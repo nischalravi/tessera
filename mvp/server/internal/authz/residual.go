@@ -29,8 +29,14 @@ type Not struct {
 // Atom is one (operator, key, values) test, after variable substitution.
 // The policy parser produces atoms with variables still unresolved.
 type Atom struct {
-	Op        string    `json:"op"`  // canonical operator without qualifier or IfExists, e.g. "StringLike", "IpAddress", "Null"
-	Key       string    `json:"key"` // lower-cased context key, e.g. "aws:sourceip"
+	Op string `json:"op"` // canonical operator without qualifier or IfExists, e.g. "StringLike", "IpAddress", "Null"
+	// Key is the context key with ASCII letters lower-cased, e.g. "aws:sourceip".
+	// AWS compares key names case-insensitively; only A–Z fold, so a
+	// non-ASCII look-alike (the Kelvin sign U+212A, "É") stays as written.
+	Key string `json:"key"`
+	// RawKey is the key exactly as the policy spells it, for explanations.
+	// "" when the atom was not built from policy text.
+	RawKey    string    `json:"raw_key"`
 	Values    []string  `json:"values"`
 	Qualifier Qualifier `json:"qualifier"` // default NoQualifier
 	IfExists  bool      `json:"if_exists"`
