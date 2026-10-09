@@ -1,7 +1,7 @@
 /** Searchable entities shared by the command palette and the top-bar global search. */
 import { ReactNode, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { AppWindow, Bot, FileText, KeyRound, Layers, Server, Settings, UserRound, UsersRound } from "lucide-react";
+import { AppWindow, Bot, FileText, KeyRound, Layers, Server, Settings, UserRound } from "lucide-react";
 import { ConnectorRow, Group, IdentityRow, useApi } from "../api";
 import { ADMIN_SECTIONS, ROLES } from "../mocks";
 import { allPages } from "./nav";
@@ -34,26 +34,25 @@ export function useEntityEntries() {
       const machine = i.type !== "human";
       out.push({
         id: `id-${i.id}`,
-        group: machine ? "Machine identities & agents" : "People",
+        group: machine ? "Machine identities & agents" : "Users",
         label: i.name,
         sub: [i.title, i.department, i.status !== "active" ? i.status : null].filter(Boolean).join(" · ") || (machine ? "Service account" : ""),
         icon: i.type === "ai_agent" ? <Bot size={15} /> : i.type === "service" ? <Server size={15} /> : <UserRound size={15} />,
         keywords: `${i.email ?? ""} ${i.department ?? ""} ${i.title ?? ""}`,
-        run: () => nav(`/directory/identities/${i.id}`),
+        run: () => nav(`/directory/${machine ? "machine" : "people"}?selected=${i.id}`),
         identity: i,
       });
     }
-    for (const r of ROLES) out.push({ id: `role-${r.id}`, group: "Roles", label: r.name, sub: `Business role · ${r.members} members`, icon: <Layers size={15} />, keywords: r.entitlements.join(" "), run: () => nav(`/directory/roles/${r.id}`) });
-    for (const g of groups ?? []) out.push({ id: `grp-${g.id}`, group: "Entitlements", label: `${g.system}:${g.name}`, sub: [g.kind.replace(/_/g, " "), g.privileged ? "privileged" : null, g.requestable ? "JIT-eligible" : null].filter(Boolean).join(" · "), icon: <KeyRound size={15} />, keywords: g.description ?? "", run: () => nav(`/directory/entitlements/${g.id}`) });
-    for (const c of conns ?? []) out.push({ id: `app-${c.system}`, group: "Applications & systems", label: c.name, sub: `${c.accounts} accounts · ${c.groups} groups`, icon: <AppWindow size={15} />, keywords: c.system, run: () => nav(`/directory/apps/${c.system}`) });
-    for (const p of allPages()) out.push({ id: `page-${p.path}`, group: "Pages", label: p.label, sub: p.section, icon: <FileText size={15} />, keywords: `${p.section} ${p.keywords ?? ""}`, run: () => nav(p.path) });
+    for (const r of ROLES) out.push({ id: `role-${r.id}`, group: "Roles", label: r.name, sub: `Business role · ${r.members} members`, icon: <Layers size={15} />, keywords: r.entitlements.join(" "), run: () => nav(`/directory/roles?selected=${r.id}`) });
+    for (const g of groups ?? []) out.push({ id: `grp-${g.id}`, group: "Entitlements", label: `${g.system}:${g.name}`, sub: [g.kind.replace(/_/g, " "), g.privileged ? "privileged" : null, g.requestable ? "JIT-eligible" : null].filter(Boolean).join(" · "), icon: <KeyRound size={15} />, keywords: g.description ?? "", run: () => nav(`/directory/entitlements?selected=${g.id}`) });
+    for (const c of conns ?? []) out.push({ id: `app-${c.system}`, group: "Applications & systems", label: c.name, sub: `${c.accounts} accounts · ${c.groups} groups`, icon: <AppWindow size={15} />, keywords: c.system, run: () => nav(`/directory/apps?selected=${c.system}`) });
+    for (const p of allPages()) out.push({ id: `page-${p.path}`, group: "Pages", label: p.label, sub: p.section || undefined, icon: <FileText size={15} />, keywords: `${p.section} ${p.keywords ?? ""}`, run: () => nav(p.path) });
     for (const s of ADMIN_SECTIONS) out.push({ id: `admin-${s.id}`, group: "Pages", label: s.title, sub: "Admin", icon: <Settings size={15} />, keywords: s.keywords.join(" "), run: () => nav(`/admin/${s.id}`) });
-    out.push({ id: "page-orgs-all", group: "Pages", label: "Organizations", sub: "Directory", icon: <UsersRound size={15} />, keywords: "departments", run: () => nav("/directory/orgs") });
     return out;
   }, [idents, groups, conns, nav]);
 }
 
-const GROUP_ORDER = ["Actions", "People", "Machine identities & agents", "Roles", "Entitlements", "Applications & systems", "Pages", "Settings"];
+const GROUP_ORDER = ["Actions", "Users", "Machine identities & agents", "Roles", "Entitlements", "Applications & systems", "Pages", "Settings"];
 
 /** Rank entries and cap each group, returning them in display order. */
 export function rankEntries(query: string, entries: Entry[], perGroup = 6): Ranked[] {

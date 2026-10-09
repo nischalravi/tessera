@@ -1,37 +1,24 @@
 import { FormEvent, useMemo, useState } from "react";
-import { Outlet, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { Outlet, useNavigate, useSearchParams } from "react-router-dom";
 import { Ban, ClipboardCheck, KeyRound, Plus, RotateCcw, ShoppingCart, Users } from "lucide-react";
 import { AccountRow, ConnectorRow, Group, HrisEvent, IdentityRow, NhiRow, ResourceRow, api, fmtDay, relTime, useApi } from "../../api";
 import { useIdentityActions } from "../../app/actions";
 import { usePersona } from "../../app/persona";
 import {
-  Avatar, Badge, Bar, Button, Callout, Chip, Column, DataTable, Drawer, EmptyState, Flag, IdLink, LinkTabs, Page, PreviewBadge, Status, TypeBadge, useToast,
+  Avatar, Badge, Button, Callout, Chip, Column, Command, DataTable, Drawer, EmptyState, Flag, GroupTabs, IdLink, Page, PreviewBadge, RiskPill, Status, TypeBadge, useSelected, useToast,
 } from "../../components";
 import { ORGS, mockObjects, mockRoles, useMockState, useRoles } from "../../mocks";
 import { AgentCard } from "./AgentCards";
+import { AccountPanel, AppPanel, GroupPanel, IdentityPanel, OrgPanel, RolePanel } from "./Panels";
 import { ImportDrawer, PreviewFormDrawer, opts, uniq } from "./shared";
 
-const TABS = [
-  { to: "/directory/people", label: "People" },
-  { to: "/directory/machine", label: "Machine identities & agents" },
-  { to: "/directory/accounts", label: "Accounts" },
-  { to: "/directory/roles", label: "Roles" },
-  { to: "/directory/entitlements", label: "Entitlements" },
-  { to: "/directory/apps", label: "Applications & systems" },
-  { to: "/directory/orgs", label: "Organizations" },
-  { to: "/directory/groups", label: "Groups" },
-];
-
+/** Identity lists each render their own page header; the layout only hosts them. */
 export function DirectoryLayout() {
-  const { pathname } = useLocation();
-  const current = TABS.find((t) => pathname.startsWith(t.to));
-  return (
-    <Page title="Directory" crumbs={[["Directory", "/directory"], [current?.label ?? ""]]} sub="Everyone and everything that holds access, and the things access is made of. Open any row for its full picture and actions.">
-      <LinkTabs label="Directory sections" tabs={TABS} />
-      <Outlet />
-    </Page>
-  );
+  return <Outlet />;
 }
+
+const IDENTITY: [string] = ["Identity"];
+const plural = (n: number | undefined | null, one: string, many = `${one}s`) => (n == null ? null : `${n.toLocaleString()} ${n === 1 ? one : many}`);
 
 /** `?new=1` / `?import=1` deep links (from the command palette) open the matching drawer. */
 function useDrawerParam(name: "new" | "import") {
@@ -61,9 +48,7 @@ function useImport() {
   };
 }
 
-const NewButton = ({ label, onClick, preview }: { label: string; onClick: () => void; preview?: boolean }) => (
-  <Button size="sm" variant="primary" icon={<Plus size={14} />} onClick={onClick} title={preview ? "Preview: saved in this browser only" : undefined}>{label}</Button>
-);
+const newCmd = (label: string, onClick: () => void, preview?: boolean): Command => ({ label, icon: <Plus size={16} />, onClick, title: preview ? "Preview: saved in this browser only" : undefined });
 
 // ------------------------------------------------------------------ people
 const TEAMS = ["backend", "frontend", "platform", "data", "security", "finance", "sales", "support", "people", "exec"];
@@ -118,25 +103,27 @@ function identityColumns(): Column<IdentityRow>[] {
         <div className="row" style={{ flexWrap: "nowrap" }}>
           <Avatar name={r.name} type={r.type} />
           <div style={{ minWidth: 0 }}>
-            <b>{r.name}</b>
-            <div className="xs faint truncate">{r.email ?? ""}</div>
+            <span className="name-link">{r.name}</span>
+            <div className="xs faint truncate">{r.title ?? r.email ?? ""}</div>
           </div>
         </div>
       ),
     },
-    { id: "dept", header: "Department", sort: (r) => r.department ?? "", cell: (r) => <span className="small">{r.department}<div className="xs faint">{r.title}</div></span>, hideNarrow: true },
+    { id: "type", header: "Type", sort: (r) => r.type, cell: (r) => <TypeBadge type={r.type} />, hideNarrow: true },
+    { id: "dept", header: "Department", sort: (r) => r.department ?? "", cell: (r) => r.department, hideNarrow: true },
     { id: "status", header: "Status", sort: (r) => r.status, cell: (r) => <Status s={r.status} /> },
-    { id: "systems", header: "Systems", csv: (r) => r.systems.join(" "), cell: (r) => <div className="row tight">{r.systems.map((s) => <Chip key={s} mono>{s}</Chip>)}</div>, hideNarrow: true },
+    { id: "systems", header: "Systems", csv: (r) => r.systems.join(" "), cell: (r) => <div className="row tight" style={{ flexWrap: "nowrap" }}>{r.systems.map((s) => <Chip key={s} mono>{s}</Chip>)}</div>, hideNarrow: true },
     { id: "eff", header: "Permissions", num: true, sort: (r) => r.effective ?? 0, cell: (r) => r.effective ?? 0, hideNarrow: true },
     { id: "unused", header: "Unused", num: true, sort: (r) => r.unused ?? 0, cell: (r) => r.unused ?? 0, hideNarrow: true },
     { id: "viol", header: "Violations", num: true, sort: (r) => r.violations ?? 0, cell: (r) => (r.violations ? <Badge tone="critical">{r.violations}</Badge> : <span className="faint">0</span>) },
     { id: "last", header: "Last active", sort: (r) => r.last_activity ?? "", cell: (r) => <span className="small nowrap">{relTime(r.last_activity)}</span>, hideNarrow: true },
-    { id: "risk", header: "Risk", sort: (r) => r.risk ?? 0, width: 110, cell: (r) => <Bar value={r.risk ?? 0} tone="risk" /> },
+    { id: "risk", header: "Risk", sort: (r) => r.risk ?? 0, csv: (r) => r.risk ?? 0, cell: (r) => <RiskPill score={r.risk} /> },
   ];
 }
 
 export function People() {
-  const { data, error } = useApi<IdentityRow[]>("/identities?type=human");
+  const { data, error, reload } = useApi<IdentityRow[]>("/identities?type=human");
+  const [selected, setSelected] = useSelected();
   const acts = useIdentityActions();
   const nav = useNavigate();
   const mock = useMockState();
@@ -145,7 +132,7 @@ export function People() {
   const rows = useMemo(() => data?.map((r) => (mock.disabled[r.id] && r.status === "active" ? { ...r, status: "disabled" } : r)) ?? null, [data, mock.disabled]);
   const cols = useMemo(identityColumns, []);
   return (
-    <>
+    <Page title="Users" count={plural(rows?.length, "identity", "identities")} crumbs={[IDENTITY, ["Users"]]}>
       <DataTable
         id="people"
         rows={rows}
@@ -160,53 +147,50 @@ export function People() {
           { id: "status", label: "Status", options: opts(["active", "disabled", "terminated"]), get: (r) => r.status },
           { id: "system", label: "System", options: opts(uniq((data ?? []).flatMap((r) => r.systems))), get: (r) => r.systems },
         ]}
-        bulkActions={[
-          { label: "Request access for", icon: <ShoppingCart size={14} />, run: (rs) => nav(`/access/request?for=${rs.map((r) => r.id).join(",")}`) },
-          { label: "Start review", icon: <ClipboardCheck size={14} />, run: () => acts.startCampaign() },
-          { label: "Disable…", icon: <Ban size={14} />, danger: true, run: (rs) => acts.disableMany(rs) },
+        commands={[
+          newCmd("New user", () => setNew(true)),
+          { label: "Start review", icon: <ClipboardCheck size={16} />, onClick: () => acts.startCampaign() },
         ]}
-        onRowClick={(r) => nav(`/directory/identities/${r.id}`)}
+        onRefresh={reload}
+        bulkActions={[
+          { label: "Request access for", icon: <ShoppingCart size={16} />, run: (rs) => nav(`/access/request?for=${rs.map((r) => r.id).join(",")}`) },
+          { label: "Disable", icon: <Ban size={16} />, danger: true, run: (rs) => acts.disableMany(rs) },
+        ]}
+        rowLabel={(r) => r.name}
+        onRowClick={(r) => setSelected(r.id)}
+        activeKey={selected}
         onImport={imp.onImport}
-        toolbarExtra={<NewButton label="New person" onClick={() => setNew(true)} />}
         empty={<EmptyState title="No people yet" icon={<Users size={18} />}>Connect Workday or import a CSV to populate the directory.</EmptyState>}
       />
+      {selected && <IdentityPanel id={selected} onClose={() => setSelected(null)} />}
       {newOpen && <NewPersonDrawer onClose={() => setNew(false)} />}
       {imp.open && <ImportDrawer kind="people" label="people" columns={["email", "name", "department", "title", "manager_email"]} rows={imp.file?.rows} fileName={imp.file?.name} onClose={imp.close} />}
-    </>
+    </Page>
   );
 }
 
 // -------------------------------------------------------- machine identities
 export function Machine() {
-  const { data, error } = useApi<NhiRow[]>("/nhi");
-  const nav = useNavigate();
+  const { data, error, reload } = useApi<NhiRow[]>("/nhi");
+  const [selected, setSelected] = useSelected();
   const acts = useIdentityActions();
   const toast = useToast();
   const [newOpen, setNew] = useDrawerParam("new");
   const { data: people } = useApi<IdentityRow[]>("/identities?type=human&status=active");
   const agents = (data ?? []).filter((x) => x.type === "ai_agent");
-  const [showAgents, setShowAgents] = useState(true);
+  const [showAgents, setShowAgents] = useState(false);
   const cols: Column<NhiRow>[] = [
-    { id: "name", header: "Name", sort: (r) => r.name.toLowerCase(), csv: (r) => r.name, cell: (r) => <div className="row" style={{ flexWrap: "nowrap" }}><Avatar name={r.name} type={r.type} /><div style={{ minWidth: 0 }}><b>{r.name}</b><div className="xs faint truncate">{r.kind}</div></div></div> },
+    { id: "name", header: "Name", sort: (r) => r.name.toLowerCase(), csv: (r) => r.name, cell: (r) => <div className="row" style={{ flexWrap: "nowrap" }}><Avatar name={r.name} type={r.type} /><div style={{ minWidth: 0 }}><span className="name-link">{r.name}</span><div className="xs faint truncate">{r.kind}</div></div></div> },
     { id: "type", header: "Type", sort: (r) => r.type, cell: (r) => <TypeBadge type={r.type} />, hideNarrow: true },
-    { id: "owner", header: "Owner", sort: (r) => r.owner?.name ?? "", cell: (r) => (r.owner ? <span className="small"><IdLink i={r.owner} /></span> : <Badge tone="critical">No owner</Badge>) },
-    { id: "systems", header: "Systems", csv: (r) => r.systems.join(" "), cell: (r) => <div className="row tight">{r.systems.map((s) => <Chip key={s} mono>{s}</Chip>)}</div>, hideNarrow: true },
+    { id: "owner", header: "Owner", sort: (r) => r.owner?.name ?? "", cell: (r) => (r.owner ? <span className="small nowrap"><IdLink i={r.owner} /></span> : <Badge tone="critical">No owner</Badge>) },
+    { id: "systems", header: "Systems", csv: (r) => r.systems.join(" "), cell: (r) => <div className="row tight" style={{ flexWrap: "nowrap" }}>{r.systems.map((s) => <Chip key={s} mono>{s}</Chip>)}</div>, hideNarrow: true },
     { id: "secret", header: "Oldest secret", num: true, sort: (r) => r.oldest_secret_days ?? -1, cell: (r) => (r.oldest_secret_days == null ? <span className="faint">-</span> : r.oldest_secret_days > 90 ? <Badge tone="warning">{r.oldest_secret_days} d</Badge> : `${r.oldest_secret_days} d`) },
     { id: "last", header: "Last active", sort: (r) => r.days_since_activity ?? 9999, cell: (r) => <span className="small nowrap">{r.days_since_activity == null ? "never" : r.days_since_activity === 0 ? "today" : `${r.days_since_activity} d ago`}</span>, hideNarrow: true },
     { id: "flags", header: "Flags", csv: (r) => r.flags.join(" "), cell: (r) => <div className="row tight">{r.flags.map((f) => <Flag key={f} f={f} />)}</div> },
-    { id: "risk", header: "Risk", sort: (r) => r.risk, width: 100, cell: (r) => <Bar value={r.risk} tone="risk" /> },
+    { id: "risk", header: "Risk", sort: (r) => r.risk, csv: (r) => r.risk, cell: (r) => <RiskPill score={r.risk} /> },
   ];
   return (
-    <div className="stack">
-      {agents.length > 0 && (
-        <div className="stack-sm">
-          <div className="spread">
-            <h2>AI agents and who they act for</h2>
-            <Button size="sm" variant="ghost" onClick={() => setShowAgents(!showAgents)} aria-expanded={showAgents}>{showAgents ? "Hide" : `Show ${agents.length}`}</Button>
-          </div>
-          {showAgents && <div className="grid g2">{agents.map((a) => <AgentCard key={a.id} a={a} />)}</div>}
-        </div>
-      )}
+    <Page title="Machine identities & agents" count={plural(data?.length, "identity", "identities")} crumbs={[IDENTITY, ["Machine identities & agents"]]}>
       <DataTable
         id="machine"
         rows={data}
@@ -221,13 +205,26 @@ export function Machine() {
           { id: "flag", label: "Flag", options: [["orphaned", "No owner"], ["owner_left", "Owner left"], ["stale_secret", "Stale secret"], ["dormant", "Dormant"], ["privileged", "Privileged"], ["pii_access", "PII access"]].map(([value, label]) => ({ value, label })), get: (r) => r.flags },
           { id: "system", label: "System", options: opts(uniq((data ?? []).flatMap((r) => r.systems))), get: (r) => r.systems },
         ]}
+        commands={[newCmd("Register", () => setNew(true), true)]}
+        onRefresh={reload}
         bulkActions={[
-          { label: "Rotate secrets", icon: <RotateCcw size={14} />, run: async (rs) => { await mockObjects.save("secret", `${rs.length} identities`, "bulk", "update"); toast(`Rotation requested for ${rs.length} identities (preview)`); } },
-          { label: "Disable…", icon: <Ban size={14} />, danger: true, run: (rs) => acts.disableMany(rs) },
+          { label: "Rotate secrets", icon: <RotateCcw size={16} />, run: async (rs) => { await mockObjects.save("secret", `${rs.length} identities`, "bulk", "update"); toast(`Rotation requested for ${rs.length} identities (preview)`); } },
+          { label: "Disable", icon: <Ban size={16} />, danger: true, run: (rs) => acts.disableMany(rs) },
         ]}
-        onRowClick={(r) => nav(`/directory/identities/${r.id}`)}
-        toolbarExtra={<NewButton label="Register" preview onClick={() => setNew(true)} />}
+        rowLabel={(r) => r.name}
+        onRowClick={(r) => setSelected(r.id)}
+        activeKey={selected}
       />
+      {agents.length > 0 && (
+        <div className="stack-sm mt">
+          <div className="spread">
+            <h2>AI agents and who they act for</h2>
+            <Button size="sm" variant="ghost" onClick={() => setShowAgents(!showAgents)} aria-expanded={showAgents}>{showAgents ? "Hide" : `Show ${agents.length}`}</Button>
+          </div>
+          {showAgents && <div className="grid g2">{agents.map((a) => <AgentCard key={a.id} a={a} />)}</div>}
+        </div>
+      )}
+      {selected && <IdentityPanel id={selected} onClose={() => setSelected(null)} />}
       {newOpen && (
         <PreviewFormDrawer
           title="Register a machine identity"
@@ -243,29 +240,30 @@ export function Machine() {
           ]}
         />
       )}
-    </div>
+    </Page>
   );
 }
 
 // ---------------------------------------------------------------- accounts
 export function Accounts() {
-  const { data, error } = useApi<AccountRow[]>("/accounts");
-  const nav = useNavigate();
+  const { data, error, reload } = useApi<AccountRow[]>("/accounts");
+  const [selected, setSelected] = useSelected();
+  const open = data?.find((a) => String(a.id) === selected);
   const toast = useToast();
   const { actor } = usePersona();
   const [newOpen, setNew] = useDrawerParam("new");
   const imp = useImport();
   const cols: Column<AccountRow>[] = [
-    { id: "user", header: "Account", sort: (r) => r.username.toLowerCase(), cell: (r) => <b className="sys">{r.username}</b> },
+    { id: "user", header: "Account", sort: (r) => r.username.toLowerCase(), cell: (r) => <span className="sys name-link">{r.username}</span> },
     { id: "system", header: "System", sort: (r) => r.system, cell: (r) => <Chip mono>{r.system}</Chip> },
     { id: "kind", header: "Kind", sort: (r) => r.kind, cell: (r) => <span className="small">{r.kind.replace(/_/g, " ")}</span>, hideNarrow: true },
     { id: "status", header: "Status", sort: (r) => r.status, cell: (r) => <Status s={r.status} /> },
-    { id: "owner", header: "Belongs to", sort: (r) => r.identity?.name ?? "", cell: (r) => (r.identity ? <span className="small"><IdLink i={r.identity} /></span> : <Badge tone="critical">Uncorrelated</Badge>) },
+    { id: "owner", header: "Belongs to", sort: (r) => r.identity?.name ?? "", cell: (r) => (r.identity ? <span className="small nowrap"><IdLink i={r.identity} /></span> : <Badge tone="critical">Uncorrelated</Badge>) },
     { id: "login", header: "Last login", sort: (r) => r.last_login_at ?? "", cell: (r) => <span className="small nowrap">{relTime(r.last_login_at)}</span> },
     { id: "created", header: "Created", sort: (r) => r.created_at ?? "", cell: (r) => <span className="small nowrap">{fmtDay(r.created_at)}</span>, hideNarrow: true },
   ];
   return (
-    <>
+    <Page title="Accounts" count={plural(data?.length, "account")} crumbs={[IDENTITY, ["Accounts"]]}>
       <DataTable
         id="accounts"
         rows={data}
@@ -280,14 +278,18 @@ export function Accounts() {
           { id: "status", label: "Status", options: opts(uniq((data ?? []).map((r) => r.status))), get: (r) => r.status },
           { id: "corr", label: "Correlation", options: [{ value: "yes", label: "Correlated" }, { value: "no", label: "Uncorrelated" }], get: (r) => (r.identity ? "yes" : "no") },
         ]}
+        commands={[newCmd("New account", () => setNew(true), true)]}
+        onRefresh={reload}
         bulkActions={[
-          { label: "Disable accounts…", icon: <Ban size={14} />, danger: true, run: async (rs) => { await mockObjects.save("account", `${rs.length} accounts`, actor, "update"); toast(`${rs.length} accounts queued to disable (preview)`); } },
+          { label: "Disable", icon: <Ban size={16} />, danger: true, run: async (rs) => { await mockObjects.save("account", `${rs.length} accounts`, actor, "update"); toast(`${rs.length} accounts queued to disable (preview)`); } },
         ]}
-        onRowClick={(r) => r.identity && nav(`/directory/identities/${r.identity.id}`)}
+        rowLabel={(r) => r.username}
+        onRowClick={(r) => setSelected(r.id)}
+        activeKey={selected}
         onImport={imp.onImport}
-        toolbarExtra={<NewButton label="New account" preview onClick={() => setNew(true)} />}
         empty={<EmptyState title="No accounts" icon={<KeyRound size={18} />}>Accounts appear after a connector sync.</EmptyState>}
       />
+      {open && <AccountPanel a={open} onClose={() => setSelected(null)} />}
       {newOpen && (
         <PreviewFormDrawer title="New account" kind="account" onClose={() => setNew(false)}
           note="Most accounts are created by provisioning when access is granted. Use this for a one-off account in a system without a connector."
@@ -300,7 +302,7 @@ export function Accounts() {
         />
       )}
       {imp.open && <ImportDrawer kind="accounts" label="accounts" columns={["username", "system", "kind", "owner_email", "status"]} rows={imp.file?.rows} fileName={imp.file?.name} onClose={imp.close} />}
-    </>
+    </Page>
   );
 }
 
@@ -308,20 +310,19 @@ export function Accounts() {
 export function Roles() {
   const roles = useRoles();
   const nav = useNavigate();
+  const acts = useIdentityActions();
+  const [selected, setSelected] = useSelected();
+  const open = roles.find((r) => r.id === selected);
   const [newOpen, setNew] = useDrawerParam("new");
   const imp = useImport();
   return (
-    <>
-      <div className="row mt-sm" style={{ marginBottom: 12 }}>
-        <PreviewBadge what="Business roles have no backend yet. They bundle real groups and roles from your connected systems." />
-        <span className="small muted">Business roles bundle entitlements from several systems so people request one thing.</span>
-      </div>
+    <Page title="Roles" count={plural(roles.length, "role")} crumbs={[IDENTITY, ["Roles"]]} badge={<PreviewBadge what="Business roles have no backend yet. They bundle real groups and roles from your connected systems." />} sub="Business roles bundle entitlements from several systems so people request one thing.">
       <DataTable
         id="roles"
         rows={roles}
         rowKey={(r) => r.id}
         columns={[
-          { id: "name", header: "Role", sort: (r) => r.name, cell: (r) => <div><b>{r.name}</b><div className="xs faint truncate" style={{ maxWidth: 420 }}>{r.description}</div></div> },
+          { id: "name", header: "Role", sort: (r) => r.name, cell: (r) => <div><span className="name-link">{r.name}</span><div className="xs faint truncate" style={{ maxWidth: 420 }}>{r.description}</div></div> },
           { id: "owner", header: "Owner", sort: (r) => r.owner, cell: (r) => <span className="small">{r.owner}</span>, hideNarrow: true },
           { id: "ents", header: "Entitlements", num: true, sort: (r) => r.entitlements.length, cell: (r) => r.entitlements.length },
           { id: "birth", header: "Birthright for", sort: (r) => r.birthright ?? "", cell: (r) => (r.birthright ? <Badge tone="outline">{r.birthright}</Badge> : <span className="faint">-</span>), hideNarrow: true },
@@ -335,14 +336,20 @@ export function Roles() {
           { id: "risk", label: "Risk", options: opts(["low", "medium", "high"]), get: (r) => r.risk },
           { id: "birth", label: "Birthright", options: opts(uniq(roles.map((r) => r.birthright))), get: (r) => r.birthright },
         ]}
-        bulkActions={[{ label: "Request", icon: <ShoppingCart size={14} />, run: (rs) => nav(`/access/request?add=${rs.map((r) => r.id).join(",")}`) }]}
-        onRowClick={(r) => nav(`/directory/roles/${r.id}`)}
+        commands={[
+          newCmd("New role", () => setNew(true), true),
+          { label: "Start review", icon: <ClipboardCheck size={16} />, onClick: () => acts.startCampaign() },
+        ]}
+        bulkActions={[{ label: "Request", icon: <ShoppingCart size={16} />, run: (rs) => nav(`/access/request?add=${rs.map((r) => r.id).join(",")}`) }]}
+        rowLabel={(r) => r.name}
+        onRowClick={(r) => setSelected(r.id)}
+        activeKey={selected}
         onImport={imp.onImport}
-        toolbarExtra={<NewButton label="New role" preview onClick={() => setNew(true)} />}
       />
+      {open && <RolePanel role={open} onClose={() => setSelected(null)} />}
       {newOpen && <NewRoleDrawer onClose={() => setNew(false)} />}
       {imp.open && <ImportDrawer kind="roles" label="roles" columns={["name", "description", "owner", "entitlements", "birthright"]} rows={imp.file?.rows} fileName={imp.file?.name} onClose={imp.close} />}
-    </>
+    </Page>
   );
 }
 
@@ -404,7 +411,7 @@ const KIND_LABEL: Record<string, string> = { group: "Group", role: "Role", team:
 
 function groupColumns(): Column<Group>[] {
   return [
-    { id: "name", header: "Name", sort: (r) => r.name.toLowerCase(), csv: (r) => `${r.system}:${r.name}`, cell: (r) => <div><b className="sys">{r.name}</b><div className="xs faint truncate" style={{ maxWidth: 420 }}>{r.description}</div></div> },
+    { id: "name", header: "Name", sort: (r) => r.name.toLowerCase(), csv: (r) => `${r.system}:${r.name}`, cell: (r) => <div><span className="sys name-link">{r.name}</span><div className="xs faint truncate" style={{ maxWidth: 420 }}>{r.description}</div></div> },
     { id: "system", header: "System", sort: (r) => r.system, cell: (r) => <Chip mono>{r.system}</Chip> },
     { id: "kind", header: "Kind", sort: (r) => r.kind, cell: (r) => <span className="small">{KIND_LABEL[r.kind] ?? r.kind}</span> },
     { id: "priv", header: "Privileged", sort: (r) => (r.privileged ? 1 : 0), cell: (r) => (r.privileged ? <Badge tone="warning">Privileged</Badge> : <span className="faint">No</span>) },
@@ -412,15 +419,17 @@ function groupColumns(): Column<Group>[] {
   ];
 }
 
-function GroupList({ id, kinds, newLabel }: { id: string; kinds?: string[]; newLabel: string }) {
-  const { data, error } = useApi<Group[]>("/groups");
+function GroupList({ id, kinds, newLabel, title }: { id: string; kinds?: string[]; newLabel: string; title: string }) {
+  const { data, error, reload } = useApi<Group[]>("/groups");
   const nav = useNavigate();
+  const [selected, setSelected] = useSelected();
   const [newOpen, setNew] = useDrawerParam("new");
   const imp = useImport();
   const rows = useMemo(() => (data ? data.filter((g) => !kinds || kinds.includes(g.kind)) : null), [data, kinds]);
   const cols = useMemo(groupColumns, []);
+  const open = rows?.find((g) => String(g.id) === selected);
   return (
-    <>
+    <Page title={title} count={plural(rows?.length, id === "groups" ? "group" : "entitlement")} crumbs={[IDENTITY, [title]]} tabs={<GroupTabs />}>
       <DataTable
         id={id}
         rows={rows}
@@ -434,11 +443,15 @@ function GroupList({ id, kinds, newLabel }: { id: string; kinds?: string[]; newL
           { id: "kind", label: "Kind", options: uniq((rows ?? []).map((r) => r.kind)).map((k) => ({ value: k, label: KIND_LABEL[k] ?? k })), get: (r) => r.kind },
           { id: "priv", label: "Privileged", options: [{ value: "yes", label: "Privileged" }, { value: "no", label: "Not privileged" }], get: (r) => (r.privileged ? "yes" : "no") },
         ]}
-        bulkActions={[{ label: "Request access", icon: <ShoppingCart size={14} />, run: (rs) => nav(`/access/request?add=${rs.map((r) => `g${r.id}`).join(",")}`) }]}
-        onRowClick={(r) => nav(`/directory/entitlements/${r.id}`)}
+        commands={[newCmd(newLabel, () => setNew(true), true)]}
+        onRefresh={reload}
+        bulkActions={[{ label: "Request access", icon: <ShoppingCart size={16} />, run: (rs) => nav(`/access/request?add=${rs.map((r) => `g${r.id}`).join(",")}`) }]}
+        rowLabel={(r) => `${r.system}:${r.name}`}
+        onRowClick={(r) => setSelected(r.id)}
+        activeKey={selected}
         onImport={imp.onImport}
-        toolbarExtra={<NewButton label={newLabel} preview onClick={() => setNew(true)} />}
       />
+      {open && <GroupPanel g={open} onClose={() => setSelected(null)} />}
       {newOpen && (
         <PreviewFormDrawer title={newLabel} kind={id} onClose={() => setNew(false)}
           note="Entitlements are normally discovered by connector sync. Create one here to manage a system without a connector."
@@ -452,28 +465,31 @@ function GroupList({ id, kinds, newLabel }: { id: string; kinds?: string[]; newL
         />
       )}
       {imp.open && <ImportDrawer kind={id} label={id} columns={["name", "system", "kind", "privileged", "description"]} rows={imp.file?.rows} fileName={imp.file?.name} onClose={imp.close} />}
-    </>
+    </Page>
   );
 }
 
-export const Entitlements = () => <GroupList id="entitlements" newLabel="New entitlement" />;
+export const Entitlements = () => <GroupList id="entitlements" title="Entitlements" newLabel="New entitlement" />;
 const GROUP_KINDS = ["group", "team", "security_group"];
-export const Groups = () => <GroupList id="groups" kinds={GROUP_KINDS} newLabel="New group" />;
+export const Groups = () => <GroupList id="groups" title="Groups" kinds={GROUP_KINDS} newLabel="New group" />;
 
 // -------------------------------------------------------------------- apps
 export function Apps() {
-  const { data, error } = useApi<ConnectorRow[]>("/connectors");
+  const { data, error, reload } = useApi<ConnectorRow[]>("/connectors");
   const { data: resources } = useApi<ResourceRow[]>("/resources");
   const nav = useNavigate();
+  const [selected, setSelected] = useSelected();
+  const open = data?.find((c) => c.system === selected);
   const sensitive = (sys: string) => (resources ?? []).filter((r) => r.system === sys && r.tags.length).length;
   return (
+    <Page title="Applications" count={plural(data?.length, "application")} crumbs={[IDENTITY, ["Applications"]]}>
     <DataTable
       id="apps"
       rows={data}
       error={error}
       rowKey={(r) => r.system}
       columns={[
-        { id: "name", header: "Application", sort: (r) => r.name, cell: (r) => <div><b>{r.name}</b><div className="xs faint sys">{r.system}</div></div> },
+        { id: "name", header: "Application", sort: (r) => r.name, cell: (r) => <div className="nowrap"><span className="name-link">{r.name}</span><div className="xs faint sys">{r.system}</div></div> },
         { id: "status", header: "Connection", cell: () => <Status s="active" />, csv: () => "connected" },
         { id: "accounts", header: "Accounts", num: true, sort: (r) => r.accounts, cell: (r) => r.accounts },
         { id: "groups", header: "Groups & roles", num: true, sort: (r) => r.groups, cell: (r) => r.groups },
@@ -483,41 +499,46 @@ export function Apps() {
       ]}
       searchText={(r) => `${r.name} ${r.system}`}
       searchPlaceholder="Search applications…"
-      onRowClick={(r) => nav(`/directory/apps/${r.system}`)}
-      toolbarExtra={<NewButton label="Add connection" onClick={() => nav("/admin/connections")} />}
+      commands={[newCmd("Add connection", () => nav("/admin/connections"))]}
+      onRefresh={reload}
+      rowLabel={(r) => r.name}
+      onRowClick={(r) => setSelected(r.system)}
+      activeKey={selected}
     />
+    {open && <AppPanel c={open} onClose={() => setSelected(null)} />}
+    </Page>
   );
 }
 
 // -------------------------------------------------------------------- orgs
 export function Orgs() {
   const { data: idents } = useApi<IdentityRow[]>("/identities?type=human");
-  const nav = useNavigate();
+  const [selected, setSelected] = useSelected();
+  const open = ORGS.find((o) => o.id === selected);
   const [newOpen, setNew] = useDrawerParam("new");
   const imp = useImport();
   const count = (dept: string | null) => (idents ?? []).filter((i) => (dept ? i.department === dept : true) && i.status === "active").length;
   return (
-    <>
-      <div className="row mt-sm" style={{ marginBottom: 12 }}>
-        <PreviewBadge what="Org units come from the mock layer. Member counts are real, matched on department." />
-        <span className="small muted">Org units mirror Workday departments. Owners approve requests and reviews by default.</span>
-      </div>
+    <Page title="Organizations" count={plural(ORGS.length, "organization")} crumbs={[IDENTITY, ["Organizations"]]} badge={<PreviewBadge what="Org units come from the mock layer. Member counts are real, matched on department." />} sub="Org units mirror Workday departments. Owners approve requests and reviews by default.">
       <DataTable
         id="orgs"
         rows={ORGS}
         rowKey={(r) => r.id}
         columns={[
-          { id: "name", header: "Organization", sort: (r) => r.name, cell: (r) => <div><b>{r.name}</b><div className="xs faint">{r.parent ? `in ${ORGS.find((o) => o.id === r.parent)?.name}` : "Top level"}</div></div> },
+          { id: "name", header: "Organization", sort: (r) => r.name, cell: (r) => <div><span className="name-link">{r.name}</span><div className="xs faint">{r.parent ? `in ${ORGS.find((o) => o.id === r.parent)?.name}` : "Top level"}</div></div> },
           { id: "owner", header: "Owner", sort: (r) => r.owner, cell: (r) => <span className="small">{r.owner}</span> },
           { id: "cc", header: "Cost center", sort: (r) => r.costCenter, cell: (r) => <span className="small sys">{r.costCenter}</span>, hideNarrow: true },
           { id: "members", header: "Active people", num: true, sort: (r) => count(r.department), cell: (r) => (idents ? count(r.department) : "…") },
         ]}
         searchText={(r) => `${r.name} ${r.owner} ${r.costCenter}`}
         searchPlaceholder="Search organizations…"
-        onRowClick={(r) => nav(`/directory/orgs/${r.id}`)}
+        commands={[newCmd("New organization", () => setNew(true), true)]}
+        rowLabel={(r) => r.name}
+        onRowClick={(r) => setSelected(r.id)}
+        activeKey={selected}
         onImport={imp.onImport}
-        toolbarExtra={<NewButton label="New organization" preview onClick={() => setNew(true)} />}
       />
+      {open && <OrgPanel org={open} onClose={() => setSelected(null)} />}
       {newOpen && (
         <PreviewFormDrawer title="New organization" kind="org" onClose={() => setNew(false)}
           fields={[
@@ -529,6 +550,6 @@ export function Orgs() {
         />
       )}
       {imp.open && <ImportDrawer kind="orgs" label="organizations" columns={["name", "parent", "owner_email", "cost_center"]} rows={imp.file?.rows} fileName={imp.file?.name} onClose={imp.close} />}
-    </>
+    </Page>
   );
 }

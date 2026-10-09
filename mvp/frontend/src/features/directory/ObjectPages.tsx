@@ -22,7 +22,7 @@ function ObjectHead({ icon, meta, actions }: { icon?: ReactNode; meta: ReactNode
 
 function NotFound({ what, back }: { what: string; back: [string, string] }) {
   return (
-    <Page title={`${what} not found`} crumbs={[["Directory", "/directory"], back]}>
+    <Page title={`${what} not found`} crumbs={[["Identity"], back]}>
       <div className="card"><EmptyState title={`That ${what.toLowerCase()} doesn't exist`} action={<Link to={back[1]}>Back to {back[0].toLowerCase()}</Link>}>It may have been removed, or the link is wrong.</EmptyState></div>
     </Page>
   );
@@ -40,7 +40,7 @@ export function RolePage() {
   if (!role) return <NotFound what="Role" back={["Roles", "/directory/roles"]} />;
   const birthright = (people ?? []).filter((p) => role.birthright && p.department === role.birthright);
   return (
-    <Page title={role.name} badge={<PreviewBadge />} crumbs={[["Directory", "/directory"], ["Roles", "/directory/roles"], [role.name]]}>
+    <Page title={role.name} badge={<PreviewBadge />} crumbs={[["Identity"], ["Roles", "/directory/roles"], [role.name]]}>
       <ObjectHead
         meta={<>
           <div style={{ color: "var(--text)" }}>{role.description}</div>
@@ -108,13 +108,13 @@ export function EntitlementPage() {
   const roles = useRoles();
   const nav = useNavigate();
   const [edit, setEdit] = useState(false);
-  if (!groups) return <Page title="Entitlement" crumbs={[["Directory", "/directory"], ["Entitlements", "/directory/entitlements"]]}><Loading error={error} kind="page" /></Page>;
+  if (!groups) return <Page title="Entitlement" crumbs={[["Identity"], ["Entitlements", "/directory/entitlements"]]}><Loading error={error} kind="page" /></Page>;
   const g = groups.find((x) => String(x.id) === id);
   if (!g) return <NotFound what="Entitlement" back={["Entitlements", "/directory/entitlements"]} />;
   const key = `${g.system}:${g.name}`;
   const inRoles = roles.filter((r) => r.entitlements.some((e) => e.replace(" (JIT)", "") === key));
   return (
-    <Page title={g.name} crumbs={[["Directory", "/directory"], ["Entitlements", "/directory/entitlements"], [g.name]]}>
+    <Page title={g.name} crumbs={[["Identity"], ["Entitlements", "/directory/entitlements"], [g.name]]}>
       <ObjectHead
         meta={<>
           <div style={{ color: "var(--text)" }}>{g.description ?? "No description from the source system."}</div>
@@ -170,9 +170,9 @@ export function AppPage() {
   const nav = useNavigate();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
-  if (!conns) return <Page title="Application" crumbs={[["Directory", "/directory"], ["Applications & systems", "/directory/apps"]]}><Loading error={error} kind="page" /></Page>;
+  if (!conns) return <Page title="Application" crumbs={[["Identity"], ["Applications", "/directory/apps"]]}><Loading error={error} kind="page" /></Page>;
   const c = conns.find((x) => x.system === system);
-  if (!c) return <NotFound what="Application" back={["Applications & systems", "/directory/apps"]} />;
+  if (!c) return <NotFound what="Application" back={["Applications", "/directory/apps"]} />;
   const res = (resources ?? []).filter((r) => r.system === system);
   const sync = async () => {
     setBusy(true);
@@ -186,7 +186,7 @@ export function AppPage() {
     }
   };
   return (
-    <Page title={c.name} crumbs={[["Directory", "/directory"], ["Applications & systems", "/directory/apps"], [c.name]]}>
+    <Page title={c.name} crumbs={[["Identity"], ["Applications", "/directory/apps"], [c.name]]}>
       <ObjectHead
         meta={<div className="row"><Chip mono>{c.system}</Chip><Status s="active" /><span>Connector {c.type}</span></div>}
         actions={<>
@@ -259,7 +259,7 @@ export function OrgPage() {
   const parent = ORGS.find((o) => o.id === org.parent);
   const active = members.filter((m) => m.status === "active");
   return (
-    <Page title={org.name} badge={<PreviewBadge />} crumbs={[["Directory", "/directory"], ["Organizations", "/directory/orgs"], [org.name]]}>
+    <Page title={org.name} badge={<PreviewBadge />} crumbs={[["Identity"], ["Organizations", "/directory/orgs"], [org.name]]}>
       <ObjectHead
         meta={<div className="row"><span>Owner {org.owner}</span><span className="sys">{org.costCenter}</span>{parent && <span>Part of <Link to={`/directory/orgs/${parent.id}`}>{parent.name}</Link></span>}</div>}
         actions={<>

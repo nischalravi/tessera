@@ -2,7 +2,7 @@ import { FormEvent, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ListChecks } from "lucide-react";
 import { HrisEvent, IdentityRow, api, fmtDate, useApi } from "../../api";
-import { Badge, Button, Callout, Chip, EmptyState, IdLink, Loading, Page, Segmented, Status, Tone, useConfirm, useToast } from "../../components";
+import { Badge, Button, Callout, Chip, EmptyState, IdLink, Loading, Page, Segmented, Status, Tone, useConfirm, useToast, GovernanceTabs } from "../../components";
 
 interface Step { action: string; detail: string; system: string }
 interface Impact { permissions_removed: number; privileged_removed: number; systems: string[]; owned_nhis: number; violations_resolved: number }
@@ -173,14 +173,14 @@ export function Lifecycle() {
   const { data, error } = useApi<HrisEvent[]>("/hris/events");
   const [params, setParams] = useSearchParams();
   const [status, setStatus] = useState<"pending" | "all">("all");
-  const crumbs: [string, string?][] = [["Governance", "/governance"], ["Lifecycle"]];
+  const crumbs: [string, string?][] = [["Access"], ["Access reviews", "/governance/reviews"], ["Lifecycle"]];
   const pick = (id: number) => setParams({ event: String(id) }, { replace: true });
-  if (!data) return <Page title="Lifecycle" crumbs={crumbs}><Loading error={error} kind="page" /></Page>;
+  if (!data) return <Page tabs={<GovernanceTabs />} title="Lifecycle" crumbs={crumbs}><Loading error={error} kind="page" /></Page>;
   const fromUrl = params.get("event") ? Number(params.get("event")) : null;
   const current = fromUrl ?? data.find((e) => e.status === "pending" && e.type === "leaver")?.id ?? data.find((e) => e.status === "pending")?.id ?? null;
   const rows = data.filter((e) => status === "all" || e.status === "pending");
   return (
-    <Page title="Lifecycle: joiners, movers and leavers" crumbs={crumbs} sub="Workday events drive provisioning plans across every connected system. A leaver plan also re-homes the machine identities and AI agents the person owned, and revokes delegations made on their behalf.">
+    <Page tabs={<GovernanceTabs />} title="Lifecycle: joiners, movers and leavers" crumbs={crumbs} sub="Workday events drive provisioning plans across every connected system. A leaver plan also re-homes the machine identities and AI agents the person owned, and revokes delegations made on their behalf.">
       <div className="grid list-detail">
         <div className="stack">
           <div className="card flush">

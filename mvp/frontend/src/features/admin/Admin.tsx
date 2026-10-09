@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
-  ArrowLeftRight, Bell, CircleCheck, Clock, FileBadge, Fingerprint, KeySquare, LucideIcon, Palette, Play, Plug, RefreshCw, ScrollText, Search, Settings, UserCog,
+  ArrowLeftRight, Bell, CircleCheck, Plus, Clock, FileBadge, Fingerprint, KeySquare, LucideIcon, Palette, Play, Plug, RefreshCw, ScrollText, Search, Settings, UserCog,
 } from "lucide-react";
 import { AuditRow, ConnectorRow, api, fmtDate, relTime, useApi } from "../../api";
 import { fuzzy } from "../../app/fuzzy";
@@ -26,7 +26,7 @@ export function Admin() {
       .map((x) => x.s);
   }, [q]);
   return (
-    <Page title="Admin" crumbs={[["Admin"]]} sub="Settings for connections, sign-in, identity rules and the platform itself. Pages marked Preview describe what they will do; the rest are live.">
+    <Page title="Admin" crumbs={[["Settings"], ["Admin"]]} sub="Settings for connections, sign-in, identity rules and the platform itself. Pages marked Preview describe what they will do; the rest are live.">
       <label className="input-icon" style={{ maxWidth: 420, width: "100%", marginBottom: 16 }}>
         <Search size={14} />
         <span className="sr-only">Search settings</span>
@@ -54,6 +54,7 @@ export function Admin() {
 // ---------------------------------------------------------------- live bits
 function Connections() {
   const { data, error } = useApi<ConnectorRow[]>("/connectors");
+  const nav = useNavigate();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const sync = async () => {
@@ -82,7 +83,11 @@ function Connections() {
         { id: "perm", header: "Permissions", num: true, sort: (r) => r.permissions, cell: (r) => r.permissions, hideNarrow: true },
       ]}
       searchText={(r) => `${r.name} ${r.system}`}
-      toolbarExtra={<Button size="sm" variant="primary" icon={<RefreshCw size={14} />} disabled={busy} onClick={sync}>{busy ? "Syncing…" : "Sync all now"}</Button>}
+      commands={[
+        { label: "Add connection", icon: <Plus size={16} />, disabled: true, title: "Preview: new connectors are added in server code for now (see the README)" },
+        { label: busy ? "Syncing…" : "Sync all now", icon: <RefreshCw size={16} />, disabled: busy, onClick: sync },
+      ]}
+      onRowClick={(r) => nav(`/directory/apps?selected=${r.system}`)}
     />
   );
 }
@@ -174,14 +179,14 @@ export function AdminSectionPage() {
   const s: AdminSection | undefined = section ? ADMIN_BY_ID[section] : undefined;
   if (!s) {
     return (
-      <Page title="Setting not found" crumbs={[["Admin", "/admin"], ["Not found"]]}>
+      <Page title="Setting not found" crumbs={[["Settings"], ["Admin", "/admin"], ["Not found"]]}>
         <div className="card"><EmptyState title="That settings page doesn't exist" action={<Link to="/admin">All settings</Link>}>Search the admin page for what you need.</EmptyState></div>
       </Page>
     );
   }
   const Live = LIVE[s.id];
   return (
-    <Page title={s.title} badge={s.live ? undefined : <PreviewBadge />} crumbs={[["Admin", "/admin"], [s.title]]} sub={s.summary}>
+    <Page title={s.title} badge={s.live ? undefined : <PreviewBadge />} crumbs={s.id === "connections" ? [["Settings"], [s.title]] : [["Settings"], ["Admin", "/admin"], [s.title]]} sub={s.summary}>
       <div className="stack">
         {Live && <Live />}
         <div className="card stack-sm">

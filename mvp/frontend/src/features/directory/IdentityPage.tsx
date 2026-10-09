@@ -143,10 +143,10 @@ export function IdentityPage() {
   const tab = (params.get("tab") ?? "access") as Tab;
   const setTab = (t: Tab) => setParams({ tab: t }, { replace: true });
 
-  if (!d) return <Page title="Identity" crumbs={[["Directory", "/directory"], ["…"]]}><Loading error={error} kind="page" /></Page>;
+  if (!d) return <Page title="Identity" crumbs={[["Identity"], ["…"]]}><Loading error={error} kind="page" /></Page>;
 
   const machine = d.type !== "human";
-  const crumbs: [string, string?][] = [["Directory", "/directory"], machine ? ["Machine identities & agents", "/directory/machine"] : ["People", "/directory/people"], [d.name]];
+  const crumbs: [string, string?][] = [["Identity"], machine ? ["Machine identities & agents", "/directory/machine"] : ["Users", "/directory/people"], [d.name]];
   const perms = d.effective_permissions.filter((p) => !filter || (filter === "unused" ? p.unused : filter === "privileged" ? p.privileged : p.tags.length > 0));
   const tabs: { id: Tab; label: string }[] = [
     { id: "access", label: `Access (${d.effective_permissions.length})` },

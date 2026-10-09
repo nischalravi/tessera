@@ -245,7 +245,7 @@ export function RequestAccess() {
   ];
 
   return (
-    <Page title="Request access" crumbs={[["Access", "/access"], ["Request access"]]} sub="Find what you need, add it to your request, and see policy conflicts before you submit. Privileged access is granted just in time and removed automatically.">
+    <Page title="Request access" crumbs={[["Access"], ["Request access"]]} sub="Find what you need, add it to your request, and see policy conflicts before you submit. Privileged access is granted just in time and removed automatically.">
       <div className="split" style={{ gridTemplateColumns: "minmax(0,1fr) 380px" }}>
         <div className="stack">
           <div className="row">

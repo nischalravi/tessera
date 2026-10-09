@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { Scale } from "lucide-react";
 import { IdentityDetail, Policy, Violation, useApi } from "../../api";
-import { Button, Callout, EmptyState, Loading, Page, Sev } from "../../components";
+import { Button, Callout, EmptyState, Loading, Page, Sev, InsightsTabs } from "../../components";
 import { RevokeDrawer } from "../directory/IdentityPage";
 
 /** Pull the two permission sets out of a separation_of_duties policy's YAML for display. */
@@ -40,13 +40,13 @@ function Conflict({ v }: { v: Violation & { edges?: [string, string][] } }) {
 export function SodConflicts() {
   const { data: policies, error } = useApi<Policy[]>("/policies");
   const { data: violations } = useApi<(Violation & { edges?: [string, string][] })[]>("/violations");
-  const crumbs: [string, string?][] = [["Insights", "/insights"], ["SoD conflicts"]];
-  if (!policies) return <Page title="SoD conflicts" crumbs={crumbs}><Loading error={error} kind="page" /></Page>;
+  const crumbs: [string, string?][] = [["Protection"], ["Insights", "/insights"], ["SoD conflicts"]];
+  if (!policies) return <Page tabs={<InsightsTabs />} title="SoD conflicts" crumbs={crumbs}><Loading error={error} kind="page" /></Page>;
   const sod = policies.filter((p) => p.type === "separation_of_duties");
   const ids = new Set(sod.map((p) => p.id));
   const conflicts = (violations ?? []).filter((v) => ids.has(v.policy_id));
   return (
-    <Page title="Separation-of-duties conflicts" crumbs={crumbs} sub="People and machine identities who can complete both halves of a sensitive process, through any combination of groups, roles and systems. Checked against effective permissions, not role names.">
+    <Page tabs={<InsightsTabs />} title="Separation-of-duties conflicts" crumbs={crumbs} sub="People and machine identities who can complete both halves of a sensitive process, through any combination of groups, roles and systems. Checked against effective permissions, not role names.">
       <div className="grid g12">
         <div className="stack">
           <h2>Rules</h2>

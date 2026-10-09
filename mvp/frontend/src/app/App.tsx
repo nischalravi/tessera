@@ -45,6 +45,7 @@ const RiskOverview = named(() => import("../features/insights/RiskOverview"), "R
 const GraphExplorer = lazy(() => import("../features/insights/GraphExplorer"));
 const LeastPrivilege = named(() => import("../features/insights/LeastPrivilege"), "LeastPrivilege");
 const SodConflicts = named(() => import("../features/insights/SodConflicts"), "SodConflicts");
+const DeploymentHealth = named(() => import("../features/insights/DeploymentHealth"), "DeploymentHealth");
 const Policies = named(() => import("../features/governance/Policies"), "Policies");
 const Reviews = named(() => import("../features/governance/Reviews"), "Reviews");
 const Lifecycle = named(() => import("../features/governance/Lifecycle"), "Lifecycle");
@@ -101,6 +102,7 @@ export default function App() {
                     <Route path="/insights/graph" element={<GraphExplorer />} />
                     <Route path="/insights/least-privilege" element={<LeastPrivilege />} />
                     <Route path="/insights/sod" element={<SodConflicts />} />
+                    <Route path="/insights/deployment" element={<DeploymentHealth />} />
 
                     <Route path="/governance" element={<Navigate to="/governance/policies" replace />} />
                     <Route path="/governance/policies" element={<Policies />} />
@@ -122,6 +124,7 @@ export default function App() {
                     <Route path="/jit" element={<Moved to="/access/jit" />} />
                     <Route path="/lifecycle" element={<Moved to="/governance/lifecycle" />} />
                     <Route path="/dashboard" element={<Moved to="/insights/risk" />} />
+                    <Route path="/directory/users" element={<Moved to="/directory/people" />} />
                     <Route path="*" element={<Navigate to="/" replace />} />
                   </Routes>
                 </Suspense>

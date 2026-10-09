@@ -1,35 +1,91 @@
 import { useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
-import { ClipboardCheck, Plus, X } from "lucide-react";
-import { Campaign as CampaignT, IdentityRow, ago, fmtDate, reviewDecide, useApi } from "../../api";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Ban, Check, ClipboardCheck, Network, Plus, UserRound, X } from "lucide-react";
+import { Campaign as CampaignT, IdentityRow, ReviewItem, ago, fmtDate, reviewDecide, useApi } from "../../api";
 import { useIdentityActions } from "../../app/actions";
 import { usePersona } from "../../app/persona";
-import { Badge, Bar, Button, EmptyState, FilterChips, Flag, IdLink, Loading, Page, Segmented, TypeBadge, flagLabel, useConfirm, useToast } from "../../components";
+import { Badge, Bar, Button, CommandBar, DataTable, EmptyState, FilterChips, Flag, IdLink, Loading, Page, Segmented, SidePanel, TypeBadge, flagLabel, useConfirm, useSelected, useToast, GovernanceTabs } from "../../components";
 
-function Campaign({ id, identity }: { id: number; identity: number | null }) {
-  const { data, error } = useApi<CampaignT>(`/reviews/campaigns/${id}`);
+function useDecide() {
   const { actor } = usePersona();
   const toast = useToast();
   const confirm = useConfirm();
-  const [reason, setReason] = useState("");
-  const [showDone, setShowDone] = useState(false);
-  if (!data) return <div className="card flush"><Loading error={error} /></div>;
-  const decide = async (itemId: number, name: string, grant: string, decision: "keep" | "revoke") => {
+  return async (it: ReviewItem, decision: "keep" | "revoke") => {
+    const grant = it.grant.split(" → ")[1] ?? it.grant;
     let comment: string | undefined;
     if (decision === "revoke") {
-      const r = await confirm({ title: `Revoke ${grant}?`, body: `Removes it from ${name} as soon as you confirm. The change is recorded with your name.`, confirmLabel: "Revoke", danger: true, reason: { label: "Comment (optional)", placeholder: "Why it should go" } });
-      if (r === null) return;
+      const r = await confirm({ title: `Revoke ${grant}?`, body: `Removes it from ${it.identity.name} as soon as you confirm. The change is recorded with your name.`, confirmLabel: "Revoke", danger: true, reason: { label: "Comment (optional)", placeholder: "Why it should go" } });
+      if (r === null) return false;
       comment = r;
     }
     try {
-      await reviewDecide(itemId, decision, actor, comment);
-      toast(decision === "keep" ? `Kept ${grant} for ${name}` : `Revoked ${grant} from ${name}`);
+      await reviewDecide(it.id, decision, actor, comment);
+      toast(decision === "keep" ? `Kept ${grant} for ${it.identity.name}` : `Revoked ${grant} from ${it.identity.name}`);
+      return true;
     } catch (e) {
       toast((e as Error).message, { kind: "error" });
+      return false;
     }
   };
-  const all = data.review_items ?? [];
-  const items = all.filter((i) => (!reason || i.reasons.includes(reason)) && (showDone || !i.decision) && (identity === null || i.identity.id === identity));
+}
+
+function ItemPanel({ it, onClose }: { it: ReviewItem; onClose: () => void }) {
+  const decide = useDecide();
+  const nav = useNavigate();
+  const [acct, grant] = it.grant.split(" → ");
+  const c = it.context;
+  return (
+    <SidePanel
+      title={grant ?? it.grant}
+      sub={<><span>{it.identity.name}</span><TypeBadge type={it.identity.type} />{it.decision && <Badge tone={it.decision === "revoke" ? "critical" : "ok"}>{it.decision === "revoke" ? "Revoked" : "Kept"}</Badge>}</>}
+      onClose={onClose}
+      fullHref={`/directory/identities/${it.identity.id}`}
+      fullLabel={`Open ${it.identity.name}'s full page`}
+      commands={
+        <CommandBar
+          label="Decision"
+          items={[
+            { label: "Keep", icon: <Check size={16} />, disabled: !!it.decision, onClick: () => decide(it, "keep") },
+            { label: "Revoke", icon: <Ban size={16} />, danger: true, disabled: !!it.decision, onClick: () => decide(it, "revoke") },
+            { label: "Open identity", icon: <UserRound size={16} />, onClick: () => nav(`/directory/${it.identity.type === "human" ? "people" : "machine"}?selected=${it.identity.id}`) },
+            { label: "Open in graph", icon: <Network size={16} />, onClick: () => nav(`/insights/graph?identity=${it.identity.id}`) },
+          ]}
+        />
+      }
+    >
+      <section className="stack-sm">
+        <h3 style={{ fontSize: "var(--fs-lg)", color: "var(--text)" }}>Why it's here</h3>
+        <div className="row tight">{it.reasons.map((r) => <Flag key={r} f={r} />)}</div>
+        {c.violations.length > 0 && <div className="small muted">{c.violations.join("; ")}</div>}
+      </section>
+      <dl className="kv">
+        <dt>Granted through</dt><dd className="sys">{acct}</dd>
+        <dt>Permissions used</dt><dd className="tnum">{c.permissions_used} of {c.permissions}</dd>
+        <dt>Last used</dt><dd>{ago(c.days_since_used)}</dd>
+        <dt>Events (90 days)</dt><dd className="tnum">{c.events_90d}</dd>
+        <dt>Privileged</dt><dd>{c.privileged ? <Badge tone="warning">Privileged</Badge> : "No"}</dd>
+        {c.sensitive.length > 0 && <><dt>Sensitive data</dt><dd>{c.sensitive.map((t) => <Badge key={t} tone="critical">{t}</Badge>)}</dd></>}
+        <dt>Peers holding it</dt><dd>{c.peer_coverage === null ? <span className="faint">No peer group</span> : `${Math.round(c.peer_coverage * 100)}%`}</dd>
+        <dt>Reviewer</dt><dd><IdLink i={it.reviewer} /></dd>
+        {it.decided_at && <><dt>Decided</dt><dd>{fmtDate(it.decided_at)}{it.comment ? ` · “${it.comment}”` : ""}</dd></>}
+      </dl>
+      {c.sample_permissions.length > 0 && (
+        <section className="stack-sm">
+          <h3 style={{ fontSize: "var(--fs-lg)", color: "var(--text)" }}>Sample permissions</h3>
+          <div className="row tight">{c.sample_permissions.map((x) => <span key={x} className="chip sys">{x}</span>)}</div>
+        </section>
+      )}
+    </SidePanel>
+  );
+}
+
+function Campaign({ id, identity, onRefresh, onStart }: { id: number; identity: number | null; onRefresh: () => void; onStart: () => void }) {
+  const { data, error, reload } = useApi<CampaignT>(`/reviews/campaigns/${id}`);
+  const decide = useDecide();
+  const [selected, setSelected] = useSelected("item");
+  if (!data) return <div className="card flush"><Loading error={error} /></div>;
+  const all = (data.review_items ?? []).filter((i) => identity === null || i.identity.id === identity);
+  const open = all.find((i) => String(i.id) === selected);
   const pctAuto = data.total_grants ? Math.round((100 * data.auto_certified) / data.total_grants) : 0;
   return (
     <div className="stack">
@@ -44,61 +100,52 @@ function Campaign({ id, identity }: { id: number; identity: number | null }) {
         <Bar value={data.decided} max={Math.max(1, data.items)} tone="ok" />
         <div className="xs faint">Only exceptions go to reviewers: grants unused for {data.unused_days}+ days, in a policy violation, held by leavers or orphaned machine identities, or privileged and idle. Everything else was auto-certified from usage evidence.</div>
       </div>
-      <div className="spread">
-        <FilterChips label="Reason" value={reason} onChange={setReason} options={[{ id: "", label: "All reasons" }, ...Object.entries(data.reasons).map(([r, n]) => ({ id: r, label: flagLabel(r), count: n }))]} />
-        <label className="row tight small muted"><input type="checkbox" checked={showDone} onChange={(e) => setShowDone(e.target.checked)} /> Show decided</label>
-      </div>
-      <div className="card flush">
-        {items.length === 0 ? (
-          <EmptyState title={showDone ? "Nothing matches" : "Nothing left to review here"} icon={<ClipboardCheck size={18} />}>
-            {showDone ? "Try another reason." : "Every item in this view has a decision. Turn on “Show decided” to see them."}
-          </EmptyState>
-        ) : (
-          <div className="table-scroll">
-            <table>
-              <thead><tr><th>Identity</th><th>Access</th><th className="hide-narrow">Why it's here</th><th className="hide-narrow">Usage</th><th className="hide-narrow">Reviewer</th><th>Decision</th></tr></thead>
-              <tbody>
-                {items.map((it) => {
-                  const [acct, grant] = it.grant.split(" → ");
-                  return (
-                    <tr key={it.id}>
-                      <td><IdLink i={it.identity} /><div style={{ marginTop: 3 }}><TypeBadge type={it.identity.type} /></div></td>
-                      <td style={{ maxWidth: 260 }}>
-                        <b className="small">{grant ?? it.grant}</b>
-                        <div className="xs faint sys">{acct}</div>
-                      </td>
-                      <td className="hide-narrow">
-                        <div className="row tight">{it.reasons.map((r) => <Flag key={r} f={r} />)}</div>
-                        {it.context.violations.length > 0 && <div className="xs faint" style={{ marginTop: 4 }}>{it.context.violations.join("; ")}</div>}
-                      </td>
-                      <td className="small hide-narrow">
-                        <span className="tnum">{it.context.permissions_used}/{it.context.permissions}</span> used · last {ago(it.context.days_since_used)}
-                        {it.context.peer_coverage !== null && <div className="xs faint">{Math.round(it.context.peer_coverage * 100)}% of peers hold this</div>}
-                      </td>
-                      <td className="small hide-narrow"><IdLink i={it.reviewer} /></td>
-                      <td className="nowrap">
-                        {it.decision ? <Badge tone={it.decision === "revoke" ? "critical" : "ok"}>{it.decision === "revoke" ? "Revoked" : "Kept"}</Badge> : (
-                          <div className="row tight">
-                            <Button size="sm" onClick={() => decide(it.id, it.identity.name, grant ?? it.grant, "keep")}>Keep</Button>
-                            <Button size="sm" variant="danger" onClick={() => decide(it.id, it.identity.name, grant ?? it.grant, "revoke")}>Revoke</Button>
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+      <DataTable
+        id="review-items"
+        rows={all}
+        rowKey={(it) => it.id}
+        columns={[
+          { id: "who", header: "Identity", sort: (it) => it.identity.name, csv: (it) => it.identity.name, cell: (it) => <div><span className="name-link">{it.identity.name}</span><div style={{ marginTop: 3 }}><TypeBadge type={it.identity.type} /></div></div> },
+          { id: "grant", header: "Access", sort: (it) => it.grant, csv: (it) => it.grant, cell: (it) => { const [a, g] = it.grant.split(" → "); return <div style={{ maxWidth: 280 }}><span className="small">{g ?? it.grant}</span><div className="xs faint sys">{a}</div></div>; } },
+          { id: "why", header: "Why it's here", csv: (it) => it.reasons.join(" "), cell: (it) => <div className="row tight">{it.reasons.map((r) => <Flag key={r} f={r} />)}</div>, hideNarrow: true },
+          { id: "usage", header: "Usage", sort: (it) => it.context.days_since_used ?? 9999, csv: (it) => `${it.context.permissions_used}/${it.context.permissions}`, cell: (it) => <span className="small nowrap"><span className="tnum">{it.context.permissions_used}/{it.context.permissions}</span> used · {ago(it.context.days_since_used)}</span>, hideNarrow: true },
+          { id: "reviewer", header: "Reviewer", sort: (it) => it.reviewer?.name ?? "", csv: (it) => it.reviewer?.name ?? "", cell: (it) => <span className="small">{it.reviewer?.name ?? <span className="faint">None</span>}</span>, hideNarrow: true },
+          {
+            id: "decision", header: "Decision", sort: (it) => it.decision ?? "", csv: (it) => it.decision ?? "open",
+            cell: (it) => it.decision ? <Badge tone={it.decision === "revoke" ? "critical" : "ok"}>{it.decision === "revoke" ? "Revoked" : "Kept"}</Badge> : (
+              <div className="row tight" style={{ flexWrap: "nowrap" }} onClick={(e) => e.stopPropagation()}>
+                <Button size="sm" onClick={() => decide(it, "keep")}>Keep</Button>
+                <Button size="sm" variant="danger" onClick={() => decide(it, "revoke")}>Revoke</Button>
+              </div>
+            ),
+          },
+        ]}
+        initialFilters={{ status: "open" }}
+        searchText={(it) => `${it.identity.name} ${it.grant} ${it.reviewer?.name ?? ""}`}
+        searchPlaceholder="Search people or access…"
+        filters={[
+          { id: "status", label: "Status", options: [{ value: "open", label: "Needs decision" }, { value: "decided", label: "Decided" }], get: (it) => (it.decision ? "decided" : "open") },
+          { id: "reason", label: "Reason", options: Object.keys(data.reasons).map((r) => ({ value: r, label: flagLabel(r) })), get: (it) => it.reasons },
+          { id: "type", label: "Identity type", options: [{ value: "human", label: "Person" }, { value: "service", label: "Service account" }, { value: "ai_agent", label: "AI agent" }], get: (it) => it.identity.type },
+        ]}
+        commands={[{ label: "Start review", icon: <Plus size={16} />, onClick: onStart }]}
+        onRefresh={() => { reload(); onRefresh(); }}
+        bulkActions={[
+          { label: "Keep", icon: <Check size={16} />, run: async (rs) => { for (const it of rs.filter((x) => !x.decision)) await decide(it, "keep"); } },
+        ]}
+        rowLabel={(it) => `${it.identity.name}, ${it.grant}`}
+        onRowClick={(it) => setSelected(it.id)}
+        activeKey={selected}
+        empty={<EmptyState title="Nothing to review here" icon={<ClipboardCheck size={18} />}>This campaign has no items for this view.</EmptyState>}
+      />
+      {open && <ItemPanel it={open} onClose={() => setSelected(null)} />}
       <div className="xs faint">Tip: the Inbox shows your review items one at a time with keyboard shortcuts: A keeps, R revokes, J and K move.</div>
     </div>
   );
 }
 
 export function Reviews() {
-  const { data, error } = useApi<CampaignT[]>("/reviews/campaigns");
+  const { data, error, reload } = useApi<CampaignT[]>("/reviews/campaigns");
   const [params, setParams] = useSearchParams();
   const acts = useIdentityActions();
   const [days, setDays] = useState<"30" | "60" | "90">("60");
@@ -111,15 +158,16 @@ export function Reviews() {
     next.set("campaign", String(id));
     setParams(next, { replace: true });
   };
-  const crumbs: [string, string?][] = [["Governance", "/governance"], ["Access reviews"]];
+  const crumbs: [string, string?][] = [["Access"], ["Access reviews"]];
   return (
-    <Page
+    <Page tabs={<GovernanceTabs />}
       title="Access reviews"
+      count={data ? `${data.length} campaign${data.length === 1 ? "" : "s"}` : undefined}
       crumbs={crumbs}
       sub="Exception-only certification. Reviewers see only risky or unused access, with usage and peer context for each decision. Revokes apply to the graph immediately."
       actions={<>
-        <Segmented label="Unused threshold" value={days} onChange={setDays} options={[["30", "30 d"], ["60", "60 d"], ["90", "90 d"]]} />
-        <Button variant="primary" icon={<Plus size={15} />} onClick={() => acts.startCampaign(Number(days))}>Start review</Button>
+        <span className="small faint">New reviews flag access unused for</span>
+        <Segmented label="Unused threshold for new reviews" value={days} onChange={setDays} options={[["30", "30 d"], ["60", "60 d"], ["90", "90 d"]]} />
       </>}
     >
       {!data ? <div className="card flush"><Loading error={error} /></div> : data.length === 0 ? (
@@ -140,7 +188,7 @@ export function Reviews() {
             onChange={(v) => setSel(Number(v))}
             options={data.map((c) => ({ id: String(c.id), label: c.name, count: c.items - c.decided }))}
           />
-          {sel !== null && <Campaign key={sel} id={sel} identity={identity} />}
+          {sel !== null && <Campaign key={sel} id={sel} identity={identity} onRefresh={reload} onStart={() => acts.startCampaign(Number(days))} />}
           {data[0] && <div className="xs faint">Latest campaign started {fmtDate(data[0].created_at)}. <Link to="/inbox?filter=review">Review in the inbox</Link></div>}
         </div>
       )}

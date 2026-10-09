@@ -1,6 +1,6 @@
 import { Link, useNavigate } from "react-router-dom";
 import { IdentityBrief, useApi } from "../../api";
-import { Bar, Kpi, Loading, Page, TypeBadge } from "../../components";
+import { Bar, Kpi, Loading, Page, RiskPill, TypeBadge, InsightsTabs } from "../../components";
 
 export interface Summary {
   identities: { human: number; service: number; ai_agent: number; terminated: number };
@@ -20,7 +20,7 @@ export interface Summary {
   usage_trend: { day: string; events: number }[];
 }
 
-function Trend({ points }: { points: { day: string; events: number }[] }) {
+export function Trend({ points }: { points: { day: string; events: number }[] }) {
   if (!points.length) return null;
   const w = 600, h = 120, max = Math.max(...points.map((p) => p.events), 1);
   const xs = (i: number) => (i / Math.max(1, points.length - 1)) * w;
@@ -56,14 +56,14 @@ export function RiskyTable({ rows }: { rows: Summary["top_risky"] }) {
         <thead><tr><th>Identity</th><th className="hide-narrow">Type</th><th className="num hide-narrow">Permissions</th><th className="num">Unused</th><th className="num hide-narrow">Privileged</th><th className="num">Violations</th><th>Risk</th></tr></thead>
         <tbody>
           {rows.map((i) => (
-            <tr key={i.id} className="click" tabIndex={0} onClick={() => nav(`/directory/identities/${i.id}`)} onKeyDown={(e) => e.key === "Enter" && nav(`/directory/identities/${i.id}`)}>
-              <td><b>{i.name}</b><div className="xs faint">{i.title ?? i.department}</div></td>
+            <tr key={i.id} className="click" tabIndex={0} onClick={() => nav(panelHref(i))} onKeyDown={(e) => e.key === "Enter" && nav(panelHref(i))}>
+              <td><span className="name-link">{i.name}</span><div className="xs faint">{i.title ?? i.department}</div></td>
               <td className="hide-narrow"><TypeBadge type={i.type} /></td>
               <td className="num hide-narrow">{i.effective}</td>
               <td className="num">{i.unused}</td>
               <td className="num hide-narrow">{i.privileged}</td>
               <td className="num">{i.violations}</td>
-              <td style={{ width: 110 }}><Bar value={i.risk} tone="risk" /></td>
+              <td><RiskPill score={i.risk} /></td>
             </tr>
           ))}
         </tbody>
@@ -72,14 +72,17 @@ export function RiskyTable({ rows }: { rows: Summary["top_risky"] }) {
   );
 }
 
+/** Where a person or machine identity opens in its list's side panel. */
+export const panelHref = (i: { id: number; type: string }) => `/directory/${i.type === "human" ? "people" : "machine"}?selected=${i.id}`;
+
 export function RiskOverview() {
   const { data: d, error } = useApi<Summary>("/summary");
-  const crumbs: [string, string?][] = [["Insights", "/insights"], ["Risk overview"]];
-  if (!d) return <Page title="Risk overview" crumbs={crumbs}><Loading error={error} kind="page" /></Page>;
+  const crumbs: [string, string?][] = [["Protection"], ["Insights", "/insights"], ["Risk overview"]];
+  if (!d) return <Page tabs={<InsightsTabs />} title="Risk overview" crumbs={crumbs}><Loading error={error} kind="page" /></Page>;
   const policies = Object.entries(d.violations.by_policy).sort((a, b) => b[1] - a[1]);
   const maxPol = Math.max(...policies.map((p) => p[1]), 1);
   return (
-    <Page title="Risk overview" crumbs={crumbs} sub="Effective access across every person, service account and AI agent, computed from the identity graph and 90 days of usage.">
+    <Page tabs={<InsightsTabs />} title="Risk overview" crumbs={crumbs} sub="Effective access across every person, service account and AI agent, computed from the identity graph and 90 days of usage.">
       <RiskKpis d={d} />
       <div className="grid g4 mt">
         <Kpi label="Approvals waiting" value={d.jit.pending} sub={`${d.jit.active} active elevations`} to="/inbox?filter=approval" />
