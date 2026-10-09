@@ -55,7 +55,7 @@ func TestServeSeedsAndShutsDownGracefully(t *testing.T) {
 	if resp.StatusCode != 200 || resp.Header.Get("X-Content-Type-Options") != "nosniff" {
 		t.Errorf("health: %d %v", resp.StatusCode, resp.Header)
 	}
-	if !strings.Contains(out.String(), "Seeded Tessera") {
+	if !strings.Contains(out.String(), "Seeded Tessera") || !strings.Contains(out.String(), "deployment-readiness demo") {
 		t.Errorf("missing seed output: %q", out.String())
 	}
 	cancel()

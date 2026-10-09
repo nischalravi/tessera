@@ -109,3 +109,14 @@ CREATE TABLE IF NOT EXISTS recon_findings (
 );
 CREATE INDEX IF NOT EXISTS recon_findings_conn ON recon_findings(tenant_id, connection_id, status, severity);
 CREATE INDEX IF NOT EXISTS recon_findings_run ON recon_findings(tenant_id, run_id);
+
+-- Readiness score series (DR-5): a row whenever a score changes.
+CREATE TABLE IF NOT EXISTS readiness_scores (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000002',
+  scope TEXT NOT NULL CHECK (scope IN ('connection','tenant')),
+  connection_id TEXT, revision_id TEXT,
+  computed_at TEXT NOT NULL, score INTEGER NOT NULL CHECK (score BETWEEN 0 AND 100),
+  band TEXT NOT NULL, breakdown TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS readiness_scores_series ON readiness_scores(tenant_id, scope, connection_id, computed_at);

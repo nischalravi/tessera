@@ -119,7 +119,10 @@ func (s *Service) persist(c *store.Conn, b *Bundle, now time.Time) error {
 		}
 		states = append(states, st)
 	}
-	return c.ReplaceItemStates(b.Rev.ID, states)
+	if err := c.ReplaceItemStates(b.Rev.ID, states); err != nil {
+		return err
+	}
+	return s.RecordScore(c, b, now)
 }
 
 // Transition performs a user-requested forward step: draft →

@@ -14,6 +14,7 @@
 //	TESSERA_NOW           freeze the clock at an ISO-8601 time (tests and demos)
 //	TESSERA_ENV           "dev" allows activating non-demo connector types before DR-10
 //	TESSERA_READINESS_SCENARIO  simulated validation scenario for demo connectors: gaps (default) or happy
+//	TESSERA_READINESS_DEMO      "off" skips seeding the demo Okta connection for Deployment health
 package main
 
 import (
@@ -166,6 +167,12 @@ func seedDB(ctx context.Context, path string, clock timeutil.Clock, loader *poli
 	}
 	fmt.Fprintf(stdout, "Seeded Tessera in %.1fs: %s usage=%d hris=%d jit=%d\n", time.Since(start).Seconds(),
 		discovery, stats.Sync.Events.Usage, stats.Sync.Events.Hris, stats.Requests)
+	if os.Getenv("TESSERA_READINESS_DEMO") != "off" {
+		if err := seedReadinessDemo(ctx, st, clock); err != nil {
+			return fmt.Errorf("readiness demo: %w", err)
+		}
+		fmt.Fprintln(stdout, "Seeded the deployment-readiness demo: Okta (demo) connection validated and dry-run reconciled")
+	}
 	return nil
 }
 

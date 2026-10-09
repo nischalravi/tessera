@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -8,9 +9,29 @@ import (
 	"io/fs"
 	"os"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/ingest"
+	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/templates"
+	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 )
+
+// seedReadinessDemo seeds the demo Okta connection (validated and
+// dry-run reconciled) so Deployment health has data on a fresh database.
+func seedReadinessDemo(ctx context.Context, st *store.Store, clock timeutil.Clock) error {
+	reg, err := template.Default()
+	if err != nil {
+		return err
+	}
+	svc := readiness.NewService(reg, os.Getenv("TESSERA_ENV"))
+	svc.Runner.Scenario = os.Getenv("TESSERA_READINESS_SCENARIO")
+	return svc.SeedDemo(ctx, st, clock, func(c *store.Conn, runID, system string, res *connectors.DiscoveryResult) error {
+		_, err := ingest.Stage(c, runID, system, res)
+		return err
+	})
+}
 
 // readinessCmd runs `tessera readiness lint [-dir path]`: it lints the
 // embedded checklist templates (or the YAML files in -dir, for template
