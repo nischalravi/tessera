@@ -2,6 +2,7 @@ package policy
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/authz"
@@ -338,15 +339,83 @@ var goldenPolicies = []goldenPolicy{
 		}},
 	{id: "GC-74", kind: model.PolicyIdentity, json: `{"Statement":[{"Effect":"Allow","Action":"s3:GetObject","Resource":"*","Condition":{"Bool":{"aws:SecureTransport":"true"}}},
                            {"Effect":"Deny","Action":"s3:GetObject","Resource":"*","Condition":{"Bool":{"aws:SecureTransport":"true"}}}]}`},
+	// Incomplete ARNs (§8.3, IAM grammar notes): AWS completes them with "*" in
+	// identity-based policies; SCPs are over-approximated the same way (A21);
+	// resource policies keep the raw pattern only.
+	{id: "ARN-complete-identity", kind: model.PolicyIdentity,
+		json: `{"Statement":[{"Effect":"Allow","Action":"sqs:*","Resource":["arn:aws:sqs","arn:aws:sqs:us-east-1:111111111111:q","*"]}]}`,
+		check: func(t *testing.T, r *Result) {
+			s := stmt(t, r, 0)
+			wantPatterns(t, "Resource", s.Resources, "arn:aws:sqs", "arn:aws:sqs:us-east-1:111111111111:q", "*")
+			wantCompleted(t, s.Resources, "arn:aws:sqs:*:*:*", "arn:aws:sqs:us-east-1:111111111111:q", "*")
+			if !hasFinding(r, "INCOMPLETE_ARN") {
+				t.Error("missing INCOMPLETE_ARN info")
+			}
+		}},
+	{id: "ARN-complete-boundary", kind: model.PolicyBoundary,
+		json: `{"Statement":[{"Effect":"Allow","Action":"*","Resource":"*"},{"Effect":"Deny","Action":"s3:*","NotResource":["arn:aws:s3:us-east-1","arn"]}]}`,
+		check: func(t *testing.T, r *Result) {
+			s := stmt(t, r, 1)
+			wantPatterns(t, "NotResource", s.NotResources, "arn:aws:s3:us-east-1", "arn")
+			wantCompleted(t, s.NotResources, "arn:aws:s3:us-east-1:*:*", "arn") // "arn" alone is not an ARN pattern
+			if c := stmt(t, r, 0).Resources.Completed; c != nil {
+				t.Errorf(`"*" needs no completion, got %q`, c)
+			}
+		}},
+	{id: "ARN-complete-scp", kind: model.PolicySCP,
+		json: `{"Statement":[{"Effect":"Deny","Action":"iam:*","Resource":"arn:aws:iam"}]}`,
+		check: func(t *testing.T, r *Result) {
+			wantCompleted(t, stmt(t, r, 0).Resources, "arn:aws:iam:*:*:*")
+			if !findingCodes(r, SeverityWarning)["INCOMPLETE_ARN"] {
+				t.Error("missing INCOMPLETE_ARN warning (A21)")
+			}
+		}},
+	{id: "ARN-complete-variable-colons", kind: model.PolicyIdentity,
+		json: `{"Statement":[{"Effect":"Allow","Action":"s3:*","Resource":"arn:aws:s3:::b/${aws:PrincipalTag/a:b}"}]}`,
+		check: func(t *testing.T, r *Result) {
+			if c := stmt(t, r, 0).Resources.Completed; c != nil {
+				t.Errorf("a complete ARN with colons in a variable was completed: %q", c)
+			}
+		}},
+	{id: "ARN-not-completed-resource-policy", kind: model.PolicyResource,
+		json: `{"Statement":[{"Effect":"Deny","Principal":"*","Action":"sqs:*","Resource":"arn:aws:sqs"}]}`,
+		check: func(t *testing.T, r *Result) {
+			s := stmt(t, r, 0)
+			if s.Resources.Completed != nil {
+				t.Errorf("resource policies are not completed: %q", s.Resources.Completed)
+			}
+			if got := s.Resources.MatchPatterns(); len(got) != 1 || got[0] != "arn:aws:sqs" {
+				t.Errorf("MatchPatterns = %q", got)
+			}
+		}},
 }
 
-// TestGoldenPolicies parses every policy document of the golden corpus. None
-// may produce an anomaly or an error finding, and the parse-relevant cases
-// check the normalized model.
+func wantCompleted(t *testing.T, ps *model.PatternSet, want ...string) {
+	t.Helper()
+	if ps == nil {
+		t.Fatal("pattern set is absent")
+	}
+	if !reflect.DeepEqual(ps.Completed, want) || !reflect.DeepEqual(ps.MatchPatterns(), want) {
+		t.Errorf("completed = %q, want %q", ps.Completed, want)
+	}
+}
+
+// withCorpusVersion applies the corpus default policy_version "2012-10-17"
+// (§14.1) to a document that has no "Version", as the golden runner does.
+func withCorpusVersion(doc string) string {
+	if strings.Contains(doc, `"Version"`) {
+		return doc
+	}
+	return `{"Version":"2012-10-17",` + strings.TrimPrefix(doc, "{")
+}
+
+// TestGoldenPolicies parses every policy document of the golden corpus, with
+// the corpus default Version applied. None may produce an anomaly or an error
+// finding, and the parse-relevant cases check the normalized model.
 func TestGoldenPolicies(t *testing.T) {
 	for _, g := range goldenPolicies {
 		t.Run(g.id, func(t *testing.T) {
-			r, err := Parse([]byte(g.json), Options{Kind: g.kind, AWSManaged: g.id == "RCPFullAWSAccess" || g.id == "FullAWSAccess"})
+			r, err := Parse([]byte(withCorpusVersion(g.json)), Options{Kind: g.kind, AWSManaged: g.id == "RCPFullAWSAccess" || g.id == "FullAWSAccess"})
 			if err != nil {
 				t.Fatalf("parse: %v", err)
 			}

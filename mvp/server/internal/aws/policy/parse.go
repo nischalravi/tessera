@@ -15,11 +15,42 @@
 // other statements' Index values); the third keeps the statement.
 //
 // Case rules (§8.1): element names, Effect values, principal-map keys, ARNs and
-// patterns are kept exactly as written. Condition key names are lower-cased
-// (they are case-insensitive in AWS). Condition operator names are matched
+// patterns are kept exactly as written; element names and Effect values must
+// match the grammar's spelling exactly (ambiguities A19, A20). Condition key
+// names and policy-variable names are case-insensitive in AWS: Atom.Key and
+// variable names are folded with asciiLower, which lower-cases A–Z only, and
+// Atom.RawKey keeps the spelling for explanations. Unicode case folding is
+// never used, so a look-alike such as the Kelvin sign (U+212A) or the dotted
+// capital I (U+0130) cannot fold into an ASCII key such as "aws:sourceip",
+// and two keys that differ only by non-ASCII case ("É" and "é") are distinct
+// keys, not duplicates; any non-ASCII key gets a NON_ASCII_CONDITION_KEY
+// warning (ambiguity A22). Condition operator names are matched ASCII
 // case-insensitively and stored in canonical spelling, with a lint warning
-// when the spelling differs (AWS does not document operator-name case; see the
-// PR description and the ambiguity register).
+// when the spelling differs (ambiguity A18).
+//
+// Incomplete ARNs (§8.3): in identity and boundary policies AWS completes a
+// Resource or NotResource ARN with fewer than six segments by adding "*" for
+// every missing segment ("arn:aws:sqs" is "arn:aws:sqs:*:*:*"). The parser
+// keeps the raw pattern in PatternSet.Patterns and stores the completed one in
+// PatternSet.Completed. SCP completion is undocumented; it is completed the
+// same way, an over-approximation of what the pattern covers (ambiguity A21).
+// Session policies reject incomplete ARNs (a lint error).
+//
+// NullIfExists is a lint error (NULL_IFEXISTS), not an ingest anomaly: the
+// design forbids IfExists on Null (§9.3), but AWS documents no rejection or
+// evaluation rule for it, so the statement is kept as written (IfExists set)
+// and the condition evaluator (PR-4) owns its semantics. Anomalies are kept
+// for statements AWS documents as unusable.
+//
+// Fail-closed contract for stored policies. A *ParseError or a Dropped
+// anomaly on a policy fetched from AWS (a resource, trust or key policy, an
+// SCP or RCP, or an identity policy) must never make the policy silently
+// disappear from evaluation. The caller records the failure, and every
+// decision the policy could affect is marked authz.Unsupported with reason
+// authz.ReasonPolicyUnparseable. The connector (PR-7) enforces this at
+// ingest. The harness (PR-8) must not send a document with a Dropped anomaly
+// to the policy simulator: AWS would reject or reinterpret it, so the
+// comparison would be meaningless.
 package policy
 
 import (
@@ -29,6 +60,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/authz"
 	"github.com/nischalravi/tessera/mvp/server/internal/aws/model"
@@ -87,9 +119,27 @@ func (e *ParseError) Error() string {
 	return fmt.Sprintf("policy: line %d col %d: %s: %s", e.Line, e.Col, e.Path, e.Msg)
 }
 
+// Error text embeds policy keys and values, which can be up to
+// Limits.MaxStringBytes long, so the path and message are clipped.
+const (
+	maxErrorPath = 256
+	maxErrorMsg  = 512
+)
+
 func newError(pos *positions, off int, code, path, msg string) *ParseError {
 	l, c := pos.at(off)
-	return &ParseError{Code: code, Path: path, Offset: off, Line: l, Col: c, Msg: msg}
+	return &ParseError{Code: code, Path: clip(path, maxErrorPath), Offset: off, Line: l, Col: c, Msg: clip(msg, maxErrorMsg)}
+}
+
+// clip shortens s to at most n bytes plus "…", cutting on a rune boundary.
+func clip(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n] + "…"
 }
 
 // AnomalyCode names an ingest anomaly.
@@ -291,9 +341,9 @@ func (p *parser) statement(n *jnode, idx int, doc *model.PolicyDoc) (*model.Stat
 		case "NotAction":
 			st.NotActions, err = p.patterns(m.val, mp)
 		case "Resource":
-			st.Resources, err = p.patterns(m.val, mp)
+			st.Resources, err = p.resourcePatterns(m.val, mp)
 		case "NotResource":
-			st.NotResources, err = p.patterns(m.val, mp)
+			st.NotResources, err = p.resourcePatterns(m.val, mp)
 		case "Condition":
 			condNode = m.val
 		}
@@ -375,6 +425,56 @@ func (p *parser) patterns(n *jnode, path string) (*model.PatternSet, error) {
 		return nil, err
 	}
 	return &model.PatternSet{Patterns: l}, nil
+}
+
+// resourcePatterns reads Resource or NotResource and, in the policy kinds
+// where AWS completes incomplete ARNs, stores the completed patterns.
+func (p *parser) resourcePatterns(n *jnode, path string) (*model.PatternSet, error) {
+	ps, err := p.patterns(n, path)
+	if err != nil || !CompletesIncompleteARNs(p.opts.Kind) {
+		return ps, err
+	}
+	var completed []string
+	for i, pat := range ps.Patterns {
+		if c, ok := CompleteARN(pat); ok {
+			if completed == nil {
+				completed = append(make([]string, 0, len(ps.Patterns)), ps.Patterns[:i]...)
+			}
+			completed = append(completed, c)
+		} else if completed != nil {
+			completed = append(completed, pat)
+		}
+	}
+	ps.Completed = completed
+	return ps, nil
+}
+
+// CompletesIncompleteARNs reports whether incomplete resource ARNs in a
+// policy of this kind are completed with wildcards: identity and boundary
+// policies (documented in the IAM grammar notes) and SCPs (undocumented;
+// over-approximated, ambiguity A21).
+func CompletesIncompleteARNs(k model.PolicyKind) bool {
+	switch k {
+	case model.PolicyIdentity, model.PolicyBoundary, model.PolicySCP:
+		return true
+	}
+	return false
+}
+
+// CompleteARN completes an ARN pattern with fewer than six colon-separated
+// segments by adding ":*" for every missing segment, as AWS does in
+// identity-based policies: "arn:aws:sqs" becomes "arn:aws:sqs:*:*:*". Colons
+// inside ${…} do not count. ok is false when s is not an "arn:" pattern or
+// already has six or more segments.
+func CompleteARN(s string) (completed string, ok bool) {
+	if !strings.HasPrefix(s, "arn:") {
+		return s, false
+	}
+	n := arnSegments(s)
+	if n >= 6 {
+		return s, false
+	}
+	return s + strings.Repeat(":*", 6-n), true
 }
 
 // principal parses Principal or NotPrincipal: "*" or a map whose keys are
@@ -643,10 +743,11 @@ func (p *parser) condition(n *jnode, path string, idx int, span *Span, ref *auth
 		}
 		seenKeys := map[string]bool{}
 		for _, k := range m.val.members {
-			lower := strings.ToLower(k.key)
+			// ASCII-only folding: see the package comment and ambiguity A22.
+			lower := asciiLower(k.key)
 			if seenKeys[lower] {
 				return nil, newError(p.pos, k.keyStart, CodeDuplicateKey, mp,
-					fmt.Sprintf("condition key %q repeats another key in this block (key names are case-insensitive)", k.key))
+					fmt.Sprintf("condition key %q repeats another key in this block (key names are ASCII case-insensitive)", k.key))
 			}
 			seenKeys[lower] = true
 			vals, err := p.conditionValues(k.val, mp+"."+k.key)
@@ -654,7 +755,7 @@ func (p *parser) condition(n *jnode, path string, idx int, span *Span, ref *auth
 				return nil, err
 			}
 			atoms = append(atoms, authz.Atom{
-				Op: op, Key: lower, Values: vals, Qualifier: q, IfExists: ifExists,
+				Op: op, Key: lower, RawKey: k.key, Values: vals, Qualifier: q, IfExists: ifExists,
 				Negated: negatedOperators[op], Source: ref,
 			})
 		}

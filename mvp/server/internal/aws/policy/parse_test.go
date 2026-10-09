@@ -15,7 +15,8 @@ import (
 )
 
 // semantic strips the fields that legitimately differ between a document and
-// its re-parsed canonical form (ids, raw bytes, spans and provenance).
+// its re-parsed canonical form (ids, raw bytes, spans, provenance and the raw
+// spelling of condition keys, which the canonical form lower-cases).
 func semantic(d *model.PolicyDoc) *model.PolicyDoc {
 	c := *d
 	c.ID, c.RawJSON = "", nil
@@ -25,7 +26,7 @@ func semantic(d *model.PolicyDoc) *model.PolicyDoc {
 		if s.Condition != nil {
 			atoms := make([]authz.Atom, len(s.Condition))
 			for j, a := range s.Condition {
-				a.Source = nil
+				a.Source, a.RawKey = nil, ""
 				atoms[j] = a
 			}
 			s.Condition = atoms
@@ -160,7 +161,7 @@ var malformedCases = []struct {
 	{"NaN", `{"Statement":[{"Effect":"Allow","Action":"*","Resource":"*","Condition":{"NumericEquals":{"k":NaN}}}]}`, CodeInvalidJSON, Limits{}},
 	{"leading zero", `{"Statement":[{"Effect":"Allow","Action":"*","Resource":"*","Condition":{"NumericEquals":{"k":01}}}]}`, CodeInvalidJSON, Limits{}},
 	{"duplicate top-level key", `{"Statement":[],"Statement":[]}`, CodeDuplicateKey, Limits{}},
-	{"duplicate key via escape", `{"Statement":[],"Statement":[]}`, CodeDuplicateKey, Limits{}},
+	{"duplicate key via escape", `{"Statement":[],"St\u0061tement":[]}`, CodeDuplicateKey, Limits{}},
 	{"duplicate Effect", `{"Statement":[{"Effect":"Allow","Effect":"Deny","Action":"*","Resource":"*"}]}`, CodeDuplicateKey, Limits{}},
 	{"duplicate principal type", `{"Statement":[{"Effect":"Allow","Principal":{"AWS":"1","AWS":"2"},"Action":"*"}]}`, CodeDuplicateKey, Limits{}},
 	{"duplicate condition key by case", `{"Statement":[{"Effect":"Allow","Action":"*","Resource":"*","Condition":{"StringEquals":{"aws:SourceIp":"a","AWS:SOURCEIP":"b"}}}]}`, CodeDuplicateKey, Limits{}},
@@ -338,11 +339,9 @@ func checkSpanText(t *testing.T, raw []byte, s model.Statement) {
 
 // spanText returns raw[start:end] for an inclusive line/column span.
 func spanText(raw []byte, sp Span) []byte {
+	lines := lineStarts(raw)
 	offset := func(line, col int) int {
-		off := 0
-		for l := 1; l < line; l++ {
-			off += bytes.IndexByte(raw[off:], '\n') + 1
-		}
+		off := lines[line-1]
 		for c := 1; c < col; c++ {
 			_, w := utf8.DecodeRune(raw[off:])
 			off += w
@@ -353,6 +352,111 @@ func spanText(raw []byte, sp Span) []byte {
 	end := offset(sp.EndLine, sp.EndCol)
 	_, w := utf8.DecodeRune(raw[end:])
 	return raw[start : end+w]
+}
+
+// A lone "\r" ends a line, "\r\n" is one line break, and "\n" is one too.
+func TestSpansLineBreaks(t *testing.T) {
+	stmt := `{"Effect":"Allow","Action":"*","Resource":"*"}`
+	for name, br := range map[string]string{"LF": "\n", "CRLF": "\r\n", "CR": "\r"} {
+		in := "{" + br + `  "Statement": [` + br + "    " + stmt + "," + br + br + "\t" + stmt + br + "  ]" + br + "}"
+		r, err := Parse([]byte(in), Options{Kind: model.PolicyIdentity})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		want := []Span{
+			{StartLine: 3, StartCol: 5, EndLine: 3, EndCol: 4 + len(stmt)},
+			{StartLine: 5, StartCol: 2, EndLine: 5, EndCol: 1 + len(stmt)},
+		}
+		for i, w := range want {
+			if got := *r.Doc.Statements[i].Span; got != w {
+				t.Errorf("%s: statement %d span %+v, want %+v", name, i, got, w)
+			}
+			checkSpanText(t, []byte(in), r.Doc.Statements[i])
+		}
+		_, err = Parse([]byte("{"+br+br+`"Statement":[],"Statement":[]}`), Options{})
+		var pe *ParseError
+		if !errors.As(err, &pe) || pe.Line != 3 || pe.Col != 16 {
+			t.Errorf("%s: error position = %+v", name, pe)
+		}
+	}
+}
+
+// Error paths and messages embed policy keys of up to MaxStringBytes, so they
+// are clipped on a rune boundary.
+func TestParseErrorClipped(t *testing.T) {
+	long := strings.Repeat("é", 3000) // 6,000 bytes
+	for _, in := range []string{
+		`{"Statement":[{"Effect":"Allow","Action":"*","Resource":"*","Condition":{"StringEquals":{"` + long + `":null}}}]}`,
+		`{"Statement":[{"Effect":"Allow","Action":"*","Resource":"*","` + long + `":1}]}`,
+		`{"Statement":[{"Effect":"Allow","Action":"*","Resource":"*","Condition":{"` + long + `":{}}}]}`,
+	} {
+		_, err := Parse([]byte(in), Options{})
+		var pe *ParseError
+		if !errors.As(err, &pe) {
+			t.Fatalf("err = %v", err)
+		}
+		if len(pe.Path) > maxErrorPath+len("…") || len(pe.Msg) > maxErrorMsg+len("…") || len(pe.Error()) > 1024 {
+			t.Errorf("error not clipped: path %d bytes, msg %d bytes", len(pe.Path), len(pe.Msg))
+		}
+		if !utf8.ValidString(pe.Path) || !utf8.ValidString(pe.Msg) {
+			t.Error("clipping split a rune")
+		}
+		if !strings.HasSuffix(pe.Path, "…") && !strings.HasSuffix(pe.Msg, "…") {
+			t.Errorf("neither path nor message is marked as clipped: %v", pe)
+		}
+	}
+	if clip("abc", 3) != "abc" || clip("abcd", 3) != "abc…" || clip("aé", 2) != "a…" {
+		t.Error("clip")
+	}
+}
+
+// Condition keys fold A–Z only (§8.1, A22). Unicode look-alikes do not fold
+// into ASCII keys, and keys that differ only by non-ASCII case are distinct.
+func TestConditionKeyFolding(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		keys string   // the members of one StringEquals block
+		want []string // Atom.Key of each atom, in order
+		raw  []string // Atom.RawKey of each atom
+	}{
+		{"ASCII case folds", `"aws:SourceIp":"x"`, []string{"aws:sourceip"}, []string{"aws:SourceIp"}},
+		{"non-ASCII case differs (QA-1)", `"aws:PrincipalTag/É":"1","aws:PrincipalTag/é":"2"`,
+			[]string{"aws:principaltag/É", "aws:principaltag/é"}, []string{"aws:PrincipalTag/É", "aws:PrincipalTag/é"}},
+		{"Kelvin sign is not k", `"aws:PrincipalTag/k":"1","aws:PrincipalTag/\u212A":"2"`,
+			[]string{"aws:principaltag/k", "aws:principaltag/\u212A"}, []string{"aws:PrincipalTag/k", "aws:PrincipalTag/\u212A"}},
+		{"dotted capital I is not i", `"aws:SourceIp":"1","aws:Source\u0130p":"2"`,
+			[]string{"aws:sourceip", "aws:source\u0130p"}, []string{"aws:SourceIp", "aws:Source\u0130p"}},
+		{"look-alike alone keeps its spelling", `"AWS:SOURCE\u0130P":"1"`, []string{"aws:source\u0130p"}, []string{"AWS:SOURCE\u0130P"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*","Condition":{"StringEquals":{` + tc.keys + `}}}]}`
+			r, err := Parse([]byte(in), Options{Kind: model.PolicyIdentity})
+			if err != nil {
+				t.Fatal(err)
+			}
+			atoms := r.Doc.Statements[0].Condition
+			if len(atoms) != len(tc.want) {
+				t.Fatalf("atoms = %+v", atoms)
+			}
+			for i, a := range atoms {
+				if a.Key != tc.want[i] || a.RawKey != tc.raw[i] {
+					t.Errorf("atom %d key %q raw %q, want %q raw %q", i, a.Key, a.RawKey, tc.want[i], tc.raw[i])
+				}
+			}
+			nonASCII := false
+			for _, k := range tc.want {
+				nonASCII = nonASCII || !isASCII(k)
+			}
+			if hasFinding(r, "NON_ASCII_CONDITION_KEY") != nonASCII {
+				t.Errorf("NON_ASCII_CONDITION_KEY = %v, want %v", !nonASCII, nonASCII)
+			}
+			roundTrip(t, []byte(in), Options{Kind: model.PolicyIdentity})
+		})
+	}
+	// strings.ToLower would fold both look-alikes into ASCII keys.
+	if asciiLower("\u212A\u0130É") != "\u212A\u0130É" || strings.ToLower("\u212A\u0130") != "ki" {
+		t.Error("asciiLower must leave non-ASCII letters alone")
+	}
 }
 
 func TestSpansGolden(t *testing.T) {
@@ -607,41 +711,99 @@ func TestDefaultLimitsAboveAWS(t *testing.T) {
 // FuzzParse: the parser never panics, never exceeds its limits, and
 // parse → serialize → parse is stable. Seeded with every policy in the golden
 // corpus and every malformed case.
+//
+// When the high bit of kind is set, the document is parsed with small limits
+// derived from the input, so the depth, value-count, statement and string
+// limits are hit often rather than only by huge inputs.
 func FuzzParse(f *testing.F) {
 	for _, g := range goldenPolicies {
 		f.Add([]byte(g.json), uint8(g.kind))
+		f.Add([]byte(g.json), uint8(g.kind)|0x80)
 	}
 	for _, m := range malformedCases {
 		f.Add([]byte(m.in), uint8(0))
 	}
 	f.Add([]byte(`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3:*","Resource":"arn:aws:s3:::b/${aws:TagKeys}","Condition":{"forallvalues:stringlikeifexists":{"A:B":[1,true,"x"]}}}}`), uint8(model.PolicyIdentity))
 	f.Add([]byte(`{"Statement":[{"Effect":"Allow","NotPrincipal":"*","Action":"*","NotAction":"*"}]}`), uint8(model.PolicyResource))
+	f.Add([]byte(`{"Statement":[{"Effect":"Allow","Action":"*","Resource":"*","Condition":{"StringEquals":{"aws:PrincipalTag/\u00c9":"1","aws:PrincipalTag/\u00e9":"2","\u212A":"3"}}}]}`), uint8(model.PolicyIdentity))
+	f.Add([]byte("{\r\"Statement\":[{\"Effect\":\"Deny\",\"Action\":\"*\",\"Resource\":\"arn:aws:sqs\"}]\r}"), uint8(model.PolicySCP)|0x80)
 	f.Fuzz(func(t *testing.T, raw []byte, kind uint8) {
-		opts := Options{Kind: model.PolicyKind(kind % 12)}
+		opts := Options{Kind: model.PolicyKind((kind & 0x7f) % 12)}
+		small := kind&0x80 != 0
+		if small {
+			n := len(raw)
+			opts.Limits = Limits{
+				MaxBytes:       1 + n,
+				MaxDepth:       1 + n%7,
+				MaxStatements:  1 + n%3,
+				MaxStringBytes: 5 + n%32, // ≥ 5: a boolean condition value becomes "false"
+				MaxValues:      1 + n%40,
+			}
+		}
 		r, err := Parse(raw, opts)
 		if err != nil {
 			var pe *ParseError
 			if !errors.As(err, &pe) {
 				t.Fatalf("error is not a *ParseError: %v", err)
 			}
+			if len(pe.Path) > maxErrorPath+len("…") || len(pe.Msg) > maxErrorMsg+len("…") {
+				t.Fatalf("error text not clipped: %d / %d bytes", len(pe.Path), len(pe.Msg))
+			}
 			return
 		}
-		lim := DefaultLimits
+		lim := opts.Limits.orDefault()
 		if len(raw) > lim.MaxBytes || len(r.Doc.Statements) > lim.MaxStatements {
 			t.Fatalf("limits exceeded: %d bytes, %d statements", len(raw), len(r.Doc.Statements))
 		}
-		lines := bytes.Count(raw, []byte("\n")) + 1
+		str := func(what, s string) {
+			if len(s) > lim.MaxStringBytes {
+				t.Fatalf("%s is %d bytes, longer than MaxStringBytes %d", what, len(s), lim.MaxStringBytes)
+			}
+		}
+		str("Id", r.Doc.IDElement)
+		lines := len(lineStarts(raw))
 		for _, s := range r.Doc.Statements {
 			if s.Span == nil || s.Span.StartLine < 1 || s.Span.EndLine > lines || s.Span.EndLine < s.Span.StartLine {
 				t.Fatalf("bad span %+v (%d lines)", s.Span, lines)
 			}
+			str("Sid", s.Sid)
 			for _, ps := range []*model.PatternSet{s.Actions, s.NotActions, s.Resources, s.NotResources} {
-				if ps != nil {
-					for _, p := range ps.Patterns {
-						if len(p) > lim.MaxStringBytes {
-							t.Fatalf("pattern longer than the limit")
-						}
+				if ps == nil {
+					continue
+				}
+				for _, p := range ps.Patterns {
+					str("pattern", p)
+				}
+				if ps.Completed != nil && len(ps.Completed) != len(ps.Patterns) {
+					t.Fatalf("completed %q does not line up with patterns %q", ps.Completed, ps.Patterns)
+				}
+				for i, c := range ps.Completed {
+					if !strings.HasPrefix(c, ps.Patterns[i]) || len(c) > len(ps.Patterns[i])+len(":*:*:*:*") {
+						t.Fatalf("completed %q is not a completion of %q", c, ps.Patterns[i])
 					}
+				}
+			}
+			for _, pset := range []*model.PrincipalSet{s.Principals, s.NotPrincipals} {
+				if pset == nil {
+					continue
+				}
+				for _, list := range [][]string{pset.AWS, pset.CanonicalUser, pset.Federated, pset.Service} {
+					for _, v := range list {
+						str("principal", v)
+					}
+				}
+				for _, e := range pset.Entries {
+					str("principal entry", e.Value)
+				}
+			}
+			for _, a := range s.Condition {
+				str("condition key", a.Key)
+				str("raw condition key", a.RawKey)
+				if a.Key != asciiLower(a.RawKey) {
+					t.Fatalf("key %q is not the ASCII fold of %q", a.Key, a.RawKey)
+				}
+				for _, v := range a.Values {
+					str("condition value", v)
 				}
 			}
 			if (s.Actions == nil) == (s.NotActions == nil) {
@@ -653,6 +815,11 @@ func FuzzParse(f *testing.F) {
 			if s.NotPrincipals != nil && s.Effect == model.EffectAllow {
 				t.Fatal("NotPrincipal with Allow was kept")
 			}
+		}
+		if small {
+			// The canonical form can need more depth than the input (a string
+			// becomes a list), so the round trip uses the default limits.
+			opts.Limits = Limits{}
 		}
 		roundTrip(t, raw, opts)
 	})

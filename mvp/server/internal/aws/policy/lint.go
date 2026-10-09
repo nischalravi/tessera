@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/authz"
 	"github.com/nischalravi/tessera/mvp/server/internal/aws/model"
 )
 
@@ -72,14 +73,21 @@ func (l *linter) add(sev Severity, code string, st *model.Statement, format stri
 
 func (l *linter) document() {
 	d := l.doc
-	switch d.LanguageVersion {
-	case "":
+	switch {
+	case d.Kind == model.PolicySCP || d.Kind == model.PolicyRCP:
+		// "Every SCP must include a Version element with the value
+		// "2012-10-17"", and the RCP syntax page says the same [S5, S5a].
+		if d.LanguageVersion != model.LanguageVersion2012 {
+			l.add(SeverityError, "VERSION_REQUIRED", nil, `%s policies must have "Version": "2012-10-17"`, d.Kind)
+		}
+	case d.LanguageVersion == "":
 		l.add(SeverityWarning, "MISSING_VERSION", nil, `no "Version": policy variables are literal text; use "2012-10-17"`)
-	case model.LanguageVersion2008:
+	case d.LanguageVersion == model.LanguageVersion2008:
 		l.add(SeverityInfo, "VERSION_2008", nil, `"Version": "2008-10-17" makes policy variables literal text`)
 	}
 	if d.IDElement != "" && d.Kind.IsIdentityBased() {
-		l.add(SeverityWarning, "ID_NOT_ALLOWED", nil, `"Id" must not be included in identity-based policies`)
+		// The grammar: the id_block "must not be included in identity-based policies".
+		l.add(SeverityError, "ID_NOT_ALLOWED", nil, `"Id" must not be included in identity-based policies`)
 	}
 	if len(d.Statements) == 0 {
 		l.add(SeverityError, "NO_STATEMENTS", nil, "the policy has no usable statements")
@@ -116,8 +124,11 @@ func (l *linter) statement(st *model.Statement) {
 				"Deny with NotPrincipal always denies principals that have a permissions boundary, and exempts a principal only if its account ARN is listed too")
 		}
 	}
-	if kind == model.PolicyRCP {
+	switch kind {
+	case model.PolicyRCP:
 		l.rcp(st)
+	case model.PolicySCP:
+		l.scp(st)
 	}
 	if st.Sid != "" && (kind.IsIdentityBased() || kind == model.PolicyTrust) && !isAlnum(st.Sid) {
 		l.add(SeverityWarning, "SID_CHARSET", st, "IAM policies allow only A–Z, a–z and 0–9 in Sid, got %q", st.Sid)
@@ -144,20 +155,36 @@ func (l *linter) statement(st *model.Statement) {
 	l.conditions(st)
 }
 
+// scp checks the SCP-only rules.
+func (l *linter) scp(st *model.Statement) {
+	// The SCP syntax page: "In statements where the Effect element has a value
+	// of Allow, you can specify only "*" in the Resource element of an SCP."
+	// The September 2025 launch of the full IAM language in SCPs allows
+	// individual resource ARNs in Allow statements, so the docs conflict
+	// (ambiguity A2): this is a warning, and the evaluator follows the launch.
+	if st.Effect == model.EffectAllow && st.Resources != nil {
+		for _, r := range st.Resources.Patterns {
+			if r != "*" {
+				l.add(SeverityWarning, "SCP_ALLOW_RESOURCE_NOT_STAR", st,
+					`the SCP syntax page allows only "Resource": "*" in Allow statements, got %q; the 2025 full-language launch allows ARNs (ambiguity A2)`, r)
+				break
+			}
+		}
+	}
+}
+
 func (l *linter) rcp(st *model.Statement) {
+	// "You can only specify "*" in the Principal element of an RCP." Only the
+	// bare string form counts: {"AWS": "*"} is a wildcard for matching but is
+	// not the spelling AWS accepts, so Star (not Entries) is checked.
+	if st.Principals != nil && !st.Principals.Star {
+		l.add(SeverityError, "RCP_PRINCIPAL_NOT_WILDCARD", st, `RCPs must use "Principal": "*" (the bare string, not a map)`)
+	}
 	if l.doc.AWSManaged {
 		return // RCPFullAWSAccess is the one Allow RCP
 	}
 	if st.Effect == model.EffectAllow {
 		l.add(SeverityError, "RCP_ALLOW_NOT_ALLOWED", st, "customer-managed RCPs may only contain Deny statements")
-	}
-	if st.Principals != nil {
-		for _, e := range st.Principals.Entries {
-			if e.Kind != model.PrincipalWildcard {
-				l.add(SeverityError, "RCP_PRINCIPAL_NOT_WILDCARD", st, `RCPs must use "Principal": "*"`)
-				break
-			}
-		}
 	}
 	if st.NotActions != nil {
 		l.add(SeverityError, "RCP_NOTACTION_UNSUPPORTED", st, "RCPs do not support NotAction")
@@ -205,18 +232,22 @@ func (l *linter) resources(st *model.Statement) {
 				l.add(SeverityWarning, "RESOURCE_FORMAT", st, "resource %q is neither \"*\" nor an ARN", r)
 				continue
 			}
-			if arnSegments(r) < 6 {
+			if completed, ok := CompleteARN(r); ok {
 				// AWS completes an incomplete ARN with wildcards in identity-based
 				// policies, and rejects it in session policies [IAM grammar notes].
 				switch {
 				case kind == model.PolicySession:
 					l.add(SeverityError, "INCOMPLETE_ARN", st, "session policies do not accept incomplete ARNs: %q", r)
-				case kind.IsIdentityBased():
-					l.add(SeverityInfo, "INCOMPLETE_ARN", st, "AWS completes %q with \"*\" for every missing segment", r)
+				case kind == model.PolicySCP:
+					l.add(SeverityWarning, "INCOMPLETE_ARN", st,
+						"AWS does not document incomplete ARNs in SCPs; %q is evaluated as %q (ambiguity A21)", r, completed)
+				case CompletesIncompleteARNs(kind):
+					l.add(SeverityInfo, "INCOMPLETE_ARN", st, "AWS completes %q to %q", r, completed)
 				default:
 					l.add(SeverityWarning, "INCOMPLETE_ARN", st, "resource ARN %q has fewer than six segments", r)
 				}
 			}
+			l.variableSyntax(st, r)
 			if hasVariable(r) {
 				if !l.doc.VariablesEnabled() {
 					l.add(SeverityWarning, "VARIABLES_LITERAL", st, `policy variables in %q are literal text without "Version": "2012-10-17"`, r)
@@ -268,6 +299,10 @@ func (l *linter) principals(st *model.Statement, ps *model.PrincipalSet, elem st
 				"wildcards cannot match part of a principal (only \"*\" alone is allowed): %q", e.Value)
 		case e.Kind == model.PrincipalUnrecognized:
 			l.add(SeverityWarning, "INVALID_PRINCIPAL", st, "%q is not an account id, account root, user, role, session, federated-user ARN or unique id", e.Value)
+		case e.Kind == model.PrincipalService && asciiLower(e.Value) != e.Value:
+			// Service principal names are lower-case (§8.1) and principal
+			// ARNs and names are compared case-sensitively.
+			l.add(SeverityWarning, "SERVICE_PRINCIPAL_CASE", st, "service principal %q has upper-case letters; service principals are lower-case, e.g. %q", e.Value, asciiLower(e.Value))
 		}
 		if hasVariable(e.Value) {
 			l.add(SeverityWarning, "VARIABLE_NOT_ALLOWED", st, "policy variables are literal text in %s: %q", elem, e.Value)
@@ -292,7 +327,11 @@ func (l *linter) conditions(st *model.Statement) {
 			}
 		}
 		if len(a.Values) == 0 {
-			l.add(SeverityWarning, "EMPTY_CONDITION_VALUES", st, "%s on %s has no values, so it can never match", name, a.Key)
+			l.add(SeverityWarning, "EMPTY_CONDITION_VALUES", st, "%s on %s has no values: %s", name, a.Key, emptyValuesMeaning(a))
+		}
+		if !isASCII(a.Key) {
+			l.add(SeverityWarning, "NON_ASCII_CONDITION_KEY", st,
+				"condition key %q has non-ASCII characters; only A–Z fold to lower case, so it never equals an ASCII key (ambiguity A22)", rawKey(a))
 		}
 		if hasVariable(a.Key) {
 			l.add(SeverityWarning, "VARIABLE_NOT_ALLOWED", st, "policy variables are literal text in condition keys: %q", a.Key)
@@ -301,6 +340,7 @@ func (l *linter) conditions(st *model.Statement) {
 			if !hasVariable(v) {
 				continue
 			}
+			l.variableSyntax(st, v)
 			switch {
 			case !variableOperator(a.Op):
 				l.add(SeverityWarning, "VARIABLE_NOT_ALLOWED", st, "policy variables are literal text in %s values: %q", a.Op, v)
@@ -309,6 +349,54 @@ func (l *linter) conditions(st *model.Statement) {
 			}
 		}
 	}
+}
+
+// emptyValuesMeaning says what a condition with an empty value list does
+// (§9.3). There is no policy value to equal, so each request value fails a
+// positive test and passes a negated one.
+func emptyValuesMeaning(a authz.Atom) string {
+	switch {
+	case a.Op == "Null":
+		return "it never matches"
+	case a.Qualifier == authz.ForAllValues && !a.Negated:
+		return "it matches only when the key is missing or has no values"
+	case a.Qualifier == authz.ForAnyValue && a.Negated:
+		return "it matches whenever the key has at least one value"
+	case a.Negated:
+		return "a negated operator with no values always matches"
+	case a.IfExists:
+		return "it matches only when the key is missing"
+	default:
+		return "it never matches"
+	}
+}
+
+// variableSyntax flags ${…} text that the variable grammar reads differently
+// from how it looks: a nested "${", or a "}" inside a quoted default.
+func (l *linter) variableSyntax(st *model.Statement, s string) {
+	for _, r := range variableRefs(s) {
+		if r.problem != "" {
+			l.add(SeverityWarning, "VARIABLE_SYNTAX", st, "%s: %q", r.problem, s)
+		}
+	}
+}
+
+// rawKey is the key as the policy spells it, or the folded key for atoms
+// built in code.
+func rawKey(a authz.Atom) string {
+	if a.RawKey != "" {
+		return a.RawKey
+	}
+	return a.Key
+}
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
 }
 
 func isAlnum(s string) bool {

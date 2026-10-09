@@ -19,21 +19,29 @@ var globalMultivaluedKeys = map[string]bool{
 	"aws:principalservicenameslist": true,
 }
 
-// IsGlobalMultivaluedKey reports whether a lower-cased key is one of the
+// IsGlobalMultivaluedKey reports whether a lower-cased (asciiLower) key is one of the
 // multivalued global condition keys.
 func IsGlobalMultivaluedKey(lowerKey string) bool { return globalMultivaluedKeys[lowerKey] }
 
 // varRef is one ${…} occurrence in a string.
 type varRef struct {
 	start, end int    // byte offsets of "${" and just past "}"
-	key        string // lower-cased key name; "" for an escape
+	key        string // key name with ASCII letters lower-cased (asciiLower); "" for an escape
+	rawKey     string // key name as written, trimmed; "" for an escape
 	escape     bool   // ${*}, ${?} or ${$}
 	hasDefault bool
+	// problem describes text that does not follow the variable grammar and
+	// probably does not mean what the author intended; "" if none. The
+	// reference still ends at the first "}", as AWS's grammar has no nesting
+	// and no quoting of "}".
+	problem string
 }
 
 // variableRefs finds the ${…} references in s using the grammar of §9.3:
 // ${key}, ${key, 'default'}, and the escapes ${*}, ${?} and ${$}. An
-// unterminated "${" is literal text.
+// unterminated "${" is literal text. A reference ends at the first "}", so a
+// nested "${" or a "}" inside a quoted default ends it early; both are
+// recorded in problem for the linter.
 func variableRefs(s string) []varRef {
 	var out []varRef
 	for i := 0; i < len(s); {
@@ -56,8 +64,15 @@ func variableRefs(s string) []varRef {
 			key := inner
 			if c := strings.IndexByte(inner, ','); c >= 0 {
 				key, r.hasDefault = inner[:c], true
+				if d := strings.TrimSpace(inner[c+1:]); strings.HasPrefix(d, "'") && (len(d) < 2 || !strings.HasSuffix(d, "'")) {
+					r.problem = `"}" inside a quoted default ends the variable early`
+				}
 			}
-			r.key = strings.ToLower(strings.TrimSpace(key))
+			if strings.Contains(inner, "${") {
+				r.problem = `nested "${" inside a variable; variables do not nest`
+			}
+			r.rawKey = strings.TrimSpace(key)
+			r.key = asciiLower(r.rawKey)
 		}
 		out = append(out, r)
 		i = end

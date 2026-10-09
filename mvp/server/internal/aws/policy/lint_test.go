@@ -2,6 +2,7 @@ package policy
 
 import (
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/aws/model"
@@ -48,9 +49,65 @@ func TestLint(t *testing.T) {
 				{"Effect":"Deny","NotPrincipal":{"AWS":"111111111111"},"Action":"s3:*","Resource":"*"}]}`,
 			want: map[string]Severity{"RCP_ALLOW_NOT_ALLOWED": SeverityError, "RCP_PRINCIPAL_NOT_WILDCARD": SeverityError,
 				"RCP_NOTACTION_UNSUPPORTED": SeverityError, "RCP_ACTION_STAR": SeverityError, "NOTPRINCIPAL_NOT_ALLOWED": SeverityError}},
-		{name: "RCP with {\"AWS\": \"*\"} is a wildcard", kind: model.PolicyRCP,
+		{name: "RCP with {\"AWS\": \"*\"} is not the bare \"*\" RCPs require", kind: model.PolicyRCP,
 			in:     `{` + v + `"Statement":[{"Effect":"Deny","Principal":{"AWS":"*"},"Action":"s3:*","Resource":"*"}]}`,
-			absent: []string{"RCP_PRINCIPAL_NOT_WILDCARD", "PRINCIPAL_REQUIRED"}},
+			want:   map[string]Severity{"RCP_PRINCIPAL_NOT_WILDCARD": SeverityError},
+			absent: []string{"PRINCIPAL_REQUIRED"}},
+		{name: "RCP with the bare \"*\" principal", kind: model.PolicyRCP,
+			in:     `{` + v + `"Statement":[{"Effect":"Deny","Principal":"*","Action":"s3:*","Resource":"*"}]}`,
+			absent: []string{"RCP_PRINCIPAL_NOT_WILDCARD", "PRINCIPAL_REQUIRED", "VERSION_REQUIRED"}},
+		{name: "AWS-managed RCP still needs the bare \"*\"", kind: model.PolicyRCP, managed: true,
+			in:   `{` + v + `"Statement":[{"Effect":"Allow","Principal":{"AWS":"*"},"Action":"*","Resource":"*"}]}`,
+			want: map[string]Severity{"RCP_PRINCIPAL_NOT_WILDCARD": SeverityError}},
+		{name: "RCP without Version", kind: model.PolicyRCP,
+			in:     `{"Statement":[{"Effect":"Deny","Principal":"*","Action":"s3:*","Resource":"*"}]}`,
+			want:   map[string]Severity{"VERSION_REQUIRED": SeverityError},
+			absent: []string{"MISSING_VERSION"}},
+		{name: "SCP without Version", kind: model.PolicySCP,
+			in:   `{"Statement":[{"Effect":"Deny","Action":"s3:*","Resource":"*"}]}`,
+			want: map[string]Severity{"VERSION_REQUIRED": SeverityError}},
+		{name: "SCP with Version 2008", kind: model.PolicySCP,
+			in:     `{"Version":"2008-10-17","Statement":[{"Effect":"Deny","Action":"s3:*","Resource":"*"}]}`,
+			want:   map[string]Severity{"VERSION_REQUIRED": SeverityError},
+			absent: []string{"VERSION_2008"}},
+		{name: "AWS-managed SCP without Version", kind: model.PolicySCP, managed: true,
+			in:   `{"Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}`,
+			want: map[string]Severity{"VERSION_REQUIRED": SeverityError}},
+		{name: "SCP with Version 2012", kind: model.PolicySCP, in: fullAccess,
+			absent: []string{"VERSION_REQUIRED", "MISSING_VERSION", "SCP_ALLOW_RESOURCE_NOT_STAR"}},
+		{name: "SCP Allow naming a resource ARN", kind: model.PolicySCP,
+			in:   `{` + v + `"Statement":[{"Effect":"Allow","Action":"s3:*","Resource":["*","arn:aws:s3:::b"]}]}`,
+			want: map[string]Severity{"SCP_ALLOW_RESOURCE_NOT_STAR": SeverityWarning}},
+		{name: "SCP Deny may name resource ARNs", kind: model.PolicySCP,
+			in:     `{` + v + `"Statement":[{"Effect":"Deny","Action":"s3:*","Resource":"arn:aws:s3:::b"}]}`,
+			absent: []string{"SCP_ALLOW_RESOURCE_NOT_STAR"}},
+		{name: "incomplete ARN in an SCP is an ambiguity", kind: model.PolicySCP,
+			in:   `{` + v + `"Statement":[{"Effect":"Deny","Action":"sqs:*","Resource":"arn:aws:sqs"}]}`,
+			want: map[string]Severity{"INCOMPLETE_ARN": SeverityWarning}},
+		{name: "incomplete ARN in a boundary is completed by AWS", kind: model.PolicyBoundary,
+			in:   `{` + v + `"Statement":[{"Effect":"Allow","Action":"sqs:*","Resource":"arn:aws:sqs"}]}`,
+			want: map[string]Severity{"INCOMPLETE_ARN": SeverityInfo}},
+		{name: "upper-case service principal", kind: model.PolicyTrust,
+			in:   `{` + v + `"Statement":[{"Effect":"Allow","Principal":{"Service":["EC2.amazonaws.com","lambda.amazonaws.com"]},"Action":"sts:AssumeRole"}]}`,
+			want: map[string]Severity{"SERVICE_PRINCIPAL_CASE": SeverityWarning}},
+		{name: "lower-case service principal", kind: model.PolicyTrust,
+			in:     `{` + v + `"Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}`,
+			absent: []string{"SERVICE_PRINCIPAL_CASE"}},
+		{name: "non-ASCII condition keys", kind: model.PolicyIdentity,
+			in:   `{` + v + `"Statement":[{"Effect":"Allow","Action":"*","Resource":"*","Condition":{"StringEquals":{"aws:PrincipalTag/É":"1","aws:PrincipalTag/é":"2"}}}]}`,
+			want: map[string]Severity{"NON_ASCII_CONDITION_KEY": SeverityWarning}},
+		{name: "ASCII condition keys", kind: model.PolicyIdentity,
+			in:     `{` + v + `"Statement":[{"Effect":"Allow","Action":"*","Resource":"*","Condition":{"StringEquals":{"aws:PrincipalTag/E":"1"}}}]}`,
+			absent: []string{"NON_ASCII_CONDITION_KEY"}},
+		{name: "nested variable", kind: model.PolicyIdentity,
+			in:   `{` + v + `"Statement":[{"Effect":"Allow","Action":"s3:*","Resource":"arn:aws:s3:::b/${aws:PrincipalTag/${aws:username}}/*"}]}`,
+			want: map[string]Severity{"VARIABLE_SYNTAX": SeverityWarning}},
+		{name: "brace inside a quoted default", kind: model.PolicyIdentity,
+			in:   `{` + v + `"Statement":[{"Effect":"Allow","Action":"s3:*","Resource":"*","Condition":{"StringLike":{"s3:prefix":"${aws:username, 'a}b'}"}}}]}`,
+			want: map[string]Severity{"VARIABLE_SYNTAX": SeverityWarning}},
+		{name: "well-formed variable with a default", kind: model.PolicyIdentity,
+			in:     `{` + v + `"Statement":[{"Effect":"Allow","Action":"s3:*","Resource":"arn:aws:s3:::b/${aws:PrincipalTag/team, 'none'}/*"}]}`,
+			absent: []string{"VARIABLE_SYNTAX"}},
 		{name: "AWS-managed RCPFullAWSAccess", kind: model.PolicyRCP, managed: true, in: rcpFullAWS,
 			absent: []string{"RCP_ALLOW_NOT_ALLOWED", "RCP_ACTION_STAR"}},
 		{name: "Sid charset in IAM policies", kind: model.PolicyIdentity,
@@ -95,7 +152,7 @@ func TestLint(t *testing.T) {
 			want: map[string]Severity{"VARIABLES_LITERAL": SeverityWarning, "MISSING_VERSION": SeverityWarning}},
 		{name: "Id in an identity policy", kind: model.PolicyIdentity,
 			in:   `{` + v + `"Id":"x","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}`,
-			want: map[string]Severity{"ID_NOT_ALLOWED": SeverityWarning}},
+			want: map[string]Severity{"ID_NOT_ALLOWED": SeverityError}},
 		{name: "Id in a resource policy is fine", kind: model.PolicyResource,
 			in:     `{` + v + `"Id":"x","Statement":[{"Effect":"Allow","Principal":"*","Action":"sqs:*"}]}`,
 			absent: []string{"ID_NOT_ALLOWED"}},
@@ -165,6 +222,41 @@ func TestLint(t *testing.T) {
 	}
 }
 
+// EMPTY_CONDITION_VALUES says what an empty value list actually does: a
+// positive operator never matches, a negated one (or ForAllValues on a
+// missing key) does.
+func TestEmptyConditionValuesMessage(t *testing.T) {
+	for op, want := range map[string]string{
+		"StringEquals":                 "it never matches",
+		"ForAnyValue:StringEquals":     "it never matches",
+		"StringNotEquals":              "a negated operator with no values always matches",
+		"ForAllValues:StringNotEquals": "a negated operator with no values always matches",
+		"ForAllValues:StringEquals":    "it matches only when the key is missing or has no values",
+		"ForAnyValue:StringNotEquals":  "it matches whenever the key has at least one value",
+		"StringEqualsIfExists":         "it matches only when the key is missing",
+		"StringNotEqualsIfExists":      "a negated operator with no values always matches",
+		"Null":                         "it never matches",
+	} {
+		in := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*","Condition":{"` + op + `":{"k":[]}}}]}`
+		r, err := Parse([]byte(in), Options{Kind: model.PolicyIdentity})
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, f := range r.Findings {
+			if f.Code == "EMPTY_CONDITION_VALUES" {
+				found = true
+				if !strings.HasSuffix(f.Message, ": "+want) {
+					t.Errorf("%s: message %q, want suffix %q", op, f.Message, want)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("%s: no EMPTY_CONDITION_VALUES finding", op)
+		}
+	}
+}
+
 // Lint works on documents built in code, without the raw text.
 func TestLintModelOnly(t *testing.T) {
 	doc := &model.PolicyDoc{Kind: model.PolicyIdentity, LanguageVersion: model.LanguageVersion2012, Statements: []model.Statement{{
@@ -190,6 +282,9 @@ func TestVariableRefs(t *testing.T) {
 		{"a${b", nil},
 		{"${a}${", []string{"a"}},
 		{"$${a}}", []string{"a"}},
+		{"${AWS:UserName}", []string{"aws:username"}},
+		{"${aws:PrincipalTag/\u212A}", []string{"aws:principaltag/\u212A"}}, // the Kelvin sign does not fold to "k"
+		{"${aws:PrincipalTag/\u0130}", []string{"aws:principaltag/\u0130"}}, // nor does the dotted capital I fold to "i"
 		{"", nil},
 	} {
 		var got []string

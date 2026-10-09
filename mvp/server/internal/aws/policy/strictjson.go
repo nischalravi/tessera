@@ -264,20 +264,29 @@ func jsonMessage(err error) string {
 }
 
 // positions converts byte offsets to 1-based line and column numbers.
-// Columns count Unicode code points; lines end at '\n'.
+// Columns count Unicode code points. A line ends at "\n", "\r\n" (one break)
+// or a lone "\r", as in editors and JSON's own white space.
 type positions struct {
 	raw   []byte
 	lines []int // byte offset of the start of each line
 }
 
 func newPositions(raw []byte) *positions {
-	p := &positions{raw: raw, lines: []int{0}}
+	return &positions{raw: raw, lines: lineStarts(raw)}
+}
+
+// lineStarts returns the byte offset of the start of each line of raw.
+func lineStarts(raw []byte) []int {
+	lines := []int{0}
 	for i, c := range raw {
-		if c == '\n' {
-			p.lines = append(p.lines, i+1)
+		switch {
+		case c == '\n':
+			lines = append(lines, i+1)
+		case c == '\r' && (i+1 == len(raw) || raw[i+1] != '\n'):
+			lines = append(lines, i+1)
 		}
 	}
-	return p
+	return lines
 }
 
 // at returns the line and column of byte offset off (clamped to the document).
