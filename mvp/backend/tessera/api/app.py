@@ -266,6 +266,17 @@ def identity_detail(identity_id: int, unused_days: int = 60, c: Ctx = Depends(ct
     }
 
 
+@app.get("/api/accounts")
+def list_accounts(system: str | None = None, s: Session = Depends(get_session)):
+    """Read-only account inventory for the directory's Accounts list (one row per system account)."""
+    stmt = select(Account).order_by(Account.system, Account.username)
+    if system:
+        stmt = stmt.where(Account.system == system)
+    return [{"id": a.id, "system": a.system, "username": a.username, "kind": a.kind, "status": a.status,
+             "created_at": _iso(a.created_at), "last_login_at": _iso(a.last_login_at),
+             "identity": _ident_brief(a.identity)} for a in s.scalars(stmt)]
+
+
 @app.get("/api/groups")
 def list_groups(requestable: bool | None = None, s: Session = Depends(get_session)):
     stmt = select(Group)

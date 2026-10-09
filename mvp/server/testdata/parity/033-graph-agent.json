@@ -1,0 +1,121 @@
+{
+ "name": "graph-agent",
+ "request": {
+  "method": "GET",
+  "path": "/api/graph?identity_id=67"
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "nodes": [
+    {
+     "id": "account:128",
+     "kind": "account",
+     "label": "okta:agent-support-copilot@agents.larkspur.example",
+     "system": "okta",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "account:207",
+     "kind": "account",
+     "label": "snowflake:agent-support-copilot",
+     "system": "snowflake",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "group:38",
+     "kind": "group",
+     "label": "snowflake:PII_READER",
+     "system": "snowflake",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "identity:67",
+     "kind": "identity",
+     "label": "Support Copilot",
+     "system": null,
+     "privileged": false,
+     "type": "ai_agent",
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "perm:49",
+     "kind": "perm",
+     "label": "snowflake:SELECT on snowflake/CUSTOMERS",
+     "system": "snowflake",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [
+      "pii"
+     ],
+     "environment": "prod"
+    },
+    {
+     "id": "resource:23",
+     "kind": "resource",
+     "label": "snowflake/CUSTOMERS",
+     "system": "snowflake",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [
+      "pii"
+     ],
+     "environment": "prod"
+    }
+   ],
+   "edges": [
+    {
+     "source": "account:207",
+     "target": "group:38",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 413
+    },
+    {
+     "source": "group:38",
+     "target": "perm:49",
+     "relation": "grants",
+     "source_kind": "connector",
+     "edge_id": 361
+    },
+    {
+     "source": "identity:67",
+     "target": "account:128",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "identity:67",
+     "target": "account:207",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "perm:49",
+     "target": "resource:23",
+     "relation": "on",
+     "source_kind": "connector",
+     "edge_id": null
+    }
+   ]
+  }
+ }
+}

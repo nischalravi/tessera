@@ -1,0 +1,28 @@
+{
+ "name": "revoke-422",
+ "request": {
+  "method": "POST",
+  "path": "/api/least-privilege/revoke",
+  "body": {
+   "dry_run": false
+  }
+ },
+ "response": {
+  "status": 422,
+  "body": {
+   "detail": [
+    {
+     "type": "missing",
+     "loc": [
+      "body",
+      "edge_id"
+     ],
+     "msg": "Field required",
+     "input": {
+      "dry_run": false
+     }
+    }
+   ]
+  }
+ }
+}

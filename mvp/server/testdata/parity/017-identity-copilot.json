@@ -1,0 +1,234 @@
+{
+ "name": "identity-copilot",
+ "request": {
+  "method": "GET",
+  "path": "/api/identities/67"
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "id": 67,
+   "name": "Support Copilot",
+   "type": "ai_agent",
+   "status": "active",
+   "department": null,
+   "title": "AI agent",
+   "email": null,
+   "description": "Drafts replies to customer tickets using account history",
+   "hired_at": null,
+   "terminated_at": null,
+   "manager": null,
+   "owner": {
+    "id": 50,
+    "name": "Yara Castellanos",
+    "type": "human",
+    "status": "active",
+    "department": "Support",
+    "title": "Support Lead"
+   },
+   "accounts": [
+    {
+     "id": 128,
+     "system": "okta",
+     "username": "agent-support-copilot@agents.larkspur.example",
+     "kind": "agent",
+     "status": "active",
+     "last_login_at": "2026-10-06T17:22:37.823026"
+    },
+    {
+     "id": 207,
+     "system": "snowflake",
+     "username": "agent-support-copilot",
+     "kind": "agent",
+     "status": "active",
+     "last_login_at": "2026-10-07T04:38:15.048570"
+    }
+   ],
+   "grants": [
+    {
+     "edge_id": 182,
+     "src": "account:128",
+     "dst": "group:20",
+     "label": "okta:ai-agents",
+     "account": "okta:agent-support-copilot@agents.larkspur.example",
+     "relation": "member_of",
+     "source": "connector",
+     "expires_at": null,
+     "privileged": false
+    },
+    {
+     "edge_id": 413,
+     "src": "account:207",
+     "dst": "group:38",
+     "label": "snowflake:PII_READER",
+     "account": "snowflake:agent-support-copilot",
+     "relation": "member_of",
+     "source": "connector",
+     "expires_at": null,
+     "privileged": false
+    }
+   ],
+   "effective_permissions": [
+    {
+     "perm_key": "perm:49",
+     "action": "snowflake:SELECT",
+     "system": "snowflake",
+     "resource": "snowflake/CUSTOMERS",
+     "resource_id": 23,
+     "environment": "prod",
+     "tags": [
+      "pii"
+     ],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 1683,
+      "active_days_90d": 79
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:67",
+        "kind": "identity",
+        "label": "Support Copilot",
+        "system": null
+       },
+       {
+        "key": "account:207",
+        "kind": "account",
+        "label": "snowflake:agent-support-copilot",
+        "system": "snowflake",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:38",
+        "kind": "group",
+        "label": "snowflake:PII_READER",
+        "system": "snowflake",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 413,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:49",
+        "kind": "perm",
+        "label": "snowflake:SELECT on snowflake/CUSTOMERS",
+        "system": "snowflake",
+        "via": {
+         "relation": "grants",
+         "edge_id": 361,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    }
+   ],
+   "violations": [
+    {
+     "policy_id": "ai-agents-no-pii",
+     "policy_name": "AI agents may not access PII",
+     "severity": "critical",
+     "identity_id": 67,
+     "identity_name": "Support Copilot",
+     "key": "ai-agents-no-pii:67:perm:49",
+     "message": "Support Copilot (ai_agent) can snowflake:SELECT on snowflake/CUSTOMERS [pii]",
+     "evidence": [
+      "Support Copilot → snowflake:agent-support-copilot → snowflake:PII_READER → snowflake:SELECT on snowflake/CUSTOMERS"
+     ],
+     "edges": [
+      [
+       "account:207",
+       "group:38"
+      ]
+     ]
+    }
+   ],
+   "recommendations": [],
+   "secrets": [
+    {
+     "id": 29,
+     "name": "agent-support-copilot-key",
+     "kind": "api_token",
+     "system": "snowflake",
+     "account": "agent-support-copilot",
+     "created_at": "2026-09-13T00:00:00",
+     "age_days": 25,
+     "status": "active",
+     "last_rotated_at": null,
+     "last_used_at": "2026-10-07T21:36:00",
+     "last_used_days": 0,
+     "stale": false
+    }
+   ],
+   "delegations": [
+    {
+     "agent": {
+      "id": 67,
+      "name": "Support Copilot",
+      "type": "ai_agent",
+      "status": "active",
+      "department": null,
+      "title": "AI agent"
+     },
+     "principal": {
+      "id": 50,
+      "name": "Yara Castellanos",
+      "type": "human",
+      "status": "active",
+      "department": "Support",
+      "title": "Support Lead"
+     },
+     "scopes": [
+      "tickets:read",
+      "customers:read"
+     ]
+    },
+    {
+     "agent": {
+      "id": 67,
+      "name": "Support Copilot",
+      "type": "ai_agent",
+      "status": "active",
+      "department": null,
+      "title": "AI agent"
+     },
+     "principal": {
+      "id": 51,
+      "name": "Callum Ferreira",
+      "type": "human",
+      "status": "active",
+      "department": "Support",
+      "title": "Customer Success Manager"
+     },
+     "scopes": [
+      "tickets:read",
+      "customers:read",
+      "tickets:reply"
+     ]
+    }
+   ],
+   "owned_identities": [],
+   "risk": {
+    "effective": 1,
+    "unused": 0,
+    "privileged": 0,
+    "sensitive": 1,
+    "violations": 1,
+    "risk": 25
+   }
+  }
+ }
+}

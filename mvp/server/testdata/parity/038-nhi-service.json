@@ -1,0 +1,1284 @@
+{
+ "name": "nhi-service",
+ "request": {
+  "method": "GET",
+  "path": "/api/nhi?type=service"
+ },
+ "response": {
+  "status": 200,
+  "body": [
+   {
+    "id": 66,
+    "name": "old-migration-token",
+    "type": "service",
+    "kind": "Okta API token",
+    "description": "Token from the 2023 IdP migration",
+    "status": "active",
+    "owner": null,
+    "systems": [
+     "okta"
+    ],
+    "accounts": [
+     {
+      "id": 127,
+      "system": "okta",
+      "username": "old-migration-token",
+      "kind": "api_key",
+      "status": "active"
+     }
+    ],
+    "secrets": [
+     {
+      "id": 7,
+      "name": "old-migration-token",
+      "kind": "api_token",
+      "system": "okta",
+      "account": "old-migration-token",
+      "created_at": "2024-11-07T00:00:00",
+      "age_days": 700,
+      "status": "active",
+      "last_rotated_at": null,
+      "last_used_at": "2026-03-22T00:00:00",
+      "last_used_days": 200,
+      "stale": true
+     }
+    ],
+    "oldest_secret_days": 700,
+    "effective_permissions": 1,
+    "privileged_permissions": 1,
+    "last_activity": null,
+    "days_since_activity": null,
+    "flags": [
+     "orphaned",
+     "stale_secret",
+     "dormant",
+     "privileged"
+    ],
+    "risk": 75
+   },
+   {
+    "id": 81,
+    "name": "svc-data-export",
+    "type": "service",
+    "kind": "AWS IAM user",
+    "description": "Ad-hoc customer export for a 2025 audit",
+    "status": "active",
+    "owner": {
+     "id": 18,
+     "name": "Oren Whitlock",
+     "status": "terminated",
+     "department": "Engineering"
+    },
+    "systems": [
+     "aws"
+    ],
+    "accounts": [
+     {
+      "id": 142,
+      "system": "aws",
+      "username": "svc-data-export",
+      "kind": "service",
+      "status": "active"
+     }
+    ],
+    "secrets": [
+     {
+      "id": 16,
+      "name": "AKIASVCDATAEXPOR",
+      "kind": "access_key",
+      "system": "aws",
+      "account": "svc-data-export",
+      "created_at": "2025-11-02T00:00:00",
+      "age_days": 340,
+      "status": "active",
+      "last_rotated_at": null,
+      "last_used_at": "2026-07-26T00:00:00",
+      "last_used_days": 74,
+      "stale": true
+     }
+    ],
+    "oldest_secret_days": 340,
+    "effective_permissions": 2,
+    "privileged_permissions": 0,
+    "last_activity": "2026-07-26T00:00:00",
+    "days_since_activity": 74,
+    "flags": [
+     "owner_left",
+     "stale_secret",
+     "dormant",
+     "pii_access"
+    ],
+    "risk": 75
+   },
+   {
+    "id": 75,
+    "name": "svc-legacy-etl",
+    "type": "service",
+    "kind": "AWS IAM user",
+    "description": "Legacy ETL from the 2022 data platform",
+    "status": "active",
+    "owner": null,
+    "systems": [
+     "aws"
+    ],
+    "accounts": [
+     {
+      "id": 136,
+      "system": "aws",
+      "username": "svc-legacy-etl",
+      "kind": "service",
+      "status": "active"
+     }
+    ],
+    "secrets": [
+     {
+      "id": 10,
+      "name": "AKIASVCLEGACYETL",
+      "kind": "access_key",
+      "system": "aws",
+      "account": "svc-legacy-etl",
+      "created_at": "2024-08-19T00:00:00",
+      "age_days": 780,
+      "status": "active",
+      "last_rotated_at": null,
+      "last_used_at": "2026-06-02T00:00:00",
+      "last_used_days": 128,
+      "stale": true
+     }
+    ],
+    "oldest_secret_days": 780,
+    "effective_permissions": 3,
+    "privileged_permissions": 0,
+    "last_activity": null,
+    "days_since_activity": null,
+    "flags": [
+     "orphaned",
+     "stale_secret",
+     "dormant",
+     "pii_access"
+    ],
+    "risk": 75
+   },
+   {
+    "id": 89,
+    "name": "LOOKER_SVC",
+    "type": "service",
+    "kind": "Snowflake service user",
+    "description": "Looker BI connection",
+    "status": "active",
+    "owner": {
+     "id": 23,
+     "name": "Dmitri Ostrowski",
+     "status": "terminated",
+     "department": "Data"
+    },
+    "systems": [
+     "snowflake"
+    ],
+    "accounts": [
+     {
+      "id": 204,
+      "system": "snowflake",
+      "username": "LOOKER_SVC",
+      "kind": "service",
+      "status": "active"
+     }
+    ],
+    "secrets": [
+     {
+      "id": 26,
+      "name": "LOOKER_SVC_rsa",
+      "kind": "keypair",
+      "system": "snowflake",
+      "account": "LOOKER_SVC",
+      "created_at": "2025-09-03T00:00:00",
+      "age_days": 400,
+      "status": "active",
+      "last_rotated_at": null,
+      "last_used_at": "2026-10-07T19:12:00",
+      "last_used_days": 0,
+      "stale": true
+     }
+    ],
+    "oldest_secret_days": 400,
+    "effective_permissions": 3,
+    "privileged_permissions": 0,
+    "last_activity": "2026-10-08T00:00:00",
+    "days_since_activity": 0,
+    "flags": [
+     "owner_left",
+     "stale_secret",
+     "pii_access"
+    ],
+    "risk": 65
+   },
+   {
+    "id": 84,
+    "name": "jenkins-pat",
+    "type": "service",
+    "kind": "GitHub pat",
+    "description": "Personal access token used by legacy Jenkins",
+    "status": "active",
+    "owner": {
+     "id": 18,
+     "name": "Oren Whitlock",
+     "status": "terminated",
+     "department": "Engineering"
+    },
+    "systems": [
+     "github"
+    ],
+    "accounts": [
+     {
+      "id": 175,
+      "system": "github",
+      "username": "jenkins-pat",
+      "kind": "service",
+      "status": "active"
+     }
+    ],
+    "secrets": [
+     {
+      "id": 20,
+      "name": "jenkins-pat-token",
+      "kind": "pat",
+      "system": "github",
+      "account": "jenkins-pat",
+      "created_at": "2025-12-12T00:00:00",
+      "age_days": 300,
+      "status": "active",
+      "last_rotated_at": null,
+      "last_used_at": "2026-10-07T12:00:00",
+      "last_used_days": 0,
+      "stale": true
+     }
+    ],
+    "oldest_secret_days": 300,
+    "effective_permissions": 2,
+    "privileged_permissions": 1,
+    "last_activity": "2026-10-08T00:00:00",
+    "days_since_activity": 0,
+    "flags": [
+     "owner_left",
+     "stale_secret",
+     "privileged"
+    ],
+    "risk": 65
+   },
+   {
+    "id": 74,
+    "name": "svc-backup-agent",
+    "type": "service",
+    "kind": "AWS IAM user",
+    "description": "Nightly RDS/S3 backup job",
+    "status": "active",
+    "owner": {
+     "id": 23,
+     "name": "Dmitri Ostrowski",
+     "status": "terminated",
+     "department": "Data"
+    },
+    "systems": [
+     "aws"
+    ],
+    "accounts": [
+     {
+      "id": 135,
+      "system": "aws",
+      "username": "svc-backup-agent",
+      "kind": "service",
+      "status": "active"
+     }
+    ],
+    "secrets": [
+     {
+      "id": 9,
+      "name": "AKIASVCBACKUPAGE",
+      "kind": "access_key",
+      "system": "aws",
+      "account": "svc-backup-agent",
+      "created_at": "2026-02-20T00:00:00",
+      "age_days": 230,
+      "status": "active",
+      "last_rotated_at": null,
+      "last_used_at": "2026-10-07T12:00:00",
+      "last_used_days": 0,
+      "stale": true
+     }
+    ],
+    "oldest_secret_days": 230,
+    "effective_permissions": 3,
+    "privileged_permissions": 0,
+    "last_activity": "2026-10-08T00:00:00",
+    "days_since_activity": 0,
+    "flags": [
+     "owner_left",
+     "stale_secret",
+     "pii_access"
+    ],
+    "risk": 65
+   },
+   {
+    "id": 63,
+    "name": "ISU_Expense_Bot",
+    "type": "service",
+    "kind": "Workday integration user",
+    "description": "Expense report automation",
+    "status": "active",
+    "owner": {
+     "id": 41,
+     "name": "Hollis Brightwater",
+     "status": "terminated",
+     "department": "Sales"
+    },
+    "systems": [
+     "workday"
+    ],
+    "accounts": [
+     {
+      "id": 63,
+      "system": "workday",
+      "username": "ISU_Expense_Bot",
+      "kind": "service",
+      "status": "active"
+     }
+    ],
+    "secrets": [
+     {
+      "id": 3,
+      "name": "ISU_Expense_Bot-password",
+      "kind": "password",
+      "system": "workday",
+      "account": "ISU_Expense_Bot",
+      "created_at": "2026-01-21T00:00:00",
+      "age_days": 260,
+      "status": "active",
+      "last_rotated_at": null,
+      "last_used_at": "2026-10-07T00:00:00",
+      "last_used_days": 1,
+      "stale": true
+     }
+    ],
+    "oldest_secret_days": 260,
+    "effective_permissions": 1,
+    "privileged_permissions": 0,
+    "last_activity": null,
+    "days_since_activity": null,
+    "flags": [
+     "owner_left",
+     "stale_secret",
+     "dormant"
+    ],
+    "risk": 55
+   },
+   {
+    "id": 61,
+    "name": "ISU_Okta_Sync",
+    "type": "service",
+    "kind": "Workday integration user",
+    "description": "Integration user for Okta sync",
+    "status": "active",
+    "owner": {
+     "id": 57,
+     "name": "Esme Thornbury",
+     "status": "active",
+     "department": "People"
+    },
+    "systems": [
+     "workday"
+    ],
+    "accounts": [
+     {
+      "id": 61,
+      "system": "workday",
+      "username": "ISU_Okta_Sync",
+      "kind": "service",
+      "status": "active"
+     }
+    ],
+    "secrets": [
+     {
+      "id": 1,
+      "name": "ISU_Okta_Sync-password",
+      "kind": "password",
+      "system": "workday",
+      "account": "ISU_Okta_Sync",
+      "created_at": "2025-10-08T00:00:00",
+      "age_days": 365,
+      "status": "active",
+      "last_rotated_at": null,
+      "last_used_at": "2026-10-07T00:00:00",
+      "last_used_days": 1,
+      "stale": true
+     }
+    ],
+    "oldest_secret_days": 365,
+    "effective_permissions": 2,
+    "privileged_permissions": 1,
+    "last_activity": "2026-10-08T00:00:00",
+    "days_since_activity": 0,
+    "flags": [
+     "stale_secret",
+     "privileged",
+     "pii_access"
+    ],
+    "risk": 55
+   },
+   {
+    "id": 62,
+    "name": "ISU_Payroll_Export",
+    "type": "service",
+    "kind": "Workday integration user",
+    "description": "Payroll export to bank",
+    "status": "active",
+    "owner": {
+     "id": 32,
+     "name": "Beatrix Pemberton",
+     "status": "active",
+     "department": "Finance"
+    },
+    "systems": [
+     "workday"
+    ],
+    "accounts": [
+     {
+      "id": 62,
+      "system": "workday",
+      "username": "ISU_Payroll_Export",
+      "kind": "service",
+      "status": "active"
+     }
+    ],
+    "secrets": [
+     {
+      "id": 2,
+      "name": "ISU_Payroll_Export-password",
+      "kind": "password",
+      "system": "workday",
+      "account": "ISU_Payroll_Export",
+      "created_at": "2025-05-26T00:00:00",
+      "age_days": 500,
+      "status": "active",
+      "last_rotated_at": null,
+      "last_used_at": "2026-10-07T00:00:00",
+      "last_used_days": 1,
+      "stale": true
+     }
+    ],
+    "oldest_secret_days": 500,
+    "effective_permissions": 2,
+    "privileged_permissions": 1,
+    "last_activity": "2026-10-08T00:00:00",
+    "days_since_activity": 0,
+    "flags": [
+     "stale_secret",
+     "privileged",
+     "pii_access"
+    ],
+    "risk": 55
+   },
+   {
+    "id": 90,
+    "name": "TABLEAU_LEGACY",
+    "type": "service",
+    "kind": "Snowflake service user",
+    "description": "Retired Tableau server",
+    "status": "active",
+    "owner": null,
+    "systems": [
+     "snowflake"
+    ],
+    "accounts": [
+     {
+      "id": 205,
+      "system": "snowflake",
+      "username": "TABLEAU_LEGACY",
+      "kind": "service",
+      "status": "active"
+     }
+    ],
+    "secrets": [
+     {
+      "id": 27,
+      "name": "TABLEAU_LEGACY_rsa",
+      "kind": "keypair",
+      "system": "snowflake",
+      "account": "TABLEAU_LEGACY",
+      "created_at": "2024-04-21T00:00:00",
+      "age_days": 900,
+      "status": "active",
+      "last_rotated_at": null,
+      "last_used_at": "2026-05-11T00:00:00",
+      "last_used_days": 150,
+      "stale": true
+     }
+    ],
+    "oldest_secret_days": 900,
+    "effective_permissions": 2,
+    "privileged_permissions": 0,
+    "last_activity": null,
+    "days_since_activity": null,
+    "flags": [
+     "orphaned",
+     "stale_secret",
+     "dormant"
+    ],
+    "risk": 55
+   },
+   {
+    "id": 83,
+    "name": "infra-deploy-key",
+    "type": "service",
+    "kind": "GitHub deploy key",
+    "description": "Deploy key on infra-terraform",
+    "status": "active",
+    "owner": null,
+    "systems": [
+     "github"
+    ],
+    "accounts": [
+     {
+      "id": 174,
+      "system": "github",
+      "username": "infra-deploy-key",
+      "kind": "service",
+      "status": "active"
+     }
+    ],
+    "secrets": [
+     {
+      "id": 19,
+      "name": "infra-deploy-key-token",
+      "kind": "deploy_key",
+      "system": "github",
+      "account": "infra-deploy-key",
+      "created_at": "2025-02-05T00:00:00",
+      "age_days": 610,
+      "status": "active",
+      "last_rotated_at": null,
+      "last_used_at": "2026-10-05T00:00:00",
+      "last_used_days": 3,
+      "stale": true
+     }
+    ],
+    "oldest_secret_days": 610,
+    "effective_permissions": 1,
+    "privileged_permissions": 0,
+    "last_activity": null,
+    "days_since_activity": null,
+    "flags": [
+     "orphaned",
+     "stale_secret",
+     "dormant"
+    ],
+    "risk": 55
+   },
+   {
+    "id": 88,
+    "name": "DBT_RUNNER",
+    "type": "service",
+    "kind": "Snowflake service user",
+    "description": "dbt transformations",
+    "status": "active",
+    "owner": {
+     "id": 22,
+     "name": "Sana Iyer",
+     "status": "active",
+     "department": "Data"
+    },
+    "systems": [
+     "snowflake"
+    ],
+    "accounts": [
+     {
+      "id": 203,
+      "system": "snowflake",
+      "username": "DBT_RUNNER",
+      "kind": "service",
+      "status": "active"
+     }
+    ],
+    "secrets": [
+     {
+      "id": 25,
+      "name": "DBT_RUNNER_rsa",
+      "kind": "keypair",
+      "system": "snowflake",
+      "account": "DBT_RUNNER",
+      "created_at": "2026-03-22T00:00:00",
+      "age_days": 200,
+      "status": "active",
+      "last_rotated_at": null,
+      "last_used_at": "2026-10-07T21:36:00",
+      "last_used_days": 0,
+      "stale": true
+     }
+    ],
+    "oldest_secret_days": 200,
+    "effective_permissions": 6,
+    "privileged_permissions": 0,
+    "last_activity": "2026-10-08T00:00:00",
+    "days_since_activity": 0,
+    "flags": [
+     "stale_secret",
+     "pii_access"
+    ],
+    "risk": 35
+   },
+   {
+    "id": 91,
+    "name": "REVERSE_ETL_SVC",
+    "type": "service",
+    "kind": "Snowflake service user",
+    "description": "Syncs customer segments to CRM",
+    "status": "active",
+    "owner": {
+     "id": 40,
+     "name": "Rafael Valdivia",
+     "status": "active",
+     "department": "Sales"
+    },
+    "systems": [
+     "snowflake"
+    ],
+    "accounts": [
+     {
+      "id": 206,
+      "system": "snowflake",
+      "username": "REVERSE_ETL_SVC",
+      "kind": "service",
+      "status": "active"
+     }
+    ],
+    "secrets": [
+     {
+      "id": 28,
+      "name": "REVERSE_ETL_SVC_rsa",
+      "kind": "keypair",
+      "system": "snowflake",
+      "account": "REVERSE_ETL_SVC",
+      "created_at": "2026-06-10T00:00:00",
+      "age_days": 120,
+      "status": "active",
+      "last_rotated_at": null,
+      "last_used_at": "2026-10-07T12:00:00",
+      "last_used_days": 0,
+      "stale": true
+     }
+    ],
+    "oldest_secret_days": 120,
+    "effective_permissions": 1,
+    "privileged_permissions": 0,
+    "last_activity": "2026-10-08T00:00:00",
+    "days_since_activity": 0,
+    "flags": [
+     "stale_secret",
+     "pii_access"
+    ],
+    "risk": 35
+   },
+   {
+    "id": 65,
+    "name": "hr-sync-token",
+    "type": "service",
+    "kind": "Okta API token",
+    "description": "Workday -> Okta HR sync",
+    "status": "active",
+    "owner": {
+     "id": 57,
+     "name": "Esme Thornbury",
+     "status": "active",
+     "department": "People"
+    },
+    "systems": [
+     "okta"
+    ],
+    "accounts": [
+     {
+      "id": 126,
+      "system": "okta",
+      "username": "hr-sync-token",
+      "kind": "api_key",
+      "status": "active"
+     }
+    ],
+    "secrets": [
+     {
+      "id": 6,
+      "name": "hr-sync-token",
+      "kind": "api_token",
+      "system": "okta",
+      "account": "hr-sync-token",
+      "created_at": "2026-05-21T00:00:00",
+      "age_days": 140,
+      "status": "active",
+      "last_rotated_at": null,
+      "last_used_at": "2026-10-07T16:48:00",
+      "last_used_days": 0,
+      "stale": true
+     }
+    ],
+    "oldest_secret_days": 140,
+    "effective_permissions": 1,
+    "privileged_permissions": 1,
+    "last_activity": "2026-10-07T00:00:00",
+    "days_since_activity": 1,
+    "flags": [
+     "stale_secret",
+     "privileged"
+    ],
+    "risk": 35
+   },
+   {
+    "id": 73,
+    "name": "svc-ci-deployer",
+    "type": "service",
+    "kind": "AWS IAM user",
+    "description": "CI/CD pipeline deployer",
+    "status": "active",
+    "owner": {
+     "id": 16,
+     "name": "Ingrid Lindqvist",
+     "status": "active",
+     "department": "Engineering"
+    },
+    "systems": [
+     "aws"
+    ],
+    "accounts": [
+     {
+      "id": 134,
+      "system": "aws",
+      "username": "svc-ci-deployer",
+      "kind": "service",
+      "status": "active"
+     }
+    ],
+    "secrets": [
+     {
+      "id": 8,
+      "name": "AKIASVCCIDEPLOYE",
+      "kind": "access_key",
+      "system": "aws",
+      "account": "svc-ci-deployer",
+      "created_at": "2025-08-22T00:00:00",
+      "age_days": 412,
+      "status": "active",
+      "last_rotated_at": null,
+      "last_used_at": "2026-10-07T21:36:00",
+      "last_used_days": 0,
+      "stale": true
+     }
+    ],
+    "oldest_secret_days": 412,
+    "effective_permissions": 5,
+    "privileged_permissions": 2,
+    "last_activity": "2026-10-08T00:00:00",
+    "days_since_activity": 0,
+    "flags": [
+     "stale_secret",
+     "privileged"
+    ],
+    "risk": 35
+   },
+   {
+    "id": 78,
+    "name": "svc-terraform",
+    "type": "service",
+    "kind": "AWS IAM user",
+    "description": "Terraform Cloud runner",
+    "status": "active",
+    "owner": {
+     "id": 16,
+     "name": "Ingrid Lindqvist",
+     "status": "active",
+     "department": "Engineering"
+    },
+    "systems": [
+     "aws"
+    ],
+    "accounts": [
+     {
+      "id": 139,
+      "system": "aws",
+      "username": "svc-terraform",
+      "kind": "service",
+      "status": "active"
+     }
+    ],
+    "secrets": [
+     {
+      "id": 13,
+      "name": "AKIASVCTERRAFORM",
+      "kind": "access_key",
+      "system": "aws",
+      "account": "svc-terraform",
+      "created_at": "2026-05-01T00:00:00",
+      "age_days": 160,
+      "status": "active",
+      "last_rotated_at": null,
+      "last_used_at": "2026-10-06T00:00:00",
+      "last_used_days": 2,
+      "stale": true
+     }
+    ],
+    "oldest_secret_days": 160,
+    "effective_permissions": 2,
+    "privileged_permissions": 2,
+    "last_activity": "2026-10-07T00:00:00",
+    "days_since_activity": 1,
+    "flags": [
+     "stale_secret",
+     "privileged"
+    ],
+    "risk": 35
+   },
+   {
+    "id": 86,
+    "name": "docs-publisher",
+    "type": "service",
+    "kind": "GitHub deploy key",
+    "description": "Publishes docs-site on merge",
+    "status": "active",
+    "owner": null,
+    "systems": [
+     "github"
+    ],
+    "accounts": [
+     {
+      "id": 177,
+      "system": "github",
+      "username": "docs-publisher",
+      "kind": "service",
+      "status": "active"
+     }
+    ],
+    "secrets": [
+     {
+      "id": 22,
+      "name": "docs-publisher-token",
+      "kind": "deploy_key",
+      "system": "github",
+      "account": "docs-publisher",
+      "created_at": "2026-09-18T00:00:00",
+      "age_days": 20,
+      "status": "active",
+      "last_rotated_at": null,
+      "last_used_at": "2026-10-07T00:00:00",
+      "last_used_days": 1,
+      "stale": false
+     }
+    ],
+    "oldest_secret_days": 20,
+    "effective_permissions": 1,
+    "privileged_permissions": 0,
+    "last_activity": "2026-10-08T00:00:00",
+    "days_since_activity": 0,
+    "flags": [
+     "orphaned"
+    ],
+    "risk": 30
+   },
+   {
+    "id": 87,
+    "name": "FIVETRAN_LOADER",
+    "type": "service",
+    "kind": "Snowflake service user",
+    "description": "Fivetran ingestion",
+    "status": "active",
+    "owner": {
+     "id": 22,
+     "name": "Sana Iyer",
+     "status": "active",
+     "department": "Data"
+    },
+    "systems": [
+     "snowflake"
+    ],
+    "accounts": [
+     {
+      "id": 202,
+      "system": "snowflake",
+      "username": "FIVETRAN_LOADER",
+      "kind": "service",
+      "status": "active"
+     }
+    ],
+    "secrets": [
+     {
+      "id": 24,
+      "name": "FIVETRAN_LOADER_rsa",
+      "kind": "keypair",
+      "system": "snowflake",
+      "account": "FIVETRAN_LOADER",
+      "created_at": "2026-07-30T00:00:00",
+      "age_days": 70,
+      "status": "active",
+      "last_rotated_at": null,
+      "last_used_at": "2026-10-07T21:36:00",
+      "last_used_days": 0,
+      "stale": false
+     }
+    ],
+    "oldest_secret_days": 70,
+    "effective_permissions": 2,
+    "privileged_permissions": 0,
+    "last_activity": "2026-10-08T00:00:00",
+    "days_since_activity": 0,
+    "flags": [
+     "pii_access"
+    ],
+    "risk": 20
+   },
+   {
+    "id": 64,
+    "name": "scim-provisioner",
+    "type": "service",
+    "kind": "Okta API token",
+    "description": "SCIM provisioning token",
+    "status": "active",
+    "owner": {
+     "id": 29,
+     "name": "Thandiwe Mokoena",
+     "status": "active",
+     "department": "Security"
+    },
+    "systems": [
+     "okta"
+    ],
+    "accounts": [
+     {
+      "id": 125,
+      "system": "okta",
+      "username": "scim-provisioner",
+      "kind": "api_key",
+      "status": "active"
+     }
+    ],
+    "secrets": [
+     {
+      "id": 5,
+      "name": "scim-provisioner",
+      "kind": "api_token",
+      "system": "okta",
+      "account": "scim-provisioner",
+      "created_at": "2026-07-12T00:00:00",
+      "age_days": 88,
+      "status": "active",
+      "last_rotated_at": null,
+      "last_used_at": "2026-10-07T16:48:00",
+      "last_used_days": 0,
+      "stale": false
+     }
+    ],
+    "oldest_secret_days": 88,
+    "effective_permissions": 1,
+    "privileged_permissions": 1,
+    "last_activity": "2026-10-07T00:00:00",
+    "days_since_activity": 1,
+    "flags": [
+     "privileged"
+    ],
+    "risk": 20
+   },
+   {
+    "id": 80,
+    "name": "svc-lambda-orders",
+    "type": "service",
+    "kind": "AWS IAM user",
+    "description": "Orders Lambda execution identity",
+    "status": "active",
+    "owner": {
+     "id": 4,
+     "name": "Kofi Mensah",
+     "status": "active",
+     "department": "Engineering"
+    },
+    "systems": [
+     "aws"
+    ],
+    "accounts": [
+     {
+      "id": 141,
+      "system": "aws",
+      "username": "svc-lambda-orders",
+      "kind": "service",
+      "status": "active"
+     }
+    ],
+    "secrets": [
+     {
+      "id": 15,
+      "name": "AKIASVCLAMBDAORD",
+      "kind": "access_key",
+      "system": "aws",
+      "account": "svc-lambda-orders",
+      "created_at": "2026-09-26T00:00:00",
+      "age_days": 12,
+      "status": "active",
+      "last_rotated_at": null,
+      "last_used_at": "2026-10-07T21:36:00",
+      "last_used_days": 0,
+      "stale": false
+     }
+    ],
+    "oldest_secret_days": 12,
+    "effective_permissions": 1,
+    "privileged_permissions": 0,
+    "last_activity": "2026-10-07T00:00:00",
+    "days_since_activity": 1,
+    "flags": [
+     "pii_access"
+    ],
+    "risk": 20
+   },
+   {
+    "id": 77,
+    "name": "svc-cost-exporter",
+    "type": "service",
+    "kind": "AWS IAM user",
+    "description": "Exports cost data to finance",
+    "status": "active",
+    "owner": {
+     "id": 32,
+     "name": "Beatrix Pemberton",
+     "status": "active",
+     "department": "Finance"
+    },
+    "systems": [
+     "aws"
+    ],
+    "accounts": [
+     {
+      "id": 138,
+      "system": "aws",
+      "username": "svc-cost-exporter",
+      "kind": "service",
+      "status": "active"
+     }
+    ],
+    "secrets": [
+     {
+      "id": 12,
+      "name": "AKIASVCCOSTEXPOR",
+      "kind": "access_key",
+      "system": "aws",
+      "account": "svc-cost-exporter",
+      "created_at": "2026-07-05T00:00:00",
+      "age_days": 95,
+      "status": "active",
+      "last_rotated_at": null,
+      "last_used_at": "2026-10-07T00:00:00",
+      "last_used_days": 1,
+      "stale": true
+     }
+    ],
+    "oldest_secret_days": 95,
+    "effective_permissions": 2,
+    "privileged_permissions": 0,
+    "last_activity": "2026-10-08T00:00:00",
+    "days_since_activity": 0,
+    "flags": [
+     "stale_secret"
+    ],
+    "risk": 15
+   },
+   {
+    "id": 85,
+    "name": "dependabot-svc",
+    "type": "service",
+    "kind": "GitHub github app",
+    "description": "Dependency update automation",
+    "status": "active",
+    "owner": {
+     "id": 29,
+     "name": "Thandiwe Mokoena",
+     "status": "active",
+     "department": "Security"
+    },
+    "systems": [
+     "github"
+    ],
+    "accounts": [
+     {
+      "id": 176,
+      "system": "github",
+      "username": "dependabot-svc",
+      "kind": "service",
+      "status": "active"
+     }
+    ],
+    "secrets": [
+     {
+      "id": 21,
+      "name": "dependabot-svc-token",
+      "kind": "github_app",
+      "system": "github",
+      "account": "dependabot-svc",
+      "created_at": "2026-09-18T00:00:00",
+      "age_days": 20,
+      "status": "active",
+      "last_rotated_at": null,
+      "last_used_at": "2026-10-07T21:36:00",
+      "last_used_days": 0,
+      "stale": false
+     }
+    ],
+    "oldest_secret_days": 20,
+    "effective_permissions": 7,
+    "privileged_permissions": 0,
+    "last_activity": "2026-10-08T00:00:00",
+    "days_since_activity": 0,
+    "flags": [],
+    "risk": 0
+   },
+   {
+    "id": 82,
+    "name": "release-bot",
+    "type": "service",
+    "kind": "GitHub github app",
+    "description": "GitHub App that cuts releases",
+    "status": "active",
+    "owner": {
+     "id": 16,
+     "name": "Ingrid Lindqvist",
+     "status": "active",
+     "department": "Engineering"
+    },
+    "systems": [
+     "github"
+    ],
+    "accounts": [
+     {
+      "id": 173,
+      "system": "github",
+      "username": "release-bot",
+      "kind": "service",
+      "status": "active"
+     }
+    ],
+    "secrets": [
+     {
+      "id": 18,
+      "name": "release-bot-token",
+      "kind": "github_app",
+      "system": "github",
+      "account": "release-bot",
+      "created_at": "2026-08-24T00:00:00",
+      "age_days": 45,
+      "status": "active",
+      "last_rotated_at": null,
+      "last_used_at": "2026-10-07T19:12:00",
+      "last_used_days": 0,
+      "stale": false
+     }
+    ],
+    "oldest_secret_days": 45,
+    "effective_permissions": 7,
+    "privileged_permissions": 0,
+    "last_activity": "2026-10-08T00:00:00",
+    "days_since_activity": 0,
+    "flags": [],
+    "risk": 0
+   },
+   {
+    "id": 76,
+    "name": "svc-log-shipper",
+    "type": "service",
+    "kind": "AWS IAM user",
+    "description": "Ships logs to the SIEM",
+    "status": "active",
+    "owner": {
+     "id": 29,
+     "name": "Thandiwe Mokoena",
+     "status": "active",
+     "department": "Security"
+    },
+    "systems": [
+     "aws"
+    ],
+    "accounts": [
+     {
+      "id": 137,
+      "system": "aws",
+      "username": "svc-log-shipper",
+      "kind": "service",
+      "status": "active"
+     }
+    ],
+    "secrets": [
+     {
+      "id": 11,
+      "name": "AKIASVCLOGSHIPPE",
+      "kind": "access_key",
+      "system": "aws",
+      "account": "svc-log-shipper",
+      "created_at": "2026-09-07T00:00:00",
+      "age_days": 31,
+      "status": "active",
+      "last_rotated_at": null,
+      "last_used_at": "2026-10-07T21:36:00",
+      "last_used_days": 0,
+      "stale": false
+     }
+    ],
+    "oldest_secret_days": 31,
+    "effective_permissions": 2,
+    "privileged_permissions": 0,
+    "last_activity": "2026-10-08T00:00:00",
+    "days_since_activity": 0,
+    "flags": [],
+    "risk": 0
+   },
+   {
+    "id": 79,
+    "name": "svc-monitoring",
+    "type": "service",
+    "kind": "AWS IAM user",
+    "description": "Metrics collector",
+    "status": "active",
+    "owner": {
+     "id": 17,
+     "name": "Marcus Bellweather",
+     "status": "active",
+     "department": "Engineering"
+    },
+    "systems": [
+     "aws"
+    ],
+    "accounts": [
+     {
+      "id": 140,
+      "system": "aws",
+      "username": "svc-monitoring",
+      "kind": "service",
+      "status": "active"
+     }
+    ],
+    "secrets": [
+     {
+      "id": 14,
+      "name": "AKIASVCMONITORIN",
+      "kind": "access_key",
+      "system": "aws",
+      "account": "svc-monitoring",
+      "created_at": "2026-08-09T00:00:00",
+      "age_days": 60,
+      "status": "active",
+      "last_rotated_at": null,
+      "last_used_at": "2026-10-07T21:36:00",
+      "last_used_days": 0,
+      "stale": false
+     }
+    ],
+    "oldest_secret_days": 60,
+    "effective_permissions": 1,
+    "privileged_permissions": 0,
+    "last_activity": "2026-10-08T00:00:00",
+    "days_since_activity": 0,
+    "flags": [],
+    "risk": 0
+   }
+  ]
+ }
+}

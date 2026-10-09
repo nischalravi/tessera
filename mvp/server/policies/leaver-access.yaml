@@ -1,0 +1,5 @@
+id: terminated-access
+name: Leavers retain no access
+type: terminated_with_access
+severity: critical
+description: Terminated identities must not have any effective permission in any system.

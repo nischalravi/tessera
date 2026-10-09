@@ -1,0 +1,83 @@
+{
+ "name": "execute-sim-joiner",
+ "request": {
+  "method": "POST",
+  "path": "/api/hris/events/8/execute"
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "executed": true,
+   "plan": {
+    "type": "joiner",
+    "identity": {
+     "name": "Ada Parity",
+     "department": "Engineering",
+     "title": "Platform Engineer"
+    },
+    "team": "platform",
+    "steps": [
+     {
+      "action": "create_identity",
+      "system": "tessera",
+      "target": "Ada Parity",
+      "detail": "Create identity Ada Parity (Platform Engineer, Engineering)"
+     },
+     {
+      "action": "create_account",
+      "system": "workday",
+      "target": "ada.parity@larkspur.example",
+      "detail": "Create workday account"
+     },
+     {
+      "action": "create_account",
+      "system": "github",
+      "target": "ada.parity@larkspur.example",
+      "detail": "Create github account"
+     },
+     {
+      "action": "create_account",
+      "system": "okta",
+      "target": "ada.parity@larkspur.example",
+      "detail": "Create okta account"
+     },
+     {
+      "action": "add_grant",
+      "system": "okta",
+      "group_id": 6,
+      "target": "okta:Everyone",
+      "detail": "Add to okta:Everyone (birthright for platform)"
+     },
+     {
+      "action": "add_grant",
+      "system": "okta",
+      "group_id": 7,
+      "target": "okta:engineering",
+      "detail": "Add to okta:engineering (birthright for platform)"
+     },
+     {
+      "action": "add_grant",
+      "system": "github",
+      "group_id": 35,
+      "target": "github:all-engineers",
+      "detail": "Add to github:all-engineers (birthright for platform)"
+     },
+     {
+      "action": "add_grant",
+      "system": "okta",
+      "group_id": 10,
+      "target": "okta:eng-platform",
+      "detail": "Add to okta:eng-platform (birthright for platform)"
+     },
+     {
+      "action": "add_grant",
+      "system": "github",
+      "group_id": 32,
+      "target": "github:platform",
+      "detail": "Add to github:platform (birthright for platform)"
+     }
+    ]
+   }
+  }
+ }
+}

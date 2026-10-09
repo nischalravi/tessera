@@ -1,0 +1,69 @@
+{
+ "name": "campaigns-after",
+ "request": {
+  "method": "GET",
+  "path": "/api/reviews/campaigns"
+ },
+ "response": {
+  "status": 200,
+  "body": [
+   {
+    "id": 3,
+    "name": "Exception-only review",
+    "status": "open",
+    "created_at": "2026-10-08T09:30:00",
+    "unused_days": 60,
+    "total_grants": 218,
+    "auto_certified": 135,
+    "items": 83,
+    "decided": 0,
+    "revoked": 0,
+    "reasons": {
+     "policy_violation": 50,
+     "unused_60d": 34,
+     "privileged_idle": 8,
+     "terminated_identity": 8,
+     "orphaned_nhi": 19
+    }
+   },
+   {
+    "id": 2,
+    "name": "Parity review",
+    "status": "open",
+    "created_at": "2026-10-08T09:30:00",
+    "unused_days": 30,
+    "total_grants": 218,
+    "auto_certified": 135,
+    "items": 83,
+    "decided": 0,
+    "revoked": 0,
+    "reasons": {
+     "policy_violation": 50,
+     "unused_30d": 38,
+     "privileged_idle": 8,
+     "terminated_identity": 8,
+     "orphaned_nhi": 19
+    }
+   },
+   {
+    "id": 1,
+    "name": "Q4 exception-only review",
+    "status": "open",
+    "created_at": "2026-10-08T09:30:00",
+    "unused_days": 60,
+    "total_grants": 219,
+    "auto_certified": 135,
+    "items": 84,
+    "decided": 2,
+    "revoked": 1,
+    "reasons": {
+     "policy_violation": 50,
+     "unused_60d": 35,
+     "privileged_idle": 8,
+     "terminated_identity": 8,
+     "orphaned_nhi": 19
+    }
+   }
+  ]
+ }
+}

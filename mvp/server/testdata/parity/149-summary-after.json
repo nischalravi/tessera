@@ -1,0 +1,534 @@
+{
+ "name": "summary-after",
+ "request": {
+  "method": "GET",
+  "path": "/api/summary"
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "identities": {
+    "human": 58,
+    "service": 25,
+    "ai_agent": 6,
+    "terminated": 4
+   },
+   "accounts": 218,
+   "systems": 5,
+   "grants": 423,
+   "effective_permissions": 758,
+   "unused_permissions": 309,
+   "unused_pct": 40.8,
+   "violations": {
+    "total": 73,
+    "by_severity": {
+     "critical": 6,
+     "high": 48,
+     "medium": 19
+    },
+    "by_policy": {
+     "AI agents may not access PII": 3,
+     "Leavers retain no access": 3,
+     "Non-human identities may not hold prod admin": 9,
+     "Every NHI and AI agent has an active owner": 11,
+     "No standing admin on prod": 28,
+     "Secrets rotated at least every 90 days": 19
+    }
+   },
+   "nhi": {
+    "orphaned": 11,
+    "stale_secrets": 19,
+    "agents_with_pii": 3
+   },
+   "jit": {
+    "pending": 2,
+    "active": 2
+   },
+   "reviews": {
+    "open_items": 248
+   },
+   "recommendations": {
+    "total": 84,
+    "remove": 44,
+    "role_trim": 3
+   },
+   "hris_pending": 1,
+   "top_risky": [
+    {
+     "id": 16,
+     "name": "Ingrid Lindqvist",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Platform Lead",
+     "effective": 31,
+     "unused": 15,
+     "privileged": 9,
+     "sensitive": 7,
+     "violations": 4,
+     "risk": 100
+    },
+    {
+     "id": 93,
+     "name": "Ada Parity",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Platform Engineer",
+     "effective": 28,
+     "unused": 28,
+     "privileged": 7,
+     "sensitive": 6,
+     "violations": 2,
+     "risk": 84
+    },
+    {
+     "id": 19,
+     "name": "Cyrus Quennell",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Platform Engineer",
+     "effective": 28,
+     "unused": 12,
+     "privileged": 7,
+     "sensitive": 6,
+     "violations": 2,
+     "risk": 68
+    },
+    {
+     "id": 21,
+     "name": "Lena Valdivia",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Site Reliability Engineer",
+     "effective": 28,
+     "unused": 12,
+     "privileged": 7,
+     "sensitive": 6,
+     "violations": 2,
+     "risk": 68
+    },
+    {
+     "id": 20,
+     "name": "Zora Whitlock",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Platform Engineer",
+     "effective": 28,
+     "unused": 11,
+     "privileged": 7,
+     "sensitive": 6,
+     "violations": 2,
+     "risk": 67
+    },
+    {
+     "id": 18,
+     "name": "Oren Whitlock",
+     "type": "human",
+     "status": "terminated",
+     "department": "Engineering",
+     "title": "Site Reliability Engineer",
+     "effective": 28,
+     "unused": 13,
+     "privileged": 7,
+     "sensitive": 6,
+     "violations": 1,
+     "risk": 57
+    },
+    {
+     "id": 78,
+     "name": "svc-terraform",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "AWS IAM user",
+     "effective": 2,
+     "unused": 0,
+     "privileged": 2,
+     "sensitive": 0,
+     "violations": 3,
+     "risk": 52
+    },
+    {
+     "id": 66,
+     "name": "old-migration-token",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "Okta API token",
+     "effective": 1,
+     "unused": 1,
+     "privileged": 1,
+     "sensitive": 0,
+     "violations": 3,
+     "risk": 51
+    }
+   ],
+   "usage_trend": [
+    {
+     "day": "2026-07-11",
+     "events": 2138
+    },
+    {
+     "day": "2026-07-12",
+     "events": 2214
+    },
+    {
+     "day": "2026-07-13",
+     "events": 2329
+    },
+    {
+     "day": "2026-07-14",
+     "events": 2332
+    },
+    {
+     "day": "2026-07-15",
+     "events": 2067
+    },
+    {
+     "day": "2026-07-16",
+     "events": 2141
+    },
+    {
+     "day": "2026-07-17",
+     "events": 2237
+    },
+    {
+     "day": "2026-07-18",
+     "events": 2155
+    },
+    {
+     "day": "2026-07-19",
+     "events": 2290
+    },
+    {
+     "day": "2026-07-20",
+     "events": 2352
+    },
+    {
+     "day": "2026-07-21",
+     "events": 2176
+    },
+    {
+     "day": "2026-07-22",
+     "events": 2307
+    },
+    {
+     "day": "2026-07-23",
+     "events": 2238
+    },
+    {
+     "day": "2026-07-24",
+     "events": 2249
+    },
+    {
+     "day": "2026-07-25",
+     "events": 2241
+    },
+    {
+     "day": "2026-07-26",
+     "events": 2343
+    },
+    {
+     "day": "2026-07-27",
+     "events": 2323
+    },
+    {
+     "day": "2026-07-28",
+     "events": 2153
+    },
+    {
+     "day": "2026-07-29",
+     "events": 1903
+    },
+    {
+     "day": "2026-07-30",
+     "events": 2075
+    },
+    {
+     "day": "2026-07-31",
+     "events": 2229
+    },
+    {
+     "day": "2026-08-01",
+     "events": 2334
+    },
+    {
+     "day": "2026-08-02",
+     "events": 2376
+    },
+    {
+     "day": "2026-08-03",
+     "events": 2094
+    },
+    {
+     "day": "2026-08-04",
+     "events": 2227
+    },
+    {
+     "day": "2026-08-05",
+     "events": 2406
+    },
+    {
+     "day": "2026-08-06",
+     "events": 2275
+    },
+    {
+     "day": "2026-08-07",
+     "events": 2337
+    },
+    {
+     "day": "2026-08-08",
+     "events": 2318
+    },
+    {
+     "day": "2026-08-09",
+     "events": 2233
+    },
+    {
+     "day": "2026-08-10",
+     "events": 2415
+    },
+    {
+     "day": "2026-08-11",
+     "events": 2100
+    },
+    {
+     "day": "2026-08-12",
+     "events": 2234
+    },
+    {
+     "day": "2026-08-13",
+     "events": 2190
+    },
+    {
+     "day": "2026-08-14",
+     "events": 2005
+    },
+    {
+     "day": "2026-08-15",
+     "events": 2124
+    },
+    {
+     "day": "2026-08-16",
+     "events": 2071
+    },
+    {
+     "day": "2026-08-17",
+     "events": 2267
+    },
+    {
+     "day": "2026-08-18",
+     "events": 2360
+    },
+    {
+     "day": "2026-08-19",
+     "events": 1989
+    },
+    {
+     "day": "2026-08-20",
+     "events": 2287
+    },
+    {
+     "day": "2026-08-21",
+     "events": 2177
+    },
+    {
+     "day": "2026-08-22",
+     "events": 2332
+    },
+    {
+     "day": "2026-08-23",
+     "events": 1921
+    },
+    {
+     "day": "2026-08-24",
+     "events": 2298
+    },
+    {
+     "day": "2026-08-25",
+     "events": 2189
+    },
+    {
+     "day": "2026-08-26",
+     "events": 2186
+    },
+    {
+     "day": "2026-08-27",
+     "events": 2177
+    },
+    {
+     "day": "2026-08-28",
+     "events": 1831
+    },
+    {
+     "day": "2026-08-29",
+     "events": 2225
+    },
+    {
+     "day": "2026-08-30",
+     "events": 2115
+    },
+    {
+     "day": "2026-08-31",
+     "events": 2115
+    },
+    {
+     "day": "2026-09-01",
+     "events": 2138
+    },
+    {
+     "day": "2026-09-02",
+     "events": 2436
+    },
+    {
+     "day": "2026-09-03",
+     "events": 2100
+    },
+    {
+     "day": "2026-09-04",
+     "events": 2054
+    },
+    {
+     "day": "2026-09-05",
+     "events": 2097
+    },
+    {
+     "day": "2026-09-06",
+     "events": 2075
+    },
+    {
+     "day": "2026-09-07",
+     "events": 2169
+    },
+    {
+     "day": "2026-09-08",
+     "events": 2254
+    },
+    {
+     "day": "2026-09-09",
+     "events": 2105
+    },
+    {
+     "day": "2026-09-10",
+     "events": 2124
+    },
+    {
+     "day": "2026-09-11",
+     "events": 2118
+    },
+    {
+     "day": "2026-09-12",
+     "events": 2250
+    },
+    {
+     "day": "2026-09-13",
+     "events": 2188
+    },
+    {
+     "day": "2026-09-14",
+     "events": 2165
+    },
+    {
+     "day": "2026-09-15",
+     "events": 2323
+    },
+    {
+     "day": "2026-09-16",
+     "events": 2370
+    },
+    {
+     "day": "2026-09-17",
+     "events": 2111
+    },
+    {
+     "day": "2026-09-18",
+     "events": 2084
+    },
+    {
+     "day": "2026-09-19",
+     "events": 2312
+    },
+    {
+     "day": "2026-09-20",
+     "events": 2276
+    },
+    {
+     "day": "2026-09-21",
+     "events": 2100
+    },
+    {
+     "day": "2026-09-22",
+     "events": 2381
+    },
+    {
+     "day": "2026-09-23",
+     "events": 1929
+    },
+    {
+     "day": "2026-09-24",
+     "events": 2063
+    },
+    {
+     "day": "2026-09-25",
+     "events": 1890
+    },
+    {
+     "day": "2026-09-26",
+     "events": 1926
+    },
+    {
+     "day": "2026-09-27",
+     "events": 1939
+    },
+    {
+     "day": "2026-09-28",
+     "events": 2079
+    },
+    {
+     "day": "2026-09-29",
+     "events": 2162
+    },
+    {
+     "day": "2026-09-30",
+     "events": 2183
+    },
+    {
+     "day": "2026-10-01",
+     "events": 2133
+    },
+    {
+     "day": "2026-10-02",
+     "events": 2249
+    },
+    {
+     "day": "2026-10-03",
+     "events": 2367
+    },
+    {
+     "day": "2026-10-04",
+     "events": 1984
+    },
+    {
+     "day": "2026-10-05",
+     "events": 2087
+    },
+    {
+     "day": "2026-10-06",
+     "events": 2216
+    },
+    {
+     "day": "2026-10-07",
+     "events": 2198
+    },
+    {
+     "day": "2026-10-08",
+     "events": 2025
+    }
+   ]
+  }
+ }
+}

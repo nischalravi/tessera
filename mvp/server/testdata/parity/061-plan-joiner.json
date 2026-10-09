@@ -1,0 +1,105 @@
+{
+ "name": "plan-joiner",
+ "request": {
+  "method": "GET",
+  "path": "/api/hris/events/3/plan"
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "event": {
+    "id": 3,
+    "external_id": "wd-evt-9003",
+    "type": "joiner",
+    "status": "pending",
+    "effective_at": "2026-10-11T00:00:00",
+    "executed_at": null,
+    "identity": null,
+    "payload": {
+     "name": "Noor Achterberg",
+     "email": "noor.achterberg@larkspur.example",
+     "department": "Data",
+     "team": "data",
+     "title": "Analytics Engineer",
+     "manager_external_id": "emp-1022"
+    }
+   },
+   "plan": {
+    "type": "joiner",
+    "identity": {
+     "name": "Noor Achterberg",
+     "department": "Data",
+     "title": "Analytics Engineer"
+    },
+    "team": "data",
+    "steps": [
+     {
+      "action": "create_identity",
+      "system": "tessera",
+      "target": "Noor Achterberg",
+      "detail": "Create identity Noor Achterberg (Analytics Engineer, Data)"
+     },
+     {
+      "action": "create_account",
+      "system": "workday",
+      "target": "noor.achterberg@larkspur.example",
+      "detail": "Create workday account"
+     },
+     {
+      "action": "create_account",
+      "system": "github",
+      "target": "noor.achterberg@larkspur.example",
+      "detail": "Create github account"
+     },
+     {
+      "action": "create_account",
+      "system": "okta",
+      "target": "noor.achterberg@larkspur.example",
+      "detail": "Create okta account"
+     },
+     {
+      "action": "create_account",
+      "system": "snowflake",
+      "target": "noor.achterberg@larkspur.example",
+      "detail": "Create snowflake account"
+     },
+     {
+      "action": "add_grant",
+      "system": "okta",
+      "group_id": 6,
+      "target": "okta:Everyone",
+      "detail": "Add to okta:Everyone (birthright for data)"
+     },
+     {
+      "action": "add_grant",
+      "system": "okta",
+      "group_id": 11,
+      "target": "okta:data-team",
+      "detail": "Add to okta:data-team (birthright for data)"
+     },
+     {
+      "action": "add_grant",
+      "system": "github",
+      "group_id": 35,
+      "target": "github:all-engineers",
+      "detail": "Add to github:all-engineers (birthright for data)"
+     },
+     {
+      "action": "add_grant",
+      "system": "github",
+      "group_id": 33,
+      "target": "github:data",
+      "detail": "Add to github:data (birthright for data)"
+     },
+     {
+      "action": "add_grant",
+      "system": "snowflake",
+      "group_id": 37,
+      "target": "snowflake:ANALYST",
+      "detail": "Add to snowflake:ANALYST (birthright for data)"
+     }
+    ]
+   }
+  }
+ }
+}

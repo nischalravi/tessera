@@ -1,0 +1,422 @@
+{
+ "name": "groups-not-requestable",
+ "request": {
+  "method": "GET",
+  "path": "/api/groups?requestable=0"
+ },
+ "response": {
+  "status": 200,
+  "body": [
+   {
+    "id": 26,
+    "key": "group:26",
+    "system": "aws",
+    "name": "BillingAdmin",
+    "kind": "role",
+    "privileged": false,
+    "requestable": false,
+    "description": "Cost and finance reporting"
+   },
+   {
+    "id": 28,
+    "key": "group:28",
+    "system": "aws",
+    "name": "CIDeployRole",
+    "kind": "role",
+    "privileged": true,
+    "requestable": false,
+    "description": "Assumed by CI to deploy infrastructure"
+   },
+   {
+    "id": 25,
+    "key": "group:25",
+    "system": "aws",
+    "name": "DataEngineer",
+    "kind": "role",
+    "privileged": false,
+    "requestable": false,
+    "description": "Data platform access"
+   },
+   {
+    "id": 21,
+    "key": "group:21",
+    "system": "aws",
+    "name": "DevAdmin",
+    "kind": "role",
+    "privileged": true,
+    "requestable": false,
+    "description": "Developer admin on staging (legacy: also reads customer-pii)"
+   },
+   {
+    "id": 22,
+    "key": "group:22",
+    "system": "aws",
+    "name": "ProdReadOnly",
+    "kind": "role",
+    "privileged": false,
+    "requestable": false,
+    "description": "Read-only access to prod"
+   },
+   {
+    "id": 29,
+    "key": "group:29",
+    "system": "aws",
+    "name": "SREAgentRole",
+    "kind": "role",
+    "privileged": false,
+    "requestable": false,
+    "description": "Assumed by the SRE on-call agent"
+   },
+   {
+    "id": 27,
+    "key": "group:27",
+    "system": "aws",
+    "name": "SecurityAudit",
+    "kind": "role",
+    "privileged": false,
+    "requestable": false,
+    "description": "Security read-only audit"
+   },
+   {
+    "id": 35,
+    "key": "group:35",
+    "system": "github",
+    "name": "all-engineers",
+    "kind": "team",
+    "privileged": false,
+    "requestable": false,
+    "description": null
+   },
+   {
+    "id": 30,
+    "key": "group:30",
+    "system": "github",
+    "name": "backend",
+    "kind": "team",
+    "privileged": false,
+    "requestable": false,
+    "description": null
+   },
+   {
+    "id": 33,
+    "key": "group:33",
+    "system": "github",
+    "name": "data",
+    "kind": "team",
+    "privileged": false,
+    "requestable": false,
+    "description": null
+   },
+   {
+    "id": 31,
+    "key": "group:31",
+    "system": "github",
+    "name": "frontend",
+    "kind": "team",
+    "privileged": false,
+    "requestable": false,
+    "description": null
+   },
+   {
+    "id": 36,
+    "key": "group:36",
+    "system": "github",
+    "name": "org-owners",
+    "kind": "team",
+    "privileged": true,
+    "requestable": false,
+    "description": null
+   },
+   {
+    "id": 32,
+    "key": "group:32",
+    "system": "github",
+    "name": "platform",
+    "kind": "team",
+    "privileged": false,
+    "requestable": false,
+    "description": null
+   },
+   {
+    "id": 34,
+    "key": "group:34",
+    "system": "github",
+    "name": "security",
+    "kind": "team",
+    "privileged": false,
+    "requestable": false,
+    "description": null
+   },
+   {
+    "id": 6,
+    "key": "group:6",
+    "system": "okta",
+    "name": "Everyone",
+    "kind": "group",
+    "privileged": false,
+    "requestable": false,
+    "description": null
+   },
+   {
+    "id": 20,
+    "key": "group:20",
+    "system": "okta",
+    "name": "ai-agents",
+    "kind": "group",
+    "privileged": false,
+    "requestable": false,
+    "description": "Registered AI agent identities"
+   },
+   {
+    "id": 11,
+    "key": "group:11",
+    "system": "okta",
+    "name": "data-team",
+    "kind": "group",
+    "privileged": false,
+    "requestable": false,
+    "description": null
+   },
+   {
+    "id": 8,
+    "key": "group:8",
+    "system": "okta",
+    "name": "eng-backend",
+    "kind": "group",
+    "privileged": false,
+    "requestable": false,
+    "description": null
+   },
+   {
+    "id": 9,
+    "key": "group:9",
+    "system": "okta",
+    "name": "eng-frontend",
+    "kind": "group",
+    "privileged": false,
+    "requestable": false,
+    "description": null
+   },
+   {
+    "id": 10,
+    "key": "group:10",
+    "system": "okta",
+    "name": "eng-platform",
+    "kind": "group",
+    "privileged": false,
+    "requestable": false,
+    "description": null
+   },
+   {
+    "id": 7,
+    "key": "group:7",
+    "system": "okta",
+    "name": "engineering",
+    "kind": "group",
+    "privileged": false,
+    "requestable": false,
+    "description": null
+   },
+   {
+    "id": 17,
+    "key": "group:17",
+    "system": "okta",
+    "name": "executives",
+    "kind": "group",
+    "privileged": false,
+    "requestable": false,
+    "description": null
+   },
+   {
+    "id": 13,
+    "key": "group:13",
+    "system": "okta",
+    "name": "finance",
+    "kind": "group",
+    "privileged": false,
+    "requestable": false,
+    "description": null
+   },
+   {
+    "id": 19,
+    "key": "group:19",
+    "system": "okta",
+    "name": "okta-helpdesk",
+    "kind": "group",
+    "privileged": true,
+    "requestable": false,
+    "description": null
+   },
+   {
+    "id": 18,
+    "key": "group:18",
+    "system": "okta",
+    "name": "okta-super-admins",
+    "kind": "group",
+    "privileged": true,
+    "requestable": false,
+    "description": "Okta Super Administrators"
+   },
+   {
+    "id": 16,
+    "key": "group:16",
+    "system": "okta",
+    "name": "people-ops",
+    "kind": "group",
+    "privileged": false,
+    "requestable": false,
+    "description": null
+   },
+   {
+    "id": 14,
+    "key": "group:14",
+    "system": "okta",
+    "name": "sales",
+    "kind": "group",
+    "privileged": false,
+    "requestable": false,
+    "description": null
+   },
+   {
+    "id": 12,
+    "key": "group:12",
+    "system": "okta",
+    "name": "security-team",
+    "kind": "group",
+    "privileged": false,
+    "requestable": false,
+    "description": null
+   },
+   {
+    "id": 15,
+    "key": "group:15",
+    "system": "okta",
+    "name": "support",
+    "kind": "group",
+    "privileged": false,
+    "requestable": false,
+    "description": null
+   },
+   {
+    "id": 37,
+    "key": "group:37",
+    "system": "snowflake",
+    "name": "ANALYST",
+    "kind": "role",
+    "privileged": false,
+    "requestable": false,
+    "description": null
+   },
+   {
+    "id": 39,
+    "key": "group:39",
+    "system": "snowflake",
+    "name": "DATA_ENGINEER",
+    "kind": "role",
+    "privileged": false,
+    "requestable": false,
+    "description": null
+   },
+   {
+    "id": 40,
+    "key": "group:40",
+    "system": "snowflake",
+    "name": "FINANCE_ANALYST",
+    "kind": "role",
+    "privileged": false,
+    "requestable": false,
+    "description": null
+   },
+   {
+    "id": 41,
+    "key": "group:41",
+    "system": "snowflake",
+    "name": "LOADER",
+    "kind": "role",
+    "privileged": false,
+    "requestable": false,
+    "description": null
+   },
+   {
+    "id": 38,
+    "key": "group:38",
+    "system": "snowflake",
+    "name": "PII_READER",
+    "kind": "role",
+    "privileged": false,
+    "requestable": false,
+    "description": null
+   },
+   {
+    "id": 42,
+    "key": "group:42",
+    "system": "snowflake",
+    "name": "REPORTING",
+    "kind": "role",
+    "privileged": false,
+    "requestable": false,
+    "description": null
+   },
+   {
+    "id": 44,
+    "key": "group:44",
+    "system": "snowflake",
+    "name": "SYSADMIN",
+    "kind": "role",
+    "privileged": true,
+    "requestable": false,
+    "description": null
+   },
+   {
+    "id": 2,
+    "key": "group:2",
+    "system": "workday",
+    "name": "AP Approver",
+    "kind": "security_group",
+    "privileged": false,
+    "requestable": false,
+    "description": "Approve supplier payments"
+   },
+   {
+    "id": 1,
+    "key": "group:1",
+    "system": "workday",
+    "name": "AP Clerk",
+    "kind": "security_group",
+    "privileged": false,
+    "requestable": false,
+    "description": "Create supplier payments"
+   },
+   {
+    "id": 4,
+    "key": "group:4",
+    "system": "workday",
+    "name": "HR Partner",
+    "kind": "security_group",
+    "privileged": false,
+    "requestable": false,
+    "description": null
+   },
+   {
+    "id": 5,
+    "key": "group:5",
+    "system": "workday",
+    "name": "Manager Self-Service",
+    "kind": "security_group",
+    "privileged": false,
+    "requestable": false,
+    "description": null
+   },
+   {
+    "id": 3,
+    "key": "group:3",
+    "system": "workday",
+    "name": "Payroll Administrator",
+    "kind": "security_group",
+    "privileged": true,
+    "requestable": false,
+    "description": null
+   }
+  ]
+ }
+}

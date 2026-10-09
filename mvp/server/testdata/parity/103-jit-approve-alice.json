@@ -1,0 +1,36 @@
+{
+ "name": "jit-approve-alice",
+ "request": {
+  "method": "POST",
+  "path": "/api/jit/requests/2/approve",
+  "body": {}
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "id": 2,
+   "identity": {
+    "id": 5,
+    "name": "Alice Okafor",
+    "type": "human",
+    "status": "active",
+    "department": "Engineering",
+    "title": "Senior Software Engineer"
+   },
+   "group": {
+    "id": 23,
+    "name": "ProdAdmin",
+    "system": "aws",
+    "privileged": true
+   },
+   "account": "okta:alice.okafor@larkspur.example",
+   "justification": "Hotfix for orders-db connection pool exhaustion (INC-4817)",
+   "duration_hours": 4.0,
+   "status": "approved",
+   "requested_at": "2026-10-08T09:30:00",
+   "decided_at": "2026-10-08T09:30:00",
+   "decided_by": "security-oncall@larkspur.example",
+   "expires_at": "2026-10-08T13:30:00"
+  }
+ }
+}

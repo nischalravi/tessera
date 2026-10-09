@@ -1,0 +1,22 @@
+{
+ "name": "revoke-no-body",
+ "request": {
+  "method": "POST",
+  "path": "/api/least-privilege/revoke"
+ },
+ "response": {
+  "status": 422,
+  "body": {
+   "detail": [
+    {
+     "type": "missing",
+     "loc": [
+      "body"
+     ],
+     "msg": "Field required",
+     "input": null
+    }
+   ]
+  }
+ }
+}

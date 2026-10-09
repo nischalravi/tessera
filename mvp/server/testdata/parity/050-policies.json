@@ -1,0 +1,82 @@
+{
+ "name": "policies",
+ "request": {
+  "method": "GET",
+  "path": "/api/policies"
+ },
+ "response": {
+  "status": 200,
+  "body": [
+   {
+    "id": "ai-agents-no-pii",
+    "name": "AI agents may not access PII",
+    "type": "forbidden_access",
+    "severity": "critical",
+    "description": "AI agents must not be able to reach any resource tagged pii, directly or through role inheritance.\n",
+    "enabled": true,
+    "source": "id: ai-agents-no-pii\nname: AI agents may not access PII\ntype: forbidden_access\nseverity: critical\ndescription: >\n  AI agents must not be able to reach any resource tagged pii, directly or\n  through role inheritance.\nsubjects:\n  identity_types: [ai_agent]\nresources:\n  tags_any: [pii]\n",
+    "violations": 3
+   },
+   {
+    "id": "terminated-access",
+    "name": "Leavers retain no access",
+    "type": "terminated_with_access",
+    "severity": "critical",
+    "description": "Terminated identities must not have any effective permission in any system.",
+    "enabled": true,
+    "source": "id: terminated-access\nname: Leavers retain no access\ntype: terminated_with_access\nseverity: critical\ndescription: Terminated identities must not have any effective permission in any system.\n",
+    "violations": 3
+   },
+   {
+    "id": "nhi-ownership",
+    "name": "Every NHI and AI agent has an active owner",
+    "type": "nhi_ownership",
+    "severity": "high",
+    "description": "Service accounts, API keys and AI agents must have an owner who is a current employee.",
+    "enabled": true,
+    "source": "id: nhi-ownership\nname: Every NHI and AI agent has an active owner\ntype: nhi_ownership\nseverity: high\ndescription: Service accounts, API keys and AI agents must have an owner who is a current employee.\n",
+    "violations": 11
+   },
+   {
+    "id": "nhi-no-prod-admin",
+    "name": "Non-human identities may not hold prod admin",
+    "type": "no_standing_access",
+    "severity": "high",
+    "description": "Service accounts and agents should use narrowly scoped roles, never admin on prod.",
+    "enabled": true,
+    "source": "id: nhi-no-prod-admin\nname: Non-human identities may not hold prod admin\ntype: no_standing_access\nseverity: high\ndescription: Service accounts and agents should use narrowly scoped roles, never admin on prod.\nsubjects:\n  identity_types: [service, ai_agent]\nmatch:\n  privileged: true\n  environment: prod\n",
+    "violations": 9
+   },
+   {
+    "id": "no-standing-prod-admin",
+    "name": "No standing admin on prod",
+    "type": "no_standing_access",
+    "severity": "high",
+    "description": "Privileged permissions on production resources must be obtained just-in-time. Access reached only through a JIT grant does not violate this policy.\n",
+    "enabled": true,
+    "source": "id: no-standing-prod-admin\nname: No standing admin on prod\ntype: no_standing_access\nseverity: high\ndescription: >\n  Privileged permissions on production resources must be obtained just-in-time.\n  Access reached only through a JIT grant does not violate this policy.\nsubjects:\n  identity_types: [human]\nmatch:\n  privileged: true\n  environment: prod\n",
+    "violations": 28
+   },
+   {
+    "id": "sod-payments",
+    "name": "SoD: create vs approve supplier payments",
+    "type": "separation_of_duties",
+    "severity": "high",
+    "description": "Nobody may hold both payments:create and payments:approve, regardless of which groups, roles or systems grant them.\n",
+    "enabled": true,
+    "source": "id: sod-payments\nname: \"SoD: create vs approve supplier payments\"\ntype: separation_of_duties\nseverity: high\ndescription: >\n  Nobody may hold both payments:create and payments:approve, regardless of\n  which groups, roles or systems grant them.\nsubjects:\n  identity_types: [human, service, ai_agent]\nconflict:\n  a: [\"payments:create\"]\n  b: [\"payments:approve\"]\n",
+    "violations": 1
+   },
+   {
+    "id": "stale-secrets",
+    "name": "Secrets rotated at least every 90 days",
+    "type": "secret_max_age",
+    "severity": "medium",
+    "description": "API keys, tokens and service credentials must be rotated within 90 days.",
+    "enabled": true,
+    "source": "id: stale-secrets\nname: Secrets rotated at least every 90 days\ntype: secret_max_age\nseverity: medium\ndescription: API keys, tokens and service credentials must be rotated within 90 days.\nmax_age_days: 90\n",
+    "violations": 19
+   }
+  ]
+ }
+}

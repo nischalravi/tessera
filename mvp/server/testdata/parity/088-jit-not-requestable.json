@@ -1,0 +1,19 @@
+{
+ "name": "jit-not-requestable",
+ "request": {
+  "method": "POST",
+  "path": "/api/jit/requests",
+  "body": {
+   "identity_id": 5,
+   "group_id": 7,
+   "duration_hours": 1,
+   "justification": "x"
+  }
+ },
+ "response": {
+  "status": 400,
+  "body": {
+   "detail": "engineering is not eligible for just-in-time access"
+  }
+ }
+}

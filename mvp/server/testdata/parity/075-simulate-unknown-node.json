@@ -1,0 +1,21 @@
+{
+ "name": "simulate-unknown-node",
+ "request": {
+  "method": "POST",
+  "path": "/api/simulate",
+  "body": {
+   "add_edges": [
+    {
+     "src": "account:999999",
+     "dst": "group:1"
+    }
+   ]
+  }
+ },
+ "response": {
+  "status": 400,
+  "body": {
+   "detail": "unknown node account:999999"
+  }
+ }
+}

@@ -1,0 +1,256 @@
+{
+ "name": "simulate-disable",
+ "request": {
+  "method": "POST",
+  "path": "/api/simulate",
+  "body": {
+   "disable_account_ids": [
+    82
+   ]
+  }
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "changes": [
+    {
+     "op": "disable_account",
+     "account_id": 82,
+     "label": "okta:oren.whitlock@larkspur.example"
+    }
+   ],
+   "summary": {
+    "identities_affected": 1,
+    "permissions_removed": 13,
+    "permissions_added": 0,
+    "removed_recently_used": 4,
+    "removed_privileged": 6,
+    "violations_before": 74,
+    "violations_after": 74,
+    "violations_resolved": 0,
+    "violations_introduced": 0
+   },
+   "identities": [
+    {
+     "identity_id": 18,
+     "name": "Oren Whitlock",
+     "type": "human",
+     "removed": [
+      {
+       "perm_key": "perm:11",
+       "action": "s3:DeleteObject",
+       "resource": "s3://customer-pii",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "pii"
+       ],
+       "usage": {
+        "last_used": "2026-07-27T00:00:00",
+        "days_since_used": 73,
+        "events_90d": 12,
+        "active_days_90d": 1
+       },
+       "used_last_30d": false
+      },
+      {
+       "perm_key": "perm:12",
+       "action": "s3:GetObject",
+       "resource": "s3://app-logs",
+       "system": "aws",
+       "privileged": false,
+       "tags": [],
+       "usage": {
+        "last_used": "2026-09-18T00:00:00",
+        "days_since_used": 20,
+        "events_90d": 242,
+        "active_days_90d": 37
+       },
+       "used_last_30d": true
+      },
+      {
+       "perm_key": "perm:16",
+       "action": "s3:GetObject",
+       "resource": "s3://ml-artifacts",
+       "system": "aws",
+       "privileged": false,
+       "tags": [],
+       "usage": {
+        "last_used": "2026-09-18T00:00:00",
+        "days_since_used": 20,
+        "events_90d": 308,
+        "active_days_90d": 41
+       },
+       "used_last_30d": true
+      },
+      {
+       "perm_key": "perm:17",
+       "action": "s3:PutObject",
+       "resource": "s3://ml-artifacts",
+       "system": "aws",
+       "privileged": false,
+       "tags": [],
+       "usage": {
+        "last_used": null,
+        "days_since_used": null,
+        "events_90d": 0,
+        "active_days_90d": 0
+       },
+       "used_last_30d": false
+      },
+      {
+       "perm_key": "perm:18",
+       "action": "s3:GetObject",
+       "resource": "s3://terraform-state",
+       "system": "aws",
+       "privileged": false,
+       "tags": [
+        "infra"
+       ],
+       "usage": {
+        "last_used": null,
+        "days_since_used": null,
+        "events_90d": 0,
+        "active_days_90d": 0
+       },
+       "used_last_30d": false
+      },
+      {
+       "perm_key": "perm:19",
+       "action": "s3:PutObject",
+       "resource": "s3://terraform-state",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "infra"
+       ],
+       "usage": {
+        "last_used": null,
+        "days_since_used": null,
+        "events_90d": 0,
+        "active_days_90d": 0
+       },
+       "used_last_30d": false
+      },
+      {
+       "perm_key": "perm:20",
+       "action": "rds:Connect",
+       "resource": "rds/orders-db",
+       "system": "aws",
+       "privileged": false,
+       "tags": [
+        "pii"
+       ],
+       "usage": {
+        "last_used": "2026-09-18T00:00:00",
+        "days_since_used": 20,
+        "events_90d": 254,
+        "active_days_90d": 38
+       },
+       "used_last_30d": true
+      },
+      {
+       "perm_key": "perm:21",
+       "action": "rds:ModifyDBInstance",
+       "resource": "rds/orders-db",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "pii"
+       ],
+       "usage": {
+        "last_used": null,
+        "days_since_used": null,
+        "events_90d": 0,
+        "active_days_90d": 0
+       },
+       "used_last_30d": false
+      },
+      {
+       "perm_key": "perm:22",
+       "action": "ec2:DescribeInstances",
+       "resource": "ec2/prod-fleet",
+       "system": "aws",
+       "privileged": false,
+       "tags": [],
+       "usage": {
+        "last_used": null,
+        "days_since_used": null,
+        "events_90d": 0,
+        "active_days_90d": 0
+       },
+       "used_last_30d": false
+      },
+      {
+       "perm_key": "perm:23",
+       "action": "ec2:TerminateInstances",
+       "resource": "ec2/prod-fleet",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "usage": {
+        "last_used": null,
+        "days_since_used": null,
+        "events_90d": 0,
+        "active_days_90d": 0
+       },
+       "used_last_30d": false
+      },
+      {
+       "perm_key": "perm:24",
+       "action": "iam:*",
+       "resource": "aws-account/larkspur-prod",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "usage": {
+        "last_used": null,
+        "days_since_used": null,
+        "events_90d": 0,
+        "active_days_90d": 0
+       },
+       "used_last_30d": false
+      },
+      {
+       "perm_key": "perm:25",
+       "action": "iam:*",
+       "resource": "aws-account/larkspur-staging",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "usage": {
+        "last_used": "2026-09-13T00:00:00",
+        "days_since_used": 25,
+        "events_90d": 69,
+        "active_days_90d": 10
+       },
+       "used_last_30d": true
+      },
+      {
+       "perm_key": "perm:9",
+       "action": "s3:GetObject",
+       "resource": "s3://customer-pii",
+       "system": "aws",
+       "privileged": false,
+       "tags": [
+        "pii"
+       ],
+       "usage": {
+        "last_used": null,
+        "days_since_used": null,
+        "events_90d": 0,
+        "active_days_90d": 0
+       },
+       "used_last_30d": false
+      }
+     ],
+     "added": []
+    }
+   ],
+   "violations": {
+    "resolved": [],
+    "introduced": []
+   }
+  }
+ }
+}

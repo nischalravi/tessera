@@ -1,0 +1,18 @@
+{
+ "name": "jit-standing",
+ "request": {
+  "method": "POST",
+  "path": "/api/jit/requests",
+  "body": {
+   "identity_id": 22,
+   "group_id": 43,
+   "justification": "x"
+  }
+ },
+ "response": {
+  "status": 400,
+  "body": {
+   "detail": "Sana Iyer already holds ACCOUNTADMIN as a standing grant"
+  }
+ }
+}

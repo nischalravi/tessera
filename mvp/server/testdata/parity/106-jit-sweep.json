@@ -1,0 +1,13 @@
+{
+ "name": "jit-sweep",
+ "request": {
+  "method": "POST",
+  "path": "/api/jit/sweep"
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "expired": 0
+  }
+ }
+}

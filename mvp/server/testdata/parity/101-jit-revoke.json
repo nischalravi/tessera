@@ -1,0 +1,35 @@
+{
+ "name": "jit-revoke",
+ "request": {
+  "method": "POST",
+  "path": "/api/jit/requests/3/revoke"
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "id": 3,
+   "identity": {
+    "id": 4,
+    "name": "Kofi Mensah",
+    "type": "human",
+    "status": "active",
+    "department": "Engineering",
+    "title": "Engineering Manager, Backend"
+   },
+   "group": {
+    "id": 24,
+    "name": "BreakGlassAdmin",
+    "system": "aws",
+    "privileged": true
+   },
+   "account": "okta:kofi.mensah@larkspur.example",
+   "justification": "Rotate compromised KMS grant during incident INC-4790",
+   "duration_hours": 2.0,
+   "status": "revoked",
+   "requested_at": "2026-10-08T09:30:00",
+   "decided_at": "2026-10-08T09:10:00",
+   "decided_by": "Ingrid Lindqvist",
+   "expires_at": "2026-10-08T09:30:00"
+  }
+ }
+}

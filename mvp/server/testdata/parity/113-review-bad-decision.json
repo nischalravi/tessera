@@ -1,0 +1,29 @@
+{
+ "name": "review-bad-decision",
+ "request": {
+  "method": "POST",
+  "path": "/api/reviews/items/3/decision",
+  "body": {
+   "decision": "maybe"
+  }
+ },
+ "response": {
+  "status": 422,
+  "body": {
+   "detail": [
+    {
+     "type": "literal_error",
+     "loc": [
+      "body",
+      "decision"
+     ],
+     "msg": "Input should be 'keep' or 'revoke'",
+     "input": "maybe",
+     "ctx": {
+      "expected": "'keep' or 'revoke'"
+     }
+    }
+   ]
+  }
+ }
+}

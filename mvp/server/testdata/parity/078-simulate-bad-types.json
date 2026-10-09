@@ -1,0 +1,58 @@
+{
+ "name": "simulate-bad-types",
+ "request": {
+  "method": "POST",
+  "path": "/api/simulate",
+  "body": {
+   "remove_edge_ids": [
+    "x"
+   ],
+   "add_edges": [
+    {
+     "src": 1
+    }
+   ]
+  }
+ },
+ "response": {
+  "status": 422,
+  "body": {
+   "detail": [
+    {
+     "type": "int_parsing",
+     "loc": [
+      "body",
+      "remove_edge_ids",
+      0
+     ],
+     "msg": "Input should be a valid integer, unable to parse string as an integer",
+     "input": "x"
+    },
+    {
+     "type": "string_type",
+     "loc": [
+      "body",
+      "add_edges",
+      0,
+      "src"
+     ],
+     "msg": "Input should be a valid string",
+     "input": 1
+    },
+    {
+     "type": "missing",
+     "loc": [
+      "body",
+      "add_edges",
+      0,
+      "dst"
+     ],
+     "msg": "Field required",
+     "input": {
+      "src": 1
+     }
+    }
+   ]
+  }
+ }
+}

@@ -1,0 +1,19 @@
+{
+ "name": "jit-too-long",
+ "request": {
+  "method": "POST",
+  "path": "/api/jit/requests",
+  "body": {
+   "identity_id": 5,
+   "group_id": 23,
+   "duration_hours": 100,
+   "justification": "x"
+  }
+ },
+ "response": {
+  "status": 400,
+  "body": {
+   "detail": "duration must be between 0 and 72 hours"
+  }
+ }
+}

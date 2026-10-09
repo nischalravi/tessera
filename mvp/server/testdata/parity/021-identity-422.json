@@ -1,0 +1,23 @@
+{
+ "name": "identity-422",
+ "request": {
+  "method": "GET",
+  "path": "/api/identities/abc"
+ },
+ "response": {
+  "status": 422,
+  "body": {
+   "detail": [
+    {
+     "type": "int_parsing",
+     "loc": [
+      "path",
+      "identity_id"
+     ],
+     "msg": "Input should be a valid integer, unable to parse string as an integer",
+     "input": "abc"
+    }
+   ]
+  }
+ }
+}

@@ -1,0 +1,17 @@
+{
+ "name": "review-revoke",
+ "request": {
+  "method": "POST",
+  "path": "/api/reviews/items/2/decision",
+  "body": {
+   "decision": "revoke"
+  }
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "id": 2,
+   "decision": "revoke"
+  }
+ }
+}

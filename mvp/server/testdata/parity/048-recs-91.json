@@ -1,0 +1,26 @@
+{
+ "name": "recs-91",
+ "request": {
+  "method": "GET",
+  "path": "/api/least-privilege/recommendations?unused_days=91"
+ },
+ "response": {
+  "status": 422,
+  "body": {
+   "detail": [
+    {
+     "type": "less_than_equal",
+     "loc": [
+      "query",
+      "unused_days"
+     ],
+     "msg": "Input should be less than or equal to 90",
+     "input": "91",
+     "ctx": {
+      "le": 90
+     }
+    }
+   ]
+  }
+ }
+}

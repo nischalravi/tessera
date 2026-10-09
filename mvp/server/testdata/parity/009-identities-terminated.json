@@ -1,0 +1,79 @@
+{
+ "name": "identities-terminated",
+ "request": {
+  "method": "GET",
+  "path": "/api/identities?status=terminated"
+ },
+ "response": {
+  "status": 200,
+  "body": [
+   {
+    "id": 18,
+    "name": "Oren Whitlock",
+    "type": "human",
+    "status": "terminated",
+    "department": "Engineering",
+    "title": "Site Reliability Engineer",
+    "email": "oren.whitlock@larkspur.example",
+    "accounts": 3,
+    "systems": [
+     "github",
+     "okta",
+     "workday"
+    ],
+    "last_activity": "2026-09-18T00:00:00",
+    "effective": 28,
+    "unused": 13,
+    "privileged": 7,
+    "sensitive": 6,
+    "violations": 1,
+    "risk": 57
+   },
+   {
+    "id": 23,
+    "name": "Dmitri Ostrowski",
+    "type": "human",
+    "status": "terminated",
+    "department": "Data",
+    "title": "Data Scientist",
+    "email": "dmitri.ostrowski@larkspur.example",
+    "accounts": 4,
+    "systems": [
+     "github",
+     "okta",
+     "snowflake",
+     "workday"
+    ],
+    "last_activity": "2026-08-19T00:00:00",
+    "effective": 15,
+    "unused": 7,
+    "privileged": 0,
+    "sensitive": 3,
+    "violations": 1,
+    "risk": 34
+   },
+   {
+    "id": 41,
+    "name": "Hollis Brightwater",
+    "type": "human",
+    "status": "terminated",
+    "department": "Sales",
+    "title": "Account Executive",
+    "email": "hollis.brightwater@larkspur.example",
+    "accounts": 3,
+    "systems": [
+     "okta",
+     "snowflake",
+     "workday"
+    ],
+    "last_activity": "2026-09-01T00:00:00",
+    "effective": 2,
+    "unused": 1,
+    "privileged": 0,
+    "sensitive": 0,
+    "violations": 1,
+    "risk": 25
+   }
+  ]
+ }
+}

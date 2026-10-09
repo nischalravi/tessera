@@ -1,0 +1,17 @@
+{
+ "name": "revoke-apply-again",
+ "request": {
+  "method": "POST",
+  "path": "/api/least-privilege/revoke",
+  "body": {
+   "edge_id": 19,
+   "dry_run": false
+  }
+ },
+ "response": {
+  "status": 404,
+  "body": {
+   "detail": "grant not found"
+  }
+ }
+}

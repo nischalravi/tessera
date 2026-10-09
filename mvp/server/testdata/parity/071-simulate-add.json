@@ -1,0 +1,139 @@
+{
+ "name": "simulate-add",
+ "request": {
+  "method": "POST",
+  "path": "/api/simulate",
+  "body": {
+   "add_edges": [
+    {
+     "src": "account:69",
+     "dst": "group:10"
+    }
+   ]
+  }
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "changes": [
+    {
+     "op": "add",
+     "edge": [
+      "account:69",
+      "group:10"
+     ],
+     "label": "okta:alice.okafor@larkspur.example → okta:eng-platform"
+    }
+   ],
+   "summary": {
+    "identities_affected": 1,
+    "permissions_removed": 0,
+    "permissions_added": 6,
+    "removed_recently_used": 0,
+    "removed_privileged": 0,
+    "violations_before": 74,
+    "violations_after": 75,
+    "violations_resolved": 0,
+    "violations_introduced": 1
+   },
+   "identities": [
+    {
+     "identity_id": 5,
+     "name": "Alice Okafor",
+     "type": "human",
+     "removed": [],
+     "added": [
+      {
+       "perm_key": "perm:11",
+       "action": "s3:DeleteObject",
+       "resource": "s3://customer-pii",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "pii"
+       ],
+       "path": "Alice Okafor → okta:alice.okafor@larkspur.example → okta:eng-platform → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+      },
+      {
+       "perm_key": "perm:18",
+       "action": "s3:GetObject",
+       "resource": "s3://terraform-state",
+       "system": "aws",
+       "privileged": false,
+       "tags": [
+        "infra"
+       ],
+       "path": "Alice Okafor → okta:alice.okafor@larkspur.example → okta:eng-platform → aws:ProdAdmin → s3:GetObject on s3://terraform-state"
+      },
+      {
+       "perm_key": "perm:19",
+       "action": "s3:PutObject",
+       "resource": "s3://terraform-state",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "infra"
+       ],
+       "path": "Alice Okafor → okta:alice.okafor@larkspur.example → okta:eng-platform → aws:ProdAdmin → s3:PutObject on s3://terraform-state"
+      },
+      {
+       "perm_key": "perm:21",
+       "action": "rds:ModifyDBInstance",
+       "resource": "rds/orders-db",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "pii"
+       ],
+       "path": "Alice Okafor → okta:alice.okafor@larkspur.example → okta:eng-platform → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db"
+      },
+      {
+       "perm_key": "perm:23",
+       "action": "ec2:TerminateInstances",
+       "resource": "ec2/prod-fleet",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "path": "Alice Okafor → okta:alice.okafor@larkspur.example → okta:eng-platform → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet"
+      },
+      {
+       "perm_key": "perm:24",
+       "action": "iam:*",
+       "resource": "aws-account/larkspur-prod",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "path": "Alice Okafor → okta:alice.okafor@larkspur.example → okta:eng-platform → aws:ProdAdmin → iam:* on aws-account/larkspur-prod"
+      }
+     ]
+    }
+   ],
+   "violations": {
+    "resolved": [],
+    "introduced": [
+     {
+      "policy_id": "no-standing-prod-admin",
+      "policy_name": "No standing admin on prod",
+      "severity": "high",
+      "identity_id": 5,
+      "identity_name": "Alice Okafor",
+      "key": "no-standing-prod-admin:5:account:69->group:10",
+      "message": "Alice Okafor has standing privileged prod access via okta:eng-platform: ec2:TerminateInstances on ec2/prod-fleet, iam:* on aws-account/larkspur-prod, rds:ModifyDBInstance on rds/orders-db …",
+      "evidence": [
+       "Alice Okafor → okta:alice.okafor@larkspur.example → okta:eng-platform → aws:ProdAdmin → iam:* on aws-account/larkspur-prod",
+       "Alice Okafor → okta:alice.okafor@larkspur.example → okta:eng-platform → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet",
+       "Alice Okafor → okta:alice.okafor@larkspur.example → okta:eng-platform → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db",
+       "Alice Okafor → okta:alice.okafor@larkspur.example → okta:eng-platform → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+      ],
+      "edges": [
+       [
+        "account:69",
+        "group:10"
+       ]
+      ]
+     }
+    ]
+   }
+  }
+ }
+}

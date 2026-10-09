@@ -1,0 +1,841 @@
+{
+ "name": "recs-90-remove",
+ "request": {
+  "method": "GET",
+  "path": "/api/least-privilege/recommendations?unused_days=90&kind=remove"
+ },
+ "response": {
+  "status": 200,
+  "body": [
+   {
+    "id": "25",
+    "edge_id": 25,
+    "kind": "remove",
+    "identity_id": 32,
+    "identity_name": "Beatrix Pemberton",
+    "identity_type": "human",
+    "department": "Finance",
+    "grant": "workday:emp-1032 → workday:Payroll Administrator",
+    "target": "workday:Payroll Administrator",
+    "target_privileged": true,
+    "permissions_via": 2,
+    "permissions_lost": 2,
+    "unused_lost": 2,
+    "used_lost": 0,
+    "privileged_unused": 1,
+    "sensitive_tags": [
+     "financial",
+     "payroll",
+     "pii"
+    ],
+    "last_used": null,
+    "days_since_used": null,
+    "unused_examples": [
+     "payroll:run on Payroll",
+     "payroll:view on Payroll"
+    ],
+    "used_examples": [],
+    "score": 25,
+    "rationale": "None of the 2 permissions only this grant provides were used in 90 days (never used)."
+   },
+   {
+    "id": "33",
+    "edge_id": 33,
+    "kind": "remove",
+    "identity_id": 63,
+    "identity_name": "ISU_Expense_Bot",
+    "identity_type": "service",
+    "department": null,
+    "grant": "workday:ISU_Expense_Bot → workday:AP Clerk",
+    "target": "workday:AP Clerk",
+    "target_privileged": false,
+    "permissions_via": 1,
+    "permissions_lost": 1,
+    "unused_lost": 1,
+    "used_lost": 0,
+    "privileged_unused": 0,
+    "sensitive_tags": [
+     "financial",
+     "payments"
+    ],
+    "last_used": null,
+    "days_since_used": null,
+    "unused_examples": [
+     "payments:create on Supplier Payments"
+    ],
+    "used_examples": [],
+    "score": 18,
+    "rationale": "None of the 1 permissions only this grant provides were used in 90 days (never used)."
+   },
+   {
+    "id": "34",
+    "edge_id": 34,
+    "kind": "remove",
+    "identity_id": 69,
+    "identity_name": "Finance Recon Agent",
+    "identity_type": "ai_agent",
+    "department": null,
+    "grant": "workday:agent-finance-recon → workday:AP Clerk",
+    "target": "workday:AP Clerk",
+    "target_privileged": false,
+    "permissions_via": 1,
+    "permissions_lost": 1,
+    "unused_lost": 1,
+    "used_lost": 0,
+    "privileged_unused": 0,
+    "sensitive_tags": [
+     "financial",
+     "payments"
+    ],
+    "last_used": null,
+    "days_since_used": null,
+    "unused_examples": [
+     "payments:create on Supplier Payments"
+    ],
+    "used_examples": [],
+    "score": 18,
+    "rationale": "None of the 1 permissions only this grant provides were used in 90 days (never used)."
+   },
+   {
+    "id": "329",
+    "edge_id": 329,
+    "kind": "remove",
+    "identity_id": 31,
+    "identity_name": "Delphine Bellweather",
+    "identity_type": "human",
+    "department": "Security",
+    "grant": "github:delphine-bellw → github:security",
+    "target": "github:security",
+    "target_privileged": false,
+    "permissions_via": 2,
+    "permissions_lost": 1,
+    "unused_lost": 1,
+    "used_lost": 0,
+    "privileged_unused": 1,
+    "sensitive_tags": [
+     "payments"
+    ],
+    "last_used": null,
+    "days_since_used": null,
+    "unused_examples": [
+     "repo:admin on larkspur/payments-service"
+    ],
+    "used_examples": [],
+    "score": 16,
+    "rationale": "None of the 1 permissions only this grant provides were used in 90 days (never used)."
+   },
+   {
+    "id": "26",
+    "edge_id": 26,
+    "kind": "remove",
+    "identity_id": 57,
+    "identity_name": "Esme Thornbury",
+    "identity_type": "human",
+    "department": "People",
+    "grant": "workday:emp-1057 → workday:HR Partner",
+    "target": "workday:HR Partner",
+    "target_privileged": false,
+    "permissions_via": 2,
+    "permissions_lost": 1,
+    "unused_lost": 1,
+    "used_lost": 0,
+    "privileged_unused": 1,
+    "sensitive_tags": [
+     "pii"
+    ],
+    "last_used": "2026-10-08T00:00:00",
+    "days_since_used": 0,
+    "unused_examples": [
+     "workers:edit on Worker Records"
+    ],
+    "used_examples": [],
+    "score": 16,
+    "rationale": "None of the 1 permissions only this grant provides were used in 90 days (last used 0 days ago)."
+   },
+   {
+    "id": "19",
+    "edge_id": 19,
+    "kind": "remove",
+    "identity_id": 33,
+    "identity_name": "Priya Ramaswamy",
+    "identity_type": "human",
+    "department": "Finance",
+    "grant": "workday:emp-1033 → workday:AP Approver",
+    "target": "workday:AP Approver",
+    "target_privileged": false,
+    "permissions_via": 1,
+    "permissions_lost": 1,
+    "unused_lost": 1,
+    "used_lost": 0,
+    "privileged_unused": 0,
+    "sensitive_tags": [
+     "financial",
+     "payments"
+    ],
+    "last_used": null,
+    "days_since_used": null,
+    "unused_examples": [
+     "payments:approve on Supplier Payments"
+    ],
+    "used_examples": [],
+    "score": 15,
+    "rationale": "None of the 1 permissions only this grant provides were used in 90 days (never used)."
+   },
+   {
+    "id": "20",
+    "edge_id": 20,
+    "kind": "remove",
+    "identity_id": 34,
+    "identity_name": "Tomas Szabo",
+    "identity_type": "human",
+    "department": "Finance",
+    "grant": "workday:emp-1034 → workday:AP Clerk",
+    "target": "workday:AP Clerk",
+    "target_privileged": false,
+    "permissions_via": 1,
+    "permissions_lost": 1,
+    "unused_lost": 1,
+    "used_lost": 0,
+    "privileged_unused": 0,
+    "sensitive_tags": [
+     "financial",
+     "payments"
+    ],
+    "last_used": null,
+    "days_since_used": null,
+    "unused_examples": [
+     "payments:create on Supplier Payments"
+    ],
+    "used_examples": [],
+    "score": 15,
+    "rationale": "None of the 1 permissions only this grant provides were used in 90 days (never used)."
+   },
+   {
+    "id": "181",
+    "edge_id": 181,
+    "kind": "remove",
+    "identity_id": 66,
+    "identity_name": "old-migration-token",
+    "identity_type": "service",
+    "department": null,
+    "grant": "okta:old-migration-token → okta:okta-super-admins",
+    "target": "okta:okta-super-admins",
+    "target_privileged": true,
+    "permissions_via": 1,
+    "permissions_lost": 1,
+    "unused_lost": 1,
+    "used_lost": 0,
+    "privileged_unused": 1,
+    "sensitive_tags": [],
+    "last_used": null,
+    "days_since_used": null,
+    "unused_examples": [
+     "okta:SuperAdmin on larkspur.okta.example"
+    ],
+    "used_examples": [],
+    "score": 15,
+    "rationale": "None of the 1 permissions only this grant provides were used in 90 days (never used)."
+   },
+   {
+    "id": "411",
+    "edge_id": 411,
+    "kind": "remove",
+    "identity_id": 90,
+    "identity_name": "TABLEAU_LEGACY",
+    "identity_type": "service",
+    "department": null,
+    "grant": "snowflake:TABLEAU_LEGACY → snowflake:REPORTING",
+    "target": "snowflake:REPORTING",
+    "target_privileged": false,
+    "permissions_via": 2,
+    "permissions_lost": 2,
+    "unused_lost": 2,
+    "used_lost": 0,
+    "privileged_unused": 0,
+    "sensitive_tags": [
+     "financial"
+    ],
+    "last_used": null,
+    "days_since_used": null,
+    "unused_examples": [
+     "snowflake:SELECT on snowflake/EVENTS",
+     "snowflake:SELECT on snowflake/FINANCE"
+    ],
+    "used_examples": [],
+    "score": 15,
+    "rationale": "None of the 2 permissions only this grant provides were used in 90 days (never used)."
+   },
+   {
+    "id": "231",
+    "edge_id": 231,
+    "kind": "remove",
+    "identity_id": 74,
+    "identity_name": "svc-backup-agent",
+    "identity_type": "service",
+    "department": null,
+    "grant": "aws:svc-backup-agent → s3:GetObject on s3://customer-pii",
+    "target": "s3:GetObject on s3://customer-pii",
+    "target_privileged": false,
+    "permissions_via": 1,
+    "permissions_lost": 1,
+    "unused_lost": 1,
+    "used_lost": 0,
+    "privileged_unused": 0,
+    "sensitive_tags": [
+     "pii"
+    ],
+    "last_used": null,
+    "days_since_used": null,
+    "unused_examples": [
+     "s3:GetObject on s3://customer-pii"
+    ],
+    "used_examples": [],
+    "score": 14,
+    "rationale": "None of the 1 permissions only this grant provides were used in 90 days (never used)."
+   },
+   {
+    "id": "234",
+    "edge_id": 234,
+    "kind": "remove",
+    "identity_id": 75,
+    "identity_name": "svc-legacy-etl",
+    "identity_type": "service",
+    "department": null,
+    "grant": "aws:svc-legacy-etl → s3:GetObject on s3://customer-pii",
+    "target": "s3:GetObject on s3://customer-pii",
+    "target_privileged": false,
+    "permissions_via": 1,
+    "permissions_lost": 1,
+    "unused_lost": 1,
+    "used_lost": 0,
+    "privileged_unused": 0,
+    "sensitive_tags": [
+     "pii"
+    ],
+    "last_used": null,
+    "days_since_used": null,
+    "unused_examples": [
+     "s3:GetObject on s3://customer-pii"
+    ],
+    "used_examples": [],
+    "score": 14,
+    "rationale": "None of the 1 permissions only this grant provides were used in 90 days (never used)."
+   },
+   {
+    "id": "235",
+    "edge_id": 235,
+    "kind": "remove",
+    "identity_id": 75,
+    "identity_name": "svc-legacy-etl",
+    "identity_type": "service",
+    "department": null,
+    "grant": "aws:svc-legacy-etl → s3:GetObject on s3://finance-reports",
+    "target": "s3:GetObject on s3://finance-reports",
+    "target_privileged": false,
+    "permissions_via": 1,
+    "permissions_lost": 1,
+    "unused_lost": 1,
+    "used_lost": 0,
+    "privileged_unused": 0,
+    "sensitive_tags": [
+     "financial"
+    ],
+    "last_used": null,
+    "days_since_used": null,
+    "unused_examples": [
+     "s3:GetObject on s3://finance-reports"
+    ],
+    "used_examples": [],
+    "score": 14,
+    "rationale": "None of the 1 permissions only this grant provides were used in 90 days (never used)."
+   },
+   {
+    "id": "236",
+    "edge_id": 236,
+    "kind": "remove",
+    "identity_id": 75,
+    "identity_name": "svc-legacy-etl",
+    "identity_type": "service",
+    "department": null,
+    "grant": "aws:svc-legacy-etl → kms:Decrypt on kms/pii-key",
+    "target": "kms:Decrypt on kms/pii-key",
+    "target_privileged": false,
+    "permissions_via": 1,
+    "permissions_lost": 1,
+    "unused_lost": 1,
+    "used_lost": 0,
+    "privileged_unused": 0,
+    "sensitive_tags": [
+     "pii"
+    ],
+    "last_used": null,
+    "days_since_used": null,
+    "unused_examples": [
+     "kms:Decrypt on kms/pii-key"
+    ],
+    "used_examples": [],
+    "score": 14,
+    "rationale": "None of the 1 permissions only this grant provides were used in 90 days (never used)."
+   },
+   {
+    "id": "246",
+    "edge_id": 246,
+    "kind": "remove",
+    "identity_id": 81,
+    "identity_name": "svc-data-export",
+    "identity_type": "service",
+    "department": null,
+    "grant": "aws:svc-data-export → s3:PutObject on s3://finance-reports",
+    "target": "s3:PutObject on s3://finance-reports",
+    "target_privileged": false,
+    "permissions_via": 1,
+    "permissions_lost": 1,
+    "unused_lost": 1,
+    "used_lost": 0,
+    "privileged_unused": 0,
+    "sensitive_tags": [
+     "financial"
+    ],
+    "last_used": null,
+    "days_since_used": null,
+    "unused_examples": [
+     "s3:PutObject on s3://finance-reports"
+    ],
+    "used_examples": [],
+    "score": 14,
+    "rationale": "None of the 1 permissions only this grant provides were used in 90 days (never used)."
+   },
+   {
+    "id": "333",
+    "edge_id": 333,
+    "kind": "remove",
+    "identity_id": 82,
+    "identity_name": "release-bot",
+    "identity_type": "service",
+    "department": null,
+    "grant": "github:release-bot → repo:write on larkspur/payments-service",
+    "target": "repo:write on larkspur/payments-service",
+    "target_privileged": false,
+    "permissions_via": 1,
+    "permissions_lost": 1,
+    "unused_lost": 1,
+    "used_lost": 0,
+    "privileged_unused": 0,
+    "sensitive_tags": [
+     "payments"
+    ],
+    "last_used": null,
+    "days_since_used": null,
+    "unused_examples": [
+     "repo:write on larkspur/payments-service"
+    ],
+    "used_examples": [],
+    "score": 14,
+    "rationale": "None of the 1 permissions only this grant provides were used in 90 days (never used)."
+   },
+   {
+    "id": "332",
+    "edge_id": 332,
+    "kind": "remove",
+    "identity_id": 4,
+    "identity_name": "Kofi Mensah",
+    "identity_type": "human",
+    "department": "Engineering",
+    "grant": "github:kofi-mensa → github:org-owners",
+    "target": "github:org-owners",
+    "target_privileged": true,
+    "permissions_via": 1,
+    "permissions_lost": 1,
+    "unused_lost": 1,
+    "used_lost": 0,
+    "privileged_unused": 1,
+    "sensitive_tags": [],
+    "last_used": null,
+    "days_since_used": null,
+    "unused_examples": [
+     "org:admin on github.com/larkspur"
+    ],
+    "used_examples": [],
+    "score": 12,
+    "rationale": "None of the 1 permissions only this grant provides were used in 90 days (never used)."
+   },
+   {
+    "id": "331",
+    "edge_id": 331,
+    "kind": "remove",
+    "identity_id": 16,
+    "identity_name": "Ingrid Lindqvist",
+    "identity_type": "human",
+    "department": "Engineering",
+    "grant": "github:ingrid-lindq → github:org-owners",
+    "target": "github:org-owners",
+    "target_privileged": true,
+    "permissions_via": 1,
+    "permissions_lost": 1,
+    "unused_lost": 1,
+    "used_lost": 0,
+    "privileged_unused": 1,
+    "sensitive_tags": [],
+    "last_used": null,
+    "days_since_used": null,
+    "unused_examples": [
+     "org:admin on github.com/larkspur"
+    ],
+    "used_examples": [],
+    "score": 12,
+    "rationale": "None of the 1 permissions only this grant provides were used in 90 days (never used)."
+   },
+   {
+    "id": "175",
+    "edge_id": 175,
+    "kind": "remove",
+    "identity_id": 29,
+    "identity_name": "Thandiwe Mokoena",
+    "identity_type": "human",
+    "department": "Security",
+    "grant": "okta:thandiwe.mokoena@larkspur.example → okta:okta-super-admins",
+    "target": "okta:okta-super-admins",
+    "target_privileged": true,
+    "permissions_via": 1,
+    "permissions_lost": 1,
+    "unused_lost": 1,
+    "used_lost": 0,
+    "privileged_unused": 1,
+    "sensitive_tags": [],
+    "last_used": null,
+    "days_since_used": null,
+    "unused_examples": [
+     "okta:SuperAdmin on larkspur.okta.example"
+    ],
+    "used_examples": [],
+    "score": 12,
+    "rationale": "None of the 1 permissions only this grant provides were used in 90 days (never used)."
+   },
+   {
+    "id": "402",
+    "edge_id": 402,
+    "kind": "remove",
+    "identity_id": 3,
+    "identity_name": "Mireille Delacroix",
+    "identity_type": "human",
+    "department": "Executive",
+    "grant": "snowflake:MIREILLE_DELACROIX → snowflake:FINANCE_ANALYST",
+    "target": "snowflake:FINANCE_ANALYST",
+    "target_privileged": false,
+    "permissions_via": 1,
+    "permissions_lost": 1,
+    "unused_lost": 1,
+    "used_lost": 0,
+    "privileged_unused": 0,
+    "sensitive_tags": [
+     "financial"
+    ],
+    "last_used": null,
+    "days_since_used": null,
+    "unused_examples": [
+     "snowflake:SELECT on snowflake/FINANCE"
+    ],
+    "used_examples": [],
+    "score": 11,
+    "rationale": "None of the 1 permissions only this grant provides were used in 90 days (never used)."
+   },
+   {
+    "id": "9",
+    "edge_id": 9,
+    "kind": "remove",
+    "identity_id": 4,
+    "identity_name": "Kofi Mensah",
+    "identity_type": "human",
+    "department": "Engineering",
+    "grant": "workday:emp-1004 → workday:Manager Self-Service",
+    "target": "workday:Manager Self-Service",
+    "target_privileged": false,
+    "permissions_via": 1,
+    "permissions_lost": 1,
+    "unused_lost": 1,
+    "used_lost": 0,
+    "privileged_unused": 0,
+    "sensitive_tags": [
+     "pii"
+    ],
+    "last_used": null,
+    "days_since_used": null,
+    "unused_examples": [
+     "workers:view on Worker Records"
+    ],
+    "used_examples": [],
+    "score": 11,
+    "rationale": "None of the 1 permissions only this grant provides were used in 90 days (never used)."
+   },
+   {
+    "id": "14",
+    "edge_id": 14,
+    "kind": "remove",
+    "identity_id": 32,
+    "identity_name": "Beatrix Pemberton",
+    "identity_type": "human",
+    "department": "Finance",
+    "grant": "workday:emp-1032 → workday:Manager Self-Service",
+    "target": "workday:Manager Self-Service",
+    "target_privileged": false,
+    "permissions_via": 1,
+    "permissions_lost": 1,
+    "unused_lost": 1,
+    "used_lost": 0,
+    "privileged_unused": 0,
+    "sensitive_tags": [
+     "pii"
+    ],
+    "last_used": null,
+    "days_since_used": null,
+    "unused_examples": [
+     "workers:view on Worker Records"
+    ],
+    "used_examples": [],
+    "score": 11,
+    "rationale": "None of the 1 permissions only this grant provides were used in 90 days (never used)."
+   },
+   {
+    "id": "386",
+    "edge_id": 386,
+    "kind": "remove",
+    "identity_id": 33,
+    "identity_name": "Priya Ramaswamy",
+    "identity_type": "human",
+    "department": "Finance",
+    "grant": "snowflake:PRIYA_RAMASWAMY → snowflake:FINANCE_ANALYST",
+    "target": "snowflake:FINANCE_ANALYST",
+    "target_privileged": false,
+    "permissions_via": 1,
+    "permissions_lost": 1,
+    "unused_lost": 1,
+    "used_lost": 0,
+    "privileged_unused": 0,
+    "sensitive_tags": [
+     "financial"
+    ],
+    "last_used": null,
+    "days_since_used": null,
+    "unused_examples": [
+     "snowflake:SELECT on snowflake/FINANCE"
+    ],
+    "used_examples": [],
+    "score": 11,
+    "rationale": "None of the 1 permissions only this grant provides were used in 90 days (never used)."
+   },
+   {
+    "id": "15",
+    "edge_id": 15,
+    "kind": "remove",
+    "identity_id": 40,
+    "identity_name": "Rafael Valdivia",
+    "identity_type": "human",
+    "department": "Sales",
+    "grant": "workday:emp-1040 → workday:Manager Self-Service",
+    "target": "workday:Manager Self-Service",
+    "target_privileged": false,
+    "permissions_via": 1,
+    "permissions_lost": 1,
+    "unused_lost": 1,
+    "used_lost": 0,
+    "privileged_unused": 0,
+    "sensitive_tags": [
+     "pii"
+    ],
+    "last_used": null,
+    "days_since_used": null,
+    "unused_examples": [
+     "workers:view on Worker Records"
+    ],
+    "used_examples": [],
+    "score": 11,
+    "rationale": "None of the 1 permissions only this grant provides were used in 90 days (never used)."
+   },
+   {
+    "id": "16",
+    "edge_id": 16,
+    "kind": "remove",
+    "identity_id": 50,
+    "identity_name": "Yara Castellanos",
+    "identity_type": "human",
+    "department": "Support",
+    "grant": "workday:emp-1050 → workday:Manager Self-Service",
+    "target": "workday:Manager Self-Service",
+    "target_privileged": false,
+    "permissions_via": 1,
+    "permissions_lost": 1,
+    "unused_lost": 1,
+    "used_lost": 0,
+    "privileged_unused": 0,
+    "sensitive_tags": [
+     "pii"
+    ],
+    "last_used": null,
+    "days_since_used": null,
+    "unused_examples": [
+     "workers:view on Worker Records"
+    ],
+    "used_examples": [],
+    "score": 11,
+    "rationale": "None of the 1 permissions only this grant provides were used in 90 days (never used)."
+   },
+   {
+    "id": "355",
+    "edge_id": 355,
+    "kind": "remove",
+    "identity_id": 68,
+    "identity_name": "Code Review Bot",
+    "identity_type": "ai_agent",
+    "department": null,
+    "grant": "github:agent-code-review → repo:read on larkspur/data-pipelines",
+    "target": "repo:read on larkspur/data-pipelines",
+    "target_privileged": false,
+    "permissions_via": 1,
+    "permissions_lost": 1,
+    "unused_lost": 1,
+    "used_lost": 0,
+    "privileged_unused": 0,
+    "sensitive_tags": [],
+    "last_used": null,
+    "days_since_used": null,
+    "unused_examples": [
+     "repo:read on larkspur/data-pipelines"
+    ],
+    "used_examples": [],
+    "score": 10,
+    "rationale": "None of the 1 permissions only this grant provides were used in 90 days (never used)."
+   },
+   {
+    "id": "334",
+    "edge_id": 334,
+    "kind": "remove",
+    "identity_id": 82,
+    "identity_name": "release-bot",
+    "identity_type": "service",
+    "department": null,
+    "grant": "github:release-bot → repo:write on larkspur/web-app",
+    "target": "repo:write on larkspur/web-app",
+    "target_privileged": false,
+    "permissions_via": 1,
+    "permissions_lost": 1,
+    "unused_lost": 1,
+    "used_lost": 0,
+    "privileged_unused": 0,
+    "sensitive_tags": [],
+    "last_used": null,
+    "days_since_used": null,
+    "unused_examples": [
+     "repo:write on larkspur/web-app"
+    ],
+    "used_examples": [],
+    "score": 10,
+    "rationale": "None of the 1 permissions only this grant provides were used in 90 days (never used)."
+   },
+   {
+    "id": "336",
+    "edge_id": 336,
+    "kind": "remove",
+    "identity_id": 82,
+    "identity_name": "release-bot",
+    "identity_type": "service",
+    "department": null,
+    "grant": "github:release-bot → repo:write on larkspur/infra-terraform",
+    "target": "repo:write on larkspur/infra-terraform",
+    "target_privileged": false,
+    "permissions_via": 1,
+    "permissions_lost": 1,
+    "unused_lost": 1,
+    "used_lost": 0,
+    "privileged_unused": 0,
+    "sensitive_tags": [],
+    "last_used": null,
+    "days_since_used": null,
+    "unused_examples": [
+     "repo:write on larkspur/infra-terraform"
+    ],
+    "used_examples": [],
+    "score": 10,
+    "rationale": "None of the 1 permissions only this grant provides were used in 90 days (never used)."
+   },
+   {
+    "id": "340",
+    "edge_id": 340,
+    "kind": "remove",
+    "identity_id": 83,
+    "identity_name": "infra-deploy-key",
+    "identity_type": "service",
+    "department": null,
+    "grant": "github:infra-deploy-key → repo:write on larkspur/infra-terraform",
+    "target": "repo:write on larkspur/infra-terraform",
+    "target_privileged": false,
+    "permissions_via": 1,
+    "permissions_lost": 1,
+    "unused_lost": 1,
+    "used_lost": 0,
+    "privileged_unused": 0,
+    "sensitive_tags": [],
+    "last_used": null,
+    "days_since_used": null,
+    "unused_examples": [
+     "repo:write on larkspur/infra-terraform"
+    ],
+    "used_examples": [],
+    "score": 10,
+    "rationale": "None of the 1 permissions only this grant provides were used in 90 days (never used)."
+   },
+   {
+    "id": "348",
+    "edge_id": 348,
+    "kind": "remove",
+    "identity_id": 85,
+    "identity_name": "dependabot-svc",
+    "identity_type": "service",
+    "department": null,
+    "grant": "github:dependabot-svc → repo:read on larkspur/ml-models",
+    "target": "repo:read on larkspur/ml-models",
+    "target_privileged": false,
+    "permissions_via": 1,
+    "permissions_lost": 1,
+    "unused_lost": 1,
+    "used_lost": 0,
+    "privileged_unused": 0,
+    "sensitive_tags": [],
+    "last_used": null,
+    "days_since_used": null,
+    "unused_examples": [
+     "repo:read on larkspur/ml-models"
+    ],
+    "used_examples": [],
+    "score": 10,
+    "rationale": "None of the 1 permissions only this grant provides were used in 90 days (never used)."
+   },
+   {
+    "id": "321",
+    "edge_id": 321,
+    "kind": "remove",
+    "identity_id": 27,
+    "identity_name": "Quinn Zeller",
+    "identity_type": "human",
+    "department": "Data",
+    "grant": "github:quinn-zelle → github:data",
+    "target": "github:data",
+    "target_privileged": false,
+    "permissions_via": 2,
+    "permissions_lost": 2,
+    "unused_lost": 2,
+    "used_lost": 0,
+    "privileged_unused": 0,
+    "sensitive_tags": [],
+    "last_used": null,
+    "days_since_used": null,
+    "unused_examples": [
+     "repo:write on larkspur/data-pipelines",
+     "repo:write on larkspur/ml-models"
+    ],
+    "used_examples": [],
+    "score": 8,
+    "rationale": "None of the 2 permissions only this grant provides were used in 90 days (never used)."
+   }
+  ]
+ }
+}

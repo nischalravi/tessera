@@ -1,0 +1,187 @@
+{
+ "name": "jit-list",
+ "request": {
+  "method": "GET",
+  "path": "/api/jit/requests"
+ },
+ "response": {
+  "status": 200,
+  "body": [
+   {
+    "id": 1,
+    "identity": {
+     "id": 71,
+     "name": "SRE On-call Agent",
+     "type": "ai_agent",
+     "status": "active",
+     "department": null,
+     "title": "AI agent"
+    },
+    "group": {
+     "id": 23,
+     "name": "ProdAdmin",
+     "system": "aws",
+     "privileged": true
+    },
+    "account": "aws:agent-sre-oncall",
+    "justification": "PagerDuty INC-4821: restart wedged ECS tasks in prod",
+    "duration_hours": 1.0,
+    "status": "pending",
+    "requested_at": "2026-10-08T09:30:00",
+    "decided_at": null,
+    "decided_by": null,
+    "expires_at": null
+   },
+   {
+    "id": 2,
+    "identity": {
+     "id": 5,
+     "name": "Alice Okafor",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Senior Software Engineer"
+    },
+    "group": {
+     "id": 23,
+     "name": "ProdAdmin",
+     "system": "aws",
+     "privileged": true
+    },
+    "account": "okta:alice.okafor@larkspur.example",
+    "justification": "Hotfix for orders-db connection pool exhaustion (INC-4817)",
+    "duration_hours": 4.0,
+    "status": "pending",
+    "requested_at": "2026-10-08T09:30:00",
+    "decided_at": null,
+    "decided_by": null,
+    "expires_at": null
+   },
+   {
+    "id": 3,
+    "identity": {
+     "id": 4,
+     "name": "Kofi Mensah",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Engineering Manager, Backend"
+    },
+    "group": {
+     "id": 24,
+     "name": "BreakGlassAdmin",
+     "system": "aws",
+     "privileged": true
+    },
+    "account": "okta:kofi.mensah@larkspur.example",
+    "justification": "Rotate compromised KMS grant during incident INC-4790",
+    "duration_hours": 2.0,
+    "status": "approved",
+    "requested_at": "2026-10-08T09:30:00",
+    "decided_at": "2026-10-08T09:10:00",
+    "decided_by": "Ingrid Lindqvist",
+    "expires_at": "2026-10-08T11:10:00"
+   },
+   {
+    "id": 4,
+    "identity": {
+     "id": 28,
+     "name": "Wren Okafor",
+     "type": "human",
+     "status": "active",
+     "department": "Data",
+     "title": "Analytics Engineer"
+    },
+    "group": {
+     "id": 43,
+     "name": "ACCOUNTADMIN",
+     "system": "snowflake",
+     "privileged": true
+    },
+    "account": "snowflake:WREN_OKAFOR",
+    "justification": "Resize warehouse for quarter-end backfill",
+    "duration_hours": 3.0,
+    "status": "expired",
+    "requested_at": "2026-10-08T09:30:00",
+    "decided_at": "2026-10-07T09:30:00",
+    "decided_by": "Sana Iyer",
+    "expires_at": "2026-10-07T12:30:00"
+   },
+   {
+    "id": 5,
+    "identity": {
+     "id": 33,
+     "name": "Priya Ramaswamy",
+     "type": "human",
+     "status": "active",
+     "department": "Finance",
+     "title": "FP&A Analyst"
+    },
+    "group": {
+     "id": 24,
+     "name": "BreakGlassAdmin",
+     "system": "aws",
+     "privileged": true
+    },
+    "account": "okta:priya.ramaswamy@larkspur.example",
+    "justification": "Quarter close",
+    "duration_hours": 1.5,
+    "status": "pending",
+    "requested_at": "2026-10-08T09:30:00",
+    "decided_at": null,
+    "decided_by": null,
+    "expires_at": null
+   },
+   {
+    "id": 6,
+    "identity": {
+     "id": 22,
+     "name": "Sana Iyer",
+     "type": "human",
+     "status": "active",
+     "department": "Data",
+     "title": "Head of Data"
+    },
+    "group": {
+     "id": 23,
+     "name": "ProdAdmin",
+     "system": "aws",
+     "privileged": true
+    },
+    "account": "okta:sana.iyer@larkspur.example",
+    "justification": "Investigate prod data job",
+    "duration_hours": 4.0,
+    "status": "pending",
+    "requested_at": "2026-10-08T09:30:00",
+    "decided_at": null,
+    "decided_by": null,
+    "expires_at": null
+   },
+   {
+    "id": 7,
+    "identity": {
+     "id": 4,
+     "name": "Kofi Mensah",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Engineering Manager, Backend"
+    },
+    "group": {
+     "id": 23,
+     "name": "ProdAdmin",
+     "system": "aws",
+     "privileged": true
+    },
+    "account": "okta:kofi.mensah@larkspur.example",
+    "justification": "coerced",
+    "duration_hours": 2.0,
+    "status": "pending",
+    "requested_at": "2026-10-08T09:30:00",
+    "decided_at": null,
+    "decided_by": null,
+    "expires_at": null
+   }
+  ]
+ }
+}

@@ -1,0 +1,38 @@
+{
+ "name": "jit-deny",
+ "request": {
+  "method": "POST",
+  "path": "/api/jit/requests/1/deny",
+  "body": {
+   "approver": "lead@larkspur.example"
+  }
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "id": 1,
+   "identity": {
+    "id": 71,
+    "name": "SRE On-call Agent",
+    "type": "ai_agent",
+    "status": "active",
+    "department": null,
+    "title": "AI agent"
+   },
+   "group": {
+    "id": 23,
+    "name": "ProdAdmin",
+    "system": "aws",
+    "privileged": true
+   },
+   "account": "aws:agent-sre-oncall",
+   "justification": "PagerDuty INC-4821: restart wedged ECS tasks in prod",
+   "duration_hours": 1.0,
+   "status": "denied",
+   "requested_at": "2026-10-08T09:30:00",
+   "decided_at": "2026-10-08T09:30:00",
+   "decided_by": "lead@larkspur.example",
+   "expires_at": null
+  }
+ }
+}

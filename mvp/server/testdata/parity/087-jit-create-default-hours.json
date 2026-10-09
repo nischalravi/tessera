@@ -1,0 +1,40 @@
+{
+ "name": "jit-create-default-hours",
+ "request": {
+  "method": "POST",
+  "path": "/api/jit/requests",
+  "body": {
+   "identity_id": 22,
+   "group_id": 23,
+   "justification": "Investigate prod data job"
+  }
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "id": 6,
+   "identity": {
+    "id": 22,
+    "name": "Sana Iyer",
+    "type": "human",
+    "status": "active",
+    "department": "Data",
+    "title": "Head of Data"
+   },
+   "group": {
+    "id": 23,
+    "name": "ProdAdmin",
+    "system": "aws",
+    "privileged": true
+   },
+   "account": "okta:sana.iyer@larkspur.example",
+   "justification": "Investigate prod data job",
+   "duration_hours": 4,
+   "status": "pending",
+   "requested_at": "2026-10-08T09:30:00",
+   "decided_at": null,
+   "decided_by": null,
+   "expires_at": null
+  }
+ }
+}

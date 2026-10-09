@@ -1,0 +1,18 @@
+{
+ "name": "review-keep",
+ "request": {
+  "method": "POST",
+  "path": "/api/reviews/items/1/decision",
+  "body": {
+   "decision": "keep",
+   "comment": "needed"
+  }
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "id": 1,
+   "decision": "keep"
+  }
+ }
+}

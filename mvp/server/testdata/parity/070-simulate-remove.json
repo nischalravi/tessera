@@ -1,0 +1,169 @@
+{
+ "name": "simulate-remove",
+ "request": {
+  "method": "POST",
+  "path": "/api/simulate",
+  "body": {
+   "remove_edge_ids": [
+    47,
+    999999
+   ]
+  }
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "changes": [
+    {
+     "op": "remove",
+     "edge_id": 47,
+     "edge": [
+      "account:69",
+      "group:7"
+     ],
+     "label": "okta:alice.okafor@larkspur.example → okta:engineering"
+    },
+    {
+     "op": "remove",
+     "edge_id": 999999,
+     "edge": null,
+     "label": "not found"
+    }
+   ],
+   "summary": {
+    "identities_affected": 1,
+    "permissions_removed": 7,
+    "permissions_added": 0,
+    "removed_recently_used": 3,
+    "removed_privileged": 1,
+    "violations_before": 74,
+    "violations_after": 74,
+    "violations_resolved": 0,
+    "violations_introduced": 0
+   },
+   "identities": [
+    {
+     "identity_id": 5,
+     "name": "Alice Okafor",
+     "type": "human",
+     "removed": [
+      {
+       "perm_key": "perm:12",
+       "action": "s3:GetObject",
+       "resource": "s3://app-logs",
+       "system": "aws",
+       "privileged": false,
+       "tags": [],
+       "usage": {
+        "last_used": "2026-10-05T00:00:00",
+        "days_since_used": 3,
+        "events_90d": 170,
+        "active_days_90d": 28
+       },
+       "used_last_30d": true
+      },
+      {
+       "perm_key": "perm:16",
+       "action": "s3:GetObject",
+       "resource": "s3://ml-artifacts",
+       "system": "aws",
+       "privileged": false,
+       "tags": [],
+       "usage": {
+        "last_used": "2026-07-17T00:00:00",
+        "days_since_used": 83,
+        "events_90d": 8,
+        "active_days_90d": 1
+       },
+       "used_last_30d": false
+      },
+      {
+       "perm_key": "perm:17",
+       "action": "s3:PutObject",
+       "resource": "s3://ml-artifacts",
+       "system": "aws",
+       "privileged": false,
+       "tags": [],
+       "usage": {
+        "last_used": null,
+        "days_since_used": null,
+        "events_90d": 0,
+        "active_days_90d": 0
+       },
+       "used_last_30d": false
+      },
+      {
+       "perm_key": "perm:20",
+       "action": "rds:Connect",
+       "resource": "rds/orders-db",
+       "system": "aws",
+       "privileged": false,
+       "tags": [
+        "pii"
+       ],
+       "usage": {
+        "last_used": "2026-10-06T00:00:00",
+        "days_since_used": 2,
+        "events_90d": 149,
+        "active_days_90d": 28
+       },
+       "used_last_30d": true
+      },
+      {
+       "perm_key": "perm:22",
+       "action": "ec2:DescribeInstances",
+       "resource": "ec2/prod-fleet",
+       "system": "aws",
+       "privileged": false,
+       "tags": [],
+       "usage": {
+        "last_used": "2026-10-04T00:00:00",
+        "days_since_used": 4,
+        "events_90d": 158,
+        "active_days_90d": 24
+       },
+       "used_last_30d": true
+      },
+      {
+       "perm_key": "perm:25",
+       "action": "iam:*",
+       "resource": "aws-account/larkspur-staging",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "usage": {
+        "last_used": null,
+        "days_since_used": null,
+        "events_90d": 0,
+        "active_days_90d": 0
+       },
+       "used_last_30d": false
+      },
+      {
+       "perm_key": "perm:9",
+       "action": "s3:GetObject",
+       "resource": "s3://customer-pii",
+       "system": "aws",
+       "privileged": false,
+       "tags": [
+        "pii"
+       ],
+       "usage": {
+        "last_used": null,
+        "days_since_used": null,
+        "events_90d": 0,
+        "active_days_90d": 0
+       },
+       "used_last_30d": false
+      }
+     ],
+     "added": []
+    }
+   ],
+   "violations": {
+    "resolved": [],
+    "introduced": []
+   }
+  }
+ }
+}

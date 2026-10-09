@@ -1,0 +1,13 @@
+{
+ "name": "graph-400",
+ "request": {
+  "method": "GET",
+  "path": "/api/graph"
+ },
+ "response": {
+  "status": 400,
+  "body": {
+   "detail": "identity_id or resource_id is required"
+  }
+ }
+}

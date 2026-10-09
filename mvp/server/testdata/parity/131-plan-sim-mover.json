@@ -1,0 +1,100 @@
+{
+ "name": "plan-sim-mover",
+ "request": {
+  "method": "GET",
+  "path": "/api/hris/events/7/plan"
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "event": {
+    "id": 7,
+    "external_id": "sim-evt-7-1791466200",
+    "type": "mover",
+    "status": "pending",
+    "effective_at": "2026-10-08T09:30:00",
+    "executed_at": null,
+    "identity": {
+     "id": 5,
+     "name": "Alice Okafor",
+     "department": "Engineering"
+    },
+    "payload": {
+     "to_team": "data",
+     "to_department": "Data",
+     "new_title": "Data Engineer"
+    }
+   },
+   "plan": {
+    "type": "mover",
+    "identity": {
+     "id": 5,
+     "name": "Alice Okafor",
+     "department": "Engineering",
+     "title": "Senior Software Engineer"
+    },
+    "from_team": "backend",
+    "to_team": "data",
+    "new_title": "Data Engineer",
+    "to_department": "Data",
+    "steps": [
+     {
+      "action": "add_grant",
+      "system": "okta",
+      "group_id": 11,
+      "target": "okta:data-team",
+      "detail": "Add to okta:data-team (birthright for data)"
+     },
+     {
+      "action": "add_grant",
+      "system": "github",
+      "group_id": 33,
+      "target": "github:data",
+      "detail": "Add to github:data (birthright for data)"
+     },
+     {
+      "action": "create_account",
+      "system": "snowflake",
+      "target": "alice.okafor@larkspur.example",
+      "detail": "Create snowflake account for Alice Okafor"
+     },
+     {
+      "action": "add_grant",
+      "system": "snowflake",
+      "group_id": 37,
+      "target": "snowflake:ANALYST",
+      "detail": "Add to snowflake:ANALYST (birthright for data)"
+     },
+     {
+      "action": "remove_grant",
+      "system": "okta",
+      "edge_id": 47,
+      "target": "okta:engineering",
+      "detail": "Remove okta:engineering (birthright of previous team backend)"
+     },
+     {
+      "action": "remove_grant",
+      "system": "okta",
+      "edge_id": 48,
+      "target": "okta:eng-backend",
+      "detail": "Remove okta:eng-backend (birthright of previous team backend)"
+     },
+     {
+      "action": "review_grant",
+      "system": "okta",
+      "edge_id": 420,
+      "target": "aws:ProdAdmin",
+      "detail": "Flag aws:ProdAdmin for manager review within 30 days (not birthright for data)"
+     },
+     {
+      "action": "remove_grant",
+      "system": "github",
+      "edge_id": 277,
+      "target": "github:backend",
+      "detail": "Remove github:backend (birthright of previous team backend)"
+     }
+    ]
+   }
+  }
+ }
+}

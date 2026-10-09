@@ -1,0 +1,23 @@
+{
+ "name": "identity-bad-unused",
+ "request": {
+  "method": "GET",
+  "path": "/api/identities/5?unused_days=x"
+ },
+ "response": {
+  "status": 422,
+  "body": {
+   "detail": [
+    {
+     "type": "int_parsing",
+     "loc": [
+      "query",
+      "unused_days"
+     ],
+     "msg": "Input should be a valid integer, unable to parse string as an integer",
+     "input": "x"
+    }
+   ]
+  }
+ }
+}

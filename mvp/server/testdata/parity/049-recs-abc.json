@@ -1,0 +1,23 @@
+{
+ "name": "recs-abc",
+ "request": {
+  "method": "GET",
+  "path": "/api/least-privilege/recommendations?unused_days=abc"
+ },
+ "response": {
+  "status": 422,
+  "body": {
+   "detail": [
+    {
+     "type": "int_parsing",
+     "loc": [
+      "query",
+      "unused_days"
+     ],
+     "msg": "Input should be a valid integer, unable to parse string as an integer",
+     "input": "abc"
+    }
+   ]
+  }
+ }
+}

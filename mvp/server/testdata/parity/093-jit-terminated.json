@@ -1,0 +1,18 @@
+{
+ "name": "jit-terminated",
+ "request": {
+  "method": "POST",
+  "path": "/api/jit/requests",
+  "body": {
+   "identity_id": 18,
+   "group_id": 23,
+   "justification": "x"
+  }
+ },
+ "response": {
+  "status": 400,
+  "body": {
+   "detail": "identity is not active"
+  }
+ }
+}

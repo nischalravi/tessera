@@ -1,0 +1,374 @@
+{
+ "name": "identity-legacy-etl",
+ "request": {
+  "method": "GET",
+  "path": "/api/identities/75"
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "id": 75,
+   "name": "svc-legacy-etl",
+   "type": "service",
+   "status": "active",
+   "department": null,
+   "title": "AWS IAM user",
+   "email": null,
+   "description": "Legacy ETL from the 2022 data platform",
+   "hired_at": null,
+   "terminated_at": null,
+   "manager": null,
+   "owner": null,
+   "accounts": [
+    {
+     "id": 136,
+     "system": "aws",
+     "username": "svc-legacy-etl",
+     "kind": "service",
+     "status": "active",
+     "last_login_at": "2026-10-05T00:43:45.318930"
+    }
+   ],
+   "grants": [
+    {
+     "edge_id": 234,
+     "src": "account:136",
+     "dst": "perm:9",
+     "label": "s3:GetObject on s3://customer-pii",
+     "account": "aws:svc-legacy-etl",
+     "relation": "direct_grant",
+     "source": "connector",
+     "expires_at": null,
+     "privileged": false
+    },
+    {
+     "edge_id": 235,
+     "src": "account:136",
+     "dst": "perm:14",
+     "label": "s3:GetObject on s3://finance-reports",
+     "account": "aws:svc-legacy-etl",
+     "relation": "direct_grant",
+     "source": "connector",
+     "expires_at": null,
+     "privileged": false
+    },
+    {
+     "edge_id": 236,
+     "src": "account:136",
+     "dst": "perm:28",
+     "label": "kms:Decrypt on kms/pii-key",
+     "account": "aws:svc-legacy-etl",
+     "relation": "direct_grant",
+     "source": "connector",
+     "expires_at": null,
+     "privileged": false
+    }
+   ],
+   "effective_permissions": [
+    {
+     "perm_key": "perm:28",
+     "action": "kms:Decrypt",
+     "system": "aws",
+     "resource": "kms/pii-key",
+     "resource_id": 14,
+     "environment": "prod",
+     "tags": [
+      "pii"
+     ],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "active_days_90d": 0
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:75",
+        "kind": "identity",
+        "label": "svc-legacy-etl",
+        "system": null
+       },
+       {
+        "key": "account:136",
+        "kind": "account",
+        "label": "aws:svc-legacy-etl",
+        "system": "aws",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:28",
+        "kind": "perm",
+        "label": "kms:Decrypt on kms/pii-key",
+        "system": "aws",
+        "via": {
+         "relation": "direct_grant",
+         "edge_id": 236,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:9",
+     "action": "s3:GetObject",
+     "system": "aws",
+     "resource": "s3://customer-pii",
+     "resource_id": 5,
+     "environment": "prod",
+     "tags": [
+      "pii"
+     ],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "active_days_90d": 0
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:75",
+        "kind": "identity",
+        "label": "svc-legacy-etl",
+        "system": null
+       },
+       {
+        "key": "account:136",
+        "kind": "account",
+        "label": "aws:svc-legacy-etl",
+        "system": "aws",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:9",
+        "kind": "perm",
+        "label": "s3:GetObject on s3://customer-pii",
+        "system": "aws",
+        "via": {
+         "relation": "direct_grant",
+         "edge_id": 234,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:14",
+     "action": "s3:GetObject",
+     "system": "aws",
+     "resource": "s3://finance-reports",
+     "resource_id": 7,
+     "environment": "prod",
+     "tags": [
+      "financial"
+     ],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "active_days_90d": 0
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:75",
+        "kind": "identity",
+        "label": "svc-legacy-etl",
+        "system": null
+       },
+       {
+        "key": "account:136",
+        "kind": "account",
+        "label": "aws:svc-legacy-etl",
+        "system": "aws",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:14",
+        "kind": "perm",
+        "label": "s3:GetObject on s3://finance-reports",
+        "system": "aws",
+        "via": {
+         "relation": "direct_grant",
+         "edge_id": 235,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    }
+   ],
+   "violations": [
+    {
+     "policy_id": "nhi-ownership",
+     "policy_name": "Every NHI and AI agent has an active owner",
+     "severity": "high",
+     "identity_id": 75,
+     "identity_name": "svc-legacy-etl",
+     "key": "nhi-ownership:75",
+     "message": "svc-legacy-etl has no owner",
+     "evidence": [
+      "3 effective permissions"
+     ],
+     "edges": []
+    },
+    {
+     "policy_id": "stale-secrets",
+     "policy_name": "Secrets rotated at least every 90 days",
+     "severity": "medium",
+     "identity_id": 75,
+     "identity_name": "svc-legacy-etl",
+     "key": "stale-secrets:10",
+     "message": "access_key 'AKIASVCLEGACYETL' on aws:svc-legacy-etl is 780 days old (max 90)",
+     "evidence": [
+      "created 2024-08-19",
+      "last rotated never"
+     ],
+     "edges": []
+    }
+   ],
+   "recommendations": [
+    {
+     "id": "234",
+     "edge_id": 234,
+     "kind": "remove",
+     "identity_id": 75,
+     "identity_name": "svc-legacy-etl",
+     "identity_type": "service",
+     "department": null,
+     "grant": "aws:svc-legacy-etl → s3:GetObject on s3://customer-pii",
+     "target": "s3:GetObject on s3://customer-pii",
+     "target_privileged": false,
+     "permissions_via": 1,
+     "permissions_lost": 1,
+     "unused_lost": 1,
+     "used_lost": 0,
+     "privileged_unused": 0,
+     "sensitive_tags": [
+      "pii"
+     ],
+     "last_used": null,
+     "days_since_used": null,
+     "unused_examples": [
+      "s3:GetObject on s3://customer-pii"
+     ],
+     "used_examples": [],
+     "score": 14,
+     "rationale": "None of the 1 permissions only this grant provides were used in 60 days (never used)."
+    },
+    {
+     "id": "235",
+     "edge_id": 235,
+     "kind": "remove",
+     "identity_id": 75,
+     "identity_name": "svc-legacy-etl",
+     "identity_type": "service",
+     "department": null,
+     "grant": "aws:svc-legacy-etl → s3:GetObject on s3://finance-reports",
+     "target": "s3:GetObject on s3://finance-reports",
+     "target_privileged": false,
+     "permissions_via": 1,
+     "permissions_lost": 1,
+     "unused_lost": 1,
+     "used_lost": 0,
+     "privileged_unused": 0,
+     "sensitive_tags": [
+      "financial"
+     ],
+     "last_used": null,
+     "days_since_used": null,
+     "unused_examples": [
+      "s3:GetObject on s3://finance-reports"
+     ],
+     "used_examples": [],
+     "score": 14,
+     "rationale": "None of the 1 permissions only this grant provides were used in 60 days (never used)."
+    },
+    {
+     "id": "236",
+     "edge_id": 236,
+     "kind": "remove",
+     "identity_id": 75,
+     "identity_name": "svc-legacy-etl",
+     "identity_type": "service",
+     "department": null,
+     "grant": "aws:svc-legacy-etl → kms:Decrypt on kms/pii-key",
+     "target": "kms:Decrypt on kms/pii-key",
+     "target_privileged": false,
+     "permissions_via": 1,
+     "permissions_lost": 1,
+     "unused_lost": 1,
+     "used_lost": 0,
+     "privileged_unused": 0,
+     "sensitive_tags": [
+      "pii"
+     ],
+     "last_used": null,
+     "days_since_used": null,
+     "unused_examples": [
+      "kms:Decrypt on kms/pii-key"
+     ],
+     "used_examples": [],
+     "score": 14,
+     "rationale": "None of the 1 permissions only this grant provides were used in 60 days (never used)."
+    }
+   ],
+   "secrets": [
+    {
+     "id": 10,
+     "name": "AKIASVCLEGACYETL",
+     "kind": "access_key",
+     "system": "aws",
+     "account": "svc-legacy-etl",
+     "created_at": "2024-08-19T00:00:00",
+     "age_days": 780,
+     "status": "active",
+     "last_rotated_at": null,
+     "last_used_at": "2026-06-02T00:00:00",
+     "last_used_days": 128,
+     "stale": true
+    }
+   ],
+   "delegations": [],
+   "owned_identities": [],
+   "risk": {
+    "effective": 3,
+    "unused": 3,
+    "privileged": 0,
+    "sensitive": 3,
+    "violations": 2,
+    "risk": 36
+   }
+  }
+ }
+}

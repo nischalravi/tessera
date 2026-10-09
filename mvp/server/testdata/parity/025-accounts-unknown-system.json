@@ -1,0 +1,11 @@
+{
+ "name": "accounts-unknown-system",
+ "request": {
+  "method": "GET",
+  "path": "/api/accounts?system=nope"
+ },
+ "response": {
+  "status": 200,
+  "body": []
+ }
+}

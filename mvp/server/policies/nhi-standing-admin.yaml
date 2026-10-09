@@ -1,0 +1,10 @@
+id: nhi-no-prod-admin
+name: Non-human identities may not hold prod admin
+type: no_standing_access
+severity: high
+description: Service accounts and agents should use narrowly scoped roles, never admin on prod.
+subjects:
+  identity_types: [service, ai_agent]
+match:
+  privileged: true
+  environment: prod
