@@ -97,7 +97,12 @@ func Delta(value float64, unitMicros int64) time.Duration {
 	sum := int64(intpart) * unitMicros
 	leftover := 0.0
 	if frac != 0 {
-		ip, fp := math.Modf(frac * float64(unitMicros))
+		// The explicit float64 conversion rounds the product before Modf
+		// subtracts the integer part; without it the compiler may fuse the
+		// multiply and subtract into one FMA (it does on arm64), which keeps the
+		// unrounded product and diverges from CPython (e.g. 0.49999999999999994
+		// instead of 0.5, flipping the round-half-to-even below).
+		ip, fp := math.Modf(float64(frac * float64(unitMicros)))
 		sum += int64(ip)
 		leftover = fp
 	}
@@ -105,7 +110,7 @@ func Delta(value float64, unitMicros int64) time.Duration {
 		whole := math.Round(leftover)
 		if math.Abs(whole-leftover) == 0.5 {
 			odd := float64(sum & 1)
-			whole = 2.0*math.Round((leftover+odd)*0.5) - odd
+			whole = float64(2.0*math.Round(float64((leftover+odd)*0.5))) - odd
 		}
 		sum += int64(whole)
 	}

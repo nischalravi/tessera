@@ -91,7 +91,8 @@ func (r *PyRandom) genrand() uint32 {
 // Random is random.random(): a float in [0, 1) with 53 random bits.
 func (r *PyRandom) Random() float64 {
 	a, b := r.genrand()>>5, r.genrand()>>6
-	return (float64(a)*67108864.0 + float64(b)) * (1.0 / 9007199254740992.0)
+	// a*2^26 is exact, so the explicit rounding only documents that no FMA is wanted.
+	return (float64(float64(a)*67108864.0) + float64(b)) * (1.0 / 9007199254740992.0)
 }
 
 func (r *PyRandom) getrandbits(k int) uint32 {
@@ -114,8 +115,10 @@ func (r *PyRandom) randbelow(n int) int {
 // RandInt is random.randint(a, b), inclusive.
 func (r *PyRandom) RandInt(a, b int) int { return a + r.randbelow(b-a+1) }
 
-// Uniform is random.uniform(a, b).
-func (r *PyRandom) Uniform(a, b float64) float64 { return a + (b-a)*r.Random() }
+// Uniform is random.uniform(a, b). The float64 conversion forces the product
+// to be rounded before the addition, as in CPython; otherwise the compiler may
+// fuse them into one FMA instruction (arm64) and produce a different value.
+func (r *PyRandom) Uniform(a, b float64) float64 { return a + float64((b-a)*r.Random()) }
 
 // ChoiceIndex is the index random.choice(seq) picks for a sequence of length n.
 func (r *PyRandom) ChoiceIndex(n int) int { return r.randbelow(n) }

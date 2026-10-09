@@ -27,7 +27,9 @@ type sysXID struct{ system, xid string }
 
 var eng = []sysXID{{"okta", "everyone"}, {"okta", "engineering"}, {"github", "team/all-engineers"}}
 
-func with(base []sysXID, more ...sysXID) []sysXID { return append(append([]sysXID{}, base...), more...) }
+func with(base []sysXID, more ...sysXID) []sysXID {
+	return append(append([]sysXID{}, base...), more...)
+}
 
 // Birthright is the access every member of a team gets: (system, group external id).
 var Birthright = map[string][]sysXID{

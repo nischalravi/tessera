@@ -32,8 +32,8 @@ const DefaultHandlerTimeout = 30 * time.Second
 // Config configures a Server.
 type Config struct {
 	Store    *store.Store
-	Clock    timeutil.Clock  // defaults to timeutil.System
-	Policies *policy.Loader  // required
+	Clock    timeutil.Clock // defaults to timeutil.System
+	Policies *policy.Loader // required
 	// Connectors returns the configured connectors (defaults to connectors.Load("", now)).
 	Connectors func(now time.Time) ([]connectors.Connector, error)
 	Logger     *slog.Logger // defaults to slog.Default()
@@ -154,7 +154,9 @@ func (rt *route) match(path string) (map[string]string, bool) {
 	return vars, true
 }
 
-func methodMatches(rm, m string) bool { return rm == m || (rm == http.MethodGet && m == http.MethodHead) }
+func methodMatches(rm, m string) bool {
+	return rm == m || (rm == http.MethodGet && m == http.MethodHead)
+}
 
 // find returns the route for method+path, or the methods allowed for the path.
 func (s *Server) find(method, path string) (*route, map[string]string, []string) {

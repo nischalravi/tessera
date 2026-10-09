@@ -148,7 +148,6 @@ type HrisEventRecord struct {
 	Payload ojson.Object
 }
 
-
 func (*UsageRecord) isEvent()     {}
 func (*HrisEventRecord) isEvent() {}
 

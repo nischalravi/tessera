@@ -37,14 +37,14 @@ type Inputs struct {
 
 // Removed describes a permission an identity would lose.
 type Removed struct {
-	PermKey      string            `json:"perm_key"`
-	Action       string            `json:"action"`
-	Resource     string            `json:"resource"`
-	System       string            `json:"system"`
-	Privileged   bool              `json:"privileged"`
-	Tags         []string          `json:"tags"`
-	Usage        usage.Description `json:"usage"`
-	UsedLast30d  bool              `json:"used_last_30d"`
+	PermKey     string            `json:"perm_key"`
+	Action      string            `json:"action"`
+	Resource    string            `json:"resource"`
+	System      string            `json:"system"`
+	Privileged  bool              `json:"privileged"`
+	Tags        []string          `json:"tags"`
+	Usage       usage.Description `json:"usage"`
+	UsedLast30d bool              `json:"used_last_30d"`
 }
 
 // Added describes a permission an identity would gain.

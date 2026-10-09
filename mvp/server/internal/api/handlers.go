@@ -375,13 +375,13 @@ func (s *Server) summary(_ http.ResponseWriter, r *http.Request, _ *params) (any
 		topOut = append(topOut, append(briefObj(people[iid]), risks[iid].kvs()...))
 	}
 	counts := map[string]string{
-		"accounts":  "SELECT count(id) FROM accounts",
-		"systems":   "SELECT count(DISTINCT system) FROM accounts",
-		"grants":    "SELECT count(id) FROM grant_edges",
-		"open":      "SELECT count(id) FROM review_items WHERE decision IS NULL",
-		"pending":   "SELECT count(id) FROM access_requests WHERE status = 'pending'",
-		"active":    "SELECT count(id) FROM access_requests WHERE status = 'approved'",
-		"hris":      "SELECT count(id) FROM hris_events WHERE status = 'pending'",
+		"accounts": "SELECT count(id) FROM accounts",
+		"systems":  "SELECT count(DISTINCT system) FROM accounts",
+		"grants":   "SELECT count(id) FROM grant_edges",
+		"open":     "SELECT count(id) FROM review_items WHERE decision IS NULL",
+		"pending":  "SELECT count(id) FROM access_requests WHERE status = 'pending'",
+		"active":   "SELECT count(id) FROM access_requests WHERE status = 'approved'",
+		"hris":     "SELECT count(id) FROM hris_events WHERE status = 'pending'",
 	}
 	n := map[string]int{}
 	for k, q := range counts {

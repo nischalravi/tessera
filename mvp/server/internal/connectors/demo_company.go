@@ -470,7 +470,9 @@ func (c *DemoCompany) buildOkta() {
 
 func (c *DemoCompany) buildAWS() {
 	prod, staging := sp("prod"), sp("staging")
-	R := func(xid, name, kind string, env *string, tags ...string) { c.resource("aws", xid, name, kind, env, tags...) }
+	R := func(xid, name, kind string, env *string, tags ...string) {
+		c.resource("aws", xid, name, kind, env, tags...)
+	}
 	R("s3:customer-pii", "s3://customer-pii", "s3_bucket", prod, "pii")
 	R("s3:app-logs", "s3://app-logs", "s3_bucket", prod)
 	R("s3:finance-reports", "s3://finance-reports", "s3_bucket", prod, "financial")
