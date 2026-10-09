@@ -62,3 +62,6 @@ func (id ID) String() string {
 
 // IsZero reports whether id is the invalid zero value.
 func (id ID) IsZero() bool { return id.u == uuid.Nil }
+
+// MarshalText renders the canonical form (for logs and JSON).
+func (id ID) MarshalText() ([]byte, error) { return []byte(id.String()), nil }
