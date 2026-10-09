@@ -205,6 +205,10 @@ var schema = []string{
 	`CREATE INDEX IF NOT EXISTS ix_usage_events_identity_id ON usage_events (identity_id)`,
 	`CREATE INDEX IF NOT EXISTS ix_usage_events_permission_id ON usage_events (permission_id)`,
 	`CREATE INDEX IF NOT EXISTS ix_usage_events_day ON usage_events (day)`,
+	// Covering index for the per-request usage aggregate (usage.Build): lets
+	// SQLite group by (identity, permission) straight off the index instead of
+	// sorting ~20k rows in a temp B-tree.
+	`CREATE INDEX IF NOT EXISTS ix_usage_events_cover ON usage_events (identity_id, permission_id, day, count)`,
 	`CREATE TABLE IF NOT EXISTS access_requests (
 		id INTEGER PRIMARY KEY, identity_id INTEGER NOT NULL, account_id INTEGER NOT NULL, group_id INTEGER NOT NULL,
 		justification TEXT NOT NULL, duration_hours REAL NOT NULL, status TEXT NOT NULL, requested_at TEXT NOT NULL,
