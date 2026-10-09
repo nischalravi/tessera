@@ -353,8 +353,10 @@ func readBody(r *http.Request) (any, bool, error) {
 	if len(data) == 0 {
 		return nil, false, nil
 	}
+	// As in FastAPI: no Content-Type, or application/json / application/*+json,
+	// means the body is parsed as JSON; anything else is passed on as text.
 	ct := r.Header.Get("Content-Type")
-	isJSON := false
+	isJSON := ct == ""
 	if ct != "" {
 		if mt, _, err := mime.ParseMediaType(ct); err == nil {
 			if main, sub, ok := strings.Cut(mt, "/"); ok && main == "application" && (sub == "json" || strings.HasSuffix(sub, "+json")) {

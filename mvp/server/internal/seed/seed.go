@@ -61,14 +61,14 @@ func Workflows(c *store.Conn, now time.Time, policies []*policy.Policy) error {
 		return err
 	}
 	// pending: an AI agent asking for prod admin, and an engineer for a hotfix
-	if _, err := jit.CreateRequest(c, now, sreAgent.ID, prodAdmin.ID, 1, "PagerDuty INC-4821: restart wedged ECS tasks in prod"); err != nil {
+	if _, err := jit.CreateRequest(c, now, sreAgent.ID, prodAdmin.ID, jit.Hours{N: 1, Whole: true}, "PagerDuty INC-4821: restart wedged ECS tasks in prod"); err != nil {
 		return err
 	}
-	if _, err := jit.CreateRequest(c, now, alice.ID, prodAdmin.ID, 4, "Hotfix for orders-db connection pool exhaustion (INC-4817)"); err != nil {
+	if _, err := jit.CreateRequest(c, now, alice.ID, prodAdmin.ID, jit.Hours{N: 4, Whole: true}, "Hotfix for orders-db connection pool exhaustion (INC-4817)"); err != nil {
 		return err
 	}
 	// active: Kofi has break-glass for 2h
-	r, err := jit.CreateRequest(c, now, kofi.ID, breakGlass.ID, 2, "Rotate compromised KMS grant during incident INC-4790")
+	r, err := jit.CreateRequest(c, now, kofi.ID, breakGlass.ID, jit.Hours{N: 2, Whole: true}, "Rotate compromised KMS grant during incident INC-4790")
 	if err != nil {
 		return err
 	}
@@ -83,7 +83,7 @@ func Workflows(c *store.Conn, now time.Time, policies []*policy.Policy) error {
 	if len(data) == 0 {
 		return fmt.Errorf("seed: no active Data identity")
 	}
-	r2, err := jit.CreateRequest(c, now, data[len(data)-1].ID, acctadmin.ID, 3, "Resize warehouse for quarter-end backfill")
+	r2, err := jit.CreateRequest(c, now, data[len(data)-1].ID, acctadmin.ID, jit.Hours{N: 3, Whole: true}, "Resize warehouse for quarter-end backfill")
 	if err != nil {
 		return err
 	}

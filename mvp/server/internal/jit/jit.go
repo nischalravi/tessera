@@ -24,6 +24,22 @@ func (e *Error) Error() string { return e.Msg }
 
 func jitErr(format string, args ...any) error { return &Error{fmt.Sprintf(format, args...)} }
 
+// Hours is a requested duration. Whole marks a value supplied as an integer
+// (the API's default of 4, or the seed's literals): the creation response and
+// the audit log render it as 4 rather than 4.0, as the original backend did.
+type Hours struct {
+	N     float64
+	Whole bool
+}
+
+// JSON returns the value as the API renders it.
+func (h Hours) JSON() any {
+	if h.Whole && h.N == float64(int64(h.N)) {
+		return int64(h.N)
+	}
+	return ojson.Float(h.N)
+}
+
 // AccountFor picks the account that receives the grant: same system as the
 // group, else the IdP (Okta) account.
 func AccountFor(c *store.Conn, identityID int64, g *store.Group) (*store.Account, error) {
@@ -49,7 +65,7 @@ func getOrNil[T any](v *T, err error) (*T, error) {
 }
 
 // CreateRequest files a pending request.
-func CreateRequest(c *store.Conn, now time.Time, identityID, groupID int64, hours float64, justification string) (*store.AccessRequest, error) {
+func CreateRequest(c *store.Conn, now time.Time, identityID, groupID int64, hours Hours, justification string) (*store.AccessRequest, error) {
 	ident, err := getOrNil(c.Identity(identityID))
 	if err != nil {
 		return nil, err
@@ -67,7 +83,7 @@ func CreateRequest(c *store.Conn, now time.Time, identityID, groupID int64, hour
 	if !g.Requestable {
 		return nil, jitErr("%s is not eligible for just-in-time access", g.Name)
 	}
-	if !(hours > 0 && hours <= MaxHours) {
+	if !(hours.N > 0 && hours.N <= MaxHours) {
 		return nil, jitErr("duration must be between 0 and %d hours", MaxHours)
 	}
 	justification = strings.TrimSpace(justification)
@@ -87,12 +103,12 @@ func CreateRequest(c *store.Conn, now time.Time, identityID, groupID int64, hour
 		return nil, jitErr("%s already holds %s as a standing grant", ident.Name, g.Name)
 	}
 	id, err := c.Insert(`INSERT INTO access_requests (identity_id, account_id, group_id, justification, duration_hours, status,
-		requested_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)`, identityID, acct.ID, g.ID, justification, hours, store.T(now))
+		requested_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)`, identityID, acct.ID, g.ID, justification, hours.N, store.T(now))
 	if err != nil {
 		return nil, err
 	}
 	if err := c.Audit(now, ident.Name, "jit.request", ojson.Object{{Key: "request_id", Value: id},
-		{Key: "group", Value: g.Name}, {Key: "hours", Value: hours}}); err != nil {
+		{Key: "group", Value: g.Name}, {Key: "hours", Value: hours.JSON()}}); err != nil {
 		return nil, err
 	}
 	return c.Request(id)

@@ -170,7 +170,7 @@ func GenerateCampaign(c *store.Conn, now time.Time, name string, unusedDays int,
 			peers := targetByDept[deptTarget{d, null, ag.Dst}]
 			var coverage any
 			if ident.Type == "human" && deptN != 0 {
-				coverage = timeutil.Round(float64(peers)/float64(deptN), 2)
+				coverage = ojson.Float(timeutil.Round(float64(peers)/float64(deptN), 2))
 			}
 			tagSet := map[string]bool{}
 			for _, ep := range via {

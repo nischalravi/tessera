@@ -1,0 +1,1567 @@
+package api
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"slices"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/graph"
+	"github.com/nischalravi/tessera/mvp/server/internal/ingest"
+	"github.com/nischalravi/tessera/mvp/server/internal/jit"
+	"github.com/nischalravi/tessera/mvp/server/internal/jml"
+	"github.com/nischalravi/tessera/mvp/server/internal/leastpriv"
+	"github.com/nischalravi/tessera/mvp/server/internal/nhi"
+	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
+	"github.com/nischalravi/tessera/mvp/server/internal/policy"
+	"github.com/nischalravi/tessera/mvp/server/internal/reviews"
+	"github.com/nischalravi/tessera/mvp/server/internal/simulate"
+	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
+	"github.com/nischalravi/tessera/mvp/server/internal/usage"
+)
+
+func (s *Server) registerRoutes() {
+	G, P := http.MethodGet, http.MethodPost
+	s.handle(G, "/api/health", s.health)
+	s.handle(G, "/api/connectors", s.listConnectors)
+	s.handle(P, "/api/connectors/sync", s.syncConnectors)
+	s.handle(G, "/api/summary", s.summary)
+	s.handle(G, "/api/identities", s.listIdentities)
+	s.handle(G, "/api/identities/{identity_id}", s.identityDetail)
+	s.handle(G, "/api/accounts", s.listAccounts)
+	s.handle(G, "/api/groups", s.listGroups)
+	s.handle(G, "/api/resources", s.listResources)
+	s.handle(G, "/api/graph", s.graphView)
+	s.handle(G, "/api/nhi", s.nhiInventory)
+	s.handle(G, "/api/least-privilege/recommendations", s.recommendations)
+	s.handle(P, "/api/least-privilege/revoke", s.revoke)
+	s.handle(G, "/api/policies", s.listPolicies)
+	s.handle(G, "/api/violations", s.listViolations)
+	s.handle(P, "/api/simulate", s.simulate)
+	s.handle(G, "/api/jit/requests", s.jitRequests)
+	s.handle(P, "/api/jit/requests", s.jitCreate)
+	s.handle(P, "/api/jit/requests/{request_id}/{action}", s.jitDecide)
+	s.handle(P, "/api/jit/sweep", s.jitSweep)
+	s.handle(G, "/api/reviews/campaigns", s.listCampaigns)
+	s.handle(P, "/api/reviews/campaigns", s.createCampaign)
+	s.handle(G, "/api/reviews/campaigns/{campaign_id}", s.campaign)
+	s.handle(P, "/api/reviews/items/{item_id}/decision", s.reviewDecide)
+	s.handle(G, "/api/hris/events", s.hrisEvents)
+	s.handle(P, "/api/hris/events", s.hrisCreate)
+	s.handle(G, "/api/hris/events/{event_id}/plan", s.hrisPlan)
+	s.handle(P, "/api/hris/events/{event_id}/execute", s.hrisExecute)
+	s.handle(G, "/api/jml/leaver-plan/{identity_id}", s.leaverPlan)
+	s.handle(G, "/api/audit", s.auditLog)
+	s.handle(G, "/openapi.json", s.openAPI)
+	s.handle(G, "/docs", s.swaggerUI)
+	s.handle(G, "/docs/oauth2-redirect", s.swaggerRedirect)
+	s.handle(G, "/redoc", s.redoc)
+}
+
+// ---------------------------------------------------------------- context
+
+// analysis is the per-request analysis context: graph snapshot, usage index
+// and (lazily) policy violations.
+type analysis struct {
+	c        *store.Conn
+	now      time.Time
+	g        *graph.Snapshot
+	u        *usage.Index
+	policies []*policy.Policy
+	viol     []policy.Violation
+	violDone bool
+}
+
+// newAnalysis sweeps expired JIT grants and builds the graph and usage index.
+// inTx is true when c is already a write transaction.
+func (s *Server) newAnalysis(ctx context.Context, c *store.Conn, inTx bool) (*analysis, error) {
+	now := s.clock()
+	if inTx {
+		if need, err := jit.NeedsSweep(c, now); err != nil {
+			return nil, err
+		} else if need {
+			if _, err := jit.Sweep(c, now); err != nil {
+				return nil, err
+			}
+		}
+	} else if err := s.sweep(ctx); err != nil {
+		return nil, err
+	}
+	pols, err := s.policies()
+	if err != nil {
+		return nil, err
+	}
+	g, err := graph.FromDB(c, now)
+	if err != nil {
+		return nil, err
+	}
+	u, err := usage.Build(c, now)
+	if err != nil {
+		return nil, err
+	}
+	return &analysis{c: c, now: now, g: g, u: u, policies: pols}, nil
+}
+
+func (a *analysis) violations() ([]policy.Violation, error) {
+	if !a.violDone {
+		v, err := policy.Evaluate(a.policies, policy.NewContext(a.g, a.c, a.now))
+		if err != nil {
+			return nil, err
+		}
+		a.viol, a.violDone = v, true
+	}
+	return a.viol, nil
+}
+
+// readAnalysis builds an analysis on a read connection.
+func (s *Server) readAnalysis(r *http.Request) (*analysis, error) {
+	return s.newAnalysis(r.Context(), s.store.Read(r.Context()), false)
+}
+
+// ---------------------------------------------------------------- helpers
+
+// counter is an insertion-ordered Counter.
+type counter struct {
+	keys []string
+	n    map[string]int
+}
+
+func newCounter() *counter { return &counter{n: map[string]int{}} }
+
+func (c *counter) add(k string, by int) {
+	if _, ok := c.n[k]; !ok {
+		c.keys = append(c.keys, k)
+	}
+	c.n[k] += by
+}
+
+func (c *counter) object() ojson.Object {
+	o := ojson.Object{}
+	for _, k := range c.keys {
+		o = append(o, ojson.KV{Key: k, Value: c.n[k]})
+	}
+	return o
+}
+
+func brief(i *store.Identity) any {
+	if i == nil {
+		return nil
+	}
+	return briefObj(i)
+}
+
+func briefObj(i *store.Identity) ojson.Object {
+	return ojson.Object{{Key: "id", Value: i.ID}, {Key: "name", Value: i.Name}, {Key: "type", Value: i.Type},
+		{Key: "status", Value: i.Status}, {Key: "department", Value: i.Department}, {Key: "title", Value: i.Title}}
+}
+
+func getOrNil[T any](v *T, err error) (*T, error) {
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	return v, err
+}
+
+func nonEmpty(p *string) bool { return p != nil && *p != "" }
+
+func validated(p *params, more []verr) error {
+	errs := append(p.errs, more...)
+	if len(errs) > 0 {
+		return &validationError{errs}
+	}
+	return nil
+}
+
+type risk struct {
+	Effective, Unused, Privileged, Sensitive, Violations, Risk int
+}
+
+func (r risk) kvs() ojson.Object {
+	return ojson.Object{{Key: "effective", Value: r.Effective}, {Key: "unused", Value: r.Unused},
+		{Key: "privileged", Value: r.Privileged}, {Key: "sensitive", Value: r.Sensitive},
+		{Key: "violations", Value: r.Violations}, {Key: "risk", Value: r.Risk}}
+}
+
+var riskSensitive = map[string]bool{"pii": true, "payments": true, "financial": true, "payroll": true}
+
+// riskScores scores every identity (in graph order).
+func (a *analysis) riskScores(unusedDays int) ([]int64, map[int64]risk, error) {
+	viols, err := a.violations()
+	if err != nil {
+		return nil, nil, err
+	}
+	vio, vioSev := map[int64]int{}, map[int64]int{}
+	for _, v := range viols {
+		if v.IdentityID != nil {
+			vio[*v.IdentityID]++
+			rank, ok := policy.SeverityRank[v.Severity]
+			if !ok {
+				rank = 1
+			}
+			vioSev[*v.IdentityID] += rank
+		}
+	}
+	ids := a.g.Identities(true)
+	out := make(map[int64]risk, len(ids))
+	for _, iid := range ids {
+		eff := a.g.EffectivePermissions(iid)
+		var r risk
+		r.Effective = eff.Len()
+		for _, ep := range eff.Values() {
+			if a.u.Unused(iid, ep.PermID, unusedDays) {
+				r.Unused++
+			}
+			if ep.Privileged {
+				r.Privileged++
+			}
+			for _, t := range ep.Tags {
+				if riskSensitive[t] {
+					r.Sensitive++
+					break
+				}
+			}
+		}
+		r.Violations = vio[iid]
+		r.Risk = min(100, vioSev[iid]*6+r.Privileged*2+r.Sensitive+r.Unused)
+		out[iid] = r
+	}
+	return ids, out, nil
+}
+
+// ---------------------------------------------------------------- meta
+
+func (s *Server) health(_ http.ResponseWriter, _ *http.Request, _ *params) (any, error) {
+	return ojson.Object{{Key: "status", Value: "ok"}, {Key: "time", Value: timeutil.ISO(s.clock())}}, nil
+}
+
+func (s *Server) listConnectors(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+	conns, err := s.cfg.Connectors(s.clock())
+	if err != nil {
+		return nil, err
+	}
+	c := s.store.Read(r.Context())
+	out := []ojson.Object{}
+	for _, cn := range conns {
+		o := ojson.Object{{Key: "system", Value: cn.System()}, {Key: "name", Value: cn.DisplayName()},
+			{Key: "type", Value: cn.TypeName()}}
+		for _, t := range []struct{ key, table string }{{"accounts", "accounts"}, {"groups", "groups"},
+			{"resources", "resources"}, {"permissions", "permissions"}} {
+			n, err := c.Count("SELECT count(id) FROM "+t.table+" WHERE system = ?", cn.System())
+			if err != nil {
+				return nil, err
+			}
+			o = append(o, ojson.KV{Key: t.key, Value: n})
+		}
+		out = append(out, o)
+	}
+	return out, nil
+}
+
+func (s *Server) syncConnectors(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+	now := s.clock()
+	conns, err := s.cfg.Connectors(now)
+	if err != nil {
+		return nil, err
+	}
+	var stats ingest.DiscoveryStats
+	err = s.store.Write(r.Context(), func(c *store.Conn) error {
+		var results []*connectors.DiscoveryResult
+		for _, cn := range conns {
+			res, err := cn.Discover(r.Context())
+			if err != nil {
+				return fmt.Errorf("%s: discover: %w", cn.System(), err)
+			}
+			results = append(results, res)
+		}
+		if stats, err = ingest.Discovery(c, now, results, false); err != nil {
+			return err
+		}
+		return c.Audit(now, "system", "connectors.sync", stats.Object())
+	})
+	if err != nil {
+		return nil, err
+	}
+	return stats.Object(), nil
+}
+
+// ---------------------------------------------------------------- summary
+
+func (s *Server) summary(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+	a, err := s.readAnalysis(r)
+	if err != nil {
+		return nil, err
+	}
+	c := a.c
+	people, idents, err := c.IdentityMap()
+	if err != nil {
+		return nil, err
+	}
+	byType := map[string]int{}
+	terminated := 0
+	for _, i := range idents {
+		if i.Status == "active" {
+			byType[i.Type]++
+		}
+		if i.Status == "terminated" {
+			terminated++
+		}
+	}
+	ids, risks, err := a.riskScores(60)
+	if err != nil {
+		return nil, err
+	}
+	totalEff, totalUnused := 0, 0
+	for _, iid := range ids {
+		totalEff += risks[iid].Effective
+		totalUnused += risks[iid].Unused
+	}
+	viols, err := a.violations()
+	if err != nil {
+		return nil, err
+	}
+	sev, byPolicy := newCounter(), newCounter()
+	for _, v := range viols {
+		sev.add(v.Severity, 1)
+		byPolicy.add(v.PolicyName, 1)
+	}
+	nhis, err := nhi.Inventory(c, a.g, a.u)
+	if err != nil {
+		return nil, err
+	}
+	orphaned, agentsPII := 0, 0
+	for _, n := range nhis {
+		if slices.Contains(n.Flags, "orphaned") || slices.Contains(n.Flags, "owner_left") {
+			orphaned++
+		}
+		if n.Type == "ai_agent" && slices.Contains(n.Flags, "pii_access") {
+			agentsPII++
+		}
+	}
+	secrets, err := c.Secrets("")
+	if err != nil {
+		return nil, err
+	}
+	stale := 0
+	for _, x := range secrets {
+		ref := x.CreatedAt
+		if x.LastRotatedAt != nil {
+			ref = *x.LastRotatedAt
+		}
+		if timeutil.Days(a.now, ref) > 90 {
+			stale++
+		}
+	}
+	recs := leastpriv.GrantRecommendations(a.g, a.u, 60, nil)
+	trims := leastpriv.RoleTrimRecommendations(a.g, a.u, 60, 2)
+	remove := 0
+	for _, rec := range recs {
+		if rec.Kind == "remove" {
+			remove++
+		}
+	}
+	top := slices.Clone(ids)
+	sort.SliceStable(top, func(i, j int) bool { return risks[top[i]].Risk > risks[top[j]].Risk })
+	if len(top) > 8 {
+		top = top[:8]
+	}
+	topOut := []ojson.Object{}
+	for _, iid := range top {
+		topOut = append(topOut, append(briefObj(people[iid]), risks[iid].kvs()...))
+	}
+	counts := map[string]string{
+		"accounts":  "SELECT count(id) FROM accounts",
+		"systems":   "SELECT count(DISTINCT system) FROM accounts",
+		"grants":    "SELECT count(id) FROM grant_edges",
+		"open":      "SELECT count(id) FROM review_items WHERE decision IS NULL",
+		"pending":   "SELECT count(id) FROM access_requests WHERE status = 'pending'",
+		"active":    "SELECT count(id) FROM access_requests WHERE status = 'approved'",
+		"hris":      "SELECT count(id) FROM hris_events WHERE status = 'pending'",
+	}
+	n := map[string]int{}
+	for k, q := range counts {
+		if n[k], err = c.Count(q); err != nil {
+			return nil, err
+		}
+	}
+	since := a.now.Add(-90 * 24 * time.Hour)
+	rows, err := c.Query("SELECT day, sum(count) FROM usage_events WHERE day >= ? GROUP BY day ORDER BY day", store.T(since))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	trend := []ojson.Object{}
+	for rows.Next() {
+		var day string
+		var events int64
+		if err := rows.Scan(&day, &events); err != nil {
+			return nil, err
+		}
+		if len(day) > 10 {
+			day = day[:10]
+		}
+		trend = append(trend, ojson.Object{{Key: "day", Value: day}, {Key: "events", Value: events}})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	var unusedPct any = 0
+	if totalEff > 0 {
+		unusedPct = ojson.Float(timeutil.Round(100*float64(totalUnused)/float64(totalEff), 1))
+	}
+	return ojson.Object{
+		{Key: "identities", Value: ojson.Object{{Key: "human", Value: byType["human"]}, {Key: "service", Value: byType["service"]},
+			{Key: "ai_agent", Value: byType["ai_agent"]}, {Key: "terminated", Value: terminated}}},
+		{Key: "accounts", Value: n["accounts"]},
+		{Key: "systems", Value: n["systems"]},
+		{Key: "grants", Value: n["grants"]},
+		{Key: "effective_permissions", Value: totalEff},
+		{Key: "unused_permissions", Value: totalUnused},
+		{Key: "unused_pct", Value: unusedPct},
+		{Key: "violations", Value: ojson.Object{{Key: "total", Value: len(viols)}, {Key: "by_severity", Value: sev.object()},
+			{Key: "by_policy", Value: byPolicy.object()}}},
+		{Key: "nhi", Value: ojson.Object{{Key: "orphaned", Value: orphaned}, {Key: "stale_secrets", Value: stale},
+			{Key: "agents_with_pii", Value: agentsPII}}},
+		{Key: "jit", Value: ojson.Object{{Key: "pending", Value: n["pending"]}, {Key: "active", Value: n["active"]}}},
+		{Key: "reviews", Value: ojson.Object{{Key: "open_items", Value: n["open"]}}},
+		{Key: "recommendations", Value: ojson.Object{{Key: "total", Value: len(recs) + len(trims)}, {Key: "remove", Value: remove},
+			{Key: "role_trim", Value: len(trims)}}},
+		{Key: "hris_pending", Value: n["hris"]},
+		{Key: "top_risky", Value: topOut},
+		{Key: "usage_trend", Value: trend},
+	}, nil
+}
+
+// ---------------------------------------------------------------- identities
+
+func (s *Server) listIdentities(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	typ, q, status := p.queryOptStr("type"), p.queryOptStr("q"), p.queryOptStr("status")
+	if err := validated(p, nil); err != nil {
+		return nil, err
+	}
+	a, err := s.readAnalysis(r)
+	if err != nil {
+		return nil, err
+	}
+	_, risks, err := a.riskScores(60)
+	if err != nil {
+		return nil, err
+	}
+	where, args := []string{}, []any{}
+	if nonEmpty(typ) {
+		where, args = append(where, "type = ?"), append(args, *typ)
+	}
+	if nonEmpty(status) {
+		where, args = append(where, "status = ?"), append(args, *status)
+	}
+	clause := ""
+	if len(where) > 0 {
+		clause = "WHERE " + strings.Join(where, " AND ")
+	}
+	idents, err := a.c.Identities(clause, args...)
+	if err != nil {
+		return nil, err
+	}
+	accts, err := a.c.Accounts("WHERE identity_id IS NOT NULL")
+	if err != nil {
+		return nil, err
+	}
+	byIdent := map[int64][]*store.Account{}
+	for _, ac := range accts {
+		byIdent[*ac.IdentityID] = append(byIdent[*ac.IdentityID], ac)
+	}
+	type row struct {
+		obj  ojson.Object
+		risk int
+		name string
+	}
+	var rows []row
+	for _, i := range idents {
+		if nonEmpty(q) {
+			hay := strings.ToLower(fmt.Sprintf("%s %s %s %s", i.Name, deref(i.Email), deref(i.Department), deref(i.Title)))
+			if !strings.Contains(hay, strings.ToLower(*q)) {
+				continue
+			}
+		}
+		sys := map[string]bool{}
+		for _, ac := range byIdent[i.ID] {
+			sys[ac.System] = true
+		}
+		var last *time.Time
+		if t, ok := a.u.ByIdentity[i.ID]; ok {
+			last = &t
+		}
+		o := append(briefObj(i), ojson.KV{Key: "email", Value: i.Email}, ojson.KV{Key: "accounts", Value: len(byIdent[i.ID])},
+			ojson.KV{Key: "systems", Value: sortedKeys(sys)}, ojson.KV{Key: "last_activity", Value: timeutil.ISOPtr(last)})
+		rk, ok := risks[i.ID]
+		if ok {
+			o = append(o, rk.kvs()...)
+		}
+		rows = append(rows, row{o, rk.Risk, i.Name})
+	}
+	sort.SliceStable(rows, func(x, y int) bool {
+		if rows[x].risk != rows[y].risk {
+			return rows[x].risk > rows[y].risk
+		}
+		return rows[x].name < rows[y].name
+	})
+	out := make([]ojson.Object, len(rows))
+	for i, rw := range rows {
+		out[i] = rw.obj
+	}
+	return out, nil
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (s *Server) identityDetail(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	id := p.pathInt("identity_id")
+	unusedDays := int(p.queryInt("unused_days", 60, nil, nil))
+	if err := validated(p, nil); err != nil {
+		return nil, err
+	}
+	a, err := s.readAnalysis(r)
+	if err != nil {
+		return nil, err
+	}
+	c := a.c
+	i, err := getOrNil(c.Identity(id))
+	if err != nil {
+		return nil, err
+	}
+	if i == nil {
+		return nil, errStatus(http.StatusNotFound, "identity not found")
+	}
+	eff := a.g.EffectivePermissions(id).Values()
+	sort.SliceStable(eff, func(x, y int) bool {
+		ex, ey := eff[x], eff[y]
+		if ex.System != ey.System {
+			return ex.System < ey.System
+		}
+		if ex.ResourceName != ey.ResourceName {
+			return ex.ResourceName < ey.ResourceName
+		}
+		return ex.Action < ey.Action
+	})
+	perms := []ojson.Object{}
+	for _, ep := range eff {
+		paths := make([][]graph.PathStep, len(ep.Paths))
+		for k, path := range ep.Paths {
+			paths[k] = a.g.DescribePath(path, timeutil.ISOPtr)
+		}
+		perms = append(perms, ojson.Object{{Key: "perm_key", Value: ep.PermKey}, {Key: "action", Value: ep.Action},
+			{Key: "system", Value: ep.System}, {Key: "resource", Value: ep.ResourceName}, {Key: "resource_id", Value: ep.ResourceID},
+			{Key: "environment", Value: ep.Environment}, {Key: "tags", Value: nonNil(ep.Tags)}, {Key: "privileged", Value: ep.Privileged},
+			{Key: "standing", Value: ep.Standing}, {Key: "usage", Value: a.u.Describe(id, ep.PermID)},
+			{Key: "unused", Value: a.u.Unused(id, ep.PermID, unusedDays)}, {Key: "paths", Value: paths}})
+	}
+	accounts, err := c.IdentityAccounts(id)
+	if err != nil {
+		return nil, err
+	}
+	secrets := []nhi.SecretView{}
+	for _, ac := range accounts {
+		secs, err := c.Secrets("WHERE s.account_id = ?", ac.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, sec := range secs {
+			secrets = append(secrets, nhi.ViewSecret(sec, ac, a.now))
+		}
+	}
+	grants := []ojson.Object{}
+	for _, ag := range a.g.GrantEdgesFromAccounts(id) {
+		dst := a.g.Node(ag.Dst)
+		grants = append(grants, ojson.Object{{Key: "edge_id", Value: ag.Edge.EdgeID}, {Key: "src", Value: ag.Acct},
+			{Key: "dst", Value: ag.Dst}, {Key: "label", Value: a.g.Label(ag.Dst)}, {Key: "account", Value: a.g.Label(ag.Acct)},
+			{Key: "relation", Value: ag.Edge.Relation}, {Key: "source", Value: ag.Edge.Source},
+			{Key: "expires_at", Value: timeutil.ISOPtr(ag.Edge.ExpiresAt)}, {Key: "privileged", Value: dst != nil && dst.Privileged}})
+	}
+	people, _, err := c.IdentityMap()
+	if err != nil {
+		return nil, err
+	}
+	dels, err := c.Delegations("WHERE agent_id = ? OR principal_id = ?", id, id)
+	if err != nil {
+		return nil, err
+	}
+	delegations := []ojson.Object{}
+	for _, d := range dels {
+		delegations = append(delegations, ojson.Object{{Key: "agent", Value: brief(people[d.AgentID])},
+			{Key: "principal", Value: brief(people[d.PrincipalID])}, {Key: "scopes", Value: d.Scopes}})
+	}
+	owned, err := c.Identities("WHERE owner_id = ?", id)
+	if err != nil {
+		return nil, err
+	}
+	ownedOut := []any{}
+	for _, o := range owned {
+		ownedOut = append(ownedOut, brief(o))
+	}
+	viols, err := a.violations()
+	if err != nil {
+		return nil, err
+	}
+	myViols := []policy.Violation{}
+	for _, v := range viols {
+		if v.IdentityID != nil && *v.IdentityID == id {
+			myViols = append(myViols, v)
+		}
+	}
+	recs := []leastpriv.Recommendation{}
+	if i.Status == "active" {
+		recs = leastpriv.GrantRecommendations(a.g, a.u, unusedDays, &id)
+	}
+	_, risks, err := a.riskScores(unusedDays)
+	if err != nil {
+		return nil, err
+	}
+	var riskOut any
+	if rk, ok := risks[id]; ok {
+		riskOut = rk.kvs()
+	}
+	var manager, owner any
+	if i.ManagerID != nil {
+		manager = brief(people[*i.ManagerID])
+	}
+	if i.OwnerID != nil {
+		owner = brief(people[*i.OwnerID])
+	}
+	acctOut := []ojson.Object{}
+	for _, ac := range accounts {
+		acctOut = append(acctOut, ojson.Object{{Key: "id", Value: ac.ID}, {Key: "system", Value: ac.System},
+			{Key: "username", Value: ac.Username}, {Key: "kind", Value: ac.Kind}, {Key: "status", Value: ac.Status},
+			{Key: "last_login_at", Value: timeutil.ISOPtr(ac.LastLoginAt)}})
+	}
+	return append(briefObj(i),
+		ojson.KV{Key: "email", Value: i.Email}, ojson.KV{Key: "description", Value: i.Description},
+		ojson.KV{Key: "hired_at", Value: timeutil.ISOPtr(i.HiredAt)}, ojson.KV{Key: "terminated_at", Value: timeutil.ISOPtr(i.TerminatedAt)},
+		ojson.KV{Key: "manager", Value: manager}, ojson.KV{Key: "owner", Value: owner},
+		ojson.KV{Key: "accounts", Value: acctOut}, ojson.KV{Key: "grants", Value: grants},
+		ojson.KV{Key: "effective_permissions", Value: perms}, ojson.KV{Key: "violations", Value: myViols},
+		ojson.KV{Key: "recommendations", Value: recs}, ojson.KV{Key: "secrets", Value: secrets},
+		ojson.KV{Key: "delegations", Value: delegations}, ojson.KV{Key: "owned_identities", Value: ownedOut},
+		ojson.KV{Key: "risk", Value: riskOut}), nil
+}
+
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
+
+func (s *Server) listAccounts(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	system := p.queryOptStr("system")
+	if err := validated(p, nil); err != nil {
+		return nil, err
+	}
+	c := s.store.Read(r.Context())
+	tail, args := "ORDER BY system, username", []any{}
+	if nonEmpty(system) {
+		tail, args = "WHERE system = ? "+tail, append(args, *system)
+	}
+	accts, err := c.AccountsOrdered(tail, args...)
+	if err != nil {
+		return nil, err
+	}
+	people, _, err := c.IdentityMap()
+	if err != nil {
+		return nil, err
+	}
+	out := []ojson.Object{}
+	for _, ac := range accts {
+		var ident any
+		if ac.IdentityID != nil {
+			ident = brief(people[*ac.IdentityID])
+		}
+		out = append(out, ojson.Object{{Key: "id", Value: ac.ID}, {Key: "system", Value: ac.System},
+			{Key: "username", Value: ac.Username}, {Key: "kind", Value: ac.Kind}, {Key: "status", Value: ac.Status},
+			{Key: "created_at", Value: timeutil.ISOPtr(ac.CreatedAt)}, {Key: "last_login_at", Value: timeutil.ISOPtr(ac.LastLoginAt)},
+			{Key: "identity", Value: ident}})
+	}
+	return out, nil
+}
+
+func (s *Server) listGroups(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	req := p.queryOptBool("requestable")
+	if err := validated(p, nil); err != nil {
+		return nil, err
+	}
+	tail, args := "ORDER BY system, name", []any{}
+	if req != nil {
+		tail, args = "WHERE requestable = ? "+tail, append(args, store.B(*req))
+	}
+	groups, err := s.store.Read(r.Context()).Groups(tail, args...)
+	if err != nil {
+		return nil, err
+	}
+	out := []ojson.Object{}
+	for _, g := range groups {
+		out = append(out, ojson.Object{{Key: "id", Value: g.ID}, {Key: "key", Value: graph.Key("group", g.ID)},
+			{Key: "system", Value: g.System}, {Key: "name", Value: g.Name}, {Key: "kind", Value: g.Kind},
+			{Key: "privileged", Value: g.Privileged}, {Key: "requestable", Value: g.Requestable},
+			{Key: "description", Value: g.Description}})
+	}
+	return out, nil
+}
+
+func (s *Server) listResources(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+	a, err := s.readAnalysis(r)
+	if err != nil {
+		return nil, err
+	}
+	res, err := a.c.Resources("ORDER BY system, name")
+	if err != nil {
+		return nil, err
+	}
+	out := []ojson.Object{}
+	for _, rs := range res {
+		who, _ := a.g.WhoCanAccess(rs.ID)
+		types := newCounter()
+		for _, iid := range who {
+			types.add(a.g.Node(graph.Key("identity", iid)).Type, 1)
+		}
+		out = append(out, ojson.Object{{Key: "id", Value: rs.ID}, {Key: "system", Value: rs.System},
+			{Key: "name", Value: rs.Name}, {Key: "kind", Value: rs.Kind}, {Key: "environment", Value: rs.Environment},
+			{Key: "tags", Value: nonNil(rs.Tags)}, {Key: "identities_with_access", Value: len(who)},
+			{Key: "by_type", Value: types.object()}})
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------- graph
+
+func optString(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+func (s *Server) graphView(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	identityID, resourceID, permKey := p.queryOptInt("identity_id"), p.queryOptInt("resource_id"), p.queryOptStr("perm_key")
+	if err := validated(p, nil); err != nil {
+		return nil, err
+	}
+	a, err := s.readAnalysis(r)
+	if err != nil {
+		return nil, err
+	}
+	g := a.g
+	nodes := map[string]bool{}
+	edges := map[[2]string]bool{}
+	addPath := func(path []string) {
+		for i, k := range path {
+			nodes[k] = true
+			if i > 0 {
+				edges[[2]string{path[i-1], k}] = true
+			}
+		}
+	}
+	switch {
+	case identityID != nil:
+		start := graph.Key("identity", *identityID)
+		nodes[start] = true
+		eff := g.EffectivePermissions(*identityID)
+		for _, pk := range eff.Keys {
+			if nonEmpty(permKey) && pk != *permKey {
+				continue
+			}
+			ep := eff.M[pk]
+			for _, path := range ep.Paths {
+				addPath(append(slices.Clone(path), graph.Key("resource", ep.ResourceID)))
+			}
+		}
+		for _, acct := range g.Successors(start) {
+			nodes[acct] = true
+			edges[[2]string{start, acct}] = true
+		}
+	case resourceID != nil:
+		res := graph.Key("resource", *resourceID)
+		nodes[res] = true
+		ids, who := g.WhoCanAccess(*resourceID)
+		for _, iid := range ids {
+			for _, ep := range who[iid] {
+				for k, path := range ep.Paths {
+					if k == 3 {
+						break
+					}
+					addPath(append(slices.Clone(path), res))
+				}
+			}
+		}
+	default:
+		return nil, errStatus(http.StatusBadRequest, "identity_id or resource_id is required")
+	}
+	keys := make([]string, 0, len(nodes))
+	for k := range nodes {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	nodeOut := []ojson.Object{}
+	for _, k := range keys {
+		n := g.Node(k)
+		if n == nil || n.Kind == "" {
+			return nil, fmt.Errorf("graph: unknown node %s", k)
+		}
+		var tags any = []string{}
+		if len(n.Tags) > 0 {
+			tags = n.Tags
+		}
+		nodeOut = append(nodeOut, ojson.Object{{Key: "id", Value: k}, {Key: "kind", Value: n.Kind}, {Key: "label", Value: n.Label},
+			{Key: "system", Value: optString(n.System)}, {Key: "privileged", Value: n.Privileged}, {Key: "type", Value: optString(n.Type)},
+			{Key: "status", Value: optString(n.Status)}, {Key: "tags", Value: tags}, {Key: "environment", Value: n.Environment}})
+	}
+	ek := make([][2]string, 0, len(edges))
+	for e := range edges {
+		ek = append(ek, e)
+	}
+	sort.Slice(ek, func(i, j int) bool {
+		if ek[i][0] != ek[j][0] {
+			return ek[i][0] < ek[j][0]
+		}
+		return ek[i][1] < ek[j][1]
+	})
+	edgeOut := []ojson.Object{}
+	for _, e := range ek {
+		var rel, src, eid any
+		if d := g.EdgeData(e[0], e[1]); d != nil {
+			rel, src, eid = d.Relation, d.Source, d.EdgeID
+		}
+		edgeOut = append(edgeOut, ojson.Object{{Key: "source", Value: e[0]}, {Key: "target", Value: e[1]},
+			{Key: "relation", Value: rel}, {Key: "source_kind", Value: src}, {Key: "edge_id", Value: eid}})
+	}
+	return ojson.Object{{Key: "nodes", Value: nodeOut}, {Key: "edges", Value: edgeOut}}, nil
+}
+
+// ---------------------------------------------------------------- NHI
+
+func (s *Server) nhiInventory(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	typ := p.queryOptLiteral("type", []string{"service", "ai_agent"})
+	if err := validated(p, nil); err != nil {
+		return nil, err
+	}
+	a, err := s.readAnalysis(r)
+	if err != nil {
+		return nil, err
+	}
+	items, err := nhi.Inventory(a.c, a.g, a.u)
+	if err != nil {
+		return nil, err
+	}
+	out := []nhi.Item{}
+	for _, it := range items {
+		if typ == nil || it.Type == *typ {
+			out = append(out, it)
+		}
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------- least privilege
+
+func (s *Server) recommendations(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	days := int(p.queryInt("unused_days", 60, i64(1), i64(90)))
+	kind, itype := p.queryOptStr("kind"), p.queryOptStr("identity_type")
+	if err := validated(p, nil); err != nil {
+		return nil, err
+	}
+	a, err := s.readAnalysis(r)
+	if err != nil {
+		return nil, err
+	}
+	recs := append(leastpriv.GrantRecommendations(a.g, a.u, days, nil), leastpriv.RoleTrimRecommendations(a.g, a.u, days, 2)...)
+	leastpriv.SortByScore(recs)
+	out := []leastpriv.Recommendation{}
+	for _, rec := range recs {
+		if nonEmpty(kind) && rec.Kind != *kind {
+			continue
+		}
+		if nonEmpty(itype) && rec.IdentityType != *itype {
+			continue
+		}
+		out = append(out, rec)
+	}
+	return out, nil
+}
+
+var revokeFields = []field{
+	{name: "edge_id", kind: kInt, required: true},
+	{name: "dry_run", kind: kBool, def: true},
+	{name: "actor", kind: kStr, def: "admin@larkspur.example"},
+}
+
+type grantRef struct {
+	EdgeID int64  `json:"edge_id"`
+	Src    string `json:"src"`
+	Dst    string `json:"dst"`
+	Label  string `json:"label"`
+}
+
+type revokeResult struct {
+	*simulate.Result
+	DryRun  bool     `json:"dry_run"`
+	Grant   grantRef `json:"grant"`
+	Applied *bool    `json:"applied,omitempty"`
+}
+
+func (s *Server) revoke(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	body, berrs, err := bodyModel(r, revokeFields, true)
+	if err != nil {
+		return nil, err
+	}
+	if err := validated(p, berrs); err != nil {
+		return nil, err
+	}
+	edgeID, dryRun, actor := body["edge_id"].(int64), body["dry_run"].(bool), body["actor"].(string)
+	var out *revokeResult
+	err = s.store.Write(r.Context(), func(c *store.Conn) error {
+		a, err := s.newAnalysis(r.Context(), c, true)
+		if err != nil {
+			return err
+		}
+		e, err := getOrNil(c.Edge(edgeID))
+		if err != nil {
+			return err
+		}
+		if e == nil {
+			return errStatus(http.StatusNotFound, "grant not found")
+		}
+		res, err := simulate.Run(c, simulate.Request{RemoveEdgeIDs: []int64{edgeID}},
+			simulate.Inputs{Now: a.now, Policies: a.policies, Usage: a.u, Base: a.g})
+		if err != nil {
+			return err
+		}
+		out = &revokeResult{Result: res, DryRun: dryRun,
+			Grant: grantRef{e.ID, e.Src, e.Dst, a.g.Label(e.Src) + " → " + a.g.Label(e.Dst)}}
+		if dryRun {
+			return nil
+		}
+		if err := c.Audit(a.now, actor, "grant.revoke", ojson.Object{{Key: "edge_id", Value: e.ID},
+			{Key: "grant", Value: out.Grant.Label}, {Key: "permissions_removed", Value: res.Summary.PermissionsRemoved}}); err != nil {
+			return err
+		}
+		if err := c.DeleteEdge(e.ID); err != nil {
+			return err
+		}
+		applied := true
+		out.Applied = &applied
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------- policies
+
+func (s *Server) listPolicies(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+	a, err := s.readAnalysis(r)
+	if err != nil {
+		return nil, err
+	}
+	viols, err := a.violations()
+	if err != nil {
+		return nil, err
+	}
+	counts := map[string]int{}
+	for _, v := range viols {
+		counts[v.PolicyID]++
+	}
+	out := []ojson.Object{}
+	for _, pol := range a.policies {
+		out = append(out, ojson.Object{{Key: "id", Value: pol.ID}, {Key: "name", Value: pol.Name}, {Key: "type", Value: pol.Type},
+			{Key: "severity", Value: pol.Severity}, {Key: "description", Value: pol.Description}, {Key: "enabled", Value: pol.Enabled},
+			{Key: "source", Value: pol.Source}, {Key: "violations", Value: counts[pol.ID]}})
+	}
+	return out, nil
+}
+
+func (s *Server) listViolations(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	pid := p.queryOptStr("policy_id")
+	if err := validated(p, nil); err != nil {
+		return nil, err
+	}
+	a, err := s.readAnalysis(r)
+	if err != nil {
+		return nil, err
+	}
+	viols, err := a.violations()
+	if err != nil {
+		return nil, err
+	}
+	out := []policy.Violation{}
+	for _, v := range viols {
+		if pid == nil || v.PolicyID == *pid {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
+var edgeFields = []field{
+	{name: "src", kind: kStr, required: true},
+	{name: "dst", kind: kStr, required: true},
+	{name: "relation", kind: kStr, def: "member_of"},
+}
+
+var simulateFields = []field{
+	{name: "remove_edge_ids", kind: kIntList, def: []int64{}},
+	{name: "add_edges", kind: kModelList, model: edgeFields, def: []map[string]any{}},
+	{name: "disable_account_ids", kind: kIntList, def: []int64{}},
+}
+
+func (s *Server) simulate(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	body, berrs, err := bodyModel(r, simulateFields, true)
+	if err != nil {
+		return nil, err
+	}
+	if err := validated(p, berrs); err != nil {
+		return nil, err
+	}
+	a, err := s.readAnalysis(r)
+	if err != nil {
+		return nil, err
+	}
+	req := simulate.Request{RemoveEdgeIDs: body["remove_edge_ids"].([]int64),
+		DisableAccountIDs: body["disable_account_ids"].([]int64)}
+	for _, e := range body["add_edges"].([]map[string]any) {
+		src, dst, rel := e["src"].(string), e["dst"].(string), e["relation"].(string)
+		for _, k := range []string{src, dst} {
+			if !a.g.HasNode(k) {
+				return nil, errStatus(http.StatusBadRequest, "unknown node "+k)
+			}
+		}
+		if kind, _, _ := strings.Cut(src, ":"); kind != "account" && kind != "group" {
+			return nil, errStatus(http.StatusBadRequest, "edges must start at an account or group")
+		}
+		req.AddEdges = append(req.AddEdges, simulate.AddEdge{Src: src, Dst: dst, Relation: rel})
+	}
+	res, err := simulate.Run(a.c, req, simulate.Inputs{Now: a.now, Policies: a.policies, Usage: a.u, Base: a.g})
+	var une *graph.UnknownNodeError
+	if errors.As(err, &une) {
+		return nil, errStatus(http.StatusBadRequest, une.Msg)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+// ---------------------------------------------------------------- JIT
+
+func reqView(c *store.Conn, r *store.AccessRequest, hours any) (ojson.Object, error) {
+	ident, err := getOrNil(c.Identity(r.IdentityID))
+	if err != nil {
+		return nil, err
+	}
+	g, err := c.Group(r.GroupID)
+	if err != nil {
+		return nil, err
+	}
+	a, err := c.Account(r.AccountID)
+	if err != nil {
+		return nil, err
+	}
+	if hours == nil {
+		hours = ojson.Float(r.DurationHours)
+	}
+	return ojson.Object{{Key: "id", Value: r.ID}, {Key: "identity", Value: brief(ident)},
+		{Key: "group", Value: ojson.Object{{Key: "id", Value: g.ID}, {Key: "name", Value: g.Name}, {Key: "system", Value: g.System},
+			{Key: "privileged", Value: g.Privileged}}},
+		{Key: "account", Value: a.System + ":" + a.Username}, {Key: "justification", Value: r.Justification},
+		{Key: "duration_hours", Value: hours}, {Key: "status", Value: r.Status},
+		{Key: "requested_at", Value: timeutil.ISO(r.RequestedAt)}, {Key: "decided_at", Value: timeutil.ISOPtr(r.DecidedAt)},
+		{Key: "decided_by", Value: r.DecidedBy}, {Key: "expires_at", Value: timeutil.ISOPtr(r.ExpiresAt)}}, nil
+}
+
+func (s *Server) jitRequests(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+	if err := s.sweep(r.Context()); err != nil {
+		return nil, err
+	}
+	c := s.store.Read(r.Context())
+	reqs, err := c.Requests("ORDER BY requested_at DESC")
+	if err != nil {
+		return nil, err
+	}
+	out := []ojson.Object{}
+	for _, rq := range reqs {
+		v, err := reqView(c, rq, nil)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
+var jitFields = []field{
+	{name: "identity_id", kind: kInt, required: true},
+	{name: "group_id", kind: kInt, required: true},
+	{name: "duration_hours", kind: kFloat, def: nil},
+	{name: "justification", kind: kStr, required: true},
+}
+
+func asJitError(err error) error {
+	var je *jit.Error
+	if errors.As(err, &je) {
+		return errStatus(http.StatusBadRequest, je.Msg)
+	}
+	return err
+}
+
+func (s *Server) jitCreate(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	body, berrs, err := bodyModel(r, jitFields, true)
+	if err != nil {
+		return nil, err
+	}
+	if err := validated(p, berrs); err != nil {
+		return nil, err
+	}
+	hours := jit.Hours{N: 4, Whole: true} // the default is not validated, so it stays an int
+	if v, ok := body["duration_hours"].(float64); ok {
+		hours = jit.Hours{N: v}
+	}
+	var out ojson.Object
+	err = s.store.Write(r.Context(), func(c *store.Conn) error {
+		rq, err := jit.CreateRequest(c, s.clock(), body["identity_id"].(int64), body["group_id"].(int64), hours,
+			body["justification"].(string))
+		if err != nil {
+			return asJitError(err)
+		}
+		out, err = reqView(c, rq, hours.JSON())
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+var decisionFields = []field{{name: "approver", kind: kStr, def: "security-oncall@larkspur.example"}}
+
+func (s *Server) jitDecide(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	id := p.pathInt("request_id")
+	action := p.pathLiteral("action", []string{"approve", "deny", "revoke"})
+	body, berrs, err := bodyModel(r, decisionFields, false)
+	if err != nil {
+		return nil, err
+	}
+	if err := validated(p, berrs); err != nil {
+		return nil, err
+	}
+	who := "security-oncall@larkspur.example"
+	if body != nil {
+		who = body["approver"].(string)
+	}
+	var out ojson.Object
+	err = s.store.Write(r.Context(), func(c *store.Conn) error {
+		now := s.clock()
+		var rq *store.AccessRequest
+		var err error
+		switch action {
+		case "approve":
+			rq, err = jit.Approve(c, id, who, now, now)
+		case "deny":
+			rq, err = jit.Deny(c, id, who, now)
+		default:
+			rq, err = jit.Revoke(c, id, who, now)
+		}
+		if err != nil {
+			return asJitError(err)
+		}
+		out, err = reqView(c, rq, nil)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *Server) jitSweep(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+	n := 0
+	err := s.store.Write(r.Context(), func(c *store.Conn) error {
+		var err error
+		n, err = jit.Sweep(c, s.clock())
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return ojson.Object{{Key: "expired", Value: n}}, nil
+}
+
+// ---------------------------------------------------------------- reviews
+
+func campaignView(c *store.Conn, cmp *store.ReviewCampaign, withItems bool) (ojson.Object, error) {
+	items, err := c.CampaignItems(cmp.ID)
+	if err != nil {
+		return nil, err
+	}
+	decided, revoked := 0, 0
+	reasons := newCounter()
+	for _, it := range items {
+		if it.Decision != nil && *it.Decision != "" {
+			decided++
+		}
+		if it.Decision != nil && *it.Decision == "revoke" {
+			revoked++
+		}
+		for _, rs := range it.Reasons {
+			reasons.add(rs, 1)
+		}
+	}
+	out := ojson.Object{{Key: "id", Value: cmp.ID}, {Key: "name", Value: cmp.Name}, {Key: "status", Value: cmp.Status},
+		{Key: "created_at", Value: timeutil.ISO(cmp.CreatedAt)}, {Key: "unused_days", Value: cmp.UnusedDays},
+		{Key: "total_grants", Value: cmp.TotalGrants}, {Key: "auto_certified", Value: cmp.AutoCertified},
+		{Key: "items", Value: len(items)}, {Key: "decided", Value: decided}, {Key: "revoked", Value: revoked},
+		{Key: "reasons", Value: reasons.object()}}
+	if withItems {
+		people, _, err := c.IdentityMap()
+		if err != nil {
+			return nil, err
+		}
+		rows := []ojson.Object{}
+		for _, it := range items {
+			var reviewer any
+			if it.ReviewerID != nil {
+				reviewer = brief(people[*it.ReviewerID])
+			}
+			rows = append(rows, ojson.Object{{Key: "id", Value: it.ID}, {Key: "identity", Value: brief(people[it.IdentityID])},
+				{Key: "grant", Value: it.GrantLabel}, {Key: "edge_id", Value: it.EdgeID}, {Key: "reasons", Value: it.Reasons},
+				{Key: "context", Value: it.Context}, {Key: "reviewer", Value: reviewer}, {Key: "decision", Value: it.Decision},
+				{Key: "comment", Value: it.Comment}, {Key: "decided_at", Value: timeutil.ISOPtr(it.DecidedAt)}})
+		}
+		out = append(out, ojson.KV{Key: "review_items", Value: rows})
+	}
+	return out, nil
+}
+
+func (s *Server) listCampaigns(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+	c := s.store.Read(r.Context())
+	cmps, err := c.Campaigns("ORDER BY id DESC")
+	if err != nil {
+		return nil, err
+	}
+	out := []ojson.Object{}
+	for _, cmp := range cmps {
+		v, err := campaignView(c, cmp, false)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
+var campaignFields = []field{
+	{name: "name", kind: kStr, def: "Exception-only review"},
+	{name: "unused_days", kind: kInt, def: int64(60)},
+}
+
+func (s *Server) createCampaign(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	body, berrs, err := bodyModel(r, campaignFields, true)
+	if err != nil {
+		return nil, err
+	}
+	if err := validated(p, berrs); err != nil {
+		return nil, err
+	}
+	pols, err := s.policies()
+	if err != nil {
+		return nil, err
+	}
+	var out ojson.Object
+	err = s.store.Write(r.Context(), func(c *store.Conn) error {
+		id, err := reviews.GenerateCampaign(c, s.clock(), body["name"].(string), int(body["unused_days"].(int64)), pols)
+		if err != nil {
+			return err
+		}
+		cmp, err := c.Campaign(id)
+		if err != nil {
+			return err
+		}
+		out, err = campaignView(c, cmp, false)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *Server) campaign(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	id := p.pathInt("campaign_id")
+	if err := validated(p, nil); err != nil {
+		return nil, err
+	}
+	c := s.store.Read(r.Context())
+	cmp, err := getOrNil(c.Campaign(id))
+	if err != nil {
+		return nil, err
+	}
+	if cmp == nil {
+		return nil, errStatus(http.StatusNotFound, "campaign not found")
+	}
+	return campaignView(c, cmp, true)
+}
+
+var reviewDecisionFields = []field{
+	{name: "decision", kind: kLiteral, required: true, lits: []string{"keep", "revoke"}},
+	{name: "comment", kind: kStr, nullable: true, def: nil},
+	{name: "reviewer", kind: kStr, def: "reviewer@larkspur.example"},
+}
+
+func (s *Server) reviewDecide(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	id := p.pathInt("item_id")
+	body, berrs, err := bodyModel(r, reviewDecisionFields, true)
+	if err != nil {
+		return nil, err
+	}
+	if err := validated(p, berrs); err != nil {
+		return nil, err
+	}
+	var comment *string
+	if v, ok := body["comment"].(string); ok {
+		comment = &v
+	}
+	var out ojson.Object
+	err = s.store.Write(r.Context(), func(c *store.Conn) error {
+		it, err := reviews.Decide(c, s.clock(), id, body["decision"].(string), body["reviewer"].(string), comment)
+		var re *reviews.Error
+		if errors.As(err, &re) {
+			return errStatus(http.StatusBadRequest, re.Msg)
+		}
+		if err != nil {
+			return err
+		}
+		out = ojson.Object{{Key: "id", Value: it.ID}, {Key: "decision", Value: it.Decision}}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------- HRIS / JML
+
+func (s *Server) hrisEvents(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+	c := s.store.Read(r.Context())
+	evs, err := c.HrisEvents("ORDER BY status DESC, effective_at DESC")
+	if err != nil {
+		return nil, err
+	}
+	out := []jml.EventView{}
+	for _, ev := range evs {
+		v, err := jml.ViewEvent(c, ev)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
+var hrisFields = []field{
+	{name: "type", kind: kLiteral, required: true, lits: []string{"joiner", "mover", "leaver"}},
+	{name: "identity_id", kind: kInt, nullable: true, def: nil},
+	{name: "payload", kind: kDict, def: ojson.Object{}},
+}
+
+// truthy mirrors Python truthiness for decoded JSON values.
+func truthy(v any) bool {
+	switch x := v.(type) {
+	case nil:
+		return false
+	case bool:
+		return x
+	case string:
+		return x != ""
+	case ojson.Object:
+		return len(x) > 0
+	case []any:
+		return len(x) > 0
+	case fmt.Stringer: // json.Number
+		f := x.String()
+		return strings.Trim(strings.TrimLeft(f, "-+"), "0.eE+-") != ""
+	}
+	return true
+}
+
+// pyTimestamp is int(naive_datetime.timestamp()): Python interprets a naive
+// datetime in the host's local time zone.
+func pyTimestamp(t time.Time) int64 {
+	return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), time.Local).Unix()
+}
+
+func (s *Server) hrisCreate(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	body, berrs, err := bodyModel(r, hrisFields, true)
+	if err != nil {
+		return nil, err
+	}
+	if err := validated(p, berrs); err != nil {
+		return nil, err
+	}
+	typ := body["type"].(string)
+	payload := body["payload"].(ojson.Object)
+	var identityID *int64
+	if v, ok := body["identity_id"].(int64); ok {
+		identityID = &v
+	}
+	if (typ == "mover" || typ == "leaver") && identityID == nil {
+		return nil, errStatus(http.StatusBadRequest, "identity_id required")
+	}
+	if name, _ := payload.Get("name"); typ == "joiner" && !truthy(name) {
+		return nil, errStatus(http.StatusBadRequest, "payload.name required")
+	}
+	if team, _ := payload.Get("to_team"); typ == "mover" && !truthy(team) {
+		return nil, errStatus(http.StatusBadRequest, "payload.to_team required")
+	}
+	var out jml.EventView
+	err = s.store.Write(r.Context(), func(c *store.Conn) error {
+		now := s.clock()
+		n, err := c.Count("SELECT count(id) FROM hris_events")
+		if err != nil {
+			return err
+		}
+		pj, err := store.JSON(payload)
+		if err != nil {
+			return err
+		}
+		id, err := c.Insert(`INSERT INTO hris_events (external_id, type, identity_id, payload, effective_at, status)
+			VALUES (?, ?, ?, ?, ?, 'pending')`, fmt.Sprintf("sim-evt-%d-%d", n+1, pyTimestamp(now)), typ,
+			store.IP(identityID), pj, store.T(now))
+		if err != nil {
+			return err
+		}
+		ev, err := c.HrisEvent(id)
+		if err != nil {
+			return err
+		}
+		out, err = jml.ViewEvent(c, ev)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *Server) hrisPlan(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	id := p.pathInt("event_id")
+	if err := validated(p, nil); err != nil {
+		return nil, err
+	}
+	pols, err := s.policies()
+	if err != nil {
+		return nil, err
+	}
+	c := s.store.Read(r.Context())
+	ev, err := getOrNil(c.HrisEvent(id))
+	if err != nil {
+		return nil, err
+	}
+	if ev == nil {
+		return nil, errStatus(http.StatusNotFound, "event not found")
+	}
+	view, err := jml.ViewEvent(c, ev)
+	if err != nil {
+		return nil, err
+	}
+	var plan any
+	if ev.Status != "executed" {
+		pl, err := jml.PlanForEvent(c, s.clock(), ev, true, pols)
+		if err != nil {
+			return nil, err // includes *jml.Error: the original backend let it surface as a 500
+		}
+		plan = pl
+	}
+	return ojson.Object{{Key: "event", Value: view}, {Key: "plan", Value: plan}}, nil
+}
+
+func (s *Server) hrisExecute(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	id := p.pathInt("event_id")
+	if err := validated(p, nil); err != nil {
+		return nil, err
+	}
+	pols, err := s.policies()
+	if err != nil {
+		return nil, err
+	}
+	var plan jml.Plan
+	err = s.store.Write(r.Context(), func(c *store.Conn) error {
+		var err error
+		plan, err = jml.ExecuteEvent(c, s.clock(), id, "jml-automation", pols)
+		var je *jml.Error
+		if errors.As(err, &je) {
+			return errStatus(http.StatusBadRequest, je.Msg)
+		}
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return ojson.Object{{Key: "executed", Value: true}, {Key: "plan", Value: plan}}, nil
+}
+
+func (s *Server) leaverPlan(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	id := p.pathInt("identity_id")
+	if err := validated(p, nil); err != nil {
+		return nil, err
+	}
+	pols, err := s.policies()
+	if err != nil {
+		return nil, err
+	}
+	plan, err := jml.LeaverPlan(s.store.Read(r.Context()), s.clock(), id, true, pols)
+	var je *jml.Error
+	if errors.As(err, &je) {
+		return nil, errStatus(http.StatusNotFound, je.Msg)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return plan, nil
+}
+
+// ---------------------------------------------------------------- audit
+
+func (s *Server) auditLog(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	limit := p.queryInt("limit", 100, nil, nil)
+	if err := validated(p, nil); err != nil {
+		return nil, err
+	}
+	rows, err := s.store.Read(r.Context()).AuditLog(int(limit))
+	if err != nil {
+		return nil, err
+	}
+	out := []ojson.Object{}
+	for _, e := range rows {
+		out = append(out, ojson.Object{{Key: "id", Value: e.ID}, {Key: "at", Value: timeutil.ISO(e.At)},
+			{Key: "actor", Value: e.Actor}, {Key: "action", Value: e.Action}, {Key: "detail", Value: e.Detail}})
+	}
+	return out, nil
+}

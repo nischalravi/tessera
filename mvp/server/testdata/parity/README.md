@@ -22,6 +22,12 @@ freshly seeded Go server through `httptest` and requires equal JSON.
   database: reads first, then JIT, review, revoke, HRIS/JML and connector-sync
   mutations, so later fixtures check the effects of earlier ones.
 
+## Running
+
+    cd mvp/server && go test ./internal/api -run TestParity -v
+
+160 fixtures (`001`-`160`); the test logs `parity: N/160 fixtures passed`.
+
 ## Normalisation rules (applied to both sides before comparing)
 
 1. **Simulated HRIS event ids.** `sim-evt-<n>-<unix>` becomes
@@ -32,7 +38,10 @@ freshly seeded Go server through `httptest` and requires equal JSON.
    a set difference of string keys, so their order depends on
    `PYTHONHASHSEED` and changes from run to run. The Go server returns them
    sorted by `key`.
-3. **Numbers** are compared by value, so Python's `4.0` equals Go's `4`.
+Numbers are compared by their JSON spelling, not just by value: Python's
+`4.0` (a float read back from the database) and `4` (an unvalidated pydantic
+default) are different, and the Go server reproduces both (`ojson.Float`,
+`jit.Hours`).
 
-Nothing else is normalised: ids, timestamps, ordering of every other list and
+Nothing else is normalised: ids, numbers, timestamps, ordering of every other list and
 all error bodies (including FastAPI/pydantic `422` shapes) must match exactly.
