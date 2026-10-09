@@ -1423,102 +1423,102 @@ Phase is the capability-map phase in `docs/knowledge/README.md`. "Better" lists 
 
 **Preconditions.** The Go port (`go-backend`) is merged, and Phase 0 PR1 (tenancy, #5), PR3 (audit ledger, #7) and PR5 (auth core, #9) are merged. Every PR keeps `./run.sh test` (`go test -race ./...`) and `./run.sh build` green, passes `go vet`, `staticcheck` and `govulncheck`, and extends the tenant isolation meta-tests (`TestIsolation_*`) to its new tables. Paths are relative to `mvp/server/` unless they start with `frontend/` or `docs/`.
 
-### GR-1: Groups store and folder/group CRUD (3 days)
+### GR-1: Groups store and folder/group CRUD (3 days) · #44
 - **Files:** `internal/store/schema/0101_groups.sql` (folders, aliases, groups, composite factors, lists, direct memberships; engine tables created empty), `internal/store/model_groups.go`, `internal/store/repo_groups.go`, `internal/groups/naming/`, `internal/groups/model/` (create, rename, move, copy, soft delete), `internal/api/groups_folders.go` (folder and group CRUD only, guarded by `tenant_admin` until GR-4), audit events `groups.folder.*`, `groups.group.*`.
 - **Tests:** `naming_test.go` (characters, case-insensitive uniqueness, aliases), `model_test.go` (move/copy/rename keep aliases; root folder per tenant), `TestIsolation_GroupsTables`, API tests for CRUD and 409s.
 - **Depends on:** #5, #7, #9.
 
-### GR-2: Membership engine (5 days)
+### GR-2: Membership engine (5 days) · #45
 - **Files:** `internal/groups/engine/` (`closure.go`, `levels.go`, `propagate.go`, `composite.go`, `budget.go`, `timewheel.go`, `verify.go`), `internal/store/repo_group_engine.go` (set-based upserts with `RETURNING`), direct-membership service, `:convert-to-composite`, cycle veto, engine queue worker registered with the job framework.
 - **Tests:** `TestEngine_MatchesOracle` (fuzz: random DAGs, composites of composites, dates, disabled groups), `TestEngine_CycleVeto`, `TestEngine_SyncBudgetFallsBackToQueue`, `TestTimewheel_DisableWithin60s`, `TestIsMember_IgnoresExpiredRowsWhenWheelLags`, `TestVerify_DetectsAndRepairsInjectedCorruption`; a benchmark at 10% of the reference tenant.
 - **Depends on:** GR-1.
 
-### GR-3: Group events and point-in-time history (3 days)
+### GR-3: Group events and point-in-time history (3 days) · #46
 - **Files:** `internal/store/schema/0103_group_events.sql`, `internal/groups/events/` (outbox, cursors, CloudEvents encoding), `internal/groups/pit/` (writer, as-of/between queries, daily Merkle digest into the audit ledger, `verify` and `rebuild`), retention job.
 - **Tests:** `TestPIT_AsOfMatchesReplay`, `TestPIT_DigestDetectsTamper`, `TestEvents_GapFreeSeqUnderConcurrency`, `TestPIT_RebuildEqualsLive`.
 - **Depends on:** GR-2, #7.
 
-### GR-4: Privilege model (3 days)
+### GR-4: Privilege model (3 days) · #47
 - **Files:** `internal/store/schema/0102_group_privs.sql`, `internal/groups/privs/` (implication table, dynamic inheritance, check, explain), `platform_users.identity_id` link, enforcement on every group route (replacing the GR-1 `tenant_admin` guard), creator and default privileges, `everyone` policy.
 - **Tests:** table-driven implication tests for all 22 privileges, `TestPrivs_InheritanceOneVsSub`, `TestPrivs_ExplainListsAllPaths`, `TestPrivs_EveryoneNeedsTenantAdmin`, `TestPrivs_ViewFiltersBrowseAndSearch`, authorization tests for every route (403 without the privilege).
 - **Depends on:** GR-2, #9.
 
-### GR-5: Groups REST API (WS parity) (3 days)
+### GR-5: Groups REST API (WS parity) (3 days) · #48
 - **Files:** `internal/groups/api/` (members with filters, trace, batch add/remove with idempotency keys, groups of an identity, privileges, simulation endpoint, as-of/between parameters), OpenAPI generation, read-only SCIM server `/scim/v2/Groups|Users`, parity fixtures for new routes.
 - **Tests:** API contract tests per route, `TestBatch_AtomicAndIdempotent`, `TestSimulate_NoSideEffects`, SCIM read conformance tests (filter, paging), isolation tests at the API layer.
 - **Depends on:** GR-3, GR-4.
 
-### GR-6: CLI and declarative plans (3 days)
+### GR-6: CLI and declarative plans (3 days) · #49
 - **Files:** `cmd/tessera-cli` `groups` subcommands, `internal/groups/plan/` (plan parse, diff, apply as batches, export folder to plan, server-side plan templates with typed inputs), the `application` template from the Deployment Guide.
 - **Tests:** golden tests for `plan` output, `TestPlan_ApplyIsIdempotent`, `TestTemplate_ApplicationMatchesDeploymentGuide`, `TestExportThenApply_RoundTrip`.
 - **Depends on:** GR-5, #14.
 
-### GR-7: Attribute framework, object types and services (3 days)
+### GR-7: Attribute framework, object types and services (3 days) · #50
 - **Files:** `internal/store/schema/0104_group_attrs.sql`, `internal/groups/attrs/` (definitions, names, actions, implies closures, assignments on all owner types, values, attribute privileges), object types and lint rules, service folders.
 - **Tests:** assignment-on-assignment, implies closure maintenance, `attr_*` privilege checks, `TestValues_NoFloats`, lint rule tests.
 - **Depends on:** GR-4.
 
-### GR-8: Directory → Groups UI (5 days)
+### GR-8: Directory → Groups UI (5 days) · #51
 - **Files:** `frontend/src/features/directory/groups/` (folder browser, group page with Members/Definition/Privileges/Usage/History/Attributes tabs, folder page, trace drawer, change preview dialog, New application wizard), `frontend/src/api.ts` functions, Managed/Connected toggle on the Groups list.
 - **Tests:** component tests for the change preview and trace; Playwright smoke: create folder from template, add members with dates, see effective change, view as-of history; accessibility checks (labels, focus, keyboard).
 - **Depends on:** GR-5, GR-7 (and the `ui-redesign` branch merged).
 
-### GR-9: Policy groups as code (5 days)
+### GR-9: Policy groups as code (5 days) · #52
 - **Files:** `internal/groups/policygroups/` (fragment parser and validator on the Cedar grammar, compiler to composite trees with hash-consing, attribute indexer for `sys:attr:*` groups, repository sync by webhook or poll, PR diff via simulation), `cmd/tessera-cli groups policy validate|diff|apply`, example repo layout in `docs/`, GitHub Action snippet for the PR comment.
 - **Tests:** `TestFragment_RejectsUnsupported` (context, resource attrs, arithmetic), `TestCompile_EquivalentToNaive` (fuzz), `TestHashConsing_SharesSubtrees`, `TestPolicyGroups_PDPAgreesWithEngine` (using the Cedar Go evaluator), `TestSync_RecordsCommitOnEveryChange`.
 - **Depends on:** GR-2, GR-7.
 
-### GR-10: Loaders as connectors (5 days)
+### GR-10: Loaders as connectors (5 days) · #53
 - **Files:** `internal/store/schema/0105_group_loaders.sql`, `internal/groups/loaders/` (`GroupSource`, SQL with read-only enforcement, LDAP, CSV/SFTP, `connector_groups`, `attribute`, `recent_memberships`; schedules; incremental cursors; failsafes with held runs and downstream impact; unresolved subjects), Inbox task type `loader_held`, Admin → Jobs entries, two-person approval for SQL loaders via the Phase 0 admin-change flow.
 - **Tests:** in-process fakes (SQLite source DB, an in-process LDAP test server, temp CSV/SFTP), `TestFailsafe_HoldsAndShowsImpact`, `TestSQLLoader_RejectsWrites`, `TestUnresolved_NeverDropped`, `TestRecentMemberships_FromPIT`.
 - **Depends on:** GR-5, #16.
 
-### GR-11: Provisioning framework with LDAP/AD, SCIM 2.0, SQL and webhook targets (5 days)
+### GR-11: Provisioning framework with LDAP/AD, SCIM 2.0, SQL and webhook targets (5 days) · #54
 - **Files:** `internal/store/schema/0106_group_prov.sql`, `internal/groups/provisioning/` (desired-state computation with inherited marks, translation templates, full and incremental sync, verify-by-reaggregation, failsafes, adopt and dry-run modes, diagnostics, sync-back cache), targets `ldap`, `ad`, `scim2` (generic plus AWS Identity Center and GitHub EMU profiles), `sql`, `webhook`.
 - **Tests:** fakes for LDAP (including AD ranged attributes), a SCIM 2.0 test server, SQLite target; `TestProvision_VerifiedOnlyAfterReread`, `TestProvision_AdoptModeChangesNothing`, `TestProvision_FailsafeMaxDeletes`, `TestProvision_IncrementalEqualsFull`.
 - **Depends on:** GR-3.
 
-### GR-12: Entra ID, Google Workspace and Okta provisioners (4 days, needs-human)
+### GR-12: Entra ID, Google Workspace and Okta provisioners (4 days, needs-human) · #55
 - **Files:** `internal/groups/provisioning/entra/`, `google/`, `okta/`; Connection types and credential flows; recorded-response fixtures.
 - **Tests:** unit tests on recorded responses; an opt-in live test suite (`-tags live`) against sandbox tenants that a human provides; verify-by-reaggregation on each.
 - **Depends on:** GR-11.
 
-### GR-13: Rules and membership constraints (3 days)
+### GR-13: Rules and membership constraints (3 days) · #56
 - **Files:** `internal/store/schema/0107_group_gov.sql` (rules), `internal/groups/rules/` (triggers, conditions, actions; privilege checks at save and fire time; email-rule tenant gate), built-in constraints (membership require, one group only, no self-add, no deletion of provisioned groups), webhook hooks with optional veto.
 - **Tests:** `TestRules_PrivilegeCheckedAtFireTime`, `TestMembershipRequire_VetoAndRemove`, `TestOneGroupOnly`, `TestEmailRulesOffByDefault`, `TestVetoHookFailClosed`.
 - **Depends on:** GR-3, GR-4.
 
-### GR-14: Attestation, deprovisioning and reports (4 days)
+### GR-14: Attestation, deprovisioning and reports (4 days) · #57
 - **Files:** attestation settings and campaign generation through `internal/reviews` with usage context, overdue actions; `internal/groups/deprov/` (affiliations, Inbox tasks, veto rule, report); `internal/groups/reports/` (catalogue, schedules, CSV/JSON delivery); Groups lens in the access graph.
 - **Tests:** `TestAttestation_FrozenPopulation`, `TestAttestation_OverdueRemovesAndVerifies`, `TestDeprov_AffiliationLossCreatesTasks`, report golden files, `TestVisualization_RespectsView`.
 - **Depends on:** GR-3, GR-4, GR-13.
 
-### GR-15: Grouper connector: import in mirror mode (5 days, needs-human)
+### GR-15: Grouper connector: import in mirror mode (5 days, needs-human) · #58
 - **Files:** `internal/groups/grouperconn/` (WS client for Grouper REST v2 JSON, SQL-mode reader for Grouper views, import of folders, groups, composites, direct memberships, privileges, attributes, loader and provisioning config as disabled objects; subject mapping through correlation with a review queue; import report and reconciliation counts), `cmd/tessera-cli groups import grouper`.
 - **Tests:** fixtures captured from a Grouper 7.6 container (`i2incommon/grouper:7.6.0` quickstart) for WS and SQL modes; `TestImport_CountsReconcile`, `TestImport_UnresolvedHeldNotDropped`, `TestImport_PrivilegeInheritanceBecomesDynamic`. A human runs the import against a real university Grouper (read-only credentials) and signs off the report.
 - **Depends on:** GR-5, GR-7, GR-10.
 
-### GR-16: Coexistence: shadow-compare, cut-over and the Grouper-WS-compatible read API (5 days, needs-human)
+### GR-16: Coexistence: shadow-compare, cut-over and the Grouper-WS-compatible read API (5 days, needs-human) · #59
 - **Files:** folder modes (`mirror`/`shadow`/`native`) with write guards; change feed (SQL change log reader, ESB HTTP webhook receiver); comparison job and readiness score; per-target provisioning cut-over checklist in the UI; optional reverse sync over Grouper WS; `/grouper-ws/servicesRest/v2_x/*` read endpoints.
 - **Tests:** `TestFolderMode_RefusesWritesWhenMirrored`, `TestShadowCompare_ReportsDifferencesWithReasons`, compatibility tests replaying captured Grouper WS requests/responses against the compatible API. A human runs a pilot cut-over of one folder.
 - **Depends on:** GR-15, GR-11.
 
-### GR-17: Scale gate (3 days)
+### GR-17: Scale gate (3 days) · #60
 - **Files:** `internal/groups/benchgen/` (synthetic university generator), `cmd/tessera-bench groups`, nightly CI job on Postgres, dashboard of the §6.7 targets.
 - **Tests:** the §6.7 targets as assertions on the reference tenant (nightly, not per PR).
 - **Depends on:** GR-2, GR-5, GR-11, #18.
 
-### GR-18: Event streaming (3 days)
+### GR-18: Event streaming (3 days) · #61
 - **Files:** `internal/groups/events/sinks/` (AWS SQS/SNS, RabbitMQ, Kafka), delivery guarantees (at-least-once, ordered per group), dead-letter handling, Admin UI for sinks.
 - **Tests:** in-process broker fakes; `TestSink_OrderedPerGroup`, `TestSink_DeadLetterAfterRetries`.
 - **Depends on:** GR-3.
 
-### GR-19: Permissions and limits (Phase 3) (4 days)
+### GR-19: Permissions and limits (Phase 3) (4 days) · #62
 - **Files:** permission assignments on roles and on (role, identity), resource and action inheritance, allow/disallow heuristics, limits compiled to Cedar `context` conditions, permission API and PIT permission view, Grouper import of permissions.
 - **Tests:** heuristics table tests mirrored from Grouper's documented examples, `TestLimits_EvaluatedByPDP`, import round-trip.
 - **Depends on:** GR-7, GR-9, GR-15.
 
-### GR-20: Long-tail provisioners via the connector SDK (Phase 3) (ongoing, needs-human)
+### GR-20: Long-tail provisioners via the connector SDK (Phase 3) (ongoing, needs-human) · #63
 - **Files:** Box, Duo, Zoom, Adobe, Dropbox, GitHub org teams, Jamf, Datadog, C•CURE, Interfolio, TeamDynamix, Remedy, Freshservice, midPoint targets on the connector SDK (D4·S10), with ticketed fulfilment where there is no API.
 - **Tests:** recorded-response tests per target; live suites opt-in.
 - **Depends on:** GR-11, the connector SDK (capability map C).

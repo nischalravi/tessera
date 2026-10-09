@@ -688,72 +688,72 @@ Webhooks out: `guest.invited`, `guest.claimed`, `guest.expiring`, `guest.expired
 
 **Preconditions.** As for the groups design: the Go port merged, Phase 0 PR1 (#5), PR2 (#6, sealing and rate limiting), PR3 (#7), PR5 (#9) merged. Each PR keeps `./run.sh test` and `./run.sh build` green, adds `TestIsolation_*` coverage for its tables and passes `go vet`, `staticcheck`, `govulncheck`. "GR-n" refers to the groups design's PRs.
 
-### GU-1: Identity data model for affiliations, source records and identifiers (3 days)
+### GU-1: Identity data model for affiliations, source records and identifiers (3 days) · #64
 - **Files:** `internal/store/schema/0201_guests.sql` (identity columns, source records, identifiers, affiliations, populations), `internal/store/model_identity.go`, `repo_identity_ext.go`, `internal/identity/affiliations/` (derive lifecycle state from affiliations), seed data for each population in the demo tenant.
 - **Tests:** `TestLifecycleState_DerivedFromAffiliations`, `TestIdentifiers_HMACUniqueness`, isolation tests.
 - **Depends on:** #5, #6, #7.
 
-### GU-2: Sponsorships, sponsor policy and sponsor invites (4 days)
+### GU-2: Sponsorships, sponsor policy and sponsor invites (4 days) · #65
 - **Files:** `internal/guests/sponsorship/` (create, approve, renew, end, transfer), sponsor policy evaluation (Cedar fragment, same parser as GR-9 or a Go evaluator with the same semantics until Cedar lands), invitations (single and CSV), Inbox task types, notification templates through the Phase 0 outbox, `/api/guests/*`, `/api/sponsorships/*`.
 - **Tests:** `TestSponsorPolicy_LimitsAndDurations`, `TestSponsor_CannotSponsorSelfOrMatch`, `TestBulkInvite_PerRowResults`, policy version recorded on every decision.
 - **Depends on:** GU-1, #9, #16.
 
-### GU-3: Self-registration with sponsor approval (2 days)
+### GU-3: Self-registration with sponsor approval (2 days) · #66
 - **Files:** public `POST /register` with bot challenge hook and rate limits, sponsor search that exposes names only, sponsorship codes, Inbox approval.
 - **Tests:** `TestRegister_NoAccountCreatedBeforeApproval`, `TestRegister_ExistingEmailGetsSignInMail`, enumeration tests.
 - **Depends on:** GU-2.
 
-### GU-4: SIS and HRIS intake for applicants, admits and pre-hires (3 days)
+### GU-4: SIS and HRIS intake for applicants, admits and pre-hires (3 days) · #67
 - **Files:** connector mappings for SIS status changes and future-dated HRIS hires to intake records and affiliations; organizational sponsors (admissions, HR); conversion events; demo SIS and HRIS connectors extended.
 - **Tests:** `TestSIS_ApplicantToAdmitToStudentKeepsIdentity`, `TestHRIS_PrehireToEmployeeKeepsIdentity`, `TestHRIS_RescindedOfferEndsPrehire`.
 - **Depends on:** GU-1.
 
-### GU-5: Identity matching, review queue, link, merge and unmerge (5 days)
+### GU-5: Identity matching, review queue, link, merge and unmerge (5 days) · #68
 - **Files:** `internal/identity/match/` (rules, normalization, Jaro-Winkler, tiers, explanations, modes), `internal/identity/merge/` (move list, credential revocation, notifications, four-eyes), Inbox match reviews, `/api/identity-matches/*`, `/api/identities/{id}:merge`, flagged TAP ID Match-compatible endpoint.
 - **Tests:** `TestMatch_SelfAssertedNeverAutoLinks`, `TestMatch_TierExplanations`, `TestMerge_MovesMembershipsThroughEngine`, `TestMerge_CredentialsNotTransferred`, `TestUnmerge_RestoresMoves`, ID Match API conformance tests.
 - **Depends on:** GU-1, GU-4, GR-1 and GR-2 (groups design) for moving memberships.
 
-### GU-6: Claim core: tokens, sessions, confirmation codes and enumeration resistance (4 days)
+### GU-6: Claim core: tokens, sessions, confirmation codes and enumeration resistance (4 days) · #69
 - **Files:** `internal/guests/claim/` (tokens and codes, claim session with key binding, confirmation codes by email and SMS through the notification outbox with an SMS provider interface, rate limits, generic responses, suspected-match branch), public claim pages skeleton in `frontend/src/public/claim/`.
 - **Tests:** all `TestClaim_*` in §10.2, `TestConfirmation_*`, Playwright happy path for an A0 visitor with the dev IdP as the customer IdP.
 - **Depends on:** GU-2, GU-5, #6.
 
-### GU-7: Identity verification providers (IAL2) and the proofing-agent screen (4 days, needs-human)
+### GU-7: Identity verification providers (IAL2) and the proofing-agent screen (4 days, needs-human) · #70
 - **Files:** `internal/guests/idv/` (provider interface, a mock provider for tests, one real provider adapter chosen in open question 2), `ProofingResult` storage, trusted-referee and proofing-agent flows, IAL recording.
 - **Tests:** mock-provider tests for each pathway and decision; `TestIDV_NoImagesStored`; a human runs the real vendor's sandbox end to end and signs off.
 - **Depends on:** GU-6.
 
-### GU-8: Credential binding: customer IdP activation, home IdP federation, password set and AAL check (5 days, needs-human)
+### GU-8: Credential binding: customer IdP activation, home IdP federation, password set and AAL check (5 days, needs-human) · #71
 - **Files:** `internal/guests/credential/` (authorities: Okta activation token, Entra Temporary Access Pass, Google Workspace, LDAP/AD password set with 800-63B-4 checks and blocklist, generic OIDC/SAML home IdP binding), first-sign-in AAL check against the Phase 0 AuthnContext, credential bindings table.
 - **Tests:** dev IdP based tests for OIDC and SAML binding and AAL checks; LDAP password set against an in-process LDAP server; `TestPassword_*`; opt-in live suites for Okta and Entra that a human runs against sandbox tenants.
 - **Depends on:** GU-6, #10, #13.
 
-### GU-9: InCommon and eduGAIN federation (4 days, needs-human)
+### GU-9: InCommon and eduGAIN federation (4 days, needs-human) · #72
 - **Files:** metadata aggregate and MDQ client with signature verification and pinned keys, entity-category and registration-authority filters, SeamlessAccess discovery integration, REFEDS MFA request and check, RAF `eduPersonAssurance` mapping to IAL, subject-id/pairwise-id handling, scope checks.
 - **Tests:** fixtures from the InCommon test federation metadata; `TestFederation_*` in §10.2; a human registers the SP in the InCommon test federation and signs in from a test IdP.
 - **Depends on:** GU-8, #13.
 
-### GU-10: Terms, consent and recovery (3 days)
+### GU-10: Terms, consent and recovery (3 days) · #73
 - **Files:** terms documents and acceptances with ledger events, re-acceptance on version change, attribute-release consent screen for federated claims, recovery claim tokens with re-verification at the recorded IAL, cooling-off for privileged bundles, notifications.
 - **Tests:** `TestTerms_ReacceptOnNewVersion`, `TestRecovery_RequiresOriginalIAL`, `TestRecovery_NotifiesAllChannels`.
 - **Depends on:** GU-6.
 
-### GU-11: Lifecycle: expiry, renewal, sponsor leaver, conversion and deprovisioning (4 days)
+### GU-11: Lifecycle: expiry, renewal, sponsor leaver, conversion and deprovisioning (4 days) · #74
 - **Files:** `internal/guests/lifecycle/` (reminders, renewal with step-up, multi-sponsorship expiry, sponsor-leaver transfer tasks on JML events, grace and retention jobs, PII purge to tombstone), Governance → Lifecycle data endpoints.
 - **Tests:** `TestSponsorLeaver_TransfersOrEnds`, `TestExpiry_LastSponsorshipEndsIdentity`, `TestDeprovision_VerifiedInTargets`, `TestPurge_KeepsTombstoneOnly`.
 - **Depends on:** GU-2, GU-4, GR-11 (groups design) for verified deprovisioning.
 
-### GU-12: Groups and access-request integration (3 days)
+### GU-12: Groups and access-request integration (3 days) · #75
 - **Files:** system-maintained reference groups (`ref:guest:*`, `ref:applicant:*`, `ref:prehire:*`, `ref:partner:*`, `ref:ial:2`, `ref:sponsor:eligible`), access bundles as direct memberships with sponsorship end dates, IAL/AAL gating in policy groups and request approvals, sponsor attestation campaign, Grouper external-subject import mapping.
 - **Tests:** `TestBundle_EndsWithSponsorship`, `TestRequest_StepUpWhenIALTooLow`, `TestRefGroups_TrackAffiliations`.
 - **Depends on:** GU-11, GR-5 and GR-9 (groups design).
 
-### GU-13: UI: sponsor portal, review queue, person page and admin (5 days)
+### GU-13: UI: sponsor portal, review queue, person page and admin (5 days) · #76
 - **Files:** `frontend/src/features/access/Guests.tsx`, Inbox item types, Directory person page sections, Governance → Lifecycle views, Admin → Guests and external identities, public claim pages completed (all steps, localization scaffolding, accessibility).
 - **Tests:** component tests; Playwright: sponsor invites a contractor, contractor claims with IAL1 and passkey, sponsor renews, sponsor leaves and the transfer task appears; accessibility checks.
 - **Depends on:** GU-2, GU-5, GU-6.
 
-### GU-14: B2B partner organizations (Phase 3) (4 days, needs-human)
+### GU-14: B2B partner organizations (Phase 3) (4 days, needs-human) · #77
 - **Files:** partner organizations with domains, IdP connections and agreements; partner admins with delegated invite rights; IdP routing (email domain to partner IdP); partner SCIM inbound (`/scim/v2` write endpoints scoped to a partner org); partner deprovisioning signals (SCIM delete, SSF RISC `account-disabled` when available); agreement expiry ending all partner sponsorships.
 - **Tests:** `TestPartnerAdmin_CanOnlyInviteOwnOrg`, `TestPartnerSCIM_ScopedToOrg`, `TestAgreementExpiry_EndsSponsorships`; a human connects a real partner Entra or Okta tenant.
 - **Depends on:** GU-8, GU-12.
