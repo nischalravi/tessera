@@ -1,7 +1,12 @@
 # API parity fixtures
 
 Golden request/response pairs recorded from the original Python (FastAPI)
-backend with `record_python.py`, before it was replaced by the Go server.
+backend with `record_python.py`, before it was replaced by the Go server. The
+Python backend was removed afterwards; to re-record, check out a commit that still has
+`mvp/backend` with the `GET /api/accounts` route (e.g. `aba5abb`) and
+run `python record_python.py ../../../backend <out-dir>` from this directory
+with the backend's requirements installed.
+
 `internal/api/parity_test.go` replays every fixture, in file order, against a
 freshly seeded Go server through `httptest` and requires equal JSON.
 
@@ -38,6 +43,7 @@ freshly seeded Go server through `httptest` and requires equal JSON.
    a set difference of string keys, so their order depends on
    `PYTHONHASHSEED` and changes from run to run. The Go server returns them
    sorted by `key`.
+
 Numbers are compared by their JSON spelling, not just by value: Python's
 `4.0` (a float read back from the database) and `4` (an unvalidated pydantic
 default) are different, and the Go server reproduces both (`ojson.Float`,

@@ -1,1 +1,0 @@
-"""Tessera - identity governance MVP."""

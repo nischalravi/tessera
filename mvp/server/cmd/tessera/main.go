@@ -31,6 +31,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/api"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/seed"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -152,8 +153,12 @@ func seedDB(ctx context.Context, path string, clock timeutil.Clock, loader *poli
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "Seeded Tessera in %.1fs: %v usage=%d hris=%d jit=%d\n", time.Since(start).Seconds(),
-		stats.Sync.Discovery.Object(), stats.Sync.Events.Usage, stats.Sync.Events.Hris, stats.Requests)
+	discovery, err := ojson.Marshal(stats.Sync.Discovery.Object())
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "Seeded Tessera in %.1fs: %s usage=%d hris=%d jit=%d\n", time.Since(start).Seconds(),
+		discovery, stats.Sync.Events.Usage, stats.Sync.Events.Hris, stats.Requests)
 	return nil
 }
 

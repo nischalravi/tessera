@@ -76,7 +76,7 @@ export default function Policies() {
   const rows = useMemo(() => (violations ?? []).filter((v) => !pid || v.policy_id === pid), [violations, pid]);
   if (!policies) return <Loading error={error} />;
   return (
-    <Page title="Policies & violations" sub={<>Policies are YAML files in <code>backend/policies/</code>, evaluated against the effective-permission graph. Edit a file and reload — no restart needed.</>}>
+    <Page title="Policies & violations" sub={<>Policies are YAML files in <code>server/policies/</code>, evaluated against the effective-permission graph. Edit a file and reload — no restart needed.</>}>
       <div className="grid g3">
         {policies.map((p) => (
           <div key={p.id} className="card" style={{ cursor: "pointer", outline: pid === p.id ? "2px solid var(--brand)" : undefined }} onClick={() => setPid(pid === p.id ? "" : p.id)}>
