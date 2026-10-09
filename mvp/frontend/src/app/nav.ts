@@ -1,4 +1,6 @@
-import { ChartLine, House, Inbox, KeyRound, LucideIcon, Settings, ShieldCheck, Users } from "lucide-react";
+import {
+  AppWindow, BadgeCheck, Bot, Building2, ChartLine, ClipboardCheck, House, Inbox, KeyRound, Layers, LucideIcon, Network, Plug, Plus, Settings, ShieldCheck, Timer, Users, UsersRound,
+} from "lucide-react";
 
 export interface NavPage {
   path: string;
@@ -8,65 +10,102 @@ export interface NavPage {
   preview?: boolean;
 }
 
-export interface NavSection {
+export interface RailItem extends NavPage {
   id: string;
-  label: string;
   icon: LucideIcon;
-  path: string;
-  children?: NavPage[];
+  /** Other paths that light this item up (sub-pages and tabs that live under it). */
+  also?: string[];
+  /** Paths under `also` that belong to a different item. */
+  except?: string[];
+  /** Pages reachable from this item's tabs; listed in the palette, not in the rail. */
+  pages?: NavPage[];
 }
 
-/** The single source of truth for the sidebar, breadcrumbs and the command palette's page list. */
-export const NAV: NavSection[] = [
-  { id: "home", label: "Home", icon: House, path: "/" },
-  { id: "inbox", label: "Inbox", icon: Inbox, path: "/inbox" },
+export interface RailGroup {
+  label?: string;
+  items: RailItem[];
+}
+
+/** The single source of truth for the left rail, breadcrumbs and the command palette's page list. */
+export const RAIL: RailGroup[] = [
   {
-    id: "access", label: "Access", icon: KeyRound, path: "/access",
-    children: [
-      { path: "/access/request", label: "Request access", keywords: "catalog cart ask new access role entitlement" },
-      { path: "/access/mine", label: "My access", keywords: "what i have entitlements remove" },
-      { path: "/access/requests", label: "Requests", keywords: "history drafts status submitted" },
-      { path: "/access/jit", label: "Just-in-time", keywords: "jit elevation temporary privileged break glass" },
+    items: [
+      { id: "home", label: "Home", icon: House, path: "/", keywords: "overview tenant monitoring recommendations" },
+      { id: "inbox", label: "Inbox", icon: Inbox, path: "/inbox", keywords: "approvals tasks queue" },
     ],
   },
   {
-    id: "directory", label: "Directory", icon: Users, path: "/directory",
-    children: [
-      { path: "/directory/people", label: "People", keywords: "users employees humans identities" },
-      { path: "/directory/machine", label: "Machine identities & agents", keywords: "nhi service accounts api keys ai agents bots secrets" },
-      { path: "/directory/accounts", label: "Accounts", keywords: "system accounts usernames" },
-      { path: "/directory/roles", label: "Roles", keywords: "business roles birthright", preview: true },
-      { path: "/directory/entitlements", label: "Entitlements", keywords: "groups permissions aws roles snowflake okta" },
-      { path: "/directory/apps", label: "Applications & systems", keywords: "apps endpoints connectors resources" },
-      { path: "/directory/orgs", label: "Organizations", keywords: "departments org units cost centers", preview: true },
-      { path: "/directory/groups", label: "Groups", keywords: "okta groups teams" },
+    label: "Identity",
+    items: [
+      { id: "users", label: "Users", icon: Users, path: "/directory/people", keywords: "people employees humans identities" },
+      { id: "machine", label: "Machine identities & agents", icon: Bot, path: "/directory/machine", keywords: "nhi service accounts api keys ai agents bots secrets" },
+      {
+        id: "groups", label: "Groups", icon: UsersRound, path: "/directory/groups", also: ["/directory/entitlements"], keywords: "okta groups teams",
+        pages: [{ path: "/directory/entitlements", label: "Entitlements", keywords: "groups permissions aws roles snowflake okta" }],
+      },
+      { id: "apps", label: "Applications", icon: AppWindow, path: "/directory/apps", keywords: "apps systems endpoints connectors resources" },
+      { id: "accounts", label: "Accounts", icon: KeyRound, path: "/directory/accounts", keywords: "system accounts usernames" },
+      { id: "roles", label: "Roles", icon: Layers, path: "/directory/roles", keywords: "business roles birthright", preview: true },
+      { id: "orgs", label: "Organizations", icon: Building2, path: "/directory/orgs", keywords: "departments org units cost centers", preview: true },
     ],
   },
   {
-    id: "insights", label: "Insights", icon: ChartLine, path: "/insights",
-    children: [
-      { path: "/insights/risk", label: "Risk overview", keywords: "dashboard kpi metrics" },
-      { path: "/insights/graph", label: "Access graph", keywords: "graph explorer paths who can access" },
-      { path: "/insights/least-privilege", label: "Least privilege", keywords: "unused recommendations right size revoke" },
-      { path: "/insights/sod", label: "SoD conflicts", keywords: "segregation separation of duties toxic combination" },
+    label: "Access",
+    items: [
+      { id: "request", label: "Request access", icon: Plus, path: "/access/request", keywords: "catalog cart ask new access role entitlement" },
+      {
+        id: "mine", label: "My access", icon: BadgeCheck, path: "/access/mine", also: ["/access/requests"], keywords: "what i have entitlements remove",
+        pages: [{ path: "/access/requests", label: "My requests", keywords: "history drafts status submitted" }],
+      },
+      { id: "jit", label: "Just-in-time", icon: Timer, path: "/access/jit", keywords: "jit elevation temporary privileged break glass" },
+      {
+        id: "reviews", label: "Access reviews", icon: ClipboardCheck, path: "/governance/reviews", also: ["/governance/lifecycle", "/governance/workflows"], keywords: "certification campaigns attestation",
+        pages: [
+          { path: "/governance/lifecycle", label: "Lifecycle", keywords: "joiner mover leaver jml hris workday onboarding offboarding" },
+          { path: "/governance/workflows", label: "Workflows", keywords: "approval routing escalation", preview: true },
+        ],
+      },
     ],
   },
   {
-    id: "governance", label: "Governance", icon: ShieldCheck, path: "/governance",
-    children: [
-      { path: "/governance/policies", label: "Policies & violations", keywords: "policy as code yaml simulation what-if" },
-      { path: "/governance/reviews", label: "Access reviews", keywords: "certification campaigns attestation" },
-      { path: "/governance/lifecycle", label: "Lifecycle", keywords: "joiner mover leaver jml hris workday onboarding offboarding" },
-      { path: "/governance/workflows", label: "Workflows", keywords: "approval routing escalation", preview: true },
+    label: "Protection",
+    items: [
+      { id: "policies", label: "Policies & SoD", icon: ShieldCheck, path: "/governance/policies", keywords: "policy as code yaml simulation what-if violations" },
+      { id: "graph", label: "Access graph", icon: Network, path: "/insights/graph", keywords: "graph explorer paths who can access" },
+      {
+        id: "insights", label: "Insights", icon: ChartLine, path: "/insights/risk", also: ["/insights"], except: ["/insights/graph"], keywords: "risk dashboard kpi metrics",
+        pages: [
+          { path: "/insights/least-privilege", label: "Least privilege", keywords: "unused recommendations right size revoke" },
+          { path: "/insights/sod", label: "SoD conflicts", keywords: "segregation separation of duties toxic combination" },
+          { path: "/insights/deployment", label: "Deployment health", keywords: "readiness setup checks connectors correlation", preview: true },
+        ],
+      },
     ],
   },
-  { id: "admin", label: "Admin", icon: Settings, path: "/admin" },
+  {
+    label: "Settings",
+    items: [
+      { id: "connections", label: "Connections", icon: Plug, path: "/admin/connections", keywords: "connectors sync okta aws github snowflake workday" },
+      { id: "admin", label: "Admin", icon: Settings, path: "/admin", except: ["/admin/connections"], keywords: "settings configuration audit jobs" },
+    ],
+  },
 ];
 
-export function allPages(): (NavPage & { section: string })[] {
-  return NAV.flatMap((s) => (s.children ? s.children.map((c) => ({ ...c, section: s.label })) : [{ path: s.path, label: s.label, section: "" }]));
+const under = (pathname: string, p: string) => pathname === p || pathname.startsWith(p + "/");
+
+/** True when `pathname` belongs to the rail item. */
+export function isActive(item: RailItem, pathname: string) {
+  if (item.path === "/") return pathname === "/";
+  if (item.except?.some((p) => under(pathname, p))) return false;
+  return under(pathname, item.path) || !!item.also?.some((p) => under(pathname, p));
 }
 
-export function sectionFor(pathname: string) {
-  return NAV.find((s) => (s.path === "/" ? pathname === "/" : pathname === s.path || pathname.startsWith(s.path + "/")));
+export function railItemFor(pathname: string) {
+  for (const g of RAIL) for (const i of g.items) if (isActive(i, pathname)) return { group: g.label, item: i };
+  if (under(pathname, "/directory/identities")) return { group: "Identity", item: RAIL[1].items[0] };
+  return null;
+}
+
+export function allPages(): (NavPage & { section: string })[] {
+  return RAIL.flatMap((g) => g.items.flatMap((i) => [{ path: i.path, label: i.label, keywords: i.keywords, preview: i.preview, section: g.label ?? "" }, ...(i.pages ?? []).map((p) => ({ ...p, section: i.label }))]));
 }

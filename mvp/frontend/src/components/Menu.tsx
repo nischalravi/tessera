@@ -10,7 +10,7 @@ export interface MenuItem {
 export type MenuEntry = MenuItem | { heading: string } | "divider";
 
 /** Small accessible dropdown menu (button + role=menu), closes on outside click and Escape. */
-export function Menu({ trigger, items, label }: { trigger: (p: { onClick: () => void; "aria-expanded": boolean; "aria-haspopup": "menu" }) => ReactNode; items: MenuEntry[]; label: string }) {
+export function Menu({ trigger, items, label, align = "end" }: { trigger: (p: { onClick: () => void; "aria-expanded": boolean; "aria-haspopup": "menu" }) => ReactNode; items: MenuEntry[]; label: string; align?: "start" | "end" }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -42,7 +42,7 @@ export function Menu({ trigger, items, label }: { trigger: (p: { onClick: () => 
     <div className="menu-anchor" ref={ref} onKeyDown={onKey}>
       {trigger({ onClick: () => setOpen((o) => !o), "aria-expanded": open, "aria-haspopup": "menu" })}
       {open && (
-        <div className="menu" role="menu" aria-label={label}>
+        <div className={`menu ${align === "start" ? "start" : ""}`} role="menu" aria-label={label}>
           {items.map((it, i) => {
             if (it === "divider") return <hr key={i} />;
             if ("heading" in it) return <div key={i} className="mlabel" role="presentation">{it.heading}</div>;
