@@ -2,6 +2,19 @@
 
 Tessera is built by a team of AI agents with a human (the founder) approving every merge and every release. This document explains who the agents are, how the weekly loop runs, and where the human checkpoints are.
 
+## Current mode: local-first
+
+Until the founder decides to move to cloud or paid services, everything runs on the founder's Mac:
+
+- **Agents run in Claude Code on the Mac**, using the founder's Claude plan. There is no API key in the repository. The market watch, build and review steps below run as local scheduled tasks in the Claude desktop app, or on demand from a Claude Code session. They only run while the Mac is on and awake.
+- **The GitHub agent workflows are manual-only** (`workflow_dispatch`) and stay unused until an API key is added. Their schedules and PR trigger are commented out, with notes on how to restore them.
+- **Free GitHub features stay on:** CI, the security scanners (pip-audit, bandit, npm audit, gitleaks) and Dependabot.
+- **Paid or cloud services have local stand-ins:**
+  - The Phase 0 dev IdP (a pure-Python mock OIDC/SAML issuer) stands in for Okta and Entra.
+  - The offline golden corpus and `moto` stand in for a live AWS sandbox. Issues that need real cloud accounts or paid services stay labelled `needs-human` until the founder decides.
+
+The rest of this document describes the full loop. The schedules apply whether the loop runs locally or in the cloud.
+
 ## Branches
 
 | Branch | Purpose | How it changes |
@@ -88,8 +101,10 @@ The agents never merge anything. The founder:
 
 Agent runs are billed to the Anthropic API key (or Claude plan token) stored in the repository secrets. Expect roughly a few dollars to a few tens of dollars per week at the weekly cadence, depending on how much gets built. The turn limits in each workflow cap the worst case. To pause the whole loop, disable the `agent-*` workflows from the Actions tab.
 
-## Setup checklist (one time)
+## Setup checklist for moving the loop to the cloud (later)
+
+Not needed while running locally.
 
 1. Install the Claude GitHub App on the repository: https://github.com/apps/claude. PRs opened with its token trigger CI; PRs opened with the default Actions token do not.
 2. Add one repository secret: `ANTHROPIC_API_KEY` (from console.anthropic.com), or `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`, uses your Claude plan).
-3. Run `agent-market-watch` once manually from the Actions tab to check it works.
+3. Restore the schedules and the PR-review trigger (see the comments in each `agent-*` workflow), then run `agent-market-watch` once manually from the Actions tab to check it works.

@@ -1,9 +1,9 @@
 name: Agent - PR review
 
 on:
-  pull_request:
-    branches: [dev]
-    types: [opened, reopened, ready_for_review]
+  # Local-first for now: PR reviews run on the founder's Mac. Re-add the
+  # pull_request trigger (branches: [dev], types: [opened, reopened, ready_for_review])
+  # when the API key is added to the repo.
   workflow_dispatch:
     inputs:
       pr:

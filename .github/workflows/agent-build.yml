@@ -1,8 +1,8 @@
 name: Agent - build
 
 on:
-  schedule:
-    - cron: "0 13 * * 3" # Wednesdays 13:00 UTC
+  # Local-first for now: agents run on the founder's Mac (see docs/agents/OPERATING-MODEL.md).
+  # Re-add a schedule here when moving the loop to the cloud.
   workflow_dispatch:
     inputs:
       issue:
