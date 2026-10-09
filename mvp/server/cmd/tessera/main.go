@@ -11,8 +11,9 @@
 //	TESSERA_CORS_ORIGINS  comma-separated browser origins allowed by CORS
 //	                      (default: the dev UI on localhost/127.0.0.1, port UI_PORT or 5173)
 //	TESSERA_NOW           freeze the clock at an ISO-8601 time (tests and demos)
-//	TESSERA_ENV           dev (default) or prod. Until authentication lands, the API
-//	                      serves one default tenant and refuses to start unless dev.
+//	TESSERA_ENV           must be "dev" (run.sh sets it). Until authentication lands,
+//	                      the API serves one default tenant and refuses to start
+//	                      otherwise, so an unset variable fails closed.
 //	TESSERA_DEV_DEFAULT_TENANT  slug of that tenant (default larkspur)
 package main
 
@@ -197,7 +198,7 @@ func serve(ctx context.Context, o options, clock timeutil.Clock, loader *policy.
 	if _, err := loader.Load(); err != nil { // fail fast on broken policy files
 		return err
 	}
-	tenant, err := st.DevDefaultTenant(ctx, envOr("TESSERA_ENV", "dev"), envOr("TESSERA_DEV_DEFAULT_TENANT", seed.LarkspurSlug))
+	tenant, err := st.DevDefaultTenant(ctx, os.Getenv("TESSERA_ENV"), envOr("TESSERA_DEV_DEFAULT_TENANT", seed.LarkspurSlug))
 	if err != nil {
 		return fmt.Errorf("no tenant to serve (authentication arrives in a later release): %w", err)
 	}

@@ -23,6 +23,7 @@ func freePort(t *testing.T) string {
 }
 
 func TestServeSeedsAndShutsDownGracefully(t *testing.T) {
+	t.Setenv("TESSERA_ENV", "dev")
 	t.Setenv("TESSERA_NOW", "2026-10-08T09:30:00")
 	t.Setenv("TESSERA_CORS_ORIGINS", "")
 	db := filepath.Join(t.TempDir(), "t.db")
@@ -68,6 +69,25 @@ func TestServeSeedsAndShutsDownGracefully(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "shutting down") { // read only after run returned
 		t.Errorf("logs: %s", logs.String())
+	}
+}
+
+// TestServeRefusesWithoutDevEnv: until authentication lands the API has an
+// implicit tenant, so it must not start unless TESSERA_ENV=dev is explicit.
+func TestServeRefusesWithoutDevEnv(t *testing.T) {
+	for _, env := range []string{"", "prod", "DEV"} {
+		t.Run(env, func(t *testing.T) {
+			t.Setenv("TESSERA_ENV", env)
+			t.Setenv("TESSERA_NOW", "2026-10-08T09:30:00")
+			db := filepath.Join(t.TempDir(), "t.db")
+			var out, logs bytes.Buffer
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer cancel()
+			err := run(ctx, []string{"serve", "-addr", freePort(t), "-db", db}, &out, &logs)
+			if err == nil || !strings.Contains(err.Error(), "TESSERA_ENV=dev") {
+				t.Errorf("serve with TESSERA_ENV=%q: %v, want a refusal naming TESSERA_ENV=dev", env, err)
+			}
+		})
 	}
 }
 
