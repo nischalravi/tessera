@@ -1,0 +1,17 @@
+{
+ "name": "hris-joiner-no-name",
+ "request": {
+  "method": "POST",
+  "path": "/api/hris/events",
+  "body": {
+   "type": "joiner",
+   "payload": {}
+  }
+ },
+ "response": {
+  "status": 400,
+  "body": {
+   "detail": "payload.name required"
+  }
+ }
+}

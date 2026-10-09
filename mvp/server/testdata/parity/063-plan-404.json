@@ -1,0 +1,13 @@
+{
+ "name": "plan-404",
+ "request": {
+  "method": "GET",
+  "path": "/api/hris/events/9999/plan"
+ },
+ "response": {
+  "status": 404,
+  "body": {
+   "detail": "event not found"
+  }
+ }
+}

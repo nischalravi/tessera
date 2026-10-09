@@ -1,0 +1,118 @@
+{
+ "name": "execute-leaver",
+ "request": {
+  "method": "POST",
+  "path": "/api/hris/events/1/execute"
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "executed": true,
+   "plan": {
+    "type": "leaver",
+    "identity": {
+     "id": 17,
+     "name": "Marcus Bellweather",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Platform Engineer"
+    },
+    "steps": [
+     {
+      "action": "disable_account",
+      "system": "workday",
+      "target": "emp-1017",
+      "account_id": 17,
+      "detail": "Disable workday account emp-1017"
+     },
+     {
+      "action": "disable_account",
+      "system": "okta",
+      "target": "marcus.bellweather@larkspur.example",
+      "account_id": 81,
+      "detail": "Disable okta account marcus.bellweather@larkspur.example"
+     },
+     {
+      "action": "disable_account",
+      "system": "github",
+      "target": "marcus-bellw",
+      "account_id": 158,
+      "detail": "Disable github account marcus-bellw"
+     },
+     {
+      "action": "remove_grant",
+      "system": "okta",
+      "edge_id": 82,
+      "target": "okta:Everyone",
+      "detail": "Remove okta:marcus.bellweather@larkspur.example from okta:Everyone"
+     },
+     {
+      "action": "remove_grant",
+      "system": "okta",
+      "edge_id": 83,
+      "target": "okta:engineering",
+      "detail": "Remove okta:marcus.bellweather@larkspur.example from okta:engineering"
+     },
+     {
+      "action": "remove_grant",
+      "system": "okta",
+      "edge_id": 84,
+      "target": "okta:eng-platform",
+      "detail": "Remove okta:marcus.bellweather@larkspur.example from okta:eng-platform"
+     },
+     {
+      "action": "remove_grant",
+      "system": "github",
+      "edge_id": 300,
+      "target": "github:all-engineers",
+      "detail": "Remove github:marcus-bellw from github:all-engineers"
+     },
+     {
+      "action": "remove_grant",
+      "system": "github",
+      "edge_id": 301,
+      "target": "github:platform",
+      "detail": "Remove github:marcus-bellw from github:platform"
+     },
+     {
+      "action": "reassign_owner",
+      "identity_id": 71,
+      "system": "tessera",
+      "target": "SRE On-call Agent",
+      "new_owner_id": 16,
+      "detail": "Transfer ownership of SRE On-call Agent (ai_agent) to Ingrid Lindqvist"
+     },
+     {
+      "action": "rotate_secret",
+      "secret_id": 17,
+      "system": "aws",
+      "target": "agent-sre-oncall-key",
+      "detail": "Rotate api_token 'agent-sre-oncall-key' on SRE On-call Agent (leaver had custody)"
+     },
+     {
+      "action": "reassign_owner",
+      "identity_id": 79,
+      "system": "tessera",
+      "target": "svc-monitoring",
+      "new_owner_id": 16,
+      "detail": "Transfer ownership of svc-monitoring (service) to Ingrid Lindqvist"
+     },
+     {
+      "action": "rotate_secret",
+      "secret_id": 14,
+      "system": "aws",
+      "target": "AKIASVCMONITORIN",
+      "detail": "Rotate access_key 'AKIASVCMONITORIN' on svc-monitoring (leaver had custody)"
+     },
+     {
+      "action": "revoke_delegation",
+      "delegation_id": 7,
+      "system": "tessera",
+      "target": "SRE On-call Agent",
+      "detail": "Revoke delegation: SRE On-call Agent acting on behalf of Marcus Bellweather (aws:ec2:describe, aws:logs:read)"
+     }
+    ]
+   }
+  }
+ }
+}

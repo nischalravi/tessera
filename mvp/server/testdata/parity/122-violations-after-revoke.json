@@ -1,0 +1,11 @@
+{
+ "name": "violations-after-revoke",
+ "request": {
+  "method": "GET",
+  "path": "/api/violations?policy_id=sod-payments"
+ },
+ "response": {
+  "status": 200,
+  "body": []
+ }
+}

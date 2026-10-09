@@ -1,0 +1,792 @@
+// Package jml automates joiner / mover / leaver changes driven by the HRIS feed.
+package jml
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/nischalravi/tessera/mvp/server/internal/graph"
+	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
+	"github.com/nischalravi/tessera/mvp/server/internal/policy"
+	"github.com/nischalravi/tessera/mvp/server/internal/simulate"
+	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
+)
+
+// Error is a caller error ("unknown identity", "event already executed").
+type Error struct{ Msg string }
+
+func (e *Error) Error() string { return e.Msg }
+
+type sysXID struct{ system, xid string }
+
+var eng = []sysXID{{"okta", "everyone"}, {"okta", "engineering"}, {"github", "team/all-engineers"}}
+
+func with(base []sysXID, more ...sysXID) []sysXID {
+	return append(append([]sysXID{}, base...), more...)
+}
+
+// Birthright is the access every member of a team gets: (system, group external id).
+var Birthright = map[string][]sysXID{
+	"backend":  with(eng, sysXID{"okta", "eng-backend"}, sysXID{"github", "team/backend"}),
+	"frontend": with(eng, sysXID{"okta", "eng-frontend"}, sysXID{"github", "team/frontend"}),
+	"platform": with(eng, sysXID{"okta", "eng-platform"}, sysXID{"github", "team/platform"}),
+	"data": {{"okta", "everyone"}, {"okta", "data-team"}, {"github", "team/all-engineers"}, {"github", "team/data"},
+		{"snowflake", "role/ANALYST"}},
+	"security": {{"okta", "everyone"}, {"okta", "security-team"}, {"github", "team/security"}},
+	"finance":  {{"okta", "everyone"}, {"okta", "finance"}, {"snowflake", "role/FINANCE_ANALYST"}},
+	"sales":    {{"okta", "everyone"}, {"okta", "sales"}, {"snowflake", "role/ANALYST"}},
+	"support":  {{"okta", "everyone"}, {"okta", "support"}},
+	"people":   {{"okta", "everyone"}, {"okta", "people-ops"}, {"workday", "sg-hr-partner"}},
+	"exec":     {{"okta", "everyone"}, {"okta", "executives"}},
+}
+
+// TeamByOktaGroup infers a team from Okta group membership.
+var TeamByOktaGroup = map[string]string{"eng-backend": "backend", "eng-frontend": "frontend", "eng-platform": "platform",
+	"data-team": "data", "security-team": "security", "finance": "finance", "sales": "sales",
+	"support": "support", "people-ops": "people", "executives": "exec"}
+
+// Step is one plan step, an ordered JSON object.
+type Step = ojson.Object
+
+func stepGet(s Step, k string) any { v, _ := s.Get(k); return v }
+
+func stepStr(s Step, k string) string { v, _ := stepGet(s, k).(string); return v }
+
+func stepInt(s Step, k string) (int64, bool) {
+	switch v := stepGet(s, k).(type) {
+	case int64:
+		return v, true
+	case *int64:
+		if v != nil {
+			return *v, true
+		}
+	}
+	return 0, false
+}
+
+func getOrNil[T any](v *T, err error) (*T, error) {
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	return v, err
+}
+
+// InferTeam derives a team from the identity's Okta group memberships.
+func InferTeam(c *store.Conn, identityID int64) (*string, error) {
+	accts, err := c.IdentityAccounts(identityID)
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range accts {
+		if a.System != "okta" {
+			continue
+		}
+		edges, err := c.Edges("WHERE src = ?", graph.Key("account", a.ID))
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range edges {
+			if !strings.HasPrefix(e.Dst, "group:") {
+				continue
+			}
+			_, gid, err := graph.ParseKey(e.Dst)
+			if err != nil {
+				continue
+			}
+			g, err := getOrNil(c.Group(gid))
+			if err != nil {
+				return nil, err
+			}
+			if g != nil {
+				if t, ok := TeamByOktaGroup[g.ExternalID]; ok {
+					return &t, nil
+				}
+			}
+		}
+	}
+	return nil, nil
+}
+
+// Label renders a node key from the database.
+func Label(c *store.Conn, key string) (string, error) {
+	kind, raw, _ := strings.Cut(key, ":")
+	id, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return key, nil
+	}
+	switch kind {
+	case "group":
+		g, err := getOrNil(c.Group(id))
+		if err != nil || g == nil {
+			return key, err
+		}
+		return g.System + ":" + g.Name, nil
+	case "account":
+		a, err := getOrNil(c.Account(id))
+		if err != nil || a == nil {
+			return key, err
+		}
+		return a.System + ":" + a.Username, nil
+	case "perm":
+		p, err := getOrNil(c.Permission(id))
+		if err != nil || p == nil {
+			return key, err
+		}
+		name, err := c.ResourceName(p.ResourceID)
+		if err != nil {
+			return key, err
+		}
+		return p.Action + " on " + name, nil
+	}
+	return key, nil
+}
+
+// ------------------------------------------------------------------ leaver
+
+// Plan is a JML plan (an ordered JSON object).
+type Plan = ojson.Object
+
+// LeaverPlan lists everything to do when an identity leaves. withImpact adds a
+// simulation of disabling the identity's active accounts.
+func LeaverPlan(c *store.Conn, now time.Time, identityID int64, withImpact bool, policies []*policy.Policy) (Plan, error) {
+	ident, err := getOrNil(c.Identity(identityID))
+	if err != nil {
+		return nil, err
+	}
+	if ident == nil {
+		return nil, &Error{"unknown identity"}
+	}
+	var manager *store.Identity
+	if ident.ManagerID != nil {
+		if manager, err = getOrNil(c.Identity(*ident.ManagerID)); err != nil {
+			return nil, err
+		}
+	}
+	accounts, err := c.IdentityAccounts(identityID)
+	if err != nil {
+		return nil, err
+	}
+	steps := []Step{}
+	var active []*store.Account
+	for _, a := range accounts {
+		if a.Status == "active" {
+			active = append(active, a)
+			steps = append(steps, Step{{Key: "action", Value: "disable_account"}, {Key: "system", Value: a.System},
+				{Key: "target", Value: a.Username}, {Key: "account_id", Value: a.ID},
+				{Key: "detail", Value: fmt.Sprintf("Disable %s account %s", a.System, a.Username)}})
+		}
+	}
+	for _, a := range accounts {
+		edges, err := c.Edges("WHERE src = ?", graph.Key("account", a.ID))
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range edges {
+			lbl, err := Label(c, e.Dst)
+			if err != nil {
+				return nil, err
+			}
+			suffix := ""
+			if e.Source == "jit" {
+				suffix = " (JIT)"
+			}
+			steps = append(steps, Step{{Key: "action", Value: "remove_grant"}, {Key: "system", Value: a.System},
+				{Key: "edge_id", Value: e.ID}, {Key: "target", Value: lbl},
+				{Key: "detail", Value: fmt.Sprintf("Remove %s:%s from %s%s", a.System, a.Username, lbl, suffix)}})
+		}
+	}
+	reqs, err := c.Requests("WHERE identity_id = ? AND status IN ('pending', 'approved') ORDER BY id", identityID)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range reqs {
+		lbl, err := Label(c, graph.Key("group", r.GroupID))
+		if err != nil {
+			return nil, err
+		}
+		steps = append(steps, Step{{Key: "action", Value: "cancel_jit"}, {Key: "request_id", Value: r.ID},
+			{Key: "system", Value: "tessera"}, {Key: "target", Value: lbl},
+			{Key: "detail", Value: fmt.Sprintf("Cancel %s JIT request #%d", r.Status, r.ID)}})
+	}
+	owned, err := c.Identities("WHERE owner_id = ? AND status = 'active'", identityID)
+	if err != nil {
+		return nil, err
+	}
+	var newOwner any
+	newOwnerName := "security team"
+	if manager != nil {
+		newOwner, newOwnerName = manager.ID, manager.Name
+	}
+	for _, n := range owned {
+		steps = append(steps, Step{{Key: "action", Value: "reassign_owner"}, {Key: "identity_id", Value: n.ID},
+			{Key: "system", Value: "tessera"}, {Key: "target", Value: n.Name}, {Key: "new_owner_id", Value: newOwner},
+			{Key: "detail", Value: fmt.Sprintf("Transfer ownership of %s (%s) to %s", n.Name, n.Type, newOwnerName)}})
+		nAccts, err := c.IdentityAccounts(n.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, a := range nAccts {
+			secs, err := c.Secrets("WHERE s.account_id = ? AND s.status = 'active'", a.ID)
+			if err != nil {
+				return nil, err
+			}
+			for _, s := range secs {
+				steps = append(steps, Step{{Key: "action", Value: "rotate_secret"}, {Key: "secret_id", Value: s.ID},
+					{Key: "system", Value: s.System}, {Key: "target", Value: s.Name},
+					{Key: "detail", Value: fmt.Sprintf("Rotate %s '%s' on %s (leaver had custody)", s.Kind, s.Name, n.Name)}})
+			}
+		}
+	}
+	dels, err := c.Delegations("WHERE principal_id = ?", identityID)
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range dels {
+		agent, err := getOrNil(c.Identity(d.AgentID))
+		if err != nil {
+			return nil, err
+		}
+		target := strconv.FormatInt(d.AgentID, 10)
+		if agent != nil {
+			target = agent.Name
+		}
+		steps = append(steps, Step{{Key: "action", Value: "revoke_delegation"}, {Key: "delegation_id", Value: d.ID},
+			{Key: "system", Value: "tessera"}, {Key: "target", Value: target},
+			{Key: "detail", Value: fmt.Sprintf("Revoke delegation: %s acting on behalf of %s (%s)", target, ident.Name,
+				strings.Join(d.Scopes, ", "))}})
+	}
+	reports, err := c.Identities("WHERE manager_id = ? AND status = 'active'", identityID)
+	if err != nil {
+		return nil, err
+	}
+	if len(reports) > 0 {
+		ids := make([]int64, len(reports))
+		for i, r := range reports {
+			ids[i] = r.ID
+		}
+		mgrName := "TBD"
+		if manager != nil {
+			mgrName = manager.Name
+		}
+		steps = append(steps, Step{{Key: "action", Value: "reassign_reports"}, {Key: "system", Value: "workday"},
+			{Key: "target", Value: fmt.Sprintf("%d direct reports", len(reports))}, {Key: "report_ids", Value: ids},
+			{Key: "new_manager_id", Value: newOwner},
+			{Key: "detail", Value: fmt.Sprintf("Move %d direct reports to %s", len(reports), mgrName)}})
+	}
+	plan := Plan{{Key: "type", Value: "leaver"}, {Key: "identity", Value: ojson.Object{{Key: "id", Value: ident.ID},
+		{Key: "name", Value: ident.Name}, {Key: "status", Value: ident.Status}, {Key: "department", Value: ident.Department},
+		{Key: "title", Value: ident.Title}}}, {Key: "steps", Value: steps}}
+	if withImpact {
+		ids := make([]int64, len(active))
+		sysSet := map[string]bool{}
+		for i, a := range active {
+			ids[i] = a.ID
+			sysSet[a.System] = true
+		}
+		sim, err := simulate.Run(c, simulate.Request{DisableAccountIDs: ids}, simulate.Inputs{Now: now, Policies: policies})
+		if err != nil {
+			return nil, err
+		}
+		removed, privRemoved := 0, 0
+		for _, x := range sim.Identities {
+			if x.IdentityID == identityID {
+				removed = len(x.Removed)
+				for _, p := range x.Removed {
+					if p.Privileged {
+						privRemoved++
+					}
+				}
+				break
+			}
+		}
+		systems := make([]string, 0, len(sysSet))
+		for s := range sysSet {
+			systems = append(systems, s)
+		}
+		sort.Strings(systems)
+		plan = append(plan, ojson.KV{Key: "impact", Value: ojson.Object{{Key: "permissions_removed", Value: removed},
+			{Key: "privileged_removed", Value: privRemoved}, {Key: "systems", Value: systems},
+			{Key: "owned_nhis", Value: len(owned)}, {Key: "violations_resolved", Value: sim.Summary.ViolationsResolved}}})
+	}
+	return plan, nil
+}
+
+// ------------------------------------------------------------------- mover
+
+type birthGroup struct {
+	key string
+	g   *store.Group
+}
+
+func birthrightGroups(c *store.Conn, team *string) ([]birthGroup, error) {
+	var out []birthGroup
+	seen := map[string]int{}
+	if team == nil {
+		return out, nil
+	}
+	for _, sx := range Birthright[*team] {
+		g, err := getOrNil(c.GroupByXID(sx.system, sx.xid))
+		if err != nil {
+			return nil, err
+		}
+		if g == nil {
+			continue
+		}
+		k := graph.Key("group", g.ID)
+		if i, ok := seen[k]; ok {
+			out[i].g = g
+			continue
+		}
+		seen[k] = len(out)
+		out = append(out, birthGroup{k, g})
+	}
+	return out, nil
+}
+
+func hasKey(gs []birthGroup, k string) bool {
+	for _, g := range gs {
+		if g.key == k {
+			return true
+		}
+	}
+	return false
+}
+
+func pyStr(v any) string {
+	switch x := v.(type) {
+	case nil:
+		return "None"
+	case string:
+		return x
+	case *string:
+		if x == nil {
+			return "None"
+		}
+		return *x
+	case bool:
+		if x {
+			return "True"
+		}
+		return "False"
+	case json.Number:
+		return x.String()
+	}
+	return fmt.Sprint(v)
+}
+
+// MoverPlan computes access changes for a team move.
+func MoverPlan(c *store.Conn, identityID int64, toTeam string, fromTeam *string, newTitle, toDepartment any) (Plan, error) {
+	ident, err := getOrNil(c.Identity(identityID))
+	if err != nil {
+		return nil, err
+	}
+	if ident == nil {
+		return nil, fmt.Errorf("jml: mover for unknown identity %d", identityID)
+	}
+	if fromTeam == nil {
+		if fromTeam, err = InferTeam(c, identityID); err != nil {
+			return nil, err
+		}
+	}
+	old, err := birthrightGroups(c, fromTeam)
+	if err != nil {
+		return nil, err
+	}
+	nw, err := birthrightGroups(c, &toTeam)
+	if err != nil {
+		return nil, err
+	}
+	accounts, err := c.IdentityAccounts(identityID)
+	if err != nil {
+		return nil, err
+	}
+	accts := map[string]*store.Account{}
+	for _, a := range accounts {
+		if a.Status == "active" {
+			accts[a.System] = a
+		}
+	}
+	target := ident.Name
+	if ident.Email != nil && *ident.Email != "" {
+		target = *ident.Email
+	}
+	steps := []Step{}
+	for _, bg := range nw {
+		if hasKey(old, bg.key) {
+			continue
+		}
+		g := bg.g
+		a := accts[g.System]
+		if a == nil {
+			steps = append(steps, Step{{Key: "action", Value: "create_account"}, {Key: "system", Value: g.System},
+				{Key: "target", Value: target}, {Key: "detail", Value: fmt.Sprintf("Create %s account for %s", g.System, ident.Name)}})
+		} else if n, err := c.Count("SELECT count(*) FROM grant_edges WHERE src = ? AND dst = ?", graph.Key("account", a.ID), bg.key); err != nil {
+			return nil, err
+		} else if n > 0 {
+			continue
+		}
+		steps = append(steps, Step{{Key: "action", Value: "add_grant"}, {Key: "system", Value: g.System},
+			{Key: "group_id", Value: g.ID}, {Key: "target", Value: g.System + ":" + g.Name},
+			{Key: "detail", Value: fmt.Sprintf("Add to %s:%s (birthright for %s)", g.System, g.Name, toTeam)}})
+	}
+	for _, a := range accounts {
+		edges, err := c.Edges("WHERE src = ?", graph.Key("account", a.ID))
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range edges {
+			inOld, inNew := hasKey(old, e.Dst), hasKey(nw, e.Dst)
+			if inNew {
+				continue
+			}
+			lbl, err := Label(c, e.Dst)
+			if err != nil {
+				return nil, err
+			}
+			if inOld {
+				steps = append(steps, Step{{Key: "action", Value: "remove_grant"}, {Key: "system", Value: a.System},
+					{Key: "edge_id", Value: e.ID}, {Key: "target", Value: lbl},
+					{Key: "detail", Value: fmt.Sprintf("Remove %s (birthright of previous team %s)", lbl, pyStr(fromTeam))}})
+			} else {
+				steps = append(steps, Step{{Key: "action", Value: "review_grant"}, {Key: "system", Value: a.System},
+					{Key: "edge_id", Value: e.ID}, {Key: "target", Value: lbl},
+					{Key: "detail", Value: fmt.Sprintf("Flag %s for manager review within 30 days (not birthright for %s)", lbl, toTeam)}})
+			}
+		}
+	}
+	var from any
+	if fromTeam != nil {
+		from = *fromTeam
+	}
+	return Plan{{Key: "type", Value: "mover"}, {Key: "identity", Value: ojson.Object{{Key: "id", Value: ident.ID},
+		{Key: "name", Value: ident.Name}, {Key: "department", Value: ident.Department}, {Key: "title", Value: ident.Title}}},
+		{Key: "from_team", Value: from}, {Key: "to_team", Value: toTeam}, {Key: "new_title", Value: newTitle},
+		{Key: "to_department", Value: toDepartment}, {Key: "steps", Value: steps}}, nil
+}
+
+// ------------------------------------------------------------------ joiner
+
+// JoinerPlan lists the accounts and birthright access for a new hire.
+func JoinerPlan(c *store.Conn, payload ojson.Object) (Plan, error) {
+	teamV, _ := payload.Get("team")
+	var team *string
+	if s, ok := teamV.(string); ok {
+		team = &s
+	}
+	name, _ := payload.Get("name")
+	title, _ := payload.Get("title")
+	dept, _ := payload.Get("department")
+	email, _ := payload.Get("email")
+	steps := []Step{{{Key: "action", Value: "create_identity"}, {Key: "system", Value: "tessera"}, {Key: "target", Value: name},
+		{Key: "detail", Value: fmt.Sprintf("Create identity %s (%s, %s)", pyStr(name), pyStr(title), pyStr(dept))}}}
+	var groups []birthGroup
+	if team != nil {
+		var err error
+		if groups, err = birthrightGroups(c, team); err != nil {
+			return nil, err
+		}
+	}
+	sysSet := map[string]bool{}
+	for _, g := range groups {
+		sysSet[g.g.System] = true
+	}
+	systems := []string{"workday"}
+	for _, s := range sortedKeys(sysSet) {
+		systems = append(systems, s)
+	}
+	for _, s := range systems {
+		steps = append(steps, Step{{Key: "action", Value: "create_account"}, {Key: "system", Value: s},
+			{Key: "target", Value: email}, {Key: "detail", Value: fmt.Sprintf("Create %s account", s)}})
+	}
+	for _, bg := range groups {
+		g := bg.g
+		steps = append(steps, Step{{Key: "action", Value: "add_grant"}, {Key: "system", Value: g.System},
+			{Key: "group_id", Value: g.ID}, {Key: "target", Value: g.System + ":" + g.Name},
+			{Key: "detail", Value: fmt.Sprintf("Add to %s:%s (birthright for %s)", g.System, g.Name, pyStr(teamV))}})
+	}
+	return Plan{{Key: "type", Value: "joiner"}, {Key: "identity", Value: ojson.Object{{Key: "name", Value: name},
+		{Key: "department", Value: dept}, {Key: "title", Value: title}}}, {Key: "team", Value: teamV},
+		{Key: "steps", Value: steps}}, nil
+}
+
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// --------------------------------------------------------------- execute
+
+func optStr(payload ojson.Object, k string) *string {
+	v, _ := payload.Get(k)
+	if s, ok := v.(string); ok {
+		return &s
+	}
+	return nil
+}
+
+func getAny(payload ojson.Object, k string) any { v, _ := payload.Get(k); return v }
+
+// PlanForEvent builds the plan for an HRIS event.
+func PlanForEvent(c *store.Conn, now time.Time, ev *store.HrisEvent, withImpact bool, policies []*policy.Policy) (Plan, error) {
+	switch ev.Type {
+	case "leaver":
+		if ev.IdentityID == nil {
+			return nil, &Error{"unknown identity"}
+		}
+		return LeaverPlan(c, now, *ev.IdentityID, withImpact, policies)
+	case "mover":
+		if ev.IdentityID == nil {
+			return nil, fmt.Errorf("jml: mover event %d has no identity", ev.ID)
+		}
+		toTeam := pyStr(getAny(ev.Payload, "to_team"))
+		return MoverPlan(c, *ev.IdentityID, toTeam, optStr(ev.Payload, "from_team"), getAny(ev.Payload, "new_title"),
+			getAny(ev.Payload, "to_department"))
+	}
+	return JoinerPlan(c, ev.Payload)
+}
+
+func ensureAccount(c *store.Conn, now time.Time, ident *store.Identity, system string) (*store.Account, error) {
+	accts, err := c.IdentityAccounts(ident.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range accts {
+		if a.System == system && a.Status == "active" {
+			return a, nil
+		}
+	}
+	var uname string
+	switch system {
+	case "okta":
+		if ident.Email == nil {
+			return nil, fmt.Errorf("jml: %s has no email for an okta account", ident.Name)
+		}
+		uname = *ident.Email
+	case "workday":
+		uname = ident.ExternalID
+	default:
+		base := ident.Name
+		if ident.Email != nil && *ident.Email != "" {
+			base = *ident.Email
+		}
+		uname = strings.ReplaceAll(strings.SplitN(base, "@", 2)[0], ".", "-")
+	}
+	id, err := c.Insert(`INSERT INTO accounts (system, external_id, identity_id, username, kind, status, created_at)
+		VALUES (?, ?, ?, ?, 'user', 'active', ?)`, system, "tessera-"+system+"-"+ident.ExternalID, ident.ID, uname, store.T(now))
+	if err != nil {
+		return nil, err
+	}
+	return c.Account(id)
+}
+
+func addGrant(c *store.Conn, now time.Time, ident *store.Identity, st Step) error {
+	gid, _ := stepInt(st, "group_id")
+	g, err := c.Group(gid)
+	if err != nil {
+		return err
+	}
+	a, err := ensureAccount(c, now, ident, g.System)
+	if err != nil {
+		return err
+	}
+	src, dst := graph.Key("account", a.ID), graph.Key("group", g.ID)
+	n, err := c.Count("SELECT count(*) FROM grant_edges WHERE src = ? AND dst = ?", src, dst)
+	if err != nil || n > 0 {
+		return err
+	}
+	_, err = c.Exec(`INSERT INTO grant_edges (src, dst, relation, source, created_at) VALUES (?, ?, 'member_of', 'manual', ?)`,
+		src, dst, store.T(now))
+	return err
+}
+
+func applyStep(c *store.Conn, now time.Time, ident *store.Identity, st Step) error {
+	var err error
+	switch stepStr(st, "action") {
+	case "disable_account":
+		id, _ := stepInt(st, "account_id")
+		_, err = c.Exec("UPDATE accounts SET status = 'disabled' WHERE id = ?", id)
+	case "remove_grant":
+		id, _ := stepInt(st, "edge_id")
+		err = c.DeleteEdge(id)
+	case "add_grant":
+		err = addGrant(c, now, ident, st)
+	case "cancel_jit":
+		id, _ := stepInt(st, "request_id")
+		_, err = c.Exec(`UPDATE access_requests SET status = CASE WHEN status = 'approved' THEN 'revoked' ELSE 'denied' END,
+			decided_at = ? WHERE id = ?`, store.T(now), id)
+	case "reassign_owner":
+		id, _ := stepInt(st, "identity_id")
+		_, err = c.Exec("UPDATE identities SET owner_id = ? WHERE id = ?", stepGet(st, "new_owner_id"), id)
+	case "rotate_secret":
+		id, _ := stepInt(st, "secret_id")
+		_, err = c.Exec("UPDATE secrets SET last_rotated_at = ? WHERE id = ?", store.T(now), id)
+	case "revoke_delegation":
+		id, _ := stepInt(st, "delegation_id")
+		_, err = c.Exec("DELETE FROM agent_delegations WHERE id = ?", id)
+	case "reassign_reports":
+		ids, _ := stepGet(st, "report_ids").([]int64)
+		for _, rid := range ids {
+			if _, err = c.Exec("UPDATE identities SET manager_id = ? WHERE id = ?", stepGet(st, "new_manager_id"), rid); err != nil {
+				return err
+			}
+		}
+	}
+	// create_account / review_grant / create_identity are informational for existing identities
+	return err
+}
+
+// ExecuteEvent applies an HRIS event's plan and marks it executed.
+func ExecuteEvent(c *store.Conn, now time.Time, eventID int64, actor string, policies []*policy.Policy) (Plan, error) {
+	ev, err := getOrNil(c.HrisEvent(eventID))
+	if err != nil {
+		return nil, err
+	}
+	if ev == nil {
+		return nil, &Error{"unknown event"}
+	}
+	if ev.Status == "executed" {
+		return nil, &Error{"event already executed"}
+	}
+	plan, err := PlanForEvent(c, now, ev, false, policies)
+	if err != nil {
+		return nil, err
+	}
+	steps, _ := getAny(plan, "steps").([]Step)
+	var identityName any
+	if ident, ok := getAny(plan, "identity").(ojson.Object); ok {
+		identityName = getAny(ident, "name")
+	}
+	if ev.Type == "joiner" {
+		p := ev.Payload
+		var mgr any
+		if xid, ok := getAny(p, "manager_external_id").(string); ok {
+			if ms, err := c.Identities("WHERE external_id = ?", xid); err != nil {
+				return nil, err
+			} else if len(ms) > 0 {
+				mgr = ms[0].ID
+			}
+		}
+		id, err := c.Insert(`INSERT INTO identities (external_id, name, email, type, department, title, status, manager_id,
+			source, hired_at, created_at) VALUES (?, ?, ?, 'human', ?, ?, 'active', ?, 'workday', ?, ?)`,
+			fmt.Sprintf("emp-new-%d", ev.ID), pyStr(getAny(p, "name")), store.SP(optStr(p, "email")),
+			store.SP(optStr(p, "department")), store.SP(optStr(p, "title")), mgr, store.T(ev.EffectiveAt), store.T(now))
+		if err != nil {
+			return nil, err
+		}
+		if _, err := c.Exec("UPDATE hris_events SET identity_id = ? WHERE id = ?", id, ev.ID); err != nil {
+			return nil, err
+		}
+		ident, err := c.Identity(id)
+		if err != nil {
+			return nil, err
+		}
+		sysSet := map[string]bool{}
+		for _, st := range steps {
+			if stepStr(st, "action") == "add_grant" {
+				sysSet[stepStr(st, "system")] = true
+			}
+		}
+		for _, s := range append([]string{"workday"}, sortedKeys(sysSet)...) {
+			if _, err := ensureAccount(c, now, ident, s); err != nil {
+				return nil, err
+			}
+		}
+		for _, st := range steps {
+			if stepStr(st, "action") == "add_grant" {
+				if err := addGrant(c, now, ident, st); err != nil {
+					return nil, err
+				}
+			}
+		}
+	} else {
+		ident, err := c.Identity(*ev.IdentityID)
+		if err != nil {
+			return nil, err
+		}
+		for _, st := range steps {
+			if err := applyStep(c, now, ident, st); err != nil {
+				return nil, err
+			}
+		}
+		switch ev.Type {
+		case "leaver":
+			_, err = c.Exec("UPDATE identities SET status = 'terminated', terminated_at = ? WHERE id = ?", store.T(now), ident.ID)
+		case "mover":
+			dept, title := any(store.SP(ident.Department)), any(store.SP(ident.Title))
+			if v, ok := ev.Payload.Get("to_department"); ok {
+				dept = dbValue(v)
+			}
+			if v, ok := ev.Payload.Get("new_title"); ok {
+				title = dbValue(v)
+			}
+			_, err = c.Exec("UPDATE identities SET department = ?, title = ? WHERE id = ?", dept, title, ident.ID)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	if _, err := c.Exec("UPDATE hris_events SET status = 'executed', executed_at = ? WHERE id = ?", store.T(now), ev.ID); err != nil {
+		return nil, err
+	}
+	err = c.Audit(now, actor, "jml."+ev.Type, ojson.Object{{Key: "event_id", Value: ev.ID},
+		{Key: "identity", Value: identityName}, {Key: "steps", Value: len(steps)}})
+	return plan, err
+}
+
+func dbValue(v any) any {
+	switch x := v.(type) {
+	case nil:
+		return nil
+	case string:
+		return x
+	}
+	return pyStr(v)
+}
+
+// IdentityRef is a brief identity in an event view.
+type IdentityRef struct {
+	ID         int64   `json:"id"`
+	Name       string  `json:"name"`
+	Department *string `json:"department"`
+}
+
+// EventView is the API rendering of an HRIS event.
+type EventView struct {
+	ID          int64        `json:"id"`
+	ExternalID  string       `json:"external_id"`
+	Type        string       `json:"type"`
+	Status      string       `json:"status"`
+	EffectiveAt string       `json:"effective_at"`
+	ExecutedAt  *string      `json:"executed_at"`
+	Identity    *IdentityRef `json:"identity"`
+	Payload     ojson.Object `json:"payload"`
+}
+
+// ViewEvent renders an event.
+func ViewEvent(c *store.Conn, ev *store.HrisEvent) (EventView, error) {
+	v := EventView{ID: ev.ID, ExternalID: ev.ExternalID, Type: ev.Type, Status: ev.Status,
+		EffectiveAt: timeutil.ISO(ev.EffectiveAt), ExecutedAt: timeutil.ISOPtr(ev.ExecutedAt), Payload: ev.Payload}
+	if v.Payload == nil {
+		v.Payload = ojson.Object{}
+	}
+	if ev.IdentityID != nil {
+		i, err := getOrNil(c.Identity(*ev.IdentityID))
+		if err != nil {
+			return v, err
+		}
+		if i != nil {
+			v.Identity = &IdentityRef{i.ID, i.Name, i.Department}
+		}
+	}
+	return v, nil
+}

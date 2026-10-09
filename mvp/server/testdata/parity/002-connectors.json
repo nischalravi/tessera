@@ -1,0 +1,57 @@
+{
+ "name": "connectors",
+ "request": {
+  "method": "GET",
+  "path": "/api/connectors"
+ },
+ "response": {
+  "status": 200,
+  "body": [
+   {
+    "system": "workday",
+    "name": "Workday (HRIS) - demo",
+    "type": "DemoWorkdayConnector",
+    "accounts": 64,
+    "groups": 5,
+    "resources": 3,
+    "permissions": 6
+   },
+   {
+    "system": "okta",
+    "name": "Okta - demo",
+    "type": "DemoOktaConnector",
+    "accounts": 69,
+    "groups": 15,
+    "resources": 1,
+    "permissions": 2
+   },
+   {
+    "system": "aws",
+    "name": "AWS - demo",
+    "type": "DemoAWSConnector",
+    "accounts": 10,
+    "groups": 9,
+    "resources": 10,
+    "permissions": 20
+   },
+   {
+    "system": "github",
+    "name": "GitHub - demo",
+    "type": "DemoGitHubConnector",
+    "accounts": 35,
+    "groups": 7,
+    "resources": 8,
+    "permissions": 17
+   },
+   {
+    "system": "snowflake",
+    "name": "Snowflake - demo",
+    "type": "DemoSnowflakeConnector",
+    "accounts": 31,
+    "groups": 8,
+    "resources": 5,
+    "permissions": 12
+   }
+  ]
+ }
+}

@@ -1,0 +1,1237 @@
+{
+ "name": "simulate-add-relation",
+ "request": {
+  "method": "POST",
+  "path": "/api/simulate",
+  "body": {
+   "add_edges": [
+    {
+     "src": "group:7",
+     "dst": "group:23",
+     "relation": "maps_to"
+    }
+   ]
+  }
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "changes": [
+    {
+     "op": "add",
+     "edge": [
+      "group:7",
+      "group:23"
+     ],
+     "label": "okta:engineering → aws:ProdAdmin"
+    }
+   ],
+   "summary": {
+    "identities_affected": 12,
+    "permissions_removed": 0,
+    "permissions_added": 71,
+    "removed_recently_used": 0,
+    "removed_privileged": 0,
+    "violations_before": 74,
+    "violations_after": 91,
+    "violations_resolved": 0,
+    "violations_introduced": 17
+   },
+   "identities": [
+    {
+     "identity_id": 4,
+     "name": "Kofi Mensah",
+     "type": "human",
+     "removed": [],
+     "added": [
+      {
+       "perm_key": "perm:11",
+       "action": "s3:DeleteObject",
+       "resource": "s3://customer-pii",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "pii"
+       ],
+       "path": "Kofi Mensah → okta:kofi.mensah@larkspur.example → okta:engineering → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+      },
+      {
+       "perm_key": "perm:18",
+       "action": "s3:GetObject",
+       "resource": "s3://terraform-state",
+       "system": "aws",
+       "privileged": false,
+       "tags": [
+        "infra"
+       ],
+       "path": "Kofi Mensah → okta:kofi.mensah@larkspur.example → okta:engineering → aws:ProdAdmin → s3:GetObject on s3://terraform-state"
+      },
+      {
+       "perm_key": "perm:19",
+       "action": "s3:PutObject",
+       "resource": "s3://terraform-state",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "infra"
+       ],
+       "path": "Kofi Mensah → okta:kofi.mensah@larkspur.example → okta:engineering → aws:ProdAdmin → s3:PutObject on s3://terraform-state"
+      },
+      {
+       "perm_key": "perm:21",
+       "action": "rds:ModifyDBInstance",
+       "resource": "rds/orders-db",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "pii"
+       ],
+       "path": "Kofi Mensah → okta:kofi.mensah@larkspur.example → okta:engineering → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db"
+      },
+      {
+       "perm_key": "perm:23",
+       "action": "ec2:TerminateInstances",
+       "resource": "ec2/prod-fleet",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "path": "Kofi Mensah → okta:kofi.mensah@larkspur.example → okta:engineering → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet"
+      }
+     ]
+    },
+    {
+     "identity_id": 5,
+     "name": "Alice Okafor",
+     "type": "human",
+     "removed": [],
+     "added": [
+      {
+       "perm_key": "perm:11",
+       "action": "s3:DeleteObject",
+       "resource": "s3://customer-pii",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "pii"
+       ],
+       "path": "Alice Okafor → okta:alice.okafor@larkspur.example → okta:engineering → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+      },
+      {
+       "perm_key": "perm:18",
+       "action": "s3:GetObject",
+       "resource": "s3://terraform-state",
+       "system": "aws",
+       "privileged": false,
+       "tags": [
+        "infra"
+       ],
+       "path": "Alice Okafor → okta:alice.okafor@larkspur.example → okta:engineering → aws:ProdAdmin → s3:GetObject on s3://terraform-state"
+      },
+      {
+       "perm_key": "perm:19",
+       "action": "s3:PutObject",
+       "resource": "s3://terraform-state",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "infra"
+       ],
+       "path": "Alice Okafor → okta:alice.okafor@larkspur.example → okta:engineering → aws:ProdAdmin → s3:PutObject on s3://terraform-state"
+      },
+      {
+       "perm_key": "perm:21",
+       "action": "rds:ModifyDBInstance",
+       "resource": "rds/orders-db",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "pii"
+       ],
+       "path": "Alice Okafor → okta:alice.okafor@larkspur.example → okta:engineering → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db"
+      },
+      {
+       "perm_key": "perm:23",
+       "action": "ec2:TerminateInstances",
+       "resource": "ec2/prod-fleet",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "path": "Alice Okafor → okta:alice.okafor@larkspur.example → okta:engineering → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet"
+      },
+      {
+       "perm_key": "perm:24",
+       "action": "iam:*",
+       "resource": "aws-account/larkspur-prod",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "path": "Alice Okafor → okta:alice.okafor@larkspur.example → okta:engineering → aws:ProdAdmin → iam:* on aws-account/larkspur-prod"
+      }
+     ]
+    },
+    {
+     "identity_id": 6,
+     "name": "Ilya Kowalczyk",
+     "type": "human",
+     "removed": [],
+     "added": [
+      {
+       "perm_key": "perm:11",
+       "action": "s3:DeleteObject",
+       "resource": "s3://customer-pii",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "pii"
+       ],
+       "path": "Ilya Kowalczyk → okta:ilya.kowalczyk@larkspur.example → okta:engineering → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+      },
+      {
+       "perm_key": "perm:18",
+       "action": "s3:GetObject",
+       "resource": "s3://terraform-state",
+       "system": "aws",
+       "privileged": false,
+       "tags": [
+        "infra"
+       ],
+       "path": "Ilya Kowalczyk → okta:ilya.kowalczyk@larkspur.example → okta:engineering → aws:ProdAdmin → s3:GetObject on s3://terraform-state"
+      },
+      {
+       "perm_key": "perm:19",
+       "action": "s3:PutObject",
+       "resource": "s3://terraform-state",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "infra"
+       ],
+       "path": "Ilya Kowalczyk → okta:ilya.kowalczyk@larkspur.example → okta:engineering → aws:ProdAdmin → s3:PutObject on s3://terraform-state"
+      },
+      {
+       "perm_key": "perm:21",
+       "action": "rds:ModifyDBInstance",
+       "resource": "rds/orders-db",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "pii"
+       ],
+       "path": "Ilya Kowalczyk → okta:ilya.kowalczyk@larkspur.example → okta:engineering → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db"
+      },
+      {
+       "perm_key": "perm:23",
+       "action": "ec2:TerminateInstances",
+       "resource": "ec2/prod-fleet",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "path": "Ilya Kowalczyk → okta:ilya.kowalczyk@larkspur.example → okta:engineering → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet"
+      },
+      {
+       "perm_key": "perm:24",
+       "action": "iam:*",
+       "resource": "aws-account/larkspur-prod",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "path": "Ilya Kowalczyk → okta:ilya.kowalczyk@larkspur.example → okta:engineering → aws:ProdAdmin → iam:* on aws-account/larkspur-prod"
+      }
+     ]
+    },
+    {
+     "identity_id": 7,
+     "name": "Desmond Abernathy",
+     "type": "human",
+     "removed": [],
+     "added": [
+      {
+       "perm_key": "perm:11",
+       "action": "s3:DeleteObject",
+       "resource": "s3://customer-pii",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "pii"
+       ],
+       "path": "Desmond Abernathy → okta:desmond.abernathy@larkspur.example → okta:engineering → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+      },
+      {
+       "perm_key": "perm:18",
+       "action": "s3:GetObject",
+       "resource": "s3://terraform-state",
+       "system": "aws",
+       "privileged": false,
+       "tags": [
+        "infra"
+       ],
+       "path": "Desmond Abernathy → okta:desmond.abernathy@larkspur.example → okta:engineering → aws:ProdAdmin → s3:GetObject on s3://terraform-state"
+      },
+      {
+       "perm_key": "perm:19",
+       "action": "s3:PutObject",
+       "resource": "s3://terraform-state",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "infra"
+       ],
+       "path": "Desmond Abernathy → okta:desmond.abernathy@larkspur.example → okta:engineering → aws:ProdAdmin → s3:PutObject on s3://terraform-state"
+      },
+      {
+       "perm_key": "perm:21",
+       "action": "rds:ModifyDBInstance",
+       "resource": "rds/orders-db",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "pii"
+       ],
+       "path": "Desmond Abernathy → okta:desmond.abernathy@larkspur.example → okta:engineering → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db"
+      },
+      {
+       "perm_key": "perm:23",
+       "action": "ec2:TerminateInstances",
+       "resource": "ec2/prod-fleet",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "path": "Desmond Abernathy → okta:desmond.abernathy@larkspur.example → okta:engineering → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet"
+      },
+      {
+       "perm_key": "perm:24",
+       "action": "iam:*",
+       "resource": "aws-account/larkspur-prod",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "path": "Desmond Abernathy → okta:desmond.abernathy@larkspur.example → okta:engineering → aws:ProdAdmin → iam:* on aws-account/larkspur-prod"
+      }
+     ]
+    },
+    {
+     "identity_id": 8,
+     "name": "Pascal Ostrowski",
+     "type": "human",
+     "removed": [],
+     "added": [
+      {
+       "perm_key": "perm:11",
+       "action": "s3:DeleteObject",
+       "resource": "s3://customer-pii",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "pii"
+       ],
+       "path": "Pascal Ostrowski → okta:pascal.ostrowski@larkspur.example → okta:engineering → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+      },
+      {
+       "perm_key": "perm:18",
+       "action": "s3:GetObject",
+       "resource": "s3://terraform-state",
+       "system": "aws",
+       "privileged": false,
+       "tags": [
+        "infra"
+       ],
+       "path": "Pascal Ostrowski → okta:pascal.ostrowski@larkspur.example → okta:engineering → aws:ProdAdmin → s3:GetObject on s3://terraform-state"
+      },
+      {
+       "perm_key": "perm:19",
+       "action": "s3:PutObject",
+       "resource": "s3://terraform-state",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "infra"
+       ],
+       "path": "Pascal Ostrowski → okta:pascal.ostrowski@larkspur.example → okta:engineering → aws:ProdAdmin → s3:PutObject on s3://terraform-state"
+      },
+      {
+       "perm_key": "perm:21",
+       "action": "rds:ModifyDBInstance",
+       "resource": "rds/orders-db",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "pii"
+       ],
+       "path": "Pascal Ostrowski → okta:pascal.ostrowski@larkspur.example → okta:engineering → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db"
+      },
+      {
+       "perm_key": "perm:23",
+       "action": "ec2:TerminateInstances",
+       "resource": "ec2/prod-fleet",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "path": "Pascal Ostrowski → okta:pascal.ostrowski@larkspur.example → okta:engineering → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet"
+      },
+      {
+       "perm_key": "perm:24",
+       "action": "iam:*",
+       "resource": "aws-account/larkspur-prod",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "path": "Pascal Ostrowski → okta:pascal.ostrowski@larkspur.example → okta:engineering → aws:ProdAdmin → iam:* on aws-account/larkspur-prod"
+      }
+     ]
+    },
+    {
+     "identity_id": 9,
+     "name": "Joaquin Pemberton",
+     "type": "human",
+     "removed": [],
+     "added": [
+      {
+       "perm_key": "perm:11",
+       "action": "s3:DeleteObject",
+       "resource": "s3://customer-pii",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "pii"
+       ],
+       "path": "Joaquin Pemberton → okta:joaquin.pemberton@larkspur.example → okta:engineering → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+      },
+      {
+       "perm_key": "perm:18",
+       "action": "s3:GetObject",
+       "resource": "s3://terraform-state",
+       "system": "aws",
+       "privileged": false,
+       "tags": [
+        "infra"
+       ],
+       "path": "Joaquin Pemberton → okta:joaquin.pemberton@larkspur.example → okta:engineering → aws:ProdAdmin → s3:GetObject on s3://terraform-state"
+      },
+      {
+       "perm_key": "perm:19",
+       "action": "s3:PutObject",
+       "resource": "s3://terraform-state",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "infra"
+       ],
+       "path": "Joaquin Pemberton → okta:joaquin.pemberton@larkspur.example → okta:engineering → aws:ProdAdmin → s3:PutObject on s3://terraform-state"
+      },
+      {
+       "perm_key": "perm:21",
+       "action": "rds:ModifyDBInstance",
+       "resource": "rds/orders-db",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "pii"
+       ],
+       "path": "Joaquin Pemberton → okta:joaquin.pemberton@larkspur.example → okta:engineering → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db"
+      },
+      {
+       "perm_key": "perm:23",
+       "action": "ec2:TerminateInstances",
+       "resource": "ec2/prod-fleet",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "path": "Joaquin Pemberton → okta:joaquin.pemberton@larkspur.example → okta:engineering → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet"
+      },
+      {
+       "perm_key": "perm:24",
+       "action": "iam:*",
+       "resource": "aws-account/larkspur-prod",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "path": "Joaquin Pemberton → okta:joaquin.pemberton@larkspur.example → okta:engineering → aws:ProdAdmin → iam:* on aws-account/larkspur-prod"
+      }
+     ]
+    },
+    {
+     "identity_id": 10,
+     "name": "Freya Whitlock",
+     "type": "human",
+     "removed": [],
+     "added": [
+      {
+       "perm_key": "perm:11",
+       "action": "s3:DeleteObject",
+       "resource": "s3://customer-pii",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "pii"
+       ],
+       "path": "Freya Whitlock → okta:freya.whitlock@larkspur.example → okta:engineering → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+      },
+      {
+       "perm_key": "perm:18",
+       "action": "s3:GetObject",
+       "resource": "s3://terraform-state",
+       "system": "aws",
+       "privileged": false,
+       "tags": [
+        "infra"
+       ],
+       "path": "Freya Whitlock → okta:freya.whitlock@larkspur.example → okta:engineering → aws:ProdAdmin → s3:GetObject on s3://terraform-state"
+      },
+      {
+       "perm_key": "perm:19",
+       "action": "s3:PutObject",
+       "resource": "s3://terraform-state",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "infra"
+       ],
+       "path": "Freya Whitlock → okta:freya.whitlock@larkspur.example → okta:engineering → aws:ProdAdmin → s3:PutObject on s3://terraform-state"
+      },
+      {
+       "perm_key": "perm:21",
+       "action": "rds:ModifyDBInstance",
+       "resource": "rds/orders-db",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "pii"
+       ],
+       "path": "Freya Whitlock → okta:freya.whitlock@larkspur.example → okta:engineering → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db"
+      },
+      {
+       "perm_key": "perm:23",
+       "action": "ec2:TerminateInstances",
+       "resource": "ec2/prod-fleet",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "path": "Freya Whitlock → okta:freya.whitlock@larkspur.example → okta:engineering → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet"
+      },
+      {
+       "perm_key": "perm:24",
+       "action": "iam:*",
+       "resource": "aws-account/larkspur-prod",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "path": "Freya Whitlock → okta:freya.whitlock@larkspur.example → okta:engineering → aws:ProdAdmin → iam:* on aws-account/larkspur-prod"
+      }
+     ]
+    },
+    {
+     "identity_id": 11,
+     "name": "Anders Zeller",
+     "type": "human",
+     "removed": [],
+     "added": [
+      {
+       "perm_key": "perm:11",
+       "action": "s3:DeleteObject",
+       "resource": "s3://customer-pii",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "pii"
+       ],
+       "path": "Anders Zeller → okta:anders.zeller@larkspur.example → okta:engineering → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+      },
+      {
+       "perm_key": "perm:18",
+       "action": "s3:GetObject",
+       "resource": "s3://terraform-state",
+       "system": "aws",
+       "privileged": false,
+       "tags": [
+        "infra"
+       ],
+       "path": "Anders Zeller → okta:anders.zeller@larkspur.example → okta:engineering → aws:ProdAdmin → s3:GetObject on s3://terraform-state"
+      },
+      {
+       "perm_key": "perm:19",
+       "action": "s3:PutObject",
+       "resource": "s3://terraform-state",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "infra"
+       ],
+       "path": "Anders Zeller → okta:anders.zeller@larkspur.example → okta:engineering → aws:ProdAdmin → s3:PutObject on s3://terraform-state"
+      },
+      {
+       "perm_key": "perm:21",
+       "action": "rds:ModifyDBInstance",
+       "resource": "rds/orders-db",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "pii"
+       ],
+       "path": "Anders Zeller → okta:anders.zeller@larkspur.example → okta:engineering → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db"
+      },
+      {
+       "perm_key": "perm:23",
+       "action": "ec2:TerminateInstances",
+       "resource": "ec2/prod-fleet",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "path": "Anders Zeller → okta:anders.zeller@larkspur.example → okta:engineering → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet"
+      },
+      {
+       "perm_key": "perm:24",
+       "action": "iam:*",
+       "resource": "aws-account/larkspur-prod",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "path": "Anders Zeller → okta:anders.zeller@larkspur.example → okta:engineering → aws:ProdAdmin → iam:* on aws-account/larkspur-prod"
+      }
+     ]
+    },
+    {
+     "identity_id": 12,
+     "name": "Hana Rasmussen",
+     "type": "human",
+     "removed": [],
+     "added": [
+      {
+       "perm_key": "perm:11",
+       "action": "s3:DeleteObject",
+       "resource": "s3://customer-pii",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "pii"
+       ],
+       "path": "Hana Rasmussen → okta:hana.rasmussen@larkspur.example → okta:engineering → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+      },
+      {
+       "perm_key": "perm:18",
+       "action": "s3:GetObject",
+       "resource": "s3://terraform-state",
+       "system": "aws",
+       "privileged": false,
+       "tags": [
+        "infra"
+       ],
+       "path": "Hana Rasmussen → okta:hana.rasmussen@larkspur.example → okta:engineering → aws:ProdAdmin → s3:GetObject on s3://terraform-state"
+      },
+      {
+       "perm_key": "perm:19",
+       "action": "s3:PutObject",
+       "resource": "s3://terraform-state",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "infra"
+       ],
+       "path": "Hana Rasmussen → okta:hana.rasmussen@larkspur.example → okta:engineering → aws:ProdAdmin → s3:PutObject on s3://terraform-state"
+      },
+      {
+       "perm_key": "perm:21",
+       "action": "rds:ModifyDBInstance",
+       "resource": "rds/orders-db",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "pii"
+       ],
+       "path": "Hana Rasmussen → okta:hana.rasmussen@larkspur.example → okta:engineering → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db"
+      },
+      {
+       "perm_key": "perm:23",
+       "action": "ec2:TerminateInstances",
+       "resource": "ec2/prod-fleet",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "path": "Hana Rasmussen → okta:hana.rasmussen@larkspur.example → okta:engineering → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet"
+      },
+      {
+       "perm_key": "perm:24",
+       "action": "iam:*",
+       "resource": "aws-account/larkspur-prod",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "path": "Hana Rasmussen → okta:hana.rasmussen@larkspur.example → okta:engineering → aws:ProdAdmin → iam:* on aws-account/larkspur-prod"
+      }
+     ]
+    },
+    {
+     "identity_id": 13,
+     "name": "Nikhil Iyer",
+     "type": "human",
+     "removed": [],
+     "added": [
+      {
+       "perm_key": "perm:11",
+       "action": "s3:DeleteObject",
+       "resource": "s3://customer-pii",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "pii"
+       ],
+       "path": "Nikhil Iyer → okta:nikhil.iyer@larkspur.example → okta:engineering → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+      },
+      {
+       "perm_key": "perm:18",
+       "action": "s3:GetObject",
+       "resource": "s3://terraform-state",
+       "system": "aws",
+       "privileged": false,
+       "tags": [
+        "infra"
+       ],
+       "path": "Nikhil Iyer → okta:nikhil.iyer@larkspur.example → okta:engineering → aws:ProdAdmin → s3:GetObject on s3://terraform-state"
+      },
+      {
+       "perm_key": "perm:19",
+       "action": "s3:PutObject",
+       "resource": "s3://terraform-state",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "infra"
+       ],
+       "path": "Nikhil Iyer → okta:nikhil.iyer@larkspur.example → okta:engineering → aws:ProdAdmin → s3:PutObject on s3://terraform-state"
+      },
+      {
+       "perm_key": "perm:21",
+       "action": "rds:ModifyDBInstance",
+       "resource": "rds/orders-db",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "pii"
+       ],
+       "path": "Nikhil Iyer → okta:nikhil.iyer@larkspur.example → okta:engineering → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db"
+      },
+      {
+       "perm_key": "perm:23",
+       "action": "ec2:TerminateInstances",
+       "resource": "ec2/prod-fleet",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "path": "Nikhil Iyer → okta:nikhil.iyer@larkspur.example → okta:engineering → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet"
+      },
+      {
+       "perm_key": "perm:24",
+       "action": "iam:*",
+       "resource": "aws-account/larkspur-prod",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "path": "Nikhil Iyer → okta:nikhil.iyer@larkspur.example → okta:engineering → aws:ProdAdmin → iam:* on aws-account/larkspur-prod"
+      }
+     ]
+    },
+    {
+     "identity_id": 14,
+     "name": "Dalia Mokoena",
+     "type": "human",
+     "removed": [],
+     "added": [
+      {
+       "perm_key": "perm:11",
+       "action": "s3:DeleteObject",
+       "resource": "s3://customer-pii",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "pii"
+       ],
+       "path": "Dalia Mokoena → okta:dalia.mokoena@larkspur.example → okta:engineering → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+      },
+      {
+       "perm_key": "perm:18",
+       "action": "s3:GetObject",
+       "resource": "s3://terraform-state",
+       "system": "aws",
+       "privileged": false,
+       "tags": [
+        "infra"
+       ],
+       "path": "Dalia Mokoena → okta:dalia.mokoena@larkspur.example → okta:engineering → aws:ProdAdmin → s3:GetObject on s3://terraform-state"
+      },
+      {
+       "perm_key": "perm:19",
+       "action": "s3:PutObject",
+       "resource": "s3://terraform-state",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "infra"
+       ],
+       "path": "Dalia Mokoena → okta:dalia.mokoena@larkspur.example → okta:engineering → aws:ProdAdmin → s3:PutObject on s3://terraform-state"
+      },
+      {
+       "perm_key": "perm:21",
+       "action": "rds:ModifyDBInstance",
+       "resource": "rds/orders-db",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "pii"
+       ],
+       "path": "Dalia Mokoena → okta:dalia.mokoena@larkspur.example → okta:engineering → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db"
+      },
+      {
+       "perm_key": "perm:23",
+       "action": "ec2:TerminateInstances",
+       "resource": "ec2/prod-fleet",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "path": "Dalia Mokoena → okta:dalia.mokoena@larkspur.example → okta:engineering → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet"
+      },
+      {
+       "perm_key": "perm:24",
+       "action": "iam:*",
+       "resource": "aws-account/larkspur-prod",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "path": "Dalia Mokoena → okta:dalia.mokoena@larkspur.example → okta:engineering → aws:ProdAdmin → iam:* on aws-account/larkspur-prod"
+      }
+     ]
+    },
+    {
+     "identity_id": 15,
+     "name": "Vesna Szabo",
+     "type": "human",
+     "removed": [],
+     "added": [
+      {
+       "perm_key": "perm:11",
+       "action": "s3:DeleteObject",
+       "resource": "s3://customer-pii",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "pii"
+       ],
+       "path": "Vesna Szabo → okta:vesna.szabo@larkspur.example → okta:engineering → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+      },
+      {
+       "perm_key": "perm:18",
+       "action": "s3:GetObject",
+       "resource": "s3://terraform-state",
+       "system": "aws",
+       "privileged": false,
+       "tags": [
+        "infra"
+       ],
+       "path": "Vesna Szabo → okta:vesna.szabo@larkspur.example → okta:engineering → aws:ProdAdmin → s3:GetObject on s3://terraform-state"
+      },
+      {
+       "perm_key": "perm:19",
+       "action": "s3:PutObject",
+       "resource": "s3://terraform-state",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "infra"
+       ],
+       "path": "Vesna Szabo → okta:vesna.szabo@larkspur.example → okta:engineering → aws:ProdAdmin → s3:PutObject on s3://terraform-state"
+      },
+      {
+       "perm_key": "perm:21",
+       "action": "rds:ModifyDBInstance",
+       "resource": "rds/orders-db",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "pii"
+       ],
+       "path": "Vesna Szabo → okta:vesna.szabo@larkspur.example → okta:engineering → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db"
+      },
+      {
+       "perm_key": "perm:23",
+       "action": "ec2:TerminateInstances",
+       "resource": "ec2/prod-fleet",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "path": "Vesna Szabo → okta:vesna.szabo@larkspur.example → okta:engineering → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet"
+      },
+      {
+       "perm_key": "perm:24",
+       "action": "iam:*",
+       "resource": "aws-account/larkspur-prod",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "path": "Vesna Szabo → okta:vesna.szabo@larkspur.example → okta:engineering → aws:ProdAdmin → iam:* on aws-account/larkspur-prod"
+      }
+     ]
+    }
+   ],
+   "violations": {
+    "resolved": [],
+    "introduced": [
+     {
+      "policy_id": "no-standing-prod-admin",
+      "policy_name": "No standing admin on prod",
+      "severity": "high",
+      "identity_id": 15,
+      "identity_name": "Vesna Szabo",
+      "key": "no-standing-prod-admin:15:account:79->group:7",
+      "message": "Vesna Szabo has standing privileged prod access via okta:engineering: ec2:TerminateInstances on ec2/prod-fleet, iam:* on aws-account/larkspur-prod, rds:ModifyDBInstance on rds/orders-db …",
+      "evidence": [
+       "Vesna Szabo → okta:vesna.szabo@larkspur.example → okta:engineering → aws:ProdAdmin → iam:* on aws-account/larkspur-prod",
+       "Vesna Szabo → okta:vesna.szabo@larkspur.example → okta:engineering → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet",
+       "Vesna Szabo → okta:vesna.szabo@larkspur.example → okta:engineering → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db",
+       "Vesna Szabo → okta:vesna.szabo@larkspur.example → okta:engineering → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+      ],
+      "edges": [
+       [
+        "account:79",
+        "group:7"
+       ]
+      ]
+     },
+     {
+      "policy_id": "no-standing-prod-admin",
+      "policy_name": "No standing admin on prod",
+      "severity": "high",
+      "identity_id": 7,
+      "identity_name": "Desmond Abernathy",
+      "key": "no-standing-prod-admin:7:account:71->group:7",
+      "message": "Desmond Abernathy has standing privileged prod access via okta:engineering: ec2:TerminateInstances on ec2/prod-fleet, iam:* on aws-account/larkspur-prod, rds:ModifyDBInstance on rds/orders-db …",
+      "evidence": [
+       "Desmond Abernathy → okta:desmond.abernathy@larkspur.example → okta:engineering → aws:ProdAdmin → iam:* on aws-account/larkspur-prod",
+       "Desmond Abernathy → okta:desmond.abernathy@larkspur.example → okta:engineering → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet",
+       "Desmond Abernathy → okta:desmond.abernathy@larkspur.example → okta:engineering → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db",
+       "Desmond Abernathy → okta:desmond.abernathy@larkspur.example → okta:engineering → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+      ],
+      "edges": [
+       [
+        "account:71",
+        "group:7"
+       ]
+      ]
+     },
+     {
+      "policy_id": "no-standing-prod-admin",
+      "policy_name": "No standing admin on prod",
+      "severity": "high",
+      "identity_id": 13,
+      "identity_name": "Nikhil Iyer",
+      "key": "no-standing-prod-admin:13:account:77->group:7",
+      "message": "Nikhil Iyer has standing privileged prod access via okta:engineering: ec2:TerminateInstances on ec2/prod-fleet, iam:* on aws-account/larkspur-prod, rds:ModifyDBInstance on rds/orders-db …",
+      "evidence": [
+       "Nikhil Iyer → okta:nikhil.iyer@larkspur.example → okta:engineering → aws:ProdAdmin → iam:* on aws-account/larkspur-prod",
+       "Nikhil Iyer → okta:nikhil.iyer@larkspur.example → okta:engineering → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet",
+       "Nikhil Iyer → okta:nikhil.iyer@larkspur.example → okta:engineering → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db",
+       "Nikhil Iyer → okta:nikhil.iyer@larkspur.example → okta:engineering → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+      ],
+      "edges": [
+       [
+        "account:77",
+        "group:7"
+       ]
+      ]
+     },
+     {
+      "policy_id": "no-standing-prod-admin",
+      "policy_name": "No standing admin on prod",
+      "severity": "high",
+      "identity_id": 19,
+      "identity_name": "Cyrus Quennell",
+      "key": "no-standing-prod-admin:19:account:83->group:7",
+      "message": "Cyrus Quennell has standing privileged prod access via okta:engineering: ec2:TerminateInstances on ec2/prod-fleet, iam:* on aws-account/larkspur-prod, rds:ModifyDBInstance on rds/orders-db …",
+      "evidence": [
+       "Cyrus Quennell → okta:cyrus.quennell@larkspur.example → okta:engineering → aws:ProdAdmin → iam:* on aws-account/larkspur-prod",
+       "Cyrus Quennell → okta:cyrus.quennell@larkspur.example → okta:engineering → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet",
+       "Cyrus Quennell → okta:cyrus.quennell@larkspur.example → okta:engineering → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db",
+       "Cyrus Quennell → okta:cyrus.quennell@larkspur.example → okta:engineering → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+      ],
+      "edges": [
+       [
+        "account:83",
+        "group:7"
+       ]
+      ]
+     },
+     {
+      "policy_id": "no-standing-prod-admin",
+      "policy_name": "No standing admin on prod",
+      "severity": "high",
+      "identity_id": 10,
+      "identity_name": "Freya Whitlock",
+      "key": "no-standing-prod-admin:10:account:74->group:7",
+      "message": "Freya Whitlock has standing privileged prod access via okta:engineering: ec2:TerminateInstances on ec2/prod-fleet, iam:* on aws-account/larkspur-prod, rds:ModifyDBInstance on rds/orders-db …",
+      "evidence": [
+       "Freya Whitlock → okta:freya.whitlock@larkspur.example → okta:engineering → aws:ProdAdmin → iam:* on aws-account/larkspur-prod",
+       "Freya Whitlock → okta:freya.whitlock@larkspur.example → okta:engineering → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet",
+       "Freya Whitlock → okta:freya.whitlock@larkspur.example → okta:engineering → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db",
+       "Freya Whitlock → okta:freya.whitlock@larkspur.example → okta:engineering → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+      ],
+      "edges": [
+       [
+        "account:74",
+        "group:7"
+       ]
+      ]
+     },
+     {
+      "policy_id": "no-standing-prod-admin",
+      "policy_name": "No standing admin on prod",
+      "severity": "high",
+      "identity_id": 11,
+      "identity_name": "Anders Zeller",
+      "key": "no-standing-prod-admin:11:account:75->group:7",
+      "message": "Anders Zeller has standing privileged prod access via okta:engineering: ec2:TerminateInstances on ec2/prod-fleet, iam:* on aws-account/larkspur-prod, rds:ModifyDBInstance on rds/orders-db …",
+      "evidence": [
+       "Anders Zeller → okta:anders.zeller@larkspur.example → okta:engineering → aws:ProdAdmin → iam:* on aws-account/larkspur-prod",
+       "Anders Zeller → okta:anders.zeller@larkspur.example → okta:engineering → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet",
+       "Anders Zeller → okta:anders.zeller@larkspur.example → okta:engineering → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db",
+       "Anders Zeller → okta:anders.zeller@larkspur.example → okta:engineering → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+      ],
+      "edges": [
+       [
+        "account:75",
+        "group:7"
+       ]
+      ]
+     },
+     {
+      "policy_id": "no-standing-prod-admin",
+      "policy_name": "No standing admin on prod",
+      "severity": "high",
+      "identity_id": 12,
+      "identity_name": "Hana Rasmussen",
+      "key": "no-standing-prod-admin:12:account:76->group:7",
+      "message": "Hana Rasmussen has standing privileged prod access via okta:engineering: ec2:TerminateInstances on ec2/prod-fleet, iam:* on aws-account/larkspur-prod, rds:ModifyDBInstance on rds/orders-db …",
+      "evidence": [
+       "Hana Rasmussen → okta:hana.rasmussen@larkspur.example → okta:engineering → aws:ProdAdmin → iam:* on aws-account/larkspur-prod",
+       "Hana Rasmussen → okta:hana.rasmussen@larkspur.example → okta:engineering → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet",
+       "Hana Rasmussen → okta:hana.rasmussen@larkspur.example → okta:engineering → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db",
+       "Hana Rasmussen → okta:hana.rasmussen@larkspur.example → okta:engineering → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+      ],
+      "edges": [
+       [
+        "account:76",
+        "group:7"
+       ]
+      ]
+     },
+     {
+      "policy_id": "no-standing-prod-admin",
+      "policy_name": "No standing admin on prod",
+      "severity": "high",
+      "identity_id": 14,
+      "identity_name": "Dalia Mokoena",
+      "key": "no-standing-prod-admin:14:account:78->group:7",
+      "message": "Dalia Mokoena has standing privileged prod access via okta:engineering: ec2:TerminateInstances on ec2/prod-fleet, iam:* on aws-account/larkspur-prod, rds:ModifyDBInstance on rds/orders-db …",
+      "evidence": [
+       "Dalia Mokoena → okta:dalia.mokoena@larkspur.example → okta:engineering → aws:ProdAdmin → iam:* on aws-account/larkspur-prod",
+       "Dalia Mokoena → okta:dalia.mokoena@larkspur.example → okta:engineering → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet",
+       "Dalia Mokoena → okta:dalia.mokoena@larkspur.example → okta:engineering → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db",
+       "Dalia Mokoena → okta:dalia.mokoena@larkspur.example → okta:engineering → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+      ],
+      "edges": [
+       [
+        "account:78",
+        "group:7"
+       ]
+      ]
+     },
+     {
+      "policy_id": "no-standing-prod-admin",
+      "policy_name": "No standing admin on prod",
+      "severity": "high",
+      "identity_id": 21,
+      "identity_name": "Lena Valdivia",
+      "key": "no-standing-prod-admin:21:account:85->group:7",
+      "message": "Lena Valdivia has standing privileged prod access via okta:engineering: ec2:TerminateInstances on ec2/prod-fleet, iam:* on aws-account/larkspur-prod, rds:ModifyDBInstance on rds/orders-db …",
+      "evidence": [
+       "Lena Valdivia → okta:lena.valdivia@larkspur.example → okta:engineering → aws:ProdAdmin → iam:* on aws-account/larkspur-prod",
+       "Lena Valdivia → okta:lena.valdivia@larkspur.example → okta:engineering → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet",
+       "Lena Valdivia → okta:lena.valdivia@larkspur.example → okta:engineering → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db",
+       "Lena Valdivia → okta:lena.valdivia@larkspur.example → okta:engineering → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+      ],
+      "edges": [
+       [
+        "account:85",
+        "group:7"
+       ]
+      ]
+     },
+     {
+      "policy_id": "no-standing-prod-admin",
+      "policy_name": "No standing admin on prod",
+      "severity": "high",
+      "identity_id": 9,
+      "identity_name": "Joaquin Pemberton",
+      "key": "no-standing-prod-admin:9:account:73->group:7",
+      "message": "Joaquin Pemberton has standing privileged prod access via okta:engineering: ec2:TerminateInstances on ec2/prod-fleet, iam:* on aws-account/larkspur-prod, rds:ModifyDBInstance on rds/orders-db …",
+      "evidence": [
+       "Joaquin Pemberton → okta:joaquin.pemberton@larkspur.example → okta:engineering → aws:ProdAdmin → iam:* on aws-account/larkspur-prod",
+       "Joaquin Pemberton → okta:joaquin.pemberton@larkspur.example → okta:engineering → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet",
+       "Joaquin Pemberton → okta:joaquin.pemberton@larkspur.example → okta:engineering → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db",
+       "Joaquin Pemberton → okta:joaquin.pemberton@larkspur.example → okta:engineering → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+      ],
+      "edges": [
+       [
+        "account:73",
+        "group:7"
+       ]
+      ]
+     },
+     {
+      "policy_id": "no-standing-prod-admin",
+      "policy_name": "No standing admin on prod",
+      "severity": "high",
+      "identity_id": 20,
+      "identity_name": "Zora Whitlock",
+      "key": "no-standing-prod-admin:20:account:84->group:7",
+      "message": "Zora Whitlock has standing privileged prod access via okta:engineering: ec2:TerminateInstances on ec2/prod-fleet, iam:* on aws-account/larkspur-prod, rds:ModifyDBInstance on rds/orders-db …",
+      "evidence": [
+       "Zora Whitlock → okta:zora.whitlock@larkspur.example → okta:engineering → aws:ProdAdmin → iam:* on aws-account/larkspur-prod",
+       "Zora Whitlock → okta:zora.whitlock@larkspur.example → okta:engineering → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet",
+       "Zora Whitlock → okta:zora.whitlock@larkspur.example → okta:engineering → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db",
+       "Zora Whitlock → okta:zora.whitlock@larkspur.example → okta:engineering → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+      ],
+      "edges": [
+       [
+        "account:84",
+        "group:7"
+       ]
+      ]
+     },
+     {
+      "policy_id": "no-standing-prod-admin",
+      "policy_name": "No standing admin on prod",
+      "severity": "high",
+      "identity_id": 4,
+      "identity_name": "Kofi Mensah",
+      "key": "no-standing-prod-admin:4:account:68->group:7",
+      "message": "Kofi Mensah has standing privileged prod access via okta:engineering: ec2:TerminateInstances on ec2/prod-fleet, iam:* on aws-account/larkspur-prod, rds:ModifyDBInstance on rds/orders-db …",
+      "evidence": [
+       "Kofi Mensah → okta:kofi.mensah@larkspur.example → okta:engineering → aws:ProdAdmin → iam:* on aws-account/larkspur-prod",
+       "Kofi Mensah → okta:kofi.mensah@larkspur.example → okta:engineering → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet",
+       "Kofi Mensah → okta:kofi.mensah@larkspur.example → okta:engineering → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db",
+       "Kofi Mensah → okta:kofi.mensah@larkspur.example → okta:engineering → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+      ],
+      "edges": [
+       [
+        "account:68",
+        "group:7"
+       ]
+      ]
+     },
+     {
+      "policy_id": "no-standing-prod-admin",
+      "policy_name": "No standing admin on prod",
+      "severity": "high",
+      "identity_id": 16,
+      "identity_name": "Ingrid Lindqvist",
+      "key": "no-standing-prod-admin:16:account:80->group:7",
+      "message": "Ingrid Lindqvist has standing privileged prod access via okta:engineering: ec2:TerminateInstances on ec2/prod-fleet, iam:* on aws-account/larkspur-prod, rds:ModifyDBInstance on rds/orders-db …",
+      "evidence": [
+       "Ingrid Lindqvist → okta:ingrid.lindqvist@larkspur.example → okta:engineering → aws:ProdAdmin → iam:* on aws-account/larkspur-prod",
+       "Ingrid Lindqvist → okta:ingrid.lindqvist@larkspur.example → okta:engineering → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet",
+       "Ingrid Lindqvist → okta:ingrid.lindqvist@larkspur.example → okta:engineering → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db",
+       "Ingrid Lindqvist → okta:ingrid.lindqvist@larkspur.example → okta:engineering → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+      ],
+      "edges": [
+       [
+        "account:80",
+        "group:7"
+       ]
+      ]
+     },
+     {
+      "policy_id": "no-standing-prod-admin",
+      "policy_name": "No standing admin on prod",
+      "severity": "high",
+      "identity_id": 6,
+      "identity_name": "Ilya Kowalczyk",
+      "key": "no-standing-prod-admin:6:account:70->group:7",
+      "message": "Ilya Kowalczyk has standing privileged prod access via okta:engineering: ec2:TerminateInstances on ec2/prod-fleet, iam:* on aws-account/larkspur-prod, rds:ModifyDBInstance on rds/orders-db …",
+      "evidence": [
+       "Ilya Kowalczyk → okta:ilya.kowalczyk@larkspur.example → okta:engineering → aws:ProdAdmin → iam:* on aws-account/larkspur-prod",
+       "Ilya Kowalczyk → okta:ilya.kowalczyk@larkspur.example → okta:engineering → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet",
+       "Ilya Kowalczyk → okta:ilya.kowalczyk@larkspur.example → okta:engineering → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db",
+       "Ilya Kowalczyk → okta:ilya.kowalczyk@larkspur.example → okta:engineering → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+      ],
+      "edges": [
+       [
+        "account:70",
+        "group:7"
+       ]
+      ]
+     },
+     {
+      "policy_id": "no-standing-prod-admin",
+      "policy_name": "No standing admin on prod",
+      "severity": "high",
+      "identity_id": 5,
+      "identity_name": "Alice Okafor",
+      "key": "no-standing-prod-admin:5:account:69->group:7",
+      "message": "Alice Okafor has standing privileged prod access via okta:engineering: ec2:TerminateInstances on ec2/prod-fleet, iam:* on aws-account/larkspur-prod, rds:ModifyDBInstance on rds/orders-db …",
+      "evidence": [
+       "Alice Okafor → okta:alice.okafor@larkspur.example → okta:engineering → aws:ProdAdmin → iam:* on aws-account/larkspur-prod",
+       "Alice Okafor → okta:alice.okafor@larkspur.example → okta:engineering → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet",
+       "Alice Okafor → okta:alice.okafor@larkspur.example → okta:engineering → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db",
+       "Alice Okafor → okta:alice.okafor@larkspur.example → okta:engineering → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+      ],
+      "edges": [
+       [
+        "account:69",
+        "group:7"
+       ]
+      ]
+     },
+     {
+      "policy_id": "no-standing-prod-admin",
+      "policy_name": "No standing admin on prod",
+      "severity": "high",
+      "identity_id": 17,
+      "identity_name": "Marcus Bellweather",
+      "key": "no-standing-prod-admin:17:account:81->group:7",
+      "message": "Marcus Bellweather has standing privileged prod access via okta:engineering: ec2:TerminateInstances on ec2/prod-fleet, iam:* on aws-account/larkspur-prod, rds:ModifyDBInstance on rds/orders-db …",
+      "evidence": [
+       "Marcus Bellweather → okta:marcus.bellweather@larkspur.example → okta:engineering → aws:ProdAdmin → iam:* on aws-account/larkspur-prod",
+       "Marcus Bellweather → okta:marcus.bellweather@larkspur.example → okta:engineering → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet",
+       "Marcus Bellweather → okta:marcus.bellweather@larkspur.example → okta:engineering → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db",
+       "Marcus Bellweather → okta:marcus.bellweather@larkspur.example → okta:engineering → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+      ],
+      "edges": [
+       [
+        "account:81",
+        "group:7"
+       ]
+      ]
+     },
+     {
+      "policy_id": "no-standing-prod-admin",
+      "policy_name": "No standing admin on prod",
+      "severity": "high",
+      "identity_id": 8,
+      "identity_name": "Pascal Ostrowski",
+      "key": "no-standing-prod-admin:8:account:72->group:7",
+      "message": "Pascal Ostrowski has standing privileged prod access via okta:engineering: ec2:TerminateInstances on ec2/prod-fleet, iam:* on aws-account/larkspur-prod, rds:ModifyDBInstance on rds/orders-db …",
+      "evidence": [
+       "Pascal Ostrowski → okta:pascal.ostrowski@larkspur.example → okta:engineering → aws:ProdAdmin → iam:* on aws-account/larkspur-prod",
+       "Pascal Ostrowski → okta:pascal.ostrowski@larkspur.example → okta:engineering → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet",
+       "Pascal Ostrowski → okta:pascal.ostrowski@larkspur.example → okta:engineering → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db",
+       "Pascal Ostrowski → okta:pascal.ostrowski@larkspur.example → okta:engineering → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+      ],
+      "edges": [
+       [
+        "account:72",
+        "group:7"
+       ]
+      ]
+     }
+    ]
+   }
+  }
+ }
+}

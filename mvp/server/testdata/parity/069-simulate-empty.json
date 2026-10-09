@@ -1,0 +1,30 @@
+{
+ "name": "simulate-empty",
+ "request": {
+  "method": "POST",
+  "path": "/api/simulate",
+  "body": {}
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "changes": [],
+   "summary": {
+    "identities_affected": 0,
+    "permissions_removed": 0,
+    "permissions_added": 0,
+    "removed_recently_used": 0,
+    "removed_privileged": 0,
+    "violations_before": 74,
+    "violations_after": 74,
+    "violations_resolved": 0,
+    "violations_introduced": 0
+   },
+   "identities": [],
+   "violations": {
+    "resolved": [],
+    "introduced": []
+   }
+  }
+ }
+}

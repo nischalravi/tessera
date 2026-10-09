@@ -1,0 +1,182 @@
+{
+ "name": "accounts-aws",
+ "request": {
+  "method": "GET",
+  "path": "/api/accounts?system=aws"
+ },
+ "response": {
+  "status": 200,
+  "body": [
+   {
+    "id": 143,
+    "system": "aws",
+    "username": "agent-sre-oncall",
+    "kind": "agent",
+    "status": "active",
+    "created_at": "2026-04-27T00:00:00",
+    "last_login_at": "2026-10-06T10:03:43.625124",
+    "identity": {
+     "id": 71,
+     "name": "SRE On-call Agent",
+     "type": "ai_agent",
+     "status": "active",
+     "department": null,
+     "title": "AI agent"
+    }
+   },
+   {
+    "id": 135,
+    "system": "aws",
+    "username": "svc-backup-agent",
+    "kind": "service",
+    "status": "active",
+    "created_at": "2025-04-29T00:00:00",
+    "last_login_at": "2026-10-05T08:17:05.397695",
+    "identity": {
+     "id": 74,
+     "name": "svc-backup-agent",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "AWS IAM user"
+    }
+   },
+   {
+    "id": 134,
+    "system": "aws",
+    "username": "svc-ci-deployer",
+    "kind": "service",
+    "status": "active",
+    "created_at": "2024-05-07T00:00:00",
+    "last_login_at": "2026-10-05T03:25:10.929784",
+    "identity": {
+     "id": 73,
+     "name": "svc-ci-deployer",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "AWS IAM user"
+    }
+   },
+   {
+    "id": 138,
+    "system": "aws",
+    "username": "svc-cost-exporter",
+    "kind": "service",
+    "status": "active",
+    "created_at": "2025-03-26T00:00:00",
+    "last_login_at": "2026-10-05T00:25:36.378842",
+    "identity": {
+     "id": 77,
+     "name": "svc-cost-exporter",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "AWS IAM user"
+    }
+   },
+   {
+    "id": 142,
+    "system": "aws",
+    "username": "svc-data-export",
+    "kind": "service",
+    "status": "active",
+    "created_at": "2026-05-22T00:00:00",
+    "last_login_at": "2026-10-06T23:39:55.665410",
+    "identity": {
+     "id": 81,
+     "name": "svc-data-export",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "AWS IAM user"
+    }
+   },
+   {
+    "id": 141,
+    "system": "aws",
+    "username": "svc-lambda-orders",
+    "kind": "service",
+    "status": "active",
+    "created_at": "2026-03-08T00:00:00",
+    "last_login_at": "2026-10-05T20:00:18.503531",
+    "identity": {
+     "id": 80,
+     "name": "svc-lambda-orders",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "AWS IAM user"
+    }
+   },
+   {
+    "id": 136,
+    "system": "aws",
+    "username": "svc-legacy-etl",
+    "kind": "service",
+    "status": "active",
+    "created_at": "2025-12-26T00:00:00",
+    "last_login_at": "2026-10-05T00:43:45.318930",
+    "identity": {
+     "id": 75,
+     "name": "svc-legacy-etl",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "AWS IAM user"
+    }
+   },
+   {
+    "id": 137,
+    "system": "aws",
+    "username": "svc-log-shipper",
+    "kind": "service",
+    "status": "active",
+    "created_at": "2025-10-24T00:00:00",
+    "last_login_at": "2026-10-07T12:22:27.997279",
+    "identity": {
+     "id": 76,
+     "name": "svc-log-shipper",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "AWS IAM user"
+    }
+   },
+   {
+    "id": 140,
+    "system": "aws",
+    "username": "svc-monitoring",
+    "kind": "service",
+    "status": "active",
+    "created_at": "2025-11-22T00:00:00",
+    "last_login_at": "2026-10-06T22:19:25.445595",
+    "identity": {
+     "id": 79,
+     "name": "svc-monitoring",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "AWS IAM user"
+    }
+   },
+   {
+    "id": 139,
+    "system": "aws",
+    "username": "svc-terraform",
+    "kind": "service",
+    "status": "active",
+    "created_at": "2025-04-23T00:00:00",
+    "last_login_at": "2026-10-06T23:35:01.095387",
+    "identity": {
+     "id": 78,
+     "name": "svc-terraform",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "AWS IAM user"
+    }
+   }
+  ]
+ }
+}

@@ -50,7 +50,7 @@ export function SodConflicts() {
       <div className="grid g12">
         <div className="stack">
           <h2>Rules</h2>
-          {sod.length === 0 && <div className="card"><EmptyState title="No SoD rules">Add a policy of type <code>separation_of_duties</code> in <code>backend/policies/</code>.</EmptyState></div>}
+          {sod.length === 0 && <div className="card"><EmptyState title="No SoD rules">Add a policy of type <code>separation_of_duties</code> in <code>server/policies/</code>.</EmptyState></div>}
           {sod.map((p) => {
             const s = conflictSides(p.source);
             return (

@@ -1,0 +1,2260 @@
+{
+ "name": "identity-oren",
+ "request": {
+  "method": "GET",
+  "path": "/api/identities/18"
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "id": 18,
+   "name": "Oren Whitlock",
+   "type": "human",
+   "status": "terminated",
+   "department": "Engineering",
+   "title": "Site Reliability Engineer",
+   "email": "oren.whitlock@larkspur.example",
+   "description": null,
+   "hired_at": "2022-11-03T00:00:00",
+   "terminated_at": "2026-09-18T00:00:00",
+   "manager": {
+    "id": 16,
+    "name": "Ingrid Lindqvist",
+    "type": "human",
+    "status": "active",
+    "department": "Engineering",
+    "title": "Platform Lead"
+   },
+   "owner": null,
+   "accounts": [
+    {
+     "id": 18,
+     "system": "workday",
+     "username": "emp-1018",
+     "kind": "user",
+     "status": "disabled",
+     "last_login_at": null
+    },
+    {
+     "id": 82,
+     "system": "okta",
+     "username": "oren.whitlock@larkspur.example",
+     "kind": "user",
+     "status": "active",
+     "last_login_at": "2026-10-07T17:53:08.930542"
+    },
+    {
+     "id": 159,
+     "system": "github",
+     "username": "oren-whitl",
+     "kind": "user",
+     "status": "active",
+     "last_login_at": "2026-10-07T20:57:42.046491"
+    }
+   ],
+   "grants": [
+    {
+     "edge_id": 85,
+     "src": "account:82",
+     "dst": "group:6",
+     "label": "okta:Everyone",
+     "account": "okta:oren.whitlock@larkspur.example",
+     "relation": "member_of",
+     "source": "connector",
+     "expires_at": null,
+     "privileged": false
+    },
+    {
+     "edge_id": 86,
+     "src": "account:82",
+     "dst": "group:7",
+     "label": "okta:engineering",
+     "account": "okta:oren.whitlock@larkspur.example",
+     "relation": "member_of",
+     "source": "connector",
+     "expires_at": null,
+     "privileged": false
+    },
+    {
+     "edge_id": 87,
+     "src": "account:82",
+     "dst": "group:10",
+     "label": "okta:eng-platform",
+     "account": "okta:oren.whitlock@larkspur.example",
+     "relation": "member_of",
+     "source": "connector",
+     "expires_at": null,
+     "privileged": false
+    },
+    {
+     "edge_id": 302,
+     "src": "account:159",
+     "dst": "group:35",
+     "label": "github:all-engineers",
+     "account": "github:oren-whitl",
+     "relation": "member_of",
+     "source": "connector",
+     "expires_at": null,
+     "privileged": false
+    },
+    {
+     "edge_id": 303,
+     "src": "account:159",
+     "dst": "group:32",
+     "label": "github:platform",
+     "account": "github:oren-whitl",
+     "relation": "member_of",
+     "source": "connector",
+     "expires_at": null,
+     "privileged": false
+    }
+   ],
+   "effective_permissions": [
+    {
+     "perm_key": "perm:24",
+     "action": "iam:*",
+     "system": "aws",
+     "resource": "aws-account/larkspur-prod",
+     "resource_id": 12,
+     "environment": "prod",
+     "tags": [],
+     "privileged": true,
+     "standing": true,
+     "usage": {
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "active_days_90d": 0
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:18",
+        "kind": "identity",
+        "label": "Oren Whitlock",
+        "system": null
+       },
+       {
+        "key": "account:82",
+        "kind": "account",
+        "label": "okta:oren.whitlock@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:10",
+        "kind": "group",
+        "label": "okta:eng-platform",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 87,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:23",
+        "kind": "group",
+        "label": "aws:ProdAdmin",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 225,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:24",
+        "kind": "perm",
+        "label": "iam:* on aws-account/larkspur-prod",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 196,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:25",
+     "action": "iam:*",
+     "system": "aws",
+     "resource": "aws-account/larkspur-staging",
+     "resource_id": 13,
+     "environment": "staging",
+     "tags": [],
+     "privileged": true,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-09-13T00:00:00",
+      "days_since_used": 25,
+      "events_90d": 69,
+      "active_days_90d": 10
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:18",
+        "kind": "identity",
+        "label": "Oren Whitlock",
+        "system": null
+       },
+       {
+        "key": "account:82",
+        "kind": "account",
+        "label": "okta:oren.whitlock@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:7",
+        "kind": "group",
+        "label": "okta:engineering",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 86,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:21",
+        "kind": "group",
+        "label": "aws:DevAdmin",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 223,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:25",
+        "kind": "perm",
+        "label": "iam:* on aws-account/larkspur-staging",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 188,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:22",
+     "action": "ec2:DescribeInstances",
+     "system": "aws",
+     "resource": "ec2/prod-fleet",
+     "resource_id": 11,
+     "environment": "prod",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "active_days_90d": 0
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:18",
+        "kind": "identity",
+        "label": "Oren Whitlock",
+        "system": null
+       },
+       {
+        "key": "account:82",
+        "kind": "account",
+        "label": "okta:oren.whitlock@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:10",
+        "kind": "group",
+        "label": "okta:eng-platform",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 87,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:23",
+        "kind": "group",
+        "label": "aws:ProdAdmin",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 225,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:22",
+        "kind": "perm",
+        "label": "ec2:DescribeInstances on ec2/prod-fleet",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 202,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ],
+      [
+       {
+        "key": "identity:18",
+        "kind": "identity",
+        "label": "Oren Whitlock",
+        "system": null
+       },
+       {
+        "key": "account:82",
+        "kind": "account",
+        "label": "okta:oren.whitlock@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:7",
+        "kind": "group",
+        "label": "okta:engineering",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 86,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:22",
+        "kind": "group",
+        "label": "aws:ProdReadOnly",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 224,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:22",
+        "kind": "perm",
+        "label": "ec2:DescribeInstances on ec2/prod-fleet",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 193,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:23",
+     "action": "ec2:TerminateInstances",
+     "system": "aws",
+     "resource": "ec2/prod-fleet",
+     "resource_id": 11,
+     "environment": "prod",
+     "tags": [],
+     "privileged": true,
+     "standing": true,
+     "usage": {
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "active_days_90d": 0
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:18",
+        "kind": "identity",
+        "label": "Oren Whitlock",
+        "system": null
+       },
+       {
+        "key": "account:82",
+        "kind": "account",
+        "label": "okta:oren.whitlock@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:10",
+        "kind": "group",
+        "label": "okta:eng-platform",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 87,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:23",
+        "kind": "group",
+        "label": "aws:ProdAdmin",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 225,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:23",
+        "kind": "perm",
+        "label": "ec2:TerminateInstances on ec2/prod-fleet",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 197,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:20",
+     "action": "rds:Connect",
+     "system": "aws",
+     "resource": "rds/orders-db",
+     "resource_id": 10,
+     "environment": "prod",
+     "tags": [
+      "pii"
+     ],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-09-18T00:00:00",
+      "days_since_used": 20,
+      "events_90d": 254,
+      "active_days_90d": 38
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:18",
+        "kind": "identity",
+        "label": "Oren Whitlock",
+        "system": null
+       },
+       {
+        "key": "account:82",
+        "kind": "account",
+        "label": "okta:oren.whitlock@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:7",
+        "kind": "group",
+        "label": "okta:engineering",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 86,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:22",
+        "kind": "group",
+        "label": "aws:ProdReadOnly",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 224,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:20",
+        "kind": "perm",
+        "label": "rds:Connect on rds/orders-db",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 195,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:21",
+     "action": "rds:ModifyDBInstance",
+     "system": "aws",
+     "resource": "rds/orders-db",
+     "resource_id": 10,
+     "environment": "prod",
+     "tags": [
+      "pii"
+     ],
+     "privileged": true,
+     "standing": true,
+     "usage": {
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "active_days_90d": 0
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:18",
+        "kind": "identity",
+        "label": "Oren Whitlock",
+        "system": null
+       },
+       {
+        "key": "account:82",
+        "kind": "account",
+        "label": "okta:oren.whitlock@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:10",
+        "kind": "group",
+        "label": "okta:eng-platform",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 87,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:23",
+        "kind": "group",
+        "label": "aws:ProdAdmin",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 225,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:21",
+        "kind": "perm",
+        "label": "rds:ModifyDBInstance on rds/orders-db",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 198,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:12",
+     "action": "s3:GetObject",
+     "system": "aws",
+     "resource": "s3://app-logs",
+     "resource_id": 6,
+     "environment": "prod",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-09-18T00:00:00",
+      "days_since_used": 20,
+      "events_90d": 242,
+      "active_days_90d": 37
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:18",
+        "kind": "identity",
+        "label": "Oren Whitlock",
+        "system": null
+       },
+       {
+        "key": "account:82",
+        "kind": "account",
+        "label": "okta:oren.whitlock@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:7",
+        "kind": "group",
+        "label": "okta:engineering",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 86,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:22",
+        "kind": "group",
+        "label": "aws:ProdReadOnly",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 224,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:12",
+        "kind": "perm",
+        "label": "s3:GetObject on s3://app-logs",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 194,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ],
+      [
+       {
+        "key": "identity:18",
+        "kind": "identity",
+        "label": "Oren Whitlock",
+        "system": null
+       },
+       {
+        "key": "account:82",
+        "kind": "account",
+        "label": "okta:oren.whitlock@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:7",
+        "kind": "group",
+        "label": "okta:engineering",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 86,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:21",
+        "kind": "group",
+        "label": "aws:DevAdmin",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 223,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:12",
+        "kind": "perm",
+        "label": "s3:GetObject on s3://app-logs",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 192,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:11",
+     "action": "s3:DeleteObject",
+     "system": "aws",
+     "resource": "s3://customer-pii",
+     "resource_id": 5,
+     "environment": "prod",
+     "tags": [
+      "pii"
+     ],
+     "privileged": true,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-07-27T00:00:00",
+      "days_since_used": 73,
+      "events_90d": 12,
+      "active_days_90d": 1
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:18",
+        "kind": "identity",
+        "label": "Oren Whitlock",
+        "system": null
+       },
+       {
+        "key": "account:82",
+        "kind": "account",
+        "label": "okta:oren.whitlock@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:10",
+        "kind": "group",
+        "label": "okta:eng-platform",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 87,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:23",
+        "kind": "group",
+        "label": "aws:ProdAdmin",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 225,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:11",
+        "kind": "perm",
+        "label": "s3:DeleteObject on s3://customer-pii",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 199,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:9",
+     "action": "s3:GetObject",
+     "system": "aws",
+     "resource": "s3://customer-pii",
+     "resource_id": 5,
+     "environment": "prod",
+     "tags": [
+      "pii"
+     ],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "active_days_90d": 0
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:18",
+        "kind": "identity",
+        "label": "Oren Whitlock",
+        "system": null
+       },
+       {
+        "key": "account:82",
+        "kind": "account",
+        "label": "okta:oren.whitlock@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:7",
+        "kind": "group",
+        "label": "okta:engineering",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 86,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:21",
+        "kind": "group",
+        "label": "aws:DevAdmin",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 223,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:9",
+        "kind": "perm",
+        "label": "s3:GetObject on s3://customer-pii",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 191,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:16",
+     "action": "s3:GetObject",
+     "system": "aws",
+     "resource": "s3://ml-artifacts",
+     "resource_id": 8,
+     "environment": "staging",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-09-18T00:00:00",
+      "days_since_used": 20,
+      "events_90d": 308,
+      "active_days_90d": 41
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:18",
+        "kind": "identity",
+        "label": "Oren Whitlock",
+        "system": null
+       },
+       {
+        "key": "account:82",
+        "kind": "account",
+        "label": "okta:oren.whitlock@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:7",
+        "kind": "group",
+        "label": "okta:engineering",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 86,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:21",
+        "kind": "group",
+        "label": "aws:DevAdmin",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 223,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:16",
+        "kind": "perm",
+        "label": "s3:GetObject on s3://ml-artifacts",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 189,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:17",
+     "action": "s3:PutObject",
+     "system": "aws",
+     "resource": "s3://ml-artifacts",
+     "resource_id": 8,
+     "environment": "staging",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "active_days_90d": 0
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:18",
+        "kind": "identity",
+        "label": "Oren Whitlock",
+        "system": null
+       },
+       {
+        "key": "account:82",
+        "kind": "account",
+        "label": "okta:oren.whitlock@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:7",
+        "kind": "group",
+        "label": "okta:engineering",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 86,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:21",
+        "kind": "group",
+        "label": "aws:DevAdmin",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 223,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:17",
+        "kind": "perm",
+        "label": "s3:PutObject on s3://ml-artifacts",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 190,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:18",
+     "action": "s3:GetObject",
+     "system": "aws",
+     "resource": "s3://terraform-state",
+     "resource_id": 9,
+     "environment": "prod",
+     "tags": [
+      "infra"
+     ],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "active_days_90d": 0
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:18",
+        "kind": "identity",
+        "label": "Oren Whitlock",
+        "system": null
+       },
+       {
+        "key": "account:82",
+        "kind": "account",
+        "label": "okta:oren.whitlock@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:10",
+        "kind": "group",
+        "label": "okta:eng-platform",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 87,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:23",
+        "kind": "group",
+        "label": "aws:ProdAdmin",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 225,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:18",
+        "kind": "perm",
+        "label": "s3:GetObject on s3://terraform-state",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 201,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:19",
+     "action": "s3:PutObject",
+     "system": "aws",
+     "resource": "s3://terraform-state",
+     "resource_id": 9,
+     "environment": "prod",
+     "tags": [
+      "infra"
+     ],
+     "privileged": true,
+     "standing": true,
+     "usage": {
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "active_days_90d": 0
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:18",
+        "kind": "identity",
+        "label": "Oren Whitlock",
+        "system": null
+       },
+       {
+        "key": "account:82",
+        "kind": "account",
+        "label": "okta:oren.whitlock@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:10",
+        "kind": "group",
+        "label": "okta:eng-platform",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 87,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:23",
+        "kind": "group",
+        "label": "aws:ProdAdmin",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 225,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:19",
+        "kind": "perm",
+        "label": "s3:PutObject on s3://terraform-state",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 200,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:34",
+     "action": "repo:read",
+     "system": "github",
+     "resource": "larkspur/data-pipelines",
+     "resource_id": 19,
+     "environment": "prod",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-09-16T00:00:00",
+      "days_since_used": 22,
+      "events_90d": 241,
+      "active_days_90d": 39
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:18",
+        "kind": "identity",
+        "label": "Oren Whitlock",
+        "system": null
+       },
+       {
+        "key": "account:159",
+        "kind": "account",
+        "label": "github:oren-whitl",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:35",
+        "kind": "group",
+        "label": "github:all-engineers",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 302,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:34",
+        "kind": "perm",
+        "label": "repo:read on larkspur/data-pipelines",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 252,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:43",
+     "action": "repo:write",
+     "system": "github",
+     "resource": "larkspur/data-pipelines",
+     "resource_id": 19,
+     "environment": "prod",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "active_days_90d": 0
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:18",
+        "kind": "identity",
+        "label": "Oren Whitlock",
+        "system": null
+       },
+       {
+        "key": "account:159",
+        "kind": "account",
+        "label": "github:oren-whitl",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:32",
+        "kind": "group",
+        "label": "github:platform",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 303,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:43",
+        "kind": "perm",
+        "label": "repo:write on larkspur/data-pipelines",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 265,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:36",
+     "action": "repo:read",
+     "system": "github",
+     "resource": "larkspur/docs-site",
+     "resource_id": 21,
+     "environment": null,
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-09-17T00:00:00",
+      "days_since_used": 21,
+      "events_90d": 273,
+      "active_days_90d": 37
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:18",
+        "kind": "identity",
+        "label": "Oren Whitlock",
+        "system": null
+       },
+       {
+        "key": "account:159",
+        "kind": "account",
+        "label": "github:oren-whitl",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:35",
+        "kind": "group",
+        "label": "github:all-engineers",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 302,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:36",
+        "kind": "perm",
+        "label": "repo:read on larkspur/docs-site",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 254,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:40",
+     "action": "repo:write",
+     "system": "github",
+     "resource": "larkspur/docs-site",
+     "resource_id": 21,
+     "environment": null,
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-09-17T00:00:00",
+      "days_since_used": 21,
+      "events_90d": 278,
+      "active_days_90d": 39
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:18",
+        "kind": "identity",
+        "label": "Oren Whitlock",
+        "system": null
+       },
+       {
+        "key": "account:159",
+        "kind": "account",
+        "label": "github:oren-whitl",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:32",
+        "kind": "group",
+        "label": "github:platform",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 303,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:40",
+        "kind": "perm",
+        "label": "repo:write on larkspur/docs-site",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 267,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:41",
+     "action": "repo:admin",
+     "system": "github",
+     "resource": "larkspur/infra-terraform",
+     "resource_id": 18,
+     "environment": "prod",
+     "tags": [
+      "infra"
+     ],
+     "privileged": true,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-09-09T00:00:00",
+      "days_since_used": 29,
+      "events_90d": 94,
+      "active_days_90d": 12
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:18",
+        "kind": "identity",
+        "label": "Oren Whitlock",
+        "system": null
+       },
+       {
+        "key": "account:159",
+        "kind": "account",
+        "label": "github:oren-whitl",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:32",
+        "kind": "group",
+        "label": "github:platform",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 303,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:41",
+        "kind": "perm",
+        "label": "repo:admin on larkspur/infra-terraform",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 260,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:33",
+     "action": "repo:read",
+     "system": "github",
+     "resource": "larkspur/infra-terraform",
+     "resource_id": 18,
+     "environment": "prod",
+     "tags": [
+      "infra"
+     ],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-09-18T00:00:00",
+      "days_since_used": 20,
+      "events_90d": 263,
+      "active_days_90d": 44
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:18",
+        "kind": "identity",
+        "label": "Oren Whitlock",
+        "system": null
+       },
+       {
+        "key": "account:159",
+        "kind": "account",
+        "label": "github:oren-whitl",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:35",
+        "kind": "group",
+        "label": "github:all-engineers",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 302,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:33",
+        "kind": "perm",
+        "label": "repo:read on larkspur/infra-terraform",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 251,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:42",
+     "action": "repo:write",
+     "system": "github",
+     "resource": "larkspur/infra-terraform",
+     "resource_id": 18,
+     "environment": "prod",
+     "tags": [
+      "infra"
+     ],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-09-16T00:00:00",
+      "days_since_used": 22,
+      "events_90d": 219,
+      "active_days_90d": 31
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:18",
+        "kind": "identity",
+        "label": "Oren Whitlock",
+        "system": null
+       },
+       {
+        "key": "account:159",
+        "kind": "account",
+        "label": "github:oren-whitl",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:32",
+        "kind": "group",
+        "label": "github:platform",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 303,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:42",
+        "kind": "perm",
+        "label": "repo:write on larkspur/infra-terraform",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 264,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:35",
+     "action": "repo:read",
+     "system": "github",
+     "resource": "larkspur/ml-models",
+     "resource_id": 20,
+     "environment": "staging",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-09-18T00:00:00",
+      "days_since_used": 20,
+      "events_90d": 205,
+      "active_days_90d": 34
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:18",
+        "kind": "identity",
+        "label": "Oren Whitlock",
+        "system": null
+       },
+       {
+        "key": "account:159",
+        "kind": "account",
+        "label": "github:oren-whitl",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:35",
+        "kind": "group",
+        "label": "github:all-engineers",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 302,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:35",
+        "kind": "perm",
+        "label": "repo:read on larkspur/ml-models",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 253,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:44",
+     "action": "repo:write",
+     "system": "github",
+     "resource": "larkspur/ml-models",
+     "resource_id": 20,
+     "environment": "staging",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "active_days_90d": 0
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:18",
+        "kind": "identity",
+        "label": "Oren Whitlock",
+        "system": null
+       },
+       {
+        "key": "account:159",
+        "kind": "account",
+        "label": "github:oren-whitl",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:32",
+        "kind": "group",
+        "label": "github:platform",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 303,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:44",
+        "kind": "perm",
+        "label": "repo:write on larkspur/ml-models",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 266,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:32",
+     "action": "repo:read",
+     "system": "github",
+     "resource": "larkspur/mobile-app",
+     "resource_id": 17,
+     "environment": "prod",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-09-18T00:00:00",
+      "days_since_used": 20,
+      "events_90d": 290,
+      "active_days_90d": 41
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:18",
+        "kind": "identity",
+        "label": "Oren Whitlock",
+        "system": null
+       },
+       {
+        "key": "account:159",
+        "kind": "account",
+        "label": "github:oren-whitl",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:35",
+        "kind": "group",
+        "label": "github:all-engineers",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 302,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:32",
+        "kind": "perm",
+        "label": "repo:read on larkspur/mobile-app",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 250,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:39",
+     "action": "repo:write",
+     "system": "github",
+     "resource": "larkspur/mobile-app",
+     "resource_id": 17,
+     "environment": "prod",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-09-18T00:00:00",
+      "days_since_used": 20,
+      "events_90d": 264,
+      "active_days_90d": 40
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:18",
+        "kind": "identity",
+        "label": "Oren Whitlock",
+        "system": null
+       },
+       {
+        "key": "account:159",
+        "kind": "account",
+        "label": "github:oren-whitl",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:32",
+        "kind": "group",
+        "label": "github:platform",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 303,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:39",
+        "kind": "perm",
+        "label": "repo:write on larkspur/mobile-app",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 263,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:30",
+     "action": "repo:read",
+     "system": "github",
+     "resource": "larkspur/payments-service",
+     "resource_id": 15,
+     "environment": "prod",
+     "tags": [
+      "payments"
+     ],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-09-18T00:00:00",
+      "days_since_used": 20,
+      "events_90d": 271,
+      "active_days_90d": 41
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:18",
+        "kind": "identity",
+        "label": "Oren Whitlock",
+        "system": null
+       },
+       {
+        "key": "account:159",
+        "kind": "account",
+        "label": "github:oren-whitl",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:35",
+        "kind": "group",
+        "label": "github:all-engineers",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 302,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:30",
+        "kind": "perm",
+        "label": "repo:read on larkspur/payments-service",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 248,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:37",
+     "action": "repo:write",
+     "system": "github",
+     "resource": "larkspur/payments-service",
+     "resource_id": 15,
+     "environment": "prod",
+     "tags": [
+      "payments"
+     ],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "active_days_90d": 0
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:18",
+        "kind": "identity",
+        "label": "Oren Whitlock",
+        "system": null
+       },
+       {
+        "key": "account:159",
+        "kind": "account",
+        "label": "github:oren-whitl",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:32",
+        "kind": "group",
+        "label": "github:platform",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 303,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:37",
+        "kind": "perm",
+        "label": "repo:write on larkspur/payments-service",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 261,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:31",
+     "action": "repo:read",
+     "system": "github",
+     "resource": "larkspur/web-app",
+     "resource_id": 16,
+     "environment": "prod",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-07-23T00:00:00",
+      "days_since_used": 77,
+      "events_90d": 7,
+      "active_days_90d": 1
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:18",
+        "kind": "identity",
+        "label": "Oren Whitlock",
+        "system": null
+       },
+       {
+        "key": "account:159",
+        "kind": "account",
+        "label": "github:oren-whitl",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:35",
+        "kind": "group",
+        "label": "github:all-engineers",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 302,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:31",
+        "kind": "perm",
+        "label": "repo:read on larkspur/web-app",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 249,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:38",
+     "action": "repo:write",
+     "system": "github",
+     "resource": "larkspur/web-app",
+     "resource_id": 16,
+     "environment": "prod",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-09-17T00:00:00",
+      "days_since_used": 21,
+      "events_90d": 213,
+      "active_days_90d": 38
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:18",
+        "kind": "identity",
+        "label": "Oren Whitlock",
+        "system": null
+       },
+       {
+        "key": "account:159",
+        "kind": "account",
+        "label": "github:oren-whitl",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:32",
+        "kind": "group",
+        "label": "github:platform",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 303,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:38",
+        "kind": "perm",
+        "label": "repo:write on larkspur/web-app",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 262,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    }
+   ],
+   "violations": [
+    {
+     "policy_id": "terminated-access",
+     "policy_name": "Leavers retain no access",
+     "severity": "critical",
+     "identity_id": 18,
+     "identity_name": "Oren Whitlock",
+     "key": "terminated-access:18",
+     "message": "Oren Whitlock is terminated but retains 28 effective permissions via 2 active account(s)",
+     "evidence": [
+      "active account: github:oren-whitl",
+      "active account: okta:oren.whitlock@larkspur.example"
+     ],
+     "edges": [
+      [
+       "account:159",
+       "group:32"
+      ],
+      [
+       "account:159",
+       "group:35"
+      ],
+      [
+       "account:82",
+       "group:10"
+      ],
+      [
+       "account:82",
+       "group:7"
+      ]
+     ]
+    }
+   ],
+   "recommendations": [],
+   "secrets": [],
+   "delegations": [],
+   "owned_identities": [
+    {
+     "id": 81,
+     "name": "svc-data-export",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "AWS IAM user"
+    },
+    {
+     "id": 84,
+     "name": "jenkins-pat",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "GitHub pat"
+    }
+   ],
+   "risk": {
+    "effective": 28,
+    "unused": 13,
+    "privileged": 7,
+    "sensitive": 6,
+    "violations": 1,
+    "risk": 57
+   }
+  }
+ }
+}

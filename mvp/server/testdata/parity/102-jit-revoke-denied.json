@@ -1,0 +1,13 @@
+{
+ "name": "jit-revoke-denied",
+ "request": {
+  "method": "POST",
+  "path": "/api/jit/requests/1/revoke"
+ },
+ "response": {
+  "status": 400,
+  "body": {
+   "detail": "request is not active"
+  }
+ }
+}

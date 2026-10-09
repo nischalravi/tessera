@@ -1,0 +1,101 @@
+{
+ "name": "revoke-dry-run-explicit",
+ "request": {
+  "method": "POST",
+  "path": "/api/least-privilege/revoke",
+  "body": {
+   "edge_id": 19,
+   "dry_run": true
+  }
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "changes": [
+    {
+     "op": "remove",
+     "edge_id": 19,
+     "edge": [
+      "account:33",
+      "group:2"
+     ],
+     "label": "workday:emp-1033 → workday:AP Approver"
+    }
+   ],
+   "summary": {
+    "identities_affected": 1,
+    "permissions_removed": 1,
+    "permissions_added": 0,
+    "removed_recently_used": 0,
+    "removed_privileged": 0,
+    "violations_before": 74,
+    "violations_after": 73,
+    "violations_resolved": 1,
+    "violations_introduced": 0
+   },
+   "identities": [
+    {
+     "identity_id": 33,
+     "name": "Priya Ramaswamy",
+     "type": "human",
+     "removed": [
+      {
+       "perm_key": "perm:2",
+       "action": "payments:approve",
+       "resource": "Supplier Payments",
+       "system": "workday",
+       "privileged": false,
+       "tags": [
+        "payments",
+        "financial"
+       ],
+       "usage": {
+        "last_used": null,
+        "days_since_used": null,
+        "events_90d": 0,
+        "active_days_90d": 0
+       },
+       "used_last_30d": false
+      }
+     ],
+     "added": []
+    }
+   ],
+   "violations": {
+    "resolved": [
+     {
+      "policy_id": "sod-payments",
+      "policy_name": "SoD: create vs approve supplier payments",
+      "severity": "high",
+      "identity_id": 33,
+      "identity_name": "Priya Ramaswamy",
+      "key": "sod-payments:33",
+      "message": "Priya Ramaswamy can both payments:create and payments:approve on Supplier Payments",
+      "evidence": [
+       "Priya Ramaswamy → workday:emp-1033 → workday:AP Clerk → payments:create on Supplier Payments",
+       "Priya Ramaswamy → workday:emp-1033 → workday:AP Approver → payments:approve on Supplier Payments"
+      ],
+      "edges": [
+       [
+        "account:33",
+        "group:1"
+       ],
+       [
+        "account:33",
+        "group:2"
+       ]
+      ]
+     }
+    ],
+    "introduced": []
+   },
+   "dry_run": true,
+   "grant": {
+    "edge_id": 19,
+    "src": "account:33",
+    "dst": "group:2",
+    "label": "workday:emp-1033 → workday:AP Approver"
+   }
+  }
+ }
+}

@@ -1,0 +1,1239 @@
+{
+ "name": "violations-after",
+ "request": {
+  "method": "GET",
+  "path": "/api/violations"
+ },
+ "response": {
+  "status": 200,
+  "body": [
+   {
+    "policy_id": "ai-agents-no-pii",
+    "policy_name": "AI agents may not access PII",
+    "severity": "critical",
+    "identity_id": 70,
+    "identity_name": "Data Analyst Agent",
+    "key": "ai-agents-no-pii:70:perm:49",
+    "message": "Data Analyst Agent (ai_agent) can snowflake:SELECT on snowflake/CUSTOMERS [pii]",
+    "evidence": [
+     "Data Analyst Agent → snowflake:agent-data-analyst → snowflake:PII_READER → snowflake:SELECT on snowflake/CUSTOMERS"
+    ],
+    "edges": [
+     [
+      "account:208",
+      "group:38"
+     ]
+    ]
+   },
+   {
+    "policy_id": "ai-agents-no-pii",
+    "policy_name": "AI agents may not access PII",
+    "severity": "critical",
+    "identity_id": 71,
+    "identity_name": "SRE On-call Agent",
+    "key": "ai-agents-no-pii:71:perm:20",
+    "message": "SRE On-call Agent (ai_agent) can rds:Connect on rds/orders-db [pii]",
+    "evidence": [
+     "SRE On-call Agent → aws:agent-sre-oncall → aws:SREAgentRole → aws:ProdReadOnly → rds:Connect on rds/orders-db"
+    ],
+    "edges": [
+     [
+      "account:143",
+      "group:29"
+     ]
+    ]
+   },
+   {
+    "policy_id": "ai-agents-no-pii",
+    "policy_name": "AI agents may not access PII",
+    "severity": "critical",
+    "identity_id": 67,
+    "identity_name": "Support Copilot",
+    "key": "ai-agents-no-pii:67:perm:49",
+    "message": "Support Copilot (ai_agent) can snowflake:SELECT on snowflake/CUSTOMERS [pii]",
+    "evidence": [
+     "Support Copilot → snowflake:agent-support-copilot → snowflake:PII_READER → snowflake:SELECT on snowflake/CUSTOMERS"
+    ],
+    "edges": [
+     [
+      "account:207",
+      "group:38"
+     ]
+    ]
+   },
+   {
+    "policy_id": "terminated-access",
+    "policy_name": "Leavers retain no access",
+    "severity": "critical",
+    "identity_id": 23,
+    "identity_name": "Dmitri Ostrowski",
+    "key": "terminated-access:23",
+    "message": "Dmitri Ostrowski is terminated but retains 15 effective permissions via 2 active account(s)",
+    "evidence": [
+     "active account: github:dmitri-ostro",
+     "active account: snowflake:DMITRI_OSTROWSKI"
+    ],
+    "edges": [
+     [
+      "account:164",
+      "group:33"
+     ],
+     [
+      "account:164",
+      "group:35"
+     ],
+     [
+      "account:180",
+      "group:39"
+     ]
+    ]
+   },
+   {
+    "policy_id": "terminated-access",
+    "policy_name": "Leavers retain no access",
+    "severity": "critical",
+    "identity_id": 41,
+    "identity_name": "Hollis Brightwater",
+    "key": "terminated-access:41",
+    "message": "Hollis Brightwater is terminated but retains 2 effective permissions via 1 active account(s)",
+    "evidence": [
+     "active account: snowflake:HOLLIS_BRIGHTWATER"
+    ],
+    "edges": [
+     [
+      "account:192",
+      "group:37"
+     ]
+    ]
+   },
+   {
+    "policy_id": "terminated-access",
+    "policy_name": "Leavers retain no access",
+    "severity": "critical",
+    "identity_id": 18,
+    "identity_name": "Oren Whitlock",
+    "key": "terminated-access:18",
+    "message": "Oren Whitlock is terminated but retains 28 effective permissions via 2 active account(s)",
+    "evidence": [
+     "active account: github:oren-whitl",
+     "active account: okta:oren.whitlock@larkspur.example"
+    ],
+    "edges": [
+     [
+      "account:159",
+      "group:32"
+     ],
+     [
+      "account:159",
+      "group:35"
+     ],
+     [
+      "account:82",
+      "group:10"
+     ],
+     [
+      "account:82",
+      "group:7"
+     ]
+    ]
+   },
+   {
+    "policy_id": "nhi-no-prod-admin",
+    "policy_name": "Non-human identities may not hold prod admin",
+    "severity": "high",
+    "identity_id": 61,
+    "identity_name": "ISU_Okta_Sync",
+    "key": "nhi-no-prod-admin:61:account:61->group:4",
+    "message": "ISU_Okta_Sync has standing privileged prod access via workday:HR Partner: workers:edit on Worker Records",
+    "evidence": [
+     "ISU_Okta_Sync → workday:ISU_Okta_Sync → workday:HR Partner → workers:edit on Worker Records"
+    ],
+    "edges": [
+     [
+      "account:61",
+      "group:4"
+     ]
+    ]
+   },
+   {
+    "policy_id": "nhi-no-prod-admin",
+    "policy_name": "Non-human identities may not hold prod admin",
+    "severity": "high",
+    "identity_id": 62,
+    "identity_name": "ISU_Payroll_Export",
+    "key": "nhi-no-prod-admin:62:account:62->group:3",
+    "message": "ISU_Payroll_Export has standing privileged prod access via workday:Payroll Administrator: payroll:run on Payroll",
+    "evidence": [
+     "ISU_Payroll_Export → workday:ISU_Payroll_Export → workday:Payroll Administrator → payroll:run on Payroll"
+    ],
+    "edges": [
+     [
+      "account:62",
+      "group:3"
+     ]
+    ]
+   },
+   {
+    "policy_id": "nhi-no-prod-admin",
+    "policy_name": "Non-human identities may not hold prod admin",
+    "severity": "high",
+    "identity_id": 65,
+    "identity_name": "hr-sync-token",
+    "key": "nhi-no-prod-admin:65:account:126->group:19",
+    "message": "hr-sync-token has standing privileged prod access via okta:okta-helpdesk: okta:UserAdmin on larkspur.okta.example",
+    "evidence": [
+     "hr-sync-token → okta:hr-sync-token → okta:okta-helpdesk → okta:UserAdmin on larkspur.okta.example"
+    ],
+    "edges": [
+     [
+      "account:126",
+      "group:19"
+     ]
+    ]
+   },
+   {
+    "policy_id": "nhi-no-prod-admin",
+    "policy_name": "Non-human identities may not hold prod admin",
+    "severity": "high",
+    "identity_id": 84,
+    "identity_name": "jenkins-pat",
+    "key": "nhi-no-prod-admin:84:account:175->perm:45",
+    "message": "jenkins-pat has standing privileged prod access via repo:admin on larkspur/payments-service: repo:admin on larkspur/payments-service",
+    "evidence": [
+     "jenkins-pat → github:jenkins-pat → repo:admin on larkspur/payments-service"
+    ],
+    "edges": [
+     [
+      "account:175",
+      "perm:45"
+     ]
+    ]
+   },
+   {
+    "policy_id": "nhi-no-prod-admin",
+    "policy_name": "Non-human identities may not hold prod admin",
+    "severity": "high",
+    "identity_id": 66,
+    "identity_name": "old-migration-token",
+    "key": "nhi-no-prod-admin:66:account:127->group:18",
+    "message": "old-migration-token has standing privileged prod access via okta:okta-super-admins: okta:SuperAdmin on larkspur.okta.example",
+    "evidence": [
+     "old-migration-token → okta:old-migration-token → okta:okta-super-admins → okta:SuperAdmin on larkspur.okta.example"
+    ],
+    "edges": [
+     [
+      "account:127",
+      "group:18"
+     ]
+    ]
+   },
+   {
+    "policy_id": "nhi-no-prod-admin",
+    "policy_name": "Non-human identities may not hold prod admin",
+    "severity": "high",
+    "identity_id": 64,
+    "identity_name": "scim-provisioner",
+    "key": "nhi-no-prod-admin:64:account:125->group:18",
+    "message": "scim-provisioner has standing privileged prod access via okta:okta-super-admins: okta:SuperAdmin on larkspur.okta.example",
+    "evidence": [
+     "scim-provisioner → okta:scim-provisioner → okta:okta-super-admins → okta:SuperAdmin on larkspur.okta.example"
+    ],
+    "edges": [
+     [
+      "account:125",
+      "group:18"
+     ]
+    ]
+   },
+   {
+    "policy_id": "nhi-no-prod-admin",
+    "policy_name": "Non-human identities may not hold prod admin",
+    "severity": "high",
+    "identity_id": 73,
+    "identity_name": "svc-ci-deployer",
+    "key": "nhi-no-prod-admin:73:account:134->group:28",
+    "message": "svc-ci-deployer has standing privileged prod access via aws:CIDeployRole: ec2:TerminateInstances on ec2/prod-fleet, s3:PutObject on s3://terraform-state",
+    "evidence": [
+     "svc-ci-deployer → aws:svc-ci-deployer → aws:CIDeployRole → s3:PutObject on s3://terraform-state",
+     "svc-ci-deployer → aws:svc-ci-deployer → aws:CIDeployRole → ec2:TerminateInstances on ec2/prod-fleet"
+    ],
+    "edges": [
+     [
+      "account:134",
+      "group:28"
+     ]
+    ]
+   },
+   {
+    "policy_id": "nhi-no-prod-admin",
+    "policy_name": "Non-human identities may not hold prod admin",
+    "severity": "high",
+    "identity_id": 78,
+    "identity_name": "svc-terraform",
+    "key": "nhi-no-prod-admin:78:account:139->perm:24",
+    "message": "svc-terraform has standing privileged prod access via iam:* on aws-account/larkspur-prod: iam:* on aws-account/larkspur-prod",
+    "evidence": [
+     "svc-terraform → aws:svc-terraform → iam:* on aws-account/larkspur-prod"
+    ],
+    "edges": [
+     [
+      "account:139",
+      "perm:24"
+     ]
+    ]
+   },
+   {
+    "policy_id": "nhi-no-prod-admin",
+    "policy_name": "Non-human identities may not hold prod admin",
+    "severity": "high",
+    "identity_id": 78,
+    "identity_name": "svc-terraform",
+    "key": "nhi-no-prod-admin:78:account:139->perm:19",
+    "message": "svc-terraform has standing privileged prod access via s3:PutObject on s3://terraform-state: s3:PutObject on s3://terraform-state",
+    "evidence": [
+     "svc-terraform → aws:svc-terraform → s3:PutObject on s3://terraform-state"
+    ],
+    "edges": [
+     [
+      "account:139",
+      "perm:19"
+     ]
+    ]
+   },
+   {
+    "policy_id": "nhi-ownership",
+    "policy_name": "Every NHI and AI agent has an active owner",
+    "severity": "high",
+    "identity_id": 63,
+    "identity_name": "ISU_Expense_Bot",
+    "key": "nhi-ownership:63",
+    "message": "ISU_Expense_Bot is owned by Hollis Brightwater, who is terminated",
+    "evidence": [
+     "1 effective permissions"
+    ],
+    "edges": []
+   },
+   {
+    "policy_id": "nhi-ownership",
+    "policy_name": "Every NHI and AI agent has an active owner",
+    "severity": "high",
+    "identity_id": 89,
+    "identity_name": "LOOKER_SVC",
+    "key": "nhi-ownership:89",
+    "message": "LOOKER_SVC is owned by Dmitri Ostrowski, who is terminated",
+    "evidence": [
+     "3 effective permissions"
+    ],
+    "edges": []
+   },
+   {
+    "policy_id": "nhi-ownership",
+    "policy_name": "Every NHI and AI agent has an active owner",
+    "severity": "high",
+    "identity_id": 72,
+    "identity_name": "Sales Research Agent",
+    "key": "nhi-ownership:72",
+    "message": "Sales Research Agent is owned by Hollis Brightwater, who is terminated",
+    "evidence": [
+     "3 effective permissions"
+    ],
+    "edges": []
+   },
+   {
+    "policy_id": "nhi-ownership",
+    "policy_name": "Every NHI and AI agent has an active owner",
+    "severity": "high",
+    "identity_id": 90,
+    "identity_name": "TABLEAU_LEGACY",
+    "key": "nhi-ownership:90",
+    "message": "TABLEAU_LEGACY has no owner",
+    "evidence": [
+     "2 effective permissions"
+    ],
+    "edges": []
+   },
+   {
+    "policy_id": "nhi-ownership",
+    "policy_name": "Every NHI and AI agent has an active owner",
+    "severity": "high",
+    "identity_id": 86,
+    "identity_name": "docs-publisher",
+    "key": "nhi-ownership:86",
+    "message": "docs-publisher has no owner",
+    "evidence": [
+     "1 effective permissions"
+    ],
+    "edges": []
+   },
+   {
+    "policy_id": "nhi-ownership",
+    "policy_name": "Every NHI and AI agent has an active owner",
+    "severity": "high",
+    "identity_id": 83,
+    "identity_name": "infra-deploy-key",
+    "key": "nhi-ownership:83",
+    "message": "infra-deploy-key has no owner",
+    "evidence": [
+     "1 effective permissions"
+    ],
+    "edges": []
+   },
+   {
+    "policy_id": "nhi-ownership",
+    "policy_name": "Every NHI and AI agent has an active owner",
+    "severity": "high",
+    "identity_id": 84,
+    "identity_name": "jenkins-pat",
+    "key": "nhi-ownership:84",
+    "message": "jenkins-pat is owned by Oren Whitlock, who is terminated",
+    "evidence": [
+     "2 effective permissions"
+    ],
+    "edges": []
+   },
+   {
+    "policy_id": "nhi-ownership",
+    "policy_name": "Every NHI and AI agent has an active owner",
+    "severity": "high",
+    "identity_id": 66,
+    "identity_name": "old-migration-token",
+    "key": "nhi-ownership:66",
+    "message": "old-migration-token has no owner",
+    "evidence": [
+     "1 effective permissions"
+    ],
+    "edges": []
+   },
+   {
+    "policy_id": "nhi-ownership",
+    "policy_name": "Every NHI and AI agent has an active owner",
+    "severity": "high",
+    "identity_id": 74,
+    "identity_name": "svc-backup-agent",
+    "key": "nhi-ownership:74",
+    "message": "svc-backup-agent is owned by Dmitri Ostrowski, who is terminated",
+    "evidence": [
+     "3 effective permissions"
+    ],
+    "edges": []
+   },
+   {
+    "policy_id": "nhi-ownership",
+    "policy_name": "Every NHI and AI agent has an active owner",
+    "severity": "high",
+    "identity_id": 81,
+    "identity_name": "svc-data-export",
+    "key": "nhi-ownership:81",
+    "message": "svc-data-export is owned by Oren Whitlock, who is terminated",
+    "evidence": [
+     "2 effective permissions"
+    ],
+    "edges": []
+   },
+   {
+    "policy_id": "nhi-ownership",
+    "policy_name": "Every NHI and AI agent has an active owner",
+    "severity": "high",
+    "identity_id": 75,
+    "identity_name": "svc-legacy-etl",
+    "key": "nhi-ownership:75",
+    "message": "svc-legacy-etl has no owner",
+    "evidence": [
+     "3 effective permissions"
+    ],
+    "edges": []
+   },
+   {
+    "policy_id": "no-standing-prod-admin",
+    "policy_name": "No standing admin on prod",
+    "severity": "high",
+    "identity_id": 93,
+    "identity_name": "Ada Parity",
+    "key": "no-standing-prod-admin:93:account:218->group:10",
+    "message": "Ada Parity has standing privileged prod access via okta:eng-platform: ec2:TerminateInstances on ec2/prod-fleet, iam:* on aws-account/larkspur-prod, rds:ModifyDBInstance on rds/orders-db …",
+    "evidence": [
+     "Ada Parity → okta:ada.parity@larkspur.example → okta:eng-platform → aws:ProdAdmin → iam:* on aws-account/larkspur-prod",
+     "Ada Parity → okta:ada.parity@larkspur.example → okta:eng-platform → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet",
+     "Ada Parity → okta:ada.parity@larkspur.example → okta:eng-platform → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db",
+     "Ada Parity → okta:ada.parity@larkspur.example → okta:eng-platform → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+    ],
+    "edges": [
+     [
+      "account:218",
+      "group:10"
+     ]
+    ]
+   },
+   {
+    "policy_id": "no-standing-prod-admin",
+    "policy_name": "No standing admin on prod",
+    "severity": "high",
+    "identity_id": 93,
+    "identity_name": "Ada Parity",
+    "key": "no-standing-prod-admin:93:account:217->group:32",
+    "message": "Ada Parity has standing privileged prod access via github:platform: repo:admin on larkspur/infra-terraform",
+    "evidence": [
+     "Ada Parity → github:ada-parity → github:platform → repo:admin on larkspur/infra-terraform"
+    ],
+    "edges": [
+     [
+      "account:217",
+      "group:32"
+     ]
+    ]
+   },
+   {
+    "policy_id": "no-standing-prod-admin",
+    "policy_name": "No standing admin on prod",
+    "severity": "high",
+    "identity_id": 32,
+    "identity_name": "Beatrix Pemberton",
+    "key": "no-standing-prod-admin:32:account:32->group:3",
+    "message": "Beatrix Pemberton has standing privileged prod access via workday:Payroll Administrator: payroll:run on Payroll",
+    "evidence": [
+     "Beatrix Pemberton → workday:emp-1032 → workday:Payroll Administrator → payroll:run on Payroll"
+    ],
+    "edges": [
+     [
+      "account:32",
+      "group:3"
+     ]
+    ]
+   },
+   {
+    "policy_id": "no-standing-prod-admin",
+    "policy_name": "No standing admin on prod",
+    "severity": "high",
+    "identity_id": 2,
+    "identity_name": "Caspian Arkwright",
+    "key": "no-standing-prod-admin:2:account:144->group:36",
+    "message": "Caspian Arkwright has standing privileged prod access via github:org-owners: org:admin on github.com/larkspur",
+    "evidence": [
+     "Caspian Arkwright → github:caspian-arkwr → github:org-owners → org:admin on github.com/larkspur"
+    ],
+    "edges": [
+     [
+      "account:144",
+      "group:36"
+     ]
+    ]
+   },
+   {
+    "policy_id": "no-standing-prod-admin",
+    "policy_name": "No standing admin on prod",
+    "severity": "high",
+    "identity_id": 19,
+    "identity_name": "Cyrus Quennell",
+    "key": "no-standing-prod-admin:19:account:160->group:32",
+    "message": "Cyrus Quennell has standing privileged prod access via github:platform: repo:admin on larkspur/infra-terraform",
+    "evidence": [
+     "Cyrus Quennell → github:cyrus-quenn → github:platform → repo:admin on larkspur/infra-terraform"
+    ],
+    "edges": [
+     [
+      "account:160",
+      "group:32"
+     ]
+    ]
+   },
+   {
+    "policy_id": "no-standing-prod-admin",
+    "policy_name": "No standing admin on prod",
+    "severity": "high",
+    "identity_id": 19,
+    "identity_name": "Cyrus Quennell",
+    "key": "no-standing-prod-admin:19:account:83->group:10",
+    "message": "Cyrus Quennell has standing privileged prod access via okta:eng-platform: ec2:TerminateInstances on ec2/prod-fleet, iam:* on aws-account/larkspur-prod, rds:ModifyDBInstance on rds/orders-db …",
+    "evidence": [
+     "Cyrus Quennell → okta:cyrus.quennell@larkspur.example → okta:eng-platform → aws:ProdAdmin → iam:* on aws-account/larkspur-prod",
+     "Cyrus Quennell → okta:cyrus.quennell@larkspur.example → okta:eng-platform → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet",
+     "Cyrus Quennell → okta:cyrus.quennell@larkspur.example → okta:eng-platform → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db",
+     "Cyrus Quennell → okta:cyrus.quennell@larkspur.example → okta:eng-platform → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+    ],
+    "edges": [
+     [
+      "account:83",
+      "group:10"
+     ]
+    ]
+   },
+   {
+    "policy_id": "no-standing-prod-admin",
+    "policy_name": "No standing admin on prod",
+    "severity": "high",
+    "identity_id": 31,
+    "identity_name": "Delphine Bellweather",
+    "key": "no-standing-prod-admin:31:account:172->group:34",
+    "message": "Delphine Bellweather has standing privileged prod access via github:security: repo:admin on larkspur/payments-service",
+    "evidence": [
+     "Delphine Bellweather → github:delphine-bellw → github:security → repo:admin on larkspur/payments-service"
+    ],
+    "edges": [
+     [
+      "account:172",
+      "group:34"
+     ]
+    ]
+   },
+   {
+    "policy_id": "no-standing-prod-admin",
+    "policy_name": "No standing admin on prod",
+    "severity": "high",
+    "identity_id": 57,
+    "identity_name": "Esme Thornbury",
+    "key": "no-standing-prod-admin:57:account:57->group:4",
+    "message": "Esme Thornbury has standing privileged prod access via workday:HR Partner: workers:edit on Worker Records",
+    "evidence": [
+     "Esme Thornbury → workday:emp-1057 → workday:HR Partner → workers:edit on Worker Records"
+    ],
+    "edges": [
+     [
+      "account:57",
+      "group:4"
+     ]
+    ]
+   },
+   {
+    "policy_id": "no-standing-prod-admin",
+    "policy_name": "No standing admin on prod",
+    "severity": "high",
+    "identity_id": 60,
+    "identity_name": "Idris Achterberg",
+    "key": "no-standing-prod-admin:60:account:60->group:4",
+    "message": "Idris Achterberg has standing privileged prod access via workday:HR Partner: workers:edit on Worker Records",
+    "evidence": [
+     "Idris Achterberg → workday:emp-1060 → workday:HR Partner → workers:edit on Worker Records"
+    ],
+    "edges": [
+     [
+      "account:60",
+      "group:4"
+     ]
+    ]
+   },
+   {
+    "policy_id": "no-standing-prod-admin",
+    "policy_name": "No standing admin on prod",
+    "severity": "high",
+    "identity_id": 16,
+    "identity_name": "Ingrid Lindqvist",
+    "key": "no-standing-prod-admin:16:account:157->group:36",
+    "message": "Ingrid Lindqvist has standing privileged prod access via github:org-owners: org:admin on github.com/larkspur",
+    "evidence": [
+     "Ingrid Lindqvist → github:ingrid-lindq → github:org-owners → org:admin on github.com/larkspur"
+    ],
+    "edges": [
+     [
+      "account:157",
+      "group:36"
+     ]
+    ]
+   },
+   {
+    "policy_id": "no-standing-prod-admin",
+    "policy_name": "No standing admin on prod",
+    "severity": "high",
+    "identity_id": 16,
+    "identity_name": "Ingrid Lindqvist",
+    "key": "no-standing-prod-admin:16:account:157->group:32",
+    "message": "Ingrid Lindqvist has standing privileged prod access via github:platform: repo:admin on larkspur/infra-terraform",
+    "evidence": [
+     "Ingrid Lindqvist → github:ingrid-lindq → github:platform → repo:admin on larkspur/infra-terraform"
+    ],
+    "edges": [
+     [
+      "account:157",
+      "group:32"
+     ]
+    ]
+   },
+   {
+    "policy_id": "no-standing-prod-admin",
+    "policy_name": "No standing admin on prod",
+    "severity": "high",
+    "identity_id": 16,
+    "identity_name": "Ingrid Lindqvist",
+    "key": "no-standing-prod-admin:16:account:80->group:18",
+    "message": "Ingrid Lindqvist has standing privileged prod access via okta:okta-super-admins: okta:SuperAdmin on larkspur.okta.example",
+    "evidence": [
+     "Ingrid Lindqvist → okta:ingrid.lindqvist@larkspur.example → okta:okta-super-admins → okta:SuperAdmin on larkspur.okta.example"
+    ],
+    "edges": [
+     [
+      "account:80",
+      "group:18"
+     ]
+    ]
+   },
+   {
+    "policy_id": "no-standing-prod-admin",
+    "policy_name": "No standing admin on prod",
+    "severity": "high",
+    "identity_id": 16,
+    "identity_name": "Ingrid Lindqvist",
+    "key": "no-standing-prod-admin:16:account:80->group:10",
+    "message": "Ingrid Lindqvist has standing privileged prod access via okta:eng-platform: ec2:TerminateInstances on ec2/prod-fleet, iam:* on aws-account/larkspur-prod, rds:ModifyDBInstance on rds/orders-db …",
+    "evidence": [
+     "Ingrid Lindqvist → okta:ingrid.lindqvist@larkspur.example → okta:eng-platform → aws:ProdAdmin → iam:* on aws-account/larkspur-prod",
+     "Ingrid Lindqvist → okta:ingrid.lindqvist@larkspur.example → okta:eng-platform → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet",
+     "Ingrid Lindqvist → okta:ingrid.lindqvist@larkspur.example → okta:eng-platform → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db",
+     "Ingrid Lindqvist → okta:ingrid.lindqvist@larkspur.example → okta:eng-platform → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+    ],
+    "edges": [
+     [
+      "account:80",
+      "group:10"
+     ]
+    ]
+   },
+   {
+    "policy_id": "no-standing-prod-admin",
+    "policy_name": "No standing admin on prod",
+    "severity": "high",
+    "identity_id": 52,
+    "identity_name": "Juno Lindqvist",
+    "key": "no-standing-prod-admin:52:account:116->group:19",
+    "message": "Juno Lindqvist has standing privileged prod access via okta:okta-helpdesk: okta:UserAdmin on larkspur.okta.example",
+    "evidence": [
+     "Juno Lindqvist → okta:juno.lindqvist@larkspur.example → okta:okta-helpdesk → okta:UserAdmin on larkspur.okta.example"
+    ],
+    "edges": [
+     [
+      "account:116",
+      "group:19"
+     ]
+    ]
+   },
+   {
+    "policy_id": "no-standing-prod-admin",
+    "policy_name": "No standing admin on prod",
+    "severity": "high",
+    "identity_id": 4,
+    "identity_name": "Kofi Mensah",
+    "key": "no-standing-prod-admin:4:account:145->group:36",
+    "message": "Kofi Mensah has standing privileged prod access via github:org-owners: org:admin on github.com/larkspur",
+    "evidence": [
+     "Kofi Mensah → github:kofi-mensa → github:org-owners → org:admin on github.com/larkspur"
+    ],
+    "edges": [
+     [
+      "account:145",
+      "group:36"
+     ]
+    ]
+   },
+   {
+    "policy_id": "no-standing-prod-admin",
+    "policy_name": "No standing admin on prod",
+    "severity": "high",
+    "identity_id": 21,
+    "identity_name": "Lena Valdivia",
+    "key": "no-standing-prod-admin:21:account:162->group:32",
+    "message": "Lena Valdivia has standing privileged prod access via github:platform: repo:admin on larkspur/infra-terraform",
+    "evidence": [
+     "Lena Valdivia → github:lena-valdi → github:platform → repo:admin on larkspur/infra-terraform"
+    ],
+    "edges": [
+     [
+      "account:162",
+      "group:32"
+     ]
+    ]
+   },
+   {
+    "policy_id": "no-standing-prod-admin",
+    "policy_name": "No standing admin on prod",
+    "severity": "high",
+    "identity_id": 21,
+    "identity_name": "Lena Valdivia",
+    "key": "no-standing-prod-admin:21:account:85->group:10",
+    "message": "Lena Valdivia has standing privileged prod access via okta:eng-platform: ec2:TerminateInstances on ec2/prod-fleet, iam:* on aws-account/larkspur-prod, rds:ModifyDBInstance on rds/orders-db …",
+    "evidence": [
+     "Lena Valdivia → okta:lena.valdivia@larkspur.example → okta:eng-platform → aws:ProdAdmin → iam:* on aws-account/larkspur-prod",
+     "Lena Valdivia → okta:lena.valdivia@larkspur.example → okta:eng-platform → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet",
+     "Lena Valdivia → okta:lena.valdivia@larkspur.example → okta:eng-platform → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db",
+     "Lena Valdivia → okta:lena.valdivia@larkspur.example → okta:eng-platform → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+    ],
+    "edges": [
+     [
+      "account:85",
+      "group:10"
+     ]
+    ]
+   },
+   {
+    "policy_id": "no-standing-prod-admin",
+    "policy_name": "No standing admin on prod",
+    "severity": "high",
+    "identity_id": 59,
+    "identity_name": "Mei Winslow",
+    "key": "no-standing-prod-admin:59:account:59->group:4",
+    "message": "Mei Winslow has standing privileged prod access via workday:HR Partner: workers:edit on Worker Records",
+    "evidence": [
+     "Mei Winslow → workday:emp-1059 → workday:HR Partner → workers:edit on Worker Records"
+    ],
+    "edges": [
+     [
+      "account:59",
+      "group:4"
+     ]
+    ]
+   },
+   {
+    "policy_id": "no-standing-prod-admin",
+    "policy_name": "No standing admin on prod",
+    "severity": "high",
+    "identity_id": 22,
+    "identity_name": "Sana Iyer",
+    "key": "no-standing-prod-admin:22:account:179->group:43",
+    "message": "Sana Iyer has standing privileged prod access via snowflake:ACCOUNTADMIN: snowflake:ACCOUNTADMIN on snowflake/LARKSPUR_SF, snowflake:OWNERSHIP on snowflake/CUSTOMERS, snowflake:OWNERSHIP on snowflake/EVENTS …",
+    "evidence": [
+     "Sana Iyer → snowflake:SANA_IYER → snowflake:ACCOUNTADMIN → snowflake:ACCOUNTADMIN on snowflake/LARKSPUR_SF",
+     "Sana Iyer → snowflake:SANA_IYER → snowflake:ACCOUNTADMIN → snowflake:SYSADMIN → snowflake:OWNERSHIP on snowflake/CUSTOMERS",
+     "Sana Iyer → snowflake:SANA_IYER → snowflake:ACCOUNTADMIN → snowflake:SYSADMIN → snowflake:OWNERSHIP on snowflake/FINANCE",
+     "Sana Iyer → snowflake:SANA_IYER → snowflake:ACCOUNTADMIN → snowflake:SYSADMIN → snowflake:OWNERSHIP on snowflake/EVENTS"
+    ],
+    "edges": [
+     [
+      "account:179",
+      "group:43"
+     ]
+    ]
+   },
+   {
+    "policy_id": "no-standing-prod-admin",
+    "policy_name": "No standing admin on prod",
+    "severity": "high",
+    "identity_id": 24,
+    "identity_name": "Talia Bellweather",
+    "key": "no-standing-prod-admin:24:account:181->group:43",
+    "message": "Talia Bellweather has standing privileged prod access via snowflake:ACCOUNTADMIN: snowflake:ACCOUNTADMIN on snowflake/LARKSPUR_SF, snowflake:OWNERSHIP on snowflake/CUSTOMERS, snowflake:OWNERSHIP on snowflake/EVENTS …",
+    "evidence": [
+     "Talia Bellweather → snowflake:TALIA_BELLWEATHER → snowflake:ACCOUNTADMIN → snowflake:ACCOUNTADMIN on snowflake/LARKSPUR_SF",
+     "Talia Bellweather → snowflake:TALIA_BELLWEATHER → snowflake:ACCOUNTADMIN → snowflake:SYSADMIN → snowflake:OWNERSHIP on snowflake/CUSTOMERS",
+     "Talia Bellweather → snowflake:TALIA_BELLWEATHER → snowflake:ACCOUNTADMIN → snowflake:SYSADMIN → snowflake:OWNERSHIP on snowflake/FINANCE",
+     "Talia Bellweather → snowflake:TALIA_BELLWEATHER → snowflake:ACCOUNTADMIN → snowflake:SYSADMIN → snowflake:OWNERSHIP on snowflake/EVENTS"
+    ],
+    "edges": [
+     [
+      "account:181",
+      "group:43"
+     ]
+    ]
+   },
+   {
+    "policy_id": "no-standing-prod-admin",
+    "policy_name": "No standing admin on prod",
+    "severity": "high",
+    "identity_id": 58,
+    "identity_name": "Teodor Delacroix",
+    "key": "no-standing-prod-admin:58:account:58->group:3",
+    "message": "Teodor Delacroix has standing privileged prod access via workday:Payroll Administrator: payroll:run on Payroll",
+    "evidence": [
+     "Teodor Delacroix → workday:emp-1058 → workday:Payroll Administrator → payroll:run on Payroll"
+    ],
+    "edges": [
+     [
+      "account:58",
+      "group:3"
+     ]
+    ]
+   },
+   {
+    "policy_id": "no-standing-prod-admin",
+    "policy_name": "No standing admin on prod",
+    "severity": "high",
+    "identity_id": 58,
+    "identity_name": "Teodor Delacroix",
+    "key": "no-standing-prod-admin:58:account:58->group:4",
+    "message": "Teodor Delacroix has standing privileged prod access via workday:HR Partner: workers:edit on Worker Records",
+    "evidence": [
+     "Teodor Delacroix → workday:emp-1058 → workday:HR Partner → workers:edit on Worker Records"
+    ],
+    "edges": [
+     [
+      "account:58",
+      "group:4"
+     ]
+    ]
+   },
+   {
+    "policy_id": "no-standing-prod-admin",
+    "policy_name": "No standing admin on prod",
+    "severity": "high",
+    "identity_id": 29,
+    "identity_name": "Thandiwe Mokoena",
+    "key": "no-standing-prod-admin:29:account:170->group:34",
+    "message": "Thandiwe Mokoena has standing privileged prod access via github:security: repo:admin on larkspur/payments-service",
+    "evidence": [
+     "Thandiwe Mokoena → github:thandiwe-mokoe → github:security → repo:admin on larkspur/payments-service"
+    ],
+    "edges": [
+     [
+      "account:170",
+      "group:34"
+     ]
+    ]
+   },
+   {
+    "policy_id": "no-standing-prod-admin",
+    "policy_name": "No standing admin on prod",
+    "severity": "high",
+    "identity_id": 29,
+    "identity_name": "Thandiwe Mokoena",
+    "key": "no-standing-prod-admin:29:account:93->group:18",
+    "message": "Thandiwe Mokoena has standing privileged prod access via okta:okta-super-admins: okta:SuperAdmin on larkspur.okta.example",
+    "evidence": [
+     "Thandiwe Mokoena → okta:thandiwe.mokoena@larkspur.example → okta:okta-super-admins → okta:SuperAdmin on larkspur.okta.example"
+    ],
+    "edges": [
+     [
+      "account:93",
+      "group:18"
+     ]
+    ]
+   },
+   {
+    "policy_id": "no-standing-prod-admin",
+    "policy_name": "No standing admin on prod",
+    "severity": "high",
+    "identity_id": 30,
+    "identity_name": "Yusuf Iyer",
+    "key": "no-standing-prod-admin:30:account:171->group:34",
+    "message": "Yusuf Iyer has standing privileged prod access via github:security: repo:admin on larkspur/payments-service",
+    "evidence": [
+     "Yusuf Iyer → github:yusuf-iyer → github:security → repo:admin on larkspur/payments-service"
+    ],
+    "edges": [
+     [
+      "account:171",
+      "group:34"
+     ]
+    ]
+   },
+   {
+    "policy_id": "no-standing-prod-admin",
+    "policy_name": "No standing admin on prod",
+    "severity": "high",
+    "identity_id": 30,
+    "identity_name": "Yusuf Iyer",
+    "key": "no-standing-prod-admin:30:account:94->group:19",
+    "message": "Yusuf Iyer has standing privileged prod access via okta:okta-helpdesk: okta:UserAdmin on larkspur.okta.example",
+    "evidence": [
+     "Yusuf Iyer → okta:yusuf.iyer@larkspur.example → okta:okta-helpdesk → okta:UserAdmin on larkspur.okta.example"
+    ],
+    "edges": [
+     [
+      "account:94",
+      "group:19"
+     ]
+    ]
+   },
+   {
+    "policy_id": "no-standing-prod-admin",
+    "policy_name": "No standing admin on prod",
+    "severity": "high",
+    "identity_id": 20,
+    "identity_name": "Zora Whitlock",
+    "key": "no-standing-prod-admin:20:account:161->group:32",
+    "message": "Zora Whitlock has standing privileged prod access via github:platform: repo:admin on larkspur/infra-terraform",
+    "evidence": [
+     "Zora Whitlock → github:zora-whitl → github:platform → repo:admin on larkspur/infra-terraform"
+    ],
+    "edges": [
+     [
+      "account:161",
+      "group:32"
+     ]
+    ]
+   },
+   {
+    "policy_id": "no-standing-prod-admin",
+    "policy_name": "No standing admin on prod",
+    "severity": "high",
+    "identity_id": 20,
+    "identity_name": "Zora Whitlock",
+    "key": "no-standing-prod-admin:20:account:84->group:10",
+    "message": "Zora Whitlock has standing privileged prod access via okta:eng-platform: ec2:TerminateInstances on ec2/prod-fleet, iam:* on aws-account/larkspur-prod, rds:ModifyDBInstance on rds/orders-db …",
+    "evidence": [
+     "Zora Whitlock → okta:zora.whitlock@larkspur.example → okta:eng-platform → aws:ProdAdmin → iam:* on aws-account/larkspur-prod",
+     "Zora Whitlock → okta:zora.whitlock@larkspur.example → okta:eng-platform → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet",
+     "Zora Whitlock → okta:zora.whitlock@larkspur.example → okta:eng-platform → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db",
+     "Zora Whitlock → okta:zora.whitlock@larkspur.example → okta:eng-platform → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+    ],
+    "edges": [
+     [
+      "account:84",
+      "group:10"
+     ]
+    ]
+   },
+   {
+    "policy_id": "stale-secrets",
+    "policy_name": "Secrets rotated at least every 90 days",
+    "severity": "medium",
+    "identity_id": 88,
+    "identity_name": "DBT_RUNNER",
+    "key": "stale-secrets:25",
+    "message": "keypair 'DBT_RUNNER_rsa' on snowflake:DBT_RUNNER is 200 days old (max 90)",
+    "evidence": [
+     "created 2026-03-22",
+     "last rotated never"
+    ],
+    "edges": []
+   },
+   {
+    "policy_id": "stale-secrets",
+    "policy_name": "Secrets rotated at least every 90 days",
+    "severity": "medium",
+    "identity_id": 70,
+    "identity_name": "Data Analyst Agent",
+    "key": "stale-secrets:30",
+    "message": "api_token 'agent-data-analyst-key' on snowflake:agent-data-analyst is 100 days old (max 90)",
+    "evidence": [
+     "created 2026-06-30",
+     "last rotated never"
+    ],
+    "edges": []
+   },
+   {
+    "policy_id": "stale-secrets",
+    "policy_name": "Secrets rotated at least every 90 days",
+    "severity": "medium",
+    "identity_id": 63,
+    "identity_name": "ISU_Expense_Bot",
+    "key": "stale-secrets:3",
+    "message": "password 'ISU_Expense_Bot-password' on workday:ISU_Expense_Bot is 260 days old (max 90)",
+    "evidence": [
+     "created 2026-01-21",
+     "last rotated never"
+    ],
+    "edges": []
+   },
+   {
+    "policy_id": "stale-secrets",
+    "policy_name": "Secrets rotated at least every 90 days",
+    "severity": "medium",
+    "identity_id": 61,
+    "identity_name": "ISU_Okta_Sync",
+    "key": "stale-secrets:1",
+    "message": "password 'ISU_Okta_Sync-password' on workday:ISU_Okta_Sync is 365 days old (max 90)",
+    "evidence": [
+     "created 2025-10-08",
+     "last rotated never"
+    ],
+    "edges": []
+   },
+   {
+    "policy_id": "stale-secrets",
+    "policy_name": "Secrets rotated at least every 90 days",
+    "severity": "medium",
+    "identity_id": 62,
+    "identity_name": "ISU_Payroll_Export",
+    "key": "stale-secrets:2",
+    "message": "password 'ISU_Payroll_Export-password' on workday:ISU_Payroll_Export is 500 days old (max 90)",
+    "evidence": [
+     "created 2025-05-26",
+     "last rotated never"
+    ],
+    "edges": []
+   },
+   {
+    "policy_id": "stale-secrets",
+    "policy_name": "Secrets rotated at least every 90 days",
+    "severity": "medium",
+    "identity_id": 89,
+    "identity_name": "LOOKER_SVC",
+    "key": "stale-secrets:26",
+    "message": "keypair 'LOOKER_SVC_rsa' on snowflake:LOOKER_SVC is 400 days old (max 90)",
+    "evidence": [
+     "created 2025-09-03",
+     "last rotated never"
+    ],
+    "edges": []
+   },
+   {
+    "policy_id": "stale-secrets",
+    "policy_name": "Secrets rotated at least every 90 days",
+    "severity": "medium",
+    "identity_id": 91,
+    "identity_name": "REVERSE_ETL_SVC",
+    "key": "stale-secrets:28",
+    "message": "keypair 'REVERSE_ETL_SVC_rsa' on snowflake:REVERSE_ETL_SVC is 120 days old (max 90)",
+    "evidence": [
+     "created 2026-06-10",
+     "last rotated never"
+    ],
+    "edges": []
+   },
+   {
+    "policy_id": "stale-secrets",
+    "policy_name": "Secrets rotated at least every 90 days",
+    "severity": "medium",
+    "identity_id": 72,
+    "identity_name": "Sales Research Agent",
+    "key": "stale-secrets:31",
+    "message": "api_token 'agent-sales-research-key' on snowflake:agent-sales-research is 210 days old (max 90)",
+    "evidence": [
+     "created 2026-03-12",
+     "last rotated never"
+    ],
+    "edges": []
+   },
+   {
+    "policy_id": "stale-secrets",
+    "policy_name": "Secrets rotated at least every 90 days",
+    "severity": "medium",
+    "identity_id": 90,
+    "identity_name": "TABLEAU_LEGACY",
+    "key": "stale-secrets:27",
+    "message": "keypair 'TABLEAU_LEGACY_rsa' on snowflake:TABLEAU_LEGACY is 900 days old (max 90)",
+    "evidence": [
+     "created 2024-04-21",
+     "last rotated never"
+    ],
+    "edges": []
+   },
+   {
+    "policy_id": "stale-secrets",
+    "policy_name": "Secrets rotated at least every 90 days",
+    "severity": "medium",
+    "identity_id": 65,
+    "identity_name": "hr-sync-token",
+    "key": "stale-secrets:6",
+    "message": "api_token 'hr-sync-token' on okta:hr-sync-token is 140 days old (max 90)",
+    "evidence": [
+     "created 2026-05-21",
+     "last rotated never"
+    ],
+    "edges": []
+   },
+   {
+    "policy_id": "stale-secrets",
+    "policy_name": "Secrets rotated at least every 90 days",
+    "severity": "medium",
+    "identity_id": 83,
+    "identity_name": "infra-deploy-key",
+    "key": "stale-secrets:19",
+    "message": "deploy_key 'infra-deploy-key-token' on github:infra-deploy-key is 610 days old (max 90)",
+    "evidence": [
+     "created 2025-02-05",
+     "last rotated never"
+    ],
+    "edges": []
+   },
+   {
+    "policy_id": "stale-secrets",
+    "policy_name": "Secrets rotated at least every 90 days",
+    "severity": "medium",
+    "identity_id": 84,
+    "identity_name": "jenkins-pat",
+    "key": "stale-secrets:20",
+    "message": "pat 'jenkins-pat-token' on github:jenkins-pat is 300 days old (max 90)",
+    "evidence": [
+     "created 2025-12-12",
+     "last rotated never"
+    ],
+    "edges": []
+   },
+   {
+    "policy_id": "stale-secrets",
+    "policy_name": "Secrets rotated at least every 90 days",
+    "severity": "medium",
+    "identity_id": 66,
+    "identity_name": "old-migration-token",
+    "key": "stale-secrets:7",
+    "message": "api_token 'old-migration-token' on okta:old-migration-token is 700 days old (max 90)",
+    "evidence": [
+     "created 2024-11-07",
+     "last rotated never"
+    ],
+    "edges": []
+   },
+   {
+    "policy_id": "stale-secrets",
+    "policy_name": "Secrets rotated at least every 90 days",
+    "severity": "medium",
+    "identity_id": 74,
+    "identity_name": "svc-backup-agent",
+    "key": "stale-secrets:9",
+    "message": "access_key 'AKIASVCBACKUPAGE' on aws:svc-backup-agent is 230 days old (max 90)",
+    "evidence": [
+     "created 2026-02-20",
+     "last rotated never"
+    ],
+    "edges": []
+   },
+   {
+    "policy_id": "stale-secrets",
+    "policy_name": "Secrets rotated at least every 90 days",
+    "severity": "medium",
+    "identity_id": 73,
+    "identity_name": "svc-ci-deployer",
+    "key": "stale-secrets:8",
+    "message": "access_key 'AKIASVCCIDEPLOYE' on aws:svc-ci-deployer is 412 days old (max 90)",
+    "evidence": [
+     "created 2025-08-22",
+     "last rotated never"
+    ],
+    "edges": []
+   },
+   {
+    "policy_id": "stale-secrets",
+    "policy_name": "Secrets rotated at least every 90 days",
+    "severity": "medium",
+    "identity_id": 77,
+    "identity_name": "svc-cost-exporter",
+    "key": "stale-secrets:12",
+    "message": "access_key 'AKIASVCCOSTEXPOR' on aws:svc-cost-exporter is 95 days old (max 90)",
+    "evidence": [
+     "created 2026-07-05",
+     "last rotated never"
+    ],
+    "edges": []
+   },
+   {
+    "policy_id": "stale-secrets",
+    "policy_name": "Secrets rotated at least every 90 days",
+    "severity": "medium",
+    "identity_id": 81,
+    "identity_name": "svc-data-export",
+    "key": "stale-secrets:16",
+    "message": "access_key 'AKIASVCDATAEXPOR' on aws:svc-data-export is 340 days old (max 90)",
+    "evidence": [
+     "created 2025-11-02",
+     "last rotated never"
+    ],
+    "edges": []
+   },
+   {
+    "policy_id": "stale-secrets",
+    "policy_name": "Secrets rotated at least every 90 days",
+    "severity": "medium",
+    "identity_id": 75,
+    "identity_name": "svc-legacy-etl",
+    "key": "stale-secrets:10",
+    "message": "access_key 'AKIASVCLEGACYETL' on aws:svc-legacy-etl is 780 days old (max 90)",
+    "evidence": [
+     "created 2024-08-19",
+     "last rotated never"
+    ],
+    "edges": []
+   },
+   {
+    "policy_id": "stale-secrets",
+    "policy_name": "Secrets rotated at least every 90 days",
+    "severity": "medium",
+    "identity_id": 78,
+    "identity_name": "svc-terraform",
+    "key": "stale-secrets:13",
+    "message": "access_key 'AKIASVCTERRAFORM' on aws:svc-terraform is 160 days old (max 90)",
+    "evidence": [
+     "created 2026-05-01",
+     "last rotated never"
+    ],
+    "edges": []
+   }
+  ]
+ }
+}

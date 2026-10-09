@@ -1,0 +1,13 @@
+{
+ "name": "unknown-route",
+ "request": {
+  "method": "GET",
+  "path": "/api/nope"
+ },
+ "response": {
+  "status": 404,
+  "body": {
+   "detail": "Not Found"
+  }
+ }
+}

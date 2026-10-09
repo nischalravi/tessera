@@ -1,0 +1,3565 @@
+{
+ "name": "accounts",
+ "request": {
+  "method": "GET",
+  "path": "/api/accounts"
+ },
+ "response": {
+  "status": 200,
+  "body": [
+   {
+    "id": 143,
+    "system": "aws",
+    "username": "agent-sre-oncall",
+    "kind": "agent",
+    "status": "active",
+    "created_at": "2026-04-27T00:00:00",
+    "last_login_at": "2026-10-06T10:03:43.625124",
+    "identity": {
+     "id": 71,
+     "name": "SRE On-call Agent",
+     "type": "ai_agent",
+     "status": "active",
+     "department": null,
+     "title": "AI agent"
+    }
+   },
+   {
+    "id": 135,
+    "system": "aws",
+    "username": "svc-backup-agent",
+    "kind": "service",
+    "status": "active",
+    "created_at": "2025-04-29T00:00:00",
+    "last_login_at": "2026-10-05T08:17:05.397695",
+    "identity": {
+     "id": 74,
+     "name": "svc-backup-agent",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "AWS IAM user"
+    }
+   },
+   {
+    "id": 134,
+    "system": "aws",
+    "username": "svc-ci-deployer",
+    "kind": "service",
+    "status": "active",
+    "created_at": "2024-05-07T00:00:00",
+    "last_login_at": "2026-10-05T03:25:10.929784",
+    "identity": {
+     "id": 73,
+     "name": "svc-ci-deployer",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "AWS IAM user"
+    }
+   },
+   {
+    "id": 138,
+    "system": "aws",
+    "username": "svc-cost-exporter",
+    "kind": "service",
+    "status": "active",
+    "created_at": "2025-03-26T00:00:00",
+    "last_login_at": "2026-10-05T00:25:36.378842",
+    "identity": {
+     "id": 77,
+     "name": "svc-cost-exporter",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "AWS IAM user"
+    }
+   },
+   {
+    "id": 142,
+    "system": "aws",
+    "username": "svc-data-export",
+    "kind": "service",
+    "status": "active",
+    "created_at": "2026-05-22T00:00:00",
+    "last_login_at": "2026-10-06T23:39:55.665410",
+    "identity": {
+     "id": 81,
+     "name": "svc-data-export",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "AWS IAM user"
+    }
+   },
+   {
+    "id": 141,
+    "system": "aws",
+    "username": "svc-lambda-orders",
+    "kind": "service",
+    "status": "active",
+    "created_at": "2026-03-08T00:00:00",
+    "last_login_at": "2026-10-05T20:00:18.503531",
+    "identity": {
+     "id": 80,
+     "name": "svc-lambda-orders",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "AWS IAM user"
+    }
+   },
+   {
+    "id": 136,
+    "system": "aws",
+    "username": "svc-legacy-etl",
+    "kind": "service",
+    "status": "active",
+    "created_at": "2025-12-26T00:00:00",
+    "last_login_at": "2026-10-05T00:43:45.318930",
+    "identity": {
+     "id": 75,
+     "name": "svc-legacy-etl",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "AWS IAM user"
+    }
+   },
+   {
+    "id": 137,
+    "system": "aws",
+    "username": "svc-log-shipper",
+    "kind": "service",
+    "status": "active",
+    "created_at": "2025-10-24T00:00:00",
+    "last_login_at": "2026-10-07T12:22:27.997279",
+    "identity": {
+     "id": 76,
+     "name": "svc-log-shipper",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "AWS IAM user"
+    }
+   },
+   {
+    "id": 140,
+    "system": "aws",
+    "username": "svc-monitoring",
+    "kind": "service",
+    "status": "active",
+    "created_at": "2025-11-22T00:00:00",
+    "last_login_at": "2026-10-06T22:19:25.445595",
+    "identity": {
+     "id": 79,
+     "name": "svc-monitoring",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "AWS IAM user"
+    }
+   },
+   {
+    "id": 139,
+    "system": "aws",
+    "username": "svc-terraform",
+    "kind": "service",
+    "status": "active",
+    "created_at": "2025-04-23T00:00:00",
+    "last_login_at": "2026-10-06T23:35:01.095387",
+    "identity": {
+     "id": 78,
+     "name": "svc-terraform",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "AWS IAM user"
+    }
+   },
+   {
+    "id": 178,
+    "system": "github",
+    "username": "agent-code-review",
+    "kind": "agent",
+    "status": "active",
+    "created_at": "2025-09-17T00:00:00",
+    "last_login_at": "2026-10-07T17:58:13.937200",
+    "identity": {
+     "id": 68,
+     "name": "Code Review Bot",
+     "type": "ai_agent",
+     "status": "active",
+     "department": null,
+     "title": "AI agent"
+    }
+   },
+   {
+    "id": 146,
+    "system": "github",
+    "username": "alice-okafo",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-01-19T00:00:00",
+    "last_login_at": "2026-10-05T16:07:30.700123",
+    "identity": {
+     "id": 5,
+     "name": "Alice Okafor",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Senior Software Engineer"
+    }
+   },
+   {
+    "id": 152,
+    "system": "github",
+    "username": "anders-zelle",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-07-05T00:00:00",
+    "last_login_at": "2026-10-05T22:52:19.710260",
+    "identity": {
+     "id": 11,
+     "name": "Anders Zeller",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Engineering Manager, Frontend"
+    }
+   },
+   {
+    "id": 144,
+    "system": "github",
+    "username": "caspian-arkwr",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-04-02T00:00:00",
+    "last_login_at": "2026-10-05T16:05:29.604081",
+    "identity": {
+     "id": 2,
+     "name": "Caspian Arkwright",
+     "type": "human",
+     "status": "active",
+     "department": "Executive",
+     "title": "Chief Technology Officer"
+    }
+   },
+   {
+    "id": 160,
+    "system": "github",
+    "username": "cyrus-quenn",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2020-10-15T00:00:00",
+    "last_login_at": "2026-10-07T16:57:44.425156",
+    "identity": {
+     "id": 19,
+     "name": "Cyrus Quennell",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Platform Engineer"
+    }
+   },
+   {
+    "id": 155,
+    "system": "github",
+    "username": "dalia-mokoe",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-07-05T00:00:00",
+    "last_login_at": "2026-10-05T16:05:33.765946",
+    "identity": {
+     "id": 14,
+     "name": "Dalia Mokoena",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Frontend Engineer"
+    }
+   },
+   {
+    "id": 172,
+    "system": "github",
+    "username": "delphine-bellw",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2023-02-19T00:00:00",
+    "last_login_at": "2026-10-06T11:26:30.718072",
+    "identity": {
+     "id": 31,
+     "name": "Delphine Bellweather",
+     "type": "human",
+     "status": "active",
+     "department": "Security",
+     "title": "Security Engineer"
+    }
+   },
+   {
+    "id": 176,
+    "system": "github",
+    "username": "dependabot-svc",
+    "kind": "service",
+    "status": "active",
+    "created_at": "2025-01-02T00:00:00",
+    "last_login_at": "2026-10-05T02:49:27.194457",
+    "identity": {
+     "id": 85,
+     "name": "dependabot-svc",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "GitHub github app"
+    }
+   },
+   {
+    "id": 148,
+    "system": "github",
+    "username": "desmond-abern",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-04-21T00:00:00",
+    "last_login_at": "2026-10-07T13:48:27.914702",
+    "identity": {
+     "id": 7,
+     "name": "Desmond Abernathy",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Software Engineer"
+    }
+   },
+   {
+    "id": 164,
+    "system": "github",
+    "username": "dmitri-ostro",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-08-18T00:00:00",
+    "last_login_at": "2026-10-07T19:26:14.797227",
+    "identity": {
+     "id": 23,
+     "name": "Dmitri Ostrowski",
+     "type": "human",
+     "status": "terminated",
+     "department": "Data",
+     "title": "Data Scientist"
+    }
+   },
+   {
+    "id": 177,
+    "system": "github",
+    "username": "docs-publisher",
+    "kind": "service",
+    "status": "active",
+    "created_at": "2026-02-15T00:00:00",
+    "last_login_at": "2026-10-05T01:04:26.423120",
+    "identity": {
+     "id": 86,
+     "name": "docs-publisher",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "GitHub deploy key"
+    }
+   },
+   {
+    "id": 167,
+    "system": "github",
+    "username": "emeric-ostro",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-01-12T00:00:00",
+    "last_login_at": "2026-10-06T04:21:29.112866",
+    "identity": {
+     "id": 26,
+     "name": "Emeric Ostrowski",
+     "type": "human",
+     "status": "active",
+     "department": "Data",
+     "title": "Data Scientist"
+    }
+   },
+   {
+    "id": 151,
+    "system": "github",
+    "username": "freya-whitl",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2020-10-22T00:00:00",
+    "last_login_at": "2026-10-07T19:33:13.029585",
+    "identity": {
+     "id": 10,
+     "name": "Freya Whitlock",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Software Engineer"
+    }
+   },
+   {
+    "id": 153,
+    "system": "github",
+    "username": "hana-rasmu",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2023-02-17T00:00:00",
+    "last_login_at": "2026-10-06T09:47:15.728789",
+    "identity": {
+     "id": 12,
+     "name": "Hana Rasmussen",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Frontend Engineer"
+    }
+   },
+   {
+    "id": 147,
+    "system": "github",
+    "username": "ilya-kowal",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-11-02T00:00:00",
+    "last_login_at": "2026-10-07T13:12:51.195913",
+    "identity": {
+     "id": 6,
+     "name": "Ilya Kowalczyk",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Software Engineer"
+    }
+   },
+   {
+    "id": 174,
+    "system": "github",
+    "username": "infra-deploy-key",
+    "kind": "service",
+    "status": "active",
+    "created_at": "2026-05-23T00:00:00",
+    "last_login_at": "2026-10-06T20:19:37.890590",
+    "identity": {
+     "id": 83,
+     "name": "infra-deploy-key",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "GitHub deploy key"
+    }
+   },
+   {
+    "id": 157,
+    "system": "github",
+    "username": "ingrid-lindq",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2020-11-16T00:00:00",
+    "last_login_at": "2026-10-07T19:54:31.589848",
+    "identity": {
+     "id": 16,
+     "name": "Ingrid Lindqvist",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Platform Lead"
+    }
+   },
+   {
+    "id": 175,
+    "system": "github",
+    "username": "jenkins-pat",
+    "kind": "service",
+    "status": "active",
+    "created_at": "2024-12-28T00:00:00",
+    "last_login_at": "2026-10-06T03:04:38.102447",
+    "identity": {
+     "id": 84,
+     "name": "jenkins-pat",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "GitHub pat"
+    }
+   },
+   {
+    "id": 150,
+    "system": "github",
+    "username": "joaquin-pembe",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-06-10T00:00:00",
+    "last_login_at": "2026-10-07T15:20:08.750365",
+    "identity": {
+     "id": 9,
+     "name": "Joaquin Pemberton",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Senior Software Engineer"
+    }
+   },
+   {
+    "id": 145,
+    "system": "github",
+    "username": "kofi-mensa",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-08-27T00:00:00",
+    "last_login_at": "2026-10-06T04:11:02.637584",
+    "identity": {
+     "id": 4,
+     "name": "Kofi Mensah",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Engineering Manager, Backend"
+    }
+   },
+   {
+    "id": 162,
+    "system": "github",
+    "username": "lena-valdi",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2023-05-02T00:00:00",
+    "last_login_at": "2026-10-07T21:59:37.195464",
+    "identity": {
+     "id": 21,
+     "name": "Lena Valdivia",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Site Reliability Engineer"
+    }
+   },
+   {
+    "id": 158,
+    "system": "github",
+    "username": "marcus-bellw",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-12-02T00:00:00",
+    "last_login_at": "2026-10-07T10:13:33.450803",
+    "identity": {
+     "id": 17,
+     "name": "Marcus Bellweather",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Platform Engineer"
+    }
+   },
+   {
+    "id": 154,
+    "system": "github",
+    "username": "nikhil-iyer",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-01-13T00:00:00",
+    "last_login_at": "2026-10-06T13:15:39.366018",
+    "identity": {
+     "id": 13,
+     "name": "Nikhil Iyer",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Frontend Engineer"
+    }
+   },
+   {
+    "id": 159,
+    "system": "github",
+    "username": "oren-whitl",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-11-03T00:00:00",
+    "last_login_at": "2026-10-07T20:57:42.046491",
+    "identity": {
+     "id": 18,
+     "name": "Oren Whitlock",
+     "type": "human",
+     "status": "terminated",
+     "department": "Engineering",
+     "title": "Site Reliability Engineer"
+    }
+   },
+   {
+    "id": 149,
+    "system": "github",
+    "username": "pascal-ostro",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-05-05T00:00:00",
+    "last_login_at": "2026-10-06T03:25:28.958804",
+    "identity": {
+     "id": 8,
+     "name": "Pascal Ostrowski",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Senior Software Engineer"
+    }
+   },
+   {
+    "id": 168,
+    "system": "github",
+    "username": "quinn-zelle",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-06-20T00:00:00",
+    "last_login_at": "2026-10-07T09:38:34.688179",
+    "identity": {
+     "id": 27,
+     "name": "Quinn Zeller",
+     "type": "human",
+     "status": "active",
+     "department": "Data",
+     "title": "Data Scientist"
+    }
+   },
+   {
+    "id": 173,
+    "system": "github",
+    "username": "release-bot",
+    "kind": "service",
+    "status": "active",
+    "created_at": "2025-02-26T00:00:00",
+    "last_login_at": "2026-10-06T16:17:13.260013",
+    "identity": {
+     "id": 82,
+     "name": "release-bot",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "GitHub github app"
+    }
+   },
+   {
+    "id": 166,
+    "system": "github",
+    "username": "rohan-march",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2021-05-12T00:00:00",
+    "last_login_at": "2026-10-05T01:55:05.022765",
+    "identity": {
+     "id": 25,
+     "name": "Rohan Marchetti",
+     "type": "human",
+     "status": "active",
+     "department": "Data",
+     "title": "Data Scientist"
+    }
+   },
+   {
+    "id": 163,
+    "system": "github",
+    "username": "sana-iyer",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2021-01-16T00:00:00",
+    "last_login_at": "2026-10-05T07:37:52.069385",
+    "identity": {
+     "id": 22,
+     "name": "Sana Iyer",
+     "type": "human",
+     "status": "active",
+     "department": "Data",
+     "title": "Head of Data"
+    }
+   },
+   {
+    "id": 165,
+    "system": "github",
+    "username": "talia-bellw",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-11-20T00:00:00",
+    "last_login_at": "2026-10-07T00:33:20.945196",
+    "identity": {
+     "id": 24,
+     "name": "Talia Bellweather",
+     "type": "human",
+     "status": "active",
+     "department": "Data",
+     "title": "Data Scientist"
+    }
+   },
+   {
+    "id": 170,
+    "system": "github",
+    "username": "thandiwe-mokoe",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-06-22T00:00:00",
+    "last_login_at": "2026-10-06T11:24:45.924740",
+    "identity": {
+     "id": 29,
+     "name": "Thandiwe Mokoena",
+     "type": "human",
+     "status": "active",
+     "department": "Security",
+     "title": "Head of Security"
+    }
+   },
+   {
+    "id": 156,
+    "system": "github",
+    "username": "vesna-szabo",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-08-27T00:00:00",
+    "last_login_at": "2026-10-05T08:24:27.350498",
+    "identity": {
+     "id": 15,
+     "name": "Vesna Szabo",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Frontend Engineer"
+    }
+   },
+   {
+    "id": 169,
+    "system": "github",
+    "username": "wren-okafo",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-05-17T00:00:00",
+    "last_login_at": "2026-10-07T04:02:33.507957",
+    "identity": {
+     "id": 28,
+     "name": "Wren Okafor",
+     "type": "human",
+     "status": "active",
+     "department": "Data",
+     "title": "Analytics Engineer"
+    }
+   },
+   {
+    "id": 171,
+    "system": "github",
+    "username": "yusuf-iyer",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2020-10-27T00:00:00",
+    "last_login_at": "2026-10-05T13:52:11.732590",
+    "identity": {
+     "id": 30,
+     "name": "Yusuf Iyer",
+     "type": "human",
+     "status": "active",
+     "department": "Security",
+     "title": "Security Engineer"
+    }
+   },
+   {
+    "id": 161,
+    "system": "github",
+    "username": "zora-whitl",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-08-03T00:00:00",
+    "last_login_at": "2026-10-06T15:26:35.999753",
+    "identity": {
+     "id": 20,
+     "name": "Zora Whitlock",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Platform Engineer"
+    }
+   },
+   {
+    "id": 129,
+    "system": "okta",
+    "username": "agent-code-review@agents.larkspur.example",
+    "kind": "agent",
+    "status": "active",
+    "created_at": "2026-05-24T00:00:00",
+    "last_login_at": "2026-10-06T02:19:13.279968",
+    "identity": {
+     "id": 68,
+     "name": "Code Review Bot",
+     "type": "ai_agent",
+     "status": "active",
+     "department": null,
+     "title": "AI agent"
+    }
+   },
+   {
+    "id": 131,
+    "system": "okta",
+    "username": "agent-data-analyst@agents.larkspur.example",
+    "kind": "agent",
+    "status": "active",
+    "created_at": "2025-06-28T00:00:00",
+    "last_login_at": "2026-10-05T00:24:35.913196",
+    "identity": {
+     "id": 70,
+     "name": "Data Analyst Agent",
+     "type": "ai_agent",
+     "status": "active",
+     "department": null,
+     "title": "AI agent"
+    }
+   },
+   {
+    "id": 130,
+    "system": "okta",
+    "username": "agent-finance-recon@agents.larkspur.example",
+    "kind": "agent",
+    "status": "active",
+    "created_at": "2025-10-26T00:00:00",
+    "last_login_at": "2026-10-07T19:12:11.438961",
+    "identity": {
+     "id": 69,
+     "name": "Finance Recon Agent",
+     "type": "ai_agent",
+     "status": "active",
+     "department": null,
+     "title": "AI agent"
+    }
+   },
+   {
+    "id": 133,
+    "system": "okta",
+    "username": "agent-sales-research@agents.larkspur.example",
+    "kind": "agent",
+    "status": "active",
+    "created_at": "2025-10-09T00:00:00",
+    "last_login_at": "2026-10-05T04:27:17.762407",
+    "identity": {
+     "id": 72,
+     "name": "Sales Research Agent",
+     "type": "ai_agent",
+     "status": "active",
+     "department": null,
+     "title": "AI agent"
+    }
+   },
+   {
+    "id": 132,
+    "system": "okta",
+    "username": "agent-sre-oncall@agents.larkspur.example",
+    "kind": "agent",
+    "status": "active",
+    "created_at": "2025-09-09T00:00:00",
+    "last_login_at": "2026-10-06T03:14:14.464639",
+    "identity": {
+     "id": 71,
+     "name": "SRE On-call Agent",
+     "type": "ai_agent",
+     "status": "active",
+     "department": null,
+     "title": "AI agent"
+    }
+   },
+   {
+    "id": 128,
+    "system": "okta",
+    "username": "agent-support-copilot@agents.larkspur.example",
+    "kind": "agent",
+    "status": "active",
+    "created_at": "2025-12-05T00:00:00",
+    "last_login_at": "2026-10-06T17:22:37.823026",
+    "identity": {
+     "id": 67,
+     "name": "Support Copilot",
+     "type": "ai_agent",
+     "status": "active",
+     "department": null,
+     "title": "AI agent"
+    }
+   },
+   {
+    "id": 69,
+    "system": "okta",
+    "username": "alice.okafor@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-01-19T00:00:00",
+    "last_login_at": "2026-10-05T11:54:19.029019",
+    "identity": {
+     "id": 5,
+     "name": "Alice Okafor",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Senior Software Engineer"
+    }
+   },
+   {
+    "id": 75,
+    "system": "okta",
+    "username": "anders.zeller@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-07-05T00:00:00",
+    "last_login_at": "2026-10-06T16:45:26.620366",
+    "identity": {
+     "id": 11,
+     "name": "Anders Zeller",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Engineering Manager, Frontend"
+    }
+   },
+   {
+    "id": 113,
+    "system": "okta",
+    "username": "anika.abernathy@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2021-12-16T00:00:00",
+    "last_login_at": "2026-10-07T19:36:53.547237",
+    "identity": {
+     "id": 49,
+     "name": "Anika Abernathy",
+     "type": "human",
+     "status": "active",
+     "department": "Sales",
+     "title": "Sales Ops Analyst"
+    }
+   },
+   {
+    "id": 119,
+    "system": "okta",
+    "username": "ayasha.lindqvist@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-10-08T00:00:00",
+    "last_login_at": "2026-10-05T12:26:45.394308",
+    "identity": {
+     "id": 55,
+     "name": "Ayasha Lindqvist",
+     "type": "human",
+     "status": "active",
+     "department": "Support",
+     "title": "Customer Success Manager"
+    }
+   },
+   {
+    "id": 110,
+    "system": "okta",
+    "username": "bastian.achterberg@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-03-21T00:00:00",
+    "last_login_at": "2026-10-07T00:31:43.571391",
+    "identity": {
+     "id": 46,
+     "name": "Bastian Achterberg",
+     "type": "human",
+     "status": "active",
+     "department": "Sales",
+     "title": "Sales Development Rep"
+    }
+   },
+   {
+    "id": 96,
+    "system": "okta",
+    "username": "beatrix.pemberton@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-11-28T00:00:00",
+    "last_login_at": "2026-10-07T22:27:33.982016",
+    "identity": {
+     "id": 32,
+     "name": "Beatrix Pemberton",
+     "type": "human",
+     "status": "active",
+     "department": "Finance",
+     "title": "Financial Controller"
+    }
+   },
+   {
+    "id": 108,
+    "system": "okta",
+    "username": "bram.okafor@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-04-25T00:00:00",
+    "last_login_at": "2026-10-06T11:54:58.830378",
+    "identity": {
+     "id": 44,
+     "name": "Bram Okafor",
+     "type": "human",
+     "status": "active",
+     "department": "Sales",
+     "title": "Sales Development Rep"
+    }
+   },
+   {
+    "id": 115,
+    "system": "okta",
+    "username": "callum.ferreira@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2021-12-09T00:00:00",
+    "last_login_at": "2026-10-05T07:21:55.122888",
+    "identity": {
+     "id": 51,
+     "name": "Callum Ferreira",
+     "type": "human",
+     "status": "active",
+     "department": "Support",
+     "title": "Customer Success Manager"
+    }
+   },
+   {
+    "id": 66,
+    "system": "okta",
+    "username": "caspian.arkwright@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-04-02T00:00:00",
+    "last_login_at": "2026-10-05T06:32:15.567882",
+    "identity": {
+     "id": 2,
+     "name": "Caspian Arkwright",
+     "type": "human",
+     "status": "active",
+     "department": "Executive",
+     "title": "Chief Technology Officer"
+    }
+   },
+   {
+    "id": 83,
+    "system": "okta",
+    "username": "cyrus.quennell@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2020-10-15T00:00:00",
+    "last_login_at": "2026-10-07T12:33:44.511724",
+    "identity": {
+     "id": 19,
+     "name": "Cyrus Quennell",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Platform Engineer"
+    }
+   },
+   {
+    "id": 78,
+    "system": "okta",
+    "username": "dalia.mokoena@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-07-05T00:00:00",
+    "last_login_at": "2026-10-05T03:52:33.942473",
+    "identity": {
+     "id": 14,
+     "name": "Dalia Mokoena",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Frontend Engineer"
+    }
+   },
+   {
+    "id": 95,
+    "system": "okta",
+    "username": "delphine.bellweather@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2023-02-19T00:00:00",
+    "last_login_at": "2026-10-06T08:31:24.382901",
+    "identity": {
+     "id": 31,
+     "name": "Delphine Bellweather",
+     "type": "human",
+     "status": "active",
+     "department": "Security",
+     "title": "Security Engineer"
+    }
+   },
+   {
+    "id": 71,
+    "system": "okta",
+    "username": "desmond.abernathy@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-04-21T00:00:00",
+    "last_login_at": "2026-10-06T20:01:31.535202",
+    "identity": {
+     "id": 7,
+     "name": "Desmond Abernathy",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Software Engineer"
+    }
+   },
+   {
+    "id": 87,
+    "system": "okta",
+    "username": "dmitri.ostrowski@larkspur.example",
+    "kind": "user",
+    "status": "disabled",
+    "created_at": "2025-08-18T00:00:00",
+    "last_login_at": null,
+    "identity": {
+     "id": 23,
+     "name": "Dmitri Ostrowski",
+     "type": "human",
+     "status": "terminated",
+     "department": "Data",
+     "title": "Data Scientist"
+    }
+   },
+   {
+    "id": 90,
+    "system": "okta",
+    "username": "emeric.ostrowski@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-01-12T00:00:00",
+    "last_login_at": "2026-10-06T03:58:00.190994",
+    "identity": {
+     "id": 26,
+     "name": "Emeric Ostrowski",
+     "type": "human",
+     "status": "active",
+     "department": "Data",
+     "title": "Data Scientist"
+    }
+   },
+   {
+    "id": 121,
+    "system": "okta",
+    "username": "esme.thornbury@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-03-22T00:00:00",
+    "last_login_at": "2026-10-07T14:35:06.163261",
+    "identity": {
+     "id": 57,
+     "name": "Esme Thornbury",
+     "type": "human",
+     "status": "active",
+     "department": "People",
+     "title": "Head of People"
+    }
+   },
+   {
+    "id": 106,
+    "system": "okta",
+    "username": "femi.ramaswamy@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-08-30T00:00:00",
+    "last_login_at": "2026-10-07T21:59:04.026318",
+    "identity": {
+     "id": 42,
+     "name": "Femi Ramaswamy",
+     "type": "human",
+     "status": "active",
+     "department": "Sales",
+     "title": "Account Executive"
+    }
+   },
+   {
+    "id": 74,
+    "system": "okta",
+    "username": "freya.whitlock@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2020-10-22T00:00:00",
+    "last_login_at": "2026-10-05T07:59:28.347658",
+    "identity": {
+     "id": 10,
+     "name": "Freya Whitlock",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Software Engineer"
+    }
+   },
+   {
+    "id": 120,
+    "system": "okta",
+    "username": "greer.lindqvist@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-08-30T00:00:00",
+    "last_login_at": "2026-10-05T08:46:18.652128",
+    "identity": {
+     "id": 56,
+     "name": "Greer Lindqvist",
+     "type": "human",
+     "status": "active",
+     "department": "Support",
+     "title": "Support Engineer"
+    }
+   },
+   {
+    "id": 76,
+    "system": "okta",
+    "username": "hana.rasmussen@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2023-02-17T00:00:00",
+    "last_login_at": "2026-10-06T02:13:09.696194",
+    "identity": {
+     "id": 12,
+     "name": "Hana Rasmussen",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Frontend Engineer"
+    }
+   },
+   {
+    "id": 105,
+    "system": "okta",
+    "username": "hollis.brightwater@larkspur.example",
+    "kind": "user",
+    "status": "disabled",
+    "created_at": "2024-08-31T00:00:00",
+    "last_login_at": null,
+    "identity": {
+     "id": 41,
+     "name": "Hollis Brightwater",
+     "type": "human",
+     "status": "terminated",
+     "department": "Sales",
+     "title": "Account Executive"
+    }
+   },
+   {
+    "id": 126,
+    "system": "okta",
+    "username": "hr-sync-token",
+    "kind": "api_key",
+    "status": "active",
+    "created_at": "2025-09-19T00:00:00",
+    "last_login_at": "2026-10-06T18:46:18.323004",
+    "identity": {
+     "id": 65,
+     "name": "hr-sync-token",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "Okta API token"
+    }
+   },
+   {
+    "id": 124,
+    "system": "okta",
+    "username": "idris.achterberg@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-06-19T00:00:00",
+    "last_login_at": "2026-10-05T09:09:28.788823",
+    "identity": {
+     "id": 60,
+     "name": "Idris Achterberg",
+     "type": "human",
+     "status": "active",
+     "department": "People",
+     "title": "Recruiter"
+    }
+   },
+   {
+    "id": 70,
+    "system": "okta",
+    "username": "ilya.kowalczyk@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-11-02T00:00:00",
+    "last_login_at": "2026-10-07T15:22:00.978887",
+    "identity": {
+     "id": 6,
+     "name": "Ilya Kowalczyk",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Software Engineer"
+    }
+   },
+   {
+    "id": 80,
+    "system": "okta",
+    "username": "ingrid.lindqvist@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2020-11-16T00:00:00",
+    "last_login_at": "2026-10-06T14:39:08.787987",
+    "identity": {
+     "id": 16,
+     "name": "Ingrid Lindqvist",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Platform Lead"
+    }
+   },
+   {
+    "id": 73,
+    "system": "okta",
+    "username": "joaquin.pemberton@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-06-10T00:00:00",
+    "last_login_at": "2026-10-07T09:38:56.410624",
+    "identity": {
+     "id": 9,
+     "name": "Joaquin Pemberton",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Senior Software Engineer"
+    }
+   },
+   {
+    "id": 116,
+    "system": "okta",
+    "username": "juno.lindqvist@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2021-11-13T00:00:00",
+    "last_login_at": "2026-10-06T00:18:06.523980",
+    "identity": {
+     "id": 52,
+     "name": "Juno Lindqvist",
+     "type": "human",
+     "status": "active",
+     "department": "Support",
+     "title": "Customer Success Manager"
+    }
+   },
+   {
+    "id": 112,
+    "system": "okta",
+    "username": "kenji.achterberg@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-10-02T00:00:00",
+    "last_login_at": "2026-10-05T11:56:16.656923",
+    "identity": {
+     "id": 48,
+     "name": "Kenji Achterberg",
+     "type": "human",
+     "status": "active",
+     "department": "Sales",
+     "title": "Sales Ops Analyst"
+    }
+   },
+   {
+    "id": 68,
+    "system": "okta",
+    "username": "kofi.mensah@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-08-27T00:00:00",
+    "last_login_at": "2026-10-06T01:41:39.901250",
+    "identity": {
+     "id": 4,
+     "name": "Kofi Mensah",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Engineering Manager, Backend"
+    }
+   },
+   {
+    "id": 103,
+    "system": "okta",
+    "username": "leif.pemberton@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-05-03T00:00:00",
+    "last_login_at": "2026-10-07T09:58:26.429436",
+    "identity": {
+     "id": 39,
+     "name": "Leif Pemberton",
+     "type": "human",
+     "status": "active",
+     "department": "Finance",
+     "title": "Accountant"
+    }
+   },
+   {
+    "id": 85,
+    "system": "okta",
+    "username": "lena.valdivia@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2023-05-02T00:00:00",
+    "last_login_at": "2026-10-07T22:00:59.337896",
+    "identity": {
+     "id": 21,
+     "name": "Lena Valdivia",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Site Reliability Engineer"
+    }
+   },
+   {
+    "id": 99,
+    "system": "okta",
+    "username": "linnea.sorensen@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-06-15T00:00:00",
+    "last_login_at": "2026-10-07T16:36:01.483725",
+    "identity": {
+     "id": 35,
+     "name": "Linnea Sorensen",
+     "type": "human",
+     "status": "active",
+     "department": "Finance",
+     "title": "Accountant"
+    }
+   },
+   {
+    "id": 81,
+    "system": "okta",
+    "username": "marcus.bellweather@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-12-02T00:00:00",
+    "last_login_at": "2026-10-05T18:28:42.977360",
+    "identity": {
+     "id": 17,
+     "name": "Marcus Bellweather",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Platform Engineer"
+    }
+   },
+   {
+    "id": 111,
+    "system": "okta",
+    "username": "marisol.iyer@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-10-14T00:00:00",
+    "last_login_at": "2026-10-06T08:48:23.763176",
+    "identity": {
+     "id": 47,
+     "name": "Marisol Iyer",
+     "type": "human",
+     "status": "active",
+     "department": "Sales",
+     "title": "Sales Ops Analyst"
+    }
+   },
+   {
+    "id": 123,
+    "system": "okta",
+    "username": "mei.winslow@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-02-20T00:00:00",
+    "last_login_at": "2026-10-06T11:14:26.214430",
+    "identity": {
+     "id": 59,
+     "name": "Mei Winslow",
+     "type": "human",
+     "status": "active",
+     "department": "People",
+     "title": "HR Business Partner"
+    }
+   },
+   {
+    "id": 67,
+    "system": "okta",
+    "username": "mireille.delacroix@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-04-07T00:00:00",
+    "last_login_at": "2026-10-06T23:13:53.411008",
+    "identity": {
+     "id": 3,
+     "name": "Mireille Delacroix",
+     "type": "human",
+     "status": "active",
+     "department": "Executive",
+     "title": "Chief Financial Officer"
+    }
+   },
+   {
+    "id": 77,
+    "system": "okta",
+    "username": "nikhil.iyer@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-01-13T00:00:00",
+    "last_login_at": "2026-10-07T17:45:14.436892",
+    "identity": {
+     "id": 13,
+     "name": "Nikhil Iyer",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Frontend Engineer"
+    }
+   },
+   {
+    "id": 100,
+    "system": "okta",
+    "username": "odessa.mensah@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2021-11-08T00:00:00",
+    "last_login_at": "2026-10-05T18:02:10.577573",
+    "identity": {
+     "id": 36,
+     "name": "Odessa Mensah",
+     "type": "human",
+     "status": "active",
+     "department": "Finance",
+     "title": "Accountant"
+    }
+   },
+   {
+    "id": 127,
+    "system": "okta",
+    "username": "old-migration-token",
+    "kind": "api_key",
+    "status": "active",
+    "created_at": "2024-12-08T00:00:00",
+    "last_login_at": "2026-10-05T05:49:10.744994",
+    "identity": {
+     "id": 66,
+     "name": "old-migration-token",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "Okta API token"
+    }
+   },
+   {
+    "id": 82,
+    "system": "okta",
+    "username": "oren.whitlock@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-11-03T00:00:00",
+    "last_login_at": "2026-10-07T17:53:08.930542",
+    "identity": {
+     "id": 18,
+     "name": "Oren Whitlock",
+     "type": "human",
+     "status": "terminated",
+     "department": "Engineering",
+     "title": "Site Reliability Engineer"
+    }
+   },
+   {
+    "id": 118,
+    "system": "okta",
+    "username": "ottilie.castellanos@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-07-16T00:00:00",
+    "last_login_at": "2026-10-06T10:47:35.591129",
+    "identity": {
+     "id": 54,
+     "name": "Ottilie Castellanos",
+     "type": "human",
+     "status": "active",
+     "department": "Support",
+     "title": "Customer Success Manager"
+    }
+   },
+   {
+    "id": 72,
+    "system": "okta",
+    "username": "pascal.ostrowski@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-05-05T00:00:00",
+    "last_login_at": "2026-10-05T20:46:21.018644",
+    "identity": {
+     "id": 8,
+     "name": "Pascal Ostrowski",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Senior Software Engineer"
+    }
+   },
+   {
+    "id": 97,
+    "system": "okta",
+    "username": "priya.ramaswamy@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2023-08-01T00:00:00",
+    "last_login_at": "2026-10-05T14:26:46.662568",
+    "identity": {
+     "id": 33,
+     "name": "Priya Ramaswamy",
+     "type": "human",
+     "status": "active",
+     "department": "Finance",
+     "title": "FP&A Analyst"
+    }
+   },
+   {
+    "id": 91,
+    "system": "okta",
+    "username": "quinn.zeller@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-06-20T00:00:00",
+    "last_login_at": "2026-10-06T05:05:50.429573",
+    "identity": {
+     "id": 27,
+     "name": "Quinn Zeller",
+     "type": "human",
+     "status": "active",
+     "department": "Data",
+     "title": "Data Scientist"
+    }
+   },
+   {
+    "id": 104,
+    "system": "okta",
+    "username": "rafael.valdivia@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-02-03T00:00:00",
+    "last_login_at": "2026-10-05T09:04:43.343861",
+    "identity": {
+     "id": 40,
+     "name": "Rafael Valdivia",
+     "type": "human",
+     "status": "active",
+     "department": "Sales",
+     "title": "VP Sales"
+    }
+   },
+   {
+    "id": 89,
+    "system": "okta",
+    "username": "rohan.marchetti@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2021-05-12T00:00:00",
+    "last_login_at": "2026-10-06T00:46:41.557163",
+    "identity": {
+     "id": 25,
+     "name": "Rohan Marchetti",
+     "type": "human",
+     "status": "active",
+     "department": "Data",
+     "title": "Data Scientist"
+    }
+   },
+   {
+    "id": 65,
+    "system": "okta",
+    "username": "rosalind.haverford@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-05-01T00:00:00",
+    "last_login_at": "2026-10-07T23:51:45.365185",
+    "identity": {
+     "id": 1,
+     "name": "Rosalind Haverford",
+     "type": "human",
+     "status": "active",
+     "department": "Executive",
+     "title": "Chief Executive Officer"
+    }
+   },
+   {
+    "id": 86,
+    "system": "okta",
+    "username": "sana.iyer@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2021-01-16T00:00:00",
+    "last_login_at": "2026-10-06T05:27:41.451214",
+    "identity": {
+     "id": 22,
+     "name": "Sana Iyer",
+     "type": "human",
+     "status": "active",
+     "department": "Data",
+     "title": "Head of Data"
+    }
+   },
+   {
+    "id": 125,
+    "system": "okta",
+    "username": "scim-provisioner",
+    "kind": "api_key",
+    "status": "active",
+    "created_at": "2024-07-18T00:00:00",
+    "last_login_at": "2026-10-05T13:02:00.648441",
+    "identity": {
+     "id": 64,
+     "name": "scim-provisioner",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "Okta API token"
+    }
+   },
+   {
+    "id": 101,
+    "system": "okta",
+    "username": "soren.sorensen@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-10-28T00:00:00",
+    "last_login_at": "2026-10-07T13:58:26.211111",
+    "identity": {
+     "id": 37,
+     "name": "Soren Sorensen",
+     "type": "human",
+     "status": "active",
+     "department": "Finance",
+     "title": "Accountant"
+    }
+   },
+   {
+    "id": 88,
+    "system": "okta",
+    "username": "talia.bellweather@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-11-20T00:00:00",
+    "last_login_at": "2026-10-06T14:29:40.273692",
+    "identity": {
+     "id": 24,
+     "name": "Talia Bellweather",
+     "type": "human",
+     "status": "active",
+     "department": "Data",
+     "title": "Data Scientist"
+    }
+   },
+   {
+    "id": 122,
+    "system": "okta",
+    "username": "teodor.delacroix@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-07-27T00:00:00",
+    "last_login_at": "2026-10-07T13:04:04.009199",
+    "identity": {
+     "id": 58,
+     "name": "Teodor Delacroix",
+     "type": "human",
+     "status": "active",
+     "department": "People",
+     "title": "HR Business Partner"
+    }
+   },
+   {
+    "id": 93,
+    "system": "okta",
+    "username": "thandiwe.mokoena@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-06-22T00:00:00",
+    "last_login_at": "2026-10-05T04:30:08.421245",
+    "identity": {
+     "id": 29,
+     "name": "Thandiwe Mokoena",
+     "type": "human",
+     "status": "active",
+     "department": "Security",
+     "title": "Head of Security"
+    }
+   },
+   {
+    "id": 98,
+    "system": "okta",
+    "username": "tomas.szabo@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2021-12-22T00:00:00",
+    "last_login_at": "2026-10-05T19:42:04.881396",
+    "identity": {
+     "id": 34,
+     "name": "Tomas Szabo",
+     "type": "human",
+     "status": "active",
+     "department": "Finance",
+     "title": "Accountant"
+    }
+   },
+   {
+    "id": 109,
+    "system": "okta",
+    "username": "ulric.quillfeather@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2026-04-25T00:00:00",
+    "last_login_at": "2026-10-05T17:00:54.199874",
+    "identity": {
+     "id": 45,
+     "name": "Ulric Quillfeather",
+     "type": "human",
+     "status": "active",
+     "department": "Sales",
+     "title": "Sales Development Rep"
+    }
+   },
+   {
+    "id": 79,
+    "system": "okta",
+    "username": "vesna.szabo@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-08-27T00:00:00",
+    "last_login_at": "2026-10-05T20:01:43.029750",
+    "identity": {
+     "id": 15,
+     "name": "Vesna Szabo",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Frontend Engineer"
+    }
+   },
+   {
+    "id": 117,
+    "system": "okta",
+    "username": "wim.bellweather@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-08-09T00:00:00",
+    "last_login_at": "2026-10-05T13:18:59.809197",
+    "identity": {
+     "id": 53,
+     "name": "Wim Bellweather",
+     "type": "human",
+     "status": "active",
+     "department": "Support",
+     "title": "Support Engineer"
+    }
+   },
+   {
+    "id": 92,
+    "system": "okta",
+    "username": "wren.okafor@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-05-17T00:00:00",
+    "last_login_at": "2026-10-06T13:50:46.683258",
+    "identity": {
+     "id": 28,
+     "name": "Wren Okafor",
+     "type": "human",
+     "status": "active",
+     "department": "Data",
+     "title": "Analytics Engineer"
+    }
+   },
+   {
+    "id": 102,
+    "system": "okta",
+    "username": "xiomara.valdivia@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2023-03-28T00:00:00",
+    "last_login_at": "2026-10-05T00:58:06.390028",
+    "identity": {
+     "id": 38,
+     "name": "Xiomara Valdivia",
+     "type": "human",
+     "status": "active",
+     "department": "Finance",
+     "title": "Accountant"
+    }
+   },
+   {
+    "id": 114,
+    "system": "okta",
+    "username": "yara.castellanos@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2021-11-23T00:00:00",
+    "last_login_at": "2026-10-05T18:43:32.204822",
+    "identity": {
+     "id": 50,
+     "name": "Yara Castellanos",
+     "type": "human",
+     "status": "active",
+     "department": "Support",
+     "title": "Support Lead"
+    }
+   },
+   {
+    "id": 94,
+    "system": "okta",
+    "username": "yusuf.iyer@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2020-10-27T00:00:00",
+    "last_login_at": "2026-10-07T12:46:27.499250",
+    "identity": {
+     "id": 30,
+     "name": "Yusuf Iyer",
+     "type": "human",
+     "status": "active",
+     "department": "Security",
+     "title": "Security Engineer"
+    }
+   },
+   {
+    "id": 107,
+    "system": "okta",
+    "username": "zainab.haverford@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2023-09-29T00:00:00",
+    "last_login_at": "2026-10-07T08:40:47.477824",
+    "identity": {
+     "id": 43,
+     "name": "Zainab Haverford",
+     "type": "human",
+     "status": "active",
+     "department": "Sales",
+     "title": "Sales Ops Analyst"
+    }
+   },
+   {
+    "id": 84,
+    "system": "okta",
+    "username": "zora.whitlock@larkspur.example",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-08-03T00:00:00",
+    "last_login_at": "2026-10-05T00:29:45.277217",
+    "identity": {
+     "id": 20,
+     "name": "Zora Whitlock",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Platform Engineer"
+    }
+   },
+   {
+    "id": 186,
+    "system": "snowflake",
+    "username": "BEATRIX_PEMBERTON",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-11-28T00:00:00",
+    "last_login_at": "2026-10-06T15:46:40.684926",
+    "identity": {
+     "id": 32,
+     "name": "Beatrix Pemberton",
+     "type": "human",
+     "status": "active",
+     "department": "Finance",
+     "title": "Financial Controller"
+    }
+   },
+   {
+    "id": 195,
+    "system": "snowflake",
+    "username": "BRAM_OKAFOR",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-04-25T00:00:00",
+    "last_login_at": "2026-10-05T16:03:39.072449",
+    "identity": {
+     "id": 44,
+     "name": "Bram Okafor",
+     "type": "human",
+     "status": "active",
+     "department": "Sales",
+     "title": "Sales Development Rep"
+    }
+   },
+   {
+    "id": 198,
+    "system": "snowflake",
+    "username": "CALLUM_FERREIRA",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2021-12-09T00:00:00",
+    "last_login_at": "2026-10-06T21:38:05.291372",
+    "identity": {
+     "id": 51,
+     "name": "Callum Ferreira",
+     "type": "human",
+     "status": "active",
+     "department": "Support",
+     "title": "Customer Success Manager"
+    }
+   },
+   {
+    "id": 203,
+    "system": "snowflake",
+    "username": "DBT_RUNNER",
+    "kind": "service",
+    "status": "active",
+    "created_at": "2026-02-23T00:00:00",
+    "last_login_at": "2026-10-07T17:56:51.319601",
+    "identity": {
+     "id": 88,
+     "name": "DBT_RUNNER",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "Snowflake service user"
+    }
+   },
+   {
+    "id": 180,
+    "system": "snowflake",
+    "username": "DMITRI_OSTROWSKI",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-08-18T00:00:00",
+    "last_login_at": "2026-10-06T10:19:44.057975",
+    "identity": {
+     "id": 23,
+     "name": "Dmitri Ostrowski",
+     "type": "human",
+     "status": "terminated",
+     "department": "Data",
+     "title": "Data Scientist"
+    }
+   },
+   {
+    "id": 183,
+    "system": "snowflake",
+    "username": "EMERIC_OSTROWSKI",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-01-12T00:00:00",
+    "last_login_at": "2026-10-05T05:33:34.331882",
+    "identity": {
+     "id": 26,
+     "name": "Emeric Ostrowski",
+     "type": "human",
+     "status": "active",
+     "department": "Data",
+     "title": "Data Scientist"
+    }
+   },
+   {
+    "id": 193,
+    "system": "snowflake",
+    "username": "FEMI_RAMASWAMY",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-08-30T00:00:00",
+    "last_login_at": "2026-10-07T02:11:59.404495",
+    "identity": {
+     "id": 42,
+     "name": "Femi Ramaswamy",
+     "type": "human",
+     "status": "active",
+     "department": "Sales",
+     "title": "Account Executive"
+    }
+   },
+   {
+    "id": 202,
+    "system": "snowflake",
+    "username": "FIVETRAN_LOADER",
+    "kind": "service",
+    "status": "active",
+    "created_at": "2025-10-19T00:00:00",
+    "last_login_at": "2026-10-05T02:02:16.407519",
+    "identity": {
+     "id": 87,
+     "name": "FIVETRAN_LOADER",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "Snowflake service user"
+    }
+   },
+   {
+    "id": 192,
+    "system": "snowflake",
+    "username": "HOLLIS_BRIGHTWATER",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-08-31T00:00:00",
+    "last_login_at": "2026-10-07T08:41:10.803947",
+    "identity": {
+     "id": 41,
+     "name": "Hollis Brightwater",
+     "type": "human",
+     "status": "terminated",
+     "department": "Sales",
+     "title": "Account Executive"
+    }
+   },
+   {
+    "id": 199,
+    "system": "snowflake",
+    "username": "JUNO_LINDQVIST",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2021-11-13T00:00:00",
+    "last_login_at": "2026-10-07T05:46:34.448530",
+    "identity": {
+     "id": 52,
+     "name": "Juno Lindqvist",
+     "type": "human",
+     "status": "active",
+     "department": "Support",
+     "title": "Customer Success Manager"
+    }
+   },
+   {
+    "id": 201,
+    "system": "snowflake",
+    "username": "KOFI_MENSAH",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-08-27T00:00:00",
+    "last_login_at": "2026-10-06T14:19:22.873226",
+    "identity": {
+     "id": 4,
+     "name": "Kofi Mensah",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Engineering Manager, Backend"
+    }
+   },
+   {
+    "id": 189,
+    "system": "snowflake",
+    "username": "LINNEA_SORENSEN",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-06-15T00:00:00",
+    "last_login_at": "2026-10-07T01:14:58.037341",
+    "identity": {
+     "id": 35,
+     "name": "Linnea Sorensen",
+     "type": "human",
+     "status": "active",
+     "department": "Finance",
+     "title": "Accountant"
+    }
+   },
+   {
+    "id": 204,
+    "system": "snowflake",
+    "username": "LOOKER_SVC",
+    "kind": "service",
+    "status": "active",
+    "created_at": "2025-09-05T00:00:00",
+    "last_login_at": "2026-10-07T21:08:58.741174",
+    "identity": {
+     "id": 89,
+     "name": "LOOKER_SVC",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "Snowflake service user"
+    }
+   },
+   {
+    "id": 200,
+    "system": "snowflake",
+    "username": "MIREILLE_DELACROIX",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-04-07T00:00:00",
+    "last_login_at": "2026-10-07T14:07:03.606911",
+    "identity": {
+     "id": 3,
+     "name": "Mireille Delacroix",
+     "type": "human",
+     "status": "active",
+     "department": "Executive",
+     "title": "Chief Financial Officer"
+    }
+   },
+   {
+    "id": 190,
+    "system": "snowflake",
+    "username": "ODESSA_MENSAH",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2021-11-08T00:00:00",
+    "last_login_at": "2026-10-05T23:40:36.508119",
+    "identity": {
+     "id": 36,
+     "name": "Odessa Mensah",
+     "type": "human",
+     "status": "active",
+     "department": "Finance",
+     "title": "Accountant"
+    }
+   },
+   {
+    "id": 187,
+    "system": "snowflake",
+    "username": "PRIYA_RAMASWAMY",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2023-08-01T00:00:00",
+    "last_login_at": "2026-10-06T18:00:07.674960",
+    "identity": {
+     "id": 33,
+     "name": "Priya Ramaswamy",
+     "type": "human",
+     "status": "active",
+     "department": "Finance",
+     "title": "FP&A Analyst"
+    }
+   },
+   {
+    "id": 184,
+    "system": "snowflake",
+    "username": "QUINN_ZELLER",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-06-20T00:00:00",
+    "last_login_at": "2026-10-05T07:43:17.919097",
+    "identity": {
+     "id": 27,
+     "name": "Quinn Zeller",
+     "type": "human",
+     "status": "active",
+     "department": "Data",
+     "title": "Data Scientist"
+    }
+   },
+   {
+    "id": 191,
+    "system": "snowflake",
+    "username": "RAFAEL_VALDIVIA",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-02-03T00:00:00",
+    "last_login_at": "2026-10-06T17:09:34.614860",
+    "identity": {
+     "id": 40,
+     "name": "Rafael Valdivia",
+     "type": "human",
+     "status": "active",
+     "department": "Sales",
+     "title": "VP Sales"
+    }
+   },
+   {
+    "id": 206,
+    "system": "snowflake",
+    "username": "REVERSE_ETL_SVC",
+    "kind": "service",
+    "status": "active",
+    "created_at": "2026-01-29T00:00:00",
+    "last_login_at": "2026-10-05T12:58:33.732047",
+    "identity": {
+     "id": 91,
+     "name": "REVERSE_ETL_SVC",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "Snowflake service user"
+    }
+   },
+   {
+    "id": 182,
+    "system": "snowflake",
+    "username": "ROHAN_MARCHETTI",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2021-05-12T00:00:00",
+    "last_login_at": "2026-10-05T05:11:51.829447",
+    "identity": {
+     "id": 25,
+     "name": "Rohan Marchetti",
+     "type": "human",
+     "status": "active",
+     "department": "Data",
+     "title": "Data Scientist"
+    }
+   },
+   {
+    "id": 179,
+    "system": "snowflake",
+    "username": "SANA_IYER",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2021-01-16T00:00:00",
+    "last_login_at": "2026-10-07T06:10:07.616839",
+    "identity": {
+     "id": 22,
+     "name": "Sana Iyer",
+     "type": "human",
+     "status": "active",
+     "department": "Data",
+     "title": "Head of Data"
+    }
+   },
+   {
+    "id": 205,
+    "system": "snowflake",
+    "username": "TABLEAU_LEGACY",
+    "kind": "service",
+    "status": "active",
+    "created_at": "2025-12-07T00:00:00",
+    "last_login_at": "2026-10-07T04:31:40.371522",
+    "identity": {
+     "id": 90,
+     "name": "TABLEAU_LEGACY",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "Snowflake service user"
+    }
+   },
+   {
+    "id": 181,
+    "system": "snowflake",
+    "username": "TALIA_BELLWEATHER",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-11-20T00:00:00",
+    "last_login_at": "2026-10-05T08:55:46.853869",
+    "identity": {
+     "id": 24,
+     "name": "Talia Bellweather",
+     "type": "human",
+     "status": "active",
+     "department": "Data",
+     "title": "Data Scientist"
+    }
+   },
+   {
+    "id": 188,
+    "system": "snowflake",
+    "username": "TOMAS_SZABO",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2021-12-22T00:00:00",
+    "last_login_at": "2026-10-06T19:44:59.153070",
+    "identity": {
+     "id": 34,
+     "name": "Tomas Szabo",
+     "type": "human",
+     "status": "active",
+     "department": "Finance",
+     "title": "Accountant"
+    }
+   },
+   {
+    "id": 196,
+    "system": "snowflake",
+    "username": "ULRIC_QUILLFEATHER",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2026-04-25T00:00:00",
+    "last_login_at": "2026-10-05T04:21:20.392504",
+    "identity": {
+     "id": 45,
+     "name": "Ulric Quillfeather",
+     "type": "human",
+     "status": "active",
+     "department": "Sales",
+     "title": "Sales Development Rep"
+    }
+   },
+   {
+    "id": 185,
+    "system": "snowflake",
+    "username": "WREN_OKAFOR",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-05-17T00:00:00",
+    "last_login_at": "2026-10-07T09:24:49.053749",
+    "identity": {
+     "id": 28,
+     "name": "Wren Okafor",
+     "type": "human",
+     "status": "active",
+     "department": "Data",
+     "title": "Analytics Engineer"
+    }
+   },
+   {
+    "id": 197,
+    "system": "snowflake",
+    "username": "YARA_CASTELLANOS",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2021-11-23T00:00:00",
+    "last_login_at": "2026-10-06T01:40:15.686715",
+    "identity": {
+     "id": 50,
+     "name": "Yara Castellanos",
+     "type": "human",
+     "status": "active",
+     "department": "Support",
+     "title": "Support Lead"
+    }
+   },
+   {
+    "id": 194,
+    "system": "snowflake",
+    "username": "ZAINAB_HAVERFORD",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2023-09-29T00:00:00",
+    "last_login_at": "2026-10-07T15:11:26.909207",
+    "identity": {
+     "id": 43,
+     "name": "Zainab Haverford",
+     "type": "human",
+     "status": "active",
+     "department": "Sales",
+     "title": "Sales Ops Analyst"
+    }
+   },
+   {
+    "id": 208,
+    "system": "snowflake",
+    "username": "agent-data-analyst",
+    "kind": "agent",
+    "status": "active",
+    "created_at": "2025-04-09T00:00:00",
+    "last_login_at": "2026-10-05T05:16:47.321569",
+    "identity": {
+     "id": 70,
+     "name": "Data Analyst Agent",
+     "type": "ai_agent",
+     "status": "active",
+     "department": null,
+     "title": "AI agent"
+    }
+   },
+   {
+    "id": 209,
+    "system": "snowflake",
+    "username": "agent-sales-research",
+    "kind": "agent",
+    "status": "active",
+    "created_at": "2025-12-27T00:00:00",
+    "last_login_at": "2026-10-07T05:08:36.740344",
+    "identity": {
+     "id": 72,
+     "name": "Sales Research Agent",
+     "type": "ai_agent",
+     "status": "active",
+     "department": null,
+     "title": "AI agent"
+    }
+   },
+   {
+    "id": 207,
+    "system": "snowflake",
+    "username": "agent-support-copilot",
+    "kind": "agent",
+    "status": "active",
+    "created_at": "2026-03-28T00:00:00",
+    "last_login_at": "2026-10-07T04:38:15.048570",
+    "identity": {
+     "id": 67,
+     "name": "Support Copilot",
+     "type": "ai_agent",
+     "status": "active",
+     "department": null,
+     "title": "AI agent"
+    }
+   },
+   {
+    "id": 63,
+    "system": "workday",
+    "username": "ISU_Expense_Bot",
+    "kind": "service",
+    "status": "active",
+    "created_at": "2026-04-13T00:00:00",
+    "last_login_at": "2026-10-05T14:25:46.906287",
+    "identity": {
+     "id": 63,
+     "name": "ISU_Expense_Bot",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "Workday integration user"
+    }
+   },
+   {
+    "id": 61,
+    "system": "workday",
+    "username": "ISU_Okta_Sync",
+    "kind": "service",
+    "status": "active",
+    "created_at": "2024-11-03T00:00:00",
+    "last_login_at": "2026-10-06T12:23:16.558363",
+    "identity": {
+     "id": 61,
+     "name": "ISU_Okta_Sync",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "Workday integration user"
+    }
+   },
+   {
+    "id": 62,
+    "system": "workday",
+    "username": "ISU_Payroll_Export",
+    "kind": "service",
+    "status": "active",
+    "created_at": "2025-07-11T00:00:00",
+    "last_login_at": "2026-10-07T17:33:31.395726",
+    "identity": {
+     "id": 62,
+     "name": "ISU_Payroll_Export",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "Workday integration user"
+    }
+   },
+   {
+    "id": 64,
+    "system": "workday",
+    "username": "agent-finance-recon",
+    "kind": "agent",
+    "status": "active",
+    "created_at": "2026-02-06T00:00:00",
+    "last_login_at": "2026-10-06T15:19:41.903364",
+    "identity": {
+     "id": 69,
+     "name": "Finance Recon Agent",
+     "type": "ai_agent",
+     "status": "active",
+     "department": null,
+     "title": "AI agent"
+    }
+   },
+   {
+    "id": 1,
+    "system": "workday",
+    "username": "emp-1001",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-05-01T00:00:00",
+    "last_login_at": "2026-10-06T04:38:09.234221",
+    "identity": {
+     "id": 1,
+     "name": "Rosalind Haverford",
+     "type": "human",
+     "status": "active",
+     "department": "Executive",
+     "title": "Chief Executive Officer"
+    }
+   },
+   {
+    "id": 2,
+    "system": "workday",
+    "username": "emp-1002",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-04-02T00:00:00",
+    "last_login_at": "2026-10-06T13:51:39.940730",
+    "identity": {
+     "id": 2,
+     "name": "Caspian Arkwright",
+     "type": "human",
+     "status": "active",
+     "department": "Executive",
+     "title": "Chief Technology Officer"
+    }
+   },
+   {
+    "id": 3,
+    "system": "workday",
+    "username": "emp-1003",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-04-07T00:00:00",
+    "last_login_at": "2026-10-07T15:41:40.368625",
+    "identity": {
+     "id": 3,
+     "name": "Mireille Delacroix",
+     "type": "human",
+     "status": "active",
+     "department": "Executive",
+     "title": "Chief Financial Officer"
+    }
+   },
+   {
+    "id": 4,
+    "system": "workday",
+    "username": "emp-1004",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-08-27T00:00:00",
+    "last_login_at": "2026-10-06T12:51:32.759098",
+    "identity": {
+     "id": 4,
+     "name": "Kofi Mensah",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Engineering Manager, Backend"
+    }
+   },
+   {
+    "id": 5,
+    "system": "workday",
+    "username": "emp-1005",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-01-19T00:00:00",
+    "last_login_at": "2026-10-05T01:35:48.278362",
+    "identity": {
+     "id": 5,
+     "name": "Alice Okafor",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Senior Software Engineer"
+    }
+   },
+   {
+    "id": 6,
+    "system": "workday",
+    "username": "emp-1006",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-11-02T00:00:00",
+    "last_login_at": "2026-10-06T13:24:41.588884",
+    "identity": {
+     "id": 6,
+     "name": "Ilya Kowalczyk",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Software Engineer"
+    }
+   },
+   {
+    "id": 7,
+    "system": "workday",
+    "username": "emp-1007",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-04-21T00:00:00",
+    "last_login_at": "2026-10-07T01:32:47.880155",
+    "identity": {
+     "id": 7,
+     "name": "Desmond Abernathy",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Software Engineer"
+    }
+   },
+   {
+    "id": 8,
+    "system": "workday",
+    "username": "emp-1008",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-05-05T00:00:00",
+    "last_login_at": "2026-10-07T13:37:24.746535",
+    "identity": {
+     "id": 8,
+     "name": "Pascal Ostrowski",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Senior Software Engineer"
+    }
+   },
+   {
+    "id": 9,
+    "system": "workday",
+    "username": "emp-1009",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-06-10T00:00:00",
+    "last_login_at": "2026-10-05T18:01:24.519821",
+    "identity": {
+     "id": 9,
+     "name": "Joaquin Pemberton",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Senior Software Engineer"
+    }
+   },
+   {
+    "id": 10,
+    "system": "workday",
+    "username": "emp-1010",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2020-10-22T00:00:00",
+    "last_login_at": "2026-10-05T18:41:40.962628",
+    "identity": {
+     "id": 10,
+     "name": "Freya Whitlock",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Software Engineer"
+    }
+   },
+   {
+    "id": 11,
+    "system": "workday",
+    "username": "emp-1011",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-07-05T00:00:00",
+    "last_login_at": "2026-10-06T13:32:21.192242",
+    "identity": {
+     "id": 11,
+     "name": "Anders Zeller",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Engineering Manager, Frontend"
+    }
+   },
+   {
+    "id": 12,
+    "system": "workday",
+    "username": "emp-1012",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2023-02-17T00:00:00",
+    "last_login_at": "2026-10-05T22:10:18.885515",
+    "identity": {
+     "id": 12,
+     "name": "Hana Rasmussen",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Frontend Engineer"
+    }
+   },
+   {
+    "id": 13,
+    "system": "workday",
+    "username": "emp-1013",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-01-13T00:00:00",
+    "last_login_at": "2026-10-06T10:49:26.092685",
+    "identity": {
+     "id": 13,
+     "name": "Nikhil Iyer",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Frontend Engineer"
+    }
+   },
+   {
+    "id": 14,
+    "system": "workday",
+    "username": "emp-1014",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-07-05T00:00:00",
+    "last_login_at": "2026-10-07T09:13:28.270263",
+    "identity": {
+     "id": 14,
+     "name": "Dalia Mokoena",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Frontend Engineer"
+    }
+   },
+   {
+    "id": 15,
+    "system": "workday",
+    "username": "emp-1015",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-08-27T00:00:00",
+    "last_login_at": "2026-10-05T03:27:16.170512",
+    "identity": {
+     "id": 15,
+     "name": "Vesna Szabo",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Frontend Engineer"
+    }
+   },
+   {
+    "id": 16,
+    "system": "workday",
+    "username": "emp-1016",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2020-11-16T00:00:00",
+    "last_login_at": "2026-10-06T21:57:13.762625",
+    "identity": {
+     "id": 16,
+     "name": "Ingrid Lindqvist",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Platform Lead"
+    }
+   },
+   {
+    "id": 17,
+    "system": "workday",
+    "username": "emp-1017",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-12-02T00:00:00",
+    "last_login_at": "2026-10-05T22:18:54.481740",
+    "identity": {
+     "id": 17,
+     "name": "Marcus Bellweather",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Platform Engineer"
+    }
+   },
+   {
+    "id": 18,
+    "system": "workday",
+    "username": "emp-1018",
+    "kind": "user",
+    "status": "disabled",
+    "created_at": "2022-11-03T00:00:00",
+    "last_login_at": null,
+    "identity": {
+     "id": 18,
+     "name": "Oren Whitlock",
+     "type": "human",
+     "status": "terminated",
+     "department": "Engineering",
+     "title": "Site Reliability Engineer"
+    }
+   },
+   {
+    "id": 19,
+    "system": "workday",
+    "username": "emp-1019",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2020-10-15T00:00:00",
+    "last_login_at": "2026-10-05T06:10:53.413100",
+    "identity": {
+     "id": 19,
+     "name": "Cyrus Quennell",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Platform Engineer"
+    }
+   },
+   {
+    "id": 20,
+    "system": "workday",
+    "username": "emp-1020",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-08-03T00:00:00",
+    "last_login_at": "2026-10-05T17:24:49.344888",
+    "identity": {
+     "id": 20,
+     "name": "Zora Whitlock",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Platform Engineer"
+    }
+   },
+   {
+    "id": 21,
+    "system": "workday",
+    "username": "emp-1021",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2023-05-02T00:00:00",
+    "last_login_at": "2026-10-07T02:32:15.152262",
+    "identity": {
+     "id": 21,
+     "name": "Lena Valdivia",
+     "type": "human",
+     "status": "active",
+     "department": "Engineering",
+     "title": "Site Reliability Engineer"
+    }
+   },
+   {
+    "id": 22,
+    "system": "workday",
+    "username": "emp-1022",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2021-01-16T00:00:00",
+    "last_login_at": "2026-10-06T01:42:35.892684",
+    "identity": {
+     "id": 22,
+     "name": "Sana Iyer",
+     "type": "human",
+     "status": "active",
+     "department": "Data",
+     "title": "Head of Data"
+    }
+   },
+   {
+    "id": 23,
+    "system": "workday",
+    "username": "emp-1023",
+    "kind": "user",
+    "status": "disabled",
+    "created_at": "2025-08-18T00:00:00",
+    "last_login_at": null,
+    "identity": {
+     "id": 23,
+     "name": "Dmitri Ostrowski",
+     "type": "human",
+     "status": "terminated",
+     "department": "Data",
+     "title": "Data Scientist"
+    }
+   },
+   {
+    "id": 24,
+    "system": "workday",
+    "username": "emp-1024",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-11-20T00:00:00",
+    "last_login_at": "2026-10-07T17:26:50.064569",
+    "identity": {
+     "id": 24,
+     "name": "Talia Bellweather",
+     "type": "human",
+     "status": "active",
+     "department": "Data",
+     "title": "Data Scientist"
+    }
+   },
+   {
+    "id": 25,
+    "system": "workday",
+    "username": "emp-1025",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2021-05-12T00:00:00",
+    "last_login_at": "2026-10-05T11:07:39.983536",
+    "identity": {
+     "id": 25,
+     "name": "Rohan Marchetti",
+     "type": "human",
+     "status": "active",
+     "department": "Data",
+     "title": "Data Scientist"
+    }
+   },
+   {
+    "id": 26,
+    "system": "workday",
+    "username": "emp-1026",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-01-12T00:00:00",
+    "last_login_at": "2026-10-06T10:40:31.534631",
+    "identity": {
+     "id": 26,
+     "name": "Emeric Ostrowski",
+     "type": "human",
+     "status": "active",
+     "department": "Data",
+     "title": "Data Scientist"
+    }
+   },
+   {
+    "id": 27,
+    "system": "workday",
+    "username": "emp-1027",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-06-20T00:00:00",
+    "last_login_at": "2026-10-05T06:36:19.385483",
+    "identity": {
+     "id": 27,
+     "name": "Quinn Zeller",
+     "type": "human",
+     "status": "active",
+     "department": "Data",
+     "title": "Data Scientist"
+    }
+   },
+   {
+    "id": 28,
+    "system": "workday",
+    "username": "emp-1028",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-05-17T00:00:00",
+    "last_login_at": "2026-10-06T22:23:23.552782",
+    "identity": {
+     "id": 28,
+     "name": "Wren Okafor",
+     "type": "human",
+     "status": "active",
+     "department": "Data",
+     "title": "Analytics Engineer"
+    }
+   },
+   {
+    "id": 29,
+    "system": "workday",
+    "username": "emp-1029",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-06-22T00:00:00",
+    "last_login_at": "2026-10-07T07:57:32.117630",
+    "identity": {
+     "id": 29,
+     "name": "Thandiwe Mokoena",
+     "type": "human",
+     "status": "active",
+     "department": "Security",
+     "title": "Head of Security"
+    }
+   },
+   {
+    "id": 30,
+    "system": "workday",
+    "username": "emp-1030",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2020-10-27T00:00:00",
+    "last_login_at": "2026-10-06T09:00:25.801775",
+    "identity": {
+     "id": 30,
+     "name": "Yusuf Iyer",
+     "type": "human",
+     "status": "active",
+     "department": "Security",
+     "title": "Security Engineer"
+    }
+   },
+   {
+    "id": 31,
+    "system": "workday",
+    "username": "emp-1031",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2023-02-19T00:00:00",
+    "last_login_at": "2026-10-06T11:48:20.931580",
+    "identity": {
+     "id": 31,
+     "name": "Delphine Bellweather",
+     "type": "human",
+     "status": "active",
+     "department": "Security",
+     "title": "Security Engineer"
+    }
+   },
+   {
+    "id": 32,
+    "system": "workday",
+    "username": "emp-1032",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-11-28T00:00:00",
+    "last_login_at": "2026-10-06T02:10:34.252952",
+    "identity": {
+     "id": 32,
+     "name": "Beatrix Pemberton",
+     "type": "human",
+     "status": "active",
+     "department": "Finance",
+     "title": "Financial Controller"
+    }
+   },
+   {
+    "id": 33,
+    "system": "workday",
+    "username": "emp-1033",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2023-08-01T00:00:00",
+    "last_login_at": "2026-10-06T03:50:51.244647",
+    "identity": {
+     "id": 33,
+     "name": "Priya Ramaswamy",
+     "type": "human",
+     "status": "active",
+     "department": "Finance",
+     "title": "FP&A Analyst"
+    }
+   },
+   {
+    "id": 34,
+    "system": "workday",
+    "username": "emp-1034",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2021-12-22T00:00:00",
+    "last_login_at": "2026-10-05T15:14:06.910744",
+    "identity": {
+     "id": 34,
+     "name": "Tomas Szabo",
+     "type": "human",
+     "status": "active",
+     "department": "Finance",
+     "title": "Accountant"
+    }
+   },
+   {
+    "id": 35,
+    "system": "workday",
+    "username": "emp-1035",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-06-15T00:00:00",
+    "last_login_at": "2026-10-05T17:24:02.827676",
+    "identity": {
+     "id": 35,
+     "name": "Linnea Sorensen",
+     "type": "human",
+     "status": "active",
+     "department": "Finance",
+     "title": "Accountant"
+    }
+   },
+   {
+    "id": 36,
+    "system": "workday",
+    "username": "emp-1036",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2021-11-08T00:00:00",
+    "last_login_at": "2026-10-07T09:56:58.148964",
+    "identity": {
+     "id": 36,
+     "name": "Odessa Mensah",
+     "type": "human",
+     "status": "active",
+     "department": "Finance",
+     "title": "Accountant"
+    }
+   },
+   {
+    "id": 37,
+    "system": "workday",
+    "username": "emp-1037",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-10-28T00:00:00",
+    "last_login_at": "2026-10-07T06:45:50.714701",
+    "identity": {
+     "id": 37,
+     "name": "Soren Sorensen",
+     "type": "human",
+     "status": "active",
+     "department": "Finance",
+     "title": "Accountant"
+    }
+   },
+   {
+    "id": 38,
+    "system": "workday",
+    "username": "emp-1038",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2023-03-28T00:00:00",
+    "last_login_at": "2026-10-06T19:09:02.611386",
+    "identity": {
+     "id": 38,
+     "name": "Xiomara Valdivia",
+     "type": "human",
+     "status": "active",
+     "department": "Finance",
+     "title": "Accountant"
+    }
+   },
+   {
+    "id": 39,
+    "system": "workday",
+    "username": "emp-1039",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-05-03T00:00:00",
+    "last_login_at": "2026-10-05T14:09:37.884069",
+    "identity": {
+     "id": 39,
+     "name": "Leif Pemberton",
+     "type": "human",
+     "status": "active",
+     "department": "Finance",
+     "title": "Accountant"
+    }
+   },
+   {
+    "id": 40,
+    "system": "workday",
+    "username": "emp-1040",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-02-03T00:00:00",
+    "last_login_at": "2026-10-07T09:36:21.258704",
+    "identity": {
+     "id": 40,
+     "name": "Rafael Valdivia",
+     "type": "human",
+     "status": "active",
+     "department": "Sales",
+     "title": "VP Sales"
+    }
+   },
+   {
+    "id": 41,
+    "system": "workday",
+    "username": "emp-1041",
+    "kind": "user",
+    "status": "disabled",
+    "created_at": "2024-08-31T00:00:00",
+    "last_login_at": null,
+    "identity": {
+     "id": 41,
+     "name": "Hollis Brightwater",
+     "type": "human",
+     "status": "terminated",
+     "department": "Sales",
+     "title": "Account Executive"
+    }
+   },
+   {
+    "id": 42,
+    "system": "workday",
+    "username": "emp-1042",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-08-30T00:00:00",
+    "last_login_at": "2026-10-06T12:31:10.946317",
+    "identity": {
+     "id": 42,
+     "name": "Femi Ramaswamy",
+     "type": "human",
+     "status": "active",
+     "department": "Sales",
+     "title": "Account Executive"
+    }
+   },
+   {
+    "id": 43,
+    "system": "workday",
+    "username": "emp-1043",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2023-09-29T00:00:00",
+    "last_login_at": "2026-10-05T19:22:03.765150",
+    "identity": {
+     "id": 43,
+     "name": "Zainab Haverford",
+     "type": "human",
+     "status": "active",
+     "department": "Sales",
+     "title": "Sales Ops Analyst"
+    }
+   },
+   {
+    "id": 44,
+    "system": "workday",
+    "username": "emp-1044",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-04-25T00:00:00",
+    "last_login_at": "2026-10-05T00:44:54.750327",
+    "identity": {
+     "id": 44,
+     "name": "Bram Okafor",
+     "type": "human",
+     "status": "active",
+     "department": "Sales",
+     "title": "Sales Development Rep"
+    }
+   },
+   {
+    "id": 45,
+    "system": "workday",
+    "username": "emp-1045",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2026-04-25T00:00:00",
+    "last_login_at": "2026-10-05T15:06:42.415785",
+    "identity": {
+     "id": 45,
+     "name": "Ulric Quillfeather",
+     "type": "human",
+     "status": "active",
+     "department": "Sales",
+     "title": "Sales Development Rep"
+    }
+   },
+   {
+    "id": 46,
+    "system": "workday",
+    "username": "emp-1046",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-03-21T00:00:00",
+    "last_login_at": "2026-10-06T13:59:55.375800",
+    "identity": {
+     "id": 46,
+     "name": "Bastian Achterberg",
+     "type": "human",
+     "status": "active",
+     "department": "Sales",
+     "title": "Sales Development Rep"
+    }
+   },
+   {
+    "id": 47,
+    "system": "workday",
+    "username": "emp-1047",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-10-14T00:00:00",
+    "last_login_at": "2026-10-07T10:03:27.229993",
+    "identity": {
+     "id": 47,
+     "name": "Marisol Iyer",
+     "type": "human",
+     "status": "active",
+     "department": "Sales",
+     "title": "Sales Ops Analyst"
+    }
+   },
+   {
+    "id": 48,
+    "system": "workday",
+    "username": "emp-1048",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-10-02T00:00:00",
+    "last_login_at": "2026-10-06T04:25:47.962988",
+    "identity": {
+     "id": 48,
+     "name": "Kenji Achterberg",
+     "type": "human",
+     "status": "active",
+     "department": "Sales",
+     "title": "Sales Ops Analyst"
+    }
+   },
+   {
+    "id": 49,
+    "system": "workday",
+    "username": "emp-1049",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2021-12-16T00:00:00",
+    "last_login_at": "2026-10-06T23:12:42.384433",
+    "identity": {
+     "id": 49,
+     "name": "Anika Abernathy",
+     "type": "human",
+     "status": "active",
+     "department": "Sales",
+     "title": "Sales Ops Analyst"
+    }
+   },
+   {
+    "id": 50,
+    "system": "workday",
+    "username": "emp-1050",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2021-11-23T00:00:00",
+    "last_login_at": "2026-10-05T13:46:59.759467",
+    "identity": {
+     "id": 50,
+     "name": "Yara Castellanos",
+     "type": "human",
+     "status": "active",
+     "department": "Support",
+     "title": "Support Lead"
+    }
+   },
+   {
+    "id": 51,
+    "system": "workday",
+    "username": "emp-1051",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2021-12-09T00:00:00",
+    "last_login_at": "2026-10-05T19:56:05.232491",
+    "identity": {
+     "id": 51,
+     "name": "Callum Ferreira",
+     "type": "human",
+     "status": "active",
+     "department": "Support",
+     "title": "Customer Success Manager"
+    }
+   },
+   {
+    "id": 52,
+    "system": "workday",
+    "username": "emp-1052",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2021-11-13T00:00:00",
+    "last_login_at": "2026-10-06T22:50:04.503552",
+    "identity": {
+     "id": 52,
+     "name": "Juno Lindqvist",
+     "type": "human",
+     "status": "active",
+     "department": "Support",
+     "title": "Customer Success Manager"
+    }
+   },
+   {
+    "id": 53,
+    "system": "workday",
+    "username": "emp-1053",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-08-09T00:00:00",
+    "last_login_at": "2026-10-05T01:50:05.717479",
+    "identity": {
+     "id": 53,
+     "name": "Wim Bellweather",
+     "type": "human",
+     "status": "active",
+     "department": "Support",
+     "title": "Support Engineer"
+    }
+   },
+   {
+    "id": 54,
+    "system": "workday",
+    "username": "emp-1054",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-07-16T00:00:00",
+    "last_login_at": "2026-10-07T18:12:04.517873",
+    "identity": {
+     "id": 54,
+     "name": "Ottilie Castellanos",
+     "type": "human",
+     "status": "active",
+     "department": "Support",
+     "title": "Customer Success Manager"
+    }
+   },
+   {
+    "id": 55,
+    "system": "workday",
+    "username": "emp-1055",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-10-08T00:00:00",
+    "last_login_at": "2026-10-07T16:38:40.867386",
+    "identity": {
+     "id": 55,
+     "name": "Ayasha Lindqvist",
+     "type": "human",
+     "status": "active",
+     "department": "Support",
+     "title": "Customer Success Manager"
+    }
+   },
+   {
+    "id": 56,
+    "system": "workday",
+    "username": "emp-1056",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2024-08-30T00:00:00",
+    "last_login_at": "2026-10-06T14:09:15.268599",
+    "identity": {
+     "id": 56,
+     "name": "Greer Lindqvist",
+     "type": "human",
+     "status": "active",
+     "department": "Support",
+     "title": "Support Engineer"
+    }
+   },
+   {
+    "id": 57,
+    "system": "workday",
+    "username": "emp-1057",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-03-22T00:00:00",
+    "last_login_at": "2026-10-06T23:40:58.445226",
+    "identity": {
+     "id": 57,
+     "name": "Esme Thornbury",
+     "type": "human",
+     "status": "active",
+     "department": "People",
+     "title": "Head of People"
+    }
+   },
+   {
+    "id": 58,
+    "system": "workday",
+    "username": "emp-1058",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2025-07-27T00:00:00",
+    "last_login_at": "2026-10-06T13:14:56.264087",
+    "identity": {
+     "id": 58,
+     "name": "Teodor Delacroix",
+     "type": "human",
+     "status": "active",
+     "department": "People",
+     "title": "HR Business Partner"
+    }
+   },
+   {
+    "id": 59,
+    "system": "workday",
+    "username": "emp-1059",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-02-20T00:00:00",
+    "last_login_at": "2026-10-05T01:03:43.459961",
+    "identity": {
+     "id": 59,
+     "name": "Mei Winslow",
+     "type": "human",
+     "status": "active",
+     "department": "People",
+     "title": "HR Business Partner"
+    }
+   },
+   {
+    "id": 60,
+    "system": "workday",
+    "username": "emp-1060",
+    "kind": "user",
+    "status": "active",
+    "created_at": "2022-06-19T00:00:00",
+    "last_login_at": "2026-10-06T04:03:40.051525",
+    "identity": {
+     "id": 60,
+     "name": "Idris Achterberg",
+     "type": "human",
+     "status": "active",
+     "department": "People",
+     "title": "Recruiter"
+    }
+   }
+  ]
+ }
+}

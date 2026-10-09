@@ -1,0 +1,16 @@
+{
+ "name": "revoke-404",
+ "request": {
+  "method": "POST",
+  "path": "/api/least-privilege/revoke",
+  "body": {
+   "edge_id": 999999
+  }
+ },
+ "response": {
+  "status": 404,
+  "body": {
+   "detail": "grant not found"
+  }
+ }
+}

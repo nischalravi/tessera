@@ -1,0 +1,2359 @@
+{
+ "name": "identity-marcus",
+ "request": {
+  "method": "GET",
+  "path": "/api/identities/17"
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "id": 17,
+   "name": "Marcus Bellweather",
+   "type": "human",
+   "status": "active",
+   "department": "Engineering",
+   "title": "Platform Engineer",
+   "email": "marcus.bellweather@larkspur.example",
+   "description": null,
+   "hired_at": "2025-12-02T00:00:00",
+   "terminated_at": null,
+   "manager": {
+    "id": 16,
+    "name": "Ingrid Lindqvist",
+    "type": "human",
+    "status": "active",
+    "department": "Engineering",
+    "title": "Platform Lead"
+   },
+   "owner": null,
+   "accounts": [
+    {
+     "id": 17,
+     "system": "workday",
+     "username": "emp-1017",
+     "kind": "user",
+     "status": "active",
+     "last_login_at": "2026-10-05T22:18:54.481740"
+    },
+    {
+     "id": 81,
+     "system": "okta",
+     "username": "marcus.bellweather@larkspur.example",
+     "kind": "user",
+     "status": "active",
+     "last_login_at": "2026-10-05T18:28:42.977360"
+    },
+    {
+     "id": 158,
+     "system": "github",
+     "username": "marcus-bellw",
+     "kind": "user",
+     "status": "active",
+     "last_login_at": "2026-10-07T10:13:33.450803"
+    }
+   ],
+   "grants": [
+    {
+     "edge_id": 82,
+     "src": "account:81",
+     "dst": "group:6",
+     "label": "okta:Everyone",
+     "account": "okta:marcus.bellweather@larkspur.example",
+     "relation": "member_of",
+     "source": "connector",
+     "expires_at": null,
+     "privileged": false
+    },
+    {
+     "edge_id": 83,
+     "src": "account:81",
+     "dst": "group:7",
+     "label": "okta:engineering",
+     "account": "okta:marcus.bellweather@larkspur.example",
+     "relation": "member_of",
+     "source": "connector",
+     "expires_at": null,
+     "privileged": false
+    },
+    {
+     "edge_id": 84,
+     "src": "account:81",
+     "dst": "group:10",
+     "label": "okta:eng-platform",
+     "account": "okta:marcus.bellweather@larkspur.example",
+     "relation": "member_of",
+     "source": "connector",
+     "expires_at": null,
+     "privileged": false
+    },
+    {
+     "edge_id": 300,
+     "src": "account:158",
+     "dst": "group:35",
+     "label": "github:all-engineers",
+     "account": "github:marcus-bellw",
+     "relation": "member_of",
+     "source": "connector",
+     "expires_at": null,
+     "privileged": false
+    },
+    {
+     "edge_id": 301,
+     "src": "account:158",
+     "dst": "group:32",
+     "label": "github:platform",
+     "account": "github:marcus-bellw",
+     "relation": "member_of",
+     "source": "connector",
+     "expires_at": null,
+     "privileged": false
+    }
+   ],
+   "effective_permissions": [
+    {
+     "perm_key": "perm:24",
+     "action": "iam:*",
+     "system": "aws",
+     "resource": "aws-account/larkspur-prod",
+     "resource_id": 12,
+     "environment": "prod",
+     "tags": [],
+     "privileged": true,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-07T00:00:00",
+      "days_since_used": 1,
+      "events_90d": 125,
+      "active_days_90d": 17
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:17",
+        "kind": "identity",
+        "label": "Marcus Bellweather",
+        "system": null
+       },
+       {
+        "key": "account:81",
+        "kind": "account",
+        "label": "okta:marcus.bellweather@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:10",
+        "kind": "group",
+        "label": "okta:eng-platform",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 84,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:23",
+        "kind": "group",
+        "label": "aws:ProdAdmin",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 225,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:24",
+        "kind": "perm",
+        "label": "iam:* on aws-account/larkspur-prod",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 196,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:25",
+     "action": "iam:*",
+     "system": "aws",
+     "resource": "aws-account/larkspur-staging",
+     "resource_id": 13,
+     "environment": "staging",
+     "tags": [],
+     "privileged": true,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-07-20T00:00:00",
+      "days_since_used": 80,
+      "events_90d": 2,
+      "active_days_90d": 1
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:17",
+        "kind": "identity",
+        "label": "Marcus Bellweather",
+        "system": null
+       },
+       {
+        "key": "account:81",
+        "kind": "account",
+        "label": "okta:marcus.bellweather@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:7",
+        "kind": "group",
+        "label": "okta:engineering",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 83,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:21",
+        "kind": "group",
+        "label": "aws:DevAdmin",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 223,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:25",
+        "kind": "perm",
+        "label": "iam:* on aws-account/larkspur-staging",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 188,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:22",
+     "action": "ec2:DescribeInstances",
+     "system": "aws",
+     "resource": "ec2/prod-fleet",
+     "resource_id": 11,
+     "environment": "prod",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 356,
+      "active_days_90d": 53
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:17",
+        "kind": "identity",
+        "label": "Marcus Bellweather",
+        "system": null
+       },
+       {
+        "key": "account:81",
+        "kind": "account",
+        "label": "okta:marcus.bellweather@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:10",
+        "kind": "group",
+        "label": "okta:eng-platform",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 84,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:23",
+        "kind": "group",
+        "label": "aws:ProdAdmin",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 225,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:22",
+        "kind": "perm",
+        "label": "ec2:DescribeInstances on ec2/prod-fleet",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 202,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ],
+      [
+       {
+        "key": "identity:17",
+        "kind": "identity",
+        "label": "Marcus Bellweather",
+        "system": null
+       },
+       {
+        "key": "account:81",
+        "kind": "account",
+        "label": "okta:marcus.bellweather@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:7",
+        "kind": "group",
+        "label": "okta:engineering",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 83,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:22",
+        "kind": "group",
+        "label": "aws:ProdReadOnly",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 224,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:22",
+        "kind": "perm",
+        "label": "ec2:DescribeInstances on ec2/prod-fleet",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 193,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:23",
+     "action": "ec2:TerminateInstances",
+     "system": "aws",
+     "resource": "ec2/prod-fleet",
+     "resource_id": 11,
+     "environment": "prod",
+     "tags": [],
+     "privileged": true,
+     "standing": true,
+     "usage": {
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "active_days_90d": 0
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:17",
+        "kind": "identity",
+        "label": "Marcus Bellweather",
+        "system": null
+       },
+       {
+        "key": "account:81",
+        "kind": "account",
+        "label": "okta:marcus.bellweather@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:10",
+        "kind": "group",
+        "label": "okta:eng-platform",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 84,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:23",
+        "kind": "group",
+        "label": "aws:ProdAdmin",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 225,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:23",
+        "kind": "perm",
+        "label": "ec2:TerminateInstances on ec2/prod-fleet",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 197,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:20",
+     "action": "rds:Connect",
+     "system": "aws",
+     "resource": "rds/orders-db",
+     "resource_id": 10,
+     "environment": "prod",
+     "tags": [
+      "pii"
+     ],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 351,
+      "active_days_90d": 52
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:17",
+        "kind": "identity",
+        "label": "Marcus Bellweather",
+        "system": null
+       },
+       {
+        "key": "account:81",
+        "kind": "account",
+        "label": "okta:marcus.bellweather@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:7",
+        "kind": "group",
+        "label": "okta:engineering",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 83,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:22",
+        "kind": "group",
+        "label": "aws:ProdReadOnly",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 224,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:20",
+        "kind": "perm",
+        "label": "rds:Connect on rds/orders-db",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 195,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:21",
+     "action": "rds:ModifyDBInstance",
+     "system": "aws",
+     "resource": "rds/orders-db",
+     "resource_id": 10,
+     "environment": "prod",
+     "tags": [
+      "pii"
+     ],
+     "privileged": true,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-06T00:00:00",
+      "days_since_used": 2,
+      "events_90d": 130,
+      "active_days_90d": 19
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:17",
+        "kind": "identity",
+        "label": "Marcus Bellweather",
+        "system": null
+       },
+       {
+        "key": "account:81",
+        "kind": "account",
+        "label": "okta:marcus.bellweather@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:10",
+        "kind": "group",
+        "label": "okta:eng-platform",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 84,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:23",
+        "kind": "group",
+        "label": "aws:ProdAdmin",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 225,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:21",
+        "kind": "perm",
+        "label": "rds:ModifyDBInstance on rds/orders-db",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 198,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:12",
+     "action": "s3:GetObject",
+     "system": "aws",
+     "resource": "s3://app-logs",
+     "resource_id": 6,
+     "environment": "prod",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 358,
+      "active_days_90d": 55
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:17",
+        "kind": "identity",
+        "label": "Marcus Bellweather",
+        "system": null
+       },
+       {
+        "key": "account:81",
+        "kind": "account",
+        "label": "okta:marcus.bellweather@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:7",
+        "kind": "group",
+        "label": "okta:engineering",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 83,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:22",
+        "kind": "group",
+        "label": "aws:ProdReadOnly",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 224,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:12",
+        "kind": "perm",
+        "label": "s3:GetObject on s3://app-logs",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 194,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ],
+      [
+       {
+        "key": "identity:17",
+        "kind": "identity",
+        "label": "Marcus Bellweather",
+        "system": null
+       },
+       {
+        "key": "account:81",
+        "kind": "account",
+        "label": "okta:marcus.bellweather@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:7",
+        "kind": "group",
+        "label": "okta:engineering",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 83,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:21",
+        "kind": "group",
+        "label": "aws:DevAdmin",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 223,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:12",
+        "kind": "perm",
+        "label": "s3:GetObject on s3://app-logs",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 192,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:11",
+     "action": "s3:DeleteObject",
+     "system": "aws",
+     "resource": "s3://customer-pii",
+     "resource_id": 5,
+     "environment": "prod",
+     "tags": [
+      "pii"
+     ],
+     "privileged": true,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-02T00:00:00",
+      "days_since_used": 6,
+      "events_90d": 127,
+      "active_days_90d": 21
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:17",
+        "kind": "identity",
+        "label": "Marcus Bellweather",
+        "system": null
+       },
+       {
+        "key": "account:81",
+        "kind": "account",
+        "label": "okta:marcus.bellweather@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:10",
+        "kind": "group",
+        "label": "okta:eng-platform",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 84,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:23",
+        "kind": "group",
+        "label": "aws:ProdAdmin",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 225,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:11",
+        "kind": "perm",
+        "label": "s3:DeleteObject on s3://customer-pii",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 199,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:9",
+     "action": "s3:GetObject",
+     "system": "aws",
+     "resource": "s3://customer-pii",
+     "resource_id": 5,
+     "environment": "prod",
+     "tags": [
+      "pii"
+     ],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "active_days_90d": 0
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:17",
+        "kind": "identity",
+        "label": "Marcus Bellweather",
+        "system": null
+       },
+       {
+        "key": "account:81",
+        "kind": "account",
+        "label": "okta:marcus.bellweather@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:7",
+        "kind": "group",
+        "label": "okta:engineering",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 83,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:21",
+        "kind": "group",
+        "label": "aws:DevAdmin",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 223,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:9",
+        "kind": "perm",
+        "label": "s3:GetObject on s3://customer-pii",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 191,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:16",
+     "action": "s3:GetObject",
+     "system": "aws",
+     "resource": "s3://ml-artifacts",
+     "resource_id": 8,
+     "environment": "staging",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "active_days_90d": 0
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:17",
+        "kind": "identity",
+        "label": "Marcus Bellweather",
+        "system": null
+       },
+       {
+        "key": "account:81",
+        "kind": "account",
+        "label": "okta:marcus.bellweather@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:7",
+        "kind": "group",
+        "label": "okta:engineering",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 83,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:21",
+        "kind": "group",
+        "label": "aws:DevAdmin",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 223,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:16",
+        "kind": "perm",
+        "label": "s3:GetObject on s3://ml-artifacts",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 189,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:17",
+     "action": "s3:PutObject",
+     "system": "aws",
+     "resource": "s3://ml-artifacts",
+     "resource_id": 8,
+     "environment": "staging",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-07T00:00:00",
+      "days_since_used": 1,
+      "events_90d": 306,
+      "active_days_90d": 50
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:17",
+        "kind": "identity",
+        "label": "Marcus Bellweather",
+        "system": null
+       },
+       {
+        "key": "account:81",
+        "kind": "account",
+        "label": "okta:marcus.bellweather@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:7",
+        "kind": "group",
+        "label": "okta:engineering",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 83,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:21",
+        "kind": "group",
+        "label": "aws:DevAdmin",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 223,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:17",
+        "kind": "perm",
+        "label": "s3:PutObject on s3://ml-artifacts",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 190,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:18",
+     "action": "s3:GetObject",
+     "system": "aws",
+     "resource": "s3://terraform-state",
+     "resource_id": 9,
+     "environment": "prod",
+     "tags": [
+      "infra"
+     ],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-05T00:00:00",
+      "days_since_used": 3,
+      "events_90d": 290,
+      "active_days_90d": 49
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:17",
+        "kind": "identity",
+        "label": "Marcus Bellweather",
+        "system": null
+       },
+       {
+        "key": "account:81",
+        "kind": "account",
+        "label": "okta:marcus.bellweather@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:10",
+        "kind": "group",
+        "label": "okta:eng-platform",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 84,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:23",
+        "kind": "group",
+        "label": "aws:ProdAdmin",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 225,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:18",
+        "kind": "perm",
+        "label": "s3:GetObject on s3://terraform-state",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 201,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:19",
+     "action": "s3:PutObject",
+     "system": "aws",
+     "resource": "s3://terraform-state",
+     "resource_id": 9,
+     "environment": "prod",
+     "tags": [
+      "infra"
+     ],
+     "privileged": true,
+     "standing": true,
+     "usage": {
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "active_days_90d": 0
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:17",
+        "kind": "identity",
+        "label": "Marcus Bellweather",
+        "system": null
+       },
+       {
+        "key": "account:81",
+        "kind": "account",
+        "label": "okta:marcus.bellweather@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:10",
+        "kind": "group",
+        "label": "okta:eng-platform",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 84,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:23",
+        "kind": "group",
+        "label": "aws:ProdAdmin",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 225,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:19",
+        "kind": "perm",
+        "label": "s3:PutObject on s3://terraform-state",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 200,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:34",
+     "action": "repo:read",
+     "system": "github",
+     "resource": "larkspur/data-pipelines",
+     "resource_id": 19,
+     "environment": "prod",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-07-24T00:00:00",
+      "days_since_used": 76,
+      "events_90d": 9,
+      "active_days_90d": 1
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:17",
+        "kind": "identity",
+        "label": "Marcus Bellweather",
+        "system": null
+       },
+       {
+        "key": "account:158",
+        "kind": "account",
+        "label": "github:marcus-bellw",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:35",
+        "kind": "group",
+        "label": "github:all-engineers",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 300,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:34",
+        "kind": "perm",
+        "label": "repo:read on larkspur/data-pipelines",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 252,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:43",
+     "action": "repo:write",
+     "system": "github",
+     "resource": "larkspur/data-pipelines",
+     "resource_id": 19,
+     "environment": "prod",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-07T00:00:00",
+      "days_since_used": 1,
+      "events_90d": 327,
+      "active_days_90d": 51
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:17",
+        "kind": "identity",
+        "label": "Marcus Bellweather",
+        "system": null
+       },
+       {
+        "key": "account:158",
+        "kind": "account",
+        "label": "github:marcus-bellw",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:32",
+        "kind": "group",
+        "label": "github:platform",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 301,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:43",
+        "kind": "perm",
+        "label": "repo:write on larkspur/data-pipelines",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 265,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:36",
+     "action": "repo:read",
+     "system": "github",
+     "resource": "larkspur/docs-site",
+     "resource_id": 21,
+     "environment": null,
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 313,
+      "active_days_90d": 43
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:17",
+        "kind": "identity",
+        "label": "Marcus Bellweather",
+        "system": null
+       },
+       {
+        "key": "account:158",
+        "kind": "account",
+        "label": "github:marcus-bellw",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:35",
+        "kind": "group",
+        "label": "github:all-engineers",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 300,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:36",
+        "kind": "perm",
+        "label": "repo:read on larkspur/docs-site",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 254,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:40",
+     "action": "repo:write",
+     "system": "github",
+     "resource": "larkspur/docs-site",
+     "resource_id": 21,
+     "environment": null,
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-03T00:00:00",
+      "days_since_used": 5,
+      "events_90d": 305,
+      "active_days_90d": 43
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:17",
+        "kind": "identity",
+        "label": "Marcus Bellweather",
+        "system": null
+       },
+       {
+        "key": "account:158",
+        "kind": "account",
+        "label": "github:marcus-bellw",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:32",
+        "kind": "group",
+        "label": "github:platform",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 301,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:40",
+        "kind": "perm",
+        "label": "repo:write on larkspur/docs-site",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 267,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:41",
+     "action": "repo:admin",
+     "system": "github",
+     "resource": "larkspur/infra-terraform",
+     "resource_id": 18,
+     "environment": "prod",
+     "tags": [
+      "infra"
+     ],
+     "privileged": true,
+     "standing": true,
+     "usage": {
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "active_days_90d": 0
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:17",
+        "kind": "identity",
+        "label": "Marcus Bellweather",
+        "system": null
+       },
+       {
+        "key": "account:158",
+        "kind": "account",
+        "label": "github:marcus-bellw",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:32",
+        "kind": "group",
+        "label": "github:platform",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 301,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:41",
+        "kind": "perm",
+        "label": "repo:admin on larkspur/infra-terraform",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 260,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:33",
+     "action": "repo:read",
+     "system": "github",
+     "resource": "larkspur/infra-terraform",
+     "resource_id": 18,
+     "environment": "prod",
+     "tags": [
+      "infra"
+     ],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-06T00:00:00",
+      "days_since_used": 2,
+      "events_90d": 298,
+      "active_days_90d": 49
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:17",
+        "kind": "identity",
+        "label": "Marcus Bellweather",
+        "system": null
+       },
+       {
+        "key": "account:158",
+        "kind": "account",
+        "label": "github:marcus-bellw",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:35",
+        "kind": "group",
+        "label": "github:all-engineers",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 300,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:33",
+        "kind": "perm",
+        "label": "repo:read on larkspur/infra-terraform",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 251,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:42",
+     "action": "repo:write",
+     "system": "github",
+     "resource": "larkspur/infra-terraform",
+     "resource_id": 18,
+     "environment": "prod",
+     "tags": [
+      "infra"
+     ],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-07T00:00:00",
+      "days_since_used": 1,
+      "events_90d": 295,
+      "active_days_90d": 48
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:17",
+        "kind": "identity",
+        "label": "Marcus Bellweather",
+        "system": null
+       },
+       {
+        "key": "account:158",
+        "kind": "account",
+        "label": "github:marcus-bellw",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:32",
+        "kind": "group",
+        "label": "github:platform",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 301,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:42",
+        "kind": "perm",
+        "label": "repo:write on larkspur/infra-terraform",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 264,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:35",
+     "action": "repo:read",
+     "system": "github",
+     "resource": "larkspur/ml-models",
+     "resource_id": 20,
+     "environment": "staging",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "active_days_90d": 0
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:17",
+        "kind": "identity",
+        "label": "Marcus Bellweather",
+        "system": null
+       },
+       {
+        "key": "account:158",
+        "kind": "account",
+        "label": "github:marcus-bellw",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:35",
+        "kind": "group",
+        "label": "github:all-engineers",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 300,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:35",
+        "kind": "perm",
+        "label": "repo:read on larkspur/ml-models",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 253,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:44",
+     "action": "repo:write",
+     "system": "github",
+     "resource": "larkspur/ml-models",
+     "resource_id": 20,
+     "environment": "staging",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 346,
+      "active_days_90d": 52
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:17",
+        "kind": "identity",
+        "label": "Marcus Bellweather",
+        "system": null
+       },
+       {
+        "key": "account:158",
+        "kind": "account",
+        "label": "github:marcus-bellw",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:32",
+        "kind": "group",
+        "label": "github:platform",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 301,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:44",
+        "kind": "perm",
+        "label": "repo:write on larkspur/ml-models",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 266,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:32",
+     "action": "repo:read",
+     "system": "github",
+     "resource": "larkspur/mobile-app",
+     "resource_id": 17,
+     "environment": "prod",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "active_days_90d": 0
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:17",
+        "kind": "identity",
+        "label": "Marcus Bellweather",
+        "system": null
+       },
+       {
+        "key": "account:158",
+        "kind": "account",
+        "label": "github:marcus-bellw",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:35",
+        "kind": "group",
+        "label": "github:all-engineers",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 300,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:32",
+        "kind": "perm",
+        "label": "repo:read on larkspur/mobile-app",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 250,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:39",
+     "action": "repo:write",
+     "system": "github",
+     "resource": "larkspur/mobile-app",
+     "resource_id": 17,
+     "environment": "prod",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 316,
+      "active_days_90d": 50
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:17",
+        "kind": "identity",
+        "label": "Marcus Bellweather",
+        "system": null
+       },
+       {
+        "key": "account:158",
+        "kind": "account",
+        "label": "github:marcus-bellw",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:32",
+        "kind": "group",
+        "label": "github:platform",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 301,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:39",
+        "kind": "perm",
+        "label": "repo:write on larkspur/mobile-app",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 263,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:30",
+     "action": "repo:read",
+     "system": "github",
+     "resource": "larkspur/payments-service",
+     "resource_id": 15,
+     "environment": "prod",
+     "tags": [
+      "payments"
+     ],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-06T00:00:00",
+      "days_since_used": 2,
+      "events_90d": 319,
+      "active_days_90d": 51
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:17",
+        "kind": "identity",
+        "label": "Marcus Bellweather",
+        "system": null
+       },
+       {
+        "key": "account:158",
+        "kind": "account",
+        "label": "github:marcus-bellw",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:35",
+        "kind": "group",
+        "label": "github:all-engineers",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 300,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:30",
+        "kind": "perm",
+        "label": "repo:read on larkspur/payments-service",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 248,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:37",
+     "action": "repo:write",
+     "system": "github",
+     "resource": "larkspur/payments-service",
+     "resource_id": 15,
+     "environment": "prod",
+     "tags": [
+      "payments"
+     ],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "active_days_90d": 0
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:17",
+        "kind": "identity",
+        "label": "Marcus Bellweather",
+        "system": null
+       },
+       {
+        "key": "account:158",
+        "kind": "account",
+        "label": "github:marcus-bellw",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:32",
+        "kind": "group",
+        "label": "github:platform",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 301,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:37",
+        "kind": "perm",
+        "label": "repo:write on larkspur/payments-service",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 261,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:31",
+     "action": "repo:read",
+     "system": "github",
+     "resource": "larkspur/web-app",
+     "resource_id": 16,
+     "environment": "prod",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-07-30T00:00:00",
+      "days_since_used": 70,
+      "events_90d": 12,
+      "active_days_90d": 1
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:17",
+        "kind": "identity",
+        "label": "Marcus Bellweather",
+        "system": null
+       },
+       {
+        "key": "account:158",
+        "kind": "account",
+        "label": "github:marcus-bellw",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:35",
+        "kind": "group",
+        "label": "github:all-engineers",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 300,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:31",
+        "kind": "perm",
+        "label": "repo:read on larkspur/web-app",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 249,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:38",
+     "action": "repo:write",
+     "system": "github",
+     "resource": "larkspur/web-app",
+     "resource_id": 16,
+     "environment": "prod",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-07T00:00:00",
+      "days_since_used": 1,
+      "events_90d": 380,
+      "active_days_90d": 59
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:17",
+        "kind": "identity",
+        "label": "Marcus Bellweather",
+        "system": null
+       },
+       {
+        "key": "account:158",
+        "kind": "account",
+        "label": "github:marcus-bellw",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:32",
+        "kind": "group",
+        "label": "github:platform",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 301,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:38",
+        "kind": "perm",
+        "label": "repo:write on larkspur/web-app",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 262,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    }
+   ],
+   "violations": [
+    {
+     "policy_id": "no-standing-prod-admin",
+     "policy_name": "No standing admin on prod",
+     "severity": "high",
+     "identity_id": 17,
+     "identity_name": "Marcus Bellweather",
+     "key": "no-standing-prod-admin:17:account:158->group:32",
+     "message": "Marcus Bellweather has standing privileged prod access via github:platform: repo:admin on larkspur/infra-terraform",
+     "evidence": [
+      "Marcus Bellweather → github:marcus-bellw → github:platform → repo:admin on larkspur/infra-terraform"
+     ],
+     "edges": [
+      [
+       "account:158",
+       "group:32"
+      ]
+     ]
+    },
+    {
+     "policy_id": "no-standing-prod-admin",
+     "policy_name": "No standing admin on prod",
+     "severity": "high",
+     "identity_id": 17,
+     "identity_name": "Marcus Bellweather",
+     "key": "no-standing-prod-admin:17:account:81->group:10",
+     "message": "Marcus Bellweather has standing privileged prod access via okta:eng-platform: ec2:TerminateInstances on ec2/prod-fleet, iam:* on aws-account/larkspur-prod, rds:ModifyDBInstance on rds/orders-db …",
+     "evidence": [
+      "Marcus Bellweather → okta:marcus.bellweather@larkspur.example → okta:eng-platform → aws:ProdAdmin → iam:* on aws-account/larkspur-prod",
+      "Marcus Bellweather → okta:marcus.bellweather@larkspur.example → okta:eng-platform → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet",
+      "Marcus Bellweather → okta:marcus.bellweather@larkspur.example → okta:eng-platform → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db",
+      "Marcus Bellweather → okta:marcus.bellweather@larkspur.example → okta:eng-platform → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+     ],
+     "edges": [
+      [
+       "account:81",
+       "group:10"
+      ]
+     ]
+    }
+   ],
+   "recommendations": [
+    {
+     "id": "83",
+     "edge_id": 83,
+     "kind": "right_size",
+     "identity_id": 17,
+     "identity_name": "Marcus Bellweather",
+     "identity_type": "human",
+     "department": "Engineering",
+     "grant": "okta:marcus.bellweather@larkspur.example → okta:engineering",
+     "target": "okta:engineering",
+     "target_privileged": false,
+     "permissions_via": 7,
+     "permissions_lost": 6,
+     "unused_lost": 3,
+     "used_lost": 3,
+     "privileged_unused": 1,
+     "sensitive_tags": [
+      "pii"
+     ],
+     "last_used": "2026-10-08T00:00:00",
+     "days_since_used": 0,
+     "unused_examples": [
+      "iam:* on aws-account/larkspur-staging",
+      "s3:GetObject on s3://ml-artifacts",
+      "s3:GetObject on s3://customer-pii"
+     ],
+     "used_examples": [
+      "s3:GetObject on s3://app-logs",
+      "rds:Connect on rds/orders-db",
+      "s3:PutObject on s3://ml-artifacts"
+     ],
+     "score": 12,
+     "rationale": "3 of 6 permissions from this grant are unused for 60+ days; replace with a narrower role."
+    },
+    {
+     "id": "300",
+     "edge_id": 300,
+     "kind": "right_size",
+     "identity_id": 17,
+     "identity_name": "Marcus Bellweather",
+     "identity_type": "human",
+     "department": "Engineering",
+     "grant": "github:marcus-bellw → github:all-engineers",
+     "target": "github:all-engineers",
+     "target_privileged": false,
+     "permissions_via": 7,
+     "permissions_lost": 7,
+     "unused_lost": 4,
+     "used_lost": 3,
+     "privileged_unused": 0,
+     "sensitive_tags": [],
+     "last_used": "2026-10-08T00:00:00",
+     "days_since_used": 0,
+     "unused_examples": [
+      "repo:read on larkspur/web-app",
+      "repo:read on larkspur/mobile-app",
+      "repo:read on larkspur/data-pipelines",
+      "repo:read on larkspur/ml-models"
+     ],
+     "used_examples": [
+      "repo:read on larkspur/payments-service",
+      "repo:read on larkspur/infra-terraform",
+      "repo:read on larkspur/docs-site"
+     ],
+     "score": 4,
+     "rationale": "4 of 7 permissions from this grant are unused for 60+ days; replace with a narrower role."
+    }
+   ],
+   "secrets": [],
+   "delegations": [
+    {
+     "agent": {
+      "id": 71,
+      "name": "SRE On-call Agent",
+      "type": "ai_agent",
+      "status": "active",
+      "department": null,
+      "title": "AI agent"
+     },
+     "principal": {
+      "id": 17,
+      "name": "Marcus Bellweather",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Platform Engineer"
+     },
+     "scopes": [
+      "aws:ec2:describe",
+      "aws:logs:read"
+     ]
+    }
+   ],
+   "owned_identities": [
+    {
+     "id": 71,
+     "name": "SRE On-call Agent",
+     "type": "ai_agent",
+     "status": "active",
+     "department": null,
+     "title": "AI agent"
+    },
+    {
+     "id": 79,
+     "name": "svc-monitoring",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "AWS IAM user"
+    }
+   ],
+   "risk": {
+    "effective": 28,
+    "unused": 11,
+    "privileged": 7,
+    "sensitive": 6,
+    "violations": 2,
+    "risk": 67
+   }
+  }
+ }
+}

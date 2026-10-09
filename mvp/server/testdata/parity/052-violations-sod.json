@@ -1,0 +1,35 @@
+{
+ "name": "violations-sod",
+ "request": {
+  "method": "GET",
+  "path": "/api/violations?policy_id=sod-payments"
+ },
+ "response": {
+  "status": 200,
+  "body": [
+   {
+    "policy_id": "sod-payments",
+    "policy_name": "SoD: create vs approve supplier payments",
+    "severity": "high",
+    "identity_id": 33,
+    "identity_name": "Priya Ramaswamy",
+    "key": "sod-payments:33",
+    "message": "Priya Ramaswamy can both payments:create and payments:approve on Supplier Payments",
+    "evidence": [
+     "Priya Ramaswamy → workday:emp-1033 → workday:AP Clerk → payments:create on Supplier Payments",
+     "Priya Ramaswamy → workday:emp-1033 → workday:AP Approver → payments:approve on Supplier Payments"
+    ],
+    "edges": [
+     [
+      "account:33",
+      "group:1"
+     ],
+     [
+      "account:33",
+      "group:2"
+     ]
+    ]
+   }
+  ]
+ }
+}

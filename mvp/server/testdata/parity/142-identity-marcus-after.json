@@ -1,0 +1,72 @@
+{
+ "name": "identity-marcus-after",
+ "request": {
+  "method": "GET",
+  "path": "/api/identities/17"
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "id": 17,
+   "name": "Marcus Bellweather",
+   "type": "human",
+   "status": "terminated",
+   "department": "Engineering",
+   "title": "Platform Engineer",
+   "email": "marcus.bellweather@larkspur.example",
+   "description": null,
+   "hired_at": "2025-12-02T00:00:00",
+   "terminated_at": "2026-10-08T09:30:00",
+   "manager": {
+    "id": 16,
+    "name": "Ingrid Lindqvist",
+    "type": "human",
+    "status": "active",
+    "department": "Engineering",
+    "title": "Platform Lead"
+   },
+   "owner": null,
+   "accounts": [
+    {
+     "id": 17,
+     "system": "workday",
+     "username": "emp-1017",
+     "kind": "user",
+     "status": "disabled",
+     "last_login_at": "2026-10-05T22:18:54.481740"
+    },
+    {
+     "id": 81,
+     "system": "okta",
+     "username": "marcus.bellweather@larkspur.example",
+     "kind": "user",
+     "status": "disabled",
+     "last_login_at": "2026-10-05T18:28:42.977360"
+    },
+    {
+     "id": 158,
+     "system": "github",
+     "username": "marcus-bellw",
+     "kind": "user",
+     "status": "disabled",
+     "last_login_at": "2026-10-07T10:13:33.450803"
+    }
+   ],
+   "grants": [],
+   "effective_permissions": [],
+   "violations": [],
+   "recommendations": [],
+   "secrets": [],
+   "delegations": [],
+   "owned_identities": [],
+   "risk": {
+    "effective": 0,
+    "unused": 0,
+    "privileged": 0,
+    "sensitive": 0,
+    "violations": 0,
+    "risk": 0
+   }
+  }
+ }
+}

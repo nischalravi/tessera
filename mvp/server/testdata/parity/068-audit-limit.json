@@ -1,0 +1,42 @@
+{
+ "name": "audit-limit",
+ "request": {
+  "method": "GET",
+  "path": "/api/audit?limit=3"
+ },
+ "response": {
+  "status": 200,
+  "body": [
+   {
+    "id": 8,
+    "at": "2026-10-08T09:30:00",
+    "actor": "system",
+    "action": "review.campaign_created",
+    "detail": {
+     "campaign": "Q4 exception-only review",
+     "items": 84,
+     "total": 219
+    }
+   },
+   {
+    "id": 7,
+    "at": "2026-10-08T09:30:00",
+    "actor": "system",
+    "action": "jit.expire",
+    "detail": {
+     "request_id": 4
+    }
+   },
+   {
+    "id": 6,
+    "at": "2026-10-08T09:30:00",
+    "actor": "Sana Iyer",
+    "action": "jit.approve",
+    "detail": {
+     "request_id": 4,
+     "expires_at": "2026-10-07T12:30:00"
+    }
+   }
+  ]
+ }
+}

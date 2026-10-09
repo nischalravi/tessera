@@ -1,0 +1,30 @@
+{
+ "name": "jit-missing-field",
+ "request": {
+  "method": "POST",
+  "path": "/api/jit/requests",
+  "body": {
+   "identity_id": 5,
+   "group_id": 23
+  }
+ },
+ "response": {
+  "status": 422,
+  "body": {
+   "detail": [
+    {
+     "type": "missing",
+     "loc": [
+      "body",
+      "justification"
+     ],
+     "msg": "Field required",
+     "input": {
+      "identity_id": 5,
+      "group_id": 23
+     }
+    }
+   ]
+  }
+ }
+}

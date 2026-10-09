@@ -1,0 +1,13 @@
+{
+ "name": "leaver-plan-404",
+ "request": {
+  "method": "GET",
+  "path": "/api/jml/leaver-plan/99999"
+ },
+ "response": {
+  "status": 404,
+  "body": {
+   "detail": "unknown identity"
+  }
+ }
+}

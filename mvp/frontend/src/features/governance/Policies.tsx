@@ -80,7 +80,7 @@ export function Policies() {
   const crumbs: [string, string?][] = [["Governance", "/governance"], ["Policies & violations"]];
   if (!policies) return <Page title="Policies & violations" crumbs={crumbs}><Loading error={error} kind="page" /></Page>;
   return (
-    <Page title="Policies & violations" crumbs={crumbs} sub={<>Policies are YAML files in <code>backend/policies/</code>, evaluated against the effective-permission graph. Edit a file and reload; no restart needed.</>}>
+    <Page title="Policies & violations" crumbs={crumbs} sub={<>Policies are YAML files in <code>server/policies/</code>, evaluated against the effective-permission graph. Edit a file and reload; no restart needed.</>}>
       <div className="grid g3">
         {policies.map((p) => (
           <div key={p.id} className="card stack-sm" style={pid === p.id ? { boxShadow: "0 0 0 2px var(--accent)" } : undefined}>

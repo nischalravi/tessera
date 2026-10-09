@@ -1,0 +1,1362 @@
+{
+ "name": "identity-alice-30d",
+ "request": {
+  "method": "GET",
+  "path": "/api/identities/5?unused_days=30"
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "id": 5,
+   "name": "Alice Okafor",
+   "type": "human",
+   "status": "active",
+   "department": "Engineering",
+   "title": "Senior Software Engineer",
+   "email": "alice.okafor@larkspur.example",
+   "description": null,
+   "hired_at": "2024-01-19T00:00:00",
+   "terminated_at": null,
+   "manager": {
+    "id": 4,
+    "name": "Kofi Mensah",
+    "type": "human",
+    "status": "active",
+    "department": "Engineering",
+    "title": "Engineering Manager, Backend"
+   },
+   "owner": null,
+   "accounts": [
+    {
+     "id": 5,
+     "system": "workday",
+     "username": "emp-1005",
+     "kind": "user",
+     "status": "active",
+     "last_login_at": "2026-10-05T01:35:48.278362"
+    },
+    {
+     "id": 69,
+     "system": "okta",
+     "username": "alice.okafor@larkspur.example",
+     "kind": "user",
+     "status": "active",
+     "last_login_at": "2026-10-05T11:54:19.029019"
+    },
+    {
+     "id": 146,
+     "system": "github",
+     "username": "alice-okafo",
+     "kind": "user",
+     "status": "active",
+     "last_login_at": "2026-10-05T16:07:30.700123"
+    }
+   ],
+   "grants": [
+    {
+     "edge_id": 46,
+     "src": "account:69",
+     "dst": "group:6",
+     "label": "okta:Everyone",
+     "account": "okta:alice.okafor@larkspur.example",
+     "relation": "member_of",
+     "source": "connector",
+     "expires_at": null,
+     "privileged": false
+    },
+    {
+     "edge_id": 47,
+     "src": "account:69",
+     "dst": "group:7",
+     "label": "okta:engineering",
+     "account": "okta:alice.okafor@larkspur.example",
+     "relation": "member_of",
+     "source": "connector",
+     "expires_at": null,
+     "privileged": false
+    },
+    {
+     "edge_id": 48,
+     "src": "account:69",
+     "dst": "group:8",
+     "label": "okta:eng-backend",
+     "account": "okta:alice.okafor@larkspur.example",
+     "relation": "member_of",
+     "source": "connector",
+     "expires_at": null,
+     "privileged": false
+    },
+    {
+     "edge_id": 276,
+     "src": "account:146",
+     "dst": "group:35",
+     "label": "github:all-engineers",
+     "account": "github:alice-okafo",
+     "relation": "member_of",
+     "source": "connector",
+     "expires_at": null,
+     "privileged": false
+    },
+    {
+     "edge_id": 277,
+     "src": "account:146",
+     "dst": "group:30",
+     "label": "github:backend",
+     "account": "github:alice-okafo",
+     "relation": "member_of",
+     "source": "connector",
+     "expires_at": null,
+     "privileged": false
+    }
+   ],
+   "effective_permissions": [
+    {
+     "perm_key": "perm:25",
+     "action": "iam:*",
+     "system": "aws",
+     "resource": "aws-account/larkspur-staging",
+     "resource_id": 13,
+     "environment": "staging",
+     "tags": [],
+     "privileged": true,
+     "standing": true,
+     "usage": {
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "active_days_90d": 0
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:5",
+        "kind": "identity",
+        "label": "Alice Okafor",
+        "system": null
+       },
+       {
+        "key": "account:69",
+        "kind": "account",
+        "label": "okta:alice.okafor@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:7",
+        "kind": "group",
+        "label": "okta:engineering",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 47,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:21",
+        "kind": "group",
+        "label": "aws:DevAdmin",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 223,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:25",
+        "kind": "perm",
+        "label": "iam:* on aws-account/larkspur-staging",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 188,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:22",
+     "action": "ec2:DescribeInstances",
+     "system": "aws",
+     "resource": "ec2/prod-fleet",
+     "resource_id": 11,
+     "environment": "prod",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-04T00:00:00",
+      "days_since_used": 4,
+      "events_90d": 158,
+      "active_days_90d": 24
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:5",
+        "kind": "identity",
+        "label": "Alice Okafor",
+        "system": null
+       },
+       {
+        "key": "account:69",
+        "kind": "account",
+        "label": "okta:alice.okafor@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:7",
+        "kind": "group",
+        "label": "okta:engineering",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 47,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:22",
+        "kind": "group",
+        "label": "aws:ProdReadOnly",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 224,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:22",
+        "kind": "perm",
+        "label": "ec2:DescribeInstances on ec2/prod-fleet",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 193,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:20",
+     "action": "rds:Connect",
+     "system": "aws",
+     "resource": "rds/orders-db",
+     "resource_id": 10,
+     "environment": "prod",
+     "tags": [
+      "pii"
+     ],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-06T00:00:00",
+      "days_since_used": 2,
+      "events_90d": 149,
+      "active_days_90d": 28
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:5",
+        "kind": "identity",
+        "label": "Alice Okafor",
+        "system": null
+       },
+       {
+        "key": "account:69",
+        "kind": "account",
+        "label": "okta:alice.okafor@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:7",
+        "kind": "group",
+        "label": "okta:engineering",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 47,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:22",
+        "kind": "group",
+        "label": "aws:ProdReadOnly",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 224,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:20",
+        "kind": "perm",
+        "label": "rds:Connect on rds/orders-db",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 195,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:12",
+     "action": "s3:GetObject",
+     "system": "aws",
+     "resource": "s3://app-logs",
+     "resource_id": 6,
+     "environment": "prod",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-05T00:00:00",
+      "days_since_used": 3,
+      "events_90d": 170,
+      "active_days_90d": 28
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:5",
+        "kind": "identity",
+        "label": "Alice Okafor",
+        "system": null
+       },
+       {
+        "key": "account:69",
+        "kind": "account",
+        "label": "okta:alice.okafor@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:7",
+        "kind": "group",
+        "label": "okta:engineering",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 47,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:22",
+        "kind": "group",
+        "label": "aws:ProdReadOnly",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 224,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:12",
+        "kind": "perm",
+        "label": "s3:GetObject on s3://app-logs",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 194,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ],
+      [
+       {
+        "key": "identity:5",
+        "kind": "identity",
+        "label": "Alice Okafor",
+        "system": null
+       },
+       {
+        "key": "account:69",
+        "kind": "account",
+        "label": "okta:alice.okafor@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:7",
+        "kind": "group",
+        "label": "okta:engineering",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 47,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:21",
+        "kind": "group",
+        "label": "aws:DevAdmin",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 223,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:12",
+        "kind": "perm",
+        "label": "s3:GetObject on s3://app-logs",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 192,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:9",
+     "action": "s3:GetObject",
+     "system": "aws",
+     "resource": "s3://customer-pii",
+     "resource_id": 5,
+     "environment": "prod",
+     "tags": [
+      "pii"
+     ],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "active_days_90d": 0
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:5",
+        "kind": "identity",
+        "label": "Alice Okafor",
+        "system": null
+       },
+       {
+        "key": "account:69",
+        "kind": "account",
+        "label": "okta:alice.okafor@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:7",
+        "kind": "group",
+        "label": "okta:engineering",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 47,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:21",
+        "kind": "group",
+        "label": "aws:DevAdmin",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 223,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:9",
+        "kind": "perm",
+        "label": "s3:GetObject on s3://customer-pii",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 191,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:16",
+     "action": "s3:GetObject",
+     "system": "aws",
+     "resource": "s3://ml-artifacts",
+     "resource_id": 8,
+     "environment": "staging",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-07-17T00:00:00",
+      "days_since_used": 83,
+      "events_90d": 8,
+      "active_days_90d": 1
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:5",
+        "kind": "identity",
+        "label": "Alice Okafor",
+        "system": null
+       },
+       {
+        "key": "account:69",
+        "kind": "account",
+        "label": "okta:alice.okafor@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:7",
+        "kind": "group",
+        "label": "okta:engineering",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 47,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:21",
+        "kind": "group",
+        "label": "aws:DevAdmin",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 223,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:16",
+        "kind": "perm",
+        "label": "s3:GetObject on s3://ml-artifacts",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 189,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:17",
+     "action": "s3:PutObject",
+     "system": "aws",
+     "resource": "s3://ml-artifacts",
+     "resource_id": 8,
+     "environment": "staging",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "active_days_90d": 0
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:5",
+        "kind": "identity",
+        "label": "Alice Okafor",
+        "system": null
+       },
+       {
+        "key": "account:69",
+        "kind": "account",
+        "label": "okta:alice.okafor@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:7",
+        "kind": "group",
+        "label": "okta:engineering",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 47,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:21",
+        "kind": "group",
+        "label": "aws:DevAdmin",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 223,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:17",
+        "kind": "perm",
+        "label": "s3:PutObject on s3://ml-artifacts",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 190,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:34",
+     "action": "repo:read",
+     "system": "github",
+     "resource": "larkspur/data-pipelines",
+     "resource_id": 19,
+     "environment": "prod",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 201,
+      "active_days_90d": 28
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:5",
+        "kind": "identity",
+        "label": "Alice Okafor",
+        "system": null
+       },
+       {
+        "key": "account:146",
+        "kind": "account",
+        "label": "github:alice-okafo",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:35",
+        "kind": "group",
+        "label": "github:all-engineers",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 276,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:34",
+        "kind": "perm",
+        "label": "repo:read on larkspur/data-pipelines",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 252,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:36",
+     "action": "repo:read",
+     "system": "github",
+     "resource": "larkspur/docs-site",
+     "resource_id": 21,
+     "environment": null,
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 151,
+      "active_days_90d": 21
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:5",
+        "kind": "identity",
+        "label": "Alice Okafor",
+        "system": null
+       },
+       {
+        "key": "account:146",
+        "kind": "account",
+        "label": "github:alice-okafo",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:35",
+        "kind": "group",
+        "label": "github:all-engineers",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 276,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:36",
+        "kind": "perm",
+        "label": "repo:read on larkspur/docs-site",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 254,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:33",
+     "action": "repo:read",
+     "system": "github",
+     "resource": "larkspur/infra-terraform",
+     "resource_id": 18,
+     "environment": "prod",
+     "tags": [
+      "infra"
+     ],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-02T00:00:00",
+      "days_since_used": 6,
+      "events_90d": 197,
+      "active_days_90d": 25
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:5",
+        "kind": "identity",
+        "label": "Alice Okafor",
+        "system": null
+       },
+       {
+        "key": "account:146",
+        "kind": "account",
+        "label": "github:alice-okafo",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:35",
+        "kind": "group",
+        "label": "github:all-engineers",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 276,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:33",
+        "kind": "perm",
+        "label": "repo:read on larkspur/infra-terraform",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 251,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:35",
+     "action": "repo:read",
+     "system": "github",
+     "resource": "larkspur/ml-models",
+     "resource_id": 20,
+     "environment": "staging",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-07T00:00:00",
+      "days_since_used": 1,
+      "events_90d": 204,
+      "active_days_90d": 30
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:5",
+        "kind": "identity",
+        "label": "Alice Okafor",
+        "system": null
+       },
+       {
+        "key": "account:146",
+        "kind": "account",
+        "label": "github:alice-okafo",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:35",
+        "kind": "group",
+        "label": "github:all-engineers",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 276,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:35",
+        "kind": "perm",
+        "label": "repo:read on larkspur/ml-models",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 253,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:32",
+     "action": "repo:read",
+     "system": "github",
+     "resource": "larkspur/mobile-app",
+     "resource_id": 17,
+     "environment": "prod",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 236,
+      "active_days_90d": 35
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:5",
+        "kind": "identity",
+        "label": "Alice Okafor",
+        "system": null
+       },
+       {
+        "key": "account:146",
+        "kind": "account",
+        "label": "github:alice-okafo",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:35",
+        "kind": "group",
+        "label": "github:all-engineers",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 276,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:32",
+        "kind": "perm",
+        "label": "repo:read on larkspur/mobile-app",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 250,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:30",
+     "action": "repo:read",
+     "system": "github",
+     "resource": "larkspur/payments-service",
+     "resource_id": 15,
+     "environment": "prod",
+     "tags": [
+      "payments"
+     ],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-07T00:00:00",
+      "days_since_used": 1,
+      "events_90d": 163,
+      "active_days_90d": 29
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:5",
+        "kind": "identity",
+        "label": "Alice Okafor",
+        "system": null
+       },
+       {
+        "key": "account:146",
+        "kind": "account",
+        "label": "github:alice-okafo",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:35",
+        "kind": "group",
+        "label": "github:all-engineers",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 276,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:30",
+        "kind": "perm",
+        "label": "repo:read on larkspur/payments-service",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 248,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:37",
+     "action": "repo:write",
+     "system": "github",
+     "resource": "larkspur/payments-service",
+     "resource_id": 15,
+     "environment": "prod",
+     "tags": [
+      "payments"
+     ],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-09-26T00:00:00",
+      "days_since_used": 12,
+      "events_90d": 151,
+      "active_days_90d": 22
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:5",
+        "kind": "identity",
+        "label": "Alice Okafor",
+        "system": null
+       },
+       {
+        "key": "account:146",
+        "kind": "account",
+        "label": "github:alice-okafo",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:30",
+        "kind": "group",
+        "label": "github:backend",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 277,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:37",
+        "kind": "perm",
+        "label": "repo:write on larkspur/payments-service",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 255,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:31",
+     "action": "repo:read",
+     "system": "github",
+     "resource": "larkspur/web-app",
+     "resource_id": 16,
+     "environment": "prod",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "active_days_90d": 0
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:5",
+        "kind": "identity",
+        "label": "Alice Okafor",
+        "system": null
+       },
+       {
+        "key": "account:146",
+        "kind": "account",
+        "label": "github:alice-okafo",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:35",
+        "kind": "group",
+        "label": "github:all-engineers",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 276,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:31",
+        "kind": "perm",
+        "label": "repo:read on larkspur/web-app",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 249,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:38",
+     "action": "repo:write",
+     "system": "github",
+     "resource": "larkspur/web-app",
+     "resource_id": 16,
+     "environment": "prod",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 210,
+      "active_days_90d": 32
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:5",
+        "kind": "identity",
+        "label": "Alice Okafor",
+        "system": null
+       },
+       {
+        "key": "account:146",
+        "kind": "account",
+        "label": "github:alice-okafo",
+        "system": "github",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:30",
+        "kind": "group",
+        "label": "github:backend",
+        "system": "github",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 277,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:38",
+        "kind": "perm",
+        "label": "repo:write on larkspur/web-app",
+        "system": "github",
+        "via": {
+         "relation": "grants",
+         "edge_id": 256,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    }
+   ],
+   "violations": [],
+   "recommendations": [
+    {
+     "id": "47",
+     "edge_id": 47,
+     "kind": "right_size",
+     "identity_id": 5,
+     "identity_name": "Alice Okafor",
+     "identity_type": "human",
+     "department": "Engineering",
+     "grant": "okta:alice.okafor@larkspur.example → okta:engineering",
+     "target": "okta:engineering",
+     "target_privileged": false,
+     "permissions_via": 7,
+     "permissions_lost": 7,
+     "unused_lost": 4,
+     "used_lost": 3,
+     "privileged_unused": 1,
+     "sensitive_tags": [
+      "pii"
+     ],
+     "last_used": "2026-10-06T00:00:00",
+     "days_since_used": 2,
+     "unused_examples": [
+      "iam:* on aws-account/larkspur-staging",
+      "s3:GetObject on s3://ml-artifacts",
+      "s3:PutObject on s3://ml-artifacts",
+      "s3:GetObject on s3://customer-pii"
+     ],
+     "used_examples": [
+      "ec2:DescribeInstances on ec2/prod-fleet",
+      "s3:GetObject on s3://app-logs",
+      "rds:Connect on rds/orders-db"
+     ],
+     "score": 13,
+     "rationale": "4 of 7 permissions from this grant are unused for 30+ days; replace with a narrower role."
+    }
+   ],
+   "secrets": [],
+   "delegations": [
+    {
+     "agent": {
+      "id": 68,
+      "name": "Code Review Bot",
+      "type": "ai_agent",
+      "status": "active",
+      "department": null,
+      "title": "AI agent"
+     },
+     "principal": {
+      "id": 5,
+      "name": "Alice Okafor",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Senior Software Engineer"
+     },
+     "scopes": [
+      "github:pull_request:comment",
+      "github:repo:read"
+     ]
+    }
+   ],
+   "owned_identities": [],
+   "risk": {
+    "effective": 16,
+    "unused": 5,
+    "privileged": 1,
+    "sensitive": 4,
+    "violations": 0,
+    "risk": 11
+   }
+  }
+ }
+}

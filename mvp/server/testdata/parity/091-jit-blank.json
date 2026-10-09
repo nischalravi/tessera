@@ -1,0 +1,19 @@
+{
+ "name": "jit-blank",
+ "request": {
+  "method": "POST",
+  "path": "/api/jit/requests",
+  "body": {
+   "identity_id": 5,
+   "group_id": 23,
+   "duration_hours": 1,
+   "justification": "   "
+  }
+ },
+ "response": {
+  "status": 400,
+  "body": {
+   "detail": "justification is required"
+  }
+ }
+}

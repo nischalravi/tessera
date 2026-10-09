@@ -1,14 +1,14 @@
 version: 2
 updates:
-  - package-ecosystem: pip
-    directory: /mvp/backend
+  - package-ecosystem: gomod
+    directory: /mvp/server
     target-branch: dev
     schedule:
       interval: weekly
       day: tuesday
     labels: [dependencies, "source:security"]
     groups:
-      python-minor-and-patch:
+      go-minor-and-patch:
         update-types: [minor, patch]
 
   - package-ecosystem: npm

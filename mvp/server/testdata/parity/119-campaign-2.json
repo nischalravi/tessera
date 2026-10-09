@@ -1,0 +1,3825 @@
+{
+ "name": "campaign-2",
+ "request": {
+  "method": "GET",
+  "path": "/api/reviews/campaigns/2"
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "id": 2,
+   "name": "Parity review",
+   "status": "open",
+   "created_at": "2026-10-08T09:30:00",
+   "unused_days": 30,
+   "total_grants": 218,
+   "auto_certified": 135,
+   "items": 83,
+   "decided": 0,
+   "revoked": 0,
+   "reasons": {
+    "policy_violation": 50,
+    "unused_30d": 38,
+    "privileged_idle": 8,
+    "terminated_identity": 8,
+    "orphaned_nhi": 19
+   },
+   "review_items": [
+    {
+     "id": 85,
+     "identity": {
+      "id": 2,
+      "name": "Caspian Arkwright",
+      "type": "human",
+      "status": "active",
+      "department": "Executive",
+      "title": "Chief Technology Officer"
+     },
+     "grant": "github:caspian-arkwr → github:org-owners",
+     "edge_id": 330,
+     "reasons": [
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 1,
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 132,
+      "privileged": true,
+      "sensitive": [],
+      "violations": [
+       "No standing admin on prod"
+      ],
+      "peer_coverage": 0.33,
+      "sample_permissions": [
+       "org:admin on github.com/larkspur"
+      ]
+     },
+     "reviewer": {
+      "id": 1,
+      "name": "Rosalind Haverford",
+      "type": "human",
+      "status": "active",
+      "department": "Executive",
+      "title": "Chief Executive Officer"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 86,
+     "identity": {
+      "id": 4,
+      "name": "Kofi Mensah",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Engineering Manager, Backend"
+     },
+     "grant": "workday:emp-1004 → workday:Manager Self-Service",
+     "edge_id": 9,
+     "reasons": [
+      "unused_30d"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 0,
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "privileged": false,
+      "sensitive": [
+       "hr",
+       "pii"
+      ],
+      "violations": [],
+      "peer_coverage": 0.18,
+      "sample_permissions": [
+       "workers:view on Worker Records"
+      ]
+     },
+     "reviewer": {
+      "id": 2,
+      "name": "Caspian Arkwright",
+      "type": "human",
+      "status": "active",
+      "department": "Executive",
+      "title": "Chief Technology Officer"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 87,
+     "identity": {
+      "id": 4,
+      "name": "Kofi Mensah",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Engineering Manager, Backend"
+     },
+     "grant": "github:kofi-mensa → github:org-owners",
+     "edge_id": 332,
+     "reasons": [
+      "unused_30d",
+      "privileged_idle",
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 0,
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "privileged": true,
+      "sensitive": [],
+      "violations": [
+       "No standing admin on prod"
+      ],
+      "peer_coverage": 0.12,
+      "sample_permissions": [
+       "org:admin on github.com/larkspur"
+      ]
+     },
+     "reviewer": {
+      "id": 2,
+      "name": "Caspian Arkwright",
+      "type": "human",
+      "status": "active",
+      "department": "Executive",
+      "title": "Chief Technology Officer"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 88,
+     "identity": {
+      "id": 16,
+      "name": "Ingrid Lindqvist",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Platform Lead"
+     },
+     "grant": "okta:ingrid.lindqvist@larkspur.example → okta:eng-platform",
+     "edge_id": 81,
+     "reasons": [
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 7,
+      "permissions_used": 2,
+      "last_used": "2026-10-07T00:00:00",
+      "days_since_used": 1,
+      "events_90d": 471,
+      "privileged": true,
+      "sensitive": [
+       "infra",
+       "pii"
+      ],
+      "violations": [
+       "No standing admin on prod"
+      ],
+      "peer_coverage": 0.35,
+      "sample_permissions": [
+       "iam:* on aws-account/larkspur-prod",
+       "ec2:TerminateInstances on ec2/prod-fleet",
+       "rds:ModifyDBInstance on rds/orders-db",
+       "s3:DeleteObject on s3://customer-pii"
+      ]
+     },
+     "reviewer": {
+      "id": 2,
+      "name": "Caspian Arkwright",
+      "type": "human",
+      "status": "active",
+      "department": "Executive",
+      "title": "Chief Technology Officer"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 89,
+     "identity": {
+      "id": 16,
+      "name": "Ingrid Lindqvist",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Platform Lead"
+     },
+     "grant": "okta:ingrid.lindqvist@larkspur.example → okta:okta-super-admins",
+     "edge_id": 176,
+     "reasons": [
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 1,
+      "last_used": "2026-10-03T00:00:00",
+      "days_since_used": 5,
+      "events_90d": 104,
+      "privileged": true,
+      "sensitive": [
+       "identity"
+      ],
+      "violations": [
+       "No standing admin on prod"
+      ],
+      "peer_coverage": 0.06,
+      "sample_permissions": [
+       "okta:SuperAdmin on larkspur.okta.example"
+      ]
+     },
+     "reviewer": {
+      "id": 2,
+      "name": "Caspian Arkwright",
+      "type": "human",
+      "status": "active",
+      "department": "Executive",
+      "title": "Chief Technology Officer"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 90,
+     "identity": {
+      "id": 16,
+      "name": "Ingrid Lindqvist",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Platform Lead"
+     },
+     "grant": "github:ingrid-lindq → github:platform",
+     "edge_id": 299,
+     "reasons": [
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 8,
+      "permissions_used": 3,
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 1068,
+      "privileged": true,
+      "sensitive": [
+       "infra",
+       "payments"
+      ],
+      "violations": [
+       "No standing admin on prod"
+      ],
+      "peer_coverage": 0.35,
+      "sample_permissions": [
+       "repo:admin on larkspur/infra-terraform",
+       "repo:write on larkspur/payments-service",
+       "repo:write on larkspur/web-app",
+       "repo:write on larkspur/mobile-app"
+      ]
+     },
+     "reviewer": {
+      "id": 2,
+      "name": "Caspian Arkwright",
+      "type": "human",
+      "status": "active",
+      "department": "Executive",
+      "title": "Chief Technology Officer"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 91,
+     "identity": {
+      "id": 16,
+      "name": "Ingrid Lindqvist",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Platform Lead"
+     },
+     "grant": "github:ingrid-lindq → github:org-owners",
+     "edge_id": 331,
+     "reasons": [
+      "unused_30d",
+      "privileged_idle",
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 0,
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "privileged": true,
+      "sensitive": [],
+      "violations": [
+       "No standing admin on prod"
+      ],
+      "peer_coverage": 0.12,
+      "sample_permissions": [
+       "org:admin on github.com/larkspur"
+      ]
+     },
+     "reviewer": {
+      "id": 2,
+      "name": "Caspian Arkwright",
+      "type": "human",
+      "status": "active",
+      "department": "Executive",
+      "title": "Chief Technology Officer"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 92,
+     "identity": {
+      "id": 17,
+      "name": "Marcus Bellweather",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Platform Engineer"
+     },
+     "grant": "okta:marcus.bellweather@larkspur.example → okta:eng-platform",
+     "edge_id": 84,
+     "reasons": [
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 7,
+      "permissions_used": 5,
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 1028,
+      "privileged": true,
+      "sensitive": [
+       "infra",
+       "pii"
+      ],
+      "violations": [
+       "No standing admin on prod"
+      ],
+      "peer_coverage": 0.35,
+      "sample_permissions": [
+       "iam:* on aws-account/larkspur-prod",
+       "ec2:TerminateInstances on ec2/prod-fleet",
+       "rds:ModifyDBInstance on rds/orders-db",
+       "s3:DeleteObject on s3://customer-pii"
+      ]
+     },
+     "reviewer": {
+      "id": 16,
+      "name": "Ingrid Lindqvist",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Platform Lead"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 93,
+     "identity": {
+      "id": 17,
+      "name": "Marcus Bellweather",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Platform Engineer"
+     },
+     "grant": "github:marcus-bellw → github:platform",
+     "edge_id": 301,
+     "reasons": [
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 8,
+      "permissions_used": 6,
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 1969,
+      "privileged": true,
+      "sensitive": [
+       "infra",
+       "payments"
+      ],
+      "violations": [
+       "No standing admin on prod"
+      ],
+      "peer_coverage": 0.35,
+      "sample_permissions": [
+       "repo:admin on larkspur/infra-terraform",
+       "repo:write on larkspur/payments-service",
+       "repo:write on larkspur/web-app",
+       "repo:write on larkspur/mobile-app"
+      ]
+     },
+     "reviewer": {
+      "id": 16,
+      "name": "Ingrid Lindqvist",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Platform Lead"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 94,
+     "identity": {
+      "id": 18,
+      "name": "Oren Whitlock",
+      "type": "human",
+      "status": "terminated",
+      "department": "Engineering",
+      "title": "Site Reliability Engineer"
+     },
+     "grant": "okta:oren.whitlock@larkspur.example → okta:engineering",
+     "edge_id": 86,
+     "reasons": [
+      "policy_violation",
+      "terminated_identity"
+     ],
+     "context": {
+      "permissions": 7,
+      "permissions_used": 4,
+      "last_used": "2026-09-18T00:00:00",
+      "days_since_used": 20,
+      "events_90d": 873,
+      "privileged": true,
+      "sensitive": [
+       "pii"
+      ],
+      "violations": [
+       "Leavers retain no access"
+      ],
+      "peer_coverage": 1.06,
+      "sample_permissions": [
+       "ec2:DescribeInstances on ec2/prod-fleet",
+       "s3:GetObject on s3://app-logs",
+       "rds:Connect on rds/orders-db",
+       "iam:* on aws-account/larkspur-staging"
+      ]
+     },
+     "reviewer": {
+      "id": 16,
+      "name": "Ingrid Lindqvist",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Platform Lead"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 95,
+     "identity": {
+      "id": 18,
+      "name": "Oren Whitlock",
+      "type": "human",
+      "status": "terminated",
+      "department": "Engineering",
+      "title": "Site Reliability Engineer"
+     },
+     "grant": "okta:oren.whitlock@larkspur.example → okta:eng-platform",
+     "edge_id": 87,
+     "reasons": [
+      "unused_30d",
+      "privileged_idle",
+      "policy_violation",
+      "terminated_identity"
+     ],
+     "context": {
+      "permissions": 7,
+      "permissions_used": 0,
+      "last_used": "2026-07-27T00:00:00",
+      "days_since_used": 73,
+      "events_90d": 12,
+      "privileged": true,
+      "sensitive": [
+       "infra",
+       "pii"
+      ],
+      "violations": [
+       "Leavers retain no access"
+      ],
+      "peer_coverage": 0.35,
+      "sample_permissions": [
+       "iam:* on aws-account/larkspur-prod",
+       "ec2:TerminateInstances on ec2/prod-fleet",
+       "rds:ModifyDBInstance on rds/orders-db",
+       "s3:DeleteObject on s3://customer-pii"
+      ]
+     },
+     "reviewer": {
+      "id": 16,
+      "name": "Ingrid Lindqvist",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Platform Lead"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 96,
+     "identity": {
+      "id": 18,
+      "name": "Oren Whitlock",
+      "type": "human",
+      "status": "terminated",
+      "department": "Engineering",
+      "title": "Site Reliability Engineer"
+     },
+     "grant": "github:oren-whitl → github:all-engineers",
+     "edge_id": 302,
+     "reasons": [
+      "policy_violation",
+      "terminated_identity"
+     ],
+     "context": {
+      "permissions": 7,
+      "permissions_used": 6,
+      "last_used": "2026-09-18T00:00:00",
+      "days_since_used": 20,
+      "events_90d": 1550,
+      "privileged": false,
+      "sensitive": [
+       "infra",
+       "payments"
+      ],
+      "violations": [
+       "Leavers retain no access"
+      ],
+      "peer_coverage": 1.06,
+      "sample_permissions": [
+       "repo:read on larkspur/payments-service",
+       "repo:read on larkspur/web-app",
+       "repo:read on larkspur/mobile-app",
+       "repo:read on larkspur/infra-terraform"
+      ]
+     },
+     "reviewer": {
+      "id": 16,
+      "name": "Ingrid Lindqvist",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Platform Lead"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 97,
+     "identity": {
+      "id": 18,
+      "name": "Oren Whitlock",
+      "type": "human",
+      "status": "terminated",
+      "department": "Engineering",
+      "title": "Site Reliability Engineer"
+     },
+     "grant": "github:oren-whitl → github:platform",
+     "edge_id": 303,
+     "reasons": [
+      "policy_violation",
+      "terminated_identity"
+     ],
+     "context": {
+      "permissions": 8,
+      "permissions_used": 5,
+      "last_used": "2026-09-18T00:00:00",
+      "days_since_used": 20,
+      "events_90d": 1068,
+      "privileged": true,
+      "sensitive": [
+       "infra",
+       "payments"
+      ],
+      "violations": [
+       "Leavers retain no access"
+      ],
+      "peer_coverage": 0.35,
+      "sample_permissions": [
+       "repo:admin on larkspur/infra-terraform",
+       "repo:write on larkspur/payments-service",
+       "repo:write on larkspur/web-app",
+       "repo:write on larkspur/mobile-app"
+      ]
+     },
+     "reviewer": {
+      "id": 16,
+      "name": "Ingrid Lindqvist",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Platform Lead"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 98,
+     "identity": {
+      "id": 19,
+      "name": "Cyrus Quennell",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Platform Engineer"
+     },
+     "grant": "okta:cyrus.quennell@larkspur.example → okta:eng-platform",
+     "edge_id": 90,
+     "reasons": [
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 7,
+      "permissions_used": 5,
+      "last_used": "2026-10-06T00:00:00",
+      "days_since_used": 2,
+      "events_90d": 613,
+      "privileged": true,
+      "sensitive": [
+       "infra",
+       "pii"
+      ],
+      "violations": [
+       "No standing admin on prod"
+      ],
+      "peer_coverage": 0.35,
+      "sample_permissions": [
+       "iam:* on aws-account/larkspur-prod",
+       "ec2:TerminateInstances on ec2/prod-fleet",
+       "rds:ModifyDBInstance on rds/orders-db",
+       "s3:DeleteObject on s3://customer-pii"
+      ]
+     },
+     "reviewer": {
+      "id": 16,
+      "name": "Ingrid Lindqvist",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Platform Lead"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 99,
+     "identity": {
+      "id": 19,
+      "name": "Cyrus Quennell",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Platform Engineer"
+     },
+     "grant": "github:cyrus-quenn → github:platform",
+     "edge_id": 305,
+     "reasons": [
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 8,
+      "permissions_used": 1,
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 292,
+      "privileged": true,
+      "sensitive": [
+       "infra",
+       "payments"
+      ],
+      "violations": [
+       "No standing admin on prod"
+      ],
+      "peer_coverage": 0.35,
+      "sample_permissions": [
+       "repo:admin on larkspur/infra-terraform",
+       "repo:write on larkspur/payments-service",
+       "repo:write on larkspur/web-app",
+       "repo:write on larkspur/mobile-app"
+      ]
+     },
+     "reviewer": {
+      "id": 16,
+      "name": "Ingrid Lindqvist",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Platform Lead"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 100,
+     "identity": {
+      "id": 20,
+      "name": "Zora Whitlock",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Platform Engineer"
+     },
+     "grant": "okta:zora.whitlock@larkspur.example → okta:eng-platform",
+     "edge_id": 93,
+     "reasons": [
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 7,
+      "permissions_used": 2,
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 546,
+      "privileged": true,
+      "sensitive": [
+       "infra",
+       "pii"
+      ],
+      "violations": [
+       "No standing admin on prod"
+      ],
+      "peer_coverage": 0.35,
+      "sample_permissions": [
+       "iam:* on aws-account/larkspur-prod",
+       "ec2:TerminateInstances on ec2/prod-fleet",
+       "rds:ModifyDBInstance on rds/orders-db",
+       "s3:DeleteObject on s3://customer-pii"
+      ]
+     },
+     "reviewer": {
+      "id": 16,
+      "name": "Ingrid Lindqvist",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Platform Lead"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 101,
+     "identity": {
+      "id": 20,
+      "name": "Zora Whitlock",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Platform Engineer"
+     },
+     "grant": "github:zora-whitl → github:platform",
+     "edge_id": 307,
+     "reasons": [
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 8,
+      "permissions_used": 6,
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 2101,
+      "privileged": true,
+      "sensitive": [
+       "infra",
+       "payments"
+      ],
+      "violations": [
+       "No standing admin on prod"
+      ],
+      "peer_coverage": 0.35,
+      "sample_permissions": [
+       "repo:admin on larkspur/infra-terraform",
+       "repo:write on larkspur/payments-service",
+       "repo:write on larkspur/web-app",
+       "repo:write on larkspur/mobile-app"
+      ]
+     },
+     "reviewer": {
+      "id": 16,
+      "name": "Ingrid Lindqvist",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Platform Lead"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 102,
+     "identity": {
+      "id": 21,
+      "name": "Lena Valdivia",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Site Reliability Engineer"
+     },
+     "grant": "okta:lena.valdivia@larkspur.example → okta:eng-platform",
+     "edge_id": 96,
+     "reasons": [
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 7,
+      "permissions_used": 3,
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 616,
+      "privileged": true,
+      "sensitive": [
+       "infra",
+       "pii"
+      ],
+      "violations": [
+       "No standing admin on prod"
+      ],
+      "peer_coverage": 0.35,
+      "sample_permissions": [
+       "iam:* on aws-account/larkspur-prod",
+       "ec2:TerminateInstances on ec2/prod-fleet",
+       "rds:ModifyDBInstance on rds/orders-db",
+       "s3:DeleteObject on s3://customer-pii"
+      ]
+     },
+     "reviewer": {
+      "id": 16,
+      "name": "Ingrid Lindqvist",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Platform Lead"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 103,
+     "identity": {
+      "id": 21,
+      "name": "Lena Valdivia",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Site Reliability Engineer"
+     },
+     "grant": "github:lena-valdi → github:platform",
+     "edge_id": 309,
+     "reasons": [
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 8,
+      "permissions_used": 4,
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 1489,
+      "privileged": true,
+      "sensitive": [
+       "infra",
+       "payments"
+      ],
+      "violations": [
+       "No standing admin on prod"
+      ],
+      "peer_coverage": 0.35,
+      "sample_permissions": [
+       "repo:admin on larkspur/infra-terraform",
+       "repo:write on larkspur/payments-service",
+       "repo:write on larkspur/web-app",
+       "repo:write on larkspur/mobile-app"
+      ]
+     },
+     "reviewer": {
+      "id": 16,
+      "name": "Ingrid Lindqvist",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Platform Lead"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 104,
+     "identity": {
+      "id": 22,
+      "name": "Sana Iyer",
+      "type": "human",
+      "status": "active",
+      "department": "Data",
+      "title": "Head of Data"
+     },
+     "grant": "snowflake:SANA_IYER → snowflake:ACCOUNTADMIN",
+     "edge_id": 405,
+     "reasons": [
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 5,
+      "permissions_used": 3,
+      "last_used": "2026-10-07T00:00:00",
+      "days_since_used": 1,
+      "events_90d": 247,
+      "privileged": true,
+      "sensitive": [
+       "financial",
+       "pii"
+      ],
+      "violations": [
+       "No standing admin on prod"
+      ],
+      "peer_coverage": 0.33,
+      "sample_permissions": [
+       "snowflake:ACCOUNTADMIN on snowflake/LARKSPUR_SF",
+       "snowflake:OWNERSHIP on snowflake/CUSTOMERS",
+       "snowflake:OWNERSHIP on snowflake/FINANCE",
+       "snowflake:OWNERSHIP on snowflake/EVENTS"
+      ]
+     },
+     "reviewer": {
+      "id": 2,
+      "name": "Caspian Arkwright",
+      "type": "human",
+      "status": "active",
+      "department": "Executive",
+      "title": "Chief Technology Officer"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 105,
+     "identity": {
+      "id": 23,
+      "name": "Dmitri Ostrowski",
+      "type": "human",
+      "status": "terminated",
+      "department": "Data",
+      "title": "Data Scientist"
+     },
+     "grant": "github:dmitri-ostro → github:all-engineers",
+     "edge_id": 312,
+     "reasons": [
+      "unused_30d",
+      "policy_violation",
+      "terminated_identity"
+     ],
+     "context": {
+      "permissions": 7,
+      "permissions_used": 0,
+      "last_used": "2026-08-19T00:00:00",
+      "days_since_used": 50,
+      "events_90d": 315,
+      "privileged": false,
+      "sensitive": [
+       "infra",
+       "payments"
+      ],
+      "violations": [
+       "Leavers retain no access"
+      ],
+      "peer_coverage": 1.17,
+      "sample_permissions": [
+       "repo:read on larkspur/payments-service",
+       "repo:read on larkspur/web-app",
+       "repo:read on larkspur/mobile-app",
+       "repo:read on larkspur/infra-terraform"
+      ]
+     },
+     "reviewer": {
+      "id": 22,
+      "name": "Sana Iyer",
+      "type": "human",
+      "status": "active",
+      "department": "Data",
+      "title": "Head of Data"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 106,
+     "identity": {
+      "id": 23,
+      "name": "Dmitri Ostrowski",
+      "type": "human",
+      "status": "terminated",
+      "department": "Data",
+      "title": "Data Scientist"
+     },
+     "grant": "github:dmitri-ostro → github:data",
+     "edge_id": 313,
+     "reasons": [
+      "unused_30d",
+      "policy_violation",
+      "terminated_identity"
+     ],
+     "context": {
+      "permissions": 2,
+      "permissions_used": 0,
+      "last_used": "2026-08-18T00:00:00",
+      "days_since_used": 51,
+      "events_90d": 129,
+      "privileged": false,
+      "sensitive": [],
+      "violations": [
+       "Leavers retain no access"
+      ],
+      "peer_coverage": 1.17,
+      "sample_permissions": [
+       "repo:write on larkspur/data-pipelines",
+       "repo:write on larkspur/ml-models"
+      ]
+     },
+     "reviewer": {
+      "id": 22,
+      "name": "Sana Iyer",
+      "type": "human",
+      "status": "active",
+      "department": "Data",
+      "title": "Head of Data"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 107,
+     "identity": {
+      "id": 23,
+      "name": "Dmitri Ostrowski",
+      "type": "human",
+      "status": "terminated",
+      "department": "Data",
+      "title": "Data Scientist"
+     },
+     "grant": "snowflake:DMITRI_OSTROWSKI → snowflake:DATA_ENGINEER",
+     "edge_id": 379,
+     "reasons": [
+      "unused_30d",
+      "policy_violation",
+      "terminated_identity"
+     ],
+     "context": {
+      "permissions": 6,
+      "permissions_used": 0,
+      "last_used": "2026-08-19T00:00:00",
+      "days_since_used": 50,
+      "events_90d": 514,
+      "privileged": false,
+      "sensitive": [
+       "pii"
+      ],
+      "violations": [
+       "Leavers retain no access"
+      ],
+      "peer_coverage": 1.17,
+      "sample_permissions": [
+       "snowflake:INSERT on snowflake/EVENTS",
+       "snowflake:INSERT on snowflake/CUSTOMERS",
+       "snowflake:INSERT on snowflake/MARKETING",
+       "snowflake:SELECT on snowflake/CUSTOMERS"
+      ]
+     },
+     "reviewer": {
+      "id": 22,
+      "name": "Sana Iyer",
+      "type": "human",
+      "status": "active",
+      "department": "Data",
+      "title": "Head of Data"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 108,
+     "identity": {
+      "id": 24,
+      "name": "Talia Bellweather",
+      "type": "human",
+      "status": "active",
+      "department": "Data",
+      "title": "Data Scientist"
+     },
+     "grant": "snowflake:TALIA_BELLWEATHER → snowflake:ACCOUNTADMIN",
+     "edge_id": 406,
+     "reasons": [
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 5,
+      "permissions_used": 1,
+      "last_used": "2026-09-22T00:00:00",
+      "days_since_used": 16,
+      "events_90d": 54,
+      "privileged": true,
+      "sensitive": [
+       "financial",
+       "pii"
+      ],
+      "violations": [
+       "No standing admin on prod"
+      ],
+      "peer_coverage": 0.33,
+      "sample_permissions": [
+       "snowflake:ACCOUNTADMIN on snowflake/LARKSPUR_SF",
+       "snowflake:OWNERSHIP on snowflake/CUSTOMERS",
+       "snowflake:OWNERSHIP on snowflake/FINANCE",
+       "snowflake:OWNERSHIP on snowflake/EVENTS"
+      ]
+     },
+     "reviewer": {
+      "id": 22,
+      "name": "Sana Iyer",
+      "type": "human",
+      "status": "active",
+      "department": "Data",
+      "title": "Head of Data"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 109,
+     "identity": {
+      "id": 25,
+      "name": "Rohan Marchetti",
+      "type": "human",
+      "status": "active",
+      "department": "Data",
+      "title": "Data Scientist"
+     },
+     "grant": "github:rohan-march → github:data",
+     "edge_id": 317,
+     "reasons": [
+      "unused_30d"
+     ],
+     "context": {
+      "permissions": 2,
+      "permissions_used": 0,
+      "last_used": "2026-08-06T00:00:00",
+      "days_since_used": 63,
+      "events_90d": 2,
+      "privileged": false,
+      "sensitive": [],
+      "violations": [],
+      "peer_coverage": 1.17,
+      "sample_permissions": [
+       "repo:write on larkspur/data-pipelines",
+       "repo:write on larkspur/ml-models"
+      ]
+     },
+     "reviewer": {
+      "id": 22,
+      "name": "Sana Iyer",
+      "type": "human",
+      "status": "active",
+      "department": "Data",
+      "title": "Head of Data"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 110,
+     "identity": {
+      "id": 27,
+      "name": "Quinn Zeller",
+      "type": "human",
+      "status": "active",
+      "department": "Data",
+      "title": "Data Scientist"
+     },
+     "grant": "github:quinn-zelle → github:data",
+     "edge_id": 321,
+     "reasons": [
+      "unused_30d"
+     ],
+     "context": {
+      "permissions": 2,
+      "permissions_used": 0,
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "privileged": false,
+      "sensitive": [],
+      "violations": [],
+      "peer_coverage": 1.17,
+      "sample_permissions": [
+       "repo:write on larkspur/data-pipelines",
+       "repo:write on larkspur/ml-models"
+      ]
+     },
+     "reviewer": {
+      "id": 22,
+      "name": "Sana Iyer",
+      "type": "human",
+      "status": "active",
+      "department": "Data",
+      "title": "Head of Data"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 111,
+     "identity": {
+      "id": 29,
+      "name": "Thandiwe Mokoena",
+      "type": "human",
+      "status": "active",
+      "department": "Security",
+      "title": "Head of Security"
+     },
+     "grant": "okta:thandiwe.mokoena@larkspur.example → okta:okta-super-admins",
+     "edge_id": 175,
+     "reasons": [
+      "unused_30d",
+      "privileged_idle",
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 0,
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "privileged": true,
+      "sensitive": [
+       "identity"
+      ],
+      "violations": [
+       "No standing admin on prod"
+      ],
+      "peer_coverage": 0.33,
+      "sample_permissions": [
+       "okta:SuperAdmin on larkspur.okta.example"
+      ]
+     },
+     "reviewer": {
+      "id": 2,
+      "name": "Caspian Arkwright",
+      "type": "human",
+      "status": "active",
+      "department": "Executive",
+      "title": "Chief Technology Officer"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 112,
+     "identity": {
+      "id": 29,
+      "name": "Thandiwe Mokoena",
+      "type": "human",
+      "status": "active",
+      "department": "Security",
+      "title": "Head of Security"
+     },
+     "grant": "github:thandiwe-mokoe → github:security",
+     "edge_id": 325,
+     "reasons": [
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 2,
+      "permissions_used": 1,
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 352,
+      "privileged": true,
+      "sensitive": [
+       "infra",
+       "payments"
+      ],
+      "violations": [
+       "No standing admin on prod"
+      ],
+      "peer_coverage": 1.0,
+      "sample_permissions": [
+       "repo:admin on larkspur/payments-service",
+       "repo:read on larkspur/infra-terraform"
+      ]
+     },
+     "reviewer": {
+      "id": 2,
+      "name": "Caspian Arkwright",
+      "type": "human",
+      "status": "active",
+      "department": "Executive",
+      "title": "Chief Technology Officer"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 113,
+     "identity": {
+      "id": 30,
+      "name": "Yusuf Iyer",
+      "type": "human",
+      "status": "active",
+      "department": "Security",
+      "title": "Security Engineer"
+     },
+     "grant": "okta:yusuf.iyer@larkspur.example → okta:okta-helpdesk",
+     "edge_id": 177,
+     "reasons": [
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 1,
+      "last_used": "2026-09-28T00:00:00",
+      "days_since_used": 10,
+      "events_90d": 114,
+      "privileged": true,
+      "sensitive": [
+       "identity"
+      ],
+      "violations": [
+       "No standing admin on prod"
+      ],
+      "peer_coverage": 0.33,
+      "sample_permissions": [
+       "okta:UserAdmin on larkspur.okta.example"
+      ]
+     },
+     "reviewer": {
+      "id": 29,
+      "name": "Thandiwe Mokoena",
+      "type": "human",
+      "status": "active",
+      "department": "Security",
+      "title": "Head of Security"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 114,
+     "identity": {
+      "id": 30,
+      "name": "Yusuf Iyer",
+      "type": "human",
+      "status": "active",
+      "department": "Security",
+      "title": "Security Engineer"
+     },
+     "grant": "github:yusuf-iyer → github:security",
+     "edge_id": 327,
+     "reasons": [
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 2,
+      "permissions_used": 2,
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 521,
+      "privileged": true,
+      "sensitive": [
+       "infra",
+       "payments"
+      ],
+      "violations": [
+       "No standing admin on prod"
+      ],
+      "peer_coverage": 1.0,
+      "sample_permissions": [
+       "repo:admin on larkspur/payments-service",
+       "repo:read on larkspur/infra-terraform"
+      ]
+     },
+     "reviewer": {
+      "id": 29,
+      "name": "Thandiwe Mokoena",
+      "type": "human",
+      "status": "active",
+      "department": "Security",
+      "title": "Head of Security"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 115,
+     "identity": {
+      "id": 31,
+      "name": "Delphine Bellweather",
+      "type": "human",
+      "status": "active",
+      "department": "Security",
+      "title": "Security Engineer"
+     },
+     "grant": "github:delphine-bellw → github:security",
+     "edge_id": 329,
+     "reasons": [
+      "unused_30d",
+      "privileged_idle",
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 2,
+      "permissions_used": 0,
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "privileged": true,
+      "sensitive": [
+       "infra",
+       "payments"
+      ],
+      "violations": [
+       "No standing admin on prod"
+      ],
+      "peer_coverage": 1.0,
+      "sample_permissions": [
+       "repo:admin on larkspur/payments-service",
+       "repo:read on larkspur/infra-terraform"
+      ]
+     },
+     "reviewer": {
+      "id": 29,
+      "name": "Thandiwe Mokoena",
+      "type": "human",
+      "status": "active",
+      "department": "Security",
+      "title": "Head of Security"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 116,
+     "identity": {
+      "id": 32,
+      "name": "Beatrix Pemberton",
+      "type": "human",
+      "status": "active",
+      "department": "Finance",
+      "title": "Financial Controller"
+     },
+     "grant": "workday:emp-1032 → workday:Manager Self-Service",
+     "edge_id": 14,
+     "reasons": [
+      "unused_30d"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 0,
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "privileged": false,
+      "sensitive": [
+       "hr",
+       "pii"
+      ],
+      "violations": [],
+      "peer_coverage": 0.12,
+      "sample_permissions": [
+       "workers:view on Worker Records"
+      ]
+     },
+     "reviewer": {
+      "id": 3,
+      "name": "Mireille Delacroix",
+      "type": "human",
+      "status": "active",
+      "department": "Executive",
+      "title": "Chief Financial Officer"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 117,
+     "identity": {
+      "id": 32,
+      "name": "Beatrix Pemberton",
+      "type": "human",
+      "status": "active",
+      "department": "Finance",
+      "title": "Financial Controller"
+     },
+     "grant": "workday:emp-1032 → workday:Payroll Administrator",
+     "edge_id": 25,
+     "reasons": [
+      "unused_30d",
+      "privileged_idle",
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 2,
+      "permissions_used": 0,
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "privileged": true,
+      "sensitive": [
+       "financial",
+       "payroll",
+       "pii"
+      ],
+      "violations": [
+       "No standing admin on prod"
+      ],
+      "peer_coverage": 0.12,
+      "sample_permissions": [
+       "payroll:run on Payroll",
+       "payroll:view on Payroll"
+      ]
+     },
+     "reviewer": {
+      "id": 3,
+      "name": "Mireille Delacroix",
+      "type": "human",
+      "status": "active",
+      "department": "Executive",
+      "title": "Chief Financial Officer"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 118,
+     "identity": {
+      "id": 33,
+      "name": "Priya Ramaswamy",
+      "type": "human",
+      "status": "active",
+      "department": "Finance",
+      "title": "FP&A Analyst"
+     },
+     "grant": "workday:emp-1033 → workday:AP Clerk",
+     "edge_id": 18,
+     "reasons": [
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 1,
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 281,
+      "privileged": false,
+      "sensitive": [
+       "financial",
+       "payments"
+      ],
+      "violations": [
+       "SoD: create vs approve supplier payments"
+      ],
+      "peer_coverage": 0.38,
+      "sample_permissions": [
+       "payments:create on Supplier Payments"
+      ]
+     },
+     "reviewer": {
+      "id": 32,
+      "name": "Beatrix Pemberton",
+      "type": "human",
+      "status": "active",
+      "department": "Finance",
+      "title": "Financial Controller"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 119,
+     "identity": {
+      "id": 33,
+      "name": "Priya Ramaswamy",
+      "type": "human",
+      "status": "active",
+      "department": "Finance",
+      "title": "FP&A Analyst"
+     },
+     "grant": "workday:emp-1033 → workday:AP Approver",
+     "edge_id": 19,
+     "reasons": [
+      "unused_30d",
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 0,
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "privileged": false,
+      "sensitive": [
+       "financial",
+       "payments"
+      ],
+      "violations": [
+       "SoD: create vs approve supplier payments"
+      ],
+      "peer_coverage": 0.38,
+      "sample_permissions": [
+       "payments:approve on Supplier Payments"
+      ]
+     },
+     "reviewer": {
+      "id": 32,
+      "name": "Beatrix Pemberton",
+      "type": "human",
+      "status": "active",
+      "department": "Finance",
+      "title": "Financial Controller"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 120,
+     "identity": {
+      "id": 33,
+      "name": "Priya Ramaswamy",
+      "type": "human",
+      "status": "active",
+      "department": "Finance",
+      "title": "FP&A Analyst"
+     },
+     "grant": "snowflake:PRIYA_RAMASWAMY → snowflake:FINANCE_ANALYST",
+     "edge_id": 386,
+     "reasons": [
+      "unused_30d"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 0,
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "privileged": false,
+      "sensitive": [
+       "financial"
+      ],
+      "violations": [],
+      "peer_coverage": 0.62,
+      "sample_permissions": [
+       "snowflake:SELECT on snowflake/FINANCE"
+      ]
+     },
+     "reviewer": {
+      "id": 32,
+      "name": "Beatrix Pemberton",
+      "type": "human",
+      "status": "active",
+      "department": "Finance",
+      "title": "Financial Controller"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 121,
+     "identity": {
+      "id": 34,
+      "name": "Tomas Szabo",
+      "type": "human",
+      "status": "active",
+      "department": "Finance",
+      "title": "Accountant"
+     },
+     "grant": "workday:emp-1034 → workday:AP Clerk",
+     "edge_id": 20,
+     "reasons": [
+      "unused_30d"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 0,
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "privileged": false,
+      "sensitive": [
+       "financial",
+       "payments"
+      ],
+      "violations": [],
+      "peer_coverage": 0.38,
+      "sample_permissions": [
+       "payments:create on Supplier Payments"
+      ]
+     },
+     "reviewer": {
+      "id": 32,
+      "name": "Beatrix Pemberton",
+      "type": "human",
+      "status": "active",
+      "department": "Finance",
+      "title": "Financial Controller"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 122,
+     "identity": {
+      "id": 34,
+      "name": "Tomas Szabo",
+      "type": "human",
+      "status": "active",
+      "department": "Finance",
+      "title": "Accountant"
+     },
+     "grant": "snowflake:TOMAS_SZABO → snowflake:FINANCE_ANALYST",
+     "edge_id": 387,
+     "reasons": [
+      "unused_30d"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 0,
+      "last_used": "2026-07-19T00:00:00",
+      "days_since_used": 81,
+      "events_90d": 2,
+      "privileged": false,
+      "sensitive": [
+       "financial"
+      ],
+      "violations": [],
+      "peer_coverage": 0.62,
+      "sample_permissions": [
+       "snowflake:SELECT on snowflake/FINANCE"
+      ]
+     },
+     "reviewer": {
+      "id": 32,
+      "name": "Beatrix Pemberton",
+      "type": "human",
+      "status": "active",
+      "department": "Finance",
+      "title": "Financial Controller"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 123,
+     "identity": {
+      "id": 40,
+      "name": "Rafael Valdivia",
+      "type": "human",
+      "status": "active",
+      "department": "Sales",
+      "title": "VP Sales"
+     },
+     "grant": "workday:emp-1040 → workday:Manager Self-Service",
+     "edge_id": 15,
+     "reasons": [
+      "unused_30d"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 0,
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "privileged": false,
+      "sensitive": [
+       "hr",
+       "pii"
+      ],
+      "violations": [],
+      "peer_coverage": 0.11,
+      "sample_permissions": [
+       "workers:view on Worker Records"
+      ]
+     },
+     "reviewer": {
+      "id": 1,
+      "name": "Rosalind Haverford",
+      "type": "human",
+      "status": "active",
+      "department": "Executive",
+      "title": "Chief Executive Officer"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 124,
+     "identity": {
+      "id": 41,
+      "name": "Hollis Brightwater",
+      "type": "human",
+      "status": "terminated",
+      "department": "Sales",
+      "title": "Account Executive"
+     },
+     "grant": "snowflake:HOLLIS_BRIGHTWATER → snowflake:ANALYST",
+     "edge_id": 391,
+     "reasons": [
+      "unused_30d",
+      "policy_violation",
+      "terminated_identity"
+     ],
+     "context": {
+      "permissions": 2,
+      "permissions_used": 0,
+      "last_used": "2026-09-01T00:00:00",
+      "days_since_used": 37,
+      "events_90d": 217,
+      "privileged": false,
+      "sensitive": [],
+      "violations": [
+       "Leavers retain no access"
+      ],
+      "peer_coverage": 0.67,
+      "sample_permissions": [
+       "snowflake:SELECT on snowflake/EVENTS",
+       "snowflake:SELECT on snowflake/MARKETING"
+      ]
+     },
+     "reviewer": {
+      "id": 40,
+      "name": "Rafael Valdivia",
+      "type": "human",
+      "status": "active",
+      "department": "Sales",
+      "title": "VP Sales"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 125,
+     "identity": {
+      "id": 50,
+      "name": "Yara Castellanos",
+      "type": "human",
+      "status": "active",
+      "department": "Support",
+      "title": "Support Lead"
+     },
+     "grant": "workday:emp-1050 → workday:Manager Self-Service",
+     "edge_id": 16,
+     "reasons": [
+      "unused_30d"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 0,
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "privileged": false,
+      "sensitive": [
+       "hr",
+       "pii"
+      ],
+      "violations": [],
+      "peer_coverage": 0.14,
+      "sample_permissions": [
+       "workers:view on Worker Records"
+      ]
+     },
+     "reviewer": {
+      "id": 1,
+      "name": "Rosalind Haverford",
+      "type": "human",
+      "status": "active",
+      "department": "Executive",
+      "title": "Chief Executive Officer"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 126,
+     "identity": {
+      "id": 51,
+      "name": "Callum Ferreira",
+      "type": "human",
+      "status": "active",
+      "department": "Support",
+      "title": "Customer Success Manager"
+     },
+     "grant": "snowflake:CALLUM_FERREIRA → snowflake:PII_READER",
+     "edge_id": 399,
+     "reasons": [
+      "unused_30d"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 0,
+      "last_used": "2026-07-17T00:00:00",
+      "days_since_used": 83,
+      "events_90d": 7,
+      "privileged": false,
+      "sensitive": [
+       "pii"
+      ],
+      "violations": [],
+      "peer_coverage": 0.43,
+      "sample_permissions": [
+       "snowflake:SELECT on snowflake/CUSTOMERS"
+      ]
+     },
+     "reviewer": {
+      "id": 50,
+      "name": "Yara Castellanos",
+      "type": "human",
+      "status": "active",
+      "department": "Support",
+      "title": "Support Lead"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 127,
+     "identity": {
+      "id": 52,
+      "name": "Juno Lindqvist",
+      "type": "human",
+      "status": "active",
+      "department": "Support",
+      "title": "Customer Success Manager"
+     },
+     "grant": "okta:juno.lindqvist@larkspur.example → okta:okta-helpdesk",
+     "edge_id": 178,
+     "reasons": [
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 1,
+      "last_used": "2026-10-05T00:00:00",
+      "days_since_used": 3,
+      "events_90d": 84,
+      "privileged": true,
+      "sensitive": [
+       "identity"
+      ],
+      "violations": [
+       "No standing admin on prod"
+      ],
+      "peer_coverage": 0.14,
+      "sample_permissions": [
+       "okta:UserAdmin on larkspur.okta.example"
+      ]
+     },
+     "reviewer": {
+      "id": 50,
+      "name": "Yara Castellanos",
+      "type": "human",
+      "status": "active",
+      "department": "Support",
+      "title": "Support Lead"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 128,
+     "identity": {
+      "id": 57,
+      "name": "Esme Thornbury",
+      "type": "human",
+      "status": "active",
+      "department": "People",
+      "title": "Head of People"
+     },
+     "grant": "workday:emp-1057 → workday:HR Partner",
+     "edge_id": 26,
+     "reasons": [
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 2,
+      "permissions_used": 1,
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 331,
+      "privileged": true,
+      "sensitive": [
+       "hr",
+       "pii"
+      ],
+      "violations": [
+       "No standing admin on prod"
+      ],
+      "peer_coverage": 1.0,
+      "sample_permissions": [
+       "workers:view on Worker Records",
+       "workers:edit on Worker Records"
+      ]
+     },
+     "reviewer": {
+      "id": 1,
+      "name": "Rosalind Haverford",
+      "type": "human",
+      "status": "active",
+      "department": "Executive",
+      "title": "Chief Executive Officer"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 129,
+     "identity": {
+      "id": 58,
+      "name": "Teodor Delacroix",
+      "type": "human",
+      "status": "active",
+      "department": "People",
+      "title": "HR Business Partner"
+     },
+     "grant": "workday:emp-1058 → workday:HR Partner",
+     "edge_id": 27,
+     "reasons": [
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 2,
+      "permissions_used": 2,
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 519,
+      "privileged": true,
+      "sensitive": [
+       "hr",
+       "pii"
+      ],
+      "violations": [
+       "No standing admin on prod"
+      ],
+      "peer_coverage": 1.0,
+      "sample_permissions": [
+       "workers:view on Worker Records",
+       "workers:edit on Worker Records"
+      ]
+     },
+     "reviewer": {
+      "id": 57,
+      "name": "Esme Thornbury",
+      "type": "human",
+      "status": "active",
+      "department": "People",
+      "title": "Head of People"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 130,
+     "identity": {
+      "id": 58,
+      "name": "Teodor Delacroix",
+      "type": "human",
+      "status": "active",
+      "department": "People",
+      "title": "HR Business Partner"
+     },
+     "grant": "workday:emp-1058 → workday:Payroll Administrator",
+     "edge_id": 30,
+     "reasons": [
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 2,
+      "permissions_used": 1,
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 307,
+      "privileged": true,
+      "sensitive": [
+       "financial",
+       "payroll",
+       "pii"
+      ],
+      "violations": [
+       "No standing admin on prod"
+      ],
+      "peer_coverage": 0.25,
+      "sample_permissions": [
+       "payroll:run on Payroll",
+       "payroll:view on Payroll"
+      ]
+     },
+     "reviewer": {
+      "id": 57,
+      "name": "Esme Thornbury",
+      "type": "human",
+      "status": "active",
+      "department": "People",
+      "title": "Head of People"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 131,
+     "identity": {
+      "id": 59,
+      "name": "Mei Winslow",
+      "type": "human",
+      "status": "active",
+      "department": "People",
+      "title": "HR Business Partner"
+     },
+     "grant": "workday:emp-1059 → workday:HR Partner",
+     "edge_id": 28,
+     "reasons": [
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 2,
+      "permissions_used": 1,
+      "last_used": "2026-09-20T00:00:00",
+      "days_since_used": 18,
+      "events_90d": 78,
+      "privileged": true,
+      "sensitive": [
+       "hr",
+       "pii"
+      ],
+      "violations": [
+       "No standing admin on prod"
+      ],
+      "peer_coverage": 1.0,
+      "sample_permissions": [
+       "workers:view on Worker Records",
+       "workers:edit on Worker Records"
+      ]
+     },
+     "reviewer": {
+      "id": 57,
+      "name": "Esme Thornbury",
+      "type": "human",
+      "status": "active",
+      "department": "People",
+      "title": "Head of People"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 132,
+     "identity": {
+      "id": 60,
+      "name": "Idris Achterberg",
+      "type": "human",
+      "status": "active",
+      "department": "People",
+      "title": "Recruiter"
+     },
+     "grant": "workday:emp-1060 → workday:HR Partner",
+     "edge_id": 29,
+     "reasons": [
+      "unused_30d",
+      "privileged_idle",
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 2,
+      "permissions_used": 0,
+      "last_used": "2026-07-15T00:00:00",
+      "days_since_used": 85,
+      "events_90d": 11,
+      "privileged": true,
+      "sensitive": [
+       "hr",
+       "pii"
+      ],
+      "violations": [
+       "No standing admin on prod"
+      ],
+      "peer_coverage": 1.0,
+      "sample_permissions": [
+       "workers:view on Worker Records",
+       "workers:edit on Worker Records"
+      ]
+     },
+     "reviewer": {
+      "id": 57,
+      "name": "Esme Thornbury",
+      "type": "human",
+      "status": "active",
+      "department": "People",
+      "title": "Head of People"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 133,
+     "identity": {
+      "id": 61,
+      "name": "ISU_Okta_Sync",
+      "type": "service",
+      "status": "active",
+      "department": null,
+      "title": "Workday integration user"
+     },
+     "grant": "workday:ISU_Okta_Sync → workday:HR Partner",
+     "edge_id": 31,
+     "reasons": [
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 2,
+      "permissions_used": 2,
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 1893,
+      "privileged": true,
+      "sensitive": [
+       "hr",
+       "pii"
+      ],
+      "violations": [
+       "Non-human identities may not hold prod admin"
+      ],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "workers:view on Worker Records",
+       "workers:edit on Worker Records"
+      ]
+     },
+     "reviewer": {
+      "id": 57,
+      "name": "Esme Thornbury",
+      "type": "human",
+      "status": "active",
+      "department": "People",
+      "title": "Head of People"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 134,
+     "identity": {
+      "id": 62,
+      "name": "ISU_Payroll_Export",
+      "type": "service",
+      "status": "active",
+      "department": null,
+      "title": "Workday integration user"
+     },
+     "grant": "workday:ISU_Payroll_Export → workday:Payroll Administrator",
+     "edge_id": 32,
+     "reasons": [
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 2,
+      "permissions_used": 2,
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 1683,
+      "privileged": true,
+      "sensitive": [
+       "financial",
+       "payroll",
+       "pii"
+      ],
+      "violations": [
+       "Non-human identities may not hold prod admin"
+      ],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "payroll:run on Payroll",
+       "payroll:view on Payroll"
+      ]
+     },
+     "reviewer": {
+      "id": 32,
+      "name": "Beatrix Pemberton",
+      "type": "human",
+      "status": "active",
+      "department": "Finance",
+      "title": "Financial Controller"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 135,
+     "identity": {
+      "id": 63,
+      "name": "ISU_Expense_Bot",
+      "type": "service",
+      "status": "active",
+      "department": null,
+      "title": "Workday integration user"
+     },
+     "grant": "workday:ISU_Expense_Bot → workday:AP Clerk",
+     "edge_id": 33,
+     "reasons": [
+      "unused_30d",
+      "orphaned_nhi"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 0,
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "privileged": false,
+      "sensitive": [
+       "financial",
+       "payments"
+      ],
+      "violations": [],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "payments:create on Supplier Payments"
+      ]
+     },
+     "reviewer": {
+      "id": 29,
+      "name": "Thandiwe Mokoena",
+      "type": "human",
+      "status": "active",
+      "department": "Security",
+      "title": "Head of Security"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 136,
+     "identity": {
+      "id": 64,
+      "name": "scim-provisioner",
+      "type": "service",
+      "status": "active",
+      "department": null,
+      "title": "Okta API token"
+     },
+     "grant": "okta:scim-provisioner → okta:okta-super-admins",
+     "edge_id": 179,
+     "reasons": [
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 1,
+      "last_used": "2026-10-07T00:00:00",
+      "days_since_used": 1,
+      "events_90d": 507,
+      "privileged": true,
+      "sensitive": [
+       "identity"
+      ],
+      "violations": [
+       "Non-human identities may not hold prod admin"
+      ],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "okta:SuperAdmin on larkspur.okta.example"
+      ]
+     },
+     "reviewer": {
+      "id": 29,
+      "name": "Thandiwe Mokoena",
+      "type": "human",
+      "status": "active",
+      "department": "Security",
+      "title": "Head of Security"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 137,
+     "identity": {
+      "id": 65,
+      "name": "hr-sync-token",
+      "type": "service",
+      "status": "active",
+      "department": null,
+      "title": "Okta API token"
+     },
+     "grant": "okta:hr-sync-token → okta:okta-helpdesk",
+     "edge_id": 180,
+     "reasons": [
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 1,
+      "last_used": "2026-10-07T00:00:00",
+      "days_since_used": 1,
+      "events_90d": 434,
+      "privileged": true,
+      "sensitive": [
+       "identity"
+      ],
+      "violations": [
+       "Non-human identities may not hold prod admin"
+      ],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "okta:UserAdmin on larkspur.okta.example"
+      ]
+     },
+     "reviewer": {
+      "id": 57,
+      "name": "Esme Thornbury",
+      "type": "human",
+      "status": "active",
+      "department": "People",
+      "title": "Head of People"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 138,
+     "identity": {
+      "id": 66,
+      "name": "old-migration-token",
+      "type": "service",
+      "status": "active",
+      "department": null,
+      "title": "Okta API token"
+     },
+     "grant": "okta:old-migration-token → okta:okta-super-admins",
+     "edge_id": 181,
+     "reasons": [
+      "unused_30d",
+      "privileged_idle",
+      "policy_violation",
+      "orphaned_nhi"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 0,
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "privileged": true,
+      "sensitive": [
+       "identity"
+      ],
+      "violations": [
+       "Non-human identities may not hold prod admin"
+      ],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "okta:SuperAdmin on larkspur.okta.example"
+      ]
+     },
+     "reviewer": {
+      "id": 29,
+      "name": "Thandiwe Mokoena",
+      "type": "human",
+      "status": "active",
+      "department": "Security",
+      "title": "Head of Security"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 139,
+     "identity": {
+      "id": 67,
+      "name": "Support Copilot",
+      "type": "ai_agent",
+      "status": "active",
+      "department": null,
+      "title": "AI agent"
+     },
+     "grant": "snowflake:agent-support-copilot → snowflake:PII_READER",
+     "edge_id": 413,
+     "reasons": [
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 1,
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 1683,
+      "privileged": false,
+      "sensitive": [
+       "pii"
+      ],
+      "violations": [
+       "AI agents may not access PII"
+      ],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "snowflake:SELECT on snowflake/CUSTOMERS"
+      ]
+     },
+     "reviewer": {
+      "id": 50,
+      "name": "Yara Castellanos",
+      "type": "human",
+      "status": "active",
+      "department": "Support",
+      "title": "Support Lead"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 140,
+     "identity": {
+      "id": 68,
+      "name": "Code Review Bot",
+      "type": "ai_agent",
+      "status": "active",
+      "department": null,
+      "title": "AI agent"
+     },
+     "grant": "github:agent-code-review → repo:read on larkspur/data-pipelines",
+     "edge_id": 355,
+     "reasons": [
+      "unused_30d"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 0,
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "privileged": false,
+      "sensitive": [],
+      "violations": [],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "repo:read on larkspur/data-pipelines"
+      ]
+     },
+     "reviewer": {
+      "id": 4,
+      "name": "Kofi Mensah",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Engineering Manager, Backend"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 141,
+     "identity": {
+      "id": 69,
+      "name": "Finance Recon Agent",
+      "type": "ai_agent",
+      "status": "active",
+      "department": null,
+      "title": "AI agent"
+     },
+     "grant": "workday:agent-finance-recon → workday:AP Clerk",
+     "edge_id": 34,
+     "reasons": [
+      "unused_30d"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 0,
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "privileged": false,
+      "sensitive": [
+       "financial",
+       "payments"
+      ],
+      "violations": [],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "payments:create on Supplier Payments"
+      ]
+     },
+     "reviewer": {
+      "id": 32,
+      "name": "Beatrix Pemberton",
+      "type": "human",
+      "status": "active",
+      "department": "Finance",
+      "title": "Financial Controller"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 142,
+     "identity": {
+      "id": 70,
+      "name": "Data Analyst Agent",
+      "type": "ai_agent",
+      "status": "active",
+      "department": null,
+      "title": "AI agent"
+     },
+     "grant": "snowflake:agent-data-analyst → snowflake:PII_READER",
+     "edge_id": 415,
+     "reasons": [
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 1,
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 1374,
+      "privileged": false,
+      "sensitive": [
+       "pii"
+      ],
+      "violations": [
+       "AI agents may not access PII"
+      ],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "snowflake:SELECT on snowflake/CUSTOMERS"
+      ]
+     },
+     "reviewer": {
+      "id": 22,
+      "name": "Sana Iyer",
+      "type": "human",
+      "status": "active",
+      "department": "Data",
+      "title": "Head of Data"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 143,
+     "identity": {
+      "id": 71,
+      "name": "SRE On-call Agent",
+      "type": "ai_agent",
+      "status": "active",
+      "department": null,
+      "title": "AI agent"
+     },
+     "grant": "aws:agent-sre-oncall → aws:SREAgentRole",
+     "edge_id": 247,
+     "reasons": [
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 3,
+      "permissions_used": 2,
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 3020,
+      "privileged": false,
+      "sensitive": [
+       "pii"
+      ],
+      "violations": [
+       "AI agents may not access PII"
+      ],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "ec2:DescribeInstances on ec2/prod-fleet",
+       "s3:GetObject on s3://app-logs",
+       "rds:Connect on rds/orders-db"
+      ]
+     },
+     "reviewer": {
+      "id": 17,
+      "name": "Marcus Bellweather",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Platform Engineer"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 144,
+     "identity": {
+      "id": 72,
+      "name": "Sales Research Agent",
+      "type": "ai_agent",
+      "status": "active",
+      "department": null,
+      "title": "AI agent"
+     },
+     "grant": "snowflake:agent-sales-research → snowflake:ANALYST",
+     "edge_id": 416,
+     "reasons": [
+      "orphaned_nhi"
+     ],
+     "context": {
+      "permissions": 2,
+      "permissions_used": 2,
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 2871,
+      "privileged": false,
+      "sensitive": [],
+      "violations": [],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "snowflake:SELECT on snowflake/EVENTS",
+       "snowflake:SELECT on snowflake/MARKETING"
+      ]
+     },
+     "reviewer": {
+      "id": 29,
+      "name": "Thandiwe Mokoena",
+      "type": "human",
+      "status": "active",
+      "department": "Security",
+      "title": "Head of Security"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 145,
+     "identity": {
+      "id": 72,
+      "name": "Sales Research Agent",
+      "type": "ai_agent",
+      "status": "active",
+      "department": null,
+      "title": "AI agent"
+     },
+     "grant": "snowflake:agent-sales-research → snowflake:REPORTING",
+     "edge_id": 417,
+     "reasons": [
+      "orphaned_nhi"
+     ],
+     "context": {
+      "permissions": 2,
+      "permissions_used": 2,
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 2893,
+      "privileged": false,
+      "sensitive": [
+       "financial"
+      ],
+      "violations": [],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "snowflake:SELECT on snowflake/EVENTS",
+       "snowflake:SELECT on snowflake/FINANCE"
+      ]
+     },
+     "reviewer": {
+      "id": 29,
+      "name": "Thandiwe Mokoena",
+      "type": "human",
+      "status": "active",
+      "department": "Security",
+      "title": "Head of Security"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 146,
+     "identity": {
+      "id": 73,
+      "name": "svc-ci-deployer",
+      "type": "service",
+      "status": "active",
+      "department": null,
+      "title": "AWS IAM user"
+     },
+     "grant": "aws:svc-ci-deployer → aws:CIDeployRole",
+     "edge_id": 230,
+     "reasons": [
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 5,
+      "permissions_used": 4,
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 5548,
+      "privileged": true,
+      "sensitive": [
+       "infra"
+      ],
+      "violations": [
+       "Non-human identities may not hold prod admin"
+      ],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "s3:PutObject on s3://terraform-state",
+       "s3:GetObject on s3://terraform-state",
+       "ec2:TerminateInstances on ec2/prod-fleet",
+       "s3:PutObject on s3://ml-artifacts"
+      ]
+     },
+     "reviewer": {
+      "id": 16,
+      "name": "Ingrid Lindqvist",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Platform Lead"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 147,
+     "identity": {
+      "id": 74,
+      "name": "svc-backup-agent",
+      "type": "service",
+      "status": "active",
+      "department": null,
+      "title": "AWS IAM user"
+     },
+     "grant": "aws:svc-backup-agent → s3:GetObject on s3://customer-pii",
+     "edge_id": 231,
+     "reasons": [
+      "unused_30d",
+      "orphaned_nhi"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 0,
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "privileged": false,
+      "sensitive": [
+       "pii"
+      ],
+      "violations": [],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "s3:GetObject on s3://customer-pii"
+      ]
+     },
+     "reviewer": {
+      "id": 29,
+      "name": "Thandiwe Mokoena",
+      "type": "human",
+      "status": "active",
+      "department": "Security",
+      "title": "Head of Security"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 148,
+     "identity": {
+      "id": 74,
+      "name": "svc-backup-agent",
+      "type": "service",
+      "status": "active",
+      "department": null,
+      "title": "AWS IAM user"
+     },
+     "grant": "aws:svc-backup-agent → rds:Connect on rds/orders-db",
+     "edge_id": 232,
+     "reasons": [
+      "orphaned_nhi"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 1,
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 1511,
+      "privileged": false,
+      "sensitive": [
+       "pii"
+      ],
+      "violations": [],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "rds:Connect on rds/orders-db"
+      ]
+     },
+     "reviewer": {
+      "id": 29,
+      "name": "Thandiwe Mokoena",
+      "type": "human",
+      "status": "active",
+      "department": "Security",
+      "title": "Head of Security"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 149,
+     "identity": {
+      "id": 74,
+      "name": "svc-backup-agent",
+      "type": "service",
+      "status": "active",
+      "department": null,
+      "title": "AWS IAM user"
+     },
+     "grant": "aws:svc-backup-agent → s3:PutObject on s3://app-logs",
+     "edge_id": 233,
+     "reasons": [
+      "orphaned_nhi"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 1,
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 1414,
+      "privileged": false,
+      "sensitive": [],
+      "violations": [],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "s3:PutObject on s3://app-logs"
+      ]
+     },
+     "reviewer": {
+      "id": 29,
+      "name": "Thandiwe Mokoena",
+      "type": "human",
+      "status": "active",
+      "department": "Security",
+      "title": "Head of Security"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 150,
+     "identity": {
+      "id": 75,
+      "name": "svc-legacy-etl",
+      "type": "service",
+      "status": "active",
+      "department": null,
+      "title": "AWS IAM user"
+     },
+     "grant": "aws:svc-legacy-etl → s3:GetObject on s3://customer-pii",
+     "edge_id": 234,
+     "reasons": [
+      "unused_30d",
+      "orphaned_nhi"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 0,
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "privileged": false,
+      "sensitive": [
+       "pii"
+      ],
+      "violations": [],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "s3:GetObject on s3://customer-pii"
+      ]
+     },
+     "reviewer": {
+      "id": 29,
+      "name": "Thandiwe Mokoena",
+      "type": "human",
+      "status": "active",
+      "department": "Security",
+      "title": "Head of Security"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 151,
+     "identity": {
+      "id": 75,
+      "name": "svc-legacy-etl",
+      "type": "service",
+      "status": "active",
+      "department": null,
+      "title": "AWS IAM user"
+     },
+     "grant": "aws:svc-legacy-etl → s3:GetObject on s3://finance-reports",
+     "edge_id": 235,
+     "reasons": [
+      "unused_30d",
+      "orphaned_nhi"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 0,
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "privileged": false,
+      "sensitive": [
+       "financial"
+      ],
+      "violations": [],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "s3:GetObject on s3://finance-reports"
+      ]
+     },
+     "reviewer": {
+      "id": 29,
+      "name": "Thandiwe Mokoena",
+      "type": "human",
+      "status": "active",
+      "department": "Security",
+      "title": "Head of Security"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 152,
+     "identity": {
+      "id": 75,
+      "name": "svc-legacy-etl",
+      "type": "service",
+      "status": "active",
+      "department": null,
+      "title": "AWS IAM user"
+     },
+     "grant": "aws:svc-legacy-etl → kms:Decrypt on kms/pii-key",
+     "edge_id": 236,
+     "reasons": [
+      "unused_30d",
+      "orphaned_nhi"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 0,
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "privileged": false,
+      "sensitive": [
+       "pii"
+      ],
+      "violations": [],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "kms:Decrypt on kms/pii-key"
+      ]
+     },
+     "reviewer": {
+      "id": 29,
+      "name": "Thandiwe Mokoena",
+      "type": "human",
+      "status": "active",
+      "department": "Security",
+      "title": "Head of Security"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 153,
+     "identity": {
+      "id": 78,
+      "name": "svc-terraform",
+      "type": "service",
+      "status": "active",
+      "department": null,
+      "title": "AWS IAM user"
+     },
+     "grant": "aws:svc-terraform → iam:* on aws-account/larkspur-prod",
+     "edge_id": 241,
+     "reasons": [
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 1,
+      "last_used": "2026-10-07T00:00:00",
+      "days_since_used": 1,
+      "events_90d": 421,
+      "privileged": true,
+      "sensitive": [],
+      "violations": [
+       "Non-human identities may not hold prod admin"
+      ],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "iam:* on aws-account/larkspur-prod"
+      ]
+     },
+     "reviewer": {
+      "id": 16,
+      "name": "Ingrid Lindqvist",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Platform Lead"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 154,
+     "identity": {
+      "id": 78,
+      "name": "svc-terraform",
+      "type": "service",
+      "status": "active",
+      "department": null,
+      "title": "AWS IAM user"
+     },
+     "grant": "aws:svc-terraform → s3:PutObject on s3://terraform-state",
+     "edge_id": 242,
+     "reasons": [
+      "policy_violation"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 1,
+      "last_used": "2026-10-07T00:00:00",
+      "days_since_used": 1,
+      "events_90d": 459,
+      "privileged": true,
+      "sensitive": [
+       "infra"
+      ],
+      "violations": [
+       "Non-human identities may not hold prod admin"
+      ],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "s3:PutObject on s3://terraform-state"
+      ]
+     },
+     "reviewer": {
+      "id": 16,
+      "name": "Ingrid Lindqvist",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Platform Lead"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 155,
+     "identity": {
+      "id": 81,
+      "name": "svc-data-export",
+      "type": "service",
+      "status": "active",
+      "department": null,
+      "title": "AWS IAM user"
+     },
+     "grant": "aws:svc-data-export → s3:GetObject on s3://customer-pii",
+     "edge_id": 245,
+     "reasons": [
+      "unused_30d",
+      "orphaned_nhi"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 0,
+      "last_used": "2026-07-26T00:00:00",
+      "days_since_used": 74,
+      "events_90d": 221,
+      "privileged": false,
+      "sensitive": [
+       "pii"
+      ],
+      "violations": [],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "s3:GetObject on s3://customer-pii"
+      ]
+     },
+     "reviewer": {
+      "id": 29,
+      "name": "Thandiwe Mokoena",
+      "type": "human",
+      "status": "active",
+      "department": "Security",
+      "title": "Head of Security"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 156,
+     "identity": {
+      "id": 81,
+      "name": "svc-data-export",
+      "type": "service",
+      "status": "active",
+      "department": null,
+      "title": "AWS IAM user"
+     },
+     "grant": "aws:svc-data-export → s3:PutObject on s3://finance-reports",
+     "edge_id": 246,
+     "reasons": [
+      "unused_30d",
+      "orphaned_nhi"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 0,
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "privileged": false,
+      "sensitive": [
+       "financial"
+      ],
+      "violations": [],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "s3:PutObject on s3://finance-reports"
+      ]
+     },
+     "reviewer": {
+      "id": 29,
+      "name": "Thandiwe Mokoena",
+      "type": "human",
+      "status": "active",
+      "department": "Security",
+      "title": "Head of Security"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 157,
+     "identity": {
+      "id": 82,
+      "name": "release-bot",
+      "type": "service",
+      "status": "active",
+      "department": null,
+      "title": "GitHub github app"
+     },
+     "grant": "github:release-bot → repo:write on larkspur/payments-service",
+     "edge_id": 333,
+     "reasons": [
+      "unused_30d"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 0,
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "privileged": false,
+      "sensitive": [
+       "payments"
+      ],
+      "violations": [],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "repo:write on larkspur/payments-service"
+      ]
+     },
+     "reviewer": {
+      "id": 16,
+      "name": "Ingrid Lindqvist",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Platform Lead"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 158,
+     "identity": {
+      "id": 82,
+      "name": "release-bot",
+      "type": "service",
+      "status": "active",
+      "department": null,
+      "title": "GitHub github app"
+     },
+     "grant": "github:release-bot → repo:write on larkspur/web-app",
+     "edge_id": 334,
+     "reasons": [
+      "unused_30d"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 0,
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "privileged": false,
+      "sensitive": [],
+      "violations": [],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "repo:write on larkspur/web-app"
+      ]
+     },
+     "reviewer": {
+      "id": 16,
+      "name": "Ingrid Lindqvist",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Platform Lead"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 159,
+     "identity": {
+      "id": 82,
+      "name": "release-bot",
+      "type": "service",
+      "status": "active",
+      "department": null,
+      "title": "GitHub github app"
+     },
+     "grant": "github:release-bot → repo:write on larkspur/infra-terraform",
+     "edge_id": 336,
+     "reasons": [
+      "unused_30d"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 0,
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "privileged": false,
+      "sensitive": [
+       "infra"
+      ],
+      "violations": [],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "repo:write on larkspur/infra-terraform"
+      ]
+     },
+     "reviewer": {
+      "id": 16,
+      "name": "Ingrid Lindqvist",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Platform Lead"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 160,
+     "identity": {
+      "id": 83,
+      "name": "infra-deploy-key",
+      "type": "service",
+      "status": "active",
+      "department": null,
+      "title": "GitHub deploy key"
+     },
+     "grant": "github:infra-deploy-key → repo:write on larkspur/infra-terraform",
+     "edge_id": 340,
+     "reasons": [
+      "unused_30d",
+      "orphaned_nhi"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 0,
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "privileged": false,
+      "sensitive": [
+       "infra"
+      ],
+      "violations": [],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "repo:write on larkspur/infra-terraform"
+      ]
+     },
+     "reviewer": {
+      "id": 29,
+      "name": "Thandiwe Mokoena",
+      "type": "human",
+      "status": "active",
+      "department": "Security",
+      "title": "Head of Security"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 161,
+     "identity": {
+      "id": 84,
+      "name": "jenkins-pat",
+      "type": "service",
+      "status": "active",
+      "department": null,
+      "title": "GitHub pat"
+     },
+     "grant": "github:jenkins-pat → repo:admin on larkspur/payments-service",
+     "edge_id": 341,
+     "reasons": [
+      "policy_violation",
+      "orphaned_nhi"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 1,
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 611,
+      "privileged": true,
+      "sensitive": [
+       "payments"
+      ],
+      "violations": [
+       "Non-human identities may not hold prod admin"
+      ],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "repo:admin on larkspur/payments-service"
+      ]
+     },
+     "reviewer": {
+      "id": 29,
+      "name": "Thandiwe Mokoena",
+      "type": "human",
+      "status": "active",
+      "department": "Security",
+      "title": "Head of Security"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 162,
+     "identity": {
+      "id": 84,
+      "name": "jenkins-pat",
+      "type": "service",
+      "status": "active",
+      "department": null,
+      "title": "GitHub pat"
+     },
+     "grant": "github:jenkins-pat → repo:write on larkspur/web-app",
+     "edge_id": 342,
+     "reasons": [
+      "orphaned_nhi"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 1,
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 1863,
+      "privileged": false,
+      "sensitive": [],
+      "violations": [],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "repo:write on larkspur/web-app"
+      ]
+     },
+     "reviewer": {
+      "id": 29,
+      "name": "Thandiwe Mokoena",
+      "type": "human",
+      "status": "active",
+      "department": "Security",
+      "title": "Head of Security"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 163,
+     "identity": {
+      "id": 85,
+      "name": "dependabot-svc",
+      "type": "service",
+      "status": "active",
+      "department": null,
+      "title": "GitHub github app"
+     },
+     "grant": "github:dependabot-svc → repo:read on larkspur/ml-models",
+     "edge_id": 348,
+     "reasons": [
+      "unused_30d"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 0,
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "privileged": false,
+      "sensitive": [],
+      "violations": [],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "repo:read on larkspur/ml-models"
+      ]
+     },
+     "reviewer": {
+      "id": 29,
+      "name": "Thandiwe Mokoena",
+      "type": "human",
+      "status": "active",
+      "department": "Security",
+      "title": "Head of Security"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 164,
+     "identity": {
+      "id": 86,
+      "name": "docs-publisher",
+      "type": "service",
+      "status": "active",
+      "department": null,
+      "title": "GitHub deploy key"
+     },
+     "grant": "github:docs-publisher → repo:write on larkspur/docs-site",
+     "edge_id": 350,
+     "reasons": [
+      "orphaned_nhi"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 1,
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 1736,
+      "privileged": false,
+      "sensitive": [],
+      "violations": [],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "repo:write on larkspur/docs-site"
+      ]
+     },
+     "reviewer": {
+      "id": 29,
+      "name": "Thandiwe Mokoena",
+      "type": "human",
+      "status": "active",
+      "department": "Security",
+      "title": "Head of Security"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 165,
+     "identity": {
+      "id": 89,
+      "name": "LOOKER_SVC",
+      "type": "service",
+      "status": "active",
+      "department": null,
+      "title": "Snowflake service user"
+     },
+     "grant": "snowflake:LOOKER_SVC → snowflake:ANALYST",
+     "edge_id": 409,
+     "reasons": [
+      "orphaned_nhi"
+     ],
+     "context": {
+      "permissions": 2,
+      "permissions_used": 1,
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 1813,
+      "privileged": false,
+      "sensitive": [],
+      "violations": [],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "snowflake:SELECT on snowflake/EVENTS",
+       "snowflake:SELECT on snowflake/MARKETING"
+      ]
+     },
+     "reviewer": {
+      "id": 29,
+      "name": "Thandiwe Mokoena",
+      "type": "human",
+      "status": "active",
+      "department": "Security",
+      "title": "Head of Security"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 166,
+     "identity": {
+      "id": 89,
+      "name": "LOOKER_SVC",
+      "type": "service",
+      "status": "active",
+      "department": null,
+      "title": "Snowflake service user"
+     },
+     "grant": "snowflake:LOOKER_SVC → snowflake:PII_READER",
+     "edge_id": 410,
+     "reasons": [
+      "orphaned_nhi"
+     ],
+     "context": {
+      "permissions": 1,
+      "permissions_used": 1,
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 1795,
+      "privileged": false,
+      "sensitive": [
+       "pii"
+      ],
+      "violations": [],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "snowflake:SELECT on snowflake/CUSTOMERS"
+      ]
+     },
+     "reviewer": {
+      "id": 29,
+      "name": "Thandiwe Mokoena",
+      "type": "human",
+      "status": "active",
+      "department": "Security",
+      "title": "Head of Security"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    },
+    {
+     "id": 167,
+     "identity": {
+      "id": 90,
+      "name": "TABLEAU_LEGACY",
+      "type": "service",
+      "status": "active",
+      "department": null,
+      "title": "Snowflake service user"
+     },
+     "grant": "snowflake:TABLEAU_LEGACY → snowflake:REPORTING",
+     "edge_id": 411,
+     "reasons": [
+      "unused_30d",
+      "orphaned_nhi"
+     ],
+     "context": {
+      "permissions": 2,
+      "permissions_used": 0,
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "privileged": false,
+      "sensitive": [
+       "financial"
+      ],
+      "violations": [],
+      "peer_coverage": null,
+      "sample_permissions": [
+       "snowflake:SELECT on snowflake/EVENTS",
+       "snowflake:SELECT on snowflake/FINANCE"
+      ]
+     },
+     "reviewer": {
+      "id": 29,
+      "name": "Thandiwe Mokoena",
+      "type": "human",
+      "status": "active",
+      "department": "Security",
+      "title": "Head of Security"
+     },
+     "decision": null,
+     "comment": null,
+     "decided_at": null
+    }
+   ]
+  }
+ }
+}

@@ -1,0 +1,55 @@
+{
+ "name": "execute-mover",
+ "request": {
+  "method": "POST",
+  "path": "/api/hris/events/2/execute"
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "executed": true,
+   "plan": {
+    "type": "mover",
+    "identity": {
+     "id": 53,
+     "name": "Wim Bellweather",
+     "department": "Support",
+     "title": "Support Engineer"
+    },
+    "from_team": "support",
+    "to_team": "sales",
+    "new_title": "Account Executive",
+    "to_department": "Sales",
+    "steps": [
+     {
+      "action": "add_grant",
+      "system": "okta",
+      "group_id": 14,
+      "target": "okta:sales",
+      "detail": "Add to okta:sales (birthright for sales)"
+     },
+     {
+      "action": "create_account",
+      "system": "snowflake",
+      "target": "wim.bellweather@larkspur.example",
+      "detail": "Create snowflake account for Wim Bellweather"
+     },
+     {
+      "action": "add_grant",
+      "system": "snowflake",
+      "group_id": 37,
+      "target": "snowflake:ANALYST",
+      "detail": "Add to snowflake:ANALYST (birthright for sales)"
+     },
+     {
+      "action": "remove_grant",
+      "system": "okta",
+      "edge_id": 160,
+      "target": "okta:support",
+      "detail": "Remove okta:support (birthright of previous team support)"
+     }
+    ]
+   }
+  }
+ }
+}

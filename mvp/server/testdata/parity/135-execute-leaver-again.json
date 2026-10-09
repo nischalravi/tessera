@@ -1,0 +1,13 @@
+{
+ "name": "execute-leaver-again",
+ "request": {
+  "method": "POST",
+  "path": "/api/hris/events/1/execute"
+ },
+ "response": {
+  "status": 400,
+  "body": {
+   "detail": "event already executed"
+  }
+ }
+}

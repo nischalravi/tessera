@@ -1,0 +1,16 @@
+{
+ "name": "hris-leaver-no-identity",
+ "request": {
+  "method": "POST",
+  "path": "/api/hris/events",
+  "body": {
+   "type": "leaver"
+  }
+ },
+ "response": {
+  "status": 400,
+  "body": {
+   "detail": "identity_id required"
+  }
+ }
+}

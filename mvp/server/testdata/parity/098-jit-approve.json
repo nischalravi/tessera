@@ -1,0 +1,35 @@
+{
+ "name": "jit-approve",
+ "request": {
+  "method": "POST",
+  "path": "/api/jit/requests/5/approve"
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "id": 5,
+   "identity": {
+    "id": 33,
+    "name": "Priya Ramaswamy",
+    "type": "human",
+    "status": "active",
+    "department": "Finance",
+    "title": "FP&A Analyst"
+   },
+   "group": {
+    "id": 24,
+    "name": "BreakGlassAdmin",
+    "system": "aws",
+    "privileged": true
+   },
+   "account": "okta:priya.ramaswamy@larkspur.example",
+   "justification": "Quarter close",
+   "duration_hours": 1.5,
+   "status": "approved",
+   "requested_at": "2026-10-08T09:30:00",
+   "decided_at": "2026-10-08T09:30:00",
+   "decided_by": "security-oncall@larkspur.example",
+   "expires_at": "2026-10-08T11:00:00"
+  }
+ }
+}

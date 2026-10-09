@@ -1,0 +1,18 @@
+{
+ "name": "hris-mover-no-team",
+ "request": {
+  "method": "POST",
+  "path": "/api/hris/events",
+  "body": {
+   "type": "mover",
+   "identity_id": 5,
+   "payload": {}
+  }
+ },
+ "response": {
+  "status": 400,
+  "body": {
+   "detail": "payload.to_team required"
+  }
+ }
+}

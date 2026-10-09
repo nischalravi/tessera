@@ -1,0 +1,81 @@
+{
+ "name": "graph-alice-perm",
+ "request": {
+  "method": "GET",
+  "path": "/api/graph?identity_id=5&perm_key=perm:1"
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "nodes": [
+    {
+     "id": "account:146",
+     "kind": "account",
+     "label": "github:alice-okafo",
+     "system": "github",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "account:5",
+     "kind": "account",
+     "label": "workday:emp-1005",
+     "system": "workday",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "account:69",
+     "kind": "account",
+     "label": "okta:alice.okafor@larkspur.example",
+     "system": "okta",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "identity:5",
+     "kind": "identity",
+     "label": "Alice Okafor",
+     "system": null,
+     "privileged": false,
+     "type": "human",
+     "status": "active",
+     "tags": [],
+     "environment": null
+    }
+   ],
+   "edges": [
+    {
+     "source": "identity:5",
+     "target": "account:146",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "identity:5",
+     "target": "account:5",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "identity:5",
+     "target": "account:69",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    }
+   ]
+  }
+ }
+}
