@@ -2,12 +2,39 @@
 
 | | |
 |---|---|
-| **Status** | Draft for review. Implementation-ready once open questions Q1–Q4 are answered. |
+| **Status** | Draft for review (v2: re-targeted to the Go backend). Implementation-ready once open questions Q2–Q4 are answered (Q1 is decided). |
 | **Phase / item** | Phase 1, step 1 (`docs/knowledge/README.md`, capability map A, rows 2–3; D3·M1, D3·M2, D5·M2) |
 | **Authors** | iam-architect, with iam-authz-expert (evaluation semantics) and iam-pam-nhi-expert (NHI, trust and escalation angle) |
 | **Reviewers needed** | iam-authz-expert: §5–§9 and the golden corpus (§14). iam-pam-nhi-expert: §11.4 and trust edges. iam-governance-expert: the evidence fields in §7.11. |
-| **Date** | 2026-10-08. AWS docs re-read on that date. Every AWS claim cites a source in §18. |
+| **Date** | 2026-10-08 (v1, Python); 2026-10-09 (v2, Go). AWS docs re-read on 2026-10-08. Every AWS claim cites a source in §18. Go library facts were checked on 2026-10-09 (§2.4). |
 | **Exit criteria served** | (1) On a sandbox AWS org, the evaluator agrees with AWS on **≥ 99.5 %** of sampled checks. (2) A policy PR shows exactly **who gains or loses which permission**. |
+
+---
+
+## Changes from v1 (Python)
+
+The founder decided that Tessera's backend is **Go**: API, auth, connectors, workflows and CLI, plus this AWS effective-permission engine. Rust is used only if profiling later shows Go is too slow. The frontend stays React + TypeScript. The Python MVP backend is being ported to Go under `mvp/server/` (module `github.com/nischalravi/tessera/mvp/server`, stdlib `net/http`, `log/slog`, `database/sql` with `modernc.org/sqlite`, plain SQL, Go table-driven tests and JSON parity fixtures in `mvp/server/testdata/parity/`). This design now targets that code, and follows the layout and test conventions of [`phase-0-platform-security.md`](phase-0-platform-security.md) v2.
+
+**Unchanged:** the evaluation semantics (§4, §7–§9), the scope cut (§3), the 17 ambiguity entries A1–A17 (with A12b) and their defaults and probes (§4.3), the golden corpus and its YAML format (§14), the harness design, strata, oracle routing and metrics (§13), the gates (§13.7), the SLOs (§12.1) and the PR order (§15). Pseudocode in §7–§9 is language-neutral and is kept as written; `None` there means "absent" (`nil` or the zero value in Go). What changed:
+
+| Area | v1 (Python) | v2 (Go) |
+|---|---|---|
+| Where the code goes | `mvp/backend/tessera/aws/…`, `tessera/authz/`, harness in `mvp/harness/` (`tessera_harness`) | `mvp/server/internal/aws/…`, `internal/authz`, connector in `internal/connectors/awsorg`, harness in `internal/aws/harness` + `cmd/tessera-harness` (§5) |
+| Role of the engine (D1) | Python reference; the spec's Rust EPE a later port tested against it | The Go engine is both the reference and the production EPE. Rust only if profiling shows Go misses §12.1, and then as a port that must reproduce this engine's output (§12.6, Q1) |
+| Data model | Frozen dataclasses, `Literal` and `Enum` | Go structs and typed enums with text marshalling; JSON field names keep the v1 snake_case so traces and `explanation_id` hashes keep their shape; immutability by construction (`snapshot.Builder`) plus a no-mutation test (§6.1) |
+| Persistence | SQLAlchemy models in `tessera/models_aws.py` | Plain SQL DDL in `internal/store/schema/`, rows read and written only through `store.TenantTx` (`repo_aws.go`); every table gains `tenant_id`, as Phase 0 §14 requires of all tables (§6.2) |
+| Glob matcher | "Linear-time glob" planned; §8.2 described it as an escaped regex | A hand-written, allocation-free matcher with no regexp and no recursion, O(\|p\|·\|s\|) worst case. Go's `regexp` (RE2) is used only as the test oracle (§8.5) |
+| Bitsets, IP sets, numbers, serialization, parallelism | `pyroaring`, `ipaddress`, `re`, `msgspec`, `multiprocessing` with fork | `RoaringBitmap/roaring/v2`, `net/netip` + `go4.org/netipx`, `math/big`, canonical JSON (`gowebpki/jcs`, as in Phase 0), goroutines over one shared read-only snapshot with `golang.org/x/sync/errgroup` (§12.6) |
+| Compiled catalog | `compiled/<version>.msgpack` | `compiled/<version>.json.gz` (canonical JSON, deterministic gzip header) (§10.2) |
+| Property tests | Hypothesis | Native fuzzing (`testing.F`) for byte-level targets; `pgregory.net/rapid` v1.3.0 for structured generators (symbolic soundness, atoms ≡ brute force), also run under `go test -fuzz` through `rapid.MakeFuzz` (§8.5, §15) |
+| Connector tests | `moto` plus botocore `Stubber` | AWS SDK for Go v2 stubbing: a Finalize-step middleware that returns typed outputs, and an `aws.HTTPClient` that replays recorded raw responses so the SDK's real deserializers run. No emulator (§11.1, §15 PR-7) |
+| Harness language and pin | Python + a `boto3` pin asserted in CI | Go + `aws-sdk-go-v2/service/iam` ≥ v1.64.3. The code references `OrderedOrganizationPolicyInputList` and `PolicyExclusionList`, so the pin is checked by the compiler (§13.1, §13.5) |
+| Cassettes | Recorded oracle responses | Recorded at the SDK's HTTP layer by the same replay client the connector tests use (`internal/aws/awstest`) (§13.1) |
+| Golden corpus location | `mvp/backend/tests/aws_eval/golden/*.yaml`, `test_golden.py` | `mvp/server/testdata/aws/golden/*.yaml`, `internal/aws/eval/golden_test.go` (`TestGolden`). Format and all 74 cases unchanged (§14) |
+| Test commands | `pytest`, a `slow` marker | `go test -race ./...` (`./run.sh test`), `go test -run TestGolden ./internal/aws/eval`, `go test -fuzz=… -fuzztime=5m` nightly, build tag `slow` for perf tests (§15) |
+| Supply-chain gates | (none named) | `go vet`, `staticcheck`, `govulncheck`, `gosec` and the licence scan, as in Phase 0 |
+| Cedar | Papers only (the method behind D1) | Adds the status and gaps of `cedar-go` v1.8.0 (§2.4). The evaluator does not depend on it |
+| PR-1 precondition | None | **Blocked until the Go port PR (branch `go-backend`) is merged** |
 
 ---
 
@@ -15,7 +42,7 @@
 
 | # | Decision | Why |
 |---|---|---|
-| D1 | Build the evaluator as a **pure-Python reference implementation** in `mvp/backend/tessera/aws/`. Its inputs are immutable snapshots and it has no I/O. The Rust Effective-Permission Engine (spec §5, §6) will later be a port of it and is differentially tested against it. | The MVP is Python. Correctness comes before speed in Phase 1. A readable reference becomes the oracle for every later implementation, which is the same approach Cedar took (a Lean model checked against Rust; see §2.3). |
+| D1 | Build the evaluator as a **pure-Go implementation** in `mvp/server/internal/aws/`. Its inputs are immutable snapshots and it has no I/O. It is both the readable reference and the spec's Effective-Permission Engine (spec §5, §6). A Rust port happens only if profiling shows Go is too slow (§12.6), and it would then be differentially tested against this engine. | The backend is Go (founder decision, 2026-10-09). Correctness comes before speed in Phase 1. A readable reference becomes the oracle for every later implementation, which is the same approach Cedar took (a Lean model checked against Rust; see §2.3). |
 | D2 | Every decision has **three values**: `ALLOW`, `DENY` or `CONDITIONAL`. A `CONDITIONAL` decision carries a residual predicate. Each decision also carries a **fidelity flag**: `EXACT`, `APPROXIMATE` or `UNSUPPORTED`, with reasons. | "Can X ever do Y" questions have context we cannot know. A wrong confident answer is worse than an honest "it depends" (D3·§8.2). |
 | D3 | When the AWS docs are ambiguous, **over-approximate access**: report the more permissive reading, mark it `APPROXIMATE`, and register a probe that settles it against live AWS (§4.3). | For a security product, missing a real grant is worse than flagging one that might exist. Probes convert approximations into `EXACT` over time. |
 | D4 | The action, resource and condition-key catalog comes from **AWS's official Service Reference JSON** (`servicereference.us-east-1.amazonaws.com`). It is snapshotted, versioned and pinned per decision. **iam-dataset (MIT)** is a supplementary source. We take **no AGPL code or data** (PMapper, iam-simulate). | It is first-party, machine-readable and updated within 24 hours. The licences are compatible with ours. |
@@ -30,7 +57,7 @@
 
 ## 1. Problem and users
 
-Tessera's wedge is access-as-code with a pre-merge blast-radius diff (spec D1). The diff is only worth something if the effective permissions under it match what AWS enforces. Knowledge doc 03 §1 says "A blast-radius number that disagrees with the cloud's real decision is worse than having no number." Today the MVP does not evaluate AWS at all. `connectors/demo_company.py` hard-codes `(action, resource)` permission rows on roles, and `graph.py` treats any reachable `perm` node as granted. There are no denies, guardrails, conditions or resource policies.
+Tessera's wedge is access-as-code with a pre-merge blast-radius diff (spec D1). The diff is only worth something if the effective permissions under it match what AWS enforces. Knowledge doc 03 §1 says "A blast-radius number that disagrees with the cloud's real decision is worse than having no number." Today the MVP does not evaluate AWS at all. `connectors/demo_company.py` (ported as `internal/connectors/demo_company.go`) hard-codes `(action, resource)` permission rows on roles, and the graph (`internal/graph`) treats any reachable `perm` node as granted. There are no denies, guardrails, conditions or resource policies.
 
 Users and their questions:
 - **Marcus (platform engineer):** "If I merge this PR, who gains or loses `s3:GetObject` on `prod-pii`?"
@@ -81,11 +108,38 @@ Users and their questions:
 
 **No permissively licensed, neutral IAM evaluation corpus exists.** The corpus in §14 is our own, and every case is labelled with the source that justifies it.
 
+### 2.4 Go libraries and Cedar's Go implementation (verified 2026-10-09)
+
+Versions, dates and licences were checked against `proxy.golang.org`, the GitHub API and `api.osv.dev` on 2026-10-09. Every module is pinned in `mvp/server/go.mod`, and `govulncheck` gates every PR.
+
+| Module | Version (release date) | Licence | Maintenance and advisories | Use |
+|---|---|---|---|---|
+| `github.com/aws/aws-sdk-go-v2` (core) and service modules `service/iam`, `service/organizations`, `service/sts`, `service/accessanalyzer`, `service/s3`; `github.com/aws/smithy-go` | core v1.47.2, `iam` v1.64.3, `organizations` v1.61.2, `sts` v1.51.3, `accessanalyzer` v1.57.3, `s3` v1.114.2 (all 2026-10-08); smithy-go v1.28.4 (2026-10-07) | Apache-2.0 | Released by AWS several times a week. One 2026 advisory touches modules we use: **GO-2026-5764 / CVE-2026-89090 / GHSA-xmrv-pmrh-hhx2**, a panic in the EventStream decoder, fixed in `aws/protocol/eventstream` v1.7.8, `service/s3` v1.97.3, `service/lambda` v1.88.5 and `service/cloudwatchlogs` v1.65.0, among others. Our floors are above every fixed version. | The connector (§11.1), harness oracles and probes (§13), and the stubbing in tests. `service/iam` v1.64.3 has `SimulateCustomPolicyInput.OrderedOrganizationPolicyInputList` and `SimulatePrincipalPolicyInput.PolicyExclusionList` (checked in source) |
+| `github.com/RoaringBitmap/roaring/v2` | v2.29.0 (2026-09-21) | Apache-2.0 | Active; no OSV advisories | Action bitsets and envelopes (§12.3) |
+| `go4.org/netipx` | v0.0.0-20260823151212-3075585bcbeb (no tagged releases; last commit 2026-08-23) | BSD-3-Clause | Small and stable; no advisories. Pinned by pseudo-version | `IPSetBuilder` for CIDR union, intersection and complement in the simplifier (§9.5). Parsing uses the standard library's `net/netip` |
+| `pgregory.net/rapid` | v1.3.0 (2026-04-30; last commit 2026-09-04) | **MPL-2.0** | Active, one main maintainer; no advisories. MPL-2.0 is file-level copyleft. We use it unmodified and only from `_test.go` files, so it never ships in a binary. The licence scan allowlists it as test-only. If it goes dormant, the same properties run as native fuzz targets with hand-written decoders | Structured property tests (§8.5, §15) |
+| `go.yaml.in/yaml/v3` | v3.0.5 (2026-07-26) | MIT and Apache-2.0 | The YAML organisation's maintained fork; no advisories; already in the port's `go.mod` | Golden corpus (§14) and catalog overlays (§10) |
+| `golang.org/x/sync` | v0.24.0 (2026-09-23) | BSD-3-Clause | Go project; no advisories | `errgroup` worker pools (§12.6) |
+| `github.com/gowebpki/jcs` | v1.0.2 | Apache-2.0 | As verified in Phase 0 §6 | Canonical JSON for `explanation_id`, snapshot ids and the compiled catalog hash |
+| `github.com/cedar-policy/cedar-go` | v1.8.0 (2026-06-01) | Apache-2.0 | See below | Not a dependency of the evaluator |
+| Z3 official Go bindings (`src/api/go` in `Z3Prover/z3`) | z3-5.1.0 (2026-08-16) | MIT | Active; **requires cgo** | Phase 2 candidate only (Q5) |
+
+**Standard library instead of dependencies:** `net/netip` (IP parsing), `math/big` (exact decimal comparison for `Numeric*`), `time` (Date operators), `encoding/base64` (`BinaryEquals`), `crypto/sha256` (content hashes), `compress/gzip`, `encoding/json`, `regexp` (only as a test oracle). The AWS SDK is imported only by the connector, the harness and `internal/aws/awstest`, never by `eval/` (enforced in `internal/archtest`, §5).
+
+**Status of `cedar-go` (checked at v1.8.0, 2026-10-09).** Cedar's Go implementation is maintained under the `cedar-policy` organisation (Apache-2.0, last commit 2026-07-15, releases v1.5.2 to v1.8.0 between February and June 2026, no OSV advisories). It has the core authorizer, JSON marshalling, every core and extension type (including RFC 80 datetime and duration), the integration test suite, and schema parsing. Its v1.8.0 release changed authorization results for IPv6 zone identifiers and IPv4-mapped loopback and multicast addresses to match the Rust implementation, so upgrades need a policy audit. **Gaps** compared with the Rust implementation (Cedar v4.13.0, 2026-09-15), as its README states:
+- the schema validator is experimental only (`x/exp/schema`, outside semantic-versioning guarantees);
+- no partial evaluation in the public API (an experimental `x/exp/batch` uses it internally), so no residual policies;
+- no policy templates;
+- no formatter and no CLI;
+- no symbolic compiler: Cedar's `cedar-policy-symcc` (v0.7.0, 2026-09-15) is Rust-only, so Cedar's SMT analysis is not available from Go.
+
+**What this means for Tessera.** This evaluator does not use Cedar. It evaluates AWS's IAM policy language, and its residuals (§9.4) are its own. Cedar matters to two other Phase 1 items. (1) The **Cedar ↔ IAM compilation** item (§2.2) can parse and authorize Cedar in Go with `cedar-go`, but it must not rely on schema validation until `x/exp/schema` graduates, and it cannot use templates. (2) Any **formal analysis** of Cedar policies (equivalence, "never permits") needs the Rust `symcc` crate as a sidecar or a service boundary, or waits for Phase 2's SMT work (Q5). The method we borrow from Cedar (a readable reference, differential random testing and type-directed generators) is language-independent and is kept.
+
 ---
 
 ## 3. Scope cut: exact, approximated, unsupported
 
-Every `Decision` has a `fidelity` of `EXACT`, `APPROXIMATE` or `UNSUPPORTED`, plus `fidelity_reasons: list[FidelityReason]`. A decision is only as exact as the least-exact component that **could have changed the outcome**. Components that were evaluated but could not flip the result do not downgrade it. For example, an approximated VPC endpoint policy cannot downgrade a request that is already explicitly denied by an identity policy (§7.9).
+Every `Decision` has a `fidelity` of `EXACT`, `APPROXIMATE` or `UNSUPPORTED`, plus `FidelityReasons []FidelityReason` (JSON `fidelity_reasons`). A decision is only as exact as the least-exact component that **could have changed the outcome**. Components that were evaluated but could not flip the result do not downgrade it. For example, an approximated VPC endpoint policy cannot downgrade a request that is already explicitly denied by an identity policy (§7.9).
 
 ### 3.1 Exact (`EXACT`)
 
@@ -249,352 +303,486 @@ Each entry gives the doc conflict, our default (chosen under D3), and the live p
 ## 5. Architecture
 
 ```
-            ┌───────────────────────── tessera/aws/ ─────────────────────────────┐
- connector  │  ingest/        model.py          catalog/            eval/          │
- (read-only)│  aws_org.py ──► Snapshot (frozen) ◄── Catalog(v=2026-10-08) ──► engine.py│
-  AWS APIs ─┼► aws_iam.py      PolicyDoc/Stmt     servicereference                 │ │
-            │  aws_res.py      Principal/OrgNode  + iam-dataset                    ▼ │
-            │                  TrustEdge/Grant                     match.py  cond.py│
-            │                                                     (action/res/princ)│
-            │  index/ (atoms, inverted idx) ◄────────────────────── explain.py      │
-            │  query.py  : can(), effective_permissions(), who_can(), diff()       │
-            └──────────────┬──────────────────────────┬──────────────────────────────┘
-                           │ EvaluatedGrant rows       │ Decision + Explanation
-                           ▼                           ▼
-             tessera/graph.py (GraphSnapshot)     api/app.py  /api/aws/*
-             simulate.py / leastpriv.py / nhi.py   PR comment renderer
+            ┌──────────────────────── mvp/server/internal/aws/ ──────────────────────────────┐
+ connector  │  snapshot/            model/             catalog/               eval/            │
+ (read-only)│  Builder ───────────► Snapshot (r/o) ◄── Catalog(v=2026-10-08) ──► engine.go      │
+  AWS APIs ─┼► (fed by              PolicyDoc/Stmt     servicereference                 │      │
+  via       │   connectors/awsorg)  Principal/OrgNode  + iam-dataset                    ▼      │
+  aws-sdk-  │                       TrustEdge/Grant          glob/ ◄─────── match.go  cond.go  │
+  go-v2     │                                                               (action/res/princ)│
+            │  index/ (atoms, inverted idx) ◄─────────────────────────────── explain.go        │
+            │  query/ : Can(), EffectivePermissions(), WhoCan(), Diff()                        │
+            └──────────────┬────────────────────────────────┬─────────────────────────────────┘
+                           │ EvaluatedGrant rows             │ Decision + Explanation
+                           ▼                                 ▼
+             internal/graph (Snapshot)                  internal/api  /api/aws/*
+             internal/simulate, leastpriv, nhi          aws/render: PR comment renderer
                            ▲
- harness/  (separate package `tessera_harness/`, never imported by the server)
+ aws/harness/ + cmd/tessera-harness  (never imported by the server binary; enforced by internal/archtest)
    sampler ─► request gen ─► oracle router ─► {SimCustom, SimPrincipal, Probe, AA}
           └──────────────► engine ──────────► comparator ─► triage DB ─► metrics/CI
 ```
 
+Package layout (all under `mvp/server/`, module `github.com/nischalravi/tessera/mvp/server`):
+
+```
+internal/
+  authz/                  platform-neutral: Outcome, DenyKind, Fidelity, Decision, ExplanationStep, StmtRef,
+                          Tri, Residual (core.go, tri.go, residual.go, simplify.go, render.go)
+  aws/
+    model/                Snapshot, Principal, PolicyDoc, Statement, OrgNode, KMSGrant, S3BucketState, TrustEdge
+    policy/               parse.go (strict JSON, string-or-list, spans), lint.go, limits.go
+    glob/                 the linear-time wildcard matcher (§8.5), its own package so it can be fuzzed alone
+    catalog/              fetch.go, compile.go, loader.go, catalog.go (Catalog API, §10.2)
+    eval/                 request.go, engine.go, match.go, arn.go, principal.go, cond.go, context.go,
+                          variables.go, kms.go, s3.go, fidelity.go, explain.go
+    snapshot/             builder.go (the only constructor of model.Snapshot), hash.go, apply.go (PolicyChange)
+    index/                atoms.go, envelope.go, inverted.go, memo.go
+    query/                query.go: Can, EffectivePermissions, WhoCan, Diff
+    render/               prcomment.go, narrative.go
+    awstest/              test helpers: SDK middleware stubs and HTTP replay (§11.1, §13.1); test-only
+    harness/              sampler, oracles, probes, cassettes, comparator, metrics, minimizer, triage
+  connectors/awsorg/      the read-only AWS connector (§11.1)
+  store/                  model_aws.go, repo_aws.go, schema/00NN_aws.sql (§6.2)
+cmd/
+  tessera-harness/        the harness binary (nightly and replay jobs)
+catalog/aws/              catalog snapshots, overlays and compiled artifacts (§10.2)
+testdata/aws/             golden corpus, cassettes, HTTP replay fixtures
+```
+
 Design rules:
-- **Purity.** `eval/` functions take `(Snapshot, Catalog, EvaluationRequest)` and return `Decision`. They do no I/O and read no clock (time arrives in the request context). This makes caching, replay and differential testing trivial.
-- **Determinism.** Iteration orders are sorted. Explanations come out in a stable order, so traces can be diffed between versions.
+- **Purity.** `eval` functions take `(*model.Snapshot, *catalog.Catalog, *eval.EvaluationRequest)` and return `*authz.Decision`. They do no I/O and read no clock (time arrives in the request context). This makes caching, replay and differential testing trivial. `internal/archtest` enforces it: `internal/aws/{eval,glob,model,policy,index,query}` may not import `net`, `net/http`, `os`, `database/sql`, any `aws-sdk-go-v2` package or `internal/store`, and a static check rejects calls to `time.Now` in them.
+- **Determinism.** Iteration orders are sorted. Go randomizes map iteration, so no code in `eval`, `index`, `query` or `render` ranges over a map without sorting its keys first, and the snapshot builder stores every list sorted. Explanations come out in a stable order, so traces can be diffed between versions. The trace-determinism test (PR-5) evaluates every golden case repeatedly and with shuffled insertion orders and requires byte-identical JSON.
 - **Versioning.** Every `Decision` records `engine_version`, `catalog_version` and `snapshot_id` (a content hash). This meets design rule 2 in the README ("every decision records the policy version it used").
-- **Platform-neutral core.** `Decision`, `ExplanationStep`, `Tri` and `Residual` live in `tessera/authz/core.py`, so the Azure and GCP evaluators (Phase 3) can reuse them.
+- **Platform-neutral core.** `Decision`, `ExplanationStep`, `Tri` and `Residual` live in `internal/authz`, so the Azure and GCP evaluators (Phase 3) can reuse them.
+- **Concurrency.** A built `Snapshot` and a loaded `Catalog` are read-only and shared by any number of goroutines without locks. Evaluation allocates its trace per call. Tests run under `-race`.
 
 ---
 
 ## 6. Data model
 
 There are two layers:
-- **(a) Frozen in-memory dataclasses** that the engine evaluates over (`tessera/aws/model.py`).
-- **(b) SQLAlchemy tables** that persist raw native documents and computed results (`tessera/models_aws.py`). They are added next to `models.py`, which is not modified.
+- **(a) In-memory Go structs** that the engine evaluates over (`internal/aws/model`, plus the platform-neutral types in `internal/authz`).
+- **(b) SQL tables** that persist raw native documents and computed results (`internal/store/schema/00NN_aws.sql`, with row structs in `internal/store/model_aws.go` and queries in `internal/store/repo_aws.go`). They are added next to the existing schema, which is not modified.
 
 Raw policy JSON is always stored verbatim alongside its normalized form, so the evidence is the exact bytes AWS holds.
 
-### 6.1 Engine dataclasses
+**Conventions for the Go types.**
+- **Immutability.** Go has no frozen structs. A `model.Snapshot` is constructed only by `snapshot.Builder.Build()`, which validates, sorts every slice and computes the content hash. After `Build()` nothing writes to it. `TestEvalDoesNotMutateSnapshot` hashes the snapshot before and after evaluating every golden case (under `-race`) and fails on any difference.
+- **Absent values.** An empty string means "none" for ARNs, ids and names; a nil pointer or nil slice means "absent" where empty and absent differ (for example `Actions` versus `NotActions`).
+- **Enums** are small integer types with `String`, `MarshalText` and `UnmarshalText`, so their JSON spelling is the v1 lower-case string (`"allow"`, `"kms_key_policy"`, …).
+- **JSON field names** are the v1 snake_case names, set with struct tags (omitted below for readability). The canonical JSON of a trace, and so its `explanation_id`, therefore has the same shape as in v1.
 
-```python
-# tessera/authz/core.py  (platform-neutral)
-from __future__ import annotations
-from dataclasses import dataclass, field
-from enum import Enum
-from typing import Literal, Union
+### 6.1 Engine types
 
-class Outcome(str, Enum):
-    ALLOW = "allow"; DENY = "deny"; CONDITIONAL = "conditional"
+```go
+// internal/authz/core.go  (platform-neutral)
+package authz
 
-class DenyKind(str, Enum):
-    EXPLICIT = "explicit"            # a Deny statement matched
-    IMPLICIT = "implicit"            # nothing allowed, or a required layer had no Allow
-    GUARDRAIL = "guardrail"          # non-policy control: S3 BPA, KMS cross-account op allowlist
+type Outcome uint8
 
-class Fidelity(str, Enum):
-    EXACT = "exact"; APPROXIMATE = "approximate"; UNSUPPORTED = "unsupported"
+const (
+	Allow       Outcome = iota + 1 // "allow"
+	Deny                           // "deny"
+	Conditional                    // "conditional"
+)
 
-@dataclass(frozen=True)
-class FidelityReason:
-    code: str                        # e.g. "AMBIGUITY:A3", "VPCE_POLICY_UNKNOWN"
-    detail: str
-    outcome_sensitive: bool          # True if flipping this assumption could flip the decision
+type DenyKind uint8 // the zero value means "no deny kind"
 
-# Residual predicates (three-valued logic, §9.4)
-@dataclass(frozen=True)
-class Atom:                          # one (operator, key, values) test, after variable substitution
-    op: str                          # canonical operator, e.g. "StringLike", "IpAddress", "Null"
-    key: str                         # lower-cased context key, e.g. "aws:sourceip"
-    values: tuple[str, ...]
-    qualifier: Literal["", "ForAllValues", "ForAnyValue"] = ""
-    if_exists: bool = False
-    negated: bool = False            # derived from the operator family; kept explicit for rendering
-    source: "StmtRef | None" = None  # which statement contributed it
+const (
+	Explicit  DenyKind = iota + 1 // a Deny statement matched
+	Implicit                      // nothing allowed, or a required layer had no Allow
+	Guardrail                     // non-policy control: S3 BPA, KMS cross-account op allowlist
+)
 
-@dataclass(frozen=True)
-class And: terms: tuple["Residual", ...]
-@dataclass(frozen=True)
-class Or:  terms: tuple["Residual", ...]
-@dataclass(frozen=True)
-class Not: term: "Residual"
-Residual = Union[bool, And, Or, Not, Atom]
+type Fidelity uint8
+
+const (
+	Exact       Fidelity = iota + 1 // "exact"
+	Approximate                     // "approximate"
+	Unsupported                     // "unsupported"
+)
+
+type FidelityReason struct {
+	Code             string // e.g. "AMBIGUITY:A3", "VPCE_POLICY_UNKNOWN"
+	Detail           string
+	OutcomeSensitive bool   // true if flipping this assumption could flip the decision
+}
+
+// Residual predicates (three-valued logic, §9.4). Residual is a closed sum type:
+// only the five types below implement it (the method is unexported).
+type Residual interface{ isResidual() }
+
+type Const bool                    // true / false
+type And struct{ Terms []Residual }
+type Or struct{ Terms []Residual }
+type Not struct{ Term Residual }
+
+type Qualifier uint8 // NoQualifier (""), ForAllValues, ForAnyValue
+
+type Atom struct { // one (operator, key, values) test, after variable substitution
+	Op        string    // canonical operator, e.g. "StringLike", "IpAddress", "Null"
+	Key       string    // lower-cased context key, e.g. "aws:sourceip"
+	Values    []string
+	Qualifier Qualifier // default NoQualifier
+	IfExists  bool
+	Negated   bool      // derived from the operator family; kept explicit for rendering
+	Source    *StmtRef  // which statement contributed it; nil if none
+}
+
+func (Const) isResidual() {}
+func (And) isResidual()   {}
+func (Or) isResidual()    {}
+func (Not) isResidual()   {}
+func (Atom) isResidual()  {}
 ```
 
-```python
-# tessera/aws/model.py
-PrincipalKind = Literal[
-    "iam_user", "iam_role",                 # entities (a role never makes a request itself)
-    "role_session",                         # AssumeRole / WebIdentity / SAML / EC2 / Identity Center sessions
-    "federated_user_session",               # GetFederationToken
-    "root",                                 # account root user (including AssumeRoot sessions)
-    "service",                              # service principal, e.g. "s3.amazonaws.com"
-    "anonymous",
-]
+```go
+// internal/aws/model/model.go
+package model
 
-@dataclass(frozen=True)
-class Principal:
-    arn: str                                 # requester ARN (the session ARN for sessions)
-    kind: PrincipalKind
-    account_id: str | None                   # None for service and anonymous
-    entity_arn: str | None                   # role ARN for role sessions; the IAM user's ARN for federated sessions
-    unique_id: str | None                    # AIDA…/AROA…, for trust-policy principal-ID matching
-    path: str = "/"
-    is_service_linked: bool = False          # role path /aws-service-role/
-    tags: dict[str, str] = field(default_factory=dict)          # entity tags
-    session_tags: dict[str, str] = field(default_factory=dict)  # override entity tags with the same key
-    transitive_tag_keys: frozenset[str] = frozenset()
-    session_policy_ids: tuple[str, ...] = ()                    # PolicyDoc ids (inline + PolicyArns)
-    source_identity: str | None = None
-    group_arns: tuple[str, ...] = ()                            # users only
-    boundary_policy_id: str | None = None
-    identity_policy_ids: tuple[str, ...] = ()                   # resolved attachments (user + groups, or role)
-    federated_provider: str | None = None                       # OIDC/SAML provider ARN
-    chain: tuple[str, ...] = ()                                 # role-chain ARNs, oldest first
+type PrincipalKind uint8
 
-class PolicyKind(str, Enum):
-    IDENTITY = "identity"; BOUNDARY = "boundary"; SESSION = "session"
-    SCP = "scp"; RCP = "rcp"; RESOURCE = "resource"; TRUST = "trust"; KMS_KEY = "kms_key_policy"
-    VPCE = "vpc_endpoint"; S3_ACCESS_POINT = "s3_access_point"; RAM = "ram_synthetic"
+const (
+	IAMUser              PrincipalKind = iota + 1 // "iam_user"   } entities (a role never makes a request itself)
+	IAMRole                                       // "iam_role"   }
+	RoleSession                                   // AssumeRole / WebIdentity / SAML / EC2 / Identity Center sessions
+	FederatedUserSession                          // GetFederationToken
+	Root                                          // account root user (including AssumeRoot sessions)
+	Service                                       // service principal, e.g. "s3.amazonaws.com"
+	Anonymous
+)
 
-@dataclass(frozen=True)
-class PolicyDoc:
-    id: str                                  # stable: sha256(kind | source_arn | version_id | raw bytes)
-    kind: PolicyKind
-    source_arn: str                          # policy ARN, "<resource-arn>#policy" or "<role-arn>#trust"
-    version_id: str | None                   # managed-policy default version, or SCP/RCP content hash
-    language_version: Literal["2012-10-17", "2008-10-17"] | None   # anything but 2012-10-17 → variables are literal
-    raw_json: str                            # verbatim bytes as fetched
-    statements: tuple["Statement", ...]
-    aws_managed: bool = False
-    fetched_at: str = ""                     # ISO 8601, for staleness
+type Principal struct {
+	ARN               string            // requester ARN (the session ARN for sessions)
+	Kind              PrincipalKind
+	AccountID         string            // "" for service and anonymous
+	EntityARN         string            // role ARN for role sessions; the IAM user's ARN for federated sessions
+	UniqueID          string            // AIDA…/AROA…, for trust-policy principal-ID matching
+	Path              string            // default "/"
+	IsServiceLinked   bool              // role path /aws-service-role/
+	Tags              map[string]string // entity tags
+	SessionTags       map[string]string // override entity tags with the same key
+	TransitiveTagKeys []string          // sorted, unique
+	SessionPolicyIDs  []string          // PolicyDoc ids (inline + PolicyArns)
+	SourceIdentity    string
+	GroupARNs         []string          // users only
+	BoundaryPolicyID  string            // "" if no boundary
+	IdentityPolicyIDs []string          // resolved attachments (user + groups, or role)
+	FederatedProvider string            // OIDC/SAML provider ARN
+	Chain             []string          // role-chain ARNs, oldest first
+}
 
-@dataclass(frozen=True)
-class Statement:
-    policy_id: str
-    index: int                               # 0-based position in the Statement array
-    sid: str | None
-    effect: Literal["Allow", "Deny"]
-    actions: "PatternSet | None"             # exactly one of actions / not_actions (validated at parse)
-    not_actions: "PatternSet | None"
-    resources: "PatternSet | None"           # both None in a resource policy ⇒ implied "this resource"
-    not_resources: "PatternSet | None"
-    principals: "PrincipalSet | None"        # resource policies only
-    not_principals: "PrincipalSet | None"
-    condition: tuple[Atom, ...]              # conjunction; variables still unresolved (resolved per request)
-    span: tuple[int, int, int, int] | None   # (start_line, start_col, end_line, end_col) in raw_json
+type PolicyKind uint8 // Identity, Boundary, Session, SCP, RCP, Resource, Trust, KMSKey, VPCE, S3AccessPoint, RAM
+// Text forms: "identity", "boundary", "session", "scp", "rcp", "resource", "trust",
+// "kms_key_policy", "vpc_endpoint", "s3_access_point", "ram_synthetic"
 
-@dataclass(frozen=True)
-class PolicyAttachment:
-    policy_id: str
-    target_arn: str                          # user / group / role / OU / account / root / resource
-    via: tuple[str, ...]                     # provenance path, e.g. ("user/alice", "group/eng")
-    attachment_type: Literal["inline", "managed", "boundary", "scp", "rcp", "resource", "session", "trust"]
+type PolicyDoc struct {
+	ID              string      // stable: sha256(kind | source_arn | version_id | raw bytes)
+	Kind            PolicyKind
+	SourceARN       string      // policy ARN, "<resource-arn>#policy" or "<role-arn>#trust"
+	VersionID       string      // managed-policy default version, or SCP/RCP content hash; "" if none
+	LanguageVersion string      // "2012-10-17", "2008-10-17" or ""; anything but 2012-10-17 → variables are literal
+	RawJSON         []byte      // verbatim bytes as fetched
+	Statements      []Statement
+	AWSManaged      bool
+	FetchedAt       time.Time   // for staleness; zero if unknown
+}
 
-@dataclass(frozen=True)
-class OrgNode:
-    id: str                                  # r-xxxx / ou-xxxx / 123456789012
-    kind: Literal["root", "ou", "account"]
-    parent_id: str | None
-    name: str
-    scp_ids: tuple[str, ...]                 # SCPs attached at THIS level
-    rcp_ids: tuple[str, ...]                 # RCPs attached at THIS level
+type Effect uint8 // EffectAllow, EffectDeny
 
-@dataclass(frozen=True)
-class Organization:
-    org_id: str
-    management_account_id: str
-    nodes: dict[str, OrgNode]
-    scp_enabled: bool
-    rcp_enabled: bool
-    def path_to(self, account_id: str) -> tuple[OrgNode, ...]: ...   # root → … → account
+type Statement struct {
+	PolicyID      string
+	Index         int           // 0-based position in the Statement array
+	Sid           string
+	Effect        Effect
+	Actions       *PatternSet   // exactly one of Actions / NotActions is non-nil (validated at parse)
+	NotActions    *PatternSet
+	Resources     *PatternSet   // both nil in a resource policy ⇒ implied "this resource"
+	NotResources  *PatternSet
+	Principals    *PrincipalSet // resource policies only
+	NotPrincipals *PrincipalSet
+	Condition     []authz.Atom  // conjunction; variables still unresolved (resolved per request)
+	Span          *Span         // {StartLine, StartCol, EndLine, EndCol} in RawJSON; nil if unknown
+}
 
-@dataclass(frozen=True)
-class Boundary:                               # convenience view; a boundary is a PolicyDoc plus an attachment
-    entity_arn: str
-    policy_id: str
+type AttachmentType uint8 // inline, managed, boundary, scp, rcp, resource, session, trust
 
-@dataclass(frozen=True)
-class ResourcePolicy:
-    resource_arn: str
-    kind: PolicyKind                         # RESOURCE / TRUST / KMS_KEY / S3_ACCESS_POINT / VPCE
-    policy_id: str
-    requires_explicit_allow: bool            # trust policies, KMS key policies, and the §7.4.3 table
+type PolicyAttachment struct {
+	PolicyID       string
+	TargetARN      string         // user / group / role / OU / account / root / resource
+	Via            []string       // provenance path, e.g. ["user/alice", "group/eng"]
+	AttachmentType AttachmentType
+}
 
-@dataclass(frozen=True)
-class KmsGrant:
-    key_arn: str; grant_id: str
-    grantee_principal: str | None; grantee_service_principal: str | None
-    operations: frozenset[str]               # "Decrypt", "GenerateDataKey", ...
-    constraints_ec_equals: dict[str, str] | None
-    constraints_ec_subset: dict[str, str] | None
-    constraint_source_arn: str | None
-    retiring_principal: str | None
-    created_at: str
+type OrgNodeKind uint8 // OrgRoot ("root"), OrgOU ("ou"), OrgAccount ("account")
 
-@dataclass(frozen=True)
-class S3BucketState:
-    bucket_arn: str; owner_account: str
-    object_ownership: Literal["BucketOwnerEnforced", "BucketOwnerPreferred", "ObjectWriter"]
-    bucket_acl: tuple["AclGrant", ...]
-    bpa_bucket: "Bpa"; bpa_account: "Bpa"; bpa_org: bool | None     # org level is all-or-none
-    policy_is_public: bool                   # computed per §7.6.2
+type OrgNode struct {
+	ID       string   // r-xxxx / ou-xxxx / 123456789012
+	Kind     OrgNodeKind
+	ParentID string   // "" for the root
+	Name     string
+	SCPIDs   []string // SCPs attached at THIS level
+	RCPIDs   []string // RCPs attached at THIS level
+}
 
-@dataclass(frozen=True)
-class TrustEdge:                              # materialized "who can become role R" (§11.4)
-    from_principal_arn: str                  # user / role / provider / service / account root
-    to_role_arn: str
-    mechanism: Literal["AssumeRole", "AssumeRoleWithWebIdentity", "AssumeRoleWithSAML", "service", "PassRole"]
-    decision: Outcome                        # ALLOW or CONDITIONAL
-    residual: Residual                       # e.g. sts:ExternalId == "x", or token sub like "repo:org/*"
-    explanation_id: str
+type Organization struct {
+	OrgID               string
+	ManagementAccountID string
+	Nodes               map[string]*OrgNode
+	SCPEnabled          bool
+	RCPEnabled          bool
+}
 
-@dataclass(frozen=True)
-class Snapshot:
-    id: str                                  # content hash
-    taken_at: str
-    org: Organization | None
-    principals: dict[str, Principal]         # entities plus synthetic session templates
-    policies: dict[str, PolicyDoc]
-    attachments: tuple[PolicyAttachment, ...]
-    resource_policies: dict[str, tuple[ResourcePolicy, ...]]   # by resource ARN
-    kms_grants: dict[str, tuple[KmsGrant, ...]]
-    s3: dict[str, S3BucketState]
-    resources: dict[str, "Resource"]         # arn → type, account, region, tags
-    vpce_policies: dict[str, str]            # VPC endpoint id → PolicyDoc id
-    canonical_ids: dict[str, str]            # S3 canonical user id → account id
+func (o *Organization) PathTo(accountID string) []*OrgNode // root → … → account
+
+type Boundary struct { // convenience view; a boundary is a PolicyDoc plus an attachment
+	EntityARN string
+	PolicyID  string
+}
+
+type ResourcePolicy struct {
+	ResourceARN           string
+	Kind                  PolicyKind // Resource / Trust / KMSKey / S3AccessPoint / VPCE
+	PolicyID              string
+	RequiresExplicitAllow bool       // trust policies, KMS key policies, and the §7.4.3 table
+}
+
+type KMSGrant struct {
+	KeyARN                  string
+	GrantID                 string
+	GranteePrincipal        string            // "" if none
+	GranteeServicePrincipal string            // "" if none
+	Operations              []string          // sorted set: "Decrypt", "GenerateDataKey", ...
+	ConstraintsECEquals     map[string]string // nil if absent
+	ConstraintsECSubset     map[string]string // nil if absent
+	ConstraintSourceARN     string
+	RetiringPrincipal       string
+	CreatedAt               time.Time
+}
+
+type S3BucketState struct {
+	BucketARN       string
+	OwnerAccount    string
+	ObjectOwnership string     // "BucketOwnerEnforced" | "BucketOwnerPreferred" | "ObjectWriter"
+	BucketACL       []ACLGrant
+	BPABucket       BPA
+	BPAAccount      BPA
+	BPAOrg          *bool      // org level is all-or-none; nil if unknown
+	PolicyIsPublic  bool       // computed per §7.6.2
+}
+
+type TrustMechanism uint8 // AssumeRole, AssumeRoleWithWebIdentity, AssumeRoleWithSAML, service, PassRole
+
+type TrustEdge struct { // materialized "who can become role R" (§11.4)
+	FromPrincipalARN string         // user / role / provider / service / account root
+	ToRoleARN        string
+	Mechanism        TrustMechanism
+	Decision         authz.Outcome  // Allow or Conditional
+	Residual         authz.Residual // e.g. sts:ExternalId == "x", or token sub like "repo:org/*"
+	ExplanationID    string
+}
+
+type Snapshot struct {
+	ID               string                      // content hash
+	TakenAt          time.Time
+	Org              *Organization               // nil if the accounts are not in an organization
+	Principals       map[string]*Principal       // entities plus synthetic session templates
+	Policies         map[string]*PolicyDoc
+	Attachments      []PolicyAttachment
+	ResourcePolicies map[string][]ResourcePolicy // by resource ARN
+	KMSGrants        map[string][]KMSGrant
+	S3               map[string]*S3BucketState
+	Resources        map[string]*Resource        // arn → type, account, region, tags
+	VPCEPolicies     map[string]string           // VPC endpoint id → PolicyDoc id
+	CanonicalIDs     map[string]string           // S3 canonical user id → account id
+}
 ```
 
-```python
-# tessera/aws/eval/request.py
-@dataclass(frozen=True)
-class ContextValue:
-    state: Literal["present", "absent", "unknown"]   # unknown ⇒ symbolic (§9.4)
-    values: tuple[str, ...] = ()
-    type: Literal["String", "ARN", "Numeric", "Date", "Bool", "IP", "Binary"] = "String"
-    multivalued: bool = False
+```go
+// internal/aws/eval/request.go
+package eval
 
-@dataclass(frozen=True)
-class EvaluationRequest:
-    principal_arn: str                        # requester (the session ARN for sessions)
-    action: str                               # "s3:GetObject"
-    resource_arn: str | None                  # None or "*" for actions with no resource-level support
-    context: dict[str, ContextValue]          # keys lower-cased
-    mode: Literal["concrete", "symbolic"] = "concrete"
-    session: "SessionSpec | None" = None      # hypothetical sessions: session policies, tags, source identity
-    via_vpce: str | None = None
-    s3_object_owner: str | None = None        # when the object owner differs from the bucket owner
-    assume: "AssumeSpec | None" = None        # sts:AssumeRole* requests: target role, ExternalId, token claims
+type ContextState uint8 // Present, Absent, Unknown (unknown ⇒ symbolic, §9.4)
+
+type ContextValue struct {
+	State       ContextState
+	Values      []string
+	Type        model.KeyType // String (default), ARN, Numeric, Date, Bool, IP, Binary (shared with the catalog)
+	Multivalued bool
+}
+
+type Mode uint8 // Concrete (default), Symbolic
+
+type EvaluationRequest struct {
+	PrincipalARN  string                  // requester (the session ARN for sessions)
+	Action        string                  // "s3:GetObject"
+	ResourceARN   string                  // "" or "*" for actions with no resource-level support
+	Context       map[string]ContextValue // keys lower-cased
+	Mode          Mode
+	Session       *SessionSpec            // hypothetical sessions: session policies, tags, source identity
+	ViaVPCE       string
+	S3ObjectOwner string                  // when the object owner differs from the bucket owner
+	Assume        *AssumeSpec             // sts:AssumeRole* requests: target role, ExternalId, token claims
+}
+
+func (*EvaluationRequest) Platform() string { return "aws" } // implements authz.Request
 ```
 
-```python
-# tessera/authz/core.py (continued)
-@dataclass(frozen=True)
-class StmtRef:
-    policy_id: str; policy_kind: str; source_arn: str; version_id: str | None
-    statement_index: int; sid: str | None; span: tuple[int, int, int, int] | None
-    attachment_path: tuple[str, ...]          # e.g. ("role/Ci", "managed:arn:aws:iam::aws:policy/ReadOnlyAccess")
-    org_level: str | None = None              # "r-abcd" | "ou-…" | account id, for SCPs and RCPs
+```go
+// internal/authz/core.go (continued)
+type Span struct{ StartLine, StartCol, EndLine, EndCol int }
 
-@dataclass(frozen=True)
-class CondTrace:
-    atom: Atom
-    request_state: Literal["present", "absent", "unknown"]
-    request_values: tuple[str, ...]
-    result: Literal["true", "false", "unknown"]
+type StmtRef struct {
+	PolicyID       string
+	PolicyKind     string
+	SourceARN      string
+	VersionID      string   // "" if none
+	StatementIndex int
+	Sid            string
+	Span           *Span
+	AttachmentPath []string // e.g. ["role/Ci", "managed:arn:aws:iam::aws:policy/ReadOnlyAccess"]
+	OrgLevel       string   // "r-abcd" | "ou-…" | account id, for SCPs and RCPs; "" otherwise
+}
 
-@dataclass(frozen=True)
-class ExplanationStep:
-    stage: Literal["parse", "context", "explicit_deny", "rcp", "scp", "resource_policy",
-                   "identity", "boundary", "session", "kms_grant", "s3_acl", "s3_bpa",
-                   "vpce", "cross_account", "special_rule", "final"]
-    result: Literal["allow", "deny", "no_match", "not_applicable", "pass", "fail", "conditional"]
-    statement: StmtRef | None                 # None for stage summaries
-    matched_on: dict[str, str]                # {"action": "s3:Get*", "resource": "arn:…/*", "principal": "PARENT"}
-    condition_trace: tuple[CondTrace, ...]
-    residual: Residual | None
-    note: str                                 # human sentence, generated from a template, never free text
-    decisive: bool                            # part of the minimal justification set
+type CondTrace struct {
+	Atom          Atom
+	RequestState  string   // "present" | "absent" | "unknown"
+	RequestValues []string
+	Result        string   // "true" | "false" | "unknown"
+}
 
-@dataclass(frozen=True)
-class Decision:
-    outcome: Outcome
-    deny_kind: DenyKind | None
-    residual: Residual                        # True for ALLOW, False for DENY, a formula for CONDITIONAL
-    fidelity: Fidelity
-    fidelity_reasons: tuple[FidelityReason, ...]
-    steps: tuple[ExplanationStep, ...]
-    decisive: tuple[StmtRef, ...]             # minimal set of statements that justify the outcome
-    request: "EvaluationRequest"
-    engine_version: str; catalog_version: str; snapshot_id: str
-    def aws_eval_decision(self) -> Literal["allowed", "explicitDeny", "implicitDeny"] | None: ...
+type Stage string // "parse", "context", "explicit_deny", "rcp", "scp", "resource_policy", "identity",
+                  // "boundary", "session", "kms_grant", "s3_acl", "s3_bpa", "vpce", "cross_account",
+                  // "special_rule", "final"
+
+type StepResult string // "allow", "deny", "no_match", "not_applicable", "pass", "fail", "conditional"
+
+type ExplanationStep struct {
+	Stage          Stage
+	Result         StepResult
+	Statement      *StmtRef          // nil for stage summaries
+	MatchedOn      map[string]string // {"action": "s3:Get*", "resource": "arn:…/*", "principal": "PARENT"}; serialized with sorted keys
+	ConditionTrace []CondTrace
+	Residual       Residual          // nil if none
+	Note           string            // human sentence, generated from a template, never free text
+	Decisive       bool              // part of the minimal justification set
+}
+
+// Request is the platform-specific request a Decision answers (*eval.EvaluationRequest for AWS).
+type Request interface{ Platform() string }
+
+type Decision struct {
+	Outcome         Outcome
+	DenyKind        DenyKind         // zero unless Outcome == Deny
+	Residual        Residual         // Const(true) for Allow, Const(false) for Deny, a formula for Conditional
+	Fidelity        Fidelity
+	FidelityReasons []FidelityReason
+	Steps           []ExplanationStep
+	Decisive        []StmtRef        // minimal set of statements that justify the outcome
+	Request         Request
+	EngineVersion   string
+	CatalogVersion  string
+	SnapshotID      string
+}
+
+// AWSEvalDecision returns "allowed", "explicitDeny" or "implicitDeny", or "" for Conditional.
+func (d *Decision) AWSEvalDecision() string
 ```
 
-### 6.2 Persistence (SQLAlchemy sketch, new file `tessera/models_aws.py`)
+### 6.2 Persistence (plain SQL, new file `internal/store/schema/00NN_aws.sql`)
 
-```python
-class AwsSnapshot(Base):
-    __tablename__ = "aws_snapshots"
-    id: Mapped[str] = mapped_column(String, primary_key=True)           # content hash
-    taken_at: Mapped[datetime]; org_id: Mapped[str | None]
-    account_ids: Mapped[list] = mapped_column(JSON)
-    catalog_version: Mapped[str]
-    source: Mapped[str]                                                 # connector | pr-sim | harness
+The DDL below is the SQLite form used by the MVP. The Postgres variant (Phase 0 PR14) uses `JSONB`, `BYTEA` and `TIMESTAMPTZ` and adds the tables to the RLS policy set. Every table carries `tenant_id`, as Phase 0 §14 requires of every table. Rows are read and written only through `*store.TenantTx` methods in `internal/store/repo_aws.go` (for example `PutAWSPolicyDocument`, which is `INSERT … ON CONFLICT DO NOTHING` because documents are content-addressed, and `ListAWSEffectiveByPrincipal`), so the Phase 0 isolation tests and statement lint cover them. Content addressing is **per tenant**: two tenants with byte-identical policies get two rows, so a row's existence never leaks across tenants.
 
-class AwsPolicyDocument(Base):            # immutable, content-addressed
-    __tablename__ = "aws_policy_documents"
-    id: Mapped[str] = mapped_column(String, primary_key=True)           # PolicyDoc.id
-    kind: Mapped[str]; source_arn: Mapped[str] = mapped_column(index=True)
-    version_id: Mapped[str | None]; raw_json: Mapped[str] = mapped_column(Text)
-    normalized: Mapped[dict] = mapped_column(JSON); fetched_at: Mapped[datetime]
+```sql
+CREATE TABLE aws_snapshots (
+  tenant_id       TEXT NOT NULL REFERENCES tenants(id),
+  id              TEXT NOT NULL,                 -- content hash
+  taken_at        TEXT NOT NULL,                 -- RFC 3339, UTC
+  org_id          TEXT,
+  account_ids     TEXT NOT NULL,                 -- JSON array
+  catalog_version TEXT NOT NULL,
+  source          TEXT NOT NULL CHECK (source IN ('connector', 'pr-sim', 'harness')),
+  PRIMARY KEY (tenant_id, id)
+);
 
-class AwsPolicyAttachment(Base):
-    __tablename__ = "aws_policy_attachments"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    snapshot_id: Mapped[str] = mapped_column(ForeignKey("aws_snapshots.id"), index=True)
-    policy_id: Mapped[str] = mapped_column(ForeignKey("aws_policy_documents.id"))
-    target_arn: Mapped[str] = mapped_column(index=True)
-    attachment_type: Mapped[str]; via: Mapped[list] = mapped_column(JSON)
+CREATE TABLE aws_policy_documents (              -- immutable, content-addressed
+  tenant_id  TEXT NOT NULL REFERENCES tenants(id),
+  id         TEXT NOT NULL,                      -- PolicyDoc.ID
+  kind       TEXT NOT NULL,
+  source_arn TEXT NOT NULL,
+  version_id TEXT,
+  raw_json   BLOB NOT NULL,                      -- verbatim bytes
+  normalized TEXT NOT NULL,                      -- JSON
+  fetched_at TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, id)
+);
+CREATE INDEX aws_policy_documents_source ON aws_policy_documents (tenant_id, source_arn);
 
-class AwsOrgNode(Base):
-    __tablename__ = "aws_org_nodes"
-    snapshot_id: Mapped[str] = mapped_column(primary_key=True)
-    id: Mapped[str] = mapped_column(primary_key=True)
-    kind: Mapped[str]; parent_id: Mapped[str | None]; name: Mapped[str]
+CREATE TABLE aws_policy_attachments (
+  tenant_id       TEXT NOT NULL REFERENCES tenants(id),
+  id              INTEGER PRIMARY KEY,
+  snapshot_id     TEXT NOT NULL,
+  policy_id       TEXT NOT NULL,
+  target_arn      TEXT NOT NULL,
+  attachment_type TEXT NOT NULL,
+  via             TEXT NOT NULL,                 -- JSON array
+  FOREIGN KEY (tenant_id, snapshot_id) REFERENCES aws_snapshots (tenant_id, id),
+  FOREIGN KEY (tenant_id, policy_id)   REFERENCES aws_policy_documents (tenant_id, id)
+);
+CREATE INDEX aws_policy_attachments_snapshot ON aws_policy_attachments (tenant_id, snapshot_id);
+CREATE INDEX aws_policy_attachments_target   ON aws_policy_attachments (tenant_id, target_arn);
 
-class AwsTrustEdge(Base):
-    __tablename__ = "aws_trust_edges"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    snapshot_id: Mapped[str] = mapped_column(index=True)
-    from_arn: Mapped[str] = mapped_column(index=True); to_role_arn: Mapped[str] = mapped_column(index=True)
-    mechanism: Mapped[str]; outcome: Mapped[str]
-    residual: Mapped[dict] = mapped_column(JSON); explanation_id: Mapped[str]
+CREATE TABLE aws_org_nodes (
+  tenant_id   TEXT NOT NULL REFERENCES tenants(id),
+  snapshot_id TEXT NOT NULL,
+  id          TEXT NOT NULL,
+  kind        TEXT NOT NULL,
+  parent_id   TEXT,
+  name        TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, snapshot_id, id)
+);
 
-class AwsEffectivePermission(Base):       # materialized, scope-compressed (§12.4)
-    __tablename__ = "aws_effective_permissions"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    snapshot_id: Mapped[str] = mapped_column(index=True)
-    principal_arn: Mapped[str] = mapped_column(index=True)
-    action_atom: Mapped[int] = mapped_column(index=True)
-    resource_atom: Mapped[int] = mapped_column(index=True)              # atom ids (§12.2)
-    outcome: Mapped[str]; residual: Mapped[dict | None] = mapped_column(JSON)
-    fidelity: Mapped[str]; explanation_id: Mapped[str]
-    engine_version: Mapped[str]; catalog_version: Mapped[str]
+CREATE TABLE aws_trust_edges (
+  tenant_id      TEXT NOT NULL REFERENCES tenants(id),
+  id             INTEGER PRIMARY KEY,
+  snapshot_id    TEXT NOT NULL,
+  from_arn       TEXT NOT NULL,
+  to_role_arn    TEXT NOT NULL,
+  mechanism      TEXT NOT NULL,
+  outcome        TEXT NOT NULL,
+  residual       TEXT NOT NULL,                  -- JSON
+  explanation_id TEXT NOT NULL
+);
+CREATE INDEX aws_trust_edges_snapshot ON aws_trust_edges (tenant_id, snapshot_id);
+CREATE INDEX aws_trust_edges_from     ON aws_trust_edges (tenant_id, from_arn);
+CREATE INDEX aws_trust_edges_to       ON aws_trust_edges (tenant_id, to_role_arn);
 
-class AwsExplanation(Base):               # content-addressed, deduplicated traces
-    __tablename__ = "aws_explanations"
-    id: Mapped[str] = mapped_column(String, primary_key=True)          # sha256 of the canonical trace
-    trace: Mapped[dict] = mapped_column(JSON)
+CREATE TABLE aws_effective_permissions (         -- materialized, scope-compressed (§12.4)
+  tenant_id       TEXT NOT NULL REFERENCES tenants(id),
+  id              INTEGER PRIMARY KEY,
+  snapshot_id     TEXT NOT NULL,
+  principal_arn   TEXT NOT NULL,
+  action_atom     INTEGER NOT NULL,              -- atom ids (§12.2)
+  resource_atom   INTEGER NOT NULL,
+  outcome         TEXT NOT NULL,
+  residual        TEXT,                          -- JSON, NULL unless conditional
+  fidelity        TEXT NOT NULL,
+  explanation_id  TEXT NOT NULL,
+  engine_version  TEXT NOT NULL,
+  catalog_version TEXT NOT NULL
+);
+CREATE INDEX aws_eff_snapshot  ON aws_effective_permissions (tenant_id, snapshot_id);
+CREATE INDEX aws_eff_principal ON aws_effective_permissions (tenant_id, principal_arn);
+CREATE INDEX aws_eff_action    ON aws_effective_permissions (tenant_id, action_atom);
+CREATE INDEX aws_eff_resource  ON aws_effective_permissions (tenant_id, resource_atom);
+
+CREATE TABLE aws_explanations (                  -- content-addressed, deduplicated traces
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  id        TEXT NOT NULL,                       -- sha256 of the canonical (JCS) trace
+  trace     TEXT NOT NULL,                       -- JSON
+  PRIMARY KEY (tenant_id, id)
+);
 ```
 
 The tables are snapshot-scoped and append-only. Old snapshots are kept for the evidence-retention period (Q8), which lets an auditor ask "why could X do Y on date D?" and get the same answer every time.
@@ -680,7 +868,7 @@ function EVALUATE(req, snap, cat) -> Decision:
     return finish(CONDITIONAL, None, T, F, residual=A.φ)
 ```
 
-The order of checks is **observably** AWS's: explicit deny, then the RCP and SCP gates, then the grant paths, then the boundary and session limits. By default the engine still evaluates every stage after a decisive one, so the trace can say "this would also have failed at the SCP" for explanation and triage. `fast=True` stops at the first decisive outcome and is used for bulk enumeration (§12).
+The order of checks is **observably** AWS's: explicit deny, then the RCP and SCP gates, then the grant paths, then the boundary and session limits. By default the engine still evaluates every stage after a decisive one, so the trace can say "this would also have failed at the SCP" for explanation and triage. `eval.Options{Fast: true}` (v1: `fast=True`) stops at the first decisive outcome and is used for bulk enumeration (§12).
 
 ### 7.3 Resolving the principal
 
@@ -922,8 +1110,9 @@ action_match(stmt, a):
   pats := stmt.actions if stmt.actions is not None else stmt.not_actions
   hit  := any(glob_ci(p, a) for p in pats)        # "*" matches everything; "s3:*"; "s3:Get*Object"; "?" = one character
   return hit if stmt.actions is not None else not hit
-glob_ci(p, a): an anchored, case-insensitive regex in which '*' → '.*' and '?' → '.', with every other
-               character escaped. Wildcards may appear anywhere, including the service prefix (SCPs allow "*:Describe*").
+glob_ci(p, a): an anchored, ASCII-case-insensitive glob in which '*' matches any run of characters (including none)
+               and '?' exactly one, and every other character is literal (the matcher is §8.5, not a regex).
+               Wildcards may appear anywhere, including the service prefix (SCPs allow "*:Describe*").
 ```
 
 The catalog is used to **pre-expand** wildcards for indexing only (§12). Evaluation always matches the raw pattern, so actions launched after the catalog snapshot still match. This matters for `NotAction` with `Allow`, which grants future actions.
@@ -953,7 +1142,7 @@ arn_glob(pattern, arn):                                      # default for ambig
   return glob_cs(pattern part 5, arn part 5)                  # in the resource part '*' crosses '/' and ':'
 ```
 
-The regex compiler escapes **every** regex metacharacter apart from our `*` and `?`. PMapper escapes only `.`, `$` and `^`; real resource names contain `+`, `(`, `[` and `{`.
+The matcher (§8.5) treats **every** character other than `*` and `?` as a literal, so there is no regex escaping step to get wrong. PMapper escapes only `.`, `$` and `^`; real resource names contain `+`, `(`, `[` and `{`.
 
 ### 8.4 Principal matching (resource policies)
 
@@ -991,13 +1180,105 @@ notprincipal_deny_applies(stmt, P):            # True ⇒ the Deny applies to P
 
 `NotPrincipal` with `Allow` is invalid, and AWS refuses to save it. If one appears in a snapshot, ingest records an anomaly, ignores the statement and adds a lint finding.
 
+### 8.5 The wildcard matcher in Go (linear-time, ReDoS-safe)
+
+Every `*`/`?` match in §8.2, §8.3 and §9.3 (`StringLike`, `ArnLike`) goes through one matcher in `internal/aws/glob`. Policy JSON is untrusted input (§16 R2), so the matcher must have no input that makes it slow. It uses no `regexp`, no recursion and no backtracking stack, and does not allocate while matching.
+
+```go
+// internal/aws/glob/glob.go
+package glob
+
+type kind uint8
+
+const (
+	lit  kind = iota // match this byte exactly (or ASCII-case-insensitively when fold is set)
+	star             // '*': any run of characters, including none
+	one              // '?': exactly one character (one UTF-8 rune)
+)
+
+// Pattern is a compiled IAM wildcard pattern. A literal '*', '?' or '$' produced by the
+// ${*}, ${?} and ${$} escapes (§9.3) is compiled as lit, never as a wildcard.
+type Pattern struct {
+	src  string // original text, for traces
+	b    []byte // pattern bytes
+	k    []kind // parallel to b
+	fold bool   // ASCII case-insensitive (actions); false for ARNs and StringLike
+}
+
+// Compile rejects invalid UTF-8 and patterns over the size cap (policy/limits.go).
+
+// Match reports whether s matches p.
+// Time: O(len(p)·len(s)) worst case, O(len(p)+len(s)) when p has at most one '*'.
+// Space: O(1). No input can make it exponential.
+func (p *Pattern) Match(s string) bool {
+	pi, si := 0, 0
+	starPi, starSi := -1, 0 // last '*' seen in p, and where in s its absorption ends
+	for si < len(s) {
+		if pi < len(p.b) {
+			switch p.k[pi] {
+			case star:
+				starPi, starSi = pi, si
+				pi++
+				continue
+			case one:
+				_, w := utf8.DecodeRuneInString(s[si:])
+				pi, si = pi+1, si+w
+				continue
+			case lit:
+				if p.eq(p.b[pi], s[si]) {
+					pi, si = pi+1, si+1
+					continue
+				}
+			}
+		}
+		if starPi < 0 {
+			return false
+		}
+		// Mismatch: let the most recent '*' absorb one more rune and resume just after it.
+		// Earlier stars never need revisiting: with only '*' and '?' (no character classes),
+		// the last star can absorb anything an earlier star would have.
+		_, w := utf8.DecodeRuneInString(s[starSi:])
+		starSi += w
+		pi, si = starPi+1, starSi
+	}
+	for pi < len(p.b) && p.k[pi] == star {
+		pi++
+	}
+	return pi == len(p.b)
+}
+
+func (p *Pattern) eq(a, b byte) bool {
+	return a == b || (p.fold && lowerASCII(a) == lowerASCII(b))
+}
+
+func lowerASCII(c byte) byte {
+	if 'A' <= c && c <= 'Z' {
+		return c + ('a' - 'A')
+	}
+	return c
+}
+```
+
+**Why it is safe.** Each mismatch moves `starSi` forward by at least one rune, and each restart scans at most `len(p)` pattern bytes, which bounds the work at `len(p)·len(s)`. With the size caps of §16 R2 that is a few million byte comparisons in the very worst case. Positions in `s` stay on rune boundaries, because restarts advance by whole runes and literals are valid UTF-8, so `?` always consumes one whole character.
+
+**Why not Go's `regexp`.** RE2 is also linear-time, so it would be safe. It is not used on the hot path because compiling 400,000 statements' patterns costs memory and time, the `${*}` escapes and the ASCII-only case folding for actions are easier to get exactly right in 60 lines than in regex translation, and the hand-written matcher does not allocate. RE2 is used as the **reference oracle** in the tests below.
+
+**ARN matching** (`internal/aws/eval/arn.go`) splits pattern and ARN with `strings.SplitN(x, ":", 6)` and applies one `glob.Pattern` per segment, using the A1 default of §8.3: segments 1–5 are matched one by one, a trailing `*` in segments 3–5 (with only empty or `*` segments after it) matches the remainder of the ARN, and the sixth segment is matched as a whole, with `*` crossing `/` and `:`. Patterns are compiled once per statement when the snapshot is built.
+
+**Tests** (`internal/aws/glob/glob_test.go`, PR-3):
+- Table-driven cases for every §8 rule and for GC-03 to GC-08 at the matcher level.
+- `FuzzMatchAgreesWithRegexp`: for any valid UTF-8 pattern and subject, `Match` agrees with a reference `regexp` built as `^(?s)` + the pattern with each literal run passed through `regexp.QuoteMeta`, `*` → `.*` and `?` → `.`. When `fold` is set the fuzzer restricts inputs to ASCII, because `(?i)` in RE2 folds Unicode. Seeds include `"*a*a*a*a*a*b"`, `"q?"`, `"arn:aws:s3:::*log*"`, `"${*}"`-escaped literals, and multi-byte runes next to `?`.
+- `FuzzCompile`: compiling never panics, and rejects invalid UTF-8 and oversized input.
+- `TestMatchWorstCase`: the pattern `strings.Repeat("*a", 1000) + "b"` against `strings.Repeat("a", 10_000)` returns false within 50 ms on CI, plus `BenchmarkMatch` for the common shapes (`s3:Get*`, `arn:aws:s3:::bucket/*`).
+- Structured properties use `pgregory.net/rapid` (§2.4): generators produce patterns and subjects that are near-misses of each other, and the same properties run under `go test -fuzz` through `rapid.MakeFuzz`.
+
 ---
 
 ## 9. Condition evaluation
 
 ### 9.1 The request-context model
 
-`build_context` produces a `dict[key → ContextValue]` with lower-cased keys. Each key is in one of three states:
+`build_context` (`eval.buildContext`) produces a `map[string]eval.ContextValue` with lower-cased keys. Each key is in one of three states:
 
 | State | Meaning | Where it comes from |
 |---|---|---|
@@ -1011,7 +1292,7 @@ Each catalog key has a declared type: String, ARN, Numeric, Date, Bool, IP, Bina
 
 ### 9.2 Derived global keys
 
-`tessera/aws/eval/context.py` implements one function per key family, covering availability rules from the AWS global condition key reference [S19]:
+`internal/aws/eval/context.go` implements one function per key family, covering availability rules from the AWS global condition key reference [S19]:
 
 | Key | Derivation |
 |---|---|
@@ -1029,7 +1310,7 @@ Each catalog key has a declared type: String, ARN, Numeric, Date, Bool, IP, Bina
 
 ### 9.3 Operators and policy variables
 
-**Normalization at parse time.** `{"StringLikeIfExists": {"k": ["a", "b"]}}` becomes `Atom(op="StringLike", key="k", values=("a", "b"), if_exists=True)`. Qualifiers are parsed out of names such as `ForAllValues:StringEquals`. Policy values of any JSON scalar type are stored as strings; `Bool` values accept JSON booleans too.
+**Normalization at parse time.** `{"StringLikeIfExists": {"k": ["a", "b"]}}` becomes `authz.Atom{Op: "StringLike", Key: "k", Values: []string{"a", "b"}, IfExists: true}`. Qualifiers are parsed out of names such as `ForAllValues:StringEquals`. Policy values of any JSON scalar type are stored as strings; `Bool` values accept JSON booleans too.
 
 **Atom evaluation for a `present` key with values V (one or more) and policy values W:**
 
@@ -1038,7 +1319,7 @@ Each catalog key has a declared type: String, ARN, Numeric, Date, Bool, IP, Bina
 | `StringEquals` / `StringNotEquals` | ∃w ∈ W: v == w (negated: ¬∃) | Case-sensitive |
 | `StringEqualsIgnoreCase` / `StringNotEqualsIgnoreCase` | Unicode case-fold comparison | |
 | `StringLike` / `StringNotLike` | Glob with `*`/`?`; `${*}`, `${?}` and `${$}` are literal characters | Case-sensitive |
-| `NumericEquals`, `…NotEquals`, `…LessThan`, `…LessThanEquals`, `…GreaterThan`, `…GreaterThanEquals` | Decimal comparison. If either side fails to parse, the atom is false. | No variables |
+| `NumericEquals`, `…NotEquals`, `…LessThan`, `…LessThanEquals`, `…GreaterThan`, `…GreaterThanEquals` | Decimal comparison (exact, with `math/big.Rat`; no float rounding). If either side fails to parse, the atom is false. | No variables |
 | `DateEquals` … `DateGreaterThanEquals` | Parse ISO 8601 (W3C profiles) or epoch seconds, normalize to UTC, compare | No variables |
 | `Bool` | Case-insensitive compare against `true`/`false` | Variables allowed |
 | `BinaryEquals` | Byte comparison of base64-decoded values | |
@@ -1072,7 +1353,7 @@ Each catalog key has a declared type: String, ARN, Numeric, Date, Bool, IP, Bina
 
 The two query modes differ only in how `unknown` is introduced:
 
-| | Concrete (`mode="concrete"`) | Symbolic (`mode="symbolic"`) |
+| | Concrete (`Mode: eval.Concrete`) | Symbolic (`Mode: eval.Symbolic`) |
 |---|---|---|
 | Used by | The harness, CloudTrail replay ("why was this call allowed?"), point checks in the UI | Effective-permission enumeration, who-can, PR diffs, least privilege |
 | Runtime keys | Must be supplied or derivably absent | `unknown` unless pinned by the query's **assumption profile** |
@@ -1087,7 +1368,7 @@ The two query modes differ only in how `unknown` is introduced:
 
 The default profile for effective permissions is `{now, tls}`, with everything else unknown. The profile used is stored with every materialized row.
 
-**Soundness invariant.** For any total context c consistent with the partial context: `eval_concrete(c) == ALLOW ⇔ φ(c) == true`. Property-based tests enforce it (§15, PR-5): random total contexts are drawn, symbolic and concrete evaluation are both run, and their results must agree.
+**Soundness invariant.** For any total context c consistent with the partial context: `eval_concrete(c) == ALLOW ⇔ φ(c) == true`. Property-based tests enforce it (§15, PR-4 and PR-5): `TestSymbolicSoundness` uses `rapid` generators to draw a snapshot, a symbolic request and a random total context consistent with it, runs symbolic and concrete evaluation, and requires the results to agree. `FuzzSymbolicSoundness` runs the same property under `go test -fuzz` via `rapid.MakeFuzz`.
 
 **Interpreting deny-side unknowns.** If a Deny statement's condition is `U(ψ)`, the final residual contains `¬ψ`. The result is "allowed unless ψ", which is reported as `CONDITIONAL`, not `ALLOW`. Example: a Deny conditioned on `aws:RequestedRegion ∉ {eu-west-1}` yields "allowed only in eu-west-1".
 
@@ -1098,7 +1379,7 @@ The default profile for effective permissions is `{now, tls}`, with everything e
 2. **Per-key consistency.** Atoms on the same key and type are grouped and checked with a small domain solver:
    - **String equality:** a set intersection or exclusion; `StringLike` against `StringEquals` literals is checked by glob matching.
    - **Numeric and date:** interval arithmetic.
-   - **IP:** CIDR set algebra with `ipaddress` collapse.
+   - **IP:** CIDR set algebra with `net/netip` prefixes and `go4.org/netipx.IPSetBuilder` (union, intersection, complement, collapse).
    - **Bool:** two values.
    - **Presence:** `Null`, IfExists and `ForAllValues`-vacuity are expressed through a presence boolean per key (the Zelkova trick).
 3. If a conjunction is inconsistent on any key, it is `F`. If a disjunction contains a key-complete cover (for example `Bool k true ∨ Bool k false ∨ Null k true`), it is `T`.
@@ -1133,21 +1414,24 @@ catalog/aws/
      services/<svc>.json           # verbatim Service Reference files
      iam-dataset.lock              # commit SHA of the supplementary data
   overlays/*.yaml                  # reviewed by iam-authz-expert (CODEOWNERS)
-  compiled/<catalog_version>.msgpack   # action ids, per-service bitsets, key types; built in CI
-tessera/aws/catalog/loader.py      # load(version) -> Catalog
+  compiled/<catalog_version>.json.gz  # action ids, per-service bitsets, key types; canonical JSON, gzip with a
+                                      # zero header timestamp, so the bytes are deterministic; built in CI
+internal/aws/catalog/loader.go     # Load(dir, version string) (*Catalog, error)
 ```
 
-`Catalog` API:
-- `canonical_action(str) -> str | None`
-- `expand(pattern) -> frozenset[ActionId]`
-- `resource_types(action) -> tuple[ResourceType]`
-- `supports_resource_level(action) -> bool`
-- `condition_keys(action, resource_type) -> set[str]`
-- `key_type(key) -> KeyType`
-- `is_multivalued(key) -> bool`
-- `rcp_supported(service) -> bool`
-- `access_level(action) -> {List, Read, Write, PermissionsManagement, Tagging}`
-- `arn_formats(resource_type) -> list[str]`, `match_resource_type(arn) -> ResourceType | None`
+The `catalog/aws/` tree lives at `mvp/server/catalog/aws/`. Snapshots are not embedded in the binary; the server loads the compiled artifact from a configured directory. A small fixture catalog for tests is embedded under `internal/aws/catalog/testdata/`.
+
+`Catalog` API (`*catalog.Catalog`, read-only and safe for concurrent use):
+- `CanonicalAction(a string) (string, bool)` (v1 `canonical_action`)
+- `Expand(pattern string) *roaring.Bitmap` (the set of `ActionID`s)
+- `ResourceTypes(action string) []ResourceType`
+- `SupportsResourceLevel(action string) bool`
+- `ConditionKeys(action string, rt ResourceType) []string` (sorted)
+- `KeyType(key string) model.KeyType`
+- `IsMultivalued(key string) bool`
+- `RCPSupported(service string) bool`
+- `AccessLevel(action string) AccessLevel` (`List`, `Read`, `Write`, `PermissionsManagement`, `Tagging`)
+- `ARNFormats(rt ResourceType) []string`, `MatchResourceType(arn string) (ResourceType, bool)`
 
 ### 10.3 Keeping the catalog current
 - **Nightly job** (`.github/workflows/catalog-refresh.yml`):
@@ -1164,11 +1448,11 @@ tessera/aws/catalog/loader.py      # load(version) -> Catalog
 
 ## 11. Integration with the existing MVP
 
-The MVP (`mvp/backend/tessera/`) has a networkx `GraphSnapshot` over `identity → account → group → perm → resource`. Effective permission there is plain reachability; `simulate.py` copies the graph, mutates edges and diffs; `leastpriv.py` and `nhi.py` read `EffectivePermission` objects. The goal is to make AWS correct **without breaking that contract**.
+The MVP, as ported to Go (`mvp/server/internal/`), has a `graph.Snapshot` over `identity → account → group → perm → resource` (v1: the networkx `GraphSnapshot`). Effective permission there is plain reachability; `internal/simulate` copies the graph, mutates edges and diffs; `internal/leastpriv` and `internal/nhi` read `graph.EffectivePermission` values. Package names below are the port's; where the port is still in progress (`internal/api`, the connector registry) the names follow Phase 0 §5.3 and are confirmed when the `go-backend` branch merges. The goal is to make AWS correct **without breaking that contract**.
 
-### 11.1 Connector: `tessera/connectors/aws_org.py` (replaces `DemoAWSConnector` for real tenants)
+### 11.1 Connector: `internal/connectors/awsorg` (replaces the demo AWS connector for real tenants)
 
-It is read-only, assumes a Tessera role through OIDC/WIF federation (no stored keys, per D5 §8.4's strategic note), and collects one snapshot per run. It needs no write permissions anywhere.
+It is read-only, assumes a Tessera role through OIDC/WIF federation (no stored keys, per D5 §8.4's strategic note), and collects one snapshot per run. It needs no write permissions anywhere. It uses the AWS SDK for Go v2 (§2.4): `stscreds.NewWebIdentityRoleProvider` for the federated role, one client per service and account, the SDK paginators for every `List*` call, and the SDK's adaptive retry mode (`retry.NewAdaptiveMode`) for throttling. Outbound HTTP goes through the Phase 0 `safehttp` client. IAM returns policy documents in `GetAccountAuthorizationDetails` URL-encoded (RFC 3986); the connector decodes them and stores the decoded bytes as `RawJSON`.
 
 | API calls | Feeds |
 |---|---|
@@ -1187,11 +1471,42 @@ The connector writes the `aws_*` tables (§6.2) and also emits the MVP's normali
 - **`PermissionRecord`** rows: **only evaluator-confirmed ALLOW or CONDITIONAL tuples**, at the granularity of an action atom × resource atom (§12.2), labelled with representative names such as "s3:GetObject on prod-pii/\*".
 - **`EdgeRecord`** `grants` from the role or user to each permission it is effectively allowed. The `edge.source` field is set to `evaluator`. A new optional field, `explanation_id`, is added to `EdgeRecord` and `GrantEdge` (nullable, so backward compatible).
 
-**Effect:** `GraphSnapshot.effective_permissions()` now returns AWS permissions that already respect denies, SCPs, boundaries and resource policies. `leastpriv`, `policies`, `reviews` and `nhi` work unchanged. Their output simply becomes correct.
+**Effect:** `graph.Snapshot.EffectivePermissions()` (v1 `effective_permissions()`) now returns AWS permissions that already respect denies, SCPs, boundaries and resource policies. `leastpriv`, `policy`, `reviews` and `nhi` work unchanged. Their output simply becomes correct.
+
+**Connector tests without moto.** v1 used `moto` for collection and botocore `Stubber` for the APIs moto lacks. Neither exists for Go, and neither enforced IAM anyway. The Go connector is tested at two levels, with helpers in `internal/aws/awstest` (test-only):
+
+1. **Typed stubs at the Finalize step.** A middleware added with `stack.Finalize.Add(…, middleware.Before)` reads the operation name (`awsmiddleware.GetOperationName(ctx)`) and returns a queued typed output (for example `*iam.GetAccountAuthorizationDetailsOutput`) or a typed error (`*types.ThrottlingException`) without calling the next handler. No network, no signing, no credentials. This is the pattern in the SDK's developer guide ("Unit testing" and "Customizing the client operation pipeline"). It is used for control-flow tests: pagination across every `List*` call, per-account `AccessDenied` that must not abort the whole org, throttling, and partial snapshots.
+
+   ```go
+   func Stub(outputs map[string][]any) func(*middleware.Stack) error {
+   	return func(stack *middleware.Stack) error {
+   		return stack.Finalize.Add(middleware.FinalizeMiddlewareFunc("tessera-stub",
+   			func(ctx context.Context, in middleware.FinalizeInput, next middleware.FinalizeHandler) (
+   				middleware.FinalizeOutput, middleware.Metadata, error) {
+   				op := awsmiddleware.GetOperationName(ctx)
+   				q := outputs[op]
+   				if len(q) == 0 {
+   					return middleware.FinalizeOutput{}, middleware.Metadata{}, fmt.Errorf("awstest: unstubbed %s", op)
+   				}
+   				out := q[0]
+   				outputs[op] = q[1:]
+   				if err, ok := out.(error); ok {
+   					return middleware.FinalizeOutput{}, middleware.Metadata{}, err
+   				}
+   				return middleware.FinalizeOutput{Result: out}, middleware.Metadata{}, nil
+   			}), middleware.Before)
+   	}
+   }
+   // cfg := aws.Config{Region: "us-east-1", Credentials: aws.AnonymousCredentials{},
+   //                   APIOptions: []func(*middleware.Stack) error{awstest.Stub(outputs)}}
+   ```
+2. **Raw HTTP replay.** `aws.Config.HTTPClient` is set to `awstest.Replay`, which implements `Do(*http.Request) (*http.Response, error)` and serves recorded response bodies from `internal/connectors/awsorg/testdata/http/<service>/<operation>/<n>.{xml,json}`. The SDK's real deserializers run, so wire-format surprises are caught: IAM's query-protocol XML, URL-encoded policy documents, empty versus absent lists, and unknown enum strings. Fixtures are recorded from the sandbox (§13.8) by the same client in record mode, and are scrubbed of account ids by a deterministic mapping.
+
+Like moto before them, neither level enforces IAM: these are collection tests only. Evaluation correctness is the golden corpus's and the harness's job.
 
 ### 11.2 Model changes (additive only)
-- `GrantEdge.explanation_id: str | None`, `GrantEdge.outcome: str | None` (`allow`/`conditional`), and `GrantEdge.fidelity: str | None`.
-- `graph.EffectivePermission` gains `conditional: bool`, `fidelity: str` and `explanation_ids: list[str]`, all with defaults. API responses gain the same fields.
+- `store.GrantEdge` gains `ExplanationID`, `Outcome` (`allow`/`conditional`) and `Fidelity`, all `string` with `""` meaning unset. They are new nullable columns on the grant-edge table (`schema/00NN_aws.sql`), so existing rows and fixtures are unaffected.
+- `graph.EffectivePermission` gains `Conditional bool`, `Fidelity string` and `ExplanationIDs []string`, all with zero-value defaults. API responses gain the same fields (JSON `conditional`, `fidelity`, `explanation_ids`); the affected parity fixtures in `testdata/parity/` are updated in the same PR, per the Phase 0 parity rule.
 - New API endpoints:
   - `GET /api/aws/can?principal=&action=&resource=&profile=` → `Decision` with trace
   - `GET /api/aws/principals/{arn}/effective?service=&profile=` → paged effective set (§12.3)
@@ -1199,31 +1514,35 @@ The connector writes the `aws_*` tables (§6.2) and also emits the MVP's normali
   - `POST /api/aws/simulate-policy-change` → diff (§11.3)
   - `GET /api/aws/explanations/{id}`
 
-  All are read-only and tenant-scoped, and every call is audited (Phase 0 ledger).
+  All are read-only and tenant-scoped, declared in the route table with their required permission (Phase 0 §12.4), and every call is audited (Phase 0 ledger).
 
 ### 11.3 Simulation: "a policy PR shows exactly who gains or loses which permission"
 
-`simulate.py` today supports `remove_edge_ids`, `add_edges` and `disable_account_ids`. The design adds a new change type, `policy_changes: list[PolicyChange]`:
+`simulate.Request` today supports `RemoveEdgeIDs`, `AddEdges` and `DisableAccountIDs` (v1 `remove_edge_ids`, `add_edges`, `disable_account_ids`). The design adds a new change type, `PolicyChanges []PolicyChange` (JSON `policy_changes`):
 
-```python
-@dataclass
-class PolicyChange:
-    op: Literal["put_policy_version", "attach", "detach", "put_inline", "delete_inline",
-                "put_boundary", "delete_boundary", "put_resource_policy", "put_trust_policy",
-                "attach_scp", "detach_scp", "put_scp", "attach_rcp", "detach_rcp", "put_rcp",
-                "move_account", "create_grant", "retire_grant", "put_bpa", "put_ownership_controls"]
-    target_arn: str
-    document: str | None          # raw JSON for puts
-    policy_arn: str | None
+```go
+// internal/aws/snapshot/apply.go
+type PolicyChangeOp string // validated against this closed set when the request is decoded:
+// "put_policy_version", "attach", "detach", "put_inline", "delete_inline",
+// "put_boundary", "delete_boundary", "put_resource_policy", "put_trust_policy",
+// "attach_scp", "detach_scp", "put_scp", "attach_rcp", "detach_rcp", "put_rcp",
+// "move_account", "create_grant", "retire_grant", "put_bpa", "put_ownership_controls"
+
+type PolicyChange struct {
+	Op        PolicyChangeOp `json:"op"`
+	TargetARN string         `json:"target_arn"`
+	Document  *string        `json:"document"`   // raw JSON for puts; nil otherwise
+	PolicyARN *string        `json:"policy_arn"` // nil if not applicable
+}
 ```
 
 **Pipeline:**
-1. Build `snap' = apply(changes, snap)`. The result is a new frozen Snapshot sharing structure with the old one.
+1. Build `snap' = snapshot.Apply(snap, changes)`. The result is a new read-only Snapshot that shares unchanged policy documents and principals with the old one (pointers to the same immutable values).
 2. Compute the affected set with the reverse indexes (§12.5), for example: an SCP change → every principal in the subtree; a bucket policy change → the principals indexed for that bucket's resource atoms plus every principal in the policy's principal set.
 3. Recompute only the affected (principal, action-atom, resource-atom) cells under both snapshots.
 4. Diff the cells. Output records are `{principal, action_atom → concrete actions, resource_atom → concrete resources, before: Decision, after: Decision, change: gained|lost|conditional_changed|fidelity_changed}`.
-5. Join with the usage index (`usage.py`), so a "lost" record shows whether it was used in the last 30 or 90 days. This is what the existing simulate UI already shows.
-6. Hand the result to the existing `diff_effective`-shaped response, plus the PR comment renderer.
+5. Join with the usage index (`internal/usage`), so a "lost" record shows whether it was used in the last 30 or 90 days. This is what the existing simulate UI already shows.
+6. Hand the result to the existing `diff_effective`-shaped response, plus the PR comment renderer (`internal/aws/render`).
 
 **Example PR comment:**
 ```
@@ -1241,8 +1560,8 @@ Tessera access diff — snapshot 7f3a… → PR head (catalog 2026-10-08, engine
 ### 11.4 Trust edges, NHI and the human view (iam-pam-nhi-expert)
 
 - **Trust-edge materialization.** For every role R and every candidate caller C, the engine evaluates `sts:AssumeRole` (and the WithWebIdentity/WithSAML variants for provider principals) in symbolic mode and stores a `TrustEdge(C → R)` if the outcome is ALLOW or CONDITIONAL. Candidate callers are the principals named in R's trust policy, plus every principal of the trusted account when the trust names the account, plus every principal of any account when it names `*`.
-- **Graph edges.** Trust edges become graph edges with `relation="can_assume"`; `graph.py` needs a single new `GRANT_RELATIONS` member. A human's effective permissions then include those of every role reachable through `can_assume`. Each hop is annotated so that role chaining, with its 1 h cap, is visible.
-- **NHI findings this enables in Phase 1**, feeding `nhi.py` flags:
+- **Graph edges.** Trust edges become graph edges with relation `"can_assume"`; `internal/graph` needs a single new member in its set of grant relations (v1 `GRANT_RELATIONS`). A human's effective permissions then include those of every role reachable through `can_assume`. Each hop is annotated so that role chaining, with its 1 h cap, is visible.
+- **NHI findings this enables in Phase 1**, feeding `internal/nhi` flags:
   - an OIDC trust with a wildcard `sub` (residual contains `StringLike …:sub "repo:org/*"`) → `wildcard_oidc_trust`;
   - a cross-account trust without `sts:ExternalId` to a non-org account → `missing_external_id`;
   - `Principal: "*"` trust with weak conditions → `public_trust`;
@@ -1337,9 +1656,9 @@ On a delta, which is either a connector change or a PR's `PolicyChange`:
 3. If more than 25 % of principal atoms are affected (typically a root SCP), switch to a partitioned full recompute per account and stream results.
 
 ### 12.6 Implementation notes
-- **Python 3.12.** Use `pyroaring` for bitsets, precompiled `re` patterns (anchored, with `re.ASCII` where safe), `ipaddress`, and `msgspec` for snapshot (de)serialization. `multiprocessing` with fork-shared, read-only compiled snapshots, sharded by principal atom.
-- **Expected cost:** 500 principal atoms × ~300 envelope-pruned action atoms × ~50 resource atoms on average ≈ 7.5 M cells. At ~20 µs per fast-mode cell that is about 150 core-seconds, comfortably inside the 60-minute materialization SLO. This is validated in PR-11 with a synthetic generator at 2× target scale.
-- **Rust port.** The spec's Rust EPE ports `eval/` 1:1 later. It must reproduce this engine's output on the golden corpus, the replay corpus and a 10⁷-request random corpus before it replaces it.
+- **Go (the module's toolchain, go 1.27).** Bitsets: `RoaringBitmap/roaring/v2`. Matching: compiled `glob.Pattern`s (§8.5), never `regexp` on the hot path. IP: `net/netip` and `go4.org/netipx`. Numbers: a strict decimal grammar parsed into `math/big.Rat`. Dates: `time.Parse` over the W3C profiles and epoch seconds, normalized to UTC. Content hashes: canonical JSON (`gowebpki/jcs`) and `crypto/sha256`. Parallelism: a worker pool of `GOMAXPROCS` goroutines (`golang.org/x/sync/errgroup`) sharing **one** read-only compiled snapshot in memory, sharded by principal atom. There is no fork and no per-worker copy, which removes the v1 design's memory multiplier. Per-evaluation time budgets use the request `context.Context`, checked between stages.
+- **Expected cost:** 500 principal atoms × ~300 envelope-pruned action atoms × ~50 resource atoms on average ≈ 7.5 M cells. At ~20 µs per fast-mode cell (the v1 budget, kept) that is about 150 core-seconds, comfortably inside the 60-minute materialization SLO. Go should beat that per-cell budget by a wide margin [unverified until PR-10's benchmarks], but the SLO does not depend on it. This is validated in PR-11 with a synthetic generator at 2× target scale (`go test -tags slow`, plus `Benchmark*` functions tracked nightly with `benchstat`).
+- **Rust only if profiling demands it.** By the founder's decision this Go engine is the spec's EPE. If PR-10's benchmarks or production profiles (`pprof`) show Go cannot meet §12.1, only the hot path (`eval/` and `index/`) is ported to Rust, behind the same interface. The port must reproduce this engine's output on the golden corpus, the replay corpus and a 10⁷-request random corpus before it replaces it. Until such a profile exists, there is no Rust.
 
 ---
 
@@ -1348,11 +1667,11 @@ On a delta, which is either a connector change or a PR's `PolicyChange`:
 ### 13.1 Architecture
 
 ```
- infra/sandbox (Terraform, applied by CI only)          mvp/harness/ (package tessera_harness; never imported by the server)
+ infra/sandbox (Terraform, applied by CI only)          internal/aws/harness + cmd/tessera-harness (never imported by the server)
  ┌───────────────────────────────────────┐   outputs  ┌───────────────────────────────────────────────────────────────┐
  │ org, OUs, SCPs, RCPs, accounts,        │──────────►│ manifest.json (scenarios, principals, resources, canaries)     │
  │ scenario modules (tsr-<id>-*)          │           │                                                                 │
- └───────────────────────────────────────┘           │ snapshotter ── uses tessera/connectors/aws_org.py (same code)  │
+ └───────────────────────────────────────┘           │ snapshotter ── uses internal/connectors/awsorg (same code)     │
                                                        │     │                                                           │
                                                        │ sampler (strata S1–S6) ─► RequestSpec[]                        │
                                                        │     │                                                           │
@@ -1364,8 +1683,8 @@ On a delta, which is either a connector change or a PR's `PolicyChange`:
                                                        └───────────────────────────────────────────────────────────────┘
 ```
 
-- **Language and package.** Python, using `boto3` pinned to a version whose IAM model includes `OrderedOrganizationPolicyInputList` and `PolicyExclusionList`. CI asserts that pin (§13.2).
-- **Cassettes.** Every oracle response is recorded, keyed by a canonical request hash plus the fixture version. Recorded cassettes become the **offline replay corpus**: PR CI re-runs every past divergence and a 2,000-check stratified sample with no AWS credentials.
+- **Language and package.** Go, in `internal/aws/harness` with the binary `cmd/tessera-harness`, inside the server module so it can reuse the engine and connector without exporting them. `internal/archtest` asserts that only `cmd/tessera-harness` imports `internal/aws/harness`, so the server binary never links the harness. It uses `aws-sdk-go-v2/service/iam` ≥ v1.64.3, whose IAM model includes `OrderedOrganizationPolicyInputList` and `PolicyExclusionList`. The harness code references both fields, so an older pin fails to compile; that replaces v1's CI assertion of the boto3 pin (§13.2).
+- **Cassettes.** Every oracle response is recorded at the SDK's HTTP layer by `awstest.Replay` in record mode (the same client the connector tests use, §11.1), keyed by a canonical request hash plus the fixture version, under `testdata/aws/cassettes/`. Recorded cassettes become the **offline replay corpus**: PR CI re-runs every past divergence and a 2,000-check stratified sample with no AWS credentials.
 - **Storage.** Tables `harness_runs`, `harness_checks` (request, our decision, oracle answer, stratum, oracle type, latency) and `harness_divergences` (class, minimized reproducer, issue link, status).
 
 ### 13.2 What AWS's oracles can and cannot decide (verified 2026-10-08)
@@ -1448,31 +1767,44 @@ In total that is ≥ 10,000 gate-eligible checks a night (S1–S5), which is eno
 
 **SimulateCustomPolicy** (fuzz and cross-account):
 
-```python
-resp = iam.simulate_custom_policy(
-    PolicyInputList=[json.dumps(p) for p in identity_policies],
-    PermissionsBoundaryPolicyInputList=[json.dumps(boundary)] if boundary else [],
-    OrderedOrganizationPolicyInputList=[            # root → OU(s) → account, ≤ 7 levels
-        {"ServiceControlPolicyInputList": [json.dumps(s) for s in level]} for level in scp_levels
-    ] if scp_levels else [],
-    ActionNames=[action],                           # concrete; no wildcards in Custom mode
-    ResourceArns=[resource_arn] if resource_arn else ["*"],
-    ResourcePolicy=json.dumps(resource_policy) if resource_policy else None,
-    ResourceOwner=f"arn:aws:iam::{resource_account}:root" if resource_policy else None,
-    CallerArn=caller_user_or_role_arn,              # never a session ARN (API restriction)
-    ContextEntries=[{"ContextKeyName": k, "ContextKeyValues": vals, "ContextKeyType": sim_type(k)}
-                    for k, vals in explicit_context.items()],   # string|stringList|numeric|…|ip|date|boolean…
-    MaxItems=1000,
-)
-# Loop while resp["IsTruncated"]. For each EvaluationResult, read ResourceSpecificResults[*].EvalResourceDecision
-# when present, else EvalDecision. Record MatchedStatements, MissingContextValues,
-# OrganizationsDecisionDetail.AllowedByOrganizations, PermissionsBoundaryDecisionDetail, EvalDecisionDetails.
-# A non-empty MissingContextValues ⇒ the check is INVALID (harness bug), not a divergence.
+```go
+in := &iam.SimulateCustomPolicyInput{
+	PolicyInputList:                    identityPolicies,          // []string of raw JSON
+	PermissionsBoundaryPolicyInputList: boundaryPolicies,          // empty if there is no boundary
+	OrderedOrganizationPolicyInputList: orderedSCPs(scpLevels),    // root → OU(s) → account, ≤ 7 levels; nil if none
+	ActionNames:                        []string{action},          // concrete; no wildcards in Custom mode
+	ResourceArns:                       []string{resourceOrStar},  // "*" when there is no resource
+	ResourcePolicy:                     resourcePolicy,            // *string, nil if none
+	ResourceOwner:                      resourceOwner,             // aws.String("arn:aws:iam::" + acct + ":root") when ResourcePolicy is set
+	CallerArn:                          aws.String(callerUserOrRoleARN), // never a session ARN (API restriction)
+	ContextEntries:                     contextEntries(explicitContext), // []types.ContextEntry{ContextKeyName, ContextKeyValues,
+	                                                                     //   ContextKeyType: types.ContextKeyTypeEnumString | …StringList | …}
+}
+
+func orderedSCPs(levels [][]string) []types.OrderedOrganizationPolicyType {
+	out := make([]types.OrderedOrganizationPolicyType, 0, len(levels))
+	for _, lvl := range levels {
+		out = append(out, types.OrderedOrganizationPolicyType{ServiceControlPolicyInputList: lvl})
+	}
+	return out
+}
+
+p := iam.NewSimulateCustomPolicyPaginator(client, in,
+	func(o *iam.SimulateCustomPolicyPaginatorOptions) { o.Limit = 1000 }) // MaxItems up to 1000
+for p.HasMorePages() {                                                   // loops on IsTruncated / Marker
+	page, err := p.NextPage(ctx)
+	// For each EvaluationResult, read ResourceSpecificResults[*].EvalResourceDecision
+	// when present, else EvalDecision. Record MatchedStatements, MissingContextValues,
+	// OrganizationsDecisionDetail.AllowedByOrganizations, PermissionsBoundaryDecisionDetail, EvalDecisionDetails.
+	// A non-empty MissingContextValues ⇒ the check is INVALID (harness bug), not a divergence.
+	// SourcePolicyType is types.PolicySourceType, a string type: an undocumented value such as
+	// "Resource Policy" passes through unchanged, and the comparator accepts it alongside "resource".
+}
 ```
 
 **SimulatePrincipalPolicy** (deployed config): `PolicySourceArn=<user/role ARN>`, `ActionNames`, `ResourceArns`, `ContextEntries`. A `ResourcePolicy` is passed only when one is needed: the API never fetches resource policies, so the harness supplies the deployed policy text. `PolicyExclusionList` is used for ablation runs, for example excluding SCPs to isolate whether a divergence is in the SCP stage. The harness role needs `iam:SimulatePrincipalPolicy`, `iam:SimulateCustomPolicy`, `iam:GetContextKeysFor*` and read-only org access.
 
-**Access Analyzer:** `accessanalyzer.check_access_not_granted(policyDocument=…, policyType="IDENTITY_POLICY"|"RESOURCE_POLICY", access=[{"actions": [...], "resources": [...]}])`, and `list_findings_v2(analyzerArn=<org internal analyzer>, filter={"findingType": {"eq": ["InternalAccess"]}})` followed by `get_finding_v2`. Honour `ThrottlingException.retryAfterSeconds`.
+**Access Analyzer:** `aa.CheckAccessNotGranted(ctx, &accessanalyzer.CheckAccessNotGrantedInput{PolicyDocument: …, PolicyType: types.AccessCheckPolicyTypeIdentityPolicy | types.AccessCheckPolicyTypeResourcePolicy, Access: []types.Access{{Actions: …, Resources: …}}})`, and `aa.ListFindingsV2` with `AnalyzerArn: <org internal analyzer>` and `Filter: map[string]types.Criterion{"findingType": {Eq: []string{"InternalAccess"}}}` (through `accessanalyzer.NewListFindingsV2Paginator`), followed by `GetFindingV2`. Honour `*types.ThrottlingException`'s `RetryAfterSeconds` (checked with `errors.As`).
 
 **Live probes.** A probe runs as a real principal from the manifest:
 - **Role sessions:** the harness assumes the role, passing the scenario's session policy and tags where relevant.
@@ -1490,7 +1822,7 @@ It then makes a **safe call**, and the result is classified by response:
 | STS | `AssumeRole` / `AssumeRoleWithWebIdentity` with a JWT minted by the sandbox test OIDC issuer (§13.8) | Credentials returned | AccessDenied |
 | Secrets Manager | `GetSecretValue` on a canary secret | 200 | AccessDeniedException |
 | IAM / Organizations reads | `Get*` / `List*` | 200 | AccessDenied |
-| Anything else | Only if the action is in the curated `probe_catalog.yaml` with a declared safe call; otherwise the check is not probed | | |
+| Anything else | Only if the action is in the curated `internal/aws/harness/probe_catalog.yaml` with a declared safe call; otherwise the check is not probed | | |
 
 Any other error (throttling, NoSuchEntity, validation) makes the probe **INCONCLUSIVE**. It is retried, and never counted as a deny. Every disagreement is re-probed after a **10-minute settle** to filter out IAM and KMS eventual consistency. The probe path **never** changes IAM, Organizations, policies or grants. Fixture changes go only through Terraform applies, or through harness setup steps that run before sampling starts. Probe roles carry a dedicated session tag (`tessera-harness=true`), and the sandbox's SCPs deny mutating calls outside the `tsr-*` resource prefix for that tag.
 
@@ -1605,7 +1937,7 @@ Every module outputs a manifest fragment: case id, principals, resources, canari
 
 ### 14.1 Format and conventions
 
-The corpus lives at `mvp/backend/tests/aws_eval/golden/*.yaml`, one file per area. `tests/aws_eval/test_golden.py` runs it with **no AWS credentials**. Every case gives the snapshot fragment, the request and the expected decision, and cites the rule that justifies the expectation. A case has `verified: doc` (it follows directly from a cited AWS doc sentence) or `verified: pending-probe:<A-id>` (it depends on an ambiguity default). A case flips to `verified: probe:<run-id>` once the harness confirms it in the sandbox. Every deployable case is also a scenario module (§13.8, stratum S1).
+The corpus lives at `mvp/server/testdata/aws/golden/*.yaml`, one file per area. `internal/aws/eval/golden_test.go` (`TestGolden`, one subtest per case id, so `go test -run 'TestGolden/GC-57' ./internal/aws/eval` runs a single case) runs it with **no AWS credentials**, parsing the files with `go.yaml.in/yaml/v3`. Every case gives the snapshot fragment, the request and the expected decision, and cites the rule that justifies the expectation. A case has `verified: doc` (it follows directly from a cited AWS doc sentence) or `verified: pending-probe:<A-id>` (it depends on an ambiguity default). A case flips to `verified: probe:<run-id>` once the harness confirms it in the sandbox. Every deployable case is also a scenario module (§13.8, stratum S1).
 
 ```yaml
 # Defaults for every case unless overridden
@@ -2154,27 +2486,29 @@ O1:
   why: "§9.5: allow ∧ ¬deny = (x ∧ ¬x) on the same atom is unsatisfiable, so the result is DENY, not CONDITIONAL. deny_kind is null because it depends on context: a concrete request gives EXPLICIT when SecureTransport is true and IMPLICIT when it is false."  verified: doc
 ```
 
-**Coverage.** These 74 cases (several of them with 2–3 requests each, so 85 assertions) cover every rule in §3.1. CI fails if a rule loses all of its cases. The rule ↔ case matrix is generated into `tests/aws_eval/golden/COVERAGE.md`. **Pending-probe cases** are A2 (GC-48), A3 (GC-57), A4 (GC-71), A14 (GC-51) and A17 (GC-23). They are run in the sandbox in the first harness night. If the probe disagrees, the default **and** the case are updated together in one PR.
+**Coverage.** These 74 cases (several of them with 2–3 requests each, so 85 assertions) cover every rule in §3.1. CI fails if a rule loses all of its cases. The rule ↔ case matrix is generated into `testdata/aws/golden/COVERAGE.md` (by `go generate ./internal/aws/eval`; CI fails if the committed file is stale). **Pending-probe cases** are A2 (GC-48), A3 (GC-57), A4 (GC-71), A14 (GC-51) and A17 (GC-23). They are run in the sandbox in the first harness night. If the probe disagrees, the default **and** the case are updated together in one PR.
 
 ---
 
 ## 15. Implementation plan: ordered, independently mergeable PRs
 
-Every PR keeps `pytest` green for the existing MVP tests (`tests/test_graph.py`, `test_least_privilege.py` and others) and adds no behaviour change until PR-11 switches the AWS connector. Paths are relative to `mvp/backend/` unless they start with `infra/` or `mvp/harness/`.
+**Precondition.** PR-1 starts only after the Go port (branch `go-backend`) is merged into `dev`. Every later PR builds on the port's layout.
+
+Every PR keeps `./run.sh test` green for the existing MVP tests. That runs `go test -race ./...` in `mvp/server`, including the existing package tests (`internal/graph`, `internal/leastpriv` and others) and the JSON parity fixtures in `testdata/parity/`. Every PR also passes `go vet ./...`, `staticcheck ./...`, `govulncheck ./...` and the licence scan, and adds no behaviour change until PR-11 switches the AWS connector. Fuzz targets run their seed corpus in every `go test` run and fuzz for 5 minutes each in a nightly job (`go test -run '^$' -fuzz '^FuzzX$' -fuzztime 5m ./internal/aws/...`); crashers are committed under the package's `testdata/fuzz/`. Paths are relative to `mvp/server/` unless they start with `infra/`, `.github/` or `docs/`.
 
 | PR | Scope | Files | Tests | Depends on |
 |---|---|---|---|---|
-| **PR-1** | Core types and the policy parser: string-or-list normalization, the `Version` rule, every `Principal` form, condition parsing with qualifiers and IfExists, statement spans, validation and ingest anomalies (NotPrincipal+Allow, an invalid element mix, a multivalued variable). Hard limits on policy size and nesting; JSON parsed strictly. | `tessera/authz/core.py`, `tessera/aws/model.py`, `tessera/aws/policy/parse.py`, `tessera/aws/policy/lint.py` | `tests/aws_eval/test_parse.py`: round-trip, malformed input, a Hypothesis fuzz that never raises, span accuracy | — |
-| **PR-2** | Catalog: the snapshot fetcher, compiler and loader; overlays (`rcp_services.yaml` with 62 prefixes, `kms_xacct_ops.yaml`, `global_keys.yaml`, `s3_acl_map.yaml`, `rbp_rules.yaml`, `opt_in_regions.yaml`, `s3_public_fixed_keys.yaml`); `THIRD_PARTY_NOTICES` for iam-dataset; the nightly refresh workflow that opens a PR | `catalog/aws/**`, `tessera/aws/catalog/{fetch,compile,loader}.py`, `.github/workflows/catalog-refresh.yml` | Loader and expansion tests; RCP list membership; offline fixtures for the diff report; a determinism test that the same inputs give the same compiled hash | — |
-| **PR-3** | Matching: a **linear-time glob** (no backtracking regex, so it is safe against ReDoS), action matching, `arn_glob` with the A1 default, principal normalization and match kinds, NotPrincipal layering | `tessera/aws/eval/match.py`, `tessera/aws/eval/glob.py` | Table tests for each §8 rule; a property test that glob agrees with a reference regex on safe patterns; a worst-case pattern performance test; GC-04–GC-11 at the matcher level | PR-1 |
-| **PR-4** | Conditions, context and residuals: operator families, the missing-key truth table, qualifiers, variables with defaults and escapes, type coercion, global-key derivation, Tri/Residual, the per-key domain simplifier, the renderer | `tessera/aws/eval/{cond,context,variables}.py`, `tessera/authz/residual.py` | Operator truth tables; GC-12–GC-30 at the condition level; a **soundness property test** (symbolic vs concrete over random total contexts); simplifier unit tests | PR-1, PR-2 |
-| **PR-5** | The engine: the §7.2 pipeline, the principal-type matrix, SCP/RCP applicability per level, sessions, trust policies, cross-account, deny-kind selection, decisive sets, fidelity accumulation with outcome-sensitivity, the explanation builder and its three renderings | `tessera/aws/eval/{engine,explain,fidelity}.py`, `tests/aws_eval/golden/{basics,conditions,matrix,scp,rcp,xacct,trust,notprincipal,symbolic}.yaml`, `tests/aws_eval/test_golden.py` | **Golden corpus GC-01–GC-59 and GC-69–GC-74 at 100 %**; trace determinism (byte-identical JSON); generated rule-coverage matrix | PR-3, PR-4 |
-| **PR-6** | KMS and S3: key-policy delegation, grants with constraints, the cross-account op allowlist, ACLs by ownership mode, effective BPA, `policy_is_public`, RestrictPublicBuckets, PUT-time BPA checks, object context | `tessera/aws/eval/{kms,s3}.py`, `tests/aws_eval/golden/{kms,s3}.yaml` | GC-60–GC-68; `policy_is_public` tests against the S3 doc examples and the Bouchet et al. categories | PR-5 |
-| **PR-7** | Read-only AWS connector and persistence: an org/IAM/S3/KMS/SQS/SNS/Secrets/Lambda/ECR/VPCE/Identity Center collector producing a `Snapshot`; `aws_*` tables; registry entry `aws` (not the default); federated credentials only | `tessera/connectors/aws_org.py`, `tessera/models_aws.py`, `tessera/aws/snapshot.py`, `tessera/connectors/registry.py` (one line) | Connector tests with `moto` (collection only; moto does not enforce IAM) and botocore Stubber for the APIs moto lacks; snapshot content-hash stability; a least-privilege check of the connector's own IAM policy (it must contain only read actions, verified by our own catalog `Annotations`) | PR-1, PR-2 |
-| **PR-8** | Harness foundation, offline: request specs, oracle clients (SimCustom, SimPrincipal, AA, probe), cassette record and replay, the comparator, M1–M4 and C, the Wilson-bound gate, the triage DB, a delta-debug minimizer, the CI replay job | `mvp/harness/tessera_harness/**`, `mvp/harness/tests/**`, `.github/workflows/harness-replay.yml` | Stubbed AWS responses: pagination, the `ResourceSpecificResults` aggregation trap, the `SourcePolicyType` enum mismatch, `MissingContextValues` ⇒ INVALID, throttling backoff; Wilson math; minimizer convergence | PR-5 |
-| **PR-9** | Sandbox Terraform and the nightly harness: org, OUs, SCP/RCP fixtures, accounts, the test OIDC issuer, CloudTrail Lake, org analyzers, a scenario module per deployable GC case, the manifest, `probe_catalog.yaml`, the nightly workflow (manual approval for applies) | `infra/sandbox/**`, `mvp/harness/probe_catalog.yaml`, `.github/workflows/harness-nightly.yml` | `terraform validate`, `tflint`, `checkov`, and a policy test that every probe action is read-only, DryRun or confined to canaries. **Not applied until Phase 0 security sign-off (Q3).** | PR-8 |
-| **PR-10** | Indexes and queries: action, resource and principal atoms; envelopes; inverted indexes; the memo; `effective_permissions()`, `who_can()`, `diff()`; incremental refinement; a synthetic scale generator | `tessera/aws/index/{atoms,envelope,inverted,memo}.py`, `tessera/aws/query.py`, `tests/aws_eval/test_query.py`, `tests/aws_eval/perf/` | Equivalence test: atom-based results equal brute force on small random snapshots. Perf test at 2× target scale (marked `slow`, run nightly) against the §12.1 SLOs | PR-5, PR-6 |
-| **PR-11** | MVP integration: additive fields on `GrantEdge` and `EffectivePermission`; the connector emits evaluator-confirmed permissions and `can_assume` trust edges; `simulate()` gains `policy_changes`; leastpriv verification; NHI trust flags; `/api/aws/*` endpoints; the PR comment renderer | `tessera/models.py` (additive columns), `tessera/graph.py` (one relation), `tessera/simulate.py`, `tessera/leastpriv.py`, `tessera/nhi.py`, `tessera/api/app.py`, `tessera/aws/render/pr_comment.py` | All existing tests unchanged and green. New: an **exit-criterion-2 test** where a golden fixture plus a policy PR gives an exact gained/lost list with traces; API tests; a test that a least-privilege recommendation preserves the used set | PR-7, PR-10 |
+| **PR-1** | Core types and the policy parser: string-or-list normalization, the `Version` rule, every `Principal` form, condition parsing with qualifiers and IfExists, statement spans, validation and ingest anomalies (NotPrincipal+Allow, an invalid element mix, a multivalued variable). Hard limits on policy size and nesting; JSON parsed strictly (a `json.Decoder` with `DisallowUnknownFields` where AWS's grammar is closed, duplicate-key detection, depth counting). | `internal/authz/{core,tri,residual}.go`, `internal/aws/model/*.go`, `internal/aws/policy/{parse,lint,limits}.go` | `internal/aws/policy/parse_test.go`: round-trip, malformed input (table-driven), span accuracy; `FuzzParse` (never panics, never exceeds the limits, parse → serialize → parse is stable), seeded with every policy in the golden corpus | The Go port merged |
+| **PR-2** | Catalog: the snapshot fetcher, compiler and loader; overlays (`rcp_services.yaml` with 62 prefixes, `kms_xacct_ops.yaml`, `global_keys.yaml`, `s3_acl_map.yaml`, `rbp_rules.yaml`, `opt_in_regions.yaml`, `s3_public_fixed_keys.yaml`); `THIRD_PARTY_NOTICES` for iam-dataset; the nightly refresh workflow that opens a PR | `catalog/aws/**`, `internal/aws/catalog/{fetch,compile,loader,catalog}.go`, `cmd/tessera` subcommand `tessera catalog refresh\|compile`, `.github/workflows/catalog-refresh.yml` | `internal/aws/catalog/*_test.go`: loader and expansion tests; RCP list membership; offline fixtures in `internal/aws/catalog/testdata/` for the diff report; a determinism test that the same inputs give the same compiled bytes and hash | — |
+| **PR-3** | Matching: the **linear-time glob** of §8.5 (no regexp, no backtracking, so it is safe against ReDoS), action matching, `arn_glob` with the A1 default, principal normalization and match kinds, NotPrincipal layering | `internal/aws/glob/glob.go`, `internal/aws/eval/{match,arn,principal}.go` | Table tests for each §8 rule; `FuzzMatchAgreesWithRegexp` (glob agrees with a reference RE2 regexp; RE2 is itself linear, so no pattern needs excluding); `FuzzCompile`; `TestMatchWorstCase` and `BenchmarkMatch`; GC-04–GC-11 at the matcher level | PR-1 |
+| **PR-4** | Conditions, context and residuals: operator families, the missing-key truth table, qualifiers, variables with defaults and escapes, type coercion, global-key derivation, Tri/Residual, the per-key domain simplifier, the renderer | `internal/aws/eval/{cond,context,variables}.go`, `internal/authz/{residual,simplify,render}.go` | Operator truth tables (table-driven); GC-12–GC-30 at the condition level; the **soundness property test** `TestSymbolicSoundness` (rapid generators: symbolic vs concrete over random total contexts) and `FuzzSymbolicSoundness` (`rapid.MakeFuzz`); simplifier unit tests; `FuzzDecimalCompare`, `FuzzDateParse` | PR-1, PR-2 |
+| **PR-5** | The engine: the §7.2 pipeline, the principal-type matrix, SCP/RCP applicability per level, sessions, trust policies, cross-account, deny-kind selection, decisive sets, fidelity accumulation with outcome-sensitivity, the explanation builder and its three renderings | `internal/aws/eval/{engine,explain,fidelity}.go`, `internal/aws/snapshot/{builder,hash}.go`, `testdata/aws/golden/{basics,conditions,matrix,scp,rcp,xacct,trust,notprincipal,symbolic}.yaml`, `internal/aws/eval/golden_test.go`, `internal/archtest` (purity import ban) | **Golden corpus GC-01–GC-59 and GC-69–GC-74 at 100 %** (`go test -run TestGolden ./internal/aws/eval`); trace determinism (byte-identical JSON across repeated runs and shuffled insertion orders); `TestEvalDoesNotMutateSnapshot` under `-race`; generated rule-coverage matrix | PR-3, PR-4 |
+| **PR-6** | KMS and S3: key-policy delegation, grants with constraints, the cross-account op allowlist, ACLs by ownership mode, effective BPA, `policy_is_public`, RestrictPublicBuckets, PUT-time BPA checks, object context | `internal/aws/eval/{kms,s3}.go`, `testdata/aws/golden/{kms,s3}.yaml` | GC-60–GC-68; `policy_is_public` table tests against the S3 doc examples and the Bouchet et al. categories | PR-5 |
+| **PR-7** | Read-only AWS connector and persistence: an org/IAM/S3/KMS/SQS/SNS/Secrets/Lambda/ECR/VPCE/Identity Center collector producing a `Snapshot`; `aws_*` tables; registry entry `aws` (not the default); federated credentials only | `internal/connectors/awsorg/*.go`, `internal/store/schema/00NN_aws.sql`, `internal/store/{model_aws,repo_aws}.go`, `internal/aws/awstest/{stub,replay}.go`, the connector registry (one line) | Connector tests with the AWS SDK for Go v2 stubs of §11.1 (Finalize-step typed outputs for control flow; HTTP replay of recorded responses in `internal/connectors/awsorg/testdata/http/` so the real deserializers run; collection only, as with moto in v1, since neither enforces IAM): pagination of every `List*` call, URL-encoded IAM policy documents, per-account AccessDenied and throttling; snapshot content-hash stability; the Phase 0 isolation suite extended to the `aws_*` tables (`TestIsolation_AWSTables`); a least-privilege check of the connector's own IAM policy (it must contain only read actions, verified by our own catalog `Annotations`) | PR-1, PR-2 |
+| **PR-8** | Harness foundation, offline: request specs, oracle clients (SimCustom, SimPrincipal, AA, probe), cassette record and replay, the comparator, M1–M4 and C, the Wilson-bound gate, the triage DB, a delta-debug minimizer, the CI replay job | `internal/aws/harness/**`, `cmd/tessera-harness/`, `testdata/aws/cassettes/`, `.github/workflows/harness-replay.yml` | Recorded AWS responses replayed through `awstest.Replay`: pagination, the `ResourceSpecificResults` aggregation trap, the `SourcePolicyType` enum mismatch, `MissingContextValues` ⇒ INVALID, throttling backoff (adaptive retry and `RetryAfterSeconds`); Wilson math (table-driven against published values); minimizer convergence; archtest: only `cmd/tessera-harness` imports `internal/aws/harness`. CI job: `go run ./cmd/tessera-harness replay` with no AWS credentials | PR-5 |
+| **PR-9** | Sandbox Terraform and the nightly harness: org, OUs, SCP/RCP fixtures, accounts, the test OIDC issuer, CloudTrail Lake, org analyzers, a scenario module per deployable GC case, the manifest, `probe_catalog.yaml`, the nightly workflow (manual approval for applies) | `infra/sandbox/**`, `internal/aws/harness/probe_catalog.yaml`, `.github/workflows/harness-nightly.yml` | `terraform validate`, `tflint`, `checkov`, and `internal/aws/harness/probecatalog_test.go`, which checks that every probe action is read-only, DryRun or confined to canaries. **Not applied until Phase 0 security sign-off (Q3).** | PR-8 |
+| **PR-10** | Indexes and queries: action, resource and principal atoms; envelopes; inverted indexes; the memo; `EffectivePermissions()`, `WhoCan()`, `Diff()`; incremental refinement; a synthetic scale generator | `internal/aws/index/{atoms,envelope,inverted,memo}.go`, `internal/aws/query/query.go`, `internal/aws/query/query_test.go`, `internal/aws/query/perf_test.go` (`//go:build slow`) | Equivalence test (rapid): atom-based results equal brute force on small random snapshots. Perf test at 2× target scale (`go test -tags slow -run TestPerf ./internal/aws/query`, run nightly) against the §12.1 SLOs, plus `Benchmark*` tracked with `benchstat`; CPU and heap profiles kept as artifacts (they are the evidence for or against a Rust port, §12.6) | PR-5, PR-6 |
+| **PR-11** | MVP integration: additive fields on `GrantEdge` and `EffectivePermission`; the connector emits evaluator-confirmed permissions and `can_assume` trust edges; `simulate` gains `PolicyChanges`; leastpriv verification; NHI trust flags; `/api/aws/*` endpoints; the PR comment renderer | `internal/store` (additive grant-edge columns and migration), `internal/graph` (one relation), `internal/simulate`, `internal/leastpriv`, `internal/nhi`, `internal/api` (`/api/aws/*` handlers in the route table), `internal/aws/snapshot/apply.go`, `internal/aws/render/prcomment.go` | All existing Go tests unchanged and green; parity fixtures change only where responses gain the additive fields, listed in the PR description. New: an **exit-criterion-2 test** where a golden fixture plus a policy PR gives an exact gained/lost list with traces; API tests through `httptest`; a test that a least-privilege recommendation preserves the used set | PR-7, PR-10 |
 | **PR-12** | Knowledge-base corrections (§4.4) and the ambiguity register as a living doc | `docs/knowledge/03-authorization-and-policy.md`, `docs/knowledge/aws-evaluation-ambiguities.md` | Docs only | can merge first |
 
 The **critical path** is PR-1 → PR-3/PR-4 → PR-5 → PR-8 → PR-9 (first nightly). PR-6, PR-7 and PR-10 run in parallel after PR-5. Exit criterion 1 is first measurable after PR-9. Exit criterion 2 is demonstrable after PR-11.
@@ -2190,15 +2524,15 @@ Ranked by severity. Platform-security risks are listed first.
 | # | Risk | Scenario | Mitigation |
 |---|---|---|---|
 | R1 | **Tessera's AWS reader is a crown jewel** | The read-only connector can read every policy in the org. Stolen, it maps the whole estate for an attacker. | Federated (OIDC/WIF) per-tenant role, no stored keys, read-only actions verified by our own catalog in CI (PR-7), Phase 0 audit ledger for every snapshot, bulk revocation path. iam-pam-nhi-expert to review. |
-| R2 | **Policy JSON is untrusted input** | A crafted policy with a pathological wildcard (`*a*a*a…`) makes a backtracking regex hang the evaluator (ReDoS); a deep or oversized document exhausts memory. | Linear-time glob (PR-3), strict JSON parsing with size and depth caps above AWS's own limits, per-evaluation time budget, fuzzing (PR-1). |
+| R2 | **Policy JSON is untrusted input** | A crafted policy with a pathological wildcard (`*a*a*a…`) makes a backtracking regex hang the evaluator (ReDoS); a deep or oversized document exhausts memory. | Linear-time glob (PR-3, §8.5), strict JSON parsing with size and depth caps above AWS's own limits, per-evaluation time budget (a `context.Context` deadline checked between stages), native fuzzing (PR-1, PR-3). |
 | R3 | **Harness credentials and public fixtures** | Probe-user access keys leak; a public test bucket is abused. | Keys only in the sandbox, rotated daily, in Secrets Manager, never in CI logs; `SbxGuardrails` SCP; canary-only public data; budget alarms; no customer data in the sandbox. Blocked on Phase 0 sign-off. |
 | R4 | **Undocumented AWS behaviour** | An ambiguity default is wrong, so a whole class of decisions is wrong. | The register (§4.3), outcome-sensitive `APPROXIMATE` flags, first-night probes, weekly re-probes to detect AWS changes. |
 | R5 | **The oracle is wrong** | The simulator disagrees with live enforcement (AWS says results "can differ") and we "fix" the engine to match the simulator. | Probe-first routing for every category the simulator doesn't cover; a `known_divergence` entry requires probe evidence; ENGINE_BUG classification needs two concurring oracles. |
 | R6 | **Sandbox not representative** | 99.5 % on fixtures, lower on real estates (odd services, huge policies, Identity Center ABAC). | Stratum S3 weighted by real CloudTrail frequencies; later, opt-in design-partner CloudTrail replay ("observed success that we predict as deny" = P1, as spec §6.2 says); per-service agreement published. |
 | R7 | **Metric gaming or bias** | Flagging hard cases `UNSUPPORTED` raises M1. | Coverage floor C ≥ 97 %, per-stratum floors, unsupported volume reported next to M1. |
 | R8 | **AWS changes semantics** | New policy types or language extensions (like the Sept 2025 SCP change) silently break the engine. | Nightly catalog diff, an RSS watch on What's New for IAM, Organizations and S3 tags, weekly ambiguity probes, engine version pinned per decision. |
-| R9 | **Performance in Python** | Atoms explode under tag-heavy ABAC (many distinct `aws:ResourceTag` values). | Cap tag-value cardinality per key in signatures (fall back to symbolic tag predicates), shard by account, the Rust port as a planned step (spec EPE). |
-| R10 | **Licence contamination** | Copying from PMapper or iam-simulate (AGPL) taints the product. | Clean-room rule in CONTRIBUTING, dependency licence scan in CI, no AGPL test data; iam-dataset and policy_sentry (MIT) data only with notices. |
+| R9 | **Performance in Go** | Atoms explode under tag-heavy ABAC (many distinct `aws:ResourceTag` values). | Cap tag-value cardinality per key in signatures (fall back to symbolic tag predicates), shard by account, profile nightly (PR-10). A Rust port of `eval/` and `index/` only if those profiles show Go misses §12.1 (founder decision, §12.6). |
+| R10 | **Licence contamination** | Copying from PMapper or iam-simulate (AGPL) taints the product. | Clean-room rule in CONTRIBUTING, dependency licence scan in CI, no AGPL test data; iam-dataset and policy_sentry (MIT) data only with notices. `pgregory.net/rapid` (MPL-2.0) is allowlisted for `_test.go` imports only (§2.4). |
 | R11 | **Eventual consistency** | IAM, KMS grant or RCP propagation makes the harness report false divergences, and the product shows stale decisions. | Settle-and-reprobe; snapshot freshness SLO with a `SNAPSHOT_STALENESS` flag; the UI shows "as of" times. |
 | R12 | **Explanations misread by auditors** | A long trace is taken as proof of something it doesn't say. | Templated wording reviewed by iam-governance-expert; the decisive set shown first; raw policy bytes attached. |
 
@@ -2208,11 +2542,11 @@ Ranked by severity. Platform-security risks are listed first.
 
 | # | Question | Proposed answer | Owner |
 |---|---|---|---|
-| Q1 | The spec puts the EPE in Rust. Is a Python reference engine first acceptable? | Yes. The Python engine becomes the oracle that the Rust port must match (D1). | iam-architect, eng lead |
+| Q1 | The spec puts the EPE in Rust. Which language for the engine? | **Decided (2026-10-09): Go.** The Go engine is both the reference and the production EPE (D1). Rust only if profiling later shows Go is too slow, and then as a port that must reproduce this engine's output (§12.6). (v1 proposed a Python reference with a later Rust port.) | Founder (decided); iam-architect, eng lead |
 | Q2 | Gate thresholds: coverage floor 97 %? Do `APPROXIMATE` decisions count in M1? | Count them (they are our answer), and report the exact-only M1 separately. | Product + iam-authz-expert |
 | Q3 | Who owns the sandbox org, its budget (≈ $300/month) and Phase 0 sign-off for harness credentials? | Security engineering owns it; Phase 0 must ship the audit ledger first. | Security lead |
 | Q4 | Default assumption profile for effective-permission views. | `{now, tls}`, everything else symbolic. Show the profile chip in the UI. | UX + iam-authz-expert |
-| Q5 | Phase 2 SMT backend (Z3, MIT, vs cvc5, BSD), and whether to reuse Cedar symcc's encoding ideas for IAM residuals. | Prototype both on residuals left `RESIDUAL_UNDECIDED`. | iam-authz-expert |
+| Q5 | Phase 2 SMT backend (Z3, MIT, vs cvc5, BSD), and whether to reuse Cedar symcc's encoding ideas for IAM residuals. | Prototype both on residuals left `RESIDUAL_UNDECIDED`. In Go: Z3 now has official Go bindings (§2.4), but they need cgo, which the pure-Go build (`modernc.org/sqlite`) otherwise avoids; the alternative is driving either solver as a subprocess over SMT-LIB 2. symcc itself is Rust-only (§2.4). | iam-authz-expert |
 | Q6 | Model VPC endpoint policies exactly in Phase 1? | No. Approximate unless the request names the endpoint (§3.2). Revisit when network-path data exists. | iam-architect |
 | Q7 | May we use AGPL iam-simulate as an additional black-box oracle (its outputs only, no code or data)? | Ask counsel. Until then, no. | Legal |
 | Q8 | Retention period for snapshots and explanations (evidence). | Align with the governance doc (D4·M22): 7 years for SOX tenants, configurable. | iam-governance-expert |
@@ -2271,6 +2605,16 @@ Ranked by severity. Platform-security risks are listed first.
   - DataDog/pathfinding.cloud (Apache-2.0)
   - act-security-labs/iam-simulate (formerly cloud-copilot; AGPL-3.0-or-later)
   - DataDog/iamspy (not verified)
+- **Go modules (checked 2026-10-09 via proxy.golang.org, the GitHub API and api.osv.dev):**
+  - aws/aws-sdk-go-v2 (Apache-2.0): core v1.47.2; service/iam v1.64.3, service/organizations v1.61.2, service/sts v1.51.3, service/accessanalyzer v1.57.3, service/s3 v1.114.2 (all 2026-10-08); aws/smithy-go v1.28.4 (Apache-2.0, 2026-10-07). Advisory GO-2026-5764 / CVE-2026-89090 / GHSA-xmrv-pmrh-hhx2 (EventStream decoder panic) is fixed in all pinned versions.
+  - RoaringBitmap/roaring v2.29.0 (Apache-2.0, 2026-09-21)
+  - go4.org/netipx v0.0.0-20260823151212-3075585bcbeb (BSD-3-Clause)
+  - pgregory.net/rapid v1.3.0 (MPL-2.0, 2026-04-30; repository flyingmutant/rapid)
+  - go.yaml.in/yaml/v3 v3.0.5 (MIT and Apache-2.0, 2026-07-26)
+  - golang.org/x/sync v0.24.0 (BSD-3-Clause, 2026-09-23)
+  - cedar-policy/cedar-go v1.8.0 (Apache-2.0, 2026-06-01; README "Comparison to the Rust implementation" read at that tag); cedar-policy/cedar v4.13.0 and cedar-policy-symcc v0.7.0 (2026-09-15)
+  - Z3Prover/z3 z3-5.1.0 (MIT, 2026-08-16), Go bindings in `src/api/go`
+- **AWS SDK for Go v2 developer guide:** "Unit testing with the AWS SDK for Go v2": https://docs.aws.amazon.com/sdk-for-go/v2/developer-guide/unit-testing.html; "Customizing the AWS SDK for Go v2 client requests with middleware": https://docs.aws.amazon.com/sdk-for-go/v2/developer-guide/middleware.html; IAM API `GetAccountAuthorizationDetails` (URL-encoded policy documents): https://docs.aws.amazon.com/IAM/latest/APIReference/API_GetAccountAuthorizationDetails.html
 - **Papers** (DOIs as recorded by the research agent, not independently re-verified):
   - Backes et al., "Semantic-based Automated Reasoning for AWS Access Policies using SMT", FMCAD 2018
   - Backes et al., "Stratified Abstraction of Access Control Policies", CAV 2020
