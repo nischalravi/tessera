@@ -94,8 +94,11 @@ func (b *Bundle) gateReady(add func(Blocker)) {
 	}
 }
 
-// ready_to_validate → validated: a validation run for the current config
-// finished within the live TTL, and every applicable Required live check passes.
+// ready_to_validate → validated: a validation run finished within the live
+// TTL, and every applicable Required live check passes. Freshness against the
+// config is judged per item (§4.5): each result is bound to the hash of the
+// fields its item depends on, so editing the sync schedule does not
+// invalidate the TLS evidence, but editing the host does.
 func (b *Bundle) gateValidated(add func(Blocker), now time.Time) {
 	run := b.Evidence.LiveRun
 	switch {
@@ -103,8 +106,6 @@ func (b *Bundle) gateValidated(add func(Blocker), now time.Time) {
 		add(Blocker{Item: "validation", Status: StatusPending, Reason: "run validation"})
 	case run.Status != "completed":
 		add(Blocker{Item: "validation", Status: run.Status, Reason: "the last validation run did not complete"})
-	case run.ConfigHash != b.ConfigHash:
-		add(Blocker{Item: "validation", Status: StatusStale, Reason: "configuration changed since the last validation run"})
 	case run.FinishedAt != nil && now.Sub(*run.FinishedAt) > b.LiveTTL:
 		add(Blocker{Item: "validation", Status: StatusStale, Reason: fmt.Sprintf("live evidence older than %s", fmtTTL(b.LiveTTL))})
 	}
@@ -112,8 +113,8 @@ func (b *Bundle) gateValidated(add func(Blocker), now time.Time) {
 		if !it.Applicable || it.Level != template.Required || !it.HasKind(template.Live) {
 			continue
 		}
-		if len(it.BlockedBy) > 0 {
-			add(blockerFor(it, StatusBlocked, it.Reason))
+		if len(it.LiveBlockedBy) > 0 {
+			add(blockerFor(it, StatusBlocked, "blocked by "+joinIDs(it.LiveBlockedBy)))
 			continue
 		}
 		if st, reason, _ := it.partsOf(template.Live); st != StatusPass {

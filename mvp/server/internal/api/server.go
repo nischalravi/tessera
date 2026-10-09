@@ -49,6 +49,9 @@ type Config struct {
 	Readiness *readiness.Service
 	// Env is TESSERA_ENV ("dev" allows activating non-demo connector types).
 	Env string
+	// ReadinessScenario selects the simulated validation scenario
+	// (TESSERA_READINESS_SCENARIO; default "gaps").
+	ReadinessScenario string
 }
 
 // Server serves the API.
@@ -85,6 +88,7 @@ func New(cfg Config) *Server {
 			panic(err) // the embedded templates are linted by TestTemplates_Lint
 		}
 		cfg.Readiness = readiness.NewService(reg, cfg.Env)
+		cfg.Readiness.Runner.Scenario = cfg.ReadinessScenario
 	}
 	s := &Server{cfg: cfg, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness}
 	s.registerRoutes()

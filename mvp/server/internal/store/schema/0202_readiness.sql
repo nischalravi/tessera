@@ -52,3 +52,31 @@ CREATE TABLE IF NOT EXISTS readiness_overlays (
   updated_by TEXT NOT NULL, updated_at TEXT NOT NULL,
   UNIQUE (tenant_id, connector_type, connection_id, version)
 );
+
+-- Validation and dry-run check runs (DR-3). simulated = 1 for demo scenarios.
+CREATE TABLE IF NOT EXISTS readiness_check_runs (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000002',
+  revision_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('validation','scheduled','dry_run')),
+  simulated INTEGER NOT NULL DEFAULT 0, agent_id TEXT,
+  status TEXT NOT NULL CHECK (status IN ('running','completed','aborted','rate_limited')),
+  actor_id TEXT NOT NULL,
+  config_hash TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS check_runs_rev ON readiness_check_runs(tenant_id, revision_id, started_at);
+
+-- One row per item and check: the same check id can run with different
+-- params for different items (design §8.3 keys results by check only).
+-- observed holds counts, versions and dates, never secrets or values.
+CREATE TABLE IF NOT EXISTS readiness_check_results (
+  tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000002',
+  run_id TEXT NOT NULL REFERENCES readiness_check_runs(id),
+  item_id TEXT NOT NULL,
+  check_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pass','fail','warn','error','skipped','blocked')),
+  observed TEXT NOT NULL, message TEXT NOT NULL, duration_ms INTEGER NOT NULL,
+  item_hash TEXT NOT NULL,
+  simulated INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (tenant_id, run_id, item_id, check_id)
+);

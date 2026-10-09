@@ -75,16 +75,20 @@ type Part struct {
 // ItemEval is the evaluated state of one checklist item.
 type ItemEval struct {
 	template.Item
-	Applicable  bool               `json:"applicable"`
-	Status      string             `json:"status"`
-	Reason      string             `json:"reason,omitempty"`
-	BlockedBy   []string           `json:"blocked_by,omitempty"`
-	Parts       []Part             `json:"parts"`
-	Attestation *store.Attestation `json:"-"`
-	Skip        *store.Skip        `json:"-"`
-	ItemHash    string             `json:"-"`
-	own         string             // status before dependencies and skips
-	ownReason   string
+	Applicable bool     `json:"applicable"`
+	Status     string   `json:"status"`
+	Reason     string   `json:"reason,omitempty"`
+	BlockedBy  []string `json:"blocked_by,omitempty"`
+	// LiveBlockedBy are dependencies that stop the item's live checks from
+	// running: like BlockedBy, but data checks (which need a dry run, which
+	// needs validation) are ignored.
+	LiveBlockedBy []string           `json:"live_blocked_by,omitempty"`
+	Parts         []Part             `json:"parts"`
+	Attestation   *store.Attestation `json:"-"`
+	Skip          *store.Skip        `json:"-"`
+	ItemHash      string             `json:"-"`
+	own           string             // status before dependencies and skips
+	ownReason     string
 }
 
 // Evaluation is a whole checklist.
@@ -215,7 +219,48 @@ func (b *Bundle) Evaluate(now time.Time, liveTTL time.Duration) (*Evaluation, er
 	for _, ie := range out.Items {
 		resolve(ie)
 	}
+	memo := map[string]bool{}
+	for _, ie := range out.Items {
+		if !ie.Applicable {
+			continue
+		}
+		for _, d := range ie.DependsOn {
+			if !out.liveOK(d, memo, map[string]bool{}) {
+				ie.LiveBlockedBy = append(ie.LiveBlockedBy, d)
+			}
+		}
+	}
 	return out, nil
+}
+
+// liveOK reports whether an item is satisfied for the live phase: not
+// applicable, skipped, or its attestation and live parts pass and so do
+// its dependencies.
+func (e *Evaluation) liveOK(id string, memo, visiting map[string]bool) bool {
+	if v, ok := memo[id]; ok {
+		return v
+	}
+	ie, ok := e.byID[id]
+	if !ok || !ie.Applicable || ie.Status == StatusSkipped || ie.Status == StatusPass {
+		return true
+	}
+	if visiting[id] {
+		return false
+	}
+	visiting[id] = true
+	okAll := true
+	for _, p := range ie.Parts {
+		if p.Kind != template.Data && p.Status != StatusPass {
+			okAll = false
+		}
+	}
+	for _, d := range ie.DependsOn {
+		if okAll && !e.liveOK(d, memo, visiting) {
+			okAll = false
+		}
+	}
+	memo[id] = okAll
+	return okAll
 }
 
 func joinIDs(ids []string) string {

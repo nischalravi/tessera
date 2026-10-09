@@ -13,6 +13,7 @@
 //	                      (default: the dev UI on localhost/127.0.0.1, port UI_PORT or 5173)
 //	TESSERA_NOW           freeze the clock at an ISO-8601 time (tests and demos)
 //	TESSERA_ENV           "dev" allows activating non-demo connector types before DR-10
+//	TESSERA_READINESS_SCENARIO  simulated validation scenario for demo connectors: gaps (default) or happy
 package main
 
 import (
@@ -27,6 +28,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -189,8 +191,12 @@ func serve(ctx context.Context, o options, clock timeutil.Clock, loader *policy.
 	if _, err := loader.Load(); err != nil { // fail fast on broken policy files
 		return err
 	}
+	scenario := os.Getenv("TESSERA_READINESS_SCENARIO")
+	if scenario != "" && !slices.Contains(connectors.ScenarioNames(), scenario) {
+		return fmt.Errorf("TESSERA_READINESS_SCENARIO: unknown scenario %q (have %v)", scenario, connectors.ScenarioNames())
+	}
 	srv := api.New(api.Config{Store: st, Clock: clock, Policies: loader, Logger: logger, AllowedOrigins: corsOrigins(),
-		Env: os.Getenv("TESSERA_ENV")})
+		Env: os.Getenv("TESSERA_ENV"), ReadinessScenario: scenario})
 	httpSrv := &http.Server{
 		Addr:              o.addr,
 		Handler:           srv.Handler(),

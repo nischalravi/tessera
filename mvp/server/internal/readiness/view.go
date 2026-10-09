@@ -74,6 +74,8 @@ type ConnectionView struct {
 	Next             *NextStep            `json:"next"`
 	Blocking         int                  `json:"blocking"`
 	Score            *ScoreSummary        `json:"score"`
+	LatestValidation *string              `json:"latest_validation_id"`
+	LatestDryRun     *string              `json:"latest_dry_run_id"`
 	CreatedAt        string               `json:"created_at"`
 	UpdatedAt        string               `json:"updated_at"`
 	RetiredAt        *string              `json:"retired_at"`
@@ -163,6 +165,12 @@ func (s *Service) View(c *store.Conn, connID string, now time.Time) (*Connection
 			}
 		}
 		v.ActiveRevision = RevisionOf(lb)
+	}
+	if cur.Evidence.LiveRun != nil {
+		v.LatestValidation = &cur.Evidence.LiveRun.ID
+	}
+	if cur.Evidence.DataRun != nil {
+		v.LatestDryRun = &cur.Evidence.DataRun.ID
 	}
 	if pending != nil {
 		v.PendingRevision = RevisionOf(cur)

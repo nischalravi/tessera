@@ -242,3 +242,44 @@ func TestLegacyConnectors_Unchanged(t *testing.T) {
 		t.Errorf("connectors after sync: %s", after)
 	}
 }
+
+func TestValidation_API(t *testing.T) {
+	c := newRD(t)
+	id := c.createAD()
+	r := c.json("POST", "/api/connections/"+id+"/validate", "", http.StatusConflict)
+	if r["error"] != "not_ready_to_validate" {
+		t.Fatalf("draft validate: %v", r)
+	}
+	c.attest(id, "base.owner")
+	c.json("POST", "/api/connections/"+id+"/transition", `{"to":"ready_to_validate"}`, http.StatusOK)
+	run := c.json("POST", "/api/connections/"+id+"/validate", "", http.StatusAccepted)
+	if run["simulated"] != true || run["status"] != "completed" {
+		t.Fatalf("run: %v", run)
+	}
+	failing := map[string]bool{}
+	for _, x := range run["results"].([]any) {
+		m := x.(map[string]any)
+		if m["status"] == "fail" {
+			failing[m["item_id"].(string)] = true
+		}
+	}
+	if !failing["ad.groups.range"] {
+		t.Errorf("gaps scenario: ad.groups.range should fail: %v", failing)
+	}
+	got := c.json("GET", "/api/connections/"+id+"/validations/"+run["id"].(string), "", http.StatusOK)
+	if got["id"] != run["id"] {
+		t.Errorf("get run: %v", got["id"])
+	}
+	v := c.json("GET", "/api/connections/"+id, "", http.StatusOK)
+	if v["state"] != "ready_to_validate" || v["latest_validation_id"] != run["id"] {
+		t.Errorf("connection after failing validation: %v %v", v["state"], v["latest_validation_id"])
+	}
+	c.json("PATCH", "/api/connections/"+id+"/config", `{"demo_fixed_checks":["range_retrieval"]}`, http.StatusOK)
+	c.json("POST", "/api/connections/"+id+"/validate", "{}", http.StatusAccepted)
+	v = c.json("GET", "/api/connections/"+id, "", http.StatusOK)
+	if v["state"] != "validated" {
+		t.Errorf("after the simulated fix: %v %v", v["state"], v["next"])
+	}
+	c.json("GET", "/api/connections/"+id+"/validations/00000000-0000-4000-8000-000000000000", "", http.StatusNotFound)
+	c.json("GET", "/api/connections/"+id+"/validations/nope", "", http.StatusUnprocessableEntity)
+}

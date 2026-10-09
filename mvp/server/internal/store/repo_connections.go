@@ -55,7 +55,7 @@ func (c *Conn) Connection(id string) (*Connection, error) {
 
 // Connections lists the tenant's connections, oldest first.
 func (c *Conn) Connections() ([]*Connection, error) {
-	return collect(c, scanConnection, "SELECT "+connCols+" FROM connections WHERE tenant_id = ? ORDER BY created_at, id", DefaultTenantID)
+	return collect(c, scanConnection, "SELECT "+connCols+" FROM connections WHERE tenant_id = ? ORDER BY created_at, rowid", DefaultTenantID)
 }
 
 // UpdateConnectionOwners records the owners named in the revision config.
@@ -284,7 +284,7 @@ func (c *Conn) Skips(revisionID string) (map[string]*Skip, error) {
 
 // AllSkips lists every skip in the tenant, newest first.
 func (c *Conn) AllSkips() ([]*Skip, error) {
-	return collect(c, scanSkip, "SELECT "+skipCols+" FROM readiness_skips WHERE tenant_id = ? ORDER BY skipped_at DESC",
+	return collect(c, scanSkip, "SELECT "+skipCols+" FROM readiness_skips WHERE tenant_id = ? ORDER BY skipped_at DESC, rowid DESC",
 		DefaultTenantID)
 }
 

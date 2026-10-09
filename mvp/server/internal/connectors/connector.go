@@ -56,6 +56,10 @@ type AccountRecord struct {
 	Status      string
 	CreatedAt   *time.Time
 	LastLoginAt *time.Time
+	// Attributes holds the source attributes the readiness template maps
+	// (correlation, status and lifecycle attributes), never the whole entry.
+	// Optional: ingest ignores it; dry runs stage it.
+	Attributes map[string]string
 }
 
 // GroupRecord is a group, team, role or security group.
@@ -124,6 +128,26 @@ type DiscoveryResult struct {
 	Edges       []EdgeRecord
 	Secrets     []SecretRecord
 	Delegations []DelegationRecord
+	// Stats are per-object-class attribute fill counts computed by the
+	// connector, so fill rates need no attribute values. Optional.
+	Stats *DiscoveryStats
+}
+
+// DiscoveryStats are attribute fill counts per object class.
+type DiscoveryStats struct {
+	Classes map[string]*ClassStats
+}
+
+// ClassStats counts the objects of one class and how many carry each attribute.
+type ClassStats struct {
+	Total      int
+	Attributes map[string]AttrStat
+}
+
+// AttrStat is how many objects have an attribute, and how many distinct values it has.
+type AttrStat struct {
+	Present  int
+	Distinct int
 }
 
 // Event is either a *UsageRecord or a *HrisEventRecord.

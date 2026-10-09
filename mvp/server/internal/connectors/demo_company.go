@@ -259,7 +259,7 @@ func (c *DemoCompany) account(system, xid, username, ownerEID, kind, status stri
 	if status == "active" {
 		lastLogin = tp(c.daysAgo(c.rng.Random() * 3))
 	}
-	c.R[system].Accounts = append(c.R[system].Accounts, AccountRecord{system, xid, username, ident, kind, status, created, lastLogin})
+	c.R[system].Accounts = append(c.R[system].Accounts, AccountRecord{system, xid, username, ident, kind, status, created, lastLogin, nil})
 	ref := Ref{"account", system, xid}
 	if ownerEID != "" {
 		c.identityAccounts[ownerEID] = append(c.identityAccounts[ownerEID], ref)

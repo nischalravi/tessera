@@ -366,7 +366,6 @@ func TestGate_EachConditionBlocks(t *testing.T) {
 		{"live evidence for an old config", func(b *Bundle) { b.Evidence.Live[resultKey{"ad.bind", "bind"}].ItemHash = "old" }, "ad.bind", t0},
 		{"live evidence expired", func(b *Bundle) {}, "validation", t0.Add(25 * time.Hour)},
 		{"no validation run", func(b *Bundle) { b.Evidence.LiveRun = nil }, "validation", t0},
-		{"validation run for another config", func(b *Bundle) { b.Evidence.LiveRun.ConfigHash = "other" }, "validation", t0},
 		{"required data check fails", func(b *Bundle) { b.Evidence.Data[resultKey{"base.attrs.required", "fill_rate"}].Status = "fail" }, "base.attrs.required", t0},
 		{"no dry run", func(b *Bundle) { b.Evidence.DataRun = nil }, "dry_run", t0},
 		{"dry run for another config", func(b *Bundle) { b.Evidence.DataRun.ConfigHash = "other" }, "dry_run", t0},

@@ -33,6 +33,7 @@ type Service struct {
 	// types can be activated only when it is "dev".
 	Env     string
 	LiveTTL time.Duration
+	Runner  RunnerOptions
 
 	// extraEvidence lets in-package tests add evidence to a revision.
 	extraEvidence func(c *store.Conn, b *store.ConnectionRevision, ev *Evidence)
