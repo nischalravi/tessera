@@ -627,7 +627,7 @@ flowchart LR
     subgraph Core["Core services"]
         N[Normalizer & identity resolver]
         G[Graph writer]
-        E[Effective-permission engine - Rust]
+        E[Effective-permission engine - Go]
         U[Usage aggregator]
         P[Policy service - Cedar + OPA]
         W[Workflow engine - Temporal]
@@ -709,12 +709,12 @@ This is the most consequential architectural choice. The requirements:
 |---|---|---|---|
 | **Postgres + recursive CTEs** | One operational store; transactional; RLS for tenancy; bitemporal is straightforward; team familiarity | Recursive CTEs over deep/wide graphs are slow and unpredictable (planner can't estimate recursion); no native path semantics; per-system evaluation logic (AWS deny/SCP/boundary) cannot be expressed cleanly in SQL; computing "who can access X" at query time is O(graph) | **Good as system of record, bad as the compute engine.** Fine for MVP-size and for simple ancestry (ltree for resource hierarchy) |
 | **Neo4j (or Memgraph, Neptune)** | Natural path queries (Cypher); good for exploration | Multi-tenancy is weak (database-per-tenant is expensive; label-based isolation is a security risk); bitemporal history awkward; still can't express AWS policy evaluation natively; write amplification under high-churn ingestion; licensing cost (Enterprise for clustering); operational burden; query-time traversal still slow for "all effective permissions" materialization at 10^9 scale | **Reject as primary.** Possibly offer read replica export for customers who want ad-hoc Cypher (v2, low priority) |
-| **Purpose-built engine** (Rust, in-memory, per-tenant partition, incremental, materializes results to Postgres) | Exact control over evaluation semantics; incremental recompute with dependency tracking; compact memory layout (CSR adjacency, interned strings, bitsets for action sets); predictable latency; path explanation built in | Engineering cost; we must own correctness and durability; recovery requires rebuild or snapshot | **Choose, in a hybrid** |
+| **Purpose-built engine** (Go, in-memory, per-tenant partition, incremental, materializes results to Postgres) | Exact control over evaluation semantics; incremental recompute with dependency tracking; compact memory layout (CSR adjacency, interned strings, bitsets for action sets); predictable latency; path explanation built in | Engineering cost; we must own correctness and durability; recovery requires rebuild or snapshot | **Choose, in a hybrid** |
 
 **Decision: hybrid.**
 
 - **Postgres is the system of record** for all entities, grants, edges, policies, workflows metadata, and the **materialized `effective_permission` and `access_path` tables**. Every UI/API read of "who has access" is a Postgres index lookup, not a traversal.
-- **The Effective-Permission Engine (EPE)** is a purpose-built Rust service that loads a tenant's grant graph into memory, evaluates per-system semantics via pluggable evaluators, incrementally recomputes on deltas, and writes diffs back to Postgres and to `effperm.changes`.
+- **The Effective-Permission Engine (EPE)** is a purpose-built Go service (Rust only if profiling shows Go cannot meet the latency or memory targets; see section 12) that loads a tenant's grant graph into memory, evaluates per-system semantics via pluggable evaluators, incrementally recomputes on deltas, and writes diffs back to Postgres and to `effperm.changes`.
 - **ClickHouse** holds usage events, usage rollups, and the long-term bitemporal history of effective permissions (append-only change log), which makes point-in-time and trend queries cheap.
 - Recursive CTEs remain for small, bounded things (resource ancestry fallback, org chart, nested group display).
 
@@ -816,16 +816,16 @@ Example path (cross-system), which is exactly what incumbents cannot show:
 
 ### 6.2 Per-system evaluators
 
-Graph reachability gives candidate permissions; **evaluators** apply each system's semantics. Each evaluator is a Rust module implementing:
+Graph reachability gives candidate permissions; **evaluators** apply each system's semantics. Each evaluator is a Go package implementing (v1 of this spec wrote it as a Rust trait; the backend is all Go, with Rust only if profiling demands it):
 
-```rust
-trait Evaluator {
-    /// Expand an entitlement's permission statements into (resource_scope, action_set, conditions)
-    fn expand(&self, ent: &Entitlement, ctx: &SystemContext) -> Vec<ScopedGrant>;
-    /// Combine all candidate statements reaching a principal into effective allow/deny per resource scope
-    fn combine(&self, principal: &Principal, candidates: &[ScopedGrant], ctx: &SystemContext) -> EffectiveSet;
-    /// Reverse index hints: which principals are affected when this object changes
-    fn dependents(&self, changed: &ObjectRef, ctx: &SystemContext) -> DependentSet;
+```go
+type Evaluator interface {
+	// Expand an entitlement's permission statements into (resource_scope, action_set, conditions)
+	Expand(ent *Entitlement, ctx *SystemContext) []ScopedGrant
+	// Combine all candidate statements reaching a principal into effective allow/deny per resource scope
+	Combine(principal *Principal, candidates []ScopedGrant, ctx *SystemContext) EffectiveSet
+	// Reverse index hints: which principals are affected when this object changes
+	Dependents(changed ObjectRef, ctx *SystemContext) DependentSet
 }
 ```
 
@@ -1116,7 +1116,7 @@ HRIS event (webhook or poll)
 
 | Tier | Built by | Mechanism | Examples |
 |---|---|---|---|
-| **Deep** | Tessera, code + spec | Custom evaluator (Rust) + ingestion (Go) + usage stream | AWS, GCP, Azure, Okta, Entra, GitHub, Snowflake, Salesforce, Google WS |
+| **Deep** | Tessera, code + spec | Custom evaluator (Go) + ingestion (Go) + usage stream | AWS, GCP, Azure, Okta, Entra, GitHub, Snowflake, Salesforce, Google WS |
 | **Standard** | Tessera or AI-generated, spec only | Declarative YAML over REST/GraphQL, generic RBAC evaluator | Jira, Confluence, Slack, Zoom, PagerDuty, Datadog, Databricks, NetSuite, Workday |
 | **SCIM** | Generic | SCIM 2.0 + optional audit log mapping | Any SCIM app |
 | **Custom** | Customer | YAML spec, runs in Outpost | Internal apps, DB-backed apps |
@@ -1315,10 +1315,12 @@ Tessera holds the most sensitive map in the enterprise: who can reach the crown 
 
 ## 12. Tech stack and rationale
 
+**Language decision (2026-10-09): an all-Go backend.** API, auth, connectors, workflows, CLI and the effective-permission engine are Go. Rust is used only if profiling later shows Go is too slow for the engine, and then only for its hot path, as a port that must reproduce the Go engine's output. The frontend stays React + TypeScript. See [`docs/design/aws-effective-permission-evaluator.md`](design/aws-effective-permission-evaluator.md) §12.6 and Q1.
+
 | Layer | Choice | Rationale | Rejected alternatives |
 |---|---|---|---|
 | Platform services (API, connectors runtime, normalizer, provisioner, policy service) | **Go** | Excellent for I/O-heavy concurrent services; simple deployment; strong cloud SDKs (AWS, GCP, Azure, Okta all first-class); easy to hire | Java/Kotlin (heavier, though viable); Python (too slow for normalizer at 50k events/s, GIL) |
-| Effective-permission engine, Cedar integration, AWS/GCP evaluators | **Rust** | Memory density and predictable latency for in-memory graphs; Cedar's reference implementation is Rust; no GC pauses during large recomputes | C++ (safety), Go (GC overhead with 100s of GB heaps), JVM graph libs |
+| Effective-permission engine, Cedar integration, AWS/GCP evaluators | **Go** (Rust only if profiling demands it) | One backend language; the engine's compact layout (bitsets, interned strings, CSR adjacency) and per-tenant partitioning keep heaps and GC pressure bounded; profiled from the first scale tests. Cedar's reference implementation is Rust, so Cedar features `cedar-go` lacks stay behind a Rust sidecar (section 5.5) | Rust up front (a second runtime with no measured need; kept as the fallback if Go's GC overhead or memory density misses the SLOs), C++ (safety), JVM graph libs |
 | Event backbone | **Redpanda** | Kafka API compatibility (ecosystem, Kafka Connect, clients), single binary, no ZooKeeper/KRaft tuning, lower tail latency, tiered storage to S3. Managed Redpanda Cloud / BYOC early; can swap to MSK/Confluent if a customer mandates | Kinesis (AWS lock-in, harder per-tenant isolation), Pulsar (ops complexity), NATS JetStream (less ecosystem for analytics sinks) |
 | System of record | **PostgreSQL 17** (Aurora PostgreSQL or Cloud SQL early; self-managed or Crunchy/Neon for BYOC) | RLS for tenancy, ltree for hierarchies, JSONB for raw payloads, partitioning, mature ops. Citus as the horizontal-scale path if a cell's Postgres outgrows vertical scaling | CockroachDB/Spanner (cost, RLS gaps, latency), Neo4j (see 5.4) |
 | Analytics / usage / history | **ClickHouse** (ClickHouse Cloud early) | Columnar compression for billions of usage events, fast aggregations, materialized views for rollups, TTL tiers | Druid/Pinot (heavier ops), BigQuery/Snowflake (cost and latency for interactive queries, and multi-tenant isolation awkward), Elasticsearch (cost) |
@@ -1334,7 +1336,7 @@ Tessera holds the most sensitive map in the enterprise: who can reach the crown 
 | AI | Model gateway with provider abstraction (Anthropic, OpenAI, Bedrock, Azure OpenAI, Vertex), prompt/eval harness, per-tenant logging | Customer choice and data residency | |
 | Primary cloud | **AWS** (cells), with GCP/Azure regions in v2 | ICP is AWS-heavy; marketplace (AWS Marketplace) for procurement | |
 
-**Language count discipline:** Go + Rust + TypeScript. Python only for offline data science/ML (peer analysis, eval harnesses), never in the hot path in production.
+**Language count discipline:** Go + TypeScript, plus Rust only if profiling demands it (EPE hot path) or for a Cedar sidecar. Python only for offline data science/ML (peer analysis, eval harnesses), never in the hot path in production.
 
 ---
 
@@ -1467,11 +1469,11 @@ The parallel MVP (Python FastAPI + SQLite + in-memory graph + React UI, seeded d
 | API | FastAPI, OpenAPI | Go API gateway, same OpenAPI contract + GraphQL | **Contract yes** (generate both from one OpenAPI spec; UI uses generated client) |
 | Domain model | SQLAlchemy/Pydantic models of entities in section 4 | Postgres schema with same entity names and fields + tenant_id + bitemporal columns | **Yes**: keep field names identical; add `tenant_id`, `valid_from/valid_to` to SQLite now even if single-tenant |
 | Store | SQLite single file | Postgres (SoR) + ClickHouse (usage/history) | No (runtime); schema yes |
-| Graph | In-memory Python graph (e.g. dicts or networkx), full recompute on load/change | Rust EPE with incremental recompute, materialized effective permissions in Postgres | **Semantics yes**: the MVP evaluator outputs (effective perms + paths) become golden tests for the Rust evaluators |
+| Graph | In-memory Python graph (e.g. dicts or networkx), full recompute on load/change | Go EPE with incremental recompute, materialized effective permissions in Postgres | **Semantics yes**: the MVP evaluator outputs (effective perms + paths) become golden tests for the production (Go) evaluators |
 | Evaluators | Simplified: AWS identity policies + permission sets + SCP deny; Snowflake role hierarchy; GitHub teams/repo roles; Okta groups/apps | Full evaluator semantics (section 6.2) | Test fixtures yes |
 | Ingestion | Seeded demo data + optional one-shot pulls | Event streams + reconciliation via Redpanda | No |
 | Usage | Seeded synthetic usage events in SQLite | ClickHouse with rollups from real streams | Schema of UsageEvent yes |
-| Policies | Local Git checkout of `tessera-policies/`; Cedar via `cedarpy`; YAML birthright/SoD; schema validation + graph-query guardrails; GitHub Action/App on a sandbox repo for PR comments | Cedar (Rust) + OPA, GitHub/GitLab apps, SMT guardrail packs, copy-on-write simulation, plan/apply | **Yes**: repo layout, Cedar schema, simulation API and diff format are frozen contracts |
+| Policies | Local Git checkout of `tessera-policies/`; Cedar via `cedarpy`; YAML birthright/SoD; schema validation + graph-query guardrails; GitHub Action/App on a sandbox repo for PR comments | Cedar (`cedar-go`, or the Rust crate as a sidecar where `cedar-go` lacks a feature) + OPA, GitHub/GitLab apps, SMT guardrail packs, copy-on-write simulation, plan/apply | **Yes**: repo layout, Cedar schema, simulation API and diff format are frozen contracts |
 | CLI | Go `tessera` CLI calling the MVP API | Same CLI, open-sourced at v1 | **Yes** |
 | Workflows | Synchronous handlers + background tasks; JIT expiry via a scheduler loop | Temporal | No; but model Request/Grant states identically |
 | Provisioning | Simulated (state change only, plus optionally a real Okta group write in a sandbox) | Provisioner with verify-by-reread | No |
@@ -1508,7 +1510,7 @@ The MVP exists to prove one loop on four systems (**AWS, Snowflake, GitHub, Okta
 
 - Freeze the **entity names, the OpenAPI contract and the policy repo layout** in week 2. The repo layout is a customer-facing interface: once a design partner commits to it, changing it is a migration.
 - The **simulation API contract** (`base_ref`, `head_ref`, diff schema) is identical in MVP and production. The production engine changes, not the shape.
-- Put **every evaluator behind an interface** mirroring the Rust trait in 6.2, and record input/output fixtures. Fixtures plus "predicted vs applied" simulation diffs become the Rust engine's acceptance tests.
+- Put **every evaluator behind an interface** mirroring the Go interface in 6.2, and record input/output fixtures. Fixtures plus "predicted vs applied" simulation diffs become the production engine's acceptance tests.
 - Write the **CLI in Go from the start** (it is the future OSS artifact), calling the MVP API. Only the server is throwaway.
 - Seed data generator **parameterized by scale** (500 / 5k / 50k identities) to stress the diff explorer and PR comments.
 - Treat SQLite as disposable; keep SQL behind a repository layer.
@@ -1523,7 +1525,7 @@ gantt
     title Tessera roadmap (from 2026-10-08)
     section MVP
     Access-as-code MVP: repo, simulation, usage revoke  :mvp, 2026-10-08, 2027-01-15
-    Production core foundations (Go/Rust/PG)            :found, 2026-11-15, 2027-02-28
+    Production core foundations (Go/PG)                 :found, 2026-11-15, 2027-02-28
     section v1
     v1: production loop, OSS CLI, auto-revoke GA        :v1, 2027-01-15, 2027-07-31
     SOC 2 Type II window                                :soc2, 2027-01-01, 2027-06-30
@@ -1535,7 +1537,7 @@ gantt
 
 ### Phase 0: MVP (now to mid-January 2027, ~3 months)
 
-**Scope:** 14.2. In parallel, two engineers start production foundations: Postgres schema, Rust EPE skeleton with AWS and Snowflake evaluators, and the Go `tessera` CLI.
+**Scope:** 14.2. In parallel, two engineers start production foundations: Postgres schema, Go EPE skeleton with AWS and Snowflake evaluators, and the Go `tessera` CLI.
 
 **Team:** 4 to 6 engineers (2 MVP/UI, 2 core platform/evaluators, 1 connectors/CLI, founder-PM), 1 contract designer.
 
@@ -1548,7 +1550,7 @@ gantt
 | 3 | **Simulation is fast and in the PR** | PR comment + check run in < 2 min on partner-sized data. At least 10 real policy PRs reviewed by partners through the bot |
 | 4 | **Usage-based revoke works end to end** | Staged revoke executed on ≥ 2 of the 4 systems (sandbox/non-prod writes for at least Okta and Snowflake): ≥ 1 canary + batch run, restore verified in < 2 min, circuit breaker tested, zero unrestorable revocations |
 | 5 | **Buyer appetite validated** (risk M3) | 5 design partners (LOI or paid pilot). ≥ 3 have security/platform engineering as the buyer, and ≥ 3 say they would pay for access-as-code + revoke without JIT or certifications. Track partners who decline because "our IAM team won't use Git" |
-| 6 | **Engine parity** | Rust EPE matches MVP evaluator fixtures 100% for AWS and Snowflake |
+| 6 | **Engine parity** | Go EPE matches MVP evaluator fixtures 100% for AWS and Snowflake |
 | 7 | **Financing** | Seed closed or term sheet in hand |
 
 ### Phase 1: v1 GA (mid-January 2027 to end of July 2027, ~6.5 months)
@@ -1568,7 +1570,7 @@ gantt
   - Entra, GCP, Databricks, BigQuery, Kubernetes RBAC and Postgres as read + usage, with revoke where observability allows
 - **Production platform:**
   - one US and one EU cell
-  - Redpanda, Postgres, ClickHouse, Temporal and the Rust EPE with incremental recompute
+  - Redpanda, Postgres, ClickHouse, Temporal and the Go EPE with incremental recompute
   - Vault/KMS and BYOK
   - Outpost v1
   - per-connector freshness SLOs published
@@ -1698,7 +1700,7 @@ Validate against (a) C1 per-user quotes, (b) the cost of the platform engineers 
 | R7 | **Write-back causes outages** | Medium / Critical | See M5; also provision via the IdP control point first, verify by re-read, and a customer-controlled kill switch for all automation |
 | R8 | **Connector long tail and API fragility** | High / Medium | Declarative specs with a conformance suite; nightly contract tests; quarantine snapshots that would delete > 20% of objects; SCIM fallback; Outpost for custom apps |
 | R9 | **Event ingestion cost** eats gross margin | Medium / Medium | Filter at the edge, aggregate early into `usage_daily`, ClickHouse compression + TTL tiers, pre-aggregation in the Outpost |
-| R10 | **Two-runtime gap**: the Python MVP diverges from Go/Rust production | Medium / Medium | Shared OpenAPI, simulation contract and repo layout; Go CLI from day one; MVP fixtures as Rust acceptance tests; MVP frozen to demo-only once v1 build starts |
+| R10 | **Two-runtime gap**: the Python MVP diverges from Go production | Medium / Medium | The MVP backend is being ported to Go (`mvp/server/`, branch `go-backend`), which leaves one backend language; shared OpenAPI, simulation contract and repo layout; Go CLI from day one; MVP fixtures (and the port's JSON parity fixtures) as production acceptance tests; MVP frozen to demo-only once v1 build starts |
 | R11 | **Operational burden** of Temporal/Redpanda/ClickHouse for a small team | Medium / Medium | Managed services through v1; self-host only for dedicated/BYOC cells in v2 |
 | R12 | **Cedar expressiveness limits** for set-based SoD and graph-shaped guardrails | Medium / Low | Cedar for per-decision rules; Tessera YAML compiled to effective-permission queries for set predicates; OPA for edge cases |
 | R13 | **Identity correlation errors** poison simulation and revocation | Medium / High | Deterministic-first correlation; confidence scores; no provisioning or revocation on correlations < 1.0 without confirmation |
@@ -1707,7 +1709,7 @@ Validate against (a) C1 per-user quotes, (b) the cost of the platform engineers 
 
 ## 19. Open questions
 
-1. **Cedar in Go vs Rust sidecar:** confirm `cedar-go` parity for schema validation and partial evaluation, or standardize on a Rust policy sidecar.
+1. **Cedar in Go vs Rust sidecar:** confirm `cedar-go` parity for schema validation and partial evaluation, or standardize on a Rust policy sidecar. As of `cedar-go` v1.8.0 (checked 2026-10-09) the validator is experimental (`x/exp/schema`) and partial evaluation, templates and symbolic analysis are missing, so a sidecar is still needed for those; the rest of the backend is Go.
 2. **Repo granularity:** one tenant repo vs per-team repos vs a directory in the customer's existing Terraform monorepo. Interview design partners in MVP weeks 1–4.
 3. **Terraform relationship:** should Tessera emit Terraform for target systems (fits existing pipelines) or apply directly (single source of truth)? Likely both, chosen per tenant; decide by v1.
 4. **OSS boundary:** exactly what is open (CLI, schemas, simulator on snapshots) vs hosted (live graph, usage, apply, evidence). Must be settled before v1 to avoid relicensing pain.
