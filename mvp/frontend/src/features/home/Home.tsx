@@ -1,8 +1,11 @@
-import { Link, useNavigate } from "react-router-dom";
-import { ArrowRight, ClipboardCheck, Inbox as InboxIcon, KeyRound, ShieldAlert, ShoppingCart, Timer, TriangleAlert, Users } from "lucide-react";
-import { JitRequest, relTime, useApi } from "../../api";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { ArrowRight, ClipboardCheck, Inbox as InboxIcon, KeyRound, ShoppingCart, Timer, Users } from "lucide-react";
+import { AuditRow, ConnectorRow, JitRequest, Policy, Violation, relTime, useApi } from "../../api";
 import { usePersona } from "../../app/persona";
-import { Badge, Bar, ButtonLink, EmptyState, Kpi, Loading, Page, Status, TypeBadge } from "../../components";
+import { TENANT } from "../../app/tenant";
+import { Badge, Bar, Button, ButtonLink, EmptyState, Kpi, Loading, Page, PreviewBadge, Status, Tabs } from "../../components";
+import { HealthChecks, useHealthChecks } from "../insights/DeploymentHealth";
+import { RiskyTable, Summary, Trend } from "../insights/RiskOverview";
 import { useMockState } from "../../mocks";
 import { InboxItem, useInbox, useOpenCampaigns } from "../inbox/model";
 import { itemTitle } from "../inbox/Inbox";
@@ -169,40 +172,125 @@ function TeamOverview({ meId }: { meId: number }) {
   );
 }
 
-function AdminOverview() {
-  const { data: d, error } = useApi<any>("/summary");
+interface Attention { key: string; tone: "crit" | "warn" | "info"; title: string; sub: string; to: string }
+
+/** "Needs attention" items for the tenant, built from live summary and violation data. */
+function useAttention(): Attention[] | null {
+  const { data: d } = useApi<Summary>("/summary");
+  const { data: violations } = useApi<Violation[]>("/violations");
+  if (!d || !violations) return null;
+  const out: Attention[] = [];
+  const sevRank: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+  [...violations].sort((a, b) => sevRank[a.severity] - sevRank[b.severity]).slice(0, 2).forEach((v) =>
+    out.push({ key: v.key, tone: v.severity === "critical" ? "crit" : "warn", title: v.message, sub: `${v.policy_name} · ${v.identity_name}`, to: `/governance/policies?selected=${encodeURIComponent(v.key)}` }),
+  );
+  if (d.nhi.orphaned) out.push({ key: "nhi", tone: "crit", title: `${d.nhi.orphaned} machine identit${d.nhi.orphaned === 1 ? "y has" : "ies have"} no live owner`, sub: `${d.nhi.stale_secrets} stale secrets · ${d.nhi.agents_with_pii} AI agents reach PII`, to: "/directory/machine" });
+  if (d.recommendations.remove) out.push({ key: "lp", tone: "warn", title: `${d.recommendations.remove} grants are safe to remove`, sub: `${d.unused_pct}% of effective permissions went unused in 60 days`, to: "/insights/least-privilege" });
+  if (d.hris_pending) out.push({ key: "hris", tone: "warn", title: `${d.hris_pending} lifecycle event${d.hris_pending === 1 ? " is" : "s are"} waiting to run`, sub: "Joiner, mover and leaver plans from Workday", to: "/governance/lifecycle" });
+  if (d.jit.pending) out.push({ key: "jit", tone: "info", title: `${d.jit.pending} just-in-time request${d.jit.pending === 1 ? " needs" : "s need"} approval`, sub: `${d.jit.active} elevations active now`, to: "/inbox?filter=approval" });
+  if (d.reviews.open_items) out.push({ key: "rev", tone: "info", title: `${d.reviews.open_items} access review item${d.reviews.open_items === 1 ? " is" : "s are"} open`, sub: "Exception-only campaigns", to: "/governance/reviews" });
+  return out;
+}
+
+function AttentionList({ items, limit }: { items: Attention[] | null; limit?: number }) {
   const nav = useNavigate();
-  if (!d) return <Loading error={error} kind="page" />;
-  const sev = d.violations.by_severity;
+  if (!items) return <Loading kind="block" />;
+  if (!items.length) return <EmptyState title="Nothing needs attention" icon={<ClipboardCheck size={18} />}>No open violations, orphaned identities or pending work.</EmptyState>;
   return (
-    <div className="stack">
-      <div className="grid g4">
-        <Kpi label="Policy violations" icon={<TriangleAlert size={14} aria-hidden />} value={d.violations.total} tone={d.violations.total ? "critical" : undefined} sub={`${sev.critical ?? 0} critical · ${sev.high ?? 0} high`} to="/governance/policies" />
-        <Kpi label="Unused permissions (60 days)" value={`${d.unused_pct}%`} sub={`${d.recommendations.remove} grants safe to remove`} to="/insights/least-privilege" />
-        <Kpi label="Machine identity risk" icon={<ShieldAlert size={14} aria-hidden />} value={d.nhi.orphaned} tone={d.nhi.orphaned ? "warning" : undefined} sub={`without a live owner · ${d.nhi.stale_secrets} stale secrets`} to="/directory/machine" />
-        <Kpi label="Lifecycle events pending" value={d.hris_pending} sub={`${d.jit.pending} JIT approvals · ${d.reviews.open_items} review items`} to="/governance/lifecycle" />
-      </div>
-      <div className="card flush">
-        <div className="card-h"><h2>Riskiest identities</h2><Link to="/insights/risk" className="small">Risk overview</Link></div>
-        <div className="table-scroll">
-          <table>
-            <thead><tr><th>Identity</th><th>Type</th><th className="num">Unused</th><th className="num hide-narrow">Privileged</th><th className="num">Violations</th><th>Risk</th></tr></thead>
-            <tbody>
-              {d.top_risky.slice(0, 6).map((i: any) => (
-                <tr key={i.id} className="click" tabIndex={0} onClick={() => nav(`/directory/identities/${i.id}`)} onKeyDown={(e) => e.key === "Enter" && nav(`/directory/identities/${i.id}`)}>
-                  <td><b>{i.name}</b><div className="xs faint">{i.title ?? i.department}</div></td>
-                  <td><TypeBadge type={i.type} /></td>
-                  <td className="num">{i.unused}</td>
-                  <td className="num hide-narrow">{i.privileged}</td>
-                  <td className="num">{i.violations ? <Badge tone="critical">{i.violations}</Badge> : 0}</td>
-                  <td style={{ width: 110 }}><Bar value={i.risk} tone="risk" /></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+    <div>
+      {items.slice(0, limit).map((a) => (
+        <div key={a.key} className="att">
+          <span className={`att-bar ${a.tone}`} aria-hidden />
+          <div className="grow"><b>{a.title}</b><div className="small faint">{a.sub}</div></div>
+          <Button size="sm" onClick={() => nav(a.to)} aria-label={`Review: ${a.title}`}>Review</Button>
         </div>
-      </div>
+      ))}
     </div>
+  );
+}
+
+type HomeTab = "overview" | "monitoring" | "deployment" | "recommendations";
+
+function AdminHome() {
+  const [params, setParams] = useSearchParams();
+  const tab = (params.get("tab") ?? "overview") as HomeTab;
+  const setTab = (t: HomeTab) => setParams(t === "overview" ? {} : { tab: t }, { replace: true });
+  const { data: d, error } = useApi<Summary>("/summary");
+  const { data: conns } = useApi<ConnectorRow[]>("/connectors");
+  const { data: policies } = useApi<Policy[]>("/policies");
+  const { data: audit } = useApi<AuditRow[]>("/audit?limit=100");
+  const { items } = useInbox("mine");
+  const attention = useAttention();
+  const { checks, score } = useHealthChecks();
+  const required = checks?.filter((c) => c.required && c.status !== "ok").length ?? 0;
+  const lastSync = audit?.find((a) => /sync/i.test(a.action))?.at ?? null;
+  const has = (s: string) => conns?.some((c) => c.system === s);
+  const sev = d?.violations.by_severity ?? {};
+  return (
+    <Page
+      title={TENANT}
+      crumbs={false}
+      sub={`Tenant overview · ${conns ? conns.length : "…"} sources · ${lastSync ? `synced ${relTime(lastSync)}` : "synced from seed data"}`}
+      tabs={<Tabs<HomeTab> label="Home" value={tab} onChange={setTab} tabs={[{ id: "overview", label: "Overview" }, { id: "monitoring", label: "Monitoring" }, { id: "deployment", label: "Deployment health" }, { id: "recommendations", label: "Recommendations" }]} />}
+    >
+      <div role="tabpanel" className="stack">
+        {!d ? <Loading error={error} kind="page" /> : tab === "overview" ? (
+          <>
+            <div className="grid g4">
+              <Kpi label="Identities" value={(d.identities.human + d.identities.service + d.identities.ai_agent).toLocaleString()} sub={<Badge tone="info">{d.identities.human} people · {d.identities.service} machine · {d.identities.ai_agent} agents</Badge>} to="/directory/people" />
+              <Kpi label="Violations" value={d.violations.total} sub={<Badge tone="critical">{sev.critical ?? 0} critical · {sev.high ?? 0} high</Badge>} to="/governance/policies" />
+              <Kpi label="Unused permissions" value={`${d.unused_pct}%`} sub={<Badge tone="warning">{d.recommendations.remove} safe to remove</Badge>} to="/insights/least-privilege" />
+              <Kpi label={<>Readiness <PreviewBadge what="Partly computed from live data, partly describing settings that have no backend yet." /></>} value={score === null ? "…" : <>{score} <span className="faint" style={{ fontSize: "var(--fs-lg)" }}>/ 100</span></>} sub={<Badge tone={required ? "warning" : "ok"}>{required ? `${required} required item${required === 1 ? "" : "s"}` : "Ready"}</Badge>} to="/?tab=deployment" />
+            </div>
+            <div className="grid g21">
+              <div className="card">
+                <div className="spread" style={{ marginBottom: 4 }}><h2>Recommendations</h2>{attention && attention.length > 4 && <button type="button" className="btn ghost sm" onClick={() => setTab("recommendations")}>See all {attention.length}</button>}</div>
+                <AttentionList items={attention} limit={4} />
+              </div>
+              <div className="card">
+                <h2 style={{ marginBottom: 10 }}>Basic information</h2>
+                <dl className="kv">
+                  <dt>Tenant</dt><dd>{TENANT}</dd>
+                  <dt>Primary IdP</dt><dd>{has("okta") ? "Okta (OIDC)" : <span className="faint">Not connected</span>}</dd>
+                  <dt>HR source</dt><dd>{has("workday") ? "Workday" : <span className="faint">Not connected</span>}</dd>
+                  <dt>Connections</dt><dd><Link to="/admin/connections">{conns ? `${conns.length} active` : "…"}</Link></dd>
+                  <dt>Accounts</dt><dd className="tnum">{d.accounts.toLocaleString()} across {d.systems} systems</dd>
+                  <dt>Policies</dt><dd><Link to="/governance/policies">{policies ? `${policies.length} in Git` : "…"}</Link> · evaluated on every change</dd>
+                  <dt>Environment</dt><dd><Badge>demo</Badge></dd>
+                </dl>
+              </div>
+            </div>
+          </>
+        ) : tab === "monitoring" ? (
+          <>
+            <div className="grid g4">
+              <Kpi label="Approvals waiting" value={d.jit.pending} sub={`${d.jit.active} active elevations`} to="/inbox?filter=approval" />
+              <Kpi label="Review items open" value={d.reviews.open_items} sub="exception-only campaigns" to="/governance/reviews" />
+              <Kpi label="Lifecycle tasks" value={d.hris_pending} sub="joiner, mover, leaver" to="/governance/lifecycle" />
+              <Kpi label="Machine identity risk" value={d.nhi.orphaned} sub={`without an owner · ${d.nhi.stale_secrets} stale secrets`} to="/directory/machine" />
+            </div>
+            <div className="card">
+              <div className="spread"><h2>Permission usage, last 90 days</h2><span className="xs faint">Daily events from connector audit logs</span></div>
+              <Trend points={d.usage_trend} />
+            </div>
+            <div className="grid g21">
+              <div className="card flush">
+                <div className="card-h"><h2>Riskiest identities</h2><Link to="/insights/risk" className="small">Risk overview</Link></div>
+                <RiskyTable rows={d.top_risky.slice(0, 8)} />
+              </div>
+              <WaitingOnYou items={items} />
+            </div>
+          </>
+        ) : tab === "deployment" ? (
+          <HealthChecks />
+        ) : (
+          <div className="card">
+            <h2 style={{ marginBottom: 4 }}>Recommendations</h2>
+            <AttentionList items={attention} />
+          </div>
+        )}
+      </div>
+    </Page>
   );
 }
 
@@ -210,34 +298,30 @@ export function Home() {
   const { persona, me, actor } = usePersona();
   const { items } = useInbox("mine");
   const first = actor.split(" ")[0];
-  const sub =
-    persona === "employee" ? "Here's what needs you and what you can access." :
-    persona === "manager" ? "Your team's approvals and access reviews, in one place." :
-    "Risk across every person, service account and AI agent, computed from the access graph and 90 days of usage.";
+  if (persona === "admin") {
+    return (
+      <>
+        <AdminHome />
+        <p className="xs faint mt">Viewing as admin & security. Switch persona in the user menu.</p>
+      </>
+    );
+  }
+  const sub = persona === "employee" ? "Here's what needs you and what you can access." : "Your team's approvals and access reviews, in one place.";
   return (
-    <Page title={`${greeting()}, ${first}`} sub={sub}>
+    <Page title={`${greeting()}, ${first}`} sub={sub} crumbs={false}>
       <div className="stack">
-        {persona === "admin" ? (
-          <>
-            <AdminOverview />
-            <WaitingOnYou items={items} />
-          </>
-        ) : (
-          <>
-            <div className="grid g21">
-              <WaitingOnYou items={items} />
-              <RequestCta />
-            </div>
-            {persona === "manager" && me && <TeamOverview meId={me.id} />}
-            {me ? (
-              <div className="grid g2">
-                <YourAccess id={me.id} />
-                <MyRequests id={me.id} name={me.name} />
-              </div>
-            ) : <Loading kind="block" />}
-          </>
-        )}
-        <p className="xs faint">Viewing as {persona === "admin" ? "admin & security" : persona}. Switch persona in the user menu.</p>
+        <div className="grid g21">
+          <WaitingOnYou items={items} />
+          <RequestCta />
+        </div>
+        {persona === "manager" && me && <TeamOverview meId={me.id} />}
+        {me ? (
+          <div className="grid g2">
+            <YourAccess id={me.id} />
+            <MyRequests id={me.id} name={me.name} />
+          </div>
+        ) : <Loading kind="block" />}
+        <p className="xs faint">Viewing as {persona}. Switch persona in the user menu.</p>
       </div>
     </Page>
   );
