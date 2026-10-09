@@ -12,6 +12,8 @@ Tessera builds a live graph of who can actually do what across your identity pro
 |---|---|
 | [`mvp/`](mvp/) | Runnable MVP: FastAPI + SQLite backend, React + Vite UI, demo connectors for Workday, Okta, AWS, GitHub and Snowflake |
 | [`docs/product-architecture-spec.md`](docs/product-architecture-spec.md) | Product and architecture spec: positioning, data model, production architecture, roadmap, pricing, risks |
+| [`docs/knowledge/`](docs/knowledge/) | IAM knowledge base: six researched domain documents and the capability map and build order ([start here](docs/knowledge/README.md)) |
+| [`.claude/agents/`](.claude/agents/) | IAM expert agents for Claude Code (`iam-architect` plus six domain experts) |
 | [`docs/competitive-analysis.md`](docs/competitive-analysis.md) | Market map and competitor analysis (SailPoint, Saviynt, Okta, Entra, ConductorOne, Veza, NHI vendors), with sources |
 | [`prototype/tessera-prototype.html`](prototype/tessera-prototype.html) | Single-file clickable UI prototype for demos and design-partner conversations |
 
