@@ -86,8 +86,29 @@ type Statement struct {
 // raw patterns in document order. Patterns are matched raw at evaluation
 // (actions case-insensitively, ARNs case-sensitively, §8.1); the parser does
 // not rewrite them. A JSON string and a one-element list are the same set.
+//
+// Completed is set only for Resource and NotResource in policy kinds where AWS
+// completes an incomplete ARN (fewer than six segments) with "*" for every
+// missing segment (§8.3): identity and boundary policies, and SCPs by
+// over-approximation (ambiguity A21). It then has one entry per pattern, in
+// the same order: the completed pattern, or the pattern itself when it needs
+// no completion. Completed is nil otherwise, including when no pattern in the
+// set is incomplete.
 type PatternSet struct {
-	Patterns []string `json:"patterns"`
+	Patterns  []string `json:"patterns"`
+	Completed []string `json:"completed"`
+}
+
+// MatchPatterns returns the patterns the matcher uses: Completed when set,
+// otherwise Patterns. Explanations show Patterns, the policy's own spelling.
+func (p *PatternSet) MatchPatterns() []string {
+	if p == nil {
+		return nil
+	}
+	if p.Completed != nil {
+		return p.Completed
+	}
+	return p.Patterns
 }
 
 // PrincipalSet is the value of Principal or NotPrincipal.
@@ -95,8 +116,15 @@ type PatternSet struct {
 // The raw per-type lists are kept in document order (nil means the key was
 // absent), and Entries holds the normalized form of §8.4.1 in the order
 // "*", AWS, CanonicalUser, Federated, Service.
+//
+// Star records only the spelling: it is true for the bare string form
+// "Principal": "*" and false for {"AWS": "*"}, which instead yields an AWS
+// entry of kind PrincipalWildcard. The two match the same requesters (§8.4.1),
+// so matching must use Entries (or HasWildcard), never Star. Star matters only
+// where AWS distinguishes the spelling, such as the RCP rule that allows the
+// bare "*" alone, and for the canonical serialization.
 type PrincipalSet struct {
-	Star          bool             `json:"star"` // the bare "Principal": "*" form
+	Star          bool             `json:"star"` // the bare "Principal": "*" form only; see the type comment
 	AWS           []string         `json:"aws"`
 	CanonicalUser []string         `json:"canonical_user"`
 	Federated     []string         `json:"federated"`

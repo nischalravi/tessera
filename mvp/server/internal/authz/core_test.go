@@ -44,6 +44,48 @@ func TestEnumTextRoundTrip(t *testing.T) {
 	}
 }
 
+func TestEnumStrings(t *testing.T) {
+	for _, tc := range []struct {
+		got, want string
+	}{
+		{Outcome(0).String(), ""}, {Allow.String(), "allow"}, {Deny.String(), "deny"}, {Conditional.String(), "conditional"}, {Outcome(4).String(), ""},
+		{DenyKind(0).String(), ""}, {Explicit.String(), "explicit"}, {Implicit.String(), "implicit"}, {Guardrail.String(), "guardrail"}, {DenyKind(4).String(), ""},
+		{Fidelity(0).String(), ""}, {Exact.String(), "exact"}, {Approximate.String(), "approximate"}, {Unsupported.String(), "unsupported"}, {Fidelity(4).String(), ""},
+		{NoQualifier.String(), ""}, {ForAllValues.String(), "ForAllValues"}, {ForAnyValue.String(), "ForAnyValue"}, {Qualifier(3).String(), ""},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("String() = %q, want %q", tc.got, tc.want)
+		}
+	}
+	for _, m := range []interface{ MarshalText() ([]byte, error) }{Outcome(4), DenyKind(4), Fidelity(4), Qualifier(3)} {
+		if _, err := m.MarshalText(); err == nil {
+			t.Errorf("%T out of range must not marshal", m)
+		}
+	}
+	for _, u := range []interface{ UnmarshalText([]byte) error }{new(DenyKind), new(Fidelity), new(Qualifier)} {
+		if err := u.UnmarshalText([]byte("nope")); err == nil {
+			t.Errorf("%T accepted an unknown name", u)
+		}
+	}
+}
+
+func TestReasonCodes(t *testing.T) {
+	if AmbiguityReason("A3") != "AMBIGUITY:A3" {
+		t.Errorf("AmbiguityReason = %q", AmbiguityReason("A3"))
+	}
+	b, err := json.Marshal(FidelityReason{Code: ReasonPolicyUnparseable, Detail: "d", OutcomeSensitive: true})
+	if err != nil || string(b) != `{"code":"POLICY_UNPARSEABLE","detail":"d","outcome_sensitive":true}` {
+		t.Errorf("FidelityReason JSON = %s, %v", b, err)
+	}
+}
+
+// Residual is a closed sum type: exactly these five types implement it.
+func TestResidualSumType(t *testing.T) {
+	for _, r := range []Residual{Const(true), And{}, Or{}, Not{Term: Const(false)}, Atom{Op: "Null", Key: "k"}} {
+		r.isResidual() // the marker method is callable and does nothing
+	}
+}
+
 func TestAWSEvalDecision(t *testing.T) {
 	for _, tc := range []struct {
 		d    Decision

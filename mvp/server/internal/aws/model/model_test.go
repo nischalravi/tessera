@@ -41,12 +41,35 @@ func TestEnumText(t *testing.T) {
 	if _, err := PolicyKind(200).MarshalText(); err == nil {
 		t.Error("out-of-range enum must not marshal")
 	}
+	// Every enum refuses an out-of-range value with the same error.
+	for _, v := range []encoding.TextMarshaler{PrincipalKind(200), PolicyKind(200), Effect(200), AttachmentType(200),
+		OrgNodeKind(200), TrustMechanism(200), KeyType(200), PrincipalEntryKind(200)} {
+		_, err := v.MarshalText()
+		if err == nil || err.Error() != "model: enum value out of range" {
+			t.Errorf("%T(200).MarshalText() error = %v", v, err)
+		}
+	}
 	var k PolicyKind
 	if err := k.UnmarshalText([]byte("Identity")); err == nil {
 		t.Error("enum text is case-sensitive")
 	}
 	if EffectAllow.PolicyElement() != "Allow" || EffectDeny.PolicyElement() != "Deny" || Effect(0).PolicyElement() != "" {
 		t.Error("PolicyElement spelling is wrong")
+	}
+}
+
+func TestPatternSetMatchPatterns(t *testing.T) {
+	var nilSet *PatternSet
+	if nilSet.MatchPatterns() != nil {
+		t.Error("nil set")
+	}
+	raw := &PatternSet{Patterns: []string{"arn:aws:sqs"}}
+	if got := raw.MatchPatterns(); len(got) != 1 || got[0] != "arn:aws:sqs" {
+		t.Errorf("raw = %q", got)
+	}
+	done := &PatternSet{Patterns: []string{"arn:aws:sqs"}, Completed: []string{"arn:aws:sqs:*:*:*"}}
+	if got := done.MatchPatterns(); len(got) != 1 || got[0] != "arn:aws:sqs:*:*:*" {
+		t.Errorf("completed = %q", got)
 	}
 }
 

@@ -92,11 +92,46 @@ func (f *Fidelity) UnmarshalText(b []byte) (err error) {
 	return err
 }
 
+// ReasonCode names why a decision is not EXACT (§3.2, §3.3). The text form is
+// the code itself, e.g. "VPCE_POLICY_UNKNOWN" or "AMBIGUITY:A3".
+type ReasonCode string
+
+// Reason codes for APPROXIMATE decisions (§3.2).
+const (
+	ReasonVPCEPolicyUnknown        ReasonCode = "VPCE_POLICY_UNKNOWN"
+	ReasonS3AccessPoint            ReasonCode = "S3_ACCESS_POINT"
+	ReasonKeySupportUnverified     ReasonCode = "KEY_SUPPORT_UNVERIFIED"
+	ReasonServiceRBPRuleUnverified ReasonCode = "SERVICE_RBP_RULE_UNVERIFIED"
+	ReasonRAMShare                 ReasonCode = "RAM_SHARE"
+	ReasonSnapshotStaleness        ReasonCode = "SNAPSHOT_STALENESS"
+)
+
+// Reason codes for UNSUPPORTED decisions (§3.3).
+const (
+	ReasonMultiResourceAction ReasonCode = "MULTI_RESOURCE_ACTION"
+	ReasonNonIAMAuthzLayer    ReasonCode = "NON_IAM_AUTHZ_LAYER"
+	ReasonIDCABACSource       ReasonCode = "IDC_ABAC_SOURCE"
+	ReasonFASChain            ReasonCode = "FAS_CHAIN"
+	ReasonDeclarativePolicy   ReasonCode = "DECLARATIVE_POLICY"
+	ReasonCatalogMiss         ReasonCode = "CATALOG_MISS"
+	// ReasonPolicyUnparseable: a stored policy that could change the decision
+	// failed to parse. The fail-closed contract (§3.3): the policy is never
+	// skipped silently; every decision it could affect is UNSUPPORTED with
+	// this code, and the FidelityReason Detail names the policy and the
+	// parse error. The connector (PR-7) enforces it at ingest.
+	ReasonPolicyUnparseable ReasonCode = "POLICY_UNPARSEABLE"
+)
+
+// AmbiguityReason is the reason code for a decision that depends on an
+// unsettled ambiguity-register entry (§4.3), e.g. AmbiguityReason("A3") is
+// "AMBIGUITY:A3".
+func AmbiguityReason(id string) ReasonCode { return ReasonCode("AMBIGUITY:" + id) }
+
 // FidelityReason explains a fidelity downgrade.
 type FidelityReason struct {
-	Code             string `json:"code"` // e.g. "AMBIGUITY:A3", "VPCE_POLICY_UNKNOWN"
-	Detail           string `json:"detail"`
-	OutcomeSensitive bool   `json:"outcome_sensitive"` // true if flipping this assumption could flip the decision
+	Code             ReasonCode `json:"code"` // e.g. "AMBIGUITY:A3", "VPCE_POLICY_UNKNOWN"
+	Detail           string     `json:"detail"`
+	OutcomeSensitive bool       `json:"outcome_sensitive"` // true if flipping this assumption could flip the decision
 }
 
 // Qualifier is a condition set operator prefix.
@@ -119,7 +154,8 @@ func (q *Qualifier) UnmarshalText(b []byte) (err error) {
 
 // Span locates a statement in the raw policy bytes. Lines and columns are
 // 1-based; columns count Unicode code points; the end position is inclusive
-// (it points at the closing brace). A line ends at '\n'.
+// (it points at the closing brace). A line ends at "\n", "\r\n" or a lone
+// "\r".
 type Span struct {
 	StartLine int `json:"start_line"`
 	StartCol  int `json:"start_col"`
