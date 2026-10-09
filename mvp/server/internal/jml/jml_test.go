@@ -1,6 +1,7 @@
 package jml_test
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"testing"
@@ -31,9 +32,24 @@ func stepsWith(p jml.Plan, action string) []jml.Step {
 
 func impact(p jml.Plan) ojson.Object { o, _ := get(p, "impact").(ojson.Object); return o }
 
+// read runs fn in a read-only transaction of st's tenant and returns its error.
+func read[T any](st *testkit.DB, fn func(*store.TenantTx) (T, error)) (T, error) {
+	var out T
+	err := st.ReadTenant(context.Background(), st.Tenant, func(c *store.TenantTx) error {
+		var err error
+		out, err = fn(c)
+		return err
+	})
+	return out, err
+}
+
+func leaverPlan(st *testkit.DB, id int64, withImpact bool, pols []*policy.Policy) (jml.Plan, error) {
+	return read(st, func(c *store.TenantTx) (jml.Plan, error) { return jml.LeaverPlan(c, testkit.Now, id, withImpact, pols) })
+}
+
 func TestLeaverPlanContents(t *testing.T) {
 	st, ids := testkit.Tiny(t)
-	plan, err := jml.LeaverPlan(testkit.Conn(st), testkit.Now, ids["alice"], true, testkit.Policies(t))
+	plan, err := leaverPlan(st, ids["alice"], true, testkit.Policies(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +86,7 @@ func TestLeaverPlanContents(t *testing.T) {
 
 func TestLeaverPlanForAlreadyTerminatedIdentityFindsLeftovers(t *testing.T) {
 	st, ids := testkit.Tiny(t)
-	plan, err := jml.LeaverPlan(testkit.Conn(st), testkit.Now, ids["dave"], true, testkit.Policies(t))
+	plan, err := leaverPlan(st, ids["dave"], true, testkit.Policies(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +113,7 @@ func TestLeaverPlanForAlreadyTerminatedIdentityFindsLeftovers(t *testing.T) {
 
 func TestLeaverPlanUnknownIdentity(t *testing.T) {
 	st, _ := testkit.Tiny(t)
-	_, err := jml.LeaverPlan(testkit.Conn(st), testkit.Now, 99999, true, nil)
+	_, err := leaverPlan(st, 99999, true, nil)
 	var je *jml.Error
 	if !errors.As(err, &je) || je.Msg != "unknown identity" {
 		t.Errorf("err = %v", err)
@@ -106,7 +122,7 @@ func TestLeaverPlanUnknownIdentity(t *testing.T) {
 
 func TestLeaverPlanWithoutImpact(t *testing.T) {
 	st, ids := testkit.Tiny(t)
-	plan, err := jml.LeaverPlan(testkit.Conn(st), testkit.Now, ids["bob"], false, nil)
+	plan, err := leaverPlan(st, ids["bob"], false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,49 +138,55 @@ func TestExecuteLeaverEventRemovesAllAccess(t *testing.T) {
 	st, ids := testkit.Tiny(t)
 	pols := testkit.Policies(t)
 	var evID int64
-	testkit.Write(t, st, func(c *store.Conn) error {
+	testkit.Write(t, st, func(c *store.TenantTx) error {
 		var err error
-		evID, err = c.Insert(`INSERT INTO hris_events (external_id, type, identity_id, payload, effective_at, status)
-			VALUES ('t-1', 'leaver', ?, '{}', ?, 'pending')`, ids["alice"], store.T(testkit.Now))
+		alice := ids["alice"]
+		evID, err = c.InsertHrisEvent(&store.HrisEvent{ExternalID: "t-1", Type: "leaver", IdentityID: &alice,
+			EffectiveAt: testkit.Now, Status: "pending"})
 		return err
 	})
-	testkit.Write(t, st, func(c *store.Conn) error {
+	testkit.Write(t, st, func(c *store.TenantTx) error {
 		_, err := jml.ExecuteEvent(c, testkit.Now, evID, "jml-automation", pols)
 		return err
 	})
-	c := testkit.Conn(st)
-	alice, err := c.Identity(ids["alice"])
-	if err != nil || alice.Status != "terminated" || alice.TerminatedAt == nil {
-		t.Fatalf("alice = %+v %v", alice, err)
-	}
-	accts, _ := c.IdentityAccounts(alice.ID)
-	for _, a := range accts {
-		if a.Status != "disabled" {
-			t.Errorf("account %s still %s", a.Username, a.Status)
+	testkit.Read(t, st, func(c *store.TenantTx) error {
+		alice, err := c.Identity(ids["alice"])
+		if err != nil || alice.Status != "terminated" || alice.TerminatedAt == nil {
+			t.Fatalf("alice = %+v %v", alice, err)
 		}
-	}
-	g, err := graph.FromDB(c, testkit.Now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n := g.EffectivePermissions(alice.ID).Len(); n != 0 {
-		t.Errorf("alice keeps %d permissions", n)
-	}
-	bot, _ := c.Identities("WHERE external_id = 'helper-bot'")
-	if bot[0].OwnerID == nil || *bot[0].OwnerID != ids["carol"] {
-		t.Errorf("helper-bot owner = %v, want carol", bot[0].OwnerID)
-	}
-	vs, err := policy.Evaluate(pols, policy.NewContext(g, c, testkit.Now))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, v := range vs {
-		if v.PolicyID == "terminated-access" && *v.IdentityID == alice.ID {
-			t.Error("executed leaver still has a terminated-access violation")
+		accts, _ := c.IdentityAccounts(alice.ID)
+		for _, a := range accts {
+			if a.Status != "disabled" {
+				t.Errorf("account %s still %s", a.Username, a.Status)
+			}
 		}
-	}
+		g, err := graph.Build(c, testkit.Now)
+		if err != nil {
+			return err
+		}
+		if n := g.EffectivePermissions(alice.ID).Len(); n != 0 {
+			t.Errorf("alice keeps %d permissions", n)
+		}
+		bot, err := c.IdentityByExternalID("helper-bot")
+		if err != nil {
+			return err
+		}
+		if bot.OwnerID == nil || *bot.OwnerID != ids["carol"] {
+			t.Errorf("helper-bot owner = %v, want carol", bot.OwnerID)
+		}
+		vs, err := policy.Evaluate(pols, policy.NewContext(g, c, testkit.Now))
+		if err != nil {
+			return err
+		}
+		for _, v := range vs {
+			if v.PolicyID == "terminated-access" && *v.IdentityID == alice.ID {
+				t.Error("executed leaver still has a terminated-access violation")
+			}
+		}
+		return nil
+	})
 	// executing twice is refused
-	err = st.Write(t.Context(), func(c *store.Conn) error {
+	err := st.InTenant(t.Context(), st.Tenant, func(c *store.TenantTx) error {
 		_, err := jml.ExecuteEvent(c, testkit.Now, evID, "jml-automation", pols)
 		return err
 	})
@@ -174,19 +196,28 @@ func TestExecuteLeaverEventRemovesAllAccess(t *testing.T) {
 	}
 }
 
-func demoEvent(t *testing.T, st *store.Store, where string) *store.HrisEvent {
+func demoEvent(t *testing.T, st *testkit.DB, typ, status string) *store.HrisEvent {
 	t.Helper()
-	evs, err := testkit.Conn(st).HrisEvents(where + " ORDER BY id")
-	if err != nil || len(evs) != 1 {
-		t.Fatalf("events %q: %d %v", where, len(evs), err)
+	var evs []*store.HrisEvent
+	for _, ev := range testkit.Get(t, st, func(c *store.TenantTx) ([]*store.HrisEvent, error) { return c.HrisEvents() }) {
+		if ev.Type == typ && (status == "" || ev.Status == status) {
+			evs = append(evs, ev)
+		}
+	}
+	if len(evs) != 1 {
+		t.Fatalf("events %s/%s: %d", typ, status, len(evs))
 	}
 	return evs[0]
 }
 
+func planFor(st *testkit.DB, ev *store.HrisEvent, pols []*policy.Policy) (jml.Plan, error) {
+	return read(st, func(c *store.TenantTx) (jml.Plan, error) { return jml.PlanForEvent(c, testkit.Now, ev, true, pols) })
+}
+
 func TestDemoMarcusLeaverPlan(t *testing.T) {
 	st := testkit.Demo(t)
-	ev := demoEvent(t, st, "WHERE type = 'leaver' AND status = 'pending'")
-	plan, err := jml.PlanForEvent(testkit.Conn(st), testkit.Now, ev, true, testkit.Policies(t))
+	ev := demoEvent(t, st, "leaver", "pending")
+	plan, err := planFor(st, ev, testkit.Policies(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +234,6 @@ func TestDemoMarcusLeaverPlan(t *testing.T) {
 
 func TestDemoJoinerAndMoverPlans(t *testing.T) {
 	st := testkit.Demo(t)
-	c := testkit.Conn(st)
 	targets := func(p jml.Plan, action string) []any {
 		var out []any
 		for _, s := range stepsWith(p, action) {
@@ -211,7 +241,7 @@ func TestDemoJoinerAndMoverPlans(t *testing.T) {
 		}
 		return out
 	}
-	joiner, err := jml.PlanForEvent(c, testkit.Now, demoEvent(t, st, "WHERE type = 'joiner'"), true, nil)
+	joiner, err := planFor(st, demoEvent(t, st, "joiner", ""), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +250,7 @@ func TestDemoJoinerAndMoverPlans(t *testing.T) {
 			t.Errorf("joiner add_grant missing %s: %v", want, targets(joiner, "add_grant"))
 		}
 	}
-	mover, err := jml.PlanForEvent(c, testkit.Now, demoEvent(t, st, "WHERE type = 'mover'"), true, nil)
+	mover, err := planFor(st, demoEvent(t, st, "mover", ""), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,9 +264,18 @@ func TestDemoJoinerAndMoverPlans(t *testing.T) {
 
 func TestInferTeamAndBirthright(t *testing.T) {
 	st := testkit.Demo(t)
-	c := testkit.Conn(st)
-	alice, _ := c.Identities("WHERE name = 'Alice Okafor'")
-	team, err := jml.InferTeam(c, alice[0].ID)
+	team, err := read(st, func(c *store.TenantTx) (*string, error) {
+		idents, err := c.Identities()
+		if err != nil {
+			return nil, err
+		}
+		for _, i := range idents {
+			if i.Name == "Alice Okafor" {
+				return jml.InferTeam(c, i.ID)
+			}
+		}
+		return nil, errors.New("no Alice Okafor")
+	})
 	if err != nil || team == nil {
 		t.Fatalf("team = %v %v", team, err)
 	}

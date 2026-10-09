@@ -11,6 +11,9 @@
 //	TESSERA_CORS_ORIGINS  comma-separated browser origins allowed by CORS
 //	                      (default: the dev UI on localhost/127.0.0.1, port UI_PORT or 5173)
 //	TESSERA_NOW           freeze the clock at an ISO-8601 time (tests and demos)
+//	TESSERA_ENV           dev (default) or prod. Until authentication lands, the API
+//	                      serves one default tenant and refuses to start unless dev.
+//	TESSERA_DEV_DEFAULT_TENANT  slug of that tenant (default larkspur)
 package main
 
 import (
@@ -115,6 +118,13 @@ func policyFS() fs.FS {
 	return policies.FS
 }
 
+func envOr(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
+}
+
 func corsOrigins() []string {
 	if v := os.Getenv("TESSERA_CORS_ORIGINS"); v != "" {
 		var out []string
@@ -148,17 +158,20 @@ func seedDB(ctx context.Context, path string, clock timeutil.Clock, loader *poli
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, "==> seeding demo data (fictional company: Larkspur Labs)")
-	stats, err := seed.Run(ctx, st, conns, now, pols)
+	fmt.Fprintln(stdout, "==> seeding demo tenants: larkspur (fictional company: Larkspur Labs) and globex")
+	stats, err := seed.Run(ctx, st, now, pols, seed.DefaultTenants(conns, now))
 	if err != nil {
 		return err
 	}
-	discovery, err := ojson.Marshal(stats.Sync.Discovery.Object())
-	if err != nil {
-		return err
+	for _, ts := range stats {
+		discovery, err := ojson.Marshal(ts.Sync.Discovery.Object())
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Seeded Tessera tenant %s: %s usage=%d hris=%d jit=%d\n", ts.Tenant.Slug,
+			discovery, ts.Sync.Events.Usage, ts.Sync.Events.Hris, ts.Requests)
 	}
-	fmt.Fprintf(stdout, "Seeded Tessera in %.1fs: %s usage=%d hris=%d jit=%d\n", time.Since(start).Seconds(),
-		discovery, stats.Sync.Events.Usage, stats.Sync.Events.Hris, stats.Requests)
+	fmt.Fprintf(stdout, "Seeded Tessera in %.1fs\n", time.Since(start).Seconds())
 	return nil
 }
 
@@ -184,7 +197,12 @@ func serve(ctx context.Context, o options, clock timeutil.Clock, loader *policy.
 	if _, err := loader.Load(); err != nil { // fail fast on broken policy files
 		return err
 	}
-	srv := api.New(api.Config{Store: st, Clock: clock, Policies: loader, Logger: logger, AllowedOrigins: corsOrigins()})
+	tenant, err := st.DevDefaultTenant(ctx, envOr("TESSERA_ENV", "dev"), envOr("TESSERA_DEV_DEFAULT_TENANT", seed.LarkspurSlug))
+	if err != nil {
+		return fmt.Errorf("no tenant to serve (authentication arrives in a later release): %w", err)
+	}
+	srv := api.New(api.Config{Store: st, Tenant: tenant, Clock: clock, Policies: loader, Logger: logger,
+		AllowedOrigins: corsOrigins()})
 	httpSrv := &http.Server{
 		Addr:              o.addr,
 		Handler:           srv.Handler(),

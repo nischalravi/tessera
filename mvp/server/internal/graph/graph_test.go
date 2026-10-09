@@ -25,13 +25,9 @@ func byAction(eff *graph.Eff) map[ar]*graph.EffectivePermission {
 	return out
 }
 
-func load(t *testing.T, st *store.Store, now time.Time) *graph.Snapshot {
+func load(t *testing.T, st *testkit.DB, now time.Time) *graph.Snapshot {
 	t.Helper()
-	g, err := graph.FromDB(testkit.Conn(st), now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return g
+	return testkit.Get(t, st, func(c *store.TenantTx) (*graph.Snapshot, error) { return graph.Build(c, now) })
 }
 
 func acctKey(ids testkit.IDs, k string) string  { return graph.Key("account", ids["acct:"+k]) }
@@ -107,10 +103,10 @@ func TestDisabledAccountsGrantNothing(t *testing.T) {
 func TestExpiredJITEdgesAreIgnored(t *testing.T) {
 	st, ids := testkit.Tiny(t)
 	now := testkit.Now
-	testkit.Write(t, st, func(c *store.Conn) error {
-		_, err := c.Exec(`INSERT INTO grant_edges (src, dst, relation, source, expires_at, created_at)
-			VALUES (?, ?, 'member_of', 'jit', ?, ?)`, acctKey(ids, "okta:alice"), groupKey(ids, "aws:ProdAdmin"),
-			store.T(now.Add(time.Hour)), store.T(now))
+	testkit.Write(t, st, func(c *store.TenantTx) error {
+		exp := now.Add(time.Hour)
+		_, err := c.InsertEdge(&store.GrantEdge{Src: acctKey(ids, "okta:alice"), Dst: groupKey(ids, "aws:ProdAdmin"),
+			Relation: "member_of", Source: "jit", ExpiresAt: &exp, CreatedAt: now})
 		return err
 	})
 	tests := []struct {
@@ -177,10 +173,15 @@ func TestSnapshotCopyIsIsolated(t *testing.T) {
 
 func TestDemoCompanyAliceReachesCustomerPII(t *testing.T) {
 	st := testkit.Demo(t)
-	c := testkit.Conn(st)
-	alice, err := c.Identities("WHERE name = ?", "Alice Okafor")
-	if err != nil || len(alice) != 1 {
-		t.Fatalf("alice: %v %v", alice, err)
+	idents := testkit.Get(t, st, func(c *store.TenantTx) ([]*store.Identity, error) { return c.Identities() })
+	var alice []*store.Identity
+	for _, i := range idents {
+		if i.Name == "Alice Okafor" {
+			alice = append(alice, i)
+		}
+	}
+	if len(alice) != 1 {
+		t.Fatalf("alice: %v", alice)
 	}
 	g := load(t, st, testkit.Now)
 	var texts []string
@@ -196,15 +197,13 @@ func TestDemoCompanyAliceReachesCustomerPII(t *testing.T) {
 		t.Errorf("paths %v do not include %q", texts, want)
 	}
 	counts := map[string]int{}
-	for _, typ := range []string{"human", "service", "ai_agent"} {
-		if counts[typ], err = c.Count("SELECT count(*) FROM identities WHERE type = ?", typ); err != nil {
-			t.Fatal(err)
-		}
+	for _, i := range idents {
+		counts[i.Type]++
 	}
 	if counts["human"] < 60 || counts["service"] < 25 || counts["ai_agent"] != 6 {
 		t.Errorf("identity counts = %v", counts)
 	}
-	if n, _ := c.Count("SELECT count(*) FROM accounts"); n <= 150 {
+	if n := testkit.Get(t, st, func(c *store.TenantTx) (int, error) { return c.CountAccounts() }); n <= 150 {
 		t.Errorf("accounts = %d, want > 150", n)
 	}
 }
@@ -328,10 +327,9 @@ func TestUnknownIdentityHasNoPermissions(t *testing.T) {
 func TestRemoveEdgeID(t *testing.T) {
 	st, ids := testkit.Tiny(t)
 	g := load(t, st, testkit.Now)
-	e, err := testkit.Conn(st).EdgeBetween(acctKey(ids, "okta:bob"), groupKey(ids, "okta:payments-approvers"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	e := testkit.Get(t, st, func(c *store.TenantTx) (*store.GrantEdge, error) {
+		return c.EdgeBetween(acctKey(ids, "okta:bob"), groupKey(ids, "okta:payments-approvers"))
+	})
 	src, dst, ok := g.RemoveEdgeID(e.ID)
 	if !ok || src != e.Src || dst != e.Dst {
 		t.Fatalf("RemoveEdgeID = %s %s %v", src, dst, ok)

@@ -123,14 +123,14 @@ func risk(flags []string) int {
 }
 
 // Inventory lists every non-human identity with risk flags, highest risk first.
-func Inventory(c *store.Conn, g *graph.Snapshot, u *usage.Index) ([]Item, error) {
+func Inventory(c *store.TenantTx, g *graph.Snapshot, u *usage.Index) ([]Item, error) {
 	now := u.Now
 	people, all, err := c.IdentityMap()
 	if err != nil {
 		return nil, err
 	}
 	secrets := map[int64][]SecretView{}
-	rows, err := c.SecretsWithAccounts("")
+	rows, err := c.SecretsWithAccounts()
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +139,7 @@ func Inventory(c *store.Conn, g *graph.Snapshot, u *usage.Index) ([]Item, error)
 			secrets[*r.Account.IdentityID] = append(secrets[*r.Account.IdentityID], ViewSecret(r.Secret, r.Account, now))
 		}
 	}
-	dels, err := c.Delegations("")
+	dels, err := c.Delegations()
 	if err != nil {
 		return nil, err
 	}
@@ -147,13 +147,15 @@ func Inventory(c *store.Conn, g *graph.Snapshot, u *usage.Index) ([]Item, error)
 	for _, d := range dels {
 		byAgent[d.AgentID] = append(byAgent[d.AgentID], d)
 	}
-	accounts, err := c.Accounts("WHERE identity_id IS NOT NULL")
+	accounts, err := c.Accounts()
 	if err != nil {
 		return nil, err
 	}
 	acctsBy := map[int64][]*store.Account{}
 	for _, a := range accounts {
-		acctsBy[*a.IdentityID] = append(acctsBy[*a.IdentityID], a)
+		if a.IdentityID != nil {
+			acctsBy[*a.IdentityID] = append(acctsBy[*a.IdentityID], a)
+		}
 	}
 
 	out := []Item{}

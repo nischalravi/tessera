@@ -13,17 +13,16 @@ import (
 
 func TestMain(m *testing.M) { testkit.Main(m) }
 
-func load(t *testing.T, st *store.Store) (*graph.Snapshot, *usage.Index) {
+func load(t *testing.T, st *testkit.DB) (g *graph.Snapshot, u *usage.Index) {
 	t.Helper()
-	c := testkit.Conn(st)
-	g, err := graph.FromDB(c, testkit.Now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	u, err := usage.Build(c, testkit.Now)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testkit.Read(t, st, func(c *store.TenantTx) error {
+		var err error
+		if g, err = graph.Build(c, testkit.Now); err != nil {
+			return err
+		}
+		u, err = usage.Build(c, testkit.Now)
+		return err
+	})
 	return g, u
 }
 
@@ -138,9 +137,9 @@ func TestRecommendationsRemoveVsRightSize(t *testing.T) {
 func TestRedundantGrant(t *testing.T) {
 	st, ids := testkit.Tiny(t)
 	// a second, parallel route to ProdAdmin makes carol's okta:platform grant redundant
-	testkit.Write(t, st, func(c *store.Conn) error {
-		_, err := c.Exec(`INSERT INTO grant_edges (src, dst, relation, source, created_at) VALUES (?, ?, 'member_of', 'manual', ?)`,
-			graph.Key("account", ids["acct:okta:carol"]), graph.Key("group", ids["group:aws:ProdAdmin"]), store.T(testkit.Now))
+	testkit.Write(t, st, func(c *store.TenantTx) error {
+		_, err := c.InsertEdge(&store.GrantEdge{Src: graph.Key("account", ids["acct:okta:carol"]),
+			Dst: graph.Key("group", ids["group:aws:ProdAdmin"]), Relation: "member_of", Source: "manual", CreatedAt: testkit.Now})
 		return err
 	})
 	g, u := load(t, st)
@@ -177,9 +176,14 @@ func TestRoleTrimFlagsPermissionNoHolderUses(t *testing.T) {
 func TestDemoUnusedAccessAndRecommendations(t *testing.T) {
 	st := testkit.Demo(t)
 	g, u := load(t, st)
-	alice, err := testkit.Conn(st).Identities("WHERE name = 'Alice Okafor'")
-	if err != nil || len(alice) != 1 {
-		t.Fatal(err)
+	var alice []*store.Identity
+	for _, i := range testkit.Get(t, st, func(c *store.TenantTx) ([]*store.Identity, error) { return c.Identities() }) {
+		if i.Name == "Alice Okafor" {
+			alice = append(alice, i)
+		}
+	}
+	if len(alice) != 1 {
+		t.Fatal(alice)
 	}
 	var labels []string
 	for _, k := range leastpriv.UnusedPermissions(g, u, alice[0].ID, 60) {
