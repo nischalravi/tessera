@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ChevronRight, Plus, Workflow as WorkflowIcon } from "lucide-react";
 import { usePersona } from "../../app/persona";
-import { Badge, Button, Callout, Page, PreviewBadge, useToast } from "../../components";
+import { Badge, Button, Callout, Page, PreviewBadge, useToast, GovernanceTabs } from "../../components";
 import { WORKFLOWS, Workflow, mockObjects } from "../../mocks";
 import { PreviewFormDrawer } from "../directory/shared";
 
@@ -43,10 +43,10 @@ function Card({ w }: { w: Workflow }) {
 export function Workflows() {
   const [create, setCreate] = useState(false);
   return (
-    <Page
+    <Page tabs={<GovernanceTabs />}
       title="Workflows"
       badge={<PreviewBadge />}
-      crumbs={[["Governance", "/governance"], ["Workflows"]]}
+      crumbs={[["Access"], ["Access reviews", "/governance/reviews"], ["Workflows"]]}
       sub="Who approves what, in which order, and what happens when nobody answers. One place for request, review and lifecycle routing."
       actions={<Button variant="primary" icon={<Plus size={15} />} onClick={() => setCreate(true)}>New workflow</Button>}
     >

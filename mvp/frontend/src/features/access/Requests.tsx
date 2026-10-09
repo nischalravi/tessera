@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { FileText, Pencil, Plus, Trash2 } from "lucide-react";
 import { JitRequest, fmtDate, relTime, useApi } from "../../api";
 import { usePersona } from "../../app/persona";
-import { Button, ButtonLink, EmptyState, Loading, Page, PreviewBadge, Status, Tabs, useConfirm } from "../../components";
+import { Button, ButtonLink, EmptyState, Loading, Page, PreviewBadge, Status, Tabs, useConfirm, MyAccessTabs } from "../../components";
 import { mockRequests, useMockState } from "../../mocks";
 
 interface Row { key: string; what: string; forWhom: string; kind: string; status: string; at: string; by: string; preview: boolean; detail: string }
@@ -34,9 +34,9 @@ export function Requests() {
   const drafts = mock.requests.filter((r) => r.status === "draft" && r.requester === actor);
 
   return (
-    <Page
+    <Page tabs={<MyAccessTabs />}
       title="Requests"
-      crumbs={[["Access", "/access"], ["Requests"]]}
+      crumbs={[["Access"], ["Requests"]]}
       sub={persona === "admin" ? "Every access request across the organisation, newest first." : "Requests you made or that were made for you, plus drafts you saved."}
       actions={<ButtonLink to="/access/request" variant="primary" icon={<Plus size={15} />}>New request</ButtonLink>}
     >

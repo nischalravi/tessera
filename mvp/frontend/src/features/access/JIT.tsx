@@ -62,7 +62,7 @@ export function JIT() {
   const count = (s: string) => (data ?? []).filter((r) => (s === "closed" ? !["pending", "approved"].includes(r.status) : r.status === s)).length;
 
   return (
-    <Page title="Just-in-time access" crumbs={[["Access", "/access"], ["Just-in-time"]]} sub="Privileged roles are requested for a set time, approved, and removed automatically when they expire. The sweeper runs every 30 seconds. JIT grants never count as standing access.">
+    <Page title="Just-in-time access" crumbs={[["Access"], ["Just-in-time"]]} sub="Privileged roles are requested for a set time, approved, and removed automatically when they expire. The sweeper runs every 30 seconds. JIT grants never count as standing access.">
       <div className="grid g21">
         <div className="stack">
           <FilterChips label="Status" value={status} onChange={setStatus} options={[{ id: "all", label: "All", count: data?.length }, { id: "pending", label: "Pending", count: count("pending") }, { id: "approved", label: "Active", count: count("approved") }, { id: "closed", label: "Closed", count: count("closed") }]} />

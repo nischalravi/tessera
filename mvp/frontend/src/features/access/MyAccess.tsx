@@ -3,7 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { Plus, Trash2 } from "lucide-react";
 import { PathStep, ago, fmtDate, useApi } from "../../api";
 import { usePersona } from "../../app/persona";
-import { Badge, Button, ButtonLink, EmptyState, FilterChips, Loading, Page, PreviewBadge, useConfirm, useToast } from "../../components";
+import { Badge, Button, ButtonLink, EmptyState, FilterChips, Loading, Page, PreviewBadge, useConfirm, useToast, MyAccessTabs } from "../../components";
 import { mockRequests, useMockState } from "../../mocks";
 
 interface GrantRow {
@@ -59,9 +59,9 @@ export function MyAccess() {
   };
 
   return (
-    <Page
+    <Page tabs={<MyAccessTabs />}
       title="My access"
-      crumbs={[["Access", "/access"], ["My access"]]}
+      crumbs={[["Access"], ["My access"]]}
       sub={me ? `Everything ${me.name} can use today, how it was granted, and when it was last used.` : undefined}
       actions={<ButtonLink to="/access/request" variant="primary" icon={<Plus size={15} />}>Request access</ButtonLink>}
     >

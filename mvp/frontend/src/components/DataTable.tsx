@@ -1,9 +1,10 @@
 import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, Bookmark, Download, Search, Trash2, Upload, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Bookmark, Check, ChevronDown, Download, FileUp, Plus, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { Button } from "./Button";
 import { useConfirm } from "./Dialog";
 import { Loading } from "./Feedback";
 import { Menu, MenuEntry } from "./Menu";
+import { Command, CommandBar } from "./Page";
 import { useToast } from "./Toast";
 import { downloadCsv, parseCsv, toCsv } from "./csv";
 import { store } from "../app/storage";
@@ -48,6 +49,17 @@ export interface DataTableProps<T> {
   filters?: Filter<T>[];
   bulkActions?: BulkAction<T>[];
   onRowClick?: (r: T) => void;
+  /** Row shown as selected (the one open in the side panel). */
+  activeKey?: string | number | null;
+  /** Commands that don't need a selection (New, Start review...). Bulk import and Refresh are added from onImport / onRefresh. */
+  commands?: (Command | null | false | undefined)[];
+  onRefresh?: () => void;
+  /** Filter values to start with, e.g. from a deep link. */
+  initialFilters?: Record<string, string>;
+  /** How many filters show as chips before "+ Add filter" (default 2). */
+  chips?: number;
+  /** Accessible name for a row's checkbox. */
+  rowLabel?: (r: T) => string;
   /** Called with parsed CSV rows. When absent, the Import button is hidden. */
   onImport?: (rows: Record<string, string>[], fileName: string) => void;
   empty?: ReactNode;
@@ -60,12 +72,13 @@ export function DataTable<T>(p: DataTableProps<T>) {
   const toast = useToast();
   const confirm = useConfirm();
   const [q, setQ] = useState("");
-  const [filters, setFilters] = useState<Record<string, string>>({});
+  const [filters, setFilters] = useState<Record<string, string>>(() => p.initialFilters ?? {});
   const [sort, setSort] = useState<[string, 1 | -1] | undefined>(p.initialSort);
   const [sel, setSel] = useState<Set<string | number>>(new Set());
   const [limit, setLimit] = useState(p.pageSize ?? 100);
   const [views, setViews] = useState<View[]>(() => store.get<View[]>(`views.${p.id}`, []));
   const fileRef = useRef<HTMLInputElement>(null);
+  const [shown, setShown] = useState<string[]>(() => [...new Set([...(p.filters ?? []).slice(0, p.chips ?? 2).map((f) => f.id), ...Object.keys(p.initialFilters ?? {})])]);
 
   useEffect(() => setSel(new Set()), [p.rows]);
 
@@ -145,6 +158,7 @@ export function DataTable<T>(p: DataTableProps<T>) {
     setQ(v.q);
     setFilters(v.filters);
     setSort(v.sort);
+    setShown((xs) => [...new Set([...xs, ...Object.keys(v.filters)])]);
   };
   const deleteView = (v: View) => {
     const next = views.filter((x) => x.name !== v.name);
@@ -160,52 +174,74 @@ export function DataTable<T>(p: DataTableProps<T>) {
   ];
 
   const sortBy = (id: string) => setSort((s) => (s && s[0] === id ? [id, s[1] === 1 ? -1 : 1] : [id, 1]));
-  const hasBulk = !!p.bulkActions?.length;
+  const hasBulk = true;
+  const reset = () => { setQ(""); setFilters({}); };
+  const hidden = (p.filters ?? []).filter((f) => !shown.includes(f.id));
+  const n = selectedRows.length;
+  const cmds: (Command | null | false | undefined)[] = [
+    ...(p.commands ?? []),
+    p.onImport && { label: "Bulk import", icon: <FileUp size={16} />, onClick: () => fileRef.current?.click() },
+    p.onRefresh && { label: "Refresh", icon: <RefreshCw size={16} />, onClick: p.onRefresh },
+    ...(p.bulkActions ?? []).map((a) => ({
+      label: a.label,
+      icon: a.icon,
+      danger: a.danger,
+      disabled: n === 0,
+      title: n === 0 ? "Select one or more rows first" : undefined,
+      onClick: async () => { await a.run(selectedRows); setSel(new Set()); },
+    })),
+  ];
 
   return (
-    <div className="card flush">
-      <div className="card-h" style={{ gap: 8 }}>
-        {selectedRows.length > 0 && hasBulk ? (
-          <div className="row" role="toolbar" aria-label="Bulk actions">
-            <b className="tnum">{selectedRows.length} selected</b>
-            {p.bulkActions!.map((a) => (
-              <Button key={a.label} size="sm" variant={a.danger ? "danger" : "default"} icon={a.icon} onClick={async () => { await a.run(selectedRows); setSel(new Set()); }}>
-                {a.label}
-              </Button>
-            ))}
-            <Button size="sm" variant="ghost" icon={<X size={14} />} onClick={() => setSel(new Set())}>Clear</Button>
-          </div>
-        ) : (
-          <div className="row grow dt-filters">
-            <label className="input-icon dt-search">
-              <Search size={14} />
-              <span className="sr-only">Search</span>
-              <input className="input" style={{ width: "100%" }} value={q} onChange={(e) => setQ(e.target.value)} placeholder={p.searchPlaceholder ?? "Search…"} />
-            </label>
-            {(p.filters ?? []).map((f) => (
-              <label key={f.id} className="row tight">
-                <span className="sr-only">{f.label}</span>
-                <select className="input" value={filters[f.id] ?? ""} onChange={(e) => setFilters({ ...filters, [f.id]: e.target.value })} aria-label={f.label}>
-                  <option value="">{f.label}: any</option>
-                  {f.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                </select>
-              </label>
-            ))}
-            {activeFilters > 0 && <Button size="sm" variant="ghost" icon={<X size={14} />} onClick={() => { setQ(""); setFilters({}); }}>Reset</Button>}
-          </div>
-        )}
-        <div className="row tight dt-tools">
+    <div>
+      <CommandBar
+        label="List commands"
+        items={cmds}
+        end={<>
+          {n > 0 && <span className="cmd-sel tnum" role="status">{n} selected <button type="button" className="btn ghost sm" onClick={() => setSel(new Set())}>Clear</button></span>}
           {p.toolbarExtra}
-          <Menu label="Saved views" items={viewItems} trigger={(t) => <Button size="sm" variant="ghost" icon={<Bookmark size={14} />} {...t}>Views</Button>} />
-          {p.onImport && (
-            <>
-              <input ref={fileRef} type="file" accept=".csv,text/csv" hidden onChange={(e) => onFile(e.target.files?.[0])} aria-hidden tabIndex={-1} />
-              <Button size="sm" variant="ghost" icon={<Upload size={14} />} onClick={() => fileRef.current?.click()}>Import</Button>
-            </>
-          )}
-          <Button size="sm" variant="ghost" icon={<Download size={14} />} onClick={exportCsv} disabled={!filtered.length}>Export</Button>
-        </div>
+          <Menu label="Saved views" items={viewItems} trigger={(t) => <button type="button" className="cmd" {...t}><Bookmark size={16} /> Views</button>} />
+          <button type="button" className="cmd" onClick={exportCsv} disabled={!filtered.length}><Download size={16} /> Export</button>
+        </>}
+      />
+      {p.onImport && <input ref={fileRef} type="file" accept=".csv,text/csv" hidden onChange={(e) => onFile(e.target.files?.[0])} aria-hidden tabIndex={-1} />}
+      <div className="dt-bar" role="group" aria-label="Search and filters">
+        <label className="input-icon dt-search">
+          <Search size={14} />
+          <span className="sr-only">Search</span>
+          <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder={p.searchPlaceholder ?? "Search…"} />
+        </label>
+        {(p.filters ?? []).filter((f) => shown.includes(f.id)).map((f) => {
+          const v = filters[f.id];
+          const vLabel = f.options.find((o) => o.value === v)?.label;
+          return (
+            <Menu
+              key={f.id}
+              align="start"
+              label={f.label}
+              items={[
+                { label: "All", icon: !v ? <Check size={14} /> : <span style={{ width: 14 }} />, checked: !v, onSelect: () => setFilters({ ...filters, [f.id]: "" }) },
+                ...f.options.map((o) => ({ label: o.label, icon: v === o.value ? <Check size={14} /> : <span style={{ width: 14 }} />, checked: v === o.value, onSelect: () => setFilters({ ...filters, [f.id]: o.value }) })),
+              ]}
+              trigger={(t) => (
+                <button type="button" className={`fchip ${v ? "on" : ""}`} aria-label={`${f.label}: ${vLabel ?? "All"}`} {...t}>
+                  {f.label}: {vLabel ?? "All"} <ChevronDown size={12} aria-hidden />
+                </button>
+              )}
+            />
+          );
+        })}
+        {hidden.length > 0 && (
+          <Menu
+            align="start"
+            label="Add filter"
+            items={hidden.map((f) => ({ label: f.label, onSelect: () => setShown([...shown, f.id]) }))}
+            trigger={(t) => <button type="button" className="fchip add" {...t}><Plus size={12} aria-hidden /> Add filter</button>}
+          />
+        )}
+        {activeFilters > 0 && <button type="button" className="fchip add" onClick={reset}><X size={12} aria-hidden /> Reset</button>}
       </div>
+      <div className="card flush">
       {!p.rows ? (
         <Loading error={p.error} />
       ) : (
@@ -237,14 +273,15 @@ export function DataTable<T>(p: DataTableProps<T>) {
                   return (
                     <tr
                       key={k}
-                      className={`${p.onRowClick ? "click" : ""} ${sel.has(k) ? "selected" : ""}`}
+                      className={`${p.onRowClick ? "click" : ""} ${sel.has(k) ? "selected" : ""} ${p.activeKey != null && String(p.activeKey) === String(k) ? "active" : ""}`}
+                      aria-current={p.activeKey != null && String(p.activeKey) === String(k) ? "true" : undefined}
                       onClick={p.onRowClick ? () => p.onRowClick!(r) : undefined}
                       tabIndex={p.onRowClick ? 0 : undefined}
                       onKeyDown={p.onRowClick ? (e) => { if (e.key === "Enter" && e.target === e.currentTarget) p.onRowClick!(r); } : undefined}
                     >
                       {hasBulk && (
                         <td className="check" onClick={(e) => e.stopPropagation()}>
-                          <input type="checkbox" checked={sel.has(k)} onChange={() => toggle(k)} aria-label="Select row" />
+                          <input type="checkbox" checked={sel.has(k)} onChange={() => toggle(k)} aria-label={p.rowLabel ? `Select ${p.rowLabel(r)}` : "Select row"} />
                         </td>
                       )}
                       {p.columns.map((c) => (
@@ -260,15 +297,16 @@ export function DataTable<T>(p: DataTableProps<T>) {
             <div className="empty-state">
               <h3>No matches</h3>
               <p>Nothing matches the current search and filters. Try a broader search or reset the filters.</p>
-              <div className="row mt-sm"><Button size="sm" onClick={() => { setQ(""); setFilters({}); }}>Reset filters</Button></div>
+              <div className="row mt-sm"><Button size="sm" onClick={reset}>Reset filters</Button></div>
             </div>
           ))}
-          <div className="spread small faint" style={{ padding: "8px 14px", borderTop: "1px solid var(--border)" }}>
+          <div className="dt-foot">
             <span className="tnum">{visible.length < filtered.length ? `Showing ${visible.length} of ${filtered.length}` : `${filtered.length} row${filtered.length === 1 ? "" : "s"}`}{filtered.length !== p.rows.length && ` · filtered from ${p.rows.length}`}</span>
             {visible.length < filtered.length && <Button size="sm" variant="ghost" onClick={() => setLimit(limit + 100)}>Show more</Button>}
           </div>
         </>
       )}
+      </div>
     </div>
   );
 }
