@@ -2,18 +2,17 @@
 
 Tessera is built by a team of AI agents with a human (the founder) approving every merge and every release. This document explains who the agents are, how the weekly loop runs, and where the human checkpoints are.
 
-## Current mode: local-first
+## Current mode: GitHub only, no paid services
 
-Until the founder decides to move to cloud or paid services, everything runs on the founder's Mac:
+Until the founder decides otherwise, everything lives in and runs on GitHub, and nothing depends on an outside cloud account or a paid service:
 
-- **Agents run in Claude Code on the Mac**, using the founder's Claude plan. There is no API key in the repository. The market watch, build and review steps below run as local scheduled tasks in the Claude desktop app, or on demand from a Claude Code session. They only run while the Mac is on and awake.
-- **The GitHub agent workflows are manual-only** (`workflow_dispatch`) and stay unused until an API key is added. Their schedules and PR trigger are commented out, with notes on how to restore them.
-- **Free GitHub features stay on:** CI, the security scanners (pip-audit, bandit, npm audit, gitleaks) and Dependabot.
+- **Agents run in GitHub Actions.** They authenticate with `CLAUDE_CODE_OAUTH_TOKEN`, which uses the founder's existing Claude plan rather than a separately billed API key.
+- **CI, security scanners and Dependabot** use GitHub's free tier.
 - **Paid or cloud services have local stand-ins:**
   - The Phase 0 dev IdP (a pure-Python mock OIDC/SAML issuer) stands in for Okta and Entra.
-  - The offline golden corpus and `moto` stand in for a live AWS sandbox. Issues that need real cloud accounts or paid services stay labelled `needs-human` until the founder decides.
+  - The offline golden corpus and `moto` stand in for a live AWS sandbox.
 
-The rest of this document describes the full loop. The schedules apply whether the loop runs locally or in the cloud.
+  Issues that need real cloud accounts or paid services stay labelled `needs-human` until the founder decides.
 
 ## Branches
 
@@ -99,12 +98,10 @@ The agents never merge anything. The founder:
 
 ## Cost
 
-Agent runs are billed to the Anthropic API key (or Claude plan token) stored in the repository secrets. Expect roughly a few dollars to a few tens of dollars per week at the weekly cadence, depending on how much gets built. The turn limits in each workflow cap the worst case. To pause the whole loop, disable the `agent-*` workflows from the Actions tab.
+With `CLAUDE_CODE_OAUTH_TOKEN`, agent runs count against the founder's Claude plan usage limits rather than a separate bill. GitHub Actions minutes come from the free tier (2,000 minutes a month for private repositories). The turn limits in each workflow cap the worst case. To pause the whole loop, disable the `agent-*` workflows from the Actions tab.
 
-## Setup checklist for moving the loop to the cloud (later)
-
-Not needed while running locally.
+## Setup checklist (one time)
 
 1. Install the Claude GitHub App on the repository: https://github.com/apps/claude. PRs opened with its token trigger CI; PRs opened with the default Actions token do not.
-2. Add one repository secret: `ANTHROPIC_API_KEY` (from console.anthropic.com), or `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`, uses your Claude plan).
-3. Restore the schedules and the PR-review trigger (see the comments in each `agent-*` workflow), then run `agent-market-watch` once manually from the Actions tab to check it works.
+2. Add one repository secret: `CLAUDE_CODE_OAUTH_TOKEN`. Create it by running `claude setup-token` in a terminal; it uses your Claude plan. (`ANTHROPIC_API_KEY` also works but is billed separately.)
+3. Run `agent-market-watch` once manually from the Actions tab to check it works.

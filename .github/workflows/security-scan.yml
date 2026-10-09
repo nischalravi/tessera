@@ -59,8 +59,7 @@ jobs:
   agent-triage:
     needs: [python-dependencies, python-code, npm-dependencies, secrets]
     # Run even when a scan failed, because failures are exactly what needs triage.
-    # Manual only while agents run locally (no API key in the repo yet).
-    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' }}
+    if: ${{ !cancelled() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     concurrency:

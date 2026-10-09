@@ -1,8 +1,8 @@
 name: Agent - market watch
 
 on:
-  # Local-first for now: agents run on the founder's Mac (see docs/agents/OPERATING-MODEL.md).
-  # Re-add a schedule here when moving the loop to the cloud.
+  schedule:
+    - cron: "0 13 * * 1" # Mondays 13:00 UTC
   workflow_dispatch:
 
 concurrency:
