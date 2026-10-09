@@ -76,7 +76,7 @@ func (l *linter) document() {
 	switch {
 	case d.Kind == model.PolicySCP || d.Kind == model.PolicyRCP:
 		// "Every SCP must include a Version element with the value
-		// "2012-10-17"", and the RCP syntax page says the same [S5, S5a].
+		// "2012-10-17"", and the RCP syntax page says the same [S4b, S5b].
 		if d.LanguageVersion != model.LanguageVersion2012 {
 			l.add(SeverityError, "VERSION_REQUIRED", nil, `%s policies must have "Version": "2012-10-17"`, d.Kind)
 		}
