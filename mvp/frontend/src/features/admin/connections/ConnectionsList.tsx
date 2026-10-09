@@ -8,6 +8,7 @@ import { STATE_LABEL, ScoreCell, SimulatedBadge, StateBadge } from "./shared";
 
 type Row = Connection | LegacyConnection;
 const key = (r: Row) => (r.legacy ? `legacy:${r.system}` : r.id);
+const STATE_ORDER = ["degraded", "draft", "ready_to_validate", "validated", "dry_run_reconciled", "active", "retired", "superseded"];
 
 export function ConnectionsList() {
   const { data, error, reload } = useApi<Row[]>("/connections");
@@ -68,7 +69,7 @@ export function ConnectionsList() {
           },
           { id: "sys", header: "System", sort: (r) => r.system, cell: (r) => <Chip mono>{r.system}</Chip>, hideNarrow: true },
           {
-            id: "state", header: "State", sort: (r) => (r.legacy ? "legacy" : r.state), csv: (r) => (r.legacy ? "legacy" : STATE_LABEL[r.state]),
+            id: "state", header: "State", sort: (r) => (r.legacy ? 99 : STATE_ORDER.indexOf(r.state)), csv: (r) => (r.legacy ? "legacy" : STATE_LABEL[r.state]),
             cell: (r) => r.legacy ? (
               <span className="row tight"><StateBadge state="legacy" />{r.governed_by && <span className="xs faint">governed below</span>}</span>
             ) : (

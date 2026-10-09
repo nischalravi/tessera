@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { Check } from "lucide-react";
 
 export interface Step {
@@ -13,8 +14,15 @@ export interface Step {
 
 /** Vertical wizard steps. The current step carries aria-current="step". */
 export function Stepper({ steps, current, onSelect, label = "Steps" }: { steps: Step[]; current: string; onSelect: (id: string) => void; label?: string }) {
+  const ref = useRef<HTMLOListElement>(null);
+  // on narrow screens the steps scroll horizontally: keep the current one visible
+  useEffect(() => {
+    const el = ref.current?.querySelector<HTMLElement>('[aria-current="step"]');
+    const list = ref.current;
+    if (el && list && list.scrollWidth > list.clientWidth) list.scrollLeft = el.offsetLeft - list.offsetLeft - 8;
+  }, [current]);
   return (
-    <ol className="stepper" aria-label={label}>
+    <ol ref={ref} className="stepper" aria-label={label}>
       {steps.map((s, i) => {
         const cur = s.id === current;
         return (

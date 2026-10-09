@@ -1,4 +1,4 @@
-import { ReactNode, useId, useMemo, useRef, useState } from "react";
+import { ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, CircleAlert, CircleCheck, CircleDashed, CircleMinus, CircleSlash, Clock, ExternalLink, Lock } from "lucide-react";
 import { Checklist as ChecklistData, ChecklistItem, ItemStatus, Level } from "../api";
 import { Badge, Tone } from "./Badge";
@@ -117,12 +117,16 @@ function ItemRow({ item, open, onToggle, onAttest, onSkip, onUnskip, focus }: {
   focus?: boolean;
 }) {
   const statusId = useId();
+  const ref = useRef<HTMLLIElement>(null);
+  useEffect(() => {
+    if (focus) ref.current?.scrollIntoView({ block: "center" });
+  }, [focus]);
   const attestable = item.applicable && item.verify.some((v) => v.kind === "attestation");
   const attestPart = item.parts.find((p) => p.kind === "attestation");
   const attested = attestPart?.status === "pass";
   const depsBlocked = (item.blocked_by?.length ?? 0) > 0;
   return (
-    <li className={`cl-item ${focus ? "focus" : ""}`} aria-describedby={statusId}>
+    <li ref={ref} className={`cl-item ${focus ? "focus" : ""}`} aria-describedby={statusId}>
       <div className="cl-row">
         {attestable && onAttest ? (
           <input

@@ -1,6 +1,6 @@
 import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { ArrowLeftRight, Check, ClipboardCheck, Keyboard, KeyRound, ListChecks, Search, ShoppingCart, X } from "lucide-react";
+import { ArrowLeftRight, Check, ClipboardCheck, Keyboard, KeyRound, ListChecks, Plug, Search, ShoppingCart, X } from "lucide-react";
 import { HrisEvent, JitRequest, SimResult, ago, fmtDate, hrisExecute, jitDecide, relTime, reviewDecide, simulate, useApi } from "../../api";
 import { usePersona } from "../../app/persona";
 import {
@@ -10,7 +10,7 @@ import { isTyping, modalOpen } from "../../components/overlay";
 import { mockDelegations, mockRequests } from "../../mocks";
 import { InboxItem, InboxKind, useInbox } from "./model";
 
-const KIND_LABEL: Record<InboxKind, string> = { approval: "Approval", review: "Review", task: "Task", delegated: "Delegated" };
+const KIND_LABEL: Record<InboxKind, string> = { approval: "Approval", review: "Review", task: "Task", delegated: "Delegated", connection: "Connection" };
 
 export function itemTitle(it: InboxItem): { icon: ReactNode; title: string; meta: ReactNode; tone: Tone; kindLabel: string } {
   switch (it.kind) {
@@ -33,6 +33,8 @@ export function itemTitle(it: InboxItem): { icon: ReactNode; title: string; meta
       const d = it.delegation;
       return { icon: <ArrowLeftRight size={15} />, title: `${d.from} delegates ${d.scope.toLowerCase()} to ${d.to}`, meta: <>until {d.until} <PreviewBadge /></>, tone: "neutral", kindLabel: KIND_LABEL.delegated };
     }
+    case "connection":
+      return { icon: <Plug size={15} />, title: `${it.conn.name} is degraded`, meta: <>Readiness {it.conn.score} · write-back stopped, reads continue</>, tone: "warning", kindLabel: KIND_LABEL.connection };
   }
 }
 
@@ -175,6 +177,12 @@ function Detail({ it }: { it: InboxItem }) {
         )}
         {it.kind === "review" && <ReviewDetail it={it} />}
         {it.kind === "task" && <TaskDetail e={it.event} />}
+        {it.kind === "connection" && (
+          <div className="stack-sm">
+            <p className="small muted">A scheduled check failed twice, a credential is close to expiry or sync has failed. Reads continue and data is labelled as coming from a degraded connection; write-back has stopped.</p>
+            <Link className="btn" to={`/admin/connections/${it.conn.id}`}>Open the connection</Link>
+          </div>
+        )}
         {it.kind === "delegated" && (
           <dl className="kv">
             <dt>From</dt><dd>{it.delegation.from}</dd>
@@ -196,6 +204,7 @@ const VERBS: Record<InboxKind, { primary: Verb; secondary: Verb }> = {
   review: { primary: "keep", secondary: "revoke" },
   task: { primary: "run", secondary: "run" },
   delegated: { primary: "accept", secondary: "decline" },
+  connection: { primary: "run", secondary: "run" },
 };
 const VERB_LABEL: Record<Verb, string> = { approve: "Approve", deny: "Deny", keep: "Keep", revoke: "Revoke", run: "Run plan", accept: "Accept", decline: "Decline" };
 
@@ -233,6 +242,8 @@ function useInboxActions() {
         if (ok === null) return false;
         await hrisExecute(it.event.id);
         toast(`Plan executed: ${itemTitle(it).title}`);
+      } else if (it.kind === "connection") {
+        return false; // opened from its row
       } else {
         await mockDelegations.decide(it.delegation.id, verb === "accept" ? "accepted" : "declined", actor);
         if (!opts.quiet) toast(`Delegation ${verb === "accept" ? "accepted" : "declined"}`);
@@ -248,7 +259,7 @@ function useInboxActions() {
 
 // ----------------------------------------------------------------- page
 const FILTERS: { id: "all" | InboxKind; label: string }[] = [
-  { id: "all", label: "All" }, { id: "approval", label: "Approvals" }, { id: "review", label: "Reviews" }, { id: "task", label: "Tasks" }, { id: "delegated", label: "Delegated" },
+  { id: "all", label: "All" }, { id: "approval", label: "Approvals" }, { id: "review", label: "Reviews" }, { id: "task", label: "Tasks" }, { id: "delegated", label: "Delegated" }, { id: "connection", label: "Connections" },
 ];
 
 export function Inbox() {
@@ -299,7 +310,7 @@ export function Inbox() {
   };
 
   const bulk = async (primary: boolean) => {
-    const chosen = visible.filter((i) => checked.has(i.key) && i.kind !== "task" && !selfRequest(i));
+    const chosen = visible.filter((i) => checked.has(i.key) && i.kind !== "task" && i.kind !== "connection" && !selfRequest(i));
     if (!chosen.length) return;
     const destructive = !primary && chosen.some((i) => i.kind === "review");
     const ok = await confirm({
@@ -405,7 +416,9 @@ export function Inbox() {
                       <span className="q-meta"><Badge tone={t.tone}>{t.kindLabel}</Badge> {t.meta}</span>
                     </span>
                     <span className="q-actions" onClick={(e) => e.stopPropagation()}>
-                      {it.kind === "task" ? (
+                      {it.kind === "connection" ? (
+                        <Link className="btn sm" to={`/admin/connections/${it.conn.id}`}>Open</Link>
+                      ) : it.kind === "task" ? (
                         <Button size="sm" disabled={busy} onClick={() => run(it, "run")} kbd={it.key === current?.key ? "A" : undefined}>Run plan</Button>
                       ) : (
                         <>

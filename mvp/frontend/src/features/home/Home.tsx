@@ -1,10 +1,10 @@
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowRight, ClipboardCheck, Inbox as InboxIcon, KeyRound, ShoppingCart, Timer, Users } from "lucide-react";
-import { AuditRow, ConnectorRow, JitRequest, Policy, Violation, relTime, useApi } from "../../api";
+import { AuditRow, ConnectorRow, DeploymentHealth, JitRequest, Policy, ReadinessSummary, Violation, relTime, useApi } from "../../api";
 import { usePersona } from "../../app/persona";
 import { TENANT } from "../../app/tenant";
-import { Badge, Bar, Button, ButtonLink, EmptyState, Kpi, Loading, Page, PreviewBadge, Status, Tabs } from "../../components";
-import { HealthChecks, useHealthChecks } from "../insights/DeploymentHealth";
+import { Badge, Bar, Button, ButtonLink, EmptyState, Kpi, Loading, Page, Status, Tabs } from "../../components";
+import { DeploymentHealthBody, ReadinessAttentionCard, ReadinessKpi } from "../insights/DeploymentHealth";
 import { RiskyTable, Summary, Trend } from "../insights/RiskOverview";
 import { useMockState } from "../../mocks";
 import { InboxItem, useInbox, useOpenCampaigns } from "../inbox/model";
@@ -211,6 +211,18 @@ function AttentionList({ items, limit }: { items: Attention[] | null; limit?: nu
 
 type HomeTab = "overview" | "monitoring" | "deployment" | "recommendations";
 
+/** Home → Deployment health: the compact dashboard, linking to Insights. */
+function DeploymentTab() {
+  const { data, error } = useApi<DeploymentHealth>("/insights/deployment-health");
+  if (!data) return <Loading error={error} kind="page" />;
+  return (
+    <div className="stack">
+      <DeploymentHealthBody data={data} compact />
+      <Link to="/insights/deployment-health">Open Deployment health for skipped items, drift and the full connection table</Link>
+    </div>
+  );
+}
+
 function AdminHome() {
   const [params, setParams] = useSearchParams();
   const tab = (params.get("tab") ?? "overview") as HomeTab;
@@ -221,8 +233,7 @@ function AdminHome() {
   const { data: audit } = useApi<AuditRow[]>("/audit?limit=100");
   const { items } = useInbox("mine");
   const attention = useAttention();
-  const { checks, score } = useHealthChecks();
-  const required = checks?.filter((c) => c.required && c.status !== "ok").length ?? 0;
+  const { data: rsum, error: rerr } = useApi<{ readiness: ReadinessSummary }>("/summary?include=readiness");
   const lastSync = audit?.find((a) => /sync/i.test(a.action))?.at ?? null;
   const has = (s: string) => conns?.some((c) => c.system === s);
   const sev = d?.violations.by_severity ?? {};
@@ -234,14 +245,20 @@ function AdminHome() {
       tabs={<Tabs<HomeTab> label="Home" value={tab} onChange={setTab} tabs={[{ id: "overview", label: "Overview" }, { id: "monitoring", label: "Monitoring" }, { id: "deployment", label: "Deployment health" }, { id: "recommendations", label: "Recommendations" }]} />}
     >
       <div role="tabpanel" className="stack">
-        {!d ? <Loading error={error} kind="page" /> : tab === "overview" ? (
+        {!d ? (
+          <>
+            {tab === "overview" && <div className="grid g4"><ReadinessKpi data={rsum?.readiness} error={rerr} /></div>}
+            <Loading error={error} kind="page" />
+          </>
+        ) : tab === "overview" ? (
           <>
             <div className="grid g4">
               <Kpi label="Identities" value={(d.identities.human + d.identities.service + d.identities.ai_agent).toLocaleString()} sub={<Badge tone="info">{d.identities.human} people · {d.identities.service} machine · {d.identities.ai_agent} agents</Badge>} to="/directory/people" />
               <Kpi label="Violations" value={d.violations.total} sub={<Badge tone="critical">{sev.critical ?? 0} critical · {sev.high ?? 0} high</Badge>} to="/governance/policies" />
               <Kpi label="Unused permissions" value={`${d.unused_pct}%`} sub={<Badge tone="warning">{d.recommendations.remove} safe to remove</Badge>} to="/insights/least-privilege" />
-              <Kpi label={<>Readiness <PreviewBadge what="Partly computed from live data, partly describing settings that have no backend yet." /></>} value={score === null ? "…" : <>{score} <span className="faint" style={{ fontSize: "var(--fs-lg)" }}>/ 100</span></>} sub={<Badge tone={required ? "warning" : "ok"}>{required ? `${required} required item${required === 1 ? "" : "s"}` : "Ready"}</Badge>} to="/?tab=deployment" />
+              <ReadinessKpi data={rsum?.readiness} error={rerr} />
             </div>
+            <ReadinessAttentionCard data={rsum?.readiness} error={rerr} />
             <div className="grid g21">
               <div className="card">
                 <div className="spread" style={{ marginBottom: 4 }}><h2>Recommendations</h2>{attention && attention.length > 4 && <button type="button" className="btn ghost sm" onClick={() => setTab("recommendations")}>See all {attention.length}</button>}</div>
@@ -282,7 +299,7 @@ function AdminHome() {
             </div>
           </>
         ) : tab === "deployment" ? (
-          <HealthChecks />
+          <DeploymentTab />
         ) : (
           <div className="card">
             <h2 style={{ marginBottom: 4 }}>Recommendations</h2>

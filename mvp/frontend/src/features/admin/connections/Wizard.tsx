@@ -44,10 +44,8 @@ export function NewConnection() {
   return (
     <Page title="New connection" crumbs={[["Settings"], ["Connections", "/admin/connections"], ["New connection"]]}
       sub="Choose the system. Its readiness checklist is pinned to the connection and every Required item must pass before it can become active.">
-      <div className="wizard">
-        <div className="stack">
-          <Stepper current="type" onSelect={() => {}} steps={WIZARD_STEPS.map((s, i) => ({ ...s, disabled: i > 0, reason: "Create the connection first" }))} />
-        </div>
+      <div className="wizard-new">
+        <Stepper current="type" onSelect={() => {}} steps={WIZARD_STEPS.map((s, i) => ({ ...s, disabled: i > 0, reason: "Create the connection first" }))} />
         <form className="card stack" onSubmit={create}>
           <h2>1. Choose type</h2>
           <div className="type-grid" role="radiogroup" aria-label="Connector type">
@@ -127,7 +125,9 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
       correlation_key: cfg.correlation_key ?? "", hr_id_attribute: cfg.hr_id_attribute ?? "", stale_days: String(cfg.stale_days ?? ""),
       sync_schedule: cfg.sync_schedule ?? "", write_mode: cfg.write_mode ?? "off",
     });
-  }, [rev.id, rev.config_hash]); // eslint-disable-line react-hooks/exhaustive-deps
+    // Reset only when the saved config itself changes (not on credential changes),
+    // so unsaved edits survive saving the credential.
+  }, [rev.id, JSON.stringify(cfg)]); // eslint-disable-line react-hooks/exhaustive-deps
   const [secret, setSecret] = useState("");
   const [ref, setRef] = useState("");
   const { busy, run } = useAction();
@@ -358,7 +358,7 @@ function ActivateStep({ conn }: { conn: Connection }) {
       <GateCallout report={report} connectionId={conn.id} />
       {conn.state !== "active" && conn.state !== "degraded" && (
         <div className="stack-sm">
-          <div><Button variant="primary" icon={<Power size={14} />} disabled={busy === "activate" || conn.state !== "dry_run_reconciled"} onClick={() => run("activate", () => readiness.activate(conn.id), (c) => `${c.name} is active`)}>
+          <div><Button variant="primary" icon={<Power size={14} />} disabled={busy === "activate" || !ready} title={ready ? undefined : "Resolve the blockers listed below; the server enforces the same gate"} onClick={() => run("activate", () => readiness.activate(conn.id), (c) => `${c.name} is active`)}>
             {busy === "activate" ? "Activating…" : "Activate"}
           </Button></div>
           {!ready && (

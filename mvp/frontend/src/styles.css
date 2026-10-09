@@ -756,6 +756,8 @@ pre.yaml { background: var(--surface-2); color: var(--text); padding: 12px; bord
 .wizard { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 420px); gap: var(--s-4); align-items: start; }
 .wizard > .stack:first-child { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: var(--s-4); align-items: start; }
 .wizard > .stack:first-child > * + * { margin-top: 0; }
+.wizard-new { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: var(--s-4); align-items: start; }
+@media (max-width: 860px) { .wizard-new { grid-template-columns: minmax(0, 1fr); } }
 .wizard-side { position: sticky; top: calc(var(--topbar-h) + 16px); max-height: calc(100vh - var(--topbar-h) - 32px); display: flex; }
 .wizard-side > .checklist { flex: 1; min-height: 0; }
 @media (max-width: 1280px) {
