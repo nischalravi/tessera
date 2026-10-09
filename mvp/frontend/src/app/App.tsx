@@ -19,6 +19,7 @@ const access = () => import("../features/access");
 const directory = () => import("../features/directory/Lists");
 const objects = () => import("../features/directory/ObjectPages");
 const admin = () => import("../features/admin/Admin");
+const connections = () => import("../features/admin/connections");
 
 const Home = named(() => import("../features/home/Home"), "Home");
 const Inbox = named(() => import("../features/inbox/Inbox"), "Inbox");
@@ -51,6 +52,11 @@ const Reviews = named(() => import("../features/governance/Reviews"), "Reviews")
 const Lifecycle = named(() => import("../features/governance/Lifecycle"), "Lifecycle");
 const Workflows = named(() => import("../features/governance/Workflows"), "Workflows");
 const Admin = named(admin, "Admin");
+const ConnectionsList = named(connections, "ConnectionsList");
+const NewConnection = named(connections, "NewConnection");
+const ConnectionDetail = named(connections, "ConnectionDetail");
+const ValidationResults = named(connections, "ValidationResults");
+const ReconReport = named(connections, "ReconReport");
 const AdminSectionPage = named(admin, "AdminSectionPage");
 
 /** Redirect an old route to its new home, keeping the query string (e.g. /graph?identity=5). */
@@ -102,7 +108,8 @@ export default function App() {
                     <Route path="/insights/graph" element={<GraphExplorer />} />
                     <Route path="/insights/least-privilege" element={<LeastPrivilege />} />
                     <Route path="/insights/sod" element={<SodConflicts />} />
-                    <Route path="/insights/deployment" element={<DeploymentHealth />} />
+                    <Route path="/insights/deployment-health" element={<DeploymentHealth />} />
+                    <Route path="/insights/deployment" element={<Moved to="/insights/deployment-health" />} />
 
                     <Route path="/governance" element={<Navigate to="/governance/policies" replace />} />
                     <Route path="/governance/policies" element={<Policies />} />
@@ -111,6 +118,11 @@ export default function App() {
                     <Route path="/governance/workflows" element={<Workflows />} />
 
                     <Route path="/admin" element={<Admin />} />
+                    <Route path="/admin/connections" element={<ConnectionsList />} />
+                    <Route path="/admin/connections/new" element={<NewConnection />} />
+                    <Route path="/admin/connections/:id" element={<ConnectionDetail />} />
+                    <Route path="/admin/connections/:id/validation/:run" element={<ValidationResults />} />
+                    <Route path="/admin/connections/:id/reconciliation/:run" element={<ReconReport />} />
                     <Route path="/admin/:section" element={<AdminSectionPage />} />
 
                     {/* routes from the previous UI */}

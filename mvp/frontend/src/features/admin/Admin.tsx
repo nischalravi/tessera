@@ -1,11 +1,11 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
-  ArrowLeftRight, Bell, CircleCheck, Plus, Clock, FileBadge, Fingerprint, KeySquare, LucideIcon, Palette, Play, Plug, RefreshCw, ScrollText, Search, Settings, UserCog,
+  ArrowLeftRight, Bell, CircleCheck, Clock, FileBadge, Fingerprint, KeySquare, LucideIcon, Palette, Play, Plug, ScrollText, Search, Settings, UserCog,
 } from "lucide-react";
-import { AuditRow, ConnectorRow, api, fmtDate, relTime, useApi } from "../../api";
+import { AuditRow, api, fmtDate, relTime, useApi } from "../../api";
 import { fuzzy } from "../../app/fuzzy";
-import { Badge, Button, Callout, Chip, DataTable, EmptyState, Page, PreviewBadge, Status, useToast } from "../../components";
+import { Badge, Button, Callout, DataTable, EmptyState, Page, PreviewBadge, useToast } from "../../components";
 import { ADMIN_BY_ID, ADMIN_SECTIONS, AdminSection, useMockState } from "../../mocks";
 
 const ICONS: Record<string, LucideIcon> = { Plug, Fingerprint, UserCog, Bell, Palette, Clock, ScrollText, FileBadge, ArrowLeftRight, KeySquare };
@@ -52,46 +52,6 @@ export function Admin() {
 }
 
 // ---------------------------------------------------------------- live bits
-function Connections() {
-  const { data, error } = useApi<ConnectorRow[]>("/connectors");
-  const nav = useNavigate();
-  const toast = useToast();
-  const [busy, setBusy] = useState(false);
-  const sync = async () => {
-    setBusy(true);
-    try {
-      await api("/connectors/sync", {});
-      toast("All connectors synced");
-    } catch (e) {
-      toast((e as Error).message, { kind: "error" });
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <DataTable
-      id="connections"
-      rows={data}
-      error={error}
-      rowKey={(r) => r.system}
-      columns={[
-        { id: "name", header: "Connector", sort: (r) => r.name, cell: (r) => <div><b>{r.name}</b><div className="xs faint">{r.type}</div></div> },
-        { id: "sys", header: "System", sort: (r) => r.system, cell: (r) => <Chip mono>{r.system}</Chip> },
-        { id: "status", header: "Health", cell: () => <Status s="active" />, csv: () => "healthy" },
-        { id: "acc", header: "Accounts", num: true, sort: (r) => r.accounts, cell: (r) => r.accounts },
-        { id: "grp", header: "Groups", num: true, sort: (r) => r.groups, cell: (r) => r.groups },
-        { id: "perm", header: "Permissions", num: true, sort: (r) => r.permissions, cell: (r) => r.permissions, hideNarrow: true },
-      ]}
-      searchText={(r) => `${r.name} ${r.system}`}
-      commands={[
-        { label: "Add connection", icon: <Plus size={16} />, disabled: true, title: "Preview: new connectors are added in server code for now (see the README)" },
-        { label: busy ? "Syncing…" : "Sync all now", icon: <RefreshCw size={16} />, disabled: busy, onClick: sync },
-      ]}
-      onRowClick={(r) => nav(`/directory/apps?selected=${r.system}`)}
-    />
-  );
-}
-
 function Jobs() {
   const toast = useToast();
   const [ran, setRan] = useState<Record<string, string>>({});
@@ -172,7 +132,7 @@ function AuditLog() {
   );
 }
 
-const LIVE: Record<string, () => JSX.Element> = { connections: Connections, jobs: Jobs, audit: AuditLog };
+const LIVE: Record<string, () => JSX.Element> = { jobs: Jobs, audit: AuditLog };
 
 export function AdminSectionPage() {
   const { section } = useParams();

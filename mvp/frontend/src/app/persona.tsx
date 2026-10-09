@@ -1,5 +1,5 @@
-import { ReactNode, createContext, useContext, useMemo, useState } from "react";
-import { IdentityRow, useApi } from "../api";
+import { ReactNode, createContext, useContext, useEffect, useMemo, useState } from "react";
+import { IdentityRow, setApiActor, useApi } from "../api";
 import { store } from "./storage";
 
 /**
@@ -32,9 +32,11 @@ export function PersonaProvider({ children }: { children: ReactNode }) {
   const { data } = useApi<IdentityRow[]>("/identities");
   const who = PERSONAS.find((p) => p.id === persona)!.who;
   const me = useMemo(() => data?.find((i) => i.name === who) ?? null, [data, who]);
+  const actor = me?.name ?? who;
+  useEffect(() => setApiActor(actor), [actor]);
   const setPersona = (p: Persona) => {
     setP(p);
     store.set("persona", p);
   };
-  return <Ctx.Provider value={{ persona, setPersona, me, actor: me?.name ?? who }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ persona, setPersona, me, actor }}>{children}</Ctx.Provider>;
 }
