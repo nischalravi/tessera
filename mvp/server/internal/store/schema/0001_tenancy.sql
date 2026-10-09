@@ -148,3 +148,172 @@ CREATE TABLE IF NOT EXISTS audit_log (
 	tenant_id TEXT NOT NULL REFERENCES tenants (id),
 	at TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, detail TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS ix_audit_log_tenant ON audit_log (tenant_id, id);
+
+-- Cross-tenant reference guards.
+--
+-- Integer primary keys are global, so a tenant could otherwise store a
+-- reference to another tenant's row (an account whose identity_id is another
+-- tenant's identity, a grant edge whose src is "account:<their id>"). Reads
+-- would then surface another tenant's ids through joins and graph edges.
+-- These triggers refuse any write whose reference points at a row of a
+-- different tenant; the store maps the error to ErrCrossTenant. They do not
+-- require the referenced row to exist (SQLite foreign keys are not enforced),
+-- so behaviour within one tenant is unchanged. In Postgres (PR14) composite
+-- foreign keys (tenant_id, x_id) -> (tenant_id, id) replace them.
+-- TestIsolation_EveryReferenceGuarded checks every foreign key and graph-key
+-- column is covered.
+
+CREATE TRIGGER IF NOT EXISTS tg_identities_xtenant_ins BEFORE INSERT ON identities
+WHEN (NEW.manager_id IS NOT NULL AND EXISTS (SELECT 1 FROM identities p WHERE p.id = NEW.manager_id AND p.tenant_id <> NEW.tenant_id))
+	OR (NEW.owner_id IS NOT NULL AND EXISTS (SELECT 1 FROM identities p WHERE p.id = NEW.owner_id AND p.tenant_id <> NEW.tenant_id))
+BEGIN SELECT RAISE(ABORT, 'cross-tenant reference: identities'); END;
+
+CREATE TRIGGER IF NOT EXISTS tg_identities_xtenant_upd BEFORE UPDATE OF tenant_id, manager_id, owner_id ON identities
+WHEN (NEW.manager_id IS NOT NULL AND EXISTS (SELECT 1 FROM identities p WHERE p.id = NEW.manager_id AND p.tenant_id <> NEW.tenant_id))
+	OR (NEW.owner_id IS NOT NULL AND EXISTS (SELECT 1 FROM identities p WHERE p.id = NEW.owner_id AND p.tenant_id <> NEW.tenant_id))
+BEGIN SELECT RAISE(ABORT, 'cross-tenant reference: identities'); END;
+
+CREATE TRIGGER IF NOT EXISTS tg_accounts_xtenant_ins BEFORE INSERT ON accounts
+WHEN (NEW.identity_id IS NOT NULL AND EXISTS (SELECT 1 FROM identities p WHERE p.id = NEW.identity_id AND p.tenant_id <> NEW.tenant_id))
+BEGIN SELECT RAISE(ABORT, 'cross-tenant reference: accounts'); END;
+
+CREATE TRIGGER IF NOT EXISTS tg_accounts_xtenant_upd BEFORE UPDATE OF tenant_id, identity_id ON accounts
+WHEN (NEW.identity_id IS NOT NULL AND EXISTS (SELECT 1 FROM identities p WHERE p.id = NEW.identity_id AND p.tenant_id <> NEW.tenant_id))
+BEGIN SELECT RAISE(ABORT, 'cross-tenant reference: accounts'); END;
+
+CREATE TRIGGER IF NOT EXISTS tg_permissions_xtenant_ins BEFORE INSERT ON permissions
+WHEN (NEW.resource_id IS NOT NULL AND EXISTS (SELECT 1 FROM resources p WHERE p.id = NEW.resource_id AND p.tenant_id <> NEW.tenant_id))
+BEGIN SELECT RAISE(ABORT, 'cross-tenant reference: permissions'); END;
+
+CREATE TRIGGER IF NOT EXISTS tg_permissions_xtenant_upd BEFORE UPDATE OF tenant_id, resource_id ON permissions
+WHEN (NEW.resource_id IS NOT NULL AND EXISTS (SELECT 1 FROM resources p WHERE p.id = NEW.resource_id AND p.tenant_id <> NEW.tenant_id))
+BEGIN SELECT RAISE(ABORT, 'cross-tenant reference: permissions'); END;
+
+CREATE TRIGGER IF NOT EXISTS tg_grant_edges_xtenant_ins BEFORE INSERT ON grant_edges
+WHEN (CASE substr(NEW.src, 1, instr(NEW.src, ':') - 1)
+		WHEN 'identity' THEN EXISTS (SELECT 1 FROM identities p WHERE p.id = CAST(substr(NEW.src, instr(NEW.src, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		WHEN 'account' THEN EXISTS (SELECT 1 FROM accounts p WHERE p.id = CAST(substr(NEW.src, instr(NEW.src, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		WHEN 'group' THEN EXISTS (SELECT 1 FROM groups p WHERE p.id = CAST(substr(NEW.src, instr(NEW.src, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		WHEN 'perm' THEN EXISTS (SELECT 1 FROM permissions p WHERE p.id = CAST(substr(NEW.src, instr(NEW.src, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		WHEN 'resource' THEN EXISTS (SELECT 1 FROM resources p WHERE p.id = CAST(substr(NEW.src, instr(NEW.src, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		ELSE 0 END)
+	OR (CASE substr(NEW.dst, 1, instr(NEW.dst, ':') - 1)
+		WHEN 'identity' THEN EXISTS (SELECT 1 FROM identities p WHERE p.id = CAST(substr(NEW.dst, instr(NEW.dst, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		WHEN 'account' THEN EXISTS (SELECT 1 FROM accounts p WHERE p.id = CAST(substr(NEW.dst, instr(NEW.dst, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		WHEN 'group' THEN EXISTS (SELECT 1 FROM groups p WHERE p.id = CAST(substr(NEW.dst, instr(NEW.dst, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		WHEN 'perm' THEN EXISTS (SELECT 1 FROM permissions p WHERE p.id = CAST(substr(NEW.dst, instr(NEW.dst, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		WHEN 'resource' THEN EXISTS (SELECT 1 FROM resources p WHERE p.id = CAST(substr(NEW.dst, instr(NEW.dst, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		ELSE 0 END)
+BEGIN SELECT RAISE(ABORT, 'cross-tenant reference: grant_edges'); END;
+
+CREATE TRIGGER IF NOT EXISTS tg_grant_edges_xtenant_upd BEFORE UPDATE OF tenant_id, src, dst ON grant_edges
+WHEN (CASE substr(NEW.src, 1, instr(NEW.src, ':') - 1)
+		WHEN 'identity' THEN EXISTS (SELECT 1 FROM identities p WHERE p.id = CAST(substr(NEW.src, instr(NEW.src, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		WHEN 'account' THEN EXISTS (SELECT 1 FROM accounts p WHERE p.id = CAST(substr(NEW.src, instr(NEW.src, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		WHEN 'group' THEN EXISTS (SELECT 1 FROM groups p WHERE p.id = CAST(substr(NEW.src, instr(NEW.src, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		WHEN 'perm' THEN EXISTS (SELECT 1 FROM permissions p WHERE p.id = CAST(substr(NEW.src, instr(NEW.src, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		WHEN 'resource' THEN EXISTS (SELECT 1 FROM resources p WHERE p.id = CAST(substr(NEW.src, instr(NEW.src, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		ELSE 0 END)
+	OR (CASE substr(NEW.dst, 1, instr(NEW.dst, ':') - 1)
+		WHEN 'identity' THEN EXISTS (SELECT 1 FROM identities p WHERE p.id = CAST(substr(NEW.dst, instr(NEW.dst, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		WHEN 'account' THEN EXISTS (SELECT 1 FROM accounts p WHERE p.id = CAST(substr(NEW.dst, instr(NEW.dst, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		WHEN 'group' THEN EXISTS (SELECT 1 FROM groups p WHERE p.id = CAST(substr(NEW.dst, instr(NEW.dst, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		WHEN 'perm' THEN EXISTS (SELECT 1 FROM permissions p WHERE p.id = CAST(substr(NEW.dst, instr(NEW.dst, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		WHEN 'resource' THEN EXISTS (SELECT 1 FROM resources p WHERE p.id = CAST(substr(NEW.dst, instr(NEW.dst, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		ELSE 0 END)
+BEGIN SELECT RAISE(ABORT, 'cross-tenant reference: grant_edges'); END;
+
+CREATE TRIGGER IF NOT EXISTS tg_secrets_xtenant_ins BEFORE INSERT ON secrets
+WHEN (NEW.account_id IS NOT NULL AND EXISTS (SELECT 1 FROM accounts p WHERE p.id = NEW.account_id AND p.tenant_id <> NEW.tenant_id))
+BEGIN SELECT RAISE(ABORT, 'cross-tenant reference: secrets'); END;
+
+CREATE TRIGGER IF NOT EXISTS tg_secrets_xtenant_upd BEFORE UPDATE OF tenant_id, account_id ON secrets
+WHEN (NEW.account_id IS NOT NULL AND EXISTS (SELECT 1 FROM accounts p WHERE p.id = NEW.account_id AND p.tenant_id <> NEW.tenant_id))
+BEGIN SELECT RAISE(ABORT, 'cross-tenant reference: secrets'); END;
+
+CREATE TRIGGER IF NOT EXISTS tg_agent_delegations_xtenant_ins BEFORE INSERT ON agent_delegations
+WHEN (NEW.agent_id IS NOT NULL AND EXISTS (SELECT 1 FROM identities p WHERE p.id = NEW.agent_id AND p.tenant_id <> NEW.tenant_id))
+	OR (NEW.principal_id IS NOT NULL AND EXISTS (SELECT 1 FROM identities p WHERE p.id = NEW.principal_id AND p.tenant_id <> NEW.tenant_id))
+BEGIN SELECT RAISE(ABORT, 'cross-tenant reference: agent_delegations'); END;
+
+CREATE TRIGGER IF NOT EXISTS tg_agent_delegations_xtenant_upd BEFORE UPDATE OF tenant_id, agent_id, principal_id ON agent_delegations
+WHEN (NEW.agent_id IS NOT NULL AND EXISTS (SELECT 1 FROM identities p WHERE p.id = NEW.agent_id AND p.tenant_id <> NEW.tenant_id))
+	OR (NEW.principal_id IS NOT NULL AND EXISTS (SELECT 1 FROM identities p WHERE p.id = NEW.principal_id AND p.tenant_id <> NEW.tenant_id))
+BEGIN SELECT RAISE(ABORT, 'cross-tenant reference: agent_delegations'); END;
+
+CREATE TRIGGER IF NOT EXISTS tg_usage_events_xtenant_ins BEFORE INSERT ON usage_events
+WHEN (NEW.identity_id IS NOT NULL AND EXISTS (SELECT 1 FROM identities p WHERE p.id = NEW.identity_id AND p.tenant_id <> NEW.tenant_id))
+	OR (NEW.account_id IS NOT NULL AND EXISTS (SELECT 1 FROM accounts p WHERE p.id = NEW.account_id AND p.tenant_id <> NEW.tenant_id))
+	OR (NEW.permission_id IS NOT NULL AND EXISTS (SELECT 1 FROM permissions p WHERE p.id = NEW.permission_id AND p.tenant_id <> NEW.tenant_id))
+BEGIN SELECT RAISE(ABORT, 'cross-tenant reference: usage_events'); END;
+
+CREATE TRIGGER IF NOT EXISTS tg_usage_events_xtenant_upd BEFORE UPDATE OF tenant_id, identity_id, account_id, permission_id ON usage_events
+WHEN (NEW.identity_id IS NOT NULL AND EXISTS (SELECT 1 FROM identities p WHERE p.id = NEW.identity_id AND p.tenant_id <> NEW.tenant_id))
+	OR (NEW.account_id IS NOT NULL AND EXISTS (SELECT 1 FROM accounts p WHERE p.id = NEW.account_id AND p.tenant_id <> NEW.tenant_id))
+	OR (NEW.permission_id IS NOT NULL AND EXISTS (SELECT 1 FROM permissions p WHERE p.id = NEW.permission_id AND p.tenant_id <> NEW.tenant_id))
+BEGIN SELECT RAISE(ABORT, 'cross-tenant reference: usage_events'); END;
+
+CREATE TRIGGER IF NOT EXISTS tg_access_requests_xtenant_ins BEFORE INSERT ON access_requests
+WHEN (NEW.identity_id IS NOT NULL AND EXISTS (SELECT 1 FROM identities p WHERE p.id = NEW.identity_id AND p.tenant_id <> NEW.tenant_id))
+	OR (NEW.account_id IS NOT NULL AND EXISTS (SELECT 1 FROM accounts p WHERE p.id = NEW.account_id AND p.tenant_id <> NEW.tenant_id))
+	OR (NEW.group_id IS NOT NULL AND EXISTS (SELECT 1 FROM groups p WHERE p.id = NEW.group_id AND p.tenant_id <> NEW.tenant_id))
+	OR (NEW.edge_id IS NOT NULL AND EXISTS (SELECT 1 FROM grant_edges p WHERE p.id = NEW.edge_id AND p.tenant_id <> NEW.tenant_id))
+BEGIN SELECT RAISE(ABORT, 'cross-tenant reference: access_requests'); END;
+
+CREATE TRIGGER IF NOT EXISTS tg_access_requests_xtenant_upd BEFORE UPDATE OF tenant_id, identity_id, account_id, group_id, edge_id ON access_requests
+WHEN (NEW.identity_id IS NOT NULL AND EXISTS (SELECT 1 FROM identities p WHERE p.id = NEW.identity_id AND p.tenant_id <> NEW.tenant_id))
+	OR (NEW.account_id IS NOT NULL AND EXISTS (SELECT 1 FROM accounts p WHERE p.id = NEW.account_id AND p.tenant_id <> NEW.tenant_id))
+	OR (NEW.group_id IS NOT NULL AND EXISTS (SELECT 1 FROM groups p WHERE p.id = NEW.group_id AND p.tenant_id <> NEW.tenant_id))
+	OR (NEW.edge_id IS NOT NULL AND EXISTS (SELECT 1 FROM grant_edges p WHERE p.id = NEW.edge_id AND p.tenant_id <> NEW.tenant_id))
+BEGIN SELECT RAISE(ABORT, 'cross-tenant reference: access_requests'); END;
+
+CREATE TRIGGER IF NOT EXISTS tg_review_items_xtenant_ins BEFORE INSERT ON review_items
+WHEN (NEW.campaign_id IS NOT NULL AND EXISTS (SELECT 1 FROM review_campaigns p WHERE p.id = NEW.campaign_id AND p.tenant_id <> NEW.tenant_id))
+	OR (NEW.identity_id IS NOT NULL AND EXISTS (SELECT 1 FROM identities p WHERE p.id = NEW.identity_id AND p.tenant_id <> NEW.tenant_id))
+	OR (NEW.reviewer_id IS NOT NULL AND EXISTS (SELECT 1 FROM identities p WHERE p.id = NEW.reviewer_id AND p.tenant_id <> NEW.tenant_id))
+	OR (NEW.edge_id IS NOT NULL AND EXISTS (SELECT 1 FROM grant_edges p WHERE p.id = NEW.edge_id AND p.tenant_id <> NEW.tenant_id))
+	OR (CASE substr(NEW.edge_src, 1, instr(NEW.edge_src, ':') - 1)
+		WHEN 'identity' THEN EXISTS (SELECT 1 FROM identities p WHERE p.id = CAST(substr(NEW.edge_src, instr(NEW.edge_src, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		WHEN 'account' THEN EXISTS (SELECT 1 FROM accounts p WHERE p.id = CAST(substr(NEW.edge_src, instr(NEW.edge_src, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		WHEN 'group' THEN EXISTS (SELECT 1 FROM groups p WHERE p.id = CAST(substr(NEW.edge_src, instr(NEW.edge_src, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		WHEN 'perm' THEN EXISTS (SELECT 1 FROM permissions p WHERE p.id = CAST(substr(NEW.edge_src, instr(NEW.edge_src, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		WHEN 'resource' THEN EXISTS (SELECT 1 FROM resources p WHERE p.id = CAST(substr(NEW.edge_src, instr(NEW.edge_src, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		ELSE 0 END)
+	OR (CASE substr(NEW.edge_dst, 1, instr(NEW.edge_dst, ':') - 1)
+		WHEN 'identity' THEN EXISTS (SELECT 1 FROM identities p WHERE p.id = CAST(substr(NEW.edge_dst, instr(NEW.edge_dst, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		WHEN 'account' THEN EXISTS (SELECT 1 FROM accounts p WHERE p.id = CAST(substr(NEW.edge_dst, instr(NEW.edge_dst, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		WHEN 'group' THEN EXISTS (SELECT 1 FROM groups p WHERE p.id = CAST(substr(NEW.edge_dst, instr(NEW.edge_dst, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		WHEN 'perm' THEN EXISTS (SELECT 1 FROM permissions p WHERE p.id = CAST(substr(NEW.edge_dst, instr(NEW.edge_dst, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		WHEN 'resource' THEN EXISTS (SELECT 1 FROM resources p WHERE p.id = CAST(substr(NEW.edge_dst, instr(NEW.edge_dst, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		ELSE 0 END)
+BEGIN SELECT RAISE(ABORT, 'cross-tenant reference: review_items'); END;
+
+CREATE TRIGGER IF NOT EXISTS tg_review_items_xtenant_upd BEFORE UPDATE OF tenant_id, campaign_id, identity_id, reviewer_id, edge_id, edge_src, edge_dst ON review_items
+WHEN (NEW.campaign_id IS NOT NULL AND EXISTS (SELECT 1 FROM review_campaigns p WHERE p.id = NEW.campaign_id AND p.tenant_id <> NEW.tenant_id))
+	OR (NEW.identity_id IS NOT NULL AND EXISTS (SELECT 1 FROM identities p WHERE p.id = NEW.identity_id AND p.tenant_id <> NEW.tenant_id))
+	OR (NEW.reviewer_id IS NOT NULL AND EXISTS (SELECT 1 FROM identities p WHERE p.id = NEW.reviewer_id AND p.tenant_id <> NEW.tenant_id))
+	OR (NEW.edge_id IS NOT NULL AND EXISTS (SELECT 1 FROM grant_edges p WHERE p.id = NEW.edge_id AND p.tenant_id <> NEW.tenant_id))
+	OR (CASE substr(NEW.edge_src, 1, instr(NEW.edge_src, ':') - 1)
+		WHEN 'identity' THEN EXISTS (SELECT 1 FROM identities p WHERE p.id = CAST(substr(NEW.edge_src, instr(NEW.edge_src, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		WHEN 'account' THEN EXISTS (SELECT 1 FROM accounts p WHERE p.id = CAST(substr(NEW.edge_src, instr(NEW.edge_src, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		WHEN 'group' THEN EXISTS (SELECT 1 FROM groups p WHERE p.id = CAST(substr(NEW.edge_src, instr(NEW.edge_src, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		WHEN 'perm' THEN EXISTS (SELECT 1 FROM permissions p WHERE p.id = CAST(substr(NEW.edge_src, instr(NEW.edge_src, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		WHEN 'resource' THEN EXISTS (SELECT 1 FROM resources p WHERE p.id = CAST(substr(NEW.edge_src, instr(NEW.edge_src, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		ELSE 0 END)
+	OR (CASE substr(NEW.edge_dst, 1, instr(NEW.edge_dst, ':') - 1)
+		WHEN 'identity' THEN EXISTS (SELECT 1 FROM identities p WHERE p.id = CAST(substr(NEW.edge_dst, instr(NEW.edge_dst, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		WHEN 'account' THEN EXISTS (SELECT 1 FROM accounts p WHERE p.id = CAST(substr(NEW.edge_dst, instr(NEW.edge_dst, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		WHEN 'group' THEN EXISTS (SELECT 1 FROM groups p WHERE p.id = CAST(substr(NEW.edge_dst, instr(NEW.edge_dst, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		WHEN 'perm' THEN EXISTS (SELECT 1 FROM permissions p WHERE p.id = CAST(substr(NEW.edge_dst, instr(NEW.edge_dst, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		WHEN 'resource' THEN EXISTS (SELECT 1 FROM resources p WHERE p.id = CAST(substr(NEW.edge_dst, instr(NEW.edge_dst, ':') + 1) AS INTEGER) AND p.tenant_id <> NEW.tenant_id)
+		ELSE 0 END)
+BEGIN SELECT RAISE(ABORT, 'cross-tenant reference: review_items'); END;
+
+CREATE TRIGGER IF NOT EXISTS tg_hris_events_xtenant_ins BEFORE INSERT ON hris_events
+WHEN (NEW.identity_id IS NOT NULL AND EXISTS (SELECT 1 FROM identities p WHERE p.id = NEW.identity_id AND p.tenant_id <> NEW.tenant_id))
+BEGIN SELECT RAISE(ABORT, 'cross-tenant reference: hris_events'); END;
+
+CREATE TRIGGER IF NOT EXISTS tg_hris_events_xtenant_upd BEFORE UPDATE OF tenant_id, identity_id ON hris_events
+WHEN (NEW.identity_id IS NOT NULL AND EXISTS (SELECT 1 FROM identities p WHERE p.id = NEW.identity_id AND p.tenant_id <> NEW.tenant_id))
+BEGIN SELECT RAISE(ABORT, 'cross-tenant reference: hris_events'); END;
+

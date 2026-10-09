@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
@@ -60,7 +61,17 @@ func (tx *TenantTx) exec(s tstmt, args ...sql.NamedArg) (sql.Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	return tx.tx.ExecContext(tx.ctx, s.sql, a...)
+	res, err := tx.tx.ExecContext(tx.ctx, s.sql, a...)
+	return res, crossTenant(err)
+}
+
+// crossTenant maps a cross-tenant reference refused by the schema's guard
+// triggers (schema/0001_tenancy.sql) to ErrCrossTenant.
+func crossTenant(err error) error {
+	if err != nil && strings.Contains(err.Error(), "cross-tenant reference") {
+		return fmt.Errorf("%w: %v", ErrCrossTenant, err)
+	}
+	return err
 }
 
 // insert runs an INSERT and returns the new row id.

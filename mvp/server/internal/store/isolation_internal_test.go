@@ -266,3 +266,63 @@ func TestReadTenantRefusesWrites(t *testing.T) {
 		t.Errorf("err = %v, want ErrReadOnly", err)
 	}
 }
+
+// referenceColumns are the tenant-table columns that hold a reference to
+// another row but have no declared foreign key: grant_edges ids and graph
+// node keys ("account:12").
+var referenceColumns = map[string][]string{
+	"grant_edges":     {"src", "dst"},
+	"access_requests": {"edge_id"},
+	"review_items":    {"edge_id", "edge_src", "edge_dst"},
+}
+
+// TestIsolation_EveryReferenceGuarded checks that every foreign key (other
+// than tenant_id) and every reference column on a tenant table is covered by
+// the cross-tenant guard triggers, on both INSERT and UPDATE.
+func TestIsolation_EveryReferenceGuarded(t *testing.T) {
+	db := openTest(t)
+	ctx := context.Background()
+	for _, table := range tables {
+		if slices.Contains(GlobalTables, table) {
+			continue
+		}
+		cols := slices.Clone(referenceColumns[table])
+		rows, err := db.sql.QueryContext(ctx, `SELECT "from" FROM pragma_foreign_key_list(@t) WHERE "table" <> 'tenants'`,
+			sql.Named("t", table))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for rows.Next() {
+			var c string
+			if err := rows.Scan(&c); err != nil {
+				t.Fatal(err)
+			}
+			cols = append(cols, c)
+		}
+		if err := rows.Close(); err != nil {
+			t.Fatal(err)
+		}
+		for _, ev := range []string{"ins", "upd"} {
+			name := "tg_" + table + "_xtenant_" + ev
+			var body string
+			err := db.sql.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = @n`,
+				sql.Named("n", name)).Scan(&body)
+			if len(cols) == 0 {
+				continue
+			}
+			if err != nil {
+				t.Errorf("%s: %v (table %s has references %v)", name, err, table, cols)
+				continue
+			}
+			for _, c := range cols {
+				if !strings.Contains(body, "NEW."+c+" ") && !strings.Contains(body, "NEW."+c+",") &&
+					!strings.Contains(body, "NEW."+c+")") {
+					t.Errorf("%s does not guard %s.%s", name, table, c)
+				}
+				if ev == "upd" && !strings.Contains(body, c+",") && !strings.Contains(body, c+" ON") {
+					t.Errorf("%s does not fire on UPDATE OF %s", name, c)
+				}
+			}
+		}
+	}
+}

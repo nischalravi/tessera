@@ -347,9 +347,10 @@ var mutations = map[string]func(c *store.TenantTx, a, b map[string]int64) error{
 		return c.UpsertPermission(&store.Permission{System: "aws", ExternalID: "get-pii", Action: "s3:*",
 			ResourceID: b["resource:aws:prod"]})
 	},
-	"UpsertConnectorEdge": func(c *store.TenantTx, a, _ map[string]int64) error {
-		// A's keys, but the row is B's: the conflict target includes tenant_id.
-		return c.UpsertConnectorEdge(key("account", a["acct:okta:alice"]), key("group", a["group:okta:eng"]), "x", storetest.Now)
+	"UpsertConnectorEdge": func(c *store.TenantTx, _, b map[string]int64) error {
+		// B's own edge: the conflict target includes tenant_id. (A's keys are
+		// refused outright; see TestIsolation_CrossTenantForeignKeys.)
+		return c.UpsertConnectorEdge(key("account", b["acct:okta:alice"]), key("group", b["group:okta:eng"]), "x", storetest.Now)
 	},
 	"UpsertSecret": func(c *store.TenantTx, _, b map[string]int64) error {
 		acct := b["acct:aws:svc-etl"]
@@ -528,42 +529,102 @@ func TestIsolation_ForEachActiveTenantVisitsEachOnce(t *testing.T) {
 	}
 }
 
-// TestIsolation_CrossTenantForeignKeys: integer foreign keys crafted inside B
-// to point at A's rows never surface A's data through a join or the graph.
+// crossRefs write, inside B, a row whose reference points at one of A's rows
+// (integer foreign keys and graph node keys). Each must be refused.
+var crossRefs = map[string]func(c *store.TenantTx, a, b map[string]int64) error{
+	"InsertAccount.identity_id": func(c *store.TenantTx, a, _ map[string]int64) error {
+		id := a["alice"]
+		_, err := c.InsertAccount(&store.Account{System: "evil", ExternalID: "x", IdentityID: &id, Username: "evil",
+			Kind: "user", Status: "active"})
+		return err
+	},
+	"UpsertAccount.identity_id": func(c *store.TenantTx, a, _ map[string]int64) error {
+		id := a["alice"]
+		return c.UpsertAccount(&store.Account{System: "okta", ExternalID: "alice", IdentityID: &id, Username: "evil",
+			Kind: "user", Status: "active"})
+	},
+	"InsertIdentity.manager_id": func(c *store.TenantTx, a, _ map[string]int64) error {
+		id := a["carol"]
+		_, err := c.InsertIdentity(&store.Identity{ExternalID: "evil", Name: "evil", Type: "human", Status: "active",
+			ManagerID: &id, CreatedAt: storetest.Now})
+		return err
+	},
+	"SetIdentityManager": func(c *store.TenantTx, a, b map[string]int64) error {
+		id := a["carol"]
+		return c.SetIdentityManager(b["alice"], &id)
+	},
+	"SetIdentityOwner": func(c *store.TenantTx, a, b map[string]int64) error {
+		id := a["dave"]
+		return c.SetIdentityOwner(b["svc-etl"], &id)
+	},
+	"SetIdentityRefsByExternalID": func(c *store.TenantTx, a, _ map[string]int64) error {
+		id := a["carol"]
+		return c.SetIdentityRefsByExternalID("alice", &id, nil)
+	},
+	"UpsertPermission.resource_id": func(c *store.TenantTx, a, _ map[string]int64) error {
+		return c.UpsertPermission(&store.Permission{System: "evil", ExternalID: "x", Action: "x",
+			ResourceID: a["resource:aws:prod"]})
+	},
+	"UpsertSecret.account_id": func(c *store.TenantTx, a, _ map[string]int64) error {
+		id := a["acct:aws:svc-etl"]
+		return c.UpsertSecret(&store.Secret{System: "evil", ExternalID: "s", Kind: "k", Name: "evil",
+			CreatedAt: storetest.Now}, &id)
+	},
+	"InsertDelegations": func(c *store.TenantTx, a, b map[string]int64) error {
+		return c.InsertDelegations([]store.Delegation{{AgentID: b["helper-bot"], PrincipalID: a["alice"],
+			Scopes: []string{"x"}, CreatedAt: storetest.Now}})
+	},
+	"InsertUsageEvents": func(c *store.TenantTx, a, b map[string]int64) error {
+		return c.InsertUsageEvents([]store.UsageEvent{{IdentityID: b["alice"], PermissionID: a["perm:aws:get-pii"],
+			Day: storetest.Now, Count: 1}})
+	},
+	"InsertEdge.dst": func(c *store.TenantTx, a, b map[string]int64) error {
+		_, err := c.InsertEdge(&store.GrantEdge{Src: key("account", b["acct:okta:alice"]),
+			Dst: key("group", a["group:aws:ProdAdmin"]), Relation: "member_of", Source: "manual", CreatedAt: storetest.Now})
+		return err
+	},
+	"InsertEdge.src": func(c *store.TenantTx, a, b map[string]int64) error {
+		_, err := c.InsertEdge(&store.GrantEdge{Src: key("account", a["acct:okta:alice"]),
+			Dst: key("group", b["group:aws:ProdAdmin"]), Relation: "member_of", Source: "manual", CreatedAt: storetest.Now})
+		return err
+	},
+	"UpsertConnectorEdge": func(c *store.TenantTx, a, b map[string]int64) error {
+		return c.UpsertConnectorEdge(key("identity", a["alice"]), key("perm", b["perm:aws:get-pii"]), "x", storetest.Now)
+	},
+	"InsertRequest": func(c *store.TenantTx, a, b map[string]int64) error {
+		_, err := c.InsertRequest(&store.AccessRequest{IdentityID: b["alice"], AccountID: b["acct:okta:alice"],
+			GroupID: a["group:aws:ProdAdmin"], Justification: "x", DurationHours: 1, Status: "pending",
+			RequestedAt: storetest.Now})
+		return err
+	},
+	"InsertReviewItem.campaign_id": func(c *store.TenantTx, a, b map[string]int64) error {
+		return c.InsertReviewItem(&store.ReviewItem{CampaignID: a["campaign"], IdentityID: b["alice"],
+			EdgeSrc: "x", EdgeDst: "y", Reasons: []string{}, Context: json.RawMessage(`{}`)})
+	},
+	"SetHrisEventIdentity": func(c *store.TenantTx, a, b map[string]int64) error {
+		return c.SetHrisEventIdentity(b["hris:joiner"], a["bob"])
+	},
+}
+
+// TestIsolation_CrossTenantForeignKeys: a reference crafted inside B to point
+// at A's row (integer foreign key or graph node key) is refused with
+// ErrCrossTenant, so it can never surface A's data through a join or the
+// graph. The reads afterwards confirm B still sees nothing of A.
 func TestIsolation_CrossTenantForeignKeys(t *testing.T) {
 	f := storetest.TwoTenants(t)
 	a := f.A.IDs
-	inB(t, f, func(c *store.TenantTx) error {
-		aAlice := a["alice"]
-		acct, err := c.InsertAccount(&store.Account{System: "evil", ExternalID: "x", IdentityID: &aAlice, Username: "evil",
-			Kind: "user", Status: "active"})
-		if err != nil {
-			return err
-		}
-		aAcct := a["acct:aws:svc-etl"]
-		if err := c.UpsertSecret(&store.Secret{System: "evil", ExternalID: "s", Kind: "k", Name: "evil",
-			CreatedAt: storetest.Now}, &aAcct); err != nil {
-			return err
-		}
-		if err := c.InsertDelegations([]store.Delegation{{AgentID: a["helper-bot"], PrincipalID: a["alice"],
-			Scopes: []string{"x"}, CreatedAt: storetest.Now}}); err != nil {
-			return err
-		}
-		if err := c.InsertUsageEvents([]store.UsageEvent{{IdentityID: a["alice"], PermissionID: a["perm:aws:get-pii"],
-			Day: storetest.Now, Count: 1}}); err != nil {
-			return err
-		}
-		if _, err := c.InsertEdge(&store.GrantEdge{Src: key("account", acct), Dst: key("group", a["group:aws:ProdAdmin"]),
-			Relation: "member_of", Source: "manual", CreatedAt: storetest.Now}); err != nil {
-			return err
-		}
-		if _, err := c.InsertRequest(&store.AccessRequest{IdentityID: a["alice"], AccountID: a["acct:okta:alice"],
-			GroupID: a["group:aws:ProdAdmin"], Justification: "x", DurationHours: 1, Status: "pending",
-			RequestedAt: storetest.Now}); err != nil {
-			return err
-		}
-		return nil
-	})
+	before := storetest.Dump(t, f.DB, f.B.ID)
+	for name, fn := range crossRefs {
+		t.Run(name, func(t *testing.T) {
+			err := f.DB.InTenant(context.Background(), f.B.ID, func(c *store.TenantTx) error { return fn(c, a, f.B.IDs) })
+			if !errors.Is(err, store.ErrCrossTenant) {
+				t.Fatalf("err = %v, want ErrCrossTenant", err)
+			}
+		})
+	}
+	if storetest.Dump(t, f.DB, f.B.ID) != before {
+		t.Error("a refused cross-tenant write changed tenant B")
+	}
 	if dump := storetest.Dump(t, f.DB, f.B.ID); hasSentinel(dump) {
 		t.Error("tenant B's rows expose tenant A data")
 	}
