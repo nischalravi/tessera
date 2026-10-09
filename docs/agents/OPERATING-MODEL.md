@@ -9,7 +9,7 @@ Until the founder decides otherwise, everything lives in and runs on GitHub, and
 - **Agents run in GitHub Actions.** They authenticate with `CLAUDE_CODE_OAUTH_TOKEN`, which uses the founder's existing Claude plan rather than a separately billed API key.
 - **CI, security scanners and Dependabot** use GitHub's free tier.
 - **Paid or cloud services have local stand-ins:**
-  - The Phase 0 dev IdP (a pure-Python mock OIDC/SAML issuer) stands in for Okta and Entra.
+  - The Phase 0 dev IdP (a Go mock OIDC/SAML issuer) stands in for Okta and Entra.
   - The offline golden corpus and `moto` stand in for a live AWS sandbox.
 
   Issues that need real cloud accounts or paid services stay labelled `needs-human` until the founder decides.
@@ -59,7 +59,7 @@ flowchart LR
 | When (UTC) | Workflow | What it does |
 |---|---|---|
 | Monday 13:00 | `agent-market-watch.yml` | Analyst and domain experts research the week; write `docs/market-watch/YYYY-MM-DD.md`; update `docs/knowledge/`; file or update backlog issues; open a docs PR into `dev` |
-| Monday 14:00 | `security-scan.yml` | pip-audit, npm audit, bandit and gitleaks; the security engineer triages findings into `type:security` issues |
+| Monday 14:00 | `security-scan.yml` | govulncheck, gosec, npm audit and gitleaks; the security engineer triages findings into `type:security` issues |
 | Wednesday 13:00 | `agent-build.yml` | Product manager picks up to 2 ready issues; developer builds; QA and security check; opens `agent/*` PRs into `dev` |
 | Every PR into `dev` | `agent-review.yml` | QA and security agents post reviews |
 | Every push and PR | `ci.yml`, `security-scan.yml` | Tests, frontend build, security scans |

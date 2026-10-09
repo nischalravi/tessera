@@ -1,0 +1,2 @@
+# False positive: a list of Go module names and versions in the Phase 0 design (sources section), not a credential.
+402b9c28be7933968c2128d372845f1b8df15979:docs/design/phase-0-platform-security.md:generic-api-key:2432

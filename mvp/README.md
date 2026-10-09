@@ -41,13 +41,13 @@ and can also be run directly: `tessera serve -addr 127.0.0.1:8000 -db tessera.db
 
 | Area | Where | Highlights in the seed data |
 |---|---|---|
-| Effective permissions with paths | Identities → detail, Graph explorer | Alice reaches `customer-pii` through Okta `engineering` → AWS `DevAdmin`. The graph explorer highlights upstream and downstream paths when you click a node, and "Who can access…" works in reverse from a resource. |
-| Usage-based least privilege | Least privilege | Grants that are **safe to remove** (nothing they uniquely provide was used in N days). **Role trims**: no one of 17 engineers has used `DevAdmin → s3:GetObject customer-pii`. **Right-size** suggestions. Every revoke runs a dry run first that shows the blast radius: identities affected, permissions lost, which of those were used in the last 30 days, and which violations are resolved or introduced. |
-| NHIs & AI agents | NHI & AI agents | Orphaned keys (`svc-legacy-etl`, `old-migration-token`), owners who have left (`jenkins-pat`, `LOOKER_SVC`), stale secrets (a 780-day-old access key). For agents: the delegation chain owner → agent → on-behalf-of, tool scopes, and "agent holds permissions its principal doesn't". |
-| Just-in-time access | Just-in-time access | Time-bound role grants with approve, deny and revoke. A background sweeper expires them automatically (every 30 s, and also on each request). JIT paths never count as standing access. |
-| Policy-as-code + simulation | Policies & violations | YAML policies in `server/policies/`: SoD on payments, no standing prod admin, AI agents may not reach PII, NHI ownership, secret age, and leavers keep no access. The what-if simulator adds or removes grants on a copy of the graph and diffs effective permissions and violations. |
-| Exception-only access reviews | Access reviews | Out of 219 grants, about 62% are auto-certified from usage evidence. Reviewers see only unused, violating, orphaned, leaver or idle-privileged access, with usage and peer-coverage context. A revoke decision applies to the graph. |
-| Joiner / mover / leaver | Joiner / mover / leaver | Simulated Workday feed. The leaver plan for Marcus disables accounts, removes grants, re-homes the AI agent and service account he owned, rotates their secrets and revokes delegations. For historical leavers it shows the access the legacy process missed (Oren still has an active Okta account) and offers one-click cleanup. |
+| Effective permissions with paths | Directory → a person, Insights → Access graph | Alice reaches `customer-pii` through Okta `engineering` → AWS `DevAdmin`. The graph explorer highlights upstream and downstream paths when you click a node, and "Who can access…" works in reverse from a resource. |
+| Usage-based least privilege | Insights → Least privilege | Grants that are **safe to remove** (nothing they uniquely provide was used in N days). **Role trims**: no one of 17 engineers has used `DevAdmin → s3:GetObject customer-pii`. **Right-size** suggestions. Every revoke runs a dry run first that shows the blast radius: identities affected, permissions lost, which of those were used in the last 30 days, and which violations are resolved or introduced. |
+| NHIs & AI agents | Directory → Machine identities & agents | Orphaned keys (`svc-legacy-etl`, `old-migration-token`), owners who have left (`jenkins-pat`, `LOOKER_SVC`), stale secrets (a 780-day-old access key). For agents: the delegation chain owner → agent → on-behalf-of, tool scopes, and "agent holds permissions its principal doesn't". |
+| Just-in-time access | Access → Just-in-time, Inbox | Time-bound role grants with approve, deny and revoke. A background sweeper expires them automatically (every 30 s, and also on each request). JIT paths never count as standing access. |
+| Policy-as-code + simulation | Governance → Policies & violations, Insights → SoD conflicts | YAML policies in `server/policies/`: SoD on payments, no standing prod admin, AI agents may not reach PII, NHI ownership, secret age, and leavers keep no access. The what-if simulator adds or removes grants on a copy of the graph and diffs effective permissions and violations. |
+| Exception-only access reviews | Inbox, Governance → Access reviews | Out of 219 grants, about 62% are auto-certified from usage evidence. Reviewers see only unused, violating, orphaned, leaver or idle-privileged access, with usage and peer-coverage context. A revoke decision applies to the graph. |
+| Joiner / mover / leaver | Inbox, Governance → Lifecycle | Simulated Workday feed. The leaver plan for Marcus disables accounts, removes grants, re-homes the AI agent and service account he owned, rotates their secrets and revokes delegations. For historical leavers it shows the access the legacy process missed (Oren still has an active Okta account) and offers one-click cleanup. |
 
 ## Architecture
 
@@ -78,7 +78,14 @@ server/
   testdata/parity/      golden request/response fixtures recorded from the original Python API
   tools/benchcmp/       end-to-end benchmark (seed, startup, p50/p95, RSS; optionally vs Python)
   scripts/install-tools.sh  pinned govulncheck + gosec
-frontend/               React 18 + Vite + TypeScript, react-router, cytoscape.js
+frontend/               React 18 + Vite + TypeScript, react-router, cytoscape.js, lucide-react
+  src/
+    api.ts              the single API client (typed responses, cached useApi hook)
+    app/                shell, routes, sidebar nav, command palette, global search, theme, persona
+    components/         shared primitives: Button, Badge, DataTable, Dialog, Drawer, Menu, Toast, Page...
+    features/<section>/ one folder per sidebar section (home, inbox, access, directory,
+                        insights, governance, admin)
+    mocks/              typed Preview data for features with no backend endpoint yet
 ```
 
 Design notes:
@@ -108,7 +115,45 @@ Design notes:
 `GET|POST /api/jit/requests` · `POST /api/jit/requests/{id}/approve|deny|revoke` ·
 `GET|POST /api/reviews/campaigns` · `POST /api/reviews/items/{id}/decision` ·
 `GET|POST /api/hris/events` · `GET /api/hris/events/{id}/plan` · `POST /api/hris/events/{id}/execute` ·
-`GET /api/jml/leaver-plan/{identity_id}` · `GET /api/audit`
+`GET /api/jml/leaver-plan/{identity_id}` · `GET /api/accounts[?system=]` · `GET /api/audit`
+
+## Web UI
+
+The UI is organised around jobs rather than object types. The left sidebar (collapsible to icons,
+a drawer below 860px) has seven sections:
+
+| Section | What it is for |
+|---|---|
+| **Home** | Changes with the persona chosen in the user menu (a demo stand-in until sign-in exists). Employee: what is waiting on you, your access, request access. Manager: adds team approvals and review progress. Admin & security: risk KPIs and the riskiest identities. |
+| **Inbox** | One queue for JIT and catalog approvals, access-review items, joiner/mover/leaver tasks and delegations. Filter chips, a detail panel with usage context, bulk actions, and keys: `j`/`k` move, `a` approve or keep, `d` deny, `r` revoke, `x` select, `?` help. |
+| **Access** | Request access (catalog of roles, entitlements and JIT-eligible access with a cart, for yourself, someone else or several people, with duration, justification and a risk/SoD preview), My access, Requests (history and drafts), Just-in-time. |
+| **Directory** | People, Machine identities & agents, Accounts, Roles, Entitlements, Applications & systems, Organizations, Groups. Every list has search, filters, saved views, bulk select, CSV import and export, and a **New** button. Rows open an object page with an action bar (for a person: Disable, Reset password, Edit, Request access for, Start review). |
+| **Insights** | Risk overview, Access graph, Least privilege, SoD conflicts. |
+| **Governance** | Policies & violations, Access reviews, Lifecycle, Workflows. |
+| **Admin** | Searchable settings cards. Connections, Jobs and Audit log are live; the rest describe what they will do. |
+
+Routes from the previous UI (`/identities`, `/graph`, `/nhi`, `/jit`, `/policies`, `/reviews`,
+`/lifecycle`, `/least-privilege`) redirect to their new homes.
+
+**Command palette.** Press `⌘K` (macOS) or `Ctrl+K` anywhere. It fuzzy-searches pages, people,
+machine identities, roles, entitlements and apps, and runs actions such as *Request access*,
+*Disable user…*, *Reset password…*, *Start access review*, *Approve pending requests*,
+*Open graph for…*, *Create role* and *Import users*. Actions ending in `…` ask for an identity
+next. Choosing a person shows actions for them. Use the arrow keys, `Enter`, `Backspace` to go
+back a step and `Esc` to close. `/` focuses the top-bar search.
+
+**Preview features.** Some screens have no backend endpoint yet: business roles, organizations,
+workflows, catalog (non-JIT) requests, delegations, disable / reset password / edit, imports and
+most admin settings. They run on typed mock data in `src/mocks/`, keep their state in the
+browser's localStorage, and carry a **Preview** badge. To wire one up, add a function to
+`src/api.ts` that returns the same type and remove the badge.
+
+**Theme and accessibility.** Light and dark themes follow the OS setting by default, with a
+toggle in the top bar. Focus rings are always visible, controls are labelled, motion is reduced
+when the OS asks for it, and the layout works down to about 400px wide.
+
+**Bundle.** Every route is lazy-loaded. The main chunk is about 85 kB gzipped; cytoscape
+(about 146 kB gzipped) only loads with the access graph.
 
 ## Adding a real connector
 

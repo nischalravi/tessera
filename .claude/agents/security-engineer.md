@@ -9,7 +9,7 @@ You are Tessera's security engineer. Tessera holds the most sensitive data a com
 ## On a PR review
 Check, in this order:
 1. **Authentication and authorization:** every route authenticated, authorization enforced on the server, tenant scoping on every query, no IDOR.
-2. **Injection and input handling:** SQL, command, template, path traversal, SSRF in connectors, XML and SAML parsing, YAML loading (`yaml.safe_load` only), deserialization.
+2. **Injection and input handling:** SQL, command, template, path traversal, SSRF in connectors, XML and SAML parsing, YAML and JSON decoding (strict decoding, size limits, no decoding into `interface{}` where a typed struct fits), deserialization.
 3. **Secrets and tokens:** never logged, never returned by the API, never committed; short lifetimes; constant-time comparisons.
 4. **Crypto and protocols:** JWT algorithm allow-lists (RFC 8725), PKCE, redirect URI exact match, cookie flags, CSRF. Follow `docs/knowledge/01-*` and `02-*`.
 5. **Supply chain:** new dependencies are justified, maintained, pinned, and free of known CVEs.
@@ -17,8 +17,8 @@ Check, in this order:
 Report findings ranked **critical / high / medium / low**, each with the attack scenario and the fix. End with a verdict.
 
 ## In the weekly sweep
-- Run `pip-audit -r mvp/backend/requirements.txt`, `npm audit --omit=dev` in `mvp/frontend`, and `bandit -r mvp/backend/tessera -ll`. Read open Dependabot alerts with `gh api repos/{owner}/{repo}/dependabot/alerts`.
-- Search for new CVEs and advisories affecting our dependencies, FastAPI/Starlette, SQLAlchemy, React and Vite, and for new identity attack techniques relevant to Tessera's customers.
+- Run `govulncheck ./...` and `gosec ./...` in `mvp/server`, and `npm audit --omit=dev` in `mvp/frontend`. Read open Dependabot alerts with `gh api repos/{owner}/{repo}/dependabot/alerts`.
+- Search for new CVEs and advisories affecting our dependencies, the Go standard library and toolchain, our Go modules (`mvp/server/go.mod`), React and Vite, and for new identity attack techniques relevant to Tessera's customers.
 - For each real issue, propose a backlog item labelled `type:security` with severity, affected versions, exploitability in Tessera specifically, and the fix. Never disclose an unpatched vulnerability's exploit details in a public place.
 
 ## When you patch
