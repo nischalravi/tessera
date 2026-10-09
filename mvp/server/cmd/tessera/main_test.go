@@ -32,16 +32,23 @@ func TestServeSeedsAndShutsDownGracefully(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- run(ctx, []string{"serve", "-addr", addr, "-db", db}, &out, &logs) }()
 
+	// Seeding runs first; under -race on a loaded CI runner it can take a while.
 	var resp *http.Response
 	var err error
-	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+	for deadline := time.Now().Add(3 * time.Minute); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		select {
+		case runErr := <-done:
+			cancel()
+			t.Fatalf("run exited before serving: %v", runErr)
+		default:
+		}
 		if resp, err = http.Get(fmt.Sprintf("http://%s/api/health", addr)); err == nil {
 			break
 		}
 	}
 	if err != nil {
 		cancel()
-		t.Fatalf("server did not come up: %v\n%s", err, logs.String())
+		t.Fatalf("server did not come up: %v", err)
 	}
 	resp.Body.Close()
 	if resp.StatusCode != 200 || resp.Header.Get("X-Content-Type-Options") != "nosniff" {
@@ -59,7 +66,7 @@ func TestServeSeedsAndShutsDownGracefully(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("server did not shut down")
 	}
-	if !strings.Contains(logs.String(), "shutting down") {
+	if !strings.Contains(logs.String(), "shutting down") { // read only after run returned
 		t.Errorf("logs: %s", logs.String())
 	}
 }
