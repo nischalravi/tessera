@@ -138,12 +138,20 @@ func (r *Registry) Get(id string) (*Resolved, bool) {
 // ForConnectorType returns the template that covers a connector type
 // ("ad", "demo-ad", ...).
 func (r *Registry) ForConnectorType(ct string) (*Resolved, bool) {
-	for _, id := range r.IDs() {
-		if slices.Contains(r.resolved[id].ConnectorTypes, ct) {
-			return r.Get(id)
-		}
+	if id, ok := r.TemplateID(ct); ok {
+		return r.Get(id)
 	}
 	return nil, false
+}
+
+// TemplateID returns the id of the template that covers a connector type.
+func (r *Registry) TemplateID(ct string) (string, bool) {
+	for id, t := range r.resolved {
+		if slices.Contains(t.ConnectorTypes, ct) {
+			return id, true
+		}
+	}
+	return "", false
 }
 
 // ErrVersionUnavailable is returned when a pin names a major.minor that this

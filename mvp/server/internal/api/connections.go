@@ -1,0 +1,487 @@
+package api
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"regexp"
+	"time"
+
+	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
+	"github.com/nischalravi/tessera/mvp/server/internal/store"
+)
+
+// Deployment-readiness routes (design §9). They are new API surface, so
+// they use plain JSON errors ({"error": code, "detail": msg}) and, for a
+// refused transition, the gate report, instead of the FastAPI-compatible
+// shapes the parity-tested routes keep.
+
+func (s *Server) registerReadinessRoutes() {
+	G, P := http.MethodGet, http.MethodPost
+	s.handle(G, "/api/readiness/templates", s.rd(s.listTemplates))
+	s.handle(G, "/api/readiness/templates/{type}", s.rd(s.getTemplate))
+	s.handle(http.MethodPut, "/api/readiness/overlays/{type}", s.rd(s.putOverlay))
+	s.handle(G, "/api/readiness/openapi.json", s.readinessOpenAPI)
+	s.handle(G, "/api/connections", s.rd(s.listConnections))
+	s.handle(P, "/api/connections", s.rd(s.createConnection))
+	s.handle(G, "/api/connections/{id}", s.rd(s.getConnection))
+	s.handle(http.MethodPatch, "/api/connections/{id}/config", s.rd(s.patchConfig))
+	s.handle(http.MethodPut, "/api/connections/{id}/credential", s.rd(s.putCredential))
+	s.handle(G, "/api/connections/{id}/checklist", s.rd(s.getChecklist))
+	s.handle(P, "/api/connections/{id}/checklist/{item}/attest", s.rd(s.attestItem))
+	s.handle(P, "/api/connections/{id}/checklist/{item}/skip", s.rd(s.skipItem))
+	s.handle(http.MethodDelete, "/api/connections/{id}/checklist/{item}/skip", s.rd(s.unskipItem))
+	s.handle(P, "/api/connections/{id}/transition", s.rd(s.transition))
+	s.handle(P, "/api/connections/{id}/activate", s.rd(s.activate))
+	s.handle(P, "/api/connections/{id}/retire", s.rd(s.retire))
+	s.registerValidationRoutes()
+}
+
+// rdFunc is a readiness handler: it returns the status and body to send.
+type rdFunc func(r *http.Request, p *params) (int, any, error)
+
+// rd adapts a readiness handler, rendering *readiness.Error as JSON.
+func (s *Server) rd(fn rdFunc) handlerFunc {
+	return func(w http.ResponseWriter, r *http.Request, p *params) (any, error) {
+		status, body, err := fn(r, p)
+		var re *readiness.Error
+		if errors.As(err, &re) {
+			writeJSON(w, re.Status, readinessErrorBody(re))
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		writeJSON(w, status, body)
+		return nil, nil
+	}
+}
+
+func readinessErrorBody(e *readiness.Error) any {
+	if e.Report != nil {
+		return e.Report
+	}
+	body := map[string]any{"error": e.Code, "detail": e.Msg}
+	if len(e.Fields) > 0 {
+		body["fields"] = e.Fields
+	}
+	for k, v := range e.Extra {
+		body[k] = v
+	}
+	return body
+}
+
+func badRequest(code, msg string) error {
+	return &readiness.Error{Status: http.StatusUnprocessableEntity, Code: code, Msg: msg}
+}
+
+// decodeBody strictly decodes a JSON object body (unknown fields rejected).
+// An empty body decodes to the zero value when allowEmpty is set.
+func decodeBody(r *http.Request, v any, allowEmpty bool) error {
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
+			return errBodyTooLarge
+		}
+		return errBodyUnreadable
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		if allowEmpty {
+			return nil
+		}
+		return badRequest("invalid_body", "a JSON body is required")
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		return badRequest("invalid_body", err.Error())
+	}
+	if dec.More() {
+		return badRequest("invalid_body", "trailing data after the JSON body")
+	}
+	return nil
+}
+
+// actorRE bounds the acting user's name. The MVP has no authentication: the
+// UI sends the persona as X-Tessera-User. DR-10 replaces this with the
+// authenticated principal and RBAC (connections.read/manage/activate).
+var actorRE = regexp.MustCompile(`^[A-Za-z0-9._@+ -]{1,120}$`)
+
+const defaultActor = "admin@larkspur.example"
+
+func actor(r *http.Request) string {
+	if a := r.Header.Get("X-Tessera-User"); actorRE.MatchString(a) {
+		return a
+	}
+	return defaultActor
+}
+
+var idRE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// connID validates the {id} path segment.
+func connID(p *params) (string, error) {
+	id := p.path["id"]
+	if !idRE.MatchString(id) {
+		return "", &readiness.Error{Status: http.StatusNotFound, Code: "not_found", Msg: "no such connection"}
+	}
+	return id, nil
+}
+
+var itemRE = regexp.MustCompile(`^[a-z0-9_]+(\.[a-z0-9_]+)+$`)
+
+func itemID(p *params) (string, error) {
+	id := p.path["item"]
+	if !itemRE.MatchString(id) {
+		return "", &readiness.Error{Status: http.StatusNotFound, Code: "not_found", Msg: "no such checklist item"}
+	}
+	return id, nil
+}
+
+// write runs fn in a write transaction.
+func (s *Server) write(r *http.Request, fn func(c *store.Conn, now time.Time) error) error {
+	now := s.clock()
+	return s.store.Write(r.Context(), func(c *store.Conn) error { return fn(c, now) })
+}
+
+// ---------------------------------------------------------------- templates
+
+type templateSummary struct {
+	ID             string   `json:"id"`
+	Version        string   `json:"version"`
+	DisplayName    string   `json:"display_name"`
+	ConnectorTypes []string `json:"connector_types"`
+	Role           string   `json:"role"`
+	OverlayVersion int      `json:"overlay_version"`
+	Items          int      `json:"items"`
+	Required       int      `json:"required"`
+	Recommended    int      `json:"recommended"`
+	Optional       int      `json:"optional"`
+}
+
+func (s *Server) listTemplates(r *http.Request, _ *params) (int, any, error) {
+	c := s.store.Read(r.Context())
+	out := []templateSummary{}
+	for _, id := range s.readiness.Templates.IDs() {
+		t, err := s.readiness.TemplateForTenant(c, id)
+		if err != nil {
+			return 0, nil, err
+		}
+		n := t.Count()
+		out = append(out, templateSummary{ID: t.ID, Version: t.Version, DisplayName: t.DisplayName,
+			ConnectorTypes: t.ConnectorTypes, Role: t.Role, OverlayVersion: t.OverlayVersion, Items: n.Items,
+			Required: n.Required, Recommended: n.Recommended, Optional: n.Optional})
+	}
+	return http.StatusOK, out, nil
+}
+
+func (s *Server) getTemplate(r *http.Request, p *params) (int, any, error) {
+	t, err := s.readiness.TemplateForTenant(s.store.Read(r.Context()), p.path["type"])
+	if err != nil {
+		return 0, nil, err
+	}
+	return http.StatusOK, t, nil
+}
+
+func (s *Server) putOverlay(r *http.Request, p *params) (int, any, error) {
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		return 0, nil, errBodyUnreadable
+	}
+	var out any
+	err = s.write(r, func(c *store.Conn, now time.Time) error {
+		t, err := s.readiness.PutOverlay(c, p.path["type"], raw, actor(r), now)
+		out = t
+		return err
+	})
+	return http.StatusOK, out, err
+}
+
+// ---------------------------------------------------------------- connections
+
+// legacyConnection describes an env-configured (TESSERA_CONNECTORS) demo
+// connector: it syncs as before and is not governed by the checklist.
+type legacyConnection struct {
+	Legacy        bool   `json:"legacy"`
+	System        string `json:"system"`
+	Name          string `json:"name"`
+	Type          string `json:"type"`
+	State         string `json:"state"`
+	GovernedByID  any    `json:"governed_by"`
+	ConnectorType string `json:"connector_type"`
+}
+
+func (s *Server) listConnections(r *http.Request, _ *params) (int, any, error) {
+	c := s.store.Read(r.Context())
+	now := s.clock()
+	conns, err := c.Connections()
+	if err != nil {
+		return 0, nil, err
+	}
+	out := []any{}
+	governed := map[string]string{}
+	for _, conn := range conns {
+		v, _, err := s.readiness.View(c, conn.ID, now)
+		if err != nil {
+			return 0, nil, err
+		}
+		if err := s.attachScore(c, v, now); err != nil {
+			return 0, nil, err
+		}
+		out = append(out, v)
+		if conn.RetiredAt == nil {
+			governed[conn.System] = conn.ID
+		}
+	}
+	legacy, err := s.cfg.Connectors(now)
+	if err != nil {
+		return 0, nil, err
+	}
+	for _, l := range legacy {
+		var by any
+		if id, ok := governed[l.System()]; ok {
+			by = id
+		}
+		out = append(out, legacyConnection{Legacy: true, System: l.System(), Name: l.DisplayName(), Type: l.TypeName(),
+			State: "legacy", GovernedByID: by, ConnectorType: "legacy"})
+	}
+	return http.StatusOK, out, nil
+}
+
+func (s *Server) connectionView(c *store.Conn, id string, now time.Time) (*readiness.ConnectionView, error) {
+	v, _, err := s.readiness.View(c, id, now)
+	if err != nil {
+		return nil, err
+	}
+	return v, s.attachScore(c, v, now)
+}
+
+func (s *Server) createConnection(r *http.Request, _ *params) (int, any, error) {
+	var in readiness.CreateInput
+	if err := decodeBody(r, &in, false); err != nil {
+		return 0, nil, err
+	}
+	var out any
+	err := s.write(r, func(c *store.Conn, now time.Time) error {
+		b, err := s.readiness.Create(c, in, actor(r), now)
+		if err != nil {
+			return err
+		}
+		out, err = s.connectionView(c, b.Conn.ID, now)
+		return err
+	})
+	return http.StatusCreated, out, err
+}
+
+func (s *Server) getConnection(r *http.Request, p *params) (int, any, error) {
+	id, err := connID(p)
+	if err != nil {
+		return 0, nil, err
+	}
+	v, err := s.connectionView(s.store.Read(r.Context()), id, s.clock())
+	return http.StatusOK, v, err
+}
+
+func (s *Server) patchConfig(r *http.Request, p *params) (int, any, error) {
+	id, err := connID(p)
+	if err != nil {
+		return 0, nil, err
+	}
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		return 0, nil, errBodyUnreadable
+	}
+	var out map[string]any
+	err = s.write(r, func(c *store.Conn, now time.Time) error {
+		res, err := s.readiness.PatchConfig(c, id, raw, actor(r), now)
+		if err != nil {
+			return err
+		}
+		v, err := s.connectionView(c, id, now)
+		inv := res.Invalidated
+		if inv == nil {
+			inv = []string{}
+		}
+		out = map[string]any{"connection": v, "new_revision": res.NewRevision, "invalidated": inv,
+			"fields": readiness.Validate(res.Bundle.Config, res.Bundle.Template)}
+		return err
+	})
+	return http.StatusOK, out, err
+}
+
+func (s *Server) putCredential(r *http.Request, p *params) (int, any, error) {
+	id, err := connID(p)
+	if err != nil {
+		return 0, nil, err
+	}
+	var in readiness.CredentialInput
+	if err := decodeBody(r, &in, false); err != nil {
+		return 0, nil, err
+	}
+	var out any
+	err = s.write(r, func(c *store.Conn, now time.Time) error {
+		b, err := s.readiness.SetCredential(c, id, in, actor(r), now)
+		if err != nil {
+			return err
+		}
+		out = readiness.RevisionOf(b).Credential
+		return nil
+	})
+	return http.StatusOK, out, err
+}
+
+func (s *Server) getChecklist(r *http.Request, p *params) (int, any, error) {
+	id, err := connID(p)
+	if err != nil {
+		return 0, nil, err
+	}
+	now := s.clock()
+	b, err := s.readiness.Current(s.store.Read(r.Context()), id, now)
+	if err != nil {
+		return 0, nil, err
+	}
+	return http.StatusOK, readiness.Checklist(b, now), nil
+}
+
+// checklistAfter runs a checklist mutation and returns the new checklist.
+func (s *Server) checklistAfter(r *http.Request, p *params, fn func(c *store.Conn, id, item string, now time.Time) (*readiness.Bundle, error)) (int, any, error) {
+	id, err := connID(p)
+	if err != nil {
+		return 0, nil, err
+	}
+	item, err := itemID(p)
+	if err != nil {
+		return 0, nil, err
+	}
+	var out any
+	err = s.write(r, func(c *store.Conn, now time.Time) error {
+		b, err := fn(c, id, item, now)
+		if err != nil {
+			return err
+		}
+		out = readiness.Checklist(b, now)
+		return nil
+	})
+	return http.StatusOK, out, err
+}
+
+func (s *Server) attestItem(r *http.Request, p *params) (int, any, error) {
+	var in struct {
+		Note string `json:"note"`
+	}
+	if err := decodeBody(r, &in, false); err != nil {
+		return 0, nil, err
+	}
+	return s.checklistAfter(r, p, func(c *store.Conn, id, item string, now time.Time) (*readiness.Bundle, error) {
+		return s.readiness.Attest(c, id, item, in.Note, actor(r), now)
+	})
+}
+
+func (s *Server) skipItem(r *http.Request, p *params) (int, any, error) {
+	var in struct {
+		Reason   string  `json:"reason"`
+		ReviewBy *string `json:"review_by"`
+	}
+	if err := decodeBody(r, &in, false); err != nil {
+		return 0, nil, err
+	}
+	var review *time.Time
+	if in.ReviewBy != nil {
+		t, err := parseDate(*in.ReviewBy)
+		if err != nil {
+			return 0, nil, badRequest("invalid_review_by", "review_by must be a date (YYYY-MM-DD) or an RFC 3339 time")
+		}
+		review = &t
+	}
+	return s.checklistAfter(r, p, func(c *store.Conn, id, item string, now time.Time) (*readiness.Bundle, error) {
+		return s.readiness.Skip(c, id, item, in.Reason, review, actor(r), now)
+	})
+}
+
+func parseDate(v string) (time.Time, error) {
+	if t, err := time.Parse(time.RFC3339, v); err == nil {
+		return t.UTC(), nil
+	}
+	t, err := time.Parse("2006-01-02", v)
+	return t.Add(24*time.Hour - time.Second), err // end of the day
+}
+
+func (s *Server) unskipItem(r *http.Request, p *params) (int, any, error) {
+	return s.checklistAfter(r, p, func(c *store.Conn, id, item string, now time.Time) (*readiness.Bundle, error) {
+		return s.readiness.Unskip(c, id, item, actor(r), now)
+	})
+}
+
+func (s *Server) transition(r *http.Request, p *params) (int, any, error) {
+	id, err := connID(p)
+	if err != nil {
+		return 0, nil, err
+	}
+	var in struct {
+		To string `json:"to"`
+	}
+	if err := decodeBody(r, &in, false); err != nil {
+		return 0, nil, err
+	}
+	var out any
+	err = s.write(r, func(c *store.Conn, now time.Time) error {
+		if _, err := s.readiness.Transition(c, id, in.To, actor(r), now); err != nil {
+			return err
+		}
+		var err error
+		out, err = s.connectionView(c, id, now)
+		return err
+	})
+	return http.StatusOK, out, err
+}
+
+func (s *Server) activate(r *http.Request, p *params) (int, any, error) {
+	id, err := connID(p)
+	if err != nil {
+		return 0, nil, err
+	}
+	if err := decodeBody(r, &struct{}{}, true); err != nil {
+		return 0, nil, err
+	}
+	var out any
+	err = s.write(r, func(c *store.Conn, now time.Time) error {
+		_, ac, err := s.readiness.Activate(c, id, actor(r), now)
+		if err != nil {
+			return err
+		}
+		if err := s.firstSync(r, c, ac, now); err != nil {
+			return err
+		}
+		out, err = s.connectionView(c, id, now)
+		return err
+	})
+	return http.StatusOK, out, err
+}
+
+func (s *Server) retire(r *http.Request, p *params) (int, any, error) {
+	id, err := connID(p)
+	if err != nil {
+		return 0, nil, err
+	}
+	var in struct {
+		Confirm bool `json:"confirm"`
+	}
+	if err := decodeBody(r, &in, false); err != nil {
+		return 0, nil, err
+	}
+	if !in.Confirm {
+		return 0, nil, badRequest("confirmation_required", `send {"confirm": true} to retire the connection`)
+	}
+	var out any
+	err = s.write(r, func(c *store.Conn, now time.Time) error {
+		if err := s.readiness.Retire(c, id, actor(r), now); err != nil {
+			return err
+		}
+		var err error
+		out, err = s.connectionView(c, id, now)
+		return err
+	})
+	return http.StatusOK, out, err
+}

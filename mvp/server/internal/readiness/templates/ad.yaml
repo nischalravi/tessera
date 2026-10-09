@@ -415,7 +415,6 @@ items:
     remediation:
       hint: "Leave off unless required."
     depends_on: [ad.sync.usn]
-    applies_when: { config_flag: use_dirsync }
     config_fields: [use_dirsync]
 
   - id: ad.sync.deleted

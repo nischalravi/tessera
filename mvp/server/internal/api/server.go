@@ -20,6 +20,8 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
+	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
+	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 )
@@ -42,6 +44,11 @@ type Config struct {
 	AllowedOrigins []string
 	MaxBodyBytes   int64         // defaults to DefaultMaxBodyBytes
 	HandlerTimeout time.Duration // defaults to DefaultHandlerTimeout; <0 disables
+	// Readiness is the deployment-readiness service (defaults to the
+	// embedded templates and Env).
+	Readiness *readiness.Service
+	// Env is TESSERA_ENV ("dev" allows activating non-demo connector types).
+	Env string
 }
 
 // Server serves the API.
@@ -51,6 +58,8 @@ type Server struct {
 	clock  timeutil.Clock
 	log    *slog.Logger
 	routes []*route
+
+	readiness *readiness.Service
 }
 
 // New builds a server.
@@ -70,8 +79,16 @@ func New(cfg Config) *Server {
 	if cfg.HandlerTimeout == 0 {
 		cfg.HandlerTimeout = DefaultHandlerTimeout
 	}
-	s := &Server{cfg: cfg, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger}
+	if cfg.Readiness == nil {
+		reg, err := template.Default()
+		if err != nil {
+			panic(err) // the embedded templates are linted by TestTemplates_Lint
+		}
+		cfg.Readiness = readiness.NewService(reg, cfg.Env)
+	}
+	s := &Server{cfg: cfg, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness}
 	s.registerRoutes()
+	s.registerReadinessRoutes()
 	return s
 }
 
@@ -350,7 +367,7 @@ func (s *Server) cors(next http.Handler) http.Handler {
 			}
 			h := w.Header()
 			h.Set("Access-Control-Allow-Origin", origin)
-			h.Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			if req := r.Header.Get("Access-Control-Request-Headers"); req != "" {
 				h.Set("Access-Control-Allow-Headers", "Content-Type")
 			}

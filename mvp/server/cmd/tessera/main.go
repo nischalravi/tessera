@@ -12,6 +12,7 @@
 //	TESSERA_CORS_ORIGINS  comma-separated browser origins allowed by CORS
 //	                      (default: the dev UI on localhost/127.0.0.1, port UI_PORT or 5173)
 //	TESSERA_NOW           freeze the clock at an ISO-8601 time (tests and demos)
+//	TESSERA_ENV           "dev" allows activating non-demo connector types before DR-10
 package main
 
 import (
@@ -188,7 +189,8 @@ func serve(ctx context.Context, o options, clock timeutil.Clock, loader *policy.
 	if _, err := loader.Load(); err != nil { // fail fast on broken policy files
 		return err
 	}
-	srv := api.New(api.Config{Store: st, Clock: clock, Policies: loader, Logger: logger, AllowedOrigins: corsOrigins()})
+	srv := api.New(api.Config{Store: st, Clock: clock, Policies: loader, Logger: logger, AllowedOrigins: corsOrigins(),
+		Env: os.Getenv("TESSERA_ENV")})
 	httpSrv := &http.Server{
 		Addr:              o.addr,
 		Handler:           srv.Handler(),
