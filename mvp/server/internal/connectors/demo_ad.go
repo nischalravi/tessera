@@ -304,21 +304,15 @@ func buildDemoAD(c *DemoCompany) *DiscoveryResult {
 			Dst: Ref{Kind: "group", System: DemoADSystem, ExternalID: "CN=" + m[1] + ",OU=Old Groups," + adDomain}, Relation: "member_of"})
 	}
 	res.Stats = StatsFromAccounts(res.Accounts, func(a *AccountRecord) string {
-		if a.Kind == "service" {
+		switch {
+		case a.Attributes["objectClass"] == "msDS-GroupManagedServiceAccount":
+			return "msDS-GroupManagedServiceAccount"
+		case a.Kind == "service":
 			return "service"
 		}
 		return "user"
 	})
 	res.Stats.Classes["group"] = groupStats
-	gmsa := 0
-	for _, a := range accts {
-		if a.class == "msDS-GroupManagedServiceAccount" {
-			gmsa++
-		}
-	}
-	if gmsa > 0 {
-		res.Stats.Classes["msDS-GroupManagedServiceAccount"] = &ClassStats{Total: gmsa, Attributes: map[string]AttrStat{}}
-	}
 	return res
 }
 

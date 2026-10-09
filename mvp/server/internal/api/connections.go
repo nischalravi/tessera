@@ -37,6 +37,7 @@ func (s *Server) registerReadinessRoutes() {
 	s.handle(P, "/api/connections/{id}/activate", s.rd(s.activate))
 	s.handle(P, "/api/connections/{id}/retire", s.rd(s.retire))
 	s.registerValidationRoutes()
+	s.registerDryRunRoutes()
 }
 
 // rdFunc is a readiness handler: it returns the status and body to send.

@@ -80,3 +80,32 @@ CREATE TABLE IF NOT EXISTS readiness_check_results (
   simulated INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (tenant_id, run_id, item_id, check_id)
 );
+
+-- Dry-run reconciliation runs and findings (DR-4). A reconciliation run
+-- shares its id with the dry_run check run that holds its data-check results.
+CREATE TABLE IF NOT EXISTS recon_runs (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000002',
+  revision_id TEXT NOT NULL,
+  connection_id TEXT NOT NULL,
+  mode TEXT NOT NULL CHECK (mode IN ('staging','live')),
+  check_run_id TEXT NOT NULL, counts TEXT, status TEXT NOT NULL,
+  started_at TEXT NOT NULL, finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS recon_runs_rev ON recon_runs(tenant_id, revision_id, started_at);
+CREATE TABLE IF NOT EXISTS recon_findings (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000002',
+  run_id TEXT NOT NULL REFERENCES recon_runs(id),
+  connection_id TEXT NOT NULL, code TEXT NOT NULL, variant TEXT NOT NULL DEFAULT '',
+  title TEXT NOT NULL,
+  severity TEXT NOT NULL CHECK (severity IN ('critical','high','medium','low','info')),
+  count INTEGER NOT NULL, denominator INTEGER NOT NULL,
+  samples TEXT NOT NULL, impact TEXT NOT NULL, cause TEXT, item_id TEXT,
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','accepted','resolved')),
+  accepted_by TEXT, reason TEXT, expires_at TEXT,
+  first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL,
+  CHECK (status <> 'accepted' OR length(reason) >= 20)
+);
+CREATE INDEX IF NOT EXISTS recon_findings_conn ON recon_findings(tenant_id, connection_id, status, severity);
+CREATE INDEX IF NOT EXISTS recon_findings_run ON recon_findings(tenant_id, run_id);

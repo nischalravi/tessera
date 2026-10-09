@@ -18,6 +18,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
+	"github.com/nischalravi/tessera/mvp/server/internal/reconcile"
 )
 
 // Result statuses.
@@ -89,7 +90,7 @@ type Env struct {
 	ConfigStrings map[string]string // config field → its text, for secret-shape scanning only
 	RequiredAttrs []string          // the template's required user attributes
 	WriteScope    []string
-	Snapshot      Snapshot // data checks only
+	Snapshot      *reconcile.Snapshot // data checks only
 }
 
 // Check is a registered check.
@@ -255,7 +256,7 @@ func pct(n, d int) string {
 	if d == 0 {
 		return "n/a"
 	}
-	return fmt.Sprintf("%.0f%%", 100*float64(n)/float64(d))
+	return fmt.Sprintf("%d%%", 100*n/d) // floor: a fill rate is "at least"
 }
 
 func subset(xs, allowed []string) (extra []string) {

@@ -508,13 +508,20 @@ func TestProbers_ReadOnly(t *testing.T) {
 	}
 }
 
-func TestRegistry_CoversLiveCatalogue(t *testing.T) {
+// Every check id the templates may reference has an implementation whose
+// kind (and, for live checks, prober operation) matches the catalogue.
+func TestRegistry_CoversCatalogue(t *testing.T) {
 	for id, spec := range template.Checks {
-		if spec.Kind != template.Live {
+		c, ok := checks.Get(id)
+		if !ok {
+			t.Errorf("%s check %s has no implementation", spec.Kind, id)
 			continue
 		}
-		if _, ok := checks.Get(id); !ok {
-			t.Errorf("live check %s has no implementation", id)
+		if c.Kind != spec.Kind || (spec.Kind == template.Live && c.Op != spec.Op) {
+			t.Errorf("%s: implementation does not match the catalogue", id)
 		}
+	}
+	if len(checks.IDs()) != len(template.Checks) {
+		t.Errorf("%d implementations for %d catalogue entries", len(checks.IDs()), len(template.Checks))
 	}
 }
