@@ -2,6 +2,7 @@
 //
 //	tessera [serve] [-addr 127.0.0.1:8000] [-db tessera.db] [-reseed]
 //	tessera seed    [-db tessera.db]
+//	tessera readiness lint [-dir path]   lint the readiness checklist templates
 //
 // Environment:
 //
@@ -57,6 +58,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		cmd, args = args[0], args[1:]
 	}
+	if cmd == "readiness" {
+		return readinessCmd(args, stdout, stderr)
+	}
 	fset := flag.NewFlagSet("tessera "+cmd, flag.ContinueOnError)
 	fset.SetOutput(stderr)
 	var o options
@@ -85,7 +89,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		}
 		return serve(ctx, o, clock, loader, logger)
 	}
-	return fmt.Errorf("unknown command %q (want serve or seed)", cmd)
+	return fmt.Errorf("unknown command %q (want serve, seed or readiness)", cmd)
 }
 
 // dbPath accepts a plain path or the Python backend's sqlite:/// URL form.

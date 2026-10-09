@@ -1,0 +1,206 @@
+# Google Workspace readiness template (design §3.11).
+template: google
+version: 1.0.0
+extends: base@1
+display_name: Google Workspace
+connector_types: [google]
+role: account_source
+default_correlation_key: id
+default_hr_id_attribute: externalIds.organization
+host_allowlist: ["*.googleapis.com", oauth2.googleapis.com]
+required_attributes:
+  user: [id, primaryEmail, suspended, creationTime, orgUnitPath]
+  group: [id, email, name]
+recommended_attributes:
+  user: [externalIds.organization, lastLoginTime]
+items:
+  - id: gws.sa.dedicated
+    title: Dedicated service account in a dedicated Google Cloud project
+    category: access
+    level: required
+    why: "Shared projects share keys and quotas."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Create a Google Cloud project for Tessera."
+    config_fields: [credential]
+
+  - id: gws.sa.keyless
+    title: No downloadable JSON key, or a sealed key rotated within 90 days
+    category: access
+    level: recommended
+    why: "Exported keys are the commonest Google credential leak."
+    verify:
+      - kind: live
+        check: credential_type
+    remediation:
+      hint: "Use workload identity federation; the org policy can block key creation."
+    config_fields: [credential]
+
+  - id: gws.dwd.scopes
+    title: Domain-wide delegation grants only read scopes
+    category: access
+    level: required
+    why: "Delegation is domain-wide: an extra write or Gmail scope is a tenant-wide grant."
+    verify:
+      - kind: live
+        check: dwd_scopes
+        params: { allowed: [admin.directory.user.readonly, admin.directory.group.readonly, admin.directory.group.member.readonly, admin.directory.orgunit.readonly, admin.directory.rolemanagement.readonly, admin.reports.audit.readonly] }
+    remediation:
+      hint: "Edit the client's scopes under Security, API controls."
+    config_fields: [credential, customer]
+
+  - id: gws.dwd.subject
+    title: Impersonated admin is a dedicated user with a custom read-only admin role
+    category: access
+    level: required
+    why: "Effective access is the scopes intersected with the subject's privileges."
+    verify:
+      - kind: live
+        check: subject_roles
+    remediation:
+      hint: "Create a read-only role and a dedicated user."
+    depends_on: [gws.dwd.scopes]
+    config_fields: [credential, customer]
+
+  - id: gws.customer
+    title: Customer (my_customer) and every secondary domain included
+    category: scope
+    level: required
+    why: "Users on secondary domains are otherwise missed."
+    verify:
+      - kind: live
+        check: domains_list
+    remediation:
+      hint: "Automatic; check the domain list."
+    depends_on: [gws.dwd.subject]
+    config_fields: [customer, domain]
+
+  - id: gws.scope.ou
+    title: Org units in scope selected; counts reconcile
+    category: scope
+    level: recommended
+    why: "OU scoping misses moved users."
+    verify:
+      - kind: live
+        check: ou_list
+      - kind: data
+        check: count_match
+    remediation:
+      hint: "Select the org units."
+    depends_on: [gws.customer]
+    config_fields: [base_dns, expected_counts]
+
+  - id: gws.key.id
+    title: Numeric user id as key; primaryEmail and aliases change
+    category: identity_keys
+    level: required
+    why: "Renames break correlation."
+    verify:
+      - kind: data
+        check: key_unique
+        params: { attr: id }
+    remediation:
+      hint: "Select id as the key."
+    depends_on: [base.correlation.key]
+    config_fields: [correlation_key]
+
+  - id: gws.key.employee
+    title: externalIds (type organization) or employeeId mapped to the HR worker id
+    category: identity_keys
+    level: recommended
+    why: "Tier-1 correlation needs it."
+    verify:
+      - kind: data
+        check: fill_rate
+        params: { attr: externalIds.organization, min: 0.95 }
+    remediation:
+      hint: "Populate it from HR."
+    config_fields: [hr_id_attribute]
+
+  - id: gws.status
+    title: suspended and archived mapped; deleted users treated as deleted
+    category: account_status
+    level: required
+    why: "Suspended users look active otherwise."
+    verify:
+      - kind: data
+        check: status_mapped
+    remediation:
+      hint: "Automatic."
+
+  - id: gws.lastlogin
+    title: lastLoginTime used (1970-01-01 means never)
+    category: account_status
+    level: recommended
+    why: "Needed for staleness."
+    verify:
+      - kind: data
+        check: attr_present
+        params: { attr: lastLoginTime }
+    remediation:
+      hint: "Automatic."
+
+  - id: gws.groups.members
+    title: Nested groups, external members and CUSTOMER-type members resolved
+    category: groups
+    level: required
+    why: "External members and whole-domain grants are invisible otherwise."
+    verify:
+      - kind: data
+        check: member_resolution
+        params: { max_unresolved: 0.01 }
+    remediation:
+      hint: "Automatic."
+
+  - id: gws.roles
+    title: Admin role assignments read; super admins tagged privileged
+    category: groups
+    level: required
+    why: "Super admin is full tenant control."
+    verify:
+      - kind: live
+        check: roles_readable
+      - kind: data
+        check: privileged_unexpected
+    remediation:
+      hint: "Add the role-management read scope."
+    depends_on: [gws.dwd.subject]
+    config_fields: [credential, privileged_expected]
+
+  - id: gws.quota
+    title: Directory API quota headroom; exponential backoff on rate-limit errors
+    category: change_tracking
+    level: recommended
+    why: "Quota exhaustion yields partial snapshots."
+    verify:
+      - kind: live
+        check: rate_headroom
+        params: { min_remaining: 0.5 }
+    remediation:
+      hint: "Request a quota increase or lower concurrency."
+    depends_on: [gws.dwd.subject]
+
+  - id: gws.incremental
+    title: Incremental from Reports API admin activity, with a daily full sync
+    category: change_tracking
+    level: recommended
+    why: "Directory API list calls have no change filter for users."
+    verify:
+      - kind: live
+        check: reports_readable
+    remediation:
+      hint: "Add the audit read scope."
+    depends_on: [gws.dwd.scopes]
+
+  - id: gws.2sv
+    title: isEnrolledIn2Sv and isEnforcedIn2Sv captured
+    category: data_quality
+    level: optional
+    why: "Feeds MFA coverage findings."
+    verify:
+      - kind: data
+        check: attr_present
+        params: { attr: isEnrolledIn2Sv }
+    remediation:
+      hint: "Automatic."

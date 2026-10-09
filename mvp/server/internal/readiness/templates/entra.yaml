@@ -1,0 +1,227 @@
+# Entra ID readiness template (design §3.9).
+template: entra
+version: 1.0.0
+extends: base@1
+display_name: Microsoft Entra ID
+connector_types: [entra]
+role: account_source
+default_correlation_key: id
+default_hr_id_attribute: employeeId
+host_allowlist: [login.microsoftonline.com, graph.microsoft.com, login.microsoftonline.us, graph.microsoft.us, login.chinacloudapi.cn, microsoftgraph.chinacloudapi.cn]
+required_attributes:
+  user: [id, userPrincipalName, accountEnabled, userType, createdDateTime, mail]
+  group: [id, displayName, securityEnabled, mailEnabled]
+recommended_attributes:
+  user: [employeeId]
+items:
+  - id: entra.app.dedicated
+    title: Dedicated single-tenant app registration for Tessera
+    category: access
+    level: required
+    why: "Shared apps blur accountability and over-grant."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Register a new single-tenant app."
+    config_fields: [tenant_id, credential]
+
+  - id: entra.app.credential
+    title: Certificate credential or workload identity federation; no client secret
+    category: access
+    level: recommended
+    why: "Secrets leak and are copied; certificates and federation are bound to the holder."
+    verify:
+      - kind: live
+        check: credential_type
+    remediation:
+      hint: "Upload a certificate and remove client secrets."
+    depends_on: [entra.tenant]
+    config_fields: [credential]
+
+  - id: entra.tenant
+    title: Tenant id (a GUID) and cloud correct; token acquired
+    category: access
+    level: required
+    why: "A wrong authority silently connects to a different tenant or cloud."
+    verify:
+      - kind: live
+        check: token_acquire
+    remediation:
+      hint: "Copy the tenant id from the Overview page."
+    config_fields: [tenant_id, cloud, credential]
+
+  - id: entra.perms.readonly
+    title: Application permissions limited to the read-only set; no ReadWrite permission
+    category: access
+    level: required
+    why: "Decoding the token's roles claim is exact, read-only proof of least privilege."
+    verify:
+      - kind: live
+        check: token_roles
+        params: { allowed: [User.Read.All, Group.Read.All, GroupMember.Read.All, AuditLog.Read.All, RoleManagement.Read.Directory, Application.Read.All] }
+    remediation:
+      hint: "Remove write permissions and re-consent."
+    depends_on: [entra.tenant]
+    config_fields: [tenant_id, credential]
+
+  - id: entra.perms.consent
+    title: Admin consent granted (the roles claim is not empty)
+    category: access
+    level: required
+    why: "Without consent every call returns 403."
+    verify:
+      - kind: live
+        check: token_roles
+    remediation:
+      hint: "Grant admin consent."
+    depends_on: [entra.tenant]
+    config_fields: [tenant_id, credential]
+
+  - id: entra.key.objectid
+    title: Object id as key; not UPN or mail
+    category: identity_keys
+    level: required
+    why: "UPNs change; mail is not unique and can be set by others (nOAuth)."
+    verify:
+      - kind: data
+        check: key_unique
+        params: { attr: id }
+    remediation:
+      hint: "Select id as the key."
+    depends_on: [base.correlation.key]
+    config_fields: [correlation_key]
+
+  - id: entra.key.employeeid
+    title: employeeId mapped to the HR worker id
+    category: identity_keys
+    level: recommended
+    why: "Often empty in cloud-only tenants, which pushes correlation to email proposals."
+    verify:
+      - kind: data
+        check: fill_rate
+        params: { attr: employeeId, min: 0.95 }
+    remediation:
+      hint: "Populate employeeId from HR provisioning."
+    config_fields: [hr_id_attribute]
+
+  - id: entra.hybrid.link
+    title: Synced users linked to the AD connection (onPremisesImmutableId, onPremisesSecurityIdentifier)
+    category: identity_keys
+    level: recommended
+    why: "One person gets two correlations otherwise."
+    verify:
+      - kind: data
+        check: cross_link_rate
+        params: { attr: onPremisesImmutableId, other_type: ad, other_attr: objectGUID, min: 0.98 }
+    remediation:
+      hint: "Applies when the tenant is hybrid."
+    depends_on: [entra.key.objectid]
+    applies_when: { config_flag: hybrid }
+    config_fields: [hybrid]
+
+  - id: entra.status.enabled
+    title: accountEnabled mapped; soft-deleted users treated as deleted
+    category: account_status
+    level: required
+    why: "Deleted users are absent from /users but restorable for 30 days."
+    verify:
+      - kind: data
+        check: status_mapped
+    remediation:
+      hint: "Automatic."
+
+  - id: entra.status.signin
+    title: signInActivity readable (AuditLog.Read.All and Entra ID P1 or P2)
+    category: account_status
+    level: recommended
+    why: "Without it there is no staleness."
+    verify:
+      - kind: live
+        check: signin_activity_available
+    remediation:
+      hint: "Add the permission or licence, or accept and use app-level signals."
+    depends_on: [entra.perms.readonly]
+
+  - id: entra.guests
+    title: Guests classified, linked to sponsors and never correlated to employees by email
+    category: identity_keys
+    level: required
+    why: "Guests matched to employees by email gain the employee's lifecycle."
+    verify:
+      - kind: data
+        check: guest_classification
+    remediation:
+      hint: "Automatic; see the guest design."
+    depends_on: [entra.key.objectid]
+
+  - id: entra.groups.transitive
+    title: Nested membership resolved; dynamic rules captured; role-assignable groups privileged
+    category: groups
+    level: required
+    why: "Effective membership (D2 M3)."
+    verify:
+      - kind: data
+        check: nesting_resolved
+    remediation:
+      hint: "Automatic."
+
+  - id: entra.groups.types
+    title: Security, Microsoft 365, mail-enabled security and distribution groups distinguished
+    category: groups
+    level: recommended
+    why: "Distribution lists grant no access and should not be reviewed as such."
+    verify:
+      - kind: data
+        check: group_types
+    remediation:
+      hint: "Automatic."
+
+  - id: entra.roles
+    title: Directory roles and PIM eligible and active assignments read; privileged roles tagged
+    category: groups
+    level: required
+    why: "Eligible PIM roles are standing privilege in waiting."
+    verify:
+      - kind: live
+        check: roles_readable
+      - kind: data
+        check: privileged_unexpected
+    remediation:
+      hint: "Add RoleManagement.Read.Directory."
+    depends_on: [entra.perms.readonly]
+    config_fields: [credential, privileged_expected]
+
+  - id: entra.sync.delta
+    title: Delta queries for users and groups; deltaLink stored; HTTP 410 forces a full sync
+    category: change_tracking
+    level: required
+    why: "Full Graph scans of large tenants are slow and throttled."
+    verify:
+      - kind: live
+        check: delta_capable
+    remediation:
+      hint: "Automatic."
+    depends_on: [entra.perms.readonly]
+
+  - id: entra.ratelimit
+    title: Throttling honoured; no throttling observed during validation
+    category: change_tracking
+    level: recommended
+    why: "Throttling during sync means partial snapshots."
+    verify:
+      - kind: live
+        check: rate_headroom
+        params: { min_remaining: 0.5 }
+    remediation:
+      hint: "Lower concurrency."
+    depends_on: [entra.perms.readonly]
+
+  - id: entra.scope.admin_units
+    title: If scoped to administrative units, the units are listed and counts reconcile
+    category: scope
+    level: optional
+    why: "AU-scoped deployments miss users outside the units."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "List the administrative units."
