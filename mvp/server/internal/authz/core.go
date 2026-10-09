@@ -49,7 +49,7 @@ const (
 
 var outcomeNames = []string{"", "allow", "deny", "conditional"}
 
-func (o Outcome) String() string                { return EnumName(o, outcomeNames) }
+func (o Outcome) String() string               { return EnumName(o, outcomeNames) }
 func (o Outcome) MarshalText() ([]byte, error) { return marshalEnum(o, outcomeNames, "outcome") }
 func (o *Outcome) UnmarshalText(b []byte) (err error) {
 	*o, err = ParseEnum[Outcome](string(b), outcomeNames, "outcome")
@@ -67,7 +67,7 @@ const (
 
 var denyKindNames = []string{"", "explicit", "implicit", "guardrail"}
 
-func (k DenyKind) String() string                { return EnumName(k, denyKindNames) }
+func (k DenyKind) String() string               { return EnumName(k, denyKindNames) }
 func (k DenyKind) MarshalText() ([]byte, error) { return marshalEnum(k, denyKindNames, "deny kind") }
 func (k *DenyKind) UnmarshalText(b []byte) (err error) {
 	*k, err = ParseEnum[DenyKind](string(b), denyKindNames, "deny kind")
@@ -85,7 +85,7 @@ const (
 
 var fidelityNames = []string{"", "exact", "approximate", "unsupported"}
 
-func (f Fidelity) String() string                { return EnumName(f, fidelityNames) }
+func (f Fidelity) String() string               { return EnumName(f, fidelityNames) }
 func (f Fidelity) MarshalText() ([]byte, error) { return marshalEnum(f, fidelityNames, "fidelity") }
 func (f *Fidelity) UnmarshalText(b []byte) (err error) {
 	*f, err = ParseEnum[Fidelity](string(b), fidelityNames, "fidelity")
@@ -110,7 +110,7 @@ const (
 
 var qualifierNames = []string{"", "ForAllValues", "ForAnyValue"}
 
-func (q Qualifier) String() string                { return EnumName(q, qualifierNames) }
+func (q Qualifier) String() string               { return EnumName(q, qualifierNames) }
 func (q Qualifier) MarshalText() ([]byte, error) { return marshalEnum(q, qualifierNames, "qualifier") }
 func (q *Qualifier) UnmarshalText(b []byte) (err error) {
 	*q, err = ParseEnum[Qualifier](string(b), qualifierNames, "qualifier")
