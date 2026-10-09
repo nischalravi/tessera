@@ -103,6 +103,11 @@ Status of the current MVP (`mvp/`): **Have** = working against demo data, **Part
 | InCommon/eduGAIN federation for external identities (metadata, R&S, Sirtfi, REFEDS MFA and RAF) | None | Build on the Phase 0 SAML SP | 2 | guest design §6.6 |
 | B2B partner organizations: delegated partner admins, IdP routing, partner SCIM, agreement expiry | None | Build | 3 | guest design §11 GU-14, D1·S16 |
 | Hosted credential service for guests at customers without a suitable IdP | None | Embed (Ory/Keycloak) or build on go-webauthn | 3 | guest design §7.1, D1·C19 |
+| Deployment readiness checklists per connector type (AD, LDAP, Entra, Okta, Google, Workday, SCIM): versioned templates, Required/Recommended/Optional items, attestation, skip-with-reason in the audit ledger, no downgrades of Required items | None | Build | 2 (MVP slice on demo connectors first) | [deployment readiness design](../design/deployment-readiness.md) §3, D2·M2–M3 |
+| Gated connection lifecycle (draft → ready to validate → validated → dry-run reconciled → active, plus degraded), enforced server-side | None | Build | 2 | deployment readiness §4 |
+| Safe, read-only live validation (bind, TLS chain, DN existence, per-class read rights, fill rate, incremental sync, rate-limit headroom) and the on-prem Directory Agent with a local target allowlist | None | Build | 2 (agent and real checks need test directories) | deployment readiness §5, Phase 0 §4 I3 |
+| Dry-run reconciliation into a staging snapshot: orphans, people without accounts, duplicate correlations, sparse attributes, out-of-scope groups, leavers and disabled accounts with access, stale accounts, unexpected privileged members, unowned service accounts, with impact and probable cause | Partial (orphan NHIs, missed-leaver demo data) | Build | 2 | deployment readiness §6, D4·M2, M9 |
+| Deployment health analytics: explainable readiness score per connection and tenant, ranked needs-attention, skipped recommendations, drift since activation, scheduled re-runs, evidence export | None | Build | 2 | deployment readiness §7, D4·M22–M23 |
 
 ### D. Privileged access, JIT and non-human identity
 
@@ -212,6 +217,7 @@ The wedge, done correctly on one cloud before going wide.
 - Native groups with Grouper parity (engine, privileges, policy groups as code, loaders, verified provisioning, PIT history, Directory → Groups) and the Grouper import and cut-over connector. Design: [groups-grouper-parity.md](../design/groups-grouper-parity.md).
 - Guest, applicant, pre-hire and partner identities with sponsorship, identity matching and account claim. Design: [guest-accounts-and-claim.md](../design/guest-accounts-and-claim.md).
 - Phase 2 parity gaps from section G: notifications, organizations, application onboarding, datasets, entitlement rules, certificates.
+- Deployment readiness for every connection: checklists, gated activation, dry-run reconciliation and deployment health. The MVP slice can be built before Phase 0 against the demo connectors. Design: [deployment-readiness.md](../design/deployment-readiness.md).
 
 **Exit:** a SOC 2 auditor-style walkthrough can reproduce a review population and trace every revocation to a verified removal. A university pilot runs its access policy groups natively in Tessera with effective memberships matching Grouper for 7 days, and a sponsored contractor and an InCommon partner each complete the claim flow at their required IAL and AAL.
 
