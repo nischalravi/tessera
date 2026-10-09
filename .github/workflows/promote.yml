@@ -1,0 +1,63 @@
+name: Promote
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Promote into"
+        required: true
+        type: choice
+        options: [test, prod]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  open-promotion-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Open promotion PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET: ${{ inputs.target }}
+        run: |
+          set -euo pipefail
+          if [ "$TARGET" = "test" ]; then SOURCE="dev"; else SOURCE="test"; fi
+
+          if [ -n "$(gh pr list --base "$TARGET" --head "$SOURCE" --state open --json number --jq '.[].number')" ]; then
+            echo "A promotion PR from $SOURCE to $TARGET is already open."
+            gh pr list --base "$TARGET" --head "$SOURCE" --state open
+            exit 0
+          fi
+
+          git fetch origin "$SOURCE" "$TARGET"
+          COUNT=$(git rev-list --count "origin/$TARGET..origin/$SOURCE")
+          if [ "$COUNT" = "0" ]; then
+            echo "$TARGET is already up to date with $SOURCE."
+            exit 0
+          fi
+
+          {
+            echo "## Promotion: \`$SOURCE\` → \`$TARGET\`"
+            echo
+            echo "$COUNT commits. Merge only after CI is green on \`$SOURCE\` and the QA checklist below is done."
+            echo
+            echo "### Changes"
+            git log --no-merges --pretty='- %s (%h)' "origin/$TARGET..origin/$SOURCE"
+            echo
+            echo "### Checklist"
+            echo "- [ ] CI and security scan passed on the head commit of \`$SOURCE\`"
+            echo "- [ ] Every PR in this set was reviewed"
+            echo "- [ ] Migrations and config changes noted, with a rollback plan"
+            echo
+            echo "Comment \`@claude act as qa-engineer and run the promotion checks\` for an agent review."
+          } > body.md
+
+          gh pr create --base "$TARGET" --head "$SOURCE" \
+            --title "Promote $SOURCE → $TARGET ($(date -u +%Y-%m-%d))" \
+            --body-file body.md

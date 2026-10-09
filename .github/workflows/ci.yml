@@ -2,8 +2,12 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [dev, test, prod, main]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   backend:
