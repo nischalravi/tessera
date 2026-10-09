@@ -89,6 +89,20 @@ Status of the current MVP (`mvp/`): **Have** = working against demo data, **Part
 | SoD engine with mitigating controls | Partial (simple SoD policy) | Build; integrate Pathlock/SAP for ERP | 3 | D4·S18 |
 | Framework evidence packages (SOX, SOC 2, ISO, PCI, NIS2, DORA, OSCAL) and KPI dashboards | None | Build | 2 | D4·M22–M23 |
 | Connector SDK for the long tail | None | Build (open) | 3 | D4·S10 |
+| Native group management with full Grouper parity: folders, composites, direct/effective memberships with dates, Grouper's 22 privileges with inheritance, attribute framework, incremental membership engine at 100k+ groups | Partial (connected-system groups only) | Build | 2 | [groups design](../design/groups-grouper-parity.md) §§5–7 |
+| Policy groups as access-as-code: Cedar fragment over reference groups and identity attributes, PR membership diff | None | Build | 2 | groups design §8, D3·M5–M6 |
+| Group loaders (SQL, LDAP, CSV, HRIS/SIS, IdP groups) with failsafes that hold for approval | None | Build | 2 | groups design §9.1 |
+| Group provisioning with verify-by-reaggregation: LDAP/AD, SCIM 2.0, SQL, Entra, Google, Okta; long tail on the connector SDK | None | Build | 2 (long tail 3) | groups design §9.2, D4·M8 |
+| Group events, tamper-evident point-in-time history, attestation, deprovisioning, rules, reports | None | Build | 2 | groups design §10 |
+| Grouper connector: import, shadow-compare, per-folder cut-over, Grouper-WS-compatible read API | None | Build | 2 | groups design §11 |
+| Grouper permissions and limits (role × resource × action, allow/disallow, limits as Cedar conditions) | None | Build | 3 | groups design §10.10 |
+| Guest, applicant, pre-hire and partner identities: affiliations, sponsorship with sponsor policy, expiry, renewal, sponsor-leaver transfer, conversion without losing history | None | Build | 2 | [guest design](../design/guest-accounts-and-claim.md) §§3, 4, 8 |
+| Identity matching for intake: confidence tiers, review queue, reversible link/merge/unmerge, no auto-link from self-asserted intake | Partial (correlation row above) | Build | 2 | guest design §5, D4·M2 |
+| Account claim: single-use claim links and codes, enumeration resistance, NIST 800-63A-4 verification (A0, IAL1, IAL2), credential binding to home IdP or customer IdP, terms, recovery | None | Build | 2 | guest design §§6–7 |
+| Identity verification (IDV) vendors and on-site proofing agents for IAL2 claim | None | Integrate | 2 (moved from F) | guest design §6.3, D1·C18 |
+| InCommon/eduGAIN federation for external identities (metadata, R&S, Sirtfi, REFEDS MFA and RAF) | None | Build on the Phase 0 SAML SP | 2 | guest design §6.6 |
+| B2B partner organizations: delegated partner admins, IdP routing, partner SCIM, agreement expiry | None | Build | 3 | guest design §11 GU-14, D1·S16 |
+| Hosted credential service for guests at customers without a suitable IdP | None | Embed (Ory/Keycloak) or build on go-webauthn | 3 | guest design §7.1, D1·C19 |
 
 ### D. Privileged access, JIT and non-human identity
 
@@ -123,16 +137,40 @@ Status of the current MVP (`mvp/`): **Have** = working against demo data, **Part
 | MCP gateway enforcement plugins, tool-definition pinning | None | Integrate with gateways | 5 | D6·S13 |
 | Permission-aware RAG filtering | None | Integrate OpenFGA or SpiceDB; expose via AuthZEN | 5 | D3·C17, D6·S16 |
 
+### G. IGA parity gaps found in the Saviynt coverage review
+
+From [`docs/design/saviynt-feature-coverage.md`](../design/saviynt-feature-coverage.md). Row numbers refer to that checklist.
+
+| Capability | MVP | Build / integrate | Phase | Source |
+|---|---|---|---|---|
+| Notification management: email templates, email history and delivery status (SMTP sender is Phase 0) | None | Build | 2 | rows 88, 108 |
+| Organizations: hierarchy, owners, organization-scoped admins, organization update rules | Partial (UI Preview) | Build | 2 | rows 28, 72, 76 |
+| Application onboarding workflow with owner questionnaires | None | Build | 2 | rows 46, 47 |
+| Datasets (lookup tables) for rules and forms | None | Build | 2 | row 73 |
+| Entitlement update rules (owner, risk and flags by pattern) | None | Build | 2 | row 77 |
+| Saved request templates and approval delegation rules | Partial | Build | 2 | rows 5, 30 |
+| SFTP file drops for inbound imports | None | Build | 2 | row 95 |
+| Certificate inventory and expiry alerts for Tessera's own SAML, connector and agent certificates | None | Build | 2 | row 105 |
+| Password management for target accounts: self-service change, help-desk reset with verification, password policies, sync (orchestrated through connectors and IdPs; Tessera stores no passwords) | None | Build orchestration; integrate IdPs | 3 | rows 17, 18, 20, 21, 71 |
+| Role engineering workbench: mining, entitlement discovery, role-access mismatch, impact preview, output as policy-as-code | Partial (role trims) | Build | 3 (moved from F) | rows 36–39, D4·C20 |
+| Configurable analytics and controls with run history, configurable dashboards, permission-checked data analyzer | None | Build | 3 | rows 33, 34, 89, 90, 106 |
+| Application audit and privileged activity log ingestion and search | Partial (usage aggregates) | Build | 3 | rows 43, 44 |
+| SaaS license management and reclamation | None | Build | 3 | row 41 |
+| Tenant customization: branding, labels and localization, navigation per role | None | Build | 3 | rows 96, 97, 99 |
+| Configuration transport between environments (export/import packages with diff and approval) | Partial (policy in Git) | Build | 3 | rows 109, 110 |
+| Archival and retention library for closed requests and campaigns | None | Build | 3 | row 84 |
+| Tenant-facing log viewer for connectors and jobs | None | Build | 3 | row 103 |
+
 ### F. Later expansion
 
 | Capability | Build / integrate | Source |
 |---|---|---|
 | Kubernetes RBAC effective permissions and admission policy | Build | D3·C18 |
 | Application-level ReBAC (Zanzibar) | Integrate OpenFGA or SpiceDB | D3·C16 |
-| Identity verification for recovery and contractor onboarding (IDV vendors, OpenID4VP, mDL) | Integrate | D1·C18, D2·C24 |
+| Identity verification for recovery (IDV vendors, OpenID4VP, mDL); guest and contractor IAL2 proofing moved to Phase 2 (section C) | Integrate | D1·C18, D2·C24 |
 | Hosted login on-ramp for companies without an IdP | Embed Ory or Keycloak | D1·C19 |
 | Device posture as policy attributes (Intune, Jamf, CrowdStrike) | Integrate | D1·S12 |
-| Role mining that outputs policy-as-code proposals | Build | D4·C20 |
+| Role mining that outputs policy-as-code proposals (moved to Phase 3, section G) | Build | D4·C20 |
 | CISA ZTMM v2 posture scoring | Build | D3·C19, D6·S18 |
 | Intent-based authorization for agents | Build | D6·C19 |
 
@@ -171,8 +209,11 @@ The wedge, done correctly on one cloud before going wide.
 - Access requests with risk-tiered approvals in Slack.
 - Certification campaigns with frozen populations, auto-decisions with sampled QA, evidence exports for SOC 2 and SOX.
 - OAuth grant inventory, workload-federation trust analysis, escalation-path analysis, Terraform PR linting.
+- Native groups with Grouper parity (engine, privileges, policy groups as code, loaders, verified provisioning, PIT history, Directory → Groups) and the Grouper import and cut-over connector. Design: [groups-grouper-parity.md](../design/groups-grouper-parity.md).
+- Guest, applicant, pre-hire and partner identities with sponsorship, identity matching and account claim. Design: [guest-accounts-and-claim.md](../design/guest-accounts-and-claim.md).
+- Phase 2 parity gaps from section G: notifications, organizations, application onboarding, datasets, entitlement rules, certificates.
 
-**Exit:** a SOC 2 auditor-style walkthrough can reproduce a review population and trace every revocation to a verified removal.
+**Exit:** a SOC 2 auditor-style walkthrough can reproduce a review population and trace every revocation to a verified removal. A university pilot runs its access policy groups natively in Tessera with effective memberships matching Grouper for 7 days, and a sponsored contractor and an InCommon partner each complete the claim flow at their required IAL and AAL.
 
 ### Phase 3: JIT, privileged access and response (about 8 weeks)
 
@@ -180,6 +221,8 @@ The wedge, done correctly on one cloud before going wide.
 - Credentials bound to the login session; break-glass.
 - SSF/CAEP receiver; detections with one-click response.
 - Azure and GCP evaluators; SoD engine.
+- Grouper permissions and limits, long-tail group provisioners, B2B partner organizations, hosted guest credential service.
+- Section G Phase 3 gaps: password management orchestration, role engineering, analytics and data analyzer, activity logs, license management, customization, configuration transport, archival.
 
 **Exit:** standing prod admin on the sandbox drops to zero, and a revoked Okta session kills the matching AWS session in under 60 seconds.
 
