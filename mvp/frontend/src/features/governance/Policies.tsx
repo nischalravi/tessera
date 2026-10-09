@@ -1,8 +1,10 @@
-import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
-import { FlaskConical, ShieldCheck } from "lucide-react";
+import { useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { ClipboardCheck, FlaskConical, ShieldCheck } from "lucide-react";
 import { Group, IdentityDetail, IdentityRow, Policy, SimResult, Violation, simulate, useApi } from "../../api";
-import { Badge, Button, Callout, DataTable, EmptyState, Loading, Page, Sev, SimulationView } from "../../components";
+import { useIdentityActions } from "../../app/actions";
+import { Badge, Button, Callout, DataTable, EmptyState, Loading, Page, Sev, SimulationView, Tabs, useSelected } from "../../components";
+import { ViolationPanel } from "../directory/Panels";
 
 function Simulator() {
   const { data: idents } = useApi<IdentityRow[]>("/identities?status=active");
@@ -71,55 +73,98 @@ function Simulator() {
   );
 }
 
+type View = "violations" | "policies" | "simulate";
+
 export function Policies() {
-  const { data: policies, error } = useApi<Policy[]>("/policies");
-  const { data: violations, error: vErr } = useApi<Violation[]>("/violations");
-  const [pid, setPid] = useState("");
+  const { data: policies, error, reload: reloadPolicies } = useApi<Policy[]>("/policies");
+  const { data: violations, error: vErr, reload } = useApi<Violation[]>("/violations");
+  const [params, setParams] = useSearchParams();
+  const [selected, setSelected] = useSelected();
+  const acts = useIdentityActions();
+  const nav = useNavigate();
   const [yaml, setYaml] = useState<string | null>(null);
-  const rows = useMemo(() => (violations ? violations.filter((v) => !pid || v.policy_id === pid) : null), [violations, pid]);
-  const crumbs: [string, string?][] = [["Governance", "/governance"], ["Policies & violations"]];
-  if (!policies) return <Page title="Policies & violations" crumbs={crumbs}><Loading error={error} kind="page" /></Page>;
+  const view = (params.get("view") ?? "violations") as View;
+  const policyFilter = params.get("policy") ?? "";
+  const setView = (v: View, policy?: string) => {
+    const next = new URLSearchParams();
+    if (v !== "violations") next.set("view", v);
+    if (policy) next.set("policy", policy);
+    setParams(next, { replace: true });
+  };
+  const open = violations?.find((v) => v.key === selected);
+  const crumbs: [string, string?][] = [["Protection"], ["Policies & SoD"]];
+  const tabs = (
+    <Tabs<View> label="Policies" value={view} onChange={(v) => setView(v)} tabs={[
+      { id: "violations", label: `Violations${violations ? ` (${violations.length})` : ""}` },
+      { id: "policies", label: `Policies${policies ? ` (${policies.length})` : ""}` },
+      { id: "simulate", label: "What-if simulation" },
+    ]} />
+  );
+  if (!policies) return <Page title="Policies & SoD" crumbs={crumbs} tabs={tabs}><Loading error={error} kind="page" /></Page>;
+  const sevOrder = ["low", "medium", "high", "critical"];
   return (
-    <Page title="Policies & violations" crumbs={crumbs} sub={<>Policies are YAML files in <code>server/policies/</code>, evaluated against the effective-permission graph. Edit a file and reload; no restart needed.</>}>
-      <div className="grid g3">
-        {policies.map((p) => (
-          <div key={p.id} className="card stack-sm" style={pid === p.id ? { boxShadow: "0 0 0 2px var(--accent)" } : undefined}>
-            <div className="spread"><Sev s={p.severity} /><Badge tone={p.violations ? "critical" : "ok"}>{p.violations} violation{p.violations === 1 ? "" : "s"}</Badge></div>
-            <b>{p.name}</b>
-            <div className="small muted">{p.description}</div>
-            <div className="spread">
-              <code className="xs faint">{p.type}</code>
-              <div className="row tight">
-                <Button size="sm" variant="ghost" aria-expanded={yaml === p.id} onClick={() => setYaml(yaml === p.id ? null : p.id)}>{yaml === p.id ? "Hide" : "View"} YAML</Button>
-                <Button size="sm" aria-pressed={pid === p.id} onClick={() => setPid(pid === p.id ? "" : p.id)}>{pid === p.id ? "Show all" : "Filter"}</Button>
-              </div>
-            </div>
-            {yaml === p.id && <pre className="yaml">{p.source}</pre>}
-          </div>
-        ))}
-      </div>
-      <div className="grid g21 mt">
-        <div className="stack-sm">
-          <h2>Violations{pid && <span className="muted"> in {policies.find((p) => p.id === pid)?.name}</span>}</h2>
+    <Page
+      title="Policies & SoD"
+      count={violations ? `${violations.length} open violation${violations.length === 1 ? "" : "s"}` : undefined}
+      crumbs={crumbs}
+      tabs={tabs}
+      sub={view === "policies" ? <>Policies are YAML files in <code>server/policies/</code>, evaluated against the effective-permission graph. Edit a file and reload; no restart needed.</> : undefined}
+    >
+      {view === "violations" && (
+        <>
           <DataTable
+            key={policyFilter}
             id="violations"
-            rows={rows}
+            rows={violations}
             error={vErr}
             rowKey={(v) => v.key}
             columns={[
-              { id: "sev", header: "Severity", sort: (v) => ["low", "medium", "high", "critical"].indexOf(v.severity), csv: (v) => v.severity, cell: (v) => <Sev s={v.severity} /> },
-              { id: "who", header: "Identity", sort: (v) => v.identity_name, cell: (v) => (v.identity_id ? <Link to={`/directory/identities/${v.identity_id}`}>{v.identity_name}</Link> : v.identity_name) },
-              { id: "msg", header: "Finding", csv: (v) => v.message, cell: (v) => <span className="small">{v.message}{v.evidence.slice(0, 2).map((e, i) => <span key={i} className="xs faint sys" style={{ display: "block" }}>{e}</span>)}</span> },
+              { id: "who", header: "Identity", sort: (v) => v.identity_name, cell: (v) => <span className="name-link">{v.identity_name}</span> },
+              { id: "msg", header: "Finding", csv: (v) => v.message, cell: (v) => <span>{v.message}<span className="xs faint" style={{ display: "block" }}>{v.policy_name}</span></span> },
+              { id: "sev", header: "Severity", sort: (v) => sevOrder.indexOf(v.severity), csv: (v) => v.severity, cell: (v) => <Sev s={v.severity} /> },
             ]}
             initialSort={["sev", -1]}
+            initialFilters={policyFilter ? { policy: policyFilter } : undefined}
             searchText={(v) => `${v.identity_name} ${v.message} ${v.policy_name}`}
             searchPlaceholder="Search findings…"
-            filters={[{ id: "sev", label: "Severity", options: ["critical", "high", "medium", "low"].map((s) => ({ value: s, label: s })), get: (v) => v.severity }]}
+            filters={[
+              { id: "sev", label: "Severity", options: ["critical", "high", "medium", "low"].map((s) => ({ value: s, label: s[0].toUpperCase() + s.slice(1) })), get: (v) => v.severity },
+              { id: "policy", label: "Policy", options: policies.map((p) => ({ value: p.id, label: p.name })), get: (v) => v.policy_id },
+            ]}
+            commands={[
+              { label: "Start review", icon: <ClipboardCheck size={16} />, onClick: () => acts.startCampaign() },
+              { label: "Simulate a fix", icon: <FlaskConical size={16} />, onClick: () => setView("simulate") },
+            ]}
+            onRefresh={() => { reload(); reloadPolicies(); }}
+            bulkActions={[{ label: "Review this identity", icon: <ClipboardCheck size={16} />, run: (vs) => { const id = vs.find((v) => v.identity_id)?.identity_id; if (id) nav(`/governance/reviews?identity=${id}`); } }]}
+            rowLabel={(v) => `${v.identity_name}: ${v.policy_name}`}
+            onRowClick={(v) => setSelected(v.key)}
+            activeKey={selected}
             empty={<EmptyState title="No violations" icon={<ShieldCheck size={18} />}>Every policy passes.</EmptyState>}
           />
+          {open && <ViolationPanel v={open} description={policies.find((p) => p.id === open.policy_id)?.description} onClose={() => setSelected(null)} />}
+        </>
+      )}
+      {view === "policies" && (
+        <div className="grid g3">
+          {policies.map((p) => (
+            <div key={p.id} className="card stack-sm">
+              <div className="spread"><Sev s={p.severity} /><Badge tone={p.violations ? "critical" : "ok"}>{p.violations} violation{p.violations === 1 ? "" : "s"}</Badge></div>
+              <b>{p.name}</b>
+              <div className="small muted">{p.description}</div>
+              <div className="spread">
+                <code className="xs faint">{p.type}</code>
+                <div className="row tight">
+                  <Button size="sm" variant="ghost" aria-expanded={yaml === p.id} onClick={() => setYaml(yaml === p.id ? null : p.id)}>{yaml === p.id ? "Hide" : "View"} YAML</Button>
+                  <Button size="sm" disabled={!p.violations} onClick={() => setView("violations", p.id)}>Show violations</Button>
+                </div>
+              </div>
+              {yaml === p.id && <pre className="yaml">{p.source}</pre>}
+            </div>
+          ))}
         </div>
-        <Simulator />
-      </div>
+      )}
+      {view === "simulate" && <div style={{ maxWidth: 820 }}><Simulator /></div>}
     </Page>
   );
 }

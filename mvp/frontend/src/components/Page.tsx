@@ -18,24 +18,65 @@ export function Breadcrumbs({ items }: { items: Crumb[] }) {
   );
 }
 
-export function Page({ title, crumbs = [], sub, actions, badge, children }: { title: ReactNode; crumbs?: Crumb[]; sub?: ReactNode; actions?: ReactNode; badge?: ReactNode; children: ReactNode }) {
+export function Page({ title, crumbs = [], sub, actions, badge, count, tabs, commands, children }: {
+  title: ReactNode;
+  /** Trail after "Home"; pass `false` for no breadcrumb (Home itself). */
+  crumbs?: Crumb[] | false;
+  sub?: ReactNode;
+  actions?: ReactNode;
+  badge?: ReactNode;
+  /** Muted count after the title, e.g. "88 identities". */
+  count?: ReactNode;
+  /** Sub-page tabs under the title. */
+  tabs?: ReactNode;
+  /** Command bar under the title (see CommandBar). */
+  commands?: ReactNode;
+  children: ReactNode;
+}) {
   useEffect(() => {
     if (typeof title === "string") document.title = `${title} · Tessera`;
   }, [title]);
   return (
     <div>
-      <Breadcrumbs items={crumbs} />
+      {crumbs !== false && <Breadcrumbs items={[["Home", "/"], ...(crumbs.length || typeof title !== "string" ? crumbs : [[title] as Crumb])]} />}
       <div className="page-head">
         <div className="grow">
           <div className="title-row">
             <h1>{title}</h1>
+            {count !== undefined && count !== null && <span className="count">{count}</span>}
             {badge}
           </div>
           {sub && <div className="sub">{sub}</div>}
         </div>
         {actions && <div className="actions">{actions}</div>}
       </div>
+      {tabs && <div className="page-tabs">{tabs}</div>}
+      {commands}
       {children}
+    </div>
+  );
+}
+
+export interface Command {
+  label: string;
+  icon?: ReactNode;
+  onClick?: () => void;
+  danger?: boolean;
+  disabled?: boolean;
+  title?: string;
+}
+
+/** Fluent-style command bar: flat icon+label buttons on one line, wrapping on narrow screens. */
+export function CommandBar({ items, end, label = "Commands" }: { items: (Command | null | false | undefined)[]; end?: ReactNode; label?: string }) {
+  return (
+    <div className="cmdbar" role="toolbar" aria-label={label}>
+      {items.filter((c): c is Command => !!c).map((c) => (
+        <button key={c.label} type="button" className={`cmd ${c.danger ? "danger" : ""}`} onClick={c.onClick} disabled={c.disabled} title={c.title}>
+          {c.icon}
+          {c.label}
+        </button>
+      ))}
+      {end && <><span className="spacer" />{end}</>}
     </div>
   );
 }

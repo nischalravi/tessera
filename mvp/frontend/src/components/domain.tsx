@@ -176,3 +176,13 @@ export function SimulationView({ r }: { r: SimResult }) {
     </div>
   );
 }
+
+/** Risk score (0-100) as a status pill: Critical, High, Medium or Low. */
+export function riskLevel(score: number | null | undefined): [string, Tone] {
+  const s = score ?? 0;
+  return s >= 70 ? ["Critical", "critical"] : s >= 40 ? ["High", "warning"] : s >= 20 ? ["Medium", "info"] : ["Low", "ok"];
+}
+export function RiskPill({ score }: { score: number | null | undefined }) {
+  const [label, tone] = riskLevel(score);
+  return <Badge tone={tone} title={`Risk score ${Math.round(score ?? 0)} of 100`}>{label}</Badge>;
+}

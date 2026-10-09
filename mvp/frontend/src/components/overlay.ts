@@ -23,6 +23,8 @@ export function useModal(ref: RefObject<HTMLElement>, onClose: () => void, opts:
     }
     const onKey = (e: KeyboardEvent) => {
       if (stack[stack.length - 1] !== me) return;
+      // an open dropdown inside the modal handles its own Escape first
+      if (e.key === "Escape" && (e.target as Element | null)?.closest?.('[role="menu"]')) return;
       if (e.key === "Escape") {
         e.stopPropagation();
         close.current();

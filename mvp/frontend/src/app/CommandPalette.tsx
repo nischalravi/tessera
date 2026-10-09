@@ -63,7 +63,8 @@ function Palette({ initial, onClose }: { initial: string; onClose: () => void })
   const identityActions = (i: IdentityRow): Entry[] => {
     const g = i.name;
     const list: Entry[] = [
-      { id: "ia-open", group: g, label: "Open profile", icon: <UserRound size={15} />, run: () => acts.open(i) },
+      { id: "ia-open", group: g, label: "Open details", icon: <UserRound size={15} />, run: () => nav(`/directory/${i.type === "human" ? "people" : "machine"}?selected=${i.id}`) },
+      { id: "ia-full", group: g, label: "Open full page", icon: <UserRound size={15} />, run: () => acts.open(i) },
       { id: "ia-graph", group: g, label: "Open in access graph", icon: <Network size={15} />, run: () => acts.openGraph(i) },
       { id: "ia-req", group: g, label: `Request access for ${i.name}`, icon: <ShoppingCart size={15} />, run: () => acts.requestFor(i) },
       { id: "ia-rev", group: g, label: "Review their access", icon: <ClipboardCheck size={15} />, run: () => acts.reviewAccess(i) },
@@ -82,8 +83,8 @@ function Palette({ initial, onClose }: { initial: string; onClose: () => void })
     { id: "a-graph", group: "Actions", label: "Open graph for…", icon: <Network size={15} />, keywords: "paths explorer", next: pickIdentity("Open graph for", people, (i) => acts.openGraph(i), "Open graph") },
     { id: "a-reqfor", group: "Actions", label: "Request access for someone…", icon: <KeyRound size={15} />, keywords: "on behalf", next: pickIdentity("Request access for", people, (i) => acts.requestFor(i), "Request") },
     { id: "a-role", group: "Actions", label: "Create role", icon: <Layers size={15} />, keywords: "new business role", hint: "Preview", run: () => nav("/directory/roles?new=1") },
-    { id: "a-import", group: "Actions", label: "Import users", icon: <Upload size={15} />, keywords: "csv upload bulk people", run: () => nav("/directory/people?import=1") },
-    { id: "a-joiner", group: "Actions", label: "Onboard a new person", icon: <UserRound size={15} />, keywords: "create user joiner hire new", run: () => nav("/directory/people?new=1") },
+    { id: "a-import", group: "Actions", label: "Bulk import users", icon: <Upload size={15} />, keywords: "csv upload bulk people", run: () => nav("/directory/people?import=1") },
+    { id: "a-joiner", group: "Actions", label: "New user (onboard a person)", icon: <UserRound size={15} />, keywords: "create user joiner hire new", run: () => nav("/directory/people?new=1") },
     { id: "a-theme", group: "Actions", label: resolved === "dark" ? "Switch to light theme" : "Switch to dark theme", icon: resolved === "dark" ? <Sun size={15} /> : <Moon size={15} />, keywords: "theme dark light appearance", run: () => setPref(resolved === "dark" ? "light" : "dark") },
     ...PERSONAS.filter((p) => p.id !== persona).map((p) => ({ id: `a-persona-${p.id}`, group: "Actions", label: `View as ${p.label.toLowerCase()}`, icon: <UserCog size={15} />, keywords: "persona switch role demo", run: () => setPersona(p.id) })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
