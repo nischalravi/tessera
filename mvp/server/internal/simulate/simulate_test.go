@@ -6,12 +6,19 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/simulate"
+	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/testkit"
 )
 
 func TestSimulation(t *testing.T) {
 	st, ids := testkit.Tiny(t)
-	c := testkit.Conn(st)
+	testkit.Read(t, st, func(c *store.TenantTx) error {
+		simulation(t, c, ids)
+		return nil
+	})
+}
+
+func simulation(t *testing.T, c *store.TenantTx, ids testkit.IDs) {
 	acct := func(k string) string { return graph.Key("account", ids["acct:"+k]) }
 	grp := func(k string) string { return graph.Key("group", ids["group:"+k]) }
 	bobAppr, err := c.EdgeBetween(acct("okta:bob"), grp("okta:payments-approvers"))

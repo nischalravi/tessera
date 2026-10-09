@@ -12,9 +12,12 @@
 //	TESSERA_CORS_ORIGINS  comma-separated browser origins allowed by CORS
 //	                      (default: the dev UI on localhost/127.0.0.1, port UI_PORT or 5173)
 //	TESSERA_NOW           freeze the clock at an ISO-8601 time (tests and demos)
-//	TESSERA_ENV           "dev" allows activating non-demo connector types before DR-10
+//	TESSERA_ENV           must be "dev" (run.sh sets it). Until authentication lands,
+//	                      the API serves one default tenant and refuses to start
+//	                      otherwise, so an unset variable fails closed.
+//	TESSERA_DEV_DEFAULT_TENANT  slug of that tenant (default larkspur)
 //	TESSERA_READINESS_SCENARIO  simulated validation scenario for demo connectors: gaps (default) or happy
-//	TESSERA_READINESS_DEMO      "off" skips seeding the demo Okta connection for Deployment health
+//	TESSERA_READINESS_DEMO      "off" skips seeding the demo Okta connection (larkspur only) for Deployment health
 package main
 
 import (
@@ -123,6 +126,13 @@ func policyFS() fs.FS {
 	return policies.FS
 }
 
+func envOr(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
+}
+
 func corsOrigins() []string {
 	if v := os.Getenv("TESSERA_CORS_ORIGINS"); v != "" {
 		var out []string
@@ -156,23 +166,30 @@ func seedDB(ctx context.Context, path string, clock timeutil.Clock, loader *poli
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, "==> seeding demo data (fictional company: Larkspur Labs)")
-	stats, err := seed.Run(ctx, st, conns, now, pols)
+	fmt.Fprintln(stdout, "==> seeding demo tenants: larkspur (fictional company: Larkspur Labs) and globex")
+	stats, err := seed.Run(ctx, st, now, pols, seed.DefaultTenants(conns, now))
 	if err != nil {
 		return err
 	}
-	discovery, err := ojson.Marshal(stats.Sync.Discovery.Object())
-	if err != nil {
-		return err
+	for _, ts := range stats {
+		discovery, err := ojson.Marshal(ts.Sync.Discovery.Object())
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Seeded Tessera tenant %s: %s usage=%d hris=%d jit=%d\n", ts.Tenant.Slug,
+			discovery, ts.Sync.Events.Usage, ts.Sync.Events.Hris, ts.Requests)
 	}
-	fmt.Fprintf(stdout, "Seeded Tessera in %.1fs: %s usage=%d hris=%d jit=%d\n", time.Since(start).Seconds(),
-		discovery, stats.Sync.Events.Usage, stats.Sync.Events.Hris, stats.Requests)
 	if os.Getenv("TESSERA_READINESS_DEMO") != "off" {
-		if err := seedReadinessDemo(ctx, st, clock); err != nil {
+		// The readiness demo is seeded for larkspur only: its Okta (demo)
+		// connection matches larkspur's demo connectors; globex is the
+		// sentinel tenant and starts with no connections.
+		if err := seedReadinessDemo(ctx, st, seed.LarkspurID, clock); err != nil {
 			return fmt.Errorf("readiness demo: %w", err)
 		}
-		fmt.Fprintln(stdout, "Seeded the deployment-readiness demo: Okta (demo) connection validated and dry-run reconciled")
+		fmt.Fprintf(stdout, "Seeded the deployment-readiness demo for tenant %s: Okta (demo) connection validated and dry-run reconciled\n",
+			seed.LarkspurSlug)
 	}
+	fmt.Fprintf(stdout, "Seeded Tessera in %.1fs\n", time.Since(start).Seconds())
 	return nil
 }
 
@@ -198,12 +215,16 @@ func serve(ctx context.Context, o options, clock timeutil.Clock, loader *policy.
 	if _, err := loader.Load(); err != nil { // fail fast on broken policy files
 		return err
 	}
+	tenant, err := st.DevDefaultTenant(ctx, os.Getenv("TESSERA_ENV"), envOr("TESSERA_DEV_DEFAULT_TENANT", seed.LarkspurSlug))
+	if err != nil {
+		return fmt.Errorf("no tenant to serve (authentication arrives in a later release): %w", err)
+	}
 	scenario := os.Getenv("TESSERA_READINESS_SCENARIO")
 	if scenario != "" && !slices.Contains(connectors.ScenarioNames(), scenario) {
 		return fmt.Errorf("TESSERA_READINESS_SCENARIO: unknown scenario %q (have %v)", scenario, connectors.ScenarioNames())
 	}
-	srv := api.New(api.Config{Store: st, Clock: clock, Policies: loader, Logger: logger, AllowedOrigins: corsOrigins(),
-		Env: os.Getenv("TESSERA_ENV"), ReadinessScenario: scenario})
+	srv := api.New(api.Config{Store: st, Tenant: tenant, Clock: clock, Policies: loader, Logger: logger,
+		AllowedOrigins: corsOrigins(), Env: os.Getenv("TESSERA_ENV"), ReadinessScenario: scenario})
 	httpSrv := &http.Server{
 		Addr:              o.addr,
 		Handler:           srv.Handler(),

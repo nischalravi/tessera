@@ -45,9 +45,18 @@ type fixture struct {
 	} `json:"response"`
 }
 
-// newSeededServer seeds a fresh database exactly as the recorder did and
-// returns a server on the frozen clock.
+// newSeededServer seeds a fresh database exactly as the recorder did (the
+// larkspur tenant only: integer ids are global across tenants, so a second
+// tenant's rows would shift the ids the fixtures recorded for rows the replay
+// creates) and returns a server for larkspur on the frozen clock.
 func newSeededServer(tb testing.TB) *Server {
+	tb.Helper()
+	return newSeededServerWith(tb, func(conns []connectors.Connector) []seed.Tenant {
+		return []seed.Tenant{seed.Larkspur(conns)}
+	})
+}
+
+func newSeededServerWith(tb testing.TB, tenants func([]connectors.Connector) []seed.Tenant) *Server {
 	tb.Helper()
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(tb.TempDir(), "parity.db"))
@@ -64,11 +73,11 @@ func newSeededServer(tb testing.TB) *Server {
 	if err != nil {
 		tb.Fatal(err)
 	}
-	if _, err := seed.Run(ctx, st, conns, FrozenNow, pols); err != nil {
+	if _, err := seed.Run(ctx, st, FrozenNow, pols, tenants(conns)); err != nil {
 		tb.Fatal(err)
 	}
 	return New(Config{
-		Store: st, Clock: timeutil.Frozen(FrozenNow), Policies: loader,
+		Store: st, Tenant: seed.LarkspurID, Clock: timeutil.Frozen(FrozenNow), Policies: loader,
 		Connectors: func(time.Time) ([]connectors.Connector, error) { return connectors.Load("demo", FrozenNow) },
 		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
@@ -214,39 +223,82 @@ func diff(path string, want, got any) string {
 	return ""
 }
 
+// replay checks one fixture against h.
+func replay(t *testing.T, h http.Handler, fx fixture) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, buildRequest(t, fx))
+	if rec.Code != fx.Response.Status {
+		t.Fatalf("status: want %d, got %d; body: %.400s", fx.Response.Status, rec.Code, rec.Body.String())
+	}
+	var wantStr string
+	if json.Unmarshal(fx.Response.Body, &wantStr) == nil { // text body (docs pages)
+		if got := rec.Body.String(); got != wantStr {
+			t.Fatalf("text body differs:\nwant %.300q\ngot  %.300q", wantStr, got)
+		}
+		return
+	}
+	want, err := ojson.Decode(fx.Response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := ojson.Decode(rec.Body.Bytes())
+	if err != nil {
+		t.Fatalf("response is not JSON: %v: %.300s", err, rec.Body.String())
+	}
+	if d := diff("$", normalize(want), normalize(got)); d != "" {
+		t.Fatal(d)
+	}
+}
+
 func TestParity(t *testing.T) {
 	fixtures := loadFixtures(t)
 	h := newSeededServer(t).Handler()
 	passed := 0
 	for _, fx := range fixtures {
-		ok := t.Run(fx.Name, func(t *testing.T) {
-			rec := httptest.NewRecorder()
-			h.ServeHTTP(rec, buildRequest(t, fx))
-			if rec.Code != fx.Response.Status {
-				t.Fatalf("status: want %d, got %d; body: %.400s", fx.Response.Status, rec.Code, rec.Body.String())
-			}
-			var wantStr string
-			if json.Unmarshal(fx.Response.Body, &wantStr) == nil { // text body (docs pages)
-				if got := rec.Body.String(); got != wantStr {
-					t.Fatalf("text body differs:\nwant %.300q\ngot  %.300q", wantStr, got)
-				}
-				return
-			}
-			want, err := ojson.Decode(fx.Response.Body)
-			if err != nil {
-				t.Fatal(err)
-			}
-			got, err := ojson.Decode(rec.Body.Bytes())
-			if err != nil {
-				t.Fatalf("response is not JSON: %v: %.300s", err, rec.Body.String())
-			}
-			if d := diff("$", normalize(want), normalize(got)); d != "" {
-				t.Fatal(d)
-			}
-		})
-		if ok {
+		if t.Run(fx.Name, func(t *testing.T) { replay(t, h, fx) }) {
 			passed++
 		}
 	}
 	t.Logf("parity: %d/%d fixtures passed", passed, len(fixtures))
+}
+
+// TestParity_SecondTenantPresent seeds the default tenants (larkspur, then
+// globex) and replays, as larkspur, every fixture up to the first request
+// that changes data: with another tenant's data in the same tables, larkspur's
+// responses must be byte-for-byte what a single-tenant database returns.
+// (After the first write, newly allocated integer ids differ, because ids are
+// global across tenants; the isolation tests cover that part.)
+func TestParity_SecondTenantPresent(t *testing.T) {
+	fixtures := loadFixtures(t)
+	h := newSeededServerWith(t, func(conns []connectors.Connector) []seed.Tenant {
+		return seed.DefaultTenants(conns, FrozenNow)
+	}).Handler()
+	n := 0
+	for _, fx := range fixtures {
+		if fx.Request.Method != http.MethodGet && fx.Response.Status == http.StatusOK && !readOnlyPost(fx) {
+			break
+		}
+		t.Run(fx.Name, func(t *testing.T) { replay(t, h, fx) })
+		n++
+	}
+	if n < 60 {
+		t.Fatalf("only %d fixtures replayed before the first write", n)
+	}
+	t.Logf("parity with a second tenant: %d fixtures replayed", n)
+}
+
+// readOnlyPost reports whether a POST only computes (a simulation or a
+// dry-run revoke) and changes no data.
+func readOnlyPost(fx fixture) bool {
+	switch fx.Request.Path {
+	case "/api/simulate":
+		return true
+	case "/api/least-privilege/revoke":
+		var body struct {
+			DryRun *bool `json:"dry_run"`
+		}
+		return json.Unmarshal(fx.Request.Body, &body) == nil && (body.DryRun == nil || *body.DryRun)
+	}
+	return false
 }

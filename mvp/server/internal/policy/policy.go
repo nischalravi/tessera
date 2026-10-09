@@ -178,7 +178,7 @@ func Parse(d map[string]any, source string) (*Policy, error) {
 // policies that need non-graph data (secrets, ownership).
 type Context struct {
 	Graph *graph.Snapshot
-	Conn  *store.Conn
+	Conn  *store.TenantTx
 	Now   time.Time
 
 	idents []*graph.Node
@@ -186,7 +186,7 @@ type Context struct {
 }
 
 // NewContext builds an evaluation context; conn may be nil.
-func NewContext(g *graph.Snapshot, conn *store.Conn, now time.Time) *Context {
+func NewContext(g *graph.Snapshot, conn *store.TenantTx, now time.Time) *Context {
 	ctx := &Context{Graph: g, Conn: conn, Now: now, byID: map[int64]*graph.Node{}}
 	for _, n := range g.Nodes() {
 		if n.Kind == "identity" {
@@ -511,12 +511,15 @@ func evalSecretAge(p *Policy, c *Context) ([]Violation, error) {
 	if !ok {
 		return nil, fmt.Errorf("policy %s: max_age_days must be a number", p.ID)
 	}
-	rows, err := c.Conn.SecretsWithAccounts("WHERE s.status = 'active'")
+	rows, err := c.Conn.SecretsWithAccounts()
 	if err != nil {
 		return nil, err
 	}
 	var out []Violation
 	for _, r := range rows {
+		if r.Secret.Status != "active" {
+			continue
+		}
 		ref := r.Secret.CreatedAt
 		if r.Secret.LastRotatedAt != nil {
 			ref = *r.Secret.LastRotatedAt
