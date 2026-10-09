@@ -8,3 +8,5 @@ export * from "./Menu";
 export * from "./Page";
 export * from "./Toast";
 export * from "./domain";
+export * from "./SidePanel";
+export * from "./SectionTabs";

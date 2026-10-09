@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { Scissors } from "lucide-react";
 import { Recommendation, ago, useApi } from "../../api";
-import { Badge, Button, Callout, Chip, EmptyState, FilterChips, Loading, Page, Segmented, TypeBadge } from "../../components";
+import { Badge, Button, Callout, Chip, EmptyState, FilterChips, Loading, Page, Segmented, TypeBadge, InsightsTabs } from "../../components";
 import { RevokeDrawer } from "../directory/IdentityPage";
 
 const KIND: Record<string, [string, "critical" | "info" | "warning"]> = { remove: ["Remove", "critical"], role_trim: ["Role trim", "info"], right_size: ["Right-size", "warning"] };
@@ -15,9 +15,9 @@ export function LeastPrivilege() {
   const [revoke, setRevoke] = useState<number | null>(null);
   const totalUnused = (data ?? []).reduce((a, r) => a + r.unused_lost, 0);
   return (
-    <Page
+    <Page tabs={<InsightsTabs />}
       title="Least privilege"
-      crumbs={[["Insights", "/insights"], ["Least privilege"]]}
+      crumbs={[["Protection"], ["Insights", "/insights"], ["Least privilege"]]}
       sub="Grants whose permissions have gone unused, from per-identity usage events. Every revoke shows its blast radius before anything changes."
       actions={<Segmented label="Unused for" value={days} onChange={setDays} options={[["30", "30 days"], ["60", "60 days"], ["90", "90 days"]]} />}
     >

@@ -81,9 +81,9 @@ server/
 frontend/               React 18 + Vite + TypeScript, react-router, cytoscape.js, lucide-react
   src/
     api.ts              the single API client (typed responses, cached useApi hook)
-    app/                shell, routes, sidebar nav, command palette, global search, theme, persona
+    app/                shell (top bar + left rail), routes, nav model, command palette, global search, theme, persona
     components/         shared primitives: Button, Badge, DataTable, Dialog, Drawer, Menu, Toast, Page...
-    features/<section>/ one folder per sidebar section (home, inbox, access, directory,
+    features/<section>/ one folder per area (home, inbox, access, directory,
                         insights, governance, admin)
     mocks/              typed Preview data for features with no backend endpoint yet
 ```
@@ -119,26 +119,58 @@ Design notes:
 
 ## Web UI
 
-The UI is organised around jobs rather than object types. The left sidebar (collapsible to icons,
-a drawer below 860px) has seven sections:
+The UI follows an "admin center" layout: a dark top bar, a light left rail grouped by job, list
+pages with a command bar and filter chips, and details that slide in from the right so you never
+lose your place in the list.
 
-| Section | What it is for |
+**Top bar** (48px, dark). The hamburger collapses the rail to icons (below 768px it opens the rail
+as a drawer), then the Tessera mark, the global search box (`/` focuses it; `⌘K` opens the
+palette), and on the right the Inbox with its count, recent activity (from the audit log),
+settings (theme: light, dark or match system), help (shortcuts) and the user menu with the
+tenant name and the persona switcher.
+
+**Left rail** (236px, light). Active items are white with a blue left indicator; counts sit on
+the right. Arrow keys move between items.
+
+| Group | Items |
 |---|---|
-| **Home** | Changes with the persona chosen in the user menu (a demo stand-in until sign-in exists). Employee: what is waiting on you, your access, request access. Manager: adds team approvals and review progress. Admin & security: risk KPIs and the riskiest identities. |
-| **Inbox** | One queue for JIT and catalog approvals, access-review items, joiner/mover/leaver tasks and delegations. Filter chips, a detail panel with usage context, bulk actions, and keys: `j`/`k` move, `a` approve or keep, `d` deny, `r` revoke, `x` select, `?` help. |
-| **Access** | Request access (catalog of roles, entitlements and JIT-eligible access with a cart, for yourself, someone else or several people, with duration, justification and a risk/SoD preview), My access, Requests (history and drafts), Just-in-time. |
-| **Directory** | People, Machine identities & agents, Accounts, Roles, Entitlements, Applications & systems, Organizations, Groups. Every list has search, filters, saved views, bulk select, CSV import and export, and a **New** button. Rows open an object page with an action bar (for a person: Disable, Reset password, Edit, Request access for, Start review). |
-| **Insights** | Risk overview, Access graph, Least privilege, SoD conflicts. |
-| **Governance** | Policies & violations, Access reviews, Lifecycle, Workflows. |
-| **Admin** | Searchable settings cards. Connections, Jobs and Audit log are live; the rest describe what they will do. |
+| (top) | **Home**, **Inbox** (count) |
+| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts, Roles (Preview), Organizations (Preview) |
+| **Access** | Request access, My access (with *My requests*), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
+| **Protection** | Policies & SoD (violations, policies, what-if simulation), Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health as a Preview) |
+| **Settings** | Connections, Admin |
+
+**Home.** For the admin & security persona: the tenant name and a sync line, then tabs
+(Overview, Monitoring, Deployment health, Recommendations). Overview has the KPI cards
+(identities, violations, unused permissions, readiness) and a Recommendations card with Review
+buttons next to Basic information. The employee and manager personas keep their own Home
+(what is waiting on you, your access, team approvals, review progress).
+
+**List pages.** Every Identity list, Access reviews and Policies share one pattern: breadcrumb,
+title with a muted count, a command bar (New, Bulk import, Refresh, Start review, and selection
+commands such as Request access for or Disable, which enable once rows are checked), filter
+chips with **+ Add filter**, saved views, CSV export and a table with checkbox selection.
+
+**Side panel.** Clicking a row opens a 520px panel over the list; on wide screens the list makes
+room so it stays visible, and the selected row stays highlighted. For a user or machine identity
+the panel shows the avatar, name and risk pill, a command bar (Edit, Request access for, Reset
+password or Rotate secret, Start review, Open in graph, Disable) and tabs: Overview, Access,
+Groups, Activity. Groups, applications, accounts, roles, organizations, policy violations and
+review items have their own panels. The panel is deep-linkable (`/directory/people?selected=16`,
+`/governance/policies?selected=<key>`, `/governance/reviews?item=<id>`), traps focus, closes
+with `Esc` and returns focus to the row. **Open full page** goes to the existing object page.
+
+**Inbox.** One queue for JIT and catalog approvals, access-review items, joiner/mover/leaver
+tasks and delegations, with keys: `j`/`k` move, `a` approve or keep, `d` deny, `r` revoke,
+`x` select, `?` help.
 
 Routes from the previous UI (`/identities`, `/graph`, `/nhi`, `/jit`, `/policies`, `/reviews`,
-`/lifecycle`, `/least-privilege`) redirect to their new homes.
+`/lifecycle`, `/least-privilege`, `/dashboard`) redirect to their new homes.
 
 **Command palette.** Press `⌘K` (macOS) or `Ctrl+K` anywhere. It fuzzy-searches pages, people,
 machine identities, roles, entitlements and apps, and runs actions such as *Request access*,
 *Disable user…*, *Reset password…*, *Start access review*, *Approve pending requests*,
-*Open graph for…*, *Create role* and *Import users*. Actions ending in `…` ask for an identity
+*Open graph for…*, *Create role* and *Bulk import users*. Search results open in the side panel. Actions ending in `…` ask for an identity
 next. Choosing a person shows actions for them. Use the arrow keys, `Enter`, `Backspace` to go
 back a step and `Esc` to close. `/` focuses the top-bar search.
 
@@ -148,12 +180,16 @@ most admin settings. They run on typed mock data in `src/mocks/`, keep their sta
 browser's localStorage, and carry a **Preview** badge. To wire one up, add a function to
 `src/api.ts` that returns the same type and remove the badge.
 
-**Theme and accessibility.** Light and dark themes follow the OS setting by default, with a
-toggle in the top bar. Focus rings are always visible, controls are labelled, motion is reduced
-when the OS asks for it, and the layout works down to about 400px wide.
+**Visual system and accessibility.** System fonts (Segoe UI first, then the platform UI font;
+no web fonts are downloaded), one accent (`#0f6cbd`), 4px radii, 1px `#e1dfdd` borders, status
+pills (critical, warning, ok, info, agent) and tabular numbers in tables. Light and dark themes
+follow the OS by default, with a choice in the settings menu; dark keeps the same structure (a
+darker rail and surfaces) with AA contrast. Focus rings are always visible, the rail, panel and
+palette work from the keyboard, motion is reduced when the OS asks for it, and the layout works
+down to about 360px wide.
 
-**Bundle.** Every route is lazy-loaded. The main chunk is about 85 kB gzipped; cytoscape
-(about 146 kB gzipped) only loads with the access graph.
+**Bundle.** Every route is lazy-loaded. The main chunk is about 87 kB gzipped and the stylesheet
+about 8 kB; cytoscape (about 146 kB gzipped) only loads with the access graph.
 
 ## Adding a real connector
 

@@ -85,7 +85,7 @@ function GraphCanvas({ nodes, edges, focus, onSelect }: { nodes: GNode[]; edges:
       maxZoom: 2.5,
       wheelSensitivity: 0.25,
       style: [
-        { selector: "node", style: { "background-color": "data(color)", label: "data(short)", "font-size": 11, "font-family": "IBM Plex Sans Variable, system-ui, sans-serif", color: c.text, "text-valign": "bottom", "text-margin-y": 4, width: 18, height: 18, "text-background-color": c.labelBg, "text-background-opacity": 0.85, "text-background-padding": "1px", "min-zoomed-font-size": 7 } },
+        { selector: "node", style: { "background-color": "data(color)", label: "data(short)", "font-size": 11, "font-family": "Segoe UI, -apple-system, BlinkMacSystemFont, Helvetica Neue, Arial, sans-serif", color: c.text, "text-valign": "bottom", "text-margin-y": 4, width: 18, height: 18, "text-background-color": c.labelBg, "text-background-opacity": 0.85, "text-background-padding": "1px", "min-zoomed-font-size": 7 } },
         { selector: "node.identity", style: { width: 30, height: 30, "font-weight": "bold", "font-size": 12 } },
         { selector: "node.account", style: { shape: "round-rectangle", width: 22, height: 16 } },
         { selector: "node.group", style: { shape: "hexagon", width: 22, height: 20 } },
@@ -186,7 +186,7 @@ export default function GraphExplorer() {
   return (
     <Page
       title="Access graph"
-      crumbs={[["Insights", "/insights"], ["Access graph"]]}
+      crumbs={[["Protection"], ["Access graph"]]}
       sub="Identity, account, group or role, permission, resource. Select a node to trace everything upstream and downstream of it."
       actions={
         <>
