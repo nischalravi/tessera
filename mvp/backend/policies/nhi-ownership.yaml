@@ -1,0 +1,5 @@
+id: nhi-ownership
+name: Every NHI and AI agent has an active owner
+type: nhi_ownership
+severity: high
+description: Service accounts, API keys and AI agents must have an owner who is a current employee.

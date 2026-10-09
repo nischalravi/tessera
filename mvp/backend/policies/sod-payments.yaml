@@ -1,0 +1,12 @@
+id: sod-payments
+name: "SoD: create vs approve supplier payments"
+type: separation_of_duties
+severity: high
+description: >
+  Nobody may hold both payments:create and payments:approve, regardless of
+  which groups, roles or systems grant them.
+subjects:
+  identity_types: [human, service, ai_agent]
+conflict:
+  a: ["payments:create"]
+  b: ["payments:approve"]

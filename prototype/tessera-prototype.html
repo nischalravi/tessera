@@ -1,0 +1,601 @@
+<title>Tessera Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: operator console. Fixed left rail of views, main pane = summary strip then detail. Collapses to top tab bar on phones. */
+:root {
+  --bg: #f3f5f6;
+  --surface: #ffffff;
+  --surface-2: #eaeef0;
+  --line: #d5dde1;
+  --fg: #12202a;
+  --muted: #5a6b76;
+  --accent: #0b6e78;
+  --accent-soft: #d6eef0;
+  --crit: #b4232f;
+  --crit-soft: #fbe3e4;
+  --warn: #9a5b00;
+  --warn-soft: #fbefd6;
+  --ok: #1d7a43;
+  --ok-soft: #dcf2e4;
+  --agent: #5b4bb5;
+  --agent-soft: #e7e3fa;
+  --f-display: "Schibsted Grotesk", "Helvetica Neue", Arial, sans-serif;
+  --f-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  --r: 6px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1418; --surface: #141e24; --surface-2: #1b272e; --line: #2a3a43;
+    --fg: #e3ebef; --muted: #93a6b1; --accent: #45c2cc; --accent-soft: #123a3f;
+    --crit: #ff6b76; --crit-soft: #3d1a1e; --warn: #f0b04a; --warn-soft: #3a2a10;
+    --ok: #5fd28f; --ok-soft: #133222; --agent: #a99bff; --agent-soft: #262046;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d1418; --surface: #141e24; --surface-2: #1b272e; --line: #2a3a43;
+  --fg: #e3ebef; --muted: #93a6b1; --accent: #45c2cc; --accent-soft: #123a3f;
+  --crit: #ff6b76; --crit-soft: #3d1a1e; --warn: #f0b04a; --warn-soft: #3a2a10;
+  --ok: #5fd28f; --ok-soft: #133222; --agent: #a99bff; --agent-soft: #262046;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { background: var(--bg); color: var(--fg); font-family: var(--f-body); font-size: 14px; line-height: 1.5; }
+.app { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 100%; }
+nav.rail { background: var(--surface); border-right: 1px solid var(--line); padding: 20px 12px; display: flex; flex-direction: column; gap: 4px; position: sticky; top: env(safe-area-inset-top, 0px); height: 100vh; }
+.brand { font-family: var(--f-display); font-weight: 700; font-size: 20px; letter-spacing: -0.01em; padding: 0 10px 4px; display: flex; align-items: center; gap: 8px; }
+.brand svg { flex: none; }
+.tenant { font-size: 12px; color: var(--muted); padding: 0 10px 16px; border-bottom: 1px solid var(--line); margin-bottom: 8px; }
+nav.rail button { all: unset; cursor: pointer; padding: 8px 10px; border-radius: var(--r); color: var(--muted); display: flex; justify-content: space-between; align-items: center; font-weight: 500; }
+nav.rail button:hover { background: var(--surface-2); color: var(--fg); }
+nav.rail button[aria-current="page"] { background: var(--accent-soft); color: var(--accent); }
+nav.rail button:focus-visible, button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.count { font-family: var(--f-mono); font-size: 11px; background: var(--surface-2); color: var(--muted); padding: 1px 6px; border-radius: 10px; }
+.count.hot { background: var(--crit-soft); color: var(--crit); }
+.proto-note { margin-top: auto; font-size: 11px; color: var(--muted); padding: 10px; border-top: 1px solid var(--line); }
+main { padding-block: 28px 60px; padding-inline: 32px; min-width: 0; }
+h1 { font-family: var(--f-display); font-size: 26px; font-weight: 700; letter-spacing: -0.015em; margin: 0 0 4px; text-wrap: balance; }
+h2 { font-family: var(--f-display); font-size: 17px; font-weight: 600; margin: 0 0 12px; text-wrap: balance; }
+.sub { color: var(--muted); margin: 0 0 24px; max-width: 70ch; }
+.eyebrow { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 18px; min-width: 0; }
+.grid { display: grid; gap: 16px; }
+.kpis { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); margin-bottom: 16px; }
+.kpi .v { font-family: var(--f-display); font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; margin-top: 6px; }
+.kpi .d { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.kpi.crit .v { color: var(--crit); }
+.kpi.warn .v { color: var(--warn); }
+.two { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); }
+.mono { font-family: var(--f-mono); font-size: 12.5px; }
+.pill { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; font-weight: 600; padding: 2px 8px; border-radius: 10px; white-space: nowrap; }
+.pill.crit { background: var(--crit-soft); color: var(--crit); }
+.pill.warn { background: var(--warn-soft); color: var(--warn); }
+.pill.ok { background: var(--ok-soft); color: var(--ok); }
+.pill.agent { background: var(--agent-soft); color: var(--agent); }
+.pill.neutral { background: var(--surface-2); color: var(--muted); }
+.pill.accent { background: var(--accent-soft); color: var(--accent); }
+.tablewrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+td { padding: 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+tr.click { cursor: pointer; }
+tr.click:hover td { background: var(--surface-2); }
+.who { font-weight: 600; }
+.who small { display: block; font-weight: 400; color: var(--muted); font-size: 12px; }
+.btn { font: inherit; font-weight: 600; font-size: 13px; padding: 7px 14px; border-radius: var(--r); border: 1px solid var(--line); background: var(--surface); color: var(--fg); cursor: pointer; }
+.btn:hover { background: var(--surface-2); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn.danger { color: var(--crit); border-color: var(--crit); background: transparent; }
+.btn.sm { padding: 4px 10px; font-size: 12px; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.spread { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.stack { display: flex; flex-direction: column; gap: 12px; }
+.list-item { display: flex; gap: 12px; align-items: flex-start; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.list-item:last-child { border-bottom: none; }
+.sev { width: 4px; align-self: stretch; border-radius: 2px; flex: none; }
+.sev.crit { background: var(--crit); } .sev.warn { background: var(--warn); } .sev.ok { background: var(--ok); } .sev.agent { background: var(--agent); }
+.muted { color: var(--muted); }
+.small { font-size: 12.5px; }
+select, input[type="text"] { font: inherit; padding: 7px 10px; border-radius: var(--r); border: 1px solid var(--line); background: var(--surface); color: var(--fg); min-width: 0; }
+label.f { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); font-weight: 500; }
+.graphwrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); }
+.graphwrap svg { display: block; min-width: 900px; width: 100%; height: auto; }
+svg text { font-family: var(--f-body); }
+.codeblock { font-family: var(--f-mono); font-size: 12.5px; background: var(--surface-2); border-radius: var(--r); padding: 12px 14px; overflow-x: auto; white-space: pre; line-height: 1.6; color: var(--fg); }
+.codeblock .k { color: var(--accent); font-weight: 500; }
+.codeblock .c { color: var(--muted); }
+.diff-add { color: var(--ok); } .diff-del { color: var(--crit); }
+.blast { border: 1px solid var(--accent); background: var(--accent-soft); border-radius: var(--r); padding: 16px; }
+.toast { position: fixed; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); right: 20px; background: var(--fg); color: var(--bg); padding: 10px 16px; border-radius: var(--r); font-weight: 500; opacity: 0; transform: translateY(8px); transition: opacity .2s, transform .2s; pointer-events: none; max-width: calc(100vw - 40px); }
+.toast.show { opacity: 1; transform: none; }
+.chain { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px; }
+.chain .node { padding: 4px 10px; border-radius: var(--r); background: var(--surface-2); border: 1px solid var(--line); }
+.chain .node.agent { background: var(--agent-soft); color: var(--agent); border-color: transparent; font-weight: 600; }
+.chain .node.bad { background: var(--crit-soft); color: var(--crit); border-color: transparent; font-weight: 600; }
+.chain .arrow { color: var(--muted); }
+.bar { height: 8px; background: var(--surface-2); border-radius: 4px; overflow: hidden; }
+.bar > span { display: block; height: 100%; background: var(--accent); border-radius: 4px; transition: width .3s; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); padding: 10px 14px; border-top: 1px solid var(--line); }
+.legend i { display: inline-block; width: 18px; height: 3px; vertical-align: middle; margin-right: 6px; border-radius: 2px; }
+@media (max-width: 900px) { .two { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 760px) {
+  .app { grid-template-columns: minmax(0, 1fr); }
+  nav.rail { position: static; height: auto; flex-direction: row; flex-wrap: nowrap; overflow-x: auto; padding: 10px 16px; border-right: none; border-bottom: 1px solid var(--line); gap: 4px; }
+  .brand { padding: 0 8px 0 0; font-size: 17px; }
+  .tenant, .proto-note { display: none; }
+  nav.rail button { white-space: nowrap; flex: none; }
+  nav.rail button .count { margin-left: 6px; }
+  main { padding-inline: 16px; padding-block: 20px 60px; }
+  h1 { font-size: 22px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="app">
+  <nav class="rail" aria-label="Views">
+    <div class="brand">
+      <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><rect x="1" y="1" width="9" height="9" rx="1.5" fill="var(--accent)"/><rect x="12" y="1" width="9" height="9" rx="1.5" fill="var(--accent)" opacity=".55"/><rect x="1" y="12" width="9" height="9" rx="1.5" fill="var(--accent)" opacity=".55"/><rect x="12" y="12" width="9" height="9" rx="1.5" fill="var(--agent)"/></svg>
+      Tessera
+    </div>
+    <div class="tenant">Halden Robotics · prod tenant<br>Synced 14s ago from 7 sources</div>
+    <button data-view="overview">Overview</button>
+    <button data-view="graph">Access graph</button>
+    <button data-view="nhi">Agents &amp; machines <span class="count hot" id="c-nhi">9</span></button>
+    <button data-view="lp">Least privilege <span class="count" id="c-lp">6</span></button>
+    <button data-view="jit">Just-in-time <span class="count" id="c-jit">3</span></button>
+    <button data-view="policy">Policies <span class="count hot" id="c-pol">4</span></button>
+    <button data-view="review">Access reviews <span class="count" id="c-rev">8</span></button>
+    <div class="proto-note">Clickable prototype. Fictional company and data. Actions change state on this page only.</div>
+  </nav>
+  <main id="main"></main>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---------- Fictional data ----------
+  const D = {
+    identities: [
+      { id: "priya", name: "Priya Raman", kind: "human", title: "Staff Engineer, Platform", status: "active", risk: "high" },
+      { id: "marcus", name: "Marcus Feld", kind: "human", title: "Finance Ops Lead", status: "active", risk: "high" },
+      { id: "dana", name: "Dana Okafor", kind: "human", title: "Data Engineer", status: "terminated 2026-09-12", risk: "critical" },
+      { id: "lin", name: "Lin Akiyama", kind: "human", title: "Support Manager", status: "active", risk: "medium" },
+      { id: "svc-billing", name: "svc-billing-sync", kind: "service", title: "AWS IAM user · access key", status: "active", risk: "critical" },
+      { id: "gh-deploy", name: "gh-deploy-bot", kind: "service", title: "GitHub App", status: "active", risk: "medium" },
+      { id: "support-copilot", name: "support-copilot", kind: "agent", title: "AI agent · acts for support reps", status: "active", risk: "critical" },
+      { id: "finops-analyst", name: "finops-analyst", kind: "agent", title: "AI agent · acts for Marcus Feld", status: "active", risk: "high" }
+    ],
+    // Effective-permission paths, per identity: [account, group/role, permission, resource, lastUsedDays|null, flag]
+    paths: {
+      priya: [
+        ["okta:priya.raman", "eng-platform (Okta group)", "AWS SSO · DevAdmin", "s3:* ", "customer-pii-prod (S3)", 74, "pii"],
+        ["okta:priya.raman", "eng-platform (Okta group)", "AWS SSO · DevAdmin", "ec2:*", "prod-us-east-1 (account)", 2, null],
+        ["okta:priya.raman", "eng-platform (Okta group)", "GitHub team · platform", "repo:admin", "halden/infra (repo)", 1, null],
+        ["okta:priya.raman", "oncall (Okta group)", "AWS SSO · BreakGlass", "iam:*", "prod-us-east-1 (account)", null, "admin"],
+        ["snowflake:PRAMAN", "direct grant", "role ANALYST_RO", "SELECT", "ANALYTICS.CUSTOMERS (table)", 133, "pii"]
+      ],
+      marcus: [
+        ["okta:marcus.feld", "finance-ops (Okta group)", "NetSuite · AP Clerk", "payments:create", "Vendor payments", 1, "sod"],
+        ["okta:marcus.feld", "payments-approvers (Okta group)", "NetSuite · AP Approver", "payments:approve", "Vendor payments", 3, "sod"],
+        ["okta:marcus.feld", "finance-ops (Okta group)", "Snowflake · FINANCE_RW", "INSERT/UPDATE", "FINANCE.LEDGER (schema)", 6, null]
+      ],
+      dana: [
+        ["snowflake:DOKAFOR", "direct grant", "role DATA_ENG", "OWNERSHIP", "RAW.EVENTS (db)", 27, "leaver"],
+        ["github:dokafor", "data-eng (GitHub team)", "repo:write", "push", "halden/pipelines (repo)", 31, "leaver"],
+        ["aws:svc-billing-sync", "owner of", "IAM user", "owns credential", "svc-billing-sync", 0, "leaver"]
+      ],
+      lin: [
+        ["okta:lin.akiyama", "support (Okta group)", "Zendesk · Admin", "tickets:*", "Zendesk (tenant)", 0, null],
+        ["okta:lin.akiyama", "support (Okta group)", "delegates to", "agent session", "support-copilot", 0, "agent"]
+      ],
+      "svc-billing": [
+        ["aws:iam/svc-billing-sync", "policy BillingFull", "inline policy", "s3:*", "billing-exports (S3)", 1, null],
+        ["aws:iam/svc-billing-sync", "policy BillingFull", "inline policy", "s3:*", "customer-pii-prod (S3)", null, "pii"],
+        ["aws:iam/svc-billing-sync", "policy BillingFull", "inline policy", "kms:Decrypt", "pii-cmk (KMS)", null, "pii"]
+      ],
+      "gh-deploy": [
+        ["github:app/gh-deploy-bot", "installation", "contents:write", "push", "halden/* (42 repos)", 0, null],
+        ["github:app/gh-deploy-bot", "installation", "administration:write", "repo settings", "halden/* (42 repos)", null, "admin"]
+      ],
+      "support-copilot": [
+        ["agent:support-copilot", "MCP tool · zendesk", "on behalf of support reps", "tickets:read", "Zendesk (tenant)", 0, "agent"],
+        ["agent:support-copilot", "MCP tool · snowflake", "role SUPPORT_RO", "SELECT", "ANALYTICS.CUSTOMERS (table)", 0, "pii"],
+        ["agent:support-copilot", "MCP tool · stripe", "restricted key", "refunds:create", "Stripe (live)", 4, "agent"]
+      ],
+      "finops-analyst": [
+        ["agent:finops-analyst", "MCP tool · netsuite", "on behalf of Marcus Feld", "payments:approve", "Vendor payments", null, "sod"],
+        ["agent:finops-analyst", "MCP tool · snowflake", "role FINANCE_RW", "SELECT", "FINANCE.LEDGER (schema)", 0, null]
+      ]
+    },
+    nhi: [
+      { name: "svc-billing-sync", type: "AWS access key", owner: "Dana Okafor", ownerOk: false, secret: 412, lastUsed: "1 day ago", issue: "Orphaned: owner terminated 2026-09-12. Key is 412 days old and can read PII it has never touched.", sev: "crit" },
+      { name: "support-copilot", type: "AI agent", owner: "Lin Akiyama", ownerOk: true, secret: 18, lastUsed: "now", issue: "Agent reads ANALYTICS.CUSTOMERS (PII) via Snowflake tool. Violates policy agent-no-pii.", sev: "crit", chain: ["Support rep (any of 14)", "support-copilot", "MCP: snowflake", "SUPPORT_RO", "ANALYTICS.CUSTOMERS"] },
+      { name: "finops-analyst", type: "AI agent", owner: "Marcus Feld", ownerOk: true, secret: 9, lastUsed: "2 hours ago", issue: "Inherits payments:approve from Marcus. Agent could approve payments Marcus created.", sev: "crit", chain: ["Marcus Feld", "finops-analyst", "MCP: netsuite", "AP Approver", "payments:approve"] },
+      { name: "gh-deploy-bot", type: "GitHub App", owner: "Priya Raman", ownerOk: true, secret: 60, lastUsed: "now", issue: "Has administration:write on 42 repos; used 0 times in 90 days.", sev: "warn" },
+      { name: "ci-runner-prod", type: "Workload identity (OIDC)", owner: "Platform team", ownerOk: true, secret: 0, lastUsed: "now", issue: "Short-lived tokens, scoped to deploy role. No action.", sev: "ok" },
+      { name: "looker-sf-legacy", type: "Snowflake user · password", owner: "none", ownerOk: false, secret: 903, lastUsed: "211 days ago", issue: "No owner, password 903 days old, unused for 211 days. Safe to disable.", sev: "crit" }
+    ],
+    recs: [
+      { id: "r1", who: "Priya Raman", what: "AWS SSO · DevAdmin → s3:* on customer-pii-prod", last: "74 days", action: "Replace with s3:GetObject on billing-*", lose: 1, used: 0, sel: true },
+      { id: "r2", who: "Priya Raman", what: "Snowflake ANALYST_RO on ANALYTICS.CUSTOMERS", last: "133 days", action: "Revoke grant", lose: 1, used: 0, sel: true },
+      { id: "r3", who: "svc-billing-sync", what: "BillingFull → s3:* + kms:Decrypt on PII", last: "never", action: "Scope policy to billing-exports", lose: 2, used: 0, sel: true },
+      { id: "r4", who: "gh-deploy-bot", what: "administration:write on 42 repos", last: "never", action: "Drop permission from app manifest", lose: 42, used: 0, sel: true },
+      { id: "r5", who: "eng-platform group (31 people)", what: "AWS SSO · DevAdmin on prod", last: "used by 6 of 31", action: "Move 25 members to JIT for DevAdmin", lose: 25, used: 6, sel: false },
+      { id: "r6", who: "looker-sf-legacy", what: "Snowflake user, all grants", last: "211 days", action: "Disable user", lose: 14, used: 0, sel: false }
+    ],
+    jit: [
+      { id: "j1", who: "Priya Raman", what: "AWS SSO · BreakGlass on prod-us-east-1", why: "INC-4471: restore failed KMS rotation", dur: "1h", state: "pending", risk: "crit" },
+      { id: "j2", who: "Tomas Varga", what: "Snowflake FINANCE_RW", why: "Quarter-close reconciliation", dur: "8h", state: "pending", risk: "warn" },
+      { id: "j3", who: "finops-analyst (for Marcus Feld)", what: "NetSuite payments:read", why: "Agent task: monthly AP aging report", dur: "30m", state: "pending", risk: "agent" },
+      { id: "j4", who: "Ana Brightwater", what: "GitHub halden/infra · maintain", why: "Terraform module upgrade", dur: "4h", state: "active · 2h 41m left", risk: "ok" }
+    ],
+    policies: [
+      { id: "sod-payments", name: "Separation of duties: vendor payments", lang: "cedar", violations: ["Marcus Feld", "finops-analyst (via Marcus)"],
+        code: '<span class="k">forbid</span> (principal, action, resource)\n<span class="k">when</span> {\n  principal.can(Action::"payments:create") &&\n  principal.can(Action::"payments:approve")\n};  <span class="c">// effective permissions, incl. agent delegation</span>' },
+      { id: "agent-no-pii", name: "AI agents may not reach PII", lang: "cedar", violations: ["support-copilot"],
+        code: '<span class="k">forbid</span> (principal is Agent, action, resource)\n<span class="k">when</span> { resource.classification == "pii" };' },
+      { id: "no-standing-admin", name: "No standing admin in production", lang: "cedar", violations: ["Priya Raman (BreakGlass)", "gh-deploy-bot"],
+        code: '<span class="k">forbid</span> (principal, action in Action::"admin", resource)\n<span class="k">when</span> { resource.env == "prod" }\n<span class="k">unless</span> { context.grant.jit == true };' },
+      { id: "leaver-24h", name: "Leavers lose all access within 24h", lang: "cedar", violations: ["Dana Okafor (26 days)"],
+        code: '<span class="k">forbid</span> (principal, action, resource)\n<span class="k">when</span> { principal.hr_status == "terminated" &&\n       context.now - principal.terminated_at > duration("24h") };' }
+    ],
+    review: [
+      { id: "v1", who: "Marcus Feld", what: "payments:approve + payments:create", why: "Separation-of-duties conflict", ctx: "Approved 41 payments in 30 days; 3 were his own.", d: null },
+      { id: "v2", who: "Priya Raman", what: "AWS BreakGlass (standing)", why: "Standing admin in prod", ctx: "Never used. Available as JIT.", d: null },
+      { id: "v3", who: "Dana Okafor", what: "Snowflake DATA_ENG on RAW.EVENTS", why: "Account still active after termination", ctx: "Last login 2026-09-11, before termination.", d: null },
+      { id: "v4", who: "support-copilot", what: "SELECT on ANALYTICS.CUSTOMERS", why: "Agent reaching PII", ctx: "38k rows read last 7 days, mostly email + plan columns.", d: null },
+      { id: "v5", who: "Raj Menon", what: "Salesforce · System Administrator", why: "Peer outlier", ctx: "Only 1 of 22 sales ops peers with this role. Used 2× in 90 days.", d: null },
+      { id: "v6", who: "svc-billing-sync", what: "kms:Decrypt on pii-cmk", why: "Unused sensitive permission", ctx: "Never called in 412 days.", d: null },
+      { id: "v7", who: "Elena Sorin", what: "GitHub halden/payments · admin", why: "Mover: changed team 2026-08-30", ctx: "Moved from Payments to Growth. Last push 39 days ago.", d: null },
+      { id: "v8", who: "looker-sf-legacy", what: "Snowflake user (14 grants)", why: "Orphaned non-human identity", ctx: "No owner. Unused 211 days.", d: null }
+    ]
+  };
+
+  const main = document.getElementById("main");
+  const toastEl = document.getElementById("toast");
+  let toastTimer;
+  function toast(msg) {
+    toastEl.textContent = msg; toastEl.classList.add("show");
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => toastEl.classList.remove("show"), 2400);
+  }
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const kindPill = k => k === "agent" ? '<span class="pill agent">AI agent</span>' : k === "service" ? '<span class="pill neutral">Machine</span>' : '<span class="pill accent">Human</span>';
+  const riskPill = r => ({ critical: '<span class="pill crit">Critical</span>', high: '<span class="pill warn">High</span>', medium: '<span class="pill neutral">Medium</span>' }[r] || "");
+
+  // ---------- Views ----------
+  const views = {};
+  let graphFocus = "priya";
+
+  views.overview = () => {
+    const pending = D.review.filter(r => !r.d).length;
+    main.innerHTML = `
+      <h1>Identity risk overview</h1>
+      <p class="sub">Every human, machine and AI agent at Halden Robotics, and what each one can actually do across 7 connected systems.</p>
+      <div class="grid kpis">
+        <div class="panel kpi"><div class="eyebrow">Identities</div><div class="v">1,284</div><div class="d">412 human · 846 machine · 26 agents</div></div>
+        <div class="panel kpi warn"><div class="eyebrow">Granted, never used</div><div class="v">61%</div><div class="d">of 48,920 effective permissions (90 days)</div></div>
+        <div class="panel kpi crit"><div class="eyebrow">Policy violations</div><div class="v">${D.policies.reduce((n, p) => n + p.violations.length, 0)}</div><div class="d">across ${D.policies.length} policies</div></div>
+        <div class="panel kpi crit"><div class="eyebrow">Orphaned machine IDs</div><div class="v">9</div><div class="d">no owner, or owner has left</div></div>
+        <div class="panel kpi"><div class="eyebrow">Standing prod admin</div><div class="v">37</div><div class="d">down from 112 after JIT rollout</div></div>
+      </div>
+      <div class="grid two">
+        <div class="panel">
+          <div class="spread"><h2>Needs attention now</h2><span class="muted small">Ranked by blast radius</span></div>
+          <div>
+            ${item("crit", "Dana Okafor left 26 days ago and still has 3 live accounts", "Snowflake OWNERSHIP on RAW.EVENTS, GitHub push to halden/pipelines, and she owns svc-billing-sync.", "graph", "dana", "Open path")}
+            ${item("crit", "support-copilot (AI agent) is reading customer PII", "Reached through the Snowflake tool's SUPPORT_RO role. 38k rows in 7 days.", "nhi", null, "Inspect agent")}
+            ${item("crit", "Marcus Feld can create and approve the same vendor payment", "His finops-analyst agent inherits the conflict through delegation.", "policy", null, "See policy")}
+            ${item("warn", "Platform group holds DevAdmin in prod; 25 of 31 never use it", "Moving them to just-in-time removes 25 standing admin paths.", "lp", null, "Review fix")}
+          </div>
+        </div>
+        <div class="panel">
+          <h2>Unused permissions removed</h2>
+          ${sparkline()}
+          <p class="small muted" style="margin:10px 0 0">Weekly auto-revocations of access unused for 90 days, with owner notification and one-click restore. 8,431 removed since July; 23 restored.</p>
+          <div style="margin-top:18px" class="stack">
+            <div class="eyebrow">Q4 SOX access review</div>
+            <div class="spread"><span><b>${pending}</b> exception items to decide</span><span class="muted small">instead of 4,212 line items</span></div>
+            <div class="bar"><span style="width:${((8 - pending) / 8) * 100}%"></span></div>
+            <div><button class="btn sm" data-go="review">Open review</button></div>
+          </div>
+        </div>
+      </div>
+      <div class="panel" style="margin-top:16px">
+        <h2>Connected sources</h2>
+        <div class="tablewrap"><table>
+          <thead><tr><th>System</th><th>Mode</th><th>Objects</th><th>Freshness</th><th>Connector access</th></tr></thead>
+          <tbody>
+            ${src("Okta", "Event hook + SCIM", "1,940", "4s", "read + group write")}
+            ${src("AWS (14 accounts)", "CloudTrail via EventBridge", "21,388", "11s", "read-only + SSO assignments")}
+            ${src("GitHub", "Webhooks + audit log", "6,102", "9s", "read + team write")}
+            ${src("Snowflake", "ACCESS_HISTORY pull", "12,775", "14m", "read-only")}
+            ${src("Workday", "Worker events", "412", "1m", "read-only")}
+            ${src("NetSuite", "Scheduled pull", "3,210", "1h", "read-only")}
+            ${src("MCP gateway", "Tool-call stream", "26 agents", "2s", "read + policy enforce")}
+          </tbody>
+        </table></div>
+      </div>`;
+  };
+  function item(sev, title, body, go, focus, label) {
+    return `<div class="list-item"><span class="sev ${sev}"></span><div style="flex:1;min-width:0"><div class="who">${esc(title)}</div><div class="small muted">${esc(body)}</div></div><button class="btn sm" data-go="${go}" ${focus ? `data-focus="${focus}"` : ""}>${label}</button></div>`;
+  }
+  function src(n, m, o, f, a) { return `<tr><td class="who">${n}</td><td>${m}</td><td class="mono">${o}</td><td><span class="pill ok">${f}</span></td><td class="small muted">${a}</td></tr>`; }
+  function sparkline() {
+    const vals = [210, 340, 520, 610, 580, 720, 690, 810, 760, 905, 880, 1010, 1080, 1120];
+    const W = 420, H = 120, P = 24, max = 1200;
+    const x = i => P + (i * (W - P * 2)) / (vals.length - 1);
+    const y = v => H - P - (v / max) * (H - P * 2);
+    const pts = vals.map((v, i) => `${x(i)},${y(v)}`).join(" ");
+    const grid = [0, 600, 1200].map(g => `<line x1="${P}" x2="${W - P}" y1="${y(g)}" y2="${y(g)}" stroke="var(--line)"/><text x="${P - 4}" y="${y(g) + 4}" font-size="10" text-anchor="end" fill="var(--muted)">${g}</text>`).join("");
+    return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Weekly auto-revocations rising from 210 to 1,120 over 14 weeks">
+      ${grid}
+      <polygon points="${x(0)},${y(0)} ${pts} ${x(vals.length - 1)},${y(0)}" fill="var(--accent)" opacity=".12"/>
+      <polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="2"/>
+      <circle cx="${x(vals.length - 1)}" cy="${y(vals[vals.length - 1])}" r="4" fill="var(--accent)"/>
+      <text x="${x(vals.length - 1) - 6}" y="${y(vals[vals.length - 1]) - 9}" font-size="11" text-anchor="end" fill="var(--fg)" font-weight="600">1,120 this week</text>
+      <text x="${P}" y="${H - 6}" font-size="10" fill="var(--muted)">Jul 1</text><text x="${W - P}" y="${H - 6}" font-size="10" text-anchor="end" fill="var(--muted)">Oct 6</text>
+    </svg>`;
+  }
+
+  views.graph = () => {
+    const idn = D.identities.find(i => i.id === graphFocus);
+    const paths = D.paths[graphFocus];
+    main.innerHTML = `
+      <h1>Access graph</h1>
+      <p class="sub">Every path from an identity to a resource, with the hop that grants it and when it was last used. Pick an identity to trace.</p>
+      <div class="row" style="margin-bottom:14px">
+        <label class="f" for="focus">Identity
+          <select id="focus">${D.identities.map(i => `<option value="${i.id}" ${i.id === graphFocus ? "selected" : ""}>${esc(i.name)} (${i.kind === "agent" ? "AI agent" : i.kind})</option>`).join("")}</select>
+        </label>
+        <div class="row" style="align-self:flex-end">${kindPill(idn.kind)} ${riskPill(idn.risk)} <span class="small muted">${esc(idn.title)} · ${esc(idn.status)}</span></div>
+      </div>
+      <div class="graphwrap">${graphSvg(idn, paths)}
+        <div class="legend"><span><i style="background:var(--accent)"></i>Used in last 30 days</span><span><i style="background:var(--muted);opacity:.5"></i>Granted, unused 30+ days</span><span><i style="background:var(--crit)"></i>Violates a policy</span><span><i style="background:var(--agent)"></i>Agent delegation</span></div>
+      </div>
+      <div class="panel" style="margin-top:16px">
+        <h2>Effective permissions (${paths.length})</h2>
+        <div class="tablewrap"><table>
+          <thead><tr><th>Permission</th><th>Resource</th><th>Granted via</th><th>Last used</th><th>Finding</th></tr></thead>
+          <tbody>${paths.map(p => `<tr><td class="mono">${esc(p[3])}</td><td>${esc(p[4])}</td><td class="small">${esc(p[0])} → ${esc(p[1])} → ${esc(p[2])}</td><td class="mono">${p[5] === null ? "never" : p[5] === 0 ? "today" : p[5] + "d ago"}</td><td>${flagPill(p[6], p[5])}</td></tr>`).join("")}</tbody>
+        </table></div>
+      </div>`;
+    document.getElementById("focus").addEventListener("change", e => { graphFocus = e.target.value; render("graph"); });
+  };
+  function flagPill(f, last) {
+    if (f === "pii") return '<span class="pill crit">PII exposure</span>';
+    if (f === "sod") return '<span class="pill crit">SoD conflict</span>';
+    if (f === "leaver") return '<span class="pill crit">Leaver access</span>';
+    if (f === "admin") return '<span class="pill warn">Standing admin</span>';
+    if (f === "agent") return '<span class="pill agent">Delegated</span>';
+    if (last === null || last > 30) return '<span class="pill warn">Unused</span>';
+    return '<span class="pill ok">OK</span>';
+  }
+  function graphSvg(idn, paths) {
+    const cols = ["Identity", "Account", "Group / role", "Grant", "Permission", "Resource"];
+    const W = 1100, colX = c => 20 + c * 212, NW = 196, NH = 34;
+    const rowsH = Math.max(paths.length * 58, 120);
+    const H = rowsH + 70;
+    // unique nodes per column
+    const colNodes = [[idn.name], [], [], [], [], []];
+    paths.forEach(p => { for (let c = 0; c < 5; c++) if (!colNodes[c + 1].includes(p[c])) colNodes[c + 1].push(p[c]); });
+    const pos = (c, label) => {
+      const arr = colNodes[c], i = arr.indexOf(label), gap = rowsH / arr.length;
+      return { x: colX(c), y: 50 + gap * i + gap / 2 - NH / 2 };
+    };
+    let edges = "", nodes = "";
+    paths.forEach(p => {
+      const bad = ["pii", "sod", "leaver", "admin"].includes(p[6]);
+      const agent = p[6] === "agent";
+      const used = p[5] !== null && p[5] <= 30;
+      const color = bad ? "var(--crit)" : agent ? "var(--agent)" : used ? "var(--accent)" : "var(--muted)";
+      const op = bad || agent || used ? 0.85 : 0.4;
+      const chain = [idn.name, ...p.slice(0, 5)];
+      for (let c = 0; c < 5; c++) {
+        const a = pos(c, chain[c]), b = pos(c + 1, chain[c + 1]);
+        const x1 = a.x + NW, y1 = a.y + NH / 2, x2 = b.x, y2 = b.y + NH / 2, mx = (x1 + x2) / 2;
+        edges += `<path d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}" fill="none" stroke="${color}" stroke-width="2" opacity="${op}" ${used || bad || agent ? "" : 'stroke-dasharray="5 4"'}/>`;
+      }
+    });
+    colNodes.forEach((arr, c) => arr.forEach(label => {
+      const { x, y } = pos(c, label);
+      const isId = c === 0;
+      const fill = isId ? (idn.kind === "agent" ? "var(--agent-soft)" : "var(--accent-soft)") : "var(--surface-2)";
+      const tc = isId ? (idn.kind === "agent" ? "var(--agent)" : "var(--accent)") : "var(--fg)";
+      const t = label.length > 30 ? label.slice(0, 29) + "…" : label;
+      nodes += `<g><title>${esc(label)}</title><rect x="${x}" y="${y}" width="${NW}" height="${NH}" rx="5" fill="${fill}" stroke="var(--line)"/><text x="${x + 10}" y="${y + 21}" font-size="12" fill="${tc}" ${isId ? 'font-weight="600"' : ""}>${esc(t)}</text></g>`;
+    }));
+    const heads = cols.map((c, i) => `<text x="${colX(i)}" y="26" font-size="10.5" fill="var(--muted)" letter-spacing="0.08em" font-weight="600">${c.toUpperCase()}</text>`).join("");
+    return `<svg viewBox="0 0 ${W + 30} ${H}" role="img" aria-label="Access paths for ${esc(idn.name)}">${heads}${edges}${nodes}</svg>`;
+  }
+
+  views.nhi = () => {
+    main.innerHTML = `
+      <h1>Agents &amp; machines</h1>
+      <p class="sub">Service accounts, keys, apps, workload identities and AI agents. Each one needs an owner, a reason to exist and the narrowest access that still works. Agents show who they act for.</p>
+      <div class="grid kpis">
+        <div class="panel kpi"><div class="eyebrow">Machine identities</div><div class="v">846</div><div class="d">2.1 per employee</div></div>
+        <div class="panel kpi"><div class="eyebrow">AI agents</div><div class="v">26</div><div class="d">11 act on behalf of users</div></div>
+        <div class="panel kpi crit"><div class="eyebrow">No live owner</div><div class="v">9</div><div class="d">auto-assigned to manager chain</div></div>
+        <div class="panel kpi warn"><div class="eyebrow">Secrets &gt; 365 days</div><div class="v">57</div><div class="d">rotation tickets opened</div></div>
+      </div>
+      <div class="panel"><div class="stack" id="nhi-list">
+        ${D.nhi.map((n, i) => `
+          <div class="list-item"><span class="sev ${n.sev === "crit" ? "crit" : n.sev === "warn" ? "warn" : "ok"}"></span>
+            <div style="flex:1;min-width:0" class="stack">
+              <div class="spread"><div class="who">${esc(n.name)} <small>${esc(n.type)}</small></div>
+                <div class="row">${n.type === "AI agent" ? '<span class="pill agent">AI agent</span>' : '<span class="pill neutral">Machine</span>'}
+                  <span class="pill ${n.ownerOk ? "neutral" : "crit"}">Owner: ${esc(n.owner)}${n.ownerOk ? "" : " ✕"}</span>
+                  <span class="pill ${n.secret > 365 ? "crit" : n.secret > 90 ? "warn" : "neutral"} mono">secret ${n.secret}d</span>
+                  <span class="pill neutral">used ${esc(n.lastUsed)}</span></div></div>
+              <div class="small">${esc(n.issue)}</div>
+              ${n.chain ? `<div><div class="eyebrow" style="margin-bottom:6px">Delegation chain</div><div class="chain">${n.chain.map((c, j) => `${j ? '<span class="arrow">→</span>' : ""}<span class="node ${c === n.name ? "agent" : j === n.chain.length - 1 ? "bad" : ""}">${esc(c)}</span>`).join("")}</div></div>` : ""}
+              ${n.sev !== "ok" ? `<div class="row"><button class="btn sm primary" data-nhi="${i}" data-act="fix">${n.type === "AI agent" ? "Remove risky tool scope" : n.ownerOk ? "Remove unused permission" : "Disable and notify manager"}</button><button class="btn sm" data-nhi="${i}" data-act="owner">Reassign owner</button></div>` : ""}
+            </div></div>`).join("")}
+      </div></div>`;
+    main.querySelectorAll("[data-nhi]").forEach(b => b.addEventListener("click", () => {
+      const n = D.nhi[+b.dataset.nhi];
+      if (b.dataset.act === "fix") { n.sev = "ok"; n.issue = "Remediated just now. Change is reversible for 30 days."; toast(`${n.name}: change queued for provisioning`); }
+      else { n.owner = "Priya Raman"; n.ownerOk = true; toast(`${n.name}: owner set to Priya Raman`); }
+      updateCounts(); render("nhi");
+    }));
+  };
+
+  let blastShown = false;
+  views.lp = () => {
+    const sel = D.recs.filter(r => r.sel);
+    const lose = sel.reduce((n, r) => n + r.lose, 0), used = sel.reduce((n, r) => n + r.used, 0);
+    main.innerHTML = `
+      <h1>Least privilege</h1>
+      <p class="sub">Tessera compares what was granted with what was used over 90 days and proposes the smallest change. Preview the blast radius before anything is revoked.</p>
+      <div class="panel">
+        <div class="tablewrap"><table>
+          <thead><tr><th></th><th>Who</th><th>Access</th><th>Last used</th><th>Proposed change</th></tr></thead>
+          <tbody>${D.recs.map(r => `<tr><td><input type="checkbox" id="rec-${r.id}" data-rec="${r.id}" ${r.sel ? "checked" : ""} aria-label="Select ${esc(r.who)}"></td><td class="who">${esc(r.who)}</td><td class="small">${esc(r.what)}</td><td class="mono">${esc(r.last)}</td><td class="small">${esc(r.action)}</td></tr>`).join("")}</tbody>
+        </table></div>
+        <div class="row" style="margin-top:14px"><button class="btn" id="preview" ${sel.length ? "" : "disabled"}>Preview blast radius (${sel.length})</button><button class="btn primary" id="apply" ${blastShown && sel.length ? "" : "disabled"}>Apply ${sel.length} changes</button></div>
+      </div>
+      ${blastShown && sel.length ? `<div class="blast" style="margin-top:16px">
+        <div class="spread"><h2 style="margin:0">Dry run: ${sel.length} changes</h2><span class="pill ${used ? "warn" : "ok"}">${used ? used + " active users affected" : "No active usage affected"}</span></div>
+        <div class="grid kpis" style="margin:14px 0 0">
+          <div><div class="eyebrow">Paths removed</div><div class="kpi"><div class="v">${lose}</div></div></div>
+          <div><div class="eyebrow">Used in last 90 days</div><div class="kpi"><div class="v">${used}</div></div></div>
+          <div><div class="eyebrow">Violations resolved</div><div class="kpi"><div class="v">${sel.filter(r => ["r1", "r3", "r4"].includes(r.id)).length}</div></div></div>
+          <div><div class="eyebrow">Restore window</div><div class="kpi"><div class="v">30d</div></div></div>
+        </div>
+        <p class="small" style="margin:12px 0 0">${used ? "Users who still use DevAdmin keep it through just-in-time requests. Owners get a Slack message with a one-click restore." : "Nobody has used any of these permissions in 90 days. Owners get a Slack message with a one-click restore."}</p>
+      </div>` : ""}`;
+    main.querySelectorAll("[data-rec]").forEach(c => c.addEventListener("change", () => { D.recs.find(r => r.id === c.dataset.rec).sel = c.checked; blastShown = false; render("lp"); }));
+    document.getElementById("preview").addEventListener("click", () => { blastShown = true; render("lp"); });
+    document.getElementById("apply").addEventListener("click", () => {
+      const n = D.recs.filter(r => r.sel).length;
+      D.recs = D.recs.filter(r => !r.sel); blastShown = false; updateCounts(); render("lp");
+      toast(`${n} changes applied. Restore available for 30 days.`);
+    });
+  };
+
+  views.jit = () => {
+    main.innerHTML = `
+      <h1>Just-in-time access</h1>
+      <p class="sub">Sensitive access is requested when needed and expires on its own. Low-risk requests auto-approve by policy; the rest go to the resource owner in Slack.</p>
+      <div class="grid two">
+        <div class="panel">
+          <h2>Requests</h2>
+          ${D.jit.map(j => `<div class="list-item"><span class="sev ${j.risk === "crit" ? "crit" : j.risk === "warn" ? "warn" : j.risk === "agent" ? "agent" : "ok"}"></span>
+            <div style="flex:1;min-width:0"><div class="who">${esc(j.who)} <small>${esc(j.what)} · ${esc(j.dur)}</small></div><div class="small muted">${esc(j.why)}</div></div>
+            ${j.state === "pending" ? `<div class="row"><button class="btn sm primary" data-j="${j.id}" data-a="ok">Approve</button><button class="btn sm danger" data-j="${j.id}" data-a="no">Deny</button></div>` : `<span class="pill ${j.state.startsWith("denied") ? "crit" : "ok"}">${esc(j.state)}</span>`}
+          </div>`).join("")}
+        </div>
+        <form class="panel stack" id="jitform">
+          <h2 style="margin:0">Request access</h2>
+          <label class="f" for="jit-res">Access
+            <select id="jit-res"><option>AWS SSO · DevAdmin on prod-us-east-1</option><option>Snowflake ANALYTICS.CUSTOMERS (read)</option><option>GitHub halden/payments · write</option><option>Okta · Super Admin</option></select></label>
+          <label class="f" for="jit-dur">Duration
+            <select id="jit-dur"><option>30m</option><option selected>1h</option><option>4h</option><option>8h</option></select></label>
+          <label class="f" for="jit-why">Reason
+            <input type="text" id="jit-why" value="Debug failing deploy for INC-4480"></label>
+          <div class="small muted">Policy check: DevAdmin on prod for ≤1h with an incident ID auto-approves. Everything else goes to the owner.</div>
+          <div><button class="btn primary" type="submit">Submit request</button></div>
+        </form>
+      </div>`;
+    main.querySelectorAll("[data-j]").forEach(b => b.addEventListener("click", () => {
+      const j = D.jit.find(x => x.id === b.dataset.j);
+      j.state = b.dataset.a === "ok" ? `active · ${j.dur} left` : "denied";
+      updateCounts(); render("jit"); toast(b.dataset.a === "ok" ? `Granted to ${j.who} for ${j.dur}` : `Denied ${j.who}`);
+    }));
+    document.getElementById("jitform").addEventListener("submit", e => {
+      e.preventDefault();
+      const res = document.getElementById("jit-res").value, dur = document.getElementById("jit-dur").value, why = document.getElementById("jit-why").value.trim() || "No reason given";
+      const auto = res.startsWith("AWS SSO · DevAdmin") && ["30m", "1h"].includes(dur) && /INC-\d+/.test(why);
+      D.jit.unshift({ id: "j" + Date.now(), who: "You (Priya Raman)", what: res, why, dur, state: auto ? `active · ${dur} left (auto-approved)` : "pending", risk: auto ? "ok" : "warn" });
+      updateCounts(); render("jit"); toast(auto ? "Auto-approved by policy" : "Sent to resource owner");
+    });
+  };
+
+  let simOn = false;
+  views.policy = () => {
+    main.innerHTML = `
+      <h1>Policies</h1>
+      <p class="sub">Policies are Cedar files in Git. They run against effective permissions, so access through groups, roles and agent delegation all counts. Simulate a change before merging it.</p>
+      <div class="panel" style="margin-bottom:16px">
+        <div class="spread"><h2 style="margin:0">Simulate a pull request</h2><span class="mono small muted">halden/access-policies · PR #212</span></div>
+        <div class="codeblock" style="margin-top:12px"><span class="c"># groups/payments-approvers.yaml</span>
+ members:
+   - ana.brightwater
+<span class="diff-del">-  - marcus.feld</span>
+<span class="diff-add">+  - tomas.varga</span></div>
+        <div class="row" style="margin-top:12px"><button class="btn ${simOn ? "" : "primary"}" id="sim">${simOn ? "Hide simulation" : "Run simulation"}</button></div>
+        ${simOn ? `<div class="blast" style="margin-top:14px"><div class="stack small">
+          <div><span class="pill ok">Resolves</span> SoD on vendor payments for Marcus Feld and finops-analyst (2 violations)</div>
+          <div><span class="pill warn">New grant</span> Tomas Varga gains payments:approve (he already holds payments:read only, so no new conflict)</div>
+          <div><span class="pill neutral">Loses</span> Marcus Feld loses approve on 41 payments in the last 30 days; 3 open approvals reassign to Ana Brightwater</div>
+          <div><span class="pill ok">No change</span> 0 other identities affected</div></div></div>` : ""}
+      </div>
+      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(min(100%,380px),1fr))">
+        ${D.policies.map(p => {
+          const v = simOn && p.id === "sod-payments" ? [] : p.violations;
+          return `<div class="panel stack"><div class="spread"><h2 style="margin:0">${esc(p.name)}</h2><span class="pill ${v.length ? "crit" : "ok"}">${v.length ? v.length + " violating" : "Passing"}</span></div>
+            <div class="codeblock">${p.code}</div>
+            ${v.length ? `<div class="row">${v.map(x => `<span class="pill neutral">${esc(x)}</span>`).join("")}</div>` : '<div class="small muted">No violations after this change.</div>'}</div>`;
+        }).join("")}
+      </div>`;
+    document.getElementById("sim").addEventListener("click", () => { simOn = !simOn; render("policy"); });
+  };
+
+  views.review = () => {
+    const done = D.review.filter(r => r.d).length;
+    main.innerHTML = `
+      <h1>Q4 SOX access review</h1>
+      <p class="sub">Tessera certified 4,204 low-risk items automatically, based on usage and peer groups. Reviewers decide only the exceptions below, each with the context needed to decide.</p>
+      <div class="panel" style="margin-bottom:16px"><div class="spread"><span><b>${done}</b> of ${D.review.length} decided</span><span class="small muted">Evidence package exports to auditors on completion</span></div><div class="bar" style="margin-top:8px"><span style="width:${(done / D.review.length) * 100}%"></span></div></div>
+      <div class="panel">
+        ${D.review.map(r => `<div class="list-item"><span class="sev ${r.d === "keep" ? "ok" : r.d === "revoke" ? "crit" : "warn"}"></span>
+          <div style="flex:1;min-width:0"><div class="who">${esc(r.who)} <small>${esc(r.what)}</small></div>
+            <div class="small"><span class="pill warn">${esc(r.why)}</span> <span class="muted">${esc(r.ctx)}</span></div></div>
+          ${r.d ? `<span class="pill ${r.d === "keep" ? "ok" : "crit"}">${r.d === "keep" ? "Kept" : "Revoked"}</span><button class="btn sm" data-r="${r.id}" data-a="undo">Undo</button>` : `<div class="row"><button class="btn sm" data-r="${r.id}" data-a="keep">Keep</button><button class="btn sm danger" data-r="${r.id}" data-a="revoke">Revoke</button></div>`}
+        </div>`).join("")}
+      </div>`;
+    main.querySelectorAll("[data-r]").forEach(b => b.addEventListener("click", () => {
+      const r = D.review.find(x => x.id === b.dataset.r);
+      r.d = b.dataset.a === "undo" ? null : b.dataset.a;
+      updateCounts(); render("review");
+      if (D.review.every(x => x.d)) toast("Review complete. Evidence package ready.");
+    }));
+  };
+
+  function updateCounts() {
+    const set = (id, n, hot) => { const el = document.getElementById(id); el.textContent = n; el.classList.toggle("hot", !!hot && n > 0); el.hidden = n === 0; };
+    const nhiOpen = D.nhi.filter(n => n.sev === "crit").length;
+    set("c-nhi", nhiOpen + 6, true);
+    set("c-lp", D.recs.length);
+    set("c-jit", D.jit.filter(j => j.state === "pending").length);
+    set("c-pol", simOn ? 3 : 4, true);
+    set("c-rev", D.review.filter(r => !r.d).length);
+  }
+
+  let current = "overview";
+  function render(v) {
+    current = v;
+    document.querySelectorAll("nav.rail button").forEach(b => b.toggleAttribute("aria-current", false));
+    const btn = document.querySelector(`nav.rail button[data-view="${v}"]`);
+    if (btn) btn.setAttribute("aria-current", "page");
+    views[v]();
+    main.querySelectorAll("[data-go]").forEach(b => b.addEventListener("click", () => {
+      if (b.dataset.focus) graphFocus = b.dataset.focus;
+      render(b.dataset.go); window.scrollTo(0, 0);
+    }));
+  }
+  document.querySelectorAll("nav.rail button").forEach(b => b.addEventListener("click", () => { render(b.dataset.view); window.scrollTo(0, 0); }));
+  const start = (location.hash || "").slice(1);
+  updateCounts();
+  render(views[start] ? start : "overview");
+})();
+</script>

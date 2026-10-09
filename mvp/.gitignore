@@ -1,0 +1,6 @@
+backend/.venv/
+backend/tessera.db*
+backend/.pytest_cache/
+**/__pycache__/
+frontend/node_modules/
+frontend/dist/
