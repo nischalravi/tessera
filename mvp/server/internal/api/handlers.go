@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -26,42 +25,50 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/usage"
 )
 
+// registerRoutes declares every route and how it reaches tenant data:
+//
+//   - noTenant: no tenant data (health, API docs).
+//   - read: a read-only tenant transaction (GET).
+//   - swept: expired JIT grants of the tenant are swept first (in their own
+//     write transaction), then a read-only tenant transaction, as the
+//     original backend swept before every analysis.
+//   - write: one tenant write transaction around the whole handler (POST).
 func (s *Server) registerRoutes() {
 	G, P := http.MethodGet, http.MethodPost
-	s.handle(G, "/api/health", s.health)
-	s.handle(G, "/api/connectors", s.listConnectors)
-	s.handle(P, "/api/connectors/sync", s.syncConnectors)
-	s.handle(G, "/api/summary", s.summary)
-	s.handle(G, "/api/identities", s.listIdentities)
-	s.handle(G, "/api/identities/{identity_id}", s.identityDetail)
-	s.handle(G, "/api/accounts", s.listAccounts)
-	s.handle(G, "/api/groups", s.listGroups)
-	s.handle(G, "/api/resources", s.listResources)
-	s.handle(G, "/api/graph", s.graphView)
-	s.handle(G, "/api/nhi", s.nhiInventory)
-	s.handle(G, "/api/least-privilege/recommendations", s.recommendations)
-	s.handle(P, "/api/least-privilege/revoke", s.revoke)
-	s.handle(G, "/api/policies", s.listPolicies)
-	s.handle(G, "/api/violations", s.listViolations)
-	s.handle(P, "/api/simulate", s.simulate)
-	s.handle(G, "/api/jit/requests", s.jitRequests)
-	s.handle(P, "/api/jit/requests", s.jitCreate)
-	s.handle(P, "/api/jit/requests/{request_id}/{action}", s.jitDecide)
-	s.handle(P, "/api/jit/sweep", s.jitSweep)
-	s.handle(G, "/api/reviews/campaigns", s.listCampaigns)
-	s.handle(P, "/api/reviews/campaigns", s.createCampaign)
-	s.handle(G, "/api/reviews/campaigns/{campaign_id}", s.campaign)
-	s.handle(P, "/api/reviews/items/{item_id}/decision", s.reviewDecide)
-	s.handle(G, "/api/hris/events", s.hrisEvents)
-	s.handle(P, "/api/hris/events", s.hrisCreate)
-	s.handle(G, "/api/hris/events/{event_id}/plan", s.hrisPlan)
-	s.handle(P, "/api/hris/events/{event_id}/execute", s.hrisExecute)
-	s.handle(G, "/api/jml/leaver-plan/{identity_id}", s.leaverPlan)
-	s.handle(G, "/api/audit", s.auditLog)
-	s.handle(G, "/openapi.json", s.openAPI)
-	s.handle(G, "/docs", s.swaggerUI)
-	s.handle(G, "/docs/oauth2-redirect", s.swaggerRedirect)
-	s.handle(G, "/redoc", s.redoc)
+	s.handle(G, "/api/health", noTenant, s.health)
+	s.handle(G, "/api/connectors", read, s.listConnectors)
+	s.handle(P, "/api/connectors/sync", write, s.syncConnectors)
+	s.handle(G, "/api/summary", swept, s.summary)
+	s.handle(G, "/api/identities", swept, s.listIdentities)
+	s.handle(G, "/api/identities/{identity_id}", swept, s.identityDetail)
+	s.handle(G, "/api/accounts", read, s.listAccounts)
+	s.handle(G, "/api/groups", read, s.listGroups)
+	s.handle(G, "/api/resources", swept, s.listResources)
+	s.handle(G, "/api/graph", swept, s.graphView)
+	s.handle(G, "/api/nhi", swept, s.nhiInventory)
+	s.handle(G, "/api/least-privilege/recommendations", swept, s.recommendations)
+	s.handle(P, "/api/least-privilege/revoke", write, s.revoke)
+	s.handle(G, "/api/policies", swept, s.listPolicies)
+	s.handle(G, "/api/violations", swept, s.listViolations)
+	s.handle(P, "/api/simulate", write, s.simulate)
+	s.handle(G, "/api/jit/requests", swept, s.jitRequests)
+	s.handle(P, "/api/jit/requests", write, s.jitCreate)
+	s.handle(P, "/api/jit/requests/{request_id}/{action}", write, s.jitDecide)
+	s.handle(P, "/api/jit/sweep", write, s.jitSweep)
+	s.handle(G, "/api/reviews/campaigns", read, s.listCampaigns)
+	s.handle(P, "/api/reviews/campaigns", write, s.createCampaign)
+	s.handle(G, "/api/reviews/campaigns/{campaign_id}", read, s.campaign)
+	s.handle(P, "/api/reviews/items/{item_id}/decision", write, s.reviewDecide)
+	s.handle(G, "/api/hris/events", read, s.hrisEvents)
+	s.handle(P, "/api/hris/events", write, s.hrisCreate)
+	s.handle(G, "/api/hris/events/{event_id}/plan", read, s.hrisPlan)
+	s.handle(P, "/api/hris/events/{event_id}/execute", write, s.hrisExecute)
+	s.handle(G, "/api/jml/leaver-plan/{identity_id}", read, s.leaverPlan)
+	s.handle(G, "/api/audit", read, s.auditLog)
+	s.handle(G, "/openapi.json", noTenant, s.openAPI)
+	s.handle(G, "/docs", noTenant, s.swaggerUI)
+	s.handle(G, "/docs/oauth2-redirect", noTenant, s.swaggerRedirect)
+	s.handle(G, "/redoc", noTenant, s.redoc)
 }
 
 // ---------------------------------------------------------------- context
@@ -69,7 +76,7 @@ func (s *Server) registerRoutes() {
 // analysis is the per-request analysis context: graph snapshot, usage index
 // and (lazily) policy violations.
 type analysis struct {
-	c        *store.Conn
+	c        *store.TenantTx
 	now      time.Time
 	g        *graph.Snapshot
 	u        *usage.Index
@@ -78,11 +85,12 @@ type analysis struct {
 	violDone bool
 }
 
-// newAnalysis sweeps expired JIT grants and builds the graph and usage index.
-// inTx is true when c is already a write transaction.
-func (s *Server) newAnalysis(ctx context.Context, c *store.Conn, inTx bool) (*analysis, error) {
+// newAnalysis builds the graph and usage index of the transaction's tenant.
+// In a write transaction it first sweeps expired JIT grants; a read-only
+// transaction was swept by the route's tenant wrapper before it began.
+func (s *Server) newAnalysis(c *store.TenantTx) (*analysis, error) {
 	now := s.clock()
-	if inTx {
+	if !c.ReadOnly() {
 		if need, err := jit.NeedsSweep(c, now); err != nil {
 			return nil, err
 		} else if need {
@@ -90,14 +98,12 @@ func (s *Server) newAnalysis(ctx context.Context, c *store.Conn, inTx bool) (*an
 				return nil, err
 			}
 		}
-	} else if err := s.sweep(ctx); err != nil {
-		return nil, err
 	}
 	pols, err := s.policies()
 	if err != nil {
 		return nil, err
 	}
-	g, err := graph.FromDB(c, now)
+	g, err := graph.Build(c, now)
 	if err != nil {
 		return nil, err
 	}
@@ -119,9 +125,9 @@ func (a *analysis) violations() ([]policy.Violation, error) {
 	return a.viol, nil
 }
 
-// readAnalysis builds an analysis on a read connection.
+// readAnalysis builds an analysis in the request's tenant transaction.
 func (s *Server) readAnalysis(r *http.Request) (*analysis, error) {
-	return s.newAnalysis(r.Context(), s.store.Read(r.Context()), false)
+	return s.newAnalysis(store.TxFrom(r.Context()))
 }
 
 // ---------------------------------------------------------------- helpers
@@ -245,20 +251,16 @@ func (s *Server) listConnectors(_ http.ResponseWriter, r *http.Request, _ *param
 	if err != nil {
 		return nil, err
 	}
-	c := s.store.Read(r.Context())
+	c := store.TxFrom(r.Context())
 	out := []ojson.Object{}
 	for _, cn := range conns {
-		o := ojson.Object{{Key: "system", Value: cn.System()}, {Key: "name", Value: cn.DisplayName()},
-			{Key: "type", Value: cn.TypeName()}}
-		for _, t := range []struct{ key, table string }{{"accounts", "accounts"}, {"groups", "groups"},
-			{"resources", "resources"}, {"permissions", "permissions"}} {
-			n, err := c.Count("SELECT count(id) FROM "+t.table+" WHERE system = ?", cn.System())
-			if err != nil {
-				return nil, err
-			}
-			o = append(o, ojson.KV{Key: t.key, Value: n})
+		n, err := c.CountSystem(cn.System())
+		if err != nil {
+			return nil, err
 		}
-		out = append(out, o)
+		out = append(out, ojson.Object{{Key: "system", Value: cn.System()}, {Key: "name", Value: cn.DisplayName()},
+			{Key: "type", Value: cn.TypeName()}, {Key: "accounts", Value: n.Accounts}, {Key: "groups", Value: n.Groups},
+			{Key: "resources", Value: n.Resources}, {Key: "permissions", Value: n.Permissions}})
 	}
 	return out, nil
 }
@@ -269,22 +271,20 @@ func (s *Server) syncConnectors(_ http.ResponseWriter, r *http.Request, _ *param
 	if err != nil {
 		return nil, err
 	}
-	var stats ingest.DiscoveryStats
-	err = s.store.Write(r.Context(), func(c *store.Conn) error {
-		var results []*connectors.DiscoveryResult
-		for _, cn := range conns {
-			res, err := cn.Discover(r.Context())
-			if err != nil {
-				return fmt.Errorf("%s: discover: %w", cn.System(), err)
-			}
-			results = append(results, res)
+	c := store.TxFrom(r.Context())
+	var results []*connectors.DiscoveryResult
+	for _, cn := range conns {
+		res, err := cn.Discover(r.Context())
+		if err != nil {
+			return nil, fmt.Errorf("%s: discover: %w", cn.System(), err)
 		}
-		if stats, err = ingest.Discovery(c, now, results, false); err != nil {
-			return err
-		}
-		return c.Audit(now, "system", "connectors.sync", stats.Object())
-	})
+		results = append(results, res)
+	}
+	stats, err := ingest.Discovery(c, now, results, false)
 	if err != nil {
+		return nil, err
+	}
+	if err := c.Audit(now, "system", "connectors.sync", stats.Object()); err != nil {
 		return nil, err
 	}
 	return stats.Object(), nil
@@ -343,7 +343,7 @@ func (s *Server) summary(_ http.ResponseWriter, r *http.Request, _ *params) (any
 			agentsPII++
 		}
 	}
-	secrets, err := c.Secrets("")
+	secrets, err := c.Secrets()
 	if err != nil {
 		return nil, err
 	}
@@ -374,41 +374,31 @@ func (s *Server) summary(_ http.ResponseWriter, r *http.Request, _ *params) (any
 	for _, iid := range top {
 		topOut = append(topOut, append(briefObj(people[iid]), risks[iid].kvs()...))
 	}
-	counts := map[string]string{
-		"accounts": "SELECT count(id) FROM accounts",
-		"systems":  "SELECT count(DISTINCT system) FROM accounts",
-		"grants":   "SELECT count(id) FROM grant_edges",
-		"open":     "SELECT count(id) FROM review_items WHERE decision IS NULL",
-		"pending":  "SELECT count(id) FROM access_requests WHERE status = 'pending'",
-		"active":   "SELECT count(id) FROM access_requests WHERE status = 'approved'",
-		"hris":     "SELECT count(id) FROM hris_events WHERE status = 'pending'",
-	}
 	n := map[string]int{}
-	for k, q := range counts {
-		if n[k], err = c.Count(q); err != nil {
+	for k, count := range map[string]func() (int, error){
+		"accounts": c.CountAccounts,
+		"systems":  c.CountAccountSystems,
+		"grants":   c.CountEdges,
+		"open":     c.CountUndecidedItems,
+		"pending":  func() (int, error) { return c.CountRequestsByStatus("pending") },
+		"active":   func() (int, error) { return c.CountRequestsByStatus("approved") },
+		"hris":     func() (int, error) { return c.CountHrisEventsByStatus("pending") },
+	} {
+		if n[k], err = count(); err != nil {
 			return nil, err
 		}
 	}
-	since := a.now.Add(-90 * 24 * time.Hour)
-	rows, err := c.Query("SELECT day, sum(count) FROM usage_events WHERE day >= ? GROUP BY day ORDER BY day", store.T(since))
+	days, err := c.UsageTrend(a.now.Add(-90 * 24 * time.Hour))
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	trend := []ojson.Object{}
-	for rows.Next() {
-		var day string
-		var events int64
-		if err := rows.Scan(&day, &events); err != nil {
-			return nil, err
-		}
+	for _, d := range days {
+		day := d.Day
 		if len(day) > 10 {
 			day = day[:10]
 		}
-		trend = append(trend, ojson.Object{{Key: "day", Value: day}, {Key: "events", Value: events}})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+		trend = append(trend, ojson.Object{{Key: "day", Value: day}, {Key: "events", Value: d.Events}})
 	}
 	var unusedPct any = 0
 	if totalEff > 0 {
@@ -452,28 +442,19 @@ func (s *Server) listIdentities(_ http.ResponseWriter, r *http.Request, p *param
 	if err != nil {
 		return nil, err
 	}
-	where, args := []string{}, []any{}
-	if nonEmpty(typ) {
-		where, args = append(where, "type = ?"), append(args, *typ)
-	}
-	if nonEmpty(status) {
-		where, args = append(where, "status = ?"), append(args, *status)
-	}
-	clause := ""
-	if len(where) > 0 {
-		clause = "WHERE " + strings.Join(where, " AND ")
-	}
-	idents, err := a.c.Identities(clause, args...)
+	idents, err := a.c.Identities()
 	if err != nil {
 		return nil, err
 	}
-	accts, err := a.c.Accounts("WHERE identity_id IS NOT NULL")
+	accts, err := a.c.Accounts()
 	if err != nil {
 		return nil, err
 	}
 	byIdent := map[int64][]*store.Account{}
 	for _, ac := range accts {
-		byIdent[*ac.IdentityID] = append(byIdent[*ac.IdentityID], ac)
+		if ac.IdentityID != nil {
+			byIdent[*ac.IdentityID] = append(byIdent[*ac.IdentityID], ac)
+		}
 	}
 	type row struct {
 		obj  ojson.Object
@@ -482,6 +463,9 @@ func (s *Server) listIdentities(_ http.ResponseWriter, r *http.Request, p *param
 	}
 	var rows []row
 	for _, i := range idents {
+		if (nonEmpty(typ) && i.Type != *typ) || (nonEmpty(status) && i.Status != *status) {
+			continue
+		}
 		if nonEmpty(q) {
 			hay := strings.ToLower(fmt.Sprintf("%s %s %s %s", i.Name, deref(i.Email), deref(i.Department), deref(i.Title)))
 			if !strings.Contains(hay, strings.ToLower(*q)) {
@@ -580,7 +564,7 @@ func (s *Server) identityDetail(_ http.ResponseWriter, r *http.Request, p *param
 	}
 	secrets := []nhi.SecretView{}
 	for _, ac := range accounts {
-		secs, err := c.Secrets("WHERE s.account_id = ?", ac.ID)
+		secs, err := c.AccountSecrets(ac.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -600,16 +584,19 @@ func (s *Server) identityDetail(_ http.ResponseWriter, r *http.Request, p *param
 	if err != nil {
 		return nil, err
 	}
-	dels, err := c.Delegations("WHERE agent_id = ? OR principal_id = ?", id, id)
+	dels, err := c.Delegations()
 	if err != nil {
 		return nil, err
 	}
 	delegations := []ojson.Object{}
 	for _, d := range dels {
+		if d.AgentID != id && d.PrincipalID != id {
+			continue
+		}
 		delegations = append(delegations, ojson.Object{{Key: "agent", Value: brief(people[d.AgentID])},
 			{Key: "principal", Value: brief(people[d.PrincipalID])}, {Key: "scopes", Value: d.Scopes}})
 	}
-	owned, err := c.Identities("WHERE owner_id = ?", id)
+	owned, err := c.IdentitiesOwnedBy(id)
 	if err != nil {
 		return nil, err
 	}
@@ -675,12 +662,11 @@ func (s *Server) listAccounts(_ http.ResponseWriter, r *http.Request, p *params)
 	if err := validated(p, nil); err != nil {
 		return nil, err
 	}
-	c := s.store.Read(r.Context())
-	tail, args := "ORDER BY system, username", []any{}
-	if nonEmpty(system) {
-		tail, args = "WHERE system = ? "+tail, append(args, *system)
+	c := store.TxFrom(r.Context())
+	if !nonEmpty(system) {
+		system = nil
 	}
-	accts, err := c.AccountsOrdered(tail, args...)
+	accts, err := c.AccountsBySystemUsername(system)
 	if err != nil {
 		return nil, err
 	}
@@ -707,11 +693,7 @@ func (s *Server) listGroups(_ http.ResponseWriter, r *http.Request, p *params) (
 	if err := validated(p, nil); err != nil {
 		return nil, err
 	}
-	tail, args := "ORDER BY system, name", []any{}
-	if req != nil {
-		tail, args = "WHERE requestable = ? "+tail, append(args, store.B(*req))
-	}
-	groups, err := s.store.Read(r.Context()).Groups(tail, args...)
+	groups, err := store.TxFrom(r.Context()).GroupsBySystemName(req)
 	if err != nil {
 		return nil, err
 	}
@@ -730,7 +712,7 @@ func (s *Server) listResources(_ http.ResponseWriter, r *http.Request, _ *params
 	if err != nil {
 		return nil, err
 	}
-	res, err := a.c.Resources("ORDER BY system, name")
+	res, err := a.c.ResourcesBySystemName()
 	if err != nil {
 		return nil, err
 	}
@@ -934,43 +916,37 @@ func (s *Server) revoke(_ http.ResponseWriter, r *http.Request, p *params) (any,
 		return nil, err
 	}
 	edgeID, dryRun, actor := body["edge_id"].(int64), body["dry_run"].(bool), body["actor"].(string)
-	var out *revokeResult
-	err = s.store.Write(r.Context(), func(c *store.Conn) error {
-		a, err := s.newAnalysis(r.Context(), c, true)
-		if err != nil {
-			return err
-		}
-		e, err := getOrNil(c.Edge(edgeID))
-		if err != nil {
-			return err
-		}
-		if e == nil {
-			return errStatus(http.StatusNotFound, "grant not found")
-		}
-		res, err := simulate.Run(c, simulate.Request{RemoveEdgeIDs: []int64{edgeID}},
-			simulate.Inputs{Now: a.now, Policies: a.policies, Usage: a.u, Base: a.g})
-		if err != nil {
-			return err
-		}
-		out = &revokeResult{Result: res, DryRun: dryRun,
-			Grant: grantRef{e.ID, e.Src, e.Dst, a.g.Label(e.Src) + " → " + a.g.Label(e.Dst)}}
-		if dryRun {
-			return nil
-		}
-		if err := c.Audit(a.now, actor, "grant.revoke", ojson.Object{{Key: "edge_id", Value: e.ID},
-			{Key: "grant", Value: out.Grant.Label}, {Key: "permissions_removed", Value: res.Summary.PermissionsRemoved}}); err != nil {
-			return err
-		}
-		if err := c.DeleteEdge(e.ID); err != nil {
-			return err
-		}
-		applied := true
-		out.Applied = &applied
-		return nil
-	})
+	c := store.TxFrom(r.Context())
+	a, err := s.newAnalysis(c)
 	if err != nil {
 		return nil, err
 	}
+	e, err := getOrNil(c.Edge(edgeID))
+	if err != nil {
+		return nil, err
+	}
+	if e == nil {
+		return nil, errStatus(http.StatusNotFound, "grant not found")
+	}
+	res, err := simulate.Run(c, simulate.Request{RemoveEdgeIDs: []int64{edgeID}},
+		simulate.Inputs{Now: a.now, Policies: a.policies, Usage: a.u, Base: a.g})
+	if err != nil {
+		return nil, err
+	}
+	out := &revokeResult{Result: res, DryRun: dryRun,
+		Grant: grantRef{e.ID, e.Src, e.Dst, a.g.Label(e.Src) + " → " + a.g.Label(e.Dst)}}
+	if dryRun {
+		return out, nil
+	}
+	if err := c.Audit(a.now, actor, "grant.revoke", ojson.Object{{Key: "edge_id", Value: e.ID},
+		{Key: "grant", Value: out.Grant.Label}, {Key: "permissions_removed", Value: res.Summary.PermissionsRemoved}}); err != nil {
+		return nil, err
+	}
+	if err := c.DeleteEdge(e.ID); err != nil {
+		return nil, err
+	}
+	applied := true
+	out.Applied = &applied
 	return out, nil
 }
 
@@ -1071,7 +1047,7 @@ func (s *Server) simulate(_ http.ResponseWriter, r *http.Request, p *params) (an
 
 // ---------------------------------------------------------------- JIT
 
-func reqView(c *store.Conn, r *store.AccessRequest, hours any) (ojson.Object, error) {
+func reqView(c *store.TenantTx, r *store.AccessRequest, hours any) (ojson.Object, error) {
 	ident, err := getOrNil(c.Identity(r.IdentityID))
 	if err != nil {
 		return nil, err
@@ -1097,11 +1073,8 @@ func reqView(c *store.Conn, r *store.AccessRequest, hours any) (ojson.Object, er
 }
 
 func (s *Server) jitRequests(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
-	if err := s.sweep(r.Context()); err != nil {
-		return nil, err
-	}
-	c := s.store.Read(r.Context())
-	reqs, err := c.Requests("ORDER BY requested_at DESC")
+	c := store.TxFrom(r.Context())
+	reqs, err := c.RequestsByRecency()
 	if err != nil {
 		return nil, err
 	}
@@ -1143,20 +1116,13 @@ func (s *Server) jitCreate(_ http.ResponseWriter, r *http.Request, p *params) (a
 	if v, ok := body["duration_hours"].(float64); ok {
 		hours = jit.Hours{N: v}
 	}
-	var out ojson.Object
-	err = s.store.Write(r.Context(), func(c *store.Conn) error {
-		rq, err := jit.CreateRequest(c, s.clock(), body["identity_id"].(int64), body["group_id"].(int64), hours,
-			body["justification"].(string))
-		if err != nil {
-			return asJitError(err)
-		}
-		out, err = reqView(c, rq, hours.JSON())
-		return err
-	})
+	c := store.TxFrom(r.Context())
+	rq, err := jit.CreateRequest(c, s.clock(), body["identity_id"].(int64), body["group_id"].(int64), hours,
+		body["justification"].(string))
 	if err != nil {
-		return nil, err
+		return nil, asJitError(err)
 	}
-	return out, nil
+	return reqView(c, rq, hours.JSON())
 }
 
 var decisionFields = []field{{name: "approver", kind: kStr, def: "security-oncall@larkspur.example"}}
@@ -1175,38 +1141,25 @@ func (s *Server) jitDecide(_ http.ResponseWriter, r *http.Request, p *params) (a
 	if body != nil {
 		who = body["approver"].(string)
 	}
-	var out ojson.Object
-	err = s.store.Write(r.Context(), func(c *store.Conn) error {
-		now := s.clock()
-		var rq *store.AccessRequest
-		var err error
-		switch action {
-		case "approve":
-			rq, err = jit.Approve(c, id, who, now, now)
-		case "deny":
-			rq, err = jit.Deny(c, id, who, now)
-		default:
-			rq, err = jit.Revoke(c, id, who, now)
-		}
-		if err != nil {
-			return asJitError(err)
-		}
-		out, err = reqView(c, rq, nil)
-		return err
-	})
-	if err != nil {
-		return nil, err
+	c := store.TxFrom(r.Context())
+	now := s.clock()
+	var rq *store.AccessRequest
+	switch action {
+	case "approve":
+		rq, err = jit.Approve(c, id, who, now, now)
+	case "deny":
+		rq, err = jit.Deny(c, id, who, now)
+	default:
+		rq, err = jit.Revoke(c, id, who, now)
 	}
-	return out, nil
+	if err != nil {
+		return nil, asJitError(err)
+	}
+	return reqView(c, rq, nil)
 }
 
 func (s *Server) jitSweep(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
-	n := 0
-	err := s.store.Write(r.Context(), func(c *store.Conn) error {
-		var err error
-		n, err = jit.Sweep(c, s.clock())
-		return err
-	})
+	n, err := jit.Sweep(store.TxFrom(r.Context()), s.clock())
 	if err != nil {
 		return nil, err
 	}
@@ -1215,7 +1168,7 @@ func (s *Server) jitSweep(_ http.ResponseWriter, r *http.Request, _ *params) (an
 
 // ---------------------------------------------------------------- reviews
 
-func campaignView(c *store.Conn, cmp *store.ReviewCampaign, withItems bool) (ojson.Object, error) {
+func campaignView(c *store.TenantTx, cmp *store.ReviewCampaign, withItems bool) (ojson.Object, error) {
 	items, err := c.CampaignItems(cmp.ID)
 	if err != nil {
 		return nil, err
@@ -1260,8 +1213,8 @@ func campaignView(c *store.Conn, cmp *store.ReviewCampaign, withItems bool) (ojs
 }
 
 func (s *Server) listCampaigns(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
-	c := s.store.Read(r.Context())
-	cmps, err := c.Campaigns("ORDER BY id DESC")
+	c := store.TxFrom(r.Context())
+	cmps, err := c.CampaignsNewestFirst()
 	if err != nil {
 		return nil, err
 	}
@@ -1293,23 +1246,16 @@ func (s *Server) createCampaign(_ http.ResponseWriter, r *http.Request, p *param
 	if err != nil {
 		return nil, err
 	}
-	var out ojson.Object
-	err = s.store.Write(r.Context(), func(c *store.Conn) error {
-		id, err := reviews.GenerateCampaign(c, s.clock(), body["name"].(string), int(body["unused_days"].(int64)), pols)
-		if err != nil {
-			return err
-		}
-		cmp, err := c.Campaign(id)
-		if err != nil {
-			return err
-		}
-		out, err = campaignView(c, cmp, false)
-		return err
-	})
+	c := store.TxFrom(r.Context())
+	id, err := reviews.GenerateCampaign(c, s.clock(), body["name"].(string), int(body["unused_days"].(int64)), pols)
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	cmp, err := c.Campaign(id)
+	if err != nil {
+		return nil, err
+	}
+	return campaignView(c, cmp, false)
 }
 
 func (s *Server) campaign(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
@@ -1317,7 +1263,7 @@ func (s *Server) campaign(_ http.ResponseWriter, r *http.Request, p *params) (an
 	if err := validated(p, nil); err != nil {
 		return nil, err
 	}
-	c := s.store.Read(r.Context())
+	c := store.TxFrom(r.Context())
 	cmp, err := getOrNil(c.Campaign(id))
 	if err != nil {
 		return nil, err
@@ -1347,30 +1293,22 @@ func (s *Server) reviewDecide(_ http.ResponseWriter, r *http.Request, p *params)
 	if v, ok := body["comment"].(string); ok {
 		comment = &v
 	}
-	var out ojson.Object
-	err = s.store.Write(r.Context(), func(c *store.Conn) error {
-		it, err := reviews.Decide(c, s.clock(), id, body["decision"].(string), body["reviewer"].(string), comment)
-		var re *reviews.Error
-		if errors.As(err, &re) {
-			return errStatus(http.StatusBadRequest, re.Msg)
-		}
-		if err != nil {
-			return err
-		}
-		out = ojson.Object{{Key: "id", Value: it.ID}, {Key: "decision", Value: it.Decision}}
-		return nil
-	})
+	it, err := reviews.Decide(store.TxFrom(r.Context()), s.clock(), id, body["decision"].(string), body["reviewer"].(string), comment)
+	var re *reviews.Error
+	if errors.As(err, &re) {
+		return nil, errStatus(http.StatusBadRequest, re.Msg)
+	}
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	return ojson.Object{{Key: "id", Value: it.ID}, {Key: "decision", Value: it.Decision}}, nil
 }
 
 // ---------------------------------------------------------------- HRIS / JML
 
 func (s *Server) hrisEvents(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
-	c := s.store.Read(r.Context())
-	evs, err := c.HrisEvents("ORDER BY status DESC, effective_at DESC")
+	c := store.TxFrom(r.Context())
+	evs, err := c.HrisEventsForUI()
 	if err != nil {
 		return nil, err
 	}
@@ -1440,34 +1378,22 @@ func (s *Server) hrisCreate(_ http.ResponseWriter, r *http.Request, p *params) (
 	if team, _ := payload.Get("to_team"); typ == "mover" && !truthy(team) {
 		return nil, errStatus(http.StatusBadRequest, "payload.to_team required")
 	}
-	var out jml.EventView
-	err = s.store.Write(r.Context(), func(c *store.Conn) error {
-		now := s.clock()
-		n, err := c.Count("SELECT count(id) FROM hris_events")
-		if err != nil {
-			return err
-		}
-		pj, err := store.JSON(payload)
-		if err != nil {
-			return err
-		}
-		id, err := c.Insert(`INSERT INTO hris_events (external_id, type, identity_id, payload, effective_at, status)
-			VALUES (?, ?, ?, ?, ?, 'pending')`, fmt.Sprintf("sim-evt-%d-%d", n+1, pyTimestamp(now)), typ,
-			store.IP(identityID), pj, store.T(now))
-		if err != nil {
-			return err
-		}
-		ev, err := c.HrisEvent(id)
-		if err != nil {
-			return err
-		}
-		out, err = jml.ViewEvent(c, ev)
-		return err
-	})
+	c := store.TxFrom(r.Context())
+	now := s.clock()
+	n, err := c.CountHrisEvents()
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	id, err := c.InsertHrisEvent(&store.HrisEvent{ExternalID: fmt.Sprintf("sim-evt-%d-%d", n+1, pyTimestamp(now)), Type: typ,
+		IdentityID: identityID, Payload: payload, EffectiveAt: now, Status: "pending"})
+	if err != nil {
+		return nil, err
+	}
+	ev, err := c.HrisEvent(id)
+	if err != nil {
+		return nil, err
+	}
+	return jml.ViewEvent(c, ev)
 }
 
 func (s *Server) hrisPlan(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
@@ -1479,7 +1405,7 @@ func (s *Server) hrisPlan(_ http.ResponseWriter, r *http.Request, p *params) (an
 	if err != nil {
 		return nil, err
 	}
-	c := s.store.Read(r.Context())
+	c := store.TxFrom(r.Context())
 	ev, err := getOrNil(c.HrisEvent(id))
 	if err != nil {
 		return nil, err
@@ -1511,16 +1437,11 @@ func (s *Server) hrisExecute(_ http.ResponseWriter, r *http.Request, p *params) 
 	if err != nil {
 		return nil, err
 	}
-	var plan jml.Plan
-	err = s.store.Write(r.Context(), func(c *store.Conn) error {
-		var err error
-		plan, err = jml.ExecuteEvent(c, s.clock(), id, "jml-automation", pols)
-		var je *jml.Error
-		if errors.As(err, &je) {
-			return errStatus(http.StatusBadRequest, je.Msg)
-		}
-		return err
-	})
+	plan, err := jml.ExecuteEvent(store.TxFrom(r.Context()), s.clock(), id, "jml-automation", pols)
+	var je *jml.Error
+	if errors.As(err, &je) {
+		return nil, errStatus(http.StatusBadRequest, je.Msg)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1536,7 +1457,7 @@ func (s *Server) leaverPlan(_ http.ResponseWriter, r *http.Request, p *params) (
 	if err != nil {
 		return nil, err
 	}
-	plan, err := jml.LeaverPlan(s.store.Read(r.Context()), s.clock(), id, true, pols)
+	plan, err := jml.LeaverPlan(store.TxFrom(r.Context()), s.clock(), id, true, pols)
 	var je *jml.Error
 	if errors.As(err, &je) {
 		return nil, errStatus(http.StatusNotFound, je.Msg)
@@ -1554,7 +1475,7 @@ func (s *Server) auditLog(_ http.ResponseWriter, r *http.Request, p *params) (an
 	if err := validated(p, nil); err != nil {
 		return nil, err
 	}
-	rows, err := s.store.Read(r.Context()).AuditLog(int(limit))
+	rows, err := store.TxFrom(r.Context()).AuditLog(int(limit))
 	if err != nil {
 		return nil, err
 	}

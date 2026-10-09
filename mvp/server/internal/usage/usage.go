@@ -2,7 +2,6 @@
 package usage
 
 import (
-	"database/sql"
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -58,34 +57,20 @@ func (u *Index) Describe(identityID, permID int64) Description {
 }
 
 // Build loads the 90-day usage index as of now.
-func Build(c *store.Conn, now time.Time) (*Index, error) {
-	since := now.Add(-90 * 24 * time.Hour)
-	rows, err := c.Query(`SELECT identity_id, permission_id, max(day), sum(count), count(id) FROM usage_events
-		WHERE day >= ? GROUP BY identity_id, permission_id`, store.T(since))
+func Build(c *store.TenantTx, now time.Time) (*Index, error) {
+	aggs, err := c.UsageAggregates(now.Add(-90 * 24 * time.Hour))
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	u := &Index{Now: now, stats: map[pair]Stat{}, ByIdentity: map[int64]time.Time{}}
-	for rows.Next() {
-		var iid, pid int64
-		var last sql.NullString
-		var total, days sql.NullInt64
-		if err := rows.Scan(&iid, &pid, &last, &total, &days); err != nil {
-			return nil, err
-		}
-		st := Stat{Events90d: int(total.Int64), ActiveDays90: int(days.Int64)}
-		if last.Valid {
-			t, err := timeutil.ParseDB(last.String)
-			if err != nil {
-				return nil, err
-			}
-			st.LastUsed = &t
-			if cur, ok := u.ByIdentity[iid]; !ok || t.After(cur) {
-				u.ByIdentity[iid] = t
+	for _, a := range aggs {
+		st := Stat{LastUsed: a.LastUsed, Events90d: a.Events, ActiveDays90: a.Days}
+		if t := a.LastUsed; t != nil {
+			if cur, ok := u.ByIdentity[a.IdentityID]; !ok || t.After(cur) {
+				u.ByIdentity[a.IdentityID] = *t
 			}
 		}
-		u.stats[pair{iid, pid}] = st
+		u.stats[pair{a.IdentityID, a.PermissionID}] = st
 	}
-	return u, rows.Err()
+	return u, nil
 }

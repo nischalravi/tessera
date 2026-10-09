@@ -35,7 +35,7 @@ Requirements: Go 1.27+ (the version in `server/go.mod`), Node 18+ (tested on 24)
 
 Ctrl+C stops both processes. You can change the ports with `API_PORT=… UI_PORT=… ./run.sh`.
 The database is `server/tessera.db` (override with `TESSERA_DB`); the binary is `server/bin/tessera`
-and can also be run directly: `tessera serve -addr 127.0.0.1:8000 -db tessera.db` or `tessera seed`.
+and can also be run directly: `TESSERA_ENV=dev tessera serve -addr 127.0.0.1:8000 -db tessera.db` or `tessera seed` (until sign-in lands the API serves the dev default tenant, `larkspur`, and refuses to start unless `TESSERA_ENV=dev`).
 
 ## What the demo shows
 

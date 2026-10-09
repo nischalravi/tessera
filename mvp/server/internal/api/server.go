@@ -21,6 +21,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 )
 
@@ -32,7 +33,12 @@ const DefaultHandlerTimeout = 30 * time.Second
 
 // Config configures a Server.
 type Config struct {
-	Store    *store.Store
+	Store *store.DB
+	// Tenant is the tenant every request is served for until authentication
+	// lands (Phase 0 PR5): cmd/tessera resolves it with store.DevDefaultTenant,
+	// which only works when TESSERA_ENV=dev. The zero value fails closed: every
+	// tenant route answers 500 and records tenancy.context_missing.
+	Tenant   tenancy.ID
 	Clock    timeutil.Clock // defaults to timeutil.System
 	Policies *policy.Loader // required
 	// Connectors returns the configured connectors (defaults to connectors.Load("", now)).
@@ -47,7 +53,7 @@ type Config struct {
 // Server serves the API.
 type Server struct {
 	cfg    Config
-	store  *store.Store
+	store  *store.DB
 	clock  timeutil.Clock
 	log    *slog.Logger
 	routes []*route
@@ -88,12 +94,14 @@ func (s *Server) Handler() http.Handler {
 	return securityHeaders(h)
 }
 
-// RunSweeper expires JIT grants every interval until ctx is done.
+// RunSweeper expires JIT grants of every active tenant, each in its own
+// tenant transaction, every interval until ctx is done. A failure in one
+// tenant is logged and does not stop the others.
 func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
-		if err := s.sweep(ctx); err != nil && ctx.Err() == nil {
+		if _, err := jit.SweepAll(ctx, s.store, s.clock()); err != nil && ctx.Err() == nil {
 			s.log.Error("jit sweep failed", "err", err)
 		}
 		select {
@@ -104,15 +112,20 @@ func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
 	}
 }
 
-// sweep expires JIT grants, taking the write lock only when there is work.
-func (s *Server) sweep(ctx context.Context) error {
+// sweepTenant expires one tenant's JIT grants, taking the write lock only
+// when there is work.
+func (s *Server) sweepTenant(ctx context.Context, t tenancy.ID) error {
 	now := s.clock()
-	need, err := jit.NeedsSweep(s.store.Read(ctx), now)
-	if err != nil || !need {
+	var need bool
+	if err := s.store.ReadTenant(ctx, t, func(tx *store.TenantTx) error {
+		var err error
+		need, err = jit.NeedsSweep(tx, now)
+		return err
+	}); err != nil || !need {
 		return err
 	}
-	return s.store.Write(ctx, func(c *store.Conn) error {
-		_, err := jit.Sweep(c, now)
+	return s.store.InTenant(ctx, t, func(tx *store.TenantTx) error {
+		_, err := jit.Sweep(tx, now)
 		return err
 	})
 }
@@ -123,14 +136,77 @@ func (s *Server) policies() ([]*policy.Policy, error) { return s.cfg.Policies.Lo
 
 type handlerFunc func(w http.ResponseWriter, r *http.Request, p *params) (any, error)
 
+// tenantMode is how a route reaches tenant data (see registerRoutes).
+type tenantMode int
+
+const (
+	noTenant tenantMode = iota
+	read
+	swept
+	write
+)
+
 type route struct {
-	method string
-	segs   []string
-	h      handlerFunc
+	method  string
+	pattern string
+	segs    []string
+	tenant  tenantMode
+	h       handlerFunc
 }
 
-func (s *Server) handle(method, pattern string, h handlerFunc) {
-	s.routes = append(s.routes, &route{method, strings.Split(strings.TrimPrefix(pattern, "/"), "/"), h})
+func (s *Server) handle(method, pattern string, mode tenantMode, h handlerFunc) {
+	s.routes = append(s.routes, &route{method, pattern, strings.Split(strings.TrimPrefix(pattern, "/"), "/"), mode, h})
+}
+
+// RouteInfo describes a registered route.
+type RouteInfo struct {
+	Method, Pattern string
+	// Tenant is true when the route runs inside a tenant transaction.
+	Tenant bool
+	// Write is true when that transaction can write.
+	Write bool
+}
+
+// Routes lists every registered route (a plain http.ServeMux cannot list its
+// patterns; tests enumerate this table).
+func (s *Server) Routes() []RouteInfo {
+	out := make([]RouteInfo, len(s.routes))
+	for i, rt := range s.routes {
+		out[i] = RouteInfo{rt.method, rt.pattern, rt.tenant != noTenant, rt.tenant == write}
+	}
+	return out
+}
+
+// serve runs the route's handler, inside a transaction of the request's
+// tenant unless the route touches no tenant data. This is the tenant
+// middleware of design §5.2: the transaction commits only if the handler
+// returns no error and rolls back otherwise, and handlers reach it with
+// store.TxFrom.
+func (s *Server) serve(rt *route, w http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	if rt.tenant == noTenant {
+		return rt.h(w, r, p)
+	}
+	ctx, t := r.Context(), s.cfg.Tenant
+	if rt.tenant == swept && !t.IsZero() {
+		if err := s.sweepTenant(ctx, t); err != nil {
+			return nil, err
+		}
+	}
+	var out any
+	run := func(tx *store.TenantTx) error {
+		r := r.WithContext(store.WithTx(ctx, tx))
+		p.r = r
+		var err error
+		out, err = rt.h(w, r, p)
+		return err
+	}
+	var err error
+	if rt.tenant == write {
+		err = s.store.InTenant(ctx, t, run)
+	} else {
+		err = s.store.ReadTenant(ctx, t, run)
+	}
+	return out, err
 }
 
 func (rt *route) match(path string) (map[string]string, bool) {
@@ -207,7 +283,7 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := &params{r: r, path: vars}
-	out, err := rt.h(w, r, p)
+	out, err := s.serve(rt, w, r, p)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -248,7 +324,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_, _ = w.Write(body)
+	_, _ = w.Write(body) // #nosec G705 -- JSON-encoded body served as application/json with nosniff, never HTML
 }
 
 func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
@@ -312,6 +388,11 @@ func (s *Server) recoverPanics(next http.Handler) http.Handler {
 			if p := recover(); p != nil {
 				if p == http.ErrAbortHandler {
 					panic(p)
+				}
+				if _, ok := p.(store.MissingTenantContext); ok {
+					// A handler reached tenant data without the tenant wrapper:
+					// fail closed and record it on the platform tenant.
+					s.store.RecordContextMissing(r.Context(), r.Method+" "+r.URL.Path)
 				}
 				s.log.Error("panic serving request", "method", r.Method, "path", r.URL.Path, "panic", p,
 					"stack", string(debug.Stack()))

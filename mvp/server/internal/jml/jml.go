@@ -78,7 +78,7 @@ func getOrNil[T any](v *T, err error) (*T, error) {
 }
 
 // InferTeam derives a team from the identity's Okta group memberships.
-func InferTeam(c *store.Conn, identityID int64) (*string, error) {
+func InferTeam(c *store.TenantTx, identityID int64) (*string, error) {
 	accts, err := c.IdentityAccounts(identityID)
 	if err != nil {
 		return nil, err
@@ -87,7 +87,7 @@ func InferTeam(c *store.Conn, identityID int64) (*string, error) {
 		if a.System != "okta" {
 			continue
 		}
-		edges, err := c.Edges("WHERE src = ?", graph.Key("account", a.ID))
+		edges, err := c.EdgesFrom(graph.Key("account", a.ID))
 		if err != nil {
 			return nil, err
 		}
@@ -114,7 +114,7 @@ func InferTeam(c *store.Conn, identityID int64) (*string, error) {
 }
 
 // Label renders a node key from the database.
-func Label(c *store.Conn, key string) (string, error) {
+func Label(c *store.TenantTx, key string) (string, error) {
 	kind, raw, _ := strings.Cut(key, ":")
 	id, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
@@ -154,7 +154,7 @@ type Plan = ojson.Object
 
 // LeaverPlan lists everything to do when an identity leaves. withImpact adds a
 // simulation of disabling the identity's active accounts.
-func LeaverPlan(c *store.Conn, now time.Time, identityID int64, withImpact bool, policies []*policy.Policy) (Plan, error) {
+func LeaverPlan(c *store.TenantTx, now time.Time, identityID int64, withImpact bool, policies []*policy.Policy) (Plan, error) {
 	ident, err := getOrNil(c.Identity(identityID))
 	if err != nil {
 		return nil, err
@@ -183,7 +183,7 @@ func LeaverPlan(c *store.Conn, now time.Time, identityID int64, withImpact bool,
 		}
 	}
 	for _, a := range accounts {
-		edges, err := c.Edges("WHERE src = ?", graph.Key("account", a.ID))
+		edges, err := c.EdgesFrom(graph.Key("account", a.ID))
 		if err != nil {
 			return nil, err
 		}
@@ -201,7 +201,7 @@ func LeaverPlan(c *store.Conn, now time.Time, identityID int64, withImpact bool,
 				{Key: "detail", Value: fmt.Sprintf("Remove %s:%s from %s%s", a.System, a.Username, lbl, suffix)}})
 		}
 	}
-	reqs, err := c.Requests("WHERE identity_id = ? AND status IN ('pending', 'approved') ORDER BY id", identityID)
+	reqs, err := c.OpenRequestsFor(identityID)
 	if err != nil {
 		return nil, err
 	}
@@ -214,7 +214,7 @@ func LeaverPlan(c *store.Conn, now time.Time, identityID int64, withImpact bool,
 			{Key: "system", Value: "tessera"}, {Key: "target", Value: lbl},
 			{Key: "detail", Value: fmt.Sprintf("Cancel %s JIT request #%d", r.Status, r.ID)}})
 	}
-	owned, err := c.Identities("WHERE owner_id = ? AND status = 'active'", identityID)
+	owned, err := activeOnly(c.IdentitiesOwnedBy(identityID))
 	if err != nil {
 		return nil, err
 	}
@@ -232,22 +232,28 @@ func LeaverPlan(c *store.Conn, now time.Time, identityID int64, withImpact bool,
 			return nil, err
 		}
 		for _, a := range nAccts {
-			secs, err := c.Secrets("WHERE s.account_id = ? AND s.status = 'active'", a.ID)
+			secs, err := c.AccountSecrets(a.ID)
 			if err != nil {
 				return nil, err
 			}
 			for _, s := range secs {
+				if s.Status != "active" {
+					continue
+				}
 				steps = append(steps, Step{{Key: "action", Value: "rotate_secret"}, {Key: "secret_id", Value: s.ID},
 					{Key: "system", Value: s.System}, {Key: "target", Value: s.Name},
 					{Key: "detail", Value: fmt.Sprintf("Rotate %s '%s' on %s (leaver had custody)", s.Kind, s.Name, n.Name)}})
 			}
 		}
 	}
-	dels, err := c.Delegations("WHERE principal_id = ?", identityID)
+	dels, err := c.Delegations()
 	if err != nil {
 		return nil, err
 	}
 	for _, d := range dels {
+		if d.PrincipalID != identityID {
+			continue
+		}
 		agent, err := getOrNil(c.Identity(d.AgentID))
 		if err != nil {
 			return nil, err
@@ -261,7 +267,7 @@ func LeaverPlan(c *store.Conn, now time.Time, identityID int64, withImpact bool,
 			{Key: "detail", Value: fmt.Sprintf("Revoke delegation: %s acting on behalf of %s (%s)", target, ident.Name,
 				strings.Join(d.Scopes, ", "))}})
 	}
-	reports, err := c.Identities("WHERE manager_id = ? AND status = 'active'", identityID)
+	reports, err := activeOnly(c.IdentitiesManagedBy(identityID))
 	if err != nil {
 		return nil, err
 	}
@@ -324,7 +330,7 @@ type birthGroup struct {
 	g   *store.Group
 }
 
-func birthrightGroups(c *store.Conn, team *string) ([]birthGroup, error) {
+func birthrightGroups(c *store.TenantTx, team *string) ([]birthGroup, error) {
 	var out []birthGroup
 	seen := map[string]int{}
 	if team == nil {
@@ -381,7 +387,7 @@ func pyStr(v any) string {
 }
 
 // MoverPlan computes access changes for a team move.
-func MoverPlan(c *store.Conn, identityID int64, toTeam string, fromTeam *string, newTitle, toDepartment any) (Plan, error) {
+func MoverPlan(c *store.TenantTx, identityID int64, toTeam string, fromTeam *string, newTitle, toDepartment any) (Plan, error) {
 	ident, err := getOrNil(c.Identity(identityID))
 	if err != nil {
 		return nil, err
@@ -426,9 +432,9 @@ func MoverPlan(c *store.Conn, identityID int64, toTeam string, fromTeam *string,
 		if a == nil {
 			steps = append(steps, Step{{Key: "action", Value: "create_account"}, {Key: "system", Value: g.System},
 				{Key: "target", Value: target}, {Key: "detail", Value: fmt.Sprintf("Create %s account for %s", g.System, ident.Name)}})
-		} else if n, err := c.Count("SELECT count(*) FROM grant_edges WHERE src = ? AND dst = ?", graph.Key("account", a.ID), bg.key); err != nil {
+		} else if e, err := getOrNil(c.EdgeBetween(graph.Key("account", a.ID), bg.key)); err != nil {
 			return nil, err
-		} else if n > 0 {
+		} else if e != nil {
 			continue
 		}
 		steps = append(steps, Step{{Key: "action", Value: "add_grant"}, {Key: "system", Value: g.System},
@@ -436,7 +442,7 @@ func MoverPlan(c *store.Conn, identityID int64, toTeam string, fromTeam *string,
 			{Key: "detail", Value: fmt.Sprintf("Add to %s:%s (birthright for %s)", g.System, g.Name, toTeam)}})
 	}
 	for _, a := range accounts {
-		edges, err := c.Edges("WHERE src = ?", graph.Key("account", a.ID))
+		edges, err := c.EdgesFrom(graph.Key("account", a.ID))
 		if err != nil {
 			return nil, err
 		}
@@ -473,7 +479,7 @@ func MoverPlan(c *store.Conn, identityID int64, toTeam string, fromTeam *string,
 // ------------------------------------------------------------------ joiner
 
 // JoinerPlan lists the accounts and birthright access for a new hire.
-func JoinerPlan(c *store.Conn, payload ojson.Object) (Plan, error) {
+func JoinerPlan(c *store.TenantTx, payload ojson.Object) (Plan, error) {
 	teamV, _ := payload.Get("team")
 	var team *string
 	if s, ok := teamV.(string); ok {
@@ -537,7 +543,7 @@ func optStr(payload ojson.Object, k string) *string {
 func getAny(payload ojson.Object, k string) any { v, _ := payload.Get(k); return v }
 
 // PlanForEvent builds the plan for an HRIS event.
-func PlanForEvent(c *store.Conn, now time.Time, ev *store.HrisEvent, withImpact bool, policies []*policy.Policy) (Plan, error) {
+func PlanForEvent(c *store.TenantTx, now time.Time, ev *store.HrisEvent, withImpact bool, policies []*policy.Policy) (Plan, error) {
 	switch ev.Type {
 	case "leaver":
 		if ev.IdentityID == nil {
@@ -555,7 +561,7 @@ func PlanForEvent(c *store.Conn, now time.Time, ev *store.HrisEvent, withImpact 
 	return JoinerPlan(c, ev.Payload)
 }
 
-func ensureAccount(c *store.Conn, now time.Time, ident *store.Identity, system string) (*store.Account, error) {
+func ensureAccount(c *store.TenantTx, now time.Time, ident *store.Identity, system string) (*store.Account, error) {
 	accts, err := c.IdentityAccounts(ident.ID)
 	if err != nil {
 		return nil, err
@@ -581,15 +587,16 @@ func ensureAccount(c *store.Conn, now time.Time, ident *store.Identity, system s
 		}
 		uname = strings.ReplaceAll(strings.SplitN(base, "@", 2)[0], ".", "-")
 	}
-	id, err := c.Insert(`INSERT INTO accounts (system, external_id, identity_id, username, kind, status, created_at)
-		VALUES (?, ?, ?, ?, 'user', 'active', ?)`, system, "tessera-"+system+"-"+ident.ExternalID, ident.ID, uname, store.T(now))
+	iid := ident.ID
+	id, err := c.InsertAccount(&store.Account{System: system, ExternalID: "tessera-" + system + "-" + ident.ExternalID,
+		IdentityID: &iid, Username: uname, Kind: "user", Status: "active", CreatedAt: &now})
 	if err != nil {
 		return nil, err
 	}
 	return c.Account(id)
 }
 
-func addGrant(c *store.Conn, now time.Time, ident *store.Identity, st Step) error {
+func addGrant(c *store.TenantTx, now time.Time, ident *store.Identity, st Step) error {
 	gid, _ := stepInt(st, "group_id")
 	g, err := c.Group(gid)
 	if err != nil {
@@ -600,21 +607,20 @@ func addGrant(c *store.Conn, now time.Time, ident *store.Identity, st Step) erro
 		return err
 	}
 	src, dst := graph.Key("account", a.ID), graph.Key("group", g.ID)
-	n, err := c.Count("SELECT count(*) FROM grant_edges WHERE src = ? AND dst = ?", src, dst)
-	if err != nil || n > 0 {
+	existing, err := getOrNil(c.EdgeBetween(src, dst))
+	if err != nil || existing != nil {
 		return err
 	}
-	_, err = c.Exec(`INSERT INTO grant_edges (src, dst, relation, source, created_at) VALUES (?, ?, 'member_of', 'manual', ?)`,
-		src, dst, store.T(now))
+	_, err = c.InsertEdge(&store.GrantEdge{Src: src, Dst: dst, Relation: "member_of", Source: "manual", CreatedAt: now})
 	return err
 }
 
-func applyStep(c *store.Conn, now time.Time, ident *store.Identity, st Step) error {
+func applyStep(c *store.TenantTx, now time.Time, ident *store.Identity, st Step) error {
 	var err error
 	switch stepStr(st, "action") {
 	case "disable_account":
 		id, _ := stepInt(st, "account_id")
-		_, err = c.Exec("UPDATE accounts SET status = 'disabled' WHERE id = ?", id)
+		err = c.DisableAccount(id)
 	case "remove_grant":
 		id, _ := stepInt(st, "edge_id")
 		err = c.DeleteEdge(id)
@@ -622,21 +628,20 @@ func applyStep(c *store.Conn, now time.Time, ident *store.Identity, st Step) err
 		err = addGrant(c, now, ident, st)
 	case "cancel_jit":
 		id, _ := stepInt(st, "request_id")
-		_, err = c.Exec(`UPDATE access_requests SET status = CASE WHEN status = 'approved' THEN 'revoked' ELSE 'denied' END,
-			decided_at = ? WHERE id = ?`, store.T(now), id)
+		err = c.CancelRequest(id, now)
 	case "reassign_owner":
 		id, _ := stepInt(st, "identity_id")
-		_, err = c.Exec("UPDATE identities SET owner_id = ? WHERE id = ?", stepGet(st, "new_owner_id"), id)
+		err = c.SetIdentityOwner(id, optInt(stepGet(st, "new_owner_id")))
 	case "rotate_secret":
 		id, _ := stepInt(st, "secret_id")
-		_, err = c.Exec("UPDATE secrets SET last_rotated_at = ? WHERE id = ?", store.T(now), id)
+		err = c.SetSecretRotated(id, now)
 	case "revoke_delegation":
 		id, _ := stepInt(st, "delegation_id")
-		_, err = c.Exec("DELETE FROM agent_delegations WHERE id = ?", id)
+		err = c.DeleteDelegation(id)
 	case "reassign_reports":
 		ids, _ := stepGet(st, "report_ids").([]int64)
 		for _, rid := range ids {
-			if _, err = c.Exec("UPDATE identities SET manager_id = ? WHERE id = ?", stepGet(st, "new_manager_id"), rid); err != nil {
+			if err = c.SetIdentityManager(rid, optInt(stepGet(st, "new_manager_id"))); err != nil {
 				return err
 			}
 		}
@@ -646,7 +651,7 @@ func applyStep(c *store.Conn, now time.Time, ident *store.Identity, st Step) err
 }
 
 // ExecuteEvent applies an HRIS event's plan and marks it executed.
-func ExecuteEvent(c *store.Conn, now time.Time, eventID int64, actor string, policies []*policy.Policy) (Plan, error) {
+func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, actor string, policies []*policy.Policy) (Plan, error) {
 	ev, err := getOrNil(c.HrisEvent(eventID))
 	if err != nil {
 		return nil, err
@@ -668,22 +673,22 @@ func ExecuteEvent(c *store.Conn, now time.Time, eventID int64, actor string, pol
 	}
 	if ev.Type == "joiner" {
 		p := ev.Payload
-		var mgr any
+		var mgr *int64
 		if xid, ok := getAny(p, "manager_external_id").(string); ok {
-			if ms, err := c.Identities("WHERE external_id = ?", xid); err != nil {
+			if m, err := getOrNil(c.IdentityByExternalID(xid)); err != nil {
 				return nil, err
-			} else if len(ms) > 0 {
-				mgr = ms[0].ID
+			} else if m != nil {
+				mgr = &m.ID
 			}
 		}
-		id, err := c.Insert(`INSERT INTO identities (external_id, name, email, type, department, title, status, manager_id,
-			source, hired_at, created_at) VALUES (?, ?, ?, 'human', ?, ?, 'active', ?, 'workday', ?, ?)`,
-			fmt.Sprintf("emp-new-%d", ev.ID), pyStr(getAny(p, "name")), store.SP(optStr(p, "email")),
-			store.SP(optStr(p, "department")), store.SP(optStr(p, "title")), mgr, store.T(ev.EffectiveAt), store.T(now))
+		source, hired := "workday", ev.EffectiveAt
+		id, err := c.InsertIdentity(&store.Identity{ExternalID: fmt.Sprintf("emp-new-%d", ev.ID),
+			Name: pyStr(getAny(p, "name")), Email: optStr(p, "email"), Type: "human", Department: optStr(p, "department"),
+			Title: optStr(p, "title"), Status: "active", ManagerID: mgr, Source: &source, HiredAt: &hired, CreatedAt: now})
 		if err != nil {
 			return nil, err
 		}
-		if _, err := c.Exec("UPDATE hris_events SET identity_id = ? WHERE id = ?", id, ev.ID); err != nil {
+		if err := c.SetHrisEventIdentity(ev.ID, id); err != nil {
 			return nil, err
 		}
 		ident, err := c.Identity(id)
@@ -720,22 +725,22 @@ func ExecuteEvent(c *store.Conn, now time.Time, eventID int64, actor string, pol
 		}
 		switch ev.Type {
 		case "leaver":
-			_, err = c.Exec("UPDATE identities SET status = 'terminated', terminated_at = ? WHERE id = ?", store.T(now), ident.ID)
+			err = c.TerminateIdentity(ident.ID, now)
 		case "mover":
-			dept, title := any(store.SP(ident.Department)), any(store.SP(ident.Title))
+			dept, title := ident.Department, ident.Title
 			if v, ok := ev.Payload.Get("to_department"); ok {
 				dept = dbValue(v)
 			}
 			if v, ok := ev.Payload.Get("new_title"); ok {
 				title = dbValue(v)
 			}
-			_, err = c.Exec("UPDATE identities SET department = ?, title = ? WHERE id = ?", dept, title, ident.ID)
+			err = c.SetIdentityDepartmentTitle(ident.ID, dept, title)
 		}
 		if err != nil {
 			return nil, err
 		}
 	}
-	if _, err := c.Exec("UPDATE hris_events SET status = 'executed', executed_at = ? WHERE id = ?", store.T(now), ev.ID); err != nil {
+	if err := c.MarkHrisEventExecuted(ev.ID, now); err != nil {
 		return nil, err
 	}
 	err = c.Audit(now, actor, "jml."+ev.Type, ojson.Object{{Key: "event_id", Value: ev.ID},
@@ -743,14 +748,40 @@ func ExecuteEvent(c *store.Conn, now time.Time, eventID int64, actor string, pol
 	return plan, err
 }
 
-func dbValue(v any) any {
+func dbValue(v any) *string {
 	switch x := v.(type) {
 	case nil:
 		return nil
 	case string:
+		return &x
+	}
+	s := pyStr(v)
+	return &s
+}
+
+// optInt is a plan step's optional integer id (nil stores NULL).
+func optInt(v any) *int64 {
+	switch x := v.(type) {
+	case int64:
+		return &x
+	case *int64:
 		return x
 	}
-	return pyStr(v)
+	return nil
+}
+
+// activeOnly keeps the active identities, preserving order.
+func activeOnly(in []*store.Identity, err error) ([]*store.Identity, error) {
+	if err != nil {
+		return nil, err
+	}
+	out := in[:0:0]
+	for _, i := range in {
+		if i.Status == "active" {
+			out = append(out, i)
+		}
+	}
+	return out, nil
 }
 
 // IdentityRef is a brief identity in an event view.
@@ -773,7 +804,7 @@ type EventView struct {
 }
 
 // ViewEvent renders an event.
-func ViewEvent(c *store.Conn, ev *store.HrisEvent) (EventView, error) {
+func ViewEvent(c *store.TenantTx, ev *store.HrisEvent) (EventView, error) {
 	v := EventView{ID: ev.ID, ExternalID: ev.ExternalID, Type: ev.Type, Status: ev.Status,
 		EffectiveAt: timeutil.ISO(ev.EffectiveAt), ExecutedAt: timeutil.ISOPtr(ev.ExecutedAt), Payload: ev.Payload}
 	if v.Payload == nil {

@@ -90,7 +90,7 @@ type Result struct {
 
 // Run simulates req. Missing inputs (usage, base graph) are built from c.
 // It returns *graph.UnknownNodeError for edges or accounts not in the graph.
-func Run(c *store.Conn, req Request, in Inputs) (*Result, error) {
+func Run(c *store.TenantTx, req Request, in Inputs) (*Result, error) {
 	var err error
 	if in.Usage == nil {
 		if in.Usage, err = usage.Build(c, in.Now); err != nil {
@@ -99,7 +99,7 @@ func Run(c *store.Conn, req Request, in Inputs) (*Result, error) {
 	}
 	base := in.Base
 	if base == nil {
-		if base, err = graph.FromDB(c, in.Now); err != nil {
+		if base, err = graph.Build(c, in.Now); err != nil {
 			return nil, err
 		}
 	}
