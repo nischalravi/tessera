@@ -54,7 +54,7 @@
 | K11 | **The readiness score is a published formula with a per-point explanation**: checklist completion weighted by level, minus a capped penalty for open findings, hard-capped below 50 while any Required item fails. The tenant score is the account-weighted mean. | Scores nobody can explain are ignored. Every deduction links to the item or finding that caused it. |
 | K12 | **Correlation is never automatic on self-asserted attributes.** Tier 1 is an exact HR-id match, tier 2 an immutable cross-system link (for example Entra `onPremisesImmutableId` to AD `objectGUID`), and tier 3 (email or UPN) only *proposes* a match into the review queue. | D4·M2 and the nOAuth class of attacks (Phase 0 S4); matches the guest design's no-auto-link rule. |
 
-**PR sequence** (§13): DR-1 templates → DR-2 connections, state machine and gating → DR-3 check framework and simulated validation → DR-4 staging and dry-run reconciliation → DR-5 score, needs-attention and dashboard API → DR-6 setup wizard UI → DR-7 deployment-health and Home UI (DR-1 to DR-7 are the **MVP slice**) → DR-8 evidence export → DR-9 drift and Degraded → DR-10 tenancy, RBAC and step-up → DR-11 directory agent and `safedial` → DR-12 to DR-18 real live checks per directory.
+**PR sequence** (§13; issues #82 to #99): DR-1 templates → DR-2 connections, state machine and gating → DR-3 check framework and simulated validation → DR-4 staging and dry-run reconciliation → DR-5 score, needs-attention and dashboard API → DR-6 setup wizard UI → DR-7 deployment-health and Home UI (DR-1 to DR-7 are the **MVP slice**) → DR-8 evidence export → DR-9 drift and Degraded → DR-10 tenancy, RBAC and step-up → DR-11 directory agent and `safedial` → DR-12 to DR-18 real live checks per directory.
 
 ---
 
@@ -1152,95 +1152,95 @@ Buildable now on the Go backend and the demo company, without Phase 0 and withou
 
 Every PR: `cd mvp && ./run.sh test` and `./run.sh build` pass; existing API parity tests stay green; new tables are covered by the isolation meta-test once #5 lands.
 
-### DR-1: Readiness templates and linter (2–3 days) · MVP slice
+### DR-1: Readiness templates and linter (2–3 days) · MVP slice · #82
 
 - **Files:** `internal/readiness/template/{types.go,load.go,lint.go,overlay.go}`, `internal/readiness/templates/{base,ad,ldap,entra,okta,google,workday,scim_app}.yaml`, `internal/readiness/template/testdata/counts.golden`, `cmd/tessera` subcommand `readiness lint`.
 - **Tests:** `TestTemplates_Lint` (every shipped template: unique ids, known check names per connector type, DAG, required fields present, remediation non-empty), `TestTemplates_Counts` (golden counts in §3.14), `TestOverlay_NoDowngrade` (table: lowering, removing or disabling an item → error; raising and adding → ok), `TestAppliesWhen_ClosedVocabulary`, `TestVersionPinning`.
 
-### DR-2: Connections, state machine and server-side gating (4 days) · MVP slice
+### DR-2: Connections, state machine and server-side gating (4 days) · MVP slice · #83
 
 - **Files:** schema `0201_connections.sql`, `0202_readiness.sql` (item states only; runs in DR-3) inside `store.Migrate` with the default tenant id, `internal/store/{model_readiness.go,repo_connections.go,repo_readiness.go}`, `internal/readiness/{state.go,gate.go,confighash.go}`, `internal/api/connections.go` (create, get, list, config, credential, checklist, attest, skip, transition, activate, retire), `openapi.json`, audit events from §4.2.
 - **Tests:** `TestStateMachine_AllTransitions` (table of state × action), `TestGate_EachConditionBlocks`, `TestActivate_409GateReport`, `TestSkipRequired_422`, `TestSkipReasonMinLength`, `TestConfigEdit_InvalidatesDependentItems`, `TestActiveEdit_CreatesRevision`, `TestActivate_ConcurrentCAS`, `TestOnlyReadinessWritesConnectionState` (go/parser source scan), `TestLegacyConnectors_Unchanged`.
 
-### DR-3: Check framework and simulated validation for demo connectors (3–4 days) · MVP slice
+### DR-3: Check framework and simulated validation for demo connectors (3–4 days) · MVP slice · #84
 
 - **Files:** `internal/connectors/probe.go` (`Prober`), `internal/connectors/demo_readiness/{happy,gaps}.yaml`, `internal/connectors/demo_ad.go` (simulated AD built from DemoCompany; staging only by default), `internal/readiness/checks/` (registry plus all check ids referenced by templates, each with a demo implementation), `internal/readiness/runner.go`, `0202_readiness.sql` (runs and results), routes `validate` and `validations/{run}`.
 - **Tests:** `TestRunner_TimeoutPerCheck` (slow fake prober), `TestRunner_DependencyBlocks`, `TestRunner_ConfigHashStale`, `TestRunner_LiveTTL`, `TestProbers_ReadOnly` (recorder), `TestResults_NoSecretBytes`, `TestSimulated_CannotGateRealTypes`, `TestScenarios_Deterministic`, `TestDemoAD_DoesNotChangeDefaultSeed` (default `demo` spec output unchanged, so parity fixtures hold).
 
-### DR-4: Staging snapshot and dry-run reconciliation (5 days) · MVP slice
+### DR-4: Staging snapshot and dry-run reconciliation (5 days) · MVP slice · #85
 
 - **Files:** `0203_staging.sql`, `internal/store/repo_staging.go`, `internal/ingest/stage.go`, `internal/connectors/connector.go` (optional `Attributes` and `Stats`), `internal/reconcile/{correlate.go,rules.go,rules.yaml,impact.go,cause.go}`, routes `dry-run`, `dry-runs/{run}`, `findings`, `findings/{id}/accept`.
 - **Tests:** `TestStage_NoLiveWrites`, `TestCorrelation_Tiers` (tier 3 only proposes), `TestCorrelation_Ambiguous`, golden findings over DemoCompany plus `demo-ad` (`TestFindings_Golden`: RF-06(b) contains exactly Oren Whitlock for Okta; RF-08 contains the planted Domain Admin; RF-09 equals 3), `TestImpact_ThroughMapsTo`, `TestCause_UnmappedKey`, `TestSamples_CappedAndMinimal`, `TestAccept_ReasonRequired`.
 
-### DR-5: Readiness score, needs-attention and dashboard API (3 days) · MVP slice
+### DR-5: Readiness score, needs-attention and dashboard API (3 days) · MVP slice · #86
 
 - **Files:** `internal/readiness/{score.go,attention.go}`, `readiness_scores` table, `internal/api/deployment_health.go` (`/api/insights/deployment-health`, `/rerun`, `/api/connections/{id}/health`), `/api/summary` `readiness` block, `/api/connectors` additions.
 - **Tests:** `TestScore_Formula` (golden table including the cap at 49, the 40-point penalty cap and half-weight accepted findings), `TestScore_BreakdownSumsToScore`, `TestTenantScore_Weighted`, `TestTenantScore_NoHRSourceCap`, `TestAttention_Ranking`, `TestSummary_ReadinessBlock`.
 
-### DR-6: Setup wizard, checklist panel, validation results and reconciliation report UI (5 days) · MVP slice
+### DR-6: Setup wizard, checklist panel, validation results and reconciliation report UI (5 days) · MVP slice · #87
 
 - **Files:** `mvp/frontend/src/components/{Stepper.tsx,Checklist.tsx}`, `features/admin/connections/{ConnectionsList.tsx,Wizard.tsx,ValidationResults.tsx,ReconReport.tsx,FindingDrawer.tsx}`, routes in `app/App.tsx`, `api.ts` types, `features/admin/Admin.tsx` (Connections section), command palette actions.
 - **Tests:** `npm run build` type-check; a scripted walkthrough of §12 recorded in the PR (screenshots in light and dark, narrow and wide); keyboard-only pass over the checklist and dialogs.
 
-### DR-7: Insights → Deployment health and Home cards (3 days) · MVP slice
+### DR-7: Insights → Deployment health and Home cards (3 days) · MVP slice · #88
 
 - **Files:** `features/insights/DeploymentHealth.tsx`, `app/nav.ts`, `features/home/Home.tsx` (Kpi and Needs attention card), `features/inbox/model.ts` (connection tasks).
 - **Tests:** type-check; walkthrough screenshots; the Home card renders with the API down (Loading and error states).
 
-### DR-8: Evidence export and audit-ledger events (2 days)
+### DR-8: Evidence export and audit-ledger events (2 days) · #89
 
 - **Depends on:** Phase 0 PR3 (#7).
 - **Files:** `internal/readiness/evidence.go`, export routes, ledger event catalogue additions (`connection.*`, `readiness.*`), control mapping text.
 - **Tests:** `TestEvidence_ManifestHashes`, `TestEvidence_LedgerEventMatchesManifest`, `TestEvidence_NoSamplesBeyondIds`.
 
-### DR-9: Drift, Degraded state, scheduled re-runs and template upgrades (3 days)
+### DR-9: Drift, Degraded state, scheduled re-runs and template upgrades (3 days) · #90
 
 - **Files:** `internal/readiness/drift.go`, `readiness_baselines`, scheduler job in Admin → Jobs, `CanWrite`, live-mode reconciliation, template minor-upgrade grace logic, Inbox task source.
 - **Tests:** `TestDrift_Tolerances`, `TestDegraded_TwoConsecutiveFailures`, `TestDegraded_BlocksWrite`, `TestRecovered`, `TestTemplateUpgrade_GracePeriod`.
 
-### DR-10: Tenancy, RBAC, step-up and two-person activation (2 days)
+### DR-10: Tenancy, RBAC, step-up and two-person activation (2 days) · #91
 
 - **Depends on:** Phase 0 PR1 (#5), PR5 (#9), PR8 (#12), PR12 (#16).
 - **Files:** permissions in `internal/auth/rbac.go`, route declarations with step-up, admin-change applier `connection.activate`, migration removing the default tenant id, `TestIsolation_ReadinessTables`.
 - **Tests:** permission matrix test per route, step-up required on activate, credential and critical acceptance, two-person rule for write-enabled connections, isolation.
 
-### DR-11: Directory agent and `safedial` (5 days)
+### DR-11: Directory agent and `safedial` (5 days) · #92
 
 - **Depends on:** Phase 0 PR2 (#6).
 - **Files:** `internal/safedial/`, `internal/agent/` (protocol, enrolment, mTLS), `cmd/tessera-agent` (local allowlist, DPAPI or file credential store, heartbeat), `directory_agents` table, Admin → Connections agent screens.
 - **Tests:** `TestSafedial_BlocksPrivateUnlessAgent`, `TestAgent_RejectsNonAllowlisted`, `TestAgent_OnlyTypedOps`, `TestEnrolment_SingleUseHashed`, an in-process LDAP test server for end-to-end probe calls.
 
-### DR-12: Active Directory live checks against a test domain (4 days, needs-human)
+### DR-12: Active Directory live checks against a test domain (4 days, needs-human) · #93
 
 - **Files:** `internal/connectors/ad/probe.go` (all `ad` checks in §5.4), DirSync and USN cursor handling, objectGUID decoding.
 - **Tests:** unit tests on recorded LDAP responses; an integration suite tagged `addc` run against a real test domain (a human provides the domain controller, test OUs, a large group and the service account).
 
-### DR-13: OpenLDAP and 389-DS live checks (3 days, needs-human)
+### DR-13: OpenLDAP and 389-DS live checks (3 days, needs-human) · #94
 
 - **Files:** `internal/connectors/ldap/probe.go`, schema variants, syncrepl and retro changelog detection, Get Effective Rights.
 - **Tests:** containers for OpenLDAP and 389-DS in an integration job (a human approves the CI change under `.github/`), recorded fixtures for unit tests.
 
-### DR-14: Entra ID live checks (3 days, needs-human)
+### DR-14: Entra ID live checks (3 days, needs-human) · #95
 
 - **Files:** `internal/connectors/entra/probe.go` (token roles, delta, sign-in activity, roles, guests), sovereign-cloud allowlists.
 - **Tests:** recorded Graph fixtures; integration against a developer tenant provided by a human.
 
-### DR-15: Okta live checks (2 days, needs-human)
+### DR-15: Okta live checks (2 days, needs-human) · #96
 
 - **Files:** `internal/connectors/okta/probe.go` (scopes, admin role of the app, DEPROVISIONED visibility, System Log, rate-limit headers).
 - **Tests:** recorded fixtures; integration against an Okta developer org.
 
-### DR-16: Google Workspace live checks (2 days, needs-human)
+### DR-16: Google Workspace live checks (2 days, needs-human) · #97
 
 - **Files:** `internal/connectors/google/probe.go` (DWD scope probe including the forbidden-scope refusal, subject roles, domains, quotas, Reports API).
 - **Tests:** recorded fixtures; integration against a test Workspace.
 
-### DR-17: Workday live checks (3 days, needs-human)
+### DR-17: Workday live checks (3 days, needs-human) · #98
 
 - **Files:** `internal/connectors/workday/probe.go` (endpoint, field inventory with forbidden fields, population mix, incremental criteria), time-zone handling.
 - **Tests:** recorded SOAP and RaaS fixtures; integration against a Workday sandbox tenant.
 
-### DR-18: Generic SCIM application live checks (2 days)
+### DR-18: Generic SCIM application live checks (2 days) · #99
 
 - **Files:** `internal/connectors/scim/probe.go` (discovery, paging, members completeness, rate limits).
 - **Tests:** an in-process SCIM 2.0 test server with misbehaviour switches (truncated members, broken `totalResults`, 429s).
