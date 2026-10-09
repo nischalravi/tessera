@@ -425,6 +425,9 @@ type Secret struct {
 	Status        string
 }
 
+// secretCols lists secret metadata columns; secret material is never stored.
+//
+// #nosec G101 -- column names, not a credential
 const secretCols = `s.id, s.system, s.external_id, s.account_id, s.kind, s.name, s.created_at, s.last_rotated_at,
 	s.last_used_at, s.status`
 

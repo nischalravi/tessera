@@ -10,6 +10,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"runtime/debug"
 	"slices"
 	"strings"
@@ -185,11 +186,14 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 		if alt == r.URL.Path {
 			alt += "/"
 		}
-		if rt2, _, allowed2 := s.find(r.Method, alt); rt2 != nil || len(allowed2) > 0 {
-			u := *r.URL
-			u.Path = alt
-			http.Redirect(w, r, u.RequestURI(), http.StatusTemporaryRedirect)
-			return
+		// Only same-origin absolute paths that match a registered route are
+		// redirected to; "//host" (protocol-relative) targets are refused.
+		if strings.HasPrefix(alt, "/") && !strings.HasPrefix(alt, "//") {
+			if rt2, _, allowed2 := s.find(r.Method, alt); rt2 != nil || len(allowed2) > 0 {
+				u := url.URL{Path: alt, RawQuery: r.URL.RawQuery}
+				http.Redirect(w, r, u.RequestURI(), http.StatusTemporaryRedirect) // #nosec G710 -- target is a registered same-origin route
+				return
+			}
 		}
 	}
 	if rt == nil {

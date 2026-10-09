@@ -10,6 +10,7 @@
 package ingest
 
 import (
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -37,47 +38,58 @@ func NewResolver(c *store.Conn) (*Resolver, error) {
 
 // Refresh reloads the id maps from the database.
 func (r *Resolver) Refresh() error {
-	rows, err := r.c.Query("SELECT id, external_id, email FROM identities ORDER BY id")
-	if err != nil {
-		return err
-	}
-	for rows.Next() {
+	err := r.scan("SELECT id, external_id, email FROM identities ORDER BY id", func(rows *sql.Rows) error {
 		var id int64
 		var xid string
 		var email *string
 		if err := rows.Scan(&id, &xid, &email); err != nil {
-			rows.Close()
 			return err
 		}
 		r.identityByXID[xid] = id
 		if email != nil && *email != "" {
 			r.identityByEmail[strings.ToLower(*email)] = id
 		}
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
+		return nil
+	})
+	if err != nil {
 		return err
 	}
 	for _, t := range []struct{ table, kind string }{{"accounts", "account"}, {"groups", "group"}, {"permissions", "perm"}, {"resources", "resource"}} {
-		rows, err := r.c.Query("SELECT id, system, external_id FROM " + t.table + " ORDER BY id")
-		if err != nil {
-			return err
-		}
-		for rows.Next() {
+		// t.table comes from the fixed list above, never from input.
+		err := r.scan("SELECT id, system, external_id FROM "+t.table+" ORDER BY id", func(rows *sql.Rows) error {
 			var id int64
 			var sys, xid string
 			if err := rows.Scan(&id, &sys, &xid); err != nil {
-				rows.Close()
 				return err
 			}
 			r.ids[key{t.kind, sys, xid}] = id
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
+			return nil
+		})
+		if err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// scan runs query and calls fn per row, closing the rows and reporting the
+// first error (scan, iteration or close).
+func (r *Resolver) scan(query string, fn func(*sql.Rows) error) (err error) {
+	rows, err := r.c.Query(query)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if cerr := rows.Close(); err == nil {
+			err = cerr
+		}
+	}()
+	for rows.Next() {
+		if err := fn(rows); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 // Identity resolves an identity reference by external id, then email.

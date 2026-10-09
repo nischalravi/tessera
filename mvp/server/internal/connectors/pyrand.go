@@ -15,7 +15,7 @@ type PyRandom struct {
 // NewPyRandom seeds like random.Random(seed) for a non-negative int seed:
 // init_by_array over the seed's 32-bit little-endian words.
 func NewPyRandom(seed uint64) *PyRandom {
-	key := []uint32{uint32(seed)}
+	key := []uint32{uint32(seed & 0xffffffff)} // #nosec G115 -- splitting the seed into 32-bit words is the algorithm
 	if hi := uint32(seed >> 32); hi != 0 {
 		key = append(key, hi)
 	}
