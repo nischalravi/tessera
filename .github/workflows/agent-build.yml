@@ -38,7 +38,7 @@ jobs:
         with:
           go-version-file: mvp/server/go.mod
           cache-dependency-path: mvp/server/go.sum
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "24"
 
