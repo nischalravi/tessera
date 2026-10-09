@@ -15,17 +15,15 @@ import (
 
 func TestMain(m *testing.M) { testkit.Main(m) }
 
-func violations(t *testing.T, st *store.Store, policyID string, pols []*policy.Policy) []policy.Violation {
+func violations(t *testing.T, st *testkit.DB, policyID string, pols []*policy.Policy) []policy.Violation {
 	t.Helper()
-	c := testkit.Conn(st)
-	g, err := graph.FromDB(c, testkit.Now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	vs, err := policy.Evaluate(pols, policy.NewContext(g, c, testkit.Now))
-	if err != nil {
-		t.Fatal(err)
-	}
+	vs := testkit.Get(t, st, func(c *store.TenantTx) ([]policy.Violation, error) {
+		g, err := graph.Build(c, testkit.Now)
+		if err != nil {
+			return nil, err
+		}
+		return policy.Evaluate(pols, policy.NewContext(g, c, testkit.Now))
+	})
 	var out []policy.Violation
 	for _, v := range vs {
 		if policyID == "" || v.PolicyID == policyID {
@@ -96,10 +94,11 @@ func TestTinyWorldPolicyFindings(t *testing.T) {
 
 func TestJITOnlyAdminIsNotAViolation(t *testing.T) {
 	st, ids := testkit.Tiny(t)
-	testkit.Write(t, st, func(c *store.Conn) error {
-		_, err := c.Exec(`INSERT INTO grant_edges (src, dst, relation, source, expires_at, created_at) VALUES (?, ?, 'member_of', 'jit', ?, ?)`,
-			graph.Key("account", ids["acct:okta:alice"]), graph.Key("group", ids["group:aws:ProdAdmin"]),
-			store.T(testkit.Now.Add(2*time.Hour)), store.T(testkit.Now))
+	testkit.Write(t, st, func(c *store.TenantTx) error {
+		exp := testkit.Now.Add(2 * time.Hour)
+		_, err := c.InsertEdge(&store.GrantEdge{Src: graph.Key("account", ids["acct:okta:alice"]),
+			Dst: graph.Key("group", ids["group:aws:ProdAdmin"]), Relation: "member_of", Source: "jit", ExpiresAt: &exp,
+			CreatedAt: testkit.Now})
 		return err
 	})
 	got := identityIDs(violations(t, st, "no-standing-prod-admin", testkit.Policies(t)))
@@ -158,12 +157,10 @@ func TestParseValidation(t *testing.T) {
 
 func TestDisabledAndUnknownPolicies(t *testing.T) {
 	st, _ := testkit.Tiny(t)
-	c := testkit.Conn(st)
-	g, err := graph.FromDB(c, testkit.Now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx := policy.NewContext(g, c, testkit.Now)
+	ctx := testkit.Get(t, st, func(c *store.TenantTx) (*policy.Context, error) {
+		g, err := graph.Build(c, testkit.Now)
+		return policy.NewContext(g, nil, testkit.Now), err
+	})
 	off := &policy.Policy{ID: "off", Type: "nope", Enabled: false}
 	if vs, err := policy.Evaluate([]*policy.Policy{off}, ctx); err != nil || len(vs) != 0 {
 		t.Errorf("disabled policy: %v %v", vs, err)

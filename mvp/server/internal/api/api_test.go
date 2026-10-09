@@ -22,9 +22,9 @@ import (
 
 func TestMain(m *testing.M) { testkit.Main(m) }
 
-func testServer(st *store.Store, mutate ...func(*Config)) http.Handler {
+func testServer(st *testkit.DB, mutate ...func(*Config)) http.Handler {
 	cfg := Config{
-		Store: st, Clock: timeutil.Frozen(testkit.Now), Policies: policy.NewLoader(policies.FS),
+		Store: st.DB, Tenant: st.Tenant, Clock: timeutil.Frozen(testkit.Now), Policies: policy.NewLoader(policies.FS),
 		Connectors:     func(time.Time) ([]connectors.Connector, error) { return connectors.Load("demo", testkit.Now) },
 		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 		AllowedOrigins: []string{"http://localhost:5173"},
@@ -87,10 +87,9 @@ func at(v any, path ...any) any {
 func TestRevokeDryRunAndApplyViaAPI(t *testing.T) {
 	st, ids := testkit.Tiny(t)
 	c := client{t, testServer(st)}
-	e, err := testkit.Conn(st).EdgeBetween(graph.Key("account", ids["acct:okta:carol"]), graph.Key("group", ids["group:okta:platform"]))
-	if err != nil {
-		t.Fatal(err)
-	}
+	e := testkit.Get(t, st, func(c *store.TenantTx) (*store.GrantEdge, error) {
+		return c.EdgeBetween(graph.Key("account", ids["acct:okta:carol"]), graph.Key("group", ids["group:okta:platform"]))
+	})
 	dry := c.json("POST", "/api/least-privilege/revoke", fmt.Sprintf(`{"edge_id": %d, "dry_run": true}`, e.ID), 200)
 	if at(dry, "summary", "permissions_removed") != 1.0 || at(dry, "summary", "violations_resolved") != 1.0 {
 		t.Errorf("summary = %v", at(dry, "summary"))
@@ -294,9 +293,9 @@ func TestCORS(t *testing.T) {
 
 func TestHandlerTimeout(t *testing.T) {
 	st, _ := testkit.Tiny(t)
-	srv := New(Config{Store: st, Clock: timeutil.Frozen(testkit.Now), Policies: policy.NewLoader(policies.FS),
+	srv := New(Config{Store: st.DB, Tenant: st.Tenant, Clock: timeutil.Frozen(testkit.Now), Policies: policy.NewLoader(policies.FS),
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), HandlerTimeout: 20 * time.Millisecond})
-	srv.handle("GET", "/api/slow", func(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+	srv.handle("GET", "/api/slow", read, func(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
 		select {
 		case <-time.After(time.Second):
 		case <-r.Context().Done():
@@ -313,12 +312,12 @@ func TestHandlerTimeout(t *testing.T) {
 func TestInternalErrorsAreNotLeaked(t *testing.T) {
 	st, _ := testkit.Tiny(t)
 	var logs strings.Builder
-	srv := New(Config{Store: st, Clock: timeutil.Frozen(testkit.Now), Policies: policy.NewLoader(policies.FS),
+	srv := New(Config{Store: st.DB, Tenant: st.Tenant, Clock: timeutil.Frozen(testkit.Now), Policies: policy.NewLoader(policies.FS),
 		Logger: slog.New(slog.NewTextHandler(&logs, nil))})
-	srv.handle("GET", "/api/boom", func(http.ResponseWriter, *http.Request, *params) (any, error) {
+	srv.handle("GET", "/api/boom", read, func(http.ResponseWriter, *http.Request, *params) (any, error) {
 		return nil, fmt.Errorf("SELECT secret FROM vault failed")
 	})
-	srv.handle("GET", "/api/panic", func(http.ResponseWriter, *http.Request, *params) (any, error) { panic("kaboom") })
+	srv.handle("GET", "/api/panic", read, func(http.ResponseWriter, *http.Request, *params) (any, error) { panic("kaboom") })
 	for _, path := range []string{"/api/boom", "/api/panic"} {
 		rec := httptest.NewRecorder()
 		srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", path+"?token=abc123", nil))

@@ -1,5 +1,7 @@
-// Package seed loads the configured connectors (demo by default) into a fresh
-// database and adds sample JIT requests and a review campaign.
+// Package seed creates the demo tenants in a fresh database: "larkspur" (the
+// configured connectors, demo by default, plus sample JIT requests and a
+// review campaign) and "globex" (the tiny world with a sentinel string in
+// every name). Each tenant is seeded in its own tenant transaction.
 package seed
 
 import (
@@ -13,6 +15,20 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/reviews"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
+)
+
+// Fixed ids of the demo tenants, so a reseed keeps them stable.
+var (
+	LarkspurID = tenancy.MustParse("00000000-0000-4000-8000-00000000000a")
+	GlobexID   = tenancy.MustParse("00000000-0000-4000-8000-00000000000b")
+)
+
+// Demo tenant slugs and the sentinel in every Globex name.
+const (
+	LarkspurSlug   = "larkspur"
+	GlobexSlug     = "globex"
+	GlobexSentinel = "ZZ-GLOBEX-SENTINEL"
 )
 
 func one[T any](items []*T, err error, what string) (*T, error) {
@@ -27,14 +43,32 @@ func one[T any](items []*T, err error, what string) (*T, error) {
 
 // Workflows adds sample JIT requests and an initial review campaign so every
 // page has data. now is the wall clock.
-func Workflows(c *store.Conn, now time.Time, policies []*policy.Policy) error {
+func Workflows(c *store.TenantTx, now time.Time, policies []*policy.Policy) error {
+	groups, err := c.Groups()
+	if err != nil {
+		return err
+	}
+	idents, err := c.Identities()
+	if err != nil {
+		return err
+	}
 	role := func(system, name string) (*store.Group, error) {
-		gs, err := c.Groups("WHERE system = ? AND name = ? ORDER BY id", system, name)
-		return one(gs, err, system+" role "+name)
+		var gs []*store.Group
+		for _, g := range groups {
+			if g.System == system && g.Name == name {
+				gs = append(gs, g)
+			}
+		}
+		return one(gs, nil, system+" role "+name)
 	}
 	ident := func(name string) (*store.Identity, error) {
-		is, err := c.Identities("WHERE name = ?", name)
-		return one(is, err, "identity "+name)
+		var is []*store.Identity
+		for _, i := range idents {
+			if i.Name == name {
+				is = append(is, i)
+			}
+		}
+		return one(is, nil, "identity "+name)
 	}
 	prodAdmin, err := role("aws", "ProdAdmin")
 	if err != nil {
@@ -76,9 +110,11 @@ func Workflows(c *store.Conn, now time.Time, policies []*policy.Policy) error {
 		return err
 	}
 	// expired: yesterday's Snowflake admin session
-	data, err := c.Identities("WHERE department = 'Data' AND status = 'active' AND name != 'Sana Iyer'")
-	if err != nil {
-		return err
+	var data []*store.Identity
+	for _, i := range idents {
+		if i.Department != nil && *i.Department == "Data" && i.Status == "active" && i.Name != "Sana Iyer" {
+			data = append(data, i)
+		}
 	}
 	if len(data) == 0 {
 		return fmt.Errorf("seed: no active Data identity")
@@ -97,28 +133,81 @@ func Workflows(c *store.Conn, now time.Time, policies []*policy.Policy) error {
 	return err
 }
 
-// Stats summarizes a seed run.
+// CampaignOnly seeds just the initial review campaign (the Globex workflows).
+func CampaignOnly(c *store.TenantTx, now time.Time, policies []*policy.Policy) error {
+	_, err := reviews.GenerateCampaign(c, now, "Q4 exception-only review", 60, policies)
+	return err
+}
+
+// Tenant is one tenant to seed.
+type Tenant struct {
+	ID         tenancy.ID
+	Slug, Name string
+	Connectors []connectors.Connector
+	// Workflows, if set, runs after the connectors are synced.
+	Workflows func(c *store.TenantTx, now time.Time, policies []*policy.Policy) error
+}
+
+// Larkspur is the Larkspur Labs demo tenant over conns.
+func Larkspur(conns []connectors.Connector) Tenant {
+	return Tenant{ID: LarkspurID, Slug: LarkspurSlug, Name: "Larkspur Labs", Connectors: conns, Workflows: Workflows}
+}
+
+// Globex is the second demo tenant: the tiny world with GlobexSentinel in
+// every name, so a leak into another tenant is easy to spot.
+func Globex(now time.Time) Tenant {
+	return Tenant{ID: GlobexID, Slug: GlobexSlug, Name: "Globex Corporation",
+		Connectors: []connectors.Connector{connectors.Tiny{Now: now, Sentinel: GlobexSentinel, Domain: "globex.example"}},
+		Workflows:  CampaignOnly}
+}
+
+// DefaultTenants are the tenants `tessera seed` creates: Larkspur over conns,
+// then Globex. Larkspur goes first so its ids match a single-tenant seed.
+func DefaultTenants(conns []connectors.Connector, now time.Time) []Tenant {
+	return []Tenant{Larkspur(conns), Globex(now)}
+}
+
+// Stats summarizes the seed of one tenant.
 type Stats struct {
+	Tenant   store.Tenant
 	Sync     ingest.SyncStats
 	Requests int
 }
 
-// Run drops and recreates the schema, syncs the connectors and seeds workflows.
-func Run(ctx context.Context, s *store.Store, conns []connectors.Connector, now time.Time, policies []*policy.Policy) (Stats, error) {
-	var st Stats
-	if err := s.Migrate(ctx, true); err != nil {
-		return st, err
+// Run drops and recreates the schema, then for each tenant creates it (in a
+// system transaction) and syncs its connectors and runs its workflows (in its
+// own tenant transaction).
+func Run(ctx context.Context, db *store.DB, now time.Time, policies []*policy.Policy, tenants []Tenant) ([]Stats, error) {
+	if err := db.Migrate(ctx, true); err != nil {
+		return nil, err
 	}
-	err := s.Write(ctx, func(c *store.Conn) error {
-		var err error
-		if st.Sync, err = ingest.Sync(c, now, conns, nil); err != nil {
+	out := make([]Stats, 0, len(tenants))
+	for _, t := range tenants {
+		var st Stats
+		if err := db.InSystem(ctx, "seed: create tenant "+t.Slug, func(s *store.SystemTx) error {
+			var err error
+			st.Tenant, err = s.CreateTenant(store.Tenant{ID: t.ID, Slug: t.Slug, Name: t.Name, CreatedAt: now})
 			return err
+		}); err != nil {
+			return out, fmt.Errorf("seed: tenant %s: %w", t.Slug, err)
 		}
-		if err := Workflows(c, now, policies); err != nil {
+		err := db.InTenant(ctx, st.Tenant.ID, func(c *store.TenantTx) error {
+			var err error
+			if st.Sync, err = ingest.Sync(c, now, t.Connectors, nil); err != nil {
+				return err
+			}
+			if t.Workflows != nil {
+				if err := t.Workflows(c, now, policies); err != nil {
+					return err
+				}
+			}
+			st.Requests, err = c.CountRequests()
 			return err
+		})
+		if err != nil {
+			return out, fmt.Errorf("seed: tenant %s: %w", t.Slug, err)
 		}
-		st.Requests, err = c.Count("SELECT count(*) FROM access_requests")
-		return err
-	})
-	return st, err
+		out = append(out, st)
+	}
+	return out, nil
 }

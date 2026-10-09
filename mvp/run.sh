@@ -18,6 +18,8 @@ UI_PORT="${UI_PORT:-5173}"
 export UI_PORT
 # read policies from disk so edits apply on the next request (the binary also embeds copies)
 export TESSERA_POLICY_DIR="${TESSERA_POLICY_DIR:-$SERVER/policies}"
+# local development: the API serves the dev default tenant (larkspur) until sign-in lands
+export TESSERA_ENV="${TESSERA_ENV:-dev}"
 
 pick_go() {
   if command -v go >/dev/null 2>&1; then command -v go; return; fi

@@ -3,6 +3,7 @@
 package jit
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 )
 
@@ -42,14 +44,14 @@ func (h Hours) JSON() any {
 
 // AccountFor picks the account that receives the grant: same system as the
 // group, else the IdP (Okta) account.
-func AccountFor(c *store.Conn, identityID int64, g *store.Group) (*store.Account, error) {
-	accts, err := c.Accounts("WHERE identity_id = ? AND status = 'active'", identityID)
+func AccountFor(c *store.TenantTx, identityID int64, g *store.Group) (*store.Account, error) {
+	accts, err := c.IdentityAccounts(identityID)
 	if err != nil {
 		return nil, err
 	}
 	for _, system := range []string{g.System, "okta"} {
 		for _, a := range accts {
-			if a.System == system {
+			if a.Status == "active" && a.System == system {
 				return a, nil
 			}
 		}
@@ -65,7 +67,7 @@ func getOrNil[T any](v *T, err error) (*T, error) {
 }
 
 // CreateRequest files a pending request.
-func CreateRequest(c *store.Conn, now time.Time, identityID, groupID int64, hours Hours, justification string) (*store.AccessRequest, error) {
+func CreateRequest(c *store.TenantTx, now time.Time, identityID, groupID int64, hours Hours, justification string) (*store.AccessRequest, error) {
 	ident, err := getOrNil(c.Identity(identityID))
 	if err != nil {
 		return nil, err
@@ -94,16 +96,15 @@ func CreateRequest(c *store.Conn, now time.Time, identityID, groupID int64, hour
 	if err != nil {
 		return nil, err
 	}
-	n, err := c.Count("SELECT count(*) FROM grant_edges WHERE src = ? AND dst = ? AND source != 'jit'",
-		graph.Key("account", acct.ID), graph.Key("group", g.ID))
+	standing, err := c.HasStandingEdge(graph.Key("account", acct.ID), graph.Key("group", g.ID))
 	if err != nil {
 		return nil, err
 	}
-	if n > 0 {
+	if standing {
 		return nil, jitErr("%s already holds %s as a standing grant", ident.Name, g.Name)
 	}
-	id, err := c.Insert(`INSERT INTO access_requests (identity_id, account_id, group_id, justification, duration_hours, status,
-		requested_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)`, identityID, acct.ID, g.ID, justification, hours.N, store.T(now))
+	id, err := c.InsertRequest(&store.AccessRequest{IdentityID: identityID, AccountID: acct.ID, GroupID: g.ID,
+		Justification: justification, DurationHours: hours.N, Status: "pending", RequestedAt: now})
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +115,7 @@ func CreateRequest(c *store.Conn, now time.Time, identityID, groupID int64, hour
 	return c.Request(id)
 }
 
-func pending(c *store.Conn, id int64) (*store.AccessRequest, error) {
+func pending(c *store.TenantTx, id int64) (*store.AccessRequest, error) {
 	r, err := getOrNil(c.Request(id))
 	if err != nil {
 		return nil, err
@@ -127,7 +128,7 @@ func pending(c *store.Conn, id int64) (*store.AccessRequest, error) {
 
 // Approve grants the access until now + duration. createdAt stamps a newly
 // created edge (the wall clock, which differs from now when back-dating).
-func Approve(c *store.Conn, requestID int64, approver string, now, createdAt time.Time) (*store.AccessRequest, error) {
+func Approve(c *store.TenantTx, requestID int64, approver string, now, createdAt time.Time) (*store.AccessRequest, error) {
 	req, err := pending(c, requestID)
 	if err != nil {
 		return nil, err
@@ -143,11 +144,11 @@ func Approve(c *store.Conn, requestID int64, approver string, now, createdAt tim
 	}
 	var edgeID int64
 	if existing == nil {
-		edgeID, err = c.Insert(`INSERT INTO grant_edges (src, dst, relation, source, expires_at, created_at)
-			VALUES (?, ?, 'member_of', 'jit', ?, ?)`, src, dst, store.T(expires), store.T(createdAt))
+		edgeID, err = c.InsertEdge(&store.GrantEdge{Src: src, Dst: dst, Relation: "member_of", Source: "jit",
+			ExpiresAt: &expires, CreatedAt: createdAt})
 	} else {
 		edgeID = existing.ID
-		_, err = c.Exec("UPDATE grant_edges SET expires_at = ? WHERE id = ?", store.T(expires), edgeID)
+		err = c.SetEdgeExpiry(edgeID, expires)
 	}
 	if err != nil {
 		return nil, err
@@ -164,7 +165,7 @@ func Approve(c *store.Conn, requestID int64, approver string, now, createdAt tim
 }
 
 // Deny rejects a pending request.
-func Deny(c *store.Conn, requestID int64, approver string, now time.Time) (*store.AccessRequest, error) {
+func Deny(c *store.TenantTx, requestID int64, approver string, now time.Time) (*store.AccessRequest, error) {
 	req, err := pending(c, requestID)
 	if err != nil {
 		return nil, err
@@ -177,7 +178,7 @@ func Deny(c *store.Conn, requestID int64, approver string, now time.Time) (*stor
 }
 
 // Revoke ends an active grant early.
-func Revoke(c *store.Conn, requestID int64, actor string, now time.Time) (*store.AccessRequest, error) {
+func Revoke(c *store.TenantTx, requestID int64, actor string, now time.Time) (*store.AccessRequest, error) {
 	req, err := getOrNil(c.Request(requestID))
 	if err != nil {
 		return nil, err
@@ -195,26 +196,24 @@ func Revoke(c *store.Conn, requestID int64, actor string, now time.Time) (*store
 	return req, c.Audit(now, actor, "jit.revoke", ojson.Object{{Key: "request_id", Value: req.ID}})
 }
 
-func dropEdge(c *store.Conn, req *store.AccessRequest) error {
+func dropEdge(c *store.TenantTx, req *store.AccessRequest) error {
 	if req.EdgeID == nil || *req.EdgeID == 0 {
 		return nil
 	}
-	_, err := c.Exec("DELETE FROM grant_edges WHERE id = ? AND source = 'jit'", *req.EdgeID)
-	return err
+	return c.DeleteJITEdge(*req.EdgeID)
 }
 
 // NeedsSweep reports whether Sweep would change anything at now.
-func NeedsSweep(c *store.Conn, now time.Time) (bool, error) {
-	n, err := c.Count(`SELECT (SELECT count(*) FROM access_requests WHERE status = 'approved' AND expires_at <= ?)
-		+ (SELECT count(*) FROM grant_edges WHERE source = 'jit' AND expires_at <= ?)`, store.T(now), store.T(now))
+func NeedsSweep(c *store.TenantTx, now time.Time) (bool, error) {
+	n, err := c.JITSweepPending(now)
 	return n > 0, err
 }
 
 // Sweep expires approved requests past their deadline, removes their grant
 // edges and any orphaned expired JIT edges. It returns the number of
 // requests expired.
-func Sweep(c *store.Conn, now time.Time) (int, error) {
-	reqs, err := c.Requests("WHERE status = 'approved' AND expires_at <= ? ORDER BY id", store.T(now))
+func Sweep(c *store.TenantTx, now time.Time) (int, error) {
+	reqs, err := c.ExpiredApprovedRequests(now)
 	if err != nil {
 		return 0, err
 	}
@@ -231,8 +230,29 @@ func Sweep(c *store.Conn, now time.Time) (int, error) {
 		}
 	}
 	// orphan JIT edges (e.g. created directly) also expire
-	if _, err := c.Exec("DELETE FROM grant_edges WHERE source = 'jit' AND expires_at <= ?", store.T(now)); err != nil {
+	if _, err := c.DeleteExpiredJITEdges(now); err != nil {
 		return 0, err
 	}
 	return len(reqs), nil
+}
+
+// SweepAll runs Sweep for every active tenant, each in its own tenant
+// transaction (the background sweeper). A tenant with nothing to expire is
+// left untouched. An error in one tenant does not stop the others. It returns
+// the number of requests expired per tenant.
+func SweepAll(ctx context.Context, db *store.DB, now time.Time) (map[tenancy.ID]int, error) {
+	out := map[tenancy.ID]int{}
+	err := db.ForEachActiveTenant(ctx, func(_ context.Context, tx *store.TenantTx) error {
+		need, err := NeedsSweep(tx, now)
+		if err != nil || !need {
+			return err
+		}
+		n, err := Sweep(tx, now)
+		if err != nil {
+			return err
+		}
+		out[tx.Tenant()] = n
+		return nil
+	})
+	return out, err
 }

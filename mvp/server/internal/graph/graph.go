@@ -151,10 +151,12 @@ func (g *Snapshot) setEdge(src, dst string, e *Edge) {
 	g.edges[k] = e
 }
 
-// FromDB builds the live graph. Expired JIT edges are excluded.
-func FromDB(c *store.Conn, now time.Time) (*Snapshot, error) {
+// Build builds the live graph of the transaction's tenant. Expired JIT edges
+// are excluded. The snapshot is per-tenant by construction: its only input is
+// a tenant transaction, so another tenant's node keys are unknown nodes.
+func Build(c *store.TenantTx, now time.Time) (*Snapshot, error) {
 	g := New()
-	idents, err := c.Identities("")
+	idents, err := c.Identities()
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +164,7 @@ func FromDB(c *store.Conn, now time.Time) (*Snapshot, error) {
 		g.AddNode(&Node{Key: Key("identity", i.ID), Kind: "identity", Label: i.Name, ID: i.ID, Type: i.Type,
 			Status: i.Status, Department: i.Department})
 	}
-	resources, err := c.Resources("ORDER BY id")
+	resources, err := c.Resources()
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +172,7 @@ func FromDB(c *store.Conn, now time.Time) (*Snapshot, error) {
 		g.AddNode(&Node{Key: Key("resource", r.ID), Kind: "resource", Label: r.Name, ID: r.ID, System: r.System,
 			Environment: r.Environment, Tags: r.Tags, ResourceKind: r.Kind})
 	}
-	accounts, err := c.Accounts("")
+	accounts, err := c.Accounts()
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +184,7 @@ func FromDB(c *store.Conn, now time.Time) (*Snapshot, error) {
 			g.setEdge(Key("identity", *a.IdentityID), k, &Edge{Relation: "has_account", Source: "connector"})
 		}
 	}
-	groups, err := c.Groups("ORDER BY id")
+	groups, err := c.Groups()
 	if err != nil {
 		return nil, err
 	}
@@ -190,7 +192,7 @@ func FromDB(c *store.Conn, now time.Time) (*Snapshot, error) {
 		g.AddNode(&Node{Key: Key("group", gr.ID), Kind: "group", Label: gr.System + ":" + gr.Name, Name: gr.Name,
 			ID: gr.ID, System: gr.System, GroupKind: gr.Kind, Privileged: gr.Privileged, Requestable: gr.Requestable})
 	}
-	perms, err := c.Permissions("ORDER BY id")
+	perms, err := c.Permissions()
 	if err != nil {
 		return nil, err
 	}
@@ -205,7 +207,7 @@ func FromDB(c *store.Conn, now time.Time) (*Snapshot, error) {
 			Environment: res.Environment, Tags: res.Tags})
 		g.setEdge(k, res.Key, &Edge{Relation: "on", Source: "connector"})
 	}
-	edges, err := c.Edges("")
+	edges, err := c.Edges()
 	if err != nil {
 		return nil, err
 	}

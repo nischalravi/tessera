@@ -7,6 +7,7 @@
 package reviews
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -39,8 +40,8 @@ func deptKey(d *string) (string, bool) {
 }
 
 // GenerateCampaign creates a campaign with an item for every risky grant.
-func GenerateCampaign(c *store.Conn, now time.Time, name string, unusedDays int, policies []*policy.Policy) (int64, error) {
-	g, err := graph.FromDB(c, now)
+func GenerateCampaign(c *store.TenantTx, now time.Time, name string, unusedDays int, policies []*policy.Policy) (int64, error) {
+	g, err := graph.Build(c, now)
 	if err != nil {
 		return 0, err
 	}
@@ -90,8 +91,7 @@ func GenerateCampaign(c *store.Conn, now time.Time, name string, unusedDays int,
 		}
 	}
 
-	campID, err := c.Insert(`INSERT INTO review_campaigns (name, created_at, status, unused_days, total_grants, auto_certified)
-		VALUES (?, ?, 'open', ?, 0, 0)`, name, store.T(now), unusedDays)
+	campID, err := c.InsertCampaign(&store.ReviewCampaign{Name: name, CreatedAt: now, Status: "open", UnusedDays: unusedDays})
 	if err != nil {
 		return 0, err
 	}
@@ -209,24 +209,20 @@ func GenerateCampaign(c *store.Conn, now time.Time, name string, unusedDays int,
 			if err != nil {
 				return 0, err
 			}
-			reasonsJSON, err := store.JSON(reasons)
-			if err != nil {
-				return 0, err
-			}
-			var reviewerID any
+			var reviewerID *int64
 			if reviewer != nil {
-				reviewerID = reviewer.ID
+				reviewerID = &reviewer.ID
 			}
-			if _, err := c.Exec(`INSERT INTO review_items (campaign_id, identity_id, edge_id, edge_src, edge_dst, grant_label,
-				reasons, context, reviewer_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, campID, iid, *ag.Edge.EdgeID, ag.Acct, ag.Dst,
-				g.Label(ag.Acct)+" → "+g.Label(ag.Dst), reasonsJSON, ctxJSON, reviewerID); err != nil {
+			edgeID := *ag.Edge.EdgeID
+			if err := c.InsertReviewItem(&store.ReviewItem{CampaignID: campID, IdentityID: iid, EdgeID: &edgeID,
+				EdgeSrc: ag.Acct, EdgeDst: ag.Dst, GrantLabel: g.Label(ag.Acct) + " → " + g.Label(ag.Dst), Reasons: reasons,
+				Context: json.RawMessage(ctxJSON), ReviewerID: reviewerID}); err != nil {
 				return 0, err
 			}
 			items++
 		}
 	}
-	if _, err := c.Exec("UPDATE review_campaigns SET total_grants = ?, auto_certified = ? WHERE id = ?",
-		total, total-items, campID); err != nil {
+	if err := c.SetCampaignTotals(campID, total, total-items); err != nil {
 		return 0, err
 	}
 	err = c.Audit(now, "system", "review.campaign_created", ojson.Object{{Key: "campaign", Value: name},
@@ -244,7 +240,7 @@ func sortedSet(m map[string]bool) []string {
 }
 
 // Decide records keep/revoke on an item; revoke deletes the grant edge.
-func Decide(c *store.Conn, now time.Time, itemID int64, decision, reviewer string, comment *string) (*store.ReviewItem, error) {
+func Decide(c *store.TenantTx, now time.Time, itemID int64, decision, reviewer string, comment *string) (*store.ReviewItem, error) {
 	if decision != "keep" && decision != "revoke" {
 		return nil, &Error{"decision must be keep or revoke"}
 	}
@@ -255,8 +251,7 @@ func Decide(c *store.Conn, now time.Time, itemID int64, decision, reviewer strin
 	if err != nil {
 		return nil, err
 	}
-	if _, err := c.Exec("UPDATE review_items SET decision = ?, comment = ?, decided_at = ? WHERE id = ?",
-		decision, store.SP(comment), store.T(now), item.ID); err != nil {
+	if err := c.DecideItem(item.ID, decision, comment, now); err != nil {
 		return nil, err
 	}
 	item.Decision, item.Comment, item.DecidedAt = &decision, comment, &now
@@ -273,12 +268,12 @@ func Decide(c *store.Conn, now time.Time, itemID int64, decision, reviewer strin
 		{Key: "grant", Value: item.GrantLabel}}); err != nil {
 		return nil, err
 	}
-	open, err := c.Count("SELECT count(*) FROM review_items WHERE campaign_id = ? AND (decision IS NULL OR decision = '')", item.CampaignID)
+	open, err := c.CountOpenItems(item.CampaignID)
 	if err != nil {
 		return nil, err
 	}
 	if open == 0 {
-		if _, err := c.Exec("UPDATE review_campaigns SET status = 'completed' WHERE id = ?", item.CampaignID); err != nil {
+		if err := c.CompleteCampaign(item.CampaignID); err != nil {
 			return nil, err
 		}
 	}
