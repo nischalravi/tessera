@@ -73,3 +73,14 @@ def test_api_smoke(demo_client):
         assert r.json(), path
     camp = c.get("/api/reviews/campaigns").json()[0]
     assert 0 < camp["items"] < camp["total_grants"]  # exception-only
+
+
+def test_accounts_list(demo_client):
+    c = demo_client
+    rows = c.get("/api/accounts").json()
+    assert len(rows) == c.get("/api/summary").json()["accounts"]
+    assert {"id", "system", "username", "kind", "status", "last_login_at", "identity"} <= rows[0].keys()
+    alice = next(r for r in rows if r["identity"] and r["identity"]["name"] == "Alice Okafor" and r["system"] == "okta")
+    assert alice["status"] == "active"
+    aws_only = c.get("/api/accounts?system=aws").json()
+    assert aws_only and all(r["system"] == "aws" for r in aws_only)

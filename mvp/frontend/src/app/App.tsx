@@ -1,0 +1,135 @@
+import { ComponentType, Suspense, lazy } from "react";
+import { Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
+import { ConfirmProvider } from "../components/Dialog";
+import { PageSkeleton } from "../components/Feedback";
+import { ToastProvider } from "../components/Toast";
+import { PaletteProvider } from "./CommandPalette";
+import { PersonaProvider } from "./persona";
+import { Shell } from "./Shell";
+import { ThemeProvider } from "./theme";
+
+/**
+ * Every route is its own chunk, so the first load is just the shell and the page you land on.
+ * `named` adapts modules that export several pages by name.
+ */
+const named = <M extends Record<string, unknown>, K extends keyof M>(load: () => Promise<M>, key: K) =>
+  lazy(async () => ({ default: (await load())[key] as ComponentType }));
+
+const access = () => import("../features/access");
+const directory = () => import("../features/directory/Lists");
+const objects = () => import("../features/directory/ObjectPages");
+const admin = () => import("../features/admin/Admin");
+
+const Home = named(() => import("../features/home/Home"), "Home");
+const Inbox = named(() => import("../features/inbox/Inbox"), "Inbox");
+const RequestAccess = named(access, "RequestAccess");
+const MyAccess = named(access, "MyAccess");
+const Requests = named(access, "Requests");
+const JIT = named(access, "JIT");
+const DirectoryLayout = named(directory, "DirectoryLayout");
+const People = named(directory, "People");
+const Machine = named(directory, "Machine");
+const Accounts = named(directory, "Accounts");
+const Roles = named(directory, "Roles");
+const Entitlements = named(directory, "Entitlements");
+const Apps = named(directory, "Apps");
+const Orgs = named(directory, "Orgs");
+const Groups = named(directory, "Groups");
+const IdentityPage = named(() => import("../features/directory/IdentityPage"), "IdentityPage");
+const RolePage = named(objects, "RolePage");
+const EntitlementPage = named(objects, "EntitlementPage");
+const AppPage = named(objects, "AppPage");
+const OrgPage = named(objects, "OrgPage");
+const RiskOverview = named(() => import("../features/insights/RiskOverview"), "RiskOverview");
+// cytoscape is the heaviest dependency; it only loads with the graph
+const GraphExplorer = lazy(() => import("../features/insights/GraphExplorer"));
+const LeastPrivilege = named(() => import("../features/insights/LeastPrivilege"), "LeastPrivilege");
+const SodConflicts = named(() => import("../features/insights/SodConflicts"), "SodConflicts");
+const Policies = named(() => import("../features/governance/Policies"), "Policies");
+const Reviews = named(() => import("../features/governance/Reviews"), "Reviews");
+const Lifecycle = named(() => import("../features/governance/Lifecycle"), "Lifecycle");
+const Workflows = named(() => import("../features/governance/Workflows"), "Workflows");
+const Admin = named(admin, "Admin");
+const AdminSectionPage = named(admin, "AdminSectionPage");
+
+/** Redirect an old route to its new home, keeping the query string (e.g. /graph?identity=5). */
+function Moved({ to }: { to: string }) {
+  const { search } = useLocation();
+  const params = useParams();
+  const path = to.replace(/:(\w+)/g, (_, k) => params[k] ?? "");
+  return <Navigate to={path + search} replace />;
+}
+
+export default function App() {
+  return (
+    <ThemeProvider>
+      <ToastProvider>
+        <ConfirmProvider>
+          <PersonaProvider>
+            <PaletteProvider>
+              <Shell>
+                <Suspense fallback={<PageSkeleton />}>
+                  <Routes>
+                    <Route path="/" element={<Home />} />
+                    <Route path="/inbox" element={<Inbox />} />
+
+                    <Route path="/access" element={<Navigate to="/access/request" replace />} />
+                    <Route path="/access/request" element={<RequestAccess />} />
+                    <Route path="/access/mine" element={<MyAccess />} />
+                    <Route path="/access/requests" element={<Requests />} />
+                    <Route path="/access/jit" element={<JIT />} />
+
+                    <Route path="/directory" element={<DirectoryLayout />}>
+                      <Route index element={<Navigate to="/directory/people" replace />} />
+                      <Route path="people" element={<People />} />
+                      <Route path="machine" element={<Machine />} />
+                      <Route path="accounts" element={<Accounts />} />
+                      <Route path="roles" element={<Roles />} />
+                      <Route path="entitlements" element={<Entitlements />} />
+                      <Route path="apps" element={<Apps />} />
+                      <Route path="orgs" element={<Orgs />} />
+                      <Route path="groups" element={<Groups />} />
+                    </Route>
+                    <Route path="/directory/identities/:id" element={<IdentityPage />} />
+                    <Route path="/directory/roles/:id" element={<RolePage />} />
+                    <Route path="/directory/entitlements/:id" element={<EntitlementPage />} />
+                    <Route path="/directory/apps/:system" element={<AppPage />} />
+                    <Route path="/directory/orgs/:id" element={<OrgPage />} />
+
+                    <Route path="/insights" element={<Navigate to="/insights/risk" replace />} />
+                    <Route path="/insights/risk" element={<RiskOverview />} />
+                    <Route path="/insights/graph" element={<GraphExplorer />} />
+                    <Route path="/insights/least-privilege" element={<LeastPrivilege />} />
+                    <Route path="/insights/sod" element={<SodConflicts />} />
+
+                    <Route path="/governance" element={<Navigate to="/governance/policies" replace />} />
+                    <Route path="/governance/policies" element={<Policies />} />
+                    <Route path="/governance/reviews" element={<Reviews />} />
+                    <Route path="/governance/lifecycle" element={<Lifecycle />} />
+                    <Route path="/governance/workflows" element={<Workflows />} />
+
+                    <Route path="/admin" element={<Admin />} />
+                    <Route path="/admin/:section" element={<AdminSectionPage />} />
+
+                    {/* routes from the previous UI */}
+                    <Route path="/identities" element={<Moved to="/directory/people" />} />
+                    <Route path="/identities/:id" element={<Moved to="/directory/identities/:id" />} />
+                    <Route path="/graph" element={<Moved to="/insights/graph" />} />
+                    <Route path="/nhi" element={<Moved to="/directory/machine" />} />
+                    <Route path="/least-privilege" element={<Moved to="/insights/least-privilege" />} />
+                    <Route path="/policies" element={<Moved to="/governance/policies" />} />
+                    <Route path="/reviews" element={<Moved to="/governance/reviews" />} />
+                    <Route path="/jit" element={<Moved to="/access/jit" />} />
+                    <Route path="/lifecycle" element={<Moved to="/governance/lifecycle" />} />
+                    <Route path="/dashboard" element={<Moved to="/insights/risk" />} />
+                    <Route path="*" element={<Navigate to="/" replace />} />
+                  </Routes>
+                </Suspense>
+              </Shell>
+            </PaletteProvider>
+          </PersonaProvider>
+        </ConfirmProvider>
+      </ToastProvider>
+    </ThemeProvider>
+  );
+}
