@@ -67,7 +67,7 @@ func auditCmd(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	if *from < 0 || *to < 0 || (*to > 0 && *to < *from) {
 		return errors.New("audit: invalid seq range")
 	}
-	if _, err := os.Stat(*db); err != nil {
+	if _, err := os.Stat(*db); err != nil { // #nosec G703 -- operator-supplied path on the operator's own host
 		return fmt.Errorf("audit: database %s: %w", *db, err)
 	}
 	st, err := store.Open(ctx, *db)

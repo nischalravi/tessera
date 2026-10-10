@@ -423,7 +423,7 @@ func (b *bufferedWriter) passthrough() {
 	b.through.Store(true)
 	if b.status != 0 || b.body.Len() > 0 {
 		b.sendHeaderLocked()
-		_, _ = b.under.Write(b.body.Bytes())
+		_, _ = b.under.Write(b.body.Bytes()) // #nosec G705 -- replays the handler's own response bytes and headers unchanged
 		b.body.Reset()
 	}
 }
@@ -439,7 +439,7 @@ func (b *bufferedWriter) flush() {
 	}
 	b.sendHeaderLocked()
 	if b.body.Len() > 0 {
-		_, _ = b.under.Write(b.body.Bytes())
+		_, _ = b.under.Write(b.body.Bytes()) // #nosec G705 -- replays the handler's own response bytes and headers unchanged
 	}
 }
 

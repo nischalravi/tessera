@@ -60,7 +60,8 @@ with SQLite through the pure-Go `modernc.org/sqlite` driver, so it needs no C to
 
 ```
 server/
-  cmd/tessera/          main: `serve` (default) and `seed`; timeouts, graceful shutdown, JIT sweeper
+  cmd/tessera/          main: `serve` (default), `seed` and `audit verify|checkpoint|export`; timeouts,
+                        graceful shutdown, JIT sweeper, audit checkpointer
   cmd/tessera-devidp/   the dev IdP binary (development and tests only; see Dev sign-in)
   internal/
     connectors/         Connector interface + normalized record types, deterministic demo company
@@ -68,6 +69,9 @@ server/
                         company the Python backend generated), registry (TESSERA_CONNECTORS)
     ingest/             phased, idempotent upsert of connector output (cross-system refs resolve)
     store/              schema, row types and parameterized queries (database/sql, no ORM)
+    audit/              hash-chained audit ledger: Record, the http.request middleware (fail-closed
+                        reads), signed checkpoints + anchor sinks, verify, NDJSON export;
+                        audit/canon is the v1 hash contract (RFC 8785 JCS + SHA-256)
     graph/              Snapshot: effective permissions + grant paths, copy for simulation,
                         expired-JIT / disabled-account handling
     usage/              last-used / 90-day usage index
@@ -144,7 +148,39 @@ The routes are documented at `/api/readiness/openapi.json`.
 `GET|POST /api/jit/requests` · `POST /api/jit/requests/{id}/approve|deny|revoke` ·
 `GET|POST /api/reviews/campaigns` · `POST /api/reviews/items/{id}/decision` ·
 `GET|POST /api/hris/events` · `GET /api/hris/events/{id}/plan` · `POST /api/hris/events/{id}/execute` ·
-`GET /api/jml/leaver-plan/{identity_id}` · `GET /api/accounts[?system=]` · `GET /api/audit`
+`GET /api/jml/leaver-plan/{identity_id}` · `GET /api/accounts[?system=]` ·
+`GET /api/audit[?limit=&before_seq=&action=&actor_id=&target_type=&target_id=&from=&to=&include_http=]` ·
+`GET /api/audit/events/{event_id}/proof` · `GET /api/audit/checkpoints[?from_seq=]` · `GET /api/audit/keys` ·
+`POST /api/audit/verify {from_seq?, to_seq?}` · `GET /api/audit/export[?from_seq=&to_seq=]` (NDJSON)
+
+### Audit ledger
+
+Every tenant has an append-only, hash-chained audit log (`audit_events`; design
+`docs/design/phase-0-platform-security.md` §13). Each event's hash is SHA-256 over
+`"tessera-audit-v1" 0x00` and the RFC 8785 (JCS) form of the event, and links to the previous
+event; `server/testdata/golden/audit_v1.json` is a test vector for independent verifiers.
+SQLite triggers refuse UPDATE and DELETE. Every API call writes one `http.request` event (the
+route template, status, sorted query keys, never bodies or query values); a read whose event
+cannot be written answers `503 {"error":"audit_unavailable"}` instead of the data. Domain events
+(JIT, reviews, revokes, JML, readiness attestations, skips and activation) commit in the same
+transaction as their change. Until sign-in lands the actor is `anonymous`; a name the browser
+sends is kept only as `detail.claimed_actor`.
+
+Every 5 minutes (or 1000 events) the server signs each chain head with the platform Ed25519 key and
+appends it to the anchor sink: `TESSERA_AUDIT_ANCHOR`, by default `var/audit-anchors.jsonl` next to
+the database (S3 Object Lock is a later step). To check a database:
+
+```bash
+cd server
+TESSERA_ENV=dev bin/tessera audit verify -all -db tessera.db -anchors file://$PWD/var/audit-anchors.jsonl
+# exit 0 ok, 2 edited row, 3 missing or duplicated seq, 4 bad checkpoint signature,
+# 5 checkpoint missing from the anchors, 6 stale anchoring (with -strict)
+TESSERA_ENV=dev bin/tessera audit checkpoint -tenant larkspur -db tessera.db   # checkpoint now
+TESSERA_ENV=dev bin/tessera audit export -tenant larkspur -db tessera.db > larkspur.ndjson
+```
+
+The Admin → Audit log page lists the events, can include API requests, verifies the chain and
+exports it.
 
 ## Web UI
 
@@ -396,7 +432,9 @@ OpenAPI document). Deliberate differences:
 
 ## Known gaps (MVP)
 
-* No authentication or RBAC on the API or UI. Actor names on approvals and revokes are placeholders.
+* No authentication or RBAC on the API or UI. Actor names on approvals and revokes are placeholders:
+  the audit ledger records every request as `anonymous` and keeps the supplied name only as an
+  unverified `claimed_actor`.
 * Revokes and JML plans change Tessera's graph only. Nothing is written back to source systems.
   Connectors do not have a `provision()`/`deprovision()` interface yet.
 * There is no scheduled connector sync. Seeding runs discovery once, and `POST /api/connectors/sync`
