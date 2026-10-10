@@ -27,13 +27,16 @@ Requirements: Go 1.27+ (the version in `server/go.mod`), Node 18+ (tested on 24)
 ./run.sh test        # go vet + Go test suite (unit tests and the API parity replay)
 ./run.sh build       # build the Go server, then tsc + vite production build
 ./run.sh seed        # (re)seed the database only
+./run.sh devidp      # run only the dev IdP (mock OIDC issuer for local sign-in)
 ./run.sh bench       # Go benchmarks + end-to-end latency, startup and memory of the server
 ```
 
 * UI: http://localhost:5173 (Vite dev server; it proxies `/api` to the backend via `TESSERA_API`)
 * API: http://127.0.0.1:8000. OpenAPI docs are at http://127.0.0.1:8000/docs
+* Dev IdP: http://127.0.0.1:8001 (see [Dev sign-in](#dev-sign-in))
 
-Ctrl+C stops both processes. You can change the ports with `API_PORT=… UI_PORT=… ./run.sh`.
+Ctrl+C stops all three processes. You can change the ports with `API_PORT=… UI_PORT=… DEVIDP_PORT=… ./run.sh`
+(`DEVIDP=0` skips the dev IdP).
 The database is `server/tessera.db` (override with `TESSERA_DB`); the binary is `server/bin/tessera`
 and can also be run directly: `TESSERA_ENV=dev tessera serve -addr 127.0.0.1:8000 -db tessera.db` or `tessera seed` (until sign-in lands the API serves the dev default tenant, `larkspur`, and refuses to start unless `TESSERA_ENV=dev`).
 
@@ -57,6 +60,7 @@ with SQLite through the pure-Go `modernc.org/sqlite` driver, so it needs no C to
 ```
 server/
   cmd/tessera/          main: `serve` (default) and `seed`; timeouts, graceful shutdown, JIT sweeper
+  cmd/tessera-devidp/   the dev IdP binary (development and tests only; see Dev sign-in)
   internal/
     connectors/         Connector interface + normalized record types, deterministic demo company
                         (pyrand.go reproduces CPython's Mersenne Twister so seed 7 gives the same
@@ -74,6 +78,8 @@ server/
     api/                HTTP routes under /api, FastAPI-compatible validation errors, OpenAPI/docs
     ojson/, timeutil/   ordered JSON + Python float repr; CPython-compatible time arithmetic
     testkit/            shared test fixtures (tiny world through a real Connector, seeded demo DB)
+    devidp/             dev IdP: mock OIDC issuer, vendor emulation profiles, fault injection;
+                        devidptest/ runs it in-process for tests. Never imported by the API.
   policies/*.yaml       policy-as-code (embedded in the binary; run.sh reads them from disk)
   testdata/parity/      golden request/response fixtures recorded from the original Python API
   tools/benchcmp/       end-to-end benchmark (seed, startup, p50/p95, RSS; optionally vs Python)
@@ -207,6 +213,62 @@ down to about 360px wide.
 
 **Bundle.** Every route is lazy-loaded. The main chunk is about 87 kB gzipped and the stylesheet
 about 8 kB; cytoscape (about 146 kB gzipped) only loads with the access graph.
+
+## Dev sign-in
+
+Tessera signs users in through their company's identity provider (Okta, Entra ID, SAML). For
+local development and tests there is a **dev IdP**: a small mock OpenID Connect issuer in pure Go
+(`server/internal/devidp`, binary `server/cmd/tessera-devidp`). It replaces a real Okta or Entra
+tenant; nothing it issues is a real identity. Design: `docs/design/phase-0-platform-security.md`
+§8.2 and §18.5.
+
+`./run.sh` starts it on http://127.0.0.1:8001 (`DEVIDP_PORT` to change, `DEVIDP=0` to skip) and
+exports `TESSERA_DEV_IDP_URL`. Tessera's own sign-in (`/api/auth/*`) lands in later Phase 0 PRs;
+until then you can drive the IdP directly with any OIDC client:
+
+| | |
+|---|---|
+| Discovery | http://127.0.0.1:8001/.well-known/openid-configuration |
+| Client | `client_id=tessera-dev`, `client_secret_basic` with `tessera-dev-secret` (override with `DEVIDP_CLIENT_SECRET`), or `private_key_jwt` with `-client-jwks file.json` |
+| Redirect URIs | `http://localhost:*/api/auth/oidc/*/callback` and the same on `127.0.0.1` (`-redirect-uris` to change) |
+| Flow | authorization code with **PKCE S256 required**; `state` and `nonce` required; ID tokens are RS256 |
+
+**Signing in.** `/authorize` shows a page where you pick a user, how they authenticate and which
+vendor to emulate:
+
+* Users come from `server/internal/devidp/users.yaml` (embedded; `-users file.yaml` to replace):
+  Alice and Ivan (tenant admins), Pat (policy admin), Olu (operator), Vic (viewer) in `larkspur`,
+  and Gina (admin) in `globex`. Each lists the authenticators they own.
+* Authenticators: **Passkey** (phishing-resistant), **Hardware security key** (phishing-resistant,
+  device-bound), **Password + OTP**, **Password only**.
+* Emulation: **Okta** returns `acr=phr` only if `acr_values` asked for `phr` and a passkey was used
+  (`phrh` needs the hardware key); every other `acr_values` entry is ignored silently, as Okta does,
+  so the `acr` is `urn:okta:loa:2fa:any` or `urn:okta:loa:1fa:pwd`. **Entra** ignores `acr_values`,
+  returns a requested Conditional Access context (`claims={"id_token":{"acrs":…}}`) in `acrs` for
+  passkeys, says `amr:["fido","mfa"]`, and identifies users by `oid` + `tid` with a pairwise `sub`.
+  **Generic** returns the first requested `acr` the method satisfies (`phrh`, `phr`, `mfa`, `pwd`).
+
+**Step-up.** The IdP keeps its own session cookie, so a second sign-in is silent single sign-on and
+keeps the original `auth_time`. `prompt=login`, `max_age=0` or an exceeded `max_age` show the page
+again and set a new `auth_time`; `prompt=none` never shows it (`login_required` instead);
+`login_hint` restricts the page to that user. `/logout` ends the session.
+
+**Faults** (negative tests only). Start it with `DEVIDP_FAULTS=1`, then add `fault=<name>` to the
+authorization request or `POST /_faults {"fault":"<name>"}` (empty clears). Each fault changes one
+thing: `wrong_iss`, `wrong_aud`, `alg_none`, `hs256_with_pubkey`, `bad_signature`, `expired`,
+`future_iat`, `nonce_mismatch`, `missing_auth_time`, `stale_auth_time`, `kid_unknown`, `jku_header`,
+`sub_change_on_stepup`, `acr_unrequested`, `no_iss_param`.
+
+**Tests** run it in-process: `devidptest.Start(t, devidp.Config{})` returns a loopback server
+with a registered test client and faults enabled.
+
+**SAML** (`/saml/metadata`, `/saml/sso`) answers 501 until the SAML SP lands (Phase 0 PR9).
+
+**Safety.** The binary refuses to start unless `TESSERA_ENV` is `dev` or `test`, listens on loopback
+only, and keeps its signing key in `server/var/devidp/` (mode 0600, git-ignored), separate from
+Tessera's keys. `devidp.New` refuses `TESSERA_ENV=prod`. `TestIsolation_DevIdPNotImportedByAPI`
+(`internal/archtest`) proves from the import graph that `cmd/tessera` and `internal/api` never link
+the dev IdP.
 
 ## Adding a real connector
 
