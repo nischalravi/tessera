@@ -13,11 +13,27 @@ import (
 const (
 	ExitOK                = 0
 	ExitHashMismatch      = 2 // an event's hash does not match its fields, or a link is broken (edited row)
-	ExitSeqGap            = 3 // a seq is missing or duplicated (deleted row)
+	ExitSeqGap            = 3 // a seq is missing or duplicated (deleted row), or the chain was truncated (kind "truncated")
 	ExitCheckpointInvalid = 4 // a checkpoint signature or payload is invalid (forged checkpoint)
 	ExitAnchorMissing     = 5 // a checkpoint is missing from the anchor source or differs there
 	ExitStaleAnchoring    = 6 // events older than StaleAfter are not covered by an anchored checkpoint (warning unless strict)
 )
+
+// Truncation. Deleting the newest events is a gap at the tail: the events
+// between the end of the chain and the head, or the newest signed checkpoint,
+// are missing. Verify reports it as exit 3 (seq gap) with kind "truncated".
+// The newest signed checkpoint is the newest one in the database or, with
+// Anchors, in the anchor source, whichever is later; the event at its seq must
+// exist with the signed hash. A database owner who deletes the newest events
+// and rewinds audit_chain_heads and deletes the checkpoint rows after the
+// cut leaves a chain the database alone cannot fault, so:
+//   - without Anchors, truncation is detected only while a checkpoint row
+//     (or the head) still points past the end of the chain;
+//   - with Anchors, only the events after the newest anchored checkpoint can
+//     be removed undetected. That window is bounded by the checkpoint interval
+//     (Checkpointer.Every, 5 min, or EveryEvents, 1000 events, whichever comes
+//     first) plus the time to anchor, and stale anchoring (exit 6) reports a
+//     chain whose oldest unanchored event is older than StaleAfter.
 
 // StaleAfter is how old an event may be without an anchored checkpoint
 // covering it before verification warns (design: ≤ 10 min).
@@ -33,17 +49,21 @@ type Problem struct {
 
 // Report is the result of verifying one tenant's chain.
 type Report struct {
-	TenantID    string    `json:"tenant_id"`
-	Tenant      string    `json:"tenant"`
-	Events      int64     `json:"events"`
-	FirstSeq    int64     `json:"first_seq"`
-	LastSeq     int64     `json:"last_seq"`
-	HeadSeq     int64     `json:"head_seq"`
-	Checkpoints int       `json:"checkpoints"`
-	Anchored    int       `json:"anchored"`
-	Result      string    `json:"result"` // ok | warning | failed
-	ExitCode    int       `json:"exit_code"`
-	Problems    []Problem `json:"problems"`
+	TenantID    string `json:"tenant_id"`
+	Tenant      string `json:"tenant"`
+	Events      int64  `json:"events"`
+	FirstSeq    int64  `json:"first_seq"`
+	LastSeq     int64  `json:"last_seq"`
+	HeadSeq     int64  `json:"head_seq"`
+	Checkpoints int    `json:"checkpoints"`
+	Anchored    int    `json:"anchored"`
+	// AnchorsUnverified counts this tenant's anchor lines whose JWS no
+	// platform key verifies (a reseeded dev database, or a revoked key); they
+	// cannot vouch for anything and are ignored.
+	AnchorsUnverified int       `json:"anchors_unverified,omitempty"`
+	Result            string    `json:"result"` // ok | warning | failed
+	ExitCode          int       `json:"exit_code"`
+	Problems          []Problem `json:"problems"`
 }
 
 // VerifyOptions scope and configure a verification.
@@ -172,7 +192,11 @@ func Verify(tx *store.TenantTx, slug string, o VerifyOptions) (Report, error) {
 		end = head.LastSeq
 	}
 	if expect <= end {
-		add(ExitSeqGap, "seq_gap", expect, "events %d..%d are missing (the chain head is at %d)", expect, end, head.LastSeq)
+		kind := "seq_gap"
+		if end == head.LastSeq {
+			kind = "truncated"
+		}
+		add(ExitSeqGap, kind, expect, "events %d..%d are missing (the chain head is at %d)", expect, end, head.LastSeq)
 	}
 	if (to == 0 || to >= head.LastSeq) && head.LastSeq > 0 && r.LastSeq == head.LastSeq && prevHash != head.LastHash {
 		add(ExitHashMismatch, "head_mismatch", head.LastSeq, "the chain head's hash does not match the last event")
@@ -183,6 +207,7 @@ func Verify(tx *store.TenantTx, slug string, o VerifyOptions) (Report, error) {
 
 	// 2. checkpoints
 	r.Checkpoints = len(checkpoints)
+	truncated := false
 	var newestAnchored int64
 	for _, c := range checkpoints {
 		p, _, err := VerifyCheckpointJWS(c.JWS, o.Keys)
@@ -196,7 +221,13 @@ func Verify(tx *store.TenantTx, slug string, o VerifyOptions) (Report, error) {
 			continue
 		}
 		if h, ok := hashAt[c.Seq]; !ok {
-			add(ExitSeqGap, "checkpoint_event_missing", c.Seq, "the event a checkpoint certifies is missing")
+			if c.Seq > r.LastSeq {
+				truncated = true
+				add(ExitSeqGap, "truncated", c.Seq, "a signed checkpoint certifies seq %d but the chain ends at %d (events removed from the tail)",
+					c.Seq, r.LastSeq)
+			} else {
+				add(ExitSeqGap, "checkpoint_event_missing", c.Seq, "the event a checkpoint certifies is missing")
+			}
 		} else if h != c.HeadHash {
 			add(ExitHashMismatch, "checkpoint_hash", c.Seq, "the event's hash differs from the signed checkpoint (chain rewritten)")
 		}
@@ -210,6 +241,27 @@ func Verify(tx *store.TenantTx, slug string, o VerifyOptions) (Report, error) {
 			newestAnchored = max(newestAnchored, c.Seq)
 		}
 	}
+	// 4. truncation: the chain must reach the newest signed checkpoint.
+	if !truncated {
+		latest, source, err := latestSignedCheckpoint(tx, o, &r)
+		if err != nil {
+			return r, err
+		}
+		if latest.Seq > 0 && latest.Seq >= from && (to == 0 || to >= latest.Seq) {
+			e, err := tx.AuditEventBySeq(latest.Seq)
+			switch {
+			case errors.Is(err, store.ErrNotFound):
+				add(ExitSeqGap, "truncated", latest.Seq,
+					"the newest signed checkpoint (%s) certifies seq %d, but the chain ends at %d (head %d): events were removed from the tail",
+					source, latest.Seq, r.LastSeq, head.LastSeq)
+			case err != nil:
+				return r, err
+			case e.Hash != latest.HeadHash && hashAt[latest.Seq] == "":
+				add(ExitHashMismatch, "checkpoint_hash", latest.Seq, "the event's hash differs from the newest signed checkpoint (%s)", source)
+			}
+		}
+	}
+
 	if o.Anchors != nil && !o.Now.IsZero() {
 		// the oldest event not covered by an anchored checkpoint
 		s := max(newestAnchored+1, from)
@@ -227,4 +279,38 @@ func Verify(tx *store.TenantTx, slug string, o VerifyOptions) (Report, error) {
 		r.Result = "ok"
 	}
 	return r, nil
+}
+
+// latestSignedCheckpoint returns the newest checkpoint of tx's tenant whose
+// signature and payload verify: the newest checkpoint row, or, with
+// o.Anchors, a later anchored one (an attacker can delete rows, not anchors).
+// source names where it came from. Anchor lines that do not verify are
+// counted in r.AnchorsUnverified and ignored.
+func latestSignedCheckpoint(tx *store.TenantTx, o VerifyOptions, r *Report) (CheckpointPayload, string, error) {
+	var best CheckpointPayload
+	source := ""
+	tid := tx.Tenant().String()
+	c, err := tx.LatestAuditCheckpoint()
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+	case err != nil:
+		return best, "", err
+	default:
+		if p, _, err := VerifyCheckpointJWS(c.JWS, o.Keys); err == nil && p.TID == tid && p.Seq == c.Seq && p.HeadHash == c.HeadHash {
+			best, source = p, "database"
+		}
+	}
+	if o.Anchors != nil {
+		for _, a := range o.Anchors.ForTenant(tid) {
+			p, _, err := VerifyCheckpointJWS(a.JWS, o.Keys)
+			if err != nil || p.TID != tid || p.Seq != a.Seq || p.HeadHash != a.HeadHash {
+				r.AnchorsUnverified++
+				continue
+			}
+			if p.Seq > best.Seq {
+				best, source = p, "anchors"
+			}
+		}
+	}
+	return best, source, nil
 }

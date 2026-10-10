@@ -31,8 +31,14 @@ const auditUsage = `usage:
   tessera audit export     -tenant slug [-from-seq N] [-to-seq M] [-db path]
 
 verify exit codes: 0 ok, 2 hash mismatch (edited row), 3 seq gap or duplicate
-(deleted row), 4 checkpoint signature invalid, 5 anchor missing or mismatched,
-6 stale anchoring (only with -strict; otherwise a warning)`
+(deleted row) or truncation (the chain ends before its head or its newest
+signed checkpoint), 4 checkpoint signature invalid, 5 anchor missing or
+mismatched, 6 stale anchoring (only with -strict; otherwise a warning).
+
+Without -anchors, a database owner who deletes the newest events, their
+checkpoint rows and rewinds the head is not detected; with -anchors only the
+events after the newest anchored checkpoint (at most one checkpoint interval:
+5 min or 1000 events) can be removed unseen.`
 
 // auditCmd runs `tessera audit verify|checkpoint|export` (design §13.7).
 func auditCmd(ctx context.Context, args []string, stdout, stderr io.Writer) error {

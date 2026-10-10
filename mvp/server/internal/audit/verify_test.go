@@ -133,7 +133,24 @@ func TestVerify_Tamper(t *testing.T) {
 			if err := tamper(t, f).DeleteEvent(ctx, tenantA, 10); err != nil {
 				t.Fatal(err)
 			}
-		}, audit.ExitSeqGap, "seq_gap"},
+		}, audit.ExitSeqGap, "truncated"},
+		{"deleted the last 3 rows", func(t *testing.T, f *ledgerFixture) {
+			if err := tamper(t, f).TruncateTail(ctx, tenantA, 7, false, false); err != nil {
+				t.Fatal(err)
+			}
+		}, audit.ExitSeqGap, "truncated"},
+		{"deleted the last 3 rows and rewound the head", func(t *testing.T, f *ledgerFixture) {
+			// the checkpoint row at 10 still certifies the removed tail
+			if err := tamper(t, f).TruncateTail(ctx, tenantA, 7, false, true); err != nil {
+				t.Fatal(err)
+			}
+		}, audit.ExitSeqGap, "truncated"},
+		{"deleted the last 3 rows and their checkpoint, rewound the head", func(t *testing.T, f *ledgerFixture) {
+			// the database is consistent again; only the anchor of seq 10 remains
+			if err := tamper(t, f).TruncateTail(ctx, tenantA, 7, true, true); err != nil {
+				t.Fatal(err)
+			}
+		}, audit.ExitSeqGap, "truncated"},
 		{"forged checkpoint", func(t *testing.T, f *ledgerFixture) {
 			// signed with an attacker's key under the real kid
 			_, priv, _ := ed25519.GenerateKey(rand.Reader)
@@ -204,6 +221,61 @@ func TestVerify_Tamper(t *testing.T) {
 				t.Errorf("tenant B affected: %+v", rb)
 			}
 		})
+	}
+}
+
+// TestVerify_TruncationWindow documents what truncation verify cannot see
+// (see the Truncation comment in verify.go): without the anchor source, a
+// tail removed together with its checkpoint rows and a rewound head; with it,
+// only the events after the newest anchored checkpoint.
+func TestVerify_TruncationWindow(t *testing.T) {
+	ctx := context.Background()
+	f := checkpointed(t)
+	if err := tamper(t, f).TruncateTail(ctx, tenantA, 7, true, true); err != nil {
+		t.Fatal(err)
+	}
+	if rep := f.verify(t, tenantA, audit.VerifyOptions{}); rep.ExitCode != 0 || rep.LastSeq != 7 {
+		t.Errorf("without anchors a covered-up truncation is invisible to the database alone: %+v", rep)
+	}
+	if rep := f.verify(t, tenantA, audit.VerifyOptions{Anchors: f.anchorSet(t)}); rep.ExitCode != audit.ExitSeqGap {
+		t.Errorf("with anchors: %+v", rep)
+	}
+
+	g := checkpointed(t)
+	g.record(t, tenantA, 3) // 11..13, after the newest anchored checkpoint (10)
+	if err := tamper(t, g).TruncateTail(ctx, tenantA, 10, true, true); err != nil {
+		t.Fatal(err)
+	}
+	rep := g.verify(t, tenantA, audit.VerifyOptions{Anchors: g.anchorSet(t), Now: t0.Add(2 * time.Minute)})
+	if rep.ExitCode != 0 || rep.LastSeq != 10 {
+		t.Errorf("the unanchored tail is the documented window: %+v", rep)
+	}
+
+	// a range that ends before the newest checkpoint is not a truncation
+	h := checkpointed(t)
+	if rep := h.verify(t, tenantA, audit.VerifyOptions{Anchors: h.anchorSet(t), ToSeq: 5}); rep.ExitCode != 0 {
+		t.Errorf("sub-range: %+v", rep)
+	}
+}
+
+// TestVerify_IgnoresUnverifiableAnchors: anchor lines no platform key
+// verifies (another database's, after a dev reseed) cannot claim a longer
+// chain; they are counted and ignored.
+func TestVerify_IgnoresUnverifiableAnchors(t *testing.T) {
+	f := checkpointed(t)
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	jws, err := audit.SignCheckpoint(&keys.SigningKey{KID: "other-db", Alg: keys.AlgEdDSA, Key: priv},
+		audit.CheckpointPayload{TID: tenantA.String(), Seq: 99, HeadHash: strings.Repeat("0", 64)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&audit.FileSink{Path: f.anchors}).Anchor(context.Background(), audit.Anchor{TID: tenantA.String(),
+		Seq: 99, HeadHash: strings.Repeat("0", 64), JWS: jws}); err != nil {
+		t.Fatal(err)
+	}
+	rep := f.verify(t, tenantA, audit.VerifyOptions{Anchors: f.anchorSet(t), Now: t0.Add(2 * time.Minute)})
+	if rep.ExitCode != 0 || rep.AnchorsUnverified != 1 {
+		t.Errorf("%+v", rep)
 	}
 }
 

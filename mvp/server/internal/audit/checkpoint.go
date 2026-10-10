@@ -255,8 +255,9 @@ func (S3Sink) Anchor(context.Context, Anchor) (string, error) { return "", ErrS3
 
 // AnchorSet is the content of an anchor source, for verification.
 type AnchorSet struct {
-	byKey map[string][]string // tid|seq -> JWSs (a reseeded dev database can reuse a seq)
-	Lines int
+	byKey    map[string][]string // tid|seq -> JWSs (a reseeded dev database can reuse a seq)
+	byTenant map[string][]Anchor // tid -> anchors, in file order
+	Lines    int
 }
 
 func anchorKey(tid string, seq int64) string { return tid + "|" + strconv.FormatInt(seq, 10) }
@@ -270,6 +271,9 @@ func (s *AnchorSet) Has(tid string, seq int64, jws string) bool {
 	}
 	return false
 }
+
+// ForTenant returns the anchors of tid, in the order they were anchored.
+func (s *AnchorSet) ForTenant(tid string) []Anchor { return s.byTenant[tid] }
 
 // maxAnchorLine caps one line of an anchor file.
 const maxAnchorLine = 16 << 10
@@ -287,7 +291,7 @@ func ReadAnchors(path string) (*AnchorSet, error) {
 
 // ParseAnchors parses JSONL anchors.
 func ParseAnchors(r io.Reader) (*AnchorSet, error) {
-	s := &AnchorSet{byKey: map[string][]string{}}
+	s := &AnchorSet{byKey: map[string][]string{}, byTenant: map[string][]Anchor{}}
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 4096), maxAnchorLine)
 	for sc.Scan() {
@@ -304,6 +308,7 @@ func ParseAnchors(r io.Reader) (*AnchorSet, error) {
 		}
 		k := anchorKey(a.TID, a.Seq)
 		s.byKey[k] = append(s.byKey[k], a.JWS)
+		s.byTenant[a.TID] = append(s.byTenant[a.TID], a)
 	}
 	return s, sc.Err()
 }

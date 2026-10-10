@@ -173,11 +173,17 @@ the database (S3 Object Lock is a later step). To check a database:
 ```bash
 cd server
 TESSERA_ENV=dev bin/tessera audit verify -all -db tessera.db -anchors file://$PWD/var/audit-anchors.jsonl
-# exit 0 ok, 2 edited row, 3 missing or duplicated seq, 4 bad checkpoint signature,
-# 5 checkpoint missing from the anchors, 6 stale anchoring (with -strict)
+# exit 0 ok, 2 edited row, 3 missing or duplicated seq or a truncated tail, 4 bad checkpoint
+# signature, 5 checkpoint missing from the anchors, 6 stale anchoring (with -strict)
 TESSERA_ENV=dev bin/tessera audit checkpoint -tenant larkspur -db tessera.db   # checkpoint now
 TESSERA_ENV=dev bin/tessera audit export -tenant larkspur -db tessera.db > larkspur.ndjson
 ```
+
+Truncation (deleting the newest events) is caught when the chain ends before its head or before
+the newest signed checkpoint, in the database or in the anchors. Pass `-anchors`: someone who can
+write the database can also delete checkpoint rows and rewind the head, and then only the anchors
+show the missing tail. Events after the newest anchored checkpoint (at most one checkpoint
+interval, 5 minutes or 1000 events) are the window that cannot be proven complete.
 
 The Admin → Audit log page lists the events, can include API requests, verifies the chain and
 exports it.

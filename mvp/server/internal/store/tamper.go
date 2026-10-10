@@ -33,7 +33,8 @@ const (
 		DROP TRIGGER IF EXISTS audit_events_no_delete;
 		DROP TRIGGER IF EXISTS audit_ckpt_immutable;
 		DROP TRIGGER IF EXISTS audit_ckpt_no_delete;
-		DROP TRIGGER IF EXISTS tg_audit_checkpoints_xtenant_upd;`
+		DROP TRIGGER IF EXISTS tg_audit_checkpoints_xtenant_upd;
+		DROP TRIGGER IF EXISTS audit_heads_forward;`
 	tamperBreak  = `ALTER TABLE audit_events RENAME TO audit_events_broken`
 	tamperRepair = `ALTER TABLE audit_events_broken RENAME TO audit_events`
 )
@@ -45,6 +46,12 @@ var (
 		DELETE FROM audit_events WHERE tenant_id = @tenant AND seq = @seq`)
 	tamperCheckpointJWS = tq("tamper.audit_checkpoints.jws", `
 		UPDATE audit_checkpoints SET jws = @jws WHERE tenant_id = @tenant AND seq = @seq`)
+	tamperDeleteTail = tq("tamper.audit_events.delete_tail", `
+		DELETE FROM audit_events WHERE tenant_id = @tenant AND seq > @seq`)
+	tamperDeleteCheckpointsTail = tq("tamper.audit_checkpoints.delete_tail", `
+		DELETE FROM audit_checkpoints WHERE tenant_id = @tenant AND seq > @seq`)
+	tamperRewindHead = tq("tamper.audit_chain_heads.rewind", `
+		UPDATE audit_chain_heads SET last_seq = @seq, last_hash = @hash WHERE tenant_id = @tenant`)
 )
 
 // DropTriggers removes the append-only triggers (as a database owner could).
@@ -83,6 +90,37 @@ func (a *AuditTamper) DeleteEvent(ctx context.Context, t tenancy.ID, seq int64) 
 // must be dropped).
 func (a *AuditTamper) ReplaceCheckpointJWS(ctx context.Context, t tenancy.ID, seq int64, jws string) error {
 	return a.exec(ctx, t, tamperCheckpointJWS, sql.Named("jws", jws), sql.Named("seq", seq))
+}
+
+// TruncateTail deletes every event after seq, as a careful attacker would:
+// with deleteCheckpoints it also deletes the checkpoint rows after seq, and
+// with rewindHead it moves the chain head back to seq, so the database alone
+// shows a consistent, shorter chain (triggers must be dropped).
+func (a *AuditTamper) TruncateTail(ctx context.Context, t tenancy.ID, seq int64, deleteCheckpoints, rewindHead bool) error {
+	return a.db.InTenant(ctx, t, func(tx *TenantTx) error {
+		res, err := tx.exec(tamperDeleteTail, sql.Named("seq", seq))
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return ErrNotFound
+		}
+		if deleteCheckpoints {
+			if _, err := tx.exec(tamperDeleteCheckpointsTail, sql.Named("seq", seq)); err != nil {
+				return err
+			}
+		}
+		if rewindHead {
+			e, err := tx.AuditEventBySeq(seq)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.exec(tamperRewindHead, sql.Named("seq", seq), sql.Named("hash", e.Hash)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // Break makes every audit append fail (the events table disappears) while the

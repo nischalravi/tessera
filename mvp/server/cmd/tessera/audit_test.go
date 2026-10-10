@@ -103,8 +103,9 @@ func exitCode(err error) int {
 }
 
 // TestAuditVerify_ExitCodes runs `tessera audit verify` against each kind of
-// tampering (design §19 PR3): edited row 2, deleted middle row 3, forged
-// checkpoint 4, missing anchor line 5.
+// tampering (design §19 PR3): edited row 2, deleted middle row 3, truncated
+// tail 3 (even with the head rewound and the checkpoint row deleted, since
+// the anchor remains), forged checkpoint 4, missing anchor line 5.
 func TestAuditVerify_ExitCodes(t *testing.T) {
 	ctx := context.Background()
 	cases := []struct {
@@ -123,6 +124,20 @@ func TestAuditVerify_ExitCodes(t *testing.T) {
 		{"deleted middle row", func(t *testing.T, db, _ string) {
 			withStore(t, db, func(_ *store.DB, tp *store.AuditTamper) {
 				if err := tp.DeleteEvent(ctx, acme, 3); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}, 3},
+		{"deleted the last 2 rows", func(t *testing.T, db, _ string) {
+			withStore(t, db, func(_ *store.DB, tp *store.AuditTamper) {
+				if err := tp.TruncateTail(ctx, acme, 4, false, false); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}, 3},
+		{"deleted the last 2 rows, their checkpoint, and rewound the head", func(t *testing.T, db, _ string) {
+			withStore(t, db, func(_ *store.DB, tp *store.AuditTamper) {
+				if err := tp.TruncateTail(ctx, acme, 4, true, true); err != nil {
 					t.Fatal(err)
 				}
 			})
