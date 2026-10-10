@@ -64,3 +64,35 @@ func TestLegacySchema_OpenRefusesAndOpenFreshRecreates(t *testing.T) {
 	}
 	_ = d2.Close()
 }
+
+// A database from before sign-in (access_requests without
+// requested_by_user_id) is refused by Open too: CREATE TABLE IF NOT EXISTS
+// cannot add the column, and the old database has no platform users.
+func TestLegacySchema_BeforeSignIn(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "pre-pr5.db")
+	d, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{`DROP TRIGGER tg_access_requests_users_xtenant`, `DROP TRIGGER tg_access_requests_users_xtenant_ins`,
+		`ALTER TABLE access_requests DROP COLUMN requested_by_user_id`} {
+		if _, err := d.sql.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if d, err := Open(ctx, path); !errors.Is(err, ErrLegacySchema) {
+		if d != nil {
+			_ = d.Close()
+		}
+		t.Fatalf("Open on a pre-sign-in database: %v, want ErrLegacySchema", err)
+	}
+	d2, err := OpenFresh(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = d2.Close()
+}

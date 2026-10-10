@@ -32,14 +32,19 @@ Requirements: Go 1.27+ (the version in `server/go.mod`), Node 18+ (tested on 24)
 ./run.sh audit-deps  # govulncheck ./... on the Go module (install with server/scripts/install-tools.sh)
 ```
 
-* UI: http://localhost:5173 (Vite dev server; it proxies `/api` to the backend via `TESSERA_API`)
+* UI: http://localhost:5173 (Vite dev server; it proxies `/api` to the backend via `TESSERA_API`).
+  Sign in with **dev sign-in** (see [Dev sign-in](#dev-sign-in)): pick a seeded user, for example
+  Alice (tenant admin) or Pat (policy admin), with a passkey.
 * API: http://127.0.0.1:8000. OpenAPI docs are at http://127.0.0.1:8000/docs
 * Dev IdP: http://127.0.0.1:8001 (see [Dev sign-in](#dev-sign-in))
 
 Ctrl+C stops all three processes. You can change the ports with `API_PORT=… UI_PORT=… DEVIDP_PORT=… ./run.sh`
 (`DEVIDP=0` skips the dev IdP).
 The database is `server/tessera.db` (override with `TESSERA_DB`); the binary is `server/bin/tessera`
-and can also be run directly: `TESSERA_ENV=dev tessera serve -addr 127.0.0.1:8000 -db tessera.db` or `tessera seed` (until sign-in lands the API serves the dev default tenant, `larkspur`, and refuses to start unless `TESSERA_ENV=dev`).
+and can also be run directly: `TESSERA_ENV=dev tessera serve -addr 127.0.0.1:8000 -db tessera.db` or `tessera seed`.
+`TESSERA_ENV` must be set (`dev`, `test` or `prod`). Every API route except `GET /api/health` needs a
+signed-in session, and the tenant is the session's: there is no default tenant. A database from before
+sign-in is refused (`./run.sh` reseeds it; otherwise run `./run.sh --reseed`).
 
 ## What the demo shows
 
@@ -151,7 +156,13 @@ The routes are documented at `/api/readiness/openapi.json`.
 `GET /api/jml/leaver-plan/{identity_id}` · `GET /api/accounts[?system=]` ·
 `GET /api/audit[?limit=&before_seq=&action=&actor_id=&target_type=&target_id=&from=&to=&include_http=]` ·
 `GET /api/audit/events/{event_id}/proof` · `GET /api/audit/checkpoints[?from_seq=]` · `GET /api/audit/keys` ·
-`POST /api/audit/verify {from_seq?, to_seq?}` · `GET /api/audit/export[?from_seq=&to_seq=]` (NDJSON)
+`POST /api/audit/verify {from_seq?, to_seq?}` · `GET /api/audit/export[?from_seq=&to_seq=]` (NDJSON) ·
+`GET /api/auth/session` · `POST /api/auth/logout` · `GET /api/auth/sessions` · `DELETE /api/auth/sessions/{session_id}` ·
+`GET|POST /api/auth/dev-login` (dev and test only)
+
+Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
+`internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
+or HRIS execution is always the signed-in user.
 
 ### Audit ledger
 
@@ -164,8 +175,10 @@ route template, status, sorted query keys, never bodies or query values); a read
 cannot be written answers `503 {"error":"audit_unavailable"}` instead of the data, and so does a
 POST that committed no domain event of its own (and `POST /api/simulate`, whose answer is data). Domain events
 (JIT, reviews, revokes, JML, readiness attestations, skips and activation) commit in the same
-transaction as their change. Until sign-in lands the actor is `anonymous`; a name the browser
-sends is kept only as `detail.claimed_actor`.
+transaction as their change. The actor is the signed-in user, with the session id and an
+authentication summary (`authn`: AAL, phishing resistance, ACR, auth time); a request without a
+session is recorded as `anonymous` with the reason, on the platform chain. The API ignores any
+actor a client names (request bodies have no `actor`, `approver` or `reviewer` fields).
 
 Every 5 minutes (or 1000 events) the server signs each chain head with the platform Ed25519 key and
 appends it to the anchor sink: `TESSERA_AUDIT_ANCHOR`, by default `var/audit-anchors.jsonl` next to
@@ -271,15 +284,51 @@ about 8 kB; cytoscape (about 146 kB gzipped) only loads with the access graph.
 
 ## Dev sign-in
 
-Tessera signs users in through their company's identity provider (Okta, Entra ID, SAML). For
-local development and tests there is a **dev IdP**: a small mock OpenID Connect issuer in pure Go
-(`server/internal/devidp`, binary `server/cmd/tessera-devidp`). It replaces a real Okta or Entra
-tenant; nothing it issues is a real identity. Design: `docs/design/phase-0-platform-security.md`
-§8.2 and §18.5.
+Every API call needs a signed-in session (design `docs/design/phase-0-platform-security.md` §11, §12).
+Tessera signs users in through their company's identity provider (Okta, Entra ID, SAML); that browser
+flow arrives in Phase 0 PR6 and PR7. Until then a development server (`TESSERA_ENV=dev` or `test`,
+which `./run.sh` sets) offers **dev sign-in**:
+
+1. `./run.sh` and open http://localhost:5173. The sign-in page lists the users the seed created for the
+   dev IdP (below) and asks how they authenticate.
+2. Pick a user and a method. The page calls `POST /api/auth/dev-login {tenant, subject, method}`; the
+   API resolves the user through the tenant's `dev_mock` IdP connection and the (connection, subject)
+   link (never by email), builds the authentication context the dev IdP's Okta emulation would return
+   when Tessera asks for phishing resistance, and sets the session cookie.
+3. Roles follow from the method, as with a real IdP (design §12.2): admin roles (`tenant_admin`,
+   `policy_admin`) are active only after a phishing-resistant method (**Passkey** or **Hardware security
+   key**); other roles need MFA (**Password + OTP** or better); **Password only** activates no role.
+   The user menu shows inactive roles and offers to sign in again.
+
+| User | Tenant | Role | What they can do |
+|---|---|---|---|
+| Alice (`00u-alice-admin`), Ivan | larkspur | tenant_admin | read everything, the audit log, connections and readiness; no data-plane writes (separation of duties) |
+| Pat (`00u-pat-policy`) | larkspur | policy_admin | read, JIT and review decisions, revoke grants, run HRIS plans, sync connectors |
+| Olu (`00u-olu-operator`) | larkspur | operator | read, request and decide JIT, review decisions |
+| Vic (`00u-vic-viewer`) | larkspur | viewer | read (with MFA; his only authenticator in the dev IdP is a password) |
+| Gina (`00u-gina-globex`) | globex | tenant_admin | the second tenant |
+
+Approvals, review decisions, HRIS execution and applying a revoke also need a phishing-resistant
+sign-in in the last 15 minutes (step-up, §10.2). Until the step-up flow lands (PR8) the API answers
+`401 step_up_required` and the UI asks you to sign in again.
+
+Dev sign-in is a development shim with guard rails (§18.4): the routes exist only with
+`TESSERA_ENV=dev` or `test`, the request needs a JSON body and an allowed `Origin`, every attempt is
+audited (`auth.login.success` / `auth.login.failure`), and a production server refuses to start while a
+`dev_mock` connection exists. PR7 removes it. Other session routes: `GET /api/auth/session`,
+`POST /api/auth/logout`, `GET /api/auth/sessions`, `DELETE /api/auth/sessions/{session_id}`.
+
+### Dev IdP
+
+Tessera's sign-in through an identity provider is tested against a **dev IdP**: a small mock OpenID
+Connect issuer in pure Go (`server/internal/devidp`, binary `server/cmd/tessera-devidp`). It replaces a
+real Okta or Entra tenant; nothing it issues is a real identity. Design:
+`docs/design/phase-0-platform-security.md` §8.2 and §18.5.
 
 `./run.sh` starts it on http://127.0.0.1:8001 (`DEVIDP_PORT` to change, `DEVIDP=0` to skip) and
-exports `TESSERA_DEV_IDP_URL`. Tessera's own sign-in (`/api/auth/*`) lands in later Phase 0 PRs;
-until then you can drive the IdP directly with any OIDC client:
+exports `TESSERA_DEV_IDP_URL` (seeding points the `dev_mock` connections at it). Tessera's IdP sign-in
+(`/api/auth/login`, the OIDC callback) lands in Phase 0 PR6; until then you can drive the IdP directly
+with any OIDC client:
 
 | | |
 |---|---|
@@ -397,7 +446,16 @@ scripts/install-tools.sh && gosec ./... && govulncheck ./...
 * Read-header, read, write and idle timeouts on the HTTP server, and a 30 s per-handler timeout.
 * Graceful shutdown on SIGINT/SIGTERM: in-flight requests drain and the JIT sweeper stops.
 * CORS allows only the dev UI origins (`http://localhost:$UI_PORT`, `http://127.0.0.1:$UI_PORT`;
-  override with `TESSERA_CORS_ORIGINS`, dev only). The UI normally reaches the API through Vite's proxy.
+  override with `TESSERA_CORS_ORIGINS`; must be empty in production, where the UI is same-origin),
+  with credentials. The UI normally reaches the API through Vite's proxy.
+* Every response carries `Content-Security-Policy` (`default-src 'none'; frame-ancestors 'none'` on the
+  API), `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` and `X-Frame-Options: DENY`;
+  API responses are `Cache-Control: no-store`; production adds HSTS.
+* Sessions are server-side (design §11): the `__Host-tessera_sid` cookie (`Secure`, `HttpOnly`,
+  `SameSite=Lax`, `Path=/`) carries 32 random bytes and the database keeps only their SHA-256. A session
+  ends after 60 minutes idle or 24 hours (15 minutes / 12 hours while an admin role is active), on sign
+  out, or when it is revoked. State-changing requests need the session's CSRF token in
+  `X-Tessera-CSRF`, an allowed `Origin` and a JSON body (403 `csrf_failed`, 415 otherwise).
 * Logs carry method, path, status and duration only: no query strings, headers or bodies.
   Internal errors are logged server-side and never echoed to the client.
 * Configuration (`internal/config`): with `TESSERA_ENV=prod` the server refuses to start on a

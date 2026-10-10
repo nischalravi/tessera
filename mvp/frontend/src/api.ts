@@ -18,35 +18,65 @@ export class ApiError extends Error {
 }
 
 /**
- * Name sent as X-Tessera-User so readiness actions (attest, skip, accept, activate) are
- * attributed. A placeholder until Phase 0 authentication; set from the persona.
+ * Session handling (design §11, §17). The browser holds only the HttpOnly session cookie,
+ * which the API sets at sign-in; this client never sees a token. Every state-changing request
+ * carries the session's CSRF token (from GET /api/auth/session) in X-Tessera-CSRF.
+ * The actor of every action is the signed-in user: nothing here names one.
  */
-let apiActor: string | null = null;
-export const setApiActor = (name: string | null) => {
-  apiActor = name && /^[A-Za-z0-9._@+ -]{1,120}$/.test(name) ? name : null;
+let csrfToken: string | null = null;
+export const setCsrfToken = (t: string | null) => {
+  csrfToken = t;
 };
+
+/** Fired when the API says the session is gone (401 login_required): the app shows sign-in. */
+export const SIGNED_OUT = "tessera:signed-out";
+/** Fired when an action needs a fresh phishing-resistant sign-in (401 step_up_required). */
+export const STEP_UP = "tessera:step-up";
+
+/** A plain-language message for the API's error contract (§16.2). */
+function errorMessage(status: number, j: any): string {
+  switch (j?.error) {
+    case "login_required":
+      return "Your session ended. Sign in again.";
+    case "step_up_required":
+      return "This action needs a phishing-resistant sign-in in the last few minutes. Sign in again with a passkey, then retry.";
+    case "role_inactive":
+      return "Your admin role is inactive because you signed in without a phishing-resistant method. Sign in again with a passkey.";
+    case "forbidden":
+      return `You don't have permission to do this${j.permission ? ` (needs ${j.permission})` : ""}.`;
+    case "csrf_failed":
+      return "The request was refused as a possible cross-site request. Reload the page and try again.";
+    case "audit_unavailable":
+      return "The audit log is unavailable, so Tessera refused the request. Try again shortly.";
+    case "activation_blocked":
+    case "transition_blocked":
+      return `${j.blocking?.length ?? 0} item(s) block this step`;
+  }
+  if (typeof j?.detail === "string") return j.detail;
+  return j ? JSON.stringify(j.detail ?? j) : `${status}`;
+}
 
 export async function api<T = any>(path: string, body?: unknown, method?: string): Promise<T> {
   const m = method ?? (body !== undefined ? "POST" : "GET");
-  const headers: Record<string, string> = { "content-type": "application/json" };
-  if (apiActor && m !== "GET") headers["x-tessera-user"] = apiActor;
+  const headers: Record<string, string> = {};
+  if (body !== undefined) headers["content-type"] = "application/json";
+  if (m !== "GET" && m !== "HEAD" && csrfToken) headers["x-tessera-csrf"] = csrfToken;
   const res = await fetch(`/api${path}`, {
     method: m,
     headers,
+    credentials: "same-origin",
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
-    let msg = `${res.status} ${res.statusText}`;
     let j: any = null;
     try {
       j = await res.json();
-      msg = typeof j.detail === "string" ? j.detail : j.error === "activation_blocked" || j.error === "transition_blocked"
-        ? `${j.blocking?.length ?? 0} item(s) block this step`
-        : JSON.stringify(j.detail ?? j);
     } catch {
       /* ignore */
     }
-    throw new ApiError(msg, res.status, j);
+    if (res.status === 401 && j?.error === "login_required") window.dispatchEvent(new Event(SIGNED_OUT));
+    if (res.status === 401 && j?.error === "step_up_required") window.dispatchEvent(new CustomEvent(STEP_UP, { detail: j }));
+    throw new ApiError(j ? errorMessage(res.status, j) : `${res.status} ${res.statusText}`, res.status, j);
   }
   const data = (await res.json()) as T;
   if (m === "GET") cache.set(path, data);
@@ -372,15 +402,77 @@ export interface NhiRow {
 export interface Policy { id: string; name: string; type: string; severity: string; description: string; enabled: boolean; source: string; violations: number }
 
 // -------------------------------------------------------------- actions
-/** Placeholder actor until Phase 0 auth: the persona's display name is recorded as the decider. */
-export const jitDecide = (id: number, action: "approve" | "deny" | "revoke", approver: string) =>
-  api<JitRequest>(`/jit/requests/${id}/${action}`, { approver });
+/** The decider is the signed-in user (the API records it from the session). */
+export const jitDecide = (id: number, action: "approve" | "deny" | "revoke") =>
+  api<JitRequest>(`/jit/requests/${id}/${action}`, {});
 
 export const jitCreate = (body: { identity_id: number; group_id: number; duration_hours: number; justification: string }) =>
   api<JitRequest>("/jit/requests", body);
 
-export const reviewDecide = (itemId: number, decision: "keep" | "revoke", reviewer: string, comment?: string) =>
-  api<{ id: number; decision: string }>(`/reviews/items/${itemId}/decision`, { decision, reviewer, comment: comment || null });
+export const reviewDecide = (itemId: number, decision: "keep" | "revoke", comment?: string) =>
+  api<{ id: number; decision: string }>(`/reviews/items/${itemId}/decision`, { decision, comment: comment || null });
+
+// -------------------------------------------------------------- session
+export interface SessionInfo {
+  user: { id: string; email: string | null; display_name: string };
+  tenant: { id: string; slug: string; name: string };
+  roles: string[];
+  active_roles: string[];
+  inactive_roles: { role: string; reason: string }[];
+  permissions: string[];
+  authn: { aal: number; phishing_resistant: boolean; phr_basis: string; acr: string; methods: string[]; auth_time: string };
+  session: { id: string; idle_expires_at: string; absolute_expires_at: string };
+  csrf_token: string;
+}
+
+/** The current session, or null when signed out. Not cached. */
+export async function getSession(): Promise<SessionInfo | null> {
+  const res = await fetch("/api/auth/session", { credentials: "same-origin" });
+  if (res.status === 401) return null;
+  if (!res.ok) throw new ApiError(`${res.status} ${res.statusText}`, res.status, null);
+  const s = (await res.json()) as SessionInfo;
+  setCsrfToken(s.csrf_token);
+  return s;
+}
+
+export async function logout(): Promise<void> {
+  try {
+    await api("/auth/logout", {});
+  } finally {
+    setCsrfToken(null);
+    cache.clear();
+  }
+}
+
+/** Development sign-in (TESSERA_ENV=dev or test only; replaced by IdP sign-in in Phase 0 PR7). */
+export interface DevUser { tenant: string; tenant_name: string; subject: string; email: string | null; display_name: string; roles: string[] }
+
+/** The users dev sign-in offers, or null when dev sign-in is not available on this server. */
+export async function devLoginUsers(): Promise<{ users: DevUser[]; methods: string[] } | null> {
+  const res = await fetch("/api/auth/dev-login", { credentials: "same-origin" });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new ApiError(`${res.status} ${res.statusText}`, res.status, null);
+  return res.json();
+}
+
+export async function devLogin(tenant: string, subject: string, method: string): Promise<void> {
+  const res = await fetch("/api/auth/dev-login", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ tenant, subject, method }),
+  });
+  if (!res.ok) {
+    let j: any = null;
+    try {
+      j = await res.json();
+    } catch {
+      /* ignore */
+    }
+    throw new ApiError(j?.error === "login_failed" ? "Sign-in failed." : errorMessage(res.status, j), res.status, j);
+  }
+  cache.clear();
+}
 
 export const hrisExecute = (eventId: number) => api(`/hris/events/${eventId}/execute`, {});
 

@@ -2,6 +2,8 @@
 //
 //	tessera [serve] [-addr 127.0.0.1:8000] [-db tessera.db] [-reseed]
 //	tessera seed    [-db tessera.db]
+//	tessera check-db [-db tessera.db]   exit 0 if the database opens with this server's schema
+//	                                    (run.sh reseeds a database from before sign-in)
 //	tessera readiness lint [-dir path]   lint the readiness checklist templates
 //	tessera audit verify|checkpoint|export   verify, checkpoint or export the audit ledger (see audit.go)
 //
@@ -99,8 +101,15 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if err := fset.Parse(args); err != nil {
 		return err
 	}
+	if cmd == "check-db" {
+		st, err := store.Open(ctx, o.db)
+		if err != nil {
+			return err
+		}
+		return st.Close()
+	}
 	if cmd != "seed" && cmd != "serve" {
-		return fmt.Errorf("unknown command %q (want serve, seed, readiness or audit)", cmd)
+		return fmt.Errorf("unknown command %q (want serve, seed, check-db, readiness or audit)", cmd)
 	}
 	if os.Getenv("TESSERA_ENV") == "" {
 		// fail closed: the environment decides the guard rails (§18.4) and
@@ -145,7 +154,6 @@ func policyFS() fs.FS {
 	}
 	return policies.FS
 }
-
 
 func seedDB(ctx context.Context, path string, cfg *config.Config, clock timeutil.Clock, loader *policy.Loader,
 	sealer *seal.Sealer, stdout io.Writer) error {

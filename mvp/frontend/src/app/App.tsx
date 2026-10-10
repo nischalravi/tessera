@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useLocation, useParams } from "react-router-do
 import { ConfirmProvider } from "../components/Dialog";
 import { PageSkeleton } from "../components/Feedback";
 import { ToastProvider } from "../components/Toast";
+import { SessionProvider } from "./auth";
 import { PaletteProvider } from "./CommandPalette";
 import { PersonaProvider } from "./persona";
 import { Shell } from "./Shell";
@@ -72,6 +73,7 @@ export default function App() {
     <ThemeProvider>
       <ToastProvider>
         <ConfirmProvider>
+          <SessionProvider>
           <PersonaProvider>
             <PaletteProvider>
               <Shell>
@@ -143,6 +145,7 @@ export default function App() {
               </Shell>
             </PaletteProvider>
           </PersonaProvider>
+          </SessionProvider>
         </ConfirmProvider>
       </ToastProvider>
     </ThemeProvider>

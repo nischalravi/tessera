@@ -200,3 +200,13 @@ func TestReadinessLint(t *testing.T) {
 		t.Error("missing subcommand accepted")
 	}
 }
+
+// TestCheckDB: check-db passes on a database with this server's schema (the
+// refusal of an older schema is store.TestLegacySchema_*).
+func TestCheckDB(t *testing.T) {
+	var out, errb bytes.Buffer
+	fresh := filepath.Join(t.TempDir(), "fresh.db")
+	if err := run(context.Background(), []string{"check-db", "-db", fresh}, &out, &errb); err != nil {
+		t.Errorf("current schema: %v", err)
+	}
+}

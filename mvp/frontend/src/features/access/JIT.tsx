@@ -20,7 +20,7 @@ export function JIT() {
   const { data, error, reload } = useApi<JitRequest[]>("/jit/requests");
   const { data: groups } = useApi<Group[]>("/groups?requestable=true");
   const { data: idents } = useApi<IdentityRow[]>("/identities?status=active");
-  const { me, actor } = usePersona();
+  const { me } = usePersona();
   const toast = useToast();
   const confirm = useConfirm();
   const [form, setForm] = useState({ identity_id: "", group_id: "", duration_hours: 2, justification: "" });
@@ -52,7 +52,7 @@ export function JIT() {
       if (ok === null) return;
     }
     try {
-      await jitDecide(r.id, a, actor);
+      await jitDecide(r.id, a);
       toast(a === "approve" ? `Approved for ${r.duration_hours} h` : a === "deny" ? "Request denied" : "Elevation revoked");
     } catch (e: any) {
       toast(e.message, { kind: "error" });
