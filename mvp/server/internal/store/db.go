@@ -78,6 +78,8 @@ var tables = []string{
 	// auth core (schema/0005_auth.sql)
 	"idp_connections", "platform_users", "external_logins", "role_assignments", "authn_contexts", "sessions",
 	"login_transactions",
+	// operator bootstrap (schema/0006_admin.sql)
+	"bootstrap_invitations",
 	// audit ledger (schema/0004_audit.sql)
 	"audit_events", "audit_chain_heads", "audit_checkpoints",
 	// deployment readiness (schema/0201-0203)

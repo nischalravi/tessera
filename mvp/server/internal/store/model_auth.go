@@ -225,6 +225,7 @@ type LoginTransaction struct {
 	MaxAge                  *int64
 	SessionID               *uuid.UUID
 	ExpectedExternalLoginID *uuid.UUID
+	BootstrapInvitationID   *uuid.UUID // purpose bootstrap
 	ReturnTo                string
 	CreatedAt               time.Time
 	ExpiresAt               time.Time
@@ -244,4 +245,21 @@ func (u UserRef) idOrNil() any {
 		return nil
 	}
 	return u.ID.String()
+}
+
+// BootstrapInvitation is a one-time code that makes the user who redeems it
+// with a phishing-resistant sign-in through IdPConnectionID a tenant admin
+// (design §15.3). Only the code's SHA-256 is stored.
+type BootstrapInvitation struct {
+	ID               uuid.UUID
+	TenantID         tenancy.ID
+	CodeHash         string
+	IdPConnectionID  uuid.UUID
+	Email            string
+	Role             string // tenant_admin
+	CreatedBy        string // the operator (OS user) who ran invite-admin
+	CreatedAt        time.Time
+	ExpiresAt        time.Time
+	ConsumedAt       *time.Time
+	ConsumedByUserID *uuid.UUID
 }
