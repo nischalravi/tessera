@@ -194,6 +194,15 @@ var rows = []row{
 		Mapping: normalize.Mapping{DevEmulation: "generic"}}, acrValues("mfa"), claims("00u-pat", "phr", "swk", "user", "mfa"),
 		want{2, false, "none", normalize.ACRAAL2, "00u-pat", nil}},
 
+	{"dev_mock saml (inferred from the class ref) phr requested", normalize.Connection{Profile: normalize.DevMock,
+		Mapping: normalize.Mapping{PhrClassRefs: []string{"urn:devidp:ac:phr"}}},
+		normalize.Requested{ClassRefs: []string{"urn:devidp:ac:phr"}}, samlClaims("urn:devidp:ac:phr"),
+		want{2, true, "acr", normalize.ACRPhr, "persistent-nameid", nil}},
+	{"dev_mock saml phr not requested", normalize.Connection{Profile: normalize.DevMock,
+		Mapping: normalize.Mapping{PhrClassRefs: []string{"urn:devidp:ac:phr"}}},
+		normalize.Requested{}, samlClaims("urn:devidp:ac:phr"),
+		want{1, false, "none", normalize.ACRAAL1, "persistent-nameid", nil}},
+
 	{"unknown profile", normalize.Connection{Profile: "ping"}, acrValues(), claims("s", "phr"),
 		want{err: normalize.ErrUnknownProfile}},
 }

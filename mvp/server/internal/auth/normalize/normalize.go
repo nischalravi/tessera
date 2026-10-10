@@ -110,7 +110,7 @@ type Mapping struct {
 	PhrhClassRefs []string `json:"phrh_authn_context_class_refs,omitempty"`
 	AAL2ClassRefs []string `json:"aal2_authn_context_class_refs,omitempty"`
 	AMRAttribute  string   `json:"amr_attribute,omitempty"`
-	// DevEmulation pins the dev_mock emulation (okta | entra | generic);
+	// DevEmulation pins the dev_mock emulation (okta | entra | generic | saml);
 	// empty infers it from the claims.
 	DevEmulation string `json:"dev_emulation,omitempty"`
 }
@@ -269,8 +269,12 @@ func devEmulation(m Mapping, c Claims) string {
 		return Entra
 	case "generic":
 		return GenericOIDC
+	case "saml":
+		return GenericSAML
 	}
 	switch {
+	case c.ClassRef != "" || c.Attributes != nil: // a SAML assertion (the dev IdP's SAML endpoints)
+		return GenericSAML
 	case c.TID != "" || c.OID != "":
 		return Entra
 	case c.ACR == "mfa" || c.ACR == "pwd":
