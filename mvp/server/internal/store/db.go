@@ -58,7 +58,7 @@ var (
 	ErrReadOnly = errors.New("store: write in a read-only transaction")
 	// ErrLegacySchema is returned by Open for a database created before
 	// tenancy; reseed it (./run.sh --reseed or tessera seed).
-	ErrLegacySchema = errors.New("store: database predates tenancy (no tenant_id columns); reseed it with `./run.sh --reseed` or `tessera seed`")
+	ErrLegacySchema = errors.New("store: database predates tenancy (no tenant_id columns); recreate it with `./run.sh --reseed`, or delete the file and run `tessera seed`")
 )
 
 // GlobalTables are the only tables without tenant_id. The schema meta-test

@@ -45,7 +45,10 @@ setup_frontend() {
   fi
 }
 
+# Seeding always starts from an empty file, so a database left over from an
+# older schema (for example one created before tenancy) can never block it.
 seed() {
+  rm -f "$DB" "$DB-shm" "$DB-wal"
   "$BIN" seed -db "$DB"
 }
 
