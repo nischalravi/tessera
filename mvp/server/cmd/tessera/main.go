@@ -10,8 +10,13 @@
 //	TESSERA_POLICY_DIR    read policies from this directory instead of the built-in copies
 //	TESSERA_CONNECTORS    connector spec, e.g. "demo" (default) or "demo-workday,okta"
 //	TESSERA_CORS_ORIGINS  comma-separated browser origins allowed by CORS
-//	                      (default: the dev UI on localhost/127.0.0.1, port UI_PORT or 5173)
-//	TESSERA_NOW           freeze the clock at an ISO-8601 time (tests and demos)
+//	                      (default: the dev UI on localhost/127.0.0.1, port UI_PORT or 5173;
+//	                      must be empty in prod)
+//	TESSERA_KEK / TESSERA_KEK_FILE  the key-encryption key (base64 of 32 bytes) that seals
+//	                      private keys; in dev it is generated at var/dev-kek next to the database
+//	(internal/config lists every setting and the production guard rails that
+//	refuse to start with unsafe ones)
+//	TESSERA_NOW           freeze the clock at an ISO-8601 time (tests and demos; refused in prod)
 //	TESSERA_ENV           must be "dev" (run.sh sets it). Until authentication lands,
 //	                      the API serves one default tenant and refuses to start
 //	                      otherwise, so an unset variable fails closed.
@@ -38,9 +43,12 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/api"
+	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/keys"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
+	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/seed"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
@@ -79,24 +87,31 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if err := fset.Parse(args); err != nil {
 		return err
 	}
+	if cmd != "seed" && cmd != "serve" {
+		return fmt.Errorf("unknown command %q (want serve, seed or readiness)", cmd)
+	}
 	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	clock, err := clockFromEnv()
+	// Typed configuration and the production guard rails come first: an
+	// unsafe production setting refuses to start before anything else runs.
+	cfg, err := config.Load(os.Getenv)
+	if err != nil {
+		return err
+	}
+	clock := cfg.Clock() // TESSERA_NOW, which config refuses in prod
+	sealer, err := cfg.Sealer(config.DevKEKPath(o.db))
 	if err != nil {
 		return err
 	}
 	loader := policy.NewLoader(policyFS())
-	switch cmd {
-	case "seed":
-		return seedDB(ctx, o.db, clock, loader, stdout)
-	case "serve":
-		if _, err := os.Stat(o.db); o.reseed || errors.Is(err, fs.ErrNotExist) {
-			if err := seedDB(ctx, o.db, clock, loader, stdout); err != nil {
-				return err
-			}
-		}
-		return serve(ctx, o, clock, loader, logger)
+	if cmd == "seed" {
+		return seedDB(ctx, o.db, clock, loader, sealer, stdout)
 	}
-	return fmt.Errorf("unknown command %q (want serve, seed or readiness)", cmd)
+	if _, err := os.Stat(o.db); o.reseed || errors.Is(err, fs.ErrNotExist) {
+		if err := seedDB(ctx, o.db, clock, loader, sealer, stdout); err != nil {
+			return err
+		}
+	}
+	return serve(ctx, o, cfg, sealer, clock, loader, logger)
 }
 
 // dbPath accepts a plain path or the Python backend's sqlite:/// URL form.
@@ -105,18 +120,6 @@ func dbPath(v string) string {
 		return "tessera.db"
 	}
 	return strings.TrimPrefix(v, "sqlite:///")
-}
-
-func clockFromEnv() (timeutil.Clock, error) {
-	v := os.Getenv("TESSERA_NOW")
-	if v == "" {
-		return timeutil.System, nil
-	}
-	t, err := timeutil.ParseISO(v)
-	if err != nil {
-		return nil, fmt.Errorf("TESSERA_NOW: %w", err)
-	}
-	return timeutil.Frozen(t), nil
 }
 
 func policyFS() fs.FS {
@@ -133,24 +136,8 @@ func envOr(k, def string) string {
 	return def
 }
 
-func corsOrigins() []string {
-	if v := os.Getenv("TESSERA_CORS_ORIGINS"); v != "" {
-		var out []string
-		for _, o := range strings.Split(v, ",") {
-			if o = strings.TrimSpace(o); o != "" {
-				out = append(out, o)
-			}
-		}
-		return out
-	}
-	port := os.Getenv("UI_PORT")
-	if port == "" {
-		port = "5173"
-	}
-	return []string{"http://localhost:" + port, "http://127.0.0.1:" + port}
-}
-
-func seedDB(ctx context.Context, path string, clock timeutil.Clock, loader *policy.Loader, stdout io.Writer) error {
+func seedDB(ctx context.Context, path string, clock timeutil.Clock, loader *policy.Loader, sealer *seal.Sealer,
+	stdout io.Writer) error {
 	start := time.Now()
 	// Seeding always starts from an empty schema, even over an older database.
 	st, err := store.OpenFresh(ctx, path)
@@ -190,6 +177,10 @@ func seedDB(ctx context.Context, path string, clock timeutil.Clock, loader *poli
 		fmt.Fprintf(stdout, "Seeded the deployment-readiness demo for tenant %s: Okta (demo) connection validated and dry-run reconciled\n",
 			seed.LarkspurSlug)
 	}
+	if err := keys.EnsureAll(ctx, st, sealer, clock()); err != nil {
+		return err
+	}
+	fmt.Fprintln(stdout, "Created the platform and per-tenant signing keys (private keys sealed under the KEK)")
 	fmt.Fprintf(stdout, "Seeded Tessera in %.1fs\n", time.Since(start).Seconds())
 	return nil
 }
@@ -203,9 +194,11 @@ const (
 	idleTimeout       = 60 * time.Second
 	shutdownTimeout   = 10 * time.Second
 	sweepInterval     = 30 * time.Second
+	keysInterval      = 24 * time.Hour // keys.EnsureAll: rotation runs daily (design §10.6)
 )
 
-func serve(ctx context.Context, o options, clock timeutil.Clock, loader *policy.Loader, logger *slog.Logger) error {
+func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Sealer, clock timeutil.Clock,
+	loader *policy.Loader, logger *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	st, err := store.Open(ctx, o.db)
@@ -220,12 +213,17 @@ func serve(ctx context.Context, o options, clock timeutil.Clock, loader *policy.
 	if err != nil {
 		return fmt.Errorf("no tenant to serve (authentication arrives in a later release): %w", err)
 	}
+	// ensure_keys: the platform key and every tenant's signing keys exist and
+	// are rotated, and the KEK opens them (fail closed on a wrong KEK).
+	if err := keys.EnsureAll(ctx, st, sealer, clock()); err != nil {
+		return err
+	}
 	scenario := os.Getenv("TESSERA_READINESS_SCENARIO")
 	if scenario != "" && !slices.Contains(connectors.ScenarioNames(), scenario) {
 		return fmt.Errorf("TESSERA_READINESS_SCENARIO: unknown scenario %q (have %v)", scenario, connectors.ScenarioNames())
 	}
 	srv := api.New(api.Config{Store: st, Tenant: tenant, Clock: clock, Policies: loader, Logger: logger,
-		AllowedOrigins: corsOrigins(), Env: os.Getenv("TESSERA_ENV"), ReadinessScenario: scenario})
+		AllowedOrigins: cfg.CORSOrigins, Env: os.Getenv("TESSERA_ENV"), ReadinessScenario: scenario})
 	httpSrv := &http.Server{
 		Addr:              o.addr,
 		Handler:           srv.Handler(),
@@ -245,6 +243,11 @@ func serve(ctx context.Context, o options, clock timeutil.Clock, loader *policy.
 		defer close(sweepDone)
 		srv.RunSweeper(ctx, sweepInterval)
 	}()
+	keysDone := make(chan struct{})
+	go func() {
+		defer close(keysDone)
+		runKeyRotation(ctx, st, sealer, clock, logger)
+	}()
 	errc := make(chan error, 1)
 	go func() { errc <- httpSrv.Serve(ln) }()
 	logger.Info("tessera API listening", "addr", ln.Addr().String())
@@ -253,6 +256,7 @@ func serve(ctx context.Context, o options, clock timeutil.Clock, loader *policy.
 	case err := <-errc:
 		stop()
 		<-sweepDone
+		<-keysDone
 		return err
 	case <-ctx.Done():
 	}
@@ -261,8 +265,25 @@ func serve(ctx context.Context, o options, clock timeutil.Clock, loader *policy.
 	defer cancel()
 	err = httpSrv.Shutdown(shutdownCtx)
 	<-sweepDone
+	<-keysDone
 	if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 		return serveErr
 	}
 	return err
+}
+
+// runKeyRotation runs keys.EnsureAll every keysInterval until ctx ends.
+func runKeyRotation(ctx context.Context, st *store.DB, sealer *seal.Sealer, clock timeutil.Clock, logger *slog.Logger) {
+	t := time.NewTicker(keysInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := keys.EnsureAll(ctx, st, sealer, clock()); err != nil && ctx.Err() == nil {
+				logger.Error("signing key rotation failed", "err", err)
+			}
+		}
+	}
 }

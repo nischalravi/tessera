@@ -56,8 +56,13 @@ func TestServeSeedsAndShutsDownGracefully(t *testing.T) {
 	if resp.StatusCode != 200 || resp.Header.Get("X-Content-Type-Options") != "nosniff" {
 		t.Errorf("health: %d %v", resp.StatusCode, resp.Header)
 	}
-	if !strings.Contains(out.String(), "Seeded Tessera") || !strings.Contains(out.String(), "deployment-readiness demo") {
+	if !strings.Contains(out.String(), "Seeded Tessera") || !strings.Contains(out.String(), "deployment-readiness demo") ||
+		!strings.Contains(out.String(), "signing keys") {
 		t.Errorf("missing seed output: %q", out.String())
+	}
+	// the dev KEK was generated next to the database, readable only by its owner
+	if fi, err := os.Stat(filepath.Join(filepath.Dir(db), "var", "dev-kek")); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("dev KEK: %v", err)
 	}
 	cancel()
 	select {
@@ -80,6 +85,13 @@ func TestServeRefusesWithoutDevEnv(t *testing.T) {
 		t.Run(env, func(t *testing.T) {
 			t.Setenv("TESSERA_ENV", env)
 			t.Setenv("TESSERA_NOW", "2026-10-08T09:30:00")
+			if env == "prod" { // a production configuration that passes every guard rail
+				t.Setenv("TESSERA_NOW", "")
+				t.Setenv("TESSERA_PUBLIC_URL", "https://tessera.example.com")
+				t.Setenv("TESSERA_KEK", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
+				t.Setenv("TESSERA_CORS_ORIGINS", "")
+				t.Setenv("TESSERA_AUDIT_ANCHOR", "s3://anchors/tessera")
+			}
 			db := filepath.Join(t.TempDir(), "t.db")
 			var out, logs bytes.Buffer
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -87,6 +99,32 @@ func TestServeRefusesWithoutDevEnv(t *testing.T) {
 			err := run(ctx, []string{"serve", "-addr", freePort(t), "-db", db}, &out, &logs)
 			if err == nil || !strings.Contains(err.Error(), "TESSERA_ENV=dev") {
 				t.Errorf("serve with TESSERA_ENV=%q: %v, want a refusal naming TESSERA_ENV=dev", env, err)
+			}
+		})
+	}
+}
+
+// TestProdGuardRailsRefuseBeforeAnythingRuns: with TESSERA_ENV=prod and an
+// unsafe setting, serve and seed refuse before touching the database.
+func TestProdGuardRailsRefuseBeforeAnythingRuns(t *testing.T) {
+	t.Setenv("TESSERA_ENV", "prod")
+	t.Setenv("TESSERA_PUBLIC_URL", "http://tessera.example.com")
+	t.Setenv("TESSERA_CORS_ORIGINS", "*")
+	for _, cmd := range []string{"serve", "seed"} {
+		t.Run(cmd, func(t *testing.T) {
+			db := filepath.Join(t.TempDir(), "t.db")
+			var out, logs bytes.Buffer
+			args := []string{cmd, "-db", db}
+			if cmd == "serve" {
+				args = append(args, "-addr", freePort(t))
+			}
+			err := run(context.Background(), args, &out, &logs)
+			if err == nil || !strings.Contains(err.Error(), "refusing to start with TESSERA_ENV=prod") ||
+				!strings.Contains(err.Error(), "TESSERA_CORS_ORIGINS must be empty") || !strings.Contains(err.Error(), "must be https") {
+				t.Errorf("%s: %v", cmd, err)
+			}
+			if _, err := os.Stat(db); err == nil {
+				t.Errorf("%s created the database before refusing", cmd)
 			}
 		})
 	}

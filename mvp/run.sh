@@ -6,6 +6,7 @@
 #   ./run.sh test       go vet + the Go test suite (includes the API parity replay)
 #   ./run.sh build      build the Go server and type-check/build the frontend
 #   ./run.sh seed       (re)seed the database only
+#   ./run.sh audit-deps govulncheck ./... on the Go module (install: server/scripts/install-tools.sh)
 #   ./run.sh devidp     run only the dev IdP (mock OIDC issuer for local sign-in) in the foreground
 #   ./run.sh bench      Go benchmarks + end-to-end latency/startup/memory of the server
 #                       (set PYTHON=… PY_BACKEND=… to also measure a Python backend checkout)
@@ -81,6 +82,14 @@ case "${1:-}" in
     build_server
     setup_frontend
     cd "$FRONTEND" && exec npm run build
+    ;;
+  audit-deps)
+    cd "$SERVER"
+    VULNCHECK="$(command -v govulncheck || echo "$("$GO" env GOPATH)/bin/govulncheck")"
+    if [ ! -x "$VULNCHECK" ]; then
+      echo "govulncheck is not installed; run server/scripts/install-tools.sh" >&2; exit 1
+    fi
+    exec "$VULNCHECK" ./...
     ;;
   seed)
     build_server

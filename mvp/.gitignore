@@ -1,2 +1,3 @@
 server/bin/
+# dev KEK, dev IdP key and other local state (never commit a KEK)
 server/var/
