@@ -300,7 +300,8 @@ func TestAudit_EveryRouteFailsClosed(t *testing.T) {
 				t.Fatalf("a read answered %d without its http.request event", rec.Code)
 			}
 			rid := rec.Header().Get("X-Request-Id")
-			for _, e := range ledger(t, f.DB, f.B.ID) {
+			// (a refused dev sign-in records auth.login.failure on the platform chain)
+			for _, e := range append(ledger(t, f.DB, f.B.ID), ledger(t, f.DB, tenancy.Platform)...) {
 				// jit.expire is swept on the way into an analysis; it does
 				// not record what the request itself did
 				if e.Action != store.ActionHTTPRequest && e.Action != "jit.expire" && e.RequestID != nil && *e.RequestID == rid {

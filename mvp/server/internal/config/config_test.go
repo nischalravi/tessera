@@ -299,3 +299,31 @@ func TestConfigNeverPrintsKEK(t *testing.T) {
 		}
 	}
 }
+
+// TestTestEnvAndInsecureCookie: TESSERA_ENV=test is a non-production
+// environment; the insecure-cookie fallback is allowed only in dev on a
+// localhost public URL (§11).
+func TestTestEnvAndInsecureCookie(t *testing.T) {
+	c, err := config.Load(env(map[string]string{"TESSERA_ENV": "test"}))
+	if err != nil || c.Env != config.Test || c.IsProd() || c.PublicOrigin() != "http://localhost:5173" {
+		t.Fatalf("test env: %+v %v", c, err)
+	}
+	for _, tc := range []struct {
+		env map[string]string
+		ok  bool
+	}{
+		{map[string]string{"TESSERA_ENV": "dev", "TESSERA_COOKIE_SECURE": "false"}, true},
+		{map[string]string{"TESSERA_ENV": "dev", "TESSERA_COOKIE_SECURE": "false", "TESSERA_PUBLIC_URL": "http://127.0.0.1:5173"}, true},
+		{map[string]string{"TESSERA_ENV": "dev", "TESSERA_COOKIE_SECURE": "false", "TESSERA_PUBLIC_URL": "http://tessera.test.example"}, false},
+		{map[string]string{"TESSERA_ENV": "test", "TESSERA_COOKIE_SECURE": "false"}, false},
+	} {
+		_, err := config.Load(env(tc.env))
+		if (err == nil) != tc.ok {
+			t.Errorf("%v: %v, want ok=%t", tc.env, err, tc.ok)
+		}
+	}
+	c, err = config.Load(env(map[string]string{"TESSERA_ENV": "dev", "TESSERA_PUBLIC_URL": "https://tessera.example.com/app"}))
+	if err != nil || c.PublicOrigin() != "https://tessera.example.com" {
+		t.Errorf("public origin %q %v", c.PublicOrigin(), err)
+	}
+}

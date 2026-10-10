@@ -95,7 +95,7 @@ func Allowed() bool { return os.Getenv("TESSERA_ENV") == "test" }
 // It fails the test unless TESSERA_ENV=test.
 func LoginAs(tb testing.TB, db *store.DB, tenant tenancy.ID, u User, c Ctx, now time.Time) Login {
 	tb.Helper()
-	l, err := login(db, tenant, u, c, now)
+	l, err := New(db, tenant, u, c, now)
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -111,7 +111,8 @@ func (errNotTest) Error() string {
 	return "authtest: refusing to create a session unless TESSERA_ENV=test"
 }
 
-func login(db *store.DB, tenant tenancy.ID, u User, c Ctx, now time.Time) (Login, error) {
+// New is LoginAs returning the error: ErrNotTest unless TESSERA_ENV=test.
+func New(db *store.DB, tenant tenancy.ID, u User, c Ctx, now time.Time) (Login, error) {
 	if !Allowed() {
 		return Login{}, ErrNotTest
 	}

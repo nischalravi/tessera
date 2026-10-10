@@ -345,3 +345,29 @@ func TestReachableFindsTransitiveImports(t *testing.T) {
 		t.Fatal("false positive")
 	}
 }
+
+// authtestPkg is the test-only session helper (design §19 PR5): it mints
+// sessions without an IdP, so no non-test file may import it.
+const authtestPkg = "internal/auth/authtest"
+
+// TestAuthtestOnlyInTests proves from the import graph of non-test files
+// that nothing but tests imports internal/auth/authtest (it also refuses to
+// run unless TESSERA_ENV=test).
+func TestAuthtestOnlyInTests(t *testing.T) {
+	graph := moduleImports(t, moduleRoot(t))
+	if _, ok := graph[authtestPkg]; !ok {
+		t.Fatalf("package %s not found; the test is not looking at the module", authtestPkg)
+	}
+	for pkg, deps := range graph {
+		for _, dep := range deps {
+			if dep == authtestPkg {
+				t.Errorf("%s imports %s outside a _test.go file", pkg, dep)
+			}
+		}
+	}
+	for _, root := range productionRoots {
+		if chain := reachable(graph, root, authtestPkg); chain != nil {
+			t.Errorf("%s links the test-only session helper: %s", root, strings.Join(chain, " -> "))
+		}
+	}
+}

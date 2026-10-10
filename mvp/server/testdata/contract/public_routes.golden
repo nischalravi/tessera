@@ -1,0 +1,3 @@
+GET /api/health
+GET /api/auth/dev-login
+POST /api/auth/dev-login
