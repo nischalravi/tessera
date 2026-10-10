@@ -223,3 +223,125 @@ func f(db *sql.DB, tx *sql.Tx, r *http.Request, v rf.Value) {
 		t.Errorf("%d violations, want 9:\n%s", n, got)
 	}
 }
+
+// devidpPkg is the dev IdP (docs/design/phase-0-platform-security.md §18.4,
+// §18.5). Only its own command and its own subpackages may import it outside
+// tests; the production binary must not link it.
+const devidpPkg = "internal/devidp"
+
+// productionRoots are the packages of the production binary and the API.
+var productionRoots = []string{"cmd/tessera", "internal/api"}
+
+// moduleImports maps every package directory of the module (module-relative)
+// to the module-internal packages its non-test files import. Build tags are
+// ignored, so every file counts: the graph is a superset of any real build.
+func moduleImports(t *testing.T, root string) map[string][]string {
+	t.Helper()
+	const module = "github.com/nischalravi/tessera/mvp/server/"
+	graph := map[string][]string{}
+	fset := token.NewFileSet()
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if name := d.Name(); path != root && (strings.HasPrefix(name, ".") || name == "testdata" || name == "node_modules") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		f, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, filepath.Dir(path))
+		if err != nil {
+			return err
+		}
+		dir := filepath.ToSlash(rel)
+		if _, ok := graph[dir]; !ok {
+			graph[dir] = nil
+		}
+		for _, imp := range f.Imports {
+			p, _ := strconv.Unquote(imp.Path.Value)
+			if strings.HasPrefix(p, module) {
+				graph[dir] = append(graph[dir], strings.TrimPrefix(p, module))
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return graph
+}
+
+// reachable returns the import path from root to a package under target, or
+// nil if there is none.
+func reachable(graph map[string][]string, root, target string) []string {
+	prev := map[string]string{root: ""}
+	queue := []string{root}
+	for len(queue) > 0 {
+		pkg := queue[0]
+		queue = queue[1:]
+		if pkg == target || strings.HasPrefix(pkg, target+"/") {
+			var chain []string
+			for p := pkg; p != ""; p = prev[p] {
+				chain = append([]string{p}, chain...)
+			}
+			return chain
+		}
+		for _, dep := range graph[pkg] {
+			if _, seen := prev[dep]; !seen {
+				prev[dep] = pkg
+				queue = append(queue, dep)
+			}
+		}
+	}
+	return nil
+}
+
+// TestIsolation_DevIdPNotImportedByAPI proves, from the module's import
+// graph, that neither the production binary (cmd/tessera) nor internal/api
+// reaches internal/devidp directly or transitively, and that outside tests
+// only cmd/tessera-devidp and the dev IdP's own packages import it.
+func TestIsolation_DevIdPNotImportedByAPI(t *testing.T) {
+	graph := moduleImports(t, moduleRoot(t))
+	for _, root := range productionRoots {
+		if _, ok := graph[root]; !ok {
+			t.Fatalf("package %s not found; the test is not looking at the module", root)
+		}
+		if chain := reachable(graph, root, devidpPkg); chain != nil {
+			t.Errorf("%s links the dev IdP: %s", root, strings.Join(chain, " -> "))
+		}
+	}
+	for pkg, deps := range graph {
+		if pkg == "cmd/tessera-devidp" || pkg == devidpPkg || strings.HasPrefix(pkg, devidpPkg+"/") {
+			continue
+		}
+		for _, dep := range deps {
+			if dep == devidpPkg || strings.HasPrefix(dep, devidpPkg+"/") {
+				t.Errorf("%s imports %s; only cmd/tessera-devidp may (tests excepted)", pkg, dep)
+			}
+		}
+	}
+	// Positive control: the walk does see the dev IdP binary's import.
+	if reachable(graph, "cmd/tessera-devidp", devidpPkg) == nil {
+		t.Fatal("cmd/tessera-devidp does not reach internal/devidp; the import graph is incomplete")
+	}
+}
+
+// TestReachableFindsTransitiveImports is the control for the graph walk.
+func TestReachableFindsTransitiveImports(t *testing.T) {
+	g := map[string][]string{"cmd/tessera": {"internal/api"}, "internal/api": {"internal/x"}, "internal/x": {"internal/devidp/devidptest"}}
+	got := strings.Join(reachable(g, "cmd/tessera", devidpPkg), " -> ")
+	if got != "cmd/tessera -> internal/api -> internal/x -> internal/devidp/devidptest" {
+		t.Fatalf("chain %q", got)
+	}
+	if reachable(map[string][]string{"cmd/tessera": {"internal/api"}}, "cmd/tessera", devidpPkg) != nil {
+		t.Fatal("false positive")
+	}
+}
