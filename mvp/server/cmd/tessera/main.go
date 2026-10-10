@@ -152,7 +152,8 @@ func corsOrigins() []string {
 
 func seedDB(ctx context.Context, path string, clock timeutil.Clock, loader *policy.Loader, stdout io.Writer) error {
 	start := time.Now()
-	st, err := store.Open(ctx, path)
+	// Seeding always starts from an empty schema, even over an older database.
+	st, err := store.OpenFresh(ctx, path)
 	if err != nil {
 		return err
 	}

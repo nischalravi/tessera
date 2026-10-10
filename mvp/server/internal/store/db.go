@@ -58,7 +58,7 @@ var (
 	ErrReadOnly = errors.New("store: write in a read-only transaction")
 	// ErrLegacySchema is returned by Open for a database created before
 	// tenancy; reseed it (./run.sh --reseed or tessera seed).
-	ErrLegacySchema = errors.New("store: database predates tenancy (no tenant_id columns); recreate it with `./run.sh --reseed`, or delete the file and run `tessera seed`")
+	ErrLegacySchema = errors.New("store: database predates tenancy (no tenant_id columns); recreate it with `./run.sh --reseed` or `tessera seed` (both start from an empty schema)")
 )
 
 // GlobalTables are the only tables without tenant_id. The schema meta-test
@@ -92,7 +92,16 @@ type DB struct {
 }
 
 // Open opens (creating if needed) the database at path and applies the schema.
-func Open(ctx context.Context, path string) (*DB, error) {
+// A database created before tenancy is refused with ErrLegacySchema.
+func Open(ctx context.Context, path string) (*DB, error) { return open(ctx, path, false) }
+
+// OpenFresh opens the database at path and drops every table before applying
+// the schema, so seeding always starts empty. It works on a database left from
+// an older schema (including one that predates tenancy) without deleting any
+// file, so a mistyped path can never destroy something that is not ours.
+func OpenFresh(ctx context.Context, path string) (*DB, error) { return open(ctx, path, true) }
+
+func open(ctx context.Context, path string, fresh bool) (*DB, error) {
 	q := url.Values{}
 	q.Add("_pragma", "busy_timeout(10000)")
 	q.Add("_pragma", "journal_mode(WAL)")
@@ -103,7 +112,7 @@ func Open(ctx context.Context, path string) (*DB, error) {
 	}
 	db.SetMaxOpenConns(8)
 	d := &DB{sql: db}
-	if err := d.Migrate(ctx, false); err != nil {
+	if err := d.Migrate(ctx, fresh); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
