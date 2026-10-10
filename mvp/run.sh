@@ -21,7 +21,7 @@ UI_PORT="${UI_PORT:-5173}"
 export UI_PORT
 # dev IdP (mock OIDC issuer; development and tests only). DEVIDP=0 skips it.
 DEVIDP_PORT="${DEVIDP_PORT:-8001}"
-export TESSERA_DEV_IDP_URL="${TESSERA_DEV_IDP_URL:-http://127.0.0.1:$DEVIDP_PORT}"
+DEVIDP_URL="${TESSERA_DEV_IDP_URL:-http://127.0.0.1:$DEVIDP_PORT}"
 # read policies from disk so edits apply on the next request (the binary also embeds copies)
 export TESSERA_POLICY_DIR="${TESSERA_POLICY_DIR:-$SERVER/policies}"
 # local development: the API serves the dev default tenant (larkspur) until sign-in lands
@@ -54,7 +54,7 @@ build_server() {
 
 # start_devidp runs the dev IdP on 127.0.0.1:$DEVIDP_PORT; its signing key lives in server/var/devidp/.
 start_devidp() {
-  exec "$DEVIDP_BIN" -addr "127.0.0.1:$DEVIDP_PORT" -issuer "$TESSERA_DEV_IDP_URL" -key-dir "$SERVER/var/devidp" \
+  exec "$DEVIDP_BIN" -addr "127.0.0.1:$DEVIDP_PORT" -issuer "$DEVIDP_URL" -key-dir "$SERVER/var/devidp" \
     -post-logout-redirect-uris "http://localhost:$UI_PORT/,http://127.0.0.1:$UI_PORT/" "$@"
 }
 
@@ -87,9 +87,8 @@ case "${1:-}" in
     ;;
   devidp)
     build_server
-    echo "==> starting dev IdP on $TESSERA_DEV_IDP_URL (development only; Ctrl+C to stop)"
+    echo "==> starting dev IdP on $DEVIDP_URL (development only; Ctrl+C to stop)"
     start_devidp
-    exit $?
     ;;
   bench)
     build_server
@@ -115,9 +114,19 @@ PIDS=()
 trap 'echo; echo "==> stopping"; for p in ${PIDS[@]+"${PIDS[@]}"}; do kill "$p" 2>/dev/null || true; done; for p in ${PIDS[@]+"${PIDS[@]}"}; do wait "$p" 2>/dev/null || true; done' EXIT INT TERM
 
 if [ "${DEVIDP:-1}" != "0" ]; then
-  echo "==> starting dev IdP on $TESSERA_DEV_IDP_URL (development only)"
+  echo "==> starting dev IdP on $DEVIDP_URL (development only)"
   start_devidp &
   PIDS+=($!)
+  for _ in $(seq 1 40); do
+    curl -sf "$DEVIDP_URL/.well-known/openid-configuration" >/dev/null 2>&1 && break
+    sleep 0.25
+  done
+  if ! curl -sf "$DEVIDP_URL/.well-known/openid-configuration" >/dev/null 2>&1; then
+    echo "the dev IdP did not start on $DEVIDP_URL (port in use? set DEVIDP_PORT, or DEVIDP=0 to skip it)" >&2
+    exit 1
+  fi
+  # only exported when the dev IdP runs: the API refuses it in production (§18.4)
+  export TESSERA_DEV_IDP_URL="$DEVIDP_URL"
 fi
 
 echo "==> starting API on http://127.0.0.1:$API_PORT"

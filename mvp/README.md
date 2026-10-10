@@ -229,7 +229,7 @@ until then you can drive the IdP directly with any OIDC client:
 | | |
 |---|---|
 | Discovery | http://127.0.0.1:8001/.well-known/openid-configuration |
-| Client | `client_id=tessera-dev`, `client_secret_basic` with `tessera-dev-secret` (override with `DEVIDP_CLIENT_SECRET`), or `private_key_jwt` with `-client-jwks file.json` |
+| Client | `client_id=tessera-dev`, `client_secret_basic` with `tessera-dev-secret` (override with `DEVIDP_CLIENT_SECRET`), or `private_key_jwt` with `-client-jwks file.json` (`aud` must be exactly the token endpoint) |
 | Redirect URIs | `http://localhost:*/api/auth/oidc/*/callback` and the same on `127.0.0.1` (`-redirect-uris` to change) |
 | Flow | authorization code with **PKCE S256 required**; `state` and `nonce` required; ID tokens are RS256 |
 
@@ -243,7 +243,9 @@ vendor to emulate:
   device-bound), **Password + OTP**, **Password only**.
 * Emulation: **Okta** returns `acr=phr` only if `acr_values` asked for `phr` and a passkey was used
   (`phrh` needs the hardware key); every other `acr_values` entry is ignored silently, as Okta does,
-  so the `acr` is `urn:okta:loa:2fa:any` or `urn:okta:loa:1fa:pwd`. **Entra** ignores `acr_values`,
+  so the `acr` is `urn:okta:loa:2fa:any` or `urn:okta:loa:1fa:pwd`. Unlike real Okta, which enforces a
+  supported value it cannot meet, the dev IdP then returns the weaker `acr`, so the "IdP returned a
+  weaker context" path can be tested. **Entra** ignores `acr_values`,
   returns a requested Conditional Access context (`claims={"id_token":{"acrs":…}}`) in `acrs` for
   passkeys, says `amr:["fido","mfa"]`, and identifies users by `oid` + `tid` with a pairwise `sub`.
   **Generic** returns the first requested `acr` the method satisfies (`phrh`, `phr`, `mfa`, `pwd`).
@@ -251,13 +253,19 @@ vendor to emulate:
 **Step-up.** The IdP keeps its own session cookie, so a second sign-in is silent single sign-on and
 keeps the original `auth_time`. `prompt=login`, `max_age=0` or an exceeded `max_age` show the page
 again and set a new `auth_time`; `prompt=none` never shows it (`login_required` instead);
-`login_hint` restricts the page to that user. `/logout` ends the session.
+`login_hint` (sub, email or Entra `oid`) lists that user first and forces the page if the session
+belongs to someone else; it does not stop another user signing in. `/logout` ends the session.
 
 **Faults** (negative tests only). Start it with `DEVIDP_FAULTS=1`, then add `fault=<name>` to the
 authorization request or `POST /_faults {"fault":"<name>"}` (empty clears). Each fault changes one
 thing: `wrong_iss`, `wrong_aud`, `alg_none`, `hs256_with_pubkey`, `bad_signature`, `expired`,
 `future_iat`, `nonce_mismatch`, `missing_auth_time`, `stale_auth_time`, `kid_unknown`, `jku_header`,
-`sub_change_on_stepup`, `acr_unrequested`, `no_iss_param`.
+`sub_change_on_stepup`, `acr_unrequested`, `no_iss_param`. `jku_header` signs with a second key
+served at the `jku` URL under the real `kid`, so an RP that follows `jku` accepts it and one that
+ignores it rejects the signature. Two faults are expectations for normalization and step-up rather
+than login refusals, and are refused where they would not be defects: `acr_unrequested` (only when
+`phr`/`phrh`/`acrs` were not requested) and `sub_change_on_stepup` (only with `prompt=login` or
+`max_age`).
 
 **Tests** run it in-process: `devidptest.Start(t, devidp.Config{})` returns a loopback server
 with a registered test client and faults enabled.
