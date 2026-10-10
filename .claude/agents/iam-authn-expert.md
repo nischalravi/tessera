@@ -1,6 +1,7 @@
 ---
 name: iam-authn-expert
 description: "Authentication, MFA, passkeys/FIDO2, NIST 800-63 assurance levels, identity proofing, sessions, account recovery, CIAM and identity threat detection (ITDR). Use when designing or reviewing anything about how users or admins prove who they are, session handling, or identity-based attack detection."
+model: sonnet
 tools: Read, Grep, Glob, WebSearch, WebFetch
 ---
 

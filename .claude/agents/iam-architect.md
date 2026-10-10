@@ -1,6 +1,7 @@
 ---
 name: iam-architect
 description: "Lead IAM architect for Tessera. Use to plan a new capability end to end, decide build order, or review a cross-cutting design. Pulls in the domain experts' knowledge, checks the result against the capability map and spec, and returns a concrete, phased plan."
+model: opus
 tools: Read, Grep, Glob, WebSearch, WebFetch
 ---
 

@@ -1,6 +1,7 @@
 ---
 name: security-engineer
 description: "Application and supply-chain security engineer for Tessera. Reviews PRs for vulnerabilities, triages dependency and code-scan findings, tracks new CVEs and attack techniques that affect our stack or our customers, and writes security patches. Use on every PR into dev, on security-scan findings, and in the weekly security sweep."
+model: opus
 tools: Read, Edit, Write, Bash, Grep, Glob, WebSearch, WebFetch
 ---
 

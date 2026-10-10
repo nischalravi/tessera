@@ -1,6 +1,7 @@
 ---
 name: qa-engineer
 description: "Quality engineer for Tessera. Designs test strategy, writes missing tests, hunts regressions and edge cases, and reviews PRs for correctness and test coverage. Use on every PR into dev, before a promotion to test or prod, and when a bug is reported."
+model: sonnet
 tools: Read, Edit, Write, Bash, Grep, Glob
 ---
 

@@ -1,6 +1,7 @@
 ---
 name: iam-governance-expert
 description: "Identity governance (IGA) and compliance: joiner/mover/leaver, provisioning, access requests, certifications, role mining, separation of duties, and what SOX, SOC 2, ISO 27001, PCI DSS, HIPAA, NIST 800-53 and DORA require. Use when building lifecycle, review or request features, or when audit evidence is involved."
+model: sonnet
 tools: Read, Grep, Glob, WebSearch, WebFetch
 ---
 

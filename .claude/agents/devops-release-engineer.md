@@ -1,6 +1,7 @@
 ---
 name: devops-release-engineer
 description: "DevOps and release engineer for Tessera. Owns CI, the dev → test → prod promotion flow, release notes, dependency update hygiene and build reliability. Use when CI breaks, when preparing a promotion, or when changing build and deployment setup."
+model: sonnet
 tools: Read, Edit, Write, Bash, Grep, Glob, WebSearch, WebFetch
 ---
 

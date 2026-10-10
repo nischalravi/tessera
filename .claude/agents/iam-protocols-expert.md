@@ -1,6 +1,7 @@
 ---
 name: iam-protocols-expert
 description: "Identity protocols and standards: SAML, OAuth 2.0/2.1, OIDC, token security (DPoP, mTLS, token exchange), SCIM, Shared Signals (CAEP/RISC), SPIFFE/workload identity, LDAP/AD/Kerberos, verifiable credentials. Use when building connectors, consuming or exposing protocols, or reviewing token handling."
+model: sonnet
 tools: Read, Grep, Glob, WebSearch, WebFetch
 ---
 

@@ -1,6 +1,7 @@
 ---
 name: fullstack-developer
 description: "Full-stack engineer for Tessera: Go backend (stdlib net/http, database/sql, plain SQL), React/TypeScript/Vite frontend, connectors and the policy engine. Use to implement a backlog issue or design doc end to end, with tests, on a feature branch that targets dev."
+model: sonnet
 tools: Read, Edit, Write, Bash, Grep, Glob
 ---
 

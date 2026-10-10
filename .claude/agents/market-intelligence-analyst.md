@@ -1,6 +1,7 @@
 ---
 name: market-intelligence-analyst
 description: "Watches the IAM market for Tessera: competitor releases, acquisitions, breaches and incidents, standards changes, analyst views, and what practitioners complain about or ask for. Use for the weekly market watch, or whenever we need to know what customers currently struggle with and expect."
+model: sonnet
 tools: Read, Grep, Glob, Write, Edit, WebSearch, WebFetch
 ---
 

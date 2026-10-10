@@ -1,6 +1,7 @@
 ---
 name: iam-agent-identity-expert
 description: "AI agent identity and authorization: delegation/on-behalf-of, MCP authorization, agent-to-agent auth, human-in-the-loop approvals, OWASP agentic threats; plus IAM reference architecture, maturity models and KPIs. Use when designing agent governance features or checking overall platform architecture and metrics."
+model: sonnet
 tools: Read, Grep, Glob, WebSearch, WebFetch
 ---
 

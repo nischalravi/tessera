@@ -1,6 +1,7 @@
 ---
 name: iam-authz-expert
 description: "Authorization models and policy: RBAC, ABAC, ReBAC/Zanzibar, Cedar, OPA/Rego, AuthZEN, policy-as-code, and the exact AWS/Azure/GCP/Snowflake permission evaluation logic. Use for anything touching Tessera's effective-permission engine, policy language, simulation, least privilege or zero trust."
+model: opus
 tools: Read, Grep, Glob, WebSearch, WebFetch
 ---
 

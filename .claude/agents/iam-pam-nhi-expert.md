@@ -1,6 +1,7 @@
 ---
 name: iam-pam-nhi-expert
 description: "Privileged access (PAM), just-in-time and zero standing privilege, CIEM, cloud IAM specifics, secrets, Kubernetes, non-human identities (service accounts, API keys, OAuth apps, certificates), ISPM/ITDR and identity attack paths. Use for machine identity, privileged access and cloud entitlement features or detections."
+model: sonnet
 tools: Read, Grep, Glob, WebSearch, WebFetch
 ---
 
