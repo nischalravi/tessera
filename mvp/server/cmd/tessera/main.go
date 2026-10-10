@@ -6,6 +6,7 @@
 //	                                    (run.sh reseeds a database from before sign-in)
 //	tessera readiness lint [-dir path]   lint the readiness checklist templates
 //	tessera audit verify|checkpoint|export   verify, checkpoint or export the audit ledger (see audit.go)
+//	tessera admin create-tenant|add-idp|invite-admin   operator bootstrap of a tenant (see admin.go)
 //
 // Environment:
 //
@@ -93,6 +94,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if cmd == "audit" {
 		return auditCmd(ctx, args, stdout, stderr)
 	}
+	if cmd == "admin" {
+		return adminCmd(ctx, args, stdout, stderr)
+	}
 	fset := flag.NewFlagSet("tessera "+cmd, flag.ContinueOnError)
 	fset.SetOutput(stderr)
 	var o options
@@ -112,7 +116,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return st.Close()
 	}
 	if cmd != "seed" && cmd != "serve" {
-		return fmt.Errorf("unknown command %q (want serve, seed, check-db, readiness or audit)", cmd)
+		return fmt.Errorf("unknown command %q (want serve, seed, check-db, readiness, audit or admin)", cmd)
 	}
 	if os.Getenv("TESSERA_ENV") == "" {
 		// fail closed: the environment decides the guard rails (§18.4) and

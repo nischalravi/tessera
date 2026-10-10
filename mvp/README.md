@@ -158,6 +158,8 @@ The routes are documented at `/api/readiness/openapi.json`.
 `GET /api/audit/events/{event_id}/proof` · `GET /api/audit/checkpoints[?from_seq=]` · `GET /api/audit/keys` ·
 `POST /api/audit/verify {from_seq?, to_seq?}` · `GET /api/audit/export[?from_seq=&to_seq=]` (NDJSON) ·
 `GET /api/auth/session` · `POST /api/auth/logout` · `GET /api/auth/sessions` · `DELETE /api/auth/sessions/{session_id}` ·
+`GET /api/auth/discover?tenant=&email=` · `GET /api/auth/login?tenant=&connection=&return_to=` (302 to the IdP) ·
+`GET /api/auth/oidc/{connection_id}/callback` · `GET /t/{slug}/bootstrap?code=` (public) ·
 `GET|POST /api/auth/dev-login` (dev and test only)
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
@@ -285,8 +287,9 @@ about 8 kB; cytoscape (about 146 kB gzipped) only loads with the access graph.
 ## Dev sign-in
 
 Every API call needs a signed-in session (design `docs/design/phase-0-platform-security.md` §11, §12).
-Tessera signs users in through their company's identity provider (Okta, Entra ID, SAML); that browser
-flow arrives in Phase 0 PR6 and PR7. Until then a development server (`TESSERA_ENV=dev` or `test`,
+Tessera signs users in through their company's identity provider (OIDC: see
+[Sign-in through the IdP](#sign-in-through-the-idp-oidc); SAML arrives in PR9); the UI switches to that
+flow in PR7. Until then a development server (`TESSERA_ENV=dev` or `test`,
 which `./run.sh` sets) offers **dev sign-in**:
 
 1. `./run.sh` and open http://localhost:5173. The sign-in page lists the users the seed created for the
@@ -331,15 +334,51 @@ phishing-resistant sign-in in that tenant. Other session routes: `GET /api/auth/
 
 ### Dev IdP
 
+### Sign-in through the IdP (OIDC)
+
+`GET /api/auth/login?tenant=larkspur` starts a sign-in through the tenant's default OIDC connection
+(design §9.1): Tessera creates a login transaction (10 minutes, bound to the `__Host-tessera_login`
+cookie, state and cookie stored only as hashes, the PKCE verifier sealed), asks the IdP for phishing
+resistance (`acr_values=phr` for Okta, the configured `claims` for Entra, the tenant's `login_acr`) and
+`max_age=43200`, and redirects. The callback (`/api/auth/oidc/{connection_id}/callback`, the redirect
+URI to register at the IdP) consumes the transaction once, redeems the code with PKCE through
+`internal/safehttp`, validates the ID token (`internal/auth/oidcrp`: algorithm allow-list, no
+`jku`/`x5u`/`jwk`/`x5c`/`crit`, `iss`, `aud`/`azp`, `exp`, `iat` window, `nonce`, `auth_time` and
+`max_age`, and the RFC 9207 `iss` parameter), normalizes the authentication, finds the user by
+(connection, subject), never by email, and sets the session cookie. A connection with
+`jit_provisioning` creates unknown users with its `default_role`; `group_role_mapping` adds viewer,
+operator or auditor from IdP groups and never an admin role. Every refusal is audited as
+`auth.login.failure` with a reason and shows a generic page with the request id.
+
+With `./run.sh`, http://localhost:5173/api/auth/login?tenant=larkspur signs in through the dev IdP (the
+seed seals its client secret, `DEVIDP_CLIENT_SECRET`, default `tessera-dev-secret`, into the `dev_mock`
+connections). The UI's sign-in page switches to this flow in PR7.
+
+**A new tenant** is created by an operator (design §15.3); every step is audited as the OS user:
+
+```bash
+cd server
+TESSERA_ENV=dev go run ./cmd/tessera admin create-tenant -slug acme -name "Acme Corp"
+TESSERA_ENV=dev go run ./cmd/tessera admin add-idp -tenant acme -file okta.yaml -client-secret-file okta.secret
+TESSERA_ENV=dev go run ./cmd/tessera admin invite-admin -tenant acme -connection <id> -email jane@acme.example
+```
+
+`add-idp` reads a connection file (§18.2; unknown keys are refused, secrets are never in it; OIDC with
+`client_secret_basic` for now) and prints the redirect URI. `invite-admin` prints a one-time
+`/t/acme/bootstrap?code=tbi_…` URL valid for at most 24 hours (only its hash is stored): redeeming it
+with a phishing-resistant sign-in through that connection, as that email, makes the user `tenant_admin`
+(source `bootstrap`), once.
+
+### Dev IdP
+
 Tessera's sign-in through an identity provider is tested against a **dev IdP**: a small mock OpenID
 Connect issuer in pure Go (`server/internal/devidp`, binary `server/cmd/tessera-devidp`). It replaces a
 real Okta or Entra tenant; nothing it issues is a real identity. Design:
 `docs/design/phase-0-platform-security.md` §8.2 and §18.5.
 
 `./run.sh` starts it on http://127.0.0.1:8001 (`DEVIDP_PORT` to change, `DEVIDP=0` to skip) and
-exports `TESSERA_DEV_IDP_URL` (seeding points the `dev_mock` connections at it). Tessera's IdP sign-in
-(`/api/auth/login`, the OIDC callback) lands in Phase 0 PR6; until then you can drive the IdP directly
-with any OIDC client:
+exports `TESSERA_DEV_IDP_URL` (seeding points the `dev_mock` connections at it). Besides Tessera's own
+sign-in (above), you can drive the IdP directly with any OIDC client:
 
 | | |
 |---|---|

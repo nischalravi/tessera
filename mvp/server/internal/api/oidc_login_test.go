@@ -194,7 +194,7 @@ func TestOIDCLogin_OktaPasskeyAdmin(t *testing.T) {
 	e := newOIDCEnv(t)
 	a := e.start("/api/auth/login?tenant=larkspur&return_to=/jit", "00u-alice-admin", devidp.MethodPasskey, devidp.ProfileOkta)
 	loc, _ := url.Parse(a.login.Header().Get("Location"))
-	if q := loc.Query(); q.Get("acr_values") != "phr" || q.Get("max_age") != "43200" || q.Get("code_challenge_method") != "S256" ||
+	if q := query(loc); q.Get("acr_values") != "phr" || q.Get("max_age") != "43200" || q.Get("code_challenge_method") != "S256" ||
 		q.Get("redirect_uri") == "" || !strings.HasPrefix(q.Get("redirect_uri"), oidcPublicURL+"/api/auth/oidc/") {
 		t.Errorf("authorize URL %s", loc)
 	}
@@ -330,13 +330,13 @@ func TestOIDCLogin_TransactionChecks(t *testing.T) {
 		tenancy.Platform, "login_transaction_unknown")
 
 	a = start()
-	q := a.callback.Query()
+	q := query(a.callback)
 	q.Set("state", "forged")
 	a.callback.RawQuery = q.Encode()
 	e.refused(e.finish(a), seed.LarkspurID, "state_mismatch")
 
 	a = start()
-	q = a.callback.Query()
+	q = query(a.callback)
 	q.Set("iss", "https://evil.example")
 	a.callback.RawQuery = q.Encode()
 	e.refused(e.finish(a), seed.LarkspurID, oidcrp.ReasonIssParam)
@@ -346,7 +346,7 @@ func TestOIDCLogin_TransactionChecks(t *testing.T) {
 	e.refused(e.finish(a), seed.LarkspurID, "connection_mismatch")
 
 	a = start()
-	q = a.callback.Query()
+	q = query(a.callback)
 	q.Del("code")
 	q.Set("error", "access_denied")
 	a.callback.RawQuery = q.Encode()
@@ -648,4 +648,11 @@ func TestOIDCLogin_ReplacesPreviousSession(t *testing.T) {
 	if code := e.get("/api/auth/session", first).Code; code != 401 {
 		t.Errorf("the previous session still works: %d", code)
 	}
+}
+
+// query parses a URL's query (url.URL.Query without the method name that
+// internal/archtest reserves for SQL).
+func query(u *url.URL) url.Values {
+	v, _ := url.ParseQuery(u.RawQuery)
+	return v
 }

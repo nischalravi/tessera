@@ -67,7 +67,7 @@ func (e *env) login(t *testing.T, f flow, sub string, m devidp.Method, p devidp.
 		t.Fatal(err)
 	}
 	cb := e.idp.NewBrowser(t).Authorize(t, u, sub, m, p)
-	q := cb.Query()
+	q := query(cb)
 	if q.Get("state") != f.req.State {
 		t.Fatalf("state %q, want %q (%s)", q.Get("state"), f.req.State, cb)
 	}
@@ -87,7 +87,7 @@ func TestAuthURL(t *testing.T) {
 		t.Fatal(err)
 	}
 	u, _ := url.Parse(raw)
-	q := u.Query()
+	q := query(u)
 	for k, want := range map[string]string{"response_type": "code", "client_id": devidptest.ClientID, "redirect_uri": redirectURI,
 		"state": f.req.State, "nonce": f.req.Nonce, "code_challenge_method": "S256", "acr_values": "phr", "max_age": "43200"} {
 		if q.Get(k) != want {
@@ -222,4 +222,11 @@ func TestDiscoveryRefusals(t *testing.T) {
 	if !errors.As(err, &oe) {
 		t.Errorf("no issuer: %v", err)
 	}
+}
+
+// query parses a URL's query (url.URL.Query without the method name that
+// internal/archtest reserves for SQL).
+func query(u *url.URL) url.Values {
+	v, _ := url.ParseQuery(u.RawQuery)
+	return v
 }
