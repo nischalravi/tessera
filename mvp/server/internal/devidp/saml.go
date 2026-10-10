@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
@@ -41,7 +42,7 @@ const (
 	nsMD      = "urn:oasis:names:tc:SAML:2.0:metadata"
 	nsDS      = "http://www.w3.org/2000/09/xmldsig#"
 	nameIDPer = "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent"
-	bearer    = "urn:oasis:names:tc:SAML:2.0:cm:bearer"
+	bearer    = "urn:oasis:names:tc:SAML:2.0:cm:bearer" // #nosec G101 -- a SAML URN, not a credential
 	bindPOST  = "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
 	bindRedir = "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
 	statusOK  = "urn:oasis:names:tc:SAML:2.0:status:Success"
@@ -54,7 +55,7 @@ const (
 	SAMLClassPhrh        = "urn:devidp:ac:phrh"
 	SAMLClassPhr         = "urn:devidp:ac:phr"
 	SAMLClassMFA         = "urn:oasis:names:tc:SAML:2.0:ac:classes:MobileTwoFactorContract"
-	SAMLClassPassword    = "urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport"
+	SAMLClassPassword    = "urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport" // #nosec G101 -- a SAML class ref URN
 	samlPendingTTL       = 10 * time.Minute
 	samlAssertionTTL     = 5 * time.Minute
 	maxSAMLRequestBytes  = 64 << 10
@@ -129,7 +130,7 @@ func (s *Server) SAMLCertificatePEM() string {
 // signatures are deterministic anyway).
 type deterministicReader struct {
 	seed []byte
-	ctr  uint64
+	ctr  uint32
 	buf  []byte
 }
 
@@ -137,7 +138,7 @@ func (d *deterministicReader) Read(p []byte) (int, error) {
 	n := 0
 	for n < len(p) {
 		if len(d.buf) == 0 {
-			h := sha256.Sum256(append(d.seed, byte(d.ctr), byte(d.ctr>>8), byte(d.ctr>>16), byte(d.ctr>>24)))
+			h := sha256.Sum256(binary.LittleEndian.AppendUint32(slices.Clip(d.seed), d.ctr))
 			d.ctr++
 			d.buf = h[:]
 		}

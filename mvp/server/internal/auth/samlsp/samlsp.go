@@ -32,6 +32,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/pem"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"math/big"
@@ -44,6 +45,7 @@ import (
 	saml2 "github.com/russellhaering/gosaml2"
 	"github.com/russellhaering/gosaml2/types"
 	dsig "github.com/russellhaering/goxmldsig"
+	dsigtypes "github.com/russellhaering/goxmldsig/types"
 )
 
 // Limits (§9.2).
@@ -57,6 +59,9 @@ const (
 	// SPKeyBits is the size of a connection's SP signing key.
 	SPKeyBits = 2048
 )
+
+// NameIDPersistent is the persistent NameID format, the default subject.
+const NameIDPersistent = saml2.NameIdFormatPersistent
 
 // XML namespaces.
 const (
@@ -483,4 +488,24 @@ func ParseCerts(pems []string) ([]*x509.Certificate, error) {
 		return nil, errors.New("samlsp: no pinned IdP certificate")
 	}
 	return out, nil
+}
+
+// Metadata is the SP's EntityDescriptor (signed AuthnRequests, signed
+// assertions wanted, one HTTP-POST ACS). It needs only the SP side of c, so
+// an admin can register Tessera at the IdP before the IdP side is set.
+func Metadata(c Connection, now time.Time) ([]byte, error) {
+	if c.SPEntityID == "" || c.ACSURL == "" || len(c.SPCert) == 0 {
+		return nil, fail(ReasonConfig, errors.New("the connection has no SP certificate"))
+	}
+	ed := types.EntityDescriptor{ValidUntil: now.UTC().Add(7 * 24 * time.Hour), EntityID: c.SPEntityID,
+		SPSSODescriptor: &types.SPSSODescriptor{AuthnRequestsSigned: true, WantAssertionsSigned: true,
+			ProtocolSupportEnumeration: NSProtocol,
+			KeyDescriptors: []types.KeyDescriptor{{Use: "signing", KeyInfo: dsigtypes.KeyInfo{X509Data: dsigtypes.X509Data{
+				X509Certificates: []dsigtypes.X509Certificate{{Data: base64.StdEncoding.EncodeToString(c.SPCert)}}}}}},
+			AssertionConsumerServices: []types.IndexedEndpoint{{Binding: saml2.BindingHttpPost, Location: c.ACSURL, Index: 1}}}}
+	b, err := xml.MarshalIndent(ed, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte(xml.Header), b...), nil
 }

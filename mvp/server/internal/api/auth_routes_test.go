@@ -21,7 +21,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/policies"
 )
 
-func decode(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
+func decode(t testing.TB, rec *httptest.ResponseRecorder) map[string]any {
 	t.Helper()
 	var v map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil {

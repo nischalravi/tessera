@@ -27,6 +27,11 @@ func TestCSRF(t *testing.T) {
 	if p.CSRFToken() != l.CSRFToken || p.CSRFToken() != auth.CSRFToken(*p.Session().CSRFSecret) {
 		t.Fatal("the CSRF token is not derived from the session's secret")
 	}
+	// a token one character off (never the token itself, whatever it starts with)
+	wrong := "x" + l.CSRFToken[1:]
+	if l.CSRFToken[0] == 'x' {
+		wrong = "y" + l.CSRFToken[1:]
+	}
 	type hdr map[string]string
 	cases := []struct {
 		name   string
@@ -40,7 +45,7 @@ func TestCSRF(t *testing.T) {
 		{"token and production origin", http.MethodDelete, hdr{"Origin": "https://tessera.example.com", auth.CSRFHeader: l.CSRFToken}, true},
 		{"token and referer, no origin", http.MethodPut, hdr{"Referer": "http://localhost:5173/jit?x=1", auth.CSRFHeader: l.CSRFToken}, true},
 		{"no token", http.MethodPost, hdr{"Origin": "http://localhost:5173"}, false},
-		{"wrong token", http.MethodPost, hdr{"Origin": "http://localhost:5173", auth.CSRFHeader: "x" + l.CSRFToken[1:]}, false},
+		{"wrong token", http.MethodPost, hdr{"Origin": "http://localhost:5173", auth.CSRFHeader: wrong}, false},
 		{"another session's token", http.MethodPost, hdr{"Origin": "http://localhost:5173", auth.CSRFHeader: other.CSRFToken}, false},
 		{"the session secret as token", http.MethodPost, hdr{"Origin": "http://localhost:5173", auth.CSRFHeader: l.Cookie.Value}, false},
 		{"no origin or referer", http.MethodPost, hdr{auth.CSRFHeader: l.CSRFToken}, false},

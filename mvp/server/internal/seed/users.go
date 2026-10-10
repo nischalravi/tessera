@@ -8,8 +8,10 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/auth/samlsp"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 )
 
 // User is a bootstrap platform user of a demo tenant. They mirror the dev
@@ -64,10 +66,60 @@ func WithDevIdP(tenants []Tenant, issuer string) []Tenant {
 }
 
 // DevIdPClient is the dev IdP connection's client secret, sealed into
-// client_secret_enc (dev and test only).
+// client_secret_enc (dev and test only). SAMLCert, when set, is the dev
+// IdP's SAML signing certificate (PEM, tessera-devidp -print-saml-cert):
+// a dev_mock SAML connection pinning it is seeded too, with an SP key
+// sealed by Sealer.
 type DevIdPClient struct {
-	Sealer *seal.Sealer
-	Secret string
+	Sealer   *seal.Sealer
+	Secret   string
+	SAMLCert string
+}
+
+// The dev IdP's SAML class refs (internal/devidp; seed must not import it).
+const (
+	devSAMLClassPhrh = "urn:devidp:ac:phrh"
+	devSAMLClassPhr  = "urn:devidp:ac:phr"
+	devSAMLClassMFA  = "urn:oasis:names:tc:SAML:2.0:ac:classes:MobileTwoFactorContract"
+)
+
+// devSAMLConnection is the dev_mock SAML connection to the dev IdP at
+// issuer: Tessera requests the dev IdP's phr/phrh/MFA class refs and trusts
+// them only when requested (normalize rule 2). A phr request also accepts
+// phrh (Comparison=exact admits any listed ref).
+func devSAMLConnection(t tenancy.ID, issuer string, dc *DevIdPClient, domains json.RawMessage, now time.Time) (*store.IdPConnection, error) {
+	entity, sso := issuer+"/saml/metadata", issuer+"/saml/sso"
+	certs, err := json.Marshal([]string{dc.SAMLCert})
+	if err != nil {
+		return nil, err
+	}
+	stepUp, err := json.Marshal(map[string]any{
+		string(auth.ACRPhrh): map[string][]string{"authn_context_class_refs": {devSAMLClassPhrh}},
+		string(auth.ACRPhr):  map[string][]string{"authn_context_class_refs": {devSAMLClassPhr, devSAMLClassPhrh}},
+		string(auth.ACRAAL2): map[string][]string{"authn_context_class_refs": {devSAMLClassMFA}}})
+	if err != nil {
+		return nil, err
+	}
+	mapping, err := json.Marshal(map[string]any{"dev_emulation": "saml",
+		"phr_authn_context_class_refs":  []string{devSAMLClassPhr},
+		"phrh_authn_context_class_refs": []string{devSAMLClassPhrh},
+		"aal2_authn_context_class_refs": []string{devSAMLClassMFA, devSAMLClassPhr, devSAMLClassPhrh}})
+	if err != nil {
+		return nil, err
+	}
+	c := &store.IdPConnection{ID: uuid.New(), Name: "Dev IdP (SAML)", Protocol: "saml", Profile: store.ProfileDevMock,
+		Status: "active", VerifiedDomains: domains, IdPEntityID: &entity, IdPSSOURL: &sso, IdPSigningCerts: certs,
+		PinCerts: true, StepUpRequest: stepUp, AuthnMapping: mapping, JITProvisioning: false, DefaultRole: store.RoleViewer,
+		CreatedAt: now, UpdatedAt: now}
+	keyPEM, certPEM, err := samlsp.GenerateSPKey("Tessera SP "+c.ID.String(), now)
+	if err != nil {
+		return nil, err
+	}
+	if c.SPKeyEnc, err = dc.Sealer.Seal(keyPEM, auth.SPKeyAAD(t, c.ID)); err != nil {
+		return nil, err
+	}
+	c.SPCertPEM = &certPEM
+	return c, nil
 }
 
 // WithDevIdPClient is WithDevIdP with the client secret the dev IdP expects,
@@ -104,15 +156,32 @@ func seedAuth(c *store.TenantTx, t Tenant, now time.Time) error {
 	if err := c.InsertIdPConnection(conn); err != nil {
 		return fmt.Errorf("seed: dev IdP connection: %w", err)
 	}
+	conns := []*store.IdPConnection{conn}
+	if dc := t.DevIdPClient; dc != nil && dc.Sealer != nil && dc.SAMLCert != "" {
+		sc, err := devSAMLConnection(c.Tenant(), issuer, dc, domains, now)
+		if err != nil {
+			return fmt.Errorf("seed: dev IdP SAML connection: %w", err)
+		}
+		if err := c.InsertIdPConnection(sc); err != nil {
+			return fmt.Errorf("seed: dev IdP SAML connection: %w", err)
+		}
+		conns = append(conns, sc)
+	}
 	for _, u := range t.Users {
 		email := u.Email
 		pu := &store.PlatformUser{Email: &email, DisplayName: u.Name, CreatedAt: now}
 		if err := c.InsertPlatformUser(pu); err != nil {
 			return err
 		}
-		if err := c.InsertExternalLogin(&store.ExternalLogin{UserID: pu.ID, IdPConnectionID: conn.ID, Issuer: issuer,
-			Subject: u.Subject, CreatedAt: now}); err != nil {
-			return err
+		for _, cn := range conns {
+			iss := issuer
+			if cn.Protocol == "saml" {
+				iss = *cn.IdPEntityID
+			}
+			if err := c.InsertExternalLogin(&store.ExternalLogin{UserID: pu.ID, IdPConnectionID: cn.ID, Issuer: iss,
+				Subject: u.Subject, CreatedAt: now}); err != nil {
+				return err
+			}
 		}
 		for _, r := range u.Roles {
 			if err := c.InsertRoleAssignment(&store.RoleAssignment{UserID: pu.ID, Role: r,

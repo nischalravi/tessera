@@ -254,3 +254,25 @@ func FuzzACS(f *testing.F) {
 		}
 	})
 }
+
+func TestMetadata(t *testing.T) {
+	e := setup(t)
+	b, err := samlsp.Metadata(e.conn, e.clk.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := etree.NewDocument()
+	if err := doc.ReadFromBytes(b); err != nil {
+		t.Fatal(err)
+	}
+	ed := doc.Root()
+	acsEl := ed.FindElement("./SPSSODescriptor/AssertionConsumerService")
+	if ed.SelectAttrValue("entityID", "") != e.conn.SPEntityID || acsEl == nil || acsEl.SelectAttrValue("Location", "") != acs ||
+		ed.FindElement("./SPSSODescriptor/KeyDescriptor/KeyInfo/X509Data/X509Certificate") == nil ||
+		ed.FindElement("./SPSSODescriptor").SelectAttrValue("WantAssertionsSigned", "") != "true" {
+		t.Fatalf("metadata:\n%s", b)
+	}
+	if _, err := samlsp.Metadata(samlsp.Connection{}, e.clk.now()); samlsp.ReasonOf(err) != samlsp.ReasonConfig {
+		t.Errorf("no SP certificate: %v", err)
+	}
+}

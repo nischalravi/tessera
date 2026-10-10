@@ -54,7 +54,7 @@ func (c *mutableClock) add(d time.Duration) {
 }
 
 type oidcEnv struct {
-	t      *testing.T
+	t      testing.TB
 	idp    *devidptest.IdP
 	srv    *Server
 	h      http.Handler
@@ -68,6 +68,13 @@ var newbie = devidp.User{Sub: "00u-newbie", Email: "newbie@larkspur.example", Na
 	Groups: []string{"Tessera Operators"}, Authenticators: []devidp.Method{devidp.MethodPasskey, devidp.MethodPassword}}
 
 func newOIDCEnv(t *testing.T, users ...devidp.User) *oidcEnv {
+	t.Helper()
+	return newAuthEnv(t, false, users...)
+}
+
+// newAuthEnv is newOIDCEnv, with the dev_mock SAML connection seeded too
+// when saml is set.
+func newAuthEnv(t testing.TB, saml bool, users ...devidp.User) *oidcEnv {
 	t.Helper()
 	clk := &mutableClock{t: testkit.Now.UTC()}
 	if len(users) == 0 {
@@ -84,10 +91,14 @@ func newOIDCEnv(t *testing.T, users ...devidp.User) *oidcEnv {
 		t.Fatal(err)
 	}
 	db := testkit.Open(t)
+	client := seed.DevIdPClient{Sealer: sealer, Secret: oidcSecret}
+	if saml {
+		client.SAMLCert = idp.SAMLCertificatePEM()
+	}
 	tenants := seed.WithDevIdPClient([]seed.Tenant{
 		{ID: seed.LarkspurID, Slug: seed.LarkspurSlug, Name: "Larkspur Labs", Connectors: []connectors.Connector{connectors.Tiny{Now: testkit.Now}}},
 		{ID: seed.GlobexID, Slug: seed.GlobexSlug, Name: "Globex", Connectors: []connectors.Connector{connectors.Tiny{Now: testkit.Now, Sentinel: "G"}}},
-	}, idp.URL, seed.DevIdPClient{Sealer: sealer, Secret: oidcSecret})
+	}, idp.URL, client)
 	if _, err := seed.Run(context.Background(), db, testkit.Now, testkit.Policies(t), tenants); err != nil {
 		t.Fatal(err)
 	}

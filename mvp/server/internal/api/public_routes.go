@@ -34,13 +34,15 @@ func needStepUp(p auth.Permission, req auth.AuthnRequirement) Route {
 // unauthenticated caller. testdata/contract/public_routes.golden snapshots
 // this list, so adding to it needs a reviewed diff.
 //
-// The SAML routes, the well-known documents and the OAuth AS routes of §16.1
-// join with the PRs that add them (PR9, PR10).
+// The well-known documents and the OAuth AS routes of §16.1 join with the PR
+// that adds them (PR10).
 var publicRoutes = []string{
 	"GET /api/health",
 	"GET /api/auth/discover",
 	"GET /api/auth/login",
 	"GET /api/auth/oidc/{connection_id}/callback",
+	"GET /api/auth/saml/{connection_id}/metadata",
+	"POST /api/auth/saml/{connection_id}/acs",
 	"GET /t/{slug}/bootstrap",
 }
 

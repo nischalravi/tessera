@@ -128,7 +128,7 @@ func (s *Server) authStepUp(w http.ResponseWriter, r *http.Request, _ *params) (
 		if err != nil {
 			return err
 		}
-		if c.Status != "active" || c.Protocol != "oidc" {
+		if c.Status != "active" || (c.Protocol != "oidc" && c.Protocol != "saml") {
 			return nil
 		}
 		ls, err := tx.ExternalLoginsForUser(*p.UserID)
@@ -236,7 +236,7 @@ func (s *Server) finishStepUp(w http.ResponseWriter, r *http.Request, tenant sto
 	var issued auth.Issued
 	err = s.store.InTenant(ctx, tenant.ID, func(tx *store.TenantTx) error {
 		ip, ua := clientAddr(r), userAgent(r)
-		*rec = store.AuthnContextRecord{ID: rec.ID, UserID: user.ID, IdPConnectionID: &conn.ID, Protocol: "oidc",
+		*rec = store.AuthnContextRecord{ID: rec.ID, UserID: user.ID, IdPConnectionID: &conn.ID, Protocol: conn.Protocol,
 			Purpose: "step_up", ACR: res.ACR, AMR: res.AMR, Methods: res.Methods, AAL: res.AAL,
 			PhishingResistant: res.PhishingResistant, PhrBasis: res.PhrBasis, TesseraACR: res.TesseraACR,
 			AuthTime: res.AuthTime, IP: ip, UserAgent: ua, MappingProfile: res.MappingProfile,

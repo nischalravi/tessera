@@ -95,6 +95,8 @@ DELETE /api/auth/sessions/{session_id}               auth.self       -  (another
 GET    /api/auth/discover                            public
 GET    /api/auth/login                               public
 GET    /api/auth/oidc/{connection_id}/callback       public
+GET    /api/auth/saml/{connection_id}/metadata       public
+POST   /api/auth/saml/{connection_id}/acs            public
 GET    /t/{slug}/bootstrap                           public
 `
 

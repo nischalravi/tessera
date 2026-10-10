@@ -7,8 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/devidp"
+	"github.com/nischalravi/tessera/mvp/server/internal/devidp/devidptest"
+	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/seed"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
@@ -106,6 +109,53 @@ func TestSeedDevIdPConnection(t *testing.T) {
 		}
 		return err
 	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestSeedDevIdPSAMLConnection: with the dev IdP's SAML certificate, a
+// dev_mock SAML connection pinning it is seeded too, with a sealed SP key,
+// and each bootstrap user is linked to both connections.
+func TestSeedDevIdPSAMLConnection(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 10, 8, 9, 30, 0, 0, time.UTC)
+	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	idp := devidptest.Start(t, devidp.Config{})
+	sealer, err := seal.New(seal.RandomBytes(seal.KeySize))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenants := seed.WithDevIdPClient([]seed.Tenant{seed.Globex(now)}, idp.URL,
+		seed.DevIdPClient{Sealer: sealer, Secret: "s", SAMLCert: idp.SAMLCertificatePEM()})
+	if _, err := seed.Run(ctx, db, now, nil, tenants); err != nil {
+		t.Fatal(err)
+	}
+	err = db.ReadTenant(ctx, seed.GlobexID, func(tx *store.TenantTx) error {
+		conns, err := tx.IdPConnections()
+		if err != nil {
+			return err
+		}
+		var sc *store.IdPConnection
+		for _, c := range conns {
+			if c.Protocol == "saml" {
+				sc = c
+			}
+		}
+		if len(conns) != 2 || sc == nil || *sc.IdPEntityID != idp.SAMLEntityID() || *sc.IdPSSOURL != idp.SAMLSSOURL() ||
+			sc.SPCertPEM == nil || sc.Status != "active" {
+			t.Fatalf("connections %+v", conns)
+		}
+		if _, err := sealer.Open(sc.SPKeyEnc, auth.SPKeyAAD(seed.GlobexID, sc.ID)); err != nil {
+			t.Errorf("SP key: %v", err)
+		}
+		_, err = tx.ExternalLoginBySubject(sc.ID, "00u-gina-globex")
+		return err
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 }

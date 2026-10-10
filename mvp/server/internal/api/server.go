@@ -158,6 +158,7 @@ func New(cfg Config) *Server {
 	s.registerReadinessRoutes()
 	s.registerAuthRoutes()
 	s.registerLoginRoutes()
+	s.registerSAMLRoutes()
 	s.registerStepUpRoutes()
 	s.checkPublicRoutes()
 	return s

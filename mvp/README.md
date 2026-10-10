@@ -160,7 +160,8 @@ The routes are documented at `/api/readiness/openapi.json`.
 `GET /api/auth/session` · `POST /api/auth/logout` · `GET /api/auth/sessions` · `DELETE /api/auth/sessions/{session_id}` ·
 `GET /api/auth/step-up?acr=&max_age=&return_to=` ·
 `GET /api/auth/discover?tenant=&email=` · `GET /api/auth/login?tenant=&connection=&return_to=` (302 to the IdP) ·
-`GET /api/auth/oidc/{connection_id}/callback` · `GET /t/{slug}/bootstrap?code=` (public)
+`GET /api/auth/oidc/{connection_id}/callback` · `GET /api/auth/saml/{connection_id}/metadata` ·
+`POST /api/auth/saml/{connection_id}/acs` · `GET /t/{slug}/bootstrap?code=` (public)
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
@@ -287,8 +288,8 @@ about 8 kB; cytoscape (about 146 kB gzipped) only loads with the access graph.
 ## Signing in
 
 Every API call needs a signed-in session (design `docs/design/phase-0-platform-security.md` §11, §12),
-and Tessera never sees a password: users sign in through their company's identity provider (OIDC; SAML
-arrives in PR9).
+and Tessera never sees a password: users sign in through their company's identity provider (OIDC or
+SAML 2.0).
 
 1. `./run.sh` and open http://localhost:5173. The sign-in page asks for the organization (tenant):
    `larkspur` (the demo company) or `globex`.
@@ -357,6 +358,27 @@ With `./run.sh`, the sign-in page (or http://localhost:5173/api/auth/login?tenan
 seed seals its client secret, `DEVIDP_CLIENT_SECRET`, default `tessera-dev-secret`, into the `dev_mock`
 connections). The UI's sign-in page uses this flow.
 
+### Sign-in through the IdP (SAML 2.0)
+
+A SAML connection (design §9.2, SP-initiated only) starts at the same `/api/auth/login?tenant=&connection=`:
+Tessera stores the AuthnRequest ID in the login transaction and redirects with a signed AuthnRequest
+(HTTP-Redirect binding, RelayState = the transaction id; a step-up adds `ForceAuthn` and the requested
+class refs). The IdP posts to the ACS, `/api/auth/saml/{connection_id}/acs` (body at most 256 KiB),
+which `internal/auth/samlsp` checks before and after gosaml2: XML round-trip safety, exactly one
+`Assertion`, a direct child with its own enveloped signature by a pinned certificate (never `KeyInfo`
+or metadata), no encrypted assertion, no comment in `NameID`, issuer, `InResponseTo`, destination and
+recipient, audience (the SP entity ID, which is the metadata URL), a ±60 s window and `AuthnInstant`.
+Each assertion ID is accepted once (`replay_cache`, until `NotOnOrAfter`). The subject is the
+persistent NameID or `subject_source: attribute:<name>`, never the email.
+
+The IdP's POST is cross-site, so the `SameSite=Lax` login cookie does not come with it: the ACS answers
+that first POST with a page (CSP nonce, `form-action 'self'`) that posts the same form again from
+Tessera's origin, where the cookie is sent. The cookie never needs `SameSite=None`.
+
+`./run.sh` seeds a second `dev_mock` connection, **Dev IdP (SAML)**, pinning the dev IdP's SAML
+certificate (`tessera-devidp -print-saml-cert`, derived from its key) with a sealed SP key, so the sign-in
+page offers both. Its SP metadata is at `/api/auth/saml/<id>/metadata`.
+
 **A new tenant** is created by an operator (design §15.3); every step is audited as the OS user:
 
 ```bash
@@ -366,8 +388,11 @@ TESSERA_ENV=dev go run ./cmd/tessera admin add-idp -tenant acme -file okta.yaml 
 TESSERA_ENV=dev go run ./cmd/tessera admin invite-admin -tenant acme -connection <id> -email jane@acme.example
 ```
 
-`add-idp` reads a connection file (§18.2; unknown keys are refused, secrets are never in it; OIDC with
-`client_secret_basic` for now) and prints the redirect URI. `invite-admin` prints a one-time
+`add-idp` reads a connection file (§18.2; unknown keys are refused, secrets are never in it). OIDC uses
+`client_secret_basic` for now and prints the redirect URI. `protocol: saml` with `profile: generic_saml`
+needs `idp_entity_id`, `idp_sso_url` and `idp_signing_certs` (pinned), takes `subject_source` and
+`attribute_map` (`email`, `name`, `groups`), generates and seals an SP key, and prints the SP entity
+ID/metadata and ACS URLs to register at the IdP. `invite-admin` prints a one-time
 `/t/acme/bootstrap?code=tbi_…` URL valid for at most 24 hours (only its hash is stored): redeeming it
 with a phishing-resistant sign-in through that connection, as that email, makes the user `tenant_admin`
 (source `bootstrap`), once.
@@ -427,7 +452,14 @@ than login refusals, and are refused where they would not be defects: `acr_unreq
 **Tests** run it in-process: `devidptest.Start(t, devidp.Config{})` returns a loopback server
 with a registered test client and faults enabled.
 
-**SAML** (`/saml/metadata`, `/saml/sso`) answers 501 until the SAML SP lands (Phase 0 PR9).
+**SAML**: `/saml/metadata` (entity ID `<issuer>/saml/metadata`) and `/saml/sso` (HTTP-Redirect
+AuthnRequests from an ACS matching `http://127.0.0.1:*/api/auth/saml/*/acs` or localhost; the request
+signature is not checked, dev only). It answers with a signed assertion (exclusive c14n, RSA-SHA256)
+whose class ref follows the method (`urn:devidp:ac:phrh`, `urn:devidp:ac:phr`, MobileTwoFactorContract,
+PasswordProtectedTransport), and attributes `email`, `displayName`, `groups`. SAML faults
+(`&fault=` on the SSO URL): `unsigned_assertion`, `signed_response_unsigned_assertion`, `xsw1`–`xsw8`,
+`comment_in_nameid`, `wrong_audience`, `wrong_recipient`, `saml_expired`, `unsolicited`,
+`wrong_in_response_to`, `replay`.
 
 **Safety.** The binary refuses to start unless `TESSERA_ENV` is `dev` or `test`, listens on loopback
 only, and keeps its signing key in `server/var/devidp/` (mode 0600, git-ignored), separate from

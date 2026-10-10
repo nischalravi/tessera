@@ -75,6 +75,12 @@ setup_frontend() {
 # `tessera seed` drops and recreates every table, so it also works over a
 # database left from an older schema. Stop a running API before reseeding.
 seed() {
+  # the dev IdP's SAML signing certificate (derived from its key), pinned by
+  # the seeded dev_mock SAML connection
+  if [ "${DEVIDP:-1}" != "0" ] && [ -x "$DEVIDP_BIN" ]; then
+    TESSERA_DEV_IDP_SAML_CERT="$("$DEVIDP_BIN" -print-saml-cert -issuer "$DEVIDP_URL" -key-dir "$SERVER/var/devidp")"
+    export TESSERA_DEV_IDP_SAML_CERT
+  fi
   "$BIN" seed -db "$DB"
 }
 
