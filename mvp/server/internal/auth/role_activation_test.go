@@ -218,3 +218,23 @@ func TestExpiredRoleAssignmentIgnored(t *testing.T) {
 		t.Errorf("assigned %v", got)
 	}
 }
+
+// TestTenantSettings: require_phr_for_all is read from the tenant's settings
+// JSON; unreadable settings fail closed to the strictest floors.
+func TestTenantSettings(t *testing.T) {
+	for raw, want := range map[string]bool{
+		"":                                    false,
+		"{}":                                  false,
+		`{"require_phr_for_all":false}`:       false,
+		`{"require_phr_for_all":true}`:        true,
+		`{"login_acr":"urn:tessera:acr:phr"}`: false,
+		`{"require_phr_for_all":"yes"}`:       true,
+		`not json`:                            true,
+		`[]`:                                  true,
+		`null`:                                true,
+	} {
+		if got := auth.TenantSettings(raw).RequirePhrForAll; got != want {
+			t.Errorf("%q: require_phr_for_all %v, want %v", raw, got, want)
+		}
+	}
+}

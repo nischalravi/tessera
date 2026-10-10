@@ -296,7 +296,8 @@ func (s *Server) devLogin(w http.ResponseWriter, r *http.Request, _ *params) (an
 			return err
 		}
 		var err error
-		issued, err = auth.CreateSession(tx, auth.SessionInput{User: user, Authn: rec, Now: now, IP: ip, UA: ua})
+		issued, err = auth.CreateSession(tx, auth.SessionInput{User: user, Authn: rec, Now: now, IP: ip, UA: ua,
+			Settings: auth.TenantSettings(tenant.Settings)})
 		if err != nil {
 			return err
 		}

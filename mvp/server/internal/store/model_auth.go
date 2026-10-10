@@ -10,9 +10,9 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 )
 
-// Tenant is a customer tenant (GLOBAL table). Settings and security contacts
-// (design §18.3, §15.5) arrive with the PRs that use them; their columns
-// already exist with empty defaults.
+// Tenant is a customer tenant (GLOBAL table). Settings is the raw JSON
+// object of §18.3 (auth.TenantSettings reads it); security contacts (§15.5)
+// arrive with the PR that uses them.
 type Tenant struct {
 	ID        tenancy.ID
 	Slug      string // ^[a-z0-9][a-z0-9-]{2,39}$; "_platform" is reserved
@@ -20,6 +20,7 @@ type Tenant struct {
 	Status    string // active | suspended | recovery
 	Cell      string // "local"
 	MinAdmins int    // default 2
+	Settings  string // JSON object, default "{}"
 	CreatedAt time.Time
 }
 

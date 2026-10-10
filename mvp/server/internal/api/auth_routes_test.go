@@ -535,3 +535,40 @@ func TestJITSelfApprovalRefused(t *testing.T) {
 		t.Fatalf("approval by another user: %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+// TestTenantSettingsRaiseRoleFloor (§18.3): a tenant's require_phr_for_all
+// is applied to its own sessions on every request: an operator signed in
+// with AAL2 has an inactive role there, and is unaffected in another tenant.
+func TestTenantSettingsRaiseRoleFloor(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	h := newIsolationServer(f).Handler()
+	op := authtest.User{Email: "op@x.example", Display: "Op", Roles: []auth.Role{auth.RoleOperator}}
+	la := signIn(t, f.DB, f.A.ID, op, authtest.AAL2, storetest.Now)
+	lb := signIn(t, f.DB, f.B.ID, op, authtest.AAL2, storetest.Now)
+	if err := f.DB.InSystem(context.Background(), "test settings", func(st *store.SystemTx) error {
+		return st.SetTenantSettings(f.B.ID, `{"require_phr_for_all":true}`)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	active := func(l authtest.Login) string {
+		v := decode(t, serve(h, authed(l, "GET", "/api/auth/session", "")))
+		b, _ := json.Marshal(at(v, "active_roles"))
+		return string(b)
+	}
+	if got := active(la); !strings.Contains(got, "operator") {
+		t.Errorf("tenant A (default settings): active roles %s", got)
+	}
+	if got := active(lb); strings.Contains(got, "operator") {
+		t.Errorf("tenant B (require_phr_for_all): active roles %s", got)
+	}
+	if rec := serve(h, authed(lb, "GET", "/api/identities", "")); rec.Code != 403 || !strings.Contains(rec.Body.String(), "role_inactive") {
+		t.Errorf("tenant B operator without phr: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := serve(h, authed(la, "GET", "/api/identities", "")); rec.Code != 200 {
+		t.Errorf("tenant A operator: %d", rec.Code)
+	}
+	pb := signIn(t, f.DB, f.B.ID, authtest.User{Email: "op2@x.example", Roles: []auth.Role{auth.RoleOperator}}, authtest.Phr, storetest.Now)
+	if got := active(pb); !strings.Contains(got, "operator") {
+		t.Errorf("tenant B operator with phr: active roles %s", got)
+	}
+}
