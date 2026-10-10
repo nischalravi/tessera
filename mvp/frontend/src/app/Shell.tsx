@@ -294,13 +294,15 @@ export function Shell({ children }: { children: ReactNode }) {
     <div className={`shell ${collapsed ? "collapsed" : ""} ${drawer ? "drawer-open" : ""}`}>
       <a href="#main" className="skip-link">Skip to content</a>
       <header className="topbar">
-        <button ref={menuBtn} type="button" className="tb-btn" onClick={toggleRail} aria-label={railLabel} title={railLabel} aria-controls="rail" aria-expanded={narrow ? drawer : !collapsed}>
-          <MenuIcon size={18} strokeWidth={1.7} aria-hidden />
-        </button>
-        <Link to="/" className="brand" aria-label="Tessera home">
-          <span className="logo" aria-hidden><i /><i /><i /><i /></span>
-          <span className="brand-name">Tessera</span>
-        </Link>
+        <div className="tb-start">
+          <button ref={menuBtn} type="button" className="tb-btn" onClick={toggleRail} aria-label={railLabel} title={railLabel} aria-controls="rail" aria-expanded={narrow ? drawer : !collapsed}>
+            <MenuIcon size={18} strokeWidth={1.7} aria-hidden />
+          </button>
+          <Link to="/" className="brand" aria-label="Tessera home">
+            <span className="logo" aria-hidden><i /><i /><i /><i /></span>
+            <span className="brand-name">Tessera</span>
+          </Link>
+        </div>
         <GlobalSearch />
         <div className="tb-actions">
           <button type="button" className="tb-btn" onClick={() => nav("/inbox")} aria-label={`Inbox${count ? `, ${count} waiting` : ""}`} title="Inbox">
