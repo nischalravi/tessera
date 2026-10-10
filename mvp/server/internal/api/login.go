@@ -299,8 +299,19 @@ func (s *Server) redirectURI(conn uuid.UUID) string {
 }
 
 // startLogin creates the transaction and redirects to the IdP.
-func (s *Server) startLogin(w http.ResponseWriter, r *http.Request, t store.Tenant, c *store.IdPConnection, purpose,
-	returnTo string, acr string, invitation *uuid.UUID) (any, error) {
+// loginStart describes a login transaction to create (startLogin).
+type loginStart struct {
+	purpose, returnTo, acr string
+	invitation             *uuid.UUID // bootstrap
+	// step-up: the session to upgrade and the external login that must
+	// sign in again; max_age=0 and prompt=login force a real re-authentication
+	session, expectedLogin *uuid.UUID
+	maxAge                 int64
+	prompt                 string
+}
+
+func (s *Server) startLogin(w http.ResponseWriter, r *http.Request, t store.Tenant, c *store.IdPConnection, ls loginStart) (any, error) {
+	purpose, returnTo, acr, invitation := ls.purpose, ls.returnTo, ls.acr, ls.invitation
 	if s.rp == nil {
 		return nil, errors.New("api: OIDC sign-in is not configured (no outbound HTTP client)")
 	}
@@ -312,10 +323,14 @@ func (s *Server) startLogin(w http.ResponseWriter, r *http.Request, t store.Tena
 	cookie, state, nonce, verifier := seal.RandomSecret(32), seal.RandomSecret(32), seal.RandomSecret(32), seal.RandomSecret(48)
 	stateHash := seal.SHA256Hex([]byte(state))
 	maxAge := loginMaxAge
+	if ls.purpose == "step_up" {
+		maxAge = ls.maxAge
+	}
 	req, claims := requestedAuthn(c, acr)
 	txn := &store.LoginTransaction{ID: uuid.New(), CookieHash: seal.SHA256Hex([]byte(cookie)), IdPConnectionID: c.ID,
 		Purpose: purpose, StateHash: &stateHash, Nonce: &nonce, RequiredTesseraACR: &acr, MaxAge: &maxAge,
-		BootstrapInvitationID: invitation, ReturnTo: returnTo, CreatedAt: now, ExpiresAt: now.Add(loginTxnTTL)}
+		BootstrapInvitationID: invitation, SessionID: ls.session, ExpectedExternalLoginID: ls.expectedLogin,
+		ReturnTo: returnTo, CreatedAt: now, ExpiresAt: now.Add(loginTxnTTL)}
 	if s.cfg.Sealer == nil {
 		return nil, errors.New("api: no sealer for the PKCE verifier")
 	}
@@ -323,7 +338,7 @@ func (s *Server) startLogin(w http.ResponseWriter, r *http.Request, t store.Tena
 		return nil, err
 	}
 	authURL, err := s.rp.AuthURL(r.Context(), rc, oidcrp.AuthRequest{RedirectURI: s.redirectURI(c.ID), State: state,
-		Nonce: nonce, Verifier: verifier, ACRValues: req.ACRValues, MaxAge: &maxAge, Claims: claims})
+		Nonce: nonce, Verifier: verifier, ACRValues: req.ACRValues, MaxAge: &maxAge, Claims: claims, Prompt: ls.prompt})
 	if err != nil {
 		return s.loginFailure(w, r, t.ID, oidcrp.ReasonOf(err), ojson.Object{{Key: "connection_id", Value: c.ID.String()}})
 	}
@@ -385,7 +400,7 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request, _ *params) (a
 	if conn == nil {
 		return s.loginFailure(w, r, t.ID, "unknown_connection", ojson.Object{{Key: "connection", Value: truncate(q.Get("connection"), 64)}})
 	}
-	return s.startLogin(w, r, t, conn, "login", returnTo, LoginACR(t.Settings), nil)
+	return s.startLogin(w, r, t, conn, loginStart{purpose: "login", returnTo: returnTo, acr: LoginACR(t.Settings)})
 }
 
 // bootstrapRedeem is GET /t/{slug}/bootstrap?code=: an unexpired, unused
@@ -433,7 +448,7 @@ func (s *Server) bootstrapRedeem(w http.ResponseWriter, r *http.Request, p *para
 	if reason != "" {
 		return s.loginFailure(w, r, t.ID, reason, nil)
 	}
-	return s.startLogin(w, r, t, conn, "bootstrap", "/", authnorm.ACRPhr, &inv.ID)
+	return s.startLogin(w, r, t, conn, loginStart{purpose: "bootstrap", returnTo: "/", acr: authnorm.ACRPhr, invitation: &inv.ID})
 }
 
 // ---------------------------------------------------------------- the callback
@@ -513,6 +528,9 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request, p *params)
 		if reason == "idp_error" {
 			extra = append(extra, ojson.KV{Key: "idp_error", Value: truncate(q.Get("error"), 64)})
 		}
+		if txn != nil && txn.Purpose == "step_up" && reason != "connection_mismatch" && reason != "state_mismatch" {
+			return s.stepUpFailure(w, r, tid, txn, "auth.step_up.failure", reason, extra)
+		}
 		return s.loginFailure(w, r, tid, reason, extra)
 	}
 	rc, err := s.rpConnection(tid, conn)
@@ -523,10 +541,18 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request, p *params)
 	if err != nil {
 		return nil, err
 	}
-	tok, err := s.rp.Exchange(ctx, rc, oidcrp.Callback{Code: q.Get("code"), Iss: q.Get("iss"),
-		RedirectURI: s.redirectURI(conn.ID), Verifier: string(verifier), Nonce: deref(txn.Nonce), MaxAge: txn.MaxAge})
+	cb := oidcrp.Callback{Code: q.Get("code"), Iss: q.Get("iss"), RedirectURI: s.redirectURI(conn.ID),
+		Verifier: string(verifier), Nonce: deref(txn.Nonce), MaxAge: txn.MaxAge}
+	if txn.Purpose == "step_up" {
+		started := txn.CreatedAt
+		cb.NotBefore = &started // the IdP must really have re-authenticated
+	}
+	tok, err := s.rp.Exchange(ctx, rc, cb)
 	if err != nil {
 		s.log.Info("OIDC callback refused", "err", err, "request_id", audit.RequestID(ctx))
+		if txn.Purpose == "step_up" {
+			return s.stepUpFailure(w, r, tid, txn, "auth.step_up.failure", oidcrp.ReasonOf(err), nil)
+		}
 		return s.loginFailure(w, r, tid, oidcrp.ReasonOf(err), ojson.Object{{Key: "login_transaction_id", Value: txnID.String()}})
 	}
 	mapping, err := authnorm.ParseMapping(conn.AuthnMapping)
@@ -540,7 +566,13 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request, p *params)
 		authnorm.Claims{Subject: tok.Subject, ACR: tok.ACR, AMR: tok.AMR, ACRS: tok.ACRS, TID: tok.TID, OID: tok.OID,
 			AuthTime: &at, Raw: tok.Raw})
 	if err != nil {
+		if txn.Purpose == "step_up" {
+			return s.stepUpFailure(w, r, tid, txn, "auth.step_up.failure", "normalization_failed", nil)
+		}
 		return s.loginFailure(w, r, tid, "normalization_failed", ojson.Object{{Key: "error", Value: err.Error()}})
+	}
+	if txn.Purpose == "step_up" {
+		return s.finishStepUp(w, r, tenant, conn, txn, res)
 	}
 	return s.finishOIDCLogin(w, r, tenant, conn, txn, tok, res)
 }

@@ -1,5 +1,10 @@
 import { FormEvent, ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { LoginConnection, SIGNED_OUT, STEP_UP, SessionInfo, discover, getSession, logout, startLogin } from "../api";
+import {
+  LoginConnection, SIGNED_OUT, STEP_UP, SessionInfo, clearPendingAction, discover, getSession, logout, runPendingAction,
+  startLogin, stepUpHref, takePendingAction,
+} from "../api";
+import { useConfirm } from "../components/Dialog";
+import { useToast } from "../components/Toast";
 import { Button } from "../components/Button";
 import { Callout } from "../components/Feedback";
 import { store } from "./storage";
@@ -33,7 +38,7 @@ export const useOptionalSession = () => useContext(Ctx);
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<SessionInfo | null | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
-  const [stepUp, setStepUp] = useState<string | null>(null);
+  const [stepUp, setStepUp] = useState<{ reason: string; href: string } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -51,7 +56,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const out = () => setSession(null);
     const up = (e: Event) => {
       const d = (e as CustomEvent).detail;
-      setStepUp(d?.max_age ? `This action needs a phishing-resistant sign-in in the last ${Math.round(d.max_age / 60)} minutes.` : "This action needs a fresh phishing-resistant sign-in.");
+      const reason = d?.max_age
+        ? `This action needs a phishing-resistant sign-in in the last ${Math.round(d.max_age / 60)} minutes.`
+        : "This action needs a fresh phishing-resistant sign-in.";
+      setStepUp({ reason, href: stepUpHref(d ?? {}) });
     };
     window.addEventListener(SIGNED_OUT, out);
     window.addEventListener(STEP_UP, up);
@@ -87,7 +95,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }
   return (
     <Ctx.Provider value={value}>
-      {stepUp && <StepUpNotice reason={stepUp} onClose={() => setStepUp(null)} onSignIn={value.reauthenticate} />}
+      {stepUp && (
+        <StepUpDialog reason={stepUp.reason} onClose={() => { clearPendingAction(); setStepUp(null); }}
+          onContinue={() => window.location.assign(stepUp.href)} />
+      )}
+      <PendingActionResumer />
       {children}
     </Ctx.Provider>
   );
@@ -194,17 +206,62 @@ function SignIn() {
   );
 }
 
-/** Shown when an action needs a fresh phishing-resistant sign-in (401 step_up_required). */
-function StepUpNotice({ reason, onClose, onSignIn }: { reason: string; onClose: () => void; onSignIn: () => Promise<void> }) {
+/**
+ * Shown when an action needs a fresh phishing-resistant sign-in (401 step_up_required): it explains
+ * why and, on Continue, re-authenticates at the IdP and comes back here (design §9.4, §17).
+ */
+function StepUpDialog({ reason, onClose, onContinue }: { reason: string; onClose: () => void; onContinue: () => void }) {
   return (
-    <div role="alertdialog" aria-labelledby="stepup-h" className="card stack"
+    <div role="alertdialog" aria-labelledby="stepup-h" aria-describedby="stepup-d" className="card stack"
       style={{ position: "fixed", right: "var(--s-4)", bottom: "var(--s-4)", zIndex: 90, width: "min(420px, calc(100vw - 32px))", boxShadow: "var(--shadow-lg, 0 8px 24px rgba(0,0,0,.18))" }}>
-      <strong id="stepup-h">Sign in again to continue</strong>
-      <p className="small">{reason} Sign in again with a passkey, then retry the action.</p>
+      <strong id="stepup-h">Confirm it's you</strong>
+      <p id="stepup-d" className="small">
+        {reason} Sign in again at your identity provider with a passkey or security key; you'll come back here and can
+        finish the action.
+      </p>
       <div className="row">
-        <Button variant="primary" onClick={onSignIn}>Sign in again</Button>
+        <Button variant="primary" onClick={onContinue} autoFocus>Continue</Button>
         <Button variant="ghost" onClick={onClose}>Not now</Button>
       </div>
     </div>
   );
+}
+
+/**
+ * After a step-up (?stepup=ok) offers to resume the action that needed it; after a refused one
+ * (?stepup=failed) says so. A pending action older than ten minutes is dropped, and it is never
+ * sent without the user confirming.
+ */
+function PendingActionResumer() {
+  const confirm = useConfirm();
+  const toast = useToast();
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const result = q.get("stepup");
+    if (!result) return;
+    const requestId = q.get("request_id");
+    q.delete("stepup");
+    q.delete("request_id");
+    window.history.replaceState(null, "", window.location.pathname + (q.size ? `?${q}` : "") + window.location.hash);
+    const pending = takePendingAction();
+    if (result !== "ok") {
+      toast(`Your identity provider did not confirm a phishing-resistant sign-in, so nothing was changed.${requestId ? ` Reference: ${requestId}` : ""}`, { kind: "error" });
+      return;
+    }
+    if (!pending) {
+      toast("Signed in again. You can retry the action now.", { kind: "info" });
+      return;
+    }
+    (async () => {
+      const ok = await confirm({ title: `Resume: ${pending.label}?`, body: "You signed in again. Finish the action you started?", confirmLabel: "Resume" });
+      if (ok === null) return;
+      try {
+        await runPendingAction(pending);
+        toast(`Done: ${pending.label}`);
+      } catch (e: any) {
+        toast(String(e.message ?? e), { kind: "error" });
+      }
+    })();
+  }, [confirm, toast]);
+  return null;
 }

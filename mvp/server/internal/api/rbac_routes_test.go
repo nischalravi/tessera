@@ -90,6 +90,7 @@ POST   /api/insights/deployment-health/rerun         connections.manage -
 GET    /api/auth/session                             auth.self       -
 POST   /api/auth/logout                              auth.self       -
 GET    /api/auth/sessions                            auth.self       -
+GET    /api/auth/step-up                             auth.self       -
 DELETE /api/auth/sessions/{session_id}               auth.self       -  (another user's: admin.sessions.revoke + STEP_UP_ADMIN in the handler)
 GET    /api/auth/discover                            public
 GET    /api/auth/login                               public

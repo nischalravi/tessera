@@ -98,7 +98,11 @@ export async function api<T = any>(path: string, body?: unknown, method?: string
       resetSessionState();
       window.dispatchEvent(new Event(SIGNED_OUT));
     }
-    if (res.status === 401 && j?.error === "step_up_required") window.dispatchEvent(new CustomEvent(STEP_UP, { detail: j }));
+    if (res.status === 401 && j?.error === "step_up_required") {
+      // remember what was being done (the request only, never a token) so it can resume after the step-up
+      if (m !== "GET" && m !== "HEAD") savePendingAction({ method: m, path, body, label: actionLabel(m, path), at: Date.now() });
+      window.dispatchEvent(new CustomEvent(STEP_UP, { detail: j }));
+    }
     throw new ApiError(j ? errorMessage(res.status, j) : `${res.status} ${res.statusText}`, res.status, j);
   }
   const data = (await res.json()) as T;
@@ -108,6 +112,77 @@ export async function api<T = any>(path: string, body?: unknown, method?: string
   else window.dispatchEvent(new Event(CHANGED));
   return data;
 }
+
+// ------------------------------------------------------------ step-up (design §9.4, §17)
+
+/** An action that needs a fresh sign-in, kept across the IdP round trip (sessionStorage, ten minutes). */
+export interface PendingAction { method: string; path: string; body?: unknown; label: string; at: number }
+
+const PENDING = "tessera.pendingAction";
+/** A pending action older than this is discarded rather than resumed. */
+export const PENDING_TTL_MS = 10 * 60 * 1000;
+
+function savePendingAction(a: PendingAction): void {
+  try {
+    sessionStorage.setItem(PENDING, JSON.stringify(a));
+  } catch {
+    /* storage unavailable: the user retries by hand after the step-up */
+  }
+}
+
+/** Forget the pending action (the user declined to resume it, or it ran). */
+export function clearPendingAction(): void {
+  try {
+    sessionStorage.removeItem(PENDING);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** The pending action, removed from storage; null when none or older than ten minutes. */
+export function takePendingAction(now = Date.now()): PendingAction | null {
+  let a: PendingAction | null = null;
+  try {
+    const raw = sessionStorage.getItem(PENDING);
+    a = raw ? (JSON.parse(raw) as PendingAction) : null;
+  } catch {
+    a = null;
+  }
+  clearPendingAction();
+  if (!a || typeof a.path !== "string" || !a.path.startsWith("/") || now - a.at > PENDING_TTL_MS || now < a.at) return null;
+  return a;
+}
+
+const LABELS: [RegExp, (m: RegExpMatchArray) => string][] = [
+  [/^\/jit\/requests\/(\d+)\/approve$/, (m) => `Approve JIT request #${m[1]}`],
+  [/^\/reviews\/items\/(\d+)\/decision$/, (m) => `Record the review decision on item #${m[1]}`],
+  [/^\/least-privilege\/revoke$/, () => "Revoke the grant"],
+  [/^\/hris\/events\/([^/]+)\/execute$/, (m) => `Run the lifecycle plan for event ${m[1]}`],
+  [/^\/connections\/([^/]+)\/(config|credential|activate|retire)$/, (m) => `${{ config: "Save the configuration of", credential: "Set the credential of", activate: "Activate", retire: "Retire" }[m[2]]} connection ${m[1]}`],
+  [/^\/readiness\/overlays\/([^/]+)$/, (m) => `Save the readiness overlay for ${m[1]}`],
+];
+
+/** A plain-language name for an API action, shown before resuming it. */
+export function actionLabel(method: string, path: string): string {
+  for (const [re, f] of LABELS) {
+    const m = path.match(re);
+    if (m) return f(m);
+  }
+  return `${method} ${path}`;
+}
+
+/** Where to go to satisfy a step_up_required answer, coming back to the current page. */
+export function stepUpHref(challenge: { step_up_url?: string; acr?: string; max_age?: number }): string {
+  const base = challenge.step_up_url ?? `/api/auth/step-up?${new URLSearchParams({ acr: challenge.acr ?? "urn:tessera:acr:phr", max_age: String(challenge.max_age ?? 900) })}`;
+  const q = new URLSearchParams(window.location.search);
+  q.delete("stepup");
+  q.delete("request_id");
+  const here = safeReturnTo(window.location.pathname + (q.size ? `?${q}` : ""));
+  return `${base}${base.includes("?") ? "&" : "?"}return_to=${encodeURIComponent(here)}`;
+}
+
+/** Run a resumed action (after a successful step-up). */
+export const runPendingAction = (a: PendingAction) => api(a.path, a.body, a.method);
 
 /** Tell mounted views that data changed outside `api()` (e.g. the mock layer). */
 export const notifyChanged = () => window.dispatchEvent(new Event(CHANGED));

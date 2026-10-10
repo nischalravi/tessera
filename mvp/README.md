@@ -158,6 +158,7 @@ The routes are documented at `/api/readiness/openapi.json`.
 `GET /api/audit/events/{event_id}/proof` · `GET /api/audit/checkpoints[?from_seq=]` · `GET /api/audit/keys` ·
 `POST /api/audit/verify {from_seq?, to_seq?}` · `GET /api/audit/export[?from_seq=&to_seq=]` (NDJSON) ·
 `GET /api/auth/session` · `POST /api/auth/logout` · `GET /api/auth/sessions` · `DELETE /api/auth/sessions/{session_id}` ·
+`GET /api/auth/step-up?acr=&max_age=&return_to=` ·
 `GET /api/auth/discover?tenant=&email=` · `GET /api/auth/login?tenant=&connection=&return_to=` (302 to the IdP) ·
 `GET /api/auth/oidc/{connection_id}/callback` · `GET /t/{slug}/bootstrap?code=` (public)
 
@@ -315,8 +316,15 @@ id, and the reason is in the audit log (`auth.login.failure`), never in the URL.
 Approvals, review decisions, HRIS execution, applying a revoke and editing a connection's config or
 credential also need a phishing-resistant sign-in in the last 15 minutes (step-up, §10.2). Nobody can
 approve a JIT request they made, or one that grants access to their own identity (403 `self_approval`).
-Until the step-up flow lands (PR8) the API answers `401 step_up_required` and the UI offers to sign in
-again.
+When the sign-in is too old or too weak the API answers `401 step_up_required` with the RFC 9470
+challenge (`WWW-Authenticate: Bearer error="insufficient_user_authentication", acr_values=…, max_age=…`)
+and a `step_up_url`. The UI explains why and, on **Continue**, re-authenticates at the IdP
+(`GET /api/auth/step-up?acr=&max_age=&return_to=`: `prompt=login`, `max_age=0`); back on the page it offers
+to resume the action (kept in `sessionStorage` for ten minutes: the request only, never a token).
+Tessera requires the same person (else `auth.step_up.subject_mismatch`), an `auth_time` after the step-up
+started (the IdP really re-authenticated) and the required ACR (else `auth.step_up.insufficient`); on
+success the session's authentication is replaced, its cookie and CSRF token rotate, and
+`auth.step_up.success` records what was required and what was presented.
 
 Unauthenticated traffic is rate-limited per client IP before it reaches the audit ledger: every
 `/api/auth/*` request (burst 30, then one per 2 s) and every request without a valid session (burst
