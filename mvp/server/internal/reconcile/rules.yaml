@@ -1,0 +1,25 @@
+# Reconciliation finding rules (design §6.3). Severity rules are data so
+# they can be reviewed like policy; template thresholds (tenant overlays)
+# override the threshold defaults where both exist.
+thresholds:
+  sparse_required: 0.05      # empty fraction above which a required attribute is sparse
+  sparse_recommended: 0.25   # same for recommended attributes
+  count_tolerance: 0.02      # staged versus expected counts
+  never_logged_in_days: 30   # never logged in and created longer ago than this
+  stale_lag_days: 0          # added to the dormancy threshold (templates set their own)
+  leaver_grace_days: 14      # leavers older than this are a process gap, not a sync delay
+  sample_cap: 10             # samples kept per finding (ids and names only)
+rules:
+  RF-01: { title: "Orphan accounts", severity: high, privileged: critical }
+  RF-02: { title: "People with no account", severity: medium }
+  RF-03: { title: "Duplicate and ambiguous correlations", severity: high }
+  RF-04: { title: "Sparse attributes", severity: medium, recommended: low }
+  RF-05: { title: "Groups out of scope", severity: medium }
+  RF-06a: { title: "Disabled or expired accounts still holding access", severity: medium, privileged: critical }
+  RF-06b: { title: "Departed in HR but still enabled", severity: high, privileged: critical }
+  RF-07: { title: "Stale accounts", severity: medium }
+  RF-08: { title: "Unexpected privileged members", severity: critical }
+  RF-09: { title: "Service accounts without an owner", severity: medium, privileged: high }
+  RF-10: { title: "Matched by email or UPN only (proposals awaiting review)", severity: low }
+  RF-11: { title: "Password never expires on privileged accounts", severity: high }
+  RF-12: { title: "Count mismatch", severity: high }

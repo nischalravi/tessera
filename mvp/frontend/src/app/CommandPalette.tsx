@@ -1,9 +1,10 @@
 import { KeyboardEvent, ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  Ban, CircleCheck, ClipboardCheck, Command, KeyRound, Layers, Moon, Network, RotateCcw, Search, ShoppingCart, Sun, Upload, UserCog, UserRound,
+  Activity, Ban, CircleCheck, ClipboardCheck, Command, KeyRound, Layers, Moon, Network, Plug, RotateCcw, Search, ShoppingCart, Sun, Upload, UserCog, UserRound,
 } from "lucide-react";
-import { IdentityRow } from "../api";
+import { IdentityRow, readiness } from "../api";
+import { useToast } from "../components/Toast";
 import { useModal } from "../components/overlay";
 import { useIdentityActions } from "./actions";
 import { PERSONAS, usePersona } from "./persona";
@@ -49,6 +50,7 @@ function Palette({ initial, onClose }: { initial: string; onClose: () => void })
   const { setPref, resolved } = useTheme();
   const { setPersona, persona } = usePersona();
   const entities = useEntityEntries();
+  const toast = useToast();
   useModal(ref, () => (stack.length ? setStack((s) => s.slice(0, -1)) : onClose()));
 
   const people = entities.filter((e) => e.identity);
@@ -84,6 +86,16 @@ function Palette({ initial, onClose }: { initial: string; onClose: () => void })
     { id: "a-reqfor", group: "Actions", label: "Request access for someone…", icon: <KeyRound size={15} />, keywords: "on behalf", next: pickIdentity("Request access for", people, (i) => acts.requestFor(i), "Request") },
     { id: "a-role", group: "Actions", label: "Create role", icon: <Layers size={15} />, keywords: "new business role", hint: "Preview", run: () => nav("/directory/roles?new=1") },
     { id: "a-import", group: "Actions", label: "Bulk import users", icon: <Upload size={15} />, keywords: "csv upload bulk people", run: () => nav("/directory/people?import=1") },
+    { id: "a-connection", group: "Actions", label: "New connection", icon: <Plug size={15} />, keywords: "connector directory ad ldap okta entra setup wizard readiness", run: () => nav("/admin/connections/new") },
+    {
+      id: "a-health", group: "Actions", label: "Run deployment health check", icon: <Activity size={15} />, keywords: "readiness validate rerun checks deployment gaps",
+      run: () => {
+        readiness.rerun(false)
+          .then((r) => toast(`Deployment health check: ${r.results.filter((x) => x.validation_run_id).length} connection(s) re-validated`))
+          .catch((e) => toast((e as Error).message, { kind: "error" }));
+        nav("/insights/deployment-health");
+      },
+    },
     { id: "a-joiner", group: "Actions", label: "New user (onboard a person)", icon: <UserRound size={15} />, keywords: "create user joiner hire new", run: () => nav("/directory/people?new=1") },
     { id: "a-theme", group: "Actions", label: resolved === "dark" ? "Switch to light theme" : "Switch to dark theme", icon: resolved === "dark" ? <Sun size={15} /> : <Moon size={15} />, keywords: "theme dark light appearance", run: () => setPref(resolved === "dark" ? "light" : "dark") },
     ...PERSONAS.filter((p) => p.id !== persona).map((p) => ({ id: `a-persona-${p.id}`, group: "Actions", label: `View as ${p.label.toLowerCase()}`, icon: <UserCog size={15} />, keywords: "persona switch role demo", run: () => setPersona(p.id) })),

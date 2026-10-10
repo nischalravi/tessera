@@ -2,6 +2,7 @@
 //
 //	tessera [serve] [-addr 127.0.0.1:8000] [-db tessera.db] [-reseed]
 //	tessera seed    [-db tessera.db]
+//	tessera readiness lint [-dir path]   lint the readiness checklist templates
 //
 // Environment:
 //
@@ -15,6 +16,8 @@
 //	                      the API serves one default tenant and refuses to start
 //	                      otherwise, so an unset variable fails closed.
 //	TESSERA_DEV_DEFAULT_TENANT  slug of that tenant (default larkspur)
+//	TESSERA_READINESS_SCENARIO  simulated validation scenario for demo connectors: gaps (default) or happy
+//	TESSERA_READINESS_DEMO      "off" skips seeding the demo Okta connection (larkspur only) for Deployment health
 package main
 
 import (
@@ -29,6 +32,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -61,6 +65,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		cmd, args = args[0], args[1:]
 	}
+	if cmd == "readiness" {
+		return readinessCmd(args, stdout, stderr)
+	}
 	fset := flag.NewFlagSet("tessera "+cmd, flag.ContinueOnError)
 	fset.SetOutput(stderr)
 	var o options
@@ -89,7 +96,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		}
 		return serve(ctx, o, clock, loader, logger)
 	}
-	return fmt.Errorf("unknown command %q (want serve or seed)", cmd)
+	return fmt.Errorf("unknown command %q (want serve, seed or readiness)", cmd)
 }
 
 // dbPath accepts a plain path or the Python backend's sqlite:/// URL form.
@@ -172,6 +179,16 @@ func seedDB(ctx context.Context, path string, clock timeutil.Clock, loader *poli
 		fmt.Fprintf(stdout, "Seeded Tessera tenant %s: %s usage=%d hris=%d jit=%d\n", ts.Tenant.Slug,
 			discovery, ts.Sync.Events.Usage, ts.Sync.Events.Hris, ts.Requests)
 	}
+	if os.Getenv("TESSERA_READINESS_DEMO") != "off" {
+		// The readiness demo is seeded for larkspur only: its Okta (demo)
+		// connection matches larkspur's demo connectors; globex is the
+		// sentinel tenant and starts with no connections.
+		if err := seedReadinessDemo(ctx, st, seed.LarkspurID, clock); err != nil {
+			return fmt.Errorf("readiness demo: %w", err)
+		}
+		fmt.Fprintf(stdout, "Seeded the deployment-readiness demo for tenant %s: Okta (demo) connection validated and dry-run reconciled\n",
+			seed.LarkspurSlug)
+	}
 	fmt.Fprintf(stdout, "Seeded Tessera in %.1fs\n", time.Since(start).Seconds())
 	return nil
 }
@@ -202,8 +219,12 @@ func serve(ctx context.Context, o options, clock timeutil.Clock, loader *policy.
 	if err != nil {
 		return fmt.Errorf("no tenant to serve (authentication arrives in a later release): %w", err)
 	}
+	scenario := os.Getenv("TESSERA_READINESS_SCENARIO")
+	if scenario != "" && !slices.Contains(connectors.ScenarioNames(), scenario) {
+		return fmt.Errorf("TESSERA_READINESS_SCENARIO: unknown scenario %q (have %v)", scenario, connectors.ScenarioNames())
+	}
 	srv := api.New(api.Config{Store: st, Tenant: tenant, Clock: clock, Policies: loader, Logger: logger,
-		AllowedOrigins: corsOrigins()})
+		AllowedOrigins: corsOrigins(), Env: os.Getenv("TESSERA_ENV"), ReadinessScenario: scenario})
 	httpSrv := &http.Server{
 		Addr:              o.addr,
 		Handler:           srv.Handler(),

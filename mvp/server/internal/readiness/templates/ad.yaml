@@ -1,0 +1,495 @@
+# Active Directory readiness template (design §3.7).
+template: ad
+version: 1.0.0
+extends: base@1
+display_name: Active Directory
+connector_types: [ad, demo-ad]
+role: account_source
+default_correlation_key: objectGUID
+default_hr_id_attribute: employeeID
+required_attributes:
+  user: [objectGUID, sAMAccountName, userPrincipalName, userAccountControl, accountExpires,
+         pwdLastSet, lastLogonTimestamp, whenCreated, memberOf, manager, mail]
+  group: [objectGUID, cn, groupType, member, managedBy]
+recommended_attributes:
+  user: [employeeID]
+thresholds:
+  fill_rate.required: 0.95
+  stale_days: 90
+  stale_lag_days: 14
+items:
+  # ---- credentials and access
+  - id: ad.svc.readonly
+    title: Dedicated service account in no privileged group, adminCount not 1
+    category: access
+    level: required
+    why: "A domain-admin service account turns Tessera into a domain compromise path."
+    verify:
+      - kind: live
+        check: ad_svc_groups
+        params: { forbidden_rids: [512, 518, 519, 544, 548, 549, 550, 551] }
+    remediation:
+      hint: "Create a standard user and grant it read access only."
+    depends_on: [ad.bind]
+    config_fields: [host, credential]
+
+  - id: ad.svc.no_write
+    title: No write rights on in-scope users and groups (unless write-back, then only there)
+    category: access
+    level: required
+    why: "Proves the account is read-only without attempting a write."
+    verify:
+      - kind: live
+        check: ad_effective_rights
+    remediation:
+      hint: "Remove delegated write ACEs; check inherited ACEs on OUs."
+    depends_on: [ad.svc.readonly]
+    config_fields: [host, credential, base_dns, write_mode, write_scope]
+
+  - id: ad.svc.no_replication
+    title: Account does not hold Replicating Directory Changes All (DCSync)
+    category: access
+    level: required
+    why: "DCSync rights expose every password hash in the domain."
+    verify:
+      - kind: live
+        check: ad_replication_rights
+    remediation:
+      hint: "Remove the extended right. Tessera's default incremental method (uSNChanged) needs no replication right."
+    depends_on: [ad.bind]
+    config_fields: [host, credential]
+
+  - id: ad.svc.password
+    title: Agent runs as a gMSA, or the password is at least 25 characters, sealed and rotated
+    category: access
+    level: recommended
+    why: "Long-lived static passwords on service accounts are a top Active Directory finding."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Use a gMSA for the agent's Windows service."
+    config_fields: [credential]
+
+  - id: ad.svc.no_interactive
+    title: Interactive and RDP logon denied to the service account
+    category: access
+    level: optional
+    why: "Limits misuse if the password leaks."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "GPO: Deny log on locally and Deny log on through Remote Desktop Services."
+    config_fields: [credential]
+
+  # ---- transport
+  - id: ad.tls.ldaps
+    title: LDAPS (636) or StartTLS (389); no simple bind in clear text
+    category: transport
+    level: required
+    why: "Simple bind sends the password in clear text."
+    verify:
+      - kind: live
+        check: tls_handshake
+        params: { min_version: "1.2" }
+    remediation:
+      hint: "Enable LDAPS on the domain controllers."
+    config_fields: [host, port]
+
+  - id: ad.tls.chain
+    title: Server certificate chains to a configured CA, hostname matches, valid more than 30 days
+    category: transport
+    level: required
+    why: "Without certificate validation, anyone on the network path can impersonate the domain controller and capture the service account's bind password."
+    verify:
+      - kind: live
+        check: tls_chain
+        params: { min_days_valid: 30 }
+    remediation:
+      hint: "Upload the issuing CA (often your AD CS root) in Connection, Transport. Tessera does not offer skip verification."
+      link: https://learn.microsoft.com/troubleshoot/windows-server/active-directory/enable-ldap-over-ssl-3rd-certification-authority
+    depends_on: [ad.tls.ldaps]
+    config_fields: [host, port]
+
+  - id: ad.tls.signing_cb
+    title: Domain controllers require LDAP signing and channel binding (ADV190023)
+    category: transport
+    level: recommended
+    why: "Stops NTLM relay to LDAP against the domain."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Set the domain controller policies to Require."
+      link: https://msrc.microsoft.com/update-guide/vulnerability/ADV190023
+    config_fields: [host]
+
+  - id: ad.bind
+    title: Bind succeeds on every configured domain controller
+    category: access
+    level: required
+    why: "Baseline connectivity."
+    verify:
+      - kind: live
+        check: bind
+    remediation:
+      hint: "Check the account, password, domain controller names and firewall."
+    depends_on: [ad.tls.chain]
+    config_fields: [host, port, credential]
+
+  - id: ad.dc.redundancy
+    title: At least two domain controllers, or the DNS SRV locator, configured
+    category: topology
+    level: recommended
+    why: "A single domain controller is a single point of sync failure."
+    verify:
+      - kind: live
+        check: dc_count
+        params: { min: 2 }
+    remediation:
+      hint: "Add a second domain controller or enable the locator."
+    depends_on: [ad.bind]
+    config_fields: [host]
+
+  # ---- scope
+  - id: ad.scope.base_dns
+    title: Every base DN exists and is readable
+    category: scope
+    level: required
+    why: "A typo in a base DN returns zero objects, not an error."
+    verify:
+      - kind: live
+        check: dn_exists
+    remediation:
+      hint: "Pick DNs from the browser in the Scope step."
+    depends_on: [ad.bind]
+    config_fields: [base_dns]
+
+  - id: ad.scope.filter
+    title: Filters parse, and people use (objectCategory=person)(objectClass=user)
+    category: scope
+    level: required
+    why: "objectClass=user alone matches computer accounts."
+    verify:
+      - kind: live
+        check: filter_parse
+      - kind: live
+        check: sample_search
+    remediation:
+      hint: "Use the template filter."
+    depends_on: [ad.scope.base_dns]
+    config_fields: [base_dns, user_filter, group_filter]
+
+  - id: ad.scope.read_perms
+    title: Read permission per object class with the required attributes returned
+    category: scope
+    level: required
+    why: "Objects visible with missing attributes indicate ACL gaps, for example confidential attributes."
+    verify:
+      - kind: live
+        check: read_per_class
+        params: { classes: [user, inetOrgPerson, group, msDS-GroupManagedServiceAccount, contact] }
+    remediation:
+      hint: "Grant read on the attribute set; check List Object mode."
+    depends_on: [ad.scope.base_dns]
+    config_fields: [base_dns, credential]
+
+  - id: ad.scope.paging
+    title: Paged results (1.2.840.113556.1.4.319) work past MaxPageSize (default 1,000)
+    category: scope
+    level: required
+    why: "Without paging a search silently stops at 1,000 objects."
+    verify:
+      - kind: live
+        check: paging
+        params: { page_limit: 1000 }
+    remediation:
+      hint: "Tessera pages automatically; the check fails if the domain controller refuses the control."
+    depends_on: [ad.scope.base_dns]
+    config_fields: [base_dns]
+
+  - id: ad.scope.service_accounts
+    title: OUs holding service accounts and gMSAs are in scope
+    category: scope
+    level: recommended
+    why: "Non-human identities are the accounts most often missed (D5)."
+    verify:
+      - kind: attestation
+      - kind: data
+        check: class_present
+        params: { class: msDS-GroupManagedServiceAccount }
+    remediation:
+      hint: "Add the service-account OUs to the base DNs."
+    depends_on: [ad.scope.read_perms]
+    config_fields: [base_dns, service_account_ous]
+
+  # ---- identity keys
+  - id: ad.key.objectguid
+    title: objectGUID is the correlation key, not sAMAccountName, UPN or mail
+    category: identity_keys
+    level: required
+    why: "Names are renamed and reused; objectGUID survives renames and moves within the forest."
+    verify:
+      - kind: data
+        check: key_unique
+        params: { attr: objectGUID }
+    remediation:
+      hint: "Select objectGUID as the key (decoded as a little-endian GUID)."
+    depends_on: [base.correlation.key]
+    config_fields: [correlation_key]
+
+  - id: ad.key.employeeid
+    title: employeeID or employeeNumber mapped to the HR worker id
+    category: identity_keys
+    level: recommended
+    why: "Tier-1 correlation needs it; without it most accounts fall to email proposals."
+    verify:
+      - kind: data
+        check: fill_rate
+        params: { attr: employeeID, min: 0.95 }
+    remediation:
+      hint: "Populate employeeID from HR, often through the HR-to-AD feed."
+    depends_on: [ad.scope.read_perms]
+    config_fields: [hr_id_attribute]
+
+  - id: ad.key.sid_history
+    title: sIDHistory captured for migrated accounts
+    category: identity_keys
+    level: optional
+    why: "Keeps links for accounts migrated between domains."
+    verify:
+      - kind: data
+        check: attr_present
+        params: { attr: sIDHistory }
+    remediation:
+      hint: "Map the sIDHistory attribute."
+
+  # ---- account status
+  - id: ad.status.disabled
+    title: Disabled from userAccountControl bit 0x2 (ACCOUNTDISABLE)
+    category: account_status
+    level: required
+    why: "Treating disabled accounts as active inflates reviews; the reverse hides leavers."
+    verify:
+      - kind: data
+        check: uac_mapped
+    remediation:
+      hint: "Uses the template mapping; fails if userAccountControl is unreadable."
+    depends_on: [ad.scope.read_perms]
+
+  - id: ad.status.lockout
+    title: Lockout from msDS-User-Account-Control-Computed or lockoutTime, not userAccountControl
+    category: account_status
+    level: recommended
+    why: "Domain controllers do not maintain the lockout bit in userAccountControl."
+    verify:
+      - kind: data
+        check: attr_present
+        params: { attr: msDS-User-Account-Control-Computed }
+    remediation:
+      hint: "Map the computed attribute."
+    depends_on: [ad.status.disabled]
+
+  - id: ad.status.expiry
+    title: accountExpires parsed (0 and 0x7FFFFFFFFFFFFFFF mean never); expired accounts inactive
+    category: account_status
+    level: required
+    why: "Contractor accounts often end by expiry rather than disablement."
+    verify:
+      - kind: data
+        check: expiry_parsed
+        params: { attr: accountExpires }
+    remediation:
+      hint: "Uses the template parser (FILETIME, UTC)."
+    depends_on: [ad.scope.read_perms]
+
+  - id: ad.status.pwdlastset
+    title: pwdLastSet and DONT_EXPIRE_PASSWORD (0x10000) captured
+    category: account_status
+    level: recommended
+    why: "Feeds password-age and never-expires findings on privileged accounts."
+    verify:
+      - kind: data
+        check: attr_present
+        params: { attr: pwdLastSet }
+    remediation:
+      hint: "Map both attributes."
+
+  - id: ad.status.lastlogon
+    title: Staleness from lastLogonTimestamp with its replication lag (up to 14 days)
+    category: account_status
+    level: recommended
+    why: "lastLogon is per domain controller and not replicated; without the lag, active users look stale."
+    verify:
+      - kind: data
+        check: attr_present
+        params: { attr: lastLogonTimestamp }
+    remediation:
+      hint: "Keep stale_lag_days at 14 unless msDS-LogonTimeSyncInterval was changed."
+
+  # ---- groups
+  - id: ad.groups.nested
+    title: Nested groups resolved with cycle detection
+    category: groups
+    level: required
+    why: "Most Active Directory access is granted through nesting (D2 M3)."
+    verify:
+      - kind: data
+        check: nesting_resolved
+    remediation:
+      hint: "Automatic; fails if group objects are out of scope."
+    depends_on: [ad.scope.read_perms]
+
+  - id: ad.groups.range
+    title: Ranged member retrieval for groups larger than MaxValRange (1,500)
+    category: groups
+    level: required
+    why: "Without ranged retrieval large groups are silently truncated."
+    verify:
+      - kind: live
+        check: range_retrieval
+        params: { max_val_range: 1500 }
+    remediation:
+      hint: "Automatic; fails if the domain controller refuses ranged reads."
+    depends_on: [ad.scope.read_perms]
+    config_fields: [host, base_dns, demo_fixed_checks]
+
+  - id: ad.groups.primary
+    title: Primary group (primaryGroupID, usually Domain Users) reconstructed
+    category: groups
+    level: recommended
+    why: "Primary group membership is not in the member attribute."
+    verify:
+      - kind: data
+        check: primary_group
+    remediation:
+      hint: "Automatic."
+    depends_on: [ad.groups.nested]
+
+  - id: ad.groups.fsp
+    title: Foreign security principals resolved by SID to another connection, or flagged
+    category: groups
+    level: recommended
+    why: "Members from trusted forests are invisible otherwise."
+    verify:
+      - kind: data
+        check: fsp_resolved
+    remediation:
+      hint: "Add the trusted forest as a connection."
+    depends_on: [ad.groups.nested]
+
+  - id: ad.groups.privileged
+    title: Privileged groups tagged, each with an expected-member list
+    category: groups
+    level: required
+    why: "Drives the most important finding: unexpected privileged members."
+    verify:
+      - kind: attestation
+      - kind: data
+        check: privileged_unexpected
+    remediation:
+      hint: "List expected members or an owning policy for each privileged group."
+    depends_on: [ad.groups.nested]
+    config_fields: [privileged_expected]
+
+  # ---- change tracking
+  - id: ad.sync.usn
+    title: Incremental on uSNChanged per DC; invocationId and highestCommittedUSN tracked
+    category: change_tracking
+    level: required
+    why: "USNs are per domain controller; reading them from a different one skips changes."
+    verify:
+      - kind: live
+        check: incremental_capable
+    remediation:
+      hint: "Automatic; pin the domain controller or let Tessera track per DC."
+    depends_on: [ad.bind]
+    config_fields: [host, use_dirsync]
+
+  - id: ad.sync.dirsync
+    title: DirSync control used instead of USN polling
+    category: change_tracking
+    level: optional
+    why: "Needs Replicating Directory Changes, which conflicts with the least-privilege default."
+    verify:
+      - kind: live
+        check: dirsync_allowed
+    remediation:
+      hint: "Leave off unless required."
+    depends_on: [ad.sync.usn]
+    config_fields: [use_dirsync]
+
+  - id: ad.sync.deleted
+    title: Deletions detected through Deleted Objects (show-deleted control) or a full-sync diff
+    category: change_tracking
+    level: required
+    why: "Incremental polling of live objects never sees deletions."
+    verify:
+      - kind: live
+        check: deleted_objects_readable
+    remediation:
+      hint: "Delegate List and Read on CN=Deleted Objects, and keep the full-sync interval shorter than the tombstone lifetime."
+    depends_on: [ad.sync.usn]
+    config_fields: [host, credential]
+
+  - id: ad.sync.recycle_bin
+    title: AD Recycle Bin state known
+    category: change_tracking
+    level: optional
+    why: "Restored objects keep objectGUID; Tessera relinks them."
+    verify:
+      - kind: live
+        check: recycle_bin_state
+    remediation:
+      hint: "Informational."
+    depends_on: [ad.bind]
+
+  # ---- topology
+  - id: ad.topo.domains
+    title: Every domain in the forest holding in-scope users is configured
+    category: topology
+    level: required
+    why: "Multi-domain forests are the commonest cause of missing people."
+    verify:
+      - kind: live
+        check: forest_domains
+    remediation:
+      hint: "Add a base DN per domain naming context."
+    depends_on: [ad.bind]
+    config_fields: [base_dns]
+
+  - id: ad.topo.gc
+    title: Global catalog used only for forest-wide lookups
+    category: topology
+    level: recommended
+    why: "The global catalog holds a partial attribute set and omits domain-local memberships."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Use domain controllers, not the global catalog port, for sync."
+    depends_on: [ad.topo.domains]
+    config_fields: [host, port]
+
+  - id: ad.topo.trusts
+    title: External and forest trusts inventoried; trusted forests connected or flagged
+    category: topology
+    level: recommended
+    why: "Access through trusts is invisible otherwise."
+    verify:
+      - kind: live
+        check: trusts
+    remediation:
+      hint: "Add connections for trusted forests or accept the gap."
+    depends_on: [ad.bind]
+
+  - id: ad.hybrid.entra
+    title: Hybrid users linked to the Entra connection (objectGUID to onPremisesImmutableId)
+    category: identity_keys
+    level: recommended
+    why: "Prevents duplicate correlations of one person."
+    verify:
+      - kind: data
+        check: cross_link_rate
+        params: { attr: objectGUID, other_type: entra, other_attr: onPremisesImmutableId, min: 0.98 }
+    remediation:
+      hint: "Applies when an Entra connection exists."
+    depends_on: [ad.key.objectguid]
+    applies_when: { tenant_has_connection_type: [entra] }

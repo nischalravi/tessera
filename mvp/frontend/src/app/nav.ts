@@ -77,7 +77,7 @@ export const RAIL: RailGroup[] = [
         pages: [
           { path: "/insights/least-privilege", label: "Least privilege", keywords: "unused recommendations right size revoke" },
           { path: "/insights/sod", label: "SoD conflicts", keywords: "segregation separation of duties toxic combination" },
-          { path: "/insights/deployment", label: "Deployment health", keywords: "readiness setup checks connectors correlation", preview: true },
+          { path: "/insights/deployment-health", label: "Deployment health", keywords: "readiness checklist deployment gaps connection setup reconciliation orphans missed" },
         ],
       },
     ],
@@ -85,7 +85,7 @@ export const RAIL: RailGroup[] = [
   {
     label: "Settings",
     items: [
-      { id: "connections", label: "Connections", icon: Plug, path: "/admin/connections", keywords: "connectors sync okta aws github snowflake workday" },
+      { id: "connections", label: "Connections", icon: Plug, path: "/admin/connections", keywords: "connectors sync okta aws github snowflake workday active directory ldap entra readiness wizard" },
       { id: "admin", label: "Admin", icon: Settings, path: "/admin", except: ["/admin/connections"], keywords: "settings configuration audit jobs" },
     ],
   },

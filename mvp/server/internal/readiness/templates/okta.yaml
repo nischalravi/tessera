@@ -1,0 +1,193 @@
+# Okta readiness template (design §3.10).
+template: okta
+version: 1.0.0
+extends: base@1
+display_name: Okta
+connector_types: [okta, demo-okta]
+role: account_source
+default_correlation_key: id
+default_hr_id_attribute: employeeNumber
+host_allowlist: ["*.okta.com", "*.oktapreview.com", "*.okta-emea.com"]
+required_attributes:
+  user: [id, login, status, created, email]
+  group: [id, name, type]
+recommended_attributes:
+  user: [employeeNumber, lastLogin]
+items:
+  - id: okta.auth.oauth
+    title: OAuth 2.0 service app with private_key_jwt, not an SSWS API token
+    category: access
+    level: recommended
+    why: "API tokens carry the creating admin's full privileges and expire after 30 days unused."
+    verify:
+      - kind: live
+        check: auth_mode
+    remediation:
+      hint: "Create an API service app and upload a public key."
+    config_fields: [credential]
+
+  - id: okta.auth.scopes
+    title: Granted scopes read-only; no manage scope
+    category: access
+    level: required
+    why: "The token response's scope is proof of read-only access."
+    verify:
+      - kind: live
+        check: token_scopes
+        params: { allowed: [okta.users.read, okta.groups.read, okta.apps.read, okta.logs.read, okta.roles.read] }
+    remediation:
+      hint: "Revoke manage scopes."
+    depends_on: [okta.org]
+    config_fields: [org_url, credential]
+
+  - id: okta.auth.admin_role
+    title: Service app's admin role is Read-Only Administrator or a custom read-only role
+    category: access
+    level: required
+    why: "Scopes are capped by the admin role; a Super Admin role makes a leaked key catastrophic."
+    verify:
+      - kind: live
+        check: app_admin_roles
+    remediation:
+      hint: "Assign Read-Only Administrator."
+    depends_on: [okta.auth.scopes]
+    config_fields: [org_url, credential]
+
+  - id: okta.org
+    title: Org URL is an Okta domain or a verified custom domain, reached through safehttp
+    category: transport
+    level: required
+    why: "A wrong org URL connects to the wrong org; an arbitrary URL is an SSRF vector."
+    verify:
+      - kind: live
+        check: token_acquire
+    remediation:
+      hint: "Use the org URL from the admin console."
+    config_fields: [org_url, credential]
+
+  - id: okta.key.userid
+    title: Okta user id (00u...) as key; login and email are mutable
+    category: identity_keys
+    level: required
+    why: "Renames break correlation."
+    verify:
+      - kind: data
+        check: key_unique
+        params: { attr: id }
+    remediation:
+      hint: "Select id as the key."
+    depends_on: [base.correlation.key]
+    config_fields: [correlation_key]
+
+  - id: okta.key.employee_number
+    title: employeeNumber profile attribute mapped to the HR worker id
+    category: identity_keys
+    level: recommended
+    why: "Tier-1 correlation needs it."
+    verify:
+      - kind: data
+        check: fill_rate
+        params: { attr: employeeNumber, min: 0.95 }
+    remediation:
+      hint: "Map it in the profile or from HR."
+    config_fields: [hr_id_attribute]
+
+  - id: okta.status.all
+    title: All statuses mapped and DEPROVISIONED users fetched explicitly
+    category: account_status
+    level: required
+    why: "The default list-users call omits DEPROVISIONED users, which hides leavers."
+    verify:
+      - kind: live
+        check: deprovisioned_visible
+      - kind: data
+        check: status_mapped
+    remediation:
+      hint: "Automatic."
+    depends_on: [okta.auth.scopes]
+
+  - id: okta.status.lastlogin
+    title: lastLogin captured; null means never
+    category: account_status
+    level: recommended
+    why: "Needed for staleness."
+    verify:
+      - kind: data
+        check: attr_present
+        params: { attr: lastLogin }
+    remediation:
+      hint: "Automatic."
+
+  - id: okta.groups.types
+    title: OKTA_GROUP, APP_GROUP and BUILT_IN groups distinguished
+    category: groups
+    level: required
+    why: "APP_GROUPs must be governed at their source; Everyone is excluded from findings."
+    verify:
+      - kind: data
+        check: group_types
+    remediation:
+      hint: "Automatic."
+
+  - id: okta.groups.rules
+    title: Group rules captured so rule-driven membership is explained
+    category: groups
+    level: recommended
+    why: "Rule-driven members would otherwise be flagged as unexpected."
+    verify:
+      - kind: live
+        check: group_rules_readable
+    remediation:
+      hint: "Automatic."
+    depends_on: [okta.auth.scopes]
+
+  - id: okta.roles.admins
+    title: Admin role assignments read; Super Admin and Org Admin tagged privileged
+    category: groups
+    level: required
+    why: "Okta admin is the keys to every SSO app."
+    verify:
+      - kind: live
+        check: roles_readable
+      - kind: data
+        check: privileged_unexpected
+    remediation:
+      hint: "Add okta.roles.read."
+    depends_on: [okta.auth.scopes]
+    config_fields: [credential, privileged_expected]
+
+  - id: okta.mastering
+    title: Profile source known; users mastered by AD or HR correlate through it, not twice
+    category: identity_keys
+    level: recommended
+    why: "Avoids duplicate correlation."
+    verify:
+      - kind: data
+        check: profile_source
+    remediation:
+      hint: "Automatic."
+
+  - id: okta.sync.syslog
+    title: Incremental through System Log polling inside the 90-day retention; weekly full sync
+    category: change_tracking
+    level: required
+    why: "Full scans only, on large orgs, eat the rate limit."
+    verify:
+      - kind: live
+        check: syslog_readable
+    remediation:
+      hint: "Add okta.logs.read."
+    depends_on: [okta.auth.scopes]
+
+  - id: okta.ratelimit
+    title: Rate-limit headroom observed; Tessera stays under its share (default 50%)
+    category: change_tracking
+    level: recommended
+    why: "Okta limits are per org; Tessera must not starve the customer's other integrations."
+    verify:
+      - kind: live
+        check: rate_headroom
+        params: { min_remaining: 0.5 }
+    remediation:
+      hint: "Set the app's share in the rate-limit dashboard and lower concurrency."
+    depends_on: [okta.auth.scopes]

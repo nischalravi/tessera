@@ -1,0 +1,52 @@
+# Demo scenario: everything passes except two Recommended items per
+# connector, so the skip flow can be shown (design §5.5).
+scenario: happy
+description: Everything passes except two Recommended items
+templates:
+  ad:
+    dc_count:
+      status: fail
+      message: "Only one domain controller is configured and the DNS SRV locator is off."
+      observed: { servers: 1 }
+    trusts:
+      status: fail
+      message: "Forest trust to emea.larkspur.example has no connection."
+      observed: { trusts: 1, unconnected: 1 }
+  okta:
+    auth_mode:
+      status: fail
+      message: "The connection uses an SSWS API token."
+      observed: { mode: api_token }
+    group_rules_readable:
+      status: fail
+      message: "Group rules could not be read: the app lacks okta.groups.read for rules."
+      observed: { available: false }
+  entra:
+    credential_type:
+      status: fail
+      message: "The app registration authenticates with a client secret."
+      observed: { mode: client_secret }
+    signin_activity_available:
+      status: fail
+      message: "signInActivity is not readable: the tenant has no Entra ID P1 licence."
+      observed: { available: false }
+  google:
+    credential_type:
+      status: fail
+      message: "A downloadable JSON key is in use."
+      observed: { mode: json_key }
+    rate_headroom:
+      status: fail
+      message: "Directory API quota fell to 31% remaining during validation."
+      observed: { limit: 2400, remaining: 744, throttled: 0 }
+  ldap:
+    tls_handshake:
+      status: pass
+      message: "TLS 1.3 negotiated."
+      observed: { tls_version: "1.3" }
+  workday: {}
+  scim_app:
+    rate_headroom:
+      status: fail
+      message: "Two 429 responses with Retry-After were seen during validation."
+      observed: { throttled: 2 }

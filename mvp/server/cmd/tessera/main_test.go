@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -55,7 +56,7 @@ func TestServeSeedsAndShutsDownGracefully(t *testing.T) {
 	if resp.StatusCode != 200 || resp.Header.Get("X-Content-Type-Options") != "nosniff" {
 		t.Errorf("health: %d %v", resp.StatusCode, resp.Header)
 	}
-	if !strings.Contains(out.String(), "Seeded Tessera") {
+	if !strings.Contains(out.String(), "Seeded Tessera") || !strings.Contains(out.String(), "deployment-readiness demo") {
 		t.Errorf("missing seed output: %q", out.String())
 	}
 	cancel()
@@ -103,5 +104,27 @@ func TestDBPath(t *testing.T) {
 		if got := dbPath(in); got != want {
 			t.Errorf("dbPath(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestReadinessLint(t *testing.T) {
+	var out, errb bytes.Buffer
+	if err := run(context.Background(), []string{"readiness", "lint"}, &out, &errb); err != nil {
+		t.Fatalf("lint: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "templates OK") || !strings.Contains(out.String(), "ad ") {
+		t.Errorf("output: %s", out.String())
+	}
+	dir := t.TempDir()
+	bad := filepath.Join(dir, "base.yaml")
+	if err := os.WriteFile(bad, []byte("template: base\nversion: x\ndisplay_name: B\nconnector_types: []\nitems: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := run(context.Background(), []string{"readiness", "lint", "-dir", dir}, &out, &errb); err == nil {
+		t.Errorf("bad template accepted: %s", out.String())
+	}
+	if err := run(context.Background(), []string{"readiness"}, &out, &errb); err == nil {
+		t.Error("missing subcommand accepted")
 	}
 }

@@ -1,0 +1,313 @@
+# Generic LDAP readiness template: OpenLDAP and 389-DS (design §3.8).
+template: ldap
+version: 1.0.0
+extends: base@1
+display_name: Generic LDAP (OpenLDAP, 389-DS)
+connector_types: [ldap]
+role: account_source
+default_correlation_key: entryUUID
+default_hr_id_attribute: employeeNumber
+required_attributes:
+  user: [entryUUID, uid, cn, mail, createTimestamp, modifyTimestamp]
+  group: [entryUUID, cn, member]
+recommended_attributes:
+  user: [employeeNumber]
+items:
+  - id: ldap.svc.readonly
+    title: Dedicated bind DN; not the rootDN or cn=Directory Manager
+    category: access
+    level: required
+    why: "The root DN bypasses all access control."
+    verify:
+      - kind: live
+        check: bind_identity
+    remediation:
+      hint: "Create a service entry with read ACIs (389-DS) or olcAccess rules (OpenLDAP)."
+    depends_on: [ldap.bind]
+    config_fields: [host, credential]
+
+  - id: ldap.svc.no_write
+    title: No write access on in-scope entries
+    category: access
+    level: required
+    why: "Proves the bind DN is read-only without writing."
+    verify:
+      - kind: live
+        check: effective_rights
+    remediation:
+      hint: "Restrict ACIs to read, search and compare. On OpenLDAP, attest instead (no Get Effective Rights control)."
+    depends_on: [ldap.svc.readonly]
+    config_fields: [host, credential, base_dns, write_mode, write_scope]
+
+  - id: ldap.svc.ppolicy
+    title: Bind DN exempt from password expiry and lockout, or rotation scheduled
+    category: access
+    level: recommended
+    why: "A password-policy lockout of the service account stops every sync."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Use a dedicated password-policy subentry."
+    config_fields: [credential]
+
+  - id: ldap.tls.ldaps
+    title: LDAPS or StartTLS
+    category: transport
+    level: required
+    why: "Clear-text bind sends the password in clear text."
+    verify:
+      - kind: live
+        check: tls_handshake
+    remediation:
+      hint: "Enable TLS on the server."
+    config_fields: [host, port]
+
+  - id: ldap.tls.chain
+    title: Certificate validates, hostname matches, valid more than 30 days
+    category: transport
+    level: required
+    why: "Prevents server impersonation."
+    verify:
+      - kind: live
+        check: tls_chain
+        params: { min_days_valid: 30 }
+    remediation:
+      hint: "Upload the issuing CA."
+    depends_on: [ldap.tls.ldaps]
+    config_fields: [host, port]
+
+  - id: ldap.tls.version
+    title: TLS 1.2 or later
+    category: transport
+    level: recommended
+    why: "Older protocol versions are deprecated."
+    verify:
+      - kind: live
+        check: tls_handshake
+        params: { min_version: "1.2" }
+    remediation:
+      hint: "Set the minimum protocol on the server."
+    depends_on: [ldap.tls.ldaps]
+    config_fields: [host, port]
+
+  - id: ldap.bind
+    title: Bind succeeds
+    category: access
+    level: required
+    why: "Baseline connectivity."
+    verify:
+      - kind: live
+        check: bind
+    remediation:
+      hint: "Check the bind DN and password."
+    depends_on: [ldap.tls.chain]
+    config_fields: [host, port, credential]
+
+  - id: ldap.replica
+    title: Reads go to a consumer replica, not the provider
+    category: topology
+    level: optional
+    why: "Spares the write master."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Point the connection at a read replica."
+    config_fields: [host]
+
+  - id: ldap.scope.base_dns
+    title: Base DNs exist and are readable
+    category: scope
+    level: required
+    why: "Typos return nothing rather than an error."
+    verify:
+      - kind: live
+        check: dn_exists
+    remediation:
+      hint: "Use the DN browser."
+    depends_on: [ldap.bind]
+    config_fields: [base_dns]
+
+  - id: ldap.scope.filter
+    title: Filters parse and select people, not service or host entries, unless intended
+    category: scope
+    level: required
+    why: "Over- or under-inclusive populations."
+    verify:
+      - kind: live
+        check: filter_parse
+      - kind: live
+        check: sample_search
+    remediation:
+      hint: "Use the template filter for the schema."
+    depends_on: [ldap.scope.base_dns]
+    config_fields: [base_dns, user_filter, group_filter]
+
+  - id: ldap.scope.read_perms
+    title: Read permission per object class and the required attributes returned
+    category: scope
+    level: required
+    why: "Partial ACLs return entries without attributes."
+    verify:
+      - kind: live
+        check: read_per_class
+        params: { classes: [inetOrgPerson, posixAccount, groupOfNames, groupOfUniqueNames, posixGroup] }
+    remediation:
+      hint: "Extend the ACIs."
+    depends_on: [ldap.scope.base_dns]
+    config_fields: [base_dns, credential]
+
+  - id: ldap.scope.limits
+    title: Paged results supported and the bind DN's limits exceed a page
+    category: scope
+    level: required
+    why: "Size limits truncate results; some clients treat that as success."
+    verify:
+      - kind: live
+        check: paging
+        params: { page_limit: 500 }
+    remediation:
+      hint: "Raise limits for the bind DN only (olcLimits or per-entry nsSizeLimit)."
+    depends_on: [ldap.scope.base_dns]
+    config_fields: [base_dns]
+
+  - id: ldap.key.entryuuid
+    title: entryUUID (RFC 4530) or 389-DS nsUniqueId as key; not DN, uid or mail
+    category: identity_keys
+    level: required
+    why: "DNs change on rename and move."
+    verify:
+      - kind: live
+        check: attr_returned
+        params: { attr: entryUUID }
+      - kind: data
+        check: key_unique
+        params: { attr: entryUUID }
+    remediation:
+      hint: "Select the key in the Mapping step; entryUUID is operational and requested explicitly."
+    depends_on: [base.correlation.key]
+    config_fields: [correlation_key]
+
+  - id: ldap.key.hr_id
+    title: employeeNumber (or the site's HR id attribute) mapped
+    category: identity_keys
+    level: recommended
+    why: "Tier-1 correlation needs it."
+    verify:
+      - kind: data
+        check: fill_rate
+        params: { attr: employeeNumber, min: 0.95 }
+    remediation:
+      hint: "Map the HR id attribute."
+    depends_on: [ldap.scope.read_perms]
+    config_fields: [hr_id_attribute]
+
+  - id: ldap.status.disabled
+    title: Disabled expression configured (ppolicy pwdAccountLockedTime, nsAccountLock, shadowExpire or site attribute)
+    category: account_status
+    level: required
+    why: "LDAP has no standard disabled flag; without an expression every account looks active."
+    verify:
+      - kind: attestation
+      - kind: data
+        check: disabled_expression
+    remediation:
+      hint: "Choose the site's convention."
+    depends_on: [ldap.scope.read_perms]
+
+  - id: ldap.status.expiry
+    title: Expiry mapped (shadowExpire in days since 1970; ppolicy pwdEndTime)
+    category: account_status
+    level: recommended
+    why: "Expired accounts would be treated as active."
+    verify:
+      - kind: data
+        check: expiry_parsed
+        params: { attr: shadowExpire }
+    remediation:
+      hint: "Map the expiry attribute."
+    depends_on: [ldap.status.disabled]
+
+  - id: ldap.status.lastlogin
+    title: Last-login source known (lastbind overlay, account policy, or the IdP)
+    category: account_status
+    level: recommended
+    why: "Staleness is otherwise impossible to compute."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Enable the lastbind overlay or rely on the IdP connection."
+
+  - id: ldap.groups.types
+    title: Group classes configured (groupOfNames, groupOfUniqueNames, posixGroup)
+    category: groups
+    level: required
+    why: "Mixing the three classes silently drops members."
+    verify:
+      - kind: data
+        check: member_resolution
+        params: { max_unresolved: 0.01 }
+    remediation:
+      hint: "Select every group class in use."
+    depends_on: [ldap.scope.read_perms]
+
+  - id: ldap.groups.nested
+    title: Nested groups resolved
+    category: groups
+    level: required
+    why: "Effective membership (D2 M3)."
+    verify:
+      - kind: data
+        check: nesting_resolved
+    remediation:
+      hint: "Automatic."
+    depends_on: [ldap.groups.types]
+
+  - id: ldap.groups.memberof
+    title: If memberOf is used, sampled consistency with member at least 99.9%
+    category: groups
+    level: optional
+    why: "memberOf goes stale when the overlay was added after the data."
+    verify:
+      - kind: data
+        check: memberof_consistency
+        params: { min: 0.999 }
+    remediation:
+      hint: "Run the fix-up task, or let Tessera use member."
+    depends_on: [ldap.groups.types]
+
+  - id: ldap.sync.incremental
+    title: Incremental through syncrepl, accesslog or retro changelog; otherwise modifyTimestamp polling
+    category: change_tracking
+    level: required
+    why: "Full syncs only, on large directories, mean stale data."
+    verify:
+      - kind: live
+        check: incremental_capable
+    remediation:
+      hint: "Enable syncprov or the retro changelog for the bind DN."
+    depends_on: [ldap.bind]
+    config_fields: [host]
+
+  - id: ldap.sync.deletes
+    title: Deletes detected (syncrepl delete phase or full-sync diff with failsafe)
+    category: change_tracking
+    level: required
+    why: "modifyTimestamp polling never sees deletions."
+    verify:
+      - kind: data
+        check: delete_detection_mode
+    remediation:
+      hint: "Schedule a full diff at least weekly."
+    depends_on: [ldap.sync.incremental]
+
+  - id: ldap.schema.custom
+    title: Custom schema attributes discovered and mapped where needed
+    category: data_quality
+    level: optional
+    why: "Site-specific HR ids and status flags live in custom attributes."
+    verify:
+      - kind: live
+        check: schema_read
+    remediation:
+      hint: "Map them in the Mapping step."
+    depends_on: [ldap.bind]

@@ -404,7 +404,7 @@ func (s *Server) summary(_ http.ResponseWriter, r *http.Request, _ *params) (any
 	if totalEff > 0 {
 		unusedPct = ojson.Float(timeutil.Round(100*float64(totalUnused)/float64(totalEff), 1))
 	}
-	return ojson.Object{
+	out := ojson.Object{
 		{Key: "identities", Value: ojson.Object{{Key: "human", Value: byType["human"]}, {Key: "service", Value: byType["service"]},
 			{Key: "ai_agent", Value: byType["ai_agent"]}, {Key: "terminated", Value: terminated}}},
 		{Key: "accounts", Value: n["accounts"]},
@@ -424,7 +424,17 @@ func (s *Server) summary(_ http.ResponseWriter, r *http.Request, _ *params) (any
 		{Key: "hris_pending", Value: n["hris"]},
 		{Key: "top_risky", Value: topOut},
 		{Key: "usage_trend", Value: trend},
-	}, nil
+	}
+	// The deployment-readiness block is opt-in so the recorded response
+	// (and every parity fixture) is unchanged.
+	if r.URL.Query().Get("include") == "readiness" {
+		rd, err := s.readinessSummary(r.Context(), a.now)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, ojson.KV{Key: "readiness", Value: rd})
+	}
+	return out, nil
 }
 
 // ---------------------------------------------------------------- identities

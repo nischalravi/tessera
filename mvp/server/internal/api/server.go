@@ -20,6 +20,8 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
+	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
+	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
@@ -48,6 +50,14 @@ type Config struct {
 	AllowedOrigins []string
 	MaxBodyBytes   int64         // defaults to DefaultMaxBodyBytes
 	HandlerTimeout time.Duration // defaults to DefaultHandlerTimeout; <0 disables
+	// Readiness is the deployment-readiness service (defaults to the
+	// embedded templates and Env).
+	Readiness *readiness.Service
+	// Env is TESSERA_ENV ("dev" allows activating non-demo connector types).
+	Env string
+	// ReadinessScenario selects the simulated validation scenario
+	// (TESSERA_READINESS_SCENARIO; default "gaps").
+	ReadinessScenario string
 }
 
 // Server serves the API.
@@ -57,6 +67,8 @@ type Server struct {
 	clock  timeutil.Clock
 	log    *slog.Logger
 	routes []*route
+
+	readiness *readiness.Service
 }
 
 // New builds a server.
@@ -76,8 +88,17 @@ func New(cfg Config) *Server {
 	if cfg.HandlerTimeout == 0 {
 		cfg.HandlerTimeout = DefaultHandlerTimeout
 	}
-	s := &Server{cfg: cfg, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger}
+	if cfg.Readiness == nil {
+		reg, err := template.Default()
+		if err != nil {
+			panic(err) // the embedded templates are linted by TestTemplates_Lint
+		}
+		cfg.Readiness = readiness.NewService(reg, cfg.Env)
+		cfg.Readiness.Runner.Scenario = cfg.ReadinessScenario
+	}
+	s := &Server{cfg: cfg, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness}
 	s.registerRoutes()
+	s.registerReadinessRoutes()
 	return s
 }
 
@@ -144,6 +165,10 @@ const (
 	read
 	swept
 	write
+	// phased routes (readiness validation and dry runs) commit in several
+	// transactions of the request's tenant: the handler opens them itself
+	// through p.scope (readiness.Scope), never through store.TxFrom.
+	phased
 )
 
 type route struct {
@@ -172,7 +197,7 @@ type RouteInfo struct {
 func (s *Server) Routes() []RouteInfo {
 	out := make([]RouteInfo, len(s.routes))
 	for i, rt := range s.routes {
-		out[i] = RouteInfo{rt.method, rt.pattern, rt.tenant != noTenant, rt.tenant == write}
+		out[i] = RouteInfo{rt.method, rt.pattern, rt.tenant != noTenant, rt.tenant == write || rt.tenant == phased}
 	}
 	return out
 }
@@ -187,6 +212,14 @@ func (s *Server) serve(rt *route, w http.ResponseWriter, r *http.Request, p *par
 		return rt.h(w, r, p)
 	}
 	ctx, t := r.Context(), s.cfg.Tenant
+	if rt.tenant == phased {
+		if t.IsZero() {
+			s.store.RecordContextMissing(ctx, r.Method+" "+r.URL.Path)
+			return nil, store.ErrNoTenant
+		}
+		p.scope = readiness.Scope{DB: s.store, Tenant: t}
+		return rt.h(w, r, p)
+	}
 	if rt.tenant == swept && !t.IsZero() {
 		if err := s.sweepTenant(ctx, t); err != nil {
 			return nil, err
@@ -291,6 +324,10 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 	if out == nil {
 		return // handler wrote the response itself
 	}
+	if sb, ok := out.(statusBody); ok {
+		writeJSON(w, sb.status, sb.body)
+		return
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -307,6 +344,13 @@ func (e *httpError) Error() string { return e.msg }
 func errStatus(status int, msg string) error { return &httpError{status, msg} }
 
 func detail(msg string) ojson.Object { return ojson.Object{{Key: "detail", Value: msg}} }
+
+// statusBody is a response body sent with a status other than 200. It is
+// written after the request's tenant transaction commits.
+type statusBody struct {
+	status int
+	body   any
+}
 
 // rawJSON is a pre-encoded JSON response body.
 type rawJSON []byte
@@ -330,7 +374,10 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var he *httpError
 	var ve *validationError
+	var re *readiness.Error
 	switch {
+	case errors.As(err, &re):
+		writeJSON(w, re.Status, readinessErrorBody(re))
 	case errors.As(err, &he):
 		writeJSON(w, he.status, detail(he.msg))
 	case errors.As(err, &ve):
@@ -431,7 +478,7 @@ func (s *Server) cors(next http.Handler) http.Handler {
 			}
 			h := w.Header()
 			h.Set("Access-Control-Allow-Origin", origin)
-			h.Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			if req := r.Header.Get("Access-Control-Request-Headers"); req != "" {
 				h.Set("Access-Control-Allow-Headers", "Content-Type")
 			}

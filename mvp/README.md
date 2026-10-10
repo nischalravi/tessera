@@ -105,6 +105,23 @@ Design notes:
   would map CloudTrail, Okta System Log, GitHub audit log and Snowflake `ACCESS_HISTORY` events
   onto these.
 
+### Deployment readiness
+
+Every customer system can be a governed **connection** with a pinned readiness checklist
+(`server/internal/readiness/templates/*.yaml`; `tessera readiness lint` checks them). A revision
+moves draft → ready to validate → validated → dry run reconciled → active, and the server
+refuses each step (409 with the blocking items) until its gate holds: Required attestations,
+read-only live checks (simulated for the demo connectors, labelled Simulated, and never enough
+for a real connector type), and a dry run that stages a snapshot into `stg_*` tables and
+reconciles it against the HR source. Findings RF-01 to RF-12 (orphans, leavers still enabled,
+unexpected privileged members, unowned service accounts…) feed a published readiness score and
+a ranked needs-attention list on Insights → Deployment health. `tessera seed` also seeds an
+Okta (demo) connection for the `larkspur` tenant only (`TESSERA_READINESS_DEMO=off` skips it;
+`globex` starts with no connections). Connections, checklists, runs, findings and scores are
+tenant-scoped like every other table; Admin → Connections → New
+connection → Active Directory (demo) walks the rest. Design: `docs/design/deployment-readiness.md`.
+The routes are documented at `/api/readiness/openapi.json`.
+
 ### Main API endpoints
 
 `GET /api/summary` · `GET /api/identities[?type=&q=]` · `GET /api/identities/{id}` · `GET /api/accounts[?system=]` ·
@@ -137,13 +154,13 @@ the right. Arrow keys move between items.
 | (top) | **Home**, **Inbox** (count) |
 | **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts, Roles (Preview), Organizations (Preview) |
 | **Access** | Request access, My access (with *My requests*), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
-| **Protection** | Policies & SoD (violations, policies, what-if simulation), Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health as a Preview) |
-| **Settings** | Connections, Admin |
+| **Protection** | Policies & SoD (violations, policies, what-if simulation), Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
+| **Settings** | Connections (governed connections and the setup wizard), Admin |
 
 **Home.** For the admin & security persona: the tenant name and a sync line, then tabs
 (Overview, Monitoring, Deployment health, Recommendations). Overview has the KPI cards
-(identities, violations, unused permissions, readiness) and a Recommendations card with Review
-buttons next to Basic information. The employee and manager personas keep their own Home
+(identities, violations, unused permissions, deployment readiness), the top three deployment
+"Needs attention" entries with Fix links, and a Recommendations card next to Basic information. The employee and manager personas keep their own Home
 (what is waiting on you, your access, team approvals, review progress).
 
 **List pages.** Every Identity list, Access reviews and Policies share one pattern: breadcrumb,

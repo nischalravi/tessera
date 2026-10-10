@@ -133,6 +133,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if !strings.Contains(rt.Pattern, "{") {
 			continue
 		}
+		if _, ok := readinessRouteCases[rt.Method+" "+rt.Pattern]; ok {
+			continue // TestIsolation_ReadinessRouteCrossTenant
+		}
 		if _, ok := routeParamCases[rt.Method+" "+rt.Pattern]; !ok {
 			t.Errorf("route %s %s has path parameters but no cross-tenant case", rt.Method, rt.Pattern)
 		}
@@ -201,6 +204,9 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 			continue
 		}
 		path := rt.Pattern
+		if rp, ok := readinessGetPaths(f.B.Refs)[path]; ok && strings.Contains(path, "{") {
+			path = rp // tenant B's own readiness ids
+		}
 		if strings.Contains(path, "{") {
 			v, ok := values[path]
 			if !ok {

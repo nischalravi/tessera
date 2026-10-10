@@ -1,0 +1,175 @@
+# Generic SCIM 2.0 application, read by Tessera as a SCIM client (design §3.13).
+template: scim_app
+version: 1.0.0
+extends: base@1
+display_name: SCIM 2.0 application
+connector_types: [scim_app]
+role: account_source
+default_correlation_key: id
+default_hr_id_attribute: employeeNumber
+required_attributes:
+  user: [id, userName, active, meta.created]
+  group: [id, displayName, members]
+recommended_attributes:
+  user: [employeeNumber, emails]
+items:
+  - id: scim.endpoint
+    title: Base URL is HTTPS and reachable through safehttp
+    category: transport
+    level: required
+    why: "Prevents SSRF and clear-text transport."
+    verify:
+      - kind: live
+        check: endpoint_reachable
+    remediation:
+      hint: "Use the application's documented SCIM URL."
+    config_fields: [base_url]
+
+  - id: scim.auth
+    title: OAuth client credentials or a long random bearer token with a known expiry
+    category: access
+    level: required
+    why: "SCIM tokens are often full admin."
+    verify:
+      - kind: live
+        check: auth_ok
+    remediation:
+      hint: "Prefer OAuth and set an expiry."
+    depends_on: [scim.endpoint]
+    config_fields: [base_url, credential]
+
+  - id: scim.discovery
+    title: ServiceProviderConfig, Schemas and ResourceTypes readable; capabilities recorded
+    category: scope
+    level: required
+    why: "Many servers deviate from the RFCs; Tessera adapts to declared capabilities."
+    verify:
+      - kind: live
+        check: scim_discovery
+    remediation:
+      hint: "Ask the vendor if discovery is missing."
+    depends_on: [scim.auth]
+    config_fields: [base_url]
+
+  - id: scim.paging
+    title: Paging works and totalResults is consistent with pages
+    category: scope
+    level: required
+    why: "Broken paging silently truncates."
+    verify:
+      - kind: live
+        check: paging
+    remediation:
+      hint: "Lower the page size."
+    depends_on: [scim.discovery]
+    config_fields: [base_url]
+
+  - id: scim.key.id
+    title: SCIM id as key; externalId only if Tessera set it; not userName
+    category: identity_keys
+    level: required
+    why: "userName is mutable."
+    verify:
+      - kind: data
+        check: key_unique
+        params: { attr: id }
+    remediation:
+      hint: "Select id as the key."
+    depends_on: [base.correlation.key]
+    config_fields: [correlation_key]
+
+  - id: scim.key.correlate
+    title: userName, primary email or enterprise employeeNumber mapped for correlation
+    category: identity_keys
+    level: recommended
+    why: "Needed to correlate accounts to HR."
+    verify:
+      - kind: data
+        check: fill_rate
+        params: { attr: employeeNumber, min: 0.95 }
+    remediation:
+      hint: "Map the field."
+    config_fields: [hr_id_attribute]
+
+  - id: scim.status
+    title: active mapped; the application's deletion semantics recorded
+    category: account_status
+    level: required
+    why: "Hard deletes look like disappearances; soft deletes look like active accounts."
+    verify:
+      - kind: attestation
+      - kind: data
+        check: status_mapped
+    remediation:
+      hint: "Record the deletion semantics per application."
+
+  - id: scim.groups.members
+    title: Group membership complete; groups fetched individually with attributes=members
+    category: groups
+    level: required
+    why: "Some servers omit or cap members on list calls, which hides access."
+    verify:
+      - kind: live
+        check: members_complete
+    remediation:
+      hint: "Automatic."
+    depends_on: [scim.paging]
+
+  - id: scim.groups.nested
+    title: Nested groups (members of type Group) handled
+    category: groups
+    level: recommended
+    why: "Effective membership."
+    verify:
+      - kind: data
+        check: nesting_resolved
+    remediation:
+      hint: "Automatic."
+    depends_on: [scim.groups.members]
+
+  - id: scim.entitlements
+    title: Roles and entitlements captured and admin roles tagged privileged
+    category: groups
+    level: recommended
+    why: "Application admins are privileged access."
+    verify:
+      - kind: data
+        check: privileged_unexpected
+    remediation:
+      hint: "Map the extension that carries roles."
+    config_fields: [privileged_expected]
+
+  - id: scim.local_accounts
+    title: Accounts not provisioned by the IdP (local accounts) identified
+    category: identity_keys
+    level: recommended
+    why: "Local accounts bypass SSO and leaver processing."
+    verify:
+      - kind: data
+        check: local_accounts
+    remediation:
+      hint: "Compare with the IdP's application assignments."
+    depends_on: [scim.key.correlate]
+
+  - id: scim.lastlogin
+    title: Last-login source known (vendor extension, application logs, or the IdP)
+    category: account_status
+    level: optional
+    why: "Needed for staleness."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Choose a last-login source."
+
+  - id: scim.ratelimit
+    title: 429 with Retry-After honoured; no throttling during validation
+    category: change_tracking
+    level: recommended
+    why: "Throttling yields partial snapshots."
+    verify:
+      - kind: live
+        check: rate_headroom
+        params: { min_remaining: 0.5 }
+    remediation:
+      hint: "Lower concurrency."
+    depends_on: [scim.auth]
