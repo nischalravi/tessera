@@ -178,9 +178,9 @@ func (e *oidcEnv) lastFailure(tn tenancy.ID) string {
 
 func (e *oidcEnv) refused(rec *httptest.ResponseRecorder, tn tenancy.ID, reason string) {
 	e.t.Helper()
-	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "Sign-in failed") ||
-		cookieNamed(rec, auth.CookieName) != nil {
-		e.t.Fatalf("want the generic error page without a session: %d %v %s", rec.Code, rec.Header(), rec.Body.String())
+	if loc := rec.Header().Get("Location"); rec.Code != http.StatusFound || !strings.HasPrefix(loc, "/login?error=login_failed&request_id=") ||
+		cookieNamed(rec, auth.CookieName) != nil || strings.Contains(loc, reason) {
+		e.t.Fatalf("want a redirect to the generic sign-in error without a session: %d %v %s", rec.Code, rec.Header(), rec.Body.String())
 	}
 	if got := e.lastFailure(tn); got != reason {
 		e.t.Errorf("auth.login.failure reason %q, want %q", got, reason)
@@ -369,8 +369,9 @@ func TestOIDCLogin_TransactionChecks(t *testing.T) {
 		"/api/auth/login?tenant=larkspur&return_to=/%5Cevil":   {seed.LarkspurID, "invalid_return_to"},
 	} {
 		rec := e.get(target)
-		if rec.Code != http.StatusBadRequest || cookieNamed(rec, LoginCookieName) != nil {
-			t.Errorf("%s: %d", target, rec.Code)
+		if rec.Code != http.StatusFound || !strings.HasPrefix(rec.Header().Get("Location"), "/login?error=") ||
+			cookieNamed(rec, LoginCookieName) != nil {
+			t.Errorf("%s: %d %s", target, rec.Code, rec.Header().Get("Location"))
 		}
 		if got := e.lastFailure(want.tn); got != want.reason {
 			t.Errorf("%s: reason %q, want %q", target, got, want.reason)
@@ -588,7 +589,7 @@ func TestOIDCLogin_Bootstrap(t *testing.T) {
 	}
 	// single use
 	rec = e.get(target)
-	if rec.Code != http.StatusBadRequest || e.lastFailure(seed.LarkspurID) != "bootstrap_code_used" {
+	if rec.Code != http.StatusFound || e.lastFailure(seed.LarkspurID) != "bootstrap_code_used" {
 		t.Errorf("second redemption: %d %s", rec.Code, e.lastFailure(seed.LarkspurID))
 	}
 	// expired, unknown, and another tenant's code at this tenant's URL
@@ -599,7 +600,7 @@ func TestOIDCLogin_Bootstrap(t *testing.T) {
 		"/t/larkspur/bootstrap?code=tbi_nope":                "bootstrap_code_unknown",
 		"/t/larkspur/bootstrap?code=" + url.QueryEscape(e.invite(seed.GlobexID, devConnID(t, e.db, seed.GlobexID), "gina@globex.example", time.Hour)): "bootstrap_code_unknown",
 	} {
-		if rec := e.get(target); rec.Code != http.StatusBadRequest || e.lastFailure(seed.LarkspurID) != reason {
+		if rec := e.get(target); rec.Code != http.StatusFound || e.lastFailure(seed.LarkspurID) != reason {
 			t.Errorf("%s: %d %s, want %s", target, rec.Code, e.lastFailure(seed.LarkspurID), reason)
 		}
 	}
@@ -655,4 +656,18 @@ func TestOIDCLogin_ReplacesPreviousSession(t *testing.T) {
 func query(u *url.URL) url.Values {
 	v, _ := url.ParseQuery(u.RawQuery)
 	return v
+}
+
+// devConnection returns the tenant's active dev_mock connection.
+func devConnection(tx *store.TenantTx) (*store.IdPConnection, error) {
+	cs, err := tx.IdPConnections()
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range cs {
+		if c.Profile == store.ProfileDevMock && c.Status == "active" {
+			return c, nil
+		}
+	}
+	return nil, store.ErrNotFound
 }

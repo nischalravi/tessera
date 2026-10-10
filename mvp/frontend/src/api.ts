@@ -471,40 +471,62 @@ export async function logout(): Promise<void> {
   }
 }
 
-/** Development sign-in (TESSERA_ENV=dev or test only; replaced by IdP sign-in in Phase 0 PR7). */
-export interface DevUser { tenant: string; tenant_name: string; subject: string; email: string | null; display_name: string; roles: string[] }
+/** An IdP connection a tenant's users sign in through (GET /api/auth/discover). */
+export interface LoginConnection { id: string; name: string; protocol: string; default: boolean }
 
 /**
- * The users dev sign-in offers for one tenant (by slug), or null when dev sign-in is not
- * available on this server. The API never lists other tenants' users.
+ * Home-realm discovery: the sign-in connections of the tenant with this slug (optionally only
+ * those whose verified domains match the email). An unknown tenant answers the same way with no
+ * connections, so the page cannot tell which tenants exist.
  */
-export async function devLoginUsers(tenant: string): Promise<{ users: DevUser[]; methods: string[] } | null> {
-  const res = await fetch(`/api/auth/dev-login?tenant=${encodeURIComponent(tenant)}`, { credentials: "same-origin" });
-  if (res.status === 404) return null;
+export async function discover(tenant: string, email?: string): Promise<LoginConnection[]> {
+  const q = new URLSearchParams({ tenant });
+  if (email) q.set("email", email);
+  const res = await fetch(`/api/auth/discover?${q}`, { credentials: "same-origin" });
+  if (res.status === 429) throw new ApiError("Too many sign-in attempts. Wait a moment and try again.", 429, null);
   if (!res.ok) throw new ApiError(`${res.status} ${res.statusText}`, res.status, null);
-  return res.json();
+  return ((await res.json()) as { connections: LoginConnection[] }).connections;
 }
 
-export async function devLogin(tenant: string, subject: string, method: string): Promise<void> {
-  // nothing of the previous session (its CSRF token, its cached data) survives a sign-in
-  resetSessionState();
-  const res = await fetch("/api/auth/dev-login", {
-    method: "POST",
-    credentials: "same-origin",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ tenant, subject, method }),
-  });
-  if (!res.ok) {
-    let j: any = null;
-    try {
-      j = await res.json();
-    } catch {
-      /* ignore */
-    }
-    throw new ApiError(j?.error === "login_failed" ? "Sign-in failed." : errorMessage(res.status, j), res.status, j);
-  }
-  resetSessionState();
+/** A same-site path to come back to after sign-in (never another origin, never /login). */
+export function safeReturnTo(path: string): string {
+  if (!path.startsWith("/") || path.startsWith("//") || /[\\\u0000-\u001f\u007f]/.test(path) || path.startsWith("/login")) return "/";
+  return path;
 }
+
+/**
+ * The URL that starts a sign-in through the IdP (the browser navigates there; the API answers
+ * with a redirect to the IdP and, afterwards, back to returnTo with the session cookie set).
+ */
+export function loginUrl(tenant: string, connection: string | null, returnTo: string): string {
+  const q = new URLSearchParams({ tenant, return_to: safeReturnTo(returnTo) });
+  if (connection) q.set("connection", connection);
+  return `/api/auth/login?${q}`;
+}
+
+/** Start a sign-in: forget the previous session's state, then leave for the IdP. */
+export function startLogin(tenant: string, connection: string | null, returnTo: string): void {
+  resetSessionState();
+  window.location.assign(loginUrl(tenant, connection, returnTo));
+}
+
+/** One of the signed-in user's sessions (GET /api/auth/sessions). */
+export interface MySession {
+  id: string;
+  kind: string;
+  status: string;
+  current: boolean;
+  created_at: string;
+  last_activity_at: string;
+  idle_expires_at: string;
+  absolute_expires_at: string;
+  revoked_at: string | null;
+  revoked_reason: string | null;
+  ip_first: string | null;
+}
+
+export const mySessions = () => api<MySession[]>("/auth/sessions");
+export const revokeSession = (id: string) => api<unknown>(`/auth/sessions/${encodeURIComponent(id)}`, undefined, "DELETE");
 
 export const hrisExecute = (eventId: number) => api(`/hris/events/${eventId}/execute`, {});
 

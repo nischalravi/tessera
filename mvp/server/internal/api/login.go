@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html/template"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -167,7 +167,9 @@ func (s *Server) authDiscover(_ http.ResponseWriter, r *http.Request, _ *params)
 // ---------------------------------------------------------------- starting a login
 
 // loginFailure audits a refused sign-in step in the tenant's chain (the
-// platform's when the tenant is unknown) and shows the generic error page.
+// platform's when the tenant is unknown) and sends the browser back to the
+// sign-in page with a generic error and the request id (§9.1: the reason is
+// in the audit event, never in the URL).
 func (s *Server) loginFailure(w http.ResponseWriter, r *http.Request, t tenancy.ID, reason string, extra ojson.Object) (any, error) {
 	if t.IsZero() {
 		t = tenancy.Platform
@@ -180,29 +182,21 @@ func (s *Server) loginFailure(w http.ResponseWriter, r *http.Request, t tenancy.
 	}); err != nil {
 		return nil, err
 	}
-	s.log.Info("sign-in refused", "reason", reason, "request_id", audit.RequestID(r.Context()))
+	rid := audit.RequestID(r.Context())
+	s.log.Info("sign-in refused", "reason", reason, "request_id", rid)
 	http.SetCookie(w, s.loginCookie("", -1))
-	writeLoginError(w, audit.RequestID(r.Context()))
+	w.Header().Set("Cache-Control", "no-store")
+	http.Redirect(w, r, LoginErrorURL(rid), http.StatusFound)
 	return nil, nil
 }
 
-var loginErrorPage = template.Must(template.New("e").Parse(`<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sign-in failed · Tessera</title>
-<style>body{font:16px/1.5 system-ui,sans-serif;margin:0;display:grid;place-items:center;min-height:100vh;background:#f5f6f8;color:#1b1f24}
-main{background:#fff;border:1px solid #d0d7de;border-radius:8px;padding:24px;max-width:480px;margin:16px}
-code{background:#eef1f4;padding:2px 4px;border-radius:4px}a{color:#0b5cad}</style></head>
-<body><main><h1 style="font-size:20px;margin-top:0">Sign-in failed</h1>
-<p>Tessera could not sign you in. Try again, or contact your administrator.</p>
-{{if .}}<p>Reference: <code>{{.}}</code></p>{{end}}
-<p><a href="/">Back to sign-in</a></p></main></body></html>
-`))
-
-func writeLoginError(w http.ResponseWriter, requestID string) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(http.StatusBadRequest)
-	_ = loginErrorPage.Execute(w, requestID)
+// LoginErrorURL is where a refused sign-in lands: the UI's sign-in page.
+func LoginErrorURL(requestID string) string {
+	v := url.Values{"error": {"login_failed"}}
+	if requestID != "" {
+		v.Set("request_id", requestID)
+	}
+	return "/login?" + v.Encode()
 }
 
 // rpConnection is the oidcrp view of a connection, with its client secret

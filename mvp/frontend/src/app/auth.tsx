@@ -1,7 +1,8 @@
 import { FormEvent, ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { DevUser, SIGNED_OUT, STEP_UP, SessionInfo, devLogin, devLoginUsers, getSession, logout } from "../api";
+import { LoginConnection, SIGNED_OUT, STEP_UP, SessionInfo, discover, getSession, logout, startLogin } from "../api";
 import { Button } from "../components/Button";
 import { Callout } from "../components/Feedback";
+import { store } from "./storage";
 
 /**
  * Who is signed in (design §17). The session lives in an HttpOnly cookie the API sets; this
@@ -33,8 +34,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<SessionInfo | null | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [stepUp, setStepUp] = useState<string | null>(null);
-  const [lastEmail, setLastEmail] = useState<string | null>(null);
-  const [lastTenant, setLastTenant] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -65,20 +64,26 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const value = useMemo<SessionCtx | null>(() => {
     if (!session) return null;
     const perms = new Set(session.permissions);
-    const end = async () => {
-      setLastEmail(session.user.email);
-      setLastTenant(session.tenant.slug);
+    const tenant = session.tenant.slug;
+    store.set(LAST_TENANT, tenant);
+    const signOut = async () => {
       await logout().catch(() => undefined);
       setSession(null);
     };
-    return { session, can: (p) => perms.has(p), signOut: end, reauthenticate: end };
+    // A fresh sign-in through the same tenant's IdP, back to this page.
+    const reauthenticate = async () => {
+      const here = window.location.pathname + window.location.search;
+      await logout().catch(() => undefined);
+      startLogin(tenant, null, here);
+    };
+    return { session, can: (p) => perms.has(p), signOut, reauthenticate };
   }, [session]);
 
   if (session === undefined) {
     return error ? <SignInFrame><Callout tone="bad">Tessera is unreachable: {error}</Callout></SignInFrame> : null;
   }
   if (!value) {
-    return <SignIn preferEmail={lastEmail} preferTenant={lastTenant} onSignedIn={async () => { setStepUp(null); await load(); }} />;
+    return <SignIn />;
   }
   return (
     <Ctx.Provider value={value}>
@@ -101,55 +106,43 @@ function SignInFrame({ children }: { children: ReactNode }) {
   );
 }
 
-const METHOD_LABELS: Record<string, string> = {
-  passkey: "Passkey (phishing-resistant)",
-  hardware_key: "Hardware security key (phishing-resistant)",
-  password_otp: "Password + OTP",
-  password: "Password only",
-};
+/** localStorage key of the last tenant signed in to (a per-browser convenience). */
+const LAST_TENANT = "lastTenant";
 
-/** The demo tenant the dev sign-in page starts with. */
-const DEMO_TENANT = "larkspur";
+/** The sign-in error the API sent the browser back with (/login?error=login_failed&request_id=…). */
+function loginError(): { requestId: string | null } | null {
+  const q = new URLSearchParams(window.location.search);
+  return q.get("error") ? { requestId: q.get("request_id") } : null;
+}
+
+/** Where to go after signing in: the page the user was on (never /login itself). */
+function returnTo(): string {
+  const { pathname, search } = window.location;
+  return pathname.startsWith("/login") ? "/" : pathname + search;
+}
 
 /**
- * The sign-in page. Until sign-in through the tenant's identity provider lands (Phase 0 PR6
- * and PR7), a development server (TESSERA_ENV=dev, or test with TESSERA_DEV_LOGIN on loopback)
- * offers dev sign-in: name the tenant, pick one of its seeded dev IdP users and how they
- * authenticate. Admin roles are active only after a phishing-resistant method (passkey or
- * hardware key).
+ * The sign-in page (design §17). Tessera never sees a password: the user names their
+ * organization (the tenant), picks its identity provider and signs in there. Admin roles are
+ * active only after a phishing-resistant sign-in (a passkey or security key at the IdP).
  */
-function SignIn({ onSignedIn, preferEmail, preferTenant }: { onSignedIn: () => Promise<void>; preferEmail: string | null; preferTenant: string | null }) {
-  const [tenant, setTenant] = useState(preferTenant ?? DEMO_TENANT);
-  const [shown, setShown] = useState(preferTenant ?? DEMO_TENANT);
-  const [dev, setDev] = useState<{ users: DevUser[]; methods: string[] } | null | undefined>(undefined);
-  const [choice, setChoice] = useState("");
-  const [method, setMethod] = useState("passkey");
+function SignIn() {
+  const [tenant, setTenant] = useState(() => store.get<string>(LAST_TENANT, ""));
+  const [connections, setConnections] = useState<LoginConnection[] | null>(null);
+  const [asked, setAsked] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const failed = useMemo(loginError, []);
 
-  useEffect(() => {
-    let alive = true;
-    devLoginUsers(shown)
-      .then((d) => {
-        if (!alive) return;
-        setDev(d);
-        setError(null);
-        const preferred = d?.users.find((u) => u.email === preferEmail) ?? d?.users[0];
-        setChoice(preferred ? preferred.subject : "");
-      })
-      .catch((e) => alive && setError(String(e.message ?? e)));
-    return () => {
-      alive = false;
-    };
-  }, [shown, preferEmail]);
-
-  const submit = async (e: FormEvent) => {
+  const find = async (e: FormEvent) => {
     e.preventDefault();
+    const slug = tenant.trim().toLowerCase();
+    if (!slug) return;
     setBusy(true);
     setError(null);
     try {
-      await devLogin(shown, choice, method);
-      await onSignedIn();
+      setConnections(await discover(slug));
+      setAsked(slug);
     } catch (err: any) {
       setError(String(err.message ?? err));
     } finally {
@@ -157,58 +150,46 @@ function SignIn({ onSignedIn, preferEmail, preferTenant }: { onSignedIn: () => P
     }
   };
 
-  if (dev === undefined && !error) return <SignInFrame><p className="faint">Loading…</p></SignInFrame>;
-  if (dev === null) {
-    return (
-      <SignInFrame>
-        <h1 style={{ fontSize: "var(--fs-xl)" }}>Sign in</h1>
-        <Callout tone="info">Sign-in through your organization's identity provider is not available on this server yet.</Callout>
-      </SignInFrame>
-    );
-  }
-  const users = dev?.users ?? [];
+  const go = (c: LoginConnection) => {
+    store.set(LAST_TENANT, asked);
+    startLogin(asked, c.id, returnTo());
+  };
+
   return (
     <SignInFrame>
       <h1 style={{ fontSize: "var(--fs-xl)" }}>Sign in to Tessera</h1>
-      <Callout tone="warn">
-        Development sign-in. This server runs with TESSERA_ENV=dev (or test, opted in) and signs you in as a user of its dev
-        identity provider. Production servers sign you in through your organization's identity provider.
-      </Callout>
-      <form className="stack" onSubmit={submit}>
+      {failed && (
+        <Callout tone="bad">
+          Sign-in did not complete. Try again, or ask your administrator
+          {failed.requestId ? <> and give them the reference <code>{failed.requestId}</code></> : null}.
+        </Callout>
+      )}
+      <form className="stack" onSubmit={find}>
         <label className="stack-sm" style={{ display: "block" }}>
-          <span className="small strong">Tenant</span>
-          <span className="row tight">
-            <input className="input" value={tenant} onChange={(e) => setTenant(e.target.value.trim())}
-              onBlur={() => setShown(tenant)} onKeyDown={(e) => { if (e.key === "Enter" && tenant !== shown) { e.preventDefault(); setShown(tenant); } }}
-              autoComplete="organization" spellCheck={false} style={{ flex: 1 }} required />
-            <Button type="button" variant="ghost" onClick={() => setShown(tenant)} disabled={!tenant || tenant === shown}>Show users</Button>
-          </span>
+          <span className="small strong">Organization</span>
+          <input className="input" value={tenant} onChange={(e) => { setTenant(e.target.value); setConnections(null); }}
+            placeholder="your-company" autoComplete="organization" spellCheck={false} autoCapitalize="none"
+            aria-describedby="tenant-help" style={{ width: "100%" }} required autoFocus />
+          <span id="tenant-help" className="faint small">The name your administrator gave you, for example larkspur.</span>
         </label>
-        <label className="stack-sm" style={{ display: "block" }}>
-          <span className="small strong">User</span>
-          <select className="input" value={choice} onChange={(e) => setChoice(e.target.value)} style={{ width: "100%" }} required disabled={users.length === 0}>
-            {users.length === 0 && <option value="">No dev sign-in users for this tenant</option>}
-            {users.map((u) => (
-              <option key={u.subject} value={u.subject}>
-                {u.display_name} · {u.email} · {u.roles.join(", ") || "no roles"}
-              </option>
-            ))}
-          </select>
-        </label>
-        <fieldset className="stack-sm" style={{ border: 0, padding: 0, margin: 0 }}>
-          <legend className="small strong">How they sign in</legend>
-          {(dev?.methods ?? []).map((m) => (
-            <label key={m} className="row tight small">
-              <input type="radio" name="method" value={m} checked={method === m} onChange={() => setMethod(m)} />
-              {METHOD_LABELS[m] ?? m}
-            </label>
-          ))}
-        </fieldset>
         {error && <Callout tone="bad">{error}</Callout>}
-        <div className="row">
-          <Button type="submit" variant="primary" disabled={busy || !choice || tenant !== shown}>{busy ? "Signing in…" : "Sign in"}</Button>
-        </div>
+        {connections === null && (
+          <div className="row">
+            <Button type="submit" variant="primary" disabled={busy || !tenant.trim()}>{busy ? "Looking up…" : "Continue"}</Button>
+          </div>
+        )}
       </form>
+      {connections !== null && connections.length === 0 && (
+        <Callout tone="info">There is no sign-in for that organization. Check the name, or ask your administrator.</Callout>
+      )}
+      {connections !== null && connections.length > 0 && (
+        <div className="stack-sm" role="group" aria-label="Sign in with">
+          {connections.map((c) => (
+            <Button key={c.id} variant={c.default ? "primary" : "ghost"} onClick={() => go(c)}>Sign in with {c.name}</Button>
+          ))}
+          <p className="faint small">You will sign in at your identity provider. Use a passkey or security key to activate admin roles.</p>
+        </div>
+      )}
     </SignInFrame>
   );
 }

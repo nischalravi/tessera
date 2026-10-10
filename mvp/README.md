@@ -33,10 +33,10 @@ Requirements: Go 1.27+ (the version in `server/go.mod`), Node 18+ (tested on 24)
 ```
 
 * UI: http://localhost:5173 (Vite dev server; it proxies `/api` to the backend via `TESSERA_API`).
-  Sign in with **dev sign-in** (see [Dev sign-in](#dev-sign-in)): pick a seeded user, for example
-  Alice (tenant admin) or Pat (policy admin), with a passkey.
+  Sign in to `larkspur` through the dev IdP (see [Signing in](#signing-in)), for example as Alice
+  (tenant admin) or Pat (policy admin) with a passkey.
 * API: http://127.0.0.1:8000. OpenAPI docs are at http://127.0.0.1:8000/docs
-* Dev IdP: http://127.0.0.1:8001 (see [Dev sign-in](#dev-sign-in))
+* Dev IdP: http://127.0.0.1:8001 (see [Signing in](#signing-in))
 
 Ctrl+C stops all three processes. You can change the ports with `API_PORT=… UI_PORT=… DEVIDP_PORT=… ./run.sh`
 (`DEVIDP=0` skips the dev IdP).
@@ -67,7 +67,7 @@ with SQLite through the pure-Go `modernc.org/sqlite` driver, so it needs no C to
 server/
   cmd/tessera/          main: `serve` (default), `seed` and `audit verify|checkpoint|export`; timeouts,
                         graceful shutdown, JIT sweeper, audit checkpointer
-  cmd/tessera-devidp/   the dev IdP binary (development and tests only; see Dev sign-in)
+  cmd/tessera-devidp/   the dev IdP binary (development and tests only; see Signing in)
   internal/
     connectors/         Connector interface + normalized record types, deterministic demo company
                         (pyrand.go reproduces CPython's Mersenne Twister so seed 7 gives the same
@@ -159,8 +159,7 @@ The routes are documented at `/api/readiness/openapi.json`.
 `POST /api/audit/verify {from_seq?, to_seq?}` · `GET /api/audit/export[?from_seq=&to_seq=]` (NDJSON) ·
 `GET /api/auth/session` · `POST /api/auth/logout` · `GET /api/auth/sessions` · `DELETE /api/auth/sessions/{session_id}` ·
 `GET /api/auth/discover?tenant=&email=` · `GET /api/auth/login?tenant=&connection=&return_to=` (302 to the IdP) ·
-`GET /api/auth/oidc/{connection_id}/callback` · `GET /t/{slug}/bootstrap?code=` (public) ·
-`GET|POST /api/auth/dev-login` (dev and test only)
+`GET /api/auth/oidc/{connection_id}/callback` · `GET /t/{slug}/bootstrap?code=` (public)
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
@@ -284,24 +283,26 @@ down to about 360px wide.
 **Bundle.** Every route is lazy-loaded. The main chunk is about 87 kB gzipped and the stylesheet
 about 8 kB; cytoscape (about 146 kB gzipped) only loads with the access graph.
 
-## Dev sign-in
+## Signing in
 
-Every API call needs a signed-in session (design `docs/design/phase-0-platform-security.md` §11, §12).
-Tessera signs users in through their company's identity provider (OIDC: see
-[Sign-in through the IdP](#sign-in-through-the-idp-oidc); SAML arrives in PR9); the UI switches to that
-flow in PR7. Until then a development server (`TESSERA_ENV=dev` or `test`,
-which `./run.sh` sets) offers **dev sign-in**:
+Every API call needs a signed-in session (design `docs/design/phase-0-platform-security.md` §11, §12),
+and Tessera never sees a password: users sign in through their company's identity provider (OIDC; SAML
+arrives in PR9).
 
-1. `./run.sh` and open http://localhost:5173. The sign-in page lists the users the seed created for the
-   dev IdP (below) and asks how they authenticate.
-2. Pick a user and a method. The page calls `POST /api/auth/dev-login {tenant, subject, method}`; the
-   API resolves the user through the tenant's `dev_mock` IdP connection and the (connection, subject)
-   link (never by email), builds the authentication context the dev IdP's Okta emulation would return
-   when Tessera asks for phishing resistance, and sets the session cookie.
-3. Roles follow from the method, as with a real IdP (design §12.2): admin roles (`tenant_admin`,
+1. `./run.sh` and open http://localhost:5173. The sign-in page asks for the organization (tenant):
+   `larkspur` (the demo company) or `globex`.
+2. **Continue** lists the tenant's sign-in connections (`GET /api/auth/discover`); **Sign in with Dev
+   IdP (OIDC)** leaves for the dev IdP (below).
+3. On the dev IdP's page pick a user, how they authenticate and which vendor to emulate (Okta is the
+   default). You come back to the page you started from, signed in.
+4. Roles follow from the method, as with a real IdP (design §12.2): admin roles (`tenant_admin`,
    `policy_admin`) are active only after a phishing-resistant method (**Passkey** or **Hardware security
    key**); other roles need MFA (**Password + OTP** or better); **Password only** activates no role.
-   The user menu shows inactive roles and offers to sign in again.
+   The user menu shows inactive roles and **Re-authenticate**, and **My sessions** (`/sessions`) lists
+   and signs out your sessions.
+
+A sign-in that fails comes back to `/login?error=login_failed&request_id=…`; the page shows the request
+id, and the reason is in the audit log (`auth.login.failure`), never in the URL.
 
 | User | Tenant | Role | What they can do |
 |---|---|---|---|
@@ -313,15 +314,9 @@ which `./run.sh` sets) offers **dev sign-in**:
 
 Approvals, review decisions, HRIS execution, applying a revoke and editing a connection's config or
 credential also need a phishing-resistant sign-in in the last 15 minutes (step-up, §10.2). Nobody can
-approve a JIT request they made, or one that grants access to their own identity (403 `self_approval`). Until the step-up flow lands (PR8) the API answers
-`401 step_up_required` and the UI asks you to sign in again.
-
-Dev sign-in is a development shim with guard rails (§18.4): the routes exist only with
-`TESSERA_ENV=dev`, or with `TESSERA_ENV=test` plus the opt-in `TESSERA_DEV_LOGIN=1`, and then answer
-loopback clients only; the picker (`GET /api/auth/dev-login?tenant=<slug>`) lists one tenant's users;
-the request needs a JSON body and an allowed `Origin`; every attempt is audited (`auth.login.success` /
-`auth.login.failure`); signing in again revokes the browser's previous session; and a production server
-refuses to start with `TESSERA_DEV_LOGIN` or while a `dev_mock` connection exists. PR7 removes it.
+approve a JIT request they made, or one that grants access to their own identity (403 `self_approval`).
+Until the step-up flow lands (PR8) the API answers `401 step_up_required` and the UI offers to sign in
+again.
 
 Unauthenticated traffic is rate-limited per client IP before it reaches the audit ledger: every
 `/api/auth/*` request (burst 30, then one per 2 s) and every request without a valid session (burst
@@ -350,9 +345,9 @@ URI to register at the IdP) consumes the transaction once, redeems the code with
 operator or auditor from IdP groups and never an admin role. Every refusal is audited as
 `auth.login.failure` with a reason and shows a generic page with the request id.
 
-With `./run.sh`, http://localhost:5173/api/auth/login?tenant=larkspur signs in through the dev IdP (the
+With `./run.sh`, the sign-in page (or http://localhost:5173/api/auth/login?tenant=larkspur) goes through the dev IdP (the
 seed seals its client secret, `DEVIDP_CLIENT_SECRET`, default `tessera-dev-secret`, into the `dev_mock`
-connections). The UI's sign-in page switches to this flow in PR7.
+connections). The UI's sign-in page uses this flow.
 
 **A new tenant** is created by an operator (design §15.3); every step is audited as the OS user:
 

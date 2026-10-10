@@ -23,9 +23,8 @@
 //	TESSERA_NOW           freeze the clock at an ISO-8601 time (tests and demos; refused in prod)
 //	TESSERA_ENV           dev (run.sh sets it), test or prod. Every API route except
 //	                      the public allow-list needs a signed-in session, and the
-//	                      tenant comes from that session. dev and test expose
-//	                      POST /api/auth/dev-login until the UI signs in through the IdP (PR7);
-//	                      prod refuses to start with any dev setting (§18.4).
+//	                      tenant comes from that session (sign-in through the tenant's
+//	                      IdP); prod refuses to start with any dev setting (§18.4).
 //	TESSERA_DEV_IDP_URL   the dev IdP's issuer: seeding (dev and test) creates a
 //	                      dev_mock connection to it with the bootstrap users
 //	DEVIDP_CLIENT_SECRET  the dev IdP client's secret, sealed into those connections
@@ -295,7 +294,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	srv := api.New(api.Config{Store: st, Clock: clock, Policies: loader, Logger: logger,
 		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound,
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
-		HSTS: cfg.IsProd(), Env: cfg.Env, DevLogin: cfg.DevLogin, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, AuditAnchor: anchorURL})
+		HSTS: cfg.IsProd(), Env: cfg.Env, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, AuditAnchor: anchorURL})
 	checkpointer := &audit.Checkpointer{DB: st, Sealer: sealer, Sink: sink, Clock: timeutil.System, Issuer: cfg.PublicURL,
 		Every: time.Duration(cfg.AuditCheckpointSeconds) * time.Second, EveryEvents: int64(cfg.AuditCheckpointEvents),
 		Log: logger}

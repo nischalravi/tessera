@@ -4,7 +4,8 @@
 import assert from "node:assert/strict";
 import { beforeEach, test } from "node:test";
 
-(globalThis as any).window = new EventTarget();
+let assigned: string | null = null;
+(globalThis as any).window = Object.assign(new EventTarget(), { location: { assign: (u: string) => { assigned = u; } } });
 
 type Call = { url: string; method: string; headers: Record<string, string> };
 let calls: Call[] = [];
@@ -23,7 +24,7 @@ const SESSION = { csrf_token: "csrf-alice", tenant: { slug: "larkspur" }, user: 
 
 beforeEach(async () => {
   calls = [];
-  answer = async (url) => (url === "/api/auth/session" ? SESSION : url.startsWith("/api/auth/dev-login") ? { status: "signed_in" } : { who: "alice" });
+  answer = async (url) => (url === "/api/auth/session" ? SESSION : { who: "alice" });
   await api.getSession();
   await api.api("/identities");
   assert.deepEqual(api.cached("/identities"), { who: "alice" });
@@ -39,12 +40,19 @@ test("sign-out clears the cache and the CSRF token", async () => {
   assert.equal(lastCsrf(), undefined);
 });
 
-test("sign-in clears the cache and the CSRF token", async () => {
-  await api.devLogin("larkspur", "00u-ivan-admin2", "passkey");
+test("sign-in clears the cache and the CSRF token, then leaves for the IdP", async () => {
+  api.startLogin("larkspur", "conn-1", "/access/jit?x=1");
+  assert.equal(assigned, "/api/auth/login?tenant=larkspur&return_to=%2Faccess%2Fjit%3Fx%3D1&connection=conn-1");
   assert.equal(api.cached("/identities"), undefined);
-  assert.equal(lastCsrf(), undefined); // dev-login sends no previous session's token
   await api.api("/jit/sweep", {});
   assert.equal(lastCsrf(), undefined);
+});
+
+test("return_to stays on this site and never loops to /login", () => {
+  for (const bad of ["https://evil.example/", "//evil.example", "/\\evil.example", "/a\nb", "/login?error=x", "jit"]) {
+    assert.equal(api.safeReturnTo(bad), "/", bad);
+  }
+  assert.equal(api.safeReturnTo("/governance/reviews?tab=open"), "/governance/reviews?tab=open");
 });
 
 test("a session that ended on the server clears the cache and the CSRF token", async () => {
