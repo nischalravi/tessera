@@ -308,14 +308,25 @@ which `./run.sh` sets) offers **dev sign-in**:
 | Vic (`00u-vic-viewer`) | larkspur | viewer | read (with MFA; his only authenticator in the dev IdP is a password) |
 | Gina (`00u-gina-globex`) | globex | tenant_admin | the second tenant |
 
-Approvals, review decisions, HRIS execution and applying a revoke also need a phishing-resistant
-sign-in in the last 15 minutes (step-up, §10.2). Until the step-up flow lands (PR8) the API answers
+Approvals, review decisions, HRIS execution, applying a revoke and editing a connection's config or
+credential also need a phishing-resistant sign-in in the last 15 minutes (step-up, §10.2). Nobody can
+approve a JIT request they made, or one that grants access to their own identity (403 `self_approval`). Until the step-up flow lands (PR8) the API answers
 `401 step_up_required` and the UI asks you to sign in again.
 
 Dev sign-in is a development shim with guard rails (§18.4): the routes exist only with
-`TESSERA_ENV=dev` or `test`, the request needs a JSON body and an allowed `Origin`, every attempt is
-audited (`auth.login.success` / `auth.login.failure`), and a production server refuses to start while a
-`dev_mock` connection exists. PR7 removes it. Other session routes: `GET /api/auth/session`,
+`TESSERA_ENV=dev`, or with `TESSERA_ENV=test` plus the opt-in `TESSERA_DEV_LOGIN=1`, and then answer
+loopback clients only; the picker (`GET /api/auth/dev-login?tenant=<slug>`) lists one tenant's users;
+the request needs a JSON body and an allowed `Origin`; every attempt is audited (`auth.login.success` /
+`auth.login.failure`); signing in again revokes the browser's previous session; and a production server
+refuses to start with `TESSERA_DEV_LOGIN` or while a `dev_mock` connection exists. PR7 removes it.
+
+Unauthenticated traffic is rate-limited per client IP before it reaches the audit ledger: every
+`/api/auth/*` request (burst 30, then one per 2 s) and every request without a valid session (burst
+120, then one per 500 ms) answer `429 rate_limited` with `Retry-After` beyond that. Behind a load
+balancer, list it in `TESSERA_TRUSTED_PROXIES` so the limit applies to the `X-Forwarded-For` client.
+
+A tenant's `require_phr_for_all` setting (`tenants.settings`, §18.3) makes every role need a
+phishing-resistant sign-in in that tenant. Other session routes: `GET /api/auth/session`,
 `POST /api/auth/logout`, `GET /api/auth/sessions`, `DELETE /api/auth/sessions/{session_id}`.
 
 ### Dev IdP
@@ -422,8 +433,9 @@ the dev IdP.
 
 ```bash
 cd server
-go vet ./... && go test -race ./...
+go vet ./... && TESSERA_ENV=test go test -race -timeout 25m ./...
 scripts/install-tools.sh && gosec ./... && govulncheck ./...
+cd ../frontend && npm run build && npm test   # npm test: node:test, no extra dependencies
 ```
 
 * **Unit tests** are table-driven Go tests per package: every test of the former pytest suite was

@@ -32,7 +32,10 @@ func (s *Server) registerReadinessRoutes() {
 	s.handle(G, "/api/connections", read, need(auth.PermConnectionsRead), s.rd(s.listConnections))
 	s.handle(P, "/api/connections", write, need(auth.PermConnectionsManage), s.rd(s.createConnection))
 	s.handle(G, "/api/connections/{id}", read, need(auth.PermConnectionsRead), s.rd(s.getConnection))
-	s.handle(http.MethodPatch, "/api/connections/{id}/config", write, need(auth.PermConnectionsManage), s.rd(s.patchConfig))
+	// Step-up like the credential: a config edit can point the revision's
+	// credential at another host (host, base_url, org_url, tenant_host, ...)
+	// or widen write_mode/write_scope.
+	s.handle(http.MethodPatch, "/api/connections/{id}/config", write, needStepUp(auth.PermConnectionsManage, auth.StepUpPolicy), s.rd(s.patchConfig))
 	s.handle(http.MethodPut, "/api/connections/{id}/credential", write, needStepUp(auth.PermConnectionsManage, auth.StepUpPolicy), s.rd(s.putCredential))
 	s.handle(G, "/api/connections/{id}/checklist", read, need(auth.PermConnectionsRead), s.rd(s.getChecklist))
 	s.handle(P, "/api/connections/{id}/checklist/{item}/attest", write, need(auth.PermConnectionsManage), s.rd(s.attestItem))
