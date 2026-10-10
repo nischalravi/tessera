@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -251,6 +252,9 @@ func (s *Server) parseAuthz(q url.Values, c *Client, redirectURI string) (pendin
 		f, err := ParseFault(q.Get("fault"))
 		if err != nil {
 			return p, "invalid_request", err.Error()
+		}
+		if slices.Contains(SAMLFaults(), f) {
+			return p, "invalid_request", fmt.Sprintf("fault %q is a SAML fault; it does not apply to OIDC", f)
 		}
 		p.fault = f
 	}
