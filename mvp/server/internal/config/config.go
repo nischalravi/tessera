@@ -144,7 +144,11 @@ func Load(getenv func(string) string) (*Config, error) {
 	c.CookieSecure = boolean("TESSERA_COOKIE_SECURE", true, true)
 	c.CORSOrigins = corsOrigins(getenv("TESSERA_CORS_ORIGINS"), getenv("UI_PORT"), prod)
 	c.OutboundAllowLoopback = boolean("TESSERA_OUTBOUND_ALLOW_LOOPBACK", true, false)
-	c.AuditAnchor = str("TESSERA_AUDIT_ANCHOR", "file://server/var/audit-anchors.jsonl", "")
+	// dev default: var/audit-anchors.jsonl next to the database (AnchorURL)
+	c.AuditAnchor = str("TESSERA_AUDIT_ANCHOR", "", "")
+	if a := c.AuditAnchor; a != "" && !strings.HasPrefix(a, "file://") && !strings.HasPrefix(a, "s3://") {
+		bad("TESSERA_AUDIT_ANCHOR: %q is not a file:// or s3:// URL", a)
+	}
 	c.AuditCheckpointSeconds = integer("TESSERA_AUDIT_CHECKPOINT_SECONDS", 300, 1, 86400)
 	c.AuditCheckpointEvents = integer("TESSERA_AUDIT_CHECKPOINT_EVENTS", 1000, 1, 1_000_000)
 	c.AccessTokenTTLSeconds = integer("TESSERA_AT_TTL_SECONDS", 600, 1, MaxAccessTokenTTLSeconds)
@@ -284,6 +288,25 @@ func (c *Config) kekSource() string {
 		return "env (REDACTED)"
 	}
 	return "dev auto-generated"
+}
+
+// AnchorURL is the audit anchor sink: TESSERA_AUDIT_ANCHOR, or in dev the
+// file var/audit-anchors.jsonl next to the database (server/var for the
+// default database). Load refuses a missing or file:// anchor in prod.
+func (c *Config) AnchorURL(dbPath string) string {
+	if c.AuditAnchor != "" || c.IsProd() {
+		return c.AuditAnchor
+	}
+	return DevAnchorURL(dbPath)
+}
+
+// DevAnchorURL is the dev anchor file for a database path.
+func DevAnchorURL(dbPath string) string {
+	p, err := filepath.Abs(filepath.Join(filepath.Dir(dbPath), "var", "audit-anchors.jsonl"))
+	if err != nil {
+		p = filepath.Join(filepath.Dir(dbPath), "var", "audit-anchors.jsonl")
+	}
+	return "file://" + filepath.ToSlash(p)
 }
 
 // DevKEKPath is where a dev KEK is generated: var/dev-kek next to the

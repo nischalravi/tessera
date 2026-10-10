@@ -273,9 +273,9 @@ var referenceColumns = map[string][]string{
 	// a chain head and a checkpoint name an event of their tenant by (seq, hash)
 	"audit_chain_heads": {"last_seq", "last_hash"},
 	"audit_checkpoints": {"seq", "head_hash"},
-	"grant_edges":     {"src", "dst"},
-	"access_requests": {"edge_id"},
-	"review_items":    {"edge_id", "edge_src", "edge_dst"},
+	"grant_edges":       {"src", "dst"},
+	"access_requests":   {"edge_id"},
+	"review_items":      {"edge_id", "edge_src", "edge_dst"},
 }
 
 // TestIsolation_EveryReferenceGuarded checks that every foreign key (other

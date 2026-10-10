@@ -322,6 +322,8 @@ type Checkpointer struct {
 	Every       time.Duration
 	EveryEvents int64
 	Log         *slog.Logger
+	// Only, when set, limits a run to the tenants it accepts (the CLI's -tenant).
+	Only func(store.Tenant) bool
 }
 
 // maxAnchorAttempts is when a failing anchor is reported as an alert.
@@ -347,7 +349,9 @@ func (c *Checkpointer) Run(ctx context.Context, force bool) (RunResult, error) {
 	if log == nil {
 		log = slog.Default()
 	}
-	ctx = WithSystemActor(ctx, "audit.checkpointer")
+	if _, ok := store.AuditContextFrom(ctx); !ok {
+		ctx = WithSystemActor(ctx, "audit.checkpointer")
+	}
 	var tenants []store.Tenant
 	if err := c.DB.InSystem(ctx, "audit checkpoints: list tenants", func(s *store.SystemTx) error {
 		var err error
@@ -369,7 +373,7 @@ func (c *Checkpointer) Run(ctx context.Context, force bool) (RunResult, error) {
 	}
 	var errs []error
 	for _, t := range tenants {
-		if t.Status != "active" {
+		if t.Status != "active" || (c.Only != nil && !c.Only(t)) {
 			continue
 		}
 		due, err := c.due(ctx, t.ID, clock(), force)

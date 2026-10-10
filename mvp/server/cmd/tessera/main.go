@@ -3,6 +3,7 @@
 //	tessera [serve] [-addr 127.0.0.1:8000] [-db tessera.db] [-reseed]
 //	tessera seed    [-db tessera.db]
 //	tessera readiness lint [-dir path]   lint the readiness checklist templates
+//	tessera audit verify|checkpoint|export   verify, checkpoint or export the audit ledger (see audit.go)
 //
 // Environment:
 //
@@ -43,6 +44,7 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/api"
+	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
@@ -58,6 +60,10 @@ import (
 func main() {
 	if err := run(context.Background(), os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, "tessera:", err)
+		var ee *exitError
+		if errors.As(err, &ee) {
+			os.Exit(ee.code)
+		}
 		os.Exit(1)
 	}
 }
@@ -76,6 +82,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if cmd == "readiness" {
 		return readinessCmd(args, stdout, stderr)
 	}
+	if cmd == "audit" {
+		return auditCmd(ctx, args, stdout, stderr)
+	}
 	fset := flag.NewFlagSet("tessera "+cmd, flag.ContinueOnError)
 	fset.SetOutput(stderr)
 	var o options
@@ -88,7 +97,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	if cmd != "seed" && cmd != "serve" {
-		return fmt.Errorf("unknown command %q (want serve, seed or readiness)", cmd)
+		return fmt.Errorf("unknown command %q (want serve, seed, readiness or audit)", cmd)
 	}
 	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	// Typed configuration and the production guard rails come first: an
@@ -195,6 +204,10 @@ const (
 	shutdownTimeout   = 10 * time.Second
 	sweepInterval     = 30 * time.Second
 	keysInterval      = 24 * time.Hour // keys.EnsureAll: rotation runs daily (design §10.6)
+	// checkpointInterval is how often the checkpointer looks for due tenants
+	// (each is checkpointed every TESSERA_AUDIT_CHECKPOINT_SECONDS or
+	// _EVENTS new events, design §13.6).
+	checkpointInterval = 30 * time.Second
 )
 
 func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Sealer, clock timeutil.Clock,
@@ -222,8 +235,17 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if scenario != "" && !slices.Contains(connectors.ScenarioNames(), scenario) {
 		return fmt.Errorf("TESSERA_READINESS_SCENARIO: unknown scenario %q (have %v)", scenario, connectors.ScenarioNames())
 	}
+	anchorURL := cfg.AnchorURL(o.db)
+	sink, err := audit.NewSink(anchorURL)
+	if err != nil {
+		return err
+	}
 	srv := api.New(api.Config{Store: st, Tenant: tenant, Clock: clock, Policies: loader, Logger: logger,
-		AllowedOrigins: cfg.CORSOrigins, Env: os.Getenv("TESSERA_ENV"), ReadinessScenario: scenario})
+		AllowedOrigins: cfg.CORSOrigins, Env: os.Getenv("TESSERA_ENV"), ReadinessScenario: scenario,
+		AuditAnchor: anchorURL})
+	checkpointer := &audit.Checkpointer{DB: st, Sealer: sealer, Sink: sink, Clock: timeutil.System, Issuer: cfg.PublicURL,
+		Every: time.Duration(cfg.AuditCheckpointSeconds) * time.Second, EveryEvents: int64(cfg.AuditCheckpointEvents),
+		Log: logger}
 	httpSrv := &http.Server{
 		Addr:              o.addr,
 		Handler:           srv.Handler(),
@@ -248,6 +270,11 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		defer close(keysDone)
 		runKeyRotation(ctx, st, sealer, clock, logger)
 	}()
+	ckptDone := make(chan struct{})
+	go func() {
+		defer close(ckptDone)
+		checkpointer.Loop(ctx, checkpointInterval)
+	}()
 	errc := make(chan error, 1)
 	go func() { errc <- httpSrv.Serve(ln) }()
 	logger.Info("tessera API listening", "addr", ln.Addr().String())
@@ -257,6 +284,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		stop()
 		<-sweepDone
 		<-keysDone
+		<-ckptDone
 		return err
 	case <-ctx.Done():
 	}
@@ -266,6 +294,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	err = httpSrv.Shutdown(shutdownCtx)
 	<-sweepDone
 	<-keysDone
+	<-ckptDone
 	if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 		return serveErr
 	}

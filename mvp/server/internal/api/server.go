@@ -133,6 +133,7 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
+	ctx = audit.WithSystemActor(ctx, "jit.sweeper") // jit.expire events name the job
 	for {
 		if _, err := jit.SweepAll(ctx, s.store, s.clock()); err != nil && ctx.Err() == nil {
 			s.log.Error("jit sweep failed", "err", err)

@@ -1,0 +1,146 @@
+{
+  "description": "Tessera audit ledger hash v1 test vector. Each record is the hashed body plus \"hash\". Remove \"hash\", canonicalize the rest with RFC 8785 (JCS), and hash = lower-hex SHA-256 of the bytes \"tessera-audit-v1\" 0x00 followed by the canonical form. prev_hash of seq 1 is the genesis hash.",
+  "algorithm": "sha256(\"tessera-audit-v1\" || 0x00 || RFC8785(record without \"hash\"))",
+  "genesis_algorithm": "sha256(\"tessera-audit-genesis-v1:\" || tenant_id)",
+  "tenant_id": "00000000-0000-4000-8000-00000000a0d1",
+  "genesis_hash": "ae350eecc8942efa538989d4efa91530d5ff00cef76218fd6520627f905626d0",
+  "events": [
+    {
+      "record": {
+        "v": 1,
+        "tenant_id": "00000000-0000-4000-8000-00000000a0d1",
+        "seq": 1,
+        "id": "6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b",
+        "occurred_at": "2026-10-08T09:30:00.000000Z",
+        "actor": {
+          "type": "system",
+          "id": "Wren Okafor",
+          "display": "Wren Okafor"
+        },
+        "session_id": null,
+        "client_id": null,
+        "authn": null,
+        "action": "jit.request",
+        "target": {
+          "type": null,
+          "id": null
+        },
+        "outcome": "success",
+        "request_id": null,
+        "http": null,
+        "ip": null,
+        "ua": null,
+        "policy_version": null,
+        "detail": {
+          "request_id": 4,
+          "group": "ProdAdmin",
+          "hours": "1.5"
+        },
+        "prev_hash": "ae350eecc8942efa538989d4efa91530d5ff00cef76218fd6520627f905626d0",
+        "hash": "a242fef749c8ced64da94a279a39636d207f9c7af49c68766fbf36c0c11679b5"
+      },
+      "canonical": "{\"action\":\"jit.request\",\"actor\":{\"display\":\"Wren Okafor\",\"id\":\"Wren Okafor\",\"type\":\"system\"},\"authn\":null,\"client_id\":null,\"detail\":{\"group\":\"ProdAdmin\",\"hours\":\"1.5\",\"request_id\":4},\"http\":null,\"id\":\"6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b\",\"ip\":null,\"occurred_at\":\"2026-10-08T09:30:00.000000Z\",\"outcome\":\"success\",\"policy_version\":null,\"prev_hash\":\"ae350eecc8942efa538989d4efa91530d5ff00cef76218fd6520627f905626d0\",\"request_id\":null,\"seq\":1,\"session_id\":null,\"target\":{\"id\":null,\"type\":null},\"tenant_id\":\"00000000-0000-4000-8000-00000000a0d1\",\"ua\":null,\"v\":1}",
+      "hash": "a242fef749c8ced64da94a279a39636d207f9c7af49c68766fbf36c0c11679b5"
+    },
+    {
+      "record": {
+        "v": 1,
+        "tenant_id": "00000000-0000-4000-8000-00000000a0d1",
+        "seq": 2,
+        "id": "7a2b3c4d-5e6f-4a01-9b2c-3d4e5f6a7b8c",
+        "occurred_at": "2026-10-08T09:30:00.001500Z",
+        "actor": {
+          "type": "anonymous",
+          "id": null,
+          "display": null
+        },
+        "session_id": null,
+        "client_id": null,
+        "authn": null,
+        "action": "http.request",
+        "target": {
+          "type": "identity",
+          "id": "42"
+        },
+        "outcome": "success",
+        "request_id": "0b6f9a1e-2c3d-4e5f-8a9b-0c1d2e3f4a5b",
+        "http": {
+          "method": "GET",
+          "route": "/api/identities/{identity_id}",
+          "path_params": {
+            "identity_id": "42"
+          },
+          "query_keys": [
+            "include",
+            "limit"
+          ],
+          "status": 200,
+          "latency_ms": 7
+        },
+        "ip": "127.0.0.1",
+        "ua": "a1b1c1d1e1f1a2b2c2d2e2f2a3b3c3d3e3f3a4b4c4d4e4f4a5b5c5d5e5f5a6b6",
+        "policy_version": null,
+        "detail": {
+          "anonymous_reason": "authentication_not_enabled"
+        },
+        "prev_hash": "a242fef749c8ced64da94a279a39636d207f9c7af49c68766fbf36c0c11679b5",
+        "hash": "ff9a0f4d43818d39a807372f709cb8faa1ef70a25c1920937a4a42636f488f3b"
+      },
+      "canonical": "{\"action\":\"http.request\",\"actor\":{\"display\":null,\"id\":null,\"type\":\"anonymous\"},\"authn\":null,\"client_id\":null,\"detail\":{\"anonymous_reason\":\"authentication_not_enabled\"},\"http\":{\"latency_ms\":7,\"method\":\"GET\",\"path_params\":{\"identity_id\":\"42\"},\"query_keys\":[\"include\",\"limit\"],\"route\":\"/api/identities/{identity_id}\",\"status\":200},\"id\":\"7a2b3c4d-5e6f-4a01-9b2c-3d4e5f6a7b8c\",\"ip\":\"127.0.0.1\",\"occurred_at\":\"2026-10-08T09:30:00.001500Z\",\"outcome\":\"success\",\"policy_version\":null,\"prev_hash\":\"a242fef749c8ced64da94a279a39636d207f9c7af49c68766fbf36c0c11679b5\",\"request_id\":\"0b6f9a1e-2c3d-4e5f-8a9b-0c1d2e3f4a5b\",\"seq\":2,\"session_id\":null,\"target\":{\"id\":\"42\",\"type\":\"identity\"},\"tenant_id\":\"00000000-0000-4000-8000-00000000a0d1\",\"ua\":\"a1b1c1d1e1f1a2b2c2d2e2f2a3b3c3d3e3f3a4b4c4d4e4f4a5b5c5d5e5f5a6b6\",\"v\":1}",
+      "hash": "ff9a0f4d43818d39a807372f709cb8faa1ef70a25c1920937a4a42636f488f3b"
+    },
+    {
+      "record": {
+        "v": 1,
+        "tenant_id": "00000000-0000-4000-8000-00000000a0d1",
+        "seq": 3,
+        "id": "8b3c4d5e-6f7a-4b12-8c3d-4e5f6a7b8c9d",
+        "occurred_at": "2026-10-08T09:30:01.999999Z",
+        "actor": {
+          "type": "user",
+          "id": "u-123",
+          "display": "Ingrid Lindqvist"
+        },
+        "session_id": "s-9",
+        "client_id": "tessera-cli",
+        "authn": {
+          "ctx_id": "ctx-1",
+          "aal": 2,
+          "phr": true,
+          "acr": "phr",
+          "auth_time": "2026-10-08T09:24:48.000000Z",
+          "auth_age_s": 312
+        },
+        "action": "jit.approve",
+        "target": {
+          "type": "access_request",
+          "id": "4"
+        },
+        "outcome": "denied",
+        "request_id": null,
+        "http": null,
+        "ip": null,
+        "ua": null,
+        "policy_version": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+        "detail": {
+          "€uro": "\u003c/script\u003e ö 😂 →",
+          "max": 9007199254740991,
+          "min": -9007199254740991,
+          "empty": {},
+          "null": null,
+          "list": [
+            true,
+            false,
+            "",
+            0
+          ],
+          "line\nbreak": "tab\there"
+        },
+        "prev_hash": "ff9a0f4d43818d39a807372f709cb8faa1ef70a25c1920937a4a42636f488f3b",
+        "hash": "a617791db45524754e5adf1d7ce7ea0791c1c608117f664e92fd77904c5d75f0"
+      },
+      "canonical": "{\"action\":\"jit.approve\",\"actor\":{\"display\":\"Ingrid Lindqvist\",\"id\":\"u-123\",\"type\":\"user\"},\"authn\":{\"aal\":2,\"acr\":\"phr\",\"auth_age_s\":312,\"auth_time\":\"2026-10-08T09:24:48.000000Z\",\"ctx_id\":\"ctx-1\",\"phr\":true},\"client_id\":\"tessera-cli\",\"detail\":{\"empty\":{},\"line\\nbreak\":\"tab\\there\",\"list\":[true,false,\"\",0],\"max\":9007199254740991,\"min\":-9007199254740991,\"null\":null,\"€uro\":\"\u003c/script\u003e ö 😂 →\"},\"http\":null,\"id\":\"8b3c4d5e-6f7a-4b12-8c3d-4e5f6a7b8c9d\",\"ip\":null,\"occurred_at\":\"2026-10-08T09:30:01.999999Z\",\"outcome\":\"denied\",\"policy_version\":\"4b825dc642cb6eb9a060e54bf8d69288fbee4904\",\"prev_hash\":\"ff9a0f4d43818d39a807372f709cb8faa1ef70a25c1920937a4a42636f488f3b\",\"request_id\":null,\"seq\":3,\"session_id\":\"s-9\",\"target\":{\"id\":\"4\",\"type\":\"access_request\"},\"tenant_id\":\"00000000-0000-4000-8000-00000000a0d1\",\"ua\":null,\"v\":1}",
+      "hash": "a617791db45524754e5adf1d7ce7ea0791c1c608117f664e92fd77904c5d75f0"
+    }
+  ]
+}
