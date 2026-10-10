@@ -34,6 +34,8 @@ type User struct {
 	Email   string
 	Display string
 	Roles   []auth.Role
+	// IdentityID links the user to an identity of the tenant (optional).
+	IdentityID *int64
 }
 
 // Ctx describes the authentication context of the session.
@@ -135,7 +137,7 @@ func New(db *store.DB, tenant tenancy.ID, u User, c Ctx, now time.Time) (Login, 
 			if display == "" {
 				display = u.Email
 			}
-			user = &store.PlatformUser{ID: u.ID, Email: &email, DisplayName: display, CreatedAt: now}
+			user = &store.PlatformUser{ID: u.ID, Email: &email, DisplayName: display, IdentityID: u.IdentityID, CreatedAt: now}
 			if err := tx.InsertPlatformUser(user); err != nil {
 				return err
 			}

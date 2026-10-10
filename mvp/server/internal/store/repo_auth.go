@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -775,8 +778,35 @@ func uuidOrNil(u *uuid.UUID) any {
 	return u.String()
 }
 
+// ErrInvalidReturnTo refuses a login transaction's return_to that is not a
+// same-site path.
+var ErrInvalidReturnTo = errors.New("store: return_to must be a same-site path")
+
+// MaxReturnToLen bounds return_to (the schema checks the same).
+const MaxReturnToLen = 2048
+
+// ValidReturnTo reports whether p is a safe post-login redirect target: a
+// path on this site. It starts with exactly one "/", holds no backslash
+// (browsers treat "/\host" as "//host"), no control character (C0, DEL or
+// C1, which browsers strip or reinterpret), is valid UTF-8 and parses as a
+// URL reference with no scheme, host or user info. The schema enforces the
+// first three in SQL as well.
+func ValidReturnTo(p string) bool {
+	if p == "" || len(p) > MaxReturnToLen || p[0] != '/' || strings.HasPrefix(p, "//") || !utf8.ValidString(p) {
+		return false
+	}
+	for _, r := range p {
+		if r == '\\' || r < 0x20 || (r >= 0x7f && r <= 0x9f) {
+			return false
+		}
+	}
+	u, err := url.Parse(p)
+	return err == nil && u.Scheme == "" && u.Host == "" && u.User == nil && !u.ForceQuery && strings.HasPrefix(u.Path, "/")
+}
+
 // InsertLoginTransaction stores a login transaction. ReturnTo must be a
-// relative path (the schema refuses anything else).
+// same-site path (ValidReturnTo; the schema refuses the rest too), else
+// ErrInvalidReturnTo. Empty means "/".
 func (tx *TenantTx) InsertLoginTransaction(x *LoginTransaction) error {
 	if err := tx.own(x.TenantID); err != nil {
 		return err
@@ -786,6 +816,9 @@ func (tx *TenantTx) InsertLoginTransaction(x *LoginTransaction) error {
 	}
 	if x.ReturnTo == "" {
 		x.ReturnTo = "/"
+	}
+	if !ValidReturnTo(x.ReturnTo) {
+		return ErrInvalidReturnTo
 	}
 	_, err := tx.exec(txnInsert, sql.Named("id", x.ID.String()), sql.Named("cookie_hash", x.CookieHash),
 		sql.Named("idp_connection_id", x.IdPConnectionID.String()), sql.Named("purpose", x.Purpose),

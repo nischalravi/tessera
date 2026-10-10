@@ -492,9 +492,10 @@ func TestIsolation_SessionTenantOnly(t *testing.T) {
 	}
 }
 
-// TestJITSelfApprovalRefused: the platform user who made a JIT request
-// cannot approve it (403 self_approval, audited, nothing granted); another
-// approver can.
+// TestJITSelfApprovalRefused: neither the platform user who made a JIT
+// request nor the one linked to the identity that would get the access can
+// approve it (403 self_approval, audited, nothing granted); another approver
+// can.
 func TestJITSelfApprovalRefused(t *testing.T) {
 	srv := newSeededServer(t) // the demo company; Priya (33) may request BreakGlassAdmin (24)
 	h := srv.Anonymous()
@@ -521,6 +522,13 @@ func TestJITSelfApprovalRefused(t *testing.T) {
 	}
 	if !refused {
 		t.Error("no jit.approve.refused event attributed to the requester")
+	}
+	// nor can the person who would get the access (Priya's own platform user)
+	priyaID := int64(33)
+	priya := signIn(t, srv.store, seed.LarkspurID, authtest.User{Email: "priya.ramaswamy@larkspur.example", Display: "Priya",
+		Roles: []auth.Role{auth.RolePolicyAdmin}, IdentityID: &priyaID}, authtest.Phr, FrozenNow)
+	if rec := serve(h, authed(priya, "POST", path, "")); rec.Code != 403 || !strings.Contains(rec.Body.String(), `"self_approval"`) {
+		t.Fatalf("approval by the beneficiary: %d %s", rec.Code, rec.Body.String())
 	}
 	rec = serve(h, authed(srv.login, "POST", path, ""))
 	if rec.Code != 200 || decode(t, rec)["status"] != "approved" {
