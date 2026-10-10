@@ -1,10 +1,13 @@
 package devidp
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMatchRedirect(t *testing.T) {
@@ -24,6 +27,10 @@ func TestMatchRedirect(t *testing.T) {
 		{"http://localhost:*/api/auth/oidc/*/callback", "http://localhost:5173/api/auth/oidc/a/callback#frag", false},
 		{"http://localhost:*/api/auth/oidc/*/callback", "http://localhost.evil.example/api/auth/oidc/a/callback", false},
 		{"http://localhost:*/api/auth/oidc/*/callback", "http://localhost:5173/api/auth/oidc/a?/callback", false},
+		{"http://localhost:*/api/auth/oidc/*/callback", "http://localhost:5173/api/auth/oidc/../callback", false},
+		{"http://localhost:*/api/auth/oidc/*/callback", "http://localhost:5173/api/auth/oidc/./callback", false},
+		{"http://localhost:*/api/auth/oidc/*/callback", "http://localhost:5173/api/auth/oidc/.../callback", true},
+		{"http://localhost:*/api/auth/oidc/*/callback", "http://localhost:5173/api/auth/oidc/v1.2/callback", true},
 	} {
 		if got := matchRedirect(tc.pattern, tc.uri); got != tc.want {
 			t.Errorf("matchRedirect(%q, %q) = %v, want %v", tc.pattern, tc.uri, got, tc.want)
@@ -114,5 +121,32 @@ func TestLoadOrCreateKey(t *testing.T) {
 	}
 	if _, err := LoadOrCreateKey(dir); err == nil {
 		t.Error("junk key accepted")
+	}
+}
+
+func TestTTLStoreBound(t *testing.T) {
+	var st ttlStore[int]
+	now := time.Now()
+	for i := range maxEntries {
+		if err := st.put(strconv.Itoa(i), i, now.Add(time.Minute), now); err != nil {
+			t.Fatalf("put %d: %v", i, err)
+		}
+	}
+	if err := st.put("one-more", 0, now.Add(time.Minute), now); !errors.Is(err, errStoreFull) {
+		t.Fatalf("put past the bound: %v", err)
+	}
+	// Once entries expire, the store sweeps them and accepts again.
+	later := now.Add(time.Minute)
+	if err := st.put("after-expiry", 1, later.Add(time.Minute), later); err != nil {
+		t.Fatalf("put after expiry: %v", err)
+	}
+	if fresh, _ := st.putNew("after-expiry", 2, later.Add(time.Minute), later); fresh {
+		t.Error("putNew overwrote a live entry")
+	}
+	if _, ok := st.take("after-expiry", later); !ok {
+		t.Error("take lost the entry")
+	}
+	if _, ok := st.take("after-expiry", later); ok {
+		t.Error("take returned an entry twice")
 	}
 }

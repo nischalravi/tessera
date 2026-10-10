@@ -69,13 +69,22 @@ func createKey(root *os.Root) (*rsa.PrivateKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	f, err := root.OpenFile(KeyFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	// Write to a temporary file and rename, so a failed write never leaves a
+	// truncated key behind.
+	tmp := KeyFile + ".tmp"
+	_ = root.Remove(tmp)
+	f, err := root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return nil, err
 	}
 	if err := pem.Encode(f, &pem.Block{Type: "PRIVATE KEY", Bytes: der}); err != nil {
 		_ = f.Close()
+		_ = root.Remove(tmp)
 		return nil, err
 	}
-	return k, f.Close()
+	if err := f.Close(); err != nil {
+		_ = root.Remove(tmp)
+		return nil, err
+	}
+	return k, root.Rename(tmp, KeyFile)
 }

@@ -125,7 +125,11 @@ type assurance struct {
 //   - okta: returns "phr"/"phrh" only when that value was requested and the
 //     method satisfies it. Every other acr_values entry, including ones Okta
 //     does not support (urn:tessera:acr:*), is ignored silently, never an
-//     error. Otherwise the acr is the method's level (2fa or 1fa).
+//     error. Otherwise the acr is the method's level (2fa or 1fa). Deliberate
+//     deviation: real Okta enforces a supported value it cannot meet (it
+//     prompts for a stronger factor or fails); the dev IdP returns the weaker
+//     acr so relying-party tests can exercise the "IdP returned a weaker
+//     context" path (§9.4, auth.step_up.insufficient).
 //   - entra: ignores acr_values and emits no acr. A Conditional Access auth
 //     context requested in the claims parameter is returned in "acrs" when the
 //     method is phishing-resistant (the dev IdP assumes every context is bound
@@ -187,7 +191,7 @@ func entraAMR(m Method) []string {
 	case MethodHardwareKey, MethodPasskey:
 		return []string{"fido", "mfa"}
 	case MethodPasswordOTP:
-		return []string{"pwd", "otp", "mfa"}
+		return []string{"pwd", "mfa"} // Entra's "otp" means email one-time passcode
 	}
 	return []string{"pwd"}
 }

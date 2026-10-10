@@ -254,7 +254,28 @@ func (s *Server) parseAuthz(q url.Values, c *Client, redirectURI string) (pendin
 		}
 		p.fault = f
 	}
+	if err := faultApplies(p.fault, p, prompt); err != nil {
+		return p, "invalid_request", err.Error()
+	}
 	return p, "", ""
+}
+
+// faultApplies refuses a fault in a request where it would not be a defect:
+// acr_unrequested only means something when phr/phrh (or an Entra auth
+// context) was NOT requested, and sub_change_on_stepup only on a
+// re-authentication (prompt=login or max_age).
+func faultApplies(f Fault, p pendingAuthz, prompt []string) error {
+	switch f {
+	case FaultACRUnrequested:
+		if slices.Contains(p.req.acrValues, OktaACRPhr) || slices.Contains(p.req.acrValues, OktaACRPhrh) || len(p.req.entraACRS) > 0 {
+			return errors.New("fault acr_unrequested needs a request that does not ask for phr, phrh or an acrs context")
+		}
+	case FaultSubChangeStepUp:
+		if !slices.Contains(prompt, "login") && !p.hasMaxAge {
+			return errors.New("fault sub_change_on_stepup needs a step-up request (prompt=login or max_age)")
+		}
+	}
+	return nil
 }
 
 // parseClaimsACRS reads id_token.acrs.values from an OIDC claims parameter
@@ -283,8 +304,12 @@ func parseClaimsACRS(v string) ([]string, error) {
 	return a.Values, nil
 }
 
+// matchesHint reports whether login_hint names the user: the subject, the
+// email, or the Entra oid. The hint only preselects the user on the page and
+// forces the page when the SSO session belongs to someone else; subject
+// checks are the relying party's job (see the sub_change_on_stepup fault).
 func (u *User) matchesHint(hint string) bool {
-	return strings.EqualFold(hint, u.Sub) || strings.EqualFold(hint, u.Email)
+	return strings.EqualFold(hint, u.Sub) || strings.EqualFold(hint, u.Email) || strings.EqualFold(hint, EntraObjectID(u.Sub))
 }
 
 // handleAuthorizeSubmit completes the sign-in page.
@@ -323,9 +348,6 @@ func (s *Server) handleAuthorizeSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	case !slices.Contains(Profiles(), profile):
 		s.errorPage(w, http.StatusBadRequest, "Unknown profile.")
-		return
-	case p.loginHint != "" && !user.matchesHint(p.loginHint):
-		s.errorPage(w, http.StatusBadRequest, "The application asked for a different user (login_hint).")
 		return
 	}
 	sess := idpSession{sid: rand.Text(), user: *user, method: method, profile: profile, authTime: now}
@@ -549,8 +571,12 @@ func (s *Server) verifyClientAssertion(assertion, clientID string, now time.Time
 	if !verified {
 		return nil, errors.New("no registered key verifies the signature")
 	}
-	if err := cl.ValidateWithLeeway(jwt.Expected{Issuer: c.ID, Subject: c.ID,
-		AnyAudience: jwt.Audience{s.issuer + pathToken, s.issuer}, Time: now}, time.Minute); err != nil {
+	// aud must be exactly the token endpoint, single-valued, as Okta and
+	// Entra require (and draft-ietf-oauth-rfc7523bis recommends).
+	if len(cl.Audience) != 1 || cl.Audience[0] != s.issuer+pathToken {
+		return nil, errors.New("aud must be the token endpoint URL, single-valued")
+	}
+	if err := cl.ValidateWithLeeway(jwt.Expected{Issuer: c.ID, Subject: c.ID, Time: now}, time.Minute); err != nil {
 		return nil, err
 	}
 	if cl.Expiry == nil || cl.Expiry.Time().After(now.Add(5*time.Minute+time.Minute)) || cl.ID == "" {
@@ -619,7 +645,9 @@ func (s *Server) mintIDToken(ac authCode, accessToken string, now time.Time) (st
 		claims["aud"] = faultAudPrefix + p.clientID
 	case FaultExpired:
 		iat = now.Add(-expiredAge + time.Minute)
-		exp = now.Add(-expiredAge + time.Minute + idTokenTTL)
+		exp = iat.Add(idTokenTTL)
+		// auth_time stays the real sign-in time even though it is after iat:
+		// moving it back 9 minutes would also break max_age (a second defect).
 	case FaultFutureIat:
 		iat = now.Add(futureIatSkew)
 		exp = iat.Add(idTokenTTL)
@@ -661,6 +689,10 @@ func (s *Server) sign(payload []byte, fault Fault) (string, error) {
 	case FaultKidUnknown:
 		key.Key = jose.JSONWebKey{Key: s.key, KeyID: faultUnknownKid}
 	case FaultJKUHeader:
+		// Signed by a different (attacker) key under the real kid, with jku
+		// pointing at a JWKS that holds that key: an RP that ignores jku
+		// rejects the signature, one that follows jku accepts it.
+		key.Key = jose.JSONWebKey{Key: s.attackerKey, KeyID: s.kid}
 		opts = opts.WithHeader("jku", s.issuer+faultJKUPath)
 	}
 	signer, err := jose.NewSigner(key, opts)
@@ -687,7 +719,8 @@ func (s *Server) sign(payload []byte, fault Fault) (string, error) {
 	return out, nil
 }
 
-// userinfoClaims is the /userinfo view of an ID token's claims.
+// userinfoClaims is the /userinfo view of an ID token's claims. It ignores
+// the requested scopes; relying parties must not depend on that.
 func userinfoClaims(c map[string]any) map[string]any {
 	out := map[string]any{}
 	for _, k := range []string{"sub", "email", "email_verified", "name", "preferred_username", "groups", "roles", "oid", "tid"} {
@@ -710,7 +743,8 @@ func (s *Server) handleUserinfo(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleLogout is the RP-initiated logout endpoint. It ends the IdP session
-// and redirects only to a registered post_logout_redirect_uri.
+// and redirects only to a registered post_logout_redirect_uri (of any client).
+// id_token_hint is not checked: acceptable for a dev IdP, not for a real one.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(sessionCookie); err == nil {
 		s.sessions.del(c.Value)

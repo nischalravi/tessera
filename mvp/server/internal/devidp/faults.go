@@ -2,8 +2,11 @@ package devidp
 
 import (
 	"fmt"
+	"net/http"
 	"slices"
 	"time"
+
+	"github.com/go-jose/go-jose/v4"
 )
 
 // Fault makes the dev IdP produce one specific defect so relying-party tests
@@ -15,21 +18,21 @@ type Fault string
 // OIDC faults.
 const (
 	FaultNone            Fault = ""
-	FaultWrongIss        Fault = "wrong_iss"         // ID token iss is not the issuer
-	FaultWrongAud        Fault = "wrong_aud"         // ID token aud is not the client_id
-	FaultAlgNone         Fault = "alg_none"          // unsigned token, alg "none"
-	FaultHS256WithPubkey Fault = "hs256_with_pubkey" // HS256, keyed with the public signing key (alg confusion)
-	FaultBadSignature    Fault = "bad_signature"     // RS256 header and kid, signature bytes corrupted
-	FaultExpired         Fault = "expired"           // exp well in the past
-	FaultFutureIat       Fault = "future_iat"        // iat well in the future
-	FaultNonceMismatch   Fault = "nonce_mismatch"    // nonce is not the request's nonce
-	FaultMissingAuthTime Fault = "missing_auth_time" // no auth_time claim
-	FaultStaleAuthTime   Fault = "stale_auth_time"   // auth_time a day old, regardless of max_age
-	FaultKidUnknown      Fault = "kid_unknown"       // kid not in the JWKS (signature by the real key)
-	FaultJKUHeader       Fault = "jku_header"        // a jku header pointing elsewhere (signature valid)
-	FaultSubChangeStepUp Fault = "sub_change_on_stepup"
-	FaultACRUnrequested  Fault = "acr_unrequested" // acr=phr although phr was not requested
-	FaultNoIssParam      Fault = "no_iss_param"    // the authorization response has no iss parameter
+	FaultWrongIss        Fault = "wrong_iss"            // ID token iss is not the issuer
+	FaultWrongAud        Fault = "wrong_aud"            // ID token aud is not the client_id
+	FaultAlgNone         Fault = "alg_none"             // unsigned token, alg "none"
+	FaultHS256WithPubkey Fault = "hs256_with_pubkey"    // HS256, keyed with the public signing key (alg confusion)
+	FaultBadSignature    Fault = "bad_signature"        // RS256 header and kid, signature bytes corrupted
+	FaultExpired         Fault = "expired"              // exp well in the past
+	FaultFutureIat       Fault = "future_iat"           // iat well in the future
+	FaultNonceMismatch   Fault = "nonce_mismatch"       // nonce is not the request's nonce
+	FaultMissingAuthTime Fault = "missing_auth_time"    // no auth_time claim
+	FaultStaleAuthTime   Fault = "stale_auth_time"      // auth_time a day old, regardless of max_age
+	FaultKidUnknown      Fault = "kid_unknown"          // kid not in the JWKS (signature by the real key)
+	FaultJKUHeader       Fault = "jku_header"           // jku names an attacker JWKS whose key signed the token under the real kid
+	FaultSubChangeStepUp Fault = "sub_change_on_stepup" // another sub on a re-authentication (step-up only)
+	FaultACRUnrequested  Fault = "acr_unrequested"      // acr=phr (Entra: acrs=[c1]) although not requested; a normalization defect, not a refusal
+	FaultNoIssParam      Fault = "no_iss_param"         // the authorization response has no iss parameter
 )
 
 // How far each fault moves its value. The offsets are well outside any
@@ -72,4 +75,11 @@ func ParseFault(s string) (Fault, error) {
 		return FaultNone, fmt.Errorf("fault %q is a SAML fault; SAML is a stub until PR9", s)
 	}
 	return FaultNone, fmt.Errorf("unknown fault %q", s)
+}
+
+// handleAttackerJWKS serves the key that signs jku_header fault tokens, at
+// the URL their jku header names (faults enabled only).
+func (s *Server) handleAttackerJWKS(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{
+		Key: s.attackerKey.Public(), KeyID: s.kid, Algorithm: string(jose.RS256), Use: "sig"}}})
 }

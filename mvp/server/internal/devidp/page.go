@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"html/template"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -67,10 +68,19 @@ func (s *Server) renderSignIn(w http.ResponseWriter, id string, p pendingAuthz) 
 	for _, pr := range Profiles() {
 		d.Profiles = append(d.Profiles, option{Value: string(pr), Label: pr.Label(), Checked: pr == s.defaultProfile})
 	}
-	for _, u := range s.users {
-		if p.loginHint != "" && !u.matchesHint(p.loginHint) {
-			continue // step-up: only the hinted user may sign in
+	// login_hint preselects: the hinted user is listed first.
+	users := slices.Clone(s.users)
+	slices.SortStableFunc(users, func(a, b User) int {
+		ha, hb := p.loginHint != "" && a.matchesHint(p.loginHint), p.loginHint != "" && b.matchesHint(p.loginHint)
+		switch {
+		case ha && !hb:
+			return -1
+		case hb && !ha:
+			return 1
 		}
+		return 0
+	})
+	for _, u := range users {
 		v := userView{Sub: u.Sub, Email: u.Email, Name: u.Name, Tenant: u.Tenant, Roles: strings.Join(u.Roles, ", ")}
 		for _, m := range Methods() {
 			if u.has(m) {
@@ -78,9 +88,6 @@ func (s *Server) renderSignIn(w http.ResponseWriter, id string, p pendingAuthz) 
 			}
 		}
 		d.Users = append(d.Users, v)
-	}
-	if len(d.Users) == 0 {
-		d.Message = "No user matches login_hint."
 	}
 	s.render(w, http.StatusOK, d)
 }

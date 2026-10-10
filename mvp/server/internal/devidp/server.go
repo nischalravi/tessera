@@ -94,6 +94,7 @@ type Config struct {
 type Server struct {
 	issuer         string
 	key            *rsa.PrivateKey
+	attackerKey    *rsa.PrivateKey // signs jku_header tokens; served at faultJKUPath
 	kid            string
 	pubPEM         []byte // HMAC key of the hs256_with_pubkey fault
 	users          []User
@@ -163,6 +164,11 @@ func New(cfg Config) (*Server, error) {
 	}
 	if s.key == nil {
 		if s.key, err = GenerateKey(); err != nil {
+			return nil, err
+		}
+	}
+	if s.faults {
+		if s.attackerKey, err = GenerateKey(); err != nil {
 			return nil, err
 		}
 	}
@@ -248,6 +254,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /saml/sso", s.handleSAMLStub)
 	mux.HandleFunc("POST /saml/sso", s.handleSAMLStub)
 	if s.faults {
+		mux.HandleFunc("GET "+faultJKUPath, s.handleAttackerJWKS)
 		mux.HandleFunc("GET /_faults", s.handleGetFault)
 		mux.HandleFunc("POST /_faults", s.handleSetFault)
 	}
@@ -356,7 +363,9 @@ func (s *ttlStore[T]) del(k string) {
 // matchRedirect reports whether uri matches a registered pattern, where "*"
 // matches one or more RFC 3986 unreserved characters (letters, digits, '-',
 // '.', '_', '~'): enough for a port or one path segment, never '/', '?', '#',
-// '@' or ':', so a wildcard cannot change the host or add userinfo.
+// '@' or ':', so a wildcard cannot change the host or add userinfo. A
+// wildcard never matches the dot segments "." or "..", which a browser would
+// resolve to a different, unregistered path.
 func matchRedirect(pattern, uri string) bool {
 	head, tail, wild := strings.Cut(pattern, "*")
 	if !wild {
@@ -370,7 +379,7 @@ func matchRedirect(pattern, uri string) bool {
 		if !unreserved(rest[i-1]) {
 			return false
 		}
-		if matchRedirect(tail, rest[i:]) {
+		if seg := rest[:i]; seg != "." && seg != ".." && matchRedirect(tail, rest[i:]) {
 			return true
 		}
 	}

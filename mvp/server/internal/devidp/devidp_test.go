@@ -421,12 +421,16 @@ func TestPKCEEnforced(t *testing.T) {
 		{"challenge as verifier (plain downgrade)", challenge},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// Each failure consumes nothing: use a fresh code per case.
+			// A failed redemption burns the code: use a fresh one per case,
+			// and check the right verifier cannot redeem it afterwards.
 			r2 := newRequest(nil)
 			cb2, _ := b.authorize(r2) // SSO now: redirected with a code
 			status, tk := b.exchange(codeForm(cb2.Get("code"), tc.verifier), true)
 			if status != http.StatusBadRequest || tk.Error != "invalid_grant" || tk.IDToken != "" {
 				t.Fatalf("status %d error %q", status, tk.Error)
+			}
+			if status, _ := b.exchange(codeForm(cb2.Get("code"), r2.verifier), true); status != http.StatusBadRequest {
+				t.Fatalf("code redeemed after a failed attempt: status %d", status)
 			}
 		})
 	}
@@ -579,7 +583,7 @@ func TestEntraAndGenericProfiles(t *testing.T) {
 		{"entra passkey with auth context", devidp.ProfileEntra, devidp.MethodPasskey,
 			map[string]string{"claims": claimsParam, "acr_values": "phr"}, nil, "[c1]", "[fido mfa]"},
 		{"entra password+otp with auth context", devidp.ProfileEntra, devidp.MethodPasswordOTP,
-			map[string]string{"claims": claimsParam}, nil, "", "[pwd otp mfa]"},
+			map[string]string{"claims": claimsParam}, nil, "", "[pwd mfa]"},
 		{"entra passkey without auth context", devidp.ProfileEntra, devidp.MethodPasskey, nil, nil, "", "[fido mfa]"},
 		{"generic phr requested", devidp.ProfileGeneric, devidp.MethodPasskey,
 			map[string]string{"acr_values": "phr"}, "phr", "", "[swk user mfa]"},
@@ -683,16 +687,16 @@ func TestStepUpPromptAndMaxAge(t *testing.T) {
 		t.Fatalf("prompt=none + stale session: %v", cb)
 	}
 
-	// login_hint locks the page to that user.
+	// login_hint only preselects: the hinted user is listed first (by sub,
+	// email or Entra oid), and another user may still sign in.
+	for _, hint := range []string{"00u-vic-viewer", "vic@larkspur.example", devidp.EntraObjectID("00u-vic-viewer")} {
+		resp, body := b.get(idp.URL + "/authorize?" + newRequest(map[string]string{"prompt": "login", "login_hint": hint}).params.Encode())
+		if resp.StatusCode != http.StatusOK || strings.Index(body, "00u-vic-viewer") > strings.Index(body, "00u-alice-admin") {
+			t.Errorf("login_hint %s: status %d, hinted user not listed first", hint, resp.StatusCode)
+		}
+	}
 	_, pageReq := b.authorize(newRequest(map[string]string{"prompt": "login", "login_hint": "00u-vic-viewer"}))
-	resp, err := b.c.PostForm(idp.URL+"/authorize", url.Values{"req": {pageReq}, "choice": {"00u-alice-admin passkey"}, "profile": {"okta"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("signing in as another user than login_hint: status %d", resp.StatusCode)
-	}
+	b.signIn(pageReq, "00u-alice-admin", devidp.MethodPasskey, devidp.ProfileOkta)
 
 	// Logout ends the session: the next request shows the page.
 	if resp, _ := b.get(idp.URL + "/logout"); resp.StatusCode != http.StatusOK {
@@ -747,7 +751,7 @@ func TestSignInPageRejectsBadChoices(t *testing.T) {
 // defects lists every way an ID token (and its authorization response)
 // differs from a valid one for the given request. A fault must produce
 // exactly its own defect.
-func defects(t *testing.T, idp *devidptest.IdP, cb url.Values, tok string, r request, wantSub string) []string {
+func defects(t *testing.T, idp *devidptest.IdP, cb url.Values, tok string, r request, user string, profile devidp.Profile) []string {
 	t.Helper()
 	var out []string
 	if cb.Get("iss") != idp.URL {
@@ -773,14 +777,26 @@ func defects(t *testing.T, idp *devidptest.IdP, cb url.Values, tok string, r req
 			out = append(out, string(devidp.FaultBadSignature))
 		}
 	case "RS256":
-		if _, ok := h["jku"]; ok {
-			out = append(out, string(devidp.FaultJKUHeader))
-		}
 		if len(set.Key(fmt.Sprint(h["kid"]))) == 0 {
 			out = append(out, string(devidp.FaultKidUnknown))
 		}
 		parsed, err := jwt.ParseSigned(tok, []jose.SignatureAlgorithm{jose.RS256})
-		if err != nil || parsed.Claims(pub.Key, &map[string]any{}) != nil {
+		realSig := err == nil && parsed.Claims(pub.Key, &map[string]any{}) == nil
+		if jku, ok := h["jku"].(string); ok {
+			// jku_header: signed by the key the jku JWKS serves, not the real one.
+			resp, err := http.Get(jku)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var js jose.JSONWebKeySet
+			_ = json.NewDecoder(resp.Body).Decode(&js)
+			resp.Body.Close()
+			if !realSig && len(js.Keys) == 1 && parsed.Claims(js.Keys[0].Key, &map[string]any{}) == nil {
+				out = append(out, string(devidp.FaultJKUHeader))
+			} else {
+				out = append(out, "jku present but not attacker-signed")
+			}
+		} else if !realSig {
 			out = append(out, string(devidp.FaultBadSignature))
 		}
 	default:
@@ -812,11 +828,26 @@ func defects(t *testing.T, idp *devidptest.IdP, cb url.Values, tok string, r req
 	} else if now-at > maxAge+60 {
 		out = append(out, string(devidp.FaultStaleAuthTime))
 	}
+	wantSub := user
+	if profile == devidp.ProfileEntra {
+		wantSub = devidp.EntraPairwiseSub(user, devidptest.ClientID)
+		if (c["oid"] != devidp.EntraObjectID(user)) != (c["sub"] != wantSub) {
+			out = append(out, "entra sub and oid disagree")
+		}
+	}
 	if c["sub"] != wantSub {
 		out = append(out, string(devidp.FaultSubChangeStepUp))
 	}
-	if c["acr"] == devidp.OktaACRPhr && !slices.Contains(strings.Fields(r.params.Get("acr_values")), "phr") {
+	_, hasACRS := c["acrs"]
+	if (c["acr"] == devidp.OktaACRPhr && !slices.Contains(strings.Fields(r.params.Get("acr_values")), "phr")) ||
+		(hasACRS && !r.params.Has("claims")) {
 		out = append(out, string(devidp.FaultACRUnrequested))
+	}
+	// Everything the faults do not target must still be there.
+	for _, k := range []string{"sid", "amr", "email", "name", "at_hash"} {
+		if _, ok := c[k]; !ok {
+			out = append(out, "missing "+k)
+		}
 	}
 	sort.Strings(out)
 	return out
@@ -826,23 +857,51 @@ func defects(t *testing.T, idp *devidptest.IdP, cb url.Values, tok string, r req
 // fault= on /authorize, and checks the response has that defect and no other.
 func TestEachFaultProducesExactlyItsDefect(t *testing.T) {
 	idp, b := start(t, devidp.Config{})
-	for _, f := range append([]devidp.Fault{devidp.FaultNone}, devidp.OIDCFaults()...) {
-		t.Run("fault="+string(f), func(t *testing.T) {
-			extra := map[string]string{"max_age": "300", "prompt": "login"}
-			if f != devidp.FaultNone {
-				extra["fault"] = string(f)
-			}
-			r := newRequest(extra)
-			cb := b.login(r, "00u-alice-admin", devidp.MethodPasskey, devidp.ProfileOkta)
-			got := defects(t, idp, cb, b.redeem(cb, r), r, "00u-alice-admin")
-			want := []string{}
-			if f != devidp.FaultNone {
-				want = []string{string(f)}
-			}
-			if !slices.Equal(got, want) && !(len(got) == 0 && len(want) == 0) {
-				t.Fatalf("defects %v, want %v", got, want)
-			}
-		})
+	for _, profile := range []devidp.Profile{devidp.ProfileOkta, devidp.ProfileEntra} {
+		for _, f := range append([]devidp.Fault{devidp.FaultNone}, devidp.OIDCFaults()...) {
+			t.Run(string(profile)+"/fault="+string(f), func(t *testing.T) {
+				extra := map[string]string{"max_age": "300", "prompt": "login"}
+				if f != devidp.FaultNone {
+					extra["fault"] = string(f)
+				}
+				r := newRequest(extra)
+				cb := b.login(r, "00u-alice-admin", devidp.MethodPasskey, profile)
+				got := defects(t, idp, cb, b.redeem(cb, r), r, "00u-alice-admin", profile)
+				var want []string
+				if f != devidp.FaultNone {
+					want = []string{string(f)}
+				}
+				if !slices.Equal(got, want) {
+					t.Fatalf("defects %v, want %v", got, want)
+				}
+			})
+		}
+	}
+}
+
+// TestFaultsRefusedWhereTheyAreNoDefect: acr_unrequested makes no sense when
+// phr (or an Entra context) was requested, nor sub_change_on_stepup outside a
+// re-authentication, so those combinations are refused.
+func TestFaultsRefusedWhereTheyAreNoDefect(t *testing.T) {
+	_, b := start(t, devidp.Config{})
+	for _, extra := range []map[string]string{
+		{"fault": "acr_unrequested", "acr_values": "phr"},
+		{"fault": "acr_unrequested", "acr_values": "phrh"},
+		{"fault": "acr_unrequested", "claims": `{"id_token":{"acrs":{"essential":true,"values":["c1"]}}}`},
+		{"fault": "sub_change_on_stepup"},
+	} {
+		if cb, _ := b.authorize(newRequest(extra)); cb.Get("error") != "invalid_request" {
+			t.Errorf("%v: %v, want invalid_request", extra, cb)
+		}
+	}
+	for _, extra := range []map[string]string{
+		{"fault": "sub_change_on_stepup", "prompt": "login"},
+		{"fault": "sub_change_on_stepup", "max_age": "0"},
+		{"fault": "acr_unrequested", "acr_values": "urn:okta:loa:2fa:any"},
+	} {
+		if cb, pageReq := b.authorize(newRequest(extra)); cb != nil || pageReq == "" {
+			t.Errorf("%v: refused: %v", extra, cb)
+		}
 	}
 }
 
@@ -861,7 +920,7 @@ func TestFaultEndpointAndDisabledFaults(t *testing.T) {
 	}
 	r := newRequest(map[string]string{"prompt": "login"})
 	cb := b.login(r, "00u-alice-admin", devidp.MethodPasskey, devidp.ProfileOkta)
-	if got := defects(t, idp, cb, b.redeem(cb, r), r, "00u-alice-admin"); !slices.Equal(got, []string{"wrong_aud"}) {
+	if got := defects(t, idp, cb, b.redeem(cb, r), r, "00u-alice-admin", devidp.ProfileOkta); !slices.Equal(got, []string{"wrong_aud"}) {
 		t.Fatalf("defects %v after POST /_faults", got)
 	}
 	for _, bad := range []string{`{"fault":"bogus"}`, `{"fault":"xsw2"}`, `{"fault":"x","more":1}`, `nope`} {
@@ -874,7 +933,7 @@ func TestFaultEndpointAndDisabledFaults(t *testing.T) {
 	}
 	r = newRequest(nil)
 	cb, _ = b.authorize(r)
-	if got := defects(t, idp, cb, b.redeem(cb, r), r, "00u-alice-admin"); len(got) != 0 {
+	if got := defects(t, idp, cb, b.redeem(cb, r), r, "00u-alice-admin", devidp.ProfileOkta); len(got) != 0 {
 		t.Fatalf("defects %v after clearing", got)
 	}
 
@@ -969,8 +1028,10 @@ func TestPrivateKeyJWTClient(t *testing.T) {
 	if s, tk := try(assertion("j1", idp.URL+"/token")); s != http.StatusUnauthorized || tk.Error != "invalid_client" {
 		t.Errorf("replayed jti: %d %q", s, tk.Error)
 	}
-	if s, _ := try(assertion("j2", "https://elsewhere.example/token")); s != http.StatusUnauthorized {
-		t.Errorf("wrong audience: %d", s)
+	for i, aud := range []string{"https://elsewhere.example/token", idp.URL} {
+		if s, _ := try(assertion(fmt.Sprint("j-aud-", i), aud)); s != http.StatusUnauthorized {
+			t.Errorf("aud %s: %d, want 401 (aud must be the token endpoint)", aud, s)
+		}
 	}
 }
 
@@ -978,4 +1039,86 @@ func httptestRecorder(h http.Handler, method, target string) *httptest.ResponseR
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(method, target, nil))
 	return rec
+}
+
+// TestExpiryBoundaries: a code lives 60 s, an access token 5 min and the SSO
+// session 12 h; at exactly the expiry instant each is gone.
+func TestExpiryBoundaries(t *testing.T) {
+	clk := &clock{t: time.Now().Truncate(time.Second)}
+	idp, b := start(t, devidp.Config{Now: clk.now})
+	r := newRequest(nil)
+	cb := b.login(r, "00u-alice-admin", devidp.MethodPasskey, devidp.ProfileOkta)
+	clk.add(60 * time.Second)
+	if status, tk := b.exchange(codeForm(cb.Get("code"), r.verifier), true); status != http.StatusBadRequest || tk.Error != "invalid_grant" {
+		t.Fatalf("code at 60 s: %d %q", status, tk.Error)
+	}
+	r = newRequest(nil)
+	cb, _ = b.authorize(r)
+	clk.add(59 * time.Second)
+	status, tk := b.exchange(codeForm(cb.Get("code"), r.verifier), true)
+	if status != http.StatusOK {
+		t.Fatalf("code at 59 s: %d %q", status, tk.Error)
+	}
+	userinfo := func() int {
+		req, _ := http.NewRequest(http.MethodGet, idp.URL+"/userinfo", nil)
+		req.Header.Set("Authorization", "Bearer "+tk.AccessToken)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	clk.add(5*time.Minute - time.Second)
+	if s := userinfo(); s != http.StatusOK {
+		t.Fatalf("access token before expiry: %d", s)
+	}
+	clk.add(time.Second)
+	if s := userinfo(); s != http.StatusUnauthorized {
+		t.Fatalf("access token at expiry: %d", s)
+	}
+	clk.add(12*time.Hour - 7*time.Minute)
+	if cb, _ := b.authorize(newRequest(nil)); cb == nil {
+		t.Fatal("SSO session expired too early")
+	}
+	clk.add(7 * time.Minute)
+	if cb, _ := b.authorize(newRequest(nil)); cb != nil {
+		t.Fatalf("SSO after 12 h: %v", cb)
+	}
+}
+
+// TestConcurrentCodeRedemption: of many simultaneous redemptions of one code,
+// exactly one succeeds.
+func TestConcurrentCodeRedemption(t *testing.T) {
+	_, b := start(t, devidp.Config{})
+	r := newRequest(nil)
+	cb := b.login(r, "00u-alice-admin", devidp.MethodPasskey, devidp.ProfileOkta)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	ok := 0
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			form := codeForm(cb.Get("code"), r.verifier)
+			req, _ := http.NewRequest(http.MethodPost, b.idp.URL+"/token", strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			req.SetBasicAuth(devidptest.ClientID, devidptest.ClientSecret)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				mu.Lock()
+				ok++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if ok != 1 {
+		t.Fatalf("%d successful redemptions, want exactly 1", ok)
+	}
 }
