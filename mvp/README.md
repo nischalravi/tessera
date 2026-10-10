@@ -116,7 +116,9 @@ for a real connector type), and a dry run that stages a snapshot into `stg_*` ta
 reconciles it against the HR source. Findings RF-01 to RF-12 (orphans, leavers still enabled,
 unexpected privileged members, unowned service accounts…) feed a published readiness score and
 a ranked needs-attention list on Insights → Deployment health. `tessera seed` also seeds an
-Okta (demo) connection (`TESSERA_READINESS_DEMO=off` skips it); Admin → Connections → New
+Okta (demo) connection for the `larkspur` tenant only (`TESSERA_READINESS_DEMO=off` skips it;
+`globex` starts with no connections). Connections, checklists, runs, findings and scores are
+tenant-scoped like every other table; Admin → Connections → New
 connection → Active Directory (demo) walks the rest. Design: `docs/design/deployment-readiness.md`.
 The routes are documented at `/api/readiness/openapi.json`.
 
