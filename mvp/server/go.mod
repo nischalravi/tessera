@@ -3,6 +3,7 @@ module github.com/nischalravi/tessera/mvp/server
 go 1.27.2
 
 require (
+	github.com/go-jose/go-jose/v4 v4.1.5
 	github.com/google/uuid v1.6.0
 	go.yaml.in/yaml/v3 v3.0.5
 	modernc.org/sqlite v1.60.1

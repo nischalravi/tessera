@@ -1,4 +1,2 @@
 server/bin/
-server/tessera.db*
-frontend/node_modules/
-frontend/dist/
+server/var/
