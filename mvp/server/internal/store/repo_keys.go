@@ -20,7 +20,7 @@ var (
 		VALUES (@kid, @tenant, @purpose, @alg, @public_jwk, @private_key_enc, @status, @created_at, @activated_at)`)
 	signingKeysByPurpose = tq("signing_keys.by_purpose", `
 		SELECT `+signingKeyCols+` FROM tenant_signing_keys k
-		WHERE k.tenant_id = @tenant AND k.purpose = @purpose ORDER BY k.created_at, k.kid`)
+		WHERE k.tenant_id = @tenant AND k.purpose = @purpose ORDER BY k.created_at, k.rowid`)
 	signingKeysGet = tq("signing_keys.get", `
 		SELECT `+signingKeyCols+` FROM tenant_signing_keys k WHERE k.tenant_id = @tenant AND k.kid = @kid`)
 	signingKeysActivate = tq("signing_keys.activate", `
@@ -76,7 +76,7 @@ func (tx *TenantTx) InsertSigningKey(k *TenantSigningKey) error {
 	return err
 }
 
-// SigningKeys lists this tenant's keys for purpose (every status), oldest first.
+// SigningKeys lists this tenant's keys for purpose (every status) in creation order.
 func (tx *TenantTx) SigningKeys(purpose string) ([]*TenantSigningKey, error) {
 	return collect(tx, scanSigningKey, signingKeysByPurpose, sql.Named("purpose", purpose))
 }
@@ -130,7 +130,7 @@ var (
 		INSERT INTO platform_keys (kid, purpose, alg, public_jwk, private_key_enc, status, created_at)
 		VALUES (@kid, @purpose, @alg, @public_jwk, @private_key_enc, 'active', @created_at)`)
 	platformKeysByPurpose = sq("platform_keys.by_purpose", `
-		SELECT `+platformKeyCols+` FROM platform_keys p WHERE p.purpose = @purpose ORDER BY p.created_at, p.kid`)
+		SELECT `+platformKeyCols+` FROM platform_keys p WHERE p.purpose = @purpose ORDER BY p.created_at, p.rowid`)
 	platformKeysRetire = sq("platform_keys.retire", `
 		UPDATE platform_keys SET status = 'retired' WHERE kid = @kid AND status = 'active'`)
 )
