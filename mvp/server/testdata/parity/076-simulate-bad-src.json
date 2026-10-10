@@ -1,0 +1,21 @@
+{
+ "name": "simulate-bad-src",
+ "request": {
+  "method": "POST",
+  "path": "/api/simulate",
+  "body": {
+   "add_edges": [
+    {
+     "src": "identity:5",
+     "dst": "group:10"
+    }
+   ]
+  }
+ },
+ "response": {
+  "status": 400,
+  "body": {
+   "detail": "edges must start at an account or group"
+  }
+ }
+}

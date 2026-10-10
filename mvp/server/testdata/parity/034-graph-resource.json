@@ -1,0 +1,1218 @@
+{
+ "name": "graph-resource",
+ "request": {
+  "method": "GET",
+  "path": "/api/graph?resource_id=5"
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "nodes": [
+    {
+     "id": "account:135",
+     "kind": "account",
+     "label": "aws:svc-backup-agent",
+     "system": "aws",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "account:136",
+     "kind": "account",
+     "label": "aws:svc-legacy-etl",
+     "system": "aws",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "account:142",
+     "kind": "account",
+     "label": "aws:svc-data-export",
+     "system": "aws",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "account:68",
+     "kind": "account",
+     "label": "okta:kofi.mensah@larkspur.example",
+     "system": "okta",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "account:69",
+     "kind": "account",
+     "label": "okta:alice.okafor@larkspur.example",
+     "system": "okta",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "account:70",
+     "kind": "account",
+     "label": "okta:ilya.kowalczyk@larkspur.example",
+     "system": "okta",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "account:71",
+     "kind": "account",
+     "label": "okta:desmond.abernathy@larkspur.example",
+     "system": "okta",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "account:72",
+     "kind": "account",
+     "label": "okta:pascal.ostrowski@larkspur.example",
+     "system": "okta",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "account:73",
+     "kind": "account",
+     "label": "okta:joaquin.pemberton@larkspur.example",
+     "system": "okta",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "account:74",
+     "kind": "account",
+     "label": "okta:freya.whitlock@larkspur.example",
+     "system": "okta",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "account:75",
+     "kind": "account",
+     "label": "okta:anders.zeller@larkspur.example",
+     "system": "okta",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "account:76",
+     "kind": "account",
+     "label": "okta:hana.rasmussen@larkspur.example",
+     "system": "okta",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "account:77",
+     "kind": "account",
+     "label": "okta:nikhil.iyer@larkspur.example",
+     "system": "okta",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "account:78",
+     "kind": "account",
+     "label": "okta:dalia.mokoena@larkspur.example",
+     "system": "okta",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "account:79",
+     "kind": "account",
+     "label": "okta:vesna.szabo@larkspur.example",
+     "system": "okta",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "account:80",
+     "kind": "account",
+     "label": "okta:ingrid.lindqvist@larkspur.example",
+     "system": "okta",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "account:81",
+     "kind": "account",
+     "label": "okta:marcus.bellweather@larkspur.example",
+     "system": "okta",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "account:82",
+     "kind": "account",
+     "label": "okta:oren.whitlock@larkspur.example",
+     "system": "okta",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "account:83",
+     "kind": "account",
+     "label": "okta:cyrus.quennell@larkspur.example",
+     "system": "okta",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "account:84",
+     "kind": "account",
+     "label": "okta:zora.whitlock@larkspur.example",
+     "system": "okta",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "account:85",
+     "kind": "account",
+     "label": "okta:lena.valdivia@larkspur.example",
+     "system": "okta",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "account:86",
+     "kind": "account",
+     "label": "okta:sana.iyer@larkspur.example",
+     "system": "okta",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "account:88",
+     "kind": "account",
+     "label": "okta:talia.bellweather@larkspur.example",
+     "system": "okta",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "account:89",
+     "kind": "account",
+     "label": "okta:rohan.marchetti@larkspur.example",
+     "system": "okta",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "account:90",
+     "kind": "account",
+     "label": "okta:emeric.ostrowski@larkspur.example",
+     "system": "okta",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "account:91",
+     "kind": "account",
+     "label": "okta:quinn.zeller@larkspur.example",
+     "system": "okta",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "account:92",
+     "kind": "account",
+     "label": "okta:wren.okafor@larkspur.example",
+     "system": "okta",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "group:10",
+     "kind": "group",
+     "label": "okta:eng-platform",
+     "system": "okta",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "group:11",
+     "kind": "group",
+     "label": "okta:data-team",
+     "system": "okta",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "group:21",
+     "kind": "group",
+     "label": "aws:DevAdmin",
+     "system": "aws",
+     "privileged": true,
+     "type": null,
+     "status": null,
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "group:23",
+     "kind": "group",
+     "label": "aws:ProdAdmin",
+     "system": "aws",
+     "privileged": true,
+     "type": null,
+     "status": null,
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "group:25",
+     "kind": "group",
+     "label": "aws:DataEngineer",
+     "system": "aws",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "group:7",
+     "kind": "group",
+     "label": "okta:engineering",
+     "system": "okta",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "identity:10",
+     "kind": "identity",
+     "label": "Freya Whitlock",
+     "system": null,
+     "privileged": false,
+     "type": "human",
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "identity:11",
+     "kind": "identity",
+     "label": "Anders Zeller",
+     "system": null,
+     "privileged": false,
+     "type": "human",
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "identity:12",
+     "kind": "identity",
+     "label": "Hana Rasmussen",
+     "system": null,
+     "privileged": false,
+     "type": "human",
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "identity:13",
+     "kind": "identity",
+     "label": "Nikhil Iyer",
+     "system": null,
+     "privileged": false,
+     "type": "human",
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "identity:14",
+     "kind": "identity",
+     "label": "Dalia Mokoena",
+     "system": null,
+     "privileged": false,
+     "type": "human",
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "identity:15",
+     "kind": "identity",
+     "label": "Vesna Szabo",
+     "system": null,
+     "privileged": false,
+     "type": "human",
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "identity:16",
+     "kind": "identity",
+     "label": "Ingrid Lindqvist",
+     "system": null,
+     "privileged": false,
+     "type": "human",
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "identity:17",
+     "kind": "identity",
+     "label": "Marcus Bellweather",
+     "system": null,
+     "privileged": false,
+     "type": "human",
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "identity:18",
+     "kind": "identity",
+     "label": "Oren Whitlock",
+     "system": null,
+     "privileged": false,
+     "type": "human",
+     "status": "terminated",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "identity:19",
+     "kind": "identity",
+     "label": "Cyrus Quennell",
+     "system": null,
+     "privileged": false,
+     "type": "human",
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "identity:20",
+     "kind": "identity",
+     "label": "Zora Whitlock",
+     "system": null,
+     "privileged": false,
+     "type": "human",
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "identity:21",
+     "kind": "identity",
+     "label": "Lena Valdivia",
+     "system": null,
+     "privileged": false,
+     "type": "human",
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "identity:22",
+     "kind": "identity",
+     "label": "Sana Iyer",
+     "system": null,
+     "privileged": false,
+     "type": "human",
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "identity:24",
+     "kind": "identity",
+     "label": "Talia Bellweather",
+     "system": null,
+     "privileged": false,
+     "type": "human",
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "identity:25",
+     "kind": "identity",
+     "label": "Rohan Marchetti",
+     "system": null,
+     "privileged": false,
+     "type": "human",
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "identity:26",
+     "kind": "identity",
+     "label": "Emeric Ostrowski",
+     "system": null,
+     "privileged": false,
+     "type": "human",
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "identity:27",
+     "kind": "identity",
+     "label": "Quinn Zeller",
+     "system": null,
+     "privileged": false,
+     "type": "human",
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "identity:28",
+     "kind": "identity",
+     "label": "Wren Okafor",
+     "system": null,
+     "privileged": false,
+     "type": "human",
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "identity:4",
+     "kind": "identity",
+     "label": "Kofi Mensah",
+     "system": null,
+     "privileged": false,
+     "type": "human",
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "identity:5",
+     "kind": "identity",
+     "label": "Alice Okafor",
+     "system": null,
+     "privileged": false,
+     "type": "human",
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "identity:6",
+     "kind": "identity",
+     "label": "Ilya Kowalczyk",
+     "system": null,
+     "privileged": false,
+     "type": "human",
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "identity:7",
+     "kind": "identity",
+     "label": "Desmond Abernathy",
+     "system": null,
+     "privileged": false,
+     "type": "human",
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "identity:74",
+     "kind": "identity",
+     "label": "svc-backup-agent",
+     "system": null,
+     "privileged": false,
+     "type": "service",
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "identity:75",
+     "kind": "identity",
+     "label": "svc-legacy-etl",
+     "system": null,
+     "privileged": false,
+     "type": "service",
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "identity:8",
+     "kind": "identity",
+     "label": "Pascal Ostrowski",
+     "system": null,
+     "privileged": false,
+     "type": "human",
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "identity:81",
+     "kind": "identity",
+     "label": "svc-data-export",
+     "system": null,
+     "privileged": false,
+     "type": "service",
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "identity:9",
+     "kind": "identity",
+     "label": "Joaquin Pemberton",
+     "system": null,
+     "privileged": false,
+     "type": "human",
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "perm:10",
+     "kind": "perm",
+     "label": "s3:PutObject on s3://customer-pii",
+     "system": "aws",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [
+      "pii"
+     ],
+     "environment": "prod"
+    },
+    {
+     "id": "perm:11",
+     "kind": "perm",
+     "label": "s3:DeleteObject on s3://customer-pii",
+     "system": "aws",
+     "privileged": true,
+     "type": null,
+     "status": null,
+     "tags": [
+      "pii"
+     ],
+     "environment": "prod"
+    },
+    {
+     "id": "perm:9",
+     "kind": "perm",
+     "label": "s3:GetObject on s3://customer-pii",
+     "system": "aws",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [
+      "pii"
+     ],
+     "environment": "prod"
+    },
+    {
+     "id": "resource:5",
+     "kind": "resource",
+     "label": "s3://customer-pii",
+     "system": "aws",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [
+      "pii"
+     ],
+     "environment": "prod"
+    }
+   ],
+   "edges": [
+    {
+     "source": "account:135",
+     "target": "perm:9",
+     "relation": "direct_grant",
+     "source_kind": "connector",
+     "edge_id": 231
+    },
+    {
+     "source": "account:136",
+     "target": "perm:9",
+     "relation": "direct_grant",
+     "source_kind": "connector",
+     "edge_id": 234
+    },
+    {
+     "source": "account:142",
+     "target": "perm:9",
+     "relation": "direct_grant",
+     "source_kind": "connector",
+     "edge_id": 245
+    },
+    {
+     "source": "account:68",
+     "target": "group:7",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 44
+    },
+    {
+     "source": "account:69",
+     "target": "group:7",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 47
+    },
+    {
+     "source": "account:70",
+     "target": "group:7",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 50
+    },
+    {
+     "source": "account:71",
+     "target": "group:7",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 53
+    },
+    {
+     "source": "account:72",
+     "target": "group:7",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 56
+    },
+    {
+     "source": "account:73",
+     "target": "group:7",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 59
+    },
+    {
+     "source": "account:74",
+     "target": "group:7",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 62
+    },
+    {
+     "source": "account:75",
+     "target": "group:7",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 65
+    },
+    {
+     "source": "account:76",
+     "target": "group:7",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 68
+    },
+    {
+     "source": "account:77",
+     "target": "group:7",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 71
+    },
+    {
+     "source": "account:78",
+     "target": "group:7",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 74
+    },
+    {
+     "source": "account:79",
+     "target": "group:7",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 77
+    },
+    {
+     "source": "account:80",
+     "target": "group:10",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 81
+    },
+    {
+     "source": "account:80",
+     "target": "group:7",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 80
+    },
+    {
+     "source": "account:81",
+     "target": "group:10",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 84
+    },
+    {
+     "source": "account:81",
+     "target": "group:7",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 83
+    },
+    {
+     "source": "account:82",
+     "target": "group:10",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 87
+    },
+    {
+     "source": "account:82",
+     "target": "group:7",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 86
+    },
+    {
+     "source": "account:83",
+     "target": "group:10",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 90
+    },
+    {
+     "source": "account:83",
+     "target": "group:7",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 89
+    },
+    {
+     "source": "account:84",
+     "target": "group:10",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 93
+    },
+    {
+     "source": "account:84",
+     "target": "group:7",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 92
+    },
+    {
+     "source": "account:85",
+     "target": "group:10",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 96
+    },
+    {
+     "source": "account:85",
+     "target": "group:7",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 95
+    },
+    {
+     "source": "account:86",
+     "target": "group:11",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 98
+    },
+    {
+     "source": "account:88",
+     "target": "group:11",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 102
+    },
+    {
+     "source": "account:89",
+     "target": "group:11",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 104
+    },
+    {
+     "source": "account:90",
+     "target": "group:11",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 106
+    },
+    {
+     "source": "account:91",
+     "target": "group:11",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 108
+    },
+    {
+     "source": "account:92",
+     "target": "group:11",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 110
+    },
+    {
+     "source": "group:10",
+     "target": "group:23",
+     "relation": "maps_to",
+     "source_kind": "connector",
+     "edge_id": 225
+    },
+    {
+     "source": "group:11",
+     "target": "group:25",
+     "relation": "maps_to",
+     "source_kind": "connector",
+     "edge_id": 226
+    },
+    {
+     "source": "group:21",
+     "target": "perm:9",
+     "relation": "grants",
+     "source_kind": "connector",
+     "edge_id": 191
+    },
+    {
+     "source": "group:23",
+     "target": "perm:11",
+     "relation": "grants",
+     "source_kind": "connector",
+     "edge_id": 199
+    },
+    {
+     "source": "group:25",
+     "target": "perm:10",
+     "relation": "grants",
+     "source_kind": "connector",
+     "edge_id": 205
+    },
+    {
+     "source": "group:25",
+     "target": "perm:9",
+     "relation": "grants",
+     "source_kind": "connector",
+     "edge_id": 204
+    },
+    {
+     "source": "group:7",
+     "target": "group:21",
+     "relation": "maps_to",
+     "source_kind": "connector",
+     "edge_id": 223
+    },
+    {
+     "source": "identity:10",
+     "target": "account:74",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "identity:11",
+     "target": "account:75",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "identity:12",
+     "target": "account:76",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "identity:13",
+     "target": "account:77",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "identity:14",
+     "target": "account:78",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "identity:15",
+     "target": "account:79",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "identity:16",
+     "target": "account:80",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "identity:17",
+     "target": "account:81",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "identity:18",
+     "target": "account:82",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "identity:19",
+     "target": "account:83",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "identity:20",
+     "target": "account:84",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "identity:21",
+     "target": "account:85",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "identity:22",
+     "target": "account:86",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "identity:24",
+     "target": "account:88",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "identity:25",
+     "target": "account:89",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "identity:26",
+     "target": "account:90",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "identity:27",
+     "target": "account:91",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "identity:28",
+     "target": "account:92",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "identity:4",
+     "target": "account:68",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "identity:5",
+     "target": "account:69",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "identity:6",
+     "target": "account:70",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "identity:7",
+     "target": "account:71",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "identity:74",
+     "target": "account:135",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "identity:75",
+     "target": "account:136",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "identity:8",
+     "target": "account:72",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "identity:81",
+     "target": "account:142",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "identity:9",
+     "target": "account:73",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "perm:10",
+     "target": "resource:5",
+     "relation": "on",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "perm:11",
+     "target": "resource:5",
+     "relation": "on",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "perm:9",
+     "target": "resource:5",
+     "relation": "on",
+     "source_kind": "connector",
+     "edge_id": null
+    }
+   ]
+  }
+ }
+}

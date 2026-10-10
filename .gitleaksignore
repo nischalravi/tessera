@@ -1,0 +1,4 @@
+# False positive: a list of Go module names and versions in the Phase 0 design (sources section), not a credential.
+402b9c28be7933968c2128d372845f1b8df15979:docs/design/phase-0-platform-security.md:generic-api-key:2432
+# False positive: a fake credential in a test asserting the API never returns stored secrets.
+1dadcc300f616a64fe333ec138fa7cc3a4cff881:mvp/server/internal/api/connections_test.go:generic-api-key:187

@@ -1,0 +1,174 @@
+{
+ "name": "hris-events-after",
+ "request": {
+  "method": "GET",
+  "path": "/api/hris/events"
+ },
+ "response": {
+  "status": 200,
+  "body": [
+   {
+    "id": 9,
+    "external_id": "sim-evt-9-1791466200",
+    "type": "leaver",
+    "status": "pending",
+    "effective_at": "2026-10-08T09:30:00",
+    "executed_at": null,
+    "identity": {
+     "id": 4,
+     "name": "Kofi Mensah",
+     "department": "Engineering"
+    },
+    "payload": {}
+   },
+   {
+    "id": 3,
+    "external_id": "wd-evt-9003",
+    "type": "joiner",
+    "status": "executed",
+    "effective_at": "2026-10-11T00:00:00",
+    "executed_at": "2026-10-08T09:30:00",
+    "identity": {
+     "id": 92,
+     "name": "Noor Achterberg",
+     "department": "Data"
+    },
+    "payload": {
+     "name": "Noor Achterberg",
+     "email": "noor.achterberg@larkspur.example",
+     "department": "Data",
+     "team": "data",
+     "title": "Analytics Engineer",
+     "manager_external_id": "emp-1022"
+    }
+   },
+   {
+    "id": 2,
+    "external_id": "wd-evt-9002",
+    "type": "mover",
+    "status": "executed",
+    "effective_at": "2026-10-10T00:00:00",
+    "executed_at": "2026-10-08T09:30:00",
+    "identity": {
+     "id": 53,
+     "name": "Wim Bellweather",
+     "department": "Sales"
+    },
+    "payload": {
+     "from_department": "Support",
+     "to_department": "Sales",
+     "from_team": "support",
+     "to_team": "sales",
+     "new_title": "Account Executive"
+    }
+   },
+   {
+    "id": 7,
+    "external_id": "sim-evt-7-1791466200",
+    "type": "mover",
+    "status": "executed",
+    "effective_at": "2026-10-08T09:30:00",
+    "executed_at": "2026-10-08T09:30:00",
+    "identity": {
+     "id": 5,
+     "name": "Alice Okafor",
+     "department": "Data"
+    },
+    "payload": {
+     "to_team": "data",
+     "to_department": "Data",
+     "new_title": "Data Engineer"
+    }
+   },
+   {
+    "id": 8,
+    "external_id": "sim-evt-8-1791466200",
+    "type": "joiner",
+    "status": "executed",
+    "effective_at": "2026-10-08T09:30:00",
+    "executed_at": "2026-10-08T09:30:00",
+    "identity": {
+     "id": 93,
+     "name": "Ada Parity",
+     "department": "Engineering"
+    },
+    "payload": {
+     "name": "Ada Parity",
+     "email": "ada.parity@larkspur.example",
+     "department": "Engineering",
+     "team": "platform",
+     "title": "Platform Engineer",
+     "manager_external_id": "emp-1013"
+    }
+   },
+   {
+    "id": 1,
+    "external_id": "wd-evt-9001",
+    "type": "leaver",
+    "status": "executed",
+    "effective_at": "2026-10-08T00:00:00",
+    "executed_at": "2026-10-08T09:30:00",
+    "identity": {
+     "id": 17,
+     "name": "Marcus Bellweather",
+     "department": "Engineering"
+    },
+    "payload": {
+     "reason": "Resignation",
+     "last_day": "2026-10-08"
+    }
+   },
+   {
+    "id": 4,
+    "external_id": "wd-evt-term-emp-1018",
+    "type": "leaver",
+    "status": "executed",
+    "effective_at": "2026-09-18T00:00:00",
+    "executed_at": null,
+    "identity": {
+     "id": 18,
+     "name": "Oren Whitlock",
+     "department": "Engineering"
+    },
+    "payload": {
+     "reason": "Voluntary",
+     "historical": true
+    }
+   },
+   {
+    "id": 6,
+    "external_id": "wd-evt-term-emp-1041",
+    "type": "leaver",
+    "status": "executed",
+    "effective_at": "2026-09-03T00:00:00",
+    "executed_at": null,
+    "identity": {
+     "id": 41,
+     "name": "Hollis Brightwater",
+     "department": "Sales"
+    },
+    "payload": {
+     "reason": "Voluntary",
+     "historical": true
+    }
+   },
+   {
+    "id": 5,
+    "external_id": "wd-evt-term-emp-1023",
+    "type": "leaver",
+    "status": "executed",
+    "effective_at": "2026-08-19T00:00:00",
+    "executed_at": null,
+    "identity": {
+     "id": 23,
+     "name": "Dmitri Ostrowski",
+     "department": "Data"
+    },
+    "payload": {
+     "reason": "Voluntary",
+     "historical": true
+    }
+   }
+  ]
+ }
+}

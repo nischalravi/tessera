@@ -1,0 +1,55 @@
+# Default demo scenario: realistic deployment misses (design §5.5).
+# Each entry overrides one check's simulated result for a template; checks
+# not listed pass against the simulated system. "fixable" entries pass once
+# the check id is listed in the connection's demo_fixed_checks.
+scenario: gaps
+description: Realistic misses for the demo walkthrough
+templates:
+  ad:
+    range_retrieval:
+      status: fail
+      fixable: true
+      message: "Group All-Staff-Legacy returned 1,500 of 2,100 members: the domain controller refused ranged retrieval past MaxValRange."
+      observed: { largest_group: All-Staff-Legacy, ranged_count: 1500, full_count: 2100, max_val_range: 1500 }
+    read_per_class:
+      status: pass
+      message: "Every required attribute was returned; employeeID is present on 61% of sampled users."
+      observed: { sampled: 500, classes: 5, employeeID_fill: "61%", missing_attributes: 0 }
+    dirsync_allowed:
+      status: fail
+      message: "DirSync needs Replicating Directory Changes, which the least-privilege service account does not hold (expected)."
+      observed: { mechanism: usn }
+  okta:
+    auth_mode:
+      status: fail
+      message: "The connection uses an SSWS API token, which carries the creating admin's privileges and expires after 30 days unused."
+      observed: { mode: api_token }
+    rate_headroom:
+      status: warn
+      message: "62% of the users rate limit remained during validation (target at least 50%)."
+      observed: { limit: 600, remaining: 372, throttled: 0 }
+  workday:
+    field_inventory:
+      status: pass
+      message: "No forbidden field (national id, compensation, bank details, date of birth) in the sampled worker."
+      observed: { fields: 14, forbidden: 0 }
+  entra:
+    credential_type:
+      status: fail
+      message: "The app registration authenticates with a client secret."
+      observed: { mode: client_secret }
+  ldap:
+    paging:
+      status: fail
+      message: "Search stopped at 500 entries with sizeLimitExceeded: the bind DN's olcLimits size limit is lower than a page."
+      observed: { page_limit: 500, size_limit_hit: true }
+  google:
+    credential_type:
+      status: fail
+      message: "A downloadable JSON key 140 days old is in use."
+      observed: { mode: json_key, key_age_days: 140 }
+  scim_app:
+    members_complete:
+      status: fail
+      message: "Group Admins lists 100 members on list calls but 132 when fetched individually."
+      observed: { list_count: 100, get_count: 132 }

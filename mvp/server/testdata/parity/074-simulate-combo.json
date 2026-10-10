@@ -1,0 +1,424 @@
+{
+ "name": "simulate-combo",
+ "request": {
+  "method": "POST",
+  "path": "/api/simulate",
+  "body": {
+   "remove_edge_ids": [
+    19
+   ],
+   "disable_account_ids": [
+    82
+   ],
+   "add_edges": [
+    {
+     "src": "account:69",
+     "dst": "group:10"
+    }
+   ]
+  }
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "changes": [
+    {
+     "op": "remove",
+     "edge_id": 19,
+     "edge": [
+      "account:33",
+      "group:2"
+     ],
+     "label": "workday:emp-1033 → workday:AP Approver"
+    },
+    {
+     "op": "add",
+     "edge": [
+      "account:69",
+      "group:10"
+     ],
+     "label": "okta:alice.okafor@larkspur.example → okta:eng-platform"
+    },
+    {
+     "op": "disable_account",
+     "account_id": 82,
+     "label": "okta:oren.whitlock@larkspur.example"
+    }
+   ],
+   "summary": {
+    "identities_affected": 3,
+    "permissions_removed": 14,
+    "permissions_added": 6,
+    "removed_recently_used": 4,
+    "removed_privileged": 6,
+    "violations_before": 74,
+    "violations_after": 74,
+    "violations_resolved": 1,
+    "violations_introduced": 1
+   },
+   "identities": [
+    {
+     "identity_id": 5,
+     "name": "Alice Okafor",
+     "type": "human",
+     "removed": [],
+     "added": [
+      {
+       "perm_key": "perm:11",
+       "action": "s3:DeleteObject",
+       "resource": "s3://customer-pii",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "pii"
+       ],
+       "path": "Alice Okafor → okta:alice.okafor@larkspur.example → okta:eng-platform → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+      },
+      {
+       "perm_key": "perm:18",
+       "action": "s3:GetObject",
+       "resource": "s3://terraform-state",
+       "system": "aws",
+       "privileged": false,
+       "tags": [
+        "infra"
+       ],
+       "path": "Alice Okafor → okta:alice.okafor@larkspur.example → okta:eng-platform → aws:ProdAdmin → s3:GetObject on s3://terraform-state"
+      },
+      {
+       "perm_key": "perm:19",
+       "action": "s3:PutObject",
+       "resource": "s3://terraform-state",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "infra"
+       ],
+       "path": "Alice Okafor → okta:alice.okafor@larkspur.example → okta:eng-platform → aws:ProdAdmin → s3:PutObject on s3://terraform-state"
+      },
+      {
+       "perm_key": "perm:21",
+       "action": "rds:ModifyDBInstance",
+       "resource": "rds/orders-db",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "pii"
+       ],
+       "path": "Alice Okafor → okta:alice.okafor@larkspur.example → okta:eng-platform → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db"
+      },
+      {
+       "perm_key": "perm:23",
+       "action": "ec2:TerminateInstances",
+       "resource": "ec2/prod-fleet",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "path": "Alice Okafor → okta:alice.okafor@larkspur.example → okta:eng-platform → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet"
+      },
+      {
+       "perm_key": "perm:24",
+       "action": "iam:*",
+       "resource": "aws-account/larkspur-prod",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "path": "Alice Okafor → okta:alice.okafor@larkspur.example → okta:eng-platform → aws:ProdAdmin → iam:* on aws-account/larkspur-prod"
+      }
+     ]
+    },
+    {
+     "identity_id": 18,
+     "name": "Oren Whitlock",
+     "type": "human",
+     "removed": [
+      {
+       "perm_key": "perm:11",
+       "action": "s3:DeleteObject",
+       "resource": "s3://customer-pii",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "pii"
+       ],
+       "usage": {
+        "last_used": "2026-07-27T00:00:00",
+        "days_since_used": 73,
+        "events_90d": 12,
+        "active_days_90d": 1
+       },
+       "used_last_30d": false
+      },
+      {
+       "perm_key": "perm:12",
+       "action": "s3:GetObject",
+       "resource": "s3://app-logs",
+       "system": "aws",
+       "privileged": false,
+       "tags": [],
+       "usage": {
+        "last_used": "2026-09-18T00:00:00",
+        "days_since_used": 20,
+        "events_90d": 242,
+        "active_days_90d": 37
+       },
+       "used_last_30d": true
+      },
+      {
+       "perm_key": "perm:16",
+       "action": "s3:GetObject",
+       "resource": "s3://ml-artifacts",
+       "system": "aws",
+       "privileged": false,
+       "tags": [],
+       "usage": {
+        "last_used": "2026-09-18T00:00:00",
+        "days_since_used": 20,
+        "events_90d": 308,
+        "active_days_90d": 41
+       },
+       "used_last_30d": true
+      },
+      {
+       "perm_key": "perm:17",
+       "action": "s3:PutObject",
+       "resource": "s3://ml-artifacts",
+       "system": "aws",
+       "privileged": false,
+       "tags": [],
+       "usage": {
+        "last_used": null,
+        "days_since_used": null,
+        "events_90d": 0,
+        "active_days_90d": 0
+       },
+       "used_last_30d": false
+      },
+      {
+       "perm_key": "perm:18",
+       "action": "s3:GetObject",
+       "resource": "s3://terraform-state",
+       "system": "aws",
+       "privileged": false,
+       "tags": [
+        "infra"
+       ],
+       "usage": {
+        "last_used": null,
+        "days_since_used": null,
+        "events_90d": 0,
+        "active_days_90d": 0
+       },
+       "used_last_30d": false
+      },
+      {
+       "perm_key": "perm:19",
+       "action": "s3:PutObject",
+       "resource": "s3://terraform-state",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "infra"
+       ],
+       "usage": {
+        "last_used": null,
+        "days_since_used": null,
+        "events_90d": 0,
+        "active_days_90d": 0
+       },
+       "used_last_30d": false
+      },
+      {
+       "perm_key": "perm:20",
+       "action": "rds:Connect",
+       "resource": "rds/orders-db",
+       "system": "aws",
+       "privileged": false,
+       "tags": [
+        "pii"
+       ],
+       "usage": {
+        "last_used": "2026-09-18T00:00:00",
+        "days_since_used": 20,
+        "events_90d": 254,
+        "active_days_90d": 38
+       },
+       "used_last_30d": true
+      },
+      {
+       "perm_key": "perm:21",
+       "action": "rds:ModifyDBInstance",
+       "resource": "rds/orders-db",
+       "system": "aws",
+       "privileged": true,
+       "tags": [
+        "pii"
+       ],
+       "usage": {
+        "last_used": null,
+        "days_since_used": null,
+        "events_90d": 0,
+        "active_days_90d": 0
+       },
+       "used_last_30d": false
+      },
+      {
+       "perm_key": "perm:22",
+       "action": "ec2:DescribeInstances",
+       "resource": "ec2/prod-fleet",
+       "system": "aws",
+       "privileged": false,
+       "tags": [],
+       "usage": {
+        "last_used": null,
+        "days_since_used": null,
+        "events_90d": 0,
+        "active_days_90d": 0
+       },
+       "used_last_30d": false
+      },
+      {
+       "perm_key": "perm:23",
+       "action": "ec2:TerminateInstances",
+       "resource": "ec2/prod-fleet",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "usage": {
+        "last_used": null,
+        "days_since_used": null,
+        "events_90d": 0,
+        "active_days_90d": 0
+       },
+       "used_last_30d": false
+      },
+      {
+       "perm_key": "perm:24",
+       "action": "iam:*",
+       "resource": "aws-account/larkspur-prod",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "usage": {
+        "last_used": null,
+        "days_since_used": null,
+        "events_90d": 0,
+        "active_days_90d": 0
+       },
+       "used_last_30d": false
+      },
+      {
+       "perm_key": "perm:25",
+       "action": "iam:*",
+       "resource": "aws-account/larkspur-staging",
+       "system": "aws",
+       "privileged": true,
+       "tags": [],
+       "usage": {
+        "last_used": "2026-09-13T00:00:00",
+        "days_since_used": 25,
+        "events_90d": 69,
+        "active_days_90d": 10
+       },
+       "used_last_30d": true
+      },
+      {
+       "perm_key": "perm:9",
+       "action": "s3:GetObject",
+       "resource": "s3://customer-pii",
+       "system": "aws",
+       "privileged": false,
+       "tags": [
+        "pii"
+       ],
+       "usage": {
+        "last_used": null,
+        "days_since_used": null,
+        "events_90d": 0,
+        "active_days_90d": 0
+       },
+       "used_last_30d": false
+      }
+     ],
+     "added": []
+    },
+    {
+     "identity_id": 33,
+     "name": "Priya Ramaswamy",
+     "type": "human",
+     "removed": [
+      {
+       "perm_key": "perm:2",
+       "action": "payments:approve",
+       "resource": "Supplier Payments",
+       "system": "workday",
+       "privileged": false,
+       "tags": [
+        "payments",
+        "financial"
+       ],
+       "usage": {
+        "last_used": null,
+        "days_since_used": null,
+        "events_90d": 0,
+        "active_days_90d": 0
+       },
+       "used_last_30d": false
+      }
+     ],
+     "added": []
+    }
+   ],
+   "violations": {
+    "resolved": [
+     {
+      "policy_id": "sod-payments",
+      "policy_name": "SoD: create vs approve supplier payments",
+      "severity": "high",
+      "identity_id": 33,
+      "identity_name": "Priya Ramaswamy",
+      "key": "sod-payments:33",
+      "message": "Priya Ramaswamy can both payments:create and payments:approve on Supplier Payments",
+      "evidence": [
+       "Priya Ramaswamy → workday:emp-1033 → workday:AP Clerk → payments:create on Supplier Payments",
+       "Priya Ramaswamy → workday:emp-1033 → workday:AP Approver → payments:approve on Supplier Payments"
+      ],
+      "edges": [
+       [
+        "account:33",
+        "group:1"
+       ],
+       [
+        "account:33",
+        "group:2"
+       ]
+      ]
+     }
+    ],
+    "introduced": [
+     {
+      "policy_id": "no-standing-prod-admin",
+      "policy_name": "No standing admin on prod",
+      "severity": "high",
+      "identity_id": 5,
+      "identity_name": "Alice Okafor",
+      "key": "no-standing-prod-admin:5:account:69->group:10",
+      "message": "Alice Okafor has standing privileged prod access via okta:eng-platform: ec2:TerminateInstances on ec2/prod-fleet, iam:* on aws-account/larkspur-prod, rds:ModifyDBInstance on rds/orders-db …",
+      "evidence": [
+       "Alice Okafor → okta:alice.okafor@larkspur.example → okta:eng-platform → aws:ProdAdmin → iam:* on aws-account/larkspur-prod",
+       "Alice Okafor → okta:alice.okafor@larkspur.example → okta:eng-platform → aws:ProdAdmin → ec2:TerminateInstances on ec2/prod-fleet",
+       "Alice Okafor → okta:alice.okafor@larkspur.example → okta:eng-platform → aws:ProdAdmin → rds:ModifyDBInstance on rds/orders-db",
+       "Alice Okafor → okta:alice.okafor@larkspur.example → okta:eng-platform → aws:ProdAdmin → s3:DeleteObject on s3://customer-pii"
+      ],
+      "edges": [
+       [
+        "account:69",
+        "group:10"
+       ]
+      ]
+     }
+    ]
+   }
+  }
+ }
+}

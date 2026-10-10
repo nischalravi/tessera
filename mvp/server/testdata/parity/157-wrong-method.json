@@ -1,0 +1,13 @@
+{
+ "name": "wrong-method",
+ "request": {
+  "method": "POST",
+  "path": "/api/summary"
+ },
+ "response": {
+  "status": 405,
+  "body": {
+   "detail": "Method Not Allowed"
+  }
+ }
+}

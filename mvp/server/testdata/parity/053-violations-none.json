@@ -1,0 +1,11 @@
+{
+ "name": "violations-none",
+ "request": {
+  "method": "GET",
+  "path": "/api/violations?policy_id=nope"
+ },
+ "response": {
+  "status": 200,
+  "body": []
+ }
+}

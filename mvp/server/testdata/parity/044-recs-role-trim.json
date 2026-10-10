@@ -1,0 +1,116 @@
+{
+ "name": "recs-role-trim",
+ "request": {
+  "method": "GET",
+  "path": "/api/least-privilege/recommendations?kind=role_trim"
+ },
+ "response": {
+  "status": 200,
+  "body": [
+   {
+    "id": "role-191",
+    "edge_id": 191,
+    "kind": "role_trim",
+    "identity_id": null,
+    "identity_name": "17 holders",
+    "identity_type": "role",
+    "department": null,
+    "grant": "aws:DevAdmin → s3:GetObject on s3://customer-pii",
+    "target": "aws:DevAdmin",
+    "target_privileged": true,
+    "permissions_via": 1,
+    "permissions_lost": 17,
+    "unused_lost": 17,
+    "used_lost": 0,
+    "privileged_unused": 0,
+    "sensitive_tags": [
+     "pii"
+    ],
+    "last_used": null,
+    "days_since_used": null,
+    "unused_examples": [
+     "s3:GetObject on s3://customer-pii"
+    ],
+    "used_examples": [],
+    "holders": [
+     "Alice Okafor",
+     "Anders Zeller",
+     "Cyrus Quennell",
+     "Dalia Mokoena",
+     "Desmond Abernathy",
+     "Freya Whitlock",
+     "Hana Rasmussen",
+     "Ilya Kowalczyk",
+     "Ingrid Lindqvist",
+     "Joaquin Pemberton",
+     "Kofi Mensah",
+     "Lena Valdivia"
+    ],
+    "score": 28,
+    "rationale": "None of the 17 identities that hold s3:GetObject on s3://customer-pii through aws:DevAdmin used it in 60 days. Remove it from the role."
+   },
+   {
+    "id": "role-371",
+    "edge_id": 371,
+    "kind": "role_trim",
+    "identity_id": null,
+    "identity_name": "2 holders",
+    "identity_type": "role",
+    "department": null,
+    "grant": "snowflake:SYSADMIN → snowflake:OWNERSHIP on snowflake/CUSTOMERS",
+    "target": "snowflake:SYSADMIN",
+    "target_privileged": true,
+    "permissions_via": 1,
+    "permissions_lost": 2,
+    "unused_lost": 2,
+    "used_lost": 0,
+    "privileged_unused": 2,
+    "sensitive_tags": [
+     "pii"
+    ],
+    "last_used": null,
+    "days_since_used": null,
+    "unused_examples": [
+     "snowflake:OWNERSHIP on snowflake/CUSTOMERS"
+    ],
+    "used_examples": [],
+    "holders": [
+     "Sana Iyer",
+     "Talia Bellweather"
+    ],
+    "score": 21,
+    "rationale": "None of the 2 identities that hold snowflake:OWNERSHIP on snowflake/CUSTOMERS through snowflake:SYSADMIN used it in 60 days. Remove it from the role."
+   },
+   {
+    "id": "role-374",
+    "edge_id": 374,
+    "kind": "role_trim",
+    "identity_id": null,
+    "identity_name": "2 holders",
+    "identity_type": "role",
+    "department": null,
+    "grant": "snowflake:SYSADMIN → snowflake:OWNERSHIP on snowflake/MARKETING",
+    "target": "snowflake:SYSADMIN",
+    "target_privileged": true,
+    "permissions_via": 1,
+    "permissions_lost": 2,
+    "unused_lost": 2,
+    "used_lost": 0,
+    "privileged_unused": 2,
+    "sensitive_tags": [],
+    "last_used": null,
+    "days_since_used": null,
+    "unused_examples": [
+     "snowflake:OWNERSHIP on snowflake/MARKETING"
+    ],
+    "used_examples": [],
+    "holders": [
+     "Sana Iyer",
+     "Talia Bellweather"
+    ],
+    "score": 15,
+    "rationale": "None of the 2 identities that hold snowflake:OWNERSHIP on snowflake/MARKETING through snowflake:SYSADMIN used it in 60 days. Remove it from the role."
+   }
+  ]
+ }
+}

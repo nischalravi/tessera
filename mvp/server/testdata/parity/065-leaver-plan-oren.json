@@ -1,0 +1,111 @@
+{
+ "name": "leaver-plan-oren",
+ "request": {
+  "method": "GET",
+  "path": "/api/jml/leaver-plan/18"
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "type": "leaver",
+   "identity": {
+    "id": 18,
+    "name": "Oren Whitlock",
+    "status": "terminated",
+    "department": "Engineering",
+    "title": "Site Reliability Engineer"
+   },
+   "steps": [
+    {
+     "action": "disable_account",
+     "system": "okta",
+     "target": "oren.whitlock@larkspur.example",
+     "account_id": 82,
+     "detail": "Disable okta account oren.whitlock@larkspur.example"
+    },
+    {
+     "action": "disable_account",
+     "system": "github",
+     "target": "oren-whitl",
+     "account_id": 159,
+     "detail": "Disable github account oren-whitl"
+    },
+    {
+     "action": "remove_grant",
+     "system": "okta",
+     "edge_id": 85,
+     "target": "okta:Everyone",
+     "detail": "Remove okta:oren.whitlock@larkspur.example from okta:Everyone"
+    },
+    {
+     "action": "remove_grant",
+     "system": "okta",
+     "edge_id": 86,
+     "target": "okta:engineering",
+     "detail": "Remove okta:oren.whitlock@larkspur.example from okta:engineering"
+    },
+    {
+     "action": "remove_grant",
+     "system": "okta",
+     "edge_id": 87,
+     "target": "okta:eng-platform",
+     "detail": "Remove okta:oren.whitlock@larkspur.example from okta:eng-platform"
+    },
+    {
+     "action": "remove_grant",
+     "system": "github",
+     "edge_id": 302,
+     "target": "github:all-engineers",
+     "detail": "Remove github:oren-whitl from github:all-engineers"
+    },
+    {
+     "action": "remove_grant",
+     "system": "github",
+     "edge_id": 303,
+     "target": "github:platform",
+     "detail": "Remove github:oren-whitl from github:platform"
+    },
+    {
+     "action": "reassign_owner",
+     "identity_id": 81,
+     "system": "tessera",
+     "target": "svc-data-export",
+     "new_owner_id": 16,
+     "detail": "Transfer ownership of svc-data-export (service) to Ingrid Lindqvist"
+    },
+    {
+     "action": "rotate_secret",
+     "secret_id": 16,
+     "system": "aws",
+     "target": "AKIASVCDATAEXPOR",
+     "detail": "Rotate access_key 'AKIASVCDATAEXPOR' on svc-data-export (leaver had custody)"
+    },
+    {
+     "action": "reassign_owner",
+     "identity_id": 84,
+     "system": "tessera",
+     "target": "jenkins-pat",
+     "new_owner_id": 16,
+     "detail": "Transfer ownership of jenkins-pat (service) to Ingrid Lindqvist"
+    },
+    {
+     "action": "rotate_secret",
+     "secret_id": 20,
+     "system": "github",
+     "target": "jenkins-pat-token",
+     "detail": "Rotate pat 'jenkins-pat-token' on jenkins-pat (leaver had custody)"
+    }
+   ],
+   "impact": {
+    "permissions_removed": 28,
+    "privileged_removed": 7,
+    "systems": [
+     "github",
+     "okta"
+    ],
+    "owned_nhis": 2,
+    "violations_resolved": 1
+   }
+  }
+ }
+}

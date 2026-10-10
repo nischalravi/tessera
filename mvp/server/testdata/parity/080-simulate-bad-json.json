@@ -1,0 +1,27 @@
+{
+ "name": "simulate-bad-json",
+ "request": {
+  "method": "POST",
+  "path": "/api/simulate",
+  "raw_body": "{not json"
+ },
+ "response": {
+  "status": 422,
+  "body": {
+   "detail": [
+    {
+     "type": "json_invalid",
+     "loc": [
+      "body",
+      1
+     ],
+     "msg": "JSON decode error",
+     "input": {},
+     "ctx": {
+      "error": "Expecting property name enclosed in double quotes"
+     }
+    }
+   ]
+  }
+ }
+}

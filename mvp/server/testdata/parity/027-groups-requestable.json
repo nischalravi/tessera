@@ -1,0 +1,42 @@
+{
+ "name": "groups-requestable",
+ "request": {
+  "method": "GET",
+  "path": "/api/groups?requestable=true"
+ },
+ "response": {
+  "status": 200,
+  "body": [
+   {
+    "id": 24,
+    "key": "group:24",
+    "system": "aws",
+    "name": "BreakGlassAdmin",
+    "kind": "role",
+    "privileged": true,
+    "requestable": true,
+    "description": "Emergency admin (JIT only)"
+   },
+   {
+    "id": 23,
+    "key": "group:23",
+    "system": "aws",
+    "name": "ProdAdmin",
+    "kind": "role",
+    "privileged": true,
+    "requestable": true,
+    "description": "Full admin on the prod account"
+   },
+   {
+    "id": 43,
+    "key": "group:43",
+    "system": "snowflake",
+    "name": "ACCOUNTADMIN",
+    "kind": "role",
+    "privileged": true,
+    "requestable": true,
+    "description": null
+   }
+  ]
+ }
+}

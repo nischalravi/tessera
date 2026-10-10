@@ -1,0 +1,643 @@
+{
+ "name": "identity-priya",
+ "request": {
+  "method": "GET",
+  "path": "/api/identities/33"
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "id": 33,
+   "name": "Priya Ramaswamy",
+   "type": "human",
+   "status": "active",
+   "department": "Finance",
+   "title": "FP&A Analyst",
+   "email": "priya.ramaswamy@larkspur.example",
+   "description": null,
+   "hired_at": "2023-08-01T00:00:00",
+   "terminated_at": null,
+   "manager": {
+    "id": 32,
+    "name": "Beatrix Pemberton",
+    "type": "human",
+    "status": "active",
+    "department": "Finance",
+    "title": "Financial Controller"
+   },
+   "owner": null,
+   "accounts": [
+    {
+     "id": 33,
+     "system": "workday",
+     "username": "emp-1033",
+     "kind": "user",
+     "status": "active",
+     "last_login_at": "2026-10-06T03:50:51.244647"
+    },
+    {
+     "id": 97,
+     "system": "okta",
+     "username": "priya.ramaswamy@larkspur.example",
+     "kind": "user",
+     "status": "active",
+     "last_login_at": "2026-10-05T14:26:46.662568"
+    },
+    {
+     "id": 187,
+     "system": "snowflake",
+     "username": "PRIYA_RAMASWAMY",
+     "kind": "user",
+     "status": "active",
+     "last_login_at": "2026-10-06T18:00:07.674960"
+    }
+   ],
+   "grants": [
+    {
+     "edge_id": 18,
+     "src": "account:33",
+     "dst": "group:1",
+     "label": "workday:AP Clerk",
+     "account": "workday:emp-1033",
+     "relation": "member_of",
+     "source": "connector",
+     "expires_at": null,
+     "privileged": false
+    },
+    {
+     "edge_id": 19,
+     "src": "account:33",
+     "dst": "group:2",
+     "label": "workday:AP Approver",
+     "account": "workday:emp-1033",
+     "relation": "member_of",
+     "source": "connector",
+     "expires_at": null,
+     "privileged": false
+    },
+    {
+     "edge_id": 119,
+     "src": "account:97",
+     "dst": "group:6",
+     "label": "okta:Everyone",
+     "account": "okta:priya.ramaswamy@larkspur.example",
+     "relation": "member_of",
+     "source": "connector",
+     "expires_at": null,
+     "privileged": false
+    },
+    {
+     "edge_id": 120,
+     "src": "account:97",
+     "dst": "group:13",
+     "label": "okta:finance",
+     "account": "okta:priya.ramaswamy@larkspur.example",
+     "relation": "member_of",
+     "source": "connector",
+     "expires_at": null,
+     "privileged": false
+    },
+    {
+     "edge_id": 386,
+     "src": "account:187",
+     "dst": "group:40",
+     "label": "snowflake:FINANCE_ANALYST",
+     "account": "snowflake:PRIYA_RAMASWAMY",
+     "relation": "member_of",
+     "source": "connector",
+     "expires_at": null,
+     "privileged": false
+    }
+   ],
+   "effective_permissions": [
+    {
+     "perm_key": "perm:27",
+     "action": "ce:GetCostAndUsage",
+     "system": "aws",
+     "resource": "aws-account/larkspur-prod",
+     "resource_id": 12,
+     "environment": "prod",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-07T00:00:00",
+      "days_since_used": 1,
+      "events_90d": 317,
+      "active_days_90d": 49
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:33",
+        "kind": "identity",
+        "label": "Priya Ramaswamy",
+        "system": null
+       },
+       {
+        "key": "account:97",
+        "kind": "account",
+        "label": "okta:priya.ramaswamy@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:13",
+        "kind": "group",
+        "label": "okta:finance",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 120,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:26",
+        "kind": "group",
+        "label": "aws:BillingAdmin",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 227,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:27",
+        "kind": "perm",
+        "label": "ce:GetCostAndUsage on aws-account/larkspur-prod",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 210,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:14",
+     "action": "s3:GetObject",
+     "system": "aws",
+     "resource": "s3://finance-reports",
+     "resource_id": 7,
+     "environment": "prod",
+     "tags": [
+      "financial"
+     ],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-07T00:00:00",
+      "days_since_used": 1,
+      "events_90d": 316,
+      "active_days_90d": 49
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:33",
+        "kind": "identity",
+        "label": "Priya Ramaswamy",
+        "system": null
+       },
+       {
+        "key": "account:97",
+        "kind": "account",
+        "label": "okta:priya.ramaswamy@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:13",
+        "kind": "group",
+        "label": "okta:finance",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 120,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:26",
+        "kind": "group",
+        "label": "aws:BillingAdmin",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 227,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:14",
+        "kind": "perm",
+        "label": "s3:GetObject on s3://finance-reports",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 211,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:15",
+     "action": "s3:PutObject",
+     "system": "aws",
+     "resource": "s3://finance-reports",
+     "resource_id": 7,
+     "environment": "prod",
+     "tags": [
+      "financial"
+     ],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 306,
+      "active_days_90d": 49
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:33",
+        "kind": "identity",
+        "label": "Priya Ramaswamy",
+        "system": null
+       },
+       {
+        "key": "account:97",
+        "kind": "account",
+        "label": "okta:priya.ramaswamy@larkspur.example",
+        "system": "okta",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:13",
+        "kind": "group",
+        "label": "okta:finance",
+        "system": "okta",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 120,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:26",
+        "kind": "group",
+        "label": "aws:BillingAdmin",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 227,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:15",
+        "kind": "perm",
+        "label": "s3:PutObject on s3://finance-reports",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 212,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:53",
+     "action": "snowflake:SELECT",
+     "system": "snowflake",
+     "resource": "snowflake/FINANCE",
+     "resource_id": 24,
+     "environment": "prod",
+     "tags": [
+      "financial"
+     ],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "active_days_90d": 0
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:33",
+        "kind": "identity",
+        "label": "Priya Ramaswamy",
+        "system": null
+       },
+       {
+        "key": "account:187",
+        "kind": "account",
+        "label": "snowflake:PRIYA_RAMASWAMY",
+        "system": "snowflake",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:40",
+        "kind": "group",
+        "label": "snowflake:FINANCE_ANALYST",
+        "system": "snowflake",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 386,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:53",
+        "kind": "perm",
+        "label": "snowflake:SELECT on snowflake/FINANCE",
+        "system": "snowflake",
+        "via": {
+         "relation": "grants",
+         "edge_id": 365,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:2",
+     "action": "payments:approve",
+     "system": "workday",
+     "resource": "Supplier Payments",
+     "resource_id": 1,
+     "environment": "prod",
+     "tags": [
+      "payments",
+      "financial"
+     ],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "active_days_90d": 0
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:33",
+        "kind": "identity",
+        "label": "Priya Ramaswamy",
+        "system": null
+       },
+       {
+        "key": "account:33",
+        "kind": "account",
+        "label": "workday:emp-1033",
+        "system": "workday",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:2",
+        "kind": "group",
+        "label": "workday:AP Approver",
+        "system": "workday",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 19,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:2",
+        "kind": "perm",
+        "label": "payments:approve on Supplier Payments",
+        "system": "workday",
+        "via": {
+         "relation": "grants",
+         "edge_id": 2,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:1",
+     "action": "payments:create",
+     "system": "workday",
+     "resource": "Supplier Payments",
+     "resource_id": 1,
+     "environment": "prod",
+     "tags": [
+      "payments",
+      "financial"
+     ],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 281,
+      "active_days_90d": 43
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:33",
+        "kind": "identity",
+        "label": "Priya Ramaswamy",
+        "system": null
+       },
+       {
+        "key": "account:33",
+        "kind": "account",
+        "label": "workday:emp-1033",
+        "system": "workday",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:1",
+        "kind": "group",
+        "label": "workday:AP Clerk",
+        "system": "workday",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 18,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:1",
+        "kind": "perm",
+        "label": "payments:create on Supplier Payments",
+        "system": "workday",
+        "via": {
+         "relation": "grants",
+         "edge_id": 1,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    }
+   ],
+   "violations": [
+    {
+     "policy_id": "sod-payments",
+     "policy_name": "SoD: create vs approve supplier payments",
+     "severity": "high",
+     "identity_id": 33,
+     "identity_name": "Priya Ramaswamy",
+     "key": "sod-payments:33",
+     "message": "Priya Ramaswamy can both payments:create and payments:approve on Supplier Payments",
+     "evidence": [
+      "Priya Ramaswamy → workday:emp-1033 → workday:AP Clerk → payments:create on Supplier Payments",
+      "Priya Ramaswamy → workday:emp-1033 → workday:AP Approver → payments:approve on Supplier Payments"
+     ],
+     "edges": [
+      [
+       "account:33",
+       "group:1"
+      ],
+      [
+       "account:33",
+       "group:2"
+      ]
+     ]
+    }
+   ],
+   "recommendations": [
+    {
+     "id": "19",
+     "edge_id": 19,
+     "kind": "remove",
+     "identity_id": 33,
+     "identity_name": "Priya Ramaswamy",
+     "identity_type": "human",
+     "department": "Finance",
+     "grant": "workday:emp-1033 → workday:AP Approver",
+     "target": "workday:AP Approver",
+     "target_privileged": false,
+     "permissions_via": 1,
+     "permissions_lost": 1,
+     "unused_lost": 1,
+     "used_lost": 0,
+     "privileged_unused": 0,
+     "sensitive_tags": [
+      "financial",
+      "payments"
+     ],
+     "last_used": null,
+     "days_since_used": null,
+     "unused_examples": [
+      "payments:approve on Supplier Payments"
+     ],
+     "used_examples": [],
+     "score": 15,
+     "rationale": "None of the 1 permissions only this grant provides were used in 60 days (never used)."
+    },
+    {
+     "id": "386",
+     "edge_id": 386,
+     "kind": "remove",
+     "identity_id": 33,
+     "identity_name": "Priya Ramaswamy",
+     "identity_type": "human",
+     "department": "Finance",
+     "grant": "snowflake:PRIYA_RAMASWAMY → snowflake:FINANCE_ANALYST",
+     "target": "snowflake:FINANCE_ANALYST",
+     "target_privileged": false,
+     "permissions_via": 1,
+     "permissions_lost": 1,
+     "unused_lost": 1,
+     "used_lost": 0,
+     "privileged_unused": 0,
+     "sensitive_tags": [
+      "financial"
+     ],
+     "last_used": null,
+     "days_since_used": null,
+     "unused_examples": [
+      "snowflake:SELECT on snowflake/FINANCE"
+     ],
+     "used_examples": [],
+     "score": 11,
+     "rationale": "None of the 1 permissions only this grant provides were used in 60 days (never used)."
+    }
+   ],
+   "secrets": [],
+   "delegations": [],
+   "owned_identities": [],
+   "risk": {
+    "effective": 6,
+    "unused": 2,
+    "privileged": 0,
+    "sensitive": 5,
+    "violations": 1,
+    "risk": 25
+   }
+  }
+ }
+}

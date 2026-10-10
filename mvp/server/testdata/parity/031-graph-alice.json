@@ -1,0 +1,739 @@
+{
+ "name": "graph-alice",
+ "request": {
+  "method": "GET",
+  "path": "/api/graph?identity_id=5"
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "nodes": [
+    {
+     "id": "account:146",
+     "kind": "account",
+     "label": "github:alice-okafo",
+     "system": "github",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "account:5",
+     "kind": "account",
+     "label": "workday:emp-1005",
+     "system": "workday",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "account:69",
+     "kind": "account",
+     "label": "okta:alice.okafor@larkspur.example",
+     "system": "okta",
+     "privileged": false,
+     "type": null,
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "group:21",
+     "kind": "group",
+     "label": "aws:DevAdmin",
+     "system": "aws",
+     "privileged": true,
+     "type": null,
+     "status": null,
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "group:22",
+     "kind": "group",
+     "label": "aws:ProdReadOnly",
+     "system": "aws",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "group:30",
+     "kind": "group",
+     "label": "github:backend",
+     "system": "github",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "group:35",
+     "kind": "group",
+     "label": "github:all-engineers",
+     "system": "github",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "group:7",
+     "kind": "group",
+     "label": "okta:engineering",
+     "system": "okta",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "identity:5",
+     "kind": "identity",
+     "label": "Alice Okafor",
+     "system": null,
+     "privileged": false,
+     "type": "human",
+     "status": "active",
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "perm:12",
+     "kind": "perm",
+     "label": "s3:GetObject on s3://app-logs",
+     "system": "aws",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [],
+     "environment": "prod"
+    },
+    {
+     "id": "perm:16",
+     "kind": "perm",
+     "label": "s3:GetObject on s3://ml-artifacts",
+     "system": "aws",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [],
+     "environment": "staging"
+    },
+    {
+     "id": "perm:17",
+     "kind": "perm",
+     "label": "s3:PutObject on s3://ml-artifacts",
+     "system": "aws",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [],
+     "environment": "staging"
+    },
+    {
+     "id": "perm:20",
+     "kind": "perm",
+     "label": "rds:Connect on rds/orders-db",
+     "system": "aws",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [
+      "pii"
+     ],
+     "environment": "prod"
+    },
+    {
+     "id": "perm:22",
+     "kind": "perm",
+     "label": "ec2:DescribeInstances on ec2/prod-fleet",
+     "system": "aws",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [],
+     "environment": "prod"
+    },
+    {
+     "id": "perm:25",
+     "kind": "perm",
+     "label": "iam:* on aws-account/larkspur-staging",
+     "system": "aws",
+     "privileged": true,
+     "type": null,
+     "status": null,
+     "tags": [],
+     "environment": "staging"
+    },
+    {
+     "id": "perm:30",
+     "kind": "perm",
+     "label": "repo:read on larkspur/payments-service",
+     "system": "github",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [
+      "payments"
+     ],
+     "environment": "prod"
+    },
+    {
+     "id": "perm:31",
+     "kind": "perm",
+     "label": "repo:read on larkspur/web-app",
+     "system": "github",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [],
+     "environment": "prod"
+    },
+    {
+     "id": "perm:32",
+     "kind": "perm",
+     "label": "repo:read on larkspur/mobile-app",
+     "system": "github",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [],
+     "environment": "prod"
+    },
+    {
+     "id": "perm:33",
+     "kind": "perm",
+     "label": "repo:read on larkspur/infra-terraform",
+     "system": "github",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [
+      "infra"
+     ],
+     "environment": "prod"
+    },
+    {
+     "id": "perm:34",
+     "kind": "perm",
+     "label": "repo:read on larkspur/data-pipelines",
+     "system": "github",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [],
+     "environment": "prod"
+    },
+    {
+     "id": "perm:35",
+     "kind": "perm",
+     "label": "repo:read on larkspur/ml-models",
+     "system": "github",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [],
+     "environment": "staging"
+    },
+    {
+     "id": "perm:36",
+     "kind": "perm",
+     "label": "repo:read on larkspur/docs-site",
+     "system": "github",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "perm:37",
+     "kind": "perm",
+     "label": "repo:write on larkspur/payments-service",
+     "system": "github",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [
+      "payments"
+     ],
+     "environment": "prod"
+    },
+    {
+     "id": "perm:38",
+     "kind": "perm",
+     "label": "repo:write on larkspur/web-app",
+     "system": "github",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [],
+     "environment": "prod"
+    },
+    {
+     "id": "perm:9",
+     "kind": "perm",
+     "label": "s3:GetObject on s3://customer-pii",
+     "system": "aws",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [
+      "pii"
+     ],
+     "environment": "prod"
+    },
+    {
+     "id": "resource:10",
+     "kind": "resource",
+     "label": "rds/orders-db",
+     "system": "aws",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [
+      "pii"
+     ],
+     "environment": "prod"
+    },
+    {
+     "id": "resource:11",
+     "kind": "resource",
+     "label": "ec2/prod-fleet",
+     "system": "aws",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [],
+     "environment": "prod"
+    },
+    {
+     "id": "resource:13",
+     "kind": "resource",
+     "label": "aws-account/larkspur-staging",
+     "system": "aws",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [],
+     "environment": "staging"
+    },
+    {
+     "id": "resource:15",
+     "kind": "resource",
+     "label": "larkspur/payments-service",
+     "system": "github",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [
+      "payments"
+     ],
+     "environment": "prod"
+    },
+    {
+     "id": "resource:16",
+     "kind": "resource",
+     "label": "larkspur/web-app",
+     "system": "github",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [],
+     "environment": "prod"
+    },
+    {
+     "id": "resource:17",
+     "kind": "resource",
+     "label": "larkspur/mobile-app",
+     "system": "github",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [],
+     "environment": "prod"
+    },
+    {
+     "id": "resource:18",
+     "kind": "resource",
+     "label": "larkspur/infra-terraform",
+     "system": "github",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [
+      "infra"
+     ],
+     "environment": "prod"
+    },
+    {
+     "id": "resource:19",
+     "kind": "resource",
+     "label": "larkspur/data-pipelines",
+     "system": "github",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [],
+     "environment": "prod"
+    },
+    {
+     "id": "resource:20",
+     "kind": "resource",
+     "label": "larkspur/ml-models",
+     "system": "github",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [],
+     "environment": "staging"
+    },
+    {
+     "id": "resource:21",
+     "kind": "resource",
+     "label": "larkspur/docs-site",
+     "system": "github",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [],
+     "environment": null
+    },
+    {
+     "id": "resource:5",
+     "kind": "resource",
+     "label": "s3://customer-pii",
+     "system": "aws",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [
+      "pii"
+     ],
+     "environment": "prod"
+    },
+    {
+     "id": "resource:6",
+     "kind": "resource",
+     "label": "s3://app-logs",
+     "system": "aws",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [],
+     "environment": "prod"
+    },
+    {
+     "id": "resource:8",
+     "kind": "resource",
+     "label": "s3://ml-artifacts",
+     "system": "aws",
+     "privileged": false,
+     "type": null,
+     "status": null,
+     "tags": [],
+     "environment": "staging"
+    }
+   ],
+   "edges": [
+    {
+     "source": "account:146",
+     "target": "group:30",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 277
+    },
+    {
+     "source": "account:146",
+     "target": "group:35",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 276
+    },
+    {
+     "source": "account:69",
+     "target": "group:7",
+     "relation": "member_of",
+     "source_kind": "connector",
+     "edge_id": 47
+    },
+    {
+     "source": "group:21",
+     "target": "perm:12",
+     "relation": "grants",
+     "source_kind": "connector",
+     "edge_id": 192
+    },
+    {
+     "source": "group:21",
+     "target": "perm:16",
+     "relation": "grants",
+     "source_kind": "connector",
+     "edge_id": 189
+    },
+    {
+     "source": "group:21",
+     "target": "perm:17",
+     "relation": "grants",
+     "source_kind": "connector",
+     "edge_id": 190
+    },
+    {
+     "source": "group:21",
+     "target": "perm:25",
+     "relation": "grants",
+     "source_kind": "connector",
+     "edge_id": 188
+    },
+    {
+     "source": "group:21",
+     "target": "perm:9",
+     "relation": "grants",
+     "source_kind": "connector",
+     "edge_id": 191
+    },
+    {
+     "source": "group:22",
+     "target": "perm:12",
+     "relation": "grants",
+     "source_kind": "connector",
+     "edge_id": 194
+    },
+    {
+     "source": "group:22",
+     "target": "perm:20",
+     "relation": "grants",
+     "source_kind": "connector",
+     "edge_id": 195
+    },
+    {
+     "source": "group:22",
+     "target": "perm:22",
+     "relation": "grants",
+     "source_kind": "connector",
+     "edge_id": 193
+    },
+    {
+     "source": "group:30",
+     "target": "perm:37",
+     "relation": "grants",
+     "source_kind": "connector",
+     "edge_id": 255
+    },
+    {
+     "source": "group:30",
+     "target": "perm:38",
+     "relation": "grants",
+     "source_kind": "connector",
+     "edge_id": 256
+    },
+    {
+     "source": "group:35",
+     "target": "perm:30",
+     "relation": "grants",
+     "source_kind": "connector",
+     "edge_id": 248
+    },
+    {
+     "source": "group:35",
+     "target": "perm:31",
+     "relation": "grants",
+     "source_kind": "connector",
+     "edge_id": 249
+    },
+    {
+     "source": "group:35",
+     "target": "perm:32",
+     "relation": "grants",
+     "source_kind": "connector",
+     "edge_id": 250
+    },
+    {
+     "source": "group:35",
+     "target": "perm:33",
+     "relation": "grants",
+     "source_kind": "connector",
+     "edge_id": 251
+    },
+    {
+     "source": "group:35",
+     "target": "perm:34",
+     "relation": "grants",
+     "source_kind": "connector",
+     "edge_id": 252
+    },
+    {
+     "source": "group:35",
+     "target": "perm:35",
+     "relation": "grants",
+     "source_kind": "connector",
+     "edge_id": 253
+    },
+    {
+     "source": "group:35",
+     "target": "perm:36",
+     "relation": "grants",
+     "source_kind": "connector",
+     "edge_id": 254
+    },
+    {
+     "source": "group:7",
+     "target": "group:21",
+     "relation": "maps_to",
+     "source_kind": "connector",
+     "edge_id": 223
+    },
+    {
+     "source": "group:7",
+     "target": "group:22",
+     "relation": "maps_to",
+     "source_kind": "connector",
+     "edge_id": 224
+    },
+    {
+     "source": "identity:5",
+     "target": "account:146",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "identity:5",
+     "target": "account:5",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "identity:5",
+     "target": "account:69",
+     "relation": "has_account",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "perm:12",
+     "target": "resource:6",
+     "relation": "on",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "perm:16",
+     "target": "resource:8",
+     "relation": "on",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "perm:17",
+     "target": "resource:8",
+     "relation": "on",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "perm:20",
+     "target": "resource:10",
+     "relation": "on",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "perm:22",
+     "target": "resource:11",
+     "relation": "on",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "perm:25",
+     "target": "resource:13",
+     "relation": "on",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "perm:30",
+     "target": "resource:15",
+     "relation": "on",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "perm:31",
+     "target": "resource:16",
+     "relation": "on",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "perm:32",
+     "target": "resource:17",
+     "relation": "on",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "perm:33",
+     "target": "resource:18",
+     "relation": "on",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "perm:34",
+     "target": "resource:19",
+     "relation": "on",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "perm:35",
+     "target": "resource:20",
+     "relation": "on",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "perm:36",
+     "target": "resource:21",
+     "relation": "on",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "perm:37",
+     "target": "resource:15",
+     "relation": "on",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "perm:38",
+     "target": "resource:16",
+     "relation": "on",
+     "source_kind": "connector",
+     "edge_id": null
+    },
+    {
+     "source": "perm:9",
+     "target": "resource:5",
+     "relation": "on",
+     "source_kind": "connector",
+     "edge_id": null
+    }
+   ]
+  }
+ }
+}

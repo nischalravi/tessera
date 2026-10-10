@@ -1,0 +1,13 @@
+{
+ "name": "campaign-404",
+ "request": {
+  "method": "GET",
+  "path": "/api/reviews/campaigns/999"
+ },
+ "response": {
+  "status": 404,
+  "body": {
+   "detail": "campaign not found"
+  }
+ }
+}

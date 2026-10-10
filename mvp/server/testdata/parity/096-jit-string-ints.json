@@ -1,0 +1,41 @@
+{
+ "name": "jit-string-ints",
+ "request": {
+  "method": "POST",
+  "path": "/api/jit/requests",
+  "body": {
+   "identity_id": "4",
+   "group_id": "23",
+   "duration_hours": "2",
+   "justification": "coerced"
+  }
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "id": 7,
+   "identity": {
+    "id": 4,
+    "name": "Kofi Mensah",
+    "type": "human",
+    "status": "active",
+    "department": "Engineering",
+    "title": "Engineering Manager, Backend"
+   },
+   "group": {
+    "id": 23,
+    "name": "ProdAdmin",
+    "system": "aws",
+    "privileged": true
+   },
+   "account": "okta:kofi.mensah@larkspur.example",
+   "justification": "coerced",
+   "duration_hours": 2.0,
+   "status": "pending",
+   "requested_at": "2026-10-08T09:30:00",
+   "decided_at": null,
+   "decided_by": null,
+   "expires_at": null
+  }
+ }
+}

@@ -1,0 +1,13 @@
+{
+ "name": "jit-unknown",
+ "request": {
+  "method": "POST",
+  "path": "/api/jit/requests/9999/approve"
+ },
+ "response": {
+  "status": 400,
+  "body": {
+   "detail": "request is not pending"
+  }
+ }
+}

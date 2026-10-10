@@ -1,0 +1,29 @@
+{
+ "name": "hris-bad-type",
+ "request": {
+  "method": "POST",
+  "path": "/api/hris/events",
+  "body": {
+   "type": "retire"
+  }
+ },
+ "response": {
+  "status": 422,
+  "body": {
+   "detail": [
+    {
+     "type": "literal_error",
+     "loc": [
+      "body",
+      "type"
+     ],
+     "msg": "Input should be 'joiner', 'mover' or 'leaver'",
+     "input": "retire",
+     "ctx": {
+      "expected": "'joiner', 'mover' or 'leaver'"
+     }
+    }
+   ]
+  }
+ }
+}

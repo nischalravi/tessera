@@ -1,0 +1,405 @@
+{
+ "name": "resources-after",
+ "request": {
+  "method": "GET",
+  "path": "/api/resources"
+ },
+ "response": {
+  "status": 200,
+  "body": [
+   {
+    "id": 12,
+    "system": "aws",
+    "name": "aws-account/larkspur-prod",
+    "kind": "aws_account",
+    "environment": "prod",
+    "tags": [],
+    "identities_with_access": 20,
+    "by_type": {
+     "human": 18,
+     "service": 2
+    }
+   },
+   {
+    "id": 13,
+    "system": "aws",
+    "name": "aws-account/larkspur-staging",
+    "kind": "aws_account",
+    "environment": "staging",
+    "tags": [],
+    "identities_with_access": 17,
+    "by_type": {
+     "human": 17
+    }
+   },
+   {
+    "id": 11,
+    "system": "aws",
+    "name": "ec2/prod-fleet",
+    "kind": "ec2_fleet",
+    "environment": "prod",
+    "tags": [],
+    "identities_with_access": 24,
+    "by_type": {
+     "human": 21,
+     "ai_agent": 1,
+     "service": 2
+    }
+   },
+   {
+    "id": 14,
+    "system": "aws",
+    "name": "kms/pii-key",
+    "kind": "kms_key",
+    "environment": "prod",
+    "tags": [
+     "pii"
+    ],
+    "identities_with_access": 9,
+    "by_type": {
+     "human": 8,
+     "service": 1
+    }
+   },
+   {
+    "id": 10,
+    "system": "aws",
+    "name": "rds/orders-db",
+    "kind": "rds_instance",
+    "environment": "prod",
+    "tags": [
+     "pii"
+    ],
+    "identities_with_access": 31,
+    "by_type": {
+     "human": 28,
+     "ai_agent": 1,
+     "service": 2
+    }
+   },
+   {
+    "id": 6,
+    "system": "aws",
+    "name": "s3://app-logs",
+    "kind": "s3_bucket",
+    "environment": "prod",
+    "tags": [],
+    "identities_with_access": 23,
+    "by_type": {
+     "human": 20,
+     "ai_agent": 1,
+     "service": 2
+    }
+   },
+   {
+    "id": 5,
+    "system": "aws",
+    "name": "s3://customer-pii",
+    "kind": "s3_bucket",
+    "environment": "prod",
+    "tags": [
+     "pii"
+    ],
+    "identities_with_access": 28,
+    "by_type": {
+     "human": 25,
+     "service": 3
+    }
+   },
+   {
+    "id": 7,
+    "system": "aws",
+    "name": "s3://finance-reports",
+    "kind": "s3_bucket",
+    "environment": "prod",
+    "tags": [
+     "financial"
+    ],
+    "identities_with_access": 11,
+    "by_type": {
+     "human": 8,
+     "service": 3
+    }
+   },
+   {
+    "id": 8,
+    "system": "aws",
+    "name": "s3://ml-artifacts",
+    "kind": "s3_bucket",
+    "environment": "staging",
+    "tags": [],
+    "identities_with_access": 26,
+    "by_type": {
+     "human": 25,
+     "service": 1
+    }
+   },
+   {
+    "id": 9,
+    "system": "aws",
+    "name": "s3://terraform-state",
+    "kind": "s3_bucket",
+    "environment": "prod",
+    "tags": [
+     "infra"
+    ],
+    "identities_with_access": 12,
+    "by_type": {
+     "human": 10,
+     "service": 2
+    }
+   },
+   {
+    "id": 22,
+    "system": "github",
+    "name": "github.com/larkspur",
+    "kind": "org",
+    "environment": "prod",
+    "tags": [],
+    "identities_with_access": 3,
+    "by_type": {
+     "human": 3
+    }
+   },
+   {
+    "id": 19,
+    "system": "github",
+    "name": "larkspur/data-pipelines",
+    "kind": "repository",
+    "environment": "prod",
+    "tags": [],
+    "identities_with_access": 33,
+    "by_type": {
+     "human": 30,
+     "ai_agent": 1,
+     "service": 2
+    }
+   },
+   {
+    "id": 21,
+    "system": "github",
+    "name": "larkspur/docs-site",
+    "kind": "repository",
+    "environment": null,
+    "tags": [],
+    "identities_with_access": 34,
+    "by_type": {
+     "human": 30,
+     "ai_agent": 1,
+     "service": 3
+    }
+   },
+   {
+    "id": 18,
+    "system": "github",
+    "name": "larkspur/infra-terraform",
+    "kind": "repository",
+    "environment": "prod",
+    "tags": [
+     "infra"
+    ],
+    "identities_with_access": 34,
+    "by_type": {
+     "human": 30,
+     "ai_agent": 1,
+     "service": 3
+    }
+   },
+   {
+    "id": 20,
+    "system": "github",
+    "name": "larkspur/ml-models",
+    "kind": "repository",
+    "environment": "staging",
+    "tags": [],
+    "identities_with_access": 33,
+    "by_type": {
+     "human": 30,
+     "ai_agent": 1,
+     "service": 2
+    }
+   },
+   {
+    "id": 17,
+    "system": "github",
+    "name": "larkspur/mobile-app",
+    "kind": "repository",
+    "environment": "prod",
+    "tags": [],
+    "identities_with_access": 33,
+    "by_type": {
+     "human": 30,
+     "ai_agent": 1,
+     "service": 2
+    }
+   },
+   {
+    "id": 15,
+    "system": "github",
+    "name": "larkspur/payments-service",
+    "kind": "repository",
+    "environment": "prod",
+    "tags": [
+     "payments"
+    ],
+    "identities_with_access": 34,
+    "by_type": {
+     "human": 30,
+     "ai_agent": 1,
+     "service": 3
+    }
+   },
+   {
+    "id": 16,
+    "system": "github",
+    "name": "larkspur/web-app",
+    "kind": "repository",
+    "environment": "prod",
+    "tags": [],
+    "identities_with_access": 34,
+    "by_type": {
+     "human": 30,
+     "ai_agent": 1,
+     "service": 3
+    }
+   },
+   {
+    "id": 4,
+    "system": "okta",
+    "name": "larkspur.okta.example",
+    "kind": "idp_tenant",
+    "environment": "prod",
+    "tags": [
+     "identity"
+    ],
+    "identities_with_access": 7,
+    "by_type": {
+     "human": 4,
+     "service": 3
+    }
+   },
+   {
+    "id": 23,
+    "system": "snowflake",
+    "name": "snowflake/CUSTOMERS",
+    "kind": "database",
+    "environment": "prod",
+    "tags": [
+     "pii"
+    ],
+    "identities_with_access": 16,
+    "by_type": {
+     "human": 10,
+     "ai_agent": 2,
+     "service": 4
+    }
+   },
+   {
+    "id": 25,
+    "system": "snowflake",
+    "name": "snowflake/EVENTS",
+    "kind": "database",
+    "environment": "prod",
+    "tags": [],
+    "identities_with_access": 27,
+    "by_type": {
+     "human": 21,
+     "ai_agent": 2,
+     "service": 4
+    }
+   },
+   {
+    "id": 24,
+    "system": "snowflake",
+    "name": "snowflake/FINANCE",
+    "kind": "database",
+    "environment": "prod",
+    "tags": [
+     "financial"
+    ],
+    "identities_with_access": 9,
+    "by_type": {
+     "human": 7,
+     "ai_agent": 1,
+     "service": 1
+    }
+   },
+   {
+    "id": 27,
+    "system": "snowflake",
+    "name": "snowflake/LARKSPUR_SF",
+    "kind": "warehouse_account",
+    "environment": "prod",
+    "tags": [],
+    "identities_with_access": 2,
+    "by_type": {
+     "human": 2
+    }
+   },
+   {
+    "id": 26,
+    "system": "snowflake",
+    "name": "snowflake/MARKETING",
+    "kind": "database",
+    "environment": "prod",
+    "tags": [],
+    "identities_with_access": 25,
+    "by_type": {
+     "human": 21,
+     "ai_agent": 2,
+     "service": 2
+    }
+   },
+   {
+    "id": 2,
+    "system": "workday",
+    "name": "Payroll",
+    "kind": "business_process",
+    "environment": "prod",
+    "tags": [
+     "payroll",
+     "pii",
+     "financial"
+    ],
+    "identities_with_access": 3,
+    "by_type": {
+     "human": 2,
+     "service": 1
+    }
+   },
+   {
+    "id": 1,
+    "system": "workday",
+    "name": "Supplier Payments",
+    "kind": "business_process",
+    "environment": "prod",
+    "tags": [
+     "payments",
+     "financial"
+    ],
+    "identities_with_access": 8,
+    "by_type": {
+     "human": 6,
+     "service": 1,
+     "ai_agent": 1
+    }
+   },
+   {
+    "id": 3,
+    "system": "workday",
+    "name": "Worker Records",
+    "kind": "dataset",
+    "environment": "prod",
+    "tags": [
+     "pii",
+     "hr"
+    ],
+    "identities_with_access": 14,
+    "by_type": {
+     "human": 13,
+     "service": 1
+    }
+   }
+  ]
+ }
+}

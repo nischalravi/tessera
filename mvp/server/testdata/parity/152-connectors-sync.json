@@ -1,0 +1,20 @@
+{
+ "name": "connectors-sync",
+ "request": {
+  "method": "POST",
+  "path": "/api/connectors/sync"
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "identities": 91,
+   "resources": 27,
+   "permissions": 57,
+   "groups": 44,
+   "accounts": 209,
+   "edges": 417,
+   "secrets": 31,
+   "delegations": 8
+  }
+ }
+}

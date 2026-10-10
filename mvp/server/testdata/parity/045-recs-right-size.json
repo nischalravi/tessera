@@ -1,0 +1,1228 @@
+{
+ "name": "recs-right-size",
+ "request": {
+  "method": "GET",
+  "path": "/api/least-privilege/recommendations?kind=right_size"
+ },
+ "response": {
+  "status": 200,
+  "body": [
+   {
+    "id": "406",
+    "edge_id": 406,
+    "kind": "right_size",
+    "identity_id": 24,
+    "identity_name": "Talia Bellweather",
+    "identity_type": "human",
+    "department": "Data",
+    "grant": "snowflake:TALIA_BELLWEATHER → snowflake:ACCOUNTADMIN",
+    "target": "snowflake:ACCOUNTADMIN",
+    "target_privileged": true,
+    "permissions_via": 5,
+    "permissions_lost": 5,
+    "unused_lost": 4,
+    "used_lost": 1,
+    "privileged_unused": 4,
+    "sensitive_tags": [
+     "financial",
+     "pii"
+    ],
+    "last_used": "2026-09-22T00:00:00",
+    "days_since_used": 16,
+    "unused_examples": [
+     "snowflake:ACCOUNTADMIN on snowflake/LARKSPUR_SF",
+     "snowflake:OWNERSHIP on snowflake/CUSTOMERS",
+     "snowflake:OWNERSHIP on snowflake/FINANCE",
+     "snowflake:OWNERSHIP on snowflake/MARKETING"
+    ],
+    "used_examples": [
+     "snowflake:OWNERSHIP on snowflake/EVENTS"
+    ],
+    "score": 32,
+    "rationale": "4 of 5 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "81",
+    "edge_id": 81,
+    "kind": "right_size",
+    "identity_id": 16,
+    "identity_name": "Ingrid Lindqvist",
+    "identity_type": "human",
+    "department": "Engineering",
+    "grant": "okta:ingrid.lindqvist@larkspur.example → okta:eng-platform",
+    "target": "okta:eng-platform",
+    "target_privileged": false,
+    "permissions_via": 7,
+    "permissions_lost": 6,
+    "unused_lost": 5,
+    "used_lost": 1,
+    "privileged_unused": 4,
+    "sensitive_tags": [
+     "pii"
+    ],
+    "last_used": "2026-10-07T00:00:00",
+    "days_since_used": 1,
+    "unused_examples": [
+     "iam:* on aws-account/larkspur-prod",
+     "ec2:TerminateInstances on ec2/prod-fleet",
+     "rds:ModifyDBInstance on rds/orders-db",
+     "s3:DeleteObject on s3://customer-pii",
+     "s3:GetObject on s3://terraform-state"
+    ],
+    "used_examples": [
+     "s3:PutObject on s3://terraform-state"
+    ],
+    "score": 29,
+    "rationale": "5 of 6 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "93",
+    "edge_id": 93,
+    "kind": "right_size",
+    "identity_id": 20,
+    "identity_name": "Zora Whitlock",
+    "identity_type": "human",
+    "department": "Engineering",
+    "grant": "okta:zora.whitlock@larkspur.example → okta:eng-platform",
+    "target": "okta:eng-platform",
+    "target_privileged": false,
+    "permissions_via": 7,
+    "permissions_lost": 6,
+    "unused_lost": 5,
+    "used_lost": 1,
+    "privileged_unused": 4,
+    "sensitive_tags": [
+     "pii"
+    ],
+    "last_used": "2026-10-08T00:00:00",
+    "days_since_used": 0,
+    "unused_examples": [
+     "ec2:TerminateInstances on ec2/prod-fleet",
+     "rds:ModifyDBInstance on rds/orders-db",
+     "s3:DeleteObject on s3://customer-pii",
+     "s3:PutObject on s3://terraform-state",
+     "s3:GetObject on s3://terraform-state"
+    ],
+    "used_examples": [
+     "iam:* on aws-account/larkspur-prod"
+    ],
+    "score": 29,
+    "rationale": "5 of 6 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "96",
+    "edge_id": 96,
+    "kind": "right_size",
+    "identity_id": 21,
+    "identity_name": "Lena Valdivia",
+    "identity_type": "human",
+    "department": "Engineering",
+    "grant": "okta:lena.valdivia@larkspur.example → okta:eng-platform",
+    "target": "okta:eng-platform",
+    "target_privileged": false,
+    "permissions_via": 7,
+    "permissions_lost": 6,
+    "unused_lost": 3,
+    "used_lost": 3,
+    "privileged_unused": 3,
+    "sensitive_tags": [
+     "pii"
+    ],
+    "last_used": "2026-10-08T00:00:00",
+    "days_since_used": 0,
+    "unused_examples": [
+     "iam:* on aws-account/larkspur-prod",
+     "rds:ModifyDBInstance on rds/orders-db",
+     "s3:PutObject on s3://terraform-state"
+    ],
+    "used_examples": [
+     "ec2:TerminateInstances on ec2/prod-fleet",
+     "s3:DeleteObject on s3://customer-pii",
+     "s3:GetObject on s3://terraform-state"
+    ],
+    "score": 22,
+    "rationale": "3 of 6 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "30",
+    "edge_id": 30,
+    "kind": "right_size",
+    "identity_id": 58,
+    "identity_name": "Teodor Delacroix",
+    "identity_type": "human",
+    "department": "People",
+    "grant": "workday:emp-1058 → workday:Payroll Administrator",
+    "target": "workday:Payroll Administrator",
+    "target_privileged": true,
+    "permissions_via": 2,
+    "permissions_lost": 2,
+    "unused_lost": 1,
+    "used_lost": 1,
+    "privileged_unused": 1,
+    "sensitive_tags": [
+     "financial",
+     "payroll",
+     "pii"
+    ],
+    "last_used": "2026-10-08T00:00:00",
+    "days_since_used": 0,
+    "unused_examples": [
+     "payroll:run on Payroll"
+    ],
+    "used_examples": [
+     "payroll:view on Payroll"
+    ],
+    "score": 18,
+    "rationale": "1 of 2 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "305",
+    "edge_id": 305,
+    "kind": "right_size",
+    "identity_id": 19,
+    "identity_name": "Cyrus Quennell",
+    "identity_type": "human",
+    "department": "Engineering",
+    "grant": "github:cyrus-quenn → github:platform",
+    "target": "github:platform",
+    "target_privileged": false,
+    "permissions_via": 8,
+    "permissions_lost": 8,
+    "unused_lost": 7,
+    "used_lost": 1,
+    "privileged_unused": 1,
+    "sensitive_tags": [
+     "payments"
+    ],
+    "last_used": "2026-10-08T00:00:00",
+    "days_since_used": 0,
+    "unused_examples": [
+     "repo:admin on larkspur/infra-terraform",
+     "repo:write on larkspur/payments-service",
+     "repo:write on larkspur/web-app",
+     "repo:write on larkspur/mobile-app",
+     "repo:write on larkspur/infra-terraform"
+    ],
+    "used_examples": [
+     "repo:write on larkspur/data-pipelines"
+    ],
+    "score": 16,
+    "rationale": "7 of 8 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "299",
+    "edge_id": 299,
+    "kind": "right_size",
+    "identity_id": 16,
+    "identity_name": "Ingrid Lindqvist",
+    "identity_type": "human",
+    "department": "Engineering",
+    "grant": "github:ingrid-lindq → github:platform",
+    "target": "github:platform",
+    "target_privileged": false,
+    "permissions_via": 8,
+    "permissions_lost": 8,
+    "unused_lost": 5,
+    "used_lost": 3,
+    "privileged_unused": 1,
+    "sensitive_tags": [
+     "payments"
+    ],
+    "last_used": "2026-10-08T00:00:00",
+    "days_since_used": 0,
+    "unused_examples": [
+     "repo:admin on larkspur/infra-terraform",
+     "repo:write on larkspur/payments-service",
+     "repo:write on larkspur/web-app",
+     "repo:write on larkspur/infra-terraform",
+     "repo:write on larkspur/docs-site"
+    ],
+    "used_examples": [
+     "repo:write on larkspur/mobile-app",
+     "repo:write on larkspur/data-pipelines",
+     "repo:write on larkspur/ml-models"
+    ],
+    "score": 14,
+    "rationale": "5 of 8 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "47",
+    "edge_id": 47,
+    "kind": "right_size",
+    "identity_id": 5,
+    "identity_name": "Alice Okafor",
+    "identity_type": "human",
+    "department": "Engineering",
+    "grant": "okta:alice.okafor@larkspur.example → okta:engineering",
+    "target": "okta:engineering",
+    "target_privileged": false,
+    "permissions_via": 7,
+    "permissions_lost": 7,
+    "unused_lost": 4,
+    "used_lost": 3,
+    "privileged_unused": 1,
+    "sensitive_tags": [
+     "pii"
+    ],
+    "last_used": "2026-10-06T00:00:00",
+    "days_since_used": 2,
+    "unused_examples": [
+     "iam:* on aws-account/larkspur-staging",
+     "s3:GetObject on s3://ml-artifacts",
+     "s3:PutObject on s3://ml-artifacts",
+     "s3:GetObject on s3://customer-pii"
+    ],
+    "used_examples": [
+     "ec2:DescribeInstances on ec2/prod-fleet",
+     "s3:GetObject on s3://app-logs",
+     "rds:Connect on rds/orders-db"
+    ],
+    "score": 13,
+    "rationale": "4 of 7 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "80",
+    "edge_id": 80,
+    "kind": "right_size",
+    "identity_id": 16,
+    "identity_name": "Ingrid Lindqvist",
+    "identity_type": "human",
+    "department": "Engineering",
+    "grant": "okta:ingrid.lindqvist@larkspur.example → okta:engineering",
+    "target": "okta:engineering",
+    "target_privileged": false,
+    "permissions_via": 7,
+    "permissions_lost": 6,
+    "unused_lost": 4,
+    "used_lost": 2,
+    "privileged_unused": 1,
+    "sensitive_tags": [
+     "pii"
+    ],
+    "last_used": "2026-10-08T00:00:00",
+    "days_since_used": 0,
+    "unused_examples": [
+     "s3:GetObject on s3://app-logs",
+     "iam:* on aws-account/larkspur-staging",
+     "s3:PutObject on s3://ml-artifacts",
+     "s3:GetObject on s3://customer-pii"
+    ],
+    "used_examples": [
+     "rds:Connect on rds/orders-db",
+     "s3:GetObject on s3://ml-artifacts"
+    ],
+    "score": 13,
+    "rationale": "4 of 6 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "309",
+    "edge_id": 309,
+    "kind": "right_size",
+    "identity_id": 21,
+    "identity_name": "Lena Valdivia",
+    "identity_type": "human",
+    "department": "Engineering",
+    "grant": "github:lena-valdi → github:platform",
+    "target": "github:platform",
+    "target_privileged": false,
+    "permissions_via": 8,
+    "permissions_lost": 8,
+    "unused_lost": 4,
+    "used_lost": 4,
+    "privileged_unused": 1,
+    "sensitive_tags": [
+     "payments"
+    ],
+    "last_used": "2026-10-08T00:00:00",
+    "days_since_used": 0,
+    "unused_examples": [
+     "repo:admin on larkspur/infra-terraform",
+     "repo:write on larkspur/payments-service",
+     "repo:write on larkspur/web-app",
+     "repo:write on larkspur/ml-models"
+    ],
+    "used_examples": [
+     "repo:write on larkspur/mobile-app",
+     "repo:write on larkspur/infra-terraform",
+     "repo:write on larkspur/data-pipelines",
+     "repo:write on larkspur/docs-site"
+    ],
+    "score": 13,
+    "rationale": "4 of 8 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "83",
+    "edge_id": 83,
+    "kind": "right_size",
+    "identity_id": 17,
+    "identity_name": "Marcus Bellweather",
+    "identity_type": "human",
+    "department": "Engineering",
+    "grant": "okta:marcus.bellweather@larkspur.example → okta:engineering",
+    "target": "okta:engineering",
+    "target_privileged": false,
+    "permissions_via": 7,
+    "permissions_lost": 6,
+    "unused_lost": 3,
+    "used_lost": 3,
+    "privileged_unused": 1,
+    "sensitive_tags": [
+     "pii"
+    ],
+    "last_used": "2026-10-08T00:00:00",
+    "days_since_used": 0,
+    "unused_examples": [
+     "iam:* on aws-account/larkspur-staging",
+     "s3:GetObject on s3://ml-artifacts",
+     "s3:GetObject on s3://customer-pii"
+    ],
+    "used_examples": [
+     "s3:GetObject on s3://app-logs",
+     "rds:Connect on rds/orders-db",
+     "s3:PutObject on s3://ml-artifacts"
+    ],
+    "score": 12,
+    "rationale": "3 of 6 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "89",
+    "edge_id": 89,
+    "kind": "right_size",
+    "identity_id": 19,
+    "identity_name": "Cyrus Quennell",
+    "identity_type": "human",
+    "department": "Engineering",
+    "grant": "okta:cyrus.quennell@larkspur.example → okta:engineering",
+    "target": "okta:engineering",
+    "target_privileged": false,
+    "permissions_via": 7,
+    "permissions_lost": 6,
+    "unused_lost": 3,
+    "used_lost": 3,
+    "privileged_unused": 1,
+    "sensitive_tags": [
+     "pii"
+    ],
+    "last_used": "2026-10-08T00:00:00",
+    "days_since_used": 0,
+    "unused_examples": [
+     "iam:* on aws-account/larkspur-staging",
+     "s3:PutObject on s3://ml-artifacts",
+     "s3:GetObject on s3://customer-pii"
+    ],
+    "used_examples": [
+     "s3:GetObject on s3://app-logs",
+     "rds:Connect on rds/orders-db",
+     "s3:GetObject on s3://ml-artifacts"
+    ],
+    "score": 12,
+    "rationale": "3 of 6 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "92",
+    "edge_id": 92,
+    "kind": "right_size",
+    "identity_id": 20,
+    "identity_name": "Zora Whitlock",
+    "identity_type": "human",
+    "department": "Engineering",
+    "grant": "okta:zora.whitlock@larkspur.example → okta:engineering",
+    "target": "okta:engineering",
+    "target_privileged": false,
+    "permissions_via": 7,
+    "permissions_lost": 6,
+    "unused_lost": 3,
+    "used_lost": 3,
+    "privileged_unused": 1,
+    "sensitive_tags": [
+     "pii"
+    ],
+    "last_used": "2026-10-08T00:00:00",
+    "days_since_used": 0,
+    "unused_examples": [
+     "iam:* on aws-account/larkspur-staging",
+     "s3:GetObject on s3://ml-artifacts",
+     "s3:GetObject on s3://customer-pii"
+    ],
+    "used_examples": [
+     "s3:GetObject on s3://app-logs",
+     "rds:Connect on rds/orders-db",
+     "s3:PutObject on s3://ml-artifacts"
+    ],
+    "score": 12,
+    "rationale": "3 of 6 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "274",
+    "edge_id": 274,
+    "kind": "right_size",
+    "identity_id": 4,
+    "identity_name": "Kofi Mensah",
+    "identity_type": "human",
+    "department": "Engineering",
+    "grant": "github:kofi-mensa → github:all-engineers",
+    "target": "github:all-engineers",
+    "target_privileged": false,
+    "permissions_via": 7,
+    "permissions_lost": 7,
+    "unused_lost": 4,
+    "used_lost": 3,
+    "privileged_unused": 0,
+    "sensitive_tags": [
+     "payments"
+    ],
+    "last_used": "2026-10-08T00:00:00",
+    "days_since_used": 0,
+    "unused_examples": [
+     "repo:read on larkspur/payments-service",
+     "repo:read on larkspur/infra-terraform",
+     "repo:read on larkspur/ml-models",
+     "repo:read on larkspur/docs-site"
+    ],
+    "used_examples": [
+     "repo:read on larkspur/web-app",
+     "repo:read on larkspur/mobile-app",
+     "repo:read on larkspur/data-pipelines"
+    ],
+    "score": 8,
+    "rationale": "4 of 7 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "77",
+    "edge_id": 77,
+    "kind": "right_size",
+    "identity_id": 15,
+    "identity_name": "Vesna Szabo",
+    "identity_type": "human",
+    "department": "Engineering",
+    "grant": "okta:vesna.szabo@larkspur.example → okta:engineering",
+    "target": "okta:engineering",
+    "target_privileged": false,
+    "permissions_via": 7,
+    "permissions_lost": 7,
+    "unused_lost": 4,
+    "used_lost": 3,
+    "privileged_unused": 0,
+    "sensitive_tags": [
+     "pii"
+    ],
+    "last_used": "2026-10-05T00:00:00",
+    "days_since_used": 3,
+    "unused_examples": [
+     "ec2:DescribeInstances on ec2/prod-fleet",
+     "s3:GetObject on s3://app-logs",
+     "s3:GetObject on s3://ml-artifacts",
+     "s3:GetObject on s3://customer-pii"
+    ],
+    "used_examples": [
+     "rds:Connect on rds/orders-db",
+     "iam:* on aws-account/larkspur-staging",
+     "s3:PutObject on s3://ml-artifacts"
+    ],
+    "score": 8,
+    "rationale": "4 of 7 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "98",
+    "edge_id": 98,
+    "kind": "right_size",
+    "identity_id": 22,
+    "identity_name": "Sana Iyer",
+    "identity_type": "human",
+    "department": "Data",
+    "grant": "okta:sana.iyer@larkspur.example → okta:data-team",
+    "target": "okta:data-team",
+    "target_privileged": false,
+    "permissions_via": 6,
+    "permissions_lost": 6,
+    "unused_lost": 4,
+    "used_lost": 2,
+    "privileged_unused": 0,
+    "sensitive_tags": [
+     "pii"
+    ],
+    "last_used": "2026-10-07T00:00:00",
+    "days_since_used": 1,
+    "unused_examples": [
+     "s3:GetObject on s3://ml-artifacts",
+     "s3:PutObject on s3://ml-artifacts",
+     "kms:Decrypt on kms/pii-key",
+     "rds:Connect on rds/orders-db"
+    ],
+    "used_examples": [
+     "s3:GetObject on s3://customer-pii",
+     "s3:PutObject on s3://customer-pii"
+    ],
+    "score": 8,
+    "rationale": "4 of 6 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "314",
+    "edge_id": 314,
+    "kind": "right_size",
+    "identity_id": 24,
+    "identity_name": "Talia Bellweather",
+    "identity_type": "human",
+    "department": "Data",
+    "grant": "github:talia-bellw → github:all-engineers",
+    "target": "github:all-engineers",
+    "target_privileged": false,
+    "permissions_via": 7,
+    "permissions_lost": 7,
+    "unused_lost": 4,
+    "used_lost": 3,
+    "privileged_unused": 0,
+    "sensitive_tags": [
+     "payments"
+    ],
+    "last_used": "2026-10-08T00:00:00",
+    "days_since_used": 0,
+    "unused_examples": [
+     "repo:read on larkspur/payments-service",
+     "repo:read on larkspur/web-app",
+     "repo:read on larkspur/data-pipelines",
+     "repo:read on larkspur/ml-models"
+    ],
+    "used_examples": [
+     "repo:read on larkspur/mobile-app",
+     "repo:read on larkspur/infra-terraform",
+     "repo:read on larkspur/docs-site"
+    ],
+    "score": 8,
+    "rationale": "4 of 7 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "326",
+    "edge_id": 326,
+    "kind": "right_size",
+    "identity_id": 30,
+    "identity_name": "Yusuf Iyer",
+    "identity_type": "human",
+    "department": "Security",
+    "grant": "github:yusuf-iyer → github:all-engineers",
+    "target": "github:all-engineers",
+    "target_privileged": false,
+    "permissions_via": 7,
+    "permissions_lost": 6,
+    "unused_lost": 4,
+    "used_lost": 2,
+    "privileged_unused": 0,
+    "sensitive_tags": [
+     "payments"
+    ],
+    "last_used": "2026-10-08T00:00:00",
+    "days_since_used": 0,
+    "unused_examples": [
+     "repo:read on larkspur/payments-service",
+     "repo:read on larkspur/web-app",
+     "repo:read on larkspur/ml-models",
+     "repo:read on larkspur/docs-site"
+    ],
+    "used_examples": [
+     "repo:read on larkspur/mobile-app",
+     "repo:read on larkspur/data-pipelines"
+    ],
+    "score": 8,
+    "rationale": "4 of 6 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "104",
+    "edge_id": 104,
+    "kind": "right_size",
+    "identity_id": 25,
+    "identity_name": "Rohan Marchetti",
+    "identity_type": "human",
+    "department": "Data",
+    "grant": "okta:rohan.marchetti@larkspur.example → okta:data-team",
+    "target": "okta:data-team",
+    "target_privileged": false,
+    "permissions_via": 6,
+    "permissions_lost": 6,
+    "unused_lost": 3,
+    "used_lost": 3,
+    "privileged_unused": 0,
+    "sensitive_tags": [
+     "pii"
+    ],
+    "last_used": "2026-10-08T00:00:00",
+    "days_since_used": 0,
+    "unused_examples": [
+     "s3:PutObject on s3://customer-pii",
+     "s3:GetObject on s3://ml-artifacts",
+     "rds:Connect on rds/orders-db"
+    ],
+    "used_examples": [
+     "s3:GetObject on s3://customer-pii",
+     "s3:PutObject on s3://ml-artifacts",
+     "kms:Decrypt on kms/pii-key"
+    ],
+    "score": 7,
+    "rationale": "3 of 6 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "383",
+    "edge_id": 383,
+    "kind": "right_size",
+    "identity_id": 27,
+    "identity_name": "Quinn Zeller",
+    "identity_type": "human",
+    "department": "Data",
+    "grant": "snowflake:QUINN_ZELLER → snowflake:DATA_ENGINEER",
+    "target": "snowflake:DATA_ENGINEER",
+    "target_privileged": false,
+    "permissions_via": 6,
+    "permissions_lost": 6,
+    "unused_lost": 3,
+    "used_lost": 3,
+    "privileged_unused": 0,
+    "sensitive_tags": [
+     "pii"
+    ],
+    "last_used": "2026-10-08T00:00:00",
+    "days_since_used": 0,
+    "unused_examples": [
+     "snowflake:INSERT on snowflake/EVENTS",
+     "snowflake:SELECT on snowflake/CUSTOMERS",
+     "snowflake:SELECT on snowflake/MARKETING"
+    ],
+    "used_examples": [
+     "snowflake:INSERT on snowflake/CUSTOMERS",
+     "snowflake:INSERT on snowflake/MARKETING",
+     "snowflake:SELECT on snowflake/EVENTS"
+    ],
+    "score": 7,
+    "rationale": "3 of 6 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "318",
+    "edge_id": 318,
+    "kind": "right_size",
+    "identity_id": 26,
+    "identity_name": "Emeric Ostrowski",
+    "identity_type": "human",
+    "department": "Data",
+    "grant": "github:emeric-ostro → github:all-engineers",
+    "target": "github:all-engineers",
+    "target_privileged": false,
+    "permissions_via": 7,
+    "permissions_lost": 7,
+    "unused_lost": 6,
+    "used_lost": 1,
+    "privileged_unused": 0,
+    "sensitive_tags": [],
+    "last_used": "2026-10-08T00:00:00",
+    "days_since_used": 0,
+    "unused_examples": [
+     "repo:read on larkspur/web-app",
+     "repo:read on larkspur/mobile-app",
+     "repo:read on larkspur/infra-terraform",
+     "repo:read on larkspur/data-pipelines",
+     "repo:read on larkspur/ml-models"
+    ],
+    "used_examples": [
+     "repo:read on larkspur/payments-service"
+    ],
+    "score": 6,
+    "rationale": "6 of 7 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "273",
+    "edge_id": 273,
+    "kind": "right_size",
+    "identity_id": 2,
+    "identity_name": "Caspian Arkwright",
+    "identity_type": "human",
+    "department": "Executive",
+    "grant": "github:caspian-arkwr → github:all-engineers",
+    "target": "github:all-engineers",
+    "target_privileged": false,
+    "permissions_via": 7,
+    "permissions_lost": 7,
+    "unused_lost": 5,
+    "used_lost": 2,
+    "privileged_unused": 0,
+    "sensitive_tags": [],
+    "last_used": "2026-10-08T00:00:00",
+    "days_since_used": 0,
+    "unused_examples": [
+     "repo:read on larkspur/web-app",
+     "repo:read on larkspur/infra-terraform",
+     "repo:read on larkspur/data-pipelines",
+     "repo:read on larkspur/ml-models",
+     "repo:read on larkspur/docs-site"
+    ],
+    "used_examples": [
+     "repo:read on larkspur/payments-service",
+     "repo:read on larkspur/mobile-app"
+    ],
+    "score": 5,
+    "rationale": "5 of 7 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "28",
+    "edge_id": 28,
+    "kind": "right_size",
+    "identity_id": 59,
+    "identity_name": "Mei Winslow",
+    "identity_type": "human",
+    "department": "People",
+    "grant": "workday:emp-1059 → workday:HR Partner",
+    "target": "workday:HR Partner",
+    "target_privileged": false,
+    "permissions_via": 2,
+    "permissions_lost": 2,
+    "unused_lost": 1,
+    "used_lost": 1,
+    "privileged_unused": 0,
+    "sensitive_tags": [
+     "pii"
+    ],
+    "last_used": "2026-09-20T00:00:00",
+    "days_since_used": 18,
+    "unused_examples": [
+     "workers:view on Worker Records"
+    ],
+    "used_examples": [
+     "workers:edit on Worker Records"
+    ],
+    "score": 5,
+    "rationale": "1 of 2 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "296",
+    "edge_id": 296,
+    "kind": "right_size",
+    "identity_id": 15,
+    "identity_name": "Vesna Szabo",
+    "identity_type": "human",
+    "department": "Engineering",
+    "grant": "github:vesna-szabo → github:all-engineers",
+    "target": "github:all-engineers",
+    "target_privileged": false,
+    "permissions_via": 7,
+    "permissions_lost": 7,
+    "unused_lost": 4,
+    "used_lost": 3,
+    "privileged_unused": 0,
+    "sensitive_tags": [],
+    "last_used": "2026-10-08T00:00:00",
+    "days_since_used": 0,
+    "unused_examples": [
+     "repo:read on larkspur/web-app",
+     "repo:read on larkspur/infra-terraform",
+     "repo:read on larkspur/data-pipelines",
+     "repo:read on larkspur/ml-models"
+    ],
+    "used_examples": [
+     "repo:read on larkspur/payments-service",
+     "repo:read on larkspur/mobile-app",
+     "repo:read on larkspur/docs-site"
+    ],
+    "score": 4,
+    "rationale": "4 of 7 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "300",
+    "edge_id": 300,
+    "kind": "right_size",
+    "identity_id": 17,
+    "identity_name": "Marcus Bellweather",
+    "identity_type": "human",
+    "department": "Engineering",
+    "grant": "github:marcus-bellw → github:all-engineers",
+    "target": "github:all-engineers",
+    "target_privileged": false,
+    "permissions_via": 7,
+    "permissions_lost": 7,
+    "unused_lost": 4,
+    "used_lost": 3,
+    "privileged_unused": 0,
+    "sensitive_tags": [],
+    "last_used": "2026-10-08T00:00:00",
+    "days_since_used": 0,
+    "unused_examples": [
+     "repo:read on larkspur/web-app",
+     "repo:read on larkspur/mobile-app",
+     "repo:read on larkspur/data-pipelines",
+     "repo:read on larkspur/ml-models"
+    ],
+    "used_examples": [
+     "repo:read on larkspur/payments-service",
+     "repo:read on larkspur/infra-terraform",
+     "repo:read on larkspur/docs-site"
+    ],
+    "score": 4,
+    "rationale": "4 of 7 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "409",
+    "edge_id": 409,
+    "kind": "right_size",
+    "identity_id": 89,
+    "identity_name": "LOOKER_SVC",
+    "identity_type": "service",
+    "department": null,
+    "grant": "snowflake:LOOKER_SVC → snowflake:ANALYST",
+    "target": "snowflake:ANALYST",
+    "target_privileged": false,
+    "permissions_via": 2,
+    "permissions_lost": 2,
+    "unused_lost": 1,
+    "used_lost": 1,
+    "privileged_unused": 0,
+    "sensitive_tags": [],
+    "last_used": "2026-10-08T00:00:00",
+    "days_since_used": 0,
+    "unused_examples": [
+     "snowflake:SELECT on snowflake/MARKETING"
+    ],
+    "used_examples": [
+     "snowflake:SELECT on snowflake/EVENTS"
+    ],
+    "score": 4,
+    "rationale": "1 of 2 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "381",
+    "edge_id": 381,
+    "kind": "right_size",
+    "identity_id": 25,
+    "identity_name": "Rohan Marchetti",
+    "identity_type": "human",
+    "department": "Data",
+    "grant": "snowflake:ROHAN_MARCHETTI → snowflake:DATA_ENGINEER",
+    "target": "snowflake:DATA_ENGINEER",
+    "target_privileged": false,
+    "permissions_via": 6,
+    "permissions_lost": 6,
+    "unused_lost": 3,
+    "used_lost": 3,
+    "privileged_unused": 0,
+    "sensitive_tags": [],
+    "last_used": "2026-10-08T00:00:00",
+    "days_since_used": 0,
+    "unused_examples": [
+     "snowflake:INSERT on snowflake/EVENTS",
+     "snowflake:INSERT on snowflake/MARKETING",
+     "snowflake:SELECT on snowflake/EVENTS"
+    ],
+    "used_examples": [
+     "snowflake:INSERT on snowflake/CUSTOMERS",
+     "snowflake:SELECT on snowflake/CUSTOMERS",
+     "snowflake:SELECT on snowflake/MARKETING"
+    ],
+    "score": 3,
+    "rationale": "3 of 6 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "289",
+    "edge_id": 289,
+    "kind": "right_size",
+    "identity_id": 11,
+    "identity_name": "Anders Zeller",
+    "identity_type": "human",
+    "department": "Engineering",
+    "grant": "github:anders-zelle → github:frontend",
+    "target": "github:frontend",
+    "target_privileged": false,
+    "permissions_via": 3,
+    "permissions_lost": 3,
+    "unused_lost": 2,
+    "used_lost": 1,
+    "privileged_unused": 0,
+    "sensitive_tags": [],
+    "last_used": "2026-10-07T00:00:00",
+    "days_since_used": 1,
+    "unused_examples": [
+     "repo:write on larkspur/mobile-app",
+     "repo:write on larkspur/docs-site"
+    ],
+    "used_examples": [
+     "repo:write on larkspur/web-app"
+    ],
+    "score": 2,
+    "rationale": "2 of 3 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "279",
+    "edge_id": 279,
+    "kind": "right_size",
+    "identity_id": 6,
+    "identity_name": "Ilya Kowalczyk",
+    "identity_type": "human",
+    "department": "Engineering",
+    "grant": "github:ilya-kowal → github:backend",
+    "target": "github:backend",
+    "target_privileged": false,
+    "permissions_via": 2,
+    "permissions_lost": 2,
+    "unused_lost": 1,
+    "used_lost": 1,
+    "privileged_unused": 0,
+    "sensitive_tags": [],
+    "last_used": "2026-10-07T00:00:00",
+    "days_since_used": 1,
+    "unused_examples": [
+     "repo:write on larkspur/web-app"
+    ],
+    "used_examples": [
+     "repo:write on larkspur/payments-service"
+    ],
+    "score": 1,
+    "rationale": "1 of 2 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "285",
+    "edge_id": 285,
+    "kind": "right_size",
+    "identity_id": 9,
+    "identity_name": "Joaquin Pemberton",
+    "identity_type": "human",
+    "department": "Engineering",
+    "grant": "github:joaquin-pembe → github:backend",
+    "target": "github:backend",
+    "target_privileged": false,
+    "permissions_via": 2,
+    "permissions_lost": 2,
+    "unused_lost": 1,
+    "used_lost": 1,
+    "privileged_unused": 0,
+    "sensitive_tags": [],
+    "last_used": "2026-10-04T00:00:00",
+    "days_since_used": 4,
+    "unused_examples": [
+     "repo:write on larkspur/web-app"
+    ],
+    "used_examples": [
+     "repo:write on larkspur/payments-service"
+    ],
+    "score": 1,
+    "rationale": "1 of 2 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "315",
+    "edge_id": 315,
+    "kind": "right_size",
+    "identity_id": 24,
+    "identity_name": "Talia Bellweather",
+    "identity_type": "human",
+    "department": "Data",
+    "grant": "github:talia-bellw → github:data",
+    "target": "github:data",
+    "target_privileged": false,
+    "permissions_via": 2,
+    "permissions_lost": 2,
+    "unused_lost": 1,
+    "used_lost": 1,
+    "privileged_unused": 0,
+    "sensitive_tags": [],
+    "last_used": "2026-10-08T00:00:00",
+    "days_since_used": 0,
+    "unused_examples": [
+     "repo:write on larkspur/data-pipelines"
+    ],
+    "used_examples": [
+     "repo:write on larkspur/ml-models"
+    ],
+    "score": 1,
+    "rationale": "1 of 2 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "323",
+    "edge_id": 323,
+    "kind": "right_size",
+    "identity_id": 28,
+    "identity_name": "Wren Okafor",
+    "identity_type": "human",
+    "department": "Data",
+    "grant": "github:wren-okafo → github:data",
+    "target": "github:data",
+    "target_privileged": false,
+    "permissions_via": 2,
+    "permissions_lost": 2,
+    "unused_lost": 1,
+    "used_lost": 1,
+    "privileged_unused": 0,
+    "sensitive_tags": [],
+    "last_used": "2026-10-05T00:00:00",
+    "days_since_used": 3,
+    "unused_examples": [
+     "repo:write on larkspur/ml-models"
+    ],
+    "used_examples": [
+     "repo:write on larkspur/data-pipelines"
+    ],
+    "score": 1,
+    "rationale": "1 of 2 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "390",
+    "edge_id": 390,
+    "kind": "right_size",
+    "identity_id": 40,
+    "identity_name": "Rafael Valdivia",
+    "identity_type": "human",
+    "department": "Sales",
+    "grant": "snowflake:RAFAEL_VALDIVIA → snowflake:ANALYST",
+    "target": "snowflake:ANALYST",
+    "target_privileged": false,
+    "permissions_via": 2,
+    "permissions_lost": 2,
+    "unused_lost": 1,
+    "used_lost": 1,
+    "privileged_unused": 0,
+    "sensitive_tags": [],
+    "last_used": "2026-10-08T00:00:00",
+    "days_since_used": 0,
+    "unused_examples": [
+     "snowflake:SELECT on snowflake/MARKETING"
+    ],
+    "used_examples": [
+     "snowflake:SELECT on snowflake/EVENTS"
+    ],
+    "score": 1,
+    "rationale": "1 of 2 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "394",
+    "edge_id": 394,
+    "kind": "right_size",
+    "identity_id": 44,
+    "identity_name": "Bram Okafor",
+    "identity_type": "human",
+    "department": "Sales",
+    "grant": "snowflake:BRAM_OKAFOR → snowflake:ANALYST",
+    "target": "snowflake:ANALYST",
+    "target_privileged": false,
+    "permissions_via": 2,
+    "permissions_lost": 2,
+    "unused_lost": 1,
+    "used_lost": 1,
+    "privileged_unused": 0,
+    "sensitive_tags": [],
+    "last_used": "2026-10-08T00:00:00",
+    "days_since_used": 0,
+    "unused_examples": [
+     "snowflake:SELECT on snowflake/EVENTS"
+    ],
+    "used_examples": [
+     "snowflake:SELECT on snowflake/MARKETING"
+    ],
+    "score": 1,
+    "rationale": "1 of 2 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "395",
+    "edge_id": 395,
+    "kind": "right_size",
+    "identity_id": 45,
+    "identity_name": "Ulric Quillfeather",
+    "identity_type": "human",
+    "department": "Sales",
+    "grant": "snowflake:ULRIC_QUILLFEATHER → snowflake:ANALYST",
+    "target": "snowflake:ANALYST",
+    "target_privileged": false,
+    "permissions_via": 2,
+    "permissions_lost": 2,
+    "unused_lost": 1,
+    "used_lost": 1,
+    "privileged_unused": 0,
+    "sensitive_tags": [],
+    "last_used": "2026-10-03T00:00:00",
+    "days_since_used": 5,
+    "unused_examples": [
+     "snowflake:SELECT on snowflake/EVENTS"
+    ],
+    "used_examples": [
+     "snowflake:SELECT on snowflake/MARKETING"
+    ],
+    "score": 1,
+    "rationale": "1 of 2 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "396",
+    "edge_id": 396,
+    "kind": "right_size",
+    "identity_id": 50,
+    "identity_name": "Yara Castellanos",
+    "identity_type": "human",
+    "department": "Support",
+    "grant": "snowflake:YARA_CASTELLANOS → snowflake:ANALYST",
+    "target": "snowflake:ANALYST",
+    "target_privileged": false,
+    "permissions_via": 2,
+    "permissions_lost": 2,
+    "unused_lost": 1,
+    "used_lost": 1,
+    "privileged_unused": 0,
+    "sensitive_tags": [],
+    "last_used": "2026-10-07T00:00:00",
+    "days_since_used": 1,
+    "unused_examples": [
+     "snowflake:SELECT on snowflake/EVENTS"
+    ],
+    "used_examples": [
+     "snowflake:SELECT on snowflake/MARKETING"
+    ],
+    "score": 1,
+    "rationale": "1 of 2 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "398",
+    "edge_id": 398,
+    "kind": "right_size",
+    "identity_id": 51,
+    "identity_name": "Callum Ferreira",
+    "identity_type": "human",
+    "department": "Support",
+    "grant": "snowflake:CALLUM_FERREIRA → snowflake:ANALYST",
+    "target": "snowflake:ANALYST",
+    "target_privileged": false,
+    "permissions_via": 2,
+    "permissions_lost": 2,
+    "unused_lost": 1,
+    "used_lost": 1,
+    "privileged_unused": 0,
+    "sensitive_tags": [],
+    "last_used": "2026-10-08T00:00:00",
+    "days_since_used": 0,
+    "unused_examples": [
+     "snowflake:SELECT on snowflake/EVENTS"
+    ],
+    "used_examples": [
+     "snowflake:SELECT on snowflake/MARKETING"
+    ],
+    "score": 1,
+    "rationale": "1 of 2 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   },
+   {
+    "id": "400",
+    "edge_id": 400,
+    "kind": "right_size",
+    "identity_id": 52,
+    "identity_name": "Juno Lindqvist",
+    "identity_type": "human",
+    "department": "Support",
+    "grant": "snowflake:JUNO_LINDQVIST → snowflake:ANALYST",
+    "target": "snowflake:ANALYST",
+    "target_privileged": false,
+    "permissions_via": 2,
+    "permissions_lost": 2,
+    "unused_lost": 1,
+    "used_lost": 1,
+    "privileged_unused": 0,
+    "sensitive_tags": [],
+    "last_used": "2026-10-07T00:00:00",
+    "days_since_used": 1,
+    "unused_examples": [
+     "snowflake:SELECT on snowflake/MARKETING"
+    ],
+    "used_examples": [
+     "snowflake:SELECT on snowflake/EVENTS"
+    ],
+    "score": 1,
+    "rationale": "1 of 2 permissions from this grant are unused for 60+ days; replace with a narrower role."
+   }
+  ]
+ }
+}

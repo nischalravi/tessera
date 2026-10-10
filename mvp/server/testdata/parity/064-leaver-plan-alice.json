@@ -1,0 +1,103 @@
+{
+ "name": "leaver-plan-alice",
+ "request": {
+  "method": "GET",
+  "path": "/api/jml/leaver-plan/5"
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "type": "leaver",
+   "identity": {
+    "id": 5,
+    "name": "Alice Okafor",
+    "status": "active",
+    "department": "Engineering",
+    "title": "Senior Software Engineer"
+   },
+   "steps": [
+    {
+     "action": "disable_account",
+     "system": "workday",
+     "target": "emp-1005",
+     "account_id": 5,
+     "detail": "Disable workday account emp-1005"
+    },
+    {
+     "action": "disable_account",
+     "system": "okta",
+     "target": "alice.okafor@larkspur.example",
+     "account_id": 69,
+     "detail": "Disable okta account alice.okafor@larkspur.example"
+    },
+    {
+     "action": "disable_account",
+     "system": "github",
+     "target": "alice-okafo",
+     "account_id": 146,
+     "detail": "Disable github account alice-okafo"
+    },
+    {
+     "action": "remove_grant",
+     "system": "okta",
+     "edge_id": 46,
+     "target": "okta:Everyone",
+     "detail": "Remove okta:alice.okafor@larkspur.example from okta:Everyone"
+    },
+    {
+     "action": "remove_grant",
+     "system": "okta",
+     "edge_id": 47,
+     "target": "okta:engineering",
+     "detail": "Remove okta:alice.okafor@larkspur.example from okta:engineering"
+    },
+    {
+     "action": "remove_grant",
+     "system": "okta",
+     "edge_id": 48,
+     "target": "okta:eng-backend",
+     "detail": "Remove okta:alice.okafor@larkspur.example from okta:eng-backend"
+    },
+    {
+     "action": "remove_grant",
+     "system": "github",
+     "edge_id": 276,
+     "target": "github:all-engineers",
+     "detail": "Remove github:alice-okafo from github:all-engineers"
+    },
+    {
+     "action": "remove_grant",
+     "system": "github",
+     "edge_id": 277,
+     "target": "github:backend",
+     "detail": "Remove github:alice-okafo from github:backend"
+    },
+    {
+     "action": "cancel_jit",
+     "request_id": 2,
+     "system": "tessera",
+     "target": "aws:ProdAdmin",
+     "detail": "Cancel pending JIT request #2"
+    },
+    {
+     "action": "revoke_delegation",
+     "delegation_id": 3,
+     "system": "tessera",
+     "target": "Code Review Bot",
+     "detail": "Revoke delegation: Code Review Bot acting on behalf of Alice Okafor (github:pull_request:comment, github:repo:read)"
+    }
+   ],
+   "impact": {
+    "permissions_removed": 16,
+    "privileged_removed": 1,
+    "systems": [
+     "github",
+     "okta",
+     "workday"
+    ],
+    "owned_nhis": 0,
+    "violations_resolved": 0
+   }
+  }
+ }
+}

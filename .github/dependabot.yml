@@ -1,0 +1,31 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /mvp/server
+    target-branch: dev
+    schedule:
+      interval: weekly
+      day: tuesday
+    labels: [dependencies, "source:security"]
+    groups:
+      go-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /mvp/frontend
+    target-branch: dev
+    schedule:
+      interval: weekly
+      day: tuesday
+    labels: [dependencies, "source:security"]
+    groups:
+      npm-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: weekly
+      day: tuesday
+    labels: [dependencies]

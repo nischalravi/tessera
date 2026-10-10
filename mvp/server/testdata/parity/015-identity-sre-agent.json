@@ -1,0 +1,375 @@
+{
+ "name": "identity-sre-agent",
+ "request": {
+  "method": "GET",
+  "path": "/api/identities/71"
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "id": 71,
+   "name": "SRE On-call Agent",
+   "type": "ai_agent",
+   "status": "active",
+   "department": null,
+   "title": "AI agent",
+   "email": null,
+   "description": "Triages alerts and gathers diagnostics from prod",
+   "hired_at": null,
+   "terminated_at": null,
+   "manager": null,
+   "owner": {
+    "id": 17,
+    "name": "Marcus Bellweather",
+    "type": "human",
+    "status": "active",
+    "department": "Engineering",
+    "title": "Platform Engineer"
+   },
+   "accounts": [
+    {
+     "id": 132,
+     "system": "okta",
+     "username": "agent-sre-oncall@agents.larkspur.example",
+     "kind": "agent",
+     "status": "active",
+     "last_login_at": "2026-10-06T03:14:14.464639"
+    },
+    {
+     "id": 143,
+     "system": "aws",
+     "username": "agent-sre-oncall",
+     "kind": "agent",
+     "status": "active",
+     "last_login_at": "2026-10-06T10:03:43.625124"
+    }
+   ],
+   "grants": [
+    {
+     "edge_id": 186,
+     "src": "account:132",
+     "dst": "group:20",
+     "label": "okta:ai-agents",
+     "account": "okta:agent-sre-oncall@agents.larkspur.example",
+     "relation": "member_of",
+     "source": "connector",
+     "expires_at": null,
+     "privileged": false
+    },
+    {
+     "edge_id": 247,
+     "src": "account:143",
+     "dst": "group:29",
+     "label": "aws:SREAgentRole",
+     "account": "aws:agent-sre-oncall",
+     "relation": "member_of",
+     "source": "connector",
+     "expires_at": null,
+     "privileged": false
+    }
+   ],
+   "effective_permissions": [
+    {
+     "perm_key": "perm:22",
+     "action": "ec2:DescribeInstances",
+     "system": "aws",
+     "resource": "ec2/prod-fleet",
+     "resource_id": 11,
+     "environment": "prod",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-08T00:00:00",
+      "days_since_used": 0,
+      "events_90d": 1699,
+      "active_days_90d": 80
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:71",
+        "kind": "identity",
+        "label": "SRE On-call Agent",
+        "system": null
+       },
+       {
+        "key": "account:143",
+        "kind": "account",
+        "label": "aws:agent-sre-oncall",
+        "system": "aws",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:29",
+        "kind": "group",
+        "label": "aws:SREAgentRole",
+        "system": "aws",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 247,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:22",
+        "kind": "group",
+        "label": "aws:ProdReadOnly",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 222,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:22",
+        "kind": "perm",
+        "label": "ec2:DescribeInstances on ec2/prod-fleet",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 193,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:20",
+     "action": "rds:Connect",
+     "system": "aws",
+     "resource": "rds/orders-db",
+     "resource_id": 10,
+     "environment": "prod",
+     "tags": [
+      "pii"
+     ],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": null,
+      "days_since_used": null,
+      "events_90d": 0,
+      "active_days_90d": 0
+     },
+     "unused": true,
+     "paths": [
+      [
+       {
+        "key": "identity:71",
+        "kind": "identity",
+        "label": "SRE On-call Agent",
+        "system": null
+       },
+       {
+        "key": "account:143",
+        "kind": "account",
+        "label": "aws:agent-sre-oncall",
+        "system": "aws",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:29",
+        "kind": "group",
+        "label": "aws:SREAgentRole",
+        "system": "aws",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 247,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:22",
+        "kind": "group",
+        "label": "aws:ProdReadOnly",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 222,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:20",
+        "kind": "perm",
+        "label": "rds:Connect on rds/orders-db",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 195,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    },
+    {
+     "perm_key": "perm:12",
+     "action": "s3:GetObject",
+     "system": "aws",
+     "resource": "s3://app-logs",
+     "resource_id": 6,
+     "environment": "prod",
+     "tags": [],
+     "privileged": false,
+     "standing": true,
+     "usage": {
+      "last_used": "2026-10-06T00:00:00",
+      "days_since_used": 2,
+      "events_90d": 1321,
+      "active_days_90d": 73
+     },
+     "unused": false,
+     "paths": [
+      [
+       {
+        "key": "identity:71",
+        "kind": "identity",
+        "label": "SRE On-call Agent",
+        "system": null
+       },
+       {
+        "key": "account:143",
+        "kind": "account",
+        "label": "aws:agent-sre-oncall",
+        "system": "aws",
+        "via": {
+         "relation": "has_account",
+         "edge_id": null,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:29",
+        "kind": "group",
+        "label": "aws:SREAgentRole",
+        "system": "aws",
+        "via": {
+         "relation": "member_of",
+         "edge_id": 247,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "group:22",
+        "kind": "group",
+        "label": "aws:ProdReadOnly",
+        "system": "aws",
+        "via": {
+         "relation": "maps_to",
+         "edge_id": 222,
+         "source": "connector",
+         "expires_at": null
+        }
+       },
+       {
+        "key": "perm:12",
+        "kind": "perm",
+        "label": "s3:GetObject on s3://app-logs",
+        "system": "aws",
+        "via": {
+         "relation": "grants",
+         "edge_id": 194,
+         "source": "connector",
+         "expires_at": null
+        }
+       }
+      ]
+     ]
+    }
+   ],
+   "violations": [
+    {
+     "policy_id": "ai-agents-no-pii",
+     "policy_name": "AI agents may not access PII",
+     "severity": "critical",
+     "identity_id": 71,
+     "identity_name": "SRE On-call Agent",
+     "key": "ai-agents-no-pii:71:perm:20",
+     "message": "SRE On-call Agent (ai_agent) can rds:Connect on rds/orders-db [pii]",
+     "evidence": [
+      "SRE On-call Agent → aws:agent-sre-oncall → aws:SREAgentRole → aws:ProdReadOnly → rds:Connect on rds/orders-db"
+     ],
+     "edges": [
+      [
+       "account:143",
+       "group:29"
+      ]
+     ]
+    }
+   ],
+   "recommendations": [],
+   "secrets": [
+    {
+     "id": 17,
+     "name": "agent-sre-oncall-key",
+     "kind": "api_token",
+     "system": "aws",
+     "account": "agent-sre-oncall",
+     "created_at": "2026-09-23T00:00:00",
+     "age_days": 15,
+     "status": "active",
+     "last_rotated_at": null,
+     "last_used_at": "2026-10-07T21:36:00",
+     "last_used_days": 0,
+     "stale": false
+    }
+   ],
+   "delegations": [
+    {
+     "agent": {
+      "id": 71,
+      "name": "SRE On-call Agent",
+      "type": "ai_agent",
+      "status": "active",
+      "department": null,
+      "title": "AI agent"
+     },
+     "principal": {
+      "id": 17,
+      "name": "Marcus Bellweather",
+      "type": "human",
+      "status": "active",
+      "department": "Engineering",
+      "title": "Platform Engineer"
+     },
+     "scopes": [
+      "aws:ec2:describe",
+      "aws:logs:read"
+     ]
+    }
+   ],
+   "owned_identities": [],
+   "risk": {
+    "effective": 3,
+    "unused": 1,
+    "privileged": 0,
+    "sensitive": 1,
+    "violations": 1,
+    "risk": 26
+   }
+  }
+ }
+}

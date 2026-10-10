@@ -1,0 +1,198 @@
+# Workday as the authoritative HR source (design §3.12).
+template: workday
+version: 1.0.0
+extends: base@1
+display_name: Workday (HR source)
+connector_types: [workday, demo-workday]
+role: authoritative
+default_correlation_key: worker_id
+default_hr_id_attribute: worker_id
+host_allowlist: ["*.workday.com", "*.myworkday.com"]
+required_attributes:
+  user: [worker_id, worker_type, legal_name, status, hire_date, manager, supervisory_org,
+         cost_center, location, work_email]
+recommended_attributes:
+  user: [preferred_name, termination_date]
+items:
+  - id: wd.authoritative
+    title: Marked as the authoritative source for joiner, mover and leaver and person attributes
+    category: ownership
+    level: required
+    why: "Every other connection reconciles against it (D4 M1)."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Set role to authoritative."
+    config_fields: [role]
+
+  - id: wd.isu.dedicated
+    title: Dedicated Integration System User with Do Not Allow UI Sessions set
+    category: access
+    level: required
+    why: "A shared or expiring integration user stops HR feeds."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Create an integration system user for Tessera."
+    config_fields: [credential]
+
+  - id: wd.isu.get_only
+    title: Integration security group has Get-only access on the needed domains; no Put
+    category: access
+    level: required
+    why: "Least privilege; HR data is the most sensitive data Tessera reads."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Review the domain security policies."
+    depends_on: [wd.isu.dedicated]
+    config_fields: [credential]
+
+  - id: wd.isu.minimal_fields
+    title: Only needed fields returned; no national ids, compensation, bank details or date of birth
+    category: data_quality
+    level: required
+    why: "Data minimisation (GDPR art. 5(1)(c)); Tessera should never hold these fields."
+    verify:
+      - kind: live
+        check: field_inventory
+        params: { forbidden: [national_id, ssn, compensation, salary, bank_account, date_of_birth] }
+    remediation:
+      hint: "Remove the fields from the report or web-service response group."
+    depends_on: [wd.endpoint]
+    config_fields: [tenant_host, interface]
+
+  - id: wd.endpoint
+    title: Tenant host and name correct, API version pinned, reached through safehttp
+    category: transport
+    level: required
+    why: "Connecting to the sandbox instead of production is a common slip."
+    verify:
+      - kind: live
+        check: endpoint_reachable
+    remediation:
+      hint: "Copy the host from the Workday tenant URL."
+    config_fields: [tenant_host, api_version]
+
+  - id: wd.interface
+    title: Interface chosen (Get_Workers, or a RaaS report owned by the integration user)
+    category: scope
+    level: required
+    why: "RaaS reports silently change when their owner edits them."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Use a dedicated report owned by the integration user."
+    depends_on: [wd.endpoint]
+    config_fields: [interface]
+
+  - id: wd.key.worker_id
+    title: Employee and contingent worker ids as the identity key; a rehire reactivates the identity
+    category: identity_keys
+    level: required
+    why: "Duplicated identities on rehire break history and reviews."
+    verify:
+      - kind: data
+        check: key_unique
+        params: { attr: worker_id }
+    remediation:
+      hint: "Automatic."
+    depends_on: [base.correlation.key]
+    config_fields: [correlation_key]
+
+  - id: wd.population
+    title: Employees, contingent workers, pre-hires and recent terminations all included
+    category: scope
+    level: required
+    why: "Contractors are the population most often missing."
+    verify:
+      - kind: attestation
+      - kind: data
+        check: population_mix
+    remediation:
+      hint: "Include all worker types."
+    depends_on: [wd.endpoint]
+    config_fields: [interface, expected_counts]
+
+  - id: wd.effective_dating
+    title: Future-dated hires and terminations captured with effective dates
+    category: change_tracking
+    level: required
+    why: "Leavers are otherwise processed late or never."
+    verify:
+      - kind: data
+        check: future_dated_present
+    remediation:
+      hint: "Use the effective and entry date parameters."
+    depends_on: [wd.population]
+
+  - id: wd.tz
+    title: Effective dates read in the Workday tenant time zone
+    category: change_tracking
+    level: required
+    why: "Off-by-one-day leavers across time zones."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Set the tenant time zone in the connection."
+    depends_on: [wd.effective_dating]
+    config_fields: [time_zone]
+
+  - id: wd.manager
+    title: Manager resolves for at least 98% of active workers
+    category: data_quality
+    level: recommended
+    why: "Manager-based reviews and approvals depend on it."
+    verify:
+      - kind: data
+        check: fill_rate
+        params: { attr: manager, min: 0.98 }
+    remediation:
+      hint: "Fix vacant supervisory organisations."
+
+  - id: wd.email
+    title: Work email filled for at least 95% of active workers
+    category: data_quality
+    level: recommended
+    why: "Needed for notifications and tier-3 proposals."
+    verify:
+      - kind: data
+        check: fill_rate
+        params: { attr: work_email, min: 0.95 }
+    remediation:
+      hint: "Fix the records in Workday."
+
+  - id: wd.multiple_positions
+    title: Primary position chosen for workers with concurrent positions
+    category: data_quality
+    level: recommended
+    why: "Department and manager become ambiguous otherwise."
+    verify:
+      - kind: data
+        check: multi_position
+    remediation:
+      hint: "Automatic, using the primary flag."
+
+  - id: wd.incremental
+    title: Incremental through transaction-log criteria or a dated RaaS prompt; daily full
+    category: change_tracking
+    level: required
+    why: "Leavers must flow within the SLA."
+    verify:
+      - kind: live
+        check: incremental_capable
+    remediation:
+      hint: "Automatic."
+    depends_on: [wd.interface]
+
+  - id: wd.leaver_sla
+    title: Sync frequency meets the leaver SLA (default every 4 hours)
+    category: change_tracking
+    level: recommended
+    why: "Leaver kill-switch timing (D4 M7)."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Set the schedule."
+    depends_on: [wd.incremental]
+    config_fields: [sync_schedule]

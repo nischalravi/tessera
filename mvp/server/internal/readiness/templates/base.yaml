@@ -1,0 +1,174 @@
+# Shared readiness items included by every connector template (design §3.6).
+# Levels: required blocks activation; recommended must pass or be skipped with a
+# reason; optional is informational. Verification kinds: attestation, live, data.
+template: base
+version: 1.0.0
+display_name: Shared base items
+connector_types: []
+thresholds:
+  fill_rate.required: 0.95
+  fill_rate.recommended: 0.75
+  count_tolerance: 0.02
+  stale_days: 90
+items:
+  - id: base.owner
+    title: Technical owner and business owner named
+    category: ownership
+    level: required
+    why: "Every connection and its findings need an accountable human (README rule 6)."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Set both owners on the Connect step."
+    config_fields: [technical_owner, business_owner]
+
+  - id: base.cred.sealed
+    title: Credential stored sealed in Tessera or as a vault reference; never in config text
+    category: access
+    level: required
+    why: "A credential in plain configuration leaks through exports and logs (Phase 0 §7.1)."
+    verify:
+      - kind: live
+        check: cred_storage
+    remediation:
+      hint: "Use the write-only credential field or a vault reference."
+    config_fields: [credential]
+
+  - id: base.cred.expiry
+    title: Credential or certificate expiry known and more than 30 days away
+    category: access
+    level: recommended
+    why: "Expired credentials are the commonest silent sync outage."
+    verify:
+      - kind: live
+        check: cred_expiry
+        params: { min_days: 30 }
+    remediation:
+      hint: "Rotate the credential, set a reminder, and prefer certificates or federation."
+    depends_on: [base.cred.sealed]
+    config_fields: [credential]
+
+  - id: base.clock
+    title: Clock skew between Tessera and the system under 2 minutes (fail at 5)
+    category: topology
+    level: recommended
+    why: "Skew corrupts last-login staleness, effective dating and token validation. Kerberos fails at 5 minutes."
+    verify:
+      - kind: live
+        check: clock_skew
+        params: { warn_seconds: 120, fail_seconds: 300 }
+    remediation:
+      hint: "Fix NTP on the directory or agent host."
+    config_fields: [host, org_url, tenant_id, domain, base_url]
+
+  - id: base.correlation.key
+    title: Immutable correlation key selected, populated on every in-scope object and unique
+    category: identity_keys
+    level: required
+    why: "Email, UPN and usernames are renamed and reused; correlating on them merges people."
+    verify:
+      - kind: attestation
+      - kind: data
+        check: key_unique
+    remediation:
+      hint: "Choose the template's immutable key in the Mapping step."
+    config_fields: [correlation_key]
+
+  - id: base.correlation.rule
+    title: Correlation to the authoritative source configured (tier 1 HR id; email only proposes)
+    category: identity_keys
+    level: required
+    why: "Without a correlation rule every account is an orphan (D4 M2)."
+    verify:
+      - kind: data
+        check: correlation_rate
+        params: { min: 0.5 }
+    remediation:
+      hint: "Map the HR id attribute; see the cause analysis in the reconciliation report."
+    depends_on: [base.correlation.key]
+    applies_when: { role: [account_source] }
+    config_fields: [correlation_key, hr_id_attribute]
+
+  - id: base.attrs.required
+    title: Template's required attributes mapped and filled on at least 95% of in-scope records
+    category: data_quality
+    level: required
+    why: "Missing attributes break reviews, separation-of-duties and joiner/mover/leaver rules."
+    verify:
+      - kind: data
+        check: fill_rate
+        params: { attrs: required }
+    remediation:
+      hint: "Map the attribute or fix the source data."
+
+  - id: base.scope.count
+    title: Staged object counts within 2% of the counts the owner expects
+    category: scope
+    level: recommended
+    why: "The fastest way to catch a missing OU, domain or population."
+    verify:
+      - kind: attestation
+      - kind: data
+        check: count_match
+    remediation:
+      hint: "Enter expected user and group counts from the directory's own console."
+    config_fields: [expected_counts]
+
+  - id: base.dryrun.reviewed
+    title: Dry run completed; every critical and high finding resolved or accepted with a reason
+    category: data_quality
+    level: required
+    why: "Makes the gaps visible before they become audit findings."
+    verify:
+      - kind: data
+        check: findings_acknowledged
+    remediation:
+      hint: "Open the reconciliation report and resolve or accept each critical and high finding."
+
+  - id: base.writeback.scope
+    title: Write-back limited to named containers or groups with the minimum rights
+    category: write_back
+    level: required
+    why: "Least privilege for provisioning (D4 M8)."
+    verify:
+      - kind: live
+        check: write_scope
+    remediation:
+      hint: "Delegate rights only on the provisioned OU or groups."
+    applies_when: { write_mode: [dry_run, scoped] }
+    config_fields: [write_mode, write_scope]
+
+  - id: base.writeback.dryrun
+    title: First provisioning run executed in dry_run and its planned operations reviewed
+    category: write_back
+    level: required
+    why: "Catches mass changes before they happen (groups design §9.2 failsafes)."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Run Provisioning, then Dry run, and review the operation list."
+    depends_on: [base.writeback.scope]
+    applies_when: { write_mode: [dry_run, scoped] }
+    config_fields: [write_mode, write_scope]
+
+  - id: base.stale.threshold
+    title: Dormancy threshold set (default 90 days, PCI DSS v4 8.2.6)
+    category: account_status
+    level: recommended
+    why: "Drives stale-account findings and reviews."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Set the threshold in Identity rules."
+    config_fields: [stale_days]
+
+  - id: base.schedule
+    title: Full sync at least weekly and incremental sync scheduled
+    category: change_tracking
+    level: recommended
+    why: "Incremental feeds miss deletes and permission changes; a periodic full sync is the backstop."
+    verify:
+      - kind: attestation
+    remediation:
+      hint: "Set the schedule on the Review step."
+    config_fields: [sync_schedule]

@@ -1,0 +1,138 @@
+{
+ "name": "identities-agents",
+ "request": {
+  "method": "GET",
+  "path": "/api/identities?type=ai_agent"
+ },
+ "response": {
+  "status": 200,
+  "body": [
+   {
+    "id": 70,
+    "name": "Data Analyst Agent",
+    "type": "ai_agent",
+    "status": "active",
+    "department": null,
+    "title": "AI agent",
+    "email": null,
+    "accounts": 2,
+    "systems": [
+     "okta",
+     "snowflake"
+    ],
+    "last_activity": "2026-10-08T00:00:00",
+    "effective": 3,
+    "unused": 0,
+    "privileged": 0,
+    "sensitive": 1,
+    "violations": 2,
+    "risk": 37
+   },
+   {
+    "id": 72,
+    "name": "Sales Research Agent",
+    "type": "ai_agent",
+    "status": "active",
+    "department": null,
+    "title": "AI agent",
+    "email": null,
+    "accounts": 2,
+    "systems": [
+     "okta",
+     "snowflake"
+    ],
+    "last_activity": "2026-10-08T00:00:00",
+    "effective": 3,
+    "unused": 0,
+    "privileged": 0,
+    "sensitive": 1,
+    "violations": 2,
+    "risk": 31
+   },
+   {
+    "id": 71,
+    "name": "SRE On-call Agent",
+    "type": "ai_agent",
+    "status": "active",
+    "department": null,
+    "title": "AI agent",
+    "email": null,
+    "accounts": 2,
+    "systems": [
+     "aws",
+     "okta"
+    ],
+    "last_activity": "2026-10-08T00:00:00",
+    "effective": 3,
+    "unused": 1,
+    "privileged": 0,
+    "sensitive": 1,
+    "violations": 1,
+    "risk": 26
+   },
+   {
+    "id": 67,
+    "name": "Support Copilot",
+    "type": "ai_agent",
+    "status": "active",
+    "department": null,
+    "title": "AI agent",
+    "email": null,
+    "accounts": 2,
+    "systems": [
+     "okta",
+     "snowflake"
+    ],
+    "last_activity": "2026-10-08T00:00:00",
+    "effective": 1,
+    "unused": 0,
+    "privileged": 0,
+    "sensitive": 1,
+    "violations": 1,
+    "risk": 25
+   },
+   {
+    "id": 68,
+    "name": "Code Review Bot",
+    "type": "ai_agent",
+    "status": "active",
+    "department": null,
+    "title": "AI agent",
+    "email": null,
+    "accounts": 2,
+    "systems": [
+     "github",
+     "okta"
+    ],
+    "last_activity": "2026-10-08T00:00:00",
+    "effective": 8,
+    "unused": 1,
+    "privileged": 0,
+    "sensitive": 1,
+    "violations": 0,
+    "risk": 2
+   },
+   {
+    "id": 69,
+    "name": "Finance Recon Agent",
+    "type": "ai_agent",
+    "status": "active",
+    "department": null,
+    "title": "AI agent",
+    "email": null,
+    "accounts": 2,
+    "systems": [
+     "okta",
+     "workday"
+    ],
+    "last_activity": null,
+    "effective": 1,
+    "unused": 1,
+    "privileged": 0,
+    "sensitive": 1,
+    "violations": 0,
+    "risk": 2
+   }
+  ]
+ }
+}

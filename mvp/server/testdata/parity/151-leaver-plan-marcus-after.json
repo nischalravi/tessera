@@ -1,0 +1,28 @@
+{
+ "name": "leaver-plan-marcus-after",
+ "request": {
+  "method": "GET",
+  "path": "/api/jml/leaver-plan/17"
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "type": "leaver",
+   "identity": {
+    "id": 17,
+    "name": "Marcus Bellweather",
+    "status": "terminated",
+    "department": "Engineering",
+    "title": "Platform Engineer"
+   },
+   "steps": [],
+   "impact": {
+    "permissions_removed": 0,
+    "privileged_removed": 0,
+    "systems": [],
+    "owned_nhis": 0,
+    "violations_resolved": 0
+   }
+  }
+ }
+}

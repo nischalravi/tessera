@@ -1,0 +1,1208 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "Tessera deployment readiness",
+  "version": "0.1.0",
+  "description": "Deployment readiness API (docs/design/deployment-readiness.md \u00a79). The MVP has no authentication: the acting user is sent as X-Tessera-User. Permissions listed per route arrive with DR-10. Errors are {\"error\": code, \"detail\": message}; refused transitions return the gate report {error, state, to, blocking: [{item|finding, level|severity, status, reason}]}."
+ },
+ "paths": {
+  "/api/readiness/templates": {
+   "get": {
+    "summary": "List readiness templates",
+    "description": "Permission: connections.read",
+    "responses": {
+     "200": {
+      "description": "Template summaries with item counts per level"
+     }
+    },
+    "parameters": [
+     {
+      "name": "X-Tessera-User",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "maxLength": 120
+      }
+     }
+    ]
+   }
+  },
+  "/api/readiness/templates/{type}": {
+   "get": {
+    "summary": "Template after the tenant overlay",
+    "description": "Permission: connections.read",
+    "responses": {
+     "200": {
+      "description": "Resolved template"
+     },
+     "404": {
+      "description": "Unknown template"
+     }
+    },
+    "parameters": [
+     {
+      "name": "type",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "X-Tessera-User",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "maxLength": 120
+      }
+     }
+    ]
+   }
+  },
+  "/api/readiness/overlays/{type}": {
+   "put": {
+    "summary": "Add items, raise levels, tighten thresholds",
+    "description": "Permission: connections.manage + step-up (DR-10)",
+    "responses": {
+     "200": {
+      "description": "Template with the overlay applied"
+     },
+     "422": {
+      "description": "level_downgrade_forbidden or invalid_overlay"
+     }
+    },
+    "parameters": [
+     {
+      "name": "type",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "X-Tessera-User",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "maxLength": 120
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/Overlay"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/connections": {
+   "get": {
+    "summary": "Governed connections plus legacy (TESSERA_CONNECTORS) connectors",
+    "description": "Permission: connections.read",
+    "responses": {
+     "200": {
+      "description": "Connections"
+     }
+    },
+    "parameters": [
+     {
+      "name": "X-Tessera-User",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "maxLength": 120
+      }
+     }
+    ]
+   },
+   "post": {
+    "summary": "Create a connection in draft",
+    "description": "Permission: connections.manage",
+    "responses": {
+     "201": {
+      "description": "Connection"
+     },
+     "409": {
+      "description": "duplicate_connection"
+     },
+     "422": {
+      "description": "unknown_connector_type, invalid_config"
+     }
+    },
+    "parameters": [
+     {
+      "name": "X-Tessera-User",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "maxLength": 120
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/CreateConnection"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/connections/{id}": {
+   "get": {
+    "summary": "Connection with its live and in-progress revisions",
+    "description": "Permission: connections.read",
+    "responses": {
+     "200": {
+      "description": "Connection"
+     },
+     "404": {
+      "description": "not_found"
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "X-Tessera-User",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "maxLength": 120
+      }
+     }
+    ]
+   }
+  },
+  "/api/connections/{id}/config": {
+   "patch": {
+    "summary": "Edit the in-progress revision (creates one when active); returns invalidated items",
+    "description": "Permission: connections.manage",
+    "responses": {
+     "200": {
+      "description": "{connection, new_revision, invalidated, fields}"
+     },
+     "422": {
+      "description": "invalid_config"
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "X-Tessera-User",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "maxLength": 120
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ConnConfig"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/connections/{id}/credential": {
+   "put": {
+    "summary": "Write-only credential or vault/agent reference; never returned",
+    "description": "Permission: connections.manage + step-up (DR-10)",
+    "responses": {
+     "200": {
+      "description": "{present, kind, version}"
+     },
+     "422": {
+      "description": "invalid_credential"
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "X-Tessera-User",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "maxLength": 120
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/Credential"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/connections/{id}/checklist": {
+   "get": {
+    "summary": "Items with level, status, verification, dependencies and blockers",
+    "description": "Permission: connections.read",
+    "responses": {
+     "200": {
+      "description": "Checklist"
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "X-Tessera-User",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "maxLength": 120
+      }
+     }
+    ]
+   }
+  },
+  "/api/connections/{id}/checklist/{item}/attest": {
+   "post": {
+    "summary": "Attest an item with a note (at least 10 characters)",
+    "description": "Permission: connections.manage",
+    "responses": {
+     "200": {
+      "description": "Checklist"
+     },
+     "409": {
+      "description": "dependencies_not_passing (gate report)"
+     },
+     "422": {
+      "description": "note_too_short, not_attestable"
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "item",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "X-Tessera-User",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "maxLength": 120
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/Attest"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/connections/{id}/checklist/{item}/skip": {
+   "post": {
+    "summary": "Skip a Recommended item with a reason (at least 20 characters)",
+    "description": "Permission: connections.manage",
+    "responses": {
+     "200": {
+      "description": "Checklist"
+     },
+     "422": {
+      "description": "required_item_not_skippable, reason_too_short"
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "item",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "X-Tessera-User",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "maxLength": 120
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/Skip"
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "summary": "Un-skip",
+    "description": "Permission: connections.manage",
+    "responses": {
+     "200": {
+      "description": "Checklist"
+     },
+     "404": {
+      "description": "not skipped"
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "item",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "X-Tessera-User",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "maxLength": 120
+      }
+     }
+    ]
+   }
+  },
+  "/api/connections/{id}/transition": {
+   "post": {
+    "summary": "Move to ready_to_validate or dry_run_reconciled",
+    "description": "Permission: connections.manage",
+    "responses": {
+     "200": {
+      "description": "Connection"
+     },
+     "409": {
+      "description": "transition_blocked (gate report)"
+     },
+     "422": {
+      "description": "invalid_target"
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "X-Tessera-User",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "maxLength": 120
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/Transition"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/connections/{id}/activate": {
+   "post": {
+    "summary": "Re-evaluate every gate and activate",
+    "description": "Permission: connections.activate + step-up (DR-10)",
+    "responses": {
+     "200": {
+      "description": "Connection"
+     },
+     "403": {
+      "description": "phase0_required (non-demo types outside TESSERA_ENV=dev)"
+     },
+     "409": {
+      "description": "activation_blocked (gate report)"
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "X-Tessera-User",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "maxLength": 120
+      }
+     }
+    ]
+   }
+  },
+  "/api/connections/{id}/retire": {
+   "post": {
+    "summary": "Retire the connection",
+    "description": "Permission: connections.manage + step-up (DR-10)",
+    "responses": {
+     "200": {
+      "description": "Connection"
+     },
+     "422": {
+      "description": "confirmation_required"
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "X-Tessera-User",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "maxLength": 120
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/Retire"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/connections/{id}/validate": {
+   "post": {
+    "summary": "Run the read-only live checks (simulated for demo connectors)",
+    "description": "Permission: connections.manage",
+    "responses": {
+     "202": {
+      "description": "Validation run with results"
+     },
+     "409": {
+      "description": "validation_running"
+     },
+     "429": {
+      "description": "rate_limited"
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "X-Tessera-User",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "maxLength": 120
+      }
+     }
+    ]
+   }
+  },
+  "/api/connections/{id}/validations/{run}": {
+   "get": {
+    "summary": "Results per check",
+    "description": "Permission: connections.read",
+    "responses": {
+     "200": {
+      "description": "Validation run"
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "run",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "X-Tessera-User",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "maxLength": 120
+      }
+     }
+    ]
+   }
+  },
+  "/api/connections/{id}/dry-run": {
+   "post": {
+    "summary": "Stage a snapshot and reconcile it (writes staging tables only)",
+    "description": "Permission: connections.manage",
+    "responses": {
+     "202": {
+      "description": "Dry run summary"
+     },
+     "409": {
+      "description": "state or dry run in flight"
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "X-Tessera-User",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "maxLength": 120
+      }
+     }
+    ]
+   }
+  },
+  "/api/connections/{id}/dry-runs/{run}": {
+   "get": {
+    "summary": "Counts, correlation tiers, findings summary",
+    "description": "Permission: connections.read",
+    "responses": {
+     "200": {
+      "description": "Dry run"
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "run",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "X-Tessera-User",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "maxLength": 120
+      }
+     }
+    ]
+   }
+  },
+  "/api/connections/{id}/findings": {
+   "get": {
+    "summary": "Findings; filter by run, code, severity, status",
+    "description": "Permission: connections.read",
+    "responses": {
+     "200": {
+      "description": "Findings"
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "X-Tessera-User",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "maxLength": 120
+      }
+     }
+    ]
+   }
+  },
+  "/api/connections/{id}/findings/{fid}/accept": {
+   "post": {
+    "summary": "Accept a finding with a reason (at least 20 characters)",
+    "description": "Permission: connections.manage (+ step-up for critical, DR-10)",
+    "responses": {
+     "200": {
+      "description": "Finding"
+     },
+     "422": {
+      "description": "reason_too_short"
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "fid",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "X-Tessera-User",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "maxLength": 120
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/Accept"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/connections/{id}/health": {
+   "get": {
+    "summary": "Score breakdown and needs-attention for one connection",
+    "description": "Permission: connections.read",
+    "responses": {
+     "200": {
+      "description": "Health"
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "X-Tessera-User",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "maxLength": 120
+      }
+     }
+    ]
+   }
+  },
+  "/api/insights/deployment-health": {
+   "get": {
+    "summary": "Tenant score, per-connection scores, needs-attention, skipped items",
+    "description": "Permission: connections.read",
+    "responses": {
+     "200": {
+      "description": "Deployment health"
+     }
+    },
+    "parameters": [
+     {
+      "name": "X-Tessera-User",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "maxLength": 120
+      }
+     }
+    ]
+   }
+  },
+  "/api/insights/deployment-health/rerun": {
+   "post": {
+    "summary": "Re-run live checks (and optionally reconciliation) for all connections",
+    "description": "Permission: connections.manage",
+    "responses": {
+     "200": {
+      "description": "Rerun summary"
+     }
+    },
+    "parameters": [
+     {
+      "name": "X-Tessera-User",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "maxLength": 120
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/Rerun"
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {
+   "ConnConfig": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+     "host": {
+      "type": "string"
+     },
+     "user_filter": {
+      "type": "string"
+     },
+     "group_filter": {
+      "type": "string"
+     },
+     "org_url": {
+      "type": "string"
+     },
+     "tenant_id": {
+      "type": "string"
+     },
+     "cloud": {
+      "type": "string"
+     },
+     "customer": {
+      "type": "string"
+     },
+     "domain": {
+      "type": "string"
+     },
+     "base_url": {
+      "type": "string"
+     },
+     "tenant_host": {
+      "type": "string"
+     },
+     "api_version": {
+      "type": "string"
+     },
+     "interface": {
+      "type": "string"
+     },
+     "time_zone": {
+      "type": "string"
+     },
+     "correlation_key": {
+      "type": "string"
+     },
+     "hr_id_attribute": {
+      "type": "string"
+     },
+     "technical_owner": {
+      "type": "string"
+     },
+     "business_owner": {
+      "type": "string"
+     },
+     "sync_schedule": {
+      "type": "string"
+     },
+     "port": {
+      "enum": [
+       389,
+       636
+      ]
+     },
+     "base_dns": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "service_account_ous": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "stale_days": {
+      "type": "integer"
+     },
+     "write_mode": {
+      "enum": [
+       "off",
+       "dry_run",
+       "scoped"
+      ]
+     },
+     "write_scope": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "hybrid": {
+      "type": "boolean"
+     },
+     "use_dirsync": {
+      "type": "boolean"
+     },
+     "expected_counts": {
+      "type": "object",
+      "properties": {
+       "users": {
+        "type": "integer"
+       },
+       "groups": {
+        "type": "integer"
+       }
+      }
+     },
+     "privileged_expected": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       }
+      }
+     },
+     "demo_fixed_checks": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "Demo connectors only: simulated checks that pass"
+     }
+    },
+    "description": "Typed, secret-free connection configuration. Unknown fields are rejected."
+   },
+   "Overlay": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+     "add_items": {
+      "type": "array",
+      "items": {
+       "type": "object"
+      }
+     },
+     "raise_levels": {
+      "type": "object",
+      "additionalProperties": {
+       "enum": [
+        "required",
+        "recommended",
+        "optional"
+       ]
+      }
+     },
+     "thresholds": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "number"
+      }
+     },
+     "remove_items": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "Always rejected (level_downgrade_forbidden)"
+     },
+     "disable_items": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "Always rejected (level_downgrade_forbidden)"
+     }
+    }
+   },
+   "CreateConnection": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "name",
+     "connector_type"
+    ],
+    "properties": {
+     "name": {
+      "type": "string",
+      "maxLength": 100
+     },
+     "connector_type": {
+      "type": "string",
+      "examples": [
+       "demo-ad",
+       "demo-okta",
+       "demo-workday",
+       "ad",
+       "ldap",
+       "entra",
+       "okta",
+       "google",
+       "workday",
+       "scim_app"
+      ]
+     },
+     "system": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$"
+     },
+     "role": {
+      "enum": [
+       "authoritative",
+       "account_source"
+      ]
+     },
+     "config": {
+      "$ref": "#/components/schemas/ConnConfig"
+     }
+    }
+   },
+   "Credential": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+     "secret": {
+      "type": "string",
+      "writeOnly": true,
+      "maxLength": 8192
+     },
+     "reference": {
+      "type": "string",
+      "pattern": "^(vault|agent):[A-Za-z0-9._/:@-]{1,200}$"
+     }
+    }
+   },
+   "Attest": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "note"
+    ],
+    "properties": {
+     "note": {
+      "type": "string",
+      "minLength": 10
+     }
+    }
+   },
+   "Skip": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "reason"
+    ],
+    "properties": {
+     "reason": {
+      "type": "string",
+      "minLength": 20
+     },
+     "review_by": {
+      "type": "string",
+      "format": "date"
+     }
+    }
+   },
+   "Transition": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "to"
+    ],
+    "properties": {
+     "to": {
+      "enum": [
+       "ready_to_validate",
+       "dry_run_reconciled"
+      ]
+     }
+    }
+   },
+   "Retire": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "confirm"
+    ],
+    "properties": {
+     "confirm": {
+      "const": true
+     }
+    }
+   },
+   "Accept": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "reason"
+    ],
+    "properties": {
+     "reason": {
+      "type": "string",
+      "minLength": 20
+     },
+     "expires_at": {
+      "type": "string",
+      "format": "date"
+     }
+    }
+   },
+   "Rerun": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+     "reconcile": {
+      "type": "boolean"
+     }
+    }
+   }
+  }
+ }
+}

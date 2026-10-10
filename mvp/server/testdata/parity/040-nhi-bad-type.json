@@ -1,0 +1,26 @@
+{
+ "name": "nhi-bad-type",
+ "request": {
+  "method": "GET",
+  "path": "/api/nhi?type=human"
+ },
+ "response": {
+  "status": 422,
+  "body": {
+   "detail": [
+    {
+     "type": "literal_error",
+     "loc": [
+      "query",
+      "type"
+     ],
+     "msg": "Input should be 'service' or 'ai_agent'",
+     "input": "human",
+     "ctx": {
+      "expected": "'service' or 'ai_agent'"
+     }
+    }
+   ]
+  }
+ }
+}

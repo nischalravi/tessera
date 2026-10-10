@@ -1,0 +1,28 @@
+{
+ "name": "hris-leaver",
+ "request": {
+  "method": "POST",
+  "path": "/api/hris/events",
+  "body": {
+   "type": "leaver",
+   "identity_id": 4
+  }
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "id": 9,
+   "external_id": "sim-evt-9-1791466200",
+   "type": "leaver",
+   "status": "pending",
+   "effective_at": "2026-10-08T09:30:00",
+   "executed_at": null,
+   "identity": {
+    "id": 4,
+    "name": "Kofi Mensah",
+    "department": "Engineering"
+   },
+   "payload": {}
+  }
+ }
+}

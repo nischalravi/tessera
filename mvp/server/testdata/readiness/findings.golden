@@ -1,0 +1,19 @@
+# Findings of the demo dry runs (DemoCompany + simulated AD, gaps scenario).
+# Regenerate with: go test ./internal/api -run TestFindings_Golden -update
+demo-ad   01                  high      26/61  26 orphan accounts.
+demo-ad   02                  medium    24/57  24 active people have no account correlated to them in Active Directory.
+demo-ad   03                  high       2/65  2 ambiguous accounts.
+demo-ad   04   employeeID     low       25/65  employeeID is empty on 38% of user records.
+demo-ad   05                  medium     2/15  3 accounts belong to groups Tessera cannot see, so their access is understated.
+demo-ad   06   a              medium     4/4   4 inactive accounts.
+demo-ad   07                  medium     5/67  5 stale accounts.
+demo-ad   08                  critical   1/4   1 unexpected privileged membership in Domain Admins.
+demo-ad   09                  medium     3/6   3 unowned service accounts.
+demo-ad   10                  low       23/65  23 proposed matches.
+demo-ad   11                  high       1/3   1 privileged account with 2 privileged memberships.
+demo-ad   12   users          high       5/70  Staged 65 users; the owner expects 70 (-5, tolerance 2%).
+demo-ad   counts {"accounts":71,"ambiguous":2,"correlated_pct":55,"groups":13,"identities":0,"memberships":164,"privileged_groups":2,"proposed":23,"service":6,"tier1":36,"tier2":0,"uncorrelated":4,"users":65}
+demo-okta 06   a              medium     2/2   2 inactive accounts, reaching 6 permissions through mapped groups.
+demo-okta 06   b              high       1/3   1 leaver account, reaching 13 permissions through mapped groups.
+demo-okta 09                  high       1/9   1 unowned service account with 1 privileged membership, reaching 1 permission through mapped groups.
+demo-okta counts {"accounts":69,"ambiguous":0,"correlated_pct":100,"groups":15,"identities":9,"memberships":151,"privileged_groups":2,"proposed":0,"service":9,"tier1":60,"tier2":0,"uncorrelated":0,"users":60}

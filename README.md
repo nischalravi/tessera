@@ -10,19 +10,34 @@ Tessera builds a live graph of who can actually do what across your identity pro
 
 | Path | What it is |
 |---|---|
-| [`mvp/`](mvp/) | Runnable MVP: FastAPI + SQLite backend, React + Vite UI, demo connectors for Workday, Okta, AWS, GitHub and Snowflake |
+| [`mvp/`](mvp/) | Runnable MVP: Go + SQLite backend (`mvp/server`), React + Vite UI, demo connectors for Workday, Okta, AWS, GitHub and Snowflake |
 | [`docs/product-architecture-spec.md`](docs/product-architecture-spec.md) | Product and architecture spec: positioning, data model, production architecture, roadmap, pricing, risks |
+| [`docs/knowledge/`](docs/knowledge/) | IAM knowledge base: six researched domain documents and the capability map and build order ([start here](docs/knowledge/README.md)) |
+| [`.claude/agents/`](.claude/agents/) | The agent team: IAM architect and six domain experts, market analyst, product manager, full-stack developer, QA, security and DevOps |
+| [`docs/agents/OPERATING-MODEL.md`](docs/agents/OPERATING-MODEL.md) | How the agent team works: branches, weekly loop, labels, human checkpoints, cost |
+| [`docs/market-watch/`](docs/market-watch/) | Weekly market-watch reports |
 | [`docs/competitive-analysis.md`](docs/competitive-analysis.md) | Market map and competitor analysis (SailPoint, Saviynt, Okta, Entra, ConductorOne, Veza, NHI vendors), with sources |
 | [`prototype/tessera-prototype.html`](prototype/tessera-prototype.html) | Single-file clickable UI prototype for demos and design-partner conversations |
 
+## Branches
+
+| Branch | Purpose |
+|---|---|
+| `dev` | Default branch. All work lands here through reviewed PRs |
+| `test` | Promoted from `dev` with the **Promote** workflow |
+| `prod` | Promoted from `test` only |
+
+Agents open PRs into `dev` only; a human merges every PR and every promotion. See the [operating model](docs/agents/OPERATING-MODEL.md).
+
 ## Run the MVP
 
-Requirements: Python 3.11+, Node 18+, npm.
+Requirements: Go 1.27+, Node 18+, npm.
 
 ```bash
 cd mvp
-./run.sh          # installs deps, seeds the demo company, starts API :8000 and UI :5173
-./run.sh test     # backend test suite
+./run.sh          # builds the Go server, installs UI deps, seeds the demo company, starts API :8000 and UI :5173
+./run.sh test     # backend test suite (Go unit tests + API parity replay)
+./run.sh bench    # benchmarks
 ```
 
 Then open http://localhost:5173. The API reference is at http://127.0.0.1:8000/docs.

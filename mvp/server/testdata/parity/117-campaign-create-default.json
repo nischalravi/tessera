@@ -1,0 +1,30 @@
+{
+ "name": "campaign-create-default",
+ "request": {
+  "method": "POST",
+  "path": "/api/reviews/campaigns",
+  "body": {}
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "id": 3,
+   "name": "Exception-only review",
+   "status": "open",
+   "created_at": "2026-10-08T09:30:00",
+   "unused_days": 60,
+   "total_grants": 218,
+   "auto_certified": 135,
+   "items": 83,
+   "decided": 0,
+   "revoked": 0,
+   "reasons": {
+    "policy_violation": 50,
+    "unused_60d": 34,
+    "privileged_idle": 8,
+    "terminated_identity": 8,
+    "orphaned_nhi": 19
+   }
+  }
+ }
+}

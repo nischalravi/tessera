@@ -1,0 +1,23 @@
+{
+ "name": "groups-bad-bool",
+ "request": {
+  "method": "GET",
+  "path": "/api/groups?requestable=maybe"
+ },
+ "response": {
+  "status": 422,
+  "body": {
+   "detail": [
+    {
+     "type": "bool_parsing",
+     "loc": [
+      "query",
+      "requestable"
+     ],
+     "msg": "Input should be a valid boolean, unable to interpret input",
+     "input": "maybe"
+    }
+   ]
+  }
+ }
+}
