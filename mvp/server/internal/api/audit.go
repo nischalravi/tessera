@@ -102,10 +102,17 @@ func auditRow(e *store.AuditEvent) ojson.Object {
 	}
 }
 
+// MaxAuditLimit caps GET /api/audit's limit; larger values are clamped to
+// it. Page further with before_seq, or use GET /api/audit/export.
+const MaxAuditLimit = 1000
+
 // GET /api/audit: newest first. Domain events by default; include_http=true
-// (or action=http.request) adds the per-request events.
+// (or action=http.request) adds the per-request events. limit defaults to
+// 100, is clamped to MaxAuditLimit, and must not be negative (422); 0 returns
+// no rows.
 func (s *Server) auditLog(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
-	f := store.AuditFilter{Limit: int(p.queryInt("limit", 100, nil, nil))}
+	limit := min(p.queryInt("limit", 100, i64(0), nil), MaxAuditLimit)
+	f := store.AuditFilter{Limit: int(limit)}
 	if b := p.queryOptInt("before_seq"); b != nil {
 		f.BeforeSeq = *b
 	}
@@ -117,6 +124,9 @@ func (s *Server) auditLog(_ http.ResponseWriter, r *http.Request, p *params) (an
 	}
 	if err := validated(p, nil); err != nil {
 		return nil, err
+	}
+	if f.Limit == 0 {
+		return []ojson.Object{}, nil // the store reads limit 0 as "no limit"
 	}
 	rows, err := store.TxFrom(r.Context()).AuditEvents(f)
 	if err != nil {

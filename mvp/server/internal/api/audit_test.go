@@ -576,3 +576,27 @@ func TestAudit_ExportStreamTimeout(t *testing.T) {
 		t.Errorf("audit.export event: %s %s", last.Action, last.Outcome)
 	}
 }
+
+// TestAudit_ListLimit: limit is clamped to MaxAuditLimit, a negative limit
+// is a 422 (it would otherwise mean "no limit" to SQLite), 0 returns nothing,
+// and the values the parity fixtures use behave as before.
+func TestAudit_ListLimit(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	syntheticChain(t, f.DB, f.B.ID, MaxAuditLimit+50)
+	h := isolationServer(f, f.B.ID).Handler()
+	c := client{t, h}
+	for q, want := range map[string]int{
+		"limit=3": 3, "": 100, "limit=1000": MaxAuditLimit, "limit=1001": MaxAuditLimit,
+		"limit=1000000": MaxAuditLimit, "limit=9223372036854775807": MaxAuditLimit, "limit=0": 0,
+	} {
+		if got := c.json("GET", "/api/audit?"+q, "", http.StatusOK).([]any); len(got) != want {
+			t.Errorf("?%s: %d rows, want %d", q, len(got), want)
+		}
+	}
+	for _, q := range []string{"limit=-1", "limit=-9223372036854775808"} {
+		body := c.json("GET", "/api/audit?"+q, "", http.StatusUnprocessableEntity)
+		if at(body, "detail", 0, "type") != "greater_than_equal" {
+			t.Errorf("?%s: %v", q, body)
+		}
+	}
+}

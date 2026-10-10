@@ -189,6 +189,9 @@ write the database can also delete checkpoint rows and rewind the head, and then
 show the missing tail. Events after the newest anchored checkpoint (at most one checkpoint
 interval, 5 minutes or 1000 events) are the window that cannot be proven complete.
 
+`GET /api/audit` returns at most 1000 rows per call (`limit` is clamped; a negative `limit` is a
+422); page back with `before_seq`.
+
 The Admin → Audit log page lists the events, can include API requests, verifies the chain and
 exports it.
 

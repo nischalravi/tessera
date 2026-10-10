@@ -2055,7 +2055,7 @@ Redeeming the code means signing in through the named connection with **phr** co
 
 | Method | Path | Requirement |
 |---|---|---|
-| GET | `/api/audit?limit=&before_seq=&action=&actor_id=&target_type=&target_id=&from=&to=` | audit.read. **Existing route, extended.** Keeps `id, at, actor, action, detail` and adds `seq, actor_type, outcome, target, authn, hash, prev_hash` |
+| GET | `/api/audit?limit=&before_seq=&action=&actor_id=&target_type=&target_id=&from=&to=` | audit.read. **Existing route, extended.** Keeps `id, at, actor, action, detail` and adds `seq, actor_type, outcome, target, authn, hash, prev_hash`. `limit` defaults to 100 and is clamped to 1000 (`api.MaxAuditLimit`); a negative `limit` is a 422 and `0` returns `[]`; page with `before_seq` |
 | GET | `/api/audit/events/{event_id}/proof` | audit.read |
 | GET | `/api/audit/checkpoints?from_seq=` | audit.read |
 | GET | `/api/audit/keys` | audit.read (platform public keys) |
