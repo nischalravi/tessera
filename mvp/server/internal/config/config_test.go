@@ -174,6 +174,36 @@ func TestDevDefaults(t *testing.T) {
 	if _, err := config.Load(env(map[string]string{"TESSERA_NOW": "yesterday"})); err == nil {
 		t.Error("dev accepted a malformed TESSERA_NOW")
 	}
+	if _, err := config.Load(env(map[string]string{"TESSERA_AUDIT_ANCHOR": "/var/anchors.jsonl"})); err == nil {
+		t.Error("dev accepted an audit anchor that is not a file:// or s3:// URL")
+	}
+}
+
+// TestAnchorURL: dev anchors next to the database unless TESSERA_AUDIT_ANCHOR
+// says otherwise; prod uses only the configured sink.
+func TestAnchorURL(t *testing.T) {
+	c, err := config.Load(env(map[string]string{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if got, want := c.AnchorURL(filepath.Join(dir, "tessera.db")), "file://"+filepath.ToSlash(filepath.Join(dir, "var", "audit-anchors.jsonl")); got != want {
+		t.Errorf("dev anchor %q, want %q", got, want)
+	}
+	c, err = config.Load(env(map[string]string{"TESSERA_AUDIT_ANCHOR": "file:///srv/anchors.jsonl"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.AnchorURL("x.db"); got != "file:///srv/anchors.jsonl" {
+		t.Errorf("configured anchor %q", got)
+	}
+	p, err := config.Load(env(safeProd()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.AnchorURL("x.db"); got != "s3://anchors/tessera" {
+		t.Errorf("prod anchor %q", got)
+	}
 }
 
 // TestClock: TESSERA_NOW freezes the clock in dev; unset, the wall clock runs.

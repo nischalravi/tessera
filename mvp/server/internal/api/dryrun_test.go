@@ -387,10 +387,15 @@ func TestWalkthrough_ADToActive(t *testing.T) {
 		t.Errorf("linked AD accounts: %d (tier 1 only, 36 people + 2 ambiguous)", n)
 	}
 	audit := c.do("GET", "/api/audit", "").Body.String()
-	for _, ev := range []string{"connection.activated", "connection.first_sync", "readiness.dryrun.completed", "readiness.validation.completed"} {
+	for _, ev := range []string{"connection.activated", "connection.first_sync", "readiness.dryrun.completed", "readiness.validation.completed",
+		"readiness.item.skipped", "readiness.item.attested", "readiness.finding.accepted"} {
 		if !strings.Contains(audit, ev) {
 			t.Errorf("audit lacks %s", ev)
 		}
+	}
+	// ...in the hash chain, which still verifies
+	if rep := c.json("POST", "/api/audit/verify", "", http.StatusOK); rep["result"] != "ok" || rep["exit_code"] != float64(0) {
+		t.Errorf("ledger after the walkthrough: %v", rep)
 	}
 	// Editing the active connection opens a new draft revision; the live one keeps syncing.
 	p := c.json("PATCH", "/api/connections/"+ad+"/config", `{"stale_days":60}`, http.StatusOK)

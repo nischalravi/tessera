@@ -23,6 +23,7 @@ type TenantTx struct {
 	tx       *sql.Tx
 	tenant   tenancy.ID
 	readOnly bool
+	appended int64 // audit events appended (counted into AuditContext.Committed on commit)
 }
 
 // Tenant returns the tenant this transaction is scoped to.

@@ -1,9 +1,9 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
-  ArrowLeftRight, Bell, CircleCheck, Clock, FileBadge, Fingerprint, KeySquare, LucideIcon, Palette, Play, Plug, ScrollText, Search, Settings, UserCog,
+  ArrowLeftRight, Bell, CircleCheck, Clock, Download, FileBadge, Fingerprint, KeySquare, LucideIcon, Palette, Play, Plug, ScrollText, Search, Settings, ShieldCheck, UserCog,
 } from "lucide-react";
-import { AuditRow, api, fmtDate, relTime, useApi } from "../../api";
+import { AuditRow, AuditVerifyReport, api, fmtDate, relTime, useApi } from "../../api";
 import { fuzzy } from "../../app/fuzzy";
 import { Badge, Button, Callout, DataTable, EmptyState, Page, PreviewBadge, useToast } from "../../components";
 import { ADMIN_BY_ID, ADMIN_SECTIONS, AdminSection, useMockState } from "../../mocks";
@@ -93,26 +93,83 @@ function Jobs() {
   );
 }
 
+const OUTCOME_TONE: Record<string, "ok" | "warning" | "critical" | "neutral"> = { success: "ok", denied: "critical", failure: "warning", error: "critical" };
+
+/** Read-only view of the tenant's hash-chained audit ledger (design §13, §17). */
 function AuditLog() {
-  const { data, error } = useApi<AuditRow[]>("/audit?limit=500");
+  const [withHttp, setWithHttp] = useState(false);
+  const { data, error } = useApi<AuditRow[]>(`/audit?limit=500${withHttp ? "&include_http=true" : ""}`);
+  const [report, setReport] = useState<AuditVerifyReport | null>(null);
+  const [verifying, setVerifying] = useState(false);
+  const toast = useToast();
   const mock = useMockState();
+  const verify = async () => {
+    setVerifying(true);
+    try {
+      setReport(await api<AuditVerifyReport>("/audit/verify", {}));
+    } catch (e) {
+      toast((e as Error).message, { kind: "error" });
+    } finally {
+      setVerifying(false);
+    }
+  };
+  const route = (r: AuditRow) => (r.http ? `${r.http.method} ${r.http.route ?? "(no route)"} → ${r.http.status}` : "");
   return (
     <div className="stack">
+      <div className="card stack-sm">
+        <div className="spread">
+          <h2 className="row tight"><ShieldCheck size={16} aria-hidden /> Tamper-evident ledger</h2>
+          <span className="row tight">
+            <Button size="sm" icon={<ShieldCheck size={13} />} disabled={verifying} onClick={verify}>{verifying ? "Verifying…" : "Verify chain"}</Button>
+            <a className="btn sm" href="/api/audit/export" download><Download size={13} aria-hidden /> Export (NDJSON)</a>
+          </span>
+        </div>
+        <p className="small muted" style={{ margin: 0 }}>
+          Every event is linked to the one before it by a SHA-256 hash, and the chain head is signed and anchored outside the database every few minutes. Rows cannot be edited or deleted. Until sign-in arrives, requests are recorded as <b>anonymous</b>; a name sent by the browser is kept only as an unverified <code>claimed_actor</code>.
+        </p>
+        {report && (
+          <Callout tone={report.result === "ok" ? "ok" : report.result === "warning" ? "warn" : "bad"}>
+            <b>{report.result === "ok" ? "Chain verified." : report.result === "warning" ? "Chain verified with warnings." : `Verification failed (exit ${report.exit_code}).`}</b>{" "}
+            {report.events} events (seq {report.first_seq}–{report.last_seq}), {report.checkpoints} signed checkpoints, {report.anchored} anchored.
+            {report.problems.length > 0 && (
+              <ul className="small" style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+                {report.problems.slice(0, 10).map((p, i) => <li key={i}><code>{p.kind}</code>{p.seq ? ` at seq ${p.seq}` : ""}: {p.detail}</li>)}
+              </ul>
+            )}
+          </Callout>
+        )}
+      </div>
       <DataTable
         id="audit"
         rows={data}
         error={error}
-        rowKey={(r) => r.id}
-        initialSort={["at", -1]}
+        rowKey={(r) => r.event_id ?? r.id}
+        initialSort={["seq", -1]}
+        toolbarExtra={
+          <label className="row tight small">
+            <input type="checkbox" checked={withHttp} onChange={(e) => setWithHttp(e.target.checked)} /> Include API requests
+          </label>
+        }
         columns={[
+          { id: "seq", header: "#", sort: (r) => r.seq ?? r.id, cell: (r) => <span className="small tnum faint">{r.seq ?? r.id}</span> },
           { id: "at", header: "When", sort: (r) => r.at, cell: (r) => <span className="small nowrap">{fmtDate(r.at)}</span> },
-          { id: "actor", header: "Actor", sort: (r) => r.actor, cell: (r) => <span className="small">{r.actor}</span> },
-          { id: "action", header: "Action", sort: (r) => r.action, cell: (r) => <code className="small">{r.action}</code> },
-          { id: "detail", header: "Detail", csv: (r) => JSON.stringify(r.detail), cell: (r) => <span className="xs faint sys truncate" style={{ display: "block", maxWidth: 480 }}>{JSON.stringify(r.detail)}</span>, hideNarrow: true },
+          {
+            id: "actor", header: "Actor", sort: (r) => r.actor,
+            cell: (r) => <span className="row tight small">{r.actor}{r.actor_type && r.actor_type !== "system" && r.actor !== r.actor_type && <Badge tone="outline">{r.actor_type}</Badge>}{r.actor_type === "anonymous" && r.actor === "anonymous" && <Badge tone="outline">unauthenticated</Badge>}</span>,
+          },
+          { id: "action", header: "Action", sort: (r) => r.action, cell: (r) => <div><code className="small">{r.action}</code>{r.http && <div className="xs faint sys">{route(r)}</div>}</div> },
+          { id: "outcome", header: "Outcome", sort: (r) => r.outcome ?? "", cell: (r) => r.outcome ? <Badge tone={OUTCOME_TONE[r.outcome] ?? "neutral"}>{r.outcome}</Badge> : null, hideNarrow: true },
+          { id: "target", header: "Target", csv: (r) => (r.target ? `${r.target.type}:${r.target.id}` : ""), cell: (r) => r.target ? <span className="small">{r.target.type} {r.target.id}</span> : <span className="faint xs">—</span>, hideNarrow: true },
+          { id: "detail", header: "Detail", csv: (r) => JSON.stringify(r.detail), cell: (r) => <span className="xs faint sys truncate" style={{ display: "block", maxWidth: 420 }}>{JSON.stringify(r.detail)}</span>, hideNarrow: true },
+          { id: "hash", header: "Hash", csv: (r) => r.hash ?? "", cell: (r) => <span className="xs faint sys" title={`hash ${r.hash}\nprev ${r.prev_hash}`}>{r.hash?.slice(0, 10)}</span>, hideNarrow: true },
         ]}
-        searchText={(r) => `${r.actor} ${r.action} ${JSON.stringify(r.detail)}`}
-        searchPlaceholder="Search actor, action or detail…"
-        filters={[{ id: "action", label: "Action", options: [...new Set((data ?? []).map((r) => r.action))].sort().map((a) => ({ value: a, label: a })), get: (r) => r.action }]}
+        searchText={(r) => `${r.actor} ${r.action} ${r.actor_type ?? ""} ${r.outcome ?? ""} ${route(r)} ${JSON.stringify(r.detail)} ${r.hash ?? ""}`}
+        searchPlaceholder="Search actor, action, route, detail or hash…"
+        filters={[
+          { id: "action", label: "Action", options: [...new Set((data ?? []).map((r) => r.action))].sort().map((a) => ({ value: a, label: a })), get: (r) => r.action },
+          { id: "outcome", label: "Outcome", options: ["success", "denied", "failure", "error"].map((o) => ({ value: o, label: o })), get: (r) => r.outcome ?? "" },
+          { id: "actor_type", label: "Actor type", options: ["anonymous", "system", "user", "api_client", "operator"].map((o) => ({ value: o, label: o })), get: (r) => r.actor_type ?? "" },
+        ]}
       />
       {mock.log.length > 0 && (
         <div className="card flush">

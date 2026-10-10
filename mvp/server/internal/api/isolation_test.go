@@ -136,6 +136,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if _, ok := readinessRouteCases[rt.Method+" "+rt.Pattern]; ok {
 			continue // TestIsolation_ReadinessRouteCrossTenant
 		}
+		if rt.Pattern == "/api/audit/events/{event_id}/proof" {
+			continue // TestIsolation_AuditRoutes
+		}
 		if _, ok := routeParamCases[rt.Method+" "+rt.Pattern]; !ok {
 			t.Errorf("route %s %s has path parameters but no cross-tenant case", rt.Method, rt.Pattern)
 		}
@@ -197,6 +200,7 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		"/api/jml/leaver-plan/{identity_id}":   fmt.Sprint(b["alice"]),
 		"/api/reviews/campaigns/{campaign_id}": fmt.Sprint(b["campaign"]),
 		"/api/hris/events/{event_id}/plan":     fmt.Sprint(b["hris:leaver"]),
+		"/api/audit/events/{event_id}/proof":   latestEventID(t, f.DB, f.B.ID),
 	}
 	checked := 0
 	for _, rt := range srv.Routes() {

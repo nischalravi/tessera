@@ -50,7 +50,9 @@ func (s *Server) registerRoutes() {
 	s.handle(P, "/api/least-privilege/revoke", write, s.revoke)
 	s.handle(G, "/api/policies", swept, s.listPolicies)
 	s.handle(G, "/api/violations", swept, s.listViolations)
-	s.handle(P, "/api/simulate", write, s.simulate)
+	// what-if analysis: its answer is data, recorded by nothing but its
+	// http.request event, so it fails closed like a read (design §13.4)
+	s.handle(P, "/api/simulate", write, s.simulate).answersRead = true
 	s.handle(G, "/api/jit/requests", swept, s.jitRequests)
 	s.handle(P, "/api/jit/requests", write, s.jitCreate)
 	s.handle(P, "/api/jit/requests/{request_id}/{action}", write, s.jitDecide)
@@ -64,7 +66,6 @@ func (s *Server) registerRoutes() {
 	s.handle(G, "/api/hris/events/{event_id}/plan", read, s.hrisPlan)
 	s.handle(P, "/api/hris/events/{event_id}/execute", write, s.hrisExecute)
 	s.handle(G, "/api/jml/leaver-plan/{identity_id}", read, s.leaverPlan)
-	s.handle(G, "/api/audit", read, s.auditLog)
 	s.handle(G, "/openapi.json", noTenant, s.openAPI)
 	s.handle(G, "/docs", noTenant, s.swaggerUI)
 	s.handle(G, "/docs/oauth2-redirect", noTenant, s.swaggerRedirect)
@@ -1476,23 +1477,4 @@ func (s *Server) leaverPlan(_ http.ResponseWriter, r *http.Request, p *params) (
 		return nil, err
 	}
 	return plan, nil
-}
-
-// ---------------------------------------------------------------- audit
-
-func (s *Server) auditLog(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
-	limit := p.queryInt("limit", 100, nil, nil)
-	if err := validated(p, nil); err != nil {
-		return nil, err
-	}
-	rows, err := store.TxFrom(r.Context()).AuditLog(int(limit))
-	if err != nil {
-		return nil, err
-	}
-	out := []ojson.Object{}
-	for _, e := range rows {
-		out = append(out, ojson.Object{{Key: "id", Value: e.ID}, {Key: "at", Value: timeutil.ISO(e.At)},
-			{Key: "actor", Value: e.Actor}, {Key: "action", Value: e.Action}, {Key: "detail", Value: e.Detail}})
-	}
-	return out, nil
 }

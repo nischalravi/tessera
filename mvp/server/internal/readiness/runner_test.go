@@ -343,7 +343,7 @@ func TestResults_NoSecretBytes(t *testing.T) {
 	}
 	// nor does anything stored for the run or the audit log
 	var rows []*store.CheckResult
-	var log []*store.AuditEntry
+	var log []*store.AuditEvent
 	read(t, st, func(c *store.TenantTx) error {
 		rows, _ = c.CheckResults(v.ID)
 		log, _ = c.AuditLog(50)

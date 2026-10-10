@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -32,6 +33,13 @@ const DefaultMaxBodyBytes = 1 << 20
 
 // DefaultHandlerTimeout bounds the time a handler may run.
 const DefaultHandlerTimeout = 30 * time.Second
+
+// DefaultStreamTimeout bounds a streamed response (GET /api/audit/export).
+// Streams bypass http.TimeoutHandler, which would buffer the whole body in
+// memory and cut it at HandlerTimeout; instead the request context gets this
+// deadline and the connection's write deadline is extended to match. An
+// export that needs longer is split with from_seq/to_seq.
+const DefaultStreamTimeout = 15 * time.Minute
 
 // Config configures a Server.
 type Config struct {
@@ -50,6 +58,7 @@ type Config struct {
 	AllowedOrigins []string
 	MaxBodyBytes   int64         // defaults to DefaultMaxBodyBytes
 	HandlerTimeout time.Duration // defaults to DefaultHandlerTimeout; <0 disables
+	StreamTimeout  time.Duration // defaults to DefaultStreamTimeout; streamed routes only
 	// Readiness is the deployment-readiness service (defaults to the
 	// embedded templates and Env).
 	Readiness *readiness.Service
@@ -58,6 +67,12 @@ type Config struct {
 	// ReadinessScenario selects the simulated validation scenario
 	// (TESSERA_READINESS_SCENARIO; default "gaps").
 	ReadinessScenario string
+	// AuditAnchor is TESSERA_AUDIT_ANCHOR: POST /api/audit/verify checks
+	// checkpoints against it when it is a file:// URL.
+	AuditAnchor string
+	// AuditAppend overrides how the audit middleware writes http.request
+	// events (tests inject failures). Nil: the store.
+	AuditAppend func(ctx context.Context, t tenancy.ID, e store.AuditEvent) error
 }
 
 // Server serves the API.
@@ -88,6 +103,9 @@ func New(cfg Config) *Server {
 	if cfg.HandlerTimeout == 0 {
 		cfg.HandlerTimeout = DefaultHandlerTimeout
 	}
+	if cfg.StreamTimeout <= 0 {
+		cfg.StreamTimeout = DefaultStreamTimeout
+	}
 	if cfg.Readiness == nil {
 		reg, err := template.Default()
 		if err != nil {
@@ -98,6 +116,7 @@ func New(cfg Config) *Server {
 	}
 	s := &Server{cfg: cfg, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness}
 	s.registerRoutes()
+	s.registerAuditRoutes()
 	s.registerReadinessRoutes()
 	return s
 }
@@ -106,13 +125,36 @@ func New(cfg Config) *Server {
 func (s *Server) Handler() http.Handler {
 	var h http.Handler = http.HandlerFunc(s.dispatch)
 	if s.cfg.HandlerTimeout > 0 {
-		h = http.TimeoutHandler(h, s.cfg.HandlerTimeout, `{"detail":"Request timed out"}`)
+		h = s.timeouts(h, http.TimeoutHandler(h, s.cfg.HandlerTimeout, `{"detail":"Request timed out"}`))
 	}
 	h = s.limitBody(h)
 	h = s.cors(h)
 	h = s.recoverPanics(h)
+	// One http.request event per request; reads are buffered and refused
+	// with 503 if the event cannot be written (design §13.4).
+	h = audit.Middleware(audit.MiddlewareConfig{DB: s.store, Tenant: s.auditTenant, Clock: s.clock, Log: s.log,
+		Append: s.cfg.AuditAppend})(h)
 	h = s.logRequests(h)
 	return securityHeaders(h)
+}
+
+// timeouts sends streamed routes to stream and every other request to timed
+// (the HandlerTimeout-bounded handler). A stream gets StreamTimeout on its
+// context and on the connection's write deadline (the server's WriteTimeout
+// is sized for ordinary responses).
+func (s *Server) timeouts(stream, timed http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if rt, _, _ := s.find(r.Method, r.URL.Path); rt == nil || !rt.stream {
+			timed.ServeHTTP(w, r)
+			return
+		}
+		deadline := time.Now().Add(s.cfg.StreamTimeout)
+		ctx, cancel := context.WithDeadline(r.Context(), deadline)
+		defer cancel()
+		// ErrNotSupported (httptest recorders) leaves the server's deadline.
+		_ = http.NewResponseController(w).SetWriteDeadline(deadline)
+		stream.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 // RunSweeper expires JIT grants of every active tenant, each in its own
@@ -121,6 +163,7 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
+	ctx = audit.WithSystemActor(ctx, "jit.sweeper") // jit.expire events name the job
 	for {
 		if _, err := jit.SweepAll(ctx, s.store, s.clock()); err != nil && ctx.Err() == nil {
 			s.log.Error("jit sweep failed", "err", err)
@@ -177,10 +220,18 @@ type route struct {
 	segs    []string
 	tenant  tenantMode
 	h       handlerFunc
+	// stream: the handler streams its response (StreamTimeout, unbuffered).
+	stream bool
+	// answersRead: a non-GET route whose response is computed data; it fails
+	// closed like a read when its http.request event cannot be written
+	// (audit.AnswersRead).
+	answersRead bool
 }
 
-func (s *Server) handle(method, pattern string, mode tenantMode, h handlerFunc) {
-	s.routes = append(s.routes, &route{method, pattern, strings.Split(strings.TrimPrefix(pattern, "/"), "/"), mode, h})
+func (s *Server) handle(method, pattern string, mode tenantMode, h handlerFunc) *route {
+	rt := &route{method: method, pattern: pattern, segs: strings.Split(strings.TrimPrefix(pattern, "/"), "/"), tenant: mode, h: h}
+	s.routes = append(s.routes, rt)
+	return rt
 }
 
 // RouteInfo describes a registered route.
@@ -315,6 +366,10 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, detail("Not Found"))
 		return
 	}
+	audit.SetRoute(r.Context(), rt.pattern, vars)
+	if rt.answersRead {
+		audit.AnswersRead(r.Context())
+	}
 	p := &params{r: r, path: vars}
 	out, err := s.serve(rt, w, r, p)
 	if err != nil {
@@ -415,6 +470,16 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 	}
 	return r.ResponseWriter.Write(b)
 }
+
+// Flush lets a streamed response through (http.Flusher).
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Unwrap exposes the underlying writer to http.ResponseController.
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
 // logRequests logs one line per request: method, path, status and duration.
 // Query strings, headers and bodies are deliberately not logged (they can

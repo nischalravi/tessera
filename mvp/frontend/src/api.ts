@@ -213,7 +213,39 @@ export interface AccountRow {
   identity: IdentityBrief | null;
 }
 
-export interface AuditRow { id: number; at: string; actor: string; action: string; detail: Record<string, unknown> }
+/** One audit ledger event (GET /api/audit). `id` is the per-tenant sequence number. */
+export interface AuditRow {
+  id: number;
+  at: string;
+  actor: string;
+  action: string;
+  detail: Record<string, unknown>;
+  event_id?: string;
+  seq?: number;
+  actor_type?: "user" | "api_client" | "system" | "operator" | "anonymous";
+  actor_id?: string | null;
+  outcome?: "success" | "denied" | "failure" | "error";
+  target?: { type: string | null; id: string | null } | null;
+  request_id?: string | null;
+  authn?: Record<string, unknown> | null;
+  http?: { method: string; route: string | null; status: number; latency_ms: number; query_keys: string[]; path_params: Record<string, string> } | null;
+  hash?: string;
+  prev_hash?: string;
+}
+
+/** POST /api/audit/verify: the chain, checkpoint and anchor check of this tenant. */
+export interface AuditVerifyReport {
+  tenant: string;
+  events: number;
+  first_seq: number;
+  last_seq: number;
+  head_seq: number;
+  checkpoints: number;
+  anchored: number;
+  result: "ok" | "warning" | "failed";
+  exit_code: number;
+  problems: { code: number; kind: string; seq?: number; detail: string }[];
+}
 
 export interface PathStep {
   key: string;

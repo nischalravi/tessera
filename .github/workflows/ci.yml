@@ -27,7 +27,9 @@ jobs:
       - name: gofmt
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
       - run: go vet ./...
-      - run: go test -race ./...
+      # -race makes the api parity suite slow on hosted runners (every request also
+      # writes an audit event since #7), so the default 10m per-package limit is too tight.
+      - run: go test -race -timeout 25m ./...
       - run: go build -trimpath -o bin/tessera ./cmd/tessera
 
   frontend:

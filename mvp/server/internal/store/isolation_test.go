@@ -477,7 +477,7 @@ func TestIsolation_ZeroTenantFailsClosed(t *testing.T) {
 	if called {
 		t.Error("fn ran without a valid tenant")
 	}
-	var events []*store.AuditEntry
+	var events []*store.AuditEvent
 	if err := f.DB.ReadTenant(ctx, tenancy.Platform, func(c *store.TenantTx) error {
 		var err error
 		events, err = c.AuditLog(-1)
@@ -664,11 +664,11 @@ func TestIsolation_EveryRepoMethodClassified(t *testing.T) {
 	covered := map[string]bool{
 		// metadata, not data access
 		"Tenant": true, "Context": true, "ReadOnly": true,
-		// Audit appends a row stamped by the executor; AuditLog is in listCases.
+		// Audit appends a domain event stamped by the executor; AuditLog is in listCases.
 		"Audit": true,
 	}
 	for _, m := range []map[string]bool{keys(listCases), keys(getCases), keys(naturalKeyGets), keys(countCases),
-		keys(mutations), keys(insertCases), readinessCovered(), keysCovered()} {
+		keys(mutations), keys(insertCases), readinessCovered(), keysCovered(), auditCovered()} {
 		for k := range m {
 			covered[strings.SplitN(k, "/", 2)[0]] = true
 		}
@@ -702,7 +702,7 @@ func TestIsolation_AuditStampedWithOwnTenant(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			found := slices.ContainsFunc(log, func(e *store.AuditEntry) bool { return e.Action == "b.action" })
+			found := slices.ContainsFunc(log, func(e *store.AuditEvent) bool { return e.Action == "b.action" })
 			if found != (tn.ID == f.B.ID) {
 				t.Errorf("tenant %s sees B's audit event: %v", tn.Slug, found)
 			}
