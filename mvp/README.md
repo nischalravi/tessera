@@ -278,13 +278,16 @@ scripts/install-tools.sh && gosec ./... && govulncheck ./...
 * Read-header, read, write and idle timeouts on the HTTP server, and a 30 s per-handler timeout.
 * Graceful shutdown on SIGINT/SIGTERM: in-flight requests drain and the JIT sweeper stops.
 * CORS allows only the dev UI origins (`http://localhost:$UI_PORT`, `http://127.0.0.1:$UI_PORT`;
-  override with `TESSERA_CORS_ORIGINS`). The UI normally reaches the API through Vite's proxy.
+  override with `TESSERA_CORS_ORIGINS`, dev only). The UI normally reaches the API through Vite's proxy.
 * Logs carry method, path, status and duration only: no query strings, headers or bodies.
   Internal errors are logged server-side and never echoed to the client.
 * Configuration (`internal/config`): with `TESSERA_ENV=prod` the server refuses to start on a
-  non-https `TESSERA_PUBLIC_URL`, `TESSERA_COOKIE_SECURE=false`, no KEK, a wildcard, `null` or
-  plain-http CORS origin, `TESSERA_OUTBOUND_ALLOW_LOOPBACK=true`, a `TESSERA_DEV_IDP_URL`, or a
-  missing or `file://` `TESSERA_AUDIT_ANCHOR`, and lists every problem at once.
+  non-https `TESSERA_PUBLIC_URL`, `TESSERA_COOKIE_SECURE=false`, no KEK, any
+  `TESSERA_CORS_ORIGINS` (the production UI is same-origin, so CORS is off),
+  `TESSERA_OUTBOUND_ALLOW_LOOPBACK=true`, a `TESSERA_DEV_IDP_URL`, a missing or `file://`
+  `TESSERA_AUDIT_ANCHOR`, a frozen clock (`TESSERA_NOW`), or a `TESSERA_TRUSTED_PROXIES` prefix
+  broader than /8 (IPv4) or /32 (IPv6), and lists every problem at once. A /0 proxy prefix is
+  refused in every environment.
 * Keys: `seed` and `serve` run the ensure-keys step (one active and one next ES256 key per tenant
   and purpose, the platform Ed25519 key, daily rotation). Private keys are stored only sealed
   under the KEK (`TESSERA_KEK` or `TESSERA_KEK_FILE`, base64 of 32 bytes, file mode 0600). In dev

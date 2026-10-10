@@ -6,9 +6,10 @@
 // is named) and returns either a valid *Config or every problem it found,
 // joined. With TESSERA_ENV=prod it refuses to start when any of these hold:
 // the public URL is not https; COOKIE_SECURE is false; there is no KEK;
-// CORS_ORIGINS contains "*" (or "null", or a plain-http origin);
-// OUTBOUND_ALLOW_LOOPBACK is true; TESSERA_DEV_IDP_URL is set; the audit
-// anchor is missing or file://. The guard rail on dev_mock IdP connections
+// CORS_ORIGINS is not empty (the UI is same-origin in production, so CORS is
+// off, §11); OUTBOUND_ALLOW_LOOPBACK is true; TESSERA_DEV_IDP_URL is set; the
+// audit anchor is missing or file://; TESSERA_NOW freezes the clock; a
+// trusted-proxy prefix is shorter than /8 (IPv4) or /32 (IPv6). The guard rail on dev_mock IdP connections
 // needs the idp_connections table and lands with it (PR6).
 package config
 
@@ -24,8 +25,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
+	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 )
 
 // Environments.
@@ -38,6 +41,13 @@ const (
 const (
 	MaxAccessTokenTTLSeconds = 900
 	MaxDeviceCodeTTLSeconds  = 600
+)
+
+// Shortest trusted-proxy prefixes accepted with TESSERA_ENV=prod. A broader
+// prefix (0.0.0.0/0 above all) would let any client spoof X-Forwarded-For.
+const (
+	MinProxyPrefixIPv4 = 8
+	MinProxyPrefixIPv6 = 32
 )
 
 // Config is the typed configuration. The KEK is held behind a pointer so
@@ -62,6 +72,9 @@ type Config struct {
 	RPID                   string
 	Notify                 string
 	DevIdPURL              string
+	// FrozenNow is TESSERA_NOW (tests and demos; refused in prod). The zero
+	// time means the wall clock; use Clock.
+	FrozenNow time.Time
 
 	kek *secretKey // decoded TESSERA_KEK or TESSERA_KEK_FILE; nil means "dev auto-generated"
 }
@@ -138,6 +151,17 @@ func Load(getenv func(string) string) (*Config, error) {
 	c.DeviceCodeTTLSeconds = integer("TESSERA_DEVICE_CODE_TTL_SECONDS", 300, 1, MaxDeviceCodeTTLSeconds)
 	c.DPoPRSNonce = boolean("TESSERA_DPOP_RS_NONCE", false, false)
 	c.Notify = str("TESSERA_NOTIFY", "log", "log")
+	if v := strings.TrimSpace(getenv("TESSERA_NOW")); v != "" {
+		t, err := timeutil.ParseISO(v)
+		switch {
+		case err != nil:
+			bad("TESSERA_NOW: %v", err)
+		case t.IsZero():
+			bad("TESSERA_NOW: %q is not a usable time", v)
+		default:
+			c.FrozenNow = t
+		}
+	}
 	c.DevIdPURL = strings.TrimSpace(getenv("TESSERA_DEV_IDP_URL"))
 	if c.DevIdPURL == "" && !prod {
 		c.DevIdPURL = "http://127.0.0.1:8001"
@@ -191,14 +215,18 @@ func Load(getenv func(string) string) (*Config, error) {
 		if !c.CookieSecure {
 			bad("TESSERA_COOKIE_SECURE must be true with TESSERA_ENV=prod")
 		}
-		for _, o := range c.CORSOrigins {
-			switch {
-			case strings.Contains(o, "*"):
-				bad("TESSERA_CORS_ORIGINS must not contain a wildcard with TESSERA_ENV=prod (got %q)", o)
-			case o == "null":
-				bad("TESSERA_CORS_ORIGINS must not contain \"null\" with TESSERA_ENV=prod")
-			case !strings.HasPrefix(o, "https://"):
-				bad("TESSERA_CORS_ORIGINS must be https origins with TESSERA_ENV=prod (got %q)", o)
+		if len(c.CORSOrigins) > 0 {
+			// §11/§18.1: the production UI is same-origin, so CORS is off.
+			// The CSRF Origin check already admits the PUBLIC_URL origin.
+			bad("TESSERA_CORS_ORIGINS must be empty with TESSERA_ENV=prod: the UI is same-origin and CORS is off (got %q)",
+				strings.Join(c.CORSOrigins, ","))
+		}
+		if !c.FrozenNow.IsZero() {
+			bad("TESSERA_NOW must not be set with TESSERA_ENV=prod (it freezes the clock and stops key rotation)")
+		}
+		for _, p := range c.TrustedProxies {
+			if want := minProxyBits(p); p.Bits() < want {
+				bad("TESSERA_TRUSTED_PROXIES: %s is broader than /%d with TESSERA_ENV=prod; list the load balancer CIDRs", p, want)
 			}
 		}
 		if c.OutboundAllowLoopback {
@@ -221,6 +249,15 @@ func Load(getenv func(string) string) (*Config, error) {
 		return nil, fmt.Errorf("config: %w", errors.Join(errs...))
 	}
 	return c, nil
+}
+
+// Clock is the clock to run on: TESSERA_NOW when set (dev only), otherwise
+// the wall clock.
+func (c *Config) Clock() timeutil.Clock {
+	if c.FrozenNow.IsZero() {
+		return timeutil.System
+	}
+	return timeutil.Frozen(c.FrozenNow)
 }
 
 // IsProd reports whether the production guard rails apply.
@@ -352,6 +389,9 @@ func parseProxies(s string) ([]netip.Prefix, error) {
 			if err != nil {
 				return nil, fmt.Errorf("%q is not an IP or CIDR", p)
 			}
+			if pf.Bits() == 0 { // every address would be a trusted proxy
+				return nil, fmt.Errorf("%q trusts every address; list the proxy CIDRs", p)
+			}
 			out = append(out, pf.Masked())
 			continue
 		}
@@ -362,6 +402,19 @@ func parseProxies(s string) ([]netip.Prefix, error) {
 		out = append(out, netip.PrefixFrom(a, a.BitLen()))
 	}
 	return out, nil
+}
+
+// minProxyBits is the shortest prod prefix for p's address family. An
+// IPv4-mapped IPv6 prefix (::ffff:a.b.c.d/n) counts as IPv4 at n-96 bits, so
+// ::ffff:0:0/96 is refused like 0.0.0.0/0.
+func minProxyBits(p netip.Prefix) int {
+	switch {
+	case p.Addr().Is4():
+		return MinProxyPrefixIPv4
+	case p.Addr().Is4In6():
+		return 96 + MinProxyPrefixIPv4
+	}
+	return MinProxyPrefixIPv6
 }
 
 // dbPath accepts a plain path or the Python backend's sqlite:/// URL form.

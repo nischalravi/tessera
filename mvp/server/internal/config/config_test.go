@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 )
@@ -22,11 +23,11 @@ var testKEK = base64.StdEncoding.EncodeToString([]byte("0123456789abcdef01234567
 // safeProd is a production configuration that passes every guard rail.
 func safeProd() map[string]string {
 	return map[string]string{
-		"TESSERA_ENV":          "prod",
-		"TESSERA_PUBLIC_URL":   "https://tessera.example.com",
-		"TESSERA_KEK":          testKEK,
-		"TESSERA_CORS_ORIGINS": "https://tessera.example.com",
-		"TESSERA_AUDIT_ANCHOR": "s3://anchors/tessera",
+		"TESSERA_ENV":             "prod",
+		"TESSERA_PUBLIC_URL":      "https://tessera.example.com",
+		"TESSERA_KEK":             testKEK,
+		"TESSERA_AUDIT_ANCHOR":    "s3://anchors/tessera",
+		"TESSERA_TRUSTED_PROXIES": "10.0.0.0/8, 192.0.2.10, 2001:db8::/32",
 	}
 }
 
@@ -50,7 +51,8 @@ func TestSafeProdStarts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !c.IsProd() || c.OutboundAllowLoopback || !c.CookieSecure || c.DevIdPURL != "" || len(c.CORSOrigins) != 1 {
+	if !c.IsProd() || c.OutboundAllowLoopback || !c.CookieSecure || c.DevIdPURL != "" || len(c.CORSOrigins) != 0 ||
+		len(c.TrustedProxies) != 3 || !c.FrozenNow.IsZero() {
 		t.Errorf("unexpected prod config: %+v", c)
 	}
 	if c.APIAudience != "https://tessera.example.com/api" || c.RPID != "tessera.example.com" {
@@ -78,10 +80,18 @@ func TestProdRefusesEachUnsafeSetting(t *testing.T) {
 		{"KEK not base64", []string{"TESSERA_KEK", "not base64!"}, "TESSERA_KEK: not valid base64"},
 		{"KEK twice", []string{"TESSERA_KEK_FILE", "/nonexistent"}, "only one of TESSERA_KEK and TESSERA_KEK_FILE"},
 		{"KEK file missing", []string{"TESSERA_KEK", "<unset>", "TESSERA_KEK_FILE", "/nonexistent/kek"}, "TESSERA_KEK_FILE"},
-		{"wildcard CORS", []string{"TESSERA_CORS_ORIGINS", "*"}, "wildcard"},
-		{"wildcard CORS in a list", []string{"TESSERA_CORS_ORIGINS", "https://a.example.com, https://*.example.com"}, "wildcard"},
-		{"null CORS origin", []string{"TESSERA_CORS_ORIGINS", "null"}, `"null"`},
-		{"plain http CORS origin", []string{"TESSERA_CORS_ORIGINS", "http://tessera.example.com"}, "must be https origins"},
+		{"wildcard CORS", []string{"TESSERA_CORS_ORIGINS", "*"}, "TESSERA_CORS_ORIGINS must be empty"},
+		{"wildcard CORS in a list", []string{"TESSERA_CORS_ORIGINS", "https://a.example.com, https://*.example.com"}, "TESSERA_CORS_ORIGINS must be empty"},
+		{"null CORS origin", []string{"TESSERA_CORS_ORIGINS", "null"}, "TESSERA_CORS_ORIGINS must be empty"},
+		{"plain http CORS origin", []string{"TESSERA_CORS_ORIGINS", "http://tessera.example.com"}, "TESSERA_CORS_ORIGINS must be empty"},
+		{"any CORS origin in prod", []string{"TESSERA_CORS_ORIGINS", "https://other.example.com"}, "TESSERA_CORS_ORIGINS must be empty"},
+		{"same-origin CORS origin in prod", []string{"TESSERA_CORS_ORIGINS", "https://tessera.example.com"}, "TESSERA_CORS_ORIGINS must be empty"},
+		{"frozen clock", []string{"TESSERA_NOW", "2026-01-01T00:00:00Z"}, "TESSERA_NOW must not be set"},
+		{"trusted proxies 0.0.0.0/0", []string{"TESSERA_TRUSTED_PROXIES", "0.0.0.0/0"}, "trusts every address"},
+		{"trusted proxies ::/0", []string{"TESSERA_TRUSTED_PROXIES", "10.0.0.0/8,::/0"}, "trusts every address"},
+		{"trusted proxies broader than /8", []string{"TESSERA_TRUSTED_PROXIES", "10.0.0.0/7"}, "broader than /8"},
+		{"trusted proxies broader than /32", []string{"TESSERA_TRUSTED_PROXIES", "2001:db8::/31"}, "broader than /32"},
+		{"trusted proxies mapped IPv4 broader than /8", []string{"TESSERA_TRUSTED_PROXIES", "::ffff:0:0/96"}, "broader than /104"},
 		{"outbound loopback", []string{"TESSERA_OUTBOUND_ALLOW_LOOPBACK", "true"}, "TESSERA_OUTBOUND_ALLOW_LOOPBACK must be false"},
 		{"dev IdP URL set", []string{"TESSERA_DEV_IDP_URL", "http://127.0.0.1:8001"}, "TESSERA_DEV_IDP_URL must not be set"},
 		{"file audit anchor", []string{"TESSERA_AUDIT_ANCHOR", "file://server/var/audit-anchors.jsonl"}, "must not be file://"},
@@ -111,7 +121,7 @@ func TestProdReportsEveryProblem(t *testing.T) {
 	if err == nil {
 		t.Fatal("started")
 	}
-	for _, want := range []string{"TESSERA_PUBLIC_URL", "a KEK is required", "wildcard", "OUTBOUND_ALLOW_LOOPBACK", "TESSERA_AUDIT_ANCHOR"} {
+	for _, want := range []string{"TESSERA_PUBLIC_URL", "a KEK is required", "TESSERA_CORS_ORIGINS must be empty", "OUTBOUND_ALLOW_LOOPBACK", "TESSERA_AUDIT_ANCHOR"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error does not mention %q: %v", want, err)
 		}
@@ -157,6 +167,31 @@ func TestDevDefaults(t *testing.T) {
 	}
 	if _, err := config.Load(env(map[string]string{"TESSERA_TRUSTED_PROXIES": "10.0.0.0/8, nonsense"})); err == nil {
 		t.Error("dev accepted a malformed trusted proxy")
+	}
+	if _, err := config.Load(env(map[string]string{"TESSERA_TRUSTED_PROXIES": "0.0.0.0/0"})); err == nil {
+		t.Error("dev accepted a trusted proxy prefix of /0")
+	}
+	if _, err := config.Load(env(map[string]string{"TESSERA_NOW": "yesterday"})); err == nil {
+		t.Error("dev accepted a malformed TESSERA_NOW")
+	}
+}
+
+// TestClock: TESSERA_NOW freezes the clock in dev; unset, the wall clock runs.
+func TestClock(t *testing.T) {
+	c, err := config.Load(env(map[string]string{"TESSERA_ENV": "dev", "TESSERA_NOW": "2026-10-08T09:30:00"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2026, 10, 8, 9, 30, 0, 0, time.UTC)
+	if got := c.Clock()(); !got.Equal(want) {
+		t.Errorf("frozen clock = %v, want %v", got, want)
+	}
+	c, err = config.Load(env(map[string]string{"TESSERA_ENV": "dev"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Clock()(); time.Since(got) > time.Minute || time.Since(got) < -time.Minute {
+		t.Errorf("wall clock = %v", got)
 	}
 }
 

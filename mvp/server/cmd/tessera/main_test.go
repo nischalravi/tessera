@@ -86,9 +86,10 @@ func TestServeRefusesWithoutDevEnv(t *testing.T) {
 			t.Setenv("TESSERA_ENV", env)
 			t.Setenv("TESSERA_NOW", "2026-10-08T09:30:00")
 			if env == "prod" { // a production configuration that passes every guard rail
+				t.Setenv("TESSERA_NOW", "")
 				t.Setenv("TESSERA_PUBLIC_URL", "https://tessera.example.com")
 				t.Setenv("TESSERA_KEK", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
-				t.Setenv("TESSERA_CORS_ORIGINS", "https://tessera.example.com")
+				t.Setenv("TESSERA_CORS_ORIGINS", "")
 				t.Setenv("TESSERA_AUDIT_ANCHOR", "s3://anchors/tessera")
 			}
 			db := filepath.Join(t.TempDir(), "t.db")
@@ -119,7 +120,7 @@ func TestProdGuardRailsRefuseBeforeAnythingRuns(t *testing.T) {
 			}
 			err := run(context.Background(), args, &out, &logs)
 			if err == nil || !strings.Contains(err.Error(), "refusing to start with TESSERA_ENV=prod") ||
-				!strings.Contains(err.Error(), "wildcard") || !strings.Contains(err.Error(), "must be https") {
+				!strings.Contains(err.Error(), "TESSERA_CORS_ORIGINS must be empty") || !strings.Contains(err.Error(), "must be https") {
 				t.Errorf("%s: %v", cmd, err)
 			}
 			if _, err := os.Stat(db); err == nil {

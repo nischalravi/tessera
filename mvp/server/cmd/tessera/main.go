@@ -10,12 +10,13 @@
 //	TESSERA_POLICY_DIR    read policies from this directory instead of the built-in copies
 //	TESSERA_CONNECTORS    connector spec, e.g. "demo" (default) or "demo-workday,okta"
 //	TESSERA_CORS_ORIGINS  comma-separated browser origins allowed by CORS
-//	                      (default: the dev UI on localhost/127.0.0.1, port UI_PORT or 5173)
+//	                      (default: the dev UI on localhost/127.0.0.1, port UI_PORT or 5173;
+//	                      must be empty in prod)
 //	TESSERA_KEK / TESSERA_KEK_FILE  the key-encryption key (base64 of 32 bytes) that seals
 //	                      private keys; in dev it is generated at var/dev-kek next to the database
 //	(internal/config lists every setting and the production guard rails that
 //	refuse to start with unsafe ones)
-//	TESSERA_NOW           freeze the clock at an ISO-8601 time (tests and demos)
+//	TESSERA_NOW           freeze the clock at an ISO-8601 time (tests and demos; refused in prod)
 //	TESSERA_ENV           must be "dev" (run.sh sets it). Until authentication lands,
 //	                      the API serves one default tenant and refuses to start
 //	                      otherwise, so an unset variable fails closed.
@@ -90,16 +91,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("unknown command %q (want serve, seed or readiness)", cmd)
 	}
 	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	clock, err := clockFromEnv()
-	if err != nil {
-		return err
-	}
 	// Typed configuration and the production guard rails come first: an
 	// unsafe production setting refuses to start before anything else runs.
 	cfg, err := config.Load(os.Getenv)
 	if err != nil {
 		return err
 	}
+	clock := cfg.Clock() // TESSERA_NOW, which config refuses in prod
 	sealer, err := cfg.Sealer(config.DevKEKPath(o.db))
 	if err != nil {
 		return err
@@ -122,18 +120,6 @@ func dbPath(v string) string {
 		return "tessera.db"
 	}
 	return strings.TrimPrefix(v, "sqlite:///")
-}
-
-func clockFromEnv() (timeutil.Clock, error) {
-	v := os.Getenv("TESSERA_NOW")
-	if v == "" {
-		return timeutil.System, nil
-	}
-	t, err := timeutil.ParseISO(v)
-	if err != nil {
-		return nil, fmt.Errorf("TESSERA_NOW: %w", err)
-	}
-	return timeutil.Frozen(t), nil
 }
 
 func policyFS() fs.FS {
