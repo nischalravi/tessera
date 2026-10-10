@@ -796,3 +796,64 @@ func TestOverlay_RaisesLevelForNewRevisions(t *testing.T) {
 		t.Errorf("custom item missing; overlay version %d", b.Rev.OverlayVersion)
 	}
 }
+
+// TestIsolation_ReadinessAuditAndStateScoped: driving a connection to active
+// in one tenant (attestations, a skip, activation) writes audit entries
+// stamped with that tenant only, and another tenant of the same database
+// sees neither the connection nor the entries.
+func TestIsolation_ReadinessAuditAndStateScoped(t *testing.T) {
+	a, s := newStore(t), newSvc(t)
+	var other store.Tenant
+	if err := a.DB.InSystem(context.Background(), "test", func(sx *store.SystemTx) error {
+		var err error
+		other, err = sx.CreateTenant(store.Tenant{Slug: "globex", Name: "Globex"})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	b := Scope{DB: a.DB, Tenant: other.ID}
+	fe := &fakeEvidence{on: true, runAt: t0}
+	fe.install(s)
+	id := createAD(t, s, a, "AD tenant A")
+	driveTo(t, s, a, id, "active")
+	actions := func(sc Scope) map[string]int {
+		out := map[string]int{}
+		read(t, sc, func(c *store.TenantTx) error {
+			log, err := c.AuditLog(-1)
+			for _, e := range log {
+				out[e.Action]++
+			}
+			return err
+		})
+		return out
+	}
+	got := actions(a)
+	for _, want := range []string{"connection.created", "readiness.item.attested", "connection.activated"} {
+		if got[want] == 0 {
+			t.Errorf("tenant A has no %s audit entry (%v)", want, got)
+		}
+	}
+	if n := len(actions(b)); n != 0 {
+		t.Errorf("tenant B's audit log has %d actions from tenant A's readiness work", n)
+	}
+	read(t, b, func(c *store.TenantTx) error {
+		conns, err := c.Connections()
+		if len(conns) != 0 {
+			t.Errorf("tenant B sees %d connections", len(conns))
+		}
+		if _, err := c.Connection(id); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("tenant A's connection from B: %v", err)
+		}
+		return err
+	})
+	if _, err := current(b, s, id, t0); codeOf(err) != "not_found" {
+		t.Errorf("readiness view of tenant A's connection from B: %v", err)
+	}
+	err := b.Write(context.Background(), func(c *store.TenantTx) error {
+		_, err := s.Attest(c, id, "base.owner", "attested from tenant B", "admin", t0)
+		return err
+	})
+	if codeOf(err) != "not_found" {
+		t.Errorf("attest tenant A's connection from B: %v", err)
+	}
+}

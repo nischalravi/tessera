@@ -34,6 +34,9 @@ func scanSource(fset *token.FileSet, f *ast.File, path string) []violation {
 	dir := filepath.ToSlash(filepath.Dir(path))
 	inReadiness := strings.HasSuffix(dir, "internal/readiness")
 	inStore := strings.HasSuffix(dir, "internal/store")
+	// The store's isolation tests call SetRevisionState with another
+	// tenant's revision to prove the compare-and-set is tenant-scoped.
+	storeIsolationTest := inStore && strings.HasPrefix(filepath.Base(path), "isolation") && strings.HasSuffix(path, "_test.go")
 	inspect := func(node ast.Node, fn string) {
 		ast.Inspect(node, func(n ast.Node) bool {
 			switch x := n.(type) {
@@ -42,7 +45,7 @@ func scanSource(fset *token.FileSet, f *ast.File, path string) []violation {
 					out = append(out, violation{fset.Position(x.Pos()).String(), x.Name + " used outside store." + want})
 				}
 			case *ast.SelectorExpr:
-				if x.Sel.Name == "SetRevisionState" && !inReadiness {
+				if x.Sel.Name == "SetRevisionState" && !inReadiness && !storeIsolationTest {
 					out = append(out, violation{fset.Position(x.Pos()).String(), "calls SetRevisionState outside internal/readiness"})
 				}
 			case *ast.BasicLit:
