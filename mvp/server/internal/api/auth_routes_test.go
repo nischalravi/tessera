@@ -572,3 +572,61 @@ func TestTenantSettingsRaiseRoleFloor(t *testing.T) {
 		t.Errorf("tenant B operator with phr: active roles %s", got)
 	}
 }
+
+// TestDevLoginRevokesPreviousSession: signing in again revokes the session
+// the browser still held, in its own tenant, with auth.session.revoke.
+func TestDevLoginRevokesPreviousSession(t *testing.T) {
+	srv, db := devLoginServer(t, "dev")
+	h := srv.Handler()
+	login := func(body string, prev *http.Cookie) *http.Cookie {
+		t.Helper()
+		r := httptest.NewRequest("POST", "/api/auth/dev-login", strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Origin", authtest.Origin)
+		if prev != nil {
+			r.AddCookie(prev)
+		}
+		rec := serve(h, r)
+		if rec.Code != 200 {
+			t.Fatalf("%s: %d %s", body, rec.Code, rec.Body.String())
+		}
+		return sessionCookie(t, rec)
+	}
+	sessionCode := func(c *http.Cookie) int {
+		r := httptest.NewRequest("GET", "/api/auth/session", nil)
+		r.AddCookie(c)
+		return serve(h, r).Code
+	}
+	revokes := func(id tenancy.ID) []*store.AuditEvent {
+		var out []*store.AuditEvent
+		for _, e := range ledger(t, db, id) {
+			if e.Action == "auth.session.revoke" && strings.Contains(string(e.Detail), `"replaced"`) {
+				out = append(out, e)
+			}
+		}
+		return out
+	}
+	alice := login(`{"tenant":"larkspur","subject":"00u-alice-admin"}`, nil)
+	ivan := login(`{"tenant":"larkspur","subject":"00u-ivan-admin2"}`, alice)
+	if sessionCode(alice) != 401 || sessionCode(ivan) != 200 {
+		t.Errorf("same tenant: old session %d, new %d", sessionCode(alice), sessionCode(ivan))
+	}
+	if ev := revokes(seed.LarkspurID); len(ev) != 1 || ev[0].ActorType != store.ActorUser {
+		t.Errorf("same tenant: revoke events %+v", ev)
+	}
+	gina := login(`{"tenant":"globex","subject":"00u-gina-globex"}`, ivan)
+	if sessionCode(ivan) != 401 || sessionCode(gina) != 200 {
+		t.Errorf("other tenant: old session %d, new %d", sessionCode(ivan), sessionCode(gina))
+	}
+	if ev := revokes(seed.LarkspurID); len(ev) != 2 || ev[0].ActorType != store.ActorSystem {
+		t.Errorf("other tenant: revoke events in the old tenant %+v", ev)
+	}
+	if ev := revokes(seed.GlobexID); len(ev) != 0 {
+		t.Errorf("other tenant: revoke recorded in the new tenant's chain: %+v", ev)
+	}
+	// an already revoked cookie is ignored
+	login(`{"tenant":"larkspur","subject":"00u-alice-admin"}`, ivan)
+	if ev := revokes(seed.LarkspurID); len(ev) != 2 {
+		t.Errorf("revoked again: %d events", len(ev))
+	}
+}

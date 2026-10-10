@@ -38,6 +38,25 @@ type Authenticator struct {
 	Cookies Cookies
 }
 
+// RequestSession returns the tenant and id of the session the request's
+// cookie names, whatever its state; ok is false without such a session.
+func (a *Authenticator) RequestSession(r *http.Request) (t tenancy.ID, sid uuid.UUID, ok bool, err error) {
+	c, err := r.Cookie(a.Cookies.Name())
+	if err != nil || c.Value == "" || len(c.Value) > 128 {
+		return t, sid, false, nil
+	}
+	hash := HashSecret(c.Value)
+	err = a.DB.ReadSystem(r.Context(), "session lookup", func(s *store.SystemTx) error {
+		var err error
+		t, sid, err = s.LookupSessionBySecretHash(hash)
+		return err
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		return t, sid, false, nil
+	}
+	return t, sid, err == nil, err
+}
+
 // Authenticate returns the request's principal, or "" and a failure reason
 // (FailNoSession, ...) when the request is not authenticated. err is set
 // only when the session could not be checked (the database failed): the

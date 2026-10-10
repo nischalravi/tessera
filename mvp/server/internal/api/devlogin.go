@@ -282,9 +282,29 @@ func (s *Server) devLogin(w http.ResponseWriter, r *http.Request, _ *params) (an
 	rec := &store.AuthnContextRecord{ID: uuid.New()}
 	summary := (&auth.Principal{Authn: &auth.AuthnContext{ID: rec.ID, AAL: res.AAL, PhishingResistant: res.PhishingResistant,
 		TesseraACR: auth.ACR(res.TesseraACR), AuthTime: res.AuthTime}}).AuditAuthn(now)
+	// Signing in again replaces the browser's previous session (§11): it is
+	// revoked, in its own tenant, with the new session's creation when that
+	// is the same tenant, and on the system's behalf before it otherwise.
+	prevTenant, prevSID, hadSession, err := s.authn.RequestSession(r)
+	if err != nil {
+		return nil, err
+	}
+	if hadSession && prevTenant != tenant.ID {
+		if err := s.store.InTenant(audit.AsSystem(ctx, "auth.login"), prevTenant, func(tx *store.TenantTx) error {
+			_, err := auth.RevokeReplaced(audit.AsSystem(ctx, "auth.login"), tx, prevSID, now)
+			return err
+		}); err != nil {
+			return nil, err
+		}
+	}
 	ctx = audit.SetPrincipal(ctx, audit.Principal{Tenant: tenant.ID, Actor: actor, Authn: summary})
 	var issued auth.Issued
 	err = s.store.InTenant(ctx, tenant.ID, func(tx *store.TenantTx) error {
+		if hadSession && prevTenant == tenant.ID {
+			if _, err := auth.RevokeReplaced(ctx, tx, prevSID, now); err != nil {
+				return err
+			}
+		}
 		acr := res.ACR
 		ip, ua := clientAddr(r), userAgent(r)
 		*rec = store.AuthnContextRecord{ID: rec.ID, UserID: user.ID, IdPConnectionID: &conn.ID, Protocol: "oidc", Purpose: "login",
