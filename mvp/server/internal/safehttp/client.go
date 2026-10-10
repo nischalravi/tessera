@@ -158,7 +158,7 @@ func Get(ctx context.Context, c *http.Client, rawURL string) (*Response, error) 
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrURL, err)
 	}
-	resp, err := c.Do(req) // #nosec G704 -- c is a safehttp client: scheme, address and redirect checks apply
+	resp, err := c.Do(req)
 	if err != nil {
 		return nil, err
 	}
