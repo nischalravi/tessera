@@ -22,6 +22,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	authnorm "github.com/nischalravi/tessera/mvp/server/internal/auth/normalize"
+	"github.com/nischalravi/tessera/mvp/server/internal/auth/oauth2rp"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/samlsp"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -159,6 +160,11 @@ type idpFile struct {
 	SubjectSource   string            `yaml:"subject_source"`    // nameid_persistent (default) | attribute:<name>
 	AttributeMap    map[string]string `yaml:"attribute_map"`     // email, name, groups -> attribute names
 	AssumePhr       bool              `yaml:"assume_phishing_resistant"`
+	// OAuth 2.0-only providers (protocol: oauth2)
+	AuthorizationEndpoint string `yaml:"authorization_endpoint"`
+	TokenEndpoint         string `yaml:"token_endpoint"`
+	UserinfoEndpoint      string `yaml:"userinfo_endpoint"`
+	SubjectField          string `yaml:"subject_field"` // the user object's immutable id field ("id" for github)
 }
 
 func readIdPFile(path string) (*idpFile, error) {
@@ -183,9 +189,9 @@ func (f *idpFile) connection(prod bool, now time.Time) (*store.IdPConnection, er
 		bad("name is required")
 	}
 	switch f.Protocol {
-	case "oidc", "saml":
+	case "oidc", "saml", "oauth2":
 	default:
-		bad("protocol %q: want oidc or saml", f.Protocol)
+		bad("protocol %q: want oidc, saml or oauth2", f.Protocol)
 	}
 	switch {
 	case f.Profile == store.ProfileDevMock:
@@ -194,6 +200,8 @@ func (f *idpFile) connection(prod bool, now time.Time) (*store.IdPConnection, er
 		}
 	case f.Protocol == "saml" && f.Profile != store.ProfileGenericSAML:
 		bad("profile %q: SAML connections use generic_saml", f.Profile)
+	case f.Protocol == "oauth2" && f.Profile != store.ProfileGitHub && f.Profile != store.ProfileGenericOAuth2:
+		bad("profile %q: OAuth 2.0 connections use github or generic_oauth2", f.Profile)
 	case f.Protocol == "oidc" && !slices.Contains([]string{store.ProfileOkta, store.ProfileEntra, store.ProfileGoogle,
 		store.ProfileGenericOIDC}, f.Profile):
 		bad("profile %q: want okta, entra, google or generic_oidc", f.Profile)
@@ -201,9 +209,12 @@ func (f *idpFile) connection(prod bool, now time.Time) (*store.IdPConnection, er
 	if f.AssumePhr {
 		bad("assume_phishing_resistant needs a two-person admin change (design §15.2); it cannot be set here")
 	}
-	if f.Protocol == "saml" {
+	switch f.Protocol {
+	case "saml":
 		f.checkSAML(prod, bad)
-	} else {
+	case "oauth2":
+		f.checkOAuth2(prod, bad)
+	default:
 		f.checkOIDC(prod, bad)
 	}
 	if f.DefaultRole == "" {
@@ -254,11 +265,24 @@ func (f *idpFile) connection(prod bool, now time.Time) (*store.IdPConnection, er
 		Status: "active", IsDefault: f.Default, VerifiedDomains: enc(f.VerifiedDomains, "[]"), StepUpRequest: enc(f.StepUpRequest, "{}"),
 		AuthnMapping: authnMapping, GroupRoleMapping: enc(f.GroupRoleMapping, "{}"), JITProvisioning: jit,
 		DefaultRole: f.DefaultRole, PinCerts: true, CreatedAt: now, UpdatedAt: now}
-	if f.Protocol == "saml" {
+	switch f.Protocol {
+	case "saml":
 		entity, sso := f.IdPEntityID, f.IdPSSOURL
 		c.IdPEntityID, c.IdPSSOURL, c.IdPSigningCerts = &entity, &sso, enc(f.IdPSigningCerts, "[]")
 		c.SubjectSource, c.AttributeMap = f.SubjectSource, enc(f.AttributeMap, "{}")
-	} else {
+	case "oauth2":
+		oc := oauth2rp.Connection{Profile: f.Profile, AuthorizationURL: f.AuthorizationEndpoint, TokenURL: f.TokenEndpoint,
+			UserinfoURL: f.UserinfoEndpoint, SubjectField: f.SubjectField, Scopes: f.Scopes}.Defaults()
+		clientID := f.ClientID
+		c.ClientID, c.SubjectSource = &clientID, "field:"+oc.SubjectField
+		c.AuthorizationEndpoint, c.TokenEndpoint, c.UserinfoEndpoint = &oc.AuthorizationURL, &oc.TokenURL, &oc.UserinfoURL
+		if len(f.Scopes) == 0 && f.Profile == store.ProfileGitHub {
+			f.Scopes = []string{"read:user", "user:email"}
+		}
+		if len(f.Scopes) == 0 {
+			c.Scopes = json.RawMessage("[]")
+		}
+	default:
 		issuer, clientID, method := f.Issuer, f.ClientID, f.ClientAuthMethod
 		c.Issuer, c.ClientID, c.ClientAuthMethod = &issuer, &clientID, &method
 	}
@@ -301,6 +325,48 @@ func (f *idpFile) checkOIDC(prod bool, bad func(string, ...any)) {
 	}
 	if f.Profile == store.ProfileEntra && f.EntraTenantID == "" {
 		bad("entra_tenant_id is required for the entra profile")
+	}
+}
+
+// checkOAuth2 validates an OAuth 2.0-only connection: the github profile
+// defaults its endpoints and subject field; generic_oauth2 needs all three
+// endpoints (https in prod) and the immutable id field.
+func (f *idpFile) checkOAuth2(prod bool, bad func(string, ...any)) {
+	if f.ClientID == "" {
+		bad("client_id is required")
+	}
+	if f.Issuer != "" || f.IdPEntityID != "" || f.SubjectSource != "" {
+		bad("issuer, idp_entity_id and subject_source are not OAuth 2.0 settings (use subject_field)")
+	}
+	switch f.ClientAuthMethod {
+	case "", "client_secret_basic":
+	default:
+		bad("client_auth_method %q: OAuth 2.0 connections use a client secret", f.ClientAuthMethod)
+	}
+	eps := map[string]string{"authorization_endpoint": f.AuthorizationEndpoint, "token_endpoint": f.TokenEndpoint,
+		"userinfo_endpoint": f.UserinfoEndpoint}
+	for name, v := range eps {
+		if v == "" {
+			if f.Profile != store.ProfileGitHub {
+				bad("%s is required for generic_oauth2", name)
+			}
+			continue
+		}
+		u, err := url.Parse(v)
+		switch {
+		case err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http"):
+			bad("%s must be an absolute URL", name)
+		case prod && u.Scheme != "https":
+			bad("%s must be https with TESSERA_ENV=prod", name)
+		}
+	}
+	switch strings.ToLower(f.SubjectField) {
+	case "":
+		if f.Profile != store.ProfileGitHub {
+			bad("subject_field is required for generic_oauth2: the user object's immutable id field")
+		}
+	case "email", "login", "username", "preferred_username", "name", "upn":
+		bad("subject_field %q: users are keyed on an immutable id, never a name or email", f.SubjectField)
 	}
 }
 
@@ -374,7 +440,7 @@ func addIdP(e *adminEnv, slug, file, secretFile string) error {
 		}
 		_, err := audit.Record(e.ctx, tx, "idp.connection.created", ojson.Object{{Key: "connection_id", Value: c.ID.String()},
 			{Key: "name", Value: c.Name}, {Key: "protocol", Value: c.Protocol}, {Key: "profile", Value: c.Profile},
-			{Key: "issuer", Value: firstOf(c.Issuer, c.IdPEntityID)},
+			{Key: "issuer", Value: firstOf(c.Issuer, c.IdPEntityID, c.UserinfoEndpoint)},
 			{Key: "jit_provisioning", Value: c.JITProvisioning}, {Key: "default_role", Value: c.DefaultRole}},
 			audit.At(e.now), audit.Target("idp_connection", c.ID.String()))
 		return err
@@ -387,8 +453,12 @@ func addIdP(e *adminEnv, slug, file, secretFile string) error {
 			api.SPEntityID(e.cfg.PublicURL, c.ID), api.ACSURL(e.cfg.PublicURL, c.ID))
 		return nil
 	}
-	fmt.Fprintf(e.stdout, "redirect URI to register at the IdP: %s/api/auth/oidc/%s/callback\n",
-		strings.TrimRight(e.cfg.PublicURL, "/"), c.ID)
+	path := "oidc"
+	if c.Protocol == "oauth2" {
+		path = "oauth2"
+	}
+	fmt.Fprintf(e.stdout, "redirect URI to register at the IdP: %s/api/auth/%s/%s/callback\n",
+		strings.TrimRight(e.cfg.PublicURL, "/"), path, c.ID)
 	return nil
 }
 

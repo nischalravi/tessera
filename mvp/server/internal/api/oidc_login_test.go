@@ -69,12 +69,15 @@ var newbie = devidp.User{Sub: "00u-newbie", Email: "newbie@larkspur.example", Na
 
 func newOIDCEnv(t *testing.T, users ...devidp.User) *oidcEnv {
 	t.Helper()
-	return newAuthEnv(t, false, users...)
+	return newAuthEnv(t, authEnvOpts{}, users...)
 }
 
-// newAuthEnv is newOIDCEnv, with the dev_mock SAML connection seeded too
-// when saml is set.
-func newAuthEnv(t testing.TB, saml bool, users ...devidp.User) *oidcEnv {
+// authEnvOpts adds seeded dev_mock connections besides the OIDC one.
+type authEnvOpts struct{ saml, github bool }
+
+// newAuthEnv is newOIDCEnv, with the dev_mock SAML and GitHub connections
+// seeded too when asked.
+func newAuthEnv(t testing.TB, o authEnvOpts, users ...devidp.User) *oidcEnv {
 	t.Helper()
 	clk := &mutableClock{t: testkit.Now.UTC()}
 	if len(users) == 0 {
@@ -85,16 +88,17 @@ func newAuthEnv(t testing.TB, saml bool, users ...devidp.User) *oidcEnv {
 		users = append(users, newbie)
 	}
 	idp := devidptest.Start(t, devidp.Config{Now: clk.now, Users: users, Clients: []devidp.Client{{ID: oidcClientID,
-		Secret: oidcSecret, RedirectURIs: []string{"http://127.0.0.1:*/api/auth/oidc/*/callback"}}}})
+		Secret: oidcSecret, RedirectURIs: []string{"http://127.0.0.1:*/api/auth/oidc/*/callback", "http://127.0.0.1:*/api/auth/oauth2/*/callback"}}}})
 	sealer, err := seal.New(seal.RandomBytes(seal.KeySize))
 	if err != nil {
 		t.Fatal(err)
 	}
 	db := testkit.Open(t)
 	client := seed.DevIdPClient{Sealer: sealer, Secret: oidcSecret}
-	if saml {
+	if o.saml {
 		client.SAMLCert = idp.SAMLCertificatePEM()
 	}
+	client.GitHub = o.github
 	tenants := seed.WithDevIdPClient([]seed.Tenant{
 		{ID: seed.LarkspurID, Slug: seed.LarkspurSlug, Name: "Larkspur Labs", Connectors: []connectors.Connector{connectors.Tiny{Now: testkit.Now}}},
 		{ID: seed.GlobexID, Slug: seed.GlobexSlug, Name: "Globex", Connectors: []connectors.Connector{connectors.Tiny{Now: testkit.Now, Sentinel: "G"}}},

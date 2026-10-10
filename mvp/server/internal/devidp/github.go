@@ -31,8 +31,8 @@ const (
 
 // GitHub faults.
 const (
-	FaultGitHubTokenError Fault = "github_token_error" // the token endpoint answers 200 with error=bad_verification_code (as GitHub does)
-	FaultGitHubTokenType  Fault = "github_token_type"  // token_type is not bearer
+	FaultGitHubTokenError Fault = "github_token_error" // #nosec G101 -- a fault name; the token endpoint answers 200 with error=bad_verification_code (as GitHub does)
+	FaultGitHubTokenType  Fault = "github_token_type"  // #nosec G101 -- a fault name; token_type is not bearer
 	FaultGitHubUserError  Fault = "github_user_error"  // the user API answers 500
 	FaultGitHubNoID       Fault = "github_no_id"       // the user object has login and email but no id
 	FaultGitHubStringID   Fault = "github_string_id"   // id is the login string instead of the numeric id

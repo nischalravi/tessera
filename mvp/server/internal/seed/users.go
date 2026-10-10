@@ -3,6 +3,8 @@ package seed
 import (
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -74,6 +76,32 @@ type DevIdPClient struct {
 	Sealer   *seal.Sealer
 	Secret   string
 	SAMLCert string
+	// GitHub seeds a dev_mock OAuth 2.0 connection to the dev IdP's
+	// GitHub emulation (no ID token; AAL1 sign-ins), with the same secret.
+	GitHub bool
+}
+
+// DevGitHubID is the dev IdP's GitHub-style numeric id for a subject
+// (devidp.GitHubID; seed must not import the dev IdP).
+func DevGitHubID(sub string) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(sub))
+	return strconv.FormatInt(1_000_000+int64(h.Sum32()%9_000_000), 10)
+}
+
+// devGitHubConnection is the dev_mock OAuth 2.0 connection to the dev IdP's
+// GitHub emulation at issuer.
+func devGitHubConnection(t tenancy.ID, issuer string, dc *DevIdPClient, domains json.RawMessage, now time.Time) (*store.IdPConnection, error) {
+	authz, token, user := issuer+"/github/login/oauth/authorize", issuer+"/github/login/oauth/access_token", issuer+"/github/user"
+	clientID := DevClientID
+	c := &store.IdPConnection{ID: uuid.New(), Name: "Dev IdP (GitHub OAuth)", Protocol: "oauth2", Profile: store.ProfileDevMock,
+		Status: "active", VerifiedDomains: domains, ClientID: &clientID, AuthorizationEndpoint: &authz, TokenEndpoint: &token,
+		UserinfoEndpoint: &user, Scopes: json.RawMessage(`["read:user","user:email"]`), SubjectSource: "field:id",
+		AuthnMapping: json.RawMessage(`{"dev_emulation":"github"}`), PinCerts: true, JITProvisioning: false,
+		DefaultRole: store.RoleViewer, CreatedAt: now, UpdatedAt: now}
+	var err error
+	c.ClientSecretEnc, err = dc.Sealer.Seal([]byte(dc.Secret), auth.ClientSecretAAD(t, c.ID))
+	return c, err
 }
 
 // The dev IdP's SAML class refs (internal/devidp; seed must not import it).
@@ -167,6 +195,16 @@ func seedAuth(c *store.TenantTx, t Tenant, now time.Time) error {
 		}
 		conns = append(conns, sc)
 	}
+	if dc := t.DevIdPClient; dc != nil && dc.Sealer != nil && dc.Secret != "" && dc.GitHub {
+		gc, err := devGitHubConnection(c.Tenant(), issuer, dc, domains, now)
+		if err == nil {
+			err = c.InsertIdPConnection(gc)
+		}
+		if err != nil {
+			return fmt.Errorf("seed: dev IdP GitHub connection: %w", err)
+		}
+		conns = append(conns, gc)
+	}
 	for _, u := range t.Users {
 		email := u.Email
 		pu := &store.PlatformUser{Email: &email, DisplayName: u.Name, CreatedAt: now}
@@ -174,12 +212,15 @@ func seedAuth(c *store.TenantTx, t Tenant, now time.Time) error {
 			return err
 		}
 		for _, cn := range conns {
-			iss := issuer
-			if cn.Protocol == "saml" {
+			iss, sub := issuer, u.Subject
+			switch cn.Protocol {
+			case "saml":
 				iss = *cn.IdPEntityID
+			case "oauth2":
+				iss, sub = issuer, DevGitHubID(u.Subject)
 			}
 			if err := c.InsertExternalLogin(&store.ExternalLogin{UserID: pu.ID, IdPConnectionID: cn.ID, Issuer: iss,
-				Subject: u.Subject, CreatedAt: now}); err != nil {
+				Subject: sub, CreatedAt: now}); err != nil {
 				return err
 			}
 		}

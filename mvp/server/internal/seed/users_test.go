@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -157,5 +158,15 @@ func TestSeedDevIdPSAMLConnection(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestDevGitHubIDMatchesDevIdP: the seed links users to the ids the dev
+// IdP's GitHub emulation reports.
+func TestDevGitHubIDMatchesDevIdP(t *testing.T) {
+	for _, u := range append(slices.Clone(seed.LarkspurUsers), seed.GlobexUsers...) {
+		if got, want := seed.DevGitHubID(u.Subject), strconv.FormatInt(devidp.GitHubID(u.Subject), 10); got != want {
+			t.Errorf("%s: %s, dev IdP %s", u.Subject, got, want)
+		}
 	}
 }

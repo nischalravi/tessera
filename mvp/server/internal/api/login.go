@@ -102,7 +102,7 @@ func (s *Server) activeTenant(ctx context.Context, slug string) (store.Tenant, b
 	return t, t.Status == "active" && t.ID != tenancy.Platform, nil
 }
 
-// loginConnections are a tenant's active OIDC and SAML connections that browser
+// loginConnections are a tenant's active OIDC, SAML and OAuth 2.0 connections that browser
 // sign-in may use (dev_mock only outside prod: config refuses prod with one).
 func loginConnections(tx *store.TenantTx) ([]*store.IdPConnection, error) {
 	cs, err := tx.IdPConnections()
@@ -111,7 +111,7 @@ func loginConnections(tx *store.TenantTx) ([]*store.IdPConnection, error) {
 	}
 	out := cs[:0]
 	for _, c := range cs {
-		if c.Status == "active" && (c.Protocol == "oidc" || c.Protocol == "saml") {
+		if c.Status == "active" && (c.Protocol == "oidc" || c.Protocol == "saml" || c.Protocol == "oauth2") {
 			out = append(out, c)
 		}
 	}
@@ -320,8 +320,11 @@ type loginStart struct {
 }
 
 func (s *Server) startLogin(w http.ResponseWriter, r *http.Request, t store.Tenant, c *store.IdPConnection, ls loginStart) (any, error) {
-	if c.Protocol == "saml" {
+	switch c.Protocol {
+	case "saml":
 		return s.startSAMLLogin(w, r, t, c, ls)
+	case "oauth2":
+		return s.startOAuth2Login(w, r, t, c, ls)
 	}
 	purpose, returnTo, acr, invitation := ls.purpose, ls.returnTo, ls.acr, ls.invitation
 	if s.rp == nil {
@@ -541,8 +544,12 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request, p *params)
 			return nil
 		}
 		conn, err = tx.IdPConnection(txn.IdPConnectionID)
-		if err == nil && conn.Status != "active" {
+		switch {
+		case err != nil:
+		case conn.Status != "active":
 			reason = "connection_disabled"
+		case (conn.Protocol == "oauth2") != strings.HasPrefix(r.URL.Path, "/api/auth/oauth2/"):
+			reason = "connection_mismatch" // an OIDC transaction at the OAuth 2.0 callback or the reverse
 		}
 		return err
 	}); err != nil {
@@ -557,6 +564,9 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request, p *params)
 			return s.stepUpFailure(w, r, tid, txn, "auth.step_up.failure", reason, extra)
 		}
 		return s.loginFailure(w, r, tid, reason, extra)
+	}
+	if conn.Protocol == "oauth2" {
+		return s.finishOAuth2Callback(w, r, tenant, conn, txn)
 	}
 	rc, err := s.rpConnection(tid, conn)
 	if err != nil {
@@ -616,8 +626,11 @@ func (s *Server) finishLogin(w http.ResponseWriter, r *http.Request, tenant stor
 	ctx := r.Context()
 	now := s.clock().UTC()
 	issuer := deref(conn.Issuer)
-	if conn.Protocol == "saml" {
+	switch conn.Protocol {
+	case "saml":
 		issuer = deref(conn.IdPEntityID)
+	case "oauth2":
+		issuer = oauth2Issuer(conn)
 	}
 	var user *store.PlatformUser
 	reason := ""

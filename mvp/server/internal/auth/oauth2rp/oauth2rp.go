@@ -50,7 +50,7 @@ const MaxUserBytes = 64 << 10
 const (
 	ReasonConfig        = "oauth2_connection_misconfigured"
 	ReasonTokenExchange = "token_exchange_failed"
-	ReasonTokenType     = "oauth2_token_type_unsupported"
+	ReasonTokenType     = "oauth2_token_type_unsupported" // #nosec G101 -- an audit reason, not a credential
 	ReasonUserAPI       = "oauth2_user_api_failed"
 	ReasonSubject       = "subject_missing"
 )

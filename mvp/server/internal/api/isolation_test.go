@@ -151,7 +151,8 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/api/audit/events/{event_id}/proof" {
 			continue // TestIsolation_AuditRoutes
 		}
-		if rt.Pattern == "/api/auth/oidc/{connection_id}/callback" || rt.Pattern == "/t/{slug}/bootstrap" {
+		if rt.Pattern == "/api/auth/oidc/{connection_id}/callback" || rt.Pattern == "/api/auth/oauth2/{connection_id}/callback" ||
+			rt.Pattern == "/t/{slug}/bootstrap" {
 			continue // TestIsolation_LoginCrossTenant (public; the tenant comes from the cookie or the slug)
 		}
 		if strings.HasPrefix(rt.Pattern, "/api/auth/saml/{connection_id}/") {

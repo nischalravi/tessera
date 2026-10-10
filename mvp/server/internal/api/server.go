@@ -20,6 +20,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/auth/oauth2rp"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oidcrp"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
@@ -110,6 +111,7 @@ type Server struct {
 	authn  *auth.Authenticator
 	limits *limiters
 	rp     *oidcrp.RP
+	oauth2 *oauth2rp.RP
 
 	readiness *readiness.Service
 }
@@ -150,6 +152,9 @@ func New(cfg Config) *Server {
 			panic(err) // HTTP and Now are set
 		}
 		s.rp = rp
+		if s.oauth2, err = oauth2rp.New(cfg.OutboundHTTP); err != nil {
+			panic(err) // HTTP is set
+		}
 	}
 	s.authn = &auth.Authenticator{DB: cfg.Store, Clock: func() time.Time { return s.clock() },
 		Cookies: auth.Cookies{Insecure: cfg.InsecureCookie}}
@@ -159,6 +164,7 @@ func New(cfg Config) *Server {
 	s.registerAuthRoutes()
 	s.registerLoginRoutes()
 	s.registerSAMLRoutes()
+	s.registerOAuth2Routes()
 	s.registerStepUpRoutes()
 	s.checkPublicRoutes()
 	return s

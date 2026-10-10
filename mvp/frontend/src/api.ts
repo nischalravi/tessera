@@ -67,7 +67,7 @@ function errorMessage(status: number, j: any): string {
     case "step_up_required":
       return STEP_UP_MESSAGE;
     case "role_inactive":
-      return "Your admin role is inactive because you signed in without a phishing-resistant method. Sign in again with a passkey.";
+      return "Your admin role is inactive because you signed in without a phishing-resistant method. Sign out and sign in again with a passkey through your organization's identity provider (a GitHub sign-in cannot activate admin roles).";
     case "forbidden":
       return `You don't have permission to do this${j.permission ? ` (needs ${j.permission})` : ""}.`;
     case "csrf_failed":

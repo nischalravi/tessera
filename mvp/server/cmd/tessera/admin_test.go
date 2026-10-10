@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/auth/oauth2rp"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/samlsp"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -207,6 +208,87 @@ func TestAdminAddSAMLIdP(t *testing.T) {
 		if c.Protocol != "saml" || *c.IdPEntityID != "https://idp.corp.example/saml" || len(c.SPKeyEnc) == 0 ||
 			c.SPCertPEM == nil || c.SubjectSource != "attribute:employeeID" || bytes.Contains(c.SPKeyEnc, []byte("PRIVATE KEY")) {
 			t.Errorf("connection %+v", c)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestAdminAddOAuth2IdP: add-idp with protocol oauth2 (github defaults its
+// endpoints and the numeric id subject; generic_oauth2 needs them) seals the
+// client secret and prints the OAuth 2.0 redirect URI.
+func TestAdminAddOAuth2IdP(t *testing.T) {
+	t.Setenv("TESSERA_ENV", "dev")
+	t.Setenv("TESSERA_NOW", "2026-10-08T09:30:00")
+	t.Setenv("TESSERA_PUBLIC_URL", "http://localhost:5173")
+	dir := t.TempDir()
+	db := filepath.Join(dir, "t.db")
+	st, err := store.OpenFresh(context.Background(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Migrate(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	_ = st.Close()
+	if _, err := adminRun(t, db, "create-tenant", "-slug", "acme", "-name", "Acme Corp"); err != nil {
+		t.Fatal(err)
+	}
+	secret := writeFile(t, dir, "secret", "gh-s3cret\n")
+	github := "name: GitHub\nprotocol: oauth2\nprofile: github\nclient_id: Iv1.abc\n"
+	out, err := adminRun(t, db, "add-idp", "-tenant", "acme", "-file", writeFile(t, dir, "gh.yaml", github), "-client-secret-file", secret)
+	m := regexp.MustCompile(`added connection ([0-9a-f-]{36})`).FindStringSubmatch(out)
+	if err != nil || m == nil || !strings.Contains(out, "http://localhost:5173/api/auth/oauth2/"+m[1]+"/callback") {
+		t.Fatalf("add-idp: %v %s", err, out)
+	}
+	generic := "name: Corp OAuth\nprotocol: oauth2\nprofile: generic_oauth2\nclient_id: c\nsubject_field: uid\n" +
+		"authorization_endpoint: https://sso.corp.example/oauth/authorize\ntoken_endpoint: https://sso.corp.example/oauth/token\n" +
+		"userinfo_endpoint: https://sso.corp.example/api/me\n"
+	if out, err := adminRun(t, db, "add-idp", "-tenant", "acme", "-file", writeFile(t, dir, "g.yaml", generic), "-client-secret-file", secret); err != nil {
+		t.Fatalf("generic: %v %s", err, out)
+	}
+	for name, body := range map[string]string{
+		"email as subject":       strings.Replace(generic, "subject_field: uid", "subject_field: email", 1),
+		"login as subject":       github + "subject_field: login\n",
+		"generic without fields": "name: X\nprotocol: oauth2\nprofile: generic_oauth2\nclient_id: c\n",
+		"oidc profile":           strings.Replace(github, "profile: github", "profile: okta", 1),
+		"attested phr":           github + "assume_phishing_resistant: true\n",
+		"no client id":           strings.Replace(github, "client_id: Iv1.abc\n", "", 1),
+		"issuer set":             github + "issuer: https://github.com\n",
+	} {
+		if out, err := adminRun(t, db, "add-idp", "-tenant", "acme", "-file", writeFile(t, dir, "bad.yaml", body), "-client-secret-file", secret); err == nil {
+			t.Errorf("%s: accepted: %s", name, out)
+		}
+	}
+	if _, err := adminRun(t, db, "add-idp", "-tenant", "acme", "-file", writeFile(t, dir, "gh2.yaml", strings.Replace(github, "GitHub", "GitHub 2", 1))); err == nil {
+		t.Error("an OAuth 2.0 connection without a client secret was accepted")
+	}
+	st, err = store.Open(context.Background(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	var acme store.Tenant
+	if err := st.ReadSystem(context.Background(), "test", func(s *store.SystemTx) error {
+		acme, err = s.TenantBySlug("acme")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ReadTenant(context.Background(), acme.ID, func(tx *store.TenantTx) error {
+		cs, err := tx.IdPConnections()
+		if err != nil || len(cs) != 2 {
+			t.Fatalf("connections %v %v", cs, err)
+		}
+		gh := cs[0]
+		if gh.Protocol != "oauth2" || *gh.TokenEndpoint != oauth2rp.GitHubTokenURL || *gh.UserinfoEndpoint != oauth2rp.GitHubUserURL ||
+			gh.SubjectSource != "field:id" || string(gh.Scopes) != `["read:user","user:email"]` || len(gh.ClientSecretEnc) == 0 ||
+			bytes.Contains(gh.ClientSecretEnc, []byte("gh-s3cret")) {
+			t.Errorf("github connection %+v", gh)
+		}
+		if cs[1].SubjectSource != "field:uid" || *cs[1].UserinfoEndpoint != "https://sso.corp.example/api/me" {
+			t.Errorf("generic connection %+v", cs[1])
 		}
 		return nil
 	}); err != nil {
