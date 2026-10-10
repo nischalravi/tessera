@@ -42,6 +42,17 @@ func (h Hours) JSON() any {
 	return ojson.Float(h.N)
 }
 
+// Audit returns the value as the audit ledger records it: a decimal string
+// spelled as the API renders it ("4", "2.0", "1.5"). The ledger refuses
+// floats so that every JCS implementation reproduces the event hash.
+func (h Hours) Audit() string {
+	b, err := ojson.Marshal(h.JSON())
+	if err != nil {
+		return fmt.Sprint(h.N)
+	}
+	return string(b)
+}
+
 // AccountFor picks the account that receives the grant: same system as the
 // group, else the IdP (Okta) account.
 func AccountFor(c *store.TenantTx, identityID int64, g *store.Group) (*store.Account, error) {
@@ -109,7 +120,7 @@ func CreateRequest(c *store.TenantTx, now time.Time, identityID, groupID int64, 
 		return nil, err
 	}
 	if err := c.Audit(now, ident.Name, "jit.request", ojson.Object{{Key: "request_id", Value: id},
-		{Key: "group", Value: g.Name}, {Key: "hours", Value: hours.JSON()}}); err != nil {
+		{Key: "group", Value: g.Name}, {Key: "hours", Value: hours.Audit()}}); err != nil {
 		return nil, err
 	}
 	return c.Request(id)

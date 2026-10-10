@@ -74,12 +74,18 @@ var schemaFS embed.FS
 var tables = []string{
 	"tenants", "platform_keys", "tenant_signing_keys", "identities", "accounts", "groups", "resources", "permissions", "grant_edges", "secrets",
 	"agent_delegations", "usage_events", "access_requests", "review_campaigns", "review_items",
-	"hris_events", "audit_log",
+	"hris_events",
+	// audit ledger (schema/0004_audit.sql)
+	"audit_events", "audit_chain_heads", "audit_checkpoints",
 	// deployment readiness (schema/0201-0203)
 	"connections", "connection_revisions", "readiness_check_runs", "readiness_item_states", "readiness_attestations",
 	"readiness_skips", "readiness_overlays", "readiness_check_results", "recon_runs", "recon_findings", "readiness_scores",
 	"stg_identities", "stg_accounts", "stg_groups", "stg_memberships", "stg_attr_stats",
 }
+
+// legacyTables are tables of older schemas that a reseed drops: audit_log was
+// the mutable audit table before the hash-chained ledger (PR3).
+var legacyTables = []string{"audit_log"}
 
 // DB owns the database handle. The *sql.DB is unexported and there is no
 // accessor: no other package can obtain a *sql.DB, *sql.Tx or *sql.Conn.
@@ -136,7 +142,9 @@ func (d *DB) Migrate(ctx context.Context, drop bool) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if drop {
-		for _, t := range slices.Backward(tables) {
+		rev := slices.Clone(tables)
+		slices.Reverse(rev)
+		for _, t := range slices.Concat(legacyTables, rev) {
 			// t comes from the fixed list above, never from input.
 			if _, err := d.sql.ExecContext(ctx, "DROP TABLE IF EXISTS "+t); err != nil { // #nosec G202 -- fixed table names
 				return fmt.Errorf("store: drop %s: %w", t, err)

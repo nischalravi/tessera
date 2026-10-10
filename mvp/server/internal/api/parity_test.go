@@ -133,6 +133,27 @@ func buildRequest(tb testing.TB, fx fixture) *http.Request {
 
 var simEvtID = regexp.MustCompile(`^(sim-evt-\d+)-\d+$`)
 
+var (
+	auditHash = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	uuidV4    = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+)
+
+// normalizeAuditValue applies rule 3 (testdata/parity/README.md): audit event
+// ids and request ids are random UUIDs, and the event hashes cover them.
+func normalizeAuditValue(key string, v any) any {
+	s, ok := v.(string)
+	if !ok {
+		return v
+	}
+	switch {
+	case (key == "hash" || key == "prev_hash") && (auditHash.MatchString(s) || s == "<hash>"):
+		return "<hash>"
+	case (key == "event_id" || key == "request_id") && (uuidV4.MatchString(s) || s == "<uuid>"):
+		return "<uuid>"
+	}
+	return v
+}
+
 // normalize applies the documented normalisation rules (see testdata/parity/README.md).
 func normalize(v any) any {
 	switch x := v.(type) {
@@ -145,7 +166,7 @@ func normalize(v any) any {
 		return x
 	case ojson.Object:
 		for i := range x {
-			x[i].Value = normalize(x[i].Value)
+			x[i].Value = normalizeAuditValue(x[i].Key, normalize(x[i].Value))
 			if x[i].Key == "violations" {
 				if vo, ok := x[i].Value.(ojson.Object); ok {
 					for j := range vo {

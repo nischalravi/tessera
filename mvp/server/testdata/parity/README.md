@@ -44,6 +44,12 @@ freshly seeded Go server through `httptest` and requires equal JSON.
    `PYTHONHASHSEED` and changes from run to run. The Go server returns them
    sorted by `key`.
 
+3. **Audit ledger ids and hashes.** In audit rows, `event_id` and
+   `request_id` values that are UUIDs become `<uuid>`, and `hash` and
+   `prev_hash` values (64 hex digits) become `<hash>`. Event ids are random,
+   and the hashes cover them; the chain itself is checked by
+   `internal/audit` and `internal/store` tests, not here.
+
 Numbers are compared by their JSON spelling, not just by value: Python's
 `4.0` (a float read back from the database) and `4` (an unvalidated pydantic
 default) are different, and the Go server reproduces both (`ojson.Float`,
@@ -51,3 +57,21 @@ default) are different, and the Go server reproduces both (`ojson.Float`,
 
 Nothing else is normalised: ids, numbers, timestamps, ordering of every other list and
 all error bodies (including FastAPI/pydantic `422` shapes) must match exactly.
+
+## Fixtures changed since the Python recording
+
+* `067-audit`, `068-audit-limit`, `155-audit-final` (Phase 0 PR3, the audit
+  ledger). `GET /api/audit` now reads the hash-chained `audit_events`. Each
+  row keeps `id, at, actor, action, detail` and adds `event_id, seq,
+  actor_type, actor_id, outcome, target, request_id, authn, http, hash,
+  prev_hash`. Values that changed on purpose:
+  * `id` is the event's per-tenant `seq`. Every API call now also writes an
+    `http.request` event, so later domain events have larger ids. The list
+    leaves `http.request` events out unless `include_http=true`.
+  * Events written during an HTTP request are attributed to the request's
+    actor, which is `anonymous` until sign-in lands (PR5). The actor the
+    caller supplied (a body `actor`/`approver`/`reviewer`, or a job name) is
+    kept in `detail.claimed_actor`, unverified.
+  * JIT `hours` in `jit.request` details is a string (`"1.5"`, `"2.0"`,
+    `"4"`). The ledger refuses floats so every RFC 8785 implementation
+    reproduces the event hash.

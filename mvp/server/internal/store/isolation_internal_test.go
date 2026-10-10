@@ -182,15 +182,15 @@ func TestStatementLintRejects(t *testing.T) {
 		{"unscoped delete", `DELETE FROM agent_delegations`},
 		{"unscoped update", `UPDATE identities SET name = @name WHERE id = @id`},
 		{"update sets tenant", `UPDATE identities SET tenant_id = @to WHERE tenant_id = @tenant AND id = @id`},
-		{"insert without tenant", `INSERT INTO audit_log (at, actor, action, detail) VALUES (@at, @a, @b, @c)`},
-		{"insert with other tenant", `INSERT INTO audit_log (tenant_id, at, actor, action, detail) VALUES (@t, @at, @a, @b, @c)`},
+		{"insert without tenant", `INSERT INTO audit_events (id, seq, action, detail) VALUES (@id, @a, @b, @c)`},
+		{"insert with other tenant", `INSERT INTO audit_events (tenant_id, id, seq, action, detail) VALUES (@t, @id, @a, @b, @c)`},
 		{"conflict target without tenant", `INSERT INTO groups (tenant_id, system, external_id, name, kind, privileged,
 			requestable) VALUES (@tenant, @s, @x, @n, @k, 0, 0) ON CONFLICT (system, external_id) DO UPDATE SET name = excluded.name`},
 		{"upsert moves tenant", `INSERT INTO groups (tenant_id, system, external_id, name, kind, privileged, requestable)
 			VALUES (@tenant, @s, @x, @n, @k, 0, 0) ON CONFLICT (tenant_id, system, external_id) DO UPDATE SET
 			name = excluded.name, tenant_id = excluded.tenant_id`},
-		{"insert select", `INSERT INTO audit_log (tenant_id, at, actor, action, detail) SELECT @tenant, l.at, l.actor, l.action,
-			l.detail FROM audit_log l`},
+		{"insert select", `INSERT INTO audit_events (tenant_id, id, seq, action, detail) SELECT @tenant, l.id, l.seq, l.action,
+			l.detail FROM audit_events l`},
 		{"CTE", `WITH x AS (SELECT i.id FROM identities i) SELECT x.id FROM x WHERE x.tenant_id = @tenant`},
 		{"union", `SELECT i.id FROM identities i WHERE i.tenant_id = @tenant UNION SELECT a.id FROM accounts a`},
 		{"system statement on tenant table", `SELECT count(*) FROM identities i`},
@@ -244,8 +244,7 @@ func TestIsolation_CallerCannotBindTenant(t *testing.T) {
 			if _, err := tx.count(accountsCount, arg); !errors.Is(err, ErrCrossTenant) {
 				t.Errorf("count with %s: %v", name, err)
 			}
-			if _, err := tx.insert(auditInsert, arg, sql.Named("at", ""), sql.Named("actor", ""), sql.Named("action", ""),
-				sql.Named("detail", "{}")); !errors.Is(err, ErrCrossTenant) {
+			if _, err := tx.insert(auditHeadInsert, arg, sql.Named("hash", ""), sql.Named("at", "")); !errors.Is(err, ErrCrossTenant) {
 				t.Errorf("insert with %s: %v", name, err)
 			}
 		}
@@ -271,6 +270,9 @@ func TestReadTenantRefusesWrites(t *testing.T) {
 // another row but have no declared foreign key: grant_edges ids and graph
 // node keys ("account:12").
 var referenceColumns = map[string][]string{
+	// a chain head and a checkpoint name an event of their tenant by (seq, hash)
+	"audit_chain_heads": {"last_seq", "last_hash"},
+	"audit_checkpoints": {"seq", "head_hash"},
 	"grant_edges":     {"src", "dst"},
 	"access_requests": {"edge_id"},
 	"review_items":    {"edge_id", "edge_src", "edge_dst"},

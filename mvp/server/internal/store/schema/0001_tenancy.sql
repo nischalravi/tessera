@@ -141,13 +141,7 @@ CREATE TABLE IF NOT EXISTS hris_events (
 	payload TEXT NOT NULL, effective_at TEXT NOT NULL, status TEXT NOT NULL, executed_at TEXT,
 	UNIQUE (tenant_id, external_id), FOREIGN KEY(identity_id) REFERENCES identities (id));
 
--- Replaced by the hash-chained audit_events in PR3; until then it is a plain,
--- tenant-scoped table.
-CREATE TABLE IF NOT EXISTS audit_log (
-	id INTEGER PRIMARY KEY,
-	tenant_id TEXT NOT NULL REFERENCES tenants (id),
-	at TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, detail TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS ix_audit_log_tenant ON audit_log (tenant_id, id);
+-- The audit log is the hash-chained audit_events ledger (schema/0004_audit.sql).
 
 -- Cross-tenant reference guards.
 --

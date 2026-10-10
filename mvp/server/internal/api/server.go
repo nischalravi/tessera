@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -58,6 +59,12 @@ type Config struct {
 	// ReadinessScenario selects the simulated validation scenario
 	// (TESSERA_READINESS_SCENARIO; default "gaps").
 	ReadinessScenario string
+	// AuditAnchor is TESSERA_AUDIT_ANCHOR: POST /api/audit/verify checks
+	// checkpoints against it when it is a file:// URL.
+	AuditAnchor string
+	// AuditAppend overrides how the audit middleware writes http.request
+	// events (tests inject failures). Nil: the store.
+	AuditAppend func(ctx context.Context, t tenancy.ID, e store.AuditEvent) error
 }
 
 // Server serves the API.
@@ -98,6 +105,7 @@ func New(cfg Config) *Server {
 	}
 	s := &Server{cfg: cfg, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness}
 	s.registerRoutes()
+	s.registerAuditRoutes()
 	s.registerReadinessRoutes()
 	return s
 }
@@ -111,6 +119,10 @@ func (s *Server) Handler() http.Handler {
 	h = s.limitBody(h)
 	h = s.cors(h)
 	h = s.recoverPanics(h)
+	// One http.request event per request; reads are buffered and refused
+	// with 503 if the event cannot be written (design §13.4).
+	h = audit.Middleware(audit.MiddlewareConfig{DB: s.store, Tenant: s.auditTenant, Clock: s.clock, Log: s.log,
+		Append: s.cfg.AuditAppend})(h)
 	h = s.logRequests(h)
 	return securityHeaders(h)
 }
@@ -315,6 +327,7 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, detail("Not Found"))
 		return
 	}
+	audit.SetRoute(r.Context(), rt.pattern, vars)
 	p := &params{r: r, path: vars}
 	out, err := s.serve(rt, w, r, p)
 	if err != nil {
