@@ -28,6 +28,7 @@ Requirements: Go 1.27+ (the version in `server/go.mod`), Node 18+ (tested on 24)
 ./run.sh build       # build the Go server, then tsc + vite production build
 ./run.sh seed        # (re)seed the database only
 ./run.sh bench       # Go benchmarks + end-to-end latency, startup and memory of the server
+./run.sh audit-deps  # govulncheck ./... on the Go module (install with server/scripts/install-tools.sh)
 ```
 
 * UI: http://localhost:5173 (Vite dev server; it proxies `/api` to the backend via `TESSERA_API`)
@@ -72,6 +73,11 @@ server/
     leastpriv/          grant-level and role-level recommendations
     nhi/, jit/, reviews/, jml/, seed/
     api/                HTTP routes under /api, FastAPI-compatible validation errors, OpenAPI/docs
+    config/             typed settings from TESSERA_* variables; production guard rails
+    seal/               AES-256-GCM sealing under the KEK (AAD-bound), random secrets, SHA-256 helpers
+    keys/               per-tenant ES256 signing keys and the platform Ed25519 key: rotation, JWKS
+    safehttp/           SSRF-guarded outbound HTTP client (https only, address checks after DNS)
+    ratelimit/          keyed token-bucket limiter with a bounded key set
     ojson/, timeutil/   ordered JSON + Python float repr; CPython-compatible time arithmetic
     testkit/            shared test fixtures (tiny world through a real Connector, seeded demo DB)
   policies/*.yaml       policy-as-code (embedded in the binary; run.sh reads them from disk)
@@ -275,6 +281,15 @@ scripts/install-tools.sh && gosec ./... && govulncheck ./...
   override with `TESSERA_CORS_ORIGINS`). The UI normally reaches the API through Vite's proxy.
 * Logs carry method, path, status and duration only: no query strings, headers or bodies.
   Internal errors are logged server-side and never echoed to the client.
+* Configuration (`internal/config`): with `TESSERA_ENV=prod` the server refuses to start on a
+  non-https `TESSERA_PUBLIC_URL`, `TESSERA_COOKIE_SECURE=false`, no KEK, a wildcard, `null` or
+  plain-http CORS origin, `TESSERA_OUTBOUND_ALLOW_LOOPBACK=true`, a `TESSERA_DEV_IDP_URL`, or a
+  missing or `file://` `TESSERA_AUDIT_ANCHOR`, and lists every problem at once.
+* Keys: `seed` and `serve` run the ensure-keys step (one active and one next ES256 key per tenant
+  and purpose, the platform Ed25519 key, daily rotation). Private keys are stored only sealed
+  under the KEK (`TESSERA_KEK` or `TESSERA_KEK_FILE`, base64 of 32 bytes, file mode 0600). In dev
+  a KEK is generated at `server/var/dev-kek`; if it is lost, the server refuses to start until
+  the database is reseeded.
 
 ## Go vs Python
 

@@ -1,4 +1,6 @@
 server/bin/
 server/tessera.db*
+# dev KEK and other local state (never commit a KEK)
+server/var/
 frontend/node_modules/
 frontend/dist/

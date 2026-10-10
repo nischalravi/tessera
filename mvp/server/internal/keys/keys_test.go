@@ -515,3 +515,17 @@ func TestEnsureAll(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestEnsureAllRefusesWrongKEK: starting with a KEK that cannot open the
+// database's sealed keys fails closed instead of minting keys beside them.
+func TestEnsureAllRefusesWrongKEK(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	if err := keys.EnsureAll(ctx, e.f.DB, e.s, t0); err != nil {
+		t.Fatal(err)
+	}
+	other, _ := seal.New(seal.RandomBytes(seal.KeySize))
+	if err := keys.EnsureAll(ctx, e.f.DB, other, t0.Add(day)); !errors.Is(err, keys.ErrWrongKEK) {
+		t.Errorf("EnsureAll with another KEK = %v, want ErrWrongKEK", err)
+	}
+}

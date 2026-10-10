@@ -366,13 +366,23 @@ func ActivePlatformKey(sys *store.SystemTx, s *seal.Sealer) (*SigningKey, error)
 
 // ---------------------------------------------------------------- bootstrap
 
-// EnsureAll is the ensure_keys bootstrap step: the platform key, then every
-// active tenant's keys, each tenant in its own transaction. An error in one
-// tenant does not stop the others; all errors are returned joined.
+// ErrWrongKEK is returned by EnsureAll when the KEK cannot open the keys
+// already sealed in the database (a lost or swapped KEK).
+var ErrWrongKEK = errors.New("keys: the KEK cannot open the signing keys in this database (wrong or lost KEK; restore it, or reseed a dev database)")
+
+// EnsureAll is the ensure_keys bootstrap step: the platform key (and a check
+// that the KEK opens it), then every active tenant's keys, each tenant in its
+// own transaction. An error in one tenant does not stop the others; all
+// errors are returned joined.
 func EnsureAll(ctx context.Context, db *store.DB, s *seal.Sealer, now time.Time) error {
 	var tenants []store.Tenant
 	if err := db.InSystem(ctx, "ensure platform keys", func(sys *store.SystemTx) error {
 		if err := EnsurePlatformKey(sys, s, now); err != nil {
+			return err
+		}
+		if _, err := ActivePlatformKey(sys, s); errors.Is(err, seal.ErrOpen) {
+			return ErrWrongKEK
+		} else if err != nil {
 			return err
 		}
 		var err error
