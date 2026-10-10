@@ -42,9 +42,12 @@ type Tenant struct {
 	ID   tenancy.ID
 	Slug string
 	IDs  map[string]int64
+	// Refs are the deployment-readiness row ids (UUIDs); see seedReadiness.
+	Refs map[string]string
 }
 
-// Fixture is a database with tenants A (sentinel) and B.
+// Fixture is a database with tenants A (sentinel) and B, each with the same
+// deployment-readiness rows (tenant B's carry ReadinessSentinel).
 type Fixture struct {
 	DB   *store.DB
 	A, B Tenant
@@ -63,6 +66,8 @@ func TwoTenants(tb testing.TB) *Fixture {
 	f := &Fixture{DB: db}
 	f.A = seedTenant(tb, db, AID, "tenant-a", Sentinel)
 	f.B = seedTenant(tb, db, BID, "tenant-b", "")
+	seedReadiness(tb, db, &f.A, "")
+	seedReadiness(tb, db, &f.B, ReadinessSentinel)
 	return f
 }
 
@@ -75,7 +80,7 @@ func seedTenant(tb testing.TB, db *store.DB, id tenancy.ID, slug, sentinel strin
 	}); err != nil {
 		tb.Fatal(err)
 	}
-	t := Tenant{ID: id, Slug: slug, IDs: map[string]int64{}}
+	t := Tenant{ID: id, Slug: slug, IDs: map[string]int64{}, Refs: map[string]string{}}
 	mark := func(s string) string {
 		if sentinel == "" {
 			return s
