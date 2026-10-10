@@ -14,7 +14,8 @@
 //
 // Private keys are generated with crypto/ecdsa and crypto/ed25519, stored
 // only sealed under the KEK (internal/seal) with an AAD bound to the tenant,
-// table, column and kid, and checked against the stored public key when
+// table, column, purpose, algorithm and kid (so a row moved to another
+// purpose no longer opens), and checked against the stored public key when
 // unsealed. go-jose v4 (the JOSE library of the design, §6) renders public
 // JWKs; no private member is ever published.
 package keys
@@ -82,12 +83,16 @@ func NewKID(prefix string, now time.Time) (string, error) {
 	return kid, nil
 }
 
-func tenantAAD(t tenancy.ID, kid string) []byte {
-	return seal.AAD(t, "tenant_signing_keys", "private_key_enc", kid)
+// tenantAAD is the AAD a tenant private key is sealed under. Binding the
+// purpose and algorithm stops a database writer from moving a key to another
+// purpose (RFC 8725 §3.12: one key per token type).
+func tenantAAD(t tenancy.ID, purpose, alg, kid string) []byte {
+	return seal.AAD(t, "tenant_signing_keys", "private_key_enc", purpose, alg, kid)
 }
 
-func platformAAD(kid string) []byte {
-	return seal.AAD(tenancy.Platform, "platform_keys", "private_key_enc", kid)
+// platformAAD is the AAD a platform private key is sealed under.
+func platformAAD(purpose, alg, kid string) []byte {
+	return seal.AAD(tenancy.Platform, "platform_keys", "private_key_enc", purpose, alg, kid)
 }
 
 // ---------------------------------------------------------------- tenant keys
@@ -172,7 +177,7 @@ func createTenantKey(tx *store.TenantTx, slug, purpose, status string, s *seal.S
 		if err != nil {
 			return err
 		}
-		enc, err := s.Seal(der, tenantAAD(tx.Tenant(), kid))
+		enc, err := s.Seal(der, tenantAAD(tx.Tenant(), purpose, AlgES256, kid))
 		if err != nil {
 			return err
 		}
@@ -271,7 +276,7 @@ func ActiveSigningKey(tx *store.TenantTx, purpose string, s *seal.Sealer) (*Sign
 		if k.Status != store.KeyActive {
 			continue
 		}
-		priv, err := unseal(s, k.PrivateKeyEnc, tenantAAD(tx.Tenant(), k.KID), k.PublicJWK)
+		priv, err := unseal(s, k.PrivateKeyEnc, tenantAAD(tx.Tenant(), k.Purpose, k.Alg, k.KID), k.PublicJWK)
 		if err != nil {
 			return nil, fmt.Errorf("keys: %s: %w", k.KID, err)
 		}
@@ -317,7 +322,7 @@ func EnsurePlatformKey(sys *store.SystemTx, s *seal.Sealer, now time.Time) error
 	if err != nil {
 		return err
 	}
-	enc, err := s.Seal(der, platformAAD(kid))
+	enc, err := s.Seal(der, platformAAD(store.KeyPurposeAuditCheckpoint, AlgEdDSA, kid))
 	if err != nil {
 		return err
 	}
@@ -354,7 +359,7 @@ func ActivePlatformKey(sys *store.SystemTx, s *seal.Sealer) (*SigningKey, error)
 	}
 	for _, k := range ks {
 		if k.Status == store.KeyActive {
-			priv, err := unseal(s, k.PrivateKeyEnc, platformAAD(k.KID), k.PublicJWK)
+			priv, err := unseal(s, k.PrivateKeyEnc, platformAAD(k.Purpose, k.Alg, k.KID), k.PublicJWK)
 			if err != nil {
 				return nil, fmt.Errorf("keys: %s: %w", k.KID, err)
 			}
@@ -370,19 +375,24 @@ func ActivePlatformKey(sys *store.SystemTx, s *seal.Sealer) (*SigningKey, error)
 // already sealed in the database (a lost or swapped KEK).
 var ErrWrongKEK = errors.New("keys: the KEK cannot open the signing keys in this database (wrong or lost KEK; restore it, or reseed a dev database)")
 
-// EnsureAll is the ensure_keys bootstrap step: the platform key (and a check
-// that the KEK opens it), then every active tenant's keys, each tenant in its
-// own transaction. An error in one tenant does not stop the others; all
-// errors are returned joined.
+// EnsureAll is the ensure_keys bootstrap step: the platform key, then every
+// active tenant's keys, each tenant in its own transaction. Before anything
+// is rotated or minted it checks that the KEK opens the keys already sealed
+// (the active platform key, and one active key per tenant inside that
+// tenant's transaction), so a wrong KEK fails closed with ErrWrongKEK and
+// writes nothing, even on a rotation day. An error in one tenant does not
+// stop the others; all errors are returned joined.
 func EnsureAll(ctx context.Context, db *store.DB, s *seal.Sealer, now time.Time) error {
 	var tenants []store.Tenant
 	if err := db.InSystem(ctx, "ensure platform keys", func(sys *store.SystemTx) error {
+		if err := kekOpens(func() error { _, err := ActivePlatformKey(sys, s); return err }); err != nil {
+			return err
+		}
 		if err := EnsurePlatformKey(sys, s, now); err != nil {
 			return err
 		}
-		if _, err := ActivePlatformKey(sys, s); errors.Is(err, seal.ErrOpen) {
-			return ErrWrongKEK
-		} else if err != nil {
+		// a fresh database: check the key just sealed opens
+		if err := kekOpens(func() error { _, err := ActivePlatformKey(sys, s); return err }); err != nil {
 			return err
 		}
 		var err error
@@ -396,11 +406,44 @@ func EnsureAll(ctx context.Context, db *store.DB, s *seal.Sealer, now time.Time)
 		if err := ctx.Err(); err != nil {
 			return errors.Join(append(errs, err)...)
 		}
-		if err := db.InTenant(ctx, t.ID, func(tx *store.TenantTx) error { return EnsureKeys(tx, t.Slug, s, now) }); err != nil {
+		if err := db.InTenant(ctx, t.ID, func(tx *store.TenantTx) error {
+			if err := tenantKEKOpens(tx, s); err != nil {
+				return err
+			}
+			return EnsureKeys(tx, t.Slug, s, now)
+		}); err != nil {
 			errs = append(errs, fmt.Errorf("keys: tenant %s: %w", t.Slug, err))
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// kekOpens runs an unseal and maps a failure to open to ErrWrongKEK. No key
+// to open (a fresh database or tenant) is not an error.
+func kekOpens(unsealActive func() error) error {
+	switch err := unsealActive(); {
+	case err == nil, errors.Is(err, store.ErrNotFound):
+		return nil
+	case errors.Is(err, seal.ErrOpen):
+		return ErrWrongKEK
+	default:
+		return err
+	}
+}
+
+// tenantKEKOpens unseals this tenant's first active key, if it has one.
+func tenantKEKOpens(tx *store.TenantTx, s *seal.Sealer) error {
+	for _, p := range TenantPurposes {
+		var found bool
+		if err := kekOpens(func() error {
+			_, err := ActiveSigningKey(tx, p, s)
+			found = err == nil || !errors.Is(err, store.ErrNotFound)
+			return err
+		}); err != nil || found {
+			return err
+		}
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------- JWK helpers

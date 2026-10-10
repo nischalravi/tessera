@@ -363,7 +363,7 @@ func TestPublicKeyMismatchRefused(t *testing.T) {
 	}
 	otherPub["kid"] = kid
 	pubJWK, _ := json.Marshal(otherPub)
-	enc, err := e.s.Seal(der, seal.AAD(e.tn.ID, "tenant_signing_keys", "private_key_enc", kid))
+	enc, err := e.s.Seal(der, seal.AAD(e.tn.ID, "tenant_signing_keys", "private_key_enc", p, keys.AlgES256, kid))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -527,5 +527,152 @@ func TestEnsureAllRefusesWrongKEK(t *testing.T) {
 	other, _ := seal.New(seal.RandomBytes(seal.KeySize))
 	if err := keys.EnsureAll(ctx, e.f.DB, other, t0.Add(day)); !errors.Is(err, keys.ErrWrongKEK) {
 		t.Errorf("EnsureAll with another KEK = %v, want ErrWrongKEK", err)
+	}
+}
+
+// relabel returns a stored public JWK with its kid replaced.
+func relabel(t *testing.T, publicJWK []byte, kid string) []byte {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal(publicJWK, &m); err != nil {
+		t.Fatal(err)
+	}
+	m["kid"] = kid
+	b, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// replaceActive retires the tenant's active key for purpose and inserts an
+// active row (kid, purpose) holding the active key's private key sealed by s
+// under sealPurpose's AAD.
+func (e *env) replaceActive(purpose, kid, sealPurpose string, s *seal.Sealer) {
+	e.t.Helper()
+	var sk *keys.SigningKey
+	e.in(func(tx *store.TenantTx) (err error) { sk, err = keys.ActiveSigningKey(tx, purpose, e.s); return })
+	der, err := x509.MarshalPKCS8PrivateKey(sk.Key)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	enc, err := s.Seal(der, seal.AAD(e.tn.ID, "tenant_signing_keys", "private_key_enc", sealPurpose, keys.AlgES256, kid))
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	active := e.keys(purpose)[0]
+	e.in(func(tx *store.TenantTx) error {
+		if err := tx.RetireSigningKey(active.KID, t0); err != nil {
+			return err
+		}
+		return tx.InsertSigningKey(&store.TenantSigningKey{KID: kid, TenantID: tx.Tenant(), Purpose: purpose,
+			Alg: keys.AlgES256, PublicJWK: relabel(e.t, active.PublicJWK, kid), PrivateKeyEnc: enc,
+			Status: store.KeyActive, CreatedAt: t0, ActivatedAt: &t0})
+	})
+}
+
+// TestPurposeBoundInAAD: a private key sealed for one purpose does not open
+// in a row whose purpose was changed to another (L2; RFC 8725 §3.12).
+func TestPurposeBoundInAAD(t *testing.T) {
+	for _, c := range []struct {
+		name, sealedFor string
+		opens           bool
+	}{
+		{"sealed for its own purpose", store.KeyPurposeIdPClientAuth, true},
+		{"purpose swapped", store.KeyPurposeAccessToken, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e := setup(t)
+			e.ensure(t0)
+			p := store.KeyPurposeIdPClientAuth
+			e.replaceActive(p, "swapped-20261008-eeeeee", c.sealedFor, e.s)
+			err := e.f.DB.InTenant(context.Background(), e.tn.ID, func(tx *store.TenantTx) error {
+				_, err := keys.ActiveSigningKey(tx, p, e.s)
+				return err
+			})
+			if c.opens && err != nil {
+				t.Errorf("a correctly sealed key did not open: %v", err)
+			}
+			if !c.opens && !errors.Is(err, seal.ErrOpen) {
+				t.Errorf("a key sealed for %s opened as %s: %v", c.sealedFor, p, err)
+			}
+		})
+	}
+}
+
+// snapshot renders every key row (platform and both tenants) with its status
+// and timestamps, to show that nothing was written.
+func (e *env) snapshot() string {
+	e.t.Helper()
+	var b strings.Builder
+	err := e.f.DB.InSystem(context.Background(), "test", func(s *store.SystemTx) error {
+		ks, err := s.PlatformKeys(store.KeyPurposeAuditCheckpoint)
+		for _, k := range ks {
+			fmt.Fprintf(&b, "%s %s %s\n", k.KID, k.Status, k.CreatedAt)
+		}
+		return err
+	})
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	saved := e.tn
+	defer func() { e.tn = saved }()
+	for _, tn := range []storetest.Tenant{e.f.A, e.f.B} {
+		e.tn = tn
+		for _, p := range keys.TenantPurposes {
+			for _, k := range e.keys(p) {
+				fmt.Fprintf(&b, "%s %s %s %v %v %v\n", k.KID, k.Purpose, k.Status, k.CreatedAt, k.ActivatedAt, k.RetiredAt)
+			}
+		}
+	}
+	return b.String()
+}
+
+// TestEnsureAllWrongKEKOnRotationDay: on the day the platform key (and every
+// tenant key) is due to rotate, a wrong KEK still fails closed with
+// ErrWrongKEK, and nothing is retired or minted (L1).
+func TestEnsureAllWrongKEKOnRotationDay(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	if err := keys.EnsureAll(ctx, e.f.DB, e.s, t0); err != nil {
+		t.Fatal(err)
+	}
+	before := e.snapshot()
+	other, _ := seal.New(seal.RandomBytes(seal.KeySize))
+	if err := keys.EnsureAll(ctx, e.f.DB, other, t0.Add(365*day)); !errors.Is(err, keys.ErrWrongKEK) {
+		t.Errorf("EnsureAll with another KEK at t0+365d = %v, want ErrWrongKEK", err)
+	}
+	if after := e.snapshot(); after != before {
+		t.Errorf("a wrong KEK wrote key rows:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+	// the right KEK still rotates normally afterwards
+	if err := keys.EnsureAll(ctx, e.f.DB, e.s, t0.Add(365*day)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestEnsureAllWrongKEKForOneTenant: the tenant check runs inside each
+// tenant's transaction, so a tenant whose keys the KEK cannot open is refused
+// with ErrWrongKEK and left untouched, while the others still rotate.
+func TestEnsureAllWrongKEKForOneTenant(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	if err := keys.EnsureAll(ctx, e.f.DB, e.s, t0); err != nil {
+		t.Fatal(err)
+	}
+	other, _ := seal.New(seal.RandomBytes(seal.KeySize))
+	e.tn = e.f.B
+	e.replaceActive(store.KeyPurposeAccessToken, "otherkek-20261008-ffffff", store.KeyPurposeAccessToken, other)
+	beforeB := statuses(e.keys(store.KeyPurposeAccessToken)) + statuses(e.keys(store.KeyPurposeIdPClientAuth))
+	err := keys.EnsureAll(ctx, e.f.DB, e.s, t0.Add(31*day))
+	if !errors.Is(err, keys.ErrWrongKEK) || !strings.Contains(err.Error(), e.f.B.Slug) || strings.Contains(err.Error(), e.f.A.Slug) {
+		t.Errorf("EnsureAll = %v, want ErrWrongKEK for %s only", err, e.f.B.Slug)
+	}
+	if after := statuses(e.keys(store.KeyPurposeAccessToken)) + statuses(e.keys(store.KeyPurposeIdPClientAuth)); after != beforeB {
+		t.Errorf("tenant B keys changed: %s -> %s", beforeB, after)
+	}
+	e.tn = e.f.A
+	if got := statuses(e.keys(store.KeyPurposeAccessToken)); got != "k0:retired k1:active k2:next" {
+		t.Errorf("tenant A did not rotate: %s", got)
 	}
 }
