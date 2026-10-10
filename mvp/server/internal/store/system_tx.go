@@ -48,6 +48,7 @@ var (
 	tenantsActive = sq("tenants.active", `
 		SELECT `+tenantCols+` FROM tenants t WHERE t.status = 'active' AND t.slug != '_platform' ORDER BY t.slug`)
 	tenantsBySlug = sq("tenants.by_slug", `SELECT `+tenantCols+` FROM tenants t WHERE t.slug = @slug`)
+	tenantsByID   = sq("tenants.by_id", `SELECT `+tenantCols+` FROM tenants t WHERE t.id = @id`)
 )
 
 func scanTenant(s scanner) (Tenant, error) {
@@ -125,6 +126,18 @@ func (s *SystemTx) ActiveTenants() ([]Tenant, error) { return s.tenants(tenantsA
 // TenantBySlug returns one tenant (ErrNotFound if missing).
 func (s *SystemTx) TenantBySlug(slug string) (Tenant, error) {
 	ts, err := s.tenants(tenantsBySlug, sql.Named("slug", slug))
+	if err != nil {
+		return Tenant{}, err
+	}
+	if len(ts) == 0 {
+		return Tenant{}, ErrNotFound
+	}
+	return ts[0], nil
+}
+
+// TenantByID returns one tenant (ErrNotFound if missing).
+func (s *SystemTx) TenantByID(id tenancy.ID) (Tenant, error) {
+	ts, err := s.tenants(tenantsByID, sql.Named("id", id.String()))
 	if err != nil {
 		return Tenant{}, err
 	}

@@ -5,8 +5,7 @@
   "path": "/api/least-privilege/revoke",
   "body": {
    "edge_id": 19,
-   "dry_run": false,
-   "actor": "parity@larkspur.example"
+   "dry_run": false
   }
  },
  "response": {

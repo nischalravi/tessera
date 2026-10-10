@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/ingest"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -12,10 +13,10 @@ import (
 )
 
 func (s *Server) registerDryRunRoutes() {
-	s.handle(http.MethodPost, "/api/connections/{id}/dry-run", phased, s.rd(s.dryRun))
-	s.handle(http.MethodGet, "/api/connections/{id}/dry-runs/{run}", read, s.rd(s.getDryRun))
-	s.handle(http.MethodGet, "/api/connections/{id}/findings", read, s.rd(s.listFindings))
-	s.handle(http.MethodPost, "/api/connections/{id}/findings/{fid}/accept", write, s.rd(s.acceptFinding))
+	s.handle(http.MethodPost, "/api/connections/{id}/dry-run", phased, need(auth.PermConnectionsManage), s.rd(s.dryRun))
+	s.handle(http.MethodGet, "/api/connections/{id}/dry-runs/{run}", read, need(auth.PermConnectionsRead), s.rd(s.getDryRun))
+	s.handle(http.MethodGet, "/api/connections/{id}/findings", read, need(auth.PermConnectionsRead), s.rd(s.listFindings))
+	s.handle(http.MethodPost, "/api/connections/{id}/findings/{fid}/accept", write, need(auth.PermConnectionsManage), s.rd(s.acceptFinding))
 }
 
 func stage(c *store.TenantTx, runID, system string, res *connectors.DiscoveryResult) error {

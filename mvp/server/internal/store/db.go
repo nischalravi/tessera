@@ -58,7 +58,7 @@ var (
 	ErrReadOnly = errors.New("store: write in a read-only transaction")
 	// ErrLegacySchema is returned by Open for a database created before
 	// tenancy; reseed it (./run.sh --reseed or tessera seed).
-	ErrLegacySchema = errors.New("store: database predates tenancy (no tenant_id columns); recreate it with `./run.sh --reseed` or `tessera seed` (both start from an empty schema)")
+	ErrLegacySchema = errors.New("store: database predates this server's schema (tenancy or sign-in); recreate it with `./run.sh --reseed` or `tessera seed` (both start from an empty schema)")
 )
 
 // GlobalTables are the only tables without tenant_id. The schema meta-test
@@ -75,6 +75,9 @@ var tables = []string{
 	"tenants", "platform_keys", "tenant_signing_keys", "identities", "accounts", "groups", "resources", "permissions", "grant_edges", "secrets",
 	"agent_delegations", "usage_events", "access_requests", "review_campaigns", "review_items",
 	"hris_events",
+	// auth core (schema/0005_auth.sql)
+	"idp_connections", "platform_users", "external_logins", "role_assignments", "authn_contexts", "sessions",
+	"login_transactions",
 	// audit ledger (schema/0004_audit.sql)
 	"audit_events", "audit_chain_heads", "audit_checkpoints",
 	// deployment readiness (schema/0201-0203)
@@ -176,20 +179,28 @@ func (d *DB) Migrate(ctx context.Context, drop bool) error {
 	})
 }
 
-// legacySchema reports whether identities exists without a tenant_id column.
+// legacySchema reports whether the database was created by an older server:
+// identities without tenant_id (before tenancy), or access_requests without
+// requested_by_user_id (before sign-in, PR5). CREATE TABLE IF NOT EXISTS
+// cannot add those columns, and the old rows have no platform users.
 func (d *DB) legacySchema(ctx context.Context) (bool, error) {
-	var n int
-	err := d.sql.QueryRowContext(ctx,
-		`SELECT count(*) FROM pragma_table_info('identities') WHERE name = 'tenant_id'`).Scan(&n)
-	if err != nil {
-		return false, err
+	for _, c := range []struct{ table, column string }{
+		{"identities", "tenant_id"}, {"access_requests", "requested_by_user_id"},
+	} {
+		var exists, n int
+		if err := d.sql.QueryRowContext(ctx,
+			`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, c.table).Scan(&exists); err != nil {
+			return false, err
+		}
+		if err := d.sql.QueryRowContext(ctx,
+			`SELECT count(*) FROM pragma_table_info(?) WHERE name = ?`, c.table, c.column).Scan(&n); err != nil {
+			return false, err
+		}
+		if exists == 1 && n == 0 {
+			return true, nil
+		}
 	}
-	var exists int
-	if err := d.sql.QueryRowContext(ctx,
-		`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'identities'`).Scan(&exists); err != nil {
-		return false, err
-	}
-	return exists == 1 && n == 0, nil
+	return false, nil
 }
 
 // InTenant runs fn in one write transaction scoped to t. A zero tenancy.ID or
@@ -281,6 +292,31 @@ func (d *DB) inSystemLocked(ctx context.Context, reason string, fn func(*SystemT
 	return fn(&SystemTx{ctx: ctx, tx: sqltx, reason: reason})
 }
 
+// ReadSystem runs fn in one read-only system transaction. It does not take
+// the write lock, so the per-request session lookup (§14.2) runs concurrently
+// with other readers. Writes through it fail.
+func (d *DB) ReadSystem(ctx context.Context, reason string, fn func(*SystemTx) error) (err error) {
+	if reason == "" {
+		return errors.New("store: ReadSystem needs a reason")
+	}
+	sqltx, err := d.sql.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return fmt.Errorf("store: begin: %w", err)
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			_ = sqltx.Rollback()
+			panic(p)
+		}
+		if err != nil {
+			_ = sqltx.Rollback()
+			return
+		}
+		err = sqltx.Commit()
+	}()
+	return fn(&SystemTx{ctx: ctx, tx: sqltx, reason: reason})
+}
+
 // ForEachActiveTenant lists the active tenants (not _platform) in a SystemTx,
 // then calls fn for each one inside its own InTenant transaction. An error in
 // one tenant does not stop the others; all errors are returned joined.
@@ -315,32 +351,6 @@ func (d *DB) ActiveTenants(ctx context.Context) ([]Tenant, error) {
 		return err
 	})
 	return out, err
-}
-
-// DevDefaultTenant resolves the tenant every API request uses until
-// authentication lands (Phase 0 PR5). It refuses unless env is "dev": there
-// is no other way for a request to choose a tenant yet, and production must
-// not have an implicit one.
-func (d *DB) DevDefaultTenant(ctx context.Context, env, slug string) (tenancy.ID, error) {
-	if env != "dev" {
-		return tenancy.ID{}, fmt.Errorf("store: a default tenant is only available when TESSERA_ENV=dev (got %q)", env)
-	}
-	var t Tenant
-	err := d.InSystem(ctx, "dev default tenant", func(s *SystemTx) error {
-		var err error
-		t, err = s.TenantBySlug(slug)
-		return err
-	})
-	if errors.Is(err, ErrNotFound) {
-		return tenancy.ID{}, fmt.Errorf("store: dev default tenant %q does not exist (seed the database)", slug)
-	}
-	if err != nil {
-		return tenancy.ID{}, err
-	}
-	if t.Status != "active" {
-		return tenancy.ID{}, fmt.Errorf("store: dev default tenant %q is %s", slug, t.Status)
-	}
-	return t.ID, nil
 }
 
 // RecordContextMissing writes a tenancy.context_missing event to the

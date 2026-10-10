@@ -18,10 +18,13 @@
 //	(internal/config lists every setting and the production guard rails that
 //	refuse to start with unsafe ones)
 //	TESSERA_NOW           freeze the clock at an ISO-8601 time (tests and demos; refused in prod)
-//	TESSERA_ENV           must be "dev" (run.sh sets it). Until authentication lands,
-//	                      the API serves one default tenant and refuses to start
-//	                      otherwise, so an unset variable fails closed.
-//	TESSERA_DEV_DEFAULT_TENANT  slug of that tenant (default larkspur)
+//	TESSERA_ENV           dev (run.sh sets it), test or prod. Every API route except
+//	                      the public allow-list needs a signed-in session, and the
+//	                      tenant comes from that session. dev and test expose
+//	                      POST /api/auth/dev-login until IdP sign-in lands (PR6, PR7);
+//	                      prod refuses to start with any dev setting (§18.4).
+//	TESSERA_DEV_IDP_URL   the dev IdP's issuer: seeding (dev and test) creates a
+//	                      dev_mock connection to it with the bootstrap users
 //	TESSERA_READINESS_SCENARIO  simulated validation scenario for demo connectors: gaps (default) or happy
 //	TESSERA_READINESS_DEMO      "off" skips seeding the demo Okta connection (larkspur only) for Deployment health
 package main
@@ -99,6 +102,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if cmd != "seed" && cmd != "serve" {
 		return fmt.Errorf("unknown command %q (want serve, seed, readiness or audit)", cmd)
 	}
+	if os.Getenv("TESSERA_ENV") == "" {
+		// fail closed: the environment decides the guard rails (§18.4) and
+		// whether dev sign-in exists, so it is never implied
+		return errors.New("set TESSERA_ENV=dev (run.sh does), TESSERA_ENV=test or TESSERA_ENV=prod")
+	}
 	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	// Typed configuration and the production guard rails come first: an
 	// unsafe production setting refuses to start before anything else runs.
@@ -113,10 +121,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	}
 	loader := policy.NewLoader(policyFS())
 	if cmd == "seed" {
-		return seedDB(ctx, o.db, clock, loader, sealer, stdout)
+		return seedDB(ctx, o.db, cfg, clock, loader, sealer, stdout)
 	}
 	if _, err := os.Stat(o.db); o.reseed || errors.Is(err, fs.ErrNotExist) {
-		if err := seedDB(ctx, o.db, clock, loader, sealer, stdout); err != nil {
+		if err := seedDB(ctx, o.db, cfg, clock, loader, sealer, stdout); err != nil {
 			return err
 		}
 	}
@@ -138,15 +146,12 @@ func policyFS() fs.FS {
 	return policies.FS
 }
 
-func envOr(k, def string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return def
-}
 
-func seedDB(ctx context.Context, path string, clock timeutil.Clock, loader *policy.Loader, sealer *seal.Sealer,
-	stdout io.Writer) error {
+func seedDB(ctx context.Context, path string, cfg *config.Config, clock timeutil.Clock, loader *policy.Loader,
+	sealer *seal.Sealer, stdout io.Writer) error {
+	if cfg.IsProd() {
+		return errors.New("seed: refusing to seed demo tenants with TESSERA_ENV=prod")
+	}
 	start := time.Now()
 	// Seeding always starts from an empty schema, even over an older database.
 	st, err := store.OpenFresh(ctx, path)
@@ -164,7 +169,11 @@ func seedDB(ctx context.Context, path string, clock timeutil.Clock, loader *poli
 		return err
 	}
 	fmt.Fprintln(stdout, "==> seeding demo tenants: larkspur (fictional company: Larkspur Labs) and globex")
-	stats, err := seed.Run(ctx, st, now, pols, seed.DefaultTenants(conns, now))
+	tenants := seed.DefaultTenants(conns, now)
+	if cfg.DevIdPURL != "" {
+		tenants = seed.WithDevIdP(tenants, cfg.DevIdPURL)
+	}
+	stats, err := seed.Run(ctx, st, now, pols, tenants)
 	if err != nil {
 		return err
 	}
@@ -222,9 +231,17 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if _, err := loader.Load(); err != nil { // fail fast on broken policy files
 		return err
 	}
-	tenant, err := st.DevDefaultTenant(ctx, os.Getenv("TESSERA_ENV"), envOr("TESSERA_DEV_DEFAULT_TENANT", seed.LarkspurSlug))
-	if err != nil {
-		return fmt.Errorf("no tenant to serve (authentication arrives in a later release): %w", err)
+	if cfg.IsProd() {
+		// §18.4: no dev_mock IdP connection may exist in production.
+		if err := st.ForEachActiveTenant(ctx, func(_ context.Context, tx *store.TenantTx) error {
+			n, err := tx.CountIdPConnectionsByProfile(store.ProfileDevMock)
+			if err == nil && n > 0 {
+				err = errors.New("refusing to start with TESSERA_ENV=prod: a dev_mock IdP connection exists")
+			}
+			return err
+		}); err != nil {
+			return err
+		}
 	}
 	// ensure_keys: the platform key and every tenant's signing keys exist and
 	// are rotated, and the KEK opens them (fail closed on a wrong KEK).
@@ -240,9 +257,9 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if err != nil {
 		return err
 	}
-	srv := api.New(api.Config{Store: st, Tenant: tenant, Clock: clock, Policies: loader, Logger: logger,
-		AllowedOrigins: cfg.CORSOrigins, Env: os.Getenv("TESSERA_ENV"), ReadinessScenario: scenario,
-		AuditAnchor: anchorURL})
+	srv := api.New(api.Config{Store: st, Clock: clock, Policies: loader, Logger: logger,
+		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
+		HSTS: cfg.IsProd(), Env: cfg.Env, ReadinessScenario: scenario, AuditAnchor: anchorURL})
 	checkpointer := &audit.Checkpointer{DB: st, Sealer: sealer, Sink: sink, Clock: timeutil.System, Issuer: cfg.PublicURL,
 		Every: time.Duration(cfg.AuditCheckpointSeconds) * time.Second, EveryEvents: int64(cfg.AuditCheckpointEvents),
 		Log: logger}

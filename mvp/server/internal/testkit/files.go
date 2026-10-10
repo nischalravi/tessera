@@ -26,8 +26,13 @@ func copyFile(src, dst string) error {
 }
 
 // Main runs the tests and removes the shared demo database afterwards. Use
-// it from TestMain in packages that call Demo.
+// it from TestMain in packages that call Demo. It sets TESSERA_ENV=test
+// (unless the environment already names one), the only environment in which
+// the test-only session helper internal/auth/authtest runs.
 func Main(m *testing.M) {
+	if os.Getenv("TESSERA_ENV") == "" {
+		_ = os.Setenv("TESSERA_ENV", "test")
+	}
 	code := m.Run()
 	if demoDir != "" {
 		_ = os.RemoveAll(demoDir)

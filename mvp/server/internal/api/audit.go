@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
+	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -25,16 +26,13 @@ import (
 // and audit.verify.
 func (s *Server) registerAuditRoutes() {
 	G := http.MethodGet
-	s.handle(G, "/api/audit", read, s.auditLog)
-	s.handle(G, "/api/audit/events/{event_id}/proof", read, s.auditProof)
-	s.handle(G, "/api/audit/checkpoints", read, s.auditCheckpoints)
-	s.handle(G, "/api/audit/keys", noTenant, s.auditKeys)
-	s.handle(http.MethodPost, "/api/audit/verify", phased, s.auditVerify)
-	s.handle(G, "/api/audit/export", phased, s.auditExport).stream = true
+	s.handle(G, "/api/audit", read, need(auth.PermAuditRead), s.auditLog)
+	s.handle(G, "/api/audit/events/{event_id}/proof", read, need(auth.PermAuditRead), s.auditProof)
+	s.handle(G, "/api/audit/checkpoints", read, need(auth.PermAuditRead), s.auditCheckpoints)
+	s.handle(G, "/api/audit/keys", noTenant, need(auth.PermAuditRead), s.auditKeys)
+	s.handle(http.MethodPost, "/api/audit/verify", phased, need(auth.PermAuditVerify), s.auditVerify)
+	s.handle(G, "/api/audit/export", phased, need(auth.PermAuditRead), s.auditExport).stream = true
 }
-
-// auditTenant is the tenant whose http.request events the middleware writes.
-func (s *Server) auditTenant(*http.Request) tenancy.ID { return s.cfg.Tenant }
 
 const maxFilterLen = 200
 

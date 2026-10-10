@@ -31,9 +31,12 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 )
 
-// Environments.
+// Environments. Test is a non-production environment like Dev (the shared
+// Test instance and go test): it exposes dev sign-in (§18.4) and is the only
+// environment the test-only session helper (internal/auth/authtest) runs in.
 const (
 	Dev  = "dev"
+	Test = "test"
 	Prod = "prod"
 )
 
@@ -91,9 +94,9 @@ func Load(getenv func(string) string) (*Config, error) {
 	switch c.Env {
 	case "":
 		c.Env = Dev // design default; serve still requires an explicit TESSERA_ENV=dev
-	case Dev, Prod:
+	case Dev, Test, Prod:
 	default:
-		return nil, fmt.Errorf("config: invalid TESSERA_ENV %q: want TESSERA_ENV=dev or TESSERA_ENV=prod", c.Env)
+		return nil, fmt.Errorf("config: invalid TESSERA_ENV %q: want TESSERA_ENV=dev, test or prod", c.Env)
 	}
 	prod := c.Env == Prod
 	def := func(devValue, prodValue string) string {
@@ -179,6 +182,13 @@ func Load(getenv func(string) string) (*Config, error) {
 		bad("TESSERA_PUBLIC_URL: %v", err)
 	case prod && pub.Scheme != "https":
 		bad("TESSERA_PUBLIC_URL must be https with TESSERA_ENV=prod (got %s)", pub.Scheme)
+	}
+	// §11: the insecure-cookie fallback (Safari on http://localhost) only in
+	// dev, and only for a localhost public URL.
+	if !c.CookieSecure && !prod {
+		if c.Env != Dev || pub == nil || (pub.Hostname() != "localhost" && pub.Hostname() != "127.0.0.1") {
+			bad("TESSERA_COOKIE_SECURE=false is allowed only with TESSERA_ENV=dev and a localhost TESSERA_PUBLIC_URL")
+		}
 	}
 	c.RPID = str("TESSERA_RP_ID", "localhost", "")
 	if c.RPID == "" && pub != nil {
@@ -266,6 +276,16 @@ func (c *Config) Clock() timeutil.Clock {
 
 // IsProd reports whether the production guard rails apply.
 func (c *Config) IsProd() bool { return c.Env == Prod }
+
+// PublicOrigin is the origin (scheme://host[:port]) of PublicURL, which the
+// CSRF Origin check always admits.
+func (c *Config) PublicOrigin() string {
+	u, err := url.Parse(c.PublicURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
+}
 
 // String describes the configuration without the KEK.
 func (c *Config) String() string {
