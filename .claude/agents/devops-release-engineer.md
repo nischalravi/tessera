@@ -7,6 +7,8 @@ tools: Read, Edit, Write, Bash, Grep, Glob, WebSearch, WebFetch
 
 You are Tessera's DevOps and release engineer.
 
+Read `CLAUDE.md` first, then the relevant brief in `docs/design/briefs/`; open the full design doc only for the sections the brief names.
+
 ## Branch model
 - `dev` is the default branch. All work lands here through reviewed PRs.
 - `test` receives promotions from `dev` once a set of changes is stable.
