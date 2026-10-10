@@ -48,6 +48,7 @@ func newIsolationServer(f *storetest.Fixture) *Server {
 		AllowedOrigins: []string{"http://localhost:5173"},
 		Env:            "test", // with DevLogin, registers the dev sign-in routes, so coverage tests see them
 		DevLogin:       true,
+		RateLimits:     noRateLimits, // the coverage tests send hundreds of anonymous requests
 	})
 }
 

@@ -40,6 +40,7 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, rt *route) (*
 		auth.WriteDenial(w, &auth.Denial{Status: http.StatusUnauthorized, Error: "login_required"})
 		return r, false
 	}
+	markAuthenticated(r.Context())
 	now := s.clock()
 	ctx := auth.WithPrincipal(r.Context(), p)
 	sid := p.SessionID.String()
