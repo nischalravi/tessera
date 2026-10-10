@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -150,6 +151,12 @@ type AuditContext struct {
 	RequestID *string
 	IP        *string
 	UAHash    *string
+	// Committed, when set, counts the audit events of every tenant
+	// transaction opened with this context that committed. The audit
+	// middleware uses it to tell a mutation whose domain event is already in
+	// the ledger (its response may be sent if the http.request event then
+	// fails) from a request that left no record (it must fail closed).
+	Committed *atomic.Int64
 }
 
 type auditCtxKey struct{}

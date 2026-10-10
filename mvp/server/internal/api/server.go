@@ -190,10 +190,16 @@ type route struct {
 	segs    []string
 	tenant  tenantMode
 	h       handlerFunc
+	// answersRead: a non-GET route whose response is computed data; it fails
+	// closed like a read when its http.request event cannot be written
+	// (audit.AnswersRead).
+	answersRead bool
 }
 
-func (s *Server) handle(method, pattern string, mode tenantMode, h handlerFunc) {
-	s.routes = append(s.routes, &route{method, pattern, strings.Split(strings.TrimPrefix(pattern, "/"), "/"), mode, h})
+func (s *Server) handle(method, pattern string, mode tenantMode, h handlerFunc) *route {
+	rt := &route{method: method, pattern: pattern, segs: strings.Split(strings.TrimPrefix(pattern, "/"), "/"), tenant: mode, h: h}
+	s.routes = append(s.routes, rt)
+	return rt
 }
 
 // RouteInfo describes a registered route.
@@ -329,6 +335,9 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	audit.SetRoute(r.Context(), rt.pattern, vars)
+	if rt.answersRead {
+		audit.AnswersRead(r.Context())
+	}
 	p := &params{r: r, path: vars}
 	out, err := s.serve(rt, w, r, p)
 	if err != nil {

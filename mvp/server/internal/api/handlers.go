@@ -50,7 +50,9 @@ func (s *Server) registerRoutes() {
 	s.handle(P, "/api/least-privilege/revoke", write, s.revoke)
 	s.handle(G, "/api/policies", swept, s.listPolicies)
 	s.handle(G, "/api/violations", swept, s.listViolations)
-	s.handle(P, "/api/simulate", write, s.simulate)
+	// what-if analysis: its answer is data, recorded by nothing but its
+	// http.request event, so it fails closed like a read (design §13.4)
+	s.handle(P, "/api/simulate", write, s.simulate).answersRead = true
 	s.handle(G, "/api/jit/requests", swept, s.jitRequests)
 	s.handle(P, "/api/jit/requests", write, s.jitCreate)
 	s.handle(P, "/api/jit/requests/{request_id}/{action}", write, s.jitDecide)

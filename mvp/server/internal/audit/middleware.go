@@ -32,9 +32,15 @@ import (
 // short transaction of the request's tenant (or _platform). If that append
 // fails, a GET or HEAD (a read of customer data) is answered with 503
 // {"error":"audit_unavailable"} and the buffered body is dropped: no data
-// leaves without a record. Other methods already committed their domain
-// event with their change, so their response is sent, the failure is logged
-// as critical and counted.
+// leaves without a record. Another method gets the same 503 unless its
+// domain event already committed with its change (counted through
+// store.AuditContext.Committed): then the change is recorded and done, so its
+// real response is sent and the failure is logged as critical and counted.
+// A POST that records nothing (a validation error, a no-op) therefore fails
+// closed like a read, and so does a route marked with AnswersRead (a POST that
+// computes an answer, such as a simulation): an incidental event it commits
+// on the way (a JIT expiry swept before the analysis) does not record the
+// answer.
 //
 // The actor is "anonymous" until authentication lands (PR5). A client cannot
 // choose it: nothing in the request is read to attribute the event.
@@ -90,6 +96,8 @@ type reqState struct {
 	mu        sync.Mutex
 	route     *string
 	params    map[string]string
+	committed atomic.Int64 // domain events this request committed
+	read      bool         // AnswersRead: fail closed whatever the method
 	recorded  bool
 	streaming bool
 	start     time.Time
@@ -114,6 +122,18 @@ func SetRoute(ctx context.Context, pattern string, params map[string]string) {
 	st.params = make(map[string]string, len(params))
 	for k, v := range params {
 		st.params[k] = v
+	}
+}
+
+// AnswersRead marks the request as a read for the fail-closed rule: its
+// response is replaced by 503 audit_unavailable if its http.request event
+// cannot be written, whatever its method and whatever it committed. For
+// routes such as POST /api/simulate whose response is computed data.
+func AnswersRead(ctx context.Context) {
+	if st, ok := ctx.Value(stateKey{}).(*reqState); ok {
+		st.mu.Lock()
+		st.read = true
+		st.mu.Unlock()
 	}
 }
 
@@ -191,7 +211,7 @@ func Middleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 			ctx := context.WithValue(r.Context(), stateKey{}, st)
 			ctx = store.WithAuditContext(ctx, store.AuditContext{
 				Actor:     store.AuditActor{Type: store.ActorAnonymous},
-				RequestID: &st.requestID, IP: ip, UAHash: ua,
+				RequestID: &st.requestID, IP: ip, UAHash: ua, Committed: &st.committed,
 			})
 			r = r.WithContext(ctx)
 			st.r = r
@@ -211,7 +231,8 @@ func Middleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 				status = http.StatusOK
 			}
 			if err := st.appendLocked(status); err != nil {
-				if r.Method == http.MethodGet || r.Method == http.MethodHead {
+				read := st.read || r.Method == http.MethodGet || r.Method == http.MethodHead
+				if read || st.committed.Load() == 0 {
 					bw.discard()
 					h := w.Header()
 					h.Set("Content-Type", "application/json")

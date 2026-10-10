@@ -185,6 +185,7 @@ func (tx *TenantTx) AppendAudit(e AuditEvent) (AuditEvent, error) {
 	if n, err := res.RowsAffected(); err != nil || n != 1 {
 		return e, fmt.Errorf("store: audit head moved during append (rows=%d): %v", n, err)
 	}
+	tx.appended++
 	return e, nil
 }
 

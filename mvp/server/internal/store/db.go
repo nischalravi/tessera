@@ -222,6 +222,7 @@ func (d *DB) inTenant(ctx context.Context, t tenancy.ID, readOnly bool, fn func(
 	if err != nil {
 		return fmt.Errorf("store: begin: %w", err)
 	}
+	ttx := &TenantTx{ctx: ctx, tx: sqltx, tenant: t, readOnly: readOnly}
 	defer func() {
 		if p := recover(); p != nil {
 			_ = sqltx.Rollback()
@@ -231,7 +232,11 @@ func (d *DB) inTenant(ctx context.Context, t tenancy.ID, readOnly bool, fn func(
 			_ = sqltx.Rollback()
 			return
 		}
-		err = sqltx.Commit()
+		if err = sqltx.Commit(); err == nil && ttx.appended > 0 {
+			if ac, ok := AuditContextFrom(ctx); ok && ac.Committed != nil {
+				ac.Committed.Add(ttx.appended)
+			}
+		}
 	}()
 	// The tenant must exist: every tenant_id this transaction writes then
 	// references a tenants row (SQLite foreign keys are not enforced yet).
@@ -242,7 +247,7 @@ func (d *DB) inTenant(ctx context.Context, t tenancy.ID, readOnly bool, fn func(
 	if n != 1 {
 		return fmt.Errorf("%w: unknown tenant %s", ErrNoTenant, t)
 	}
-	return fn(&TenantTx{ctx: ctx, tx: sqltx, tenant: t, readOnly: readOnly})
+	return fn(ttx)
 }
 
 // InSystem runs fn in one write transaction that can touch only the

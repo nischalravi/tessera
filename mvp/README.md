@@ -161,7 +161,8 @@ Every tenant has an append-only, hash-chained audit log (`audit_events`; design
 event; `server/testdata/golden/audit_v1.json` is a test vector for independent verifiers.
 SQLite triggers refuse UPDATE and DELETE. Every API call writes one `http.request` event (the
 route template, status, sorted query keys, never bodies or query values); a read whose event
-cannot be written answers `503 {"error":"audit_unavailable"}` instead of the data. Domain events
+cannot be written answers `503 {"error":"audit_unavailable"}` instead of the data, and so does a
+POST that committed no domain event of its own (and `POST /api/simulate`, whose answer is data). Domain events
 (JIT, reviews, revokes, JML, readiness attestations, skips and activation) commit in the same
 transaction as their change. Until sign-in lands the actor is `anonymous`; a name the browser
 sends is kept only as `detail.claimed_actor`.

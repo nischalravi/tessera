@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -128,5 +129,37 @@ func TestAuditAppend_RollbackLeavesNoEvent(t *testing.T) {
 func TestTamperForTest(t *testing.T) {
 	if _, err := openTest(t).TamperForTest(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestAuditContext_Committed: the audit middleware's counter grows by the
+// events of committed transactions only (never a rolled-back or read one).
+func TestAuditContext_Committed(t *testing.T) {
+	db := openTest(t)
+	var n atomic.Int64
+	ctx := WithAuditContext(context.Background(), AuditContext{Actor: AuditActor{Type: ActorAnonymous}, Committed: &n})
+	_ = db.InTenant(ctx, tenancy.Platform, func(tx *TenantTx) error {
+		if err := tx.Audit(time.Now(), "", "doomed", nil); err != nil {
+			return err
+		}
+		return errors.New("rolled back")
+	})
+	_ = db.ReadTenant(ctx, tenancy.Platform, func(*TenantTx) error { return nil })
+	_ = db.InTenant(ctx, tenancy.Platform, func(*TenantTx) error { return nil })
+	if n.Load() != 0 {
+		t.Fatalf("committed = %d before any recorded commit", n.Load())
+	}
+	if err := db.InTenant(ctx, tenancy.Platform, func(tx *TenantTx) error {
+		for range 2 {
+			if err := tx.Audit(time.Now(), "", "kept", nil); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if n.Load() != 2 {
+		t.Errorf("committed = %d, want 2", n.Load())
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -216,22 +217,95 @@ func TestAudit_ReadFailsClosed(t *testing.T) {
 }
 
 // TestAudit_MutationResponseSentWhenRequestEventFails: for a non-read whose
-// domain work committed, a failed http.request append is logged and counted,
-// and the real response is still sent.
+// domain event committed with its change, a failed http.request append is
+// logged and counted, and the real response is still sent. POST
+// /api/simulate fails closed like a read, even though the JIT sweep before
+// its analysis commits a jit.expire event in its transaction.
 func TestAudit_MutationResponseSentWhenRequestEventFails(t *testing.T) {
 	f := storetest.TwoTenants(t)
 	srv := isolationServer(f, f.B.ID)
 	srv.cfg.AuditAppend = func(context.Context, tenancy.ID, store.AuditEvent) error { return errors.New("disk full") }
 	h := srv.Handler()
 	failures := audit.WriteFailures()
-	if rec := serveOnce(h, "POST", "/api/simulate", `{}`); rec.Code != http.StatusOK {
-		t.Errorf("POST with a failing http.request append: %d, want the real 200", rec.Code)
+	rec := serveOnce(h, "POST", "/api/simulate", `{}`)
+	if rec.Code != http.StatusServiceUnavailable || strings.Contains(rec.Body.String(), "violations") {
+		t.Errorf("POST /api/simulate with a failing append: %d %.200s, want 503 without the result", rec.Code, rec.Body.String())
+	}
+	swept := false
+	for _, e := range ledger(t, f.DB, f.B.ID) {
+		swept = swept || (e.Action == "jit.expire" && e.RequestID != nil && *e.RequestID == rec.Header().Get("X-Request-Id"))
+	}
+	if !swept {
+		t.Error("the simulation did not commit the incidental jit.expire this test relies on")
+	}
+	if rec := serveOnce(h, "POST", "/api/reviews/campaigns", `{}`); rec.Code != http.StatusOK {
+		t.Errorf("recorded mutation with a failing http.request append: %d, want the real 200", rec.Code)
 	}
 	if rec := serveOnce(h, "GET", "/api/groups", ""); rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("GET with a failing append: %d, want 503", rec.Code)
 	}
-	if audit.WriteFailures() != failures+2 {
+	if audit.WriteFailures() != failures+3 {
 		t.Errorf("failures counted: %d", audit.WriteFailures()-failures)
+	}
+}
+
+// TestAudit_EveryRouteFailsClosed (§13.4): with every http.request append
+// failing, each registered route either answers 503 audit_unavailable
+// without its data, or is a mutation whose own domain event (with this
+// request's id) is in the ledger. A new route that returns data or changes
+// state without a record fails here.
+func TestAudit_EveryRouteFailsClosed(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	srv := isolationServer(f, f.B.ID)
+	srv.cfg.AuditAppend = func(context.Context, tenancy.ID, store.AuditEvent) error { return errors.New("disk full") }
+	h := srv.Handler()
+	ids := map[string]string{"identity_id": fmt.Sprint(f.B.IDs["alice"])}
+	recorded, refused := 0, 0
+	for _, rt := range srv.Routes() {
+		path := rt.Pattern
+		for _, seg := range strings.Split(rt.Pattern, "/") {
+			if strings.HasPrefix(seg, "{") {
+				v, ok := ids[strings.Trim(seg, "{}")]
+				if !ok {
+					v = "1"
+				}
+				path = strings.Replace(path, seg, v, 1)
+			}
+		}
+		req := httptest.NewRequest(rt.Method, path, nil)
+		if audit.DefaultExcluded(req) {
+			continue // GET /api/health: public, no tenant data, never recorded
+		}
+		body := ""
+		if rt.Method != http.MethodGet {
+			body = `{}`
+		}
+		t.Run(rt.Method+" "+rt.Pattern, func(t *testing.T) {
+			rec := serveOnce(h, rt.Method, path, body)
+			if rec.Code == http.StatusServiceUnavailable {
+				if !strings.Contains(rec.Body.String(), `"error":"audit_unavailable"`) || leaks(rec.Body.String()) {
+					t.Errorf("503 body: %.200s", rec.Body.String())
+				}
+				refused++
+				return
+			}
+			if rt.Method == http.MethodGet {
+				t.Fatalf("a read answered %d without its http.request event", rec.Code)
+			}
+			rid := rec.Header().Get("X-Request-Id")
+			for _, e := range ledger(t, f.DB, f.B.ID) {
+				// jit.expire is swept on the way into an analysis; it does
+				// not record what the request itself did
+				if e.Action != store.ActionHTTPRequest && e.Action != "jit.expire" && e.RequestID != nil && *e.RequestID == rid {
+					recorded++
+					return
+				}
+			}
+			t.Errorf("answered %d with no http.request event and no domain event of this request: %.200s", rec.Code, rec.Body.String())
+		})
+	}
+	if refused == 0 || recorded == 0 {
+		t.Errorf("coverage: %d refused, %d recorded mutations (want both > 0)", refused, recorded)
 	}
 }
 
