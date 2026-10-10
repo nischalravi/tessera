@@ -23,10 +23,12 @@
 //	TESSERA_ENV           dev (run.sh sets it), test or prod. Every API route except
 //	                      the public allow-list needs a signed-in session, and the
 //	                      tenant comes from that session. dev and test expose
-//	                      POST /api/auth/dev-login until IdP sign-in lands (PR6, PR7);
+//	                      POST /api/auth/dev-login until the UI signs in through the IdP (PR7);
 //	                      prod refuses to start with any dev setting (§18.4).
 //	TESSERA_DEV_IDP_URL   the dev IdP's issuer: seeding (dev and test) creates a
 //	                      dev_mock connection to it with the bootstrap users
+//	DEVIDP_CLIENT_SECRET  the dev IdP client's secret, sealed into those connections
+//	                      (default tessera-dev-secret, as cmd/tessera-devidp)
 //	TESSERA_READINESS_SCENARIO  simulated validation scenario for demo connectors: gaps (default) or happy
 //	TESSERA_READINESS_DEMO      "off" skips seeding the demo Okta connection (larkspur only) for Deployment health
 package main
@@ -55,6 +57,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/seed"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -155,6 +158,10 @@ func policyFS() fs.FS {
 	return policies.FS
 }
 
+// devIdPClientSecret is the dev IdP's published default client secret
+// (cmd/tessera-devidp); DEVIDP_CLIENT_SECRET overrides both.
+const devIdPClientSecret = "tessera-dev-secret" // #nosec G101 -- documented dev-only value of a mock IdP
+
 func seedDB(ctx context.Context, path string, cfg *config.Config, clock timeutil.Clock, loader *policy.Loader,
 	sealer *seal.Sealer, stdout io.Writer) error {
 	if cfg.IsProd() {
@@ -179,7 +186,13 @@ func seedDB(ctx context.Context, path string, cfg *config.Config, clock timeutil
 	fmt.Fprintln(stdout, "==> seeding demo tenants: larkspur (fictional company: Larkspur Labs) and globex")
 	tenants := seed.DefaultTenants(conns, now)
 	if cfg.DevIdPURL != "" {
-		tenants = seed.WithDevIdP(tenants, cfg.DevIdPURL)
+		// the dev IdP's client secret (cmd/tessera-devidp reads the same
+		// variable), sealed into the dev_mock connections
+		secret := os.Getenv("DEVIDP_CLIENT_SECRET")
+		if secret == "" {
+			secret = devIdPClientSecret
+		}
+		tenants = seed.WithDevIdPClient(tenants, cfg.DevIdPURL, seed.DevIdPClient{Sealer: sealer, Secret: secret})
 	}
 	stats, err := seed.Run(ctx, st, now, pols, tenants)
 	if err != nil {
@@ -265,7 +278,18 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if err != nil {
 		return err
 	}
+	// Outbound calls to IdPs (discovery, JWKS, token) go through safehttp. A
+	// test server gets the production client (no loopback exception).
+	outCfg := *cfg
+	if outCfg.Env == config.Test {
+		outCfg.Env, outCfg.OutboundAllowLoopback = config.Prod, false
+	}
+	outbound, err := safehttp.ForConfig(&outCfg)
+	if err != nil {
+		return err
+	}
 	srv := api.New(api.Config{Store: st, Clock: clock, Policies: loader, Logger: logger,
+		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound,
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
 		HSTS: cfg.IsProd(), Env: cfg.Env, DevLogin: cfg.DevLogin, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, AuditAnchor: anchorURL})
 	checkpointer := &audit.Checkpointer{DB: st, Sealer: sealer, Sink: sink, Clock: timeutil.System, Issuer: cfg.PublicURL,

@@ -10,8 +10,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/google/uuid"
-
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	authnorm "github.com/nischalravi/tessera/mvp/server/internal/auth/normalize"
@@ -271,69 +269,11 @@ func (s *Server) devLogin(w http.ResponseWriter, r *http.Request, _ *params) (an
 	if err != nil {
 		return nil, err
 	}
-	actor := store.AuditActor{Type: store.ActorUser}
-	uid := user.ID.String()
-	display := user.DisplayName
-	if user.Email != nil && *user.Email != "" {
-		display = *user.Email
-	}
-	actor.ID, actor.Display = &uid, &display
-	// the login's own events carry the authentication summary of the new context
-	rec := &store.AuthnContextRecord{ID: uuid.New()}
-	summary := (&auth.Principal{Authn: &auth.AuthnContext{ID: rec.ID, AAL: res.AAL, PhishingResistant: res.PhishingResistant,
-		TesseraACR: auth.ACR(res.TesseraACR), AuthTime: res.AuthTime}}).AuditAuthn(now)
-	// Signing in again replaces the browser's previous session (§11): it is
-	// revoked, in its own tenant, with the new session's creation when that
-	// is the same tenant, and on the system's behalf before it otherwise.
-	prevTenant, prevSID, hadSession, err := s.authn.RequestSession(r)
+	issued, err := s.completeLogin(w, r, tenant, conn, res, loginOptions{via: "dev_login", protocol: "oidc",
+		purpose: "login", user: user, detail: ojson.Object{{Key: "method", Value: in.Method}}})
 	if err != nil {
 		return nil, err
 	}
-	if hadSession && prevTenant != tenant.ID {
-		if err := s.store.InTenant(audit.AsSystem(ctx, "auth.login"), prevTenant, func(tx *store.TenantTx) error {
-			_, err := auth.RevokeReplaced(audit.AsSystem(ctx, "auth.login"), tx, prevSID, now)
-			return err
-		}); err != nil {
-			return nil, err
-		}
-	}
-	ctx = audit.SetPrincipal(ctx, audit.Principal{Tenant: tenant.ID, Actor: actor, Authn: summary})
-	var issued auth.Issued
-	err = s.store.InTenant(ctx, tenant.ID, func(tx *store.TenantTx) error {
-		if hadSession && prevTenant == tenant.ID {
-			if _, err := auth.RevokeReplaced(ctx, tx, prevSID, now); err != nil {
-				return err
-			}
-		}
-		acr := res.ACR
-		ip, ua := clientAddr(r), userAgent(r)
-		*rec = store.AuthnContextRecord{ID: rec.ID, UserID: user.ID, IdPConnectionID: &conn.ID, Protocol: "oidc", Purpose: "login",
-			ACR: acr, AMR: res.AMR, Methods: res.Methods, AAL: res.AAL, PhishingResistant: res.PhishingResistant,
-			PhrBasis: res.PhrBasis, TesseraACR: res.TesseraACR, AuthTime: res.AuthTime, IP: ip, UserAgent: ua,
-			MappingProfile: res.MappingProfile, MappingVersion: res.MappingVersion, ClaimsSHA256: res.ClaimsSHA256,
-			CreatedAt: now}
-		if err := tx.InsertAuthnContext(rec); err != nil {
-			return err
-		}
-		var err error
-		issued, err = auth.CreateSession(tx, auth.SessionInput{User: user, Authn: rec, Now: now, IP: ip, UA: ua,
-			Settings: auth.TenantSettings(tenant.Settings)})
-		if err != nil {
-			return err
-		}
-		sid := issued.Session.ID.String()
-		_, err = audit.Record(ctx, tx, "auth.login.success", ojson.Object{{Key: "via", Value: "dev_login"},
-			{Key: "method", Value: in.Method}, {Key: "session_id", Value: sid}, {Key: "authn_context_id", Value: rec.ID.String()},
-			{Key: "aal", Value: rec.AAL}, {Key: "phishing_resistant", Value: rec.PhishingResistant},
-			{Key: "acr", Value: rec.TesseraACR}}, audit.At(now), audit.Target("session", sid))
-		return err
-	})
-	if err != nil {
-		return nil, err
-	}
-	sid := issued.Session.ID.String()
-	audit.SetPrincipal(ctx, audit.Principal{Tenant: tenant.ID, Actor: actor, SessionID: &sid, Authn: summary})
-	http.SetCookie(w, s.authn.Cookies.Session(issued.Secret))
 	return ojson.Object{{Key: "status", Value: "signed_in"}, {Key: "csrf_token", Value: issued.CSRFToken}}, nil
 }
 

@@ -20,12 +20,14 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/auth/oidcrp"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
+	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
@@ -83,6 +85,13 @@ type Config struct {
 	// AuditAnchor is TESSERA_AUDIT_ANCHOR: POST /api/audit/verify checks
 	// checkpoints against it when it is a file:// URL.
 	AuditAnchor string
+	// PublicURL is TESSERA_PUBLIC_URL: the base of the OIDC redirect URIs.
+	PublicURL string
+	// Sealer opens connection client secrets and seals PKCE verifiers.
+	Sealer *seal.Sealer
+	// OutboundHTTP is the safehttp client for IdP discovery, JWKS and token
+	// requests. Nil: browser sign-in through an IdP is unavailable.
+	OutboundHTTP *http.Client
 	// RateLimits are the per-IP limits on anonymous and /api/auth/*
 	// requests (ratelimit.go); the zero value is the defaults.
 	RateLimits RateLimits
@@ -103,6 +112,7 @@ type Server struct {
 	routes []*route
 	authn  *auth.Authenticator
 	limits *limiters
+	rp     *oidcrp.RP
 
 	readiness *readiness.Service
 }
@@ -137,12 +147,20 @@ func New(cfg Config) *Server {
 	}
 	s := &Server{cfg: cfg, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
 		limits: newLimiters(cfg.RateLimits)}
+	if cfg.OutboundHTTP != nil {
+		rp, err := oidcrp.New(oidcrp.Config{HTTP: cfg.OutboundHTTP, Now: func() time.Time { return s.clock() }})
+		if err != nil {
+			panic(err) // HTTP and Now are set
+		}
+		s.rp = rp
+	}
 	s.authn = &auth.Authenticator{DB: cfg.Store, Clock: func() time.Time { return s.clock() },
 		Cookies: auth.Cookies{Insecure: cfg.InsecureCookie}}
 	s.registerRoutes()
 	s.registerAuditRoutes()
 	s.registerReadinessRoutes()
 	s.registerAuthRoutes()
+	s.registerLoginRoutes()
 	s.checkPublicRoutes()
 	return s
 }

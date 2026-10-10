@@ -5,6 +5,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
@@ -59,6 +63,24 @@ func WithDevIdP(tenants []Tenant, issuer string) []Tenant {
 	return out
 }
 
+// DevIdPClient is the dev IdP connection's client secret, sealed into
+// client_secret_enc (dev and test only).
+type DevIdPClient struct {
+	Sealer *seal.Sealer
+	Secret string
+}
+
+// WithDevIdPClient is WithDevIdP with the client secret the dev IdP expects,
+// so browser sign-in through it (PR6) works.
+func WithDevIdPClient(tenants []Tenant, issuer string, client DevIdPClient) []Tenant {
+	out := WithDevIdP(tenants, issuer)
+	for i := range out {
+		c := client
+		out[i].DevIdPClient = &c
+	}
+	return out
+}
+
 // seedAuth creates the tenant's dev_mock connection and bootstrap users.
 // It writes no audit event, so the ledger of a fresh seed is unchanged.
 func seedAuth(c *store.TenantTx, t Tenant, now time.Time) error {
@@ -70,10 +92,15 @@ func seedAuth(c *store.TenantTx, t Tenant, now time.Time) error {
 	if err != nil {
 		return err
 	}
-	conn := &store.IdPConnection{Name: "Dev IdP (OIDC)", Protocol: "oidc", Profile: store.ProfileDevMock,
+	conn := &store.IdPConnection{ID: uuid.New(), Name: "Dev IdP (OIDC)", Protocol: "oidc", Profile: store.ProfileDevMock,
 		Status: "active", IsDefault: true, VerifiedDomains: domains, Issuer: &issuer, ClientID: &clientID,
 		ClientAuthMethod: &method, PinCerts: true, JITProvisioning: false, DefaultRole: store.RoleViewer,
 		CreatedAt: now, UpdatedAt: now}
+	if dc := t.DevIdPClient; dc != nil && dc.Sealer != nil && dc.Secret != "" {
+		if conn.ClientSecretEnc, err = dc.Sealer.Seal([]byte(dc.Secret), auth.ClientSecretAAD(c.Tenant(), conn.ID)); err != nil {
+			return err
+		}
+	}
 	if err := c.InsertIdPConnection(conn); err != nil {
 		return fmt.Errorf("seed: dev IdP connection: %w", err)
 	}
