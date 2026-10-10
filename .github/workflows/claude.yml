@@ -33,6 +33,6 @@ jobs:
           base_branch: dev
           branch_prefix: agent/
           claude_args: >-
-            --model claude-opus-5-5
+            --model claude-sonnet-5-5
             --max-turns 60
             --append-system-prompt "You are working with Tessera's agent team; definitions are in .claude/agents/ and the operating model is docs/agents/OPERATING-MODEL.md. Use the agent the request names, or the best fit. Never push to dev, test, prod or main, never force-push, and never modify .github/. Open PRs into dev only."
