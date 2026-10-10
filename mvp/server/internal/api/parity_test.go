@@ -62,21 +62,45 @@ var (
 		Email: "security-oncall@larkspur.example", Display: "Security on-call",
 		Roles: []auth.Role{auth.RoleTenantAdmin, auth.RolePolicyAdmin}}
 	parityCtx = authtest.Ctx{ID: uuid.MustParse("00000000-0000-4000-8000-0000000000c2"), AAL: 2, Phr: true}
+	// parityRequester makes the fixtures' JIT requests (POST /api/jit/requests):
+	// a requester never approves their own request, so the approvals the
+	// fixtures record are by a different person (parityUser).
+	parityRequester = authtest.User{ID: uuid.MustParse("00000000-0000-4000-8000-0000000000c3"),
+		Email: "requester@larkspur.example", Display: "Requester", Roles: []auth.Role{auth.RoleOperator}}
+	parityRequesterCtx = authtest.Ctx{ID: uuid.MustParse("00000000-0000-4000-8000-0000000000c4"), AAL: 2, Phr: true}
 )
+
+// paritySrv sends JIT request creation as parityRequester and everything
+// else as parityUser.
+type paritySrv struct {
+	testSrv
+	requester authtest.Login
+}
+
+func (s paritySrv) Handler() http.Handler {
+	h := s.testSrv.Handler()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/jit/requests" && r.Header.Get("Cookie") == "" {
+			r = r.Clone(r.Context())
+			s.requester.Apply(r)
+		}
+		h.ServeHTTP(w, r)
+	})
+}
 
 // newSeededServer seeds a fresh database exactly as the recorder did (the
 // larkspur tenant only: integer ids are global across tenants, so a second
 // tenant's rows would shift the ids the fixtures recorded for rows the replay
 // creates) and returns a server for larkspur on the frozen clock, signed in
-// as parityUser.
-func newSeededServer(tb testing.TB) testSrv {
+// as parityUser (JIT requests as parityRequester).
+func newSeededServer(tb testing.TB) paritySrv {
 	tb.Helper()
 	return newSeededServerWith(tb, func(conns []connectors.Connector) []seed.Tenant {
 		return []seed.Tenant{seed.Larkspur(conns)}
 	})
 }
 
-func newSeededServerWith(tb testing.TB, tenants func([]connectors.Connector) []seed.Tenant) testSrv {
+func newSeededServerWith(tb testing.TB, tenants func([]connectors.Connector) []seed.Tenant) paritySrv {
 	tb.Helper()
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(tb.TempDir(), "parity.db"))
@@ -101,7 +125,8 @@ func newSeededServerWith(tb testing.TB, tenants func([]connectors.Connector) []s
 		Connectors: func(time.Time) ([]connectors.Connector, error) { return connectors.Load("demo", FrozenNow) },
 		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)), AllowedOrigins: []string{authtest.Origin},
 	})
-	return testSrv{srv, authtest.LoginAs(tb, st, seed.LarkspurID, parityUser, parityCtx, FrozenNow)}
+	return paritySrv{testSrv{srv, authtest.LoginAs(tb, st, seed.LarkspurID, parityUser, parityCtx, FrozenNow)},
+		authtest.LoginAs(tb, st, seed.LarkspurID, parityRequester, parityRequesterCtx, FrozenNow)}
 }
 
 func loadFixtures(tb testing.TB) []fixture {

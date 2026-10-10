@@ -98,7 +98,7 @@ func (s *Server) registerAuthRoutes() {
 	s.handle(P, "/api/auth/logout", write, need(auth.PermAuthenticated), s.authLogout)
 	s.handle(G, "/api/auth/sessions", read, need(auth.PermAuthenticated), s.authSessions)
 	s.handle(http.MethodDelete, "/api/auth/sessions/{session_id}", write, need(auth.PermAuthenticated), s.authRevokeSession)
-	if devLoginEnabled(s.cfg.Env) {
+	if s.devLoginEnabled() {
 		s.handle(G, "/api/auth/dev-login", noTenant, publicRoute, s.devLoginUsers)
 		s.handle(P, "/api/auth/dev-login", noTenant, publicRoute, s.devLogin)
 	}

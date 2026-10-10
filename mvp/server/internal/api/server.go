@@ -71,8 +71,11 @@ type Config struct {
 	// embedded templates and Env).
 	Readiness *readiness.Service
 	// Env is TESSERA_ENV: "dev" allows activating non-demo connector types,
-	// and "dev" and "test" expose POST /api/auth/dev-login (§18.4).
+	// and "dev" exposes /api/auth/dev-login (§18.4).
 	Env string
+	// DevLogin is TESSERA_DEV_LOGIN: with Env "test", the explicit opt-in
+	// that exposes /api/auth/dev-login, to loopback peers only.
+	DevLogin bool
 	// ReadinessScenario selects the simulated validation scenario
 	// (TESSERA_READINESS_SCENARIO; default "gaps").
 	ReadinessScenario string

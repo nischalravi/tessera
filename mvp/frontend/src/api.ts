@@ -28,6 +28,25 @@ export const setCsrfToken = (t: string | null) => {
   csrfToken = t;
 };
 
+/**
+ * Bumped whenever the signed-in session changes. A GET that started under an earlier session
+ * does not write its answer into the cache, so another user's data never shows after a switch.
+ */
+let sessionEpoch = 0;
+
+/**
+ * Forget everything tied to the current session: the CSRF token and every cached GET. Called on
+ * sign-out, on sign-in and when the API says the session is gone.
+ */
+export function resetSessionState(): void {
+  csrfToken = null;
+  cache.clear();
+  sessionEpoch++;
+}
+
+/** The cached answer for a GET path, if any. */
+export const cached = <T = unknown>(path: string): T | undefined => cache.get(path) as T | undefined;
+
 /** Fired when the API says the session is gone (401 login_required): the app shows sign-in. */
 export const SIGNED_OUT = "tessera:signed-out";
 /** Fired when an action needs a fresh phishing-resistant sign-in (401 step_up_required). */
@@ -61,6 +80,7 @@ export async function api<T = any>(path: string, body?: unknown, method?: string
   const headers: Record<string, string> = {};
   if (body !== undefined) headers["content-type"] = "application/json";
   if (m !== "GET" && m !== "HEAD" && csrfToken) headers["x-tessera-csrf"] = csrfToken;
+  const epoch = sessionEpoch;
   const res = await fetch(`/api${path}`, {
     method: m,
     headers,
@@ -74,12 +94,17 @@ export async function api<T = any>(path: string, body?: unknown, method?: string
     } catch {
       /* ignore */
     }
-    if (res.status === 401 && j?.error === "login_required") window.dispatchEvent(new Event(SIGNED_OUT));
+    if (res.status === 401 && j?.error === "login_required") {
+      resetSessionState();
+      window.dispatchEvent(new Event(SIGNED_OUT));
+    }
     if (res.status === 401 && j?.error === "step_up_required") window.dispatchEvent(new CustomEvent(STEP_UP, { detail: j }));
     throw new ApiError(j ? errorMessage(res.status, j) : `${res.status} ${res.statusText}`, res.status, j);
   }
   const data = (await res.json()) as T;
-  if (m === "GET") cache.set(path, data);
+  if (m === "GET") {
+    if (epoch === sessionEpoch) cache.set(path, data);
+  }
   else window.dispatchEvent(new Event(CHANGED));
   return data;
 }
@@ -88,7 +113,7 @@ export async function api<T = any>(path: string, body?: unknown, method?: string
 export const notifyChanged = () => window.dispatchEvent(new Event(CHANGED));
 
 export function useApi<T = any>(path: string | null) {
-  const [data, setData] = useState<T | null>(() => (path ? ((cache.get(path) as T) ?? null) : null));
+  const [data, setData] = useState<T | null>(() => (path ? (cached<T>(path) ?? null) : null));
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const load = useCallback(() => {
@@ -108,7 +133,7 @@ export function useApi<T = any>(path: string | null) {
     };
   }, [path]);
   useEffect(() => {
-    setData(path ? ((cache.get(path) as T) ?? null) : null);
+    setData(path ? (cached<T>(path) ?? null) : null);
     return load();
   }, [load, path]);
   useEffect(() => {
@@ -428,7 +453,10 @@ export interface SessionInfo {
 /** The current session, or null when signed out. Not cached. */
 export async function getSession(): Promise<SessionInfo | null> {
   const res = await fetch("/api/auth/session", { credentials: "same-origin" });
-  if (res.status === 401) return null;
+  if (res.status === 401) {
+    resetSessionState();
+    return null;
+  }
   if (!res.ok) throw new ApiError(`${res.status} ${res.statusText}`, res.status, null);
   const s = (await res.json()) as SessionInfo;
   setCsrfToken(s.csrf_token);
@@ -439,23 +467,27 @@ export async function logout(): Promise<void> {
   try {
     await api("/auth/logout", {});
   } finally {
-    setCsrfToken(null);
-    cache.clear();
+    resetSessionState();
   }
 }
 
 /** Development sign-in (TESSERA_ENV=dev or test only; replaced by IdP sign-in in Phase 0 PR7). */
 export interface DevUser { tenant: string; tenant_name: string; subject: string; email: string | null; display_name: string; roles: string[] }
 
-/** The users dev sign-in offers, or null when dev sign-in is not available on this server. */
-export async function devLoginUsers(): Promise<{ users: DevUser[]; methods: string[] } | null> {
-  const res = await fetch("/api/auth/dev-login", { credentials: "same-origin" });
+/**
+ * The users dev sign-in offers for one tenant (by slug), or null when dev sign-in is not
+ * available on this server. The API never lists other tenants' users.
+ */
+export async function devLoginUsers(tenant: string): Promise<{ users: DevUser[]; methods: string[] } | null> {
+  const res = await fetch(`/api/auth/dev-login?tenant=${encodeURIComponent(tenant)}`, { credentials: "same-origin" });
   if (res.status === 404) return null;
   if (!res.ok) throw new ApiError(`${res.status} ${res.statusText}`, res.status, null);
   return res.json();
 }
 
 export async function devLogin(tenant: string, subject: string, method: string): Promise<void> {
+  // nothing of the previous session (its CSRF token, its cached data) survives a sign-in
+  resetSessionState();
   const res = await fetch("/api/auth/dev-login", {
     method: "POST",
     credentials: "same-origin",
@@ -471,7 +503,7 @@ export async function devLogin(tenant: string, subject: string, method: string):
     }
     throw new ApiError(j?.error === "login_failed" ? "Sign-in failed." : errorMessage(res.status, j), res.status, j);
   }
-  cache.clear();
+  resetSessionState();
 }
 
 export const hrisExecute = (eventId: number) => api(`/hris/events/${eventId}/execute`, {});
