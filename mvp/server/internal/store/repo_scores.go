@@ -17,29 +17,48 @@ type ScoreRow struct {
 	Breakdown    string // JSON
 }
 
+var (
+	scoresLatest = tq("readiness_scores.latest", `
+		SELECT s.score, s.band FROM readiness_scores s
+		WHERE s.tenant_id = @tenant AND s.scope = @scope AND COALESCE(s.connection_id, '') = COALESCE(@connection_id, '')
+			AND COALESCE(s.revision_id, '') = COALESCE(@revision_id, '')
+		ORDER BY s.computed_at DESC, s.rowid DESC LIMIT 1`)
+	scoresInsert = tq("readiness_scores.insert", `
+		INSERT INTO readiness_scores (id, tenant_id, scope, connection_id, revision_id, computed_at, score, band, breakdown)
+		VALUES (@id, @tenant, @scope, @connection_id, @revision_id, @computed_at, @score, @band, @breakdown)`)
+	// The newest @limit points, returned oldest first.
+	scoresSeries = tq("readiness_scores.series", `
+		SELECT x.scope, x.connection_id, x.revision_id, x.computed_at, x.score, x.band, x.breakdown FROM (
+			SELECT s.scope, s.connection_id, s.revision_id, s.computed_at, s.score, s.band, s.breakdown, s.rowid AS rid
+			FROM readiness_scores s
+			WHERE s.tenant_id = @tenant AND s.scope = @scope AND COALESCE(s.connection_id, '') = COALESCE(@connection_id, '')
+			ORDER BY s.computed_at DESC, s.rowid DESC LIMIT @limit) x
+		ORDER BY x.computed_at, x.rid`)
+)
+
 // RecordScore appends a score unless it equals the latest one recorded for
 // the same scope, connection and revision.
-func (c *Conn) RecordScore(r *ScoreRow) error {
+func (tx *TenantTx) RecordScore(r *ScoreRow) error {
 	var last sql.NullInt64
 	var band sql.NullString
-	err := c.QueryRow(`SELECT score, band FROM readiness_scores WHERE tenant_id = ? AND scope = ?
-		AND COALESCE(connection_id, '') = COALESCE(?, '') AND COALESCE(revision_id, '') = COALESCE(?, '')
-		ORDER BY computed_at DESC, rowid DESC LIMIT 1`, DefaultTenantID, r.Scope, SP(r.ConnectionID), SP(r.RevisionID)).Scan(&last, &band)
+	err := tx.queryRow(scoresLatest, sql.Named("scope", r.Scope), sql.Named("connection_id", SP(r.ConnectionID)),
+		sql.Named("revision_id", SP(r.RevisionID))).Scan(&last, &band)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
 	if err == nil && int(last.Int64) == r.Score && band.String == r.Band {
 		return nil
 	}
-	_, err = c.Exec(`INSERT INTO readiness_scores (id, tenant_id, scope, connection_id, revision_id, computed_at, score, band, breakdown)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, NewID(), DefaultTenantID, r.Scope, SP(r.ConnectionID), SP(r.RevisionID),
-		RT(r.ComputedAt), r.Score, r.Band, r.Breakdown)
+	_, err = tx.exec(scoresInsert, sql.Named("id", NewID()), sql.Named("scope", r.Scope),
+		sql.Named("connection_id", SP(r.ConnectionID)), sql.Named("revision_id", SP(r.RevisionID)),
+		sql.Named("computed_at", RT(r.ComputedAt)), sql.Named("score", r.Score), sql.Named("band", r.Band),
+		sql.Named("breakdown", r.Breakdown))
 	return err
 }
 
 // ScoreSeries returns the recorded scores of a scope (and connection), oldest first.
-func (c *Conn) ScoreSeries(scope string, connectionID *string, limit int) ([]*ScoreRow, error) {
-	return collect(c, func(s scanner) (*ScoreRow, error) {
+func (tx *TenantTx) ScoreSeries(scope string, connectionID *string, limit int) ([]*ScoreRow, error) {
+	return collect(tx, func(s scanner) (*ScoreRow, error) {
 		var r ScoreRow
 		var conn, rev sql.NullString
 		var at string
@@ -50,7 +69,5 @@ func (c *Conn) ScoreSeries(scope string, connectionID *string, limit int) ([]*Sc
 		var err error
 		r.ComputedAt, err = ParseRT(at)
 		return &r, err
-	}, `SELECT scope, connection_id, revision_id, computed_at, score, band, breakdown FROM (
-		SELECT *, rowid AS rid FROM readiness_scores WHERE tenant_id = ? AND scope = ? AND COALESCE(connection_id, '') = COALESCE(?, '')
-		ORDER BY computed_at DESC, rid DESC LIMIT ?) ORDER BY computed_at, rid`, DefaultTenantID, scope, SP(connectionID), limit)
+	}, scoresSeries, sql.Named("scope", scope), sql.Named("connection_id", SP(connectionID)), sql.Named("limit", limit))
 }

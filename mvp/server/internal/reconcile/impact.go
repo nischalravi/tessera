@@ -18,20 +18,23 @@ type ImpactGraph struct {
 }
 
 // BuildImpact loads the live group and edge maps.
-func BuildImpact(c *store.Conn) (*ImpactGraph, error) {
+func BuildImpact(c *store.TenantTx) (*ImpactGraph, error) {
 	g := &ImpactGraph{groupNode: map[string]string{}, out: map[string][]string{}, memo: map[string]map[string]bool{}}
-	groups, err := c.Groups("ORDER BY id")
+	groups, err := c.Groups() // id order
 	if err != nil {
 		return nil, err
 	}
 	for _, x := range groups {
 		g.groupNode[x.System+"|"+x.ExternalID] = fmt.Sprintf("group:%d", x.ID)
 	}
-	edges, err := c.Edges("WHERE relation IN ('maps_to', 'grants')")
+	edges, err := c.Edges()
 	if err != nil {
 		return nil, err
 	}
 	for _, e := range edges {
+		if e.Relation != "maps_to" && e.Relation != "grants" {
+			continue
+		}
 		g.out[e.Src] = append(g.out[e.Src], e.Dst)
 	}
 	return g, nil

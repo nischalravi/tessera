@@ -11,7 +11,7 @@ func runInfo(r *store.CheckRun) *RunInfo {
 		StartedAt: r.StartedAt, FinishedAt: r.FinishedAt}
 }
 
-func loadResults(c *store.Conn, run *store.CheckRun, into map[resultKey]*ResultInfo) error {
+func loadResults(c *store.TenantTx, run *store.CheckRun, into map[resultKey]*ResultInfo) error {
 	rows, err := c.CheckResults(run.ID)
 	if err != nil {
 		return err
@@ -29,8 +29,8 @@ func loadResults(c *store.Conn, run *store.CheckRun, into map[resultKey]*ResultI
 
 // loadRunEvidence loads the latest finished validation run (live results),
 // the latest dry run (data results) and that dry run's findings.
-func loadRunEvidence(c *store.Conn, rev *store.ConnectionRevision, ev *Evidence) error {
-	live, err := c.LatestCheckRun(rev.ID, "validation", "scheduled")
+func loadRunEvidence(c *store.TenantTx, rev *store.ConnectionRevision, ev *Evidence) error {
+	live, err := c.LatestLiveRun(rev.ID)
 	if err != nil {
 		return err
 	}
@@ -40,7 +40,7 @@ func loadRunEvidence(c *store.Conn, rev *store.ConnectionRevision, ev *Evidence)
 			return err
 		}
 	}
-	data, err := c.LatestCheckRun(rev.ID, "dry_run")
+	data, err := c.LatestDryRun(rev.ID)
 	if err != nil {
 		return err
 	}

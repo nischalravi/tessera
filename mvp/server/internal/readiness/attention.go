@@ -192,7 +192,7 @@ type Dashboard struct {
 
 // scored returns the revision a connection is scored on: the live one, or
 // the in-progress one before the first activation.
-func (s *Service) scored(c *store.Conn, conn *store.Connection, now time.Time) (*Bundle, error) {
+func (s *Service) scored(c *store.TenantTx, conn *store.Connection, now time.Time) (*Bundle, error) {
 	_, live, pending, err := Revisions(c, conn.ID)
 	if err != nil {
 		return nil, err
@@ -216,7 +216,7 @@ func (s *Service) ConnectionScore(b *Bundle) ScoreBreakdown {
 	return ComputeScore(b.Eval, b.Evidence.Findings)
 }
 
-func dryRunCounts(c *store.Conn, b *Bundle) (DryRunCounts, error) {
+func dryRunCounts(c *store.TenantTx, b *Bundle) (DryRunCounts, error) {
 	var dc DryRunCounts
 	if b.Evidence.DataRun == nil {
 		return dc, nil
@@ -231,7 +231,7 @@ func dryRunCounts(c *store.Conn, b *Bundle) (DryRunCounts, error) {
 // Dashboard builds the tenant's deployment health (§7.2–7.4). legacyHR
 // names an env-configured HR connector still feeding the graph (the demo's
 // Workday), which counts as the authoritative HR source until it is governed.
-func (s *Service) Dashboard(c *store.Conn, now time.Time, legacyHR string) (*Dashboard, error) {
+func (s *Service) Dashboard(c *store.TenantTx, now time.Time, legacyHR string) (*Dashboard, error) {
 	d := &Dashboard{GeneratedAt: store.RT(now), KPIs: map[string]int{}, Connections: []ConnectionHealth{},
 		NeedsAttention: []AttentionEntry{}, Skipped: []SkippedView{}, Drift: []any{},
 		Schedule: map[string]string{"live_checks": "on demand", "reconciliation": "on demand",
@@ -310,10 +310,7 @@ func (s *Service) Dashboard(c *store.Conn, now time.Time, legacyHR string) (*Das
 			}
 		}
 		if b.Evidence.DataRun != nil {
-			n, err := c.Count(`SELECT count(DISTINCT m.member_xid) FROM stg_memberships m JOIN stg_groups g
-				ON g.run_id = m.run_id AND g.external_id = m.group_xid AND g.tenant_id = m.tenant_id
-				WHERE m.tenant_id = ? AND m.run_id = ? AND m.member_kind = 'account' AND g.privileged = 1`,
-				store.DefaultTenantID, b.Evidence.DataRun.ID)
+			n, err := c.StagedPrivilegedAccounts(b.Evidence.DataRun.ID)
 			if err != nil {
 				return nil, err
 			}
@@ -362,7 +359,7 @@ type ConnectionHealthView struct {
 }
 
 // Health returns one connection's score breakdown and needs-attention list.
-func (s *Service) Health(c *store.Conn, connID string, now time.Time) (*ConnectionHealthView, error) {
+func (s *Service) Health(c *store.TenantTx, connID string, now time.Time) (*ConnectionHealthView, error) {
 	conn, _, _, err := Revisions(c, connID)
 	if err != nil {
 		return nil, err
@@ -391,7 +388,7 @@ func (s *Service) Health(c *store.Conn, connID string, now time.Time) (*Connecti
 
 // RecordScore appends a connection score to the readiness_scores series
 // when it changed since the last recorded value.
-func (s *Service) RecordScore(c *store.Conn, b *Bundle, now time.Time) error {
+func (s *Service) RecordScore(c *store.TenantTx, b *Bundle, now time.Time) error {
 	sc := s.ConnectionScore(b)
 	raw, err := json.Marshal(sc)
 	if err != nil {

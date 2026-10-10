@@ -3,13 +3,15 @@ package api
 import (
 	"net/http"
 	"regexp"
+
+	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
 var runIDRE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 func (s *Server) registerValidationRoutes() {
-	s.handle(http.MethodPost, "/api/connections/{id}/validate", s.rd(s.validate))
-	s.handle(http.MethodGet, "/api/connections/{id}/validations/{run}", s.rd(s.getValidation))
+	s.handle(http.MethodPost, "/api/connections/{id}/validate", phased, s.rd(s.validate))
+	s.handle(http.MethodGet, "/api/connections/{id}/validations/{run}", read, s.rd(s.getValidation))
 }
 
 // validate runs the read-only live checks (simulated for demo connectors)
@@ -23,7 +25,7 @@ func (s *Server) validate(r *http.Request, p *params) (int, any, error) {
 	if err := decodeBody(r, &struct{}{}, true); err != nil {
 		return 0, nil, err
 	}
-	v, err := s.readiness.Validate(r.Context(), s.store, id, actor(r), s.clock)
+	v, err := s.readiness.Validate(r.Context(), p.scope, id, actor(r), s.clock)
 	return http.StatusAccepted, v, err
 }
 
@@ -36,6 +38,6 @@ func (s *Server) getValidation(r *http.Request, p *params) (int, any, error) {
 	if !runIDRE.MatchString(run) {
 		return 0, nil, badRequest("not_found", "no such run")
 	}
-	v, err := s.readiness.RunView(s.store.Read(r.Context()), id, run, s.clock())
+	v, err := s.readiness.RunView(store.TxFrom(r.Context()), id, run, s.clock())
 	return http.StatusOK, v, err
 }

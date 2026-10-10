@@ -82,7 +82,7 @@ type DryRunView struct {
 }
 
 // DryRunView renders a dry run of a connection.
-func (s *Service) DryRunView(c *store.Conn, connID, runID string, now time.Time) (*DryRunView, error) {
+func (s *Service) DryRunView(c *store.TenantTx, connID, runID string, now time.Time) (*DryRunView, error) {
 	rr, err := c.ReconRunByID(runID)
 	if errors.Is(err, store.ErrNotFound) || (err == nil && rr.ConnectionID != connID) {
 		return nil, notFound("no dry run %s for this connection", runID)
@@ -143,7 +143,7 @@ func (s *Service) DryRunView(c *store.Conn, connID, runID string, now time.Time)
 	return v, nil
 }
 
-func (s *Service) reloadRev(c *store.Conn, revID string, now time.Time) (*Bundle, error) {
+func (s *Service) reloadRev(c *store.TenantTx, revID string, now time.Time) (*Bundle, error) {
 	return s.reload(c, revID, now)
 }
 
@@ -154,7 +154,7 @@ type FindingFilter struct {
 
 // Findings lists a connection's findings, by default those of the current
 // revision's latest dry run.
-func (s *Service) Findings(c *store.Conn, connID string, f FindingFilter, now time.Time) ([]*FindingView, error) {
+func (s *Service) Findings(c *store.TenantTx, connID string, f FindingFilter, now time.Time) ([]*FindingView, error) {
 	runID := f.RunID
 	if runID == "" {
 		b, err := s.Current(c, connID, now)

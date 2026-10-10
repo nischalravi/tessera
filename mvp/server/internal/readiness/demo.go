@@ -14,7 +14,7 @@ import (
 // validation and a dry run, so Insights → Deployment health has data on a
 // fresh demo database (the walkthrough then adds Active Directory). It runs
 // from `tessera seed`, never in the parity fixtures' seed.
-func (s *Service) SeedDemo(ctx context.Context, st *store.Store, clock func() time.Time, stage StageFunc) error {
+func (s *Service) SeedDemo(ctx context.Context, st Scope, clock func() time.Time, stage StageFunc) error {
 	const admin = "j.rivera@larkspur.example"
 	company := connectors.GetCompany(connectors.DemoSeed, clock())
 	email := func(name string) string { return company.P(name).Email() }
@@ -38,7 +38,7 @@ func (s *Service) SeedDemo(ctx context.Context, st *store.Store, clock func() ti
 		return err
 	}
 	var id string
-	err = st.Write(ctx, func(c *store.Conn) error {
+	err = st.Write(ctx, func(c *store.TenantTx) error {
 		now := clock()
 		b, err := s.Create(c, CreateInput{Name: "Okta (demo)", ConnectorType: "demo-okta", Config: raw}, admin, now)
 		if err != nil {
@@ -68,7 +68,7 @@ func (s *Service) SeedDemo(ctx context.Context, st *store.Store, clock func() ti
 	if _, err := s.DryRun(ctx, st, id, admin, clock, stage); err != nil {
 		return err
 	}
-	return st.Write(ctx, func(c *store.Conn) error {
+	return st.Write(ctx, func(c *store.TenantTx) error {
 		now := clock()
 		for _, it := range []struct{ item, note string }{
 			{"base.stale.threshold", "90 days, per the PCI DSS v4 8.2.6 policy"},

@@ -25,7 +25,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
-// Service holds the readiness configuration. Its methods take a *store.Conn;
+// Service holds the readiness configuration. Its methods take a *store.TenantTx;
 // mutating ones expect a write transaction.
 type Service struct {
 	Templates *template.Registry
@@ -36,7 +36,7 @@ type Service struct {
 	Runner  RunnerOptions
 
 	// extraEvidence lets in-package tests add evidence to a revision.
-	extraEvidence func(c *store.Conn, b *store.ConnectionRevision, ev *Evidence)
+	extraEvidence func(c *store.TenantTx, b *store.ConnectionRevision, ev *Evidence)
 }
 
 // NewService returns a service over a template registry.
@@ -61,7 +61,7 @@ type Bundle struct {
 func (b *Bundle) Simulated() bool { return IsDemoType(b.Conn.ConnectorType) }
 
 // templateFor resolves a revision's pinned template plus its pinned overlay.
-func (s *Service) templateFor(c *store.Conn, templateID, version string, overlayVersion int) (*template.Resolved, error) {
+func (s *Service) templateFor(c *store.TenantTx, templateID, version string, overlayVersion int) (*template.Resolved, error) {
 	t, err := s.Templates.Resolve(templateID + "@" + version)
 	if err != nil {
 		return nil, err
@@ -94,7 +94,7 @@ func hashInput(conn *store.Connection, rev *store.ConnectionRevision, cfg ConnCo
 }
 
 // Load evaluates a revision.
-func (s *Service) Load(c *store.Conn, rev *store.ConnectionRevision, now time.Time) (*Bundle, error) {
+func (s *Service) Load(c *store.TenantTx, rev *store.ConnectionRevision, now time.Time) (*Bundle, error) {
 	conn, err := c.Connection(rev.ConnectionID)
 	if err != nil {
 		return nil, err
@@ -121,7 +121,7 @@ func (s *Service) Load(c *store.Conn, rev *store.ConnectionRevision, now time.Ti
 	return b, err
 }
 
-func (s *Service) loadEvidence(c *store.Conn, conn *store.Connection, rev *store.ConnectionRevision) (*Evidence, error) {
+func (s *Service) loadEvidence(c *store.TenantTx, conn *store.Connection, rev *store.ConnectionRevision) (*Evidence, error) {
 	ev := &Evidence{TenantTypes: map[string]bool{}, Live: map[resultKey]*ResultInfo{}, Data: map[resultKey]*ResultInfo{}}
 	var err error
 	if ev.Attestations, err = c.Attestations(rev.ID); err != nil {
@@ -152,7 +152,7 @@ func (s *Service) loadEvidence(c *store.Conn, conn *store.Connection, rev *store
 }
 
 // Revisions returns a connection with its live and in-progress revisions.
-func Revisions(c *store.Conn, connID string) (conn *store.Connection, live, pending *store.ConnectionRevision, err error) {
+func Revisions(c *store.TenantTx, connID string) (conn *store.Connection, live, pending *store.ConnectionRevision, err error) {
 	conn, err = c.Connection(connID)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, nil, nil, notFound("no connection %s", connID)
@@ -177,7 +177,7 @@ func Revisions(c *store.Conn, connID string) (conn *store.Connection, live, pend
 
 // Current returns the revision the checklist shows: the in-progress one if
 // there is one, otherwise the live one, otherwise the newest.
-func (s *Service) Current(c *store.Conn, connID string, now time.Time) (*Bundle, error) {
+func (s *Service) Current(c *store.TenantTx, connID string, now time.Time) (*Bundle, error) {
 	conn, live, pending, err := Revisions(c, connID)
 	if err != nil {
 		return nil, err
@@ -201,7 +201,7 @@ func (s *Service) Current(c *store.Conn, connID string, now time.Time) (*Bundle,
 
 // pendingBundle returns the in-progress revision, creating a new draft
 // revision from the live one when the connection is active (design K6).
-func (s *Service) pendingBundle(c *store.Conn, connID, actor string, now time.Time) (*Bundle, bool, error) {
+func (s *Service) pendingBundle(c *store.TenantTx, connID, actor string, now time.Time) (*Bundle, bool, error) {
 	conn, live, pending, err := Revisions(c, connID)
 	if err != nil {
 		return nil, false, err
@@ -272,7 +272,7 @@ func validText(s string, max int) bool {
 
 // Create adds a connection in draft (design §4.2: the template must exist and
 // the config must parse into the typed config).
-func (s *Service) Create(c *store.Conn, in CreateInput, actor string, now time.Time) (*Bundle, error) {
+func (s *Service) Create(c *store.TenantTx, in CreateInput, actor string, now time.Time) (*Bundle, error) {
 	in.Name = strings.TrimSpace(in.Name)
 	if !validText(in.Name, 100) {
 		return nil, unprocessable("invalid_name", "name is required (at most 100 printable characters)")
@@ -386,7 +386,7 @@ type ConfigResult struct {
 // PatchConfig applies a partial config to the in-progress revision (creating
 // one when the connection is active) and moves the revision back through the
 // gates whose evidence the change invalidated.
-func (s *Service) PatchConfig(c *store.Conn, connID string, patch []byte, actor string, now time.Time) (*ConfigResult, error) {
+func (s *Service) PatchConfig(c *store.TenantTx, connID string, patch []byte, actor string, now time.Time) (*ConfigResult, error) {
 	b, created, err := s.pendingBundle(c, connID, actor, now)
 	if err != nil {
 		return nil, err
@@ -476,7 +476,7 @@ var refRE = regexp.MustCompile(`^(vault|agent):[A-Za-z0-9._/:@-]{1,200}$`)
 // values at all: a submitted secret is acknowledged with a sealed:<id>
 // reference and a new version, and the value itself is discarded. Demo
 // connectors need no secret, and no real connector can run before DR-10.
-func (s *Service) SetCredential(c *store.Conn, connID string, in CredentialInput, actor string, now time.Time) (*Bundle, error) {
+func (s *Service) SetCredential(c *store.TenantTx, connID string, in CredentialInput, actor string, now time.Time) (*Bundle, error) {
 	var ref string
 	switch {
 	case in.Secret != "" && in.Reference != "":
@@ -521,7 +521,7 @@ func (s *Service) SetCredential(c *store.Conn, connID string, in CredentialInput
 }
 
 // reload re-reads a revision after a write.
-func (s *Service) reload(c *store.Conn, revID string, now time.Time) (*Bundle, error) {
+func (s *Service) reload(c *store.TenantTx, revID string, now time.Time) (*Bundle, error) {
 	rev, err := c.Revision(revID)
 	if err != nil {
 		return nil, err
@@ -546,7 +546,7 @@ func (s *Service) itemFor(b *Bundle, itemID string) (*ItemEval, error) {
 }
 
 // Attest records an attestation for an item of the in-progress revision.
-func (s *Service) Attest(c *store.Conn, connID, itemID, note, actor string, now time.Time) (*Bundle, error) {
+func (s *Service) Attest(c *store.TenantTx, connID, itemID, note, actor string, now time.Time) (*Bundle, error) {
 	b, _, err := s.pendingBundle(c, connID, actor, now)
 	if err != nil {
 		return nil, err
@@ -597,7 +597,7 @@ func printableNote(s string) bool {
 
 // Skip records a reasoned skip of a Recommended item. Required items cannot
 // be skipped (422 required_item_not_skippable).
-func (s *Service) Skip(c *store.Conn, connID, itemID, reason string, reviewBy *time.Time, actor string, now time.Time) (*Bundle, error) {
+func (s *Service) Skip(c *store.TenantTx, connID, itemID, reason string, reviewBy *time.Time, actor string, now time.Time) (*Bundle, error) {
 	b, _, err := s.pendingBundle(c, connID, actor, now)
 	if err != nil {
 		return nil, err
@@ -645,7 +645,7 @@ func (s *Service) Skip(c *store.Conn, connID, itemID, reason string, reviewBy *t
 }
 
 // Unskip removes a skip.
-func (s *Service) Unskip(c *store.Conn, connID, itemID, actor string, now time.Time) (*Bundle, error) {
+func (s *Service) Unskip(c *store.TenantTx, connID, itemID, actor string, now time.Time) (*Bundle, error) {
 	b, _, err := s.pendingBundle(c, connID, actor, now)
 	if err != nil {
 		return nil, err
@@ -691,7 +691,7 @@ func decodeOverlay(raw []byte) (*template.Overlay, error) {
 // PutOverlay stores a new tenant overlay version for a template after
 // checking it against the no-downgrade rule (422 level_downgrade_forbidden).
 // New revisions pin the new version; existing revisions keep theirs.
-func (s *Service) PutOverlay(c *store.Conn, templateID string, raw []byte, actor string, now time.Time) (*template.Resolved, error) {
+func (s *Service) PutOverlay(c *store.TenantTx, templateID string, raw []byte, actor string, now time.Time) (*template.Resolved, error) {
 	t, ok := s.Templates.Get(templateID)
 	if !ok {
 		return nil, notFound("no readiness template %q", templateID)
@@ -733,7 +733,7 @@ func (s *Service) PutOverlay(c *store.Conn, templateID string, raw []byte, actor
 }
 
 // TemplateForTenant returns a template with the tenant's latest overlay applied.
-func (s *Service) TemplateForTenant(c *store.Conn, templateID string) (*template.Resolved, error) {
+func (s *Service) TemplateForTenant(c *store.TenantTx, templateID string) (*template.Resolved, error) {
 	t, ok := s.Templates.Get(templateID)
 	if !ok {
 		return nil, notFound("no readiness template %q", templateID)

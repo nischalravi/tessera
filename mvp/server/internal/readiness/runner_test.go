@@ -21,7 +21,7 @@ import (
 func readyAD(t *testing.T, s *Service, st *store.Store, name string, cfg string) string {
 	t.Helper()
 	var id string
-	write(t, st, func(c *store.Conn) error {
+	write(t, st, func(c *store.TenantTx) error {
 		if cfg == "" {
 			cfg = `{}`
 		}
@@ -79,7 +79,7 @@ func TestValidate_GapsScenarioAndSimulatedFix(t *testing.T) {
 		t.Fatalf("state after failing validation: %s", got)
 	}
 	// Apply the simulated fix (the scenario toggle), re-run: validated.
-	write(t, st, func(c *store.Conn) error {
+	write(t, st, func(c *store.TenantTx) error {
 		_, err := s.PatchConfig(c, id, []byte(`{"demo_fixed_checks":["range_retrieval"]}`), "admin", t0)
 		return err
 	})
@@ -95,7 +95,7 @@ func TestValidate_GapsScenarioAndSimulatedFix(t *testing.T) {
 	}
 	// Draft connections cannot be validated.
 	var draft string
-	write(t, st, func(c *store.Conn) error {
+	write(t, st, func(c *store.TenantTx) error {
 		b, err := s.Create(c, CreateInput{Name: "draft", ConnectorType: "demo-ad", System: "draft"}, "admin", t0)
 		draft = b.Conn.ID
 		return err
@@ -214,7 +214,7 @@ func TestRunner_ConfigHashStale(t *testing.T) {
 	st, s := newStore(t), newSvc(t)
 	id := validated(t, s, st, "AD stale")
 	var runID string
-	write(t, st, func(c *store.Conn) error {
+	write(t, st, func(c *store.TenantTx) error {
 		b, err := s.Current(c, id, t0)
 		runID = b.Evidence.LiveRun.ID
 		if err != nil {
@@ -231,7 +231,7 @@ func TestRunner_ConfigHashStale(t *testing.T) {
 		return nil
 	})
 	// The host backs the TLS evidence: editing it makes that evidence stale.
-	write(t, st, func(c *store.Conn) error {
+	write(t, st, func(c *store.TenantTx) error {
 		res, err := s.PatchConfig(c, id, []byte(`{"host":"dc07.corp.larkspur.example"}`), "admin", t0)
 		if err != nil {
 			return err
@@ -261,7 +261,7 @@ func TestRunner_LiveTTL(t *testing.T) {
 	st, s := newStore(t), newSvc(t)
 	id := validated(t, s, st, "AD ttl")
 	later := t0.Add(25 * time.Hour)
-	err := st.Write(context.Background(), func(c *store.Conn) error {
+	err := st.Write(context.Background(), func(c *store.TenantTx) error {
 		_, err := s.Transition(c, id, store.StateDryRunReconciled, "admin", later)
 		return err
 	})
@@ -294,7 +294,7 @@ func TestRunner_OneRunAtATimeAndRateLimit(t *testing.T) {
 	st, s := newStore(t), newSvc(t)
 	id := readyAD(t, s, st, "AD rate", "")
 	// a run left running blocks the next one
-	write(t, st, func(c *store.Conn) error {
+	write(t, st, func(c *store.TenantTx) error {
 		b, err := s.Current(c, id, t0)
 		if err != nil {
 			return err

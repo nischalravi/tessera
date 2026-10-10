@@ -32,7 +32,7 @@ func newSvc(t *testing.T) *Service {
 	return NewService(template.MustDefault(), "")
 }
 
-func write(t *testing.T, st *store.Store, fn func(c *store.Conn) error) {
+func write(t *testing.T, st *store.Store, fn func(c *store.TenantTx) error) {
 	t.Helper()
 	if err := st.Write(context.Background(), fn); err != nil {
 		t.Fatal(err)
@@ -51,7 +51,7 @@ type fakeEvidence struct {
 }
 
 func (f *fakeEvidence) install(s *Service) {
-	s.extraEvidence = func(c *store.Conn, rev *store.ConnectionRevision, ev *Evidence) {
+	s.extraEvidence = func(c *store.TenantTx, rev *store.ConnectionRevision, ev *Evidence) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		if !f.on {
@@ -98,7 +98,7 @@ var adAttestations = []string{"base.owner", "base.correlation.key", "base.scope.
 func createAD(t *testing.T, s *Service, st *store.Store, name string) string {
 	t.Helper()
 	var id string
-	write(t, st, func(c *store.Conn) error {
+	write(t, st, func(c *store.TenantTx) error {
 		b, err := s.Create(c, CreateInput{Name: name, ConnectorType: "demo-ad", System: strings.ToLower(strings.ReplaceAll(name, " ", "-")),
 			Config: json.RawMessage(`{"technical_owner":"Ingrid Lindqvist","business_owner":"Thandiwe Mokoena"}`)}, "admin", t0)
 		if err != nil {
@@ -114,7 +114,7 @@ func createAD(t *testing.T, s *Service, st *store.Store, name string) string {
 // readyToActivate drives a demo AD connection to dry_run_reconciled.
 func readyToActivate(t *testing.T, s *Service, st *store.Store, id string) {
 	t.Helper()
-	write(t, st, func(c *store.Conn) error {
+	write(t, st, func(c *store.TenantTx) error {
 		for _, item := range adAttestations {
 			if _, err := s.Attest(c, id, item, "checked in the console", "admin", t0); err != nil {
 				return err
@@ -181,28 +181,28 @@ func TestStateMachine_AllTransitions(t *testing.T) {
 	// complete, so only the state decides.
 	type action struct {
 		name string
-		run  func(s *Service, c *store.Conn, id string) error
+		run  func(s *Service, c *store.TenantTx, id string) error
 	}
 	actions := []action{
-		{"to_ready", func(s *Service, c *store.Conn, id string) error {
+		{"to_ready", func(s *Service, c *store.TenantTx, id string) error {
 			_, err := s.Transition(c, id, store.StateReadyToValidate, "admin", t0)
 			return err
 		}},
-		{"to_reconciled", func(s *Service, c *store.Conn, id string) error {
+		{"to_reconciled", func(s *Service, c *store.TenantTx, id string) error {
 			_, err := s.Transition(c, id, store.StateDryRunReconciled, "admin", t0)
 			return err
 		}},
-		{"to_active_via_transition", func(s *Service, c *store.Conn, id string) error {
+		{"to_active_via_transition", func(s *Service, c *store.TenantTx, id string) error {
 			_, err := s.Transition(c, id, store.StateActive, "admin", t0)
 			return err
 		}},
-		{"activate", func(s *Service, c *store.Conn, id string) error {
+		{"activate", func(s *Service, c *store.TenantTx, id string) error {
 			_, _, err := s.Activate(c, id, "admin", t0)
 			return err
 		}},
-		{"retire", func(s *Service, c *store.Conn, id string) error { return s.Retire(c, id, "admin", t0) }},
-		{"degrade", func(s *Service, c *store.Conn, id string) error { return s.Degrade(c, id, "test", t0) }},
-		{"recover", func(s *Service, c *store.Conn, id string) error { return s.Recover(c, id, "test", t0) }},
+		{"retire", func(s *Service, c *store.TenantTx, id string) error { return s.Retire(c, id, "admin", t0) }},
+		{"degrade", func(s *Service, c *store.TenantTx, id string) error { return s.Degrade(c, id, "test", t0) }},
+		{"recover", func(s *Service, c *store.TenantTx, id string) error { return s.Recover(c, id, "test", t0) }},
 	}
 	// want[state][action] is "" (allowed) or the error code.
 	want := map[string]map[string]string{
@@ -235,7 +235,7 @@ func TestStateMachine_AllTransitions(t *testing.T) {
 			t.Run(from+"/"+a.name, func(t *testing.T) {
 				id := createAD(t, s, st, "AD "+from+" "+strings.ReplaceAll(a.name, "_", " "))
 				driveTo(t, s, st, id, from)
-				err := st.Write(context.Background(), func(c *store.Conn) error { return a.run(s, c, id) })
+				err := st.Write(context.Background(), func(c *store.TenantTx) error { return a.run(s, c, id) })
 				if got := codeOf(err); got != want[from][a.name] {
 					t.Fatalf("%s from %s: got %q, want %q", a.name, from, got, want[from][a.name])
 				}
@@ -250,7 +250,7 @@ func driveTo(t *testing.T, s *Service, st *store.Store, id, target string) {
 	order := []string{"draft", "ready_to_validate", "validated", "dry_run_reconciled", "active"}
 	if target == "degraded" || target == "retired" {
 		driveTo(t, s, st, id, "active")
-		write(t, st, func(c *store.Conn) error {
+		write(t, st, func(c *store.TenantTx) error {
 			if target == "degraded" {
 				return s.Degrade(c, id, "test", t0)
 			}
@@ -259,7 +259,7 @@ func driveTo(t *testing.T, s *Service, st *store.Store, id, target string) {
 		return
 	}
 	n := slices.Index(order, target)
-	write(t, st, func(c *store.Conn) error {
+	write(t, st, func(c *store.TenantTx) error {
 		for _, item := range adAttestations {
 			if _, err := s.Attest(c, id, item, "checked in the console", "admin", t0); err != nil {
 				return err
@@ -269,7 +269,7 @@ func driveTo(t *testing.T, s *Service, st *store.Store, id, target string) {
 		return err
 	})
 	for i := 1; i <= n; i++ {
-		write(t, st, func(c *store.Conn) error {
+		write(t, st, func(c *store.TenantTx) error {
 			switch order[i] {
 			case "ready_to_validate":
 				_, err := s.Transition(c, id, store.StateReadyToValidate, "admin", t0)
@@ -477,7 +477,7 @@ func TestDependencies_BlockAndApplicability(t *testing.T) {
 func TestSkipRules(t *testing.T) {
 	st, s := newStore(t), newSvc(t)
 	id := createAD(t, s, st, "AD skip")
-	err := st.Write(context.Background(), func(c *store.Conn) error {
+	err := st.Write(context.Background(), func(c *store.TenantTx) error {
 		_, err := s.Skip(c, id, "ad.bind", "We will fix this after go-live, promise", nil, "admin", t0)
 		return err
 	})
@@ -485,7 +485,7 @@ func TestSkipRules(t *testing.T) {
 		t.Errorf("required skip: %v", err)
 	}
 	for _, reason := range []string{"", "too short", "nineteen characters"} {
-		err = st.Write(context.Background(), func(c *store.Conn) error {
+		err = st.Write(context.Background(), func(c *store.TenantTx) error {
 			_, err := s.Skip(c, id, "ad.tls.signing_cb", reason, nil, "admin", t0)
 			return err
 		})
@@ -493,7 +493,7 @@ func TestSkipRules(t *testing.T) {
 			t.Errorf("reason %q: %v", reason, err)
 		}
 	}
-	write(t, st, func(c *store.Conn) error {
+	write(t, st, func(c *store.TenantTx) error {
 		b, err := s.Skip(c, id, "ad.tls.signing_cb", "twenty characters ok", nil, "admin", t0)
 		if err != nil {
 			return err
@@ -523,7 +523,7 @@ func TestSkipRules(t *testing.T) {
 func TestConfigEdit_InvalidatesDependentItems(t *testing.T) {
 	st, s := newStore(t), newSvc(t)
 	id := createAD(t, s, st, "AD edit")
-	write(t, st, func(c *store.Conn) error {
+	write(t, st, func(c *store.TenantTx) error {
 		for _, item := range []string{"base.owner", "base.schedule", "ad.tls.signing_cb"} {
 			if _, err := s.Attest(c, id, item, "checked in the console", "admin", t0); err != nil {
 				return err
@@ -534,7 +534,7 @@ func TestConfigEdit_InvalidatesDependentItems(t *testing.T) {
 	})
 	patch := func(body string) *ConfigResult {
 		var res *ConfigResult
-		write(t, st, func(c *store.Conn) error {
+		write(t, st, func(c *store.TenantTx) error {
 			var err error
 			res, err = s.PatchConfig(c, id, []byte(body), "admin", t0)
 			return err
@@ -564,7 +564,7 @@ func TestConfigEdit_InvalidatesDependentItems(t *testing.T) {
 		t.Errorf("base.owner status %s", it.Status)
 	}
 	// Unknown fields (a password, say) are rejected.
-	err := st.Write(context.Background(), func(c *store.Conn) error {
+	err := st.Write(context.Background(), func(c *store.TenantTx) error {
 		_, err := s.PatchConfig(c, id, []byte(`{"password":"hunter2"}`), "admin", t0)
 		return err
 	})
@@ -585,7 +585,7 @@ func TestActiveEdit_CreatesRevision(t *testing.T) {
 		t.Fatalf("live %v pending %v err %v", live, pending, err)
 	}
 	var res *ConfigResult
-	write(t, st, func(c *store.Conn) error {
+	write(t, st, func(c *store.TenantTx) error {
 		res, err = s.PatchConfig(c, id, []byte(`{"stale_days":60}`), "admin", t0)
 		return err
 	})
@@ -621,7 +621,7 @@ func TestActivate_ConcurrentCAS(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				errs[i] = st.Write(context.Background(), func(c *store.Conn) error {
+				errs[i] = st.Write(context.Background(), func(c *store.TenantTx) error {
 					_, _, err := s.Activate(c, id, "admin", t0)
 					return err
 				})
@@ -630,7 +630,7 @@ func TestActivate_ConcurrentCAS(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errs[2] = st.Write(context.Background(), func(c *store.Conn) error {
+			errs[2] = st.Write(context.Background(), func(c *store.TenantTx) error {
 				_, err := s.PatchConfig(c, id, []byte(`{"host":"dc09.corp.larkspur.example"}`), "admin", t0)
 				return err
 			})
@@ -671,7 +671,7 @@ func TestSimulated_CannotGateRealTypes(t *testing.T) {
 	fe := &fakeEvidence{on: true, runAt: t0}
 	fe.install(s)
 	var id string
-	write(t, st, func(c *store.Conn) error {
+	write(t, st, func(c *store.TenantTx) error {
 		b, err := s.Create(c, CreateInput{Name: "Corp AD", ConnectorType: "ad", Config: json.RawMessage(
 			`{"host":"dc01.corp.example","base_dns":["DC=corp,DC=example"],"technical_owner":"A","business_owner":"B"}`)}, "admin", t0)
 		if err != nil {
@@ -714,7 +714,7 @@ func TestSimulated_CannotGateRealTypes(t *testing.T) {
 	})
 	// Outside dev, real types cannot be activated at all before DR-10.
 	s.Env = ""
-	err := st.Write(context.Background(), func(c *store.Conn) error {
+	err := st.Write(context.Background(), func(c *store.TenantTx) error {
 		_, _, err := s.Activate(c, id, "admin", t0)
 		return err
 	})
@@ -725,13 +725,13 @@ func TestSimulated_CannotGateRealTypes(t *testing.T) {
 
 func TestOverlay_RaisesLevelForNewRevisions(t *testing.T) {
 	st, s := newStore(t), newSvc(t)
-	write(t, st, func(c *store.Conn) error {
+	write(t, st, func(c *store.TenantTx) error {
 		_, err := s.PutOverlay(c, "ad", []byte(`{"raise_levels":{"ad.svc.no_interactive":"required"},
 			"add_items":[{"id":"custom.change_ticket","title":"Change ticket linked","category":"ownership","level":"required",
 			"why":"Auditors ask for it.","verify":[{"kind":"attestation"}],"remediation":{"hint":"Link the ticket."}}]}`), "admin", t0)
 		return err
 	})
-	err := st.Write(context.Background(), func(c *store.Conn) error {
+	err := st.Write(context.Background(), func(c *store.TenantTx) error {
 		_, err := s.PutOverlay(c, "ad", []byte(`{"raise_levels":{"ad.bind":"optional"}}`), "admin", t0)
 		return err
 	})

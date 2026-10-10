@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
+	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 )
 
 // Request validation that reproduces FastAPI/pydantic v2 semantics (lax
@@ -405,6 +406,8 @@ type params struct {
 	r    *http.Request
 	path map[string]string
 	errs []verr
+	// scope is set for phased routes only (see tenantMode).
+	scope readiness.Scope
 }
 
 func (p *params) query(name string) (string, bool) {

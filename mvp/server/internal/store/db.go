@@ -75,6 +75,10 @@ var tables = []string{
 	"tenants", "identities", "accounts", "groups", "resources", "permissions", "grant_edges", "secrets",
 	"agent_delegations", "usage_events", "access_requests", "review_campaigns", "review_items",
 	"hris_events", "audit_log",
+	// deployment readiness (schema/0201-0203)
+	"connections", "connection_revisions", "readiness_check_runs", "readiness_item_states", "readiness_attestations",
+	"readiness_skips", "readiness_overlays", "readiness_check_results", "recon_runs", "recon_findings", "readiness_scores",
+	"stg_identities", "stg_accounts", "stg_groups", "stg_memberships", "stg_attr_stats",
 }
 
 // DB owns the database handle. The *sql.DB is unexported and there is no

@@ -18,24 +18,28 @@ import (
 // refused transition, the gate report, instead of the FastAPI-compatible
 // shapes the parity-tested routes keep.
 
+// Every route except the OpenAPI document is tenant-scoped: it runs inside a
+// transaction of the request's tenant (read or write) and reaches it with
+// store.TxFrom, or, for the phased validation and dry-run routes, opens
+// transactions of that tenant through p.scope.
 func (s *Server) registerReadinessRoutes() {
 	G, P := http.MethodGet, http.MethodPost
-	s.handle(G, "/api/readiness/templates", s.rd(s.listTemplates))
-	s.handle(G, "/api/readiness/templates/{type}", s.rd(s.getTemplate))
-	s.handle(http.MethodPut, "/api/readiness/overlays/{type}", s.rd(s.putOverlay))
-	s.handle(G, "/api/readiness/openapi.json", s.readinessOpenAPI)
-	s.handle(G, "/api/connections", s.rd(s.listConnections))
-	s.handle(P, "/api/connections", s.rd(s.createConnection))
-	s.handle(G, "/api/connections/{id}", s.rd(s.getConnection))
-	s.handle(http.MethodPatch, "/api/connections/{id}/config", s.rd(s.patchConfig))
-	s.handle(http.MethodPut, "/api/connections/{id}/credential", s.rd(s.putCredential))
-	s.handle(G, "/api/connections/{id}/checklist", s.rd(s.getChecklist))
-	s.handle(P, "/api/connections/{id}/checklist/{item}/attest", s.rd(s.attestItem))
-	s.handle(P, "/api/connections/{id}/checklist/{item}/skip", s.rd(s.skipItem))
-	s.handle(http.MethodDelete, "/api/connections/{id}/checklist/{item}/skip", s.rd(s.unskipItem))
-	s.handle(P, "/api/connections/{id}/transition", s.rd(s.transition))
-	s.handle(P, "/api/connections/{id}/activate", s.rd(s.activate))
-	s.handle(P, "/api/connections/{id}/retire", s.rd(s.retire))
+	s.handle(G, "/api/readiness/templates", read, s.rd(s.listTemplates))
+	s.handle(G, "/api/readiness/templates/{type}", read, s.rd(s.getTemplate))
+	s.handle(http.MethodPut, "/api/readiness/overlays/{type}", write, s.rd(s.putOverlay))
+	s.handle(G, "/api/readiness/openapi.json", noTenant, s.readinessOpenAPI)
+	s.handle(G, "/api/connections", read, s.rd(s.listConnections))
+	s.handle(P, "/api/connections", write, s.rd(s.createConnection))
+	s.handle(G, "/api/connections/{id}", read, s.rd(s.getConnection))
+	s.handle(http.MethodPatch, "/api/connections/{id}/config", write, s.rd(s.patchConfig))
+	s.handle(http.MethodPut, "/api/connections/{id}/credential", write, s.rd(s.putCredential))
+	s.handle(G, "/api/connections/{id}/checklist", read, s.rd(s.getChecklist))
+	s.handle(P, "/api/connections/{id}/checklist/{item}/attest", write, s.rd(s.attestItem))
+	s.handle(P, "/api/connections/{id}/checklist/{item}/skip", write, s.rd(s.skipItem))
+	s.handle(http.MethodDelete, "/api/connections/{id}/checklist/{item}/skip", write, s.rd(s.unskipItem))
+	s.handle(P, "/api/connections/{id}/transition", write, s.rd(s.transition))
+	s.handle(P, "/api/connections/{id}/activate", write, s.rd(s.activate))
+	s.handle(P, "/api/connections/{id}/retire", write, s.rd(s.retire))
 	s.registerValidationRoutes()
 	s.registerDryRunRoutes()
 	s.registerHealthRoutes()
@@ -44,20 +48,16 @@ func (s *Server) registerReadinessRoutes() {
 // rdFunc is a readiness handler: it returns the status and body to send.
 type rdFunc func(r *http.Request, p *params) (int, any, error)
 
-// rd adapts a readiness handler, rendering *readiness.Error as JSON.
+// rd adapts a readiness handler. An error (including a *readiness.Error,
+// which writeError renders as JSON) rolls the tenant transaction back; the
+// body is written only after the transaction commits.
 func (s *Server) rd(fn rdFunc) handlerFunc {
-	return func(w http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	return func(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
 		status, body, err := fn(r, p)
-		var re *readiness.Error
-		if errors.As(err, &re) {
-			writeJSON(w, re.Status, readinessErrorBody(re))
-			return nil, nil
-		}
 		if err != nil {
 			return nil, err
 		}
-		writeJSON(w, status, body)
-		return nil, nil
+		return statusBody{status, body}, nil
 	}
 }
 
@@ -142,10 +142,9 @@ func itemID(p *params) (string, error) {
 	return id, nil
 }
 
-// write runs fn in a write transaction.
-func (s *Server) write(r *http.Request, fn func(c *store.Conn, now time.Time) error) error {
-	now := s.clock()
-	return s.store.Write(r.Context(), func(c *store.Conn) error { return fn(c, now) })
+// write runs fn in the request's tenant transaction (a write route).
+func (s *Server) write(r *http.Request, fn func(c *store.TenantTx, now time.Time) error) error {
+	return fn(store.TxFrom(r.Context()), s.clock())
 }
 
 // ---------------------------------------------------------------- templates
@@ -164,7 +163,7 @@ type templateSummary struct {
 }
 
 func (s *Server) listTemplates(r *http.Request, _ *params) (int, any, error) {
-	c := s.store.Read(r.Context())
+	c := store.TxFrom(r.Context())
 	out := []templateSummary{}
 	for _, id := range s.readiness.Templates.IDs() {
 		t, err := s.readiness.TemplateForTenant(c, id)
@@ -180,7 +179,7 @@ func (s *Server) listTemplates(r *http.Request, _ *params) (int, any, error) {
 }
 
 func (s *Server) getTemplate(r *http.Request, p *params) (int, any, error) {
-	t, err := s.readiness.TemplateForTenant(s.store.Read(r.Context()), p.path["type"])
+	t, err := s.readiness.TemplateForTenant(store.TxFrom(r.Context()), p.path["type"])
 	if err != nil {
 		return 0, nil, err
 	}
@@ -193,7 +192,7 @@ func (s *Server) putOverlay(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, errBodyUnreadable
 	}
 	var out any
-	err = s.write(r, func(c *store.Conn, now time.Time) error {
+	err = s.write(r, func(c *store.TenantTx, now time.Time) error {
 		t, err := s.readiness.PutOverlay(c, p.path["type"], raw, actor(r), now)
 		out = t
 		return err
@@ -216,7 +215,7 @@ type legacyConnection struct {
 }
 
 func (s *Server) listConnections(r *http.Request, _ *params) (int, any, error) {
-	c := s.store.Read(r.Context())
+	c := store.TxFrom(r.Context())
 	now := s.clock()
 	conns, err := c.Connections()
 	if err != nil {
@@ -252,7 +251,7 @@ func (s *Server) listConnections(r *http.Request, _ *params) (int, any, error) {
 	return http.StatusOK, out, nil
 }
 
-func (s *Server) connectionView(c *store.Conn, id string, now time.Time) (*readiness.ConnectionView, error) {
+func (s *Server) connectionView(c *store.TenantTx, id string, now time.Time) (*readiness.ConnectionView, error) {
 	v, _, err := s.readiness.View(c, id, now)
 	if err != nil {
 		return nil, err
@@ -266,7 +265,7 @@ func (s *Server) createConnection(r *http.Request, _ *params) (int, any, error) 
 		return 0, nil, err
 	}
 	var out any
-	err := s.write(r, func(c *store.Conn, now time.Time) error {
+	err := s.write(r, func(c *store.TenantTx, now time.Time) error {
 		b, err := s.readiness.Create(c, in, actor(r), now)
 		if err != nil {
 			return err
@@ -282,7 +281,7 @@ func (s *Server) getConnection(r *http.Request, p *params) (int, any, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	v, err := s.connectionView(s.store.Read(r.Context()), id, s.clock())
+	v, err := s.connectionView(store.TxFrom(r.Context()), id, s.clock())
 	return http.StatusOK, v, err
 }
 
@@ -296,7 +295,7 @@ func (s *Server) patchConfig(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, errBodyUnreadable
 	}
 	var out map[string]any
-	err = s.write(r, func(c *store.Conn, now time.Time) error {
+	err = s.write(r, func(c *store.TenantTx, now time.Time) error {
 		res, err := s.readiness.PatchConfig(c, id, raw, actor(r), now)
 		if err != nil {
 			return err
@@ -323,7 +322,7 @@ func (s *Server) putCredential(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, err
 	}
 	var out any
-	err = s.write(r, func(c *store.Conn, now time.Time) error {
+	err = s.write(r, func(c *store.TenantTx, now time.Time) error {
 		b, err := s.readiness.SetCredential(c, id, in, actor(r), now)
 		if err != nil {
 			return err
@@ -340,7 +339,7 @@ func (s *Server) getChecklist(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, err
 	}
 	now := s.clock()
-	b, err := s.readiness.Current(s.store.Read(r.Context()), id, now)
+	b, err := s.readiness.Current(store.TxFrom(r.Context()), id, now)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -348,7 +347,7 @@ func (s *Server) getChecklist(r *http.Request, p *params) (int, any, error) {
 }
 
 // checklistAfter runs a checklist mutation and returns the new checklist.
-func (s *Server) checklistAfter(r *http.Request, p *params, fn func(c *store.Conn, id, item string, now time.Time) (*readiness.Bundle, error)) (int, any, error) {
+func (s *Server) checklistAfter(r *http.Request, p *params, fn func(c *store.TenantTx, id, item string, now time.Time) (*readiness.Bundle, error)) (int, any, error) {
 	id, err := connID(p)
 	if err != nil {
 		return 0, nil, err
@@ -358,7 +357,7 @@ func (s *Server) checklistAfter(r *http.Request, p *params, fn func(c *store.Con
 		return 0, nil, err
 	}
 	var out any
-	err = s.write(r, func(c *store.Conn, now time.Time) error {
+	err = s.write(r, func(c *store.TenantTx, now time.Time) error {
 		b, err := fn(c, id, item, now)
 		if err != nil {
 			return err
@@ -376,7 +375,7 @@ func (s *Server) attestItem(r *http.Request, p *params) (int, any, error) {
 	if err := decodeBody(r, &in, false); err != nil {
 		return 0, nil, err
 	}
-	return s.checklistAfter(r, p, func(c *store.Conn, id, item string, now time.Time) (*readiness.Bundle, error) {
+	return s.checklistAfter(r, p, func(c *store.TenantTx, id, item string, now time.Time) (*readiness.Bundle, error) {
 		return s.readiness.Attest(c, id, item, in.Note, actor(r), now)
 	})
 }
@@ -397,7 +396,7 @@ func (s *Server) skipItem(r *http.Request, p *params) (int, any, error) {
 		}
 		review = &t
 	}
-	return s.checklistAfter(r, p, func(c *store.Conn, id, item string, now time.Time) (*readiness.Bundle, error) {
+	return s.checklistAfter(r, p, func(c *store.TenantTx, id, item string, now time.Time) (*readiness.Bundle, error) {
 		return s.readiness.Skip(c, id, item, in.Reason, review, actor(r), now)
 	})
 }
@@ -411,7 +410,7 @@ func parseDate(v string) (time.Time, error) {
 }
 
 func (s *Server) unskipItem(r *http.Request, p *params) (int, any, error) {
-	return s.checklistAfter(r, p, func(c *store.Conn, id, item string, now time.Time) (*readiness.Bundle, error) {
+	return s.checklistAfter(r, p, func(c *store.TenantTx, id, item string, now time.Time) (*readiness.Bundle, error) {
 		return s.readiness.Unskip(c, id, item, actor(r), now)
 	})
 }
@@ -428,7 +427,7 @@ func (s *Server) transition(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, err
 	}
 	var out any
-	err = s.write(r, func(c *store.Conn, now time.Time) error {
+	err = s.write(r, func(c *store.TenantTx, now time.Time) error {
 		if _, err := s.readiness.Transition(c, id, in.To, actor(r), now); err != nil {
 			return err
 		}
@@ -448,7 +447,7 @@ func (s *Server) activate(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, err
 	}
 	var out any
-	err = s.write(r, func(c *store.Conn, now time.Time) error {
+	err = s.write(r, func(c *store.TenantTx, now time.Time) error {
 		_, ac, err := s.readiness.Activate(c, id, actor(r), now)
 		if err != nil {
 			return err
@@ -477,7 +476,7 @@ func (s *Server) retire(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, badRequest("confirmation_required", `send {"confirm": true} to retire the connection`)
 	}
 	var out any
-	err = s.write(r, func(c *store.Conn, now time.Time) error {
+	err = s.write(r, func(c *store.TenantTx, now time.Time) error {
 		if err := s.readiness.Retire(c, id, actor(r), now); err != nil {
 			return err
 		}

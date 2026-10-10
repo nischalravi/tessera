@@ -54,7 +54,7 @@ type Snapshot struct {
 func (s *Snapshot) RunID() string { return s.ID }
 
 // LoadSnapshot reads a staged run.
-func LoadSnapshot(c *store.Conn, runID string, meta Meta) (*Snapshot, error) {
+func LoadSnapshot(c *store.TenantTx, runID string, meta Meta) (*Snapshot, error) {
 	s := &Snapshot{ID: runID, Meta: meta}
 	var err error
 	if s.Accounts, err = c.StagedAccounts(runID); err != nil {

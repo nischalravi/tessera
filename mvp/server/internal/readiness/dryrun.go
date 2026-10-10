@@ -20,7 +20,7 @@ import (
 
 // StageFunc writes a discovery result into the staging tables (ingest.Stage;
 // passed in because ingest depends on this package for ActiveConnection).
-type StageFunc func(c *store.Conn, runID, system string, res *connectors.DiscoveryResult) error
+type StageFunc func(c *store.TenantTx, runID, system string, res *connectors.DiscoveryResult) error
 
 // hrItems name the checklist item that maps the HR id, per template.
 var hrItems = map[string]string{"ad": "ad.key.employeeid", "ldap": "ldap.key.hr_id", "entra": "entra.key.employeeid",
@@ -60,12 +60,12 @@ func connectorFor(b *Bundle, now time.Time) (connectors.Connector, error) {
 // DryRun stages a snapshot of the connection's in-progress revision and
 // reconciles it (§6). It writes staging tables and reconciliation results
 // only; the live graph is untouched until activation.
-func (s *Service) DryRun(ctx context.Context, st *store.Store, connID, actor string, clock func() time.Time, stage StageFunc) (*DryRunView, error) {
+func (s *Service) DryRun(ctx context.Context, st Scope, connID, actor string, clock func() time.Time, stage StageFunc) (*DryRunView, error) {
 	start := clock()
 	var b *Bundle
 	var run *store.CheckRun
 	var cn connectors.Connector
-	err := st.Write(ctx, func(c *store.Conn) error {
+	err := st.Write(ctx, func(c *store.TenantTx) error {
 		conn, _, pending, err := Revisions(c, connID)
 		if err != nil {
 			return err
@@ -106,7 +106,7 @@ func (s *Service) DryRun(ctx context.Context, st *store.Store, connID, actor str
 		return nil, err
 	}
 	res, derr := cn.Discover(ctx)
-	err = st.Write(context.WithoutCancel(ctx), func(c *store.Conn) error {
+	err = st.Write(context.WithoutCancel(ctx), func(c *store.TenantTx) error {
 		now := clock()
 		if derr != nil {
 			if err := c.FinishCheckRun(run.ID, "aborted", now); err != nil {
@@ -122,7 +122,13 @@ func (s *Service) DryRun(ctx context.Context, st *store.Store, connID, actor str
 	if derr != nil {
 		return nil, fmt.Errorf("readiness: dry run discovery: %w", derr)
 	}
-	return s.DryRunView(st.Read(ctx), connID, run.ID, clock())
+	var v *DryRunView
+	err = st.Read(ctx, func(c *store.TenantTx) error {
+		var err error
+		v, err = s.DryRunView(c, connID, run.ID, clock())
+		return err
+	})
+	return v, err
 }
 
 // DryRunCounts are the staged object counts and correlation tiers.
@@ -142,7 +148,7 @@ type DryRunCounts struct {
 	CorrelatedPct int `json:"correlated_pct"`
 }
 
-func (s *Service) reconcileRun(c *store.Conn, b *Bundle, run *store.CheckRun, res *connectors.DiscoveryResult, actor string,
+func (s *Service) reconcileRun(c *store.TenantTx, b *Bundle, run *store.CheckRun, res *connectors.DiscoveryResult, actor string,
 	now time.Time, stage StageFunc) error {
 	m := meta(b, now)
 	attrs := slices.Concat(m.RequiredAttrs, m.RecommendedAttrs, []string{m.CorrelationKey, m.HRAttribute})
@@ -229,17 +235,20 @@ func (s *Service) reconcileRun(c *store.Conn, b *Bundle, run *store.CheckRun, re
 // liveContext loads the authoritative people (the live HR identities), how
 // many enabled accounts each has in other systems, the owned non-human
 // identities, and tier-2 links from other live connections.
-func liveContext(c *store.Conn, system string) (reconcile.Input, []reconcile.LiveLink, error) {
+func liveContext(c *store.TenantTx, system string) (reconcile.Input, []reconcile.LiveLink, error) {
 	in := reconcile.Input{People: map[int64]reconcile.Person{}, Elsewhere: map[int64]int{}}
-	people, err := c.Identities("WHERE type = 'human'")
+	people, err := c.Identities()
 	if err != nil {
 		return in, nil, err
 	}
 	for _, p := range people {
+		if p.Type != "human" {
+			continue
+		}
 		in.People[p.ID] = reconcile.Person{ID: p.ID, ExternalID: p.ExternalID, Name: p.Name, Email: deref(p.Email),
 			Status: p.Status, Department: deref(p.Department), Title: deref(p.Title), TerminatedAt: tsPtr(p.TerminatedAt)}
 	}
-	accts, err := c.Accounts("")
+	accts, err := c.Accounts()
 	if err != nil {
 		return in, nil, err
 	}
@@ -312,7 +321,7 @@ func countsOf(snap *reconcile.Snapshot) DryRunCounts {
 // in the next run when the same finding (code and variant) is found again
 // and its acceptance has not expired; findings of the previous run that
 // are no longer found are resolved (§6.6).
-func (s *Service) storeFindings(c *store.Conn, connID, runID string, fs []reconcile.Finding, now time.Time) error {
+func (s *Service) storeFindings(c *store.TenantTx, connID, runID string, fs []reconcile.Finding, now time.Time) error {
 	prev, err := c.PreviousFindings(connID, runID)
 	if err != nil {
 		return err
@@ -369,7 +378,7 @@ func (s *Service) storeFindings(c *store.Conn, connID, runID string, fs []reconc
 
 // writeDataResults evaluates every applicable data check over the snapshot
 // and replaces the run's results.
-func (s *Service) writeDataResults(c *store.Conn, b *Bundle, run *store.CheckRun, snap *reconcile.Snapshot, now time.Time) error {
+func (s *Service) writeDataResults(c *store.TenantTx, b *Bundle, run *store.CheckRun, snap *reconcile.Snapshot, now time.Time) error {
 	if err := c.DeleteCheckResults(run.ID); err != nil {
 		return err
 	}
@@ -402,7 +411,7 @@ func (s *Service) writeDataResults(c *store.Conn, b *Bundle, run *store.CheckRun
 }
 
 // loadFindings loads a dry run's findings into the evidence.
-func loadFindings(c *store.Conn, runID string, ev *Evidence) error {
+func loadFindings(c *store.TenantTx, runID string, ev *Evidence) error {
 	fs, err := c.RunFindings(runID)
 	if err != nil {
 		return err
@@ -420,7 +429,7 @@ const MinAcceptReason = 20
 // AcceptFinding accepts an open finding of the connection's latest dry run
 // with a reason, then re-evaluates the data checks that read finding status.
 // Accepting a critical finding will additionally need step-up (DR-10).
-func (s *Service) AcceptFinding(c *store.Conn, connID, findingID, reason string, expires *time.Time, actor string, now time.Time) (*store.Finding, error) {
+func (s *Service) AcceptFinding(c *store.TenantTx, connID, findingID, reason string, expires *time.Time, actor string, now time.Time) (*store.Finding, error) {
 	f, err := c.FindingByID(findingID)
 	if errors.Is(err, store.ErrNotFound) || (err == nil && f.ConnectionID != connID) {
 		return nil, notFound("no finding %s for this connection", findingID)

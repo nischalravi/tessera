@@ -12,13 +12,13 @@ import (
 )
 
 func (s *Server) registerDryRunRoutes() {
-	s.handle(http.MethodPost, "/api/connections/{id}/dry-run", s.rd(s.dryRun))
-	s.handle(http.MethodGet, "/api/connections/{id}/dry-runs/{run}", s.rd(s.getDryRun))
-	s.handle(http.MethodGet, "/api/connections/{id}/findings", s.rd(s.listFindings))
-	s.handle(http.MethodPost, "/api/connections/{id}/findings/{fid}/accept", s.rd(s.acceptFinding))
+	s.handle(http.MethodPost, "/api/connections/{id}/dry-run", phased, s.rd(s.dryRun))
+	s.handle(http.MethodGet, "/api/connections/{id}/dry-runs/{run}", read, s.rd(s.getDryRun))
+	s.handle(http.MethodGet, "/api/connections/{id}/findings", read, s.rd(s.listFindings))
+	s.handle(http.MethodPost, "/api/connections/{id}/findings/{fid}/accept", write, s.rd(s.acceptFinding))
 }
 
-func stage(c *store.Conn, runID, system string, res *connectors.DiscoveryResult) error {
+func stage(c *store.TenantTx, runID, system string, res *connectors.DiscoveryResult) error {
 	_, err := ingest.Stage(c, runID, system, res)
 	return err
 }
@@ -32,7 +32,7 @@ func (s *Server) dryRun(r *http.Request, p *params) (int, any, error) {
 	if err := decodeBody(r, &struct{}{}, true); err != nil {
 		return 0, nil, err
 	}
-	v, err := s.readiness.DryRun(r.Context(), s.store, id, actor(r), s.clock, stage)
+	v, err := s.readiness.DryRun(r.Context(), p.scope, id, actor(r), s.clock, stage)
 	return http.StatusAccepted, v, err
 }
 
@@ -45,7 +45,7 @@ func (s *Server) getDryRun(r *http.Request, p *params) (int, any, error) {
 	if !runIDRE.MatchString(run) {
 		return 0, nil, badRequest("not_found", "no such dry run")
 	}
-	v, err := s.readiness.DryRunView(s.store.Read(r.Context()), id, run, s.clock())
+	v, err := s.readiness.DryRunView(store.TxFrom(r.Context()), id, run, s.clock())
 	return http.StatusOK, v, err
 }
 
@@ -62,7 +62,7 @@ func (s *Server) listFindings(r *http.Request, p *params) (int, any, error) {
 	if (f.RunID != "" && !runIDRE.MatchString(f.RunID)) || !severityNames[f.Severity] || !findingStatuses[f.Status] || len(f.Code) > 8 {
 		return 0, nil, badRequest("invalid_filter", "run must be a run id, severity critical|high|medium|low|info, status open|accepted|resolved")
 	}
-	v, err := s.readiness.Findings(s.store.Read(r.Context()), id, f, s.clock())
+	v, err := s.readiness.Findings(store.TxFrom(r.Context()), id, f, s.clock())
 	return http.StatusOK, v, err
 }
 
@@ -91,7 +91,7 @@ func (s *Server) acceptFinding(r *http.Request, p *params) (int, any, error) {
 		exp = &t
 	}
 	var out any
-	err = s.write(r, func(c *store.Conn, now time.Time) error {
+	err = s.write(r, func(c *store.TenantTx, now time.Time) error {
 		f, err := s.readiness.AcceptFinding(c, id, fid, in.Reason, exp, actor(r), now)
 		if err != nil {
 			return err
@@ -105,7 +105,7 @@ func (s *Server) acceptFinding(r *http.Request, p *params) (int, any, error) {
 // firstSync runs the normal first sync of a just-activated connection
 // inside the activation transaction (§6.1): only an ActiveConnection, which
 // only package readiness can construct, reaches the live graph.
-func (s *Server) firstSync(_ *http.Request, c *store.Conn, ac readiness.ActiveConnection, now time.Time) error {
+func (s *Server) firstSync(_ *http.Request, c *store.TenantTx, ac readiness.ActiveConnection, now time.Time) error {
 	if _, ok := connectors.DemoConnectorFor(ac.ConnectorType(), now); !ok {
 		return c.Audit(now, "system", "connection.first_sync_skipped", ojson.Object{{Key: "connection_id", Value: ac.ConnectionID()},
 			{Key: "reason", Value: "no live connector for " + ac.ConnectorType() + " yet (DR-12 to DR-18)"}})

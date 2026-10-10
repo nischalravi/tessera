@@ -7,18 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 )
 
 // Deployment-readiness rows (design §8). New tables use UUID text keys,
-// RFC 3339 UTC timestamps and carry tenant_id.
-
-// TenantID identifies a tenant. It is a string alias until the tenancy
-// package (Phase 0 PR1, #5) introduces tenancy.ID.
-type TenantID = string
-
-// DefaultTenantID is the fixed id of the single MVP tenant. Phase 0 PR1
-// migrates these rows to real tenants and removes the column default.
-const DefaultTenantID TenantID = "00000000-0000-0000-0000-000000000002"
+// RFC 3339 UTC timestamps and carry tenant_id; they are reached only through
+// a *TenantTx like every other tenant table.
 
 // Revision states (§4.1).
 const (
@@ -79,7 +74,8 @@ var ErrDuplicate = errors.New("store: duplicate")
 
 // Connection is a governed customer system (design K1).
 type Connection struct {
-	ID, TenantID     string
+	ID               string
+	TenantID         tenancy.ID // zero on insert means "this transaction's tenant"
 	Name             string
 	ConnectorType    string
 	System           string
@@ -96,7 +92,8 @@ type Connection struct {
 
 // ConnectionRevision is one configuration of a connection and its lifecycle state.
 type ConnectionRevision struct {
-	ID, TenantID    string
+	ID              string
+	TenantID        tenancy.ID // zero on insert means "this transaction's tenant"
 	ConnectionID    string
 	Rev             int
 	State           string

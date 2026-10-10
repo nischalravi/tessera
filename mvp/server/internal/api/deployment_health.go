@@ -16,15 +16,15 @@ import (
 // scores, needs-attention, skipped items, and on-demand re-runs.
 
 func (s *Server) registerHealthRoutes() {
-	s.handle(http.MethodGet, "/api/insights/deployment-health", s.rd(s.deploymentHealth))
-	s.handle(http.MethodPost, "/api/insights/deployment-health/rerun", s.rd(s.rerunHealth))
-	s.handle(http.MethodGet, "/api/connections/{id}/health", s.rd(s.connectionHealth))
+	s.handle(http.MethodGet, "/api/insights/deployment-health", read, s.rd(s.deploymentHealth))
+	s.handle(http.MethodPost, "/api/insights/deployment-health/rerun", phased, s.rd(s.rerunHealth))
+	s.handle(http.MethodGet, "/api/connections/{id}/health", read, s.rd(s.connectionHealth))
 }
 
 // legacyHR names an env-configured HR connector that is not governed by a
 // connection yet (the demo's Workday feed). It counts as the authoritative
 // HR source for the tenant score until it is governed.
-func (s *Server) legacyHR(c *store.Conn, now time.Time) (string, error) {
+func (s *Server) legacyHR(c *store.TenantTx, now time.Time) (string, error) {
 	legacy, err := s.cfg.Connectors(now)
 	if err != nil {
 		return "", err
@@ -50,7 +50,7 @@ func (s *Server) legacyHR(c *store.Conn, now time.Time) (string, error) {
 	return "", nil
 }
 
-func (s *Server) dashboard(c *store.Conn, now time.Time) (*readiness.Dashboard, error) {
+func (s *Server) dashboard(c *store.TenantTx, now time.Time) (*readiness.Dashboard, error) {
 	hr, err := s.legacyHR(c, now)
 	if err != nil {
 		return nil, err
@@ -59,7 +59,7 @@ func (s *Server) dashboard(c *store.Conn, now time.Time) (*readiness.Dashboard, 
 }
 
 func (s *Server) deploymentHealth(r *http.Request, _ *params) (int, any, error) {
-	d, err := s.dashboard(s.store.Read(r.Context()), s.clock())
+	d, err := s.dashboard(store.TxFrom(r.Context()), s.clock())
 	return http.StatusOK, d, err
 }
 
@@ -68,7 +68,7 @@ func (s *Server) connectionHealth(r *http.Request, p *params) (int, any, error) 
 	if err != nil {
 		return 0, nil, err
 	}
-	v, err := s.readiness.Health(s.store.Read(r.Context()), id, s.clock())
+	v, err := s.readiness.Health(store.TxFrom(r.Context()), id, s.clock())
 	return http.StatusOK, v, err
 }
 
@@ -82,16 +82,22 @@ type rerunResult struct {
 }
 
 // rerunHealth re-runs the live checks of every connection that is ready to
-// validate or later (and, with reconcile, the dry run of those in setup).
-func (s *Server) rerunHealth(r *http.Request, _ *params) (int, any, error) {
+// validate or later (and, with reconcile, the dry run of those in setup). It
+// is a phased route: each run commits in its own transactions of the
+// request's tenant (p.scope).
+func (s *Server) rerunHealth(r *http.Request, p *params) (int, any, error) {
 	var in struct {
 		Reconcile bool `json:"reconcile"`
 	}
 	if err := decodeBody(r, &in, true); err != nil {
 		return 0, nil, err
 	}
-	conns, err := s.store.Read(r.Context()).Connections()
-	if err != nil {
+	var conns []*store.Connection
+	if err := p.scope.Read(r.Context(), func(c *store.TenantTx) error {
+		var err error
+		conns, err = c.Connections()
+		return err
+	}); err != nil {
 		return 0, nil, err
 	}
 	out := []rerunResult{}
@@ -100,7 +106,7 @@ func (s *Server) rerunHealth(r *http.Request, _ *params) (int, any, error) {
 			continue
 		}
 		res := rerunResult{ConnectionID: conn.ID, Name: conn.Name}
-		v, err := s.readiness.Validate(r.Context(), s.store, conn.ID, actor(r), s.clock)
+		v, err := s.readiness.Validate(r.Context(), p.scope, conn.ID, actor(r), s.clock)
 		var re *readiness.Error
 		switch {
 		case errors.As(err, &re):
@@ -111,7 +117,7 @@ func (s *Server) rerunHealth(r *http.Request, _ *params) (int, any, error) {
 			res.ValidationID = &v.ID
 		}
 		if in.Reconcile && err == nil {
-			dr, err := s.readiness.DryRun(r.Context(), s.store, conn.ID, actor(r), s.clock, stage)
+			dr, err := s.readiness.DryRun(r.Context(), p.scope, conn.ID, actor(r), s.clock, stage)
 			switch {
 			case errors.As(err, &re):
 				if res.Skipped == "" {
@@ -126,7 +132,8 @@ func (s *Server) rerunHealth(r *http.Request, _ *params) (int, any, error) {
 		out = append(out, res)
 	}
 	var d *readiness.Dashboard
-	err = s.write(r, func(c *store.Conn, now time.Time) error {
+	err := p.scope.Write(r.Context(), func(c *store.TenantTx) error {
+		now := s.clock()
 		var err error
 		if d, err = s.dashboard(c, now); err != nil {
 			return err
@@ -148,7 +155,7 @@ func (s *Server) rerunHealth(r *http.Request, _ *params) (int, any, error) {
 }
 
 // attachScore adds the connection readiness score to a connection view.
-func (s *Server) attachScore(c *store.Conn, v *readiness.ConnectionView, now time.Time) error {
+func (s *Server) attachScore(c *store.TenantTx, v *readiness.ConnectionView, now time.Time) error {
 	h, err := s.readiness.Health(c, v.ID, now)
 	if err != nil {
 		var re *readiness.Error
@@ -163,7 +170,7 @@ func (s *Server) attachScore(c *store.Conn, v *readiness.ConnectionView, now tim
 
 // readinessSummary is the /api/summary?include=readiness block for the Home card.
 func (s *Server) readinessSummary(ctx context.Context, now time.Time) (ojson.Object, error) {
-	d, err := s.dashboard(s.store.Read(ctx), now)
+	d, err := s.dashboard(store.TxFrom(ctx), now)
 	if err != nil {
 		return nil, err
 	}

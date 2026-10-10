@@ -20,7 +20,7 @@ type StageStats struct {
 // runID (design §6.1). It writes only stg_* tables; nothing here touches the
 // live graph, and no code path copies staged rows into live tables
 // (TestStage_NoLiveWrites). Only the connection's own system is staged.
-func Stage(c *store.Conn, runID, system string, res *connectors.DiscoveryResult) (StageStats, error) {
+func Stage(c *store.TenantTx, runID, system string, res *connectors.DiscoveryResult) (StageStats, error) {
 	var st StageStats
 	for _, x := range res.Identities {
 		attrs := map[string]string{}
@@ -99,7 +99,7 @@ func Stage(c *store.Conn, runID, system string, res *connectors.DiscoveryResult)
 // The sync is additive (no edge pruning: other connections' edges stay), and
 // memberships in groups outside the connection's scope are left out: the dry
 // run reported them (RF-05).
-func SyncActive(c *store.Conn, now time.Time, conns []readiness.ActiveConnection,
+func SyncActive(c *store.TenantTx, now time.Time, conns []readiness.ActiveConnection,
 	open func(readiness.ActiveConnection) (connectors.Connector, error)) (SyncStats, error) {
 	var out SyncStats
 	var results []*connectors.DiscoveryResult
@@ -109,7 +109,7 @@ func SyncActive(c *store.Conn, now time.Time, conns []readiness.ActiveConnection
 		if err != nil {
 			return out, fmt.Errorf("%s: %w", ac.Name(), err)
 		}
-		r, err := cn.Discover(c.Ctx)
+		r, err := cn.Discover(c.Context())
 		if err != nil {
 			return out, fmt.Errorf("%s: discover: %w", ac.Name(), err)
 		}
@@ -123,7 +123,7 @@ func SyncActive(c *store.Conn, now time.Time, conns []readiness.ActiveConnection
 	out.Discovery = d
 	out.Events, err = Events(c, func(yield func(connectors.Event) error) error {
 		for _, cn := range cs {
-			if err := cn.StreamEvents(c.Ctx, nil, yield); err != nil {
+			if err := cn.StreamEvents(c.Context(), nil, yield); err != nil {
 				return fmt.Errorf("%s: events: %w", cn.System(), err)
 			}
 		}

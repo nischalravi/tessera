@@ -129,7 +129,7 @@ func nextStep(state string) (to, action string) {
 
 // View renders a connection. current is the revision the checklist shows
 // (in-progress if any, else live); live is the live revision, if different.
-func (s *Service) View(c *store.Conn, connID string, now time.Time) (*ConnectionView, *Bundle, error) {
+func (s *Service) View(c *store.TenantTx, connID string, now time.Time) (*ConnectionView, *Bundle, error) {
 	conn, live, pending, err := Revisions(c, connID)
 	if err != nil {
 		return nil, nil, err

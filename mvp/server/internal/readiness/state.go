@@ -45,7 +45,7 @@ var previous = map[string]string{
 
 // setState is the single place this package writes a revision state. It
 // compare-and-sets on (state, config hash, evidence sequence).
-func (s *Service) setState(c *store.Conn, b *Bundle, to string, report *GateReport, actor, reason string, now time.Time) error {
+func (s *Service) setState(c *store.TenantTx, b *Bundle, to string, report *GateReport, actor, reason string, now time.Time) error {
 	from := b.Rev.State
 	if !CanTransition(from, to) {
 		return conflict("invalid_transition", "%s cannot move from %s to %s", b.Conn.Name, from, to)
@@ -78,7 +78,7 @@ func (s *Service) setState(c *store.Conn, b *Bundle, to string, report *GateRepo
 // settle moves an in-progress revision back while the gate of its current
 // state no longer holds (config changed, attestation invalidated, evidence
 // expired), then stores the item states.
-func (s *Service) settle(c *store.Conn, b *Bundle, actor string, now time.Time, why string) error {
+func (s *Service) settle(c *store.TenantTx, b *Bundle, actor string, now time.Time, why string) error {
 	for IsPending(b.Rev.State) && b.Rev.State != store.StateDraft {
 		g := b.Gate(b.Rev.State, now)
 		if !g.Blocks() {
@@ -92,7 +92,7 @@ func (s *Service) settle(c *store.Conn, b *Bundle, actor string, now time.Time, 
 }
 
 // persist stores the evaluated item states for reporting.
-func (s *Service) persist(c *store.Conn, b *Bundle, now time.Time) error {
+func (s *Service) persist(c *store.TenantTx, b *Bundle, now time.Time) error {
 	states := make([]*store.ItemState, 0, len(b.Eval.Items))
 	for _, it := range b.Eval.Items {
 		st := &store.ItemState{RevisionID: b.Rev.ID, ItemID: it.ID, Level: string(it.Level), Status: it.Status,
@@ -128,7 +128,7 @@ func (s *Service) persist(c *store.Conn, b *Bundle, now time.Time) error {
 // Transition performs a user-requested forward step: draft →
 // ready_to_validate or validated → dry_run_reconciled. A refused step
 // returns 409 with the gate report.
-func (s *Service) Transition(c *store.Conn, connID, to, actor string, now time.Time) (*Bundle, error) {
+func (s *Service) Transition(c *store.TenantTx, connID, to, actor string, now time.Time) (*Bundle, error) {
 	if to != store.StateReadyToValidate && to != store.StateDryRunReconciled {
 		return nil, unprocessable("invalid_target", "to must be ready_to_validate or dry_run_reconciled; use /activate or /retire")
 	}
@@ -168,7 +168,7 @@ var requiredFrom = map[string]string{
 
 // advanceAfterValidation moves ready_to_validate → validated when the gate
 // holds after a validation run (the system transition of §4.2).
-func (s *Service) advanceAfterValidation(c *store.Conn, b *Bundle, actor string, now time.Time) error {
+func (s *Service) advanceAfterValidation(c *store.TenantTx, b *Bundle, actor string, now time.Time) error {
 	if err := s.settle(c, b, actor, now, "validation run"); err != nil {
 		return err
 	}
@@ -206,7 +206,7 @@ func (a ActiveConnection) Name() string { return a.name }
 
 // ActiveConnections lists the live connections (active or degraded: reads
 // continue while degraded, §7.5).
-func (s *Service) ActiveConnections(c *store.Conn) ([]ActiveConnection, error) {
+func (s *Service) ActiveConnections(c *store.TenantTx) ([]ActiveConnection, error) {
 	conns, err := c.Connections()
 	if err != nil {
 		return nil, err
@@ -229,7 +229,7 @@ func (s *Service) ActiveConnections(c *store.Conn) ([]ActiveConnection, error) {
 
 // CanWrite reports whether write-back may apply changes through a
 // connection: only an active (not degraded) revision in scoped write mode (§4.4).
-func (s *Service) CanWrite(c *store.Conn, connID string) (bool, error) {
+func (s *Service) CanWrite(c *store.TenantTx, connID string) (bool, error) {
 	_, live, _, err := Revisions(c, connID)
 	if err != nil || live == nil {
 		return false, err
@@ -239,7 +239,7 @@ func (s *Service) CanWrite(c *store.Conn, connID string) (bool, error) {
 
 // Activate re-evaluates every gate from stored evidence and, in one
 // transaction, swaps the in-progress revision in as the live one.
-func (s *Service) Activate(c *store.Conn, connID, actor string, now time.Time) (*Bundle, ActiveConnection, error) {
+func (s *Service) Activate(c *store.TenantTx, connID, actor string, now time.Time) (*Bundle, ActiveConnection, error) {
 	conn, live, pending, err := Revisions(c, connID)
 	if err != nil {
 		return nil, ActiveConnection{}, err
@@ -293,7 +293,7 @@ func (s *Service) Activate(c *store.Conn, connID, actor string, now time.Time) (
 // Retire retires a connection: its in-progress and live revisions move to
 // retired, and the connection stops syncing. Data already synced stays
 // read-only for the retention period.
-func (s *Service) Retire(c *store.Conn, connID, actor string, now time.Time) error {
+func (s *Service) Retire(c *store.TenantTx, connID, actor string, now time.Time) error {
 	conn, live, pending, err := Revisions(c, connID)
 	if err != nil {
 		return err
@@ -325,16 +325,16 @@ func (s *Service) Retire(c *store.Conn, connID, actor string, now time.Time) err
 
 // Degrade moves a live revision to degraded (system; the scheduled checks of
 // DR-9 call it). Reads continue; write-back stops (CanWrite is false).
-func (s *Service) Degrade(c *store.Conn, connID, reason string, now time.Time) error {
+func (s *Service) Degrade(c *store.TenantTx, connID, reason string, now time.Time) error {
 	return s.setLive(c, connID, store.StateActive, store.StateDegraded, "degraded", "connection.degraded", reason, now)
 }
 
 // Recover moves a degraded revision back to active once the cause cleared.
-func (s *Service) Recover(c *store.Conn, connID, reason string, now time.Time) error {
+func (s *Service) Recover(c *store.TenantTx, connID, reason string, now time.Time) error {
 	return s.setLive(c, connID, store.StateDegraded, store.StateActive, "ok", "connection.recovered", reason, now)
 }
 
-func (s *Service) setLive(c *store.Conn, connID, from, to, health, event, reason string, now time.Time) error {
+func (s *Service) setLive(c *store.TenantTx, connID, from, to, health, event, reason string, now time.Time) error {
 	conn, live, _, err := Revisions(c, connID)
 	if err != nil {
 		return err

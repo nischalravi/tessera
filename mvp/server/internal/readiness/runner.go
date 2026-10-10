@@ -101,12 +101,12 @@ type runResult struct {
 // Validate runs the live checks of a connection's in-progress revision (or
 // of its live revision, as a scheduled re-run). Checks run outside the
 // write lock; the run row is created before and finished after.
-func (s *Service) Validate(ctx context.Context, st *store.Store, connID, actor string, clock func() time.Time) (*RunView, error) {
+func (s *Service) Validate(ctx context.Context, st Scope, connID, actor string, clock func() time.Time) (*RunView, error) {
 	opts := s.Runner.withDefaults()
 	var b *Bundle
 	var run *store.CheckRun
 	start := clock()
-	err := st.Write(ctx, func(c *store.Conn) error {
+	err := st.Write(ctx, func(c *store.TenantTx) error {
 		conn, live, pending, err := Revisions(c, connID)
 		if err != nil {
 			return err
@@ -127,7 +127,7 @@ func (s *Service) Validate(ctx context.Context, st *store.Store, connID, actor s
 		if rev.State == store.StateDraft {
 			return blocked("not_ready_to_validate", b.Gate(store.StateReadyToValidate, start))
 		}
-		if running, err := c.RunningCheckRun(rev.ID, "validation", "scheduled"); err != nil {
+		if running, err := c.RunningLiveRun(rev.ID); err != nil {
 			return err
 		} else if running != nil {
 			e := conflict("validation_running", "validation run %s is still running", running.ID)
@@ -158,7 +158,7 @@ func (s *Service) Validate(ctx context.Context, st *store.Store, connID, actor s
 	}
 	results, status := s.execute(ctx, b, opts, start)
 	finish := clock()
-	err = st.Write(context.WithoutCancel(ctx), func(c *store.Conn) error {
+	err = st.Write(context.WithoutCancel(ctx), func(c *store.TenantTx) error {
 		passed, failed := 0, 0
 		for _, r := range results {
 			it, _ := b.Eval.Item(r.item)
@@ -202,7 +202,13 @@ func (s *Service) Validate(ctx context.Context, st *store.Store, connID, actor s
 	if err != nil {
 		return nil, err
 	}
-	return s.RunView(st.Read(ctx), connID, run.ID, clock())
+	var v *RunView
+	err = st.Read(ctx, func(c *store.TenantTx) error {
+		var err error
+		v, err = s.RunView(c, connID, run.ID, clock())
+		return err
+	})
+	return v, err
 }
 
 // execute runs every applicable live check in dependency order. A check
@@ -404,7 +410,7 @@ type RunView struct {
 }
 
 // RunView renders a check run of a connection.
-func (s *Service) RunView(c *store.Conn, connID, runID string, now time.Time) (*RunView, error) {
+func (s *Service) RunView(c *store.TenantTx, connID, runID string, now time.Time) (*RunView, error) {
 	run, err := c.CheckRun(runID)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, notFound("no run %s", runID)
