@@ -286,8 +286,8 @@ var readinessMutations = map[string]func(c *store.TenantTx, a, b refs) error{
 		}
 		return ignoreConflict(c.AcceptFinding(b["finding:ad"], "a", "accepted from the wrong tenant", nil))
 	},
-	"ResolveFinding":  func(c *store.TenantTx, _, b refs) error { return c.ResolveFinding(b["finding:ad"]) },
-	"PruneStaging":    func(c *store.TenantTx, _, b refs) error { return c.PruneStaging(b["revision:ad"], 0) },
+	"ResolveFinding": func(c *store.TenantTx, _, b refs) error { return c.ResolveFinding(b["finding:ad"]) },
+	"PruneStaging":   func(c *store.TenantTx, _, b refs) error { return c.PruneStaging(b["revision:ad"], 0) },
 	"SetStagedCorrelation": func(c *store.TenantTx, _, b refs) error {
 		return c.SetStagedCorrelation(b["run:ad-dry"], "ad-corp", "S-1", "uncorrelated", 0, nil, nil)
 	},
