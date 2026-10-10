@@ -18,7 +18,7 @@ import (
 )
 
 // readyAD creates a demo AD connection in ready_to_validate.
-func readyAD(t *testing.T, s *Service, st *store.Store, name string, cfg string) string {
+func readyAD(t *testing.T, s *Service, st Scope, name string, cfg string) string {
 	t.Helper()
 	var id string
 	write(t, st, func(c *store.TenantTx) error {
@@ -188,7 +188,7 @@ func TestRunner_DependencyBlocks(t *testing.T) {
 			t.Errorf("%s: %+v", it[0], r)
 		}
 	}
-	b, err := s.Current(st.Read(context.Background()), id, t0)
+	b, err := current(st, s, id, t0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +198,7 @@ func TestRunner_DependencyBlocks(t *testing.T) {
 	}
 }
 
-func validated(t *testing.T, s *Service, st *store.Store, name string) string {
+func validated(t *testing.T, s *Service, st Scope, name string) string {
 	t.Helper()
 	id := readyAD(t, s, st, name, `{"demo_fixed_checks":["range_retrieval"]}`)
 	if _, err := s.Validate(context.Background(), st, id, "admin", clockAt(t0)); err != nil {
@@ -248,7 +248,12 @@ func TestRunner_ConfigHashStale(t *testing.T) {
 		}
 		return nil
 	})
-	v, err := s.RunView(st.Read(context.Background()), id, runID, t0)
+	var v *RunView
+	err := st.Read(context.Background(), func(c *store.TenantTx) error {
+		var err error
+		v, err = s.RunView(c, id, runID, t0)
+		return err
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +279,7 @@ func TestRunner_LiveTTL(t *testing.T) {
 	}) {
 		t.Errorf("blockers: %+v", re.Report.Blocking)
 	}
-	b, err := s.Current(st.Read(context.Background()), id, later)
+	b, err := current(st, s, id, later)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,14 +342,18 @@ func TestResults_NoSecretBytes(t *testing.T) {
 		t.Fatal("a check result contains the secret bytes")
 	}
 	// nor does anything stored for the run or the audit log
-	c := st.Read(context.Background())
-	rows, _ := c.CheckResults(v.ID)
+	var rows []*store.CheckResult
+	var log []*store.AuditEntry
+	read(t, st, func(c *store.TenantTx) error {
+		rows, _ = c.CheckResults(v.ID)
+		log, _ = c.AuditLog(50)
+		return nil
+	})
 	for _, r := range rows {
 		if strings.Contains(r.Observed+r.Message, secret) {
 			t.Fatalf("stored result %s leaks the secret", r.CheckID)
 		}
 	}
-	log, _ := c.AuditLog(50)
 	for _, e := range log {
 		if strings.Contains(e.Action, "validation") && strings.Contains(string(e.Detail), secret) {
 			t.Fatalf("audit %s leaks the secret", e.Action)

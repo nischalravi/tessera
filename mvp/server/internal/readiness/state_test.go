@@ -17,14 +17,41 @@ import (
 
 var t0 = time.Date(2026, 10, 8, 9, 30, 0, 0, time.UTC)
 
-func newStore(t *testing.T) *store.Store {
+// newStore opens a fresh database with one tenant and returns that tenant's scope.
+func newStore(t *testing.T) Scope {
 	t.Helper()
-	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "r.db"))
+	db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "r.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = st.Close() })
-	return st
+	t.Cleanup(func() { _ = db.Close() })
+	var tn store.Tenant
+	if err := db.InSystem(context.Background(), "test", func(s *store.SystemTx) error {
+		var err error
+		tn, err = s.CreateTenant(store.Tenant{Slug: "larkspur", Name: "Larkspur Labs"})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return Scope{DB: db, Tenant: tn.ID}
+}
+
+// read runs fn in a read-only transaction of the test tenant.
+func read(t *testing.T, st Scope, fn func(c *store.TenantTx) error) {
+	t.Helper()
+	if err := st.Read(context.Background(), fn); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// current is Service.Current in a read transaction of the test tenant.
+func current(st Scope, s *Service, id string, now time.Time) (b *Bundle, err error) {
+	err = st.Read(context.Background(), func(c *store.TenantTx) error {
+		var err error
+		b, err = s.Current(c, id, now)
+		return err
+	})
+	return b, err
 }
 
 func newSvc(t *testing.T) *Service {
@@ -32,7 +59,7 @@ func newSvc(t *testing.T) *Service {
 	return NewService(template.MustDefault(), "")
 }
 
-func write(t *testing.T, st *store.Store, fn func(c *store.TenantTx) error) {
+func write(t *testing.T, st Scope, fn func(c *store.TenantTx) error) {
 	t.Helper()
 	if err := st.Write(context.Background(), fn); err != nil {
 		t.Fatal(err)
@@ -95,7 +122,7 @@ func (f *fakeEvidence) install(s *Service) {
 var adAttestations = []string{"base.owner", "base.correlation.key", "base.scope.count", "base.stale.threshold",
 	"base.schedule", "ad.svc.password", "ad.scope.service_accounts", "ad.groups.privileged", "ad.topo.gc"}
 
-func createAD(t *testing.T, s *Service, st *store.Store, name string) string {
+func createAD(t *testing.T, s *Service, st Scope, name string) string {
 	t.Helper()
 	var id string
 	write(t, st, func(c *store.TenantTx) error {
@@ -112,7 +139,7 @@ func createAD(t *testing.T, s *Service, st *store.Store, name string) string {
 }
 
 // readyToActivate drives a demo AD connection to dry_run_reconciled.
-func readyToActivate(t *testing.T, s *Service, st *store.Store, id string) {
+func readyToActivate(t *testing.T, s *Service, st Scope, id string) {
 	t.Helper()
 	write(t, st, func(c *store.TenantTx) error {
 		for _, item := range adAttestations {
@@ -138,9 +165,9 @@ func readyToActivate(t *testing.T, s *Service, st *store.Store, id string) {
 	})
 }
 
-func state(t *testing.T, s *Service, st *store.Store, id string) string {
+func state(t *testing.T, s *Service, st Scope, id string) string {
 	t.Helper()
-	b, err := s.Current(st.Read(context.Background()), id, t0)
+	b, err := current(st, s, id, t0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +272,7 @@ func TestStateMachine_AllTransitions(t *testing.T) {
 }
 
 // driveTo moves a fresh demo AD connection to state through the real gates.
-func driveTo(t *testing.T, s *Service, st *store.Store, id, target string) {
+func driveTo(t *testing.T, s *Service, st Scope, id, target string) {
 	t.Helper()
 	order := []string{"draft", "ready_to_validate", "validated", "dry_run_reconciled", "active"}
 	if target == "degraded" || target == "retired" {
@@ -330,7 +357,7 @@ func passingBundle(t *testing.T) *Bundle {
 
 func (b *Bundle) reeval(t *testing.T, now time.Time) *GateReport {
 	t.Helper()
-	if err := b.Hash.Prepare(); err != nil {
+	if err := b.Hash.Normalize(); err != nil {
 		t.Fatal(err)
 	}
 	var err error
@@ -579,8 +606,12 @@ func TestActiveEdit_CreatesRevision(t *testing.T) {
 	fe.install(s)
 	id := createAD(t, s, st, "AD live")
 	driveTo(t, s, st, id, "active")
-	c := st.Read(context.Background())
-	_, live, pending, err := Revisions(c, id)
+	var live, pending *store.ConnectionRevision
+	var err error
+	read(t, st, func(c *store.TenantTx) error {
+		_, live, pending, err = Revisions(c, id)
+		return nil
+	})
 	if err != nil || live == nil || pending != nil {
 		t.Fatalf("live %v pending %v err %v", live, pending, err)
 	}
@@ -592,17 +623,29 @@ func TestActiveEdit_CreatesRevision(t *testing.T) {
 	if !res.NewRevision || res.Bundle.Rev.Rev != 2 || res.Bundle.Rev.State != store.StateDraft {
 		t.Fatalf("new revision: %+v", res.Bundle.Rev)
 	}
-	_, live2, pending2, _ := Revisions(c, id)
+	var live2, pending2 *store.ConnectionRevision
+	read(t, st, func(c *store.TenantTx) error {
+		_, live2, pending2, _ = Revisions(c, id)
+		return nil
+	})
 	if live2.ID != live.ID || live2.State != store.StateActive || pending2 == nil || pending2.ID != res.Bundle.Rev.ID {
 		t.Fatalf("live revision disturbed: live %+v pending %+v", live2, pending2)
 	}
 	// The new revision goes through the same gates, then swaps atomically.
 	driveTo(t, s, st, id, "active")
-	_, live3, pending3, _ := Revisions(c, id)
+	var live3, pending3 *store.ConnectionRevision
+	read(t, st, func(c *store.TenantTx) error {
+		_, live3, pending3, _ = Revisions(c, id)
+		return nil
+	})
 	if live3.ID != res.Bundle.Rev.ID || pending3 != nil {
 		t.Fatalf("swap: live %s pending %v", live3.ID, pending3)
 	}
-	old, _ := c.Revision(live.ID)
+	var old *store.ConnectionRevision
+	read(t, st, func(c *store.TenantTx) error {
+		old, _ = c.Revision(live.ID)
+		return nil
+	})
 	if old.State != store.StateSuperseded {
 		t.Errorf("old revision %s", old.State)
 	}
@@ -647,8 +690,11 @@ func TestActivate_ConcurrentCAS(t *testing.T) {
 		if ok > 1 {
 			t.Fatalf("both activations succeeded")
 		}
-		c := st.Read(context.Background())
-		revs, _ := c.Revisions(id)
+		var revs []*store.ConnectionRevision
+		read(t, st, func(c *store.TenantTx) error {
+			revs, _ = c.Revisions(id)
+			return nil
+		})
 		live := 0
 		for _, r := range revs {
 			if IsLive(r.State) {
@@ -739,7 +785,7 @@ func TestOverlay_RaisesLevelForNewRevisions(t *testing.T) {
 		t.Errorf("downgrade: %v", err)
 	}
 	id := createAD(t, s, st, "AD overlay")
-	b, err := s.Current(st.Read(context.Background()), id, t0)
+	b, err := current(st, s, id, t0)
 	if err != nil {
 		t.Fatal(err)
 	}

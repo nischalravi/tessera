@@ -14,7 +14,7 @@ import (
 // rdClient wraps client with JSON helpers for the readiness routes.
 type rdClient struct {
 	client
-	st *store.Store
+	st *testkit.DB
 }
 
 func newRD(t *testing.T, mutate ...func(*Config)) rdClient {
@@ -23,12 +23,35 @@ func newRD(t *testing.T, mutate ...func(*Config)) rdClient {
 	return rdClient{client{t, testServer(st, mutate...)}, st}
 }
 
-func (c rdClient) count(q string) int {
+// read runs fn in a read-only transaction of the test tenant. Tests reach
+// the database only through the tenant-scoped repositories (no raw SQL
+// outside internal/store).
+func (c rdClient) read(fn func(tx *store.TenantTx) error) {
 	c.t.Helper()
-	n, err := testkit.Conn(c.st).Count(q)
-	if err != nil {
-		c.t.Fatal(err)
-	}
+	testkit.Read(c.t, c.st, fn)
+}
+
+// systemCounts counts the live accounts, groups, resources and permissions of a system.
+func (c rdClient) systemCounts(system string) store.SystemCounts {
+	c.t.Helper()
+	return testkit.Get(c.t, c.st, func(tx *store.TenantTx) (store.SystemCounts, error) { return tx.CountSystem(system) })
+}
+
+// revisionCount counts every connection revision of the tenant.
+func (c rdClient) revisionCount() int {
+	c.t.Helper()
+	n := 0
+	c.read(func(tx *store.TenantTx) error {
+		conns, err := tx.Connections()
+		for _, cn := range conns {
+			revs, err := tx.Revisions(cn.ID)
+			if err != nil {
+				return err
+			}
+			n += len(revs)
+		}
+		return err
+	})
 	return n
 }
 
@@ -209,7 +232,7 @@ func TestLegacyConnectors_Unchanged(t *testing.T) {
 		t.Errorf("/api/connectors changed:\n%s\n%s", before, after)
 	}
 	// The legacy sync path neither creates revisions nor touches gates.
-	revs := c.count("SELECT count(*) FROM connection_revisions")
+	revs := c.revisionCount()
 	if rec := c.do("POST", "/api/connectors/sync", ""); rec.Code != http.StatusOK {
 		t.Fatalf("sync: %d", rec.Code)
 	}
@@ -232,7 +255,7 @@ func TestLegacyConnectors_Unchanged(t *testing.T) {
 			}
 		}
 	}
-	if n := c.count("SELECT count(*) FROM connection_revisions"); n != revs || n != 1 {
+	if n := c.revisionCount(); n != revs || n != 1 {
 		t.Errorf("revisions %d (before sync %d)", n, revs)
 	}
 	if governed != 1 || legacy != 5 {

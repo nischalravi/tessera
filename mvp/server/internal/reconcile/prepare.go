@@ -7,13 +7,13 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 )
 
-// Prepare returns a copy of a discovery result whose accounts all carry the
+// PrepareDiscovery returns a copy of a discovery result whose accounts all carry the
 // template's mapped attributes and whose stats cover the template's required
 // and recommended attributes. Connectors that already map attributes (the
 // simulated AD) keep theirs; the existing demo connectors get the canonical
 // mapping of their template. Values are only ever used to compute counts and
 // correlation keys; findings keep ids and names.
-func Prepare(templateID string, res *connectors.DiscoveryResult, attrs []string) *connectors.DiscoveryResult {
+func PrepareDiscovery(templateID string, res *connectors.DiscoveryResult, attrs []string) *connectors.DiscoveryResult {
 	out := *res
 	out.Accounts = make([]connectors.AccountRecord, len(res.Accounts))
 	for i, a := range res.Accounts {

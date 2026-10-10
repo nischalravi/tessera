@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
 func TestSummary_ReadinessBlock(t *testing.T) {
@@ -101,10 +103,27 @@ func TestDeploymentHealth_API(t *testing.T) {
 	if res["validation_run_id"] == nil || res["dry_run_id"] == nil {
 		t.Errorf("rerun: %v", res)
 	}
-	if n := c.count("SELECT count(*) FROM readiness_scores WHERE scope = 'tenant'"); n != 1 {
-		t.Errorf("tenant score series: %d rows", n)
+	var tenantRows, connRows int
+	c.read(func(tx *store.TenantTx) error {
+		rows, err := tx.ScoreSeries("tenant", nil, 1000)
+		tenantRows = len(rows)
+		if err != nil {
+			return err
+		}
+		conns, err := tx.Connections()
+		for _, cn := range conns {
+			rows, err := tx.ScoreSeries("connection", &cn.ID, 1000)
+			if err != nil {
+				return err
+			}
+			connRows += len(rows)
+		}
+		return err
+	})
+	if tenantRows != 1 {
+		t.Errorf("tenant score series: %d rows", tenantRows)
 	}
-	if n := c.count("SELECT count(*) FROM readiness_scores WHERE scope = 'connection'"); n == 0 {
+	if connRows == 0 {
 		t.Error("connection score series is empty")
 	}
 }
@@ -114,7 +133,7 @@ func TestReadinessOpenAPI_CoversRoutes(t *testing.T) {
 	c := newRD(t)
 	doc := c.json("GET", "/api/readiness/openapi.json", "", http.StatusOK)
 	paths := doc["paths"].(map[string]any)
-	srv := New(Config{Store: c.st, Policies: nil})
+	srv := New(Config{Store: c.st.DB, Policies: nil})
 	n := 0
 	for _, rt := range srv.routes {
 		path := "/" + strings.Join(rt.segs, "/")

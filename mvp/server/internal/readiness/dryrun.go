@@ -152,7 +152,7 @@ func (s *Service) reconcileRun(c *store.TenantTx, b *Bundle, run *store.CheckRun
 	now time.Time, stage StageFunc) error {
 	m := meta(b, now)
 	attrs := slices.Concat(m.RequiredAttrs, m.RecommendedAttrs, []string{m.CorrelationKey, m.HRAttribute})
-	prepared := reconcile.Prepare(b.Template.ID, res, attrs)
+	prepared := reconcile.PrepareDiscovery(b.Template.ID, res, attrs)
 	if err := stage(c, run.ID, b.Conn.System, prepared); err != nil {
 		return err
 	}

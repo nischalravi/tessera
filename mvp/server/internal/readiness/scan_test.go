@@ -20,40 +20,64 @@ var revInsert = regexp.MustCompile(`(?is)\binsert\s+(or\s+\w+\s+)?into\s+connect
 
 type violation struct{ pos, msg string }
 
+// The store declares its SQL as package-level statement constants; these are
+// the only two allowed to write revision state, and each may be used only by
+// its repository method.
+var stateStatements = map[string]string{"revisionsSetState": "SetRevisionState", "revisionsInsert": "InsertRevision"}
+
 // scanSource reports every place outside package readiness that calls
-// SetRevisionState, and every SQL literal outside store.SetRevisionState
-// (store.InsertRevision for inserts) that writes revision state.
+// SetRevisionState, and every SQL literal that writes revision state other
+// than the store's revisionsSetState and revisionsInsert statements (each
+// used only by store.SetRevisionState and store.InsertRevision).
 func scanSource(fset *token.FileSet, f *ast.File, path string) []violation {
 	var out []violation
 	dir := filepath.ToSlash(filepath.Dir(path))
 	inReadiness := strings.HasSuffix(dir, "internal/readiness")
 	inStore := strings.HasSuffix(dir, "internal/store")
-	var fn string
-	ast.Inspect(f, func(n ast.Node) bool {
-		switch x := n.(type) {
+	inspect := func(node ast.Node, fn string) {
+		ast.Inspect(node, func(n ast.Node) bool {
+			switch x := n.(type) {
+			case *ast.Ident:
+				if want, ok := stateStatements[x.Name]; ok && inStore && fn != want && fn != x.Name {
+					out = append(out, violation{fset.Position(x.Pos()).String(), x.Name + " used outside store." + want})
+				}
+			case *ast.SelectorExpr:
+				if x.Sel.Name == "SetRevisionState" && !inReadiness {
+					out = append(out, violation{fset.Position(x.Pos()).String(), "calls SetRevisionState outside internal/readiness"})
+				}
+			case *ast.BasicLit:
+				if x.Kind != token.STRING {
+					return true
+				}
+				s, err := strconv.Unquote(x.Value)
+				if err != nil {
+					return true
+				}
+				if stateWrite.MatchString(s) && !(inStore && fn == "revisionsSetState") {
+					out = append(out, violation{fset.Position(x.Pos()).String(), "SQL writes connection_revisions.state"})
+				}
+				if revInsert.MatchString(s) && !(inStore && fn == "revisionsInsert") {
+					out = append(out, violation{fset.Position(x.Pos()).String(), "SQL inserts connection_revisions"})
+				}
+			}
+			return true
+		})
+	}
+	// fn is the enclosing function, or the package-level variable being declared.
+	for _, d := range f.Decls {
+		switch x := d.(type) {
 		case *ast.FuncDecl:
-			fn = x.Name.Name
-		case *ast.SelectorExpr:
-			if x.Sel.Name == "SetRevisionState" && !inReadiness {
-				out = append(out, violation{fset.Position(x.Pos()).String(), "calls SetRevisionState outside internal/readiness"})
-			}
-		case *ast.BasicLit:
-			if x.Kind != token.STRING {
-				return true
-			}
-			s, err := strconv.Unquote(x.Value)
-			if err != nil {
-				return true
-			}
-			if stateWrite.MatchString(s) && !(inStore && fn == "SetRevisionState") {
-				out = append(out, violation{fset.Position(x.Pos()).String(), "SQL writes connection_revisions.state"})
-			}
-			if revInsert.MatchString(s) && !(inStore && fn == "InsertRevision") {
-				out = append(out, violation{fset.Position(x.Pos()).String(), "SQL inserts connection_revisions"})
+			inspect(x, x.Name.Name)
+		case *ast.GenDecl:
+			for _, sp := range x.Specs {
+				fn := ""
+				if vs, ok := sp.(*ast.ValueSpec); ok && len(vs.Names) > 0 {
+					fn = vs.Names[0].Name
+				}
+				inspect(sp, fn)
 			}
 		}
-		return true
-	})
+	}
 	return out
 }
 
@@ -108,8 +132,12 @@ func f(c any) {
 		t.Fatalf("want 3 violations, got %+v", v)
 	}
 	f2, _ := parser.ParseFile(fset, "internal/store/y.go", `package store
-func (c *Conn) SetRevisionState() { _ = "UPDATE connection_revisions SET state = ? WHERE id = ?" }`, 0)
-	if v := scanSource(fset, f2, "internal/store/y.go"); len(v) != 0 {
-		t.Fatalf("the store's own SetRevisionState flagged: %+v", v)
+var revisionsSetState = tq("x", "UPDATE connection_revisions SET state = @to WHERE tenant_id = @tenant")
+var other = tq("y", "UPDATE connection_revisions SET state = @to WHERE tenant_id = @tenant")
+func (tx *TenantTx) SetRevisionState() { _ = revisionsSetState }
+func (tx *TenantTx) Sneaky() { _ = revisionsSetState }`, 0)
+	v := scanSource(fset, f2, "internal/store/y.go")
+	if len(v) != 2 || !strings.Contains(v[0].msg, "writes connection_revisions.state") || !strings.Contains(v[1].msg, "outside store.SetRevisionState") {
+		t.Fatalf("want the second statement and the Sneaky use flagged, got %+v", v)
 	}
 }

@@ -10,6 +10,10 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/store/storetest"
+	"github.com/nischalravi/tessera/mvp/server/internal/testkit"
 )
 
 var updateGolden = flag.Bool("update", false, "rewrite testdata/readiness golden files")
@@ -58,13 +62,16 @@ func finding(dr map[string]any, code string) map[string]any {
 	return nil
 }
 
-// liveCounts counts the rows of every live (graph and workflow) table.
-func (c rdClient) liveCounts() map[string]int {
-	out := map[string]int{}
-	for _, t := range []string{"identities", "accounts", "groups", "resources", "permissions", "grant_edges", "secrets",
-		"agent_delegations", "usage_events", "access_requests", "review_campaigns", "review_items", "hris_events"} {
-		out[t] = c.count("SELECT count(*) FROM " + t)
+// liveRows dumps every row of every live (graph and workflow) table of the
+// tenant (storetest.Dump, through the tenant-scoped repositories), minus the
+// audit log, which a dry run appends to.
+func (c rdClient) liveRows() map[string]json.RawMessage {
+	c.t.Helper()
+	var out map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(storetest.Dump(c.t, c.st.DB, c.st.Tenant)), &out); err != nil {
+		c.t.Fatal(err)
 	}
+	delete(out, "audit_log")
 	return out
 }
 
@@ -72,20 +79,23 @@ func TestStage_NoLiveWrites(t *testing.T) {
 	c := newRD(t)
 	ad := c.adValidated()
 	okta := c.validatedConn("demo-okta", "Okta (demo)", "")
-	before := c.liveCounts()
+	before := c.liveRows()
 	dr := c.json("POST", "/api/connections/"+ad+"/dry-run", "", http.StatusAccepted)
 	c.json("POST", "/api/connections/"+okta+"/dry-run", "", http.StatusAccepted)
-	after := c.liveCounts()
+	after := c.liveRows()
 	for k, v := range before {
-		if after[k] != v {
-			t.Errorf("dry run changed live table %s: %d -> %d", k, v, after[k])
+		if string(after[k]) != string(v) {
+			t.Errorf("dry run changed live table %s", k)
 		}
 	}
-	if n := c.count("SELECT count(*) FROM accounts WHERE system = 'ad-corp'"); n != 0 {
+	if n := c.systemCounts("ad-corp").Accounts; n != 0 {
 		t.Errorf("%d AD accounts in the live graph before activation", n)
 	}
-	if n := c.count("SELECT count(*) FROM stg_accounts WHERE run_id = '" + dr["id"].(string) + "'"); n != 71 {
-		t.Errorf("staged %d AD accounts", n)
+	staged := testkit.Get(t, c.st, func(tx *store.TenantTx) ([]*store.StagedAccount, error) {
+		return tx.StagedAccounts(dr["id"].(string))
+	})
+	if len(staged) != 71 {
+		t.Errorf("staged %d AD accounts", len(staged))
 	}
 }
 
@@ -155,6 +165,64 @@ func TestFindings_Golden(t *testing.T) {
 	}
 }
 
+// downstreamPerms counts, independently of package reconcile, the distinct
+// permissions reachable from a person's live groups in one system through
+// maps_to and grants edges.
+func (c rdClient) downstreamPerms(name, system string) int {
+	c.t.Helper()
+	perms := map[string]bool{}
+	c.read(func(tx *store.TenantTx) error {
+		idents, err := tx.Identities()
+		if err != nil {
+			return err
+		}
+		accts, err := tx.Accounts()
+		if err != nil {
+			return err
+		}
+		edges, err := tx.Edges()
+		if err != nil {
+			return err
+		}
+		person := map[int64]bool{}
+		for _, i := range idents {
+			if i.Name == name {
+				person[i.ID] = true
+			}
+		}
+		var frontier []string
+		for _, a := range accts {
+			if a.System != system || a.IdentityID == nil || !person[*a.IdentityID] {
+				continue
+			}
+			for _, e := range edges {
+				if e.Src == fmt.Sprintf("account:%d", a.ID) && e.Relation == "member_of" {
+					frontier = append(frontier, e.Dst)
+				}
+			}
+		}
+		seen := map[string]bool{}
+		for len(frontier) > 0 {
+			n := frontier[0]
+			frontier = frontier[1:]
+			if seen[n] {
+				continue
+			}
+			seen[n] = true
+			if strings.HasPrefix(n, "perm:") {
+				perms[n] = true
+			}
+			for _, e := range edges {
+				if e.Src == n && (e.Relation == "maps_to" || e.Relation == "grants") {
+					frontier = append(frontier, e.Dst)
+				}
+			}
+		}
+		return nil
+	})
+	return len(perms)
+}
+
 func TestImpact_ThroughMapsTo(t *testing.T) {
 	c := newRD(t)
 	okta := c.validatedConn("demo-okta", "Okta (demo)", "")
@@ -162,14 +230,7 @@ func TestImpact_ThroughMapsTo(t *testing.T) {
 	rf06b := finding(dr, "RF-06b")
 	im := rf06b["impact"].(map[string]any)
 	// Independently: permissions reachable from Oren's live Okta groups via maps_to and grants.
-	want := c.count(`WITH RECURSIVE reach(node) AS (
-		SELECT e.dst FROM grant_edges e
-		  JOIN accounts a ON e.src = 'account:' || a.id
-		  JOIN identities i ON a.identity_id = i.id
-		 WHERE a.system = 'okta' AND i.name = 'Oren Whitlock' AND e.relation = 'member_of'
-		UNION
-		SELECT e.dst FROM grant_edges e JOIN reach r ON e.src = r.node WHERE e.relation IN ('maps_to', 'grants'))
-		SELECT count(DISTINCT node) FROM reach WHERE node LIKE 'perm:%'`)
+	want := c.downstreamPerms("Oren Whitlock", "okta")
 	if want == 0 || im["downstream_perms"] != float64(want) {
 		t.Errorf("downstream permissions %v, want %d (through Okta groups mapped to AWS roles)", im["downstream_perms"], want)
 	}
@@ -305,14 +366,24 @@ func TestWalkthrough_ADToActive(t *testing.T) {
 	}
 	// Activation ran the first sync: the AD accounts are in the live graph,
 	// without the memberships in out-of-scope groups.
-	if n := c.count("SELECT count(*) FROM accounts WHERE system = 'ad-corp'"); n != 71 {
+	if n := c.systemCounts("ad-corp").Accounts; n != 71 {
 		t.Errorf("live AD accounts: %d", n)
 	}
-	if n := c.count("SELECT count(*) FROM groups WHERE system = 'ad-corp'"); n != 13 {
+	if n := c.systemCounts("ad-corp").Groups; n != 13 {
 		t.Errorf("live AD groups: %d", n)
 	}
 	// Tier 3 proposals were not linked by the sync either.
-	if n := c.count("SELECT count(*) FROM accounts WHERE system = 'ad-corp' AND identity_id IS NOT NULL"); n != 38 {
+	linked := 0
+	c.read(func(tx *store.TenantTx) error {
+		accts, err := tx.Accounts()
+		for _, a := range accts {
+			if a.System == "ad-corp" && a.IdentityID != nil {
+				linked++
+			}
+		}
+		return err
+	})
+	if n := linked; n != 38 {
 		t.Errorf("linked AD accounts: %d (tier 1 only, 36 people + 2 ambiguous)", n)
 	}
 	audit := c.do("GET", "/api/audit", "").Body.String()

@@ -17,11 +17,11 @@ type HashInput struct {
 	TemplatePin    string // "ad@1.0"
 	OverlayVersion int
 
-	canon map[string]json.RawMessage // cached by Prepare
+	canon map[string]json.RawMessage // cached by Normalize
 }
 
-// Prepare caches the canonical form; call it again after changing a field.
-func (in *HashInput) Prepare() error {
+// Normalize caches the canonical form; call it again after changing a field.
+func (in *HashInput) Normalize() error {
 	in.canon = nil
 	m, err := in.canonical()
 	in.canon = m

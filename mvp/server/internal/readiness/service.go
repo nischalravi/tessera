@@ -108,7 +108,7 @@ func (s *Service) Load(c *store.TenantTx, rev *store.ConnectionRevision, now tim
 		return nil, err
 	}
 	b := &Bundle{Conn: conn, Rev: rev, Template: tmpl, Config: cfg, Hash: hashInput(conn, rev, cfg), LiveTTL: s.LiveTTL}
-	if err := b.Hash.Prepare(); err != nil {
+	if err := b.Hash.Normalize(); err != nil {
 		return nil, err
 	}
 	if b.ConfigHash, err = b.Hash.ConfigHash(); err != nil {
