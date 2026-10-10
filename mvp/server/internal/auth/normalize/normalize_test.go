@@ -203,6 +203,17 @@ var rows = []row{
 		normalize.Requested{}, samlClaims("urn:devidp:ac:phr"),
 		want{1, false, "none", normalize.ACRAAL1, "persistent-nameid", nil}},
 
+	// OAuth 2.0-only providers: AAL1 at most, never phr, not even attested
+	{"github", normalize.Connection{Profile: normalize.GitHub}, normalize.Requested{}, claims("12345", ""),
+		want{1, false, "none", normalize.ACRAAL1, "12345", nil}},
+	{"github ignores acr-looking input", normalize.Connection{Profile: normalize.GenericOAuth2}, acrValues(), claims("12345", "phr"),
+		want{1, false, "none", normalize.ACRAAL1, "12345", nil}},
+	{"github attestation ignored", normalize.Connection{Profile: normalize.GitHub, AssumePhishingResistant: true},
+		normalize.Requested{}, claims("12345", ""), want{1, false, "none", normalize.ACRAAL1, "12345", nil}},
+	{"dev_mock github", normalize.Connection{Profile: normalize.DevMock, AssumePhishingResistant: true,
+		Mapping: normalize.Mapping{DevEmulation: "github"}}, normalize.Requested{}, claims("12345", ""),
+		want{1, false, "none", normalize.ACRAAL1, "12345", nil}},
+
 	{"unknown profile", normalize.Connection{Profile: "ping"}, acrValues(), claims("s", "phr"),
 		want{err: normalize.ErrUnknownProfile}},
 }
