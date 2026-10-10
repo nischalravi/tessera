@@ -50,7 +50,7 @@ var dataHandler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) 
 
 // TestReadFailsClosed (E2.4): when the event cannot be written, a GET or
 // HEAD gets 503 audit_unavailable and none of the handler's body or headers;
-// a POST (whose domain event committed with its change) gets its response.
+// a POST gets its response only if its domain event committed with its change.
 func TestReadFailsClosed(t *testing.T) {
 	c := &capture{fail: errors.New("database is locked")}
 	h := mw(c, dataHandler)
@@ -74,13 +74,39 @@ func TestReadFailsClosed(t *testing.T) {
 			}
 		}
 	}
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/things/7", strings.NewReader("{}")))
-	if rec.Code != http.StatusOK || rec.Body.String() != secretData {
-		t.Errorf("POST: %d %q, want the real response", rec.Code, rec.Body.String())
+	// A POST is answered only if it committed a domain event of its own
+	// (the store counts them into AuditContext.Committed), and never if it is
+	// marked AnswersRead.
+	committing := func(answersRead bool) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if ac, ok := store.AuditContextFrom(r.Context()); ok && ac.Committed != nil {
+				ac.Committed.Add(1)
+			}
+			if answersRead {
+				audit.AnswersRead(r.Context())
+			}
+			dataHandler.ServeHTTP(w, r)
+		})
+	}
+	for name, tc := range map[string]struct {
+		h    http.Handler
+		want int
+	}{
+		"POST without a domain event":     {dataHandler, http.StatusServiceUnavailable},
+		"POST with a domain event":        {committing(false), http.StatusOK},
+		"POST AnswersRead, with an event": {committing(true), http.StatusServiceUnavailable},
+	} {
+		rec := httptest.NewRecorder()
+		mw(c, tc.h).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/things/7", strings.NewReader("{}")))
+		if rec.Code != tc.want {
+			t.Errorf("%s: %d, want %d", name, rec.Code, tc.want)
+		}
+		if leaked := strings.Contains(rec.Body.String(), "ZZ-SECRET-ROW"); leaked != (tc.want == http.StatusOK) {
+			t.Errorf("%s: body %q", name, rec.Body.String())
+		}
 	}
 	c.fail = nil
-	rec = httptest.NewRecorder()
+	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/things/7", nil))
 	if rec.Code != http.StatusOK || rec.Body.String() != secretData || rec.Header().Get("X-Leaky") != "1" {
 		t.Errorf("healthy GET: %d %q", rec.Code, rec.Body.String())
