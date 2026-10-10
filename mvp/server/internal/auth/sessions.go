@@ -100,13 +100,15 @@ func (c Cookies) Name() string {
 // SameSite=Lax, Path=/, no Domain, no Max-Age (a browser-session cookie;
 // the server-side expiry is authoritative), Secure unless Insecure.
 func (c Cookies) Session(secret string) *http.Cookie {
+	// #nosec G124 -- Secure is false only for the dev-only Safari fallback, which config allows only with
+	// TESSERA_ENV=dev and a localhost public URL (§11); HttpOnly and SameSite=Lax are always set
 	return &http.Cookie{Name: c.Name(), Value: secret, Path: "/", Secure: !c.Insecure, HttpOnly: true,
 		SameSite: http.SameSiteLaxMode}
 }
 
 // Clear returns a cookie that deletes the session cookie.
 func (c Cookies) Clear() *http.Cookie {
-	k := c.Session("")
+	k := c.Session("") // #nosec G124 -- the same attributes as the session cookie (see Session)
 	k.MaxAge = -1
 	return k
 }

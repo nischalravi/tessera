@@ -123,7 +123,11 @@ function SignIn({ onSignedIn, preferEmail }: { onSignedIn: () => Promise<void>; 
     devLoginUsers()
       .then((d) => {
         setDev(d);
-        const preferred = d?.users.find((u) => u.email === preferEmail) ?? d?.users[0];
+        // the last user, else the first user of the tenant with the most users (the demo company)
+        const counts = new Map<string, number>();
+        d?.users.forEach((u) => counts.set(u.tenant, (counts.get(u.tenant) ?? 0) + 1));
+        const busiest = [...counts.entries()].sort((x, y) => y[1] - x[1])[0]?.[0];
+        const preferred = d?.users.find((u) => u.email === preferEmail) ?? d?.users.find((u) => u.tenant === busiest);
         if (preferred) setChoice(`${preferred.tenant}|${preferred.subject}`);
       })
       .catch((e) => setError(String(e.message ?? e)));

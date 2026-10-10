@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	authnorm "github.com/nischalravi/tessera/mvp/server/internal/auth/normalize"
@@ -246,12 +248,16 @@ func (s *Server) devLogin(w http.ResponseWriter, r *http.Request, _ *params) (an
 		display = *user.Email
 	}
 	actor.ID, actor.Display = &uid, &display
-	ctx = audit.SetPrincipal(ctx, audit.Principal{Tenant: tenant.ID, Actor: actor})
+	// the login's own events carry the authentication summary of the new context
+	rec := &store.AuthnContextRecord{ID: uuid.New()}
+	summary := (&auth.Principal{Authn: &auth.AuthnContext{ID: rec.ID, AAL: res.AAL, PhishingResistant: res.PhishingResistant,
+		TesseraACR: auth.ACR(res.TesseraACR), AuthTime: res.AuthTime}}).AuditAuthn(now)
+	ctx = audit.SetPrincipal(ctx, audit.Principal{Tenant: tenant.ID, Actor: actor, Authn: summary})
 	var issued auth.Issued
 	err = s.store.InTenant(ctx, tenant.ID, func(tx *store.TenantTx) error {
 		acr := res.ACR
 		ip, ua := clientAddr(r), userAgent(r)
-		rec := &store.AuthnContextRecord{UserID: user.ID, IdPConnectionID: &conn.ID, Protocol: "oidc", Purpose: "login",
+		*rec = store.AuthnContextRecord{ID: rec.ID, UserID: user.ID, IdPConnectionID: &conn.ID, Protocol: "oidc", Purpose: "login",
 			ACR: acr, AMR: res.AMR, Methods: res.Methods, AAL: res.AAL, PhishingResistant: res.PhishingResistant,
 			PhrBasis: res.PhrBasis, TesseraACR: res.TesseraACR, AuthTime: res.AuthTime, IP: ip, UserAgent: ua,
 			MappingProfile: res.MappingProfile, MappingVersion: res.MappingVersion, ClaimsSHA256: res.ClaimsSHA256,
@@ -275,7 +281,7 @@ func (s *Server) devLogin(w http.ResponseWriter, r *http.Request, _ *params) (an
 		return nil, err
 	}
 	sid := issued.Session.ID.String()
-	audit.SetPrincipal(ctx, audit.Principal{Tenant: tenant.ID, Actor: actor, SessionID: &sid})
+	audit.SetPrincipal(ctx, audit.Principal{Tenant: tenant.ID, Actor: actor, SessionID: &sid, Authn: summary})
 	http.SetCookie(w, s.authn.Cookies.Session(issued.Secret))
 	return ojson.Object{{Key: "status", Value: "signed_in"}, {Key: "csrf_token", Value: issued.CSRFToken}}, nil
 }
