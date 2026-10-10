@@ -119,6 +119,7 @@ func TestBlocksAddresses(t *testing.T) {
 		"fc00::1", "fd00:ec2::254", "fe80::1", "fec0::1", "ff02::1", "::", "2001:db8::1",
 		"::ffff:10.0.0.1", "::ffff:169.254.169.254", "::ffff:127.0.0.1", "::10.0.0.1",
 		"64:ff9b::a00:1", "2002:a00:1::1", "2001::1",
+		"::ffff:0:7f00:1", "::ffff:0:a9fe:a9fe", "::ffff:0:a00:1", "::1:2:3:4", "ff::1", // ::/8, IPv4-translated
 	}
 	for _, env := range []safehttp.Options{{Env: config.Prod}, {Env: config.Dev, AllowLoopback: true}} {
 		c := client(t, env)
@@ -142,6 +143,13 @@ func TestBlocksAddresses(t *testing.T) {
 }
 
 func TestBlockedTable(t *testing.T) {
+	// IPv4-translated addresses (RFC 2765) look like global unicast to
+	// netip but reach IPv4 (here 127.0.0.1) behind a SIIT/NAT46 translator.
+	for _, ip := range []string{"::ffff:0:7f00:1", "::ffff:0:a9fe:a9fe", "0:ff::1"} {
+		if !safehttp.Blocked(netip.MustParseAddr(ip)) {
+			t.Errorf("%s (in ::/8) not blocked", ip)
+		}
+	}
 	for _, ip := range []string{"8.8.8.8", "1.1.1.1", "93.184.215.14", "2606:4700:4700::1111", "2a00:1450:4001:80b::200e"} {
 		if safehttp.Blocked(netip.MustParseAddr(ip)) {
 			t.Errorf("public address %s blocked", ip)

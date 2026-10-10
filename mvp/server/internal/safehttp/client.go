@@ -366,6 +366,11 @@ var blockedPrefixes = func() []netip.Prefix {
 		"240.0.0.0/4",      // reserved, broadcast
 		"168.63.129.16/32", // Azure wire server / metadata
 		// IPv6
+		// ::/8 is reserved by the IETF. It holds the unspecified, loopback,
+		// IPv4-compatible and IPv4-mapped forms, and IPv4-translated
+		// ::ffff:0:0:0/96 (RFC 2765), which netip calls global unicast but
+		// which reaches IPv4 behind a SIIT/NAT46 translator.
+		"::/8",
 		"::/96",          // unspecified, loopback, IPv4-compatible
 		"::ffff:0:0/96",  // IPv4-mapped (also unmapped before checking)
 		"64:ff9b::/96",   // NAT64
