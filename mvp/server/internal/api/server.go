@@ -34,6 +34,13 @@ const DefaultMaxBodyBytes = 1 << 20
 // DefaultHandlerTimeout bounds the time a handler may run.
 const DefaultHandlerTimeout = 30 * time.Second
 
+// DefaultStreamTimeout bounds a streamed response (GET /api/audit/export).
+// Streams bypass http.TimeoutHandler, which would buffer the whole body in
+// memory and cut it at HandlerTimeout; instead the request context gets this
+// deadline and the connection's write deadline is extended to match. An
+// export that needs longer is split with from_seq/to_seq.
+const DefaultStreamTimeout = 15 * time.Minute
+
 // Config configures a Server.
 type Config struct {
 	Store *store.DB
@@ -51,6 +58,7 @@ type Config struct {
 	AllowedOrigins []string
 	MaxBodyBytes   int64         // defaults to DefaultMaxBodyBytes
 	HandlerTimeout time.Duration // defaults to DefaultHandlerTimeout; <0 disables
+	StreamTimeout  time.Duration // defaults to DefaultStreamTimeout; streamed routes only
 	// Readiness is the deployment-readiness service (defaults to the
 	// embedded templates and Env).
 	Readiness *readiness.Service
@@ -95,6 +103,9 @@ func New(cfg Config) *Server {
 	if cfg.HandlerTimeout == 0 {
 		cfg.HandlerTimeout = DefaultHandlerTimeout
 	}
+	if cfg.StreamTimeout <= 0 {
+		cfg.StreamTimeout = DefaultStreamTimeout
+	}
 	if cfg.Readiness == nil {
 		reg, err := template.Default()
 		if err != nil {
@@ -114,7 +125,7 @@ func New(cfg Config) *Server {
 func (s *Server) Handler() http.Handler {
 	var h http.Handler = http.HandlerFunc(s.dispatch)
 	if s.cfg.HandlerTimeout > 0 {
-		h = http.TimeoutHandler(h, s.cfg.HandlerTimeout, `{"detail":"Request timed out"}`)
+		h = s.timeouts(h, http.TimeoutHandler(h, s.cfg.HandlerTimeout, `{"detail":"Request timed out"}`))
 	}
 	h = s.limitBody(h)
 	h = s.cors(h)
@@ -125,6 +136,25 @@ func (s *Server) Handler() http.Handler {
 		Append: s.cfg.AuditAppend})(h)
 	h = s.logRequests(h)
 	return securityHeaders(h)
+}
+
+// timeouts sends streamed routes to stream and every other request to timed
+// (the HandlerTimeout-bounded handler). A stream gets StreamTimeout on its
+// context and on the connection's write deadline (the server's WriteTimeout
+// is sized for ordinary responses).
+func (s *Server) timeouts(stream, timed http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if rt, _, _ := s.find(r.Method, r.URL.Path); rt == nil || !rt.stream {
+			timed.ServeHTTP(w, r)
+			return
+		}
+		deadline := time.Now().Add(s.cfg.StreamTimeout)
+		ctx, cancel := context.WithDeadline(r.Context(), deadline)
+		defer cancel()
+		// ErrNotSupported (httptest recorders) leaves the server's deadline.
+		_ = http.NewResponseController(w).SetWriteDeadline(deadline)
+		stream.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 // RunSweeper expires JIT grants of every active tenant, each in its own
@@ -190,6 +220,8 @@ type route struct {
 	segs    []string
 	tenant  tenantMode
 	h       handlerFunc
+	// stream: the handler streams its response (StreamTimeout, unbuffered).
+	stream bool
 	// answersRead: a non-GET route whose response is computed data; it fails
 	// closed like a read when its http.request event cannot be written
 	// (audit.AnswersRead).
@@ -438,6 +470,16 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 	}
 	return r.ResponseWriter.Write(b)
 }
+
+// Flush lets a streamed response through (http.Flusher).
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Unwrap exposes the underlying writer to http.ResponseController.
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
 // logRequests logs one line per request: method, path, status and duration.
 // Query strings, headers and bodies are deliberately not logged (they can

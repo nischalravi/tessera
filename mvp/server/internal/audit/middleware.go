@@ -384,6 +384,10 @@ type bufferedWriter struct {
 
 func (b *bufferedWriter) Header() http.Header { return b.header }
 
+// Unwrap exposes the underlying writer to http.ResponseController (a stream
+// extends its write deadline through it).
+func (b *bufferedWriter) Unwrap() http.ResponseWriter { return b.under }
+
 func (b *bufferedWriter) WriteHeader(code int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

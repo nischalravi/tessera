@@ -180,6 +180,9 @@ TESSERA_ENV=dev bin/tessera audit checkpoint -tenant larkspur -db tessera.db   #
 TESSERA_ENV=dev bin/tessera audit export -tenant larkspur -db tessera.db > larkspur.ndjson
 ```
 
+`GET /api/audit/export` streams the same NDJSON (chunked, 500 events per read) outside the 30 s
+handler timeout, under a 15-minute stream timeout; split longer exports with `from_seq`/`to_seq`.
+
 Truncation (deleting the newest events) is caught when the chain ends before its head or before
 the newest signed checkpoint, in the database or in the anchors. Pass `-anchors`: someone who can
 write the database can also delete checkpoint rows and rewind the head, and then only the anchors

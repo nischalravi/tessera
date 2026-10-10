@@ -10,10 +10,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
+	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/store/storetest"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
@@ -464,5 +466,113 @@ func TestAudit_ListFilters(t *testing.T) {
 	c.json("GET", "/api/audit?action="+strings.Repeat("x", 300), "", http.StatusUnprocessableEntity)
 	if got := c.json("GET", "/api/audit?from=2999-01-01T00:00:00Z", "", http.StatusOK).([]any); len(got) != 0 {
 		t.Errorf("from in the future: %d rows", len(got))
+	}
+}
+
+// flushCounter is a ResponseWriter that records how the body arrives.
+type flushCounter struct {
+	*httptest.ResponseRecorder
+	flushes, atFirstFlush int
+}
+
+func (f *flushCounter) Flush() {
+	if f.flushes == 0 {
+		f.atFirstFlush = f.Body.Len()
+	}
+	f.flushes++
+	f.ResponseRecorder.Flush()
+}
+
+// syntheticChain appends n domain events to t's chain in one transaction.
+func syntheticChain(t *testing.T, db *store.DB, tn tenancy.ID, n int) {
+	t.Helper()
+	if err := db.InTenant(context.Background(), tn, func(tx *store.TenantTx) error {
+		for i := range n {
+			if err := tx.Audit(storetest.Now, "", "synthetic.event", ojson.Object{{Key: "i", Value: i}}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestAudit_ExportStreamsLargeChain: the export of a large chain is streamed
+// in chunks (not buffered whole by the handler timeout), is not cut off by
+// HandlerTimeout or the server's WriteTimeout, and every line verifies.
+func TestAudit_ExportStreamsLargeChain(t *testing.T) {
+	const n = 5000
+	f := storetest.TwoTenants(t)
+	syntheticChain(t, f.DB, f.B.ID, n)
+	total := len(ledger(t, f.DB, f.B.ID))
+	srv := isolationServer(f, f.B.ID)
+	srv.cfg.HandlerTimeout = time.Millisecond // every buffered route would time out
+	h := srv.Handler()
+	if rec := serveOnce(h, "GET", "/api/identities", ""); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("a buffered route with a 1ms handler timeout: %d, want the timeout's 503", rec.Code)
+	}
+
+	w := &flushCounter{ResponseRecorder: httptest.NewRecorder()}
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/api/audit/export", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("export: %d %.200s", w.Code, w.Body.String())
+	}
+	lines := strings.Count(w.Body.String(), "\n")
+	if lines < total || lines < n {
+		t.Errorf("export has %d lines, want at least the %d events before it", lines, total)
+	}
+	if w.flushes < 2 || w.atFirstFlush >= w.Body.Len() {
+		t.Errorf("not streamed: %d flushes, first at %d of %d bytes", w.flushes, w.atFirstFlush, w.Body.Len())
+	}
+	last := ledger(t, f.DB, f.B.ID)[0]
+	if last.Action != "audit.export" || last.Outcome != store.OutcomeSuccess || !strings.Contains(string(last.Detail), fmt.Sprintf(`"events":%d`, lines)) {
+		t.Errorf("audit.export event: %s %s %s", last.Action, last.Outcome, last.Detail)
+	}
+
+	// Through a real server whose WriteTimeout is far shorter than the
+	// export: the stream extends its own write deadline.
+	ts := httptest.NewUnstartedServer(h)
+	ts.Config.WriteTimeout = 50 * time.Millisecond
+	ts.Start()
+	defer ts.Close()
+	resp, err := ts.Client().Get(ts.URL + "/api/audit/export")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || len(resp.TransferEncoding) == 0 || resp.TransferEncoding[0] != "chunked" {
+		t.Fatalf("live export: %d, transfer-encoding %v", resp.StatusCode, resp.TransferEncoding)
+	}
+	sc := bufio.NewScanner(resp.Body)
+	sc.Buffer(nil, 1<<20)
+	got := 0
+	for sc.Scan() {
+		got++
+		if got%1000 == 1 {
+			if ok, _, err := audit.VerifyRecord(sc.Bytes()); err != nil || !ok {
+				t.Fatalf("line %d does not verify: %v", got, err)
+			}
+		}
+	}
+	if err := sc.Err(); err != nil || got < lines {
+		t.Errorf("live export: %d lines (want >= %d): %v", got, lines, err)
+	}
+}
+
+// TestAudit_ExportStreamTimeout: a stream that outlives StreamTimeout ends,
+// and its audit.export event records the error.
+func TestAudit_ExportStreamTimeout(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	syntheticChain(t, f.DB, f.B.ID, 1200)
+	srv := isolationServer(f, f.B.ID)
+	srv.cfg.StreamTimeout = time.Nanosecond
+	rec := serveOnce(srv.Handler(), "GET", "/api/audit/export", "")
+	if rec.Code != http.StatusOK || strings.Count(rec.Body.String(), "\n") >= 1200 {
+		t.Errorf("export past its deadline: %d, %d lines", rec.Code, strings.Count(rec.Body.String(), "\n"))
+	}
+	last := ledger(t, f.DB, f.B.ID)[0]
+	if last.Action != "audit.export" || last.Outcome != store.OutcomeError {
+		t.Errorf("audit.export event: %s %s", last.Action, last.Outcome)
 	}
 }

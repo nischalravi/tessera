@@ -30,7 +30,7 @@ func (s *Server) registerAuditRoutes() {
 	s.handle(G, "/api/audit/checkpoints", read, s.auditCheckpoints)
 	s.handle(G, "/api/audit/keys", noTenant, s.auditKeys)
 	s.handle(http.MethodPost, "/api/audit/verify", phased, s.auditVerify)
-	s.handle(G, "/api/audit/export", phased, s.auditExport)
+	s.handle(G, "/api/audit/export", phased, s.auditExport).stream = true
 }
 
 // auditTenant is the tenant whose http.request events the middleware writes.
@@ -335,8 +335,12 @@ func (s *Server) auditVerify(_ http.ResponseWriter, r *http.Request, p *params) 
 }
 
 // GET /api/audit/export?from_seq=&to_seq=: NDJSON, one hashed record per
-// line, streamed. Its http.request event is written before the first byte
-// (503 if that fails); an audit.export event records how it ended.
+// line, streamed in pages (audit.Export) with chunked writes, so memory stays
+// bounded whatever the chain's length. The route bypasses the handler
+// timeout and runs under StreamTimeout (default 15 min); a longer export is
+// split with from_seq/to_seq. Its http.request event is written before the
+// first byte (503 if that fails); an audit.export event records how it ended
+// (outcome error if the stream was cut short).
 func (s *Server) auditExport(w http.ResponseWriter, r *http.Request, p *params) (any, error) {
 	from := p.queryInt("from_seq", 1, i64(0), nil)
 	to := p.queryInt("to_seq", 0, i64(0), nil)
