@@ -65,10 +65,9 @@ setup_frontend() {
   fi
 }
 
-# Seeding always starts from an empty file, so a database left over from an
-# older schema (for example one created before tenancy) can never block it.
+# `tessera seed` drops and recreates every table, so it also works over a
+# database left from an older schema. Stop a running API before reseeding.
 seed() {
-  rm -f "$DB" "$DB-shm" "$DB-wal"
   "$BIN" seed -db "$DB"
 }
 
