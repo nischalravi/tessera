@@ -52,13 +52,20 @@ export const SIGNED_OUT = "tessera:signed-out";
 /** Fired when an action needs a fresh phishing-resistant sign-in (401 step_up_required). */
 export const STEP_UP = "tessera:step-up";
 
+/**
+ * The message of a step_up_required error. The step-up dialog already explains it, so toasts
+ * drop it (components/Toast.tsx) rather than show it twice.
+ */
+export const STEP_UP_MESSAGE =
+  "This action needs a phishing-resistant sign-in in the last few minutes. Sign in again with a passkey, then retry.";
+
 /** A plain-language message for the API's error contract (§16.2). */
 function errorMessage(status: number, j: any): string {
   switch (j?.error) {
     case "login_required":
       return "Your session ended. Sign in again.";
     case "step_up_required":
-      return "This action needs a phishing-resistant sign-in in the last few minutes. Sign in again with a passkey, then retry.";
+      return STEP_UP_MESSAGE;
     case "role_inactive":
       return "Your admin role is inactive because you signed in without a phishing-resistant method. Sign in again with a passkey.";
     case "forbidden":
