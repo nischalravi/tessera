@@ -953,7 +953,7 @@ func (s *Server) revoke(_ http.ResponseWriter, r *http.Request, p *params) (any,
 		{Key: "grant", Value: out.Grant.Label}, {Key: "permissions_removed", Value: res.Summary.PermissionsRemoved}}); err != nil {
 		return nil, err
 	}
-	if err := c.DeleteEdge(e.ID); err != nil {
+	if err := c.RevokeEdge(e.ID, a.now, "least-privilege"); err != nil {
 		return nil, err
 	}
 	applied := true
@@ -1011,6 +1011,7 @@ var edgeFields = []field{
 	{name: "src", kind: kStr, required: true},
 	{name: "dst", kind: kStr, required: true},
 	{name: "relation", kind: kStr, def: "member_of"},
+	{name: "duration_hours", kind: kFloat, nullable: true, def: nil}, // set: a time-boxed JIT grant, never standing access
 }
 
 var simulateFields = []field{
@@ -1043,7 +1044,15 @@ func (s *Server) simulate(_ http.ResponseWriter, r *http.Request, p *params) (an
 		if kind, _, _ := strings.Cut(src, ":"); kind != "account" && kind != "group" {
 			return nil, errStatus(http.StatusBadRequest, "edges must start at an account or group")
 		}
-		req.AddEdges = append(req.AddEdges, simulate.AddEdge{Src: src, Dst: dst, Relation: rel})
+		ae := simulate.AddEdge{Src: src, Dst: dst, Relation: rel}
+		if h, ok := e["duration_hours"].(float64); ok {
+			if h <= 0 {
+				return nil, errStatus(http.StatusBadRequest, "duration_hours must be positive")
+			}
+			exp := a.now.Add(time.Duration(h * float64(time.Hour)))
+			ae.ExpiresAt = &exp
+		}
+		req.AddEdges = append(req.AddEdges, ae)
 	}
 	res, err := simulate.Run(a.c, req, simulate.Inputs{Now: a.now, Policies: a.policies, Usage: a.u, Base: a.g})
 	var une *graph.UnknownNodeError
@@ -1390,6 +1399,15 @@ func (s *Server) hrisCreate(_ http.ResponseWriter, r *http.Request, p *params) (
 		return nil, errStatus(http.StatusBadRequest, "payload.to_team required")
 	}
 	c := store.TxFrom(r.Context())
+	if identityID != nil {
+		// An event for an identity that does not exist could never be planned or executed.
+		if ident, err := getOrNil(c.Identity(*identityID)); err != nil {
+			return nil, err
+		} else if ident == nil {
+			return nil, &validationError{[]verr{{Type: "value_error", Loc: []any{"body", "identity_id"},
+				Msg: fmt.Sprintf("Value error, unknown identity %d", *identityID), Input: *identityID}}}
+		}
+	}
 	now := s.clock()
 	n, err := c.CountHrisEvents()
 	if err != nil {
@@ -1431,8 +1449,12 @@ func (s *Server) hrisPlan(_ http.ResponseWriter, r *http.Request, p *params) (an
 	var plan any
 	if ev.Status != "executed" {
 		pl, err := jml.PlanForEvent(c, s.clock(), ev, true, pols)
+		var je *jml.Error
+		if errors.As(err, &je) { // e.g. an event row left pointing at an identity that no longer exists
+			return nil, errStatus(http.StatusConflict, "event cannot be planned: "+je.Msg)
+		}
 		if err != nil {
-			return nil, err // includes *jml.Error: the original backend let it surface as a 500
+			return nil, err
 		}
 		plan = pl
 	}

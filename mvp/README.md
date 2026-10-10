@@ -144,10 +144,10 @@ The routes are documented at `/api/readiness/openapi.json`.
 `GET /api/graph?identity_id=|resource_id=` · `GET /api/nhi` ·
 `GET /api/least-privilege/recommendations?unused_days=60&kind=remove|right_size|role_trim` ·
 `POST /api/least-privilege/revoke {edge_id, dry_run}` · `GET /api/policies` · `GET /api/violations` ·
-`POST /api/simulate {remove_edge_ids, add_edges:[{src,dst}], disable_account_ids}` ·
+`POST /api/simulate {remove_edge_ids, add_edges:[{src,dst,duration_hours?}], disable_account_ids}` ·
 `GET|POST /api/jit/requests` · `POST /api/jit/requests/{id}/approve|deny|revoke` ·
 `GET|POST /api/reviews/campaigns` · `POST /api/reviews/items/{id}/decision` ·
-`GET|POST /api/hris/events` · `GET /api/hris/events/{id}/plan` · `POST /api/hris/events/{id}/execute` ·
+`GET|POST /api/hris/events` (422 for an unknown `identity_id`) · `GET /api/hris/events/{id}/plan` · `POST /api/hris/events/{id}/execute` ·
 `GET /api/jml/leaver-plan/{identity_id}` · `GET /api/accounts[?system=]` ·
 `GET /api/audit[?limit=&before_seq=&action=&actor_id=&target_type=&target_id=&from=&to=&include_http=]` ·
 `GET /api/audit/events/{event_id}/proof` · `GET /api/audit/checkpoints[?from_seq=]` · `GET /api/audit/keys` ·
@@ -441,6 +441,10 @@ OpenAPI document). Deliberate differences:
 * CORS no longer allows every origin (`*`); see above.
 * `violations.resolved` / `violations.introduced` in simulate and revoke responses are sorted by
   `key` (Python's order depended on the hash seed).
+* `POST /api/hris/events` returns `422` for an `identity_id` that does not exist; `GET .../plan` returns `409` (not `500`) for a stored event whose identity is gone.
+* A connector sync never undoes Tessera-side decisions: terminated identities, disabled accounts, executed HRIS events and
+  grants revoked by a leaver plan, access review or least-privilege revoke (tombstones in `revoked_grants`) stay as they are.
+* `add_edges[].duration_hours` simulates a time-boxed JIT grant, which never counts as standing access.
 * Policies are embedded in the binary; set `TESSERA_POLICY_DIR` (run.sh does) to edit them live.
 
 ## Known gaps (MVP)
