@@ -86,6 +86,8 @@ var tables = []string{
 	"stg_identities", "stg_accounts", "stg_groups", "stg_memberships", "stg_attr_stats",
 	// access requests (schema/0205_requests.sql)
 	"catalog_items", "access_request_lines", "access_request_events",
+	// approval routing (schema/0206_approvals.sql)
+	"approval_policies", "access_request_stages", "approval_delegations",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was

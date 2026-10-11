@@ -44,6 +44,7 @@ func newWorld(t *testing.T) *world {
 			}
 			*u.a = requests.Actor{UserID: pu.ID, Display: u.name, IdentityID: u.ident}
 		}
+		w.pat.Decider = true // pat holds requests.decide
 		eight, max := 8.0, 72.0
 		for key, spec := range map[string]requests.ItemSpec{
 			"group:okta:platform":           {Requestable: true, Risk: "low"},
@@ -227,7 +228,7 @@ func TestRequest_DecisionRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	forAlice, forBob := lines[0], lines[1]
-	other0 := requests.Actor{UserID: uuid.New(), Display: "Someone"}
+	other0 := requests.Actor{UserID: uuid.New(), Display: "Someone", Decider: true}
 	w.tx(func(c *store.TenantTx) error {
 		if _, err := requests.Approve(c, forBob.ID, w.pat, "", w.now); code(err) != "self_approval" {
 			t.Errorf("requester approves: %v", err)
@@ -241,7 +242,10 @@ func TestRequest_DecisionRules(t *testing.T) {
 		if _, err := requests.Cancel(c, forBob.ID, w.alice, w.now); code(err) != "request_not_found" {
 			t.Errorf("cancel someone else's: %v", err)
 		}
-		if _, err := requests.Deny(c, forBob.ID, w.alice, "not needed", w.now); err != nil {
+		if _, err := requests.Deny(c, forBob.ID, w.alice, "not needed", w.now); code(err) != "not_an_approver" {
+			t.Errorf("a non-approver denies: %v", err)
+		}
+		if _, err := requests.Deny(c, forBob.ID, other0, "not needed", w.now); err != nil {
 			return err
 		}
 		if _, err := requests.Approve(c, forBob.ID, w.alice, "", w.now); code(err) != "not_pending" {
@@ -265,7 +269,7 @@ func TestRequest_DecisionRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	other := requests.Actor{Display: "Olu"}
+	other := requests.Actor{Display: "Olu", Decider: true}
 	w.tx(func(c *store.TenantTx) error {
 		u := &store.PlatformUser{DisplayName: "Olu", CreatedAt: w.now}
 		if err := c.InsertPlatformUser(u); err != nil {
