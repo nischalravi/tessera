@@ -18,6 +18,9 @@ type User struct {
 	Email   string
 	Name    string
 	Roles   []string
+	// Identity is the external id of the person the user is in the demo
+	// directory (empty: none), so "request access for me" has a beneficiary.
+	Identity string
 }
 
 // Bootstrap users of the demo tenants (design §18.5): Alice and Ivan are
@@ -26,14 +29,15 @@ type User struct {
 // way an admin role exists without a two-person change request.
 var (
 	LarkspurUsers = []User{
-		{"00u-alice-admin", "alice.admin@larkspur.example", "Alice (tenant admin)", []string{store.RoleTenantAdmin}},
-		{"00u-ivan-admin2", "ivan.admin@larkspur.example", "Ivan (2nd admin)", []string{store.RoleTenantAdmin}},
-		{"00u-pat-policy", "pat.policy@larkspur.example", "Pat (policy admin)", []string{store.RolePolicyAdmin}},
-		{"00u-olu-operator", "olu@larkspur.example", "Olu (operator)", []string{store.RoleOperator}},
-		{"00u-vic-viewer", "vic@larkspur.example", "Vic (viewer)", []string{store.RoleViewer}},
+		{"00u-alice-admin", "alice.admin@larkspur.example", "Alice (tenant admin)", []string{store.RoleTenantAdmin}, ""},
+		{"00u-ivan-admin2", "ivan.admin@larkspur.example", "Ivan (2nd admin)", []string{store.RoleTenantAdmin}, ""},
+		{"00u-pat-policy", "pat.policy@larkspur.example", "Pat (policy admin)", []string{store.RolePolicyAdmin}, ""},
+		// Olu and Vic sign in as two of the demo employees (issue #164)
+		{"00u-olu-operator", "olu@larkspur.example", "Olu (operator)", []string{store.RoleOperator}, "emp-1006"},
+		{"00u-vic-viewer", "vic@larkspur.example", "Vic (viewer)", []string{store.RoleViewer}, "emp-1012"},
 	}
 	GlobexUsers = []User{
-		{"00u-gina-globex", "gina@globex.example", "Gina (Globex admin)", []string{store.RoleTenantAdmin}},
+		{"00u-gina-globex", "gina@globex.example", "Gina (Globex admin)", []string{store.RoleTenantAdmin}, ""},
 	}
 )
 
@@ -80,6 +84,13 @@ func seedAuth(c *store.TenantTx, t Tenant, now time.Time) error {
 	for _, u := range t.Users {
 		email := u.Email
 		pu := &store.PlatformUser{Email: &email, DisplayName: u.Name, CreatedAt: now}
+		if u.Identity != "" {
+			i, err := c.IdentityByExternalID(u.Identity)
+			if err != nil {
+				return fmt.Errorf("seed: identity %s for %s: %w", u.Identity, u.Subject, err)
+			}
+			pu.IdentityID = &i.ID
+		}
 		if err := c.InsertPlatformUser(pu); err != nil {
 			return err
 		}

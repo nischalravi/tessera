@@ -208,6 +208,9 @@ func Run(ctx context.Context, db *store.DB, now time.Time, policies []*policy.Po
 			if err := seedAuth(c, t, now); err != nil {
 				return err
 			}
+			if err := seedCatalog(c, now); err != nil {
+				return err
+			}
 			st.Requests, err = c.CountRequests()
 			return err
 		})

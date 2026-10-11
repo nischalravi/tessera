@@ -22,6 +22,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
+	"github.com/nischalravi/tessera/mvp/server/internal/requests"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
@@ -211,6 +212,9 @@ func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
 		if _, err := jit.SweepAll(ctx, s.store, s.clock()); err != nil && ctx.Err() == nil {
 			s.log.Error("jit sweep failed", "err", err)
 		}
+		if err := requests.SweepAll(audit.WithSystemActor(ctx, requests.Sweeper), s.store, s.clock()); err != nil && ctx.Err() == nil {
+			s.log.Error("request sweep failed", "err", err)
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -219,24 +223,38 @@ func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
 	}
 }
 
-// sweepTenant expires one tenant's JIT grants, taking the write lock only
-// when there is work. The jit.expire events name the sweeper, not the
-// principal whose read happened to trigger the sweep.
+// sweepTenant expires one tenant's JIT grants and closes its due request
+// lines (requests.Sweep), taking the write lock only when there is work. The
+// events name the sweepers, not the principal whose read happened to trigger
+// the sweep.
 func (s *Server) sweepTenant(ctx context.Context, t tenancy.ID) error {
-	ctx = audit.AsSystem(ctx, "jit.sweeper")
 	now := s.clock()
-	var need bool
+	var needJIT, needReq bool
 	if err := s.store.ReadTenant(ctx, t, func(tx *store.TenantTx) error {
 		var err error
-		need, err = jit.NeedsSweep(tx, now)
+		if needJIT, err = jit.NeedsSweep(tx, now); err != nil {
+			return err
+		}
+		needReq, err = requests.NeedsSweep(tx, now)
 		return err
-	}); err != nil || !need {
+	}); err != nil {
 		return err
 	}
-	return s.store.InTenant(ctx, t, func(tx *store.TenantTx) error {
-		_, err := jit.Sweep(tx, now)
-		return err
-	})
+	if needJIT {
+		if err := s.store.InTenant(audit.AsSystem(ctx, "jit.sweeper"), t, func(tx *store.TenantTx) error {
+			_, err := jit.Sweep(tx, now)
+			return err
+		}); err != nil {
+			return err
+		}
+	}
+	if needReq {
+		return s.store.InTenant(audit.AsSystem(ctx, requests.Sweeper), t, func(tx *store.TenantTx) error {
+			_, err := requests.Sweep(tx, now)
+			return err
+		})
+	}
+	return nil
 }
 
 func (s *Server) policies() ([]*policy.Policy, error) { return s.cfg.Policies.Load() }
