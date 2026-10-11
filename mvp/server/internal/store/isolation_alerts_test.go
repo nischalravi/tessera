@@ -97,7 +97,7 @@ func TestIsolation_AlertReads(t *testing.T) {
 		if _, err := c.AlertDelivery(a.delivery); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("AlertDelivery(A's) = %v", err)
 		}
-		if seq, err := c.AlertCursor(); err != nil || seq != 7 {
+		if seq, ok, err := c.AlertCursor(); err != nil || !ok || seq != 7 {
 			t.Errorf("AlertCursor = %d, %v", seq, err)
 		}
 		if n, err := c.FailedAuditAnchors(); err != nil || n != 0 {

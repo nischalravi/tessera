@@ -385,14 +385,14 @@ func (tx *TenantTx) SaveAlertDelivery(d *AlertDelivery) error {
 		sql.Named("sent_at", TP(d.SentAt)))
 }
 
-// AlertCursor is the last audit seq the alert engine has read (0: none).
-func (tx *TenantTx) AlertCursor() (int64, error) {
-	var seq int64
-	err := tx.queryRow(alertCursorGet).Scan(&seq)
+// AlertCursor is the last audit seq the alert engine has read; ok is false
+// before the engine first ran for the tenant.
+func (tx *TenantTx) AlertCursor() (seq int64, ok bool, err error) {
+	err = tx.queryRow(alertCursorGet).Scan(&seq)
 	if err == sql.ErrNoRows {
-		return 0, nil
+		return 0, false, nil
 	}
-	return seq, err
+	return seq, err == nil, err
 }
 
 // SetAlertCursor moves the cursor.
