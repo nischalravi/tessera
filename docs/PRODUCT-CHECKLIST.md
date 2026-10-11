@@ -13,6 +13,8 @@ A box is checked (☑) only when all of these hold:
 3. It works on **real connector data**, not only on the demo connectors in `server/internal/connectors/demo*.go`, wherever data is involved.
 4. Where it changes access, it **changes the target system and verifies the change by re-reading it**. Changing only Tessera's graph does not count.
 
+The owner approved these four rules, including the strict rules 3 and 4, on 2026-10-11.
+
 Status shows how far an unchecked item has come:
 
 | Status | Meaning |
