@@ -260,6 +260,9 @@ func TestMerge_MovesAndUnmergeRestores(t *testing.T) {
 	if !is(w.accountIdentity("acct:okta:carol"), alice) || !is(w.identity("bob").ManagerID, alice) {
 		t.Error("re-sync moved items back to the merged identity")
 	}
+	if m := w.identity("alice").ManagerID; m != nil && *m == alice {
+		t.Error("re-sync made the survivor her own manager")
+	}
 	// merged identities cannot take part again
 	w.tx(func(c *store.TenantTx) error {
 		if _, err := correlation.Merge(c, "m2", carol, bob, "x", w.actor, storetest.Now); code(err) != "identity_merged" {

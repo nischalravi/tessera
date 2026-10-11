@@ -120,6 +120,20 @@ func (r *Resolver) Identity(ref *connectors.IdentityRef) *int64 {
 	return nil
 }
 
+// IdentityRefOf resolves an identity's manager or owner reference. A
+// reference to an identity merged into this one keeps pointing at the merged
+// identity, as the merge left it: no one becomes their own manager or owner.
+func (r *Resolver) IdentityRefOf(selfXID string, ref *connectors.IdentityRef) *int64 {
+	id := r.Identity(ref)
+	if self, ok := r.identityByXID[selfXID]; ok && id != nil && *id == self {
+		if raw, ok := r.identityByXID[ref.ExternalID]; ok && raw != self {
+			return &raw
+		}
+		return nil
+	}
+	return id
+}
+
 // live follows a merge to the surviving identity.
 func (r *Resolver) live(id int64) *int64 {
 	if s, ok := r.survivor[id]; ok {
@@ -187,7 +201,8 @@ func Discovery(c *store.TenantTx, now time.Time, results []*connectors.Discovery
 	}
 	for _, r := range results {
 		for _, rec := range r.Identities {
-			if err := c.SetIdentityRefsByExternalID(rec.ExternalID, res.Identity(rec.Manager), res.Identity(rec.Owner)); err != nil {
+			if err := c.SetIdentityRefsByExternalID(rec.ExternalID, res.IdentityRefOf(rec.ExternalID, rec.Manager),
+				res.IdentityRefOf(rec.ExternalID, rec.Owner)); err != nil {
 				return st, err
 			}
 		}
