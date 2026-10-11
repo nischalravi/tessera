@@ -90,7 +90,9 @@ func TestApprovalsAPI_RoutedFlow(t *testing.T) {
 func TestApprovalsAPI_CrossTenant(t *testing.T) {
 	f := storetest.TwoTenants(t)
 	h := newIsolationServer(f).Handler()
-	viewer := func(email string) authtest.User { return authtest.User{Email: email, Roles: []auth.Role{auth.RoleViewer}} }
+	viewer := func(email string) authtest.User {
+		return authtest.User{Email: email, Roles: []auth.Role{auth.RoleViewer}}
+	}
 	ua := signIn(t, f.DB, f.A.ID, viewer("a1@a.example"), authtest.Phr, storetest.Now)
 	ua2 := signIn(t, f.DB, f.A.ID, viewer("a2@a.example"), authtest.Phr, storetest.Now)
 	rec := reqDo(h, ua, "POST", "/api/approvals/delegations", fmt.Sprintf(`{"to_user_id":"%s","starts_at":"%s","ends_at":"%s","reason":"leave"}`,
