@@ -2,6 +2,7 @@ package seed
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -84,12 +85,12 @@ func seedAuth(c *store.TenantTx, t Tenant, now time.Time) error {
 	for _, u := range t.Users {
 		email := u.Email
 		pu := &store.PlatformUser{Email: &email, DisplayName: u.Name, CreatedAt: now}
-		if u.Identity != "" {
-			i, err := c.IdentityByExternalID(u.Identity)
-			if err != nil {
+		if u.Identity != "" { // absent from worlds other than the demo directory
+			if i, err := c.IdentityByExternalID(u.Identity); err == nil {
+				pu.IdentityID = &i.ID
+			} else if !errors.Is(err, store.ErrNotFound) {
 				return fmt.Errorf("seed: identity %s for %s: %w", u.Identity, u.Subject, err)
 			}
-			pu.IdentityID = &i.ID
 		}
 		if err := c.InsertPlatformUser(pu); err != nil {
 			return err

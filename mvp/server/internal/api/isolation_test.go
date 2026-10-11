@@ -113,6 +113,8 @@ var crossTenantCases = map[string]crossTenantCase{
 	"GET graph by resource": {method: "GET", path: pathf("/api/graph?resource_id=%d"), key: "resource:aws:prod"},
 	"POST simulate disable account": {method: "POST", path: fixed("/api/simulate"), key: "acct:aws:svc-etl",
 		body: func(id int64) string { return fmt.Sprintf(`{"disable_account_ids":[%d]}`, id) }},
+	"PUT catalog item": {method: "PUT", path: pathf("/api/catalog/items/%d"), key: "group:okta:platform",
+		body: func(int64) string { return `{"requestable":true,"risk":"low"}` }},
 }
 
 // routeParamKey maps each route with path parameters to the cases above.
@@ -126,6 +128,7 @@ var routeParamCases = map[string][]string{
 	"POST /api/jit/requests/{request_id}/approve": {"POST jit approve"},
 	"POST /api/jit/requests/{request_id}/deny":    {"POST jit deny"},
 	"POST /api/jit/requests/{request_id}/revoke":  {"POST jit revoke"},
+	"PUT /api/catalog/items/{group_id}":           {"PUT catalog item"},
 }
 
 // TestIsolation_RouteCrossTenant: as tenant B, every route with a path
@@ -151,6 +154,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		}
 		if rt.Pattern == "/api/audit/events/{event_id}/proof" {
 			continue // TestIsolation_AuditRoutes
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/requests/{request_id}") {
+			continue // TestRequestsAPI_CrossTenant (a UUID, not a fixture id)
 		}
 		if rt.Pattern == "/api/auth/sessions/{session_id}" {
 			continue // TestIsolation_SessionCookieScoped (a UUID, not a fixture id)
@@ -211,7 +217,9 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 	h := srv.Handler()
 	b := f.B.IDs
 	param := regexp.MustCompile(`\{[a-z_]+\}`)
+	lines := seedRequestLines(t, f) // A's justification carries the sentinel
 	values := map[string]string{
+		"/api/requests/{request_id}":           lines[f.B.ID],
 		"/api/identities/{identity_id}":        fmt.Sprint(b["alice"]),
 		"/api/jml/leaver-plan/{identity_id}":   fmt.Sprint(b["alice"]),
 		"/api/reviews/campaigns/{campaign_id}": fmt.Sprint(b["campaign"]),

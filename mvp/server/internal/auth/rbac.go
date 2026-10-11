@@ -68,21 +68,29 @@ const (
 	PermConnectionsRead     Permission = "connections.read"
 	PermConnectionsManage   Permission = "connections.manage"
 	PermConnectionsActivate Permission = "connections.activate"
+	// access requests (issue #164)
+	PermRequestsCreate       Permission = "requests.create"
+	PermRequestsCreateOthers Permission = "requests.create_for_others"
+	PermRequestsDecide       Permission = "requests.decide"
+	PermCatalogManage        Permission = "catalog.manage"
 )
 
 // rolePermissions is the static role -> permission map (Cedar-ready, §12.1).
 // tenant_admin deliberately has no data-plane write permission: admins run
 // the platform, policy admins change access (separation of duties).
+// Everyone but break-glass may request access for themselves; operators
+// and policy admins may also request for others and decide (issue #164).
 var rolePermissions = map[Role][]Permission{
-	RoleViewer: {PermGraphRead},
+	RoleViewer: {PermGraphRead, PermRequestsCreate},
 	RoleOperator: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
-		PermReviewsDecide, PermHRISSimulateEvent},
-	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead},
+		PermReviewsDecide, PermHRISSimulateEvent, PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide},
+	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead, PermRequestsCreate},
 	RolePolicyAdmin: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
-		PermReviewsDecide, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync},
+		PermReviewsDecide, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
+		PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide, PermCatalogManage},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
-		PermConnectionsActivate},
+		PermConnectionsActivate, PermRequestsCreate},
 	RoleBreakGlass: {PermAdminRead, PermBreakGlassRecover},
 }
 

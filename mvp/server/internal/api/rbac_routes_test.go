@@ -78,6 +78,15 @@ DELETE /api/connections/{id}/checklist/{item}/skip   connections.manage -
 POST   /api/connections/{id}/transition              connections.manage -
 POST   /api/connections/{id}/activate                connections.activate STEP_UP_POLICY
 POST   /api/connections/{id}/retire                  connections.manage STEP_UP_POLICY
+GET    /api/catalog                                  requests.create -  # issue #164 (?all=1: catalog.manage in the handler)
+PUT    /api/catalog/items/{group_id}                 catalog.manage  STEP_UP_POLICY  # issue #164
+POST   /api/requests                                 requests.create -  # issue #164 (others: requests.create_for_others in the handler)
+GET    /api/requests                                 requests.create -  # issue #164 (scope=pending|all: requests.decide or graph.read)
+GET    /api/requests/{request_id}                    requests.create -  # issue #164
+POST   /api/requests/{request_id}/approve            requests.decide STEP_UP_POLICY  # issue #164
+POST   /api/requests/{request_id}/deny               requests.decide -  # issue #164
+POST   /api/requests/{request_id}/cancel             requests.create -  # issue #164 (the requester)
+POST   /api/requests/{request_id}/remove             requests.create -  # issue #164 (requests.decide, or the beneficiary)
 POST   /api/connections/{id}/validate                connections.manage -
 GET    /api/connections/{id}/validations/{run}       connections.read   -
 POST   /api/connections/{id}/dry-run                 connections.manage -
