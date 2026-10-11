@@ -46,3 +46,5 @@ jobs:
           cache-dependency-path: mvp/frontend/package-lock.json
       - run: npm ci
       - run: npm run build
+      # unit tests of the API client (node:test, no extra dependencies)
+      - run: npm test
