@@ -158,11 +158,30 @@ The routes are documented at `/api/readiness/openapi.json`.
 `GET /api/audit/events/{event_id}/proof` · `GET /api/audit/checkpoints[?from_seq=]` · `GET /api/audit/keys` ·
 `POST /api/audit/verify {from_seq?, to_seq?}` · `GET /api/audit/export[?from_seq=&to_seq=]` (NDJSON) ·
 `GET /api/auth/session` · `POST /api/auth/logout` · `GET /api/auth/sessions` · `DELETE /api/auth/sessions/{session_id}` ·
-`GET|POST /api/auth/dev-login` (dev and test only)
+`GET|POST /api/auth/dev-login` (dev and test only) ·
+`GET|POST /api/reviews/schedules` · `PUT /api/reviews/schedules/{id}` · `POST /api/reviews/schedules/{id}/run`
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
 or HRIS execution is always the signed-in user.
+
+### Scheduled access reviews
+
+**Access reviews → Schedules** (issue #166) runs campaigns on a recurrence: once, every
+quarter, every six months or every year. A schedule sets:
+
+- **Scope:** one system or all; privileged grants only, or every risky grant.
+- **Review window:** how many days reviewers get, and when the reminder goes out.
+- **Close-out:** what happens to items nobody decided by the due date. Either they are revoked,
+  or they go to an escalation reviewer for a few days and are revoked after that.
+
+The scheduler (`reviews.scheduler`, every 5 minutes) launches due schedules. Each period
+(`2026-Q4`, `2026-H2`, `2026`) runs once, even after a restart. Periods missed while the server
+was down collapse into one run. The next run is counted from the scheduled time, so it doesn't
+drift. **Run now** launches outside the schedule. Reminders, escalations and close-outs are audit
+events; delivery by email or chat comes with alerting (#168). Reviewers are assigned as for
+manual campaigns: the manager, then the owner, then the security lead. The scheduler follows
+`TESSERA_NOW` in dev.
 
 ### Audit ledger
 

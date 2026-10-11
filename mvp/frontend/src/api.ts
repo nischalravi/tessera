@@ -508,6 +508,39 @@ export async function devLogin(tenant: string, subject: string, method: string):
 
 export const hrisExecute = (eventId: number) => api(`/hris/events/${eventId}/execute`, {});
 
+// ---------------------------------------------------------------- scheduled reviews (issue #166)
+
+export type Recurrence = "once" | "quarterly" | "semiannual" | "annual";
+export interface ReviewLaunch {
+  id: string; period: string; campaign_id: number; launched_at: string; due_at: string;
+  reminded_at: string | null; escalated_at: string | null; closed_at: string | null; revoked: number;
+}
+export interface ReviewSchedule {
+  id: string;
+  name: string;
+  system: string | null;
+  privileged_only: boolean;
+  unused_days: number;
+  duration_days: number;
+  reminder_days: number;
+  close_out: "revoke" | "escalate";
+  escalation_reviewer: { id: number; name: string } | null;
+  escalation_days: number;
+  recurrence: Recurrence;
+  next_run_at: string | null;
+  enabled: boolean;
+  updated_at: string;
+  launches: ReviewLaunch[];
+}
+export interface ReviewScheduleInput {
+  name: string; system: string | null; privileged_only: boolean; unused_days: number; duration_days: number; reminder_days: number;
+  close_out: "revoke" | "escalate"; escalation_identity_id: number | null; escalation_days: number; recurrence: Recurrence;
+  first_run_at?: string; enabled: boolean;
+}
+export const createReviewSchedule = (b: ReviewScheduleInput) => api<ReviewSchedule>("/reviews/schedules", b);
+export const updateReviewSchedule = (id: string, b: ReviewScheduleInput) => api<ReviewSchedule>(`/reviews/schedules/${encodeURIComponent(id)}`, b, "PUT");
+export const runReviewSchedule = (id: string) => api<ReviewLaunch>(`/reviews/schedules/${encodeURIComponent(id)}/run`, {});
+
 export const simulate = (body: { remove_edge_ids?: number[]; add_edges?: { src: string; dst: string }[]; disable_account_ids?: number[] }) =>
   api<SimResult>("/simulate", { remove_edge_ids: [], add_edges: [], disable_account_ids: [], ...body });
 
