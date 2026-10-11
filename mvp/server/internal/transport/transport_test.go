@@ -415,3 +415,30 @@ func TestApplyRefusedForProd(t *testing.T) {
 }
 
 func b64(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
+
+func TestPlan_NameAndSystemClashesAreManual(t *testing.T) {
+	e := newEnv(t)
+	e.seedSource(t)
+	e.trust(t)
+	write(t, e.dst, func(tx *store.TenantTx) error {
+		// Another name for Corp AD's system, and a retired Workday.
+		if _, err := e.rd.Create(tx, readiness.CreateInput{Name: "AD (old)", ConnectorType: "demo-ad", System: "corp-ad",
+			Config: json.RawMessage(`{}`)}, "admin", t0); err != nil {
+			return err
+		}
+		b, err := e.rd.Create(tx, readiness.CreateInput{Name: "Workday", ConnectorType: "demo-ad", System: "wd-old",
+			Config: json.RawMessage(`{}`)}, "admin", t0)
+		if err != nil {
+			return err
+		}
+		return e.rd.Retire(tx, b.Conn.ID, "admin", t0)
+	})
+	raw := e.export(t).JWS
+	got := actions(e.plan(t, raw, Target{}))
+	if got["connections/Corp AD"] != Manual || got["connections/Workday"] != Manual {
+		t.Fatalf("plan %v", got)
+	}
+	if _, err := e.apply(t, raw, false); err != nil {
+		t.Fatalf("apply with manual items: %v", err)
+	}
+}

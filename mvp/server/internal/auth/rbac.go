@@ -68,6 +68,8 @@ const (
 	PermConnectionsRead     Permission = "connections.read"
 	PermConnectionsManage   Permission = "connections.manage"
 	PermConnectionsActivate Permission = "connections.activate"
+	// Config transport between tenants (issue #170).
+	PermConfigTransport Permission = "config.transport"
 )
 
 // rolePermissions is the static role -> permission map (Cedar-ready, §12.1).
@@ -82,7 +84,7 @@ var rolePermissions = map[Role][]Permission{
 		PermReviewsDecide, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
-		PermConnectionsActivate},
+		PermConnectionsActivate, PermConfigTransport},
 	RoleBreakGlass: {PermAdminRead, PermBreakGlassRecover},
 }
 
@@ -169,7 +171,7 @@ var scopePermissions = map[Scope][]Permission{
 		PermConnectionsManage, PermConnectionsActivate},
 	ScopeAudit: {PermAuditRead, PermAuditVerify},
 	ScopeAdmin: {PermAdminRead, PermAdminChangeReq, PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev,
-		PermBreakGlassRecover},
+		PermBreakGlassRecover, PermConfigTransport},
 }
 
 // perms returns the union of the roles' permissions.

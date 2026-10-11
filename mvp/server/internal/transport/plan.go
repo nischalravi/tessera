@@ -240,12 +240,31 @@ func planConnections(tx *store.TenantTx, rd *readiness.Service, b *Bundle, p *Pl
 	if err != nil {
 		return err
 	}
+	all, err := tx.Connections()
+	if err != nil {
+		return err
+	}
+	// Names and systems are unique across all connections, retired ones too.
+	takenName, takenSystem := map[string]*store.Connection{}, map[string]*store.Connection{}
+	for _, c := range all {
+		takenName[c.Name] = c
+		takenSystem[c.System] = c
+	}
 	inBundle := map[string]bool{}
 	for _, c := range b.Connections {
 		inBundle[c.Name] = true
 		it := Item{Section: "connections", Name: c.Name}
 		l, ok := live[c.Name]
 		switch {
+		case !ok && takenName[c.Name] != nil:
+			it.Action = Manual
+			it.Notes = append(it.Notes, "a retired connection here has this name: rename one of them")
+		case !ok && takenSystem[c.System] != nil:
+			it.Action = Manual
+			it.Notes = append(it.Notes, fmt.Sprintf("connection %q here already covers system %q", takenSystem[c.System].Name, c.System))
+		case ok && l.conn.System != c.System:
+			it.Action = Manual
+			it.Notes = append(it.Notes, fmt.Sprintf("this connection covers system %q here, %q in the bundle", l.conn.System, c.System))
 		case !ok:
 			it.Action = Add
 			it.Notes = append(it.Notes, "created as a draft: validate and dry-run it here before activating")

@@ -46,7 +46,7 @@ const (
 	// MediaType is the JWS "typ".
 	MediaType = "tessera-config-bundle+json"
 	// MaxBundleBytes caps an uploaded bundle.
-	MaxBundleBytes = 4 << 20
+	MaxBundleBytes = 1 << 20
 )
 
 // Error is a refused request; Code is stable for API clients.

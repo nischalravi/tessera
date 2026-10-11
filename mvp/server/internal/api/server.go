@@ -26,9 +26,11 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
+	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
+	"github.com/nischalravi/tessera/mvp/server/internal/transport"
 )
 
 // DefaultMaxBodyBytes caps request bodies (every request body is a small JSON object).
@@ -83,6 +85,9 @@ type Config struct {
 	// AuditAnchor is TESSERA_AUDIT_ANCHOR: POST /api/audit/verify checks
 	// checkpoints against it when it is a file:// URL.
 	AuditAnchor string
+	// Sealer seals and opens tenant secrets under the KEK (config bundle
+	// signing keys). Nil: export is unavailable.
+	Sealer *seal.Sealer
 	// RateLimits are the per-IP limits on anonymous and /api/auth/*
 	// requests (ratelimit.go); the zero value is the defaults.
 	RateLimits RateLimits
@@ -142,6 +147,7 @@ func New(cfg Config) *Server {
 	s.registerRoutes()
 	s.registerAuditRoutes()
 	s.registerReadinessRoutes()
+	s.registerTransportRoutes()
 	s.registerAuthRoutes()
 	s.checkPublicRoutes()
 	return s
@@ -527,12 +533,15 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var he *httpError
 	var ve *validationError
 	var re *readiness.Error
+	var te *transport.Error
 	var dn denial
 	switch {
 	case errors.As(err, &dn):
 		auth.WriteDenial(w, dn.d)
 	case errors.As(err, &re):
 		writeJSON(w, re.Status, readinessErrorBody(re))
+	case errors.As(err, &te):
+		writeJSON(w, te.Status, map[string]any{"error": te.Code, "detail": te.Msg})
 	case errors.As(err, &he):
 		writeJSON(w, he.status, detail(he.msg))
 	case errors.As(err, &ve):
