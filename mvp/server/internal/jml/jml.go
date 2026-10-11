@@ -223,10 +223,18 @@ func LeaverPlan(c *store.TenantTx, now time.Time, identityID int64, withImpact b
 	if manager != nil {
 		newOwner, newOwnerName = manager.ID, manager.Name
 	}
+	handover, err := ownershipHandover(c, identityID, newOwner, newOwnerName)
+	if err != nil {
+		return nil, err
+	}
 	for _, n := range owned {
+		to, toName := newOwner, newOwnerName
+		if h, ok := handover[store.OwnedIdentity+"/"+strconv.FormatInt(n.ID, 10)]; ok {
+			to, toName = h.primary, h.primaryName
+		}
 		steps = append(steps, Step{{Key: "action", Value: "reassign_owner"}, {Key: "identity_id", Value: n.ID},
-			{Key: "system", Value: "tessera"}, {Key: "target", Value: n.Name}, {Key: "new_owner_id", Value: newOwner},
-			{Key: "detail", Value: fmt.Sprintf("Transfer ownership of %s (%s) to %s", n.Name, n.Type, newOwnerName)}})
+			{Key: "system", Value: "tessera"}, {Key: "target", Value: n.Name}, {Key: "new_owner_id", Value: to},
+			{Key: "detail", Value: fmt.Sprintf("Transfer ownership of %s (%s) to %s", n.Name, n.Type, toName)}})
 		nAccts, err := c.IdentityAccounts(n.ID)
 		if err != nil {
 			return nil, err
@@ -246,6 +254,7 @@ func LeaverPlan(c *store.TenantTx, now time.Time, identityID int64, withImpact b
 			}
 		}
 	}
+	steps = append(steps, handoverSteps(handover)...)
 	dels, err := c.Delegations()
 	if err != nil {
 		return nil, err
@@ -632,6 +641,8 @@ func applyStep(c *store.TenantTx, now time.Time, ident *store.Identity, st Step)
 	case "reassign_owner":
 		id, _ := stepInt(st, "identity_id")
 		err = c.SetIdentityOwner(id, optInt(stepGet(st, "new_owner_id")))
+	case "reassign_ownership":
+		err = reassignOwnership(c, now, st)
 	case "rotate_secret":
 		id, _ := stepInt(st, "secret_id")
 		err = c.SetSecretRotated(id, now)

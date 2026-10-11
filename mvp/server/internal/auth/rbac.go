@@ -56,6 +56,9 @@ const (
 	PermHRISExecute       Permission = "hris.execute"
 	PermJITSweep          Permission = "jit.sweep"
 	PermConnectorsSync    Permission = "connectors.sync"
+	// PermOwnershipManage assigns owners to applications, entitlements,
+	// resources and machine identities (issue #167).
+	PermOwnershipManage   Permission = "ownership.manage"
 	PermAuditRead         Permission = "audit.read"
 	PermAuditVerify       Permission = "audit.verify"
 	PermAdminRead         Permission = "admin.read"
@@ -76,10 +79,10 @@ const (
 var rolePermissions = map[Role][]Permission{
 	RoleViewer: {PermGraphRead},
 	RoleOperator: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
-		PermReviewsDecide, PermHRISSimulateEvent},
+		PermReviewsDecide, PermHRISSimulateEvent, PermOwnershipManage},
 	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead},
 	RolePolicyAdmin: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
-		PermReviewsDecide, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync},
+		PermReviewsDecide, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync, PermOwnershipManage},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
 		PermConnectionsActivate},
@@ -166,7 +169,7 @@ var scopePermissions = map[Scope][]Permission{
 	ScopeRead: {PermGraphRead, PermConnectionsRead},
 	ScopeWrite: {PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage, PermReviewsDecide,
 		PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
-		PermConnectionsManage, PermConnectionsActivate},
+		PermConnectionsManage, PermConnectionsActivate, PermOwnershipManage},
 	ScopeAudit: {PermAuditRead, PermAuditVerify},
 	ScopeAdmin: {PermAdminRead, PermAdminChangeReq, PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev,
 		PermBreakGlassRecover},

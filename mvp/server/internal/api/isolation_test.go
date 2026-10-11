@@ -113,6 +113,12 @@ var crossTenantCases = map[string]crossTenantCase{
 	"GET graph by resource": {method: "GET", path: pathf("/api/graph?resource_id=%d"), key: "resource:aws:prod"},
 	"POST simulate disable account": {method: "POST", path: fixed("/api/simulate"), key: "acct:aws:svc-etl",
 		body: func(id int64) string { return fmt.Sprintf(`{"disable_account_ids":[%d]}`, id) }},
+	"PUT group ownership": {method: "PUT", path: pathf("/api/ownership/group/%d"), key: "group:okta:payments-approvers",
+		body: func(int64) string { return `{}` }},
+	"PUT identity ownership": {method: "PUT", path: pathf("/api/ownership/identity/%d"), key: "svc-etl",
+		body: func(int64) string { return `{}` }},
+	"POST bulk ownership": {method: "POST", path: fixed("/api/ownership/bulk"), key: "svc-etl",
+		body: func(id int64) string { return fmt.Sprintf(`{"objects":[{"kind":"identity","key":"%d"}]}`, id) }},
 }
 
 // routeParamKey maps each route with path parameters to the cases above.
@@ -126,6 +132,7 @@ var routeParamCases = map[string][]string{
 	"POST /api/jit/requests/{request_id}/approve": {"POST jit approve"},
 	"POST /api/jit/requests/{request_id}/deny":    {"POST jit deny"},
 	"POST /api/jit/requests/{request_id}/revoke":  {"POST jit revoke"},
+	"PUT /api/ownership/{kind}/{object_key}":      {"PUT group ownership", "PUT identity ownership"},
 }
 
 // TestIsolation_RouteCrossTenant: as tenant B, every route with a path

@@ -55,8 +55,10 @@ var (
 		VALUES (@tenant, @external_id, @name, @email, @type, @department, @title, @status, @manager_id,
 			@owner_id, @source, @description, @hired_at, @terminated_at, @created_at)`)
 	identitiesSetRefsByXID = tq("identities.set_manager_owner_by_external_id", `
-		UPDATE identities SET manager_id = @manager_id, owner_id = @owner_id
-		WHERE tenant_id = @tenant AND external_id = @external_id`)
+		UPDATE identities SET manager_id = @manager_id,
+			owner_id = CASE WHEN EXISTS (SELECT 1 FROM ownerships o WHERE o.tenant_id = @tenant
+				AND o.object_kind = 'identity' AND o.object_key = CAST(identities.id AS TEXT)) THEN owner_id ELSE @owner_id END
+		WHERE identities.tenant_id = @tenant AND identities.external_id = @external_id`)
 	identitiesSetOwner = tq("identities.set_owner", `
 		UPDATE identities SET owner_id = @owner_id WHERE tenant_id = @tenant AND id = @id`)
 	identitiesSetManager = tq("identities.set_manager", `
@@ -159,6 +161,7 @@ func (tx *TenantTx) InsertIdentity(i *Identity) (int64, error) {
 }
 
 // SetIdentityRefsByExternalID sets manager and owner of the identity with the external id.
+// An owner set in Tessera (an ownerships row, #167) is kept.
 func (tx *TenantTx) SetIdentityRefsByExternalID(xid string, managerID, ownerID *int64) error {
 	_, err := tx.exec(identitiesSetRefsByXID, sql.Named("manager_id", IP(managerID)), sql.Named("owner_id", IP(ownerID)),
 		sql.Named("external_id", xid))
