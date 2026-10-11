@@ -115,7 +115,7 @@ func (s *SMTPMailer) Send(ctx context.Context, m Message) error {
 	_ = conn.SetDeadline(time.Now().Add(smtpTimeout))
 	c, err := smtp.NewClient(conn, s.Host)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return fmt.Errorf("smtp: %w", err)
 	}
 	defer c.Close()
