@@ -32,7 +32,8 @@ var (
 	LarkspurUsers = []User{
 		{"00u-alice-admin", "alice.admin@larkspur.example", "Alice (tenant admin)", []string{store.RoleTenantAdmin}, ""},
 		{"00u-ivan-admin2", "ivan.admin@larkspur.example", "Ivan (2nd admin)", []string{store.RoleTenantAdmin}, ""},
-		{"00u-pat-policy", "pat.policy@larkspur.example", "Pat (policy admin)", []string{store.RolePolicyAdmin}, ""},
+		// Pat signs in as Anders Zeller, Hana's (Vic's) manager, so Vic's requests reach Pat first (#165)
+		{"00u-pat-policy", "pat.policy@larkspur.example", "Pat (policy admin)", []string{store.RolePolicyAdmin}, "emp-1011"},
 		// Olu and Vic sign in as two of the demo employees (issue #164)
 		{"00u-olu-operator", "olu@larkspur.example", "Olu (operator)", []string{store.RoleOperator}, "emp-1006"},
 		{"00u-vic-viewer", "vic@larkspur.example", "Vic (viewer)", []string{store.RoleViewer}, "emp-1012"},

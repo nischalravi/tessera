@@ -527,6 +527,41 @@ export interface CatalogEntry {
   /** null: no limit. */
   max_hours: number | null;
   updated_at: string | null;
+  /** Approval stages, in order (issue #165), and hours before a stage escalates to deciders. */
+  approval: { stages: StageKind[]; escalate_after_hours: number };
+}
+export type StageKind = "manager" | "owner" | "decider";
+export interface RequestStage {
+  index: number;
+  kind: StageKind;
+  status: "queued" | "waiting" | "approved" | "denied" | "closed";
+  assignee: PersonRef | null;
+  due_at: string | null;
+  escalated: boolean;
+  decided_by: { id: string; display_name: string } | null;
+  on_behalf_of: { id: string; display_name: string } | null;
+  decided_at: string | null;
+  reason: string | null;
+}
+/** A request line the signed-in user may decide now (GET /api/approvals/inbox). */
+export interface ApprovalItem {
+  line: RequestLine;
+  stage: number | null;
+  kind: StageKind;
+  escalated: boolean;
+  on_behalf_of: { id: string; display_name: string } | null;
+}
+export interface UserRef { id: string; display_name: string }
+export interface ApprovalDelegation {
+  id: string;
+  from: UserRef;
+  to: UserRef;
+  starts_at: string;
+  ends_at: string;
+  reason: string;
+  created_at: string;
+  revoked_at: string | null;
+  active: boolean;
 }
 export interface CatalogView {
   /** The person the signed-in user is; null when not linked (they request for others only). */
@@ -555,6 +590,7 @@ export interface RequestLine {
   expires_at: string | null;
   closed_at: string | null;
   events?: { event: string; actor: string; note: string | null; at: string }[];
+  stages: RequestStage[];
   can_approve: boolean;
   can_cancel: boolean;
   can_remove: boolean;
@@ -567,8 +603,12 @@ export const approveRequest = (id: string, reason?: string) => line(id, "approve
 export const denyRequest = (id: string, reason: string) => line(id, "deny", { reason });
 export const cancelRequest = (id: string) => line(id, "cancel");
 export const removeRequest = (id: string, reason?: string) => line(id, "remove", reason ? { reason } : {});
-export const putCatalogItem = (groupId: number, body: Omit<CatalogEntry, "id" | "group" | "owner" | "updated_at"> & { owner_identity_id: number | null }) =>
-  api<CatalogEntry>(`/catalog/items/${groupId}`, body, "PUT");
+export const putCatalogItem = (groupId: number, body: Omit<CatalogEntry, "id" | "group" | "owner" | "updated_at" | "approval"> & {
+  owner_identity_id: number | null; approval_stages?: StageKind[]; escalate_after_hours?: number;
+}) => api<CatalogEntry>(`/catalog/items/${groupId}`, body, "PUT");
+export const createDelegation = (body: { to_user_id: string; starts_at: string; ends_at: string; reason: string }) =>
+  api<ApprovalDelegation>("/approvals/delegations", body);
+export const revokeDelegation = (id: string) => api<ApprovalDelegation>(`/approvals/delegations/${encodeURIComponent(id)}/revoke`, {});
 
 export const simulate = (body: { remove_edge_ids?: number[]; add_edges?: { src: string; dst: string }[]; disable_account_ids?: number[] }) =>
   api<SimResult>("/simulate", { remove_edge_ids: [], add_edges: [], disable_account_ids: [], ...body });

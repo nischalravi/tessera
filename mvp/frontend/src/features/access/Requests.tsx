@@ -1,20 +1,21 @@
-import { useMemo, useState } from "react";
+import { FormEvent, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Check, FileText, Pencil, Plus, Trash2, Undo2, X } from "lucide-react";
-import { RequestLine, approveRequest, cancelRequest, denyRequest, fmtDate, relTime, removeRequest, useApi } from "../../api";
+import { ApprovalDelegation, ApprovalItem, RequestLine, UserRef, approveRequest, cancelRequest, createDelegation, denyRequest, fmtDate, relTime, removeRequest, revokeDelegation, useApi } from "../../api";
 import { useSession } from "../../app/auth";
 import { usePersona } from "../../app/persona";
 import {
   Button, ButtonLink, Column, DataTable, EmptyState, MyAccessTabs, Page, PreviewBadge, SidePanel, Status, Tabs, useConfirm, useSelected, useToast,
 } from "../../components";
 import { mockRequests, useMockState } from "../../mocks";
+import { Stages } from "./stages";
 
 /**
  * Access requests (issue #164): your requests and the ones made for you, the approval queue for
  * people who decide, every request, and drafts (saved in this browser). Each request line is one
  * person and one item; its history shows who requested, who decided and when it ended.
  */
-type Tab = "mine" | "approvals" | "all" | "drafts";
+type Tab = "mine" | "approvals" | "all" | "delegations" | "drafts";
 
 const durationLabel = (h: number | null) => (h == null ? "Until removed" : h % 24 === 0 && h >= 48 ? `${h / 24} days` : `${h} h`);
 
@@ -23,16 +24,21 @@ export function Requests() {
   const { can } = useSession();
   const decider = can("requests.decide");
   const tab = (params.get("tab") ?? "mine") as Tab;
-  const scope = tab === "approvals" ? "pending" : tab === "all" ? "all" : "mine";
-  const { data, error, reload } = useApi<RequestLine[]>(tab === "drafts" ? null : `/requests?scope=${scope}`);
-  const pending = useApi<RequestLine[]>(decider ? "/requests?scope=pending" : null);
+  const scope = tab === "all" ? "all" : "mine";
+  const listed = useApi<RequestLine[]>(tab === "mine" || tab === "all" ? `/requests?scope=${scope}` : null);
+  // what the API routed to you: manager and owner stages, delegations, and access-approver stages
+  const inbox = useApi<ApprovalItem[]>("/approvals/inbox");
+  const approvals = useMemo(() => inbox.data?.map((a) => a.line) ?? null, [inbox.data]);
+  const { data, error, reload } = tab === "approvals" ? { data: approvals, error: inbox.error, reload: inbox.reload } : listed;
   const { actor } = usePersona();
   const mock = useMockState();
   const drafts = mock.requests.filter((r) => r.status === "draft" && r.requester === actor);
   const previews = mock.requests.filter((r) => r.status !== "draft" && r.requester === actor);
   const tabs: { id: Tab; label: string }[] = [
     { id: "mine", label: "My requests" },
-    ...(decider ? [{ id: "approvals" as Tab, label: `Approvals${pending.data ? ` (${pending.data.length})` : ""}` }, { id: "all" as Tab, label: "All requests" }] : []),
+    { id: "approvals", label: `Approvals${approvals ? ` (${approvals.length})` : ""}` },
+    ...(decider ? [{ id: "all" as Tab, label: "All requests" }] : []),
+    { id: "delegations", label: "Delegations" },
     { id: "drafts", label: `Drafts (${drafts.length})` },
   ];
   return (
@@ -44,7 +50,7 @@ export function Requests() {
       actions={<ButtonLink to="/access/request" variant="primary" icon={<Plus size={15} />}>New request</ButtonLink>}
     >
       <Tabs label="Request views" value={tab} onChange={(v) => setParams(v === "mine" ? {} : { tab: v })} tabs={tabs} />
-      {tab === "drafts" ? <Drafts drafts={drafts} /> : <Lines rows={data} error={error} reload={reload} tab={tab} />}
+      {tab === "drafts" ? <Drafts drafts={drafts} /> : tab === "delegations" ? <Delegations /> : <Lines rows={data} error={error} reload={reload} tab={tab} />}
       {tab === "mine" && previews.length > 0 && (
         <p className="small muted mt">
           {previews.length} business-role request{previews.length === 1 ? "" : "s"} saved in this browser <PreviewBadge what="Business roles have no backend yet" />
@@ -141,6 +147,7 @@ function LinePanel({ id, onClose }: { id: string; onClose: () => void }) {
             {l.decided_by && <><dt>Decided by</dt><dd>{l.decided_by.display_name}, {fmtDate(l.decided_at)}</dd></>}
             {l.decision_reason && <><dt>Reason</dt><dd>{l.decision_reason}</dd></>}
           </dl>
+          {l.stages.length > 0 && <><h3 className="mt">Approval stages</h3><Stages stages={l.stages} /></>}
           <h3 className="mt">History</h3>
           <ol className="timeline">
             {(l.events ?? []).map((e, i) => (
@@ -182,6 +189,85 @@ function Drafts({ drafts }: { drafts: ReturnType<typeof useMockState>["requests"
           </tbody>
         </table>
       )}
+    </div>
+  );
+}
+
+/** Hand your approvals to someone while you're away (issue #165). They decide what is routed to you, never their own requests. */
+function Delegations() {
+  const { data, error, reload } = useApi<ApprovalDelegation[]>("/approvals/delegations");
+  const { data: people } = useApi<UserRef[]>("/approvals/delegates");
+  const toast = useToast();
+  const confirm = useConfirm();
+  const today = new Date().toISOString().slice(0, 10);
+  const [to, setTo] = useState("");
+  const [from, setFrom] = useState(today);
+  const [until, setUntil] = useState("");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      // whole days in the viewer's time zone: from the start of the first day to the end of the last
+      await createDelegation({ to_user_id: to, starts_at: new Date(`${from}T00:00:00`).toISOString(), ends_at: new Date(`${until}T23:59:59`).toISOString(), reason: reason.trim() });
+      toast("Delegation saved");
+      setTo(""); setUntil(""); setReason("");
+      reload();
+    } catch (err: any) {
+      toast(String(err.message ?? err), { kind: "error" });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="split request-split mt">
+      <div className="card flush">
+        {!data ? <p className="small muted" style={{ padding: 16 }}>{error ?? "Loading…"}</p> : data.length === 0 ? (
+          <EmptyState title="No delegations" icon={<Undo2 size={18} />}>Delegate your approvals before you go on leave; they come back to you when it ends.</EmptyState>
+        ) : (
+          <div className="table-scroll">
+            <table>
+              <thead><tr><th>From</th><th>To</th><th>When</th><th className="hide-narrow">Reason</th><th>State</th><th /></tr></thead>
+              <tbody>
+                {data.map((d) => (
+                  <tr key={d.id}>
+                    <td className="small">{d.from.display_name}</td>
+                    <td className="small">{d.to.display_name}</td>
+                    <td className="small nowrap">{fmtDate(d.starts_at)} – {fmtDate(d.ends_at)}</td>
+                    <td className="small hide-narrow">{d.reason}</td>
+                    <td><Status s={d.revoked_at ? "revoked" : d.active ? "active" : new Date(d.ends_at) < new Date() ? "expired" : "scheduled"} /></td>
+                    <td className="actions-cell">
+                      {!d.revoked_at && new Date(d.ends_at) > new Date() && (
+                        <Button size="sm" variant="ghost" icon={<X size={14} />} onClick={async () => {
+                          if ((await confirm({ title: "End this delegation now?", confirmLabel: "End delegation", danger: true })) === null) return;
+                          try { await revokeDelegation(d.id); toast("Delegation ended"); reload(); } catch (err: any) { toast(String(err.message ?? err), { kind: "error" }); }
+                        }}>End</Button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+      <form className="card stack" onSubmit={submit} aria-label="Delegate your approvals">
+        <h2>Delegate your approvals</h2>
+        <label className="field">To
+          <select className="input" value={to} onChange={(e) => setTo(e.target.value)} required>
+            <option value="">Choose a person…</option>
+            {(people ?? []).map((p) => <option key={p.id} value={p.id}>{p.display_name}</option>)}
+          </select>
+        </label>
+        <div className="row">
+          <label className="field" style={{ flex: 1 }}>From<input className="input" type="date" value={from} min={today} onChange={(e) => setFrom(e.target.value)} required /></label>
+          <label className="field" style={{ flex: 1 }}>Until<input className="input" type="date" value={until} min={from} onChange={(e) => setUntil(e.target.value)} required /></label>
+        </div>
+        <label className="field">Reason<input className="input" value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} placeholder="Annual leave" required /></label>
+        <p className="small muted">They approve what is routed to you as a manager or owner, for at most 90 days. Never their own requests, and never yours.</p>
+        <div className="row"><Button type="submit" variant="primary" disabled={busy || !to || !until || !reason.trim()}>{busy ? "Saving…" : "Delegate"}</Button></div>
+      </form>
     </div>
   );
 }

@@ -162,7 +162,9 @@ The routes are documented at `/api/readiness/openapi.json`.
 `GET /api/catalog[?all=1]` · `PUT /api/catalog/items/{group_id}` ·
 `POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours}` ·
 `GET /api/requests[?scope=mine|pending|all&status=]` · `GET /api/requests/{id}` ·
-`POST /api/requests/{id}/approve|deny|cancel|remove {reason}`
+`POST /api/requests/{id}/approve|deny|cancel|remove {reason}` ·
+`GET /api/approvals/inbox` · `GET /api/approvals/delegates` · `GET|POST /api/approvals/delegations` ·
+`POST /api/approvals/delegations/{id}/revoke`
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
@@ -191,11 +193,25 @@ expired lines, and lines whose grant was removed elsewhere (a review, a revoke).
 keeps its history (submitted, approved, denied, cancelled, expired, removed), and each change
 is audited.
 
+**Approval routing** (issue #165). Each catalog item has ordered approval stages. Each stage is
+one of: the person's **manager**, the item's **owner**, or an **access approver** (anyone with
+`requests.decide`). A line copies its item's stages when it is filed. The first stage waits;
+each approval starts the next; the last one grants. Any stage's approver can deny.
+
+Managers and owners decide their stage from the **Inbox** or **Requests → Approvals**, as can
+anyone they delegated to (**Requests → Delegations**, up to 90 days). A stage escalates to the
+access approvers after the item's escalation hours (default 48). It escalates at once when no
+manager or owner signs in.
+
+Nobody decides a line they requested or that is for them, or for whoever delegated to them. Nobody
+decides two stages of the same line. The seed routes every demo item to the manager, then an access
+approver. Pat signs in as Anders Zeller, Vic's (Hana's) manager, so Vic's requests reach Pat
+first, then Olu or another access approver.
+
 Policy admins edit an item under **Directory → Entitlements → (group) → Request catalog**
 (`catalog.manage`). The seed puts every demo group in the catalog (privileged ones: 8 hours by
 default, at most 72). It also links Olu and Vic to two demo employees, so they can request for
-themselves. Not yet: provisioning into the target system (#103), manager and owner routing
-(#165), business roles (#161).
+themselves. Not yet: provisioning into the target system (#103), business roles (#161).
 
 ### Audit ledger
 
