@@ -230,7 +230,9 @@ func scanRequestEvent(s scanner) (*RequestEvent, error) {
 }
 
 // CatalogItems returns every catalog item, by group id.
-func (tx *TenantTx) CatalogItems() ([]*CatalogItem, error) { return collect(tx, scanCatalogItem, catalogList) }
+func (tx *TenantTx) CatalogItems() ([]*CatalogItem, error) {
+	return collect(tx, scanCatalogItem, catalogList)
+}
 
 // CatalogItem returns one item, or ErrNotFound.
 func (tx *TenantTx) CatalogItem(id string) (*CatalogItem, error) {
