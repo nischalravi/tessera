@@ -1,7 +1,7 @@
 import { FormEvent, ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import {
-  LoginConnection, SIGNED_OUT, STEP_UP, SessionInfo, clearPendingAction, discover, getSession, logout, runPendingAction,
-  startLogin, stepUpHref, takePendingAction,
+  LoginConnection, RateLimitedError, SIGNED_OUT, STEP_UP, SessionInfo, clearPendingAction, discover, getSession, logout,
+  runPendingAction, startLogin, stepUpHref, takePendingAction,
 } from "../api";
 import { useConfirm } from "../components/Dialog";
 import { useToast } from "../components/Toast";
@@ -40,14 +40,32 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [stepUp, setStepUp] = useState<{ reason: string; href: string } | null>(null);
 
+  const [limited, setLimited] = useState<number | null>(null); // seconds until the sign-in limit lets this browser retry
+
   const load = useCallback(async () => {
     try {
       setSession(await getSession());
       setError(null);
+      setLimited(null);
     } catch (e: any) {
+      if (e instanceof RateLimitedError) {
+        setLimited(e.retryAfter);
+        return;
+      }
       setError(String(e.message ?? e));
     }
   }, []);
+
+  // While rate limited: count down and retry on its own when the wait is over.
+  useEffect(() => {
+    if (limited === null) return;
+    if (limited <= 0) {
+      load();
+      return;
+    }
+    const t = window.setTimeout(() => setLimited((s) => (s === null ? null : s - 1)), 1000);
+    return () => window.clearTimeout(t);
+  }, [limited, load]);
 
   useEffect(() => {
     load();
@@ -88,7 +106,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [session]);
 
   if (session === undefined) {
-    return error ? <SignInFrame><Callout tone="bad">Tessera is unreachable: {error}</Callout></SignInFrame> : null;
+    if (limited !== null) return <RateLimited seconds={limited} onRetry={() => setLimited(0)} />;
+    if (error) {
+      return (
+        <SignInFrame>
+          <Callout tone="bad">Tessera is unreachable: {error}</Callout>
+          <div><Button onClick={() => { setError(null); load(); }}>Try again</Button></div>
+        </SignInFrame>
+      );
+    }
+    return null;
   }
   if (!value) {
     return <SignIn />;
@@ -102,6 +129,20 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       <PendingActionResumer />
       {children}
     </Ctx.Provider>
+  );
+}
+
+/** The sign-in limit's page: what happened, the countdown, and a way to try now. */
+function RateLimited({ seconds, onRetry }: { seconds: number; onRetry: () => void }) {
+  return (
+    <SignInFrame>
+      <h1 style={{ fontSize: "var(--fs-4)", margin: 0 }}>Too many sign-in attempts</h1>
+      <Callout tone="warn">
+        Tessera limits how often one network can sign in. <span role="status" aria-live="polite">
+          {seconds > 0 ? `Trying again in ${seconds} second${seconds === 1 ? "" : "s"}…` : "Trying again…"}</span>
+      </Callout>
+      <div><Button variant="primary" onClick={onRetry} disabled={seconds <= 0}>Try again now</Button></div>
+    </SignInFrame>
   );
 }
 
