@@ -28,11 +28,18 @@ type Resolver struct {
 	identityByXID   map[string]int64
 	identityByEmail map[string]int64
 	ids             map[key]int64
+	// survivor maps a merged identity to the one it was merged into: a
+	// connector reference to it resolves to the survivor (issue #160).
+	survivor map[int64]int64
+	// pins are reviewers' account decisions (account_links), keyed by
+	// system and external id; sync never overrides them.
+	pins map[key]*store.AccountLink
 }
 
 // NewResolver loads the current id maps.
 func NewResolver(c *store.TenantTx) (*Resolver, error) {
-	r := &Resolver{c: c, identityByXID: map[string]int64{}, identityByEmail: map[string]int64{}, ids: map[key]int64{}}
+	r := &Resolver{c: c, identityByXID: map[string]int64{}, identityByEmail: map[string]int64{}, ids: map[key]int64{},
+		pins: map[key]*store.AccountLink{}}
 	return r, r.Refresh()
 }
 
@@ -54,6 +61,22 @@ func (r *Resolver) Refresh() error {
 	}
 	for _, a := range accts {
 		r.ids[key{"account", a.System, a.ExternalID}] = a.ID
+	}
+	if r.survivor, err = r.c.MergeSurvivors(); err != nil {
+		return err
+	}
+	links, err := r.c.AccountLinks()
+	if err != nil {
+		return err
+	}
+	byID := make(map[int64]*store.Account, len(accts))
+	for _, a := range accts {
+		byID[a.ID] = a
+	}
+	for _, l := range links {
+		if a := byID[l.AccountID]; a != nil {
+			r.pins[key{"account", a.System, a.ExternalID}] = l
+		}
 	}
 	groups, err := r.c.Groups()
 	if err != nil {
@@ -86,15 +109,35 @@ func (r *Resolver) Identity(ref *connectors.IdentityRef) *int64 {
 	}
 	if ref.ExternalID != "" {
 		if id, ok := r.identityByXID[ref.ExternalID]; ok {
-			return &id
+			return r.live(id)
 		}
 	}
 	if ref.Email != "" {
 		if id, ok := r.identityByEmail[strings.ToLower(ref.Email)]; ok {
-			return &id
+			return r.live(id)
 		}
 	}
 	return nil
+}
+
+// live follows a merge to the surviving identity.
+func (r *Resolver) live(id int64) *int64 {
+	if s, ok := r.survivor[id]; ok {
+		id = s
+	}
+	return &id
+}
+
+// AccountIdentity is the identity an account belongs to: a reviewer's
+// pinned decision if there is one, else the connector's reference.
+func (r *Resolver) AccountIdentity(system, xid string, ref *connectors.IdentityRef) *int64 {
+	if l := r.pins[key{"account", system, xid}]; l != nil {
+		if l.IdentityID == nil {
+			return nil
+		}
+		return r.live(*l.IdentityID)
+	}
+	return r.Identity(ref)
 }
 
 // Node returns the graph node key ("group:7") for a ref, or "".
@@ -191,7 +234,7 @@ func Discovery(c *store.TenantTx, now time.Time, results []*connectors.Discovery
 	for _, r := range results {
 		for _, rec := range r.Accounts {
 			if err := c.UpsertAccount(&store.Account{System: rec.System, ExternalID: rec.ExternalID, Username: rec.Username,
-				IdentityID: res.Identity(rec.Identity), Kind: defaultStr(rec.Kind, "user"), Status: defaultStr(rec.Status, "active"),
+				IdentityID: res.AccountIdentity(rec.System, rec.ExternalID, rec.Identity), Kind: defaultStr(rec.Kind, "user"), Status: defaultStr(rec.Status, "active"),
 				CreatedAt: rec.CreatedAt, LastLoginAt: rec.LastLoginAt}); err != nil {
 				return st, err
 			}
