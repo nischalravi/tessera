@@ -122,5 +122,17 @@ func reassignOwnership(c *store.TenantTx, now time.Time, st Step) error {
 		return err
 	}
 	o.PrimaryID, o.BackupID, o.UpdatedAt = optInt(stepGet(st, "new_primary_id")), optInt(stepGet(st, "new_backup_id")), now
-	return c.PutOwnership(o)
+	if err := c.PutOwnership(o); err != nil {
+		return err
+	}
+	if o.Kind != store.OwnedIdentity {
+		return nil
+	}
+	// Keep identities.owner_id in step (reassign_owner covers active
+	// identities only; this covers a disabled one too).
+	var id int64
+	if _, err := fmt.Sscan(o.Key, &id); err != nil {
+		return nil
+	}
+	return c.SetIdentityOwner(id, o.PrimaryID)
 }
