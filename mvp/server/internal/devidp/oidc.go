@@ -55,6 +55,7 @@ type pendingAuthz struct {
 	loginHint     string
 	fault         Fault
 	github        bool // GitHub-style OAuth 2.0 (github.go): no ID token
+	cas           bool // CAS (cas.go): redirectURI is the service URL
 }
 
 // authCode is what an authorization code is redeemed for.
@@ -65,6 +66,7 @@ type authCode struct {
 	profile  Profile
 	authTime time.Time
 	sid      string
+	newLogin bool // CAS isFromNewLogin: the user signed in for this ticket
 }
 
 // idpSession is the dev IdP's own single sign-on session.
@@ -254,7 +256,7 @@ func (s *Server) parseAuthz(q url.Values, c *Client, redirectURI string) (pendin
 		if err != nil {
 			return p, "invalid_request", err.Error()
 		}
-		if slices.Contains(SAMLFaults(), f) || slices.Contains(GitHubFaults(), f) {
+		if slices.Contains(SAMLFaults(), f) || slices.Contains(GitHubFaults(), f) || slices.Contains(CASFaults(), f) {
 			return p, "invalid_request", fmt.Sprintf("fault %q is a SAML fault; it does not apply to OIDC", f)
 		}
 		p.fault = f
@@ -351,7 +353,7 @@ func (s *Server) handleAuthorizeSubmit(w http.ResponseWriter, r *http.Request) {
 	case !user.has(method):
 		s.errorPage(w, http.StatusBadRequest, "That user has no such authenticator.")
 		return
-	case !p.github && !slices.Contains(Profiles(), profile):
+	case !p.github && !p.cas && !slices.Contains(Profiles(), profile):
 		s.errorPage(w, http.StatusBadRequest, "Unknown profile.")
 		return
 	}
@@ -363,7 +365,7 @@ func (s *Server) handleAuthorizeSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	s.setSessionCookie(w, cookie, int(sessionTTL/time.Second))
 	s.log.Info("devidp sign-in", "sub", user.Sub, "method", method, "profile", profile, "client_id", p.clientID)
-	s.issueCode(w, r, p, authCode{user: *user, method: method, profile: profile, authTime: now, sid: sess.sid}, http.StatusSeeOther)
+	s.issueCode(w, r, p, authCode{user: *user, method: method, profile: profile, authTime: now, sid: sess.sid, newLogin: true}, http.StatusSeeOther)
 }
 
 // setSessionCookie sets (or, with maxAge -1, clears) the IdP session cookie.
@@ -387,6 +389,10 @@ func (s *Server) session(r *http.Request, now time.Time) (idpSession, bool) {
 func (s *Server) issueCode(w http.ResponseWriter, r *http.Request, p pendingAuthz, ac authCode, status int) {
 	now := s.now()
 	ac.authz = p
+	if p.cas {
+		s.issueCASTicket(w, r, ac, status)
+		return
+	}
 	code := rand.Text()
 	if err := s.codes.put(code, ac, now.Add(codeTTL), now); err != nil {
 		s.redirectError(w, r, p.redirectURI, p.state, "temporarily_unavailable", "too many outstanding codes")
