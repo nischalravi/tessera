@@ -50,9 +50,17 @@ func (s *Server) configSigningKey(r *http.Request, _ *params) (int, any, error) 
 	return http.StatusOK, map[string]any{"key": signingKeyView{transport.EncodeKey(k, c.Tenant().String()), &at}}, nil
 }
 
-func (s *Server) source(r *http.Request, c *store.TenantTx) transport.Source {
-	return transport.Source{TenantID: c.Tenant().String(), Tenant: c.Tenant().String(), Env: s.cfg.Env,
-		Instance: s.cfg.PublicOrigin, ExportedBy: actor(r)}
+func (s *Server) source(r *http.Request, c *store.TenantTx) (transport.Source, error) {
+	var t store.Tenant
+	if err := s.store.ReadSystem(r.Context(), "config export source", func(st *store.SystemTx) error {
+		var err error
+		t, err = st.TenantByID(c.Tenant())
+		return err
+	}); err != nil {
+		return transport.Source{}, err
+	}
+	return transport.Source{TenantID: c.Tenant().String(), Tenant: t.Slug, Env: s.cfg.Env,
+		Instance: s.cfg.PublicOrigin, ExportedBy: actor(r)}, nil
 }
 
 // configExport signs the tenant's configuration and returns the bundle,
@@ -63,7 +71,11 @@ func (s *Server) configExport(r *http.Request, _ *params) (int, any, error) {
 	}
 	var out any
 	err := s.write(r, func(c *store.TenantTx, now time.Time) error {
-		signed, b, err := transport.Export(c, s.readiness, s.cfg.Sealer, s.source(r, c), now)
+		src, err := s.source(r, c)
+		if err != nil {
+			return err
+		}
+		signed, b, err := transport.Export(c, s.readiness, s.cfg.Sealer, src, now)
 		if err != nil {
 			return err
 		}

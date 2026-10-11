@@ -143,6 +143,26 @@ tenant-scoped like every other table; Admin → Connections → New
 connection → Active Directory (demo) walks the rest. Design: `docs/design/deployment-readiness.md`.
 The routes are documented at `/api/readiness/openapi.json`.
 
+### Config transport (dev → test → prod)
+
+Admin → Export / import configuration moves a tenant's connections (config, owners, credential
+*references*), readiness overlays and sign-in connections to another tenant, usually on another
+instance, as a **signed bundle** (`server/internal/transport`). Export signs with the tenant's
+Ed25519 key (made on first export, sealed under the KEK; a server without a KEK cannot export).
+Import accepts only bundles signed by a **trusted signer**: paste the exporting tenant's public
+key under Trusted signers first (a tenant does not trust its own key implicitly). The preview
+lists add / change / remove / manual per item; apply is bound to the previewed hash, needs
+step-up, and never activates anything: new connections are drafts, config changes make a new
+draft revision, sign-in connections arrive as **pending**, and a changed existing sign-in
+connection is shown as manual (change it through an admin change request). Removals retire
+connections only with prune. A bundle never holds a secret: sealed credentials and client
+secrets stay behind (the plan says where to set them), retired connections and the dev IdP are
+left out, and a bundle whose config looks like it carries a secret is refused. On a prod server
+(`TESSERA_ENV=prod`) a bundle naming a localhost target or the dev IdP, or a sign-in
+connection on plain http or a private address, is refused. Applies are audited
+(`config.import.applied` with the bundle hash) and listed under Imports. Permission:
+`config.transport` (tenant admin); reading keys, signers and history needs `admin.read`.
+
 ### Main API endpoints
 
 `GET /api/summary` · `GET /api/identities[?type=&q=]` · `GET /api/identities/{id}` · `GET /api/accounts[?system=]` ·
@@ -158,7 +178,10 @@ The routes are documented at `/api/readiness/openapi.json`.
 `GET /api/audit/events/{event_id}/proof` · `GET /api/audit/checkpoints[?from_seq=]` · `GET /api/audit/keys` ·
 `POST /api/audit/verify {from_seq?, to_seq?}` · `GET /api/audit/export[?from_seq=&to_seq=]` (NDJSON) ·
 `GET /api/auth/session` · `POST /api/auth/logout` · `GET /api/auth/sessions` · `DELETE /api/auth/sessions/{session_id}` ·
-`GET|POST /api/auth/dev-login` (dev and test only)
+`GET|POST /api/auth/dev-login` (dev and test only) ·
+`GET /api/config/signing-key` · `POST /api/config/export` · `GET|POST /api/config/trusted-signers` ·
+`DELETE /api/config/trusted-signers/{kid}` · `POST /api/config/import/plan` (body: the bundle file) ·
+`POST /api/config/import/apply?hash=&prune=` · `GET /api/config/imports`
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke

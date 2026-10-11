@@ -670,3 +670,30 @@ export const readiness = {
   rerun: (reconcile = false) => api<{ results: { connection_id: string; name: string; validation_run_id: string | null; dry_run_id: string | null; skipped?: string }[]; dashboard: DeploymentHealth }>(
     "/insights/deployment-health/rerun", { reconcile }),
 };
+
+// ------------------------------------------------- config transport (#170)
+
+export interface SigningKey { kid: string; public_key: string; tenant: string; created_at: string | null }
+export interface TrustedSigner { kid: string; public_key: string; label: string; added_by: string | null; added_at: string }
+export interface ExportedBundle { hash: string; kid: string; file_name: string; excluded: { section: string; name: string; reason: string }[] | null; bundle: unknown }
+export type PlanAction = "add" | "change" | "remove" | "unchanged" | "manual";
+export interface PlanItem { section: "connections" | "overlays" | "identity_providers"; name: string; action: PlanAction; fields?: string[]; notes?: string[] }
+export interface ImportPlan {
+  hash: string; signer: string; signer_kid: string; exported_at: string; items: PlanItem[]; refusals: string[];
+  source: { tenant_id: string; tenant: string; env: string; instance?: string; exported_by: string };
+  counts: Record<PlanAction, number>;
+}
+export interface ConfigImport { id: string; bundle_hash: string; signer_kid: string; source: string; exported_at: string; summary: Record<PlanAction, number>; applied_by: string | null; applied_at: string }
+
+export const configTransport = {
+  signingKey: () => api<{ key: SigningKey | null }>("/config/signing-key"),
+  export: () => api<ExportedBundle>("/config/export", {}),
+  signers: () => api<TrustedSigner[]>("/config/trusted-signers"),
+  trust: (body: { kid: string; public_key: string; label: string }) => api<TrustedSigner>("/config/trusted-signers", body),
+  untrust: (kid: string) => api<{ removed: string }>(`/config/trusted-signers/${encodeURIComponent(kid)}`, undefined, "DELETE"),
+  /** bundle is the parsed exported file: the server verifies its signature, not its bytes. */
+  plan: (bundle: unknown) => api<ImportPlan>("/config/import/plan", bundle),
+  apply: (bundle: unknown, hash: string, prune: boolean) =>
+    api<{ import_id: string; plan: ImportPlan }>(`/config/import/apply?hash=${encodeURIComponent(hash)}${prune ? "&prune=true" : ""}`, bundle),
+  imports: () => api<ConfigImport[]>("/config/imports"),
+};

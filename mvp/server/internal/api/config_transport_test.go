@@ -65,7 +65,7 @@ func trustA(t *testing.T, b http.Handler, key map[string]any) {
 }
 
 func TestConfigTransport_ExportPlanApply(t *testing.T) {
-	_, a, b := transportServers(t, "test")
+	f, a, b := transportServers(t, "test")
 	var k struct {
 		Key any `json:"key"`
 	}
@@ -92,8 +92,14 @@ func TestConfigTransport_ExportPlanApply(t *testing.T) {
 		Hash     string   `json:"hash"`
 		Refusals []string `json:"refusals"`
 		Items    []any    `json:"items"`
+		Source   struct {
+			Tenant string `json:"tenant"`
+		} `json:"source"`
 	}
 	decodeJSON(t, rec.Body.String(), &plan)
+	if plan.Source.Tenant != f.A.Slug {
+		t.Errorf("source tenant %q, want slug %q", plan.Source.Tenant, f.A.Slug)
+	}
 	if plan.Hash == "" || len(plan.Refusals) != 0 {
 		t.Fatalf("plan %s", rec.Body)
 	}

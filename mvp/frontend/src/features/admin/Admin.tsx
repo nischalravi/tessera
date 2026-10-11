@@ -7,6 +7,7 @@ import { AuditRow, AuditVerifyReport, api, fmtDate, relTime, useApi } from "../.
 import { fuzzy } from "../../app/fuzzy";
 import { Badge, Button, Callout, DataTable, EmptyState, Page, PreviewBadge, useToast } from "../../components";
 import { ADMIN_BY_ID, ADMIN_SECTIONS, AdminSection, useMockState } from "../../mocks";
+import { ConfigTransfer } from "./ConfigTransfer";
 
 const ICONS: Record<string, LucideIcon> = { Plug, Fingerprint, UserCog, Bell, Palette, Clock, ScrollText, FileBadge, ArrowLeftRight, KeySquare };
 const Icon = ({ name, size = 18 }: { name: string; size?: number }) => {
@@ -189,7 +190,7 @@ function AuditLog() {
   );
 }
 
-const LIVE: Record<string, () => JSX.Element> = { jobs: Jobs, audit: AuditLog };
+const LIVE: Record<string, () => JSX.Element> = { jobs: Jobs, audit: AuditLog, "config-transfer": ConfigTransfer };
 
 export function AdminSectionPage() {
   const { section } = useParams();
