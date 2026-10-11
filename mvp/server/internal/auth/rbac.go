@@ -56,6 +56,11 @@ const (
 	PermHRISExecute       Permission = "hris.execute"
 	PermJITSweep          Permission = "jit.sweep"
 	PermConnectorsSync    Permission = "connectors.sync"
+	// Alerting (issue #168): read alerts; triage them (acknowledge,
+	// resolve, assign); configure rules and delivery channels.
+	PermAlertsRead        Permission = "alerts.read"
+	PermAlertsManage      Permission = "alerts.manage"
+	PermAlertsConfigure   Permission = "alerts.configure"
 	PermAuditRead         Permission = "audit.read"
 	PermAuditVerify       Permission = "audit.verify"
 	PermAdminRead         Permission = "admin.read"
@@ -76,13 +81,13 @@ const (
 var rolePermissions = map[Role][]Permission{
 	RoleViewer: {PermGraphRead},
 	RoleOperator: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
-		PermReviewsDecide, PermHRISSimulateEvent},
-	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead},
+		PermReviewsDecide, PermHRISSimulateEvent, PermAlertsRead, PermAlertsManage},
+	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead, PermAlertsRead},
 	RolePolicyAdmin: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
-		PermReviewsDecide, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync},
+		PermReviewsDecide, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync, PermAlertsRead, PermAlertsManage},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
-		PermConnectionsActivate},
+		PermConnectionsActivate, PermAlertsRead, PermAlertsManage, PermAlertsConfigure},
 	RoleBreakGlass: {PermAdminRead, PermBreakGlassRecover},
 }
 
@@ -166,10 +171,10 @@ var scopePermissions = map[Scope][]Permission{
 	ScopeRead: {PermGraphRead, PermConnectionsRead},
 	ScopeWrite: {PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage, PermReviewsDecide,
 		PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
-		PermConnectionsManage, PermConnectionsActivate},
-	ScopeAudit: {PermAuditRead, PermAuditVerify},
+		PermConnectionsManage, PermConnectionsActivate, PermAlertsManage},
+	ScopeAudit: {PermAuditRead, PermAuditVerify, PermAlertsRead},
 	ScopeAdmin: {PermAdminRead, PermAdminChangeReq, PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev,
-		PermBreakGlassRecover},
+		PermBreakGlassRecover, PermAlertsConfigure},
 }
 
 // perms returns the union of the roles' permissions.

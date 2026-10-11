@@ -48,6 +48,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/alerts"
 	"github.com/nischalravi/tessera/mvp/server/internal/api"
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
@@ -55,6 +56,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/seed"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -265,9 +267,14 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if err != nil {
 		return err
 	}
+	alertSvc, err := newAlertService(cfg, st, sealer, clock, logger)
+	if err != nil {
+		return err
+	}
 	srv := api.New(api.Config{Store: st, Clock: clock, Policies: loader, Logger: logger,
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
-		HSTS: cfg.IsProd(), Env: cfg.Env, DevLogin: cfg.DevLogin, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, AuditAnchor: anchorURL})
+		HSTS: cfg.IsProd(), Env: cfg.Env, DevLogin: cfg.DevLogin, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, AuditAnchor: anchorURL,
+		Alerts: alertSvc})
 	checkpointer := &audit.Checkpointer{DB: st, Sealer: sealer, Sink: sink, Clock: timeutil.System, Issuer: cfg.PublicURL,
 		Every: time.Duration(cfg.AuditCheckpointSeconds) * time.Second, EveryEvents: int64(cfg.AuditCheckpointEvents),
 		Log: logger}
@@ -300,6 +307,11 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		defer close(ckptDone)
 		checkpointer.Loop(ctx, checkpointInterval)
 	}()
+	alertsDone := make(chan struct{})
+	go func() {
+		defer close(alertsDone)
+		alertSvc.Run(ctx, alertsInterval)
+	}()
 	errc := make(chan error, 1)
 	go func() { errc <- httpSrv.Serve(ln) }()
 	logger.Info("tessera API listening", "addr", ln.Addr().String())
@@ -310,6 +322,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		<-sweepDone
 		<-keysDone
 		<-ckptDone
+		<-alertsDone
 		return err
 	case <-ctx.Done():
 	}
@@ -320,6 +333,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	<-sweepDone
 	<-keysDone
 	<-ckptDone
+	<-alertsDone
 	if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 		return serveErr
 	}
@@ -340,4 +354,23 @@ func runKeyRotation(ctx context.Context, st *store.DB, sealer *seal.Sealer, cloc
 			}
 		}
 	}
+}
+
+// alertsInterval is how often the alert engine reads new audit events and
+// sends due deliveries (detections run every 15 minutes).
+const alertsInterval = time.Minute
+
+// newAlertService builds the alert engine and deliverer (issue #168):
+// webhooks through the SSRF-guarded client, email per TESSERA_NOTIFY.
+func newAlertService(cfg *config.Config, st *store.DB, sealer *seal.Sealer, clock timeutil.Clock, logger *slog.Logger) (*alerts.Service, error) {
+	client, err := safehttp.ForConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	mailer, err := alerts.NewMailer(cfg.Notify, logger)
+	if err != nil {
+		return nil, err
+	}
+	return &alerts.Service{DB: st, Sealer: sealer, HTTP: client, Mail: mailer, Clock: clock, Log: logger,
+		PublicURL: cfg.PublicURL}, nil
 }

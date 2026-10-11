@@ -39,7 +39,8 @@ func NewMailer(notify string, log *slog.Logger) (Mailer, error) {
 	if err != nil || (u.Scheme != "smtp" && u.Scheme != "smtps") || u.Hostname() == "" {
 		return nil, fmt.Errorf("alerts: TESSERA_NOTIFY must be log, smtp://… or smtps://… (got %q)", redactURL(notify))
 	}
-	from := u.Query().Get("from")
+	q, _ := url.ParseQuery(u.RawQuery)
+	from := q.Get("from")
 	if _, err := parseAddr(from); err != nil {
 		return nil, errors.New("alerts: TESSERA_NOTIFY needs ?from=<address>")
 	}

@@ -155,6 +155,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/api/auth/sessions/{session_id}" {
 			continue // TestIsolation_SessionCookieScoped (a UUID, not a fixture id)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/alerts/") {
+			continue // TestAlertsAPI_CrossTenant (UUIDs and rule names, not fixture ids)
+		}
 		if _, ok := routeParamCases[rt.Method+" "+rt.Pattern]; !ok {
 			t.Errorf("route %s %s has path parameters but no cross-tenant case", rt.Method, rt.Pattern)
 		}
@@ -217,6 +220,7 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		"/api/reviews/campaigns/{campaign_id}": fmt.Sprint(b["campaign"]),
 		"/api/hris/events/{event_id}/plan":     fmt.Sprint(b["hris:leaver"]),
 		"/api/audit/events/{event_id}/proof":   latestEventID(t, f.DB, f.B.ID),
+		"/api/alerts/{alert_id}":               seedAlert(t, f.DB, f.B.ID, "b"),
 	}
 	checked := 0
 	for _, rt := range srv.Routes() {
