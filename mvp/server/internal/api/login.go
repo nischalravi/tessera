@@ -111,7 +111,7 @@ func loginConnections(tx *store.TenantTx) ([]*store.IdPConnection, error) {
 	}
 	out := cs[:0]
 	for _, c := range cs {
-		if c.Status == "active" && (c.Protocol == "oidc" || c.Protocol == "saml" || c.Protocol == "oauth2") {
+		if c.Status == "active" && (c.Protocol == "oidc" || c.Protocol == "saml" || c.Protocol == "oauth2" || c.Protocol == "cas") {
 			out = append(out, c)
 		}
 	}
@@ -325,6 +325,8 @@ func (s *Server) startLogin(w http.ResponseWriter, r *http.Request, t store.Tena
 		return s.startSAMLLogin(w, r, t, c, ls)
 	case "oauth2":
 		return s.startOAuth2Login(w, r, t, c, ls)
+	case "cas":
+		return s.startCASLogin(w, r, t, c, ls)
 	}
 	purpose, returnTo, acr, invitation := ls.purpose, ls.returnTo, ls.acr, ls.invitation
 	if s.rp == nil {
@@ -453,7 +455,7 @@ func (s *Server) bootstrapRedeem(w http.ResponseWriter, r *http.Request, p *para
 		if conn, err = tx.IdPConnection(inv.IdPConnectionID); err != nil {
 			return err
 		}
-		if conn.Status != "active" || (conn.Protocol != "oidc" && conn.Protocol != "saml") {
+		if conn.Status != "active" || (conn.Protocol != "oidc" && conn.Protocol != "saml" && conn.Protocol != "cas") {
 			reason = "unknown_connection"
 		}
 		return nil
@@ -548,8 +550,8 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request, p *params)
 		case err != nil:
 		case conn.Status != "active":
 			reason = "connection_disabled"
-		case (conn.Protocol == "oauth2") != strings.HasPrefix(r.URL.Path, "/api/auth/oauth2/"):
-			reason = "connection_mismatch" // an OIDC transaction at the OAuth 2.0 callback or the reverse
+		case !strings.HasPrefix(r.URL.Path, "/api/auth/"+conn.Protocol+"/"):
+			reason = "connection_mismatch" // a transaction of another protocol at this callback
 		}
 		return err
 	}); err != nil {
@@ -565,8 +567,11 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request, p *params)
 		}
 		return s.loginFailure(w, r, tid, reason, extra)
 	}
-	if conn.Protocol == "oauth2" {
+	switch conn.Protocol {
+	case "oauth2":
 		return s.finishOAuth2Callback(w, r, tenant, conn, txn)
+	case "cas":
+		return s.finishCASCallback(w, r, tenant, conn, txn)
 	}
 	rc, err := s.rpConnection(tid, conn)
 	if err != nil {

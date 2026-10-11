@@ -165,6 +165,8 @@ type idpFile struct {
 	TokenEndpoint         string `yaml:"token_endpoint"`
 	UserinfoEndpoint      string `yaml:"userinfo_endpoint"`
 	SubjectField          string `yaml:"subject_field"` // the user object's immutable id field ("id" for github)
+	// CAS 3.0 (protocol: cas)
+	CASServerURL string `yaml:"cas_server_url"`
 }
 
 func readIdPFile(path string) (*idpFile, error) {
@@ -189,9 +191,9 @@ func (f *idpFile) connection(prod bool, now time.Time) (*store.IdPConnection, er
 		bad("name is required")
 	}
 	switch f.Protocol {
-	case "oidc", "saml", "oauth2":
+	case "oidc", "saml", "oauth2", "cas":
 	default:
-		bad("protocol %q: want oidc, saml or oauth2", f.Protocol)
+		bad("protocol %q: want oidc, saml, oauth2 or cas", f.Protocol)
 	}
 	switch {
 	case f.Profile == store.ProfileDevMock:
@@ -200,6 +202,8 @@ func (f *idpFile) connection(prod bool, now time.Time) (*store.IdPConnection, er
 		}
 	case f.Protocol == "saml" && f.Profile != store.ProfileGenericSAML:
 		bad("profile %q: SAML connections use generic_saml", f.Profile)
+	case f.Protocol == "cas" && f.Profile != store.ProfileGenericCAS:
+		bad("profile %q: CAS connections use generic_cas", f.Profile)
 	case f.Protocol == "oauth2" && f.Profile != store.ProfileGitHub && f.Profile != store.ProfileGenericOAuth2:
 		bad("profile %q: OAuth 2.0 connections use github or generic_oauth2", f.Profile)
 	case f.Protocol == "oidc" && !slices.Contains([]string{store.ProfileOkta, store.ProfileEntra, store.ProfileGoogle,
@@ -214,6 +218,8 @@ func (f *idpFile) connection(prod bool, now time.Time) (*store.IdPConnection, er
 		f.checkSAML(prod, bad)
 	case "oauth2":
 		f.checkOAuth2(prod, bad)
+	case "cas":
+		f.checkCAS(prod, bad)
 	default:
 		f.checkOIDC(prod, bad)
 	}
@@ -270,6 +276,12 @@ func (f *idpFile) connection(prod bool, now time.Time) (*store.IdPConnection, er
 		entity, sso := f.IdPEntityID, f.IdPSSOURL
 		c.IdPEntityID, c.IdPSSOURL, c.IdPSigningCerts = &entity, &sso, enc(f.IdPSigningCerts, "[]")
 		c.SubjectSource, c.AttributeMap = f.SubjectSource, enc(f.AttributeMap, "{}")
+	case "cas":
+		server := strings.TrimRight(f.CASServerURL, "/")
+		c.Issuer, c.SubjectSource, c.AttributeMap = &server, f.SubjectSource, enc(f.AttributeMap, "{}")
+		if c.SubjectSource == "" {
+			c.SubjectSource = "cas_user"
+		}
 	case "oauth2":
 		oc := oauth2rp.Connection{Profile: f.Profile, AuthorizationURL: f.AuthorizationEndpoint, TokenURL: f.TokenEndpoint,
 			UserinfoURL: f.UserinfoEndpoint, SubjectField: f.SubjectField, Scopes: f.Scopes}.Defaults()
@@ -370,6 +382,32 @@ func (f *idpFile) checkOAuth2(prod bool, bad func(string, ...any)) {
 	}
 }
 
+// checkCAS validates a CAS 3.0 connection: the server URL (https in prod)
+// and the subject (cas:user or an attribute, never the email).
+func (f *idpFile) checkCAS(prod bool, bad func(string, ...any)) {
+	u, err := url.Parse(f.CASServerURL)
+	switch {
+	case f.CASServerURL == "" || err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http"):
+		bad("cas_server_url must be an absolute URL (the CAS server base, e.g. https://cas.example.edu/cas)")
+	case prod && u.Scheme != "https":
+		bad("cas_server_url must be https with TESSERA_ENV=prod")
+	case u.RawQuery != "" || u.Fragment != "":
+		bad("cas_server_url has no query or fragment")
+	}
+	switch s := f.SubjectSource; {
+	case s == "" || s == "cas_user":
+	case strings.HasPrefix(s, "attribute:") && len(s) > len("attribute:"):
+		if a := strings.ToLower(strings.TrimPrefix(s, "attribute:")); a == "mail" || a == "email" {
+			bad("subject_source %q: users are keyed on an immutable id, never the email", s)
+		}
+	default:
+		bad("subject_source %q: want cas_user or attribute:<name>", s)
+	}
+	if f.Issuer != "" || f.ClientID != "" || f.IdPEntityID != "" {
+		bad("issuer, client_id and idp_entity_id are not CAS settings (use cas_server_url)")
+	}
+}
+
 // checkSAML validates the SAML fields: an exact entity ID, an SSO URL
 // (https in prod) and at least one pinned signing certificate.
 func (f *idpFile) checkSAML(prod bool, bad func(string, ...any)) {
@@ -454,8 +492,13 @@ func addIdP(e *adminEnv, slug, file, secretFile string) error {
 		return nil
 	}
 	path := "oidc"
-	if c.Protocol == "oauth2" {
+	switch c.Protocol {
+	case "oauth2":
 		path = "oauth2"
+	case "cas":
+		fmt.Fprintf(e.stdout, "register this service URL pattern at the CAS server: %s/api/auth/cas/%s/callback?state=*\n",
+			strings.TrimRight(e.cfg.PublicURL, "/"), c.ID)
+		return nil
 	}
 	fmt.Fprintf(e.stdout, "redirect URI to register at the IdP: %s/api/auth/%s/%s/callback\n",
 		strings.TrimRight(e.cfg.PublicURL, "/"), path, c.ID)
@@ -465,6 +508,9 @@ func addIdP(e *adminEnv, slug, file, secretFile string) error {
 // sealConnectionSecrets seals an OIDC client secret (from secretFile), or
 // generates and seals a SAML connection's SP signing key.
 func sealConnectionSecrets(e *adminEnv, t tenancy.ID, c *store.IdPConnection, secretFile string) error {
+	if c.Protocol == "cas" {
+		return nil // CAS has no client secret: the ticket is validated against the server
+	}
 	if c.Protocol == "saml" {
 		keyPEM, certPEM, err := samlsp.GenerateSPKey("Tessera SP "+c.ID.String(), e.now)
 		if err != nil {
@@ -527,7 +573,7 @@ func inviteAdmin(e *adminEnv, slug, connID, email string, ttl time.Duration) err
 		} else if err != nil {
 			return err
 		}
-		if c.Status != "active" || (c.Protocol != "oidc" && c.Protocol != "saml") {
+		if c.Status != "active" || (c.Protocol != "oidc" && c.Protocol != "saml" && c.Protocol != "cas") {
 			return fmt.Errorf("connection %s is not an active OIDC or SAML connection", id)
 		}
 		if err := tx.InsertBootstrapInvitation(inv); err != nil {

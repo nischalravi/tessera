@@ -324,7 +324,14 @@ func samlSubject(conn *store.IdPConnection, a *samlsp.Assertion) (string, bool) 
 // ({"email": , "name": , "groups": } attribute names; defaults email,
 // displayName and groups_claim or groups).
 func samlProfile(conn *store.IdPConnection, a *samlsp.Assertion) idpProfile {
-	m := map[string]string{"email": "email", "name": "displayName", "groups": "groups"}
+	return attributeProfile(conn, a.Attributes, "groups")
+}
+
+// attributeProfile reads email, name and groups from attributes (SAML,
+// CAS) through attribute_map, with the defaults email, displayName and
+// groups_claim or defaultGroups.
+func attributeProfile(conn *store.IdPConnection, attrs map[string][]string, defaultGroups string) idpProfile {
+	m := map[string]string{"email": "email", "name": "displayName", "groups": defaultGroups}
 	if conn.GroupsClaim != nil && *conn.GroupsClaim != "" {
 		m["groups"] = *conn.GroupsClaim
 	}
@@ -337,12 +344,12 @@ func samlProfile(conn *store.IdPConnection, a *samlsp.Assertion) idpProfile {
 		}
 	}
 	first := func(k string) string {
-		if v := a.Attributes[m[k]]; len(v) > 0 {
+		if v := attrs[m[k]]; len(v) > 0 {
 			return v[0]
 		}
 		return ""
 	}
-	return idpProfile{email: first("email"), name: first("name"), groups: a.Attributes[m["groups"]]}
+	return idpProfile{email: first("email"), name: first("name"), groups: attrs[m["groups"]]}
 }
 
 var bounceTmpl = template.Must(template.New("bounce").Parse(`<!doctype html>

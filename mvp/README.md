@@ -162,6 +162,7 @@ The routes are documented at `/api/readiness/openapi.json`.
 `GET /api/auth/discover?tenant=&email=` · `GET /api/auth/login?tenant=&connection=&return_to=` (302 to the IdP) ·
 `GET /api/auth/oidc/{connection_id}/callback` · `GET /api/auth/saml/{connection_id}/metadata` ·
 `POST /api/auth/saml/{connection_id}/acs` · `GET /api/auth/oauth2/{connection_id}/callback` ·
+`GET /api/auth/cas/{connection_id}/callback` ·
 `GET /t/{slug}/bootstrap?code=` (public)
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
@@ -290,7 +291,7 @@ about 8 kB; cytoscape (about 146 kB gzipped) only loads with the access graph.
 
 Every API call needs a signed-in session (design `docs/design/phase-0-platform-security.md` §11, §12),
 and Tessera never sees a password: users sign in through their company's identity provider (OIDC, SAML 2.0,
-or an OAuth 2.0-only provider such as GitHub).
+CAS 3.0, or an OAuth 2.0-only provider such as GitHub).
 
 1. `./run.sh` and open http://localhost:5173. The sign-in page asks for the organization (tenant):
    `larkspur` (the demo company) or `globex`.
@@ -399,6 +400,27 @@ ignored). `auth_time` is the callback time. Admins sign in through OIDC or SAML.
 (`/github/login/oauth/authorize`, `/github/login/oauth/access_token`, `/github/user`; faults
 `github_token_error`, `github_token_type`, `github_user_error`, `github_no_id`, `github_string_id`).
 
+### Sign-in through CAS 3.0
+
+A `protocol: cas` connection (issue #152; most Apereo CAS servers also speak SAML and OIDC, which are
+preferred) redirects to `{cas_server_url}/login?service=…` with the transaction's `state` inside the
+service URL, `/api/auth/cas/{connection_id}/callback?state=`. CAS sends back only a ticket, so the
+callback rebuilds that exact service URL and validates the ticket at `{cas_server_url}/p3/serviceValidate`
+through `internal/safehttp` (`internal/auth/casclient`): service tickets (`ST-`) only, no proxy tickets or
+proxy granting, a size cap, XML round-trip check, exactly one `cas:user`, and any markup inside the user
+or an attribute (a comment splitting the name, a nested element) refused. Each ticket is also used once
+here (`replay_cache`). The user is `cas:user` or `subject_source: attribute:<name>`, never the email.
+
+`authenticationDate` must be released: it is `auth_time` (max_age at sign-in). Phishing resistance comes
+only from a configured amr-style attribute (`authn_mapping.amr_attribute` + `phr_amr`, for example
+`successfulAuthenticationHandlers: [[WebAuthnAuthenticationHandler]]`); otherwise sessions are AAL1.
+Step-up sends `renew=true`, validates with `renew=true`, and needs an `authenticationDate` after the
+step-up started and `isFromNewLogin` not false.
+
+`./run.sh` seeds **Dev IdP (CAS)** against the dev IdP's `/cas` server (`/cas/login` with single
+sign-on unless `renew`, `/cas/p3/serviceValidate`; faults `cas_failure`, `cas_no_user`,
+`cas_two_users`, `cas_comment_user`, `cas_proxied`, `cas_stale_auth`, `cas_ticket_reuse`).
+
 **A new tenant** is created by an operator (design §15.3); every step is audited as the OS user:
 
 ```bash
@@ -415,7 +437,9 @@ needs `idp_entity_id`, `idp_sso_url` and `idp_signing_certs` (pinned), takes `su
 ID/metadata and ACS URLs to register at the IdP. `protocol: oauth2` takes `profile: github` (GitHub's
 endpoints and `id` by default) or `generic_oauth2` with `authorization_endpoint`, `token_endpoint`,
 `userinfo_endpoint` and `subject_field` (never a name or email), needs `-client-secret-file`, and
-prints the redirect URI. `invite-admin` prints a one-time
+prints the redirect URI. `protocol: cas` with `profile: generic_cas` needs `cas_server_url`, takes
+`subject_source` (`cas_user` or `attribute:<name>`), `attribute_map` and `authn_mapping`, and prints the
+service URL pattern to register at the CAS server. `invite-admin` prints a one-time
 `/t/acme/bootstrap?code=tbi_…` URL valid for at most 24 hours (only its hash is stored): redeeming it
 with a phishing-resistant sign-in through that connection, as that email, makes the user `tenant_admin`
 (source `bootstrap`), once.

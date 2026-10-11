@@ -199,7 +199,7 @@ func seedDB(ctx context.Context, path string, cfg *config.Config, clock timeutil
 			secret = devIdPClientSecret
 		}
 		tenants = seed.WithDevIdPClient(tenants, cfg.DevIdPURL, seed.DevIdPClient{Sealer: sealer, Secret: secret,
-			SAMLCert: strings.TrimSpace(os.Getenv("TESSERA_DEV_IDP_SAML_CERT")), GitHub: true})
+			SAMLCert: strings.TrimSpace(os.Getenv("TESSERA_DEV_IDP_SAML_CERT")), GitHub: true, CAS: true})
 	}
 	stats, err := seed.Run(ctx, st, now, pols, tenants)
 	if err != nil {
