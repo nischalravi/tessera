@@ -1,9 +1,9 @@
 import { KeyboardEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { Bell, Check, CircleHelp, Inbox, Menu as MenuIcon, Monitor, Moon, Search, Settings, Sun } from "lucide-react";
-import { AuditRow, IdentityRow, relTime, useApi } from "../api";
+import { AlertRow, AuditRow, IdentityRow, relTime, severityTone, useApi } from "../api";
 import { Menu } from "../components/Menu";
-import { initials } from "../components";
+import { Badge, initials } from "../components";
 import { isTyping, modalOpen } from "../components/overlay";
 import { useInbox } from "../features/inbox/model";
 import { MOD, usePalette } from "./CommandPalette";
@@ -156,6 +156,46 @@ const TbBtn = ({ label, children, t }: { label: string; children: ReactNode; t: 
 );
 
 function Notifications() {
+  const { can } = useSession();
+  return can("alerts.read") ? <AlertBell /> : <AuditBell />;
+}
+
+/** Live alerts (#168), newest first, with a count badge. */
+function AlertBell() {
+  const { data } = useApi<AlertRow[]>("/alerts?status=open");
+  const nav = useNavigate();
+  const items = (data ?? []).slice(0, 6);
+  const n = data?.length ?? 0;
+  return (
+    <Menu
+      label="Alerts"
+      items={[
+        { heading: n ? `${n} open ${n === 1 ? "alert" : "alerts"}` : "Alerts" },
+        ...(items.length
+          ? items.map((a) => ({
+              label: (
+                <span className="grow">
+                  <Badge tone={severityTone(a.severity)}>{a.severity}</Badge> {a.title}
+                  <span className="faint small" style={{ display: "block" }}>{a.rule_name} · {relTime(a.last_seen_at)}</span>
+                </span>
+              ),
+              onSelect: () => nav(`/alerts?selected=${encodeURIComponent(a.id)}`),
+            }))
+          : [{ label: <span className="faint">No open alerts</span> }]),
+        "divider",
+        { label: "Open alerts", onSelect: () => nav("/alerts") },
+      ]}
+      trigger={(t) => (
+        <button type="button" className="tb-btn" aria-label={`Alerts${n ? `, ${n} open` : ""}`} title="Alerts" {...t}>
+          <Bell size={18} strokeWidth={1.7} />
+          {n ? <span className="tb-badge" aria-hidden>{n > 99 ? "99+" : n}</span> : null}
+        </button>
+      )}
+    />
+  );
+}
+
+function AuditBell() {
   const { data } = useApi<AuditRow[]>("/audit?limit=6");
   const nav = useNavigate();
   const items = (data ?? []).slice(0, 6);

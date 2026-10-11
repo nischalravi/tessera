@@ -670,3 +670,105 @@ export const readiness = {
   rerun: (reconcile = false) => api<{ results: { connection_id: string; name: string; validation_run_id: string | null; dry_run_id: string | null; skipped?: string }[]; dashboard: DeploymentHealth }>(
     "/insights/deployment-health/rerun", { reconcile }),
 };
+
+// ---------------------------------------------------------------- alerts (#168)
+
+export type AlertSeverity = "low" | "medium" | "high" | "critical";
+export type AlertStatus = "open" | "acknowledged" | "resolved";
+
+export interface UserRef {
+  id: string;
+  name: string;
+}
+
+export interface AlertDeliveryRow {
+  id: string;
+  channel: string;
+  channel_kind: "email" | "webhook";
+  status: "pending" | "sent" | "failed";
+  attempts: number;
+  next_attempt_at: string | null;
+  last_error: string | null;
+  sent_at: string | null;
+}
+
+export interface AlertRow {
+  id: string;
+  rule: string;
+  rule_name: string;
+  key: string;
+  severity: AlertSeverity;
+  title: string;
+  detail: Record<string, unknown>;
+  status: AlertStatus;
+  count: number;
+  first_seen_at: string;
+  last_seen_at: string;
+  assignee: UserRef | null;
+  acknowledged_by: UserRef | null;
+  acknowledged_at: string | null;
+  resolved_by: UserRef | null;
+  resolved_at: string | null;
+  resolution: string | null;
+  deliveries?: AlertDeliveryRow[];
+}
+
+export interface AlertSummary {
+  open: number;
+  acknowledged: number;
+  by_severity: Partial<Record<AlertSeverity, number>>;
+}
+
+export interface AlertRule {
+  id: string;
+  name: string;
+  description: string;
+  kind: "event" | "detection";
+  enabled: boolean;
+  severity: AlertSeverity;
+  threshold: number;
+  window_minutes: number;
+  customized: boolean;
+  updated_at: string | null;
+  live: number;
+}
+
+export interface AlertChannel {
+  id: string;
+  name: string;
+  kind: "email" | "webhook";
+  /** Webhook URLs come back redacted (scheme, host and the last characters). */
+  target: string;
+  min_severity: AlertSeverity;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+  /** Only in the response that created the channel or rotated its secret. */
+  secret?: string;
+}
+
+export interface AlertChannelInput {
+  name: string;
+  kind?: "email" | "webhook";
+  /** Omit on update to keep the current target. */
+  target?: string;
+  min_severity: AlertSeverity;
+  enabled: boolean;
+  rotate_secret?: boolean;
+}
+
+export const ALERT_SEVERITIES: AlertSeverity[] = ["low", "medium", "high", "critical"];
+
+export const alertsApi = {
+  acknowledge: (id: string) => api<AlertRow>(`/alerts/${encodeURIComponent(id)}/acknowledge`, {}),
+  resolve: (id: string, note: string) => api<AlertRow>(`/alerts/${encodeURIComponent(id)}/resolve`, { note }),
+  assign: (id: string, assignee_user_id: string | null) => api<AlertRow>(`/alerts/${encodeURIComponent(id)}/assign`, { assignee_user_id }),
+  setRule: (id: string, body: { enabled: boolean; severity: AlertSeverity; threshold: number; window_minutes: number }) =>
+    api<AlertRule[]>(`/alerts/rules/${encodeURIComponent(id)}`, body, "PUT"),
+  createChannel: (body: AlertChannelInput) => api<AlertChannel>("/alerts/channels", body),
+  updateChannel: (id: string, body: AlertChannelInput) => api<AlertChannel>(`/alerts/channels/${encodeURIComponent(id)}`, body, "PUT"),
+  testChannel: (id: string) => api<{ ok: boolean; error?: string }>(`/alerts/channels/${encodeURIComponent(id)}/test`, {}),
+};
+
+/** Severity → badge tone. */
+export const severityTone = (s: AlertSeverity) => (s === "critical" ? "critical" : s === "high" ? "warning" : s === "medium" ? "info" : "neutral");

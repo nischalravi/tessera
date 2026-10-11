@@ -48,6 +48,7 @@ const GraphExplorer = lazy(() => import("../features/insights/GraphExplorer"));
 const LeastPrivilege = named(() => import("../features/insights/LeastPrivilege"), "LeastPrivilege");
 const SodConflicts = named(() => import("../features/insights/SodConflicts"), "SodConflicts");
 const DeploymentHealth = named(() => import("../features/insights/DeploymentHealth"), "DeploymentHealth");
+const Alerts = named(() => import("../features/alerts/Alerts"), "Alerts");
 const Policies = named(() => import("../features/governance/Policies"), "Policies");
 const Reviews = named(() => import("../features/governance/Reviews"), "Reviews");
 const Lifecycle = named(() => import("../features/governance/Lifecycle"), "Lifecycle");
@@ -114,6 +115,7 @@ export default function App() {
                     <Route path="/insights/deployment" element={<Moved to="/insights/deployment-health" />} />
 
                     <Route path="/governance" element={<Navigate to="/governance/policies" replace />} />
+                    <Route path="/alerts" element={<Alerts />} />
                     <Route path="/governance/policies" element={<Policies />} />
                     <Route path="/governance/reviews" element={<Reviews />} />
                     <Route path="/governance/lifecycle" element={<Lifecycle />} />
