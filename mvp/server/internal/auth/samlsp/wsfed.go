@@ -46,7 +46,10 @@ func WSFedLoginURL(endpoint, realm, reply, wctx string, fresh bool, wauth string
 	if realm == "" {
 		return "", fail(ReasonConfig, errors.New("no realm"))
 	}
-	q := u.Query()
+	q, err := url.ParseQuery(u.RawQuery) // not u.Query(): internal/archtest reserves the name for SQL
+	if err != nil {
+		return "", fail(ReasonConfig, err)
+	}
 	q.Set("wa", "wsignin1.0")
 	q.Set("wtrealm", realm)
 	q.Set("wreply", reply)
