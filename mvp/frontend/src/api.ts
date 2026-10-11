@@ -17,6 +17,27 @@ export class ApiError extends Error {
   }
 }
 
+/** A 429 from the per-IP sign-in limit: retry after retryAfter seconds. */
+export class RateLimitedError extends ApiError {
+  constructor(readonly retryAfter: number) {
+    super("Too many sign-in attempts from this network.", 429, null);
+  }
+}
+
+/** The seconds a Retry-After header asks for (delta-seconds or an HTTP date), 1 to 300; 30 when absent or unreadable. */
+export function retryAfterSeconds(header: string | null, now: number = Date.now()): number {
+  const clamp = (n: number) => Math.min(300, Math.max(1, Math.ceil(n)));
+  if (!header) return 30;
+  const v = header.trim();
+  if (/^\d+$/.test(v)) return clamp(Number(v));
+  const at = Date.parse(v);
+  return Number.isNaN(at) ? 30 : clamp((at - now) / 1000);
+}
+
+function rateLimited(res: Response): RateLimitedError {
+  return new RateLimitedError(retryAfterSeconds(res.headers?.get("Retry-After") ?? null));
+}
+
 /**
  * Session handling (design §11, §17). The browser holds only the HttpOnly session cookie,
  * which the API sets at sign-in; this client never sees a token. Every state-changing request
@@ -457,6 +478,7 @@ export async function getSession(): Promise<SessionInfo | null> {
     resetSessionState();
     return null;
   }
+  if (res.status === 429) throw rateLimited(res);
   if (!res.ok) throw new ApiError(`${res.status} ${res.statusText}`, res.status, null);
   const s = (await res.json()) as SessionInfo;
   setCsrfToken(s.csrf_token);
@@ -483,7 +505,7 @@ export async function discover(tenant: string, email?: string): Promise<LoginCon
   const q = new URLSearchParams({ tenant });
   if (email) q.set("email", email);
   const res = await fetch(`/api/auth/discover?${q}`, { credentials: "same-origin" });
-  if (res.status === 429) throw new ApiError("Too many sign-in attempts. Wait a moment and try again.", 429, null);
+  if (res.status === 429) throw rateLimited(res);
   if (!res.ok) throw new ApiError(`${res.status} ${res.statusText}`, res.status, null);
   return ((await res.json()) as { connections: LoginConnection[] }).connections;
 }
