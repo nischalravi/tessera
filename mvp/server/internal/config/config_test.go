@@ -328,3 +328,15 @@ func TestTestEnvAndInsecureCookie(t *testing.T) {
 		t.Errorf("public origin %q %v", c.PublicOrigin(), err)
 	}
 }
+
+func TestDevOnlyURL(t *testing.T) {
+	for raw, want := range map[string]bool{
+		"https://login.example.com/oauth2": false, "https://203.0.113.9/x": false, "not a url": false, "": false,
+		"http://login.example.com": true, "https://localhost:8443": true, "https://api.localhost": true, "https://127.0.0.1:8001": true,
+		"https://[::1]/x": true, "https://10.1.2.3": true, "https://192.168.0.5": true, "https://169.254.169.254": true,
+	} {
+		if got := config.DevOnlyURL(raw) != ""; got != want {
+			t.Errorf("DevOnlyURL(%q) = %q, want dev-only %v", raw, config.DevOnlyURL(raw), want)
+		}
+	}
+}
