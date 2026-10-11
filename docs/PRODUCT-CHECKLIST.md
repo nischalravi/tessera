@@ -43,8 +43,8 @@ Three gaps account for most unchecked boxes:
 | ☐ | Create accounts automatically | Partial | `jml.JoinerPlan` / `ExecuteEvent` create the identity and birthright accounts in Tessera's graph only; HRIS events are simulated (`POST /api/hris/events`); UI `governance/Lifecycle.tsx` | M2 real HR source, M3 write-back |
 | ☐ | Update access when someone changes roles | Partial | `jml.MoverPlan` adds and removes grants in the graph only (`TestDemoJoinerAndMoverPlans`) | M3 write-back |
 | ☐ | Disable accounts when someone leaves | Partial | `jml.LeaverPlan`, `GET /api/jml/leaver-plan/{id}`; the account is disabled in the graph only | M3 write-back, kill switch #106 |
-| ☐ | Support employees, contractors, partners and guests | Missing | `identities.type` covers human, service and agent only | M4 guests #112, #115, #116 |
-| ☐ | Support temporary accounts with expiration dates | Missing | Only grants, JIT requests and sessions expire; identities and accounts do not | M4 guest expiry; no issue yet for contractors |
+| ☐ | Support employees, contractors, partners and guests | Missing | `identities.type` covers human, service and agent only | #159 (contractors, partners); guests M4 #74, #76, #77 |
+| ☐ | Support temporary accounts with expiration dates | Missing | Only grants, JIT requests and sessions expire; identities and accounts do not | #159; guest expiry M4 #74 |
 
 ## Identity sources
 
@@ -52,7 +52,7 @@ Three gaps account for most unchecked boxes:
 |---|---|---|---|---|
 | ☐ | Connect to HR systems and directories | Demo | Readiness, validation and dry-run machinery is real (`readiness/`); the Workday and AD data is simulated (`connectors/demo_company.go`, `demo_ad.go`) | M2 #20–#31, #82–#99 |
 | ☑ | Maintain unique identity identifiers | **Done** | `UNIQUE (tenant_id, external_id)` on identities and `(tenant_id, system, external_id)` on accounts (`store/schema/0001_tenancy.sql`) | — |
-| ☐ | Correlate accounts across applications | Partial | `reconcile/correlate.go` (confidence tiers, tested), UI `ReconReport.tsx`; demo data only, results are staged, no link, merge or unmerge | M2 real sources; no issue yet for link/merge |
+| ☐ | Correlate accounts across applications | Partial | `reconcile/correlate.go` (confidence tiers, tested), UI `ReconReport.tsx`; demo data only, results are staged, no link, merge or unmerge | #160 (link, merge, unmerge); guests #68; M2 real sources #104 |
 | ☐ | Detect duplicate and orphaned accounts | Partial | `reconcile/findings.go` orphans, duplicates and stale; NHI orphaned flag; demo data only | M2 |
 
 ## Authentication
@@ -71,18 +71,18 @@ Tessera is a relying party to the customer's IdP. It never stores passwords or s
 
 | ☐ | Item | Status | Evidence | Closes with |
 |---|---|---|---|---|
-| ☐ | Role-based access control (RBAC) | Built (open PR) | Six platform roles and per-route permissions (`auth/rbac.go`, `rbac_routes_test.go`); business roles in the UI are Preview | Merge #146; business roles: no issue yet |
-| ☐ | Attribute-based access control (ABAC) | Missing | Policies filter by identity type only; no attribute conditions | No issue yet (M2 AWS engine covers AWS conditions only) |
+| ☐ | Role-based access control (RBAC) | Built (open PR) | Six platform roles and per-route permissions (`auth/rbac.go`, `rbac_routes_test.go`); business roles in the UI are Preview | Merge #146; business roles #161 |
+| ☐ | Attribute-based access control (ABAC) | Missing | Policies filter by identity type only; no attribute conditions | #162 (M2 AWS engine covers AWS conditions only) |
 | ☐ | Least-privilege access | Built | `leastpriv` recommendations from usage, `GET /api/least-privilege/recommendations`, `POST /api/least-privilege/revoke`; demo usage data, revoke changes the graph only | M2 real usage data, M3 write-back |
-| ☐ | Conditional access based on device, location or risk | Missing | Only step-up (fresh, phishing-resistant sign-in) exists | M3 SSF/CAEP #114; no issue yet for device or location policy |
+| ☐ | Conditional access based on device, location or risk | Missing | Only step-up (fresh, phishing-resistant sign-in) exists | #163 (device, location); risk signals M3 SSF/CAEP #114 |
 | ☐ | Time-limited access | Built | `jit` with a 72 h maximum, `Sweep` removes expired grants (`jit_test.go`); in Tessera's graph only | M3 write-back |
 
 ## Access requests and approvals
 
 | ☐ | Item | Status | Evidence | Closes with |
 |---|---|---|---|---|
-| ☐ | Self-service access catalog | Partial | Requestable groups and JIT are real (`RequestAccess.tsx` → `/api/jit/requests`); roles and other items are Preview | No issue yet |
-| ☐ | Manager and application-owner approvals | Partial | One approver with `PermJITDecide` and a self-approval block; no manager or owner routing | No issue yet |
+| ☐ | Self-service access catalog | Partial | Requestable groups and JIT are real (`RequestAccess.tsx` → `/api/jit/requests`); roles and other items are Preview | #164 |
+| ☐ | Manager and application-owner approvals | Partial | One approver with `PermJITDecide` and a self-approval block; no manager or owner routing | #165 |
 | ☐ | Multiple approval stages | Preview | `governance/Workflows.tsx` with mock `WORKFLOWS` | Knowledge row 86 (Phase 2) |
 | ☐ | Request tracking and notifications | Partial | Tracking is real for JIT (`GET /api/jit/requests`); there are no notifications | #16 (notifications) |
 | ☐ | Automatic access expiration and removal | Built | `jit.Sweep` / `SweepAll`; in Tessera's graph only | M3 write-back |
@@ -101,10 +101,10 @@ Tessera is a relying party to the customer's IdP. It never stores passwords or s
 
 | ☐ | Item | Status | Evidence | Closes with |
 |---|---|---|---|---|
-| ☐ | Periodic access reviews and certifications | Partial | Campaigns and decisions are real (`reviews.go`, `/api/reviews/*`); created by hand, no schedule | M3 frozen review populations; scheduling: no issue yet |
+| ☐ | Periodic access reviews and certifications | Partial | Campaigns and decisions are real (`reviews.go`, `/api/reviews/*`); created by hand, no schedule | #166 (scheduling); M3 frozen populations #110 |
 | ☐ | Segregation-of-duties checks | Built | `separation_of_duties` policies (`policy_test.go`), `/api/violations`, `/api/simulate`; demo data | M2 real data |
 | ☐ | Detect excessive or inappropriate access | Built | `leastpriv` recommendations and the standing-admin policy; demo data | M2 real data |
-| ☐ | Assign application and entitlement owners | Partial | Owners on connections only; none on resources or groups | No issue yet |
+| ☐ | Assign application and entitlement owners | Partial | Owners on connections only; none on resources or groups | #167 |
 | ☐ | Track remediation through completion | Partial | A review revoke deletes the graph edge and is audited; the target system is not verified | M3 #106–#111 |
 
 ## Privileged access (PAM)
@@ -122,7 +122,7 @@ Tessera is a relying party to the customer's IdP. It never stores passwords or s
 | ☐ | Item | Status | Evidence | Closes with |
 |---|---|---|---|---|
 | ☐ | Inventory service accounts and workload identities | Built | `nhi.Inventory` (service, ai_agent, secrets, agent delegations), `GET /api/nhi`; demo data | M2 real data |
-| ☐ | Assign owners and purposes | Partial | `owner_id`, `description`, orphaned and owner-left flags; the leaver plan reassigns owners; no API or UI to set an owner (the form is Preview) | No issue yet |
+| ☐ | Assign owners and purposes | Partial | `owner_id`, `description`, orphaned and owner-left flags; the leaver plan reassigns owners; no API or UI to set an owner (the form is Preview) | #167 |
 | ☐ | Manage secrets and certificates | Partial | Secrets are read-only metadata; certificates are a Preview page | Phases 2 and 4 certificate inventory |
 | ☐ | Rotate credentials and track expiration | Partial | Age and last-rotated tracking plus the 90-day stale-secret policy; no rotation, no expiry dates | M3 secret rotation |
 | ☐ | Identify unused identities | Built | `dormant` flag, `leastpriv.UnusedPermissions`; demo data | M2 real data |
@@ -133,8 +133,8 @@ Tessera is a relying party to the customer's IdP. It never stores passwords or s
 |---|---|---|---|---|
 | ☐ | Log sign-ins and access changes | Partial | The hash-chained audit ledger is on `dev` (`audit/ledger.go`); sign-in events are in the open PRs | Merge #146, #147 |
 | ☐ | Detect suspicious identity activity | Missing | No detection code | M3 #109, #114 |
-| ☐ | Generate alerts | Missing | Only a server log line when anchoring fails | #17 (break-glass alerts); general alerting: no issue yet |
-| ☐ | Integrate with SIEM and incident-response tools | Missing | The NDJSON audit export (`/api/audit/export`) is the only feed | M3 #114; SIEM sink: no issue yet |
+| ☐ | Generate alerts | Missing | Only a server log line when anchoring fails | #168; break-glass alerts #17 |
+| ☐ | Integrate with SIEM and incident-response tools | Missing | The NDJSON audit export (`/api/audit/export`) is the only feed | #169; inbound signals M3 #114 |
 | ☐ | Revoke sessions and access during incidents | Partial | Session revoke is in the open PRs; access revoke changes the graph only | Merge #146; M3 kill switch #106 |
 
 ## Audit and reporting
@@ -142,7 +142,7 @@ Tessera is a relying party to the customer's IdP. It never stores passwords or s
 | ☐ | Item | Status | Evidence | Closes with |
 |---|---|---|---|---|
 | ☐ | Report who has access to what | Built | `/api/identities/{id}`, `/api/graph`, `/api/simulate`, `GraphExplorer.tsx`; demo data | M2 real data, exact AWS engine |
-| ☐ | Show who requested and approved access | Partial | JIT and review decisions are real and audited; general requests are Preview | No issue yet for general requests |
+| ☐ | Show who requested and approved access | Partial | JIT and review decisions are real and audited; general requests are Preview | #164 (general requests) |
 | ☐ | Retain access and policy-change history | Partial | Append-only ledger with proofs and checkpoints; no point-in-time policy history | M3 #111 |
 | ☐ | Export audit evidence | Partial | `GET /api/audit/export`, `/api/audit/verify`; no evidence packs | M3 #89, #110, #111 |
 | ☐ | Configure log retention | Missing | No retention code | Knowledge row 166 (Phase 3) |
@@ -152,20 +152,20 @@ Tessera is a relying party to the customer's IdP. It never stores passwords or s
 | ☐ | Item | Status | Evidence | Closes with |
 |---|---|---|---|---|
 | ☐ | Delegate administration with restricted permissions | Partial (open PRs) | Six roles and per-route permissions; the admin-change workflow has no routes yet | Merge #146; #16, #91 |
-| ☐ | Separate development, testing and production | Partial | Code promotion dev → test → prod (`promote.yml`) and connection dry-runs; config transport is Preview | No issue yet for config transport |
-| ☐ | Support high availability and disaster recovery | Missing | Single-file SQLite; no backup or DR | #18 (Postgres); HA/DR: no issue yet |
-| ☐ | Monitor connector health and failed jobs | Partial | Connector health is real (`/api/insights/deployment-health`, `/api/connections/{id}/health`); no failed-job history | No issue yet for job history |
+| ☐ | Separate development, testing and production | Partial | Code promotion dev → test → prod (`promote.yml`) and connection dry-runs; config transport is Preview | #170 (config transport) |
+| ☐ | Support high availability and disaster recovery | Missing | Single-file SQLite; no backup or DR | #171; Postgres #18 |
+| ☐ | Monitor connector health and failed jobs | Partial | Connector health is real (`/api/insights/deployment-health`, `/api/connections/{id}/health`); no failed-job history | #172 (job history) |
 | ☐ | Provide APIs, documentation and support | Partial | OpenAPI, `/docs`, `/redoc`, `mvp/README.md`; API keys are Preview; no support channel | #15 (machine clients) |
 
 ## User experience
 
 | ☐ | Item | Status | Evidence | Closes with |
 |---|---|---|---|---|
-| ☐ | Easy access-request portal | Preview | `RequestAccess.tsx` uses mock roles and requests; only JIT is real; open bug #144 | No issue yet beyond #144 |
-| ☐ | Clear approval and review screens | Partial | Reviews, JIT and HRIS approvals call the API; inbox requests and delegations are mock | No issue yet |
-| ☐ | Accessible interface | Partial | ARIA throughout and reduced-motion support; no automated accessibility tests or WCAG audit | No issue yet |
+| ☐ | Easy access-request portal | Preview | `RequestAccess.tsx` uses mock roles and requests; only JIT is real; open bug #144 | #164; bug #144 |
+| ☐ | Clear approval and review screens | Partial | Reviews, JIT and HRIS approvals call the API; inbox requests and delegations are mock | #165 |
+| ☐ | Accessible interface | Partial | ARIA throughout and reduced-motion support; no automated accessibility tests or WCAG audit | #173 |
 | ☐ | Useful notifications | Preview | The admin notifications section is mock | #16 |
-| ☐ | Mobile-friendly authentication | Partial (open PRs) | Redirect sign-in and step-up work on mobile; the UI has only basic breakpoints | Merge #146–#149; layout: no issue yet |
+| ☐ | Mobile-friendly authentication | Partial (open PRs) | Redirect sign-in and step-up work on mobile; the UI has only basic breakpoints | Merge #146–#149; layout #174 |
 
 ## Re-validating
 
