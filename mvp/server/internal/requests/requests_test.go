@@ -227,6 +227,7 @@ func TestRequest_DecisionRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	forAlice, forBob := lines[0], lines[1]
+	other0 := requests.Actor{UserID: uuid.New(), Display: "Someone"}
 	w.tx(func(c *store.TenantTx) error {
 		if _, err := requests.Approve(c, forBob.ID, w.pat, "", w.now); code(err) != "self_approval" {
 			t.Errorf("requester approves: %v", err)
@@ -246,10 +247,20 @@ func TestRequest_DecisionRules(t *testing.T) {
 		if _, err := requests.Approve(c, forBob.ID, w.alice, "", w.now); code(err) != "not_pending" {
 			t.Errorf("approve a denied line: %v", err)
 		}
+		// alice left before the decision
+		if err := c.TerminateIdentity(w.ids["alice"], w.now); err != nil {
+			return err
+		}
+		if _, err := requests.Approve(c, forAlice.ID, other0, "", w.now); code(err) != "beneficiary_not_active" {
+			t.Errorf("approve for a leaver: %v", err)
+		}
 		_, err := requests.Cancel(c, forAlice.ID, w.pat, w.now)
 		return err
 	})
-	// alice asks again for herself; another approver grants; she removes it herself
+	// alice comes back; she asks again for herself; another approver grants; she removes it herself
+	w.tx(func(c *store.TenantTx) error {
+		return c.UpsertIdentity(&store.Identity{ExternalID: "alice", Name: "Alice", Type: "human", Status: "active", CreatedAt: w.now})
+	})
 	again, err := w.submit(w.alice, false, []string{"alice"}, []string{"group:okta:platform"}, nil)
 	if err != nil {
 		t.Fatal(err)

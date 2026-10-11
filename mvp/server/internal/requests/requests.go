@@ -367,6 +367,17 @@ func Approve(tx *store.TenantTx, id string, by Actor, reason string, now time.Ti
 	case by.IdentityID != nil && *by.IdentityID == l.BeneficiaryID:
 		return nil, refuse(403, "self_approval", "you cannot approve access for yourself")
 	}
+	// the person or account may have changed since the request (a leaver)
+	if ben, err := tx.Identity(l.BeneficiaryID); err != nil {
+		return nil, err
+	} else if ben.Status != "active" {
+		return nil, refuse(409, "beneficiary_not_active", "%s is no longer active; deny the request", ben.Name)
+	}
+	if acct, err := tx.Account(l.AccountID); err != nil {
+		return nil, err
+	} else if acct.Status != "active" {
+		return nil, refuse(409, "account_not_active", "the receiving account is no longer active; deny the request")
+	}
 	if has, err := holds(tx, l.AccountID, l.GroupID, now); err != nil {
 		return nil, err
 	} else if has {
@@ -458,7 +469,7 @@ func Remove(tx *store.TenantTx, id string, by Actor, decider bool, reason string
 	if !decider && !own {
 		return nil, refuse(403, "forbidden", "you can remove only your own access")
 	}
-	r, err := reasonPtr(reason, !own)
+	r, err := reasonPtr(reason, false)
 	if err != nil {
 		return nil, err
 	}
