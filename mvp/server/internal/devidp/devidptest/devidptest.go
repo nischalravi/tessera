@@ -191,3 +191,56 @@ func parseSAMLPost(tb testing.TB, body []byte) SAMLPost {
 	}
 	return p
 }
+
+// WSFedPost is the form the dev IdP auto-POSTs to a WS-Federation wreply.
+type WSFedPost struct {
+	Reply, WResult, WCtx string
+}
+
+var wsfedFieldRE = regexp.MustCompile(`<input type="hidden" name="(wa|wresult|wctx)" value="([^"]*)">`)
+
+// AuthorizeWSFed opens a WS-Federation passive sign-in URL and, when the
+// sign-in page is shown, signs in as sub with method. It returns the form
+// the IdP would auto-POST to wreply.
+func (b *Browser) AuthorizeWSFed(tb testing.TB, signinURL, sub string, m devidp.Method) WSFedPost {
+	tb.Helper()
+	resp, err := b.C.Get(signinURL)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		tb.Fatalf("dev IdP WS-Federation: %d %s", resp.StatusCode, body)
+	}
+	if match := reqRE.FindSubmatch(body); match != nil {
+		resp, err = b.C.PostForm(b.IdP.URL+"/saml/sso", url.Values{"req": {html.UnescapeString(string(match[1]))},
+			"choice": {sub + " " + string(m)}})
+		if err != nil {
+			tb.Fatal(err)
+		}
+		body, _ = io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			tb.Fatalf("dev IdP WS-Federation sign-in: %d %s", resp.StatusCode, body)
+		}
+	}
+	a := formActionRE.FindSubmatch(body)
+	if a == nil {
+		tb.Fatalf("no WS-Federation POST form in:\n%s", body)
+	}
+	p := WSFedPost{Reply: html.UnescapeString(string(a[1]))}
+	for _, f := range wsfedFieldRE.FindAllSubmatch(body, -1) {
+		v := html.UnescapeString(string(f[2]))
+		switch string(f[1]) {
+		case "wresult":
+			p.WResult = v
+		case "wctx":
+			p.WCtx = v
+		}
+	}
+	if p.WResult == "" {
+		tb.Fatalf("no wresult in:\n%s", body)
+	}
+	return p
+}

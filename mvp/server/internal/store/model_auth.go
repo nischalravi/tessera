@@ -77,6 +77,7 @@ const (
 	ProfileGitHub        = "github"
 	ProfileGenericOAuth2 = "generic_oauth2"
 	ProfileGenericCAS    = "generic_cas"
+	ProfileADFS          = "adfs"
 	ProfileDevMock       = "dev_mock"
 )
 
