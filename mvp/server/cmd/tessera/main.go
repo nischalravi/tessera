@@ -220,6 +220,7 @@ const (
 	idleTimeout       = 60 * time.Second
 	shutdownTimeout   = 10 * time.Second
 	sweepInterval     = 30 * time.Second
+	reviewInterval    = 5 * time.Minute // scheduled access reviews (issue #166)
 	keysInterval      = 24 * time.Hour // keys.EnsureAll: rotation runs daily (design §10.6)
 	// checkpointInterval is how often the checkpointer looks for due tenants
 	// (each is checkpointed every TESSERA_AUDIT_CHECKPOINT_SECONDS or
@@ -290,6 +291,11 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		defer close(sweepDone)
 		srv.RunSweeper(ctx, sweepInterval)
 	}()
+	reviewsDone := make(chan struct{})
+	go func() {
+		defer close(reviewsDone)
+		srv.RunReviewScheduler(ctx, reviewInterval)
+	}()
 	keysDone := make(chan struct{})
 	go func() {
 		defer close(keysDone)
@@ -308,6 +314,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	case err := <-errc:
 		stop()
 		<-sweepDone
+		<-reviewsDone
 		<-keysDone
 		<-ckptDone
 		return err
@@ -318,6 +325,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	defer cancel()
 	err = httpSrv.Shutdown(shutdownCtx)
 	<-sweepDone
+	<-reviewsDone
 	<-keysDone
 	<-ckptDone
 	if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {

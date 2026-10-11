@@ -39,8 +39,20 @@ func deptKey(d *string) (string, bool) {
 	return *d, false
 }
 
+// Scope narrows a campaign (issue #166): one system's grants (System, "" for
+// every system) and, with PrivilegedOnly, privileged grants only.
+type Scope struct {
+	System         string
+	PrivilegedOnly bool
+}
+
 // GenerateCampaign creates a campaign with an item for every risky grant.
 func GenerateCampaign(c *store.TenantTx, now time.Time, name string, unusedDays int, policies []*policy.Policy) (int64, error) {
+	return GenerateScopedCampaign(c, now, name, unusedDays, policies, Scope{})
+}
+
+// GenerateScopedCampaign is GenerateCampaign over the grants in scope.
+func GenerateScopedCampaign(c *store.TenantTx, now time.Time, name string, unusedDays int, policies []*policy.Policy, scope Scope) (int64, error) {
 	g, err := graph.Build(c, now)
 	if err != nil {
 		return 0, err
@@ -115,6 +127,13 @@ func GenerateCampaign(c *store.TenantTx, now time.Time, name string, unusedDays 
 			if len(via) == 0 {
 				continue
 			}
+			privileged := g.Node(ag.Dst).Privileged
+			for _, ep := range via {
+				privileged = privileged || ep.Privileged
+			}
+			if (scope.System != "" && g.Node(ag.Dst).System != scope.System) || (scope.PrivilegedOnly && !privileged) {
+				continue
+			}
 			total++
 			var last *time.Time
 			usedN, events := 0, 0
@@ -133,10 +152,6 @@ func GenerateCampaign(c *store.TenantTx, now time.Time, name string, unusedDays 
 			reasons := []string{}
 			if usedN == 0 {
 				reasons = append(reasons, fmt.Sprintf("unused_%dd", unusedDays))
-			}
-			privileged := g.Node(ag.Dst).Privileged
-			for _, ep := range via {
-				privileged = privileged || ep.Privileged
 			}
 			if privileged && (last == nil || timeutil.Days(now, *last) >= 30) {
 				reasons = append(reasons, "privileged_idle")

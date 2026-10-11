@@ -26,6 +26,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
+	"github.com/nischalravi/tessera/mvp/server/internal/reviews"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
@@ -198,6 +199,27 @@ func (s *Server) timeouts(stream, timed http.Handler) http.Handler {
 		// after authorization), so authentication is not cut short.
 		stream.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), streamDeadlineKey{}, deadline)))
 	})
+}
+
+// RunReviewScheduler launches due review schedules and progresses open
+// scheduled campaigns (reminders, escalation, close-out) in every active
+// tenant, every interval until ctx is done (issue #166).
+func (s *Server) RunReviewScheduler(ctx context.Context, interval time.Duration) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	ctx = audit.WithSystemActor(ctx, reviews.Scheduler)
+	for {
+		if pols, err := s.policies(); err != nil {
+			s.log.Error("review scheduler: policies", "err", err)
+		} else if err := reviews.TickAll(ctx, s.store, s.clock(), pols); err != nil && ctx.Err() == nil {
+			s.log.Error("review scheduler failed", "err", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
 }
 
 // RunSweeper expires JIT grants of every active tenant, each in its own
