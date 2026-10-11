@@ -167,6 +167,9 @@ type idpFile struct {
 	SubjectField          string `yaml:"subject_field"` // the user object's immutable id field ("id" for github)
 	// CAS 3.0 (protocol: cas)
 	CASServerURL string `yaml:"cas_server_url"`
+	// WS-Federation (protocol: wsfed): idp_entity_id is the token issuer,
+	// idp_signing_certs the pinned token-signing certificates
+	WSFedEndpoint string `yaml:"wsfed_endpoint"` // the passive endpoint, e.g. https://adfs.corp.example/adfs/ls/
 }
 
 func readIdPFile(path string) (*idpFile, error) {
@@ -191,9 +194,9 @@ func (f *idpFile) connection(prod bool, now time.Time) (*store.IdPConnection, er
 		bad("name is required")
 	}
 	switch f.Protocol {
-	case "oidc", "saml", "oauth2", "cas":
+	case "oidc", "saml", "oauth2", "cas", "wsfed":
 	default:
-		bad("protocol %q: want oidc, saml, oauth2 or cas", f.Protocol)
+		bad("protocol %q: want oidc, saml, oauth2, cas or wsfed", f.Protocol)
 	}
 	switch {
 	case f.Profile == store.ProfileDevMock:
@@ -202,6 +205,8 @@ func (f *idpFile) connection(prod bool, now time.Time) (*store.IdPConnection, er
 		}
 	case f.Protocol == "saml" && f.Profile != store.ProfileGenericSAML:
 		bad("profile %q: SAML connections use generic_saml", f.Profile)
+	case f.Protocol == "wsfed" && f.Profile != store.ProfileADFS:
+		bad("profile %q: WS-Federation connections use adfs", f.Profile)
 	case f.Protocol == "cas" && f.Profile != store.ProfileGenericCAS:
 		bad("profile %q: CAS connections use generic_cas", f.Profile)
 	case f.Protocol == "oauth2" && f.Profile != store.ProfileGitHub && f.Profile != store.ProfileGenericOAuth2:
@@ -220,6 +225,8 @@ func (f *idpFile) connection(prod bool, now time.Time) (*store.IdPConnection, er
 		f.checkOAuth2(prod, bad)
 	case "cas":
 		f.checkCAS(prod, bad)
+	case "wsfed":
+		f.checkWSFed(prod, bad)
 	default:
 		f.checkOIDC(prod, bad)
 	}
@@ -275,6 +282,10 @@ func (f *idpFile) connection(prod bool, now time.Time) (*store.IdPConnection, er
 	case "saml":
 		entity, sso := f.IdPEntityID, f.IdPSSOURL
 		c.IdPEntityID, c.IdPSSOURL, c.IdPSigningCerts = &entity, &sso, enc(f.IdPSigningCerts, "[]")
+		c.SubjectSource, c.AttributeMap = f.SubjectSource, enc(f.AttributeMap, "{}")
+	case "wsfed":
+		entity, endpoint := f.IdPEntityID, f.WSFedEndpoint
+		c.IdPEntityID, c.IdPSSOURL, c.IdPSigningCerts = &entity, &endpoint, enc(f.IdPSigningCerts, "[]")
 		c.SubjectSource, c.AttributeMap = f.SubjectSource, enc(f.AttributeMap, "{}")
 	case "cas":
 		server := strings.TrimRight(f.CASServerURL, "/")
@@ -379,6 +390,39 @@ func (f *idpFile) checkOAuth2(prod bool, bad func(string, ...any)) {
 		}
 	case "email", "login", "username", "preferred_username", "name", "upn":
 		bad("subject_field %q: users are keyed on an immutable id, never a name or email", f.SubjectField)
+	}
+}
+
+// checkWSFed validates a WS-Federation connection: the token issuer, the
+// passive endpoint (https in prod), pinned signing certificates and the
+// subject (the persistent NameID or an immutable claim, never UPN or email).
+func (f *idpFile) checkWSFed(prod bool, bad func(string, ...any)) {
+	if f.IdPEntityID == "" {
+		bad("idp_entity_id is required: the token issuer (for ADFS, http://<host>/adfs/services/trust)")
+	}
+	u, err := url.Parse(f.WSFedEndpoint)
+	switch {
+	case f.WSFedEndpoint == "" || err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http"):
+		bad("wsfed_endpoint must be an absolute URL (the passive endpoint)")
+	case prod && u.Scheme != "https":
+		bad("wsfed_endpoint must be https with TESSERA_ENV=prod")
+	}
+	if len(f.IdPSigningCerts) == 0 {
+		bad("idp_signing_certs: pin at least one token-signing certificate")
+	} else if _, err := samlsp.ParseCerts(f.IdPSigningCerts); err != nil {
+		bad("idp_signing_certs: %v", err)
+	}
+	switch s := strings.ToLower(f.SubjectSource); {
+	case s == "" || s == "nameid_persistent":
+	case strings.HasPrefix(s, "attribute:") && len(s) > len("attribute:"):
+		if strings.Contains(s, "emailaddress") || strings.Contains(s, "/upn") || strings.HasSuffix(s, ":email") || strings.HasSuffix(s, ":mail") {
+			bad("subject_source %q: users are keyed on an immutable claim (e.g. objectGUID), never UPN or email", f.SubjectSource)
+		}
+	default:
+		bad("subject_source %q: want nameid_persistent or attribute:<claim type>", f.SubjectSource)
+	}
+	if f.Issuer != "" || f.ClientID != "" || f.IdPSSOURL != "" {
+		bad("issuer, client_id and idp_sso_url are not WS-Federation settings (use wsfed_endpoint)")
 	}
 }
 
@@ -495,6 +539,10 @@ func addIdP(e *adminEnv, slug, file, secretFile string) error {
 	switch c.Protocol {
 	case "oauth2":
 		path = "oauth2"
+	case "wsfed":
+		fmt.Fprintf(e.stdout, "register a relying party trust: identifier (realm) %s\nWS-Federation passive endpoint (reply) %s\n",
+			api.WSFedRealm(e.cfg.PublicURL, c.ID), api.WSFedReply(e.cfg.PublicURL, c.ID))
+		return nil
 	case "cas":
 		fmt.Fprintf(e.stdout, "register this service URL pattern at the CAS server: %s/api/auth/cas/%s/callback?state=*\n",
 			strings.TrimRight(e.cfg.PublicURL, "/"), c.ID)
@@ -508,8 +556,8 @@ func addIdP(e *adminEnv, slug, file, secretFile string) error {
 // sealConnectionSecrets seals an OIDC client secret (from secretFile), or
 // generates and seals a SAML connection's SP signing key.
 func sealConnectionSecrets(e *adminEnv, t tenancy.ID, c *store.IdPConnection, secretFile string) error {
-	if c.Protocol == "cas" {
-		return nil // CAS has no client secret: the ticket is validated against the server
+	if c.Protocol == "cas" || c.Protocol == "wsfed" {
+		return nil // no client secret: CAS tickets are validated at the server, WS-Federation tokens are signed
 	}
 	if c.Protocol == "saml" {
 		keyPEM, certPEM, err := samlsp.GenerateSPKey("Tessera SP "+c.ID.String(), e.now)
@@ -573,7 +621,7 @@ func inviteAdmin(e *adminEnv, slug, connID, email string, ttl time.Duration) err
 		} else if err != nil {
 			return err
 		}
-		if c.Status != "active" || (c.Protocol != "oidc" && c.Protocol != "saml" && c.Protocol != "cas") {
+		if c.Status != "active" || (c.Protocol != "oidc" && c.Protocol != "saml" && c.Protocol != "cas" && c.Protocol != "wsfed") {
 			return fmt.Errorf("connection %s is not an active OIDC or SAML connection", id)
 		}
 		if err := tx.InsertBootstrapInvitation(inv); err != nil {

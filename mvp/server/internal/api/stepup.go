@@ -128,7 +128,7 @@ func (s *Server) authStepUp(w http.ResponseWriter, r *http.Request, _ *params) (
 		if err != nil {
 			return err
 		}
-		if c.Status != "active" || (c.Protocol != "oidc" && c.Protocol != "saml" && c.Protocol != "cas") {
+		if c.Status != "active" || (c.Protocol != "oidc" && c.Protocol != "saml" && c.Protocol != "cas" && c.Protocol != "wsfed") {
 			return nil
 		}
 		ls, err := tx.ExternalLoginsForUser(*p.UserID)

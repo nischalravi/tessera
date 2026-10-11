@@ -99,6 +99,7 @@ GET    /api/auth/saml/{connection_id}/metadata       public
 POST   /api/auth/saml/{connection_id}/acs            public
 GET    /api/auth/oauth2/{connection_id}/callback     public
 GET    /api/auth/cas/{connection_id}/callback        public
+POST   /api/auth/wsfed/{connection_id}/callback      public
 GET    /t/{slug}/bootstrap                           public
 `
 

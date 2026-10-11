@@ -45,6 +45,7 @@ var publicRoutes = []string{
 	"POST /api/auth/saml/{connection_id}/acs",
 	"GET /api/auth/oauth2/{connection_id}/callback",
 	"GET /api/auth/cas/{connection_id}/callback",
+	"POST /api/auth/wsfed/{connection_id}/callback",
 	"GET /t/{slug}/bootstrap",
 }
 

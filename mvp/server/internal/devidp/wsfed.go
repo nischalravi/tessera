@@ -30,8 +30,8 @@ const (
 	nsWSPolicy   = "http://schemas.xmlsoap.org/ws/2004/09/policy"
 	nsWSAddr     = "http://www.w3.org/2005/08/addressing"
 	nsWSUtil     = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd"
-	samlV2Token  = "urn:oasis:names:tc:SAML:2.0:assertion"
-	samlV11Token = "urn:oasis:names:tc:SAML:1.0:assertion"
+	samlV2Token  = "urn:oasis:names:tc:SAML:2.0:assertion" // #nosec G101 -- a token type URN, not a credential
+	samlV11Token = "urn:oasis:names:tc:SAML:1.0:assertion" // #nosec G101 -- a token type URN, not a credential
 
 	defaultWSFedReplyPattern1 = "http://127.0.0.1:*/api/auth/wsfed/*/callback"
 	defaultWSFedReplyPattern2 = "http://localhost:*/api/auth/wsfed/*/callback"

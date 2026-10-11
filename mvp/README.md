@@ -162,7 +162,7 @@ The routes are documented at `/api/readiness/openapi.json`.
 `GET /api/auth/discover?tenant=&email=` · `GET /api/auth/login?tenant=&connection=&return_to=` (302 to the IdP) ·
 `GET /api/auth/oidc/{connection_id}/callback` · `GET /api/auth/saml/{connection_id}/metadata` ·
 `POST /api/auth/saml/{connection_id}/acs` · `GET /api/auth/oauth2/{connection_id}/callback` ·
-`GET /api/auth/cas/{connection_id}/callback` ·
+`GET /api/auth/cas/{connection_id}/callback` · `POST /api/auth/wsfed/{connection_id}/callback` ·
 `GET /t/{slug}/bootstrap?code=` (public)
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
@@ -291,7 +291,7 @@ about 8 kB; cytoscape (about 146 kB gzipped) only loads with the access graph.
 
 Every API call needs a signed-in session (design `docs/design/phase-0-platform-security.md` §11, §12),
 and Tessera never sees a password: users sign in through their company's identity provider (OIDC, SAML 2.0,
-CAS 3.0, or an OAuth 2.0-only provider such as GitHub).
+CAS 3.0, WS-Federation (legacy ADFS), or an OAuth 2.0-only provider such as GitHub).
 
 1. `./run.sh` and open http://localhost:5173. The sign-in page asks for the organization (tenant):
    `larkspur` (the demo company) or `globex`.
@@ -421,6 +421,25 @@ step-up started and `isFromNewLogin` not false.
 sign-on unless `renew`, `/cas/p3/serviceValidate`; faults `cas_failure`, `cas_no_user`,
 `cas_two_users`, `cas_comment_user`, `cas_proxied`, `cas_stale_auth`, `cas_ticket_reuse`).
 
+### Sign-in through WS-Federation (legacy ADFS)
+
+A `protocol: wsfed` connection (issue #153; ADFS and Entra also speak SAML and OIDC, which are preferred)
+redirects to the passive endpoint with `wa=wsignin1.0`, `wtrealm` (Tessera's realm,
+`/api/auth/wsfed/{connection_id}`, the token audience), `wreply` (`…/callback`) and `wctx` (the login
+transaction's state); a step-up adds `wfresh=0`, and `wauth` asks for the configured class ref. The IdP
+posts `wresult`, a WS-Trust 2005/02 RequestSecurityTokenResponse, to the callback (cross-site, so it is
+re-posted from Tessera's origin as for SAML). `samlsp.ValidateWSFed` applies the SAML ACS checks to the
+SAML 2.0 assertion inside it (the document's only assertion, its own enveloped signature by a pinned
+certificate, verified detached and only the verified element read, no comment in NameID, issuer,
+audience = realm, Recipient when present, time window, AuthnInstant), plus AppliesTo = realm.
+WS-Federation has no request ID: the transaction is bound by the cookie and `wctx`, and each assertion
+ID is accepted once (`replay_cache`). SAML 1.1 tokens are refused. The user is the persistent NameID or
+`subject_source: attribute:<claim type>` (for example objectGUID), never the UPN or email.
+
+`./run.sh` seeds **Dev IdP (WS-Federation)** against the dev IdP's `/wsfed` endpoint, which wraps the
+SAML assertion it signs (faults: the SAML assertion faults, XSW1–8 included, plus `wsfed_saml11`,
+`wsfed_wrong_applies_to`, `wsfed_tampered`).
+
 **A new tenant** is created by an operator (design §15.3); every step is audited as the OS user:
 
 ```bash
@@ -439,7 +458,10 @@ endpoints and `id` by default) or `generic_oauth2` with `authorization_endpoint`
 `userinfo_endpoint` and `subject_field` (never a name or email), needs `-client-secret-file`, and
 prints the redirect URI. `protocol: cas` with `profile: generic_cas` needs `cas_server_url`, takes
 `subject_source` (`cas_user` or `attribute:<name>`), `attribute_map` and `authn_mapping`, and prints the
-service URL pattern to register at the CAS server. `invite-admin` prints a one-time
+service URL pattern to register at the CAS server. `protocol: wsfed` with `profile: adfs` needs
+`idp_entity_id` (the token issuer), `wsfed_endpoint` and `idp_signing_certs`, takes `subject_source`,
+`attribute_map`, `step_up_request` and `authn_mapping`, and prints the realm and reply URL for the
+relying party trust. `invite-admin` prints a one-time
 `/t/acme/bootstrap?code=tbi_…` URL valid for at most 24 hours (only its hash is stored): redeeming it
 with a phishing-resistant sign-in through that connection, as that email, makes the user `tenant_admin`
 (source `bootstrap`), once.
