@@ -155,6 +155,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/api/auth/sessions/{session_id}" {
 			continue // TestIsolation_SessionCookieScoped (a UUID, not a fixture id)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/siem/sinks/") {
+			continue // TestSiemAPI_CrossTenant (UUIDs, not fixture ids)
+		}
 		if _, ok := routeParamCases[rt.Method+" "+rt.Pattern]; !ok {
 			t.Errorf("route %s %s has path parameters but no cross-tenant case", rt.Method, rt.Pattern)
 		}
@@ -212,11 +215,12 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 	b := f.B.IDs
 	param := regexp.MustCompile(`\{[a-z_]+\}`)
 	values := map[string]string{
-		"/api/identities/{identity_id}":        fmt.Sprint(b["alice"]),
-		"/api/jml/leaver-plan/{identity_id}":   fmt.Sprint(b["alice"]),
-		"/api/reviews/campaigns/{campaign_id}": fmt.Sprint(b["campaign"]),
-		"/api/hris/events/{event_id}/plan":     fmt.Sprint(b["hris:leaver"]),
-		"/api/audit/events/{event_id}/proof":   latestEventID(t, f.DB, f.B.ID),
+		"/api/identities/{identity_id}":          fmt.Sprint(b["alice"]),
+		"/api/jml/leaver-plan/{identity_id}":     fmt.Sprint(b["alice"]),
+		"/api/reviews/campaigns/{campaign_id}":   fmt.Sprint(b["campaign"]),
+		"/api/hris/events/{event_id}/plan":       fmt.Sprint(b["hris:leaver"]),
+		"/api/audit/events/{event_id}/proof":     latestEventID(t, f.DB, f.B.ID),
+		"/api/siem/sinks/{sink_id}/dead-letters": seedSiemSink(t, f.DB, f.B.ID, "b"),
 	}
 	checked := 0
 	for _, rt := range srv.Routes() {

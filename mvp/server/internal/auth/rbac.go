@@ -56,6 +56,10 @@ const (
 	PermHRISExecute       Permission = "hris.execute"
 	PermJITSweep          Permission = "jit.sweep"
 	PermConnectorsSync    Permission = "connectors.sync"
+	// SIEM streaming (issue #169): see sinks and their health; add and
+	// change them.
+	PermSiemRead          Permission = "siem.read"
+	PermSiemConfigure     Permission = "siem.configure"
 	PermAuditRead         Permission = "audit.read"
 	PermAuditVerify       Permission = "audit.verify"
 	PermAdminRead         Permission = "admin.read"
@@ -77,12 +81,12 @@ var rolePermissions = map[Role][]Permission{
 	RoleViewer: {PermGraphRead},
 	RoleOperator: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
 		PermReviewsDecide, PermHRISSimulateEvent},
-	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead},
+	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead, PermSiemRead},
 	RolePolicyAdmin: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
 		PermReviewsDecide, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
-		PermConnectionsActivate},
+		PermConnectionsActivate, PermSiemRead, PermSiemConfigure},
 	RoleBreakGlass: {PermAdminRead, PermBreakGlassRecover},
 }
 
@@ -167,9 +171,9 @@ var scopePermissions = map[Scope][]Permission{
 	ScopeWrite: {PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage, PermReviewsDecide,
 		PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
 		PermConnectionsManage, PermConnectionsActivate},
-	ScopeAudit: {PermAuditRead, PermAuditVerify},
+	ScopeAudit: {PermAuditRead, PermAuditVerify, PermSiemRead},
 	ScopeAdmin: {PermAdminRead, PermAdminChangeReq, PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev,
-		PermBreakGlassRecover},
+		PermBreakGlassRecover, PermSiemConfigure},
 }
 
 // perms returns the union of the roles' permissions.
