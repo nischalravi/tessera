@@ -508,6 +508,68 @@ export async function devLogin(tenant: string, subject: string, method: string):
 
 export const hrisExecute = (eventId: number) => api(`/hris/events/${eventId}/execute`, {});
 
+// ---------------------------------------------------------------- access requests (issue #164)
+
+export type Risk = "low" | "medium" | "high";
+export interface PersonRef { id: number; name: string; type: IdentityType; status: string }
+export interface CatalogEntry {
+  /** null: the group is not in the catalog (only listed with ?all=1). */
+  id: string | null;
+  group: { id: number; system: string; name: string; kind: string; privileged: boolean };
+  requestable: boolean;
+  description: string;
+  owner: PersonRef | null;
+  risk: Risk;
+  eligible_types: string[];
+  eligible_departments: string[];
+  /** null: until removed. */
+  default_hours: number | null;
+  /** null: no limit. */
+  max_hours: number | null;
+  updated_at: string | null;
+}
+export interface CatalogView {
+  /** The person the signed-in user is; null when not linked (they request for others only). */
+  me: PersonRef | null;
+  can_request_for_others: boolean;
+  can_decide: boolean;
+  can_manage: boolean;
+  items: CatalogEntry[];
+}
+export type RequestStatus = "pending" | "approved" | "denied" | "cancelled" | "expired" | "removed";
+export interface RequestLine {
+  id: string;
+  batch_id: string;
+  status: RequestStatus;
+  catalog_item_id: string;
+  group: CatalogEntry["group"];
+  beneficiary: PersonRef;
+  account: { id: number; system: string; username: string };
+  requested_by: { id: string; display_name: string };
+  justification: string;
+  duration_hours: number | null;
+  requested_at: string;
+  decided_by: { id: string; display_name: string } | null;
+  decided_at: string | null;
+  decision_reason: string | null;
+  expires_at: string | null;
+  closed_at: string | null;
+  events?: { event: string; actor: string; note: string | null; at: string }[];
+  can_approve: boolean;
+  can_cancel: boolean;
+  can_remove: boolean;
+}
+
+export const submitRequest = (body: { beneficiary_ids: number[]; catalog_item_ids: string[]; justification: string; duration_hours?: number | null }) =>
+  api<{ batch_id: string; lines: RequestLine[] }>("/requests", body);
+const line = (id: string, action: string, body: object = {}) => api<RequestLine>(`/requests/${encodeURIComponent(id)}/${action}`, body);
+export const approveRequest = (id: string, reason?: string) => line(id, "approve", reason ? { reason } : {});
+export const denyRequest = (id: string, reason: string) => line(id, "deny", { reason });
+export const cancelRequest = (id: string) => line(id, "cancel");
+export const removeRequest = (id: string, reason?: string) => line(id, "remove", reason ? { reason } : {});
+export const putCatalogItem = (groupId: number, body: Omit<CatalogEntry, "id" | "group" | "owner" | "updated_at"> & { owner_identity_id: number | null }) =>
+  api<CatalogEntry>(`/catalog/items/${groupId}`, body, "PUT");
+
 export const simulate = (body: { remove_edge_ids?: number[]; add_edges?: { src: string; dst: string }[]; disable_account_ids?: number[] }) =>
   api<SimResult>("/simulate", { remove_edge_ids: [], add_edges: [], disable_account_ids: [], ...body });
 

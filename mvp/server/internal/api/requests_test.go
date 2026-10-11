@@ -78,7 +78,9 @@ func TestRequestsAPI_Flow(t *testing.T) {
 	}
 	// alice sees it and requests it for herself, but not for bob
 	rec = reqDo(h, alice, "GET", "/api/catalog", "")
-	if !strings.Contains(rec.Body.String(), "Platform team") {
+	if !strings.Contains(rec.Body.String(), "Platform team") ||
+		!strings.Contains(rec.Body.String(), fmt.Sprintf(`"me":{"id":%d`, f.B.IDs["alice"])) ||
+		!strings.Contains(rec.Body.String(), `"can_request_for_others":false`) {
 		t.Errorf("catalog: %s", rec.Body)
 	}
 	if rec := reqDo(h, alice, "GET", "/api/catalog?all=1", ""); rec.Code != 403 {

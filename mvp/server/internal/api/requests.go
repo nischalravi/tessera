@@ -16,7 +16,7 @@ import (
 
 // The access request service (issue #164):
 //
-//	GET  /api/catalog                          requestable items (?all=1: every group, catalog.manage)
+//	GET  /api/catalog                          {me, can_*, items}: requestable items (?all=1: every group, catalog.manage)
 //	PUT  /api/catalog/items/{group_id}         a group's catalog item
 //	POST /api/requests                         {beneficiary_ids, catalog_item_ids, justification, duration_hours}
 //	GET  /api/requests                         ?scope=mine (default) | pending | all, &status=
@@ -62,7 +62,7 @@ func requestActor(r *http.Request) (requests.Actor, error) {
 	if err != nil {
 		return a, err
 	}
-	a.IdentityID = u.IdentityID
+	a.IdentityID, a.Display = u.IdentityID, u.DisplayName // the name people see in request history
 	return a, nil
 }
 
@@ -281,15 +281,33 @@ func (s *Server) catalog(_ http.ResponseWriter, r *http.Request, p *params) (any
 		return nil, err
 	}
 	v := newViewer(tx)
-	out := make([]catalogEntry, 0, len(entries))
+	out := catalogView{Items: make([]catalogEntry, 0, len(entries)), CanRequestForOthers: s.can(r, auth.PermRequestsCreateOthers),
+		CanDecide: s.can(r, auth.PermRequestsDecide), CanManage: s.can(r, auth.PermCatalogManage)}
 	for _, e := range entries {
 		ce, err := v.entry(e)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, ce)
+		out.Items = append(out.Items, ce)
+	}
+	if me, err := requestActor(r); err == nil && me.IdentityID != nil {
+		p, err := v.person(*me.IdentityID)
+		if err != nil {
+			return nil, err
+		}
+		out.Me = &p
 	}
 	return out, nil
+}
+
+// catalogView is the catalog with what the signed-in user may do: Me is
+// the person they are (nil: not linked, so they request for others only).
+type catalogView struct {
+	Me                  *personRef     `json:"me"`
+	CanRequestForOthers bool           `json:"can_request_for_others"`
+	CanDecide           bool           `json:"can_decide"`
+	CanManage           bool           `json:"can_manage"`
+	Items               []catalogEntry `json:"items"`
 }
 
 type catalogItemBody struct {

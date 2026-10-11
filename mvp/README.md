@@ -158,11 +158,44 @@ The routes are documented at `/api/readiness/openapi.json`.
 `GET /api/audit/events/{event_id}/proof` · `GET /api/audit/checkpoints[?from_seq=]` · `GET /api/audit/keys` ·
 `POST /api/audit/verify {from_seq?, to_seq?}` · `GET /api/audit/export[?from_seq=&to_seq=]` (NDJSON) ·
 `GET /api/auth/session` · `POST /api/auth/logout` · `GET /api/auth/sessions` · `DELETE /api/auth/sessions/{session_id}` ·
-`GET|POST /api/auth/dev-login` (dev and test only)
+`GET|POST /api/auth/dev-login` (dev and test only) ·
+`GET /api/catalog[?all=1]` · `PUT /api/catalog/items/{group_id}` ·
+`POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours}` ·
+`GET /api/requests[?scope=mine|pending|all&status=]` · `GET /api/requests/{id}` ·
+`POST /api/requests/{id}/approve|deny|cancel|remove {reason}`
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
 or HRIS execution is always the signed-in user.
+
+### Access requests
+
+**Access → Request access** is the catalog (issue #164). It lists every group a policy admin has
+made requestable, with its risk and durations; business roles are still a Preview. A request
+names one or more people and items and files one *line* per person and item, all or nothing.
+The checks:
+
+- The person is active and eligible: the item's identity types and departments.
+- They don't already hold the access and have no open request for it.
+- Privileged items, and items with a maximum duration, get a duration (the item's default
+  unless one is chosen); a duration never exceeds the maximum.
+
+Requesting for someone else needs `requests.create_for_others`.
+
+A person with `requests.decide` approves (with a fresh phishing-resistant sign-in) or denies (with
+a reason) each line under **Access → Requests → Approvals**. Nobody approves a line they
+requested or that grants them access. Approval grants the access in Tessera at once, as a
+grant edge (source `request`), until the duration ends or someone removes it. The
+beneficiary can remove their own access; deciders can remove anyone's. The sweeper closes
+expired lines, and lines whose grant was removed elsewhere (a review, a revoke). Each line
+keeps its history (submitted, approved, denied, cancelled, expired, removed), and each change
+is audited.
+
+Policy admins edit an item under **Directory → Entitlements → (group) → Request catalog**
+(`catalog.manage`). The seed puts every demo group in the catalog (privileged ones: 8 hours by
+default, at most 72). It also links Olu and Vic to two demo employees, so they can request for
+themselves. Not yet: provisioning into the target system (#103), manager and owner routing
+(#165), business roles (#161).
 
 ### Audit ledger
 

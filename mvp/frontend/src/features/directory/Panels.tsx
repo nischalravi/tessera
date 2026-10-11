@@ -15,6 +15,7 @@ import {
 } from "../../components";
 import { BusinessRole, ORGS, OrgUnit, mockIdentityOps, mockObjects, useMockState, useRoles } from "../../mocks";
 import { RevokeDrawer } from "./IdentityPage";
+import { CatalogSettings } from "./catalog";
 import { PreviewFormDrawer } from "./shared";
 
 const I = 16;
@@ -297,7 +298,7 @@ export function AccountPanel({ a, onClose }: { a: AccountRow; onClose: () => voi
 export function GroupPanel({ g, onClose }: { g: Group; onClose: () => void }) {
   const nav = useNavigate();
   const roles = useRoles();
-  const [tab, setTab] = useTab<"overview" | "roles">("overview", g.id);
+  const [tab, setTab] = useTab<"overview" | "catalog" | "roles">("overview", g.id);
   const [edit, setEdit] = useState(false);
   const key = `${g.system}:${g.name}`;
   const inRoles = roles.filter((r) => r.entitlements.some((e) => e.replace(" (JIT)", "") === key));
@@ -319,9 +320,9 @@ export function GroupPanel({ g, onClose }: { g: Group; onClose: () => void }) {
           ]}
         />
       }
-      tabs={<Tabs label="Entitlement details" value={tab} onChange={setTab} tabs={[{ id: "overview", label: "Overview" }, { id: "roles", label: `Roles (${inRoles.length})` }]} />}
+      tabs={<Tabs label="Entitlement details" value={tab} onChange={setTab} tabs={[{ id: "overview", label: "Overview" }, { id: "catalog", label: "Request catalog" }, { id: "roles", label: `Roles (${inRoles.length})` }]} />}
     >
-      {tab === "overview" ? (
+      {tab === "catalog" ? <CatalogSettings groupId={g.id} privileged={g.privileged} /> : tab === "overview" ? (
         <>
           <p className="muted">{g.description ?? "No description from the source system."}</p>
           <dl className="kv">
@@ -330,7 +331,7 @@ export function GroupPanel({ g, onClose }: { g: Group; onClose: () => void }) {
             <dt>Kind</dt><dd>{g.kind.replace(/_/g, " ")}</dd>
             <dt>Privileged</dt><dd>{g.privileged ? <Badge tone="warning">Privileged</Badge> : "No"}</dd>
             <dt>Access model</dt><dd>{g.requestable ? <Badge tone="info">JIT-eligible</Badge> : "Standing access"}</dd>
-            <dt>Approval</dt><dd>{g.privileged ? "Manager, resource owner and security" : "Manager"}</dd>
+            <dt>Approval</dt><dd>A person with requests.decide (see the Request catalog tab)</dd>
             <dt>Review cadence</dt><dd>{g.privileged ? "Quarterly, plus exception reviews" : "Exception reviews only"}</dd>
           </dl>
         </>
