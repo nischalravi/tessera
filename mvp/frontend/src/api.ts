@@ -670,3 +670,51 @@ export const readiness = {
   rerun: (reconcile = false) => api<{ results: { connection_id: string; name: string; validation_run_id: string | null; dry_run_id: string | null; skipped?: string }[]; dashboard: DeploymentHealth }>(
     "/insights/deployment-health/rerun", { reconcile }),
 };
+
+// ------------------------------------------------------------- ownership (#167)
+
+export type OwnedKind = "app" | "group" | "resource" | "identity";
+
+export interface NamedRef {
+  id: number;
+  name: string;
+}
+
+export interface OwnedObject {
+  kind: OwnedKind;
+  key: string;
+  label: string;
+  primary_owner: NamedRef | null;
+  backup_owner: NamedRef | null;
+  owner_group: NamedRef | null;
+  purpose: string;
+  /** "tessera" when set here, "connector" when only the connector names an owner. */
+  source: "tessera" | "connector" | null;
+  updated_at: string | null;
+}
+
+export interface OwnershipList {
+  kind: OwnedKind;
+  counts: Record<OwnedKind, { total: number; unowned: number }>;
+  items: OwnedObject[];
+}
+
+export interface OwnershipInput {
+  primary_owner_id: number | null;
+  backup_owner_id: number | null;
+  owner_group_id: number | null;
+  purpose: string;
+}
+
+export const ownershipPath = (kind: OwnedKind) => `/ownership?kind=${kind}`;
+
+export const setOwnership = (kind: OwnedKind, key: string, body: OwnershipInput) =>
+  api<OwnedObject>(`/ownership/${kind}/${encodeURIComponent(key)}`, body, "PUT");
+
+export const bulkSetOwnership = (objects: { kind: OwnedKind; key: string }[], body: Omit<OwnershipInput, "purpose">) =>
+  api<{ updated: number }>("/ownership/bulk", { objects, ...body });
+
+/** The one object's row out of a kind's listing, or null. */
+export function ownedObject(list: OwnershipList | null, key: string | number): OwnedObject | null {
+  return list?.items.find((o) => o.key === String(key)) ?? null;
+}

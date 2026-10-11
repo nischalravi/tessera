@@ -37,6 +37,7 @@ const Entitlements = named(directory, "Entitlements");
 const Apps = named(directory, "Apps");
 const Orgs = named(directory, "Orgs");
 const Groups = named(directory, "Groups");
+const Ownership = named(() => import("../features/directory/Ownership"), "Ownership");
 const IdentityPage = named(() => import("../features/directory/IdentityPage"), "IdentityPage");
 const RolePage = named(objects, "RolePage");
 const EntitlementPage = named(objects, "EntitlementPage");
@@ -98,6 +99,7 @@ export default function App() {
                       <Route path="apps" element={<Apps />} />
                       <Route path="orgs" element={<Orgs />} />
                       <Route path="groups" element={<Groups />} />
+                      <Route path="ownership" element={<Ownership />} />
                     </Route>
                     <Route path="/directory/identities/:id" element={<IdentityPage />} />
                     <Route path="/directory/roles/:id" element={<RolePage />} />

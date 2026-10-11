@@ -154,6 +154,8 @@ The routes are documented at `/api/readiness/openapi.json`.
 `GET|POST /api/reviews/campaigns` · `POST /api/reviews/items/{id}/decision` ·
 `GET|POST /api/hris/events` · `GET /api/hris/events/{id}/plan` · `POST /api/hris/events/{id}/execute` ·
 `GET /api/jml/leaver-plan/{identity_id}` · `GET /api/accounts[?system=]` ·
+`GET /api/ownership[?kind=app|group|resource|identity&unowned=]` · `PUT /api/ownership/{kind}/{object_key}` ·
+`POST /api/ownership/bulk` ·
 `GET /api/audit[?limit=&before_seq=&action=&actor_id=&target_type=&target_id=&from=&to=&include_http=]` ·
 `GET /api/audit/events/{event_id}/proof` · `GET /api/audit/checkpoints[?from_seq=]` · `GET /api/audit/keys` ·
 `POST /api/audit/verify {from_seq?, to_seq?}` · `GET /api/audit/export[?from_seq=&to_seq=]` (NDJSON) ·
@@ -163,6 +165,23 @@ The routes are documented at `/api/readiness/openapi.json`.
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
 or HRIS execution is always the signed-in user.
+
+### Ownership
+
+Applications (by system name), entitlements (groups), resources and machine identities each have a
+primary owner, an optional backup owner, an optional owner group and a purpose (table `ownerships`,
+issue #167). Owners must be active people; the backup must differ from the primary. Setting needs
+`ownership.manage` (operator, policy_admin); reading needs `graph.read`. Every change is audited as
+`ownership.set`.
+
+- For a machine identity the primary owner is also `identities.owner_id`, so the NHI flags, reviews
+  and policies use it. Once set in Tessera, connector sync no longer overwrites it.
+- The leaver plan gains `reassign_ownership` steps: an object the leaver owns goes to its active
+  backup, else to the leaver's manager (else nobody); where the leaver is the backup, the slot is
+  cleared. Plans without ownership rows are unchanged.
+- UI: **Identity > Ownership** lists each kind with unowned counts, a "No owner" / "No backup" filter
+  and bulk **Assign owner**; the entitlement, application and machine-identity panels show the
+  owners with **Assign**/**Change**; the machine identity list has the same bulk action.
 
 ### Audit ledger
 
@@ -226,7 +245,7 @@ the right. Arrow keys move between items.
 | Group | Items |
 |---|---|
 | (top) | **Home**, **Inbox** (count) |
-| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts, Roles (Preview), Organizations (Preview) |
+| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Ownership, Accounts, Roles (Preview), Organizations (Preview) |
 | **Access** | Request access, My access (with *My requests*), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
 | **Protection** | Policies & SoD (violations, policies, what-if simulation), Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
 | **Settings** | Connections (governed connections and the setup wizard), Admin |
