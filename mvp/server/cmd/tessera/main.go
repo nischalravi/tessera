@@ -221,7 +221,7 @@ const (
 	shutdownTimeout   = 10 * time.Second
 	sweepInterval     = 30 * time.Second
 	reviewInterval    = 5 * time.Minute // scheduled access reviews (issue #166)
-	keysInterval      = 24 * time.Hour // keys.EnsureAll: rotation runs daily (design §10.6)
+	keysInterval      = 24 * time.Hour  // keys.EnsureAll: rotation runs daily (design §10.6)
 	// checkpointInterval is how often the checkpointer looks for due tenants
 	// (each is checkpointed every TESSERA_AUDIT_CHECKPOINT_SECONDS or
 	// _EVENTS new events, design §13.6).
