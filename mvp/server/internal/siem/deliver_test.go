@@ -78,6 +78,11 @@ func (w *world) head(t *testing.T) int64 {
 	})
 }
 
+func (w *world) pending(t *testing.T, id string) int64 {
+	k := w.sink(t, id)
+	return testkit.Get(t, w.st, func(tx *store.TenantTx) (int64, error) { return tx.SiemPending(k.CursorSeq, k.IncludeHTTP) })
+}
+
 func (w *world) sink(t *testing.T, id string) *store.SiemSink {
 	return testkit.Get(t, w.st, func(tx *store.TenantTx) (*store.SiemSink, error) { return tx.SiemSink(id) })
 }
@@ -230,7 +235,7 @@ func TestBackoffFailingAndRecovered(t *testing.T) {
 		}
 		w.now = w.now.Add(siem.Backoff(i))
 	}
-	if got := siem.HealthOf(w.sink(t, k.ID), w.head(t)); got.Status != "failing" || got.Lag == 0 {
+	if got := siem.HealthOf(w.sink(t, k.ID), w.pending(t, k.ID)); got.Status != "failing" || got.Lag == 0 {
 		t.Errorf("health %+v", got)
 	}
 	if auditCount(t, w, "siem.sink.failing") != 1 {
@@ -238,7 +243,7 @@ func TestBackoffFailingAndRecovered(t *testing.T) {
 	}
 	rec.fail = nil
 	w.tick(t, svc)
-	if got := siem.HealthOf(w.sink(t, k.ID), w.head(t)); got.Status != "healthy" {
+	if got := siem.HealthOf(w.sink(t, k.ID), w.pending(t, k.ID)); got.Status != "healthy" {
 		t.Errorf("after recovery %+v", got)
 	}
 	if auditCount(t, w, "siem.sink.recovered") != 1 {

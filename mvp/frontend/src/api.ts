@@ -670,3 +670,76 @@ export const readiness = {
   rerun: (reconcile = false) => api<{ results: { connection_id: string; name: string; validation_run_id: string | null; dry_run_id: string | null; skipped?: string }[]; dashboard: DeploymentHealth }>(
     "/insights/deployment-health/rerun", { reconcile }),
 };
+
+// ------------------------------------------------------------ SIEM sinks (#169)
+
+export type SiemKind = "syslog" | "webhook";
+export type SiemFormat = "json" | "ocsf";
+export type SiemFlavor = "hec" | "json" | "";
+
+export interface SiemSink {
+  id: string;
+  name: string;
+  kind: SiemKind;
+  format: SiemFormat;
+  /** host:port, or the webhook URL without its query string. */
+  target: string;
+  flavor: SiemFlavor;
+  has_ca: boolean;
+  has_token: boolean;
+  include_http: boolean;
+  enabled: boolean;
+  cursor_seq: number;
+  head_seq: number;
+  health: { status: "healthy" | "catching_up" | "degraded" | "failing" | "paused"; lag: number };
+  attempts: number;
+  next_attempt_at: string | null;
+  last_error: string | null;
+  last_success_at: string | null;
+  delivered_count: number;
+  dead_letter_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SiemSinkInput {
+  name: string;
+  kind?: SiemKind;
+  format: SiemFormat;
+  /** Omit on update to keep the current target. */
+  target?: string;
+  flavor?: SiemFlavor;
+  /** Omit on update to keep; "" removes it. */
+  ca_pem?: string;
+  /** Omit to keep the stored token; "" removes it. */
+  token?: string;
+  include_http: boolean;
+  enabled: boolean;
+  /** Creation only. */
+  start?: "now" | "beginning";
+}
+
+export interface SiemDeadLetter {
+  id: string;
+  from_seq: number;
+  to_seq: number;
+  events: number;
+  error: string;
+  created_at: string;
+}
+
+export const siemApi = {
+  create: (body: SiemSinkInput) => api<SiemSink>("/siem/sinks", body),
+  update: (id: string, body: SiemSinkInput) => api<SiemSink>(`/siem/sinks/${encodeURIComponent(id)}`, body, "PUT"),
+  rewind: (id: string, seq: number) => api<SiemSink>(`/siem/sinks/${encodeURIComponent(id)}/rewind`, { seq }),
+  test: (id: string) => api<{ ok: boolean; error?: string }>(`/siem/sinks/${encodeURIComponent(id)}/test`, {}),
+};
+
+/** Health → badge tone and label. */
+export const SIEM_HEALTH: Record<SiemSink["health"]["status"], { tone: "ok" | "info" | "warning" | "critical" | "outline"; label: string }> = {
+  healthy: { tone: "ok", label: "Healthy" },
+  catching_up: { tone: "info", label: "Catching up" },
+  degraded: { tone: "warning", label: "Retrying" },
+  failing: { tone: "critical", label: "Failing" },
+  paused: { tone: "outline", label: "Paused" },
+};

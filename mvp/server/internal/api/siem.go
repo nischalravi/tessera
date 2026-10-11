@@ -89,12 +89,16 @@ func redactSinkTarget(k *store.SiemSink) string {
 	return u.String()
 }
 
-func sinkViewOf(k *store.SiemSink, head int64) sinkView {
+func sinkViewOf(tx *store.TenantTx, k *store.SiemSink, head int64) (sinkView, error) {
+	pending, err := tx.SiemPending(k.CursorSeq, k.IncludeHTTP)
+	if err != nil {
+		return sinkView{}, err
+	}
 	return sinkView{ID: k.ID, Name: k.Name, Kind: k.Kind, Format: k.Format, Target: redactSinkTarget(k), Flavor: k.Flavor,
 		HasCA: k.CAPEM != nil, HasToken: len(k.SecretSealed) > 0, IncludeHTTP: k.IncludeHTTP, Enabled: k.Enabled, CursorSeq: k.CursorSeq,
-		HeadSeq: head, Health: siem.HealthOf(k, head), Attempts: k.Attempts, NextAttemptAt: k.NextAttemptAt, LastError: k.LastError,
+		HeadSeq: head, Health: siem.HealthOf(k, pending), Attempts: k.Attempts, NextAttemptAt: k.NextAttemptAt, LastError: k.LastError,
 		LastSuccessAt: k.LastSuccessAt, DeliveredCount: k.DeliveredCount, DeadLetterCount: k.DeadLetterCount, CreatedAt: k.CreatedAt,
-		UpdatedAt: k.UpdatedAt}
+		UpdatedAt: k.UpdatedAt}, nil
 }
 
 func ledgerHead(tx *store.TenantTx) (int64, error) {
@@ -114,7 +118,11 @@ func (s *Server) listSiemSinks(_ http.ResponseWriter, r *http.Request, _ *params
 	}
 	out := make([]sinkView, 0, len(ks))
 	for _, k := range ks {
-		out = append(out, sinkViewOf(k, head))
+		v, err := sinkViewOf(tx, k, head)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
 	}
 	return out, nil
 }
@@ -181,7 +189,11 @@ func (s *Server) createSiemSink(_ http.ResponseWriter, r *http.Request, _ *param
 	if err != nil {
 		return nil, err
 	}
-	return statusBody{http.StatusCreated, sinkViewOf(k, head)}, nil
+	v, err := sinkViewOf(tx, k, head)
+	if err != nil {
+		return nil, err
+	}
+	return statusBody{http.StatusCreated, v}, nil
 }
 
 func (s *Server) updateSiemSink(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
@@ -208,7 +220,7 @@ func (s *Server) updateSiemSink(_ http.ResponseWriter, r *http.Request, p *param
 	if err != nil {
 		return nil, err
 	}
-	return sinkViewOf(k, head), nil
+	return sinkViewOf(tx, k, head)
 }
 
 func (s *Server) rewindSiemSink(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
@@ -234,7 +246,7 @@ func (s *Server) rewindSiemSink(_ http.ResponseWriter, r *http.Request, p *param
 	if err != nil {
 		return nil, err
 	}
-	return sinkViewOf(k, head), nil
+	return sinkViewOf(tx, k, head)
 }
 
 // testSiemSink sends one synthetic event outside any transaction, then

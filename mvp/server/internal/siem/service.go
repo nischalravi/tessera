@@ -282,12 +282,13 @@ func (s *Service) fail(ctx context.Context, t tenancy.ID, k *store.SiemSink, cur
 // Health is a sink's delivery state.
 type Health struct {
 	Status string `json:"status"` // healthy | catching_up | degraded | failing | paused
-	Lag    int64  `json:"lag"`    // events in the ledger after the cursor
+	Lag    int64  `json:"lag"`    // events after the cursor the sink will send
 }
 
-// HealthOf reports a sink's state against the tenant's ledger head.
-func HealthOf(k *store.SiemSink, head int64) Health {
-	h := Health{Lag: max(head-k.CursorSeq, 0)}
+// HealthOf reports a sink's state; pending is how many events after its
+// cursor it would send (store.SiemPending).
+func HealthOf(k *store.SiemSink, pending int64) Health {
+	h := Health{Lag: max(pending, 0)}
 	switch {
 	case !k.Enabled:
 		h.Status = "paused"

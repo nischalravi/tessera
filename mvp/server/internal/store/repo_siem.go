@@ -78,6 +78,9 @@ var (
 	siemDeadLettersInsert = tq("siem_dead_letters.insert", `
 		INSERT INTO siem_dead_letters (id, tenant_id, sink_id, from_seq, to_seq, events, error, created_at)
 		VALUES (@id, @tenant, @sink_id, @from_seq, @to_seq, @events, @error, @created_at)`)
+	siemPendingCount = tq("audit_events.count_pending", `
+		SELECT count(e.id) FROM audit_events e WHERE e.tenant_id = @tenant AND e.seq > @seq
+			AND (@http = 1 OR e.action <> 'http.request')`)
 	siemDeadLettersList = tq("siem_dead_letters.list", `
 		SELECT d.id, d.sink_id, d.from_seq, d.to_seq, d.events, d.error, d.created_at FROM siem_dead_letters d
 		WHERE d.tenant_id = @tenant AND d.sink_id = @sink_id ORDER BY d.created_at DESC, d.id LIMIT 100`)
@@ -178,4 +181,12 @@ func (tx *TenantTx) SiemDeadLetters(sinkID string) ([]*SiemDeadLetter, error) {
 		d.CreatedAt, err = at.val()
 		return &d, err
 	}, siemDeadLettersList, sql.Named("sink_id", sinkID))
+}
+
+// SiemPending counts the audit events after seq a sink would send
+// (http.request only when includeHTTP).
+func (tx *TenantTx) SiemPending(seq int64, includeHTTP bool) (int64, error) {
+	var n int64
+	err := tx.queryRow(siemPendingCount, sql.Named("seq", seq), sql.Named("http", B(includeHTTP))).Scan(&n)
+	return n, err
 }

@@ -41,6 +41,9 @@ func TestIsolation_SiemSinks(t *testing.T) {
 		if _, err := c.SiemSink("sink-a"); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("SiemSink(A's) = %v", err)
 		}
+		if n, err := c.SiemPending(0, true); err != nil || n == 0 {
+			t.Errorf("SiemPending = %d, %v", n, err)
+		}
 		if ds, err := c.SiemDeadLetters("sink-a"); err != nil || len(ds) != 0 {
 			t.Errorf("SiemDeadLetters(A's) = %v, %v", ds, err)
 		}
@@ -88,7 +91,7 @@ func TestSiemCursorOptimistic(t *testing.T) {
 func siemCovered() map[string]bool {
 	out := map[string]bool{}
 	for _, k := range []string{"SiemSinks", "SiemSink", "InsertSiemSink", "UpdateSiemSink", "AckSiemBatch", "FailSiemBatch",
-		"DeadLetterSiemBatch", "SetSiemCursor", "SiemDeadLetters"} {
+		"DeadLetterSiemBatch", "SetSiemCursor", "SiemDeadLetters", "SiemPending"} {
 		out[k] = true // TestIsolation_SiemSinks
 	}
 	return out
