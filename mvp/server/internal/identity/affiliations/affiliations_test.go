@@ -144,7 +144,6 @@ func TestAdd(t *testing.T) {
 		}), "invalid_org_unit"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := storetest.TwoTenants(t)
 			err := f.DB.InTenant(context.Background(), f.B.ID, func(c *store.TenantTx) error {
 				in := tc.in
 				a, err := affiliations.Add(c, in, now)
