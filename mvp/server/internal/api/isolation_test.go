@@ -115,20 +115,28 @@ var crossTenantCases = map[string]crossTenantCase{
 		body: func(id int64) string { return fmt.Sprintf(`{"disable_account_ids":[%d]}`, id) }},
 	"PUT catalog item": {method: "PUT", path: pathf("/api/catalog/items/%d"), key: "group:okta:platform",
 		body: func(int64) string { return `{"requestable":true,"risk":"low"}` }},
+	"GET lifecycle": {method: "GET", path: pathf("/api/identities/%d/lifecycle"), key: "alice"},
+	"PUT lifecycle": {method: "PUT", path: pathf("/api/identities/%d/lifecycle"), key: "alice",
+		body: func(int64) string { return `{"worker_type":"employee","reason":"x"}` }},
+	"POST lifecycle extend": {method: "POST", path: pathf("/api/identities/%d/lifecycle/extend"), key: "alice",
+		body: func(int64) string { return `{"ends_at":"2030-01-01T00:00:00Z","reason":"x"}` }},
 }
 
 // routeParamKey maps each route with path parameters to the cases above.
 var routeParamCases = map[string][]string{
-	"GET /api/identities/{identity_id}":           {"GET identity", "GET identity (nhi)"},
-	"GET /api/jml/leaver-plan/{identity_id}":      {"GET leaver plan"},
-	"GET /api/reviews/campaigns/{campaign_id}":    {"GET campaign"},
-	"GET /api/hris/events/{event_id}/plan":        {"GET hris plan"},
-	"POST /api/hris/events/{event_id}/execute":    {"POST hris execute"},
-	"POST /api/reviews/items/{item_id}/decision":  {"POST review decision"},
-	"POST /api/jit/requests/{request_id}/approve": {"POST jit approve"},
-	"POST /api/jit/requests/{request_id}/deny":    {"POST jit deny"},
-	"POST /api/jit/requests/{request_id}/revoke":  {"POST jit revoke"},
-	"PUT /api/catalog/items/{group_id}":           {"PUT catalog item"},
+	"GET /api/identities/{identity_id}":                   {"GET identity", "GET identity (nhi)"},
+	"GET /api/jml/leaver-plan/{identity_id}":              {"GET leaver plan"},
+	"GET /api/reviews/campaigns/{campaign_id}":            {"GET campaign"},
+	"GET /api/hris/events/{event_id}/plan":                {"GET hris plan"},
+	"POST /api/hris/events/{event_id}/execute":            {"POST hris execute"},
+	"POST /api/reviews/items/{item_id}/decision":          {"POST review decision"},
+	"POST /api/jit/requests/{request_id}/approve":         {"POST jit approve"},
+	"POST /api/jit/requests/{request_id}/deny":            {"POST jit deny"},
+	"POST /api/jit/requests/{request_id}/revoke":          {"POST jit revoke"},
+	"PUT /api/catalog/items/{group_id}":                   {"PUT catalog item"},
+	"GET /api/identities/{identity_id}/lifecycle":         {"GET lifecycle"},
+	"PUT /api/identities/{identity_id}/lifecycle":         {"PUT lifecycle"},
+	"POST /api/identities/{identity_id}/lifecycle/extend": {"POST lifecycle extend"},
 }
 
 // TestIsolation_RouteCrossTenant: as tenant B, every route with a path
@@ -223,15 +231,16 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 	lines := seedRequestLines(t, f) // A's justification carries the sentinel
 	roleIDs, _ := seedRoles(t, f)   // and A's role description
 	values := map[string]string{
-		"/api/roles/{role_id}":                 roleIDs[f.B.ID],
-		"/api/roles/{role_id}/versions":        roleIDs[f.B.ID],
-		"/api/roles/{role_id}/drift":           roleIDs[f.B.ID],
-		"/api/requests/{request_id}":           lines[f.B.ID],
-		"/api/identities/{identity_id}":        fmt.Sprint(b["alice"]),
-		"/api/jml/leaver-plan/{identity_id}":   fmt.Sprint(b["alice"]),
-		"/api/reviews/campaigns/{campaign_id}": fmt.Sprint(b["campaign"]),
-		"/api/hris/events/{event_id}/plan":     fmt.Sprint(b["hris:leaver"]),
-		"/api/audit/events/{event_id}/proof":   latestEventID(t, f.DB, f.B.ID),
+		"/api/roles/{role_id}":                    roleIDs[f.B.ID],
+		"/api/roles/{role_id}/versions":           roleIDs[f.B.ID],
+		"/api/roles/{role_id}/drift":              roleIDs[f.B.ID],
+		"/api/requests/{request_id}":              lines[f.B.ID],
+		"/api/identities/{identity_id}":           fmt.Sprint(b["alice"]),
+		"/api/identities/{identity_id}/lifecycle": fmt.Sprint(b["alice"]),
+		"/api/jml/leaver-plan/{identity_id}":      fmt.Sprint(b["alice"]),
+		"/api/reviews/campaigns/{campaign_id}":    fmt.Sprint(b["campaign"]),
+		"/api/hris/events/{event_id}/plan":        fmt.Sprint(b["hris:leaver"]),
+		"/api/audit/events/{event_id}/proof":      latestEventID(t, f.DB, f.B.ID),
 	}
 	checked := 0
 	for _, rt := range srv.Routes() {

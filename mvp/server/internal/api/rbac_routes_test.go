@@ -102,6 +102,12 @@ GET    /api/role-requests                            requests.create -  # issue 
 POST   /api/role-requests/{request_id}/approve       requests.decide STEP_UP_POLICY  # issue #161
 POST   /api/role-requests/{request_id}/deny          requests.decide -  # issue #161
 POST   /api/role-requests/{request_id}/cancel        requests.create -  # issue #161 (the requester)
+GET    /api/lifecycle                                graph.read      -  # issue #159
+GET    /api/lifecycle/sponsored                      requests.create -  # issue #159
+POST   /api/lifecycle/sweep                          lifecycle.manage -  # issue #159
+GET    /api/identities/{identity_id}/lifecycle       graph.read      -  # issue #159
+PUT    /api/identities/{identity_id}/lifecycle       lifecycle.manage STEP_UP_POLICY  # issue #159
+POST   /api/identities/{identity_id}/lifecycle/extend requests.create -  # issue #159 (the sponsor, or lifecycle.manage)
 POST   /api/connections/{id}/validate                connections.manage -
 GET    /api/connections/{id}/validations/{run}       connections.read   -
 POST   /api/connections/{id}/dry-run                 connections.manage -
