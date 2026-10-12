@@ -165,7 +165,9 @@ The routes are documented at `/api/readiness/openapi.json`.
 `POST /api/requests/{id}/approve|deny|cancel|remove {reason}` ·
 `GET|POST /api/roles` · `GET|PUT /api/roles/{id}` · `GET /api/roles/{id}/versions|drift` ·
 `POST /api/roles/{id}/retire|reconcile|members` · `POST /api/roles/{id}/members/{identity_id}/remove`
-(changes take `?dry_run=1`) · `GET|POST /api/role-requests` · `POST /api/role-requests/{id}/approve|deny|cancel`
+(changes take `?dry_run=1`) · `GET|POST /api/role-requests` · `POST /api/role-requests/{id}/approve|deny|cancel` ·
+`GET|POST /api/abac/policies` · `GET|PUT /api/abac/policies/{id}` · `POST /api/abac/policies/{id}/retire` ·
+`POST /api/abac/simulate` · `GET /api/abac/bindings` · `PUT /api/catalog/items/{group_id}/policy`
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
@@ -232,8 +234,46 @@ contains their value.
 Changing roles needs `roles.manage` (policy admins) and a fresh phishing-resistant sign-in.
 Members, versions and drift need `graph.read`. The seed creates the demo company's six roles.
 Rule members are seeded only where people already hold every entitlement, so seeding grants
-nothing: reconcile a role to see the rest. Not yet: provisioning into the target system (#103),
-role mining (Phase 3), and ABAC conditions in rules (#162).
+nothing: reconcile a role to see the rest. Not yet: provisioning into the target system (#103)
+and role mining (Phase 3).
+
+### Attribute policies (ABAC)
+
+**Protection → Attribute policies** (issue #162). A policy is a named, versioned condition in a
+small JSON language (`internal/abac`): `all` / `any` / `not` over tests
+`{"attr": "identity.department", "op": "eq", "value": "Finance"}`, with ops `eq`, `ne`, `in`,
+`prefix`, `exists`, `gt`, `gte`, `lt`, `lte` (numbers or RFC 3339 times). Attributes are
+`identity.*` (type, status, name, email, department, title, manager_id, has_manager, source,
+tenure_days), `resource.*` (name, risk, and for catalog items system and privileged) and `context.*`
+(time, hour, weekday in UTC, and `aal` when a signed-in user acts). It is data, never code:
+evaluation is a deterministic walk with limits on depth (8), size (100 parts) and lists (50).
+
+- **Missing attributes deny.** Evaluation is three-valued: a test on an attribute the subject lacks
+  is unknown, `not` of unknown is still unknown, and only a condition that is definitely true
+  grants. So `not (department = Legal)` does not grant to someone with no department. `exists` is
+  the one test that is never unknown.
+- **Where it applies.** *Birthright rules*: a role's rule has an optional `policy` (an attribute
+  policy id) that must hold on top of the department, type and title lists; the policy sees the
+  person, the role (`resource.name`, `resource.risk`) and the time. *Request eligibility*:
+  `PUT /api/catalog/items/{group_id}/policy {policy_id}` binds a policy to a catalog item, checked
+  on top of its eligible types and departments (`409 not_eligible`), with the item as the resource
+  and the requester's assurance level as `context.aal`. *SoD*: a policy file's
+  `subjects.condition` (the same language, as YAML) limits which identities are checked; an
+  identity that lacks a tested attribute stays in scope, because a detective control should
+  over-check rather than skip. Current rules and eligibility lists work unchanged.
+- **Versioning and audit.** Each save is the next version in `abac_policy_versions` (append-only,
+  with who and why); create, update, retire and binding changes are audited in the same
+  transaction (`abac.policy.*`, `abac.binding.*`). A role rule picks up a policy's new version at
+  the role's next save or reconcile; a policy a rule or catalog item uses cannot be retired.
+- **Simulate before saving.** `POST /api/abac/simulate {condition, policy_id?, resource?, context?}`
+  evaluates a draft against every identity and returns who matches, who gains and who loses
+  against the saved version (up to 200 each, with exact counts), and how many identities lack an
+  attribute the draft tests. It writes nothing; the editor requires a simulation before saving.
+
+Reading and simulating need `graph.read`; changing a policy needs `roles.manage` with a fresh
+phishing-resistant sign-in, and binding a catalog item needs `catalog.manage` (same step-up).
+Not yet: location, worker type and custom HRIS fields (the identity record does not store them, so
+a test on one is always unknown and denies; they arrive with the HRIS attribute mapping).
 
 ### Audit ledger
 
@@ -299,7 +339,7 @@ the right. Arrow keys move between items.
 | (top) | **Home**, **Inbox** (count) |
 | **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts, Roles, Organizations (Preview) |
 | **Access** | Request access, My access (with *My requests*), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
-| **Protection** | Policies & SoD (violations, policies, what-if simulation), Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
+| **Protection** | Policies & SoD (violations, policies, what-if simulation), Attribute policies, Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
 | **Settings** | Connections (governed connections and the setup wizard), Admin |
 
 **Home.** For the admin & security persona: the tenant name and a sync line, then tabs
