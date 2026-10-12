@@ -75,7 +75,7 @@ export function JIT() {
             ) : (
               <div className="table-scroll">
                 <table>
-                  <thead><tr><th>Requester</th><th>Role</th><th className="hide-narrow">Justification</th><th>Status</th><th /></tr></thead>
+                  <thead><tr><th>Requester</th><th>Role</th><th className="hide-narrow">Justification</th><th>Status</th><th><span className="sr-only">Actions</span></th></tr></thead>
                   <tbody>
                     {rows.map((r) => (
                       <tr key={r.id}>

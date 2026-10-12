@@ -241,7 +241,7 @@ a:hover { text-decoration: underline; }
 h1, h2, h3, h4 { margin: 0; font-weight: 600; }
 h1 { font-size: var(--fs-2xl); line-height: 1.27; }
 h2 { font-size: var(--fs-xl); line-height: 1.375; }
-h3 { font-size: var(--fs-sm); color: var(--text-2); font-weight: 600; }
+h3, .h3 { font-size: var(--fs-sm); color: var(--text-2); font-weight: 600; }
 p { margin: 0; }
 code, pre, .mono { font-family: var(--font-mono); font-size: 12px; }
 .num, td.num, th.num, .tnum { font-variant-numeric: tabular-nums; }

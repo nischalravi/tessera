@@ -212,7 +212,7 @@ export default function GraphExplorer() {
         </div>
         <div className="stack">
           <div className="card stack-sm">
-            <h3>Selection</h3>
+            <h2 className="h3">Selection</h2>
             {!sel && <div className="muted small">Select a node to see its details and trace its paths.</div>}
             {sel && (
               <div className="stack-sm small">
@@ -232,7 +232,7 @@ export default function GraphExplorer() {
             )}
           </div>
           <div className="card stack-sm">
-            <h3>Legend</h3>
+            <h2 className="h3">Legend</h2>
             <div className="legend">
               <span><i style={{ background: "var(--kind-human)" }} />Person <i style={{ background: "var(--kind-service)", marginLeft: 8 }} />Service <i style={{ background: "var(--kind-agent)", marginLeft: 8 }} />AI agent</span>
               <span><i style={{ background: "var(--g-account)" }} />Account</span>

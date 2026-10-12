@@ -220,7 +220,7 @@ export function IdentityPage() {
           {d.grants.length === 0 ? <EmptyState title="No grants">This identity holds no group or role memberships.</EmptyState> : (
             <div className="table-scroll">
               <table>
-                <thead><tr><th>Granted</th><th>Account</th><th>Type</th><th>Expires</th><th /></tr></thead>
+                <thead><tr><th>Granted</th><th>Account</th><th>Type</th><th>Expires</th><th><span className="sr-only">Actions</span></th></tr></thead>
                 <tbody>
                   {d.grants.map((g) => (
                     <tr key={g.src + g.dst}>
@@ -256,7 +256,7 @@ export function IdentityPage() {
           {d.recommendations.length === 0 ? <EmptyState title="No recommendations">Access matches usage. Nothing to trim.</EmptyState> : (
             <div className="table-scroll">
               <table>
-                <thead><tr><th>Grant</th><th>Recommendation</th><th className="num">Unused / lost</th><th>Last used</th><th /></tr></thead>
+                <thead><tr><th>Grant</th><th>Recommendation</th><th className="num">Unused / lost</th><th>Last used</th><th><span className="sr-only">Actions</span></th></tr></thead>
                 <tbody>
                   {d.recommendations.map((r) => (
                     <tr key={r.edge_id}>

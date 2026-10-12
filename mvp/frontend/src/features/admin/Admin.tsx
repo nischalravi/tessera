@@ -76,7 +76,7 @@ function Jobs() {
     <div className="card flush">
       <div className="table-scroll">
         <table>
-          <thead><tr><th>Job</th><th>Schedule</th><th>Last run here</th><th /></tr></thead>
+          <thead><tr><th>Job</th><th>Schedule</th><th>Last run here</th><th><span className="sr-only">Actions</span></th></tr></thead>
           <tbody>
             {jobs.map((j) => (
               <tr key={j.id}>
