@@ -8,6 +8,10 @@
 #   ./run.sh build      build the Go server and type-check/build the frontend
 #   ./run.sh seed       (re)seed the database only
 #   ./run.sh audit-deps govulncheck ./... on the Go module (install: server/scripts/install-tools.sh)
+#   ./run.sh backup     take an encrypted online backup now (server may be running; args go to
+#                       `tessera backup create`, e.g. -dir /backups -keep 28)
+#   ./run.sh restore F  verify backup F and restore it over the database (stop the server
+#                       first; the current database is kept as a .pre-restore copy)
 #   ./run.sh devidp     run only the dev IdP (mock OIDC issuer for local sign-in) in the foreground
 #   ./run.sh bench      Go benchmarks + end-to-end latency/startup/memory of the server
 #                       (set PYTHON=… PY_BACKEND=… to also measure a Python backend checkout)
@@ -103,6 +107,17 @@ case "${1:-}" in
     build_server
     seed
     exit 0
+    ;;
+  backup)
+    build_server
+    shift
+    exec "$BIN" backup create -db "$DB" "$@"
+    ;;
+  restore)
+    build_server
+    if [ -z "${2:-}" ]; then echo "usage: ./run.sh restore <backup.tbak> [tessera backup restore flags]" >&2; exit 2; fi
+    f="$2"; shift 2
+    exec "$BIN" backup restore -in "$f" -db "$DB" -force "$@"
     ;;
   devidp)
     build_server

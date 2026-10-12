@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
+	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 )
 
 // RestoreOptions configure a verification or a restore.
@@ -197,4 +199,19 @@ func Upload(ctx context.Context, client *http.Client, url, path string) error {
 		return fmt.Errorf("backup: upload: %s", resp.Status)
 	}
 	return nil
+}
+
+// RecordEvent appends action to the platform audit chain of db, with the
+// actor from ctx (audit.WithOperatorActor or audit.WithSystemActor).
+func RecordEvent(ctx context.Context, db *store.DB, action string, detail ojson.Object) error {
+	return db.InTenant(ctx, tenancy.Platform, func(tx *store.TenantTx) error {
+		_, err := audit.Record(ctx, tx, action, detail)
+		return err
+	})
+}
+
+// Detail is the audit detail of a created backup (never the KEK check).
+func (c *Created) Detail() ojson.Object {
+	return ojson.Object{{Key: "backup_id", Value: c.Manifest.ID}, {Key: "file", Value: filepath.Base(c.Path)},
+		{Key: "sha256", Value: c.Manifest.SHA256}, {Key: "size", Value: c.Manifest.Size}, {Key: "tenants", Value: len(c.Manifest.Tenants)}}
 }

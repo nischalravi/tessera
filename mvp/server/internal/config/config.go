@@ -69,6 +69,11 @@ type Config struct {
 	AuditAnchor            string
 	AuditCheckpointSeconds int
 	AuditCheckpointEvents  int
+	// BackupDir (TESSERA_BACKUP_DIR) turns on scheduled encrypted backups
+	// every BackupEveryMinutes, keeping the newest BackupKeep (issue #171).
+	BackupDir          string
+	BackupEveryMinutes int
+	BackupKeep         int
 	AccessTokenTTLSeconds  int
 	DeviceCodeTTLSeconds   int
 	DPoPRSNonce            bool
@@ -157,6 +162,9 @@ func Load(getenv func(string) string) (*Config, error) {
 	}
 	c.AuditCheckpointSeconds = integer("TESSERA_AUDIT_CHECKPOINT_SECONDS", 300, 1, 86400)
 	c.AuditCheckpointEvents = integer("TESSERA_AUDIT_CHECKPOINT_EVENTS", 1000, 1, 1_000_000)
+	c.BackupDir = str("TESSERA_BACKUP_DIR", "", "")
+	c.BackupEveryMinutes = integer("TESSERA_BACKUP_EVERY_MINUTES", 360, 5, 7*24*60)
+	c.BackupKeep = integer("TESSERA_BACKUP_KEEP", 28, 1, 10_000)
 	c.AccessTokenTTLSeconds = integer("TESSERA_AT_TTL_SECONDS", 600, 1, MaxAccessTokenTTLSeconds)
 	c.DeviceCodeTTLSeconds = integer("TESSERA_DEVICE_CODE_TTL_SECONDS", 300, 1, MaxDeviceCodeTTLSeconds)
 	c.DPoPRSNonce = boolean("TESSERA_DPOP_RS_NONCE", false, false)
