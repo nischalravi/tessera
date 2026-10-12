@@ -6,6 +6,7 @@ import {
 import { AuditRow, AuditVerifyReport, api, fmtDate, relTime, useApi } from "../../api";
 import { fuzzy } from "../../app/fuzzy";
 import { Badge, Button, Callout, DataTable, EmptyState, Page, PreviewBadge, useToast } from "../../components";
+import { NotificationsAdminPanel } from "../notifications/Notifications";
 import { ADMIN_BY_ID, ADMIN_SECTIONS, AdminSection, useMockState } from "../../mocks";
 
 const ICONS: Record<string, LucideIcon> = { Plug, Fingerprint, UserCog, Bell, Palette, Clock, ScrollText, FileBadge, ArrowLeftRight, KeySquare };
@@ -189,7 +190,7 @@ function AuditLog() {
   );
 }
 
-const LIVE: Record<string, () => JSX.Element> = { jobs: Jobs, audit: AuditLog };
+const LIVE: Record<string, () => JSX.Element> = { jobs: Jobs, audit: AuditLog, notifications: NotificationsAdminPanel };
 
 export function AdminSectionPage() {
   const { section } = useParams();

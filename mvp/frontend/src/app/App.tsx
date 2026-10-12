@@ -24,6 +24,7 @@ const connections = () => import("../features/admin/connections");
 
 const Home = named(() => import("../features/home/Home"), "Home");
 const Inbox = named(() => import("../features/inbox/Inbox"), "Inbox");
+const Notifications = named(() => import("../features/notifications/Notifications"), "Notifications");
 const RequestAccess = named(access, "RequestAccess");
 const MyAccess = named(access, "MyAccess");
 const Requests = named(access, "Requests");
@@ -81,6 +82,7 @@ export default function App() {
                   <Routes>
                     <Route path="/" element={<Home />} />
                     <Route path="/inbox" element={<Inbox />} />
+                    <Route path="/notifications" element={<Notifications />} />
 
                     <Route path="/access" element={<Navigate to="/access/request" replace />} />
                     <Route path="/access/request" element={<RequestAccess />} />

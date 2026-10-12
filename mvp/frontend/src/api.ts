@@ -610,6 +610,45 @@ export const createDelegation = (body: { to_user_id: string; starts_at: string; 
   api<ApprovalDelegation>("/approvals/delegations", body);
 export const revokeDelegation = (id: string) => api<ApprovalDelegation>(`/approvals/delegations/${encodeURIComponent(id)}/revoke`, {});
 
+// ---------------------------------------------------------------- notifications (issue #189)
+
+export type NotificationChannel = "off" | "in_app" | "email" | "both" | "digest";
+/** One entry of the signed-in user's inbox (the top-bar bell). */
+export interface AppNotification {
+  id: string;
+  kind: string;
+  subject: string;
+  body: string;
+  /** An app path such as /inbox; empty when there is none. */
+  link: string;
+  created_at: string;
+  read_at: string | null;
+}
+export interface NotificationList { unread: number; items: AppNotification[] }
+export interface NotificationKindPref {
+  kind: string;
+  label: string;
+  description: string;
+  /** Cannot be turned off. */
+  mandatory: boolean;
+  channel: NotificationChannel;
+  default: NotificationChannel;
+}
+export interface NotificationPrefs {
+  /** False when the server sends no email at all (TESSERA_NOTIFY_EMAIL=off). */
+  email_available: boolean;
+  /** True when email goes to the dev sink, a file, and is not delivered. */
+  email_dev_sink: boolean;
+  channels: NotificationChannel[];
+  kinds: NotificationKindPref[];
+}
+
+export const NOTIFICATIONS_PATH = "/notifications?limit=30";
+export const markNotificationsRead = (target: { ids: string[] } | { all: true }) =>
+  api<{ marked: number; unread: number }>("/notifications/read", target);
+export const putNotificationPrefs = (prefs: Record<string, NotificationChannel>) =>
+  api<NotificationPrefs>("/notifications/preferences", { prefs }, "PUT");
+
 export const simulate = (body: { remove_edge_ids?: number[]; add_edges?: { src: string; dst: string }[]; disable_account_ids?: number[] }) =>
   api<SimResult>("/simulate", { remove_edge_ids: [], add_edges: [], disable_account_ids: [], ...body });
 

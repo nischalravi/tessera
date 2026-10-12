@@ -833,3 +833,13 @@ fieldset.card { margin: 0; }
 /* Request access: catalog beside the cart, stacked on narrow screens (issue #164, see #144) */
 .request-split { grid-template-columns: minmax(0, 1fr) 380px; }
 @media (max-width: 900px) { .request-split { grid-template-columns: minmax(0, 1fr); } .request-split .side-panel { position: static; max-height: none; } }
+
+/* Notifications (issue #189): the inbox list and the bell's unread entries. */
+.notif-list { list-style: none; margin: 0; padding: 0; }
+.notif-list li + li { border-top: 1px solid var(--border); }
+.notif-item { display: flex; gap: var(--s-3); width: 100%; padding: var(--s-3) var(--s-4); border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; align-items: flex-start; }
+.notif-item:hover { background: var(--surface-2); }
+.notif-item .notif-dot { flex: none; width: 8px; height: 8px; margin-top: 7px; border-radius: 50%; background: transparent; }
+.notif-item.unread .notif-dot { background: var(--accent-line); }
+.notif-item .notif-body { display: block; overflow-wrap: anywhere; white-space: pre-line; }
+.notif-unread { font-weight: 600; }
