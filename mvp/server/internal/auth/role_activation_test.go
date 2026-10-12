@@ -192,9 +192,9 @@ func TestRolePermissionsMatchDesign(t *testing.T) {
 	want := map[auth.Role]string{
 		auth.RoleViewer:      "graph.read requests.create",
 		auth.RoleOperator:    "graph.read jit.request jit.decide jit.deny_revoke reviews.manage reviews.decide hris.simulate_event requests.create requests.create_for_others requests.decide",
-		auth.RoleAuditor:     "graph.read audit.read audit.verify admin.read connections.read requests.create",
+		auth.RoleAuditor:     "graph.read audit.read audit.verify admin.read connections.read requests.create email.read",
 		auth.RolePolicyAdmin: "graph.read jit.request jit.decide jit.deny_revoke reviews.manage reviews.decide hris.simulate_event grants.revoke hris.execute jit.sweep connectors.sync requests.create requests.create_for_others requests.decide catalog.manage",
-		auth.RoleTenantAdmin: "graph.read audit.read audit.verify admin.read admin.change.request admin.change.approve admin.users.disable admin.sessions.revoke connections.read connections.manage connections.activate requests.create",
+		auth.RoleTenantAdmin: "graph.read audit.read audit.verify admin.read admin.change.request admin.change.approve admin.users.disable admin.sessions.revoke connections.read connections.manage connections.activate requests.create email.read email.manage",
 		auth.RoleBreakGlass:  "admin.read breakglass.recover",
 	}
 	for r, w := range want {

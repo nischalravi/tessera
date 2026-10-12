@@ -3,15 +3,23 @@ package notify_test
 import (
 	"bufio"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"math/big"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
@@ -19,31 +27,41 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 )
 
-// fakeSMTP is a minimal SMTP server on loopback: it records the envelope and
-// the message, and answers RCPT with rcpt (default 250).
+// fakeSMTP is a minimal SMTP server on loopback. It records the envelope and
+// the message, answers RCPT from rcpts (one reply per attempt, then the last
+// repeats; default 250), ends DATA with final, can offer STARTTLS (tlsConf) or
+// speak TLS from the first byte (implicit), and can stall (delay).
 type fakeSMTP struct {
-	ln   net.Listener
-	rcpt string
-	mu   sync.Mutex
-	from string
-	to   []string
-	data string
+	ln       net.Listener
+	rcpts    []string
+	final    string
+	tlsConf  *tls.Config
+	implicit bool
+	starttls string // the reply to STARTTLS; default 220
+	delay    time.Duration
+	mu       sync.Mutex
+	rcptN    int
+	from     string
+	to       []string
+	data     string
+	auth     []string
 }
 
-func newFakeSMTP(t *testing.T, rcpt string) *fakeSMTP {
+func newFakeSMTP(t *testing.T, rcpts ...string) *fakeSMTP {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Skip("no loopback listener:", err)
 	}
-	f := &fakeSMTP{ln: ln, rcpt: rcpt}
-	if f.rcpt == "" {
-		f.rcpt = "250 ok"
-	}
+	f := &fakeSMTP{ln: ln, rcpts: rcpts, final: "250 2.0.0 Ok: queued as ABC123"}
 	t.Cleanup(func() { _ = ln.Close() })
+	return f.start()
+}
+
+func (f *fakeSMTP) start() *fakeSMTP {
 	go func() {
 		for {
-			c, err := ln.Accept()
+			c, err := f.ln.Accept()
 			if err != nil {
 				return
 			}
@@ -55,11 +73,28 @@ func newFakeSMTP(t *testing.T, rcpt string) *fakeSMTP {
 
 func (f *fakeSMTP) port() int { return f.ln.Addr().(*net.TCPAddr).Port }
 
+func (f *fakeSMTP) nextRcpt() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.rcpts) == 0 {
+		return "250 2.1.5 Ok"
+	}
+	i := min(f.rcptN, len(f.rcpts)-1)
+	f.rcptN++
+	return f.rcpts[i]
+}
+
 func (f *fakeSMTP) serve(c net.Conn) {
 	defer c.Close()
+	if f.delay > 0 {
+		time.Sleep(f.delay)
+	}
+	if f.implicit {
+		c = tls.Server(c, f.tlsConf)
+	}
 	r, w := bufio.NewReader(c), bufio.NewWriter(c)
 	say := func(s string) { _, _ = w.WriteString(s + "\r\n"); _ = w.Flush() }
-	say("220 fake ESMTP")
+	say("220 relay.example ESMTP fake")
 	for {
 		line, err := r.ReadString('\n')
 		if err != nil {
@@ -67,22 +102,46 @@ func (f *fakeSMTP) serve(c net.Conn) {
 		}
 		cmd := strings.ToUpper(strings.TrimSpace(line))
 		switch {
-		case strings.HasPrefix(cmd, "EHLO"), strings.HasPrefix(cmd, "HELO"):
-			say("250 fake")
+		case strings.HasPrefix(cmd, "EHLO"):
+			if f.tlsConf != nil && !f.implicit {
+				say("250-relay.example\r\n250-STARTTLS\r\n250 AUTH PLAIN")
+			} else {
+				say("250-relay.example\r\n250-SIZE 1000\r\n250 8BITMIME")
+			}
+		case cmd == "STARTTLS":
+			reply := f.starttls
+			if reply == "" {
+				reply = "220 2.0.0 Ready to start TLS"
+			}
+			say(reply)
+			if strings.HasPrefix(reply, "220") {
+				tc := tls.Server(c, f.tlsConf)
+				if err := tc.Handshake(); err != nil {
+					return
+				}
+				c = tc
+				r, w = bufio.NewReader(c), bufio.NewWriter(c)
+			}
+		case strings.HasPrefix(cmd, "AUTH PLAIN"):
+			f.mu.Lock()
+			f.auth = append(f.auth, strings.TrimSpace(line))
+			f.mu.Unlock()
+			say("235 2.7.0 Authentication successful")
 		case strings.HasPrefix(cmd, "MAIL FROM:"):
 			f.mu.Lock()
 			f.from = strings.TrimSpace(line[len("MAIL FROM:"):])
 			f.mu.Unlock()
-			say("250 ok")
+			say("250 2.1.0 Ok")
 		case strings.HasPrefix(cmd, "RCPT TO:"):
-			if strings.HasPrefix(f.rcpt, "250") {
+			reply := f.nextRcpt()
+			if strings.HasPrefix(reply, "250") {
 				f.mu.Lock()
 				f.to = append(f.to, strings.TrimSpace(line[len("RCPT TO:"):]))
 				f.mu.Unlock()
 			}
-			say(f.rcpt)
+			say(reply)
 		case cmd == "DATA":
-			say("354 go")
+			say("354 End data with <CR><LF>.<CR><LF>")
 			var b strings.Builder
 			for {
 				l, err := r.ReadString('\n')
@@ -94,14 +153,36 @@ func (f *fakeSMTP) serve(c net.Conn) {
 			f.mu.Lock()
 			f.data = b.String()
 			f.mu.Unlock()
-			say("250 queued")
+			say(f.final)
 		case cmd == "QUIT":
-			say("221 bye")
+			say("221 2.0.0 Bye")
 			return
 		default:
 			say("250 ok")
 		}
 	}
+}
+
+// relayCert returns a TLS server config with a fresh self-signed certificate
+// for 127.0.0.1 and a client config that trusts it.
+func relayCert(t *testing.T) (server, client *tls.Config) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "relay.example", Organization: []string{"Fake Relay"}},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, IPAddresses: []net.IP{net.ParseIP("127.0.0.1")},
+		BasicConstraintsValid: true, IsCA: true}
+	der, err := x509.CreateCertificate(rand.Reader, tpl, tpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, _ := x509.ParseCertificate(der)
+	pool := x509.NewCertPool()
+	pool.AddCert(cert)
+	return &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}}, &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
 }
 
 func testSealer(t *testing.T) *seal.Sealer {
@@ -124,7 +205,7 @@ func smtpFor(t *testing.T, f *fakeSMTP, env string, loopback bool) *notify.SMTP 
 }
 
 func TestSMTP_SendsAMessage(t *testing.T) {
-	f := newFakeSMTP(t, "")
+	f := newFakeSMTP(t)
 	c := smtpFor(t, f, config.Dev, true)
 	err := c.Send(context.Background(), notify.Email{ID: "n-1", To: "ann@b.example", Subject: "[Tessera] Approval needed\r\nBcc: evil@x.example",
 		Body: "Hello.\nOpen in Tessera: https://t.example/inbox"})
@@ -158,7 +239,7 @@ func TestSMTP_ClassifiesFailures(t *testing.T) {
 	if err := smtpFor(t, transient, config.Dev, true).Send(context.Background(), notify.Email{ID: "b", To: "x@b.example", Subject: "s", Body: "b"}); err == nil || errors.Is(err, notify.ErrPermanent) {
 		t.Errorf("a 451 = %v, want a retryable error", err)
 	}
-	c := smtpFor(t, newFakeSMTP(t, ""), config.Dev, true)
+	c := smtpFor(t, newFakeSMTP(t), config.Dev, true)
 	for _, to := range []string{"", "not an address", "a@b.example\r\nBcc: x@y.example", "Ann <a@b.example>", "a@b.example, c@d.example"} {
 		if err := c.Send(context.Background(), notify.Email{ID: "c", To: to, Subject: "s", Body: "b"}); !errors.Is(err, notify.ErrPermanent) {
 			t.Errorf("recipient %q = %v, want ErrPermanent", to, err)
@@ -170,7 +251,7 @@ func TestSMTP_ClassifiesFailures(t *testing.T) {
 // so loopback (and private and metadata addresses) are refused unless the dev
 // exception is on.
 func TestSMTP_UsesTheSSRFGuard(t *testing.T) {
-	f := newFakeSMTP(t, "")
+	f := newFakeSMTP(t)
 	for _, tc := range []struct {
 		name, env string
 		loopback  bool
@@ -229,7 +310,7 @@ func TestSMTP_PasswordIsSealed(t *testing.T) {
 func TestSMTP_NeverSendsAPasswordWithoutTLS(t *testing.T) {
 	s := testSealer(t)
 	sealed, _ := notify.SealPassword(s, "pw")
-	f := newFakeSMTP(t, "")
+	f := newFakeSMTP(t)
 	c, err := notify.NewSMTP(config.Mail{Mode: config.MailSMTP, Host: "127.0.0.1", Port: f.port(), From: "t@example.com", Username: "u",
 		PasswordSealed: sealed, TLS: config.SMTPNoTLS}, config.Dev, true, s)
 	if err != nil {

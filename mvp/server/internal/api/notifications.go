@@ -57,6 +57,8 @@ type notificationView struct {
 	Link      string     `json:"link"`
 	CreatedAt time.Time  `json:"created_at"`
 	ReadAt    *time.Time `json:"read_at"`
+	// Delivery is the email side: none, pending, digest, digested, sent, skipped or dead.
+	Delivery string `json:"delivery"`
 }
 
 func (s *Server) listNotifications(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
@@ -80,7 +82,7 @@ func (s *Server) listNotifications(_ http.ResponseWriter, r *http.Request, _ *pa
 	out := make([]notificationView, 0, len(items))
 	for _, n := range items {
 		out = append(out, notificationView{ID: n.ID, Kind: n.Kind, Subject: n.Subject, Body: n.Body, Link: n.Link,
-			CreatedAt: n.CreatedAt, ReadAt: n.ReadAt})
+			CreatedAt: n.CreatedAt, ReadAt: n.ReadAt, Delivery: n.Delivery})
 	}
 	return map[string]any{"unread": unread, "items": out}, nil
 }

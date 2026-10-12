@@ -38,3 +38,13 @@ test("mark-as-read and preference calls send method, path, body and CSRF", async
   ]);
   for (const c of calls) assert.equal(c.headers["x-tessera-csrf"], "csrf-vic");
 });
+
+test("retrying an email message is a POST to its own path with CSRF", async () => {
+  await api.retryEmail("m/1");
+  await api.api("/email/messages?status=deferred&limit=500");
+  assert.deepEqual(calls.map((c) => [c.method, c.url, c.body]), [
+    ["POST", "/api/email/messages/m%2F1/retry", {}],
+    ["GET", "/api/email/messages?status=deferred&limit=500", undefined],
+  ]);
+  assert.equal(calls[0].headers["x-tessera-csrf"], "csrf-vic");
+});

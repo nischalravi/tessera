@@ -111,7 +111,7 @@ export function Notifications() {
                   <button type="button" className={`notif-item ${n.read_at ? "" : "unread"}`} onClick={() => open(n)}>
                     <span className="notif-dot" aria-hidden />
                     <span className="grow">
-                      <span className="row tight"><b>{n.subject}</b><span className="chip">{KIND_LABEL[n.kind] ?? n.kind}</span>{!n.read_at && <span className="sr-only">Unread</span>}</span>
+                      <span className="row tight"><b>{n.subject}</b><span className="chip">{KIND_LABEL[n.kind] ?? n.kind}</span>{n.delivery !== "none" && <span className="chip" title="What happened to the email for this notification">Email: {n.delivery}</span>}{!n.read_at && <span className="sr-only">Unread</span>}</span>
                       <span className="small muted notif-body">{n.body}</span>
                       <span className="small faint" title={fmtDate(n.created_at)}>{relTime(n.created_at)}</span>
                     </span>

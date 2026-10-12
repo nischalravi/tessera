@@ -11,10 +11,10 @@ import (
 	"mime"
 	"net"
 	"net/mail"
-	"net/smtp"
 	"net/textproto"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -70,7 +70,29 @@ type DevSink struct {
 }
 
 // Send records the message.
-func (d *DevSink) Send(_ context.Context, e Email) error {
+func (d *DevSink) Send(ctx context.Context, e Email) error {
+	_, err := d.SendRecorded(ctx, e)
+	return err
+}
+
+// SendRecorded records the message and returns a one-step transcript.
+func (d *DevSink) SendRecorded(_ context.Context, e Email) (*Attempt, error) {
+	a := &Attempt{Started: time.Now().UTC(), Banner: "dev mail sink (nothing is sent)", Steps: []Step{}, RcptTo: e.To}
+	err := d.write(e)
+	a.Finished = time.Now().UTC()
+	switch {
+	case err == nil:
+		a.Outcome, a.QueueID = OutcomeAccepted, "dev-"+e.ID
+		a.step("(dev sink)", 250, "2.0.0 recorded in the dev mail sink, not sent")
+	case errors.Is(err, ErrPermanent):
+		a.Outcome, a.Error = OutcomeRejected, "invalid recipient"
+	default:
+		a.Outcome, a.Error = OutcomeFailed, clipField(err.Error())
+	}
+	return a, err
+}
+
+func (d *DevSink) write(e Email) error {
 	if err := validAddress(e.To); err != nil {
 		return err
 	}
@@ -119,9 +141,10 @@ func SealPassword(s *seal.Sealer, password string) (string, error) {
 	return base64.StdEncoding.EncodeToString(b), nil
 }
 
-// SMTP sends through an SMTP relay with the standard library. Every
-// connection goes through safehttp's guarded dialer, so a relay name that
-// resolves to a private, loopback or metadata address is refused (SSRF),
+// SMTP sends through an SMTP relay with its own small client on the standard
+// library (net/textproto), so it can record the transcript of each attempt.
+// Every connection goes through safehttp's guarded dialer, so a relay name
+// that resolves to a private, loopback or metadata address is refused (SSRF),
 // except the dev loopback exception.
 type SMTP struct {
 	Host     string
@@ -132,16 +155,14 @@ type SMTP struct {
 	TLS      string
 	Timeout  time.Duration
 	Dial     safehttp.DialFunc
-	tlsConf  *tls.Config
+	// TLSConfig replaces the default (TLS 1.2 or later, system roots): a
+	// private CA, or a test relay.
+	TLSConfig *tls.Config
 }
 
 // NewSMTP builds the sender from the mail configuration: it opens the sealed
 // password with the KEK sealer and uses the guarded dialer for env.
 func NewSMTP(m config.Mail, env string, allowLoopback bool, s *seal.Sealer) (*SMTP, error) {
-	return newSMTP(m, env, allowLoopback, s, nil, nil)
-}
-
-func newSMTP(m config.Mail, env string, allowLoopback bool, s *seal.Sealer, resolver safehttp.Resolver, tlsConf *tls.Config) (*SMTP, error) {
 	pw := ""
 	if m.PasswordSealed != "" {
 		raw, err := base64.StdEncoding.DecodeString(m.PasswordSealed)
@@ -157,15 +178,12 @@ func newSMTP(m config.Mail, env string, allowLoopback bool, s *seal.Sealer, reso
 	if env != config.Prod {
 		env = config.Dev
 	}
-	dial, err := safehttp.NewDialer(safehttp.Options{Env: env, AllowLoopback: allowLoopback && env == config.Dev, Resolver: resolver})
+	dial, err := safehttp.NewDialer(safehttp.Options{Env: env, AllowLoopback: allowLoopback && env == config.Dev})
 	if err != nil {
 		return nil, err
 	}
-	if tlsConf == nil {
-		tlsConf = &tls.Config{MinVersion: tls.VersionTLS12}
-	}
 	return &SMTP{Host: m.Host, Port: m.Port, Username: m.Username, password: pw, From: m.From, TLS: m.TLS,
-		Timeout: 30 * time.Second, Dial: dial, tlsConf: tlsConf}, nil
+		Timeout: 30 * time.Second, Dial: dial}, nil
 }
 
 // String never shows the password.
@@ -173,6 +191,46 @@ func (c *SMTP) String() string { return fmt.Sprintf("smtp{%s:%d tls=%s}", c.Host
 
 // Send delivers one message.
 func (c *SMTP) Send(ctx context.Context, e Email) error {
+	_, err := c.SendRecorded(ctx, e)
+	return err
+}
+
+// replyError is a relay reply that ended the attempt.
+type replyError struct {
+	Code int
+	Msg  string
+}
+
+func (e *replyError) Error() string { return fmt.Sprintf("smtp %d: %s", e.Code, e.Msg) }
+
+// SendRecorded delivers one message and returns the transcript of the attempt
+// (also on failure). Outcome: accepted on 250 at the end of DATA, deferred on
+// a 4xx, rejected on a 5xx or an address that can never work (the error then
+// wraps ErrPermanent), failed on a network, TLS or timeout error.
+func (c *SMTP) SendRecorded(ctx context.Context, e Email) (*Attempt, error) {
+	a := &Attempt{Started: time.Now().UTC(), Steps: []Step{}}
+	err := c.send(ctx, e, a)
+	a.Finished = time.Now().UTC()
+	var re *replyError
+	switch {
+	case err == nil:
+		a.Outcome = OutcomeAccepted
+	case errors.Is(err, ErrPermanent):
+		a.Outcome = OutcomeRejected
+	case errors.As(err, &re) && re.Code >= 500:
+		a.Outcome, err = OutcomeRejected, fmt.Errorf("%w: %v", ErrPermanent, err)
+	case errors.As(err, &re):
+		a.Outcome = OutcomeDeferred
+	default:
+		a.Outcome = OutcomeFailed
+	}
+	if err != nil {
+		a.Error = clipField(strings.ReplaceAll(err.Error(), e.To, "<recipient>"))
+	}
+	return a, err
+}
+
+func (c *SMTP) send(ctx context.Context, e Email, a *Attempt) error {
 	if err := validAddress(e.To); err != nil {
 		return err
 	}
@@ -180,6 +238,7 @@ func (c *SMTP) Send(ctx context.Context, e Email) error {
 	if err != nil {
 		return fmt.Errorf("%w: invalid from address", ErrPermanent)
 	}
+	a.MailFrom, a.RcptTo = from.Address, e.To
 	msg := buildMessage(from, e)
 	ctx, cancel := context.WithTimeout(ctx, c.Timeout)
 	defer cancel()
@@ -191,21 +250,82 @@ func (c *SMTP) Send(ctx context.Context, e Email) error {
 	if dl, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(dl)
 	}
-	tc := c.tlsConf.Clone()
-	tc.ServerName = c.Host
-	if c.TLS == config.SMTPTLS {
-		conn = tls.Client(conn, tc)
+	tc := &tls.Config{MinVersion: tls.VersionTLS12}
+	if c.TLSConfig != nil {
+		tc = c.TLSConfig.Clone()
 	}
-	cl, err := smtp.NewClient(conn, c.Host)
+	tc.ServerName = c.Host
+	upgrade := func() error {
+		tconn := tls.Client(conn, tc)
+		if err := tconn.HandshakeContext(ctx); err != nil {
+			a.TLS = &TLSInfo{Error: clipField(err.Error())}
+			return fmt.Errorf("tls handshake: %w", err)
+		}
+		a.TLS = tlsInfo(tconn.ConnectionState())
+		conn = tconn
+		return nil
+	}
+	if c.TLS == config.SMTPTLS {
+		if err := upgrade(); err != nil {
+			return err
+		}
+	}
+	text := textproto.NewConn(conn)
+	// read takes one reply and records it; a reply of another class ends the attempt
+	read := func(shown string, class int) (string, error) {
+		code, msg, err := text.ReadResponse(0)
+		if err != nil {
+			return "", err
+		}
+		a.step(shown, code, msg)
+		if code/100 != class {
+			return msg, &replyError{code, clipField(msg)}
+		}
+		return msg, nil
+	}
+	cmd := func(line, shown string, class int) (string, error) {
+		if err := text.PrintfLine("%s", line); err != nil {
+			return "", err
+		}
+		return read(shown, class)
+	}
+	banner, err := read("(connect)", 2)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = cl.Close() }()
+	a.Banner = clipField(banner)
+	hello := "tessera.invalid"
+	if i := strings.LastIndex(from.Address, "@"); i >= 0 {
+		hello = from.Address[i+1:]
+	}
+	ehlo := func() error {
+		msg, err := cmd("EHLO "+hello, "EHLO "+hello, 2)
+		if err != nil {
+			return err
+		}
+		a.Capabilities = []string{}
+		for _, l := range strings.Split(msg, "\n")[1:] {
+			a.Capabilities = append(a.Capabilities, clipField(strings.TrimSpace(l)))
+		}
+		return nil
+	}
+	if err := ehlo(); err != nil {
+		return err
+	}
 	if c.TLS == config.SMTPStartTLS {
-		if ok, _ := cl.Extension("STARTTLS"); !ok {
+		if !slices.ContainsFunc(a.Capabilities, func(s string) bool { return strings.EqualFold(s, "STARTTLS") }) {
+			a.TLS = &TLSInfo{Error: "the relay does not offer STARTTLS"}
 			return errors.New("notify: the SMTP relay does not offer STARTTLS")
 		}
-		if err := cl.StartTLS(tc); err != nil {
+		if _, err := cmd("STARTTLS", "STARTTLS", 2); err != nil {
+			a.TLS = &TLSInfo{Error: clipField(err.Error())}
+			return fmt.Errorf("starttls refused: %s", err) // the connection could not be secured: a failure, retried
+		}
+		if err := upgrade(); err != nil {
+			return err
+		}
+		text = textproto.NewConn(conn)
+		if err := ehlo(); err != nil {
 			return err
 		}
 	}
@@ -213,36 +333,38 @@ func (c *SMTP) Send(ctx context.Context, e Email) error {
 		if c.TLS == config.SMTPNoTLS {
 			return fmt.Errorf("%w: refusing to send a password without TLS", ErrPermanent)
 		}
-		if err := cl.Auth(smtp.PlainAuth("", c.Username, c.password, c.Host)); err != nil {
-			return classify(err)
+		token := base64.StdEncoding.EncodeToString([]byte("\x00" + c.Username + "\x00" + c.password))
+		if _, err := cmd("AUTH PLAIN "+token, "AUTH PLAIN <redacted>", 2); err != nil {
+			return err
 		}
 	}
-	if err := cl.Mail(from.Address); err != nil {
-		return classify(err)
+	if _, err := cmd("MAIL FROM:<"+from.Address+">", "MAIL FROM:<"+from.Address+">", 2); err != nil {
+		return err
 	}
-	if err := cl.Rcpt(e.To); err != nil {
-		return classify(err)
+	if _, err := cmd("RCPT TO:<"+e.To+">", "RCPT TO:<"+e.To+">", 2); err != nil {
+		return err
 	}
-	w, err := cl.Data()
-	if err != nil {
-		return classify(err)
+	if _, err := cmd("DATA", "DATA", 3); err != nil {
+		return err
 	}
+	w := text.DotWriter()
 	if _, err := w.Write(msg); err != nil {
 		return err
 	}
 	if err := w.Close(); err != nil {
-		return classify(err)
+		return err
 	}
-	return cl.Quit()
-}
-
-// classify makes a 5xx reply permanent and leaves 4xx and network errors to retry.
-func classify(err error) error {
-	var te *textproto.Error
-	if errors.As(err, &te) && te.Code >= 500 {
-		return fmt.Errorf("%w: %v", ErrPermanent, err)
+	final, err := read("<message body not recorded>", 2)
+	if err != nil {
+		return err
 	}
-	return err
+	a.QueueID = ParseQueueID(final)
+	if text.PrintfLine("QUIT") == nil {
+		if code, msg, err := text.ReadResponse(0); err == nil {
+			a.step("QUIT", code, msg)
+		}
+	}
+	return nil
 }
 
 // buildMessage renders a plain-text RFC 5322 message with CRLF line endings.

@@ -168,7 +168,9 @@ The routes are documented at `/api/readiness/openapi.json`.
 `GET /api/approvals/inbox` · `GET /api/approvals/delegates` · `GET|POST /api/approvals/delegations` ·
 `POST /api/approvals/delegations/{id}/revoke` ·
 `GET /api/notifications[?unread=1&limit=]` · `POST /api/notifications/read {ids}|{all:true}` ·
-`GET|PUT /api/notifications/preferences {prefs:{kind:channel}}`
+`GET|PUT /api/notifications/preferences {prefs:{kind:channel}}` ·
+`GET /api/email/messages[?status=&kind=&recipient=&limit=]` · `GET /api/email/messages/{id}` ·
+`POST /api/email/messages/{id}/retry`
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
@@ -265,6 +267,32 @@ addresses refused; loopback allowed only in dev): `TESSERA_SMTP_HOST`, `_PORT` (
 never read in clear: `echo -n 'password' | tessera notify seal-password` prints it sealed under the KEK.
 Production refuses the dev sink, SMTP without TLS and a login without a sealed password. With email `off`
 due email is recorded as `skipped`.
+
+**Email delivery log.** Every email the dispatcher sends has a record (`schema/0224_email_messages.sql`),
+so an operator can see what happened without the relay's dashboard (**Admin → Email delivery**, or
+`GET /api/email/messages`). A record holds the message id, kind, recipient and subject (never the body),
+the envelope (`MAIL FROM`, `RCPT TO`), a **status**, the relay's **queue id** parsed from the final 250
+reply (`250 2.0.0 Ok: queued as ABC123`), and a list of attempts. Each attempt has start and finish
+times, the server banner, the EHLO capabilities, the TLS result (version, cipher, server certificate
+subject and issuer, or the error), and every command with the relay's reply, its code and its enhanced
+status code. The SMTP client is a small one on `net/textproto` so it can record this; AUTH is recorded as
+`AUTH PLAIN <redacted>`, the body as `<message body not recorded>`, and a transcript is capped (120 steps,
+24 KiB, 300 characters a field).
+
+| Status | Meaning | Retried |
+|---|---|---|
+| `queued`, `sending` | waiting for an attempt, or one is running | |
+| `accepted` | the relay answered 250 at the end of DATA | final |
+| `deferred` | a 4xx reply | yes, with backoff |
+| `rejected` | a 5xx reply, or an address that can never work | no |
+| `failed` | a network or TLS error, or a timeout | yes, with backoff |
+| `bounced` | reserved for bounce and DSN processing, a later step; nothing sets it yet | |
+
+**Accepted means accepted by the relay, not delivered to the inbox.** The UI says so. After the
+attempts run out a deferred or failed message is a dead letter; `POST /api/email/messages/{id}/retry`
+(audited as `email.message.retry`) queues one more attempt. Reading needs `email.read` (auditor and
+tenant admin), retrying `email.manage` (tenant admin). The dev sink records its sends too, with a
+one-step transcript. Not yet: bounce and DSN processing, per-tenant relay settings.
 
 **For other producers.** Write a notification from the transaction of your event:
 

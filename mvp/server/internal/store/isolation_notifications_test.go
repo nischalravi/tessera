@@ -22,11 +22,12 @@ type notifRows struct {
 	due    string // a notification with email pending
 	digest string // one waiting for the digest
 	dedupe string
+	msg    string // the email delivery record of due
 }
 
 func seedNotifRows(t *testing.T, db *store.DB, tn storetest.Tenant, tag string) notifRows {
 	t.Helper()
-	r := notifRows{reqRows: seedReqRows(t, db, tn, tag), due: "n-due-" + tag, digest: "n-dig-" + tag, dedupe: "k-due-" + tag}
+	r := notifRows{reqRows: seedReqRows(t, db, tn, tag), due: "n-due-" + tag, digest: "n-dig-" + tag, msg: "m-" + tag, dedupe: "k-due-" + tag}
 	err := db.InTenant(context.Background(), tn.ID, func(c *store.TenantTx) error {
 		uid, email, now := r.user.ID.String(), "u-"+tag+"@t.example", storetest.Now
 		if ok, err := c.InsertNotification(&store.Notification{ID: r.due, UserID: &uid, Email: &email, Kind: "request.approved",
@@ -39,6 +40,10 @@ func seedNotifRows(t *testing.T, db *store.DB, tn storetest.Tenant, tag string) 
 			return err
 		}
 		if err := c.PutNotificationPref(uid, "request.approved", "both", now); err != nil {
+			return err
+		}
+		if err := c.EnsureEmailMessage(&store.EmailMessage{ID: r.msg, NotificationID: r.due, Kind: "request.approved",
+			Recipient: email, Subject: "s " + tag, CreatedAt: now}); err != nil {
 			return err
 		}
 		// an approved request line that ends within the hour
@@ -111,6 +116,15 @@ func TestIsolation_NotificationReads(t *testing.T) {
 		if ls, err := c.ReviewerLoads(f.B.IDs["campaign"]); err != nil || len(ls) != 1 || ls[0].ReviewerID != f.B.IDs["carol"] || ls[0].Open != 1 {
 			t.Errorf("ReviewerLoads(B's campaign) = %v, %v", ls, err)
 		}
+		if ms, err := c.EmailMessages(store.EmailFilter{}); err != nil || len(ms) != 1 || ms[0].ID != b.msg {
+			t.Errorf("EmailMessages = %v, %v", ms, err)
+		}
+		if _, err := c.EmailMessage(a.msg); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("EmailMessage(A's) = %v", err)
+		}
+		if _, err := c.EmailMessageForNotification(a.due); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("EmailMessageForNotification(A's) = %v", err)
+		}
 		from, to := storetest.Now, storetest.Now.Add(24*time.Hour)
 		if rs, err := c.JITExpiringBetween(from, to); err != nil || len(rs) != 1 || rs[0].ID != f.B.IDs["request:approved"] {
 			t.Errorf("JITExpiringBetween = %v, %v", rs, err)
@@ -153,6 +167,15 @@ var notifMutations = map[string]func(c *store.TenantTx, a, b notifRows) error{
 	},
 	"FinishNotification": func(c *store.TenantTx, a, _ notifRows) error {
 		return c.FinishNotification(a.due, 0, store.DeliverySent, nil, nil, nil)
+	},
+	"EnsureEmailMessage": func(c *store.TenantTx, a, _ notifRows) error {
+		return c.EnsureEmailMessage(&store.EmailMessage{ID: "x", NotificationID: a.digest, Kind: "k", Recipient: "r", Subject: "s", CreatedAt: storetest.Now})
+	},
+	"SaveEmailMessage": func(c *store.TenantTx, a, _ notifRows) error {
+		return c.SaveEmailMessage(&store.EmailMessage{ID: a.msg, Status: store.EmailAccepted, UpdatedAt: storetest.Now})
+	},
+	"RequeueNotification": func(c *store.TenantTx, a, _ notifRows) error {
+		return c.RequeueNotification(a.due, storetest.Now)
 	},
 	"MarkDigested": func(c *store.TenantTx, a, _ notifRows) error { return c.MarkDigested(a.digest) },
 	"PutNotificationPref": func(c *store.TenantTx, a, _ notifRows) error {
@@ -229,7 +252,11 @@ func notifDump(t *testing.T, db *store.DB, tid tenancy.ID, r notifRows) string {
 		if err != nil {
 			return err
 		}
-		b, err := json.Marshal([]any{ns, ps, due})
+		ms, err := c.EmailMessages(store.EmailFilter{})
+		if err != nil {
+			return err
+		}
+		b, err := json.Marshal([]any{ns, ps, due, ms})
 		out += "\n" + string(b)
 		return err
 	}); err != nil {
@@ -245,7 +272,7 @@ func notificationsCovered() map[string]bool {
 	}
 	for _, k := range []string{"Notifications", "CountUnreadNotifications", "HasNotification", "DueNotifications", "DigestWaiting",
 		"CountNotificationsDelivery", "NotificationPrefs", "ActiveUserRoles", "ReviewerLoads", "JITExpiringBetween",
-		"RequestLinesExpiringBetween"} {
+		"RequestLinesExpiringBetween", "EmailMessages", "EmailMessage", "EmailMessageForNotification"} {
 		out[k] = true // TestIsolation_NotificationReads
 	}
 	return out

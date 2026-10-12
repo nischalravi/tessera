@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -152,6 +153,7 @@ type claimed struct {
 
 type outcome struct {
 	claimed
+	att      *Attempt // the transcript, nil when nothing was sent (skipped)
 	delivery string
 	next     *time.Time
 	err      string
@@ -223,6 +225,11 @@ func (d *Dispatcher) Tenant(ctx context.Context, t tenancy.ID) (Stats, error) {
 				return err
 			}
 			claims = append(claims, claimed{n, n.Attempts + 1})
+			if d.Sender != nil && deref(n.Email) != "" {
+				if err := d.markSending(tx, n, now); err != nil {
+					return err
+				}
+			}
 		}
 		return nil
 	}); err != nil {
@@ -262,6 +269,16 @@ func (d *Dispatcher) Tenant(ctx context.Context, t tenancy.ID) (Stats, error) {
 				{Key: "channel", Value: "email"}, {Key: "status", Value: status}, {Key: "attempt", Value: o.attempt}}
 			if o.n.UserID != nil {
 				detail = append(detail, ojson.KV{Key: "user_id", Value: *o.n.UserID})
+			}
+			if o.att != nil {
+				mid, err := d.recordAttempt(tx, o)
+				if err != nil {
+					return err
+				}
+				detail = append(detail, ojson.KV{Key: "message_id", Value: mid}, ojson.KV{Key: "outcome", Value: o.att.Outcome})
+				if o.att.QueueID != "" {
+					detail = append(detail, ojson.KV{Key: "queue_id", Value: o.att.QueueID})
+				}
 			}
 			if o.err != "" {
 				detail = append(detail, ojson.KV{Key: "error", Value: o.err})
@@ -305,7 +322,25 @@ func (d *Dispatcher) send(ctx context.Context, c claimed) outcome {
 		body += "\n\nOpen in Tessera: " + strings.TrimRight(d.BaseURL, "/") + c.n.Link
 	}
 	body += "\n\n--\nYou get this because of your notification settings in Tessera."
-	err := d.Sender.Send(ctx, Email{ID: c.n.ID, To: email, Subject: "[Tessera] " + c.n.Subject, Body: body})
+	mail := Email{ID: c.n.ID, To: email, Subject: "[Tessera] " + c.n.Subject, Body: body}
+	var err error
+	if rec, ok := d.Sender.(RecordingSender); ok {
+		o.att, err = rec.SendRecorded(ctx, mail)
+	} else {
+		started := time.Now().UTC()
+		err = d.Sender.Send(ctx, mail)
+		o.att = &Attempt{Started: started, Finished: time.Now().UTC(), Steps: []Step{}, RcptTo: email, Outcome: OutcomeAccepted}
+		switch {
+		case err == nil:
+		case errors.Is(err, ErrPermanent):
+			o.att.Outcome = OutcomeRejected
+		default:
+			o.att.Outcome = OutcomeFailed
+		}
+		if err != nil {
+			o.att.Error = scrub(err, email)
+		}
+	}
 	now := d.Clock().UTC()
 	switch {
 	case err == nil:
@@ -320,6 +355,66 @@ func (d *Dispatcher) send(ctx context.Context, c claimed) outcome {
 		d.Log.Warn("notification email failed", "id", c.n.ID, "kind", c.n.Kind, "attempt", c.attempt, "status", o.delivery)
 	}
 	return o
+}
+
+// markSending creates the notification's delivery record if it has none and
+// marks it sending.
+func (d *Dispatcher) markSending(tx *store.TenantTx, n *store.Notification, now time.Time) error {
+	m, err := tx.EmailMessageForNotification(n.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		if err := tx.EnsureEmailMessage(&store.EmailMessage{ID: uuid.NewString(), NotificationID: n.ID, Kind: n.Kind,
+			Recipient: deref(n.Email), Subject: n.Subject, CreatedAt: now}); err != nil {
+			return err
+		}
+		m, err = tx.EmailMessageForNotification(n.ID)
+	}
+	if err != nil {
+		return err
+	}
+	m.Status, m.UpdatedAt = store.EmailSending, now
+	return tx.SaveEmailMessage(m)
+}
+
+// recordAttempt appends an attempt to the notification's delivery record and
+// sets its status, queue id and envelope; it returns the record's id.
+func (d *Dispatcher) recordAttempt(tx *store.TenantTx, o outcome) (string, error) {
+	m, err := tx.EmailMessageForNotification(o.n.ID)
+	if err != nil {
+		return "", err
+	}
+	var prev []json.RawMessage
+	if len(m.Attempts) > 0 {
+		if err := json.Unmarshal(m.Attempts, &prev); err != nil {
+			prev = nil
+		}
+	}
+	raw, err := json.Marshal(o.att)
+	if err != nil {
+		return "", err
+	}
+	prev = append(prev, raw)
+	if len(prev) > 25 {
+		prev = prev[len(prev)-25:]
+	}
+	if m.Attempts, err = json.Marshal(prev); err != nil {
+		return "", err
+	}
+	m.AttemptCount++
+	m.Status = o.att.Outcome
+	if o.att.QueueID != "" {
+		q := o.att.QueueID
+		m.QueueID = &q
+	}
+	if o.att.MailFrom != "" {
+		f := o.att.MailFrom
+		m.MailFrom = &f
+	}
+	if o.att.RcptTo != "" {
+		r := o.att.RcptTo
+		m.RcptTo = &r
+	}
+	m.UpdatedAt = d.Clock().UTC()
+	return m.ID, tx.SaveEmailMessage(m)
 }
 
 // scrub is an error text safe to store and audit: the recipient's address is

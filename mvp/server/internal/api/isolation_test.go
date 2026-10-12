@@ -161,6 +161,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if strings.HasPrefix(rt.Pattern, "/api/requests/{request_id}") {
 			continue // TestRequestsAPI_CrossTenant (a UUID, not a fixture id)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/email/messages/{message_id}") {
+			continue // TestEmailAPI_CrossTenant (a UUID, not a fixture id)
+		}
 		if rt.Pattern == "/api/auth/sessions/{session_id}" {
 			continue // TestIsolation_SessionCookieScoped (a UUID, not a fixture id)
 		}
@@ -223,6 +226,7 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 	lines := seedRequestLines(t, f) // A's justification carries the sentinel
 	values := map[string]string{
 		"/api/requests/{request_id}":           lines[f.B.ID],
+		"/api/email/messages/{message_id}":     seedEmailMessage(t, f, f.B, store.EmailDeferred),
 		"/api/identities/{identity_id}":        fmt.Sprint(b["alice"]),
 		"/api/jml/leaver-plan/{identity_id}":   fmt.Sprint(b["alice"]),
 		"/api/reviews/campaigns/{campaign_id}": fmt.Sprint(b["campaign"]),

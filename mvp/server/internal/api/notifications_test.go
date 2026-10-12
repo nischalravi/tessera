@@ -222,3 +222,120 @@ func TestNotificationsAPI_CrossTenant(t *testing.T) {
 		t.Error("B marked A's notification read")
 	}
 }
+
+// seedEmailMessage writes a notification and its delivery record (with one
+// deferred attempt) in a tenant and returns the message id.
+func seedEmailMessage(t testing.TB, f *storetest.Fixture, tenant storetest.Tenant, status string) string {
+	t.Helper()
+	var id string
+	if err := f.DB.InTenant(context.Background(), tenant.ID, func(c *store.TenantTx) error {
+		u := &store.PlatformUser{DisplayName: "Recipient", CreatedAt: storetest.Now}
+		if err := c.InsertPlatformUser(u); err != nil {
+			return err
+		}
+		uid, email, now := u.ID.String(), "to@"+tenant.Slug+".example", storetest.Now
+		nid := "n-" + uid
+		if _, err := c.InsertNotification(&store.Notification{ID: nid, UserID: &uid, Email: &email, Kind: notify.KindApprovalNeeded,
+			Subject: "subject " + tenant.Slug, Body: "b", DedupeKey: nid, InApp: true, CreatedAt: now, Delivery: store.DeliveryDead}); err != nil {
+			return err
+		}
+		id = "m-" + uid
+		if err := c.EnsureEmailMessage(&store.EmailMessage{ID: id, NotificationID: nid, Kind: notify.KindApprovalNeeded, Recipient: email,
+			Subject: "subject " + tenant.Slug, CreatedAt: now}); err != nil {
+			return err
+		}
+		m, err := c.EmailMessage(id)
+		if err != nil {
+			return err
+		}
+		m.Status, m.AttemptCount, m.UpdatedAt = status, 1, now
+		m.Attempts = json.RawMessage(`[{"outcome":"deferred","steps":[{"command":"RCPT TO:<` + email + `>","reply":"4.3.0 later","code":451,"enhanced":"4.3.0"}]}]`)
+		return c.SaveEmailMessage(m)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func TestEmailAPI_ListDetailRetryAndPermissions(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	h := newIsolationServer(f).Handler()
+	tadmin := reqLogin(t, f, "ta@b.example", []auth.Role{auth.RoleTenantAdmin}, "")
+	auditor := reqLogin(t, f, "au@b.example", []auth.Role{auth.RoleAuditor}, "")
+	viewer := reqLogin(t, f, "v@b.example", []auth.Role{auth.RoleViewer}, "")
+	deferred := seedEmailMessage(t, f, f.B, store.EmailDeferred)
+	accepted := seedEmailMessage(t, f, f.B, store.EmailAccepted)
+
+	for _, who := range []authtest.Login{tadmin, auditor} {
+		rec := reqDo(h, who, "GET", "/api/email/messages", "")
+		if rec.Code != 200 || !strings.Contains(rec.Body.String(), deferred) || !strings.Contains(rec.Body.String(), accepted) {
+			t.Fatalf("list: %d %s", rec.Code, rec.Body)
+		}
+		if strings.Contains(rec.Body.String(), `"attempts"`) {
+			t.Error("the list carries transcripts")
+		}
+	}
+	if rec := reqDo(h, viewer, "GET", "/api/email/messages", ""); rec.Code != 403 {
+		t.Errorf("a viewer listed the delivery log: %d", rec.Code)
+	}
+	var list struct {
+		Messages []struct{ ID, Status string } `json:"messages"`
+	}
+	rec := reqDo(h, tadmin, "GET", "/api/email/messages?status=deferred&kind=request.approval_needed&recipient=TO@TENANT-B", "")
+	_ = json.Unmarshal(rec.Body.Bytes(), &list)
+	if rec.Code != 200 || len(list.Messages) != 1 || list.Messages[0].ID != deferred {
+		t.Errorf("filtered list: %d %s", rec.Code, rec.Body)
+	}
+	for _, q := range []string{"?status=nope", "?limit=0", "?limit=9999"} {
+		if rec := reqDo(h, tadmin, "GET", "/api/email/messages"+q, ""); rec.Code != 422 {
+			t.Errorf("GET %s: %d", q, rec.Code)
+		}
+	}
+	rec = reqDo(h, auditor, "GET", "/api/email/messages/"+deferred, "")
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"code":451`) || !strings.Contains(rec.Body.String(), `"enhanced":"4.3.0"`) ||
+		!strings.Contains(rec.Body.String(), `"retryable":true`) {
+		t.Errorf("detail: %d %s", rec.Code, rec.Body)
+	}
+	if rec := reqDo(h, tadmin, "GET", "/api/email/messages/"+accepted, ""); !strings.Contains(rec.Body.String(), `"retryable":false`) {
+		t.Errorf("accepted detail: %s", rec.Body)
+	}
+	// retry needs email.manage
+	if rec := reqDo(h, auditor, "POST", "/api/email/messages/"+deferred+"/retry", `{}`); rec.Code != 403 {
+		t.Errorf("an auditor retried: %d", rec.Code)
+	}
+	if rec := reqDo(h, tadmin, "POST", "/api/email/messages/"+accepted+"/retry", `{}`); rec.Code != 409 || !strings.Contains(rec.Body.String(), "not_retryable") {
+		t.Errorf("retry of an accepted message: %d %s", rec.Code, rec.Body)
+	}
+	rec = reqDo(h, tadmin, "POST", "/api/email/messages/"+deferred+"/retry", `{}`)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"status":"queued"`) {
+		t.Fatalf("retry: %d %s", rec.Code, rec.Body)
+	}
+	if got := reqAuditActions(t, f, f.B.ID); got["email.message.retry"] != 1 {
+		t.Errorf("retry audit events = %d", got["email.message.retry"])
+	}
+}
+
+func TestEmailAPI_CrossTenant(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	h := newIsolationServer(f).Handler()
+	aMsg := seedEmailMessage(t, f, f.A, store.EmailDeferred)
+	admin := reqLogin(t, f, "ta@b.example", []auth.Role{auth.RoleTenantAdmin}, "")
+	if rec := reqDo(h, admin, "GET", "/api/email/messages", ""); leaks(rec.Body.String()) || strings.Contains(rec.Body.String(), aMsg) || strings.Contains(rec.Body.String(), "@tenant-a.example") {
+		t.Errorf("B's list leaks A: %s", rec.Body)
+	}
+	missing := "00000000-0000-4000-8000-00000000dead"
+	for _, c := range []struct{ method, path, body string }{
+		{"GET", "/api/email/messages/%s", ""}, {"POST", "/api/email/messages/%s/retry", `{}`},
+	} {
+		cross := reqDo(h, admin, c.method, fmt.Sprintf(c.path, aMsg), c.body)
+		gone := reqDo(h, admin, c.method, fmt.Sprintf(c.path, missing), c.body)
+		if cross.Code != 404 || strings.ReplaceAll(cross.Body.String(), aMsg, "<id>") != strings.ReplaceAll(gone.Body.String(), missing, "<id>") {
+			t.Errorf("%s %s: A's id %d %s, missing %d %s", c.method, c.path, cross.Code, cross.Body, gone.Code, gone.Body)
+		}
+	}
+	// A's message is untouched
+	aAdmin := signIn(t, f.DB, f.A.ID, authtest.User{Email: "ta@a.example", Roles: []auth.Role{auth.RoleTenantAdmin}}, authtest.Phr, storetest.Now)
+	if rec := reqDo(h, aAdmin, "GET", "/api/email/messages/"+aMsg, ""); !strings.Contains(rec.Body.String(), `"status":"deferred"`) {
+		t.Errorf("A's message changed: %s", rec.Body)
+	}
+}

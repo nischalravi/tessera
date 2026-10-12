@@ -96,6 +96,9 @@ GET    /api/notifications                            auth.self       -  # issue 
 POST   /api/notifications/read                       auth.self       -  # issue #189
 GET    /api/notifications/preferences                auth.self       -  # issue #189
 PUT    /api/notifications/preferences                auth.self       -  # issue #189
+GET    /api/email/messages                           email.read      -  # issue #189
+GET    /api/email/messages/{message_id}              email.read      -  # issue #189
+POST   /api/email/messages/{message_id}/retry        email.manage    -  # issue #189
 POST   /api/connections/{id}/validate                connections.manage -
 GET    /api/connections/{id}/validations/{run}       connections.read   -
 POST   /api/connections/{id}/dry-run                 connections.manage -

@@ -73,6 +73,9 @@ const (
 	PermRequestsCreateOthers Permission = "requests.create_for_others"
 	PermRequestsDecide       Permission = "requests.decide"
 	PermCatalogManage        Permission = "catalog.manage"
+	// email delivery log (issue #189)
+	PermEmailRead   Permission = "email.read"
+	PermEmailManage Permission = "email.manage"
 )
 
 // rolePermissions is the static role -> permission map (Cedar-ready, §12.1).
@@ -84,13 +87,13 @@ var rolePermissions = map[Role][]Permission{
 	RoleViewer: {PermGraphRead, PermRequestsCreate},
 	RoleOperator: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
 		PermReviewsDecide, PermHRISSimulateEvent, PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide},
-	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead, PermRequestsCreate},
+	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead, PermRequestsCreate, PermEmailRead},
 	RolePolicyAdmin: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
 		PermReviewsDecide, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
 		PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide, PermCatalogManage},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
-		PermConnectionsActivate, PermRequestsCreate},
+		PermConnectionsActivate, PermRequestsCreate, PermEmailRead, PermEmailManage},
 	RoleBreakGlass: {PermAdminRead, PermBreakGlassRecover},
 }
 
@@ -176,7 +179,7 @@ var scopePermissions = map[Scope][]Permission{
 		PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
 		PermConnectionsManage, PermConnectionsActivate},
 	ScopeAudit: {PermAuditRead, PermAuditVerify},
-	ScopeAdmin: {PermAdminRead, PermAdminChangeReq, PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev,
+	ScopeAdmin: {PermEmailRead, PermEmailManage, PermAdminRead, PermAdminChangeReq, PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev,
 		PermBreakGlassRecover},
 }
 
