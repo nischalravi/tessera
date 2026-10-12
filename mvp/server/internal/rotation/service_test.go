@@ -635,3 +635,38 @@ func TestOwnerWhoLeftEscalates(t *testing.T) {
 }
 
 func mustOtherTenant() tenancy.ID { return tenancy.MustParse("00000000-0000-4000-8000-0000000000d4") }
+
+// An orphaned machine identity has no owner: it is not its own owner.
+func TestOrphanedMachineIdentityHasNoOwner(t *testing.T) {
+	h := newHarness(t)
+	fakePolicy(h, 0, nil)
+	sid := h.addSecret("aws", "access_key", "AKIAORPH", "AKIAORPHEXAMPLE000001", 100*24*time.Hour)
+	h.write(func(tx *store.TenantTx, _ time.Time) error {
+		ids, _, err := tx.IdentityMap()
+		if err != nil {
+			return err
+		}
+		for _, i := range ids {
+			if i.Name == "svc-etl" {
+				return tx.SetIdentityOwner(i.ID, nil)
+			}
+		}
+		return nil
+	})
+	h.read(func(tx *store.TenantTx, now time.Time) error {
+		plan, err := h.svc.Plan(tx, []int64{sid}, now)
+		if err != nil || plan[0].Owner != nil || !slices.ContainsFunc(plan[0].Warnings, func(w string) bool { return strings.Contains(w, "no owner") }) {
+			t.Errorf("plan owner %+v warnings %v (%v)", plan[0].Owner, plan[0].Warnings, err)
+		}
+		return nil
+	})
+	id := h.startRotation(sid)
+	for _, want := range []string{store.RotHandedOver, store.RotOldDisabled, store.RotVerified, store.RotOldDeleted} {
+		h.step(id, want)
+	}
+	h.notes.mu.Lock()
+	defer h.notes.mu.Unlock()
+	if len(h.notes.list) != 1 || h.notes.list[0].Owner != nil {
+		t.Errorf("notifications %+v", h.notes.list)
+	}
+}

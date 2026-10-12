@@ -111,7 +111,7 @@ func (f *fakeAdapter) Create(_ context.Context, t Target) (*Minted, error) {
 		ref = loc + hashSeparator + id
 	}
 	f.world.keys[ref] = &fakeKey{created: f.now(), active: true, exists: true}
-	return &Minted{Ref: ref, Material: map[string]string{"simulated_secret": "not-a-real-secret"}}, nil
+	return &Minted{Ref: ref, Material: map[string]string{"simulated": "true"}}, nil
 }
 
 func (f *fakeAdapter) HandOver(ctx context.Context, t Target, m *Minted, dest Destination, path string) error {

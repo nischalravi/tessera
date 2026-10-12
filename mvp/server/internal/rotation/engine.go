@@ -197,7 +197,10 @@ func ownerFor(tx *store.TenantTx, acct *store.Account) (*Owner, error) {
 	if err != nil {
 		return nil, err
 	}
-	if who.Type != "human" && who.OwnerID != nil {
+	if who.Type != "human" {
+		if who.OwnerID == nil {
+			return nil, nil // orphaned machine identity: the notification escalates
+		}
 		if who, err = tx.Identity(*who.OwnerID); errors.Is(err, store.ErrNotFound) {
 			return nil, nil
 		} else if err != nil {

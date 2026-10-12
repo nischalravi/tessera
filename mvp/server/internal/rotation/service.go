@@ -629,7 +629,11 @@ func (snap *snapshot) owner(acct *store.Account) (*store.Identity, *Owner) {
 		return nil, nil
 	}
 	who := snap.people[*acct.IdentityID]
-	if who != nil && who.Type != "human" && who.OwnerID != nil {
+	if who != nil && who.Type != "human" {
+		// a machine identity answers to its owner; without one it is orphaned
+		if who.OwnerID == nil {
+			return nil, nil
+		}
 		who = snap.people[*who.OwnerID]
 	}
 	if who == nil {
@@ -750,8 +754,25 @@ func (s *Service) planOne(snap *snapshot, sec *store.Secret, graceOverride *int)
 	return it
 }
 
+// adapterLabel is an adapter type as a plan names it.
+func adapterLabel(typ string) string {
+	switch typ {
+	case TypeAWSIAM:
+		return "AWS IAM"
+	case TypeAWSSM:
+		return "AWS Secrets Manager"
+	case TypeVault:
+		return "HashiCorp Vault"
+	case TypeGitHub:
+		return "GitHub"
+	case TypeFake:
+		return "simulated"
+	}
+	return typ
+}
+
 func stepsOf(it *PlanItem, caps Capabilities) []string {
-	steps := []string{"Create a new " + it.Kind + " through the " + it.AdapterType + " adapter"}
+	steps := []string{"Create a new " + it.Kind + " through the " + adapterLabel(it.AdapterType) + " adapter"}
 	if caps.NeedsDestination {
 		steps = append(steps, fmt.Sprintf("Write it to %s at %s (Tessera does not keep it)", *it.Destination, it.DestPath))
 	} else {
