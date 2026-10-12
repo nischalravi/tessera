@@ -575,6 +575,16 @@ func (s *Server) patchGroup(g *groupRec, op patchOp) error {
 			}
 		}
 	case "remove":
+		if op.Path == "members" { // value-list form
+			var ms []member
+			if err := json.Unmarshal(op.Value, &ms); err != nil {
+				return fmt.Errorf("members must be a list")
+			}
+			for _, m := range ms {
+				g.Members = without(g.Members, m.Value)
+			}
+			return nil
+		}
 		m := removeRE.FindStringSubmatch(op.Path)
 		if m == nil {
 			return fmt.Errorf("unsupported path %q", op.Path)

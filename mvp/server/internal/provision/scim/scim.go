@@ -440,8 +440,26 @@ func (c *Client) membership(ctx context.Context, r target.Request) error {
 		return c.patch(ctx, "add entitlement", "/Groups", g.ID, r.Key,
 			map[string]any{"op": c.opName("add"), "path": "members", "value": []member{{Value: u.ID}}})
 	}
-	return c.patch(ctx, "remove entitlement", "/Groups", g.ID, r.Key,
-		map[string]any{"op": c.opName("remove"), "path": `members[value eq "` + safeFilter.Replace(u.ID) + `"]`})
+	return c.removeMember(ctx, g.ID, u.ID, r.Key)
+}
+
+// removeMember takes a user out of a group. PATCH filter paths interoperate
+// poorly across servers, so the standard dialect tries the RFC 7644 filter
+// path first and, if the server refuses it (400 or 501), the value-list form
+// (a "remove" on members naming the member). The entra dialect sends the
+// value-list form, as Entra's own provisioning client does.
+func (c *Client) removeMember(ctx context.Context, groupID, userID, key string) error {
+	byValue := map[string]any{"op": c.opName("remove"), "path": "members", "value": []member{{Value: userID}}}
+	if c.Dialect == Entra {
+		return c.patch(ctx, "remove entitlement", "/Groups", groupID, key, byValue)
+	}
+	byFilter := map[string]any{"op": c.opName("remove"), "path": `members[value eq "` + safeFilter.Replace(userID) + `"]`}
+	err := c.patch(ctx, "remove entitlement", "/Groups", groupID, key, byFilter)
+	var te *target.Error
+	if asTarget(err, &te) && (te.Status == http.StatusBadRequest || te.Status == http.StatusNotImplemented) {
+		return c.patch(ctx, "remove entitlement", "/Groups", groupID, key, byValue)
+	}
+	return err
 }
 
 func sortedKeys(m map[string]string) []string {

@@ -326,3 +326,26 @@ func TestScim_LenientFakeStillCreates(t *testing.T) {
 		t.Errorf("no POST: %v", f.Requests())
 	}
 }
+
+// Entra removes a member with a value list; the standard dialect falls back
+// to the same form when the server refuses the RFC 7644 filter path.
+func TestScim_RemoveMemberDialects(t *testing.T) {
+	for _, tc := range []struct{ cassette, dialect string }{
+		{"entra_group_remove", scim.Entra},
+		{"standard_group_remove_fallback", scim.Standard},
+	} {
+		t.Run(tc.cassette, func(t *testing.T) {
+			c, cas := replayClient(t, tc.cassette, tc.dialect)
+			ctx := context.Background()
+			r := member(target.RemoveEntitlement, bob)
+			if err := c.Apply(ctx, r); err != nil {
+				t.Fatal(err)
+			}
+			v, err := c.Verify(ctx, r)
+			if err != nil || !v.OK {
+				t.Fatalf("Verify = %+v, %v", v, err)
+			}
+			done(t, cas)
+		})
+	}
+}

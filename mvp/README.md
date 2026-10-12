@@ -216,11 +216,15 @@ change in the target system and checks that it happened.
   before, and nothing reaches the target (so the parity fixtures are unchanged). On: the change goes
   through the engine. Routing is by the connection's `system` (`provision.Submit`).
 * **Connectors.** `internal/provision/scim` is a SCIM 2.0 client (filtered, paginated lists; group
-  members read page by page; PATCH add/replace/remove; `dialect: entra` sends capitalised operations and
-  string booleans, and every dialect reads `"True"`/`"False"`). `internal/provision/okta` is a native
+  members read page by page; PATCH add/replace/remove, where a member is removed with the RFC 7644
+  filter path and, if the server refuses it, with a value list; `dialect: entra` sends capitalised
+  operations, string booleans and the value list, and every dialect reads `"True"`/`"False"`). `internal/provision/okta` is a native
   Okta connector (users, lifecycle deactivate/delete, group membership, `Link` paging that must stay on
   the org's origin). Credentials are sealed under the KEK (`internal/seal`, AAD = tenant, table,
   column and row) and are write-only in the API. Every request goes through `internal/safehttp`.
+* **Limits.** Disabling or deleting an account through SCIM does not end sessions or tokens the
+  account already holds (SCIM does not imply it; knowledge base §4.6), so a verified disable is not
+  yet a verified kill: that needs session revocation or CAEP/SSF, which is future work.
 * **What is routed.** JML leaver/mover/joiner steps (disable, remove and add group, create account),
   review revokes of group memberships, JIT revoke and expiry (the request stays `approved` and the edge
   stays until the target confirms; the sweeper does not retry a failed removal, an operator does),
