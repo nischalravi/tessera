@@ -211,6 +211,9 @@ func Run(ctx context.Context, db *store.DB, now time.Time, policies []*policy.Po
 			if err := seedCatalog(c, now); err != nil {
 				return err
 			}
+			if err := seedRoles(c, now); err != nil {
+				return err
+			}
 			st.Requests, err = c.CountRequests()
 			return err
 		})

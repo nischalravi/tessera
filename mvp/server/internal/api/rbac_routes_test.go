@@ -87,6 +87,21 @@ POST   /api/requests/{request_id}/approve            requests.decide STEP_UP_POL
 POST   /api/requests/{request_id}/deny               requests.decide -  # issue #164
 POST   /api/requests/{request_id}/cancel             requests.create -  # issue #164 (the requester)
 POST   /api/requests/{request_id}/remove             requests.create -  # issue #164 (requests.decide, or the beneficiary)
+GET    /api/roles                                    requests.create -  # issue #161
+POST   /api/roles                                    roles.manage    STEP_UP_POLICY  # issue #161
+GET    /api/roles/{role_id}                          graph.read      -  # issue #161
+PUT    /api/roles/{role_id}                          roles.manage    STEP_UP_POLICY  # issue #161
+GET    /api/roles/{role_id}/versions                 graph.read      -  # issue #161
+GET    /api/roles/{role_id}/drift                    graph.read      -  # issue #161
+POST   /api/roles/{role_id}/retire                   roles.manage    STEP_UP_POLICY  # issue #161
+POST   /api/roles/{role_id}/reconcile                roles.manage    STEP_UP_POLICY  # issue #161
+POST   /api/roles/{role_id}/members                  roles.manage    STEP_UP_POLICY  # issue #161
+POST   /api/roles/{role_id}/members/{identity_id}/remove roles.manage STEP_UP_POLICY  # issue #161
+POST   /api/role-requests                            requests.create -  # issue #161 (others: requests.create_for_others in the handler)
+GET    /api/role-requests                            requests.create -  # issue #161 (scope=pending|all: requests.decide or graph.read)
+POST   /api/role-requests/{request_id}/approve       requests.decide STEP_UP_POLICY  # issue #161
+POST   /api/role-requests/{request_id}/deny          requests.decide -  # issue #161
+POST   /api/role-requests/{request_id}/cancel        requests.create -  # issue #161 (the requester)
 POST   /api/connections/{id}/validate                connections.manage -
 GET    /api/connections/{id}/validations/{run}       connections.read   -
 POST   /api/connections/{id}/dry-run                 connections.manage -

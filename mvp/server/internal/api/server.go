@@ -143,6 +143,7 @@ func New(cfg Config) *Server {
 	s.registerRoutes()
 	s.registerAuditRoutes()
 	s.registerRequestRoutes()
+	s.registerRoleRoutes()
 	s.registerReadinessRoutes()
 	s.registerAuthRoutes()
 	s.checkPublicRoutes()

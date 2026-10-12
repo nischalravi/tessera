@@ -679,10 +679,16 @@ func planDetail(p *Plan) ojson.Object {
 
 // ---------------------------------------------------------------- changes
 
-// Result is a role after a change, with the change's plan.
+// Result is a role after a change (saved, or as it would be for a dry
+// run), with its entitlements and the change's plan.
 type Result struct {
-	Role *store.BusinessRole
-	Plan *Plan
+	Role         *store.BusinessRole
+	Entitlements []int64
+	Plan         *Plan
+}
+
+func (w *world) result(r *store.BusinessRole, p *Plan) *Result {
+	return &Result{Role: r, Entitlements: w.ents[r.ID], Plan: p}
 }
 
 func uidp(by Actor) *string {
@@ -693,8 +699,8 @@ func uidp(by Actor) *string {
 	return &s
 }
 
-// snapshot is a version's JSON: the role and its entitlements.
-func snapshot(r *store.BusinessRole, ents []int64) (string, error) {
+// Snapshot is a version's JSON: the role and its entitlements.
+func Snapshot(r *store.BusinessRole, ents []int64) (string, error) {
 	var rule any
 	if r.Birthright != nil {
 		rule = json.RawMessage(*r.Birthright)
@@ -705,7 +711,7 @@ func snapshot(r *store.BusinessRole, ents []int64) (string, error) {
 }
 
 func (w *world) version(r *store.BusinessRole, note string, by Actor) error {
-	snap, err := snapshot(r, w.ents[r.ID])
+	snap, err := Snapshot(r, w.ents[r.ID])
 	if err != nil {
 		return err
 	}
@@ -750,7 +756,7 @@ func Create(tx *store.TenantTx, s Spec, by Actor, dryRun bool, now time.Time) (*
 	}
 	p.DryRun = dryRun
 	if dryRun {
-		return &Result{r, p}, nil
+		return w.result(r, p), nil
 	}
 	if err := tx.InsertBusinessRole(r); err != nil {
 		return nil, err
@@ -764,7 +770,7 @@ func Create(tx *store.TenantTx, s Spec, by Actor, dryRun bool, now time.Time) (*
 	if err := w.version(r, s.Note, by); err != nil {
 		return nil, err
 	}
-	return &Result{r, p}, tx.Audit(now, by.Display, "role.create", roleDetail(r, p))
+	return w.result(r, p), tx.Audit(now, by.Display, "role.create", roleDetail(r, p))
 }
 
 func (w *world) finish(before map[int64]map[string]*store.RoleMember, p *Plan) error {
@@ -827,7 +833,7 @@ func Update(tx *store.TenantTx, id string, version int, s Spec, by Actor, dryRun
 	}
 	p.DryRun = dryRun
 	if dryRun {
-		return &Result{&r, p}, nil
+		return w.result(&r, p), nil
 	}
 	if err := tx.SaveBusinessRole(&r, old.Version); errors.Is(err, store.ErrNotFound) {
 		return nil, refuse(409, "version_conflict", "the role changed; reload it")
@@ -843,7 +849,7 @@ func Update(tx *store.TenantTx, id string, version int, s Spec, by Actor, dryRun
 	if err := w.version(&r, s.Note, by); err != nil {
 		return nil, err
 	}
-	return &Result{&r, p}, tx.Audit(now, by.Display, "role.update", roleDetail(&r, p))
+	return w.result(&r, p), tx.Audit(now, by.Display, "role.update", roleDetail(&r, p))
 }
 
 func without(a, b []int64) []int64 {
@@ -887,7 +893,7 @@ func Retire(tx *store.TenantTx, id, reason string, by Actor, dryRun bool, now ti
 	}
 	p.DryRun = dryRun
 	if dryRun {
-		return &Result{&r, p}, nil
+		return w.result(&r, p), nil
 	}
 	if err := tx.SaveBusinessRole(&r, old.Version); err != nil {
 		return nil, err
@@ -910,7 +916,7 @@ func Retire(tx *store.TenantTx, id, reason string, by Actor, dryRun bool, now ti
 		return nil, err
 	}
 	d := append(roleDetail(&r, p), ojson.KV{Key: "reason", Value: *rp}, ojson.KV{Key: "requests_denied", Value: len(pend)})
-	return &Result{&r, p}, tx.Audit(now, by.Display, "role.retire", d)
+	return w.result(&r, p), tx.Audit(now, by.Display, "role.retire", d)
 }
 
 func reasonPtr(reason string, required bool) (*string, error) {
@@ -964,7 +970,7 @@ func assign(tx *store.TenantTx, id string, identityID int64, source string, reqI
 	}
 	p.DryRun = dryRun
 	if dryRun {
-		return &Result{r, p}, nil
+		return w.result(r, p), nil
 	}
 	if err := w.finish(before, p); err != nil {
 		return nil, err
@@ -976,7 +982,7 @@ func assign(tx *store.TenantTx, id string, identityID int64, source string, reqI
 	if reason != nil {
 		d = append(d, ojson.KV{Key: "reason", Value: *reason})
 	}
-	return &Result{r, p}, tx.Audit(now, by.Display, "role.assign", d)
+	return w.result(r, p), tx.Audit(now, by.Display, "role.assign", d)
 }
 
 // Unassign takes a role away from a person, with the grants only it
@@ -1009,13 +1015,13 @@ func Unassign(tx *store.TenantTx, id string, identityID int64, reason string, by
 	}
 	p.DryRun = dryRun
 	if dryRun {
-		return &Result{r, p}, nil
+		return w.result(r, p), nil
 	}
 	if err := w.finish(before, p); err != nil {
 		return nil, err
 	}
 	d := append(roleDetail(r, p), ojson.KV{Key: "identity_id", Value: identityID}, ojson.KV{Key: "reason", Value: *rp})
-	return &Result{r, p}, tx.Audit(now, by.Display, "role.unassign", d)
+	return w.result(r, p), tx.Audit(now, by.Display, "role.unassign", d)
 }
 
 // Reconcile brings a role in step: rule members with the rule (after HR
@@ -1045,12 +1051,12 @@ func Reconcile(tx *store.TenantTx, id string, by Actor, dryRun bool, now time.Ti
 	}
 	p.DryRun = dryRun
 	if dryRun || len(p.Steps) == 0 {
-		return &Result{r, p}, nil
+		return w.result(r, p), nil
 	}
 	if err := w.finish(before, p); err != nil {
 		return nil, err
 	}
-	return &Result{r, p}, tx.Audit(now, by.Display, "role.reconcile", roleDetail(r, p))
+	return w.result(r, p), tx.Audit(now, by.Display, "role.reconcile", roleDetail(r, p))
 }
 
 // ---------------------------------------------------------------- drift

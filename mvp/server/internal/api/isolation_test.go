@@ -158,6 +158,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if strings.HasPrefix(rt.Pattern, "/api/requests/{request_id}") {
 			continue // TestRequestsAPI_CrossTenant (a UUID, not a fixture id)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/roles/{role_id}") || strings.HasPrefix(rt.Pattern, "/api/role-requests/{request_id}") {
+			continue // TestRolesAPI_CrossTenant (UUIDs, not fixture ids)
+		}
 		if rt.Pattern == "/api/auth/sessions/{session_id}" {
 			continue // TestIsolation_SessionCookieScoped (a UUID, not a fixture id)
 		}
@@ -218,7 +221,11 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 	b := f.B.IDs
 	param := regexp.MustCompile(`\{[a-z_]+\}`)
 	lines := seedRequestLines(t, f) // A's justification carries the sentinel
+	roleIDs, _ := seedRoles(t, f)   // and A's role description
 	values := map[string]string{
+		"/api/roles/{role_id}":                 roleIDs[f.B.ID],
+		"/api/roles/{role_id}/versions":        roleIDs[f.B.ID],
+		"/api/roles/{role_id}/drift":           roleIDs[f.B.ID],
 		"/api/requests/{request_id}":           lines[f.B.ID],
 		"/api/identities/{identity_id}":        fmt.Sprint(b["alice"]),
 		"/api/jml/leaver-plan/{identity_id}":   fmt.Sprint(b["alice"]),

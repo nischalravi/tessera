@@ -73,6 +73,8 @@ const (
 	PermRequestsCreateOthers Permission = "requests.create_for_others"
 	PermRequestsDecide       Permission = "requests.decide"
 	PermCatalogManage        Permission = "catalog.manage"
+	// business roles (issue #161)
+	PermRolesManage Permission = "roles.manage"
 )
 
 // rolePermissions is the static role -> permission map (Cedar-ready, §12.1).
@@ -87,7 +89,7 @@ var rolePermissions = map[Role][]Permission{
 	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead, PermRequestsCreate},
 	RolePolicyAdmin: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
 		PermReviewsDecide, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
-		PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide, PermCatalogManage},
+		PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide, PermCatalogManage, PermRolesManage},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
 		PermConnectionsActivate, PermRequestsCreate},
@@ -174,7 +176,7 @@ var scopePermissions = map[Scope][]Permission{
 	ScopeRead: {PermGraphRead, PermConnectionsRead},
 	ScopeWrite: {PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage, PermReviewsDecide,
 		PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
-		PermConnectionsManage, PermConnectionsActivate},
+		PermConnectionsManage, PermConnectionsActivate, PermRolesManage},
 	ScopeAudit: {PermAuditRead, PermAuditVerify},
 	ScopeAdmin: {PermAdminRead, PermAdminChangeReq, PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev,
 		PermBreakGlassRecover},
