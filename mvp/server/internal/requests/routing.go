@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
@@ -114,6 +115,21 @@ func startStages(tx *store.TenantTx, l *store.RequestLine, ben *store.Identity, 
 		}
 		if err := tx.InsertRequestStage(st); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// notifyWaiting tells the approvers of a line's waiting stage that it needs
+// them (issue #189), in the caller's transaction.
+func notifyWaiting(tx *store.TenantTx, l *store.RequestLine, now time.Time) error {
+	stages, err := tx.RequestStages(l.ID)
+	if err != nil {
+		return err
+	}
+	for _, st := range stages {
+		if st.Status == store.StageWaiting {
+			return notify.ApprovalNeeded(tx, now, l, st, len(stages))
 		}
 	}
 	return nil
@@ -346,6 +362,9 @@ func Delegate(tx *store.TenantTx, by Actor, to string, starts, ends time.Time, r
 	d := &store.ApprovalDelegationRow{ID: uuid.NewString(), FromUser: by.id(), ToUser: to, StartsAt: starts.UTC(), EndsAt: ends.UTC(),
 		Reason: r, CreatedAt: now}
 	if err := tx.InsertApprovalDelegation(d); err != nil {
+		return nil, err
+	}
+	if err := notify.ApprovalDelegated(tx, now, d); err != nil {
 		return nil, err
 	}
 	return d, tx.Audit(now, by.Display, "approval.delegate", ojson.Object{{Key: "delegation_id", Value: d.ID},

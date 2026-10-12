@@ -448,6 +448,12 @@ func DevKEKPath(dbPath string) string {
 	return filepath.Join(filepath.Dir(dbPath), "var", "dev-kek")
 }
 
+// DevMailPath is where the dev mail sink appends: var/dev-mail.jsonl next to
+// the database file.
+func DevMailPath(dbPath string) string {
+	return filepath.Join(filepath.Dir(dbPath), "var", "dev-mail.jsonl")
+}
+
 // Sealer returns the KEK sealer. With no KEK configured (dev only; Load
 // refuses that in prod) it loads the dev KEK at devKEKPath, generating it
 // with mode 0600 on first use.

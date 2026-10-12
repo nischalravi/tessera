@@ -290,7 +290,7 @@ func (tx *TenantTx) PutNotificationPref(user, kind, channel string, at time.Time
 
 // ActiveUserRoles lists the roles of every active user, expired assignments left out.
 func (tx *TenantTx) ActiveUserRoles(now time.Time) ([]UserRole, error) {
-	rows, err := tx.query(userRolesActive, sql.Named("now", T(now)))
+	rows, err := tx.query(userRolesActive, sql.Named("now", RT(now)))
 	if err != nil {
 		return nil, err
 	}

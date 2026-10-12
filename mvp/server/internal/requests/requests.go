@@ -30,6 +30,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
+	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
@@ -252,6 +253,9 @@ func Submit(tx *store.TenantTx, s Submission, by Actor, forOthers bool, now time
 		if err := event(tx, l.ID, "submitted", by, nil, now); err != nil {
 			return "", nil, err
 		}
+		if err := notifyWaiting(tx, l, now); err != nil {
+			return "", nil, err
+		}
 	}
 	ids := make([]string, len(lines))
 	for i, l := range lines {
@@ -367,6 +371,7 @@ func Approve(tx *store.TenantTx, id string, by Actor, reason string, now time.Ti
 	if err != nil {
 		return nil, err
 	}
+	said := r // what the approver wrote, for the notification
 	auth, err := authorize(tx, l, by, now)
 	if err != nil {
 		return nil, err
@@ -401,6 +406,9 @@ func Approve(tx *store.TenantTx, id string, by Actor, reason string, now time.Ti
 			if err := event(tx, l.ID, "approved", by, note, now); err != nil {
 				return nil, err
 			}
+			if err := notifyWaiting(tx, l, now); err != nil { // the next stage's approvers
+				return nil, err
+			}
 			return l, tx.Audit(now, by.Display, "request.stage.approve", stageDetail(l, auth, r))
 		}
 		r = note
@@ -431,6 +439,9 @@ func Approve(tx *store.TenantTx, id string, by Actor, reason string, now time.Ti
 	if err := event(tx, l.ID, "approved", by, r, now); err != nil {
 		return nil, err
 	}
+	if err := notify.RequestDecided(tx, now, l, true, uid, said); err != nil {
+		return nil, err
+	}
 	return l, tx.Audit(now, by.Display, "request.approve", lineDetail(l, r))
 }
 
@@ -444,6 +455,7 @@ func Deny(tx *store.TenantTx, id string, by Actor, reason string, now time.Time)
 	if err != nil {
 		return nil, err
 	}
+	said := r
 	auth, err := authorize(tx, l, by, now)
 	if err != nil {
 		return nil, err
@@ -469,6 +481,9 @@ func Deny(tx *store.TenantTx, id string, by Actor, reason string, now time.Time)
 		return nil, err
 	}
 	if err := event(tx, l.ID, "denied", by, r, now); err != nil {
+		return nil, err
+	}
+	if err := notify.RequestDecided(tx, now, l, false, uid, said); err != nil {
 		return nil, err
 	}
 	return l, tx.Audit(now, by.Display, "request.deny", lineDetail(l, r))

@@ -92,6 +92,10 @@ GET    /api/approvals/delegates                      requests.create -  # issue 
 GET    /api/approvals/delegations                    requests.create -  # issue #165 (?all=1: requests.decide)
 POST   /api/approvals/delegations                    requests.create -  # issue #165
 POST   /api/approvals/delegations/{delegation_id}/revoke requests.create -  # issue #165
+GET    /api/notifications                            auth.self       -  # issue #189 (the caller's own inbox)
+POST   /api/notifications/read                       auth.self       -  # issue #189
+GET    /api/notifications/preferences                auth.self       -  # issue #189
+PUT    /api/notifications/preferences                auth.self       -  # issue #189
 POST   /api/connections/{id}/validate                connections.manage -
 GET    /api/connections/{id}/validations/{run}       connections.read   -
 POST   /api/connections/{id}/dry-run                 connections.manage -

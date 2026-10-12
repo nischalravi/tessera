@@ -17,6 +17,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/jml"
 	"github.com/nischalravi/tessera/mvp/server/internal/leastpriv"
 	"github.com/nischalravi/tessera/mvp/server/internal/nhi"
+	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/reviews"
@@ -1288,6 +1289,11 @@ func (s *Server) createCampaign(_ http.ResponseWriter, r *http.Request, p *param
 	c := store.TxFrom(r.Context())
 	id, err := reviews.GenerateCampaign(c, s.clock(), body["name"].(string), int(body["unused_days"].(int64)), pols)
 	if err != nil {
+		return nil, err
+	}
+	// the reviewers are told in the same transaction (issue #189); seeding calls
+	// GenerateCampaign directly and tells no one
+	if err := notify.ReviewLaunched(c, s.clock(), id); err != nil {
 		return nil, err
 	}
 	cmp, err := c.Campaign(id)
