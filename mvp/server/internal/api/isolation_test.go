@@ -120,6 +120,10 @@ var crossTenantCases = map[string]crossTenantCase{
 	"DELETE account link": {method: "DELETE", path: pathf("/api/accounts/%d/link"), key: "acct:okta:alice"},
 	"POST merge identity": {method: "POST", path: pathf("/api/identities/%d/merge"), key: "alice",
 		body: func(id int64) string { return fmt.Sprintf(`{"into":%d,"reason":"x"}`, id) }},
+	"GET identity affiliations": {method: "GET", path: pathf("/api/identities/%d/affiliations"), key: "alice"},
+	"GET identity identifiers":  {method: "GET", path: pathf("/api/identities/%d/identifiers"), key: "alice"},
+	"POST add affiliation": {method: "POST", path: pathf("/api/identities/%d/affiliations"), key: "alice",
+		body: func(int64) string { return `{"type":"alum","reason":"x"}` }},
 }
 
 // routeParamKey maps each route with path parameters to the cases above.
@@ -137,6 +141,10 @@ var routeParamCases = map[string][]string{
 	"POST /api/accounts/{account_id}/not-person":  {"POST account not person"},
 	"DELETE /api/accounts/{account_id}/link":      {"DELETE account link"},
 	"POST /api/identities/{identity_id}/merge":    {"POST merge identity"},
+
+	"GET /api/identities/{identity_id}/affiliations":  {"GET identity affiliations"},
+	"GET /api/identities/{identity_id}/identifiers":   {"GET identity identifiers"},
+	"POST /api/identities/{identity_id}/affiliations": {"POST add affiliation"},
 }
 
 // TestIsolation_RouteCrossTenant: as tenant B, every route with a path
@@ -165,6 +173,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		}
 		if rt.Pattern == "/api/identity-merges/{merge_id}/unmerge" {
 			continue // TestCorrelationAPI_CrossTenant (a UUID, not a fixture id)
+		}
+		if rt.Pattern == "/api/affiliations/{affiliation_id}/end" {
+			continue // TestAffiliationsAPI_CrossTenant (a UUID, not a fixture id)
 		}
 		if rt.Pattern == "/api/auth/sessions/{session_id}" {
 			continue // TestIsolation_SessionCookieScoped (a UUID, not a fixture id)
@@ -226,11 +237,13 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 	b := f.B.IDs
 	param := regexp.MustCompile(`\{[a-z_]+\}`)
 	values := map[string]string{
-		"/api/identities/{identity_id}":        fmt.Sprint(b["alice"]),
-		"/api/jml/leaver-plan/{identity_id}":   fmt.Sprint(b["alice"]),
-		"/api/reviews/campaigns/{campaign_id}": fmt.Sprint(b["campaign"]),
-		"/api/hris/events/{event_id}/plan":     fmt.Sprint(b["hris:leaver"]),
-		"/api/audit/events/{event_id}/proof":   latestEventID(t, f.DB, f.B.ID),
+		"/api/identities/{identity_id}":              fmt.Sprint(b["alice"]),
+		"/api/jml/leaver-plan/{identity_id}":         fmt.Sprint(b["alice"]),
+		"/api/identities/{identity_id}/affiliations": fmt.Sprint(b["alice"]),
+		"/api/identities/{identity_id}/identifiers":  fmt.Sprint(b["alice"]),
+		"/api/reviews/campaigns/{campaign_id}":       fmt.Sprint(b["campaign"]),
+		"/api/hris/events/{event_id}/plan":           fmt.Sprint(b["hris:leaver"]),
+		"/api/audit/events/{event_id}/proof":         latestEventID(t, f.DB, f.B.ID),
 	}
 	checked := 0
 	for _, rt := range srv.Routes() {

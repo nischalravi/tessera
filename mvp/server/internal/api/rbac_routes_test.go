@@ -85,6 +85,10 @@ POST   /api/accounts/{account_id}/not-person         identities.correlate STEP_U
 DELETE /api/accounts/{account_id}/link               identities.correlate STEP_UP_POLICY  # issue #160
 POST   /api/identities/{identity_id}/merge           identities.merge STEP_UP_POLICY  # issue #160
 GET    /api/identity-merges                          graph.read      -  # issue #160
+GET    /api/identities/{identity_id}/affiliations    graph.read      -  # issue #64
+GET    /api/identities/{identity_id}/identifiers     graph.read      -  # issue #64
+POST   /api/identities/{identity_id}/affiliations    identities.affiliate STEP_UP_POLICY  # issue #64
+POST   /api/affiliations/{affiliation_id}/end        identities.affiliate STEP_UP_POLICY  # issue #64
 POST   /api/identity-merges/{merge_id}/unmerge       identities.merge STEP_UP_POLICY  # issue #160
 POST   /api/connections/{id}/validate                connections.manage -
 GET    /api/connections/{id}/validations/{run}       connections.read   -
