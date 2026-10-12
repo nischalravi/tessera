@@ -553,6 +553,49 @@ export const mergeIdentity = (mergedId: number, survivorId: number, reason: stri
 export const unmergeIdentity = (mergeId: string, reason: string) =>
   api<UnmergeResult>(`/identity-merges/${encodeURIComponent(mergeId)}/unmerge`, { reason });
 
+// ------------------------------------------------ affiliations and identifiers (issue #64)
+
+export type AffiliationType = "employee" | "student" | "applicant" | "admit" | "prehire" | "contractor" | "guest_visitor" | "volunteer" | "partner" | "alum" | "retiree";
+/** One relationship between a person and the organization. A person has many. */
+export interface Affiliation {
+  id: string;
+  identity_id: number;
+  type: AffiliationType;
+  source: "hris" | "sis" | "sponsorship" | "partner_org" | "manual";
+  source_ref: string | null;
+  org_unit: string | null;
+  population: string | null;
+  starts_at: string;
+  ends_at: string | null;
+  /** Stored status. */
+  status: "pending" | "active" | "ended" | "revoked";
+  /** What it is now: an active affiliation past its end reads as ended until the lifecycle sweep runs. */
+  effective_status: "pending" | "active" | "ended" | "revoked";
+  created_at: string;
+  ended_at: string | null;
+  end_reason: string | null;
+}
+/** Lifecycle state as far as affiliations determine it. */
+export type PersonState = "unaffiliated" | "prospective" | "active" | "expiring" | "expired" | "revoked" | "merged";
+export interface PersonAffiliations { identity_id: number; lifecycle_state: PersonState; affiliations: Affiliation[] }
+export interface PersonIdentifier {
+  id: string;
+  type: string;
+  issuer: string;
+  /** Null for hashed-only identifiers: the value is never stored. */
+  value: string | null;
+  verified_at: string | null;
+  verified_by: "confirmation_code" | "federation" | "authoritative_source" | "proofing_agent" | null;
+  status: "active" | "retired";
+  source_system: string | null;
+}
+export interface AddAffiliationInput { type: AffiliationType; org_unit?: string; population?: string; starts_at?: string; ends_at?: string; reason: string }
+
+export const addAffiliation = (identityId: number, body: AddAffiliationInput) =>
+  api<Affiliation>(`/identities/${identityId}/affiliations`, body);
+export const endAffiliation = (affiliationId: string, reason: string) =>
+  api<Affiliation>(`/affiliations/${encodeURIComponent(affiliationId)}/end`, { reason });
+
 export const simulate = (body: { remove_edge_ids?: number[]; add_edges?: { src: string; dst: string }[]; disable_account_ids?: number[] }) =>
   api<SimResult>("/simulate", { remove_edge_ids: [], add_edges: [], disable_account_ids: [], ...body });
 

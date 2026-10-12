@@ -162,7 +162,10 @@ The routes are documented at `/api/readiness/openapi.json`.
 `GET /api/correlation/queue` · `GET /api/correlation/decisions` ·
 `POST /api/accounts/{id}/link {identity_id, reason}` · `POST /api/accounts/{id}/not-person {reason}` ·
 `DELETE /api/accounts/{id}/link` · `POST /api/identities/{id}/merge {into, reason}` ·
-`GET /api/identity-merges` · `POST /api/identity-merges/{id}/unmerge {reason}`
+`GET /api/identity-merges` · `POST /api/identity-merges/{id}/unmerge {reason}` ·
+`GET /api/identities/{id}/affiliations` · `GET /api/identities/{id}/identifiers` ·
+`POST /api/identities/{id}/affiliations {type, org_unit?, population?, starts_at?, ends_at?, reason}` ·
+`POST /api/affiliations/{id}/end {reason}`
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
@@ -190,6 +193,36 @@ Connectors tie most accounts to a person. **Directory → Accounts → Account m
 
 Decisions need `identities.correlate`, merges `identities.merge` (both: policy admin), each
 with a fresh phishing-resistant sign-in and a reason. Every decision is audited.
+
+### Affiliations and identifiers
+
+The guest-accounts design (K1, `docs/design/guest-accounts-and-claim.md`) keeps **one identity per
+person with many affiliations**; issue #64 (GU-1) adds the data model and a read view. The identity
+page (**Affiliations & identifiers** tab) and the identity side panel (**Affiliations** tab) show,
+for a human:
+
+- **Affiliations** (`affiliations`): each relationship (employee, contractor, guest visitor, ...)
+  with its source, organization unit, population, start and end. The person's lifecycle state
+  (`active`, `expiring`, `expired`, ...) is **derived** from them, not stored
+  (`internal/identity/affiliations`). A person is active while any affiliation is.
+- **Identifiers** (`identity_identifiers`): email, employee ID, federated subjects and so on, each
+  with how it was verified. Lookups use `value_hmac`, an HMAC under a per-tenant key derived from the
+  KEK, so two records with the same email collide without anyone storing a lookup table of values.
+  The hash is never returned by the API.
+- **Source records** (`identity_source_records`): what each system of record said about the person.
+  No screen yet; matching and review arrive with GU-5.
+
+**Add** and **End** (policy admin, `identities.affiliate`, fresh phishing-resistant sign-in, reason
+required, audited) are for relationships an administrator may vouch for: guest visitor, contractor,
+volunteer, partner, alum, retiree. Employee, student, applicant, admit and pre-hire come only from the HR or
+student feed, so the API refuses them. Guest-like types need an end date, bounded by the population
+(`guest_populations`: 365 days; a guest visitor 30). Ending a running affiliation sets `ended`; one
+that had not started is `revoked`. An ended affiliation is history: the table refuses to change it.
+
+The seed back-fills one source record, one HR affiliation and the HR identifiers (email, employee
+ID) for every human, with no audit events and no change to any identity id. Identities that
+connectors add later are not back-filled until the lifecycle feed (GU-4, GU-11) lands. The worker
+type, sponsor and lifecycle state of a person belong to `identity_lifecycle` (issue #159), not here.
 
 ### Audit ledger
 
