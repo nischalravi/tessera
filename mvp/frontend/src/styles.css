@@ -839,3 +839,29 @@ html { scroll-padding-top: calc(var(--topbar-h) + 8px); }
 /* Reflow (WCAG 1.4.10): grid columns may shrink below their content's width; segmented controls wrap. */
 .split > * { min-width: 0; }
 .seg { max-width: 100%; flex-wrap: wrap; }
+
+/* ------------------------------------------------------------ mobile (issue #174) */
+/* Step-up notice: a floating card on desktop, a bottom sheet on phones. */
+.stepup { position: fixed; right: var(--s-4); bottom: var(--s-4); z-index: 90; width: min(420px, calc(100vw - 32px)); box-shadow: var(--shadow-lg, 0 8px 24px rgba(0, 0, 0, .18)); }
+@media (max-width: 768px) {
+  /* side panels and dialogs become full-screen sheets over the top bar */
+  .panel { top: 0; z-index: 70; width: 100vw; height: 100dvh; border-left: 0; }
+  .panel-head { position: sticky; top: 0; z-index: 1; background: var(--surface); padding-top: max(var(--s-3), env(safe-area-inset-top)); }
+  .panel-body { padding-bottom: calc(var(--s-6) + env(safe-area-inset-bottom)); }
+  .dialog-wrap { padding: 0; place-items: stretch; }
+  .dialog { width: 100vw; max-width: none; min-height: 100dvh; border-radius: 0; display: flex; flex-direction: column; }
+  .dialog .dlg-b { flex: 1; }
+  .dialog .dlg-f { position: sticky; bottom: 0; background: var(--surface); padding-bottom: calc(var(--s-3) + env(safe-area-inset-bottom)); flex-wrap: wrap; }
+  .stepup { left: 0; right: 0; bottom: 0; width: 100%; border-radius: var(--r-lg) var(--r-lg) 0 0; padding-bottom: calc(var(--s-4) + env(safe-area-inset-bottom)); }
+
+  /* touch targets: at least 44 x 44 CSS px (WCAG 2.5.5 enhanced; Apple and Material guidance) */
+  .btn, button.btn, .btn.sm, .tb-btn, .fchip, .seg button { min-height: 44px; }
+  .btn, button.btn, .tb-btn { min-width: 44px; }
+  .tabs [role="tab"], .tabs a { min-height: 44px; display: inline-flex; align-items: center; }
+  .cmdbar .cmd { min-height: 44px; min-width: 44px; }
+  .input, select.input, textarea.input { min-height: 44px; font-size: 16px; } /* 16px stops iOS zooming into the field */
+  .rail-item { min-height: 44px; }
+  .chk-hit { display: inline-grid; place-items: center; min-width: 44px; min-height: 44px; margin: -10px; cursor: pointer; }
+  input[type="checkbox"], input[type="radio"] { width: 20px; height: 20px; }
+  label:has(> input[type="radio"]), label:has(> input[type="checkbox"]) { min-height: 44px; display: flex; align-items: center; gap: 10px; }
+}

@@ -1,5 +1,5 @@
 import { FormEvent, ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { DevUser, SIGNED_OUT, STEP_UP, SessionInfo, devLogin, devLoginUsers, getSession, logout } from "../api";
+import { DevUser, SIGNED_OUT, STEP_UP, SessionInfo, devLogin, devLoginUsers, getSession, isRateLimited, logout } from "../api";
 import { Button } from "../components/Button";
 import { Callout } from "../components/Feedback";
 
@@ -31,7 +31,7 @@ export const useOptionalSession = () => useContext(Ctx);
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<SessionInfo | null | undefined>(undefined);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [stepUp, setStepUp] = useState<string | null>(null);
   const [lastEmail, setLastEmail] = useState<string | null>(null);
   const [lastTenant, setLastTenant] = useState<string | null>(null);
@@ -40,8 +40,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     try {
       setSession(await getSession());
       setError(null);
-    } catch (e: any) {
-      setError(String(e.message ?? e));
+    } catch (e: unknown) {
+      setError(e);
     }
   }, []);
 
@@ -75,7 +75,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [session]);
 
   if (session === undefined) {
-    return error ? <SignInFrame><Callout tone="bad">Tessera is unreachable: {error}</Callout></SignInFrame> : null;
+    if (isRateLimited(error)) return <SignInFrame><RateLimited secs={error.retryAfter ?? 1} onRetry={load} /></SignInFrame>;
+    return error ? <SignInFrame><Callout tone="bad">Tessera is unreachable: {String((error as Error).message ?? error)}</Callout></SignInFrame> : null;
   }
   if (!value) {
     return <SignIn preferEmail={lastEmail} preferTenant={lastTenant} onSignedIn={async () => { setStepUp(null); await load(); }} />;
@@ -126,6 +127,8 @@ function SignIn({ onSignedIn, preferEmail, preferTenant }: { onSignedIn: () => P
   const [method, setMethod] = useState("passkey");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [limited, setLimited] = useState<number | null>(null);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -136,12 +139,17 @@ function SignIn({ onSignedIn, preferEmail, preferTenant }: { onSignedIn: () => P
         setError(null);
         const preferred = d?.users.find((u) => u.email === preferEmail) ?? d?.users[0];
         setChoice(preferred ? preferred.subject : "");
+        setLimited(null);
       })
-      .catch((e) => alive && setError(String(e.message ?? e)));
+      .catch((e) => {
+        if (!alive) return;
+        if (isRateLimited(e)) setLimited(e.retryAfter ?? 1);
+        else setError(String(e.message ?? e));
+      });
     return () => {
       alive = false;
     };
-  }, [shown, preferEmail]);
+  }, [shown, preferEmail, attempt]);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -157,6 +165,7 @@ function SignIn({ onSignedIn, preferEmail, preferTenant }: { onSignedIn: () => P
     }
   };
 
+  if (limited !== null) return <SignInFrame><RateLimited secs={limited} onRetry={() => setAttempt((a) => a + 1)} /></SignInFrame>;
   if (dev === undefined && !error) return <SignInFrame><p className="faint">Loading…</p></SignInFrame>;
   if (dev === null) {
     return (
@@ -213,17 +222,37 @@ function SignIn({ onSignedIn, preferEmail, preferTenant }: { onSignedIn: () => P
   );
 }
 
-/** Shown when an action needs a fresh phishing-resistant sign-in (401 step_up_required). */
+/** Shown when an action needs a fresh phishing-resistant sign-in (401 step_up_required). A bottom sheet on phones. */
 function StepUpNotice({ reason, onClose, onSignIn }: { reason: string; onClose: () => void; onSignIn: () => Promise<void> }) {
   return (
-    <div role="alertdialog" aria-labelledby="stepup-h" className="card stack"
-      style={{ position: "fixed", right: "var(--s-4)", bottom: "var(--s-4)", zIndex: 90, width: "min(420px, calc(100vw - 32px))", boxShadow: "var(--shadow-lg, 0 8px 24px rgba(0,0,0,.18))" }}>
+    <div role="alertdialog" aria-labelledby="stepup-h" aria-describedby="stepup-d" className="card stack stepup">
       <strong id="stepup-h">Sign in again to continue</strong>
-      <p className="small">{reason} Sign in again with a passkey, then retry the action.</p>
-      <div className="row">
-        <Button variant="primary" onClick={onSignIn}>Sign in again</Button>
+      <p id="stepup-d" className="small">{reason} Sign in again with a passkey, then retry the action.</p>
+      <div className="row wrap">
+        <Button variant="primary" onClick={onSignIn} autoFocus>Sign in again</Button>
         <Button variant="ghost" onClick={onClose}>Not now</Button>
       </div>
+    </div>
+  );
+}
+
+/** 429 from the sign-in endpoints: say why, count down Retry-After, then offer a retry. */
+function RateLimited({ secs, onRetry }: { secs: number; onRetry: () => void }) {
+  const [left, setLeft] = useState(secs);
+  useEffect(() => {
+    setLeft(secs);
+    const t = window.setInterval(() => setLeft((l) => Math.max(0, l - 1)), 1000);
+    return () => window.clearInterval(t);
+  }, [secs]);
+  return (
+    <div className="stack">
+      <h1 style={{ fontSize: "var(--fs-xl)" }}>Too many sign-in attempts</h1>
+      <p className="small">
+        Tessera limits how often one network can sign in, to slow down password-guessing and abuse. Nothing is wrong with your
+        account. {left > 0 ? `You can try again in ${left} second${left === 1 ? "" : "s"}.` : "You can try again now."}
+      </p>
+      <span className="sr-only" aria-live="polite">{left === 0 ? "You can try again now." : ""}</span>
+      <div><Button variant="primary" disabled={left > 0} onClick={onRetry}>Try again</Button></div>
     </div>
   );
 }

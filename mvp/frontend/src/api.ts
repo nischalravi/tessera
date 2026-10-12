@@ -12,10 +12,24 @@ const CHANGED = "tessera:api-changed";
 
 /** An API error with its status and parsed body (gate reports carry `blocking`). */
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number, readonly body: any) {
+  /** retryAfter: seconds from the Retry-After header of a 429. */
+  constructor(message: string, readonly status: number, readonly body: any, readonly retryAfter?: number) {
     super(message);
   }
 }
+
+/** A 429's Retry-After, in seconds (at least 1). */
+function retryAfterOf(res: Response): number | undefined {
+  if (res.status !== 429) return undefined;
+  const n = Number(res.headers.get("Retry-After"));
+  return Number.isFinite(n) && n > 0 ? Math.ceil(n) : 1;
+}
+
+/** The plain-language message of a 429. */
+export const rateLimitedMessage = (secs?: number) =>
+  `Too many requests from your network. Wait ${secs && secs > 1 ? `${secs} seconds` : "a moment"} and try again.`;
+
+export const isRateLimited = (e: unknown): e is ApiError => e instanceof ApiError && e.status === 429;
 
 /**
  * Session handling (design §11, §17). The browser holds only the HttpOnly session cookie,
@@ -65,6 +79,8 @@ function errorMessage(status: number, j: any): string {
       return `You don't have permission to do this${j.permission ? ` (needs ${j.permission})` : ""}.`;
     case "csrf_failed":
       return "The request was refused as a possible cross-site request. Reload the page and try again.";
+    case "rate_limited":
+      return rateLimitedMessage();
     case "audit_unavailable":
       return "The audit log is unavailable, so Tessera refused the request. Try again shortly.";
     case "activation_blocked":
@@ -99,7 +115,8 @@ export async function api<T = any>(path: string, body?: unknown, method?: string
       window.dispatchEvent(new Event(SIGNED_OUT));
     }
     if (res.status === 401 && j?.error === "step_up_required") window.dispatchEvent(new CustomEvent(STEP_UP, { detail: j }));
-    throw new ApiError(j ? errorMessage(res.status, j) : `${res.status} ${res.statusText}`, res.status, j);
+    const ra = retryAfterOf(res);
+    throw new ApiError(ra ? rateLimitedMessage(ra) : j ? errorMessage(res.status, j) : `${res.status} ${res.statusText}`, res.status, j, ra);
   }
   const data = (await res.json()) as T;
   if (m === "GET") {
@@ -457,7 +474,10 @@ export async function getSession(): Promise<SessionInfo | null> {
     resetSessionState();
     return null;
   }
-  if (!res.ok) throw new ApiError(`${res.status} ${res.statusText}`, res.status, null);
+  if (!res.ok) {
+    const ra = retryAfterOf(res);
+    throw new ApiError(ra ? rateLimitedMessage(ra) : `${res.status} ${res.statusText}`, res.status, null, ra);
+  }
   const s = (await res.json()) as SessionInfo;
   setCsrfToken(s.csrf_token);
   return s;
@@ -481,7 +501,10 @@ export interface DevUser { tenant: string; tenant_name: string; subject: string;
 export async function devLoginUsers(tenant: string): Promise<{ users: DevUser[]; methods: string[] } | null> {
   const res = await fetch(`/api/auth/dev-login?tenant=${encodeURIComponent(tenant)}`, { credentials: "same-origin" });
   if (res.status === 404) return null;
-  if (!res.ok) throw new ApiError(`${res.status} ${res.statusText}`, res.status, null);
+  if (!res.ok) {
+    const ra = retryAfterOf(res);
+    throw new ApiError(ra ? rateLimitedMessage(ra) : `${res.status} ${res.statusText}`, res.status, null, ra);
+  }
   return res.json();
 }
 
@@ -501,7 +524,8 @@ export async function devLogin(tenant: string, subject: string, method: string):
     } catch {
       /* ignore */
     }
-    throw new ApiError(j?.error === "login_failed" ? "Sign-in failed." : errorMessage(res.status, j), res.status, j);
+    const ra = retryAfterOf(res);
+    throw new ApiError(j?.error === "login_failed" ? "Sign-in failed." : ra ? rateLimitedMessage(ra) : errorMessage(res.status, j), res.status, j, ra);
   }
   resetSessionState();
 }
