@@ -16,6 +16,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
+	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/store/storetest"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
@@ -49,7 +50,18 @@ func newIsolationServer(f *storetest.Fixture) *Server {
 		Env:            "test", // with DevLogin, registers the dev sign-in routes, so coverage tests see them
 		DevLogin:       true,
 		RateLimits:     noRateLimits, // the coverage tests send hundreds of anonymous requests
+		Sealer:         testSealer(),
+		RotationFake:   true,
 	})
+}
+
+// testSealer is a throwaway KEK for adapter credentials.
+func testSealer() *seal.Sealer {
+	s, err := seal.New(seal.RandomBytes(seal.KeySize))
+	if err != nil {
+		panic(err)
+	}
+	return s
 }
 
 func serveOnce(h http.Handler, method, path, body string) *httptest.ResponseRecorder {
@@ -152,6 +164,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/api/audit/events/{event_id}/proof" {
 			continue // TestIsolation_AuditRoutes
 		}
+		if _, ok := rotationRouteCases[rt.Method+" "+rt.Pattern]; ok {
+			continue // TestIsolation_RotationRouteCrossTenant
+		}
 		if rt.Pattern == "/api/auth/sessions/{session_id}" {
 			continue // TestIsolation_SessionCookieScoped (a UUID, not a fixture id)
 		}
@@ -226,6 +241,9 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		path := rt.Pattern
 		if rp, ok := readinessGetPaths(f.B.Refs)[path]; ok && strings.Contains(path, "{") {
 			path = rp // tenant B's own readiness ids
+		}
+		if rp, ok := rotationGetPaths(f.B.Refs)[path]; ok {
+			path = rp // tenant B's own rotation ids
 		}
 		if strings.Contains(path, "{") {
 			v, ok := values[path]

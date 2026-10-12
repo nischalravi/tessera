@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/jml"
@@ -281,5 +282,66 @@ func TestInferTeamAndBirthright(t *testing.T) {
 	}
 	if _, ok := jml.Birthright[*team]; !ok {
 		t.Errorf("inferred team %q has no birthright", *team)
+	}
+}
+
+// stubRotator stands in for the rotation service: it records the secrets it was asked to rotate.
+type stubRotator struct {
+	queued bool
+	asked  []int64
+	actor  string
+}
+
+func (s *stubRotator) QueueForLeaver(_ *store.TenantTx, secretID int64, actor string, _ time.Time) (bool, error) {
+	s.asked, s.actor = append(s.asked, secretID), actor
+	return s.queued, nil
+}
+
+// With a rotator the rotate_secret step queues a real rotation and leaves
+// the rotation time to the job; when no adapter can rotate the secret (or
+// there is no rotator) it stamps the time, as it always did.
+func TestRotateSecretStepUsesTheRotator(t *testing.T) {
+	for name, tc := range map[string]struct {
+		rotator     *stubRotator
+		wantStamped bool
+	}{
+		"rotation queued":          {&stubRotator{queued: true}, false},
+		"no adapter can rotate it": {&stubRotator{queued: false}, true},
+		"no rotator":               {nil, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			st, ids := testkit.Tiny(t)
+			pols := testkit.Policies(t)
+			var evID int64
+			testkit.Write(t, st, func(c *store.TenantTx) error {
+				var err error
+				dave := ids["dave"]
+				evID, err = c.InsertHrisEvent(&store.HrisEvent{ExternalID: "t-rot", Type: "leaver", IdentityID: &dave,
+					EffectiveAt: testkit.Now, Status: "pending"})
+				return err
+			})
+			var opts []jml.Option
+			if tc.rotator != nil {
+				opts = append(opts, jml.WithRotator(tc.rotator))
+			}
+			testkit.Write(t, st, func(c *store.TenantTx) error {
+				_, err := jml.ExecuteEvent(c, testkit.Now, evID, store.UserRef{Display: "jml-automation"}, pols, opts...)
+				return err
+			})
+			testkit.Read(t, st, func(c *store.TenantTx) error {
+				secrets, err := c.Secrets()
+				if err != nil || len(secrets) != 1 {
+					t.Fatalf("secrets %v %v", secrets, err)
+				}
+				stamped := secrets[0].LastRotatedAt != nil && secrets[0].LastRotatedAt.Equal(testkit.Now)
+				if stamped != tc.wantStamped {
+					t.Errorf("rotation time stamped = %v, want %v", stamped, tc.wantStamped)
+				}
+				return nil
+			})
+			if tc.rotator != nil && (len(tc.rotator.asked) != 1 || tc.rotator.actor != "jml-automation") {
+				t.Errorf("rotator asked %v as %q", tc.rotator.asked, tc.rotator.actor)
+			}
+		})
 	}
 }

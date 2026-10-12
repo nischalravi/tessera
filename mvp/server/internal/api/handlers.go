@@ -1477,7 +1477,7 @@ func (s *Server) hrisExecute(_ http.ResponseWriter, r *http.Request, p *params) 
 	if err != nil {
 		return nil, err
 	}
-	plan, err := jml.ExecuteEvent(store.TxFrom(r.Context()), s.clock(), id, principal(r).User(), pols)
+	plan, err := jml.ExecuteEvent(store.TxFrom(r.Context()), s.clock(), id, principal(r).User(), pols, jml.WithRotator(s.rotation))
 	var je *jml.Error
 	if errors.As(err, &je) {
 		return nil, errStatus(http.StatusBadRequest, je.Msg)

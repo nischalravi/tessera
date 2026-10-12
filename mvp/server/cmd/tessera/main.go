@@ -28,6 +28,8 @@
 //	TESSERA_DEV_IDP_URL   the dev IdP's issuer: seeding (dev and test) creates a
 //	                      dev_mock connection to it with the bootstrap users
 //	TESSERA_READINESS_SCENARIO  simulated validation scenario for demo connectors: gaps (default) or happy
+//	TESSERA_ROTATION_FAKE_ADAPTERS  true (the dev and test default) admits the simulated secret-rotation
+//	                      adapter, which the demo policies use; prod refuses it
 //	TESSERA_READINESS_DEMO      "off" skips seeding the demo Okta connection (larkspur only) for Deployment health
 package main
 
@@ -55,6 +57,8 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
+	"github.com/nischalravi/tessera/mvp/server/internal/rotation"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/seed"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -203,6 +207,13 @@ func seedDB(ctx context.Context, path string, cfg *config.Config, clock timeutil
 		fmt.Fprintf(stdout, "Seeded the deployment-readiness demo for tenant %s: Okta (demo) connection validated and dry-run reconciled\n",
 			seed.LarkspurSlug)
 	}
+	if cfg.RotationFakeAdapters {
+		if err := seedRotationDemo(ctx, st, seed.LarkspurID, clock); err != nil {
+			return fmt.Errorf("rotation demo: %w", err)
+		}
+		fmt.Fprintf(stdout, "Seeded the secret-rotation demo for tenant %s: a simulated provider and policies for the demo credentials\n",
+			seed.LarkspurSlug)
+	}
 	if err := keys.EnsureAll(ctx, st, sealer, clock()); err != nil {
 		return err
 	}
@@ -225,6 +236,8 @@ const (
 	// (each is checkpointed every TESSERA_AUDIT_CHECKPOINT_SECONDS or
 	// _EVENTS new events, design §13.6).
 	checkpointInterval = 30 * time.Second
+	// rotationInterval is how often the rotation worker looks for due jobs.
+	rotationInterval = 30 * time.Second
 )
 
 func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Sealer, clock timeutil.Clock,
@@ -265,9 +278,20 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if err != nil {
 		return err
 	}
+	// Secret rotation: the worker calls providers only through the SSRF-guarded
+	// client, opens adapter credentials only with the KEK, and the simulated
+	// adapter exists only where config allows it (never in prod).
+	rotationHTTP, err := safehttp.ForConfig(cfg)
+	if err != nil {
+		return err
+	}
+	rotationEngine := &rotation.Engine{DB: st, Clock: clock, Log: logger,
+		Service: &rotation.Service{Sealer: sealer, Env: cfg.Env, AllowFake: cfg.RotationFakeAdapters},
+		Factory: &rotation.Factory{HTTP: rotationHTTP, Sealer: sealer, Now: clock, AllowFake: cfg.RotationFakeAdapters}}
 	srv := api.New(api.Config{Store: st, Clock: clock, Policies: loader, Logger: logger,
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
-		HSTS: cfg.IsProd(), Env: cfg.Env, DevLogin: cfg.DevLogin, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, AuditAnchor: anchorURL})
+		HSTS: cfg.IsProd(), Env: cfg.Env, DevLogin: cfg.DevLogin, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, AuditAnchor: anchorURL,
+		Sealer: sealer, RotationFake: cfg.RotationFakeAdapters})
 	checkpointer := &audit.Checkpointer{DB: st, Sealer: sealer, Sink: sink, Clock: timeutil.System, Issuer: cfg.PublicURL,
 		Every: time.Duration(cfg.AuditCheckpointSeconds) * time.Second, EveryEvents: int64(cfg.AuditCheckpointEvents),
 		Log: logger}
@@ -300,6 +324,11 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		defer close(ckptDone)
 		checkpointer.Loop(ctx, checkpointInterval)
 	}()
+	rotationDone := make(chan struct{})
+	go func() {
+		defer close(rotationDone)
+		rotationEngine.Loop(ctx, rotationInterval)
+	}()
 	errc := make(chan error, 1)
 	go func() { errc <- httpSrv.Serve(ln) }()
 	logger.Info("tessera API listening", "addr", ln.Addr().String())
@@ -310,6 +339,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		<-sweepDone
 		<-keysDone
 		<-ckptDone
+		<-rotationDone
 		return err
 	case <-ctx.Done():
 	}
@@ -320,6 +350,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	<-sweepDone
 	<-keysDone
 	<-ckptDone
+	<-rotationDone
 	if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 		return serveErr
 	}

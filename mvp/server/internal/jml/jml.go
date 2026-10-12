@@ -615,7 +615,25 @@ func addGrant(c *store.TenantTx, now time.Time, ident *store.Identity, st Step) 
 	return err
 }
 
-func applyStep(c *store.TenantTx, now time.Time, ident *store.Identity, st Step) error {
+// SecretRotator queues a real rotation of a secret a leaver had custody of
+// (internal/rotation.Service). QueueForLeaver reports whether a rotation job
+// is now running for the secret; false means no rotation policy and adapter
+// can rotate it, and the rotate_secret step keeps recording the timestamp
+// only, as before.
+type SecretRotator interface {
+	QueueForLeaver(tx *store.TenantTx, secretID int64, actor string, now time.Time) (bool, error)
+}
+
+// Option adjusts ExecuteEvent.
+type Option func(*options)
+
+type options struct{ rotator SecretRotator }
+
+// WithRotator makes the rotate_secret step queue a rotation job through r
+// when one can run, instead of only stamping the secret's rotation time.
+func WithRotator(r SecretRotator) Option { return func(o *options) { o.rotator = r } }
+
+func applyStep(c *store.TenantTx, now time.Time, ident *store.Identity, st Step, actor string, o *options) error {
 	var err error
 	switch stepStr(st, "action") {
 	case "disable_account":
@@ -634,7 +652,15 @@ func applyStep(c *store.TenantTx, now time.Time, ident *store.Identity, st Step)
 		err = c.SetIdentityOwner(id, optInt(stepGet(st, "new_owner_id")))
 	case "rotate_secret":
 		id, _ := stepInt(st, "secret_id")
-		err = c.SetSecretRotated(id, now)
+		queued := false
+		if o.rotator != nil {
+			if queued, err = o.rotator.QueueForLeaver(c, id, actor, now); err != nil {
+				return err
+			}
+		}
+		if !queued { // no adapter can rotate it: record the rotation time, as before
+			err = c.SetSecretRotated(id, now)
+		}
 	case "revoke_delegation":
 		id, _ := stepInt(st, "delegation_id")
 		err = c.DeleteDelegation(id)
@@ -652,7 +678,11 @@ func applyStep(c *store.TenantTx, now time.Time, ident *store.Identity, st Step)
 
 // ExecuteEvent applies an HRIS event's plan and marks it executed.
 // by is the platform user who executes it (the request's principal).
-func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.UserRef, policies []*policy.Policy) (Plan, error) {
+func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.UserRef, policies []*policy.Policy, opts ...Option) (Plan, error) {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
 	ev, err := getOrNil(c.HrisEvent(eventID))
 	if err != nil {
 		return nil, err
@@ -720,7 +750,7 @@ func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.User
 			return nil, err
 		}
 		for _, st := range steps {
-			if err := applyStep(c, now, ident, st); err != nil {
+			if err := applyStep(c, now, ident, st, by.Display, &o); err != nil {
 				return nil, err
 			}
 		}

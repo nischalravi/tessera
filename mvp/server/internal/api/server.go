@@ -26,6 +26,8 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
+	"github.com/nischalravi/tessera/mvp/server/internal/rotation"
+	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
@@ -89,6 +91,14 @@ type Config struct {
 	// TrustedProxies (TESSERA_TRUSTED_PROXIES) are the peers whose
 	// X-Forwarded-For the rate limiter believes.
 	TrustedProxies []netip.Prefix
+	// Sealer seals the credentials of secret-rotation adapters (the KEK from
+	// internal/config). Nil: adapters with credentials cannot be saved (503).
+	Sealer *seal.Sealer
+	// RotationFake admits the simulated rotation adapter
+	// (TESSERA_ROTATION_FAKE_ADAPTERS; config refuses it in prod).
+	RotationFake bool
+	// RotationNotifier tells secret owners about rotations; nil: the audit-event notifier.
+	RotationNotifier rotation.Notifier
 	// AuditAppend overrides how the audit middleware writes http.request
 	// events (tests inject failures). Nil: the store.
 	AuditAppend func(ctx context.Context, t tenancy.ID, e store.AuditEvent) error
@@ -105,6 +115,7 @@ type Server struct {
 	limits *limiters
 
 	readiness *readiness.Service
+	rotation  *rotation.Service
 }
 
 // New builds a server.
@@ -136,12 +147,14 @@ func New(cfg Config) *Server {
 		cfg.Readiness.Runner.Scenario = cfg.ReadinessScenario
 	}
 	s := &Server{cfg: cfg, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
-		limits: newLimiters(cfg.RateLimits)}
+		limits:   newLimiters(cfg.RateLimits),
+		rotation: &rotation.Service{Sealer: cfg.Sealer, Env: cfg.Env, AllowFake: cfg.RotationFake, Notifier: cfg.RotationNotifier}}
 	s.authn = &auth.Authenticator{DB: cfg.Store, Clock: func() time.Time { return s.clock() },
 		Cookies: auth.Cookies{Insecure: cfg.InsecureCookie}}
 	s.registerRoutes()
 	s.registerAuditRoutes()
 	s.registerReadinessRoutes()
+	s.registerRotationRoutes()
 	s.registerAuthRoutes()
 	s.checkPublicRoutes()
 	return s
