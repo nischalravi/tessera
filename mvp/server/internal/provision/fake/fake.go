@@ -54,6 +54,7 @@ type userRec struct {
 type groupRec struct {
 	ID, DisplayName, ExternalID string
 	Members                     []string
+	lenient                     bool // created by a lookup, not pre-provisioned
 }
 
 // Server is the fake target.
@@ -294,6 +295,7 @@ func list(w http.ResponseWriter, r *http.Request, all []map[string]any) {
 func unquote(s string) string { return strings.NewReplacer(`\"`, `"`, `\\`, `\`).Replace(s) }
 
 func (s *Server) listUsers(w http.ResponseWriter, r *http.Request, create bool) {
+	removal := r.Header.Get("X-Tessera-Operation") == "remove_entitlement"
 	var all []map[string]any
 	ids := make([]string, 0, len(s.users))
 	for id := range s.users {
@@ -310,8 +312,15 @@ func (s *Server) listUsers(w http.ResponseWriter, r *http.Request, create bool) 
 			}
 		}
 		if !found && s.opt.Lenient && !create && !s.deleted[name] {
-			s.addUser(name, "", true)
-			ids = append(ids, "u"+strconv.Itoa(s.seq))
+			u := s.addUser(name, "", true)
+			ids = append(ids, u.ID)
+			if removal { // a user "already provisioned" holds the groups that were looked up before
+				for _, g := range s.groups {
+					if g.lenient {
+						g.Members = append(g.Members, u.ID)
+					}
+				}
+			}
 		}
 	}
 	for _, id := range ids {
@@ -482,6 +491,7 @@ func (s *Server) listGroups(w http.ResponseWriter, r *http.Request) {
 			// first and the name second, so create on the name.
 			if m[1] == "displayName" {
 				g := s.addGroup(name, ext)
+				g.lenient = true
 				if r.Header.Get("X-Tessera-Operation") == "remove_entitlement" {
 					// the user being removed "already" held this group
 					for id := range s.users {

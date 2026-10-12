@@ -281,3 +281,48 @@ func TestScim_RejectsBadUpdatePath(t *testing.T) {
 		t.Fatalf("err = %v, want a permanent error", err)
 	}
 }
+
+// The dev fake treats users and groups it has never seen as already
+// provisioned: a removal really removes (or, with a dropped write, is caught).
+func TestScim_LenientFakeRemoval(t *testing.T) {
+	for _, tc := range []struct {
+		fault  string
+		wantOK bool
+	}{{"", true}, {fake.DropWrites, false}} {
+		f := fake.New(fake.Options{Lenient: true, Fault: tc.fault})
+		c := newClient(t, f.Handler(), scim.Standard)
+		ctx := context.Background()
+		r := member(target.RemoveEntitlement, alice)
+		if err := c.Apply(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+		v, err := c.Verify(ctx, r)
+		if err != nil || v.OK != tc.wantOK {
+			t.Errorf("fault %q: Verify = %+v, %v; want OK=%v", tc.fault, v, err, tc.wantOK)
+		}
+		// A second user looked up later is also a member of the already-known group.
+		r2 := member(target.RemoveEntitlement, bob)
+		if err := c.Apply(ctx, r2); err != nil {
+			t.Fatal(err)
+		}
+		if v, err := c.Verify(ctx, r2); err != nil || v.OK != tc.wantOK {
+			t.Errorf("fault %q, second user: Verify = %+v, %v", tc.fault, v, err)
+		}
+	}
+}
+
+// create_account is not satisfied by leniency: the user really is created.
+func TestScim_LenientFakeStillCreates(t *testing.T) {
+	f := fake.New(fake.Options{Lenient: true})
+	c := newClient(t, f.Handler(), scim.Standard)
+	if err := c.Apply(context.Background(), req(target.CreateAccount, bob)); err != nil {
+		t.Fatal(err)
+	}
+	var posted bool
+	for _, r := range f.Requests() {
+		posted = posted || r == "POST /scim/v2/Users"
+	}
+	if !posted {
+		t.Errorf("no POST: %v", f.Requests())
+	}
+}

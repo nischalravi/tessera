@@ -152,7 +152,8 @@ function TargetPanel({ target, onClose }: { target: ProvTarget | null; onClose: 
   const [writeBack, setWriteBack] = useState(target?.write_back ?? false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const usable = (conns.data ?? []).filter((c) => !c.retired_at);
+  // legacy (pre-readiness) entries have no id and no target to configure
+  const usable = (conns.data ?? []).filter((c) => c.id && !c.legacy && !c.retired_at);
   const save = async (e: FormEvent) => {
     e.preventDefault();
     setBusy(true);
