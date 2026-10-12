@@ -53,12 +53,15 @@ func TestIsolation_RotationGetsOtherTenantNotFound(t *testing.T) {
 	f := storetest.TwoTenants(t)
 	a := f.A.Refs
 	cases := map[string]func(c *store.TenantTx) error{
-		"RotationAdapter":       func(c *store.TenantTx) error { _, err := c.RotationAdapter(a["rot:adapter"]); return err },
-		"RotationAdapterByName": func(c *store.TenantTx) error { _, err := c.RotationAdapterByName("adapter " + storetest.Sentinel); return err },
-		"RotationPolicy":        func(c *store.TenantTx) error { _, err := c.RotationPolicy(a["rot:policy"]); return err },
-		"RotationBulk":          func(c *store.TenantTx) error { _, err := c.RotationBulk(a["rot:bulk"]); return err },
-		"RotationJob":           func(c *store.TenantTx) error { _, err := c.RotationJob(a["rot:job"]); return err },
-		"SecretByID":            func(c *store.TenantTx) error { _, err := c.SecretByID(f.A.IDs["secret"]); return err },
+		"RotationAdapter": func(c *store.TenantTx) error { _, err := c.RotationAdapter(a["rot:adapter"]); return err },
+		"RotationAdapterByName": func(c *store.TenantTx) error {
+			_, err := c.RotationAdapterByName("adapter " + storetest.Sentinel)
+			return err
+		},
+		"RotationPolicy": func(c *store.TenantTx) error { _, err := c.RotationPolicy(a["rot:policy"]); return err },
+		"RotationBulk":   func(c *store.TenantTx) error { _, err := c.RotationBulk(a["rot:bulk"]); return err },
+		"RotationJob":    func(c *store.TenantTx) error { _, err := c.RotationJob(a["rot:job"]); return err },
+		"SecretByID":     func(c *store.TenantTx) error { _, err := c.SecretByID(f.A.IDs["secret"]); return err },
 	}
 	for name, fn := range cases {
 		t.Run(name, func(t *testing.T) {

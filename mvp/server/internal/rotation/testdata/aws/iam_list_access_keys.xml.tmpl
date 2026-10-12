@@ -1,0 +1,19 @@
+<ListAccessKeysResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <ListAccessKeysResult>
+    <UserName>{{.User}}</UserName>
+    <AccessKeyMetadata>
+{{- range .Keys}}
+      <member>
+        <UserName>{{$.User}}</UserName>
+        <AccessKeyId>{{.ID}}</AccessKeyId>
+        <Status>{{.Status}}</Status>
+        <CreateDate>{{.Created}}</CreateDate>
+      </member>
+{{- end}}
+    </AccessKeyMetadata>
+    <IsTruncated>false</IsTruncated>
+  </ListAccessKeysResult>
+  <ResponseMetadata>
+    <RequestId>01234567-89ab-cdef-0123-456789abcdef</RequestId>
+  </ResponseMetadata>
+</ListAccessKeysResponse>

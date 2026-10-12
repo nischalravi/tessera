@@ -33,8 +33,7 @@ var (
 		SELECT (SELECT count(*) FROM rotation_policies p WHERE p.tenant_id = @tenant
 				AND (p.adapter_id = @id OR p.dest_adapter_id = @id))
 			+ (SELECT count(*) FROM rotation_jobs j WHERE j.tenant_id = @tenant
-				AND (j.adapter_id = @id OR j.dest_adapter_id = @id)
-				AND j.state NOT IN ('old_deleted','failed','cancelled'))`)
+				AND (j.adapter_id = @id OR j.dest_adapter_id = @id))`)
 )
 
 func scanRotAdapter(s scanner) (*RotationAdapter, error) {
@@ -100,7 +99,8 @@ func (tx *TenantTx) DeleteRotationAdapter(id string) (bool, error) {
 	return n > 0, err
 }
 
-// RotationAdapterUses counts the policies and in-flight jobs naming an adapter.
+// RotationAdapterUses counts the policies and jobs (finished ones are history
+// and keep the adapter) naming an adapter.
 func (tx *TenantTx) RotationAdapterUses(id string) (int, error) {
 	return tx.count(rotAdaptersUses, sql.Named("id", id))
 }
@@ -284,7 +284,7 @@ var (
 	// The CAS on state is the only way a job moves: a step that lost a race
 	// changes nothing. lease_until is cleared by every write.
 	rotJobsUpdate = tq("rotation_jobs.update", `
-		UPDATE rotation_jobs SET state = @state, failed_state = @failed_state, new_ref = @new_ref, attempts = @attempts,
+		UPDATE rotation_jobs SET state = @state, failed_state = @failed_state, old_ref = @old_ref, new_ref = @new_ref, attempts = @attempts,
 			last_error = @last_error, next_step_at = @next_step_at, lease_until = NULL,
 			handed_over_at = @handed_over_at, disabled_at = @disabled_at, verified_at = @verified_at,
 			completed_at = @completed_at, verification = @verification, updated_at = @updated_at
@@ -381,11 +381,12 @@ func (tx *TenantTx) ClaimRotationJob(id, state string, now, leaseUntil time.Time
 	return n == 1, err
 }
 
-// UpdateRotationJob writes j's progress if the job is still in state from
+// UpdateRotationJob writes j's progress (and the old credential's reference,
+// which an adapter may narrow once the rotation starts) if the job is still in state from
 // (ErrStateConflict otherwise) and releases its lease.
 func (tx *TenantTx) UpdateRotationJob(j *RotationJob, from string, now time.Time) error {
 	res, err := tx.exec(rotJobsUpdate, sql.Named("state", j.State), sql.Named("failed_state", SP(j.FailedState)),
-		sql.Named("new_ref", SP(j.NewRef)), sql.Named("attempts", j.Attempts), sql.Named("last_error", SP(j.LastError)),
+		sql.Named("old_ref", j.OldRef), sql.Named("new_ref", SP(j.NewRef)), sql.Named("attempts", j.Attempts), sql.Named("last_error", SP(j.LastError)),
 		sql.Named("next_step_at", RT(j.NextStepAt)), sql.Named("handed_over_at", RTP(j.HandedOverAt)),
 		sql.Named("disabled_at", RTP(j.DisabledAt)), sql.Named("verified_at", RTP(j.VerifiedAt)),
 		sql.Named("completed_at", RTP(j.CompletedAt)), sql.Named("verification", SP(j.Verification)),
