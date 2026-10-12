@@ -138,6 +138,15 @@ func (d *DB) Checkpoint(ctx context.Context) error {
 	return err
 }
 
+// Snapshot writes a transactionally consistent copy of the whole database to
+// path with VACUUM INTO, while the server keeps serving. path must not exist.
+func (d *DB) Snapshot(ctx context.Context, path string) error {
+	if _, err := d.sql.ExecContext(ctx, "VACUUM INTO ?", path); err != nil {
+		return fmt.Errorf("store: snapshot: %w", err)
+	}
+	return nil
+}
+
 // Migrate creates the schema and the reserved _platform tenant; drop=true
 // drops every table first (reseed). A database created before tenancy is
 // refused with ErrLegacySchema unless drop is set.
