@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"encoding/json"
 	"net/http"
 	"slices"
 	"time"
@@ -225,6 +226,28 @@ const (
 // ActivationSettings are the tenant settings that move role floors (§18.3).
 type ActivationSettings struct {
 	RequirePhrForAll bool // require_phr_for_all: raises the floor of every role to phr
+}
+
+// TenantSettings reads the activation settings from a tenant's settings
+// JSON (Tenant.Settings, §18.3). Keys other PRs own are ignored. Settings
+// that cannot be read fail closed: the strictest floors apply, so a damaged
+// row never lowers what a role needs.
+func TenantSettings(raw string) ActivationSettings {
+	strict := ActivationSettings{RequirePhrForAll: true}
+	if raw == "" {
+		return ActivationSettings{}
+	}
+	var v map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &v); err != nil || v == nil {
+		return strict
+	}
+	var s ActivationSettings
+	if b, ok := v["require_phr_for_all"]; ok {
+		if err := json.Unmarshal(b, &s.RequirePhrForAll); err != nil {
+			return strict
+		}
+	}
+	return s
 }
 
 // RoleFloor is the AuthnContext a role needs to be active (§12.2).

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/netip"
 	"slices"
 	"strings"
 
@@ -32,13 +33,33 @@ import (
 // through the same normalization as a real login, so roles activate the same
 // way (admin roles need the passkey or hardware key). PR7 removes both routes.
 //
-// Guard rails: the routes are registered only with TESSERA_ENV=dev or test
-// (cmd/tessera refuses prod with a dev IdP URL or a dev_mock connection,
-// §18.4); POST needs a JSON body and an allowed Origin (login CSRF); every
-// attempt is audited (auth.login.success or auth.login.failure).
+// Guard rails: the routes are registered only with TESSERA_ENV=dev, or with
+// TESSERA_ENV=test plus the explicit opt-in TESSERA_DEV_LOGIN=1, and a test
+// server answers them only to a loopback peer (cmd/tessera refuses prod with
+// a dev IdP URL, a dev_mock connection or TESSERA_DEV_LOGIN, §18.4). The
+// picker lists one named tenant's users, never every tenant's. POST needs a
+// JSON body and an allowed Origin (login CSRF); every attempt is audited
+// (auth.login.success or auth.login.failure).
 
-// devLoginEnabled reports whether the environment allows dev sign-in.
-func devLoginEnabled(env string) bool { return env == "dev" || env == "test" }
+// devLoginEnabled reports whether the routes are registered: always in dev,
+// in test only with the opt-in.
+func (s *Server) devLoginEnabled() bool {
+	return s.cfg.Env == "dev" || (s.cfg.Env == "test" && s.cfg.DevLogin)
+}
+
+// devLoginAllowed reports whether this request may use dev sign-in: a test
+// server serves it to loopback peers only (the TCP peer; forwarding headers
+// are not trusted).
+func (s *Server) devLoginAllowed(r *http.Request) bool {
+	if !s.devLoginEnabled() {
+		return false
+	}
+	if s.cfg.Env == "dev" {
+		return true
+	}
+	ap, err := netip.ParseAddrPort(r.RemoteAddr)
+	return err == nil && ap.Addr().Unmap().IsLoopback()
+}
 
 // devMethods are the dev IdP's sign-in methods (users.yaml authenticators)
 // and what the Okta emulation returns for each when phr was requested.
@@ -76,56 +97,65 @@ func devConnection(tx *store.TenantTx) (*store.IdPConnection, error) {
 	return nil, store.ErrNotFound
 }
 
-// devLoginUsers is GET /api/auth/dev-login: the users of every active
-// tenant's dev_mock connection, for the dev sign-in picker.
+// devLoginUsers is GET /api/auth/dev-login?tenant=<slug>: the users of that
+// tenant's dev_mock connection, for the dev sign-in picker. An unknown or
+// inactive tenant lists no users (the same answer as a tenant without a dev
+// connection), and no other tenant's users are ever listed.
 func (s *Server) devLoginUsers(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
-	if !devLoginEnabled(s.cfg.Env) {
+	if !s.devLoginAllowed(r) {
 		return nil, errStatus(http.StatusNotFound, "Not Found")
 	}
-	tenants, err := s.store.ActiveTenants(r.Context())
+	methods := ojson.Object{{Key: "methods", Value: []string{"passkey", "hardware_key", "password_otp", "password"}}}
+	out := []ojson.Object{}
+	slug := r.URL.Query().Get("tenant")
+	var t store.Tenant
+	err := s.store.ReadSystem(r.Context(), "dev login tenant", func(st *store.SystemTx) error {
+		var err error
+		t, err = st.TenantBySlug(slug)
+		return err
+	})
+	if errors.Is(err, store.ErrNotFound) || (err == nil && (t.Status != "active" || t.ID == tenancy.Platform)) {
+		return append(ojson.Object{{Key: "users", Value: out}}, methods...), nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	out := []ojson.Object{}
-	for _, t := range tenants {
-		err := s.store.ReadTenant(r.Context(), t.ID, func(tx *store.TenantTx) error {
-			conn, err := devConnection(tx)
-			if errors.Is(err, store.ErrNotFound) {
-				return nil
-			}
-			if err != nil {
-				return err
-			}
-			users, err := tx.PlatformUsers()
-			if err != nil {
-				return err
-			}
-			for _, u := range users {
-				logins, err := tx.ExternalLoginsForUser(u.ID)
-				if err != nil {
-					return err
-				}
-				i := slices.IndexFunc(logins, func(l *store.ExternalLogin) bool { return l.IdPConnectionID == conn.ID })
-				if i < 0 || u.Status != "active" {
-					continue
-				}
-				as, err := tx.RoleAssignments(u.ID)
-				if err != nil {
-					return err
-				}
-				out = append(out, ojson.Object{{Key: "tenant", Value: t.Slug}, {Key: "tenant_name", Value: t.Name},
-					{Key: "subject", Value: logins[i].Subject}, {Key: "email", Value: u.Email},
-					{Key: "display_name", Value: u.DisplayName},
-					{Key: "roles", Value: roleNames(auth.AssignedRoles(as, s.clock()).Sorted())}})
-			}
+	err = s.store.ReadTenant(r.Context(), t.ID, func(tx *store.TenantTx) error {
+		conn, err := devConnection(tx)
+		if errors.Is(err, store.ErrNotFound) {
 			return nil
-		})
-		if err != nil {
-			return nil, err
 		}
+		if err != nil {
+			return err
+		}
+		users, err := tx.PlatformUsers()
+		if err != nil {
+			return err
+		}
+		for _, u := range users {
+			logins, err := tx.ExternalLoginsForUser(u.ID)
+			if err != nil {
+				return err
+			}
+			i := slices.IndexFunc(logins, func(l *store.ExternalLogin) bool { return l.IdPConnectionID == conn.ID })
+			if i < 0 || u.Status != "active" {
+				continue
+			}
+			as, err := tx.RoleAssignments(u.ID)
+			if err != nil {
+				return err
+			}
+			out = append(out, ojson.Object{{Key: "tenant", Value: t.Slug}, {Key: "tenant_name", Value: t.Name},
+				{Key: "subject", Value: logins[i].Subject}, {Key: "email", Value: u.Email},
+				{Key: "display_name", Value: u.DisplayName},
+				{Key: "roles", Value: roleNames(auth.AssignedRoles(as, s.clock()).Sorted())}})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	return ojson.Object{{Key: "users", Value: out},
-		{Key: "methods", Value: []string{"passkey", "hardware_key", "password_otp", "password"}}}, nil
+	return append(ojson.Object{{Key: "users", Value: out}}, methods...), nil
 }
 
 // devLoginFailure audits a refused dev sign-in in the tenant's chain (or the
@@ -154,7 +184,7 @@ func truncate(v string, n int) string {
 
 // devLogin is POST /api/auth/dev-login.
 func (s *Server) devLogin(w http.ResponseWriter, r *http.Request, _ *params) (any, error) {
-	if !devLoginEnabled(s.cfg.Env) {
+	if !s.devLoginAllowed(r) {
 		return nil, errStatus(http.StatusNotFound, "Not Found")
 	}
 	if !jsonContentType(r) {
@@ -252,9 +282,29 @@ func (s *Server) devLogin(w http.ResponseWriter, r *http.Request, _ *params) (an
 	rec := &store.AuthnContextRecord{ID: uuid.New()}
 	summary := (&auth.Principal{Authn: &auth.AuthnContext{ID: rec.ID, AAL: res.AAL, PhishingResistant: res.PhishingResistant,
 		TesseraACR: auth.ACR(res.TesseraACR), AuthTime: res.AuthTime}}).AuditAuthn(now)
+	// Signing in again replaces the browser's previous session (§11): it is
+	// revoked, in its own tenant, with the new session's creation when that
+	// is the same tenant, and on the system's behalf before it otherwise.
+	prevTenant, prevSID, hadSession, err := s.authn.RequestSession(r)
+	if err != nil {
+		return nil, err
+	}
+	if hadSession && prevTenant != tenant.ID {
+		if err := s.store.InTenant(audit.AsSystem(ctx, "auth.login"), prevTenant, func(tx *store.TenantTx) error {
+			_, err := auth.RevokeReplaced(audit.AsSystem(ctx, "auth.login"), tx, prevSID, now)
+			return err
+		}); err != nil {
+			return nil, err
+		}
+	}
 	ctx = audit.SetPrincipal(ctx, audit.Principal{Tenant: tenant.ID, Actor: actor, Authn: summary})
 	var issued auth.Issued
 	err = s.store.InTenant(ctx, tenant.ID, func(tx *store.TenantTx) error {
+		if hadSession && prevTenant == tenant.ID {
+			if _, err := auth.RevokeReplaced(ctx, tx, prevSID, now); err != nil {
+				return err
+			}
+		}
 		acr := res.ACR
 		ip, ua := clientAddr(r), userAgent(r)
 		*rec = store.AuthnContextRecord{ID: rec.ID, UserID: user.ID, IdPConnectionID: &conn.ID, Protocol: "oidc", Purpose: "login",
@@ -266,7 +316,8 @@ func (s *Server) devLogin(w http.ResponseWriter, r *http.Request, _ *params) (an
 			return err
 		}
 		var err error
-		issued, err = auth.CreateSession(tx, auth.SessionInput{User: user, Authn: rec, Now: now, IP: ip, UA: ua})
+		issued, err = auth.CreateSession(tx, auth.SessionInput{User: user, Authn: rec, Now: now, IP: ip, UA: ua,
+			Settings: auth.TenantSettings(tenant.Settings)})
 		if err != nil {
 			return err
 		}

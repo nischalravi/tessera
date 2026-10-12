@@ -1181,6 +1181,15 @@ func (s *Server) jitDecide(action string) handlerFunc {
 		default:
 			rq, err = jit.Revoke(c, id, by, now)
 		}
+		if errors.Is(err, jit.ErrSelfApproval) {
+			// nothing changed; the refusal itself is evidence of the control
+			if err := c.Audit(now, by.Display, "jit.approve.refused", ojson.Object{{Key: "request_id", Value: id},
+				{Key: "reason", Value: "self_approval"}}); err != nil {
+				return nil, err
+			}
+			return statusBody{http.StatusForbidden, ojson.Object{{Key: "error", Value: "self_approval"},
+				{Key: "detail", Value: "You cannot approve your own request; another approver must decide it."}}}, nil
+		}
 		if err != nil {
 			return nil, asJitError(err)
 		}

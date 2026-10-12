@@ -1,16 +1,20 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/audit"
+	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
@@ -48,6 +52,7 @@ const (
 	RevokedUserDisabled = "user_disabled"
 	RevokedIdPDisabled  = "idp_disabled"
 	RevokedRTReuse      = "rt_reuse"
+	RevokedReplaced     = "replaced" // the browser signed in again
 )
 
 // secretBytes is the size of session secrets and CSRF secrets.
@@ -217,6 +222,20 @@ func RotateSession(tx *store.TenantTx, sid, ctxID uuid.UUID, settings Activation
 // RevokeSession revokes one active session.
 func RevokeSession(tx *store.TenantTx, sid uuid.UUID, reason string, now time.Time) error {
 	return tx.RevokeSession(sid, reason, now.UTC())
+}
+
+// RevokeReplaced revokes the session a browser held when it signed in again
+// (in tx, the session's tenant) and records auth.session.revoke. A session
+// that is no longer active is left alone; ok reports whether one was revoked.
+func RevokeReplaced(ctx context.Context, tx *store.TenantTx, sid uuid.UUID, now time.Time) (ok bool, err error) {
+	if err := tx.RevokeSession(sid, RevokedReplaced, now.UTC()); errors.Is(err, store.ErrSessionInactive) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	_, err = audit.Record(ctx, tx, "auth.session.revoke", ojson.Object{{Key: "session_id", Value: sid.String()},
+		{Key: "reason", Value: RevokedReplaced}}, audit.At(now), audit.Target("session", sid.String()))
+	return err == nil, err
 }
 
 // RevokeUserSessions revokes every active session of a user (user disabled,

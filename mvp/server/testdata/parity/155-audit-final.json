@@ -442,7 +442,7 @@
    {
     "id": 105,
     "at": "2026-10-08T09:30:00",
-    "actor": "security-oncall@larkspur.example",
+    "actor": "requester@larkspur.example",
     "action": "jit.request",
     "detail": {
      "request_id": 7,
@@ -452,12 +452,12 @@
     "event_id": "<uuid>",
     "seq": 105,
     "actor_type": "user",
-    "actor_id": "00000000-0000-4000-8000-0000000000c1",
+    "actor_id": "00000000-0000-4000-8000-0000000000c3",
     "outcome": "success",
     "target": null,
     "request_id": "<uuid>",
     "authn": {
-     "ctx_id": "00000000-0000-4000-8000-0000000000c2",
+     "ctx_id": "00000000-0000-4000-8000-0000000000c4",
      "aal": 2,
      "phr": true,
      "acr": "urn:tessera:acr:phr",
@@ -471,7 +471,7 @@
    {
     "id": 95,
     "at": "2026-10-08T09:30:00",
-    "actor": "security-oncall@larkspur.example",
+    "actor": "requester@larkspur.example",
     "action": "jit.request",
     "detail": {
      "request_id": 6,
@@ -481,12 +481,12 @@
     "event_id": "<uuid>",
     "seq": 95,
     "actor_type": "user",
-    "actor_id": "00000000-0000-4000-8000-0000000000c1",
+    "actor_id": "00000000-0000-4000-8000-0000000000c3",
     "outcome": "success",
     "target": null,
     "request_id": "<uuid>",
     "authn": {
-     "ctx_id": "00000000-0000-4000-8000-0000000000c2",
+     "ctx_id": "00000000-0000-4000-8000-0000000000c4",
      "aal": 2,
      "phr": true,
      "acr": "urn:tessera:acr:phr",
@@ -500,7 +500,7 @@
    {
     "id": 93,
     "at": "2026-10-08T09:30:00",
-    "actor": "security-oncall@larkspur.example",
+    "actor": "requester@larkspur.example",
     "action": "jit.request",
     "detail": {
      "request_id": 5,
@@ -510,12 +510,12 @@
     "event_id": "<uuid>",
     "seq": 93,
     "actor_type": "user",
-    "actor_id": "00000000-0000-4000-8000-0000000000c1",
+    "actor_id": "00000000-0000-4000-8000-0000000000c3",
     "outcome": "success",
     "target": null,
     "request_id": "<uuid>",
     "authn": {
-     "ctx_id": "00000000-0000-4000-8000-0000000000c2",
+     "ctx_id": "00000000-0000-4000-8000-0000000000c4",
      "aal": 2,
      "phr": true,
      "acr": "urn:tessera:acr:phr",

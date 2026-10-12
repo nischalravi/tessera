@@ -33,10 +33,28 @@ const (
 // Authenticator resolves the session cookie of a request to a Principal
 // (design §12.4, cookie path; the DPoP token path arrives in PR10).
 type Authenticator struct {
-	DB       *store.DB
-	Clock    func() time.Time
-	Cookies  Cookies
-	Settings ActivationSettings
+	DB      *store.DB
+	Clock   func() time.Time
+	Cookies Cookies
+}
+
+// RequestSession returns the tenant and id of the session the request's
+// cookie names, whatever its state; ok is false without such a session.
+func (a *Authenticator) RequestSession(r *http.Request) (t tenancy.ID, sid uuid.UUID, ok bool, err error) {
+	c, err := r.Cookie(a.Cookies.Name())
+	if err != nil || c.Value == "" || len(c.Value) > 128 {
+		return t, sid, false, nil
+	}
+	hash := HashSecret(c.Value)
+	err = a.DB.ReadSystem(r.Context(), "session lookup", func(s *store.SystemTx) error {
+		var err error
+		t, sid, err = s.LookupSessionBySecretHash(hash)
+		return err
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		return t, sid, false, nil
+	}
+	return t, sid, err == nil, err
 }
 
 // Authenticate returns the request's principal, or "" and a failure reason
@@ -125,7 +143,8 @@ func (a *Authenticator) Authenticate(r *http.Request) (*Principal, string, error
 		}
 		authn := ContextFromRecord(rec)
 		assigned := AssignedRoles(as, now)
-		active, inactive := ActivateRoles(assigned, &authn, a.Settings, now)
+		// the floors of the session's own tenant (§18.3), read with the session
+		active, inactive := ActivateRoles(assigned, &authn, TenantSettings(tenant.Settings), now)
 		uid, sessID := u.ID, s.ID
 		display := u.DisplayName
 		if u.Email != nil && *u.Email != "" {

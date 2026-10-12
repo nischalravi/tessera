@@ -288,6 +288,22 @@ func TestAuthSchemaRules(t *testing.T) {
 				AAL: 2, PhishingResistant: true, PhrBasis: "none", TesseraACR: "urn:tessera:acr:phr", AuthTime: now,
 				MappingProfile: "x", MappingVersion: 1, ClaimsSHA256: "x", CreatedAt: now})
 		},
+		"break-glass enrolment without a change request": func(c *store.TenantTx) error {
+			return c.InsertRoleAssignment(&store.RoleAssignment{UserID: b.user.ID, Role: store.RoleBreakGlass,
+				Source: store.RoleSourceManual, CreatedAt: now})
+		},
+		"break-glass role from the break-glass source without a change request": func(c *store.TenantTx) error {
+			return c.InsertRoleAssignment(&store.RoleAssignment{UserID: b.user.ID, Role: store.RoleBreakGlass,
+				Source: store.RoleSourceBreakGlass, CreatedAt: now})
+		},
+		"a login transaction returning off-site with a backslash": func(c *store.TenantTx) error {
+			return c.InsertLoginTransaction(&store.LoginTransaction{CookieHash: hexHash('u'), IdPConnectionID: b.conn.ID,
+				Purpose: "login", ReturnTo: "/\\evil.example/", CreatedAt: now, ExpiresAt: now})
+		},
+		"a login transaction returning to a path with a control character": func(c *store.TenantTx) error {
+			return c.InsertLoginTransaction(&store.LoginTransaction{CookieHash: hexHash('v'), IdPConnectionID: b.conn.ID,
+				Purpose: "login", ReturnTo: "/\t/evil.example/", CreatedAt: now, ExpiresAt: now})
+		},
 		"a login transaction returning off-site": func(c *store.TenantTx) error {
 			return c.InsertLoginTransaction(&store.LoginTransaction{CookieHash: hexHash('t'), IdPConnectionID: b.conn.ID,
 				Purpose: "login", ReturnTo: "//evil.example/", CreatedAt: now, ExpiresAt: now})

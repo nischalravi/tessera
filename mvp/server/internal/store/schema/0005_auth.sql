@@ -81,7 +81,8 @@ CREATE TABLE IF NOT EXISTS role_assignments (
   UNIQUE (tenant_id, user_id, role, source),
   -- E1: IdP groups never confer admin roles; admin roles need a change request or bootstrap
   CHECK (NOT (source = 'idp_group' AND role IN ('policy_admin','tenant_admin','break_glass'))),
-  CHECK (role NOT IN ('policy_admin','tenant_admin') OR source = 'bootstrap' OR change_request_id IS NOT NULL)
+  -- admin roles and break-glass enrolment need a two-person change request (§15)
+  CHECK (role NOT IN ('policy_admin','tenant_admin','break_glass') OR source = 'bootstrap' OR change_request_id IS NOT NULL)
 );
 CREATE INDEX IF NOT EXISTS role_assignments_user ON role_assignments(tenant_id, user_id);
 
@@ -145,7 +146,11 @@ CREATE TABLE IF NOT EXISTS login_transactions (
   session_id TEXT, expected_external_login_id TEXT, device_grant_id TEXT, bootstrap_invitation_id TEXT,
   return_to TEXT NOT NULL DEFAULT '/',
   created_at TEXT NOT NULL, expires_at TEXT NOT NULL, consumed_at TEXT,
-  CHECK (substr(return_to, 1, 1) = '/' AND substr(return_to, 1, 2) <> '//')
+  -- a same-site path: starts with one '/', no backslash (browsers read '/\x'
+  -- as '//x'), no control characters; store.ValidReturnTo checks the same in Go
+  CHECK (substr(return_to, 1, 1) = '/' AND substr(return_to, 1, 2) <> '//' AND length(return_to) <= 2048
+    AND instr(return_to, char(92)) = 0
+    AND NOT (return_to GLOB ('*[' || char(1) || '-' || char(31) || char(127) || ']*')))
 );
 CREATE INDEX IF NOT EXISTS login_transactions_tenant ON login_transactions(tenant_id);
 

@@ -46,7 +46,9 @@ func newIsolationServer(f *storetest.Fixture) *Server {
 		},
 		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 		AllowedOrigins: []string{"http://localhost:5173"},
-		Env:            "test", // registers the dev sign-in routes, so coverage tests see them
+		Env:            "test", // with DevLogin, registers the dev sign-in routes, so coverage tests see them
+		DevLogin:       true,
+		RateLimits:     noRateLimits, // the coverage tests send hundreds of anonymous requests
 	})
 }
 

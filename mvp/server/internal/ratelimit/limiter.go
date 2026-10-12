@@ -6,8 +6,9 @@
 // with a full bucket, which is the accepted trade-off of a bounded
 // in-process limiter; a shared store (Valkey) replaces it in production (§21).
 //
-// The callers (the /token, /device_authorization and device-verify
-// endpoints, home-realm discovery) arrive in PR6 and PR10.
+// The API limits anonymous and /api/auth/* requests per IP before they reach
+// the audit ledger (internal/api ratelimit.go); the /token,
+// /device_authorization and device-verify limits arrive in PR10.
 package ratelimit
 
 import (
@@ -65,6 +66,21 @@ func (l *Limiter) AllowAt(key string, now time.Time) bool {
 		}
 	}
 	return lim.AllowN(now, 1)
+}
+
+// Exhausted reports whether key's bucket is empty now (no event would be
+// allowed), without taking a token. An untracked key is not exhausted.
+func (l *Limiter) Exhausted(key string) bool { return l.ExhaustedAt(key, time.Now()) }
+
+// ExhaustedAt is Exhausted at now.
+func (l *Limiter) ExhaustedAt(key string, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	el, ok := l.keys[key]
+	if !ok {
+		return false
+	}
+	return el.Value.(*entry).lim.TokensAt(now) < 1
 }
 
 // Len returns the number of tracked keys.

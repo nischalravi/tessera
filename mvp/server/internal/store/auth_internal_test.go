@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -57,6 +58,50 @@ func TestAuthnContextsImmutable(t *testing.T) {
 		}
 		if _, err := db.sql.ExecContext(ctx, q); err == nil || !strings.Contains(err.Error(), "immutable") {
 			t.Errorf("%s: %v, want refused", q, err)
+		}
+	}
+}
+
+// TestValidReturnTo: only same-site paths are post-login redirect targets.
+func TestValidReturnTo(t *testing.T) {
+	ok := []string{"/", "/identities", "/jit?status=pending#top", "/a/b%2Fc", "/café", "/a//b"}
+	bad := []string{"", "identities", "//evil.example", "///evil.example", "/\\evil.example", "/x\\y", "\\\\evil",
+		"/\tevil", "/a\nb", "/a\rb", "/a\x00b", "/a\x7fb", "/a\u0085b", "/a\u009bb", "https://evil.example/",
+		"/%zz", "/?", "/" + strings.Repeat("a", MaxReturnToLen), "/\xff"}
+	for _, p := range ok {
+		if !ValidReturnTo(p) {
+			t.Errorf("refused %q", p)
+		}
+	}
+	for _, p := range bad {
+		if ValidReturnTo(p) {
+			t.Errorf("accepted %q", p)
+		}
+	}
+}
+
+// TestReturnToSchemaCheck: the schema refuses an unsafe return_to even when
+// the Go check is bypassed.
+func TestReturnToSchemaCheck(t *testing.T) {
+	db := openTest(t)
+	ctx := context.Background()
+	if _, err := db.sql.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+		t.Fatal(err)
+	}
+	insert := func(i int, rt string) error {
+		_, err := db.sql.ExecContext(ctx, `INSERT INTO login_transactions (id, tenant_id, cookie_hash, idp_connection_id,
+			purpose, return_to, created_at, expires_at) VALUES (?, '00000000-0000-0000-0000-000000000001', ?, 'c', 'login', ?, 't', 't')`,
+			fmt.Sprintf("lt%d", i), fmt.Sprintf("%064d", i), rt)
+		return err
+	}
+	for i, rt := range []string{"/", "/jit?x=1", "/café"} {
+		if err := insert(i, rt); err != nil {
+			t.Errorf("%q: %v", rt, err)
+		}
+	}
+	for i, rt := range []string{"//evil", "/\\evil", "x", "/a\tb", "/a\nb", "/a\x1fb", "/a\x7fb", "/" + strings.Repeat("a", 2048)} {
+		if err := insert(100+i, rt); err == nil || !strings.Contains(err.Error(), "CHECK") {
+			t.Errorf("%q: %v, want a CHECK failure", rt, err)
 		}
 	}
 }

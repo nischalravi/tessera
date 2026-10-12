@@ -277,6 +277,12 @@ func TestSecurityHeaders(t *testing.T) {
 // connection and its bootstrap users.
 func devLoginServer(t *testing.T, env string) (*Server, *store.DB) {
 	t.Helper()
+	return devLoginServerOpt(t, env, false)
+}
+
+// devLoginServerOpt is devLoginServer with TESSERA_DEV_LOGIN.
+func devLoginServerOpt(t *testing.T, env string, optIn bool) (*Server, *store.DB) {
+	t.Helper()
 	db := testkit.Open(t)
 	conns := []connectors.Connector{connectors.Tiny{Now: testkit.Now}}
 	tenants := seed.WithDevIdP([]seed.Tenant{
@@ -287,7 +293,7 @@ func devLoginServer(t *testing.T, env string) (*Server, *store.DB) {
 		t.Fatal(err)
 	}
 	return New(Config{Store: db, Clock: timeutil.Frozen(testkit.Now), Policies: policy.NewLoader(policies.FS), Env: env,
-		AllowedOrigins: []string{authtest.Origin}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}), db
+		DevLogin: optIn, AllowedOrigins: []string{authtest.Origin}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}), db
 }
 
 func devLogin(h http.Handler, body, origin string) *httptest.ResponseRecorder {
@@ -317,10 +323,19 @@ func sessionCookie(t *testing.T, rec *httptest.ResponseRecorder) *http.Cookie {
 func TestDevLogin(t *testing.T) {
 	srv, db := devLoginServer(t, "dev")
 	h := srv.Handler()
-	// the picker lists the seeded users of both tenants
-	list := decode(t, serve(h, httptest.NewRequest("GET", "/api/auth/dev-login", nil)))
-	if users := at(list, "users").([]any); len(users) != len(seed.LarkspurUsers)+len(seed.GlobexUsers) {
-		t.Errorf("dev users %v", users)
+	// the picker lists the seeded users of the named tenant only
+	for q, want := range map[string]int{"?tenant=larkspur": len(seed.LarkspurUsers), "?tenant=globex": len(seed.GlobexUsers),
+		"": 0, "?tenant=nope": 0, "?tenant=_platform": 0} {
+		list := decode(t, serve(h, httptest.NewRequest("GET", "/api/auth/dev-login"+q, nil)))
+		users := at(list, "users").([]any)
+		if len(users) != want {
+			t.Errorf("%q: %d dev users, want %d", q, len(users), want)
+		}
+		for _, u := range users {
+			if slug := strings.TrimPrefix(q, "?tenant="); u.(map[string]any)["tenant"] != slug {
+				t.Errorf("%q lists a user of another tenant: %v", q, u)
+			}
+		}
 	}
 	for _, tc := range []struct {
 		subject, method string
@@ -420,6 +435,37 @@ func TestDevLoginOnlyInDevAndTest(t *testing.T) {
 	}
 }
 
+// TestDevLoginTestEnvNeedsOptInAndLoopback: with TESSERA_ENV=test the routes
+// exist only with TESSERA_DEV_LOGIN, and then answer loopback peers only.
+func TestDevLoginTestEnvNeedsOptInAndLoopback(t *testing.T) {
+	body := `{"tenant":"larkspur","subject":"00u-alice-admin"}`
+	srv, _ := devLoginServerOpt(t, "test", false)
+	if rec := devLogin(srv.Handler(), body, authtest.Origin); rec.Code != 404 {
+		t.Errorf("test without opt-in: %d", rec.Code)
+	}
+	for _, rt := range srv.Routes() {
+		if strings.Contains(rt.Pattern, "dev-login") {
+			t.Errorf("test without opt-in registers %s %s", rt.Method, rt.Pattern)
+		}
+	}
+	srv, _ = devLoginServerOpt(t, "test", true)
+	h := srv.Handler()
+	for addr, ok := range map[string]bool{"127.0.0.1:5555": true, "[::1]:5555": true, "[::ffff:127.0.0.1]:5555": true,
+		"192.0.2.1:1234": false, "10.0.0.7:80": false, "[2001:db8::1]:443": false, "garbage": false} {
+		post := httptest.NewRequest("POST", "/api/auth/dev-login", strings.NewReader(body))
+		post.Header.Set("Content-Type", "application/json")
+		post.Header.Set("Origin", authtest.Origin)
+		post.Header.Set("X-Forwarded-For", "127.0.0.1") // never trusted
+		post.RemoteAddr = addr
+		get := httptest.NewRequest("GET", "/api/auth/dev-login?tenant=larkspur", nil)
+		get.RemoteAddr = addr
+		pc, gc := serve(h, post).Code, serve(h, get).Code
+		if ok && (pc != 200 || gc != 200) || !ok && (pc != 404 || gc != 404) {
+			t.Errorf("%s: POST %d GET %d (allowed %v)", addr, pc, gc, ok)
+		}
+	}
+}
+
 // TestIsolation_SessionTenantOnly: a user of tenant A reaches only A's data,
 // whatever tenant the request names; B's objects are not found.
 func TestIsolation_SessionTenantOnly(t *testing.T) {
@@ -443,5 +489,144 @@ func TestIsolation_SessionTenantOnly(t *testing.T) {
 	both.AddCookie(la.Cookie)
 	if rec := serve(h, both); rec.Code != 200 || leaks(rec.Body.String()) {
 		t.Errorf("two cookies: %d leaks=%t", rec.Code, leaks(rec.Body.String()))
+	}
+}
+
+// TestJITSelfApprovalRefused: neither the platform user who made a JIT
+// request nor the one linked to the identity that would get the access can
+// approve it (403 self_approval, audited, nothing granted); another approver
+// can.
+func TestJITSelfApprovalRefused(t *testing.T) {
+	srv := newSeededServer(t) // the demo company; Priya (33) may request BreakGlassAdmin (24)
+	h := srv.Anonymous()
+	// the requester holds jit.decide too (operator), so only the self check stops them
+	rec := serve(h, authed(srv.requester, "POST", "/api/jit/requests", `{"identity_id":33,"group_id":24,"justification":"incident"}`))
+	if rec.Code != 200 {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
+	}
+	id := int(decode(t, rec)["id"].(float64))
+	path := fmt.Sprintf("/api/jit/requests/%d/approve", id)
+	rec = serve(h, authed(srv.requester, "POST", path, ""))
+	if rec.Code != 403 || !strings.Contains(rec.Body.String(), `"self_approval"`) {
+		t.Fatalf("self-approval: %d %s", rec.Code, rec.Body.String())
+	}
+	refused := false
+	for _, e := range ledger(t, srv.store, seed.LarkspurID) {
+		if e.Action == "jit.approve.refused" && strings.Contains(string(e.Detail), "self_approval") &&
+			e.ActorID != nil && *e.ActorID == parityRequester.ID.String() {
+			refused = true
+		}
+		if e.Action == "jit.approve" && strings.Contains(string(e.Detail), fmt.Sprintf(`"request_id":%d,`, id)) {
+			t.Error("self-approval wrote jit.approve")
+		}
+	}
+	if !refused {
+		t.Error("no jit.approve.refused event attributed to the requester")
+	}
+	// nor can the person who would get the access (Priya's own platform user)
+	priyaID := int64(33)
+	priya := signIn(t, srv.store, seed.LarkspurID, authtest.User{Email: "priya.ramaswamy@larkspur.example", Display: "Priya",
+		Roles: []auth.Role{auth.RolePolicyAdmin}, IdentityID: &priyaID}, authtest.Phr, FrozenNow)
+	if rec := serve(h, authed(priya, "POST", path, "")); rec.Code != 403 || !strings.Contains(rec.Body.String(), `"self_approval"`) {
+		t.Fatalf("approval by the beneficiary: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = serve(h, authed(srv.login, "POST", path, ""))
+	if rec.Code != 200 || decode(t, rec)["status"] != "approved" {
+		t.Fatalf("approval by another user: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestTenantSettingsRaiseRoleFloor (§18.3): a tenant's require_phr_for_all
+// is applied to its own sessions on every request: an operator signed in
+// with AAL2 has an inactive role there, and is unaffected in another tenant.
+func TestTenantSettingsRaiseRoleFloor(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	h := newIsolationServer(f).Handler()
+	op := authtest.User{Email: "op@x.example", Display: "Op", Roles: []auth.Role{auth.RoleOperator}}
+	la := signIn(t, f.DB, f.A.ID, op, authtest.AAL2, storetest.Now)
+	lb := signIn(t, f.DB, f.B.ID, op, authtest.AAL2, storetest.Now)
+	if err := f.DB.InSystem(context.Background(), "test settings", func(st *store.SystemTx) error {
+		return st.SetTenantSettings(f.B.ID, `{"require_phr_for_all":true}`)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	active := func(l authtest.Login) string {
+		v := decode(t, serve(h, authed(l, "GET", "/api/auth/session", "")))
+		b, _ := json.Marshal(at(v, "active_roles"))
+		return string(b)
+	}
+	if got := active(la); !strings.Contains(got, "operator") {
+		t.Errorf("tenant A (default settings): active roles %s", got)
+	}
+	if got := active(lb); strings.Contains(got, "operator") {
+		t.Errorf("tenant B (require_phr_for_all): active roles %s", got)
+	}
+	if rec := serve(h, authed(lb, "GET", "/api/identities", "")); rec.Code != 403 || !strings.Contains(rec.Body.String(), "role_inactive") {
+		t.Errorf("tenant B operator without phr: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := serve(h, authed(la, "GET", "/api/identities", "")); rec.Code != 200 {
+		t.Errorf("tenant A operator: %d", rec.Code)
+	}
+	pb := signIn(t, f.DB, f.B.ID, authtest.User{Email: "op2@x.example", Roles: []auth.Role{auth.RoleOperator}}, authtest.Phr, storetest.Now)
+	if got := active(pb); !strings.Contains(got, "operator") {
+		t.Errorf("tenant B operator with phr: active roles %s", got)
+	}
+}
+
+// TestDevLoginRevokesPreviousSession: signing in again revokes the session
+// the browser still held, in its own tenant, with auth.session.revoke.
+func TestDevLoginRevokesPreviousSession(t *testing.T) {
+	srv, db := devLoginServer(t, "dev")
+	h := srv.Handler()
+	login := func(body string, prev *http.Cookie) *http.Cookie {
+		t.Helper()
+		r := httptest.NewRequest("POST", "/api/auth/dev-login", strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Origin", authtest.Origin)
+		if prev != nil {
+			r.AddCookie(prev)
+		}
+		rec := serve(h, r)
+		if rec.Code != 200 {
+			t.Fatalf("%s: %d %s", body, rec.Code, rec.Body.String())
+		}
+		return sessionCookie(t, rec)
+	}
+	sessionCode := func(c *http.Cookie) int {
+		r := httptest.NewRequest("GET", "/api/auth/session", nil)
+		r.AddCookie(c)
+		return serve(h, r).Code
+	}
+	revokes := func(id tenancy.ID) []*store.AuditEvent {
+		var out []*store.AuditEvent
+		for _, e := range ledger(t, db, id) {
+			if e.Action == "auth.session.revoke" && strings.Contains(string(e.Detail), `"replaced"`) {
+				out = append(out, e)
+			}
+		}
+		return out
+	}
+	alice := login(`{"tenant":"larkspur","subject":"00u-alice-admin"}`, nil)
+	ivan := login(`{"tenant":"larkspur","subject":"00u-ivan-admin2"}`, alice)
+	if sessionCode(alice) != 401 || sessionCode(ivan) != 200 {
+		t.Errorf("same tenant: old session %d, new %d", sessionCode(alice), sessionCode(ivan))
+	}
+	if ev := revokes(seed.LarkspurID); len(ev) != 1 || ev[0].ActorType != store.ActorUser {
+		t.Errorf("same tenant: revoke events %+v", ev)
+	}
+	gina := login(`{"tenant":"globex","subject":"00u-gina-globex"}`, ivan)
+	if sessionCode(ivan) != 401 || sessionCode(gina) != 200 {
+		t.Errorf("other tenant: old session %d, new %d", sessionCode(ivan), sessionCode(gina))
+	}
+	if ev := revokes(seed.LarkspurID); len(ev) != 2 || ev[0].ActorType != store.ActorSystem {
+		t.Errorf("other tenant: revoke events in the old tenant %+v", ev)
+	}
+	if ev := revokes(seed.GlobexID); len(ev) != 0 {
+		t.Errorf("other tenant: revoke recorded in the new tenant's chain: %+v", ev)
+	}
+	// an already revoked cookie is ignored
+	login(`{"tenant":"larkspur","subject":"00u-alice-admin"}`, ivan)
+	if ev := revokes(seed.LarkspurID); len(ev) != 2 {
+		t.Errorf("revoked again: %d events", len(ev))
 	}
 }

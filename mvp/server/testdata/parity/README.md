@@ -92,7 +92,11 @@ request with that session's cookie, an allowed `Origin` and the CSRF token:
   unchanged wherever the recording used the default;
 * its user id (`00000000-0000-4000-8000-0000000000c1`) and authentication
   context id (`…00c2`) are fixed, so the audit rows of `155-audit-final`
-  are reproducible.
+  are reproducible;
+* JIT requests (`POST /api/jit/requests`) are sent by a second principal,
+  `requester@larkspur.example` (an operator, user id `…00c3`, context
+  `…00c4`), because a requester may not approve their own request (403
+  `self_approval`) and the fixtures approve the requests they create.
 
 Signing in writes no audit event, so the ledger ids (`id`, `seq`) of the
 audit fixtures are the recorded ones.
@@ -124,8 +128,11 @@ other), and the JIT decision route is split into three routes.
   and `authn` is the authentication summary (`ctx_id`, `aal` 2, `phr`
   true, `acr` `urn:tessera:acr:phr`, `auth_time`, `auth_age_s` 0).
   `detail.claimed_actor` is gone: the client can no longer claim an actor,
-  so there is nothing to keep. Events written by the seed (`system`) are
-  unchanged, and so are every `id` and `seq`.
+  so there is nothing to keep. The three `jit.request` events written by
+  the replay (seq 93, 95, 105) are attributed to the requester
+  (`requester@larkspur.example`, `…00c3`, `authn.ctx_id` `…00c4`), the
+  other domain events to `security-oncall@larkspur.example`. Events written
+  by the seed (`system`) are unchanged, and so are every `id` and `seq`.
 * `158-openapi`: the API description follows the contract:
   `RevokeIn.actor` and `ReviewDecisionIn.reviewer` are removed, the
   `DecisionIn` schema is gone, `/api/jit/requests/{request_id}/{action}`

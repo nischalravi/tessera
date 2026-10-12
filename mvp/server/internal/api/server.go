@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"runtime/debug"
 	"slices"
@@ -71,14 +72,23 @@ type Config struct {
 	// embedded templates and Env).
 	Readiness *readiness.Service
 	// Env is TESSERA_ENV: "dev" allows activating non-demo connector types,
-	// and "dev" and "test" expose POST /api/auth/dev-login (§18.4).
+	// and "dev" exposes /api/auth/dev-login (§18.4).
 	Env string
+	// DevLogin is TESSERA_DEV_LOGIN: with Env "test", the explicit opt-in
+	// that exposes /api/auth/dev-login, to loopback peers only.
+	DevLogin bool
 	// ReadinessScenario selects the simulated validation scenario
 	// (TESSERA_READINESS_SCENARIO; default "gaps").
 	ReadinessScenario string
 	// AuditAnchor is TESSERA_AUDIT_ANCHOR: POST /api/audit/verify checks
 	// checkpoints against it when it is a file:// URL.
 	AuditAnchor string
+	// RateLimits are the per-IP limits on anonymous and /api/auth/*
+	// requests (ratelimit.go); the zero value is the defaults.
+	RateLimits RateLimits
+	// TrustedProxies (TESSERA_TRUSTED_PROXIES) are the peers whose
+	// X-Forwarded-For the rate limiter believes.
+	TrustedProxies []netip.Prefix
 	// AuditAppend overrides how the audit middleware writes http.request
 	// events (tests inject failures). Nil: the store.
 	AuditAppend func(ctx context.Context, t tenancy.ID, e store.AuditEvent) error
@@ -92,6 +102,7 @@ type Server struct {
 	log    *slog.Logger
 	routes []*route
 	authn  *auth.Authenticator
+	limits *limiters
 
 	readiness *readiness.Service
 }
@@ -124,7 +135,8 @@ func New(cfg Config) *Server {
 		cfg.Readiness = readiness.NewService(reg, cfg.Env)
 		cfg.Readiness.Runner.Scenario = cfg.ReadinessScenario
 	}
-	s := &Server{cfg: cfg, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness}
+	s := &Server{cfg: cfg, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
+		limits: newLimiters(cfg.RateLimits)}
 	s.authn = &auth.Authenticator{DB: cfg.Store, Clock: func() time.Time { return s.clock() },
 		Cookies: auth.Cookies{Insecure: cfg.InsecureCookie}}
 	s.registerRoutes()
@@ -159,6 +171,9 @@ func (s *Server) Handler() http.Handler {
 	// in dispatch); unauthenticated requests go to the _platform chain.
 	h = audit.Middleware(audit.MiddlewareConfig{DB: s.store, Clock: s.clock, Log: s.log,
 		Append: s.cfg.AuditAppend})(h)
+	// Per-IP limits on anonymous and /api/auth/* requests, before anything
+	// is written to the ledger.
+	h = s.rateLimit(h)
 	h = s.logRequests(h)
 	return s.securityHeaders(h)
 }
@@ -461,6 +476,7 @@ func (s *Server) attribute(r *http.Request) {
 	case p == nil:
 		audit.SetAnonymous(r.Context(), reason)
 	default:
+		markAuthenticated(r.Context())
 		sid := p.SessionID.String()
 		audit.SetPrincipal(r.Context(), audit.Principal{Tenant: p.TenantID, Actor: p.AuditActor(), SessionID: &sid,
 			Authn: p.AuditAuthn(s.clock())})

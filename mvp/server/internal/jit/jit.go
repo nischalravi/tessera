@@ -26,6 +26,11 @@ type Error struct{ Msg string }
 
 func (e *Error) Error() string { return e.Msg }
 
+// ErrSelfApproval refuses an approval by the platform user who made the
+// request, or by the platform user linked to the identity that would get the
+// access (separation of duties: nobody grants themselves access).
+var ErrSelfApproval = errors.New("jit: the requester cannot approve their own request")
+
 func jitErr(format string, args ...any) error { return &Error{fmt.Sprintf(format, args...)} }
 
 // Hours is a requested duration. Whole marks a value supplied as an integer
@@ -150,6 +155,18 @@ func Approve(c *store.TenantTx, requestID int64, by store.UserRef, now, createdA
 	req, err := pending(c, requestID)
 	if err != nil {
 		return nil, err
+	}
+	if by.ID != uuid.Nil {
+		if req.RequestedByUserID != nil && *req.RequestedByUserID == by.ID {
+			return nil, ErrSelfApproval
+		}
+		u, err := c.PlatformUser(by.ID)
+		if err != nil {
+			return nil, err
+		}
+		if u.IdentityID != nil && *u.IdentityID == req.IdentityID {
+			return nil, ErrSelfApproval
+		}
 	}
 	src, dst := graph.Key("account", req.AccountID), graph.Key("group", req.GroupID)
 	existing, err := getOrNil(c.EdgeBetween(src, dst))

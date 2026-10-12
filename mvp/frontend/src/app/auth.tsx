@@ -34,6 +34,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [stepUp, setStepUp] = useState<string | null>(null);
   const [lastEmail, setLastEmail] = useState<string | null>(null);
+  const [lastTenant, setLastTenant] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -66,6 +67,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const perms = new Set(session.permissions);
     const end = async () => {
       setLastEmail(session.user.email);
+      setLastTenant(session.tenant.slug);
       await logout().catch(() => undefined);
       setSession(null);
     };
@@ -76,7 +78,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     return error ? <SignInFrame><Callout tone="bad">Tessera is unreachable: {error}</Callout></SignInFrame> : null;
   }
   if (!value) {
-    return <SignIn preferEmail={lastEmail} onSignedIn={async () => { setStepUp(null); await load(); }} />;
+    return <SignIn preferEmail={lastEmail} preferTenant={lastTenant} onSignedIn={async () => { setStepUp(null); await load(); }} />;
   }
   return (
     <Ctx.Provider value={value}>
@@ -106,13 +108,19 @@ const METHOD_LABELS: Record<string, string> = {
   password: "Password only",
 };
 
+/** The demo tenant the dev sign-in page starts with. */
+const DEMO_TENANT = "larkspur";
+
 /**
  * The sign-in page. Until sign-in through the tenant's identity provider lands (Phase 0 PR6
- * and PR7), a development server (TESSERA_ENV=dev or test) offers dev sign-in: pick a seeded
- * user of the dev IdP and how they authenticate. Admin roles are active only after a
- * phishing-resistant method (passkey or hardware key).
+ * and PR7), a development server (TESSERA_ENV=dev, or test with TESSERA_DEV_LOGIN on loopback)
+ * offers dev sign-in: name the tenant, pick one of its seeded dev IdP users and how they
+ * authenticate. Admin roles are active only after a phishing-resistant method (passkey or
+ * hardware key).
  */
-function SignIn({ onSignedIn, preferEmail }: { onSignedIn: () => Promise<void>; preferEmail: string | null }) {
+function SignIn({ onSignedIn, preferEmail, preferTenant }: { onSignedIn: () => Promise<void>; preferEmail: string | null; preferTenant: string | null }) {
+  const [tenant, setTenant] = useState(preferTenant ?? DEMO_TENANT);
+  const [shown, setShown] = useState(preferTenant ?? DEMO_TENANT);
   const [dev, setDev] = useState<{ users: DevUser[]; methods: string[] } | null | undefined>(undefined);
   const [choice, setChoice] = useState("");
   const [method, setMethod] = useState("passkey");
@@ -120,26 +128,27 @@ function SignIn({ onSignedIn, preferEmail }: { onSignedIn: () => Promise<void>; 
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    devLoginUsers()
+    let alive = true;
+    devLoginUsers(shown)
       .then((d) => {
+        if (!alive) return;
         setDev(d);
-        // the last user, else the first user of the tenant with the most users (the demo company)
-        const counts = new Map<string, number>();
-        d?.users.forEach((u) => counts.set(u.tenant, (counts.get(u.tenant) ?? 0) + 1));
-        const busiest = [...counts.entries()].sort((x, y) => y[1] - x[1])[0]?.[0];
-        const preferred = d?.users.find((u) => u.email === preferEmail) ?? d?.users.find((u) => u.tenant === busiest);
-        if (preferred) setChoice(`${preferred.tenant}|${preferred.subject}`);
+        setError(null);
+        const preferred = d?.users.find((u) => u.email === preferEmail) ?? d?.users[0];
+        setChoice(preferred ? preferred.subject : "");
       })
-      .catch((e) => setError(String(e.message ?? e)));
-  }, [preferEmail]);
+      .catch((e) => alive && setError(String(e.message ?? e)));
+    return () => {
+      alive = false;
+    };
+  }, [shown, preferEmail]);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    const [tenant, subject] = choice.split("|");
     setBusy(true);
     setError(null);
     try {
-      await devLogin(tenant, subject, method);
+      await devLogin(shown, choice, method);
       await onSignedIn();
     } catch (err: any) {
       setError(String(err.message ?? err));
@@ -157,26 +166,32 @@ function SignIn({ onSignedIn, preferEmail }: { onSignedIn: () => Promise<void>; 
       </SignInFrame>
     );
   }
-  const tenants = [...new Set((dev?.users ?? []).map((u) => u.tenant_name))];
+  const users = dev?.users ?? [];
   return (
     <SignInFrame>
       <h1 style={{ fontSize: "var(--fs-xl)" }}>Sign in to Tessera</h1>
       <Callout tone="warn">
-        Development sign-in. This server runs with TESSERA_ENV=dev or test and signs you in as a user of its dev identity
-        provider. Production servers sign you in through your organization's identity provider.
+        Development sign-in. This server runs with TESSERA_ENV=dev (or test, opted in) and signs you in as a user of its dev
+        identity provider. Production servers sign you in through your organization's identity provider.
       </Callout>
       <form className="stack" onSubmit={submit}>
         <label className="stack-sm" style={{ display: "block" }}>
+          <span className="small strong">Tenant</span>
+          <span className="row tight">
+            <input className="input" value={tenant} onChange={(e) => setTenant(e.target.value.trim())}
+              onBlur={() => setShown(tenant)} onKeyDown={(e) => { if (e.key === "Enter" && tenant !== shown) { e.preventDefault(); setShown(tenant); } }}
+              autoComplete="organization" spellCheck={false} style={{ flex: 1 }} required />
+            <Button type="button" variant="ghost" onClick={() => setShown(tenant)} disabled={!tenant || tenant === shown}>Show users</Button>
+          </span>
+        </label>
+        <label className="stack-sm" style={{ display: "block" }}>
           <span className="small strong">User</span>
-          <select className="input" value={choice} onChange={(e) => setChoice(e.target.value)} style={{ width: "100%" }} required>
-            {tenants.map((t) => (
-              <optgroup key={t} label={t}>
-                {(dev?.users ?? []).filter((u) => u.tenant_name === t).map((u) => (
-                  <option key={`${u.tenant}|${u.subject}`} value={`${u.tenant}|${u.subject}`}>
-                    {u.display_name} · {u.email} · {u.roles.join(", ") || "no roles"}
-                  </option>
-                ))}
-              </optgroup>
+          <select className="input" value={choice} onChange={(e) => setChoice(e.target.value)} style={{ width: "100%" }} required disabled={users.length === 0}>
+            {users.length === 0 && <option value="">No dev sign-in users for this tenant</option>}
+            {users.map((u) => (
+              <option key={u.subject} value={u.subject}>
+                {u.display_name} · {u.email} · {u.roles.join(", ") || "no roles"}
+              </option>
             ))}
           </select>
         </label>
@@ -191,7 +206,7 @@ function SignIn({ onSignedIn, preferEmail }: { onSignedIn: () => Promise<void>; 
         </fieldset>
         {error && <Callout tone="bad">{error}</Callout>}
         <div className="row">
-          <Button type="submit" variant="primary" disabled={busy || !choice}>{busy ? "Signing in…" : "Sign in"}</Button>
+          <Button type="submit" variant="primary" disabled={busy || !choice || tenant !== shown}>{busy ? "Signing in…" : "Sign in"}</Button>
         </div>
       </form>
     </SignInFrame>

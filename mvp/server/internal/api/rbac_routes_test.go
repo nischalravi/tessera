@@ -69,7 +69,7 @@ GET    /api/readiness/openapi.json                   auth.self          -  #
 GET    /api/connections                              connections.read   -
 POST   /api/connections                              connections.manage -
 GET    /api/connections/{id}                         connections.read   -
-PATCH  /api/connections/{id}/config                  connections.manage -
+PATCH  /api/connections/{id}/config                  connections.manage STEP_UP_POLICY
 PUT    /api/connections/{id}/credential              connections.manage STEP_UP_POLICY
 GET    /api/connections/{id}/checklist               connections.read   -
 POST   /api/connections/{id}/checklist/{item}/attest connections.manage -
@@ -260,4 +260,25 @@ func containsPerm(ps []auth.Permission, p auth.Permission) bool {
 		}
 	}
 	return false
+}
+
+// TestConnectionConfigNeedsStepUp: editing a connection's config can point
+// its credential at another host or widen its write scope, so it needs the
+// same fresh phishing-resistant sign-in as setting the credential.
+func TestConnectionConfigNeedsStepUp(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	h := newIsolationServer(f).Handler()
+	admin := authtest.User{Email: "conn-admin@b.example", Roles: []auth.Role{auth.RoleTenantAdmin}}
+	stale := signIn(t, f.DB, f.B.ID, admin, authtest.Ctx{AAL: 2, Phr: true, AuthTime: storetest.Now.Add(-20 * time.Minute)}, storetest.Now)
+	body := `{"base_url":"https://attacker.example"}`
+	for _, path := range []string{"/api/connections/x/config", "/api/connections/x/credential"} {
+		method := map[bool]string{true: "PATCH", false: "PUT"}[strings.HasSuffix(path, "config")]
+		if rec := serve(h, authed(stale, method, path, body)); rec.Code != 401 || !strings.Contains(rec.Body.String(), "step_up_required") {
+			t.Errorf("%s %s with a 20-minute-old sign-in: %d %s", method, path, rec.Code, rec.Body.String())
+		}
+	}
+	fresh := signIn(t, f.DB, f.B.ID, authtest.User{Email: "conn-admin2@b.example", Roles: admin.Roles}, authtest.Phr, storetest.Now)
+	if rec := serve(h, authed(fresh, "PATCH", "/api/connections/x/config", body)); rec.Code == 401 || rec.Code == 403 {
+		t.Errorf("PATCH config with a fresh sign-in: %d %s", rec.Code, rec.Body.String())
+	}
 }

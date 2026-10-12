@@ -40,6 +40,7 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, rt *route) (*
 		auth.WriteDenial(w, &auth.Denial{Status: http.StatusUnauthorized, Error: "login_required"})
 		return r, false
 	}
+	markAuthenticated(r.Context())
 	now := s.clock()
 	ctx := auth.WithPrincipal(r.Context(), p)
 	sid := p.SessionID.String()
@@ -98,7 +99,7 @@ func (s *Server) registerAuthRoutes() {
 	s.handle(P, "/api/auth/logout", write, need(auth.PermAuthenticated), s.authLogout)
 	s.handle(G, "/api/auth/sessions", read, need(auth.PermAuthenticated), s.authSessions)
 	s.handle(http.MethodDelete, "/api/auth/sessions/{session_id}", write, need(auth.PermAuthenticated), s.authRevokeSession)
-	if devLoginEnabled(s.cfg.Env) {
+	if s.devLoginEnabled() {
 		s.handle(G, "/api/auth/dev-login", noTenant, publicRoute, s.devLoginUsers)
 		s.handle(P, "/api/auth/dev-login", noTenant, publicRoute, s.devLogin)
 	}
