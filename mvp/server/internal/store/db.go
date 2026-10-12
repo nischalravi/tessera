@@ -89,6 +89,8 @@ var tables = []string{
 	// business roles (schema/0206_business_roles.sql)
 	"business_roles", "business_role_entitlements", "business_role_versions", "business_role_members",
 	"business_role_requests",
+	// attribute conditions (schema/0221_abac.sql)
+	"abac_policies", "abac_policy_versions", "abac_bindings",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was
