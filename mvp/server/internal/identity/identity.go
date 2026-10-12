@@ -181,7 +181,7 @@ func employeeAffiliation(p *store.Identity, srcID string, now time.Time) *store.
 // addIdentifier records one authoritative identifier; false when the value is
 // unusable or another person already holds it.
 func addIdentifier(c *store.TenantTx, k *identifiers.Keyer, p *store.Identity, srcID, typ, val string) (bool, error) {
-	norm, mac, err := k.Prepare(c.Tenant(), typ, "", val)
+	norm, mac, err := k.Digest(c.Tenant(), typ, "", val)
 	if err != nil {
 		return false, nil // a malformed HR value is not an identifier; never fail the seed on it
 	}

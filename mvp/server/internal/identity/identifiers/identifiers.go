@@ -169,9 +169,9 @@ func (k *Keyer) String() string { return "identifiers.Keyer{REDACTED}" }
 // GoString is String.
 func (k *Keyer) GoString() string { return k.String() }
 
-// Prepare validates and normalizes an identifier and returns the value to
+// Digest validates and normalizes an identifier and returns the value to
 // store (nil for hashed-only types) with its hash.
-func (k *Keyer) Prepare(tenant tenancy.ID, typ, issuer, value string) (norm *string, mac string, err error) {
+func (k *Keyer) Digest(tenant tenancy.ID, typ, issuer, value string) (norm *string, mac string, err error) {
 	if k == nil || k.sealer == nil {
 		return nil, "", errors.New("identifiers: no key")
 	}

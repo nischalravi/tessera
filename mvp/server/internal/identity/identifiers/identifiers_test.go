@@ -71,9 +71,9 @@ func TestCheckIssuer(t *testing.T) {
 
 func hash(t *testing.T, k *identifiers.Keyer, f *storetest.Fixture, tn storetest.Tenant, typ, issuer, v string) (*string, string) {
 	t.Helper()
-	norm, mac, err := k.Prepare(tn.ID, typ, issuer, v)
+	norm, mac, err := k.Digest(tn.ID, typ, issuer, v)
 	if err != nil {
-		t.Fatalf("Prepare(%s, %q): %v", typ, v, err)
+		t.Fatalf("Digest(%s, %q): %v", typ, v, err)
 	}
 	return norm, mac
 }
@@ -110,10 +110,10 @@ func TestIdentifiers_HMACUniqueness(t *testing.T) {
 	if n, _ := hash(t, k, f, f.A, store.IdentNationalHMAC, "", "123-45-6789"); n != nil {
 		t.Error("a hashed-only identifier keeps its value")
 	}
-	if _, _, err := k.Prepare(f.A.ID, store.IdentOIDCSub, "", "abc"); err == nil {
+	if _, _, err := k.Digest(f.A.ID, store.IdentOIDCSub, "", "abc"); err == nil {
 		t.Error("an oidc subject without an issuer was accepted")
 	}
-	if _, _, err := (*identifiers.Keyer)(nil).Prepare(f.A.ID, store.IdentEmail, "", "a@b.c"); err == nil {
+	if _, _, err := (*identifiers.Keyer)(nil).Digest(f.A.ID, store.IdentEmail, "", "a@b.c"); err == nil {
 		t.Error("a nil keyer hashed")
 	}
 
