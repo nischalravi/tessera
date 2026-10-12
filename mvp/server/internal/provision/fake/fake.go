@@ -108,6 +108,13 @@ func (s *Server) addGroup(displayName, externalID string) *groupRec {
 	return g
 }
 
+// SetFault changes the fault mode ("" for none).
+func (s *Server) SetFault(mode string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.opt.Fault = mode
+}
+
 // Requests returns the requests received so far, as "METHOD /path".
 func (s *Server) Requests() []string {
 	s.mu.Lock()
