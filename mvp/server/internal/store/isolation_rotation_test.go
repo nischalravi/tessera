@@ -55,7 +55,7 @@ func TestIsolation_RotationGetsOtherTenantNotFound(t *testing.T) {
 	cases := map[string]func(c *store.TenantTx) error{
 		"RotationAdapter": func(c *store.TenantTx) error { _, err := c.RotationAdapter(a["rot:adapter"]); return err },
 		"RotationAdapterByName": func(c *store.TenantTx) error {
-			_, err := c.RotationAdapterByName("adapter " + storetest.Sentinel)
+			_, err := c.RotationAdapterByName("adapter-" + storetest.Sentinel)
 			return err
 		},
 		"RotationPolicy": func(c *store.TenantTx) error { _, err := c.RotationPolicy(a["rot:policy"]); return err },

@@ -57,15 +57,18 @@ const (
 // printing a Config (even with %#v) never shows key bytes; String and
 // LogValue redact it as well.
 type Config struct {
-	Env                    string // Dev or Prod
-	PublicURL              string // issuer base; https in prod
-	APIAudience            string // access-token aud
-	DB                     string // SQLite path (or sqlite:///path)
-	KEKFile                string // TESSERA_KEK_FILE, when set
-	CookieSecure           bool
-	CORSOrigins            []string
-	TrustedProxies         []netip.Prefix
-	OutboundAllowLoopback  bool // safehttp may reach 127.0.0.1 / ::1 (dev only)
+	Env                   string // Dev or Prod
+	PublicURL             string // issuer base; https in prod
+	APIAudience           string // access-token aud
+	DB                    string // SQLite path (or sqlite:///path)
+	KEKFile               string // TESSERA_KEK_FILE, when set
+	CookieSecure          bool
+	CORSOrigins           []string
+	TrustedProxies        []netip.Prefix
+	OutboundAllowLoopback bool // safehttp may reach 127.0.0.1 / ::1 (dev only)
+	// RotationFakeAdapters admits the simulated secret-rotation adapter
+	// (TESSERA_ROTATION_FAKE_ADAPTERS; dev and test only).
+	RotationFakeAdapters   bool
 	AuditAnchor            string
 	AuditCheckpointSeconds int
 	AuditCheckpointEvents  int
@@ -150,6 +153,7 @@ func Load(getenv func(string) string) (*Config, error) {
 	c.CookieSecure = boolean("TESSERA_COOKIE_SECURE", true, true)
 	c.CORSOrigins = corsOrigins(getenv("TESSERA_CORS_ORIGINS"), getenv("UI_PORT"), prod)
 	c.OutboundAllowLoopback = boolean("TESSERA_OUTBOUND_ALLOW_LOOPBACK", true, false)
+	c.RotationFakeAdapters = boolean("TESSERA_ROTATION_FAKE_ADAPTERS", true, false)
 	// dev default: var/audit-anchors.jsonl next to the database (AnchorURL)
 	c.AuditAnchor = str("TESSERA_AUDIT_ANCHOR", "", "")
 	if a := c.AuditAnchor; a != "" && !strings.HasPrefix(a, "file://") && !strings.HasPrefix(a, "s3://") {
@@ -249,6 +253,9 @@ func Load(getenv func(string) string) (*Config, error) {
 		}
 		if c.OutboundAllowLoopback {
 			bad("TESSERA_OUTBOUND_ALLOW_LOOPBACK must be false with TESSERA_ENV=prod")
+		}
+		if c.RotationFakeAdapters {
+			bad("TESSERA_ROTATION_FAKE_ADAPTERS must be false with TESSERA_ENV=prod: the simulated rotation adapter would report success without touching any credential")
 		}
 		if c.DevIdPURL != "" {
 			bad("TESSERA_DEV_IDP_URL must not be set with TESSERA_ENV=prod")

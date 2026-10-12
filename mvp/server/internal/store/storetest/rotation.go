@@ -27,11 +27,18 @@ func seedRotation(tb testing.TB, db *store.DB, t *Tenant, sentinel string) {
 		}
 		return s + " " + sentinel
 	}
+	// adapter names must be valid API names (no spaces)
+	markName := func(s string) string {
+		if sentinel == "" {
+			return s
+		}
+		return s + "-" + sentinel
+	}
 	refs := t.Refs
 	err := db.InTenant(context.Background(), t.ID, func(c *store.TenantTx) error {
 		for _, a := range []struct{ key, name string }{{"rot:adapter", "adapter"}, {"rot:dest", "dest"}} {
 			id := store.NewID()
-			if err := c.InsertRotationAdapter(&store.RotationAdapter{ID: id, TenantID: t.ID, Name: mark(a.name), Type: "fake",
+			if err := c.InsertRotationAdapter(&store.RotationAdapter{ID: id, TenantID: t.ID, Name: markName(a.name), Type: "fake",
 				Config: `{"note":"` + mark("config") + `"}`, SecretEnc: []byte("blob-" + a.name), CreatedBy: mark("admin"),
 				CreatedAt: Now, UpdatedAt: Now}); err != nil {
 				return err

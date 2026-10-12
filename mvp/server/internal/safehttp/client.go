@@ -92,9 +92,14 @@ type Options struct {
 	Resolver Resolver
 }
 
-// ForConfig returns the client for the running configuration.
+// ForConfig returns the client for the running configuration. TESSERA_ENV=test
+// runs with the dev rules (only prod is strict).
 func ForConfig(c *config.Config) (*http.Client, error) {
-	return New(Options{Env: c.Env, AllowLoopback: c.OutboundAllowLoopback})
+	env := c.Env
+	if env == config.Test {
+		env = config.Dev
+	}
+	return New(Options{Env: env, AllowLoopback: c.OutboundAllowLoopback})
 }
 
 // New returns an SSRF-guarded *http.Client.

@@ -68,6 +68,11 @@ const (
 	PermConnectionsRead     Permission = "connections.read"
 	PermConnectionsManage   Permission = "connections.manage"
 	PermConnectionsActivate Permission = "connections.activate"
+	// PermSecretsRotate changes how secrets are rotated: rotation adapters
+	// (their credentials), policies, rotate-now and the vendor-compromised
+	// bulk run. Held by policy_admin only; every route that uses it also asks
+	// for a fresh phishing-resistant sign-in (STEP_UP_POLICY).
+	PermSecretsRotate Permission = "secrets.rotate"
 )
 
 // rolePermissions is the static role -> permission map (Cedar-ready, §12.1).
@@ -79,7 +84,8 @@ var rolePermissions = map[Role][]Permission{
 		PermReviewsDecide, PermHRISSimulateEvent},
 	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead},
 	RolePolicyAdmin: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
-		PermReviewsDecide, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync},
+		PermReviewsDecide, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
+		PermSecretsRotate},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
 		PermConnectionsActivate},
@@ -166,7 +172,7 @@ var scopePermissions = map[Scope][]Permission{
 	ScopeRead: {PermGraphRead, PermConnectionsRead},
 	ScopeWrite: {PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage, PermReviewsDecide,
 		PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
-		PermConnectionsManage, PermConnectionsActivate},
+		PermConnectionsManage, PermConnectionsActivate, PermSecretsRotate},
 	ScopeAudit: {PermAuditRead, PermAuditVerify},
 	ScopeAdmin: {PermAdminRead, PermAdminChangeReq, PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev,
 		PermBreakGlassRecover},

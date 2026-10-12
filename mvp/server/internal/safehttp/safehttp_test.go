@@ -97,12 +97,14 @@ func TestNewRefusesLoopbackOutsideDev(t *testing.T) {
 }
 
 func TestForConfig(t *testing.T) {
-	c, err := config.Load(func(k string) string { return map[string]string{"TESSERA_ENV": "dev"}[k] })
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := safehttp.ForConfig(c); err != nil {
-		t.Error(err)
+	for _, env := range []string{"dev", "test"} {
+		c, err := config.Load(func(k string) string { return map[string]string{"TESSERA_ENV": env}[k] })
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := safehttp.ForConfig(c); err != nil {
+			t.Errorf("TESSERA_ENV=%s: %v", env, err)
+		}
 	}
 }
 
