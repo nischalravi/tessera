@@ -426,16 +426,16 @@ func (tx *TenantTx) DeleteRoleAssignment(id uuid.UUID) error {
 
 const ctxCols = `x.id, x.tenant_id, x.user_id, x.idp_connection_id, x.protocol, x.purpose, x.acr, x.amr, x.methods,
 	x.aal, x.phishing_resistant, x.phr_basis, x.tessera_acr, x.auth_time, x.idp_session_id, x.ip, x.user_agent,
-	x.mapping_profile, x.mapping_version, x.claims_sha256, x.created_at`
+	x.mapping_profile, x.mapping_version, x.claims_sha256, x.created_at, x.device`
 
 var (
 	ctxInsert = tq("authn_contexts.insert", `
 		INSERT INTO authn_contexts (id, tenant_id, user_id, idp_connection_id, protocol, purpose, acr, amr, methods,
 			aal, phishing_resistant, phr_basis, tessera_acr, auth_time, idp_session_id, ip, user_agent,
-			mapping_profile, mapping_version, claims_sha256, created_at)
+			mapping_profile, mapping_version, claims_sha256, created_at, device)
 		VALUES (@id, @tenant, @user_id, @idp_connection_id, @protocol, @purpose, @acr, @amr, @methods,
 			@aal, @phishing_resistant, @phr_basis, @tessera_acr, @auth_time, @idp_session_id, @ip, @user_agent,
-			@mapping_profile, @mapping_version, @claims_sha256, @created_at)`)
+			@mapping_profile, @mapping_version, @claims_sha256, @created_at, @device)`)
 	ctxGet = tq("authn_contexts.get", `
 		SELECT `+ctxCols+` FROM authn_contexts x WHERE x.tenant_id = @tenant AND x.id = @id`)
 )
@@ -443,11 +443,11 @@ var (
 func scanCtx(s scanner) (*AuthnContextRecord, error) {
 	var x AuthnContextRecord
 	var id, tid, uid, amr, methods, authTime, created string
-	var conn, acr, sid, ip, ua sql.NullString
+	var conn, acr, sid, ip, ua, device sql.NullString
 	var phr int
 	if err := s.Scan(&id, &tid, &uid, &conn, &x.Protocol, &x.Purpose, &acr, &amr, &methods,
 		&x.AAL, &phr, &x.PhrBasis, &x.TesseraACR, &authTime, &sid, &ip, &ua,
-		&x.MappingProfile, &x.MappingVersion, &x.ClaimsSHA256, &created); err != nil {
+		&x.MappingProfile, &x.MappingVersion, &x.ClaimsSHA256, &created, &device); err != nil {
 		return nil, err
 	}
 	var err error
@@ -474,6 +474,7 @@ func scanCtx(s scanner) (*AuthnContextRecord, error) {
 		return nil, fmt.Errorf("store: authn_contexts.methods: %w", err)
 	}
 	x.ACR, x.IdPSessionID, x.IP, x.UserAgent, x.PhishingResistant = strp(acr), strp(sid), strp(ip), strp(ua), phr == 1
+	x.Device = strp(device)
 	if x.AuthTime, err = ParseRT(authTime); err != nil {
 		return nil, err
 	}
@@ -516,7 +517,8 @@ func (tx *TenantTx) InsertAuthnContext(x *AuthnContextRecord) error {
 		sql.Named("tessera_acr", x.TesseraACR), sql.Named("auth_time", RT(x.AuthTime)),
 		sql.Named("idp_session_id", SP(x.IdPSessionID)), sql.Named("ip", SP(x.IP)), sql.Named("user_agent", SP(x.UserAgent)),
 		sql.Named("mapping_profile", x.MappingProfile), sql.Named("mapping_version", x.MappingVersion),
-		sql.Named("claims_sha256", x.ClaimsSHA256), sql.Named("created_at", RT(x.CreatedAt)))
+		sql.Named("claims_sha256", x.ClaimsSHA256), sql.Named("created_at", RT(x.CreatedAt)),
+		sql.Named("device", SP(x.Device)))
 	return crossTenant(err)
 }
 

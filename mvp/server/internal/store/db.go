@@ -86,6 +86,8 @@ var tables = []string{
 	"connections", "connection_revisions", "readiness_check_runs", "readiness_item_states", "readiness_attestations",
 	"readiness_skips", "readiness_overlays", "readiness_check_results", "recon_runs", "recon_findings", "readiness_scores",
 	"stg_identities", "stg_accounts", "stg_groups", "stg_memberships", "stg_attr_stats",
+	// conditional access (schema/0222)
+	"network_ranges", "access_policies", "device_compliance_signals",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was

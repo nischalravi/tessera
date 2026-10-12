@@ -110,6 +110,11 @@ type Mapping struct {
 	PhrhClassRefs []string `json:"phrh_authn_context_class_refs,omitempty"`
 	AAL2ClassRefs []string `json:"aal2_authn_context_class_refs,omitempty"`
 	AMRAttribute  string   `json:"amr_attribute,omitempty"`
+	// Names of the claims (OIDC) or attributes (SAML) that carry the device
+	// posture (issue #163); see Device. Defaults device_managed and
+	// device_compliant.
+	DeviceManagedClaim   string `json:"device_managed_claim,omitempty"`
+	DeviceCompliantClaim string `json:"device_compliant_claim,omitempty"`
 	// DevEmulation pins the dev_mock emulation (okta | entra | generic | saml);
 	// empty infers it from the claims.
 	DevEmulation string `json:"dev_emulation,omitempty"`
@@ -177,6 +182,8 @@ type Result struct {
 	MappingProfile    string
 	MappingVersion    int
 	ClaimsSHA256      string
+	// Device is the device posture the IdP asserted (Device).
+	Device Device
 }
 
 // Normalize applies the connection's profile to validated claims.
@@ -212,6 +219,7 @@ func Normalize(conn Connection, req Requested, c Claims) (Result, error) {
 		r.PhishingResistant, r.PhrBasis = true, BasisAttestation
 	}
 	r.AuthTime = c.AuthTime.UTC()
+	r.Device = deviceFrom(conn.Mapping, c)
 	r.MappingProfile, r.MappingVersion = conn.Profile, Version
 	if conn.Profile == DevMock {
 		r.MappingProfile = DevMock + "/" + profile

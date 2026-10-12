@@ -280,3 +280,49 @@ func TestParseMapping(t *testing.T) {
 		t.Errorf("empty mapping: %v", err)
 	}
 }
+
+func TestNormalize_Device(t *testing.T) {
+	conn := normalize.Connection{Profile: normalize.GenericOIDC}
+	tp := func(b bool) *bool { return &b }
+	oidc := func(raw string) normalize.Claims {
+		return with(claims("u1", ""), func(c *normalize.Claims) { c.Raw = []byte(raw) })
+	}
+	saml := func(attrs map[string][]string) normalize.Claims {
+		return with(claims("u1", ""), func(c *normalize.Claims) { c.Attributes = attrs })
+	}
+	for _, tc := range []struct {
+		name string
+		conn normalize.Connection
+		c    normalize.Claims
+		want normalize.Device
+	}{
+		{"nothing asserted", conn, oidc(`{"sub":"u1"}`), normalize.Device{}},
+		{"booleans", conn, oidc(`{"device_managed":true,"device_compliant":false}`), normalize.Device{Managed: tp(true), Compliant: tp(false)}},
+		{"strings", conn, oidc(`{"device_managed":"managed","device_compliant":"non_compliant"}`), normalize.Device{Managed: tp(true), Compliant: tp(false)}},
+		{"unreadable value is not asserted", conn, oidc(`{"device_managed":42,"device_compliant":"maybe"}`), normalize.Device{}},
+		{"not JSON", conn, oidc(`<xml/>`), normalize.Device{}},
+		{"configured names", normalize.Connection{Profile: normalize.GenericOIDC, Mapping: normalize.Mapping{DeviceManagedClaim: "mdm", DeviceCompliantClaim: "posture"}},
+			oidc(`{"mdm":true,"posture":true,"device_managed":false}`), normalize.Device{Managed: tp(true), Compliant: tp(true)}},
+		{"saml attributes", normalize.Connection{Profile: normalize.GenericSAML},
+			saml(map[string][]string{"device_managed": {"true"}, "device_compliant": {"false", "true"}}), normalize.Device{Managed: tp(true), Compliant: tp(false)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := normalize.Normalize(tc.conn, normalize.Requested{}, tc.c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := res.Device.JSON(), tc.want.JSON(); (got == nil) != (want == nil) || (got != nil && *got != *want) {
+				t.Errorf("device = %v, want %v", got, want)
+			}
+		})
+	}
+	// the stored form round-trips; garbage reads as nothing asserted
+	d := normalize.Device{Managed: tp(true)}
+	if back := normalize.ParseDevice(d.JSON()); back.Managed == nil || !*back.Managed || back.Compliant != nil {
+		t.Errorf("round trip: %+v", back)
+	}
+	bad := "{nope"
+	if !normalize.ParseDevice(&bad).IsZero() || !normalize.ParseDevice(nil).IsZero() {
+		t.Error("garbage must read as nothing asserted")
+	}
+}
