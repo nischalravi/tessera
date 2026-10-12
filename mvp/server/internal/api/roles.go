@@ -64,6 +64,7 @@ type ruleView struct {
 	Department []string `json:"department"`
 	Type       []string `json:"type"`
 	Title      []string `json:"title"`
+	Policy     string   `json:"policy"` // id of the attribute policy ("" : none)
 }
 
 type roleView struct {
@@ -124,7 +125,7 @@ func (v *viewer) roleView(r *store.BusinessRole, ents []int64, members int) (rol
 		return out, err
 	}
 	if rule != nil {
-		out.Birthright = &ruleView{nonNilS(rule.Department), nonNilS(rule.Type), nonNilS(rule.Title)}
+		out.Birthright = &ruleView{nonNilS(rule.Department), nonNilS(rule.Type), nonNilS(rule.Title), rule.Policy}
 	}
 	for _, g := range ents {
 		gr, err := v.group(g)
@@ -365,7 +366,7 @@ func (b roleBody) spec() roles.Spec {
 	s := roles.Spec{Name: b.Name, Description: b.Description, OwnerIdentityID: b.OwnerIdentityID, Risk: b.Risk,
 		Requestable: b.Requestable, Entitlements: b.Entitlements, Note: b.Note}
 	if b.Birthright != nil {
-		s.Birthright = &roles.Rule{Department: b.Birthright.Department, Type: b.Birthright.Type, Title: b.Birthright.Title}
+		s.Birthright = &roles.Rule{Department: b.Birthright.Department, Type: b.Birthright.Type, Title: b.Birthright.Title, Policy: b.Birthright.Policy}
 	}
 	return s
 }
