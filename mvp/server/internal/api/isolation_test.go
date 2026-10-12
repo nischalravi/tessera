@@ -152,6 +152,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/api/audit/events/{event_id}/proof" {
 			continue // TestIsolation_AuditRoutes
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/jobs/{job_id}") {
+			continue // TestIsolation_JobRoutes (a UUID, not a fixture id)
+		}
 		if rt.Pattern == "/api/auth/sessions/{session_id}" {
 			continue // TestIsolation_SessionCookieScoped (a UUID, not a fixture id)
 		}
@@ -217,6 +220,7 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		"/api/reviews/campaigns/{campaign_id}": fmt.Sprint(b["campaign"]),
 		"/api/hris/events/{event_id}/plan":     fmt.Sprint(b["hris:leaver"]),
 		"/api/audit/events/{event_id}/proof":   latestEventID(t, f.DB, f.B.ID),
+		"/api/jobs/{job_id}":                   insertJobRun(t, f.DB, f.B.ID),
 	}
 	checked := 0
 	for _, rt := range srv.Routes() {

@@ -22,6 +22,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
+	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
@@ -142,6 +143,7 @@ func New(cfg Config) *Server {
 	s.registerRoutes()
 	s.registerAuditRoutes()
 	s.registerReadinessRoutes()
+	s.registerJobRoutes()
 	s.registerAuthRoutes()
 	s.checkPublicRoutes()
 	return s
@@ -207,9 +209,14 @@ func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	ctx = audit.WithSystemActor(ctx, "jit.sweeper") // jit.expire events name the job
+	var maintained time.Time
 	for {
-		if _, err := jit.SweepAll(ctx, s.store, s.clock()); err != nil && ctx.Err() == nil {
-			s.log.Error("jit sweep failed", "err", err)
+		s.sweepAndRecord(ctx)
+		if now := s.clock(); now.Sub(maintained) >= jobMaintainGap {
+			if err := jobs.Maintain(ctx, s.store, now, jobStaleAfter, jobRetention); err != nil && ctx.Err() == nil {
+				s.log.Error("job history upkeep failed", "err", err)
+			}
+			maintained = now
 		}
 		select {
 		case <-ctx.Done():
@@ -272,6 +279,8 @@ type route struct {
 	// closed like a read when its http.request event cannot be written
 	// (audit.AnswersRead).
 	answersRead bool
+	// job: the route runs a job whose runs are recorded (jobs.go).
+	job *jobSpec
 }
 
 // handle registers a route with its declared requirement (design §12.4). A
@@ -330,6 +339,13 @@ func (s *Server) serve(rt *route, w http.ResponseWriter, r *http.Request, p *par
 	if pr, ok := auth.PrincipalFrom(r.Context()); ok {
 		t = pr.TenantID
 	}
+	if rt.job != nil && !t.IsZero() {
+		return s.serveJob(rt, w, r, p, t)
+	}
+	return s.serveTenant(rt, w, r, p, t)
+}
+
+func (s *Server) serveTenant(rt *route, w http.ResponseWriter, r *http.Request, p *params, t tenancy.ID) (any, error) {
 	ctx := r.Context()
 	if rt.tenant == phased {
 		if t.IsZero() {

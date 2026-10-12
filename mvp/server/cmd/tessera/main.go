@@ -270,7 +270,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		HSTS: cfg.IsProd(), Env: cfg.Env, DevLogin: cfg.DevLogin, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, AuditAnchor: anchorURL})
 	checkpointer := &audit.Checkpointer{DB: st, Sealer: sealer, Sink: sink, Clock: timeutil.System, Issuer: cfg.PublicURL,
 		Every: time.Duration(cfg.AuditCheckpointSeconds) * time.Second, EveryEvents: int64(cfg.AuditCheckpointEvents),
-		Log: logger}
+		Log: logger, OnTenant: api.RecordAnchorRun(st)}
 	httpSrv := &http.Server{
 		Addr:              o.addr,
 		Handler:           srv.Handler(),

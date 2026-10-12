@@ -68,6 +68,8 @@ const (
 	PermConnectionsRead     Permission = "connections.read"
 	PermConnectionsManage   Permission = "connections.manage"
 	PermConnectionsActivate Permission = "connections.activate"
+	// Job run history (issue #172).
+	PermJobsRead Permission = "jobs.read"
 )
 
 // rolePermissions is the static role -> permission map (Cedar-ready, §12.1).
@@ -76,13 +78,14 @@ const (
 var rolePermissions = map[Role][]Permission{
 	RoleViewer: {PermGraphRead},
 	RoleOperator: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
-		PermReviewsDecide, PermHRISSimulateEvent},
-	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead},
+		PermReviewsDecide, PermHRISSimulateEvent, PermJobsRead},
+	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead, PermJobsRead},
 	RolePolicyAdmin: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
-		PermReviewsDecide, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync},
+		PermReviewsDecide, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
+		PermJobsRead},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
-		PermConnectionsActivate},
+		PermConnectionsActivate, PermJobsRead},
 	RoleBreakGlass: {PermAdminRead, PermBreakGlassRecover},
 }
 
@@ -163,7 +166,7 @@ const (
 )
 
 var scopePermissions = map[Scope][]Permission{
-	ScopeRead: {PermGraphRead, PermConnectionsRead},
+	ScopeRead: {PermGraphRead, PermConnectionsRead, PermJobsRead},
 	ScopeWrite: {PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage, PermReviewsDecide,
 		PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
 		PermConnectionsManage, PermConnectionsActivate},

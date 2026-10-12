@@ -87,6 +87,9 @@ POST   /api/connections/{id}/findings/{fid}/accept   connections.manage -
 GET    /api/connections/{id}/health                  connections.read   -
 GET    /api/insights/deployment-health               connections.read   -
 POST   /api/insights/deployment-health/rerun         connections.manage -
+GET    /api/jobs                                     jobs.read       -  # issue #172
+GET    /api/jobs/{job_id}                            jobs.read       -  #
+POST   /api/jobs/{job_id}/retry                      jobs.read       -  # (the replayed route's own permission and step-up apply)
 GET    /api/auth/session                             auth.self       -
 POST   /api/auth/logout                              auth.self       -
 GET    /api/auth/sessions                            auth.self       -
