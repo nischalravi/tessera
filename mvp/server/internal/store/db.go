@@ -88,6 +88,8 @@ var tables = []string{
 	"catalog_items", "access_request_lines", "access_request_events",
 	// approval routing (schema/0206_approvals.sql)
 	"approval_policies", "access_request_stages", "approval_delegations",
+	// notifications (schema/0223_notifications.sql)
+	"notifications", "notification_prefs",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was
