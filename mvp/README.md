@@ -165,7 +165,9 @@ The routes are documented at `/api/readiness/openapi.json`.
 `POST /api/requests/{id}/approve|deny|cancel|remove {reason}` ·
 `GET|POST /api/roles` · `GET|PUT /api/roles/{id}` · `GET /api/roles/{id}/versions|drift` ·
 `POST /api/roles/{id}/retire|reconcile|members` · `POST /api/roles/{id}/members/{identity_id}/remove`
-(changes take `?dry_run=1`) · `GET|POST /api/role-requests` · `POST /api/role-requests/{id}/approve|deny|cancel`
+(changes take `?dry_run=1`) · `GET|POST /api/role-requests` · `POST /api/role-requests/{id}/approve|deny|cancel` ·
+`GET /api/lifecycle[?state=upcoming|active|ending|ended]` · `GET /api/lifecycle/sponsored` · `POST /api/lifecycle/sweep` ·
+`GET|PUT /api/identities/{id}/lifecycle` · `POST /api/identities/{id}/lifecycle/extend {ends_at, reason}`
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
@@ -234,6 +236,41 @@ Members, versions and drift need `graph.read`. The seed creates the demo company
 Rule members are seeded only where people already hold every entitlement, so seeding grants
 nothing: reconcile a role to see the rest. Not yet: provisioning into the target system (#103),
 role mining (Phase 3), and ABAC conditions in rules (#162).
+
+### Contractors, guests and end dates
+
+**Identity → Contractors & guests** (issue #159). Each person has a worker type: employee,
+contractor, intern, partner, vendor or guest. Every type except employee has:
+- a **sponsor**: an active employee accountable for them;
+- an **end date**, at most a year away;
+- optionally an organization and a start date.
+
+A person without a lifecycle record is an employee with no end date. Policy admins set the
+lifecycle by hand (`lifecycle.manage`, with step-up). Otherwise it comes from the HRIS: a joiner
+event's `worker_type` and `end_date`, with the manager as sponsor unless
+`sponsor_external_id` names someone else.
+
+- **Warnings.** The background sweeper warns 14, 7 and 1 days before the end date. Each
+  warning goes out once, as a history entry and an audit event (`lifecycle.warn`). The
+  notifications outbox (#189) delivers them through `lifecycle.Notify`.
+- **Extending.** The sponsor, or a lifecycle admin, moves the end date later, with a reason.
+  Nobody extends their own term. An extension restarts the warnings.
+- **The end.** On the end date the sweeper runs the person's **leaver plan**: accounts are
+  disabled, grants removed, JIT cancelled and ownership reassigned, as the JML leaver plan lists
+  them. It then terminates the identity, all in one transaction with `lifecycle.end`. The
+  sweep runs in the background loop, never on a read. Admins can also run it at once.
+- **Converting.** Changing the worker type is a conversion, for example contractor to employee,
+  which can drop the end date. It is recorded as `lifecycle.convert`.
+
+The Users list has a *Worker type* column and filter. The identity panel and page show the
+worker type, sponsor and dates, with *Extend* and *Change*. The page has three views:
+*Ending soon* (the next 14 days), *Everyone*, and *Sponsored by me*. The seed makes five demo
+people contractors, an intern, a vendor and a partner, ending 3 to 120 days out.
+
+Not yet:
+- provisioning the leaver plan into target systems (#103);
+- the guest claim flow and affiliations (GU-1 #64 onward);
+- rehiring someone whose term has ended.
 
 ### Audit ledger
 

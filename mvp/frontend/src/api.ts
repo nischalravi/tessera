@@ -686,6 +686,49 @@ export const roles = {
 };
 export const rolePaths = { list: "/roles", one: (id: string) => rolePath(id), versions: (id: string) => rolePath(id, "/versions"), drift: (id: string) => rolePath(id, "/drift") };
 
+// ---------------------------------------------------------------- identity lifecycle (issue #159)
+
+export type WorkerType = "employee" | "contractor" | "intern" | "partner" | "vendor" | "guest";
+export const WORKER_TYPES: WorkerType[] = ["employee", "contractor", "intern", "partner", "vendor", "guest"];
+export type LifecycleState = "upcoming" | "active" | "ending" | "ended";
+export interface Lifecycle {
+  person: PersonRef;
+  worker_type: WorkerType;
+  sponsor: PersonRef | null;
+  organization: string | null;
+  starts_at: string | null;
+  ends_at: string | null;
+  ended_at: string | null;
+  state: LifecycleState;
+  /** Whole days until the end date (0 when due); null without one. */
+  days_left: number | null;
+  /** The smallest warning already sent (14, 7 or 1 days). */
+  warned_days: number | null;
+  source: "manual" | "hris";
+  updated_at: string | null;
+  /** No lifecycle row: an employee with no end date. */
+  default: boolean;
+  can_extend: boolean;
+  can_manage: boolean;
+  events?: { event: "set" | "extended" | "converted" | "warned" | "ended"; worker_type: string | null; ends_at: string | null; note: string | null; actor: string; at: string }[];
+}
+export interface LifecycleList { can_manage: boolean; rows: Lifecycle[] }
+export interface LifecycleSpec {
+  worker_type: WorkerType;
+  sponsor_identity_id: number | null;
+  organization: string | null;
+  starts_at: string | null;
+  ends_at: string | null;
+  reason: string;
+}
+const lcPath = (id: number, rest = "") => `/identities/${id}/lifecycle${rest}`;
+export const lifecycle = {
+  paths: { list: (state?: LifecycleState) => `/lifecycle${state ? `?state=${state}` : ""}`, sponsored: "/lifecycle/sponsored", one: (id: number) => lcPath(id) },
+  set: (id: number, spec: LifecycleSpec) => api<Lifecycle>(lcPath(id), spec, "PUT"),
+  extend: (id: number, endsAt: string, reason: string) => api<Lifecycle>(lcPath(id, "/extend"), { ends_at: endsAt, reason }),
+  sweep: () => api<{ warned: number; ended: number }>("/lifecycle/sweep", {}),
+};
+
 export const simulate = (body: { remove_edge_ids?: number[]; add_edges?: { src: string; dst: string }[]; disable_account_ids?: number[] }) =>
   api<SimResult>("/simulate", { remove_edge_ids: [], add_edges: [], disable_account_ids: [], ...body });
 

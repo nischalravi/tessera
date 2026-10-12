@@ -13,6 +13,7 @@ import { usePersona } from "../../app/persona";
 import {
   Avatar, Badge, Chip, CommandBar, EmptyState, IdLink, Loading, PathView, PreviewBadge, RiskPill, Sev, SidePanel, Status, Tabs, TypeBadge, TYPE_LABEL, useToast,
 } from "../../components";
+import { LifecycleSection } from "../lifecycle/parts";
 import { ORGS, OrgUnit, mockIdentityOps, mockObjects, useMockState } from "../../mocks";
 import { RevokeDrawer } from "./IdentityPage";
 import { CatalogSettings } from "./catalog";
@@ -102,6 +103,7 @@ export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void
             {d.terminated_at && <><dt>Left</dt><dd>{fmtDay(d.terminated_at)}</dd></>}
             <dt>Last sign-in</dt><dd>{relTime(lastLogin)}</dd>
           </dl>
+          {human && <LifecycleSection id={d.id} compact />}
           <Section title="Risk">
             <dl className="kv">
               <dt>Risk</dt><dd><RiskPill score={d.risk?.risk} /> <span className="faint small tnum">{Math.round(d.risk?.risk ?? 0)} / 100</span></dd>
