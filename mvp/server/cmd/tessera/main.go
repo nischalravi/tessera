@@ -52,6 +52,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
@@ -180,6 +181,10 @@ func seedDB(ctx context.Context, path string, cfg *config.Config, clock timeutil
 	tenants := seed.DefaultTenants(conns, now)
 	if cfg.DevIdPURL != "" {
 		tenants = seed.WithDevIdP(tenants, cfg.DevIdPURL)
+	}
+	keyer := identifiers.NewKeyer(sealer)
+	for i := range tenants {
+		tenants[i].Identifiers = keyer
 	}
 	stats, err := seed.Run(ctx, st, now, pols, tenants)
 	if err != nil {
