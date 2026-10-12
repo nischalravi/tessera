@@ -78,13 +78,24 @@ func newLimiters(c RateLimits) *limiters {
 		anonEvery: anon.Every, authEvery: au.Every}
 }
 
-// rateKey is the limiter key of the request's client.
-func (s *Server) rateKey(r *http.Request) string {
+// Where a client address came from (condaccess.Input.IPVia).
+const (
+	ipViaPeer = "peer"
+	ipViaXFF  = "x_forwarded_for"
+)
+
+// clientIP is the address of the request's client: the TCP peer, or, when the
+// peer is one of TrustedProxies, the rightmost X-Forwarded-For entry that is
+// not itself a trusted proxy. A header sent by any other peer is ignored, so
+// a client cannot name its own address; a malformed hop stops the walk at the
+// last address that could be trusted. The second result says which it was.
+// The zero Addr means the peer address could not be parsed.
+func (s *Server) clientIP(r *http.Request) (netip.Addr, string) {
 	ap, err := netip.ParseAddrPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		return netip.Addr{}, ""
 	}
-	a := ap.Addr().Unmap()
+	a, via := ap.Addr().Unmap(), ipViaPeer
 	if s.trustedProxy(a) {
 		hops := strings.Split(strings.Join(r.Header.Values("X-Forwarded-For"), ","), ",")
 		for i := len(hops) - 1; i >= 0; i-- {
@@ -92,11 +103,20 @@ func (s *Server) rateKey(r *http.Request) string {
 			if err != nil {
 				break // a malformed hop: keep the last address we could trust
 			}
-			a = h.Unmap()
+			a, via = h.Unmap(), ipViaXFF
 			if !s.trustedProxy(a) {
 				break
 			}
 		}
+	}
+	return a, via
+}
+
+// rateKey is the limiter key of the request's client.
+func (s *Server) rateKey(r *http.Request) string {
+	a, _ := s.clientIP(r)
+	if !a.IsValid() {
+		return r.RemoteAddr
 	}
 	if a.Is6() {
 		p, _ := a.Prefix(64)

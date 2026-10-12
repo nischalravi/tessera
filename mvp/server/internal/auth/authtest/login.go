@@ -45,6 +45,9 @@ type Ctx struct {
 	Phr      bool
 	Phrh     bool
 	AuthTime time.Time // zero: the session's creation time
+	// Device is the JSON of the device claims the IdP asserted (for example
+	// `{"managed":true,"compliant":false}`); empty: none.
+	Device string
 }
 
 // Common contexts.
@@ -193,7 +196,11 @@ func Record(user uuid.UUID, c Ctx, now time.Time) *store.AuthnContextRecord {
 	if c.Phrh {
 		aal = 3
 	}
-	return &store.AuthnContextRecord{ID: c.ID, UserID: user, Protocol: "oidc", Purpose: "login", AAL: aal,
+	var device *string
+	if c.Device != "" {
+		device = &c.Device
+	}
+	return &store.AuthnContextRecord{ID: c.ID, UserID: user, Device: device, Protocol: "oidc", Purpose: "login", AAL: aal,
 		PhishingResistant: c.Phr || c.Phrh, PhrBasis: basis, TesseraACR: string(acr), AuthTime: at.UTC(),
 		MappingProfile: "authtest", MappingVersion: 1, ClaimsSHA256: "authtest", CreatedAt: now}
 }

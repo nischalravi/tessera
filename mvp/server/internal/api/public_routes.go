@@ -15,6 +15,12 @@ type Route struct {
 	Public bool
 	Perm   auth.Permission
 	Authn  *auth.AuthnRequirement
+	// NoConditionalAccess exempts a step-up route from the tenant's
+	// privileged-scope conditional access policies (still permission and
+	// step-up). Only the conditional access management routes set it: a policy
+	// that denies the admin's own network must not lock the admin out of
+	// fixing it.
+	NoConditionalAccess bool
 }
 
 // publicRoute is the requirement of a route on the allow-list.
@@ -27,6 +33,14 @@ func need(p auth.Permission) Route { return Route{Perm: p} }
 func needStepUp(p auth.Permission, req auth.AuthnRequirement) Route {
 	r := req
 	return Route{Perm: p, Authn: &r}
+}
+
+// needStepUpExempt is needStepUp for a route conditional access never
+// blocks (see Route.NoConditionalAccess).
+func needStepUpExempt(p auth.Permission, req auth.AuthnRequirement) Route {
+	r := needStepUp(p, req)
+	r.NoConditionalAccess = true
+	return r
 }
 
 // publicRoutes is the exact allow-list of routes served without a session

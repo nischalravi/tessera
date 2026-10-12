@@ -157,6 +157,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if strings.HasPrefix(rt.Pattern, "/api/auth/saml/{connection_id}/") {
 			continue // TestIsolation_SAMLCrossTenant (public; the tenant comes from the cookie or the connection)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/access/") {
+			continue // TestAccessCrossTenant (UUID ids, not fixture ids)
+		}
 		if rt.Pattern == "/api/auth/sessions/{session_id}" {
 			continue // TestIsolation_SessionCookieScoped (a UUID, not a fixture id)
 		}

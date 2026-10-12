@@ -16,7 +16,7 @@ import (
 // designRoutes is the route -> requirement table of the designs, transcribed:
 // docs/design/phase-0-platform-security.md §16.2 (existing routes) and §16.1
 // (session and audit routes), and docs/design/deployment-readiness.md §9
-// (readiness routes). Columns: method, pattern, permission, step-up
+// (readiness routes) and issue #163 (conditional access). Columns: method, pattern, permission, step-up
 // (STEP_UP_POLICY or -). "public" marks the allow-list. Routes that neither
 // design names (GET /api/accounts, the API description) are marked with a
 // trailing "#" and the requirement chosen for them in this PR.
@@ -87,6 +87,18 @@ POST   /api/connections/{id}/findings/{fid}/accept   connections.manage -
 GET    /api/connections/{id}/health                  connections.read   -
 GET    /api/insights/deployment-health               connections.read   -
 POST   /api/insights/deployment-health/rerun         connections.manage -
+GET    /api/access/policies                          conditional_access.read   -
+POST   /api/access/policies                          conditional_access.manage STEP_UP_POLICY
+PUT    /api/access/policies/{id}                     conditional_access.manage STEP_UP_POLICY
+DELETE /api/access/policies/{id}                     conditional_access.manage STEP_UP_POLICY
+GET    /api/access/networks                          conditional_access.read   -
+POST   /api/access/networks                          conditional_access.manage STEP_UP_POLICY
+PUT    /api/access/networks/{id}                     conditional_access.manage STEP_UP_POLICY
+DELETE /api/access/networks/{id}                     conditional_access.manage STEP_UP_POLICY
+GET    /api/access/device-signals                    conditional_access.read   -
+PUT    /api/access/device-signals/{user_id}          conditional_access.manage STEP_UP_POLICY
+DELETE /api/access/device-signals/{user_id}          conditional_access.manage STEP_UP_POLICY
+POST   /api/access/evaluate                          conditional_access.read   -
 GET    /api/auth/session                             auth.self       -
 POST   /api/auth/logout                              auth.self       -
 GET    /api/auth/sessions                            auth.self       -

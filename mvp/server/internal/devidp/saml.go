@@ -17,6 +17,7 @@ import (
 	"math/big"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -436,6 +437,14 @@ func (s *Server) BuildSAMLResponse(in SAMLAssertionInput, fault Fault) (*etree.D
 	addAttr(samlDefaultAttributeName, in.User.Name)
 	if len(in.User.Groups) > 0 {
 		addAttr(samlDefaultAttributeGroups, in.User.Groups...)
+	}
+	if d := in.User.Device; d != nil {
+		if d.Managed != nil {
+			addAttr("device_managed", strconv.FormatBool(*d.Managed))
+		}
+		if d.Compliant != nil {
+			addAttr("device_compliant", strconv.FormatBool(*d.Compliant))
+		}
 	}
 
 	ctx, err := s.samlSigner()

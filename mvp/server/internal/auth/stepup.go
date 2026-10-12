@@ -27,6 +27,19 @@ var (
 	StepUpAdmin = AuthnRequirement{ACR: ACRPhr, MaxAge: 300 * time.Second}
 )
 
+// Merge is the stricter of r and o: the higher ACR and the shorter positive
+// MaxAge. Conditional access uses it to add its step-up to a route's own.
+func (r AuthnRequirement) Merge(o AuthnRequirement) AuthnRequirement {
+	out := r
+	if o.ACR.Rank() > out.ACR.Rank() {
+		out.ACR = o.ACR
+	}
+	if o.MaxAge > 0 && (out.MaxAge <= 0 || o.MaxAge < out.MaxAge) {
+		out.MaxAge = o.MaxAge
+	}
+	return out
+}
+
 // describe is the human-readable reason of a step-up challenge.
 func (r AuthnRequirement) describe() string {
 	what := "a phishing-resistant sign-in"

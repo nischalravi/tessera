@@ -58,7 +58,19 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, rt *route) (*
 			return r, false
 		}
 	}
-	if d := auth.Check(p, rt.spec.Perm, rt.spec.Authn, now); d != nil {
+	d := auth.Check(p, rt.spec.Perm, rt.spec.Authn, now)
+	if rt.spec.Authn != nil && !rt.spec.NoConditionalAccess && p.Kind == auth.KindUser &&
+		(d == nil || d.Error == "step_up_required") {
+		// a privileged action: the tenant's conditional access policies may
+		// deny it or add a step-up of their own (access.go)
+		var err error
+		if d, err = s.accessCheck(r.Context(), r, nil, p, rt.spec.Perm, rt.spec.Authn, rt.method+" "+rt.pattern); err != nil {
+			s.log.Error("conditional access failed", "method", r.Method, "path", r.URL.Path, "err", err)
+			writeAuditUnavailable(w, r)
+			return r, false
+		}
+	}
+	if d != nil {
 		auth.WriteDenial(w, d)
 		return r, false
 	}

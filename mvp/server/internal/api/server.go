@@ -21,6 +21,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oidcrp"
+	"github.com/nischalravi/tessera/mvp/server/internal/condaccess"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -95,6 +96,10 @@ type Config struct {
 	// TrustedProxies (TESSERA_TRUSTED_PROXIES) are the peers whose
 	// X-Forwarded-For the rate limiter believes.
 	TrustedProxies []netip.Prefix
+	// DeviceSignals is the source of device-compliance signals for
+	// conditional access. Nil: the signals admins set (condaccess.StoreSignals);
+	// the CAEP receiver (#114) will plug in here.
+	DeviceSignals condaccess.SignalSource
 	// AuditAppend overrides how the audit middleware writes http.request
 	// events (tests inject failures). Nil: the store.
 	AuditAppend func(ctx context.Context, t tenancy.ID, e store.AuditEvent) error
@@ -110,6 +115,8 @@ type Server struct {
 	authn  *auth.Authenticator
 	limits *limiters
 	rp     *oidcrp.RP
+	// signals supplies device-compliance signals to conditional access.
+	signals condaccess.SignalSource
 
 	readiness *readiness.Service
 }
@@ -142,7 +149,10 @@ func New(cfg Config) *Server {
 		cfg.Readiness = readiness.NewService(reg, cfg.Env)
 		cfg.Readiness.Runner.Scenario = cfg.ReadinessScenario
 	}
-	s := &Server{cfg: cfg, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
+	if cfg.DeviceSignals == nil {
+		cfg.DeviceSignals = condaccess.StoreSignals{}
+	}
+	s := &Server{cfg: cfg, signals: cfg.DeviceSignals, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
 		limits: newLimiters(cfg.RateLimits)}
 	if cfg.OutboundHTTP != nil {
 		rp, err := oidcrp.New(oidcrp.Config{HTTP: cfg.OutboundHTTP, Now: func() time.Time { return s.clock() }})
@@ -160,6 +170,7 @@ func New(cfg Config) *Server {
 	s.registerLoginRoutes()
 	s.registerSAMLRoutes()
 	s.registerStepUpRoutes()
+	s.registerAccessRoutes()
 	s.checkPublicRoutes()
 	return s
 }

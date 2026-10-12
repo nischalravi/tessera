@@ -128,7 +128,7 @@ func (s *Server) handleDiscovery(w http.ResponseWriter, _ *http.Request) {
 		TokenEndpointAuthMethodsSupported:      []string{"client_secret_basic", "private_key_jwt"},
 		TokenEndpointAuthSigningAlgsSupported:  algs,
 		CodeChallengeMethodsSupported:          []string{"S256"},
-		ClaimsSupported:                        []string{"iss", "sub", "aud", "exp", "iat", "auth_time", "nonce", "sid", "acr", "amr", "acrs", "email", "email_verified", "name", "preferred_username", "groups", "roles", "oid", "tid", "at_hash"},
+		ClaimsSupported:                        []string{"iss", "sub", "aud", "exp", "iat", "auth_time", "nonce", "sid", "acr", "amr", "acrs", "email", "email_verified", "name", "preferred_username", "groups", "roles", "device_managed", "device_compliant", "oid", "tid", "at_hash"},
 		ClaimsParameterSupported:               true,
 		ACRValuesSupported:                     acrValuesSupported,
 		PromptValuesSupported:                  []string{"none", "login"},
@@ -641,6 +641,14 @@ func (s *Server) mintIDToken(ac authCode, accessToken string, now time.Time) (st
 	}
 	if len(ac.user.Roles) > 0 {
 		claims["roles"] = ac.user.Roles
+	}
+	if d := ac.user.Device; d != nil {
+		if d.Managed != nil {
+			claims["device_managed"] = *d.Managed
+		}
+		if d.Compliant != nil {
+			claims["device_compliant"] = *d.Compliant
+		}
 	}
 	switch p.fault {
 	case FaultWrongIss:

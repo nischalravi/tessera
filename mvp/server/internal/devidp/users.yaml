@@ -4,14 +4,16 @@
 # tenant          the Tessera tenant slug the user belongs to
 # groups          emitted as the "groups" claim (connections map groups to roles)
 # roles           emitted as the "roles" claim; the seeded bootstrap role in Tessera
+# device          optional {managed, compliant}: emitted as the device_managed and
+#                 device_compliant claims, which conditional access can test
 # authenticators  methods offered on the sign-in page:
 #                   passkey       synced passkey (FIDO2 WebAuthn): phishing-resistant
 #                   hardware_key  device-bound security key: phishing-resistant, non-exportable
 #                   password_otp  password + one-time code: MFA, not phishing-resistant
 #                   password      password only
-- {sub: "00u-alice-admin", email: alice.admin@larkspur.example, name: "Alice (tenant admin)", tenant: larkspur, groups: ["Tessera Viewers"], roles: [tenant_admin], authenticators: [passkey, password_otp, password]}
+- {sub: "00u-alice-admin", email: alice.admin@larkspur.example, name: "Alice (tenant admin)", tenant: larkspur, groups: ["Tessera Viewers"], roles: [tenant_admin], authenticators: [passkey, password_otp, password], device: {managed: true, compliant: true}}
 - {sub: "00u-ivan-admin2", email: ivan.admin@larkspur.example, name: "Ivan (2nd admin)", tenant: larkspur, roles: [tenant_admin], authenticators: [passkey, hardware_key, password_otp]}
 - {sub: "00u-pat-policy", email: pat.policy@larkspur.example, name: "Pat (policy admin)", tenant: larkspur, roles: [policy_admin], authenticators: [passkey, password_otp]}
-- {sub: "00u-olu-operator", email: olu@larkspur.example, name: "Olu (operator)", tenant: larkspur, groups: ["Tessera Operators"], roles: [operator], authenticators: [password_otp, password]}
+- {sub: "00u-olu-operator", email: olu@larkspur.example, name: "Olu (operator)", tenant: larkspur, groups: ["Tessera Operators"], roles: [operator], authenticators: [password_otp, password], device: {managed: false, compliant: false}}
 - {sub: "00u-vic-viewer", email: vic@larkspur.example, name: "Vic (viewer)", tenant: larkspur, groups: ["Tessera Viewers"], roles: [viewer], authenticators: [password]}
 - {sub: "00u-gina-globex", email: gina@globex.example, name: "Gina (Globex admin)", tenant: globex, roles: [tenant_admin], authenticators: [passkey, password_otp]}
