@@ -40,8 +40,9 @@ test("a plan is summarised and only rotatable secrets are queued", () => {
 
 test("the recorded re-read is explained in sentences", () => {
   const base = { checked_at: "2026-10-12T09:00:00Z", verdict: "ok", evidence: "age_and_last_use", old_exists: true, old_active: false, old_created_at: "2026-06-04T00:00:00Z", old_age_days: 130, old_last_used_at: "2026-10-10T08:15:00Z", last_used_known: true, disabled_at: "2026-10-11T09:00:00Z" } as any;
-  assert.deepEqual(evidenceLines(base), ["Key age: 130 days.", "Last use: 2026-10-10 08:15:00 UTC.", "The old credential is not in use."]);
+  assert.deepEqual(evidenceLines(base), ["Key age: 130 days.", "Last use: 2026-10-10 08:15 UTC.", "The old credential is not in use."]);
   assert.match(evidenceLines({ ...base, old_last_used_at: null })[1], /never/);
+  assert.equal(evidenceLines({ ...base, old_last_used_at: "2026-10-12T19:23:26.562581Z" })[1], "Last use: 2026-10-12 19:23 UTC.");
   assert.match(evidenceLines({ ...base, last_used_known: false })[1], /does not report it/);
   const bad = evidenceLines({ ...base, verdict: "used_after_disable", detail: "a consumer still signs" });
   assert.match(bad[2], /used after the grace period/);

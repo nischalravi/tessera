@@ -85,6 +85,8 @@ server/
     simulate/           what-if engine: apply edits to a snapshot copy, diff perms + violations
     leastpriv/          grant-level and role-level recommendations
     nhi/, jit/, reviews/, jml/, seed/
+    rotation/           secret rotation: adapters (AWS IAM, Secrets Manager, Vault, GitHub), SigV4,
+                        policies, plans, the job engine, bulk "vendor compromised", Notifier
     api/                HTTP routes under /api, FastAPI-compatible validation errors, OpenAPI/docs
     config/             typed settings from TESSERA_* variables; production guard rails
     seal/               AES-256-GCM sealing under the KEK (AAD-bound), random secrets, SHA-256 helpers
@@ -143,6 +145,85 @@ tenant-scoped like every other table; Admin → Connections → New
 connection → Active Directory (demo) walks the rest. Design: `docs/design/deployment-readiness.md`.
 The routes are documented at `/api/readiness/openapi.json`.
 
+### Secret rotation
+
+Issue #113. Unrotated credentials caused Cloudflare (2023), Internet Archive (2024), Snowflake (2024)
+and Klue (2026); the old `rotate_secret` step only stamped a timestamp. Tessera now rotates a
+credential through the customer's own vaults and cloud APIs and proves the old one is unused before
+deleting it. Screens: Identity → **Secret rotation** (Secrets, Rotation jobs, Policies & adapters,
+Vendor compromised), plus the rotation status and **Rotate secrets…** action on Machine identities
+and on an identity's panel and page. The routes are documented at `/api/rotation/openapi.json`.
+
+**Tessera is not a password vault.** A new credential is written into the customer's vault (Vault KV v2
+or AWS Secrets Manager) and is never stored by Tessera: it lives in memory for the few calls a hand-over
+takes. The only credentials Tessera holds are the adapters' own (an AWS access key, a Vault token, a
+GitHub token), sealed with `internal/seal` under the KEK, bound by AAD to tenant, table, column and
+adapter, and never returned by the API or written to a log or audit event. Every outbound call goes
+through `internal/safehttp`; the simulated adapter exists only where `TESSERA_ROTATION_FAKE_ADAPTERS`
+allows it (on by default in dev and test, refused when `TESSERA_ENV=prod`).
+
+A **job** walks `pending → created → handed_over → old_disabled → verified → old_deleted`, or `failed`
+(retry resumes at the step that failed):
+
+1. *created*: the adapter makes the new credential.
+2. *handed_over*: it is written to the vault named by the policy (`dest_path`, with `{system}`, `{kind}`,
+   `{name}`, `{account}`). If the hand-over fails the new credential is removed again, so nothing is left
+   behind and the old one is untouched. A worker that dies between the two steps is recovered the same way.
+3. After the policy's **grace period**, *old_disabled*: the old credential is deactivated where the provider
+   can (IAM yes; Secrets Manager removes the `AWSPREVIOUS` label; Vault and GitHub cannot, so the step is
+   recorded as skipped).
+4. *verified*: Tessera **re-reads the old credential**, records its key age and last use on the job
+   (`verification`), and refuses to go on if it is still active after being disabled or was used after the
+   grace period (a consumer has not moved). The database enforces it: a job cannot be `verified` or
+   `old_deleted` without the recorded observation. Providers that report no last use (Vault) are recorded as
+   `age_only` evidence.
+5. *old_deleted*: the old credential is deleted, re-read to confirm it is gone, the inventory follows the new
+   credential and the owner is notified.
+
+| Adapter | Rotates | Disable | Last use | Notes |
+|---|---|---|---|---|
+| `aws_iam` | IAM user access key (`access_key`); secret ref is the key id, account username the IAM user | yes | `GetAccessKeyLastUsed` | hand over to Vault or Secrets Manager; SigV4 signed with the standard library (no SDK) |
+| `aws_secretsmanager` | a secret's value in place: `RotateSecret` when it has a rotation function, otherwise a new random version | removes `AWSPREVIOUS` | `LastAccessedDate` | Tessera never reads a secret value; also a hand-over destination |
+| `vault` | AppRole SecretID (`approle_secret_id`, ref `mount/role#accessor`) | no | not reported | also a KV v2 destination; SecretID accessor lookup and destroy |
+| `github` | repository deploy key (`deploy_key`, ref `owner/repo#id`) | no | `last_used` | new Ed25519 key, read-only flag copied from the old key |
+
+What GitHub allows: deploy keys can be created and deleted through the API. Personal access tokens (classic
+and fine-grained) and GitHub App private keys cannot be created or revoked by API, and installation tokens
+last an hour, so those kinds stay **manual**: Tessera tracks their age against a max-age policy and the plan
+says why. Kinds with no adapter (key pairs, passwords) are manual as well.
+
+**Policies** (`/api/rotation/policies`) give a secret kind (optionally one system) a max age, a grace period
+and an adapter (none means manual: age tracking and owner notification only); `auto_rotate` lets the worker
+queue the rotation of an overdue secret. **Plans** (`POST /api/rotation/plan`, `/api/rotation/bulk/plan`)
+are dry runs computed from the database: nothing is called or written. **Vendor compromised**
+(`POST /api/rotation/bulk`): pick an integration, review the plan (its `plan_hash` is what you confirm; the
+server refuses with 409 `plan_changed` if the credentials changed since), give a reason, and every active
+credential of that system is queued with no grace period; owners of credentials Tessera cannot rotate are
+told to rotate them by hand. The JML `rotate_secret` step queues a rotation (no grace period) when a policy
+covers the secret, and otherwise keeps stamping the timestamp as before.
+
+Reading rotation state needs `graph.read`; changing anything (adapters, policies, rotate now, retry, cancel,
+bulk) needs the new `secrets.rotate` permission (policy admin) and a fresh phishing-resistant sign-in. Every
+change writes its audit event in the same transaction (`rotation.adapter.*`, `rotation.policy.*`,
+`rotation.job.queued|created|handed_over|old_disabled|verified|failed|retried|cancelled`,
+`rotation.completed`, `rotation.bulk.executed`, `rotation.owner_notified`); the worker acts as the system
+actor `rotation.worker`.
+
+**Owner notifications** go through `rotation.Notifier` (`internal/rotation/notify.go`): `Notify(ctx, tx,
+Notification)` runs in the tenant transaction that records the change, must not do network I/O, and an error
+rolls the change back. The default, `AuditNotifier`, writes a `rotation.owner_notified` audit event naming the
+owner (or "tenant administrators" when the secret is orphaned or its owner has left) and sends nothing. The
+notifications outbox (#189) plugs in by implementing the interface and setting `api.Config.RotationNotifier`
+and `rotation.Service.Notifier`.
+
+Limits worth knowing: the worker steps jobs every 30 s and retries transient provider errors with a backoff
+(30 s doubling, five attempts). AWS reports last use at about hour granularity and may lag, so a late use can
+show up after the re-read. Secrets Manager cannot delete a version, only take its labels off (the version is
+then deprecated and removed by AWS). A Vault or GitHub endpoint on a private address is refused by the SSRF
+guard (there is no allow-list yet). GitHub OAuth app tokens need the app's client secret and the token itself,
+which Tessera does not hold, so they are not rotated. The dev seed adds a simulated provider and policies for
+the demo credentials (`TESSERA_ROTATION_FAKE_ADAPTERS=false` skips them).
+
 ### Main API endpoints
 
 `GET /api/summary` · `GET /api/identities[?type=&q=]` · `GET /api/identities/{id}` · `GET /api/accounts[?system=]` ·
@@ -158,7 +239,11 @@ The routes are documented at `/api/readiness/openapi.json`.
 `GET /api/audit/events/{event_id}/proof` · `GET /api/audit/checkpoints[?from_seq=]` · `GET /api/audit/keys` ·
 `POST /api/audit/verify {from_seq?, to_seq?}` · `GET /api/audit/export[?from_seq=&to_seq=]` (NDJSON) ·
 `GET /api/auth/session` · `POST /api/auth/logout` · `GET /api/auth/sessions` · `DELETE /api/auth/sessions/{session_id}` ·
-`GET|POST /api/auth/dev-login` (dev and test only)
+`GET|POST /api/auth/dev-login` (dev and test only) ·
+`GET /api/rotation/overview` · `GET|PUT /api/rotation/adapters[/{name}]` · `GET|PUT /api/rotation/policies` ·
+`POST /api/rotation/plan {secret_ids}` · `GET|POST /api/rotation/jobs` · `GET /api/rotation/jobs/{id}` ·
+`POST /api/rotation/jobs/{id}/retry|cancel` · `POST /api/rotation/bulk/plan {system}` ·
+`GET|POST /api/rotation/bulk` · `GET /api/rotation/bulk/{id}`
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
@@ -226,7 +311,7 @@ the right. Arrow keys move between items.
 | Group | Items |
 |---|---|
 | (top) | **Home**, **Inbox** (count) |
-| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts, Roles (Preview), Organizations (Preview) |
+| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Secret rotation (Secrets, Rotation jobs, Policies & adapters, Vendor compromised), Applications, Accounts, Roles (Preview), Organizations (Preview) |
 | **Access** | Request access, My access (with *My requests*), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
 | **Protection** | Policies & SoD (violations, policies, what-if simulation), Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
 | **Settings** | Connections (governed connections and the setup wizard), Admin |
@@ -245,7 +330,7 @@ chips with **+ Add filter**, saved views, CSV export and a table with checkbox s
 **Side panel.** Clicking a row opens a 520px panel over the list; on wide screens the list makes
 room so it stays visible, and the selected row stays highlighted. For a user or machine identity
 the panel shows the avatar, name and risk pill, a command bar (Edit, Request access for, Reset
-password or Rotate secret, Start review, Open in graph, Disable) and tabs: Overview, Access,
+password or Rotate secrets…, Start review, Open in graph, Disable) and tabs: Overview, Access,
 Groups, Activity. Groups, applications, accounts, roles, organizations, policy violations and
 review items have their own panels. The panel is deep-linkable (`/directory/people?selected=16`,
 `/governance/policies?selected=<key>`, `/governance/reviews?item=<id>`), traps focus, closes
@@ -473,7 +558,8 @@ cd ../frontend && npm run build && npm test   # npm test: node:test, no extra de
 * Configuration (`internal/config`): with `TESSERA_ENV=prod` the server refuses to start on a
   non-https `TESSERA_PUBLIC_URL`, `TESSERA_COOKIE_SECURE=false`, no KEK, any
   `TESSERA_CORS_ORIGINS` (the production UI is same-origin, so CORS is off),
-  `TESSERA_OUTBOUND_ALLOW_LOOPBACK=true`, a `TESSERA_DEV_IDP_URL`, a missing or `file://`
+  `TESSERA_OUTBOUND_ALLOW_LOOPBACK=true`, `TESSERA_ROTATION_FAKE_ADAPTERS=true` (the simulated
+  rotation adapter), a `TESSERA_DEV_IDP_URL`, a missing or `file://`
   `TESSERA_AUDIT_ANCHOR`, a frozen clock (`TESSERA_NOW`), or a `TESSERA_TRUSTED_PROXIES` prefix
   broader than /8 (IPv4) or /32 (IPv6), and lists every problem at once. A /0 proxy prefix is
   refused in every environment.

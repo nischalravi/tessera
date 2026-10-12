@@ -105,6 +105,9 @@ export function planHeadline(s: PlanSummary): string {
 /** Secrets of a plan that the Rotate action can queue. */
 export const rotatable = (items: Pick<RotationPlanItem, "action" | "secret_id">[]) => items.filter((i) => i.action === "rotate").map((i) => i.secret_id);
 
+/** "2026-10-12T19:23:26.562581Z" as "2026-10-12 19:23 UTC". */
+export const utcMinute = (s: string) => s.replace(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}):\d{2}(?:\.\d+)?Z?$/, "$1 $2 UTC");
+
 const VERDICT_TEXT: Record<RotationVerification["verdict"], string> = {
   ok: "The old credential is not in use.",
   still_active: "The old credential was still active after it was disabled.",
@@ -119,7 +122,7 @@ export function evidenceLines(v: RotationVerification): string[] {
   if (!v.old_exists) lines.push("The old credential was already gone when it was re-read.");
   else if (!v.last_used_known) lines.push("Last use: this provider does not report it, so only the key age was checked.");
   else if (!v.old_last_used_at) lines.push("Last use: never.");
-  else lines.push(`Last use: ${v.old_last_used_at.replace("T", " ").replace("Z", " UTC")}.`);
+  else lines.push(`Last use: ${utcMinute(v.old_last_used_at)}.`);
   lines.push(VERDICT_TEXT[v.verdict]);
   if (v.detail && v.verdict !== "ok") lines.push(v.detail);
   return lines;
