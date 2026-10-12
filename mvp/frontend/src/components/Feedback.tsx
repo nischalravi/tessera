@@ -85,11 +85,11 @@ export function Kpi({ label, value, sub, tone, icon, to }: { label: ReactNode; v
   return to ? <Link className={`card kpi ${tone ?? ""}`} to={to}>{body}</Link> : <div className={`card kpi ${tone ?? ""}`}>{body}</div>;
 }
 
-export function Bar({ value, max = 100, tone }: { value: number; max?: number; tone?: "risk" | "ok" }) {
+export function Bar({ value, max = 100, tone, label }: { value: number; max?: number; tone?: "risk" | "ok"; label?: string }) {
   const pct = Math.min(100, (100 * value) / Math.max(1, max));
   const cls = tone === "risk" ? `risk ${pct >= 70 ? "hi" : ""}` : tone ?? "";
   return (
-    <div className={`bar ${cls}`} role="meter" aria-valuenow={Math.round(value)} aria-valuemin={0} aria-valuemax={max}>
+    <div className={`bar ${cls}`} role="meter" aria-label={label ?? (tone === "risk" ? `Risk ${Math.round(value)} of ${max}` : `${Math.round(value)} of ${max}`)} aria-valuenow={Math.round(value)} aria-valuemin={0} aria-valuemax={max}>
       <i style={{ width: `${pct}%` }} />
     </div>
   );

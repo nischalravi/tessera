@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Layers, Minus, Plus, Search, ShieldAlert, ShoppingCart, Timer, X } from "lucide-react";
@@ -246,7 +247,7 @@ export function RequestAccess() {
 
   return (
     <Page title="Request access" crumbs={[["Access"], ["Request access"]]} sub="Find what you need, add it to your request, and see policy conflicts before you submit. Privileged access is granted just in time and removed automatically.">
-      <div className="split" style={{ gridTemplateColumns: "minmax(0,1fr) 380px" }}>
+      <div className="split" style={{ "--side-w": "380px" } as CSSProperties}>
         <div className="stack">
           <div className="row">
             <label className="input-icon" style={{ flex: "1 1 260px" }}>

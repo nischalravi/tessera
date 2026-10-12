@@ -69,12 +69,18 @@ type Config struct {
 	AuditAnchor            string
 	AuditCheckpointSeconds int
 	AuditCheckpointEvents  int
-	AccessTokenTTLSeconds  int
-	DeviceCodeTTLSeconds   int
-	DPoPRSNonce            bool
-	RPID                   string
-	Notify                 string
-	DevIdPURL              string
+	// AuthRateBurst and AnonRateBurst are the per-IP burst sizes of the
+	// /api/auth/* and anonymous request limiters (TESSERA_AUTH_RATE_BURST,
+	// TESSERA_ANON_RATE_BURST; defaults 30 and 120). Browser test suites from
+	// one address raise them.
+	AuthRateBurst         int
+	AnonRateBurst         int
+	AccessTokenTTLSeconds int
+	DeviceCodeTTLSeconds  int
+	DPoPRSNonce           bool
+	RPID                  string
+	Notify                string
+	DevIdPURL             string
 	// DevLogin is TESSERA_DEV_LOGIN: with TESSERA_ENV=test, the explicit
 	// opt-in for dev sign-in (loopback peers only). Refused in prod.
 	DevLogin bool
@@ -157,6 +163,8 @@ func Load(getenv func(string) string) (*Config, error) {
 	}
 	c.AuditCheckpointSeconds = integer("TESSERA_AUDIT_CHECKPOINT_SECONDS", 300, 1, 86400)
 	c.AuditCheckpointEvents = integer("TESSERA_AUDIT_CHECKPOINT_EVENTS", 1000, 1, 1_000_000)
+	c.AuthRateBurst = integer("TESSERA_AUTH_RATE_BURST", 30, 1, 100_000)
+	c.AnonRateBurst = integer("TESSERA_ANON_RATE_BURST", 120, 1, 100_000)
 	c.AccessTokenTTLSeconds = integer("TESSERA_AT_TTL_SECONDS", 600, 1, MaxAccessTokenTTLSeconds)
 	c.DeviceCodeTTLSeconds = integer("TESSERA_DEVICE_CODE_TTL_SECONDS", 300, 1, MaxDeviceCodeTTLSeconds)
 	c.DPoPRSNonce = boolean("TESSERA_DPOP_RS_NONCE", false, false)

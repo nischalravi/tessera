@@ -297,7 +297,7 @@ export function Inbox() {
     if (visible.length && !visible.some((i) => i.key === selKey)) setSelKey(visible[Math.min(idx, visible.length - 1)].key);
   }, [visible, selKey, idx]);
   useEffect(() => {
-    listRef.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
+    listRef.current?.querySelector<HTMLElement>('[aria-current="true"]')?.scrollIntoView({ block: "nearest" });
   }, [selKey]);
 
   const run = async (it: InboxItem, verb: Verb) => {
@@ -402,13 +402,13 @@ export function Inbox() {
               {items.length ? "Try another filter or clear the search." : scope === "mine" ? "Nothing is assigned to you. Approvals, review items and tasks for you will appear here." : "No open approvals, reviews, tasks or delegations. Start an access review from Governance when you're ready."}
             </EmptyState>
           ) : (
-            <div ref={listRef} role="listbox" aria-label="Inbox items" aria-activedescendant={current ? `ib-${current.key}` : undefined} tabIndex={0}>
+            <div ref={listRef} role="list" aria-label="Inbox items">
               {visible.map((it) => {
                 const t = itemTitle(it);
                 const v = VERBS[it.kind];
                 const self = selfRequest(it);
                 return (
-                  <div key={it.key} id={`ib-${it.key}`} role="option" aria-selected={it.key === current?.key} className="qrow" onClick={() => setSelKey(it.key)}>
+                  <div key={it.key} id={`ib-${it.key}`} role="listitem" aria-current={it.key === current?.key ? "true" : undefined} className={`qrow ${it.key === current?.key ? "selected" : ""}`} onClick={() => setSelKey(it.key)}>
                     <input type="checkbox" checked={checked.has(it.key)} onClick={(e) => e.stopPropagation()} onChange={() => setChecked((s) => { const n = new Set(s); if (n.has(it.key)) n.delete(it.key); else n.add(it.key); return n; })} aria-label={`Select ${t.title}`} />
                     <span className="q-ic" aria-hidden>{t.icon}</span>
                     <span style={{ minWidth: 0 }}>

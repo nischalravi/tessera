@@ -188,8 +188,8 @@ export function IdentityPage() {
                 <tbody>
                   {perms.map((p) => (
                     <Fragment key={p.perm_key}>
-                      <tr className="click" tabIndex={0} aria-expanded={open === p.perm_key} onClick={() => setOpen(open === p.perm_key ? null : p.perm_key)} onKeyDown={(e) => e.key === "Enter" && setOpen(open === p.perm_key ? null : p.perm_key)}>
-                        <td><b>{p.action}</b> {p.privileged && <Badge tone="warning">Privileged</Badge>} {!p.standing && <Badge tone="info">JIT</Badge>}</td>
+                      <tr className="click" onClick={() => setOpen(open === p.perm_key ? null : p.perm_key)}>
+                        <td><button type="button" className="linklike" aria-expanded={open === p.perm_key} onClick={(e) => { e.stopPropagation(); setOpen(open === p.perm_key ? null : p.perm_key); }}><b>{p.action}</b></button> {p.privileged && <Badge tone="warning">Privileged</Badge>} {!p.standing && <Badge tone="info">JIT</Badge>}</td>
                         <td>{p.resource} {p.environment && <Chip>{p.environment}</Chip>} {p.tags.map((t) => <Chip key={t}>{t}</Chip>)}</td>
                         <td className="sys">{p.system}</td>
                         <td className="nowrap">{p.unused ? <Badge tone="warning">{ago(p.usage.days_since_used)}</Badge> : <span className="small">{ago(p.usage.days_since_used)}</span>}</td>
