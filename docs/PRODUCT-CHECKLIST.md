@@ -1,6 +1,6 @@
 # Tessera product checklist
 
-The goal is to check every box: 64 capabilities in 13 areas (issue #157). The roadmap ([`ROADMAP.md`](ROADMAP.md)) orders the work. This page is how we measure it.
+The goal is to check every box: 65 capabilities in 13 areas (issue #157; email delivery visibility added 2026-10-12). The roadmap ([`ROADMAP.md`](ROADMAP.md)) orders the work. This page is how we measure it.
 
 **Last validated:** 2026-10-11, by a code audit of `dev` plus the open sign-in PRs #146–#156.
 
@@ -30,7 +30,7 @@ Status shows how far an unchecked item has come:
 
 | | Done | Built | Partial | Preview | Demo | Missing | Total |
 |---|---|---|---|---|---|---|---|
-| Count | 1 | 12 | 32 | 3 | 2 | 14 | 64 |
+| Count | 1 | 12 | 32 | 3 | 2 | 15 | 65 |
 
 Three gaps account for most unchecked boxes:
 
@@ -86,7 +86,7 @@ Tessera is a relying party to the customer's IdP. It never stores passwords or s
 | ☐ | Self-service access catalog | Partial | Requestable groups and JIT are real (`RequestAccess.tsx` → `/api/jit/requests`); roles and other items are Preview | #164 |
 | ☐ | Manager and application-owner approvals | Partial | One approver with `PermJITDecide` and a self-approval block; no manager or owner routing | #165 |
 | ☐ | Multiple approval stages | Preview | `governance/Workflows.tsx` with mock `WORKFLOWS` | Knowledge row 86 (Phase 2) |
-| ☐ | Request tracking and notifications | Partial | Tracking is real for JIT (`GET /api/jit/requests`); there are no notifications | #16 (notifications) |
+| ☐ | Request tracking and notifications | Partial | Tracking is real for JIT (`GET /api/jit/requests`); there are no notifications | #189 (notifications; #16 reuses its outbox) |
 | ☐ | Automatic access expiration and removal | Built | `jit.Sweep` / `SweepAll`; in Tessera's graph only | M3 write-back |
 
 ## Provisioning and integrations
@@ -166,7 +166,8 @@ Tessera is a relying party to the customer's IdP. It never stores passwords or s
 | ☐ | Easy access-request portal | Preview | `RequestAccess.tsx` uses mock roles and requests; only JIT is real; open bug #144 | #164; bug #144 |
 | ☐ | Clear approval and review screens | Partial | Reviews, JIT and HRIS approvals call the API; inbox requests and delegations are mock | #165 |
 | ☐ | Accessible interface | Partial | ARIA throughout and reduced-motion support; no automated accessibility tests or WCAG audit | #173 |
-| ☐ | Useful notifications | Preview | The admin notifications section is mock | #16 |
+| ☐ | Useful notifications | Preview | The admin notifications section is mock | #189 |
+| ☐ | Email delivery visible in Tessera | Missing | Tessera sends no email. Customers who send claim, invite or notification emails must check a relay's dashboard (such as Postmark) to see whether a message went out | #189: a per-message delivery log with the SMTP transaction (envelope, every command and reply code, STARTTLS result, the relay's queue id, each retry), credentials and bodies redacted; status queued, accepted by the relay, deferred, rejected or failed; shown on claim and invite records (GU-2 #65, GU-6 #69). Bounce tracking follows |
 | ☐ | Mobile-friendly authentication | Partial (open PRs) | Redirect sign-in and step-up work on mobile; the UI has only basic breakpoints | Merge #146–#149; layout #174 |
 
 ## Re-validating
