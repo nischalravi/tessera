@@ -925,6 +925,10 @@ type revokeResult struct {
 	DryRun  bool     `json:"dry_run"`
 	Grant   grantRef `json:"grant"`
 	Applied *bool    `json:"applied,omitempty"`
+	// Provisioning is set when the revoke went to the target system through
+	// the provisioning engine (write-back on): applied is false until a
+	// re-read of the target confirms it, and the edge stays until then.
+	Provisioning *provisioningRef `json:"provisioning,omitempty"`
 }
 
 func (s *Server) revoke(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
@@ -965,6 +969,13 @@ func (s *Server) revoke(_ http.ResponseWriter, r *http.Request, p *params) (any,
 	out := &revokeResult{Result: res, DryRun: dryRun,
 		Grant: grantRef{e.ID, e.Src, e.Dst, a.g.Label(e.Src) + " → " + a.g.Label(e.Dst)}}
 	if dryRun {
+		return out, nil
+	}
+	if op, err := routeGrantRevoke(c, a.now, e, out.Grant.Label, res.Summary.PermissionsRemoved); err != nil {
+		return nil, err
+	} else if op != nil {
+		applied := false
+		out.Applied, out.Provisioning = &applied, refOf(op)
 		return out, nil
 	}
 	if err := c.Audit(a.now, pr.Display, "grant.revoke", ojson.Object{{Key: "edge_id", Value: e.ID},

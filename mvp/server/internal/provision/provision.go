@@ -113,6 +113,9 @@ type Change struct {
 	// JSON-able argument.
 	Completion string
 	Data       any
+	// NoRequeue leaves an existing operation with this key as it is, even a
+	// failed one: a background job must not retry what an operator has to look at.
+	NoRequeue bool
 }
 
 func (c Change) ref() string {
@@ -178,6 +181,9 @@ func Enqueue(tx *store.TenantTx, now time.Time, connectionID string, c Change) (
 		return nil, &Error{400, "invalid_group", "an entitlement operation needs a group"}
 	}
 	if existing, err := tx.ProvOpByKey(c.Key); err == nil {
+		if c.NoRequeue {
+			return existing, nil
+		}
 		return requeueIfDone(tx, now, existing)
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return nil, err

@@ -671,6 +671,44 @@ export const readiness = {
     "/insights/deployment-health/rerun", { reconcile }),
 };
 
+// ----------------------------------------------------- provisioning (#103)
+
+export type ProvStatus = "queued" | "sent" | "pending_verification" | "verified" | "mismatch" | "failed" | "cancelled";
+export type ProvKind = "create_account" | "update_account" | "disable_account" | "delete_account" | "add_entitlement" | "remove_entitlement";
+
+export interface ProvOp {
+  id: string; connection_id: string; connection_name: string; system: string; kind: ProvKind; target: string;
+  source: "jml" | "review" | "jit" | "leastpriv" | "api"; status: ProvStatus; attempts: number; verify_attempts: number;
+  next_attempt_at: string; last_error: string | null; observed: string | null; requested_by: string; idempotency_key: string;
+  completion: string | null; created_at: string; updated_at: string; completed_at: string | null; can_retry: boolean; can_cancel: boolean;
+}
+
+export interface ProvFinding {
+  id: string; op_id: string; connection_id: string; code: string; severity: "high" | "medium" | "low"; title: string;
+  expected: string; observed: string; status: "open" | "resolved"; created_at: string; resolved_at: string | null;
+}
+
+export interface ProvOpDetail extends ProvOp { payload: { account?: Record<string, unknown>; group?: Record<string, unknown> }; findings: ProvFinding[] }
+
+export interface ProvTarget {
+  connection_id: string; connection_name: string; system: string; kind: "scim" | "okta" | "fake"; base_url: string;
+  dialect?: "standard" | "entra"; fault?: string; write_back: boolean; has_credential: boolean; credential_version: string | null; updated_at: string;
+}
+
+/** token is write-only: omit it to keep the stored credential. */
+export interface ProvTargetInput { kind: ProvTarget["kind"]; base_url: string; dialect?: string; fault?: string; token?: string; write_back: boolean }
+
+export const provisioning = {
+  targets: () => api<ProvTarget[]>("/provisioning/targets"),
+  putTarget: (connectionId: string, body: ProvTargetInput) => api<ProvTarget>(`/provisioning/targets/${connectionId}`, body, "PUT"),
+  deleteTarget: (connectionId: string) => api<{ removed: boolean }>(`/provisioning/targets/${connectionId}`, undefined, "DELETE"),
+  get: (id: string) => api<ProvOpDetail>(`/provisioning/ops/${encodeURIComponent(id)}`),
+  retry: (id: string) => api<ProvOpDetail>(`/provisioning/ops/${encodeURIComponent(id)}/retry`, {}),
+  cancel: (id: string) => api<ProvOpDetail>(`/provisioning/ops/${encodeURIComponent(id)}/cancel`, {}),
+  /** Takes the due operations now instead of at the worker's next tick (every 5 seconds). */
+  run: () => api<{ processed: number; verified: number; mismatch: number; failed: number; retrying: number }>("/provisioning/run", {}),
+};
+
 // ----------------------------------------------------- job runs (#172)
 
 export interface JobRun {

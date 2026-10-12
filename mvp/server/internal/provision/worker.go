@@ -354,7 +354,7 @@ func (e *Engine) verify(ctx context.Context, t tenancy.ID, op *store.ProvOp, con
 		return e.set(ctx, t, op, PendingVerification, store.ProvOpState{Status: PendingVerification, Attempts: op.Attempts,
 			VerifyAttempts: op.VerifyAttempts, NextAttemptAt: now.Add(e.backoff(op.VerifyAttempts)),
 			LastError: sp("not yet visible in the target: expected " + v.Expected + ", observed " + v.Observed),
-			Observed: sp(v.Observed)}, "", nil)
+			Observed:  sp(v.Observed)}, "", nil)
 	case !v.OK:
 		st.Mismatch++
 		return e.mismatch(ctx, t, op, v)

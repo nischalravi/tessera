@@ -70,6 +70,12 @@ const (
 	PermConnectionsActivate Permission = "connections.activate"
 	// Job run history (issue #172).
 	PermJobsRead Permission = "jobs.read"
+
+	// Closed-loop provisioning (issue #103). Configuring a target needs
+	// connections.manage; retrying, cancelling and running operations needs
+	// provisioning.manage.
+	PermProvisioningRead   Permission = "provisioning.read"
+	PermProvisioningManage Permission = "provisioning.manage"
 )
 
 // rolePermissions is the static role -> permission map (Cedar-ready, §12.1).
@@ -78,14 +84,15 @@ const (
 var rolePermissions = map[Role][]Permission{
 	RoleViewer: {PermGraphRead},
 	RoleOperator: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
-		PermReviewsDecide, PermHRISSimulateEvent, PermJobsRead},
-	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead, PermJobsRead},
+		PermReviewsDecide, PermHRISSimulateEvent, PermJobsRead, PermProvisioningRead},
+	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead, PermJobsRead,
+		PermProvisioningRead},
 	RolePolicyAdmin: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
 		PermReviewsDecide, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
-		PermJobsRead},
+		PermJobsRead, PermProvisioningRead, PermProvisioningManage},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
-		PermConnectionsActivate, PermJobsRead},
+		PermConnectionsActivate, PermJobsRead, PermProvisioningRead, PermProvisioningManage},
 	RoleBreakGlass: {PermAdminRead, PermBreakGlassRecover},
 }
 
@@ -166,10 +173,10 @@ const (
 )
 
 var scopePermissions = map[Scope][]Permission{
-	ScopeRead: {PermGraphRead, PermConnectionsRead, PermJobsRead},
+	ScopeRead: {PermGraphRead, PermConnectionsRead, PermJobsRead, PermProvisioningRead},
 	ScopeWrite: {PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage, PermReviewsDecide,
 		PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
-		PermConnectionsManage, PermConnectionsActivate},
+		PermConnectionsManage, PermConnectionsActivate, PermProvisioningManage},
 	ScopeAudit: {PermAuditRead, PermAuditVerify},
 	ScopeAdmin: {PermAdminRead, PermAdminChangeReq, PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev,
 		PermBreakGlassRecover},

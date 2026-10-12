@@ -20,13 +20,17 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
+	"github.com/nischalravi/tessera/mvp/server/internal/provision"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
+	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
@@ -90,6 +94,17 @@ type Config struct {
 	// TrustedProxies (TESSERA_TRUSTED_PROXIES) are the peers whose
 	// X-Forwarded-For the rate limiter believes.
 	TrustedProxies []netip.Prefix
+	// Sealer seals target credentials under the KEK. Nil (tests only) uses a
+	// key generated for this process: credentials sealed with it cannot be
+	// read after a restart. cmd/tessera always passes the real one.
+	Sealer *seal.Sealer
+	// Outbound is the safehttp client the provisioning worker sends through.
+	// Nil builds a production-grade one (no loopback).
+	Outbound *http.Client
+	// FakeTargetURL is the base URL of the in-process fake SCIM target
+	// (TESSERA_DEV_FAKE_TARGET, dev only). Empty: the "fake" target kind is
+	// refused.
+	FakeTargetURL string
 	// AuditAppend overrides how the audit middleware writes http.request
 	// events (tests inject failures). Nil: the store.
 	AuditAppend func(ctx context.Context, t tenancy.ID, e store.AuditEvent) error
@@ -106,6 +121,7 @@ type Server struct {
 	limits *limiters
 
 	readiness *readiness.Service
+	prov      *provision.Engine
 }
 
 // New builds a server.
@@ -136,14 +152,31 @@ func New(cfg Config) *Server {
 		cfg.Readiness = readiness.NewService(reg, cfg.Env)
 		cfg.Readiness.Runner.Scenario = cfg.ReadinessScenario
 	}
+	if cfg.Sealer == nil {
+		sealer, err := seal.New(seal.RandomBytes(seal.KeySize))
+		if err != nil {
+			panic(err)
+		}
+		cfg.Sealer = sealer
+	}
+	if cfg.Outbound == nil {
+		hc, err := safehttp.New(safehttp.Options{Env: config.Prod})
+		if err != nil {
+			panic(err)
+		}
+		cfg.Outbound = hc
+	}
 	s := &Server{cfg: cfg, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
 		limits: newLimiters(cfg.RateLimits)}
+	s.prov = &provision.Engine{DB: cfg.Store, Sealer: cfg.Sealer, HTTP: cfg.Outbound,
+		Clock: func() time.Time { return s.clock() }, Log: cfg.Logger.With("component", "provisioning")}
 	s.authn = &auth.Authenticator{DB: cfg.Store, Clock: func() time.Time { return s.clock() },
 		Cookies: auth.Cookies{Insecure: cfg.InsecureCookie}}
 	s.registerRoutes()
 	s.registerAuditRoutes()
 	s.registerReadinessRoutes()
 	s.registerJobRoutes()
+	s.registerProvisioningRoutes()
 	s.registerAuthRoutes()
 	s.checkPublicRoutes()
 	return s
