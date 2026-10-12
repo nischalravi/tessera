@@ -22,6 +22,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
+	"github.com/nischalravi/tessera/mvp/server/internal/lifecycle"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
@@ -203,7 +204,8 @@ func (s *Server) timeouts(stream, timed http.Handler) http.Handler {
 	})
 }
 
-// RunSweeper expires JIT grants of every active tenant, each in its own
+// RunSweeper expires JIT grants, closes due request lines and ends due
+// lifecycle terms (warnings first) of every active tenant, each in its own
 // tenant transaction, every interval until ctx is done. A failure in one
 // tenant is logged and does not stop the others.
 func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
@@ -216,6 +218,9 @@ func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
 		}
 		if err := requests.SweepAll(audit.WithSystemActor(ctx, requests.Sweeper), s.store, s.clock()); err != nil && ctx.Err() == nil {
 			s.log.Error("request sweep failed", "err", err)
+		}
+		if err := lifecycle.SweepAll(audit.WithSystemActor(ctx, lifecycle.Sweeper), s.store, s.clock()); err != nil && ctx.Err() == nil {
+			s.log.Error("lifecycle sweep failed", "err", err)
 		}
 		select {
 		case <-ctx.Done():
