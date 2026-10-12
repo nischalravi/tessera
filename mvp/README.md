@@ -158,11 +158,32 @@ The routes are documented at `/api/readiness/openapi.json`.
 `GET /api/audit/events/{event_id}/proof` · `GET /api/audit/checkpoints[?from_seq=]` · `GET /api/audit/keys` ·
 `POST /api/audit/verify {from_seq?, to_seq?}` · `GET /api/audit/export[?from_seq=&to_seq=]` (NDJSON) ·
 `GET /api/auth/session` · `POST /api/auth/logout` · `GET /api/auth/sessions` · `DELETE /api/auth/sessions/{session_id}` ·
-`GET|POST /api/auth/dev-login` (dev and test only)
+`GET|POST /api/auth/dev-login` (dev and test only) ·
+`GET /api/jobs[?status=running|succeeded|failed&kind=&connection_id=&limit=]` · `GET /api/jobs/{job_id}` ·
+`POST /api/jobs/{job_id}/retry`
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
 or HRIS execution is always the signed-in user.
+
+### Job run history
+
+Every run of a connector sync, provisioning (HRIS execute), connection validation, dry run,
+deployment-health re-run and JIT sweep is recorded in `job_runs` (`internal/jobs`), plus every
+audit anchoring run that did something or failed. A sweep that finds nothing is not recorded.
+Each record has the kind, trigger (manual, schedule or retry), status, duration, a result summary
+and a one-line error. The run row is written in its own transaction before the job and finished in
+another, so a job that rolls back keeps its failed run, and `job.failed` is appended to the audit
+chain for alert rules to match. A request refused before the job ran (bad input, missing
+permission, a blocked gate) is not a run.
+
+`POST /api/jobs/{id}/retry` replays the run's API call as the signed-in user, through the whole
+middleware: the original route's permission and step-up apply. It is offered only for idempotent
+kinds (sync, validation, dry run, health re-run, JIT sweep), not for provisioning. The new run
+links `retry_of` and records `job.retried`. Runs still `running` after an hour are marked failed
+("interrupted"), and runs are kept 30 days. Reading the history needs `jobs.read` (operator,
+auditor, policy admin, tenant admin). Admin → Jobs lists the runs, with Failed, Running and job
+filter chips and a side panel showing the error, the result and Retry.
 
 ### Audit ledger
 

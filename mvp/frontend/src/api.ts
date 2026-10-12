@@ -670,3 +670,18 @@ export const readiness = {
   rerun: (reconcile = false) => api<{ results: { connection_id: string; name: string; validation_run_id: string | null; dry_run_id: string | null; skipped?: string }[]; dashboard: DeploymentHealth }>(
     "/insights/deployment-health/rerun", { reconcile }),
 };
+
+// ----------------------------------------------------- job runs (#172)
+
+export interface JobRun {
+  id: string; kind: string; trigger: "manual" | "schedule" | "retry"; status: "running" | "succeeded" | "failed";
+  connection_id: string | null; method: string | null; path: string | null; retryable: boolean; retry_of: string | null;
+  actor: string; started_at: string; finished_at: string | null; duration_ms: number | null; result: unknown; error: string | null;
+}
+
+export const jobs = {
+  list: (q = "") => api<JobRun[]>(`/jobs${q}`),
+  get: (id: string) => api<JobRun>(`/jobs/${encodeURIComponent(id)}`),
+  /** Replays the run's API call as you; its own permission and step-up apply. */
+  retry: (id: string) => api<unknown>(`/jobs/${encodeURIComponent(id)}/retry`, {}),
+};
