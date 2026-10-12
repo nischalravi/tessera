@@ -25,7 +25,7 @@ export function NotificationPreferences() {
     setBusy(k.kind);
     try {
       await putNotificationPrefs({ [k.kind]: channel });
-      toast(`${k.label}: ${CHANNEL_LABEL[channel].toLowerCase()}`);
+      toast(`${k.label}: ${CHANNEL_LABEL[channel]}`);
     } catch (e) {
       toast((e as Error).message, { kind: "error" });
     } finally {
