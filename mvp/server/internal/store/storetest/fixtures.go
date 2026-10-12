@@ -68,6 +68,8 @@ func TwoTenants(tb testing.TB) *Fixture {
 	f.B = seedTenant(tb, db, BID, "tenant-b", "")
 	seedReadiness(tb, db, &f.A, "")
 	seedReadiness(tb, db, &f.B, ReadinessSentinel)
+	seedRotation(tb, db, &f.A, Sentinel)
+	seedRotation(tb, db, &f.B, "")
 	return f
 }
 
@@ -273,6 +275,14 @@ func Dump(tb testing.TB, db *store.DB, t tenancy.ID) string {
 		get("hris_events", v12, e)
 		v13, e := c.AuditLog(-1)
 		get("audit_log", v13, e)
+		v14, e := c.RotationAdapters()
+		get("rotation_adapters", v14, e)
+		v15, e := c.RotationPolicies()
+		get("rotation_policies", v15, e)
+		v16, e := c.RotationBulks()
+		get("rotation_bulks", v16, e)
+		v17, e := c.RotationJobs(store.RotationJobFilter{})
+		get("rotation_jobs", v17, e)
 		return err
 	})
 	if err != nil {
