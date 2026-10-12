@@ -162,7 +162,10 @@ The routes are documented at `/api/readiness/openapi.json`.
 `GET /api/catalog[?all=1]` · `PUT /api/catalog/items/{group_id}` ·
 `POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours}` ·
 `GET /api/requests[?scope=mine|pending|all&status=]` · `GET /api/requests/{id}` ·
-`POST /api/requests/{id}/approve|deny|cancel|remove {reason}`
+`POST /api/requests/{id}/approve|deny|cancel|remove {reason}` ·
+`GET|POST /api/roles` · `GET|PUT /api/roles/{id}` · `GET /api/roles/{id}/versions|drift` ·
+`POST /api/roles/{id}/retire|reconcile|members` · `POST /api/roles/{id}/members/{identity_id}/remove`
+(changes take `?dry_run=1`) · `GET|POST /api/role-requests` · `POST /api/role-requests/{id}/approve|deny|cancel`
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
@@ -171,7 +174,7 @@ or HRIS execution is always the signed-in user.
 ### Access requests
 
 **Access → Request access** is the catalog (issue #164). It lists every group a policy admin has
-made requestable, with its risk and durations; business roles are still a Preview. A request
+made requestable, with its risk and durations, and the requestable business roles. A request
 names one or more people and items and files one *line* per person and item, all or nothing.
 The checks:
 
@@ -195,7 +198,42 @@ Policy admins edit an item under **Directory → Entitlements → (group) → Re
 (`catalog.manage`). The seed puts every demo group in the catalog (privileged ones: 8 hours by
 default, at most 72). It also links Olu and Vic to two demo employees, so they can request for
 themselves. Not yet: provisioning into the target system (#103), manager and owner routing
-(#165), business roles (#161).
+(#165).
+
+### Business roles
+
+**Directory → Roles** (issue #161). A business role bundles entitlements (groups) from several
+systems, with an owner, a description, a risk, and optionally a **birthright rule**: departments,
+identity types and exact job titles. An active person matches when every list they fill in
+contains their value.
+
+- **Members** come from the rule, from an approved request, or are assigned by hand. Rule members
+  follow the rule: every save and **Reconcile** add the people it now matches and remove those it
+  no longer does. A rule member is removed by changing the rule, not by hand.
+- **Grants.** Holding a role grants each entitlement as a grant edge (source `role`) from the
+  person's account in that system (or their Okta account, as for requests). A grant made any other
+  way (connector, request, JIT, manual) is never touched. A role grant is removed only when none
+  of the person's roles still grants the group, so overlapping roles and direct grants are safe.
+- **Every change is a plan first.** Create, edit, assign, remove, reconcile and retire show the
+  plan (`?dry_run=1`): who gains or loses the role, the grants added, the role grants removed,
+  the grants kept and why (another role, or granted outside roles), and people with no account
+  that can receive a grant. Applying it writes the change, the grants and one audit event
+  (`role.create|update|assign|unassign|reconcile|retire`) in one transaction.
+- **Versions.** Each save, and retirement, appends a version (the role and its entitlements, who
+  and why) under the role's *History* tab. Edits carry the version they started from, so a
+  concurrent edit is refused (`version_conflict`).
+- **Drift** lists members missing an entitlement (removed elsewhere, or no account in that
+  system) and people who hold at least half of a role's entitlements without the role.
+- **Requests.** A requestable role appears in the request catalog. A role request is one per
+  person; a person with `requests.decide` approves it (with step-up) or denies it under
+  **Access → Requests**. Approval assigns the role. Retiring a role removes every member and
+  denies its pending requests.
+
+Changing roles needs `roles.manage` (policy admins) and a fresh phishing-resistant sign-in.
+Members, versions and drift need `graph.read`. The seed creates the demo company's six roles.
+Rule members are seeded only where people already hold every entitlement, so seeding grants
+nothing: reconcile a role to see the rest. Not yet: provisioning into the target system (#103),
+role mining (Phase 3), and ABAC conditions in rules (#162).
 
 ### Audit ledger
 
@@ -259,7 +297,7 @@ the right. Arrow keys move between items.
 | Group | Items |
 |---|---|
 | (top) | **Home**, **Inbox** (count) |
-| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts, Roles (Preview), Organizations (Preview) |
+| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts, Roles, Organizations (Preview) |
 | **Access** | Request access, My access (with *My requests*), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
 | **Protection** | Policies & SoD (violations, policies, what-if simulation), Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
 | **Settings** | Connections (governed connections and the setup wizard), Admin |
@@ -298,7 +336,7 @@ machine identities, roles, entitlements and apps, and runs actions such as *Requ
 next. Choosing a person shows actions for them. Use the arrow keys, `Enter`, `Backspace` to go
 back a step and `Esc` to close. `/` focuses the top-bar search.
 
-**Preview features.** Some screens have no backend endpoint yet: business roles, organizations,
+**Preview features.** Some screens have no backend endpoint yet: organizations,
 workflows, catalog (non-JIT) requests, delegations, disable / reset password / edit, imports and
 most admin settings. They run on typed mock data in `src/mocks/`, keep their state in the
 browser's localStorage, and carry a **Preview** badge. To wire one up, add a function to

@@ -7,13 +7,13 @@ import { Link, useNavigate } from "react-router-dom";
 import {
   Ban, ClipboardCheck, ExternalLink, Network, Pencil, RefreshCw, RotateCcw, Settings, ShieldCheck, ShoppingCart, Timer, UserCheck, UserRound,
 } from "lucide-react";
-import { AccountRow, ConnectorRow, Group, IdentityDetail, IdentityRow, ResourceRow, Violation, ago, api, fmtDay, relTime, useApi } from "../../api";
+import { AccountRow, ConnectorRow, Group, IdentityDetail, IdentityRow, ResourceRow, RolesView, Violation, ago, api, fmtDay, relTime, useApi } from "../../api";
 import { useIdentityActions } from "../../app/actions";
 import { usePersona } from "../../app/persona";
 import {
   Avatar, Badge, Chip, CommandBar, EmptyState, IdLink, Loading, PathView, PreviewBadge, RiskPill, Sev, SidePanel, Status, Tabs, TypeBadge, TYPE_LABEL, useToast,
 } from "../../components";
-import { BusinessRole, ORGS, OrgUnit, mockIdentityOps, mockObjects, useMockState, useRoles } from "../../mocks";
+import { ORGS, OrgUnit, mockIdentityOps, mockObjects, useMockState } from "../../mocks";
 import { RevokeDrawer } from "./IdentityPage";
 import { CatalogSettings } from "./catalog";
 import { PreviewFormDrawer } from "./shared";
@@ -297,11 +297,10 @@ export function AccountPanel({ a, onClose }: { a: AccountRow; onClose: () => voi
 // ----------------------------------------------------------- entitlement
 export function GroupPanel({ g, onClose }: { g: Group; onClose: () => void }) {
   const nav = useNavigate();
-  const roles = useRoles();
+  const { data: rv } = useApi<RolesView>("/roles");
   const [tab, setTab] = useTab<"overview" | "catalog" | "roles">("overview", g.id);
   const [edit, setEdit] = useState(false);
-  const key = `${g.system}:${g.name}`;
-  const inRoles = roles.filter((r) => r.entitlements.some((e) => e.replace(" (JIT)", "") === key));
+  const inRoles = (rv?.roles ?? []).filter((r) => r.status === "active" && r.entitlements.some((e) => e.id === g.id));
   return (
     <SidePanel
       title={g.name}
@@ -338,7 +337,7 @@ export function GroupPanel({ g, onClose }: { g: Group; onClose: () => void }) {
       ) : (
         <Section title={<>Part of these roles <PreviewBadge /></>}>
           {inRoles.length === 0 ? <div className="small muted">Not bundled in any business role. People request it directly.</div> :
-            inRoles.map((r) => <div key={r.id} className="small"><Link to={`/directory/roles?selected=${r.id}`}>{r.name}</Link> <span className="faint">· {r.members} members</span></div>)}
+            inRoles.map((r) => <div key={r.id} className="small"><Link to={`/directory/roles?selected=${r.id}`}>{r.name}</Link> <span className="faint">· {r.member_count} members</span></div>)}
         </Section>
       )}
       {edit && (
@@ -410,68 +409,6 @@ export function AppPanel({ c, onClose }: { c: ConnectorRow; onClose: () => void 
             ))}
           </tbody>
         </table>
-      )}
-    </SidePanel>
-  );
-}
-
-// ----------------------------------------------------------------- role
-export function RolePanel({ role, onClose }: { role: BusinessRole; onClose: () => void }) {
-  const nav = useNavigate();
-  const acts = useIdentityActions();
-  const { data: groups } = useApi<Group[]>("/groups");
-  const [tab, setTab] = useTab<"overview" | "ents">("overview", role.id);
-  const [edit, setEdit] = useState(false);
-  const tone = role.risk === "high" ? "critical" : role.risk === "medium" ? "warning" : "ok";
-  return (
-    <SidePanel
-      title={role.name}
-      sub={<><PreviewBadge /><Badge tone={tone}>{role.risk[0].toUpperCase() + role.risk.slice(1)} risk</Badge></>}
-      onClose={onClose}
-      fullHref={`/directory/roles/${role.id}`}
-      commands={
-        <CommandBar
-          label={`Actions for ${role.name}`}
-          items={[
-            { label: "Request this role", icon: <ShoppingCart size={I} />, onClick: () => nav(`/access/request?add=${role.id}`) },
-            { label: "Edit", icon: <Pencil size={I} />, onClick: () => setEdit(true) },
-            { label: "Start review", icon: <ClipboardCheck size={I} />, onClick: () => acts.startCampaign() },
-          ]}
-        />
-      }
-      tabs={<Tabs label="Role details" value={tab} onChange={setTab} tabs={[{ id: "overview", label: "Overview" }, { id: "ents", label: `Entitlements (${role.entitlements.length})` }]} />}
-    >
-      {tab === "overview" ? (
-        <>
-          <p className="muted">{role.description}</p>
-          <dl className="kv">
-            <dt>Owner</dt><dd>{role.owner}</dd>
-            <dt>Birthright for</dt><dd>{role.birthright ?? <span className="faint">Nobody (request only)</span>}</dd>
-            <dt>Members</dt><dd className="tnum">{role.members}</dd>
-            <dt>Updated</dt><dd>{role.updated}</dd>
-          </dl>
-        </>
-      ) : (
-        <table>
-          <tbody>
-            {role.entitlements.map((e) => {
-              const k = e.replace(" (JIT)", "");
-              const g = (groups ?? []).find((x) => `${x.system}:${x.name}` === k);
-              return (
-                <tr key={e}>
-                  <td>{g ? <Link className="sys" to={`/directory/entitlements?selected=${g.id}`}>{k}</Link> : <span className="sys">{k}</span>}</td>
-                  <td style={{ textAlign: "right" }}>{e.endsWith(" (JIT)") && <Badge tone="info">JIT only</Badge>} {g?.privileged && <Badge tone="warning">Privileged</Badge>}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      )}
-      {edit && (
-        <PreviewFormDrawer title={`Edit ${role.name}`} kind="role" verb="update" onClose={() => setEdit(false)}
-          initial={{ name: role.name, description: role.description, owner: role.owner }}
-          fields={[{ id: "name", label: "Name", required: true }, { id: "description", label: "Description", textarea: true }, { id: "owner", label: "Owner" }]}
-        />
       )}
     </SidePanel>
   );

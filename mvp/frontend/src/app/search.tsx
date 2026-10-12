@@ -2,8 +2,8 @@
 import { ReactNode, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { AppWindow, Bot, FileText, KeyRound, Layers, Server, Settings, UserRound } from "lucide-react";
-import { ConnectorRow, Group, IdentityRow, useApi } from "../api";
-import { ADMIN_SECTIONS, ROLES } from "../mocks";
+import { ConnectorRow, Group, IdentityRow, RolesView, useApi } from "../api";
+import { ADMIN_SECTIONS } from "../mocks";
 import { allPages } from "./nav";
 import { Match, rank } from "./fuzzy";
 
@@ -28,6 +28,7 @@ export function useEntityEntries() {
   const { data: idents } = useApi<IdentityRow[]>("/identities");
   const { data: groups } = useApi<Group[]>("/groups");
   const { data: conns } = useApi<ConnectorRow[]>("/connectors");
+  const { data: rv } = useApi<RolesView>("/roles");
   return useMemo(() => {
     const out: Entry[] = [];
     for (const i of idents ?? []) {
@@ -43,13 +44,13 @@ export function useEntityEntries() {
         identity: i,
       });
     }
-    for (const r of ROLES) out.push({ id: `role-${r.id}`, group: "Roles", label: r.name, sub: `Business role · ${r.members} members`, icon: <Layers size={15} />, keywords: r.entitlements.join(" "), run: () => nav(`/directory/roles?selected=${r.id}`) });
+    for (const r of rv?.roles ?? []) out.push({ id: `role-${r.id}`, group: "Roles", label: r.name, sub: `Business role · ${r.member_count} members${r.status === "retired" ? " · retired" : ""}`, icon: <Layers size={15} />, keywords: r.entitlements.map((g) => `${g.system}:${g.name}`).join(" "), run: () => nav(`/directory/roles?selected=${r.id}`) });
     for (const g of groups ?? []) out.push({ id: `grp-${g.id}`, group: "Entitlements", label: `${g.system}:${g.name}`, sub: [g.kind.replace(/_/g, " "), g.privileged ? "privileged" : null, g.requestable ? "JIT-eligible" : null].filter(Boolean).join(" · "), icon: <KeyRound size={15} />, keywords: g.description ?? "", run: () => nav(`/directory/entitlements?selected=${g.id}`) });
     for (const c of conns ?? []) out.push({ id: `app-${c.system}`, group: "Applications & systems", label: c.name, sub: `${c.accounts} accounts · ${c.groups} groups`, icon: <AppWindow size={15} />, keywords: c.system, run: () => nav(`/directory/apps?selected=${c.system}`) });
     for (const p of allPages()) out.push({ id: `page-${p.path}`, group: "Pages", label: p.label, sub: p.section || undefined, icon: <FileText size={15} />, keywords: `${p.section} ${p.keywords ?? ""}`, run: () => nav(p.path) });
     for (const s of ADMIN_SECTIONS) out.push({ id: `admin-${s.id}`, group: "Pages", label: s.title, sub: "Admin", icon: <Settings size={15} />, keywords: s.keywords.join(" "), run: () => nav(`/admin/${s.id}`) });
     return out;
-  }, [idents, groups, conns, nav]);
+  }, [idents, groups, conns, rv, nav]);
 }
 
 const GROUP_ORDER = ["Actions", "Users", "Machine identities & agents", "Roles", "Entitlements", "Applications & systems", "Pages", "Settings"];

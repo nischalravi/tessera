@@ -1,11 +1,11 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Check, FileText, Pencil, Plus, Trash2, Undo2, X } from "lucide-react";
-import { RequestLine, approveRequest, cancelRequest, denyRequest, fmtDate, relTime, removeRequest, useApi } from "../../api";
+import { RequestLine, RoleRequest, approveRequest, cancelRequest, denyRequest, fmtDate, relTime, removeRequest, roles as roleApi, useApi } from "../../api";
 import { useSession } from "../../app/auth";
 import { usePersona } from "../../app/persona";
 import {
-  Button, ButtonLink, Column, DataTable, EmptyState, MyAccessTabs, Page, PreviewBadge, SidePanel, Status, Tabs, useConfirm, useSelected, useToast,
+  Badge, Button, ButtonLink, Column, DataTable, EmptyState, MyAccessTabs, Page, SidePanel, Status, Tabs, useConfirm, useSelected, useToast,
 } from "../../components";
 import { mockRequests, useMockState } from "../../mocks";
 
@@ -26,13 +26,13 @@ export function Requests() {
   const scope = tab === "approvals" ? "pending" : tab === "all" ? "all" : "mine";
   const { data, error, reload } = useApi<RequestLine[]>(tab === "drafts" ? null : `/requests?scope=${scope}`);
   const pending = useApi<RequestLine[]>(decider ? "/requests?scope=pending" : null);
+  const rolesPending = useApi<RoleRequest[]>(decider ? "/role-requests?scope=pending" : null);
   const { actor } = usePersona();
   const mock = useMockState();
   const drafts = mock.requests.filter((r) => r.status === "draft" && r.requester === actor);
-  const previews = mock.requests.filter((r) => r.status !== "draft" && r.requester === actor);
   const tabs: { id: Tab; label: string }[] = [
     { id: "mine", label: "My requests" },
-    ...(decider ? [{ id: "approvals" as Tab, label: `Approvals${pending.data ? ` (${pending.data.length})` : ""}` }, { id: "all" as Tab, label: "All requests" }] : []),
+    ...(decider ? [{ id: "approvals" as Tab, label: `Approvals${pending.data && rolesPending.data ? ` (${pending.data.length + rolesPending.data.length})` : ""}` }, { id: "all" as Tab, label: "All requests" }] : []),
     { id: "drafts", label: `Drafts (${drafts.length})` },
   ];
   return (
@@ -45,11 +45,7 @@ export function Requests() {
     >
       <Tabs label="Request views" value={tab} onChange={(v) => setParams(v === "mine" ? {} : { tab: v })} tabs={tabs} />
       {tab === "drafts" ? <Drafts drafts={drafts} /> : <Lines rows={data} error={error} reload={reload} tab={tab} />}
-      {tab === "mine" && previews.length > 0 && (
-        <p className="small muted mt">
-          {previews.length} business-role request{previews.length === 1 ? "" : "s"} saved in this browser <PreviewBadge what="Business roles have no backend yet" />
-        </p>
-      )}
+      {tab !== "drafts" && <RoleRequests scope={scope} onChange={rolesPending.reload} />}
     </Page>
   );
 }
@@ -153,6 +149,66 @@ function LinePanel({ id, onClose }: { id: string; onClose: () => void }) {
         </>
       )}
     </SidePanel>
+  );
+}
+
+/** Business role requests (issue #161): one per person and role; approval assigns the role. */
+function RoleRequests({ scope, onChange }: { scope: string; onChange: () => void }) {
+  const { data, error, reload } = useApi<RoleRequest[]>(`/role-requests?scope=${scope}`);
+  const confirm = useConfirm();
+  const toast = useToast();
+  const [busy, setBusy] = useState<string | null>(null);
+  const act = async (q: RoleRequest, o: { title: string; body?: string; label: string; danger?: boolean; reason?: "required" | "optional"; run: (reason: string) => Promise<unknown>; done: string }) => {
+    const reason = await confirm({
+      title: o.title, body: o.body, confirmLabel: o.label, danger: o.danger,
+      reason: o.reason ? { label: o.reason === "required" ? "Reason (the requester sees it)" : "Note (optional)", required: o.reason === "required" } : undefined,
+    });
+    if (reason == null) return;
+    setBusy(q.id);
+    try {
+      await o.run(reason);
+      toast(o.done);
+      reload();
+      onChange();
+    } catch (e: any) {
+      toast(String(e.message ?? e), { kind: "error" });
+    } finally {
+      setBusy(null);
+    }
+  };
+  if (data && data.length === 0 && !error) return null;
+  const cols: Column<RoleRequest>[] = [
+    { id: "role", header: "Role", sort: (q) => q.role.name, cell: (q) => <span><Link to={`/directory/roles/${q.role.id}`}>{q.role.name}</Link>{q.role.risk !== "low" && <> <Badge tone={q.role.risk === "high" ? "critical" : "warning"}>{q.role.risk} risk</Badge></>}</span> },
+    { id: "for", header: "For", sort: (q) => q.beneficiary.name, cell: (q) => <span className="small">{q.beneficiary.name}</span> },
+    { id: "by", header: "Requested by", sort: (q) => q.requested_by.display_name, cell: (q) => <span className="small">{q.requested_by.display_name}<div className="xs faint truncate" style={{ maxWidth: 260 }}>{q.justification}</div></span>, hideNarrow: true },
+    { id: "status", header: "Status", sort: (q) => q.status, cell: (q) => <span className="nowrap"><Status s={q.status} />{q.decided_by && <div className="xs faint">by {q.decided_by.display_name}</div>}</span> },
+    { id: "at", header: "Requested", sort: (q) => q.requested_at, cell: (q) => <span className="small faint nowrap" title={fmtDate(q.requested_at)}>{relTime(q.requested_at)}</span> },
+    { id: "act", header: "Actions", cell: (q) => (
+      <span className="row tight" style={{ justifyContent: "flex-end", flexWrap: "nowrap" }}>
+        {q.can_approve && <Button size="sm" variant="primary" icon={<Check size={14} />} disabled={busy === q.id}
+          onClick={() => act(q, { title: `Approve ${q.role.name} for ${q.beneficiary.name}?`, body: "Tessera assigns the role now and grants each entitlement in it.", label: "Approve", reason: "optional", run: (r) => roleApi.approve(q.id, r || undefined), done: "Approved: role assigned" })}>Approve</Button>}
+        {q.can_approve && <Button size="sm" variant="danger" icon={<X size={14} />} disabled={busy === q.id}
+          onClick={() => act(q, { title: `Deny ${q.role.name} for ${q.beneficiary.name}?`, label: "Deny", danger: true, reason: "required", run: (r) => roleApi.deny(q.id, r), done: "Denied" })}>Deny</Button>}
+        {q.can_cancel && <Button size="sm" icon={<Undo2 size={14} />} disabled={busy === q.id}
+          onClick={() => act(q, { title: "Cancel this role request?", label: "Cancel request", run: () => roleApi.cancel(q.id), done: "Request cancelled" })}>Cancel</Button>}
+      </span>
+    ) },
+  ];
+  return (
+    <section className="mt" aria-labelledby="role-requests-h">
+      <h2 id="role-requests-h" className="h3">Role requests</h2>
+      <DataTable
+        id={`role-requests-${scope}`}
+        rows={data}
+        error={error}
+        rowKey={(q) => q.id}
+        columns={cols}
+        searchText={(q) => `${q.role.name} ${q.beneficiary.name} ${q.requested_by.display_name} ${q.justification}`}
+        searchPlaceholder="Search roles or people…"
+        onRefresh={reload}
+        rowLabel={(q) => `${q.role.name} for ${q.beneficiary.name}`}
+      />
+    </section>
   );
 }
 

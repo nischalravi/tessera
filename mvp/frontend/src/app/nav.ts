@@ -45,7 +45,7 @@ export const RAIL: RailGroup[] = [
       },
       { id: "apps", label: "Applications", icon: AppWindow, path: "/directory/apps", keywords: "apps systems endpoints connectors resources" },
       { id: "accounts", label: "Accounts", icon: KeyRound, path: "/directory/accounts", keywords: "system accounts usernames" },
-      { id: "roles", label: "Roles", icon: Layers, path: "/directory/roles", keywords: "business roles birthright", preview: true },
+      { id: "roles", label: "Roles", icon: Layers, path: "/directory/roles", keywords: "business roles birthright drift" },
       { id: "orgs", label: "Organizations", icon: Building2, path: "/directory/orgs", keywords: "departments org units cost centers", preview: true },
     ],
   },
