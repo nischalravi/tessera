@@ -71,15 +71,15 @@ type Config struct {
 	AuditCheckpointEvents  int
 	// BackupDir (TESSERA_BACKUP_DIR) turns on scheduled encrypted backups
 	// every BackupEveryMinutes, keeping the newest BackupKeep (issue #171).
-	BackupDir          string
-	BackupEveryMinutes int
-	BackupKeep         int
-	AccessTokenTTLSeconds  int
-	DeviceCodeTTLSeconds   int
-	DPoPRSNonce            bool
-	RPID                   string
-	Notify                 string
-	DevIdPURL              string
+	BackupDir             string
+	BackupEveryMinutes    int
+	BackupKeep            int
+	AccessTokenTTLSeconds int
+	DeviceCodeTTLSeconds  int
+	DPoPRSNonce           bool
+	RPID                  string
+	Notify                string
+	DevIdPURL             string
 	// DevLogin is TESSERA_DEV_LOGIN: with TESSERA_ENV=test, the explicit
 	// opt-in for dev sign-in (loopback peers only). Refused in prod.
 	DevLogin bool
