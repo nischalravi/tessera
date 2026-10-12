@@ -7,7 +7,8 @@ import { usePersona } from "../../app/persona";
 import {
   Avatar, Badge, Button, Callout, Chip, Drawer, EmptyState, IdLink, Loading, Menu, Page, PathView, PreviewBadge, Segmented, Sev, SimulationView, Status, Tabs, TypeBadge, useToast,
 } from "../../components";
-import { mockIdentityOps, mockObjects, useMockState } from "../../mocks";
+import { mockIdentityOps, useMockState } from "../../mocks";
+import { PlanDrawer, RotationBadge, useRotationStatus } from "../rotation/shared";
 import { PreviewFormDrawer } from "./shared";
 
 /** Dry-run first, then apply: shows the blast radius of removing one grant before anything changes. */
@@ -62,6 +63,7 @@ function Header({ d, disabledAt }: { d: IdentityDetail; disabledAt?: string }) {
   const { actor } = usePersona();
   const toast = useToast();
   const [edit, setEdit] = useState(false);
+  const [rotate, setRotate] = useState(false);
   const human = d.type === "human";
   const status = disabledAt && d.status === "active" ? "disabled" : d.status;
   return (
@@ -96,7 +98,7 @@ function Header({ d, disabledAt }: { d: IdentityDetail; disabledAt?: string }) {
           {human ? (
             <Button size="sm" icon={<RotateCcw size={14} />} disabled={status !== "active"} onClick={() => acts.resetPassword(d)}>Reset password</Button>
           ) : (
-            <Button size="sm" icon={<RotateCcw size={14} />} onClick={async () => { await mockObjects.save("secret", d.name, actor, "update"); toast(`Secret rotation requested for ${d.name} (preview)`); }}>Rotate secret</Button>
+            <Button size="sm" icon={<RotateCcw size={14} />} disabled={d.secrets.length === 0} title={d.secrets.length === 0 ? "No secrets are recorded for this identity" : "Preview the rotation of its secrets"} onClick={() => setRotate(true)}>Rotate secrets…</Button>
           )}
           <Button size="sm" icon={<Pencil size={14} />} onClick={() => setEdit(true)}>Edit</Button>
           <Button size="sm" icon={<ShoppingCart size={14} />} disabled={status !== "active"} onClick={() => acts.requestFor(d)}>Request access for</Button>
@@ -111,6 +113,7 @@ function Header({ d, disabledAt }: { d: IdentityDetail; disabledAt?: string }) {
           />
         </div>
       </div>
+      {rotate && <PlanDrawer title={`Rotate ${d.name}'s secrets`} secretIds={d.secrets.map((x) => x.id)} onClose={() => setRotate(false)} />}
       {edit && (
         <PreviewFormDrawer
           title={`Edit ${d.name}`}
@@ -140,6 +143,7 @@ export function IdentityPage() {
   const [open, setOpen] = useState<string | null>(null);
   const [filter, setFilter] = useState<"" | "unused" | "privileged" | "sensitive">("");
   const [revoke, setRevoke] = useState<number | null>(null);
+  const rot = useRotationStatus();
   const tab = (params.get("tab") ?? "access") as Tab;
   const setTab = (t: Tab) => setParams({ tab: t }, { replace: true });
 
@@ -299,13 +303,14 @@ export function IdentityPage() {
             {d.secrets.length === 0 ? <EmptyState title="No machine credentials">Only service accounts and agents hold API keys or tokens.</EmptyState> : (
               <div className="table-scroll">
                 <table>
-                  <thead><tr><th>Secret</th><th className="num">Age</th><th>Last used</th></tr></thead>
+                  <thead><tr><th>Secret</th><th className="num">Age</th><th>Last used</th><th>Rotation</th></tr></thead>
                   <tbody>
                     {d.secrets.map((s) => (
                       <tr key={s.id}>
                         <td className="small"><span className="sys">{s.name}</span><div className="xs faint">{s.kind.replace(/_/g, " ")}</div></td>
                         <td className="num">{s.stale ? <Badge tone="warning">{s.age_days} d</Badge> : `${s.age_days} d`}</td>
                         <td className="small nowrap">{ago(s.last_used_days)}</td>
+                        <td><RotationBadge status={rot.get(s.id)} /></td>
                       </tr>
                     ))}
                   </tbody>

@@ -1,5 +1,5 @@
 import {
-  AppWindow, BadgeCheck, Bot, Building2, ChartLine, ClipboardCheck, House, Inbox, KeyRound, Layers, LucideIcon, Network, Plug, Plus, Settings, ShieldCheck, Timer, Users, UsersRound,
+  AppWindow, BadgeCheck, Bot, Building2, ChartLine, ClipboardCheck, House, Inbox, KeyRound, Layers, LucideIcon, Network, Plug, Plus, RotateCw, Settings, ShieldCheck, Timer, Users, UsersRound,
 } from "lucide-react";
 
 export interface NavPage {
@@ -42,6 +42,14 @@ export const RAIL: RailGroup[] = [
       {
         id: "groups", label: "Groups", icon: UsersRound, path: "/directory/groups", also: ["/directory/entitlements"], keywords: "okta groups teams",
         pages: [{ path: "/directory/entitlements", label: "Entitlements", keywords: "groups permissions aws roles snowflake okta" }],
+      },
+      {
+        id: "rotation", label: "Secret rotation", icon: RotateCw, path: "/rotation/secrets", also: ["/rotation"], keywords: "credentials vault rotate keys tokens api keys aws iam secrets manager hashicorp github deploy key vendor compromised breach",
+        pages: [
+          { path: "/rotation/jobs", label: "Rotation jobs", keywords: "rotate history failed retry verify old credential" },
+          { path: "/rotation/policies", label: "Rotation policies & adapters", keywords: "max age grace period vault aws github adapter" },
+          { path: "/rotation/vendor", label: "Vendor compromised", keywords: "breach bulk rotate integration incident" },
+        ],
       },
       { id: "apps", label: "Applications", icon: AppWindow, path: "/directory/apps", keywords: "apps systems endpoints connectors resources" },
       { id: "accounts", label: "Accounts", icon: KeyRound, path: "/directory/accounts", keywords: "system accounts usernames" },
