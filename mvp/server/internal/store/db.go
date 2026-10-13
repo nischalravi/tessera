@@ -113,6 +113,8 @@ var tables = []string{
 	"provisioning_targets", "provisioning_ops", "provisioning_findings",
 	// guest access bundles, assurance and catalog populations (schema/0229_guest_access.sql)
 	"guest_bundle_items", "identity_assurance", "catalog_item_populations",
+	// identity matching, merge requests, settings and claim links (schema/0230_matching.sql)
+	"match_results", "identity_merge_requests", "matching_settings", "claim_links",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was
