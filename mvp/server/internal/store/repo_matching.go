@@ -103,7 +103,6 @@ type MatchingSettings struct {
 	AutoLinkTierB      bool
 	RequireReviewTierA bool
 	UnmergeWindowDays  int
-	IDMatchEnabled     bool
 	UpdatedBy          *string
 	UpdatedAt          *time.Time
 }
@@ -165,15 +164,15 @@ var (
 		WHERE tenant_id = @tenant AND id = @id AND status = 'pending'`)
 
 	settingsGet = tq("matching_settings.get", `
-		SELECT s.auto_link_tier_b, s.require_review_tier_a, s.unmerge_window_days, s.id_match_enabled, s.updated_by, s.updated_at
+		SELECT s.auto_link_tier_b, s.require_review_tier_a, s.unmerge_window_days, s.updated_by, s.updated_at
 		FROM matching_settings s WHERE s.tenant_id = @tenant`)
 	settingsPut = tq("matching_settings.put", `
-		INSERT INTO matching_settings (tenant_id, auto_link_tier_b, require_review_tier_a, unmerge_window_days, id_match_enabled,
+		INSERT INTO matching_settings (tenant_id, auto_link_tier_b, require_review_tier_a, unmerge_window_days,
 			updated_by, updated_at)
-		VALUES (@tenant, @auto_link_tier_b, @require_review_tier_a, @unmerge_window_days, @id_match_enabled, @updated_by, @updated_at)
+		VALUES (@tenant, @auto_link_tier_b, @require_review_tier_a, @unmerge_window_days, @updated_by, @updated_at)
 		ON CONFLICT (tenant_id) DO UPDATE SET auto_link_tier_b = excluded.auto_link_tier_b,
 			require_review_tier_a = excluded.require_review_tier_a, unmerge_window_days = excluded.unmerge_window_days,
-			id_match_enabled = excluded.id_match_enabled, updated_by = excluded.updated_by, updated_at = excluded.updated_at`)
+			updated_by = excluded.updated_by, updated_at = excluded.updated_at`)
 
 	claimLinkInsert = tq("claim_links.insert", `
 		INSERT INTO claim_links (id, tenant_id, session_id_hash, intake_id, login_txn_id, status, created_at)
@@ -310,16 +309,16 @@ func (tx *TenantTx) DecideMergeRequest(id, status, by string, reason *string, me
 // MatchingSettings returns the tenant's settings (the defaults when none were saved).
 func (tx *TenantTx) MatchingSettings() (MatchingSettings, error) {
 	out := MatchingSettings{UnmergeWindowDays: DefaultUnmergeDays}
-	var a, b, c, d int
+	var a, b, c int
 	var by sql.NullString
 	var at nullTime
-	err := tx.queryRow(settingsGet).Scan(&a, &b, &c, &d, &by, &at)
+	err := tx.queryRow(settingsGet).Scan(&a, &b, &c, &by, &at)
 	if err == sql.ErrNoRows {
 		return out, nil
 	} else if err != nil {
 		return out, err
 	}
-	out.AutoLinkTierB, out.RequireReviewTierA, out.UnmergeWindowDays, out.IDMatchEnabled = a == 1, b == 1, c, d == 1
+	out.AutoLinkTierB, out.RequireReviewTierA, out.UnmergeWindowDays = a == 1, b == 1, c
 	out.UpdatedBy = strp(by)
 	out.UpdatedAt, err = at.ptr()
 	return out, err
@@ -329,7 +328,7 @@ func (tx *TenantTx) MatchingSettings() (MatchingSettings, error) {
 func (tx *TenantTx) PutMatchingSettings(s MatchingSettings, by string, at time.Time) error {
 	_, err := tx.exec(settingsPut, sql.Named("auto_link_tier_b", B(s.AutoLinkTierB)),
 		sql.Named("require_review_tier_a", B(s.RequireReviewTierA)), sql.Named("unmerge_window_days", s.UnmergeWindowDays),
-		sql.Named("id_match_enabled", B(s.IDMatchEnabled)), sql.Named("updated_by", by), sql.Named("updated_at", T(at)))
+		sql.Named("updated_by", by), sql.Named("updated_at", T(at)))
 	return err
 }
 

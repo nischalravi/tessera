@@ -318,7 +318,7 @@ func TestMatchingAPI_CrossTenant(t *testing.T) {
 func TestMatchingAPI_Settings(t *testing.T) {
 	w := newMatchWorld(t)
 	rec := reqDo(w.h, w.admin1, "GET", "/api/admin/matching", "")
-	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"unmerge_window_days":180`) || !strings.Contains(rec.Body.String(), `"id_match_enabled":false`) {
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"unmerge_window_days":180`) {
 		t.Fatalf("defaults: %d %s", rec.Code, rec.Body)
 	}
 	for _, bad := range []string{`{"unmerge_window_days":0}`, `{"unmerge_window_days":4000}`, `{"unmerge_window_days":30,"extra":1}`} {
@@ -326,7 +326,7 @@ func TestMatchingAPI_Settings(t *testing.T) {
 			t.Errorf("%s: %d %s", bad, rec.Code, rec.Body)
 		}
 	}
-	rec = reqDo(w.h, w.admin1, "PUT", "/api/admin/matching", `{"unmerge_window_days":30,"auto_link_tier_b":true,"require_review_tier_a":true,"id_match_enabled":true}`)
+	rec = reqDo(w.h, w.admin1, "PUT", "/api/admin/matching", `{"unmerge_window_days":30,"auto_link_tier_b":true,"require_review_tier_a":true}`)
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"unmerge_window_days":30`) || !strings.Contains(rec.Body.String(), `"updated_by"`) {
 		t.Fatalf("put: %d %s", rec.Code, rec.Body)
 	}

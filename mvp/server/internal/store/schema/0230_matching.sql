@@ -18,8 +18,8 @@
 -- is needed.
 --
 -- matching_settings are the tenant's matching settings: whether a Tier B match
--- may auto-link, whether exact matches are reviewed, how long a merge can be
--- undone, and whether the TAP ID Match-compatible endpoint is on.
+-- may auto-link, whether exact matches are reviewed, and how long a merge can be
+-- undone.
 --
 -- claim_links records a claim's "yes, I already have an account" sign-in (the
 -- login transaction that carries it) and what came of it. The login
@@ -92,7 +92,6 @@ CREATE TABLE IF NOT EXISTS matching_settings (
   auto_link_tier_b INTEGER NOT NULL DEFAULT 0 CHECK (auto_link_tier_b IN (0,1)),
   require_review_tier_a INTEGER NOT NULL DEFAULT 0 CHECK (require_review_tier_a IN (0,1)),
   unmerge_window_days INTEGER NOT NULL DEFAULT 180 CHECK (unmerge_window_days BETWEEN 1 AND 3650),
-  id_match_enabled INTEGER NOT NULL DEFAULT 0 CHECK (id_match_enabled IN (0,1)),
   updated_by TEXT REFERENCES platform_users (id),
   updated_at TEXT NOT NULL
 );

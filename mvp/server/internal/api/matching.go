@@ -28,7 +28,7 @@ import (
 //	GET  /api/identity-merge-requests?status=    merges and links waiting for a second reviewer (default pending)
 //	POST /api/identity-merge-requests/{merge_request_id}/approve {}        a reviewer other than the requester
 //	POST /api/identity-merge-requests/{merge_request_id}/reject  {reason}  anyone with the permission; the requester withdraws it
-//	GET|PUT /api/admin/matching                  {auto_link_tier_b, require_review_tier_a, unmerge_window_days, id_match_enabled}
+//	GET|PUT /api/admin/matching                  {auto_link_tier_b, require_review_tier_a, unmerge_window_days}
 //
 // The queue shows masked attributes (a name's first letters, an address's
 // first letter and domain), the rules that fired, and for each candidate the
@@ -535,13 +535,12 @@ type matchingSettingsView struct {
 	AutoLinkTierB      bool       `json:"auto_link_tier_b"`
 	RequireReviewTierA bool       `json:"require_review_tier_a"`
 	UnmergeWindowDays  int        `json:"unmerge_window_days"`
-	IDMatchEnabled     bool       `json:"id_match_enabled"`
 	UpdatedBy          *userRef   `json:"updated_by"`
 	UpdatedAt          *time.Time `json:"updated_at"`
 }
 
 func viewSettings(v *viewer, st store.MatchingSettings) matchingSettingsView {
-	out := matchingSettingsView{st.AutoLinkTierB, st.RequireReviewTierA, st.UnmergeWindowDays, st.IDMatchEnabled, nil, st.UpdatedAt}
+	out := matchingSettingsView{st.AutoLinkTierB, st.RequireReviewTierA, st.UnmergeWindowDays, nil, st.UpdatedAt}
 	if st.UpdatedBy != nil {
 		u := v.user(*st.UpdatedBy)
 		out.UpdatedBy = &u
@@ -562,7 +561,6 @@ type putMatchingBody struct {
 	AutoLinkTierB      bool `json:"auto_link_tier_b"`
 	RequireReviewTierA bool `json:"require_review_tier_a"`
 	UnmergeWindowDays  int  `json:"unmerge_window_days"`
-	IDMatchEnabled     bool `json:"id_match_enabled"`
 }
 
 func (s *Server) putMatchingSettings(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
@@ -583,15 +581,14 @@ func (s *Server) putMatchingSettings(_ http.ResponseWriter, r *http.Request, _ *
 		return nil, err
 	}
 	st := store.MatchingSettings{AutoLinkTierB: b.AutoLinkTierB, RequireReviewTierA: b.RequireReviewTierA,
-		UnmergeWindowDays: b.UnmergeWindowDays, IDMatchEnabled: b.IDMatchEnabled}
+		UnmergeWindowDays: b.UnmergeWindowDays}
 	if err := c.PutMatchingSettings(st, actor.UserID, now); err != nil {
 		return nil, err
 	}
 	if err := c.Audit(now, actor.Display, "identity.matching.configure", ojson.Object{
 		{Key: "auto_link_tier_b", Value: ojson.Object{{Key: "from", Value: old.AutoLinkTierB}, {Key: "to", Value: st.AutoLinkTierB}}},
 		{Key: "require_review_tier_a", Value: ojson.Object{{Key: "from", Value: old.RequireReviewTierA}, {Key: "to", Value: st.RequireReviewTierA}}},
-		{Key: "unmerge_window_days", Value: ojson.Object{{Key: "from", Value: old.UnmergeWindowDays}, {Key: "to", Value: st.UnmergeWindowDays}}},
-		{Key: "id_match_enabled", Value: ojson.Object{{Key: "from", Value: old.IDMatchEnabled}, {Key: "to", Value: st.IDMatchEnabled}}}}); err != nil {
+		{Key: "unmerge_window_days", Value: ojson.Object{{Key: "from", Value: old.UnmergeWindowDays}, {Key: "to", Value: st.UnmergeWindowDays}}}}); err != nil {
 		return nil, err
 	}
 	got, err := c.MatchingSettings()
