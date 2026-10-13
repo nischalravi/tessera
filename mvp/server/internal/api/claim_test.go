@@ -184,6 +184,16 @@ func TestClaim_EndToEnd_DevIdP(t *testing.T) {
 			t.Errorf("no %s event", a)
 		}
 	}
+	// every claim request is in the tenant's own chain, as an anonymous caller, by route pattern
+	routes := map[string]bool{}
+	for _, ev := range ledger(t, e.db, e.tenant) {
+		if ev.Action == "http.request" && ev.ActorType == store.ActorAnonymous && strings.Contains(string(ev.HTTP), "/public/t/{slug}/claim/") {
+			routes[strings.TrimSpace(string(ev.HTTP))] = true
+		}
+	}
+	if len(routes) < 5 {
+		t.Errorf("the claim requests are not in the tenant's ledger: %d distinct http.request events", len(routes))
+	}
 	// the invitation cannot be claimed twice, and the link is dead
 	if rec := e.newPage().start(token); decodeMap(t, rec)["next"] != "check_link" {
 		t.Errorf("a used link started again: %s", rec.Body)

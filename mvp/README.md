@@ -446,7 +446,9 @@ The link is `<TESSERA_PUBLIC_URL>/claim#t=<43 characters>`. The page reads the t
 
 1. **start**: the token is exchanged once for a claim session (cookie `__Host-tessera_claim`; in the
    dev insecure-cookie mode `tessera_claim`, like the login cookie), 60 minutes idle and 24 hours at most.
-2. **verify_contact**: a 6-digit code to the invited address (10 minutes, 5 tries, then void).
+2. **verify_contact**: a 6-digit code to the invited address (10 minutes, 5 tries, then void). It
+   proves control of the address once, for the claim (A0, 800-63A contact verification); it is never an
+   authenticator (`docs/knowledge/01`: email is not an acceptable out-of-band authenticator).
 3. **existing_account**: "Do you already have an account with the organization?", asked of every
    claimant. "No" continues. "Yes" is recorded on the intake (`existing_account`, for the review
    queue) and the guest is told an administrator will follow up. **It never links** (K3): matching
