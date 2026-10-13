@@ -105,6 +105,8 @@ var tables = []string{
 	"email_messages",
 	// sponsorships and invitations (schema/0227_sponsorships.sql)
 	"intake_records", "sponsorships", "sponsorship_events",
+	// guest claim (schema/0228_claim.sql)
+	"claim_tokens", "claim_sessions", "confirmation_codes",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was
