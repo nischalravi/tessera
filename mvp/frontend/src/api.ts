@@ -913,7 +913,7 @@ export interface Lifecycle {
   days_left: number | null;
   /** The smallest warning already sent (14, 7 or 1 days). */
   warned_days: number | null;
-  source: "manual" | "hris";
+  source: "manual" | "hris" | "sponsorship";
   updated_at: string | null;
   /** No lifecycle row: an employee with no end date. */
   default: boolean;
@@ -936,6 +936,135 @@ export const lifecycle = {
   set: (id: number, spec: LifecycleSpec) => api<Lifecycle>(lcPath(id), spec, "PUT"),
   extend: (id: number, endsAt: string, reason: string) => api<Lifecycle>(lcPath(id, "/extend"), { ends_at: endsAt, reason }),
   sweep: () => api<{ warned: number; ended: number }>("/lifecycle/sweep", {}),
+};
+
+// ---------------------------------------------------------------- guest sponsorships (issue #65)
+
+export type GuestPopulationKey = "visitor" | "contractor" | "volunteer" | "partner";
+export type SponsorshipStatus = "requested" | "pending_approval" | "active" | "transfer_pending" | "ended" | "revoked" | "rejected";
+/** The status, with a running sponsorship told apart as upcoming, active or ending (within 14 days). */
+export type SponsorshipState = SponsorshipStatus | "upcoming" | "ending";
+export interface BundleItem { group_id: number; system: string; name: string; risk: Risk; privileged: boolean }
+export interface SponsorshipEvent {
+  event: string;
+  from_status: SponsorshipStatus | null;
+  to_status: SponsorshipStatus;
+  note: string | null;
+  policy_version: string;
+  actor: string;
+  at: string;
+}
+export interface Sponsorship {
+  id: string;
+  status: SponsorshipStatus;
+  state: SponsorshipState;
+  guest: PersonRef & { email: string | null };
+  sponsor: PersonRef;
+  population: GuestPopulationKey;
+  purpose: string;
+  bundle: BundleItem[];
+  required_ial: number;
+  required_aal: number;
+  starts_at: string;
+  ends_at: string;
+  /** Whole days until the end; null once it is over. */
+  days_left: number | null;
+  /** The version of the sponsor policy that made the last decision. */
+  policy_version: string;
+  created_by: UserRef | null;
+  created_at: string;
+  approved_by: UserRef | null;
+  approved_at: string | null;
+  transfer_to: PersonRef | null;
+  transfer_deadline: string | null;
+  ended_at: string | null;
+  end_reason: string | null;
+  /** "ready" until the claim flow (GU-6) sends the invitation. */
+  invitation: "ready" | "sent" | "claimed" | "revoked";
+  can_renew: boolean;
+  can_end: boolean;
+  can_transfer: boolean;
+  can_accept_transfer: boolean;
+  can_approve: boolean;
+  events?: SponsorshipEvent[];
+}
+export interface GuestPopulationInfo {
+  key: GuestPopulationKey;
+  name: string;
+  max_days: number;
+  max_active: number;
+  default_ial: number;
+  default_aal: number;
+  approval_with_sensitive_bundle: boolean;
+}
+export interface GuestList {
+  rows: Sponsorship[];
+  populations: GuestPopulationInfo[];
+  policy_version: string;
+  max_invites_per_day: number;
+  transfer_deadline_days: number;
+  /** The sponsor policy lets the signed-in person sponsor. */
+  can_sponsor: boolean;
+  can_read_all: boolean;
+  can_approve: boolean;
+}
+export interface InviteInput {
+  given_name: string;
+  family_name: string;
+  email: string;
+  population: GuestPopulationKey;
+  purpose: string;
+  /** Omitted: now. */
+  starts_at?: string;
+  ends_at: string;
+  /** Group ids of requestable catalog items. */
+  bundle?: number[];
+  required_ial?: number;
+}
+export type BulkRowStatus = "ok" | "needs_approval" | "created" | "refused";
+export interface BulkRowResult {
+  row: number;
+  email: string;
+  population: string;
+  status: BulkRowStatus;
+  /** The stable code of the rule that refused the row. */
+  code?: string;
+  message?: string;
+  needs_approval: boolean;
+  policy_version: string;
+  sponsorship_id?: string;
+}
+export interface BulkResult {
+  dry_run: boolean;
+  batch_id?: string;
+  policy_version: string;
+  rows: BulkRowResult[];
+  created: number;
+  would_create: number;
+  refused: number;
+}
+const spPath = (id: string, rest = "") => `/sponsorships/${encodeURIComponent(id)}${rest}`;
+export const guests = {
+  paths: {
+    list: (f: { sponsor?: "me" | "all"; state?: SponsorshipStatus; population?: GuestPopulationKey } = {}) => {
+      const q = new URLSearchParams();
+      if (f.sponsor) q.set("sponsor", f.sponsor);
+      if (f.state) q.set("state", f.state);
+      if (f.population) q.set("population", f.population);
+      return `/guests${q.size ? `?${q}` : ""}`;
+    },
+    one: (id: string) => spPath(id),
+    approvals: "/sponsorships/approvals",
+  },
+  invite: (body: InviteInput) => api<Sponsorship>("/guests/invitations", body),
+  /** csv: the file's text. dryRun judges every row against the sponsor policy and writes nothing. */
+  bulk: (csv: string, dryRun: boolean) => api<BulkResult>("/guests/invitations/bulk", { csv, dry_run: dryRun }),
+  approve: (id: string) => api<Sponsorship>(spPath(id, "/approve"), {}),
+  reject: (id: string, reason: string) => api<Sponsorship>(spPath(id, "/reject"), { reason }),
+  renew: (id: string, endsAt: string, justification: string) => api<Sponsorship>(spPath(id, "/renew"), { ends_at: endsAt, justification }),
+  end: (id: string, reason: string) => api<Sponsorship>(spPath(id, "/end"), { reason }),
+  transfer: (id: string, toIdentityId: number, reason: string) => api<Sponsorship>(spPath(id, "/transfer"), { to_identity_id: toIdentityId, reason }),
+  acceptTransfer: (id: string) => api<Sponsorship>(spPath(id, "/accept-transfer"), {}),
 };
 
 export const simulate = (body: { remove_edge_ids?: number[]; add_edges?: { src: string; dst: string }[]; disable_account_ids?: number[] }) =>

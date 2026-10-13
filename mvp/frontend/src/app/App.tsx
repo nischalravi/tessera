@@ -29,6 +29,7 @@ const RequestAccess = named(access, "RequestAccess");
 const MyAccess = named(access, "MyAccess");
 const Requests = named(access, "Requests");
 const JIT = named(access, "JIT");
+const Guests = named(access, "Guests");
 const DirectoryLayout = named(directory, "DirectoryLayout");
 const People = named(directory, "People");
 const Machine = named(directory, "Machine");
@@ -92,6 +93,7 @@ export default function App() {
                     <Route path="/access/mine" element={<MyAccess />} />
                     <Route path="/access/requests" element={<Requests />} />
                     <Route path="/access/jit" element={<JIT />} />
+                    <Route path="/access/guests" element={<Guests />} />
 
                     <Route path="/directory" element={<DirectoryLayout />}>
                       <Route index element={<Navigate to="/directory/people" replace />} />
