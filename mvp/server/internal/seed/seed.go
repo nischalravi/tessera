@@ -158,6 +158,9 @@ type Tenant struct {
 	Identifiers *identifiers.Keyer
 	// DevIdPClient seals the dev IdP connection's client secret (optional).
 	DevIdPClient *DevIdPClient
+	// DemoMatching adds a guest invitation that matches an employee, so the
+	// review queue has an item (needs Identifiers). Off for tests.
+	DemoMatching bool
 }
 
 // Larkspur is the Larkspur Labs demo tenant over conns.
@@ -243,6 +246,11 @@ func Run(ctx context.Context, db *store.DB, now time.Time, policies []*policy.Po
 			}
 			if err := seedLifecycle(c, now, skip); err != nil {
 				return err
+			}
+			if t.DemoMatching {
+				if err := seedMatching(c, t.Identifiers, skip, now); err != nil {
+					return err
+				}
 			}
 			st.Requests, err = c.CountRequests()
 			return err
