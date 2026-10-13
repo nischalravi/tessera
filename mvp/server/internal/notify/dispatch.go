@@ -63,6 +63,9 @@ type Dispatcher struct {
 	Batch       int                             // per tenant per run; default DefaultBatch
 	Lease       time.Duration                   // default DefaultLease
 	Backoff     func(attempt int) time.Duration // default DefaultBackoff
+	// Secrets supplies the one secret line of the guest claim emails (see
+	// Secrets); nil makes such notifications dead letters.
+	Secrets *Secrets
 }
 
 // Stats counts what a run did.
@@ -283,6 +286,9 @@ func (d *Dispatcher) Tenant(ctx context.Context, t tenancy.ID) (Stats, error) {
 			if o.err != "" {
 				detail = append(detail, ojson.KV{Key: "error", Value: o.err})
 			}
+			if o.delivery != store.DeliveryPending {
+				d.Secrets.Drop(o.n.ID) // final: the one-time secret is forgotten
+			}
 			if err := tx.Audit(d.Clock().UTC(), Actor, "notification.send", detail); err != nil {
 				return err
 			}
@@ -322,6 +328,19 @@ func (d *Dispatcher) send(ctx context.Context, c claimed) outcome {
 		body += "\n\nOpen in Tessera: " + strings.TrimRight(d.BaseURL, "/") + c.n.Link
 	}
 	body += "\n\n--\nYou get this because of your notification settings in Tessera."
+	if SecretKind(c.n.Kind) {
+		secret, ok := d.Secrets.Get(c.n.ID, d.Clock().UTC())
+		if !ok {
+			// the secret lived only in memory (a restart, or it expired): never
+			// send a message without it, and say how to get a new one
+			msg := "the one-time secret is no longer held (restart or expiry); send a new one"
+			now := d.Clock().UTC()
+			o.att = &Attempt{Started: now, Finished: now, Steps: []Step{}, RcptTo: email, Outcome: OutcomeRejected, Error: msg}
+			o.delivery, o.err = store.DeliveryDead, msg
+			return o
+		}
+		body = c.n.Body + "\n\n" + secret + "\n\n--\nIf you were not expecting this message, ignore it: nothing happens until the link or code is used."
+	}
 	mail := Email{ID: c.n.ID, To: email, Subject: "[Tessera] " + c.n.Subject, Body: body}
 	var err error
 	if rec, ok := d.Sender.(RecordingSender); ok {
