@@ -23,6 +23,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oidcrp"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/access"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/claim"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/credential"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/sponsorship"
@@ -231,6 +232,7 @@ func New(cfg Config) *Server {
 	s.registerLifecycleRoutes()
 	s.registerGuestRoutes()
 	s.registerClaimRoutes()
+	s.registerGuestAccessRoutes()
 	s.registerNotificationRoutes()
 	s.registerEmailRoutes()
 	s.registerReadinessRoutes()
@@ -323,6 +325,10 @@ func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
 			if err := s.claimSvc.SweepAll(audit.WithSystemActor(ctx, "claim.sweeper"), s.store, s.clock()); err != nil && ctx.Err() == nil {
 				s.log.Error("claim sweep failed", "err", err)
 			}
+		}
+		// bundles of ended sponsorships, waiting items and the reference groups (GU-12)
+		if err := access.SweepAll(audit.WithSystemActor(ctx, access.Sweeper), s.store, s.clock(), s.eligible()); err != nil && ctx.Err() == nil {
+			s.log.Error("guest access sweep failed", "err", err)
 		}
 		if err := lifecycle.SweepAll(audit.WithSystemActor(ctx, lifecycle.Sweeper), s.store, s.clock()); err != nil && ctx.Err() == nil {
 			s.log.Error("lifecycle sweep failed", "err", err)

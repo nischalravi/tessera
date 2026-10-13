@@ -134,8 +134,9 @@ var crossTenantCases = map[string]crossTenantCase{
 	"DELETE account link": {method: "DELETE", path: pathf("/api/accounts/%d/link"), key: "acct:okta:alice"},
 	"POST merge identity": {method: "POST", path: pathf("/api/identities/%d/merge"), key: "alice",
 		body: func(id int64) string { return fmt.Sprintf(`{"into":%d,"reason":"x"}`, id) }},
-	"GET identity affiliations": {method: "GET", path: pathf("/api/identities/%d/affiliations"), key: "alice"},
-	"GET identity identifiers":  {method: "GET", path: pathf("/api/identities/%d/identifiers"), key: "alice"},
+	"GET identity affiliations":  {method: "GET", path: pathf("/api/identities/%d/affiliations"), key: "alice"},
+	"GET identity identifiers":   {method: "GET", path: pathf("/api/identities/%d/identifiers"), key: "alice"},
+	"GET identity access bundle": {method: "GET", path: pathf("/api/identities/%d/access-bundle"), key: "alice"},
 	// a bundle names catalog groups by id: tenant A's group is not in B's catalog, like a missing one
 	"POST invite bundle": {method: "POST", path: fixed("/api/guests/invitations"), key: "group:aws:ProdAdmin",
 		body: func(id int64) string {
@@ -172,6 +173,7 @@ var routeParamCases = map[string][]string{
 	"POST /api/identities/{identity_id}/merge":            {"POST merge identity"},
 	"GET /api/identities/{identity_id}/affiliations":      {"GET identity affiliations"},
 	"GET /api/identities/{identity_id}/identifiers":       {"GET identity identifiers"},
+	"GET /api/identities/{identity_id}/access-bundle":     {"GET identity access bundle"},
 	"POST /api/identities/{identity_id}/affiliations":     {"POST add affiliation"},
 }
 
@@ -295,22 +297,23 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 	roleIDs, _ := seedRoles(t, f)          // and A's role description
 	sponsorships := seedSponsorships(t, f) // and A's sponsorship purpose
 	values := map[string]string{
-		"/api/roles/{role_id}":                       roleIDs[f.B.ID],
-		"/api/roles/{role_id}/versions":              roleIDs[f.B.ID],
-		"/api/roles/{role_id}/drift":                 roleIDs[f.B.ID],
-		"/api/requests/{request_id}":                 lines[f.B.ID],
-		"/api/sponsorships/{sponsorship_id}":         sponsorships[f.B.ID],
-		"/api/identities/{identity_id}":              fmt.Sprint(b["alice"]),
-		"/api/identities/{identity_id}/lifecycle":    fmt.Sprint(b["alice"]),
-		"/api/identities/{identity_id}/affiliations": fmt.Sprint(b["alice"]),
-		"/api/identities/{identity_id}/identifiers":  fmt.Sprint(b["alice"]),
-		"/api/jml/leaver-plan/{identity_id}":         fmt.Sprint(b["alice"]),
-		"/api/reviews/campaigns/{campaign_id}":       fmt.Sprint(b["campaign"]),
-		"/api/hris/events/{event_id}/plan":           fmt.Sprint(b["hris:leaver"]),
-		"/api/audit/events/{event_id}/proof":         latestEventID(t, f.DB, f.B.ID),
-		"/api/email/messages/{message_id}":           seedEmailMessage(t, f, f.B, store.EmailDeferred),
-		"/api/jobs/{job_id}":                         insertJobRun(t, f.DB, f.B.ID),
-		"/api/provisioning/ops/{op_id}":              insertProvOp(t, f.DB, f.B.ID, f.B.Refs["connection:ad"], "b-key"),
+		"/api/roles/{role_id}":                        roleIDs[f.B.ID],
+		"/api/roles/{role_id}/versions":               roleIDs[f.B.ID],
+		"/api/roles/{role_id}/drift":                  roleIDs[f.B.ID],
+		"/api/requests/{request_id}":                  lines[f.B.ID],
+		"/api/sponsorships/{sponsorship_id}":          sponsorships[f.B.ID],
+		"/api/identities/{identity_id}":               fmt.Sprint(b["alice"]),
+		"/api/identities/{identity_id}/lifecycle":     fmt.Sprint(b["alice"]),
+		"/api/identities/{identity_id}/affiliations":  fmt.Sprint(b["alice"]),
+		"/api/identities/{identity_id}/identifiers":   fmt.Sprint(b["alice"]),
+		"/api/identities/{identity_id}/access-bundle": fmt.Sprint(b["alice"]),
+		"/api/jml/leaver-plan/{identity_id}":          fmt.Sprint(b["alice"]),
+		"/api/reviews/campaigns/{campaign_id}":        fmt.Sprint(b["campaign"]),
+		"/api/hris/events/{event_id}/plan":            fmt.Sprint(b["hris:leaver"]),
+		"/api/audit/events/{event_id}/proof":          latestEventID(t, f.DB, f.B.ID),
+		"/api/email/messages/{message_id}":            seedEmailMessage(t, f, f.B, store.EmailDeferred),
+		"/api/jobs/{job_id}":                          insertJobRun(t, f.DB, f.B.ID),
+		"/api/provisioning/ops/{op_id}":               insertProvOp(t, f.DB, f.B.ID, f.B.Refs["connection:ad"], "b-key"),
 	}
 	checked := 0
 	for _, rt := range srv.Routes() {

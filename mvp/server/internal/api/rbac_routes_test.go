@@ -89,6 +89,9 @@ GET    /api/identities/{identity_id}/affiliations    graph.read      -  # issue 
 GET    /api/identities/{identity_id}/identifiers     graph.read      -  # issue #64
 POST   /api/identities/{identity_id}/affiliations    identities.affiliate STEP_UP_POLICY  # issue #64
 POST   /api/affiliations/{affiliation_id}/end        identities.affiliate STEP_UP_POLICY  # issue #64
+GET    /api/identities/{identity_id}/access-bundle   guests.read     -  # issue #75
+GET    /api/refgroups                                graph.read      -  # issue #75
+POST   /api/refgroups/reconcile                      lifecycle.manage -  # issue #75
 POST   /api/identity-merges/{merge_id}/unmerge       identities.merge STEP_UP_POLICY  # issue #160
 GET    /api/catalog                                  requests.create -  # issue #164 (?all=1: catalog.manage in the handler)
 PUT    /api/catalog/items/{group_id}                 catalog.manage  STEP_UP_POLICY  # issue #164

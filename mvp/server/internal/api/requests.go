@@ -113,6 +113,7 @@ type catalogEntry struct {
 	Risk                string       `json:"risk"`
 	EligibleTypes       []string     `json:"eligible_types"`
 	EligibleDepartments []string     `json:"eligible_departments"`
+	Populations         []string     `json:"populations"` // guest populations the item is open to
 	DefaultHours        *float64     `json:"default_hours"`
 	MaxHours            *float64     `json:"max_hours"`
 	UpdatedAt           *time.Time   `json:"updated_at"`
@@ -228,7 +229,7 @@ func (v *viewer) user(id string) userRef {
 func (v *viewer) entry(e requests.Entry) (catalogEntry, error) {
 	g := e.Group
 	out := catalogEntry{Group: groupRef{g.ID, g.System, g.Name, g.Kind, g.Privileged}, Risk: "low",
-		EligibleTypes: []string{}, EligibleDepartments: []string{}}
+		EligibleTypes: []string{}, EligibleDepartments: []string{}, Populations: []string{}}
 	if g.Description != nil {
 		out.Description = *g.Description
 	}
@@ -241,6 +242,13 @@ func (v *viewer) entry(e requests.Entry) (catalogEntry, error) {
 		out.Approval = approvalView{Stages: stages, EscalateAfterHours: hours}
 		out.ID, out.Requestable, out.Risk, out.DefaultHours, out.MaxHours = &it.ID, it.Requestable, it.Risk, it.DefaultHours, it.MaxHours
 		out.EligibleTypes, out.EligibleDepartments, out.UpdatedAt = it.EligibleTypes, it.EligibleDepartments, &it.UpdatedAt
+		pops, err := v.tx.CatalogPopulations(it.ID)
+		if err != nil {
+			return out, err
+		}
+		for _, pp := range pops {
+			out.Populations = append(out.Populations, pp.Population)
+		}
 		if it.Description != "" {
 			out.Description = it.Description
 		}
@@ -382,6 +390,8 @@ type catalogItemBody struct {
 	EligibleDepartments []string `json:"eligible_departments"`
 	DefaultHours        *float64 `json:"default_hours"`
 	MaxHours            *float64 `json:"max_hours"`
+	// optional: the guest populations the item is open to (omitted: unchanged)
+	Populations []string `json:"populations"`
 	// optional: the approval stages (manager, owner, decider) and escalation hours
 	ApprovalStages     []string `json:"approval_stages"`
 	EscalateAfterHours *float64 `json:"escalate_after_hours"`
@@ -403,7 +413,8 @@ func (s *Server) putCatalogItem(_ http.ResponseWriter, r *http.Request, p *param
 	tx := store.TxFrom(r.Context())
 	it, err := requests.PutItem(tx, gid, requests.ItemSpec{Requestable: b.Requestable, Description: b.Description,
 		OwnerIdentityID: b.OwnerIdentityID, Risk: b.Risk, EligibleTypes: b.EligibleTypes,
-		EligibleDepartments: b.EligibleDepartments, DefaultHours: b.DefaultHours, MaxHours: b.MaxHours}, by, s.clock().UTC())
+		EligibleDepartments: b.EligibleDepartments, DefaultHours: b.DefaultHours, MaxHours: b.MaxHours,
+		Populations: b.Populations}, by, s.clock().UTC())
 	if err != nil {
 		return nil, reqErr(err)
 	}

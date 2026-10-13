@@ -50,6 +50,7 @@ const (
 	SourceReview    = "review"
 	SourceJIT       = "jit"
 	SourceLeastPriv = "leastpriv"
+	SourceGuest     = "guest" // a guest sponsorship's access bundle (issue #75); the key names the sponsorship
 	SourceAPI       = "api"
 )
 

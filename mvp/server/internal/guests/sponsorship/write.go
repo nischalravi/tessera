@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/access"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/affiliations"
 	"github.com/nischalravi/tessera/mvp/server/internal/lifecycle"
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
@@ -217,6 +218,14 @@ func (s *Service) activate(tx *store.TenantTx, ss *store.Sponsorship, by Actor, 
 	if err := s.syncPerson(tx, ss.GuestIdentityID, by, now, "sponsorship "+ss.ID); err != nil {
 		return err
 	}
+	// the access bundle: recorded now, granted once the guest has claimed
+	// (at once for a guest who is active already)
+	if err := access.Plan(tx, ss, by.Display, now); err != nil {
+		return err
+	}
+	if err := access.GrantPending(tx, ss.GuestIdentityID, by.Display, now); err != nil {
+		return err
+	}
 	return s.invite(tx, ss, now)
 }
 
@@ -263,11 +272,18 @@ func (s *Service) syncPerson(tx *store.TenantTx, guestID int64, by Actor, now ti
 		}
 	}
 	if last == nil {
-		return s.settle(tx, guestID, by, now, note, all)
+		if err := s.settle(tx, guestID, by, now, note, all); err != nil {
+			return err
+		}
+	} else {
+		pop, _ := PopulationOf(last.Population)
+		if _, err = lifecycle.ApplySponsored(tx, guestID, lifecycle.Sponsored{WorkerType: pop.WorkerType, SponsorID: last.SponsorIdentityID,
+			StartsAt: starts, EndsAt: last.EndsAt, Note: note}, by.lc(), now); err != nil {
+			return err
+		}
 	}
-	pop, _ := PopulationOf(last.Population)
-	_, err = lifecycle.ApplySponsored(tx, guestID, lifecycle.Sponsored{WorkerType: pop.WorkerType, SponsorID: last.SponsorIdentityID,
-		StartsAt: starts, EndsAt: last.EndsAt, Note: note}, by.lc(), now)
+	// the reference groups follow the guest's affiliations and status
+	_, err = access.Recompute(tx, now, by.Display, guestID, s.CanSponsor)
 	return err
 }
 

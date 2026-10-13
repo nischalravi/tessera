@@ -95,38 +95,38 @@ type guestRef struct {
 }
 
 type sponsorshipView struct {
-	ID                string                   `json:"id"`
-	Status            string                   `json:"status"`
-	State             string                   `json:"state"`
-	Guest             guestRef                 `json:"guest"`
-	Sponsor           personRef                `json:"sponsor"`
-	Population        string                   `json:"population"`
-	Purpose           string                   `json:"purpose"`
-	Bundle            []sponsorship.BundleItem `json:"bundle"`
-	RequiredIAL       int                      `json:"required_ial"`
-	RequiredAAL       int                      `json:"required_aal"`
-	StartsAt          time.Time                `json:"starts_at"`
-	EndsAt            time.Time                `json:"ends_at"`
-	DaysLeft          *int                     `json:"days_left"`
-	PolicyVersion     string                   `json:"policy_version"`
-	CreatedBy         *userRef                 `json:"created_by"`
-	CreatedAt         time.Time                `json:"created_at"`
-	ApprovedBy        *userRef                 `json:"approved_by"`
-	ApprovedAt        *time.Time               `json:"approved_at"`
-	TransferTo        *personRef               `json:"transfer_to"`
-	TransferDeadline  *time.Time               `json:"transfer_deadline"`
-	EndedAt           *time.Time               `json:"ended_at"`
-	EndReason         *string                  `json:"end_reason"`
-	Invitation        string                   `json:"invitation"` // ready, sent, claiming, expired, claimed or revoked
-	InvitationExpires *time.Time               `json:"invitation_expires_at"`
-	CanResend         bool                     `json:"can_resend_invitation"`
-	CanRevoke         bool                     `json:"can_revoke_invitation"`
-	CanRenew          bool                     `json:"can_renew"`
-	CanEnd            bool                     `json:"can_end"`
-	CanTransfer       bool                     `json:"can_transfer"`
-	CanAcceptTransfer bool                     `json:"can_accept_transfer"`
-	CanApprove        bool                     `json:"can_approve"`
-	Events            []sponsorshipEventView   `json:"events,omitempty"`
+	ID                string                 `json:"id"`
+	Status            string                 `json:"status"`
+	State             string                 `json:"state"`
+	Guest             guestRef               `json:"guest"`
+	Sponsor           personRef              `json:"sponsor"`
+	Population        string                 `json:"population"`
+	Purpose           string                 `json:"purpose"`
+	Bundle            []bundleItemView       `json:"bundle"`
+	RequiredIAL       int                    `json:"required_ial"`
+	RequiredAAL       int                    `json:"required_aal"`
+	StartsAt          time.Time              `json:"starts_at"`
+	EndsAt            time.Time              `json:"ends_at"`
+	DaysLeft          *int                   `json:"days_left"`
+	PolicyVersion     string                 `json:"policy_version"`
+	CreatedBy         *userRef               `json:"created_by"`
+	CreatedAt         time.Time              `json:"created_at"`
+	ApprovedBy        *userRef               `json:"approved_by"`
+	ApprovedAt        *time.Time             `json:"approved_at"`
+	TransferTo        *personRef             `json:"transfer_to"`
+	TransferDeadline  *time.Time             `json:"transfer_deadline"`
+	EndedAt           *time.Time             `json:"ended_at"`
+	EndReason         *string                `json:"end_reason"`
+	Invitation        string                 `json:"invitation"` // ready, sent, claiming, expired, claimed or revoked
+	InvitationExpires *time.Time             `json:"invitation_expires_at"`
+	CanResend         bool                   `json:"can_resend_invitation"`
+	CanRevoke         bool                   `json:"can_revoke_invitation"`
+	CanRenew          bool                   `json:"can_renew"`
+	CanEnd            bool                   `json:"can_end"`
+	CanTransfer       bool                   `json:"can_transfer"`
+	CanAcceptTransfer bool                   `json:"can_accept_transfer"`
+	CanApprove        bool                   `json:"can_approve"`
+	Events            []sponsorshipEventView `json:"events,omitempty"`
 }
 
 // sponsorshipState is what a reader sees: the status, with a running
@@ -148,10 +148,13 @@ func sponsorshipState(ss *store.Sponsorship, now time.Time) string {
 func (s *Server) sponsorshipView(v *viewer, ss *store.Sponsorship, act sponsorship.Actor, withEvents bool) (sponsorshipView, error) {
 	tx, now := v.tx, s.clock().UTC()
 	out := sponsorshipView{ID: ss.ID, Status: ss.Status, State: sponsorshipState(ss, now), Population: ss.Population, Purpose: ss.Purpose,
-		Bundle: sponsorship.ParseBundle(ss.AccessBundle), RequiredIAL: ss.RequiredIAL, RequiredAAL: ss.RequiredAAL, StartsAt: ss.StartsAt,
+		RequiredIAL: ss.RequiredIAL, RequiredAAL: ss.RequiredAAL, StartsAt: ss.StartsAt,
 		EndsAt: ss.EndsAt, PolicyVersion: ss.PolicyVersion, CreatedAt: ss.CreatedAt, ApprovedAt: ss.ApprovedAt,
 		TransferDeadline: ss.TransferDeadline, EndedAt: ss.EndedAt, EndReason: ss.EndReason}
 	var err error
+	if out.Bundle, err = bundleViews(tx, ss); err != nil {
+		return out, err
+	}
 	if out.Guest.personRef, err = v.person(ss.GuestIdentityID); err != nil {
 		return out, err
 	}

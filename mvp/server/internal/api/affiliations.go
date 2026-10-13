@@ -198,6 +198,9 @@ func (s *Server) addAffiliation(_ http.ResponseWriter, r *http.Request, p *param
 		{Key: "starts_at", Value: a.StartsAt}, {Key: "ends_at", Value: a.EndsAt}, {Key: "reason", Value: b.Reason}}); err != nil {
 		return nil, err
 	}
+	if err := s.refreshRefGroups(c, now, principal(r).Display, a.IdentityID); err != nil {
+		return nil, err
+	}
 	return viewAffiliation(a, now), nil
 }
 
@@ -219,6 +222,9 @@ func (s *Server) endAffiliation(_ http.ResponseWriter, r *http.Request, p *param
 	if err := c.Audit(now, principal(r).Display, "identity.affiliation.end", ojson.Object{
 		{Key: "affiliation_id", Value: a.ID}, {Key: "identity_id", Value: a.IdentityID}, {Key: "type", Value: a.Type},
 		{Key: "status", Value: a.Status}, {Key: "ended_at", Value: a.EndsAt}, {Key: "reason", Value: b.Reason}}); err != nil {
+		return nil, err
+	}
+	if err := s.refreshRefGroups(c, now, principal(r).Display, a.IdentityID); err != nil {
 		return nil, err
 	}
 	return viewAffiliation(a, now), nil

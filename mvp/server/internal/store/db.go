@@ -111,6 +111,8 @@ var tables = []string{
 	"job_runs",
 	// closed-loop provisioning (schema/0224-0225)
 	"provisioning_targets", "provisioning_ops", "provisioning_findings",
+	// guest access bundles, assurance and catalog populations (schema/0229_guest_access.sql)
+	"guest_bundle_items", "identity_assurance", "catalog_item_populations",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was

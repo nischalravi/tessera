@@ -7,6 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/access"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/affiliations"
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -182,6 +183,11 @@ func (s *Service) finalize(tx *store.TenantTx, ss *store.Sponsorship, status, ev
 			return err
 		}
 	}
+	// this sponsorship's bundle ends now, before the person's own end (the
+	// last sponsorship ending runs the leaver plan, which leaves these edges to it)
+	if err := access.End(tx, ss, by.Display, now); err != nil {
+		return err
+	}
 	return s.syncPerson(tx, ss.GuestIdentityID, by, now, reason)
 }
 
@@ -230,6 +236,9 @@ func (s *Service) Renew(tx *store.TenantTx, by Actor, id string, to time.Time, j
 		return nil, err
 	}
 	if err := affiliations.MoveSponsoredEnd(tx, ss.GuestIdentityID, ss.ID, ss.EndsAt); err != nil {
+		return nil, err
+	}
+	if err := access.Extend(tx, ss, by.Display, now); err != nil {
 		return nil, err
 	}
 	if err := s.syncPerson(tx, ss.GuestIdentityID, by, now, "renewed: "+why); err != nil {

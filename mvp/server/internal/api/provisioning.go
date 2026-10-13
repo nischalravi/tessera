@@ -110,8 +110,11 @@ type opView struct {
 	CreatedAt      string  `json:"created_at"`
 	UpdatedAt      string  `json:"updated_at"`
 	CompletedAt    *string `json:"completed_at"`
-	CanRetry       bool    `json:"can_retry"`
-	CanCancel      bool    `json:"can_cancel"`
+	// SponsorshipID links an operation of a guest's access bundle back to its
+	// sponsorship (the key is guest:<sponsorship>:...).
+	SponsorshipID *string `json:"sponsorship_id"`
+	CanRetry      bool    `json:"can_retry"`
+	CanCancel     bool    `json:"can_cancel"`
 }
 
 type connInfo struct{ name, system string }
@@ -137,6 +140,11 @@ func viewOp(o *store.ProvOp, names map[string]connInfo) opView {
 		CompletedAt: timeutil.ISOPtr(o.CompletedAt),
 		CanRetry:    o.Status == provision.Failed || o.Status == provision.Mismatch || o.Status == provision.Cancelled,
 		CanCancel:   o.Status == provision.Queued || o.Status == provision.Failed || o.Status == provision.Mismatch}
+	if o.Source == provision.SourceGuest {
+		if parts := strings.SplitN(o.IdempotencyKey, ":", 3); len(parts) == 3 && parts[0] == "guest" {
+			v.SponsorshipID = &parts[1]
+		}
+	}
 	if o.Completion != nil {
 		var env struct {
 			Name string `json:"name"`

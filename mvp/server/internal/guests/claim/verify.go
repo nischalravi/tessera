@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/normalize"
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/access"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/affiliations"
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -352,6 +353,11 @@ func (s *Service) Complete(tx *store.TenantTx, sess *store.ClaimSession, b Bindi
 		return nil, err
 	}
 	if err := notify.GuestClaimed(tx, now, ss); err != nil {
+		return nil, err
+	}
+	// the access bundle is granted and the guest joins the reference groups of
+	// their affiliations (GU-12); the identity assurance reached is recorded
+	if err := access.Claimed(tx, now, guest.ID, v.IAL, b.AAL); err != nil {
 		return nil, err
 	}
 	err = auditEvent(tx, now, "claim.complete", "identity", int64s(guest.ID), ojson.Object{{Key: "intake_id", Value: sess.IntakeID},
