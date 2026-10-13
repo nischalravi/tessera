@@ -16,7 +16,7 @@ import {
 } from "../../api";
 import { Badge, Button, Callout, Column, DataTable, Drawer, EmptyState, Loading, Page, SidePanel, Tabs, useConfirm, useSelected, useToast } from "../../components";
 import {
-  CSV_HEADER, INVITATION_LABEL, INVITATION_TONE, InviteForm, MAX_BULK_ROWS, POPULATIONS, POPULATION_LABEL, ROW_LABEL, STATE_LABEL, STATE_TONE, addDays, bundleChoices, csvRowCount,
+  BUNDLE_STATE_LABEL, BUNDLE_STATE_TONE, CSV_HEADER, INVITATION_LABEL, INVITATION_TONE, InviteForm, MAX_BULK_ROWS, POPULATIONS, POPULATION_LABEL, ROW_LABEL, STATE_LABEL, STATE_TONE, addDays, bundleChoices, bundleSummary, csvRowCount,
   csvTemplate, csvTooLong, dayOf, daysLeftLabel, emptyInvite, endInstant, invitationNote, invitePayload, inviteProblems, itemIal, maxEndDay, needsApproval, requiredIal,
 } from "./guestModel";
 
@@ -180,9 +180,16 @@ function SponsorshipDetail({ id, onChanged }: { id: string; onChanged: () => voi
         <dt>Access bundle</dt>
         <dd>
           {s.bundle.length === 0 ? <span className="faint">None</span> : (
-            <ul className="plain-list">{s.bundle.map((b) => <li key={b.group_id}>{b.system}:{b.name} <Badge tone={itemIal(b) ? "warning" : "neutral"}>IAL {itemIal(b)}</Badge></li>)}</ul>
+            <ul className="plain-list">{s.bundle.map((b) => (
+              <li key={b.group_id}>
+                {b.system}:{b.name} <Badge tone={itemIal(b) ? "warning" : "neutral"}>IAL {itemIal(b)}</Badge>{" "}
+                <Badge tone={BUNDLE_STATE_TONE[b.state]}>{BUNDLE_STATE_LABEL[b.state]}</Badge>
+                {b.detail && <div className="xs faint">{b.detail}</div>}
+                {b.op_id && <div className="xs faint">Provisioning operation {b.op_id.slice(0, 8)} ({b.op_status})</div>}
+              </li>
+            ))}</ul>
           )}
-          {s.bundle.length > 0 && <div className="xs faint">Granted when the groups engine reads sponsorships; nothing is granted yet.</div>}
+          {s.bundle.length > 0 && <div className="xs faint">{bundleSummary(s.bundle)}. Granted after the guest claims their account, and removed when this sponsorship ends.</div>}
         </dd>
         <dt>Invitation</dt>
         <dd><Badge tone={INVITATION_TONE[s.invitation]}>{INVITATION_LABEL[s.invitation]}</Badge><div className="xs faint">{invitationNote(s, fmtDate)}</div></dd>
@@ -351,7 +358,7 @@ function InviteDrawer({ pops, limit, onClose }: { pops: GuestPopulationInfo[]; l
               ))}
             </ul>
           )}
-          <p className="xs faint">The bundle is recorded with the sponsorship; the groups engine grants it later. Privileged or high-risk items need the guest to prove their identity to IAL 2.</p>
+          <p className="xs faint">The bundle is recorded with the sponsorship and granted once the guest has claimed their account. Privileged or high-risk items need the guest to prove their identity to IAL 2.</p>
         </fieldset>
         <p className="small">The guest will need identity assurance <b>IAL {ial}</b>{pop ? ` and sign-in strength AAL ${pop.default_aal}` : ""}.</p>
         {needsApproval(pop, picked) && <Callout tone="warn">This contractor sponsorship has privileged access, so a second person must approve it before it starts.</Callout>}

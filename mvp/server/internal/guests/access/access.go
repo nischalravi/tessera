@@ -415,12 +415,13 @@ func endItem(tx *store.TenantTx, now time.Time, actor string, ss *store.Sponsors
 		if other, err := otherHolder(tx, it); err != nil {
 			return err
 		} else if other != nil { // another live sponsorship still needs the group: only this record ends
-			if it.EdgeID != nil {
-				if err := syncEdgeExpiry(tx, other); err != nil {
-					return err
-				}
+			if err := markRemoved(tx, now, actor, it, "another sponsorship keeps the access"); err != nil {
+				return err
 			}
-			return markRemoved(tx, now, actor, it, "another sponsorship keeps the access")
+			if other.EdgeID != nil && other.Status == store.BundleGranted {
+				return syncEdgeExpiry(tx, other) // now only the live holders count
+			}
+			return nil
 		}
 		if it.EdgeID == nil { // the grant was never ours
 			return markRemoved(tx, now, actor, it, "not an edge of this bundle")

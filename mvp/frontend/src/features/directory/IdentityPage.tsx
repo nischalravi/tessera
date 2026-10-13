@@ -10,6 +10,7 @@ import {
 import { mockIdentityOps, mockObjects, useMockState } from "../../mocks";
 import { useSession } from "../../app/auth";
 import { AffiliationsSection, IdentifiersSection } from "./affiliations";
+import { BundleSection } from "./bundle";
 import { MergeDialog } from "./correlation";
 import { PreviewFormDrawer } from "./shared";
 import { LifecycleSection } from "../lifecycle/parts";
@@ -162,6 +163,7 @@ function Header({ d, disabledAt }: { d: IdentityDetail; disabledAt?: string }) {
 }
 
 export function IdentityPage() {
+  const { can } = useSession();
   const { id } = useParams();
   const [params, setParams] = useSearchParams();
   const { data: d, error, reload } = useApi<IdentityDetail>(`/identities/${id}`);
@@ -274,6 +276,7 @@ export function IdentityPage() {
         <div className="grid g2">
           <div className="card"><AffiliationsSection identityId={d.id} name={d.name} human /></div>
           <div className="card"><IdentifiersSection identityId={d.id} /></div>
+          {can("guests.read") && <div className="card"><BundleSection identityId={d.id} /></div>}
         </div>
       )}
 
