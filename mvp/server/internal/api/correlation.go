@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-		"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/correlation"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/merge"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"

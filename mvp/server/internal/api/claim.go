@@ -32,7 +32,7 @@ import (
 //	POST verify/send                       mail a 6-digit code to the invited address
 //	POST verify/check      {code}          check it (5 tries, 10 minutes)
 //	GET  status                            the step and what the page may show
-//	POST existing-account  {answer}        "do you already have an account?" (asked of everyone)
+//	POST existing-account  {answer}        "do you already have an account?" (asked of everyone; "yes" answers {redirect} to a sign-in as that person)
 //	POST credential                        set up the sign-in: answers {redirect} to the authority
 //	POST resend            {email}         "send me a new link"
 //
@@ -505,6 +505,14 @@ type claimExistingBody struct {
 	Answer string `json:"answer"`
 }
 
+// claimExistingAccount is POST existing-account: "do you already have an
+// account?", asked of every claimant. A "no" moves on to the credential. A "yes"
+// starts a sign-in with the tenant's identity provider (purpose claim, recorded
+// as a claim link); the callback links the claim to the person who signed in
+// when they are one of the people the matcher thought this invitation might be
+// (§6.5), and otherwise the claim goes on at the credential step. The answer
+// is the same whatever the matcher found: the claimant is never told whether a
+// match exists, and a "yes" always gets a sign-in.
 func (s *Server) claimExistingAccount(w http.ResponseWriter, r *http.Request, p *params) (any, error) {
 	c, err := s.claimBegin(w, r, p)
 	if err != nil {
@@ -518,6 +526,44 @@ func (s *Server) claimExistingAccount(w http.ResponseWriter, r *http.Request, p 
 	if err != nil || deny != nil {
 		return orDeny(deny, err)
 	}
+	// 1. read: the tenant's sign-in connection and what the claim asks of it
+	var conn *store.IdPConnection
+	aal := 1
+	if b.Answer == "yes" {
+		err = s.store.ReadTenant(c.ctx, c.t.ID, func(tx *store.TenantTx) error {
+			cur, err := tx.ClaimSession(sess.IDHash)
+			if err != nil || cur.Step != claim.StepExistingAccount {
+				return err // a wrong step is refused below, with the other refusals
+			}
+			cs, err := loginConnections(tx)
+			if err != nil {
+				return err
+			}
+			for _, x := range cs {
+				if x.IsDefault || len(cs) == 1 {
+					conn = x
+					break
+				}
+			}
+			if _, a, err := s.claimSvc.Requirements(tx, cur); err == nil {
+				aal = a
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	// 2. outside any transaction: the authorization URL
+	var cookie, authURL string
+	var txn *store.LoginTransaction
+	if conn != nil && s.rp != nil {
+		if cookie, txn, authURL, err = s.claimSignIn(c, conn, aal); err != nil {
+			s.log.Warn("claim: the existing-account sign-in could not start", "request_id", audit.RequestID(c.ctx))
+			authURL = "" // the claim goes on without it
+		}
+	}
+	// 3. write: the answer, and the login transaction with the claim link that tells the callback what it is for
 	var rerr error
 	err = s.store.InTenant(c.ctx, c.t.ID, func(tx *store.TenantTx) error {
 		cur, err := tx.ClaimSession(sess.IDHash)
@@ -532,7 +578,14 @@ func (s *Server) claimExistingAccount(w http.ResponseWriter, r *http.Request, p 
 			}
 			return err
 		}
-		return nil
+		if authURL == "" {
+			return nil
+		}
+		if err := tx.InsertLoginTransaction(txn); err != nil {
+			return err
+		}
+		return tx.InsertClaimLink(&store.ClaimLink{ID: uuid.NewString(), SessionIDHash: cur.IDHash, IntakeID: cur.IntakeID,
+			LoginTxnID: txn.ID.String(), CreatedAt: c.now})
 	})
 	if err != nil {
 		return nil, err
@@ -541,12 +594,44 @@ func (s *Server) claimExistingAccount(w http.ResponseWriter, r *http.Request, p 
 	if errors.As(rerr, &ce) {
 		return statusBody{ce.Status, ojson.Object{{Key: "error", Value: ce.Code}}}, nil
 	}
-	msg := ""
-	if b.Answer == "yes" {
-		// the seam for matching (GU-5): nothing is linked; an administrator reviews it
-		msg = "Thank you. An administrator will follow up about your existing account. You can carry on setting up this one."
+	out := ojson.Object{{Key: "ok", Value: true}, {Key: "step", Value: claim.StepCredential}}
+	switch {
+	case authURL != "":
+		http.SetCookie(w, s.loginCookie(cookie, int(loginTxnTTL/time.Second)))
+		out = append(out, ojson.KV{Key: "status", Value: "redirect"}, ojson.KV{Key: "redirect", Value: authURL})
+	case b.Answer == "yes":
+		// nothing to sign in to here: the answer is kept for the reviewers and the claim goes on
+		out = append(out, ojson.KV{Key: "message", Value: "Thank you. An administrator will follow up about your existing account. You can carry on setting up this one."})
 	}
-	return ojson.Object{{Key: "ok", Value: true}, {Key: "step", Value: claim.StepCredential}, {Key: "message", Value: msg}}, nil
+	return out, nil
+}
+
+// claimSignIn builds the sign-in as an existing person: a login transaction
+// (purpose claim, a fresh authentication at the sponsorship's assurance level)
+// and the authorization URL. Nothing is written; the caller stores the
+// transaction with the claim link.
+func (s *Server) claimSignIn(c *claimReq, conn *store.IdPConnection, aal int) (cookie string, txn *store.LoginTransaction, authURL string, err error) {
+	rc, err := s.rpConnection(c.t.ID, conn)
+	if err != nil {
+		return "", nil, "", err
+	}
+	required := claimACR(aal)
+	cookie, state, nonce, verifier := seal.RandomSecret(32), seal.RandomSecret(32), seal.RandomSecret(32), seal.RandomSecret(48)
+	stateHash := seal.SHA256Hex([]byte(state))
+	maxAge := claimMaxAge
+	req, claims := requestedAuthn(conn, required)
+	txn = &store.LoginTransaction{ID: uuid.New(), CookieHash: seal.SHA256Hex([]byte(cookie)), IdPConnectionID: conn.ID,
+		Purpose: "claim", StateHash: &stateHash, Nonce: &nonce, RequiredTesseraACR: &required, MaxAge: &maxAge,
+		ReturnTo: "/claim", CreatedAt: c.now, ExpiresAt: c.now.Add(loginTxnTTL)}
+	if txn.PKCEVerifierEnc, err = s.cfg.Sealer.Seal([]byte(verifier), verifierAAD(c.t.ID, txn.ID)); err != nil {
+		return "", nil, "", err
+	}
+	authURL, err = s.rp.AuthURL(c.ctx, rc, oidcrp.AuthRequest{RedirectURI: s.redirectURI(conn.ID), State: state, Nonce: nonce,
+		Verifier: verifier, ACRValues: req.ACRValues, MaxAge: &maxAge, Prompt: "login", Claims: claims})
+	if err != nil {
+		return "", nil, "", err
+	}
+	return cookie, txn, authURL, nil
 }
 
 // ---------------------------------------------------------------- credential

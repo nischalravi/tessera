@@ -141,6 +141,10 @@ func finishMatch(tx *store.TenantTx, row *store.MatchResult, m *store.IdentityMe
 	if second != nil {
 		d.SecondReviewer = &second.UserID
 	}
+	if basis == BasisSignIn {
+		// the suspicion is replaced by the proof: a tier A result of its own, below
+		d = store.MatchResult{ID: row.ID, Status: store.MatchSuperseded, DecidedAt: &now}
+	}
 	if err := tx.DecideMatchResult(&d); err != nil {
 		return err
 	}

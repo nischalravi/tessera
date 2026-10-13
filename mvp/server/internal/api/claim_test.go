@@ -862,7 +862,8 @@ func TestClaim_NoAuthorityStaysPending(t *testing.T) {
 	}
 }
 
-// TestClaim_ExistingAccountNeverLinks: "yes" is recorded for review and links nothing.
+// TestClaim_ExistingAccountNeverLinks: "yes" is recorded for review and, by itself,
+// links nothing: it only starts a sign-in as that person (claim_link_test.go).
 func TestClaim_ExistingAccountNeverLinks(t *testing.T) {
 	e := newClaimEnv(t, claimOpts{})
 	const email = "hasone@guest.example"
@@ -876,7 +877,7 @@ func TestClaim_ExistingAccountNeverLinks(t *testing.T) {
 	}
 	rec := pg.post("existing-account", `{"answer":"yes"}`)
 	m := decodeMap(t, rec)
-	if rec.Code != 200 || m["step"] != "credential" || !strings.Contains(m["message"].(string), "administrator will follow up") {
+	if rec.Code != 200 || m["step"] != "credential" || m["status"] != "redirect" || m["redirect"] == "" {
 		t.Fatalf("yes: %d %s", rec.Code, rec.Body)
 	}
 	if err := e.db.ReadTenant(context.Background(), e.tenant, func(tx *store.TenantTx) error {
