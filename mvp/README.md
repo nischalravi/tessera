@@ -180,6 +180,7 @@ The routes are documented at `/api/readiness/openapi.json`.
 `GET /api/guests[?sponsor=me|all&state=&population=]` · `GET /api/sponsorships/approvals` · `GET /api/sponsorships/{id}` ·
 `POST /api/sponsorships/{id}/approve|reject|renew|end|transfer|accept-transfer` ·
 `POST /api/guests/{identity_id}/resend-invitation|revoke-invitation` ·
+`GET /api/identities/{identity_id}/access-bundle` · `GET /api/refgroups` · `POST /api/refgroups/reconcile` ·
 `POST /public/t/{slug}/claim/start|verify/send|verify/check|existing-account|credential|resend` ·
 `GET /public/t/{slug}/claim/status` (public: the guest's claim, see Guest claim) ·
 `GET /api/approvals/inbox` · `GET /api/approvals/delegates` · `GET|POST /api/approvals/delegations` ·
@@ -643,6 +644,45 @@ links `retry_of` and records `job.retried`. Runs still `running` after an hour a
 ("interrupted"), and runs are kept 30 days. Reading the history needs `jobs.read` (operator,
 auditor, policy admin, tenant admin). Admin → Jobs lists the runs, with Failed, Running and job
 filter chips and a side panel showing the error, the result and Retry.
+
+### Guest access: bundles and reference groups
+
+Issue #75 (GU-12, design §8.2 and §9.3). The groups engine (GR-*) is not built, so these run on Tessera
+itself and move into the groups engine when GR-1/GR-2 land.
+
+- **Bundles.** The catalog items chosen at invite are recorded per sponsorship (`guest_bundle_items`, state
+  pending / granted / failed / removing / removed) when the sponsorship becomes active, and granted when the
+  claim completes (at once for a guest who is active already). For each system the bundle touches: with
+  write-back on, a `create_account` operation (key `guest:<sponsorship>:<system>:account`) if the guest has no
+  account there, then `add_entitlement` (`guest:<sponsorship>:<group>:add`), source `guest`. The membership edge
+  is written by the operation's completion only after the re-read shows it; a failed or mismatched operation
+  leaves no edge. With write-back off the account and edge are written directly. The edge has source
+  `guest_sponsorship`, its source_ref is the bundle item (the sponsorship), and it expires at the sponsorship's
+  end date (the graph drops it on time). Renewing extends it. Ending, revoking, a lapsed transfer or the end date
+  removes that sponsorship's memberships (`remove_entitlement` when write-back is on) unless another live
+  sponsorship of the guest still needs the group, so each sponsorship ends independently. Accounts are disabled
+  only when the last sponsorship ends, by the lifecycle leaver plan, which leaves the bundle's edges to the removal.
+  The sweeper reconciles what events missed. The state of each item is in the sponsorship view (Guests I
+  sponsor), on the person's page (Affiliations tab, `guests.read`) and the operations link back by
+  `sponsorship_id` in Admin, Provisioning.
+- **Reference groups.** System `tessera`, kind `reference`: `ref:guest:active|visitor|contractor|volunteer`,
+  `ref:partner:active`, `ref:ial:2`, `ref:sponsor:eligible`. Membership is derived from affiliations, identity
+  status (only claimed, active people count), assurance and the sponsor policy, and recomputed on affiliation,
+  claim and sponsorship changes and by the sweeper; edits by hand (or an access review revoke) are undone. They
+  appear in Groups and access reviews, policies can name them, and they are never provisioned. Not built:
+  `ref:applicant|admit|prehire` (need SIS/HRIS intake, GU-4) and `ref:partner:<org>` (partner orgs, GU-14).
+  People from the HR or student system count as IAL 2; guests use the assurance recorded at claim
+  (`identity_assurance`, IAL 0 today; the step-up that raises it is GU-7/GU-8).
+- **Guest requests.** A catalog item is open to guests only if it names their population (`populations` on
+  `PUT /api/catalog/items/{group_id}`). Approval goes to the guest's sponsor first (`sponsor` stage), then the
+  item's owner (or deciders). Privileged or high-risk items need IAL 2: a guest below it is refused with
+  `step_up_claim_required` (the step-up claim itself is not built).
+- **Not here.** Sponsor attestation campaign (needs frozen-population reviews, #110), Grouper external-subject
+  import (GR-15), policy groups as code (GR-9). Schema changes: new tables in `0229_guest_access.sql` and the
+  `sponsor` stage kind in `0206_approvals.sql`; reseed existing databases (`./run.sh --reseed`).
+- **Try it** with the dev fake target: `TESSERA_DEV_FAKE_TARGET=1`, Admin, Provisioning, set the Okta target to
+  kind `fake` with write-back on; put an Okta group in the catalog; invite a guest with it in the bundle; claim;
+  watch the operations verify and the item turn Granted.
 
 ### Closed-loop provisioning
 
