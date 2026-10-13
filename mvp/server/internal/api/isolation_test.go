@@ -181,6 +181,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/api/audit/events/{event_id}/proof" {
 			continue // TestIsolation_AuditRoutes
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/approvals/delegations/{delegation_id}") {
+			continue // TestApprovalsAPI_CrossTenant (a UUID, not a fixture id)
+		}
 		if strings.HasPrefix(rt.Pattern, "/api/requests/{request_id}") {
 			continue // TestRequestsAPI_CrossTenant (a UUID, not a fixture id)
 		}
@@ -192,6 +195,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		}
 		if rt.Pattern == "/api/affiliations/{affiliation_id}/end" {
 			continue // TestAffiliationsAPI_CrossTenant (a UUID, not a fixture id)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/email/messages/{message_id}") {
+			continue // TestEmailAPI_CrossTenant (a UUID, not a fixture id)
 		}
 		if rt.Pattern == "/api/auth/sessions/{session_id}" {
 			continue // TestIsolation_SessionCookieScoped (a UUID, not a fixture id)
@@ -267,6 +273,7 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		"/api/reviews/campaigns/{campaign_id}":       fmt.Sprint(b["campaign"]),
 		"/api/hris/events/{event_id}/plan":           fmt.Sprint(b["hris:leaver"]),
 		"/api/audit/events/{event_id}/proof":         latestEventID(t, f.DB, f.B.ID),
+		"/api/email/messages/{message_id}":           seedEmailMessage(t, f, f.B, store.EmailDeferred),
 	}
 	checked := 0
 	for _, rt := range srv.Routes() {

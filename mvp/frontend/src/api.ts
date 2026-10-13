@@ -614,6 +614,41 @@ export interface CatalogEntry {
   /** null: no limit. */
   max_hours: number | null;
   updated_at: string | null;
+  /** Approval stages, in order (issue #165), and hours before a stage escalates to deciders. */
+  approval: { stages: StageKind[]; escalate_after_hours: number };
+}
+export type StageKind = "manager" | "owner" | "decider";
+export interface RequestStage {
+  index: number;
+  kind: StageKind;
+  status: "queued" | "waiting" | "approved" | "denied" | "closed";
+  assignee: PersonRef | null;
+  due_at: string | null;
+  escalated: boolean;
+  decided_by: { id: string; display_name: string } | null;
+  on_behalf_of: { id: string; display_name: string } | null;
+  decided_at: string | null;
+  reason: string | null;
+}
+/** A request line the signed-in user may decide now (GET /api/approvals/inbox). */
+export interface ApprovalItem {
+  line: RequestLine;
+  stage: number | null;
+  kind: StageKind;
+  escalated: boolean;
+  on_behalf_of: { id: string; display_name: string } | null;
+}
+export interface UserRef { id: string; display_name: string }
+export interface ApprovalDelegation {
+  id: string;
+  from: UserRef;
+  to: UserRef;
+  starts_at: string;
+  ends_at: string;
+  reason: string;
+  created_at: string;
+  revoked_at: string | null;
+  active: boolean;
 }
 export interface CatalogView {
   /** The person the signed-in user is; null when not linked (they request for others only). */
@@ -642,6 +677,7 @@ export interface RequestLine {
   expires_at: string | null;
   closed_at: string | null;
   events?: { event: string; actor: string; note: string | null; at: string }[];
+  stages: RequestStage[];
   can_approve: boolean;
   can_cancel: boolean;
   can_remove: boolean;
@@ -654,8 +690,94 @@ export const approveRequest = (id: string, reason?: string) => line(id, "approve
 export const denyRequest = (id: string, reason: string) => line(id, "deny", { reason });
 export const cancelRequest = (id: string) => line(id, "cancel");
 export const removeRequest = (id: string, reason?: string) => line(id, "remove", reason ? { reason } : {});
-export const putCatalogItem = (groupId: number, body: Omit<CatalogEntry, "id" | "group" | "owner" | "updated_at"> & { owner_identity_id: number | null }) =>
-  api<CatalogEntry>(`/catalog/items/${groupId}`, body, "PUT");
+export const putCatalogItem = (groupId: number, body: Omit<CatalogEntry, "id" | "group" | "owner" | "updated_at" | "approval"> & {
+  owner_identity_id: number | null; approval_stages?: StageKind[]; escalate_after_hours?: number;
+}) => api<CatalogEntry>(`/catalog/items/${groupId}`, body, "PUT");
+export const createDelegation = (body: { to_user_id: string; starts_at: string; ends_at: string; reason: string }) =>
+  api<ApprovalDelegation>("/approvals/delegations", body);
+export const revokeDelegation = (id: string) => api<ApprovalDelegation>(`/approvals/delegations/${encodeURIComponent(id)}/revoke`, {});
+
+// ---------------------------------------------------------------- notifications (issue #189)
+
+export type NotificationChannel = "off" | "in_app" | "email" | "both" | "digest";
+/** One entry of the signed-in user's inbox (the top-bar bell). */
+export interface AppNotification {
+  id: string;
+  kind: string;
+  subject: string;
+  body: string;
+  /** An app path such as /inbox; empty when there is none. */
+  link: string;
+  created_at: string;
+  read_at: string | null;
+  /** The email side: none, pending, digest, digested, sent, skipped or dead. */
+  delivery: string;
+}
+export interface NotificationList { unread: number; items: AppNotification[] }
+export interface NotificationKindPref {
+  kind: string;
+  label: string;
+  description: string;
+  /** Cannot be turned off. */
+  mandatory: boolean;
+  channel: NotificationChannel;
+  default: NotificationChannel;
+}
+export interface NotificationPrefs {
+  /** False when the server sends no email at all (TESSERA_NOTIFY_EMAIL=off). */
+  email_available: boolean;
+  /** True when email goes to the dev sink, a file, and is not delivered. */
+  email_dev_sink: boolean;
+  channels: NotificationChannel[];
+  kinds: NotificationKindPref[];
+}
+
+export const NOTIFICATIONS_PATH = "/notifications?limit=30";
+export const markNotificationsRead = (target: { ids: string[] } | { all: true }) =>
+  api<{ marked: number; unread: number }>("/notifications/read", target);
+export const putNotificationPrefs = (prefs: Record<string, NotificationChannel>) =>
+  api<NotificationPrefs>("/notifications/preferences", { prefs }, "PUT");
+
+// ---------------------------------------------------------------- email delivery log (issue #189)
+
+export type EmailStatus = "queued" | "sending" | "accepted" | "deferred" | "rejected" | "failed" | "bounced";
+export interface EmailStep { command: string; reply: string; code: number; enhanced?: string }
+/** One send attempt with its SMTP transaction. Credentials are redacted and the body is never recorded. */
+export interface EmailAttempt {
+  started_at: string;
+  finished_at: string;
+  outcome: EmailStatus;
+  banner?: string;
+  capabilities?: string[];
+  tls?: { version?: string; cipher?: string; server_subject?: string; server_issuer?: string; error?: string };
+  steps: EmailStep[];
+  mail_from?: string;
+  rcpt_to?: string;
+  queue_id?: string;
+  error?: string;
+  truncated?: boolean;
+}
+export interface EmailMessage {
+  id: string;
+  notification_id: string;
+  kind: string;
+  recipient: string;
+  subject: string;
+  mail_from: string | null;
+  rcpt_to: string | null;
+  status: EmailStatus;
+  /** The relay's queue id from its final 250 reply. */
+  queue_id: string | null;
+  attempt_count: number;
+  created_at: string;
+  updated_at: string;
+  /** Deferred or failed messages can be sent again. */
+  retryable: boolean;
+  /** Only in the detail. */
+  attempts?: EmailAttempt[];
+}
+export interface EmailList { statuses: EmailStatus[]; email_mode: string; messages: EmailMessage[] }
+export const retryEmail = (id: string) => api<EmailMessage>(`/email/messages/${encodeURIComponent(id)}/retry`, {});
 
 // ---------------------------------------------------------------- business roles (issue #161)
 

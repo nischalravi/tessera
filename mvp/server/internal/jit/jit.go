@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
+	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
@@ -194,6 +195,9 @@ func Approve(c *store.TenantTx, requestID int64, by store.UserRef, now, createdA
 	if err := c.SaveRequest(req); err != nil {
 		return nil, err
 	}
+	if err := notifyDecided(c, now, req, by); err != nil {
+		return nil, err
+	}
 	if err := c.Audit(createdAt, approver, "jit.approve", ojson.Object{{Key: "request_id", Value: req.ID},
 		{Key: "expires_at", Value: timeutil.ISO(expires)}}); err != nil {
 		return nil, err
@@ -212,7 +216,19 @@ func Deny(c *store.TenantTx, requestID int64, by store.UserRef, now time.Time) (
 	if err := c.SaveRequest(req); err != nil {
 		return nil, err
 	}
+	if err := notifyDecided(c, now, req, by); err != nil {
+		return nil, err
+	}
 	return req, c.Audit(now, approver, "jit.deny", ojson.Object{{Key: "request_id", Value: req.ID}})
+}
+
+// notifyDecided tells the requester and the person that a request was granted
+// or denied (issue #189). Seed data has no signed-in decider and tells no one.
+func notifyDecided(c *store.TenantTx, now time.Time, req *store.AccessRequest, by store.UserRef) error {
+	if by.ID == uuid.Nil {
+		return nil
+	}
+	return notify.JITDecided(c, now, req, by.ID.String())
 }
 
 // Revoke ends an active grant early.

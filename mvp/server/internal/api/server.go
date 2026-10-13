@@ -91,6 +91,9 @@ type Config struct {
 	// TrustedProxies (TESSERA_TRUSTED_PROXIES) are the peers whose
 	// X-Forwarded-For the rate limiter believes.
 	TrustedProxies []netip.Prefix
+	// EmailMode is the email delivery (config.MailOff, MailDev or MailSMTP):
+	// the preferences page says whether the email channels do anything.
+	EmailMode string
 	// AuditAppend overrides how the audit middleware writes http.request
 	// events (tests inject failures). Nil: the store.
 	AuditAppend func(ctx context.Context, t tenancy.ID, e store.AuditEvent) error
@@ -148,6 +151,8 @@ func New(cfg Config) *Server {
 	s.registerRequestRoutes()
 	s.registerRoleRoutes()
 	s.registerLifecycleRoutes()
+	s.registerNotificationRoutes()
+	s.registerEmailRoutes()
 	s.registerReadinessRoutes()
 	s.registerAuthRoutes()
 	s.checkPublicRoutes()

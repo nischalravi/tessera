@@ -65,8 +65,9 @@ with SQLite through the pure-Go `modernc.org/sqlite` driver, so it needs no C to
 
 ```
 server/
-  cmd/tessera/          main: `serve` (default), `seed` and `audit verify|checkpoint|export`; timeouts,
-                        graceful shutdown, JIT sweeper, audit checkpointer
+  cmd/tessera/          main: `serve` (default), `seed`, `audit verify|checkpoint|export` and
+                        `notify seal-password`; timeouts, graceful shutdown, JIT sweeper, audit
+                        checkpointer, notification dispatcher
   cmd/tessera-devidp/   the dev IdP binary (development and tests only; see Dev sign-in)
   internal/
     connectors/         Connector interface + normalized record types, deterministic demo company
@@ -85,6 +86,7 @@ server/
     simulate/           what-if engine: apply edits to a snapshot copy, diff perms + violations
     leastpriv/          grant-level and role-level recommendations
     nhi/, jit/, reviews/, jml/, seed/
+    notify/             notification outbox, in-app inbox, email senders (dev sink, SMTP), dispatcher
     api/                HTTP routes under /api, FastAPI-compatible validation errors, OpenAPI/docs
     config/             typed settings from TESSERA_* variables; production guard rails
     seal/               AES-256-GCM sealing under the KEK (AAD-bound), random secrets, SHA-256 helpers
@@ -175,6 +177,12 @@ The routes are documented at `/api/readiness/openapi.json`.
 (changes take `?dry_run=1`) · `GET|POST /api/role-requests` · `POST /api/role-requests/{id}/approve|deny|cancel` ·
 `GET /api/lifecycle[?state=upcoming|active|ending|ended]` · `GET /api/lifecycle/sponsored` · `POST /api/lifecycle/sweep` ·
 `GET|PUT /api/identities/{id}/lifecycle` · `POST /api/identities/{id}/lifecycle/extend {ends_at, reason}`
+`GET /api/approvals/inbox` · `GET /api/approvals/delegates` · `GET|POST /api/approvals/delegations` ·
+`POST /api/approvals/delegations/{id}/revoke` ·
+`GET /api/notifications[?unread=1&limit=]` · `POST /api/notifications/read {ids}|{all:true}` ·
+`GET|PUT /api/notifications/preferences {prefs:{kind:channel}}` ·
+`GET /api/email/messages[?status=&kind=&recipient=&limit=]` · `GET /api/email/messages/{id}` ·
+`POST /api/email/messages/{id}/retry`
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
@@ -255,6 +263,21 @@ expired lines, and lines whose grant was removed elsewhere (a review, a revoke).
 keeps its history (submitted, approved, denied, cancelled, expired, removed), and each change
 is audited.
 
+**Approval routing** (issue #165). Each catalog item has ordered approval stages. Each stage is
+one of: the person's **manager**, the item's **owner**, or an **access approver** (anyone with
+`requests.decide`). A line copies its item's stages when it is filed. The first stage waits;
+each approval starts the next; the last one grants. Any stage's approver can deny.
+
+Managers and owners decide their stage from the **Inbox** or **Requests → Approvals**, as can
+anyone they delegated to (**Requests → Delegations**, up to 90 days). A stage escalates to the
+access approvers after the item's escalation hours (default 48). It escalates at once when no
+manager or owner signs in.
+
+Nobody decides a line they requested or that is for them, or for whoever delegated to them. Nobody
+decides two stages of the same line. The seed routes every demo item to the manager, then an access
+approver. Pat signs in as Anders Zeller, Vic's (Hana's) manager, so Vic's requests reach Pat
+first, then Olu or another access approver.
+
 Policy admins edit an item under **Directory → Entitlements → (group) → Request catalog**
 (`catalog.manage`). The seed puts every demo group in the catalog (privileged ones: 8 hours by
 default, at most 72). It also links Olu and Vic to two demo employees, so they can request for
@@ -330,6 +353,96 @@ Not yet:
 - provisioning the leaver plan into target systems (#103);
 - the guest claim flow and affiliations (GU-1 #64 onward);
 - rehiring someone whose term has ended.
+themselves. Not yet: provisioning into the target system (#103), business roles (#161).
+
+### Notifications
+
+Issue #189. Requests, approvals, reviews and expiring access now tell people. Each notification is a
+row in the tenant's outbox (`schema/0223_notifications.sql`), written **in the same transaction** as
+the event that causes it, so a rolled-back event leaves none behind. The row is the person's in-app
+entry (the top-bar bell: unread count, mark as read) and, if they want it, an email.
+
+| Kind | Who is told | When |
+|---|---|---|
+| `request.approval_needed` | the approvers of the waiting stage (assignee and their delegates; deciders for a decider stage or one past due) | a request is submitted, and each time the next stage starts |
+| `request.approved`, `request.denied` | the requester and the beneficiary | the final decision |
+| `request.expiring` | the requester and the beneficiary | approved access ends within 24 hours |
+| `approval.escalated` | deciders and the stage's assignee | a stage passes its due time (not when it was due at once) |
+| `approval.delegated` | the delegate | someone delegates their approvals |
+| `review.launched`, `review.closed` | each reviewer of the campaign | campaign created, campaign complete |
+| `review.reminder` | reviewers with open items | once a week from the campaign's seventh day |
+| `jit.granted`, `jit.denied`, `jit.expiring` | the requester and the person | decision; access ends within the hour |
+| `access.ending` | the person (and others you name) | `notify.Expiring`, below |
+| `security.alert` | whoever the producer names | `notify.SecurityAlert`; **cannot be turned off** |
+
+People who do not sign in (a reviewer or owner with no platform user) are reached by email at their
+identity's address. Seeding and system jobs notify no one. The actor of a decision is never told of it.
+
+**Preferences.** Each user picks a channel per kind (**Notifications** in the UI, `/api/notifications/preferences`):
+`off`, `in_app`, `email`, `both` or `digest` (in the bell, plus one email a day). Defaults: `both` for
+approvals needed, escalations, review launches and reminders and security alerts, `in_app` for the rest.
+A user with no email address keeps an `email` choice in the bell.
+
+**Delivery.** A background dispatcher (every 15 seconds, `notify.Dispatcher`) claims due email in a short
+transaction (counting the attempt and leasing the row, so a crash retries after 5 minutes and a second
+dispatcher cannot send it twice), sends outside any transaction, and records each outcome in a second one.
+A failure is retried after a backoff of 30 s doubling to 1 h; after `TESSERA_NOTIFY_MAX_ATTEMPTS`
+(default 6), or on a permanent failure (a 5xx reply, an invalid address), the notification is a **dead
+letter**: it stays in the bell, its `delivery` is `dead` and its `last_error` says why. The
+email carries the notification id as its `Message-ID`. The digest is built per recipient once a day, from
+`TESSERA_NOTIFY_DIGEST_HOUR` UTC (default 8). **Every email send, retry, skip, dead letter and digest is an
+audit event** (`notification.send`, `notification.digest`; the address is never in it), as are
+mark-as-read and preference changes. The in-app entry itself is written with the audited event that causes it.
+
+**Email.** `TESSERA_NOTIFY_EMAIL` is `off`, `dev` or `smtp`; the default is `smtp` when `TESSERA_SMTP_HOST` is
+set, else `dev` outside production and `off` in production. The **dev sink** sends nothing: it logs and
+appends each message to `server/var/dev-mail.jsonl`. SMTP uses the standard library through
+`safehttp.NewDialer`, the same SSRF guard as every outbound call (private, loopback and metadata
+addresses refused; loopback allowed only in dev): `TESSERA_SMTP_HOST`, `_PORT` (587), `_FROM`, `_TLS`
+(`starttls` default, `tls`, `none` for dev), `_USERNAME` and `TESSERA_SMTP_PASSWORD_SEALED`. The password is
+never read in clear: `echo -n 'password' | tessera notify seal-password` prints it sealed under the KEK.
+Production refuses the dev sink, SMTP without TLS and a login without a sealed password. With email `off`
+due email is recorded as `skipped`.
+
+**Email delivery log.** Every email the dispatcher sends has a record (`schema/0224_email_messages.sql`),
+so an operator can see what happened without the relay's dashboard (**Admin → Email delivery**, or
+`GET /api/email/messages`). A record holds the message id, kind, recipient and subject (never the body),
+the envelope (`MAIL FROM`, `RCPT TO`), a **status**, the relay's **queue id** parsed from the final 250
+reply (`250 2.0.0 Ok: queued as ABC123`), and a list of attempts. Each attempt has start and finish
+times, the server banner, the EHLO capabilities, the TLS result (version, cipher, server certificate
+subject and issuer, or the error), and every command with the relay's reply, its code and its enhanced
+status code. The SMTP client is a small one on `net/textproto` so it can record this; AUTH is recorded as
+`AUTH PLAIN <redacted>`, the body as `<message body not recorded>`, and a transcript is capped (120 steps,
+24 KiB, 300 characters a field).
+
+| Status | Meaning | Retried |
+|---|---|---|
+| `queued`, `sending` | waiting for an attempt, or one is running | |
+| `accepted` | the relay answered 250 at the end of DATA | final |
+| `deferred` | a 4xx reply | yes, with backoff |
+| `rejected` | a 5xx reply, or an address that can never work | no |
+| `failed` | a network or TLS error, or a timeout | yes, with backoff |
+| `bounced` | reserved for bounce and DSN processing, a later step; nothing sets it yet | |
+
+**Accepted means accepted by the relay, not delivered to the inbox.** The UI says so. After the
+attempts run out a deferred or failed message is a dead letter; `POST /api/email/messages/{id}/retry`
+(audited as `email.message.retry`) queues one more attempt. Reading needs `email.read` (auditor and
+tenant admin), retrying `email.manage` (tenant admin). The dev sink records its sends too, with a
+one-step transcript. Not yet: bounce and DSN processing, per-tenant relay settings.
+
+**For other producers.** Write a notification from the transaction of your event:
+
+```go
+notify.Emit(tx, now, notify.Message{Kind: notify.KindSecurityAlert, Key: "role.grant:"+id,
+    Subject: "...", Body: "...", Link: "/admin"}, recipients...)   // idempotent per Key and recipient
+notify.SecurityAlert(tx, now, key, subject, body, link, recipients...) // admin-change notices (#16)
+notify.Expiring(tx, now, notify.Ending{Key: "identity:42", IdentityID: 42, Also: []int64{managerID},
+    What: "Ada's contract", EndsAt: end})   // end dates (#159): once per Key and end date
+```
+
+`notify.Identity`, `notify.User` and `notify.Deciders` build recipients. Add a kind to `notify.Kinds`
+(label, default, mandatory) and it appears in everyone's settings. Not yet: per-tenant SMTP and chat
+(the settings are server-wide), templates, per-kind digests.
 
 ### Audit ledger
 
@@ -383,8 +496,8 @@ lose your place in the list.
 
 **Top bar** (48px, dark). The hamburger collapses the rail to icons (below 768px it opens the rail
 as a drawer), then the Tessera mark, the global search box (`/` focuses it; `⌘K` opens the
-palette), and on the right the Inbox with its count, recent activity (from the audit log),
-settings (theme: light, dark or match system), help (shortcuts) and the user menu with the
+palette), and on the right the Inbox with its count, the notification bell (unread count, the
+latest notifications, mark all as read, and **All notifications and settings**), settings (theme: light, dark or match system), help (shortcuts) and the user menu with the
 tenant name and the persona switcher.
 
 **Left rail** (236px, light). Active items are white with a blue left indicator; counts sit on
@@ -641,7 +754,8 @@ cd ../frontend && npm run build && npm test   # npm test: node:test, no extra de
 * Configuration (`internal/config`): with `TESSERA_ENV=prod` the server refuses to start on a
   non-https `TESSERA_PUBLIC_URL`, `TESSERA_COOKIE_SECURE=false`, no KEK, any
   `TESSERA_CORS_ORIGINS` (the production UI is same-origin, so CORS is off),
-  `TESSERA_OUTBOUND_ALLOW_LOOPBACK=true`, a `TESSERA_DEV_IDP_URL`, a missing or `file://`
+  `TESSERA_OUTBOUND_ALLOW_LOOPBACK=true`, the dev mail sink (`TESSERA_NOTIFY_EMAIL=dev`), SMTP
+  without TLS, a `TESSERA_DEV_IDP_URL`, a missing or `file://`
   `TESSERA_AUDIT_ANCHOR`, a frozen clock (`TESSERA_NOW`), or a `TESSERA_TRUSTED_PROXIES` prefix
   broader than /8 (IPv4) or /32 (IPv6), and lists every problem at once. A /0 proxy prefix is
   refused in every environment.

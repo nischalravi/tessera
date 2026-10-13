@@ -145,6 +145,35 @@ func New(o Options) (*http.Client, error) {
 	}, nil
 }
 
+// DialFunc opens a connection like net.Dialer.DialContext.
+type DialFunc func(ctx context.Context, network, address string) (net.Conn, error)
+
+// NewDialer returns the guarded dialer New uses, for protocols other than
+// HTTP (the SMTP sender): the host is resolved once, refused if any of its
+// addresses is blocked (private, loopback, link-local, metadata and the
+// other ranges above), and only the checked addresses are connected to. The
+// dev loopback exception applies exactly as for New. Timeout, Env,
+// AllowLoopback and Resolver are the only options it reads.
+func NewDialer(o Options) (DialFunc, error) {
+	switch o.Env {
+	case config.Dev, config.Prod:
+	default:
+		return nil, fmt.Errorf("safehttp: Options.Env must be %q or %q (got %q)", config.Dev, config.Prod, o.Env)
+	}
+	if o.AllowLoopback && o.Env != config.Dev {
+		return nil, errors.New("safehttp: the loopback exception is only allowed with TESSERA_ENV=dev")
+	}
+	if o.Timeout <= 0 {
+		o.Timeout = DefaultTimeout
+	}
+	if o.Resolver == nil {
+		o.Resolver = net.DefaultResolver
+	}
+	d := &dialer{o: o}
+	d.net = net.Dialer{Timeout: o.Timeout, Control: d.control}
+	return d.dial, nil
+}
+
 // Response is a fully read, size-limited response.
 type Response struct {
 	StatusCode int

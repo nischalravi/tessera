@@ -95,8 +95,8 @@ PUT    /api/catalog/items/{group_id}                 catalog.manage  STEP_UP_POL
 POST   /api/requests                                 requests.create -  # issue #164 (others: requests.create_for_others in the handler)
 GET    /api/requests                                 requests.create -  # issue #164 (scope=pending|all: requests.decide or graph.read)
 GET    /api/requests/{request_id}                    requests.create -  # issue #164
-POST   /api/requests/{request_id}/approve            requests.decide STEP_UP_POLICY  # issue #164
-POST   /api/requests/{request_id}/deny               requests.decide -  # issue #164
+POST   /api/requests/{request_id}/approve            requests.create STEP_UP_POLICY  # issue #164 (#165: the line's routing decides who)
+POST   /api/requests/{request_id}/deny               requests.create -  # issue #164 (#165: the line's routing decides who)
 POST   /api/requests/{request_id}/cancel             requests.create -  # issue #164 (the requester)
 POST   /api/requests/{request_id}/remove             requests.create -  # issue #164 (requests.decide, or the beneficiary)
 GET    /api/roles                                    requests.create -  # issue #161
@@ -120,6 +120,18 @@ POST   /api/lifecycle/sweep                          lifecycle.manage -  # issue
 GET    /api/identities/{identity_id}/lifecycle       graph.read      -  # issue #159
 PUT    /api/identities/{identity_id}/lifecycle       lifecycle.manage STEP_UP_POLICY  # issue #159
 POST   /api/identities/{identity_id}/lifecycle/extend requests.create -  # issue #159 (the sponsor, or lifecycle.manage)
+GET    /api/approvals/inbox                          requests.create -  # issue #165
+GET    /api/approvals/delegates                      requests.create -  # issue #165
+GET    /api/approvals/delegations                    requests.create -  # issue #165 (?all=1: requests.decide)
+POST   /api/approvals/delegations                    requests.create -  # issue #165
+POST   /api/approvals/delegations/{delegation_id}/revoke requests.create -  # issue #165
+GET    /api/notifications                            auth.self       -  # issue #189 (the caller's own inbox)
+POST   /api/notifications/read                       auth.self       -  # issue #189
+GET    /api/notifications/preferences                auth.self       -  # issue #189
+PUT    /api/notifications/preferences                auth.self       -  # issue #189
+GET    /api/email/messages                           email.read      -  # issue #189
+GET    /api/email/messages/{message_id}              email.read      -  # issue #189
+POST   /api/email/messages/{message_id}/retry        email.manage    -  # issue #189
 POST   /api/connections/{id}/validate                connections.manage -
 GET    /api/connections/{id}/validations/{run}       connections.read   -
 POST   /api/connections/{id}/dry-run                 connections.manage -

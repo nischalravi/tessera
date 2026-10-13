@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
-import { CatalogView, Risk, putCatalogItem, useApi } from "../../api";
+import { CatalogView, IdentityRow, Risk, StageKind, putCatalogItem, useApi } from "../../api";
 import { Badge, Button, Callout } from "../../components";
 import { useToast } from "../../components/Toast";
 
@@ -9,6 +9,7 @@ import { useToast } from "../../components/Toast";
  * edit them (the API also asks for a fresh phishing-resistant sign-in).
  */
 const TYPES: [string, string][] = [["human", "People"], ["service", "Service accounts"], ["ai_agent", "AI agents"]];
+const STAGES: [StageKind, string][] = [["manager", "The person's manager"], ["owner", "The item's owner"], ["decider", "An access approver (requests.decide)"]];
 const hrs = (h: number | null) => (h == null ? "" : String(h));
 const num = (s: string) => (s.trim() === "" ? null : Number(s));
 
@@ -26,6 +27,10 @@ export function CatalogSettings({ groupId, privileged }: { groupId: number; priv
   const [depts, setDepts] = useState("");
   const [def, setDef] = useState("");
   const [max, setMax] = useState("");
+  const [stages, setStages] = useState<StageKind[]>(["decider"]);
+  const [escalate, setEscalate] = useState("48");
+  const [owner, setOwner] = useState("");
+  const people = useApi<IdentityRow[]>(manage ? "/identities?type=human" : null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -37,6 +42,9 @@ export function CatalogSettings({ groupId, privileged }: { groupId: number; priv
     setDepts(entry.eligible_departments.join(", "));
     setDef(hrs(entry.default_hours));
     setMax(hrs(entry.max_hours));
+    setStages(entry.approval.stages);
+    setEscalate(String(entry.approval.escalate_after_hours));
+    setOwner(entry.owner ? String(entry.owner.id) : "");
   }, [entry, privileged]);
 
   if (!view) return <p className="small muted">{first.error ?? "Loading…"}</p>;
@@ -48,6 +56,8 @@ export function CatalogSettings({ groupId, privileged }: { groupId: number; priv
         <dt>Risk</dt><dd><Badge tone={entry.risk === "high" ? "warning" : "outline"}>{entry.risk}</Badge></dd>
         <dt>Duration</dt><dd>{entry.default_hours ? `${entry.default_hours} h by default` : "Until removed"}{entry.max_hours ? `, at most ${entry.max_hours} h` : ""}</dd>
         <dt>Who can ask</dt><dd>{[entry.eligible_types.join(", "), entry.eligible_departments.join(", ")].filter(Boolean).join(" in ") || "Anyone"}</dd>
+        <dt>Owner</dt><dd>{entry.owner?.name ?? "None"}</dd>
+        <dt>Approval</dt><dd>{entry.approval.stages.map((k) => STAGES.find(([v]) => v === k)?.[1] ?? k).join(", then ")}</dd>
       </dl>
     );
   }
@@ -57,8 +67,9 @@ export function CatalogSettings({ groupId, privileged }: { groupId: number; priv
     setError(null);
     try {
       await putCatalogItem(groupId, {
-        requestable, risk, description, owner_identity_id: entry?.owner?.id ?? null, eligible_types: types,
+        requestable, risk, description, owner_identity_id: owner ? Number(owner) : null, eligible_types: types,
         eligible_departments: depts.split(",").map((d) => d.trim()).filter(Boolean), default_hours: num(def), max_hours: num(max),
+        approval_stages: stages, escalate_after_hours: Number(escalate),
       });
       toast("Catalog settings saved");
     } catch (err: any) {
@@ -97,8 +108,27 @@ export function CatalogSettings({ groupId, privileged }: { groupId: number; priv
         </label>
       </div>
       {privileged && <span className="small muted">Privileged access needs a default duration.</span>}
+      <label className="field">Owner
+        <select className="input" value={owner} onChange={(e) => setOwner(e.target.value)}>
+          <option value="">No owner</option>
+          {(people.data ?? []).filter((p) => p.status === "active").map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+      </label>
+      <fieldset className="stack-sm" style={{ border: 0, padding: 0, margin: 0 }}>
+        <legend className="small strong">Approved by, in this order</legend>
+        {STAGES.map(([v, l]) => (
+          <label key={v} className="row tight small">
+            <input type="checkbox" checked={stages.includes(v)} onChange={(e) => setStages(STAGES.map(([k]) => k).filter((k) => (k === v ? e.target.checked : stages.includes(k))))} /> {l}
+          </label>
+        ))}
+        {stages.length === 0 && <span className="small" style={{ color: "var(--critical)" }}>Pick at least one stage.</span>}
+      </fieldset>
+      <label className="field">Escalate a waiting stage to access approvers after (hours)
+        <input className="input" inputMode="decimal" value={escalate} onChange={(e) => setEscalate(e.target.value)} />
+        <span className="hint">A stage with no manager or owner who signs in escalates at once.</span>
+      </label>
       {error && <Callout tone="bad">{error}</Callout>}
-      <div className="row"><Button type="submit" variant="primary" disabled={busy}>{busy ? "Saving…" : "Save"}</Button></div>
+      <div className="row"><Button type="submit" variant="primary" disabled={busy || stages.length === 0}>{busy ? "Saving…" : "Save"}</Button></div>
     </form>
   );
 }

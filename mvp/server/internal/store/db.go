@@ -95,6 +95,12 @@ var tables = []string{
 	"business_role_requests",
 	// identity lifecycle (schema/0220_lifecycle.sql)
 	"identity_lifecycle", "identity_lifecycle_events",
+	// approval routing (schema/0206_approvals.sql)
+	"approval_policies", "access_request_stages", "approval_delegations",
+	// notifications (schema/0223_notifications.sql)
+	"notifications", "notification_prefs",
+	// email delivery log (schema/0224_email_messages.sql)
+	"email_messages",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was
