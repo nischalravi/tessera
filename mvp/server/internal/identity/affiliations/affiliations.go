@@ -37,6 +37,9 @@ const (
 	StateExpired  State = "expired"  // all affiliations ended
 	StateRevoked  State = "revoked"  // the last affiliation to end was revoked
 	StateMerged   State = "merged"
+	// StateInvited: a sponsored person who has not claimed the account yet
+	// (identity status "invited", GU-2); the claim (GU-6) makes them active.
+	StateInvited State = "invited"
 )
 
 // Limits and defaults.
@@ -49,9 +52,10 @@ const (
 )
 
 const (
-	humanType      = "human"
-	identityMerged = store.IdentityStatusMerged
-	manualSource   = store.AffSourceManual
+	humanType       = "human"
+	identityMerged  = store.IdentityStatusMerged
+	identityInvited = "invited"
+	manualSource    = store.AffSourceManual
 )
 
 // Types lists the affiliation types in display order.
@@ -129,6 +133,14 @@ func Derive(identityStatus string, affs []*store.Affiliation, now time.Time, not
 	}
 	if len(affs) == 0 {
 		return StateNone
+	}
+	if identityStatus == identityInvited {
+		// not claimed yet: invited while any affiliation is still running or to come
+		for _, a := range affs {
+			if e := Effective(a, now); e == store.AffActive || e == store.AffPending {
+				return StateInvited
+			}
+		}
 	}
 	var active, pending int
 	soon := true // every active affiliation ends within notice

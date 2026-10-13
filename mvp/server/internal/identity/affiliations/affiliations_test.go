@@ -54,6 +54,8 @@ func TestLifecycleState_DerivedFromAffiliations(t *testing.T) {
 			aff("contractor", "revoked", -40, day(-30)), aff("guest_visitor", "ended", -20, day(-2))}, affiliations.StateExpired},
 		{"merged wins", "merged", []*store.Affiliation{aff("employee", "active", -400, nil)}, affiliations.StateMerged},
 		{"merged without affiliations", "merged", nil, affiliations.StateMerged},
+		{"invited guest has not claimed: invited, not active", "invited", []*store.Affiliation{aff("guest_visitor", "pending", -1, day(20))}, affiliations.StateInvited},
+		{"invited guest whose sponsorship ended before the claim", "invited", []*store.Affiliation{aff("guest_visitor", "ended", -20, day(-1))}, affiliations.StateExpired},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := affiliations.Derive(tc.status, tc.affs, now, affiliations.DefaultNotice); got != tc.want {

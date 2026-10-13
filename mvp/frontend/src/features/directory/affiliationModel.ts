@@ -41,6 +41,7 @@ export const STATE_LABEL: Record<PersonState, string> = {
   expired: "Expired",
   revoked: "Revoked",
   merged: "Merged",
+  invited: "Invited, not claimed yet",
 };
 
 export const STATE_TONE: Record<PersonState, "ok" | "warning" | "critical" | "neutral" | "info"> = {
@@ -51,6 +52,7 @@ export const STATE_TONE: Record<PersonState, "ok" | "warning" | "critical" | "ne
   expired: "neutral",
   revoked: "critical",
   merged: "neutral",
+  invited: "info",
 };
 
 export const VERIFIED_LABEL: Record<NonNullable<PersonIdentifier["verified_by"]>, string> = {

@@ -576,7 +576,7 @@ export interface Affiliation {
   end_reason: string | null;
 }
 /** Lifecycle state as far as affiliations determine it. */
-export type PersonState = "unaffiliated" | "prospective" | "active" | "expiring" | "expired" | "revoked" | "merged";
+export type PersonState = "unaffiliated" | "prospective" | "active" | "expiring" | "expired" | "revoked" | "merged" | "invited";
 export interface PersonAffiliations { identity_id: number; lifecycle_state: PersonState; affiliations: Affiliation[] }
 export interface PersonIdentifier {
   id: string;
