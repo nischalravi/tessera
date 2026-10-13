@@ -73,7 +73,7 @@ func (s *Service) save(tx *store.TenantTx, ss *store.Sponsorship, from string, n
 // fourEyes refuses a decision by someone the sponsorship is about or whose
 // request it is.
 func fourEyes(ss *store.Sponsorship, by Actor) error {
-	if by.is(ss.SponsorIdentityID) || by.is(ss.GuestIdentityID) || (ss.CreatedBy != nil && by.uid() != nil && *ss.CreatedBy == *by.uid()) {
+	if by.Is(ss.SponsorIdentityID) || by.Is(ss.GuestIdentityID) || (ss.CreatedBy != nil && by.uid() != nil && *ss.CreatedBy == *by.uid()) {
 		return refuse(403, "self_approval", "a second person approves: not the sponsor, the guest or whoever made the request")
 	}
 	return nil
@@ -193,7 +193,7 @@ func (s *Service) Renew(tx *store.TenantTx, by Actor, id string, to time.Time, j
 	if err != nil {
 		return nil, err
 	}
-	sponsor := by.is(ss.SponsorIdentityID)
+	sponsor := by.Is(ss.SponsorIdentityID)
 	switch {
 	case !sponsor && !by.Approver:
 		return nil, refuse(403, "not_sponsor", "only the sponsor can renew a sponsorship")
@@ -213,7 +213,7 @@ func (s *Service) Renew(tx *store.TenantTx, by Actor, id string, to time.Time, j
 	switch {
 	case !d.Allowed:
 		return nil, refusal(d)
-	case d.NeedsApproval && (sponsor || by.is(ss.GuestIdentityID)):
+	case d.NeedsApproval && (sponsor || by.Is(ss.GuestIdentityID)):
 		return nil, refuse(422, "renewal_needs_approval", "this sponsorship needs a second approver to renew: ask someone with sponsorships.approve")
 	}
 	from := ss.EndsAt
@@ -246,7 +246,7 @@ func (s *Service) End(tx *store.TenantTx, by Actor, id, reason string, now time.
 	if err != nil {
 		return nil, err
 	}
-	sponsor := by.is(ss.SponsorIdentityID)
+	sponsor := by.Is(ss.SponsorIdentityID)
 	switch {
 	case !sponsor && !by.Approver:
 		return nil, refuse(403, "not_sponsor", "only the sponsor can end a sponsorship")
@@ -278,7 +278,7 @@ func (s *Service) Transfer(tx *store.TenantTx, by Actor, id string, to int64, re
 		return nil, err
 	}
 	switch {
-	case !by.is(ss.SponsorIdentityID) && !by.Approver:
+	case !by.Is(ss.SponsorIdentityID) && !by.Approver:
 		return nil, refuse(403, "not_sponsor", "only the sponsor can transfer a sponsorship")
 	case ss.Status != store.SponsorActive && ss.Status != store.SponsorTransferPending:
 		return nil, refuse(409, "not_active", "only a running sponsorship can be transferred")
@@ -324,7 +324,7 @@ func (s *Service) AcceptTransfer(tx *store.TenantTx, by Actor, id string, now ti
 	switch {
 	case ss.Status != store.SponsorTransferPending || ss.TransferToIdentityID == nil || ss.TransferDeadline == nil:
 		return nil, refuse(409, "not_pending", "this sponsorship is not waiting for a new sponsor")
-	case !by.is(*ss.TransferToIdentityID):
+	case !by.Is(*ss.TransferToIdentityID):
 		return nil, refuse(403, "not_transfer_target", "only the person asked to take over can accept")
 	case !ss.TransferDeadline.After(now):
 		return nil, refuse(409, "transfer_expired", "the deadline to accept has passed")

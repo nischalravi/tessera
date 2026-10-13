@@ -84,7 +84,8 @@ func (a Actor) uid() *string {
 	return &s
 }
 
-func (a Actor) is(id int64) bool { return a.IdentityID != nil && *a.IdentityID == id }
+// Is reports whether the actor is the person.
+func (a Actor) Is(id int64) bool { return a.IdentityID != nil && *a.IdentityID == id }
 
 // Service decides and records sponsorships under one policy.
 type Service struct {
@@ -182,11 +183,11 @@ func (s *Service) denied(code, msg string) *Plan {
 // sponsorOf is the person the signed-in user is.
 func sponsorOf(tx *store.TenantTx, by Actor) (*store.Identity, error) {
 	if by.IdentityID == nil {
-		return nil, refuse(403, "sponsor_identity_required", "your sign-in is not linked to a person, so you cannot sponsor guests")
+		return nil, refuse(422, "sponsor_identity_required", "your sign-in is not linked to a person, so you cannot sponsor guests")
 	}
 	sp, err := tx.Identity(*by.IdentityID)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, refuse(403, "sponsor_identity_required", "your sign-in is not linked to a person, so you cannot sponsor guests")
+		return nil, refuse(422, "sponsor_identity_required", "your sign-in is not linked to a person, so you cannot sponsor guests")
 	}
 	return sp, err
 }
@@ -397,3 +398,24 @@ func detail(sp *store.Sponsorship, extra ...ojson.KV) ojson.Object {
 }
 
 func rulesKV(d Decision) ojson.KV { return ojson.KV{Key: "rules", Value: d.Rules} }
+
+// CanSponsor reports whether the person may sponsor at all under the policy.
+func (s *Service) CanSponsor(tx *store.TenantTx, identityID int64) (bool, error) {
+	sp, err := tx.Identity(identityID)
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	worker, ended, err := workerOf(tx, sp.ID)
+	if err != nil {
+		return false, err
+	}
+	return s.Policy.Eligible(sp, worker, ended), nil
+}
+
+// MaxDays is the longest a term of the population may run under the tenant's
+// settings, for display.
+func MaxDays(pop Population, gp *store.GuestPopulation) int {
+	return affiliations.MaxDurationDays(pop.AffType, gp.MaxDurationDays)
+}

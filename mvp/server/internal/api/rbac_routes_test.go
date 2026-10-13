@@ -120,6 +120,17 @@ POST   /api/lifecycle/sweep                          lifecycle.manage -  # issue
 GET    /api/identities/{identity_id}/lifecycle       graph.read      -  # issue #159
 PUT    /api/identities/{identity_id}/lifecycle       lifecycle.manage STEP_UP_POLICY  # issue #159
 POST   /api/identities/{identity_id}/lifecycle/extend requests.create -  # issue #159 (the sponsor, or lifecycle.manage)
+POST   /api/guests/invitations                       guests.sponsor  STEP_UP_POLICY  # issue #65 (the sponsor policy decides who may sponsor)
+POST   /api/guests/invitations/bulk                  guests.sponsor  STEP_UP_POLICY  # issue #65 (dry_run too: it audits)
+GET    /api/guests                                   guests.sponsor  -  # issue #65 (sponsor=all: guests.read in the handler)
+GET    /api/sponsorships/approvals                   sponsorships.approve -  # issue #65
+GET    /api/sponsorships/{sponsorship_id}            guests.sponsor  -  # issue #65 (the sponsor, the transfer target, guests.read or sponsorships.approve)
+POST   /api/sponsorships/{sponsorship_id}/approve    sponsorships.approve STEP_UP_POLICY  # issue #65
+POST   /api/sponsorships/{sponsorship_id}/reject     sponsorships.approve STEP_UP_POLICY  # issue #65
+POST   /api/sponsorships/{sponsorship_id}/renew      guests.sponsor  STEP_UP_POLICY  # issue #65 (the sponsor)
+POST   /api/sponsorships/{sponsorship_id}/end        guests.sponsor  STEP_UP_POLICY  # issue #65 (the sponsor, or sponsorships.approve)
+POST   /api/sponsorships/{sponsorship_id}/transfer   guests.sponsor  STEP_UP_POLICY  # issue #65 (the sponsor)
+POST   /api/sponsorships/{sponsorship_id}/accept-transfer guests.sponsor STEP_UP_POLICY  # issue #65 (the person asked)
 GET    /api/approvals/inbox                          requests.create -  # issue #165
 GET    /api/approvals/delegates                      requests.create -  # issue #165
 GET    /api/approvals/delegations                    requests.create -  # issue #165 (?all=1: requests.decide)

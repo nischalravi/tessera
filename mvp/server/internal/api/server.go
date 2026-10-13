@@ -21,6 +21,8 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/sponsorship"
+	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
 	"github.com/nischalravi/tessera/mvp/server/internal/lifecycle"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -94,6 +96,9 @@ type Config struct {
 	// EmailMode is the email delivery (config.MailOff, MailDev or MailSMTP):
 	// the preferences page says whether the email channels do anything.
 	EmailMode string
+	// Identifiers hashes the identifiers of invited guests under per-tenant
+	// keys derived from the KEK. Nil: invitations answer 503.
+	Identifiers *identifiers.Keyer
 	// AuditAppend overrides how the audit middleware writes http.request
 	// events (tests inject failures). Nil: the store.
 	AuditAppend func(ctx context.Context, t tenancy.ID, e store.AuditEvent) error
@@ -108,6 +113,7 @@ type Server struct {
 	routes []*route
 	authn  *auth.Authenticator
 	limits *limiters
+	guests *sponsorship.Service
 
 	readiness *readiness.Service
 }
@@ -142,6 +148,7 @@ func New(cfg Config) *Server {
 	}
 	s := &Server{cfg: cfg, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
 		limits: newLimiters(cfg.RateLimits)}
+	s.guests = sponsorship.New(cfg.Identifiers)
 	s.authn = &auth.Authenticator{DB: cfg.Store, Clock: func() time.Time { return s.clock() },
 		Cookies: auth.Cookies{Insecure: cfg.InsecureCookie}}
 	s.registerRoutes()
@@ -151,6 +158,7 @@ func New(cfg Config) *Server {
 	s.registerRequestRoutes()
 	s.registerRoleRoutes()
 	s.registerLifecycleRoutes()
+	s.registerGuestRoutes()
 	s.registerNotificationRoutes()
 	s.registerEmailRoutes()
 	s.registerReadinessRoutes()
@@ -226,6 +234,10 @@ func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
 		}
 		if err := requests.SweepAll(audit.WithSystemActor(ctx, requests.Sweeper), s.store, s.clock()); err != nil && ctx.Err() == nil {
 			s.log.Error("request sweep failed", "err", err)
+		}
+		// sponsorships first: the last one to end ends the person, the lifecycle sweep then has nothing left
+		if err := s.guests.SweepAll(audit.WithSystemActor(ctx, sponsorship.Sweeper), s.store, s.clock()); err != nil && ctx.Err() == nil {
+			s.log.Error("sponsorship sweep failed", "err", err)
 		}
 		if err := lifecycle.SweepAll(audit.WithSystemActor(ctx, lifecycle.Sweeper), s.store, s.clock()); err != nil && ctx.Err() == nil {
 			s.log.Error("lifecycle sweep failed", "err", err)

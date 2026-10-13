@@ -15,7 +15,9 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
+	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
+	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/store/storetest"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
@@ -39,8 +41,13 @@ func isolationServer(t testing.TB, f *storetest.Fixture, tenant tenancy.ID) test
 }
 
 func newIsolationServer(f *storetest.Fixture) *Server {
+	kek, err := seal.New(storetest.IdentityKEK)
+	if err != nil {
+		panic(err)
+	}
 	return New(Config{
-		Store: f.DB, Clock: timeutil.Frozen(storetest.Now), Policies: policy.NewLoader(policies.FS),
+		Identifiers: identifiers.NewKeyer(kek),
+		Store:       f.DB, Clock: timeutil.Frozen(storetest.Now), Policies: policy.NewLoader(policies.FS),
 		Connectors: func(now time.Time) ([]connectors.Connector, error) {
 			return []connectors.Connector{connectors.Tiny{Now: now}}, nil
 		},
@@ -129,6 +136,11 @@ var crossTenantCases = map[string]crossTenantCase{
 		body: func(id int64) string { return fmt.Sprintf(`{"into":%d,"reason":"x"}`, id) }},
 	"GET identity affiliations": {method: "GET", path: pathf("/api/identities/%d/affiliations"), key: "alice"},
 	"GET identity identifiers":  {method: "GET", path: pathf("/api/identities/%d/identifiers"), key: "alice"},
+	// a bundle names catalog groups by id: tenant A's group is not in B's catalog, like a missing one
+	"POST invite bundle": {method: "POST", path: fixed("/api/guests/invitations"), key: "group:aws:ProdAdmin",
+		body: func(id int64) string {
+			return fmt.Sprintf(`{"given_name":"G","email":"g@x.example","population":"visitor","purpose":"x","ends_at":"2026-10-12T00:00:00Z","bundle":[%d]}`, id)
+		}},
 	"POST add affiliation": {method: "POST", path: pathf("/api/identities/%d/affiliations"), key: "alice",
 		body: func(int64) string { return `{"type":"alum","reason":"x"}` }},
 }
@@ -196,6 +208,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/api/affiliations/{affiliation_id}/end" {
 			continue // TestAffiliationsAPI_CrossTenant (a UUID, not a fixture id)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/sponsorships/{sponsorship_id}") {
+			continue // TestSponsorshipsAPI_CrossTenant (a UUID, not a fixture id)
+		}
 		if strings.HasPrefix(rt.Pattern, "/api/email/messages/{message_id}") {
 			continue // TestEmailAPI_CrossTenant (a UUID, not a fixture id)
 		}
@@ -258,13 +273,15 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 	h := srv.Handler()
 	b := f.B.IDs
 	param := regexp.MustCompile(`\{[a-z_]+\}`)
-	lines := seedRequestLines(t, f) // A's justification carries the sentinel
-	roleIDs, _ := seedRoles(t, f)   // and A's role description
+	lines := seedRequestLines(t, f)        // A's justification carries the sentinel
+	roleIDs, _ := seedRoles(t, f)          // and A's role description
+	sponsorships := seedSponsorships(t, f) // and A's sponsorship purpose
 	values := map[string]string{
 		"/api/roles/{role_id}":                       roleIDs[f.B.ID],
 		"/api/roles/{role_id}/versions":              roleIDs[f.B.ID],
 		"/api/roles/{role_id}/drift":                 roleIDs[f.B.ID],
 		"/api/requests/{request_id}":                 lines[f.B.ID],
+		"/api/sponsorships/{sponsorship_id}":         sponsorships[f.B.ID],
 		"/api/identities/{identity_id}":              fmt.Sprint(b["alice"]),
 		"/api/identities/{identity_id}/lifecycle":    fmt.Sprint(b["alice"]),
 		"/api/identities/{identity_id}/affiliations": fmt.Sprint(b["alice"]),

@@ -282,7 +282,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	}
 	srv := api.New(api.Config{Store: st, Clock: clock, Policies: loader, Logger: logger,
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
-		HSTS: cfg.IsProd(), Env: cfg.Env, EmailMode: cfg.Mail.Mode, DevLogin: cfg.DevLogin, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, AuditAnchor: anchorURL})
+		HSTS: cfg.IsProd(), Env: cfg.Env, Identifiers: identifiers.NewKeyer(sealer), EmailMode: cfg.Mail.Mode, DevLogin: cfg.DevLogin, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, AuditAnchor: anchorURL})
 	sender, err := notify.NewSender(cfg.Mail, cfg.Env, cfg.OutboundAllowLoopback, sealer, config.DevMailPath(o.db), logger)
 	if err != nil {
 		return err
