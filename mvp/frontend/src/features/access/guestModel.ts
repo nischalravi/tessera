@@ -1,4 +1,4 @@
-import type { BundleItem, BulkRowStatus, CatalogEntry, GuestPopulationInfo, GuestPopulationKey, InviteInput, Sponsorship, SponsorshipState } from "../../api";
+import type { BundleItem, BulkRowStatus, CatalogEntry, GuestPopulationInfo, GuestPopulationKey, InvitationState, InviteInput, Sponsorship, SponsorshipState } from "../../api";
 
 /** Labels and rules for guest sponsorships (issue #65). No React, so `npm test` can import it. */
 
@@ -144,3 +144,41 @@ export function daysLeftLabel(s: Pick<Sponsorship, "days_left" | "status">): str
 
 /** A person needs to act on this sponsorship (accept it, or approve it). */
 export const needsMe = (s: Pick<Sponsorship, "can_accept_transfer" | "can_approve">) => s.can_accept_transfer || s.can_approve;
+
+// ---------------------------------------------------------------- the invitation (issue #69)
+
+export const INVITATION_LABEL: Record<InvitationState, string> = {
+  ready: "Not sent",
+  sent: "Sent",
+  claiming: "Guest is setting up",
+  expired: "Expired",
+  claimed: "Claimed",
+  revoked: "Revoked",
+};
+
+export const INVITATION_TONE: Record<InvitationState, Tone> = {
+  ready: "neutral",
+  sent: "info",
+  claiming: "info",
+  expired: "warning",
+  claimed: "ok",
+  revoked: "critical",
+};
+
+/** What the sponsor should know about the invitation, in a sentence. */
+export function invitationNote(s: Pick<Sponsorship, "invitation" | "invitation_expires_at">, fmt: (iso: string) => string): string {
+  switch (s.invitation) {
+    case "ready":
+      return "No claim link has been sent: it needs the claim to be set up for this organization.";
+    case "sent":
+      return s.invitation_expires_at ? `The guest has an email with a one-time link that works until ${fmt(s.invitation_expires_at)}.` : "The guest has an email with a one-time link.";
+    case "claiming":
+      return "The guest opened the link and is setting up their sign-in.";
+    case "expired":
+      return "The link ran out before the guest used it. Send a new one.";
+    case "claimed":
+      return "The guest set up their sign-in.";
+    case "revoked":
+      return "The invitation was cancelled; its links no longer work.";
+  }
+}
