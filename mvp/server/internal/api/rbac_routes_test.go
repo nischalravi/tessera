@@ -95,6 +95,7 @@ GET    /api/access/networks                          conditional_access.read   -
 POST   /api/access/networks                          conditional_access.manage STEP_UP_POLICY
 PUT    /api/access/networks/{id}                     conditional_access.manage STEP_UP_POLICY
 DELETE /api/access/networks/{id}                     conditional_access.manage STEP_UP_POLICY
+GET    /api/access/users                             conditional_access.read   -
 GET    /api/access/device-signals                    conditional_access.read   -
 PUT    /api/access/device-signals/{user_id}          conditional_access.manage STEP_UP_POLICY
 DELETE /api/access/device-signals/{user_id}          conditional_access.manage STEP_UP_POLICY

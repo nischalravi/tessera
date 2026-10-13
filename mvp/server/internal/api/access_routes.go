@@ -48,6 +48,7 @@ func (s *Server) registerAccessRoutes() {
 	s.handle(P, "/api/access/networks", write, needStepUpExempt(wr, auth.StepUpPolicy), s.rd(s.createNetworkRange))
 	s.handle(U, "/api/access/networks/{id}", write, needStepUpExempt(wr, auth.StepUpPolicy), s.rd(s.updateNetworkRange))
 	s.handle(D, "/api/access/networks/{id}", write, needStepUpExempt(wr, auth.StepUpPolicy), s.rd(s.deleteNetworkRange))
+	s.handle(G, "/api/access/users", read, need(rd), s.rd(s.listAccessUsers))
 	s.handle(G, "/api/access/device-signals", read, need(rd), s.rd(s.listDeviceSignals))
 	s.handle(U, "/api/access/device-signals/{user_id}", write, needStepUpExempt(wr, auth.StepUpPolicy), s.rd(s.setDeviceSignal))
 	s.handle(D, "/api/access/device-signals/{user_id}", write, needStepUpExempt(wr, auth.StepUpPolicy), s.rd(s.clearDeviceSignal))
@@ -547,6 +548,33 @@ type signalView struct {
 	SetAt     string  `json:"set_at"`
 	ExpiresAt *string `json:"expires_at"`
 	Active    bool    `json:"active"`
+}
+
+type accessUser struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Email string `json:"email"`
+}
+
+// listAccessUsers lists the tenant's active platform users, to pick the user
+// a device signal is about.
+func (s *Server) listAccessUsers(r *http.Request, _ *params) (int, any, error) {
+	users, err := store.TxFrom(r.Context()).PlatformUsers()
+	if err != nil {
+		return 0, nil, err
+	}
+	out := []accessUser{}
+	for _, u := range users {
+		if u.Status != "active" {
+			continue
+		}
+		v := accessUser{ID: u.ID.String(), Name: u.DisplayName}
+		if u.Email != nil {
+			v.Email = *u.Email
+		}
+		out = append(out, v)
+	}
+	return http.StatusOK, out, nil
 }
 
 func (s *Server) listDeviceSignals(r *http.Request, _ *params) (int, any, error) {

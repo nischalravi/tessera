@@ -161,11 +161,55 @@ The routes are documented at `/api/readiness/openapi.json`.
 `GET /api/auth/step-up?acr=&max_age=&return_to=` ·
 `GET /api/auth/discover?tenant=&email=` · `GET /api/auth/login?tenant=&connection=&return_to=` (302 to the IdP) ·
 `GET /api/auth/oidc/{connection_id}/callback` · `GET /api/auth/saml/{connection_id}/metadata` ·
-`POST /api/auth/saml/{connection_id}/acs` · `GET /t/{slug}/bootstrap?code=` (public)
+`POST /api/auth/saml/{connection_id}/acs` · `GET /t/{slug}/bootstrap?code=` (public) ·
+`GET|POST /api/access/policies` · `PUT|DELETE /api/access/policies/{id}` · `GET|POST /api/access/networks` ·
+`PUT|DELETE /api/access/networks/{id}` · `GET /api/access/users` · `GET /api/access/device-signals` ·
+`PUT|DELETE /api/access/device-signals/{user_id}` · `POST /api/access/evaluate` (conditional access, below)
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
 or HRIS execution is always the signed-in user.
+
+### Conditional access (network location and device posture)
+
+Beyond step-up, a tenant can decide **allow, require step-up or deny** by where a request comes from and
+what is known about the device (issue #163; Settings → **Conditional access**, `/admin/conditional-access`).
+Policies have a **scope**: `signin` (the Tessera sign-in, at the OIDC callback and SAML ACS) or
+`privileged` (every route that already needs a fresh sign-in: JIT approval, review decisions, revoking
+grants, HRIS execution, connection changes). Conditions, all of which must hold:
+
+* **Network**: `in` or `not_in` named ranges (CIDRs, IPv4 and IPv6). The address is the **trusted-proxy
+  client IP**: the TCP peer, or, only when the peer is in `TESSERA_TRUSTED_PROXIES`, the rightmost
+  `X-Forwarded-For` entry that is not itself a trusted proxy. A header from any other peer is ignored, so a
+  client cannot name its own address (the rate limiter uses the same function). An address that cannot be
+  determined is in no range.
+* **Device**: `unmanaged` or `not_compliant`. Posture comes from the IdP's claims at sign-in (OIDC claims or
+  SAML attributes `device_managed` and `device_compliant`, renamable per connection with
+  `authn_mapping.device_managed_claim` / `device_compliant_claim`; stored on the authentication context) and
+  from the user's **device-compliance signal**. "Not compliant" from either source wins; a device the IdP says
+  nothing about counts as unmanaged and not compliant. Signals are set by an admin (source `manual`, optional
+  expiry) through `condaccess.SignalSource`; the CAEP receiver of #114 is not built, and will write
+  `caep` signals into the same table or implement that interface.
+
+Policies are checked in priority order and **the first enforced match decides**; no match is allow. `report_only`
+policies are evaluated and recorded with the outcome they would have had but never change the result;
+`disabled` ones are ignored. Outcomes: `deny` refuses a sign-in (`auth.login.failure`, reason
+`conditional_access_denied`) or answers `403 conditional_access_denied`; `step_up` names an ACR (aal2, phr, phrh)
+and optional `max_age`. On a sign-in the authentication itself must already meet it (else
+`conditional_access_step_up_required`); on a privileged route it tightens the route's own requirement, so the
+client gets the usual `401 step_up_required` challenge. The permission is checked before policies, so a caller
+without it learns nothing of them. The operator bootstrap sign-in and the conditional access routes themselves
+are exempt (a policy cannot lock an admin out of fixing it).
+
+Every evaluation that had a policy to check is audited with its inputs (`access.decision`, or the
+`conditional_access` detail of `auth.login.success` / `auth.login.failure`): scope, outcome, deciding policy,
+report-only hits, client IP and how it was resolved (`peer` or `x_forwarded_for`), device managed, compliance and
+its source. Changes to ranges, policies and signals are `access.network.*`, `access.policy.*` and
+`access.device_signal.*` events in the same transaction. Reading needs `conditional_access.read` (auditor,
+tenant admin); changing needs `conditional_access.manage` (tenant admin) and a fresh phishing-resistant
+sign-in. A tenant is limited to 100 policies and 100 ranges. `POST /api/access/evaluate` answers what the
+current policies would decide for a described request without recording anything. In the dev IdP, Alice's
+device is managed and compliant and Olu's is neither (`device:` in `users.yaml`).
 
 ### Audit ledger
 
@@ -232,7 +276,7 @@ the right. Arrow keys move between items.
 | **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts, Roles (Preview), Organizations (Preview) |
 | **Access** | Request access, My access (with *My requests*), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
 | **Protection** | Policies & SoD (violations, policies, what-if simulation), Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
-| **Settings** | Connections (governed connections and the setup wizard), Admin |
+| **Settings** | Connections (governed connections and the setup wizard), Conditional access (network ranges, policies, device signals), Admin |
 
 **Home.** For the admin & security persona: the tenant name and a sync line, then tabs
 (Overview, Monitoring, Deployment health, Recommendations). Overview has the KPI cards

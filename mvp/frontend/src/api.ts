@@ -93,6 +93,8 @@ function errorMessage(status: number, j: any): string {
       return `You don't have permission to do this${j.permission ? ` (needs ${j.permission})` : ""}.`;
     case "csrf_failed":
       return "The request was refused as a possible cross-site request. Reload the page and try again.";
+    case "conditional_access_denied":
+      return "Your organization's conditional access policy does not allow this action from here. Ask an administrator, or try from an allowed network or device.";
     case "audit_unavailable":
       return "The audit log is unavailable, so Tessera refused the request. Try again shortly.";
     case "activation_blocked":
@@ -188,6 +190,7 @@ const LABELS: [RegExp, (m: RegExpMatchArray) => string][] = [
   [/^\/hris\/events\/([^/]+)\/execute$/, (m) => `Run the lifecycle plan for event ${m[1]}`],
   [/^\/connections\/([^/]+)\/(config|credential|activate|retire)$/, (m) => `${{ config: "Save the configuration of", credential: "Set the credential of", activate: "Activate", retire: "Retire" }[m[2]]} connection ${m[1]}`],
   [/^\/readiness\/overlays\/([^/]+)$/, (m) => `Save the readiness overlay for ${m[1]}`],
+  [/^\/access\/(policies|networks|device-signals)(\/[^/]+)?$/, (m) => `Change conditional access (${m[1].replace("-", " ")})`],
 ];
 
 /** A plain-language name for an API action, shown before resuming it. */
@@ -796,3 +799,64 @@ export const readiness = {
   rerun: (reconcile = false) => api<{ results: { connection_id: string; name: string; validation_run_id: string | null; dry_run_id: string | null; skipped?: string }[]; dashboard: DeploymentHealth }>(
     "/insights/deployment-health/rerun", { reconcile }),
 };
+
+// ------------------------------------------------------------------ conditional access (issue #163)
+
+export type AccessScope = "signin" | "privileged";
+export type AccessMode = "disabled" | "report_only" | "enforce";
+export type AccessOutcome = "allow" | "step_up" | "deny";
+export type NetworkOp = "any" | "in" | "not_in";
+export type DeviceCondition = "any" | "unmanaged" | "not_compliant";
+export type StepUpAcr = "urn:tessera:acr:aal2" | "urn:tessera:acr:phr" | "urn:tessera:acr:phrh";
+
+export interface AccessPolicy {
+  id: string; name: string; description: string; scope: AccessScope; mode: AccessMode; outcome: AccessOutcome;
+  step_up_acr: StepUpAcr | null; step_up_max_age: number; network_op: NetworkOp; network_range_ids: string[];
+  device: DeviceCondition; priority: number; created_at: string; updated_at: string;
+}
+export type AccessPolicyInput = Omit<AccessPolicy, "id" | "created_at" | "updated_at">;
+
+export interface NetworkRange { id: string; name: string; description: string; cidrs: string[]; used_by: string[]; created_at: string; updated_at: string }
+export interface NetworkRangeInput { name: string; description: string; cidrs: string[] }
+
+export interface DeviceSignal {
+  user_id: string; user: string; status: "compliant" | "not_compliant"; source: "manual" | "caep"; reason: string;
+  set_at: string; expires_at: string | null; active: boolean;
+}
+export interface AccessUser { id: string; name: string; email: string }
+
+/** The answer of a what-if evaluation: what the current policies would decide. */
+export interface AccessDecision {
+  scope: AccessScope; outcome: AccessOutcome; policies_evaluated: number;
+  decided_by?: { policy_id: string; name: string; mode: AccessMode; outcome: AccessOutcome; step_up_acr?: StepUpAcr; step_up_max_age?: number };
+  report_only?: { policy_id: string; name: string; outcome: AccessOutcome }[];
+  inputs: { client_ip: string; device_managed: string; device_compliance: string };
+}
+export interface AccessEvaluateInput { scope: AccessScope; client_ip?: string; device_managed?: boolean | null; device_compliance?: "compliant" | "not_compliant" | "unknown" }
+
+/** Conditional access: network ranges, policies and the device-compliance signal (needs conditional_access.read / .manage). */
+export const conditionalAccess = {
+  policies: () => api<AccessPolicy[]>("/access/policies"),
+  createPolicy: (b: AccessPolicyInput) => api<AccessPolicy>("/access/policies", b),
+  updatePolicy: (id: string, b: AccessPolicyInput) => api<AccessPolicy>(`/access/policies/${encodeURIComponent(id)}`, b, "PUT"),
+  deletePolicy: (id: string) => api<{ deleted: string }>(`/access/policies/${encodeURIComponent(id)}`, undefined, "DELETE"),
+  networks: () => api<NetworkRange[]>("/access/networks"),
+  createNetwork: (b: NetworkRangeInput) => api<NetworkRange>("/access/networks", b),
+  updateNetwork: (id: string, b: NetworkRangeInput) => api<NetworkRange>(`/access/networks/${encodeURIComponent(id)}`, b, "PUT"),
+  deleteNetwork: (id: string) => api<{ deleted: string }>(`/access/networks/${encodeURIComponent(id)}`, undefined, "DELETE"),
+  signals: () => api<DeviceSignal[]>("/access/device-signals"),
+  setSignal: (userId: string, b: { status: DeviceSignal["status"]; reason: string; expires_in_hours?: number }) =>
+    api<DeviceSignal>(`/access/device-signals/${encodeURIComponent(userId)}`, b, "PUT"),
+  clearSignal: (userId: string) => api<{ cleared: string }>(`/access/device-signals/${encodeURIComponent(userId)}`, undefined, "DELETE"),
+  evaluate: (b: AccessEvaluateInput) => api<AccessDecision>("/access/evaluate", b),
+};
+
+/** One line describing when a policy applies, for lists. */
+export function describeConditions(p: Pick<AccessPolicy, "network_op" | "network_range_ids" | "device">, ranges: Pick<NetworkRange, "id" | "name">[]): string {
+  const name = (id: string) => ranges.find((r) => r.id === id)?.name ?? "a deleted range";
+  const parts: string[] = [];
+  if (p.network_op !== "any") parts.push(`network ${p.network_op === "in" ? "is in" : "is not in"} ${p.network_range_ids.map(name).join(", ")}`);
+  if (p.device === "unmanaged") parts.push("device is not managed");
+  if (p.device === "not_compliant") parts.push("device is not known to be compliant");
+  return parts.length ? parts.join(" and ") : "always";
+}

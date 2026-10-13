@@ -103,6 +103,36 @@ func seedAccessIn(t *testing.T, db *store.DB, tenant tenancy.ID, specs ...pspec)
 	}
 }
 
+// clearAccess removes tenant's ranges and policies, so table tests can share
+// one fixture (seeding two tenants dominates their cost under -race).
+func clearAccess(t *testing.T, db *store.DB, tenant tenancy.ID) {
+	t.Helper()
+	err := db.InTenant(context.Background(), tenant, func(c *store.TenantTx) error {
+		ps, err := c.AccessPolicies()
+		if err != nil {
+			return err
+		}
+		for _, p := range ps {
+			if err := c.DeleteAccessPolicy(p.ID); err != nil {
+				return err
+			}
+		}
+		ns, err := c.NetworkRanges()
+		if err != nil {
+			return err
+		}
+		for _, n := range ns {
+			if err := c.DeleteNetworkRange(n.ID); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 // privileged is a step-up route whose handler does nothing harmful here:
 // approving a JIT request that does not exist.
 func privileged(l authtest.Login, remote string, xff ...string) *http.Request {
@@ -143,6 +173,8 @@ func decisions(t *testing.T, f *storetest.Fixture, tn storetest.Tenant) []map[st
 func asMap(v any) map[string]any { m, _ := v.(map[string]any); return m }
 
 func TestAccess_PrivilegedOutcomes(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	h := accessServer(f).Handler()
 	S, P := store.AccessScopeSignin, store.AccessScopePrivileged
 	E, R := store.AccessModeEnforce, store.AccessModeReportOnly
 	for _, tc := range []struct {
@@ -192,9 +224,9 @@ func TestAccess_PrivilegedOutcomes(t *testing.T) {
 			authtest.Ctx{AAL: 2, Phr: true, AuthTime: storetest.Now.Add(-10 * time.Minute), Device: `{"managed":true,"compliant":false}`}, insideIP, 401, "step_up_required", "step_up"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := storetest.TwoTenants(t)
+			clearAccess(t, f.DB, f.B.ID)
 			seedAccess(t, f, f.B, tc.specs...)
-			h := accessServer(f).Handler()
+			before := len(decisions(t, f, f.B))
 			l := signIn(t, f.DB, f.B.ID, testAdmin, tc.ctx, storetest.Now)
 			rec := serve(h, privileged(l, tc.remote))
 			switch {
@@ -205,13 +237,13 @@ func TestAccess_PrivilegedOutcomes(t *testing.T) {
 			}
 			evs := decisions(t, f, f.B)
 			if tc.audited == "" {
-				if len(evs) != 0 {
+				if len(evs) != before {
 					t.Errorf("unexpected access.decision events: %v", evs)
 				}
 				return
 			}
-			if len(evs) != 1 {
-				t.Fatalf("%d access.decision events, want 1", len(evs))
+			if len(evs) != before+1 {
+				t.Fatalf("%d new access.decision events, want 1", len(evs)-before)
 			}
 			d := evs[0]
 			in := asMap(d["inputs"])
@@ -513,6 +545,9 @@ func TestAccess_ManagementCRUD(t *testing.T) {
 		t.Errorf("evaluate bad ip: %d %v", code, v)
 	}
 	// device signals
+	if rec := serve(h, authed(admin, "GET", "/api/access/users", "")); !strings.Contains(rec.Body.String(), testAdmin.Email) {
+		t.Errorf("users: %d %s", rec.Code, rec.Body.String())
+	}
 	if code, v := call("PUT", "/api/access/device-signals/"+admin.UserID.String(), `{"status":"not_compliant","reason":"lost laptop","expires_in_hours":24}`); code != 200 || v["source"] != "manual" || v["expires_at"] == nil {
 		t.Errorf("set signal: %d %v", code, v)
 	}
@@ -674,7 +709,7 @@ func TestAccessCrossTenant(t *testing.T) {
 	if rec.Code != 422 || !strings.Contains(rec.Body.String(), "unknown_network_range") {
 		t.Errorf("policy naming A's range: %d %s", rec.Code, rec.Body.String())
 	}
-	for _, path := range []string{"/api/access/policies", "/api/access/networks", "/api/access/device-signals"} {
+	for _, path := range []string{"/api/access/policies", "/api/access/networks", "/api/access/device-signals", "/api/access/users"} {
 		rec := serveOnce(h, "GET", path, "")
 		if rec.Code != 200 || strings.Contains(rec.Body.String(), "a-policy") || strings.Contains(rec.Body.String(), aNet.String()) ||
 			strings.Contains(rec.Body.String(), aPolicy.String()) || strings.Contains(rec.Body.String(), aUser.String()) {

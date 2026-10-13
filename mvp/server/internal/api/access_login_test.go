@@ -51,6 +51,8 @@ func (e *oidcEnv) loginEvent(action string) map[string]any {
 }
 
 func TestAccessLogin_NetworkOutcomes(t *testing.T) {
+	e := newOIDCEnv(t)
+	e.srv.cfg.TrustedProxies = []netip.Prefix{netip.MustParsePrefix("10.255.0.0/16")}
 	S, E, R := store.AccessScopeSignin, store.AccessModeEnforce, store.AccessModeReportOnly
 	for _, tc := range []struct {
 		name   string
@@ -82,8 +84,7 @@ func TestAccessLogin_NetworkOutcomes(t *testing.T) {
 			outsideIP, nil, devidp.MethodPasskey, "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			e := newOIDCEnv(t)
-			e.srv.cfg.TrustedProxies = []netip.Prefix{netip.MustParsePrefix("10.255.0.0/16")}
+			clearAccess(t, e.db, seed.LarkspurID)
 			seedAccessIn(t, e.db, seed.LarkspurID, tc.specs...)
 			rec := e.signInFrom("00u-alice-admin", tc.method, tc.remote, tc.xff...)
 			var ca map[string]any

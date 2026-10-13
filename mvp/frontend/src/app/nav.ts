@@ -1,5 +1,5 @@
 import {
-  AppWindow, BadgeCheck, Bot, Building2, ChartLine, ClipboardCheck, House, Inbox, KeyRound, Layers, LucideIcon, Network, Plug, Plus, Settings, ShieldCheck, Timer, Users, UsersRound,
+  AppWindow, BadgeCheck, Bot, Building2, ChartLine, ClipboardCheck, House, Inbox, KeyRound, Layers, LucideIcon, Network, Plug, Plus, Settings, ShieldAlert, ShieldCheck, Timer, Users, UsersRound,
 } from "lucide-react";
 
 export interface NavPage {
@@ -86,7 +86,8 @@ export const RAIL: RailGroup[] = [
     label: "Settings",
     items: [
       { id: "connections", label: "Connections", icon: Plug, path: "/admin/connections", keywords: "connectors sync okta aws github snowflake workday active directory ldap entra readiness wizard" },
-      { id: "admin", label: "Admin", icon: Settings, path: "/admin", except: ["/admin/connections"], keywords: "settings configuration audit jobs" },
+      { id: "conditional-access", label: "Conditional access", icon: ShieldAlert, path: "/admin/conditional-access", keywords: "network location ip range device posture compliant managed step-up deny report-only policy sign-in trusted proxy" },
+      { id: "admin", label: "Admin", icon: Settings, path: "/admin", except: ["/admin/connections", "/admin/conditional-access"], keywords: "settings configuration audit jobs" },
     ],
   },
 ];
