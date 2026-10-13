@@ -177,6 +177,9 @@ The routes are documented at `/api/readiness/openapi.json`.
 (changes take `?dry_run=1`) · `GET|POST /api/role-requests` · `POST /api/role-requests/{id}/approve|deny|cancel` ·
 `GET /api/lifecycle[?state=upcoming|active|ending|ended]` · `GET /api/lifecycle/sponsored` · `POST /api/lifecycle/sweep` ·
 `GET|PUT /api/identities/{id}/lifecycle` · `POST /api/identities/{id}/lifecycle/extend {ends_at, reason}`
+`POST /api/guests/invitations` · `POST /api/guests/invitations/bulk {csv, dry_run}` ·
+`GET /api/guests[?sponsor=me|all&state=&population=]` · `GET /api/sponsorships/approvals` · `GET /api/sponsorships/{id}` ·
+`POST /api/sponsorships/{id}/approve|reject|renew|end|transfer|accept-transfer` ·
 `GET /api/approvals/inbox` · `GET /api/approvals/delegates` · `GET|POST /api/approvals/delegations` ·
 `POST /api/approvals/delegations/{id}/revoke` ·
 `GET /api/notifications[?unread=1&limit=]` · `POST /api/notifications/read {ids}|{all:true}` ·
@@ -349,10 +352,76 @@ worker type, sponsor and dates, with *Extend* and *Change*. The page has three v
 *Ending soon* (the next 14 days), *Everyone*, and *Sponsored by me*. The seed makes five demo
 people contractors, an intern, a vendor and a partner, ending 3 to 120 days out.
 
+A person with a live sponsorship (next section) has their lifecycle written by it: `PUT` and
+`extend` answer `409 managed_by_sponsorship`, and renewing goes through the sponsorship.
+
 Not yet:
 - provisioning the leaver plan into target systems (#103);
-- the guest claim flow and affiliations (GU-1 #64 onward);
+- the guest claim flow (GU-6 #69 onward);
 - rehiring someone whose term has ended.
+
+### Guest sponsorships and invitations
+
+**Access → Guests I sponsor** (issue #65, GU-2; design `docs/design/guest-accounts-and-claim.md`
+§4.3, §8). A sponsor invites a visitor, contractor, volunteer or partner; the **sponsorship** records
+the sponsor's decision (who, purpose, population, access bundle, term, who approved, and the
+**policy version** that decided). Code: `internal/guests/sponsorship`.
+
+- **Sponsorship drives the lifecycle.** While it is active (made without approval, or approved) it
+  writes the guest's *affiliation* (`internal/identity/affiliations`, source `sponsorship`; type
+  `guest_visitor`, `contractor`, `volunteer` or `partner`) and their *lifecycle*
+  (`internal/lifecycle`, source `sponsorship`; worker type `guest` for visitors and volunteers,
+  `contractor`, `partner`). With several live sponsorships the lifecycle takes the sponsor of the
+  one that ends last and the latest end date: **a person stays active until their last sponsorship
+  ends**. Ending the last one ends the person now through the lifecycle end path (the leaver plan).
+  The affiliation stays `pending` until the guest completes their claim (GU-6).
+- **An invitation is self-asserted intake (K3).** It always creates a **new** identity (type human,
+  status `invited`, source `sponsorship`, external id `guest:<uuid>`), an unverified email
+  identifier marked as asserted by the sponsor (its issuer is the one invitation, so it never
+  collides with another person), a source record and an `intake_records` row (channel
+  `sponsor_invite` or `bulk_invite`, match mode `self_asserted`). Tessera never links it to an existing
+  person and never tells the sponsor whether the email matches one. The one exception: inviting
+  yourself is `422 cannot_sponsor_self`. Linking and merging are GU-5.
+- **Sponsor policy** (`internal/guests/sponsorship/default_policy.json`, evaluated in Go with the
+  semantics of the design's Cedar fragment until Cedar lands). Its version is
+  `<id>@<12 hex of the file's sha256>`; every decision stamps it on the sponsorship, its history and
+  the audit event. Defaults: only active employees sponsor (guests, contractors, interns, partners,
+  vendors and `invited` people cannot); at most 50 visitor, 25 contractor, 100 volunteer and 25
+  partner sponsorships at a time per sponsor, and 50 invitations a day; a term at most
+  `guest_populations.max_duration_days` (visitors 30 days); a contractor whose bundle holds a
+  privileged or high-risk group needs a second approver (`sponsorships.approve`, never the sponsor,
+  the guest or whoever made the request); such a bundle needs IAL 2 (`bundle_needs_ial2` if the
+  sponsor asks for less, otherwise the required IAL is raised). Refusals are `422` with stable codes
+  (`sponsor_not_eligible`, `sponsor_limit_reached`, `daily_invite_limit`, `exceeds_max_duration`,
+  `invalid_dates`, `bundle_needs_ial2`, `bundle_item_not_requestable`, `cannot_sponsor_self`, ...).
+- **Access bundle.** A list of requestable catalog items (the access catalog, #164), stored on the
+  sponsorship. **Granting it is GU-12**: nothing is granted in this release.
+- **Bulk invite.** CSV with the header `email,given_name,family_name,population,starts_at,ends_at,purpose`
+  (an optional `bundle` column of group ids separated by `;`), at most 500 rows. `dry_run` returns
+  per-row policy results and writes nothing (rows count against the limits as the real run would);
+  the real run creates the rows the policy permits and reports each row. One bad row never blocks
+  the others.
+- **Renew** re-runs the policy, needs a fresh justification and a new end at most the population
+  maximum from now. Where the policy asks for a second approver the sponsor cannot renew alone: a
+  holder of `sponsorships.approve` who is not the sponsor renews it. **End** by the sponsor is
+  `ended`; by an approver, or before it began, `revoked`. **Transfer** asks another eligible person to
+  take over; the sponsor stays until they **accept** (policy checked again as them); if nobody accepts
+  within 14 days the sponsorship ends. The sweeper (`sponsorship.sweeper`, before the lifecycle
+  sweep) ends sponsorships at their end date and expired transfers.
+- **Notifications** (outbox): approval needed (to holders of `sponsorships.approve`), approved or
+  rejected (to the sponsor), transfer requested (to the target). Reminders before the end are the
+  lifecycle warnings (#159).
+- **Permissions.** `guests.sponsor` (every role but break-glass: the policy decides eligibility),
+  `guests.read` (operator, auditor, policy admin, tenant admin: every guest; a sponsor always sees
+  their own, and the person asked to take a sponsorship over sees it), `sponsorships.approve`
+  (policy admin). Every change needs a fresh phishing-resistant sign-in. A sponsorship someone may
+  not see answers `404`. Audit actions: `sponsorship.create|approve|reject|renew|end|transfer|accept_transfer|expire|transfer_expire|bulk_invite|bulk_preview`.
+
+Not yet: the claim link and the guest's invitation email (GU-6; the intake's `invitation_status`
+stays `ready`), granting the bundle (GU-12), sponsor-leaver transfer from JML events and the
+transfer task in the Inbox (GU-11), self-registration (GU-3), resend and revoke invitation, and
+per-tenant sponsor policy editing. After pulling this change run `./run.sh --reseed`: it adds three
+tables and widens the lifecycle `source` check.
 themselves. Not yet: provisioning into the target system (#103), business roles (#161).
 
 ### Notifications
@@ -508,7 +577,7 @@ the right. Arrow keys move between items.
 | (top) | **Home**, **Inbox** (count) |
 | **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts (with *Account matches*), Roles (Preview), Organizations (Preview) |
 | **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts, Roles, Organizations (Preview) |
-| **Access** | Request access, My access (with *My requests*), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
+| **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
 | **Protection** | Policies & SoD (violations, policies, what-if simulation), Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
 | **Settings** | Connections (governed connections and the setup wizard), Admin |
 
