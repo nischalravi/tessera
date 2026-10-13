@@ -12,6 +12,7 @@ import { useSession } from "../../app/auth";
 import { AffiliationsSection, IdentifiersSection } from "./affiliations";
 import { MergeDialog } from "./correlation";
 import { PreviewFormDrawer } from "./shared";
+import { LifecycleSection } from "../lifecycle/parts";
 
 /** Dry-run first, then apply: shows the blast radius of removing one grant before anything changes. */
 export function RevokeDrawer({ edgeId, onClose, onDone }: { edgeId: number; onClose: () => void; onDone?: () => void }) {
@@ -58,7 +59,7 @@ export function RevokeDrawer({ edgeId, onClose, onDone }: { edgeId: number; onCl
   );
 }
 
-type Tab = "access" | "grants" | "violations" | "recs" | "accounts" | "affiliations" | "delegation";
+type Tab = "access" | "grants" | "violations" | "recs" | "accounts" | "affiliations" | "delegation" | "lifecycle";
 
 function Header({ d, disabledAt }: { d: IdentityDetail; disabledAt?: string }) {
   const acts = useIdentityActions();
@@ -185,6 +186,7 @@ export function IdentityPage() {
   ];
   if (!machine) tabs.push({ id: "affiliations", label: "Affiliations & identifiers" });
   if (d.delegations.length || d.owned_identities.length) tabs.push({ id: "delegation", label: "Delegation & ownership" });
+  if (!machine) tabs.push({ id: "lifecycle", label: "Worker type & dates" });
 
   return (
     <Page title={d.name} crumbs={crumbs}>
@@ -204,6 +206,7 @@ export function IdentityPage() {
         <Tabs label="Identity sections" tabs={tabs} value={tab} onChange={setTab} />
       </div>
 
+      {tab === "lifecycle" && !machine && <div className="card"><LifecycleSection id={d.id} /></div>}
       {tab === "access" && (
         <div className="card flush">
           <div className="card-h">

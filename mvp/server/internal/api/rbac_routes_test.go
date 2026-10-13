@@ -90,6 +90,36 @@ GET    /api/identities/{identity_id}/identifiers     graph.read      -  # issue 
 POST   /api/identities/{identity_id}/affiliations    identities.affiliate STEP_UP_POLICY  # issue #64
 POST   /api/affiliations/{affiliation_id}/end        identities.affiliate STEP_UP_POLICY  # issue #64
 POST   /api/identity-merges/{merge_id}/unmerge       identities.merge STEP_UP_POLICY  # issue #160
+GET    /api/catalog                                  requests.create -  # issue #164 (?all=1: catalog.manage in the handler)
+PUT    /api/catalog/items/{group_id}                 catalog.manage  STEP_UP_POLICY  # issue #164
+POST   /api/requests                                 requests.create -  # issue #164 (others: requests.create_for_others in the handler)
+GET    /api/requests                                 requests.create -  # issue #164 (scope=pending|all: requests.decide or graph.read)
+GET    /api/requests/{request_id}                    requests.create -  # issue #164
+POST   /api/requests/{request_id}/approve            requests.decide STEP_UP_POLICY  # issue #164
+POST   /api/requests/{request_id}/deny               requests.decide -  # issue #164
+POST   /api/requests/{request_id}/cancel             requests.create -  # issue #164 (the requester)
+POST   /api/requests/{request_id}/remove             requests.create -  # issue #164 (requests.decide, or the beneficiary)
+GET    /api/roles                                    requests.create -  # issue #161
+POST   /api/roles                                    roles.manage    STEP_UP_POLICY  # issue #161
+GET    /api/roles/{role_id}                          graph.read      -  # issue #161
+PUT    /api/roles/{role_id}                          roles.manage    STEP_UP_POLICY  # issue #161
+GET    /api/roles/{role_id}/versions                 graph.read      -  # issue #161
+GET    /api/roles/{role_id}/drift                    graph.read      -  # issue #161
+POST   /api/roles/{role_id}/retire                   roles.manage    STEP_UP_POLICY  # issue #161
+POST   /api/roles/{role_id}/reconcile                roles.manage    STEP_UP_POLICY  # issue #161
+POST   /api/roles/{role_id}/members                  roles.manage    STEP_UP_POLICY  # issue #161
+POST   /api/roles/{role_id}/members/{identity_id}/remove roles.manage STEP_UP_POLICY  # issue #161
+POST   /api/role-requests                            requests.create -  # issue #161 (others: requests.create_for_others in the handler)
+GET    /api/role-requests                            requests.create -  # issue #161 (scope=pending|all: requests.decide or graph.read)
+POST   /api/role-requests/{request_id}/approve       requests.decide STEP_UP_POLICY  # issue #161
+POST   /api/role-requests/{request_id}/deny          requests.decide -  # issue #161
+POST   /api/role-requests/{request_id}/cancel        requests.create -  # issue #161 (the requester)
+GET    /api/lifecycle                                graph.read      -  # issue #159
+GET    /api/lifecycle/sponsored                      requests.create -  # issue #159
+POST   /api/lifecycle/sweep                          lifecycle.manage -  # issue #159
+GET    /api/identities/{identity_id}/lifecycle       graph.read      -  # issue #159
+PUT    /api/identities/{identity_id}/lifecycle       lifecycle.manage STEP_UP_POLICY  # issue #159
+POST   /api/identities/{identity_id}/lifecycle/extend requests.create -  # issue #159 (the sponsor, or lifecycle.manage)
 POST   /api/connections/{id}/validate                connections.manage -
 GET    /api/connections/{id}/validations/{run}       connections.read   -
 POST   /api/connections/{id}/dry-run                 connections.manage -

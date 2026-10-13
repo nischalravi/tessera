@@ -6,6 +6,7 @@ package seed
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -219,6 +220,26 @@ func Run(ctx context.Context, db *store.DB, now time.Time, policies []*policy.Po
 				return err
 			}
 			if err := seedAuth(c, t, now); err != nil {
+				return err
+			}
+			if err := seedCatalog(c, now); err != nil {
+				return err
+			}
+			if err := seedRoles(c, now); err != nil {
+				return err
+			}
+			skip := map[int64]bool{} // people who sign in stay employees
+			for _, u := range append(LarkspurUsers, GlobexUsers...) {
+				if u.Identity == "" {
+					continue
+				}
+				if i, err := c.IdentityByExternalID(u.Identity); err == nil {
+					skip[i.ID] = true
+				} else if !errors.Is(err, store.ErrNotFound) {
+					return err
+				}
+			}
+			if err := seedLifecycle(c, now, skip); err != nil {
 				return err
 			}
 			st.Requests, err = c.CountRequests()

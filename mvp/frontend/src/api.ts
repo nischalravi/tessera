@@ -595,6 +595,226 @@ export const addAffiliation = (identityId: number, body: AddAffiliationInput) =>
   api<Affiliation>(`/identities/${identityId}/affiliations`, body);
 export const endAffiliation = (affiliationId: string, reason: string) =>
   api<Affiliation>(`/affiliations/${encodeURIComponent(affiliationId)}/end`, { reason });
+// ---------------------------------------------------------------- access requests (issue #164)
+
+export type Risk = "low" | "medium" | "high";
+export interface PersonRef { id: number; name: string; type: IdentityType; status: string }
+export interface CatalogEntry {
+  /** null: the group is not in the catalog (only listed with ?all=1). */
+  id: string | null;
+  group: { id: number; system: string; name: string; kind: string; privileged: boolean };
+  requestable: boolean;
+  description: string;
+  owner: PersonRef | null;
+  risk: Risk;
+  eligible_types: string[];
+  eligible_departments: string[];
+  /** null: until removed. */
+  default_hours: number | null;
+  /** null: no limit. */
+  max_hours: number | null;
+  updated_at: string | null;
+}
+export interface CatalogView {
+  /** The person the signed-in user is; null when not linked (they request for others only). */
+  me: PersonRef | null;
+  can_request_for_others: boolean;
+  can_decide: boolean;
+  can_manage: boolean;
+  items: CatalogEntry[];
+}
+export type RequestStatus = "pending" | "approved" | "denied" | "cancelled" | "expired" | "removed";
+export interface RequestLine {
+  id: string;
+  batch_id: string;
+  status: RequestStatus;
+  catalog_item_id: string;
+  group: CatalogEntry["group"];
+  beneficiary: PersonRef;
+  account: { id: number; system: string; username: string };
+  requested_by: { id: string; display_name: string };
+  justification: string;
+  duration_hours: number | null;
+  requested_at: string;
+  decided_by: { id: string; display_name: string } | null;
+  decided_at: string | null;
+  decision_reason: string | null;
+  expires_at: string | null;
+  closed_at: string | null;
+  events?: { event: string; actor: string; note: string | null; at: string }[];
+  can_approve: boolean;
+  can_cancel: boolean;
+  can_remove: boolean;
+}
+
+export const submitRequest = (body: { beneficiary_ids: number[]; catalog_item_ids: string[]; justification: string; duration_hours?: number | null }) =>
+  api<{ batch_id: string; lines: RequestLine[] }>("/requests", body);
+const line = (id: string, action: string, body: object = {}) => api<RequestLine>(`/requests/${encodeURIComponent(id)}/${action}`, body);
+export const approveRequest = (id: string, reason?: string) => line(id, "approve", reason ? { reason } : {});
+export const denyRequest = (id: string, reason: string) => line(id, "deny", { reason });
+export const cancelRequest = (id: string) => line(id, "cancel");
+export const removeRequest = (id: string, reason?: string) => line(id, "remove", reason ? { reason } : {});
+export const putCatalogItem = (groupId: number, body: Omit<CatalogEntry, "id" | "group" | "owner" | "updated_at"> & { owner_identity_id: number | null }) =>
+  api<CatalogEntry>(`/catalog/items/${groupId}`, body, "PUT");
+
+// ---------------------------------------------------------------- business roles (issue #161)
+
+export type GroupRef = CatalogEntry["group"];
+export interface RoleRule { department: string[]; type: string[]; title: string[] }
+export type MemberSource = "rule" | "request" | "manual";
+export interface RoleMember {
+  person: PersonRef;
+  source: MemberSource;
+  assigned_by: { id: string; display_name: string } | null;
+  assigned_at: string;
+  request_id: string | null;
+}
+export interface BusinessRole {
+  id: string;
+  name: string;
+  description: string;
+  owner: PersonRef | null;
+  risk: Risk;
+  requestable: boolean;
+  /** null: no birthright rule (members are assigned or requested). */
+  birthright: RoleRule | null;
+  status: "active" | "retired";
+  version: number;
+  entitlements: GroupRef[];
+  member_count: number;
+  created_at: string;
+  updated_by: { id: string; display_name: string } | null;
+  updated_at: string;
+  /** Only on GET /roles/{id} and after a change. */
+  members?: RoleMember[];
+  /** The signed-in user holds it / has a pending request for it. */
+  held: boolean;
+  pending: boolean;
+}
+export interface RolesView {
+  me: PersonRef | null;
+  can_manage: boolean;
+  can_decide: boolean;
+  can_request_for_others: boolean;
+  can_read_members: boolean;
+  roles: BusinessRole[];
+}
+export type PlanAction = "add_grant" | "remove_grant" | "keep_grant" | "no_account" | "add_member" | "remove_member";
+export interface PlanStep {
+  action: PlanAction;
+  identity_id: number;
+  identity: string;
+  role_id?: string;
+  role?: string;
+  source?: MemberSource;
+  group_id?: number;
+  group?: string;
+  account_id?: number;
+  edge_id?: number;
+  reason?: string;
+}
+export interface RolePlan {
+  dry_run: boolean;
+  steps: PlanStep[];
+  grants_added: number;
+  grants_removed: number;
+  members_added: number;
+  members_removed: number;
+  no_account: number;
+}
+export interface RoleChange { role: BusinessRole; plan: RolePlan }
+export interface RoleSpec {
+  name: string;
+  description: string;
+  owner_identity_id: number | null;
+  risk: Risk;
+  requestable: boolean;
+  birthright: RoleRule | null;
+  entitlement_group_ids: number[];
+  note?: string;
+}
+export interface RoleVersion { version: number; snapshot: Record<string, unknown>; note: string | null; actor: string; changed_at: string }
+export interface RoleDrift {
+  missing: { person: PersonRef; missing: GroupRef[] }[];
+  holders: { person: PersonRef; held: GroupRef[]; holds_all: boolean }[];
+}
+export interface RoleRequest {
+  id: string;
+  role: { id: string; name: string; risk: Risk };
+  beneficiary: PersonRef;
+  requested_by: { id: string; display_name: string };
+  justification: string;
+  status: "pending" | "approved" | "denied" | "cancelled";
+  requested_at: string;
+  decided_by: { id: string; display_name: string } | null;
+  decided_at: string | null;
+  decision_reason: string | null;
+  can_approve: boolean;
+  can_cancel: boolean;
+}
+
+const rolePath = (id: string, rest = "") => `/roles/${encodeURIComponent(id)}${rest}`;
+const dry = (d?: boolean) => (d ? "?dry_run=1" : "");
+export const roles = {
+  create: (spec: RoleSpec, dryRun?: boolean) => api<RoleChange>(`/roles${dry(dryRun)}`, spec),
+  update: (id: string, version: number, spec: RoleSpec, dryRun?: boolean) =>
+    api<RoleChange>(rolePath(id, dry(dryRun)), { version, ...spec }, "PUT"),
+  retire: (id: string, reason: string, dryRun?: boolean) => api<RoleChange>(rolePath(id, "/retire" + dry(dryRun)), { reason }),
+  reconcile: (id: string, dryRun?: boolean) => api<RoleChange>(rolePath(id, "/reconcile" + dry(dryRun)), {}),
+  assign: (id: string, identityId: number, reason: string, dryRun?: boolean) =>
+    api<RoleChange>(rolePath(id, "/members" + dry(dryRun)), { identity_id: identityId, reason }),
+  unassign: (id: string, identityId: number, reason: string, dryRun?: boolean) =>
+    api<RoleChange>(rolePath(id, `/members/${identityId}/remove` + dry(dryRun)), { reason }),
+  request: (roleId: string, beneficiaryId: number, justification: string) =>
+    api<RoleRequest>("/role-requests", { role_id: roleId, beneficiary_id: beneficiaryId, justification }),
+  approve: (id: string, reason?: string) => api<RoleRequest>(`/role-requests/${encodeURIComponent(id)}/approve`, reason ? { reason } : {}),
+  deny: (id: string, reason: string) => api<RoleRequest>(`/role-requests/${encodeURIComponent(id)}/deny`, { reason }),
+  cancel: (id: string) => api<RoleRequest>(`/role-requests/${encodeURIComponent(id)}/cancel`, {}),
+};
+export const rolePaths = { list: "/roles", one: (id: string) => rolePath(id), versions: (id: string) => rolePath(id, "/versions"), drift: (id: string) => rolePath(id, "/drift") };
+
+// ---------------------------------------------------------------- identity lifecycle (issue #159)
+
+export type WorkerType = "employee" | "contractor" | "intern" | "partner" | "vendor" | "guest";
+export const WORKER_TYPES: WorkerType[] = ["employee", "contractor", "intern", "partner", "vendor", "guest"];
+export type LifecycleState = "upcoming" | "active" | "ending" | "ended";
+export interface Lifecycle {
+  person: PersonRef;
+  worker_type: WorkerType;
+  sponsor: PersonRef | null;
+  organization: string | null;
+  starts_at: string | null;
+  ends_at: string | null;
+  ended_at: string | null;
+  state: LifecycleState;
+  /** Whole days until the end date (0 when due); null without one. */
+  days_left: number | null;
+  /** The smallest warning already sent (14, 7 or 1 days). */
+  warned_days: number | null;
+  source: "manual" | "hris";
+  updated_at: string | null;
+  /** No lifecycle row: an employee with no end date. */
+  default: boolean;
+  can_extend: boolean;
+  can_manage: boolean;
+  events?: { event: "set" | "extended" | "converted" | "warned" | "ended"; worker_type: string | null; ends_at: string | null; note: string | null; actor: string; at: string }[];
+}
+export interface LifecycleList { can_manage: boolean; rows: Lifecycle[] }
+export interface LifecycleSpec {
+  worker_type: WorkerType;
+  sponsor_identity_id: number | null;
+  organization: string | null;
+  starts_at: string | null;
+  ends_at: string | null;
+  reason: string;
+}
+const lcPath = (id: number, rest = "") => `/identities/${id}/lifecycle${rest}`;
+export const lifecycle = {
+  paths: { list: (state?: LifecycleState) => `/lifecycle${state ? `?state=${state}` : ""}`, sponsored: "/lifecycle/sponsored", one: (id: number) => lcPath(id) },
+  set: (id: number, spec: LifecycleSpec) => api<Lifecycle>(lcPath(id), spec, "PUT"),
+  extend: (id: number, endsAt: string, reason: string) => api<Lifecycle>(lcPath(id, "/extend"), { ends_at: endsAt, reason }),
+  sweep: () => api<{ warned: number; ended: number }>("/lifecycle/sweep", {}),
+};
 
 export const simulate = (body: { remove_edge_ids?: number[]; add_edges?: { src: string; dst: string }[]; disable_account_ids?: number[] }) =>
   api<SimResult>("/simulate", { remove_edge_ids: [], add_edges: [], disable_account_ids: [], ...body });

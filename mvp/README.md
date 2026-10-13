@@ -166,6 +166,15 @@ The routes are documented at `/api/readiness/openapi.json`.
 `GET /api/identities/{id}/affiliations` · `GET /api/identities/{id}/identifiers` ·
 `POST /api/identities/{id}/affiliations {type, org_unit?, population?, starts_at?, ends_at?, reason}` ·
 `POST /api/affiliations/{id}/end {reason}`
+`GET /api/catalog[?all=1]` · `PUT /api/catalog/items/{group_id}` ·
+`POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours}` ·
+`GET /api/requests[?scope=mine|pending|all&status=]` · `GET /api/requests/{id}` ·
+`POST /api/requests/{id}/approve|deny|cancel|remove {reason}` ·
+`GET|POST /api/roles` · `GET|PUT /api/roles/{id}` · `GET /api/roles/{id}/versions|drift` ·
+`POST /api/roles/{id}/retire|reconcile|members` · `POST /api/roles/{id}/members/{identity_id}/remove`
+(changes take `?dry_run=1`) · `GET|POST /api/role-requests` · `POST /api/role-requests/{id}/approve|deny|cancel` ·
+`GET /api/lifecycle[?state=upcoming|active|ending|ended]` · `GET /api/lifecycle/sponsored` · `POST /api/lifecycle/sweep` ·
+`GET|PUT /api/identities/{id}/lifecycle` · `POST /api/identities/{id}/lifecycle/extend {ends_at, reason}`
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
@@ -223,6 +232,104 @@ The seed back-fills one source record, one HR affiliation and the HR identifiers
 ID) for every human, with no audit events and no change to any identity id. Identities that
 connectors add later are not back-filled until the lifecycle feed (GU-4, GU-11) lands. The worker
 type, sponsor and lifecycle state of a person belong to `identity_lifecycle` (issue #159), not here.
+### Access requests
+
+**Access → Request access** is the catalog (issue #164). It lists every group a policy admin has
+made requestable, with its risk and durations, and the requestable business roles. A request
+names one or more people and items and files one *line* per person and item, all or nothing.
+The checks:
+
+- The person is active and eligible: the item's identity types and departments.
+- They don't already hold the access and have no open request for it.
+- Privileged items, and items with a maximum duration, get a duration (the item's default
+  unless one is chosen); a duration never exceeds the maximum.
+
+Requesting for someone else needs `requests.create_for_others`.
+
+A person with `requests.decide` approves (with a fresh phishing-resistant sign-in) or denies (with
+a reason) each line under **Access → Requests → Approvals**. Nobody approves a line they
+requested or that grants them access. Approval grants the access in Tessera at once, as a
+grant edge (source `request`), until the duration ends or someone removes it. The
+beneficiary can remove their own access; deciders can remove anyone's. The sweeper closes
+expired lines, and lines whose grant was removed elsewhere (a review, a revoke). Each line
+keeps its history (submitted, approved, denied, cancelled, expired, removed), and each change
+is audited.
+
+Policy admins edit an item under **Directory → Entitlements → (group) → Request catalog**
+(`catalog.manage`). The seed puts every demo group in the catalog (privileged ones: 8 hours by
+default, at most 72). It also links Olu and Vic to two demo employees, so they can request for
+themselves. Not yet: provisioning into the target system (#103), manager and owner routing
+(#165).
+
+### Business roles
+
+**Directory → Roles** (issue #161). A business role bundles entitlements (groups) from several
+systems, with an owner, a description, a risk, and optionally a **birthright rule**: departments,
+identity types and exact job titles. An active person matches when every list they fill in
+contains their value.
+
+- **Members** come from the rule, from an approved request, or are assigned by hand. Rule members
+  follow the rule: every save and **Reconcile** add the people it now matches and remove those it
+  no longer does. A rule member is removed by changing the rule, not by hand.
+- **Grants.** Holding a role grants each entitlement as a grant edge (source `role`) from the
+  person's account in that system (or their Okta account, as for requests). A grant made any other
+  way (connector, request, JIT, manual) is never touched. A role grant is removed only when none
+  of the person's roles still grants the group, so overlapping roles and direct grants are safe.
+- **Every change is a plan first.** Create, edit, assign, remove, reconcile and retire show the
+  plan (`?dry_run=1`): who gains or loses the role, the grants added, the role grants removed,
+  the grants kept and why (another role, or granted outside roles), and people with no account
+  that can receive a grant. Applying it writes the change, the grants and one audit event
+  (`role.create|update|assign|unassign|reconcile|retire`) in one transaction.
+- **Versions.** Each save, and retirement, appends a version (the role and its entitlements, who
+  and why) under the role's *History* tab. Edits carry the version they started from, so a
+  concurrent edit is refused (`version_conflict`).
+- **Drift** lists members missing an entitlement (removed elsewhere, or no account in that
+  system) and people who hold at least half of a role's entitlements without the role.
+- **Requests.** A requestable role appears in the request catalog. A role request is one per
+  person; a person with `requests.decide` approves it (with step-up) or denies it under
+  **Access → Requests**. Approval assigns the role. Retiring a role removes every member and
+  denies its pending requests.
+
+Changing roles needs `roles.manage` (policy admins) and a fresh phishing-resistant sign-in.
+Members, versions and drift need `graph.read`. The seed creates the demo company's six roles.
+Rule members are seeded only where people already hold every entitlement, so seeding grants
+nothing: reconcile a role to see the rest. Not yet: provisioning into the target system (#103),
+role mining (Phase 3), and ABAC conditions in rules (#162).
+
+### Contractors, guests and end dates
+
+**Identity → Contractors & guests** (issue #159). Each person has a worker type: employee,
+contractor, intern, partner, vendor or guest. Every type except employee has:
+- a **sponsor**: an active employee accountable for them;
+- an **end date**, at most a year away;
+- optionally an organization and a start date.
+
+A person without a lifecycle record is an employee with no end date. Policy admins set the
+lifecycle by hand (`lifecycle.manage`, with step-up). Otherwise it comes from the HRIS: a joiner
+event's `worker_type` and `end_date`, with the manager as sponsor unless
+`sponsor_external_id` names someone else.
+
+- **Warnings.** The background sweeper warns 14, 7 and 1 days before the end date. Each
+  warning goes out once, as a history entry and an audit event (`lifecycle.warn`). The
+  notifications outbox (#189) delivers them through `lifecycle.Notify`.
+- **Extending.** The sponsor, or a lifecycle admin, moves the end date later, with a reason.
+  Nobody extends their own term. An extension restarts the warnings.
+- **The end.** On the end date the sweeper runs the person's **leaver plan**: accounts are
+  disabled, grants removed, JIT cancelled and ownership reassigned, as the JML leaver plan lists
+  them. It then terminates the identity, all in one transaction with `lifecycle.end`. The
+  sweep runs in the background loop, never on a read. Admins can also run it at once.
+- **Converting.** Changing the worker type is a conversion, for example contractor to employee,
+  which can drop the end date. It is recorded as `lifecycle.convert`.
+
+The Users list has a *Worker type* column and filter. The identity panel and page show the
+worker type, sponsor and dates, with *Extend* and *Change*. The page has three views:
+*Ending soon* (the next 14 days), *Everyone*, and *Sponsored by me*. The seed makes five demo
+people contractors, an intern, a vendor and a partner, ending 3 to 120 days out.
+
+Not yet:
+- provisioning the leaver plan into target systems (#103);
+- the guest claim flow and affiliations (GU-1 #64 onward);
+- rehiring someone whose term has ended.
 
 ### Audit ledger
 
@@ -287,6 +394,7 @@ the right. Arrow keys move between items.
 |---|---|
 | (top) | **Home**, **Inbox** (count) |
 | **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts (with *Account matches*), Roles (Preview), Organizations (Preview) |
+| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts, Roles, Organizations (Preview) |
 | **Access** | Request access, My access (with *My requests*), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
 | **Protection** | Policies & SoD (violations, policies, what-if simulation), Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
 | **Settings** | Connections (governed connections and the setup wizard), Admin |
@@ -325,7 +433,7 @@ machine identities, roles, entitlements and apps, and runs actions such as *Requ
 next. Choosing a person shows actions for them. Use the arrow keys, `Enter`, `Backspace` to go
 back a step and `Esc` to close. `/` focuses the top-bar search.
 
-**Preview features.** Some screens have no backend endpoint yet: business roles, organizations,
+**Preview features.** Some screens have no backend endpoint yet: organizations,
 workflows, catalog (non-JIT) requests, delegations, disable / reset password / edit, imports and
 most admin settings. They run on typed mock data in `src/mocks/`, keep their state in the
 browser's localStorage, and carry a **Preview** badge. To wire one up, add a function to

@@ -692,6 +692,9 @@ func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.User
 		if err := c.SetHrisEventIdentity(ev.ID, id); err != nil {
 			return nil, err
 		}
+		if err := joinerLifecycle(c, now, id, mgr, p); err != nil {
+			return nil, err
+		}
 		ident, err := c.Identity(id)
 		if err != nil {
 			return nil, err
@@ -821,4 +824,59 @@ func ViewEvent(c *store.TenantTx, ev *store.HrisEvent) (EventView, error) {
 		}
 	}
 	return v, nil
+}
+
+// ExecuteLeaver runs an identity's leaver plan outside an HRIS event (an
+// identity reaching its end date, issue #159): every step of LeaverPlan is
+// applied and the identity is terminated, in the caller's transaction. The
+// caller writes the audit event.
+func ExecuteLeaver(c *store.TenantTx, now time.Time, identityID int64) (Plan, error) {
+	plan, err := LeaverPlan(c, now, identityID, false, nil)
+	if err != nil {
+		return nil, err
+	}
+	ident, err := c.Identity(identityID)
+	if err != nil {
+		return nil, err
+	}
+	steps, _ := getAny(plan, "steps").([]Step)
+	for _, st := range steps {
+		if err := applyStep(c, now, ident, st); err != nil {
+			return nil, err
+		}
+	}
+	return plan, c.TerminateIdentity(identityID, now)
+}
+
+// joinerLifecycle records a non-employee joiner's worker type, end date and
+// sponsor from the HRIS payload (worker_type, end_date, and
+// sponsor_external_id, else the manager), issue #159. An employee joiner
+// writes nothing.
+func joinerLifecycle(c *store.TenantTx, now time.Time, id int64, mgr *int64, p ojson.Object) error {
+	wt, _ := getAny(p, "worker_type").(string)
+	if wt == "" || wt == store.WorkerEmployee {
+		return nil
+	}
+	l := &store.Lifecycle{IdentityID: id, WorkerType: wt, SponsorID: mgr, Source: "hris", UpdatedAt: now}
+	if xid, ok := getAny(p, "sponsor_external_id").(string); ok {
+		sp, err := getOrNil(c.IdentityByExternalID(xid))
+		if err != nil {
+			return err
+		}
+		if sp != nil {
+			l.SponsorID = &sp.ID
+		}
+	}
+	end, _ := getAny(p, "end_date").(string)
+	t, err := timeutil.ParseISO(end)
+	if err != nil {
+		return &Error{fmt.Sprintf("a %s joiner needs an end_date", wt)}
+	}
+	l.EndsAt = &t
+	if err := c.PutLifecycle(l); err != nil {
+		return err
+	}
+	w := wt
+	return c.AddLifecycleEvent(&store.LifecycleEvent{IdentityID: id, Event: "set", WorkerType: &w, EndsAt: l.EndsAt,
+		Actor: "hris", At: now})
 }

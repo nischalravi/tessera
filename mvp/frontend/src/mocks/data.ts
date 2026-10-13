@@ -1,14 +1,4 @@
-import type { AdminSection, BusinessRole, DelegationItem, OrgUnit, Workflow } from "./types";
-
-/** Fictional business roles for Larkspur Labs, bundling real seeded groups/roles. */
-export const ROLES: BusinessRole[] = [
-  { id: "role-backend", name: "Backend engineer", description: "Day-one access for backend engineers: source control, the engineering Okta group and dev-account AWS roles.", owner: "Kofi Mensah", entitlements: ["okta:engineering", "okta:eng-backend", "github:backend", "aws:DevAdmin"], birthright: "Engineering", members: 9, risk: "medium", updated: "2026-09-02" },
-  { id: "role-frontend", name: "Frontend engineer", description: "Source control and preview environments for the web team.", owner: "Anders Zeller", entitlements: ["okta:engineering", "okta:eng-frontend", "github:frontend"], birthright: "Engineering", members: 6, risk: "low", updated: "2026-08-21" },
-  { id: "role-platform", name: "Platform on-call", description: "Production break-glass is JIT only; standing access covers read-only observability.", owner: "Ingrid Lindqvist", entitlements: ["okta:eng-platform", "github:platform", "aws:ProdReadOnly", "aws:ProdAdmin (JIT)"], members: 5, risk: "high", updated: "2026-09-28" },
-  { id: "role-analyst", name: "Data analyst", description: "Warehouse read access and BI tooling for analysts.", owner: "Sana Iyer", entitlements: ["okta:data-team", "github:data", "snowflake:ANALYST"], birthright: "Data", members: 7, risk: "medium", updated: "2026-07-30" },
-  { id: "role-finance", name: "Finance operations", description: "Accounts-payable processing in Workday. Must not be combined with AP Approver (SoD).", owner: "Beatrix Pemberton", entitlements: ["okta:finance", "workday:AP Clerk", "snowflake:FINANCE_ANALYST"], birthright: "Finance", members: 4, risk: "high", updated: "2026-09-12" },
-  { id: "role-support", name: "Support agent", description: "Customer support tooling and read-only account lookups.", owner: "Esme Thornbury", entitlements: ["okta:support"], birthright: "Support", members: 6, risk: "low", updated: "2026-06-18" },
-];
+import type { AdminSection, DelegationItem, OrgUnit, Workflow } from "./types";
 
 export const ORGS: OrgUnit[] = [
   { id: "org-root", name: "Larkspur Labs", parent: null, department: null, owner: "Rosalind Haverford", costCenter: "CC-1000" },

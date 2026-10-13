@@ -73,22 +73,34 @@ const (
 	PermIdentitiesMerge     Permission = "identities.merge"
 	// affiliations of a person (guest accounts design, issue #64)
 	PermIdentitiesAffiliate Permission = "identities.affiliate"
+	// access requests (issue #164)
+	PermRequestsCreate       Permission = "requests.create"
+	PermRequestsCreateOthers Permission = "requests.create_for_others"
+	PermRequestsDecide       Permission = "requests.decide"
+	PermCatalogManage        Permission = "catalog.manage"
+	// business roles (issue #161)
+	PermRolesManage Permission = "roles.manage"
+	// identity lifecycle (issue #159)
+	PermLifecycleManage Permission = "lifecycle.manage"
 )
 
 // rolePermissions is the static role -> permission map (Cedar-ready, §12.1).
 // tenant_admin deliberately has no data-plane write permission: admins run
 // the platform, policy admins change access (separation of duties).
+// Everyone but break-glass may request access for themselves; operators
+// and policy admins may also request for others and decide (issue #164).
 var rolePermissions = map[Role][]Permission{
-	RoleViewer: {PermGraphRead},
+	RoleViewer: {PermGraphRead, PermRequestsCreate},
 	RoleOperator: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
-		PermReviewsDecide, PermHRISSimulateEvent},
-	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead},
+		PermReviewsDecide, PermHRISSimulateEvent, PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide},
+	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead, PermRequestsCreate},
 	RolePolicyAdmin: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
 		PermReviewsDecide, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
-		PermIdentitiesCorrelate, PermIdentitiesMerge, PermIdentitiesAffiliate},
+		PermIdentitiesCorrelate, PermIdentitiesMerge, PermIdentitiesAffiliate,
+		PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide, PermCatalogManage, PermRolesManage, PermLifecycleManage},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
-		PermConnectionsActivate},
+		PermConnectionsActivate, PermRequestsCreate},
 	RoleBreakGlass: {PermAdminRead, PermBreakGlassRecover},
 }
 
@@ -172,7 +184,7 @@ var scopePermissions = map[Scope][]Permission{
 	ScopeRead: {PermGraphRead, PermConnectionsRead},
 	ScopeWrite: {PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage, PermReviewsDecide,
 		PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
-		PermConnectionsManage, PermConnectionsActivate},
+		PermConnectionsManage, PermConnectionsActivate, PermRolesManage, PermLifecycleManage},
 	ScopeAudit: {PermAuditRead, PermAuditVerify},
 	ScopeAdmin: {PermAdminRead, PermAdminChangeReq, PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev,
 		PermBreakGlassRecover},

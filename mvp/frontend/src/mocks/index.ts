@@ -1,18 +1,18 @@
 /**
  * Preview mock layer. Typed stand-ins for backend capabilities that do not exist yet:
- * business roles, organizations, workflows, non-JIT access requests, delegations,
+ * organizations, workflows, non-JIT access requests, delegations,
  * disable / reset-password actions and admin settings.
  *
  * State lives in this browser only (localStorage) so the demo feels real across reloads.
  * Nothing here calls the API, and nothing here invents API routes.
  */
-import { useMemo, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 import { store } from "../app/storage";
-import { ADMIN_SECTIONS, DELEGATIONS, ORGS, ROLES, WORKFLOWS } from "./data";
-import type { AccessRequestDraft, BusinessRole, DelegationItem } from "./types";
+import { ADMIN_SECTIONS, DELEGATIONS, ORGS, WORKFLOWS } from "./data";
+import type { AccessRequestDraft, DelegationItem } from "./types";
 
 export * from "./types";
-export { ADMIN_SECTIONS, ORGS, ROLES, WORKFLOWS };
+export { ADMIN_SECTIONS, ORGS, WORKFLOWS };
 
 const delay = <T,>(v: T, ms = 350) => new Promise<T>((r) => setTimeout(() => r(v), ms));
 
@@ -22,13 +22,11 @@ interface MockState {
   delegations: DelegationItem[];
   /** identity id -> state set by preview actions */
   disabled: Record<number, string>;
-  /** Roles created in the Preview "New role" form. */
-  roles: BusinessRole[];
   log: { at: string; actor: string; action: string; target: string }[];
 }
 
 const KEY = "mock.v1";
-const EMPTY: MockState = { requests: [], delegations: DELEGATIONS, disabled: {}, roles: [], log: [] };
+const EMPTY: MockState = { requests: [], delegations: DELEGATIONS, disabled: {}, log: [] };
 let state: MockState = { ...EMPTY, ...store.get<Partial<MockState>>(KEY, {}) };
 const subs = new Set<() => void>();
 function commit(next: MockState) {
@@ -104,14 +102,6 @@ export const mockIdentityOps = {
   },
 };
 
-export const mockRoles = {
-  async create(r: Omit<BusinessRole, "id" | "updated" | "members">, actor: string) {
-    const role: BusinessRole = { ...r, id: newId("role"), members: 0, updated: new Date().toISOString().slice(0, 10) };
-    commit({ ...state, roles: [role, ...state.roles], log: log(actor, "role.create", role.name) });
-    return delay(role);
-  },
-};
-
 /** Create / edit / import for objects that have no write endpoint yet (accounts, orgs, machine identities...). */
 export const mockObjects = {
   async save(kind: string, name: string, actor: string, verb: "create" | "update" = "create") {
@@ -119,12 +109,6 @@ export const mockObjects = {
     return delay(true);
   },
 };
-
-/** Seeded roles plus any created in this browser. */
-export function useRoles(): BusinessRole[] {
-  const created = useMockState().roles;
-  return useMemo(() => [...created, ...ROLES], [created]);
-}
 
 export function resetMockState() {
   commit(EMPTY);
