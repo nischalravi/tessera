@@ -334,6 +334,9 @@ func Approve(tx *store.TenantTx, requestID string, actor Actor, now time.Time) (
 		if match, err = tx.MatchResult(*q.MatchID); err != nil {
 			return nil, err
 		}
+		if match.Status != store.MatchReview && match.Status != store.MatchReverification {
+			return nil, refuse(409, "already_decided", "the match this request is about was decided meanwhile; reject the request")
+		}
 	}
 	first := Actor{UserID: q.RequestedBy, Display: q.RequestedBy}
 	out, err := applyFor(tx, in, q.Reason, first, actor, &actor, match, now)

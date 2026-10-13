@@ -991,3 +991,33 @@ func TestMerge_SponsorConflictRefused(t *testing.T) {
 		t.Errorf("merging a guest into their sponsor: %v", err)
 	}
 }
+
+// A request about a match that was decided meanwhile cannot be approved.
+func TestFourEyes_ApprovalOfADecidedMatchRefused(t *testing.T) {
+	e := newEnv(t)
+	_, row := e.suspected()
+	var d *merge.Decided
+	e.tx(func(c *store.TenantTx) (err error) {
+		d, err = merge.Decide(c, row.ID, merge.DecisionLink, "same person", e.r1, merge.Hooks{}, now)
+		return
+	})
+	if d.Outcome.Pending == nil {
+		t.Fatalf("no request: %+v", d.Outcome)
+	}
+	e.tx(func(c *store.TenantTx) error {
+		_, err := merge.Decide(c, row.ID, merge.DecisionNewPerson, "a different Bob", e.r2, merge.Hooks{}, now)
+		return err
+	})
+	err := e.try(func(c *store.TenantTx) error { _, err := merge.Approve(c, d.Outcome.Pending.ID, e.r2, now); return err })
+	if code(err) != "already_decided" {
+		t.Errorf("approving a request about a decided match: %v", err)
+	}
+	// the request can still be rejected
+	e.tx(func(c *store.TenantTx) error {
+		r, err := merge.Reject(c, d.Outcome.Pending.ID, e.r2, "decided meanwhile", now)
+		if err != nil || r.Status != store.MergeReqRejected {
+			t.Errorf("reject: %+v, %v", r, err)
+		}
+		return nil
+	})
+}
