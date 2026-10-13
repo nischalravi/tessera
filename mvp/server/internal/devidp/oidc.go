@@ -333,12 +333,7 @@ func (s *Server) handleAuthorizeSubmit(w http.ResponseWriter, r *http.Request) {
 	sub, m, _ := strings.Cut(f.Get("choice"), " ")
 	method := Method(m)
 	profile := Profile(f.Get("profile"))
-	var user *User
-	for i := range s.users {
-		if s.users[i].Sub == sub {
-			user = &s.users[i]
-		}
-	}
+	user := s.findUser(sub)
 	switch {
 	case user == nil:
 		s.errorPage(w, http.StatusBadRequest, "Unknown user.")

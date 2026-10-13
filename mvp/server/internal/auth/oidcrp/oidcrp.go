@@ -235,6 +235,10 @@ type AuthRequest struct {
 	ACRValues   []string
 	MaxAge      *int64
 	Prompt      string // "login" for step-up
+	// LoginHint preselects the user at the IdP (the guest claim names the
+	// account it just registered). The relying party still checks the
+	// subject that comes back.
+	LoginHint string
 	// Claims is the OIDC claims request parameter (Entra acrs), raw JSON.
 	Claims string
 }
@@ -268,6 +272,9 @@ func (rp *RP) AuthURL(ctx context.Context, c Connection, r AuthRequest) (string,
 	}
 	if r.Claims != "" {
 		opts = append(opts, oauth2.SetAuthURLParam("claims", r.Claims))
+	}
+	if r.LoginHint != "" {
+		opts = append(opts, oauth2.SetAuthURLParam("login_hint", r.LoginHint))
 	}
 	return rp.oauth(pr, c, r.RedirectURI).AuthCodeURL(r.State, opts...), nil
 }

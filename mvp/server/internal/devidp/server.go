@@ -112,6 +112,9 @@ type Server struct {
 
 	mu    sync.Mutex
 	fault Fault // set by POST /_faults
+
+	usersMu    sync.RWMutex    // guards users, which POST /_register extends at runtime
+	registered map[string]bool // subs added at runtime (only those can be replaced)
 }
 
 // CheckEnv is the start-up guard of the standalone binary: the dev IdP runs
@@ -216,7 +219,7 @@ func (s *Server) JWKS() jose.JSONWebKeySet {
 }
 
 // Users returns a copy of the configured users.
-func (s *Server) Users() []User { return slices.Clone(s.users) }
+func (s *Server) Users() []User { return s.userList() }
 
 // SetFault sets the fault applied to every later authorization (as POST
 // /_faults does); FaultNone clears it. It fails when faults are disabled.
@@ -247,6 +250,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /authorize", s.handleAuthorize)
 	mux.HandleFunc("POST /authorize", s.handleAuthorizeSubmit)
 	mux.HandleFunc("POST /token", s.handleToken)
+	mux.HandleFunc("POST /_register", s.handleRegister)
 	mux.HandleFunc("GET /userinfo", s.handleUserinfo)
 	mux.HandleFunc("POST /userinfo", s.handleUserinfo)
 	mux.HandleFunc("GET /logout", s.handleLogout)
