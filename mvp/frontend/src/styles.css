@@ -665,7 +665,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 @media (max-width: 720px) { .qrow { grid-template-columns: 22px minmax(0, 1fr); } .qrow .q-ic { display: none; } .qrow .q-actions { grid-column: 2; } }
 .kv { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 7px 12px; font-size: var(--fs-md); margin: 0; }
 .kv dt { color: var(--text-3); }
-.kv dd { margin: 0; min-width: 0; }
+.kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 
 /* catalog */
 .catalog { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: var(--s-3); }
