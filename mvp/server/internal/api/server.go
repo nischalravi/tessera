@@ -22,10 +22,13 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oidcrp"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/claim"
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/credential"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/sponsorship"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
 	"github.com/nischalravi/tessera/mvp/server/internal/lifecycle"
+	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
@@ -108,6 +111,18 @@ type Config struct {
 	// Identifiers hashes the identifiers of invited guests under per-tenant
 	// keys derived from the KEK. Nil: invitations answer 503.
 	Identifiers *identifiers.Keyer
+	// Secrets hands one-time secrets (claim links, confirmation codes) to the
+	// notification dispatcher through memory, never the database; share the
+	// instance with the Dispatcher. Nil: the API makes its own (nothing is
+	// mailed without a dispatcher holding it).
+	Secrets *notify.Secrets
+	// Credential is the credential authority guests set up their sign-in
+	// through (guest claim, internal/guests/credential). Nil: the claim stops
+	// at the credential step and stays pending.
+	Credential credential.Authority
+	// ClaimMinDuration is the minimum time of a claim start or resend (default
+	// 300 ms); tests shorten it.
+	ClaimMinDuration time.Duration
 	// AuditAppend overrides how the audit middleware writes http.request
 	// events (tests inject failures). Nil: the store.
 	AuditAppend func(ctx context.Context, t tenancy.ID, e store.AuditEvent) error
@@ -123,7 +138,11 @@ type Server struct {
 	authn  *auth.Authenticator
 	limits *limiters
 	guests *sponsorship.Service
-	rp     *oidcrp.RP
+
+	claimSvc *claim.Service
+	claimLim *claimLimits
+	names    nameCache
+	rp       *oidcrp.RP
 
 	readiness *readiness.Service
 }
@@ -159,6 +178,15 @@ func New(cfg Config) *Server {
 	s := &Server{cfg: cfg, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
 		limits: newLimiters(cfg.RateLimits)}
 	s.guests = sponsorship.New(cfg.Identifiers)
+	s.claimLim = newClaimLimits()
+	if cfg.Identifiers != nil && cfg.PublicURL != "" {
+		if cfg.Secrets == nil {
+			cfg.Secrets = notify.NewSecrets()
+			s.cfg.Secrets = cfg.Secrets
+		}
+		s.claimSvc = claim.New(cfg.Identifiers, cfg.Secrets, cfg.PublicURL, s.tenantName)
+		s.guests.Claim = s.claimSvc
+	}
 	if cfg.OutboundHTTP != nil {
 		rp, err := oidcrp.New(oidcrp.Config{HTTP: cfg.OutboundHTTP, Now: func() time.Time { return s.clock() }})
 		if err != nil {
@@ -176,6 +204,7 @@ func New(cfg Config) *Server {
 	s.registerRoleRoutes()
 	s.registerLifecycleRoutes()
 	s.registerGuestRoutes()
+	s.registerClaimRoutes()
 	s.registerNotificationRoutes()
 	s.registerEmailRoutes()
 	s.registerReadinessRoutes()
@@ -256,6 +285,11 @@ func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
 		// sponsorships first: the last one to end ends the person, the lifecycle sweep then has nothing left
 		if err := s.guests.SweepAll(audit.WithSystemActor(ctx, sponsorship.Sweeper), s.store, s.clock()); err != nil && ctx.Err() == nil {
 			s.log.Error("sponsorship sweep failed", "err", err)
+		}
+		if s.claimSvc != nil {
+			if err := s.claimSvc.SweepAll(audit.WithSystemActor(ctx, "claim.sweeper"), s.store, s.clock()); err != nil && ctx.Err() == nil {
+				s.log.Error("claim sweep failed", "err", err)
+			}
 		}
 		if err := lifecycle.SweepAll(audit.WithSystemActor(ctx, lifecycle.Sweeper), s.store, s.clock()); err != nil && ctx.Err() == nil {
 			s.log.Error("lifecycle sweep failed", "err", err)
@@ -753,7 +787,7 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		default:
 			h.Set("Content-Security-Policy", cspAPI)
 		}
-		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/t/") {
+		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/t/") || strings.HasPrefix(r.URL.Path, "/public/") {
 			h.Set("Cache-Control", "no-store")
 		}
 		if s.cfg.HSTS {

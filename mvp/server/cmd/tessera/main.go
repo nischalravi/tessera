@@ -60,6 +60,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/credential"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
@@ -307,8 +308,19 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if err != nil {
 		return err
 	}
+	// One-time secrets (claim links, confirmation codes) go from the API to the
+	// dispatcher through memory only.
+	secrets := notify.NewSecrets()
+	// The guest claim's credential authority: the dev IdP, in development only.
+	// Without one (production today) a claim stops at the credential step.
+	var authority credential.Authority
+	if cfg.Env == config.Dev && cfg.DevIdPURL != "" {
+		if authority, err = credential.NewDevIdP(cfg.Env, outbound); err != nil {
+			return err
+		}
+	}
 	srv := api.New(api.Config{Store: st, Clock: clock, Policies: loader, Logger: logger,
-		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound,
+		Secrets: secrets, Credential: authority, PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound,
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
 		HSTS: cfg.IsProd(), Env: cfg.Env, Identifiers: identifiers.NewKeyer(sealer), EmailMode: cfg.Mail.Mode, DevLogin: cfg.DevLogin, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, AuditAnchor: anchorURL})
 	sender, err := notify.NewSender(cfg.Mail, cfg.Env, cfg.OutboundAllowLoopback, sealer, config.DevMailPath(o.db), logger)
@@ -316,7 +328,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		return err
 	}
 	dispatcher := &notify.Dispatcher{DB: st, Sender: sender, Clock: clock, Log: logger, MaxAttempts: cfg.NotifyMaxAttempts,
-		DigestHour: cfg.NotifyDigestHour, BaseURL: cfg.PublicURL}
+		DigestHour: cfg.NotifyDigestHour, BaseURL: cfg.PublicURL, Secrets: secrets}
 	checkpointer := &audit.Checkpointer{DB: st, Sealer: sealer, Sink: sink, Clock: timeutil.System, Issuer: cfg.PublicURL,
 		Every: time.Duration(cfg.AuditCheckpointSeconds) * time.Second, EveryEvents: int64(cfg.AuditCheckpointEvents),
 		Log: logger}

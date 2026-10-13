@@ -131,6 +131,8 @@ POST   /api/sponsorships/{sponsorship_id}/renew      guests.sponsor  STEP_UP_POL
 POST   /api/sponsorships/{sponsorship_id}/end        guests.sponsor  STEP_UP_POLICY  # issue #65 (the sponsor, or sponsorships.approve)
 POST   /api/sponsorships/{sponsorship_id}/transfer   guests.sponsor  STEP_UP_POLICY  # issue #65 (the sponsor)
 POST   /api/sponsorships/{sponsorship_id}/accept-transfer guests.sponsor STEP_UP_POLICY  # issue #65 (the person asked)
+POST   /api/guests/{identity_id}/resend-invitation   guests.sponsor  STEP_UP_POLICY  # issue #69 (the sponsor, or sponsorships.approve; checked in the handler)
+POST   /api/guests/{identity_id}/revoke-invitation   guests.sponsor  STEP_UP_POLICY  # issue #69 (the sponsor, or sponsorships.approve; checked in the handler)
 GET    /api/approvals/inbox                          requests.create -  # issue #165
 GET    /api/approvals/delegates                      requests.create -  # issue #165
 GET    /api/approvals/delegations                    requests.create -  # issue #165 (?all=1: requests.decide)
@@ -160,6 +162,13 @@ GET    /api/auth/discover                            public
 GET    /api/auth/login                               public
 GET    /api/auth/oidc/{connection_id}/callback       public
 GET    /t/{slug}/bootstrap                           public
+POST   /public/t/{slug}/claim/start                  public  # issue #69: the guest's claim, by link token, cookie and key proof
+POST   /public/t/{slug}/claim/verify/send            public
+POST   /public/t/{slug}/claim/verify/check           public
+GET    /public/t/{slug}/claim/status                 public
+POST   /public/t/{slug}/claim/existing-account       public
+POST   /public/t/{slug}/claim/credential             public
+POST   /public/t/{slug}/claim/resend                 public
 GET    /api/auth/dev-login                           public
 POST   /api/auth/dev-login                           public
 `

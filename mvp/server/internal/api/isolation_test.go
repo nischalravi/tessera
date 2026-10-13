@@ -143,6 +143,10 @@ var crossTenantCases = map[string]crossTenantCase{
 		}},
 	"POST add affiliation": {method: "POST", path: pathf("/api/identities/%d/affiliations"), key: "alice",
 		body: func(int64) string { return `{"type":"alum","reason":"x"}` }},
+	"POST resend invitation": {method: "POST", path: pathf("/api/guests/%d/resend-invitation"), key: "alice",
+		body: func(int64) string { return `{}` }},
+	"POST revoke invitation": {method: "POST", path: pathf("/api/guests/%d/revoke-invitation"), key: "alice",
+		body: func(int64) string { return `{}` }},
 }
 
 // routeParamKey maps each route with path parameters to the cases above.
@@ -158,6 +162,8 @@ var routeParamCases = map[string][]string{
 	"POST /api/jit/requests/{request_id}/revoke":          {"POST jit revoke"},
 	"PUT /api/catalog/items/{group_id}":                   {"PUT catalog item"},
 	"GET /api/identities/{identity_id}/lifecycle":         {"GET lifecycle"},
+	"POST /api/guests/{identity_id}/resend-invitation":    {"POST resend invitation"},
+	"POST /api/guests/{identity_id}/revoke-invitation":    {"POST revoke invitation"},
 	"PUT /api/identities/{identity_id}/lifecycle":         {"PUT lifecycle"},
 	"POST /api/identities/{identity_id}/lifecycle/extend": {"POST lifecycle extend"},
 	"POST /api/accounts/{account_id}/link":                {"POST link account"},
@@ -216,6 +222,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		}
 		if rt.Pattern == "/api/auth/oidc/{connection_id}/callback" || rt.Pattern == "/t/{slug}/bootstrap" {
 			continue // TestIsolation_LoginCrossTenant (public; the tenant comes from the cookie or the slug)
+		}
+		if strings.HasPrefix(rt.Pattern, "/public/t/{slug}/claim/") {
+			continue // TestClaim_SessionIsPerTenant (public; the tenant comes from the slug)
 		}
 		if rt.Pattern == "/api/auth/sessions/{session_id}" {
 			continue // TestIsolation_SessionCookieScoped (a UUID, not a fixture id)

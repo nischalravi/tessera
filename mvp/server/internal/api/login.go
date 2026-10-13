@@ -519,7 +519,7 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request, p *params)
 		if reason == "idp_error" {
 			extra = append(extra, ojson.KV{Key: "idp_error", Value: truncate(q.Get("error"), 64)})
 		}
-		return s.loginFailure(w, r, tid, reason, extra)
+		return s.callbackFailure(w, r, txn, tid, reason, extra)
 	}
 	rc, err := s.rpConnection(tid, conn)
 	if err != nil {
@@ -533,7 +533,7 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request, p *params)
 		RedirectURI: s.redirectURI(conn.ID), Verifier: string(verifier), Nonce: deref(txn.Nonce), MaxAge: txn.MaxAge})
 	if err != nil {
 		s.log.Info("OIDC callback refused", "err", err, "request_id", audit.RequestID(ctx))
-		return s.loginFailure(w, r, tid, oidcrp.ReasonOf(err), ojson.Object{{Key: "login_transaction_id", Value: txnID.String()}})
+		return s.callbackFailure(w, r, txn, tid, oidcrp.ReasonOf(err), ojson.Object{{Key: "login_transaction_id", Value: txnID.String()}})
 	}
 	mapping, err := authnorm.ParseMapping(conn.AuthnMapping)
 	if err != nil {
@@ -546,7 +546,10 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request, p *params)
 		authnorm.Claims{Subject: tok.Subject, ACR: tok.ACR, AMR: tok.AMR, ACRS: tok.ACRS, TID: tok.TID, OID: tok.OID,
 			AuthTime: &at, Raw: tok.Raw})
 	if err != nil {
-		return s.loginFailure(w, r, tid, "normalization_failed", ojson.Object{{Key: "error", Value: err.Error()}})
+		return s.callbackFailure(w, r, txn, tid, "normalization_failed", ojson.Object{{Key: "error", Value: err.Error()}})
+	}
+	if txn.Purpose == "claim" {
+		return s.finishClaim(w, r, tenant, conn, txn, tok, res)
 	}
 	return s.finishOIDCLogin(w, r, tenant, conn, txn, tok, res)
 }
