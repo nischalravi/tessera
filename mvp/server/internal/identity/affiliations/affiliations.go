@@ -287,6 +287,10 @@ func End(c *store.TenantTx, id, reason, by string, now time.Time) (*store.Affili
 	if a.Status != store.AffPending && a.Status != store.AffActive {
 		return nil, refuse(http.StatusConflict, "already_ended", "this affiliation has already ended")
 	}
+	if !has(manualTypes, a.Type) {
+		return nil, refuse(http.StatusUnprocessableEntity, "type_not_manual",
+			a.Type+" affiliations end in the HR or student system, not by an administrator")
+	}
 	status, end := store.AffEnded, now
 	if a.StartsAt.After(now) {
 		status, end = store.AffRevoked, a.StartsAt

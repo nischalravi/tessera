@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
@@ -128,8 +129,16 @@ func TestAffiliationsAPI_DerivedStateAndMerged(t *testing.T) {
 	if len(v.Affiliations) != 1 || v.LifecycleState != "active" {
 		t.Fatalf("bob: %+v", v)
 	}
-	if rec := corrDo(h, l, "POST", "/api/affiliations/"+v.Affiliations[0].ID+"/end", `{"reason":"left"}`); rec.Code != 200 {
-		t.Fatalf("end: %d %s", rec.Code, rec.Body)
+	// bob's only affiliation is from the HR feed: an administrator may not end it
+	hr := v.Affiliations[0].ID
+	if rec := corrDo(h, l, "POST", "/api/affiliations/"+hr+"/end", `{"reason":"left"}`); rec.Code != 422 || !strings.Contains(rec.Body.String(), "type_not_manual") {
+		t.Fatalf("end HR affiliation: %d %s", rec.Code, rec.Body)
+	}
+	// the HR feed ends it (GU-4 will do this through ingest)
+	if err := f.DB.InTenant(context.Background(), f.B.ID, func(c *store.TenantTx) error {
+		return c.EndAffiliation(hr, store.AffEnded, storetest.Now, nil, "left")
+	}); err != nil {
+		t.Fatal(err)
 	}
 	if v := decodeAffs(t, corrDo(h, l, "GET", path, "")); v.LifecycleState != "expired" {
 		t.Errorf("after ending the last affiliation: %s", v.LifecycleState)

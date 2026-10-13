@@ -75,7 +75,9 @@ export const IDENTIFIER_LABEL: Record<string, string> = {
 };
 
 /** A pending or running affiliation can be ended; ended and revoked ones are history. */
-export const canEnd = (a: Pick<Affiliation, "status">) => a.status === "pending" || a.status === "active";
+/** An administrator may end only the relationships they may add; HR and student ones end at the source. */
+export const canEnd = (a: Pick<Affiliation, "status" | "type">) =>
+  (a.status === "pending" || a.status === "active") && MANUAL_TYPES.includes(a.type);
 
 /** A date input value (YYYY-MM-DD) as the end of that day in UTC, or undefined when empty or invalid. */
 export function endOfDayUtc(day: string): string | undefined {

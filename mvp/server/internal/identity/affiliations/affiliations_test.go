@@ -217,6 +217,15 @@ func TestEnd(t *testing.T) {
 		if _, err := affiliations.End(c, "00000000-0000-4000-8000-00000000dead", "x", by, now); code(err) != "not_found" {
 			t.Errorf("End unknown = %v", err)
 		}
+		// an HR affiliation ends in the HR system: an administrator may not end it
+		hr := &store.Affiliation{ID: "00000000-0000-4000-8000-0000000000e1", IdentityID: f.B.IDs["alice"], Type: store.AffEmployee,
+			Source: store.AffSourceHRIS, StartsAt: now.AddDate(-1, 0, 0), Status: store.AffActive, CreatedAt: now}
+		if err := c.InsertAffiliation(hr); err != nil {
+			return err
+		}
+		if _, err := affiliations.End(c, hr.ID, "left", by, now); code(err) != "type_not_manual" {
+			t.Errorf("End HR employee = %v, want type_not_manual", err)
+		}
 		return nil
 	})
 	// an ended affiliation is history: the table refuses to change it

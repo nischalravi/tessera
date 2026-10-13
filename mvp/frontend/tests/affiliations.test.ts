@@ -53,9 +53,12 @@ test("end dates: required for guest types, in the future, as end of day UTC", ()
   assert.equal(model.addProblem("contractor", "2026-11-01", "vendor project", now), null);
 });
 
-test("only pending and running affiliations can be ended", () => {
-  assert.equal(model.canEnd({ status: "pending" }), true);
-  assert.equal(model.canEnd({ status: "active" }), true);
-  assert.equal(model.canEnd({ status: "ended" }), false);
-  assert.equal(model.canEnd({ status: "revoked" }), false);
+test("only pending and running affiliations an administrator may add can be ended", () => {
+  assert.equal(model.canEnd({ status: "pending", type: "contractor" }), true);
+  assert.equal(model.canEnd({ status: "active", type: "guest_visitor" }), true);
+  assert.equal(model.canEnd({ status: "ended", type: "contractor" }), false);
+  assert.equal(model.canEnd({ status: "revoked", type: "contractor" }), false);
+  // HR and student relationships end at the source
+  assert.equal(model.canEnd({ status: "active", type: "employee" }), false);
+  assert.equal(model.canEnd({ status: "active", type: "student" }), false);
 });
