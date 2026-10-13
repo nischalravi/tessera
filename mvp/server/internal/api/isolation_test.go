@@ -214,6 +214,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if strings.HasPrefix(rt.Pattern, "/api/email/messages/{message_id}") {
 			continue // TestEmailAPI_CrossTenant (a UUID, not a fixture id)
 		}
+		if rt.Pattern == "/api/auth/oidc/{connection_id}/callback" || rt.Pattern == "/t/{slug}/bootstrap" {
+			continue // TestIsolation_LoginCrossTenant (public; the tenant comes from the cookie or the slug)
+		}
 		if rt.Pattern == "/api/auth/sessions/{session_id}" {
 			continue // TestIsolation_SessionCookieScoped (a UUID, not a fixture id)
 		}

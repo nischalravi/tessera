@@ -1,3 +1,7 @@
 GET /api/health
 GET /api/auth/dev-login
 POST /api/auth/dev-login
+GET /api/auth/discover
+GET /api/auth/login
+GET /api/auth/oidc/{connection_id}/callback
+GET /t/{slug}/bootstrap

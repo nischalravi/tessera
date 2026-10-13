@@ -709,16 +709,16 @@ func (s *SystemTx) lookup(st lstmt, hash string) (tenancy.ID, uuid.UUID, error) 
 
 const txnCols = `t.id, t.tenant_id, t.cookie_hash, t.idp_connection_id, t.purpose, t.state_hash, t.nonce,
 	t.pkce_verifier_enc, t.saml_request_id, t.required_tessera_acr, t.max_age, t.session_id,
-	t.expected_external_login_id, t.return_to, t.created_at, t.expires_at, t.consumed_at`
+	t.expected_external_login_id, t.bootstrap_invitation_id, t.return_to, t.created_at, t.expires_at, t.consumed_at`
 
 var (
 	txnInsert = tq("login_transactions.insert", `
 		INSERT INTO login_transactions (id, tenant_id, cookie_hash, idp_connection_id, purpose, state_hash, nonce,
 			pkce_verifier_enc, saml_request_id, required_tessera_acr, max_age, session_id, expected_external_login_id,
-			return_to, created_at, expires_at)
+			bootstrap_invitation_id, return_to, created_at, expires_at)
 		VALUES (@id, @tenant, @cookie_hash, @idp_connection_id, @purpose, @state_hash, @nonce,
 			@pkce_verifier_enc, @saml_request_id, @required_tessera_acr, @max_age, @session_id, @expected_external_login_id,
-			@return_to, @created_at, @expires_at)`)
+			@bootstrap_invitation_id, @return_to, @created_at, @expires_at)`)
 	txnGet = tq("login_transactions.get", `
 		SELECT `+txnCols+` FROM login_transactions t WHERE t.tenant_id = @tenant AND t.id = @id`)
 	// single use: only an unconsumed, unexpired transaction can be consumed
@@ -732,10 +732,10 @@ var (
 func scanTxn(s scanner) (*LoginTransaction, error) {
 	var x LoginTransaction
 	var id, tid, conn, created, expires string
-	var state, nonce, samlID, acr, sid, ext, consumed sql.NullString
+	var state, nonce, samlID, acr, sid, ext, inv, consumed sql.NullString
 	var maxAge sql.NullInt64
 	if err := s.Scan(&id, &tid, &x.CookieHash, &conn, &x.Purpose, &state, &nonce, &x.PKCEVerifierEnc, &samlID, &acr,
-		&maxAge, &sid, &ext, &x.ReturnTo, &created, &expires, &consumed); err != nil {
+		&maxAge, &sid, &ext, &inv, &x.ReturnTo, &created, &expires, &consumed); err != nil {
 		return nil, err
 	}
 	var err error
@@ -751,7 +751,7 @@ func scanTxn(s scanner) (*LoginTransaction, error) {
 	for _, p := range []struct {
 		dst **uuid.UUID
 		src sql.NullString
-	}{{&x.SessionID, sid}, {&x.ExpectedExternalLoginID, ext}} {
+	}{{&x.SessionID, sid}, {&x.ExpectedExternalLoginID, ext}, {&x.BootstrapInvitationID, inv}} {
 		if p.src.Valid {
 			u, err := uuid.Parse(p.src.String)
 			if err != nil {
@@ -827,6 +827,7 @@ func (tx *TenantTx) InsertLoginTransaction(x *LoginTransaction) error {
 		sql.Named("required_tessera_acr", SP(x.RequiredTesseraACR)), sql.Named("max_age", IP(x.MaxAge)),
 		sql.Named("session_id", uuidOrNil(x.SessionID)),
 		sql.Named("expected_external_login_id", uuidOrNil(x.ExpectedExternalLoginID)),
+		sql.Named("bootstrap_invitation_id", uuidOrNil(x.BootstrapInvitationID)),
 		sql.Named("return_to", x.ReturnTo), sql.Named("created_at", RT(x.CreatedAt)),
 		sql.Named("expires_at", RT(x.ExpiresAt)))
 	if isUnique(err) {
