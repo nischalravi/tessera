@@ -47,6 +47,10 @@ const (
 	KindJITExpiring       = "jit.expiring"
 	KindAccessEnding      = "access.ending" // an identity's or grant's end date is near (#159)
 	KindSecurityAlert     = "security.alert"
+	// guest sponsorships (#65)
+	KindSponsorshipApproval = "sponsorship.approval_needed"
+	KindSponsorshipDecided  = "sponsorship.decided"
+	KindSponsorshipTransfer = "sponsorship.transfer"
 	// KindDigest is the daily digest email itself. Users do not choose it.
 	KindDigest = "digest"
 )
@@ -89,6 +93,9 @@ var Kinds = []Kind{
 	{KindJITDenied, "Just-in-time access denied", "A just-in-time request was denied.", false, ChannelInApp},
 	{KindJITExpiring, "Just-in-time access ending", "Time-bound access ends within the hour.", false, ChannelInApp},
 	{KindAccessEnding, "End date approaching", "An identity's or grant's end date is near.", false, ChannelInApp},
+	{KindSponsorshipApproval, "Sponsorship approval needed", "A guest sponsorship is waiting for a second approver.", false, ChannelBoth},
+	{KindSponsorshipDecided, "Sponsorship decided", "A sponsorship you made was approved or rejected.", false, ChannelInApp},
+	{KindSponsorshipTransfer, "Sponsorship transfer requested", "Someone asked you to take over sponsoring a guest.", false, ChannelBoth},
 	{KindSecurityAlert, "Security alerts", "Security-relevant changes. These cannot be turned off.", true, ChannelBoth},
 }
 

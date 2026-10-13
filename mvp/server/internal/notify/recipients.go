@@ -70,11 +70,11 @@ func identityUsers(tx *store.TenantTx, identityID int64) ([]string, error) {
 	return tx.UsersLinkedTo(identityID)
 }
 
-// deciderRoles are the roles whose permissions include requests.decide.
-func deciderRoles() []string {
+// rolesWith are the roles whose permissions include p.
+func rolesWith(p auth.Permission) []string {
 	var out []string
 	for _, r := range auth.AllRoles() {
-		if slices.Contains(auth.RolePermissions(r), auth.PermRequestsDecide) {
+		if slices.Contains(auth.RolePermissions(r), p) {
 			out = append(out, string(r))
 		}
 	}
@@ -84,11 +84,17 @@ func deciderRoles() []string {
 // Deciders returns the recipients for every active user who holds
 // requests.decide through an unexpired role.
 func Deciders(tx *store.TenantTx, now time.Time) ([]Recipient, error) {
+	return Holders(tx, now, auth.PermRequestsDecide)
+}
+
+// Holders returns the recipients for every active user who holds permission
+// p through an unexpired role.
+func Holders(tx *store.TenantTx, now time.Time, p auth.Permission) ([]Recipient, error) {
 	roles, err := tx.ActiveUserRoles(now)
 	if err != nil {
 		return nil, err
 	}
-	want := deciderRoles()
+	want := rolesWith(p)
 	var out []Recipient
 	seen := map[string]bool{}
 	for _, ur := range roles {

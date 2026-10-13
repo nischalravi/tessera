@@ -88,6 +88,16 @@ func has(list []string, s string) bool {
 // ValidType reports whether t is an affiliation type.
 func ValidType(t string) bool { return has(Types, t) }
 
+// MaxDurationDays is the longest a relationship of type t may run when its
+// population allows populationMax days: some types are capped lower (a
+// visitor, 30 days).
+func MaxDurationDays(t string, populationMax int) int {
+	if m, ok := typeMaxDays[t]; ok && m < populationMax {
+		return m
+	}
+	return populationMax
+}
+
 // PopulationFor is the population key whose limits apply to a type ("" for
 // types that have none).
 func PopulationFor(t string) string { return populationOf[t] }
@@ -253,11 +263,7 @@ func Add(c *store.TenantTx, in AddInput, now time.Time) (*store.Affiliation, err
 			return nil, err
 		}
 		if ends != nil {
-			days := p.MaxDurationDays
-			if m, ok := typeMaxDays[in.Type]; ok && m < days {
-				days = m
-			}
-			if ends.After(starts.AddDate(0, 0, days)) {
+			if ends.After(starts.AddDate(0, 0, MaxDurationDays(in.Type, p.MaxDurationDays))) {
 				return nil, refuse(http.StatusUnprocessableEntity, "exceeds_maximum", "the end is later than the maximum duration allowed for this population")
 			}
 		}
@@ -305,4 +311,83 @@ func End(c *store.TenantTx, id, reason, by string, now time.Time) (*store.Affili
 		return nil, err
 	}
 	return c.Affiliation(id)
+}
+
+// SponsoredInput is the relationship a sponsorship grants (issue #65).
+type SponsoredInput struct {
+	IdentityID    int64
+	Type          string // a type with a population: contractor, guest_visitor, volunteer, partner
+	SponsorshipID string
+	OrgUnit       string
+	StartsAt      time.Time
+	EndsAt        time.Time
+	By            string // the signed-in user's id
+}
+
+// AddSponsored records the affiliation of an activated sponsorship (source
+// 'sponsorship', source_ref the sponsorship). It stays pending until the
+// guest's claim completes (GU-6). The sponsorship's policy has already bounded
+// the dates, so only the shape is checked here.
+func AddSponsored(c *store.TenantTx, in SponsoredInput, now time.Time) (*store.Affiliation, error) {
+	pop := PopulationFor(in.Type)
+	if !has(needsEnd, in.Type) || pop == "" || in.SponsorshipID == "" {
+		return nil, refuse(http.StatusUnprocessableEntity, "invalid_type", "a sponsorship grants a contractor, visitor, volunteer or partner affiliation")
+	}
+	if !in.EndsAt.After(in.StartsAt) {
+		return nil, refuse(http.StatusUnprocessableEntity, "invalid_end", "the end must be after the start")
+	}
+	ends, ref := in.EndsAt.UTC(), in.SponsorshipID
+	a := &store.Affiliation{ID: uuid.NewString(), IdentityID: in.IdentityID, Type: in.Type, Source: store.AffSourceSponsorship,
+		SourceRef: &ref, Population: &pop, StartsAt: in.StartsAt.UTC(), EndsAt: &ends, Status: store.AffPending, CreatedAt: now}
+	if u := strings.TrimSpace(in.OrgUnit); u != "" && utf8.RuneCountInString(u) <= MaxOrgUnit {
+		a.OrgUnit = &u
+	}
+	if in.By != "" {
+		by := in.By
+		a.CreatedBy = &by
+	}
+	return a, c.InsertAffiliation(a)
+}
+
+// ForSponsorship returns the affiliation a sponsorship wrote, or nil.
+func ForSponsorship(c *store.TenantTx, identityID int64, sponsorshipID string) (*store.Affiliation, error) {
+	affs, err := c.AffiliationsFor(identityID)
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range affs {
+		if a.Source == store.AffSourceSponsorship && a.SourceRef != nil && *a.SourceRef == sponsorshipID {
+			return a, nil
+		}
+	}
+	return nil, nil
+}
+
+// EndSponsored ends the affiliation of a sponsorship now (revoked if it never
+// started). It does nothing when there is none or it has ended already.
+func EndSponsored(c *store.TenantTx, identityID int64, sponsorshipID, reason, by string, now time.Time) error {
+	a, err := ForSponsorship(c, identityID, sponsorshipID)
+	if err != nil || a == nil || (a.Status != store.AffPending && a.Status != store.AffActive) {
+		return err
+	}
+	status, end := store.AffEnded, now
+	if a.StartsAt.After(now) {
+		status, end = store.AffRevoked, a.StartsAt
+	} else if a.EndsAt != nil && a.EndsAt.Before(end) {
+		end = *a.EndsAt
+	}
+	var byp *string
+	if by != "" {
+		byp = &by
+	}
+	return c.EndAffiliation(a.ID, status, end, byp, reason)
+}
+
+// MoveSponsoredEnd moves the planned end of a sponsorship's affiliation (a renewal).
+func MoveSponsoredEnd(c *store.TenantTx, identityID int64, sponsorshipID string, to time.Time) error {
+	a, err := ForSponsorship(c, identityID, sponsorshipID)
+	if err != nil || a == nil {
+		return err
+	}
+	return c.SetAffiliationEnd(a.ID, to.UTC())
 }

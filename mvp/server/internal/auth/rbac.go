@@ -82,6 +82,12 @@ const (
 	PermRolesManage Permission = "roles.manage"
 	// identity lifecycle (issue #159)
 	PermLifecycleManage Permission = "lifecycle.manage"
+	// guest sponsorships (issue #65): guests.sponsor is anyone who may attempt
+	// to sponsor (the sponsor policy decides eligibility), guests.read sees every
+	// guest, sponsorships.approve is the second approver.
+	PermGuestsSponsor       Permission = "guests.sponsor"
+	PermGuestsRead          Permission = "guests.read"
+	PermSponsorshipsApprove Permission = "sponsorships.approve"
 	// email delivery log (issue #189)
 	PermEmailRead   Permission = "email.read"
 	PermEmailManage Permission = "email.manage"
@@ -93,17 +99,20 @@ const (
 // Everyone but break-glass may request access for themselves; operators
 // and policy admins may also request for others and decide (issue #164).
 var rolePermissions = map[Role][]Permission{
-	RoleViewer: {PermGraphRead, PermRequestsCreate},
+	RoleViewer: {PermGraphRead, PermRequestsCreate, PermGuestsSponsor},
 	RoleOperator: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
-		PermReviewsDecide, PermHRISSimulateEvent, PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide},
-	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead, PermRequestsCreate, PermEmailRead},
+		PermReviewsDecide, PermHRISSimulateEvent, PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide,
+		PermGuestsSponsor, PermGuestsRead},
+	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead, PermRequestsCreate, PermEmailRead,
+		PermGuestsSponsor, PermGuestsRead},
 	RolePolicyAdmin: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
 		PermReviewsDecide, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
 		PermIdentitiesCorrelate, PermIdentitiesMerge, PermIdentitiesAffiliate,
-		PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide, PermCatalogManage, PermRolesManage, PermLifecycleManage},
+		PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide, PermCatalogManage, PermRolesManage, PermLifecycleManage,
+		PermGuestsSponsor, PermGuestsRead, PermSponsorshipsApprove},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
-		PermConnectionsActivate, PermRequestsCreate, PermEmailRead, PermEmailManage},
+		PermConnectionsActivate, PermRequestsCreate, PermEmailRead, PermEmailManage, PermGuestsSponsor, PermGuestsRead},
 	RoleBreakGlass: {PermAdminRead, PermBreakGlassRecover},
 }
 

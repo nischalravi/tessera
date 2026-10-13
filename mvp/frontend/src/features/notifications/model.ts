@@ -38,5 +38,8 @@ export const KIND_LABEL: Record<string, string> = {
   "jit.denied": "Just-in-time",
   "jit.expiring": "Just-in-time",
   "access.ending": "End date",
+  "sponsorship.approval_needed": "Sponsorship approval",
+  "sponsorship.decided": "Sponsorship decided",
+  "sponsorship.transfer": "Sponsorship transfer",
   "security.alert": "Security alert",
 };
