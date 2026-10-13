@@ -28,6 +28,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/credential"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/sponsorship"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
+	"github.com/nischalravi/tessera/mvp/server/internal/identity/match"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/lifecycle"
@@ -203,6 +204,9 @@ func New(cfg Config) *Server {
 	s := &Server{cfg: cfg, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
 		limits: newLimiters(cfg.RateLimits)}
 	s.guests = sponsorship.New(cfg.Identifiers)
+	if cfg.Identifiers != nil {
+		s.guests.Matcher = match.New(cfg.Identifiers)
+	}
 	s.claimLim = newClaimLimits()
 	if cfg.Identifiers != nil && cfg.PublicURL != "" {
 		if cfg.Secrets == nil {
@@ -226,6 +230,7 @@ func New(cfg Config) *Server {
 	s.registerRoutes()
 	s.registerAuditRoutes()
 	s.registerCorrelationRoutes()
+	s.registerMatchingRoutes()
 	s.registerAffiliationRoutes()
 	s.registerRequestRoutes()
 	s.registerRoleRoutes()

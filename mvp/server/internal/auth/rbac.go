@@ -71,6 +71,11 @@ const (
 	// account correlation (issue #160)
 	PermIdentitiesCorrelate Permission = "identities.correlate"
 	PermIdentitiesMerge     Permission = "identities.merge"
+	// identity matching (guest accounts design §5, issue #68): the review queue,
+	// the matching settings, and the TAP ID Match-compatible endpoint
+	PermIdentityMatchesReview Permission = "identity_matches.review"
+	PermMatchingConfigure     Permission = "matching.configure"
+	PermIDMatchQuery          Permission = "idmatch.query"
 	// affiliations of a person (guest accounts design, issue #64)
 	PermIdentitiesAffiliate Permission = "identities.affiliate"
 	// access requests (issue #164)
@@ -117,6 +122,7 @@ var rolePermissions = map[Role][]Permission{
 	RolePolicyAdmin: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
 		PermReviewsDecide, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
 		PermIdentitiesCorrelate, PermIdentitiesMerge, PermIdentitiesAffiliate,
+		PermIdentityMatchesReview, PermMatchingConfigure, PermIDMatchQuery,
 		PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide, PermCatalogManage, PermRolesManage, PermLifecycleManage,
 		PermGuestsSponsor, PermGuestsRead, PermSponsorshipsApprove, PermJobsRead, PermProvisioningRead, PermProvisioningManage},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
@@ -206,7 +212,8 @@ var scopePermissions = map[Scope][]Permission{
 	ScopeRead: {PermGraphRead, PermConnectionsRead, PermJobsRead, PermProvisioningRead},
 	ScopeWrite: {PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage, PermReviewsDecide,
 		PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
-		PermConnectionsManage, PermConnectionsActivate, PermRolesManage, PermLifecycleManage, PermProvisioningManage},
+		PermConnectionsManage, PermConnectionsActivate, PermRolesManage, PermLifecycleManage, PermProvisioningManage,
+		PermIDMatchQuery},
 	ScopeAudit: {PermAuditRead, PermAuditVerify},
 	ScopeAdmin: {PermEmailRead, PermEmailManage, PermAdminRead, PermAdminChangeReq, PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev,
 		PermBreakGlassRecover},

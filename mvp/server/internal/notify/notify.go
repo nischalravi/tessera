@@ -51,7 +51,8 @@ const (
 	KindSponsorshipApproval = "sponsorship.approval_needed"
 	KindSponsorshipDecided  = "sponsorship.decided"
 	KindSponsorshipTransfer = "sponsorship.transfer"
-	KindGuestClaimed        = "guest.claimed" // a guest you sponsor finished their claim (#69)
+	KindGuestClaimed        = "guest.claimed"           // a guest you sponsor finished their claim (#69)
+	KindMergeApproval       = "identity.merge_approval" // a merge or reviewer link waits for a second reviewer (#68)
 	// KindDigest is the daily digest email itself. Users do not choose it.
 	KindDigest = "digest"
 	// The guest claim's two emails (#69): the invitation with the claim link
@@ -104,6 +105,7 @@ var Kinds = []Kind{
 	{KindSponsorshipDecided, "Sponsorship decided", "A sponsorship you made was approved or rejected.", false, ChannelInApp},
 	{KindSponsorshipTransfer, "Sponsorship transfer requested", "Someone asked you to take over sponsoring a guest.", false, ChannelBoth},
 	{KindGuestClaimed, "Guest set up their sign-in", "A guest you invited accepted the invitation and set up their sign-in.", false, ChannelInApp},
+	{KindMergeApproval, "Identity merge needs a reviewer", "A merge or link of two people waits for a second reviewer.", false, ChannelBoth},
 	{KindSecurityAlert, "Security alerts", "Security-relevant changes. These cannot be turned off.", true, ChannelBoth},
 }
 

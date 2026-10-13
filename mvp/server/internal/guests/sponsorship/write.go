@@ -10,6 +10,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/access"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/affiliations"
+	"github.com/nischalravi/tessera/mvp/server/internal/identity/match"
 	"github.com/nischalravi/tessera/mvp/server/internal/lifecycle"
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -43,10 +44,10 @@ func (s *Service) Invite(tx *store.TenantTx, by Actor, in Invite, channel, batch
 	if !p.Decision.Allowed {
 		return nil, refusal(p.Decision)
 	}
-	return s.writeInvite(tx, by, p, channel, batch, now)
+	return s.writeInvite(tx, by, p, channel, batch, nil, now)
 }
 
-func (s *Service) writeInvite(tx *store.TenantTx, by Actor, p *Plan, channel, batch string, now time.Time) (*Result, error) {
+func (s *Service) writeInvite(tx *store.TenantTx, by Actor, p *Plan, channel, batch string, pool *match.Pool, now time.Time) (*Result, error) {
 	if s.Keyer == nil {
 		return nil, errors.New("sponsorship: no identifier key")
 	}
@@ -98,6 +99,14 @@ func (s *Service) writeInvite(tx *store.TenantTx, by Actor, p *Plan, channel, ba
 	ss, err := s.create(tx, by, sp, guest, p, intakeID, now)
 	if err != nil {
 		return nil, err
+	}
+	// is the invited person someone we know? A self-asserted intake only ever
+	// raises a flag for the review queue; the sponsor is told nothing (K3)
+	if s.Matcher != nil {
+		if _, err := s.Matcher.Run(tx, pool, intakeID, match.Subject{Mode: match.SelfAsserted, Given: p.Given, Family: p.Family,
+			Emails: []string{p.Email}, SOR: SourceSor, SORID: intakeID, Exclude: guestID}, now); err != nil {
+			return nil, err
+		}
 	}
 	return &Result{Sponsorship: ss, Guest: guest, Decision: p.Decision}, nil
 }
