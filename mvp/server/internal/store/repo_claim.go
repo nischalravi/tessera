@@ -74,6 +74,7 @@ type ConfirmationCode struct {
 	VoidedAt        *time.Time
 }
 
+// #nosec G101 -- a column list (token_hash is a hash column name), not a credential
 const claimTokenCols = `t.id, t.intake_id, t.identity_id, t.kind, t.purpose, t.token_hash, t.email_hmac, t.failed_attempts,
 	t.status, t.not_before, t.expires_at, t.consumed_at, t.created_at`
 

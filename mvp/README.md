@@ -179,6 +179,9 @@ The routes are documented at `/api/readiness/openapi.json`.
 `POST /api/guests/invitations` · `POST /api/guests/invitations/bulk {csv, dry_run}` ·
 `GET /api/guests[?sponsor=me|all&state=&population=]` · `GET /api/sponsorships/approvals` · `GET /api/sponsorships/{id}` ·
 `POST /api/sponsorships/{id}/approve|reject|renew|end|transfer|accept-transfer` ·
+`POST /api/guests/{identity_id}/resend-invitation|revoke-invitation` ·
+`POST /public/t/{slug}/claim/start|verify/send|verify/check|existing-account|credential|resend` ·
+`GET /public/t/{slug}/claim/status` (public: the guest's claim, see Guest claim) ·
 `GET /api/approvals/inbox` · `GET /api/approvals/delegates` · `GET|POST /api/approvals/delegations` ·
 `POST /api/approvals/delegations/{id}/revoke` ·
 `GET /api/notifications[?unread=1&limit=]` · `POST /api/notifications/read {ids}|{all:true}` ·
@@ -419,11 +422,110 @@ the sponsor's decision (who, purpose, population, access bundle, term, who appro
   (policy admin). Every change needs a fresh phishing-resistant sign-in. A sponsorship someone may
   not see answers `404`. Audit actions: `sponsorship.create|approve|reject|renew|end|transfer|accept_transfer|expire|transfer_expire|bulk_invite|bulk_preview`.
 
-Not yet: the claim link and the guest's invitation email (GU-6; the intake's `invitation_status`
-stays `ready`), granting the bundle (GU-12), sponsor-leaver transfer from JML events and the
-transfer task in the Inbox (GU-11), self-registration (GU-3), resend and revoke invitation, and
-per-tenant sponsor policy editing. After pulling this change run `./run.sh --reseed`: it adds three
-tables and widens the lifecycle `source` check.
+Not yet: granting the bundle (GU-12), sponsor-leaver transfer from JML events and the transfer task
+in the Inbox (GU-11), self-registration (GU-3), and per-tenant sponsor policy editing. The invitation's
+claim link, email, resend and revoke are in "Guest claim" below.
+
+### Guest claim
+
+Issue #69 (GU-6; design `docs/design/guest-accounts-and-claim.md` §6, §7.1, §9.2, §10). A guest turns
+an invitation into a sign-in. Code: `internal/guests/claim` (links, sessions, codes, completion),
+`internal/guests/credential` (the credential authority), `internal/api/claim*.go`, schema
+`0228_claim.sql`, the page `frontend/src/public/claim/`. This branch merges #10's OIDC sign-in, whose
+callback the claim reuses.
+
+**Flow.** When a sponsorship becomes active (made without approval, or approved) Tessera issues a
+claim link and emails it through the notification outbox (so it shows in Admin → Email delivery);
+resend and revoke are `POST /api/guests/{identity_id}/resend-invitation|revoke-invitation` (the
+sponsor or a holder of `sponsorships.approve`, fresh phishing-resistant sign-in) and buttons in the
+Guests I sponsor side panel. The intake's `invitation_status` goes `ready` (nothing sent: the claim
+needs `TESSERA_PUBLIC_URL` and the KEK) → `sent` → `claimed`, `revoked` or `expired` (a sweeper marks
+the last; the panel also reads an old link as expired at once; "Guest is setting up" is a link in use).
+The link is `<TESSERA_PUBLIC_URL>/claim#t=<43 characters>`. The page reads the token from the
+**fragment**, removes it with `history.replaceState`, and starts the claim:
+
+1. **start**: the token is exchanged once for a claim session (cookie `__Host-tessera_claim`; in the
+   dev insecure-cookie mode `tessera_claim`, like the login cookie), 60 minutes idle and 24 hours at most.
+2. **verify_contact**: a 6-digit code to the invited address (10 minutes, 5 tries, then void).
+3. **existing_account**: "Do you already have an account with the organization?", asked of every
+   claimant. "No" continues. "Yes" is recorded on the intake (`existing_account`, for the review
+   queue) and the guest is told an administrator will follow up. **It never links** (K3): matching
+   and linking are GU-5, whose seam is `claim.Service.OnExistingAccount`.
+4. **credential**: the guest is sent to the bound credential authority to sign in. The claim
+   completes only on a sign-in at the sponsorship's required AAL, as the account that was set up for
+   this claim, through that authority (§7.1): then identity `invited` → `active`, the sponsorship's
+   affiliation `pending` → `active`, the intake `claimed`, the sponsor told (`guest.claimed`), and a
+   **new platform user with no roles**, linked to the identity, whose external login is the
+   `(issuer, subject)` of that sign-in (never the email), exists. Tessera creates no session for it.
+5. With no authority configured (production today) the claim stops at step 4 with "your organization
+   will finish setting up your sign-in" and stays pending. An IAL above 0 (IDV, GU-7) stops at
+   `verify_identity`. The step list is `claim.Steps`; terms (GU-10) go in as another step.
+
+**Security properties.** The token is 256 bits from `crypto/rand`, stored only as
+`SHA-256("tessera-claim-v1|"+tenant+"|"+token)`, single use (one atomic `UPDATE … WHERE
+status='issued' AND expires_at>now`, checked by rows affected because the store's SQL lint forbids
+`RETURNING`), 7 days for visitors and 14 for the others (never past the sponsorship's end), bound to
+the intake and the invited address's tenant-keyed hash. A new invitation revokes the earlier tokens
+and open sessions of the intake. The token is never in a log, an audit event, a notification row, the
+delivery log (it never records bodies) or a URL path or query. It reaches the email without being
+stored: the notification row only says "send the invitation", and `notify.Secrets` (memory) hands the
+link line to the dispatcher at send time and forgets it when the message is final. A restart between
+queueing and sending loses it: the message becomes a dead letter with a clear error and the sponsor
+resends (the same goes for confirmation codes). Codes are stored as a keyed hash (HKDF from the KEK),
+compared in constant time.
+Unknown, malformed, expired, used and revoked tokens get an identical `200 {"next":"check_link"}` with
+identical headers after a 300 ms floor (a dummy hash comparison keeps the path alike); `claim.start.refused`
+records the real reason. `Referrer-Policy: no-referrer` and `Cache-Control: no-store` are on every
+response. **Key binding (T20, implemented)**: the page makes a WebCrypto ECDSA P-256 key,
+non-extractable, keeps it in IndexedDB and sends the public JWK with `start`. Every request carries
+`X-Claim-Proof: <unix seconds>.<base64url r||s>`, a signature over
+`"tessera-claim-proof-v1\n"+METHOD+"\n"+PATH+"\n"+seconds+"\n"+session nonce`; the server verifies it with
+`crypto/ecdsa`, accepts ±60 s and refuses a repeated signature, so a stolen cookie is useless (the
+path signed is the one the API sees: a reverse proxy must not rewrite it). Missing, bad, stale and
+replayed proofs get the same `401 {"error":"session_required"}` as no cookie at all and are audited
+as `claim.proof.rejected`. A session of one tenant is nothing at another.
+
+**Public routes** (`/public/t/{slug}/claim/…`, registered `noTenant` and public; each resolves the
+tenant from the slug, opens its own tenant transaction and writes its domain events in it; the
+`http.request` event goes to the tenant's chain as an anonymous caller):
+`POST start {token, key}` · `POST verify/send` · `POST verify/check {code}` · `GET status` (step, first
+name, organization, sponsor, population, end date, nothing else) · `POST existing-account {answer}` ·
+`POST credential` (answers `{redirect}`) · `POST resend {email}` ("If an invitation exists for this
+address, we have sent a new link."). The design's `GET credential/callback` is the existing
+`/api/auth/oidc/{connection_id}/callback` with the login purpose `claim`; it sends the browser back to
+`/claim?result=complete|failed`. The Vite dev server proxies `/public/t`.
+
+**Rate limits** (`internal/ratelimit`, in process, token buckets of N per window; throttles are
+audited as `claim.throttled` without a token or code): start 10 per IP per 10 minutes (client IP as
+the API's rate limiter, trusting `TESSERA_TRUSTED_PROXIES`) and 100 per tenant per minute (429; no
+bot challenge yet); verify/send 3 per session per 10 minutes, 5 per address per hour, 10 per day
+(the answer is the same when throttled); verify/check 5 tries per code; resend 3 per address per day.
+
+**Audit actions:** `claim.invitation.issue|revoke|expire`, `claim.start`, `claim.start.refused`,
+`claim.code.send|failed|locked`, `claim.verify_contact`, `claim.existing_account`,
+`claim.credential.start|pending|failed`, `claim.complete`, `claim.throttled`, `claim.proof.rejected`.
+
+**Dev completion path** (the only credential authority so far; GU-8 does the real ones): outside
+production with the dev IdP configured, `credential.DevIdP` registers the guest with the dev IdP over
+HTTP through `internal/safehttp` (loopback allowed in dev only) at the dev-only
+`POST <issuer>/_register` (client authentication as `tessera-dev`; only `guest-…` subjects; users.yaml
+users cannot be replaced) with a passkey, then the claim redirects to the normal OIDC sign-in with
+`login_hint` and `prompt=login`; the callback binds `guest-<id>`, which is the only sign-in it accepts.
+To try it: `./run.sh --reseed`; sign in at http://localhost:5173 as Pat (policy admin; his account is a
+Larkspur employee) and invite a guest at Access → Guests I sponsor; the dev mail sink
+(`server/var/dev-mail.jsonl`, written by the dispatcher within about 15 seconds) holds the email: open
+its `/claim#t=…` link, ask for a code (also in the sink), answer the question, choose "Continue to
+sign-in" and pick the passkey for the guest on the dev IdP page. Back on `/claim` the guest sees
+"You are all set"; the panel shows the invitation as claimed. Checked by hand: the page is plain HTML
+and CSS, no third-party scripts, works at 360 px; `npm test` covers its model and client, `go test
+./internal/api -run TestClaim` the API end to end.
+
+**Deferred:** matching and linking on "yes" (GU-5), identity verification and IAL above 0 (GU-7), real
+credential authorities, passwords, MFA enrolment, the Tessera-hosted service (GU-8), terms and
+consent, recovery (GU-10), SMS codes, claim codes for letters, a bot challenge, and shared (multi-node)
+rate-limit state. Parity fixtures are unchanged. After pulling this change run `./run.sh --reseed`:
+it adds the claim tables and three columns to `intake_records`, widens its `invitation_status` check
+and allows the login purpose `claim`.
 themselves. Not yet: provisioning into the target system (#103), business roles (#161).
 
 ### Notifications
@@ -681,8 +783,6 @@ balancer, list it in `TESSERA_TRUSTED_PROXIES` so the limit applies to the `X-Fo
 A tenant's `require_phr_for_all` setting (`tenants.settings`, §18.3) makes every role need a
 phishing-resistant sign-in in that tenant. Other session routes: `GET /api/auth/session`,
 `POST /api/auth/logout`, `GET /api/auth/sessions`, `DELETE /api/auth/sessions/{session_id}`.
-
-### Dev IdP
 
 ### Sign-in through the IdP (OIDC)
 

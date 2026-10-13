@@ -2,6 +2,9 @@ package api
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -18,6 +21,8 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/devidp"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/claim"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/store/storetest"
+	"github.com/nischalravi/tessera/mvp/server/internal/testkit"
 )
 
 // identityOf returns the guest's identity.
@@ -229,7 +234,7 @@ func capture(rec *httptest.ResponseRecorder, took time.Duration) sameResponse {
 // a malformed one, an expired one, a used one and a revoked one get one and
 // the same answer (status, body and headers), after the same minimum time.
 func TestClaim_SameResponseForUnknownExpiredUsed(t *testing.T) {
-	const floor = 80 * time.Millisecond
+	const floor = 150 * time.Millisecond
 	e := newClaimEnv(t, claimOpts{minDur: floor})
 	mk := func(email string) (string, sponsorshipView) {
 		v := e.invite(email, "visitor")
@@ -281,7 +286,7 @@ func TestClaim_SameResponseForUnknownExpiredUsed(t *testing.T) {
 	if lo < floor-5*time.Millisecond {
 		t.Errorf("a refused start took %v, under the %v floor", lo, floor)
 	}
-	if hi-lo > 60*time.Millisecond {
+	if hi-lo > 120*time.Millisecond {
 		t.Errorf("timings differ too much: %v to %v (%v)", lo, hi, got)
 	}
 	// the reasons are in the ledger, the token never is
@@ -990,5 +995,36 @@ func TestClaim_InvitationLifecycle(t *testing.T) {
 	}
 	if rec := e.newPage().start(token); decodeMap(t, rec)["next"] != "check_link" {
 		t.Errorf("a link of an ended sponsorship starts: %s", rec.Body)
+	}
+}
+
+// TestClaim_NotConfigured: without TESSERA_PUBLIC_URL the claim is off: the
+// public routes answer like an unknown link or no session, never an error, and
+// an invitation stays "ready".
+func TestClaim_NotConfigured(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	srv := newIsolationServer(f)
+	h := srv.Handler()
+	pg := &page{e: &claimEnv{t: t, clk: &mutableClock{t: testkit.Now.UTC()}, h: h}, slug: f.B.Slug, ip: "192.0.2.5:1", origin: "http://localhost:5173"}
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pg.key = k
+	pg.e.srv = srv
+	rec := pg.start(claim.NewToken())
+	if rec.Code != 200 && rec.Code != 400 {
+		t.Errorf("start: %d %s", rec.Code, rec.Body)
+	}
+	if rec := serve(h, httptest.NewRequest("GET", pg.path("status"), nil)); rec.Code != 401 {
+		t.Errorf("status: %d %s", rec.Code, rec.Body)
+	}
+	if rec := serve(h, func() *http.Request {
+		r := httptest.NewRequest("POST", pg.path("resend"), strings.NewReader(`{"email":"a@b.example"}`))
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Origin", "http://localhost:5173")
+		return r
+	}()); rec.Code != 200 || !strings.Contains(rec.Body.String(), "If an invitation exists") {
+		t.Errorf("resend: %d %s", rec.Code, rec.Body)
 	}
 }

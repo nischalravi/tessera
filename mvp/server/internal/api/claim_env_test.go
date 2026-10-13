@@ -279,6 +279,7 @@ type page struct {
 	nonce  string
 	slug   string
 	ip     string
+	origin string // default claimOrigin
 	// skew shifts the clock the page signs with
 	skew time.Duration
 }
@@ -288,7 +289,7 @@ func (e *claimEnv) newPage() *page {
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	return &page{e: e, key: k, slug: e.slug, ip: "192.0.2.10:4000"}
+	return &page{e: e, key: k, slug: e.slug, ip: "192.0.2.10:4000", origin: claimOrigin}
 }
 
 func (p *page) jwk() string {
@@ -323,7 +324,7 @@ func (p *page) req(method, rest, body string) *http.Request {
 	}
 	r.RemoteAddr = p.ip
 	if method != "GET" {
-		r.Header.Set("Origin", claimOrigin)
+		r.Header.Set("Origin", p.origin)
 	}
 	if p.cookie != nil {
 		r.AddCookie(p.cookie)
@@ -343,7 +344,7 @@ func (p *page) start(token string) *httptest.ResponseRecorder {
 	path := p.path("start")
 	r := httptest.NewRequest("POST", path, strings.NewReader(fmt.Sprintf(`{"token":%q,"key":%s}`, token, p.jwk())))
 	r.Header.Set("Content-Type", "application/json")
-	r.Header.Set("Origin", claimOrigin)
+	r.Header.Set("Origin", p.origin)
 	r.RemoteAddr = p.ip
 	r.Header.Set("X-Claim-Proof", p.proof("POST", path, ""))
 	rec := serve(p.e.h, r)

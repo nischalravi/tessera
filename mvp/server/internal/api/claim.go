@@ -332,9 +332,13 @@ func (s *Server) claimStart(w http.ResponseWriter, r *http.Request, p *params) (
 	if c.ok && !s.claimLim.startTenant.AllowAt(c.t.ID.String(), c.now) {
 		return s.claimThrottled(c, "start_tenant", time.Minute)
 	}
+	var replays *claim.Replays
+	if s.claimSvc != nil {
+		replays = s.claimSvc.Replays
+	}
 	pub, canonical, jkt, kerr := claim.ParseKey(b.Key)
 	if kerr != nil || len(b.Token) == 0 || len(b.Token) > 256 ||
-		claim.Verify(pub, r.Header.Get(claim.ProofHeader), r.Method, r.URL.Path, "", c.now, s.claimSvc.Replays) != nil {
+		claim.Verify(pub, r.Header.Get(claim.ProofHeader), r.Method, r.URL.Path, "", c.now, replays) != nil {
 		// a malformed request is refused before any token is touched, whatever the token is
 		return statusBody{http.StatusBadRequest, ojson.Object{{Key: "error", Value: "invalid_request"}}}, nil
 	}
