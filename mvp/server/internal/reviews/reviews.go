@@ -257,7 +257,7 @@ func Decide(c *store.TenantTx, now time.Time, itemID int64, decision, reviewer s
 	item.Decision, item.Comment, item.DecidedAt = &decision, comment, &now
 	if decision == "revoke" {
 		if e, err := c.EdgeBetween(item.EdgeSrc, item.EdgeDst); err == nil {
-			if err := c.DeleteEdge(e.ID); err != nil {
+			if err := c.RevokeEdge(e.ID, now, "review"); err != nil {
 				return nil, err
 			}
 		} else if !errors.Is(err, store.ErrNotFound) {

@@ -47,8 +47,10 @@ var (
 		VALUES (@tenant, @external_id, @name, @email, @type, @department, @title, @status, @description,
 			@hired_at, @terminated_at, @created_at)
 		ON CONFLICT (tenant_id, external_id) DO UPDATE SET name = excluded.name, email = excluded.email,
-			type = excluded.type, department = excluded.department, title = excluded.title, status = excluded.status,
-			description = excluded.description, hired_at = excluded.hired_at, terminated_at = excluded.terminated_at`)
+			type = excluded.type, department = excluded.department, title = excluded.title,
+			status = CASE WHEN identities.status = 'terminated' THEN identities.status ELSE excluded.status END,
+			description = excluded.description, hired_at = excluded.hired_at,
+			terminated_at = CASE WHEN identities.status = 'terminated' THEN identities.terminated_at ELSE excluded.terminated_at END`)
 	identitiesInsert = tq("identities.insert", `
 		INSERT INTO identities (tenant_id, external_id, name, email, type, department, title, status, manager_id,
 			owner_id, source, description, hired_at, terminated_at, created_at)

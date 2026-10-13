@@ -75,3 +75,12 @@ all error bodies (including FastAPI/pydantic `422` shapes) must match exactly.
   * JIT `hours` in `jit.request` details is a string (`"1.5"`, `"2.0"`,
     `"4"`). The ledger refuses floats so every RFC 8785 implementation
     reproduces the event hash.
+* `153-summary-after-sync`, `154-identities-after-sync` (UAT #134). The recorded
+  Python backend let `POST /api/connectors/sync` undo the leaver plan and the
+  grant revokes run earlier in the sequence: Marcus Bellweather came back as an
+  active identity with his accounts and grants. The Go server now treats
+  Tessera-side decisions as authoritative (terminated identities, disabled
+  accounts and revoked grants are not reverted, see `revoked_grants`), so after
+  the sync the summary keeps the earlier remediation (`human` 58, `terminated` 4,
+  fewer grants, effective and unused permissions, violations) and Marcus stays
+  terminated, which also changes the order of the identity list.
