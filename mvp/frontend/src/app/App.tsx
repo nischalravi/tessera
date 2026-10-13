@@ -35,6 +35,7 @@ const People = named(directory, "People");
 const Machine = named(directory, "Machine");
 const Accounts = named(directory, "Accounts");
 const Matches = named(() => import("../features/directory/Matches"), "Matches");
+const IdentityMatches = named(() => import("../features/directory/IdentityMatches"), "IdentityMatches");
 const roles = () => import("../features/roles/Roles");
 const Roles = named(roles, "Roles");
 const Workers = named(() => import("../features/lifecycle/Workers"), "Workers");
@@ -114,6 +115,7 @@ export default function App() {
                       <Route path="machine" element={<Machine />} />
                       <Route path="accounts" element={<Accounts />} />
                       <Route path="matches" element={<Matches />} />
+                      <Route path="identity-matches" element={<IdentityMatches />} />
                       <Route path="roles" element={<Roles />} />
                       <Route path="workers" element={<Workers />} />
                       <Route path="entitlements" element={<Entitlements />} />

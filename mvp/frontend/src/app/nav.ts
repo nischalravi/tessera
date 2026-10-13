@@ -37,7 +37,10 @@ export const RAIL: RailGroup[] = [
   {
     label: "Identity",
     items: [
-      { id: "users", label: "Users", icon: Users, path: "/directory/people", keywords: "people employees humans identities" },
+      {
+        id: "users", label: "Users", icon: Users, path: "/directory/people", also: ["/directory/identity-matches"], keywords: "people employees humans identities",
+        pages: [{ path: "/directory/identity-matches", label: "Identity matches", keywords: "match review queue duplicate guest invitation existing person link merge second reviewer four eyes reverification" }],
+      },
       { id: "workers", label: "Contractors & guests", icon: CalendarClock, path: "/directory/workers", keywords: "contractors partners vendors interns guests temporary accounts expiry end date sponsor expiring" },
       { id: "machine", label: "Machine identities & agents", icon: Bot, path: "/directory/machine", keywords: "nhi service accounts api keys ai agents bots secrets" },
       {

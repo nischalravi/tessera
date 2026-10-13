@@ -1,5 +1,5 @@
 import { FormEvent, useId, useMemo, useRef, useState } from "react";
-import { IdentityRow, mergeIdentity, useApi } from "../../api";
+import { IdentityRow, MergeRequest, isPendingMerge, mergeIdentity, useApi } from "../../api";
 import { Button } from "../../components/Button";
 import { Callout } from "../../components/Feedback";
 import { useModal } from "../../components/overlay";
@@ -66,7 +66,8 @@ export function PersonPicker({ value, onChange, exclude, type = "human", label =
 export function MergeDialog({ merged, onClose, onMerged }: {
   merged: { id: number; name: string; type: string };
   onClose: () => void;
-  onMerged: (survivorId: number) => void;
+  /** `request` is set when the merge did not happen: it waits for a second reviewer. */
+  onMerged: (survivorId: number, request: MergeRequest | null) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useId();
@@ -82,8 +83,8 @@ export function MergeDialog({ merged, onClose, onMerged }: {
     setBusy(true);
     setError(null);
     try {
-      await mergeIdentity(merged.id, survivor, reason.trim());
-      onMerged(survivor);
+      const r = await mergeIdentity(merged.id, survivor, reason.trim());
+      onMerged(survivor, isPendingMerge(r) ? r.request : null);
     } catch (err: any) {
       setError(String(err.message ?? err));
     } finally {
@@ -101,6 +102,9 @@ export function MergeDialog({ merged, onClose, onMerged }: {
               {merged.name}'s accounts, the identities they own, their reports and their agent delegations move to the identity you
               pick. History stays where it is. Sign-in credentials never move, so an identity that signs in to Tessera can only be the
               one kept. You can undo the merge for 180 days.
+            </p>
+            <p className="muted">
+              If either person holds privileged access, has IAL 2 or more, or is an employee, a second reviewer must approve before anything moves.
             </p>
             <div className="mt">
               <PersonPicker value={survivor} onChange={setSurvivor} exclude={merged.id} type={merged.type} label="Keep" />

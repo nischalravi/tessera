@@ -523,7 +523,8 @@ export interface LinkDecision {
   decided_by: string;
   decided_at: string;
 }
-export interface MergeMove { table: string; id: number; column: string }
+/** One row a merge re-pointed: numeric ids in `id`; the guest tables, whose ids are text, in `key`. */
+export interface MergeMove { table: string; id: number; key?: string; column: string }
 export interface IdentityMerge {
   id: string;
   survivor_id: number;
@@ -540,7 +541,9 @@ export interface IdentityMerge {
   unmerged_at: string | null;
   unmerge_reason: string | null;
 }
-export interface UnmergeResult { merge: IdentityMerge; restored: MergeMove[]; kept: MergeMove[] }
+/** A row created after the merge that now belongs to the survivor; an unmerge leaves it there. */
+export interface CreatedAfter { table: string; id: string; at: string }
+export interface UnmergeResult { merge: IdentityMerge; restored: MergeMove[]; kept: MergeMove[]; created_after?: CreatedAfter[] }
 
 export const linkAccount = (accountId: number, identityId: number, reason: string) =>
   api<{ account: CorrAccount; decision: LinkDecision }>(`/accounts/${accountId}/link`, { identity_id: identityId, reason });
@@ -548,10 +551,103 @@ export const markNotPerson = (accountId: number, reason: string) =>
   api<{ account: CorrAccount; decision: LinkDecision }>(`/accounts/${accountId}/not-person`, { reason });
 export const releaseAccount = (accountId: number) =>
   api<{ account: CorrAccount; decision: LinkDecision }>(`/accounts/${accountId}/link`, undefined, "DELETE");
+/**
+ * Ask for a merge. Where either person holds privileged access, has IAL 2 or more or is an
+ * employee, the API answers 202 with a request that a second reviewer approves; the merge has not happened.
+ */
 export const mergeIdentity = (mergedId: number, survivorId: number, reason: string) =>
-  api<IdentityMerge>(`/identities/${mergedId}/merge`, { into: survivorId, reason });
+  api<IdentityMerge | PendingMerge>(`/identities/${mergedId}/merge`, { into: survivorId, reason });
+export const isPendingMerge = (r: IdentityMerge | PendingMerge): r is PendingMerge => (r as PendingMerge).status === "pending_approval";
 export const unmergeIdentity = (mergeId: string, reason: string) =>
   api<UnmergeResult>(`/identity-merges/${encodeURIComponent(mergeId)}/unmerge`, { reason });
+
+// ---------------------------------------------------------------- identity matching (issue #68)
+
+/** Why a second reviewer is needed. */
+export type MergeRisk = "privileged_access" | "ial2" | "employee";
+export interface MergeRequest {
+  id: string;
+  kind: "merge" | "match_link";
+  status: "pending" | "approved" | "rejected" | "cancelled";
+  survivor: PersonRef;
+  merged: PersonRef;
+  match_id: string | null;
+  reason: string;
+  risk: MergeRisk[];
+  requested_by: UserRef;
+  requested_at: string;
+  decided_by: UserRef | null;
+  decided_at: string | null;
+  decision_reason: string | null;
+  merge_id: string | null;
+}
+export interface PendingMerge { status: "pending_approval"; request: MergeRequest }
+
+/** A rule that fired, with the (masked) attributes it compared. */
+export interface MatchRule { rule: string; tier: "A" | "B" | "C"; score: number; why: string; compared: Record<string, string> }
+export interface MatchAffiliation { type: string; status: string; source: string }
+export interface IdentityMatchCandidate {
+  match_id: string;
+  candidate_id: number;
+  name: string;
+  email: string | null;
+  type: string;
+  tier: "A" | "B" | "C";
+  score: number;
+  outcome: string;
+  status: "review" | "reverification" | "linked" | "new_person" | "rejected" | "superseded";
+  decision: string | null;
+  rules: MatchRule[];
+  affiliations: MatchAffiliation[];
+  privileged_access: boolean;
+  ial: number;
+  employee: boolean;
+  second_reviewer_because: MergeRisk[];
+  reverification_required: boolean;
+  decided_by: UserRef | null;
+  second_reviewer: UserRef | null;
+  reason: string | null;
+  decided_at: string | null;
+  pending_request: MergeRequest | null;
+  merge_id: string | null;
+}
+export interface IdentityMatchItem {
+  /** The best candidate's match id; a decision may name any candidate's. */
+  id: string;
+  intake_id: string;
+  channel: string;
+  mode: string;
+  status: string;
+  received_at: string;
+  /** What the claimant said at "do you already have an account?". It never links anyone. */
+  claimant_says_has_account: "yes" | "no" | null;
+  subject: { identity_id: number | null; name: string; email: string | null; population: string | null; purpose: string | null; sponsor: PersonRef | null; sponsorship_id: string | null };
+  candidates: IdentityMatchCandidate[];
+}
+export interface IdentityMatchList { items: IdentityMatchItem[]; count: number }
+export type MatchDecision = "link" | "new_person" | "reject";
+export interface MatchDecided {
+  result: "linked" | "new_person" | "rejected" | "pending_approval" | "reverification_required" | "reverification" | "review";
+  item?: IdentityMatchItem;
+  request?: MergeRequest;
+  merge?: IdentityMerge;
+}
+export const decideIdentityMatch = (matchId: string, decision: MatchDecision, reason: string) =>
+  api<MatchDecided>(`/identity-matches/${encodeURIComponent(matchId)}/decide`, { decision, reason });
+export const approveMergeRequest = (id: string) =>
+  api<{ request: MergeRequest; result: "merged" | "reverification_required"; merge?: IdentityMerge }>(`/identity-merge-requests/${encodeURIComponent(id)}/approve`, {});
+export const rejectMergeRequest = (id: string, reason: string) =>
+  api<{ request: MergeRequest }>(`/identity-merge-requests/${encodeURIComponent(id)}/reject`, { reason });
+
+export interface MatchingSettings {
+  auto_link_tier_b: boolean;
+  require_review_tier_a: boolean;
+  unmerge_window_days: number;
+  updated_by: UserRef | null;
+  updated_at: string | null;
+}
+export const putMatchingSettings = (s: Pick<MatchingSettings, "auto_link_tier_b" | "require_review_tier_a" | "unmerge_window_days">) =>
+  api<MatchingSettings>("/admin/matching", s, "PUT");
 
 // ------------------------------------------------ affiliations and identifiers (issue #64)
 
@@ -1189,7 +1285,9 @@ export const claimApi = {
   checkCode: (slug: string, signer: ClaimSigner, nonce: string, code: string) =>
     claimFetch<{ ok: boolean; step: ClaimStep }>(slug, "POST", "verify/check", { code }, signer, nonce),
   existingAccount: (slug: string, signer: ClaimSigner, nonce: string, answer: "yes" | "no") =>
-    claimFetch<{ ok: boolean; step: ClaimStep; message: string }>(slug, "POST", "existing-account", { answer }, signer, nonce),
+    claimFetch<{ ok: boolean; step: ClaimStep; message?: string; status?: "redirect"; redirect?: string }>(slug, "POST", "existing-account", { answer }, signer, nonce),
+  // "yes" answers {status: "redirect", redirect}: a sign-in as the existing account, which links this
+  // invitation to it when it is the account the organization had in mind (and otherwise changes nothing).
   /** Set up the sign-in: a redirect to the credential authority, or "pending" when the organization has not set one up. */
   credential: (slug: string, signer: ClaimSigner, nonce: string) =>
     claimFetch<{ status: "redirect" | "pending"; redirect?: string; pending?: string; message?: string }>(slug, "POST", "credential", undefined, signer, nonce),

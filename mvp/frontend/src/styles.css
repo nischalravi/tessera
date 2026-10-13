@@ -871,3 +871,9 @@ fieldset.card { margin: 0; }
 .claim-choices { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .claim input.input, .claim .btn { min-height: 40px; }
 @media (max-width: 400px) { .claim { padding: 16px 12px; border-left: 0; border-right: 0; border-radius: 0; } .claim-wrap { padding: 0; } }
+
+/* Identity matches (issue #68): the invited person and the candidate side by side */
+.match-sides { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s-3); }
+.match-sides > section { border: 1px solid var(--border); border-radius: 6px; padding: var(--s-3); min-width: 0; }
+.kv.kv-narrow { grid-template-columns: 96px minmax(0, 1fr); }
+@media (max-width: 640px) { .match-sides { grid-template-columns: minmax(0, 1fr); } }

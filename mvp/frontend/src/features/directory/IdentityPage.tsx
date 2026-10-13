@@ -134,8 +134,13 @@ function Header({ d, disabledAt }: { d: IdentityDetail; disabledAt?: string }) {
         <MergeDialog
           merged={d}
           onClose={() => setMerging(false)}
-          onMerged={(survivor) => {
+          onMerged={(survivor, request) => {
             setMerging(false);
+            if (request) {
+              toast(`The merge of ${d.name} waits for a second reviewer`);
+              nav("/directory/identity-matches?tab=requests");
+              return;
+            }
             toast(`${d.name} merged`);
             nav(`/directory/identities/${survivor}`);
           }}
