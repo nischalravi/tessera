@@ -49,11 +49,21 @@ type fakeSMTP struct {
 
 func newFakeSMTP(t *testing.T, rcpts ...string) *fakeSMTP {
 	t.Helper()
+	return newFakeSMTPWith(t, nil, rcpts...)
+}
+
+// newFakeSMTPWith sets the relay's options before it starts accepting, so
+// the serving goroutines never race the test's writes.
+func newFakeSMTPWith(t *testing.T, set func(*fakeSMTP), rcpts ...string) *fakeSMTP {
+	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Skip("no loopback listener:", err)
 	}
 	f := &fakeSMTP{ln: ln, rcpts: rcpts, final: "250 2.0.0 Ok: queued as ABC123"}
+	if set != nil {
+		set(f)
+	}
 	t.Cleanup(func() { _ = ln.Close() })
 	return f.start()
 }

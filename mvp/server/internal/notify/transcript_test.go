@@ -76,8 +76,7 @@ func TestTranscript_RedactsAuthAndRecordsTLS(t *testing.T) {
 	sealed, _ := notify.SealPassword(s, "hunter2-the-password")
 	for _, mode := range []string{config.SMTPStartTLS, config.SMTPTLS} {
 		t.Run(mode, func(t *testing.T) {
-			f := newFakeSMTP(t)
-			f.tlsConf, f.implicit = serverConf, mode == config.SMTPTLS
+			f := newFakeSMTPWith(t, func(f *fakeSMTP) { f.tlsConf, f.implicit = serverConf, mode == config.SMTPTLS })
 			c, err := notify.NewSMTP(config.Mail{Mode: config.MailSMTP, Host: "127.0.0.1", Port: f.port(), From: "tessera@example.com", Username: "relay-user",
 				PasswordSealed: sealed, TLS: mode}, config.Dev, true, s)
 			if err != nil {
@@ -118,8 +117,9 @@ func TestTranscript_RedactsAuthAndRecordsTLS(t *testing.T) {
 
 func TestTranscript_StartTLSFailureIsAFailure(t *testing.T) {
 	serverConf, clientConf := relayCert(t)
-	f := newFakeSMTP(t)
-	f.tlsConf, f.starttls = serverConf, "454 4.7.0 TLS not available due to temporary reason"
+	f := newFakeSMTPWith(t, func(f *fakeSMTP) {
+		f.tlsConf, f.starttls = serverConf, "454 4.7.0 TLS not available due to temporary reason"
+	})
 	c := smtpFor(t, f, config.Dev, true)
 	c.TLS, c.TLSConfig = config.SMTPStartTLS, clientConf
 	a, err := c.SendRecorded(context.Background(), mail1())
@@ -182,8 +182,7 @@ func TestTranscript_OutcomesByReplyClass(t *testing.T) {
 // TestTranscript_SlowRelayTimesOut: a relay that never answers fails the
 // attempt at the timeout (a failure, so it is retried).
 func TestTranscript_SlowRelayTimesOut(t *testing.T) {
-	f := newFakeSMTP(t)
-	f.delay = 3 * time.Second
+	f := newFakeSMTPWith(t, func(f *fakeSMTP) { f.delay = 3 * time.Second })
 	c := smtpFor(t, f, config.Dev, true)
 	c.Timeout = 300 * time.Millisecond
 	start := time.Now()
