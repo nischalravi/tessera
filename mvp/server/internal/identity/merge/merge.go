@@ -129,7 +129,21 @@ func (a *Assessor) Facts(id int64) (Facts, error) {
 			return f, err
 		}
 	}
-	if eff := a.snap.EffectivePermissions(id); eff != nil {
+	// privileged access is membership of a privileged group (or a direct grant of a
+	// privileged permission) through any of the person's accounts, or any privileged
+	// permission that reaches them through the groups they are in
+	accts, err := a.tx.IdentityAccounts(id)
+	if err != nil {
+		return f, err
+	}
+	for _, acct := range accts {
+		for _, next := range a.snap.Successors(graph.Key("account", acct.ID)) {
+			if n := a.snap.Node(next); n != nil && n.Privileged {
+				f.Privileged = true
+			}
+		}
+	}
+	if eff := a.snap.EffectivePermissions(id); eff != nil && !f.Privileged {
 		for _, p := range eff.Values() {
 			if p.Privileged {
 				f.Privileged = true
