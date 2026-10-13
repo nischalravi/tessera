@@ -13,10 +13,14 @@ import (
 	"sort"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
+
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
+	"github.com/nischalravi/tessera/mvp/server/internal/provision"
+	"github.com/nischalravi/tessera/mvp/server/internal/provision/target"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 	"github.com/nischalravi/tessera/mvp/server/internal/usage"
@@ -242,6 +246,12 @@ func sortedSet(m map[string]bool) []string {
 
 // Decide records keep/revoke on an item; revoke deletes the grant edge.
 // by is the reviewer (the request's principal).
+//
+// When the grant is a group membership in a system whose connection has
+// write-back on, a revoke does not decide the item: it queues the removal in
+// the target and returns the item still open. The provisioning engine decides
+// the item and deletes the edge once a re-read confirms the member is gone; a
+// failed or unverified write leaves the item open for the reviewer to retry.
 func Decide(c *store.TenantTx, now time.Time, itemID int64, decision string, by store.UserRef, comment *string) (*store.ReviewItem, error) {
 	if decision != "keep" && decision != "revoke" {
 		return nil, &Error{"decision must be keep or revoke"}
@@ -253,6 +263,21 @@ func Decide(c *store.TenantTx, now time.Time, itemID int64, decision string, by 
 	if err != nil {
 		return nil, err
 	}
+	key := fmt.Sprintf("review:%d:revoke", item.ID)
+	if op, err := provision.InFlight(c, key); err != nil {
+		return nil, err
+	} else if op != nil {
+		return nil, &Error{"a revoke for this item is waiting for the target system to confirm it"}
+	}
+	if decision == "revoke" {
+		if routed, err := routeRevoke(c, now, item, key, by, comment); err != nil || routed {
+			return item, err
+		}
+	}
+	return applyDecision(c, now, item, decision, by, comment)
+}
+
+func applyDecision(c *store.TenantTx, now time.Time, item *store.ReviewItem, decision string, by store.UserRef, comment *string) (*store.ReviewItem, error) {
 	if err := c.DecideItem(item.ID, decision, comment, now, by); err != nil {
 		return nil, err
 	}
@@ -283,4 +308,71 @@ func Decide(c *store.TenantTx, now time.Time, itemID int64, decision string, by 
 		}
 	}
 	return item, nil
+}
+
+// completeRevoke is the provisioning completion of a routed revoke.
+const completeRevoke = "review.revoke"
+
+type revokeData struct {
+	ItemID  int64   `json:"item_id"`
+	UserID  string  `json:"user_id,omitempty"`
+	Display string  `json:"display"`
+	Comment *string `json:"comment"`
+}
+
+func init() {
+	provision.RegisterCompletion(completeRevoke, func(c *store.TenantTx, now time.Time, raw json.RawMessage) error {
+		var d revokeData
+		if err := json.Unmarshal(raw, &d); err != nil {
+			return err
+		}
+		item, err := c.Item(d.ItemID)
+		if err != nil {
+			return err
+		}
+		if item.Decision != nil && *item.Decision != "" {
+			return nil // decided some other way meanwhile
+		}
+		by := store.UserRef{Display: d.Display}
+		if d.UserID != "" {
+			if by.ID, err = uuid.Parse(d.UserID); err != nil {
+				return err
+			}
+		}
+		_, err = applyDecision(c, now, item, "revoke", by, d.Comment)
+		return err
+	})
+}
+
+// routeRevoke queues the removal of the item's group membership in the target.
+func routeRevoke(c *store.TenantTx, now time.Time, item *store.ReviewItem, key string, by store.UserRef, comment *string) (bool, error) {
+	kind, aid, err := graph.ParseKey(item.EdgeSrc)
+	if err != nil || kind != "account" {
+		return false, nil
+	}
+	kind, gid, err := graph.ParseKey(item.EdgeDst)
+	if err != nil || kind != "group" {
+		return false, nil
+	}
+	a, err := c.Account(aid)
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	g, err := c.Group(gid)
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	d := revokeData{ItemID: item.ID, Display: by.Display, Comment: comment}
+	if by.ID != uuid.Nil {
+		d.UserID = by.ID.String()
+	}
+	_, routed, err := provision.Submit(c, now, provision.Change{System: g.System, Kind: target.RemoveEntitlement,
+		Account: target.Account{Username: a.Username, ExternalID: a.ExternalID},
+		Group:   target.Group{ExternalID: g.ExternalID, Name: g.Name}, Source: provision.SourceReview, Key: key,
+		Completion: completeRevoke, Data: d})
+	return routed, err
 }

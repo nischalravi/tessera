@@ -107,6 +107,10 @@ var tables = []string{
 	"intake_records", "sponsorships", "sponsorship_events",
 	// guest claim (schema/0228_claim.sql)
 	"claim_tokens", "claim_sessions", "confirmation_codes",
+	// job run history (schema/0212_job_runs.sql)
+	"job_runs",
+	// closed-loop provisioning (schema/0224-0225)
+	"provisioning_targets", "provisioning_ops", "provisioning_findings",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was

@@ -190,7 +190,13 @@ The routes are documented at `/api/readiness/openapi.json`.
 `POST /api/email/messages/{id}/retry` ·
 `GET /api/auth/discover?tenant=&email=` · `GET /api/auth/login?tenant=&connection=&return_to=` (302 to the IdP) ·
 `GET /api/auth/oidc/{connection_id}/callback` · `GET /t/{slug}/bootstrap?code=` (public) ·
-`GET|POST /api/auth/dev-login` (dev and test only)
+`GET|POST /api/auth/dev-login` (dev and test only) ·
+`GET /api/jobs[?status=running|succeeded|failed&kind=&connection_id=&limit=]` · `GET /api/jobs/{job_id}` ·
+`POST /api/jobs/{job_id}/retry` ·
+`GET /api/provisioning/targets` · `PUT|DELETE /api/provisioning/targets/{connection_id}` ·
+`GET /api/provisioning/ops[?status=&kind=&connection_id=&limit=]` · `GET /api/provisioning/ops/{op_id}` ·
+`POST /api/provisioning/ops/{op_id}/retry|cancel` · `POST /api/provisioning/run` ·
+`GET /api/provisioning/findings[?status=open|resolved]`
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
@@ -619,6 +625,88 @@ notify.Expiring(tx, now, notify.Ending{Key: "identity:42", IdentityID: 42, Also:
 (label, default, mandatory) and it appears in everyone's settings. Not yet: per-tenant SMTP and chat
 (the settings are server-wide), templates, per-kind digests.
 
+### Job run history
+
+Every run of a connector sync, provisioning (HRIS execute), connection validation, dry run,
+deployment-health re-run and JIT sweep is recorded in `job_runs` (`internal/jobs`), plus every
+audit anchoring run that did something or failed. A sweep that finds nothing is not recorded.
+Each record has the kind, trigger (manual, schedule or retry), status, duration, a result summary
+and a one-line error. The run row is written in its own transaction before the job and finished in
+another, so a job that rolls back keeps its failed run, and `job.failed` is appended to the audit
+chain for alert rules to match. A request refused before the job ran (bad input, missing
+permission, a blocked gate) is not a run.
+
+`POST /api/jobs/{id}/retry` replays the run's API call as the signed-in user, through the whole
+middleware: the original route's permission and step-up apply. It is offered only for idempotent
+kinds (sync, validation, dry run, health re-run, JIT sweep), not for provisioning. The new run
+links `retry_of` and records `job.retried`. Runs still `running` after an hour are marked failed
+("interrupted"), and runs are kept 30 days. Reading the history needs `jobs.read` (operator,
+auditor, policy admin, tenant admin). Admin → Jobs lists the runs, with Failed, Running and job
+filter chips and a side panel showing the error, the result and Retry.
+
+### Closed-loop provisioning
+
+Until issue #103 every write Tessera made (JML execute, review revoke, JIT revoke and expiry,
+least-privilege revoke) changed only its own graph. `internal/provision` is the engine that makes the
+change in the target system and checks that it happened.
+
+* **Operations.** `provisioning_ops` (schema `0225`) holds one row per change: create, update, disable
+  or delete an account, add or remove an entitlement. An idempotency key names the intent
+  (`jit:12:end`, `review:7:revoke`, `jml:3:0:disable_account`); submitting it twice gives one operation,
+  and it is sent to the target as `Idempotency-Key`. Every connector also reads before it writes, so
+  a repeated request converges.
+* **Lifecycle.** `queued` → `sent` → `pending_verification` → `verified`, or `mismatch` / `failed`
+  (and `cancelled` by an operator). A worker (every 5 s, `Server.RunProvisioning`; `POST
+  /api/provisioning/run` runs it now and is recorded as a `provision` job run) sends each operation and
+  **re-reads the target**. A send that fails for a transient reason (transport, 429, 5xx) is retried
+  with exponential backoff (5 s doubling to 10 min, 5 attempts); a refusal (401/403/400) fails it at
+  once. A re-read that disagrees is repeated 3 times, then the operation is a `mismatch` and a finding
+  (`provisioning_findings`, `verify_mismatch`, high for a disable or removal) is raised.
+* **Tessera changes only after verification.** An operation carries a completion (a graph edit, a
+  review decision, a JIT end) that runs in the same transaction that marks it `verified`. A failed or
+  unverified write therefore leaves the review item open, the account active and the JIT grant in place.
+  Retrying (or deciding again, or the next `POST …/retry`) re-queues the same operation.
+* **Write-back is per connection and off by default.** A target (`provisioning_targets`, schema
+  `0224`, one per connection) has a `write_back` switch. Off: the change edits the graph at once, as
+  before, and nothing reaches the target (so the parity fixtures are unchanged). On: the change goes
+  through the engine. Routing is by the connection's `system` (`provision.Submit`).
+* **Connectors.** `internal/provision/scim` is a SCIM 2.0 client (filtered, paginated lists; group
+  members read page by page; PATCH add/replace/remove, where a member is removed with the RFC 7644
+  filter path and, if the server refuses it, with a value list; `dialect: entra` sends capitalised
+  operations, string booleans and the value list, and every dialect reads `"True"`/`"False"`). `internal/provision/okta` is a native
+  Okta connector (users, lifecycle deactivate/delete, group membership, `Link` paging that must stay on
+  the org's origin). Credentials are sealed under the KEK (`internal/seal`, AAD = tenant, table,
+  column and row) and are write-only in the API. Every request goes through `internal/safehttp`.
+* **Limits.** Disabling or deleting an account through SCIM does not end sessions or tokens the
+  account already holds (SCIM does not imply it; knowledge base §4.6), so a verified disable is not
+  yet a verified kill: that needs session revocation or CAEP/SSF, which is future work.
+* **What is routed.** JML leaver/mover/joiner steps (disable, remove and add group, create account),
+  review revokes of group memberships, JIT revoke and expiry (the request stays `approved` and the edge
+  stays until the target confirms; the sweeper does not retry a failed removal, an operator does),
+  and the least-privilege revoke. Edges to permissions have no counterpart in a target and stay direct.
+* **Audit.** Each operation writes `provision.enqueued`, `provision.sent` and one of
+  `provision.verified`, `provision.mismatch`, `provision.failed`, plus `provision.retried`,
+  `provision.cancelled`; target changes write `provision.target_set` and `provision.target_removed`
+  (never the token). Completions write the event the direct path wrote (`jit.expire`, `review.revoke`,
+  `grant.revoke`).
+* **Permissions.** `provisioning.read` (operator, auditor, policy admin, tenant admin) and
+  `provisioning.manage` (policy admin, tenant admin: retry, cancel, run). Configuring a target needs
+  `connections.manage` with step-up.
+* **Dev fake target.** `TESSERA_DEV_FAKE_TARGET=1` (set by `run.sh`) starts an in-process fake SCIM
+  service on a loopback port (`internal/provision/fake`) and enables the `fake` target kind, with a
+  simulated fault: `fail_writes` (503) or `drop_writes` (accepted, never applied: a mismatch). The fake
+  treats users and groups it has never seen as already provisioned. Config refuses the setting with
+  `TESSERA_ENV=prod`, and an architecture test keeps the fake out of every package but `cmd/tessera`.
+* **Tests.** Recorded exchanges (`internal/provision/{scim,okta}/testdata`, replayed by
+  `internal/provision/replay`) pin Entra's string booleans, capitalised PATCH operations, paginated
+  large groups, Okta `Link` paging and error classification; engine tests cover backoff, idempotency,
+  mismatch findings, sealed credentials and tenant isolation; API and JML tests show a failed
+  target write leaving the review item, account and edges open.
+
+Admin → Provisioning lists the target systems (with the write-back switch) and the operations, with
+status, change and source filter chips, a side panel with the findings, request and Retry / Cancel,
+and Run now.
+
 ### Audit ledger
 
 Every tenant has an append-only, hash-chained audit log (`audit_events`; design
@@ -1010,8 +1098,9 @@ OpenAPI document). Deliberate differences:
 * No authentication or RBAC on the API or UI. Actor names on approvals and revokes are placeholders:
   the audit ledger records every request as `anonymous` and keeps the supplied name only as an
   unverified `claimed_actor`.
-* Revokes and JML plans change Tessera's graph only. Nothing is written back to source systems.
-  Connectors do not have a `provision()`/`deprovision()` interface yet.
+* Revokes and JML plans change Tessera's graph only unless the connection has a provisioning target
+  with write-back on (see Closed-loop provisioning); JIT approval and rotating secrets are not yet
+  sent to targets, and only SCIM 2.0 and Okta have connectors (no Entra native connector yet).
 * There is no scheduled connector sync. Seeding runs discovery once, and `POST /api/connectors/sync`
   re-runs discovery on demand.
 * Effective-permission paths are capped at 8 per permission, and "lost if removed" uses those paths.

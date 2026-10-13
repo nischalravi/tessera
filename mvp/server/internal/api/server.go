@@ -21,19 +21,23 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oidcrp"
+	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/claim"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/credential"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/sponsorship"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
+	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/lifecycle"
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
+	"github.com/nischalravi/tessera/mvp/server/internal/provision"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 	"github.com/nischalravi/tessera/mvp/server/internal/requests"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
@@ -123,6 +127,10 @@ type Config struct {
 	// ClaimMinDuration is the minimum time of a claim start or resend (default
 	// 300 ms); tests shorten it.
 	ClaimMinDuration time.Duration
+	// FakeTargetURL is the base URL of the in-process fake SCIM target
+	// (TESSERA_DEV_FAKE_TARGET, dev only). Empty: the "fake" target kind is
+	// refused.
+	FakeTargetURL string
 	// AuditAppend overrides how the audit middleware writes http.request
 	// events (tests inject failures). Nil: the store.
 	AuditAppend func(ctx context.Context, t tenancy.ID, e store.AuditEvent) error
@@ -145,6 +153,7 @@ type Server struct {
 	rp       *oidcrp.RP
 
 	readiness *readiness.Service
+	prov      *provision.Engine
 }
 
 // New builds a server.
@@ -175,6 +184,21 @@ func New(cfg Config) *Server {
 		cfg.Readiness = readiness.NewService(reg, cfg.Env)
 		cfg.Readiness.Runner.Scenario = cfg.ReadinessScenario
 	}
+	if cfg.Sealer == nil {
+		sealer, err := seal.New(seal.RandomBytes(seal.KeySize))
+		if err != nil {
+			panic(err)
+		}
+		cfg.Sealer = sealer
+	}
+	provHTTP := cfg.OutboundHTTP // the provisioning worker sends through the same safehttp client
+	if provHTTP == nil {
+		hc, err := safehttp.New(safehttp.Options{Env: config.Prod})
+		if err != nil {
+			panic(err)
+		}
+		provHTTP = hc
+	}
 	s := &Server{cfg: cfg, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
 		limits: newLimiters(cfg.RateLimits)}
 	s.guests = sponsorship.New(cfg.Identifiers)
@@ -194,6 +218,8 @@ func New(cfg Config) *Server {
 		}
 		s.rp = rp
 	}
+	s.prov = &provision.Engine{DB: cfg.Store, Sealer: cfg.Sealer, HTTP: provHTTP,
+		Clock: func() time.Time { return s.clock() }, Log: cfg.Logger.With("component", "provisioning")}
 	s.authn = &auth.Authenticator{DB: cfg.Store, Clock: func() time.Time { return s.clock() },
 		Cookies: auth.Cookies{Insecure: cfg.InsecureCookie}}
 	s.registerRoutes()
@@ -208,6 +234,8 @@ func New(cfg Config) *Server {
 	s.registerNotificationRoutes()
 	s.registerEmailRoutes()
 	s.registerReadinessRoutes()
+	s.registerJobRoutes()
+	s.registerProvisioningRoutes()
 	s.registerAuthRoutes()
 	s.registerLoginRoutes()
 	s.checkPublicRoutes()
@@ -275,9 +303,14 @@ func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	ctx = audit.WithSystemActor(ctx, "jit.sweeper") // jit.expire events name the job
+	var maintained time.Time
 	for {
-		if _, err := jit.SweepAll(ctx, s.store, s.clock()); err != nil && ctx.Err() == nil {
-			s.log.Error("jit sweep failed", "err", err)
+		s.sweepAndRecord(ctx)
+		if now := s.clock(); now.Sub(maintained) >= jobMaintainGap {
+			if err := jobs.Maintain(ctx, s.store, now, jobStaleAfter, jobRetention); err != nil && ctx.Err() == nil {
+				s.log.Error("job history upkeep failed", "err", err)
+			}
+			maintained = now
 		}
 		if err := requests.SweepAll(audit.WithSystemActor(ctx, requests.Sweeper), s.store, s.clock()); err != nil && ctx.Err() == nil {
 			s.log.Error("request sweep failed", "err", err)
@@ -369,6 +402,8 @@ type route struct {
 	// closed like a read when its http.request event cannot be written
 	// (audit.AnswersRead).
 	answersRead bool
+	// job: the route runs a job whose runs are recorded (jobs.go).
+	job *jobSpec
 }
 
 // handle registers a route with its declared requirement (design §12.4). A
@@ -427,6 +462,13 @@ func (s *Server) serve(rt *route, w http.ResponseWriter, r *http.Request, p *par
 	if pr, ok := auth.PrincipalFrom(r.Context()); ok {
 		t = pr.TenantID
 	}
+	if rt.job != nil && !t.IsZero() {
+		return s.serveJob(rt, w, r, p, t)
+	}
+	return s.serveTenant(rt, w, r, p, t)
+}
+
+func (s *Server) serveTenant(rt *route, w http.ResponseWriter, r *http.Request, p *params, t tenancy.ID) (any, error) {
 	ctx := r.Context()
 	if rt.tenant == phased {
 		if t.IsZero() {

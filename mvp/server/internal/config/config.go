@@ -89,6 +89,10 @@ type Config struct {
 	// NotifyDigestHour is the UTC hour from which the daily digest is built
 	// (TESSERA_NOTIFY_DIGEST_HOUR).
 	NotifyDigestHour int
+	// FakeTarget is TESSERA_DEV_FAKE_TARGET: cmd/tessera starts an in-process
+	// fake SCIM target on a loopback port, so the provisioning screens can be
+	// demonstrated without a real system. Refused in prod.
+	FakeTarget bool
 	// FrozenNow is TESSERA_NOW (tests and demos; refused in prod). The zero
 	// time means the wall clock; use Clock.
 	FrozenNow time.Time
@@ -220,6 +224,7 @@ func Load(getenv func(string) string) (*Config, error) {
 		}
 	}
 	c.DevLogin = boolean("TESSERA_DEV_LOGIN", false, false)
+	c.FakeTarget = boolean("TESSERA_DEV_FAKE_TARGET", false, false)
 	c.DevIdPURL = strings.TrimSpace(getenv("TESSERA_DEV_IDP_URL"))
 	if c.DevIdPURL == "" && !prod {
 		c.DevIdPURL = "http://127.0.0.1:8001"
@@ -302,6 +307,9 @@ func Load(getenv func(string) string) (*Config, error) {
 		}
 		if c.DevLogin {
 			bad("TESSERA_DEV_LOGIN must not be set with TESSERA_ENV=prod")
+		}
+		if c.FakeTarget {
+			bad("TESSERA_DEV_FAKE_TARGET must not be set with TESSERA_ENV=prod (the fake provisioning target accepts any change)")
 		}
 		switch {
 		case c.AuditAnchor == "":

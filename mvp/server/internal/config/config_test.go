@@ -95,6 +95,7 @@ func TestProdRefusesEachUnsafeSetting(t *testing.T) {
 		{"outbound loopback", []string{"TESSERA_OUTBOUND_ALLOW_LOOPBACK", "true"}, "TESSERA_OUTBOUND_ALLOW_LOOPBACK must be false"},
 		{"dev IdP URL set", []string{"TESSERA_DEV_IDP_URL", "http://127.0.0.1:8001"}, "TESSERA_DEV_IDP_URL must not be set"},
 		{"dev login opt-in", []string{"TESSERA_DEV_LOGIN", "1"}, "TESSERA_DEV_LOGIN must not be set"},
+		{"dev fake provisioning target", []string{"TESSERA_DEV_FAKE_TARGET", "1"}, "TESSERA_DEV_FAKE_TARGET must not be set"},
 		{"file audit anchor", []string{"TESSERA_AUDIT_ANCHOR", "file://server/var/audit-anchors.jsonl"}, "must not be file://"},
 		{"audit anchor missing", []string{"TESSERA_AUDIT_ANCHOR", "<unset>"}, "TESSERA_AUDIT_ANCHOR is required"},
 		{"access token TTL too long", []string{"TESSERA_AT_TTL_SECONDS", "901"}, "TESSERA_AT_TTL_SECONDS"},
@@ -366,6 +367,22 @@ func TestMailConfig(t *testing.T) {
 	} {
 		if _, err := config.Load(env(with(map[string]string{"TESSERA_ENV": "dev"}, kv...))); err == nil {
 			t.Errorf("dev accepted %v", kv)
+		}
+	}
+}
+
+// The fake provisioning target is a dev tool: off by default, on in dev when asked.
+func TestFakeTargetIsDevOnly(t *testing.T) {
+	for _, tc := range []struct {
+		env  map[string]string
+		want bool
+	}{
+		{map[string]string{"TESSERA_ENV": "dev"}, false},
+		{map[string]string{"TESSERA_ENV": "dev", "TESSERA_DEV_FAKE_TARGET": "1"}, true},
+	} {
+		c, err := config.Load(env(tc.env))
+		if err != nil || c.FakeTarget != tc.want {
+			t.Errorf("%v: FakeTarget = %v, %v; want %v", tc.env, c != nil && c.FakeTarget, err, tc.want)
 		}
 	}
 }

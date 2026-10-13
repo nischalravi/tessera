@@ -91,6 +91,15 @@ const (
 	// email delivery log (issue #189)
 	PermEmailRead   Permission = "email.read"
 	PermEmailManage Permission = "email.manage"
+
+	// Job run history (issue #172).
+	PermJobsRead Permission = "jobs.read"
+
+	// Closed-loop provisioning (issue #103). Configuring a target needs
+	// connections.manage; retrying, cancelling and running operations needs
+	// provisioning.manage.
+	PermProvisioningRead   Permission = "provisioning.read"
+	PermProvisioningManage Permission = "provisioning.manage"
 )
 
 // rolePermissions is the static role -> permission map (Cedar-ready, §12.1).
@@ -102,17 +111,18 @@ var rolePermissions = map[Role][]Permission{
 	RoleViewer: {PermGraphRead, PermRequestsCreate, PermGuestsSponsor},
 	RoleOperator: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
 		PermReviewsDecide, PermHRISSimulateEvent, PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide,
-		PermGuestsSponsor, PermGuestsRead},
+		PermGuestsSponsor, PermGuestsRead, PermJobsRead, PermProvisioningRead},
 	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead, PermRequestsCreate, PermEmailRead,
-		PermGuestsSponsor, PermGuestsRead},
+		PermGuestsSponsor, PermGuestsRead, PermJobsRead, PermProvisioningRead},
 	RolePolicyAdmin: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
 		PermReviewsDecide, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
 		PermIdentitiesCorrelate, PermIdentitiesMerge, PermIdentitiesAffiliate,
 		PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide, PermCatalogManage, PermRolesManage, PermLifecycleManage,
-		PermGuestsSponsor, PermGuestsRead, PermSponsorshipsApprove},
+		PermGuestsSponsor, PermGuestsRead, PermSponsorshipsApprove, PermJobsRead, PermProvisioningRead, PermProvisioningManage},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
-		PermConnectionsActivate, PermRequestsCreate, PermEmailRead, PermEmailManage, PermGuestsSponsor, PermGuestsRead},
+		PermConnectionsActivate, PermRequestsCreate, PermEmailRead, PermEmailManage, PermGuestsSponsor, PermGuestsRead,
+		PermJobsRead, PermProvisioningRead, PermProvisioningManage},
 	RoleBreakGlass: {PermAdminRead, PermBreakGlassRecover},
 }
 
@@ -193,10 +203,10 @@ const (
 )
 
 var scopePermissions = map[Scope][]Permission{
-	ScopeRead: {PermGraphRead, PermConnectionsRead},
+	ScopeRead: {PermGraphRead, PermConnectionsRead, PermJobsRead, PermProvisioningRead},
 	ScopeWrite: {PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage, PermReviewsDecide,
 		PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
-		PermConnectionsManage, PermConnectionsActivate, PermRolesManage, PermLifecycleManage},
+		PermConnectionsManage, PermConnectionsActivate, PermRolesManage, PermLifecycleManage, PermProvisioningManage},
 	ScopeAudit: {PermAuditRead, PermAuditVerify},
 	ScopeAdmin: {PermEmailRead, PermEmailManage, PermAdminRead, PermAdminChangeReq, PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev,
 		PermBreakGlassRecover},
