@@ -78,6 +78,14 @@ DELETE /api/connections/{id}/checklist/{item}/skip   connections.manage -
 POST   /api/connections/{id}/transition              connections.manage -
 POST   /api/connections/{id}/activate                connections.activate STEP_UP_POLICY
 POST   /api/connections/{id}/retire                  connections.manage STEP_UP_POLICY
+GET    /api/correlation/queue                        graph.read      -  # issue #160
+GET    /api/correlation/decisions                    graph.read      -  # issue #160
+POST   /api/accounts/{account_id}/link               identities.correlate STEP_UP_POLICY  # issue #160
+POST   /api/accounts/{account_id}/not-person         identities.correlate STEP_UP_POLICY  # issue #160
+DELETE /api/accounts/{account_id}/link               identities.correlate STEP_UP_POLICY  # issue #160
+POST   /api/identities/{identity_id}/merge           identities.merge STEP_UP_POLICY  # issue #160
+GET    /api/identity-merges                          graph.read      -  # issue #160
+POST   /api/identity-merges/{merge_id}/unmerge       identities.merge STEP_UP_POLICY  # issue #160
 POST   /api/connections/{id}/validate                connections.manage -
 GET    /api/connections/{id}/validations/{run}       connections.read   -
 POST   /api/connections/{id}/dry-run                 connections.manage -

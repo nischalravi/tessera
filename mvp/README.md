@@ -149,10 +149,10 @@ The routes are documented at `/api/readiness/openapi.json`.
 `GET /api/graph?identity_id=|resource_id=` · `GET /api/nhi` ·
 `GET /api/least-privilege/recommendations?unused_days=60&kind=remove|right_size|role_trim` ·
 `POST /api/least-privilege/revoke {edge_id, dry_run}` · `GET /api/policies` · `GET /api/violations` ·
-`POST /api/simulate {remove_edge_ids, add_edges:[{src,dst}], disable_account_ids}` ·
+`POST /api/simulate {remove_edge_ids, add_edges:[{src,dst,duration_hours?}], disable_account_ids}` ·
 `GET|POST /api/jit/requests` · `POST /api/jit/requests/{id}/approve|deny|revoke` ·
 `GET|POST /api/reviews/campaigns` · `POST /api/reviews/items/{id}/decision` ·
-`GET|POST /api/hris/events` · `GET /api/hris/events/{id}/plan` · `POST /api/hris/events/{id}/execute` ·
+`GET|POST /api/hris/events` (422 for an unknown `identity_id`) · `GET /api/hris/events/{id}/plan` · `POST /api/hris/events/{id}/execute` ·
 `GET /api/jml/leaver-plan/{identity_id}` · `GET /api/accounts[?system=]` ·
 `GET /api/audit[?limit=&before_seq=&action=&actor_id=&target_type=&target_id=&from=&to=&include_http=]` ·
 `GET /api/audit/events/{event_id}/proof` · `GET /api/audit/checkpoints[?from_seq=]` · `GET /api/audit/keys` ·
@@ -164,7 +164,12 @@ The routes are documented at `/api/readiness/openapi.json`.
 `POST /api/auth/saml/{connection_id}/acs` · `GET /t/{slug}/bootstrap?code=` (public) ·
 `GET|POST /api/access/policies` · `PUT|DELETE /api/access/policies/{id}` · `GET|POST /api/access/networks` ·
 `PUT|DELETE /api/access/networks/{id}` · `GET /api/access/users` · `GET /api/access/device-signals` ·
-`PUT|DELETE /api/access/device-signals/{user_id}` · `POST /api/access/evaluate` (conditional access, below)
+`PUT|DELETE /api/access/device-signals/{user_id}` · `POST /api/access/evaluate` (conditional access, below) ·
+`GET|POST /api/auth/dev-login` (dev and test only) ·
+`GET /api/correlation/queue` · `GET /api/correlation/decisions` ·
+`POST /api/accounts/{id}/link {identity_id, reason}` · `POST /api/accounts/{id}/not-person {reason}` ·
+`DELETE /api/accounts/{id}/link` · `POST /api/identities/{id}/merge {into, reason}` ·
+`GET /api/identity-merges` · `POST /api/identity-merges/{id}/unmerge {reason}`
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
@@ -210,6 +215,28 @@ tenant admin); changing needs `conditional_access.manage` (tenant admin) and a f
 sign-in. A tenant is limited to 100 policies and 100 ranges. `POST /api/access/evaluate` answers what the
 current policies would decide for a described request without recording anything. In the dev IdP, Alice's
 device is managed and compliant and Olu's is neither (`device:` in `users.yaml`).
+### Account correlation
+
+Connectors tie most accounts to a person. **Directory → Accounts → Account matches**
+(`/directory/matches`) handles the rest (issue #160):
+
+- **To review** lists user accounts with no person and no decision. A login that equals a
+  person's email, or matches the part before the @, is shown as a *proposal*. Tessera never
+  links on it by itself (self-asserted attributes, design K12).
+- **Link**, **Not a person** and **Release** pin a reviewer's decision (`account_links`).
+  Connector syncs keep it until someone releases it, which hands the account back to the
+  connector's mapping.
+- **Merge** (identity page, More actions → Merge into…) moves the merged identity's accounts,
+  account decisions, owned identities, reports and agent delegations to the identity kept. The
+  merged identity gets status `merged`; syncs keep it merged and resolve references to it to the
+  survivor. History (usage, reviews, requests, HRIS events) is not moved. An identity bound to a
+  Tessera sign-in user cannot be the merged side, because credentials never move.
+- **Undo** (Merges tab) works for 180 days. It moves back every recorded row that still points
+  at the survivor; rows changed since stay and are listed. Merges into an identity that was
+  merged later are undone last-first.
+
+Decisions need `identities.correlate`, merges `identities.merge` (both: policy admin), each
+with a fresh phishing-resistant sign-in and a reason. Every decision is audited.
 
 ### Audit ledger
 
@@ -273,7 +300,7 @@ the right. Arrow keys move between items.
 | Group | Items |
 |---|---|
 | (top) | **Home**, **Inbox** (count) |
-| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts, Roles (Preview), Organizations (Preview) |
+| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts (with *Account matches*), Roles (Preview), Organizations (Preview) |
 | **Access** | Request access, My access (with *My requests*), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
 | **Protection** | Policies & SoD (violations, policies, what-if simulation), Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
 | **Settings** | Connections (governed connections and the setup wizard), Conditional access (network ranges, policies, device signals), Admin |
@@ -629,6 +656,10 @@ OpenAPI document). Deliberate differences:
 * CORS no longer allows every origin (`*`); see above.
 * `violations.resolved` / `violations.introduced` in simulate and revoke responses are sorted by
   `key` (Python's order depended on the hash seed).
+* `POST /api/hris/events` returns `422` for an `identity_id` that does not exist; `GET .../plan` returns `409` (not `500`) for a stored event whose identity is gone.
+* A connector sync never undoes Tessera-side decisions: terminated identities, disabled accounts, executed HRIS events and
+  grants revoked by a leaver plan, access review or least-privilege revoke (tombstones in `revoked_grants`) stay as they are.
+* `add_edges[].duration_hours` simulates a time-boxed JIT grant, which never counts as standing access.
 * Policies are embedded in the binary; set `TESSERA_POLICY_DIR` (run.sh does) to edit them live.
 
 ## Known gaps (MVP)

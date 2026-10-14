@@ -40,7 +40,8 @@ var (
 		INSERT INTO accounts (tenant_id, system, external_id, username, identity_id, kind, status, created_at, last_login_at)
 		VALUES (@tenant, @system, @external_id, @username, @identity_id, @kind, @status, @created_at, @last_login_at)
 		ON CONFLICT (tenant_id, system, external_id) DO UPDATE SET username = excluded.username,
-			identity_id = excluded.identity_id, kind = excluded.kind, status = excluded.status,
+			identity_id = excluded.identity_id, kind = excluded.kind,
+			status = CASE WHEN accounts.status = 'disabled' THEN accounts.status ELSE excluded.status END, -- a disable decision sticks
 			created_at = excluded.created_at, last_login_at = excluded.last_login_at`)
 	accountsInsert = tq("accounts.insert", `
 		INSERT INTO accounts (tenant_id, system, external_id, identity_id, username, kind, status, created_at, last_login_at)
