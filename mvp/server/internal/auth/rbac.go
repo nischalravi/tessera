@@ -95,6 +95,12 @@ const (
 	// guest lifecycle settings (issue #74): reminders, transfer deadlines,
 	// grace and retention
 	PermGuestLifecycleConfigure Permission = "guest_lifecycle.configure"
+	// guest terms of use and recovery (issue #73): terms.manage publishes and
+	// assigns terms documents; guests.recover is the help desk's right to issue a
+	// recovery link for any guest (a sponsor may for their own guests with
+	// guests.sponsor).
+	PermTermsManage   Permission = "terms.manage"
+	PermGuestsRecover Permission = "guests.recover"
 	// email delivery log (issue #189)
 	PermEmailRead   Permission = "email.read"
 	PermEmailManage Permission = "email.manage"
@@ -118,7 +124,7 @@ var rolePermissions = map[Role][]Permission{
 	RoleViewer: {PermGraphRead, PermRequestsCreate, PermGuestsSponsor},
 	RoleOperator: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
 		PermReviewsDecide, PermHRISSimulateEvent, PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide,
-		PermGuestsSponsor, PermGuestsRead, PermJobsRead, PermProvisioningRead},
+		PermGuestsSponsor, PermGuestsRead, PermGuestsRecover, PermJobsRead, PermProvisioningRead},
 	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead, PermRequestsCreate, PermEmailRead,
 		PermGuestsSponsor, PermGuestsRead, PermJobsRead, PermProvisioningRead},
 	RolePolicyAdmin: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
@@ -126,7 +132,7 @@ var rolePermissions = map[Role][]Permission{
 		PermIdentitiesCorrelate, PermIdentitiesMerge, PermIdentitiesAffiliate,
 		PermIdentityMatchesReview, PermMatchingConfigure, PermGuestLifecycleConfigure,
 		PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide, PermCatalogManage, PermRolesManage, PermLifecycleManage,
-		PermGuestsSponsor, PermGuestsRead, PermSponsorshipsApprove, PermJobsRead, PermProvisioningRead, PermProvisioningManage},
+		PermGuestsSponsor, PermGuestsRead, PermGuestsRecover, PermSponsorshipsApprove, PermTermsManage, PermJobsRead, PermProvisioningRead, PermProvisioningManage},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
 		PermConnectionsActivate, PermRequestsCreate, PermEmailRead, PermEmailManage, PermGuestsSponsor, PermGuestsRead,
