@@ -3,12 +3,17 @@
  * they are and picks the person who will vouch for them (a name-only search, or a code that person
  * shared). Nothing is created until that person approves. Whatever happens to the request, the page
  * answers the same: "Check your email". It never says whether an address or a sponsor is known.
+ *
+ * Accessibility: every field has a visible label; a failed submit moves focus to the error, which is
+ * announced (role="alert") and marks the field; search results are a radio group, so they work with a
+ * keyboard and a screen reader, and the number of results is announced.
  */
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { CheckCircle2 } from "lucide-react";
 import { SponsorChoice, searchSponsors, submitRegistration } from "../../api";
 import { Button } from "../../components/Button";
-import { Callout } from "../../components/Feedback";
+import { t } from "../../i18n";
+import { ErrorAlert, PublicHeading, PublicShell, StatusRegion } from "../PublicShell";
 import { tenantSlug } from "../claim/model";
 
 const isoDay = (d: Date) => d.toISOString().slice(0, 10);
@@ -20,88 +25,113 @@ export default function RegisterPage() {
   const [mode, setMode] = useState<"search" | "code">("search");
   const [q, setQ] = useState("");
   const [choices, setChoices] = useState<SponsorChoice[]>([]);
+  const [searched, setSearched] = useState(false);
   const [sponsor, setSponsor] = useState("");
   const [code, setCode] = useState("");
   const [state, setState] = useState<"ready" | "sending" | "sent">("ready");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [bad, setBad] = useState<"" | "sponsor" | "code">("");
   const set = (k: keyof typeof form) => (e: { target: { value: string } }) => setForm({ ...form, [k]: e.target.value });
+  const sponsorInput = useRef<HTMLInputElement>(null);
+  const codeInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    setSearched(false);
     if (mode !== "search" || q.trim().length < 2) {
       setChoices([]);
       return;
     }
     let alive = true;
-    const t = window.setTimeout(() => {
-      searchSponsors(slug, q).then((c) => alive && setChoices(c)).catch(() => alive && setChoices([]));
+    const timer = window.setTimeout(() => {
+      searchSponsors(slug, q)
+        .then((c) => { if (alive) { setChoices(c); setSearched(true); } })
+        .catch(() => { if (alive) { setChoices([]); setSearched(false); } });
     }, 250);
     return () => {
       alive = false;
-      window.clearTimeout(t);
+      window.clearTimeout(timer);
     };
   }, [q, mode, slug]);
+
+  const fail = (text: string, field: "" | "sponsor" | "code" = "") => {
+    setError(text);
+    setBad(field);
+    // the message is announced by its alert region; focus goes to the field that needs the fix
+    window.setTimeout(() => (field === "sponsor" ? sponsorInput : field === "code" ? codeInput : null)?.current?.focus(), 0);
+  };
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setError("");
-    if (mode === "search" && !sponsor) return setError("Pick the person who will sponsor you from the search results.");
-    if (mode === "code" && !code.trim()) return setError("Enter the code your sponsor gave you.");
+    setBad("");
+    if (mode === "search" && !sponsor) return fail(t("register.error.pick_sponsor"), "sponsor");
+    if (mode === "code" && !code.trim()) return fail(t("register.error.enter_code"), "code");
     setState("sending");
     try {
       // challenge_token: a bot challenge widget (Turnstile or equivalent) fills it where one is configured
       setMessage(await submitRegistration(slug, { ...form, sponsor: mode === "search" ? sponsor : undefined, code: mode === "code" ? code : undefined }));
       setState("sent");
     } catch (err: any) {
-      setError(String(err.message ?? err));
+      fail(String(err.message ?? err));
       setState("ready");
     }
   };
 
   return (
-    <div className="claim-wrap">
-      <main className="claim" aria-labelledby="register-title">
-        <p className="claim-brand">Tessera</p>
-        <h1 id="register-title" className="claim-h">Register as a guest</h1>
-        {state === "sent" ? (
-          <p role="status" className="row tight"><CheckCircle2 size={18} aria-hidden /> {message} If your sponsor approves, we will send you a link to set up your sign-in.</p>
-        ) : (
+    <PublicShell titleKey="register.title">
+      {state === "sent" ? (
+        <>
+          <PublicHeading>{t("register.sent_title")}</PublicHeading>
+          <p role="status" className="row tight"><CheckCircle2 size={18} aria-hidden /> {message} {t("register.sent_suffix")}</p>
+        </>
+      ) : (
+        <>
+          <PublicHeading>{t("register.title")}</PublicHeading>
           <form onSubmit={submit} className="stack" style={{ gap: 12 }}>
-            <p>Tell us who you are and who invited you. Nothing is created until they approve.</p>
-            {error && <Callout tone="bad">{error}</Callout>}
-            <label>First name<input className="input" required maxLength={100} autoComplete="given-name" value={form.given_name} onChange={set("given_name")} /></label>
-            <label>Last name<input className="input" maxLength={100} autoComplete="family-name" value={form.family_name} onChange={set("family_name")} /></label>
-            <label>Email<input className="input" type="email" required maxLength={320} autoComplete="email" value={form.email} onChange={set("email")} /></label>
-            <label>Why do you need access?<textarea className="input" required maxLength={500} rows={3} value={form.purpose} onChange={set("purpose")} /></label>
-            <label>Until<input className="input" type="date" required min={isoDay(today)} value={form.ends_at} onChange={set("ends_at")} /></label>
-            <fieldset className="stack" style={{ gap: 8, border: 0, padding: 0, margin: 0 }}>
-              <legend>Your sponsor</legend>
+            <p>{t("register.intro")}</p>
+            <ErrorAlert message={error} />
+            <label className="field">{t("register.given_name")}<input className="input" required maxLength={100} autoComplete="given-name" value={form.given_name} onChange={set("given_name")} /></label>
+            <label className="field">{t("register.family_name")}<input className="input" maxLength={100} autoComplete="family-name" value={form.family_name} onChange={set("family_name")} /></label>
+            <label className="field">{t("register.email")}<input className="input" type="email" required maxLength={320} autoComplete="email" value={form.email} onChange={set("email")} /></label>
+            <label className="field">{t("register.purpose")}<textarea className="input" required maxLength={500} rows={3} value={form.purpose} onChange={set("purpose")} /></label>
+            <label className="field">{t("register.until")}<input className="input" type="date" required min={isoDay(today)} value={form.ends_at} onChange={set("ends_at")} /></label>
+            <fieldset className="claim-choices">
+              <legend>{t("register.sponsor_legend")}</legend>
               <div className="row">
-                <label className="row tight"><input type="radio" name="mode" checked={mode === "search"} onChange={() => setMode("search")} /> Search by name</label>
-                <label className="row tight"><input type="radio" name="mode" checked={mode === "code"} onChange={() => setMode("code")} /> I have a code</label>
+                <label className="row tight"><input type="radio" name="mode" checked={mode === "search"} onChange={() => { setMode("search"); setBad(""); }} /> {t("register.mode_search")}</label>
+                <label className="row tight"><input type="radio" name="mode" checked={mode === "code"} onChange={() => { setMode("code"); setBad(""); }} /> {t("register.mode_code")}</label>
               </div>
               {mode === "search" ? (
                 <>
-                  <label>Sponsor's name<input className="input" value={q} onChange={(e) => { setQ(e.target.value); setSponsor(""); }} autoComplete="off" aria-describedby="sponsor-help" /></label>
-                  <p id="sponsor-help" className="small muted">Type at least two letters.</p>
+                  <label className="field">{t("register.sponsor_name")}
+                    <input ref={sponsorInput} className="input" value={q} onChange={(e) => { setQ(e.target.value); setSponsor(""); }} autoComplete="off"
+                      aria-describedby="sponsor-help" aria-invalid={bad === "sponsor" ? true : undefined} />
+                  </label>
+                  <p id="sponsor-help" className="small muted">{t("register.sponsor_help")}</p>
+                  <StatusRegion>{searched && (choices.length === 0 ? t("register.results_none") : t("register.results_count", { count: choices.length }))}</StatusRegion>
                   {choices.length > 0 && (
-                    <ul role="listbox" aria-label="Matching sponsors" className="stack" style={{ listStyle: "none", margin: 0, padding: 0, gap: 4 }}>
+                    <fieldset className="claim-choices">
+                      <legend className="sr-only">{t("register.sponsor_results")}</legend>
                       {choices.map((c) => (
-                        <li key={c.handle}>
-                          <button type="button" role="option" aria-selected={sponsor === c.handle} className={`btn ${sponsor === c.handle ? "primary" : ""}`} onClick={() => setSponsor(c.handle)}>{c.name}</button>
-                        </li>
+                        <label key={c.handle} className="row tight">
+                          <input type="radio" name="sponsor" checked={sponsor === c.handle} onChange={() => { setSponsor(c.handle); setBad(""); }} /> {c.name}
+                        </label>
                       ))}
-                    </ul>
+                    </fieldset>
                   )}
                 </>
               ) : (
-                <label>Sponsor code<input className="input" value={code} onChange={(e) => setCode(e.target.value)} autoComplete="off" maxLength={32} placeholder="ABCDE-FGHJK" /></label>
+                <label className="field">{t("register.sponsor_code")}
+                  <input ref={codeInput} className="input" value={code} onChange={(e) => setCode(e.target.value)} autoComplete="off" maxLength={32} placeholder="ABCDE-FGHJK"
+                    aria-invalid={bad === "code" ? true : undefined} />
+                </label>
               )}
             </fieldset>
-            <Button variant="primary" type="submit" disabled={state === "sending"}>{state === "sending" ? "Sending…" : "Ask my sponsor"}</Button>
+            <Button variant="primary" type="submit" disabled={state === "sending"}>{state === "sending" ? t("common.sending") : t("register.submit")}</Button>
           </form>
-        )}
-      </main>
-    </div>
+        </>
+      )}
+    </PublicShell>
   );
 }

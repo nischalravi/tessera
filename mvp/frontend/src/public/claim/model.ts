@@ -39,14 +39,6 @@ export function tenantSlug(hostname: string, configured?: string): string {
   return "larkspur";
 }
 
-export const STEP_LABEL: Record<ClaimStep, string> = {
-  verify_contact: "Confirm your email",
-  verify_identity: "Verify your identity",
-  existing_account: "Existing account",
-  credential: "Choose how you sign in",
-  complete: "Done",
-};
-
 /** The steps a person goes through, from what the API listed (identity verification only when it is the step). */
 export function visibleSteps(s: Pick<ClaimStatus, "steps" | "step">): ClaimStep[] {
   return s.steps.filter((x) => x !== "verify_identity" || s.step === "verify_identity");
@@ -93,14 +85,6 @@ export function resultFromSearch(search: string): ClaimResult | null {
 /** Where a "yes, I have an account" answer sends the browser: the sign-in the API started, or nowhere. */
 export const signInRedirect = (r: { status?: string; redirect?: string }): string | null =>
   r.status === "redirect" && typeof r.redirect === "string" && r.redirect !== "" ? r.redirect : null;
-
-/** Population in a sentence. */
-export const POPULATION_PHRASE: Record<string, string> = {
-  visitor: "a visitor",
-  contractor: "a contractor",
-  volunteer: "a volunteer",
-  partner: "a partner",
-};
 
 /**
  * What is left of step 5 in what the API listed: the documents not yet ticked, and whether the consent

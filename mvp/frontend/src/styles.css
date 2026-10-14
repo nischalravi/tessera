@@ -877,3 +877,6 @@ fieldset.card { margin: 0; }
 .match-sides > section { border: 1px solid var(--border); border-radius: 6px; padding: var(--s-3); min-width: 0; }
 .kv.kv-narrow { grid-template-columns: 96px minmax(0, 1fr); }
 @media (max-width: 640px) { .match-sides { grid-template-columns: minmax(0, 1fr); } }
+.claim-terms { max-height: 240px; overflow: auto; white-space: pre-wrap; border: 1px solid var(--line); border-radius: var(--r-sm, 4px); padding: 8px; background: var(--surface-2); }
+.claim-terms:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.claim [aria-invalid="true"] { border-color: var(--critical); }
