@@ -261,9 +261,10 @@ func TestRequest_DecisionRules(t *testing.T) {
 		_, err := requests.Cancel(c, forAlice.ID, w.pat, w.now)
 		return err
 	})
-	// alice comes back; she asks again for herself; another approver grants; she removes it herself
+	// alice comes back; she asks again for herself; another approver grants; she removes it herself.
+	// A connector sync no longer reverts a termination (UAT #134), so the rehire is set directly.
 	w.tx(func(c *store.TenantTx) error {
-		return c.UpsertIdentity(&store.Identity{ExternalID: "alice", Name: "Alice", Type: "human", Status: "active", CreatedAt: w.now})
+		return c.SetIdentityStatus(w.ids["alice"], "active")
 	})
 	again, err := w.submit(w.alice, false, []string{"alice"}, []string{"group:okta:platform"}, nil)
 	if err != nil {

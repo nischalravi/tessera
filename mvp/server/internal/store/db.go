@@ -73,7 +73,7 @@ var schemaFS embed.FS
 // tables in dependency order (parents first); Migrate(drop) drops them in reverse.
 var tables = []string{
 	"tenants", "platform_keys", "tenant_signing_keys", "identities", "accounts", "groups", "resources", "permissions", "grant_edges", "secrets",
-	"agent_delegations", "usage_events", "access_requests", "review_campaigns", "review_items",
+	"revoked_grants", "agent_delegations", "usage_events", "access_requests", "review_campaigns", "review_items",
 	"hris_events",
 	// auth core (schema/0005_auth.sql)
 	"idp_connections", "platform_users", "external_logins", "role_assignments", "authn_contexts", "sessions",
@@ -82,7 +82,7 @@ var tables = []string{
 	"bootstrap_invitations",
 	// audit ledger (schema/0004_audit.sql)
 	"audit_events", "audit_chain_heads", "audit_checkpoints",
-	// deployment readiness (schema/0201-0203)
+	// deployment readiness (schema/0201-0203; revoked_grants is 0204)
 	"connections", "connection_revisions", "readiness_check_runs", "readiness_item_states", "readiness_attestations",
 	"readiness_skips", "readiness_overlays", "readiness_check_results", "recon_runs", "recon_findings", "readiness_scores",
 	"stg_identities", "stg_accounts", "stg_groups", "stg_memberships", "stg_attr_stats",
