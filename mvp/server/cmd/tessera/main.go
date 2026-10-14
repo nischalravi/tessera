@@ -23,6 +23,7 @@
 //	                      otherwise, so an unset variable fails closed.
 //	TESSERA_DEV_DEFAULT_TENANT  slug of that tenant (default larkspur)
 //	TESSERA_READINESS_SCENARIO  simulated validation scenario for demo connectors: gaps (default) or happy
+//	TESSERA_SAFEDIAL_ALLOW      dev only: host:port or CIDR:port private LDAP targets live checks may dial (see mvp/README.md "Live LDAP checks")
 //	TESSERA_READINESS_DEMO      "off" skips seeding the demo Okta connection (larkspur only) for Deployment health
 package main
 
@@ -50,6 +51,9 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
+	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
+	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
+	"github.com/nischalravi/tessera/mvp/server/internal/safedial"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/seed"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -240,9 +244,23 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if err != nil {
 		return err
 	}
+	// Live readiness checks: real LDAP probes open the sealed credential with
+	// the KEK and dial through safedial. Private targets need the dev-only
+	// allowlist (refused in prod by config) or, later, the Directory Agent.
+	templates, err := template.Default()
+	if err != nil {
+		return err
+	}
+	allow, err := safedial.ParseAllow(cfg.SafedialAllow)
+	if err != nil {
+		return fmt.Errorf("TESSERA_SAFEDIAL_ALLOW: %w", err)
+	}
+	rsvc := readiness.NewService(templates, os.Getenv("TESSERA_ENV"))
+	rsvc.Runner.Scenario = scenario
+	rsvc.Runner.Live.Sealer, rsvc.Runner.Live.Allow = sealer, allow
 	srv := api.New(api.Config{Store: st, Tenant: tenant, Clock: clock, Policies: loader, Logger: logger,
 		AllowedOrigins: cfg.CORSOrigins, Env: os.Getenv("TESSERA_ENV"), ReadinessScenario: scenario,
-		AuditAnchor: anchorURL})
+		Readiness: rsvc, AuditAnchor: anchorURL})
 	checkpointer := &audit.Checkpointer{DB: st, Sealer: sealer, Sink: sink, Clock: timeutil.System, Issuer: cfg.PublicURL,
 		Every: time.Duration(cfg.AuditCheckpointSeconds) * time.Second, EveryEvents: int64(cfg.AuditCheckpointEvents),
 		Log: logger}
