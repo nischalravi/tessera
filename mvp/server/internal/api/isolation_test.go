@@ -137,6 +137,7 @@ var crossTenantCases = map[string]crossTenantCase{
 	"GET identity affiliations":  {method: "GET", path: pathf("/api/identities/%d/affiliations"), key: "alice"},
 	"GET identity identifiers":   {method: "GET", path: pathf("/api/identities/%d/identifiers"), key: "alice"},
 	"GET identity access bundle": {method: "GET", path: pathf("/api/identities/%d/access-bundle"), key: "alice"},
+	"GET identity guest profile": {method: "GET", path: pathf("/api/identities/%d/guest-profile"), key: "alice"},
 	// a bundle names catalog groups by id: tenant A's group is not in B's catalog, like a missing one
 	"POST invite bundle": {method: "POST", path: fixed("/api/guests/invitations"), key: "group:aws:ProdAdmin",
 		body: func(id int64) string {
@@ -177,6 +178,7 @@ var routeParamCases = map[string][]string{
 	"GET /api/identities/{identity_id}/affiliations":      {"GET identity affiliations"},
 	"GET /api/identities/{identity_id}/identifiers":       {"GET identity identifiers"},
 	"GET /api/identities/{identity_id}/access-bundle":     {"GET identity access bundle"},
+	"GET /api/identities/{identity_id}/guest-profile":     {"GET identity guest profile"},
 	"POST /api/identities/{identity_id}/affiliations":     {"POST add affiliation"},
 }
 
@@ -328,6 +330,7 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		"/api/identities/{identity_id}/affiliations":  fmt.Sprint(b["alice"]),
 		"/api/identities/{identity_id}/identifiers":   fmt.Sprint(b["alice"]),
 		"/api/identities/{identity_id}/access-bundle": fmt.Sprint(b["alice"]),
+		"/api/identities/{identity_id}/guest-profile": fmt.Sprint(b["alice"]),
 		"/api/jml/leaver-plan/{identity_id}":          fmt.Sprint(b["alice"]),
 		"/api/reviews/campaigns/{campaign_id}":        fmt.Sprint(b["campaign"]),
 		"/api/hris/events/{event_id}/plan":            fmt.Sprint(b["hris:leaver"]),

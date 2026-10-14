@@ -1,13 +1,16 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/affiliations"
+	"github.com/nischalravi/tessera/mvp/server/internal/identity/match"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -17,6 +20,8 @@ import (
 //
 //	GET  /api/identities/{identity_id}/affiliations   the person's lifecycle state and affiliations
 //	GET  /api/identities/{identity_id}/identifiers    identifiers and how each was verified
+//	GET  /api/affiliation-summary                       every person's lifecycle state and effective affiliation types (the People list filters)
+//	GET  /api/identities/{identity_id}/guest-profile  source records (identifiers masked, attribute names only) and terms acceptances (guests.read)
 //	POST /api/identities/{identity_id}/affiliations   {type, org_unit, population, starts_at, ends_at, reason}
 //	POST /api/affiliations/{affiliation_id}/end       {reason}
 //
@@ -30,6 +35,8 @@ func (s *Server) registerAffiliationRoutes() {
 	affiliate := needStepUp(auth.PermIdentitiesAffiliate, auth.StepUpPolicy)
 	s.handle(G, "/api/identities/{identity_id}/affiliations", read, need(auth.PermGraphRead), s.listAffiliations)
 	s.handle(G, "/api/identities/{identity_id}/identifiers", read, need(auth.PermGraphRead), s.listIdentifiers)
+	s.handle(G, "/api/affiliation-summary", read, need(auth.PermGraphRead), s.affiliationSummary)
+	s.handle(G, "/api/identities/{identity_id}/guest-profile", read, need(auth.PermGuestsRead), s.guestProfile)
 	s.handle(P, "/api/identities/{identity_id}/affiliations", write, affiliate, s.addAffiliation)
 	s.handle(P, "/api/affiliations/{affiliation_id}/end", write, affiliate, s.endAffiliation)
 }
@@ -156,6 +163,112 @@ func (s *Server) listIdentifiers(_ http.ResponseWriter, r *http.Request, p *para
 			}
 		}
 		out = append(out, v)
+	}
+	return out, nil
+}
+
+type affiliationSummaryRow struct {
+	IdentityID     int64    `json:"identity_id"`
+	LifecycleState string   `json:"lifecycle_state"`
+	Types          []string `json:"types"` // effective-active or pending affiliation types, sorted
+}
+
+// affiliationSummary is one read for the People list's affiliation and lifecycle filters, instead of
+// one request per person. It carries no identifiers and nothing beyond what the per-person route returns.
+func (s *Server) affiliationSummary(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	if err := validated(p, nil); err != nil {
+		return nil, err
+	}
+	c, now := store.TxFrom(r.Context()), s.clock().UTC()
+	ids, err := c.Identities()
+	if err != nil {
+		return nil, err
+	}
+	all, err := c.Affiliations()
+	if err != nil {
+		return nil, err
+	}
+	by := map[int64][]*store.Affiliation{}
+	for _, a := range all {
+		by[a.IdentityID] = append(by[a.IdentityID], a)
+	}
+	out := make([]affiliationSummaryRow, 0, len(ids))
+	for _, i := range ids {
+		affs := by[i.ID]
+		row := affiliationSummaryRow{IdentityID: i.ID, Types: []string{},
+			LifecycleState: string(affiliations.Derive(i.Status, affs, now, affiliations.DefaultNotice))}
+		seen := map[string]bool{}
+		for _, a := range affs {
+			if e := affiliations.Effective(a, now); (e == store.AffActive || e == store.AffPending) && !seen[a.Type] {
+				seen[a.Type] = true
+				row.Types = append(row.Types, a.Type)
+			}
+		}
+		sort.Strings(row.Types)
+		out = append(out, row)
+	}
+	return struct {
+		People []affiliationSummaryRow `json:"people"`
+	}{out}, nil
+}
+
+type sourceRecordView struct {
+	ID         string    `json:"id"`
+	System     string    `json:"system"`
+	SystemID   string    `json:"system_id"` // masked
+	Status     string    `json:"status"`
+	ReceivedAt time.Time `json:"received_at"`
+	// Attributes lists the names the record carries, never their values.
+	Attributes []string `json:"attributes"`
+}
+
+type termsAcceptanceView struct {
+	Key        string    `json:"key"`
+	Version    int       `json:"version"`
+	Context    string    `json:"context"`
+	AcceptedAt time.Time `json:"accepted_at"`
+}
+
+type guestProfileView struct {
+	IdentityID      int64                 `json:"identity_id"`
+	SourceRecords   []sourceRecordView    `json:"source_records"`
+	TermsAcceptance []termsAcceptanceView `json:"terms_acceptances"`
+}
+
+// guestProfile is the person page's "source records" and "terms accepted"
+// sections. It returns no attribute values, no hashes and no session data.
+func (s *Server) guestProfile(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	id := p.pathInt("identity_id")
+	if err := validated(p, nil); err != nil {
+		return nil, err
+	}
+	c := store.TxFrom(r.Context())
+	if _, err := person(c, id); err != nil {
+		return nil, err
+	}
+	srcs, err := c.SourceRecordsFor(id)
+	if err != nil {
+		return nil, err
+	}
+	acc, err := c.TermsAcceptancesFor(id)
+	if err != nil {
+		return nil, err
+	}
+	out := guestProfileView{IdentityID: id, SourceRecords: make([]sourceRecordView, 0, len(srcs)), TermsAcceptance: make([]termsAcceptanceView, 0, len(acc))}
+	for _, sr := range srcs {
+		names := []string{}
+		var attrs map[string]json.RawMessage
+		if json.Unmarshal([]byte(sr.Attributes), &attrs) == nil {
+			for k := range attrs {
+				names = append(names, k)
+			}
+			sort.Strings(names)
+		}
+		out.SourceRecords = append(out.SourceRecords, sourceRecordView{ID: sr.ID, System: sr.SOR, SystemID: match.MaskID(sr.SORID),
+			Status: sr.Status, ReceivedAt: sr.ReceivedAt, Attributes: names})
+	}
+	for _, a := range acc {
+		out.TermsAcceptance = append(out.TermsAcceptance, termsAcceptanceView{Key: a.Key, Version: a.Version, Context: a.Context, AcceptedAt: a.AcceptedAt})
 	}
 	return out, nil
 }
