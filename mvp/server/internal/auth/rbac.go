@@ -71,6 +71,8 @@ const (
 	// account correlation (issue #160)
 	PermIdentitiesCorrelate Permission = "identities.correlate"
 	PermIdentitiesMerge     Permission = "identities.merge"
+	// kill switch (issue #106)
+	PermIdentitiesContain Permission = "identities.contain"
 )
 
 // rolePermissions is the static role -> permission map (Cedar-ready, §12.1).
@@ -83,7 +85,7 @@ var rolePermissions = map[Role][]Permission{
 	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead},
 	RolePolicyAdmin: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
 		PermReviewsDecide, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
-		PermIdentitiesCorrelate, PermIdentitiesMerge},
+		PermIdentitiesCorrelate, PermIdentitiesMerge, PermIdentitiesContain},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
 		PermConnectionsActivate},
