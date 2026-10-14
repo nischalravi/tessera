@@ -98,3 +98,21 @@ func TestNewValidates(t *testing.T) {
 		}()
 	}
 }
+
+func TestExhausted(t *testing.T) {
+	l := ratelimit.New(time.Second, 2, 10)
+	if l.ExhaustedAt("k", t0) || l.Len() != 0 {
+		t.Fatal("an untracked key is exhausted or got tracked")
+	}
+	l.AllowAt("k", t0)
+	if l.ExhaustedAt("k", t0) {
+		t.Fatal("exhausted with a token left")
+	}
+	l.AllowAt("k", t0)
+	if !l.ExhaustedAt("k", t0) || !l.ExhaustedAt("k", t0) {
+		t.Fatal("not exhausted after the burst (or peeking took a token)")
+	}
+	if l.ExhaustedAt("k", t0.Add(time.Second)) {
+		t.Fatal("still exhausted after a refill")
+	}
+}

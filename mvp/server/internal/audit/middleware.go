@@ -42,11 +42,15 @@ import (
 // on the way (a JIT expiry swept before the analysis) does not record the
 // answer.
 //
-// The actor is "anonymous" until authentication lands (PR5). A client cannot
-// choose it: nothing in the request is read to attribute the event.
+// The actor is the authenticated principal, which the API's authenticator
+// hands over with SetPrincipal (with its tenant, session and authn summary),
+// or "anonymous" with the reason authentication failed (SetAnonymous). A
+// client cannot choose it: nothing in the request body or headers is read to
+// attribute the event.
 
-// AnonymousReason is recorded on every anonymous event until PR5.
-const AnonymousReason = "authentication_not_enabled"
+// AnonymousReason is recorded on an anonymous event whose request never
+// reached an authenticator (an unknown route, for example).
+const AnonymousReason = "unauthenticated"
 
 // MiddlewareConfig configures Middleware.
 type MiddlewareConfig struct {
@@ -104,6 +108,10 @@ type reqState struct {
 	at        time.Time
 	requestID string
 	tenant    tenancy.ID
+	actor     store.AuditActor
+	sessionID *string
+	authn     json.RawMessage
+	anonWhy   string
 	cfg       *MiddlewareConfig
 	r         *http.Request
 	bw        *bufferedWriter
@@ -122,6 +130,42 @@ func SetRoute(ctx context.Context, pattern string, params map[string]string) {
 	st.params = make(map[string]string, len(params))
 	for k, v := range params {
 		st.params[k] = v
+	}
+}
+
+// Principal is the authenticated caller of a request, as the audit ledger
+// records it.
+type Principal struct {
+	Tenant    tenancy.ID
+	Actor     store.AuditActor
+	SessionID *string
+	ClientID  *string
+	Authn     json.RawMessage // canon.Authn
+}
+
+// SetPrincipal attributes the request to p: its http.request event goes to
+// p.Tenant's chain with p's actor, session and authn summary, and so does
+// every domain event written through a transaction opened with the returned
+// context. Call it once, after authentication, before the handler runs.
+func SetPrincipal(ctx context.Context, p Principal) context.Context {
+	st, ok := ctx.Value(stateKey{}).(*reqState)
+	if ok {
+		st.mu.Lock()
+		st.tenant, st.actor, st.sessionID, st.authn, st.anonWhy = p.Tenant, p.Actor, p.SessionID, p.Authn, ""
+		st.mu.Unlock()
+	}
+	ac, _ := store.AuditContextFrom(ctx)
+	ac.Actor, ac.SessionID, ac.ClientID, ac.Authn = p.Actor, p.SessionID, p.ClientID, p.Authn
+	return store.WithAuditContext(ctx, ac)
+}
+
+// SetAnonymous records why the request is anonymous (public route, no
+// session, expired session, ...); it is kept as detail.anonymous_reason.
+func SetAnonymous(ctx context.Context, reason string) {
+	if st, ok := ctx.Value(stateKey{}).(*reqState); ok {
+		st.mu.Lock()
+		st.anonWhy = reason
+		st.mu.Unlock()
 	}
 }
 
@@ -200,7 +244,8 @@ func Middleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			st := &reqState{start: time.Now(), at: cfg.Clock(), requestID: uuid.NewString(), cfg: &cfg}
+			st := &reqState{start: time.Now(), at: cfg.Clock(), requestID: uuid.NewString(), cfg: &cfg,
+				actor: store.AuditActor{Type: store.ActorAnonymous}, anonWhy: AnonymousReason}
 			if cfg.Tenant != nil {
 				st.tenant = cfg.Tenant(r)
 			}
@@ -273,11 +318,16 @@ func (st *reqState) appendLocked(status int) error {
 		return err
 	}
 	ac, _ := store.AuditContextFrom(r.Context())
-	detail, err := canon.Detail(ojson.Object{{Key: "anonymous_reason", Value: AnonymousReason}})
+	d := ojson.Object{}
+	if st.actor.Type == store.ActorAnonymous {
+		d = append(d, ojson.KV{Key: "anonymous_reason", Value: st.anonWhy})
+	}
+	detail, err := canon.Detail(d)
 	if err != nil {
 		return err
 	}
-	e := store.AuditEvent{OccurredAt: st.at, ActorType: store.ActorAnonymous, Action: store.ActionHTTPRequest,
+	e := store.AuditEvent{OccurredAt: st.at, ActorType: st.actor.Type, ActorID: st.actor.ID, ActorDisplay: st.actor.Display,
+		SessionID: st.sessionID, Authn: st.authn, Action: store.ActionHTTPRequest,
 		Outcome: outcome(status), RequestID: &st.requestID, HTTP: h, IP: ac.IP, UserAgentSHA256: ac.UAHash, Detail: detail}
 	if st.route != nil {
 		e.TargetType, e.TargetID = target(*st.route, params)

@@ -80,7 +80,7 @@ func TestIsolation_StatementsAreConstants(t *testing.T) {
 				return true
 			}
 			id, ok := c.Fun.(*ast.Ident)
-			if !ok || (id.Name != "tq" && id.Name != "sq") {
+			if !ok || (id.Name != "tq" && id.Name != "sq" && id.Name != "lq") {
 				return true
 			}
 			calls++
@@ -102,6 +102,6 @@ func TestIsolation_StatementsAreConstants(t *testing.T) {
 		})
 	}
 	if calls != len(statements) {
-		t.Errorf("found %d tq/sq calls but %d registered statements", calls, len(statements))
+		t.Errorf("found %d tq/sq/lq calls but %d registered statements", calls, len(statements))
 	}
 }

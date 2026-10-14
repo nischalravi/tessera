@@ -20,7 +20,7 @@ type rdClient struct {
 func newRD(t *testing.T, mutate ...func(*Config)) rdClient {
 	t.Helper()
 	st := testkit.Demo(t)
-	return rdClient{client{t, testServer(st, mutate...)}, st}
+	return rdClient{client{t, testServer(t, st, mutate...)}, st}
 }
 
 // read runs fn in a read-only transaction of the test tenant. Tests reach

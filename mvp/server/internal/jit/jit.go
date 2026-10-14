@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -23,6 +25,11 @@ const MaxHours = 72
 type Error struct{ Msg string }
 
 func (e *Error) Error() string { return e.Msg }
+
+// ErrSelfApproval refuses an approval by the platform user who made the
+// request, or by the platform user linked to the identity that would get the
+// access (separation of duties: nobody grants themselves access).
+var ErrSelfApproval = errors.New("jit: the requester cannot approve their own request")
 
 func jitErr(format string, args ...any) error { return &Error{fmt.Sprintf(format, args...)} }
 
@@ -77,8 +84,10 @@ func getOrNil[T any](v *T, err error) (*T, error) {
 	return v, err
 }
 
-// CreateRequest files a pending request.
-func CreateRequest(c *store.TenantTx, now time.Time, identityID, groupID int64, hours Hours, justification string) (*store.AccessRequest, error) {
+// CreateRequest files a pending request on behalf of identityID, made by the
+// platform user by (zero for seed data).
+func CreateRequest(c *store.TenantTx, now time.Time, identityID, groupID int64, hours Hours, justification string,
+	by store.UserRef) (*store.AccessRequest, error) {
 	ident, err := getOrNil(c.Identity(identityID))
 	if err != nil {
 		return nil, err
@@ -115,7 +124,8 @@ func CreateRequest(c *store.TenantTx, now time.Time, identityID, groupID int64, 
 		return nil, jitErr("%s already holds %s as a standing grant", ident.Name, g.Name)
 	}
 	id, err := c.InsertRequest(&store.AccessRequest{IdentityID: identityID, AccountID: acct.ID, GroupID: g.ID,
-		Justification: justification, DurationHours: hours.N, Status: "pending", RequestedAt: now})
+		Justification: justification, DurationHours: hours.N, Status: "pending", RequestedAt: now,
+		RequestedByUserID: userID(by)})
 	if err != nil {
 		return nil, err
 	}
@@ -139,10 +149,24 @@ func pending(c *store.TenantTx, id int64) (*store.AccessRequest, error) {
 
 // Approve grants the access until now + duration. createdAt stamps a newly
 // created edge (the wall clock, which differs from now when back-dating).
-func Approve(c *store.TenantTx, requestID int64, approver string, now, createdAt time.Time) (*store.AccessRequest, error) {
+// by is the approver: its display string is decided_by, its platform user
+// decided_by_user_id. The audit actor is the request's principal.
+func Approve(c *store.TenantTx, requestID int64, by store.UserRef, now, createdAt time.Time) (*store.AccessRequest, error) {
 	req, err := pending(c, requestID)
 	if err != nil {
 		return nil, err
+	}
+	if by.ID != uuid.Nil {
+		if req.RequestedByUserID != nil && *req.RequestedByUserID == by.ID {
+			return nil, ErrSelfApproval
+		}
+		u, err := c.PlatformUser(by.ID)
+		if err != nil {
+			return nil, err
+		}
+		if u.IdentityID != nil && *u.IdentityID == req.IdentityID {
+			return nil, ErrSelfApproval
+		}
 	}
 	src, dst := graph.Key("account", req.AccountID), graph.Key("group", req.GroupID)
 	existing, err := getOrNil(c.EdgeBetween(src, dst))
@@ -164,7 +188,9 @@ func Approve(c *store.TenantTx, requestID int64, approver string, now, createdAt
 	if err != nil {
 		return nil, err
 	}
+	approver := by.Display
 	req.Status, req.DecidedAt, req.DecidedBy, req.ExpiresAt, req.EdgeID = "approved", &now, &approver, &expires, &edgeID
+	req.DecidedByUserID = userID(by)
 	if err := c.SaveRequest(req); err != nil {
 		return nil, err
 	}
@@ -176,12 +202,13 @@ func Approve(c *store.TenantTx, requestID int64, approver string, now, createdAt
 }
 
 // Deny rejects a pending request.
-func Deny(c *store.TenantTx, requestID int64, approver string, now time.Time) (*store.AccessRequest, error) {
+func Deny(c *store.TenantTx, requestID int64, by store.UserRef, now time.Time) (*store.AccessRequest, error) {
 	req, err := pending(c, requestID)
 	if err != nil {
 		return nil, err
 	}
-	req.Status, req.DecidedAt, req.DecidedBy = "denied", &now, &approver
+	approver := by.Display
+	req.Status, req.DecidedAt, req.DecidedBy, req.DecidedByUserID = "denied", &now, &approver, userID(by)
 	if err := c.SaveRequest(req); err != nil {
 		return nil, err
 	}
@@ -189,7 +216,7 @@ func Deny(c *store.TenantTx, requestID int64, approver string, now time.Time) (*
 }
 
 // Revoke ends an active grant early.
-func Revoke(c *store.TenantTx, requestID int64, actor string, now time.Time) (*store.AccessRequest, error) {
+func Revoke(c *store.TenantTx, requestID int64, by store.UserRef, now time.Time) (*store.AccessRequest, error) {
 	req, err := getOrNil(c.Request(requestID))
 	if err != nil {
 		return nil, err
@@ -204,7 +231,7 @@ func Revoke(c *store.TenantTx, requestID int64, actor string, now time.Time) (*s
 	if err := c.SaveRequest(req); err != nil {
 		return nil, err
 	}
-	return req, c.Audit(now, actor, "jit.revoke", ojson.Object{{Key: "request_id", Value: req.ID}})
+	return req, c.Audit(now, by.Display, "jit.revoke", ojson.Object{{Key: "request_id", Value: req.ID}})
 }
 
 func dropEdge(c *store.TenantTx, req *store.AccessRequest) error {
@@ -266,4 +293,13 @@ func SweepAll(ctx context.Context, db *store.DB, now time.Time) (map[tenancy.ID]
 		return nil
 	})
 	return out, err
+}
+
+// userID is the platform user of by, or nil.
+func userID(by store.UserRef) *uuid.UUID {
+	if by.ID == uuid.Nil {
+		return nil
+	}
+	id := by.ID
+	return &id
 }

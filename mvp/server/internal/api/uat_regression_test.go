@@ -15,7 +15,7 @@ import (
 // an event row that already points at a missing identity cannot break the reads.
 func TestHrisEventUnknownIdentity(t *testing.T) {
 	st, _ := testkit.Tiny(t)
-	c := client{t, testServer(st)}
+	c := client{t, testServer(t, st)}
 	for _, typ := range []string{"leaver", "mover", "joiner"} {
 		body := fmt.Sprintf(`{"type":%q,"identity_id":99999,"payload":{"name":"x","to_team":"eng"}}`, typ)
 		rec := c.do("POST", "/api/hris/events", body)
@@ -142,7 +142,7 @@ func (c rdClient) edge(id int64) *store.GrantEdge {
 // the standing-admin violation that a permanent grant would.
 func TestSimulateJitGrantIsNotStanding(t *testing.T) {
 	st, ids := testkit.Tiny(t)
-	c := client{t, testServer(st)}
+	c := client{t, testServer(t, st)}
 	edge := func(extra string) string {
 		return fmt.Sprintf(`{"add_edges":[{"src":"account:%d","dst":"group:%d"%s}]}`, ids["acct:okta:alice"], ids["group:okta:platform"], extra)
 	}

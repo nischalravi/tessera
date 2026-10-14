@@ -34,7 +34,7 @@ func namedArgs(args []sql.NamedArg) []any {
 	return out
 }
 
-const tenantCols = `t.id, t.slug, t.name, t.status, t.cell, t.min_admins, t.created_at`
+const tenantCols = `t.id, t.slug, t.name, t.status, t.cell, t.min_admins, t.settings, t.created_at`
 
 var (
 	tenantsExists         = sq("tenants.exists", `SELECT count(*) FROM tenants t WHERE t.id = @id`)
@@ -47,14 +47,18 @@ var (
 	tenantsList   = sq("tenants.list", `SELECT `+tenantCols+` FROM tenants t ORDER BY t.slug`)
 	tenantsActive = sq("tenants.active", `
 		SELECT `+tenantCols+` FROM tenants t WHERE t.status = 'active' AND t.slug != '_platform' ORDER BY t.slug`)
-	tenantsBySlug = sq("tenants.by_slug", `SELECT `+tenantCols+` FROM tenants t WHERE t.slug = @slug`)
+	tenantsBySlug      = sq("tenants.by_slug", `SELECT `+tenantCols+` FROM tenants t WHERE t.slug = @slug`)
+	tenantsByID        = sq("tenants.by_id", `SELECT `+tenantCols+` FROM tenants t WHERE t.id = @id`)
+	tenantsSetSettings = sq("tenants.set_settings", `
+		UPDATE tenants SET settings = @settings WHERE id = @id AND slug != '_platform' AND json_valid(@settings)
+			AND json_type(@settings) = 'object'`)
 )
 
 func scanTenant(s scanner) (Tenant, error) {
 	var t Tenant
 	var id string
 	var created nullTime
-	if err := s.Scan(&id, &t.Slug, &t.Name, &t.Status, &t.Cell, &t.MinAdmins, &created); err != nil {
+	if err := s.Scan(&id, &t.Slug, &t.Name, &t.Status, &t.Cell, &t.MinAdmins, &t.Settings, &created); err != nil {
 		return t, err
 	}
 	var err error
@@ -125,6 +129,34 @@ func (s *SystemTx) ActiveTenants() ([]Tenant, error) { return s.tenants(tenantsA
 // TenantBySlug returns one tenant (ErrNotFound if missing).
 func (s *SystemTx) TenantBySlug(slug string) (Tenant, error) {
 	ts, err := s.tenants(tenantsBySlug, sql.Named("slug", slug))
+	if err != nil {
+		return Tenant{}, err
+	}
+	if len(ts) == 0 {
+		return Tenant{}, ErrNotFound
+	}
+	return ts[0], nil
+}
+
+// TenantByID returns one tenant (ErrNotFound if missing).
+// SetTenantSettings replaces a tenant's settings (design §18.3; a JSON
+// object). Changing them from the API is an audited admin change (PR12);
+// until then only the seed and tests call this.
+func (s *SystemTx) SetTenantSettings(id tenancy.ID, settings string) error {
+	res, err := s.exec(tenantsSetSettings, sql.Named("id", id.String()), sql.Named("settings", settings))
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *SystemTx) TenantByID(id tenancy.ID) (Tenant, error) {
+	ts, err := s.tenants(tenantsByID, sql.Named("id", id.String()))
 	if err != nil {
 		return Tenant{}, err
 	}

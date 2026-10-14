@@ -94,6 +94,7 @@ func TestProdRefusesEachUnsafeSetting(t *testing.T) {
 		{"trusted proxies mapped IPv4 broader than /8", []string{"TESSERA_TRUSTED_PROXIES", "::ffff:0:0/96"}, "broader than /104"},
 		{"outbound loopback", []string{"TESSERA_OUTBOUND_ALLOW_LOOPBACK", "true"}, "TESSERA_OUTBOUND_ALLOW_LOOPBACK must be false"},
 		{"dev IdP URL set", []string{"TESSERA_DEV_IDP_URL", "http://127.0.0.1:8001"}, "TESSERA_DEV_IDP_URL must not be set"},
+		{"dev login opt-in", []string{"TESSERA_DEV_LOGIN", "1"}, "TESSERA_DEV_LOGIN must not be set"},
 		{"file audit anchor", []string{"TESSERA_AUDIT_ANCHOR", "file://server/var/audit-anchors.jsonl"}, "must not be file://"},
 		{"audit anchor missing", []string{"TESSERA_AUDIT_ANCHOR", "<unset>"}, "TESSERA_AUDIT_ANCHOR is required"},
 		{"access token TTL too long", []string{"TESSERA_AT_TTL_SECONDS", "901"}, "TESSERA_AT_TTL_SECONDS"},
@@ -297,5 +298,33 @@ func TestConfigNeverPrintsKEK(t *testing.T) {
 			strings.Contains(out, fmt.Sprint(raw)) {
 			t.Errorf("KEK printed: %s", out)
 		}
+	}
+}
+
+// TestTestEnvAndInsecureCookie: TESSERA_ENV=test is a non-production
+// environment; the insecure-cookie fallback is allowed only in dev on a
+// localhost public URL (§11).
+func TestTestEnvAndInsecureCookie(t *testing.T) {
+	c, err := config.Load(env(map[string]string{"TESSERA_ENV": "test"}))
+	if err != nil || c.Env != config.Test || c.IsProd() || c.PublicOrigin() != "http://localhost:5173" {
+		t.Fatalf("test env: %+v %v", c, err)
+	}
+	for _, tc := range []struct {
+		env map[string]string
+		ok  bool
+	}{
+		{map[string]string{"TESSERA_ENV": "dev", "TESSERA_COOKIE_SECURE": "false"}, true},
+		{map[string]string{"TESSERA_ENV": "dev", "TESSERA_COOKIE_SECURE": "false", "TESSERA_PUBLIC_URL": "http://127.0.0.1:5173"}, true},
+		{map[string]string{"TESSERA_ENV": "dev", "TESSERA_COOKIE_SECURE": "false", "TESSERA_PUBLIC_URL": "http://tessera.test.example"}, false},
+		{map[string]string{"TESSERA_ENV": "test", "TESSERA_COOKIE_SECURE": "false"}, false},
+	} {
+		_, err := config.Load(env(tc.env))
+		if (err == nil) != tc.ok {
+			t.Errorf("%v: %v, want ok=%t", tc.env, err, tc.ok)
+		}
+	}
+	c, err = config.Load(env(map[string]string{"TESSERA_ENV": "dev", "TESSERA_PUBLIC_URL": "https://tessera.example.com/app"}))
+	if err != nil || c.PublicOrigin() != "https://tessera.example.com" {
+		t.Errorf("public origin %q %v", c.PublicOrigin(), err)
 	}
 }

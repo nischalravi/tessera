@@ -222,7 +222,7 @@ function useInboxActions() {
           toast("You can't approve your own request. Someone else needs to decide.", { kind: "error" });
           return false;
         }
-        if (it.source === "jit") await jitDecide(it.jit.id, verb === "approve" ? "approve" : "deny", actor);
+        if (it.source === "jit") await jitDecide(it.jit.id, verb === "approve" ? "approve" : "deny");
         else await mockRequests.decide(it.req.id, verb === "approve" ? "approved" : "denied", actor);
         if (!opts.quiet) toast(`${verb === "approve" ? "Approved" : "Denied"}: ${itemTitle(it).title}`);
       } else if (it.kind === "review") {
@@ -236,7 +236,7 @@ function useInboxActions() {
           if (reason === null) return false;
           comment = reason;
         }
-        await reviewDecide(it.item.id, verb === "revoke" ? "revoke" : "keep", actor, comment);
+        await reviewDecide(it.item.id, verb === "revoke" ? "revoke" : "keep", comment);
         if (!opts.quiet) toast(`${verb === "revoke" ? "Revoked" : "Kept"}: ${itemTitle(it).title}`);
       } else if (it.kind === "task") {
         const ok = await confirm({ title: `Run the ${it.event.type} plan?`, body: "Executes every step in the plan against Tessera's graph and writes an audit record. Nothing is written back to source systems yet.", confirmLabel: "Run plan", danger: it.event.type === "leaver" });

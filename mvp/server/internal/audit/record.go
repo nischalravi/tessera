@@ -62,3 +62,14 @@ func WithOperatorActor(ctx context.Context, id string) context.Context {
 		Actor: store.AuditActor{Type: store.ActorOperator, ID: &id, Display: &id},
 	})
 }
+
+// AsSystem returns ctx attributing events to the system job id while keeping
+// the request's id, address and committed-event counter: for work a request
+// triggers on the system's behalf (the JIT sweep before an analysis), which
+// the requester did not ask for.
+func AsSystem(ctx context.Context, id string) context.Context {
+	ac, _ := store.AuditContextFrom(ctx)
+	ac.Actor = store.AuditActor{Type: store.ActorSystem, ID: &id, Display: &id}
+	ac.SessionID, ac.ClientID, ac.Authn = nil, nil, nil
+	return store.WithAuditContext(ctx, ac)
+}
