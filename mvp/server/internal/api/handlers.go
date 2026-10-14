@@ -72,7 +72,7 @@ func (s *Server) registerRoutes() {
 	s.handle(G, "/api/hris/events", read, need(auth.PermGraphRead), s.hrisEvents)
 	s.handle(P, "/api/hris/events", write, need(auth.PermHRISSimulateEvent), s.hrisCreate)
 	s.handle(G, "/api/hris/events/{event_id}/plan", read, need(auth.PermGraphRead), s.hrisPlan)
-	s.handle(P, "/api/hris/events/{event_id}/execute", write, needStepUp(auth.PermHRISExecute, auth.StepUpPolicy), s.hrisExecute).asJob(jobs.Provision, "")
+	s.handle(P, "/api/hris/events/{event_id}/execute", phased, needStepUp(auth.PermHRISExecute, auth.StepUpPolicy), s.hrisExecute).asJob(jobs.Provision, "")
 	s.handle(G, "/api/jml/leaver-plan/{identity_id}", read, need(auth.PermGraphRead), s.leaverPlan)
 	s.handle(G, "/openapi.json", noTenant, need(auth.PermAuthenticated), s.openAPI)
 	s.handle(G, "/docs", noTenant, need(auth.PermAuthenticated), s.swaggerUI)
@@ -1513,26 +1513,7 @@ func (s *Server) hrisExecute(_ http.ResponseWriter, r *http.Request, p *params) 
 	if err := validated(p, nil); err != nil {
 		return nil, err
 	}
-	pols, err := s.policies()
-	if err != nil {
-		return nil, err
-	}
-	tx := store.TxFrom(r.Context())
-	ev, evErr := tx.HrisEvent(id) // before it runs: a leaver or mover who sponsors guests sets transfer tasks going
-	plan, err := jml.ExecuteEvent(tx, s.clock(), id, principal(r).User(), pols)
-	var je *jml.Error
-	if errors.As(err, &je) {
-		return nil, errStatus(http.StatusBadRequest, je.Msg)
-	}
-	if err != nil {
-		return nil, err
-	}
-	if evErr == nil && ev.IdentityID != nil {
-		if _, err := s.guestLife.OnEvent(tx, ev.Type, *ev.IdentityID, s.clock().UTC()); err != nil {
-			return nil, err
-		}
-	}
-	return ojson.Object{{Key: "executed", Value: true}, {Key: "plan", Value: plan}}, nil
+	return s.executeLeaver(r, p, id)
 }
 
 func (s *Server) leaverPlan(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
