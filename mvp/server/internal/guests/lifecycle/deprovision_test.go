@@ -383,7 +383,10 @@ func TestPurge_KeepsTombstoneOnly(t *testing.T) {
 		for _, ev := range evs {
 			after = append(after, ev.Action+"|"+ev.Hash)
 			if ev.Action == "guest.purge" {
-				purge = string(mustJSON(t, ev))
+				// scan what the event says, not its random ids and hashes (hex can contain "555")
+				said := *ev
+				said.ID, said.Hash, said.PrevHash = uuid.Nil, "", ""
+				purge = string(mustJSON(t, said))
 			}
 		}
 		return err
