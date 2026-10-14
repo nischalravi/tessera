@@ -92,6 +92,9 @@ const (
 	PermGuestsSponsor       Permission = "guests.sponsor"
 	PermGuestsRead          Permission = "guests.read"
 	PermSponsorshipsApprove Permission = "sponsorships.approve"
+	// guest lifecycle settings (issue #74): reminders, transfer deadlines,
+	// grace and retention
+	PermGuestLifecycleConfigure Permission = "guest_lifecycle.configure"
 	// email delivery log (issue #189)
 	PermEmailRead   Permission = "email.read"
 	PermEmailManage Permission = "email.manage"
@@ -121,7 +124,7 @@ var rolePermissions = map[Role][]Permission{
 	RolePolicyAdmin: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
 		PermReviewsDecide, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
 		PermIdentitiesCorrelate, PermIdentitiesMerge, PermIdentitiesAffiliate,
-		PermIdentityMatchesReview, PermMatchingConfigure,
+		PermIdentityMatchesReview, PermMatchingConfigure, PermGuestLifecycleConfigure,
 		PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide, PermCatalogManage, PermRolesManage, PermLifecycleManage,
 		PermGuestsSponsor, PermGuestsRead, PermSponsorshipsApprove, PermJobsRead, PermProvisioningRead, PermProvisioningManage},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,

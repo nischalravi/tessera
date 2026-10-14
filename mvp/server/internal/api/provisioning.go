@@ -76,6 +76,7 @@ type targetView struct {
 	BaseURL        string  `json:"base_url"`
 	Dialect        string  `json:"dialect,omitempty"`
 	Fault          string  `json:"fault,omitempty"`
+	OnDeprovision  string  `json:"on_deprovision,omitempty"` // "delete": accounts are deleted after the grace period (issue #74)
 	WriteBack      bool    `json:"write_back"`
 	HasCredential  bool    `json:"has_credential"`
 	CredentialVer  *string `json:"credential_version"`
@@ -86,7 +87,7 @@ func viewTarget(t *store.ProvTarget, connName string) targetView {
 	var st provision.Settings
 	_ = json.Unmarshal([]byte(t.Settings), &st)
 	return targetView{ConnectionID: t.ConnectionID, ConnectionName: connName, System: t.System, Kind: t.Kind, BaseURL: t.BaseURL,
-		Dialect: st.Dialect, Fault: st.Fault, WriteBack: t.WriteBack, HasCredential: len(t.CredentialEnc) > 0,
+		Dialect: st.Dialect, Fault: st.Fault, OnDeprovision: st.OnDeprovision, WriteBack: t.WriteBack, HasCredential: len(t.CredentialEnc) > 0,
 		CredentialVer: t.CredentialVer, UpdatedAt: timeutil.ISO(t.UpdatedAt)}
 }
 
@@ -244,6 +245,9 @@ type targetInput struct {
 	Fault     string `json:"fault"`
 	Token     string `json:"token"`
 	WriteBack bool   `json:"write_back"`
+	// OnDeprovision is "disable" (the default: leave a deprovisioned guest's
+	// account disabled) or "delete" it once the grace period has passed.
+	OnDeprovision string `json:"on_deprovision"`
 }
 
 func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
@@ -286,6 +290,13 @@ func (s *Server) validateTarget(in *targetInput) (provision.Settings, error) {
 	st.Dialect = in.Dialect
 	if in.Kind == provision.KindOkta {
 		st.Dialect = ""
+	}
+	switch in.OnDeprovision {
+	case "", "disable":
+	case "delete":
+		st.OnDeprovision = "delete"
+	default:
+		return st, badRequest("invalid_on_deprovision", "on_deprovision must be disable or delete")
 	}
 	if len(in.Token) > 4096 {
 		return st, badRequest("invalid_credential", "token is longer than 4 KiB")

@@ -1495,13 +1495,20 @@ func (s *Server) hrisExecute(_ http.ResponseWriter, r *http.Request, p *params) 
 	if err != nil {
 		return nil, err
 	}
-	plan, err := jml.ExecuteEvent(store.TxFrom(r.Context()), s.clock(), id, principal(r).User(), pols)
+	tx := store.TxFrom(r.Context())
+	ev, evErr := tx.HrisEvent(id) // before it runs: a leaver or mover who sponsors guests sets transfer tasks going
+	plan, err := jml.ExecuteEvent(tx, s.clock(), id, principal(r).User(), pols)
 	var je *jml.Error
 	if errors.As(err, &je) {
 		return nil, errStatus(http.StatusBadRequest, je.Msg)
 	}
 	if err != nil {
 		return nil, err
+	}
+	if evErr == nil && ev.IdentityID != nil {
+		if _, err := s.guestLife.OnEvent(tx, ev.Type, *ev.IdentityID, s.clock().UTC()); err != nil {
+			return nil, err
+		}
 	}
 	return ojson.Object{{Key: "executed", Value: true}, {Key: "plan", Value: plan}}, nil
 }

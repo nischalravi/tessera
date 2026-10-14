@@ -228,6 +228,12 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/api/auth/oidc/{connection_id}/callback" || rt.Pattern == "/t/{slug}/bootstrap" {
 			continue // TestIsolation_LoginCrossTenant (public; the tenant comes from the cookie or the slug)
 		}
+		if rt.Pattern == "/api/guest-lifecycle/tasks/{task_id}/resolve" {
+			continue // TestGuestLifecycleAPI_CrossTenant (a UUID, not a fixture id)
+		}
+		if rt.Pattern == "/public/t/{slug}/guest/renewal-request" {
+			continue // TestGuestLifecycleAPI_RenewalRequest (public; the tenant comes from the slug)
+		}
 		if strings.HasPrefix(rt.Pattern, "/public/t/{slug}/claim/") {
 			continue // TestClaim_SessionIsPerTenant (public; the tenant comes from the slug)
 		}

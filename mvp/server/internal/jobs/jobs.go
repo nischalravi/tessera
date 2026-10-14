@@ -30,10 +30,13 @@ const (
 	HealthRerun = "health_rerun"
 	JITSweep    = "jit_sweep"
 	AuditAnchor = "audit_anchor"
+	// GuestLifecycle is the guest lifecycle sweep: reminders, transfer deadlines,
+	// step-up renewals, conversions, grace and retention (issue #74).
+	GuestLifecycle = "guest_lifecycle"
 )
 
 // Kinds lists every kind, for filters.
-var Kinds = []string{Sync, Provision, Validation, DryRun, HealthRerun, JITSweep, AuditAnchor}
+var Kinds = []string{Sync, Provision, Validation, DryRun, HealthRerun, JITSweep, AuditAnchor, GuestLifecycle}
 
 // Idempotent reports whether running a kind again with the same input is
 // safe: it reads a source and converges, or re-checks. Provisioning is not:

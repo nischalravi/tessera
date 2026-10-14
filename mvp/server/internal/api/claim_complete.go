@@ -91,7 +91,9 @@ func (s *Server) finishClaim(w http.ResponseWriter, r *http.Request, tenant stor
 			Email: tok.Email, Name: tok.Name, AAL: res.AAL, ACR: res.TesseraACR, Authority: authority}, now)
 		switch {
 		case err == nil:
-			return nil
+			// a renewal held for a step-up continues once the assurance is reached (GU-11)
+			_, err = s.guests.ApplyStepups(tx, 0, now)
+			return err
 		case errors.Is(err, claim.ErrAAL):
 			reason = "aal_not_met"
 		case errors.Is(err, claim.ErrSubject):

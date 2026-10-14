@@ -53,6 +53,7 @@ var publicRoutes = []string{
 	"POST /public/t/{slug}/claim/existing-account",
 	"POST /public/t/{slug}/claim/credential",
 	"POST /public/t/{slug}/claim/resend",
+	"POST /public/t/{slug}/guest/renewal-request",
 }
 
 // PublicRoutes returns the allow-list.

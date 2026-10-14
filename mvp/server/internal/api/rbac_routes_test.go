@@ -100,6 +100,12 @@ POST   /api/identity-merge-requests/{merge_request_id}/approve identities.merge 
 POST   /api/identity-merge-requests/{merge_request_id}/reject  identities.merge STEP_UP_POLICY  # issue #68
 GET    /api/admin/matching                           matching.configure -  # issue #68
 PUT    /api/admin/matching                           matching.configure STEP_UP_POLICY  # issue #68
+GET    /api/guest-lifecycle                          guests.read     -  # issue #74
+GET    /api/guest-lifecycle/items                    guests.read     -  # issue #74
+GET    /api/guest-lifecycle/tasks                    guests.sponsor  -  # issue #74 (only the tasks the caller may decide)
+POST   /api/guest-lifecycle/tasks/{task_id}/resolve  guests.sponsor  STEP_UP_POLICY  # issue #74 (the manager of the departed sponsor, sponsorships.approve or the sponsor, in the service)
+GET    /api/admin/guest-lifecycle                    guest_lifecycle.configure -  # issue #74
+PUT    /api/admin/guest-lifecycle                    guest_lifecycle.configure STEP_UP_POLICY  # issue #74
 GET    /api/catalog                                  requests.create -  # issue #164 (?all=1: catalog.manage in the handler)
 PUT    /api/catalog/items/{group_id}                 catalog.manage  STEP_UP_POLICY  # issue #164
 POST   /api/requests                                 requests.create -  # issue #164 (others: requests.create_for_others in the handler)
@@ -191,6 +197,7 @@ GET    /public/t/{slug}/claim/status                 public
 POST   /public/t/{slug}/claim/existing-account       public
 POST   /public/t/{slug}/claim/credential             public
 POST   /public/t/{slug}/claim/resend                 public
+POST   /public/t/{slug}/guest/renewal-request        public  # issue #74: the guest's "request renewal" link, always 202
 GET    /api/auth/dev-login                           public
 POST   /api/auth/dev-login                           public
 `
