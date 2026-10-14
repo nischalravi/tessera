@@ -115,6 +115,9 @@ var tables = []string{
 	"guest_bundle_items", "identity_assurance", "catalog_item_populations",
 	// identity matching, merge requests, settings and claim links (schema/0230_matching.sql)
 	"match_results", "identity_merge_requests", "matching_settings", "claim_links",
+	// guest lifecycle (schema/0231_guest_lifecycle.sql)
+	"guest_lifecycle_settings", "guest_reminders", "guest_renewal_tokens", "guest_lifecycle_tasks", "sponsorship_stepups",
+	"guest_deprovisioning",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was
