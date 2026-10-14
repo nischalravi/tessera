@@ -50,6 +50,7 @@ func authed(l authtest.Login, method, path, body string) *http.Request {
 // tenant (from the session), assigned/active/inactive roles, permissions,
 // the authentication summary, the session's expiry and the CSRF token.
 func TestAuthSession(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	h := newIsolationServer(f).Handler()
 	weak := signIn(t, f.DB, f.B.ID, authtest.User{Email: "ada@b.example", Display: "Ada",
@@ -89,6 +90,7 @@ func TestAuthSession(t *testing.T) {
 // TestAuthLogout: logout revokes the session, clears the cookie, is audited,
 // and the old cookie no longer works.
 func TestAuthLogout(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	h := newIsolationServer(f).Handler()
 	l := signIn(t, f.DB, f.B.ID, testAdmin, authtest.Phr, storetest.Now)
@@ -123,6 +125,7 @@ func TestAuthLogout(t *testing.T) {
 // another user's session is 404 without admin.sessions.revoke, and an admin
 // may revoke it; another tenant's session is always 404.
 func TestAuthSessionsAndRevoke(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	h := newIsolationServer(f).Handler()
 	vic := authtest.User{Email: "vic@b.example", Roles: []auth.Role{auth.RoleViewer}}
@@ -177,6 +180,7 @@ func TestAuthSessionsAndRevoke(t *testing.T) {
 // request without the CSRF token, from a foreign origin, or with a non-JSON
 // body is refused before the handler runs.
 func TestUnsafeRequestsNeedCSRFAndJSON(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	srv := newIsolationServer(f)
 	h := srv.Handler()
@@ -229,6 +233,7 @@ func domainEvents(evs []*store.AuditEvent) int {
 // frame-ancestors, nosniff, no-referrer, no-store on API responses, HSTS in
 // production, CORS with credentials only for configured origins.
 func TestSecurityHeaders(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	srv := newIsolationServer(f)
 	h := srv.Handler()
@@ -321,6 +326,7 @@ func sessionCookie(t *testing.T, rec *httptest.ResponseRecorder) *http.Cookie {
 // through the dev_mock connection's (connection, subject) link, normalizes
 // the chosen method like an Okta login that asked for phr, and is audited.
 func TestDevLogin(t *testing.T) {
+	t.Parallel()
 	srv, db := devLoginServer(t, "dev")
 	h := srv.Handler()
 	// the picker lists the seeded users of the named tenant only
@@ -421,6 +427,7 @@ func TestDevLogin(t *testing.T) {
 // TestDevLoginOnlyInDevAndTest: with any other environment the routes do not
 // exist.
 func TestDevLoginOnlyInDevAndTest(t *testing.T) {
+	t.Parallel()
 	for _, env := range []string{"", "prod"} {
 		srv, _ := devLoginServer(t, env)
 		h := srv.Handler()
@@ -438,6 +445,7 @@ func TestDevLoginOnlyInDevAndTest(t *testing.T) {
 // TestDevLoginTestEnvNeedsOptInAndLoopback: with TESSERA_ENV=test the routes
 // exist only with TESSERA_DEV_LOGIN, and then answer loopback peers only.
 func TestDevLoginTestEnvNeedsOptInAndLoopback(t *testing.T) {
+	t.Parallel()
 	body := `{"tenant":"larkspur","subject":"00u-alice-admin"}`
 	srv, _ := devLoginServerOpt(t, "test", false)
 	if rec := devLogin(srv.Handler(), body, authtest.Origin); rec.Code != 404 {
@@ -469,6 +477,7 @@ func TestDevLoginTestEnvNeedsOptInAndLoopback(t *testing.T) {
 // TestIsolation_SessionTenantOnly: a user of tenant A reaches only A's data,
 // whatever tenant the request names; B's objects are not found.
 func TestIsolation_SessionTenantOnly(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	h := newIsolationServer(f).Handler()
 	la := signIn(t, f.DB, f.A.ID, testAdmin, authtest.Phr, storetest.Now)
@@ -497,6 +506,7 @@ func TestIsolation_SessionTenantOnly(t *testing.T) {
 // approve it (403 self_approval, audited, nothing granted); another approver
 // can.
 func TestJITSelfApprovalRefused(t *testing.T) {
+	t.Parallel()
 	srv := newSeededServer(t) // the demo company; Priya (33) may request BreakGlassAdmin (24)
 	h := srv.Anonymous()
 	// the requester holds jit.decide too (operator), so only the self check stops them
@@ -540,6 +550,7 @@ func TestJITSelfApprovalRefused(t *testing.T) {
 // is applied to its own sessions on every request: an operator signed in
 // with AAL2 has an inactive role there, and is unaffected in another tenant.
 func TestTenantSettingsRaiseRoleFloor(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	h := newIsolationServer(f).Handler()
 	op := authtest.User{Email: "op@x.example", Display: "Op", Roles: []auth.Role{auth.RoleOperator}}
@@ -576,6 +587,7 @@ func TestTenantSettingsRaiseRoleFloor(t *testing.T) {
 // TestDevLoginRevokesPreviousSession: signing in again revokes the session
 // the browser still held, in its own tenant, with auth.session.revoke.
 func TestDevLoginRevokesPreviousSession(t *testing.T) {
+	t.Parallel()
 	srv, db := devLoginServer(t, "dev")
 	h := srv.Handler()
 	login := func(body string, prev *http.Cookie) *http.Cookie {

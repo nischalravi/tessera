@@ -320,7 +320,7 @@ func (d *DB) ReadSystem(ctx context.Context, reason string, fn func(*SystemTx) e
 		}
 		err = sqltx.Commit()
 	}()
-	return fn(&SystemTx{ctx: ctx, tx: sqltx, reason: reason})
+	return fn(&SystemTx{ctx: ctx, db: d, tx: sqltx, reason: reason})
 }
 
 // ForEachActiveTenant lists the active tenants (not _platform) in a SystemTx,

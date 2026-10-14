@@ -178,7 +178,7 @@ func TestAudit_HealthNotRecorded(t *testing.T) {
 // TestAudit_ReadFailsClosed (E2.4): with the ledger broken, a read answers
 // 503 audit_unavailable and none of the data it computed.
 func TestAudit_ReadFailsClosed(t *testing.T) {
-	t.Parallel()
+	// Serial: counts the process-wide audit.WriteFailures.
 	f := storetest.TwoTenants(t)
 	h := isolationServer(t, f, f.A.ID).Handler()
 	if rec := serveOnce(h, "GET", "/api/identities", ""); rec.Code != http.StatusOK || !leaks(rec.Body.String()) {
@@ -232,7 +232,7 @@ func TestAudit_ReadFailsClosed(t *testing.T) {
 // /api/simulate fails closed like a read, even though the JIT sweep before
 // its analysis commits a jit.expire event in its transaction.
 func TestAudit_MutationResponseSentWhenRequestEventFails(t *testing.T) {
-	t.Parallel()
+	// Serial: counts the process-wide audit.WriteFailures.
 	f := storetest.TwoTenants(t)
 	srv := isolationServer(t, f, f.B.ID)
 	srv.cfg.AuditAppend = func(context.Context, tenancy.ID, store.AuditEvent) error { return errors.New("disk full") }
@@ -266,7 +266,7 @@ func TestAudit_MutationResponseSentWhenRequestEventFails(t *testing.T) {
 // request's id) is in the ledger. A new route that returns data or changes
 // state without a record fails here.
 func TestAudit_EveryRouteFailsClosed(t *testing.T) {
-	t.Parallel()
+	// Serial: counts the process-wide audit.WriteFailures.
 	f := storetest.TwoTenants(t)
 	srv := isolationServer(t, f, f.B.ID)
 	srv.cfg.AuditAppend = func(context.Context, tenancy.ID, store.AuditEvent) error { return errors.New("disk full") }
@@ -409,7 +409,7 @@ func TestIsolation_AuditRoutes(t *testing.T) {
 // TestAudit_ExportOneRequestEvent: the streamed export writes its
 // http.request event once, before streaming, plus an audit.export event.
 func TestAudit_ExportOneRequestEvent(t *testing.T) {
-	t.Parallel()
+	// Serial: breaks the chain, which counts into the process-wide audit.WriteFailures.
 	f := storetest.TwoTenants(t)
 	h := isolationServer(t, f, f.B.ID).Handler()
 	before := ledger(t, f.DB, f.B.ID)
