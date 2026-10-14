@@ -99,3 +99,38 @@ export function addProblem(type: AffiliationType, endDay: string, reason: string
   }
   return null;
 }
+
+/**
+ * An identifier as the person page shows it. The API returns the normalized value to people who may
+ * read identities; the page still masks it, so a screenshot or a shoulder-surf does not carry the
+ * whole address, phone number or ID. Hover and copy do not reveal it either.
+ */
+export function maskIdentifier(type: string, value: string | null): string | null {
+  if (value === null) return null;
+  const chars = [...value];
+  if (type === "email" || value.includes("@")) {
+    const at = value.lastIndexOf("@");
+    return at <= 0 ? `${chars[0]}***` : `${[...value.slice(0, at)][0]}***${value.slice(at)}`;
+  }
+  if (type === "phone") return chars.length <= 4 ? "***" : `***${chars.slice(-4).join("")}`;
+  return chars.length <= 4 ? "***" : `${chars.slice(0, 2).join("")}***${chars.slice(-2).join("")}`;
+}
+
+/** The merges a person took part in, newest first. */
+export function mergesFor<T extends { survivor_id: number; merged_id: number; merged_at: string }>(merges: T[], id: number): T[] {
+  return merges.filter((m) => m.survivor_id === id || m.merged_id === id).sort((a, b) => b.merged_at.localeCompare(a.merged_at));
+}
+
+/** The decided matches in which a person was the candidate or the subject, newest first. */
+export function matchesFor<T extends { received_at: string; subject: { identity_id: number | null }; candidates: { candidate_id: number }[] }>(items: T[], id: number): T[] {
+  return items.filter((i) => i.subject.identity_id === id || i.candidates.some((c) => c.candidate_id === id)).sort((a, b) => b.received_at.localeCompare(a.received_at));
+}
+
+/** What the claim has reached for a person, from the sponsorships that invited them. */
+export function claimSummary(invitations: string[]): "claimed" | "in_progress" | "invited" | "expired" | "none" {
+  if (invitations.length === 0) return "none";
+  if (invitations.includes("claimed")) return "claimed";
+  if (invitations.includes("claiming")) return "in_progress";
+  if (invitations.includes("sent") || invitations.includes("ready")) return "invited";
+  return "expired";
+}

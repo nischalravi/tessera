@@ -11,6 +11,7 @@ import { mockIdentityOps, mockObjects, useMockState } from "../../mocks";
 import { useSession } from "../../app/auth";
 import { AffiliationsSection, IdentifiersSection } from "./affiliations";
 import { BundleSection } from "./bundle";
+import { IdentityCard, MatchHistory, SourceAndTerms, SponsorshipsSection } from "./guestProfile";
 import { MergeDialog } from "./correlation";
 import { PreviewFormDrawer } from "./shared";
 import { LifecycleSection } from "../lifecycle/parts";
@@ -279,9 +280,13 @@ export function IdentityPage() {
 
       {tab === "affiliations" && !machine && (
         <div className="grid g2">
+          <div className="card"><IdentityCard identityId={d.id} /></div>
           <div className="card"><AffiliationsSection identityId={d.id} name={d.name} human /></div>
           <div className="card"><IdentifiersSection identityId={d.id} /></div>
+          {can("guests.sponsor") && <div className="card"><SponsorshipsSection identityId={d.id} /></div>}
           {can("guests.read") && <div className="card"><BundleSection identityId={d.id} /></div>}
+          {can("guests.read") && <div className="card stack"><SourceAndTerms identityId={d.id} /></div>}
+          <div className="card"><MatchHistory identityId={d.id} /></div>
         </div>
       )}
 

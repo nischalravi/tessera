@@ -1,7 +1,7 @@
 import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Check, ClipboardCheck, Keyboard, KeyRound, ListChecks, Plug, Search, ShoppingCart, X } from "lucide-react";
-import { HrisEvent, IdentityMatchList, JitRequest, RegistrationRequest, SimResult, ago, approveRequest, denyRequest, fmtDate, hrisExecute, jitDecide, registrationRequests, relTime, reviewDecide, simulate, useApi } from "../../api";
+import { ArrowRightLeft, Check, ClipboardCheck, GitMerge, Keyboard, KeyRound, ListChecks, Plug, Search, ShoppingCart, UserCheck, UserPlus, X } from "lucide-react";
+import { GuestLifecycleOverview, HrisEvent, JitRequest, SimResult, ago, approveRequest, denyRequest, fmtDate, fmtDay, guestLifecycle, guests, hrisExecute, jitDecide, registrationRequests, relTime, reviewDecide, simulate, useApi } from "../../api";
 import { useSession } from "../../app/auth";
 import { usePersona } from "../../app/persona";
 import {
@@ -9,9 +9,31 @@ import {
 } from "../../components";
 import { isTyping, modalOpen } from "../../components/overlay";
 import { STAGE_LABEL, Stages } from "../access/stages";
+import { POPULATION_LABEL } from "../access/guestModel";
+import { TASK_KIND_LABEL, TRIGGER_LABEL, taskActions } from "../governance/guestLifecycleModel";
+import { GuestInboxItem, guestRowActions } from "./guestItems";
 import { InboxItem, InboxKind, useInbox } from "./model";
 
-const KIND_LABEL: Record<InboxKind, string> = { approval: "Approval", review: "Review", task: "Task", connection: "Connection" };
+const KIND_LABEL: Record<InboxKind, string> = { approval: "Approval", review: "Review", task: "Task", connection: "Connection", guest: "Guest" };
+
+/** The row for a piece of guest work: a sponsorship approval, a registration, an identity match or a lifecycle task. */
+function guestTitle(g: GuestInboxItem): ReturnType<typeof itemTitle> {
+  const kindLabel = KIND_LABEL.guest;
+  switch (g.type) {
+    case "sponsorship":
+      return { icon: <UserCheck size={15} />, title: `Approve sponsorship of ${g.s.guest.name}`, tone: "warning", kindLabel,
+        meta: <>{POPULATION_LABEL[g.s.population]} sponsored by {g.s.sponsor.name} until {fmtDay(g.s.ends_at)} · second approver needed {relTime(g.s.created_at)}</> };
+    case "registration":
+      return { icon: <UserPlus size={15} />, title: `${[g.r.given_name, g.r.family_name].filter(Boolean).join(" ") || "A visitor"} asks you to sponsor them`, tone: "info", kindLabel,
+        meta: <>Registration request · until {fmtDay(g.r.ends_at)} · asked {relTime(g.r.created_at)}</> };
+    case "match":
+      return { icon: <GitMerge size={15} />, title: `Identity match: ${g.m.subject.name}`, tone: "warning", kindLabel,
+        meta: <>{g.m.status === "reverification" ? "Waiting for re-verification" : "Review"} · {g.m.candidates.length} possible {g.m.candidates.length === 1 ? "person" : "people"} · {relTime(g.m.received_at)}</> };
+    case "task":
+      return { icon: <ArrowRightLeft size={15} />, title: `${TASK_KIND_LABEL[g.t.task_kind ?? ""] ?? "Guest task"}: ${g.t.guest.name}`, tone: g.t.task_kind === "sponsor_transfer" ? "critical" : "warning", kindLabel,
+        meta: <>{g.t.trigger ? (TRIGGER_LABEL[g.t.trigger] ?? g.t.trigger) : "Guest lifecycle"}{g.t.deadline && <> · decide by {fmtDay(g.t.deadline)}</>}</> };
+  }
+}
 
 export function itemTitle(it: InboxItem): { icon: ReactNode; title: string; meta: ReactNode; tone: Tone; kindLabel: string } {
   switch (it.kind) {
@@ -36,6 +58,8 @@ export function itemTitle(it: InboxItem): { icon: ReactNode; title: string; meta
       const who = e.identity?.name ?? e.payload.name ?? "unknown identity";
       return { icon: <ListChecks size={15} />, title: `${e.type[0].toUpperCase() + e.type.slice(1)}: ${who}`, meta: <>HRIS event {e.external_id} · effective {fmtDate(e.effective_at)}</>, tone: e.type === "leaver" ? "critical" : "neutral", kindLabel: KIND_LABEL.task };
     }
+    case "guest":
+      return guestTitle(it.guest);
     case "connection":
       return { icon: <Plug size={15} />, title: `${it.conn.name} is degraded`, meta: <>Readiness {it.conn.score} · write-back stopped, reads continue</>, tone: "warning", kindLabel: KIND_LABEL.connection };
   }
@@ -160,6 +184,66 @@ function TaskDetail({ e }: { e: HrisEvent }) {
   );
 }
 
+function GuestDetail({ g }: { g: GuestInboxItem }) {
+  switch (g.type) {
+    case "sponsorship":
+      return (
+        <div className="stack-sm">
+          <dl className="kv">
+            <dt>Guest</dt><dd>{g.s.guest.name}</dd>
+            <dt>Sponsor</dt><dd>{g.s.sponsor.name}</dd>
+            <dt>Population</dt><dd>{POPULATION_LABEL[g.s.population]}</dd>
+            <dt>Purpose</dt><dd>{g.s.purpose}</dd>
+            <dt>Term</dt><dd>{fmtDay(g.s.starts_at)} to {fmtDay(g.s.ends_at)}</dd>
+            <dt>Access bundle</dt><dd>{g.s.bundle.length ? g.s.bundle.map((b) => `${b.system}:${b.name}`).join(", ") : "None"}</dd>
+            <dt>Assurance</dt><dd>IAL {g.s.required_ial}, AAL {g.s.required_aal}</dd>
+          </dl>
+          <p className="small muted">The guest gets no standing or access until a second person approves. You cannot approve a sponsorship you created.</p>
+          <Link className="btn sm" to={`/access/guests?tab=approvals&selected=${encodeURIComponent(g.s.id)}`}>Open in Guests</Link>
+        </div>
+      );
+    case "registration":
+      return (
+        <div className="stack-sm">
+          <dl className="kv">
+            <dt>Name</dt><dd>{g.r.given_name} {g.r.family_name}</dd>
+            <dt>Email</dt><dd>{g.r.email}<div className="xs faint">As the visitor wrote it, not verified.</div></dd>
+            <dt>Purpose</dt><dd>{g.r.purpose}</dd>
+            <dt>Term</dt><dd>{fmtDay(g.r.starts_at)} to {fmtDay(g.r.ends_at)}</dd>
+            <dt>Found you</dt><dd>{g.r.via === "code" ? "With your sponsor code" : "By searching for your name"}</dd>
+            <dt>Request expires</dt><dd>{fmtDate(g.r.expires_at)}</dd>
+          </dl>
+          <p className="small muted">Nothing exists for this person until you approve. Approving creates the guest and emails the invitation; denying sends a neutral email.</p>
+        </div>
+      );
+    case "match":
+      return (
+        <div className="stack-sm">
+          <p className="small">{g.m.subject.name}{g.m.subject.email && <span className="muted"> ({g.m.subject.email})</span>} arrived through {g.m.channel.replace(/_/g, " ")} and might already be in Tessera.</p>
+          <ul className="plain-list">
+            {g.m.candidates.map((c) => <li key={c.match_id} className="small">{c.name}: tier {c.tier}, score {c.score}{c.employee && " · employee"}{c.privileged_access && " · privileged"}{c.second_reviewer_because.length > 0 && " · second reviewer needed"}</li>)}
+          </ul>
+          <p className="small muted">Linking can be decided only on the review page, where the evidence, re-verification and four-eyes rules are shown.</p>
+          <Link className="btn sm" to={`/directory/identity-matches?selected=${encodeURIComponent(g.m.id)}`}>Review the match</Link>
+        </div>
+      );
+    case "task":
+      return (
+        <div className="stack-sm">
+          <dl className="kv">
+            <dt>Guest</dt><dd>{g.t.guest.name}</dd>
+            {g.t.sponsor && <dt>Sponsor</dt>}{g.t.sponsor && <dd>{g.t.sponsor.name}</dd>}
+            <dt>Task</dt><dd>{TASK_KIND_LABEL[g.t.task_kind ?? ""] ?? g.t.task_kind}</dd>
+            {g.t.deadline && <><dt>Decide by</dt><dd>{fmtDate(g.t.deadline)}</dd></>}
+            {g.t.ends_at && <><dt>Sponsorship ends</dt><dd>{fmtDay(g.t.ends_at)}</dd></>}
+          </dl>
+          {g.t.task_kind === "sponsor_transfer" && <p className="small muted">If nobody takes this over by the deadline, the sponsorship ends and the guest loses access under it.</p>}
+          <Link className="btn sm" to="/governance/guest-lifecycle?view=tasks">Open in Guest lifecycle</Link>
+        </div>
+      );
+  }
+}
+
 function Detail({ it }: { it: InboxItem }) {
   const t = itemTitle(it);
   return (
@@ -187,6 +271,7 @@ function Detail({ it }: { it: InboxItem }) {
         )}
         {it.kind === "review" && <ReviewDetail it={it} />}
         {it.kind === "task" && <TaskDetail e={it.event} />}
+        {it.kind === "guest" && <GuestDetail g={it.guest} />}
         {it.kind === "connection" && (
           <div className="stack-sm">
             <p className="small muted">A scheduled check failed twice, a credential is close to expiry or sync has failed. Reads continue and data is labelled as coming from a degraded connection; write-back has stopped.</p>
@@ -199,20 +284,60 @@ function Detail({ it }: { it: InboxItem }) {
 }
 
 // -------------------------------------------------------------- actions
-type Verb = "approve" | "deny" | "keep" | "revoke" | "run";
+type Verb = "approve" | "deny" | "keep" | "revoke" | "run" | "open";
 const VERBS: Record<InboxKind, { primary: Verb; secondary: Verb }> = {
   approval: { primary: "approve", secondary: "deny" },
   review: { primary: "keep", secondary: "revoke" },
   task: { primary: "run", secondary: "run" },
   connection: { primary: "run", secondary: "run" },
+  guest: { primary: "approve", secondary: "deny" },
 };
-const VERB_LABEL: Record<Verb, string> = { approve: "Approve", deny: "Deny", keep: "Keep", revoke: "Revoke", run: "Run plan" };
+const VERB_LABEL: Record<Verb, string> = { approve: "Approve", deny: "Deny", keep: "Keep", revoke: "Revoke", run: "Run plan", open: "Open" };
+
 
 function useInboxActions() {
   const { me } = usePersona();
   const confirm = useConfirm();
   const toast = useToast();
+  const { can } = useSession();
+  const { data: overview } = useApi<GuestLifecycleOverview>(can("guests.read") ? "/guest-lifecycle" : null);
   const selfRequest = (it: InboxItem) => it.kind === "approval" && it.source === "jit" && it.jit.identity.id === me?.id;
+
+  async function actGuest(g: GuestInboxItem, verb: Verb, opts: { quiet?: boolean }): Promise<boolean> {
+    const departure = overview?.settings.on_sponsor_departure ?? "end";
+    const say = (text: string) => { if (!opts.quiet) toast(text); };
+    switch (g.type) {
+      case "sponsorship": {
+        if (verb === "approve") { await guests.approve(g.s.id); say(`Approved the sponsorship of ${g.s.guest.name}`); return true; }
+        const reason = await confirm({ title: `Reject the sponsorship of ${g.s.guest.name}?`, body: "The sponsor is told. The invited person is withdrawn unless another sponsorship stands behind them.", confirmLabel: "Reject", danger: true, reason: { label: "Reason (kept in the history and the audit log)", required: true } });
+        if (reason === null) return false;
+        await guests.reject(g.s.id, reason);
+        say(`Rejected the sponsorship of ${g.s.guest.name}`);
+        return true;
+      }
+      case "registration": {
+        const who = [g.r.given_name, g.r.family_name].filter(Boolean).join(" ") || "the visitor";
+        if (verb === "approve") { await registrationRequests.approve(g.r.id); say(`Approved: ${who}`); return true; }
+        const ok = await confirm({ title: `Deny ${who}?`, body: "They get a neutral email that does not say why.", confirmLabel: "Deny", danger: true });
+        if (ok === null) return false;
+        await registrationRequests.deny(g.r.id);
+        say(`Denied: ${who}`);
+        return true;
+      }
+      case "task": {
+        const acts = taskActions(g.t, departure);
+        const a = verb === "approve" ? (acts.find((x) => x.primary) ?? acts[0]) : acts.find((x) => x.danger);
+        if (!a) return false;
+        const ok = await confirm({ title: a.title, body: a.body, confirmLabel: a.label, danger: a.danger });
+        if (ok === null) return false;
+        await guestLifecycle.resolveTask(g.t.task_id!, a.action);
+        say(`${a.label}: ${g.t.guest.name}`);
+        return true;
+      }
+      case "match":
+        return false; // decided on the review page
+    }
+  }
 
   async function act(it: InboxItem, verb: Verb, opts: { quiet?: boolean; skipConfirm?: boolean } = {}): Promise<boolean> {
     try {
@@ -247,6 +372,8 @@ function useInboxActions() {
         if (ok === null) return false;
         await hrisExecute(it.event.id);
         toast(`Plan executed: ${itemTitle(it).title}`);
+      } else if (it.kind === "guest") {
+        return await actGuest(it.guest, verb, opts);
       } else if (it.kind === "connection") {
         return false; // opened from its row
       }
@@ -256,89 +383,24 @@ function useInboxActions() {
       return false;
     }
   }
-  return { act, selfRequest };
+  return { act, selfRequest, departure: overview?.settings.on_sponsor_departure ?? "end" };
+}
+
+function GuestRowButtons({ g, departure, busy, current, run }: { g: GuestInboxItem; departure: "end" | "suspend"; busy: boolean; current: boolean; run: (v: Verb) => void }) {
+  const a = guestRowActions(g, departure);
+  if (a.link) return <Link className="btn sm" to={a.link}>{g.type === "match" ? "Review" : "Open"}</Link>;
+  return (
+    <>
+      {a.primary && <Button size="sm" variant="primary" disabled={busy} onClick={() => run("approve")} kbd={current ? "A" : undefined}>{a.primary}</Button>}
+      {a.secondary && <Button size="sm" variant={g.type === "task" ? "danger" : "default"} disabled={busy} onClick={() => run("deny")} kbd={current ? "D" : undefined}>{a.secondary}</Button>}
+    </>
+  );
 }
 
 // ----------------------------------------------------------------- page
 const FILTERS: { id: "all" | InboxKind; label: string }[] = [
-  { id: "all", label: "All" }, { id: "approval", label: "Approvals" }, { id: "review", label: "Reviews" }, { id: "task", label: "Tasks" }, { id: "connection", label: "Connections" },
+  { id: "all", label: "All" }, { id: "approval", label: "Approvals" }, { id: "review", label: "Reviews" }, { id: "task", label: "Tasks" }, { id: "guest", label: "Guests" }, { id: "connection", label: "Connections" },
 ];
-
-/** Identity matches waiting for a reviewer (issue #68), for people who may decide them. */
-function IdentityMatchBanner() {
-  const { can } = useSession();
-  const { data } = useApi<IdentityMatchList>(can("identity_matches.review") ? "/identity-matches?status=review" : null);
-  if (!data || data.count === 0) return null;
-  return (
-    <div style={{ marginBottom: 12 }}>
-      <Callout tone="warn">
-        {data.count} identity {data.count === 1 ? "match waits" : "matches wait"} for a reviewer: someone invited or imported might already be in Tessera.{" "}
-        <Link to="/directory/identity-matches">Review identity matches</Link>
-      </Callout>
-    </div>
-  );
-}
-
-/**
- * Registration requests (issue #66): visitors who asked the signed-in person to sponsor them. Nothing
- * exists for them until it is approved here; approving creates the guest and emails the invitation,
- * denying sends them a neutral "not approved" email.
- */
-function RegistrationRequests() {
-  const { can } = useSession();
-  const toast = useToast();
-  const { data, reload } = useApi<{ registrations: RegistrationRequest[] }>(can("guests.sponsor") ? "/guest-registrations" : null);
-  const [busy, setBusy] = useState("");
-  if (!data || data.registrations.length === 0) return null;
-  const decide = async (r: RegistrationRequest, verb: "approve" | "deny") => {
-    setBusy(r.id);
-    try {
-      if (verb === "approve") await registrationRequests.approve(r.id);
-      else await registrationRequests.deny(r.id);
-      toast(`${verb === "approve" ? "Approved" : "Denied"}: ${r.given_name ?? ""} ${r.family_name ?? ""}`.trim());
-      reload();
-    } catch (e: any) {
-      toast(String(e.message ?? e), { kind: "error" });
-    } finally {
-      setBusy("");
-    }
-  };
-  return (
-    <section className="card" style={{ marginBottom: 12 }} aria-labelledby="reg-requests">
-      <h2 id="reg-requests" className="h3">Guest registration requests</h2>
-      <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
-        {data.registrations.map((r) => (
-          <li key={r.id} className="spread" style={{ gap: 12, padding: "8px 0", borderTop: "1px solid var(--line)", flexWrap: "wrap" }}>
-            <div>
-              <strong>{r.given_name} {r.family_name}</strong> <span className="small muted">{r.email}</span>
-              <div className="small">{r.purpose}</div>
-              <div className="small muted">Until {fmtDate(r.ends_at)} · asked {relTime(r.created_at)}{r.via === "code" && " · with your code"}</div>
-            </div>
-            <div className="row">
-              <Button variant="primary" disabled={busy === r.id} onClick={() => decide(r, "approve")}>Approve</Button>
-              <Button disabled={busy === r.id} onClick={() => decide(r, "deny")}>Deny</Button>
-            </div>
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
-
-/** Guest lifecycle tasks (issue #74) the signed-in person may decide: a sponsor left, a guest asked for a renewal, a hire. */
-function GuestTaskBanner() {
-  const { data } = useApi<{ tasks: { task_id?: string }[] }>("/guest-lifecycle/tasks");
-  if (!data || data.tasks.length === 0) return null;
-  const n = data.tasks.length;
-  return (
-    <div style={{ marginBottom: 12 }}>
-      <Callout tone="warn">
-        {n} guest {n === 1 ? "task waits" : "tasks wait"} for you: a sponsor left, a guest asked for a renewal or someone was hired.{" "}
-        <Link to="/governance/guest-lifecycle?view=tasks">Open guest lifecycle tasks</Link>
-      </Callout>
-    </div>
-  );
-}
 
 export function Inbox() {
   const { persona } = usePersona();
@@ -351,7 +413,7 @@ export function Inbox() {
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [help, setHelp] = useState(false);
-  const { act, selfRequest } = useInboxActions();
+  const { act, selfRequest, departure } = useInboxActions();
   const confirm = useConfirm();
   const toast = useToast();
   const listRef = useRef<HTMLDivElement>(null);
@@ -388,7 +450,7 @@ export function Inbox() {
   };
 
   const bulk = async (primary: boolean) => {
-    const chosen = visible.filter((i) => checked.has(i.key) && i.kind !== "task" && i.kind !== "connection" && !selfRequest(i));
+    const chosen = visible.filter((i) => checked.has(i.key) && i.kind !== "task" && i.kind !== "connection" && i.kind !== "guest" && !selfRequest(i));
     if (!chosen.length) return;
     const destructive = !primary && chosen.some((i) => i.kind === "review");
     const ok = await confirm({
@@ -419,8 +481,8 @@ export function Inbox() {
       else if (k === "?") setHelp((h) => !h);
       else if (!current) return;
       else if (k === "x") setChecked((s) => { const n = new Set(s); if (n.has(current.key)) n.delete(current.key); else n.add(current.key); return n; });
-      else if (k === "a") run(current, VERBS[current.kind].primary);
-      else if (k === "d" && current.kind === "approval") run(current, VERBS[current.kind].secondary);
+      else if (k === "a") { if (current.kind !== "guest" || guestRowActions(current.guest, departure).primary) run(current, VERBS[current.kind].primary); }
+      else if (k === "d" && (current.kind === "approval" || (current.kind === "guest" && guestRowActions(current.guest, departure).secondary))) run(current, VERBS[current.kind].secondary);
       else if (k === "r" && current.kind === "review") run(current, "revoke");
     };
     window.addEventListener("keydown", onKey);
@@ -432,7 +494,7 @@ export function Inbox() {
   return (
     <Page
       title="Inbox"
-      sub="Approvals routed to you (including as a delegate), access reviews and lifecycle tasks in one queue. Decide with the buttons or the keyboard."
+      sub="Approvals routed to you (including as a delegate), access reviews, lifecycle tasks and guest work (sponsorship approvals, registrations, identity matches, sponsor transfers) in one queue. Decide with the buttons or the keyboard."
       actions={<Button variant="ghost" icon={<Keyboard size={15} />} onClick={() => setHelp(!help)} aria-expanded={help}>Shortcuts</Button>}
     >
       {help && (
@@ -448,9 +510,6 @@ export function Inbox() {
           </div>
         </div>
       )}
-      <IdentityMatchBanner />
-      <GuestTaskBanner />
-      <RegistrationRequests />
       <div className="spread" style={{ marginBottom: 12, flexWrap: "wrap" }}>
         <FilterChips label="Filter inbox" value={filter} onChange={(v) => setParams(v === "all" ? {} : { filter: v })} options={FILTERS.map((f) => ({ ...f, count: counts[f.id] ?? 0 }))} />
         <div className="row">
@@ -499,6 +558,8 @@ export function Inbox() {
                     <span className="q-actions" onClick={(e) => e.stopPropagation()}>
                       {it.kind === "connection" ? (
                         <Link className="btn sm" to={`/admin/connections/${it.conn.id}`}>Open</Link>
+                      ) : it.kind === "guest" ? (
+                        <GuestRowButtons g={it.guest} departure={departure} busy={busy} current={it.key === current?.key} run={(v) => run(it, v)} />
                       ) : it.kind === "task" ? (
                         <Button size="sm" disabled={busy} onClick={() => run(it, "run")} kbd={it.key === current?.key ? "A" : undefined}>Run plan</Button>
                       ) : (
