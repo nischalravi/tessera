@@ -308,6 +308,29 @@ func TestEngine_MismatchRaisesFinding(t *testing.T) {
 		}
 		return nil
 	})
+	// A retry that fails authentication must not close the original finding.
+	e.inA(func(c *store.TenantTx) error {
+		pt, err := c.ProvTarget(e.conn)
+		if err != nil {
+			return err
+		}
+		pt.CredentialEnc, err = provision.SealToken(e.sealer, e.f.A.ID, pt.ID, "invalid-token")
+		if err != nil {
+			return err
+		}
+		return c.UpsertProvTarget(pt, e.now)
+	})
+	e.run()
+	if e.op(op.ID).Status != provision.Failed {
+		t.Fatalf("invalid credential retry did not fail: %+v", e.op(op.ID))
+	}
+	e.inA(func(c *store.TenantTx) error {
+		fs, err := c.ProvFindings("open", op.ID)
+		if err != nil || len(fs) != 1 {
+			t.Fatalf("failed retry hid finding: %v, %v", fs, err)
+		}
+		return nil
+	})
 	e.inA(func(c *store.TenantTx) error {
 		_, err := provision.Cancel(c, e.now, op.ID)
 		return err
@@ -323,6 +346,7 @@ func TestEngine_MismatchRaisesFinding(t *testing.T) {
 	}
 	// A verified retry is the only automatic resolution.
 	e.fake.SetFault("")
+	e.setTarget(true, provision.Settings{})
 	e.inA(func(c *store.TenantTx) error {
 		_, err := provision.Retry(c, e.now, op.ID)
 		return err
