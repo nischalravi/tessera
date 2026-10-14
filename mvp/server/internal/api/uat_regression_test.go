@@ -16,7 +16,7 @@ import (
 func TestHrisEventUnknownIdentity(t *testing.T) {
 	t.Parallel()
 	st, _ := testkit.Tiny(t)
-	c := client{t, testServer(st)}
+	c := client{t, testServer(t, st)}
 	for _, typ := range []string{"leaver", "mover", "joiner"} {
 		body := fmt.Sprintf(`{"type":%q,"identity_id":99999,"payload":{"name":"x","to_team":"eng"}}`, typ)
 		rec := c.do("POST", "/api/hris/events", body)
@@ -145,7 +145,7 @@ func (c rdClient) edge(id int64) *store.GrantEdge {
 func TestSimulateJitGrantIsNotStanding(t *testing.T) {
 	t.Parallel()
 	st, ids := testkit.Tiny(t)
-	c := client{t, testServer(st)}
+	c := client{t, testServer(t, st)}
 	edge := func(extra string) string {
 		return fmt.Sprintf(`{"add_edges":[{"src":"account:%d","dst":"group:%d"%s}]}`, ids["acct:okta:alice"], ids["group:okta:platform"], extra)
 	}

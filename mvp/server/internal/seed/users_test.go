@@ -1,0 +1,111 @@
+package seed_test
+
+import (
+	"context"
+	"path/filepath"
+	"slices"
+	"testing"
+	"time"
+
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/devidp"
+	"github.com/nischalravi/tessera/mvp/server/internal/seed"
+	"github.com/nischalravi/tessera/mvp/server/internal/store"
+)
+
+// TestSeedUsersMatchDevIdP keeps the bootstrap users in step with the dev
+// IdP's users.yaml: same subjects, emails, tenants and roles.
+func TestSeedUsersMatchDevIdP(t *testing.T) {
+	idp, err := devidp.DefaultUsers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seeded := map[string]seed.User{}
+	tenantOf := map[string]string{}
+	for _, u := range seed.LarkspurUsers {
+		seeded[u.Subject], tenantOf[u.Subject] = u, seed.LarkspurSlug
+	}
+	for _, u := range seed.GlobexUsers {
+		seeded[u.Subject], tenantOf[u.Subject] = u, seed.GlobexSlug
+	}
+	if len(seeded) != len(idp) {
+		t.Errorf("%d seeded users, %d dev IdP users", len(seeded), len(idp))
+	}
+	for _, u := range idp {
+		s, ok := seeded[u.Sub]
+		if !ok {
+			t.Errorf("dev IdP user %s is not seeded", u.Sub)
+			continue
+		}
+		if s.Email != u.Email || tenantOf[u.Sub] != u.Tenant || !slices.Equal(s.Roles, u.Roles) {
+			t.Errorf("%s: seeded %+v (%s), dev IdP %+v", u.Sub, s, tenantOf[u.Sub], u)
+		}
+	}
+}
+
+// TestSeedDevIdPConnection: WithDevIdP seeds an active dev_mock connection
+// and the bootstrap users with their (connection, subject) links and roles,
+// and writes no audit event (a fresh ledger keeps its recorded ids).
+func TestSeedDevIdPConnection(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 10, 8, 9, 30, 0, 0, time.UTC)
+	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	tenants := seed.WithDevIdP([]seed.Tenant{seed.Globex(now)}, "http://127.0.0.1:8001")
+	if _, err := seed.Run(ctx, db, now, nil, tenants); err != nil {
+		t.Fatal(err)
+	}
+	err = db.ReadTenant(ctx, seed.GlobexID, func(tx *store.TenantTx) error {
+		conns, err := tx.IdPConnections()
+		if err != nil {
+			return err
+		}
+		if len(conns) != 1 || conns[0].Profile != store.ProfileDevMock || conns[0].Status != "active" ||
+			*conns[0].Issuer != "http://127.0.0.1:8001" {
+			t.Errorf("connections %+v", conns)
+		}
+		l, err := tx.ExternalLoginBySubject(conns[0].ID, "00u-gina-globex")
+		if err != nil {
+			return err
+		}
+		roles, err := tx.RoleAssignments(l.UserID)
+		if err != nil {
+			return err
+		}
+		if len(roles) != 1 || roles[0].Role != store.RoleTenantAdmin || roles[0].Source != store.RoleSourceBootstrap {
+			t.Errorf("roles %+v", roles)
+		}
+		log, err := tx.AuditLog(-1)
+		for _, e := range log {
+			if e.Action != "review.campaign_created" {
+				t.Errorf("seeding the auth rows wrote %s", e.Action)
+			}
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// without WithDevIdP there is no connection and no user
+	db2, err := store.Open(ctx, filepath.Join(t.TempDir(), "s2.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db2.Close()
+	if _, err := seed.Run(ctx, db2, now, nil, []seed.Tenant{{ID: seed.GlobexID, Slug: "globex", Name: "G",
+		Connectors: []connectors.Connector{connectors.Tiny{Now: now}}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db2.ReadTenant(ctx, seed.GlobexID, func(tx *store.TenantTx) error {
+		users, err := tx.PlatformUsers()
+		if len(users) != 0 {
+			t.Errorf("users seeded without a dev IdP: %d", len(users))
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

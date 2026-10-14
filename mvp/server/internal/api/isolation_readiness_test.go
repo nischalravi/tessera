@@ -100,7 +100,7 @@ var readinessRouteCases = map[string][]rdCase{
 func TestIsolation_ReadinessRouteCrossTenant(t *testing.T) {
 	t.Parallel()
 	f := storetest.TwoTenants(t)
-	h := isolationServer(f, f.A.ID).Handler()
+	h := isolationServer(t, f, f.A.ID).Handler()
 	beforeB := storetest.ReadinessDump(t, f.DB, f.B.ID, f.B.Refs)
 	beforeBGraph := storetest.Dump(t, f.DB, f.B.ID)
 	for route, cases := range readinessRouteCases {
@@ -168,9 +168,9 @@ func readinessGetPaths(r map[string]string) map[string]string {
 func TestIsolation_ReadinessListRoutesNeverLeak(t *testing.T) {
 	t.Parallel()
 	f := storetest.TwoTenants(t)
-	srv := isolationServer(f, f.A.ID)
+	srv := isolationServer(t, f, f.A.ID)
 	h := srv.Handler()
-	hb := isolationServer(f, f.B.ID).Handler()
+	hb := isolationServer(t, f, f.B.ID).Handler()
 	for _, p := range []string{"/api/connections", "/api/insights/deployment-health", "/api/readiness/templates/ad",
 		"/api/connections/" + f.B.Refs["connection:ad"] + "/checklist"} {
 		if rec := serveOnce(hb, http.MethodGet, p, ""); !readinessLeaks(rec.Body.String()) {
@@ -229,7 +229,7 @@ func TestIsolation_ReadinessListRoutesNeverLeak(t *testing.T) {
 func TestIsolation_ReadinessOverlayScoped(t *testing.T) {
 	t.Parallel()
 	f := storetest.TwoTenants(t)
-	ha, hb := isolationServer(f, f.A.ID).Handler(), isolationServer(f, f.B.ID).Handler()
+	ha, hb := isolationServer(t, f, f.A.ID).Handler(), isolationServer(t, f, f.B.ID).Handler()
 	beforeB := serveOnce(hb, http.MethodGet, "/api/readiness/templates/ad", "").Body.String()
 	rec := serveOnce(ha, http.MethodPut, "/api/readiness/overlays/ad",
 		`{"raise_levels":{"ad.svc.no_interactive":"required"}}`)
@@ -247,7 +247,7 @@ func TestIsolation_ReadinessOverlayScoped(t *testing.T) {
 func TestIsolation_ReadinessAuditStampedWithOwnTenant(t *testing.T) {
 	t.Parallel()
 	f := storetest.TwoTenants(t)
-	h := isolationServer(f, f.A.ID).Handler()
+	h := isolationServer(t, f, f.A.ID).Handler()
 	a := f.A.Refs
 	countIn := func(tn storetest.Tenant) map[string]int {
 		out := map[string]int{}
