@@ -388,7 +388,7 @@ func TestProbe_SampleBound(t *testing.T) {
 	}
 }
 
-// TestProbe_Concurrency: never more than two connections at once.
+// TestProbe_Concurrency: never more than two requests in flight at once.
 func TestProbe_Concurrency(t *testing.T) {
 	e := newEnv(t, lldapLab)
 	hold := make(chan struct{})
@@ -404,7 +404,7 @@ func TestProbe_Concurrency(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		e.srv.mu.Lock()
-		n := e.srv.active
+		n := e.srv.inflight
 		e.srv.mu.Unlock()
 		if n >= MaxConcurrent {
 			break
@@ -416,8 +416,8 @@ func TestProbe_Concurrency(t *testing.T) {
 	wg.Wait()
 	e.srv.mu.Lock()
 	defer e.srv.mu.Unlock()
-	if e.srv.maxActive != MaxConcurrent {
-		t.Errorf("max concurrent connections = %d; want %d", e.srv.maxActive, MaxConcurrent)
+	if e.srv.maxInflight != MaxConcurrent {
+		t.Errorf("max concurrent requests = %d; want %d", e.srv.maxInflight, MaxConcurrent)
 	}
 }
 

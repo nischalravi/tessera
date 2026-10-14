@@ -86,8 +86,8 @@ type fakeServer struct {
 	closeOnce   sync.Once
 	closed      chan struct{}
 	searchBases []string
-	active      int
-	maxActive   int
+	inflight    int // searches currently held by holdSearch
+	maxInflight int
 	holdSearch  chan struct{} // when set, searches wait on it (concurrency test)
 }
 
@@ -204,15 +204,6 @@ type reqControl struct {
 }
 
 func (s *fakeServer) serve(raw net.Conn, secure bool) {
-	s.mu.Lock()
-	s.active++
-	s.maxActive = max(s.maxActive, s.active)
-	s.mu.Unlock()
-	defer func() {
-		s.mu.Lock()
-		s.active--
-		s.mu.Unlock()
-	}()
 	var conn net.Conn = raw
 	if secure {
 		tc := tls.Server(raw, s.cfg)
@@ -380,8 +371,15 @@ func (s *fakeServer) search(id int64, op *ber.Packet, controls []reqControl, bin
 	if strings.HasSuffix(normDN(base), "cn=config") && !isRoot { // the config database is root-only
 		return envelope(id, result(5, 50, "insufficient access"))
 	}
-	if s.holdSearch != nil {
+	if s.holdSearch != nil { // requests in flight, not sockets (a closed one lingers server-side)
+		s.mu.Lock()
+		s.inflight++
+		s.maxInflight = max(s.maxInflight, s.inflight)
+		s.mu.Unlock()
 		<-s.holdSearch
+		s.mu.Lock()
+		s.inflight--
+		s.mu.Unlock()
 	}
 	// Paged results, when the server honours the control.
 	var pageSize, offset int
