@@ -651,7 +651,8 @@ func applyStep(c *store.TenantTx, now time.Time, ident *store.Identity, st Step)
 }
 
 // ExecuteEvent applies an HRIS event's plan and marks it executed.
-func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, actor string, policies []*policy.Policy) (Plan, error) {
+// by is the platform user who executes it (the request's principal).
+func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.UserRef, policies []*policy.Policy) (Plan, error) {
 	ev, err := getOrNil(c.HrisEvent(eventID))
 	if err != nil {
 		return nil, err
@@ -740,10 +741,10 @@ func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, actor string,
 			return nil, err
 		}
 	}
-	if err := c.MarkHrisEventExecuted(ev.ID, now); err != nil {
+	if err := c.MarkHrisEventExecuted(ev.ID, now, by); err != nil {
 		return nil, err
 	}
-	err = c.Audit(now, actor, "jml."+ev.Type, ojson.Object{{Key: "event_id", Value: ev.ID},
+	err = c.Audit(now, by.Display, "jml."+ev.Type, ojson.Object{{Key: "event_id", Value: ev.ID},
 		{Key: "identity", Value: identityName}, {Key: "steps", Value: len(steps)}})
 	return plan, err
 }

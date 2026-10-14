@@ -19,18 +19,20 @@ import (
 const secretData = `{"identities":["ZZ-SECRET-ROW"]}`
 
 type capture struct {
-	mu     sync.Mutex
-	events []store.AuditEvent
-	fail   error
+	mu      sync.Mutex
+	events  []store.AuditEvent
+	tenants []tenancy.ID
+	fail    error
 }
 
-func (c *capture) append(_ context.Context, _ tenancy.ID, e store.AuditEvent) error {
+func (c *capture) append(_ context.Context, t tenancy.ID, e store.AuditEvent) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.fail != nil {
 		return c.fail
 	}
 	c.events = append(c.events, e)
+	c.tenants = append(c.tenants, t)
 	return nil
 }
 
@@ -114,7 +116,8 @@ func TestReadFailsClosed(t *testing.T) {
 }
 
 // TestMiddleware_ActorNeverFromClient: whatever identity headers or bodies a
-// client sends, the event's actor is anonymous until PR5.
+// client sends, the event's actor is anonymous unless the authenticator hands
+// over a principal (SetPrincipal; see TestMiddleware_PrincipalAttributed).
 func TestMiddleware_ActorNeverFromClient(t *testing.T) {
 	c := &capture{}
 	var seen store.AuditContext
@@ -213,5 +216,56 @@ func TestStartStream(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/things/7", nil))
 	if rec.Code != http.StatusServiceUnavailable || strings.Contains(rec.Body.String(), "line") {
 		t.Errorf("stream with a failing ledger: %d %q", rec.Code, rec.Body.String())
+	}
+}
+
+// TestMiddleware_PrincipalAttributed: SetPrincipal moves the http.request
+// event to the principal's tenant with its actor, session and authn summary,
+// and the request context's AuditContext carries the same actor for domain
+// events; the request's id, address and committed counter are kept.
+func TestMiddleware_PrincipalAttributed(t *testing.T) {
+	c := &capture{}
+	tenant := tenancy.MustParse("00000000-0000-4000-8000-0000000000ab")
+	uid, display, sid := "u-1", "pat.policy@larkspur.example", "s-1"
+	authn := json.RawMessage(`{"ctx_id":"x","aal":2,"phr":true,"acr":"urn:tessera:acr:phr","auth_time":"2026-10-08T09:30:00.000000Z","auth_age_s":0}`)
+	var seen store.AuditContext
+	h := mw(c, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := audit.SetPrincipal(r.Context(), audit.Principal{Tenant: tenant,
+			Actor: store.AuditActor{Type: store.ActorUser, ID: &uid, Display: &display}, SessionID: &sid, Authn: authn})
+		seen, _ = store.AuditContextFrom(ctx)
+		w.WriteHeader(http.StatusOK)
+	}))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/things/7", nil))
+	if len(c.events) != 1 {
+		t.Fatalf("%d events", len(c.events))
+	}
+	e := c.events[0]
+	if c.tenants[0] != tenant {
+		t.Errorf("event in tenant %s, want the principal's", c.tenants[0])
+	}
+	if e.ActorType != store.ActorUser || *e.ActorID != uid || *e.ActorDisplay != display || e.SessionID == nil ||
+		*e.SessionID != sid || string(e.Authn) != string(authn) {
+		t.Errorf("event actor %s %v %v session %v authn %s", e.ActorType, e.ActorID, e.ActorDisplay, e.SessionID, e.Authn)
+	}
+	if strings.Contains(string(e.Detail), "anonymous_reason") {
+		t.Errorf("an attributed event has an anonymous reason: %s", e.Detail)
+	}
+	if seen.Actor.Type != store.ActorUser || seen.RequestID == nil || seen.Committed == nil || *seen.SessionID != sid {
+		t.Errorf("request audit context %+v", seen)
+	}
+}
+
+// TestMiddleware_AnonymousReason: SetAnonymous records why a request is not
+// attributed.
+func TestMiddleware_AnonymousReason(t *testing.T) {
+	c := &capture{}
+	h := mw(c, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		audit.SetAnonymous(r.Context(), "session_expired")
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/things/7", nil))
+	if len(c.events) != 1 || !strings.Contains(string(c.events[0].Detail), `"anonymous_reason":"session_expired"`) ||
+		c.events[0].Outcome != store.OutcomeDenied || c.tenants[0] != tenantA {
+		t.Errorf("events %+v", c.events)
 	}
 }

@@ -113,6 +113,8 @@ CREATE TABLE IF NOT EXISTS access_requests (
 	identity_id INTEGER NOT NULL, account_id INTEGER NOT NULL, group_id INTEGER NOT NULL,
 	justification TEXT NOT NULL, duration_hours REAL NOT NULL, status TEXT NOT NULL, requested_at TEXT NOT NULL,
 	decided_at TEXT, decided_by TEXT, expires_at TEXT, edge_id INTEGER,
+	-- platform users (schema/0005_auth.sql); decided_by stays as the display string
+	requested_by_user_id TEXT, decided_by_user_id TEXT,
 	FOREIGN KEY(identity_id) REFERENCES identities (id), FOREIGN KEY(account_id) REFERENCES accounts (id),
 	FOREIGN KEY(group_id) REFERENCES groups (id));
 CREATE INDEX IF NOT EXISTS ix_access_requests_tenant_status ON access_requests (tenant_id, status);
@@ -130,6 +132,7 @@ CREATE TABLE IF NOT EXISTS review_items (
 	campaign_id INTEGER NOT NULL, identity_id INTEGER NOT NULL, edge_id INTEGER,
 	edge_src TEXT NOT NULL, edge_dst TEXT NOT NULL, grant_label TEXT NOT NULL, reasons TEXT NOT NULL,
 	context TEXT NOT NULL, reviewer_id INTEGER, decision TEXT, comment TEXT, decided_at TEXT,
+	decided_by_user_id TEXT,
 	FOREIGN KEY(campaign_id) REFERENCES review_campaigns (id), FOREIGN KEY(identity_id) REFERENCES identities (id),
 	FOREIGN KEY(reviewer_id) REFERENCES identities (id));
 CREATE INDEX IF NOT EXISTS ix_review_items_tenant_campaign ON review_items (tenant_id, campaign_id);
@@ -139,6 +142,7 @@ CREATE TABLE IF NOT EXISTS hris_events (
 	tenant_id TEXT NOT NULL REFERENCES tenants (id),
 	external_id TEXT NOT NULL, type TEXT NOT NULL, identity_id INTEGER,
 	payload TEXT NOT NULL, effective_at TEXT NOT NULL, status TEXT NOT NULL, executed_at TEXT,
+	executed_by_user_id TEXT,
 	UNIQUE (tenant_id, external_id), FOREIGN KEY(identity_id) REFERENCES identities (id));
 
 -- The audit log is the hash-chained audit_events ledger (schema/0004_audit.sql).

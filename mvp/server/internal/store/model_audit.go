@@ -139,9 +139,9 @@ type AuditFilter struct {
 }
 
 // AuditContext is who and what an event is attributed to, carried in the
-// request context: the audit middleware sets it for every HTTP request (the
-// actor is "anonymous" until authentication lands in PR5), background jobs set
-// a system actor. Domain events written through a TenantTx opened with that
+// request context: the audit middleware sets it for every HTTP request
+// ("anonymous" until the authenticator hands over the principal through
+// audit.SetPrincipal), background jobs set a system actor. Domain events written through a TenantTx opened with that
 // context take their actor from it, never from a caller-supplied string.
 type AuditContext struct {
 	Actor     AuditActor
