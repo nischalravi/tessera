@@ -148,6 +148,8 @@ var crossTenantCases = map[string]crossTenantCase{
 		body: func(int64) string { return `{}` }},
 	"POST revoke invitation": {method: "POST", path: pathf("/api/guests/%d/revoke-invitation"), key: "alice",
 		body: func(int64) string { return `{}` }},
+	"POST guest recovery": {method: "POST", path: pathf("/api/guests/%d/recovery"), key: "alice",
+		body: func(int64) string { return `{}` }},
 }
 
 // routeParamKey maps each route with path parameters to the cases above.
@@ -165,6 +167,7 @@ var routeParamCases = map[string][]string{
 	"GET /api/identities/{identity_id}/lifecycle":         {"GET lifecycle"},
 	"POST /api/guests/{identity_id}/resend-invitation":    {"POST resend invitation"},
 	"POST /api/guests/{identity_id}/revoke-invitation":    {"POST revoke invitation"},
+	"POST /api/guests/{identity_id}/recovery":             {"POST guest recovery"},
 	"PUT /api/identities/{identity_id}/lifecycle":         {"PUT lifecycle"},
 	"POST /api/identities/{identity_id}/lifecycle/extend": {"POST lifecycle extend"},
 	"POST /api/accounts/{account_id}/link":                {"POST link account"},
@@ -236,6 +239,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		}
 		if strings.HasPrefix(rt.Pattern, "/public/t/{slug}/claim/") {
 			continue // TestClaim_SessionIsPerTenant (public; the tenant comes from the slug)
+		}
+		if rt.Pattern == "/api/guest-recoveries/{case_id}/cancel" || rt.Pattern == "/api/admin/terms/{key}/assignments" {
+			continue // TestTermsAPI_CrossTenant (a UUID and a document key, not fixture ids)
 		}
 		if strings.HasPrefix(rt.Pattern, "/api/jobs/{job_id}") {
 			continue // TestIsolation_JobRoutes (a UUID, not a fixture id)

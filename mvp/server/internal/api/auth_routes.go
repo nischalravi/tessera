@@ -62,6 +62,15 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, rt *route) (*
 		auth.WriteDenial(w, d)
 		return r, false
 	}
+	// a guest past the grace period of a new terms version is blocked until they accept (GU-10)
+	if blocked, err := s.termsGate(r, p, rt); err != nil {
+		s.log.Error("terms check failed", "method", r.Method, "path", r.URL.Path, "err", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return r, false
+	} else if blocked {
+		auth.WriteDenial(w, &auth.Denial{Status: http.StatusForbidden, Error: "terms_required"})
+		return r, false
+	}
 	return r, true
 }
 
