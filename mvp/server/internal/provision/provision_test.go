@@ -296,13 +296,24 @@ func TestEngine_MismatchRaisesFinding(t *testing.T) {
 	if !strings.Contains(strings.Join(e.auditActions(), ","), "provision.mismatch") {
 		t.Errorf("audit = %v", e.auditActions())
 	}
-	// Cancelling closes the finding and never completes.
+	// Retrying and cancelling do not remediate the target finding.
+	e.inA(func(c *store.TenantTx) error {
+		_, err := provision.Retry(c, e.now, op.ID)
+		return err
+	})
+	e.inA(func(c *store.TenantTx) error {
+		fs, err := c.ProvFindings("open", op.ID)
+		if err != nil || len(fs) != 1 {
+			t.Fatalf("retry hid unresolved finding: %v, %v", fs, err)
+		}
+		return nil
+	})
 	e.inA(func(c *store.TenantTx) error {
 		_, err := provision.Cancel(c, e.now, op.ID)
 		return err
 	})
 	e.inA(func(c *store.TenantTx) error {
-		if fs, _ := c.ProvFindings("open", ""); len(fs) != 0 {
+		if fs, _ := c.ProvFindings("open", ""); len(fs) != 1 {
 			t.Errorf("open findings after cancel = %d", len(fs))
 		}
 		return nil
@@ -310,6 +321,20 @@ func TestEngine_MismatchRaisesFinding(t *testing.T) {
 	if e.op(op.ID).Status != provision.Cancelled || completed != 0 {
 		t.Errorf("cancelled op = %+v, completed = %d", e.op(op.ID), completed)
 	}
+	// A verified retry is the only automatic resolution.
+	e.fake.SetFault("")
+	e.inA(func(c *store.TenantTx) error {
+		_, err := provision.Retry(c, e.now, op.ID)
+		return err
+	})
+	e.run()
+	e.inA(func(c *store.TenantTx) error {
+		fs, err := c.ProvFindings("open", op.ID)
+		if err != nil || len(fs) != 0 {
+			t.Errorf("verified retry did not resolve finding: %v, %v", fs, err)
+		}
+		return nil
+	})
 }
 
 func TestEngine_RetryAfterFailureCompletes(t *testing.T) {

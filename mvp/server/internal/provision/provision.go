@@ -267,9 +267,6 @@ func Retry(tx *store.TenantTx, now time.Time, id string) (*store.ProvOp, error) 
 	if err := tx.SetProvOpState(id, op.Status, st, now); err != nil {
 		return nil, err
 	}
-	if _, err := tx.ResolveProvFindings(id, now); err != nil {
-		return nil, err
-	}
 	if err := tx.Audit(now, "system", "provision.retried", ojson.Object{{Key: "op_id", Value: id},
 		{Key: "kind", Value: op.Kind}, {Key: "target", Value: op.TargetRef}, {Key: "was", Value: op.Status}}); err != nil {
 		return nil, err
@@ -293,9 +290,6 @@ func Cancel(tx *store.TenantTx, now time.Time, id string) (*store.ProvOp, error)
 	st := store.ProvOpState{Status: Cancelled, Attempts: op.Attempts, VerifyAttempts: op.VerifyAttempts, NextAttemptAt: now,
 		LastError: op.LastError, Observed: op.Observed, CompletedAt: &now}
 	if err := tx.SetProvOpState(id, op.Status, st, now); err != nil {
-		return nil, err
-	}
-	if _, err := tx.ResolveProvFindings(id, now); err != nil {
 		return nil, err
 	}
 	if err := tx.Audit(now, "system", "provision.cancelled", ojson.Object{{Key: "op_id", Value: id},

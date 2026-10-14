@@ -315,6 +315,10 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 	old, err := c.ProvTarget(id)
 	switch {
 	case err == nil:
+		if in.Kind != provision.KindFake && len(old.CredentialEnc) > 0 && in.Token == "" &&
+			(in.Kind != old.Kind || strings.TrimRight(in.BaseURL, "/") != strings.TrimRight(old.BaseURL, "/")) {
+			return 0, nil, badRequest("credential_required_for_target_change", "changing the target URL or connector kind requires a replacement token")
+		}
 		t.ID, t.CredentialEnc, t.CredentialVer, t.CreatedBy = old.ID, old.CredentialEnc, old.CredentialVer, old.CreatedBy
 	case !errors.Is(err, store.ErrNotFound):
 		return 0, nil, err

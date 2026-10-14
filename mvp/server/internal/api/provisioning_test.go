@@ -370,13 +370,13 @@ func TestProvisioning_MismatchRaisesAFindingAndKeepsTheGraph(t *testing.T) {
 	if !h.hasEdge("alice", "eng") {
 		t.Error("the edge was deleted without verification")
 	}
-	// Cancel withdraws it and closes the finding.
+	// Cancellation withdraws the operation but leaves the access finding open.
 	opID := at(h.ops("?status=mismatch"), 0, "id").(string)
 	d := h.c.json("POST", "/api/provisioning/ops/"+opID+"/cancel", "", 200).(map[string]any)
 	if d["status"] != "cancelled" {
 		t.Errorf("cancel = %v", d)
 	}
-	if fs := h.c.json("GET", "/api/provisioning/findings?status=open", "", 200).([]any); len(fs) != 0 {
+	if fs := h.c.json("GET", "/api/provisioning/findings?status=open", "", 200).([]any); len(fs) != 1 {
 		t.Errorf("open findings after cancel = %v", fs)
 	}
 	if rec := h.c.do("POST", "/api/provisioning/ops/"+opID+"/cancel", ""); rec.Code != http.StatusConflict {
@@ -538,5 +538,31 @@ func TestProvisioning_JITExpiryFailureIsNotRetriedBySweeper(t *testing.T) {
 	ops := h.ops("")
 	if len(ops) != 1 || at(ops, 0, "status") != "failed" || at(ops, 0, "attempts") != float64(5) {
 		t.Errorf("the sweeper retried or duplicated a failed operation: %v", ops)
+	}
+}
+
+func TestProvisioning_TargetChangeRequiresReplacementCredential(t *testing.T) {
+	h := newProvHarness(t, fake.Options{})
+	h.target(`{"kind":"scim","base_url":"https://original.example/scim/v2","token":"original-secret"}`, 200)
+	for _, body := range []string{
+		`{"kind":"scim","base_url":"https://other.example/scim/v2"}`,
+		`{"kind":"scim","base_url":"https://original.example/other"}`,
+		`{"kind":"okta","base_url":"https://original.example/scim/v2"}`,
+	} {
+		h.target(body, http.StatusUnprocessableEntity)
+		testkit.Read(t, h.st, func(c *store.TenantTx) error {
+			pt, err := c.ProvTarget(h.conn)
+			if err != nil {
+				return err
+			}
+			if pt.BaseURL != "https://original.example/scim/v2" || pt.Kind != "scim" {
+				t.Errorf("rejected edit changed target: %+v", pt)
+			}
+			return nil
+		})
+	}
+	v := h.target(`{"kind":"scim","base_url":"https://other.example/scim/v2","token":"replacement-secret"}`, 200)
+	if v["has_credential"] != true || v["base_url"] != "https://other.example/scim/v2" {
+		t.Errorf("replacement target = %v", v)
 	}
 }

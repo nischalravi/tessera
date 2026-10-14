@@ -210,6 +210,7 @@ change in the target system and checks that it happened.
 * **Tessera changes only after verification.** An operation carries a completion (a graph edit, a
   review decision, a JIT end) that runs in the same transaction that marks it `verified`. A failed or
   unverified write therefore leaves the review item open, the account active and the JIT grant in place.
+  Mismatch findings remain open during retry or cancellation and resolve only after successful verification.
   Retrying (or deciding again, or the next `POST …/retry`) re-queues the same operation.
 * **Write-back is per connection and off by default.** A target (`provisioning_targets`, schema
   `0224`, one per connection) has a `write_back` switch. Off: the change edits the graph at once, as
@@ -220,7 +221,7 @@ change in the target system and checks that it happened.
   filter path and, if the server refuses it, with a value list; `dialect: entra` sends capitalised
   operations, string booleans and the value list, and every dialect reads `"True"`/`"False"`). `internal/provision/okta` is a native
   Okta connector (users, lifecycle deactivate/delete, group membership, `Link` paging that must stay on
-  the org's origin). Credentials are sealed under the KEK (`internal/seal`, AAD = tenant, table,
+  the org's origin). Changing a credentialed target URL or connector kind requires a replacement token. Credentials are sealed under the KEK (`internal/seal`, AAD = tenant, table,
   column and row) and are write-only in the API. Every request goes through `internal/safehttp`.
 * **Limits.** Disabling or deleting an account through SCIM does not end sessions or tokens the
   account already holds (SCIM does not imply it; knowledge base §4.6), so a verified disable is not
