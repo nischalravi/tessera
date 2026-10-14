@@ -82,6 +82,15 @@ Supports a single object or a `sailpoint` wrapper. Maps:
 - Bundle `id`/`name` and the same owner reference, as a draft business role.
   Profiles, selectors, inheritance and membership criteria remain blockers.
 
+Top-level `Workflow`, `Rule`, `Policy`, `PolicyViolation`,
+`CertificationDefinition` and `Form` objects are recognised but not mapped; each
+gets its own blocking reason code (`deferred_mapping:iiq_workflow`, `…:iiq_rule`,
+`…:iiq_policy`, `…:iiq_policy_violation`, `…:iiq_certification_definition`,
+`…:iiq_form`) with a content digest, so the report doubles as a scoping
+worksheet. `provisional_source_id` is informational (`blocking: false`); every
+other diagnostic blocks. An SoD definition the policy engine rejects becomes a
+`sod_proposal_invalid` diagnostic instead of failing the whole report.
+
 All other elements/attributes/text are digest-only blocking diagnostics. Rules,
 Source/Script, workflows, forms, policy violations and certification models are
 not translated. Application reference elements and other native variations are

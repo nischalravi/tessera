@@ -110,6 +110,18 @@ func parseXML(b []byte, r *Report) error {
 	return nil
 }
 
+// deferredIIQ names IIQ object types that are recognised but deliberately not
+// mapped yet (#112); each gets its own reason code so the report doubles as a
+// scoping worksheet. Their content is reported as a digest only.
+var deferredIIQ = map[string]string{
+	"Workflow":                "iiq_workflow",
+	"Rule":                    "iiq_rule",
+	"Policy":                  "iiq_policy",
+	"PolicyViolation":         "iiq_policy_violation",
+	"CertificationDefinition": "iiq_certification_definition",
+	"Form":                    "iiq_form",
+}
+
 func (r *Report) unsupportedXML(n *xmlNode, kind, id, field string) {
 	b, _ := json.Marshal(n)
 	r.diagnostic("unsupported_xml_semantics", kind, id, field, digest(b))
@@ -221,6 +233,11 @@ func (r *Report) xmlObject(n *xmlNode) {
 		r.diagnostic("role_membership_mapping_pending", "role", id, "membership/entitlements", "")
 	default:
 		id := r.xmlID(n, "unsupported")
+		if reason, ok := deferredIIQ[n.Name]; ok {
+			b, _ := json.Marshal(n)
+			r.diagnostic("deferred_mapping:"+reason, "unsupported", id, n.Name, digest(b))
+			return
+		}
 		r.unsupportedXML(n, "unsupported", id, n.Name)
 	}
 }

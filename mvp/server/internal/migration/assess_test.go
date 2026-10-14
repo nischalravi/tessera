@@ -313,3 +313,50 @@ func TestDeferredVendorTypesAreDigestOnlyBlockers(t *testing.T) {
 		})
 	}
 }
+
+// TestAssess_DeferredIIQTypesHaveReasonCodes: recognised but unmapped IIQ object
+// types get their own reason code (a scoping worksheet), stay blocking, and keep
+// only a digest of their content.
+func TestAssess_DeferredIIQTypesHaveReasonCodes(t *testing.T) {
+	for kind, reason := range deferredIIQ {
+		t.Run(kind, func(t *testing.T) {
+			r, err := Assess(options("iiq-xml"), strings.NewReader(`<sailpoint><`+kind+` id="x1">PRIVATE_LOGIC_SNIPPET</`+kind+`></sailpoint>`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, d := range r.Diagnostics {
+				if d.Code == "deferred_mapping:"+reason && d.Field == kind && d.Blocking && len(d.Digest) == 64 {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("no deferred_mapping:%s diagnostic: %+v", reason, r.Diagnostics)
+			}
+			var out bytes.Buffer
+			if err := WriteReport(&out, r); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(out.String(), "PRIVATE_LOGIC_SNIPPET") {
+				t.Fatal("raw logic leaked")
+			}
+		})
+	}
+}
+
+// TestAssess_ProvisionalIDIsInformational: a provisional source id describes the
+// report; it is listed but does not block.
+func TestAssess_ProvisionalIDIsInformational(t *testing.T) {
+	r, err := Assess(options("iiq-xml"), strings.NewReader(`<sailpoint><Identity name="no-id"/></sailpoint>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range r.Diagnostics {
+		if d.Code == "provisional_source_id" && d.Blocking {
+			t.Fatal("provisional_source_id must not block")
+		}
+	}
+	if !hasCode(r, "provisional_source_id") {
+		t.Fatal("provisional id not reported")
+	}
+}

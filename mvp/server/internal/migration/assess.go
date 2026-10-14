@@ -133,8 +133,12 @@ func (r *Report) ref(kind, id string) string {
 	}
 	return strings.Join(parts, "/")
 }
+
+// informational codes describe the report itself; they never block a migration.
+var informational = map[string]bool{"provisional_source_id": true}
+
 func (r *Report) diagnostic(code, kind, id, field, hash string) {
-	r.Diagnostics = append(r.Diagnostics, Diagnostic{code, r.ref(kind, id), field, hash, true})
+	r.Diagnostics = append(r.Diagnostics, Diagnostic{code, r.ref(kind, id), field, hash, !informational[code]})
 }
 
 func Assess(o Options, input io.Reader) (*Report, error) {
@@ -327,7 +331,9 @@ func (r *Report) validate() error {
 		}
 		definition := map[string]any{"id": r.ref("sod", x.ID), "name": x.Name, "type": "separation_of_duties", "severity": "high", "enabled": false, "conflict": map[string]any{"a": x.ActionsA, "b": x.ActionsB}}
 		if _, err := policy.Parse(definition, "migration proposal"); err != nil {
-			return errors.New("migration: policy proposal invalid")
+			// One definition the engine rejects must not hide the rest of the report.
+			r.diagnostic("sod_proposal_invalid", "sod", x.ID, "definition", "")
+			continue
 		}
 		r.SoDProposals = append(r.SoDProposals, SoDProposal{r.ref("sod", x.ID), definition, "draft_disabled"})
 	}
