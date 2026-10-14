@@ -89,6 +89,8 @@ var tables = []string{
 	// business roles (schema/0206_business_roles.sql)
 	"business_roles", "business_role_entitlements", "business_role_versions", "business_role_members",
 	"business_role_requests",
+	// account correlation (schema/0204_correlation.sql)
+	"account_links", "identity_merges",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was
