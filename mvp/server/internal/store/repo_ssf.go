@@ -112,7 +112,7 @@ var (
 	ssfEventsDeleteFor = tq("ssf_events.delete_for_transmitter", `
 		DELETE FROM ssf_events WHERE tenant_id = @tenant AND transmitter_id = @transmitter_id`)
 	ssfTransmitterSeen = tq("ssf_transmitters.seen", `
-		UPDATE ssf_transmitters SET last_event_at = @at, updated_at = @at WHERE tenant_id = @tenant AND id = @id`)
+		UPDATE ssf_transmitters SET last_event_at = @at WHERE tenant_id = @tenant AND id = @id`)
 	ssfTransmitterErr = tq("ssf_transmitters.error", `
 		UPDATE ssf_transmitters SET last_error = @error, last_error_at = @at WHERE tenant_id = @tenant AND id = @id`)
 	ssfTransmitterClearErr = tq("ssf_transmitters.clear_error", `
