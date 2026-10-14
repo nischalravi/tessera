@@ -58,6 +58,7 @@ const Policies = named(() => import("../features/governance/Policies"), "Policie
 const Reviews = named(() => import("../features/governance/Reviews"), "Reviews");
 const Lifecycle = named(() => import("../features/governance/Lifecycle"), "Lifecycle");
 const GuestLifecycle = named(() => import("../features/governance/GuestLifecycle"), "GuestLifecycle");
+const Terms = named(() => import("../features/governance/Terms"), "Terms");
 const Workflows = named(() => import("../features/governance/Workflows"), "Workflows");
 const Admin = named(admin, "Admin");
 const ConnectionsList = named(connections, "ConnectionsList");
@@ -154,6 +155,7 @@ export default function App() {
                     <Route path="/governance/reviews" element={<Reviews />} />
                     <Route path="/governance/lifecycle" element={<Lifecycle />} />
                     <Route path="/governance/guest-lifecycle" element={<GuestLifecycle />} />
+                    <Route path="/governance/terms" element={<Terms />} />
                     <Route path="/governance/workflows" element={<Workflows />} />
 
                     <Route path="/admin" element={<Admin />} />

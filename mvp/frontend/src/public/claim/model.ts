@@ -73,20 +73,21 @@ export type ClaimView =
 export function viewOf(s: ClaimStatus): ClaimView {
   if (s.complete || s.step === "complete") return { kind: "complete" };
   if (s.pending === "organization" && s.step === "credential") return { kind: "step", step: "credential" };
+  if ((s.pending === "terms" || s.pending === "consent") && s.step === "credential") return { kind: "step", step: "credential" };
   if (s.pending === "identity_verification") return { kind: "waiting", why: "identity_verification" };
   return { kind: "step", step: s.step };
 }
 
-export type ClaimResult = "complete" | "failed" | "continue";
+export type ClaimResult = "complete" | "failed" | "continue" | "cooling_off";
 
 /**
- * ?result=complete|failed|continue, which the sign-in callbacks send the browser back with.
+ * ?result=complete|failed|continue|cooling_off, which the sign-in callbacks send the browser back with.
  * "continue" is a sign-in as an existing account that did not link anything: it looks the same whatever the
  * reason, and the claim goes on at the credential step.
  */
 export function resultFromSearch(search: string): ClaimResult | null {
   const v = new URLSearchParams(search).get("result");
-  return v === "complete" || v === "failed" || v === "continue" ? v : null;
+  return v === "complete" || v === "failed" || v === "continue" || v === "cooling_off" ? v : null;
 }
 
 /** Where a "yes, I have an account" answer sends the browser: the sign-in the API started, or nowhere. */
@@ -100,3 +101,15 @@ export const POPULATION_PHRASE: Record<string, string> = {
   volunteer: "a volunteer",
   partner: "a partner",
 };
+
+/**
+ * What is left of step 5 in what the API listed: the documents not yet ticked, and whether the consent
+ * screen is still to answer. The page offers the button only when everything shown is ticked.
+ */
+export function termsReady(docs: { id: string }[], ticked: Record<string, boolean>): boolean {
+  return docs.length > 0 && docs.every((d) => ticked[d.id]);
+}
+
+/** The attributes to send for a consent: the required ones are always included by the API, so only the chosen optional ones. */
+export const consentChoice = (attrs: { name: string; required: boolean }[], chosen: Record<string, boolean>): string[] =>
+  attrs.filter((a) => !a.required && chosen[a.name]).map((a) => a.name);
