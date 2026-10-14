@@ -12,7 +12,10 @@
 // old_deleted. The old credential is deleted only after it has been re-read
 // from the provider (its age and its last use) and that observation has been
 // recorded; the database refuses a job in state verified or old_deleted
-// without it. A step that fails is retried with a backoff while the error is
+// without it. old_deleted is recorded only once the provider's retirement
+// condition holds (Capabilities.Retirement): the credential is observed
+// absent, or, for a Secrets Manager version, no longer AWSCURRENT/AWSPENDING
+// (retired, deprecated, not deleted). A step that fails is retried with a backoff while the error is
 // transient and fails the job otherwise.
 //
 // Outbound calls all go through an *http.Client from internal/safehttp.
@@ -53,7 +56,10 @@ type Observation struct {
 	CreatedAt     *time.Time // key age
 	LastUsedAt    *time.Time // nil when never used or unknown
 	LastUsedKnown bool       // the provider reports last use at all
-	Detail        string
+	// Stages are the version stages the old credential still carries (Secrets
+	// Manager only: AWSCURRENT, AWSPENDING, AWSPREVIOUS).
+	Stages []string
+	Detail string
 }
 
 // Minted is a new credential. Material is secret and is never stored or logged.
@@ -80,6 +86,43 @@ type Capabilities struct {
 	// MaterialFree: no secret leaves the provider (Secrets Manager rotates in
 	// place), so an interrupted hand-over can simply be resumed.
 	MaterialFree bool
+	// Retirement is what "done" means for the old credential once DeleteOld has
+	// been accepted. The zero value, RetireDeleted, requires the provider to no
+	// longer list the credential. RetireDeprecated is for providers that cannot
+	// delete (Secrets Manager versions): it requires the old version to carry
+	// neither AWSCURRENT nor AWSPENDING.
+	Retirement string
+}
+
+// Retirement conditions (Capabilities.Retirement).
+const (
+	RetireDeleted    = "deleted"
+	RetireDeprecated = "deprecated"
+)
+
+// Dispositions recorded when a job completes (rotation.completed old_disposition).
+const (
+	DispositionDeleted    = "deleted"
+	DispositionDeprecated = "retired_deprecated"
+)
+
+// retired reports whether obs, read after DeleteOld, meets the provider's
+// retirement condition, and what to call the outcome. Exists and inactive is
+// never enough for a deletable credential: that is a stale read or a delete
+// that did not take, and the engine re-reads until the credential is absent.
+func retired(caps Capabilities, obs Observation) (ok bool, disposition string) {
+	if caps.Retirement == RetireDeprecated {
+		if !obs.Exists {
+			return true, DispositionDeprecated
+		}
+		for _, s := range obs.Stages {
+			if s == "AWSCURRENT" || s == "AWSPENDING" {
+				return false, DispositionDeprecated
+			}
+		}
+		return true, DispositionDeprecated
+	}
+	return !obs.Exists, DispositionDeleted
 }
 
 // Adapter rotates one kind of credential at one provider.

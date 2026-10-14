@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -237,7 +238,7 @@ func (*smAdapter) Type() string { return TypeAWSSM }
 func (*smAdapter) Capabilities() Capabilities {
 	// "Disable" is removing the AWSPREVIOUS label; the version itself is
 	// deprecated and deleted by Secrets Manager.
-	return Capabilities{CanDisable: true, ReportsLastUsed: true, MaterialFree: true}
+	return Capabilities{CanDisable: true, ReportsLastUsed: true, MaterialFree: true, Retirement: RetireDeprecated}
 }
 
 func (*smAdapter) Validate(t Target) error {
@@ -438,7 +439,7 @@ func (a *smAdapter) ObserveOld(ctx context.Context, t Target) (Observation, erro
 		if v.VersionID != oldV {
 			continue
 		}
-		obs.Exists, obs.Active = true, len(v.Stages) > 0
+		obs.Exists, obs.Active, obs.Stages = true, len(v.Stages) > 0, slices.Clone(v.Stages)
 		obs.CreatedAt, obs.LastUsedAt = epoch(v.Created), epoch(v.Accessed)
 		obs.Detail = "stages: " + strings.Join(v.Stages, ",")
 	}

@@ -146,7 +146,7 @@ export function JobTimeline({ job }: { job: RotationJob }) {
         <li key={s.state} className="row" style={{ alignItems: "flex-start", gap: 10, opacity: s.status === "pending" ? 0.6 : 1 }}>
           <span style={{ marginTop: 2, color: s.status === "failed" ? "var(--critical)" : s.status === "done" ? "var(--ok)" : undefined }}>{STEP_ICON[s.status]}</span>
           <div className="grow">
-            <div>{STEP_LABEL[s.state]}{s.status === "skipped" && <span className="faint"> (the provider cannot do this)</span>}</div>
+            <div>{s.state === "old_deleted" && job.adapter_type === "aws_secretsmanager" ? "Old version retired (deprecated, not deleted)" : STEP_LABEL[s.state]}{s.status === "skipped" && <span className="faint"> (the provider cannot do this)</span>}</div>
             <div className="xs faint">
               {s.at && s.status !== "pending" ? fmtDate(s.at) : s.status === "current" && job.next_step_at ? `due ${fmtDate(job.next_step_at)}` : ""}
               <span className="sr-only">{`, ${s.status}`}</span>

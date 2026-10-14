@@ -177,8 +177,19 @@ A **job** walks `pending → created → handed_over → old_disabled → verifi
    grace period (a consumer has not moved). The database enforces it: a job cannot be `verified` or
    `old_deleted` without the recorded observation. Providers that report no last use (Vault) are recorded as
    `age_only` evidence.
-5. *old_deleted*: the old credential is deleted, re-read to confirm it is gone, the inventory follows the new
-   credential and the owner is notified.
+5. *old_deleted*: the old credential is deleted, the inventory follows the new credential and the owner is
+   notified. The job reaches this state only once the provider's retirement condition is **observed** after
+   the delete call. Exists-but-inactive is not enough for a deletable credential (a stale read or a delete
+   that did not take): the job re-reads with the usual backoff and retry budget, then fails and notifies the
+   owner, and never reports `old_deleted` on an unverified delete. The completion audit event records
+   `old_disposition` (`deleted` or `retired_deprecated`) and `old_deleted` (true or false).
+
+| Adapter | "Done" means | Disposition |
+|---|---|---|
+| `aws_iam` | the key is no longer listed for the user (absent) | `deleted` |
+| `vault` | the SecretID accessor lookup returns not found (absent) | `deleted` |
+| `github` | the deploy key lookup returns 404 (absent) | `deleted` |
+| `aws_secretsmanager` | the old version carries neither `AWSCURRENT` nor `AWSPENDING` (`AWSPREVIOUS` or no stage); the version itself may remain | `retired_deprecated`: retired, not deleted (Secrets Manager has no call to delete a version) |
 
 | Adapter | Rotates | Disable | Last use | Notes |
 |---|---|---|---|---|

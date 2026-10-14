@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -99,7 +100,7 @@ func cleanConfig(typ string, in map[string]string, env string) (map[string]strin
 	allowed := map[string][]string{
 		TypeAWSIAM: {"region", "endpoint"}, TypeAWSSM: {"region", "endpoint"},
 		TypeVault: {"address", "namespace"}, TypeGitHub: {"api_url"},
-		TypeFake: {"fail_at", "consumer_still_uses"},
+		TypeFake: {"fail_at", "consumer_still_uses", "delete_lag", "retirement"},
 	}[typ]
 	out := map[string]string{}
 	for k, v := range in {
@@ -136,6 +137,14 @@ func cleanConfig(typ string, in map[string]string, env string) (map[string]strin
 		}
 		if v := out["consumer_still_uses"]; err == nil && v != "" && v != "true" && v != "false" {
 			err = fmt.Errorf("config.consumer_still_uses must be true or false")
+		}
+		if v := out["delete_lag"]; err == nil && v != "" {
+			if n, perr := strconv.Atoi(v); perr != nil || n < 0 || n > 1000 {
+				err = fmt.Errorf("config.delete_lag must be a number of reads from 0 to 1000")
+			}
+		}
+		if v := out["retirement"]; err == nil && v != "" && v != RetireDeleted && v != RetireDeprecated {
+			err = fmt.Errorf("config.retirement must be deleted or deprecated")
 		}
 	}
 	for k, v := range out {

@@ -564,14 +564,22 @@ func (e *Engine) deleteOld(ctx context.Context, t tenancy.ID, sc *stepCtx, ad Ad
 	if err != nil {
 		return e.fail(ctx, t, sc, store.RotVerified, err)
 	}
-	if obs.Exists && obs.Active {
-		return e.fail(ctx, t, sc, store.RotVerified, fail("delete", "old_credential_still_present",
-			"the provider still reports the old credential after it was deleted", false))
+	caps := ad.Capabilities()
+	done, disposition := retired(caps, obs)
+	if !done {
+		// A stale read or a delete that did not take: re-read after the backoff
+		// within the retry budget; only an observed retirement completes the job.
+		msg := "the provider still lists the old credential after it was deleted"
+		if caps.Retirement == RetireDeprecated {
+			msg = "the old version still carries AWSCURRENT or AWSPENDING"
+		}
+		return e.fail(ctx, t, sc, store.RotVerified, fail("delete", "old_credential_still_present", msg, true))
 	}
 	now := e.now()
 	j.State, j.CompletedAt, j.Attempts, j.LastError = store.RotOldDeleted, &now, 0, nil
 	return e.commit(ctx, t, sc, store.RotVerified, "rotation.completed", ojson.Object{{Key: "old_ref", Value: j.OldRef},
-		{Key: "new_ref", Value: refOrNil(j.NewRef)}},
+		{Key: "new_ref", Value: refOrNil(j.NewRef)}, {Key: "old_disposition", Value: disposition},
+		{Key: "old_deleted", Value: disposition == DispositionDeleted}},
 		func(tx *store.TenantTx, now time.Time) error {
 			ref := ad.InventoryRef(j.OldRef, *j.NewRef)
 			if err := tx.ReplaceSecretCredential(sc.secret.ID, ref, now); errors.Is(err, store.ErrDuplicate) {
@@ -582,8 +590,12 @@ func (e *Engine) deleteOld(ctx context.Context, t tenancy.ID, sc *stepCtx, ad Ad
 			} else if err != nil {
 				return err
 			}
+			outcome := "deleted and observed absent"
+			if disposition == DispositionDeprecated {
+				outcome = "retired (deprecated, not deleted): the old version no longer carries AWSCURRENT or AWSPENDING"
+			}
 			return e.Service.notify(tx, e.note(sc, EventCompleted, fmt.Sprintf("Rotated %s on %s", sc.secret.Name, sc.secret.System),
-				"The new credential was handed over, the old one was verified unused after the grace period and deleted."))
+				"The new credential was handed over, the old one was verified unused after the grace period and "+outcome+"."))
 		})
 }
 
