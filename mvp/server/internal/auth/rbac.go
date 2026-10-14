@@ -91,6 +91,8 @@ const (
 	// email delivery log (issue #189)
 	PermEmailRead   Permission = "email.read"
 	PermEmailManage Permission = "email.manage"
+	// kill switch (issue #106)
+	PermIdentitiesContain Permission = "identities.contain"
 )
 
 // rolePermissions is the static role -> permission map (Cedar-ready, §12.1).
@@ -109,7 +111,7 @@ var rolePermissions = map[Role][]Permission{
 		PermReviewsDecide, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
 		PermIdentitiesCorrelate, PermIdentitiesMerge, PermIdentitiesAffiliate,
 		PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide, PermCatalogManage, PermRolesManage, PermLifecycleManage,
-		PermGuestsSponsor, PermGuestsRead, PermSponsorshipsApprove},
+		PermGuestsSponsor, PermGuestsRead, PermSponsorshipsApprove, PermIdentitiesContain},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
 		PermConnectionsActivate, PermRequestsCreate, PermEmailRead, PermEmailManage, PermGuestsSponsor, PermGuestsRead},

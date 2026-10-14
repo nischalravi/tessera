@@ -889,6 +889,58 @@
      }
     }
    }
+  },
+  "/api/connections/{id}/containment-credential": {
+   "put": {
+    "summary": "Write-only provider credential for the kill switch (Okta, Entra, Google, GitHub); sealed at rest, never returned",
+    "description": "Permission: connections.manage + step-up (issue #106). Body: token, base_url (required for Okta), org (required for GitHub).",
+    "responses": {
+     "200": {
+      "description": "{configured: true}"
+     },
+     "422": {
+      "description": "invalid_credential"
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "properties": {
+         "token": {
+          "type": "string",
+          "maxLength": 8192
+         },
+         "base_url": {
+          "type": "string",
+          "maxLength": 512
+         },
+         "org": {
+          "type": "string",
+          "maxLength": 100
+         }
+        },
+        "required": [
+         "token"
+        ],
+        "additionalProperties": false
+       }
+      }
+     }
+    }
+   }
   }
  },
  "components": {
