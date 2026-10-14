@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "node --experimental-transform-types --no-warnings --test tests/*.test.ts"
+    "test": "node --experimental-transform-types --no-warnings --test tests/*.test.ts",
+    "test:e2e:guests": "playwright test -c playwright.guests.config.ts"
   },
   "dependencies": {
     "cytoscape": "^3.34.3",
@@ -17,6 +18,8 @@
     "react-router-dom": "^7.18.4"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "@playwright/test": "1.56.1",
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
     "@vitejs/plugin-react": "^4.7.0",

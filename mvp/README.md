@@ -169,6 +169,8 @@ when a second reviewer is needed) · `GET /api/identity-merges` · `POST /api/id
 `GET /api/identity-merge-requests[?status=]` · `POST /api/identity-merge-requests/{id}/approve {}|reject {reason}` ·
 `GET|PUT /api/admin/matching {auto_link_tier_b, require_review_tier_a, unmerge_window_days}` ·
 `GET /api/identities/{id}/affiliations` · `GET /api/identities/{id}/identifiers` ·
+`GET /api/identities/{id}/guest-profile` (guests.read: source records with masked references and attribute names, terms accepted) ·
+`GET /api/affiliation-summary` (graph.read: lifecycle state and effective affiliation types per person, for the People filters) ·
 `POST /api/identities/{id}/affiliations {type, org_unit?, population?, starts_at?, ends_at?, reason}` ·
 `POST /api/affiliations/{id}/end {reason}` ·
 `GET /api/catalog[?all=1]` · `PUT /api/catalog/items/{group_id}` ·
@@ -1070,9 +1072,9 @@ the right. Arrow keys move between items.
 | (top) | **Home**, **Inbox** (count) |
 | **Identity** | Users (with *Identity matches*), Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts (with *Account matches*), Roles (Preview), Organizations (Preview) |
 | **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts, Roles, Organizations (Preview) |
-| **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals), Just-in-time, Access reviews (with *Lifecycle*, *Guest lifecycle* and *Workflows* tabs) |
+| **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals, registration requests, sponsor code, recovery), Just-in-time, Access reviews (with *Lifecycle*, *Guest lifecycle*, *Guest terms* and *Workflows* tabs) |
 | **Protection** | Policies & SoD (violations, policies, what-if simulation), Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
-| **Settings** | Connections (governed connections and the setup wizard), Admin |
+| **Settings** | Connections (governed connections and the setup wizard), Admin (including *Guests and external identities*) |
 
 **Home.** For the admin & security persona: the tenant name and a sync line, then tabs
 (Overview, Monitoring, Deployment health, Recommendations). Overview has the KPI cards
@@ -1096,7 +1098,37 @@ with `Esc` and returns focus to the row. **Open full page** goes to the existing
 
 **Inbox.** One queue for JIT and catalog approvals, access-review items, joiner/mover/leaver
 tasks and delegations, with keys: `j`/`k` move, `a` approve or keep, `d` deny, `r` revoke,
-`x` select, `?` help.
+`x` select, `?` help. Guest work is in the same queue as **Guest** items (filter chip *Guests*):
+sponsorship approvals (approve, reject with a reason), registration requests (approve, deny),
+identity-match reviews (the row links to the review page: linking needs the evidence, re-verification
+and four-eyes rules shown there) and guest lifecycle tasks (a sponsor-transfer task can be taken over or
+ended in place; other tasks open in Guest lifecycle). Each source is read only if the person holds the
+permission and is already routed to them by its endpoint.
+
+**Guests (UI, issue #76, GU-13).** *Access → Guests I sponsor* is the sponsor portal: my guests with
+state chips and days left, **Invite guest** (single, with the bundle picker showing the required IAL),
+**Bulk invite** (CSV, per-row policy preview), a **Registration requests** tab for visitors who asked
+this person to sponsor them, **Sponsor code** (shown once), and in the side panel Renew, End, Transfer,
+Resend or Revoke invitation and **Start recovery** for a claimed guest. The *Directory → Users* list
+filters by affiliation and lifecycle state; the person page (tab *Affiliations & identifiers*) has a
+lifecycle, assurance and claim card, affiliations, identifiers (masked), sponsorships, the access
+bundle, source records (masked references, attribute names only), match and merge history and terms
+accepted. *Governance → Access reviews → Lifecycle* shows guest tiles (ending soon, pending transfer,
+renewal requests, hired with a sponsorship open) linking to *Guest lifecycle*. *Admin → Guests and
+external identities* summarizes and links to matching, guest lifecycle and terms settings, shows the
+populations and sponsor policy, and lists recovery cases (cancel). Not built because their backends are
+not merged: claim KPIs (time to claim, completion and IDV failure rates), claims stuck at a step,
+identity-verification providers, federation metadata, partner organizations and proofing agents (listed
+under "Coming next" on the Admin page).
+
+**Public pages** (`/claim`, `/register`, `/renew`; no sign-in, no navigation, no third-party scripts).
+Every string comes from the message catalog in `src/i18n` (`t("key", {name})`; English only, a new
+language is a file with the same keys, picked from the browser's language list, with English as the
+fallback). The pages share `src/public/PublicShell.tsx` (page language, title, brand, one `main`).
+Accessibility: each step's heading takes focus when the step appears, errors go to a `role="alert"`
+region and mark the field, the code field takes focus when it appears, sponsor search results are a radio
+group with an announced count, the identity step explains the proofing-agent and online pathways.
+`tests/guestui.test.ts` checks that every key used exists, none is unused and no sentence is hard-coded.
 
 Routes from the previous UI (`/identities`, `/graph`, `/nhi`, `/jit`, `/policies`, `/reviews`,
 `/lifecycle`, `/least-privilege`, `/dashboard`) redirect to their new homes.
@@ -1326,6 +1358,22 @@ cd ../frontend && npm run build && npm test   # npm test: node:test, no extra de
   (FastAPI) backend with `record_python.py` on a frozen clock (2026-10-08T09:30:00 UTC) before it
   was removed; check out commit `aba5abb` to re-run the recorder against it. Only two values are
   normalised, both non-deterministic in Python itself (see `testdata/parity/README.md`).
+* **Guest UI end-to-end** (issue #76): `frontend/e2e/guests.spec.ts` (Playwright 1.56.1 and axe-core)
+  runs against a stack you start yourself and skips every spec when none answers, so it never touches
+  a running dev instance:
+
+  ```bash
+  cd mvp && API_PORT=8430 UI_PORT=5430 DEVIDP_PORT=8431 TESSERA_DB=/tmp/guests-e2e.db \
+    TESSERA_AUTH_RATE_BURST=5000 TESSERA_ANON_RATE_BURST=5000 ./run.sh --reseed    # in one terminal
+  cd mvp/frontend && GUESTS_UI_PORT=5430 GUESTS_DB=/tmp/guests-e2e.db npm run test:e2e:guests
+  ```
+
+  Flows: a sponsor invites a contractor; the contractor confirms the email and reaches identity
+  verification (IAL 1: completing it needs an identity-verification provider, GU-7); a visitor claims
+  through the existing-account question, terms and the sign-in step; the sponsor renews; the sponsor
+  leaves (HR leaver event) and the transfer task appears in the Inbox. Axe (serious and critical) runs
+  on the guest screens and the public pages, and the public pages are checked at 360px. The emails
+  (claim link, codes) are read from the dev mail sink file next to `GUESTS_DB`.
 * **Security scanners:** gosec reports 0 issues; each of the few `#nosec` annotations carries a
   justification. govulncheck reports no vulnerabilities.
 
