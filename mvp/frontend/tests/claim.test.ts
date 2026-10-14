@@ -82,22 +82,30 @@ test("a proof is a signature by the page's key over the request, in the server's
   assert.equal(jwk.kty, "EC");
   assert.equal(jwk.crv, "P-256");
   const now = Date.UTC(2026, 9, 8, 9, 30, 0);
-  const p = await proof.makeProof(pair.privateKey, "POST", "/public/t/larkspur/claim/verify/check", "nonce-123", now);
+  const body = JSON.stringify({ code: "123456" });
+  const p = await proof.makeProof(pair.privateKey, "POST", "/public/t/larkspur/claim/verify/check", "nonce-123", body, now);
   const [secs, sig] = p.split(".");
   assert.equal(secs, String(Math.floor(now / 1000)));
   const raw = Uint8Array.from(atob(sig.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (sig.length % 4)) % 4)), (c) => c.charCodeAt(0));
   assert.equal(raw.length, 64, "r||s");
-  const message = "tessera-claim-proof-v1\nPOST\n/public/t/larkspur/claim/verify/check\n" + secs + "\nnonce-123";
-  assert.equal(proof.proofMessage("POST", "/public/t/larkspur/claim/verify/check", Number(secs), "nonce-123"), message);
+  // the body's digest: base64url(SHA-256(body)), as the server's claim.BodyHash
+  const digest = await proof.bodyHash(body);
+  assert.equal(digest, proof.b64url(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body))));
+  assert.equal(await proof.bodyHash(""), "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU", "the empty body has a digest too");
+  const message = "tessera-claim-proof-v2\nPOST\n/public/t/larkspur/claim/verify/check\n" + secs + "\nnonce-123\n" + digest;
+  assert.equal(proof.proofMessage("POST", "/public/t/larkspur/claim/verify/check", Number(secs), "nonce-123", digest), message);
   const ok = await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, pair.publicKey, raw, new TextEncoder().encode(message));
   assert.ok(ok, "the signature verifies");
   const other = await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, pair.publicKey, raw, new TextEncoder().encode(message.replace("POST", "GET")));
   assert.equal(other, false);
+  const otherBody = await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, pair.publicKey, raw,
+    new TextEncoder().encode(message.replace(digest, await proof.bodyHash(JSON.stringify({ code: "654321" })))));
+  assert.equal(otherBody, false, "the proof is bound to the body");
   // randomized: the same request signed twice is two different proofs (the server refuses a repeat)
-  assert.notEqual(p, await proof.makeProof(pair.privateKey, "POST", "/public/t/larkspur/claim/verify/check", "nonce-123", now));
+  assert.notEqual(p, await proof.makeProof(pair.privateKey, "POST", "/public/t/larkspur/claim/verify/check", "nonce-123", body, now));
 });
 
-const signer = { sign: async (m: string, p: string, n: string) => `proof(${m} ${p} ${n})` };
+const signer = { sign: async (m: string, p: string, n: string, b: string) => `proof(${m} ${p} ${n} ${b})` };
 
 test("start sends the token in the body, signed, with no admin session assumptions", async () => {
   reply = { status: 200, body: { next: "verify_contact", nonce: "n1", status: status() } };
@@ -109,7 +117,7 @@ test("start sends the token in the body, signed, with no admin session assumptio
   assert.equal(c.method, "POST");
   assert.equal(c.url, "/public/t/larkspur/claim/start");
   assert.deepEqual(c.body, { token: TOKEN, key: jwk });
-  assert.equal(c.headers["x-claim-proof"], "proof(POST /public/t/larkspur/claim/start )");
+  assert.equal(c.headers["x-claim-proof"], `proof(POST /public/t/larkspur/claim/start  ${JSON.stringify({ token: TOKEN, key: jwk })})`, "the proof covers the exact body sent");
   assert.equal(c.headers["x-tessera-csrf"], undefined);
   assert.equal(c.credentials, "same-origin");
   assert.ok(!c.url.includes(TOKEN), "the token is never in the URL");
@@ -123,11 +131,11 @@ test("every session call is signed with its own method, path and the session's n
   await api.claimApi.existingAccount("larkspur", signer, "n1", "no");
   await api.claimApi.credential("larkspur", signer, "n1");
   assert.deepEqual(calls.map((c) => [c.method, c.url, c.body, c.headers["x-claim-proof"]]), [
-    ["GET", "/public/t/larkspur/claim/status", undefined, "proof(GET /public/t/larkspur/claim/status n1)"],
-    ["POST", "/public/t/larkspur/claim/verify/send", undefined, "proof(POST /public/t/larkspur/claim/verify/send n1)"],
-    ["POST", "/public/t/larkspur/claim/verify/check", { code: "123456" }, "proof(POST /public/t/larkspur/claim/verify/check n1)"],
-    ["POST", "/public/t/larkspur/claim/existing-account", { answer: "no" }, "proof(POST /public/t/larkspur/claim/existing-account n1)"],
-    ["POST", "/public/t/larkspur/claim/credential", undefined, "proof(POST /public/t/larkspur/claim/credential n1)"],
+    ["GET", "/public/t/larkspur/claim/status", undefined, "proof(GET /public/t/larkspur/claim/status n1 )"],
+    ["POST", "/public/t/larkspur/claim/verify/send", undefined, "proof(POST /public/t/larkspur/claim/verify/send n1 )"],
+    ["POST", "/public/t/larkspur/claim/verify/check", { code: "123456" }, `proof(POST /public/t/larkspur/claim/verify/check n1 ${JSON.stringify({ code: "123456" })})`],
+    ["POST", "/public/t/larkspur/claim/existing-account", { answer: "no" }, `proof(POST /public/t/larkspur/claim/existing-account n1 ${JSON.stringify({ answer: "no" })})`],
+    ["POST", "/public/t/larkspur/claim/credential", undefined, "proof(POST /public/t/larkspur/claim/credential n1 )"],
   ]);
   assert.ok(calls.every((c) => c.headers["x-tessera-csrf"] === undefined));
   assert.equal(api.claimPath("a b/c", "status"), "/public/t/a%20b%2Fc/claim/status");

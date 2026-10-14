@@ -1296,8 +1296,8 @@ export interface ClaimStart {
   status?: ClaimStatus;
 }
 export interface ClaimSigner {
-  /** The X-Claim-Proof header value for a request: a signature by the key bound at start. */
-  sign(method: string, path: string, nonce: string): Promise<string>;
+  /** The X-Claim-Proof header value for a request: a signature by the key bound at start over the request and its body ("" for none). */
+  sign(method: string, path: string, nonce: string, body: string): Promise<string>;
 }
 export class ClaimError extends Error {
   constructor(message: string, readonly status: number, readonly code: string) {
@@ -1309,15 +1309,17 @@ export const claimPath = (slug: string, rest: string) => `/public/t/${encodeURIC
 
 async function claimFetch<T>(slug: string, method: "GET" | "POST", rest: string, body: unknown, signer: ClaimSigner, nonce: string): Promise<T> {
   const path = claimPath(slug, rest);
-  const headers: Record<string, string> = { "x-claim-proof": await signer.sign(method, path, nonce) };
-  if (body !== undefined) headers["content-type"] = "application/json";
+  // serialize once: the proof signs exactly the bytes that are sent
+  const payload = body !== undefined ? JSON.stringify(body) : undefined;
+  const headers: Record<string, string> = { "x-claim-proof": await signer.sign(method, path, nonce, payload ?? "") };
+  if (payload !== undefined) headers["content-type"] = "application/json";
   const res = await fetch(path, {
     method,
     headers,
     credentials: "same-origin",
     cache: "no-store",
     referrerPolicy: "no-referrer",
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    body: payload,
   });
   let j: any = null;
   try {

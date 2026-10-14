@@ -1,9 +1,11 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -113,6 +115,8 @@ type claimReq struct {
 	ok  bool // an active tenant of that slug exists
 	ctx context.Context
 	now time.Time
+	// bodyHash is claim.BodyHash of the raw request body, which the proof signs
+	bodyHash string
 }
 
 func (s *Server) claimReady() bool { return s.claimSvc != nil && s.claimSvc.Ready() }
@@ -124,6 +128,14 @@ func (s *Server) claimBegin(w http.ResponseWriter, r *http.Request, p *params) (
 	h.Set("Cache-Control", "no-store")
 	h.Set("Referrer-Policy", "no-referrer")
 	c := &claimReq{ctx: r.Context(), now: s.clock().UTC()}
+	// The proof signs the body, so read it once here (the request is already
+	// capped at MaxBodyBytes) and hand the same bytes to the JSON decoder.
+	raw, rerr := io.ReadAll(r.Body)
+	r.Body = io.NopCloser(bytes.NewReader(raw))
+	c.bodyHash = claim.BodyHash(raw)
+	if rerr != nil {
+		c.bodyHash = "" // matches no signed digest: the proof fails
+	}
 	t, ok, err := s.activeTenant(r.Context(), p.path["slug"])
 	if err != nil {
 		return nil, err
@@ -179,7 +191,10 @@ func (s *Server) claimSession(r *http.Request, c *claimReq) (*store.ClaimSession
 		if err != nil {
 			return err
 		}
-		if perr := s.claimSvc.VerifyProof(x, r.Header.Get(claim.ProofHeader), r.Method, r.URL.Path, c.now); perr != nil {
+		if perr := s.claimSvc.VerifyProof(tx, x, r.Header.Get(claim.ProofHeader), r.Method, r.URL.Path, c.bodyHash, c.now); perr != nil {
+			if !claim.IsProofError(perr) {
+				return perr
+			}
 			// a cookie without the key: audited, without any secret
 			return claim.Audit(tx, c.now, "claim.proof.rejected", ojson.Object{{Key: "intake_id", Value: x.IntakeID},
 				{Key: "reason", Value: claim.Reason(perr)}}, store.OutcomeFailure)
@@ -337,8 +352,12 @@ func (s *Server) claimStart(w http.ResponseWriter, r *http.Request, p *params) (
 		replays = s.claimSvc.Replays
 	}
 	pub, canonical, jkt, kerr := claim.ParseKey(b.Key)
-	if kerr != nil || len(b.Token) == 0 || len(b.Token) > 256 ||
-		claim.Verify(pub, r.Header.Get(claim.ProofHeader), r.Method, r.URL.Path, "", c.now, replays) != nil {
+	var proof claim.Proof
+	var perr error
+	if kerr == nil {
+		proof, perr = claim.Verify(pub, r.Header.Get(claim.ProofHeader), r.Method, r.URL.Path, "", c.bodyHash, c.now, replays)
+	}
+	if kerr != nil || len(b.Token) == 0 || len(b.Token) > 256 || perr != nil {
 		// a malformed request is refused before any token is touched, whatever the token is
 		return statusBody{http.StatusBadRequest, ojson.Object{{Key: "error", Value: "invalid_request"}}}, nil
 	}
@@ -349,6 +368,12 @@ func (s *Server) claimStart(w http.ResponseWriter, r *http.Request, p *params) (
 	var started *claim.Started
 	var status ojson.Object
 	err = s.store.InTenant(c.ctx, c.t.ID, func(tx *store.TenantTx) error {
+		if err := claim.UseProof(tx, proof, c.now); errors.Is(err, claim.ErrProofReplay) {
+			// a replayed start: the token is not touched; the caller hears what everyone hears
+			return claim.Audit(tx, c.now, "claim.start.refused", ojson.Object{{Key: "reason", Value: "proof_replay"}}, store.OutcomeFailure)
+		} else if err != nil {
+			return err
+		}
 		st, reason, err := s.claimSvc.Start(tx, b.Token, canonical, jkt, c.now)
 		if err != nil {
 			return err

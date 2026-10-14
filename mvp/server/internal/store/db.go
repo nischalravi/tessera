@@ -107,6 +107,8 @@ var tables = []string{
 	"intake_records", "sponsorships", "sponsorship_events",
 	// guest claim (schema/0228_claim.sql)
 	"claim_tokens", "claim_sessions", "confirmation_codes",
+	// claim proof one-use memory (schema/0228_claim_proofs.sql)
+	"claim_proof_uses",
 	// job run history (schema/0212_job_runs.sql)
 	"job_runs",
 	// closed-loop provisioning (schema/0224-0225)

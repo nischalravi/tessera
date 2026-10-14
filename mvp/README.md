@@ -509,9 +509,13 @@ records the real reason. `Referrer-Policy: no-referrer` and `Cache-Control: no-s
 response. **Key binding (T20, implemented)**: the page makes a WebCrypto ECDSA P-256 key,
 non-extractable, keeps it in IndexedDB and sends the public JWK with `start`. Every request carries
 `X-Claim-Proof: <unix seconds>.<base64url r||s>`, a signature over
-`"tessera-claim-proof-v1\n"+METHOD+"\n"+PATH+"\n"+seconds+"\n"+session nonce`; the server verifies it with
-`crypto/ecdsa`, accepts ±60 s and refuses a repeated signature, so a stolen cookie is useless (the
-path signed is the one the API sees: a reverse proxy must not rewrite it). Missing, bad, stale and
+`"tessera-claim-proof-v2\n"+METHOD+"\n"+PATH+"\n"+seconds+"\n"+session nonce+"\n"+base64url(SHA-256(body))`;
+the server verifies it with `crypto/ecdsa`, accepts ±60 s and lets each proof be used once, so a
+stolen cookie is useless and a captured proof cannot carry another body (the path signed is the one
+the API sees: a reverse proxy must not rewrite it). One use is keyed on the signature's `r`, so the
+malleated form `(r, N−s)` of an accepted signature is a replay too, and it is recorded atomically in
+the tenant's database (`claim_proof_uses`, schema `0228_claim_proofs.sql`), so it holds across
+restarts and processes. Missing, bad, stale and
 replayed proofs get the same `401 {"error":"session_required"}` as no cookie at all and are audited
 as `claim.proof.rejected`. A session of one tenant is nothing at another.
 

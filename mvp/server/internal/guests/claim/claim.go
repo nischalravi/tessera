@@ -368,13 +368,30 @@ func (s *Service) Touch(tx *store.TenantTx, sess *store.ClaimSession, now time.T
 	return tx.SaveClaimSession(sess)
 }
 
-// VerifyProof checks the request's proof against the session's key and nonce.
-func (s *Service) VerifyProof(sess *store.ClaimSession, header, method, path string, now time.Time) error {
+// VerifyProof checks the request's proof against the session's key and nonce
+// and the request body, and records its one use in the tenant's database.
+func (s *Service) VerifyProof(tx *store.TenantTx, sess *store.ClaimSession, header, method, path, bodyHash string, now time.Time) error {
 	pub, _, _, err := ParseKey([]byte(sess.KeyJWK))
 	if err != nil {
 		return ErrProofBad
 	}
-	return Verify(pub, header, method, path, sess.Nonce, now, s.Replays)
+	p, err := Verify(pub, header, method, path, sess.Nonce, bodyHash, now, s.Replays)
+	if err != nil {
+		return err
+	}
+	return UseProof(tx, p, now)
+}
+
+// UseProof records an accepted proof's one use; ErrProofReplay if it was used.
+func UseProof(tx *store.TenantTx, p Proof, now time.Time) error {
+	fresh, err := tx.UseClaimProof(p.ID, p.UseUntil, now)
+	if err != nil {
+		return err
+	}
+	if !fresh {
+		return ErrProofReplay
+	}
+	return nil
 }
 
 // Status is what the claim page may know: the step, the guest's first name,

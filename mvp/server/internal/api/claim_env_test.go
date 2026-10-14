@@ -27,6 +27,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/devidp"
 	"github.com/nischalravi/tessera/mvp/server/internal/devidp/devidptest"
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/claim"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/credential"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
@@ -299,10 +300,15 @@ func (p *page) jwk() string {
 
 func (p *page) path(rest string) string { return "/public/t/" + p.slug + "/claim/" + rest }
 
-// proof signs a request as the page does: seconds, then the signature.
-func (p *page) proof(method, path, nonce string) string {
+// proof signs a request as the page does: seconds, then the signature over
+// the method, path, time, nonce and the body's digest (no body: empty).
+func (p *page) proof(method, path, nonce string, body ...string) string {
 	ts := fmt.Sprint(p.e.clk.now().Add(p.skew).Unix())
-	msg := "tessera-claim-proof-v1\n" + method + "\n" + path + "\n" + ts + "\n" + nonce
+	b := ""
+	if len(body) > 0 {
+		b = body[0]
+	}
+	msg := "tessera-claim-proof-v2\n" + method + "\n" + path + "\n" + ts + "\n" + nonce + "\n" + claim.BodyHash([]byte(b))
 	sum := sha256.Sum256([]byte(msg))
 	r, s, err := ecdsa.Sign(rand.Reader, p.key, sum[:])
 	if err != nil {
@@ -329,7 +335,7 @@ func (p *page) req(method, rest, body string) *http.Request {
 	if p.cookie != nil {
 		r.AddCookie(p.cookie)
 	}
-	r.Header.Set("X-Claim-Proof", p.proof(method, path, p.nonce))
+	r.Header.Set("X-Claim-Proof", p.proof(method, path, p.nonce, body))
 	return r
 }
 
@@ -342,11 +348,12 @@ func (p *page) post(rest, body string) *httptest.ResponseRecorder { return p.do(
 // start posts the token with a proof for the empty nonce, as the page does.
 func (p *page) start(token string) *httptest.ResponseRecorder {
 	path := p.path("start")
-	r := httptest.NewRequest("POST", path, strings.NewReader(fmt.Sprintf(`{"token":%q,"key":%s}`, token, p.jwk())))
+	body := fmt.Sprintf(`{"token":%q,"key":%s}`, token, p.jwk())
+	r := httptest.NewRequest("POST", path, strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Origin", p.origin)
 	r.RemoteAddr = p.ip
-	r.Header.Set("X-Claim-Proof", p.proof("POST", path, ""))
+	r.Header.Set("X-Claim-Proof", p.proof("POST", path, "", body))
 	rec := serve(p.e.h, r)
 	if c := cookieNamed(rec, ClaimCookieName); c != nil {
 		p.cookie = c
