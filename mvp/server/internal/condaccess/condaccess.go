@@ -199,14 +199,24 @@ func hit(p *store.AccessPolicy) Hit {
 
 // matches reports whether every condition of p holds for in.
 func matches(p *store.AccessPolicy, ranges map[uuid.UUID]*store.NetworkRange, in Input) bool {
-	switch p.NetworkOp {
-	case store.NetworkIn:
-		if in.IPUnresolved || !inAny(p.NetworkRangeIDs, ranges, in.ClientIP) {
+	switch {
+	case p.NetworkOp == "" || p.NetworkOp == store.NetworkAny:
+	case in.IPUnresolved:
+		// Nobody can say where an unresolved client is (a trusted proxy did not
+		// name it), so a network condition fails closed both ways: it holds for
+		// a policy that restricts (deny, step up) and never for one that
+		// allows. "Deny in blocked ranges" and "deny not_in corporate" both
+		// apply; "allow in corporate" does not.
+		if p.Outcome == store.AccessAllow {
 			return false
 		}
-	case store.NetworkNotIn:
-		// an address that is unknown or unresolved is not in any range
-		if !in.IPUnresolved && inAny(p.NetworkRangeIDs, ranges, in.ClientIP) {
+	case p.NetworkOp == store.NetworkIn:
+		if !inAny(p.NetworkRangeIDs, ranges, in.ClientIP) {
+			return false
+		}
+	case p.NetworkOp == store.NetworkNotIn:
+		// an address that is unknown is not in any range
+		if inAny(p.NetworkRangeIDs, ranges, in.ClientIP) {
 			return false
 		}
 	}

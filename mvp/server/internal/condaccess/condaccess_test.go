@@ -248,9 +248,25 @@ func TestEvaluate_UnresolvedClient(t *testing.T) {
 	if d.Outcome != store.AccessDeny {
 		t.Errorf("not_in corporate must deny an unresolved client, got %s", d.Outcome)
 	}
-	d = condaccess.Evaluate([]*store.AccessPolicy{pol("deny corp", P, store.AccessModeEnforce, store.AccessDeny, isIn(corp))}, ranges, unresolved)
-	if d.Outcome != store.AccessAllow {
-		t.Errorf("in corporate must not match an unresolved client, got %s", d.Outcome)
+	// a blocklist ("deny in these ranges") must not fail open either
+	d = condaccess.Evaluate([]*store.AccessPolicy{pol("deny blocked", P, store.AccessModeEnforce, store.AccessDeny, isIn(corp))}, ranges, unresolved)
+	if d.Outcome != store.AccessDeny {
+		t.Errorf("deny in a range must deny an unresolved client, got %s", d.Outcome)
+	}
+	d = condaccess.Evaluate([]*store.AccessPolicy{pol("step up off-net", P, store.AccessModeEnforce, store.AccessStepUp, notIn(corp))}, ranges, unresolved)
+	if d.Outcome != store.AccessStepUp {
+		t.Errorf("step up not_in corporate must step up an unresolved client, got %s", d.Outcome)
+	}
+	// a policy that grants never matches an unresolved client, in either form,
+	// so a later restrictive policy decides
+	for name, cond := range map[string]func(*store.AccessPolicy){"in": isIn(corp), "not_in": notIn(corp)} {
+		d = condaccess.Evaluate([]*store.AccessPolicy{
+			pol("allow corp "+name, P, store.AccessModeEnforce, store.AccessAllow, cond),
+			pol("deny the rest", P, store.AccessModeEnforce, store.AccessDeny, func(*store.AccessPolicy) {}),
+		}, ranges, unresolved)
+		if d.Outcome != store.AccessDeny {
+			t.Errorf("allow %s corporate matched an unresolved client: %s", name, d.Outcome)
+		}
 	}
 	d = condaccess.Evaluate([]*store.AccessPolicy{pol("trial", P, store.AccessModeReportOnly, store.AccessDeny, notIn(corp))}, ranges, unresolved)
 	if len(d.ReportOnly) != 1 || d.Outcome != store.AccessAllow {

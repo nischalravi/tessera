@@ -204,7 +204,7 @@ are exempt (a policy cannot lock an admin out of fixing it).
 Every evaluation that had a policy to check is audited with its inputs (`access.decision`, or the
 `conditional_access` detail of `auth.login.success` / `auth.login.failure`): scope, outcome, deciding policy,
 report-only hits, client IP and how it was resolved (`peer` or `x_forwarded_for`), device managed, compliance and
-its source. When a trusted proxy does not say who the client is (`X-Forwarded-For` missing or malformed, or every hop a trusted proxy), the client is unresolved: it is never given the proxy's address, it matches no range (so `in` fails and `not_in` holds, the restrictive outcome) and the event records `client_ip_unresolved`; rate limiting still keys on the proxy. Changes to ranges, policies and signals are `access.network.*`, `access.policy.*` and
+its source. When a trusted proxy does not say who the client is (`X-Forwarded-For` missing or malformed, or every hop a trusted proxy), the client is unresolved: it is never given the proxy's address, every network condition on a deny or step-up policy holds for it (`in` and `not_in` alike, so a blocklist and an off-network rule both apply) and none on an allow policy does, and the event records `client_ip_unresolved`; rate limiting still keys on the proxy. Changes to ranges, policies and signals are `access.network.*`, `access.policy.*` and
 `access.device_signal.*` events in the same transaction. Reading needs `conditional_access.read` (auditor,
 tenant admin); changing needs `conditional_access.manage` (tenant admin) and a fresh phishing-resistant
 sign-in. A tenant is limited to 100 policies and 100 ranges. `POST /api/access/evaluate` answers what the
