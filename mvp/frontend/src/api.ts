@@ -1568,11 +1568,11 @@ export interface ProvOpDetail extends ProvOp { payload: { account?: Record<strin
 
 export interface ProvTarget {
   connection_id: string; connection_name: string; system: string; kind: "scim" | "okta" | "fake"; base_url: string;
-  dialect?: "standard" | "entra"; fault?: string; write_back: boolean; has_credential: boolean; credential_version: string | null; updated_at: string;
+  dialect?: "standard" | "entra"; fault?: string; on_deprovision?: "delete"; write_back: boolean; has_credential: boolean; credential_version: string | null; updated_at: string;
 }
 
 /** token is write-only: omit it to keep the stored credential. */
-export interface ProvTargetInput { kind: ProvTarget["kind"]; base_url: string; dialect?: string; fault?: string; token?: string; write_back: boolean }
+export interface ProvTargetInput { kind: ProvTarget["kind"]; base_url: string; dialect?: string; fault?: string; token?: string; write_back: boolean; on_deprovision?: "disable" | "delete" }
 
 export const provisioning = {
   targets: () => api<ProvTarget[]>("/provisioning/targets"),

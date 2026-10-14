@@ -187,6 +187,10 @@ when a second reviewer is needed) · `GET /api/identity-merges` · `POST /api/id
 `GET /api/identities/{identity_id}/access-bundle` · `GET /api/refgroups` · `POST /api/refgroups/reconcile` ·
 `POST /public/t/{slug}/claim/start|verify/send|verify/check|existing-account|credential|resend` ·
 `GET /public/t/{slug}/claim/status` (public: the guest's claim, see Guest claim) ·
+`GET /api/guest-lifecycle` · `GET /api/guest-lifecycle/items[?bucket=]` · `GET /api/guest-lifecycle/tasks` ·
+`POST /api/guest-lifecycle/tasks/{id}/resolve {action: accept|decline|keep|confirm|dismiss}` ·
+`GET|PUT /api/admin/guest-lifecycle {sponsor_reminder_days, guest_reminder_days, transfer_deadline_days, on_sponsor_departure, conversion_dual_status, grace_days, retention_days, retention_days_visitor, keep_rematch_hashes}` ·
+`POST /public/t/{slug}/guest/renewal-request {token}` (public, always 202; see Guest lifecycle) ·
 `GET /api/approvals/inbox` · `GET /api/approvals/delegates` · `GET|POST /api/approvals/delegations` ·
 `POST /api/approvals/delegations/{id}/revoke` ·
 `GET /api/notifications[?unread=1&limit=]` · `POST /api/notifications/read {ids}|{all:true}` ·
@@ -701,7 +705,7 @@ notify.Expiring(tx, now, notify.Ending{Key: "identity:42", IdentityID: 42, Also:
 ### Job run history
 
 Every run of a connector sync, provisioning (HRIS execute), connection validation, dry run,
-deployment-health re-run and JIT sweep is recorded in `job_runs` (`internal/jobs`), plus every
+deployment-health re-run, JIT sweep and guest lifecycle sweep is recorded in `job_runs` (`internal/jobs`), plus every
 audit anchoring run that did something or failed. A sweep that finds nothing is not recorded.
 Each record has the kind, trigger (manual, schedule or retry), status, duration, a result summary
 and a one-line error. The run row is written in its own transaction before the job and finished in
@@ -755,6 +759,81 @@ itself and move into the groups engine when GR-1/GR-2 land.
 - **Try it** with the dev fake target: `TESSERA_DEV_FAKE_TARGET=1`, Admin, Provisioning, set the Okta target to
   kind `fake` with write-back on; put an Okta group in the catalog; invite a guest with it in the bundle; claim;
   watch the operations verify and the item turn Granted.
+
+### Guest lifecycle
+
+Issue #74 (GU-11, design §8). Code: `internal/guests/lifecycle` (the jobs), `internal/guests/sponsorship`
+(renew with step-up, take over, end or suspend, return). Tables in `schema/0231_guest_lifecycle.sql`
+(`guest_lifecycle_settings`, `guest_reminders`, `guest_renewal_tokens`, `guest_lifecycle_tasks`,
+`sponsorship_stepups`, `guest_deprovisioning`); `suspended` joined the sponsorship statuses and events in
+`0227_sponsorships.sql`, so reseed existing databases (`./run.sh --reseed`). The jobs run in the sweeper
+(every tick, each step in its own transaction) and are recorded as `guest_lifecycle` runs in Admin → Jobs when
+they did something or failed. Every change is audited in its own transaction; the audit ledger itself is never
+modified.
+
+- **Settings** (tenant, `GET|PUT /api/admin/guest-lifecycle`, `guest_lifecycle.configure`, policy admins;
+  Governance → Guest lifecycle → Settings). Defaults: sponsor reminders at 30, 14 and 3 days; guest reminder at
+  14 days (0 turns it off); transfer deadline 14 days; `on_sponsor_departure` `end` (or `suspend`);
+  `conversion_dual_status` `end` (or `sponsor_confirms`); grace 0 days for visitors and 30 for contractors,
+  volunteers and partners; retention 2555 days (7 years) for anyone who held access, 365 days for a visitor who
+  held none; `keep_rematch_hashes` off. Per connection, Admin → Provisioning has *on deprovision*:
+  `disable` (default, the account stays disabled) or `delete` (a verified `delete_account` after the grace period).
+- **Reminders.** `guest_reminders` holds one row per (sponsorship, end date, audience, threshold), written before
+  the message in the same transaction, so each goes out once across sweeps and restarts; a renewal moves the end
+  date and re-arms them. A sponsor gets the bucket they are in (30, 14 or 3 days). The guest (active, with an
+  address; needs `TESSERA_PUBLIC_URL` and the identifier key) gets a mail with a one-time "request renewal" link
+  `/renew#t=<token>`: only its SHA-256 is stored and the link is handed to the mailer through memory only (like
+  the claim link). `POST /public/t/{slug}/guest/renewal-request {token}` spends the token once and opens a
+  renewal-request task for the sponsor; every call (good, bad, spent, unknown tenant) answers the same `202
+  {"status":"received"}` after the same minimum time, with an Origin check and a per-tenant rate limit.
+- **Renewal and step-up.** Renewal re-runs the sponsor policy (eligible, within limits, at most the maximum).
+  If the guest's `identity_assurance` is below what the sponsorship now needs (its own requirement, the
+  population default, the bundle minimum) the renewal is **recorded and held** (`sponsorship_stepups`, event
+  `stepup_required`, the sponsorship view's `stepup`): nothing extends. When the assurance is recorded at that
+  level (after a claim completes, or by the sweeper) the renewal is applied under a fresh policy check, or
+  cancelled if it can no longer stand. *Not built:* the guest's step-up claim itself (a claim session for an
+  active guest, `claim_tokens.purpose = renewal_stepup`, and identity verification at IAL 2, GU-7): today the
+  assurance rises only through the claim; this is the missing piece.
+- **Sponsor leaver or mover.** Executing an HRIS leaver or mover event for a sponsor, or the sweeper finding a
+  sponsor who is no longer eligible, opens a `sponsor_transfer` task per active sponsorship, with a deadline
+  (the transfer deadline, never past the sponsorship's end). The sponsor's manager and the holders of
+  `sponsorships.approve` are notified (kind *Guest lifecycle task*; Inbox banner; Governance → Guest lifecycle →
+  My tasks). **Take over** moves the sponsorship to the person acting under a fresh policy check; **keep** (movers)
+  leaves an eligible sponsor in place; **decline** and the deadline end the sponsorship or, by setting, **suspend**
+  it (`suspended`: no access, affiliation ended, not final; a sponsor admin ends it, or it ends at its end date).
+  Until the deadline the sponsorship stands under the departed sponsor; at the deadline nothing is left without
+  a living sponsor or without a decision. Only the departed sponsor's manager and sponsor admins see and decide
+  these tasks (others get 404).
+- **Several sponsorships.** The person stays active until the last one ends; each bundle ends independently
+  (`TestExpiry_LastSponsorshipEndsIdentity`, `TestBundle_TwoSponsorshipsEndIndependently`).
+- **Conversion.** An HR or student employee affiliation that appears on an identity with a running guest
+  sponsorship (after a merge, GU-5) ends the sponsorship at the hire date, or with `sponsor_confirms` asks the
+  sponsor (task `dual_status`; ends at the deadline unless confirmed). The person stays one identity and keeps
+  every history; the lifecycle becomes employee instead of ending; a `conversion` sponsorship event and a
+  `jml.conversion` audit event record it. Employee to guest: a person who left (terminated, deprovisioned, not
+  purged) can be sponsored again; they are revived on the same identity, with a new guest affiliation next to the
+  ended employee one. Applicant, admit and pre-hire conversions need SIS/HRIS intake (GU-4) and are not built.
+- **Deprovisioning.** When the last sponsorship ends the lifecycle leaver plan runs as before (memberships and
+  grants end, accounts disabled through provisioning, verified by re-read). The sweeper then starts the grace
+  period (`guest_deprovisioning`), revokes the person's sign-in sessions, and after the grace period, once every
+  operation that ended their access is verified, deletes accounts where the target says so, reassigns the
+  ownership they still hold (NHI owners, secrets, delegations, reports: the leaver plan's steps) and sets the
+  identity `deprovisioned`. A failed or unverified operation holds the person in grace (shown as blocked).
+- **Purge.** After the retention period the identity becomes a tombstone (`purged`): the id, affiliation history,
+  lifecycle and dates stay; name, email, department, title, identifiers (`value_norm` always; the keyed hash
+  only when `keep_rematch_hashes`), source-record attributes, the linked sign-in user's name and email, and the
+  notifications and email log rows addressed to the person are nulled or redacted. The `guest.purge` audit event
+  lists counts, never values. A purge is idempotent. **The audit ledger is append-only and is not minimised
+  here; ledger PII minimisation is a follow-up**, as are notifications about the guest sent to others and the
+  claim tokens' keyed email hashes (those rows are immutable). A person who returns within retention is matched
+  (Tier A on a federated binding or authoritative identifier, or by sign-in) and gets the same identity back; after
+  a purge only when hashes were kept.
+- **Governance → Guest lifecycle** (`/governance/guest-lifecycle`, `guests.read`): counts and lists for ending in
+  30, 14 and 3 days, renewal requests, step-up required, pending transfer, ended by sponsor departure, suspended,
+  dual status, in grace, deprovisioned and purged, a side panel per row, My tasks and (policy admins) Settings.
+  `./run.sh --reseed` adds a contractor ending in 10 days and one whose sponsor left (a pending transfer).
+  RBAC: `guests.read` for the page, `guests.sponsor` for tasks (the service decides who may act),
+  `guest_lifecycle.configure` for settings.
 
 ### Closed-loop provisioning
 
@@ -883,7 +962,7 @@ the right. Arrow keys move between items.
 | (top) | **Home**, **Inbox** (count) |
 | **Identity** | Users (with *Identity matches*), Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts (with *Account matches*), Roles (Preview), Organizations (Preview) |
 | **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts, Roles, Organizations (Preview) |
-| **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
+| **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals), Just-in-time, Access reviews (with *Lifecycle*, *Guest lifecycle* and *Workflows* tabs) |
 | **Protection** | Policies & SoD (violations, policies, what-if simulation), Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
 | **Settings** | Connections (governed connections and the setup wizard), Admin |
 
