@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -109,6 +110,8 @@ func (e *claimEnv) acceptances(guest int64) []*store.TermsAcceptance {
 	}); err != nil {
 		e.t.Fatal(err)
 	}
+	// acceptances made at the same instant (the test clock stands still) come back in id order
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Version < out[j].Version })
 	return out
 }
 
