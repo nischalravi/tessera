@@ -155,6 +155,10 @@ PUT    /api/notifications/preferences                auth.self       -  # issue 
 GET    /api/email/messages                           email.read      -  # issue #189
 GET    /api/email/messages/{message_id}              email.read      -  # issue #189
 POST   /api/email/messages/{message_id}/retry        email.manage    -  # issue #189
+POST   /api/identities/{identity_id}/contain         identities.contain STEP_UP_POLICY  # issue #106
+GET    /api/identities/{identity_id}/containment     graph.read      -  # issue #106
+POST   /api/containment-retries/{retry_id}/retry-now identities.contain STEP_UP_POLICY  # issue #106
+PUT    /api/connections/{id}/containment-credential  connections.manage STEP_UP_POLICY  # issue #106
 POST   /api/connections/{id}/validate                connections.manage -
 GET    /api/connections/{id}/validations/{run}       connections.read   -
 POST   /api/connections/{id}/dry-run                 connections.manage -

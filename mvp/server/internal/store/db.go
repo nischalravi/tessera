@@ -117,6 +117,8 @@ var tables = []string{
 	"guest_bundle_items", "identity_assurance", "catalog_item_populations",
 	// identity matching, merge requests, settings and claim links (schema/0230_matching.sql)
 	"match_results", "identity_merge_requests", "matching_settings", "claim_links",
+	// identity containment (schema/0205_containment.sql)
+	"containment_credentials", "containment_retries",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was
