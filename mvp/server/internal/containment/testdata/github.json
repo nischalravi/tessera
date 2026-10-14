@@ -1,0 +1,27 @@
+{
+  "ok_grants": [
+    {"method": "GET", "path": "/orgs/acme/credential-authorizations", "query": "login=octocat&per_page=100", "responses": [
+      {"status": 200, "body": [
+        {"login": "octocat", "credential_id": 1001, "credential_type": "personal access token", "token_last_eight": "abcd1234"},
+        {"login": "octocat", "credential_id": 1002, "credential_type": "SSH key", "fingerprint": "jZ1AvsHLRxy4"}]},
+      {"status": 200, "body": []}]},
+    {"method": "DELETE", "path": "/orgs/acme/credential-authorizations/1001", "responses": [{"status": 204}]},
+    {"method": "DELETE", "path": "/orgs/acme/credential-authorizations/1002", "responses": [{"status": 204}]}
+  ],
+  "not_found": [
+    {"method": "GET", "path": "/orgs/acme/credential-authorizations", "responses": [
+      {"status": 404, "body": {"message": "Not Found", "documentation_url": "https://docs.github.com/rest"}}]}
+  ],
+  "remains": [
+    {"method": "GET", "path": "/orgs/acme/credential-authorizations", "responses": [
+      {"status": 200, "body": [{"login": "octocat", "credential_id": 1001, "credential_type": "personal access token"}]}]},
+    {"method": "DELETE", "path": "/orgs/acme/credential-authorizations/1001", "responses": [{"status": 204}]}
+  ],
+  "partial": [
+    {"method": "GET", "path": "/orgs/acme/credential-authorizations", "responses": [
+      {"status": 200, "body": [{"credential_id": 1001}, {"credential_id": 1002}]}]},
+    {"method": "DELETE", "path": "/orgs/acme/credential-authorizations/1001", "responses": [{"status": 204}]},
+    {"method": "DELETE", "path": "/orgs/acme/credential-authorizations/1002", "responses": [
+      {"status": 403, "body": {"message": "Resource not accessible"}}]}
+  ]
+}

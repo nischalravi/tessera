@@ -11,6 +11,8 @@ interface PlanResp { event: HrisEvent; plan: { steps: Step[]; impact?: Impact } 
 
 const ACTION: Record<string, [string, Tone]> = {
   disable_account: ["Disable account", "critical"],
+  revoke_sessions: ["Revoke sessions", "critical"],
+  revoke_grants: ["Revoke OAuth grants", "critical"],
   remove_grant: ["Remove grant", "warning"],
   cancel_jit: ["Cancel JIT", "warning"],
   reassign_owner: ["Reassign owner", "info"],

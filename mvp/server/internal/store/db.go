@@ -124,6 +124,8 @@ var tables = []string{
 	"terms_documents", "terms_assignments", "terms_acceptances", "attribute_consents", "recovery_cases", "recovery_codes",
 	// guest self-registration (schema/0240_guest_registration.sql)
 	"guest_registrations", "guest_sponsor_codes",
+	// identity containment (schema/0205_containment.sql)
+	"containment_credentials", "containment_retries",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was
