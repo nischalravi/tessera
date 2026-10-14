@@ -27,6 +27,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/claim"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/credential"
 	guestlife "github.com/nischalravi/tessera/mvp/server/internal/guests/lifecycle"
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/register"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/sponsorship"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/match"
@@ -127,6 +128,11 @@ type Config struct {
 	// through (guest claim, internal/guests/credential). Nil: the claim stops
 	// at the credential step and stays pending.
 	Credential credential.Authority
+	// RegisterChallenge is the bot challenge of the public registration page
+	// (Turnstile or equivalent). Nil: outside production the page accepts
+	// every request (register.AllowAll); in production registration answers
+	// 503 until one is configured.
+	RegisterChallenge register.Challenger
 	// ClaimMinDuration is the minimum time of a claim start or resend (default
 	// 300 ms); tests shorten it.
 	ClaimMinDuration time.Duration
@@ -154,8 +160,11 @@ type Server struct {
 
 	claimSvc *claim.Service
 	claimLim *claimLimits
-	names    nameCache
-	rp       *oidcrp.RP
+	// reg is guest self-registration with sponsor approval (issue #66)
+	reg    *register.Service
+	regLim *registerLimits
+	names  nameCache
+	rp     *oidcrp.RP
 
 	readiness *readiness.Service
 	prov      *provision.Engine
@@ -219,6 +228,12 @@ func New(cfg Config) *Server {
 		s.claimSvc = claim.New(cfg.Identifiers, cfg.Secrets, cfg.PublicURL, s.tenantName)
 		s.guests.Claim = s.claimSvc
 	}
+	s.regLim = newRegisterLimits()
+	s.reg = &register.Service{Guests: s.guests, Keyer: cfg.Identifiers, Challenge: cfg.RegisterChallenge, TenantName: s.tenantName,
+		SignInURL: cfg.PublicURL}
+	if s.reg.Challenge == nil && cfg.Env != config.Prod {
+		s.reg.Challenge = register.AllowAll{} // dev and test only: production needs a real bot challenge
+	}
 	s.guestLife = guestlife.New(s.guests)
 	s.guestLife.Secrets, s.guestLife.BaseURL, s.guestLife.TenantName = cfg.Secrets, cfg.PublicURL, s.tenantName
 	if cfg.OutboundHTTP != nil {
@@ -244,6 +259,7 @@ func New(cfg Config) *Server {
 	s.registerClaimRoutes()
 	s.registerGuestAccessRoutes()
 	s.registerGuestLifecycleRoutes()
+	s.registerRegistrationRoutes()
 	s.registerNotificationRoutes()
 	s.registerEmailRoutes()
 	s.registerReadinessRoutes()
@@ -336,6 +352,10 @@ func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
 			if err := s.claimSvc.SweepAll(audit.WithSystemActor(ctx, "claim.sweeper"), s.store, s.clock()); err != nil && ctx.Err() == nil {
 				s.log.Error("claim sweep failed", "err", err)
 			}
+		}
+		// pending registrations that waited too long, and the personal data of decided ones (GU-3)
+		if err := s.reg.SweepAll(audit.WithSystemActor(ctx, register.Sweeper), s.store, s.clock()); err != nil && ctx.Err() == nil {
+			s.log.Error("registration sweep failed", "err", err)
 		}
 		// bundles of ended sponsorships, waiting items and the reference groups (GU-12)
 		if err := access.SweepAll(audit.WithSystemActor(ctx, access.Sweeper), s.store, s.clock(), s.eligible()); err != nil && ctx.Err() == nil {

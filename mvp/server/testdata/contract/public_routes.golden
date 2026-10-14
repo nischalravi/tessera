@@ -7,6 +7,8 @@ POST /public/t/{slug}/claim/existing-account
 POST /public/t/{slug}/claim/credential
 POST /public/t/{slug}/claim/resend
 POST /public/t/{slug}/guest/renewal-request
+GET /public/t/{slug}/register/sponsors
+POST /public/t/{slug}/register
 GET /api/auth/dev-login
 POST /api/auth/dev-login
 GET /api/auth/discover
