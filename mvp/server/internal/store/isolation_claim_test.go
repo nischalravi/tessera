@@ -309,13 +309,51 @@ func TestClaim_SchemaRules(t *testing.T) {
 	})
 }
 
+// TestIsolation_ClaimProofUses: a proof's one use is per tenant. The same id
+// used in tenant A is still fresh in tenant B, and A's replay is refused.
+func TestIsolation_ClaimProofUses(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	now := storetest.Now
+	id := hex64("d")
+	use := func(tn storetest.Tenant) (fresh bool) {
+		t.Helper()
+		if err := f.DB.InTenant(context.Background(), tn.ID, func(c *store.TenantTx) (err error) {
+			fresh, err = c.UseClaimProof(id, now.Add(2*time.Minute), now)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return fresh
+	}
+	if !use(f.A) {
+		t.Fatal("first use in A was not fresh")
+	}
+	if use(f.A) {
+		t.Error("a replay in A was accepted")
+	}
+	if !use(f.B) {
+		t.Error("A's use made the proof used in B")
+	}
+	// expired rows are pruned, so the id is fresh again after its window
+	if err := f.DB.InTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
+		fresh, err := c.UseClaimProof(id, now.Add(time.Hour), now.Add(3*time.Minute))
+		if err == nil && !fresh {
+			t.Error("an expired use was not pruned")
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func claimCovered() map[string]bool {
 	out := map[string]bool{}
 	for k := range claimMutations {
 		out[k] = true
 	}
 	for _, k := range []string{"ClaimTokenByHash", "ClaimTokensForIntake", "ClaimTokensByEmail", "ClaimSession", "ClaimSessionsForIntake",
-		"ClaimSessionByLoginTxn", "LiveConfirmationCode", "IntakesByInvitation", "InsertClaimToken", "InsertClaimSession", "InsertConfirmationCode"} {
+		"ClaimSessionByLoginTxn", "LiveConfirmationCode", "IntakesByInvitation", "InsertClaimToken", "InsertClaimSession", "InsertConfirmationCode",
+		"UseClaimProof"} {
 		out[k] = true // TestIsolation_ClaimReads, and the inserts in the mutation cases and seeds
 	}
 	return out

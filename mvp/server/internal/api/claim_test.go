@@ -5,8 +5,10 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -652,6 +654,32 @@ func TestClaim_KeyBinding(t *testing.T) {
 	replay.AddCookie(pg.cookie)
 	replay.Header.Set("X-Claim-Proof", r.Header.Get("X-Claim-Proof"))
 	denied(serve(e.h, replay), "replay")
+	// ECDSA malleability (review on #202): (r, N-s) is the same proof, not a new one
+	ts, sig, _ := strings.Cut(r.Header.Get("X-Claim-Proof"), ".")
+	rs, _ := base64.RawURLEncoding.DecodeString(sig)
+	sv := new(big.Int).SetBytes(rs[32:])
+	sv.Sub(elliptic.P256().Params().N, sv)
+	mall := httptest.NewRequest("GET", r.URL.Path, nil)
+	mall.AddCookie(pg.cookie)
+	mall.Header.Set("X-Claim-Proof", ts+"."+base64.RawURLEncoding.EncodeToString(append(rs[:32:32], sv.FillBytes(make([]byte, 32))...)))
+	denied(serve(e.h, mall), "malleated replay")
+	// one use is recorded in the database: a fresh in-memory memory (a restart,
+	// another process) still refuses the replay
+	r = pg.req("GET", "status", "")
+	if rec := serve(e.h, r); rec.Code != 200 {
+		t.Fatalf("a good request: %d %s", rec.Code, rec.Body)
+	}
+	e.srv.claimSvc.Replays = claim.NewReplays()
+	replay = httptest.NewRequest("GET", r.URL.Path, nil)
+	replay.AddCookie(pg.cookie)
+	replay.Header.Set("X-Claim-Proof", r.Header.Get("X-Claim-Proof"))
+	denied(serve(e.h, replay), "replay after a restart")
+	// the proof signs the body: a captured proof does not carry another body
+	r = pg.req("POST", "verify/check", `{"code":"000000"}`)
+	swapped := httptest.NewRequest("POST", r.URL.Path, strings.NewReader(`{"code":"111111"}`))
+	swapped.Header = r.Header.Clone()
+	swapped.RemoteAddr = r.RemoteAddr
+	denied(serve(e.h, swapped), "another body")
 	// the session is unharmed by all that
 	if rec := pg.do("GET", "status", ""); rec.Code != 200 {
 		t.Errorf("after the rejected requests: %d %s", rec.Code, rec.Body)
@@ -678,12 +706,12 @@ func TestClaim_KeyBinding(t *testing.T) {
 	if c := post(fmt.Sprintf(`{"token":"x","key":%s}`, np.jwk()), ""); c != 400 {
 		t.Errorf("start without a proof: %d", c)
 	}
-	if c := post(fmt.Sprintf(`{"token":"x","key":%s}`, np.jwk()), pg.proof("POST", path, "")); c != 400 {
-		t.Errorf("start with a proof by another key: %d", c)
+	if body := fmt.Sprintf(`{"token":"x","key":%s}`, np.jwk()); post(body, pg.proof("POST", path, "", body)) != 400 {
+		t.Error("start with a proof by another key was not refused")
 	}
 	priv := strings.Replace(np.jwk(), `"ext":true`, `"d":"AAAA"`, 1)
-	if c := post(fmt.Sprintf(`{"token":"x","key":%s}`, priv), np.proof("POST", path, "")); c != 400 {
-		t.Errorf("start with a private key: %d", c)
+	if body := fmt.Sprintf(`{"token":"x","key":%s}`, priv); post(body, np.proof("POST", path, "", body)) != 400 {
+		t.Error("start with a private key was not refused")
 	}
 }
 
