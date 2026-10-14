@@ -18,38 +18,93 @@ export class ApiError extends Error {
 }
 
 /**
- * Name sent as X-Tessera-User so readiness actions (attest, skip, accept, activate) are
- * attributed. A placeholder until Phase 0 authentication; set from the persona.
+ * Session handling (design §11, §17). The browser holds only the HttpOnly session cookie,
+ * which the API sets at sign-in; this client never sees a token. Every state-changing request
+ * carries the session's CSRF token (from GET /api/auth/session) in X-Tessera-CSRF.
+ * The actor of every action is the signed-in user: nothing here names one.
  */
-let apiActor: string | null = null;
-export const setApiActor = (name: string | null) => {
-  apiActor = name && /^[A-Za-z0-9._@+ -]{1,120}$/.test(name) ? name : null;
+let csrfToken: string | null = null;
+export const setCsrfToken = (t: string | null) => {
+  csrfToken = t;
 };
+
+/**
+ * Bumped whenever the signed-in session changes. A GET that started under an earlier session
+ * does not write its answer into the cache, so another user's data never shows after a switch.
+ */
+let sessionEpoch = 0;
+
+/**
+ * Forget everything tied to the current session: the CSRF token and every cached GET. Called on
+ * sign-out, on sign-in and when the API says the session is gone.
+ */
+export function resetSessionState(): void {
+  csrfToken = null;
+  cache.clear();
+  sessionEpoch++;
+}
+
+/** The cached answer for a GET path, if any. */
+export const cached = <T = unknown>(path: string): T | undefined => cache.get(path) as T | undefined;
+
+/** Fired when the API says the session is gone (401 login_required): the app shows sign-in. */
+export const SIGNED_OUT = "tessera:signed-out";
+/** Fired when an action needs a fresh phishing-resistant sign-in (401 step_up_required). */
+export const STEP_UP = "tessera:step-up";
+
+/** A plain-language message for the API's error contract (§16.2). */
+function errorMessage(status: number, j: any): string {
+  switch (j?.error) {
+    case "login_required":
+      return "Your session ended. Sign in again.";
+    case "step_up_required":
+      return "This action needs a phishing-resistant sign-in in the last few minutes. Sign in again with a passkey, then retry.";
+    case "role_inactive":
+      return "Your admin role is inactive because you signed in without a phishing-resistant method. Sign in again with a passkey.";
+    case "forbidden":
+      return `You don't have permission to do this${j.permission ? ` (needs ${j.permission})` : ""}.`;
+    case "csrf_failed":
+      return "The request was refused as a possible cross-site request. Reload the page and try again.";
+    case "audit_unavailable":
+      return "The audit log is unavailable, so Tessera refused the request. Try again shortly.";
+    case "activation_blocked":
+    case "transition_blocked":
+      return `${j.blocking?.length ?? 0} item(s) block this step`;
+  }
+  if (typeof j?.detail === "string") return j.detail;
+  return j ? JSON.stringify(j.detail ?? j) : `${status}`;
+}
 
 export async function api<T = any>(path: string, body?: unknown, method?: string): Promise<T> {
   const m = method ?? (body !== undefined ? "POST" : "GET");
-  const headers: Record<string, string> = { "content-type": "application/json" };
-  if (apiActor && m !== "GET") headers["x-tessera-user"] = apiActor;
+  const headers: Record<string, string> = {};
+  if (body !== undefined) headers["content-type"] = "application/json";
+  if (m !== "GET" && m !== "HEAD" && csrfToken) headers["x-tessera-csrf"] = csrfToken;
+  const epoch = sessionEpoch;
   const res = await fetch(`/api${path}`, {
     method: m,
     headers,
+    credentials: "same-origin",
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
-    let msg = `${res.status} ${res.statusText}`;
     let j: any = null;
     try {
       j = await res.json();
-      msg = typeof j.detail === "string" ? j.detail : j.error === "activation_blocked" || j.error === "transition_blocked"
-        ? `${j.blocking?.length ?? 0} item(s) block this step`
-        : JSON.stringify(j.detail ?? j);
     } catch {
       /* ignore */
     }
-    throw new ApiError(msg, res.status, j);
+    if (res.status === 401 && j?.error === "login_required") {
+      resetSessionState();
+      window.dispatchEvent(new Event(SIGNED_OUT));
+    }
+    if (res.status === 401 && j?.error === "step_up_required") window.dispatchEvent(new CustomEvent(STEP_UP, { detail: j }));
+    throw new ApiError(j ? errorMessage(res.status, j) : `${res.status} ${res.statusText}`, res.status, j);
   }
   const data = (await res.json()) as T;
-  if (m === "GET") cache.set(path, data);
+  if (m === "GET") {
+    if (epoch === sessionEpoch) cache.set(path, data);
+  }
   else window.dispatchEvent(new Event(CHANGED));
   return data;
 }
@@ -58,7 +113,7 @@ export async function api<T = any>(path: string, body?: unknown, method?: string
 export const notifyChanged = () => window.dispatchEvent(new Event(CHANGED));
 
 export function useApi<T = any>(path: string | null) {
-  const [data, setData] = useState<T | null>(() => (path ? ((cache.get(path) as T) ?? null) : null));
+  const [data, setData] = useState<T | null>(() => (path ? (cached<T>(path) ?? null) : null));
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const load = useCallback(() => {
@@ -78,7 +133,7 @@ export function useApi<T = any>(path: string | null) {
     };
   }, [path]);
   useEffect(() => {
-    setData(path ? ((cache.get(path) as T) ?? null) : null);
+    setData(path ? (cached<T>(path) ?? null) : null);
     return load();
   }, [load, path]);
   useEffect(() => {
@@ -372,17 +427,131 @@ export interface NhiRow {
 export interface Policy { id: string; name: string; type: string; severity: string; description: string; enabled: boolean; source: string; violations: number }
 
 // -------------------------------------------------------------- actions
-/** Placeholder actor until Phase 0 auth: the persona's display name is recorded as the decider. */
-export const jitDecide = (id: number, action: "approve" | "deny" | "revoke", approver: string) =>
-  api<JitRequest>(`/jit/requests/${id}/${action}`, { approver });
+/** The decider is the signed-in user (the API records it from the session). */
+export const jitDecide = (id: number, action: "approve" | "deny" | "revoke") =>
+  api<JitRequest>(`/jit/requests/${id}/${action}`, {});
 
 export const jitCreate = (body: { identity_id: number; group_id: number; duration_hours: number; justification: string }) =>
   api<JitRequest>("/jit/requests", body);
 
-export const reviewDecide = (itemId: number, decision: "keep" | "revoke", reviewer: string, comment?: string) =>
-  api<{ id: number; decision: string }>(`/reviews/items/${itemId}/decision`, { decision, reviewer, comment: comment || null });
+export const reviewDecide = (itemId: number, decision: "keep" | "revoke", comment?: string) =>
+  api<{ id: number; decision: string }>(`/reviews/items/${itemId}/decision`, { decision, comment: comment || null });
+
+// -------------------------------------------------------------- session
+export interface SessionInfo {
+  user: { id: string; email: string | null; display_name: string };
+  tenant: { id: string; slug: string; name: string };
+  roles: string[];
+  active_roles: string[];
+  inactive_roles: { role: string; reason: string }[];
+  permissions: string[];
+  authn: { aal: number; phishing_resistant: boolean; phr_basis: string; acr: string; methods: string[]; auth_time: string };
+  session: { id: string; idle_expires_at: string; absolute_expires_at: string };
+  csrf_token: string;
+}
+
+/** The current session, or null when signed out. Not cached. */
+export async function getSession(): Promise<SessionInfo | null> {
+  const res = await fetch("/api/auth/session", { credentials: "same-origin" });
+  if (res.status === 401) {
+    resetSessionState();
+    return null;
+  }
+  if (!res.ok) throw new ApiError(`${res.status} ${res.statusText}`, res.status, null);
+  const s = (await res.json()) as SessionInfo;
+  setCsrfToken(s.csrf_token);
+  return s;
+}
+
+export async function logout(): Promise<void> {
+  try {
+    await api("/auth/logout", {});
+  } finally {
+    resetSessionState();
+  }
+}
+
+/** Development sign-in (TESSERA_ENV=dev or test only; replaced by IdP sign-in in Phase 0 PR7). */
+export interface DevUser { tenant: string; tenant_name: string; subject: string; email: string | null; display_name: string; roles: string[] }
+
+/**
+ * The users dev sign-in offers for one tenant (by slug), or null when dev sign-in is not
+ * available on this server. The API never lists other tenants' users.
+ */
+export async function devLoginUsers(tenant: string): Promise<{ users: DevUser[]; methods: string[] } | null> {
+  const res = await fetch(`/api/auth/dev-login?tenant=${encodeURIComponent(tenant)}`, { credentials: "same-origin" });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new ApiError(`${res.status} ${res.statusText}`, res.status, null);
+  return res.json();
+}
+
+export async function devLogin(tenant: string, subject: string, method: string): Promise<void> {
+  // nothing of the previous session (its CSRF token, its cached data) survives a sign-in
+  resetSessionState();
+  const res = await fetch("/api/auth/dev-login", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ tenant, subject, method }),
+  });
+  if (!res.ok) {
+    let j: any = null;
+    try {
+      j = await res.json();
+    } catch {
+      /* ignore */
+    }
+    throw new ApiError(j?.error === "login_failed" ? "Sign-in failed." : errorMessage(res.status, j), res.status, j);
+  }
+  resetSessionState();
+}
 
 export const hrisExecute = (eventId: number) => api(`/hris/events/${eventId}/execute`, {});
+
+// ---------------------------------------------------------------- account correlation (issue #160)
+
+export interface CorrAccount { id: number; system: string; external_id: string; username: string; kind: string; status: string; identity_id: number | null }
+/** A person the account's login proposes. Proposals are never linked automatically. */
+export interface MatchCandidate { identity_id: number; name: string; email: string; rule: "email" | "email_local_part" }
+export interface MatchItem { account: CorrAccount; candidates: MatchCandidate[] }
+export interface LinkDecision {
+  account_id: number;
+  decision: "link" | "not_person";
+  identity_id: number | null;
+  previous_identity_id: number | null;
+  reason: string;
+  decided_by: string;
+  decided_at: string;
+}
+export interface MergeMove { table: string; id: number; column: string }
+export interface IdentityMerge {
+  id: string;
+  survivor_id: number;
+  survivor_name: string;
+  merged_id: number;
+  merged_name: string;
+  merged_status: string;
+  moves: MergeMove[];
+  reason: string;
+  merged_by: string;
+  merged_at: string;
+  unmerge_before: string;
+  unmerged_by: string | null;
+  unmerged_at: string | null;
+  unmerge_reason: string | null;
+}
+export interface UnmergeResult { merge: IdentityMerge; restored: MergeMove[]; kept: MergeMove[] }
+
+export const linkAccount = (accountId: number, identityId: number, reason: string) =>
+  api<{ account: CorrAccount; decision: LinkDecision }>(`/accounts/${accountId}/link`, { identity_id: identityId, reason });
+export const markNotPerson = (accountId: number, reason: string) =>
+  api<{ account: CorrAccount; decision: LinkDecision }>(`/accounts/${accountId}/not-person`, { reason });
+export const releaseAccount = (accountId: number) =>
+  api<{ account: CorrAccount; decision: LinkDecision }>(`/accounts/${accountId}/link`, undefined, "DELETE");
+export const mergeIdentity = (mergedId: number, survivorId: number, reason: string) =>
+  api<IdentityMerge>(`/identities/${mergedId}/merge`, { into: survivorId, reason });
+export const unmergeIdentity = (mergeId: string, reason: string) =>
+  api<UnmergeResult>(`/identity-merges/${encodeURIComponent(mergeId)}/unmerge`, { reason });
 
 export const simulate = (body: { remove_edge_ids?: number[]; add_edges?: { src: string; dst: string; duration_hours?: number }[]; disable_account_ids?: number[] }) =>
   api<SimResult>("/simulate", { remove_edge_ids: [], add_edges: [], disable_account_ids: [], ...body });

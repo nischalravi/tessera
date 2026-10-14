@@ -198,7 +198,7 @@
   "/api/connections/{id}/config": {
    "patch": {
     "summary": "Edit the in-progress revision (creates one when active); returns invalidated items",
-    "description": "Permission: connections.manage",
+    "description": "Permission: connections.manage + step-up (DR-10)",
     "responses": {
      "200": {
       "description": "{connection, new_revision, invalidated, fields}"

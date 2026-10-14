@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 )
@@ -27,10 +29,15 @@ type AccessRequest struct {
 	DecidedBy     *string
 	ExpiresAt     *time.Time
 	EdgeID        *int64
+	// The platform users who requested and decided (nil for seed data and
+	// system jobs). DecidedBy stays as the display string the UI shows.
+	RequestedByUserID *uuid.UUID
+	DecidedByUserID   *uuid.UUID
 }
 
 const requestCols = `r.id, r.tenant_id, r.identity_id, r.account_id, r.group_id, r.justification, r.duration_hours,
-	r.status, r.requested_at, r.decided_at, r.decided_by, r.expires_at, r.edge_id`
+	r.status, r.requested_at, r.decided_at, r.decided_by, r.expires_at, r.edge_id, r.requested_by_user_id,
+	r.decided_by_user_id`
 
 var (
 	requestsRecent = tq("access_requests.list_recent", `
@@ -45,12 +52,12 @@ var (
 		WHERE r.tenant_id = @tenant AND r.identity_id = @identity_id AND r.status IN ('pending', 'approved') ORDER BY r.id`)
 	requestsInsert = tq("access_requests.insert", `
 		INSERT INTO access_requests (tenant_id, identity_id, account_id, group_id, justification, duration_hours, status,
-			requested_at, decided_at, decided_by, expires_at, edge_id)
+			requested_at, decided_at, decided_by, expires_at, edge_id, requested_by_user_id, decided_by_user_id)
 		VALUES (@tenant, @identity_id, @account_id, @group_id, @justification, @duration_hours, @status,
-			@requested_at, @decided_at, @decided_by, @expires_at, @edge_id)`)
+			@requested_at, @decided_at, @decided_by, @expires_at, @edge_id, @requested_by_user_id, @decided_by_user_id)`)
 	requestsSave = tq("access_requests.save", `
 		UPDATE access_requests SET status = @status, decided_at = @decided_at, decided_by = @decided_by,
-			expires_at = @expires_at, edge_id = @edge_id
+			expires_at = @expires_at, edge_id = @edge_id, decided_by_user_id = @decided_by_user_id
 		WHERE tenant_id = @tenant AND id = @id`)
 	requestsCancel = tq("access_requests.cancel", `
 		UPDATE access_requests SET status = CASE WHEN status = 'approved' THEN 'revoked' ELSE 'denied' END,
@@ -71,14 +78,20 @@ func scanRequest(s scanner) (*AccessRequest, error) {
 	var r AccessRequest
 	var tid string
 	var req, dec, exp nullTime
-	var by sql.NullString
+	var by, reqBy, decBy sql.NullString
 	var edge sql.NullInt64
 	if err := s.Scan(&r.ID, &tid, &r.IdentityID, &r.AccountID, &r.GroupID, &r.Justification, &r.DurationHours, &r.Status,
-		&req, &dec, &by, &exp, &edge); err != nil {
+		&req, &dec, &by, &exp, &edge, &reqBy, &decBy); err != nil {
 		return nil, err
 	}
 	var err error
 	if r.TenantID, err = tenantOf(tid); err != nil {
+		return nil, err
+	}
+	if r.RequestedByUserID, err = uuidp(reqBy); err != nil {
+		return nil, err
+	}
+	if r.DecidedByUserID, err = uuidp(decBy); err != nil {
 		return nil, err
 	}
 	r.DecidedBy, r.EdgeID = strp(by), intp(edge)
@@ -121,14 +134,16 @@ func (tx *TenantTx) InsertRequest(r *AccessRequest) (int64, error) {
 		sql.Named("group_id", r.GroupID), sql.Named("justification", r.Justification),
 		sql.Named("duration_hours", r.DurationHours), sql.Named("status", r.Status),
 		sql.Named("requested_at", T(r.RequestedAt)), sql.Named("decided_at", TP(r.DecidedAt)),
-		sql.Named("decided_by", SP(r.DecidedBy)), sql.Named("expires_at", TP(r.ExpiresAt)), sql.Named("edge_id", IP(r.EdgeID)))
+		sql.Named("decided_by", SP(r.DecidedBy)), sql.Named("expires_at", TP(r.ExpiresAt)), sql.Named("edge_id", IP(r.EdgeID)),
+		sql.Named("requested_by_user_id", uuidOrNil(r.RequestedByUserID)),
+		sql.Named("decided_by_user_id", uuidOrNil(r.DecidedByUserID)))
 }
 
 // SaveRequest writes the mutable fields of an access request.
 func (tx *TenantTx) SaveRequest(r *AccessRequest) error {
 	_, err := tx.exec(requestsSave, sql.Named("status", r.Status), sql.Named("decided_at", TP(r.DecidedAt)),
 		sql.Named("decided_by", SP(r.DecidedBy)), sql.Named("expires_at", TP(r.ExpiresAt)), sql.Named("edge_id", IP(r.EdgeID)),
-		sql.Named("id", r.ID))
+		sql.Named("decided_by_user_id", uuidOrNil(r.DecidedByUserID)), sql.Named("id", r.ID))
 	return err
 }
 
@@ -246,10 +261,12 @@ type ReviewItem struct {
 	Decision   *string
 	Comment    *string
 	DecidedAt  *time.Time
+	// DecidedByUserID is the platform user who decided (nil before PR5 data).
+	DecidedByUserID *uuid.UUID
 }
 
 const itemCols = `ri.id, ri.tenant_id, ri.campaign_id, ri.identity_id, ri.edge_id, ri.edge_src, ri.edge_dst, ri.grant_label,
-	ri.reasons, ri.context, ri.reviewer_id, ri.decision, ri.comment, ri.decided_at`
+	ri.reasons, ri.context, ri.reviewer_id, ri.decision, ri.comment, ri.decided_at, ri.decided_by_user_id`
 
 var (
 	itemsByCampaign = tq("review_items.by_campaign", `
@@ -262,7 +279,8 @@ var (
 		VALUES (@tenant, @campaign_id, @identity_id, @edge_id, @edge_src, @edge_dst, @grant_label, @reasons,
 			@context, @reviewer_id)`)
 	itemsDecide = tq("review_items.decide", `
-		UPDATE review_items SET decision = @decision, comment = @comment, decided_at = @decided_at
+		UPDATE review_items SET decision = @decision, comment = @comment, decided_at = @decided_at,
+			decided_by_user_id = @decided_by_user_id
 		WHERE tenant_id = @tenant AND id = @id`)
 	itemsCountOpenInCampaign = tq("review_items.count_open_in_campaign", `
 		SELECT count(*) FROM review_items ri
@@ -276,14 +294,17 @@ func scanItem(s scanner) (*ReviewItem, error) {
 	var tid string
 	var edge, rev sql.NullInt64
 	var reasons, ctx string
-	var dec, com sql.NullString
+	var dec, com, by sql.NullString
 	var at nullTime
 	if err := s.Scan(&x.ID, &tid, &x.CampaignID, &x.IdentityID, &edge, &x.EdgeSrc, &x.EdgeDst, &x.GrantLabel, &reasons, &ctx,
-		&rev, &dec, &com, &at); err != nil {
+		&rev, &dec, &com, &at, &by); err != nil {
 		return nil, err
 	}
 	var err error
 	if x.TenantID, err = tenantOf(tid); err != nil {
+		return nil, err
+	}
+	if x.DecidedByUserID, err = uuidp(by); err != nil {
 		return nil, err
 	}
 	x.EdgeID, x.ReviewerID, x.Decision, x.Comment = intp(edge), intp(rev), strp(dec), strp(com)
@@ -325,10 +346,10 @@ func (tx *TenantTx) InsertReviewItem(x *ReviewItem) error {
 	return err
 }
 
-// DecideItem records a decision on a review item.
-func (tx *TenantTx) DecideItem(id int64, decision string, comment *string, at time.Time) error {
+// DecideItem records a decision on a review item, made by the platform user by.
+func (tx *TenantTx) DecideItem(id int64, decision string, comment *string, at time.Time, by UserRef) error {
 	_, err := tx.exec(itemsDecide, sql.Named("decision", decision), sql.Named("comment", SP(comment)),
-		sql.Named("decided_at", T(at)), sql.Named("id", id))
+		sql.Named("decided_at", T(at)), sql.Named("decided_by_user_id", by.idOrNil()), sql.Named("id", id))
 	return err
 }
 
@@ -353,9 +374,12 @@ type HrisEvent struct {
 	EffectiveAt time.Time
 	Status      string // pending | executed
 	ExecutedAt  *time.Time
+	// ExecutedByUserID is the platform user who executed the event.
+	ExecutedByUserID *uuid.UUID
 }
 
-const hrisCols = `h.id, h.tenant_id, h.external_id, h.type, h.identity_id, h.payload, h.effective_at, h.status, h.executed_at`
+const hrisCols = `h.id, h.tenant_id, h.external_id, h.type, h.identity_id, h.payload, h.effective_at, h.status, h.executed_at,
+	h.executed_by_user_id`
 
 var (
 	hrisList = tq("hris_events.list", `
@@ -377,7 +401,8 @@ var (
 	hrisSetIdentity = tq("hris_events.set_identity", `
 		UPDATE hris_events SET identity_id = @identity_id WHERE tenant_id = @tenant AND id = @id`)
 	hrisMarkExecuted = tq("hris_events.mark_executed", `
-		UPDATE hris_events SET status = 'executed', executed_at = @at WHERE tenant_id = @tenant AND id = @id`)
+		UPDATE hris_events SET status = 'executed', executed_at = @at, executed_by_user_id = @executed_by_user_id
+		WHERE tenant_id = @tenant AND id = @id`)
 	hrisCount = tq("hris_events.count", `
 		SELECT count(h.id) FROM hris_events h WHERE h.tenant_id = @tenant`)
 	hrisCountStatus = tq("hris_events.count_status", `
@@ -390,11 +415,15 @@ func scanHris(s scanner) (*HrisEvent, error) {
 	var iid sql.NullInt64
 	var payload string
 	var eff, exe nullTime
-	if err := s.Scan(&x.ID, &tid, &x.ExternalID, &x.Type, &iid, &payload, &eff, &x.Status, &exe); err != nil {
+	var by sql.NullString
+	if err := s.Scan(&x.ID, &tid, &x.ExternalID, &x.Type, &iid, &payload, &eff, &x.Status, &exe, &by); err != nil {
 		return nil, err
 	}
 	var err error
 	if x.TenantID, err = tenantOf(tid); err != nil {
+		return nil, err
+	}
+	if x.ExecutedByUserID, err = uuidp(by); err != nil {
 		return nil, err
 	}
 	x.IdentityID = intp(iid)
@@ -467,9 +496,10 @@ func (tx *TenantTx) SetHrisEventIdentity(id, identityID int64) error {
 	return err
 }
 
-// MarkHrisEventExecuted marks an event executed at.
-func (tx *TenantTx) MarkHrisEventExecuted(id int64, at time.Time) error {
-	_, err := tx.exec(hrisMarkExecuted, sql.Named("at", T(at)), sql.Named("id", id))
+// MarkHrisEventExecuted marks an event executed at, by the platform user by.
+func (tx *TenantTx) MarkHrisEventExecuted(id int64, at time.Time, by UserRef) error {
+	_, err := tx.exec(hrisMarkExecuted, sql.Named("at", T(at)), sql.Named("executed_by_user_id", by.idOrNil()),
+		sql.Named("id", id))
 	return err
 }
 
@@ -479,4 +509,16 @@ func (tx *TenantTx) CountHrisEvents() (int, error) { return tx.count(hrisCount) 
 // CountHrisEventsByStatus counts HRIS events with a status.
 func (tx *TenantTx) CountHrisEventsByStatus(status string) (int, error) {
 	return tx.count(hrisCountStatus, sql.Named("status", status))
+}
+
+// uuidp parses an optional UUID column.
+func uuidp(n sql.NullString) (*uuid.UUID, error) {
+	if !n.Valid {
+		return nil, nil
+	}
+	u, err := uuid.Parse(n.String)
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
 }

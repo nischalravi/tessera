@@ -2,7 +2,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowRight, ClipboardCheck, Inbox as InboxIcon, KeyRound, ShoppingCart, Timer, Users } from "lucide-react";
 import { AuditRow, ConnectorRow, DeploymentHealth, JitRequest, Policy, ReadinessSummary, Violation, relTime, useApi } from "../../api";
 import { usePersona } from "../../app/persona";
-import { TENANT } from "../../app/tenant";
+import { useSession } from "../../app/auth";
 import { Badge, Bar, Button, ButtonLink, EmptyState, Kpi, Loading, Page, Status, Tabs } from "../../components";
 import { DeploymentHealthBody, ReadinessAttentionCard, ReadinessKpi } from "../insights/DeploymentHealth";
 import { RiskyTable, Summary, Trend } from "../insights/RiskOverview";
@@ -234,6 +234,7 @@ function AdminHome() {
   const { items } = useInbox("mine");
   const attention = useAttention();
   const { data: rsum, error: rerr } = useApi<{ readiness: ReadinessSummary }>("/summary?include=readiness");
+  const TENANT = useSession().session.tenant.name;
   const lastSync = audit?.find((a) => /sync/i.test(a.action))?.at ?? null;
   const has = (s: string) => conns?.some((c) => c.system === s);
   const sev = d?.violations.by_severity ?? {};

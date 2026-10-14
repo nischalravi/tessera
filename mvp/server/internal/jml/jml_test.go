@@ -146,7 +146,7 @@ func TestExecuteLeaverEventRemovesAllAccess(t *testing.T) {
 		return err
 	})
 	testkit.Write(t, st, func(c *store.TenantTx) error {
-		_, err := jml.ExecuteEvent(c, testkit.Now, evID, "jml-automation", pols)
+		_, err := jml.ExecuteEvent(c, testkit.Now, evID, store.UserRef{Display: "jml-automation"}, pols)
 		return err
 	})
 	testkit.Read(t, st, func(c *store.TenantTx) error {
@@ -187,7 +187,7 @@ func TestExecuteLeaverEventRemovesAllAccess(t *testing.T) {
 	})
 	// executing twice is refused
 	err := st.InTenant(t.Context(), st.Tenant, func(c *store.TenantTx) error {
-		_, err := jml.ExecuteEvent(c, testkit.Now, evID, "jml-automation", pols)
+		_, err := jml.ExecuteEvent(c, testkit.Now, evID, store.UserRef{Display: "jml-automation"}, pols)
 		return err
 	})
 	var je *jml.Error
