@@ -617,3 +617,5 @@ OpenAPI document). Deliberate differences:
 * Delegated agent scopes are shown and compared with what the principal holds, but they do not
   narrow the agent's own effective permissions.
 * SQLite and a per-request graph rebuild are fine for this demo but would not scale to large tenants.
+
+The test launcher clears TESSERA_DEV_FAKE_TARGET before vet and tests so its local fake-target default does not affect production-refusal checks. Production still rejects the fake target when explicitly enabled.
