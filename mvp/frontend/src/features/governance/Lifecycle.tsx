@@ -102,7 +102,7 @@ function Plan({ eventId }: { eventId: number }) {
     <div className="card stack">
       <div className="spread">
         <div>
-          <h2>{cap(event.type)}: {event.identity?.name ?? String(event.payload.name ?? "")}</h2>
+          <h2>{cap(event.type)}: {event.identity?.name ?? String(event.payload.name ?? "unknown identity")}</h2>
           <div className="small muted">HRIS event {event.external_id} · effective {fmtDate(event.effective_at)}</div>
         </div>
         {plan && <Button variant={event.type === "leaver" ? "danger-solid" : "primary"} disabled={busy} onClick={execute}>Execute plan ({plan.steps.length} steps)</Button>}
