@@ -1066,3 +1066,26 @@ func TestClaim_NotConfigured(t *testing.T) {
 		t.Errorf("resend: %d %s", rec.Code, rec.Body)
 	}
 }
+
+// TestClaim_IALRequiredWaitsAtVerifyIdentity: a sponsorship that needs IAL 1 or
+// more moves the claim to verify_identity after the contact check (the schema
+// must accept that step; it used to fail the update with a 500).
+func TestClaim_IALRequiredWaitsAtVerifyIdentity(t *testing.T) {
+	e := newClaimEnv(t, claimOpts{})
+	const email = "ial@guest.example"
+	pg, _, v := e.started(email)
+	if err := e.db.InTenant(context.Background(), e.tenant, func(tx *store.TenantTx) error {
+		s, err := tx.Sponsorship(v.ID)
+		if err != nil {
+			return err
+		}
+		s.RequiredIAL = 2
+		return tx.SaveSponsorship(s, s.Status)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pg.verifyEmail(email)
+	if st := decodeMap(t, pg.do("GET", "status", "")); st["step"] != "verify_identity" {
+		t.Errorf("status after code = %v", st)
+	}
+}
