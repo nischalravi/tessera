@@ -214,12 +214,28 @@ the run failed. Provider calls go through `internal/safehttp`.
 
 - **Leaver plan.** `GET .../leaver-plan` and `POST /api/hris/events/{id}/execute` carry the two
   steps for each active account on Okta, Entra, Google (GitHub: grants only) that has a live
-  connection (the demo Okta connection counts). Execute runs them first with no transaction open;
-  if any fails it answers `502 containment_failed` with the report and executes nothing. A success
-  adds `containment` (the report) to the response.
+  connection (the demo Okta connection counts). Execute runs them first with no transaction open.
+  **A failed containment step does not stop the leaver**: accounts are disabled and grants removed
+  as always, each failed step becomes a retry task, and the response carries
+  `containment: {status, failed, retry_id, retry_ids, ...report}` where `status` is `done`,
+  `manual` (nothing failed, a person must act) or `retrying` (containment is incomplete, never
+  "done"). The run is audited (`containment.run`, with timings) in its own transaction, apart from
+  the leaver's `jml.leaver` event.
+- **Retry tasks** (`containment_retries`, schema 0206). One open task per account and step, with
+  identity, connection, step, attempts, `next_attempt_at`, last error and status `pending`,
+  `succeeded` or `gave_up`. The sweeper (the 30 s `RunSweeper` loop, clock-aware like the rest)
+  retries a due task, re-running the step and its verification, with backoff 1 m, 5 m, 15 m,
+  1 h, then hourly, until about 24 h after the first failure; then it marks it `gave_up`. Each
+  attempt is audited (`containment.retry_attempt`, plus `containment.retry_scheduled`,
+  `containment.retry_succeeded`, `containment.retry_gave_up`). A `gave_up` task stays listed with
+  a `manual_action` and is shown in red in the identity panel; there is no separate alert
+  channel yet. `GET /api/identities/{id}/containment` (graph.read) lists an identity's tasks;
+  `POST /api/containment-retries/{id}/retry-now` (`identities.contain`, step-up) runs a pending
+  one now. UI: the identity panel's "Containment retrying (n)" badge and list, with Retry now.
 - **Contain identity.** `POST /api/identities/{id}/contain` `{reason}` (10 to 500 characters) runs
   both steps for every account of the identity (an agent too: trigger `agent`) without disabling
-  anything. `200` with the report, or `502 containment_failed` with the same report. Needs
+  anything. `200` with the report, or `502 containment_failed` with the same report plus
+  `status: "retrying"` and `retry_id` (the failed steps are queued as retry tasks). Needs
   `identities.contain` (policy admin) and a fresh phishing-resistant sign-in. UI: identity page
   More actions, and the identity side panel, "Contain".
 - **Credentials.** `PUT /api/connections/{id}/containment-credential` `{token, base_url, org}`

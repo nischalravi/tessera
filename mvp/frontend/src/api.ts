@@ -583,6 +583,25 @@ export interface ContainmentReport {
 export const containIdentity = (identityId: number, reason: string) =>
   api<ContainmentReport>(`/identities/${identityId}/contain`, { reason });
 
+/** A containment step that failed and is queued for retry (or was given up on). */
+export interface ContainmentRetry {
+  id: string;
+  identity_id: number;
+  system: string;
+  account: string;
+  action: "revoke_sessions" | "revoke_grants";
+  trigger: string;
+  status: "pending" | "succeeded" | "gave_up";
+  attempts: number;
+  next_attempt_at: string | null;
+  last_error: string;
+  created_at: string;
+  updated_at: string;
+  manual_action?: string;
+}
+export const retryContainmentNow = (retryId: string) =>
+  api<{ retry: ContainmentRetry }>(`/containment-retries/${encodeURIComponent(retryId)}/retry-now`, {});
+
 export const simulate = (body: { remove_edge_ids?: number[]; add_edges?: { src: string; dst: string; duration_hours?: number }[]; disable_account_ids?: number[] }) =>
   api<SimResult>("/simulate", { remove_edge_ids: [], add_edges: [], disable_account_ids: [], ...body });
 

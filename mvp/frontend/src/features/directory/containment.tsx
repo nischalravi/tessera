@@ -1,6 +1,6 @@
 import { FormEvent, useId, useRef, useState } from "react";
-import { ApiError, ContainmentReport, containIdentity } from "../../api";
-import { Badge, Button, Callout, Tone } from "../../components";
+import { ApiError, ContainmentReport, ContainmentRetry, containIdentity, fmtDate, retryContainmentNow, useApi } from "../../api";
+import { Badge, Button, Callout, Tone, useToast } from "../../components";
 import { useModal } from "../../components/overlay";
 
 /**
@@ -101,6 +101,53 @@ export function ContainDialog({ identity, onClose }: { identity: { id: number; n
           </div>
         </form>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Containment retries of one identity: failed revoke steps that Tessera keeps retrying (backoff, about 24 hours),
+ * and the ones it gave up on, which need a person. Shows nothing when there are none.
+ */
+export function ContainmentRetries({ identityId, canRetry }: { identityId: number; canRetry: boolean }) {
+  const { data, reload } = useApi<{ retries: ContainmentRetry[] }>(`/identities/${identityId}/containment`);
+  const toast = useToast();
+  const [busy, setBusy] = useState<string | null>(null);
+  const open = (data?.retries ?? []).filter((r) => r.status !== "succeeded");
+  if (open.length === 0) return null;
+  const pending = open.filter((r) => r.status === "pending").length;
+  const retry = async (r: ContainmentRetry) => {
+    setBusy(r.id);
+    try {
+      const res = await retryContainmentNow(r.id);
+      toast(res.retry.status === "succeeded" ? "Revoked and verified" : "Still failing; Tessera will keep retrying", { kind: res.retry.status === "succeeded" ? "ok" : "error" });
+      reload();
+    } catch (err: any) {
+      toast(String(err.message ?? err), { kind: "error" });
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <div className="mt" role="region" aria-label="Containment retries">
+      {pending > 0 && <Badge tone="warning">Containment retrying ({pending})</Badge>}{" "}
+      {open.length > pending && <Badge tone="critical">Gave up ({open.length - pending})</Badge>}
+      <ul className="steps mt">
+        {open.map((r) => (
+          <li key={r.id} className="step">
+            <span className="act"><Badge tone={r.status === "pending" ? "warning" : "critical"}>{r.status === "pending" ? "Retrying" : "Gave up"}</Badge></span>
+            <span className="small grow">
+              {ACTION_LABEL[r.action] ?? r.action} · {r.system} · {r.account} · {r.attempts} attempt(s)
+              {r.next_attempt_at && <> · next {fmtDate(r.next_attempt_at)}</>}
+              {r.last_error && <span className="muted"> ({r.last_error})</span>}
+              {r.manual_action && <b> {r.manual_action}</b>}
+            </span>
+            {canRetry && r.status === "pending" && (
+              <Button size="sm" disabled={busy === r.id} onClick={() => retry(r)}>{busy === r.id ? "Retrying…" : "Retry now"}</Button>
+            )}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

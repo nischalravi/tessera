@@ -178,10 +178,21 @@ func TestContainAPI(t *testing.T) {
 	okta.keepToken = true
 	rec = corrDo(h, l, "POST", alice, body)
 	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), `"containment_failed"`) ||
-		!strings.Contains(rec.Body.String(), "still found 1 active session") {
+		!strings.Contains(rec.Body.String(), "still found 1 active session") || !strings.Contains(rec.Body.String(), `"retry_id"`) ||
+		!strings.Contains(rec.Body.String(), `"status":"retrying"`) {
 		t.Errorf("surviving token: %d %s", rec.Code, rec.Body)
 	}
-	if evs = runEvents(t, f, f.A); len(evs) != 3 || evs[0]["ok"] != false {
+	if got := auditActions(t, f, f.A.ID); got["containment.retry_scheduled"] != 1 {
+		t.Errorf("a failed manual contain must queue a retry: %v", got)
+	}
+	// a second failure reuses the open task
+	if rec = corrDo(h, l, "POST", alice, body); rec.Code != http.StatusBadGateway {
+		t.Errorf("second failure: %d", rec.Code)
+	}
+	if got := auditActions(t, f, f.A.ID); got["containment.retry_scheduled"] != 1 {
+		t.Errorf("one open task per step: %v", got)
+	}
+	if evs = runEvents(t, f, f.A); len(evs) != 4 || evs[0]["ok"] != false {
 		t.Errorf("a failed run must be audited: %v", evs)
 	}
 
@@ -213,7 +224,7 @@ func TestLeaverExecuteRunsContainment(t *testing.T) {
 		return fmt.Sprintf("/api/hris/events/%d/execute", f.A.IDs["hris:leaver"])
 	}
 
-	t.Run("a surviving token blocks the leaver", func(t *testing.T) {
+	t.Run("a surviving token does not block the leaver: it is retried", func(t *testing.T) {
 		f := storetest.TwoTenants(t)
 		h := containServer(t, f).Handler()
 		okta := newFakeOkta(t)
@@ -222,20 +233,36 @@ func TestLeaverExecuteRunsContainment(t *testing.T) {
 		admin := signIn(t, f.DB, f.A.ID, authtest.User{Email: "ta@a.example", Roles: []auth.Role{auth.RoleTenantAdmin}}, authtest.Phr, storetest.Now)
 		setCredential(t, h, admin, f.A.Refs["connection"], okta.srv.URL)
 		rec := corrDo(h, l, "POST", leaver(f), "")
-		if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "containment_failed") {
-			t.Fatalf("execute: %d %s", rec.Code, rec.Body)
+		var out struct {
+			Executed    bool `json:"executed"`
+			Containment struct {
+				Status  string                   `json:"status"`
+				RetryID string                   `json:"retry_id"`
+				Failed  []containment.StepResult `json:"failed"`
+				OK      bool                     `json:"ok"`
+			} `json:"containment"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil || rec.Code != 200 || !out.Executed ||
+			out.Containment.Status != "retrying" || out.Containment.OK || len(out.Containment.Failed) != 1 || out.Containment.RetryID == "" {
+			t.Fatalf("execute: %d %.900s", rec.Code, rec.Body)
 		}
 		evs := runEvents(t, f, f.A)
-		if len(evs) != 1 || evs[0]["ok"] != false || evs[0]["trigger"] != "leaver" {
+		if len(evs) != 1 || evs[0]["ok"] != false || evs[0]["trigger"] != "leaver" || evs[0]["duration_ms"] == nil {
 			t.Errorf("audit %v", evs)
 		}
-		// nothing was executed: the event is still pending, the accounts still active
-		rec = corrDo(h, l, "GET", "/api/hris/events", "")
-		if !strings.Contains(rec.Body.String(), `"status":"pending"`) || strings.Contains(rec.Body.String(), `"executed_at":"`) {
-			t.Errorf("events: %.400s", rec.Body)
+		// the leaver went ahead: accounts disabled, the event executed, its domain event audited
+		got := auditActions(t, f, f.A.ID)
+		if got["jml.leaver"] != 1 || got["containment.retry_scheduled"] != 1 {
+			t.Errorf("audit actions %v", got)
 		}
-		if got := auditActions(t, f, f.A.ID); got["jml.leaver"] != 0 {
-			t.Errorf("the leaver was recorded as executed: %v", got)
+		rec = corrDo(h, l, "GET", fmt.Sprintf("/api/identities/%d", f.A.IDs["alice"]), "")
+		if !strings.Contains(rec.Body.String(), `"status":"terminated"`) || strings.Contains(rec.Body.String(), `"status":"active","last_login`) {
+			t.Errorf("alice not terminated: %.400s", rec.Body)
+		}
+		// the retry task is listed for the identity, pending
+		rec = corrDo(h, l, "GET", fmt.Sprintf("/api/identities/%d/containment", f.A.IDs["alice"]), "")
+		if rec.Code != 200 || !strings.Contains(rec.Body.String(), out.Containment.RetryID) || !strings.Contains(rec.Body.String(), `"status":"pending"`) {
+			t.Errorf("containment list: %d %s", rec.Code, rec.Body)
 		}
 	})
 
@@ -297,4 +324,64 @@ func TestLeaverExecuteRunsContainment(t *testing.T) {
 			t.Errorf("plan has containment steps without a live connection: %.600s", rec.Body)
 		}
 	})
+}
+
+func TestContainmentRetriesAPI(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	h := containServer(t, f).Handler()
+	okta := newFakeOkta(t)
+	okta.keepToken = true
+	l := policyAdmin(t, f, f.A.ID, "pa@a.example")
+	admin := signIn(t, f.DB, f.A.ID, authtest.User{Email: "ta@a.example", Roles: []auth.Role{auth.RoleTenantAdmin}}, authtest.Phr, storetest.Now)
+	viewer := signIn(t, f.DB, f.A.ID, authtest.User{Email: "v@a.example", Roles: []auth.Role{auth.RoleViewer}}, authtest.Phr, storetest.Now)
+	setCredential(t, h, admin, f.A.Refs["connection"], okta.srv.URL)
+	rec := corrDo(h, l, "POST", fmt.Sprintf("/api/identities/%d/contain", f.A.IDs["alice"]), `{"reason":"suspected token theft"}`)
+	var fail struct {
+		RetryID string `json:"retry_id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &fail); err != nil || rec.Code != 502 || fail.RetryID == "" {
+		t.Fatalf("contain: %d %s", rec.Code, rec.Body)
+	}
+	path := "/api/containment-retries/" + fail.RetryID + "/retry-now"
+
+	// still failing: retry-now answers with the task, now with one attempt
+	rec = corrDo(h, l, "POST", path, "")
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"attempts":1`) || !strings.Contains(rec.Body.String(), `"status":"pending"`) {
+		t.Errorf("retry-now (still failing): %d %s", rec.Code, rec.Body)
+	}
+	// the provider recovers
+	okta.mu.Lock()
+	okta.keepToken = false
+	okta.mu.Unlock()
+	rec = corrDo(h, l, "POST", path, "")
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"status":"succeeded"`) {
+		t.Errorf("retry-now (recovered): %d %s", rec.Code, rec.Body)
+	}
+	if got := auditActions(t, f, f.A.ID); got["containment.retry_succeeded"] != 1 || got["containment.retry_attempt"] != 2 {
+		t.Errorf("audit %v", got)
+	}
+	// a settled task cannot be retried
+	if rec = corrDo(h, l, "POST", path, ""); rec.Code != http.StatusConflict {
+		t.Errorf("settled task: %d %s", rec.Code, rec.Body)
+	}
+	// tenant B's admin sees A's task exactly as a missing one
+	lb := policyAdmin(t, f, f.B.ID, "pa@b.example")
+	cross := corrDo(h, lb, "POST", path, "")
+	missing := corrDo(h, lb, "POST", "/api/containment-retries/00000000-0000-4000-8000-00000000dead/retry-now", "")
+	if cross.Code != 404 || cross.Code != missing.Code || cross.Body.String() != missing.Body.String() {
+		t.Errorf("cross-tenant %d %s vs missing %d %s", cross.Code, cross.Body, missing.Code, missing.Body)
+	}
+	// RBAC: retry-now needs identities.contain; the list needs graph.read
+	if rec = corrDo(h, admin, "POST", path, ""); rec.Code != 403 {
+		t.Errorf("tenant admin retry-now: %d", rec.Code)
+	}
+	if rec = corrDo(h, viewer, "POST", path, ""); rec.Code != 403 {
+		t.Errorf("viewer retry-now: %d", rec.Code)
+	}
+	if rec = corrDo(h, viewer, "GET", fmt.Sprintf("/api/identities/%d/containment", f.A.IDs["alice"]), ""); rec.Code != 200 {
+		t.Errorf("viewer list: %d", rec.Code)
+	}
+	if rec = corrDo(h, l, "POST", "/api/containment-retries/not-a-uuid/retry-now", ""); rec.Code != 404 {
+		t.Errorf("bad id: %d", rec.Code)
+	}
 }

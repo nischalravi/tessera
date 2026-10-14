@@ -34,15 +34,20 @@ const containTimeout = 20 * time.Second
 func (s *Server) registerContainmentRoutes() {
 	s.handle(http.MethodPost, "/api/identities/{identity_id}/contain", phased,
 		needStepUp(auth.PermIdentitiesContain, auth.StepUpPolicy), s.containIdentity)
+	s.handle(http.MethodGet, "/api/identities/{identity_id}/containment", read, need(auth.PermGraphRead), s.listContainment)
+	s.handle(http.MethodPost, "/api/containment-retries/{retry_id}/retry-now", phased,
+		needStepUp(auth.PermIdentitiesContain, auth.StepUpPolicy), s.retryNow)
 	s.handle(http.MethodPut, "/api/connections/{id}/containment-credential", write,
 		needStepUp(auth.PermConnectionsManage, auth.StepUpPolicy), s.rd(s.putContainmentCredential))
 }
 
-func containmentFailed(rep *containment.Report) error {
+func containmentFailed(rep *containment.Report, retries []*store.ContainmentRetry) error {
 	n := len(rep.Failed())
-	msg := fmt.Sprintf("containment failed: %d step(s) failed; the identity may still have live sessions or grants", n)
+	msg := fmt.Sprintf("containment failed: %d step(s) failed; the identity may still have live sessions or grants. "+
+		"A retry is scheduled.", n)
+	sum := containment.Summarize(rep, retries)
 	return &readiness.Error{Status: http.StatusBadGateway, Code: "containment_failed", Msg: msg,
-		Extra: map[string]any{"report": rep}}
+		Extra: map[string]any{"report": rep, "status": sum.Status, "retry_id": sum.RetryID, "retry_ids": sum.RetryIDs}}
 }
 
 func (s *Server) containIdentity(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
@@ -84,16 +89,30 @@ func (s *Server) containIdentity(_ http.ResponseWriter, r *http.Request, p *para
 		return nil, err
 	}
 	rep := s.runContainment(ctx, job)
-	err = p.scope.Write(ctx, func(c *store.TenantTx) error {
-		return containment.Record(c, s.clock(), actor(r), rep)
-	})
+	retries, err := s.recordContainment(ctx, p, actor(r), job, rep)
 	if err != nil {
 		return nil, err
 	}
 	if !rep.OK {
-		return nil, containmentFailed(rep)
+		return nil, containmentFailed(rep, retries)
 	}
 	return rep, nil
+}
+
+// recordContainment audits the run and queues a retry task for each failed
+// step, in one transaction (also when the run failed).
+func (s *Server) recordContainment(ctx context.Context, p *params, by string, job *containment.Job, rep *containment.Report) ([]*store.ContainmentRetry, error) {
+	var retries []*store.ContainmentRetry
+	err := p.scope.Write(ctx, func(c *store.TenantTx) error {
+		now := s.clock()
+		if err := containment.Record(c, now, by, rep); err != nil {
+			return err
+		}
+		var err error
+		retries, err = containment.EnqueueRetries(c, now, job, rep)
+		return err
+	})
+	return retries, err
 }
 
 // runContainment runs job under the containment time budget.
@@ -126,8 +145,9 @@ func (s *Server) putContainmentCredential(r *http.Request, p *params) (int, any,
 }
 
 // executeLeaver executes an HRIS event. A leaver plan's containment steps run
-// first, with no transaction open; the run is recorded whatever its result,
-// and the event is executed only when no step failed.
+// first, with no transaction open; the run is recorded whatever its result.
+// A failed step does not stop the leaver: it becomes a retry task and the
+// response says containment is incomplete (containment.status "retrying").
 func (s *Server) executeLeaver(r *http.Request, p *params, id int64) (any, error) {
 	ctx := r.Context()
 	pols, err := s.policies()
@@ -154,21 +174,17 @@ func (s *Server) executeLeaver(r *http.Request, p *params, id int64) (any, error
 		return nil, err
 	}
 	var rep *containment.Report
+	var retries []*store.ContainmentRetry
 	if job != nil {
 		rep = s.runContainment(ctx, job)
-		if err := p.scope.Write(ctx, func(c *store.TenantTx) error {
-			return containment.Record(c, s.clock(), actor(r), rep)
-		}); err != nil {
+		if retries, err = s.recordContainment(ctx, p, actor(r), job, rep); err != nil {
 			return nil, err
-		}
-		if !rep.OK {
-			return nil, containmentFailed(rep)
 		}
 	}
 	var plan jml.Plan
 	err = p.scope.Write(ctx, func(c *store.TenantTx) error {
 		var err error
-		plan, err = jml.ExecuteEvent(c, s.clock(), id, principal(r).User(), pols, rep)
+		plan, err = jml.ExecuteEvent(c, s.clock(), id, principal(r).User(), pols)
 		return err
 	})
 	var je *jml.Error
@@ -180,7 +196,54 @@ func (s *Server) executeLeaver(r *http.Request, p *params, id int64) (any, error
 	}
 	out := ojson.Object{{Key: "executed", Value: true}, {Key: "plan", Value: plan}}
 	if rep != nil {
-		out = append(out, ojson.KV{Key: "containment", Value: rep})
+		out = append(out, ojson.KV{Key: "containment", Value: containment.Summarize(rep, retries)})
 	}
 	return out, nil
+}
+
+// GET /api/identities/{identity_id}/containment lists the identity's containment
+// retry tasks (pending, succeeded, gave_up), oldest first.
+func (s *Server) listContainment(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	id := p.pathInt("identity_id")
+	if err := validated(p, nil); err != nil {
+		return nil, err
+	}
+	c := store.TxFrom(r.Context())
+	if _, err := c.Identity(id); errors.Is(err, store.ErrNotFound) {
+		return nil, errStatus(http.StatusNotFound, "identity not found")
+	} else if err != nil {
+		return nil, err
+	}
+	rows, err := c.ContainmentRetriesFor(id)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]containment.RetryView, len(rows))
+	for i, x := range rows {
+		out[i] = containment.ViewRetry(x)
+	}
+	return ojson.Object{{Key: "identity_id", Value: id}, {Key: "retries", Value: out}}, nil
+}
+
+// POST /api/containment-retries/{retry_id}/retry-now runs one pending retry
+// task now (provider calls, then re-read) and answers with its new state.
+func (s *Server) retryNow(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	id := p.path["retry_id"]
+	if !idRE.MatchString(id) {
+		return nil, errStatus(http.StatusNotFound, "retry not found")
+	}
+	if err := decodeBody(r, &struct{}{}, true); err != nil {
+		return nil, err
+	}
+	rows, err := s.containment.RunRetries(r.Context(), s.store, p.scope.Tenant, actor(r), id)
+	var ce *containment.Error
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return nil, errStatus(http.StatusNotFound, "retry not found")
+	case errors.As(err, &ce):
+		return nil, errStatus(http.StatusConflict, ce.Msg)
+	case err != nil:
+		return nil, err
+	}
+	return ojson.Object{{Key: "retry", Value: containment.ViewRetry(rows[0])}}, nil
 }

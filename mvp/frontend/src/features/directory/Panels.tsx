@@ -15,7 +15,7 @@ import {
 } from "../../components";
 import { BusinessRole, ORGS, OrgUnit, mockIdentityOps, mockObjects, useMockState, useRoles } from "../../mocks";
 import { useSession } from "../../app/auth";
-import { ContainDialog } from "./containment";
+import { ContainDialog, ContainmentRetries } from "./containment";
 import { RevokeDrawer } from "./IdentityPage";
 import { PreviewFormDrawer } from "./shared";
 
@@ -108,6 +108,7 @@ export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void
             {d.terminated_at && <><dt>Left</dt><dd>{fmtDay(d.terminated_at)}</dd></>}
             <dt>Last sign-in</dt><dd>{relTime(lastLogin)}</dd>
           </dl>
+          <ContainmentRetries identityId={d.id} canRetry={can("identities.contain")} />
           <Section title="Risk">
             <dl className="kv">
               <dt>Risk</dt><dd><RiskPill score={d.risk?.risk} /> <span className="faint small tnum">{Math.round(d.risk?.risk ?? 0)} / 100</span></dd>

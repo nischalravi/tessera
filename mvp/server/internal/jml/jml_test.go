@@ -6,7 +6,6 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/jml"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -147,7 +146,7 @@ func TestExecuteLeaverEventRemovesAllAccess(t *testing.T) {
 		return err
 	})
 	testkit.Write(t, st, func(c *store.TenantTx) error {
-		_, err := jml.ExecuteEvent(c, testkit.Now, evID, store.UserRef{Display: "jml-automation"}, pols, nil)
+		_, err := jml.ExecuteEvent(c, testkit.Now, evID, store.UserRef{Display: "jml-automation"}, pols)
 		return err
 	})
 	testkit.Read(t, st, func(c *store.TenantTx) error {
@@ -188,7 +187,7 @@ func TestExecuteLeaverEventRemovesAllAccess(t *testing.T) {
 	})
 	// executing twice is refused
 	err := st.InTenant(t.Context(), st.Tenant, func(c *store.TenantTx) error {
-		_, err := jml.ExecuteEvent(c, testkit.Now, evID, store.UserRef{Display: "jml-automation"}, pols, nil)
+		_, err := jml.ExecuteEvent(c, testkit.Now, evID, store.UserRef{Display: "jml-automation"}, pols)
 		return err
 	})
 	var je *jml.Error
@@ -287,7 +286,7 @@ func TestInferTeamAndBirthright(t *testing.T) {
 
 // Containment steps (issue #106): a leaver plan carries revoke_sessions and
 // revoke_grants for an account on a system with a live connection, and
-// ExecuteEvent refuses to run without a passing report for them.
+// ExecuteEvent runs the plan whether or not they succeeded.
 func TestLeaverContainmentSteps(t *testing.T) {
 	st, ids := testkit.Tiny(t)
 	pols := testkit.Policies(t)
@@ -331,34 +330,18 @@ func TestLeaverContainmentSteps(t *testing.T) {
 			EffectiveAt: testkit.Now, Status: "pending"})
 		return err
 	})
-	acct := stringOf(get(sess[0], "target"))
-	step := func(action, outcome string) containment.StepResult {
-		return containment.StepResult{Action: action, System: "okta", Account: acct, Outcome: outcome}
-	}
-	for name, rep := range map[string]*containment.Report{
-		"no report":    nil,
-		"failed step":  {Steps: []containment.StepResult{step("revoke_sessions", "failed"), step("revoke_grants", "done")}},
-		"missing step": {Steps: []containment.StepResult{step("revoke_sessions", "done")}},
-	} {
-		err := st.InTenant(context.Background(), st.Tenant, func(c *store.TenantTx) error {
-			_, err := jml.ExecuteEvent(c, testkit.Now, evID, store.UserRef{Display: "x"}, pols, rep)
-			return err
-		})
-		var je *jml.Error
-		if !errors.As(err, &je) {
-			t.Errorf("%s: err = %v, want a jml.Error", name, err)
-		}
-	}
+	// A failed or unrun containment step never blocks the leaver: ExecuteEvent
+	// applies the other steps (the failure is a retry task, made by the caller).
+	testkit.Write(t, st, func(c *store.TenantTx) error {
+		_, err := jml.ExecuteEvent(c, testkit.Now, evID, store.UserRef{Display: "x"}, pols)
+		return err
+	})
 	testkit.Read(t, st, func(c *store.TenantTx) error {
-		if a, _ := c.Identity(ids["alice"]); a.Status == "terminated" {
-			t.Error("a refused execute terminated alice")
+		a, _ := c.Identity(ids["alice"])
+		if a.Status != "terminated" {
+			t.Errorf("alice is %s", a.Status)
 		}
 		return nil
-	})
-	ok := &containment.Report{OK: true, Steps: []containment.StepResult{step("revoke_sessions", "done"), step("revoke_grants", "manual")}}
-	testkit.Write(t, st, func(c *store.TenantTx) error {
-		_, err := jml.ExecuteEvent(c, testkit.Now, evID, store.UserRef{Display: "x"}, pols, ok)
-		return err
 	})
 }
 

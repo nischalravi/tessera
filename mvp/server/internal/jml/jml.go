@@ -638,7 +638,7 @@ func addGrant(c *store.TenantTx, now time.Time, ident *store.Identity, st Step) 
 
 // ContainmentSpecs lists the plan's containment steps. They call providers,
 // so the caller runs them (internal/containment) before ExecuteEvent, with no
-// transaction open, and hands ExecuteEvent the report.
+// transaction open.
 func ContainmentSpecs(plan Plan) []containment.Spec {
 	var out []containment.Spec
 	steps, _ := getAny(plan, "steps").([]Step)
@@ -655,40 +655,11 @@ func isContainment(action string) bool {
 	return action == containment.ActionRevokeSessions || action == containment.ActionRevokeGrants
 }
 
-// checkContained refuses to execute a plan whose containment steps have not
-// run and passed: a leaver is never marked executed on the strength of steps
-// that were skipped. A manual step (no live credential) is allowed: it is in
-// the report as a manual task, never as done.
-func checkContained(steps []Step, rep *containment.Report) error {
-	for _, st := range steps {
-		a := stepStr(st, "action")
-		if !isContainment(a) {
-			continue
-		}
-		if rep == nil {
-			return &Error{"containment steps have not been run"}
-		}
-		ok := false
-		for _, r := range rep.Steps {
-			if r.Action == a && r.System == stepStr(st, "system") && r.Account == stepStr(st, "target") {
-				if r.Outcome == containment.OutcomeFailed {
-					return &Error{fmt.Sprintf("containment failed for %s %s", r.System, r.Account)}
-				}
-				ok = true
-			}
-		}
-		if !ok {
-			return &Error{"containment steps do not match the plan"}
-		}
-	}
-	return nil
-}
-
 func applyStep(c *store.TenantTx, now time.Time, ident *store.Identity, st Step) error {
 	var err error
 	switch stepStr(st, "action") {
 	case containment.ActionRevokeSessions, containment.ActionRevokeGrants:
-		// run by the caller before ExecuteEvent (checkContained)
+		// run by the caller before ExecuteEvent; failures become retry tasks
 	case "disable_account":
 		id, _ := stepInt(st, "account_id")
 		err = c.DisableAccount(id)
@@ -722,10 +693,11 @@ func applyStep(c *store.TenantTx, now time.Time, ident *store.Identity, st Step)
 }
 
 // ExecuteEvent applies an HRIS event's plan and marks it executed.
-// by is the platform user who executes it (the request's principal). rep is
-// the report of the plan's containment steps (nil when it has none); a plan
-// whose containment steps are missing from rep or failed is refused.
-func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.UserRef, policies []*policy.Policy, rep *containment.Report) (Plan, error) {
+// by is the platform user who executes it (the request's principal). The
+// containment steps (revoke_sessions, revoke_grants) are not applied here:
+// the caller runs them before, and a failed one is a retry task, not a
+// reason to stop the leaver.
+func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.UserRef, policies []*policy.Policy) (Plan, error) {
 	ev, err := getOrNil(c.HrisEvent(eventID))
 	if err != nil {
 		return nil, err
@@ -741,9 +713,6 @@ func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.User
 		return nil, err
 	}
 	steps, _ := getAny(plan, "steps").([]Step)
-	if err := checkContained(steps, rep); err != nil {
-		return nil, err
-	}
 	var identityName any
 	if ident, ok := getAny(plan, "identity").(ojson.Object); ok {
 		identityName = getAny(ident, "name")
