@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { Ban, ChevronDown, ChevronRight, ClipboardCheck, Ellipsis, GitMerge, Link2, Network, Pencil, RotateCcw, ShieldCheck, ShoppingCart, UserCheck } from "lucide-react";
+import { Ban, ChevronDown, ChevronRight, ClipboardCheck, Ellipsis, GitMerge, Link2, ShieldAlert, Network, Pencil, RotateCcw, ShieldCheck, ShoppingCart, UserCheck } from "lucide-react";
 import { IdentityDetail, SimResult, ago, api, fmtDate, fmtDay, useApi } from "../../api";
 import { useIdentityActions } from "../../app/actions";
 import { usePersona } from "../../app/persona";
@@ -11,6 +11,7 @@ import { mockIdentityOps, mockObjects, useMockState } from "../../mocks";
 import { useSession } from "../../app/auth";
 import { AffiliationsSection, IdentifiersSection } from "./affiliations";
 import { MergeDialog } from "./correlation";
+import { ContainDialog } from "./containment";
 import { PreviewFormDrawer } from "./shared";
 
 /** Dry-run first, then apply: shows the blast radius of removing one grant before anything changes. */
@@ -66,6 +67,7 @@ function Header({ d, disabledAt }: { d: IdentityDetail; disabledAt?: string }) {
   const toast = useToast();
   const [edit, setEdit] = useState(false);
   const [merging, setMerging] = useState(false);
+  const [containing, setContaining] = useState(false);
   const { can } = useSession();
   const nav = useNavigate();
   const human = d.type === "human";
@@ -111,6 +113,9 @@ function Header({ d, disabledAt }: { d: IdentityDetail; disabledAt?: string }) {
             label="More actions"
             items={[
               { label: "Open in access graph", icon: <Network size={14} />, onSelect: () => acts.openGraph(d) },
+              ...(can("identities.contain") && d.status !== "merged"
+                ? [{ label: "Contain identity…", icon: <ShieldAlert size={14} />, onSelect: () => setContaining(true) }]
+                : []),
               ...(can("identities.merge") && d.status !== "merged"
                 ? [{ label: "Merge into…", icon: <GitMerge size={14} />, onSelect: () => setMerging(true) }]
                 : []),
@@ -128,6 +133,7 @@ function Header({ d, disabledAt }: { d: IdentityDetail; disabledAt?: string }) {
           </Callout>
         </div>
       )}
+      {containing && <ContainDialog identity={{ id: d.id, name: d.name }} onClose={() => setContaining(false)} />}
       {merging && (
         <MergeDialog
           merged={d}

@@ -88,6 +88,8 @@ var tables = []string{
 	"account_links", "identity_merges",
 	// identity model for guests (schema/0226_identity_model.sql)
 	"guest_populations", "identity_source_records", "identity_identifiers", "affiliations",
+	// identity containment (schema/0205_containment.sql)
+	"containment_credentials", "containment_retries",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was
