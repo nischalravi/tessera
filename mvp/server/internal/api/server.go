@@ -23,6 +23,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oidcrp"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/access"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/claim"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/credential"
@@ -132,6 +133,10 @@ type Config struct {
 	// (TESSERA_DEV_FAKE_TARGET, dev only). Empty: the "fake" target kind is
 	// refused.
 	FakeTargetURL string
+	// Containment runs the kill switch's provider calls (revoke sessions and
+	// grants). Nil: a service with no outbound client, so every containment
+	// step is a manual task.
+	Containment *containment.Service
 	// AuditAppend overrides how the audit middleware writes http.request
 	// events (tests inject failures). Nil: the store.
 	AuditAppend func(ctx context.Context, t tenancy.ID, e store.AuditEvent) error
@@ -155,6 +160,8 @@ type Server struct {
 
 	readiness *readiness.Service
 	prov      *provision.Engine
+	// containment is the kill switch (issue #106); never nil.
+	containment *containment.Service
 }
 
 // New builds a server.
@@ -200,7 +207,13 @@ func New(cfg Config) *Server {
 		}
 		provHTTP = hc
 	}
-	s := &Server{cfg: cfg, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
+	if cfg.Containment == nil {
+		cfg.Containment = &containment.Service{}
+	}
+	if cfg.Containment.Clock == nil {
+		cfg.Containment.Clock = cfg.Clock
+	}
+	s := &Server{cfg: cfg, containment: cfg.Containment, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
 		limits: newLimiters(cfg.RateLimits)}
 	s.guests = sponsorship.New(cfg.Identifiers)
 	s.claimLim = newClaimLimits()
@@ -235,6 +248,7 @@ func New(cfg Config) *Server {
 	s.registerGuestAccessRoutes()
 	s.registerNotificationRoutes()
 	s.registerEmailRoutes()
+	s.registerContainmentRoutes()
 	s.registerReadinessRoutes()
 	s.registerJobRoutes()
 	s.registerProvisioningRoutes()
@@ -332,6 +346,9 @@ func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
 		}
 		if err := lifecycle.SweepAll(audit.WithSystemActor(ctx, lifecycle.Sweeper), s.store, s.clock()); err != nil && ctx.Err() == nil {
 			s.log.Error("lifecycle sweep failed", "err", err)
+		}
+		if err := s.containment.SweepRetries(audit.WithSystemActor(ctx, "containment.sweeper"), s.store, "containment.sweeper"); err != nil && ctx.Err() == nil {
+			s.log.Error("containment retry sweep failed", "err", err)
 		}
 		select {
 		case <-ctx.Done():

@@ -115,6 +115,8 @@ var tables = []string{
 	"provisioning_targets", "provisioning_ops", "provisioning_findings",
 	// guest access bundles, assurance and catalog populations (schema/0229_guest_access.sql)
 	"guest_bundle_items", "identity_assurance", "catalog_item_populations",
+	// identity containment (schema/0205_containment.sql)
+	"containment_credentials", "containment_retries",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was
