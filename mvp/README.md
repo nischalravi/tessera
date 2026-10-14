@@ -260,7 +260,10 @@ event's `worker_type` and `end_date`, with the manager as sponsor unless
   notifications outbox (#189) delivers them through `lifecycle.Notify`.
 - **Extending.** The sponsor, or a lifecycle admin, moves the end date later, with a reason.
   Nobody extends their own term. An extension restarts the warnings.
-- **The end.** On the end date the sweeper runs the person's **leaver plan**: accounts are
+- **The end.** On the end date the sweeper first **contains** the person (sessions, refresh tokens
+  and OAuth grants revoked at connected providers, audited as `containment.run`). A failed step
+  becomes a retry and never blocks the end; if the sweep's time budget runs out first, the person
+  stays due for the next pass. Then it runs the person's **leaver plan**: accounts are
   disabled, grants removed, JIT cancelled and ownership reassigned, as the JML leaver plan lists
   them. It then terminates the identity, all in one transaction with `lifecycle.end`. The
   sweep runs in the background loop, never on a read. Admins can also run it at once.
