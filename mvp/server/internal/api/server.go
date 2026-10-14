@@ -153,6 +153,7 @@ func New(cfg Config) *Server {
 		Cookies: auth.Cookies{Insecure: cfg.InsecureCookie}}
 	s.registerRoutes()
 	s.registerAuditRoutes()
+	s.registerCorrelationRoutes()
 	s.registerReadinessRoutes()
 	s.registerRotationRoutes()
 	s.registerAuthRoutes()

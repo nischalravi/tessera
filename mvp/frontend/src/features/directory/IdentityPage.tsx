@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
-import { Ban, ChevronDown, ChevronRight, ClipboardCheck, Ellipsis, Link2, Network, Pencil, RotateCcw, ShieldCheck, ShoppingCart, UserCheck } from "lucide-react";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Ban, ChevronDown, ChevronRight, ClipboardCheck, Ellipsis, GitMerge, Link2, Network, Pencil, RotateCcw, ShieldCheck, ShoppingCart, UserCheck } from "lucide-react";
 import { IdentityDetail, SimResult, ago, api, fmtDate, fmtDay, useApi } from "../../api";
 import { useIdentityActions } from "../../app/actions";
 import { usePersona } from "../../app/persona";
@@ -8,6 +8,8 @@ import {
   Avatar, Badge, Button, Callout, Chip, Drawer, EmptyState, IdLink, Loading, Menu, Page, PathView, PreviewBadge, Segmented, Sev, SimulationView, Status, Tabs, TypeBadge, useToast,
 } from "../../components";
 import { mockIdentityOps, useMockState } from "../../mocks";
+import { useSession } from "../../app/auth";
+import { MergeDialog } from "./correlation";
 import { PlanDrawer, RotationBadge, useRotationStatus } from "../rotation/shared";
 import { PreviewFormDrawer } from "./shared";
 
@@ -64,6 +66,9 @@ function Header({ d, disabledAt }: { d: IdentityDetail; disabledAt?: string }) {
   const toast = useToast();
   const [edit, setEdit] = useState(false);
   const [rotate, setRotate] = useState(false);
+  const [merging, setMerging] = useState(false);
+  const { can } = useSession();
+  const nav = useNavigate();
   const human = d.type === "human";
   const status = disabledAt && d.status === "active" ? "disabled" : d.status;
   return (
@@ -93,7 +98,7 @@ function Header({ d, disabledAt }: { d: IdentityDetail; disabledAt?: string }) {
           {status === "disabled" ? (
             <Button size="sm" icon={<UserCheck size={14} />} onClick={async () => { await mockIdentityOps.enable(d.id, d.name, actor); toast(`${d.name} re-enabled (preview)`); }}>Enable</Button>
           ) : (
-            <Button size="sm" variant="danger" icon={<Ban size={14} />} disabled={d.status === "terminated"} onClick={() => acts.disable(d)}>Disable</Button>
+            <Button size="sm" variant="danger" icon={<Ban size={14} />} disabled={d.status === "terminated" || d.status === "merged"} onClick={() => acts.disable(d)}>Disable</Button>
           )}
           {human ? (
             <Button size="sm" icon={<RotateCcw size={14} />} disabled={status !== "active"} onClick={() => acts.resetPassword(d)}>Reset password</Button>
@@ -107,6 +112,9 @@ function Header({ d, disabledAt }: { d: IdentityDetail; disabledAt?: string }) {
             label="More actions"
             items={[
               { label: "Open in access graph", icon: <Network size={14} />, onSelect: () => acts.openGraph(d) },
+              ...(can("identities.merge") && d.status !== "merged"
+                ? [{ label: "Merge into…", icon: <GitMerge size={14} />, onSelect: () => setMerging(true) }]
+                : []),
               { label: "Copy link", icon: <Link2 size={14} />, onSelect: () => { navigator.clipboard?.writeText(window.location.href).then(() => toast("Link copied"), () => toast("Couldn't copy the link", { kind: "error" })); } },
             ]}
             trigger={(t) => <Button size="sm" variant="ghost" icon={<Ellipsis size={16} />} label="More actions" {...t} />}
@@ -114,6 +122,25 @@ function Header({ d, disabledAt }: { d: IdentityDetail; disabledAt?: string }) {
         </div>
       </div>
       {rotate && <PlanDrawer title={`Rotate ${d.name}'s secrets`} secretIds={d.secrets.map((x) => x.id)} onClose={() => setRotate(false)} />}
+      {d.status === "merged" && (
+        <div className="mt">
+          <Callout tone="warn">
+            This identity was merged into another one. Its accounts and ownership moved there; its history stays here.{" "}
+            <Link to="/directory/matches?tab=merges">See merges</Link> to undo it.
+          </Callout>
+        </div>
+      )}
+      {merging && (
+        <MergeDialog
+          merged={d}
+          onClose={() => setMerging(false)}
+          onMerged={(survivor) => {
+            setMerging(false);
+            toast(`${d.name} merged`);
+            nav(`/directory/identities/${survivor}`);
+          }}
+        />
+      )}
       {edit && (
         <PreviewFormDrawer
           title={`Edit ${d.name}`}

@@ -73,6 +73,9 @@ const (
 	// bulk run. Held by policy_admin only; every route that uses it also asks
 	// for a fresh phishing-resistant sign-in (STEP_UP_POLICY).
 	PermSecretsRotate Permission = "secrets.rotate"
+	// account correlation (issue #160)
+	PermIdentitiesCorrelate Permission = "identities.correlate"
+	PermIdentitiesMerge     Permission = "identities.merge"
 )
 
 // rolePermissions is the static role -> permission map (Cedar-ready, §12.1).
@@ -85,7 +88,8 @@ var rolePermissions = map[Role][]Permission{
 	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead},
 	RolePolicyAdmin: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
 		PermReviewsDecide, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
-		PermSecretsRotate},
+		PermSecretsRotate,
+		PermIdentitiesCorrelate, PermIdentitiesMerge},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
 		PermConnectionsActivate},

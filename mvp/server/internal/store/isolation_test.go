@@ -295,7 +295,10 @@ var mutations = map[string]func(c *store.TenantTx, a, b map[string]int64) error{
 	"SetEdgeExpiry": func(c *store.TenantTx, a, _ map[string]int64) error {
 		return c.SetEdgeExpiry(a["edge:jit-active"], storetest.Now)
 	},
-	"DeleteEdge":    func(c *store.TenantTx, a, _ map[string]int64) error { return c.DeleteEdge(a["edge:0"]) },
+	"DeleteEdge": func(c *store.TenantTx, a, _ map[string]int64) error { return c.DeleteEdge(a["edge:0"]) },
+	"RevokeEdge": func(c *store.TenantTx, a, _ map[string]int64) error {
+		return c.RevokeEdge(a["edge:0"], storetest.Now, "test")
+	},
 	"DeleteJITEdge": func(c *store.TenantTx, a, _ map[string]int64) error { return c.DeleteJITEdge(a["edge:jit-active"]) },
 	"DeleteExpiredJITEdges": func(c *store.TenantTx, _, _ map[string]int64) error {
 		_, err := c.DeleteExpiredJITEdges(storetest.Now.Add(1000 * time.Hour))
@@ -666,9 +669,11 @@ func TestIsolation_EveryRepoMethodClassified(t *testing.T) {
 		"Tenant": true, "Context": true, "ReadOnly": true,
 		// Audit appends a domain event stamped by the executor; AuditLog is in listCases.
 		"Audit": true,
+		// RevokedGrants has its own test: the shared fixture holds no tombstones.
+		"RevokedGrants": true,
 	}
 	for _, m := range []map[string]bool{keys(listCases), keys(getCases), keys(naturalKeyGets), keys(countCases),
-		keys(mutations), keys(insertCases), readinessCovered(), keysCovered(), auditCovered(), authCovered(), rotationCovered()} {
+		keys(mutations), keys(insertCases), readinessCovered(), keysCovered(), auditCovered(), authCovered(), rotationCovered(), correlationCovered()} {
 		for k := range m {
 			covered[strings.SplitN(k, "/", 2)[0]] = true
 		}
@@ -711,5 +716,38 @@ func TestIsolation_AuditStampedWithOwnTenant(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// TestIsolation_RevokedGrantsOwnTenantOnly: a tombstone written in A is not
+// visible in B, and a revoke in B leaves A's grant in place.
+func TestIsolation_RevokedGrantsOwnTenantOnly(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	if err := f.DB.InTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
+		return c.RevokeEdge(f.A.IDs["edge:0"], storetest.Now, "test")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	inB(t, f, func(c *store.TenantTx) error {
+		got, err := c.RevokedGrants()
+		if err != nil {
+			return err
+		}
+		if len(got) != 0 {
+			t.Errorf("tenant B sees %d tombstones of tenant A", len(got))
+		}
+		return nil
+	})
+	if err := f.DB.ReadTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
+		got, err := c.RevokedGrants()
+		if err != nil {
+			return err
+		}
+		if len(got) != 1 || got[0].TenantID != f.A.ID {
+			t.Errorf("tenant A tombstones = %+v", got)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
