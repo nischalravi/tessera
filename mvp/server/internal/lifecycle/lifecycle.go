@@ -359,7 +359,7 @@ type Sponsored struct {
 // history event but without an audit event: the sponsorship's own audit event
 // in the caller's transaction records the change. An invited guest, who has
 // not claimed their account yet, may have one; a term that has ended may not
-// be revived.
+// be revived (a person who came back is active again first, sponsorship.Return).
 func ApplySponsored(tx *store.TenantTx, identityID int64, sp Sponsored, by Actor, now time.Time) (*store.Lifecycle, error) {
 	p, err := person(tx, identityID)
 	if err != nil {
@@ -381,7 +381,7 @@ func ApplySponsored(tx *store.TenantTx, identityID int64, sp Sponsored, by Actor
 	} else if err != nil {
 		return nil, err
 	}
-	if old != nil && old.EndedAt != nil {
+	if old != nil && old.EndedAt != nil && p.Status != "active" {
 		return nil, refuse(409, "ended", "this term has ended")
 	}
 	starts, ends, sponsor := sp.StartsAt, sp.EndsAt, sp.SponsorID

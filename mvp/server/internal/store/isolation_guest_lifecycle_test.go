@@ -173,6 +173,10 @@ var glMutations = map[string]func(c *store.TenantTx, a, b glRows) error{
 		_, err := c.ConsumeRenewalToken(a.hash, storetest.Now)
 		return err
 	},
+	"RestartDeprovisioning": func(c *store.TenantTx, a, _ glRows) error {
+		return c.RestartDeprovisioning(&store.Deprovisioning{IdentityID: a.other, Population: store.PopVisitor, EndedAt: storetest.Now,
+			GraceUntil: storetest.Now, RetentionUntil: storetest.Now, UpdatedAt: storetest.Now})
+	},
 	"ReviveIdentity": func(c *store.TenantTx, a, _ glRows) error { return c.ReviveIdentity(a.guest) },
 	"PurgeIdentityPII": func(c *store.TenantTx, a, _ glRows) error {
 		_, err := c.PurgeIdentityPII(a.guest, false)
@@ -296,7 +300,7 @@ func guestLifecycleCovered() map[string]bool {
 	for _, k := range []string{"GuestLifecycleSettings", "PutGuestLifecycleSettings", "MarkReminder", "CountReminders", "InsertRenewalToken",
 		"ConsumeRenewalToken", "RevokeRenewalTokens", "ExpireRenewalTokens", "RenewalTokensFor", "InsertLifecycleTask", "LifecycleTask",
 		"LifecycleTasks", "ResolveLifecycleTask", "InsertStepup", "Stepups", "ResolveStepup", "InsertDeprovisioning", "Deprovisioning",
-		"DeprovisioningList", "AdvanceDeprovisioning", "AwaitingDeprovisioning", "HeldBundleAccess", "ReviveIdentity",
+		"DeprovisioningList", "AdvanceDeprovisioning", "RestartDeprovisioning", "AwaitingDeprovisioning", "HeldBundleAccess", "ReviveIdentity",
 		"SetAccountStatus", "PurgeIdentityPII"} {
 		out[k] = true // TestIsolation_GuestLifecycleReads, and the writes in the seeds and mutation cases
 	}

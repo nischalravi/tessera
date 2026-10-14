@@ -14,6 +14,9 @@ const (
 	CompleteEdgeRemove     = "graph.edge_remove"
 	CompleteAccountDisable = "graph.account_disable"
 	CompleteGrantRevoke    = "grant.revoke"
+	// CompleteAccountDelete marks an account deleted once the target confirms the
+	// delete (the guest lifecycle's grace period, issue #74).
+	CompleteAccountDelete = "graph.account_delete"
 )
 
 // EdgeData is the argument of CompleteEdgeRemove.
@@ -49,6 +52,13 @@ func init() {
 			return err
 		}
 		return tx.DisableAccount(d.AccountID)
+	})
+	RegisterCompletion(CompleteAccountDelete, func(tx *store.TenantTx, _ time.Time, raw json.RawMessage) error {
+		var d AccountData
+		if err := json.Unmarshal(raw, &d); err != nil {
+			return err
+		}
+		return tx.SetAccountStatus(d.AccountID, "deleted")
 	})
 	RegisterCompletion(CompleteGrantRevoke, func(tx *store.TenantTx, now time.Time, raw json.RawMessage) error {
 		var d GrantRevokeData

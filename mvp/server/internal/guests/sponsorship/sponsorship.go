@@ -377,13 +377,20 @@ func (s *Service) Check(tx *store.TenantTx, by Actor, in Invite, existing *store
 }
 
 // notSponsorable says why an existing person cannot be taken on as a guest:
-// only people who are not employees or students, and have not left.
+// only people who are not current employees or students, and have not been
+// purged. A person who left (terminated or deprovisioned, within retention) may
+// be sponsored again, which is how a former employee becomes a retiree or
+// visiting guest and a returning guest gets their identity back (design §8.4,
+// §8.5): they are revived when the sponsorship is written.
 func notSponsorable(tx *store.TenantTx, guest *store.Identity) (code, msg string) {
+	returning := guest.Status == "terminated" || guest.Status == store.StageDeprovisioned
 	switch {
 	case guest.Type != "human":
 		return "guest_not_sponsorable", "only people can be sponsored"
-	case guest.Status != "active" && guest.Status != "invited":
+	case guest.Status != "active" && guest.Status != "invited" && !returning:
 		return "guest_not_sponsorable", "this person is no longer with the organization"
+	case returning:
+		return "", "" // the HR or student record, if any, says they left
 	}
 	if l, err := tx.LifecycleFor(guest.ID); err == nil && (l.WorkerType == store.WorkerEmployee || l.EndedAt != nil) {
 		return "guest_not_sponsorable", "this person is an employee or their term has ended"
@@ -431,3 +438,6 @@ func (s *Service) CanSponsor(tx *store.TenantTx, identityID int64) (bool, error)
 func MaxDays(pop Population, gp *store.GuestPopulation) int {
 	return affiliations.MaxDurationDays(pop.AffType, gp.MaxDurationDays)
 }
+
+// UserPtr is the signed-in user's id, nil when the actor is a job.
+func (a Actor) UserPtr() *string { return a.uid() }

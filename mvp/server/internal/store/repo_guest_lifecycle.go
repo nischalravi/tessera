@@ -244,11 +244,17 @@ var (
 			purged_at = CASE WHEN @stage = 'purged' THEN @now ELSE purged_at END,
 			returned_at = CASE WHEN @stage = 'returned' THEN @now ELSE returned_at END
 		WHERE tenant_id = @tenant AND identity_id = @identity_id AND stage = @from`)
-	// people whose last sponsorship ended and who have no stage row yet
+	glDeprovRestart = tq("guest_deprovisioning.restart", `
+		UPDATE guest_deprovisioning SET stage = 'grace', population = @population, held_access = @held_access,
+			ended_at = @ended_at, grace_until = @grace_until, retention_until = @retention_until, deprovisioned_at = NULL,
+			returned_at = NULL, updated_at = @updated_at
+		WHERE tenant_id = @tenant AND identity_id = @identity_id AND stage = 'returned'`)
+	// people whose last sponsorship ended and who have no running stage row (none, or one that returned)
 	glAwaiting = tq("guest_deprovisioning.awaiting", `
 		SELECT i.id FROM identities i WHERE i.tenant_id = @tenant AND i.status = 'terminated' AND i.type = 'human'
 			AND EXISTS (SELECT 1 FROM sponsorships s WHERE s.tenant_id = @tenant AND s.guest_identity_id = i.id)
-			AND NOT EXISTS (SELECT 1 FROM guest_deprovisioning d WHERE d.tenant_id = @tenant AND d.identity_id = i.id)
+			AND NOT EXISTS (SELECT 1 FROM guest_deprovisioning d WHERE d.tenant_id = @tenant AND d.identity_id = i.id
+				AND d.stage <> 'returned')
 		ORDER BY i.id`)
 
 	glReviveIdentity = tq("identities.revive", `
@@ -413,7 +419,7 @@ func (tx *TenantTx) PutGuestLifecycleSettings(s GuestLifecycleSettings, by strin
 		sql.Named("grace_contractor", s.GraceDays[PopContractor]), sql.Named("grace_volunteer", s.GraceDays[PopVolunteer]),
 		sql.Named("grace_partner", s.GraceDays[PopPartner]), sql.Named("retention_days", s.RetentionDays),
 		sql.Named("retention_days_visitor", s.RetentionDaysVisitor), sql.Named("keep_rematch_hashes", B(s.KeepRematchHashes)),
-		sql.Named("updated_by", optStr(&by)), sql.Named("updated_at", T(at)))
+		sql.Named("updated_by", emptyNil(by)), sql.Named("updated_at", T(at)))
 	return err
 }
 
@@ -499,7 +505,7 @@ func (tx *TenantTx) LifecycleTasks(f LifecycleTaskFilter) ([]*LifecycleTask, err
 // ResolveLifecycleTask closes an open task; ErrNotFound if it is unknown or already closed.
 func (tx *TenantTx) ResolveLifecycleTask(id, status, outcome, note string, by *string, now time.Time) error {
 	res, err := tx.exec(glTaskResolve, sql.Named("id", id), sql.Named("status", status), sql.Named("outcome", outcome),
-		sql.Named("note", optStr(&note)), sql.Named("resolved_by", optStr(by)), sql.Named("now", T(now)))
+		sql.Named("note", emptyNil(note)), sql.Named("resolved_by", optStr(by)), sql.Named("now", T(now)))
 	return affectedOne(res, err)
 }
 
@@ -528,6 +534,14 @@ func (tx *TenantTx) InsertDeprovisioning(d *Deprovisioning) error {
 		sql.Named("held_access", B(d.HeldAccess)), sql.Named("ended_at", T(d.EndedAt)), sql.Named("grace_until", T(d.GraceUntil)),
 		sql.Named("retention_until", T(d.RetentionUntil)), sql.Named("updated_at", T(d.UpdatedAt)))
 	return err
+}
+
+// RestartDeprovisioning begins a new cycle for a person who had returned.
+func (tx *TenantTx) RestartDeprovisioning(d *Deprovisioning) error {
+	res, err := tx.exec(glDeprovRestart, sql.Named("identity_id", d.IdentityID), sql.Named("population", d.Population),
+		sql.Named("held_access", B(d.HeldAccess)), sql.Named("ended_at", T(d.EndedAt)), sql.Named("grace_until", T(d.GraceUntil)),
+		sql.Named("retention_until", T(d.RetentionUntil)), sql.Named("updated_at", T(d.UpdatedAt)))
+	return affectedOne(res, err)
 }
 
 // Deprovisioning returns a person's stage, or ErrNotFound.
@@ -633,3 +647,10 @@ func (tx *TenantTx) PurgeIdentityPII(id int64, keepHashes bool) (PurgeReport, er
 	return r, err
 }
 
+// emptyNil stores an empty string as NULL.
+func emptyNil(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}

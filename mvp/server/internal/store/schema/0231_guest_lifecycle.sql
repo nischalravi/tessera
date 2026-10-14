@@ -28,7 +28,8 @@
 -- guest_deprovisioning is where a person stands after their last affiliation
 -- ended: in 'grace' (accounts disabled, access ended), 'deprovisioned' once the
 -- grace period passed, 'purged' once the retention period passed and the
--- operational PII was reduced to a tombstone, or 'returned' when they came back.
+-- operational PII was reduced to a tombstone, or 'returned' when they came back
+-- (a later end starts a new cycle on the same row).
 -- The audit ledger is never touched.
 --
 -- Tenant-owned like 0001_tenancy.sql: guard triggers at the end refuse a
@@ -163,10 +164,14 @@ BEGIN SELECT RAISE(ABORT, 'sponsorship_stepups: resolved rows and identity colum
 CREATE TRIGGER IF NOT EXISTS tg_sponsorship_stepups_no_delete BEFORE DELETE ON sponsorship_stepups
 BEGIN SELECT RAISE(ABORT, 'sponsorship_stepups are append-only'); END;
 
--- A person's stage only moves forward, and a purge is final.
+-- A person's stage only moves forward, and a purge is final. A person who
+-- returned starts a new cycle when their next affiliation ends: 'returned' goes
+-- back to 'grace' with the new dates, and only that.
 CREATE TRIGGER IF NOT EXISTS tg_guest_deprovisioning_immutable BEFORE UPDATE ON guest_deprovisioning
-WHEN OLD.stage IN ('purged','returned') OR NEW.tenant_id <> OLD.tenant_id OR NEW.identity_id <> OLD.identity_id
-	OR NEW.ended_at <> OLD.ended_at OR (OLD.stage = 'deprovisioned' AND NEW.stage = 'grace')
+WHEN OLD.stage = 'purged' OR NEW.tenant_id <> OLD.tenant_id OR NEW.identity_id <> OLD.identity_id
+	OR (OLD.stage = 'returned' AND NEW.stage <> 'grace')
+	OR (OLD.stage <> 'returned' AND NEW.ended_at <> OLD.ended_at)
+	OR (OLD.stage = 'deprovisioned' AND NEW.stage = 'grace')
 BEGIN SELECT RAISE(ABORT, 'guest_deprovisioning: final rows and identity columns are immutable'); END;
 CREATE TRIGGER IF NOT EXISTS tg_guest_deprovisioning_no_delete BEFORE DELETE ON guest_deprovisioning
 BEGIN SELECT RAISE(ABORT, 'guest_deprovisioning is append-only'); END;

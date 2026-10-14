@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1061,6 +1062,33 @@ func ExecuteLeaver(c *store.TenantTx, now time.Time, identityID int64) (Plan, er
 		}
 	}
 	return plan, c.TerminateIdentity(identityID, now)
+}
+
+// ExecuteLeaverSteps applies only the steps of the person's leaver plan whose
+// action is one of actions, for a later pass over what a leaver still holds (the
+// guest lifecycle's grace period reassigns ownership then, issue #74). It
+// terminates nobody and returns how many steps it applied.
+func ExecuteLeaverSteps(c *store.TenantTx, now time.Time, identityID int64, base string, actions ...string) (int, error) {
+	plan, err := LeaverPlan(c, now, identityID, false, nil)
+	if err != nil {
+		return 0, err
+	}
+	ident, err := c.Identity(identityID)
+	if err != nil {
+		return 0, err
+	}
+	steps, _ := getAny(plan, "steps").([]Step)
+	n := 0
+	for i, st := range steps {
+		if !slices.Contains(actions, stepStr(st, "action")) {
+			continue
+		}
+		if err := applyStep(c, now, ident, st, base, i); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
 }
 
 // joinerLifecycle records a non-employee joiner's worker type, end date and
