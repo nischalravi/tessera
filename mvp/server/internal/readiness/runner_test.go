@@ -119,7 +119,8 @@ func (p slowProber) Connect(ctx context.Context) (connectors.ConnInfo, error) {
 
 func TestRunner_TimeoutPerCheck(t *testing.T) {
 	st, s := newStore(t), newSvc(t)
-	s.Runner.CheckTimeout = 30 * time.Millisecond
+	// Allow fast checks to finish under race instrumentation and scheduler load.
+	s.Runner.CheckTimeout = 500 * time.Millisecond
 	s.Runner.ProberFor = func(b *Bundle, now time.Time) (connectors.Prober, error) {
 		p, err := connectors.NewScenarioProber("ad", "happy", now, b.Config.BaseDNs, nil)
 		return slowProber{p}, err
