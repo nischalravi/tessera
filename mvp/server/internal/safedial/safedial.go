@@ -53,6 +53,9 @@ var (
 	ErrBlockedAddress = errors.New("safedial: destination address not allowed")
 	// ErrHost: the host is empty or not a plain host name or IP.
 	ErrHost = errors.New("safedial: host not allowed")
+	// ErrHandshake: the TCP connection opened but the TLS handshake failed
+	// (no TLS on the port, TLS older than 1.2, or a verification failure).
+	ErrHandshake = errors.New("safedial: TLS handshake failed")
 	// ErrNoTLS: the connection is not (yet) protected by TLS 1.2 or later.
 	ErrNoTLS = errors.New("safedial: connection is not protected by TLS")
 )
@@ -188,7 +191,7 @@ func (d *Dialer) Dial(ctx context.Context, host string, port int, inspect bool) 
 		defer cancel()
 		if err := tc.HandshakeContext(hctx); err != nil {
 			_ = raw.Close()
-			return nil, err
+			return nil, fmt.Errorf("%w: %w", ErrHandshake, err)
 		}
 		c.Conn = tc
 		if err := c.SetTLS(tc.ConnectionState()); err != nil {
