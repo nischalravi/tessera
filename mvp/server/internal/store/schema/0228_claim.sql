@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS claim_sessions (
   key_jwk TEXT NOT NULL,
   key_jkt TEXT NOT NULL,
   nonce TEXT NOT NULL CHECK (length(nonce) >= 16),
-  step TEXT NOT NULL CHECK (step IN ('verify_contact','existing_account','credential','complete')),
+  step TEXT NOT NULL CHECK (step IN ('verify_contact','verify_identity','existing_account','credential','complete')),
   verified TEXT NOT NULL DEFAULT '{}',
   credential_subject TEXT,
   login_txn_id TEXT,
