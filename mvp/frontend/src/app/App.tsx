@@ -60,6 +60,7 @@ const ConnectionDetail = named(connections, "ConnectionDetail");
 const ValidationResults = named(connections, "ValidationResults");
 const ReconReport = named(connections, "ReconReport");
 const AdminSectionPage = named(admin, "AdminSectionPage");
+const SharedSignals = named(() => import("../features/admin/SharedSignals"), "SharedSignals");
 
 /** Redirect an old route to its new home, keeping the query string (e.g. /graph?identity=5). */
 function Moved({ to }: { to: string }) {
@@ -127,6 +128,7 @@ export default function App() {
                     <Route path="/admin/connections/:id" element={<ConnectionDetail />} />
                     <Route path="/admin/connections/:id/validation/:run" element={<ValidationResults />} />
                     <Route path="/admin/connections/:id/reconciliation/:run" element={<ReconReport />} />
+                    <Route path="/admin/shared-signals" element={<SharedSignals />} />
                     <Route path="/admin/:section" element={<AdminSectionPage />} />
 
                     {/* routes from the previous UI */}

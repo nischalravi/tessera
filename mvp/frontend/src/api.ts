@@ -602,6 +602,91 @@ export interface ContainmentRetry {
 export const retryContainmentNow = (retryId: string) =>
   api<{ retry: ContainmentRetry }>(`/containment-retries/${encodeURIComponent(retryId)}/retry-now`, {});
 
+// ------------------------------------------------ shared signals receiver (issue #114)
+export type SsfStatus = "enabled" | "paused" | "disabled";
+export type SsfEventStatus = "received" | "matched" | "actioned" | "no_action" | "unmatched" | "ignored" | "failed";
+
+/** A transmitter (an SSF stream). It never carries a secret: `secret_set` says one is stored. */
+export interface SsfTransmitter {
+  id: string;
+  name: string;
+  issuer: string;
+  audience: string;
+  jwks_url: string;
+  inline_jwks: boolean;
+  delivery: "push" | "poll";
+  poll_url: string;
+  verification_url: string;
+  subject_system: string;
+  connection_id: string | null;
+  status: SsfStatus;
+  secret_set: boolean;
+  api_token_set: boolean;
+  /** Push streams: the path the transmitter delivers to (on this server's origin). */
+  receiver_path?: string;
+  last_event_at: string | null;
+  last_error: string;
+  last_error_at: string | null;
+  last_polled_at: string | null;
+  verification_pending: boolean;
+  verified_at: string | null;
+  pending_acks: number;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** One received event and what became of it. Latencies are in milliseconds. */
+export interface SsfEvent {
+  id: string;
+  transmitter_id: string;
+  jti: string;
+  via: "push" | "poll";
+  event_type: string;
+  /** Short name: session-revoked, credential-change, account-disabled, verification or unknown. */
+  event: string;
+  subject_format: string;
+  subject: string;
+  identity_id: number | null;
+  status: SsfEventStatus;
+  outcome: string;
+  steps: number;
+  steps_failed: number;
+  received_at: string;
+  iat_at: string;
+  actioned_at: string | null;
+  /** Receipt to the last action done. */
+  latency_ms: number | null;
+  /** The SET's iat to the last action done. */
+  iat_latency_ms: number | null;
+}
+
+export interface SsfInput {
+  name: string;
+  issuer: string;
+  audience: string;
+  delivery: "push" | "poll";
+  subject_system: string;
+  status?: SsfStatus;
+  jwks_url?: string;
+  /** Inline public keys: a JWKS document as a string. */
+  jwks?: unknown;
+  poll_url?: string;
+  verification_url?: string;
+  /** Push: the secret the transmitter presents (blank: generate). Poll: the token Tessera presents. */
+  secret?: string;
+  rotate_secret?: boolean;
+  api_token?: string;
+  discover?: boolean;
+}
+/** `receiver_secret` is present once, when Tessera generated the secret of a push stream. */
+export interface SsfSaved { transmitter: SsfTransmitter; receiver_secret?: string }
+
+export const createSsfTransmitter = (input: SsfInput) => api<SsfSaved>("/ssf/transmitters", input);
+export const updateSsfTransmitter = (id: string, input: SsfInput) => api<SsfSaved>(`/ssf/transmitters/${encodeURIComponent(id)}`, input, "PUT");
+export const deleteSsfTransmitter = (id: string) => api<{ deleted: boolean }>(`/ssf/transmitters/${encodeURIComponent(id)}`, undefined, "DELETE");
+export const verifySsfTransmitter = (id: string) => api<{ requested: boolean }>(`/ssf/transmitters/${encodeURIComponent(id)}/verify`, {});
+
 export const simulate = (body: { remove_edge_ids?: number[]; add_edges?: { src: string; dst: string; duration_hours?: number }[]; disable_account_ids?: number[] }) =>
   api<SimResult>("/simulate", { remove_edge_ids: [], add_edges: [], disable_account_ids: [], ...body });
 
