@@ -53,12 +53,14 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 	"github.com/nischalravi/tessera/mvp/server/internal/safedial"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/seed"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -283,7 +285,13 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	rsvc := readiness.NewService(templates, string(cfg.Env))
 	rsvc.Runner.Scenario = scenario
 	rsvc.Runner.Live.Sealer, rsvc.Runner.Live.Allow = sealer, allow
-	srv := api.New(api.Config{Store: st, Clock: clock, Policies: loader, Logger: logger,
+	// Outbound calls of the kill switch (containment) use the SSRF-guarded client.
+	outbound, err := safehttp.ForConfig(cfg)
+	if err != nil {
+		return err
+	}
+	srv := api.New(api.Config{Containment: &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock},
+		Store: st, Clock: clock, Policies: loader, Logger: logger,
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
 		HSTS: cfg.IsProd(), Env: cfg.Env, DevLogin: cfg.DevLogin, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, Readiness: rsvc, AuditAnchor: anchorURL})
 	checkpointer := &audit.Checkpointer{DB: st, Sealer: sealer, Sink: sink, Clock: timeutil.System, Issuer: cfg.PublicURL,
