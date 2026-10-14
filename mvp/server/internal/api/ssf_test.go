@@ -165,6 +165,24 @@ func (a *fakeAWS) Calls() []string {
 	return append([]string(nil), a.calls...)
 }
 
+func (a *fakeAWS) SetDelay(d time.Duration) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.delay = d
+}
+
+func (a *fakeAWS) Updates() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]string(nil), a.updates...)
+}
+
+func (a *fakeAWS) Assignments() []map[string]string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]map[string]string(nil), a.assignments...)
+}
+
 func (a *fakeAWS) Count(op string) int {
 	n := 0
 	for _, c := range a.Calls() {
@@ -362,18 +380,18 @@ func seedSSFTransmitters(t testing.TB, f *storetest.Fixture) map[string]string {
 // both, and records the event with its latency.
 func TestSSFEndToEnd_OktaSessionRevokedEndsAWSSession(t *testing.T) {
 	e := newSSFEnv(t)
-	e.aws.delay = 25 * time.Millisecond // the provider takes a moment: the latency is real
+	e.aws.SetDelay(25 * time.Millisecond) // the provider takes a moment: the latency is real
 	rec := e.deliver(e.key.sign(t, sessionRevoked("jti-e2e-1", "alice", nil)))
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("push: %d %s", rec.Code, rec.Body)
 	}
 	// the SCP was updated with her user id, next to the placeholder
-	if len(e.aws.updates) != 1 || !strings.Contains(e.aws.updates[0], `"identitystore:userId":["Add user ID here","`+awsUserID+`"]`) {
-		t.Fatalf("SCP updates: %v", e.aws.updates)
+	if updates := e.aws.Updates(); len(updates) != 1 || !strings.Contains(updates[0], `"identitystore:userId":["Add user ID here","`+awsUserID+`"]`) {
+		t.Fatalf("SCP updates: %v", e.aws.Updates())
 	}
 	// her assignments were deleted
-	if len(e.aws.assignments) != 0 || e.aws.Count("DeleteAccountAssignment") != 2 {
-		t.Errorf("assignments left: %v (%d deletes)", e.aws.assignments, e.aws.Count("DeleteAccountAssignment"))
+	if len(e.aws.Assignments()) != 0 || e.aws.Count("DeleteAccountAssignment") != 2 {
+		t.Errorf("assignments left: %v (%d deletes)", e.aws.Assignments(), e.aws.Count("DeleteAccountAssignment"))
 	}
 	// verification passed: the policy and the assignments were read again after the revoke
 	calls := e.aws.Calls()
@@ -527,7 +545,6 @@ func TestSSFPush_RevealsNothing(t *testing.T) {
 	if err := e.f.DB.InTenant(context.Background(), e.f.B.ID, func(c *store.TenantTx) error {
 		x := &store.SSFTransmitter{Name: "B's", Issuer: ssfIssuer, Audience: ssfAudience, JWKSInline: e.key.jwks(), Delivery: store.SSFPush,
 			SecretEnc: []byte("sealed"), SubjectSystem: "okta", Status: store.SSFEnabled, CreatedBy: "b"}
-		bID = x.ID
 		if err := c.InsertSSFTransmitter(x, storetest.Now); err != nil {
 			return err
 		}
