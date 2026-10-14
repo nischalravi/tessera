@@ -85,6 +85,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if cmd == "audit" {
 		return auditCmd(ctx, args, stdout, stderr)
 	}
+	if cmd == "migration" {
+		return migrationCmd(args, stdout, stderr)
+	}
 	fset := flag.NewFlagSet("tessera "+cmd, flag.ContinueOnError)
 	fset.SetOutput(stderr)
 	var o options
@@ -97,7 +100,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	if cmd != "seed" && cmd != "serve" {
-		return fmt.Errorf("unknown command %q (want serve, seed, readiness or audit)", cmd)
+		return fmt.Errorf("unknown command %q (want serve, seed, readiness, audit or migration)", cmd)
 	}
 	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	// Typed configuration and the production guard rails come first: an
