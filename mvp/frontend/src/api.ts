@@ -729,7 +729,7 @@ export const lifecycle = {
   sweep: () => api<{ warned: number; ended: number }>("/lifecycle/sweep", {}),
 };
 
-export const simulate = (body: { remove_edge_ids?: number[]; add_edges?: { src: string; dst: string }[]; disable_account_ids?: number[] }) =>
+export const simulate = (body: { remove_edge_ids?: number[]; add_edges?: { src: string; dst: string; duration_hours?: number }[]; disable_account_ids?: number[] }) =>
   api<SimResult>("/simulate", { remove_edge_ids: [], add_edges: [], disable_account_ids: [], ...body });
 
 // ------------------------------------------------------------ formatting

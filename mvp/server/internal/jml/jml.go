@@ -623,7 +623,7 @@ func applyStep(c *store.TenantTx, now time.Time, ident *store.Identity, st Step)
 		err = c.DisableAccount(id)
 	case "remove_grant":
 		id, _ := stepInt(st, "edge_id")
-		err = c.DeleteEdge(id)
+		err = c.RevokeEdge(id, now, "jml")
 	case "add_grant":
 		err = addGrant(c, now, ident, st)
 	case "cancel_jit":
