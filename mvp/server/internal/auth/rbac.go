@@ -73,6 +73,8 @@ const (
 	PermIdentitiesMerge     Permission = "identities.merge"
 	// kill switch (issue #106)
 	PermIdentitiesContain Permission = "identities.contain"
+	// Shared Signals receiver (issue #114): configure SSF transmitters and streams.
+	PermSSFConfigure Permission = "ssf.configure"
 )
 
 // rolePermissions is the static role -> permission map (Cedar-ready, §12.1).
@@ -85,7 +87,7 @@ var rolePermissions = map[Role][]Permission{
 	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead},
 	RolePolicyAdmin: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
 		PermReviewsDecide, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
-		PermIdentitiesCorrelate, PermIdentitiesMerge, PermIdentitiesContain},
+		PermIdentitiesCorrelate, PermIdentitiesMerge, PermIdentitiesContain, PermSSFConfigure},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
 		PermConnectionsActivate},

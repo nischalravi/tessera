@@ -59,6 +59,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/seed"
+	"github.com/nischalravi/tessera/mvp/server/internal/ssf"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 	"github.com/nischalravi/tessera/mvp/server/policies"
@@ -272,7 +273,9 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if err != nil {
 		return err
 	}
-	srv := api.New(api.Config{Containment: &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock},
+	containmentSvc := &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock}
+	srv := api.New(api.Config{Containment: containmentSvc,
+		SSF:   &ssf.Service{HTTP: outbound, Sealer: sealer, Clock: clock, Containment: containmentSvc},
 		Store: st, Clock: clock, Policies: loader, Logger: logger,
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
 		HSTS: cfg.IsProd(), Env: cfg.Env, DevLogin: cfg.DevLogin, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, AuditAnchor: anchorURL})

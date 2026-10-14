@@ -140,7 +140,7 @@ var (
 	ssfEventsRecent = tq("ssf_events.recent", `
 		SELECT `+ssfEventCols+` FROM ssf_events e
 		WHERE e.tenant_id = @tenant AND (@transmitter_id = '' OR e.transmitter_id = @transmitter_id)
-		ORDER BY e.received_at DESC, e.id DESC LIMIT @limit`)
+		ORDER BY e.received_at DESC, e.rowid DESC LIMIT @limit`)
 	ssfEventUpdate = tq("ssf_events.update", `
 		UPDATE ssf_events SET identity_id = @identity_id, account_id = @account_id, status = @status, outcome = @outcome,
 			steps = @steps, steps_failed = @steps_failed, actioned_at = @actioned_at, latency_ms = @latency_ms,

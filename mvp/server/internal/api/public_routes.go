@@ -42,6 +42,8 @@ var publicRoutes = []string{
 	"GET /api/health",
 	"GET /api/auth/dev-login",
 	"POST /api/auth/dev-login",
+	// SSF push delivery (RFC 8935): authenticated by the stream's bearer secret (ssf.go).
+	"POST /public/t/{slug}/ssf/{transmitter_id}/events",
 }
 
 // PublicRoutes returns the allow-list.

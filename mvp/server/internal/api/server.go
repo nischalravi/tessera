@@ -27,6 +27,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
+	"github.com/nischalravi/tessera/mvp/server/internal/ssf"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
@@ -94,6 +95,10 @@ type Config struct {
 	// grants). Nil: a service with no outbound client, so every containment
 	// step is a manual task.
 	Containment *containment.Service
+	// SSF is the Shared Signals receiver (issue #114): push endpoint, stream
+	// management, polling. Nil: a service with no outbound client and no key,
+	// which refuses to hold secrets, so no stream can be configured.
+	SSF *ssf.Service
 	// AuditAppend overrides how the audit middleware writes http.request
 	// events (tests inject failures). Nil: the store.
 	AuditAppend func(ctx context.Context, t tenancy.ID, e store.AuditEvent) error
@@ -112,6 +117,8 @@ type Server struct {
 	readiness *readiness.Service
 	// containment is the kill switch (issue #106); never nil.
 	containment *containment.Service
+	// ssf is the Shared Signals receiver (issue #114); never nil.
+	ssf *ssf.Service
 }
 
 // New builds a server.
@@ -148,7 +155,13 @@ func New(cfg Config) *Server {
 	if cfg.Containment.Clock == nil {
 		cfg.Containment.Clock = cfg.Clock
 	}
-	s := &Server{cfg: cfg, containment: cfg.Containment, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
+	if cfg.SSF == nil {
+		cfg.SSF = &ssf.Service{Containment: cfg.Containment}
+	}
+	if cfg.SSF.Clock == nil {
+		cfg.SSF.Clock = cfg.Clock
+	}
+	s := &Server{cfg: cfg, ssf: cfg.SSF, containment: cfg.Containment, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
 		limits: newLimiters(cfg.RateLimits)}
 	s.authn = &auth.Authenticator{DB: cfg.Store, Clock: func() time.Time { return s.clock() },
 		Cookies: auth.Cookies{Insecure: cfg.InsecureCookie}}
@@ -156,6 +169,7 @@ func New(cfg Config) *Server {
 	s.registerAuditRoutes()
 	s.registerCorrelationRoutes()
 	s.registerContainmentRoutes()
+	s.registerSSFRoutes()
 	s.registerReadinessRoutes()
 	s.registerAuthRoutes()
 	s.checkPublicRoutes()
@@ -228,6 +242,9 @@ func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
 		}
 		if err := s.containment.SweepRetries(audit.WithSystemActor(ctx, "containment.sweeper"), s.store, "containment.sweeper"); err != nil && ctx.Err() == nil {
 			s.log.Error("containment retry sweep failed", "err", err)
+		}
+		if err := s.ssf.PollAll(audit.WithSystemActor(ctx, "ssf.poller"), s.store); err != nil && ctx.Err() == nil {
+			s.log.Error("shared signals poll failed", "err", err)
 		}
 		select {
 		case <-ctx.Done():
@@ -708,7 +725,7 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		default:
 			h.Set("Content-Security-Policy", cspAPI)
 		}
-		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/t/") {
+		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/t/") || strings.HasPrefix(r.URL.Path, "/public/") {
 			h.Set("Cache-Control", "no-store")
 		}
 		if s.cfg.HSTS {

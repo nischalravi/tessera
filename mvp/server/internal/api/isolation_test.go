@@ -174,6 +174,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/api/containment-retries/{retry_id}/retry-now" {
 			continue // TestContainmentRetriesAPI (a UUID, not a fixture id)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/ssf/transmitters/{id}") || strings.HasPrefix(rt.Pattern, "/public/t/") {
+			continue // TestSSFAPI_CrossTenant (UUIDs, not fixture ids)
+		}
 		if rt.Pattern == "/api/auth/sessions/{session_id}" {
 			continue // TestIsolation_SessionCookieScoped (a UUID, not a fixture id)
 		}
@@ -229,6 +232,7 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 	if rec := serveOnce(isolationServer(t, f, f.A.ID).Handler(), http.MethodGet, "/api/identities", ""); !leaks(rec.Body.String()) {
 		t.Fatal("tenant A's own identities do not carry the sentinel; the leak check would never fire")
 	}
+	ssfIDs := seedSSFTransmitters(t, f) // each tenant's own, A's carrying the sentinel
 	srv := isolationServer(t, f, f.B.ID)
 	h := srv.Handler()
 	b := f.B.IDs
@@ -240,6 +244,7 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		"/api/reviews/campaigns/{campaign_id}":      fmt.Sprint(b["campaign"]),
 		"/api/hris/events/{event_id}/plan":          fmt.Sprint(b["hris:leaver"]),
 		"/api/audit/events/{event_id}/proof":        latestEventID(t, f.DB, f.B.ID),
+		"/api/ssf/transmitters/{id}":                ssfIDs[f.B.Slug],
 	}
 	checked := 0
 	for _, rt := range srv.Routes() {
