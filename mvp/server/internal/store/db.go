@@ -88,6 +88,8 @@ var tables = []string{
 	"account_links", "identity_merges",
 	// identity containment (schema/0205_containment.sql)
 	"containment_credentials", "containment_retries",
+	// third-party OAuth app inventory (schema/0207_oauth_apps.sql)
+	"oauth_apps", "oauth_grants", "oauth_sync_state",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was
