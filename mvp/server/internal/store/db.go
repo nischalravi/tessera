@@ -91,6 +91,8 @@ var tables = []string{
 	"business_role_requests",
 	// attribute conditions (schema/0221_abac.sql)
 	"abac_policies", "abac_policy_versions", "abac_bindings",
+	// account correlation (schema/0204_correlation.sql)
+	"account_links", "identity_merges",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was
