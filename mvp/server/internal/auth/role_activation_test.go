@@ -193,7 +193,7 @@ func TestRolePermissionsMatchDesign(t *testing.T) {
 		auth.RoleViewer:      "graph.read",
 		auth.RoleOperator:    "graph.read jit.request jit.decide jit.deny_revoke reviews.manage reviews.decide hris.simulate_event jobs.read provisioning.read",
 		auth.RoleAuditor:     "graph.read audit.read audit.verify admin.read connections.read jobs.read provisioning.read",
-		auth.RolePolicyAdmin: "graph.read jit.request jit.decide jit.deny_revoke reviews.manage reviews.decide hris.simulate_event grants.revoke hris.execute jit.sweep connectors.sync jobs.read provisioning.read provisioning.manage identities.correlate identities.merge",
+		auth.RolePolicyAdmin: "graph.read jit.request jit.decide jit.deny_revoke reviews.manage reviews.decide hris.simulate_event grants.revoke hris.execute jit.sweep connectors.sync jobs.read provisioning.read provisioning.manage identities.correlate identities.merge identities.contain",
 		auth.RoleTenantAdmin: "graph.read audit.read audit.verify admin.read admin.change.request admin.change.approve admin.users.disable admin.sessions.revoke connections.read connections.manage connections.activate jobs.read provisioning.read provisioning.manage",
 		auth.RoleBreakGlass:  "admin.read breakglass.recover",
 	}
