@@ -57,6 +57,7 @@ const DeploymentHealth = named(() => import("../features/insights/DeploymentHeal
 const Policies = named(() => import("../features/governance/Policies"), "Policies");
 const Reviews = named(() => import("../features/governance/Reviews"), "Reviews");
 const Lifecycle = named(() => import("../features/governance/Lifecycle"), "Lifecycle");
+const GuestLifecycle = named(() => import("../features/governance/GuestLifecycle"), "GuestLifecycle");
 const Workflows = named(() => import("../features/governance/Workflows"), "Workflows");
 const Admin = named(admin, "Admin");
 const ConnectionsList = named(connections, "ConnectionsList");
@@ -76,9 +77,20 @@ function Moved({ to }: { to: string }) {
 
 // the guest's claim page: public, outside the admin shell and its sign-in
 const ClaimPage = lazy(() => import("../public/claim/ClaimPage"));
+// the guest's "request renewal" page (issue #74): public, one button, no session
+const RenewPage = lazy(() => import("../public/renew/RenewPage"));
 
 export default function App() {
   const { pathname } = useLocation();
+  if (pathname === "/renew") {
+    return (
+      <ThemeProvider>
+        <Suspense fallback={<PageSkeleton />}>
+          <RenewPage />
+        </Suspense>
+      </ThemeProvider>
+    );
+  }
   if (pathname === "/claim") {
     return (
       <ThemeProvider>
@@ -141,6 +153,7 @@ export default function App() {
                     <Route path="/governance/policies" element={<Policies />} />
                     <Route path="/governance/reviews" element={<Reviews />} />
                     <Route path="/governance/lifecycle" element={<Lifecycle />} />
+                    <Route path="/governance/guest-lifecycle" element={<GuestLifecycle />} />
                     <Route path="/governance/workflows" element={<Workflows />} />
 
                     <Route path="/admin" element={<Admin />} />

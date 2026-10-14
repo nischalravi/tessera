@@ -649,6 +649,73 @@ export interface MatchingSettings {
 export const putMatchingSettings = (s: Pick<MatchingSettings, "auto_link_tier_b" | "require_review_tier_a" | "unmerge_window_days">) =>
   api<MatchingSettings>("/admin/matching", s, "PUT");
 
+// ------------------------------------------------ guest lifecycle (issue #74)
+
+export type GuestLifecycleBucket =
+  | "expiring_30" | "expiring_14" | "expiring_3" | "renewal_requests" | "stepup_required" | "pending_transfer"
+  | "auto_ended" | "suspended" | "dual_status" | "in_grace" | "deprovisioned" | "purged";
+export interface GuestLifecycleSettings {
+  sponsor_reminder_days: number[];
+  guest_reminder_days: number;
+  transfer_deadline_days: number;
+  on_sponsor_departure: "end" | "suspend";
+  conversion_dual_status: "end" | "sponsor_confirms";
+  grace_days: Record<"visitor" | "contractor" | "volunteer" | "partner", number>;
+  retention_days: number;
+  retention_days_visitor: number;
+  keep_rematch_hashes: boolean;
+  updated_at: string | null;
+}
+export interface GuestLifecycleOverview {
+  buckets: GuestLifecycleBucket[];
+  counts: Record<GuestLifecycleBucket, number>;
+  settings: GuestLifecycleSettings;
+}
+export interface GuestLifecycleItem {
+  sponsorship_id?: string;
+  task_id?: string;
+  task_kind?: "sponsor_transfer" | "renewal_request" | "dual_status";
+  guest: { id: number; name: string };
+  sponsor?: { id: number; name: string };
+  population?: string;
+  /** Sponsorship status, or the deprovisioning stage. */
+  status?: string;
+  ends_at?: string;
+  days_left?: number;
+  deadline?: string;
+  outcome?: string;
+  trigger?: string;
+  grace_until?: string;
+  retention_until?: string;
+  held_access?: boolean;
+  required_ial?: number;
+  can_act: boolean;
+}
+export type GuestTaskAction = "accept" | "decline" | "keep" | "confirm" | "dismiss";
+export const guestLifecycle = {
+  resolveTask: (taskId: string, action: GuestTaskAction) =>
+    api<{ id: string; kind: string; sponsorship_id: string; status: string; outcome: string | null }>(
+      `/guest-lifecycle/tasks/${encodeURIComponent(taskId)}/resolve`, { action }),
+  putSettings: (s: Omit<GuestLifecycleSettings, "updated_at">) => api<GuestLifecycleSettings>("/admin/guest-lifecycle", s, "PUT"),
+};
+
+/**
+ * The guest's "request renewal" link (/renew#t=...): public, no session. The answer is the same
+ * whether or not the token was good, so the page says only that the request was received.
+ */
+export async function requestRenewal(slug: string, token: string): Promise<void> {
+  const res = await fetch(`/public/t/${encodeURIComponent(slug)}/guest/renewal-request`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    credentials: "same-origin",
+    cache: "no-store",
+    referrerPolicy: "no-referrer",
+    body: JSON.stringify({ token }),
+  });
+  if (res.status === 429) throw new Error("Too many tries. Wait a while and try again.");
+  if (!res.ok && res.status !== 202) throw new Error("Something went wrong. Try again.");
+}
+
 // ------------------------------------------------ affiliations and identifiers (issue #64)
 
 export type AffiliationType = "employee" | "student" | "applicant" | "admit" | "prehire" | "contractor" | "guest_visitor" | "volunteer" | "partner" | "alum" | "retiree";
@@ -1039,7 +1106,7 @@ export const lifecycle = {
 // ---------------------------------------------------------------- guest sponsorships (issue #65)
 
 export type GuestPopulationKey = "visitor" | "contractor" | "volunteer" | "partner";
-export type SponsorshipStatus = "requested" | "pending_approval" | "active" | "transfer_pending" | "ended" | "revoked" | "rejected";
+export type SponsorshipStatus = "requested" | "pending_approval" | "active" | "transfer_pending" | "suspended" | "ended" | "revoked" | "rejected";
 /** The status, with a running sponsorship told apart as upcoming, active or ending (within 14 days). */
 export type SponsorshipState = SponsorshipStatus | "upcoming" | "ending";
 export interface BundleItem { group_id: number; system: string; name: string; risk: Risk; privileged: boolean }
@@ -1071,8 +1138,12 @@ export interface SponsorshipEvent {
   at: string;
 }
 export type InvitationState = "ready" | "sent" | "claiming" | "expired" | "claimed" | "revoked";
+/** A renewal held until the guest's identity assurance reaches `required_ial` (issue #74). */
+export interface SponsorshipStepup { required_ial: number; requested_ends_at: string; justification: string; requested_at: string }
 export interface Sponsorship {
   id: string;
+  /** Set while a renewal waits for a step-up: the access does not extend meanwhile. */
+  stepup?: SponsorshipStepup;
   status: SponsorshipStatus;
   state: SponsorshipState;
   guest: PersonRef & { email: string | null };

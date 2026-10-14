@@ -167,6 +167,12 @@ function SponsorshipDetail({ id, onChanged }: { id: string; onChanged: () => voi
         </div>
       )}
       {s.status === "pending_approval" && <Callout tone="warn">A second person must approve this sponsorship before the guest gets any standing or access. {s.can_approve ? "" : "Approvers have been asked."}</Callout>}
+      {s.stepup && (
+        <Callout tone="info">
+          The renewal to {fmtDay(s.stepup.requested_ends_at)} is recorded but held: {s.guest.name} must verify their identity at IAL {s.stepup.required_ial} first. Access does not extend until then.
+        </Callout>
+      )}
+      {s.status === "suspended" && <Callout tone="warn">Suspended after the sponsor left and nobody took over. It gives no access. A sponsor admin can end it; it ends at its own end date.</Callout>}
       {s.status === "transfer_pending" && s.transfer_to && (
         <Callout tone="warn">Waiting for {s.transfer_to.name} to accept, until {fmtDate(s.transfer_deadline)}. If nobody accepts, the sponsorship ends then.</Callout>
       )}

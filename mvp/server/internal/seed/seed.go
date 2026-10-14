@@ -161,6 +161,10 @@ type Tenant struct {
 	// DemoMatching adds a guest invitation that matches an employee, so the
 	// review queue has an item (needs Identifiers). Off for tests.
 	DemoMatching bool
+	// DemoGuestLifecycle adds a sponsorship that expires in 10 days and one whose
+	// sponsor has left, so Governance → Guest lifecycle has rows (needs
+	// Identifiers). Off for tests.
+	DemoGuestLifecycle bool
 }
 
 // Larkspur is the Larkspur Labs demo tenant over conns.
@@ -249,6 +253,11 @@ func Run(ctx context.Context, db *store.DB, now time.Time, policies []*policy.Po
 			}
 			if t.DemoMatching {
 				if err := seedMatching(c, t.Identifiers, skip, now); err != nil {
+					return err
+				}
+			}
+			if t.DemoGuestLifecycle {
+				if err := seedGuestLifecycle(c, t.Identifiers, skip, now); err != nil {
 					return err
 				}
 			}

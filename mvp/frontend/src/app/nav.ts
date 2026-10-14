@@ -67,9 +67,10 @@ export const RAIL: RailGroup[] = [
       { id: "guests", label: "Guests I sponsor", icon: UserPlus, path: "/access/guests", keywords: "guest sponsor invite visitor contractor volunteer partner sponsorship bulk csv approve transfer" },
       { id: "jit", label: "Just-in-time", icon: Timer, path: "/access/jit", keywords: "jit elevation temporary privileged break glass" },
       {
-        id: "reviews", label: "Access reviews", icon: ClipboardCheck, path: "/governance/reviews", also: ["/governance/lifecycle", "/governance/workflows"], keywords: "certification campaigns attestation",
+        id: "reviews", label: "Access reviews", icon: ClipboardCheck, path: "/governance/reviews", also: ["/governance/lifecycle", "/governance/guest-lifecycle", "/governance/workflows"], keywords: "certification campaigns attestation",
         pages: [
           { path: "/governance/lifecycle", label: "Lifecycle", keywords: "joiner mover leaver jml hris workday onboarding offboarding" },
+          { path: "/governance/guest-lifecycle", label: "Guest lifecycle", keywords: "guest sponsorship expiry renewal reminder transfer sponsor leaver conversion deprovision grace retention purge step-up" },
           { path: "/governance/workflows", label: "Workflows", keywords: "approval routing escalation", preview: true },
         ],
       },

@@ -213,7 +213,8 @@ func seedDB(ctx context.Context, path string, cfg *config.Config, clock timeutil
 	keyer := identifiers.NewKeyer(sealer)
 	for i := range tenants {
 		tenants[i].Identifiers = keyer
-		tenants[i].DemoMatching = tenants[i].Slug == seed.LarkspurSlug // an item for the Identity matches queue
+		tenants[i].DemoMatching = tenants[i].Slug == seed.LarkspurSlug       // an item for the Identity matches queue
+		tenants[i].DemoGuestLifecycle = tenants[i].Slug == seed.LarkspurSlug // rows for Governance → Guest lifecycle
 	}
 	stats, err := seed.Run(ctx, st, now, pols, tenants)
 	if err != nil {

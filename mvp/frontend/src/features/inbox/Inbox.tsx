@@ -278,6 +278,21 @@ function IdentityMatchBanner() {
   );
 }
 
+/** Guest lifecycle tasks (issue #74) the signed-in person may decide: a sponsor left, a guest asked for a renewal, a hire. */
+function GuestTaskBanner() {
+  const { data } = useApi<{ tasks: { task_id?: string }[] }>("/guest-lifecycle/tasks");
+  if (!data || data.tasks.length === 0) return null;
+  const n = data.tasks.length;
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <Callout tone="warn">
+        {n} guest {n === 1 ? "task waits" : "tasks wait"} for you: a sponsor left, a guest asked for a renewal or someone was hired.{" "}
+        <Link to="/governance/guest-lifecycle?view=tasks">Open guest lifecycle tasks</Link>
+      </Callout>
+    </div>
+  );
+}
+
 export function Inbox() {
   const { persona } = usePersona();
   const [params, setParams] = useSearchParams();
@@ -387,6 +402,7 @@ export function Inbox() {
         </div>
       )}
       <IdentityMatchBanner />
+      <GuestTaskBanner />
       <div className="spread" style={{ marginBottom: 12, flexWrap: "wrap" }}>
         <FilterChips label="Filter inbox" value={filter} onChange={(v) => setParams(v === "all" ? {} : { filter: v })} options={FILTERS.map((f) => ({ ...f, count: counts[f.id] ?? 0 }))} />
         <div className="row">

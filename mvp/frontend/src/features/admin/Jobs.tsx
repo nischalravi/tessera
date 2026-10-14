@@ -5,7 +5,7 @@ import { Badge, Button, Callout, DataTable, SidePanel, useToast } from "../../co
 
 const KIND: Record<string, string> = {
   sync: "Connector sync", provision: "Provisioning (leaver/mover)", validation: "Connection validation", dry_run: "Dry run",
-  health_rerun: "Deployment health re-run", jit_sweep: "JIT expiry sweep", audit_anchor: "Audit anchoring",
+  health_rerun: "Deployment health re-run", jit_sweep: "JIT expiry sweep", audit_anchor: "Audit anchoring", guest_lifecycle: "Guest lifecycle",
 };
 const STATUS_TONE: Record<string, "ok" | "critical" | "warning"> = { succeeded: "ok", failed: "critical", running: "warning" };
 
