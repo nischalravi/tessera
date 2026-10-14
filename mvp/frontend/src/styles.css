@@ -384,6 +384,8 @@ kbd, .kbd {
 .nowrap { white-space: nowrap; }
 .grow { flex: 1; min-width: 0; }
 .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* long ids, URLs and secrets wrap instead of overflowing a panel (360px) */
+.break { overflow-wrap: anywhere; word-break: break-word; }
 .err { color: var(--critical); font-size: var(--fs-sm); }
 .sys { font-family: var(--font-mono); font-size: 12px; }
 

@@ -7,6 +7,7 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +20,21 @@ const (
 	testIssuer   = "https://larkspur.okta.com"
 	testAudience = "https://tessera.example/public/t/larkspur/ssf/1"
 )
+
+var (
+	rsaOnce sync.Once
+	rsaKey  *rsa.PrivateKey
+	rsaErr  error
+)
+
+func sharedRSA(t testing.TB) *rsa.PrivateKey {
+	t.Helper()
+	rsaOnce.Do(func() { rsaKey, rsaErr = rsa.GenerateKey(rand.Reader, 2048) })
+	if rsaErr != nil {
+		t.Fatal(rsaErr)
+	}
+	return rsaKey
+}
 
 // signer is a test transmitter key.
 type signer struct {
@@ -37,10 +53,7 @@ func newSigner(t testing.TB, alg jose.SignatureAlgorithm, kid string) *signer {
 		}
 		priv, pub = k, &k.PublicKey
 	default:
-		k, err := rsa.GenerateKey(rand.Reader, 2048)
-		if err != nil {
-			t.Fatal(err)
-		}
+		k := sharedRSA(t) // 2048-bit generation is slow, above all under -race
 		priv, pub = k, &k.PublicKey
 	}
 	sg, err := jose.NewSigner(jose.SigningKey{Algorithm: alg, Key: jose.JSONWebKey{Key: priv, KeyID: kid}},

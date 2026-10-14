@@ -123,7 +123,7 @@ func (s *Service) PutCredential(c *store.TenantTx, connectionID string, in Crede
 		if why := in.AWS.check(); why != "" {
 			return &Error{why}
 		}
-		raw, err := json.Marshal(in.AWS)
+		raw, err := json.Marshal(in.AWS) // #nosec G117 -- sealed below (internal/seal); never stored or logged in the clear
 		if err != nil {
 			return err
 		}

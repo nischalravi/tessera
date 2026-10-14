@@ -38,7 +38,7 @@ import (
 // Event types Tessera knows.
 const (
 	EventSessionRevoked   = "https://schemas.openid.net/secevent/caep/event-type/session-revoked"
-	EventCredentialChange = "https://schemas.openid.net/secevent/caep/event-type/credential-change"
+	EventCredentialChange = "https://schemas.openid.net/secevent/caep/event-type/credential-change" // #nosec G101 -- an event type URI, not a credential
 	EventAccountDisabled  = "https://schemas.openid.net/secevent/risc/event-type/account-disabled"
 	EventVerification     = "https://schemas.openid.net/secevent/ssf/event-type/verification"
 )

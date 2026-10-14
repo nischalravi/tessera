@@ -217,7 +217,7 @@ function StreamPanel({ t, events, onClose, onEdit, onChanged }: { t: SsfTransmit
             <li key={e.id}>
               <div className="row tight"><Badge tone={EVENT_TONE[e.status]}>{EVENT_LABEL[e.status]}</Badge><b className="small">{e.event}</b><span className="small faint nowrap">{relTime(e.received_at)}</span></div>
               <div className="small muted break">{e.subject}</div>
-              <div className="small faint">{e.outcome}{e.latency_ms !== null && e.status !== "ignored" && <> · {ms(e.latency_ms)} to act</>}</div>
+              <div className="small faint">{e.outcome}{e.latency_ms !== null && (e.status === "actioned" || e.status === "failed") && <> · {ms(e.latency_ms)} to act</>}</div>
             </li>
           ))}
         </ul>
