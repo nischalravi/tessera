@@ -86,6 +86,8 @@ var tables = []string{
 	"stg_identities", "stg_accounts", "stg_groups", "stg_memberships", "stg_attr_stats",
 	// account correlation (schema/0204_correlation.sql)
 	"account_links", "identity_merges",
+	// identity containment (schema/0205_containment.sql)
+	"containment_credentials",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was

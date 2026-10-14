@@ -6,6 +6,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/jml"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -146,7 +147,7 @@ func TestExecuteLeaverEventRemovesAllAccess(t *testing.T) {
 		return err
 	})
 	testkit.Write(t, st, func(c *store.TenantTx) error {
-		_, err := jml.ExecuteEvent(c, testkit.Now, evID, store.UserRef{Display: "jml-automation"}, pols)
+		_, err := jml.ExecuteEvent(c, testkit.Now, evID, store.UserRef{Display: "jml-automation"}, pols, nil)
 		return err
 	})
 	testkit.Read(t, st, func(c *store.TenantTx) error {
@@ -187,7 +188,7 @@ func TestExecuteLeaverEventRemovesAllAccess(t *testing.T) {
 	})
 	// executing twice is refused
 	err := st.InTenant(t.Context(), st.Tenant, func(c *store.TenantTx) error {
-		_, err := jml.ExecuteEvent(c, testkit.Now, evID, store.UserRef{Display: "jml-automation"}, pols)
+		_, err := jml.ExecuteEvent(c, testkit.Now, evID, store.UserRef{Display: "jml-automation"}, pols, nil)
 		return err
 	})
 	var je *jml.Error
@@ -283,3 +284,82 @@ func TestInferTeamAndBirthright(t *testing.T) {
 		t.Errorf("inferred team %q has no birthright", *team)
 	}
 }
+
+// Containment steps (issue #106): a leaver plan carries revoke_sessions and
+// revoke_grants for an account on a system with a live connection, and
+// ExecuteEvent refuses to run without a passing report for them.
+func TestLeaverContainmentSteps(t *testing.T) {
+	st, ids := testkit.Tiny(t)
+	pols := testkit.Policies(t)
+	plan, err := read(st, func(c *store.TenantTx) (jml.Plan, error) {
+		return jml.LeaverPlan(c, testkit.Now, ids["alice"], false, pols)
+	})
+	if err != nil || len(stepsWith(plan, "revoke_sessions")) != 0 || len(stepsWith(plan, "revoke_grants")) != 0 {
+		t.Fatalf("no connection, yet containment steps: %v %v", err, steps(plan))
+	}
+
+	testkit.Write(t, st, func(c *store.TenantTx) error {
+		return c.InsertConnection(&store.Connection{ID: store.NewID(), Name: "Okta", ConnectorType: "okta", System: "okta",
+			Role: "account_source", CreatedAt: testkit.Now, UpdatedAt: testkit.Now})
+	})
+	plan, err = read(st, func(c *store.TenantTx) (jml.Plan, error) {
+		return jml.LeaverPlan(c, testkit.Now, ids["alice"], false, pols)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, grants := stepsWith(plan, "revoke_sessions"), stepsWith(plan, "revoke_grants")
+	if len(sess) != 1 || len(grants) != 1 || get(sess[0], "system") != "okta" {
+		t.Fatalf("steps: %v", steps(plan))
+	}
+	// containment comes before the grants are removed
+	idx := func(s jml.Step) int {
+		return slices.IndexFunc(steps(plan), func(x jml.Step) bool { return get(x, "action") == get(s, "action") })
+	}
+	if idx(sess[0]) > idx(stepsWith(plan, "remove_grant")[0]) {
+		t.Error("revoke_sessions is planned after remove_grant")
+	}
+	if specs := jml.ContainmentSpecs(plan); len(specs) != 2 {
+		t.Errorf("specs %+v", specs)
+	}
+
+	var evID int64
+	testkit.Write(t, st, func(c *store.TenantTx) error {
+		alice := ids["alice"]
+		var err error
+		evID, err = c.InsertHrisEvent(&store.HrisEvent{ExternalID: "t-c", Type: "leaver", IdentityID: &alice,
+			EffectiveAt: testkit.Now, Status: "pending"})
+		return err
+	})
+	acct := stringOf(get(sess[0], "target"))
+	step := func(action, outcome string) containment.StepResult {
+		return containment.StepResult{Action: action, System: "okta", Account: acct, Outcome: outcome}
+	}
+	for name, rep := range map[string]*containment.Report{
+		"no report":    nil,
+		"failed step":  {Steps: []containment.StepResult{step("revoke_sessions", "failed"), step("revoke_grants", "done")}},
+		"missing step": {Steps: []containment.StepResult{step("revoke_sessions", "done")}},
+	} {
+		err := st.InTenant(context.Background(), st.Tenant, func(c *store.TenantTx) error {
+			_, err := jml.ExecuteEvent(c, testkit.Now, evID, store.UserRef{Display: "x"}, pols, rep)
+			return err
+		})
+		var je *jml.Error
+		if !errors.As(err, &je) {
+			t.Errorf("%s: err = %v, want a jml.Error", name, err)
+		}
+	}
+	testkit.Read(t, st, func(c *store.TenantTx) error {
+		if a, _ := c.Identity(ids["alice"]); a.Status == "terminated" {
+			t.Error("a refused execute terminated alice")
+		}
+		return nil
+	})
+	ok := &containment.Report{OK: true, Steps: []containment.StepResult{step("revoke_sessions", "done"), step("revoke_grants", "manual")}}
+	testkit.Write(t, st, func(c *store.TenantTx) error {
+		_, err := jml.ExecuteEvent(c, testkit.Now, evID, store.UserRef{Display: "x"}, pols, ok)
+		return err
+	})
+}
+
+func stringOf(v any) string { s, _ := v.(string); return s }

@@ -120,6 +120,8 @@ var crossTenantCases = map[string]crossTenantCase{
 	"DELETE account link": {method: "DELETE", path: pathf("/api/accounts/%d/link"), key: "acct:okta:alice"},
 	"POST merge identity": {method: "POST", path: pathf("/api/identities/%d/merge"), key: "alice",
 		body: func(id int64) string { return fmt.Sprintf(`{"into":%d,"reason":"x"}`, id) }},
+	"POST contain identity": {method: "POST", path: pathf("/api/identities/%d/contain"), key: "alice",
+		body: func(int64) string { return `{"reason":"suspected credential compromise"}` }},
 }
 
 // routeParamKey maps each route with path parameters to the cases above.
@@ -137,6 +139,7 @@ var routeParamCases = map[string][]string{
 	"POST /api/accounts/{account_id}/not-person":  {"POST account not person"},
 	"DELETE /api/accounts/{account_id}/link":      {"DELETE account link"},
 	"POST /api/identities/{identity_id}/merge":    {"POST merge identity"},
+	"POST /api/identities/{identity_id}/contain":  {"POST contain identity"},
 }
 
 // TestIsolation_RouteCrossTenant: as tenant B, every route with a path

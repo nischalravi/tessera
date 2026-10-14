@@ -56,7 +56,7 @@ sign-in is refused (`./run.sh` reseeds it; otherwise run `./run.sh --reseed`).
 | Just-in-time access | Access → Just-in-time, Inbox | Time-bound role grants with approve, deny and revoke. A background sweeper expires them automatically (every 30 s, and also on each request). JIT paths never count as standing access. |
 | Policy-as-code + simulation | Governance → Policies & violations, Insights → SoD conflicts | YAML policies in `server/policies/`: SoD on payments, no standing prod admin, AI agents may not reach PII, NHI ownership, secret age, and leavers keep no access. The what-if simulator adds or removes grants on a copy of the graph and diffs effective permissions and violations. |
 | Exception-only access reviews | Inbox, Governance → Access reviews | Out of 219 grants, about 62% are auto-certified from usage evidence. Reviewers see only unused, violating, orphaned, leaver or idle-privileged access, with usage and peer-coverage context. A revoke decision applies to the graph. |
-| Joiner / mover / leaver | Inbox, Governance → Lifecycle | Simulated Workday feed. The leaver plan for Marcus disables accounts, removes grants, re-homes the AI agent and service account he owned, rotates their secrets and revokes delegations. For historical leavers it shows the access the legacy process missed (Oren still has an active Okta account) and offers one-click cleanup. |
+| Joiner / mover / leaver | Inbox, Governance → Lifecycle | Simulated Workday feed. The leaver plan for Marcus disables accounts, removes grants, re-homes the AI agent and service account he owned, rotates their secrets and revokes delegations. For accounts on a connected Okta, Entra, Google or GitHub it also revokes live sessions, tokens and OAuth grants (see Identity containment). For historical leavers it shows the access the legacy process missed (Oren still has an active Okta account) and offers one-click cleanup. |
 
 ## Architecture
 
@@ -153,7 +153,8 @@ The routes are documented at `/api/readiness/openapi.json`.
 `GET|POST /api/jit/requests` · `POST /api/jit/requests/{id}/approve|deny|revoke` ·
 `GET|POST /api/reviews/campaigns` · `POST /api/reviews/items/{id}/decision` ·
 `GET|POST /api/hris/events` (422 for an unknown `identity_id`) · `GET /api/hris/events/{id}/plan` · `POST /api/hris/events/{id}/execute` ·
-`GET /api/jml/leaver-plan/{identity_id}` · `GET /api/accounts[?system=]` ·
+`GET /api/jml/leaver-plan/{identity_id}` · `POST /api/identities/{id}/contain` (kill switch, see "Identity containment") ·
+`PUT /api/connections/{id}/containment-credential` · `GET /api/accounts[?system=]` ·
 `GET /api/audit[?limit=&before_seq=&action=&actor_id=&target_type=&target_id=&from=&to=&include_http=]` ·
 `GET /api/audit/events/{event_id}/proof` · `GET /api/audit/checkpoints[?from_seq=]` · `GET /api/audit/keys` ·
 `POST /api/audit/verify {from_seq?, to_seq?}` · `GET /api/audit/export[?from_seq=&to_seq=]` (NDJSON) ·
@@ -190,6 +191,48 @@ Connectors tie most accounts to a person. **Directory → Accounts → Account m
 
 Decisions need `identities.correlate`, merges `identities.merge` (both: policy admin), each
 with a fresh phishing-resistant sign-in and a reason. Every decision is audited.
+
+### Identity containment (kill switch)
+
+A disabled account does not end its live sessions, refresh tokens or OAuth consents. Two plan
+steps do (design: issue #106, package `server/internal/containment`):
+
+- `revoke_sessions`: Okta `DELETE /api/v1/users/{id}/sessions?oauthTokens=true`; Entra
+  `POST /v1.0/users/{id}/revokeSignInSessions`; Google `POST .../users/{key}/signOut` plus a delete
+  of each `tokens` entry.
+- `revoke_grants`: Okta `DELETE /api/v1/users/{id}/grants`; Entra `oauth2PermissionGrants` of the
+  principal; Google token deletes; GitHub `DELETE /orgs/{org}/credential-authorizations/{id}`.
+  GitHub PATs and SSH keys that are not SSO-authorized have no API: they come back as manual tasks.
+
+Each step re-reads the provider afterwards (Okta grants and refresh tokens, Entra
+`signInSessionsValidFromDateTime` and grants, Google tokens, GitHub authorizations). A provider
+refusal, an unknown user (404), a 429 that outlasts its 4 attempts, or a re-read that still finds a
+session or grant **fails the step**. With no credential for the connection the step is a manual
+task with instructions and is never reported as done. Run time is recorded in the audit event
+`containment.run` (started, finished, `duration_ms`, outcome per provider and per step), also when
+the run failed. Provider calls go through `internal/safehttp`.
+
+- **Leaver plan.** `GET .../leaver-plan` and `POST /api/hris/events/{id}/execute` carry the two
+  steps for each active account on Okta, Entra, Google (GitHub: grants only) that has a live
+  connection (the demo Okta connection counts). Execute runs them first with no transaction open;
+  if any fails it answers `502 containment_failed` with the report and executes nothing. A success
+  adds `containment` (the report) to the response.
+- **Contain identity.** `POST /api/identities/{id}/contain` `{reason}` (10 to 500 characters) runs
+  both steps for every account of the identity (an agent too: trigger `agent`) without disabling
+  anything. `200` with the report, or `502 containment_failed` with the same report. Needs
+  `identities.contain` (policy admin) and a fresh phishing-resistant sign-in. UI: identity page
+  More actions, and the identity side panel, "Contain".
+- **Credentials.** `PUT /api/connections/{id}/containment-credential` `{token, base_url, org}`
+  (connections.manage, step-up) seals the provider token with the KEK (`internal/seal`, AAD bound to
+  tenant, table, column and connection) in `containment_credentials`; it is never returned or
+  logged. Okta needs `base_url` (the org URL), GitHub `org`; Entra and Google default to
+  `graph.microsoft.com` and `admin.googleapis.com`. Tokens: Okta API token (SSWS), Entra and Google
+  bearer access tokens with the permission to revoke sessions (`User.RevokeSessions.All`,
+  `DelegatedPermissionGrant.ReadWrite.All`; `admin.directory.user.security`), GitHub an owner's
+  token with `admin:org` (SAML SSO organizations only).
+- **Still manual or not covered.** Okta has no API that lists IdP sessions and Google none for
+  sessions: those re-reads cover refresh tokens and say so in the step's notes. `rotate_secret`
+  still only stamps a timestamp.
 
 ### Audit ledger
 
