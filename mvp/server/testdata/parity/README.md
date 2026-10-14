@@ -142,3 +142,13 @@ other), and the JIT decision route is split into three routes.
   and none on `/api/health`).
 
 `067-audit` and `068-audit-limit` list only seed events and are unchanged.
+
+* `153-summary-after-sync`, `154-identities-after-sync` (UAT #134). The recorded
+  Python backend let `POST /api/connectors/sync` undo the leaver plan and the
+  grant revokes run earlier in the sequence: Marcus Bellweather came back as an
+  active identity with his accounts and grants. The Go server now treats
+  Tessera-side decisions as authoritative (terminated identities, disabled
+  accounts and revoked grants are not reverted, see `revoked_grants`), so after
+  the sync the summary keeps the earlier remediation (`human` 58, `terminated` 4,
+  fewer grants, effective and unused permissions, violations) and Marcus stays
+  terminated, which also changes the order of the identity list.
