@@ -45,7 +45,10 @@ export const RAIL: RailGroup[] = [
         pages: [{ path: "/directory/entitlements", label: "Entitlements", keywords: "groups permissions aws roles snowflake okta" }],
       },
       { id: "apps", label: "Applications", icon: AppWindow, path: "/directory/apps", keywords: "apps systems endpoints connectors resources" },
-      { id: "accounts", label: "Accounts", icon: KeyRound, path: "/directory/accounts", keywords: "system accounts usernames" },
+      {
+        id: "accounts", label: "Accounts", icon: KeyRound, path: "/directory/accounts", also: ["/directory/matches"], keywords: "system accounts usernames",
+        pages: [{ path: "/directory/matches", label: "Account matches", keywords: "correlation link merge unmerge duplicate orphan uncorrelated" }],
+      },
       { id: "roles", label: "Roles", icon: Layers, path: "/directory/roles", keywords: "business roles birthright drift" },
       { id: "orgs", label: "Organizations", icon: Building2, path: "/directory/orgs", keywords: "departments org units cost centers", preview: true },
     ],

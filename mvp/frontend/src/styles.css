@@ -833,3 +833,10 @@ fieldset.card { margin: 0; }
 /* Request access: catalog beside the cart, stacked on narrow screens (issue #164, see #144) */
 .request-split { grid-template-columns: minmax(0, 1fr) 380px; }
 @media (max-width: 900px) { .request-split { grid-template-columns: minmax(0, 1fr); } .request-split .side-panel { position: static; max-height: none; } }
+/* Account matches (issue #160) */
+.h-sm { font-size: var(--fs-lg); color: var(--text); margin-bottom: var(--s-2); }
+.plain-list { list-style: none; margin: 0 0 var(--s-3); padding: 0; display: grid; gap: var(--s-2); }
+.plain-list > li { padding: var(--s-2) 0; border-bottom: 1px solid var(--border); }
+.pick-list { list-style: none; margin: 4px 0 0; padding: 0; border: 1px solid var(--border); border-radius: var(--r-md, 6px); max-height: 260px; overflow-y: auto; font-weight: 400; }
+.pick-item { display: block; width: 100%; text-align: left; padding: 8px 10px; min-height: 44px; background: none; border: 0; color: var(--text); cursor: pointer; }
+.pick-item:hover, .pick-item:focus-visible { background: var(--surface-2, var(--hover)); }

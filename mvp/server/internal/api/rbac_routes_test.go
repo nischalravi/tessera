@@ -108,6 +108,14 @@ POST   /api/lifecycle/sweep                          lifecycle.manage -  # issue
 GET    /api/identities/{identity_id}/lifecycle       graph.read      -  # issue #159
 PUT    /api/identities/{identity_id}/lifecycle       lifecycle.manage STEP_UP_POLICY  # issue #159
 POST   /api/identities/{identity_id}/lifecycle/extend requests.create -  # issue #159 (the sponsor, or lifecycle.manage)
+GET    /api/correlation/queue                        graph.read      -  # issue #160
+GET    /api/correlation/decisions                    graph.read      -  # issue #160
+POST   /api/accounts/{account_id}/link               identities.correlate STEP_UP_POLICY  # issue #160
+POST   /api/accounts/{account_id}/not-person         identities.correlate STEP_UP_POLICY  # issue #160
+DELETE /api/accounts/{account_id}/link               identities.correlate STEP_UP_POLICY  # issue #160
+POST   /api/identities/{identity_id}/merge           identities.merge STEP_UP_POLICY  # issue #160
+GET    /api/identity-merges                          graph.read      -  # issue #160
+POST   /api/identity-merges/{merge_id}/unmerge       identities.merge STEP_UP_POLICY  # issue #160
 POST   /api/connections/{id}/validate                connections.manage -
 GET    /api/connections/{id}/validations/{run}       connections.read   -
 POST   /api/connections/{id}/dry-run                 connections.manage -

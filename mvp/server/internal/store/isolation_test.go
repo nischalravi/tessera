@@ -285,9 +285,6 @@ var mutations = map[string]func(c *store.TenantTx, a, b map[string]int64) error{
 	"SetIdentityManager": func(c *store.TenantTx, a, _ map[string]int64) error {
 		return c.SetIdentityManager(a["alice"], nil)
 	},
-	"SetIdentityStatus": func(c *store.TenantTx, a, _ map[string]int64) error {
-		return c.SetIdentityStatus(a["alice"], "active")
-	},
 	"TerminateIdentity": func(c *store.TenantTx, a, _ map[string]int64) error {
 		return c.TerminateIdentity(a["alice"], storetest.Now)
 	},
@@ -676,7 +673,7 @@ func TestIsolation_EveryRepoMethodClassified(t *testing.T) {
 		"RevokedGrants": true,
 	}
 	for _, m := range []map[string]bool{keys(listCases), keys(getCases), keys(naturalKeyGets), keys(countCases),
-		keys(mutations), keys(insertCases), readinessCovered(), keysCovered(), auditCovered(), authCovered(), requestsCovered(), rolesCovered(), lifecycleCovered()} {
+		keys(mutations), keys(insertCases), readinessCovered(), keysCovered(), auditCovered(), authCovered(), requestsCovered(), rolesCovered(), lifecycleCovered(), correlationCovered()} {
 		for k := range m {
 			covered[strings.SplitN(k, "/", 2)[0]] = true
 		}

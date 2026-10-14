@@ -120,6 +120,13 @@ var crossTenantCases = map[string]crossTenantCase{
 		body: func(int64) string { return `{"worker_type":"employee","reason":"x"}` }},
 	"POST lifecycle extend": {method: "POST", path: pathf("/api/identities/%d/lifecycle/extend"), key: "alice",
 		body: func(int64) string { return `{"ends_at":"2030-01-01T00:00:00Z","reason":"x"}` }},
+	"POST link account": {method: "POST", path: pathf("/api/accounts/%d/link"), key: "acct:okta:alice",
+		body: func(id int64) string { return fmt.Sprintf(`{"identity_id":%d,"reason":"x"}`, id) }},
+	"POST account not person": {method: "POST", path: pathf("/api/accounts/%d/not-person"), key: "acct:okta:alice",
+		body: func(int64) string { return `{"reason":"x"}` }},
+	"DELETE account link": {method: "DELETE", path: pathf("/api/accounts/%d/link"), key: "acct:okta:alice"},
+	"POST merge identity": {method: "POST", path: pathf("/api/identities/%d/merge"), key: "alice",
+		body: func(id int64) string { return fmt.Sprintf(`{"into":%d,"reason":"x"}`, id) }},
 }
 
 // routeParamKey maps each route with path parameters to the cases above.
@@ -137,6 +144,10 @@ var routeParamCases = map[string][]string{
 	"GET /api/identities/{identity_id}/lifecycle":         {"GET lifecycle"},
 	"PUT /api/identities/{identity_id}/lifecycle":         {"PUT lifecycle"},
 	"POST /api/identities/{identity_id}/lifecycle/extend": {"POST lifecycle extend"},
+	"POST /api/accounts/{account_id}/link":                {"POST link account"},
+	"POST /api/accounts/{account_id}/not-person":          {"POST account not person"},
+	"DELETE /api/accounts/{account_id}/link":              {"DELETE account link"},
+	"POST /api/identities/{identity_id}/merge":            {"POST merge identity"},
 }
 
 // TestIsolation_RouteCrossTenant: as tenant B, every route with a path
@@ -168,6 +179,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		}
 		if strings.HasPrefix(rt.Pattern, "/api/roles/{role_id}") || strings.HasPrefix(rt.Pattern, "/api/role-requests/{request_id}") {
 			continue // TestRolesAPI_CrossTenant (UUIDs, not fixture ids)
+		}
+		if rt.Pattern == "/api/identity-merges/{merge_id}/unmerge" {
+			continue // TestCorrelationAPI_CrossTenant (a UUID, not a fixture id)
 		}
 		if rt.Pattern == "/api/auth/sessions/{session_id}" {
 			continue // TestIsolation_SessionCookieScoped (a UUID, not a fixture id)

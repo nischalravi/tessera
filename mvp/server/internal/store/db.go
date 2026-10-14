@@ -91,6 +91,8 @@ var tables = []string{
 	"business_role_requests",
 	// identity lifecycle (schema/0220_lifecycle.sql)
 	"identity_lifecycle", "identity_lifecycle_events",
+	// account correlation (schema/0204_correlation.sql)
+	"account_links", "identity_merges",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was

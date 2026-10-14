@@ -48,7 +48,9 @@ var (
 			@hired_at, @terminated_at, @created_at)
 		ON CONFLICT (tenant_id, external_id) DO UPDATE SET name = excluded.name, email = excluded.email,
 			type = excluded.type, department = excluded.department, title = excluded.title,
-			status = CASE WHEN identities.status = 'terminated' THEN identities.status ELSE excluded.status END,
+			-- Tessera-side decisions win over the connector: a merged identity stays merged
+			-- until unmerged (repo_correlation.go), a terminated one stays terminated (UAT #134)
+			status = CASE WHEN identities.status IN ('merged', 'terminated') THEN identities.status ELSE excluded.status END,
 			description = excluded.description, hired_at = excluded.hired_at,
 			terminated_at = CASE WHEN identities.status = 'terminated' THEN identities.terminated_at ELSE excluded.terminated_at END`)
 	identitiesInsert = tq("identities.insert", `
@@ -65,8 +67,6 @@ var (
 		UPDATE identities SET manager_id = @manager_id WHERE tenant_id = @tenant AND id = @id`)
 	identitiesTerminate = tq("identities.terminate", `
 		UPDATE identities SET status = 'terminated', terminated_at = @at WHERE tenant_id = @tenant AND id = @id`)
-	identitiesSetStatus = tq("identities.set_status", `
-		UPDATE identities SET status = @status WHERE tenant_id = @tenant AND id = @id`)
 	identitiesSetDeptTitle = tq("identities.set_department_title", `
 		UPDATE identities SET department = @department, title = @title WHERE tenant_id = @tenant AND id = @id`)
 )
@@ -184,14 +184,6 @@ func (tx *TenantTx) SetIdentityManager(id int64, managerID *int64) error {
 // TerminateIdentity marks an identity terminated at.
 func (tx *TenantTx) TerminateIdentity(id int64, at time.Time) error {
 	_, err := tx.exec(identitiesTerminate, sql.Named("at", T(at)), sql.Named("id", id))
-	return err
-}
-
-// SetIdentityStatus sets an identity's status (a rehire: a connector sync no
-// longer reverts a termination, UAT #134). The same method arrives with #160
-// (repo_correlation.go); keep one when both are merged.
-func (tx *TenantTx) SetIdentityStatus(id int64, status string) error {
-	_, err := tx.exec(identitiesSetStatus, sql.Named("id", id), sql.Named("status", status))
 	return err
 }
 

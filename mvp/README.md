@@ -167,7 +167,11 @@ The routes are documented at `/api/readiness/openapi.json`.
 `POST /api/roles/{id}/retire|reconcile|members` · `POST /api/roles/{id}/members/{identity_id}/remove`
 (changes take `?dry_run=1`) · `GET|POST /api/role-requests` · `POST /api/role-requests/{id}/approve|deny|cancel` ·
 `GET /api/lifecycle[?state=upcoming|active|ending|ended]` · `GET /api/lifecycle/sponsored` · `POST /api/lifecycle/sweep` ·
-`GET|PUT /api/identities/{id}/lifecycle` · `POST /api/identities/{id}/lifecycle/extend {ends_at, reason}`
+`GET|PUT /api/identities/{id}/lifecycle` · `POST /api/identities/{id}/lifecycle/extend {ends_at, reason}` ·
+`GET /api/correlation/queue` · `GET /api/correlation/decisions` ·
+`POST /api/accounts/{id}/link {identity_id, reason}` · `POST /api/accounts/{id}/not-person {reason}` ·
+`DELETE /api/accounts/{id}/link` · `POST /api/identities/{id}/merge {into, reason}` ·
+`GET /api/identity-merges` · `POST /api/identity-merges/{id}/unmerge {reason}`
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
@@ -271,6 +275,28 @@ Not yet:
 - provisioning the leaver plan into target systems (#103);
 - the guest claim flow and affiliations (GU-1 #64 onward);
 - rehiring someone whose term has ended.
+### Account correlation
+
+Connectors tie most accounts to a person. **Directory → Accounts → Account matches**
+(`/directory/matches`) handles the rest (issue #160):
+
+- **To review** lists user accounts with no person and no decision. A login that equals a
+  person's email, or matches the part before the @, is shown as a *proposal*. Tessera never
+  links on it by itself (self-asserted attributes, design K12).
+- **Link**, **Not a person** and **Release** pin a reviewer's decision (`account_links`).
+  Connector syncs keep it until someone releases it, which hands the account back to the
+  connector's mapping.
+- **Merge** (identity page, More actions → Merge into…) moves the merged identity's accounts,
+  account decisions, owned identities, reports and agent delegations to the identity kept. The
+  merged identity gets status `merged`; syncs keep it merged and resolve references to it to the
+  survivor. History (usage, reviews, requests, HRIS events) is not moved. An identity bound to a
+  Tessera sign-in user cannot be the merged side, because credentials never move.
+- **Undo** (Merges tab) works for 180 days. It moves back every recorded row that still points
+  at the survivor; rows changed since stay and are listed. Merges into an identity that was
+  merged later are undone last-first.
+
+Decisions need `identities.correlate`, merges `identities.merge` (both: policy admin), each
+with a fresh phishing-resistant sign-in and a reason. Every decision is audited.
 
 ### Audit ledger
 
@@ -334,7 +360,7 @@ the right. Arrow keys move between items.
 | Group | Items |
 |---|---|
 | (top) | **Home**, **Inbox** (count) |
-| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts, Roles, Organizations (Preview) |
+| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts (with *Account matches*), Roles, Organizations (Preview) |
 | **Access** | Request access, My access (with *My requests*), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
 | **Protection** | Policies & SoD (violations, policies, what-if simulation), Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
 | **Settings** | Connections (governed connections and the setup wizard), Admin |
