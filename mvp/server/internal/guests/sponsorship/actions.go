@@ -242,7 +242,9 @@ func (s *Service) RenewOrHold(tx *store.TenantTx, by Actor, id string, to time.T
 	if err != nil {
 		return nil, nil, err
 	}
-	if have < need {
+	if g, err := tx.Identity(ss.GuestIdentityID); err != nil {
+		return nil, nil, err
+	} else if g.Status == "active" && have < need { // an unclaimed guest meets the requirement in their claim
 		up, err := s.hold(tx, ss, by, to.UTC(), why, need, now)
 		return ss, up, err
 	}
