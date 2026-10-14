@@ -1467,6 +1467,92 @@ export async function claimResend(slug: string, email: string): Promise<string> 
   return j?.message ?? "If an invitation exists for this address, we have sent a new link.";
 }
 
+// ------------------------------------------------ guest self-registration (issue #66)
+
+/** A sponsor as the public search shows one: a name and an opaque handle, nothing else. */
+export interface SponsorChoice {
+  name: string;
+  handle: string;
+}
+
+/** What the visitor typed. `sponsor` is a handle from the search; `code` is a code the sponsor shared (it wins). */
+export interface RegistrationForm {
+  given_name: string;
+  family_name: string;
+  email: string;
+  purpose: string;
+  starts_at?: string;
+  ends_at: string;
+  sponsor?: string;
+  code?: string;
+  /** The bot challenge's token (Turnstile or equivalent); empty where none is configured (dev). */
+  challenge_token?: string;
+}
+
+const publicJSON = (slug: string, rest: string, init: RequestInit = {}) =>
+  fetch(`/public/t/${encodeURIComponent(slug)}/${rest}`, {
+    credentials: "same-origin",
+    cache: "no-store",
+    referrerPolicy: "no-referrer",
+    ...init,
+    headers: init.body ? { "content-type": "application/json" } : undefined,
+  });
+
+/** Public sponsor search: names only. Fewer than two letters lists nobody. */
+export async function searchSponsors(slug: string, q: string): Promise<SponsorChoice[]> {
+  if (q.trim().length < 2) return [];
+  const res = await publicJSON(slug, `register/sponsors?q=${encodeURIComponent(q.trim())}`);
+  if (res.status === 429) throw new Error("Too many searches. Wait a moment and try again.");
+  if (!res.ok) throw new Error("Search is unavailable. Try again.");
+  return ((await res.json()) as { sponsors: SponsorChoice[] }).sponsors;
+}
+
+/**
+ * Ask a sponsor to register you. The answer is the same whatever happened to the request (it does
+ * not say whether the address or the sponsor is known); only a form that is not valid, a failed
+ * bot challenge and the rate limit are told apart, and none of them depends on anyone else.
+ */
+export async function submitRegistration(slug: string, form: RegistrationForm): Promise<string> {
+  const res = await publicJSON(slug, "register", { method: "POST", body: JSON.stringify(form) });
+  if (res.status === 429) throw new Error("Too many tries from this network. Wait a while and try again.");
+  if (res.status === 403) throw new Error("We could not confirm you are not a robot. Try again.");
+  if (res.status === 400) throw new Error("Check the form: every field is needed, and the end date must be after today.");
+  if (res.status === 503) throw new Error("Registration is not available right now.");
+  if (!res.ok && res.status !== 202) throw new Error("Something went wrong. Try again.");
+  let j: any = null;
+  try {
+    j = await res.json();
+  } catch {
+    /* no body */
+  }
+  return j?.message ?? "Check your email.";
+}
+
+/** A request waiting for the signed-in sponsor. */
+export interface RegistrationRequest {
+  id: string;
+  given_name: string | null;
+  family_name: string | null;
+  email: string | null;
+  purpose: string | null;
+  via: "search" | "code";
+  starts_at: string;
+  ends_at: string;
+  expires_at: string;
+  created_at: string;
+}
+
+export const registrationRequests = {
+  list: () => api<{ registrations: RegistrationRequest[] }>("/guest-registrations"),
+  /** Approve: the guest is created and invited through the ordinary sponsor path. */
+  approve: (id: string, terms: { population?: string; ends_at?: string } = {}) =>
+    api<{ id: string; status: "approved"; guest_identity_id: number; sponsorship_id: string }>(`/guest-registrations/${encodeURIComponent(id)}/approve`, terms),
+  /** Deny: the visitor gets a neutral email; the reason is for the audit log only. */
+  deny: (id: string, reason = "") => api<{ id: string; status: "denied" }>(`/guest-registrations/${encodeURIComponent(id)}/deny`, { reason }),
+  /** A code to share instead of being searched for; shown once. */
+  newCode: () => api<{ code: string; expires_at: string }>("/guest-registrations/code", {}),
+};
+
 export const simulate = (body: { remove_edge_ids?: number[]; add_edges?: { src: string; dst: string; duration_hours?: number }[]; disable_account_ids?: number[] }) =>
   api<SimResult>("/simulate", { remove_edge_ids: [], add_edges: [], disable_account_ids: [], ...body });
 

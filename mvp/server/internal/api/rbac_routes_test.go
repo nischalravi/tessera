@@ -147,6 +147,10 @@ PUT    /api/identities/{identity_id}/lifecycle       lifecycle.manage STEP_UP_PO
 POST   /api/identities/{identity_id}/lifecycle/extend requests.create -  # issue #159 (the sponsor, or lifecycle.manage)
 POST   /api/guests/invitations                       guests.sponsor  STEP_UP_POLICY  # issue #65 (the sponsor policy decides who may sponsor)
 POST   /api/guests/invitations/bulk                  guests.sponsor  STEP_UP_POLICY  # issue #65 (dry_run too: it audits)
+GET    /api/guest-registrations                      guests.sponsor  -  # issue #66 (only the caller's own pending requests)
+POST   /api/guest-registrations/code                 guests.sponsor  STEP_UP_POLICY  # issue #66
+POST   /api/guest-registrations/{registration_id}/approve  guests.sponsor  STEP_UP_POLICY  # issue #66 (only the sponsor the request names; the sponsor policy still decides)
+POST   /api/guest-registrations/{registration_id}/deny     guests.sponsor  STEP_UP_POLICY  # issue #66 (only the sponsor the request names)
 GET    /api/guests                                   guests.sponsor  -  # issue #65 (sponsor=all: guests.read in the handler)
 GET    /api/sponsorships/approvals                   sponsorships.approve -  # issue #65
 GET    /api/sponsorships/{sponsorship_id}            guests.sponsor  -  # issue #65 (the sponsor, the transfer target, guests.read or sponsorships.approve)
@@ -210,6 +214,8 @@ POST   /public/t/{slug}/claim/consent                public
 POST   /public/t/{slug}/claim/credential             public
 POST   /public/t/{slug}/claim/resend                 public
 POST   /public/t/{slug}/guest/renewal-request        public  # issue #74: the guest's "request renewal" link, always 202
+GET    /public/t/{slug}/register/sponsors            public  # issue #66: sponsor names (no emails), at least 2 letters, rate-limited
+POST   /public/t/{slug}/register                     public  # issue #66: self-registration, bot challenge, 5 per IP per hour, always 202
 GET    /api/auth/dev-login                           public
 POST   /api/auth/dev-login                           public
 `
