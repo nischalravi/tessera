@@ -67,6 +67,13 @@ const (
 	// The guest's reminder that their term ends soon carries the one-time
 	// "request renewal" link (#74), supplied at send time like the claim link.
 	KindGuestRenewalLink = "guest.renewal_link"
+	// Self-registration (#66): the three emails to a visitor who has no
+	// account, by address only (like the claim emails, no preference to set).
+	KindRegistrationReceived = "guest.registration_received" // "your sponsor has been asked"
+	KindRegistrationSignIn   = "guest.registration_signin"   // "you already have an account, sign in"
+	KindRegistrationDenied   = "guest.registration_denied"   // a neutral "not approved"
+	// KindGuestRegistration asks a sponsor to decide a visitor's request.
+	KindGuestRegistration = "guest.registration"
 )
 
 // Channels a user may choose for a kind.
@@ -114,6 +121,7 @@ var Kinds = []Kind{
 	{KindSponsorshipEnding, "Sponsorship ending", "A guest sponsorship of yours ends in 30, 14 or 3 days.", false, ChannelBoth},
 	{KindGuestTask, "Guest lifecycle task", "A sponsorship needs a new sponsor, a renewal decision or a dual-status confirmation.", false, ChannelBoth},
 	{KindGuestStepUp, "Renewal needs identity verification", "A guest renewal waits until the guest verifies their identity at a higher level.", false, ChannelBoth},
+	{KindGuestRegistration, "Guest registration request", "Someone asked to register as your guest and waits for your decision.", false, ChannelBoth},
 	{KindMergeApproval, "Identity merge needs a reviewer", "A merge or link of two people waits for a second reviewer.", false, ChannelBoth},
 	{KindSecurityAlert, "Security alerts", "Security-relevant changes. These cannot be turned off.", true, ChannelBoth},
 }
@@ -197,7 +205,7 @@ func (m Message) validate() error {
 }
 
 func isKind(id string) bool {
-	if id == KindDigest || SecretKind(id) {
+	if id == KindDigest || SecretKind(id) || registrantKind(id) {
 		return true
 	}
 	_, ok := KindByID(id)
