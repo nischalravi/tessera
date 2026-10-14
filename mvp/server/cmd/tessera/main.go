@@ -57,6 +57,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
@@ -295,7 +296,13 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if err != nil {
 		return err
 	}
-	srv := api.New(api.Config{Store: st, Clock: clock, Policies: loader, Logger: logger,
+	// Outbound calls of the kill switch (containment) use the SSRF-guarded client.
+	containmentHTTP, err := safehttp.ForConfig(cfg)
+	if err != nil {
+		return err
+	}
+	srv := api.New(api.Config{Containment: &containment.Service{HTTP: containmentHTTP, Sealer: sealer, Clock: clock},
+		Store: st, Clock: clock, Policies: loader, Logger: logger,
 		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound,
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
 		HSTS: cfg.IsProd(), Env: cfg.Env, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, AuditAnchor: anchorURL})
