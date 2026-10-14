@@ -96,28 +96,6 @@
     "risk": 68
    },
    {
-    "id": 17,
-    "name": "Marcus Bellweather",
-    "type": "human",
-    "status": "active",
-    "department": "Engineering",
-    "title": "Platform Engineer",
-    "email": "marcus.bellweather@larkspur.example",
-    "accounts": 3,
-    "systems": [
-     "github",
-     "okta",
-     "workday"
-    ],
-    "last_activity": "2026-10-08T00:00:00",
-    "effective": 28,
-    "unused": 11,
-    "privileged": 7,
-    "sensitive": 6,
-    "violations": 2,
-    "risk": 67
-   },
-   {
     "id": 20,
     "name": "Zora Whitlock",
     "type": "human",
@@ -333,27 +311,25 @@
     "risk": 45
    },
    {
-    "id": 5,
-    "name": "Alice Okafor",
-    "type": "human",
+    "id": 71,
+    "name": "SRE On-call Agent",
+    "type": "ai_agent",
     "status": "active",
-    "department": "Engineering",
-    "title": "Senior Software Engineer",
-    "email": "alice.okafor@larkspur.example",
-    "accounts": 4,
+    "department": null,
+    "title": "AI agent",
+    "email": null,
+    "accounts": 2,
     "systems": [
-     "github",
-     "okta",
-     "snowflake",
-     "workday"
+     "aws",
+     "okta"
     ],
     "last_activity": "2026-10-08T00:00:00",
-    "effective": 28,
-    "unused": 17,
-    "privileged": 6,
-    "sensitive": 8,
-    "violations": 0,
-    "risk": 37
+    "effective": 3,
+    "unused": 1,
+    "privileged": 0,
+    "sensitive": 1,
+    "violations": 2,
+    "risk": 44
    },
    {
     "id": 70,
@@ -521,6 +497,29 @@
     "sensitive": 2,
     "violations": 2,
     "risk": 34
+   },
+   {
+    "id": 5,
+    "name": "Alice Okafor",
+    "type": "human",
+    "status": "active",
+    "department": "Engineering",
+    "title": "Senior Software Engineer",
+    "email": "alice.okafor@larkspur.example",
+    "accounts": 4,
+    "systems": [
+     "github",
+     "okta",
+     "snowflake",
+     "workday"
+    ],
+    "last_activity": "2026-10-08T00:00:00",
+    "effective": 24,
+    "unused": 16,
+    "privileged": 5,
+    "sensitive": 7,
+    "violations": 0,
+    "risk": 33
    },
    {
     "id": 90,
@@ -708,28 +707,6 @@
     "risk": 29
    },
    {
-    "id": 33,
-    "name": "Priya Ramaswamy",
-    "type": "human",
-    "status": "active",
-    "department": "Finance",
-    "title": "FP&A Analyst",
-    "email": "priya.ramaswamy@larkspur.example",
-    "accounts": 3,
-    "systems": [
-     "okta",
-     "snowflake",
-     "workday"
-    ],
-    "last_activity": "2026-10-08T00:00:00",
-    "effective": 7,
-    "unused": 3,
-    "privileged": 1,
-    "sensitive": 5,
-    "violations": 1,
-    "risk": 28
-   },
-   {
     "id": 2,
     "name": "Caspian Arkwright",
     "type": "human",
@@ -747,27 +724,6 @@
     "effective": 8,
     "unused": 5,
     "privileged": 1,
-    "sensitive": 1,
-    "violations": 1,
-    "risk": 26
-   },
-   {
-    "id": 71,
-    "name": "SRE On-call Agent",
-    "type": "ai_agent",
-    "status": "active",
-    "department": null,
-    "title": "AI agent",
-    "email": null,
-    "accounts": 2,
-    "systems": [
-     "aws",
-     "okta"
-    ],
-    "last_activity": "2026-10-08T00:00:00",
-    "effective": 3,
-    "unused": 1,
-    "privileged": 0,
     "sensitive": 1,
     "violations": 1,
     "risk": 26
@@ -954,6 +910,26 @@
     "accounts": 1,
     "systems": [
      "github"
+    ],
+    "last_activity": "2026-10-08T00:00:00",
+    "effective": 1,
+    "unused": 0,
+    "privileged": 0,
+    "sensitive": 0,
+    "violations": 1,
+    "risk": 18
+   },
+   {
+    "id": 79,
+    "name": "svc-monitoring",
+    "type": "service",
+    "status": "active",
+    "department": null,
+    "title": "AWS IAM user",
+    "email": null,
+    "accounts": 1,
+    "systems": [
+     "aws"
     ],
     "last_activity": "2026-10-08T00:00:00",
     "effective": 1,
@@ -1336,6 +1312,28 @@
     "risk": 8
    },
    {
+    "id": 33,
+    "name": "Priya Ramaswamy",
+    "type": "human",
+    "status": "active",
+    "department": "Finance",
+    "title": "FP&A Analyst",
+    "email": "priya.ramaswamy@larkspur.example",
+    "accounts": 3,
+    "systems": [
+     "okta",
+     "snowflake",
+     "workday"
+    ],
+    "last_activity": "2026-10-08T00:00:00",
+    "effective": 6,
+    "unused": 2,
+    "privileged": 1,
+    "sensitive": 4,
+    "violations": 0,
+    "risk": 8
+   },
+   {
     "id": 34,
     "name": "Tomas Szabo",
     "type": "human",
@@ -1462,28 +1460,6 @@
     "unused": 2,
     "privileged": 0,
     "sensitive": 1,
-    "violations": 0,
-    "risk": 3
-   },
-   {
-    "id": 3,
-    "name": "Mireille Delacroix",
-    "type": "human",
-    "status": "active",
-    "department": "Executive",
-    "title": "Chief Financial Officer",
-    "email": "mireille.delacroix@larkspur.example",
-    "accounts": 3,
-    "systems": [
-     "okta",
-     "snowflake",
-     "workday"
-    ],
-    "last_activity": "2026-10-08T00:00:00",
-    "effective": 4,
-    "unused": 1,
-    "privileged": 0,
-    "sensitive": 2,
     "violations": 0,
     "risk": 3
    },
@@ -1699,6 +1675,28 @@
     "risk": 1
    },
    {
+    "id": 3,
+    "name": "Mireille Delacroix",
+    "type": "human",
+    "status": "active",
+    "department": "Executive",
+    "title": "Chief Financial Officer",
+    "email": "mireille.delacroix@larkspur.example",
+    "accounts": 3,
+    "systems": [
+     "okta",
+     "snowflake",
+     "workday"
+    ],
+    "last_activity": "2026-10-08T00:00:00",
+    "effective": 3,
+    "unused": 0,
+    "privileged": 0,
+    "sensitive": 1,
+    "violations": 0,
+    "risk": 1
+   },
+   {
     "id": 1,
     "name": "Rosalind Haverford",
     "type": "human",
@@ -1889,6 +1887,28 @@
     "risk": 0
    },
    {
+    "id": 17,
+    "name": "Marcus Bellweather",
+    "type": "human",
+    "status": "terminated",
+    "department": "Engineering",
+    "title": "Platform Engineer",
+    "email": "marcus.bellweather@larkspur.example",
+    "accounts": 3,
+    "systems": [
+     "github",
+     "okta",
+     "workday"
+    ],
+    "last_activity": "2026-10-08T00:00:00",
+    "effective": 0,
+    "unused": 0,
+    "privileged": 0,
+    "sensitive": 0,
+    "violations": 0,
+    "risk": 0
+   },
+   {
     "id": 47,
     "name": "Marisol Iyer",
     "type": "human",
@@ -1966,26 +1986,6 @@
     ],
     "last_activity": "2026-10-08T00:00:00",
     "effective": 2,
-    "unused": 0,
-    "privileged": 0,
-    "sensitive": 0,
-    "violations": 0,
-    "risk": 0
-   },
-   {
-    "id": 79,
-    "name": "svc-monitoring",
-    "type": "service",
-    "status": "active",
-    "department": null,
-    "title": "AWS IAM user",
-    "email": null,
-    "accounts": 1,
-    "systems": [
-     "aws"
-    ],
-    "last_activity": "2026-10-08T00:00:00",
-    "effective": 1,
     "unused": 0,
     "privileged": 0,
     "sensitive": 0,

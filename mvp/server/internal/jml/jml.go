@@ -697,7 +697,7 @@ func applyStep(c *store.TenantTx, now time.Time, ident *store.Identity, st Step,
 		id, _ := stepInt(st, "edge_id")
 		var routed bool
 		if routed, err = routeRemoveGrant(c, now, id, stepKey(eventID, idx, "remove_grant")); err == nil && !routed {
-			err = c.DeleteEdge(id)
+			err = c.RevokeEdge(id, now, "jml")
 		}
 	case "add_grant":
 		var routed bool

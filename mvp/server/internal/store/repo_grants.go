@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
@@ -49,6 +50,15 @@ var (
 		UPDATE grant_edges SET expires_at = @expires_at WHERE tenant_id = @tenant AND id = @id`)
 	edgesDelete = tq("grant_edges.delete", `
 		DELETE FROM grant_edges WHERE tenant_id = @tenant AND id = @id`)
+	revokedRecord = tq("revoked_grants.record", `
+		INSERT INTO revoked_grants (tenant_id, src, dst, reason, revoked_at)
+		VALUES (@tenant, @src, @dst, @reason, @at)
+		ON CONFLICT (tenant_id, src, dst) DO UPDATE SET reason = excluded.reason, revoked_at = excluded.revoked_at`)
+	revokedCount = tq("revoked_grants.count_between", `
+		SELECT count(*) FROM revoked_grants r WHERE r.tenant_id = @tenant AND r.src = @src AND r.dst = @dst`)
+	revokedList = tq("revoked_grants.list", `
+		SELECT r.tenant_id, r.src, r.dst, r.reason, r.revoked_at FROM revoked_grants r WHERE r.tenant_id = @tenant
+		ORDER BY r.src, r.dst`)
 	edgesDeleteJIT = tq("grant_edges.delete_jit", `
 		DELETE FROM grant_edges WHERE tenant_id = @tenant AND id = @id AND source = 'jit'`)
 	edgesDeleteExpiredJIT = tq("grant_edges.delete_expired_jit", `
@@ -104,7 +114,11 @@ func (tx *TenantTx) HasStandingEdge(src, dst string) (bool, error) {
 func (tx *TenantTx) CountEdges() (int, error) { return tx.count(edgesCount) }
 
 // UpsertConnectorEdge inserts a connector edge or updates the relation of the existing src -> dst edge.
+// A grant revoked inside Tessera (see RevokeEdge) is not brought back.
 func (tx *TenantTx) UpsertConnectorEdge(src, dst, relation string, createdAt time.Time) error {
+	if n, err := tx.count(revokedCount, sql.Named("src", src), sql.Named("dst", dst)); err != nil || n > 0 {
+		return err
+	}
 	_, err := tx.exec(edgesUpsertConnector, sql.Named("src", src), sql.Named("dst", dst), sql.Named("relation", relation),
 		sql.Named("created_at", T(createdAt)))
 	return err
@@ -129,6 +143,51 @@ func (tx *TenantTx) SetEdgeExpiry(id int64, expires time.Time) error {
 func (tx *TenantTx) DeleteEdge(id int64) error {
 	_, err := tx.exec(edgesDelete, sql.Named("id", id))
 	return err
+}
+
+// RevokeEdge deletes a grant edge and records a tombstone, so a later connector
+// sync does not re-create it. Use DeleteEdge for removals that are not decisions.
+func (tx *TenantTx) RevokeEdge(id int64, at time.Time, reason string) error {
+	e, err := tx.Edge(id)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := tx.exec(revokedRecord, sql.Named("src", e.Src), sql.Named("dst", e.Dst), sql.Named("reason", reason),
+		sql.Named("at", T(at))); err != nil {
+		return err
+	}
+	return tx.DeleteEdge(id)
+}
+
+// RevokedGrant is a tombstone left by RevokeEdge.
+type RevokedGrant struct {
+	TenantID  tenancy.ID
+	Src, Dst  string
+	Reason    string
+	RevokedAt time.Time
+}
+
+func scanRevoked(s scanner) (*RevokedGrant, error) {
+	var r RevokedGrant
+	var tid string
+	var at nullTime
+	if err := s.Scan(&tid, &r.Src, &r.Dst, &r.Reason, &at); err != nil {
+		return nil, err
+	}
+	var err error
+	if r.TenantID, err = tenantOf(tid); err != nil {
+		return nil, err
+	}
+	r.RevokedAt, err = at.val()
+	return &r, err
+}
+
+// RevokedGrants returns the revoked-grant tombstones, ordered by src then dst.
+func (tx *TenantTx) RevokedGrants() ([]*RevokedGrant, error) {
+	return collect(tx, scanRevoked, revokedList)
 }
 
 // DeleteJITEdge deletes a grant edge by id if it is a JIT edge.
