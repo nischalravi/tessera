@@ -54,6 +54,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
@@ -288,7 +289,13 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	rotationEngine := &rotation.Engine{DB: st, Clock: clock, Log: logger,
 		Service: &rotation.Service{Sealer: sealer, Env: cfg.Env, AllowFake: cfg.RotationFakeAdapters},
 		Factory: &rotation.Factory{HTTP: rotationHTTP, Sealer: sealer, Now: clock, AllowFake: cfg.RotationFakeAdapters}}
-	srv := api.New(api.Config{Store: st, Clock: clock, Policies: loader, Logger: logger,
+	// Outbound calls of the kill switch (containment) use the SSRF-guarded client.
+	outbound, err := safehttp.ForConfig(cfg)
+	if err != nil {
+		return err
+	}
+	srv := api.New(api.Config{Containment: &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock},
+		Store: st, Clock: clock, Policies: loader, Logger: logger,
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
 		HSTS: cfg.IsProd(), Env: cfg.Env, DevLogin: cfg.DevLogin, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, AuditAnchor: anchorURL,
 		Sealer: sealer, RotationFake: cfg.RotationFakeAdapters})
