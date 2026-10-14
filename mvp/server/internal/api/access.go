@@ -62,9 +62,15 @@ func (s *Server) accessDecision(tx *store.TenantTx, r *http.Request, scope strin
 			return condaccess.Decision{}, err
 		}
 	}
-	ip, via := s.clientIP(r)
-	return condaccess.Evaluate(pols, ranges, condaccess.Input{Scope: scope, ClientIP: ip, IPVia: via,
-		Device: condaccess.ResolveDevice(claims, sig)}), nil
+	ip, via, resolved := s.accessClientIP(r)
+	dec := condaccess.Evaluate(pols, ranges, condaccess.Input{Scope: scope, ClientIP: ip, IPVia: via,
+		IPUnresolved: !resolved, Device: condaccess.ResolveDevice(claims, sig)})
+	if !resolved && (dec.Evaluated > 0) {
+		// also covers report-only policies: the unresolved client is visible in the logs
+		s.log.Warn("conditional access: client address unresolved", "scope", scope, "outcome", dec.Outcome,
+			"report_only_hits", len(dec.ReportOnly), "path", r.URL.Path)
+	}
+	return dec, nil
 }
 
 // signinAccess evaluates the sign-in policies of a tenant for a sign-in that

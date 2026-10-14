@@ -291,7 +291,7 @@ func TestAccess_SpoofedForwardedFor(t *testing.T) {
 		{"a corporate address prepended by the client is not the client", proxyIP, []string{insideIP + ", " + outsideIP}, false, outsideIP, "x_forwarded_for"},
 		{"the proxy's append after the client's own header", proxyIP, []string{insideIP, outsideIP}, false, outsideIP, "x_forwarded_for"},
 		{"a chain of trusted proxies is walked past", proxyIP, []string{insideIP + ", 10.255.0.2"}, true, insideIP, "x_forwarded_for"},
-		{"a malformed hop stops the walk at the trusted peer", proxyIP, []string{insideIP + ", not-an-ip"}, false, proxyIP, "peer"},
+		{"a malformed hop leaves the client unresolved, not the proxy", proxyIP, []string{insideIP + ", not-an-ip"}, false, "", "unresolved"},
 		{"the header is ignored without a proxy even when it parses", insideIP, []string{outsideIP}, true, insideIP, "peer"},
 		{"an IPv4-mapped peer is the IPv4 address", "[::ffff:" + insideIP + "]", nil, true, insideIP, "peer"},
 	} {
@@ -723,5 +723,72 @@ func TestAccessCrossTenant(t *testing.T) {
 	l := signIn(t, f.DB, f.B.ID, testAdmin, authtest.Phr, storetest.Now)
 	if rec := serve(srv.Handler(), privileged(l, outsideIP)); !ran(rec) {
 		t.Errorf("tenant A's deny policy applied to tenant B: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestAccess_UnresolvedClientFailsClosed: when the peer is a trusted proxy that
+// sits inside the corporate range and the real client cannot be found (header
+// missing, malformed, or every hop a trusted proxy), the proxy's own address
+// must not stand in for the client. A deny for not_in corporate applies, and
+// the decision records client_ip_unresolved.
+func TestAccess_UnresolvedClientFailsClosed(t *testing.T) {
+	const proxyInCorp = "198.51.100.10" // trusted proxy, inside corpCIDR
+	f := storetest.TwoTenants(t)
+	seedAccess(t, f, f.B, pspec{name: "corp only", scope: store.AccessScopePrivileged, mode: store.AccessModeEnforce,
+		outcome: "deny", netOp: "not_in"})
+	s := accessServer(f)
+	s.cfg.TrustedProxies = []netip.Prefix{netip.MustParsePrefix("198.51.100.8/29")}
+	h := s.Handler()
+	l := signIn(t, f.DB, f.B.ID, testAdmin, authtest.Phr, storetest.Now)
+	for _, tc := range []struct {
+		name       string
+		xff        []string
+		allowed    bool
+		unresolved bool
+	}{
+		{"header missing", nil, false, true},
+		{"header malformed", []string{"not-an-ip"}, false, true},
+		{"rightmost hop malformed", []string{insideIP + ", not-an-ip"}, false, true},
+		{"every hop is a trusted proxy", []string{"198.51.100.11, 198.51.100.12"}, false, true},
+		{"external client", []string{outsideIP}, false, false},
+		{"corporate client", []string{insideIP}, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := len(decisions(t, f, f.B))
+			rec := serve(h, privileged(l, proxyInCorp, tc.xff...))
+			if tc.allowed != ran(rec) {
+				t.Fatalf("allowed=%v but %d %s", tc.allowed, rec.Code, rec.Body.String())
+			}
+			evs := decisions(t, f, f.B)
+			if len(evs) != before+1 {
+				t.Fatalf("%d decision events, want %d", len(evs), before+1)
+			}
+			in := asMap(evs[0]["inputs"])
+			got, _ := in["client_ip_unresolved"].(bool)
+			if got != tc.unresolved {
+				t.Errorf("client_ip_unresolved = %v, want %v (%v)", in["client_ip_unresolved"], tc.unresolved, in)
+			}
+			if tc.unresolved && in["client_ip"] != "" {
+				t.Errorf("an unresolved client records no address: %v", in)
+			}
+		})
+	}
+}
+
+// TestAccess_RateKeyKeepsProxyFallback: rate limiting still keys an
+// unresolved client on the proxy address (it must key on something).
+func TestAccess_RateKeyKeepsProxyFallback(t *testing.T) {
+	s := accessServer(storetest.TwoTenants(t))
+	for _, tc := range []struct{ xff, want string }{
+		{"", proxyIP}, {"not-an-ip", proxyIP}, {"10.255.0.2", "10.255.0.2"}, {insideIP, insideIP},
+	} {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.RemoteAddr = proxyIP + ":1"
+		if tc.xff != "" {
+			req.Header.Set("X-Forwarded-For", tc.xff)
+		}
+		if got := s.rateKey(req); got != tc.want {
+			t.Errorf("rateKey(xff %q) = %q, want %q", tc.xff, got, tc.want)
+		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -234,5 +235,29 @@ func TestStoreSignals(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// An unresolved client matches no range: not_in holds (deny/step-up apply, in
+// enforce and report-only), in does not.
+func TestEvaluate_UnresolvedClient(t *testing.T) {
+	P := store.AccessScopePrivileged
+	unresolved := in(P, "10.0.0.10", unknownDev) // even if an address leaked in, the flag wins
+	unresolved.IPUnresolved = true
+	d := condaccess.Evaluate([]*store.AccessPolicy{pol("deny off-net", P, store.AccessModeEnforce, store.AccessDeny, notIn(corp))}, ranges, unresolved)
+	if d.Outcome != store.AccessDeny {
+		t.Errorf("not_in corporate must deny an unresolved client, got %s", d.Outcome)
+	}
+	d = condaccess.Evaluate([]*store.AccessPolicy{pol("deny corp", P, store.AccessModeEnforce, store.AccessDeny, isIn(corp))}, ranges, unresolved)
+	if d.Outcome != store.AccessAllow {
+		t.Errorf("in corporate must not match an unresolved client, got %s", d.Outcome)
+	}
+	d = condaccess.Evaluate([]*store.AccessPolicy{pol("trial", P, store.AccessModeReportOnly, store.AccessDeny, notIn(corp))}, ranges, unresolved)
+	if len(d.ReportOnly) != 1 || d.Outcome != store.AccessAllow {
+		t.Errorf("report-only hit expected without changing the outcome: %+v", d)
+	}
+	b, _ := json.Marshal(d.Audit())
+	if !strings.Contains(string(b), `"client_ip_unresolved":true`) {
+		t.Errorf("audit lacks client_ip_unresolved: %s", b)
 	}
 }

@@ -109,8 +109,12 @@ type Input struct {
 	ClientIP netip.Addr
 	// IPVia says how the address was found: peer (the TCP peer) or
 	// x_forwarded_for (taken from the header of a trusted proxy).
-	IPVia  string
-	Device DeviceState
+	IPVia string
+	// IPUnresolved is set when a trusted proxy did not say who the client is.
+	// The client then matches no network range, so an "in" condition does not
+	// hold and a "not_in" condition does: the policy treats it as outside.
+	IPUnresolved bool
+	Device       DeviceState
 }
 
 // Hit is a policy that matched.
@@ -197,12 +201,12 @@ func hit(p *store.AccessPolicy) Hit {
 func matches(p *store.AccessPolicy, ranges map[uuid.UUID]*store.NetworkRange, in Input) bool {
 	switch p.NetworkOp {
 	case store.NetworkIn:
-		if !inAny(p.NetworkRangeIDs, ranges, in.ClientIP) {
+		if in.IPUnresolved || !inAny(p.NetworkRangeIDs, ranges, in.ClientIP) {
 			return false
 		}
 	case store.NetworkNotIn:
-		// an address that is unknown is not in any range
-		if inAny(p.NetworkRangeIDs, ranges, in.ClientIP) {
+		// an address that is unknown or unresolved is not in any range
+		if !in.IPUnresolved && inAny(p.NetworkRangeIDs, ranges, in.ClientIP) {
 			return false
 		}
 	}
@@ -262,10 +266,13 @@ func (d Decision) Audit() ojson.Object {
 		}
 		out = append(out, ojson.KV{Key: "report_only", Value: hits})
 	}
-	return append(out, ojson.KV{Key: "inputs", Value: ojson.Object{
-		{Key: "client_ip", Value: ip}, {Key: "client_ip_via", Value: d.Input.IPVia},
-		{Key: "device_managed", Value: managed}, {Key: "device_compliance", Value: d.Input.Device.Compliance},
-		{Key: "device_compliance_source", Value: d.Input.Device.ComplianceSource}}})
+	in := ojson.Object{{Key: "client_ip", Value: ip}, {Key: "client_ip_via", Value: d.Input.IPVia}}
+	if d.Input.IPUnresolved {
+		in = append(in, ojson.KV{Key: "client_ip_unresolved", Value: true})
+	}
+	return append(out, ojson.KV{Key: "inputs", Value: append(in,
+		ojson.KV{Key: "device_managed", Value: managed}, ojson.KV{Key: "device_compliance", Value: d.Input.Device.Compliance},
+		ojson.KV{Key: "device_compliance_source", Value: d.Input.Device.ComplianceSource})})
 }
 
 func (h Hit) audit() ojson.Object {
