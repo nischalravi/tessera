@@ -85,10 +85,17 @@ func keyPair(t *testing.T) (*ecdsa.PrivateKey, string) {
 	return k, fmt.Sprintf(`{"kty":"EC","crv":"P-256","x":%q,"y":%q}`, b(k.X), b(k.Y))
 }
 
-func sign(t *testing.T, k *ecdsa.PrivateKey, method, path string, at time.Time, nonce string) string {
+// emptyBody is claim.BodyHash of an empty body.
+var emptyBody = claim.BodyHash(nil)
+
+func sign(t *testing.T, k *ecdsa.PrivateKey, method, path string, at time.Time, nonce string, body ...string) string {
 	t.Helper()
 	ts := fmt.Sprint(at.Unix())
-	sum := sha256.Sum256([]byte("tessera-claim-proof-v1\n" + method + "\n" + path + "\n" + ts + "\n" + nonce))
+	b := ""
+	if len(body) > 0 {
+		b = body[0]
+	}
+	sum := sha256.Sum256([]byte("tessera-claim-proof-v2\n" + method + "\n" + path + "\n" + ts + "\n" + nonce + "\n" + claim.BodyHash([]byte(b))))
 	r, s, err := ecdsa.Sign(rand.Reader, k, sum[:])
 	if err != nil {
 		t.Fatal(err)
@@ -153,7 +160,7 @@ func TestVerify(t *testing.T) {
 		{"two minutes ahead", func() string { return sign(t, k, "GET", path, now.Add(2*time.Minute), nonce) }, "GET", path, nonce, claim.ErrProofStale},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			err := claim.Verify(pub, c.header(), c.method, c.path, c.nonce, now, claim.NewReplays())
+			_, err := claim.Verify(pub, c.header(), c.method, c.path, c.nonce, emptyBody, now, claim.NewReplays())
 			if err != c.wantErr {
 				t.Errorf("Verify = %v, want %v", err, c.wantErr)
 			}
@@ -162,15 +169,56 @@ func TestVerify(t *testing.T) {
 	t.Run("replay", func(t *testing.T) {
 		rp := claim.NewReplays()
 		h := sign(t, k, "GET", path, now, nonce)
-		if err := claim.Verify(pub, h, "GET", path, nonce, now, rp); err != nil {
+		if _, err := claim.Verify(pub, h, "GET", path, nonce, emptyBody, now, rp); err != nil {
 			t.Fatal(err)
 		}
-		if err := claim.Verify(pub, h, "GET", path, nonce, now, rp); err != claim.ErrProofReplay {
+		if _, err := claim.Verify(pub, h, "GET", path, nonce, emptyBody, now, rp); err != claim.ErrProofReplay {
 			t.Errorf("replay = %v", err)
 		}
 		// once the window has passed the entry is forgotten (the timestamp check refuses it anyway)
-		if err := claim.Verify(pub, h, "GET", path, nonce, now.Add(10*time.Minute), rp); err != claim.ErrProofStale {
+		if _, err := claim.Verify(pub, h, "GET", path, nonce, emptyBody, now.Add(10*time.Minute), rp); err != claim.ErrProofStale {
 			t.Errorf("an old replay = %v", err)
+		}
+	})
+	// ECDSA malleability (review on #202): (r, N-s) verifies for the same
+	// message. It is the same proof, so it is a replay, not a fresh proof.
+	t.Run("malleated replay", func(t *testing.T) {
+		rp := claim.NewReplays()
+		h := sign(t, k, "GET", path, now, nonce)
+		ts, sig, _ := strings.Cut(h, ".")
+		raw, _ := base64.RawURLEncoding.DecodeString(sig)
+		s := new(big.Int).SetBytes(raw[32:])
+		s.Sub(elliptic.P256().Params().N, s)
+		mall := ts + "." + base64.RawURLEncoding.EncodeToString(append(raw[:32:32], s.FillBytes(make([]byte, 32))...))
+		if mall == h {
+			t.Fatal("the malleated form is the same string")
+		}
+		p1, err := claim.Verify(pub, h, "GET", path, nonce, emptyBody, now, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p2, err := claim.Verify(pub, mall, "GET", path, nonce, emptyBody, now, nil)
+		if err != nil {
+			t.Fatalf("the malleated signature should verify (it is valid ECDSA): %v", err)
+		}
+		if p1.ID != p2.ID {
+			t.Fatalf("a signature and its malleated form have different proof IDs: %s, %s", p1.ID, p2.ID)
+		}
+		if _, err := claim.Verify(pub, h, "GET", path, nonce, emptyBody, now, rp); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := claim.Verify(pub, mall, "GET", path, nonce, emptyBody, now, rp); err != claim.ErrProofReplay {
+			t.Errorf("malleated replay = %v, want ErrProofReplay", err)
+		}
+	})
+	// The proof signs the body: the same proof with another body does not verify.
+	t.Run("body bound", func(t *testing.T) {
+		h := sign(t, k, "POST", path, now, nonce, `{"code":"123456"}`)
+		if _, err := claim.Verify(pub, h, "POST", path, nonce, claim.BodyHash([]byte(`{"code":"123456"}`)), now, nil); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := claim.Verify(pub, h, "POST", path, nonce, claim.BodyHash([]byte(`{"code":"654321"}`)), now, nil); err != claim.ErrProofBad {
+			t.Errorf("another body = %v, want ErrProofBad", err)
 		}
 	})
 	for err, want := range map[error]string{claim.ErrProofMissing: "proof_missing", claim.ErrProofStale: "proof_stale",

@@ -151,6 +151,11 @@ var (
 	confirmationUse = tq("confirmation_codes.use", `
 		UPDATE confirmation_codes SET used_at = @now WHERE tenant_id = @tenant AND id = @id
 			AND used_at IS NULL AND voided_at IS NULL AND expires_at > @now`)
+	claimProofPrune = tq("claim_proof_uses.prune", `
+		DELETE FROM claim_proof_uses WHERE tenant_id = @tenant AND expires_at <= @now`)
+	claimProofUse = tq("claim_proof_uses.use", `
+		INSERT INTO claim_proof_uses (tenant_id, proof_id, expires_at) VALUES (@tenant, @id, @until)
+		ON CONFLICT (tenant_id, proof_id) DO NOTHING`)
 
 	intakeInvitation = tq("intake_records.set_invitation", `
 		UPDATE intake_records SET invitation_status = @status,
@@ -363,6 +368,22 @@ func (tx *TenantTx) VoidConfirmationCodes(sessionIDHash string, now time.Time) e
 func (tx *TenantTx) UseConfirmationCode(id string, now time.Time) error {
 	res, err := tx.exec(confirmationUse, sql.Named("id", id), sql.Named("now", T(now)))
 	return affectedOne(res, err)
+}
+
+// UseClaimProof records a claim proof's one use (see guests/claim/proof.go).
+// It reports false when the proof was already used and has not expired; the
+// insert is atomic, so two concurrent uses cannot both succeed. Expired rows
+// are pruned first.
+func (tx *TenantTx) UseClaimProof(id string, until, now time.Time) (bool, error) {
+	if _, err := tx.exec(claimProofPrune, sql.Named("now", T(now))); err != nil {
+		return false, err
+	}
+	res, err := tx.exec(claimProofUse, sql.Named("id", id), sql.Named("until", T(until)))
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
 // SetIntakeInvitation moves an intake's invitation status (claimed_at is stamped for claimed).
