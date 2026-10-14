@@ -729,6 +729,54 @@ export const roles = {
   cancel: (id: string) => api<RoleRequest>(`/role-requests/${encodeURIComponent(id)}/cancel`, {}),
 };
 export const rolePaths = { list: "/roles", one: (id: string) => rolePath(id), versions: (id: string) => rolePath(id, "/versions"), drift: (id: string) => rolePath(id, "/drift") };
+/** Kill switch (issue #106): revoke an identity's sessions, refresh tokens and OAuth grants at the providers. */
+export interface ContainmentStep {
+  action: "revoke_sessions" | "revoke_grants";
+  system: string;
+  account: string;
+  outcome: "done" | "manual" | "failed";
+  revoked: number;
+  verified: boolean;
+  detail?: string;
+  notes?: string[];
+  started_at: string;
+  finished_at: string;
+  duration_ms: number;
+}
+export interface ContainmentReport {
+  identity_id: number;
+  identity: string;
+  trigger: string;
+  ok: boolean;
+  started_at: string;
+  finished_at: string;
+  duration_ms: number;
+  providers: { system: string; outcome: string; steps: number; failed: number; manual: number; duration_ms: number }[];
+  steps: ContainmentStep[];
+  manual_tasks: { system: string; account: string; action: string; instructions: string }[];
+}
+/** Resolves with the report; a failed run rejects with an ApiError whose body.report holds it. */
+export const containIdentity = (identityId: number, reason: string) =>
+  api<ContainmentReport>(`/identities/${identityId}/contain`, { reason });
+
+/** A containment step that failed and is queued for retry (or was given up on). */
+export interface ContainmentRetry {
+  id: string;
+  identity_id: number;
+  system: string;
+  account: string;
+  action: "revoke_sessions" | "revoke_grants";
+  trigger: string;
+  status: "pending" | "succeeded" | "gave_up";
+  attempts: number;
+  next_attempt_at: string | null;
+  last_error: string;
+  created_at: string;
+  updated_at: string;
+  manual_action?: string;
+}
+export const retryContainmentNow = (retryId: string) =>
+  api<{ retry: ContainmentRetry }>(`/containment-retries/${encodeURIComponent(retryId)}/retry-now`, {});
 
 // ---------------------------------------------------------------- identity lifecycle (issue #159)
 

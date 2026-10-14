@@ -127,6 +127,9 @@ var crossTenantCases = map[string]crossTenantCase{
 	"DELETE account link": {method: "DELETE", path: pathf("/api/accounts/%d/link"), key: "acct:okta:alice"},
 	"POST merge identity": {method: "POST", path: pathf("/api/identities/%d/merge"), key: "alice",
 		body: func(id int64) string { return fmt.Sprintf(`{"into":%d,"reason":"x"}`, id) }},
+	"GET identity containment": {method: "GET", path: pathf("/api/identities/%d/containment"), key: "alice"},
+	"POST contain identity": {method: "POST", path: pathf("/api/identities/%d/contain"), key: "alice",
+		body: func(int64) string { return `{"reason":"suspected credential compromise"}` }},
 }
 
 // routeParamKey maps each route with path parameters to the cases above.
@@ -148,6 +151,8 @@ var routeParamCases = map[string][]string{
 	"POST /api/accounts/{account_id}/not-person":          {"POST account not person"},
 	"DELETE /api/accounts/{account_id}/link":              {"DELETE account link"},
 	"POST /api/identities/{identity_id}/merge":            {"POST merge identity"},
+	"POST /api/identities/{identity_id}/contain":          {"POST contain identity"},
+	"GET /api/identities/{identity_id}/containment":       {"GET identity containment"},
 }
 
 // TestIsolation_RouteCrossTenant: as tenant B, every route with a path
@@ -182,6 +187,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		}
 		if rt.Pattern == "/api/identity-merges/{merge_id}/unmerge" {
 			continue // TestCorrelationAPI_CrossTenant (a UUID, not a fixture id)
+		}
+		if rt.Pattern == "/api/containment-retries/{retry_id}/retry-now" {
+			continue // TestContainmentRetriesAPI (a UUID, not a fixture id)
 		}
 		if rt.Pattern == "/api/auth/sessions/{session_id}" {
 			continue // TestIsolation_SessionCookieScoped (a UUID, not a fixture id)
@@ -245,16 +253,17 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 	lines := seedRequestLines(t, f) // A's justification carries the sentinel
 	roleIDs, _ := seedRoles(t, f)   // and A's role description
 	values := map[string]string{
-		"/api/roles/{role_id}":                    roleIDs[f.B.ID],
-		"/api/roles/{role_id}/versions":           roleIDs[f.B.ID],
-		"/api/roles/{role_id}/drift":              roleIDs[f.B.ID],
-		"/api/requests/{request_id}":              lines[f.B.ID],
-		"/api/identities/{identity_id}":           fmt.Sprint(b["alice"]),
-		"/api/identities/{identity_id}/lifecycle": fmt.Sprint(b["alice"]),
-		"/api/jml/leaver-plan/{identity_id}":      fmt.Sprint(b["alice"]),
-		"/api/reviews/campaigns/{campaign_id}":    fmt.Sprint(b["campaign"]),
-		"/api/hris/events/{event_id}/plan":        fmt.Sprint(b["hris:leaver"]),
-		"/api/audit/events/{event_id}/proof":      latestEventID(t, f.DB, f.B.ID),
+		"/api/roles/{role_id}":                      roleIDs[f.B.ID],
+		"/api/roles/{role_id}/versions":             roleIDs[f.B.ID],
+		"/api/roles/{role_id}/drift":                roleIDs[f.B.ID],
+		"/api/requests/{request_id}":                lines[f.B.ID],
+		"/api/identities/{identity_id}":             fmt.Sprint(b["alice"]),
+		"/api/identities/{identity_id}/lifecycle":   fmt.Sprint(b["alice"]),
+		"/api/jml/leaver-plan/{identity_id}":        fmt.Sprint(b["alice"]),
+		"/api/reviews/campaigns/{campaign_id}":      fmt.Sprint(b["campaign"]),
+		"/api/hris/events/{event_id}/plan":          fmt.Sprint(b["hris:leaver"]),
+		"/api/audit/events/{event_id}/proof":        latestEventID(t, f.DB, f.B.ID),
+		"/api/identities/{identity_id}/containment": fmt.Sprint(b["alice"]),
 	}
 	checked := 0
 	for _, rt := range srv.Routes() {
