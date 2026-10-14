@@ -8,36 +8,35 @@
   "status": 200,
   "body": {
    "identities": {
-    "human": 59,
+    "human": 58,
     "service": 25,
     "ai_agent": 6,
-    "terminated": 3
+    "terminated": 4
    },
    "accounts": 218,
    "systems": 5,
-   "grants": 434,
-   "effective_permissions": 792,
-   "unused_permissions": 323,
+   "grants": 423,
+   "effective_permissions": 758,
+   "unused_permissions": 309,
    "unused_pct": 40.8,
    "violations": {
-    "total": 76,
+    "total": 75,
     "by_severity": {
      "critical": 6,
-     "high": 51,
+     "high": 50,
      "medium": 19
     },
     "by_policy": {
      "AI agents may not access PII": 3,
      "Leavers retain no access": 3,
      "Non-human identities may not hold prod admin": 9,
-     "Every NHI and AI agent has an active owner": 11,
-     "No standing admin on prod": 30,
-     "SoD: create vs approve supplier payments": 1,
+     "Every NHI and AI agent has an active owner": 13,
+     "No standing admin on prod": 28,
      "Secrets rotated at least every 90 days": 19
     }
    },
    "nhi": {
-    "orphaned": 11,
+    "orphaned": 13,
     "stale_secrets": 19,
     "agents_with_pii": 3
    },
@@ -49,8 +48,8 @@
     "open_items": 248
    },
    "recommendations": {
-    "total": 89,
-    "remove": 47,
+    "total": 84,
+    "remove": 44,
     "role_trim": 3
    },
    "hris_pending": 1,
@@ -112,20 +111,6 @@
      "risk": 68
     },
     {
-     "id": 17,
-     "name": "Marcus Bellweather",
-     "type": "human",
-     "status": "active",
-     "department": "Engineering",
-     "title": "Platform Engineer",
-     "effective": 28,
-     "unused": 11,
-     "privileged": 7,
-     "sensitive": 6,
-     "violations": 2,
-     "risk": 67
-    },
-    {
      "id": 20,
      "name": "Zora Whitlock",
      "type": "human",
@@ -166,6 +151,20 @@
      "sensitive": 0,
      "violations": 3,
      "risk": 52
+    },
+    {
+     "id": 66,
+     "name": "old-migration-token",
+     "type": "service",
+     "status": "active",
+     "department": null,
+     "title": "Okta API token",
+     "effective": 1,
+     "unused": 1,
+     "privileged": 1,
+     "sensitive": 0,
+     "violations": 3,
+     "risk": 51
     }
    ],
    "usage_trend": [
