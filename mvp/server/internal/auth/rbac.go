@@ -113,6 +113,8 @@ const (
 	// provisioning.manage.
 	PermProvisioningRead   Permission = "provisioning.read"
 	PermProvisioningManage Permission = "provisioning.manage"
+	// kill switch (issue #106)
+	PermIdentitiesContain Permission = "identities.contain"
 )
 
 // rolePermissions is the static role -> permission map (Cedar-ready, §12.1).
@@ -132,7 +134,7 @@ var rolePermissions = map[Role][]Permission{
 		PermIdentitiesCorrelate, PermIdentitiesMerge, PermIdentitiesAffiliate,
 		PermIdentityMatchesReview, PermMatchingConfigure, PermGuestLifecycleConfigure,
 		PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide, PermCatalogManage, PermRolesManage, PermLifecycleManage,
-		PermGuestsSponsor, PermGuestsRead, PermGuestsRecover, PermSponsorshipsApprove, PermTermsManage, PermJobsRead, PermProvisioningRead, PermProvisioningManage},
+		PermGuestsSponsor, PermGuestsRead, PermGuestsRecover, PermSponsorshipsApprove, PermTermsManage, PermJobsRead, PermProvisioningRead, PermProvisioningManage, PermIdentitiesContain},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
 		PermConnectionsActivate, PermRequestsCreate, PermEmailRead, PermEmailManage, PermGuestsSponsor, PermGuestsRead,

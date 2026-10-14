@@ -150,6 +150,9 @@ var crossTenantCases = map[string]crossTenantCase{
 		body: func(int64) string { return `{}` }},
 	"POST guest recovery": {method: "POST", path: pathf("/api/guests/%d/recovery"), key: "alice",
 		body: func(int64) string { return `{}` }},
+	"GET identity containment": {method: "GET", path: pathf("/api/identities/%d/containment"), key: "alice"},
+	"POST contain identity": {method: "POST", path: pathf("/api/identities/%d/contain"), key: "alice",
+		body: func(int64) string { return `{"reason":"suspected credential compromise"}` }},
 }
 
 // routeParamKey maps each route with path parameters to the cases above.
@@ -178,6 +181,8 @@ var routeParamCases = map[string][]string{
 	"GET /api/identities/{identity_id}/identifiers":       {"GET identity identifiers"},
 	"GET /api/identities/{identity_id}/access-bundle":     {"GET identity access bundle"},
 	"POST /api/identities/{identity_id}/affiliations":     {"POST add affiliation"},
+	"POST /api/identities/{identity_id}/contain":          {"POST contain identity"},
+	"GET /api/identities/{identity_id}/containment":       {"GET identity containment"},
 }
 
 // TestIsolation_RouteCrossTenant: as tenant B, every route with a path
@@ -248,6 +253,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		}
 		if strings.HasPrefix(rt.Pattern, "/api/provisioning/") {
 			continue // TestIsolation_ProvisioningRoutes (UUIDs, not fixture ids)
+		}
+		if rt.Pattern == "/api/containment-retries/{retry_id}/retry-now" {
+			continue // TestContainmentRetriesAPI (a UUID, not a fixture id)
 		}
 		if rt.Pattern == "/api/auth/sessions/{session_id}" {
 			continue // TestIsolation_SessionCookieScoped (a UUID, not a fixture id)
@@ -329,6 +337,7 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		"/api/email/messages/{message_id}":            seedEmailMessage(t, f, f.B, store.EmailDeferred),
 		"/api/jobs/{job_id}":                          insertJobRun(t, f.DB, f.B.ID),
 		"/api/provisioning/ops/{op_id}":               insertProvOp(t, f.DB, f.B.ID, f.B.Refs["connection:ad"], "b-key"),
+		"/api/identities/{identity_id}/containment":   fmt.Sprint(b["alice"]),
 	}
 	checked := 0
 	for _, rt := range srv.Routes() {

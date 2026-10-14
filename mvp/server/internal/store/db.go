@@ -122,6 +122,8 @@ var tables = []string{
 	"guest_deprovisioning",
 	// guest terms, attribute consent and recovery (schema/0232_terms_recovery.sql)
 	"terms_documents", "terms_assignments", "terms_acceptances", "attribute_consents", "recovery_cases", "recovery_codes",
+	// identity containment (schema/0205_containment.sql)
+	"containment_credentials", "containment_retries",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was
