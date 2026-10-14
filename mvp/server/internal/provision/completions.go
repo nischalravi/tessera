@@ -36,12 +36,14 @@ type GrantRevokeData struct {
 }
 
 func init() {
-	RegisterCompletion(CompleteEdgeRemove, func(tx *store.TenantTx, _ time.Time, raw json.RawMessage) error {
+	// Removals leave a revoked_grants tombstone, like the direct paths, so a
+	// connector sync does not bring the grant back (UAT #134).
+	RegisterCompletion(CompleteEdgeRemove, func(tx *store.TenantTx, now time.Time, raw json.RawMessage) error {
 		var d EdgeData
 		if err := json.Unmarshal(raw, &d); err != nil {
 			return err
 		}
-		return tx.DeleteEdge(d.EdgeID)
+		return tx.RevokeEdge(d.EdgeID, now, "jml")
 	})
 	RegisterCompletion(CompleteAccountDisable, func(tx *store.TenantTx, _ time.Time, raw json.RawMessage) error {
 		var d AccountData
@@ -64,6 +66,6 @@ func init() {
 			{Key: "grant", Value: d.Grant}, {Key: "permissions_removed", Value: d.PermissionsRemoved}}); err != nil {
 			return err
 		}
-		return tx.DeleteEdge(d.EdgeID)
+		return tx.RevokeEdge(d.EdgeID, now, "least-privilege")
 	})
 }
