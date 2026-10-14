@@ -80,8 +80,20 @@ const ClaimPage = lazy(() => import("../public/claim/ClaimPage"));
 // the guest's "request renewal" page (issue #74): public, one button, no session
 const RenewPage = lazy(() => import("../public/renew/RenewPage"));
 
+// guest self-registration (issue #66): public, one form, no session
+const RegisterPage = lazy(() => import("../public/register/RegisterPage"));
+
 export default function App() {
   const { pathname } = useLocation();
+  if (pathname === "/register") {
+    return (
+      <ThemeProvider>
+        <Suspense fallback={<PageSkeleton />}>
+          <RegisterPage />
+        </Suspense>
+      </ThemeProvider>
+    );
+  }
   if (pathname === "/renew") {
     return (
       <ThemeProvider>

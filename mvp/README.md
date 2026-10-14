@@ -191,6 +191,8 @@ when a second reviewer is needed) · `GET /api/identity-merges` · `POST /api/id
 `POST /api/guest-lifecycle/tasks/{id}/resolve {action: accept|decline|keep|confirm|dismiss}` ·
 `GET|PUT /api/admin/guest-lifecycle {sponsor_reminder_days, guest_reminder_days, transfer_deadline_days, on_sponsor_departure, conversion_dual_status, grace_days, retention_days, retention_days_visitor, keep_rematch_hashes}` ·
 `POST /public/t/{slug}/guest/renewal-request {token}` (public, always 202; see Guest lifecycle) ·
+`GET /public/t/{slug}/register/sponsors?q=` · `POST /public/t/{slug}/register` (public, always 202; see Guest self-registration) ·
+`GET /api/guest-registrations` · `POST /api/guest-registrations/code` · `POST /api/guest-registrations/{id}/approve|deny` ·
 `GET /api/approvals/inbox` · `GET /api/approvals/delegates` · `GET|POST /api/approvals/delegations` ·
 `POST /api/approvals/delegations/{id}/revoke` ·
 `GET /api/notifications[?unread=1&limit=]` · `POST /api/notifications/read {ids}|{all:true}` ·
@@ -562,6 +564,48 @@ rate-limit state. Parity fixtures are unchanged. After pulling this change run `
 it adds the claim tables and three columns to `intake_records`, widens its `invitation_status` check
 and allows the login purpose `claim`.
 themselves. Not yet: provisioning into the target system (#103), business roles (#161).
+
+### Guest self-registration
+
+Issue #66 (GU-3; design `docs/design/guest-accounts-and-claim.md` §3, §6.4, T16). A visitor asks a
+sponsor to register them at `/register` (public page, no sign-in; the tenant comes from the host or
+`VITE_TESSERA_TENANT`). Code: `internal/guests/register`, `internal/api/register.go`, schema
+`0240_guest_registration.sql` (`guest_registrations`, `guest_sponsor_codes`), page
+`frontend/src/public/register/`, the sponsor's side in the Inbox ("Guest registration requests").
+
+- **Nothing exists until the sponsor approves.** `POST /public/t/{slug}/register` records a pending
+  request (name, address, purpose, dates, sponsor) and mails the sponsor (Inbox notification) and the
+  visitor ("your sponsor has been asked", no link). No identity, account, platform user or claim token
+  is created. Pending requests expire after 14 days.
+- **The sponsor is named by a name-only search** (`GET register/sponsors?q=`, at least two letters,
+  at most 20 results, each `{name, handle}`; the handle is a keyed hash, so no id or address leaks and
+  a handle means nothing in another tenant) **or by a code** the sponsor made (`POST
+  /api/guest-registrations/code`, shown once, `XXXXX-XXXXX`, 30 days, one active code per sponsor, only
+  a keyed hash is stored). Only people the sponsor policy lets sponsor are found or accepted.
+- **Always the same answer.** The response is `202 {"status":"ok","message":"Check your email. ..."}` for a
+  new request, an address that already has an account, an unknown sponsor or code, a repeat and an
+  unknown tenant, after the claim minimum duration (300 ms). Only a form that is not valid (400), a
+  failed bot challenge (403), the rate limit (429) and an unconfigured server (503) differ, and none
+  depends on anyone else. Refusals are audited with a reason and never with the address.
+- **An address that already belongs to someone** (a person, an identifier or a sign-in user) gets one
+  "you already have an account, sign in" email a day and nothing is created (K3: a match is never
+  authority).
+- **Limits:** 5 per IP per hour (token bucket, same client-IP key as the other limits), 3 per address
+  per day (throttles are audited as `claim.throttled` with scope `register_ip` or `register_email`), 30
+  searches per IP then one per 2 s.
+- **Bot challenge:** `register.Challenger` (`Config.RegisterChallenge`). Outside production the default
+  accepts everything (`register.AllowAll`); in production registration answers `503` until a real
+  verifier is configured. A Turnstile adapter (through `internal/safehttp`) is not built yet.
+- **Approve / deny** (`guests.sponsor`, step-up; only the sponsor the request names, anyone else gets
+  404). Approve runs the ordinary invitation path (`sponsorship.Invite`, channel `self_registration`,
+  self-asserted, never auto-links): the sponsor policy still decides and refuses with its own codes
+  (the request stays pending), and the claim link is issued and mailed as for any sponsor invitation.
+  Optional body `{population, ends_at}` (defaults: `visitor`, the dates asked for). Deny sends the
+  visitor a neutral "not approved" email (no sponsor, no reason).
+- **Retention (PII).** A request holds name, address and purpose. They are reduced to NULL at approval
+  (the person record holds them) and 30 days after a denial or expiry (the sweeper does it; the row
+  stays as a tombstone with the address's keyed hash). Audit actions:
+  `guest.registration.submit|refused|approve|deny|expire|purge`, `guest.sponsor_code.create`.
 
 ### Identity matching and merging
 

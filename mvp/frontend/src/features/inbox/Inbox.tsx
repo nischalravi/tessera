@@ -1,7 +1,7 @@
 import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Check, ClipboardCheck, Keyboard, KeyRound, ListChecks, Plug, Search, ShoppingCart, X } from "lucide-react";
-import { HrisEvent, IdentityMatchList, JitRequest, SimResult, ago, approveRequest, denyRequest, fmtDate, hrisExecute, jitDecide, relTime, reviewDecide, simulate, useApi } from "../../api";
+import { HrisEvent, IdentityMatchList, JitRequest, RegistrationRequest, SimResult, ago, approveRequest, denyRequest, fmtDate, hrisExecute, jitDecide, registrationRequests, relTime, reviewDecide, simulate, useApi } from "../../api";
 import { useSession } from "../../app/auth";
 import { usePersona } from "../../app/persona";
 import {
@@ -279,6 +279,52 @@ function IdentityMatchBanner() {
   );
 }
 
+/**
+ * Registration requests (issue #66): visitors who asked the signed-in person to sponsor them. Nothing
+ * exists for them until it is approved here; approving creates the guest and emails the invitation,
+ * denying sends them a neutral "not approved" email.
+ */
+function RegistrationRequests() {
+  const { can } = useSession();
+  const toast = useToast();
+  const { data, reload } = useApi<{ registrations: RegistrationRequest[] }>(can("guests.sponsor") ? "/guest-registrations" : null);
+  const [busy, setBusy] = useState("");
+  if (!data || data.registrations.length === 0) return null;
+  const decide = async (r: RegistrationRequest, verb: "approve" | "deny") => {
+    setBusy(r.id);
+    try {
+      if (verb === "approve") await registrationRequests.approve(r.id);
+      else await registrationRequests.deny(r.id);
+      toast(`${verb === "approve" ? "Approved" : "Denied"}: ${r.given_name ?? ""} ${r.family_name ?? ""}`.trim());
+      reload();
+    } catch (e: any) {
+      toast(String(e.message ?? e), { kind: "error" });
+    } finally {
+      setBusy("");
+    }
+  };
+  return (
+    <section className="card" style={{ marginBottom: 12 }} aria-labelledby="reg-requests">
+      <h2 id="reg-requests" className="h3">Guest registration requests</h2>
+      <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+        {data.registrations.map((r) => (
+          <li key={r.id} className="spread" style={{ gap: 12, padding: "8px 0", borderTop: "1px solid var(--line)", flexWrap: "wrap" }}>
+            <div>
+              <strong>{r.given_name} {r.family_name}</strong> <span className="small muted">{r.email}</span>
+              <div className="small">{r.purpose}</div>
+              <div className="small muted">Until {fmtDate(r.ends_at)} · asked {relTime(r.created_at)}{r.via === "code" && " · with your code"}</div>
+            </div>
+            <div className="row">
+              <Button variant="primary" disabled={busy === r.id} onClick={() => decide(r, "approve")}>Approve</Button>
+              <Button disabled={busy === r.id} onClick={() => decide(r, "deny")}>Deny</Button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 /** Guest lifecycle tasks (issue #74) the signed-in person may decide: a sponsor left, a guest asked for a renewal, a hire. */
 function GuestTaskBanner() {
   const { data } = useApi<{ tasks: { task_id?: string }[] }>("/guest-lifecycle/tasks");
@@ -404,6 +450,7 @@ export function Inbox() {
       )}
       <IdentityMatchBanner />
       <GuestTaskBanner />
+      <RegistrationRequests />
       <div className="spread" style={{ marginBottom: 12, flexWrap: "wrap" }}>
         <FilterChips label="Filter inbox" value={filter} onChange={(v) => setParams(v === "all" ? {} : { filter: v })} options={FILTERS.map((f) => ({ ...f, count: counts[f.id] ?? 0 }))} />
         <div className="row">
