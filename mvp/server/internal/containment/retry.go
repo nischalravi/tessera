@@ -204,16 +204,27 @@ func (s *Service) RunRetries(ctx context.Context, db *store.DB, tenant tenancy.I
 	if err != nil || len(todo) == 0 {
 		return nil, err
 	}
-	rctx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	budget := s.RetryBudget
+	if budget <= 0 {
+		budget = 25 * time.Second
+	}
+	rctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
+	// A task the deadline left unstarted stays due for the next sweep rather
+	// than counting as a failed attempt and losing its place in the backoff.
+	ran := todo[:0]
 	for _, w := range todo {
 		if w.rep == nil {
+			if rctx.Err() != nil {
+				continue
+			}
 			w.rep = s.Run(rctx, w.job)
 		}
+		ran = append(ran, w)
 	}
 	var out []*store.ContainmentRetry
 	err = db.InTenant(ctx, tenant, func(c *store.TenantTx) error {
-		for _, w := range todo {
+		for _, w := range ran {
 			r, err := ApplyRetry(c, s.now(), actor, w.r.ID, w.rep)
 			if err != nil {
 				return err

@@ -32,6 +32,9 @@ type Service struct {
 	Clock  timeutil.Clock
 	// Sleep waits between rate-limit retries (tests replace it).
 	Sleep func(ctx context.Context, d time.Duration) error
+	// RetryBudget bounds the provider calls of one RunRetries pass (default
+	// 25s); tests shorten it.
+	RetryBudget time.Duration
 }
 
 func (s *Service) now() time.Time {

@@ -172,6 +172,27 @@ func TestRetrySweeperBacksOffThenSucceeds(t *testing.T) {
 	}
 }
 
+func TestRetryUnstartedTasksStayDue(t *testing.T) {
+	e := newRetryEnv(t)
+	e.svc.RetryBudget = time.Nanosecond // spent before the first task starts
+	e.now = e.rows()[0].NextAttemptAt
+	if got := e.sweep(); len(got) != 0 {
+		t.Fatalf("tasks ran past the budget: %v", got)
+	}
+	for _, r := range e.rows() {
+		if r.Status != store.RetryPending || r.Attempts != 0 || r.NextAttemptAt.After(e.now) {
+			t.Errorf("an unstarted task lost its turn: %+v", r)
+		}
+	}
+	if a := e.actions(); a["containment.retry_attempt"] != 0 {
+		t.Errorf("unstarted tasks were audited as attempts: %v", a)
+	}
+	e.svc.RetryBudget = 0
+	if got := e.sweep(); len(got) != 2 {
+		t.Errorf("the next sweep ran %d tasks, want 2", len(got))
+	}
+}
+
 func TestRetryGivesUpAfterADay(t *testing.T) {
 	e := newRetryEnv(t)
 	start := e.now
