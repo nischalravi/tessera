@@ -138,6 +138,64 @@ tenant-scoped like every other table; Admin → Connections → New
 connection → Active Directory (demo) walks the rest. Design: `docs/design/deployment-readiness.md`.
 The routes are documented at `/api/readiness/openapi.json`.
 
+#### Live LDAP checks
+
+Connections of type **OpenLDAP / 389-DS** (template `ldap`, which also covers LLDAP) run **real,
+read-only** checks instead of simulated ones: TLS handshake and chain, simple bind, Who Am I
+(RFC 4532), base-DN reads, a bounded people search, per-class attribute fill counts (counts only,
+no values), paging past the server's size limit, the change feed (syncrepl, accesslog or the
+389-DS retro changelog), the schema's custom attributes and, on 389-DS, the Get Effective Rights
+control. The prober (`server/internal/connectors/ldap`) can only bind, search, ask Who Am I and
+negotiate StartTLS, reads at most 500 objects per class, and sends a password only over a
+connection with a verified TLS 1.2+ channel. What a server cannot answer (no Who Am I, no Get
+Effective Rights, no `cn=Monitor` clock, as on LLDAP and OpenLDAP) is reported as **unsupported:
+an attestation is required**, never as a pass. Other connector types keep their simulated checks.
+
+Network path: `server/internal/safedial` shares safehttp's address policy for raw TCP. Only ports
+**636 (LDAPS)** and **389 (StartTLS required)** are dialled, private, loopback, link-local,
+CGNAT and metadata addresses are refused after DNS resolution, and TLS 1.2 or later is required.
+**The production path for a directory on a private network is the Directory Agent** (design
+`deployment-readiness.md` §5.3, DR-11, not built yet; `safedial.Transport` is the seam it will
+implement). Until then, a dev instance can reach a lab directory with an explicit allowlist.
+
+To point a local dev instance at a real LDAP or LLDAP server (for example an LLDAP on a NAS):
+
+1. Use **LDAPS** (port 636) and a certificate whose name matches the host name you configure.
+   (LLDAP: set `[ldaps_options] enabled = true`, `port = 6360`, `cert_file` and `key_file` in `lldap_config.toml`;
+   map 636 on the host if the container publishes 6360. Port 389 works only if the server offers StartTLS.)
+2. Create a **read-only bind account**. In LLDAP create a user such as `svc-tessera` and add it to the
+   `lldap_strict_readonly` group, not `lldap_admin` (a member of `lldap_admin` is reported as a root
+   identity and fails `ldap.svc.readonly`). On OpenLDAP and 389-DS use a dedicated entry with read ACLs,
+   never the rootDN or `cn=Directory Manager`.
+3. Start the dev server with the lab host allowlisted (dev only; `TESSERA_ENV=prod` refuses this variable):
+
+   ```bash
+   TESSERA_SAFEDIAL_ALLOW=192.168.1.20:636 ./run.sh     # host:port, CIDR:port or name:port; 389 or 636 only
+   ```
+
+4. In Admin → Connections → New connection → **OpenLDAP / 389-DS** set the host, port 636, the
+   **Bind DN** (for example `uid=svc-tessera,ou=people,dc=tessera,dc=test`) and, if the server
+   certificate is not from a public CA, paste the CA certificate (PEM, certificates only). Under
+   Scope set the base DNs (LLDAP: `ou=people,dc=tessera,dc=test` and `ou=groups,dc=tessera,dc=test`) and
+   the user filter (`(objectClass=inetOrgPerson)`), then save the password under Credential. It is
+   sealed under the KEK and never returned. Attest the base items, move to ready to validate and run
+   **Validate**.
+5. To check the prober against the lab outside the UI (read-only; nothing is committed, the target
+   comes from the environment):
+
+   ```bash
+   cd server
+   TESSERA_LDAP_TEST_URL=ldaps://192.168.1.20:636 \
+   TESSERA_LDAP_TEST_BIND_DN='uid=svc-tessera,ou=people,dc=tessera,dc=test' \
+   TESSERA_LDAP_TEST_PASSWORD='...' \
+   TESSERA_LDAP_TEST_BASE_DN='ou=people,dc=tessera,dc=test;ou=groups,dc=tessera,dc=test' \
+   TESSERA_LDAP_TEST_CA=/path/to/ca.pem \
+   go test -tags ldapinteg -run TestLive -v ./internal/connectors/ldap
+   ```
+
+   It logs every check's status and message (never the password) and fails if TLS, bind, the base
+   DNs or the people search do not pass.
+
 ### Main API endpoints
 
 `GET /api/summary` · `GET /api/identities[?type=&q=]` · `GET /api/identities/{id}` · `GET /api/accounts[?system=]` ·
