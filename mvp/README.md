@@ -87,7 +87,7 @@ server/
     safehttp/           SSRF-guarded outbound HTTP client (https only, address checks after DNS)
     ratelimit/          keyed token-bucket limiter with a bounded key set
     ojson/, timeutil/   ordered JSON + Python float repr; CPython-compatible time arithmetic
-    testkit/            shared test fixtures (tiny world through a real Connector, seeded demo DB)
+    testkit/            shared test fixtures (tiny world through a real Connector, seeded demo DB; each is seeded once per test binary and handed out as a private copy per test)
     devidp/             dev IdP: mock OIDC issuer, vendor emulation profiles, fault injection;
                         devidptest/ runs it in-process for tests. Never imported by the API.
   policies/*.yaml       policy-as-code (embedded in the binary; run.sh reads them from disk)
