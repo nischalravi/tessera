@@ -85,6 +85,7 @@ func at(v any, path ...any) any {
 }
 
 func TestRevokeDryRunAndApplyViaAPI(t *testing.T) {
+	t.Parallel()
 	st, ids := testkit.Tiny(t)
 	c := client{t, testServer(st)}
 	e := testkit.Get(t, st, func(c *store.TenantTx) (*store.GrantEdge, error) {
@@ -118,6 +119,7 @@ func TestRevokeDryRunAndApplyViaAPI(t *testing.T) {
 }
 
 func TestAPISmoke(t *testing.T) {
+	t.Parallel() // its own database
 	c := client{t, testServer(testkit.Demo(t))}
 	summary := c.json("GET", "/api/summary", "", 200)
 	if at(summary, "identities", "ai_agent") != 6.0 || at(summary, "violations", "total").(float64) <= 0 {
@@ -178,6 +180,7 @@ func TestAPISmoke(t *testing.T) {
 }
 
 func TestAccountsList(t *testing.T) {
+	t.Parallel()
 	c := client{t, testServer(testkit.Demo(t))}
 	rows := c.json("GET", "/api/accounts", "", 200).([]any)
 	if float64(len(rows)) != at(c.json("GET", "/api/summary", "", 200), "accounts") {
@@ -209,6 +212,7 @@ func TestAccountsList(t *testing.T) {
 }
 
 func TestRoutingAndErrors(t *testing.T) {
+	t.Parallel()
 	st, _ := testkit.Tiny(t)
 	c := client{t, testServer(st)}
 	tests := []struct {
@@ -245,6 +249,7 @@ func TestRoutingAndErrors(t *testing.T) {
 }
 
 func TestBodySizeLimit(t *testing.T) {
+	t.Parallel()
 	st, _ := testkit.Tiny(t)
 	c := client{t, testServer(st, func(cfg *Config) { cfg.MaxBodyBytes = 64 })}
 	big := `{"remove_edge_ids": [` + strings.Repeat("1,", 100) + `1]}`
@@ -266,6 +271,7 @@ func TestBodySizeLimit(t *testing.T) {
 }
 
 func TestCORS(t *testing.T) {
+	t.Parallel()
 	st, _ := testkit.Tiny(t)
 	c := client{t, testServer(st)}
 	tests := []struct {
@@ -310,6 +316,7 @@ func TestHandlerTimeout(t *testing.T) {
 }
 
 func TestInternalErrorsAreNotLeaked(t *testing.T) {
+	t.Parallel()
 	st, _ := testkit.Tiny(t)
 	var logs strings.Builder
 	srv := New(Config{Store: st.DB, Tenant: st.Tenant, Clock: timeutil.Frozen(testkit.Now), Policies: policy.NewLoader(policies.FS),

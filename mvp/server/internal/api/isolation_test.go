@@ -125,6 +125,7 @@ var routeParamCases = map[string][]string{
 // "request is not pending"); the design's "404" is therefore checked as
 // "indistinguishable from missing".
 func TestIsolation_RouteCrossTenant(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	srv := isolationServer(f, f.B.ID)
 	h := srv.Handler()
@@ -186,6 +187,7 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 // own ids for path parameters) answers without any of tenant A's data. POST
 // routes that return tenant data are exercised too.
 func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	// Positive control: served as tenant A, the sentinel is visible.
 	if rec := serveOnce(isolationServer(f, f.A.ID).Handler(), http.MethodGet, "/api/identities", ""); !leaks(rec.Body.String()) {
@@ -272,6 +274,7 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 // TestIsolation_GraphSnapshotScoped: tenant B's graph shares no node with
 // tenant A's, and /api/simulate with one of A's node keys is a 400.
 func TestIsolation_GraphSnapshotScoped(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	snap := func(id tenancy.ID) *graph.Snapshot {
 		var g *graph.Snapshot
@@ -309,6 +312,7 @@ func TestIsolation_GraphSnapshotScoped(t *testing.T) {
 // tenancy.ID) answers every tenant route with 500 and no data, and records
 // tenancy.context_missing on the platform tenant. Untenanted routes still work.
 func TestIsolation_NoTenantFailsClosed(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	srv := isolationServer(f, tenancy.ID{})
 	h := srv.Handler()

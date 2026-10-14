@@ -14,6 +14,7 @@ import (
 // UAT #133: an HRIS event for an identity that does not exist is rejected, and
 // an event row that already points at a missing identity cannot break the reads.
 func TestHrisEventUnknownIdentity(t *testing.T) {
+	t.Parallel()
 	st, _ := testkit.Tiny(t)
 	c := client{t, testServer(st)}
 	for _, typ := range []string{"leaver", "mover", "joiner"} {
@@ -45,6 +46,7 @@ func TestHrisEventUnknownIdentity(t *testing.T) {
 // UAT #134: a connector sync must not undo a leaver, a revoked grant or an
 // access-review revoke.
 func TestSyncKeepsRemediation(t *testing.T) {
+	t.Parallel()
 	c := newRD(t)
 	var leaver, leaverEvent int64
 	var revoked *store.GrantEdge
@@ -141,6 +143,7 @@ func (c rdClient) edge(id int64) *store.GrantEdge {
 // UAT #135: simulating a time-boxed JIT grant (duration_hours) must not report
 // the standing-admin violation that a permanent grant would.
 func TestSimulateJitGrantIsNotStanding(t *testing.T) {
+	t.Parallel()
 	st, ids := testkit.Tiny(t)
 	c := client{t, testServer(st)}
 	edge := func(extra string) string {

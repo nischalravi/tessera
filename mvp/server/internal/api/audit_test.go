@@ -68,6 +68,7 @@ type httpField struct {
 // status, sorted query keys only, and the anonymous actor, whatever the
 // client claims.
 func TestAudit_EveryRequestOneEvent(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	h := isolationServer(f, f.B.ID).Handler()
 	alice := fmt.Sprint(f.B.IDs["alice"])
@@ -157,6 +158,7 @@ func TestAudit_EveryRequestOneEvent(t *testing.T) {
 
 // TestAudit_HealthNotRecorded: the excluded public routes write nothing.
 func TestAudit_HealthNotRecorded(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	h := isolationServer(f, f.B.ID).Handler()
 	before := len(ledger(t, f.DB, f.B.ID)) + len(ledger(t, f.DB, tenancy.Platform))
@@ -171,6 +173,7 @@ func TestAudit_HealthNotRecorded(t *testing.T) {
 // TestAudit_ReadFailsClosed (E2.4): with the ledger broken, a read answers
 // 503 audit_unavailable and none of the data it computed.
 func TestAudit_ReadFailsClosed(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	h := isolationServer(f, f.A.ID).Handler()
 	if rec := serveOnce(h, "GET", "/api/identities", ""); rec.Code != http.StatusOK || !leaks(rec.Body.String()) {
@@ -224,6 +227,7 @@ func TestAudit_ReadFailsClosed(t *testing.T) {
 // /api/simulate fails closed like a read, even though the JIT sweep before
 // its analysis commits a jit.expire event in its transaction.
 func TestAudit_MutationResponseSentWhenRequestEventFails(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	srv := isolationServer(f, f.B.ID)
 	srv.cfg.AuditAppend = func(context.Context, tenancy.ID, store.AuditEvent) error { return errors.New("disk full") }
@@ -257,6 +261,7 @@ func TestAudit_MutationResponseSentWhenRequestEventFails(t *testing.T) {
 // request's id) is in the ledger. A new route that returns data or changes
 // state without a record fails here.
 func TestAudit_EveryRouteFailsClosed(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	srv := isolationServer(f, f.B.ID)
 	srv.cfg.AuditAppend = func(context.Context, tenancy.ID, store.AuditEvent) error { return errors.New("disk full") }
@@ -315,6 +320,7 @@ func TestAudit_EveryRouteFailsClosed(t *testing.T) {
 // nonexistent, and B's audit routes (list, checkpoints, proof, verify,
 // export) never read, verify or change A's chain.
 func TestIsolation_AuditRoutes(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	a := isolationServer(f, f.A.ID).Handler()
 	serveOnce(a, "GET", "/api/identities", "") // A has request events too
@@ -397,6 +403,7 @@ func TestIsolation_AuditRoutes(t *testing.T) {
 // TestAudit_ExportOneRequestEvent: the streamed export writes its
 // http.request event once, before streaming, plus an audit.export event.
 func TestAudit_ExportOneRequestEvent(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	h := isolationServer(f, f.B.ID).Handler()
 	before := ledger(t, f.DB, f.B.ID)
@@ -433,6 +440,7 @@ func TestAudit_ExportOneRequestEvent(t *testing.T) {
 // TestAudit_ListFilters: the extended /api/audit keeps its fields, adds the
 // ledger's, and filters.
 func TestAudit_ListFilters(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	h := isolationServer(f, f.B.ID).Handler()
 	serveOnce(h, "GET", "/api/identities", "")
@@ -581,6 +589,7 @@ func TestAudit_ExportStreamTimeout(t *testing.T) {
 // is a 422 (it would otherwise mean "no limit" to SQLite), 0 returns nothing,
 // and the values the parity fixtures use behave as before.
 func TestAudit_ListLimit(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	syntheticChain(t, f.DB, f.B.ID, MaxAuditLimit+50)
 	h := isolationServer(f, f.B.ID).Handler()
