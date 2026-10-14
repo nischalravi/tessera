@@ -2,6 +2,7 @@ package containment
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -57,6 +58,8 @@ func (s *Service) revoker(system string, c Credential) (Revoker, error) {
 		return newGoogle(s.HTTP, c, s.Sleep)
 	case GitHub:
 		return newGitHub(s.HTTP, c, s.Sleep)
+	case AWSIdentityCenter:
+		return newAWS(s.HTTP, c, s.Sleep, s.now)
 	}
 	return nil, fmt.Errorf("no revoker for system %q", system)
 }
@@ -68,6 +71,9 @@ type CredentialInput struct {
 	Token   string `json:"token"`
 	BaseURL string `json:"base_url"`
 	Org     string `json:"org"`
+	// AWS is the credential of an aws_identity_center connection (instead of
+	// Token); base_url then optionally replaces the AWS endpoints.
+	AWS *AWSCredential `json:"aws"`
 }
 
 func credAAD(c *store.TenantTx, connectionID string) []byte {
@@ -90,9 +96,13 @@ func (s *Service) PutCredential(c *store.TenantTx, connectionID string, in Crede
 	switch {
 	case conn.RetiredAt != nil:
 		return &Error{"the connection is retired"}
-	case !GrantCapable(conn.System):
-		return &Error{fmt.Sprintf("containment supports okta, entra, google and github connections, not %q", conn.System)}
-	case in.Token == "" || len(in.Token) > 8192:
+	case !GrantCapable(conn.System) && conn.System != AWSIdentityCenter:
+		return &Error{fmt.Sprintf("containment supports okta, entra, google, github and aws_identity_center connections, not %q", conn.System)}
+	case conn.System == AWSIdentityCenter && in.AWS == nil:
+		return &Error{"aws (the AWS credential) is required for an aws_identity_center connection"}
+	case conn.System != AWSIdentityCenter && in.AWS != nil:
+		return &Error{"aws is only for aws_identity_center connections"}
+	case conn.System != AWSIdentityCenter && (in.Token == "" || len(in.Token) > 8192):
 		return &Error{"token is required and at most 8 KiB"}
 	case conn.System == Okta && in.BaseURL == "":
 		return &Error{"base_url (the Okta org URL) is required"}
@@ -108,7 +118,18 @@ func (s *Service) PutCredential(c *store.TenantTx, connectionID string, in Crede
 	if len(in.Org) > 100 {
 		return &Error{"org is too long"}
 	}
-	enc, err := s.Sealer.Seal([]byte(in.Token), credAAD(c, connectionID))
+	secret := in.Token
+	if conn.System == AWSIdentityCenter {
+		if why := in.AWS.check(); why != "" {
+			return &Error{why}
+		}
+		raw, err := json.Marshal(in.AWS)
+		if err != nil {
+			return err
+		}
+		secret = string(raw)
+	}
+	enc, err := s.Sealer.Seal([]byte(secret), credAAD(c, connectionID))
 	if err != nil {
 		return err
 	}

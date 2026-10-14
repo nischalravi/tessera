@@ -40,20 +40,27 @@ const (
 	GitHub = "github"
 )
 
-// SessionCapable reports whether system is an IdP whose sessions and refresh
-// tokens Tessera can revoke.
+// AWSIdentityCenter (aws.go) is also a provider: its revoke_sessions step
+// denies the user in a service control policy and removes the user's
+// assignments.
+
+// SessionCapable reports whether system is an IdP, or AWS IAM Identity Center,
+// whose sessions and refresh tokens Tessera can revoke.
 func SessionCapable(system string) bool {
-	return system == Okta || system == Entra || system == Google
+	return system == Okta || system == Entra || system == Google || system == AWSIdentityCenter
 }
 
 // GrantCapable reports whether system has OAuth consents or credential
-// authorizations Tessera can revoke.
-func GrantCapable(system string) bool { return SessionCapable(system) || system == GitHub }
+// authorizations Tessera can revoke (IAM Identity Center has none: its
+// assignments go with revoke_sessions).
+func GrantCapable(system string) bool {
+	return system == Okta || system == Entra || system == Google || system == GitHub
+}
 
 // Target is one account to contain at one provider.
 type Target struct {
-	System   string // okta, entra, google, github
-	UserID   string // Okta and Entra user id, Google userKey (email or id), GitHub login
+	System   string // okta, entra, google, github, aws_identity_center
+	UserID   string // Okta and Entra user id, Google userKey (email or id), GitHub login, identity store UserId
 	Username string // for reports
 }
 
