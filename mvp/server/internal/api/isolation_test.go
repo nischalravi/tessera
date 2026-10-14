@@ -147,6 +147,9 @@ var crossTenantCases = map[string]crossTenantCase{
 		body: func(int64) string { return `{}` }},
 	"POST revoke invitation": {method: "POST", path: pathf("/api/guests/%d/revoke-invitation"), key: "alice",
 		body: func(int64) string { return `{}` }},
+	"GET identity containment": {method: "GET", path: pathf("/api/identities/%d/containment"), key: "alice"},
+	"POST contain identity": {method: "POST", path: pathf("/api/identities/%d/contain"), key: "alice",
+		body: func(int64) string { return `{"reason":"suspected credential compromise"}` }},
 }
 
 // routeParamKey maps each route with path parameters to the cases above.
@@ -173,6 +176,8 @@ var routeParamCases = map[string][]string{
 	"GET /api/identities/{identity_id}/affiliations":      {"GET identity affiliations"},
 	"GET /api/identities/{identity_id}/identifiers":       {"GET identity identifiers"},
 	"POST /api/identities/{identity_id}/affiliations":     {"POST add affiliation"},
+	"POST /api/identities/{identity_id}/contain":          {"POST contain identity"},
+	"GET /api/identities/{identity_id}/containment":       {"GET identity containment"},
 }
 
 // TestIsolation_RouteCrossTenant: as tenant B, every route with a path
@@ -225,6 +230,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		}
 		if strings.HasPrefix(rt.Pattern, "/public/t/{slug}/claim/") {
 			continue // TestClaim_SessionIsPerTenant (public; the tenant comes from the slug)
+		}
+		if rt.Pattern == "/api/containment-retries/{retry_id}/retry-now" {
+			continue // TestContainmentRetriesAPI (a UUID, not a fixture id)
 		}
 		if rt.Pattern == "/api/auth/sessions/{session_id}" {
 			continue // TestIsolation_SessionCookieScoped (a UUID, not a fixture id)
@@ -303,6 +311,7 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		"/api/hris/events/{event_id}/plan":           fmt.Sprint(b["hris:leaver"]),
 		"/api/audit/events/{event_id}/proof":         latestEventID(t, f.DB, f.B.ID),
 		"/api/email/messages/{message_id}":           seedEmailMessage(t, f, f.B, store.EmailDeferred),
+		"/api/identities/{identity_id}/containment":  fmt.Sprint(b["alice"]),
 	}
 	checked := 0
 	for _, rt := range srv.Routes() {

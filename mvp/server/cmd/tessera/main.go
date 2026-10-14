@@ -60,6 +60,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/credential"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
@@ -319,7 +320,8 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 			return err
 		}
 	}
-	srv := api.New(api.Config{Store: st, Clock: clock, Policies: loader, Logger: logger,
+	srv := api.New(api.Config{Containment: &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock},
+		Store: st, Clock: clock, Policies: loader, Logger: logger,
 		Secrets: secrets, Credential: authority, PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound,
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
 		HSTS: cfg.IsProd(), Env: cfg.Env, Identifiers: identifiers.NewKeyer(sealer), EmailMode: cfg.Mail.Mode, DevLogin: cfg.DevLogin, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, AuditAnchor: anchorURL})
