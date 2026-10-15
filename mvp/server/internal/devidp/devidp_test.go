@@ -923,7 +923,7 @@ func TestFaultEndpointAndDisabledFaults(t *testing.T) {
 	if got := defects(t, idp, cb, b.redeem(cb, r), r, "00u-alice-admin", devidp.ProfileOkta); !slices.Equal(got, []string{"wrong_aud"}) {
 		t.Fatalf("defects %v after POST /_faults", got)
 	}
-	for _, bad := range []string{`{"fault":"bogus"}`, `{"fault":"xsw2"}`, `{"fault":"x","more":1}`, `nope`} {
+	for _, bad := range []string{`{"fault":"bogus"}`, `{"fault":"x","more":1}`, `nope`} {
 		if s := post(bad); s != http.StatusBadRequest {
 			t.Errorf("POST %s: %d", bad, s)
 		}
@@ -956,7 +956,7 @@ func TestFaultEndpointAndDisabledFaults(t *testing.T) {
 	}
 }
 
-func TestUserinfoAndSAMLStub(t *testing.T) {
+func TestUserinfo(t *testing.T) {
 	idp, b := start(t, devidp.Config{})
 	r := newRequest(nil)
 	cb := b.login(r, "00u-olu-operator", devidp.MethodPasswordOTP, devidp.ProfileOkta)
@@ -984,11 +984,6 @@ func TestUserinfoAndSAMLStub(t *testing.T) {
 	for _, auth := range []string{"", "Bearer nope", "Basic " + tk.AccessToken} {
 		if s, _ := get(auth); s != http.StatusUnauthorized {
 			t.Errorf("userinfo with %q: %d", auth, s)
-		}
-	}
-	for _, p := range []string{"/saml/metadata", "/saml/sso"} {
-		if resp, _ := b.get(idp.URL + p); resp.StatusCode != http.StatusNotImplemented {
-			t.Errorf("%s: %d, want 501 until PR9", p, resp.StatusCode)
 		}
 	}
 }
