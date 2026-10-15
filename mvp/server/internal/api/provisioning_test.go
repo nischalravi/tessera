@@ -148,7 +148,7 @@ func (h *provHarness) edgeIDOrZero(account, group string) int64 {
 	return id
 }
 
-func (h *provHarness) audit() string { return auditActions(h.t, h.st.DB, h.st.Tenant) }
+func (h *provHarness) audit() string { return auditActionList(h.t, h.st.DB, h.st.Tenant) }
 
 func (h *provHarness) seedTarget() {
 	h.aliceID = h.fake.AddUser(h.alice, "Alice", true)
