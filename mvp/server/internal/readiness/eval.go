@@ -345,6 +345,10 @@ func unsupportedResult(r *ResultInfo) bool {
 
 // liveAttestationFresh reports whether a live attestation holds for the item:
 // bound to the fields the item depends on, and not older than the live TTL.
+// The binding is the per-item hash (the item's config_fields: for the LDAP
+// items the bind DN, trusted CA and port among them), not the whole
+// ConfigHash, which an unrelated edit would invalidate. The stored
+// ConfigHash is kept for the audit trail only.
 func liveAttestationFresh(a *store.LiveAttestation, itemHash string, now time.Time, ttl time.Duration) (ok bool, reason string) {
 	switch {
 	case a == nil:
