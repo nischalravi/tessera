@@ -44,6 +44,8 @@ var readinessRouteCases = map[string][]rdCase{
 		key: "connection:ad"}},
 	"PUT /api/connections/{id}/credential": {{method: "PUT", path: onConn("/credential"),
 		body: `{"reference":"vault:kv/tessera/other"}`, key: "connection:ad"}},
+	"PUT /api/connections/{id}/containment-credential": {{method: "PUT", path: onConn("/containment-credential"),
+		body: `{"token":"tok-from-another-tenant","base_url":"https://x.okta.com"}`, key: "connection"}},
 	"GET /api/connections/{id}/checklist": {{method: "GET", path: onConn("/checklist"), key: "connection:ad"}},
 	"POST /api/connections/{id}/checklist/{item}/attest": {{method: "POST", path: onConn("/checklist/base.owner/attest"),
 		body: `{"note":"attested from another tenant"}`, key: "connection:ad"}},

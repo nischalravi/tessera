@@ -52,9 +52,12 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
+	"github.com/nischalravi/tessera/mvp/server/internal/provision/fake"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/seed"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -220,7 +223,8 @@ const (
 	idleTimeout       = 60 * time.Second
 	shutdownTimeout   = 10 * time.Second
 	sweepInterval     = 30 * time.Second
-	keysInterval      = 24 * time.Hour // keys.EnsureAll: rotation runs daily (design §10.6)
+	provisionInterval = 5 * time.Second // provisioning worker: sends queued operations and re-reads targets
+	keysInterval      = 24 * time.Hour  // keys.EnsureAll: rotation runs daily (design §10.6)
 	// checkpointInterval is how often the checkpointer looks for due tenants
 	// (each is checkpointed every TESSERA_AUDIT_CHECKPOINT_SECONDS or
 	// _EVENTS new events, design §13.6).
@@ -265,7 +269,19 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if err != nil {
 		return err
 	}
-	srv := api.New(api.Config{Store: st, Clock: clock, Policies: loader, Logger: logger,
+	// Outbound calls of the kill switch (containment) use the SSRF-guarded client.
+	outbound, err := safehttp.ForConfig(cfg)
+	if err != nil {
+		return err
+	}
+	fakeURL, stopFake, err := startFakeTarget(cfg, logger)
+	if err != nil {
+		return err
+	}
+	defer stopFake()
+	srv := api.New(api.Config{Containment: &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock},
+		Store: st, Clock: clock, Policies: loader, Logger: logger,
+		Sealer: sealer, Outbound: outbound, FakeTargetURL: fakeURL,
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
 		HSTS: cfg.IsProd(), Env: cfg.Env, DevLogin: cfg.DevLogin, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, AuditAnchor: anchorURL})
 	checkpointer := &audit.Checkpointer{DB: st, Sealer: sealer, Sink: sink, Clock: timeutil.System, Issuer: cfg.PublicURL,
@@ -290,6 +306,11 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		defer close(sweepDone)
 		srv.RunSweeper(ctx, sweepInterval)
 	}()
+	provDone := make(chan struct{})
+	go func() {
+		defer close(provDone)
+		srv.RunProvisioning(ctx, provisionInterval)
+	}()
 	keysDone := make(chan struct{})
 	go func() {
 		defer close(keysDone)
@@ -308,6 +329,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	case err := <-errc:
 		stop()
 		<-sweepDone
+		<-provDone
 		<-keysDone
 		<-ckptDone
 		return err
@@ -318,12 +340,40 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	defer cancel()
 	err = httpSrv.Shutdown(shutdownCtx)
 	<-sweepDone
+	<-provDone
 	<-keysDone
 	<-ckptDone
 	if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 		return serveErr
 	}
 	return err
+}
+
+// startFakeTarget starts the in-process fake SCIM target on a loopback port
+// when TESSERA_DEV_FAKE_TARGET is set (config refuses it in prod) and returns
+// its base URL; with it off the URL is empty and the API refuses the "fake"
+// target kind.
+func startFakeTarget(cfg *config.Config, logger *slog.Logger) (string, func(), error) {
+	if !cfg.FakeTarget {
+		return "", func() {}, nil
+	}
+	if cfg.IsProd() || !cfg.OutboundAllowLoopback {
+		return "", nil, errors.New("TESSERA_DEV_FAKE_TARGET needs TESSERA_ENV=dev with TESSERA_OUTBOUND_ALLOW_LOOPBACK on")
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", nil, err
+	}
+	srv := &http.Server{Handler: fake.New(fake.Options{Lenient: true}).Handler(), ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout: readTimeout, WriteTimeout: readTimeout}
+	go func() {
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("fake provisioning target stopped", "err", err)
+		}
+	}()
+	url := "http://" + ln.Addr().String()
+	logger.Info("dev fake provisioning target listening", "url", url)
+	return url, func() { _ = srv.Close() }, nil
 }
 
 // runKeyRotation runs keys.EnsureAll every keysInterval until ctx ends.

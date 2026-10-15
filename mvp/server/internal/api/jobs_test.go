@@ -36,7 +36,7 @@ func (f failingConnector) Discover(ctx context.Context) (*connectors.DiscoveryRe
 	return f.Tiny.Discover(ctx)
 }
 
-func auditActions(t *testing.T, db *store.DB, tn tenancy.ID) string {
+func auditActionList(t *testing.T, db *store.DB, tn tenancy.ID) string {
 	t.Helper()
 	var out []string
 	for _, e := range ledger(t, db, tn) {
@@ -62,7 +62,7 @@ func TestJobs_SyncRecordedFailedAndRetried(t *testing.T) {
 		t.Fatalf("failed runs %v", failed)
 	}
 	id := at(failed, 0, "id").(string)
-	if !strings.Contains(auditActions(t, st.DB, st.Tenant), "job.failed") {
+	if !strings.Contains(auditActionList(t, st.DB, st.Tenant), "job.failed") {
 		t.Error("no job.failed event")
 	}
 
@@ -78,7 +78,7 @@ func TestJobs_SyncRecordedFailedAndRetried(t *testing.T) {
 	if at(all, 0, "result", "identities") == nil || at(all, 0, "duration_ms") == nil {
 		t.Errorf("result not recorded: %v", at(all, 0))
 	}
-	if !strings.Contains(auditActions(t, st.DB, st.Tenant), "job.retried") {
+	if !strings.Contains(auditActionList(t, st.DB, st.Tenant), "job.retried") {
 		t.Error("no job.retried event")
 	}
 	one := c.json("GET", "/api/jobs/"+id, "", 200)

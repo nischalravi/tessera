@@ -508,7 +508,101 @@ export async function devLogin(tenant: string, subject: string, method: string):
 
 export const hrisExecute = (eventId: number) => api(`/hris/events/${eventId}/execute`, {});
 
-export const simulate = (body: { remove_edge_ids?: number[]; add_edges?: { src: string; dst: string }[]; disable_account_ids?: number[] }) =>
+// ---------------------------------------------------------------- account correlation (issue #160)
+
+export interface CorrAccount { id: number; system: string; external_id: string; username: string; kind: string; status: string; identity_id: number | null }
+/** A person the account's login proposes. Proposals are never linked automatically. */
+export interface MatchCandidate { identity_id: number; name: string; email: string; rule: "email" | "email_local_part" }
+export interface MatchItem { account: CorrAccount; candidates: MatchCandidate[] }
+export interface LinkDecision {
+  account_id: number;
+  decision: "link" | "not_person";
+  identity_id: number | null;
+  previous_identity_id: number | null;
+  reason: string;
+  decided_by: string;
+  decided_at: string;
+}
+export interface MergeMove { table: string; id: number; column: string }
+export interface IdentityMerge {
+  id: string;
+  survivor_id: number;
+  survivor_name: string;
+  merged_id: number;
+  merged_name: string;
+  merged_status: string;
+  moves: MergeMove[];
+  reason: string;
+  merged_by: string;
+  merged_at: string;
+  unmerge_before: string;
+  unmerged_by: string | null;
+  unmerged_at: string | null;
+  unmerge_reason: string | null;
+}
+export interface UnmergeResult { merge: IdentityMerge; restored: MergeMove[]; kept: MergeMove[] }
+
+export const linkAccount = (accountId: number, identityId: number, reason: string) =>
+  api<{ account: CorrAccount; decision: LinkDecision }>(`/accounts/${accountId}/link`, { identity_id: identityId, reason });
+export const markNotPerson = (accountId: number, reason: string) =>
+  api<{ account: CorrAccount; decision: LinkDecision }>(`/accounts/${accountId}/not-person`, { reason });
+export const releaseAccount = (accountId: number) =>
+  api<{ account: CorrAccount; decision: LinkDecision }>(`/accounts/${accountId}/link`, undefined, "DELETE");
+export const mergeIdentity = (mergedId: number, survivorId: number, reason: string) =>
+  api<IdentityMerge>(`/identities/${mergedId}/merge`, { into: survivorId, reason });
+export const unmergeIdentity = (mergeId: string, reason: string) =>
+  api<UnmergeResult>(`/identity-merges/${encodeURIComponent(mergeId)}/unmerge`, { reason });
+
+/** Kill switch (issue #106): revoke an identity's sessions, refresh tokens and OAuth grants at the providers. */
+export interface ContainmentStep {
+  action: "revoke_sessions" | "revoke_grants";
+  system: string;
+  account: string;
+  outcome: "done" | "manual" | "failed";
+  revoked: number;
+  verified: boolean;
+  detail?: string;
+  notes?: string[];
+  started_at: string;
+  finished_at: string;
+  duration_ms: number;
+}
+export interface ContainmentReport {
+  identity_id: number;
+  identity: string;
+  trigger: string;
+  ok: boolean;
+  started_at: string;
+  finished_at: string;
+  duration_ms: number;
+  providers: { system: string; outcome: string; steps: number; failed: number; manual: number; duration_ms: number }[];
+  steps: ContainmentStep[];
+  manual_tasks: { system: string; account: string; action: string; instructions: string }[];
+}
+/** Resolves with the report; a failed run rejects with an ApiError whose body.report holds it. */
+export const containIdentity = (identityId: number, reason: string) =>
+  api<ContainmentReport>(`/identities/${identityId}/contain`, { reason });
+
+/** A containment step that failed and is queued for retry (or was given up on). */
+export interface ContainmentRetry {
+  id: string;
+  identity_id: number;
+  system: string;
+  account: string;
+  action: "revoke_sessions" | "revoke_grants";
+  trigger: string;
+  status: "pending" | "succeeded" | "gave_up";
+  attempts: number;
+  next_attempt_at: string | null;
+  last_error: string;
+  created_at: string;
+  updated_at: string;
+  manual_action?: string;
+}
+export const retryContainmentNow = (retryId: string) =>
+  api<{ retry: ContainmentRetry }>(`/containment-retries/${encodeURIComponent(retryId)}/retry-now`, {});
+
+export const simulate = (body: { remove_edge_ids?: number[]; add_edges?: { src: string; dst: string; duration_hours?: number }[]; disable_account_ids?: number[] }) =>
   api<SimResult>("/simulate", { remove_edge_ids: [], add_edges: [], disable_account_ids: [], ...body });
 
 // ------------------------------------------------------------ formatting
@@ -669,6 +763,44 @@ export const readiness = {
   retire: (id: string) => api<Connection>(`/connections/${id}/retire`, { confirm: true }),
   rerun: (reconcile = false) => api<{ results: { connection_id: string; name: string; validation_run_id: string | null; dry_run_id: string | null; skipped?: string }[]; dashboard: DeploymentHealth }>(
     "/insights/deployment-health/rerun", { reconcile }),
+};
+
+// ----------------------------------------------------- provisioning (#103)
+
+export type ProvStatus = "queued" | "sent" | "pending_verification" | "verified" | "mismatch" | "failed" | "cancelled";
+export type ProvKind = "create_account" | "update_account" | "disable_account" | "delete_account" | "add_entitlement" | "remove_entitlement";
+
+export interface ProvOp {
+  id: string; connection_id: string; connection_name: string; system: string; kind: ProvKind; target: string;
+  source: "jml" | "review" | "jit" | "leastpriv" | "api"; status: ProvStatus; attempts: number; verify_attempts: number;
+  next_attempt_at: string; last_error: string | null; observed: string | null; requested_by: string; idempotency_key: string;
+  completion: string | null; created_at: string; updated_at: string; completed_at: string | null; can_retry: boolean; can_cancel: boolean;
+}
+
+export interface ProvFinding {
+  id: string; op_id: string; connection_id: string; code: string; severity: "high" | "medium" | "low"; title: string;
+  expected: string; observed: string; status: "open" | "resolved"; created_at: string; resolved_at: string | null;
+}
+
+export interface ProvOpDetail extends ProvOp { payload: { account?: Record<string, unknown>; group?: Record<string, unknown> }; findings: ProvFinding[] }
+
+export interface ProvTarget {
+  connection_id: string; connection_name: string; system: string; kind: "scim" | "okta" | "fake"; base_url: string;
+  dialect?: "standard" | "entra"; fault?: string; write_back: boolean; has_credential: boolean; credential_version: string | null; updated_at: string;
+}
+
+/** token is write-only: omit it to keep the stored credential. */
+export interface ProvTargetInput { kind: ProvTarget["kind"]; base_url: string; dialect?: string; fault?: string; token?: string; write_back: boolean }
+
+export const provisioning = {
+  targets: () => api<ProvTarget[]>("/provisioning/targets"),
+  putTarget: (connectionId: string, body: ProvTargetInput) => api<ProvTarget>(`/provisioning/targets/${connectionId}`, body, "PUT"),
+  deleteTarget: (connectionId: string) => api<{ removed: boolean }>(`/provisioning/targets/${connectionId}`, undefined, "DELETE"),
+  get: (id: string) => api<ProvOpDetail>(`/provisioning/ops/${encodeURIComponent(id)}`),
+  retry: (id: string) => api<ProvOpDetail>(`/provisioning/ops/${encodeURIComponent(id)}/retry`, {}),
+  cancel: (id: string) => api<ProvOpDetail>(`/provisioning/ops/${encodeURIComponent(id)}/cancel`, {}),
+  /** Takes the due operations now instead of at the worker's next tick (every 5 seconds). */
+  run: () => api<{ processed: number; verified: number; mismatch: number; failed: number; retrying: number }>("/provisioning/run", {}),
 };
 
 // ----------------------------------------------------- job runs (#172)
