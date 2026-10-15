@@ -78,9 +78,6 @@ type Config struct {
 	RPID                   string
 	Notify                 string
 	DevIdPURL              string
-	// DevLogin is TESSERA_DEV_LOGIN: with TESSERA_ENV=test, the explicit
-	// opt-in for dev sign-in (loopback peers only). Refused in prod.
-	DevLogin bool
 	// Mail is the notification email delivery (issue #189).
 	Mail Mail
 	// NotifyMaxAttempts is how many times the dispatcher tries to send one
