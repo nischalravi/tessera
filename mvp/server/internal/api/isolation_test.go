@@ -128,7 +128,6 @@ var crossTenantCases = map[string]crossTenantCase{
 
 // routeParamKey maps each route with path parameters to the cases above.
 var routeParamCases = map[string][]string{
-	"PUT /api/catalog/items/{group_id}":             {"PUT catalog item"},
 	"GET /api/identities/{identity_id}":             {"GET identity", "GET identity (nhi)"},
 	"GET /api/jml/leaver-plan/{identity_id}":        {"GET leaver plan"},
 	"GET /api/reviews/campaigns/{campaign_id}":      {"GET campaign"},
@@ -138,6 +137,7 @@ var routeParamCases = map[string][]string{
 	"POST /api/jit/requests/{request_id}/approve":   {"POST jit approve"},
 	"POST /api/jit/requests/{request_id}/deny":      {"POST jit deny"},
 	"POST /api/jit/requests/{request_id}/revoke":    {"POST jit revoke"},
+	"PUT /api/catalog/items/{group_id}":             {"PUT catalog item"},
 	"POST /api/accounts/{account_id}/link":          {"POST link account"},
 	"POST /api/accounts/{account_id}/not-person":    {"POST account not person"},
 	"DELETE /api/accounts/{account_id}/link":        {"DELETE account link"},

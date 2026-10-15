@@ -181,6 +181,12 @@ The routes are documented at `/api/readiness/openapi.json`.
 `POST /api/auth/saml/{connection_id}/acs` · `GET /api/auth/oauth2/{connection_id}/callback` ·
 `GET /t/{slug}/bootstrap?code=` (public)
 `GET|POST /api/auth/dev-login` (dev and test only) ·
+`GET /api/catalog[?all=1]` · `PUT /api/catalog/items/{group_id}` ·
+`POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours}` ·
+`GET /api/requests[?scope=mine|pending|all&status=]` · `GET /api/requests/{id}` ·
+`POST /api/requests/{id}/approve|deny|cancel|remove {reason}` ·
+`GET /api/approvals/inbox` · `GET /api/approvals/delegates` · `GET|POST /api/approvals/delegations` ·
+`POST /api/approvals/delegations/{id}/revoke` ·
 `GET /api/correlation/queue` · `GET /api/correlation/decisions` ·
 `POST /api/accounts/{id}/link {identity_id, reason}` · `POST /api/accounts/{id}/not-person {reason}` ·
 `DELETE /api/accounts/{id}/link` · `POST /api/identities/{id}/merge {into, reason}` ·
