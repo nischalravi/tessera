@@ -1477,6 +1477,7 @@ Nonces are stateless: `b64url(ts_bucket || HMAC-SHA256(nonce_key, ts_bucket))`, 
 | `jit.deny_revoke` | | ✓ | | ✓ | | |
 | `reviews.manage` (create campaign) | | ✓ | | ✓ | | |
 | `reviews.decide` | | ✓ | | ✓ | | |
+| `reviews.export` (auditor export of a frozen review population, issue #110) | | ✓ | ✓ | ✓ | | |
 | `hris.simulate_event` | | ✓ | | ✓ | | |
 | `grants.revoke` (apply), `hris.execute`, `jit.sweep`, `connectors.sync` | | | | ✓ | | |
 | `audit.read`, `audit.verify` | | | ✓ | | ✓ | |

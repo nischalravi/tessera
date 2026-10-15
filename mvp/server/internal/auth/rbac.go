@@ -51,6 +51,7 @@ const (
 	PermJITDenyRevoke     Permission = "jit.deny_revoke"
 	PermReviewsManage     Permission = "reviews.manage"
 	PermReviewsDecide     Permission = "reviews.decide"
+	PermReviewsExport     Permission = "reviews.export" // auditor export of a frozen review population (issue #110)
 	PermHRISSimulateEvent Permission = "hris.simulate_event"
 	PermGrantsRevoke      Permission = "grants.revoke"
 	PermHRISExecute       Permission = "hris.execute"
@@ -81,10 +82,10 @@ const (
 var rolePermissions = map[Role][]Permission{
 	RoleViewer: {PermGraphRead},
 	RoleOperator: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
-		PermReviewsDecide, PermHRISSimulateEvent},
-	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead},
+		PermReviewsDecide, PermReviewsExport, PermHRISSimulateEvent},
+	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead, PermReviewsExport},
 	RolePolicyAdmin: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
-		PermReviewsDecide, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
+		PermReviewsDecide, PermReviewsExport, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
 		PermIdentitiesCorrelate, PermIdentitiesMerge, PermIdentitiesContain},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
@@ -173,7 +174,7 @@ var scopePermissions = map[Scope][]Permission{
 	ScopeWrite: {PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage, PermReviewsDecide,
 		PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
 		PermConnectionsManage, PermConnectionsActivate},
-	ScopeAudit: {PermAuditRead, PermAuditVerify},
+	ScopeAudit: {PermAuditRead, PermAuditVerify, PermReviewsExport},
 	ScopeAdmin: {PermAdminRead, PermAdminChangeReq, PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev,
 		PermBreakGlassRecover},
 }

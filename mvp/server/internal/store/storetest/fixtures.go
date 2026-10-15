@@ -6,6 +6,7 @@ package storetest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -37,7 +38,7 @@ var (
 // "perm:<system>:<xid>", "resource:<system>:<xid>", "edge:<n>" (every grant
 // edge, in id order), and "request:pending", "request:approved",
 // "request:expired", "edge:jit-active", "edge:jit-expired", "campaign",
-// "item", "hris:leaver", "hris:joiner", "secret", "delegation".
+// "item", "qa" (an auto-decision sampled for QA), "hris:leaver", "hris:joiner", "secret", "delegation".
 type Tenant struct {
 	ID   tenancy.ID
 	Slug string
@@ -148,6 +149,26 @@ func seedTenant(tb testing.TB, db *store.DB, id tenancy.ID, slug, sentinel strin
 			return fmt.Errorf("storetest: campaign items: %v %w", items, err)
 		}
 		t.IDs["item"] = items[0].ID
+		// The campaign's frozen population: bob's grant, auto-certified and sampled for QA.
+		if err := c.InsertReviewPopulation(&store.ReviewPopulation{CampaignID: t.IDs["campaign"], CreatedAt: Now,
+			PopulationHash: "fixture-hash", ItemCount: 1, SystemCounts: json.RawMessage(`{"okta":1}`),
+			SourceSyncs: json.RawMessage(`{"okta":null}`), Scope: json.RawMessage(`{}`), RulesVersion: "exception-only-v1",
+			QASamplePct: 5}, []*store.PopulationRow{{CampaignID: t.IDs["campaign"], Ordinal: 1, EdgeID: edge.ID,
+			IdentityID: t.IDs["bob"], IdentityRef: "bob", AccountRef: "bob", System: "okta",
+			Entitlement: mark("payments-approvers"), EdgeSrc: edge.Src, EdgeDst: edge.Dst, InScopeReason: "standing_grant",
+			Disposition: "auto_certified"}}); err != nil {
+			return err
+		}
+		if err := c.InsertAutoDecision(&store.AutoDecision{CampaignID: t.IDs["campaign"], Ordinal: 1, EdgeID: edge.ID,
+			IdentityID: t.IDs["bob"], Rule: json.RawMessage(`{"id":"exception_only.no_exception_signals","version":1,"note":"` +
+				mark("rule") + `"}`), QASample: true}); err != nil {
+			return err
+		}
+		ads, err := c.AutoDecisions(t.IDs["campaign"])
+		if err != nil || len(ads) != 1 {
+			return fmt.Errorf("storetest: auto-decisions: %v %w", ads, err)
+		}
+		t.IDs["qa"] = ads[0].ID
 		// HRIS: a pending leaver for alice and a pending joiner.
 		alice := t.IDs["alice"]
 		if t.IDs["hris:leaver"], err = c.InsertHrisEvent(&store.HrisEvent{ExternalID: "evt-leaver", Type: "leaver",
@@ -269,6 +290,25 @@ func Dump(tb testing.TB, db *store.DB, t tenancy.ID) string {
 			items = append(items, it...)
 		}
 		out["review_items"] = items
+		var pops []*store.ReviewPopulation
+		var prows []*store.PopulationRow
+		var autos []*store.AutoDecision
+		for _, cmp := range v11 {
+			if pop, e := c.ReviewPopulation(cmp.ID); e == nil {
+				pops = append(pops, pop)
+			} else if !errors.Is(e, store.ErrNotFound) {
+				get("review_populations", nil, e)
+			}
+			r, e := c.PopulationRows(cmp.ID)
+			get("review_population_rows", nil, e)
+			prows = append(prows, r...)
+			a, e := c.AutoDecisions(cmp.ID)
+			get("review_auto_decisions", nil, e)
+			autos = append(autos, a...)
+		}
+		out["review_populations"], out["review_population_rows"], out["review_auto_decisions"] = pops, prows, autos
+		qs, _, e2 := c.TenantSetting("qa_sample_pct")
+		get("tenant_settings", qs, e2)
 		v12, e := c.HrisEvents()
 		get("hris_events", v12, e)
 		v13, e := c.AuditLog(-1)

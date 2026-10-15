@@ -88,16 +88,20 @@ func pathf(format string) func(int64) string {
 // crossTenantCases cover every route with a path parameter (enforced by
 // TestIsolation_RouteCrossTenant) and every request body field holding an id.
 var crossTenantCases = map[string]crossTenantCase{
-	"GET identity":         {method: "GET", path: pathf("/api/identities/%d"), key: "alice"},
-	"GET identity (nhi)":   {method: "GET", path: pathf("/api/identities/%d"), key: "svc-etl"},
-	"GET leaver plan":      {method: "GET", path: pathf("/api/jml/leaver-plan/%d"), key: "alice"},
-	"GET campaign":         {method: "GET", path: pathf("/api/reviews/campaigns/%d"), key: "campaign"},
-	"GET hris plan":        {method: "GET", path: pathf("/api/hris/events/%d/plan"), key: "hris:leaver"},
-	"POST hris execute":    {method: "POST", path: pathf("/api/hris/events/%d/execute"), key: "hris:leaver"},
-	"POST review decision": {method: "POST", path: pathf("/api/reviews/items/%d/decision"), key: "item", body: func(int64) string { return `{"decision":"revoke"}` }},
-	"POST jit approve":     {method: "POST", path: pathf("/api/jit/requests/%d/approve"), key: "request:pending", body: func(int64) string { return `{}` }},
-	"POST jit deny":        {method: "POST", path: pathf("/api/jit/requests/%d/deny"), key: "request:pending", body: func(int64) string { return `{}` }},
-	"POST jit revoke":      {method: "POST", path: pathf("/api/jit/requests/%d/revoke"), key: "request:approved", body: func(int64) string { return `{}` }},
+	"GET identity":            {method: "GET", path: pathf("/api/identities/%d"), key: "alice"},
+	"GET identity (nhi)":      {method: "GET", path: pathf("/api/identities/%d"), key: "svc-etl"},
+	"GET leaver plan":         {method: "GET", path: pathf("/api/jml/leaver-plan/%d"), key: "alice"},
+	"GET campaign":            {method: "GET", path: pathf("/api/reviews/campaigns/%d"), key: "campaign"},
+	"GET hris plan":           {method: "GET", path: pathf("/api/hris/events/%d/plan"), key: "hris:leaver"},
+	"POST hris execute":       {method: "POST", path: pathf("/api/hris/events/%d/execute"), key: "hris:leaver"},
+	"POST review decision":    {method: "POST", path: pathf("/api/reviews/items/%d/decision"), key: "item", body: func(int64) string { return `{"decision":"revoke"}` }},
+	"GET campaign population": {method: "GET", path: pathf("/api/reviews/campaigns/%d/population"), key: "campaign"},
+	"GET campaign export":     {method: "GET", path: pathf("/api/reviews/campaigns/%d/export"), key: "campaign"},
+	"POST qa decision": {method: "POST", path: pathf("/api/reviews/qa/%d/decision"), key: "qa",
+		body: func(int64) string { return `{"decision":"revoke"}` }},
+	"POST jit approve": {method: "POST", path: pathf("/api/jit/requests/%d/approve"), key: "request:pending", body: func(int64) string { return `{}` }},
+	"POST jit deny":    {method: "POST", path: pathf("/api/jit/requests/%d/deny"), key: "request:pending", body: func(int64) string { return `{}` }},
+	"POST jit revoke":  {method: "POST", path: pathf("/api/jit/requests/%d/revoke"), key: "request:approved", body: func(int64) string { return `{}` }},
 	"POST revoke edge (dry run)": {method: "POST", path: fixed("/api/least-privilege/revoke"), key: "edge:0",
 		body: func(id int64) string { return fmt.Sprintf(`{"edge_id":%d}`, id) }},
 	"POST revoke edge": {method: "POST", path: fixed("/api/least-privilege/revoke"), key: "edge:0",
@@ -126,21 +130,24 @@ var crossTenantCases = map[string]crossTenantCase{
 
 // routeParamKey maps each route with path parameters to the cases above.
 var routeParamCases = map[string][]string{
-	"GET /api/identities/{identity_id}":             {"GET identity", "GET identity (nhi)"},
-	"GET /api/jml/leaver-plan/{identity_id}":        {"GET leaver plan"},
-	"GET /api/reviews/campaigns/{campaign_id}":      {"GET campaign"},
-	"GET /api/hris/events/{event_id}/plan":          {"GET hris plan"},
-	"POST /api/hris/events/{event_id}/execute":      {"POST hris execute"},
-	"POST /api/reviews/items/{item_id}/decision":    {"POST review decision"},
-	"POST /api/jit/requests/{request_id}/approve":   {"POST jit approve"},
-	"POST /api/jit/requests/{request_id}/deny":      {"POST jit deny"},
-	"POST /api/jit/requests/{request_id}/revoke":    {"POST jit revoke"},
-	"POST /api/accounts/{account_id}/link":          {"POST link account"},
-	"POST /api/accounts/{account_id}/not-person":    {"POST account not person"},
-	"DELETE /api/accounts/{account_id}/link":        {"DELETE account link"},
-	"POST /api/identities/{identity_id}/merge":      {"POST merge identity"},
-	"POST /api/identities/{identity_id}/contain":    {"POST contain identity"},
-	"GET /api/identities/{identity_id}/containment": {"GET identity containment"},
+	"GET /api/identities/{identity_id}":                   {"GET identity", "GET identity (nhi)"},
+	"GET /api/jml/leaver-plan/{identity_id}":              {"GET leaver plan"},
+	"GET /api/reviews/campaigns/{campaign_id}":            {"GET campaign"},
+	"GET /api/reviews/campaigns/{campaign_id}/population": {"GET campaign population"},
+	"GET /api/reviews/campaigns/{campaign_id}/export":     {"GET campaign export"},
+	"POST /api/reviews/qa/{qa_id}/decision":               {"POST qa decision"},
+	"GET /api/hris/events/{event_id}/plan":                {"GET hris plan"},
+	"POST /api/hris/events/{event_id}/execute":            {"POST hris execute"},
+	"POST /api/reviews/items/{item_id}/decision":          {"POST review decision"},
+	"POST /api/jit/requests/{request_id}/approve":         {"POST jit approve"},
+	"POST /api/jit/requests/{request_id}/deny":            {"POST jit deny"},
+	"POST /api/jit/requests/{request_id}/revoke":          {"POST jit revoke"},
+	"POST /api/accounts/{account_id}/link":                {"POST link account"},
+	"POST /api/accounts/{account_id}/not-person":          {"POST account not person"},
+	"DELETE /api/accounts/{account_id}/link":              {"DELETE account link"},
+	"POST /api/identities/{identity_id}/merge":            {"POST merge identity"},
+	"POST /api/identities/{identity_id}/contain":          {"POST contain identity"},
+	"GET /api/identities/{identity_id}/containment":       {"GET identity containment"},
 }
 
 // TestIsolation_RouteCrossTenant: as tenant B, every route with a path
@@ -240,12 +247,14 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 	b := f.B.IDs
 	param := regexp.MustCompile(`\{[a-z_]+\}`)
 	values := map[string]string{
-		"/api/identities/{identity_id}":             fmt.Sprint(b["alice"]),
-		"/api/jml/leaver-plan/{identity_id}":        fmt.Sprint(b["alice"]),
-		"/api/identities/{identity_id}/containment": fmt.Sprint(b["alice"]),
-		"/api/reviews/campaigns/{campaign_id}":      fmt.Sprint(b["campaign"]),
-		"/api/hris/events/{event_id}/plan":          fmt.Sprint(b["hris:leaver"]),
-		"/api/audit/events/{event_id}/proof":        latestEventID(t, f.DB, f.B.ID),
+		"/api/identities/{identity_id}":                   fmt.Sprint(b["alice"]),
+		"/api/jml/leaver-plan/{identity_id}":              fmt.Sprint(b["alice"]),
+		"/api/identities/{identity_id}/containment":       fmt.Sprint(b["alice"]),
+		"/api/reviews/campaigns/{campaign_id}":            fmt.Sprint(b["campaign"]),
+		"/api/reviews/campaigns/{campaign_id}/population": fmt.Sprint(b["campaign"]),
+		"/api/reviews/campaigns/{campaign_id}/export":     fmt.Sprint(b["campaign"]),
+		"/api/hris/events/{event_id}/plan":                fmt.Sprint(b["hris:leaver"]),
+		"/api/audit/events/{event_id}/proof":              latestEventID(t, f.DB, f.B.ID),
 	}
 	checked := 0
 	for _, rt := range srv.Routes() {

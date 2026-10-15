@@ -141,7 +141,17 @@ other), and the JIT decision route is split into three routes.
   (`components.securitySchemes.session`, a global `security` requirement,
   and none on `/api/health`).
 
-`067-audit` and `068-audit-limit` list only seed events and are unchanged.
+* `067-audit`, `068-audit-limit`, `155-audit-final` (issue #110, frozen review
+  populations). Launching a campaign now also writes a
+  `review.population_frozen` event (campaign id, population hash, row count,
+  per-system counts, auto-certified and QA-sampled counts, QA sample percent)
+  right after `review.campaign_created`. The seed launches one campaign, so
+  `067` and `068` gain one newest event (seq 9) and `155` gains the same event
+  for each of the three campaigns launched during the replay, which shifts every
+  later `id` and `seq` by up to 3. No other response changed: campaign
+  responses (`055`, `056`, `115`, `116`-`119`) carry no new fields, because the
+  population, QA queue and export are served by new routes. The
+  `population_hash` in these fixtures is deterministic (frozen clock, seed 7).
 * `153-summary-after-sync`, `154-identities-after-sync` (UAT #134). The recorded
   Python backend let `POST /api/connectors/sync` undo the leaver plan and the
   grant revokes run earlier in the sequence: Marcus Bellweather came back as an

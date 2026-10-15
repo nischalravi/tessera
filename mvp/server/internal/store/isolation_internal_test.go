@@ -306,6 +306,9 @@ var referenceColumns = map[string][]string{
 	"access_requests":   {"edge_id", "requested_by_user_id", "decided_by_user_id"},
 	"review_items":      {"edge_id", "edge_src", "edge_dst", "decided_by_user_id"},
 	"hris_events":       {"executed_by_user_id"},
+	// frozen populations name a grant edge by id (the edge is deleted when revoked)
+	"review_population_rows": {"edge_id"},
+	"review_auto_decisions":  {"edge_id", "qa_decided_by_user_id"},
 	// platform users and sessions named without a declared foreign key
 	"role_assignments":   {"granted_by_user_id"},
 	"login_transactions": {"session_id", "expected_external_login_id", "bootstrap_invitation_id"},

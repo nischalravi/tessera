@@ -96,6 +96,7 @@ func GenerateCampaign(c *store.TenantTx, now time.Time, name string, unusedDays 
 		return 0, err
 	}
 	total, items := 0, 0
+	fz := newFreezer() // the population snapshot (issue #110), frozen below in this transaction
 	for _, iid := range g.Identities(true) {
 		ident := people[iid]
 		eff := g.EffectivePermissions(iid)
@@ -152,8 +153,10 @@ func GenerateCampaign(c *store.TenantTx, now time.Time, name string, unusedDays 
 				reasons = append(reasons, "orphaned_nhi")
 			}
 			if len(reasons) == 0 {
+				fz.record(ident, g, ag, autoRule(now, unusedDays, len(via), usedN, last, privileged, ident))
 				continue
 			}
+			fz.record(ident, g, ag, nil)
 			var reviewer *store.Identity
 			if ident.Type == "human" {
 				if ident.ManagerID != nil {
@@ -225,8 +228,15 @@ func GenerateCampaign(c *store.TenantTx, now time.Time, name string, unusedDays 
 	if err := c.SetCampaignTotals(campID, total, total-items); err != nil {
 		return 0, err
 	}
-	err = c.Audit(now, "system", "review.campaign_created", ojson.Object{{Key: "campaign", Value: name},
-		{Key: "items", Value: items}, {Key: "total", Value: total}})
+	if err := c.Audit(now, "system", "review.campaign_created", ojson.Object{{Key: "campaign", Value: name},
+		{Key: "items", Value: items}, {Key: "total", Value: total}}); err != nil {
+		return 0, err
+	}
+	var qaReviewer *int64 // sampled auto-decisions are QA'd by the security lead, not the line manager
+	if securityLead != nil {
+		qaReviewer = &securityLead.ID
+	}
+	_, err = fz.freeze(c, now, campID, unusedDays, qaReviewer)
 	return campID, err
 }
 
