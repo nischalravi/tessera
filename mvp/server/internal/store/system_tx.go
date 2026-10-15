@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 )
@@ -165,4 +166,33 @@ func (s *SystemTx) TenantByID(id tenancy.ID) (Tenant, error) {
 		return Tenant{}, ErrNotFound
 	}
 	return ts[0], nil
+}
+
+// ---------------------------------------------------------------- replay_cache
+
+var (
+	replayPurge  = sq("replay_cache.purge", `DELETE FROM replay_cache WHERE expires_at <= @now`)
+	replayInsert = sq("replay_cache.insert", `
+		INSERT INTO replay_cache (kind, key_hash, expires_at) VALUES (@kind, @key_hash, @expires_at)`)
+)
+
+// Replay kinds.
+const (
+	ReplaySAMLAssertion = "saml_assertion"
+	ReplayDPoPJTI       = "dpop_jti"
+)
+
+// UseOnce records that the value with keyHash (SHA-256 hex) of kind was
+// used, until expires. It returns ErrDuplicate if it was already used and has
+// not expired; expired entries are purged first.
+func (s *SystemTx) UseOnce(kind, keyHash string, now, expires time.Time) error {
+	if _, err := s.exec(replayPurge, sql.Named("now", RT(now))); err != nil {
+		return err
+	}
+	_, err := s.exec(replayInsert, sql.Named("kind", kind), sql.Named("key_hash", keyHash),
+		sql.Named("expires_at", RT(expires)))
+	if isUnique(err) {
+		return ErrDuplicate
+	}
+	return err
 }

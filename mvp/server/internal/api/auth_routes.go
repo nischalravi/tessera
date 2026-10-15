@@ -99,10 +99,6 @@ func (s *Server) registerAuthRoutes() {
 	s.handle(P, "/api/auth/logout", write, need(auth.PermAuthenticated), s.authLogout)
 	s.handle(G, "/api/auth/sessions", read, need(auth.PermAuthenticated), s.authSessions)
 	s.handle(http.MethodDelete, "/api/auth/sessions/{session_id}", write, need(auth.PermAuthenticated), s.authRevokeSession)
-	if s.devLoginEnabled() {
-		s.handle(G, "/api/auth/dev-login", noTenant, publicRoute, s.devLoginUsers)
-		s.handle(P, "/api/auth/dev-login", noTenant, publicRoute, s.devLogin)
-	}
 }
 
 func rt3339(t time.Time) string { return t.UTC().Format("2006-01-02T15:04:05Z") }
