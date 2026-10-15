@@ -172,8 +172,9 @@ func matchAccount(out *MatchKinds, account string, p *model.Principal) {
 // dropped at ingest, so this has no Allow counterpart.
 //
 // ambiguousA4 is true when the answer rests on the A4 default for sessions
-// (the account is listed and exactly one of the role and session ARNs is, or
-// neither): the caller adds AMBIGUITY:A4 to the decision's fidelity reasons.
+// (the account is listed and exactly one of the role and session ARNs is; with
+// neither listed the Deny applies by every reading, and with both listed the
+// requester is exempt by every reading): the caller adds AMBIGUITY:A4 to the decision's fidelity reasons.
 func NotPrincipalDenyApplies(np *model.PrincipalSet, p *model.Principal) (applies, ambiguousA4 bool) {
 	if np == nil || p == nil {
 		return false, false
