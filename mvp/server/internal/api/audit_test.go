@@ -23,7 +23,7 @@ import (
 
 // Audit middleware and routes (design §13.4, §16.1, §20 E2.3–E2.5).
 
-func ledger(t *testing.T, db *store.DB, tn tenancy.ID) []*store.AuditEvent {
+func ledger(t testing.TB, db *store.DB, tn tenancy.ID) []*store.AuditEvent {
 	t.Helper()
 	var out []*store.AuditEvent
 	if err := db.ReadTenant(context.Background(), tn, func(tx *store.TenantTx) error {
