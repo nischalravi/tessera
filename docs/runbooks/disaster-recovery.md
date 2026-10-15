@@ -65,8 +65,18 @@ Manual backup at any time, with the server running: `./run.sh backup -dir /backu
 5. Start the server, then run
    `tessera audit verify -all -anchors <anchor URL>`. It must pass.
 6. After a restore, close the gap the backup cannot cover:
-   - **Revoke all sessions.** Sessions and access revoked after the backup was taken come
-     back with it. Revoke every user's sessions and API clients issued since then.
+   - **Credentials are revoked for you.** Sessions, sign-in transactions, bootstrap codes and
+     access tokens that were valid at snapshot time would come back with the backup, and
+     revocations made since are lost. So the restore itself revokes every active session
+     (reason `restore`), deletes pending sign-ins and unconsumed bootstrap invitations, and
+     revokes the `access_token` signing keys (the server mints fresh ones on start). The
+     restore report and the `platform.backup.restored` event give the counts. **Users sign in
+     again.** Issue new bootstrap codes if a tenant still needs one. `idp_client_auth` keys
+     are kept, because they are registered with the IdPs.
+   - **Replay protection has a gap.** `replay_cache` entries consumed after the snapshot cannot
+     be recovered, so a SAML assertion or DPoP proof seen after the snapshot could be replayed.
+     Both windows are short (minutes), so the exposure ends soon after the restore. Where that
+     matters, wait out the window before reopening sign-in.
    - **Re-sync connectors** (`POST /api/connectors/sync`) so identities and accounts match
      the source systems again. The JIT sweeper expires anything that lapsed in the gap on
      its first run.

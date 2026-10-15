@@ -209,7 +209,9 @@ func recordRestore(ctx context.Context, target string, res *backup.Restored) err
 	}
 	return backup.RecordEvent(ctx, st, "platform.backup.restored", ojson.Object{{Key: "backup_id", Value: res.Manifest.ID},
 		{Key: "backup_created_at", Value: res.Manifest.CreatedAt.Format(time.RFC3339)}, {Key: "sha256", Value: res.Manifest.SHA256},
-		{Key: "tenants", Value: len(res.Tenants)}, {Key: "anchored_events_lost", Value: lost}})
+		{Key: "tenants", Value: len(res.Tenants)}, {Key: "anchored_events_lost", Value: lost},
+		{Key: "sessions_revoked", Value: res.Invalidated.Sessions}, {Key: "login_transactions_deleted", Value: res.Invalidated.LoginTransactions},
+		{Key: "bootstrap_invitations_deleted", Value: res.Invalidated.Invitations}, {Key: "signing_keys_revoked", Value: res.Invalidated.SigningKeys}})
 }
 
 func printRestore(w io.Writer, res *backup.Restored, asJSON bool) {
@@ -231,6 +233,11 @@ func printRestore(w io.Writer, res *backup.Restored, asJSON bool) {
 		for _, p := range r.Problems {
 			fmt.Fprintf(w, "    [%d] %s seq=%d: %s\n", p.Code, p.Kind, p.Seq, p.Detail)
 		}
+	}
+	if res.Target != "" {
+		in := res.Invalidated
+		fmt.Fprintf(w, "credentials revoked: sessions=%d login-transactions=%d bootstrap-invitations=%d signing-keys=%d; users sign in again\n",
+			in.Sessions, in.LoginTransactions, in.Invitations, in.SigningKeys)
 	}
 }
 

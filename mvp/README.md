@@ -319,8 +319,14 @@ A restore installs the database only when all of these pass, and keeps the previ
 than the backup, which is the data the restore loses. Backups and restores are recorded in the
 platform audit chain (`platform.backup.created`, `platform.backup.restored`).
 
+A restore also revokes the credentials the backup brings back: every active session (reason
+`restore`), pending sign-in transactions, unconsumed bootstrap invitations and the `access_token`
+signing keys, so users sign in again and the server mints fresh keys on start. The counts are in
+the report and the audit event. `replay_cache` entries consumed after the snapshot cannot be
+recovered; their SAML and DPoP windows are short.
+
 The KEK and the anchor source are not in the backup: keep the KEK in escrow, or no backup can be
-opened. RPO and RTO targets, the restore procedure, what to do after a restore (revoke sessions,
+opened. RPO and RTO targets, the restore procedure, what to do after a restore (sign in again,
 re-sync) and the drill are in `docs/runbooks/disaster-recovery.md`. CI runs the drill as
 `TestBackupDRDrill`. HA on Postgres is a draft in `docs/design/ha-postgres.md`.
 

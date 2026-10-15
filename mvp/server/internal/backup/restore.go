@@ -48,7 +48,15 @@ type Restored struct {
 	Tenants  []TenantResult `json:"tenants"`
 	Target   string         `json:"target,omitempty"`
 	Previous string         `json:"previous,omitempty"` // where an existing target was moved
+	// Invalidated is what a restore revoked so credentials that were valid at
+	// snapshot time do not come back: sessions, pending login transactions,
+	// unconsumed bootstrap codes and access-token signing keys, summed over
+	// all tenants. It is zero for a verify-only run.
+	Invalidated store.CredentialsInvalidated `json:"invalidated"`
 }
+
+// InvalidationReason is the revoked_reason of sessions a restore revoked.
+const InvalidationReason = "restore"
 
 // Restore decrypts the backup, verifies every tenant's audit chain (hashes,
 // links, checkpoint signatures and, with Anchors, the anchors up to the
@@ -80,6 +88,11 @@ func Restore(ctx context.Context, path string, sealer *seal.Sealer, opts Restore
 	}
 	if opts.Target == "" {
 		return res, nil
+	}
+	// Before anything is installed: a failure here leaves the working
+	// database in place and the temporary copy is removed.
+	if err := invalidateCredentials(ctx, tmp, opts.Now, res); err != nil {
+		return res, fmt.Errorf("backup: invalidate credentials in the restored database: %w", err)
 	}
 	if _, err := os.Stat(opts.Target); err == nil {
 		prev := opts.Target + ".pre-restore-" + opts.Now.UTC().Format("20060102T150405Z")
@@ -169,6 +182,45 @@ func verifyRestored(ctx context.Context, path string, m Manifest, opts RestoreOp
 		return refuse("verification_failed", "the backup does not verify, refusing it: %v", failed)
 	}
 	return st.Checkpoint(ctx)
+}
+
+// invalidateCredentials revokes, in the restored copy at path, every
+// credential that could have been revoked, consumed or rotated after the
+// snapshot: a restored database cannot remember later revocations, so none of
+// its sessions, pending sign-ins, bootstrap codes or access-token keys is
+// trusted. Users sign in again; the server mints fresh signing keys on start.
+func invalidateCredentials(ctx context.Context, path string, now time.Time, res *Restored) error {
+	st, err := store.Open(ctx, path)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	var tenants []store.Tenant
+	if err := st.InSystem(ctx, "backup: invalidate credentials", func(s *store.SystemTx) error {
+		var err error
+		tenants, err = s.Tenants()
+		return err
+	}); err != nil {
+		return err
+	}
+	var total store.CredentialsInvalidated
+	for _, t := range tenants {
+		if err := st.InTenant(ctx, t.ID, func(tx *store.TenantTx) error {
+			n, err := tx.InvalidateCredentials(InvalidationReason, now)
+			total.Sessions += n.Sessions
+			total.LoginTransactions += n.LoginTransactions
+			total.Invitations += n.Invitations
+			total.SigningKeys += n.SigningKeys
+			return err
+		}); err != nil {
+			return err
+		}
+	}
+	if err := st.Checkpoint(ctx); err != nil {
+		return err
+	}
+	res.Invalidated = total
+	return nil
 }
 
 // Upload PUTs the backup to url (for example an object-storage presigned

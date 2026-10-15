@@ -411,7 +411,60 @@ func authCovered() map[string]bool {
 		"BootstrapInvitation", "BootstrapInvitationByCodeHash", "InsertBootstrapInvitation"} {
 		out[k] = true // TestIsolation_AuthRows, TestIsolation_AuthInsertsRefused
 	}
+	out["InvalidateCredentials"] = true // TestIsolation_InvalidateCredentials
 	return out
+}
+
+// TestIsolation_InvalidateCredentials: the restore hook in tenant B revokes
+// B's sessions, login transactions, unconsumed invitations and access-token
+// keys, and changes nothing of A's.
+func TestIsolation_InvalidateCredentials(t *testing.T) {
+	f, a, b := authFixture(t)
+	seedKeys(t, f)
+	at := storetest.Now.Add(time.Hour)
+	inB(t, f, func(c *store.TenantTx) error {
+		n, err := c.InvalidateCredentials("restore", at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := (store.CredentialsInvalidated{Sessions: 1, LoginTransactions: 1, Invitations: 1, SigningKeys: 2}); n != want {
+			t.Errorf("B counts %+v, want %+v", n, want)
+		}
+		if s, err := c.Session(b.session.ID); err != nil || s.Status != "revoked" || s.RevokedReason == nil || *s.RevokedReason != "restore" {
+			t.Errorf("B session after: %+v %v", s, err)
+		}
+		if _, err := c.LoginTransaction(b.txn.ID); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("B login transaction after: %v", err)
+		}
+		if _, err := c.BootstrapInvitation(b.inv.ID); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("B invitation after: %v", err)
+		}
+		return nil
+	})
+	err := f.DB.InTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
+		if s, err := c.Session(a.session.ID); err != nil || s.Status != "active" || s.RevokedReason != nil {
+			t.Errorf("A session touched: %+v %v", s, err)
+		}
+		if _, err := c.LoginTransaction(a.txn.ID); err != nil {
+			t.Errorf("A login transaction touched: %v", err)
+		}
+		if inv, err := c.BootstrapInvitation(a.inv.ID); err != nil || inv.ConsumedAt != nil {
+			t.Errorf("A invitation touched: %+v %v", inv, err)
+		}
+		ks, err := c.SigningKeys(store.KeyPurposeAccessToken)
+		if err != nil || len(ks) != 2 {
+			t.Fatalf("A keys: %v %v", ks, err)
+		}
+		for _, k := range ks {
+			if k.Status == store.KeyRevoked {
+				t.Errorf("A key %s revoked by B's call", k.KID)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 // TestBootstrapInvitationSingleUse: an invitation is consumed once, never
