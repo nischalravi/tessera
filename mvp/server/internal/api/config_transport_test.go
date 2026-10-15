@@ -90,6 +90,7 @@ func TestConfigTransport_ExportPlanApply(t *testing.T) {
 	}
 	var plan struct {
 		Hash     string   `json:"hash"`
+		Digest   string   `json:"digest"`
 		Refusals []string `json:"refusals"`
 		Items    []any    `json:"items"`
 		Source   struct {
@@ -107,10 +108,10 @@ func TestConfigTransport_ExportPlanApply(t *testing.T) {
 	if rec := serveOnce(b, http.MethodPost, "/api/config/import/apply", bundle); rec.Code != http.StatusUnprocessableEntity {
 		t.Errorf("apply without hash %d", rec.Code)
 	}
-	if rec := serveOnce(b, http.MethodPost, "/api/config/import/apply?hash=00", bundle); !strings.Contains(rec.Body.String(), "hash_mismatch") {
+	if rec := serveOnce(b, http.MethodPost, "/api/config/import/apply?hash=00&digest="+plan.Digest, bundle); !strings.Contains(rec.Body.String(), "hash_mismatch") {
 		t.Errorf("apply with another hash %d: %s", rec.Code, rec.Body)
 	}
-	rec = serveOnce(b, http.MethodPost, "/api/config/import/apply?hash="+url.QueryEscape(plan.Hash), bundle)
+	rec = serveOnce(b, http.MethodPost, "/api/config/import/apply?hash="+url.QueryEscape(plan.Hash)+"&digest="+url.QueryEscape(plan.Digest), bundle)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("apply %d: %s", rec.Code, rec.Body)
 	}
@@ -148,6 +149,137 @@ func TestIsolation_TrustedSignerScoped(t *testing.T) {
 	}
 }
 
+type previewed struct {
+	Hash        string `json:"hash"`
+	Digest      string `json:"digest"`
+	DigestPrune string `json:"digest_prune"`
+	Items       []struct {
+		Name   string `json:"name"`
+		Action string `json:"action"`
+	} `json:"items"`
+}
+
+func previewOn(t *testing.T, b http.Handler, bundle string) previewed {
+	t.Helper()
+	rec := serveOnce(b, http.MethodPost, "/api/config/import/plan", bundle)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("plan %d: %s", rec.Code, rec.Body)
+	}
+	var p previewed
+	decodeJSON(t, rec.Body.String(), &p)
+	if p.Digest == "" || p.DigestPrune == "" || p.Digest == p.DigestPrune {
+		t.Fatalf("plan digests %q / %q: want two different digests", p.Digest, p.DigestPrune)
+	}
+	return p
+}
+
+func applyURL(p previewed, digest string, prune bool) string {
+	u := "/api/config/import/apply?hash=" + url.QueryEscape(p.Hash) + "&digest=" + url.QueryEscape(digest)
+	if prune {
+		u += "&prune=true"
+	}
+	return u
+}
+
+// TestConfigTransport_StalePlan: the apply confirmation binds the reviewed
+// plan, not only the bundle: the destination changing after the preview, or
+// the prune choice changing, is refused before anything is written (#182).
+func TestConfigTransport_StalePlan(t *testing.T) {
+	const extra = `{"name":"Extra","connector_type":"demo-ad","system":"extra-sys","config":{"host":"ad.example.com"}}`
+	setup := func(t *testing.T) (http.Handler, string, previewed) {
+		t.Helper()
+		_, a, b := transportServers(t, "test")
+		bundle, key := exportA(t, a)
+		trustA(t, b, key)
+		return b, bundle, previewOn(t, b, bundle)
+	}
+	refused := func(t *testing.T, b http.Handler, rec interface{ String() string }, code int) {
+		t.Helper()
+		if code != http.StatusConflict || !strings.Contains(rec.String(), "stale_plan") {
+			t.Errorf("want 409 stale_plan, got %d: %s", code, rec.String())
+		}
+		if body := serveOnce(b, http.MethodGet, "/api/config/imports", "").Body.String(); strings.TrimSpace(body) != "[]" {
+			t.Errorf("a refused apply left an import: %s", body)
+		}
+	}
+
+	t.Run("digest required", func(t *testing.T) {
+		b, bundle, p := setup(t)
+		rec := serveOnce(b, http.MethodPost, "/api/config/import/apply?hash="+url.QueryEscape(p.Hash), bundle)
+		if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "digest_required") {
+			t.Errorf("apply without digest %d: %s", rec.Code, rec.Body)
+		}
+	})
+	t.Run("connection added after the preview, prune", func(t *testing.T) {
+		b, bundle, p := setup(t)
+		if rec := serveOnce(b, http.MethodPost, "/api/connections", extra); rec.Code != http.StatusCreated {
+			t.Fatalf("create %d: %s", rec.Code, rec.Body)
+		}
+		rec := serveOnce(b, http.MethodPost, applyURL(p, p.DigestPrune, true), bundle)
+		refused(t, b, rec.Body, rec.Code)
+		// The connection added after the preview is still live: a new plan lists it for removal.
+		again := previewOn(t, b, bundle)
+		var live bool
+		for _, it := range again.Items {
+			live = live || (it.Name == "Extra" && it.Action == "remove")
+		}
+		if !live {
+			t.Errorf("Extra was retired by a refused apply: %+v", again.Items)
+		}
+		// A plan reviewed after the change applies.
+		if rec := serveOnce(b, http.MethodPost, applyURL(again, again.Digest, false), bundle); rec.Code != http.StatusOK {
+			t.Errorf("apply of the fresh plan %d: %s", rec.Code, rec.Body)
+		}
+	})
+	t.Run("connection added after the preview, no prune", func(t *testing.T) {
+		b, bundle, p := setup(t)
+		if rec := serveOnce(b, http.MethodPost, "/api/connections", extra); rec.Code != http.StatusCreated {
+			t.Fatalf("create %d: %s", rec.Code, rec.Body)
+		}
+		rec := serveOnce(b, http.MethodPost, applyURL(p, p.Digest, false), bundle)
+		refused(t, b, rec.Body, rec.Code)
+	})
+	t.Run("prune changed after the preview", func(t *testing.T) {
+		b, bundle, p := setup(t)
+		rec := serveOnce(b, http.MethodPost, applyURL(p, p.Digest, true), bundle)
+		refused(t, b, rec.Body, rec.Code)
+		rec = serveOnce(b, http.MethodPost, applyURL(p, p.DigestPrune, false), bundle)
+		refused(t, b, rec.Body, rec.Code)
+	})
+	t.Run("existing connection changed after the preview", func(t *testing.T) {
+		_, a, b := transportServers(t, "test")
+		if rec := serveOnce(a, http.MethodPost, "/api/connections", extra); rec.Code != http.StatusCreated {
+			t.Fatalf("create on A %d: %s", rec.Code, rec.Body)
+		}
+		bundle, key := exportA(t, a)
+		trustA(t, b, key)
+		rec := serveOnce(b, http.MethodPost, "/api/connections", extra)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("create on B %d: %s", rec.Code, rec.Body)
+		}
+		var made struct {
+			Conn struct {
+				ID string `json:"id"`
+			} `json:"conn"`
+			Connection struct {
+				ID string `json:"id"`
+			} `json:"connection"`
+			ID string `json:"id"`
+		}
+		decodeJSON(t, rec.Body.String(), &made)
+		id := made.ID + made.Conn.ID + made.Connection.ID
+		if id == "" {
+			t.Fatalf("no connection id in %s", rec.Body)
+		}
+		p := previewOn(t, b, bundle)
+		if patch := serveOnce(b, http.MethodPatch, "/api/connections/"+id+"/config", `{"host":"other.example.com"}`); patch.Code >= 300 {
+			t.Fatalf("patch %d: %s", patch.Code, patch.Body)
+		}
+		rec = serveOnce(b, http.MethodPost, applyURL(p, p.Digest, false), bundle)
+		refused(t, b, rec.Body, rec.Code)
+	})
+}
+
 func TestConfigTransport_NoSealer(t *testing.T) {
 	f := storetest.TwoTenants(t)
 	h := asAdmin(t, newIsolationServer(f), f.DB, f.A.ID, storetest.Now).Handler()
@@ -169,13 +301,14 @@ func TestConfigTransport_ProdRefusesDevOnly(t *testing.T) {
 	rec := serveOnce(b, http.MethodPost, "/api/config/import/plan", bundle)
 	var plan struct {
 		Hash     string   `json:"hash"`
+		Digest   string   `json:"digest"`
 		Refusals []string `json:"refusals"`
 	}
 	decodeJSON(t, rec.Body.String(), &plan)
 	if len(plan.Refusals) == 0 || !strings.Contains(plan.Refusals[0], "localhost") {
 		t.Fatalf("prod plan %d: %s", rec.Code, rec.Body)
 	}
-	rec = serveOnce(b, http.MethodPost, "/api/config/import/apply?hash="+plan.Hash, bundle)
+	rec = serveOnce(b, http.MethodPost, "/api/config/import/apply?hash="+plan.Hash+"&digest="+plan.Digest, bundle)
 	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "bundle_refused") {
 		t.Errorf("prod apply %d: %s", rec.Code, rec.Body)
 	}

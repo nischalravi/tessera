@@ -119,7 +119,7 @@ function ImportCard() {
     if (ok === null) return;
     setBusy(true);
     try {
-      await configTransport.apply(bundle, plan.hash, prune);
+      await configTransport.apply(bundle, plan, prune);
       toast("Bundle applied");
       setPlan(null);
       setBundle(null);

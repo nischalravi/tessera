@@ -151,8 +151,10 @@ instance, as a **signed bundle** (`server/internal/transport`). Export signs wit
 Ed25519 key (made on first export, sealed under the KEK; a server without a KEK cannot export).
 Import accepts only bundles signed by a **trusted signer**: paste the exporting tenant's public
 key under Trusted signers first (a tenant does not trust its own key implicitly). The preview
-lists add / change / remove / manual per item; apply is bound to the previewed hash, needs
-step-up, and never activates anything: new connections are drafts, config changes make a new
+lists add / change / remove / manual per item; apply is bound to the previewed plan (`digest`, or
+`digest_prune` with prune: the bundle, tenant, environment, current revisions, operations and prune
+mode), so a change here or a different prune choice since the preview is refused with
+`409 stale_plan` before anything is written; apply needs step-up, and never activates anything: new connections are drafts, config changes make a new
 draft revision, sign-in connections arrive as **pending**, and a changed existing sign-in
 connection is shown as manual (change it through an admin change request). Removals retire
 connections only with prune. A bundle never holds a secret: sealed credentials and client
@@ -191,7 +193,7 @@ connection on plain http or a private address, is refused. Applies are audited
 `GET /api/identity-merges` · `POST /api/identity-merges/{id}/unmerge {reason}` ·
 `GET /api/config/signing-key` · `POST /api/config/export` · `GET|POST /api/config/trusted-signers` ·
 `DELETE /api/config/trusted-signers/{kid}` · `POST /api/config/import/plan` (body: the bundle file) ·
-`POST /api/config/import/apply?hash=&prune=` · `GET /api/config/imports`
+`POST /api/config/import/apply?hash=&digest=&prune=` · `GET /api/config/imports`
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke

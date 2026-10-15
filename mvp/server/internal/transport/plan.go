@@ -2,6 +2,9 @@ package transport
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -47,6 +50,37 @@ type Plan struct {
 	Items     []Item   `json:"items"`
 	Refusals  []string `json:"refusals"` // non-empty: the bundle cannot be applied here
 	Counts    Counts   `json:"counts"`
+	// Digest and DigestPrune bind an apply to this plan (without and with
+	// prune): the bundle, the destination tenant and environment, the
+	// current state of what the plan touches, the proposed operations and
+	// the prune mode. Apply recomputes the digest in its own transaction and
+	// refuses with 409 stale_plan when it differs.
+	Digest      string `json:"digest"`
+	DigestPrune string `json:"digest_prune"`
+
+	state []string // the destination state the plan was made against (digest input)
+}
+
+// digest hashes everything the reviewed plan depends on.
+func (p *Plan) digest(tenant string, target Target, prune bool) string {
+	state := append([]string(nil), p.state...)
+	sort.Strings(state)
+	raw, _ := json.Marshal(struct {
+		V      int      `json:"v"`
+		Tenant string   `json:"tenant"`
+		Prod   bool     `json:"prod"`
+		Prune  bool     `json:"prune"`
+		Bundle string   `json:"bundle"`
+		Items  []Item   `json:"items"`
+		State  []string `json:"state"`
+	}{1, tenant, target.Prod, prune, p.Hash, p.Items, state})
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+func shortHash(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:8])
 }
 
 // Counts summarize a plan.
@@ -95,6 +129,8 @@ func MakePlan(tx *store.TenantTx, rd *readiness.Service, v *Verified, target Tar
 			p.Counts.Unchanged++
 		}
 	}
+	p.Digest = p.digest(tx.Tenant().String(), target, false)
+	p.DigestPrune = p.digest(tx.Tenant().String(), target, true)
 	return p, nil
 }
 
@@ -206,6 +242,7 @@ type liveConn struct {
 	conn *store.Connection
 	cfg  json.RawMessage
 	cred Credential
+	rev  string // the current revision: id, config hash and credential reference
 }
 
 func liveConnections(tx *store.TenantTx, rd *readiness.Service, now time.Time) (map[string]liveConn, error) {
@@ -223,6 +260,10 @@ func liveConnections(tx *store.TenantTx, rd *readiness.Service, now time.Time) (
 			return nil, err
 		}
 		lc := liveConn{conn: c, cfg: compactJSON(cur.Rev.Config), cred: Credential{Kind: "none"}}
+		lc.rev = cur.Rev.ID + ":" + cur.Rev.ConfigHash
+		if r := cur.Rev.SecretRef; r != nil {
+			lc.rev += ":" + shortHash(*r)
+		}
 		if r := cur.Rev.SecretRef; r != nil && *r != "" {
 			if len(*r) > 7 && (*r)[:7] == "sealed:" {
 				lc.cred = Credential{Kind: "sealed"}
@@ -249,6 +290,10 @@ func planConnections(tx *store.TenantTx, rd *readiness.Service, b *Bundle, p *Pl
 	for _, c := range all {
 		takenName[c.Name] = c
 		takenSystem[c.System] = c
+		p.state = append(p.state, fmt.Sprintf("connection|%s|%s|%s|%t", c.ID, c.Name, c.System, c.RetiredAt != nil))
+	}
+	for n, l := range live {
+		p.state = append(p.state, "revision|"+n+"|"+l.rev)
 	}
 	inBundle := map[string]bool{}
 	for _, c := range b.Connections {
@@ -314,6 +359,11 @@ func planOverlays(tx *store.TenantTx, rd *readiness.Service, b *Bundle, p *Plan)
 		if err != nil {
 			return err
 		}
+		if cur == nil {
+			p.state = append(p.state, "overlay|"+o.TemplateID+"|none")
+		} else {
+			p.state = append(p.state, fmt.Sprintf("overlay|%s|%d|%s", o.TemplateID, cur.Version, shortHash(cur.Body)))
+		}
 		switch {
 		case cur == nil:
 			it.Action = Add
@@ -344,6 +394,7 @@ func planIdPs(tx *store.TenantTx, b *Bundle, p *Plan) error {
 	byName := map[string]*store.IdPConnection{}
 	for _, c := range idps {
 		byName[c.Name] = c
+		p.state = append(p.state, "idp|"+c.ID.String()+"|"+c.Name)
 	}
 	for _, i := range b.IdentityProviders {
 		it := Item{Section: "identity_providers", Name: i.Name}
@@ -411,10 +462,19 @@ type Applied struct {
 // Apply plans a verified bundle again and makes the changes, all in tx.
 // Removals happen only with prune. It refuses a bundle whose plan has
 // refusals.
-func Apply(tx *store.TenantTx, rd *readiness.Service, v *Verified, target Target, prune bool, actor string, actorUser *string, now time.Time) (*Applied, error) {
+func Apply(tx *store.TenantTx, rd *readiness.Service, v *Verified, target Target, prune bool, digest string, actor string, actorUser *string, now time.Time) (*Applied, error) {
 	p, err := MakePlan(tx, rd, v, target, now)
 	if err != nil {
 		return nil, err
+	}
+	// The digest the admin reviewed must still describe this tenant, this
+	// prune choice and these operations: checked before anything is written.
+	want := p.Digest
+	if prune {
+		want = p.DigestPrune
+	}
+	if digest == "" || subtle.ConstantTimeCompare([]byte(digest), []byte(want)) != 1 {
+		return nil, refuse(409, "stale_plan", "the configuration here or the prune choice changed since the preview; plan the import again and review it")
 	}
 	if len(p.Refusals) > 0 {
 		return nil, refuse(422, "bundle_refused", "this bundle cannot be applied here: %s", p.Refusals[0])

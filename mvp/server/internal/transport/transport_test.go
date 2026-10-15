@@ -131,13 +131,23 @@ func (e *env) plan(t *testing.T, raw []byte, target Target) *Plan {
 
 func (e *env) apply(t *testing.T, raw []byte, prune bool) (*Applied, error) {
 	t.Helper()
+	p := e.plan(t, raw, Target{}) // the preview the admin reviewed
+	digest := p.Digest
+	if prune {
+		digest = p.DigestPrune
+	}
+	return e.applyDigest(t, raw, prune, digest)
+}
+
+func (e *env) applyDigest(t *testing.T, raw []byte, prune bool, digest string) (*Applied, error) {
+	t.Helper()
 	var a *Applied
 	err := e.dst.Write(context.Background(), func(tx *store.TenantTx) error {
 		v, err := Verify(tx, raw)
 		if err != nil {
 			return err
 		}
-		a, err = Apply(tx, e.rd, v, Target{}, prune, "admin", nil, t0)
+		a, err = Apply(tx, e.rd, v, Target{}, prune, digest, "admin", nil, t0)
 		return err
 	})
 	return a, err
@@ -298,6 +308,62 @@ func TestDiffAndPrune(t *testing.T) {
 	})
 }
 
+// TestApplyBindsThePlan: an apply is refused, with nothing written, when the
+// destination or the prune choice differs from the plan that was reviewed.
+func TestApplyBindsThePlan(t *testing.T) {
+	e := newEnv(t)
+	e.seedSource(t)
+	e.trust(t)
+	raw := e.export(t).JWS
+	reviewed := e.plan(t, raw, Target{})
+	if reviewed.Digest == "" || reviewed.Digest == reviewed.DigestPrune {
+		t.Fatalf("digests %q %q", reviewed.Digest, reviewed.DigestPrune)
+	}
+	if again := e.plan(t, raw, Target{}); again.Digest != reviewed.Digest || again.DigestPrune != reviewed.DigestPrune {
+		t.Fatal("the digest is not stable for an unchanged destination")
+	}
+	if p := e.plan(t, raw, Target{Prod: true}); p.Digest == reviewed.Digest {
+		t.Error("the digest does not cover the environment")
+	}
+	notStale := func(label string, err error) {
+		t.Helper()
+		var te *Error
+		if !errors.As(err, &te) || te.Code != "stale_plan" || te.Status != 409 {
+			t.Errorf("%s: %v, want 409 stale_plan", label, err)
+		}
+	}
+	_, err := e.applyDigest(t, raw, true, reviewed.Digest) // prune changed after the preview
+	notStale("prune changed", err)
+	_, err = e.applyDigest(t, raw, false, "")
+	notStale("no digest", err)
+
+	write(t, e.dst, func(tx *store.TenantTx) error { // another admin adds a connection
+		_, err := e.rd.Create(tx, readiness.CreateInput{Name: "Added later", ConnectorType: "demo-ad", System: "later",
+			Config: json.RawMessage(`{}`)}, "admin", t0)
+		return err
+	})
+	_, err = e.applyDigest(t, raw, true, reviewed.DigestPrune)
+	notStale("connection added", err)
+	write(t, e.dst, func(tx *store.TenantTx) error {
+		conns, err := tx.Connections()
+		if err != nil {
+			return err
+		}
+		for _, c := range conns {
+			if c.RetiredAt != nil {
+				t.Errorf("%s retired by a refused apply", c.Name)
+			}
+			if c.Name == "Corp AD" {
+				t.Error("a refused apply created a connection")
+			}
+		}
+		return nil
+	})
+	if _, err := e.apply(t, raw, false); err != nil { // a fresh preview applies
+		t.Fatal(err)
+	}
+}
+
 func TestVerifyRefusals(t *testing.T) {
 	e := newEnv(t)
 	e.seedSource(t)
@@ -400,12 +466,13 @@ func TestApplyRefusedForProd(t *testing.T) {
 	if p := e.plan(t, raw, Target{Prod: true}); len(p.Refusals) != 1 {
 		t.Errorf("prod refusals %v", p.Refusals)
 	}
+	digest := e.plan(t, raw, Target{Prod: true}).Digest
 	err := e.dst.Write(context.Background(), func(tx *store.TenantTx) error {
 		v, err := Verify(tx, raw)
 		if err != nil {
 			return err
 		}
-		_, err = Apply(tx, e.rd, v, Target{Prod: true}, false, "admin", nil, t0)
+		_, err = Apply(tx, e.rd, v, Target{Prod: true}, false, digest, "admin", nil, t0)
 		return err
 	})
 	var te *Error

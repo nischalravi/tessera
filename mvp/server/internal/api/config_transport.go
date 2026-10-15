@@ -205,7 +205,9 @@ func (s *Server) importPlan(r *http.Request, _ *params) (int, any, error) {
 }
 
 // importApply applies a bundle. ?prune=true also retires connections the
-// bundle does not have; ?hash= must match the plan the admin reviewed.
+// bundle does not have; ?hash= must match the bundle the admin reviewed and
+// ?digest= the plan (the plan's digest, or digest_prune with prune=true):
+// the destination or the prune choice changing since is a 409 stale_plan.
 func (s *Server) importApply(r *http.Request, _ *params) (int, any, error) {
 	q, err := url.ParseQuery(r.URL.RawQuery)
 	if err != nil {
@@ -215,6 +217,10 @@ func (s *Server) importApply(r *http.Request, _ *params) (int, any, error) {
 	hash := q.Get("hash")
 	if hash == "" {
 		return 0, nil, badRequest("hash_required", "send ?hash=<the plan's hash> so the bundle applied is the one previewed")
+	}
+	digest := q.Get("digest")
+	if digest == "" {
+		return 0, nil, badRequest("digest_required", "send ?digest=<the plan's digest> (digest_prune with prune=true) so the plan applied is the one previewed")
 	}
 	raw, err := readBundle(r)
 	if err != nil {
@@ -229,7 +235,7 @@ func (s *Server) importApply(r *http.Request, _ *params) (int, any, error) {
 		if v.Hash != hash {
 			return badRequest("hash_mismatch", "this bundle is not the one previewed; plan it again")
 		}
-		out, err = transport.Apply(c, s.readiness, v, s.target(), prune, actor(r), userIDOf(r), now)
+		out, err = transport.Apply(c, s.readiness, v, s.target(), prune, digest, actor(r), userIDOf(r), now)
 		return err
 	})
 	return http.StatusOK, out, err
