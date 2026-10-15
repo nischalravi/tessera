@@ -65,10 +65,10 @@ func SAMLFaults() []Fault {
 		FaultUnsolicited, FaultWrongInResponseTo}
 }
 
-// ParseFault accepts "" (no fault), an OIDC fault or a SAML fault name.
+// ParseFault accepts "" (no fault), an OIDC, SAML or GitHub fault name.
 func ParseFault(s string) (Fault, error) {
 	f := Fault(s)
-	if f == FaultNone || slices.Contains(OIDCFaults(), f) || slices.Contains(SAMLFaults(), f) {
+	if f == FaultNone || slices.Contains(OIDCFaults(), f) || slices.Contains(SAMLFaults(), f) || slices.Contains(GitHubFaults(), f) {
 		return f, nil
 	}
 	return FaultNone, fmt.Errorf("unknown fault %q", s)

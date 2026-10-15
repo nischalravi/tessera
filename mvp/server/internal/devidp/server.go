@@ -117,6 +117,7 @@ type Server struct {
 	codes    ttlStore[authCode]
 	sessions ttlStore[idpSession]
 	tokens   ttlStore[accessGrant]
+	github   ttlStore[githubGrant]
 	jtis     ttlStore[struct{}]
 
 	mu    sync.Mutex
@@ -266,6 +267,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /userinfo", s.handleUserinfo)
 	mux.HandleFunc("POST /userinfo", s.handleUserinfo)
 	mux.HandleFunc("GET /logout", s.handleLogout)
+	mux.HandleFunc("GET "+pathGitHubAuthorize, s.handleGitHubAuthorize)
+	mux.HandleFunc("POST "+pathGitHubToken, s.handleGitHubToken)
+	mux.HandleFunc("GET "+pathGitHubUser, s.handleGitHubUser)
+	mux.HandleFunc("GET "+pathGitHubEmails, s.handleGitHubEmails)
 	mux.HandleFunc("GET "+samlEntityPath, s.handleSAMLMetadata)
 	mux.HandleFunc("GET "+samlSSOPath, s.handleSAMLSSO)
 	mux.HandleFunc("POST "+samlSSOPath, s.handleSAMLSubmit)

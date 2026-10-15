@@ -162,7 +162,8 @@ The routes are documented at `/api/readiness/openapi.json`.
 `GET /api/auth/step-up?acr=&max_age=&return_to=` ·
 `GET /api/auth/discover?tenant=&email=` · `GET /api/auth/login?tenant=&connection=&return_to=` (302 to the IdP) ·
 `GET /api/auth/oidc/{connection_id}/callback` · `GET /api/auth/saml/{connection_id}/metadata` ·
-`POST /api/auth/saml/{connection_id}/acs` · `GET /t/{slug}/bootstrap?code=` (public) ·
+`POST /api/auth/saml/{connection_id}/acs` · `GET /api/auth/oauth2/{connection_id}/callback` ·
+`GET /t/{slug}/bootstrap?code=` (public) ·
 `GET|POST /api/access/policies` · `PUT|DELETE /api/access/policies/{id}` · `GET|POST /api/access/networks` ·
 `PUT|DELETE /api/access/networks/{id}` · `GET /api/access/users` · `GET /api/access/device-signals` ·
 `PUT|DELETE /api/access/device-signals/{user_id}` · `POST /api/access/evaluate` (conditional access, below) ·
@@ -418,8 +419,8 @@ about 8 kB; cytoscape (about 146 kB gzipped) only loads with the access graph.
 ## Signing in
 
 Every API call needs a signed-in session (design `docs/design/phase-0-platform-security.md` §11, §12),
-and Tessera never sees a password: users sign in through their company's identity provider (OIDC or
-SAML 2.0).
+and Tessera never sees a password: users sign in through their company's identity provider (OIDC, SAML 2.0,
+or an OAuth 2.0-only provider such as GitHub).
 
 1. `./run.sh` and open http://localhost:5173. The sign-in page asks for the organization (tenant):
    `larkspur` (the demo company) or `globex`.
@@ -509,6 +510,25 @@ Tessera's origin, where the cookie is sent. The cookie never needs `SameSite=Non
 certificate (`tessera-devidp -print-saml-cert`, derived from its key) with a sealed SP key, so the sign-in
 page offers both. Its SP metadata is at `/api/auth/saml/<id>/metadata`.
 
+### Sign-in through an OAuth 2.0-only provider (GitHub)
+
+Some providers speak only OAuth 2.0 and issue no ID token (issue #151). A `protocol: oauth2`
+connection (`github`, or `generic_oauth2` with configured endpoints) uses the authorization code flow
+with PKCE S256 and `state` through the same login transaction and cookie. The callback,
+`/api/auth/oauth2/{connection_id}/callback`, redeems the code at the pinned token endpoint and asks the
+user API who signed in (`internal/auth/oauth2rp`, through `internal/safehttp`). The user is keyed on
+an immutable id (GitHub's numeric `id`, or `subject_field`), never a login name or email; email is the
+primary verified address when `user:email` is granted, for display only.
+
+Nothing signed proves the factor or when the user authenticated, so these sessions are **AAL1 and
+never phishing resistant**: admin roles stay inactive, step-up answers `409 step_up_unavailable`,
+bootstrap invitations cannot use the connection, and `assume_phishing_resistant` is refused (and
+ignored). `auth_time` is the callback time. Admins sign in through OIDC or SAML.
+
+`./run.sh` also seeds **Dev IdP (GitHub OAuth)**, which uses the dev IdP's GitHub emulation
+(`/github/login/oauth/authorize`, `/github/login/oauth/access_token`, `/github/user`; faults
+`github_token_error`, `github_token_type`, `github_user_error`, `github_no_id`, `github_string_id`).
+
 **A new tenant** is created by an operator (design §15.3); every step is audited as the OS user:
 
 ```bash
@@ -522,7 +542,10 @@ TESSERA_ENV=dev go run ./cmd/tessera admin invite-admin -tenant acme -connection
 `client_secret_basic` for now and prints the redirect URI. `protocol: saml` with `profile: generic_saml`
 needs `idp_entity_id`, `idp_sso_url` and `idp_signing_certs` (pinned), takes `subject_source` and
 `attribute_map` (`email`, `name`, `groups`), generates and seals an SP key, and prints the SP entity
-ID/metadata and ACS URLs to register at the IdP. `invite-admin` prints a one-time
+ID/metadata and ACS URLs to register at the IdP. `protocol: oauth2` takes `profile: github` (GitHub's
+endpoints and `id` by default) or `generic_oauth2` with `authorization_endpoint`, `token_endpoint`,
+`userinfo_endpoint` and `subject_field` (never a name or email), needs `-client-secret-file`, and
+prints the redirect URI. `invite-admin` prints a one-time
 `/t/acme/bootstrap?code=tbi_…` URL valid for at most 24 hours (only its hash is stored): redeeming it
 with a phishing-resistant sign-in through that connection, as that email, makes the user `tenant_admin`
 (source `bootstrap`), once.

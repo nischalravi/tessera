@@ -45,7 +45,8 @@ import (
 const devClientSecret = "tessera-dev-secret" // #nosec G101 -- documented dev-only value of a mock IdP
 
 const (
-	defaultRedirects   = "http://localhost:*/api/auth/oidc/*/callback,http://127.0.0.1:*/api/auth/oidc/*/callback"
+	defaultRedirects = "http://localhost:*/api/auth/oidc/*/callback,http://127.0.0.1:*/api/auth/oidc/*/callback," +
+		"http://localhost:*/api/auth/oauth2/*/callback,http://127.0.0.1:*/api/auth/oauth2/*/callback"
 	defaultPostLogouts = "http://localhost:5173/,http://127.0.0.1:5173/"
 	shutdownTimeout    = 5 * time.Second
 )

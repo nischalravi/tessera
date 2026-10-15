@@ -177,7 +177,7 @@ func TestAccessLogin_DeviceClaims(t *testing.T) {
 		}
 	})
 	t.Run("saml", func(t *testing.T) {
-		e := newAuthEnv(t, true)
+		e := newAuthEnv(t, authEnvOpts{saml: true})
 		seedAccessIn(t, e.db, seed.LarkspurID, pspec{name: "compliant only", scope: S, mode: E, outcome: "deny", device: store.DeviceNotCompliant})
 		e.refused(e.samlSignIn("00u-olu-operator", devidp.MethodPasswordOTP, ""), seed.LarkspurID, "conditional_access_denied")
 		rec := e.samlSignIn("00u-alice-admin", devidp.MethodPasskey, "")

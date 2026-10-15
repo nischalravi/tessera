@@ -29,6 +29,7 @@ var ErrSessionInactive = errors.New("store: session is not active")
 const idpCols = `c.id, c.tenant_id, c.name, c.protocol, c.profile, c.status, c.is_default, c.verified_domains,
 	c.issuer, c.discovery_url, c.client_id, c.client_auth_method, c.client_secret_enc, c.client_signing_kid,
 	c.scopes, c.id_token_algs, c.step_up_request, c.idp_entity_id, c.idp_sso_url, c.idp_signing_certs,
+	c.authorization_endpoint, c.token_endpoint, c.userinfo_endpoint,
 	c.metadata_url, c.pin_certs, c.sp_key_enc, c.sp_cert_pem, c.subject_source, c.attribute_map, c.authn_mapping,
 	c.assume_phishing_resistant, c.groups_claim, c.group_role_mapping, c.jit_provisioning, c.default_role,
 	c.created_at, c.updated_at, c.last_change_request_id`
@@ -37,13 +38,15 @@ var (
 	idpInsert = tq("idp_connections.insert", `
 		INSERT INTO idp_connections (id, tenant_id, name, protocol, profile, status, is_default, verified_domains,
 			issuer, discovery_url, client_id, client_auth_method, client_secret_enc, client_signing_kid, scopes,
-			id_token_algs, step_up_request, idp_entity_id, idp_sso_url, idp_signing_certs, metadata_url, pin_certs,
+			id_token_algs, step_up_request, idp_entity_id, idp_sso_url, idp_signing_certs, authorization_endpoint,
+			token_endpoint, userinfo_endpoint, metadata_url, pin_certs,
 			sp_key_enc, sp_cert_pem, subject_source, attribute_map, authn_mapping, assume_phishing_resistant,
 			groups_claim, group_role_mapping, jit_provisioning, default_role, created_at, updated_at,
 			last_change_request_id)
 		VALUES (@id, @tenant, @name, @protocol, @profile, @status, @is_default, @verified_domains,
 			@issuer, @discovery_url, @client_id, @client_auth_method, @client_secret_enc, @client_signing_kid, @scopes,
-			@id_token_algs, @step_up_request, @idp_entity_id, @idp_sso_url, @idp_signing_certs, @metadata_url, @pin_certs,
+			@id_token_algs, @step_up_request, @idp_entity_id, @idp_sso_url, @idp_signing_certs, @authorization_endpoint,
+			@token_endpoint, @userinfo_endpoint, @metadata_url, @pin_certs,
 			@sp_key_enc, @sp_cert_pem, @subject_source, @attribute_map, @authn_mapping, @assume_phishing_resistant,
 			@groups_claim, @group_role_mapping, @jit_provisioning, @default_role, @created_at, @updated_at,
 			@last_change_request_id)`)
@@ -68,9 +71,11 @@ func scanIdP(s scanner) (*IdPConnection, error) {
 	var verified, scopes, algs, stepUp, certs, attrs, mapping, groupMap string
 	var isDefault, pin, assume, jitProv int
 	var issuer, disc, clientID, authMethod, kid, entity, sso, meta, spCert, groupsClaim, lastCR sql.NullString
+	var authzEP, tokenEP, userinfoEP sql.NullString
 	if err := s.Scan(&id, &tid, &c.Name, &c.Protocol, &c.Profile, &c.Status, &isDefault, &verified,
 		&issuer, &disc, &clientID, &authMethod, &c.ClientSecretEnc, &kid,
 		&scopes, &algs, &stepUp, &entity, &sso, &certs,
+		&authzEP, &tokenEP, &userinfoEP,
 		&meta, &pin, &c.SPKeyEnc, &spCert, &c.SubjectSource, &attrs, &mapping,
 		&assume, &groupsClaim, &groupMap, &jitProv, &c.DefaultRole,
 		&created, &updated, &lastCR); err != nil {
@@ -90,6 +95,7 @@ func scanIdP(s scanner) (*IdPConnection, error) {
 	c.Issuer, c.DiscoveryURL, c.ClientID, c.ClientAuthMethod = strp(issuer), strp(disc), strp(clientID), strp(authMethod)
 	c.ClientSigningKID, c.IdPEntityID, c.IdPSSOURL, c.MetadataURL = strp(kid), strp(entity), strp(sso), strp(meta)
 	c.SPCertPEM, c.GroupsClaim, c.LastChangeRequestID = strp(spCert), strp(groupsClaim), strp(lastCR)
+	c.AuthorizationEndpoint, c.TokenEndpoint, c.UserinfoEndpoint = strp(authzEP), strp(tokenEP), strp(userinfoEP)
 	if c.CreatedAt, err = ParseRT(created); err != nil {
 		return nil, err
 	}
@@ -125,6 +131,8 @@ func (tx *TenantTx) InsertIdPConnection(c *IdPConnection) error {
 		sql.Named("id_token_algs", jsonOr(c.IDTokenAlgs, `["RS256","ES256","PS256"]`)),
 		sql.Named("step_up_request", jsonOr(c.StepUpRequest, "{}")), sql.Named("idp_entity_id", SP(c.IdPEntityID)),
 		sql.Named("idp_sso_url", SP(c.IdPSSOURL)), sql.Named("idp_signing_certs", jsonOr(c.IdPSigningCerts, "[]")),
+		sql.Named("authorization_endpoint", SP(c.AuthorizationEndpoint)), sql.Named("token_endpoint", SP(c.TokenEndpoint)),
+		sql.Named("userinfo_endpoint", SP(c.UserinfoEndpoint)),
 		sql.Named("metadata_url", SP(c.MetadataURL)), sql.Named("pin_certs", B(c.PinCerts)),
 		sql.Named("sp_key_enc", c.SPKeyEnc), sql.Named("sp_cert_pem", SP(c.SPCertPEM)),
 		sql.Named("subject_source", c.SubjectSource), sql.Named("attribute_map", jsonOr(c.AttributeMap, "{}")),

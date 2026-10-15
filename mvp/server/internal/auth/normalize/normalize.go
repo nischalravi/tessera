@@ -59,12 +59,14 @@ const (
 
 // Profiles (store.Profile*).
 const (
-	Okta        = "okta"
-	Entra       = "entra"
-	Google      = "google"
-	GenericOIDC = "generic_oidc"
-	GenericSAML = "generic_saml"
-	DevMock     = "dev_mock"
+	Okta          = "okta"
+	Entra         = "entra"
+	Google        = "google"
+	GenericOIDC   = "generic_oidc"
+	GenericSAML   = "generic_saml"
+	GitHub        = "github"
+	GenericOAuth2 = "generic_oauth2"
+	DevMock       = "dev_mock"
 )
 
 // Okta acr values (Identity Engine).
@@ -115,7 +117,7 @@ type Mapping struct {
 	// device_compliant.
 	DeviceManagedClaim   string `json:"device_managed_claim,omitempty"`
 	DeviceCompliantClaim string `json:"device_compliant_claim,omitempty"`
-	// DevEmulation pins the dev_mock emulation (okta | entra | generic | saml);
+	// DevEmulation pins the dev_mock emulation (okta | entra | generic | saml | github);
 	// empty infers it from the claims.
 	DevEmulation string `json:"dev_emulation,omitempty"`
 }
@@ -203,6 +205,8 @@ func Normalize(conn Connection, req Requested, c Claims) (Result, error) {
 		r, err = generic(conn, req, c)
 	case GenericSAML:
 		r, err = saml(conn, req, c)
+	case GitHub, GenericOAuth2:
+		r = Result{Subject: c.Subject, AAL: 1} // oauth2: nothing proves the factor
 	default:
 		return Result{}, fmt.Errorf("%w %q", ErrUnknownProfile, conn.Profile)
 	}
@@ -215,7 +219,8 @@ func Normalize(conn Connection, req Requested, c Claims) (Result, error) {
 	if r.Subject == "" {
 		return Result{}, ErrMissingSubject
 	}
-	if conn.AssumePhishingResistant && !r.PhishingResistant { // rule 4
+	oauth2 := profile == GitHub || profile == GenericOAuth2
+	if conn.AssumePhishingResistant && !r.PhishingResistant && !oauth2 { // rule 4; never for OAuth 2.0-only providers
 		r.PhishingResistant, r.PhrBasis = true, BasisAttestation
 	}
 	r.AuthTime = c.AuthTime.UTC()
@@ -279,6 +284,8 @@ func devEmulation(m Mapping, c Claims) string {
 		return GenericOIDC
 	case "saml":
 		return GenericSAML
+	case "github":
+		return GitHub
 	}
 	switch {
 	case c.ClassRef != "" || c.Attributes != nil: // a SAML assertion (the dev IdP's SAML endpoints)

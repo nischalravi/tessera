@@ -31,7 +31,7 @@ import (
 
 func newSAMLEnv(t *testing.T) *oidcEnv {
 	t.Helper()
-	return newAuthEnv(t, true)
+	return newAuthEnv(t, authEnvOpts{saml: true})
 }
 
 // samlConnID is the tenant's seeded dev_mock SAML connection.
@@ -401,7 +401,7 @@ func samlRequestXML(t *testing.T, v string) string {
 // panic and never create a session. Each input gets a fresh transaction,
 // which no response answers (the seeds were issued for another one).
 func FuzzSAMLACS(f *testing.F) {
-	e := newAuthEnv(f, true)
+	e := newAuthEnv(f, authEnvOpts{saml: true})
 	a := e.samlStart(e.samlLoginURL(""), "00u-alice-admin", devidp.MethodPasskey, devidp.FaultNone)
 	raw, _ := base64.StdEncoding.DecodeString(a.post.SAMLResponse)
 	f.Add(raw)
