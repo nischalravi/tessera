@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
@@ -24,22 +25,25 @@ import (
 // transactions of that tenant through p.scope.
 func (s *Server) registerReadinessRoutes() {
 	G, P := http.MethodGet, http.MethodPost
-	s.handle(G, "/api/readiness/templates", read, s.rd(s.listTemplates))
-	s.handle(G, "/api/readiness/templates/{type}", read, s.rd(s.getTemplate))
-	s.handle(http.MethodPut, "/api/readiness/overlays/{type}", write, s.rd(s.putOverlay))
-	s.handle(G, "/api/readiness/openapi.json", noTenant, s.readinessOpenAPI)
-	s.handle(G, "/api/connections", read, s.rd(s.listConnections))
-	s.handle(P, "/api/connections", write, s.rd(s.createConnection))
-	s.handle(G, "/api/connections/{id}", read, s.rd(s.getConnection))
-	s.handle(http.MethodPatch, "/api/connections/{id}/config", write, s.rd(s.patchConfig))
-	s.handle(http.MethodPut, "/api/connections/{id}/credential", write, s.rd(s.putCredential))
-	s.handle(G, "/api/connections/{id}/checklist", read, s.rd(s.getChecklist))
-	s.handle(P, "/api/connections/{id}/checklist/{item}/attest", write, s.rd(s.attestItem))
-	s.handle(P, "/api/connections/{id}/checklist/{item}/skip", write, s.rd(s.skipItem))
-	s.handle(http.MethodDelete, "/api/connections/{id}/checklist/{item}/skip", write, s.rd(s.unskipItem))
-	s.handle(P, "/api/connections/{id}/transition", write, s.rd(s.transition))
-	s.handle(P, "/api/connections/{id}/activate", write, s.rd(s.activate))
-	s.handle(P, "/api/connections/{id}/retire", write, s.rd(s.retire))
+	s.handle(G, "/api/readiness/templates", read, need(auth.PermConnectionsRead), s.rd(s.listTemplates))
+	s.handle(G, "/api/readiness/templates/{type}", read, need(auth.PermConnectionsRead), s.rd(s.getTemplate))
+	s.handle(http.MethodPut, "/api/readiness/overlays/{type}", write, needStepUp(auth.PermConnectionsManage, auth.StepUpPolicy), s.rd(s.putOverlay))
+	s.handle(G, "/api/readiness/openapi.json", noTenant, need(auth.PermAuthenticated), s.readinessOpenAPI)
+	s.handle(G, "/api/connections", read, need(auth.PermConnectionsRead), s.rd(s.listConnections))
+	s.handle(P, "/api/connections", write, need(auth.PermConnectionsManage), s.rd(s.createConnection))
+	s.handle(G, "/api/connections/{id}", read, need(auth.PermConnectionsRead), s.rd(s.getConnection))
+	// Step-up like the credential: a config edit can point the revision's
+	// credential at another host (host, base_url, org_url, tenant_host, ...)
+	// or widen write_mode/write_scope.
+	s.handle(http.MethodPatch, "/api/connections/{id}/config", write, needStepUp(auth.PermConnectionsManage, auth.StepUpPolicy), s.rd(s.patchConfig))
+	s.handle(http.MethodPut, "/api/connections/{id}/credential", write, needStepUp(auth.PermConnectionsManage, auth.StepUpPolicy), s.rd(s.putCredential))
+	s.handle(G, "/api/connections/{id}/checklist", read, need(auth.PermConnectionsRead), s.rd(s.getChecklist))
+	s.handle(P, "/api/connections/{id}/checklist/{item}/attest", write, need(auth.PermConnectionsManage), s.rd(s.attestItem))
+	s.handle(P, "/api/connections/{id}/checklist/{item}/skip", write, need(auth.PermConnectionsManage), s.rd(s.skipItem))
+	s.handle(http.MethodDelete, "/api/connections/{id}/checklist/{item}/skip", write, need(auth.PermConnectionsManage), s.rd(s.unskipItem))
+	s.handle(P, "/api/connections/{id}/transition", write, need(auth.PermConnectionsManage), s.rd(s.transition))
+	s.handle(P, "/api/connections/{id}/activate", write, needStepUp(auth.PermConnectionsActivate, auth.StepUpPolicy), s.rd(s.activate))
+	s.handle(P, "/api/connections/{id}/retire", write, needStepUp(auth.PermConnectionsManage, auth.StepUpPolicy), s.rd(s.retire))
 	s.registerValidationRoutes()
 	s.registerDryRunRoutes()
 	s.registerHealthRoutes()
@@ -107,19 +111,10 @@ func decodeBody(r *http.Request, v any, allowEmpty bool) error {
 	return nil
 }
 
-// actorRE bounds the acting user's name. The MVP has no authentication: the
-// UI sends the persona as X-Tessera-User. DR-10 replaces this with the
-// authenticated principal and RBAC (connections.read/manage/activate).
-var actorRE = regexp.MustCompile(`^[A-Za-z0-9._@+ -]{1,120}$`)
-
-const defaultActor = "admin@larkspur.example"
-
-func actor(r *http.Request) string {
-	if a := r.Header.Get("X-Tessera-User"); actorRE.MatchString(a) {
-		return a
-	}
-	return defaultActor
-}
+// actor is the name readiness records (attested_by, skipped_by, ...): the
+// authenticated principal's display name. The former X-Tessera-User header
+// is no longer read: the actor comes only from the session (design §16.2).
+func actor(r *http.Request) string { return principal(r).Display }
 
 var idRE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 

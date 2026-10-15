@@ -23,7 +23,7 @@ import (
 
 // Audit middleware and routes (design §13.4, §16.1, §20 E2.3–E2.5).
 
-func ledger(t *testing.T, db *store.DB, tn tenancy.ID) []*store.AuditEvent {
+func ledger(t testing.TB, db *store.DB, tn tenancy.ID) []*store.AuditEvent {
 	t.Helper()
 	var out []*store.AuditEvent
 	if err := db.ReadTenant(context.Background(), tn, func(tx *store.TenantTx) error {
@@ -65,11 +65,11 @@ type httpField struct {
 
 // TestAudit_EveryRequestOneEvent (E2.3): each call writes exactly one
 // http.request event with the route template (never the raw path), the
-// status, sorted query keys only, and the anonymous actor, whatever the
-// client claims.
+// status, sorted query keys only, and the signed-in principal as the actor,
+// whatever the client claims (an X-Tessera-User header is ignored).
 func TestAudit_EveryRequestOneEvent(t *testing.T) {
 	f := storetest.TwoTenants(t)
-	h := isolationServer(f, f.B.ID).Handler()
+	h := isolationServer(t, f, f.B.ID).Handler()
 	alice := fmt.Sprint(f.B.IDs["alice"])
 	cases := []struct {
 		method, path, body string
@@ -99,8 +99,13 @@ func TestAudit_EveryRequestOneEvent(t *testing.T) {
 				t.Fatalf("%d http.request events written, want 1", len(after)-len(before))
 			}
 			e := after[0]
-			if e.ActorType != store.ActorAnonymous || e.ActorID != nil || e.ActorDisplay != nil {
-				t.Errorf("actor %s %v %v, want anonymous", e.ActorType, e.ActorID, e.ActorDisplay)
+			if e.ActorType != store.ActorUser || e.ActorID == nil || e.ActorDisplay == nil ||
+				*e.ActorDisplay != testAdmin.Email || e.SessionID == nil || len(e.Authn) == 0 {
+				t.Errorf("actor %s %v %v session %v authn %s, want the principal", e.ActorType, e.ActorID, e.ActorDisplay,
+					e.SessionID, e.Authn)
+			}
+			if strings.Contains(string(e.Detail), "anonymous_reason") {
+				t.Errorf("detail %s", e.Detail)
 			}
 			if e.Outcome != tc.outcome {
 				t.Errorf("outcome %s, want %s", e.Outcome, tc.outcome)
@@ -137,28 +142,28 @@ func TestAudit_EveryRequestOneEvent(t *testing.T) {
 		})
 	}
 	// The domain event of the connection create is attributed to the
-	// anonymous request actor; the header's name is only a claim.
+	// principal; the header's name appears nowhere.
 	for _, e := range ledger(t, f.DB, f.B.ID) {
-		if e.Action == "connection.created" && strings.Contains(string(e.Detail), "Mallory Admin") {
-			if e.ActorType != store.ActorAnonymous || e.ActorDisplay != nil {
+		if strings.Contains(string(e.Detail), "Mallory") || strings.Contains(string(e.Detail), "mallory") {
+			t.Errorf("%s: the client-claimed actor was recorded: %s", e.Action, e.Detail)
+		}
+		if e.Action == "connection.created" {
+			if e.ActorType != store.ActorUser || e.ActorDisplay == nil || *e.ActorDisplay != testAdmin.Email {
 				t.Errorf("connection.created actor %s %v", e.ActorType, e.ActorDisplay)
 			}
-			if !strings.Contains(string(e.Detail), `"claimed_actor":"Mallory Admin"`) {
-				t.Errorf("claimed actor not kept: %s", e.Detail)
-			}
-			if e.RequestID == nil {
-				t.Error("domain event lacks the request id")
+			if e.RequestID == nil || e.SessionID == nil || len(e.Authn) == 0 {
+				t.Error("domain event lacks the request id, session or authn summary")
 			}
 			return
 		}
 	}
-	t.Error("no connection.created event with the claimed actor")
+	t.Error("no connection.created event")
 }
 
 // TestAudit_HealthNotRecorded: the excluded public routes write nothing.
 func TestAudit_HealthNotRecorded(t *testing.T) {
 	f := storetest.TwoTenants(t)
-	h := isolationServer(f, f.B.ID).Handler()
+	h := isolationServer(t, f, f.B.ID).Handler()
 	before := len(ledger(t, f.DB, f.B.ID)) + len(ledger(t, f.DB, tenancy.Platform))
 	if rec := serveOnce(h, "GET", "/api/health", ""); rec.Code != http.StatusOK {
 		t.Fatal(rec.Code)
@@ -172,7 +177,7 @@ func TestAudit_HealthNotRecorded(t *testing.T) {
 // 503 audit_unavailable and none of the data it computed.
 func TestAudit_ReadFailsClosed(t *testing.T) {
 	f := storetest.TwoTenants(t)
-	h := isolationServer(f, f.A.ID).Handler()
+	h := isolationServer(t, f, f.A.ID).Handler()
 	if rec := serveOnce(h, "GET", "/api/identities", ""); rec.Code != http.StatusOK || !leaks(rec.Body.String()) {
 		t.Fatalf("baseline read: %d", rec.Code)
 	}
@@ -225,7 +230,7 @@ func TestAudit_ReadFailsClosed(t *testing.T) {
 // its analysis commits a jit.expire event in its transaction.
 func TestAudit_MutationResponseSentWhenRequestEventFails(t *testing.T) {
 	f := storetest.TwoTenants(t)
-	srv := isolationServer(f, f.B.ID)
+	srv := isolationServer(t, f, f.B.ID)
 	srv.cfg.AuditAppend = func(context.Context, tenancy.ID, store.AuditEvent) error { return errors.New("disk full") }
 	h := srv.Handler()
 	failures := audit.WriteFailures()
@@ -258,7 +263,7 @@ func TestAudit_MutationResponseSentWhenRequestEventFails(t *testing.T) {
 // state without a record fails here.
 func TestAudit_EveryRouteFailsClosed(t *testing.T) {
 	f := storetest.TwoTenants(t)
-	srv := isolationServer(f, f.B.ID)
+	srv := isolationServer(t, f, f.B.ID)
 	srv.cfg.AuditAppend = func(context.Context, tenancy.ID, store.AuditEvent) error { return errors.New("disk full") }
 	h := srv.Handler()
 	ids := map[string]string{"identity_id": fmt.Sprint(f.B.IDs["alice"])}
@@ -295,7 +300,8 @@ func TestAudit_EveryRouteFailsClosed(t *testing.T) {
 				t.Fatalf("a read answered %d without its http.request event", rec.Code)
 			}
 			rid := rec.Header().Get("X-Request-Id")
-			for _, e := range ledger(t, f.DB, f.B.ID) {
+			// (a refused dev sign-in records auth.login.failure on the platform chain)
+			for _, e := range append(ledger(t, f.DB, f.B.ID), ledger(t, f.DB, tenancy.Platform)...) {
 				// jit.expire is swept on the way into an analysis; it does
 				// not record what the request itself did
 				if e.Action != store.ActionHTTPRequest && e.Action != "jit.expire" && e.RequestID != nil && *e.RequestID == rid {
@@ -316,13 +322,13 @@ func TestAudit_EveryRouteFailsClosed(t *testing.T) {
 // export) never read, verify or change A's chain.
 func TestIsolation_AuditRoutes(t *testing.T) {
 	f := storetest.TwoTenants(t)
-	a := isolationServer(f, f.A.ID).Handler()
+	a := isolationServer(t, f, f.A.ID).Handler()
 	serveOnce(a, "GET", "/api/identities", "") // A has request events too
 	aEvent := latestEventID(t, f.DB, f.A.ID)
 	beforeA := storetest.Dump(t, f.DB, f.A.ID)
 	aLedger := len(ledger(t, f.DB, f.A.ID))
 
-	h := isolationServer(f, f.B.ID).Handler()
+	h := isolationServer(t, f, f.B.ID).Handler()
 	cross := serveOnce(h, "GET", "/api/audit/events/"+aEvent+"/proof", "")
 	missing := serveOnce(h, "GET", "/api/audit/events/"+uuid.NewString()+"/proof", "")
 	if cross.Code != http.StatusNotFound || cross.Body.String() != missing.Body.String() {
@@ -398,7 +404,7 @@ func TestIsolation_AuditRoutes(t *testing.T) {
 // http.request event once, before streaming, plus an audit.export event.
 func TestAudit_ExportOneRequestEvent(t *testing.T) {
 	f := storetest.TwoTenants(t)
-	h := isolationServer(f, f.B.ID).Handler()
+	h := isolationServer(t, f, f.B.ID).Handler()
 	before := ledger(t, f.DB, f.B.ID)
 	rec := serveOnce(h, "GET", "/api/audit/export?from_seq=1", "")
 	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/x-ndjson" {
@@ -434,7 +440,7 @@ func TestAudit_ExportOneRequestEvent(t *testing.T) {
 // ledger's, and filters.
 func TestAudit_ListFilters(t *testing.T) {
 	f := storetest.TwoTenants(t)
-	h := isolationServer(f, f.B.ID).Handler()
+	h := isolationServer(t, f, f.B.ID).Handler()
 	serveOnce(h, "GET", "/api/identities", "")
 	c := client{t, h}
 	all := c.json("GET", "/api/audit?include_http=true&limit=1000", "", http.StatusOK).([]any)
@@ -506,7 +512,7 @@ func TestAudit_ExportStreamsLargeChain(t *testing.T) {
 	f := storetest.TwoTenants(t)
 	syntheticChain(t, f.DB, f.B.ID, n)
 	total := len(ledger(t, f.DB, f.B.ID))
-	srv := isolationServer(f, f.B.ID)
+	srv := isolationServer(t, f, f.B.ID)
 	srv.cfg.HandlerTimeout = time.Millisecond // every buffered route would time out
 	h := srv.Handler()
 	if rec := serveOnce(h, "GET", "/api/identities", ""); rec.Code != http.StatusServiceUnavailable {
@@ -565,7 +571,7 @@ func TestAudit_ExportStreamsLargeChain(t *testing.T) {
 func TestAudit_ExportStreamTimeout(t *testing.T) {
 	f := storetest.TwoTenants(t)
 	syntheticChain(t, f.DB, f.B.ID, 1200)
-	srv := isolationServer(f, f.B.ID)
+	srv := isolationServer(t, f, f.B.ID)
 	srv.cfg.StreamTimeout = time.Nanosecond
 	rec := serveOnce(srv.Handler(), "GET", "/api/audit/export", "")
 	if rec.Code != http.StatusOK || strings.Count(rec.Body.String(), "\n") >= 1200 {
@@ -583,7 +589,7 @@ func TestAudit_ExportStreamTimeout(t *testing.T) {
 func TestAudit_ListLimit(t *testing.T) {
 	f := storetest.TwoTenants(t)
 	syntheticChain(t, f.DB, f.B.ID, MaxAuditLimit+50)
-	h := isolationServer(f, f.B.ID).Handler()
+	h := isolationServer(t, f, f.B.ID).Handler()
 	c := client{t, h}
 	for q, want := range map[string]int{
 		"limit=3": 3, "": 100, "limit=1000": MaxAuditLimit, "limit=1001": MaxAuditLimit,

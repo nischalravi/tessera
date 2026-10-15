@@ -26,7 +26,7 @@ export function itemTitle(it: InboxItem): { icon: ReactNode; title: string; meta
     }
     case "task": {
       const e = it.event;
-      const who = e.identity?.name ?? e.payload.name;
+      const who = e.identity?.name ?? e.payload.name ?? "unknown identity";
       return { icon: <ListChecks size={15} />, title: `${e.type[0].toUpperCase() + e.type.slice(1)}: ${who}`, meta: <>HRIS event {e.external_id} · effective {fmtDate(e.effective_at)}</>, tone: e.type === "leaver" ? "critical" : "neutral", kindLabel: KIND_LABEL.task };
     }
     case "delegated": {
@@ -48,13 +48,14 @@ function JitDetail({ r }: { r: JitRequest }) {
   useEffect(() => {
     if (!acct) return;
     let alive = true;
-    simulate({ add_edges: [{ src: `account:${acct.id}`, dst: `group:${r.group.id}` }] })
+    // A JIT grant is time-boxed: duration_hours makes the simulated edge non-standing, as it is once approved.
+    simulate({ add_edges: [{ src: `account:${acct.id}`, dst: `group:${r.group.id}`, duration_hours: r.duration_hours }] })
       .then((x) => alive && setSim(x))
       .catch((e) => alive && setSimErr(e.message));
     return () => {
       alive = false;
     };
-  }, [acct?.id, r.group.id]);
+  }, [acct?.id, r.group.id, r.duration_hours]);
   const prior = (all ?? []).filter((x) => x.identity.id === r.identity.id && x.group.id === r.group.id && x.id !== r.id);
   return (
     <div className="stack">
@@ -221,7 +222,7 @@ function useInboxActions() {
           toast("You can't approve your own request. Someone else needs to decide.", { kind: "error" });
           return false;
         }
-        if (it.source === "jit") await jitDecide(it.jit.id, verb === "approve" ? "approve" : "deny", actor);
+        if (it.source === "jit") await jitDecide(it.jit.id, verb === "approve" ? "approve" : "deny");
         else await mockRequests.decide(it.req.id, verb === "approve" ? "approved" : "denied", actor);
         if (!opts.quiet) toast(`${verb === "approve" ? "Approved" : "Denied"}: ${itemTitle(it).title}`);
       } else if (it.kind === "review") {
@@ -235,7 +236,7 @@ function useInboxActions() {
           if (reason === null) return false;
           comment = reason;
         }
-        await reviewDecide(it.item.id, verb === "revoke" ? "revoke" : "keep", actor, comment);
+        await reviewDecide(it.item.id, verb === "revoke" ? "revoke" : "keep", comment);
         if (!opts.quiet) toast(`${verb === "revoke" ? "Revoked" : "Kept"}: ${itemTitle(it).title}`);
       } else if (it.kind === "task") {
         const ok = await confirm({ title: `Run the ${it.event.type} plan?`, body: "Executes every step in the plan against Tessera's graph and writes an audit record. Nothing is written back to source systems yet.", confirmLabel: "Run plan", danger: it.event.type === "leaver" });

@@ -26,7 +26,8 @@
          }
         }
        }
-      }
+      },
+      "security": []
      }
     },
     "/api/connectors": {
@@ -683,10 +684,10 @@
       }
      }
     },
-    "/api/jit/requests/{request_id}/{action}": {
+    "/api/jit/requests/{request_id}/approve": {
      "post": {
-      "summary": "Jit Decide",
-      "operationId": "jit_decide_api_jit_requests__request_id___action__post",
+      "summary": "Jit Approve",
+      "operationId": "jit_approve_api_jit_requests__request_id__approve_post",
       "parameters": [
        {
         "name": "request_id",
@@ -696,39 +697,82 @@
          "type": "integer",
          "title": "Request Id"
         }
-       },
-       {
-        "name": "action",
-        "in": "path",
-        "required": true,
-        "schema": {
-         "enum": [
-          "approve",
-          "deny",
-          "revoke"
-         ],
-         "type": "string",
-         "title": "Action"
-        }
        }
       ],
-      "requestBody": {
-       "content": {
-        "application/json": {
-         "schema": {
-          "anyOf": [
-           {
-            "$ref": "#/components/schemas/DecisionIn"
-           },
-           {
-            "type": "null"
-           }
-          ],
-          "title": "Body"
+      "responses": {
+       "200": {
+        "description": "Successful Response",
+        "content": {
+         "application/json": {
+          "schema": {}
+         }
+        }
+       },
+       "422": {
+        "description": "Validation Error",
+        "content": {
+         "application/json": {
+          "schema": {
+           "$ref": "#/components/schemas/HTTPValidationError"
+          }
          }
         }
        }
-      },
+      }
+     }
+    },
+    "/api/jit/requests/{request_id}/deny": {
+     "post": {
+      "summary": "Jit Deny",
+      "operationId": "jit_deny_api_jit_requests__request_id__deny_post",
+      "parameters": [
+       {
+        "name": "request_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+         "type": "integer",
+         "title": "Request Id"
+        }
+       }
+      ],
+      "responses": {
+       "200": {
+        "description": "Successful Response",
+        "content": {
+         "application/json": {
+          "schema": {}
+         }
+        }
+       },
+       "422": {
+        "description": "Validation Error",
+        "content": {
+         "application/json": {
+          "schema": {
+           "$ref": "#/components/schemas/HTTPValidationError"
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "/api/jit/requests/{request_id}/revoke": {
+     "post": {
+      "summary": "Jit Revoke",
+      "operationId": "jit_revoke_api_jit_requests__request_id__revoke_post",
+      "parameters": [
+       {
+        "name": "request_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+         "type": "integer",
+         "title": "Request Id"
+        }
+       }
+      ],
       "responses": {
        "200": {
         "description": "Successful Response",
@@ -1120,17 +1164,6 @@
       "type": "object",
       "title": "CampaignIn"
      },
-     "DecisionIn": {
-      "properties": {
-       "approver": {
-        "type": "string",
-        "title": "Approver",
-        "default": "security-oncall@larkspur.example"
-       }
-      },
-      "type": "object",
-      "title": "DecisionIn"
-     },
      "EdgeIn": {
       "properties": {
        "src": {
@@ -1249,11 +1282,6 @@
          }
         ],
         "title": "Comment"
-       },
-       "reviewer": {
-        "type": "string",
-        "title": "Reviewer",
-        "default": "reviewer@larkspur.example"
        }
       },
       "type": "object",
@@ -1272,11 +1300,6 @@
         "type": "boolean",
         "title": "Dry Run",
         "default": true
-       },
-       "actor": {
-        "type": "string",
-        "title": "Actor",
-        "default": "admin@larkspur.example"
        }
       },
       "type": "object",
@@ -1352,8 +1375,21 @@
       ],
       "title": "ValidationError"
      }
+    },
+    "securitySchemes": {
+     "session": {
+      "type": "apiKey",
+      "in": "cookie",
+      "name": "__Host-tessera_sid",
+      "description": "Server-side session (design §11). Unsafe methods also need the X-Tessera-CSRF header from GET /api/auth/session."
+     }
     }
-   }
+   },
+   "security": [
+    {
+     "session": []
+    }
+   ]
   }
  }
 }

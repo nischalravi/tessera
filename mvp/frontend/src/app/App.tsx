@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useLocation, useParams } from "react-router-do
 import { ConfirmProvider } from "../components/Dialog";
 import { PageSkeleton } from "../components/Feedback";
 import { ToastProvider } from "../components/Toast";
+import { SessionProvider } from "./auth";
 import { PaletteProvider } from "./CommandPalette";
 import { PersonaProvider } from "./persona";
 import { Shell } from "./Shell";
@@ -31,6 +32,7 @@ const DirectoryLayout = named(directory, "DirectoryLayout");
 const People = named(directory, "People");
 const Machine = named(directory, "Machine");
 const Accounts = named(directory, "Accounts");
+const Matches = named(() => import("../features/directory/Matches"), "Matches");
 const Roles = named(directory, "Roles");
 const Entitlements = named(directory, "Entitlements");
 const Apps = named(directory, "Apps");
@@ -58,6 +60,7 @@ const ConnectionDetail = named(connections, "ConnectionDetail");
 const ValidationResults = named(connections, "ValidationResults");
 const ReconReport = named(connections, "ReconReport");
 const AdminSectionPage = named(admin, "AdminSectionPage");
+const MySessions = named(() => import("../features/account/MySessions"), "MySessions");
 
 /** Redirect an old route to its new home, keeping the query string (e.g. /graph?identity=5). */
 function Moved({ to }: { to: string }) {
@@ -72,12 +75,16 @@ export default function App() {
     <ThemeProvider>
       <ToastProvider>
         <ConfirmProvider>
+          <SessionProvider>
           <PersonaProvider>
             <PaletteProvider>
               <Shell>
                 <Suspense fallback={<PageSkeleton />}>
                   <Routes>
                     <Route path="/" element={<Home />} />
+                    {/* signed in already: the sign-in page (and its error) has nothing left to do */}
+                    <Route path="/login" element={<Navigate to="/" replace />} />
+                    <Route path="/sessions" element={<MySessions />} />
                     <Route path="/inbox" element={<Inbox />} />
 
                     <Route path="/access" element={<Navigate to="/access/request" replace />} />
@@ -91,6 +98,7 @@ export default function App() {
                       <Route path="people" element={<People />} />
                       <Route path="machine" element={<Machine />} />
                       <Route path="accounts" element={<Accounts />} />
+                      <Route path="matches" element={<Matches />} />
                       <Route path="roles" element={<Roles />} />
                       <Route path="entitlements" element={<Entitlements />} />
                       <Route path="apps" element={<Apps />} />
@@ -143,6 +151,7 @@ export default function App() {
               </Shell>
             </PaletteProvider>
           </PersonaProvider>
+          </SessionProvider>
         </ConfirmProvider>
       </ToastProvider>
     </ThemeProvider>

@@ -39,10 +39,12 @@ jobs:
         working-directory: mvp/frontend
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: npm
           cache-dependency-path: mvp/frontend/package-lock.json
       - run: npm ci
       - run: npm run build
+      # unit tests of the API client (node:test, no extra dependencies)
+      - run: npm test

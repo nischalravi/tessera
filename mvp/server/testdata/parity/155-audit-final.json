@@ -10,7 +10,7 @@
    {
     "id": 176,
     "at": "2026-10-08T09:30:00",
-    "actor": "anonymous",
+    "actor": "security-oncall@larkspur.example",
     "action": "connectors.sync",
     "detail": {
      "identities": 91,
@@ -24,12 +24,19 @@
     },
     "event_id": "<uuid>",
     "seq": 176,
-    "actor_type": "anonymous",
-    "actor_id": null,
+    "actor_type": "user",
+    "actor_id": "00000000-0000-4000-8000-0000000000c1",
     "outcome": "success",
     "target": null,
     "request_id": "<uuid>",
-    "authn": null,
+    "authn": {
+     "ctx_id": "00000000-0000-4000-8000-0000000000c2",
+     "aal": 2,
+     "phr": true,
+     "acr": "urn:tessera:acr:phr",
+     "auth_time": "2026-10-08T09:30:00.000000Z",
+     "auth_age_s": 0
+    },
     "http": null,
     "hash": "<hash>",
     "prev_hash": "<hash>"
@@ -37,22 +44,28 @@
    {
     "id": 162,
     "at": "2026-10-08T09:30:00",
-    "actor": "anonymous",
+    "actor": "security-oncall@larkspur.example",
     "action": "jml.joiner",
     "detail": {
      "event_id": 8,
      "identity": "Ada Parity",
-     "steps": 9,
-     "claimed_actor": "jml-automation"
+     "steps": 9
     },
     "event_id": "<uuid>",
     "seq": 162,
-    "actor_type": "anonymous",
-    "actor_id": null,
+    "actor_type": "user",
+    "actor_id": "00000000-0000-4000-8000-0000000000c1",
     "outcome": "success",
     "target": null,
     "request_id": "<uuid>",
-    "authn": null,
+    "authn": {
+     "ctx_id": "00000000-0000-4000-8000-0000000000c2",
+     "aal": 2,
+     "phr": true,
+     "acr": "urn:tessera:acr:phr",
+     "auth_time": "2026-10-08T09:30:00.000000Z",
+     "auth_age_s": 0
+    },
     "http": null,
     "hash": "<hash>",
     "prev_hash": "<hash>"
@@ -60,22 +73,28 @@
    {
     "id": 160,
     "at": "2026-10-08T09:30:00",
-    "actor": "anonymous",
+    "actor": "security-oncall@larkspur.example",
     "action": "jml.mover",
     "detail": {
      "event_id": 7,
      "identity": "Alice Okafor",
-     "steps": 8,
-     "claimed_actor": "jml-automation"
+     "steps": 8
     },
     "event_id": "<uuid>",
     "seq": 160,
-    "actor_type": "anonymous",
-    "actor_id": null,
+    "actor_type": "user",
+    "actor_id": "00000000-0000-4000-8000-0000000000c1",
     "outcome": "success",
     "target": null,
     "request_id": "<uuid>",
-    "authn": null,
+    "authn": {
+     "ctx_id": "00000000-0000-4000-8000-0000000000c2",
+     "aal": 2,
+     "phr": true,
+     "acr": "urn:tessera:acr:phr",
+     "auth_time": "2026-10-08T09:30:00.000000Z",
+     "auth_age_s": 0
+    },
     "http": null,
     "hash": "<hash>",
     "prev_hash": "<hash>"
@@ -83,22 +102,28 @@
    {
     "id": 158,
     "at": "2026-10-08T09:30:00",
-    "actor": "anonymous",
+    "actor": "security-oncall@larkspur.example",
     "action": "jml.joiner",
     "detail": {
      "event_id": 3,
      "identity": "Noor Achterberg",
-     "steps": 10,
-     "claimed_actor": "jml-automation"
+     "steps": 10
     },
     "event_id": "<uuid>",
     "seq": 158,
-    "actor_type": "anonymous",
-    "actor_id": null,
+    "actor_type": "user",
+    "actor_id": "00000000-0000-4000-8000-0000000000c1",
     "outcome": "success",
     "target": null,
     "request_id": "<uuid>",
-    "authn": null,
+    "authn": {
+     "ctx_id": "00000000-0000-4000-8000-0000000000c2",
+     "aal": 2,
+     "phr": true,
+     "acr": "urn:tessera:acr:phr",
+     "auth_time": "2026-10-08T09:30:00.000000Z",
+     "auth_age_s": 0
+    },
     "http": null,
     "hash": "<hash>",
     "prev_hash": "<hash>"
@@ -106,22 +131,28 @@
    {
     "id": 156,
     "at": "2026-10-08T09:30:00",
-    "actor": "anonymous",
+    "actor": "security-oncall@larkspur.example",
     "action": "jml.mover",
     "detail": {
      "event_id": 2,
      "identity": "Wim Bellweather",
-     "steps": 4,
-     "claimed_actor": "jml-automation"
+     "steps": 4
     },
     "event_id": "<uuid>",
     "seq": 156,
-    "actor_type": "anonymous",
-    "actor_id": null,
+    "actor_type": "user",
+    "actor_id": "00000000-0000-4000-8000-0000000000c1",
     "outcome": "success",
     "target": null,
     "request_id": "<uuid>",
-    "authn": null,
+    "authn": {
+     "ctx_id": "00000000-0000-4000-8000-0000000000c2",
+     "aal": 2,
+     "phr": true,
+     "acr": "urn:tessera:acr:phr",
+     "auth_time": "2026-10-08T09:30:00.000000Z",
+     "auth_age_s": 0
+    },
     "http": null,
     "hash": "<hash>",
     "prev_hash": "<hash>"
@@ -129,22 +160,28 @@
    {
     "id": 153,
     "at": "2026-10-08T09:30:00",
-    "actor": "anonymous",
+    "actor": "security-oncall@larkspur.example",
     "action": "jml.leaver",
     "detail": {
      "event_id": 1,
      "identity": "Marcus Bellweather",
-     "steps": 13,
-     "claimed_actor": "jml-automation"
+     "steps": 13
     },
     "event_id": "<uuid>",
     "seq": 153,
-    "actor_type": "anonymous",
-    "actor_id": null,
+    "actor_type": "user",
+    "actor_id": "00000000-0000-4000-8000-0000000000c1",
     "outcome": "success",
     "target": null,
     "request_id": "<uuid>",
-    "authn": null,
+    "authn": {
+     "ctx_id": "00000000-0000-4000-8000-0000000000c2",
+     "aal": 2,
+     "phr": true,
+     "acr": "urn:tessera:acr:phr",
+     "auth_time": "2026-10-08T09:30:00.000000Z",
+     "auth_age_s": 0
+    },
     "http": null,
     "hash": "<hash>",
     "prev_hash": "<hash>"
@@ -152,22 +189,28 @@
    {
     "id": 138,
     "at": "2026-10-08T09:30:00",
-    "actor": "anonymous",
+    "actor": "security-oncall@larkspur.example",
     "action": "grant.revoke",
     "detail": {
      "edge_id": 19,
      "grant": "workday:emp-1033 → workday:AP Approver",
-     "permissions_removed": 1,
-     "claimed_actor": "parity@larkspur.example"
+     "permissions_removed": 1
     },
     "event_id": "<uuid>",
     "seq": 138,
-    "actor_type": "anonymous",
-    "actor_id": null,
+    "actor_type": "user",
+    "actor_id": "00000000-0000-4000-8000-0000000000c1",
     "outcome": "success",
     "target": null,
     "request_id": "<uuid>",
-    "authn": null,
+    "authn": {
+     "ctx_id": "00000000-0000-4000-8000-0000000000c2",
+     "aal": 2,
+     "phr": true,
+     "acr": "urn:tessera:acr:phr",
+     "auth_time": "2026-10-08T09:30:00.000000Z",
+     "auth_age_s": 0
+    },
     "http": null,
     "hash": "<hash>",
     "prev_hash": "<hash>"
@@ -175,7 +218,7 @@
    {
     "id": 134,
     "at": "2026-10-08T09:30:00",
-    "actor": "anonymous",
+    "actor": "security-oncall@larkspur.example",
     "action": "review.campaign_created",
     "detail": {
      "campaign": "Exception-only review",
@@ -184,12 +227,19 @@
     },
     "event_id": "<uuid>",
     "seq": 134,
-    "actor_type": "anonymous",
-    "actor_id": null,
+    "actor_type": "user",
+    "actor_id": "00000000-0000-4000-8000-0000000000c1",
     "outcome": "success",
     "target": null,
     "request_id": "<uuid>",
-    "authn": null,
+    "authn": {
+     "ctx_id": "00000000-0000-4000-8000-0000000000c2",
+     "aal": 2,
+     "phr": true,
+     "acr": "urn:tessera:acr:phr",
+     "auth_time": "2026-10-08T09:30:00.000000Z",
+     "auth_age_s": 0
+    },
     "http": null,
     "hash": "<hash>",
     "prev_hash": "<hash>"
@@ -197,7 +247,7 @@
    {
     "id": 132,
     "at": "2026-10-08T09:30:00",
-    "actor": "anonymous",
+    "actor": "security-oncall@larkspur.example",
     "action": "review.campaign_created",
     "detail": {
      "campaign": "Parity review",
@@ -206,12 +256,19 @@
     },
     "event_id": "<uuid>",
     "seq": 132,
-    "actor_type": "anonymous",
-    "actor_id": null,
+    "actor_type": "user",
+    "actor_id": "00000000-0000-4000-8000-0000000000c1",
     "outcome": "success",
     "target": null,
     "request_id": "<uuid>",
-    "authn": null,
+    "authn": {
+     "ctx_id": "00000000-0000-4000-8000-0000000000c2",
+     "aal": 2,
+     "phr": true,
+     "acr": "urn:tessera:acr:phr",
+     "auth_time": "2026-10-08T09:30:00.000000Z",
+     "auth_age_s": 0
+    },
     "http": null,
     "hash": "<hash>",
     "prev_hash": "<hash>"
@@ -219,21 +276,27 @@
    {
     "id": 127,
     "at": "2026-10-08T09:30:00",
-    "actor": "anonymous",
+    "actor": "security-oncall@larkspur.example",
     "action": "review.revoke",
     "detail": {
      "item_id": 2,
-     "grant": "snowflake:MIREILLE_DELACROIX → snowflake:FINANCE_ANALYST",
-     "claimed_actor": "reviewer@larkspur.example"
+     "grant": "snowflake:MIREILLE_DELACROIX → snowflake:FINANCE_ANALYST"
     },
     "event_id": "<uuid>",
     "seq": 127,
-    "actor_type": "anonymous",
-    "actor_id": null,
+    "actor_type": "user",
+    "actor_id": "00000000-0000-4000-8000-0000000000c1",
     "outcome": "success",
     "target": null,
     "request_id": "<uuid>",
-    "authn": null,
+    "authn": {
+     "ctx_id": "00000000-0000-4000-8000-0000000000c2",
+     "aal": 2,
+     "phr": true,
+     "acr": "urn:tessera:acr:phr",
+     "auth_time": "2026-10-08T09:30:00.000000Z",
+     "auth_age_s": 0
+    },
     "http": null,
     "hash": "<hash>",
     "prev_hash": "<hash>"
@@ -241,21 +304,27 @@
    {
     "id": 125,
     "at": "2026-10-08T09:30:00",
-    "actor": "anonymous",
+    "actor": "security-oncall@larkspur.example",
     "action": "review.keep",
     "detail": {
      "item_id": 1,
-     "grant": "github:caspian-arkwr → github:org-owners",
-     "claimed_actor": "reviewer@larkspur.example"
+     "grant": "github:caspian-arkwr → github:org-owners"
     },
     "event_id": "<uuid>",
     "seq": 125,
-    "actor_type": "anonymous",
-    "actor_id": null,
+    "actor_type": "user",
+    "actor_id": "00000000-0000-4000-8000-0000000000c1",
     "outcome": "success",
     "target": null,
     "request_id": "<uuid>",
-    "authn": null,
+    "authn": {
+     "ctx_id": "00000000-0000-4000-8000-0000000000c2",
+     "aal": 2,
+     "phr": true,
+     "acr": "urn:tessera:acr:phr",
+     "auth_time": "2026-10-08T09:30:00.000000Z",
+     "auth_age_s": 0
+    },
     "http": null,
     "hash": "<hash>",
     "prev_hash": "<hash>"
@@ -263,21 +332,27 @@
    {
     "id": 116,
     "at": "2026-10-08T09:30:00",
-    "actor": "anonymous",
+    "actor": "security-oncall@larkspur.example",
     "action": "jit.approve",
     "detail": {
      "request_id": 2,
-     "expires_at": "2026-10-08T13:30:00",
-     "claimed_actor": "security-oncall@larkspur.example"
+     "expires_at": "2026-10-08T13:30:00"
     },
     "event_id": "<uuid>",
     "seq": 116,
-    "actor_type": "anonymous",
-    "actor_id": null,
+    "actor_type": "user",
+    "actor_id": "00000000-0000-4000-8000-0000000000c1",
     "outcome": "success",
     "target": null,
     "request_id": "<uuid>",
-    "authn": null,
+    "authn": {
+     "ctx_id": "00000000-0000-4000-8000-0000000000c2",
+     "aal": 2,
+     "phr": true,
+     "acr": "urn:tessera:acr:phr",
+     "auth_time": "2026-10-08T09:30:00.000000Z",
+     "auth_age_s": 0
+    },
     "http": null,
     "hash": "<hash>",
     "prev_hash": "<hash>"
@@ -285,20 +360,26 @@
    {
     "id": 113,
     "at": "2026-10-08T09:30:00",
-    "actor": "anonymous",
+    "actor": "security-oncall@larkspur.example",
     "action": "jit.revoke",
     "detail": {
-     "request_id": 3,
-     "claimed_actor": "security-oncall@larkspur.example"
+     "request_id": 3
     },
     "event_id": "<uuid>",
     "seq": 113,
-    "actor_type": "anonymous",
-    "actor_id": null,
+    "actor_type": "user",
+    "actor_id": "00000000-0000-4000-8000-0000000000c1",
     "outcome": "success",
     "target": null,
     "request_id": "<uuid>",
-    "authn": null,
+    "authn": {
+     "ctx_id": "00000000-0000-4000-8000-0000000000c2",
+     "aal": 2,
+     "phr": true,
+     "acr": "urn:tessera:acr:phr",
+     "auth_time": "2026-10-08T09:30:00.000000Z",
+     "auth_age_s": 0
+    },
     "http": null,
     "hash": "<hash>",
     "prev_hash": "<hash>"
@@ -306,20 +387,26 @@
    {
     "id": 111,
     "at": "2026-10-08T09:30:00",
-    "actor": "anonymous",
+    "actor": "security-oncall@larkspur.example",
     "action": "jit.deny",
     "detail": {
-     "request_id": 1,
-     "claimed_actor": "lead@larkspur.example"
+     "request_id": 1
     },
     "event_id": "<uuid>",
     "seq": 111,
-    "actor_type": "anonymous",
-    "actor_id": null,
+    "actor_type": "user",
+    "actor_id": "00000000-0000-4000-8000-0000000000c1",
     "outcome": "success",
     "target": null,
     "request_id": "<uuid>",
-    "authn": null,
+    "authn": {
+     "ctx_id": "00000000-0000-4000-8000-0000000000c2",
+     "aal": 2,
+     "phr": true,
+     "acr": "urn:tessera:acr:phr",
+     "auth_time": "2026-10-08T09:30:00.000000Z",
+     "auth_age_s": 0
+    },
     "http": null,
     "hash": "<hash>",
     "prev_hash": "<hash>"
@@ -327,21 +414,27 @@
    {
     "id": 108,
     "at": "2026-10-08T09:30:00",
-    "actor": "anonymous",
+    "actor": "security-oncall@larkspur.example",
     "action": "jit.approve",
     "detail": {
      "request_id": 5,
-     "expires_at": "2026-10-08T11:00:00",
-     "claimed_actor": "security-oncall@larkspur.example"
+     "expires_at": "2026-10-08T11:00:00"
     },
     "event_id": "<uuid>",
     "seq": 108,
-    "actor_type": "anonymous",
-    "actor_id": null,
+    "actor_type": "user",
+    "actor_id": "00000000-0000-4000-8000-0000000000c1",
     "outcome": "success",
     "target": null,
     "request_id": "<uuid>",
-    "authn": null,
+    "authn": {
+     "ctx_id": "00000000-0000-4000-8000-0000000000c2",
+     "aal": 2,
+     "phr": true,
+     "acr": "urn:tessera:acr:phr",
+     "auth_time": "2026-10-08T09:30:00.000000Z",
+     "auth_age_s": 0
+    },
     "http": null,
     "hash": "<hash>",
     "prev_hash": "<hash>"
@@ -349,22 +442,28 @@
    {
     "id": 105,
     "at": "2026-10-08T09:30:00",
-    "actor": "anonymous",
+    "actor": "requester@larkspur.example",
     "action": "jit.request",
     "detail": {
      "request_id": 7,
      "group": "ProdAdmin",
-     "hours": "2.0",
-     "claimed_actor": "Kofi Mensah"
+     "hours": "2.0"
     },
     "event_id": "<uuid>",
     "seq": 105,
-    "actor_type": "anonymous",
-    "actor_id": null,
+    "actor_type": "user",
+    "actor_id": "00000000-0000-4000-8000-0000000000c3",
     "outcome": "success",
     "target": null,
     "request_id": "<uuid>",
-    "authn": null,
+    "authn": {
+     "ctx_id": "00000000-0000-4000-8000-0000000000c4",
+     "aal": 2,
+     "phr": true,
+     "acr": "urn:tessera:acr:phr",
+     "auth_time": "2026-10-08T09:30:00.000000Z",
+     "auth_age_s": 0
+    },
     "http": null,
     "hash": "<hash>",
     "prev_hash": "<hash>"
@@ -372,22 +471,28 @@
    {
     "id": 95,
     "at": "2026-10-08T09:30:00",
-    "actor": "anonymous",
+    "actor": "requester@larkspur.example",
     "action": "jit.request",
     "detail": {
      "request_id": 6,
      "group": "ProdAdmin",
-     "hours": "4",
-     "claimed_actor": "Sana Iyer"
+     "hours": "4"
     },
     "event_id": "<uuid>",
     "seq": 95,
-    "actor_type": "anonymous",
-    "actor_id": null,
+    "actor_type": "user",
+    "actor_id": "00000000-0000-4000-8000-0000000000c3",
     "outcome": "success",
     "target": null,
     "request_id": "<uuid>",
-    "authn": null,
+    "authn": {
+     "ctx_id": "00000000-0000-4000-8000-0000000000c4",
+     "aal": 2,
+     "phr": true,
+     "acr": "urn:tessera:acr:phr",
+     "auth_time": "2026-10-08T09:30:00.000000Z",
+     "auth_age_s": 0
+    },
     "http": null,
     "hash": "<hash>",
     "prev_hash": "<hash>"
@@ -395,22 +500,28 @@
    {
     "id": 93,
     "at": "2026-10-08T09:30:00",
-    "actor": "anonymous",
+    "actor": "requester@larkspur.example",
     "action": "jit.request",
     "detail": {
      "request_id": 5,
      "group": "BreakGlassAdmin",
-     "hours": "1.5",
-     "claimed_actor": "Priya Ramaswamy"
+     "hours": "1.5"
     },
     "event_id": "<uuid>",
     "seq": 93,
-    "actor_type": "anonymous",
-    "actor_id": null,
+    "actor_type": "user",
+    "actor_id": "00000000-0000-4000-8000-0000000000c3",
     "outcome": "success",
     "target": null,
     "request_id": "<uuid>",
-    "authn": null,
+    "authn": {
+     "ctx_id": "00000000-0000-4000-8000-0000000000c4",
+     "aal": 2,
+     "phr": true,
+     "acr": "urn:tessera:acr:phr",
+     "auth_time": "2026-10-08T09:30:00.000000Z",
+     "auth_age_s": 0
+    },
     "http": null,
     "hash": "<hash>",
     "prev_hash": "<hash>"

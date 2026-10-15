@@ -1,11 +1,11 @@
-import { ReactNode, createContext, useContext, useEffect, useMemo, useState } from "react";
-import { IdentityRow, setApiActor, useApi } from "../api";
+import { ReactNode, createContext, useContext, useMemo, useState } from "react";
+import { IdentityRow, useApi } from "../api";
 import { store } from "./storage";
 
 /**
- * Demo stand-in for authentication (until Phase 0 auth lands): the persona decides what
- * Home emphasises and whose name is recorded on approvals. It grants no permissions;
- * the API has no authorization yet.
+ * A demo view switch: the persona decides what Home emphasises and which preview (mock)
+ * items are "yours". It grants nothing and names no one to the API: the API takes the actor
+ * of every action, and what you may do, from your signed-in session (see auth.tsx).
  */
 export type Persona = "employee" | "manager" | "admin";
 
@@ -20,7 +20,7 @@ interface PersonaCtx {
   setPersona: (p: Persona) => void;
   /** The demo identity behind the persona (resolved by name from the seeded directory). */
   me: IdentityRow | null;
-  /** Name recorded as the actor on approvals and decisions. */
+  /** Name the preview (mock) features record; real actions are attributed by the API. */
   actor: string;
 }
 
@@ -33,7 +33,6 @@ export function PersonaProvider({ children }: { children: ReactNode }) {
   const who = PERSONAS.find((p) => p.id === persona)!.who;
   const me = useMemo(() => data?.find((i) => i.name === who) ?? null, [data, who]);
   const actor = me?.name ?? who;
-  useEffect(() => setApiActor(actor), [actor]);
   const setPersona = (p: Persona) => {
     setP(p);
     store.set("persona", p);

@@ -8,8 +8,10 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"runtime/debug"
 	"slices"
@@ -17,12 +19,17 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
+	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/auth/oauth2rp"
+	"github.com/nischalravi/tessera/mvp/server/internal/auth/oidcrp"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
+	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
@@ -44,25 +51,32 @@ const DefaultStreamTimeout = 15 * time.Minute
 // Config configures a Server.
 type Config struct {
 	Store *store.DB
-	// Tenant is the tenant every request is served for until authentication
-	// lands (Phase 0 PR5): cmd/tessera resolves it with store.DevDefaultTenant,
-	// which only works when TESSERA_ENV=dev. The zero value fails closed: every
-	// tenant route answers 500 and records tenancy.context_missing.
-	Tenant   tenancy.ID
+	// There is no default tenant: every request's tenant comes from its
+	// authenticated principal's session row (design §14.2).
 	Clock    timeutil.Clock // defaults to timeutil.System
 	Policies *policy.Loader // required
 	// Connectors returns the configured connectors (defaults to connectors.Load("", now)).
 	Connectors func(now time.Time) ([]connectors.Connector, error)
 	Logger     *slog.Logger // defaults to slog.Default()
-	// AllowedOrigins are the browser origins allowed by CORS (exact match).
+	// AllowedOrigins are the browser origins allowed by CORS (exact match,
+	// credentials allowed): TESSERA_CORS_ORIGINS, empty in production.
 	AllowedOrigins []string
+	// PublicOrigin is the origin of TESSERA_PUBLIC_URL. The CSRF Origin check
+	// admits it and AllowedOrigins.
+	PublicOrigin string
+	// InsecureCookie selects the dev-only cookie without Secure
+	// (TESSERA_COOKIE_SECURE=false; config allows it only in dev on localhost).
+	InsecureCookie bool
+	// HSTS adds Strict-Transport-Security (production).
+	HSTS           bool
 	MaxBodyBytes   int64         // defaults to DefaultMaxBodyBytes
 	HandlerTimeout time.Duration // defaults to DefaultHandlerTimeout; <0 disables
 	StreamTimeout  time.Duration // defaults to DefaultStreamTimeout; streamed routes only
 	// Readiness is the deployment-readiness service (defaults to the
 	// embedded templates and Env).
 	Readiness *readiness.Service
-	// Env is TESSERA_ENV ("dev" allows activating non-demo connector types).
+	// Env is TESSERA_ENV: "dev" allows activating non-demo connector types,
+	// and is otherwise informational.
 	Env string
 	// ReadinessScenario selects the simulated validation scenario
 	// (TESSERA_READINESS_SCENARIO; default "gaps").
@@ -70,6 +84,23 @@ type Config struct {
 	// AuditAnchor is TESSERA_AUDIT_ANCHOR: POST /api/audit/verify checks
 	// checkpoints against it when it is a file:// URL.
 	AuditAnchor string
+	// PublicURL is TESSERA_PUBLIC_URL: the base of the OIDC redirect URIs.
+	PublicURL string
+	// Sealer opens connection client secrets and seals PKCE verifiers.
+	Sealer *seal.Sealer
+	// OutboundHTTP is the safehttp client for IdP discovery, JWKS and token
+	// requests. Nil: browser sign-in through an IdP is unavailable.
+	OutboundHTTP *http.Client
+	// RateLimits are the per-IP limits on anonymous and /api/auth/*
+	// requests (ratelimit.go); the zero value is the defaults.
+	RateLimits RateLimits
+	// TrustedProxies (TESSERA_TRUSTED_PROXIES) are the peers whose
+	// X-Forwarded-For the rate limiter believes.
+	TrustedProxies []netip.Prefix
+	// Containment runs the kill switch's provider calls (revoke sessions and
+	// grants). Nil: a service with no outbound client, so every containment
+	// step is a manual task.
+	Containment *containment.Service
 	// AuditAppend overrides how the audit middleware writes http.request
 	// events (tests inject failures). Nil: the store.
 	AuditAppend func(ctx context.Context, t tenancy.ID, e store.AuditEvent) error
@@ -82,8 +113,14 @@ type Server struct {
 	clock  timeutil.Clock
 	log    *slog.Logger
 	routes []*route
+	authn  *auth.Authenticator
+	limits *limiters
+	rp     *oidcrp.RP
+	oauth2 *oauth2rp.RP
 
 	readiness *readiness.Service
+	// containment is the kill switch (issue #106); never nil.
+	containment *containment.Service
 }
 
 // New builds a server.
@@ -114,11 +151,47 @@ func New(cfg Config) *Server {
 		cfg.Readiness = readiness.NewService(reg, cfg.Env)
 		cfg.Readiness.Runner.Scenario = cfg.ReadinessScenario
 	}
-	s := &Server{cfg: cfg, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness}
+	if cfg.Containment == nil {
+		cfg.Containment = &containment.Service{}
+	}
+	if cfg.Containment.Clock == nil {
+		cfg.Containment.Clock = cfg.Clock
+	}
+	s := &Server{cfg: cfg, containment: cfg.Containment, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
+		limits: newLimiters(cfg.RateLimits)}
+	if cfg.OutboundHTTP != nil {
+		rp, err := oidcrp.New(oidcrp.Config{HTTP: cfg.OutboundHTTP, Now: func() time.Time { return s.clock() }})
+		if err != nil {
+			panic(err) // HTTP and Now are set
+		}
+		s.rp = rp
+		if s.oauth2, err = oauth2rp.New(cfg.OutboundHTTP); err != nil {
+			panic(err) // HTTP is set
+		}
+	}
+	s.authn = &auth.Authenticator{DB: cfg.Store, Clock: func() time.Time { return s.clock() },
+		Cookies: auth.Cookies{Insecure: cfg.InsecureCookie}}
 	s.registerRoutes()
 	s.registerAuditRoutes()
+	s.registerCorrelationRoutes()
+	s.registerContainmentRoutes()
 	s.registerReadinessRoutes()
+	s.registerAuthRoutes()
+	s.registerLoginRoutes()
+	s.registerSAMLRoutes()
+	s.registerOAuth2Routes()
+	s.registerStepUpRoutes()
+	s.checkPublicRoutes()
 	return s
+}
+
+// csrfOrigins are the origins the CSRF Origin check admits.
+func (s *Server) csrfOrigins() []string {
+	out := slices.Clone(s.cfg.AllowedOrigins)
+	if s.cfg.PublicOrigin != "" && !slices.Contains(out, s.cfg.PublicOrigin) {
+		out = append(out, s.cfg.PublicOrigin)
+	}
+	return out
 }
 
 // Handler returns the HTTP handler with all middleware applied.
@@ -132,11 +205,19 @@ func (s *Server) Handler() http.Handler {
 	h = s.recoverPanics(h)
 	// One http.request event per request; reads are buffered and refused
 	// with 503 if the event cannot be written (design §13.4).
-	h = audit.Middleware(audit.MiddlewareConfig{DB: s.store, Tenant: s.auditTenant, Clock: s.clock, Log: s.log,
+	// The tenant of an http.request event is the principal's (audit.SetPrincipal
+	// in dispatch); unauthenticated requests go to the _platform chain.
+	h = audit.Middleware(audit.MiddlewareConfig{DB: s.store, Clock: s.clock, Log: s.log,
 		Append: s.cfg.AuditAppend})(h)
+	// Per-IP limits on anonymous and /api/auth/* requests, before anything
+	// is written to the ledger.
+	h = s.rateLimit(h)
 	h = s.logRequests(h)
-	return securityHeaders(h)
+	return s.securityHeaders(h)
 }
+
+// streamDeadlineKey carries a streamed route's deadline to dispatch.
+type streamDeadlineKey struct{}
 
 // timeouts sends streamed routes to stream and every other request to timed
 // (the HandlerTimeout-bounded handler). A stream gets StreamTimeout on its
@@ -149,11 +230,11 @@ func (s *Server) timeouts(stream, timed http.Handler) http.Handler {
 			return
 		}
 		deadline := time.Now().Add(s.cfg.StreamTimeout)
-		ctx, cancel := context.WithDeadline(r.Context(), deadline)
-		defer cancel()
 		// ErrNotSupported (httptest recorders) leaves the server's deadline.
 		_ = http.NewResponseController(w).SetWriteDeadline(deadline)
-		stream.ServeHTTP(w, r.WithContext(ctx))
+		// The context deadline applies to the handler only (dispatch sets it
+		// after authorization), so authentication is not cut short.
+		stream.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), streamDeadlineKey{}, deadline)))
 	})
 }
 
@@ -168,6 +249,9 @@ func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
 		if _, err := jit.SweepAll(ctx, s.store, s.clock()); err != nil && ctx.Err() == nil {
 			s.log.Error("jit sweep failed", "err", err)
 		}
+		if err := s.containment.SweepRetries(audit.WithSystemActor(ctx, "containment.sweeper"), s.store, "containment.sweeper"); err != nil && ctx.Err() == nil {
+			s.log.Error("containment retry sweep failed", "err", err)
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -177,8 +261,10 @@ func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
 }
 
 // sweepTenant expires one tenant's JIT grants, taking the write lock only
-// when there is work.
+// when there is work. The jit.expire events name the sweeper, not the
+// principal whose read happened to trigger the sweep.
 func (s *Server) sweepTenant(ctx context.Context, t tenancy.ID) error {
+	ctx = audit.AsSystem(ctx, "jit.sweeper")
 	now := s.clock()
 	var need bool
 	if err := s.store.ReadTenant(ctx, t, func(tx *store.TenantTx) error {
@@ -219,6 +305,7 @@ type route struct {
 	pattern string
 	segs    []string
 	tenant  tenantMode
+	spec    Route
 	h       handlerFunc
 	// stream: the handler streams its response (StreamTimeout, unbuffered).
 	stream bool
@@ -228,8 +315,23 @@ type route struct {
 	answersRead bool
 }
 
-func (s *Server) handle(method, pattern string, mode tenantMode, h handlerFunc) *route {
-	rt := &route{method: method, pattern: pattern, segs: strings.Split(strings.TrimPrefix(pattern, "/"), "/"), tenant: mode, h: h}
+// handle registers a route with its declared requirement (design §12.4). A
+// non-public route without a permission, or a public route that is not on
+// the allow-list (public_routes.go), or a public route that reaches tenant
+// data, panics at startup.
+func (s *Server) handle(method, pattern string, mode tenantMode, spec Route, h handlerFunc) *route {
+	switch {
+	case spec.Public && (spec.Perm != "" || spec.Authn != nil):
+		panic(fmt.Sprintf("api: public route %s %s declares a permission", method, pattern))
+	case spec.Public && mode != noTenant:
+		panic(fmt.Sprintf("api: public route %s %s reaches tenant data", method, pattern))
+	case spec.Public && !isPublicRoute(method, pattern):
+		panic(fmt.Sprintf("api: %s %s is not on the public route allow-list", method, pattern))
+	case !spec.Public && spec.Perm == "":
+		panic(fmt.Sprintf("api: route %s %s declares no permission", method, pattern))
+	}
+	rt := &route{method: method, pattern: pattern, segs: strings.Split(strings.TrimPrefix(pattern, "/"), "/"), tenant: mode,
+		spec: spec, h: h}
 	s.routes = append(s.routes, rt)
 	return rt
 }
@@ -241,6 +343,8 @@ type RouteInfo struct {
 	Tenant bool
 	// Write is true when that transaction can write.
 	Write bool
+	// Route is the declared requirement: Public, or Perm (and Authn).
+	Route
 }
 
 // Routes lists every registered route (a plain http.ServeMux cannot list its
@@ -248,21 +352,26 @@ type RouteInfo struct {
 func (s *Server) Routes() []RouteInfo {
 	out := make([]RouteInfo, len(s.routes))
 	for i, rt := range s.routes {
-		out[i] = RouteInfo{rt.method, rt.pattern, rt.tenant != noTenant, rt.tenant == write || rt.tenant == phased}
+		out[i] = RouteInfo{rt.method, rt.pattern, rt.tenant != noTenant, rt.tenant == write || rt.tenant == phased, rt.spec}
 	}
 	return out
 }
 
-// serve runs the route's handler, inside a transaction of the request's
+// serve runs the route's handler, inside a transaction of the principal's
 // tenant unless the route touches no tenant data. This is the tenant
 // middleware of design §5.2: the transaction commits only if the handler
 // returns no error and rolls back otherwise, and handlers reach it with
-// store.TxFrom.
+// store.TxFrom. The tenant is the principal's, which comes only from its
+// session row; a request without one never gets here.
 func (s *Server) serve(rt *route, w http.ResponseWriter, r *http.Request, p *params) (any, error) {
 	if rt.tenant == noTenant {
 		return rt.h(w, r, p)
 	}
-	ctx, t := r.Context(), s.cfg.Tenant
+	var t tenancy.ID
+	if pr, ok := auth.PrincipalFrom(r.Context()); ok {
+		t = pr.TenantID
+	}
+	ctx := r.Context()
 	if rt.tenant == phased {
 		if t.IsZero() {
 			s.store.RecordContextMissing(ctx, r.Method+" "+r.URL.Path)
@@ -357,6 +466,9 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if rt == nil {
+		// No route: nothing runs, but a signed-in caller's probe is still
+		// attributed to them (and recorded in their tenant's chain).
+		s.attribute(r)
 		if len(allowed) > 0 {
 			slices.Sort(allowed)
 			w.Header().Set("Allow", strings.Join(slices.Compact(allowed), ", "))
@@ -369,6 +481,15 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 	audit.SetRoute(r.Context(), rt.pattern, vars)
 	if rt.answersRead {
 		audit.AnswersRead(r.Context())
+	}
+	r, ok := s.authorize(w, r, rt)
+	if !ok {
+		return
+	}
+	if d, ok := r.Context().Value(streamDeadlineKey{}).(time.Time); ok && rt.stream {
+		ctx, cancel := context.WithDeadline(r.Context(), d)
+		defer cancel()
+		r = r.WithContext(ctx)
 	}
 	p := &params{r: r, path: vars}
 	out, err := s.serve(rt, w, r, p)
@@ -384,6 +505,23 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// attribute hands the request's principal, if it has a valid session, to the
+// audit middleware without authorizing anything.
+func (s *Server) attribute(r *http.Request) {
+	p, reason, err := s.authn.Authenticate(r)
+	switch {
+	case err != nil:
+		audit.SetAnonymous(r.Context(), "authentication_error")
+	case p == nil:
+		audit.SetAnonymous(r.Context(), reason)
+	default:
+		markAuthenticated(r.Context())
+		sid := p.SessionID.String()
+		audit.SetPrincipal(r.Context(), audit.Principal{Tenant: p.TenantID, Actor: p.AuditActor(), SessionID: &sid,
+			Authn: p.AuditAuthn(s.clock())})
+	}
 }
 
 // ---------------------------------------------------------------- responses
@@ -430,7 +568,10 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var he *httpError
 	var ve *validationError
 	var re *readiness.Error
+	var dn denial
 	switch {
+	case errors.As(err, &dn):
+		auth.WriteDenial(w, dn.d)
 	case errors.As(err, &re):
 		writeJSON(w, re.Status, readinessErrorBody(re))
 	case errors.As(err, &he):
@@ -526,7 +667,9 @@ func (s *Server) limitBody(next http.Handler) http.Handler {
 	})
 }
 
-// cors allows the configured UI origins only (exact match, no credentials).
+// cors allows the configured UI origins only (exact match, never a wildcard):
+// with credentials, so the dev UI on another origin can send its session
+// cookie. Production is same-origin and configures no origins (§11).
 func (s *Server) cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
@@ -543,9 +686,10 @@ func (s *Server) cors(next http.Handler) http.Handler {
 			}
 			h := w.Header()
 			h.Set("Access-Control-Allow-Origin", origin)
+			h.Set("Access-Control-Allow-Credentials", "true")
 			h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			if req := r.Header.Get("Access-Control-Request-Headers"); req != "" {
-				h.Set("Access-Control-Allow-Headers", "Content-Type")
+				h.Set("Access-Control-Allow-Headers", "Content-Type, "+auth.CSRFHeader)
 			}
 			h.Set("Access-Control-Max-Age", "600")
 			w.WriteHeader(http.StatusOK)
@@ -553,19 +697,45 @@ func (s *Server) cors(next http.Handler) http.Handler {
 		}
 		if allowed {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
 		}
 		next.ServeHTTP(w, r)
 	})
 }
 
-func securityHeaders(next http.Handler) http.Handler {
+// Content-Security-Policy values. The API serves JSON, so it allows nothing
+// but itself and is never framed. The Swagger UI and ReDoc pages (the
+// FastAPI-generated HTML) load their bundles from jsDelivr and inline a
+// small bootstrap script, so they get a policy that allows exactly that.
+const (
+	cspAPI  = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+	cspDocs = "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; " +
+		"style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; " +
+		"font-src https://fonts.gstatic.com; img-src 'self' data: https://fastapi.tiangolo.com https://cdn.redoc.ly; " +
+		"worker-src blob:; frame-ancestors 'none'; base-uri 'none'"
+)
+
+// securityHeaders sets the headers of design §5.2 on every response.
+func (s *Server) securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "no-referrer")
-		if strings.HasPrefix(r.URL.Path, "/api/") {
+		h.Set("Cross-Origin-Opener-Policy", "same-origin")
+		h.Set("Cross-Origin-Resource-Policy", "same-origin")
+		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()")
+		switch r.URL.Path {
+		case "/docs", "/redoc", "/docs/oauth2-redirect":
+			h.Set("Content-Security-Policy", cspDocs)
+		default:
+			h.Set("Content-Security-Policy", cspAPI)
+		}
+		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/t/") {
 			h.Set("Cache-Control", "no-store")
+		}
+		if s.cfg.HSTS {
+			h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}
 		next.ServeHTTP(w, r)
 	})

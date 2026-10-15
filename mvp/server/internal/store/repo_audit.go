@@ -197,11 +197,12 @@ func rawOrNil(r json.RawMessage) any {
 }
 
 // RecordAudit appends a domain event. The actor comes from the transaction's
-// context (AuditContext); only without one (system jobs, seeding, the CLI) is
-// r.LegacyActor used, as a system actor. With a context whose actor is not
-// the system, a LegacyActor other than "system" is kept as
-// detail.claimed_actor: it may come from a request body or header, so it is
-// recorded but never trusted.
+// context (AuditContext): the authenticated principal of an API request, or
+// a job's system actor. Only without a context (seeding, the CLI) is
+// r.LegacyActor used, as a system actor. An authenticated principal's events
+// ignore LegacyActor (the actor comes only from the principal); an anonymous
+// context keeps a LegacyActor other than "system" as detail.claimed_actor,
+// unverified (no route that writes domain events is anonymous since PR5).
 func (tx *TenantTx) RecordAudit(r AuditRecord) (AuditEvent, error) {
 	e := AuditEvent{OccurredAt: r.At, Action: r.Action, Outcome: r.Outcome,
 		TargetType: strPtr(r.TargetType), TargetID: strPtr(r.TargetID), PolicyVersion: strPtr(r.PolicyVersion)}
@@ -213,7 +214,7 @@ func (tx *TenantTx) RecordAudit(r AuditRecord) (AuditEvent, error) {
 		e.ActorType, e.ActorID, e.ActorDisplay = ac.Actor.Type, ac.Actor.ID, ac.Actor.Display
 		e.SessionID, e.ClientID, e.Authn = ac.SessionID, ac.ClientID, ac.Authn
 		e.RequestID, e.IP, e.UserAgentSHA256 = ac.RequestID, ac.IP, ac.UAHash
-		if ac.Actor.Type != ActorSystem && r.LegacyActor != "" && r.LegacyActor != ActorSystem {
+		if ac.Actor.Type == ActorAnonymous && r.LegacyActor != "" && r.LegacyActor != ActorSystem {
 			if detail, err = withClaimedActor(detail, r.LegacyActor); err != nil {
 				return e, err
 			}

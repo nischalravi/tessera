@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Timer } from "lucide-react";
 import { Group, IdentityRow, JitRequest, fmtDate, jitCreate, jitDecide, useApi } from "../../api";
+import { useSession } from "../../app/auth";
 import { usePersona } from "../../app/persona";
 import { Badge, Button, EmptyState, FilterChips, IdLink, Loading, Page, Status, TypeBadge, useConfirm, useToast } from "../../components";
 
@@ -20,7 +21,9 @@ export function JIT() {
   const { data, error, reload } = useApi<JitRequest[]>("/jit/requests");
   const { data: groups } = useApi<Group[]>("/groups?requestable=true");
   const { data: idents } = useApi<IdentityRow[]>("/identities?status=active");
-  const { me, actor } = usePersona();
+  const { me } = usePersona();
+  // hides what the API would refuse anyway (it enforces every permission itself)
+  const { can } = useSession();
   const toast = useToast();
   const confirm = useConfirm();
   const [form, setForm] = useState({ identity_id: "", group_id: "", duration_hours: 2, justification: "" });
@@ -52,7 +55,7 @@ export function JIT() {
       if (ok === null) return;
     }
     try {
-      await jitDecide(r.id, a, actor);
+      await jitDecide(r.id, a);
       toast(a === "approve" ? `Approved for ${r.duration_hours} h` : a === "deny" ? "Request denied" : "Elevation revoked");
     } catch (e: any) {
       toast(e.message, { kind: "error" });
@@ -85,13 +88,13 @@ export function JIT() {
                           {r.decided_by && <div className="xs faint">by {r.decided_by}</div>}
                         </td>
                         <td className="actions-cell">
-                          {r.status === "pending" && (
+                          {r.status === "pending" && (can("jit.decide") || can("jit.deny_revoke")) && (
                             <div className="row tight" style={{ justifyContent: "flex-end" }}>
-                              <Button size="sm" variant="primary" disabled={r.identity.id === me?.id} title={r.identity.id === me?.id ? "You can't approve your own request" : undefined} onClick={() => act(r, "approve")}>Approve</Button>
-                              <Button size="sm" onClick={() => act(r, "deny")}>Deny</Button>
+                              {can("jit.decide") && <Button size="sm" variant="primary" disabled={r.identity.id === me?.id} title={r.identity.id === me?.id ? "You can't approve your own request" : undefined} onClick={() => act(r, "approve")}>Approve</Button>}
+                              {can("jit.deny_revoke") && <Button size="sm" onClick={() => act(r, "deny")}>Deny</Button>}
                             </div>
                           )}
-                          {r.status === "approved" && <Button size="sm" variant="danger" onClick={() => act(r, "revoke")}>Revoke now</Button>}
+                          {r.status === "approved" && can("jit.deny_revoke") && <Button size="sm" variant="danger" onClick={() => act(r, "revoke")}>Revoke now</Button>}
                         </td>
                       </tr>
                     ))}

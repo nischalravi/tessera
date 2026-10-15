@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Tessera MVP launcher.
-#   ./run.sh            build the Go server, install UI deps (first run), seed if no DB,
-#                       start the dev IdP :8001, the API :8000 and the UI :5173
+#   ./run.sh            build the Go server, install UI deps (first run), seed if no DB (or a
+#                       DB from before sign-in), start the dev IdP :8001, the API :8000 and
+#                       the UI :5173; open the UI and sign in through the dev IdP (see mvp/README.md)
 #   ./run.sh --reseed   wipe and re-seed the demo database first
 #   ./run.sh test       go vet + the Go test suite (includes the API parity replay)
 #   ./run.sh build      build the Go server and type-check/build the frontend
@@ -23,10 +24,15 @@ export UI_PORT
 # dev IdP (mock OIDC issuer; development and tests only). DEVIDP=0 skips it.
 DEVIDP_PORT="${DEVIDP_PORT:-8001}"
 DEVIDP_URL="${TESSERA_DEV_IDP_URL:-http://127.0.0.1:$DEVIDP_PORT}"
+# seeding creates a dev_mock IdP connection to this issuer with the dev IdP's users
+# (the seeded dev_mock connections sign users in through it); the API refuses it in production (§18.4)
+export TESSERA_DEV_IDP_URL="$DEVIDP_URL"
 # read policies from disk so edits apply on the next request (the binary also embeds copies)
 export TESSERA_POLICY_DIR="${TESSERA_POLICY_DIR:-$SERVER/policies}"
-# local development: the API serves the dev default tenant (larkspur) until sign-in lands
+# local development: every API call needs a session; users sign in through the dev IdP
 export TESSERA_ENV="${TESSERA_ENV:-dev}"
+# the browser origin of the UI: the CSRF Origin check admits it
+export TESSERA_PUBLIC_URL="${TESSERA_PUBLIC_URL:-http://localhost:$UI_PORT}"
 
 pick_go() {
   if command -v go >/dev/null 2>&1; then command -v go; return; fi
@@ -69,6 +75,12 @@ setup_frontend() {
 # `tessera seed` drops and recreates every table, so it also works over a
 # database left from an older schema. Stop a running API before reseeding.
 seed() {
+  # the dev IdP's SAML signing certificate (derived from its key), pinned by
+  # the seeded dev_mock SAML connection
+  if [ "${DEVIDP:-1}" != "0" ] && [ -x "$DEVIDP_BIN" ]; then
+    TESSERA_DEV_IDP_SAML_CERT="$("$DEVIDP_BIN" -print-saml-cert -issuer "$DEVIDP_URL" -key-dir "$SERVER/var/devidp")"
+    export TESSERA_DEV_IDP_SAML_CERT
+  fi
   "$BIN" seed -db "$DB"
 }
 
@@ -76,7 +88,8 @@ case "${1:-}" in
   test)
     cd "$SERVER"
     "$GO" vet ./...
-    exec "$GO" test ./...
+    # the test-only session helper (internal/auth/authtest) runs only with TESSERA_ENV=test
+    TESSERA_ENV=test exec "$GO" test ./...
     ;;
   build)
     build_server
@@ -119,6 +132,10 @@ build_server
 setup_frontend
 if [ "${1:-}" = "--reseed" ] || [ ! -f "$DB" ]; then
   seed
+elif ! "$BIN" check-db -db "$DB" >/dev/null 2>&1; then
+  # a database from an older schema (before tenancy or sign-in) has no users to sign in as
+  echo "==> $DB predates this server's schema (no sign-in users); reseeding the demo data"
+  seed
 fi
 
 PIDS=()
@@ -136,8 +153,6 @@ if [ "${DEVIDP:-1}" != "0" ]; then
     echo "the dev IdP did not start on $DEVIDP_URL (port in use? set DEVIDP_PORT, or DEVIDP=0 to skip it)" >&2
     exit 1
   fi
-  # only exported when the dev IdP runs: the API refuses it in production (§18.4)
-  export TESSERA_DEV_IDP_URL="$DEVIDP_URL"
 fi
 
 echo "==> starting API on http://127.0.0.1:$API_PORT"
@@ -150,5 +165,6 @@ for _ in $(seq 1 40); do
 done
 
 echo "==> starting UI on http://localhost:$UI_PORT  (Ctrl+C to stop everything)"
+echo "    sign in to larkspur through the dev IdP: e.g. Alice (tenant admin) or Pat (policy admin) with a passkey"
 cd "$FRONTEND"
 TESSERA_API="http://127.0.0.1:$API_PORT" npx vite --port "$UI_PORT" --strictPort

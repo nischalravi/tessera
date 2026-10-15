@@ -240,7 +240,8 @@ func sortedSet(m map[string]bool) []string {
 }
 
 // Decide records keep/revoke on an item; revoke deletes the grant edge.
-func Decide(c *store.TenantTx, now time.Time, itemID int64, decision, reviewer string, comment *string) (*store.ReviewItem, error) {
+// by is the reviewer (the request's principal).
+func Decide(c *store.TenantTx, now time.Time, itemID int64, decision string, by store.UserRef, comment *string) (*store.ReviewItem, error) {
 	if decision != "keep" && decision != "revoke" {
 		return nil, &Error{"decision must be keep or revoke"}
 	}
@@ -251,20 +252,20 @@ func Decide(c *store.TenantTx, now time.Time, itemID int64, decision, reviewer s
 	if err != nil {
 		return nil, err
 	}
-	if err := c.DecideItem(item.ID, decision, comment, now); err != nil {
+	if err := c.DecideItem(item.ID, decision, comment, now, by); err != nil {
 		return nil, err
 	}
 	item.Decision, item.Comment, item.DecidedAt = &decision, comment, &now
 	if decision == "revoke" {
 		if e, err := c.EdgeBetween(item.EdgeSrc, item.EdgeDst); err == nil {
-			if err := c.DeleteEdge(e.ID); err != nil {
+			if err := c.RevokeEdge(e.ID, now, "review"); err != nil {
 				return nil, err
 			}
 		} else if !errors.Is(err, store.ErrNotFound) {
 			return nil, err
 		}
 	}
-	if err := c.Audit(now, reviewer, "review."+decision, ojson.Object{{Key: "item_id", Value: item.ID},
+	if err := c.Audit(now, by.Display, "review."+decision, ojson.Object{{Key: "item_id", Value: item.ID},
 		{Key: "grant", Value: item.GrantLabel}}); err != nil {
 		return nil, err
 	}

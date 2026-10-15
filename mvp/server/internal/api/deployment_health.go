@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -16,9 +17,9 @@ import (
 // scores, needs-attention, skipped items, and on-demand re-runs.
 
 func (s *Server) registerHealthRoutes() {
-	s.handle(http.MethodGet, "/api/insights/deployment-health", read, s.rd(s.deploymentHealth))
-	s.handle(http.MethodPost, "/api/insights/deployment-health/rerun", phased, s.rd(s.rerunHealth))
-	s.handle(http.MethodGet, "/api/connections/{id}/health", read, s.rd(s.connectionHealth))
+	s.handle(http.MethodGet, "/api/insights/deployment-health", read, need(auth.PermConnectionsRead), s.rd(s.deploymentHealth))
+	s.handle(http.MethodPost, "/api/insights/deployment-health/rerun", phased, need(auth.PermConnectionsManage), s.rd(s.rerunHealth))
+	s.handle(http.MethodGet, "/api/connections/{id}/health", read, need(auth.PermConnectionsRead), s.rd(s.connectionHealth))
 }
 
 // legacyHR names an env-configured HR connector that is not governed by a

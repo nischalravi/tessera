@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/ingest"
@@ -35,41 +36,46 @@ import (
 //   - write: one tenant write transaction around the whole handler (POST).
 func (s *Server) registerRoutes() {
 	G, P := http.MethodGet, http.MethodPost
-	s.handle(G, "/api/health", noTenant, s.health)
-	s.handle(G, "/api/connectors", read, s.listConnectors)
-	s.handle(P, "/api/connectors/sync", write, s.syncConnectors)
-	s.handle(G, "/api/summary", swept, s.summary)
-	s.handle(G, "/api/identities", swept, s.listIdentities)
-	s.handle(G, "/api/identities/{identity_id}", swept, s.identityDetail)
-	s.handle(G, "/api/accounts", read, s.listAccounts)
-	s.handle(G, "/api/groups", read, s.listGroups)
-	s.handle(G, "/api/resources", swept, s.listResources)
-	s.handle(G, "/api/graph", swept, s.graphView)
-	s.handle(G, "/api/nhi", swept, s.nhiInventory)
-	s.handle(G, "/api/least-privilege/recommendations", swept, s.recommendations)
-	s.handle(P, "/api/least-privilege/revoke", write, s.revoke)
-	s.handle(G, "/api/policies", swept, s.listPolicies)
-	s.handle(G, "/api/violations", swept, s.listViolations)
+	s.handle(G, "/api/health", noTenant, publicRoute, s.health)
+	s.handle(G, "/api/connectors", read, need(auth.PermGraphRead), s.listConnectors)
+	s.handle(P, "/api/connectors/sync", write, need(auth.PermConnectorsSync), s.syncConnectors)
+	s.handle(G, "/api/summary", swept, need(auth.PermGraphRead), s.summary)
+	s.handle(G, "/api/identities", swept, need(auth.PermGraphRead), s.listIdentities)
+	s.handle(G, "/api/identities/{identity_id}", swept, need(auth.PermGraphRead), s.identityDetail)
+	s.handle(G, "/api/accounts", read, need(auth.PermGraphRead), s.listAccounts)
+	s.handle(G, "/api/groups", read, need(auth.PermGraphRead), s.listGroups)
+	s.handle(G, "/api/resources", swept, need(auth.PermGraphRead), s.listResources)
+	s.handle(G, "/api/graph", swept, need(auth.PermGraphRead), s.graphView)
+	s.handle(G, "/api/nhi", swept, need(auth.PermGraphRead), s.nhiInventory)
+	s.handle(G, "/api/least-privilege/recommendations", swept, need(auth.PermGraphRead), s.recommendations)
+	s.handle(P, "/api/least-privilege/revoke", write, need(auth.PermGraphRead), s.revoke)
+	s.handle(G, "/api/policies", swept, need(auth.PermGraphRead), s.listPolicies)
+	s.handle(G, "/api/violations", swept, need(auth.PermGraphRead), s.listViolations)
 	// what-if analysis: its answer is data, recorded by nothing but its
 	// http.request event, so it fails closed like a read (design §13.4)
-	s.handle(P, "/api/simulate", write, s.simulate).answersRead = true
-	s.handle(G, "/api/jit/requests", swept, s.jitRequests)
-	s.handle(P, "/api/jit/requests", write, s.jitCreate)
-	s.handle(P, "/api/jit/requests/{request_id}/{action}", write, s.jitDecide)
-	s.handle(P, "/api/jit/sweep", write, s.jitSweep)
-	s.handle(G, "/api/reviews/campaigns", read, s.listCampaigns)
-	s.handle(P, "/api/reviews/campaigns", write, s.createCampaign)
-	s.handle(G, "/api/reviews/campaigns/{campaign_id}", read, s.campaign)
-	s.handle(P, "/api/reviews/items/{item_id}/decision", write, s.reviewDecide)
-	s.handle(G, "/api/hris/events", read, s.hrisEvents)
-	s.handle(P, "/api/hris/events", write, s.hrisCreate)
-	s.handle(G, "/api/hris/events/{event_id}/plan", read, s.hrisPlan)
-	s.handle(P, "/api/hris/events/{event_id}/execute", write, s.hrisExecute)
-	s.handle(G, "/api/jml/leaver-plan/{identity_id}", read, s.leaverPlan)
-	s.handle(G, "/openapi.json", noTenant, s.openAPI)
-	s.handle(G, "/docs", noTenant, s.swaggerUI)
-	s.handle(G, "/docs/oauth2-redirect", noTenant, s.swaggerRedirect)
-	s.handle(G, "/redoc", noTenant, s.redoc)
+	s.handle(P, "/api/simulate", write, need(auth.PermGraphRead), s.simulate).answersRead = true
+	s.handle(G, "/api/jit/requests", swept, need(auth.PermGraphRead), s.jitRequests)
+	s.handle(P, "/api/jit/requests", write, need(auth.PermJITRequest), s.jitCreate)
+	// The former /api/jit/requests/{request_id}/{action} route is split so each
+	// decision declares its own requirement (design §16.2); the URLs are the same.
+	s.handle(P, "/api/jit/requests/{request_id}/approve", write,
+		needStepUp(auth.PermJITDecide, auth.StepUpPolicy), s.jitDecide("approve"))
+	s.handle(P, "/api/jit/requests/{request_id}/deny", write, need(auth.PermJITDenyRevoke), s.jitDecide("deny"))
+	s.handle(P, "/api/jit/requests/{request_id}/revoke", write, need(auth.PermJITDenyRevoke), s.jitDecide("revoke"))
+	s.handle(P, "/api/jit/sweep", write, need(auth.PermJITSweep), s.jitSweep)
+	s.handle(G, "/api/reviews/campaigns", read, need(auth.PermGraphRead), s.listCampaigns)
+	s.handle(P, "/api/reviews/campaigns", write, need(auth.PermReviewsManage), s.createCampaign)
+	s.handle(G, "/api/reviews/campaigns/{campaign_id}", read, need(auth.PermGraphRead), s.campaign)
+	s.handle(P, "/api/reviews/items/{item_id}/decision", write, needStepUp(auth.PermReviewsDecide, auth.StepUpPolicy), s.reviewDecide)
+	s.handle(G, "/api/hris/events", read, need(auth.PermGraphRead), s.hrisEvents)
+	s.handle(P, "/api/hris/events", write, need(auth.PermHRISSimulateEvent), s.hrisCreate)
+	s.handle(G, "/api/hris/events/{event_id}/plan", read, need(auth.PermGraphRead), s.hrisPlan)
+	s.handle(P, "/api/hris/events/{event_id}/execute", phased, needStepUp(auth.PermHRISExecute, auth.StepUpPolicy), s.hrisExecute)
+	s.handle(G, "/api/jml/leaver-plan/{identity_id}", read, need(auth.PermGraphRead), s.leaverPlan)
+	s.handle(G, "/openapi.json", noTenant, need(auth.PermAuthenticated), s.openAPI)
+	s.handle(G, "/docs", noTenant, need(auth.PermAuthenticated), s.swaggerUI)
+	s.handle(G, "/docs/oauth2-redirect", noTenant, need(auth.PermAuthenticated), s.swaggerRedirect)
+	s.handle(G, "/redoc", noTenant, need(auth.PermAuthenticated), s.redoc)
 }
 
 // ---------------------------------------------------------------- context
@@ -898,10 +904,12 @@ func (s *Server) recommendations(_ http.ResponseWriter, r *http.Request, p *para
 	return out, nil
 }
 
+// revokeFields: the actor comes from the authenticated principal (design
+// §16.2); the former body field "actor" is gone and, like any unknown
+// field, refused.
 var revokeFields = []field{
 	{name: "edge_id", kind: kInt, required: true},
 	{name: "dry_run", kind: kBool, def: true},
-	{name: "actor", kind: kStr, def: "admin@larkspur.example"},
 }
 
 type grantRef struct {
@@ -926,7 +934,16 @@ func (s *Server) revoke(_ http.ResponseWriter, r *http.Request, p *params) (any,
 	if err := validated(p, berrs); err != nil {
 		return nil, err
 	}
-	edgeID, dryRun, actor := body["edge_id"].(int64), body["dry_run"].(bool), body["actor"].(string)
+	edgeID, dryRun := body["edge_id"].(int64), body["dry_run"].(bool)
+	pr := principal(r)
+	if !dryRun {
+		// Applying a revoke needs grants.revoke and a fresh phishing-resistant
+		// sign-in; a dry run needs only graph.read (the route's permission).
+		// Checked here because the requirement depends on the body (§16.2).
+		if d := auth.Check(pr, auth.PermGrantsRevoke, &auth.StepUpPolicy, s.clock()); d != nil {
+			return nil, denial{d}
+		}
+	}
 	c := store.TxFrom(r.Context())
 	a, err := s.newAnalysis(c)
 	if err != nil {
@@ -949,11 +966,11 @@ func (s *Server) revoke(_ http.ResponseWriter, r *http.Request, p *params) (any,
 	if dryRun {
 		return out, nil
 	}
-	if err := c.Audit(a.now, actor, "grant.revoke", ojson.Object{{Key: "edge_id", Value: e.ID},
+	if err := c.Audit(a.now, pr.Display, "grant.revoke", ojson.Object{{Key: "edge_id", Value: e.ID},
 		{Key: "grant", Value: out.Grant.Label}, {Key: "permissions_removed", Value: res.Summary.PermissionsRemoved}}); err != nil {
 		return nil, err
 	}
-	if err := c.DeleteEdge(e.ID); err != nil {
+	if err := c.RevokeEdge(e.ID, a.now, "least-privilege"); err != nil {
 		return nil, err
 	}
 	applied := true
@@ -1011,6 +1028,7 @@ var edgeFields = []field{
 	{name: "src", kind: kStr, required: true},
 	{name: "dst", kind: kStr, required: true},
 	{name: "relation", kind: kStr, def: "member_of"},
+	{name: "duration_hours", kind: kFloat, nullable: true, def: nil}, // set: a time-boxed JIT grant, never standing access
 }
 
 var simulateFields = []field{
@@ -1043,7 +1061,15 @@ func (s *Server) simulate(_ http.ResponseWriter, r *http.Request, p *params) (an
 		if kind, _, _ := strings.Cut(src, ":"); kind != "account" && kind != "group" {
 			return nil, errStatus(http.StatusBadRequest, "edges must start at an account or group")
 		}
-		req.AddEdges = append(req.AddEdges, simulate.AddEdge{Src: src, Dst: dst, Relation: rel})
+		ae := simulate.AddEdge{Src: src, Dst: dst, Relation: rel}
+		if h, ok := e["duration_hours"].(float64); ok {
+			if h <= 0 {
+				return nil, errStatus(http.StatusBadRequest, "duration_hours must be positive")
+			}
+			exp := a.now.Add(time.Duration(h * float64(time.Hour)))
+			ae.ExpiresAt = &exp
+		}
+		req.AddEdges = append(req.AddEdges, ae)
 	}
 	res, err := simulate.Run(a.c, req, simulate.Inputs{Now: a.now, Policies: a.policies, Usage: a.u, Base: a.g})
 	var une *graph.UnknownNodeError
@@ -1129,44 +1155,55 @@ func (s *Server) jitCreate(_ http.ResponseWriter, r *http.Request, p *params) (a
 	}
 	c := store.TxFrom(r.Context())
 	rq, err := jit.CreateRequest(c, s.clock(), body["identity_id"].(int64), body["group_id"].(int64), hours,
-		body["justification"].(string))
+		body["justification"].(string), principal(r).User())
 	if err != nil {
 		return nil, asJitError(err)
 	}
 	return reqView(c, rq, hours.JSON())
 }
 
-var decisionFields = []field{{name: "approver", kind: kStr, def: "security-oncall@larkspur.example"}}
+// decisionFields is the (optional) body of a JIT decision: empty. The
+// former "approver" field is gone (the decider is the authenticated
+// principal, design §16.2) and, like any unknown field, refused.
+var decisionFields = []field{}
 
-func (s *Server) jitDecide(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
-	id := p.pathInt("request_id")
-	action := p.pathLiteral("action", []string{"approve", "deny", "revoke"})
-	body, berrs, err := bodyModel(r, decisionFields, false)
-	if err != nil {
-		return nil, err
+// jitDecide serves one of the three JIT decision routes.
+func (s *Server) jitDecide(action string) handlerFunc {
+	return func(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+		id := p.pathInt("request_id")
+		_, berrs, err := bodyModel(r, decisionFields, false)
+		if err != nil {
+			return nil, err
+		}
+		if err := validated(p, berrs); err != nil {
+			return nil, err
+		}
+		by := principal(r).User()
+		c := store.TxFrom(r.Context())
+		now := s.clock()
+		var rq *store.AccessRequest
+		switch action {
+		case "approve":
+			rq, err = jit.Approve(c, id, by, now, now)
+		case "deny":
+			rq, err = jit.Deny(c, id, by, now)
+		default:
+			rq, err = jit.Revoke(c, id, by, now)
+		}
+		if errors.Is(err, jit.ErrSelfApproval) {
+			// nothing changed; the refusal itself is evidence of the control
+			if err := c.Audit(now, by.Display, "jit.approve.refused", ojson.Object{{Key: "request_id", Value: id},
+				{Key: "reason", Value: "self_approval"}}); err != nil {
+				return nil, err
+			}
+			return statusBody{http.StatusForbidden, ojson.Object{{Key: "error", Value: "self_approval"},
+				{Key: "detail", Value: "You cannot approve your own request; another approver must decide it."}}}, nil
+		}
+		if err != nil {
+			return nil, asJitError(err)
+		}
+		return reqView(c, rq, nil)
 	}
-	if err := validated(p, berrs); err != nil {
-		return nil, err
-	}
-	who := "security-oncall@larkspur.example"
-	if body != nil {
-		who = body["approver"].(string)
-	}
-	c := store.TxFrom(r.Context())
-	now := s.clock()
-	var rq *store.AccessRequest
-	switch action {
-	case "approve":
-		rq, err = jit.Approve(c, id, who, now, now)
-	case "deny":
-		rq, err = jit.Deny(c, id, who, now)
-	default:
-		rq, err = jit.Revoke(c, id, who, now)
-	}
-	if err != nil {
-		return nil, asJitError(err)
-	}
-	return reqView(c, rq, nil)
 }
 
 func (s *Server) jitSweep(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
@@ -1285,10 +1322,11 @@ func (s *Server) campaign(_ http.ResponseWriter, r *http.Request, p *params) (an
 	return campaignView(c, cmp, true)
 }
 
+// reviewDecisionFields: the reviewer is the authenticated principal; the
+// former "reviewer" field is gone (design §16.2) and refused.
 var reviewDecisionFields = []field{
 	{name: "decision", kind: kLiteral, required: true, lits: []string{"keep", "revoke"}},
 	{name: "comment", kind: kStr, nullable: true, def: nil},
-	{name: "reviewer", kind: kStr, def: "reviewer@larkspur.example"},
 }
 
 func (s *Server) reviewDecide(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
@@ -1304,7 +1342,7 @@ func (s *Server) reviewDecide(_ http.ResponseWriter, r *http.Request, p *params)
 	if v, ok := body["comment"].(string); ok {
 		comment = &v
 	}
-	it, err := reviews.Decide(store.TxFrom(r.Context()), s.clock(), id, body["decision"].(string), body["reviewer"].(string), comment)
+	it, err := reviews.Decide(store.TxFrom(r.Context()), s.clock(), id, body["decision"].(string), principal(r).User(), comment)
 	var re *reviews.Error
 	if errors.As(err, &re) {
 		return nil, errStatus(http.StatusBadRequest, re.Msg)
@@ -1390,6 +1428,15 @@ func (s *Server) hrisCreate(_ http.ResponseWriter, r *http.Request, p *params) (
 		return nil, errStatus(http.StatusBadRequest, "payload.to_team required")
 	}
 	c := store.TxFrom(r.Context())
+	if identityID != nil {
+		// An event for an identity that does not exist could never be planned or executed.
+		if ident, err := getOrNil(c.Identity(*identityID)); err != nil {
+			return nil, err
+		} else if ident == nil {
+			return nil, &validationError{[]verr{{Type: "value_error", Loc: []any{"body", "identity_id"},
+				Msg: fmt.Sprintf("Value error, unknown identity %d", *identityID), Input: *identityID}}}
+		}
+	}
 	now := s.clock()
 	n, err := c.CountHrisEvents()
 	if err != nil {
@@ -1431,8 +1478,12 @@ func (s *Server) hrisPlan(_ http.ResponseWriter, r *http.Request, p *params) (an
 	var plan any
 	if ev.Status != "executed" {
 		pl, err := jml.PlanForEvent(c, s.clock(), ev, true, pols)
+		var je *jml.Error
+		if errors.As(err, &je) { // e.g. an event row left pointing at an identity that no longer exists
+			return nil, errStatus(http.StatusConflict, "event cannot be planned: "+je.Msg)
+		}
 		if err != nil {
-			return nil, err // includes *jml.Error: the original backend let it surface as a 500
+			return nil, err
 		}
 		plan = pl
 	}
@@ -1444,19 +1495,7 @@ func (s *Server) hrisExecute(_ http.ResponseWriter, r *http.Request, p *params) 
 	if err := validated(p, nil); err != nil {
 		return nil, err
 	}
-	pols, err := s.policies()
-	if err != nil {
-		return nil, err
-	}
-	plan, err := jml.ExecuteEvent(store.TxFrom(r.Context()), s.clock(), id, "jml-automation", pols)
-	var je *jml.Error
-	if errors.As(err, &je) {
-		return nil, errStatus(http.StatusBadRequest, je.Msg)
-	}
-	if err != nil {
-		return nil, err
-	}
-	return ojson.Object{{Key: "executed", Value: true}, {Key: "plan", Value: plan}}, nil
+	return s.executeLeaver(r, p, id)
 }
 
 func (s *Server) leaverPlan(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {

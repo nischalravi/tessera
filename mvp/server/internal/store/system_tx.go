@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 )
@@ -34,7 +35,7 @@ func namedArgs(args []sql.NamedArg) []any {
 	return out
 }
 
-const tenantCols = `t.id, t.slug, t.name, t.status, t.cell, t.min_admins, t.created_at`
+const tenantCols = `t.id, t.slug, t.name, t.status, t.cell, t.min_admins, t.settings, t.created_at`
 
 var (
 	tenantsExists         = sq("tenants.exists", `SELECT count(*) FROM tenants t WHERE t.id = @id`)
@@ -47,14 +48,18 @@ var (
 	tenantsList   = sq("tenants.list", `SELECT `+tenantCols+` FROM tenants t ORDER BY t.slug`)
 	tenantsActive = sq("tenants.active", `
 		SELECT `+tenantCols+` FROM tenants t WHERE t.status = 'active' AND t.slug != '_platform' ORDER BY t.slug`)
-	tenantsBySlug = sq("tenants.by_slug", `SELECT `+tenantCols+` FROM tenants t WHERE t.slug = @slug`)
+	tenantsBySlug      = sq("tenants.by_slug", `SELECT `+tenantCols+` FROM tenants t WHERE t.slug = @slug`)
+	tenantsByID        = sq("tenants.by_id", `SELECT `+tenantCols+` FROM tenants t WHERE t.id = @id`)
+	tenantsSetSettings = sq("tenants.set_settings", `
+		UPDATE tenants SET settings = @settings WHERE id = @id AND slug != '_platform' AND json_valid(@settings)
+			AND json_type(@settings) = 'object'`)
 )
 
 func scanTenant(s scanner) (Tenant, error) {
 	var t Tenant
 	var id string
 	var created nullTime
-	if err := s.Scan(&id, &t.Slug, &t.Name, &t.Status, &t.Cell, &t.MinAdmins, &created); err != nil {
+	if err := s.Scan(&id, &t.Slug, &t.Name, &t.Status, &t.Cell, &t.MinAdmins, &t.Settings, &created); err != nil {
 		return t, err
 	}
 	var err error
@@ -132,4 +137,61 @@ func (s *SystemTx) TenantBySlug(slug string) (Tenant, error) {
 		return Tenant{}, ErrNotFound
 	}
 	return ts[0], nil
+}
+
+// TenantByID returns one tenant (ErrNotFound if missing).
+// SetTenantSettings replaces a tenant's settings (design §18.3; a JSON
+// object). Changing them from the API is an audited admin change (PR12);
+// until then only the seed and tests call this.
+func (s *SystemTx) SetTenantSettings(id tenancy.ID, settings string) error {
+	res, err := s.exec(tenantsSetSettings, sql.Named("id", id.String()), sql.Named("settings", settings))
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *SystemTx) TenantByID(id tenancy.ID) (Tenant, error) {
+	ts, err := s.tenants(tenantsByID, sql.Named("id", id.String()))
+	if err != nil {
+		return Tenant{}, err
+	}
+	if len(ts) == 0 {
+		return Tenant{}, ErrNotFound
+	}
+	return ts[0], nil
+}
+
+// ---------------------------------------------------------------- replay_cache
+
+var (
+	replayPurge  = sq("replay_cache.purge", `DELETE FROM replay_cache WHERE expires_at <= @now`)
+	replayInsert = sq("replay_cache.insert", `
+		INSERT INTO replay_cache (kind, key_hash, expires_at) VALUES (@kind, @key_hash, @expires_at)`)
+)
+
+// Replay kinds.
+const (
+	ReplaySAMLAssertion = "saml_assertion"
+	ReplayDPoPJTI       = "dpop_jti"
+)
+
+// UseOnce records that the value with keyHash (SHA-256 hex) of kind was
+// used, until expires. It returns ErrDuplicate if it was already used and has
+// not expired; expired entries are purged first.
+func (s *SystemTx) UseOnce(kind, keyHash string, now, expires time.Time) error {
+	if _, err := s.exec(replayPurge, sql.Named("now", RT(now))); err != nil {
+		return err
+	}
+	_, err := s.exec(replayInsert, sql.Named("kind", kind), sql.Named("key_hash", keyHash),
+		sql.Named("expires_at", RT(expires)))
+	if isUnique(err) {
+		return ErrDuplicate
+	}
+	return err
 }

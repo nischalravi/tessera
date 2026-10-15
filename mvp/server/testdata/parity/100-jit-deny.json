@@ -2,10 +2,7 @@
  "name": "jit-deny",
  "request": {
   "method": "POST",
-  "path": "/api/jit/requests/1/deny",
-  "body": {
-   "approver": "lead@larkspur.example"
-  }
+  "path": "/api/jit/requests/1/deny"
  },
  "response": {
   "status": 200,
@@ -31,7 +28,7 @@
    "status": "denied",
    "requested_at": "2026-10-08T09:30:00",
    "decided_at": "2026-10-08T09:30:00",
-   "decided_by": "lead@larkspur.example",
+   "decided_by": "security-oncall@larkspur.example",
    "expires_at": null
   }
  }

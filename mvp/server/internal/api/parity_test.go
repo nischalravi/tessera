@@ -17,6 +17,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/auth/authtest"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
@@ -45,18 +49,58 @@ type fixture struct {
 	} `json:"response"`
 }
 
+// The fixtures were recorded unauthenticated. Since PR5 every route except
+// the public allow-list needs a session, so the replay signs in as this
+// principal of larkspur: a tenant admin and policy admin (every permission
+// the fixtures use), with a phishing-resistant authentication at the frozen
+// time (every step-up requirement met). Its ids are fixed so the audit rows
+// of 155-audit-final are reproducible; its email is the approver the Python
+// backend recorded by default, so decided_by values match where the fixtures
+// did not name another one (testdata/parity/README.md).
+var (
+	parityUser = authtest.User{ID: uuid.MustParse("00000000-0000-4000-8000-0000000000c1"),
+		Email: "security-oncall@larkspur.example", Display: "Security on-call",
+		Roles: []auth.Role{auth.RoleTenantAdmin, auth.RolePolicyAdmin}}
+	parityCtx = authtest.Ctx{ID: uuid.MustParse("00000000-0000-4000-8000-0000000000c2"), AAL: 2, Phr: true}
+	// parityRequester makes the fixtures' JIT requests (POST /api/jit/requests):
+	// a requester never approves their own request, so the approvals the
+	// fixtures record are by a different person (parityUser).
+	parityRequester = authtest.User{ID: uuid.MustParse("00000000-0000-4000-8000-0000000000c3"),
+		Email: "requester@larkspur.example", Display: "Requester", Roles: []auth.Role{auth.RoleOperator}}
+	parityRequesterCtx = authtest.Ctx{ID: uuid.MustParse("00000000-0000-4000-8000-0000000000c4"), AAL: 2, Phr: true}
+)
+
+// paritySrv sends JIT request creation as parityRequester and everything
+// else as parityUser.
+type paritySrv struct {
+	testSrv
+	requester authtest.Login
+}
+
+func (s paritySrv) Handler() http.Handler {
+	h := s.testSrv.Handler()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/jit/requests" && r.Header.Get("Cookie") == "" {
+			r = r.Clone(r.Context())
+			s.requester.Apply(r)
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
 // newSeededServer seeds a fresh database exactly as the recorder did (the
 // larkspur tenant only: integer ids are global across tenants, so a second
 // tenant's rows would shift the ids the fixtures recorded for rows the replay
-// creates) and returns a server for larkspur on the frozen clock.
-func newSeededServer(tb testing.TB) *Server {
+// creates) and returns a server for larkspur on the frozen clock, signed in
+// as parityUser (JIT requests as parityRequester).
+func newSeededServer(tb testing.TB) paritySrv {
 	tb.Helper()
 	return newSeededServerWith(tb, func(conns []connectors.Connector) []seed.Tenant {
 		return []seed.Tenant{seed.Larkspur(conns)}
 	})
 }
 
-func newSeededServerWith(tb testing.TB, tenants func([]connectors.Connector) []seed.Tenant) *Server {
+func newSeededServerWith(tb testing.TB, tenants func([]connectors.Connector) []seed.Tenant) paritySrv {
 	tb.Helper()
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(tb.TempDir(), "parity.db"))
@@ -76,11 +120,13 @@ func newSeededServerWith(tb testing.TB, tenants func([]connectors.Connector) []s
 	if _, err := seed.Run(ctx, st, FrozenNow, pols, tenants(conns)); err != nil {
 		tb.Fatal(err)
 	}
-	return New(Config{
-		Store: st, Tenant: seed.LarkspurID, Clock: timeutil.Frozen(FrozenNow), Policies: loader,
+	srv := New(Config{
+		Store: st, Clock: timeutil.Frozen(FrozenNow), Policies: loader,
 		Connectors: func(time.Time) ([]connectors.Connector, error) { return connectors.Load("demo", FrozenNow) },
-		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)), AllowedOrigins: []string{authtest.Origin},
 	})
+	return paritySrv{testSrv{srv, authtest.LoginAs(tb, st, seed.LarkspurID, parityUser, parityCtx, FrozenNow)},
+		authtest.LoginAs(tb, st, seed.LarkspurID, parityRequester, parityRequesterCtx, FrozenNow)}
 }
 
 func loadFixtures(tb testing.TB) []fixture {
