@@ -150,6 +150,7 @@ func New(cfg Config) *Server {
 		}
 		cfg.Readiness = readiness.NewService(reg, cfg.Env)
 		cfg.Readiness.Runner.Scenario = cfg.ReadinessScenario
+		cfg.Readiness.Runner.SCIM.Env = cfg.Env
 	}
 	if cfg.Containment == nil {
 		cfg.Containment = &containment.Service{}

@@ -363,6 +363,10 @@ func init() {
 		if err != nil {
 			return probeErr(err)
 		}
+		if len(ri.Missing) > 0 {
+			return fail("Discovery is incomplete: "+strings.Join(ri.Missing, ", ")+" could not be read.",
+				map[string]any{"missing": ri.Missing, "capabilities": ri.Capabilities})
+		}
 		if len(ri.Capabilities) == 0 {
 			return fail("ServiceProviderConfig declared no capabilities.", nil)
 		}
@@ -451,6 +455,13 @@ func init() {
 	}))
 	live("paging", template.OpSample, sample(connectors.SampleQuery{Op: "page"}, func(env Env, p Params, s connectors.SampleStats) Result {
 		obs := map[string]any{"page_limit": p.Int("page_limit", 500), "size_limit_hit": s.SizeLimitHit}
+		if s.Pages > 0 { // SCIM: index paging walked page by page
+			obs = map[string]any{"pages": s.Pages, "total_results": s.TotalResults, "read": s.Objects, "findings": s.Findings}
+			if len(s.Findings) > 0 {
+				return fail("Paging is inconsistent: "+strings.Join(s.Findings, "; "), obs)
+			}
+			return pass(fmt.Sprintf("Paging is consistent: %d resources over %d pages match totalResults.", s.Objects, s.Pages), obs)
+		}
 		if s.SizeLimitHit || !s.PagedBeyond {
 			return fail("Results stop at the server's page limit.", obs)
 		}
@@ -477,6 +488,13 @@ func init() {
 	live("deprovisioned_visible", template.OpSample, sample(connectors.SampleQuery{Op: "deprovisioned", Limit: 1}, available("DEPROVISIONED users")))
 	live("members_complete", template.OpSample, sample(connectors.SampleQuery{Op: "members", Limit: 1}, func(env Env, _ Params, s connectors.SampleStats) Result {
 		obs := map[string]any{"list_count": s.RangedCount, "get_count": s.FullCount}
+		if s.ReverseChecked {
+			obs["reverse_count"] = s.ReverseCount
+		}
+		if len(s.Findings) > 0 { // SCIM: list versus GET versus reverse lookup
+			obs["findings"] = s.Findings
+			return fail("Group membership is not complete: "+strings.Join(s.Findings, "; "), obs)
+		}
 		if s.RangedCount != s.FullCount {
 			return fail(fmt.Sprintf("Member lists are truncated: %d on list calls, %d on get.", s.RangedCount, s.FullCount), obs)
 		}
@@ -595,6 +613,9 @@ func init() {
 			return probeErr(err)
 		}
 		obs := map[string]any{"limit": r.Limit, "remaining": r.Remaining, "throttled": r.Throttled}
+		if r.Retries > 0 || r.RetryAfterSeconds > 0 { // 429 handling evidence
+			obs["retries"], obs["retry_after_seconds"] = r.Retries, r.RetryAfterSeconds
+		}
 		if r.Throttled > 0 {
 			return fail(fmt.Sprintf("%d throttled responses during validation.", r.Throttled), obs)
 		}
