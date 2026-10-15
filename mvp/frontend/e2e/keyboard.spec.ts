@@ -44,16 +44,27 @@ async function toasts(page: Page) {
 
 async function signInByKeyboard(page: Page, who: string) {
   await page.goto("/");
-  await page.waitForSelector("select");
-  // tenant field, then the user picker
-  await tabTo(page, (e) => e.tag === "select");
-  const options = await page.locator("select option").allTextContents();
-  const idx = options.findIndex((o) => o.includes(who));
-  for (let i = 0; i < idx; i++) await page.keyboard.press("ArrowDown");
-  await tabTo(page, (e) => e.tag === "input" && e.type === "radio");
-  await page.keyboard.press("Space");
-  await tabTo(page, (e) => e.tag === "button" && /sign in/i.test(e.name));
+  // the organization field has focus on load: type it and submit
+  await expect(page.getByLabel("Organization")).toBeFocused();
+  await page.keyboard.type("larkspur");
   await page.keyboard.press("Enter");
+  // the organization's sign-in connections
+  await page.getByRole("button", { name: /^Sign in with/ }).first().waitFor();
+  await tabTo(page, (e) => e.tag === "button" && /^sign in with/i.test(e.name));
+  await page.keyboard.press("Enter");
+  // the dev IdP's page: Tab to the user's strongest method (a passkey, else password + OTP)
+  await page.waitForSelector("fieldset");
+  for (let i = 0; ; i++) {
+    if (i === 80) throw new Error("focus never reached the user's sign-in method button");
+    await page.keyboard.press("Tab");
+    const legend = await page.evaluate(() => document.activeElement?.closest("fieldset")?.querySelector("legend")?.textContent ?? "");
+    const el = await focused(page);
+    if (el.tag === "button" && /^(Passkey|Password \+ OTP)/.test(el.name) && legend.includes(who)) {
+      await expectFocusVisible(page);
+      await page.keyboard.press("Enter");
+      break;
+    }
+  }
   await expect(page.locator("main h1").first()).toBeVisible({ timeout: 20_000 });
 }
 

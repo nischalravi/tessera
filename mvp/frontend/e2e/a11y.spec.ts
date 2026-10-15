@@ -19,7 +19,7 @@ test.describe("signed out", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
   test("sign-in page has no serious or critical WCAG 2.2 AA violations", async ({ page }) => {
   await page.goto("/");
-  await page.waitForSelector("select");
+  await page.getByLabel("Organization").waitFor();
   const found = await seriousViolations(page, "sign-in");
   expect(found, report(found)).toEqual([]);
   });
