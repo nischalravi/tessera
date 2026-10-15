@@ -19,6 +19,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/nhi"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
+	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/reviews"
 	"github.com/nischalravi/tessera/mvp/server/internal/simulate"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -1135,10 +1136,22 @@ var jitFields = []field{
 
 func asJitError(err error) error {
 	var je *jit.Error
-	if errors.As(err, &je) {
-		return errStatus(http.StatusBadRequest, je.Msg)
+	if !errors.As(err, &je) {
+		return err
 	}
-	return err
+	status := http.StatusBadRequest
+	switch {
+	case je.Kind == jit.KindNotFound:
+		status = http.StatusNotFound
+	case je.Kind == jit.KindConflict:
+		status = http.StatusConflict
+	case je.Code != "":
+		status = http.StatusUnprocessableEntity // a field-specific refusal, like badRequest
+	}
+	if je.Code != "" {
+		return &readiness.Error{Status: status, Code: je.Code, Msg: je.Msg}
+	}
+	return errStatus(status, je.Msg)
 }
 
 func (s *Server) jitCreate(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
