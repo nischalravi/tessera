@@ -15,6 +15,7 @@ require (
 	golang.org/x/oauth2 v0.37.0
 	golang.org/x/time v0.16.0
 	modernc.org/sqlite v1.60.1
+	pgregory.net/rapid v1.3.0
 )
 
 require (
