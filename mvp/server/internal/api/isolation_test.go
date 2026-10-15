@@ -46,8 +46,7 @@ func newIsolationServer(f *storetest.Fixture) *Server {
 		},
 		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 		AllowedOrigins: []string{"http://localhost:5173"},
-		Env:            "test", // with DevLogin, registers the dev sign-in routes, so coverage tests see them
-		DevLogin:       true,
+		Env:            "test",
 		RateLimits:     noRateLimits, // the coverage tests send hundreds of anonymous requests
 	})
 }
@@ -173,6 +172,13 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		}
 		if strings.HasPrefix(rt.Pattern, "/api/provisioning/") {
 			continue // TestIsolation_ProvisioningRoutes (UUIDs, not fixture ids)
+		}
+		if rt.Pattern == "/api/auth/oidc/{connection_id}/callback" || rt.Pattern == "/api/auth/oauth2/{connection_id}/callback" ||
+			rt.Pattern == "/t/{slug}/bootstrap" {
+			continue // TestIsolation_LoginCrossTenant (public; the tenant comes from the cookie or the slug)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/auth/saml/{connection_id}/") {
+			continue // TestIsolation_SAMLCrossTenant (public; the tenant comes from the cookie or the connection)
 		}
 		if rt.Pattern == "/api/identity-merges/{merge_id}/unmerge" {
 			continue // TestCorrelationAPI_CrossTenant (a UUID, not a fixture id)

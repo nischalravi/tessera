@@ -20,6 +20,8 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/auth/oauth2rp"
+	"github.com/nischalravi/tessera/mvp/server/internal/auth/oidcrp"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
@@ -78,27 +80,30 @@ type Config struct {
 	// embedded templates and Env).
 	Readiness *readiness.Service
 	// Env is TESSERA_ENV: "dev" allows activating non-demo connector types,
-	// and "dev" exposes /api/auth/dev-login (§18.4).
+	// and is otherwise informational.
 	Env string
-	// DevLogin is TESSERA_DEV_LOGIN: with Env "test", the explicit opt-in
-	// that exposes /api/auth/dev-login, to loopback peers only.
-	DevLogin bool
 	// ReadinessScenario selects the simulated validation scenario
 	// (TESSERA_READINESS_SCENARIO; default "gaps").
 	ReadinessScenario string
 	// AuditAnchor is TESSERA_AUDIT_ANCHOR: POST /api/audit/verify checks
 	// checkpoints against it when it is a file:// URL.
 	AuditAnchor string
+	// PublicURL is TESSERA_PUBLIC_URL: the base of the OIDC redirect URIs.
+	PublicURL string
+	// Sealer opens connection client secrets, seals PKCE verifiers and seals
+	// provisioning target credentials under the KEK. Nil (tests only) uses a
+	// key generated for this process: credentials sealed with it cannot be
+	// read after a restart. cmd/tessera always passes the real one.
+	Sealer *seal.Sealer
+	// OutboundHTTP is the safehttp client for IdP discovery, JWKS and token
+	// requests. Nil: browser sign-in through an IdP is unavailable.
+	OutboundHTTP *http.Client
 	// RateLimits are the per-IP limits on anonymous and /api/auth/*
 	// requests (ratelimit.go); the zero value is the defaults.
 	RateLimits RateLimits
 	// TrustedProxies (TESSERA_TRUSTED_PROXIES) are the peers whose
 	// X-Forwarded-For the rate limiter believes.
 	TrustedProxies []netip.Prefix
-	// Sealer seals target credentials under the KEK. Nil (tests only) uses a
-	// key generated for this process: credentials sealed with it cannot be
-	// read after a restart. cmd/tessera always passes the real one.
-	Sealer *seal.Sealer
 	// Outbound is the safehttp client the provisioning worker sends through.
 	// Nil builds a production-grade one (no loopback).
 	Outbound *http.Client
@@ -124,6 +129,8 @@ type Server struct {
 	routes []*route
 	authn  *auth.Authenticator
 	limits *limiters
+	rp     *oidcrp.RP
+	oauth2 *oauth2rp.RP
 
 	readiness *readiness.Service
 	prov      *provision.Engine
@@ -183,6 +190,16 @@ func New(cfg Config) *Server {
 		limits: newLimiters(cfg.RateLimits)}
 	s.prov = &provision.Engine{DB: cfg.Store, Sealer: cfg.Sealer, HTTP: cfg.Outbound,
 		Clock: func() time.Time { return s.clock() }, Log: cfg.Logger.With("component", "provisioning")}
+	if cfg.OutboundHTTP != nil {
+		rp, err := oidcrp.New(oidcrp.Config{HTTP: cfg.OutboundHTTP, Now: func() time.Time { return s.clock() }})
+		if err != nil {
+			panic(err) // HTTP and Now are set
+		}
+		s.rp = rp
+		if s.oauth2, err = oauth2rp.New(cfg.OutboundHTTP); err != nil {
+			panic(err) // HTTP is set
+		}
+	}
 	s.authn = &auth.Authenticator{DB: cfg.Store, Clock: func() time.Time { return s.clock() },
 		Cookies: auth.Cookies{Insecure: cfg.InsecureCookie}}
 	s.registerRoutes()
@@ -193,6 +210,10 @@ func New(cfg Config) *Server {
 	s.registerJobRoutes()
 	s.registerProvisioningRoutes()
 	s.registerAuthRoutes()
+	s.registerLoginRoutes()
+	s.registerSAMLRoutes()
+	s.registerOAuth2Routes()
+	s.registerStepUpRoutes()
 	s.checkPublicRoutes()
 	return s
 }

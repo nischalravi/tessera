@@ -1,6 +1,9 @@
 package api
 
 import (
+	"context"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -10,10 +13,14 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/authtest"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/seed"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/testkit"
+	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
+	"github.com/nischalravi/tessera/mvp/server/policies"
 )
 
 // noRateLimits is for tests that send many anonymous requests on purpose.
@@ -43,7 +50,7 @@ func countHTTPEvents(t *testing.T, db *store.DB) int {
 // 429 with Retry-After and writes nothing to the ledger; another IP and a
 // signed-in session are unaffected; made-up cookies count as anonymous.
 func TestRateLimit_AnonymousPerIP(t *testing.T) {
-	srv, db := devLoginServer(t, "dev")
+	srv, db := seededServer(t)
 	srv.limits = newLimiters(RateLimits{Anonymous: RateLimit{Every: time.Hour, Burst: 3}, Auth: RateLimit{Every: time.Hour, Burst: 100}})
 	h := srv.Handler()
 	alice := signIn(t, db, seed.LarkspurID, testAdmin, authtest.Phr, testkit.Now)
@@ -97,17 +104,14 @@ func TestRateLimit_AnonymousPerIP(t *testing.T) {
 // TestRateLimit_AuthRoutes: every /api/auth/* request takes a token from the
 // IP's auth bucket, signed in or not.
 func TestRateLimit_AuthRoutes(t *testing.T) {
-	srv, db := devLoginServer(t, "dev")
+	srv, db := seededServer(t)
 	srv.limits = newLimiters(RateLimits{Anonymous: RateLimit{Every: time.Hour, Burst: 100}, Auth: RateLimit{Every: time.Hour, Burst: 2}})
 	h := srv.Handler()
 	alice := signIn(t, db, seed.LarkspurID, testAdmin, authtest.Phr, testkit.Now)
-	body := `{"tenant":"larkspur","subject":"nobody"}`
-	for i, want := range []int{401, 401, 429} {
-		r := fromIP(httptest.NewRequest("POST", "/api/auth/dev-login", strings.NewReader(body)), "198.51.100.8:1")
-		r.Header.Set("Content-Type", "application/json")
-		r.Header.Set("Origin", authtest.Origin)
+	for i, want := range []int{200, 200, 429} {
+		r := fromIP(httptest.NewRequest("GET", "/api/auth/discover?tenant=larkspur", nil), "198.51.100.8:1")
 		if code := serve(h, r).Code; code != want {
-			t.Errorf("dev-login %d: %d, want %d", i, code, want)
+			t.Errorf("discover %d: %d, want %d", i, code, want)
 		}
 	}
 	if code := serve(h, fromIP(authed(alice, "GET", "/api/auth/session", ""), "198.51.100.8:1")).Code; code != 429 {
@@ -141,4 +145,20 @@ func TestRateLimit_ClientBehindTrustedProxy(t *testing.T) {
 			t.Errorf("peer %s XFF %q: key %s, want %s", tc.peer, tc.xff, got, tc.want)
 		}
 	}
+}
+
+// seededServer is a server over a seed with the dev IdP connections and
+// their bootstrap users.
+func seededServer(t *testing.T) (*Server, *store.DB) {
+	t.Helper()
+	db := testkit.Open(t)
+	tenants := seed.WithDevIdP([]seed.Tenant{
+		{ID: seed.LarkspurID, Slug: seed.LarkspurSlug, Name: "Larkspur Labs", Connectors: []connectors.Connector{connectors.Tiny{Now: testkit.Now}}},
+		{ID: seed.GlobexID, Slug: seed.GlobexSlug, Name: "Globex", Connectors: []connectors.Connector{connectors.Tiny{Now: testkit.Now, Sentinel: "G"}}},
+	}, "http://127.0.0.1:8001")
+	if _, err := seed.Run(context.Background(), db, testkit.Now, testkit.Policies(t), tenants); err != nil {
+		t.Fatal(err)
+	}
+	return New(Config{Store: db, Clock: timeutil.Frozen(testkit.Now), Policies: policy.NewLoader(policies.FS), Env: "test",
+		AllowedOrigins: []string{authtest.Origin}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}), db
 }
