@@ -1,12 +1,15 @@
-// Package oauth is Tessera's OAuth 2.0 authorization server for the CLI and,
-// from PR11, machine clients (design docs/design/phase-0-platform-security.md
-// §6, §9.3, §10, §19 PR10).
+// Package oauth is Tessera's OAuth 2.0 authorization server for the CLI and
+// for machine clients (design docs/design/phase-0-platform-security.md §6,
+// §9.3, §9.5, §10, §19 PR10 and PR11).
 //
-// Each tenant is its own issuer, PUBLIC_URL/t/{slug}. This PR serves two
-// grants: the device authorization grant (RFC 8628) and the refresh-token
-// grant, both sender-constrained with DPoP (RFC 9449, package dpop), and
-// issues JWT access tokens (RFC 9068) signed with the tenant's own ES256 key
-// (internal/keys).
+// Each tenant is its own issuer, PUBLIC_URL/t/{slug}. It serves the device
+// authorization grant (RFC 8628) and the refresh-token grant for the CLI, both
+// sender-constrained with DPoP (RFC 9449, package dpop), and the client
+// credentials grant for machine clients, which authenticate with a signed JWT
+// (private_key_jwt, RFC 7523: clientauth.go) and use DPoP unless the client is
+// registered without it. It issues JWT access tokens (RFC 9068) signed with the
+// tenant's own ES256 key (internal/keys), and answers token introspection
+// (RFC 7662) for machine clients allowed to ask (introspect.go).
 //
 // Library choice (the PR10 spike rule, §19): the grants are hand-written on
 // go-jose, the §6 fallback, not on zitadel/oidc. zitadel/oidc v3.51.13
@@ -21,9 +24,11 @@
 //
 // Files: oauth.go (Service, helpers), tokens.go (mint and verify access
 // tokens), device.go (device authorization, user-code lookup and approval),
-// grants.go (the token endpoint: device_code and refresh_token), routes.go
-// (the public routes and the RFC 8414 and 9728 documents), clients.go (the
-// first-party CLI client).
+// grants.go (the token endpoint: device_code, refresh_token and
+// client_credentials), clientauth.go (private_key_jwt assertions and the
+// registered key sets), introspect.go (RFC 7662), routes.go (the public routes
+// and the RFC 8414 and 9728 documents), clients.go (the first-party CLI
+// client).
 package oauth
 
 import (
@@ -51,6 +56,12 @@ import (
 const (
 	GrantDeviceCode = "urn:ietf:params:oauth:grant-type:device_code"
 	GrantRefresh    = "refresh_token"
+	// GrantClientCredentials is the machine clients' grant (RFC 6749 §4.4).
+	GrantClientCredentials = "client_credentials"
+	// ScopeIntrospect is held by a machine client that may call the
+	// introspection endpoint. It is a capability of the client's registration,
+	// not an API scope: it covers no permission (auth.ScopeSetOf drops it).
+	ScopeIntrospect = "tessera:introspect"
 
 	// CLIClientID is the first-party CLI client every tenant has.
 	CLIClientID = "tessera-cli"

@@ -186,6 +186,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/api/auth/sessions/{session_id}" {
 			continue // TestIsolation_SessionCookieScoped (a UUID, not a fixture id)
 		}
+		if rt.Pattern == "/api/admin/api-clients/{client_id}" {
+			continue // TestAdminAPIClients_CrossTenant (a client_id string, not a fixture id)
+		}
 		if _, ok := routeParamCases[rt.Method+" "+rt.Pattern]; !ok {
 			t.Errorf("route %s %s has path parameters but no cross-tenant case", rt.Method, rt.Pattern)
 		}
@@ -238,11 +241,15 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 	if rec := serveOnce(isolationServer(t, f, f.A.ID).Handler(), http.MethodGet, "/api/identities", ""); !leaks(rec.Body.String()) {
 		t.Fatal("tenant A's own identities do not carry the sentinel; the leak check would never fire")
 	}
+	// each tenant has an OAuth client; tenant A's carries the sentinel
+	seedClient(t, f.DB, f.A.ID, "tsc_client_a", "ETL "+storetest.Sentinel)
+	seedClient(t, f.DB, f.B.ID, "tsc_client_b", "ETL B")
 	srv := isolationServer(t, f, f.B.ID)
 	h := srv.Handler()
 	b := f.B.IDs
 	param := regexp.MustCompile(`\{[a-z_]+\}`)
 	values := map[string]string{
+		"/api/admin/api-clients/{client_id}":        "tsc_client_b",
 		"/api/identities/{identity_id}":             fmt.Sprint(b["alice"]),
 		"/api/jml/leaver-plan/{identity_id}":        fmt.Sprint(b["alice"]),
 		"/api/identities/{identity_id}/containment": fmt.Sprint(b["alice"]),

@@ -53,9 +53,12 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, rt *route) (*
 	markAuthenticated(r.Context())
 	now := s.clock()
 	ctx := auth.WithPrincipal(r.Context(), p)
-	sid := p.SessionID.String()
-	ap := audit.Principal{Tenant: p.TenantID, Actor: p.AuditActor(), SessionID: &sid, Authn: p.AuditAuthn(now)}
-	if p.Via == auth.ViaDPoP {
+	ap := audit.Principal{Tenant: p.TenantID, Actor: p.AuditActor(), Authn: p.AuditAuthn(now)}
+	if p.SessionID != nil { // a machine client has no session
+		sid := p.SessionID.String()
+		ap.SessionID = &sid
+	}
+	if p.IsToken() {
 		ap.ClientID = &p.ClientID
 	}
 	ctx = audit.SetPrincipal(ctx, ap)
@@ -68,7 +71,7 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, rt *route) (*
 		}
 		// CSRF protects ambient credentials: a DPoP token is not sent by a
 		// browser on its own, and its proof is bound to the request
-		if p.Via != auth.ViaDPoP {
+		if !p.IsToken() {
 			if err := auth.CheckCSRF(r, p, s.csrfOrigins()); err != nil {
 				writeJSON(w, http.StatusForbidden, ojson.Object{{Key: "error", Value: "csrf_failed"}})
 				return r, false
@@ -106,6 +109,19 @@ func principal(r *http.Request) *auth.Principal {
 	return p
 }
 
+// userPrincipal is principal for the routes about a signed-in user's session
+// (auth.self is held by every principal, a machine client included): a
+// machine client has no user and no session, and gets 403
+// interactive_authentication_required, like a step-up route.
+func userPrincipal(r *http.Request) (*auth.Principal, error) {
+	p := principal(r)
+	if p.Kind != auth.KindUser || p.UserID == nil || p.SessionID == nil {
+		return nil, denial{&auth.Denial{Status: http.StatusForbidden, Error: "interactive_authentication_required",
+			Permission: auth.PermAuthenticated}}
+	}
+	return p, nil
+}
+
 // denial is an authorization refusal decided inside a handler (for example
 // a revoke with dry_run=false). writeError renders it.
 type denial struct{ d *auth.Denial }
@@ -136,7 +152,10 @@ func roleNames(rs []auth.Role) []string {
 // (active and inactive with the reason), the authentication summary, the
 // CSRF token and the session's expiry.
 func (s *Server) authSession(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
-	p := principal(r)
+	p, err := userPrincipal(r)
+	if err != nil {
+		return nil, err
+	}
 	tx := store.TxFrom(r.Context())
 	u, err := tx.PlatformUser(*p.UserID)
 	if err != nil {
@@ -187,7 +206,10 @@ func (s *Server) authSession(_ http.ResponseWriter, r *http.Request, _ *params) 
 // authLogout is POST /api/auth/logout: it revokes the current session and
 // clears the cookie.
 func (s *Server) authLogout(w http.ResponseWriter, r *http.Request, _ *params) (any, error) {
-	p := principal(r)
+	p, err := userPrincipal(r)
+	if err != nil {
+		return nil, err
+	}
 	tx := store.TxFrom(r.Context())
 	now := s.clock()
 	if err := auth.RevokeSession(tx, *p.SessionID, auth.RevokedLogout, now); err != nil {
@@ -203,7 +225,10 @@ func (s *Server) authLogout(w http.ResponseWriter, r *http.Request, _ *params) (
 
 // authSessions is GET /api/auth/sessions: the caller's own sessions.
 func (s *Server) authSessions(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
-	p := principal(r)
+	p, err := userPrincipal(r)
+	if err != nil {
+		return nil, err
+	}
 	ss, err := store.TxFrom(r.Context()).SessionsForUser(*p.UserID)
 	if err != nil {
 		return nil, err
@@ -229,7 +254,10 @@ func (s *Server) authSessions(_ http.ResponseWriter, r *http.Request, _ *params)
 // own session, or (admin.sessions.revoke with STEP_UP_ADMIN) another user's
 // in the same tenant. Any other session id is 404, like a missing one.
 func (s *Server) authRevokeSession(w http.ResponseWriter, r *http.Request, p *params) (any, error) {
-	pr := principal(r)
+	pr, err := userPrincipal(r)
+	if err != nil {
+		return nil, err
+	}
 	id, err := uuid.Parse(p.path["session_id"])
 	if err != nil {
 		return nil, errStatus(http.StatusNotFound, "Not Found")

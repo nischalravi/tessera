@@ -210,6 +210,7 @@ func New(cfg Config) *Server {
 	s.registerOAuth2Routes()
 	s.registerStepUpRoutes()
 	s.registerOAuthRoutes()
+	s.registerAdminRoutes()
 	s.checkPublicRoutes()
 	return s
 }
@@ -547,9 +548,12 @@ func (s *Server) attribute(r *http.Request) {
 		audit.SetAnonymous(r.Context(), reason)
 	default:
 		markAuthenticated(r.Context())
-		sid := p.SessionID.String()
-		audit.SetPrincipal(r.Context(), audit.Principal{Tenant: p.TenantID, Actor: p.AuditActor(), SessionID: &sid,
-			Authn: p.AuditAuthn(s.clock())})
+		ap := audit.Principal{Tenant: p.TenantID, Actor: p.AuditActor(), Authn: p.AuditAuthn(s.clock())}
+		if p.SessionID != nil { // a machine client has no session
+			sid := p.SessionID.String()
+			ap.SessionID = &sid
+		}
+		audit.SetPrincipal(r.Context(), ap)
 	}
 }
 

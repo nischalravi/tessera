@@ -65,6 +65,15 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request, slug string) {
 	}
 	grant, ok1 := formValue(r, "grant_type")
 	clientID, ok2 := formValue(r, "client_id")
+	if clientID == "" && grant == GrantClientCredentials {
+		// RFC 7523 §3: client_id may be omitted when the assertion names the
+		// client; it is only a lookup key until the assertion is verified
+		if raw, ok := formValue(r, "client_assertion"); ok {
+			if a, err := ParseClientAssertion(raw); err == nil {
+				clientID = a.UnverifiedIssuer()
+			}
+		}
+	}
 	if !ok1 || !ok2 || grant == "" || len(grant) > 128 || clientID == "" || len(clientID) > 64 {
 		oauthError(w, http.StatusBadRequest, "invalid_request", "grant_type and client_id are required and must not repeat")
 		return
@@ -83,37 +92,51 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request, slug string) {
 		serverError(w, s.cfg.Log, r, err)
 		return
 	}
-	// from here on the events are the client's
-	ctx = audit.SetPrincipal(ctx, audit.Principal{Tenant: t.ID, ClientID: &client.ClientID,
-		Actor: store.AuditActor{Type: store.ActorAPIClient, ID: &client.ClientID, Display: &client.Name}})
-	r = r.WithContext(ctx)
+	// the first-party CLI is a public client: its events are its own from here
+	// on. A machine client's are anonymous until its assertion is verified.
+	asClient := audit.Principal{Tenant: t.ID, ClientID: &client.ClientID,
+		Actor: store.AuditActor{Type: store.ActorAPIClient, ID: &client.ClientID, Display: &client.Name}}
+	if client.Kind == store.ClientFirstPartyCLI {
+		ctx = audit.SetPrincipal(ctx, asClient)
+		r = r.WithContext(ctx)
+	}
 	switch grant {
-	case GrantDeviceCode, GrantRefresh:
+	case GrantDeviceCode, GrantRefresh, GrantClientCredentials:
 	default:
-		oauthError(w, http.StatusBadRequest, "unsupported_grant_type", "this server supports the device code and refresh token grants")
+		oauthError(w, http.StatusBadRequest, "unsupported_grant_type",
+			"this server supports the device code, refresh token and client credentials grants")
 		return
 	}
-	if !slices.Contains(client.GrantTypes, grant) || client.Kind != store.ClientFirstPartyCLI {
+	// device and refresh tokens are the CLI's; client credentials are a machine client's
+	machine := grant == GrantClientCredentials
+	if !slices.Contains(client.GrantTypes, grant) || machine != (client.Kind == store.ClientMachine) {
 		oauthError(w, http.StatusBadRequest, "unauthorized_client", "this client may not use that grant")
 		return
 	}
 	// DPoP first (RFC 9449 §5): nothing is looked up or issued for a request
-	// whose proof is not valid for this endpoint
-	jkt, err := s.dpop.ValidateProof(ctx, r.Header, dpop.ProofParams{Method: http.MethodPost, URL: s.endpoint(slug, "token"),
-		RequireNonce: true, Now: now})
-	if err != nil {
-		var pe *dpop.ProofError
-		if !errors.As(err, &pe) {
-			serverError(w, s.cfg.Log, r, err)
+	// whose proof is not valid for this endpoint. A machine client configured
+	// without DPoP may omit the proof, and then gets an unbound token; a proof
+	// it does send is validated and binds the token.
+	var jkt string
+	if !machine || client.DPoPRequired || len(r.Header.Values("DPoP")) > 0 {
+		jkt, err = s.dpop.ValidateProof(ctx, r.Header, dpop.ProofParams{Method: http.MethodPost, URL: s.endpoint(slug, "token"),
+			RequireNonce: true, Now: now})
+		if err != nil {
+			var pe *dpop.ProofError
+			if !errors.As(err, &pe) {
+				serverError(w, s.cfg.Log, r, err)
+				return
+			}
+			s.dpopRefused(w, r, t.ID, pe)
 			return
 		}
-		s.dpopRefused(w, r, t.ID, pe)
-		return
 	}
 	var res *tokenResult
 	switch grant {
 	case GrantDeviceCode:
 		res, err = s.deviceCodeGrant(r, t, client, jkt)
+	case GrantClientCredentials:
+		res, err = s.clientCredentialsGrant(r, t, client, jkt, asClient)
 	default:
 		res, err = s.refreshGrant(r, t, client, jkt)
 	}
@@ -469,4 +492,117 @@ func (s *Service) Revoke(w http.ResponseWriter, r *http.Request, slug string) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
+}
+
+// ---------------------------------------------------------------- client_credentials
+
+// maxScopeParam bounds the scope parameter.
+const maxScopeParam = 512
+
+// clientCredentialsGrant is RFC 6749 §4.4 with private_key_jwt client
+// authentication (RFC 7523, design §9.5). The client proves itself with a
+// signed assertion (clientauth.go) and gets an access token of at most
+// AccessTokenTTL, no refresh token, with the scopes it asked for out of the
+// ones registered for it (all of them when it asks for none). The token names
+// the client, never a user or a session; what it can do is the client's
+// configured roles intersected with these scopes, read on every request
+// (auth.authenticateMachine). When the client requires DPoP the token is bound
+// to the proof's key (jkt); otherwise it is a Bearer token, unless a proof was
+// sent.
+func (s *Service) clientCredentialsGrant(r *http.Request, t store.Tenant, client *store.APIClient, jkt string,
+	asClient audit.Principal) (*tokenResult, error) {
+	now := s.now()
+	scopeParam, ok := formValue(r, "scope")
+	if !ok || len(scopeParam) > maxScopeParam {
+		return fail("invalid_request", "scope must appear once and be short"), nil
+	}
+	params, msg := readClientAuth(r)
+	if msg != "" {
+		return fail("invalid_request", msg), nil
+	}
+	if params.clientID != "" && params.clientID != client.ClientID {
+		return clientAuthFailed(), nil
+	}
+	reason, err := s.authenticateClient(r, t.ID, client, params.assertion, s.endpoint(t.Slug, "token"), now)
+	if err != nil {
+		return nil, err
+	}
+	if reason != "" {
+		return s.clientAuthRefused(r, t, client, "token", reason, now)
+	}
+	// authenticated: from here the events are the client's
+	ctx := audit.SetPrincipal(r.Context(), asClient)
+	scope, ok := grantedScope(scopeParam, client.AllowedScopes)
+	var res *tokenResult
+	err = s.db.InTenant(ctx, t.ID, func(tx *store.TenantTx) error {
+		if !ok {
+			res = fail("invalid_scope", "a scope is not registered for this client")
+			_, err := audit.Record(ctx, tx, "oauth.token.refused", ojson.Object{{Key: "grant", Value: GrantClientCredentials},
+				{Key: "client_id", Value: client.ClientID}, {Key: "reason", Value: "invalid_scope"}},
+				audit.At(now), audit.Outcome(store.OutcomeDenied), audit.Target("api_client", client.ID.String()))
+			return err
+		}
+		at, ttl, err := s.mintAccessToken(mintInput{Slug: t.Slug, Machine: true, ClientRowID: client.ID, ClientID: client.ClientID,
+			Scope: scope, JKT: jkt, Now: now, SigningTx: tx})
+		if err != nil {
+			return err
+		}
+		if err := tx.TouchAPIClient(client.ClientID, now); err != nil {
+			return err
+		}
+		if _, err := audit.Record(ctx, tx, "oauth.token.issued", ojson.Object{{Key: "grant", Value: GrantClientCredentials},
+			{Key: "client_id", Value: client.ClientID}, {Key: "jkt", Value: jkt}, {Key: "scope", Value: scope},
+			{Key: "dpop_bound", Value: jkt != ""}}, audit.At(now), audit.Target("api_client", client.ID.String())); err != nil {
+			return err
+		}
+		tokenType := "Bearer"
+		if jkt != "" {
+			tokenType = "DPoP"
+		}
+		res = &tokenResult{body: map[string]any{"access_token": at, "token_type": tokenType,
+			"expires_in": int(ttl / time.Second), "scope": scope}}
+		return nil
+	})
+	return res, err
+}
+
+// grantedScope resolves the scope parameter against the client's registered
+// scopes: the requested ones (each must be registered), or all of them when
+// none is requested. ok is false for an unregistered scope or an empty result.
+func grantedScope(param string, allowed []string) (scope string, ok bool) {
+	var out []string
+	for _, f := range strings.Fields(param) {
+		if !slices.Contains(allowed, f) {
+			return "", false
+		}
+		if !slices.Contains(out, f) {
+			out = append(out, f)
+		}
+	}
+	if len(out) == 0 {
+		out = slices.Clone(allowed)
+	}
+	if len(out) == 0 {
+		return "", false
+	}
+	return strings.Join(out, " "), true
+}
+
+// clientAuthFailed is the invalid_client answer of a failed client
+// authentication; it says nothing about why.
+func clientAuthFailed() *tokenResult {
+	return &tokenResult{status: http.StatusUnauthorized, errMsg: "invalid_client", desc: "client authentication failed"}
+}
+
+// clientAuthRefused records oauth.client_auth.failed (the reason is for the
+// operator, in the audit log only) and answers invalid_client.
+func (s *Service) clientAuthRefused(r *http.Request, t store.Tenant, client *store.APIClient, endpoint, reason string,
+	now time.Time) (*tokenResult, error) {
+	err := s.db.InTenant(r.Context(), t.ID, func(tx *store.TenantTx) error {
+		_, err := audit.Record(r.Context(), tx, "oauth.client_auth.failed", ojson.Object{{Key: "client_id", Value: client.ClientID},
+			{Key: "endpoint", Value: endpoint}, {Key: "reason", Value: reason}},
+			audit.At(now), audit.Outcome(store.OutcomeFailure), audit.Target("api_client", client.ID.String()))
+		return err
+	})
+	return clientAuthFailed(), err
 }

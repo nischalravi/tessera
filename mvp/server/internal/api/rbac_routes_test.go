@@ -117,6 +117,9 @@ GET    /.well-known/oauth-protected-resource         public
 POST   /t/{slug}/oauth/device_authorization          public
 POST   /t/{slug}/oauth/token                         public
 POST   /t/{slug}/oauth/revoke                        public
+POST   /t/{slug}/oauth/introspect                    public
+GET    /api/admin/api-clients                        admin.read      -  # issue #15
+GET    /api/admin/api-clients/{client_id}            admin.read      -  # issue #15
 POST   /api/auth/device/lookup                       auth.self       -  # issue #14
 POST   /api/auth/device/approve                      auth.self       STEP_UP_ADMIN  # issue #14: max_age 300 s
 `

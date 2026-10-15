@@ -17,7 +17,14 @@ import (
 const (
 	ViaCookie = "cookie"
 	ViaDPoP   = "dpop" // PR10
+	// ViaBearer is a machine client's unbound token (a client not configured
+	// for DPoP, §9.5).
+	ViaBearer = "bearer"
 )
+
+// IsToken reports whether the principal authenticated with an access token
+// (not a cookie): no CSRF check applies, and its events carry the client id.
+func (p *Principal) IsToken() bool { return p.Via == ViaDPoP || p.Via == ViaBearer }
 
 // Reasons an authentication failed (recorded as the anonymous_reason of the
 // request's http.request event; the client only sees 401 login_required).
@@ -28,6 +35,7 @@ const (
 	FailRevoked        = "session_revoked"
 	FailUserDisabled   = "user_disabled"
 	FailTenantInactive = "tenant_inactive"
+	FailClientDisabled = "client_disabled"
 )
 
 // Authenticator resolves the session cookie of a request to a Principal
@@ -236,6 +244,9 @@ func (a *Authenticator) authenticateToken(r *http.Request) (*Principal, *Failure
 	}
 	if vt.Tenant.Status != "active" || vt.Tenant.ID == tenancy.Platform {
 		return nil, &Failure{Reason: FailTenantInactive, Challenge: `DPoP error="invalid_token"`}, nil
+	}
+	if vt.Machine {
+		return a.authenticateMachine(r, vt)
 	}
 	now := a.Clock().UTC()
 	var p *Principal
