@@ -1,5 +1,6 @@
 import { ReactNode, createContext, useCallback, useContext, useRef, useState } from "react";
 import { CircleAlert, CircleCheck, Info, X } from "lucide-react";
+import { STEP_UP_MESSAGE } from "../api";
 
 type Kind = "ok" | "error" | "info";
 interface ToastItem { id: number; kind: Kind; text: ReactNode; action?: { label: string; run: () => void } }
@@ -13,6 +14,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const seq = useRef(0);
   const dismiss = (id: number) => setItems((xs) => xs.filter((x) => x.id !== id));
   const toast = useCallback<ToastFn>((text, opts) => {
+    if (text === STEP_UP_MESSAGE) return; // the step-up dialog (app/auth.tsx) says this
     const id = ++seq.current;
     const kind = opts?.kind ?? "ok";
     setItems((xs) => [...xs.slice(-3), { id, kind, text, action: opts?.action }]);

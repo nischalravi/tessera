@@ -14,9 +14,11 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/usage"
 )
 
-// AddEdge is a hypothetical new grant.
+// AddEdge is a hypothetical new grant. A non-nil ExpiresAt makes it a
+// time-boxed JIT grant, which never counts as standing access.
 type AddEdge struct {
 	Src, Dst, Relation string
+	ExpiresAt          *time.Time
 }
 
 // Request lists the hypothetical changes.
@@ -130,7 +132,11 @@ func Run(c *store.TenantTx, req Request, in Inputs) (*Result, error) {
 		if rel == "" {
 			rel = "member_of"
 		}
-		if err := after.AddEdge(e.Src, e.Dst, rel, "simulated", nil); err != nil {
+		source := "simulated"
+		if e.ExpiresAt != nil {
+			source = "jit" // time-boxed: the graph and policies treat it as non-standing
+		}
+		if err := after.AddEdge(e.Src, e.Dst, rel, source, e.ExpiresAt); err != nil {
 			return nil, err
 		}
 		applied = append(applied, ojson.Object{{Key: "op", Value: "add"}, {Key: "edge", Value: []string{e.Src, e.Dst}},

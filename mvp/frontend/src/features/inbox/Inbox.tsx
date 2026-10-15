@@ -32,7 +32,7 @@ export function itemTitle(it: InboxItem): { icon: ReactNode; title: string; meta
     }
     case "task": {
       const e = it.event;
-      const who = e.identity?.name ?? e.payload.name;
+      const who = e.identity?.name ?? e.payload.name ?? "unknown identity";
       return { icon: <ListChecks size={15} />, title: `${e.type[0].toUpperCase() + e.type.slice(1)}: ${who}`, meta: <>HRIS event {e.external_id} · effective {fmtDate(e.effective_at)}</>, tone: e.type === "leaver" ? "critical" : "neutral", kindLabel: KIND_LABEL.task };
     }
     case "connection":
@@ -50,13 +50,14 @@ function JitDetail({ r }: { r: JitRequest }) {
   useEffect(() => {
     if (!acct) return;
     let alive = true;
-    simulate({ add_edges: [{ src: `account:${acct.id}`, dst: `group:${r.group.id}` }] })
+    // A JIT grant is time-boxed: duration_hours makes the simulated edge non-standing, as it is once approved.
+    simulate({ add_edges: [{ src: `account:${acct.id}`, dst: `group:${r.group.id}`, duration_hours: r.duration_hours }] })
       .then((x) => alive && setSim(x))
       .catch((e) => alive && setSimErr(e.message));
     return () => {
       alive = false;
     };
-  }, [acct?.id, r.group.id]);
+  }, [acct?.id, r.group.id, r.duration_hours]);
   const prior = (all ?? []).filter((x) => x.identity.id === r.identity.id && x.group.id === r.group.id && x.id !== r.id);
   return (
     <div className="stack">

@@ -28,6 +28,7 @@ type authRows struct {
 	ctx     *store.AuthnContextRecord
 	session *store.Session
 	txn     *store.LoginTransaction
+	inv     *store.BootstrapInvitation
 	hash    string
 }
 
@@ -78,8 +79,13 @@ func seedAuthRows(t *testing.T, db *store.DB, tid tenancy.ID, tag byte) authRows
 		if err := c.InsertSession(r.session); err != nil {
 			return err
 		}
-		r.txn = &store.LoginTransaction{CookieHash: hexHash(tag + 1), IdPConnectionID: r.conn.ID, Purpose: "login",
-			CreatedAt: now, ExpiresAt: now.Add(10 * time.Minute)}
+		r.inv = &store.BootstrapInvitation{CodeHash: hexHash(tag + 2), IdPConnectionID: r.conn.ID, Email: email,
+			CreatedBy: "op", CreatedAt: now, ExpiresAt: now.Add(24 * time.Hour)}
+		if err := c.InsertBootstrapInvitation(r.inv); err != nil {
+			return err
+		}
+		r.txn = &store.LoginTransaction{CookieHash: hexHash(tag + 1), IdPConnectionID: r.conn.ID, Purpose: "bootstrap",
+			BootstrapInvitationID: &r.inv.ID, CreatedAt: now, ExpiresAt: now.Add(10 * time.Minute)}
 		return c.InsertLoginTransaction(r.txn)
 	})
 	if err != nil {
@@ -111,6 +117,9 @@ var authMutations = map[string]func(c *store.TenantTx, a authRows) error{
 	"ConsumeLoginTransaction": func(c *store.TenantTx, a authRows) error {
 		return c.ConsumeLoginTransaction(a.txn.ID, storetest.Now)
 	},
+	"ConsumeBootstrapInvitation": func(c *store.TenantTx, a authRows) error {
+		return c.ConsumeBootstrapInvitation(a.inv.ID, a.user.ID, storetest.Now)
+	},
 }
 
 func TestIsolation_AuthRows(t *testing.T) {
@@ -128,11 +137,16 @@ func TestIsolation_AuthRows(t *testing.T) {
 			t.Errorf("CountIdPConnectionsByProfile in B = %d %v, want 1", n, err)
 		}
 		for name, get := range map[string]func() error{
-			"IdPConnection":    func() error { _, err := c.IdPConnection(a.conn.ID); return err },
-			"PlatformUser":     func() error { _, err := c.PlatformUser(a.user.ID); return err },
-			"AuthnContext":     func() error { _, err := c.AuthnContext(a.ctx.ID); return err },
-			"Session":          func() error { _, err := c.Session(a.session.ID); return err },
-			"LoginTransaction": func() error { _, err := c.LoginTransaction(a.txn.ID); return err },
+			"IdPConnection":       func() error { _, err := c.IdPConnection(a.conn.ID); return err },
+			"PlatformUser":        func() error { _, err := c.PlatformUser(a.user.ID); return err },
+			"AuthnContext":        func() error { _, err := c.AuthnContext(a.ctx.ID); return err },
+			"Session":             func() error { _, err := c.Session(a.session.ID); return err },
+			"LoginTransaction":    func() error { _, err := c.LoginTransaction(a.txn.ID); return err },
+			"BootstrapInvitation": func() error { _, err := c.BootstrapInvitation(a.inv.ID); return err },
+			"BootstrapInvitationByCodeHash": func() error {
+				_, err := c.BootstrapInvitationByCodeHash(a.inv.CodeHash)
+				return err
+			},
 			"ExternalLoginBySubject": func() error {
 				_, err := c.ExternalLoginBySubject(a.conn.ID, a.login.Subject)
 				return err
@@ -182,8 +196,11 @@ func TestIsolation_AuthRows(t *testing.T) {
 			t.Errorf("A's role changed: %v %v", rs, err)
 		}
 		x, err := c.LoginTransaction(a.txn.ID)
-		if err != nil || x.ConsumedAt != nil {
-			t.Errorf("A's login transaction consumed: %v", err)
+		if err != nil || x.ConsumedAt != nil || x.BootstrapInvitationID == nil || *x.BootstrapInvitationID != a.inv.ID {
+			t.Errorf("A's login transaction consumed or changed: %+v %v", x, err)
+		}
+		if inv, err := c.BootstrapInvitation(a.inv.ID); err != nil || inv.ConsumedAt != nil {
+			t.Errorf("A's invitation consumed: %+v %v", inv, err)
 		}
 		return nil
 	})
@@ -241,6 +258,21 @@ func TestIsolation_AuthInsertsRefused(t *testing.T) {
 		"InsertLoginTransaction/references A's connection": func(c *store.TenantTx) error {
 			return c.InsertLoginTransaction(&store.LoginTransaction{CookieHash: hexHash('s'), IdPConnectionID: a.conn.ID,
 				Purpose: "login", CreatedAt: now, ExpiresAt: now})
+		},
+		"InsertBootstrapInvitation/references A's connection": func(c *store.TenantTx) error {
+			return c.InsertBootstrapInvitation(&store.BootstrapInvitation{CodeHash: hexHash('w'), IdPConnectionID: a.conn.ID,
+				Email: "x@b.example", CreatedBy: "op", CreatedAt: now, ExpiresAt: now.Add(time.Hour)})
+		},
+		"InsertBootstrapInvitation/stamped": func(c *store.TenantTx) error {
+			return c.InsertBootstrapInvitation(&store.BootstrapInvitation{TenantID: f.A.ID, CodeHash: hexHash('x'),
+				IdPConnectionID: b.conn.ID, Email: "x@b.example", CreatedBy: "op", CreatedAt: now, ExpiresAt: now.Add(time.Hour)})
+		},
+		"InsertLoginTransaction/references A's invitation": func(c *store.TenantTx) error {
+			return c.InsertLoginTransaction(&store.LoginTransaction{CookieHash: hexHash('y'), IdPConnectionID: b.conn.ID,
+				Purpose: "bootstrap", BootstrapInvitationID: &a.inv.ID, CreatedAt: now, ExpiresAt: now})
+		},
+		"ConsumeBootstrapInvitation/by A's user": func(c *store.TenantTx) error {
+			return c.ConsumeBootstrapInvitation(b.inv.ID, a.user.ID, now)
 		},
 		"SaveRequest/decided by A's user": func(c *store.TenantTx) error {
 			r, err := c.Request(f.B.IDs["request:pending"])
@@ -375,8 +407,35 @@ func authCovered() map[string]bool {
 	for _, k := range []string{"IdPConnections", "PlatformUsers", "CountIdPConnectionsByProfile", "IdPConnection",
 		"PlatformUser", "AuthnContext", "Session", "LoginTransaction", "ExternalLoginBySubject", "SessionsForUser",
 		"RoleAssignments", "ExternalLoginsForUser", "RevokeUserSessions", "InsertIdPConnection", "InsertPlatformUser",
-		"InsertExternalLogin", "InsertRoleAssignment", "InsertAuthnContext", "InsertSession", "InsertLoginTransaction"} {
+		"InsertExternalLogin", "InsertRoleAssignment", "InsertAuthnContext", "InsertSession", "InsertLoginTransaction",
+		"BootstrapInvitation", "BootstrapInvitationByCodeHash", "InsertBootstrapInvitation"} {
 		out[k] = true // TestIsolation_AuthRows, TestIsolation_AuthInsertsRefused
 	}
 	return out
+}
+
+// TestBootstrapInvitationSingleUse: an invitation is consumed once, never
+// after it expires, and the code is stored only as its hash.
+func TestBootstrapInvitationSingleUse(t *testing.T) {
+	f, a, _ := authFixture(t)
+	now := storetest.Now
+	err := f.DB.InTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
+		if err := c.ConsumeBootstrapInvitation(a.inv.ID, a.user.ID, now.Add(25*time.Hour)); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("consume after expiry: %v", err)
+		}
+		if err := c.ConsumeBootstrapInvitation(a.inv.ID, a.user.ID, now); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.ConsumeBootstrapInvitation(a.inv.ID, a.user.ID, now); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("second consume: %v", err)
+		}
+		got, err := c.BootstrapInvitationByCodeHash(a.inv.CodeHash)
+		if err != nil || got.ConsumedAt == nil || got.ConsumedByUserID == nil || *got.ConsumedByUserID != a.user.ID {
+			t.Errorf("after consume: %+v %v", got, err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 }
