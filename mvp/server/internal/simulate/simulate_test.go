@@ -3,6 +3,7 @@ package simulate_test
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/simulate"
@@ -58,6 +59,20 @@ func simulation(t *testing.T, c *store.TenantTx, ids testkit.IDs) {
 		in := out.Violations.Introduced
 		if len(in) != 1 || in[0].PolicyID != "no-standing-prod-admin" || *in[0].IdentityID != ids["alice"] {
 			t.Errorf("introduced = %+v", in)
+		}
+		if out.Summary.PermissionsAdded != 1 {
+			t.Errorf("permissions_added = %d", out.Summary.PermissionsAdded)
+		}
+	})
+
+	t.Run("time-boxed JIT grant does not introduce a standing-admin violation", func(t *testing.T) {
+		exp := testkit.Now.Add(4 * time.Hour)
+		out, err := run(simulate.Request{AddEdges: []simulate.AddEdge{{Src: acct("okta:alice"), Dst: grp("okta:platform"), ExpiresAt: &exp}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := len(out.Violations.Introduced); n != 0 {
+			t.Errorf("introduced = %+v; a JIT grant must not count as standing access", out.Violations.Introduced)
 		}
 		if out.Summary.PermissionsAdded != 1 {
 			t.Errorf("permissions_added = %d", out.Summary.PermissionsAdded)
