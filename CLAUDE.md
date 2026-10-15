@@ -11,7 +11,7 @@ Layout: `mvp/server` (Go API, SQLite), `mvp/frontend` (React + TypeScript + Vite
 - `./run.sh test` is `go vet` + the Go suite. `./run.sh build` builds the server and type-checks/builds the UI.
 - `./run.sh bench` runs benchmarks and end-to-end latency. `./run.sh audit-deps` runs govulncheck.
 - Other dev and Test instances are often running on this machine (for example dev on 8200/5210/8001, Test on 8300/5300/8301). Pick free ports (8400+) for anything you start, and stop **only the processes you started**, by PID or Ctrl-C. Never use broad kills such as `pkill -f run.sh`, `pkill tessera` or `killall node`; they take down the founder's instances.
-- Sign-in: every API route needs a session (Phase 0 PR5); the tenant comes from it. `GET /api/auth/login?tenant=larkspur` signs in through the tenant's OIDC IdP (PR6); with `TESSERA_ENV=dev` the UI's dev sign-in (`/api/auth/dev-login`) still works until PR7. The dev IdP (`internal/devidp`, `cmd/tessera-devidp`) is an OIDC issuer: client `tessera-dev`, users in `internal/devidp/users.yaml` (Alice, Ivan, Pat, Olu, Vic in larkspur; Gina in globex). See `mvp/README.md` "Dev sign-in". The API must never import the dev IdP (tested).
+- Sign-in: every API route needs a session (Phase 0 PR5); the tenant comes from it. Users sign in through the tenant's OIDC IdP (`/api/auth/login?tenant=larkspur`, PR6; the UI's sign-in page, PR7). The dev IdP (`internal/devidp`, `cmd/tessera-devidp`) is an OIDC issuer: client `tessera-dev`, users in `internal/devidp/users.yaml` (Alice, Ivan, Pat, Olu, Vic in larkspur; Gina in globex). See `mvp/README.md` "Signing in". The API must never import the dev IdP (tested).
 
 ## Backend rules (`mvp/server`)
 

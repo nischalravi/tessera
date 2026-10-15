@@ -20,6 +20,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/auth/oauth2rp"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oidcrp"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
@@ -90,11 +91,8 @@ type Config struct {
 	// embedded templates and Env).
 	Readiness *readiness.Service
 	// Env is TESSERA_ENV: "dev" allows activating non-demo connector types,
-	// and "dev" exposes /api/auth/dev-login (§18.4).
+	// and is otherwise informational.
 	Env string
-	// DevLogin is TESSERA_DEV_LOGIN: with Env "test", the explicit opt-in
-	// that exposes /api/auth/dev-login, to loopback peers only.
-	DevLogin bool
 	// ReadinessScenario selects the simulated validation scenario
 	// (TESSERA_READINESS_SCENARIO; default "gaps").
 	ReadinessScenario string
@@ -170,6 +168,7 @@ type Server struct {
 	regLim *registerLimits
 	names  nameCache
 	rp     *oidcrp.RP
+	oauth2 *oauth2rp.RP
 
 	readiness *readiness.Service
 	prov      *provision.Engine
@@ -255,6 +254,9 @@ func New(cfg Config) *Server {
 			panic(err) // HTTP and Now are set
 		}
 		s.rp = rp
+		if s.oauth2, err = oauth2rp.New(cfg.OutboundHTTP); err != nil {
+			panic(err) // HTTP is set
+		}
 	}
 	s.prov = &provision.Engine{DB: cfg.Store, Sealer: cfg.Sealer, HTTP: provHTTP,
 		Clock: func() time.Time { return s.clock() }, Log: cfg.Logger.With("component", "provisioning")}
@@ -281,6 +283,9 @@ func New(cfg Config) *Server {
 	s.registerProvisioningRoutes()
 	s.registerAuthRoutes()
 	s.registerLoginRoutes()
+	s.registerSAMLRoutes()
+	s.registerOAuth2Routes()
+	s.registerStepUpRoutes()
 	s.checkPublicRoutes()
 	return s
 }

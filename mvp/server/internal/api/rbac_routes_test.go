@@ -193,12 +193,16 @@ GET    /api/provisioning/findings                    provisioning.read   -
 GET    /api/auth/session                             auth.self       -
 POST   /api/auth/logout                              auth.self       -
 GET    /api/auth/sessions                            auth.self       -
+GET    /api/auth/step-up                             auth.self       -
 DELETE /api/auth/sessions/{session_id}               auth.self       -  (another user's: admin.sessions.revoke + STEP_UP_ADMIN in the handler)
 GET    /api/auth/discover                            public
 GET    /api/auth/login                               public
 GET    /api/auth/oidc/{connection_id}/callback       public
+GET    /api/auth/saml/{connection_id}/metadata       public
+POST   /api/auth/saml/{connection_id}/acs            public
+GET    /api/auth/oauth2/{connection_id}/callback     public
 GET    /t/{slug}/bootstrap                           public
-POST   /public/t/{slug}/claim/start                  public  # issue #69: the guest's claim, by link token, cookie and key proof
+POST   /public/t/{slug}/claim/start                 public  # issue #69: the guest's claim, by link token, cookie and key proof
 POST   /public/t/{slug}/claim/verify/send            public
 POST   /public/t/{slug}/claim/verify/check           public
 GET    /public/t/{slug}/claim/status                 public
@@ -206,10 +210,8 @@ POST   /public/t/{slug}/claim/existing-account       public
 POST   /public/t/{slug}/claim/credential             public
 POST   /public/t/{slug}/claim/resend                 public
 POST   /public/t/{slug}/guest/renewal-request        public  # issue #74: the guest's "request renewal" link, always 202
-GET    /public/t/{slug}/register/sponsors            public  # issue #66: sponsor names (no emails), at least 2 letters, rate-limited
+GET    /public/t/{slug}/register/sponsors           public  # issue #66: sponsor names (no emails), at least 2 letters, rate-limited
 POST   /public/t/{slug}/register                     public  # issue #66: self-registration, bot challenge, 5 per IP per hour, always 202
-GET    /api/auth/dev-login                           public
-POST   /api/auth/dev-login                           public
 `
 
 type designRoute struct {

@@ -44,9 +44,10 @@ func Start(tb testing.TB, cfg devidp.Config) *IdP {
 	cfg.Faults = true
 	if len(cfg.Clients) == 0 {
 		cfg.Clients = []devidp.Client{{
-			ID:           ClientID,
-			Secret:       ClientSecret,
-			RedirectURIs: []string{"http://127.0.0.1:*/callback", "http://127.0.0.1:*/api/auth/oidc/*/callback"},
+			ID:     ClientID,
+			Secret: ClientSecret,
+			RedirectURIs: []string{"http://127.0.0.1:*/callback", "http://127.0.0.1:*/api/auth/oidc/*/callback",
+				"http://127.0.0.1:*/api/auth/oauth2/*/callback"},
 		}}
 	}
 	srv, err := devidp.New(cfg)
@@ -127,4 +128,66 @@ func location(tb testing.TB, resp *http.Response) *url.URL {
 		tb.Fatalf("dev IdP redirect without a Location: %v", err)
 	}
 	return u
+}
+
+var (
+	formActionRE = regexp.MustCompile(`<form method="post" action="([^"]+)" id="f">`)
+	hiddenRE     = regexp.MustCompile(`<input type="hidden" name="(SAMLResponse|RelayState)" value="([^"]*)">`)
+)
+
+// SAMLPost is the dev IdP's auto-POST to an ACS.
+type SAMLPost struct {
+	ACS          string
+	SAMLResponse string
+	RelayState   string
+}
+
+// AuthorizeSAML opens a SAML Redirect-binding SSO URL and, when the sign-in
+// page is shown, signs in as sub with method. It returns the form the IdP
+// would auto-POST to the SP's ACS.
+func (b *Browser) AuthorizeSAML(tb testing.TB, ssoURL, sub string, m devidp.Method) SAMLPost {
+	tb.Helper()
+	resp, err := b.C.Get(ssoURL)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		tb.Fatalf("dev IdP SAML SSO: %d %s", resp.StatusCode, body)
+	}
+	if match := reqRE.FindSubmatch(body); match != nil {
+		resp, err = b.C.PostForm(b.IdP.URL+"/saml/sso", url.Values{"req": {html.UnescapeString(string(match[1]))},
+			"choice": {sub + " " + string(m)}})
+		if err != nil {
+			tb.Fatal(err)
+		}
+		body, _ = io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			tb.Fatalf("dev IdP SAML sign-in: %d %s", resp.StatusCode, body)
+		}
+	}
+	return parseSAMLPost(tb, body)
+}
+
+func parseSAMLPost(tb testing.TB, body []byte) SAMLPost {
+	tb.Helper()
+	a := formActionRE.FindSubmatch(body)
+	if a == nil {
+		tb.Fatalf("no SAML POST form in:\n%s", body)
+	}
+	p := SAMLPost{ACS: html.UnescapeString(string(a[1]))}
+	for _, m := range hiddenRE.FindAllSubmatch(body, -1) {
+		v := html.UnescapeString(string(m[2]))
+		if string(m[1]) == "SAMLResponse" {
+			p.SAMLResponse = v
+		} else {
+			p.RelayState = v
+		}
+	}
+	if p.SAMLResponse == "" {
+		tb.Fatalf("no SAMLResponse in:\n%s", body)
+	}
+	return p
 }
