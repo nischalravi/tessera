@@ -696,6 +696,10 @@ OpenAPI document). Deliberate differences:
 * `violations.resolved` / `violations.introduced` in simulate and revoke responses are sorted by
   `key` (Python's order depended on the hash seed).
 * `POST /api/hris/events` returns `422` for an `identity_id` that does not exist; `GET .../plan` returns `409` (not `500`) for a stored event whose identity is gone.
+* A joiner whose email (case-insensitive, trimmed) or `payload.employee_id` (the HR id, stored as the identity's external id) matches an
+  *active* identity is refused with `409 {"error":"identity_exists","existing_identity_id":N,"matched_on":"email|hr_id"}`, at
+  `POST /api/hris/events` and, authoritatively, at `POST .../execute` (the event stays pending; the refusal is audited as
+  `jml.joiner.refused`). A terminated identity does not match, so a rehire joins as a new identity.
 * A connector sync never undoes Tessera-side decisions: terminated identities, disabled accounts, executed HRIS events and
   grants revoked by a leaver plan, access review or least-privilege revoke (tombstones in `revoked_grants`) stay as they are.
 * `add_edges[].duration_hours` simulates a time-boxed JIT grant, which never counts as standing access.
