@@ -168,11 +168,58 @@ The routes are documented at `/api/readiness/openapi.json`.
 `GET /api/correlation/queue` · `GET /api/correlation/decisions` ·
 `POST /api/accounts/{id}/link {identity_id, reason}` · `POST /api/accounts/{id}/not-person {reason}` ·
 `DELETE /api/accounts/{id}/link` · `POST /api/identities/{id}/merge {into, reason}` ·
-`GET /api/identity-merges` · `POST /api/identity-merges/{id}/unmerge {reason}`
+`GET /api/identity-merges` · `POST /api/identity-merges/{id}/unmerge {reason}` ·
+`GET /api/admin/users` · `POST /api/admin/users/{id}/disable {reason}` · `GET /api/admin/idp-connections` ·
+`POST /api/admin/idp-connections/{id}/activate` · `GET|POST /api/admin/change-requests` ·
+`GET /api/admin/change-requests/{id}` · `POST /api/admin/change-requests/{id}/approve|reject|cancel|apply` ·
+`GET /api/admin/notifications` · `GET /api/admin/recovery` · `POST /api/admin/recovery/{id}/cancel` ·
+`GET /api/admin/api-clients` (see "Admin changes")
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
 or HRIS execution is always the signed-in user.
+
+### Admin changes, notifications and operator recovery
+
+Changes that widen trust or privilege go through **change requests** (design §15, issue #16;
+`internal/admin`, routes in `internal/api/admin_routes.go`, UI under Settings → Admin: Users,
+Authentication, Change requests, API clients, and a banner on every page while a change is pending).
+
+| `type` | Who approves | Waits | Applies |
+|---|---|---|---|
+| `role.grant` of `policy_admin` or `tenant_admin` | a different `tenant_admin` | 24 h | adds the role, ends the target's sessions |
+| `role.grant` of viewer, operator, auditor | one admin | none | at once |
+| `role.revoke` of another user's admin role | a different admin | none | at once, never below the tenant's `min_admins` |
+| `role.revoke` of a non-admin role, or your own | one admin | none | at once |
+| `idp_connection.create` | a different admin | 24 h | creates the connection `pending`; it becomes `active` after the requester's successful test login (`POST …/activate`) |
+| `idp_connection.update_trust` | a different admin | 24 h | updates it and revokes every session that came through it |
+| `idp_connection.update_cosmetic`, `.disable` | one admin | none | at once (disable ends the connection's sessions; refused for the last active connection) |
+| `tenant.settings.update` | a different admin if it **weakens** a setting | 24 h if weakening | merges the bounded settings of §18.3 and `min_admins` |
+| `tenant.security_contacts.update` | a different admin | 24 h | replaces the contacts |
+
+Every submit and approve needs `STEP_UP_ADMIN` (phishing-resistant sign-in within 5 minutes). The payload
+is decoded into a typed struct with unknown fields refused; the approver echoes its SHA-256 (`payload_hash`)
+and a mismatch is 409. States: `pending_approval` → `cooling_off` → `applied`, or `rejected`, `cancelled`,
+`expired` (72 h without approval) or `failed` (the applier raised; recorded with the reason). Applying before
+`effective_at` is 409; the sweeper (`RunSweeper`) applies due changes and expires old ones, using the
+injected clock. A tenant with fewer than two admins can grant `tenant_admin` with one person and the 24 h;
+a change that needs two people is refused (`bootstrap_restricted`) until it has two. A client secret
+travels beside the payload, is sealed, and is cleared when the request ends; it never appears in the
+payload, audit, a response or a list. `api_client.*` and `breakglass.*` types arrive with the PRs that add
+their tables. Every transition writes an `admin.change.*` audit event and queues an `admin_notifications`
+row for every active tenant admin and security contact, in the same transaction (delivery is the
+notification outbox's job, issue #189; until then the rows and the banner are the notice).
+
+**Operator recovery** (all admins and break-glass keys lost, §15.5): two *different* operators run
+`tessera admin recover-tenant -tenant acme -operator <id> -co-operator <id> -ticket <ref> -connection <id>
+-email <address> -operator-phr -co-operator-phr` (the two flags attest that each signed in to the hardened
+operator host with a hardware key). The tenant moves to `status=recovery` (its admins can still sign in),
+a bootstrap invitation is created that works only after **72 hours** (`not_before`) and only with a
+phishing-resistant sign-in, and every admin and contact is told at once. Any existing admin cancels it
+under Change requests (the invitation is spent and both operators are told); redeeming it completes the
+recovery. It is audited in the tenant's chain and the platform chain.
+`tessera admin revoke-signing-key -tenant acme -kid <kid> -reason "…"` revokes one of a tenant's signing
+keys at once (a new one becomes active; audited as the operator).
 
 ### Account correlation
 
@@ -706,6 +753,10 @@ OpenAPI document). Deliberate differences:
 * No authentication or RBAC on the API or UI. Actor names on approvals and revokes are placeholders:
   the audit ledger records every request as `anonymous` and keeps the supplied name only as an
   unverified `claimed_actor`.
+* The test sign-in of a requested IdP connection (`GET /api/auth/login?connection=…&test=1`, design §15.2)
+  is not wired into the login flow yet: `admin.RecordTestLogin` records it and `POST
+  /api/admin/idp-connections/{id}/activate` requires it, but a connection created by a change request stays
+  `pending` until the login flow calls it (it needs a `test` purpose on `login_transactions`).
 * Revokes and JML plans change Tessera's graph only. Nothing is written back to source systems.
   Connectors do not have a `provision()`/`deprovision()` interface yet.
 * There is no scheduled connector sync. Seeding runs discovery once, and `POST /api/connectors/sync`

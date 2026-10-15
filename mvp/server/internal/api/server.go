@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/admin"
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oauth2rp"
@@ -121,6 +122,8 @@ type Server struct {
 	readiness *readiness.Service
 	// containment is the kill switch (issue #106); never nil.
 	containment *containment.Service
+	// admin is the admin-change workflow (design §15); never nil.
+	admin *admin.Service
 }
 
 // New builds a server.
@@ -159,6 +162,8 @@ func New(cfg Config) *Server {
 	}
 	s := &Server{cfg: cfg, containment: cfg.Containment, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
 		limits: newLimiters(cfg.RateLimits)}
+	s.admin = &admin.Service{DB: cfg.Store, Clock: func() time.Time { return s.clock() }, Sealer: cfg.Sealer,
+		Prod: cfg.Env == "prod", Log: cfg.Logger}
 	if cfg.OutboundHTTP != nil {
 		rp, err := oidcrp.New(oidcrp.Config{HTTP: cfg.OutboundHTTP, Now: func() time.Time { return s.clock() }})
 		if err != nil {
@@ -181,6 +186,7 @@ func New(cfg Config) *Server {
 	s.registerSAMLRoutes()
 	s.registerOAuth2Routes()
 	s.registerStepUpRoutes()
+	s.registerAdminRoutes()
 	s.checkPublicRoutes()
 	return s
 }
@@ -251,6 +257,11 @@ func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
 		}
 		if err := s.containment.SweepRetries(audit.WithSystemActor(ctx, "containment.sweeper"), s.store, "containment.sweeper"); err != nil && ctx.Err() == nil {
 			s.log.Error("containment retry sweep failed", "err", err)
+		}
+		// apply the admin changes whose cooling-off ended and expire the ones
+		// nobody approved in 72 hours (design §15.2)
+		if _, err := s.admin.Sweep(audit.WithSystemActor(ctx, "admin.sweeper")); err != nil && ctx.Err() == nil {
+			s.log.Error("admin change sweep failed", "err", err)
 		}
 		select {
 		case <-ctx.Done():
@@ -569,9 +580,14 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var ve *validationError
 	var re *readiness.Error
 	var dn denial
+	var ae *admin.Error
 	switch {
 	case errors.As(err, &dn):
 		auth.WriteDenial(w, dn.d)
+	case errors.As(err, &ae) && ae.Denial != nil:
+		auth.WriteDenial(w, ae.Denial)
+	case errors.As(err, &ae):
+		writeJSON(w, ae.Status, ojson.Object{{Key: "error", Value: ae.Code}, {Key: "detail", Value: ae.Msg}})
 	case errors.As(err, &re):
 		writeJSON(w, re.Status, readinessErrorBody(re))
 	case errors.As(err, &he):

@@ -80,6 +80,8 @@ var tables = []string{
 	"login_transactions",
 	// operator bootstrap (schema/0006_admin.sql)
 	"bootstrap_invitations",
+	// admin changes, admin notifications, operator recovery (schema/0008_admin_changes.sql)
+	"tenant_recoveries", "admin_change_requests", "admin_notifications",
 	// audit ledger (schema/0004_audit.sql)
 	"audit_events", "audit_chain_heads", "audit_checkpoints",
 	// deployment readiness (schema/0201-0203; revoked_grants is 0204)

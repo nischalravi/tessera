@@ -35,7 +35,7 @@ func namedArgs(args []sql.NamedArg) []any {
 	return out
 }
 
-const tenantCols = `t.id, t.slug, t.name, t.status, t.cell, t.min_admins, t.settings, t.created_at`
+const tenantCols = `t.id, t.slug, t.name, t.status, t.cell, t.min_admins, t.settings, t.security_contacts, t.created_at`
 
 var (
 	tenantsExists         = sq("tenants.exists", `SELECT count(*) FROM tenants t WHERE t.id = @id`)
@@ -59,7 +59,7 @@ func scanTenant(s scanner) (Tenant, error) {
 	var t Tenant
 	var id string
 	var created nullTime
-	if err := s.Scan(&id, &t.Slug, &t.Name, &t.Status, &t.Cell, &t.MinAdmins, &t.Settings, &created); err != nil {
+	if err := s.Scan(&id, &t.Slug, &t.Name, &t.Status, &t.Cell, &t.MinAdmins, &t.Settings, &t.SecurityContacts, &created); err != nil {
 		return t, err
 	}
 	var err error

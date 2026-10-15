@@ -890,3 +890,69 @@ export const readiness = {
   rerun: (reconcile = false) => api<{ results: { connection_id: string; name: string; validation_run_id: string | null; dry_run_id: string | null; skipped?: string }[]; dashboard: DeploymentHealth }>(
     "/insights/deployment-health/rerun", { reconcile }),
 };
+
+// ------------------------------------------------------------ admin changes (design §15, §16.1)
+
+export type ChangeStatus = "pending_approval" | "cooling_off" | "applied" | "rejected" | "cancelled" | "expired" | "failed";
+
+/** The change types of design §15.2 that the API accepts. */
+export type ChangeType =
+  | "role.grant" | "role.revoke" | "idp_connection.create" | "idp_connection.update_trust" | "idp_connection.update_cosmetic"
+  | "idp_connection.disable" | "tenant.settings.update" | "tenant.security_contacts.update";
+
+interface PersonRef { id: string; display_name: string }
+
+export interface AdminChange {
+  id: string; type: ChangeType; summary: string; status: ChangeStatus; target_id: string | null; two_person: boolean;
+  cooling_off_seconds: number; requested_by: PersonRef; requested_at: string; expires_at: string; approved_by: PersonRef | null;
+  approved_at: string | null; effective_at: string | null; decided_by: PersonRef | null; decided_at: string | null;
+  applied_at: string | null; failure: string | null; test_login_at: string | null; payload_hash: string;
+  payload: Record<string, unknown> | null;
+  notifications?: AdminNotification[];
+}
+
+export interface AdminNotification {
+  id: string; kind: string; recipient_type: "admin" | "contact" | "operator"; recipient: string; subject: string;
+  change_request_id: string | null; recovery_id: string | null; created_at: string; delivered_at: string | null;
+}
+
+export interface AdminUser {
+  id: string; email: string | null; display_name: string; status: "active" | "disabled"; is_break_glass: boolean;
+  roles: { role: string; source: string; expires_at: string | null; change_request_id: string | null }[];
+  created_at: string; last_login_at: string | null; disabled_at: string | null; disabled_reason: string | null;
+}
+
+export interface AdminIdpConnection {
+  id: string; name: string; protocol: string; profile: string; status: "pending" | "active" | "disabled"; is_default: boolean;
+  verified_domains: string[]; issuer: string | null; assume_phishing_resistant: boolean; jit_provisioning: boolean;
+  default_role: string; created_at: string; updated_at: string; last_change_request_id: string | null;
+  activation: { change_request_id: string; requested_by: string; test_login_at: string | null; ready: boolean } | null;
+}
+
+export interface AdminRecovery {
+  id: string; status: "pending" | "cancelled" | "completed"; ticket: string; operator: string; co_operator: string;
+  not_before: string; created_at: string; cancelled_at: string | null; completed_at: string | null;
+}
+
+export interface AdminApiClients { available: boolean; clients: { id: string; name: string }[]; detail: string }
+
+/** Admin-change workflow calls. Approving needs the hash of the payload the admin reviewed. */
+export const adminChanges = {
+  submit: (type: ChangeType, payload: Record<string, unknown>, client_secret?: string) =>
+    api<AdminChange>("/admin/change-requests", client_secret ? { type, payload, client_secret } : { type, payload }),
+  approve: (id: string, payload_hash: string) => api<AdminChange>(`/admin/change-requests/${id}/approve`, { payload_hash }),
+  reject: (id: string) => api<AdminChange>(`/admin/change-requests/${id}/reject`, {}),
+  cancel: (id: string) => api<AdminChange>(`/admin/change-requests/${id}/cancel`, {}),
+  apply: (id: string) => api<AdminChange>(`/admin/change-requests/${id}/apply`, {}),
+  activateConnection: (id: string) => api<{ id: string; status: string }>(`/admin/idp-connections/${id}/activate`, {}),
+  disableUser: (id: string, reason: string) => api<{ id: string; status: string }>(`/admin/users/${id}/disable`, { reason }),
+  cancelRecovery: (id: string) => api<AdminRecovery>(`/admin/recovery/${id}/cancel`, {}),
+};
+
+/** Seconds as "24 h", "5 min" for the cooling-off column. */
+export function fmtSpan(seconds: number): string {
+  if (seconds <= 0) return "none";
+  if (seconds % 3600 === 0) return `${seconds / 3600} h`;
+  if (seconds % 60 === 0) return `${seconds / 60} min`;
+  return `${seconds} s`;
+}

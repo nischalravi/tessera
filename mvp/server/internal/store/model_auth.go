@@ -11,8 +11,8 @@ import (
 )
 
 // Tenant is a customer tenant (GLOBAL table). Settings is the raw JSON
-// object of §18.3 (auth.TenantSettings reads it); security contacts (§15.5)
-// arrive with the PR that uses them.
+// object of §18.3 (auth.TenantSettings reads it); SecurityContacts is the
+// JSON array of §15.2 and §15.5.
 type Tenant struct {
 	ID        tenancy.ID
 	Slug      string // ^[a-z0-9][a-z0-9-]{2,39}$; "_platform" is reserved
@@ -21,7 +21,9 @@ type Tenant struct {
 	Cell      string // "local"
 	MinAdmins int    // default 2
 	Settings  string // JSON object, default "{}"
-	CreatedAt time.Time
+	// SecurityContacts is a JSON array of {"name","email"}; empty is "[]".
+	SecurityContacts string
+	CreatedAt        time.Time
 }
 
 // PlatformSlug is the slug of the reserved tenancy.Platform tenant.
