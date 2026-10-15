@@ -273,7 +273,6 @@ the run failed. Provider calls go through `internal/safehttp`.
 - **Still manual or not covered.** Okta has no API that lists IdP sessions and Google none for
   sessions: those re-reads cover refresh tokens and say so in the step's notes. `rotate_secret`
   still only stamps a timestamp.
->>>>>>> origin/dev
 
 ### Audit ledger
 
