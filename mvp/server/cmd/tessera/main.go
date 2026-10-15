@@ -301,15 +301,10 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if err != nil {
 		return err
 	}
-	srv := api.New(api.Config{Store: st, Clock: clock, Policies: loader, Logger: logger,
-		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound,
-	// Outbound calls of the kill switch (containment) use the SSRF-guarded client.
-	outbound, err := safehttp.ForConfig(cfg)
-	if err != nil {
-		return err
-	}
+	// The kill switch (containment) uses the same SSRF-guarded client.
 	srv := api.New(api.Config{Containment: &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock},
 		Store: st, Clock: clock, Policies: loader, Logger: logger,
+		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound,
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
 		HSTS: cfg.IsProd(), Env: cfg.Env, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, AuditAnchor: anchorURL})
 	checkpointer := &audit.Checkpointer{DB: st, Sealer: sealer, Sink: sink, Clock: timeutil.System, Issuer: cfg.PublicURL,
