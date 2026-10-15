@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
@@ -181,6 +182,26 @@ func LeaverPlan(c *store.TenantTx, now time.Time, identityID int64, withImpact b
 				{Key: "target", Value: a.Username}, {Key: "account_id", Value: a.ID},
 				{Key: "detail", Value: fmt.Sprintf("Disable %s account %s", a.System, a.Username)}})
 		}
+	}
+	// Kill switch (issue #106): sessions, refresh tokens and OAuth grants live
+	// at the IdP and outlast a disabled account. Only accounts on a system with
+	// a live connection get the steps.
+	specs, err := containment.Steps(c, identityID, true)
+	if err != nil {
+		return nil, err
+	}
+	for _, sp := range specs {
+		a, err := c.Account(sp.AccountID)
+		if err != nil {
+			return nil, err
+		}
+		what := "Revoke sessions and refresh tokens of %s account %s"
+		if sp.Action == containment.ActionRevokeGrants {
+			what = "Revoke OAuth consents and credentials of %s account %s"
+		}
+		steps = append(steps, Step{{Key: "action", Value: sp.Action}, {Key: "system", Value: a.System},
+			{Key: "target", Value: a.Username}, {Key: "account_id", Value: a.ID},
+			{Key: "detail", Value: fmt.Sprintf(what, a.System, a.Username)}})
 	}
 	for _, a := range accounts {
 		edges, err := c.EdgesFrom(graph.Key("account", a.ID))
@@ -615,15 +636,36 @@ func addGrant(c *store.TenantTx, now time.Time, ident *store.Identity, st Step) 
 	return err
 }
 
+// ContainmentSpecs lists the plan's containment steps. They call providers,
+// so the caller runs them (internal/containment) before ExecuteEvent, with no
+// transaction open.
+func ContainmentSpecs(plan Plan) []containment.Spec {
+	var out []containment.Spec
+	steps, _ := getAny(plan, "steps").([]Step)
+	for _, st := range steps {
+		if a := stepStr(st, "action"); isContainment(a) {
+			id, _ := stepInt(st, "account_id")
+			out = append(out, containment.Spec{Action: a, AccountID: id})
+		}
+	}
+	return out
+}
+
+func isContainment(action string) bool {
+	return action == containment.ActionRevokeSessions || action == containment.ActionRevokeGrants
+}
+
 func applyStep(c *store.TenantTx, now time.Time, ident *store.Identity, st Step) error {
 	var err error
 	switch stepStr(st, "action") {
+	case containment.ActionRevokeSessions, containment.ActionRevokeGrants:
+		// run by the caller before ExecuteEvent; failures become retry tasks
 	case "disable_account":
 		id, _ := stepInt(st, "account_id")
 		err = c.DisableAccount(id)
 	case "remove_grant":
 		id, _ := stepInt(st, "edge_id")
-		err = c.DeleteEdge(id)
+		err = c.RevokeEdge(id, now, "jml")
 	case "add_grant":
 		err = addGrant(c, now, ident, st)
 	case "cancel_jit":
@@ -651,7 +693,10 @@ func applyStep(c *store.TenantTx, now time.Time, ident *store.Identity, st Step)
 }
 
 // ExecuteEvent applies an HRIS event's plan and marks it executed.
-// by is the platform user who executes it (the request's principal).
+// by is the platform user who executes it (the request's principal). The
+// containment steps (revoke_sessions, revoke_grants) are not applied here:
+// the caller runs them before, and a failed one is a retry task, not a
+// reason to stop the leaver.
 func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.UserRef, policies []*policy.Policy) (Plan, error) {
 	ev, err := getOrNil(c.HrisEvent(eventID))
 	if err != nil {

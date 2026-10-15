@@ -1,7 +1,13 @@
 import { FormEvent, ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { DevUser, SIGNED_OUT, STEP_UP, SessionInfo, devLogin, devLoginUsers, getSession, isRateLimited, logout } from "../api";
+import {
+  LoginConnection, RateLimitedError, SIGNED_OUT, STEP_UP, SessionInfo, clearPendingAction, discover, getSession, logout,
+  runPendingAction, startLogin, stepUpHref, takePendingAction,
+} from "../api";
+import { useConfirm } from "../components/Dialog";
+import { useToast } from "../components/Toast";
 import { Button } from "../components/Button";
 import { Callout } from "../components/Feedback";
+import { store } from "./storage";
 
 /**
  * Who is signed in (design §17). The session lives in an HttpOnly cookie the API sets; this
@@ -31,19 +37,35 @@ export const useOptionalSession = () => useContext(Ctx);
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<SessionInfo | null | undefined>(undefined);
-  const [error, setError] = useState<unknown>(null);
-  const [stepUp, setStepUp] = useState<string | null>(null);
-  const [lastEmail, setLastEmail] = useState<string | null>(null);
-  const [lastTenant, setLastTenant] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [stepUp, setStepUp] = useState<{ reason: string; href: string } | null>(null);
+
+  const [limited, setLimited] = useState<number | null>(null); // seconds until the sign-in limit lets this browser retry
 
   const load = useCallback(async () => {
     try {
       setSession(await getSession());
       setError(null);
-    } catch (e: unknown) {
-      setError(e);
+      setLimited(null);
+    } catch (e: any) {
+      if (e instanceof RateLimitedError) {
+        setLimited(e.retryAfter);
+        return;
+      }
+      setError(String(e.message ?? e));
     }
   }, []);
+
+  // While rate limited: count down and retry on its own when the wait is over.
+  useEffect(() => {
+    if (limited === null) return;
+    if (limited <= 0) {
+      load();
+      return;
+    }
+    const t = window.setTimeout(() => setLimited((s) => (s === null ? null : s - 1)), 1000);
+    return () => window.clearTimeout(t);
+  }, [limited, load]);
 
   useEffect(() => {
     load();
@@ -52,7 +74,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const out = () => setSession(null);
     const up = (e: Event) => {
       const d = (e as CustomEvent).detail;
-      setStepUp(d?.max_age ? `This action needs a phishing-resistant sign-in in the last ${Math.round(d.max_age / 60)} minutes.` : "This action needs a fresh phishing-resistant sign-in.");
+      const reason = d?.max_age
+        ? `This action needs a phishing-resistant sign-in in the last ${Math.round(d.max_age / 60)} minutes.`
+        : "This action needs a fresh phishing-resistant sign-in.";
+      setStepUp({ reason, href: stepUpHref(d ?? {}) });
     };
     window.addEventListener(SIGNED_OUT, out);
     window.addEventListener(STEP_UP, up);
@@ -65,27 +90,59 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const value = useMemo<SessionCtx | null>(() => {
     if (!session) return null;
     const perms = new Set(session.permissions);
-    const end = async () => {
-      setLastEmail(session.user.email);
-      setLastTenant(session.tenant.slug);
+    const tenant = session.tenant.slug;
+    store.set(LAST_TENANT, tenant);
+    const signOut = async () => {
       await logout().catch(() => undefined);
       setSession(null);
     };
-    return { session, can: (p) => perms.has(p), signOut: end, reauthenticate: end };
+    // A fresh sign-in through the same tenant's IdP, back to this page.
+    const reauthenticate = async () => {
+      const here = window.location.pathname + window.location.search;
+      await logout().catch(() => undefined);
+      startLogin(tenant, null, here);
+    };
+    return { session, can: (p) => perms.has(p), signOut, reauthenticate };
   }, [session]);
 
   if (session === undefined) {
-    if (isRateLimited(error)) return <SignInFrame><RateLimited secs={error.retryAfter ?? 1} onRetry={load} /></SignInFrame>;
-    return error ? <SignInFrame><Callout tone="bad">Tessera is unreachable: {String((error as Error).message ?? error)}</Callout></SignInFrame> : null;
+    if (limited !== null) return <RateLimited seconds={limited} onRetry={() => setLimited(0)} />;
+    if (error) {
+      return (
+        <SignInFrame>
+          <Callout tone="bad">Tessera is unreachable: {error}</Callout>
+          <div><Button onClick={() => { setError(null); load(); }}>Try again</Button></div>
+        </SignInFrame>
+      );
+    }
+    return null;
   }
   if (!value) {
-    return <SignIn preferEmail={lastEmail} preferTenant={lastTenant} onSignedIn={async () => { setStepUp(null); await load(); }} />;
+    return <SignIn />;
   }
   return (
     <Ctx.Provider value={value}>
-      {stepUp && <StepUpNotice reason={stepUp} onClose={() => setStepUp(null)} onSignIn={value.reauthenticate} />}
+      {stepUp && (
+        <StepUpDialog reason={stepUp.reason} onClose={() => { clearPendingAction(); setStepUp(null); }}
+          onContinue={() => window.location.assign(stepUp.href)} />
+      )}
+      <PendingActionResumer />
       {children}
     </Ctx.Provider>
+  );
+}
+
+/** The sign-in limit's page: what happened, the countdown, and a way to try now. */
+function RateLimited({ seconds, onRetry }: { seconds: number; onRetry: () => void }) {
+  return (
+    <SignInFrame>
+      <h1 style={{ fontSize: "var(--fs-4)", margin: 0 }}>Too many sign-in attempts</h1>
+      <Callout tone="warn">
+        Tessera limits how often one network can sign in. <span role="status" aria-live="polite">
+          {seconds > 0 ? `Trying again in ${seconds} second${seconds === 1 ? "" : "s"}…` : "Trying again…"}</span>
+      </Callout>
+      <div><Button variant="primary" onClick={onRetry} disabled={seconds <= 0}>Try again now</Button></div>
+    </SignInFrame>
   );
 }
 
@@ -102,62 +159,43 @@ function SignInFrame({ children }: { children: ReactNode }) {
   );
 }
 
-const METHOD_LABELS: Record<string, string> = {
-  passkey: "Passkey (phishing-resistant)",
-  hardware_key: "Hardware security key (phishing-resistant)",
-  password_otp: "Password + OTP",
-  password: "Password only",
-};
+/** localStorage key of the last tenant signed in to (a per-browser convenience). */
+const LAST_TENANT = "lastTenant";
 
-/** The demo tenant the dev sign-in page starts with. */
-const DEMO_TENANT = "larkspur";
+/** The sign-in error the API sent the browser back with (/login?error=login_failed&request_id=…). */
+function loginError(): { requestId: string | null } | null {
+  const q = new URLSearchParams(window.location.search);
+  return q.get("error") ? { requestId: q.get("request_id") } : null;
+}
+
+/** Where to go after signing in: the page the user was on (never /login itself). */
+function returnTo(): string {
+  const { pathname, search } = window.location;
+  return pathname.startsWith("/login") ? "/" : pathname + search;
+}
 
 /**
- * The sign-in page. Until sign-in through the tenant's identity provider lands (Phase 0 PR6
- * and PR7), a development server (TESSERA_ENV=dev, or test with TESSERA_DEV_LOGIN on loopback)
- * offers dev sign-in: name the tenant, pick one of its seeded dev IdP users and how they
- * authenticate. Admin roles are active only after a phishing-resistant method (passkey or
- * hardware key).
+ * The sign-in page (design §17). Tessera never sees a password: the user names their
+ * organization (the tenant), picks its identity provider and signs in there. Admin roles are
+ * active only after a phishing-resistant sign-in (a passkey or security key at the IdP).
  */
-function SignIn({ onSignedIn, preferEmail, preferTenant }: { onSignedIn: () => Promise<void>; preferEmail: string | null; preferTenant: string | null }) {
-  const [tenant, setTenant] = useState(preferTenant ?? DEMO_TENANT);
-  const [shown, setShown] = useState(preferTenant ?? DEMO_TENANT);
-  const [dev, setDev] = useState<{ users: DevUser[]; methods: string[] } | null | undefined>(undefined);
-  const [choice, setChoice] = useState("");
-  const [method, setMethod] = useState("passkey");
+function SignIn() {
+  const [tenant, setTenant] = useState(() => store.get<string>(LAST_TENANT, ""));
+  const [connections, setConnections] = useState<LoginConnection[] | null>(null);
+  const [asked, setAsked] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [limited, setLimited] = useState<number | null>(null);
-  const [attempt, setAttempt] = useState(0);
+  const failed = useMemo(loginError, []);
 
-  useEffect(() => {
-    let alive = true;
-    devLoginUsers(shown)
-      .then((d) => {
-        if (!alive) return;
-        setDev(d);
-        setError(null);
-        const preferred = d?.users.find((u) => u.email === preferEmail) ?? d?.users[0];
-        setChoice(preferred ? preferred.subject : "");
-        setLimited(null);
-      })
-      .catch((e) => {
-        if (!alive) return;
-        if (isRateLimited(e)) setLimited(e.retryAfter ?? 1);
-        else setError(String(e.message ?? e));
-      });
-    return () => {
-      alive = false;
-    };
-  }, [shown, preferEmail, attempt]);
-
-  const submit = async (e: FormEvent) => {
+  const find = async (e: FormEvent) => {
     e.preventDefault();
+    const slug = tenant.trim().toLowerCase();
+    if (!slug) return;
     setBusy(true);
     setError(null);
     try {
-      await devLogin(shown, choice, method);
-      await onSignedIn();
+      setConnections(await discover(slug));
+      setAsked(slug);
     } catch (err: any) {
       setError(String(err.message ?? err));
     } finally {
@@ -165,94 +203,105 @@ function SignIn({ onSignedIn, preferEmail, preferTenant }: { onSignedIn: () => P
     }
   };
 
-  if (limited !== null) return <SignInFrame><RateLimited secs={limited} onRetry={() => setAttempt((a) => a + 1)} /></SignInFrame>;
-  if (dev === undefined && !error) return <SignInFrame><p className="faint">Loading…</p></SignInFrame>;
-  if (dev === null) {
-    return (
-      <SignInFrame>
-        <h1 style={{ fontSize: "var(--fs-xl)" }}>Sign in</h1>
-        <Callout tone="info">Sign-in through your organization's identity provider is not available on this server yet.</Callout>
-      </SignInFrame>
-    );
-  }
-  const users = dev?.users ?? [];
+  const go = (c: LoginConnection) => {
+    store.set(LAST_TENANT, asked);
+    startLogin(asked, c.id, returnTo());
+  };
+
   return (
     <SignInFrame>
       <h1 style={{ fontSize: "var(--fs-xl)" }}>Sign in to Tessera</h1>
-      <Callout tone="warn">
-        Development sign-in. This server runs with TESSERA_ENV=dev (or test, opted in) and signs you in as a user of its dev
-        identity provider. Production servers sign you in through your organization's identity provider.
-      </Callout>
-      <form className="stack" onSubmit={submit}>
+      {failed && (
+        <Callout tone="bad">
+          Sign-in did not complete. Try again, or ask your administrator
+          {failed.requestId ? <> and give them the reference <code>{failed.requestId}</code></> : null}.
+        </Callout>
+      )}
+      <form className="stack" onSubmit={find}>
         <label className="stack-sm" style={{ display: "block" }}>
-          <span className="small strong">Tenant</span>
-          <span className="row tight">
-            <input className="input" value={tenant} onChange={(e) => setTenant(e.target.value.trim())}
-              onBlur={() => setShown(tenant)} onKeyDown={(e) => { if (e.key === "Enter" && tenant !== shown) { e.preventDefault(); setShown(tenant); } }}
-              autoComplete="organization" spellCheck={false} style={{ flex: 1 }} required />
-            <Button type="button" variant="ghost" onClick={() => setShown(tenant)} disabled={!tenant || tenant === shown}>Show users</Button>
-          </span>
+          <span className="small strong">Organization</span>
+          <input className="input" value={tenant} onChange={(e) => { setTenant(e.target.value); setConnections(null); }}
+            placeholder="your-company" autoComplete="organization" spellCheck={false} autoCapitalize="none"
+            aria-describedby="tenant-help" style={{ width: "100%" }} required autoFocus />
+          <span id="tenant-help" className="faint small">The name your administrator gave you, for example larkspur.</span>
         </label>
-        <label className="stack-sm" style={{ display: "block" }}>
-          <span className="small strong">User</span>
-          <select className="input" value={choice} onChange={(e) => setChoice(e.target.value)} style={{ width: "100%" }} required disabled={users.length === 0}>
-            {users.length === 0 && <option value="">No dev sign-in users for this tenant</option>}
-            {users.map((u) => (
-              <option key={u.subject} value={u.subject}>
-                {u.display_name} · {u.email} · {u.roles.join(", ") || "no roles"}
-              </option>
-            ))}
-          </select>
-        </label>
-        <fieldset className="stack-sm" style={{ border: 0, padding: 0, margin: 0 }}>
-          <legend className="small strong">How they sign in</legend>
-          {(dev?.methods ?? []).map((m) => (
-            <label key={m} className="row tight small">
-              <input type="radio" name="method" value={m} checked={method === m} onChange={() => setMethod(m)} />
-              {METHOD_LABELS[m] ?? m}
-            </label>
-          ))}
-        </fieldset>
         {error && <Callout tone="bad">{error}</Callout>}
-        <div className="row">
-          <Button type="submit" variant="primary" disabled={busy || !choice || tenant !== shown}>{busy ? "Signing in…" : "Sign in"}</Button>
-        </div>
+        {connections === null && (
+          <div className="row">
+            <Button type="submit" variant="primary" disabled={busy || !tenant.trim()}>{busy ? "Looking up…" : "Continue"}</Button>
+          </div>
+        )}
       </form>
+      {connections !== null && connections.length === 0 && (
+        <Callout tone="info">There is no sign-in for that organization. Check the name, or ask your administrator.</Callout>
+      )}
+      {connections !== null && connections.length > 0 && (
+        <div className="stack-sm" role="group" aria-label="Sign in with">
+          {connections.map((c) => (
+            <Button key={c.id} variant={c.default ? "primary" : "ghost"} onClick={() => go(c)}>Sign in with {c.name}</Button>
+          ))}
+          <p className="faint small">You will sign in at your identity provider. Use a passkey or security key to activate admin roles.</p>
+        </div>
+      )}
     </SignInFrame>
   );
 }
 
-/** Shown when an action needs a fresh phishing-resistant sign-in (401 step_up_required). A bottom sheet on phones. */
-function StepUpNotice({ reason, onClose, onSignIn }: { reason: string; onClose: () => void; onSignIn: () => Promise<void> }) {
+/**
+ * Shown when an action needs a fresh phishing-resistant sign-in (401 step_up_required): it explains
+ * why and, on Continue, re-authenticates at the IdP and comes back here (design §9.4, §17).
+ */
+function StepUpDialog({ reason, onClose, onContinue }: { reason: string; onClose: () => void; onContinue: () => void }) {
   return (
     <div role="alertdialog" aria-labelledby="stepup-h" aria-describedby="stepup-d" className="card stack stepup">
-      <strong id="stepup-h">Sign in again to continue</strong>
-      <p id="stepup-d" className="small">{reason} Sign in again with a passkey, then retry the action.</p>
-      <div className="row wrap">
-        <Button variant="primary" onClick={onSignIn} autoFocus>Sign in again</Button>
+      <strong id="stepup-h">Confirm it's you</strong>
+      <p id="stepup-d" className="small">
+        {reason} Sign in again at your identity provider with a passkey or security key; you'll come back here and can
+        finish the action.
+      </p>
+      <div className="row">
+        <Button variant="primary" onClick={onContinue} autoFocus>Continue</Button>
         <Button variant="ghost" onClick={onClose}>Not now</Button>
       </div>
     </div>
   );
 }
 
-/** 429 from the sign-in endpoints: say why, count down Retry-After, then offer a retry. */
-function RateLimited({ secs, onRetry }: { secs: number; onRetry: () => void }) {
-  const [left, setLeft] = useState(secs);
+/**
+ * After a step-up (?stepup=ok) offers to resume the action that needed it; after a refused one
+ * (?stepup=failed) says so. A pending action older than ten minutes is dropped, and it is never
+ * sent without the user confirming.
+ */
+function PendingActionResumer() {
+  const confirm = useConfirm();
+  const toast = useToast();
   useEffect(() => {
-    setLeft(secs);
-    const t = window.setInterval(() => setLeft((l) => Math.max(0, l - 1)), 1000);
-    return () => window.clearInterval(t);
-  }, [secs]);
-  return (
-    <div className="stack">
-      <h1 style={{ fontSize: "var(--fs-xl)" }}>Too many sign-in attempts</h1>
-      <p className="small">
-        Tessera limits how often one network can sign in, to slow down password-guessing and abuse. Nothing is wrong with your
-        account. {left > 0 ? `You can try again in ${left} second${left === 1 ? "" : "s"}.` : "You can try again now."}
-      </p>
-      <span className="sr-only" aria-live="polite">{left === 0 ? "You can try again now." : ""}</span>
-      <div><Button variant="primary" disabled={left > 0} onClick={onRetry}>Try again</Button></div>
-    </div>
-  );
+    const q = new URLSearchParams(window.location.search);
+    const result = q.get("stepup");
+    if (!result) return;
+    const requestId = q.get("request_id");
+    q.delete("stepup");
+    q.delete("request_id");
+    window.history.replaceState(null, "", window.location.pathname + (q.size ? `?${q}` : "") + window.location.hash);
+    const pending = takePendingAction();
+    if (result !== "ok") {
+      toast(`Your identity provider did not confirm a phishing-resistant sign-in, so nothing was changed.${requestId ? ` Reference: ${requestId}` : ""}`, { kind: "error" });
+      return;
+    }
+    if (!pending) {
+      toast("Signed in again. You can retry the action now.", { kind: "info" });
+      return;
+    }
+    (async () => {
+      const ok = await confirm({ title: `Resume: ${pending.label}?`, body: "You signed in again. Finish the action you started?", confirmLabel: "Resume" });
+      if (ok === null) return;
+      try {
+        await runPendingAction(pending);
+        toast(`Done: ${pending.label}`);
+      } catch (e: any) {
+        toast(String(e.message ?? e), { kind: "error" });
+      }
+    })();
+  }, [confirm, toast]);
+  return null;
 }

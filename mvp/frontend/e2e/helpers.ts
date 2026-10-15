@@ -4,20 +4,18 @@ import AxeBuilder from "@axe-core/playwright";
 /** WCAG 2.0/2.1/2.2 A and AA rules. */
 export const WCAG_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
 
-/** Dev sign-in as one of the seeded dev IdP users, with a passkey (phishing-resistant). */
+/**
+ * Sign in as one of the seeded dev IdP users, with a passkey (else password + OTP): the sign-in
+ * page asks for the organization, lists its connections, and the dev IdP's page picks the user
+ * and the authentication method.
+ */
 export async function signIn(page: Page, who = "Alice", tenant = "larkspur", path = "/") {
   await page.goto(path);
-  await page.waitForSelector("select");
-  if (tenant !== "larkspur") {
-    const t = page.getByLabel("Tenant");
-    await t.fill(tenant);
-    await t.press("Enter");
-  }
-  const sel = page.locator("select").first();
-  const value = await sel.locator("option", { hasText: who }).first().getAttribute("value");
-  await sel.selectOption(value!);
-  await page.locator('input[name="method"]').first().check();
-  await page.locator('button[type="submit"]').click();
+  await page.getByLabel("Organization").fill(tenant);
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByRole("button", { name: /^Sign in with/ }).first().click();
+  // the dev IdP's own page (a different origin): one fieldset per user
+  await page.locator("fieldset", { hasText: who }).first().getByRole("button", { name: /^(Passkey|Password \+ OTP)/ }).first().click();
   await expect(page.locator("main h1").first()).toBeVisible({ timeout: 20_000 });
 }
 

@@ -54,20 +54,24 @@ for (const width of WIDTHS) {
 
       test("sign-in page", async ({ page }, info) => {
         await page.goto("/");
-        await page.waitForSelector("select");
+        await page.getByLabel("Organization").waitFor();
         await checkPage(page, info, `sign-in-${width}`);
+        // the organization's connections, once named
+        await page.getByLabel("Organization").fill("larkspur");
+        await page.getByRole("button", { name: "Continue" }).click();
+        await expect(page.getByRole("button", { name: /^Sign in with/ }).first()).toBeVisible();
+        await checkPage(page, info, `sign-in-connections-${width}`);
       });
 
       test("rate-limited sign-in explains the wait and offers a retry", async ({ page }, info) => {
         await page.route("**/api/auth/session", (r) => r.fulfill({ status: 429, headers: { "Retry-After": "2" }, contentType: "application/json", body: '{"error":"rate_limited"}' }));
         await page.goto("/");
         await expect(page.getByRole("heading", { name: "Too many sign-in attempts" })).toBeVisible();
-        await expect(page.getByRole("button", { name: "Try again" })).toBeDisabled();
+        await expect(page.getByRole("status")).toContainText(/Trying again/);
         await checkPage(page, info, `rate-limited-${width}`);
         await page.unroute("**/api/auth/session");
-        await expect(page.getByRole("button", { name: "Try again" })).toBeEnabled({ timeout: 5_000 });
-        await page.getByRole("button", { name: "Try again" }).click();
-        await expect(page.locator("select").first()).toBeVisible();
+        await page.getByRole("button", { name: "Try again now" }).click();
+        await expect(page.getByLabel("Organization")).toBeVisible({ timeout: 10_000 });
       });
     });
 
@@ -86,9 +90,9 @@ for (const width of WIDTHS) {
         await page.goto("/inbox");
         await settle(page);
         await page.evaluate(() => window.dispatchEvent(new CustomEvent("tessera:step-up", { detail: { error: "step_up_required", max_age: 300 } })));
-        const sheet = page.getByRole("alertdialog", { name: "Sign in again to continue" });
+        const sheet = page.getByRole("alertdialog", { name: "Confirm it's you" });
         await expect(sheet).toBeVisible();
-        await expect(page.getByRole("button", { name: "Sign in again" })).toBeFocused();
+        await expect(page.getByRole("button", { name: "Continue" })).toBeFocused();
         const box = (await sheet.boundingBox())!;
         expect(box.x).toBeGreaterThanOrEqual(0);
         expect(box.x + box.width).toBeLessThanOrEqual(width + 1);
