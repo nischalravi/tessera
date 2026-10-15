@@ -182,6 +182,7 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		}
 		if strings.HasPrefix(rt.Pattern, "/api/auth/saml/{connection_id}/") {
 			continue // TestIsolation_SAMLCrossTenant (public; the tenant comes from the cookie or the connection)
+		}
 		if rt.Pattern == "/api/identity-merges/{merge_id}/unmerge" {
 			continue // TestCorrelationAPI_CrossTenant (a UUID, not a fixture id)
 		}
