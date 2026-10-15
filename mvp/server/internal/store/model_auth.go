@@ -69,12 +69,14 @@ const (
 
 // IdP connection profiles (design §8.2).
 const (
-	ProfileOkta        = "okta"
-	ProfileEntra       = "entra"
-	ProfileGoogle      = "google"
-	ProfileGenericOIDC = "generic_oidc"
-	ProfileGenericSAML = "generic_saml"
-	ProfileDevMock     = "dev_mock"
+	ProfileOkta          = "okta"
+	ProfileEntra         = "entra"
+	ProfileGoogle        = "google"
+	ProfileGenericOIDC   = "generic_oidc"
+	ProfileGenericSAML   = "generic_saml"
+	ProfileGitHub        = "github"
+	ProfileGenericOAuth2 = "generic_oauth2"
+	ProfileDevMock       = "dev_mock"
 )
 
 // IdPConnection is one of a tenant's OIDC or SAML identity providers. JSON
@@ -82,26 +84,30 @@ const (
 // structs. Sealed secrets (ClientSecretEnc, SPKeyEnc) are opened only by the
 // login flows (PR6, PR9).
 type IdPConnection struct {
-	ID                      uuid.UUID
-	TenantID                tenancy.ID
-	Name                    string
-	Protocol                string // oidc | saml
-	Profile                 string // okta | entra | google | generic_oidc | generic_saml | dev_mock
-	Status                  string // pending | active | disabled
-	IsDefault               bool
-	VerifiedDomains         json.RawMessage // ["acme.com"]: home-realm discovery only
-	Issuer                  *string
-	DiscoveryURL            *string
-	ClientID                *string
-	ClientAuthMethod        *string
-	ClientSecretEnc         []byte
-	ClientSigningKID        *string
-	Scopes                  json.RawMessage
-	IDTokenAlgs             json.RawMessage
-	StepUpRequest           json.RawMessage
-	IdPEntityID             *string
-	IdPSSOURL               *string
-	IdPSigningCerts         json.RawMessage
+	ID               uuid.UUID
+	TenantID         tenancy.ID
+	Name             string
+	Protocol         string // oidc | saml
+	Profile          string // okta | entra | google | generic_oidc | generic_saml | dev_mock
+	Status           string // pending | active | disabled
+	IsDefault        bool
+	VerifiedDomains  json.RawMessage // ["acme.com"]: home-realm discovery only
+	Issuer           *string
+	DiscoveryURL     *string
+	ClientID         *string
+	ClientAuthMethod *string
+	ClientSecretEnc  []byte
+	ClientSigningKID *string
+	Scopes           json.RawMessage
+	IDTokenAlgs      json.RawMessage
+	StepUpRequest    json.RawMessage
+	IdPEntityID      *string
+	IdPSSOURL        *string
+	IdPSigningCerts  json.RawMessage
+	// OAuth 2.0-only providers: the pinned endpoints (no discovery)
+	AuthorizationEndpoint   *string
+	TokenEndpoint           *string
+	UserinfoEndpoint        *string
 	MetadataURL             *string
 	PinCerts                bool
 	SPKeyEnc                []byte
@@ -225,6 +231,7 @@ type LoginTransaction struct {
 	MaxAge                  *int64
 	SessionID               *uuid.UUID
 	ExpectedExternalLoginID *uuid.UUID
+	BootstrapInvitationID   *uuid.UUID // purpose bootstrap
 	ReturnTo                string
 	CreatedAt               time.Time
 	ExpiresAt               time.Time
@@ -244,4 +251,21 @@ func (u UserRef) idOrNil() any {
 		return nil
 	}
 	return u.ID.String()
+}
+
+// BootstrapInvitation is a one-time code that makes the user who redeems it
+// with a phishing-resistant sign-in through IdPConnectionID a tenant admin
+// (design §15.3). Only the code's SHA-256 is stored.
+type BootstrapInvitation struct {
+	ID               uuid.UUID
+	TenantID         tenancy.ID
+	CodeHash         string
+	IdPConnectionID  uuid.UUID
+	Email            string
+	Role             string // tenant_admin
+	CreatedBy        string // the operator (OS user) who ran invite-admin
+	CreatedAt        time.Time
+	ExpiresAt        time.Time
+	ConsumedAt       *time.Time
+	ConsumedByUserID *uuid.UUID
 }
