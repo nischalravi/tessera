@@ -46,8 +46,7 @@ func newIsolationServer(f *storetest.Fixture) *Server {
 		},
 		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 		AllowedOrigins: []string{"http://localhost:5173"},
-		Env:            "test", // with DevLogin, registers the dev sign-in routes, so coverage tests see them
-		DevLogin:       true,
+		Env:            "test",
 		RateLimits:     noRateLimits, // the coverage tests send hundreds of anonymous requests
 	})
 }
@@ -113,19 +112,35 @@ var crossTenantCases = map[string]crossTenantCase{
 	"GET graph by resource": {method: "GET", path: pathf("/api/graph?resource_id=%d"), key: "resource:aws:prod"},
 	"POST simulate disable account": {method: "POST", path: fixed("/api/simulate"), key: "acct:aws:svc-etl",
 		body: func(id int64) string { return fmt.Sprintf(`{"disable_account_ids":[%d]}`, id) }},
+	"POST link account": {method: "POST", path: pathf("/api/accounts/%d/link"), key: "acct:okta:alice",
+		body: func(id int64) string { return fmt.Sprintf(`{"identity_id":%d,"reason":"x"}`, id) }},
+	"POST account not person": {method: "POST", path: pathf("/api/accounts/%d/not-person"), key: "acct:okta:alice",
+		body: func(int64) string { return `{"reason":"x"}` }},
+	"DELETE account link": {method: "DELETE", path: pathf("/api/accounts/%d/link"), key: "acct:okta:alice"},
+	"POST merge identity": {method: "POST", path: pathf("/api/identities/%d/merge"), key: "alice",
+		body: func(id int64) string { return fmt.Sprintf(`{"into":%d,"reason":"x"}`, id) }},
+	"GET identity containment": {method: "GET", path: pathf("/api/identities/%d/containment"), key: "alice"},
+	"POST contain identity": {method: "POST", path: pathf("/api/identities/%d/contain"), key: "alice",
+		body: func(int64) string { return `{"reason":"suspected credential compromise"}` }},
 }
 
 // routeParamKey maps each route with path parameters to the cases above.
 var routeParamCases = map[string][]string{
-	"GET /api/identities/{identity_id}":           {"GET identity", "GET identity (nhi)"},
-	"GET /api/jml/leaver-plan/{identity_id}":      {"GET leaver plan"},
-	"GET /api/reviews/campaigns/{campaign_id}":    {"GET campaign"},
-	"GET /api/hris/events/{event_id}/plan":        {"GET hris plan"},
-	"POST /api/hris/events/{event_id}/execute":    {"POST hris execute"},
-	"POST /api/reviews/items/{item_id}/decision":  {"POST review decision"},
-	"POST /api/jit/requests/{request_id}/approve": {"POST jit approve"},
-	"POST /api/jit/requests/{request_id}/deny":    {"POST jit deny"},
-	"POST /api/jit/requests/{request_id}/revoke":  {"POST jit revoke"},
+	"GET /api/identities/{identity_id}":             {"GET identity", "GET identity (nhi)"},
+	"GET /api/jml/leaver-plan/{identity_id}":        {"GET leaver plan"},
+	"GET /api/reviews/campaigns/{campaign_id}":      {"GET campaign"},
+	"GET /api/hris/events/{event_id}/plan":          {"GET hris plan"},
+	"POST /api/hris/events/{event_id}/execute":      {"POST hris execute"},
+	"POST /api/reviews/items/{item_id}/decision":    {"POST review decision"},
+	"POST /api/jit/requests/{request_id}/approve":   {"POST jit approve"},
+	"POST /api/jit/requests/{request_id}/deny":      {"POST jit deny"},
+	"POST /api/jit/requests/{request_id}/revoke":    {"POST jit revoke"},
+	"POST /api/accounts/{account_id}/link":          {"POST link account"},
+	"POST /api/accounts/{account_id}/not-person":    {"POST account not person"},
+	"DELETE /api/accounts/{account_id}/link":        {"DELETE account link"},
+	"POST /api/identities/{identity_id}/merge":      {"POST merge identity"},
+	"POST /api/identities/{identity_id}/contain":    {"POST contain identity"},
+	"GET /api/identities/{identity_id}/containment": {"GET identity containment"},
 }
 
 // TestIsolation_RouteCrossTenant: as tenant B, every route with a path
@@ -154,6 +169,19 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		}
 		if rt.Pattern == "/api/config/trusted-signers/{kid}" {
 			continue // TestIsolation_TrustedSignerScoped (a key id, not a fixture id)
+		}
+		if rt.Pattern == "/api/auth/oidc/{connection_id}/callback" || rt.Pattern == "/api/auth/oauth2/{connection_id}/callback" ||
+			rt.Pattern == "/t/{slug}/bootstrap" {
+			continue // TestIsolation_LoginCrossTenant (public; the tenant comes from the cookie or the slug)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/auth/saml/{connection_id}/") {
+			continue // TestIsolation_SAMLCrossTenant (public; the tenant comes from the cookie or the connection)
+		}
+		if rt.Pattern == "/api/identity-merges/{merge_id}/unmerge" {
+			continue // TestCorrelationAPI_CrossTenant (a UUID, not a fixture id)
+		}
+		if rt.Pattern == "/api/containment-retries/{retry_id}/retry-now" {
+			continue // TestContainmentRetriesAPI (a UUID, not a fixture id)
 		}
 		if rt.Pattern == "/api/auth/sessions/{session_id}" {
 			continue // TestIsolation_SessionCookieScoped (a UUID, not a fixture id)
@@ -215,11 +243,12 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 	b := f.B.IDs
 	param := regexp.MustCompile(`\{[a-z_]+\}`)
 	values := map[string]string{
-		"/api/identities/{identity_id}":        fmt.Sprint(b["alice"]),
-		"/api/jml/leaver-plan/{identity_id}":   fmt.Sprint(b["alice"]),
-		"/api/reviews/campaigns/{campaign_id}": fmt.Sprint(b["campaign"]),
-		"/api/hris/events/{event_id}/plan":     fmt.Sprint(b["hris:leaver"]),
-		"/api/audit/events/{event_id}/proof":   latestEventID(t, f.DB, f.B.ID),
+		"/api/identities/{identity_id}":             fmt.Sprint(b["alice"]),
+		"/api/jml/leaver-plan/{identity_id}":        fmt.Sprint(b["alice"]),
+		"/api/identities/{identity_id}/containment": fmt.Sprint(b["alice"]),
+		"/api/reviews/campaigns/{campaign_id}":      fmt.Sprint(b["campaign"]),
+		"/api/hris/events/{event_id}/plan":          fmt.Sprint(b["hris:leaver"]),
+		"/api/audit/events/{event_id}/proof":        latestEventID(t, f.DB, f.B.ID),
 	}
 	checked := 0
 	for _, rt := range srv.Routes() {

@@ -2,9 +2,11 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestLookupLintRejects: the hash-lookup lint accepts only the two §14.2
@@ -103,5 +105,30 @@ func TestReturnToSchemaCheck(t *testing.T) {
 		if err := insert(100+i, rt); err == nil || !strings.Contains(err.Error(), "CHECK") {
 			t.Errorf("%q: %v, want a CHECK failure", rt, err)
 		}
+	}
+}
+
+// TestReplayCacheUseOnce: a key is accepted once until it expires, then again.
+func TestReplayCacheUseOnce(t *testing.T) {
+	db := openTest(t)
+	ctx := context.Background()
+	now := nowUTC()
+	h := fmt.Sprintf("%064d", 7)
+	use := func(at time.Time) error {
+		return db.InSystem(ctx, "test", func(s *SystemTx) error { return s.UseOnce(ReplaySAMLAssertion, h, at, now.Add(time.Minute)) })
+	}
+	if err := use(now); err != nil {
+		t.Fatal(err)
+	}
+	if err := use(now.Add(30 * time.Second)); !errors.Is(err, ErrDuplicate) {
+		t.Errorf("second use: %v", err)
+	}
+	if err := db.InSystem(ctx, "test", func(s *SystemTx) error {
+		return s.UseOnce(ReplayDPoPJTI, h, now, now.Add(time.Minute))
+	}); err != nil {
+		t.Errorf("same hash, other kind: %v", err)
+	}
+	if err := use(now.Add(2 * time.Minute)); err != nil {
+		t.Errorf("after expiry: %v", err)
 	}
 }

@@ -29,7 +29,7 @@ func TestRefusesToStartOutsideDev(t *testing.T) {
 		{"stray args", map[string]string{"TESSERA_ENV": "test"}, []string{"serve"}, "unexpected arguments"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := run(context.Background(), tc.args, env(tc.env), io.Discard)
+			err := run(context.Background(), tc.args, env(tc.env), io.Discard, io.Discard)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("run: %v, want an error mentioning %q", err, tc.want)
 			}
@@ -43,5 +43,23 @@ func TestCheckLoopback(t *testing.T) {
 		if err := checkLoopback(addr); (err == nil) != ok {
 			t.Errorf("checkLoopback(%q) = %v", addr, err)
 		}
+	}
+}
+
+// TestPrintSAMLCert: -print-saml-cert prints the same certificate for the
+// same key, so a connection can pin it before the dev IdP starts.
+func TestPrintSAMLCert(t *testing.T) {
+	keyDir := filepath.Join(t.TempDir(), "keys")
+	print := func() string {
+		var out strings.Builder
+		args := []string{"-addr", "127.0.0.1:0", "-key-dir", keyDir, "-print-saml-cert"}
+		if err := run(context.Background(), args, env(map[string]string{"TESSERA_ENV": "dev"}), &out, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+		return out.String()
+	}
+	a, b := print(), print()
+	if !strings.HasPrefix(a, "-----BEGIN CERTIFICATE-----") || a != b {
+		t.Fatalf("certificates %q and %q", a, b)
 	}
 }
