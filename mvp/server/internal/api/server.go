@@ -164,6 +164,9 @@ func New(cfg Config) *Server {
 	if cfg.Containment.Clock == nil {
 		cfg.Containment.Clock = cfg.Clock
 	}
+	if cfg.Containment.DB == nil {
+		cfg.Containment.DB = cfg.Store // the lease that serializes edits of the AWS Deny policy
+	}
 	if cfg.SSF == nil {
 		cfg.SSF = &ssf.Service{Containment: cfg.Containment}
 	}

@@ -103,6 +103,7 @@ type fakeAWS struct {
 	calls       []string
 	updates     []string // the content of every UpdatePolicy
 	delay       time.Duration
+	unattached  bool // the Deny policy has no target
 }
 
 func newFakeAWS(t *testing.T) *fakeAWS {
@@ -135,6 +136,12 @@ func (a *fakeAWS) serve(w http.ResponseWriter, r *http.Request) {
 	switch op {
 	case "DescribeUser":
 		reply(map[string]any{"UserId": in["UserId"], "UserName": "alice@larkspur.example"})
+	case "ListTargetsForPolicy":
+		targets := []map[string]string{}
+		if !a.unattached {
+			targets = append(targets, map[string]string{"TargetId": "r-ab12", "Type": "ROOT"})
+		}
+		reply(map[string]any{"Targets": targets})
 	case "DescribePolicy":
 		reply(map[string]any{"Policy": map[string]any{"Content": a.policy}})
 	case "UpdatePolicy":
@@ -395,8 +402,9 @@ func TestSSFEndToEnd_OktaSessionRevokedEndsAWSSession(t *testing.T) {
 	}
 	// verification passed: the policy and the assignments were read again after the revoke
 	calls := e.aws.Calls()
-	want := []string{"DescribeUser", "DescribePolicy", "UpdatePolicy", "ListAccountAssignmentsForPrincipal", "DeleteAccountAssignment",
-		"DeleteAccountAssignment", "DescribePolicy", "ListAccountAssignmentsForPrincipal"}
+	want := []string{"DescribeUser", "ListTargetsForPolicy", "DescribePolicy", "UpdatePolicy", "DescribePolicy",
+		"ListAccountAssignmentsForPrincipal", "DeleteAccountAssignment", "DeleteAccountAssignment", "ListTargetsForPolicy",
+		"DescribePolicy", "ListAccountAssignmentsForPrincipal"}
 	if strings.Join(calls, ",") != strings.Join(want, ",") {
 		t.Errorf("AWS calls\n got %v\nwant %v", calls, want)
 	}

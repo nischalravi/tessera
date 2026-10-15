@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/containment/sigv4"
+	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
 // AWS IAM Identity Center. AWS has no API that ends a workforce user's
@@ -26,8 +27,12 @@ import (
 //  1. the identity store UserId is the account's external id (checked with
 //     identitystore:DescribeUser, so a stale id fails the step);
 //  2. the UserId is added to the Deny policy, a service control policy
-//     prepared in advance whose condition is "identitystore:userId"
-//     (organizations:DescribePolicy, then UpdatePolicy);
+//     prepared in advance whose one statement denies "*" on "*" under the
+//     single condition "identitystore:userId" (anything narrower proves
+//     nothing and is refused), and which must be attached to a target
+//     (organizations:ListTargetsForPolicy). The edit is serialized per policy
+//     across workers by a database lease, merges every entry Tessera holds and
+//     is read back (organizations:DescribePolicy, UpdatePolicy);
 //  3. the user's permission set assignments are deleted
 //     (sso-admin:ListAccountAssignmentsForPrincipal, DeleteAccountAssignment),
 //     so no new role session can start;
@@ -146,9 +151,10 @@ type awsRevoker struct {
 	base  *url.URL // endpoint override, nil: the AWS endpoints
 	sleep sleepFunc
 	now   func() time.Time
+	led   policyLedger // serializes policy edits across workers; nil: no coordination (no database)
 }
 
-func newAWS(hc *http.Client, c Credential, sleep sleepFunc, now func() time.Time) (Revoker, error) {
+func newAWS(hc *http.Client, c Credential, sleep sleepFunc, now func() time.Time, led policyLedger) (Revoker, error) {
 	var ac AWSCredential
 	dec := json.NewDecoder(strings.NewReader(c.Token))
 	dec.DisallowUnknownFields()
@@ -158,7 +164,7 @@ func newAWS(hc *http.Client, c Credential, sleep sleepFunc, now func() time.Time
 	if why := ac.check(); why != "" {
 		return nil, errors.New("containment: AWS credential: " + why)
 	}
-	r := &awsRevoker{hc: hc, cred: ac, sleep: sleep, now: now}
+	r := &awsRevoker{hc: hc, cred: ac, sleep: sleep, now: now, led: led}
 	if r.sleep == nil {
 		r.sleep = sleepCtx
 	}
@@ -265,9 +271,65 @@ func isAWSType(err error, typ string) bool {
 
 // ---------------------------------------------------------------- the Deny policy
 
-// denyStatement finds the condition value of the Deny statement keyed by
-// DenyConditionKey. It returns the statement's StringEquals map.
-func denyCondition(doc map[string]any) (map[string]any, bool) {
+// mentionsDenyKey reports whether a statement's Condition names DenyConditionKey
+// under any operator.
+func mentionsDenyKey(st map[string]any) bool {
+	cond, _ := st["Condition"].(map[string]any)
+	for _, op := range cond {
+		if m, ok := op.(map[string]any); ok {
+			if _, ok := m[DenyConditionKey]; ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isStar reports whether v is "*" or ["*"].
+func isStar(v any) bool {
+	switch x := v.(type) {
+	case string:
+		return x == "*"
+	case []any:
+		return len(x) == 1 && x[0] == "*"
+	}
+	return false
+}
+
+// denyAllProblem says why a Deny statement that names DenyConditionKey is not
+// a dedicated deny-all ("" when it is): Action "*" and Resource "*" (or no
+// Resource), no NotAction, NotResource, Principal or other element, and as its
+// only condition StringEquals on the one key. A user id in a Deny statement
+// that is narrower (a few actions, one resource, a second condition such as a
+// source IP) would not end the user's role sessions, so it proves nothing.
+func denyAllProblem(st map[string]any) string {
+	for k := range st {
+		switch k {
+		case "Sid", "Effect", "Action", "Resource", "Condition":
+		default:
+			return k + " is not allowed"
+		}
+	}
+	switch {
+	case st["Effect"] != "Deny":
+		return "Effect must be Deny"
+	case !isStar(st["Action"]):
+		return `Action must be "*"`
+	case st["Resource"] != nil && !isStar(st["Resource"]):
+		return `Resource must be "*"`
+	}
+	cond, _ := st["Condition"].(map[string]any)
+	eq, _ := cond["StringEquals"].(map[string]any)
+	if len(cond) != 1 || len(eq) != 1 || eq[DenyConditionKey] == nil {
+		return "the only condition must be StringEquals on " + DenyConditionKey
+	}
+	return ""
+}
+
+// denyCondition finds the dedicated deny-all statement keyed by
+// DenyConditionKey and returns its StringEquals map. A Deny statement that
+// names the key without being a deny-all (or a second one) is an error.
+func denyCondition(doc map[string]any) (map[string]any, error) {
 	var stmts []any
 	switch s := doc["Statement"].(type) {
 	case []any:
@@ -275,18 +337,24 @@ func denyCondition(doc map[string]any) (map[string]any, bool) {
 	case map[string]any:
 		stmts = []any{s}
 	}
+	var found map[string]any
 	for _, s := range stmts {
 		st, _ := s.(map[string]any)
-		if st["Effect"] != "Deny" {
+		if st["Effect"] != "Deny" || !mentionsDenyKey(st) {
 			continue
 		}
-		cond, _ := st["Condition"].(map[string]any)
-		eq, _ := cond["StringEquals"].(map[string]any)
-		if _, ok := eq[DenyConditionKey]; ok {
-			return eq, true
+		if why := denyAllProblem(st); why != "" {
+			return nil, fmt.Errorf("%w: %s", errNotDenyAll, why)
 		}
+		if found != nil {
+			return nil, fmt.Errorf("%w: more than one statement names %s", errNotDenyAll, DenyConditionKey)
+		}
+		found = st["Condition"].(map[string]any)["StringEquals"].(map[string]any)
 	}
-	return nil, false
+	if found == nil {
+		return nil, errNoDenyStatement
+	}
+	return found, nil
 }
 
 func condValues(v any) []string {
@@ -308,39 +376,72 @@ func condValues(v any) []string {
 var errNoDenyStatement = errors.New("the policy has no Deny statement with the " + DenyConditionKey +
 	" condition: create the Deny policy first (see the README)")
 
-// policyHasUser reports whether the Deny policy content names userID.
-func policyHasUser(content, userID string) (bool, error) {
+// errNotDenyAll: the statement that names the user ids is not a dedicated deny-all.
+var errNotDenyAll = errors.New("the Deny policy's statement for " + DenyConditionKey +
+	` is not a dedicated deny-all (Effect Deny, Action "*", Resource "*", no other condition)`)
+
+// errPolicyUnattached: a service control policy that is not attached to the
+// organization root, an OU or an account denies nothing.
+var errPolicyUnattached = errors.New("the Deny service control policy is not attached to any target (organizations:ListTargetsForPolicy " +
+	"returned none): attach it to the organization root or to the accounts, or it denies nothing")
+
+// policyUsers lists the user ids in the Deny policy content.
+func policyUsers(content string) ([]string, error) {
 	var doc map[string]any
 	if err := json.Unmarshal([]byte(content), &doc); err != nil {
-		return false, errors.New("the Deny policy is not valid JSON")
+		return nil, errors.New("the Deny policy is not valid JSON")
 	}
-	eq, ok := denyCondition(doc)
-	if !ok {
-		return false, errNoDenyStatement
+	eq, err := denyCondition(doc)
+	if err != nil {
+		return nil, err
 	}
-	return slices.Contains(condValues(eq[DenyConditionKey]), userID), nil
+	return condValues(eq[DenyConditionKey]), nil
+}
+
+// policyHasUser reports whether the Deny policy content names userID in its
+// deny-all statement.
+func policyHasUser(content, userID string) (bool, error) {
+	users, err := policyUsers(content)
+	if err != nil {
+		return false, err
+	}
+	return slices.Contains(users, userID), nil
 }
 
 // addUserToPolicy returns the policy content with userID in the Deny list,
 // and whether it changed.
 func addUserToPolicy(content, userID string) (string, bool, error) {
+	return addUsersToPolicy(content, []string{userID})
+}
+
+// addUsersToPolicy returns the policy content with every user id of users in
+// the Deny list (the ids already there stay), and whether it changed.
+func addUsersToPolicy(content string, users []string) (string, bool, error) {
 	var doc map[string]any
 	if err := json.Unmarshal([]byte(content), &doc); err != nil {
 		return "", false, errors.New("the Deny policy is not valid JSON")
 	}
-	eq, ok := denyCondition(doc)
-	if !ok {
-		return "", false, errNoDenyStatement
+	eq, err := denyCondition(doc)
+	if err != nil {
+		return "", false, err
 	}
 	vals := condValues(eq[DenyConditionKey])
-	if slices.Contains(vals, userID) {
-		return content, false, nil
-	}
-	list := make([]any, 0, len(vals)+1)
+	list := make([]any, 0, len(vals)+len(users))
 	for _, v := range vals {
 		list = append(list, v)
 	}
-	eq[DenyConditionKey] = append(list, userID)
+	changed := false
+	for _, u := range users {
+		if !slices.Contains(vals, u) {
+			vals = append(vals, u)
+			list = append(list, u)
+			changed = true
+		}
+	}
+	if !changed {
+		return content, false, nil
+	}
+	eq[DenyConditionKey] = list
 	out, err := json.Marshal(doc)
 	if err != nil {
 		return "", false, err
@@ -365,38 +466,113 @@ func (a *awsRevoker) policy(ctx context.Context) (string, error) {
 	return out.Policy.Content, nil
 }
 
-// denyUser adds userID to the Deny policy. A concurrent edit of the policy
-// (ConcurrentModificationException) is retried from a fresh read.
+// requireAttached fails unless the Deny policy is attached to at least one
+// target (organizations:ListTargetsForPolicy): an unattached policy denies
+// nothing, whatever it says.
+func (a *awsRevoker) requireAttached(ctx context.Context) error {
+	var out struct {
+		Targets []struct {
+			TargetID string `json:"TargetId"`
+		} `json:"Targets"`
+	}
+	if err := a.call(ctx, svcOrganizations, "ListTargetsForPolicy", map[string]any{"PolicyId": a.cred.PolicyID, "MaxResults": 1}, &out); err != nil {
+		return err
+	}
+	if len(out.Targets) == 0 {
+		return errPolicyUnattached
+	}
+	return nil
+}
+
+// denyHold is how long Tessera keeps a user id in the ledger of entries it must
+// keep in the policy: the 12 hours role sessions can last (the policy's owner
+// may remove an entry by hand after that).
+const denyHold = 12 * time.Hour
+
+// denyUser adds userID to the Deny policy and reads the policy back to prove it
+// is there.
+//
+// The policy is one document that other writers also edit by read-modify-write,
+// so two writes can each drop the other's entry. Tessera's own workers are
+// serialized per policy by a lease in the database (a.led). Under the lease the
+// update is the complete desired set: every entry Tessera holds for the policy
+// (pending or active, within denyHold) plus what the policy has now. The policy
+// is then re-read and every expected entry must be in it; a missing one (an
+// external writer overwrote the policy) is added again, and the step fails if
+// it is still missing after maxAttempts. A ConcurrentModificationException is
+// retried from a fresh read.
 func (a *awsRevoker) denyUser(ctx context.Context, userID string) error {
-	var err error
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		var content string
-		if content, err = a.policy(ctx); err != nil {
+	pid := a.cred.PolicyID
+	if a.led != nil {
+		release, err := a.led.lock(ctx, pid)
+		if err != nil {
 			return err
 		}
-		next, changed, perr := addUserToPolicy(content, userID)
-		if perr != nil {
-			return perr
-		}
-		if !changed {
-			return nil
-		}
-		err = a.call(ctx, svcOrganizations, "UpdatePolicy", map[string]string{"PolicyId": a.cred.PolicyID, "Content": next}, nil)
-		var ae *awsError
-		switch {
-		case err == nil:
-			return nil
-		case errors.As(err, &ae) && ae.Type == awsConcurrent:
-			if serr := a.sleep(ctx, retryWait("", attempt)); serr != nil {
-				return serr
-			}
-		case errors.As(err, &ae) && ae.Type == "ConstraintViolationException":
-			return fmt.Errorf("%w (%s)", ErrPolicyTooLarge, ae)
-		default:
+		defer release()
+		if err := a.led.mark(ctx, pid, userID, store.DenialPending, a.now()); err != nil {
 			return err
 		}
 	}
-	return err
+	var last error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		content, err := a.policy(ctx)
+		if err != nil {
+			return err
+		}
+		want := []string{userID}
+		if a.led != nil {
+			held, err := a.led.held(ctx, pid, a.now().Add(-denyHold))
+			if err != nil {
+				return err
+			}
+			want = append(held, userID)
+		}
+		next, changed, err := addUsersToPolicy(content, want)
+		if err != nil {
+			return err
+		}
+		if changed {
+			err = a.call(ctx, svcOrganizations, "UpdatePolicy", map[string]string{"PolicyId": pid, "Content": next}, nil)
+			var ae *awsError
+			switch {
+			case err == nil:
+			case errors.As(err, &ae) && ae.Type == awsConcurrent:
+				last = err
+				if serr := a.sleep(ctx, retryWait("", attempt)); serr != nil {
+					return serr
+				}
+				continue
+			case errors.As(err, &ae) && ae.Type == "ConstraintViolationException":
+				return fmt.Errorf("%w (%s)", ErrPolicyTooLarge, ae)
+			default:
+				return err
+			}
+			if content, err = a.policy(ctx); err != nil {
+				return err
+			}
+		}
+		users, err := policyUsers(content)
+		if err != nil {
+			return err
+		}
+		var missing []string
+		for _, u := range want {
+			if !slices.Contains(users, u) {
+				missing = append(missing, u)
+			}
+		}
+		if len(missing) == 0 {
+			if a.led != nil {
+				return a.led.mark(ctx, pid, userID, store.DenialActive, a.now())
+			}
+			return nil
+		}
+		last = fmt.Errorf("%d deny entr(ies) are missing from the policy after an update: another writer overwrote it (see the README on external writers)", len(missing))
+		if serr := a.sleep(ctx, retryWait("", attempt)); serr != nil {
+			return serr
+		}
+	}
+	return last
 }
 
 // ---------------------------------------------------------------- assignments
@@ -530,6 +706,9 @@ func (a *awsRevoker) RevokeSessions(ctx context.Context, t Target) (Outcome, err
 	if err != nil {
 		return Outcome{}, err
 	}
+	if err := a.requireAttached(ctx); err != nil {
+		return Outcome{}, err
+	}
 	if err := a.denyUser(ctx, t.UserID); err != nil {
 		return Outcome{}, err
 	}
@@ -561,6 +740,9 @@ func (a *awsRevoker) Verify(ctx context.Context, t Target, _ time.Time, c Check)
 	}
 	if c&CheckSessions == 0 {
 		return r, nil
+	}
+	if err := a.requireAttached(ctx); err != nil {
+		return r, err
 	}
 	content, err := a.policy(ctx)
 	if err != nil {

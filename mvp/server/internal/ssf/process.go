@@ -193,8 +193,14 @@ func (s *Service) process(ctx context.Context, db *store.DB, tenant tenancy.ID, 
 		return err
 	})
 	if errors.Is(err, errNoContainment) {
+		// Tessera's own sessions end without a provider connection
+		n, lerr := s.revokeLocal(ctx, db, tenant, ident)
+		if lerr != nil {
+			return lerr
+		}
 		return s.finish(ctx, db, tenant, tr, ev, started, store.SSFEventFailed,
-			"containment is not configured on this server; nothing was revoked", &match{acct, ident}, s.actionedAudit(ev, tr, set, ident, 0, 0))
+			fmt.Sprintf("containment is not configured on this server; no provider session was revoked (%d Tessera session(s) ended)", n),
+			&match{acct, ident}, s.actionedAudit(ev, tr, set, ident, 0, 0, n))
 	}
 	if err != nil {
 		return err
@@ -208,9 +214,20 @@ func (s *Service) process(ctx context.Context, db *store.DB, tenant tenancy.ID, 
 		})
 	}
 	m := &match{acct, ident}
+	// Tessera's own sessions end first: no provider call is needed, and a slow
+	// or failing provider must not leave them usable. This runs even when the
+	// identity has no other account to act on.
+	local, err := s.revokeLocal(ctx, db, tenant, ident)
+	if err != nil {
+		return err
+	}
 	if job == nil {
-		return s.finish(ctx, db, tenant, tr, ev, started, store.SSFEventNoAction,
-			"the identity has no other linked account with a kill-switch connection", m, s.actionedAudit(ev, tr, set, ident, 0, 0))
+		status, outcome := store.SSFEventNoAction, "the identity has no other linked account with a kill-switch connection and no active Tessera session"
+		if local > 0 {
+			status = store.SSFEventActioned
+			outcome = fmt.Sprintf("ended %d Tessera session(s); the identity has no other linked account with a kill-switch connection", local)
+		}
+		return s.finish(ctx, db, tenant, tr, ev, started, status, outcome, m, s.actionedAudit(ev, tr, set, ident, 0, 0, local))
 	}
 	// matched: recorded before the provider calls, which can take a while
 	if err := db.InTenant(ctx, tenant, func(c *store.TenantTx) error {
@@ -240,12 +257,27 @@ func (s *Service) process(ctx context.Context, db *store.DB, tenant tenancy.ID, 
 		ev.IdentityID, ev.AccountID = &ident.ID, &acct.ID
 		ev.Status, ev.Steps, ev.StepsFailed = status, len(rep.Steps), failed
 		ev.Outcome = outcomeText(rep, len(retries))
+		if local > 0 {
+			ev.Outcome += fmt.Sprintf("; %d Tessera session(s) ended", local)
+		}
 		s.stamp(ev, started, now)
 		if err := c.UpdateSSFEvent(ev); err != nil {
 			return err
 		}
-		return s.actionedAudit(ev, tr, set, ident, len(retries), len(rep.Manual))(c, now)
+		return s.actionedAudit(ev, tr, set, ident, len(retries), len(rep.Manual), local)(c, now)
 	})
+}
+
+// revokeLocal ends the identity's Tessera sessions in a write transaction (the
+// containment.local_sessions_revoked audit event is in it) and returns how many.
+func (s *Service) revokeLocal(ctx context.Context, db *store.DB, tenant tenancy.ID, ident *store.Identity) (int, error) {
+	var n int
+	err := db.InTenant(ctx, tenant, func(c *store.TenantTx) error {
+		res, err := containment.RevokeLocal(c, s.now(), Actor, ident.ID, "ssf")
+		n = res.Sessions
+		return err
+	})
+	return n, err
 }
 
 var errNoContainment = errors.New("containment is not configured")
@@ -286,12 +318,13 @@ func (s *Service) stamp(ev *store.SSFEvent, started, now time.Time) {
 }
 
 // actionedAudit audits ssf.event_actioned: what ran, how long it took.
-func (s *Service) actionedAudit(ev *store.SSFEvent, tr *store.SSFTransmitter, set *SET, ident *store.Identity, retries, manual int) func(*store.TenantTx, time.Time) error {
+func (s *Service) actionedAudit(ev *store.SSFEvent, tr *store.SSFTransmitter, set *SET, ident *store.Identity, retries, manual, local int) func(*store.TenantTx, time.Time) error {
 	return func(c *store.TenantTx, now time.Time) error {
 		d := ojson.Object{{Key: "event_id", Value: ev.ID}, {Key: "transmitter_id", Value: tr.ID},
 			{Key: "event_type", Value: set.EventType}, {Key: "event", Value: EventName(set.EventType)},
 			{Key: "status", Value: ev.Status}, {Key: "outcome", Value: ev.Outcome}, {Key: "steps", Value: ev.Steps},
-			{Key: "steps_failed", Value: ev.StepsFailed}, {Key: "manual_tasks", Value: manual}, {Key: "retries_queued", Value: retries}}
+			{Key: "steps_failed", Value: ev.StepsFailed}, {Key: "manual_tasks", Value: manual}, {Key: "retries_queued", Value: retries},
+			{Key: "local_sessions_revoked", Value: local}}
 		if ident != nil {
 			d = append(d, ojson.KV{Key: "identity_id", Value: ident.ID}, ojson.KV{Key: "identity", Value: ident.Name})
 		}

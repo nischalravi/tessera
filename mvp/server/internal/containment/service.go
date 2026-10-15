@@ -13,6 +13,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 )
 
@@ -36,6 +37,10 @@ type Service struct {
 	// RetryBudget bounds the provider calls of one RunRetries pass (default
 	// 25s); tests shorten it.
 	RetryBudget time.Duration
+	// DB holds the lease and the ledger that serialize edits of the shared AWS
+	// Deny policy across workers. Without it (unit tests of one provider) the
+	// edits are not coordinated; the policy is still read back and verified.
+	DB *store.DB
 }
 
 func (s *Service) now() time.Time {
@@ -45,7 +50,7 @@ func (s *Service) now() time.Time {
 	return timeutil.System()
 }
 
-func (s *Service) revoker(system string, c Credential) (Revoker, error) {
+func (s *Service) revoker(tenant tenancy.ID, system string, c Credential) (Revoker, error) {
 	if s.HTTP == nil {
 		return nil, errors.New("outbound HTTP is not configured")
 	}
@@ -59,7 +64,7 @@ func (s *Service) revoker(system string, c Credential) (Revoker, error) {
 	case GitHub:
 		return newGitHub(s.HTTP, c, s.Sleep)
 	case AWSIdentityCenter:
-		return newAWS(s.HTTP, c, s.Sleep, s.now)
+		return newAWS(s.HTTP, c, s.Sleep, s.now, s.ledgerFor(tenant))
 	}
 	return nil, fmt.Errorf("no revoker for system %q", system)
 }
@@ -203,6 +208,7 @@ type Item struct {
 	Connection string // the connection id, "" when the system has none
 	cred       *Credential
 	prepErr    string // why the credential could not be loaded (fails the step)
+	tenant     tenancy.ID
 }
 
 // Job is what Run executes: prepared in a read transaction, run with no
@@ -259,7 +265,7 @@ func (s *Service) BuildJob(c *store.TenantTx, identityID int64, trigger string, 
 		if a.IdentityID == nil || *a.IdentityID != identityID {
 			return nil, &Error{"account does not belong to the identity"}
 		}
-		it := Item{Action: sp.Action, AccountID: a.ID, Target: targetFor(a)}
+		it := Item{Action: sp.Action, AccountID: a.ID, Target: targetFor(a), tenant: c.Tenant()}
 		if cn := conns[a.System]; cn != nil {
 			it.Connection = cn.ID
 			if _, done := creds[cn.ID]; !done && failed[cn.ID] == "" {
@@ -438,7 +444,7 @@ func (s *Service) runItem(ctx context.Context, st *StepResult, it Item, revokers
 	rv, ok := revokers[it.Connection]
 	if !ok {
 		var err error
-		if rv, err = s.revoker(it.Target.System, *it.cred); err != nil {
+		if rv, err = s.revoker(it.tenant, it.Target.System, *it.cred); err != nil {
 			return fail("%v", err)
 		}
 		revokers[it.Connection] = rv

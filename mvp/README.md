@@ -349,12 +349,41 @@ AWS has no API that ends a workforce user's sessions. `revoke_sessions` for an
 as far as an API reaches. The account's external id is the identity store `UserId`.
 
 1. `identitystore:DescribeUser` (a stale id fails the step).
-2. The `UserId` goes into the Deny policy (`organizations:DescribePolicy`, then `UpdatePolicy`; a
-   `ConcurrentModificationException` is retried from a fresh read).
-3. The user's permission set assignments are deleted
+2. The Deny policy must be attached (`organizations:ListTargetsForPolicy` returns at least one
+   target) and its statement must be a dedicated deny-all (see the prerequisite below). A policy that
+   is unattached, or whose `identitystore:userId` statement is narrower, fails the step: a user id in
+   a statement that does not deny everything proves nothing, so the step is never reported verified.
+3. The `UserId` goes into the Deny policy (`organizations:DescribePolicy`, then `UpdatePolicy`; a
+   `ConcurrentModificationException` is retried from a fresh read). Edits are serialized per policy:
+   a worker takes a lease on (tenant, policy id) in the database
+   (`containment_policy_leases`, 60 s, released when done), merges the complete desired set (every
+   user id Tessera holds for the policy, pending or active within the last 12 hours, from
+   `containment_policy_denials`, plus what the policy has now), writes it, then re-reads the policy
+   and checks every expected entry is there. A missing entry is added again; if it is still missing
+   after 4 attempts the step fails. A worker that cannot get the lease within 25 s fails the step,
+   which is queued for retry.
+4. The user's permission set assignments are deleted
    (`sso-admin:ListAccountAssignmentsForPrincipal`, `DeleteAccountAssignment`, then
    `DescribeAccountAssignmentDeletionStatus` until `SUCCEEDED`), so no new role session can start.
-4. Verify re-reads the policy (the `UserId` is in it) and the assignments (none left).
+5. Verify re-reads the attachment, the policy (the `UserId` is in the deny-all statement) and the
+   assignments (none left).
+
+**External writers.** The lease only orders Tessera's own workers; AWS offers no compare-and-set on
+`UpdatePolicy`. If someone edits the Deny policy by hand or from another tool at the same moment, their
+write can replace Tessera's. Tessera notices (the read-back), adds its entries again and fails the
+step rather than report it verified if it cannot. Edit the policy through the console between
+Tessera runs, and keep the single deny-all statement: another statement that names
+`identitystore:userId` makes the policy ambiguous and is refused.
+
+**Tessera's own sessions.** Containment also ends the identity's sessions inside Tessera, whether or
+not the identity has an account on a kill-switch connection: every active session of every platform
+user linked to it (`platform_users.identity_id`, or a sign-in through an IdP connection whose subject
+is the external id of one of the identity's accounts), in a write transaction with a
+`containment.local_sessions_revoked` audit event (users and sessions counted; written when the identity
+has linked platform users, so an identity nobody signs in as adds no event). The SSF receiver,
+`POST /api/identities/{id}/contain` and the leaver execution all do it, before any provider call. A
+revoked session is refused with `401` on its next request. Tessera keeps no refresh tokens or OAuth
+grants of its own, so the session is its only bearer credential.
 
 Manual tasks in the report: delete the AWS access portal session in the console (no API), disable
 the user at the external identity provider and remove group-based access at the source, and remove
@@ -387,9 +416,15 @@ give Tessera its policy id (`p-...`):
 }
 ```
 
+Tessera accepts only this shape: one `Deny` statement, `Action` `"*"` (a string or `["*"]`),
+`Resource` `"*"` (or none), no `NotAction`, `NotResource` or other element, and as its only condition
+`StringEquals` on `identitystore:userId`. A narrower statement (some actions, one resource, a second
+condition such as a source IP) would not end the user's role sessions, so a user id in it is not
+proof, and the step fails with an error that says so. The policy must also be attached to a target.
+
 The placeholder matches no user and stays in the list. Tessera adds user ids next to it. The AWS
 credential is an IAM user (or role session) in the management account that may call
-`organizations:DescribePolicy`, `organizations:UpdatePolicy` on that policy,
+`organizations:DescribePolicy`, `organizations:ListTargetsForPolicy`, `organizations:UpdatePolicy` on that policy,
 `identitystore:DescribeUser`, `sso:ListAccountAssignmentsForPrincipal`,
 `sso:DeleteAccountAssignment` and `sso:DescribeAccountAssignmentDeletionStatus` (the sso-admin API; check the
 DeleteAccountAssignment reference for anything else AWS requires of the caller, which Tessera cannot verify

@@ -92,6 +92,8 @@ var tables = []string{
 	"containment_credentials", "containment_retries",
 	// shared signals receiver (schema/0207_ssf.sql)
 	"ssf_transmitters", "ssf_events",
+	// the shared Deny policy of AWS containment (schema/0208_containment_policy.sql)
+	"containment_policy_leases", "containment_policy_denials",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was

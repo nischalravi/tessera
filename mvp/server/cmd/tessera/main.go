@@ -298,7 +298,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if err != nil {
 		return err
 	}
-	containmentSvc := &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock}
+	containmentSvc := &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock, DB: st}
 	srv := api.New(api.Config{Containment: containmentSvc,
 		SSF:   &ssf.Service{HTTP: outbound, Sealer: sealer, Clock: clock, Containment: containmentSvc},
 		Store: st, Clock: clock, Policies: loader, Logger: logger,

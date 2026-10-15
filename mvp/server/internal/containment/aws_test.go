@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 )
 
 // The AWS tests replay recorded AWS JSON answers (testdata/aws.json, one
@@ -100,6 +102,12 @@ func (r *awsReplay) serve(w http.ResponseWriter, req *http.Request) {
 		_, _ = w.Write(resp.Body)
 		return
 	}
+	if target == "AWSOrganizationsV20161128.ListTargetsForPolicy" {
+		// a scenario that does not script it has the policy attached to the root
+		w.Header().Set("Content-Type", "application/x-amz-json-1.1")
+		_, _ = w.Write([]byte(`{"Targets":[{"TargetId":"r-ab12","Name":"Root","Type":"ROOT"}]}`))
+		return
+	}
 	r.t.Errorf("fixture holds no answer for %s with body %s", target, body)
 	http.Error(w, "no fixture", 599)
 }
@@ -152,21 +160,23 @@ func TestAWSIdentityCenter(t *testing.T) {
 		manual         int
 	}{
 		{name: "revoke: deny entry, assignments deleted, verified", scenario: "revoke", outcome: OutcomeDone, revoked: 3, manual: 3,
-			calls: []string{"DescribeUser", "DescribePolicy", "UpdatePolicy", "ListAccountAssignmentsForPrincipal",
-				"DeleteAccountAssignment", "DescribeAccountAssignmentDeletionStatus", "DeleteAccountAssignment",
-				"DescribeAccountAssignmentDeletionStatus", "DescribePolicy", "ListAccountAssignmentsForPrincipal"},
+			calls: []string{"DescribeUser", "ListTargetsForPolicy", "DescribePolicy", "UpdatePolicy", "DescribePolicy",
+				"ListAccountAssignmentsForPrincipal", "DeleteAccountAssignment", "DescribeAccountAssignmentDeletionStatus",
+				"DeleteAccountAssignment", "DescribeAccountAssignmentDeletionStatus", "ListTargetsForPolicy", "DescribePolicy",
+				"ListAccountAssignmentsForPrincipal"},
 			sleeps: []time.Duration{250 * ms, 250 * ms}},
 		{name: "already denied: no policy update", scenario: "already_denied", outcome: OutcomeDone, revoked: 1, manual: 3,
-			calls: []string{"DescribeUser", "DescribePolicy", "ListAccountAssignmentsForPrincipal", "DescribePolicy",
-				"ListAccountAssignmentsForPrincipal"}},
+			calls: []string{"DescribeUser", "ListTargetsForPolicy", "DescribePolicy", "ListAccountAssignmentsForPrincipal",
+				"ListTargetsForPolicy", "DescribePolicy", "ListAccountAssignmentsForPrincipal"}},
 		{name: "throttled twice, then ok", scenario: "throttled_then_ok", outcome: OutcomeDone, revoked: 1, manual: 3,
 			sleeps: []time.Duration{250 * ms, 500 * ms}},
 		{name: "throttle exhausted", scenario: "throttle_exhausted", outcome: OutcomeFailed, detail: "rate limit",
 			sleeps: []time.Duration{250 * ms, 500 * ms, time.Second}},
 		{name: "concurrent modification is retried from a fresh read", scenario: "concurrent_modification", outcome: OutcomeDone,
 			revoked: 1, manual: 3,
-			calls: []string{"DescribeUser", "DescribePolicy", "UpdatePolicy", "DescribePolicy", "UpdatePolicy",
-				"ListAccountAssignmentsForPrincipal", "DescribePolicy", "ListAccountAssignmentsForPrincipal"},
+			calls: []string{"DescribeUser", "ListTargetsForPolicy", "DescribePolicy", "UpdatePolicy", "DescribePolicy", "UpdatePolicy",
+				"DescribePolicy", "ListAccountAssignmentsForPrincipal", "ListTargetsForPolicy", "DescribePolicy",
+				"ListAccountAssignmentsForPrincipal"},
 			sleeps: []time.Duration{250 * ms}},
 		{name: "policy too large", scenario: "policy_too_large", outcome: OutcomeFailed, detail: "Deny service control policy is full"},
 		{name: "unknown identity store user", scenario: "user_not_found", outcome: OutcomeFailed, detail: "does not know this user"},
@@ -248,7 +258,7 @@ func TestAWSVerifyOnly(t *testing.T) {
 		svc, _ := testService(t)
 		svc.Clock = func() time.Time { return time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC) }
 		rp := newAWSReplay(t, tc.scenario)
-		rv, err := svc.revoker(AWSIdentityCenter, Credential{BaseURL: rp.srv.URL, Token: awsCredJSON(t, nil)})
+		rv, err := svc.revoker(tenancy.ID{}, AWSIdentityCenter, Credential{BaseURL: rp.srv.URL, Token: awsCredJSON(t, nil)})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -274,19 +284,19 @@ func TestAWSCredentialValidation(t *testing.T) {
 		"bad endpoint":       {awsCredJSON(t, nil), "ftp://x", "base_url"},
 		"endpoint with user": {awsCredJSON(t, nil), "https://u:p@x", "base_url"},
 	} {
-		if _, err := svc.revoker(AWSIdentityCenter, Credential{BaseURL: tc.base, Token: tc.token}); err == nil ||
+		if _, err := svc.revoker(tenancy.ID{}, AWSIdentityCenter, Credential{BaseURL: tc.base, Token: tc.token}); err == nil ||
 			!strings.Contains(err.Error(), tc.wantErr) {
 			t.Errorf("%s: err = %v, want %q", name, err, tc.wantErr)
 		}
 	}
-	if _, err := svc.revoker(AWSIdentityCenter, Credential{Token: awsCredJSON(t, func(c *AWSCredential) { c.SessionToken = "tok" })}); err != nil {
+	if _, err := svc.revoker(tenancy.ID{}, AWSIdentityCenter, Credential{Token: awsCredJSON(t, func(c *AWSCredential) { c.SessionToken = "tok" })}); err != nil {
 		t.Errorf("valid credential with a session token: %v", err)
 	}
 }
 
 func TestAWSBadTargetAndGrants(t *testing.T) {
 	svc, _ := testService(t)
-	rv, err := svc.revoker(AWSIdentityCenter, Credential{Token: awsCredJSON(t, nil)})
+	rv, err := svc.revoker(tenancy.ID{}, AWSIdentityCenter, Credential{Token: awsCredJSON(t, nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +320,7 @@ func TestAddUserToPolicy(t *testing.T) {
 	if _, changed, _ := addUserToPolicy(out, "u-1"); changed {
 		t.Error("adding a present user changed the policy")
 	}
-	big := `{"Statement":[{"Effect":"Deny","Condition":{"StringEquals":{"identitystore:userId":["` + strings.Repeat("a", 5100) + `"]}}}]}`
+	big := `{"Statement":[{"Effect":"Deny","Action":"*","Resource":"*","Condition":{"StringEquals":{"identitystore:userId":["` + strings.Repeat("a", 5100) + `"]}}}]}`
 	if _, _, err := addUserToPolicy(big, "u-2"); err != ErrPolicyTooLarge {
 		t.Errorf("full policy: %v", err)
 	}
