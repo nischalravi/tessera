@@ -23,6 +23,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oauth2rp"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oidcrp"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
@@ -96,6 +97,10 @@ type Config struct {
 	// TrustedProxies (TESSERA_TRUSTED_PROXIES) are the peers whose
 	// X-Forwarded-For the rate limiter believes.
 	TrustedProxies []netip.Prefix
+	// Containment runs the kill switch's provider calls (revoke sessions and
+	// grants). Nil: a service with no outbound client, so every containment
+	// step is a manual task.
+	Containment *containment.Service
 	// AuditAppend overrides how the audit middleware writes http.request
 	// events (tests inject failures). Nil: the store.
 	AuditAppend func(ctx context.Context, t tenancy.ID, e store.AuditEvent) error
@@ -114,6 +119,8 @@ type Server struct {
 	oauth2 *oauth2rp.RP
 
 	readiness *readiness.Service
+	// containment is the kill switch (issue #106); never nil.
+	containment *containment.Service
 }
 
 // New builds a server.
@@ -144,7 +151,13 @@ func New(cfg Config) *Server {
 		cfg.Readiness = readiness.NewService(reg, cfg.Env)
 		cfg.Readiness.Runner.Scenario = cfg.ReadinessScenario
 	}
-	s := &Server{cfg: cfg, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
+	if cfg.Containment == nil {
+		cfg.Containment = &containment.Service{}
+	}
+	if cfg.Containment.Clock == nil {
+		cfg.Containment.Clock = cfg.Clock
+	}
+	s := &Server{cfg: cfg, containment: cfg.Containment, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
 		limits: newLimiters(cfg.RateLimits)}
 	if cfg.OutboundHTTP != nil {
 		rp, err := oidcrp.New(oidcrp.Config{HTTP: cfg.OutboundHTTP, Now: func() time.Time { return s.clock() }})
@@ -160,6 +173,8 @@ func New(cfg Config) *Server {
 		Cookies: auth.Cookies{Insecure: cfg.InsecureCookie}}
 	s.registerRoutes()
 	s.registerAuditRoutes()
+	s.registerCorrelationRoutes()
+	s.registerContainmentRoutes()
 	s.registerReadinessRoutes()
 	s.registerAuthRoutes()
 	s.registerLoginRoutes()
@@ -233,6 +248,9 @@ func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
 	for {
 		if _, err := jit.SweepAll(ctx, s.store, s.clock()); err != nil && ctx.Err() == nil {
 			s.log.Error("jit sweep failed", "err", err)
+		}
+		if err := s.containment.SweepRetries(audit.WithSystemActor(ctx, "containment.sweeper"), s.store, "containment.sweeper"); err != nil && ctx.Err() == nil {
+			s.log.Error("containment retry sweep failed", "err", err)
 		}
 		select {
 		case <-ctx.Done():
