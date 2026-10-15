@@ -1,4 +1,9 @@
 GET /api/health
 POST /public/t/{slug}/ssf/{transmitter_id}/events
-GET /api/auth/dev-login
-POST /api/auth/dev-login
+GET /api/auth/discover
+GET /api/auth/login
+GET /api/auth/oidc/{connection_id}/callback
+GET /t/{slug}/bootstrap
+GET /api/auth/saml/{connection_id}/metadata
+POST /api/auth/saml/{connection_id}/acs
+GET /api/auth/oauth2/{connection_id}/callback
