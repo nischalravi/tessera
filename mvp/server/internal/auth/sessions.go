@@ -251,3 +251,9 @@ func RevokeUserSessions(tx *store.TenantTx, userID uuid.UUID, reason string, now
 func ClientSecretAAD(t tenancy.ID, conn uuid.UUID) []byte {
 	return seal.AAD(t, "idp_connections", "client_secret_enc", conn.String())
 }
+
+// SPKeyAAD binds a sealed SAML SP signing key (idp_connections.sp_key_enc)
+// to its tenant and connection.
+func SPKeyAAD(t tenancy.ID, conn uuid.UUID) []byte {
+	return seal.AAD(t, "idp_connections", "sp_key_enc", conn.String())
+}

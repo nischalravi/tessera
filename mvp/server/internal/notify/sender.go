@@ -225,7 +225,12 @@ func (c *SMTP) SendRecorded(ctx context.Context, e Email) (*Attempt, error) {
 		a.Outcome = OutcomeFailed
 	}
 	if err != nil {
-		a.Error = clipField(strings.ReplaceAll(err.Error(), e.To, "<recipient>"))
+		// the stored text and the returned error never carry a credential a relay echoed
+		msg := a.scrubText(strings.ReplaceAll(err.Error(), e.To, "<recipient>"))
+		a.Error = clipField(msg)
+		if m := a.scrubText(err.Error()); m != err.Error() {
+			err = &redactedError{msg: m, err: err}
+		}
 	}
 	return a, err
 }
@@ -277,9 +282,13 @@ func (c *SMTP) send(ctx context.Context, e Email, a *Attempt) error {
 		if err != nil {
 			return "", err
 		}
+		if strings.HasPrefix(shown, "AUTH ") {
+			// the relay may echo the payload: keep the codes (digits only) and a fixed text
+			msg = strings.TrimSpace(enhancedRE.FindString(msg) + " " + authReplyDetail)
+		}
 		a.step(shown, code, msg)
 		if code/100 != class {
-			return msg, &replyError{code, clipField(msg)}
+			return msg, &replyError{code, clipField(a.scrubText(msg))}
 		}
 		return msg, nil
 	}
@@ -334,6 +343,9 @@ func (c *SMTP) send(ctx context.Context, e Email, a *Attempt) error {
 			return fmt.Errorf("%w: refusing to send a password without TLS", ErrPermanent)
 		}
 		token := base64.StdEncoding.EncodeToString([]byte("\x00" + c.Username + "\x00" + c.password))
+		b64 := func(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
+		a.redact = append(a.redact, token, c.password, b64(c.password), b64(c.Username),
+			base64.RawStdEncoding.EncodeToString([]byte("\x00"+c.Username+"\x00"+c.password)), c.Username)
 		if _, err := cmd("AUTH PLAIN "+token, "AUTH PLAIN <redacted>", 2); err != nil {
 			return err
 		}

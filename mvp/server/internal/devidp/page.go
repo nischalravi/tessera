@@ -23,16 +23,16 @@ var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html>
 <h1>{{.Title}}</h1>
 {{if .Message}}<p>{{.Message}}</p>{{end}}
 {{if .Req}}
-<p>Client <code>{{.ClientID}}</code> asks you to sign in.
-{{if .ACRValues}} Requested <code>acr_values={{.ACRValues}}</code>.{{end}}
+<p>{{if .SAML}}Service provider{{else}}Client{{end}} <code>{{.ClientID}}</code> asks you to sign in.
+{{if .ACRValues}} Requested <code>{{if .SAML}}AuthnContextClassRef {{else}}acr_values={{end}}{{.ACRValues}}</code>.{{end}}
 {{if .ACRS}} Requested Entra auth context <code>{{.ACRS}}</code>.{{end}}
 {{if .MaxAge}} <code>max_age={{.MaxAge}}</code>.{{end}}
 {{if .Fault}} <strong>Fault: <code>{{.Fault}}</code></strong>.{{end}}</p>
 <form method="post" action="{{.Action}}">
 <input type="hidden" name="req" value="{{.Req}}">
-<fieldset><legend>Emulate</legend>
+{{if .Profiles}}<fieldset><legend>Emulate</legend>
 {{range .Profiles}}<label><input type="radio" name="profile" value="{{.Value}}"{{if .Checked}} checked{{end}}> {{.Label}}</label><br>{{end}}
-</fieldset>
+</fieldset>{{end}}
 {{range .Users}}<fieldset><legend>{{.Name}} · <code>{{.Sub}}</code> · {{.Email}} · tenant <code>{{.Tenant}}</code>{{if .Roles}} · {{.Roles}}{{end}}</legend>
 {{$u := .}}{{range .Methods}}<button type="submit" name="choice" value="{{$u.Sub}} {{.Value}}">{{.Label}}</button>{{end}}
 </fieldset>{{end}}
@@ -57,6 +57,7 @@ type pageData struct {
 	ACRValues, ACRS, MaxAge, Fault string
 	Profiles                       []option
 	Users                          []userView
+	SAML                           bool
 }
 
 func (s *Server) renderSignIn(w http.ResponseWriter, id string, p pendingAuthz) {
@@ -68,6 +69,12 @@ func (s *Server) renderSignIn(w http.ResponseWriter, id string, p pendingAuthz) 
 	for _, pr := range Profiles() {
 		d.Profiles = append(d.Profiles, option{Value: string(pr), Label: pr.Label(), Checked: pr == s.defaultProfile})
 	}
+	s.renderUsers(w, &d, p.loginHint)
+}
+
+// renderUsers adds the users (hint first) to d and renders the sign-in page.
+func (s *Server) renderUsers(w http.ResponseWriter, d *pageData, loginHint string) {
+	p := struct{ loginHint string }{loginHint}
 	// login_hint preselects: the hinted user is listed first.
 	users := s.userList()
 	slices.SortStableFunc(users, func(a, b User) int {
@@ -89,7 +96,7 @@ func (s *Server) renderSignIn(w http.ResponseWriter, id string, p pendingAuthz) 
 		}
 		d.Users = append(d.Users, v)
 	}
-	s.render(w, http.StatusOK, d)
+	s.render(w, http.StatusOK, *d)
 }
 
 func (s *Server) errorPage(w http.ResponseWriter, status int, msg string) {

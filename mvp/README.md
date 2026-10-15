@@ -33,10 +33,10 @@ Requirements: Go 1.27+ (the version in `server/go.mod`), Node 18+ (tested on 24)
 ```
 
 * UI: http://localhost:5173 (Vite dev server; it proxies `/api` to the backend via `TESSERA_API`).
-  Sign in with **dev sign-in** (see [Dev sign-in](#dev-sign-in)): pick a seeded user, for example
-  Alice (tenant admin) or Pat (policy admin), with a passkey.
+  Sign in to `larkspur` through the dev IdP (see [Signing in](#signing-in)), for example as Alice
+  (tenant admin) or Pat (policy admin) with a passkey.
 * API: http://127.0.0.1:8000. OpenAPI docs are at http://127.0.0.1:8000/docs
-* Dev IdP: http://127.0.0.1:8001 (see [Dev sign-in](#dev-sign-in))
+* Dev IdP: http://127.0.0.1:8001 (see [Signing in](#signing-in))
 
 Ctrl+C stops all three processes. You can change the ports with `API_PORT=… UI_PORT=… DEVIDP_PORT=… ./run.sh`
 (`DEVIDP=0` skips the dev IdP).
@@ -69,6 +69,9 @@ server/
                         `notify seal-password`; timeouts, graceful shutdown, JIT sweeper, audit
                         checkpointer, notification dispatcher
   cmd/tessera-devidp/   the dev IdP binary (development and tests only; see Dev sign-in)
+  cmd/tessera/          main: `serve` (default), `seed` and `audit verify|checkpoint|export`; timeouts,
+                        graceful shutdown, JIT sweeper, audit checkpointer
+  cmd/tessera-devidp/   the dev IdP binary (development and tests only; see Signing in)
   internal/
     connectors/         Connector interface + normalized record types, deterministic demo company
                         (pyrand.go reproduces CPython's Mersenne Twister so seed 7 gives the same
@@ -161,6 +164,18 @@ The routes are documented at `/api/readiness/openapi.json`.
 `GET /api/audit/events/{event_id}/proof` · `GET /api/audit/checkpoints[?from_seq=]` · `GET /api/audit/keys` ·
 `POST /api/audit/verify {from_seq?, to_seq?}` · `GET /api/audit/export[?from_seq=&to_seq=]` (NDJSON) ·
 `GET /api/auth/session` · `POST /api/auth/logout` · `GET /api/auth/sessions` · `DELETE /api/auth/sessions/{session_id}` ·
+`GET /api/auth/step-up?acr=&max_age=&return_to=` ·
+`GET /api/auth/discover?tenant=&email=` · `GET /api/auth/login?tenant=&connection=&return_to=` (302 to the IdP) ·
+`GET /api/auth/oidc/{connection_id}/callback` · `GET /api/auth/saml/{connection_id}/metadata` ·
+`POST /api/auth/saml/{connection_id}/acs` · `GET /api/auth/oauth2/{connection_id}/callback` ·
+`GET /t/{slug}/bootstrap?code=` (public)
+`GET|POST /api/auth/dev-login` (dev and test only) ·
+`GET /api/catalog[?all=1]` · `PUT /api/catalog/items/{group_id}` ·
+`POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours}` ·
+`GET /api/requests[?scope=mine|pending|all&status=]` · `GET /api/requests/{id}` ·
+`POST /api/requests/{id}/approve|deny|cancel|remove {reason}` ·
+`GET /api/approvals/inbox` · `GET /api/approvals/delegates` · `GET|POST /api/approvals/delegations` ·
+`POST /api/approvals/delegations/{id}/revoke` ·
 `GET /api/correlation/queue` · `GET /api/correlation/decisions` ·
 `POST /api/accounts/{id}/link {identity_id, reason}` · `POST /api/accounts/{id}/not-person {reason}` ·
 `DELETE /api/accounts/{id}/link` · `POST /api/identities/{id}/merge {into, reason}` (202 and a request
@@ -206,9 +221,6 @@ when a second reviewer is needed) · `GET /api/identity-merges` · `POST /api/id
 `GET|PUT /api/notifications/preferences {prefs:{kind:channel}}` ·
 `GET /api/email/messages[?status=&kind=&recipient=&limit=]` · `GET /api/email/messages/{id}` ·
 `POST /api/email/messages/{id}/retry` ·
-`GET /api/auth/discover?tenant=&email=` · `GET /api/auth/login?tenant=&connection=&return_to=` (302 to the IdP) ·
-`GET /api/auth/oidc/{connection_id}/callback` · `GET /t/{slug}/bootstrap?code=` (public) ·
-`GET|POST /api/auth/dev-login` (dev and test only) ·
 `GET /api/jobs[?status=running|succeeded|failed&kind=&connection_id=&limit=]` · `GET /api/jobs/{job_id}` ·
 `POST /api/jobs/{job_id}/retry` ·
 `GET /api/provisioning/targets` · `PUT|DELETE /api/provisioning/targets/{connection_id}` ·
@@ -1215,24 +1227,26 @@ down to about 360px wide.
 **Bundle.** Every route is lazy-loaded. The main chunk is about 87 kB gzipped and the stylesheet
 about 8 kB; cytoscape (about 146 kB gzipped) only loads with the access graph.
 
-## Dev sign-in
+## Signing in
 
-Every API call needs a signed-in session (design `docs/design/phase-0-platform-security.md` §11, §12).
-Tessera signs users in through their company's identity provider (OIDC: see
-[Sign-in through the IdP](#sign-in-through-the-idp-oidc); SAML arrives in PR9); the UI switches to that
-flow in PR7. Until then a development server (`TESSERA_ENV=dev` or `test`,
-which `./run.sh` sets) offers **dev sign-in**:
+Every API call needs a signed-in session (design `docs/design/phase-0-platform-security.md` §11, §12),
+and Tessera never sees a password: users sign in through their company's identity provider (OIDC, SAML 2.0,
+or an OAuth 2.0-only provider such as GitHub).
 
-1. `./run.sh` and open http://localhost:5173. The sign-in page lists the users the seed created for the
-   dev IdP (below) and asks how they authenticate.
-2. Pick a user and a method. The page calls `POST /api/auth/dev-login {tenant, subject, method}`; the
-   API resolves the user through the tenant's `dev_mock` IdP connection and the (connection, subject)
-   link (never by email), builds the authentication context the dev IdP's Okta emulation would return
-   when Tessera asks for phishing resistance, and sets the session cookie.
-3. Roles follow from the method, as with a real IdP (design §12.2): admin roles (`tenant_admin`,
+1. `./run.sh` and open http://localhost:5173. The sign-in page asks for the organization (tenant):
+   `larkspur` (the demo company) or `globex`.
+2. **Continue** lists the tenant's sign-in connections (`GET /api/auth/discover`); **Sign in with Dev
+   IdP (OIDC)** leaves for the dev IdP (below).
+3. On the dev IdP's page pick a user, how they authenticate and which vendor to emulate (Okta is the
+   default). You come back to the page you started from, signed in.
+4. Roles follow from the method, as with a real IdP (design §12.2): admin roles (`tenant_admin`,
    `policy_admin`) are active only after a phishing-resistant method (**Passkey** or **Hardware security
    key**); other roles need MFA (**Password + OTP** or better); **Password only** activates no role.
-   The user menu shows inactive roles and offers to sign in again.
+   The user menu shows inactive roles and **Re-authenticate**, and **My sessions** (`/sessions`) lists
+   and signs out your sessions.
+
+A sign-in that fails comes back to `/login?error=login_failed&request_id=…`; the page shows the request
+id, and the reason is in the audit log (`auth.login.failure`), never in the URL.
 
 | User | Tenant | Role | What they can do |
 |---|---|---|---|
@@ -1244,15 +1258,16 @@ which `./run.sh` sets) offers **dev sign-in**:
 
 Approvals, review decisions, HRIS execution, applying a revoke and editing a connection's config or
 credential also need a phishing-resistant sign-in in the last 15 minutes (step-up, §10.2). Nobody can
-approve a JIT request they made, or one that grants access to their own identity (403 `self_approval`). Until the step-up flow lands (PR8) the API answers
-`401 step_up_required` and the UI asks you to sign in again.
-
-Dev sign-in is a development shim with guard rails (§18.4): the routes exist only with
-`TESSERA_ENV=dev`, or with `TESSERA_ENV=test` plus the opt-in `TESSERA_DEV_LOGIN=1`, and then answer
-loopback clients only; the picker (`GET /api/auth/dev-login?tenant=<slug>`) lists one tenant's users;
-the request needs a JSON body and an allowed `Origin`; every attempt is audited (`auth.login.success` /
-`auth.login.failure`); signing in again revokes the browser's previous session; and a production server
-refuses to start with `TESSERA_DEV_LOGIN` or while a `dev_mock` connection exists. PR7 removes it.
+approve a JIT request they made, or one that grants access to their own identity (403 `self_approval`).
+When the sign-in is too old or too weak the API answers `401 step_up_required` with the RFC 9470
+challenge (`WWW-Authenticate: Bearer error="insufficient_user_authentication", acr_values=…, max_age=…`)
+and a `step_up_url`. The UI explains why and, on **Continue**, re-authenticates at the IdP
+(`GET /api/auth/step-up?acr=&max_age=&return_to=`: `prompt=login`, `max_age=0`); back on the page it offers
+to resume the action (kept in `sessionStorage` for ten minutes: the request only, never a token).
+Tessera requires the same person (else `auth.step_up.subject_mismatch`), an `auth_time` after the step-up
+started (the IdP really re-authenticated) and the required ACR (else `auth.step_up.insufficient`); on
+success the session's authentication is replaced, its cookie and CSRF token rotate, and
+`auth.step_up.success` records what was required and what was presented.
 
 Unauthenticated traffic is rate-limited per client IP before it reaches the audit ledger: every
 `/api/auth/*` request (burst 30, then one per 2 s) and every request without a valid session (burst
@@ -1279,9 +1294,49 @@ URI to register at the IdP) consumes the transaction once, redeems the code with
 operator or auditor from IdP groups and never an admin role. Every refusal is audited as
 `auth.login.failure` with a reason and shows a generic page with the request id.
 
-With `./run.sh`, http://localhost:5173/api/auth/login?tenant=larkspur signs in through the dev IdP (the
+With `./run.sh`, the sign-in page (or http://localhost:5173/api/auth/login?tenant=larkspur) goes through the dev IdP (the
 seed seals its client secret, `DEVIDP_CLIENT_SECRET`, default `tessera-dev-secret`, into the `dev_mock`
-connections). The UI's sign-in page switches to this flow in PR7.
+connections). The UI's sign-in page uses this flow.
+
+### Sign-in through the IdP (SAML 2.0)
+
+A SAML connection (design §9.2, SP-initiated only) starts at the same `/api/auth/login?tenant=&connection=`:
+Tessera stores the AuthnRequest ID in the login transaction and redirects with a signed AuthnRequest
+(HTTP-Redirect binding, RelayState = the transaction id; a step-up adds `ForceAuthn` and the requested
+class refs). The IdP posts to the ACS, `/api/auth/saml/{connection_id}/acs` (body at most 256 KiB),
+which `internal/auth/samlsp` checks before and after gosaml2: XML round-trip safety, exactly one
+`Assertion`, a direct child with its own enveloped signature by a pinned certificate (never `KeyInfo`
+or metadata), no encrypted assertion, no comment in `NameID`, issuer, `InResponseTo`, destination and
+recipient, audience (the SP entity ID, which is the metadata URL), a ±60 s window and `AuthnInstant`.
+Each assertion ID is accepted once (`replay_cache`, until `NotOnOrAfter`). The subject is the
+persistent NameID or `subject_source: attribute:<name>`, never the email.
+
+The IdP's POST is cross-site, so the `SameSite=Lax` login cookie does not come with it: the ACS answers
+that first POST with a page (CSP nonce, `form-action 'self'`) that posts the same form again from
+Tessera's origin, where the cookie is sent. The cookie never needs `SameSite=None`.
+
+`./run.sh` seeds a second `dev_mock` connection, **Dev IdP (SAML)**, pinning the dev IdP's SAML
+certificate (`tessera-devidp -print-saml-cert`, derived from its key) with a sealed SP key, so the sign-in
+page offers both. Its SP metadata is at `/api/auth/saml/<id>/metadata`.
+
+### Sign-in through an OAuth 2.0-only provider (GitHub)
+
+Some providers speak only OAuth 2.0 and issue no ID token (issue #151). A `protocol: oauth2`
+connection (`github`, or `generic_oauth2` with configured endpoints) uses the authorization code flow
+with PKCE S256 and `state` through the same login transaction and cookie. The callback,
+`/api/auth/oauth2/{connection_id}/callback`, redeems the code at the pinned token endpoint and asks the
+user API who signed in (`internal/auth/oauth2rp`, through `internal/safehttp`). The user is keyed on
+an immutable id (GitHub's numeric `id`, or `subject_field`), never a login name or email; email is the
+primary verified address when `user:email` is granted, for display only.
+
+Nothing signed proves the factor or when the user authenticated, so these sessions are **AAL1 and
+never phishing resistant**: admin roles stay inactive, step-up answers `409 step_up_unavailable`,
+bootstrap invitations cannot use the connection, and `assume_phishing_resistant` is refused (and
+ignored). `auth_time` is the callback time. Admins sign in through OIDC or SAML.
+
+`./run.sh` also seeds **Dev IdP (GitHub OAuth)**, which uses the dev IdP's GitHub emulation
+(`/github/login/oauth/authorize`, `/github/login/oauth/access_token`, `/github/user`; faults
+`github_token_error`, `github_token_type`, `github_user_error`, `github_no_id`, `github_string_id`).
 
 **A new tenant** is created by an operator (design §15.3); every step is audited as the OS user:
 
@@ -1292,8 +1347,14 @@ TESSERA_ENV=dev go run ./cmd/tessera admin add-idp -tenant acme -file okta.yaml 
 TESSERA_ENV=dev go run ./cmd/tessera admin invite-admin -tenant acme -connection <id> -email jane@acme.example
 ```
 
-`add-idp` reads a connection file (§18.2; unknown keys are refused, secrets are never in it; OIDC with
-`client_secret_basic` for now) and prints the redirect URI. `invite-admin` prints a one-time
+`add-idp` reads a connection file (§18.2; unknown keys are refused, secrets are never in it). OIDC uses
+`client_secret_basic` for now and prints the redirect URI. `protocol: saml` with `profile: generic_saml`
+needs `idp_entity_id`, `idp_sso_url` and `idp_signing_certs` (pinned), takes `subject_source` and
+`attribute_map` (`email`, `name`, `groups`), generates and seals an SP key, and prints the SP entity
+ID/metadata and ACS URLs to register at the IdP. `protocol: oauth2` takes `profile: github` (GitHub's
+endpoints and `id` by default) or `generic_oauth2` with `authorization_endpoint`, `token_endpoint`,
+`userinfo_endpoint` and `subject_field` (never a name or email), needs `-client-secret-file`, and
+prints the redirect URI. `invite-admin` prints a one-time
 `/t/acme/bootstrap?code=tbi_…` URL valid for at most 24 hours (only its hash is stored): redeeming it
 with a phishing-resistant sign-in through that connection, as that email, makes the user `tenant_admin`
 (source `bootstrap`), once.
@@ -1353,7 +1414,14 @@ than login refusals, and are refused where they would not be defects: `acr_unreq
 **Tests** run it in-process: `devidptest.Start(t, devidp.Config{})` returns a loopback server
 with a registered test client and faults enabled.
 
-**SAML** (`/saml/metadata`, `/saml/sso`) answers 501 until the SAML SP lands (Phase 0 PR9).
+**SAML**: `/saml/metadata` (entity ID `<issuer>/saml/metadata`) and `/saml/sso` (HTTP-Redirect
+AuthnRequests from an ACS matching `http://127.0.0.1:*/api/auth/saml/*/acs` or localhost; the request
+signature is not checked, dev only). It answers with a signed assertion (exclusive c14n, RSA-SHA256)
+whose class ref follows the method (`urn:devidp:ac:phrh`, `urn:devidp:ac:phr`, MobileTwoFactorContract,
+PasswordProtectedTransport), and attributes `email`, `displayName`, `groups`. SAML faults
+(`&fault=` on the SSO URL): `unsigned_assertion`, `signed_response_unsigned_assertion`, `xsw1`–`xsw8`,
+`comment_in_nameid`, `wrong_audience`, `wrong_recipient`, `saml_expired`, `unsolicited`,
+`wrong_in_response_to`, `replay`.
 
 **Safety.** The binary refuses to start unless `TESSERA_ENV` is `dev` or `test`, listens on loopback
 only, and keeps its signing key in `server/var/devidp/` (mode 0600, git-ignored), separate from
