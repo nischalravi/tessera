@@ -90,6 +90,8 @@ var tables = []string{
 	"account_links", "identity_merges",
 	// identity containment (schema/0205_containment.sql)
 	"containment_credentials", "containment_retries",
+	// two-person activation (schema/0208_activation_requests.sql)
+	"connection_activation_requests",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was

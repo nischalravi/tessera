@@ -58,6 +58,9 @@ type Evidence struct {
 	Data         map[resultKey]*ResultInfo
 	Findings     []FindingInfo
 	TenantTypes  map[string]bool // template ids of the tenant's other connections
+	// Approval is the applied two-person activation request of this revision
+	// (nil when none); the gate accepts it only for the exact config hash.
+	Approval *store.ActivationRequest
 }
 
 // Part is the evaluation of one verification of an item.

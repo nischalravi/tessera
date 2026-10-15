@@ -143,6 +143,22 @@ tenant-scoped like every other table; Admin → Connections → New
 connection → Active Directory (demo) walks the rest. Design: `docs/design/deployment-readiness.md`.
 The routes are documented at `/api/readiness/openapi.json`.
 
+Access control: `connections.read` (tenant admin, auditor), `connections.manage` and
+`connections.activate` (tenant admin). Activating, retiring, editing the config or credential, and
+changing an overlay need a phishing-resistant sign-in in the last 15 minutes (step-up); so does
+accepting a **critical** finding (checked in the handler, since it depends on the finding). A
+revision with `write_mode` other than `off` is **two-person**: `POST /api/connections/{id}/activate`
+opens an activation request (`202 pending_approval`, valid 72 h, bound to the revision and config
+hash), and a different tenant admin approves it with `POST .../activation/approve` (step-up), which
+applies the activation in the same transaction. The requester and anyone who attested an item of
+the revision get `403 two_person_rule`; the requester cancels and anyone else rejects with
+`POST .../activation/reject`; `GET .../activation` shows the latest request. The gate itself
+(blocker `activation.approval`) refuses a write-enabled revision that has no approval, so no other
+caller can skip the second person. This request table stands in for the `connection.activate`
+admin-change type until Phase 0's admin-change workflow (PR12) lands. Non-demo connector types are
+no longer refused with `phase0_required`: the gate alone decides (simulated evidence never
+satisfies it).
+
 ### Main API endpoints
 
 `GET /api/summary` · `GET /api/identities[?type=&q=]` · `GET /api/identities/{id}` · `GET /api/accounts[?system=]` ·

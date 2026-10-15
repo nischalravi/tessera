@@ -428,7 +428,8 @@ const MinAcceptReason = 20
 
 // AcceptFinding accepts an open finding of the connection's latest dry run
 // with a reason, then re-evaluates the data checks that read finding status.
-// Accepting a critical finding will additionally need step-up (DR-10).
+// Accepting a critical finding additionally needs step-up, which the API
+// handler checks (the authentication context is not known here).
 func (s *Service) AcceptFinding(c *store.TenantTx, connID, findingID, reason string, expires *time.Time, actor string, now time.Time) (*store.Finding, error) {
 	f, err := c.FindingByID(findingID)
 	if errors.Is(err, store.ErrNotFound) || (err == nil && f.ConnectionID != connID) {

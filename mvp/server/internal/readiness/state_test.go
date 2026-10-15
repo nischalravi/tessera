@@ -758,13 +758,15 @@ func TestSimulated_CannotGateRealTypes(t *testing.T) {
 		}
 		return nil
 	})
-	// Outside dev, real types cannot be activated at all before DR-10.
+	// DR-10 lifted the phase0_required refusal (tenancy, RBAC and step-up
+	// exist); outside dev the gate alone still refuses: simulated evidence
+	// never satisfies a real type.
 	s.Env = ""
 	err := st.Write(context.Background(), func(c *store.TenantTx) error {
 		_, _, err := s.Activate(c, id, "admin", t0)
 		return err
 	})
-	if codeOf(err) != "phase0_required" {
+	if codeOf(err) != "activation_blocked" {
 		t.Errorf("real type activation: %v", err)
 	}
 }

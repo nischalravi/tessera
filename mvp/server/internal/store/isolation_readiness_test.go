@@ -460,5 +460,8 @@ func readinessCovered() map[string]bool {
 	// Covered by TestIsolation_ReadinessInsertWrongTenantRejected and
 	// TestIsolation_ReadinessCountsOnlyOwnRows.
 	out["InsertConnection"], out["RunningDryRuns"] = true, true
+	for k := range activationCovered() { // TestIsolation_ReadinessTables
+		out[k] = true
+	}
 	return out
 }

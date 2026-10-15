@@ -95,8 +95,11 @@ GET    /api/connections/{id}/validations/{run}       connections.read   -
 POST   /api/connections/{id}/dry-run                 connections.manage -
 GET    /api/connections/{id}/dry-runs/{run}          connections.read   -
 GET    /api/connections/{id}/findings                connections.read   -
-POST   /api/connections/{id}/findings/{fid}/accept   connections.manage -
+POST   /api/connections/{id}/findings/{fid}/accept   connections.manage -  (critical finding: STEP_UP_POLICY in the handler)
 GET    /api/connections/{id}/health                  connections.read   -
+GET    /api/connections/{id}/activation              connections.read   -  # DR-10
+POST   /api/connections/{id}/activation/approve      connections.activate STEP_UP_POLICY  # DR-10
+POST   /api/connections/{id}/activation/reject       connections.activate -  # DR-10
 GET    /api/insights/deployment-health               connections.read   -
 POST   /api/insights/deployment-health/rerun         connections.manage -
 GET    /api/auth/session                             auth.self       -
