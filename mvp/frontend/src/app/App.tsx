@@ -65,6 +65,7 @@ const RotationSecrets = named(rotationPages, "RotationSecrets");
 const RotationJobs = named(rotationPages, "RotationJobs");
 const RotationPolicies = named(rotationPages, "RotationPolicies");
 const VendorCompromised = named(rotationPages, "VendorCompromised");
+const MySessions = named(() => import("../features/account/MySessions"), "MySessions");
 
 /** Redirect an old route to its new home, keeping the query string (e.g. /graph?identity=5). */
 function Moved({ to }: { to: string }) {
@@ -86,6 +87,9 @@ export default function App() {
                 <Suspense fallback={<PageSkeleton />}>
                   <Routes>
                     <Route path="/" element={<Home />} />
+                    {/* signed in already: the sign-in page (and its error) has nothing left to do */}
+                    <Route path="/login" element={<Navigate to="/" replace />} />
+                    <Route path="/sessions" element={<MySessions />} />
                     <Route path="/inbox" element={<Inbox />} />
 
                     <Route path="/access" element={<Navigate to="/access/request" replace />} />

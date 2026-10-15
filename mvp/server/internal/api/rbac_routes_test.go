@@ -121,9 +121,15 @@ GET    /api/rotation/bulk/{id}                       graph.read         -
 GET    /api/auth/session                             auth.self       -
 POST   /api/auth/logout                              auth.self       -
 GET    /api/auth/sessions                            auth.self       -
+GET    /api/auth/step-up                             auth.self       -
 DELETE /api/auth/sessions/{session_id}               auth.self       -  (another user's: admin.sessions.revoke + STEP_UP_ADMIN in the handler)
-GET    /api/auth/dev-login                           public
-POST   /api/auth/dev-login                           public
+GET    /api/auth/discover                            public
+GET    /api/auth/login                               public
+GET    /api/auth/oidc/{connection_id}/callback       public
+GET    /api/auth/saml/{connection_id}/metadata       public
+POST   /api/auth/saml/{connection_id}/acs            public
+GET    /api/auth/oauth2/{connection_id}/callback     public
+GET    /t/{slug}/bootstrap                           public
 `
 
 type designRoute struct {
