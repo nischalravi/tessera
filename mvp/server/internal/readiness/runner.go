@@ -23,6 +23,9 @@ type RunnerOptions struct {
 	RunTimeout     time.Duration // whole run (default 120 s)
 	MaxRunsPerHour int           // per connection (default 6)
 	Scenario       string        // demo scenario (default connectors.DefaultScenario)
+	// Scheduled re-run intervals (§7.4, Scheduler): live checks every 1 to 7
+	// days (default 1), post-activation reconciliation weekly.
+	LiveEvery, ReconEvery time.Duration
 	// ProberFor returns the prober for a revision. The default is the
 	// simulated scenario prober: no real directory is contacted in the MVP.
 	ProberFor func(b *Bundle, now time.Time) (connectors.Prober, error)
@@ -41,6 +44,12 @@ func (o *RunnerOptions) withDefaults() RunnerOptions {
 	}
 	if r.Scenario == "" {
 		r.Scenario = connectors.DefaultScenario
+	}
+	if r.LiveEvery < 24*time.Hour || r.LiveEvery > 7*24*time.Hour {
+		r.LiveEvery = 24 * time.Hour
+	}
+	if r.ReconEvery <= 0 {
+		r.ReconEvery = 7 * 24 * time.Hour
 	}
 	if r.ProberFor == nil {
 		scenario := r.Scenario

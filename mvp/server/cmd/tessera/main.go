@@ -33,6 +33,8 @@
 //	                      tessera-devidp -print-saml-cert): seeding also creates a
 //	                      dev_mock SAML connection pinning it (run.sh sets it)
 //	TESSERA_READINESS_SCENARIO  simulated validation scenario for demo connectors: gaps (default) or happy
+//	TESSERA_READINESS_LIVE_CHECK_DAYS  how often live checks re-run on active connections, 1 to 7 days (default 1)
+//	TESSERA_READINESS_SCHEDULER "off" stops the scheduled re-runs, drift and Degraded detection
 //	TESSERA_READINESS_DEMO      "off" skips seeding the demo Okta connection (larkspur only) for Deployment health
 package main
 
@@ -281,6 +283,10 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if scenario != "" && !slices.Contains(connectors.ScenarioNames(), scenario) {
 		return fmt.Errorf("TESSERA_READINESS_SCENARIO: unknown scenario %q (have %v)", scenario, connectors.ScenarioNames())
 	}
+	rsvc, err := newReadinessService(cfg.Env, scenario)
+	if err != nil {
+		return err
+	}
 	anchorURL := cfg.AnchorURL(o.db)
 	sink, err := audit.NewSink(anchorURL)
 	if err != nil {
@@ -301,7 +307,8 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound,
 		Containment:    &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock},
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
-		HSTS: cfg.IsProd(), Env: cfg.Env, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, AuditAnchor: anchorURL})
+		HSTS: cfg.IsProd(), Env: cfg.Env, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, Readiness: rsvc,
+		AuditAnchor: anchorURL})
 	checkpointer := &audit.Checkpointer{DB: st, Sealer: sealer, Sink: sink, Clock: timeutil.System, Issuer: cfg.PublicURL,
 		Every: time.Duration(cfg.AuditCheckpointSeconds) * time.Second, EveryEvents: int64(cfg.AuditCheckpointEvents),
 		Log: logger}
@@ -334,6 +341,11 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		defer close(ckptDone)
 		checkpointer.Loop(ctx, checkpointInterval)
 	}()
+	rdyDone := make(chan struct{})
+	go func() {
+		defer close(rdyDone)
+		runReadinessScheduler(ctx, rsvc, st, clock, logger)
+	}()
 	errc := make(chan error, 1)
 	go func() { errc <- httpSrv.Serve(ln) }()
 	logger.Info("tessera API listening", "addr", ln.Addr().String())
@@ -344,6 +356,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		<-sweepDone
 		<-keysDone
 		<-ckptDone
+		<-rdyDone
 		return err
 	case <-ctx.Done():
 	}
@@ -354,6 +367,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	<-sweepDone
 	<-keysDone
 	<-ckptDone
+	<-rdyDone
 	if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 		return serveErr
 	}

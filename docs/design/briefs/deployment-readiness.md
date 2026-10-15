@@ -37,7 +37,9 @@ Connections to customer directories (AD, LDAP, Entra, Okta, Google, Workday, SCI
 
 Frontend (mvp/frontend/src): `features/admin/connections/{ConnectionsList,Wizard,ValidationResults,ReconReport,FindingDrawer,shared,index}`, `components/{Checklist,Stepper}.tsx`, `features/insights/DeploymentHealth.tsx`, `features/home/Home.tsx`, `features/inbox/`, `app/nav.ts`, `app/CommandPalette.tsx`, `api.ts`.
 
-Not yet existing: `readiness/evidence.go`, `drift.go`, `internal/safedial`, `internal/agent`, `cmd/tessera-agent`, per-directory `internal/connectors/{ad,ldap,entra,...}/probe.go`.
+DR-9 (#90, on branch `agent/90-readiness-drift`): `readiness/drift.go` (baseline, `Compare`, `Monitor`, `DegradeReasons`, `RequireWrite`, template upgrade grace, `Tasks`), `readiness/schedule.go` (`Scheduler`, `JobHook`), `store/repo_baselines.go`, `schema/0209_readiness_baselines.sql`, `template.Registry.Archive`, `cmd/tessera/readiness_jobs.go`.
+
+Not yet existing: `readiness/evidence.go`, `internal/safedial`, `internal/agent`, `cmd/tessera-agent`, per-directory `internal/connectors/{ad,ldap,entra,...}/probe.go`.
 
 ## Key names
 - Score: `levelWeight` required 5, recommended 2, optional 0; `severityPenalty` critical 15, high 8, medium 3, low 1; `PenaltyCap` 40; `RequiredCap` 49 (cap below 50 while a Required item fails); bands healthy, needs_attention, at_risk, not_ready.

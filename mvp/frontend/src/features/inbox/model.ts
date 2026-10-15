@@ -7,7 +7,7 @@
  *   connection   degraded connections, for their owners and admins (deployment readiness)
  */
 import { useEffect, useMemo, useState } from "react";
-import { Campaign, ConnectionHealthRow, DeploymentHealth, HrisEvent, JitRequest, ReviewItem, api, useApi } from "../../api";
+import { Campaign, ConnectionHealthRow, DeploymentHealth, HrisEvent, JitRequest, ReadinessTask, ReviewItem, api, useApi } from "../../api";
 import { Persona, usePersona } from "../../app/persona";
 import { AccessRequestDraft, DelegationItem, useMockState } from "../../mocks";
 
@@ -19,7 +19,7 @@ export type InboxItem =
   | { kind: "review"; key: string; at: string; item: ReviewItem; campaign: Campaign }
   | { kind: "task"; key: string; at: string; event: HrisEvent }
   | { kind: "delegated"; key: string; at: string; delegation: DelegationItem }
-  | { kind: "connection"; key: string; at: string; conn: ConnectionHealthRow };
+  | { kind: "connection"; key: string; at: string; conn: ConnectionHealthRow; task?: ReadinessTask };
 
 /** Full detail for each open campaign; refetches when any write happens. */
 export function useOpenCampaigns() {
@@ -73,7 +73,10 @@ export function useInbox(scope: "mine" | "all" = "mine") {
     campaigns.forEach((c) => (c.review_items ?? []).filter((it) => !it.decision).forEach((it) => out.push({ kind: "review", key: `rev-${it.id}`, at: c.created_at, item: it, campaign: c })));
     hris.filter((e) => e.status === "pending").forEach((e) => out.push({ kind: "task", key: `hris-${e.id}`, at: e.effective_at, event: e }));
     mock.delegations.filter((d) => d.status === "pending").forEach((d) => out.push({ kind: "delegated", key: d.id, at: new Date().toISOString(), delegation: d }));
-    (health?.connections ?? []).filter((c) => c.state === "degraded").forEach((c) => out.push({ kind: "connection", key: `conn-${c.id}`, at: c.last_validated ?? health!.generated_at, conn: c }));
+    (health?.connections ?? []).filter((c) => c.state === "degraded").forEach((c) => {
+      const task = health!.tasks.find((t) => t.connection_id === c.id); // the server's task carries the reason and the owner
+      out.push({ kind: "connection", key: `conn-${c.id}`, at: task?.since ?? c.last_validated ?? health!.generated_at, conn: c, task });
+    });
     return out;
   }, [jit, hris, campaigns, mock, health]);
 

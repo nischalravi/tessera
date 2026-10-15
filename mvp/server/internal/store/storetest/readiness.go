@@ -36,6 +36,9 @@ const ReadinessSentinel = "ZZ-GLOBEX-READINESS-SENTINEL"
 //	run:ad-running  a validation run still running
 //	finding:ad      the marked finding
 //	item:ad-skip    the skipped Recommended item of the AD connection
+//
+// The AD revision also has a drift baseline (readiness_baselines) with a
+// marked snapshot and degraded reason.
 func seedReadiness(tb testing.TB, db *store.DB, t *Tenant, sentinel string) {
 	tb.Helper()
 	mark := func(s string) string {
@@ -174,6 +177,12 @@ func seedReadiness(tb testing.TB, db *store.DB, t *Tenant, sentinel string) {
 		if err := c.SetStagedCorrelation(dryID, "ad-corp", "S-1", "correlated", 1, ptr(t.IDs["alice"]), nil); err != nil {
 			return err
 		}
+		snapshot, _ := json.Marshal(map[string]string{"note": mark("baseline")})
+		reason := mark("Required live check failed on 2 consecutive scheduled runs")
+		if err := c.InsertBaseline(&store.Baseline{RevisionID: b.Rev.ID, CapturedAt: at, Score: 42, ConfigHash: b.ConfigHash,
+			Snapshot: string(snapshot), FailStreak: 1, DegradedReason: &reason}); err != nil {
+			return err
+		}
 		breakdown, _ := json.Marshal(map[string]string{"note": mark("score")})
 		return c.RecordScore(&store.ScoreRow{Scope: "connection", ConnectionID: &ad, RevisionID: &b.Rev.ID, ComputedAt: at,
 			Score: 42, Band: "at_risk", Breakdown: string(breakdown)})
@@ -216,6 +225,8 @@ func ReadinessDump(tb testing.TB, db *store.DB, t tenancy.ID, refs map[string]st
 		}
 		s, e := c.ScoreSeries("tenant", nil, 1000)
 		put("scores:tenant", s, e)
+		bls, e := c.Baselines()
+		put("baselines", bls, e)
 		k, e := c.AllSkips()
 		put("skips", k, e)
 		o, e := c.LatestOverlay("ad")
