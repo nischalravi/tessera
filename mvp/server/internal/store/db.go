@@ -80,6 +80,8 @@ var tables = []string{
 	"login_transactions",
 	// operator bootstrap (schema/0006_admin.sql)
 	"bootstrap_invitations",
+	// OAuth authorization server (schema/0207_oauth.sql)
+	"api_clients", "device_grants", "refresh_tokens",
 	// audit ledger (schema/0004_audit.sql)
 	"audit_events", "audit_chain_heads", "audit_checkpoints",
 	// deployment readiness (schema/0201-0203; revoked_grants is 0204)

@@ -80,9 +80,32 @@ func newLimiters(c RateLimits) *limiters {
 
 // rateKey is the limiter key of the request's client.
 func (s *Server) rateKey(r *http.Request) string {
+	a, ok := s.clientIP(r)
+	if !ok {
+		return r.RemoteAddr
+	}
+	if a.Is6() {
+		p, _ := a.Prefix(64)
+		return p.String()
+	}
+	return a.String()
+}
+
+// requestIP is the client address as text (the OAuth server records it and
+// keys its limiter by it).
+func (s *Server) requestIP(r *http.Request) string {
+	if a, ok := s.clientIP(r); ok {
+		return a.String()
+	}
+	return r.RemoteAddr
+}
+
+// clientIP is the client address: the TCP peer, or, when the peer is a
+// trusted proxy, the rightmost X-Forwarded-For entry that is not one.
+func (s *Server) clientIP(r *http.Request) (netip.Addr, bool) {
 	ap, err := netip.ParseAddrPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		return netip.Addr{}, false
 	}
 	a := ap.Addr().Unmap()
 	if s.trustedProxy(a) {
@@ -98,11 +121,7 @@ func (s *Server) rateKey(r *http.Request) string {
 			}
 		}
 	}
-	if a.Is6() {
-		p, _ := a.Prefix(64)
-		return p.String()
-	}
-	return a.String()
+	return a, true
 }
 
 func (s *Server) trustedProxy(a netip.Addr) bool {
