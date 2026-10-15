@@ -151,6 +151,8 @@ type Tenant struct {
 	// with Users as its bootstrap users (WithDevIdP; dev and test only).
 	DevIdP string
 	Users  []User
+	// DevIdPClient seals the dev IdP connection's client secret (optional).
+	DevIdPClient *DevIdPClient
 }
 
 // Larkspur is the Larkspur Labs demo tenant over conns.
