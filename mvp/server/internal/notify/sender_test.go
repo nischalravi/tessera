@@ -39,6 +39,7 @@ type fakeSMTP struct {
 	implicit bool
 	starttls string // the reply to STARTTLS; default 220
 	delay    time.Duration
+	authEcho bool // answer AUTH with a 535 that repeats the payload
 	mu       sync.Mutex
 	rcptN    int
 	from     string
@@ -136,6 +137,10 @@ func (f *fakeSMTP) serve(c net.Conn) {
 			f.mu.Lock()
 			f.auth = append(f.auth, strings.TrimSpace(line))
 			f.mu.Unlock()
+			if f.authEcho {
+				say("535 5.7.8 authentication failed: " + strings.TrimSpace(line[len("AUTH PLAIN "):]))
+				continue
+			}
 			say("235 2.7.0 Authentication successful")
 		case strings.HasPrefix(cmd, "MAIL FROM:"):
 			f.mu.Lock()
