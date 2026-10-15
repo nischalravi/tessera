@@ -3,8 +3,11 @@ package reviews_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,23 +31,73 @@ type world struct {
 	t    *testing.T
 }
 
+// The demo company is seeded once per test binary into a template database
+// file (seeding is slow under -race); every test works on its own copy.
+var (
+	templateOnce sync.Once
+	templateDir  string
+	templateErr  error
+)
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if templateDir != "" {
+		_ = os.RemoveAll(templateDir)
+	}
+	os.Exit(code)
+}
+
+func seedTemplate() (string, error) {
+	templateOnce.Do(func() {
+		ctx := context.Background()
+		dir, err := os.MkdirTemp("", "reviews-template-")
+		if err != nil {
+			templateErr = err
+			return
+		}
+		templateDir = dir
+		db, err := store.Open(ctx, filepath.Join(dir, "template.db"))
+		if err != nil {
+			templateErr = err
+			return
+		}
+		pols, err := policy.NewLoader(policies.FS).Load()
+		if err == nil {
+			var conns []connectors.Connector
+			if conns, err = connectors.Load("demo", now); err == nil {
+				_, err = seed.Run(ctx, db, now, pols, []seed.Tenant{seed.Larkspur(conns), seed.Globex(now)})
+			}
+		}
+		if err == nil {
+			err = db.Checkpoint(ctx) // so the file can be copied on its own
+		}
+		templateErr = errors.Join(err, db.Close())
+	})
+	return filepath.Join(templateDir, "template.db"), templateErr
+}
+
 func newWorld(t *testing.T) *world {
 	t.Helper()
 	ctx := context.Background()
-	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "reviews.db"))
+	src, err := seedTemplate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(src) // #nosec G304 -- the template this test binary created
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "reviews.db")
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.Open(ctx, path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	pols, err := policy.NewLoader(policies.FS).Load()
 	if err != nil {
-		t.Fatal(err)
-	}
-	conns, err := connectors.Load("demo", now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := seed.Run(ctx, db, now, pols, []seed.Tenant{seed.Larkspur(conns), seed.Globex(now)}); err != nil {
 		t.Fatal(err)
 	}
 	return &world{db: db, pols: pols, t: t}

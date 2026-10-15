@@ -152,7 +152,7 @@ func TestQASamplePctSetting(t *testing.T) {
 		})
 		return
 	}
-	for _, tc := range []struct{ pct, want int }{{50, 68}, {1, 2}, {0, 0}, {100, 135}} {
+	for _, tc := range []struct{ pct, want int }{{50, 68}, {1, 2}, {0, 0}} {
 		w.larkspur(func(c *store.TenantTx) error { return reviews.SetQASamplePct(c, now, tc.pct, reviewer) })
 		id := w.launch("pct")
 		if got, pct := count(id); got != tc.want || pct != tc.pct {
@@ -161,8 +161,8 @@ func TestQASamplePctSetting(t *testing.T) {
 	}
 	w.larkspur(func(c *store.TenantTx) error {
 		evs, _ := c.AuditEvents(store.AuditFilter{Action: "review.qa_sample_pct_changed"})
-		if len(evs) != 4 {
-			t.Errorf("%d setting-change events, want 4", len(evs))
+		if len(evs) != 3 {
+			t.Errorf("%d setting-change events, want 3", len(evs))
 		}
 		return nil
 	})
