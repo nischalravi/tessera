@@ -57,6 +57,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
@@ -285,8 +286,9 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if err != nil {
 		return err
 	}
-	// Outbound calls to IdPs (discovery, JWKS, token) go through safehttp. A
-	// test server gets the production client (no loopback exception).
+	// Outbound calls to IdPs (discovery, JWKS, token) and the kill switch's
+	// provider calls (containment) go through safehttp. A test server gets the
+	// production client (no loopback exception).
 	outCfg := *cfg
 	if outCfg.Env == config.Test {
 		outCfg.Env, outCfg.OutboundAllowLoopback = config.Prod, false
@@ -297,6 +299,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	}
 	srv := api.New(api.Config{Store: st, Clock: clock, Policies: loader, Logger: logger,
 		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound,
+		Containment:    &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock},
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
 		HSTS: cfg.IsProd(), Env: cfg.Env, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, AuditAnchor: anchorURL})
 	checkpointer := &audit.Checkpointer{DB: st, Sealer: sealer, Sink: sink, Clock: timeutil.System, Issuer: cfg.PublicURL,

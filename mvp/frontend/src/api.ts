@@ -634,7 +634,101 @@ export const revokeSession = (id: string) => api<unknown>(`/auth/sessions/${enco
 
 export const hrisExecute = (eventId: number) => api(`/hris/events/${eventId}/execute`, {});
 
-export const simulate = (body: { remove_edge_ids?: number[]; add_edges?: { src: string; dst: string }[]; disable_account_ids?: number[] }) =>
+// ---------------------------------------------------------------- account correlation (issue #160)
+
+export interface CorrAccount { id: number; system: string; external_id: string; username: string; kind: string; status: string; identity_id: number | null }
+/** A person the account's login proposes. Proposals are never linked automatically. */
+export interface MatchCandidate { identity_id: number; name: string; email: string; rule: "email" | "email_local_part" }
+export interface MatchItem { account: CorrAccount; candidates: MatchCandidate[] }
+export interface LinkDecision {
+  account_id: number;
+  decision: "link" | "not_person";
+  identity_id: number | null;
+  previous_identity_id: number | null;
+  reason: string;
+  decided_by: string;
+  decided_at: string;
+}
+export interface MergeMove { table: string; id: number; column: string }
+export interface IdentityMerge {
+  id: string;
+  survivor_id: number;
+  survivor_name: string;
+  merged_id: number;
+  merged_name: string;
+  merged_status: string;
+  moves: MergeMove[];
+  reason: string;
+  merged_by: string;
+  merged_at: string;
+  unmerge_before: string;
+  unmerged_by: string | null;
+  unmerged_at: string | null;
+  unmerge_reason: string | null;
+}
+export interface UnmergeResult { merge: IdentityMerge; restored: MergeMove[]; kept: MergeMove[] }
+
+export const linkAccount = (accountId: number, identityId: number, reason: string) =>
+  api<{ account: CorrAccount; decision: LinkDecision }>(`/accounts/${accountId}/link`, { identity_id: identityId, reason });
+export const markNotPerson = (accountId: number, reason: string) =>
+  api<{ account: CorrAccount; decision: LinkDecision }>(`/accounts/${accountId}/not-person`, { reason });
+export const releaseAccount = (accountId: number) =>
+  api<{ account: CorrAccount; decision: LinkDecision }>(`/accounts/${accountId}/link`, undefined, "DELETE");
+export const mergeIdentity = (mergedId: number, survivorId: number, reason: string) =>
+  api<IdentityMerge>(`/identities/${mergedId}/merge`, { into: survivorId, reason });
+export const unmergeIdentity = (mergeId: string, reason: string) =>
+  api<UnmergeResult>(`/identity-merges/${encodeURIComponent(mergeId)}/unmerge`, { reason });
+
+/** Kill switch (issue #106): revoke an identity's sessions, refresh tokens and OAuth grants at the providers. */
+export interface ContainmentStep {
+  action: "revoke_sessions" | "revoke_grants";
+  system: string;
+  account: string;
+  outcome: "done" | "manual" | "failed";
+  revoked: number;
+  verified: boolean;
+  detail?: string;
+  notes?: string[];
+  started_at: string;
+  finished_at: string;
+  duration_ms: number;
+}
+export interface ContainmentReport {
+  identity_id: number;
+  identity: string;
+  trigger: string;
+  ok: boolean;
+  started_at: string;
+  finished_at: string;
+  duration_ms: number;
+  providers: { system: string; outcome: string; steps: number; failed: number; manual: number; duration_ms: number }[];
+  steps: ContainmentStep[];
+  manual_tasks: { system: string; account: string; action: string; instructions: string }[];
+}
+/** Resolves with the report; a failed run rejects with an ApiError whose body.report holds it. */
+export const containIdentity = (identityId: number, reason: string) =>
+  api<ContainmentReport>(`/identities/${identityId}/contain`, { reason });
+
+/** A containment step that failed and is queued for retry (or was given up on). */
+export interface ContainmentRetry {
+  id: string;
+  identity_id: number;
+  system: string;
+  account: string;
+  action: "revoke_sessions" | "revoke_grants";
+  trigger: string;
+  status: "pending" | "succeeded" | "gave_up";
+  attempts: number;
+  next_attempt_at: string | null;
+  last_error: string;
+  created_at: string;
+  updated_at: string;
+  manual_action?: string;
+}
+export const retryContainmentNow = (retryId: string) =>
+  api<{ retry: ContainmentRetry }>(`/containment-retries/${encodeURIComponent(retryId)}/retry-now`, {});
+
+export const simulate = (body: { remove_edge_ids?: number[]; add_edges?: { src: string; dst: string; duration_hours?: number }[]; disable_account_ids?: number[] }) =>
   api<SimResult>("/simulate", { remove_edge_ids: [], add_edges: [], disable_account_ids: [], ...body });
 
 // ------------------------------------------------------------ formatting

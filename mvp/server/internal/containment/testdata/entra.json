@@ -1,0 +1,42 @@
+{
+  "ok_sessions": [
+    {"method": "POST", "path": "/v1.0/users/11111111-2222-3333-4444-555555555555/revokeSignInSessions", "responses": [
+      {"status": 200, "body": {"@odata.context": "https://graph.microsoft.com/v1.0/$metadata#Edm.Boolean", "value": true}}]},
+    {"method": "GET", "path": "/v1.0/users/11111111-2222-3333-4444-555555555555", "responses": [
+      {"status": 200, "body": {"id": "11111111-2222-3333-4444-555555555555", "signInSessionsValidFromDateTime": "2026-10-14T12:00:05Z"}}]}
+  ],
+  "ok_grants": [
+    {"method": "GET", "path": "/v1.0/oauth2PermissionGrants", "responses": [
+      {"status": 200, "body": {"value": [{"id": "g-1", "consentType": "Principal", "scope": "User.Read"}, {"id": "g-2", "consentType": "Principal", "scope": "Mail.Read"}]}},
+      {"status": 200, "body": {"value": []}}]},
+    {"method": "DELETE", "path": "/v1.0/oauth2PermissionGrants/g-1", "responses": [{"status": 204}]},
+    {"method": "DELETE", "path": "/v1.0/oauth2PermissionGrants/g-2", "responses": [{"status": 204}]}
+  ],
+  "not_found": [
+    {"method": "POST", "path": "/v1.0/users/11111111-2222-3333-4444-555555555555/revokeSignInSessions", "responses": [
+      {"status": 404, "body": {"error": {"code": "Request_ResourceNotFound", "message": "Resource '11111111-2222-3333-4444-555555555555' does not exist"}}}]}
+  ],
+  "rate_limited": [
+    {"method": "POST", "path": "/v1.0/users/11111111-2222-3333-4444-555555555555/revokeSignInSessions", "responses": [
+      {"status": 429, "headers": {"Retry-After": "1"}, "body": {"error": {"code": "TooManyRequests"}}},
+      {"status": 429, "headers": {"Retry-After": "1"}, "body": {"error": {"code": "TooManyRequests"}}},
+      {"status": 200, "body": {"value": true}}]},
+    {"method": "GET", "path": "/v1.0/users/11111111-2222-3333-4444-555555555555", "responses": [
+      {"status": 200, "body": {"signInSessionsValidFromDateTime": "2026-10-14T12:00:01Z"}}]}
+  ],
+  "stale_session": [
+    {"method": "POST", "path": "/v1.0/users/11111111-2222-3333-4444-555555555555/revokeSignInSessions", "responses": [{"status": 200, "body": {"value": true}}]},
+    {"method": "GET", "path": "/v1.0/users/11111111-2222-3333-4444-555555555555", "responses": [
+      {"status": 200, "body": {"signInSessionsValidFromDateTime": "2026-10-14T09:15:00Z"}}]}
+  ],
+  "not_confirmed": [
+    {"method": "POST", "path": "/v1.0/users/11111111-2222-3333-4444-555555555555/revokeSignInSessions", "responses": [{"status": 200, "body": {"value": false}}]}
+  ],
+  "partial": [
+    {"method": "GET", "path": "/v1.0/oauth2PermissionGrants", "responses": [
+      {"status": 200, "body": {"value": [{"id": "g-1"}, {"id": "g-2"}]}}]},
+    {"method": "DELETE", "path": "/v1.0/oauth2PermissionGrants/g-1", "responses": [{"status": 204}]},
+    {"method": "DELETE", "path": "/v1.0/oauth2PermissionGrants/g-2", "responses": [
+      {"status": 403, "body": {"error": {"code": "Authorization_RequestDenied"}}}]}
+  ]
+}
