@@ -49,6 +49,8 @@ var readinessRouteCases = map[string][]rdCase{
 	"GET /api/connections/{id}/checklist": {{method: "GET", path: onConn("/checklist"), key: "connection:ad"}},
 	"POST /api/connections/{id}/checklist/{item}/attest": {{method: "POST", path: onConn("/checklist/base.owner/attest"),
 		body: `{"note":"attested from another tenant"}`, key: "connection:ad"}},
+	"POST /api/connections/{id}/checklist/{item}/attest-instead": {{method: "POST", path: onConn("/checklist/ldap.svc.no_write/attest-instead"),
+		body: `{"attester":"Pat","reason":"attested from another tenant","evidence":"none at all"}`, key: "connection:ad"}},
 	"POST /api/connections/{id}/checklist/{item}/skip": {{method: "POST", path: onConn("/checklist/base.schedule/skip"),
 		body: `{"reason":"skipping across the tenant boundary"}`, key: "connection:ad"}},
 	// The fixture skips the same item in both tenants.

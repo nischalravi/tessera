@@ -39,6 +39,9 @@ func (s *Server) registerReadinessRoutes() {
 	s.handle(http.MethodPut, "/api/connections/{id}/credential", write, needStepUp(auth.PermConnectionsManage, auth.StepUpPolicy), s.rd(s.putCredential))
 	s.handle(G, "/api/connections/{id}/checklist", read, need(auth.PermConnectionsRead), s.rd(s.getChecklist))
 	s.handle(P, "/api/connections/{id}/checklist/{item}/attest", write, need(auth.PermConnectionsManage), s.rd(s.attestItem))
+	// Step-up like the other attestations that gate activation by a person's word
+	// for a system that cannot be checked.
+	s.handle(P, "/api/connections/{id}/checklist/{item}/attest-instead", write, needStepUp(auth.PermConnectionsManage, auth.StepUpPolicy), s.rd(s.attestInstead))
 	s.handle(P, "/api/connections/{id}/checklist/{item}/skip", write, need(auth.PermConnectionsManage), s.rd(s.skipItem))
 	s.handle(http.MethodDelete, "/api/connections/{id}/checklist/{item}/skip", write, need(auth.PermConnectionsManage), s.rd(s.unskipItem))
 	s.handle(P, "/api/connections/{id}/transition", write, need(auth.PermConnectionsManage), s.rd(s.transition))
@@ -372,6 +375,21 @@ func (s *Server) attestItem(r *http.Request, p *params) (int, any, error) {
 	}
 	return s.checklistAfter(r, p, func(c *store.TenantTx, id, item string, now time.Time) (*readiness.Bundle, error) {
 		return s.readiness.Attest(c, id, item, in.Note, actor(r), now)
+	})
+}
+
+func (s *Server) attestInstead(r *http.Request, p *params) (int, any, error) {
+	var in struct {
+		Attester string `json:"attester"`
+		Reason   string `json:"reason"`
+		Evidence string `json:"evidence"`
+	}
+	if err := decodeBody(r, &in, false); err != nil {
+		return 0, nil, err
+	}
+	return s.checklistAfter(r, p, func(c *store.TenantTx, id, item string, now time.Time) (*readiness.Bundle, error) {
+		return s.readiness.AttestInstead(c, id, item, readiness.LiveAttestInput{Attester: in.Attester, Reason: in.Reason,
+			Evidence: in.Evidence}, actor(r), now)
 	})
 }
 

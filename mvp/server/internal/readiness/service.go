@@ -134,6 +134,9 @@ func (s *Service) loadEvidence(c *store.TenantTx, conn *store.Connection, rev *s
 	if ev.Attestations, err = c.Attestations(rev.ID); err != nil {
 		return nil, err
 	}
+	if ev.LiveAttestations, err = c.LiveAttestations(rev.ID); err != nil {
+		return nil, err
+	}
 	if ev.Skips, err = c.Skips(rev.ID); err != nil {
 		return nil, err
 	}
@@ -602,6 +605,85 @@ func (s *Service) Attest(c *store.TenantTx, connID, itemID, note, actor string, 
 	if err := c.Audit(now, actor, "readiness.item.attested", ojson.Object{{Key: "connection_id", Value: b.Conn.ID},
 		{Key: "revision_id", Value: b.Rev.ID}, {Key: "item", Value: itemID}, {Key: "level", Value: string(it.Level)},
 		{Key: "note", Value: note}, {Key: "config_hash", Value: b.ConfigHash}}); err != nil {
+		return nil, err
+	}
+	nb, err := s.reload(c, b.Rev.ID, now)
+	if err != nil {
+		return nil, err
+	}
+	return nb, s.settle(c, nb, actor, now, "attestation")
+}
+
+// Limits of an attestation in place of an unsupported live check (#217).
+const (
+	MinAttesterName = 2
+	MaxAttesterName = 120
+	MinLiveReason   = 20
+	MinEvidence     = 10
+	MaxEvidence     = 4000
+)
+
+// LiveAttestInput is what a person gives in place of a live check the system
+// cannot answer.
+type LiveAttestInput struct {
+	Attester string // the named person who verified it
+	Reason   string // why the live check cannot be used
+	Evidence string // what they looked at
+}
+
+// AttestInstead records an attestation for an item whose live check reported
+// "unsupported" (the system cannot answer it). It is refused unless the item's
+// template declares the alternative (on_unsupported) and the latest live
+// result is unsupported and current: a failing result can never be attested
+// away. The attestation is bound to the item's config fields and expires like
+// live results; its audit event is written in the same transaction.
+func (s *Service) AttestInstead(c *store.TenantTx, connID, itemID string, in LiveAttestInput, actor string, now time.Time) (*Bundle, error) {
+	b, _, err := s.pendingBundle(c, connID, actor, now)
+	if err != nil {
+		return nil, err
+	}
+	it, err := s.itemFor(b, itemID)
+	if err != nil {
+		return nil, err
+	}
+	in.Attester, in.Reason, in.Evidence = strings.TrimSpace(in.Attester), strings.TrimSpace(in.Reason), strings.TrimSpace(in.Evidence)
+	n := utf8.RuneCountInString(in.Attester)
+	switch {
+	case !it.HasLiveAlternative():
+		return nil, unprocessable("not_attestable_instead", "%s has no attestation alternative to its live check", itemID)
+	case !it.Applicable:
+		return nil, unprocessable("not_applicable", "%s does not apply: %s", itemID, it.Reason)
+	case n < MinAttesterName || n > MaxAttesterName ||
+		strings.ContainsAny(in.Attester, "\r\n") || !printableNote(in.Attester):
+		return nil, unprocessable("attester_required", "name the person who verified it (%d to %d characters)", MinAttesterName, MaxAttesterName)
+	case utf8.RuneCountInString(in.Reason) < MinLiveReason || len(in.Reason) > 2000 || !printableNote(in.Reason):
+		return nil, unprocessable("reason_too_short", "an attestation needs a reason of at least %d characters", MinLiveReason)
+	case utf8.RuneCountInString(in.Evidence) < MinEvidence || len(in.Evidence) > MaxEvidence || !printableNote(in.Evidence):
+		return nil, unprocessable("evidence_required", "an attestation needs evidence text of at least %d characters", MinEvidence)
+	case !it.liveUnsupported():
+		return nil, unprocessable("live_check_not_unsupported",
+			"%s can be attested only when its live check reports it cannot be answered; a failed or missing result cannot be attested", itemID)
+	case len(it.BlockedBy) > 0:
+		g := &GateReport{State: b.Rev.State, To: "attest", ConfigHash: b.ConfigHash, EvaluatedAt: store.RT(now)}
+		for _, d := range it.BlockedBy {
+			if dep, ok := b.Eval.Item(d); ok {
+				g.Blocking = append(g.Blocking, blockerFor(dep, dep.Status, ""))
+			}
+		}
+		return nil, blocked("dependencies_not_passing", g)
+	}
+	if err := c.UpsertLiveAttestation(&store.LiveAttestation{RevisionID: b.Rev.ID, ItemID: itemID, ActorID: actor,
+		Attester: in.Attester, Reason: in.Reason, Evidence: in.Evidence, ItemHash: it.ItemHash, ConfigHash: b.ConfigHash,
+		AttestedAt: now}); err != nil {
+		return nil, err
+	}
+	if err := c.BumpEvidence(b.Rev.ID, now); err != nil {
+		return nil, err
+	}
+	if err := c.Audit(now, actor, "readiness.item.attested_instead", ojson.Object{{Key: "connection_id", Value: b.Conn.ID},
+		{Key: "revision_id", Value: b.Rev.ID}, {Key: "item", Value: itemID}, {Key: "level", Value: string(it.Level)},
+		{Key: "attester", Value: in.Attester}, {Key: "reason", Value: in.Reason}, {Key: "evidence", Value: in.Evidence},
+		{Key: "config_hash", Value: b.ConfigHash}}); err != nil {
 		return nil, err
 	}
 	nb, err := s.reload(c, b.Rev.ID, now)

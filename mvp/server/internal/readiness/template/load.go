@@ -256,7 +256,7 @@ func cloneItem(it Item) Item {
 	c.ConfigFields = slices.Clone(it.ConfigFields)
 	c.Verify = make([]Verify, len(it.Verify))
 	for i, v := range it.Verify {
-		c.Verify[i] = Verify{Kind: v.Kind, Check: v.Check, Params: maps.Clone(v.Params)}
+		c.Verify[i] = Verify{Kind: v.Kind, Check: v.Check, Params: maps.Clone(v.Params), OnUnsupported: v.OnUnsupported}
 	}
 	if it.AppliesWhen != nil {
 		aw := *it.AppliesWhen

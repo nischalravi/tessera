@@ -73,6 +73,7 @@ PATCH  /api/connections/{id}/config                  connections.manage STEP_UP_
 PUT    /api/connections/{id}/credential              connections.manage STEP_UP_POLICY
 GET    /api/connections/{id}/checklist               connections.read   -
 POST   /api/connections/{id}/checklist/{item}/attest connections.manage -
+POST   /api/connections/{id}/checklist/{item}/attest-instead connections.manage STEP_UP_POLICY  # issue #217
 POST   /api/connections/{id}/checklist/{item}/skip   connections.manage -
 DELETE /api/connections/{id}/checklist/{item}/skip   connections.manage -
 POST   /api/connections/{id}/transition              connections.manage -

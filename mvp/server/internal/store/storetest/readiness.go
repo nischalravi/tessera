@@ -102,6 +102,11 @@ func seedReadiness(tb testing.TB, db *store.DB, t *Tenant, sentinel string) {
 		if _, err := svc.Attest(c, ad, "base.owner", mark("Owners agreed in CHG-1042"), "admin", Now); err != nil {
 			return err
 		}
+		if err := c.UpsertLiveAttestation(&store.LiveAttestation{RevisionID: b.Rev.ID, ItemID: "ldap.svc.no_write", ActorID: "admin",
+			Attester: mark("Ingrid Lindqvist"), Reason: mark("The directory has no Get Effective Rights control"),
+			Evidence: mark("ACL export reviewed in CHG-1043"), ItemHash: "h", ConfigHash: b.ConfigHash, AttestedAt: Now}); err != nil {
+			return err
+		}
 		for _, it := range b.Eval.Items {
 			if it.Level != template.Recommended || !it.Applicable || len(it.DependsOn) > 0 {
 				continue
@@ -206,6 +211,8 @@ func ReadinessDump(tb testing.TB, db *store.DB, t tenancy.ID, refs map[string]st
 			for _, r := range revs {
 				v1, e := c.Attestations(r.ID)
 				put("attestations:"+r.ID, v1, e)
+				v1b, e := c.LiveAttestations(r.ID)
+				put("live_attestations:"+r.ID, v1b, e)
 				v2, e := c.Skips(r.ID)
 				put("skips:"+r.ID, v2, e)
 				v3, e := c.ItemStates(r.ID)

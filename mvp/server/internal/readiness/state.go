@@ -91,6 +91,30 @@ func (s *Service) settle(c *store.TenantTx, b *Bundle, actor string, now time.Ti
 	return s.persist(c, b, now)
 }
 
+// liveUnsupported reports whether the item has a live verification, declared
+// attestable, whose current result is the system saying it cannot answer.
+func (ie *ItemEval) liveUnsupported() bool {
+	for i, v := range ie.Verify {
+		if v.Kind == template.Live && v.OnUnsupported == template.Attestation && i < len(ie.Parts) && ie.Parts[i].Unsupported {
+			return true
+		}
+	}
+	return false
+}
+
+// liveAttested reports whether an attestation passed in place of a live check.
+func (ie *ItemEval) liveAttested() bool {
+	if ie.LiveAttest == nil || ie.Status != StatusPass {
+		return false
+	}
+	for _, p := range ie.Parts {
+		if p.Kind == template.Live && p.Unsupported && p.Status == StatusPass {
+			return true
+		}
+	}
+	return false
+}
+
 // persist stores the evaluated item states for reporting.
 func (s *Service) persist(c *store.TenantTx, b *Bundle, now time.Time) error {
 	states := make([]*store.ItemState, 0, len(b.Eval.Items))
@@ -107,6 +131,9 @@ func (s *Service) persist(c *store.TenantTx, b *Bundle, now time.Time) error {
 			st.Source = "live"
 		default:
 			st.Source = "attestation"
+		}
+		if it.liveAttested() {
+			st.Source, st.ActorID, st.Note = "attestation", &it.LiveAttest.Attester, &it.LiveAttest.Reason
 		}
 		if st.Source == "attestation" && it.Attestation != nil {
 			st.ActorID, st.Note = &it.Attestation.ActorID, &it.Attestation.Note

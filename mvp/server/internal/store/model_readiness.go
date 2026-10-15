@@ -124,6 +124,18 @@ type Attestation struct {
 	AttestedAt         time.Time
 }
 
+// LiveAttestation stands in for a live check the system reported unsupported:
+// a named attester, the reason and the evidence they relied on. ActorID is who
+// recorded it.
+type LiveAttestation struct {
+	RevisionID, ItemID string
+	ActorID, Attester  string
+	Reason, Evidence   string
+	ItemHash           string
+	ConfigHash         string
+	AttestedAt         time.Time
+}
+
 // Skip is a Recommended item skipped with a reason (an accepted gap).
 type Skip struct {
 	RevisionID, ConnectionID, ItemID string
