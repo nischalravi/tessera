@@ -818,7 +818,6 @@ export interface EmailMessage {
 export interface EmailList { statuses: EmailStatus[]; email_mode: string; messages: EmailMessage[] }
 export const retryEmail = (id: string) => api<EmailMessage>(`/email/messages/${encodeURIComponent(id)}/retry`, {});
 
-export const simulate = (body: { remove_edge_ids?: number[]; add_edges?: { src: string; dst: string }[]; disable_account_ids?: number[] }) =>
 // ---------------------------------------------------------------- account correlation (issue #160)
 
 export interface CorrAccount { id: number; system: string; external_id: string; username: string; kind: string; status: string; identity_id: number | null }
