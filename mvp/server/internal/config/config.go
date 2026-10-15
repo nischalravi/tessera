@@ -81,9 +81,6 @@ type Config struct {
 	RPID                   string
 	Notify                 string
 	DevIdPURL              string
-	// DevLogin is TESSERA_DEV_LOGIN: with TESSERA_ENV=test, the explicit
-	// opt-in for dev sign-in (loopback peers only). Refused in prod.
-	DevLogin bool
 	// FrozenNow is TESSERA_NOW (tests and demos; refused in prod). The zero
 	// time means the wall clock; use Clock.
 	FrozenNow time.Time
@@ -179,7 +176,6 @@ func Load(getenv func(string) string) (*Config, error) {
 			c.FrozenNow = t
 		}
 	}
-	c.DevLogin = boolean("TESSERA_DEV_LOGIN", false, false)
 	c.DevIdPURL = strings.TrimSpace(getenv("TESSERA_DEV_IDP_URL"))
 	if c.DevIdPURL == "" && !prod {
 		c.DevIdPURL = "http://127.0.0.1:8001"
