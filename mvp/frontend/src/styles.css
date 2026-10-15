@@ -848,3 +848,10 @@ fieldset.card { margin: 0; }
 .attempt-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s-4); }
 .attempt-list > li { border-left: 2px solid var(--border); padding-left: var(--s-3); }
 .transcript { margin: 0; padding: var(--s-2) var(--s-3); background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm); font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; }
+/* Account matches (issue #160) */
+.h-sm { font-size: var(--fs-lg); color: var(--text); margin-bottom: var(--s-2); }
+.plain-list { list-style: none; margin: 0 0 var(--s-3); padding: 0; display: grid; gap: var(--s-2); }
+.plain-list > li { padding: var(--s-2) 0; border-bottom: 1px solid var(--border); }
+.pick-list { list-style: none; margin: 4px 0 0; padding: 0; border: 1px solid var(--border); border-radius: var(--r-md, 6px); max-height: 260px; overflow-y: auto; font-weight: 400; }
+.pick-item { display: block; width: 100%; text-align: left; padding: 8px 10px; min-height: 44px; background: none; border: 0; color: var(--text); cursor: pointer; }
+.pick-item:hover, .pick-item:focus-visible { background: var(--surface-2, var(--hover)); }

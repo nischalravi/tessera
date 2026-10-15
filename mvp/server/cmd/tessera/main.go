@@ -7,6 +7,7 @@
 //	tessera readiness lint [-dir path]   lint the readiness checklist templates
 //	tessera audit verify|checkpoint|export   verify, checkpoint or export the audit ledger (see audit.go)
 //	tessera notify seal-password             seal an SMTP password (stdin) for TESSERA_SMTP_PASSWORD_SEALED
+//	tessera admin create-tenant|add-idp|invite-admin   operator bootstrap of a tenant (see admin.go)
 //
 // Environment:
 //
@@ -23,15 +24,19 @@
 //	TESSERA_NOW           freeze the clock at an ISO-8601 time (tests and demos; refused in prod)
 //	TESSERA_ENV           dev (run.sh sets it), test or prod. Every API route except
 //	                      the public allow-list needs a signed-in session, and the
-//	                      tenant comes from that session. dev and test expose
-//	                      POST /api/auth/dev-login until IdP sign-in lands (PR6, PR7);
-//	                      prod refuses to start with any dev setting (§18.4).
+//	                      tenant comes from that session (sign-in through the tenant's
+//	                      IdP); prod refuses to start with any dev setting (§18.4).
 //	TESSERA_DEV_IDP_URL   the dev IdP's issuer: seeding (dev and test) creates a
 //	                      dev_mock connection to it with the bootstrap users
 //	TESSERA_NOTIFY_EMAIL  off, dev (the dev sink, never in prod) or smtp; default smtp when TESSERA_SMTP_HOST is set,
 //	                      else dev outside prod and off in prod. TESSERA_SMTP_HOST/_PORT/_USERNAME/_FROM/_TLS and
 //	                      TESSERA_SMTP_PASSWORD_SEALED configure the relay; TESSERA_NOTIFY_MAX_ATTEMPTS and
 //	                      TESSERA_NOTIFY_DIGEST_HOUR tune the dispatcher (see internal/config)
+//	DEVIDP_CLIENT_SECRET  the dev IdP client's secret, sealed into those connections
+//	                      (default tessera-dev-secret, as cmd/tessera-devidp)
+//	TESSERA_DEV_IDP_SAML_CERT  the dev IdP's SAML signing certificate (PEM, from
+//	                      tessera-devidp -print-saml-cert): seeding also creates a
+//	                      dev_mock SAML connection pinning it (run.sh sets it)
 //	TESSERA_READINESS_SCENARIO  simulated validation scenario for demo connectors: gaps (default) or happy
 //	TESSERA_READINESS_DEMO      "off" skips seeding the demo Okta connection (larkspur only) for Deployment health
 package main
@@ -57,10 +62,12 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/seed"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -99,6 +106,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if cmd == "notify" {
 		return notifyCmd(ctx, args, stdout, stderr)
 	}
+	if cmd == "admin" {
+		return adminCmd(ctx, args, stdout, stderr)
+	}
 	fset := flag.NewFlagSet("tessera "+cmd, flag.ContinueOnError)
 	fset.SetOutput(stderr)
 	var o options
@@ -118,7 +128,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return st.Close()
 	}
 	if cmd != "seed" && cmd != "serve" {
-		return fmt.Errorf("unknown command %q (want serve, seed, check-db, readiness or audit)", cmd)
+		return fmt.Errorf("unknown command %q (want serve, seed, check-db, readiness, audit or admin)", cmd)
 	}
 	if os.Getenv("TESSERA_ENV") == "" {
 		// fail closed: the environment decides the guard rails (§18.4) and
@@ -164,6 +174,10 @@ func policyFS() fs.FS {
 	return policies.FS
 }
 
+// devIdPClientSecret is the dev IdP's published default client secret
+// (cmd/tessera-devidp); DEVIDP_CLIENT_SECRET overrides both.
+const devIdPClientSecret = "tessera-dev-secret" // #nosec G101 -- documented dev-only value of a mock IdP
+
 func seedDB(ctx context.Context, path string, cfg *config.Config, clock timeutil.Clock, loader *policy.Loader,
 	sealer *seal.Sealer, stdout io.Writer) error {
 	if cfg.IsProd() {
@@ -188,7 +202,14 @@ func seedDB(ctx context.Context, path string, cfg *config.Config, clock timeutil
 	fmt.Fprintln(stdout, "==> seeding demo tenants: larkspur (fictional company: Larkspur Labs) and globex")
 	tenants := seed.DefaultTenants(conns, now)
 	if cfg.DevIdPURL != "" {
-		tenants = seed.WithDevIdP(tenants, cfg.DevIdPURL)
+		// the dev IdP's client secret (cmd/tessera-devidp reads the same
+		// variable), sealed into the dev_mock connections
+		secret := os.Getenv("DEVIDP_CLIENT_SECRET")
+		if secret == "" {
+			secret = devIdPClientSecret
+		}
+		tenants = seed.WithDevIdPClient(tenants, cfg.DevIdPURL, seed.DevIdPClient{Sealer: sealer, Secret: secret,
+			SAMLCert: strings.TrimSpace(os.Getenv("TESSERA_DEV_IDP_SAML_CERT")), GitHub: true})
 	}
 	stats, err := seed.Run(ctx, st, now, pols, tenants)
 	if err != nil {
@@ -275,9 +296,22 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if err != nil {
 		return err
 	}
+	// Outbound calls to IdPs (discovery, JWKS, token) and the kill switch's
+	// provider calls (containment) go through safehttp. A test server gets the
+	// production client (no loopback exception).
+	outCfg := *cfg
+	if outCfg.Env == config.Test {
+		outCfg.Env, outCfg.OutboundAllowLoopback = config.Prod, false
+	}
+	outbound, err := safehttp.ForConfig(&outCfg)
+	if err != nil {
+		return err
+	}
 	srv := api.New(api.Config{Store: st, Clock: clock, Policies: loader, Logger: logger,
+		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound,
+		Containment:    &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock},
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
-		HSTS: cfg.IsProd(), Env: cfg.Env, EmailMode: cfg.Mail.Mode, DevLogin: cfg.DevLogin, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, AuditAnchor: anchorURL})
+		HSTS: cfg.IsProd(), Env: cfg.Env, EmailMode: cfg.Mail.Mode, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, AuditAnchor: anchorURL})
 	sender, err := notify.NewSender(cfg.Mail, cfg.Env, cfg.OutboundAllowLoopback, sealer, config.DevMailPath(o.db), logger)
 	if err != nil {
 		return err

@@ -1,0 +1,41 @@
+{
+  "ok_sessions": [
+    {"method": "POST", "path": "/admin/directory/v1/users/alice@example.com/signOut", "responses": [{"status": 204}]},
+    {"method": "GET", "path": "/admin/directory/v1/users/alice@example.com/tokens", "responses": [
+      {"status": 200, "body": {"kind": "admin#directory#tokenList", "items": [
+        {"kind": "admin#directory#token", "clientId": "1234.apps.googleusercontent.com", "displayText": "Calendar sync"},
+        {"kind": "admin#directory#token", "clientId": "5678.apps.googleusercontent.com", "displayText": "Mail client"}]}},
+      {"status": 200, "body": {"kind": "admin#directory#tokenList"}}]},
+    {"method": "DELETE", "path": "/admin/directory/v1/users/alice@example.com/tokens/1234.apps.googleusercontent.com", "responses": [{"status": 204}]},
+    {"method": "DELETE", "path": "/admin/directory/v1/users/alice@example.com/tokens/5678.apps.googleusercontent.com", "responses": [{"status": 204}]}
+  ],
+  "ok_grants": [
+    {"method": "GET", "path": "/admin/directory/v1/users/alice@example.com/tokens", "responses": [
+      {"status": 200, "body": {"items": [{"clientId": "1234.apps.googleusercontent.com"}]}},
+      {"status": 200, "body": {}}]},
+    {"method": "DELETE", "path": "/admin/directory/v1/users/alice@example.com/tokens/1234.apps.googleusercontent.com", "responses": [{"status": 204}]}
+  ],
+  "not_found": [
+    {"method": "POST", "path": "/admin/directory/v1/users/alice@example.com/signOut", "responses": [
+      {"status": 404, "body": {"error": {"code": 404, "message": "Resource Not Found: userKey", "errors": [{"reason": "notFound"}]}}}]}
+  ],
+  "rate_limited": [
+    {"method": "POST", "path": "/admin/directory/v1/users/alice@example.com/signOut", "responses": [
+      {"status": 429, "body": {"error": {"code": 429, "message": "Quota exceeded"}}},
+      {"status": 204}]},
+    {"method": "GET", "path": "/admin/directory/v1/users/alice@example.com/tokens", "responses": [{"status": 200, "body": {}}]}
+  ],
+  "token_remains": [
+    {"method": "POST", "path": "/admin/directory/v1/users/alice@example.com/signOut", "responses": [{"status": 204}]},
+    {"method": "GET", "path": "/admin/directory/v1/users/alice@example.com/tokens", "responses": [
+      {"status": 200, "body": {"items": [{"clientId": "1234.apps.googleusercontent.com"}]}}]},
+    {"method": "DELETE", "path": "/admin/directory/v1/users/alice@example.com/tokens/1234.apps.googleusercontent.com", "responses": [{"status": 204}]}
+  ],
+  "partial": [
+    {"method": "GET", "path": "/admin/directory/v1/users/alice@example.com/tokens", "responses": [
+      {"status": 200, "body": {"items": [{"clientId": "1234.apps.googleusercontent.com"}, {"clientId": "5678.apps.googleusercontent.com"}]}}]},
+    {"method": "DELETE", "path": "/admin/directory/v1/users/alice@example.com/tokens/1234.apps.googleusercontent.com", "responses": [{"status": 204}]},
+    {"method": "DELETE", "path": "/admin/directory/v1/users/alice@example.com/tokens/5678.apps.googleusercontent.com", "responses": [
+      {"status": 500, "body": {"error": {"code": 500, "message": "Backend Error"}}}]}
+  ]
+}

@@ -308,7 +308,7 @@ var referenceColumns = map[string][]string{
 	"hris_events":       {"executed_by_user_id"},
 	// platform users and sessions named without a declared foreign key
 	"role_assignments":   {"granted_by_user_id"},
-	"login_transactions": {"session_id", "expected_external_login_id"},
+	"login_transactions": {"session_id", "expected_external_login_id", "bootstrap_invitation_id"},
 }
 
 // immutableTables refuse every UPDATE (a trigger raises unconditionally), so
