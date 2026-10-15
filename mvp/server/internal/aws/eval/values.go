@@ -322,8 +322,9 @@ func likeMatch(p Pattern, v string) bool { return globTokens(p.tokens(), runesOf
 
 // arnLikeMatch is ArnLike/ArnEquals (§9.3, default A1): the first five
 // segments match one by one, the sixth is the rest of the ARN colons included,
-// and a trailing "*" on the last pattern segment 3-5 matches the remainder of
-// the ARN. A "*" never crosses a colon otherwise. A value that is not a
+// and a pattern of fewer than six segments whose last segment ends in "*"
+// matches the remainder of the ARN from that segment on (so "*" and "arn:*"
+// match any ARN). A "*" never crosses a colon otherwise. A value that is not a
 // six-segment ARN never matches.
 func arnLikeMatch(p Pattern, v string) bool {
 	pt := p.tokens()
@@ -335,7 +336,7 @@ func arnLikeMatch(p Pattern, v string) bool {
 	}
 	if len(psegs) < 6 {
 		last := len(psegs) - 1
-		if last < 2 || len(psegs[last]) == 0 || psegs[last][len(psegs[last])-1].kind != tokStar {
+		if len(psegs[last]) == 0 || psegs[last][len(psegs[last])-1].kind != tokStar {
 			return false
 		}
 		for i := 0; i < last; i++ {

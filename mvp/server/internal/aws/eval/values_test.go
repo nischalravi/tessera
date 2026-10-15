@@ -193,8 +193,44 @@ func TestGlob(t *testing.T) {
 	}
 }
 
+// TestArnLikeShortPatterns pins the A1 default for patterns of fewer than six
+// segments: a last segment ending in "*" absorbs the rest of the ARN from that
+// segment on (segment 0 included), and a non-ARN value never matches.
+func TestArnLikeShortPatterns(t *testing.T) {
+	const arn = "arn:aws:sqs:us-east-1:111111111111:q"
+	tests := []struct {
+		name, pat, val string
+		want           bool
+	}{
+		{"bare star", "*", arn, true},
+		{"arn star", "arn:*", arn, true},
+		{"partition star", "arn:aws:*", arn, true},
+		{"service star", "arn:aws:s3:*", "arn:aws:s3:::bucket/k", true},
+		{"service star, other service", "arn:aws:s3:*", arn, false},
+		{"segment 0 star prefix", "a*", arn, true},
+		{"segment 0 star prefix, mismatch", "b*", arn, false},
+		{"star crosses colons from its segment", "arn:aws:sqs:*", arn, true},
+		{"no trailing star, short pattern", "arn:aws:sqs", arn, false},
+		{"bare star, not an arn", "*", "bucket", false},
+		{"arn star, not an arn", "arn:*", "arn:aws", false},
+		{"partition star, not an arn", "arn:aws:*", "arn:aws:s3:::", true},
+		{"partition star, five segments", "arn:aws:*", "arn:aws:s3:us-east-1:1", false},
+		{"service star, not an arn", "arn:aws:s3:*", "not-an-arn", false},
+		{"service star, empty value", "arn:aws:s3:*", "", false},
+		{"bare star, empty value", "*", "", false},
+		{"six segments, star stays in segment", "arn:aws:*:::x", "arn:aws:sns:us-east-1:1:x", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := arnLikeMatch(Pattern{Segs: []Seg{{Text: tc.pat}}}, tc.val); got != tc.want {
+				t.Errorf("arnLikeMatch(%q, %q) = %v, want %v", tc.pat, tc.val, got, tc.want)
+			}
+		})
+	}
+}
+
 func FuzzGlob(f *testing.F) {
-	for _, s := range [][2]string{{"a*b", "axxb"}, {"*?*", ""}, {"${*}", "*"}, {"\xff*", "\xfe"}, {"arn:aws:s3:::*", "arn:aws:s3:::b"}} {
+	for _, s := range [][2]string{{"a*b", "axxb"}, {"*?*", ""}, {"${*}", "*"}, {"\xff*", "\xfe"}, {"arn:aws:s3:::*", "arn:aws:s3:::b"}, {"*", "arn:aws:s3:::b"}, {"arn:*", "arn:aws:s3:::b"}} {
 		f.Add(s[0], s[1])
 	}
 	f.Fuzz(func(t *testing.T, p, s string) {
