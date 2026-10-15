@@ -298,19 +298,10 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if err != nil {
 		return err
 	}
-	// Secret rotation: the worker calls providers only through the SSRF-guarded
-	// client, opens adapter credentials only with the KEK, and the simulated
-	// adapter exists only where config allows it (never in prod).
-	rotationHTTP, err := safehttp.ForConfig(cfg)
-	if err != nil {
-		return err
-	}
-	rotationEngine := &rotation.Engine{DB: st, Clock: clock, Log: logger,
-		Service: &rotation.Service{Sealer: sealer, Env: cfg.Env, AllowFake: cfg.RotationFakeAdapters},
-		Factory: &rotation.Factory{HTTP: rotationHTTP, Sealer: sealer, Now: clock, AllowFake: cfg.RotationFakeAdapters}}
-	// Outbound calls to IdPs (discovery, JWKS, token) and the kill switch's
-	// provider calls (containment) go through safehttp. A test server gets the
-	// production client (no loopback exception).
+	// Outbound calls to IdPs (discovery, JWKS, token), the kill switch's
+	// provider calls (containment) and secret-rotation provider calls go
+	// through safehttp. A test server gets the production client (no
+	// loopback exception).
 	outCfg := *cfg
 	if outCfg.Env == config.Test {
 		outCfg.Env, outCfg.OutboundAllowLoopback = config.Prod, false
@@ -319,6 +310,12 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if err != nil {
 		return err
 	}
+	// Secret rotation: the worker calls providers only through the SSRF-guarded
+	// client, opens adapter credentials only with the KEK, and the simulated
+	// adapter exists only where config allows it (never in prod).
+	rotationEngine := &rotation.Engine{DB: st, Clock: clock, Log: logger,
+		Service: &rotation.Service{Sealer: sealer, Env: cfg.Env, AllowFake: cfg.RotationFakeAdapters},
+		Factory: &rotation.Factory{HTTP: outbound, Sealer: sealer, Now: clock, AllowFake: cfg.RotationFakeAdapters}}
 	srv := api.New(api.Config{Store: st, Clock: clock, Policies: loader, Logger: logger,
 		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound,
 		Containment:    &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock},
