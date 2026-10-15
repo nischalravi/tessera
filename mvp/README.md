@@ -299,6 +299,28 @@ interval, 5 minutes or 1000 events) are the window that cannot be proven complet
 The Admin → Audit log page lists the events, can include API requests, verifies the chain and
 exports it.
 
+### AWS action catalog
+
+The AWS effective-permission evaluator (design `docs/design/aws-effective-permission-evaluator.md`
+§10) needs a versioned catalog of actions, resource types and condition keys. It is built offline,
+never at request time. Run from `server/`:
+
+```sh
+go run ./cmd/tessera catalog refresh -dir catalog/aws            # fetch a snapshot of today's upstream data
+go run ./cmd/tessera catalog compile -dir catalog/aws -report diff.md   # verify, merge overlays, write compiled/<version>.json.gz
+```
+
+`refresh` downloads the AWS Service Reference JSON (about 450 services), the RCP service list from
+the Organizations guide and the iam-dataset file pinned in `catalog/aws/iam-dataset.lock` (commit
+and SHA-256), all through `internal/safehttp`, into `catalog/aws/snapshots/<date>/`. Snapshots are
+immutable and carry a `MANIFEST.json` of SHA-256 digests. `compile` refuses a snapshot that differs
+from its manifest, merges the reviewed overlays in `catalog/aws/overlays/` (RCP services, KMS
+cross-account operations, global keys, S3 ACL map, resource-policy rules, opt-in regions, S3 public
+keys) and writes a deterministic artifact. It prints the catalog version, the PR title, and whether
+anything changed against the previous artifact; `-report` writes the full diff as Markdown.
+`internal/aws/catalog.Load(dir, version)` reads the artifact. See `catalog/aws/README.md` and
+`catalog/aws/THIRD_PARTY_NOTICES`.
+
 ## Web UI
 
 The UI follows an "admin center" layout: a dark top bar, a light left rail grouped by job, list
