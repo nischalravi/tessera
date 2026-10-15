@@ -393,7 +393,8 @@ var (
 		INSERT INTO hris_events (tenant_id, external_id, type, identity_id, payload, effective_at, status)
 		VALUES (@tenant, @external_id, @type, @identity_id, @payload, @effective_at, @status)
 		ON CONFLICT (tenant_id, external_id) DO UPDATE SET type = excluded.type, identity_id = excluded.identity_id,
-			payload = excluded.payload, effective_at = excluded.effective_at, status = excluded.status`)
+			payload = excluded.payload, effective_at = excluded.effective_at,
+			status = CASE WHEN hris_events.status = 'executed' THEN hris_events.status ELSE excluded.status END`)
 	hrisInsert = tq("hris_events.insert", `
 		INSERT INTO hris_events (tenant_id, external_id, type, identity_id, payload, effective_at, status, executed_at)
 		VALUES (@tenant, @external_id, @type, @identity_id, @payload, @effective_at, @status, @executed_at)`)
