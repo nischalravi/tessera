@@ -304,24 +304,20 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	rsvc := readiness.NewService(templates, string(cfg.Env))
 	rsvc.Runner.Scenario = scenario
 	rsvc.Runner.Live.Sealer, rsvc.Runner.Live.Allow = sealer, allow
-	// Outbound calls to IdPs (discovery, JWKS, token) go through safehttp. A
-	// test server gets the production client (no loopback exception).
+	// Outbound calls to IdPs (discovery, JWKS, token) and the kill switch's
+	// provider calls (containment) go through safehttp. A test server gets the
+	// production client (no loopback exception).
 	outCfg := *cfg
 	if outCfg.Env == config.Test {
 		outCfg.Env, outCfg.OutboundAllowLoopback = config.Prod, false
 	}
-	idpHTTP, err := safehttp.ForConfig(&outCfg)
+	outbound, err := safehttp.ForConfig(&outCfg)
 	if err != nil {
 		return err
 	}
-	// Outbound calls of the kill switch (containment) use the SSRF-guarded client.
-	outbound, err := safehttp.ForConfig(cfg)
-	if err != nil {
-		return err
-	}
-	srv := api.New(api.Config{Containment: &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock},
-		Store: st, Clock: clock, Policies: loader, Logger: logger,
-		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: idpHTTP,
+	srv := api.New(api.Config{Store: st, Clock: clock, Policies: loader, Logger: logger,
+		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound,
+		Containment:    &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock},
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
 		HSTS: cfg.IsProd(), Env: cfg.Env, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, Readiness: rsvc, AuditAnchor: anchorURL})
 	checkpointer := &audit.Checkpointer{DB: st, Sealer: sealer, Sink: sink, Clock: timeutil.System, Issuer: cfg.PublicURL,
