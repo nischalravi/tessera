@@ -6,3 +6,5 @@ GET /t/{slug}/bootstrap
 GET /api/auth/saml/{connection_id}/metadata
 POST /api/auth/saml/{connection_id}/acs
 GET /api/auth/oauth2/{connection_id}/callback
+POST /api/auth/break-glass/options
+POST /api/auth/break-glass/verify

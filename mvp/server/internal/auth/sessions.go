@@ -55,6 +55,10 @@ const (
 	RevokedIdPDisabled  = "idp_disabled"
 	RevokedRTReuse      = "rt_reuse"
 	RevokedReplaced     = "replaced" // the browser signed in again
+	// RevokedBreakGlass: a break-glass session revoked every other session (§15.4).
+	RevokedBreakGlass = "break_glass"
+	// RevokedBreakGlassKey: the break-glass key that signed the session in was revoked.
+	RevokedBreakGlassKey = "break_glass_key_revoked"
 )
 
 // secretBytes is the size of session secrets and CSRF secrets.

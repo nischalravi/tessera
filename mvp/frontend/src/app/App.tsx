@@ -66,11 +66,21 @@ const IdpConnections = named(() => import("../features/admin/IdpConnections"), "
 const ChangeRequests = named(() => import("../features/admin/ChangeRequests"), "ChangeRequests");
 const ApiClients = named(() => import("../features/admin/ApiClients"), "ApiClients");
 const ChangeBanner = named(() => import("../features/admin/ChangeBanner"), "ChangeBanner");
+const BreakGlass = named(() => import("../features/admin/BreakGlass"), "BreakGlass");
+const BreakGlassNotice = named(() => import("../features/admin/BreakGlass"), "BreakGlassNotice");
 
-/** The persistent banner of pending and cooling-off admin changes (design §15.2), for admins only. */
+/**
+ * The persistent banner of pending and cooling-off admin changes and unexplained break-glass sign-ins
+ * (design §15.2, §15.4), for admins only; a break-glass session also sees what it may do and its time left.
+ */
 function AdminBanner() {
-  const { can } = useSession();
-  return can("admin.read") ? <Suspense fallback={null}><ChangeBanner /></Suspense> : null;
+  const { can, session } = useSession();
+  return can("admin.read") ? (
+    <Suspense fallback={null}>
+      {session.active_roles.includes("break_glass") && <BreakGlassNotice />}
+      <ChangeBanner />
+    </Suspense>
+  ) : null;
 }
 
 /** Redirect an old route to its new home, keeping the query string (e.g. /graph?identity=5). */
@@ -147,6 +157,7 @@ export default function App() {
                     <Route path="/admin/authentication" element={<IdpConnections />} />
                     <Route path="/admin/change-requests" element={<ChangeRequests />} />
                     <Route path="/admin/api-clients" element={<ApiClients />} />
+                    <Route path="/admin/break-glass" element={<BreakGlass />} />
                     <Route path="/admin/:section" element={<AdminSectionPage />} />
 
                     {/* routes from the previous UI */}

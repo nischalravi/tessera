@@ -67,6 +67,14 @@ var changeTypes = map[string]*changeType{
 		func(_ *env, v *contactsPayload) string {
 			return fmt.Sprintf("Replace the tenant's security contacts (%d)", len(v.Contacts))
 		}),
+	TypeBGRegister: typed(TypeBGRegister, prepBGRegister, planBGRegister, applyBGRegister,
+		func(_ *env, v *bgRegisterPayload) string {
+			return fmt.Sprintf("Enrol the break-glass key %q (custodian %s)", v.Label, v.Custodian)
+		}),
+	TypeBGRevoke: typed(TypeBGRevoke, nil, planBGRevoke, applyBGRevoke,
+		func(e *env, v *bgRevokePayload) string {
+			return "Revoke the break-glass key " + e.bgKeyName(v.CredentialID)
+		}),
 }
 
 // withSecret marks the type that carries a sealed client secret.
@@ -692,6 +700,9 @@ type settingsPayload struct {
 	StepUpAdminMaxAgeS    *int    `json:"step_up_admin_max_age_s,omitempty"`
 	DeviceGrantEnabled    *bool   `json:"device_grant_enabled,omitempty"`
 	MinAdmins             *int    `json:"min_admins,omitempty"`
+	// BreakGlassAAGUIDAllowlist limits the authenticator models a break-glass
+	// key may be (§15.4). An empty list lifts the limit.
+	BreakGlassAAGUIDAllowlist *[]string `json:"breakglass_aaguid_allowlist,omitempty"`
 }
 
 type intSetting struct {
@@ -726,8 +737,15 @@ func (v *settingsPayload) fields() []string {
 	}
 	add(v.DeviceGrantEnabled != nil, "device_grant_enabled")
 	add(v.MinAdmins != nil, "min_admins")
+	add(v.BreakGlassAAGUIDAllowlist != nil, keyAAGUIDAllowlist)
 	return out
 }
+
+// keyAAGUIDAllowlist is the tenant setting that limits break-glass key models.
+const keyAAGUIDAllowlist = "breakglass_aaguid_allowlist"
+
+// maxAAGUIDs bounds the allowlist.
+const maxAAGUIDs = 50
 
 // settingsView is the tenant's current settings with defaults filled in.
 type settingsView struct {
@@ -737,6 +755,46 @@ type settingsView struct {
 	ints      map[string]int
 	device    bool
 	minAdmins int
+	// aaguids is the break-glass AAGUID allowlist, canonical lower-case
+	// UUIDs, sorted; empty means any model.
+	aaguids []string
+}
+
+// normalizeAAGUIDs validates an allowlist and returns it as canonical
+// lower-case UUIDs, sorted and without duplicates.
+func normalizeAAGUIDs(in []string) ([]string, error) {
+	if len(in) > maxAAGUIDs {
+		return nil, invalid("%s has more than %d entries", keyAAGUIDAllowlist, maxAAGUIDs)
+	}
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		id, err := uuid.Parse(strings.TrimSpace(s))
+		if err != nil || len(strings.TrimSpace(s)) != 36 {
+			return nil, invalid("%s: %q is not an AAGUID (a UUID such as 2fc0579f-8113-47ea-b116-bb5a8db9202a)", keyAAGUIDAllowlist, s)
+		}
+		if c := id.String(); !slices.Contains(out, c) {
+			out = append(out, c)
+		}
+	}
+	slices.Sort(out)
+	return out, nil
+}
+
+// aaguidsWiden reports whether next admits a model cur does not: any model
+// (an empty list) where cur limited them, or a model cur did not list.
+func aaguidsWiden(cur, next []string) bool {
+	if len(cur) == 0 {
+		return false
+	}
+	if len(next) == 0 {
+		return true
+	}
+	for _, a := range next {
+		if !slices.Contains(cur, a) {
+			return true
+		}
+	}
+	return false
 }
 
 func viewSettings(t store.Tenant) settingsView {
@@ -757,6 +815,12 @@ func viewSettings(t store.Tenant) settingsView {
 	}
 	if b, ok := s.raw["device_grant_enabled"]; ok {
 		_ = json.Unmarshal(b, &s.device)
+	}
+	if b, ok := s.raw[keyAAGUIDAllowlist]; ok {
+		var list []string
+		if json.Unmarshal(b, &list) == nil {
+			s.aaguids, _ = normalizeAAGUIDs(list)
+		}
 	}
 	for _, d := range intSettings {
 		s.ints[d.key] = d.def
@@ -787,6 +851,10 @@ func (v *settingsPayload) weakens(cur settingsView) bool {
 	}
 	w = w || (v.DeviceGrantEnabled != nil && *v.DeviceGrantEnabled && !cur.device)
 	w = w || (v.MinAdmins != nil && *v.MinAdmins < cur.minAdmins)
+	if v.BreakGlassAAGUIDAllowlist != nil {
+		next, _ := normalizeAAGUIDs(*v.BreakGlassAAGUIDAllowlist) // check() has refused a bad list
+		w = w || aaguidsWiden(cur.aaguids, next)
+	}
 	return w
 }
 
@@ -801,6 +869,10 @@ func (v *settingsPayload) changes(cur settingsView) bool {
 	}
 	c = c || (v.DeviceGrantEnabled != nil && *v.DeviceGrantEnabled != cur.device)
 	c = c || (v.MinAdmins != nil && *v.MinAdmins != cur.minAdmins)
+	if v.BreakGlassAAGUIDAllowlist != nil {
+		next, _ := normalizeAAGUIDs(*v.BreakGlassAAGUIDAllowlist)
+		c = c || !slices.Equal(next, cur.aaguids)
+	}
 	return c
 }
 
@@ -826,6 +898,11 @@ func (v *settingsPayload) check(cur settingsView) error {
 	}
 	if v.MinAdmins != nil && (*v.MinAdmins < 2 || *v.MinAdmins > maxMinAdmins) {
 		return invalid("min_admins %d: allowed range is 2 to %d", *v.MinAdmins, maxMinAdmins)
+	}
+	if v.BreakGlassAAGUIDAllowlist != nil {
+		if _, err := normalizeAAGUIDs(*v.BreakGlassAAGUIDAllowlist); err != nil {
+			return err
+		}
 	}
 	if !v.changes(cur) {
 		return invalid("the diff changes nothing")
@@ -873,6 +950,13 @@ func applySettings(e *env, _ *store.AdminChange, v *settingsPayload) error {
 	}
 	if v.DeviceGrantEnabled != nil {
 		set("device_grant_enabled", *v.DeviceGrantEnabled)
+	}
+	if v.BreakGlassAAGUIDAllowlist != nil {
+		list, err := normalizeAAGUIDs(*v.BreakGlassAAGUIDAllowlist)
+		if err != nil {
+			return err
+		}
+		set(keyAAGUIDAllowlist, list)
 	}
 	b, err := json.Marshal(cur.raw)
 	if err != nil {

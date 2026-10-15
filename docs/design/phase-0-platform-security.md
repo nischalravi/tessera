@@ -2050,6 +2050,8 @@ Redeeming the code means signing in through the named connection with **phr** co
 | POST | `/api/admin/change-requests/{id}/apply` | admin.change.request. Only when `effective_at ≤ now`. The sweeper also applies. |
 | POST | `/api/admin/break-glass/registration/options` · `/verify` | admin.change.request + STEP_UP_ADMIN + an applied `breakglass.register` request id |
 | POST | `/api/admin/break-glass/actions/{action}` | break_glass role only (§15.4 actions) |
+| GET | `/api/admin/break-glass` | admin.read: keys, open enrolments, uses of the last 30 days (added in PR13) |
+| POST | `/api/admin/break-glass/uses/{use_id}/attest` | admin.change.request: why break-glass was used (added in PR13) |
 
 **Authenticated: audit**
 

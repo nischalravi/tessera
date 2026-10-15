@@ -36,6 +36,7 @@ import (
 	"io/fs"
 	"net/url"
 	"slices"
+	"strings"
 	"sync"
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver
@@ -82,6 +83,8 @@ var tables = []string{
 	"bootstrap_invitations",
 	// admin changes, admin notifications, operator recovery (schema/0008_admin_changes.sql)
 	"tenant_recoveries", "admin_change_requests", "admin_notifications",
+	// break-glass keys, WebAuthn challenges and uses (schema/0009_breakglass.sql)
+	"break_glass_credentials", "break_glass_challenges", "break_glass_uses",
 	// audit ledger (schema/0004_audit.sql)
 	"audit_events", "audit_chain_heads", "audit_checkpoints",
 	// deployment readiness (schema/0201-0203; revoked_grants is 0204)
@@ -208,7 +211,15 @@ func (d *DB) legacySchema(ctx context.Context) (bool, error) {
 			return true, nil
 		}
 	}
-	return false, nil
+	// admin_change_requests from before break-glass (PR13) has a type CHECK
+	// that refuses breakglass.*, and SQLite cannot widen a CHECK in place.
+	var def sql.NullString
+	err := d.sql.QueryRowContext(ctx,
+		`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'admin_change_requests'`).Scan(&def)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, err
+	}
+	return def.Valid && !strings.Contains(def.String, "breakglass.register"), nil
 }
 
 // InTenant runs fn in one write transaction scoped to t. A zero tenancy.ID or

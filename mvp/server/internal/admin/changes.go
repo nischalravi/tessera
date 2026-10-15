@@ -33,6 +33,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/google/uuid"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
@@ -44,8 +45,8 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 )
 
-// Change types (design §15.2). api_client.* and breakglass.* join with the
-// PRs that add their tables (PR10/11 and PR13).
+// Change types (design §15.2). api_client.* joins with the PR that adds its
+// table (PR10/11).
 const (
 	TypeRoleGrant         = "role.grant"
 	TypeRoleRevoke        = "role.revoke"
@@ -55,6 +56,8 @@ const (
 	TypeIdPDisable        = "idp_connection.disable"
 	TypeTenantSettings    = "tenant.settings.update"
 	TypeSecurityContacts  = "tenant.security_contacts.update"
+	TypeBGRegister        = "breakglass.register"
+	TypeBGRevoke          = "breakglass.revoke"
 )
 
 const (
@@ -91,6 +94,9 @@ type Service struct {
 	// Log receives the details of an applier failure, which the request
 	// itself records only generically. Nil: slog.Default.
 	Log *slog.Logger
+	// WebAuthn runs the break-glass ceremonies (NewWebAuthn). Nil: break-glass
+	// registration and sign-in answer 503 break_glass_unavailable.
+	WebAuthn *webauthn.WebAuthn
 }
 
 func (s *Service) now() time.Time {
@@ -250,8 +256,8 @@ func lookupType(name string) (*changeType, error) {
 	if t, ok := changeTypes[name]; ok {
 		return t, nil
 	}
-	if strings.HasPrefix(name, "api_client.") || strings.HasPrefix(name, "breakglass.") {
-		return nil, invalid("type %q is not available yet (its table arrives with machine clients or break-glass)", name)
+	if strings.HasPrefix(name, "api_client.") {
+		return nil, invalid("type %q is not available yet (its table arrives with machine clients)", name)
 	}
 	return nil, invalid("unsupported type %q (want one of %s)", name, strings.Join(Types(), ", "))
 }
