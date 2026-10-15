@@ -1,0 +1,41 @@
+{
+  "ok_sessions": [
+    {"method": "DELETE", "path": "/api/v1/users/00u1abcd/sessions", "query": "oauthTokens=true", "responses": [{"status": 204}]},
+    {"method": "GET", "path": "/api/v1/users/00u1abcd/clients", "responses": [{"status": 200, "body": [{"client_id": "0oaCLIENT1", "client_name": "Okta Mobile"}]}]},
+    {"method": "GET", "path": "/api/v1/users/00u1abcd/clients/0oaCLIENT1/tokens", "responses": [{"status": 200, "body": []}]}
+  ],
+  "ok_grants": [
+    {"method": "GET", "path": "/api/v1/users/00u1abcd/grants", "responses": [
+      {"status": 200, "body": [{"id": "oag1", "status": "ACTIVE", "scopeId": "okta.users.read"}, {"id": "oag2", "status": "ACTIVE", "scopeId": "okta.apps.read"}]},
+      {"status": 200, "body": []}]},
+    {"method": "DELETE", "path": "/api/v1/users/00u1abcd/grants", "responses": [{"status": 204}]}
+  ],
+  "not_found": [
+    {"method": "DELETE", "path": "/api/v1/users/00u1abcd/sessions", "responses": [
+      {"status": 404, "body": {"errorCode": "E0000007", "errorSummary": "Not found: Resource not found: 00u1abcd (User)"}}]}
+  ],
+  "rate_limited": [
+    {"method": "DELETE", "path": "/api/v1/users/00u1abcd/sessions", "responses": [
+      {"status": 429, "headers": {"Retry-After": "2"}, "body": {"errorCode": "E0000047", "errorSummary": "API call exceeded rate limit due to too many requests."}},
+      {"status": 204}]},
+    {"method": "GET", "path": "/api/v1/users/00u1abcd/clients", "responses": [{"status": 200, "body": []}]}
+  ],
+  "rate_limit_exhausted": [
+    {"method": "DELETE", "path": "/api/v1/users/00u1abcd/sessions", "responses": [
+      {"status": 429, "headers": {"Retry-After": "1"}, "body": {"errorCode": "E0000047"}}]}
+  ],
+  "still_has_token": [
+    {"method": "DELETE", "path": "/api/v1/users/00u1abcd/sessions", "responses": [{"status": 204}]},
+    {"method": "GET", "path": "/api/v1/users/00u1abcd/clients", "responses": [{"status": 200, "body": [{"client_id": "0oaCLIENT1"}]}]},
+    {"method": "GET", "path": "/api/v1/users/00u1abcd/clients/0oaCLIENT1/tokens", "responses": [{"status": 200, "body": [{"id": "oar1", "status": "ACTIVE"}]}]}
+  ],
+  "still_has_grant": [
+    {"method": "GET", "path": "/api/v1/users/00u1abcd/grants", "responses": [{"status": 200, "body": [{"id": "oag1"}]}]},
+    {"method": "DELETE", "path": "/api/v1/users/00u1abcd/grants", "responses": [{"status": 204}]}
+  ],
+  "forbidden": [
+    {"method": "GET", "path": "/api/v1/users/00u1abcd/grants", "responses": [{"status": 200, "body": [{"id": "oag1"}]}]},
+    {"method": "DELETE", "path": "/api/v1/users/00u1abcd/grants", "responses": [
+      {"status": 403, "body": {"errorCode": "E0000006", "errorSummary": "You do not have permission to perform the requested action"}}]}
+  ]
+}

@@ -81,6 +81,18 @@ DELETE /api/connections/{id}/checklist/{item}/skip   connections.manage -
 POST   /api/connections/{id}/transition              connections.manage -
 POST   /api/connections/{id}/activate                connections.activate STEP_UP_POLICY
 POST   /api/connections/{id}/retire                  connections.manage STEP_UP_POLICY
+GET    /api/correlation/queue                        graph.read      -  # issue #160
+GET    /api/correlation/decisions                    graph.read      -  # issue #160
+POST   /api/accounts/{account_id}/link               identities.correlate STEP_UP_POLICY  # issue #160
+POST   /api/accounts/{account_id}/not-person         identities.correlate STEP_UP_POLICY  # issue #160
+DELETE /api/accounts/{account_id}/link               identities.correlate STEP_UP_POLICY  # issue #160
+POST   /api/identities/{identity_id}/merge           identities.merge STEP_UP_POLICY  # issue #160
+GET    /api/identity-merges                          graph.read      -  # issue #160
+POST   /api/identity-merges/{merge_id}/unmerge       identities.merge STEP_UP_POLICY  # issue #160
+POST   /api/identities/{identity_id}/contain         identities.contain STEP_UP_POLICY  # issue #106
+GET    /api/identities/{identity_id}/containment     graph.read      -  # issue #106
+POST   /api/containment-retries/{retry_id}/retry-now identities.contain STEP_UP_POLICY  # issue #106
+PUT    /api/connections/{id}/containment-credential  connections.manage STEP_UP_POLICY  # issue #106
 POST   /api/connections/{id}/validate                connections.manage -
 GET    /api/connections/{id}/validations/{run}       connections.read   -
 POST   /api/connections/{id}/dry-run                 connections.manage -
@@ -93,9 +105,15 @@ POST   /api/insights/deployment-health/rerun         connections.manage -
 GET    /api/auth/session                             auth.self       -
 POST   /api/auth/logout                              auth.self       -
 GET    /api/auth/sessions                            auth.self       -
+GET    /api/auth/step-up                             auth.self       -
 DELETE /api/auth/sessions/{session_id}               auth.self       -  (another user's: admin.sessions.revoke + STEP_UP_ADMIN in the handler)
-GET    /api/auth/dev-login                           public
-POST   /api/auth/dev-login                           public
+GET    /api/auth/discover                            public
+GET    /api/auth/login                               public
+GET    /api/auth/oidc/{connection_id}/callback       public
+GET    /api/auth/saml/{connection_id}/metadata       public
+POST   /api/auth/saml/{connection_id}/acs            public
+GET    /api/auth/oauth2/{connection_id}/callback     public
+GET    /t/{slug}/bootstrap                           public
 `
 
 type designRoute struct {
