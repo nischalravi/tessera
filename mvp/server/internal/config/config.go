@@ -219,7 +219,6 @@ func Load(getenv func(string) string) (*Config, error) {
 			c.FrozenNow = t
 		}
 	}
-	c.DevLogin = boolean("TESSERA_DEV_LOGIN", false, false)
 	c.DevIdPURL = strings.TrimSpace(getenv("TESSERA_DEV_IDP_URL"))
 	if c.DevIdPURL == "" && !prod {
 		c.DevIdPURL = "http://127.0.0.1:8001"
@@ -299,9 +298,6 @@ func Load(getenv func(string) string) (*Config, error) {
 		}
 		if c.DevIdPURL != "" {
 			bad("TESSERA_DEV_IDP_URL must not be set with TESSERA_ENV=prod")
-		}
-		if c.DevLogin {
-			bad("TESSERA_DEV_LOGIN must not be set with TESSERA_ENV=prod")
 		}
 		switch {
 		case c.AuditAnchor == "":

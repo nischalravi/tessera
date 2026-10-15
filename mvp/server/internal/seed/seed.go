@@ -156,6 +156,8 @@ type Tenant struct {
 	// Identifiers, when set, hashes the identifiers the back-fill records for
 	// each person (identity_identifiers). Nil skips them.
 	Identifiers *identifiers.Keyer
+	// DevIdPClient seals the dev IdP connection's client secret (optional).
+	DevIdPClient *DevIdPClient
 }
 
 // Larkspur is the Larkspur Labs demo tenant over conns.
