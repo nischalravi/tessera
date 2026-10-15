@@ -7,10 +7,14 @@
 //	tessera readiness lint [-dir path]   lint the readiness checklist templates
 //	tessera audit verify|checkpoint|export   verify, checkpoint or export the audit ledger (see audit.go)
 //	tessera admin create-tenant|add-idp|invite-admin   operator bootstrap of a tenant (see admin.go)
+//	tessera admin gen-rls [-out path] [-check]   render the Postgres row-level-security file (see genrls.go)
 //
 // Environment:
 //
-//	TESSERA_DB            database path (or sqlite:///path); default ./tessera.db
+//	TESSERA_DB            database path (or sqlite:///path), or a postgres:// DSN
+//	                      (postgres://owner@host/db?sslmode=require&app_role=tessera_app);
+//	                      default ./tessera.db
+//	TESSERA_AUDIT_ANCHOR  file:///path.jsonl (dev) or s3://bucket/prefix (S3 Object Lock; prod)
 //	TESSERA_POLICY_DIR    read policies from this directory instead of the built-in copies
 //	TESSERA_CONNECTORS    connector spec, e.g. "demo" (default) or "demo-workday,okta"
 //	TESSERA_CORS_ORIGINS  comma-separated browser origins allowed by CORS
@@ -103,7 +107,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	fset := flag.NewFlagSet("tessera "+cmd, flag.ContinueOnError)
 	fset.SetOutput(stderr)
 	var o options
-	fset.StringVar(&o.db, "db", dbPath(os.Getenv("TESSERA_DB")), "SQLite database path")
+	fset.StringVar(&o.db, "db", dbPath(os.Getenv("TESSERA_DB")), "SQLite database path or postgres:// DSN")
 	if cmd == "serve" {
 		fset.StringVar(&o.addr, "addr", "127.0.0.1:8000", "listen address")
 		fset.BoolVar(&o.reseed, "reseed", false, "wipe and re-seed the database before serving")
@@ -142,12 +146,41 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if cmd == "seed" {
 		return seedDB(ctx, o.db, cfg, clock, loader, sealer, stdout)
 	}
-	if _, err := os.Stat(o.db); o.reseed || errors.Is(err, fs.ErrNotExist) {
+	seedNow, err := needsSeed(ctx, o, cfg)
+	if err != nil {
+		return err
+	}
+	if seedNow {
 		if err := seedDB(ctx, o.db, cfg, clock, loader, sealer, stdout); err != nil {
 			return err
 		}
 	}
 	return serve(ctx, o, cfg, sealer, clock, loader, logger)
+}
+
+// needsSeed reports whether serve must seed the demo tenants first: on
+// --reseed, or when there is nothing yet. For SQLite "nothing" is a missing
+// file. A Postgres database always exists, so there it is a database with no
+// tenant, and never in production (an empty production database is filled by
+// `tessera admin create-tenant`, not by demo data).
+func needsSeed(ctx context.Context, o options, cfg *config.Config) (bool, error) {
+	if !store.IsPostgresDSN(o.db) {
+		_, err := os.Stat(o.db)
+		return o.reseed || errors.Is(err, fs.ErrNotExist), nil
+	}
+	if o.reseed {
+		return true, nil
+	}
+	if cfg.IsProd() {
+		return false, nil
+	}
+	st, err := store.Open(ctx, o.db)
+	if err != nil {
+		return false, err
+	}
+	defer st.Close()
+	tenants, err := st.ActiveTenants(ctx)
+	return len(tenants) == 0, err
 }
 
 // dbPath accepts a plain path or the Python backend's sqlite:/// URL form.
@@ -281,11 +314,6 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if scenario != "" && !slices.Contains(connectors.ScenarioNames(), scenario) {
 		return fmt.Errorf("TESSERA_READINESS_SCENARIO: unknown scenario %q (have %v)", scenario, connectors.ScenarioNames())
 	}
-	anchorURL := cfg.AnchorURL(o.db)
-	sink, err := audit.NewSink(anchorURL)
-	if err != nil {
-		return err
-	}
 	// Outbound calls to IdPs (discovery, JWKS, token) and the kill switch's
 	// provider calls (containment) go through safehttp. A test server gets the
 	// production client (no loopback exception).
@@ -294,6 +322,12 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		outCfg.Env, outCfg.OutboundAllowLoopback = config.Prod, false
 	}
 	outbound, err := safehttp.ForConfig(&outCfg)
+	if err != nil {
+		return err
+	}
+	// The s3:// anchor sink's AWS SDK client uses the same safehttp client.
+	anchorURL := cfg.AnchorURL(o.db)
+	sink, err := audit.NewSink(anchorURL, audit.WithHTTPClient(outbound))
 	if err != nil {
 		return err
 	}

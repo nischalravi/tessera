@@ -33,7 +33,11 @@ func register(name, sql string, system, lookup bool) {
 	if _, dup := statements[name]; dup {
 		panic(fmt.Sprintf("store: duplicate statement name %q", name))
 	}
-	statements[name] = registered{name, strings.TrimSpace(sql), system, lookup}
+	text := strings.TrimSpace(sql)
+	statements[name] = registered{name, text, system, lookup}
+	if o, ok := pgOverrides[name]; ok {
+		pgBySQL[text] = strings.TrimSpace(o)
+	}
 }
 
 // tq declares a tenant statement. Call it only from package-level var blocks.

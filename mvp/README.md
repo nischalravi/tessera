@@ -273,7 +273,8 @@ actor a client names (request bodies have no `actor`, `approver` or `reviewer` f
 
 Every 5 minutes (or 1000 events) the server signs each chain head with the platform Ed25519 key and
 appends it to the anchor sink: `TESSERA_AUDIT_ANCHOR`, by default `var/audit-anchors.jsonl` next to
-the database (S3 Object Lock is a later step). To check a database:
+the database. In production it is `s3://bucket/prefix` (see "S3 Object Lock anchor" below). To check
+a database:
 
 ```bash
 cd server
@@ -298,6 +299,94 @@ interval, 5 minutes or 1000 events) are the window that cannot be proven complet
 
 The Admin → Audit log page lists the events, can include API requests, verifies the chain and
 exports it.
+
+#### S3 Object Lock anchor
+
+`TESSERA_AUDIT_ANCHOR=s3://bucket/prefix` writes one object per checkpoint, `prefix/<tenant id>/<seq>.jws`
+(the checkpoint JWS), with `ObjectLockMode=COMPLIANCE`, retention of 7 years, `If-None-Match: *` (an
+existing object is never replaced) and a SHA-256 checksum. `anchor_ref` is
+`s3://bucket/key?versionId=<id>`; a response without a version id is a failure, because it means the
+bucket is not versioned with Object Lock enabled. The bucket must be created with Object Lock
+(versioning is then on) and the server's role needs `s3:PutObject`, `s3:PutObjectRetention` and
+`s3:GetObject`/`s3:GetObjectVersion` (the last two let a retried write recognise its own object).
+A failed anchor is retried with backoff and flagged after 3 attempts, as with the file sink.
+
+The AWS SDK for Go v2 client sends all of its HTTP traffic through `internal/safehttp` (the SSRF
+guard): no proxy, no private, link-local or loopback addresses, which also blocks the EC2/ECS
+credential endpoints, so give the process credentials through the SDK's other sources
+(environment, web identity / IRSA) and set `AWS_REGION`. `AWS_CA_BUNDLE` is not supported with the
+safehttp client; trust a private CA through the system roots. `tessera audit verify -anchors`
+reads `file://` anchor files only; verifying against the bucket is a later step.
+
+## Postgres
+
+SQLite stays the default and is unchanged. Set `TESSERA_DB` (or `-db`) to a Postgres DSN to use Postgres
+(design `docs/design/phase-0-platform-security.md` §14.3, §19 PR14):
+
+```bash
+export TESSERA_DB='postgres://tessera_owner:…@db.example.com:5432/tessera?sslmode=verify-full&app_role=tessera_app'
+```
+
+Two roles, created once by a DBA before the first start:
+
+```sql
+CREATE ROLE tessera_owner LOGIN PASSWORD '…' BYPASSRLS;   -- (or SUPERUSER) it owns the tables and runs the migrations
+CREATE ROLE tessera_app NOLOGIN NOSUPERUSER NOBYPASSRLS;   -- never owns a table, never bypasses row-level security
+GRANT tessera_app TO tessera_owner;                        -- lets the owner's connections SET ROLE tessera_app
+CREATE DATABASE tessera OWNER tessera_owner;
+```
+
+* The DSN's role runs the goose migrations (`internal/store/schema/postgres/*.sql`, embedded, applied
+  on every start under an advisory lock) and `rls.sql`. With `app_role` every connection that serves
+  requests then runs `SET ROLE tessera_app`. `TESSERA_ENV=prod` refuses a DSN without `app_role` or
+  without `sslmode=require|verify-ca|verify-full`. The owner should be a superuser or `BYPASSRLS`:
+  the cross-tenant guards for graph node keys are `SECURITY DEFINER` functions that must see other
+  tenants' rows. The role must exist before the migrations run (they grant it its privileges).
+* **Row-level security.** Every tenant table has `ENABLE` and `FORCE ROW LEVEL SECURITY` and a
+  `tenant_isolation` policy on `tenant_id = NULLIF(current_setting('app.tenant_id', true), '')`.
+  `DB.InTenant`/`ReadTenant` run `set_config('app.tenant_id', …, true)` (transaction-local, so a pooled
+  connection cannot carry a tenant into its next transaction); with no setting no row matches.
+  `sessions` and `login_transactions` also have a SELECT-only `lookup_by_hash` policy for the two
+  bearer-hash lookups (`app.lookup`). The repository's own `tenant_id = @tenant` predicates stay: RLS
+  is the second layer.
+* **`tessera admin gen-rls [-out path] [-check]`** renders `internal/store/schema/postgres/rls.sql` from
+  the Postgres schema (no database needed). After changing a Postgres migration run
+  `go run ./cmd/tessera admin gen-rls -out internal/store/schema/postgres/rls.sql`;
+  `TestPostgresRLSFileCurrent` fails while the committed file is stale.
+* **Foreign keys** between tenant tables are composite `(tenant_id, x_id) → (tenant_id, id)` against a
+  `UNIQUE (tenant_id, id)` on the parent, so the database refuses a reference into another tenant. Graph
+  node keys (`account:12`) and four "soft" references to rows that may be gone (`access_requests.edge_id`,
+  `review_items.edge_id`, `hris_events.identity_id`, `readiness_item_states.check_run_id`) keep a trigger.
+* **Audit tables** (`audit_events`, `audit_checkpoints`): `plpgsql` triggers refuse UPDATE, DELETE and
+  TRUNCATE, and `0900_roles.sql` revokes UPDATE, DELETE and TRUNCATE from `tessera_app` (only a
+  checkpoint's `anchor_*` columns stay updatable).
+* **What differs from SQLite.** Statements are written once, in SQLite's dialect, and translated
+  (`internal/store/dialect.go`: `@name` → `$n`, `INSERT OR IGNORE`, `instr`, a negative `LIMIT`).
+  Timestamps stay sortable `TEXT`. A failing statement runs inside a savepoint, so a handled unique or
+  reference violation does not abort the transaction (as in SQLite). Write transactions of one tenant
+  queue on an advisory lock (SQLite serializes all writers); other tenants and all readers run in
+  parallel. Integer ids come from sequences, which are not gapless (an upsert that finds its row still
+  consumes a value). `schema/postgres` is kept in step with the SQLite DDL by
+  `TestSchemaParity_SQLiteAndPostgres`.
+* `tessera serve` seeds the demo tenants into an empty Postgres database in dev (never in prod; `-reseed`
+  wipes and reseeds); production starts empty and is filled with `tessera admin create-tenant`.
+  `TESSERA_DB=postgres://… ./run.sh` works the same way: it never reseeds a Postgres database unless
+  you pass `--reseed`.
+
+Run the Postgres tests against any throwaway server (not production: every test creates and drops its
+own database, and the first run creates the `tessera_app` role):
+
+```bash
+export TESSERA_TEST_PG_URL='postgres://postgres@127.0.0.1:5432/postgres?sslmode=disable'
+cd server && go test ./...                      # the whole suite on Postgres, as tessera_app
+TESSERA_REQUIRE_PG_TESTS=1 go test ./internal/store/   # fail instead of skipping when it is unset
+```
+
+Without `TESSERA_TEST_PG_URL` the suite runs on SQLite and the Postgres-only tests skip (the
+dialect, schema-parity, DSN and `gen-rls` tests need no server and always run). With it,
+`internal/store/storetest`, `testkit` and the API parity replay run on Postgres (the parity replay
+accepts a different numeric `id`/`edge_id` there, see above). CI should run this with a Postgres 16
+service container and `TESSERA_REQUIRE_PG_TESTS=1`.
 
 ## Web UI
 
@@ -632,6 +721,10 @@ cd ../frontend && npm run build && npm test   # npm test: node:test, no extra de
   (FastAPI) backend with `record_python.py` on a frozen clock (2026-10-08T09:30:00 UTC) before it
   was removed; check out commit `aba5abb` to re-run the recorder against it. Only two values are
   normalised, both non-deterministic in Python itself (see `testdata/parity/README.md`).
+* **Postgres.** With `TESSERA_TEST_PG_URL` set (see "Postgres") the whole suite runs on Postgres 16 as
+  the non-owner `tessera_app` role, and `store/pg_isolation_test.go` checks row-level security,
+  composite foreign keys and the audit privileges. `TESSERA_REQUIRE_PG_TESTS=1` turns a missing
+  server into a failure.
 * **Security scanners:** gosec reports 0 issues; each of the few `#nosec` annotations carries a
   justification. govulncheck reports no vulnerabilities.
 
@@ -659,8 +752,9 @@ cd ../frontend && npm run build && npm test   # npm test: node:test, no extra de
   `TESSERA_CORS_ORIGINS` (the production UI is same-origin, so CORS is off),
   `TESSERA_OUTBOUND_ALLOW_LOOPBACK=true`, a `TESSERA_DEV_IDP_URL`, a missing or `file://`
   `TESSERA_AUDIT_ANCHOR`, a frozen clock (`TESSERA_NOW`), or a `TESSERA_TRUSTED_PROXIES` prefix
-  broader than /8 (IPv4) or /32 (IPv6), and lists every problem at once. A /0 proxy prefix is
-  refused in every environment.
+  broader than /8 (IPv4) or /32 (IPv6), or a `postgres://` `TESSERA_DB` without `sslmode=require`
+  (or stricter) and `app_role`, and lists every problem at once (never echoing the DSN). A /0 proxy
+  prefix is refused in every environment.
 * Keys: `seed` and `serve` run the ensure-keys step (one active and one next ES256 key per tenant
   and purpose, the platform Ed25519 key, daily rotation). Private keys are stored only sealed
   under the KEK (`TESSERA_KEK` or `TESSERA_KEK_FILE`, base64 of 32 bytes, file mode 0600). In dev

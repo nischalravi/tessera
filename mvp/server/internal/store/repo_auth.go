@@ -690,12 +690,20 @@ func (tx *TenantTx) ExpireSession(id uuid.UUID) error {
 // two reads of a tenant table outside a TenantTx (design §14.2): the caller
 // then loads the row with InTenant/ReadTenant, which re-applies the tenant.
 func (s *SystemTx) LookupSessionBySecretHash(hash string) (tenancy.ID, uuid.UUID, error) {
-	return s.lookup(sessionsLookup, hash)
+	return s.lookup(sessionsLookup, "session_hash", hash)
 }
 
-func (s *SystemTx) lookup(st lstmt, hash string) (tenancy.ID, uuid.UUID, error) {
+// lookup runs one of the two hash lookups. On Postgres it first sets
+// app.lookup (transaction-local) to the lookup's name, which is what the
+// narrow SELECT policy lookup_by_hash of rls.sql keys on.
+func (s *SystemTx) lookup(st lstmt, setting, hash string) (tenancy.ID, uuid.UUID, error) {
 	if len(hash) != 64 {
 		return tenancy.ID{}, uuid.Nil, ErrNotFound
+	}
+	if s.tx.d == dialectPostgres {
+		if _, err := s.tx.tx.ExecContext(s.ctx, pgSetLookup, setting); err != nil {
+			return tenancy.ID{}, uuid.Nil, fmt.Errorf("store: set lookup: %w", err)
+		}
 	}
 	var tid, id string
 	err := s.tx.QueryRowContext(s.ctx, st.sql, sql.Named("hash", hash)).Scan(&tid, &id)
@@ -858,5 +866,5 @@ func (tx *TenantTx) ConsumeLoginTransaction(id uuid.UUID, at time.Time) error {
 // LookupLoginTxnByCookieHash resolves a login cookie's hash to its tenant and
 // transaction id (the second §14.2 lookup).
 func (s *SystemTx) LookupLoginTxnByCookieHash(hash string) (tenancy.ID, uuid.UUID, error) {
-	return s.lookup(txnLookup, hash)
+	return s.lookup(txnLookup, "login_cookie_hash", hash)
 }
