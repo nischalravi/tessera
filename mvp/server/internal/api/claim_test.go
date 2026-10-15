@@ -890,6 +890,40 @@ func TestClaim_NoAuthorityStaysPending(t *testing.T) {
 	}
 }
 
+// TestClaim_OnlyOIDCConnectionsServeAClaim: OAuth 2.0 sessions are AAL1 and
+// never phishing resistant, and the SAML callback does not serve claims, so
+// a claim never works through such a connection even when its profile is the
+// authority's and its name sorts first.
+func TestClaim_OnlyOIDCConnectionsServeAClaim(t *testing.T) {
+	e := newClaimEnv(t, claimOpts{})
+	now := testkit.Now.UTC()
+	if err := e.db.InTenant(context.Background(), e.tenant, func(tx *store.TenantTx) error {
+		for _, c := range []*store.IdPConnection{
+			{Name: "AAA oauth2", Protocol: "oauth2", Profile: store.ProfileDevMock, Status: "active", CreatedAt: now, UpdatedAt: now},
+			{Name: "AAB saml", Protocol: "saml", Profile: store.ProfileDevMock, Status: "active", CreatedAt: now, UpdatedAt: now},
+		} {
+			if err := tx.InsertIdPConnection(c); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.db.ReadTenant(context.Background(), e.tenant, func(tx *store.TenantTx) error {
+		_, c, ok, err := e.srv.claimAuthority(tx)
+		if err != nil {
+			return err
+		}
+		if !ok || c.Protocol != "oidc" {
+			t.Errorf("claim connection = %+v (ok %v), want the OIDC one", c, ok)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestClaim_ExistingAccountNeverLinks: "yes" is recorded for review and links nothing.
 func TestClaim_ExistingAccountNeverLinks(t *testing.T) {
 	e := newClaimEnv(t, claimOpts{})

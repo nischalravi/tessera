@@ -242,6 +242,7 @@ function HelpMenu() {
 function UserMenu() {
   const { persona, setPersona } = usePersona();
   const { session, signOut, reauthenticate } = useSession();
+  const navigate = useNavigate();
   const p = PERSONAS.find((x) => x.id === persona)!;
   const name = session.user.display_name;
   const a = session.authn;
@@ -257,6 +258,8 @@ function UserMenu() {
           label: <span className="small" style={{ color: "var(--warning, #9a6700)" }}>{r.role} is inactive: sign in with a passkey to use it</span>,
           onSelect: () => { reauthenticate(); },
         })),
+        ...(session.inactive_roles.length ? [{ label: "Re-authenticate", onSelect: () => { reauthenticate(); } }] : []),
+        { label: "My sessions", onSelect: () => navigate("/sessions") },
         "divider",
         { heading: "View as (demo)" },
         ...PERSONAS.map((x) => ({

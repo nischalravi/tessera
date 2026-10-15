@@ -18,9 +18,12 @@ import (
 	"github.com/google/uuid"
 	"go.yaml.in/yaml/v3"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/api"
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	authnorm "github.com/nischalravi/tessera/mvp/server/internal/auth/normalize"
+	"github.com/nischalravi/tessera/mvp/server/internal/auth/oauth2rp"
+	"github.com/nischalravi/tessera/mvp/server/internal/auth/samlsp"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
@@ -150,6 +153,18 @@ type idpFile struct {
 	EntraTenantID    string            `yaml:"entra_tenant_id"`
 	StepUpRequest    map[string]any    `yaml:"step_up_request"`
 	AuthnMapping     map[string]any    `yaml:"authn_mapping"`
+	// SAML (protocol: saml)
+	IdPEntityID     string            `yaml:"idp_entity_id"`
+	IdPSSOURL       string            `yaml:"idp_sso_url"`
+	IdPSigningCerts []string          `yaml:"idp_signing_certs"` // PEM or base64 DER; pinned
+	SubjectSource   string            `yaml:"subject_source"`    // nameid_persistent (default) | attribute:<name>
+	AttributeMap    map[string]string `yaml:"attribute_map"`     // email, name, groups -> attribute names
+	AssumePhr       bool              `yaml:"assume_phishing_resistant"`
+	// OAuth 2.0-only providers (protocol: oauth2)
+	AuthorizationEndpoint string `yaml:"authorization_endpoint"`
+	TokenEndpoint         string `yaml:"token_endpoint"`
+	UserinfoEndpoint      string `yaml:"userinfo_endpoint"`
+	SubjectField          string `yaml:"subject_field"` // the user object's immutable id field ("id" for github)
 }
 
 func readIdPFile(path string) (*idpFile, error) {
@@ -173,39 +188,34 @@ func (f *idpFile) connection(prod bool, now time.Time) (*store.IdPConnection, er
 	if strings.TrimSpace(f.Name) == "" {
 		bad("name is required")
 	}
-	if f.Protocol != "oidc" {
-		bad("protocol %q: only oidc is supported until SAML lands (PR9)", f.Protocol)
+	switch f.Protocol {
+	case "oidc", "saml", "oauth2":
+	default:
+		bad("protocol %q: want oidc, saml or oauth2", f.Protocol)
 	}
-	switch f.Profile {
-	case store.ProfileOkta, store.ProfileEntra, store.ProfileGoogle, store.ProfileGenericOIDC:
-	case store.ProfileDevMock:
+	switch {
+	case f.Profile == store.ProfileDevMock:
 		if prod {
 			bad("profile dev_mock is refused with TESSERA_ENV=prod")
 		}
-	default:
+	case f.Protocol == "saml" && f.Profile != store.ProfileGenericSAML:
+		bad("profile %q: SAML connections use generic_saml", f.Profile)
+	case f.Protocol == "oauth2" && f.Profile != store.ProfileGitHub && f.Profile != store.ProfileGenericOAuth2:
+		bad("profile %q: OAuth 2.0 connections use github or generic_oauth2", f.Profile)
+	case f.Protocol == "oidc" && !slices.Contains([]string{store.ProfileOkta, store.ProfileEntra, store.ProfileGoogle,
+		store.ProfileGenericOIDC}, f.Profile):
 		bad("profile %q: want okta, entra, google or generic_oidc", f.Profile)
 	}
-	iss, err := url.Parse(f.Issuer)
-	switch {
-	case f.Issuer == "" || err != nil || iss.Host == "":
-		bad("issuer must be an absolute URL")
-	case prod && iss.Scheme != "https":
-		bad("issuer must be https with TESSERA_ENV=prod")
-	case strings.HasSuffix(f.Issuer, "/") || iss.RawQuery != "" || iss.Fragment != "":
-		bad("issuer %q must be exact: no trailing slash, query or fragment", f.Issuer)
-	case f.Profile == store.ProfileEntra && strings.Contains(f.Issuer, "{tenantid}"):
-		bad("issuer: Entra multi-tenant templates are not supported; configure the tenant-specific issuer")
+	if f.AssumePhr {
+		bad("assume_phishing_resistant needs a two-person admin change (design §15.2); it cannot be set here")
 	}
-	if f.ClientID == "" {
-		bad("client_id is required")
-	}
-	switch f.ClientAuthMethod {
-	case "", "client_secret_basic":
-		f.ClientAuthMethod = "client_secret_basic"
-	case "private_key_jwt":
-		bad("client_auth_method private_key_jwt is not supported yet; use client_secret_basic")
+	switch f.Protocol {
+	case "saml":
+		f.checkSAML(prod, bad)
+	case "oauth2":
+		f.checkOAuth2(prod, bad)
 	default:
-		bad("client_auth_method %q: want client_secret_basic", f.ClientAuthMethod)
+		f.checkOIDC(prod, bad)
 	}
 	if f.DefaultRole == "" {
 		f.DefaultRole = store.RoleViewer
@@ -230,9 +240,6 @@ func (f *idpFile) connection(prod bool, now time.Time) (*store.IdPConnection, er
 		}
 		mapping["entra_tenant_id"] = f.EntraTenantID
 	}
-	if f.Profile == store.ProfileEntra && f.EntraTenantID == "" {
-		bad("entra_tenant_id is required for the entra profile")
-	}
 	enc := func(v any, def string) json.RawMessage {
 		if v == nil || (fmt.Sprint(v) == "map[]") {
 			return json.RawMessage(def)
@@ -254,12 +261,31 @@ func (f *idpFile) connection(prod bool, now time.Time) (*store.IdPConnection, er
 	if f.JITProvisioning != nil {
 		jit = *f.JITProvisioning
 	}
-	issuer, clientID, method := f.Issuer, f.ClientID, f.ClientAuthMethod
 	c := &store.IdPConnection{ID: uuid.New(), Name: strings.TrimSpace(f.Name), Protocol: f.Protocol, Profile: f.Profile,
-		Status: "active", IsDefault: f.Default, VerifiedDomains: enc(f.VerifiedDomains, "[]"), Issuer: &issuer,
-		ClientID: &clientID, ClientAuthMethod: &method, StepUpRequest: enc(f.StepUpRequest, "{}"),
+		Status: "active", IsDefault: f.Default, VerifiedDomains: enc(f.VerifiedDomains, "[]"), StepUpRequest: enc(f.StepUpRequest, "{}"),
 		AuthnMapping: authnMapping, GroupRoleMapping: enc(f.GroupRoleMapping, "{}"), JITProvisioning: jit,
 		DefaultRole: f.DefaultRole, PinCerts: true, CreatedAt: now, UpdatedAt: now}
+	switch f.Protocol {
+	case "saml":
+		entity, sso := f.IdPEntityID, f.IdPSSOURL
+		c.IdPEntityID, c.IdPSSOURL, c.IdPSigningCerts = &entity, &sso, enc(f.IdPSigningCerts, "[]")
+		c.SubjectSource, c.AttributeMap = f.SubjectSource, enc(f.AttributeMap, "{}")
+	case "oauth2":
+		oc := oauth2rp.Connection{Profile: f.Profile, AuthorizationURL: f.AuthorizationEndpoint, TokenURL: f.TokenEndpoint,
+			UserinfoURL: f.UserinfoEndpoint, SubjectField: f.SubjectField, Scopes: f.Scopes}.Defaults()
+		clientID := f.ClientID
+		c.ClientID, c.SubjectSource = &clientID, "field:"+oc.SubjectField
+		c.AuthorizationEndpoint, c.TokenEndpoint, c.UserinfoEndpoint = &oc.AuthorizationURL, &oc.TokenURL, &oc.UserinfoURL
+		if len(f.Scopes) == 0 && f.Profile == store.ProfileGitHub {
+			f.Scopes = []string{"read:user", "user:email"}
+		}
+		if len(f.Scopes) == 0 {
+			c.Scopes = json.RawMessage("[]")
+		}
+	default:
+		issuer, clientID, method := f.Issuer, f.ClientID, f.ClientAuthMethod
+		c.Issuer, c.ClientID, c.ClientAuthMethod = &issuer, &clientID, &method
+	}
 	if len(f.Scopes) > 0 {
 		c.Scopes = enc(f.Scopes, "[]")
 	}
@@ -271,6 +297,109 @@ func (f *idpFile) connection(prod bool, now time.Time) (*store.IdPConnection, er
 		c.GroupsClaim = &g
 	}
 	return c, nil
+}
+
+// checkOIDC validates the OIDC fields.
+func (f *idpFile) checkOIDC(prod bool, bad func(string, ...any)) {
+	iss, err := url.Parse(f.Issuer)
+	switch {
+	case f.Issuer == "" || err != nil || iss.Host == "":
+		bad("issuer must be an absolute URL")
+	case prod && iss.Scheme != "https":
+		bad("issuer must be https with TESSERA_ENV=prod")
+	case strings.HasSuffix(f.Issuer, "/") || iss.RawQuery != "" || iss.Fragment != "":
+		bad("issuer %q must be exact: no trailing slash, query or fragment", f.Issuer)
+	case f.Profile == store.ProfileEntra && strings.Contains(f.Issuer, "{tenantid}"):
+		bad("issuer: Entra multi-tenant templates are not supported; configure the tenant-specific issuer")
+	}
+	if f.ClientID == "" {
+		bad("client_id is required")
+	}
+	switch f.ClientAuthMethod {
+	case "", "client_secret_basic":
+		f.ClientAuthMethod = "client_secret_basic"
+	case "private_key_jwt":
+		bad("client_auth_method private_key_jwt is not supported yet; use client_secret_basic")
+	default:
+		bad("client_auth_method %q: want client_secret_basic", f.ClientAuthMethod)
+	}
+	if f.Profile == store.ProfileEntra && f.EntraTenantID == "" {
+		bad("entra_tenant_id is required for the entra profile")
+	}
+}
+
+// checkOAuth2 validates an OAuth 2.0-only connection: the github profile
+// defaults its endpoints and subject field; generic_oauth2 needs all three
+// endpoints (https in prod) and the immutable id field.
+func (f *idpFile) checkOAuth2(prod bool, bad func(string, ...any)) {
+	if f.ClientID == "" {
+		bad("client_id is required")
+	}
+	if f.Issuer != "" || f.IdPEntityID != "" || f.SubjectSource != "" {
+		bad("issuer, idp_entity_id and subject_source are not OAuth 2.0 settings (use subject_field)")
+	}
+	switch f.ClientAuthMethod {
+	case "", "client_secret_basic":
+	default:
+		bad("client_auth_method %q: OAuth 2.0 connections use a client secret", f.ClientAuthMethod)
+	}
+	eps := map[string]string{"authorization_endpoint": f.AuthorizationEndpoint, "token_endpoint": f.TokenEndpoint,
+		"userinfo_endpoint": f.UserinfoEndpoint}
+	for name, v := range eps {
+		if v == "" {
+			if f.Profile != store.ProfileGitHub {
+				bad("%s is required for generic_oauth2", name)
+			}
+			continue
+		}
+		u, err := url.Parse(v)
+		switch {
+		case err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http"):
+			bad("%s must be an absolute URL", name)
+		case prod && u.Scheme != "https":
+			bad("%s must be https with TESSERA_ENV=prod", name)
+		}
+	}
+	switch strings.ToLower(f.SubjectField) {
+	case "":
+		if f.Profile != store.ProfileGitHub {
+			bad("subject_field is required for generic_oauth2: the user object's immutable id field")
+		}
+	case "email", "login", "username", "preferred_username", "name", "upn":
+		bad("subject_field %q: users are keyed on an immutable id, never a name or email", f.SubjectField)
+	}
+}
+
+// checkSAML validates the SAML fields: an exact entity ID, an SSO URL
+// (https in prod) and at least one pinned signing certificate.
+func (f *idpFile) checkSAML(prod bool, bad func(string, ...any)) {
+	if f.IdPEntityID == "" {
+		bad("idp_entity_id is required")
+	}
+	sso, err := url.Parse(f.IdPSSOURL)
+	switch {
+	case f.IdPSSOURL == "" || err != nil || sso.Host == "":
+		bad("idp_sso_url must be an absolute URL")
+	case prod && sso.Scheme != "https":
+		bad("idp_sso_url must be https with TESSERA_ENV=prod")
+	}
+	if len(f.IdPSigningCerts) == 0 {
+		bad("idp_signing_certs: pin at least one signing certificate")
+	} else if _, err := samlsp.ParseCerts(f.IdPSigningCerts); err != nil {
+		bad("idp_signing_certs: %v", err)
+	}
+	if f.SubjectSource != "" && f.SubjectSource != "nameid_persistent" &&
+		(!strings.HasPrefix(f.SubjectSource, "attribute:") || len(f.SubjectSource) == len("attribute:")) {
+		bad("subject_source %q: want nameid_persistent or attribute:<name> (never email)", f.SubjectSource)
+	}
+	for k := range f.AttributeMap {
+		if !slices.Contains([]string{"email", "name", "groups"}, k) {
+			bad("attribute_map: unknown key %q (want email, name, groups)", k)
+		}
+	}
+	if f.ClientID != "" || f.Issuer != "" {
+		bad("issuer and client_id are OIDC settings; a SAML connection uses idp_entity_id and idp_sso_url")
+	}
 }
 
 func lookupTenant(e *adminEnv, slug string) (store.Tenant, error) {
@@ -302,6 +431,51 @@ func addIdP(e *adminEnv, slug, file, secretFile string) error {
 	if err != nil {
 		return fmt.Errorf("add-idp: %w", err)
 	}
+	if err := sealConnectionSecrets(e, t.ID, c, secretFile); err != nil {
+		return err
+	}
+	if err := e.db.InTenant(e.ctx, t.ID, func(tx *store.TenantTx) error {
+		if err := tx.InsertIdPConnection(c); err != nil {
+			return err
+		}
+		_, err := audit.Record(e.ctx, tx, "idp.connection.created", ojson.Object{{Key: "connection_id", Value: c.ID.String()},
+			{Key: "name", Value: c.Name}, {Key: "protocol", Value: c.Protocol}, {Key: "profile", Value: c.Profile},
+			{Key: "issuer", Value: firstOf(c.Issuer, c.IdPEntityID, c.UserinfoEndpoint)},
+			{Key: "jit_provisioning", Value: c.JITProvisioning}, {Key: "default_role", Value: c.DefaultRole}},
+			audit.At(e.now), audit.Target("idp_connection", c.ID.String()))
+		return err
+	}); err != nil {
+		return fmt.Errorf("add-idp: %w", err)
+	}
+	fmt.Fprintf(e.stdout, "added connection %s (%s) to %s\n", c.ID, c.Name, t.Slug)
+	if c.Protocol == "saml" {
+		fmt.Fprintf(e.stdout, "register at the IdP: SP entity ID (audience) and metadata %s\nACS URL (HTTP-POST) %s\n",
+			api.SPEntityID(e.cfg.PublicURL, c.ID), api.ACSURL(e.cfg.PublicURL, c.ID))
+		return nil
+	}
+	path := "oidc"
+	if c.Protocol == "oauth2" {
+		path = "oauth2"
+	}
+	fmt.Fprintf(e.stdout, "redirect URI to register at the IdP: %s/api/auth/%s/%s/callback\n",
+		strings.TrimRight(e.cfg.PublicURL, "/"), path, c.ID)
+	return nil
+}
+
+// sealConnectionSecrets seals an OIDC client secret (from secretFile), or
+// generates and seals a SAML connection's SP signing key.
+func sealConnectionSecrets(e *adminEnv, t tenancy.ID, c *store.IdPConnection, secretFile string) error {
+	if c.Protocol == "saml" {
+		keyPEM, certPEM, err := samlsp.GenerateSPKey("Tessera SP "+c.ID.String(), e.now)
+		if err != nil {
+			return err
+		}
+		if c.SPKeyEnc, err = e.sealer.Seal(keyPEM, auth.SPKeyAAD(t, c.ID)); err != nil {
+			return err
+		}
+		c.SPCertPEM = &certPEM
+		return nil
+	}
 	if secretFile == "" {
 		return errors.New("add-idp: -client-secret-file is required for client_secret_basic")
 	}
@@ -313,24 +487,18 @@ func addIdP(e *adminEnv, slug, file, secretFile string) error {
 	if len(secret) == 0 {
 		return errors.New("add-idp: the client secret file is empty")
 	}
-	if c.ClientSecretEnc, err = e.sealer.Seal(secret, auth.ClientSecretAAD(t.ID, c.ID)); err != nil {
-		return err
-	}
-	if err := e.db.InTenant(e.ctx, t.ID, func(tx *store.TenantTx) error {
-		if err := tx.InsertIdPConnection(c); err != nil {
-			return err
+	c.ClientSecretEnc, err = e.sealer.Seal(secret, auth.ClientSecretAAD(t, c.ID))
+	return err
+}
+
+// firstOf is the first non-nil value.
+func firstOf(vs ...*string) string {
+	for _, v := range vs {
+		if v != nil {
+			return *v
 		}
-		_, err := audit.Record(e.ctx, tx, "idp.connection.created", ojson.Object{{Key: "connection_id", Value: c.ID.String()},
-			{Key: "name", Value: c.Name}, {Key: "profile", Value: c.Profile}, {Key: "issuer", Value: *c.Issuer},
-			{Key: "jit_provisioning", Value: c.JITProvisioning}, {Key: "default_role", Value: c.DefaultRole}},
-			audit.At(e.now), audit.Target("idp_connection", c.ID.String()))
-		return err
-	}); err != nil {
-		return fmt.Errorf("add-idp: %w", err)
 	}
-	fmt.Fprintf(e.stdout, "added connection %s (%s) to %s\nredirect URI to register at the IdP: %s/api/auth/oidc/%s/callback\n",
-		c.ID, c.Name, t.Slug, strings.TrimRight(e.cfg.PublicURL, "/"), c.ID)
-	return nil
+	return ""
 }
 
 func inviteAdmin(e *adminEnv, slug, connID, email string, ttl time.Duration) error {
@@ -359,8 +527,8 @@ func inviteAdmin(e *adminEnv, slug, connID, email string, ttl time.Duration) err
 		} else if err != nil {
 			return err
 		}
-		if c.Status != "active" || c.Protocol != "oidc" {
-			return fmt.Errorf("connection %s is not an active OIDC connection", id)
+		if c.Status != "active" || (c.Protocol != "oidc" && c.Protocol != "saml") {
+			return fmt.Errorf("connection %s is not an active OIDC or SAML connection", id)
 		}
 		if err := tx.InsertBootstrapInvitation(inv); err != nil {
 			return err

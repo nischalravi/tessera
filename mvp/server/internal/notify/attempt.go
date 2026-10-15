@@ -59,7 +59,34 @@ type Attempt struct {
 	Truncated    bool      `json:"truncated,omitempty"`
 
 	size int
+	// redact are the credential values (and their base64 forms) that must not
+	// appear in anything stored or returned: a relay may echo them.
+	redact []string
 }
+
+// scrubText replaces every known credential value in s.
+func (a *Attempt) scrubText(s string) string {
+	for _, v := range a.redact {
+		if v != "" {
+			s = strings.ReplaceAll(s, v, "<redacted>")
+		}
+	}
+	return s
+}
+
+// authReplyDetail is all that is kept of a relay's reply to AUTH (and of the
+// error built from it) beyond the status code: the text may echo the payload.
+const authReplyDetail = "(reply detail not recorded)"
+
+// redactedError is an error whose text has been scrubbed of credentials; it
+// keeps the original for errors.Is and errors.As.
+type redactedError struct {
+	msg string
+	err error
+}
+
+func (e *redactedError) Error() string { return e.msg }
+func (e *redactedError) Unwrap() error { return e.err }
 
 // RecordingSender is a Sender that also returns the transcript of the attempt.
 type RecordingSender interface {
@@ -82,7 +109,7 @@ func (a *Attempt) step(command string, code int, reply string) {
 		a.Truncated = true
 		return
 	}
-	s := Step{Command: clipField(command), Reply: clipField(reply), Code: code}
+	s := Step{Command: clipField(a.scrubText(command)), Reply: clipField(a.scrubText(reply)), Code: code}
 	if m := enhancedRE.FindString(reply); m != "" {
 		s.Enhanced = m
 	}
