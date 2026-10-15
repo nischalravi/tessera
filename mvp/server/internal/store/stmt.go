@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -55,7 +56,8 @@ func sq(name, sql string) sstmt {
 // maxCachedStmts bounds the prepared-statement cache. Every statement is a
 // package-level constant (see register), so the bound is only a backstop
 // against a statement built at run time.
-const maxCachedStmts = 1024
+// It is a variable only so a test can lower it.
+var maxCachedStmts = 1024
 
 // stmtCache holds one *sql.Stmt per distinct SQL text. database/sql prepares
 // it lazily on each pooled connection and reuses it there, so SQLite parses a
@@ -66,6 +68,16 @@ const maxCachedStmts = 1024
 type stmtCache struct {
 	mu sync.Mutex
 	m  map[string]*sql.Stmt
+
+	inflight map[string]*prepCall // statements being prepared right now
+
+	prepares atomic.Int64 // PrepareContext calls, for tests
+}
+
+// prepCall is one prepare in progress; st is nil if it failed.
+type prepCall struct {
+	done chan struct{}
+	st   *sql.Stmt
 }
 
 // prepareWait bounds how long the first use of a statement waits for a pooled
@@ -81,27 +93,55 @@ func (d *DB) stmtFor(ctx context.Context, tx *sql.Tx, query string) (*sql.Stmt, 
 	c := &d.stmts
 	c.mu.Lock()
 	st, ok := c.m[query]
-	full := len(c.m) >= maxCachedStmts
-	c.mu.Unlock()
 	if !ok {
-		if full {
+		if len(c.m) >= maxCachedStmts {
+			c.mu.Unlock()
 			return nil, false
 		}
+		if call, busy := c.inflight[query]; busy {
+			// Another caller is preparing this statement: wait for it (bounded
+			// like a prepare) instead of preparing a duplicate.
+			c.mu.Unlock()
+			t := time.NewTimer(prepareWait)
+			defer t.Stop()
+			select {
+			case <-call.done:
+			case <-t.C:
+				return nil, false
+			case <-ctx.Done():
+				return nil, false
+			}
+			if call.st == nil {
+				return nil, false
+			}
+			return tx.StmtContext(ctx, call.st), true
+		}
+		call := &prepCall{done: make(chan struct{})}
+		if c.inflight == nil {
+			c.inflight = map[string]*prepCall{}
+		}
+		c.inflight[query] = call
+		c.mu.Unlock()
+
 		pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), prepareWait)
 		defer cancel()
+		c.prepares.Add(1)
 		fresh, err := d.sql.PrepareContext(pctx, query)
-		if err != nil {
-			return nil, false
-		}
 		c.mu.Lock()
-		if st, ok = c.m[query]; ok {
-			_ = fresh.Close() // lost a race; use the winner
-		} else {
+		delete(c.inflight, query)
+		if err == nil {
 			if c.m == nil {
 				c.m = map[string]*sql.Stmt{}
 			}
-			c.m[query], st = fresh, fresh
+			c.m[query], call.st = fresh, fresh
 		}
+		c.mu.Unlock()
+		close(call.done)
+		if err != nil {
+			return nil, false
+		}
+		st = fresh
+	} else {
 		c.mu.Unlock()
 	}
 	return tx.StmtContext(ctx, st), true
