@@ -45,13 +45,14 @@ import (
 const devClientSecret = "tessera-dev-secret" // #nosec G101 -- documented dev-only value of a mock IdP
 
 const (
-	defaultRedirects   = "http://localhost:*/api/auth/oidc/*/callback,http://127.0.0.1:*/api/auth/oidc/*/callback"
+	defaultRedirects = "http://localhost:*/api/auth/oidc/*/callback,http://127.0.0.1:*/api/auth/oidc/*/callback," +
+		"http://localhost:*/api/auth/oauth2/*/callback,http://127.0.0.1:*/api/auth/oauth2/*/callback"
 	defaultPostLogouts = "http://localhost:5173/,http://127.0.0.1:5173/"
 	shutdownTimeout    = 5 * time.Second
 )
 
 func main() {
-	if err := run(context.Background(), os.Args[1:], os.Getenv, os.Stderr); err != nil {
+	if err := run(context.Background(), os.Args[1:], os.Getenv, os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, "tessera-devidp:", err)
 		os.Exit(1)
 	}
@@ -60,6 +61,7 @@ func main() {
 type options struct {
 	addr, issuer, keyDir, users, profile         string
 	clientID, clientJWKS, redirects, postLogouts string
+	printSAMLCert                                bool
 }
 
 func parseFlags(args []string, stderr io.Writer) (options, error) {
@@ -75,6 +77,7 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 	fs.StringVar(&o.clientJWKS, "client-jwks", "", "JWKS file of the client's public keys, enabling private_key_jwt")
 	fs.StringVar(&o.redirects, "redirect-uris", defaultRedirects, "comma-separated redirect URI patterns (* = one port or path segment)")
 	fs.StringVar(&o.postLogouts, "post-logout-redirect-uris", defaultPostLogouts, "comma-separated post-logout redirect URIs")
+	fs.BoolVar(&o.printSAMLCert, "print-saml-cert", false, "print the SAML signing certificate (PEM) and exit, for pinning it in a connection")
 	if err := fs.Parse(args); err != nil {
 		return o, err
 	}
@@ -164,7 +167,7 @@ func splitList(v string) []string {
 	return out
 }
 
-func run(ctx context.Context, args []string, getenv func(string) string, stderr io.Writer) error {
+func run(ctx context.Context, args []string, getenv func(string) string, stdout, stderr io.Writer) error {
 	if err := devidp.CheckEnv(getenv("TESSERA_ENV")); err != nil {
 		return err
 	}
@@ -182,6 +185,10 @@ func run(ctx context.Context, args []string, getenv func(string) string, stderr 
 	}
 	srv, err := devidp.New(cfg)
 	if err != nil {
+		return err
+	}
+	if o.printSAMLCert {
+		_, err := io.WriteString(stdout, srv.SAMLCertificatePEM())
 		return err
 	}
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
