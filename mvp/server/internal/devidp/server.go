@@ -88,6 +88,10 @@ type Config struct {
 	// Now is the clock; nil means time.Now.
 	Now    func() time.Time
 	Logger *slog.Logger
+	// SAMLACS are the AssertionConsumerServiceURL patterns ("*" matches a
+	// port or one path segment); nil allows http loopback and localhost
+	// /api/auth/saml/*/acs.
+	SAMLACS []string
 }
 
 // Server is a dev IdP. Create it with New and serve Handler.
@@ -104,10 +108,16 @@ type Server struct {
 	now            func() time.Time
 	log            *slog.Logger
 
+	samlCert        []byte   // DER, derived from key
+	samlACS         []string // ACS URL patterns AuthnRequests may name
+	samlPending     ttlStore[pendingSAML]
+	lastAssertionID string // guarded by mu; the replay fault reuses it
+
 	pending  ttlStore[pendingAuthz]
 	codes    ttlStore[authCode]
 	sessions ttlStore[idpSession]
 	tokens   ttlStore[accessGrant]
+	github   ttlStore[githubGrant]
 	jtis     ttlStore[struct{}]
 
 	mu    sync.Mutex
@@ -147,6 +157,10 @@ func New(cfg Config) (*Server, error) {
 		faults:         cfg.Faults,
 		now:            cfg.Now,
 		log:            cfg.Logger,
+		samlACS:        cfg.SAMLACS,
+	}
+	if s.samlACS == nil {
+		s.samlACS = []string{defaultSAMLACSPattern1, defaultSAMLACSPattern2}
 	}
 	if s.now == nil {
 		s.now = time.Now
@@ -177,6 +191,9 @@ func New(cfg Config) (*Server, error) {
 	}
 	if s.key.N.BitLen() < rsaKeyBits {
 		return nil, fmt.Errorf("devidp: signing key must be at least %d bits", rsaKeyBits)
+	}
+	if err := s.makeSAMLCert(); err != nil {
+		return nil, fmt.Errorf("devidp: SAML certificate: %w", err)
 	}
 	jwk := jose.JSONWebKey{Key: s.key.Public()}
 	tp, err := jwk.Thumbprint(crypto.SHA256)
@@ -254,9 +271,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /userinfo", s.handleUserinfo)
 	mux.HandleFunc("POST /userinfo", s.handleUserinfo)
 	mux.HandleFunc("GET /logout", s.handleLogout)
-	mux.HandleFunc("GET /saml/metadata", s.handleSAMLStub)
-	mux.HandleFunc("GET /saml/sso", s.handleSAMLStub)
-	mux.HandleFunc("POST /saml/sso", s.handleSAMLStub)
+	mux.HandleFunc("GET "+pathGitHubAuthorize, s.handleGitHubAuthorize)
+	mux.HandleFunc("POST "+pathGitHubToken, s.handleGitHubToken)
+	mux.HandleFunc("GET "+pathGitHubUser, s.handleGitHubUser)
+	mux.HandleFunc("GET "+pathGitHubEmails, s.handleGitHubEmails)
+	mux.HandleFunc("GET "+samlEntityPath, s.handleSAMLMetadata)
+	mux.HandleFunc("GET "+samlSSOPath, s.handleSAMLSSO)
+	mux.HandleFunc("POST "+samlSSOPath, s.handleSAMLSubmit)
 	if s.faults {
 		mux.HandleFunc("GET "+faultJKUPath, s.handleAttackerJWKS)
 		mux.HandleFunc("GET /_faults", s.handleGetFault)
