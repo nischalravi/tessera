@@ -540,6 +540,63 @@ export const jitCreate = (body: { identity_id: number; group_id: number; duratio
 export const reviewDecide = (itemId: number, decision: "keep" | "revoke", comment?: string) =>
   api<{ id: number; decision: string }>(`/reviews/items/${itemId}/decision`, { decision, comment: comment || null });
 
+// ------------------------------------------------ frozen review populations (issue #110)
+export interface QAItem {
+  id: number;
+  identity: string;
+  grant: string;
+  system: string;
+  rule: { id: string; version: number; inputs: Record<string, any> };
+  qa_reviewer: string | null;
+  qa_decision: "keep" | "revoke" | null;
+  overturned: boolean;
+}
+
+export interface CampaignPopulation {
+  campaign_id: number;
+  population_hash: string;
+  recomputed_hash: string;
+  hash_match: boolean;
+  hash_algorithm: string;
+  frozen_at: string;
+  item_count: number;
+  system_counts: Record<string, number>;
+  source_syncs: Record<string, string | null>;
+  rules_version: string;
+  qa_sample_pct: number;
+  qa: { auto_certified: number; sampled: number; decided: number; overturned: number };
+  qa_queue: QAItem[];
+}
+
+export const qaDecide = (qaId: number, decision: "keep" | "revoke", comment?: string) =>
+  api<{ id: number; qa_decision: string; overturned: boolean }>(`/reviews/qa/${qaId}/decision`, { decision, comment: comment || null });
+
+/** Downloads the auditor export (population, hash, decisions) of a campaign as CSV or JSON. */
+export async function downloadPopulationExport(campaignId: number, format: "csv" | "json"): Promise<void> {
+  const res = await fetch(`/api/reviews/campaigns/${campaignId}/export?format=${format}`, { credentials: "same-origin" });
+  if (!res.ok) {
+    let j: any = null;
+    try {
+      j = await res.json();
+    } catch {
+      /* ignore */
+    }
+    if (res.status === 401 && j?.error === "login_required") {
+      resetSessionState();
+      window.dispatchEvent(new Event(SIGNED_OUT));
+    }
+    throw new ApiError(j ? errorMessage(res.status, j) : `${res.status} ${res.statusText}`, res.status, j);
+  }
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `tessera-review-population-${campaignId}.${format}`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 // -------------------------------------------------------------- session
 export interface SessionInfo {
   user: { id: string; email: string | null; display_name: string };

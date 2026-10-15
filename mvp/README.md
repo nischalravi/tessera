@@ -152,6 +152,8 @@ The routes are documented at `/api/readiness/openapi.json`.
 `POST /api/simulate {remove_edge_ids, add_edges:[{src,dst,duration_hours?}], disable_account_ids}` ·
 `GET|POST /api/jit/requests` · `POST /api/jit/requests/{id}/approve|deny|revoke` ·
 `GET|POST /api/reviews/campaigns` · `POST /api/reviews/items/{id}/decision` ·
+`GET /api/reviews/campaigns/{id}/population` · `GET /api/reviews/campaigns/{id}/export?format=csv|json` ·
+`POST /api/reviews/qa/{id}/decision {decision, comment?}` · `PUT /api/reviews/settings {qa_sample_pct}` (see "Review populations") ·
 `GET|POST /api/hris/events` (422 for an unknown `identity_id`) · `GET /api/hris/events/{id}/plan` · `POST /api/hris/events/{id}/execute` ·
 `GET /api/jml/leaver-plan/{identity_id}` · `POST /api/identities/{id}/contain` (kill switch, see "Identity containment") ·
 `PUT /api/connections/{id}/containment-credential` · `GET /api/accounts[?system=]` ·
@@ -173,6 +175,59 @@ The routes are documented at `/api/readiness/openapi.json`.
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
 or HRIS execution is always the signed-in user.
+
+### Review populations (auditor evidence, issue #110)
+
+Auditors test the completeness and accuracy of a review population (IPE). When a campaign is
+launched, `reviews.GenerateCampaign` freezes the **full population** in the same transaction:
+every standing (non-JIT) grant edge of an active account with effective permissions, for every
+identity including terminated ones, not only the risky grants that become review items.
+`review_populations` (hash, row count, per-system counts, source sync timestamps, scope, rules
+version, QA percent) and `review_population_rows` are immutable (triggers refuse UPDATE and DELETE),
+and a `review.population_frozen` audit event carries the hash and counts. Campaigns launched before
+this change have no population and answer 404 on the new routes.
+
+Each row has: `ordinal` (1..n in ascending `edge_id`), `edge_id`, `identity_id`, `identity_ref`
+(external id), `account_ref`, `system`, `entitlement` (label), `edge_src`, `edge_dst`,
+`in_scope_reason` (`standing_grant`) and `disposition` (`review` or `auto_certified`).
+`source_syncs` is the time of the tenant's last `connectors.sync` event (Tessera keeps no
+per-system sync clock), or null.
+
+**Hash (`tessera-review-population-v1`).** To recompute it from an export:
+
+1. Take the rows in ascending `ordinal`.
+2. Write each row as a JSON object with exactly the 11 fields above and canonicalize it with
+   RFC 8785 (JCS). Strings are UTF-8, numbers are integers.
+3. Join the canonical rows with a single `\n` (no trailing newline).
+4. `hash = lowercase-hex SHA-256( "tessera-review-population-v1" || 0x00 || joined )`. An empty
+   population hashes the domain string and the 0x00 byte.
+
+`server/testdata/golden/review_population_v1.json` is a test vector; the audit ledger's contract is
+`audit_v1.json`. The export recomputes the hash from the stored rows and reports `stored_hash`,
+`recomputed_hash` and `hash_match` (a mismatch is flagged `false`).
+
+**Auto-decisions.** A grant with no exception signal is auto-certified, and
+`review_auto_decisions.decided_by_rule` records the rule (`exception_only.no_exception_signals`,
+version 1) and the inputs that matched: the unused-days threshold, last-used time, days since used,
+permissions and permissions used, privileged, policy violation, identity status and type.
+
+**Sampled QA.** The tenant setting `qa_sample_pct` (default 5, 0 disables, set with
+`PUT /api/reviews/settings`, `reviews.manage`) sends `ceil(pct% of n)` of the n auto-decisions
+(at least 1 when n > 0 and pct > 0) to a human QA queue (the security lead). Selection is
+reproducible: rank the auto-decisions by `SHA-256(population_hash ":" edge_id)` ascending (hex)
+and take the first k. `POST /api/reviews/qa/{id}/decision` (`reviews.decide`, step-up) records
+keep (confirm) or revoke (overturn: the grant is removed like a review revoke); both are audited
+(`review.qa_confirmed`, `review.qa_overturned`). The campaign side panel's "Population & export"
+shows the hash, counts, QA queue and the export buttons.
+
+**Export.** `GET /api/reviews/campaigns/{id}/export?format=csv|json` (`reviews.export`: auditor,
+operator and policy admin) returns the population (rows, hashes, counts, sync timestamps) and a
+decision per grant: decision, decision source, reviewer, decided by, decided at, reason, exception
+reasons, the rule (auto), `qa_sample`, QA decision and `revocation_verification`:
+`not_applicable` (kept or open), `verified_removed` (revoked and the grant edge is gone from
+Tessera's graph) or `pending` (revoked but still present). Provider-side verification is the
+containment report (`GET /api/identities/{id}/containment`). CSV cells that start with
+`= + - @` are prefixed with `'`. Each export is audited as `review.population_exported`.
 
 ### Account correlation
 
