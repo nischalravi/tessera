@@ -90,12 +90,14 @@ func (s *Service) PutCredential(c *store.TenantTx, connectionID string, in Crede
 	switch {
 	case conn.RetiredAt != nil:
 		return &Error{"the connection is retired"}
-	case !GrantCapable(conn.System):
+	case !GrantCapable(conn.System) && conn.System != Salesforce:
 		return &Error{fmt.Sprintf("containment supports okta, entra, google and github connections, not %q", conn.System)}
 	case in.Token == "" || len(in.Token) > 8192:
 		return &Error{"token is required and at most 8 KiB"}
 	case conn.System == Okta && in.BaseURL == "":
 		return &Error{"base_url (the Okta org URL) is required"}
+	case conn.System == Salesforce && in.BaseURL == "":
+		return &Error{"base_url (the Salesforce instance URL) is required"}
 	case conn.System == GitHub && !userIDRE.MatchString(in.Org):
 		return &Error{"org (the GitHub organization) is required"}
 	}
