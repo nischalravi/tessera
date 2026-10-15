@@ -3,6 +3,7 @@ package identity_test
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -53,8 +54,11 @@ func TestBackfill(t *testing.T) {
 			if len(affs) != wantAffs || len(srcs) != 1 || srcs[0].SOR != identity.SorHRIS || srcs[0].SORID != p.ExternalID {
 				t.Errorf("%s: %d affiliations, %d source records", p.ExternalID, len(affs), len(srcs))
 			}
-			if len(affs) > 0 && (affs[0].Type != store.AffEmployee || affs[0].Source != store.AffSourceHRIS) {
-				t.Errorf("%s: first affiliation %+v", p.ExternalID, affs[0])
+			// the HR affiliation is among them (a fixture's guest affiliation can share its start time, so no order is assumed)
+			if len(affs) > 0 && !slices.ContainsFunc(affs, func(a *store.Affiliation) bool {
+				return a.Type == store.AffEmployee && a.Source == store.AffSourceHRIS
+			}) {
+				t.Errorf("%s: no HR affiliation among %+v", p.ExternalID, affs)
 			}
 			xs, err := c.IdentifiersFor(p.ID)
 			if err != nil {
