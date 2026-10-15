@@ -278,7 +278,9 @@ func (s *Server) claimAuthority(tx *store.TenantTx) (credential.Authority, *stor
 		return nil, nil, false, err
 	}
 	for _, c := range cs {
-		if c.Profile == a.Profile() {
+		// OIDC only: the claim needs a phishing-resistant sign-in, and OAuth 2.0
+		// sessions are AAL1 and never phishing resistant, and a claim signs in through the OIDC callback
+		if c.Protocol == "oidc" && c.Profile == a.Profile() {
 			return a, c, true, nil
 		}
 	}
@@ -564,12 +566,7 @@ func (s *Server) claimExistingAccount(w http.ResponseWriter, r *http.Request, p 
 			if err != nil {
 				return err
 			}
-			for _, x := range cs {
-				if x.IsDefault || len(cs) == 1 {
-					conn = x
-					break
-				}
-			}
+			conn = claimSignInConnection(cs)
 			if _, a, err := s.claimSvc.Requirements(tx, cur); err == nil {
 				aal = a
 			}
@@ -629,6 +626,26 @@ func (s *Server) claimExistingAccount(w http.ResponseWriter, r *http.Request, p 
 		out = append(out, ojson.KV{Key: "message", Value: "Thank you. An administrator will follow up about your existing account. You can carry on setting up this one."})
 	}
 	return out, nil
+}
+
+// claimSignInConnection picks the connection for a claim's sign-in as an
+// existing person: the default one, or the only one, among the OIDC
+// connections. A claim asks for a phishing-resistant level and OAuth 2.0
+// sessions are AAL1 (its callback refuses the claim purpose anyway); a claim
+// signs in through the OIDC callback, not SAML. Nil: none.
+func claimSignInConnection(cs []*store.IdPConnection) *store.IdPConnection {
+	var oidc []*store.IdPConnection
+	for _, x := range cs {
+		if x.Protocol == "oidc" {
+			oidc = append(oidc, x)
+		}
+	}
+	for _, x := range oidc {
+		if x.IsDefault || len(oidc) == 1 {
+			return x
+		}
+	}
+	return nil
 }
 
 // claimSignIn builds the sign-in as an existing person: a login transaction

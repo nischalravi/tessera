@@ -24,9 +24,8 @@
 //	TESSERA_NOW           freeze the clock at an ISO-8601 time (tests and demos; refused in prod)
 //	TESSERA_ENV           dev (run.sh sets it), test or prod. Every API route except
 //	                      the public allow-list needs a signed-in session, and the
-//	                      tenant comes from that session. dev and test expose
-//	                      POST /api/auth/dev-login until the UI signs in through the IdP (PR7);
-//	                      prod refuses to start with any dev setting (§18.4).
+//	                      tenant comes from that session (sign-in through the tenant's
+//	                      IdP); prod refuses to start with any dev setting (§18.4).
 //	TESSERA_DEV_IDP_URL   the dev IdP's issuer: seeding (dev and test) creates a
 //	                      dev_mock connection to it with the bootstrap users
 //	TESSERA_NOTIFY_EMAIL  off, dev (the dev sink, never in prod) or smtp; default smtp when TESSERA_SMTP_HOST is set,
@@ -35,6 +34,9 @@
 //	                      TESSERA_NOTIFY_DIGEST_HOUR tune the dispatcher (see internal/config)
 //	DEVIDP_CLIENT_SECRET  the dev IdP client's secret, sealed into those connections
 //	                      (default tessera-dev-secret, as cmd/tessera-devidp)
+//	TESSERA_DEV_IDP_SAML_CERT  the dev IdP's SAML signing certificate (PEM, from
+//	                      tessera-devidp -print-saml-cert): seeding also creates a
+//	                      dev_mock SAML connection pinning it (run.sh sets it)
 //	TESSERA_READINESS_SCENARIO  simulated validation scenario for demo connectors: gaps (default) or happy
 //	TESSERA_READINESS_DEMO      "off" skips seeding the demo Okta connection (larkspur only) for Deployment health
 package main
@@ -209,7 +211,8 @@ func seedDB(ctx context.Context, path string, cfg *config.Config, clock timeutil
 		if secret == "" {
 			secret = devIdPClientSecret
 		}
-		tenants = seed.WithDevIdPClient(tenants, cfg.DevIdPURL, seed.DevIdPClient{Sealer: sealer, Secret: secret})
+		tenants = seed.WithDevIdPClient(tenants, cfg.DevIdPURL, seed.DevIdPClient{Sealer: sealer, Secret: secret,
+			SAMLCert: strings.TrimSpace(os.Getenv("TESSERA_DEV_IDP_SAML_CERT")), GitHub: true})
 	}
 	keyer := identifiers.NewKeyer(sealer)
 	for i := range tenants {
@@ -303,8 +306,9 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if err != nil {
 		return err
 	}
-	// Outbound calls to IdPs (discovery, JWKS, token) go through safehttp. A
-	// test server gets the production client (no loopback exception).
+	// Outbound calls to IdPs (discovery, JWKS, token) and the kill switch's
+	// provider calls (containment) go through safehttp. A test server gets the
+	// production client (no loopback exception).
 	outCfg := *cfg
 	if outCfg.Env == config.Test {
 		outCfg.Env, outCfg.OutboundAllowLoopback = config.Prod, false
@@ -334,7 +338,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		Secrets: secrets, Credential: authority, PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound,
 		FakeTargetURL:  fakeURL,
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
-		HSTS: cfg.IsProd(), Env: cfg.Env, Identifiers: identifiers.NewKeyer(sealer), EmailMode: cfg.Mail.Mode, DevLogin: cfg.DevLogin, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, AuditAnchor: anchorURL})
+		HSTS: cfg.IsProd(), Env: cfg.Env, Identifiers: identifiers.NewKeyer(sealer), EmailMode: cfg.Mail.Mode, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, AuditAnchor: anchorURL})
 	sender, err := notify.NewSender(cfg.Mail, cfg.Env, cfg.OutboundAllowLoopback, sealer, config.DevMailPath(o.db), logger)
 	if err != nil {
 		return err

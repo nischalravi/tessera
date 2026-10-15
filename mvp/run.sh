@@ -2,7 +2,7 @@
 # Tessera MVP launcher.
 #   ./run.sh            build the Go server, install UI deps (first run), seed if no DB (or a
 #                       DB from before sign-in), start the dev IdP :8001, the API :8000 and
-#                       the UI :5173; open the UI and use dev sign-in (see mvp/README.md)
+#                       the UI :5173; open the UI and sign in through the dev IdP (see mvp/README.md)
 #   ./run.sh --reseed   wipe and re-seed the demo database first
 #   ./run.sh test       go vet + the Go test suite (includes the API parity replay)
 #   ./run.sh build      build the Go server and type-check/build the frontend
@@ -25,12 +25,11 @@ export UI_PORT
 DEVIDP_PORT="${DEVIDP_PORT:-8001}"
 DEVIDP_URL="${TESSERA_DEV_IDP_URL:-http://127.0.0.1:$DEVIDP_PORT}"
 # seeding creates a dev_mock IdP connection to this issuer with the dev IdP's users
-# (dev sign-in resolves users through it); the API refuses it in production (§18.4)
+# (the seeded dev_mock connections sign users in through it); the API refuses it in production (§18.4)
 export TESSERA_DEV_IDP_URL="$DEVIDP_URL"
 # read policies from disk so edits apply on the next request (the binary also embeds copies)
 export TESSERA_POLICY_DIR="${TESSERA_POLICY_DIR:-$SERVER/policies}"
-# local development: every API call needs a session; TESSERA_ENV=dev enables dev sign-in
-# (POST /api/auth/dev-login) until IdP sign-in lands in the UI (Phase 0 PR7)
+# local development: every API call needs a session; users sign in through the dev IdP
 export TESSERA_ENV="${TESSERA_ENV:-dev}"
 # dev only: an in-process fake SCIM target so Admin → Provisioning can be tried without a real
 # system (the API refuses it in production). TESSERA_DEV_FAKE_TARGET=0 turns it off.
@@ -79,6 +78,12 @@ setup_frontend() {
 # `tessera seed` drops and recreates every table, so it also works over a
 # database left from an older schema. Stop a running API before reseeding.
 seed() {
+  # the dev IdP's SAML signing certificate (derived from its key), pinned by
+  # the seeded dev_mock SAML connection
+  if [ "${DEVIDP:-1}" != "0" ] && [ -x "$DEVIDP_BIN" ]; then
+    TESSERA_DEV_IDP_SAML_CERT="$("$DEVIDP_BIN" -print-saml-cert -issuer "$DEVIDP_URL" -key-dir "$SERVER/var/devidp")"
+    export TESSERA_DEV_IDP_SAML_CERT
+  fi
   "$BIN" seed -db "$DB"
 }
 
@@ -163,6 +168,6 @@ for _ in $(seq 1 40); do
 done
 
 echo "==> starting UI on http://localhost:$UI_PORT  (Ctrl+C to stop everything)"
-echo "    sign in with dev sign-in: e.g. Alice (tenant admin) or Pat (policy admin) with a passkey"
+echo "    sign in to larkspur through the dev IdP: e.g. Alice (tenant admin) or Pat (policy admin) with a passkey"
 cd "$FRONTEND"
 TESSERA_API="http://127.0.0.1:$API_PORT" npx vite --port "$UI_PORT" --strictPort
