@@ -29,7 +29,7 @@
     "status": "denied",
     "requested_at": "2026-10-08T09:30:00",
     "decided_at": "2026-10-08T09:30:00",
-    "decided_by": "lead@larkspur.example",
+    "decided_by": "security-oncall@larkspur.example",
     "expires_at": null
    },
    {

@@ -57,7 +57,9 @@ export function ErrorNote({ error }: { error: string }) {
       <span>
         {/^not found$/i.test(error)
           ? "The running API doesn't have this endpoint. It was probably started before an update: restart it with ./run.sh, then reload."
-          : `Couldn't load this: ${error}. Check that the API is running on :8000, then reload.`}
+          : /permission|role is inactive|sign in/i.test(error)
+            ? `Couldn't load this: ${error}`
+            : `Couldn't load this: ${error}. Check that the API is running on :8000, then reload.`}
       </span>
     </div>
   );

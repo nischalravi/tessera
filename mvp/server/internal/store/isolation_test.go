@@ -324,13 +324,13 @@ var mutations = map[string]func(c *store.TenantTx, a, b map[string]int64) error{
 	"SetCampaignTotals": func(c *store.TenantTx, a, _ map[string]int64) error { return c.SetCampaignTotals(a["campaign"], 9, 9) },
 	"CompleteCampaign":  func(c *store.TenantTx, a, _ map[string]int64) error { return c.CompleteCampaign(a["campaign"]) },
 	"DecideItem": func(c *store.TenantTx, a, _ map[string]int64) error {
-		return c.DecideItem(a["item"], "revoke", nil, storetest.Now)
+		return c.DecideItem(a["item"], "revoke", nil, storetest.Now, store.UserRef{})
 	},
 	"SetHrisEventIdentity": func(c *store.TenantTx, a, _ map[string]int64) error {
 		return c.SetHrisEventIdentity(a["hris:joiner"], a["bob"])
 	},
 	"MarkHrisEventExecuted": func(c *store.TenantTx, a, _ map[string]int64) error {
-		return c.MarkHrisEventExecuted(a["hris:leaver"], storetest.Now)
+		return c.MarkHrisEventExecuted(a["hris:leaver"], storetest.Now, store.UserRef{})
 	},
 	// Upserts on natural keys both tenants share update B's row only.
 	"UpsertIdentity": func(c *store.TenantTx, _, _ map[string]int64) error {
@@ -673,7 +673,7 @@ func TestIsolation_EveryRepoMethodClassified(t *testing.T) {
 		"RevokedGrants": true,
 	}
 	for _, m := range []map[string]bool{keys(listCases), keys(getCases), keys(naturalKeyGets), keys(countCases),
-		keys(mutations), keys(insertCases), readinessCovered(), keysCovered(), auditCovered()} {
+		keys(mutations), keys(insertCases), readinessCovered(), keysCovered(), auditCovered(), authCovered(), correlationCovered(), containmentCovered()} {
 		for k := range m {
 			covered[strings.SplitN(k, "/", 2)[0]] = true
 		}

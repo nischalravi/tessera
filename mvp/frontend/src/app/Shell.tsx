@@ -11,7 +11,7 @@ import { RAIL, isActive } from "./nav";
 import { PERSONAS, usePersona } from "./persona";
 import { ResultList, rankEntries, useEntityEntries } from "./search";
 import { store } from "./storage";
-import { TENANT } from "./tenant";
+import { useSession } from "./auth";
 import { ThemePref, useTheme } from "./theme";
 
 
@@ -220,15 +220,28 @@ function HelpMenu() {
 }
 
 function UserMenu() {
-  const { persona, setPersona, actor, me } = usePersona();
+  const { persona, setPersona } = usePersona();
+  const { session, signOut, reauthenticate } = useSession();
+  const navigate = useNavigate();
   const p = PERSONAS.find((x) => x.id === persona)!;
+  const name = session.user.display_name;
+  const a = session.authn;
+  const assurance = `AAL${a.aal}${a.phishing_resistant ? " · phishing-resistant" : ""}`;
   return (
     <Menu
       label="User menu"
       items={[
-        { heading: `Signed in as ${actor} (demo)` },
+        { heading: `Signed in as ${session.user.email ?? name}` },
+        { label: <span className="faint small">{session.tenant.name} · {assurance} · signed in {relTime(a.auth_time.replace("Z", ""))}</span> },
+        { label: <span className="faint small">Roles: {session.active_roles.join(", ") || "none active"}</span> },
+        ...session.inactive_roles.map((r) => ({
+          label: <span className="small" style={{ color: "var(--warning, #9a6700)" }}>{r.role} is inactive: sign in with a passkey to use it</span>,
+          onSelect: () => { reauthenticate(); },
+        })),
+        ...(session.inactive_roles.length ? [{ label: "Re-authenticate", onSelect: () => { reauthenticate(); } }] : []),
+        { label: "My sessions", onSelect: () => navigate("/sessions") },
         "divider",
-        { heading: "View as" },
+        { heading: "View as (demo)" },
         ...PERSONAS.map((x) => ({
           label: (
             <span className="grow">
@@ -240,16 +253,17 @@ function UserMenu() {
           checked: persona === x.id,
           onSelect: () => setPersona(x.id),
         })),
+        { label: <span className="faint small">The view changes what Home emphasises, not what you're allowed to do: that comes from your roles.</span> },
         "divider",
-        { label: <span className="faint small">Persona is a demo stand-in until sign-in (Phase 0). It changes what Home shows, not what you're allowed to do.</span> },
+        { label: "Sign out", onSelect: () => { signOut(); } },
       ]}
       trigger={(t) => (
-        <button type="button" className="me" aria-label={`User menu: ${actor}, ${TENANT}, viewing as ${p.label}`} {...t}>
+        <button type="button" className="me" aria-label={`User menu: ${name}, ${session.tenant.name}, viewing as ${p.label}`} {...t}>
           <span className="tb-hide-sm">
-            {me?.name ?? actor}
-            <small>{TENANT} · {p.label}</small>
+            {name}
+            <small>{session.tenant.name} · {p.label}</small>
           </span>
-          <span className="avatar" aria-hidden>{initials(me?.name ?? actor)}</span>
+          <span className="avatar" aria-hidden>{initials(name)}</span>
         </button>
       )}
     />

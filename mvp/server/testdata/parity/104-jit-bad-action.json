@@ -5,22 +5,9 @@
   "path": "/api/jit/requests/2/escalate"
  },
  "response": {
-  "status": 422,
+  "status": 404,
   "body": {
-   "detail": [
-    {
-     "type": "literal_error",
-     "loc": [
-      "path",
-      "action"
-     ],
-     "msg": "Input should be 'approve', 'deny' or 'revoke'",
-     "input": "escalate",
-     "ctx": {
-      "expected": "'approve', 'deny' or 'revoke'"
-     }
-    }
-   ]
+   "detail": "Not Found"
   }
  }
 }

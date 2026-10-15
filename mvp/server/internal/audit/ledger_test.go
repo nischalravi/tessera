@@ -312,7 +312,7 @@ func goldenEvents() []store.AuditEvent {
 	httpj, _ := json.Marshal(store.AuditHTTP{Method: "GET", Route: &route, PathParams: map[string]string{"identity_id": "42"},
 		QueryKeys: []string{"include", "limit"}, Status: 200, LatencyMS: 7})
 	d1, _ := canon.Detail(ojson.Object{{Key: "request_id", Value: 4}, {Key: "group", Value: "ProdAdmin"}, {Key: "hours", Value: "1.5"}})
-	d2, _ := canon.Detail(ojson.Object{{Key: "anonymous_reason", Value: audit.AnonymousReason}})
+	d2, _ := canon.Detail(ojson.Object{{Key: "anonymous_reason", Value: "authentication_not_enabled"}}) // a literal: the golden vector is fixed
 	d3, _ := canon.Detail(ojson.Object{{Key: "€uro", Value: "</script> ö 😂 →"}, {Key: "max", Value: int64(canon.MaxSafeInt)},
 		{Key: "min", Value: int64(-canon.MaxSafeInt)}, {Key: "empty", Value: ojson.Object{}}, {Key: "null", Value: nil},
 		{Key: "list", Value: []any{true, false, "", int64(0)}}, {Key: "line\nbreak", Value: "tab\there"}})

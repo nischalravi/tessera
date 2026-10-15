@@ -3,11 +3,9 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Ban, Check, ClipboardCheck, Network, Plus, UserRound, X } from "lucide-react";
 import { Campaign as CampaignT, IdentityRow, ReviewItem, ago, fmtDate, reviewDecide, useApi } from "../../api";
 import { useIdentityActions } from "../../app/actions";
-import { usePersona } from "../../app/persona";
 import { Badge, Bar, Button, CommandBar, DataTable, EmptyState, FilterChips, Flag, IdLink, Loading, Page, Segmented, SidePanel, TypeBadge, flagLabel, useConfirm, useSelected, useToast, GovernanceTabs } from "../../components";
 
 function useDecide() {
-  const { actor } = usePersona();
   const toast = useToast();
   const confirm = useConfirm();
   return async (it: ReviewItem, decision: "keep" | "revoke") => {
@@ -19,7 +17,7 @@ function useDecide() {
       comment = r;
     }
     try {
-      await reviewDecide(it.id, decision, actor, comment);
+      await reviewDecide(it.id, decision, comment);
       toast(decision === "keep" ? `Kept ${grant} for ${it.identity.name}` : `Revoked ${grant} from ${it.identity.name}`);
       return true;
     } catch (e) {
