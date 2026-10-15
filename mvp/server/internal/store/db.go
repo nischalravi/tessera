@@ -90,6 +90,8 @@ var tables = []string{
 	"account_links", "identity_merges",
 	// identity containment (schema/0205_containment.sql)
 	"containment_credentials", "containment_retries",
+	// flat-file import for disconnected apps (schema/0207_flatfile.sql)
+	"flatfile_mappings", "flatfile_uploads", "flatfile_upload_errors", "flatfile_changes", "flatfile_records", "flatfile_tasks",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was

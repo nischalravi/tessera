@@ -183,6 +183,19 @@ func (s DiscoveryStats) Object() ojson.Object {
 // Discovery upserts discovery results. pruneEdges deletes connector edges
 // that no connector reported any more.
 func Discovery(c *store.TenantTx, now time.Time, results []*connectors.DiscoveryResult, pruneEdges bool) (DiscoveryStats, error) {
+	return discovery(c, now, results, pruneEdges, true)
+}
+
+// Import upserts the records of one disconnected app (a flat-file import,
+// issue #105) through the same phases as Discovery, correlating accounts with
+// the same resolver. Unlike Discovery it leaves the agent delegations alone:
+// a file of one app says nothing about them. Edges are never pruned here; the
+// importer removes what its delta says is gone.
+func Import(c *store.TenantTx, now time.Time, res *connectors.DiscoveryResult) (DiscoveryStats, error) {
+	return discovery(c, now, []*connectors.DiscoveryResult{res}, false, false)
+}
+
+func discovery(c *store.TenantTx, now time.Time, results []*connectors.DiscoveryResult, pruneEdges, delegations bool) (DiscoveryStats, error) {
 	var st DiscoveryStats
 	// 1. identities (two passes so manager/owner refs resolve)
 	for _, r := range results {
@@ -301,6 +314,9 @@ func Discovery(c *store.TenantTx, now time.Time, results []*connectors.Discovery
 			}
 			st.Secrets++
 		}
+	}
+	if !delegations {
+		return st, nil
 	}
 	// 8. delegations (replace wholesale, this tenant only: the Python MVP's
 	// unscoped bulk delete would have removed every tenant's delegations)

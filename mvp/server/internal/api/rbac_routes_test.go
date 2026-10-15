@@ -90,6 +90,13 @@ POST   /api/identities/{identity_id}/contain         identities.contain STEP_UP_
 GET    /api/identities/{identity_id}/containment     graph.read      -  # issue #106
 POST   /api/containment-retries/{retry_id}/retry-now identities.contain STEP_UP_POLICY  # issue #106
 PUT    /api/connections/{id}/containment-credential  connections.manage STEP_UP_POLICY  # issue #106
+GET    /api/flatfile/apps                            graph.read      -  # issue #105
+PUT    /api/flatfile/apps/{system}/mapping           flatfile.manage STEP_UP_POLICY  # issue #105
+POST   /api/flatfile/apps/{system}/uploads           flatfile.upload -  # issue #105
+GET    /api/flatfile/uploads                         graph.read      -  # issue #105
+GET    /api/flatfile/uploads/{upload_id}             graph.read      -  # issue #105
+GET    /api/flatfile/tasks                           graph.read      -  # issue #105
+POST   /api/flatfile/tasks/{task_id}/close           flatfile.close_tasks STEP_UP_POLICY  # issue #105
 POST   /api/connections/{id}/validate                connections.manage -
 GET    /api/connections/{id}/validations/{run}       connections.read   -
 POST   /api/connections/{id}/dry-run                 connections.manage -

@@ -255,6 +255,58 @@ the run failed. Provider calls go through `internal/safehttp`.
   sessions: those re-reads cover refresh tokens and say so in the step's notes. `rotate_secret`
   still only stamps a timestamp.
 
+### Flat-file import (disconnected applications)
+
+An app with no connector is fed by CSV files (issue #105; schema `0207_flatfile.sql`, package
+`internal/flatfile`). Its accounts and entitlements flow through the same ingest path as a
+connector's (`ingest.Import`), so they correlate with the normal resolver (the person's id, then
+email; a reviewer's pin is kept), and show in access reviews, SoD, leaver plans and the correlation
+queue (orphans). An entitlement is a permission `ent:<code>` on one application resource, granted
+to the account by a `direct_grant` edge. Agent delegations are left alone.
+
+- `PUT /api/flatfile/apps/{system}/mapping` `{name, owner, accounts{account_id, username, email,
+  identity_id, status}, entitlements{account_id, entitlement, name, privileged}}` saves the column
+  mapping (`flatfile.manage`: tenant admin; step-up). `system` is the app's permanent name
+  (`^[a-z0-9][a-z0-9_.-]{0,62}$`); one that a connection or another source already feeds is `409`.
+  `GET /api/flatfile/apps` lists the mappings.
+- `POST /api/flatfile/apps/{system}/uploads?kind=accounts|entitlements&filename=` takes the CSV as the
+  request body (`Content-Type: text/csv`, the one non-JSON body the API accepts, declared per route)
+  (`flatfile.upload`: operator, policy admin). `201` with `{upload, confirmed_tasks}` when applied;
+  `422` with the same body when rejected. Upload accounts before entitlements: an entitlement row
+  must name an account of the last accounts file.
+- Limits: 512 KiB, 5 000 rows, 64 columns, 256 characters a cell; UTF-8 only (a byte order mark is
+  dropped; NUL, other encodings and control characters in a cell are rejected). A file with **any**
+  invalid row is rejected whole, with every bad row listed (row, column, code, message; the first 200
+  are stored), and changes nothing but the history. A partial file must never make the delta call
+  accounts removed. Row codes: `not_utf8`, `column_count`, `required`, `formula_prefix`,
+  `invalid_email`, `invalid_status`, `duplicate_key`, `unknown_account`, and the file-level
+  `file_too_large`, `too_many_rows`, `missing_column`, `bad_csv`, `no_header`, `duplicate_column`.
+- Each upload is a full snapshot of its kind. The delta against the last applied file is *added*,
+  *removed* (an account is disabled, not deleted; its imported grants go; a removed account takes its
+  entitlements) and *changed* (which fields, never the values). `GET /api/flatfile/uploads[?system=]`
+  and `GET /api/flatfile/uploads/{id}` (graph.read) give the history, with the per-row errors and the
+  delta of each upload. The file itself is not kept: only its SHA-256, size and name.
+- **Formula injection.** Identifiers (account id, person's id, entitlement, email) that start with
+  `= + - @` (or tab or CR) are rejected; display values (username, entitlement name, file name) are
+  stored with a leading `'`; every API view neutralises again, and the CSV export of the lists does too.
+- **Manual tasks.** A leaver (the plan's `disable_account` step), a least-privilege revoke or a review
+  `revoke` on an imported account or entitlement opens a task (`flatfile_tasks`, audited as
+  `flatfile.task_created`): Tessera cannot do it in the app. A leaver gets one task per account, not one
+  per entitlement. The task stays `open` until an upload shows it done: the account gone from (or
+  disabled in) the accounts file, or the account/entitlement row gone from the entitlements file
+  (`confirmed`, with the upload that confirmed it, audited as `flatfile.task_confirmed`). Until then the
+  account stays disabled and revoked grants are not brought back by a file that still lists them.
+  `POST /api/flatfile/tasks/{id}/close` `{reason}` (10 to 500 characters; `flatfile.close_tasks`: policy
+  admin; step-up) closes one by hand (`closed`, `flatfile.task_closed`). `GET /api/flatfile/tasks[?status=]`
+  lists them.
+- Audit: `flatfile.mapping_saved`, `flatfile.upload` (outcome `failure` for a rejected file), and the
+  task events above, each in the transaction of the change.
+- **SFTP later.** `flatfile.Apply(tx, now, Input{Source: "sftp", Raw: bytes, ...})` is all an SFTP drop
+  has to call; the upload row already has `source` (`api` or `sftp`). No SFTP server is built.
+- UI: **Settings, Flat-file apps** (`/admin/flat-files`): the mapping editor (with column suggestions
+  from a sample file's first line), Upload CSV, upload history with a side panel of per-row errors and
+  the delta, and the manual task list with Close.
+
 ### Audit ledger
 
 Every tenant has an append-only, hash-chained audit log (`audit_events`; design

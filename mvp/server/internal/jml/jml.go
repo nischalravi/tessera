@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
+	"github.com/nischalravi/tessera/mvp/server/internal/flatfile"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
@@ -655,17 +656,22 @@ func isContainment(action string) bool {
 	return action == containment.ActionRevokeSessions || action == containment.ActionRevokeGrants
 }
 
-func applyStep(c *store.TenantTx, now time.Time, ident *store.Identity, st Step) error {
+func applyStep(c *store.TenantTx, now time.Time, by string, ident *store.Identity, st Step) error {
 	var err error
 	switch stepStr(st, "action") {
 	case containment.ActionRevokeSessions, containment.ActionRevokeGrants:
 		// run by the caller before ExecuteEvent; failures become retry tasks
 	case "disable_account":
 		id, _ := stepInt(st, "account_id")
-		err = c.DisableAccount(id)
+		if err = c.DisableAccount(id); err == nil {
+			// an app with no connector cannot be disabled from here: a manual task (issue #105)
+			err = flatfile.AccountDisabled(c, now, by, id, "leaver")
+		}
 	case "remove_grant":
 		id, _ := stepInt(st, "edge_id")
-		err = c.RevokeEdge(id, now, "jml")
+		if err = flatfile.GrantRevoked(c, now, by, id, "leaver"); err == nil {
+			err = c.RevokeEdge(id, now, "jml")
+		}
 	case "add_grant":
 		err = addGrant(c, now, ident, st)
 	case "cancel_jit":
@@ -765,7 +771,7 @@ func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.User
 			return nil, err
 		}
 		for _, st := range steps {
-			if err := applyStep(c, now, ident, st); err != nil {
+			if err := applyStep(c, now, by.Display, ident, st); err != nil {
 				return nil, err
 			}
 		}

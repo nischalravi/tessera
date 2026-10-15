@@ -103,19 +103,28 @@ function errorMessage(status: number, j: any): string {
   return j ? JSON.stringify(j.detail ?? j) : `${status}`;
 }
 
-export async function api<T = any>(path: string, body?: unknown, method?: string): Promise<T> {
-  const m = method ?? (body !== undefined ? "POST" : "GET");
+/** For the one kind of request that is not JSON: a file sent as it is (flat-file upload). */
+export interface RawBody {
+  data: Blob | string;
+  contentType: string;
+  /** Statuses that carry a result rather than an error (a rejected upload is 422 with its report). */
+  resultStatuses?: number[];
+}
+
+export async function api<T = any>(path: string, body?: unknown, method?: string, raw?: RawBody): Promise<T> {
+  const m = method ?? (body !== undefined || raw ? "POST" : "GET");
   const headers: Record<string, string> = {};
-  if (body !== undefined) headers["content-type"] = "application/json";
+  if (raw) headers["content-type"] = raw.contentType;
+  else if (body !== undefined) headers["content-type"] = "application/json";
   if (m !== "GET" && m !== "HEAD" && csrfToken) headers["x-tessera-csrf"] = csrfToken;
   const epoch = sessionEpoch;
   const res = await fetch(`/api${path}`, {
     method: m,
     headers,
     credentials: "same-origin",
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    body: raw ? raw.data : body !== undefined ? JSON.stringify(body) : undefined,
   });
-  if (!res.ok) {
+  if (!res.ok && !raw?.resultStatuses?.includes(res.status)) {
     let j: any = null;
     try {
       j = await res.json();
@@ -188,6 +197,8 @@ const LABELS: [RegExp, (m: RegExpMatchArray) => string][] = [
   [/^\/hris\/events\/([^/]+)\/execute$/, (m) => `Run the lifecycle plan for event ${m[1]}`],
   [/^\/connections\/([^/]+)\/(config|credential|activate|retire)$/, (m) => `${{ config: "Save the configuration of", credential: "Set the credential of", activate: "Activate", retire: "Retire" }[m[2]]} connection ${m[1]}`],
   [/^\/readiness\/overlays\/([^/]+)$/, (m) => `Save the readiness overlay for ${m[1]}`],
+  [/^\/flatfile\/apps\/([^/]+)\/mapping$/, (m) => `Save the column mapping of ${m[1]}`],
+  [/^\/flatfile\/tasks\/([^/]+)\/close$/, () => "Close the manual task"],
 ];
 
 /** A plain-language name for an API action, shown before resuming it. */
@@ -727,6 +738,84 @@ export interface ContainmentRetry {
 }
 export const retryContainmentNow = (retryId: string) =>
   api<{ retry: ContainmentRetry }>(`/containment-retries/${encodeURIComponent(retryId)}/retry-now`, {});
+
+// ------------------------------------------------------------ flat-file import (issue #105)
+
+/** Which CSV column holds which field of an accounts file ("" or absent: not mapped). */
+export interface FlatAccountCols { account_id: string; username: string; email?: string; identity_id?: string; status?: string }
+/** The same for an account-entitlement file: one row per account and entitlement. */
+export interface FlatEntitlementCols { account_id: string; entitlement: string; name?: string; privileged?: string }
+export interface FlatMapping {
+  system: string;
+  name: string;
+  owner: string;
+  accounts: FlatAccountCols;
+  entitlements: FlatEntitlementCols | null;
+  updated_by: string;
+  updated_at: string;
+}
+export type FlatKind = "accounts" | "entitlements";
+export interface FlatUpload {
+  id: string;
+  system: string;
+  kind: FlatKind;
+  source: "api" | "sftp";
+  filename: string;
+  sha256: string;
+  size_bytes: number;
+  status: "applied" | "rejected";
+  rows_total: number;
+  rows_rejected: number;
+  added: number;
+  removed: number;
+  changed: number;
+  unchanged: number;
+  tasks_confirmed: number;
+  uploaded_by: string;
+  uploaded_at: string;
+}
+/** A rejected row; row 0 is the file as a whole. */
+export interface FlatRowError { row: number; column: string; code: string; message: string }
+export interface FlatChange { kind: FlatKind; change: "added" | "removed" | "changed"; label: string; detail?: string }
+export interface FlatUploadDetail extends FlatUpload { errors: FlatRowError[]; errors_truncated: boolean; changes: FlatChange[] }
+export interface FlatTask {
+  id: string;
+  system: string;
+  kind: "disable_account" | "remove_entitlement";
+  account: string;
+  account_label: string;
+  entitlement: string;
+  identity_id: number | null;
+  trigger: string;
+  status: "open" | "confirmed" | "closed";
+  instruction: string;
+  created_by: string;
+  created_at: string;
+  closed_by: string | null;
+  closed_at: string | null;
+  close_reason: string;
+  closed_upload_id: string | null;
+}
+
+/** Save an app's column mapping (flatfile.manage, fresh sign-in). */
+export const saveFlatMapping = (system: string, body: { name: string; owner: string; accounts: FlatAccountCols; entitlements: FlatEntitlementCols | null }) =>
+  api<FlatMapping>(`/flatfile/apps/${encodeURIComponent(system)}/mapping`, body, "PUT");
+
+/**
+ * Upload a CSV for an app. Resolves with the upload either way: a file with an invalid row is
+ * rejected whole (status "rejected", every bad row listed) and nothing else changes.
+ */
+export const uploadFlatFile = (system: string, kind: FlatKind, file: File) =>
+  api<{ upload: FlatUploadDetail; confirmed_tasks: FlatTask[] }>(
+    `/flatfile/apps/${encodeURIComponent(system)}/uploads?${new URLSearchParams({ kind, filename: file.name })}`,
+    undefined,
+    "POST",
+    { data: file, contentType: "text/csv", resultStatuses: [422] },
+  );
+
+/** Close a manual task by hand, with a reason (flatfile.close_tasks, fresh sign-in). */
+export const closeFlatTask = (taskId: string, reason: string) =>
+  api<{ task: FlatTask }>(`/flatfile/tasks/${encodeURIComponent(taskId)}/close`, { reason });
 
 export const simulate = (body: { remove_edge_ids?: number[]; add_edges?: { src: string; dst: string; duration_hours?: number }[]; disable_account_ids?: number[] }) =>
   api<SimResult>("/simulate", { remove_edge_ids: [], add_edges: [], disable_account_ids: [], ...body });

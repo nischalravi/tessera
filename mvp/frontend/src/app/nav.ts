@@ -1,5 +1,5 @@
 import {
-  AppWindow, BadgeCheck, Bot, Building2, ChartLine, ClipboardCheck, House, Inbox, KeyRound, Layers, LucideIcon, Network, Plug, Plus, Settings, ShieldCheck, Timer, Users, UsersRound,
+  AppWindow, BadgeCheck, Bot, Building2, ChartLine, ClipboardCheck, FileUp, House, Inbox, KeyRound, Layers, LucideIcon, Network, Plug, Plus, Settings, ShieldCheck, Timer, Users, UsersRound,
 } from "lucide-react";
 
 export interface NavPage {
@@ -89,7 +89,8 @@ export const RAIL: RailGroup[] = [
     label: "Settings",
     items: [
       { id: "connections", label: "Connections", icon: Plug, path: "/admin/connections", keywords: "connectors sync okta aws github snowflake workday active directory ldap entra readiness wizard" },
-      { id: "admin", label: "Admin", icon: Settings, path: "/admin", except: ["/admin/connections"], keywords: "settings configuration audit jobs" },
+      { id: "flat-files", label: "Flat-file apps", icon: FileUp, path: "/admin/flat-files", keywords: "csv import upload disconnected applications no connector manual tasks column mapping sftp" },
+      { id: "admin", label: "Admin", icon: Settings, path: "/admin", except: ["/admin/connections", "/admin/flat-files"], keywords: "settings configuration audit jobs" },
     ],
   },
 ];

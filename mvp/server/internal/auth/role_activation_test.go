@@ -191,10 +191,10 @@ func TestStepUpChallenge(t *testing.T) {
 func TestRolePermissionsMatchDesign(t *testing.T) {
 	want := map[auth.Role]string{
 		auth.RoleViewer:      "graph.read",
-		auth.RoleOperator:    "graph.read jit.request jit.decide jit.deny_revoke reviews.manage reviews.decide hris.simulate_event",
+		auth.RoleOperator:    "graph.read jit.request jit.decide jit.deny_revoke reviews.manage reviews.decide hris.simulate_event flatfile.upload",
 		auth.RoleAuditor:     "graph.read audit.read audit.verify admin.read connections.read",
-		auth.RolePolicyAdmin: "graph.read jit.request jit.decide jit.deny_revoke reviews.manage reviews.decide hris.simulate_event grants.revoke hris.execute jit.sweep connectors.sync identities.correlate identities.merge identities.contain",
-		auth.RoleTenantAdmin: "graph.read audit.read audit.verify admin.read admin.change.request admin.change.approve admin.users.disable admin.sessions.revoke connections.read connections.manage connections.activate",
+		auth.RolePolicyAdmin: "graph.read jit.request jit.decide jit.deny_revoke reviews.manage reviews.decide hris.simulate_event grants.revoke hris.execute jit.sweep connectors.sync identities.correlate identities.merge identities.contain flatfile.upload flatfile.close_tasks",
+		auth.RoleTenantAdmin: "graph.read audit.read audit.verify admin.read admin.change.request admin.change.approve admin.users.disable admin.sessions.revoke connections.read connections.manage connections.activate flatfile.manage",
 		auth.RoleBreakGlass:  "admin.read breakglass.recover",
 	}
 	for r, w := range want {

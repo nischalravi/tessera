@@ -15,6 +15,11 @@ type Route struct {
 	Public bool
 	Perm   auth.Permission
 	Authn  *auth.AuthnRequirement
+	// BodyType is the one non-JSON media type the route takes as its body
+	// (the flat-file upload takes text/csv). Every other unsafe request must
+	// be application/json. The type must not be CORS-safelisted, so a
+	// cross-site form cannot send it (text/plain, for one, is).
+	BodyType string
 }
 
 // publicRoute is the requirement of a route on the allow-list.

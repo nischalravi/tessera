@@ -34,6 +34,8 @@ var (
 		ORDER BY a.system, a.username, a.id`)
 	accountsGet = tq("accounts.get", `
 		SELECT `+accountCols+` FROM accounts a WHERE a.tenant_id = @tenant AND a.id = @id`)
+	accountsByXID = tq("accounts.by_xid", `
+		SELECT `+accountCols+` FROM accounts a WHERE a.tenant_id = @tenant AND a.system = @system AND a.external_id = @external_id`)
 	accountsByIdentity = tq("accounts.by_identity", `
 		SELECT `+accountCols+` FROM accounts a WHERE a.tenant_id = @tenant AND a.identity_id = @identity_id ORDER BY a.id`)
 	accountsUpsert = tq("accounts.upsert", `
@@ -91,6 +93,11 @@ func (tx *TenantTx) AccountsBySystemUsername(system *string) ([]*Account, error)
 // Account returns one account by id.
 func (tx *TenantTx) Account(id int64) (*Account, error) {
 	return one(tx, scanAccount, accountsGet, sql.Named("id", id))
+}
+
+// AccountByXID returns the account with the system and external id, or ErrNotFound.
+func (tx *TenantTx) AccountByXID(system, externalID string) (*Account, error) {
+	return one(tx, scanAccount, accountsByXID, sql.Named("system", system), sql.Named("external_id", externalID))
 }
 
 // IdentityAccounts returns an identity's accounts in id order.

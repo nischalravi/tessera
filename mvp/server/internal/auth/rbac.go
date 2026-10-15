@@ -73,6 +73,11 @@ const (
 	PermIdentitiesMerge     Permission = "identities.merge"
 	// kill switch (issue #106)
 	PermIdentitiesContain Permission = "identities.contain"
+	// flat-file import for disconnected apps (issue #105): column mappings,
+	// uploads, and closing a manual fulfilment task by hand
+	PermFlatfileManage     Permission = "flatfile.manage"
+	PermFlatfileUpload     Permission = "flatfile.upload"
+	PermFlatfileCloseTasks Permission = "flatfile.close_tasks"
 )
 
 // rolePermissions is the static role -> permission map (Cedar-ready, §12.1).
@@ -81,14 +86,14 @@ const (
 var rolePermissions = map[Role][]Permission{
 	RoleViewer: {PermGraphRead},
 	RoleOperator: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
-		PermReviewsDecide, PermHRISSimulateEvent},
+		PermReviewsDecide, PermHRISSimulateEvent, PermFlatfileUpload},
 	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead},
 	RolePolicyAdmin: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
 		PermReviewsDecide, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
-		PermIdentitiesCorrelate, PermIdentitiesMerge, PermIdentitiesContain},
+		PermIdentitiesCorrelate, PermIdentitiesMerge, PermIdentitiesContain, PermFlatfileUpload, PermFlatfileCloseTasks},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
-		PermConnectionsActivate},
+		PermConnectionsActivate, PermFlatfileManage},
 	RoleBreakGlass: {PermAdminRead, PermBreakGlassRecover},
 }
 
@@ -172,7 +177,7 @@ var scopePermissions = map[Scope][]Permission{
 	ScopeRead: {PermGraphRead, PermConnectionsRead},
 	ScopeWrite: {PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage, PermReviewsDecide,
 		PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
-		PermConnectionsManage, PermConnectionsActivate},
+		PermConnectionsManage, PermConnectionsActivate, PermFlatfileManage, PermFlatfileUpload, PermFlatfileCloseTasks},
 	ScopeAudit: {PermAuditRead, PermAuditVerify},
 	ScopeAdmin: {PermAdminRead, PermAdminChangeReq, PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev,
 		PermBreakGlassRecover},

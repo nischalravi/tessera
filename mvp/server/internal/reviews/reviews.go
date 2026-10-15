@@ -13,6 +13,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/flatfile"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
@@ -258,6 +259,10 @@ func Decide(c *store.TenantTx, now time.Time, itemID int64, decision string, by 
 	item.Decision, item.Comment, item.DecidedAt = &decision, comment, &now
 	if decision == "revoke" {
 		if e, err := c.EdgeBetween(item.EdgeSrc, item.EdgeDst); err == nil {
+			// an entitlement of an app with no connector becomes a manual task (issue #105)
+			if err := flatfile.GrantRevoked(c, now, by.Display, e.ID, "review"); err != nil {
+				return nil, err
+			}
 			if err := c.RevokeEdge(e.ID, now, "review"); err != nil {
 				return nil, err
 			}
