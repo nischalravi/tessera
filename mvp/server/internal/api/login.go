@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html/template"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -63,7 +63,9 @@ func (s *Server) loginCookieName() string {
 }
 
 // loginCookie is the transaction cookie. SameSite=Lax is enough for the OIDC
-// redirect back (a top-level GET); the SAML POST binding (PR9) needs None.
+// redirect back (a top-level GET). The SAML POST binding arrives cross-site
+// without it; the ACS then re-posts from a same-site page (samlBounce), so
+// the cookie never needs SameSite=None.
 func (s *Server) loginCookie(value string, maxAge int) *http.Cookie {
 	// #nosec G124 -- Secure is false only for the dev-only insecure-cookie mode (config allows it only in dev on localhost)
 	return &http.Cookie{Name: s.loginCookieName(), Value: value, Path: "/", Secure: !s.cfg.InsecureCookie, HttpOnly: true,
@@ -100,7 +102,7 @@ func (s *Server) activeTenant(ctx context.Context, slug string) (store.Tenant, b
 	return t, t.Status == "active" && t.ID != tenancy.Platform, nil
 }
 
-// loginConnections are a tenant's active OIDC connections that browser
+// loginConnections are a tenant's active OIDC, SAML and OAuth 2.0 connections that browser
 // sign-in may use (dev_mock only outside prod: config refuses prod with one).
 func loginConnections(tx *store.TenantTx) ([]*store.IdPConnection, error) {
 	cs, err := tx.IdPConnections()
@@ -109,7 +111,7 @@ func loginConnections(tx *store.TenantTx) ([]*store.IdPConnection, error) {
 	}
 	out := cs[:0]
 	for _, c := range cs {
-		if c.Status == "active" && c.Protocol == "oidc" {
+		if c.Status == "active" && (c.Protocol == "oidc" || c.Protocol == "saml" || c.Protocol == "oauth2") {
 			out = append(out, c)
 		}
 	}
@@ -167,7 +169,9 @@ func (s *Server) authDiscover(_ http.ResponseWriter, r *http.Request, _ *params)
 // ---------------------------------------------------------------- starting a login
 
 // loginFailure audits a refused sign-in step in the tenant's chain (the
-// platform's when the tenant is unknown) and shows the generic error page.
+// platform's when the tenant is unknown) and sends the browser back to the
+// sign-in page with a generic error and the request id (§9.1: the reason is
+// in the audit event, never in the URL).
 func (s *Server) loginFailure(w http.ResponseWriter, r *http.Request, t tenancy.ID, reason string, extra ojson.Object) (any, error) {
 	if t.IsZero() {
 		t = tenancy.Platform
@@ -180,29 +184,21 @@ func (s *Server) loginFailure(w http.ResponseWriter, r *http.Request, t tenancy.
 	}); err != nil {
 		return nil, err
 	}
-	s.log.Info("sign-in refused", "reason", reason, "request_id", audit.RequestID(r.Context()))
+	rid := audit.RequestID(r.Context())
+	s.log.Info("sign-in refused", "reason", reason, "request_id", rid)
 	http.SetCookie(w, s.loginCookie("", -1))
-	writeLoginError(w, audit.RequestID(r.Context()))
+	w.Header().Set("Cache-Control", "no-store")
+	http.Redirect(w, r, LoginErrorURL(rid), http.StatusFound)
 	return nil, nil
 }
 
-var loginErrorPage = template.Must(template.New("e").Parse(`<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sign-in failed · Tessera</title>
-<style>body{font:16px/1.5 system-ui,sans-serif;margin:0;display:grid;place-items:center;min-height:100vh;background:#f5f6f8;color:#1b1f24}
-main{background:#fff;border:1px solid #d0d7de;border-radius:8px;padding:24px;max-width:480px;margin:16px}
-code{background:#eef1f4;padding:2px 4px;border-radius:4px}a{color:#0b5cad}</style></head>
-<body><main><h1 style="font-size:20px;margin-top:0">Sign-in failed</h1>
-<p>Tessera could not sign you in. Try again, or contact your administrator.</p>
-{{if .}}<p>Reference: <code>{{.}}</code></p>{{end}}
-<p><a href="/">Back to sign-in</a></p></main></body></html>
-`))
-
-func writeLoginError(w http.ResponseWriter, requestID string) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(http.StatusBadRequest)
-	_ = loginErrorPage.Execute(w, requestID)
+// LoginErrorURL is where a refused sign-in lands: the UI's sign-in page.
+func LoginErrorURL(requestID string) string {
+	v := url.Values{"error": {"login_failed"}}
+	if requestID != "" {
+		v.Set("request_id", requestID)
+	}
+	return "/login?" + v.Encode()
 }
 
 // rpConnection is the oidcrp view of a connection, with its client secret
@@ -243,9 +239,13 @@ func requestedAuthn(c *store.IdPConnection, acr string) (authnorm.Requested, str
 	var m map[string]struct {
 		ACRValues string          `json:"acr_values"`
 		Claims    json.RawMessage `json:"claims"`
+		ClassRefs []string        `json:"authn_context_class_refs"`
 	}
 	if err := json.Unmarshal(c.StepUpRequest, &m); err == nil {
 		if e, ok := m[acr]; ok {
+			if c.Protocol == "saml" {
+				return authnorm.Requested{ClassRefs: e.ClassRefs}, ""
+			}
 			req := authnorm.Requested{ACRValues: strings.Fields(e.ACRValues)}
 			claims := ""
 			if len(e.Claims) > 0 {
@@ -254,6 +254,9 @@ func requestedAuthn(c *store.IdPConnection, acr string) (authnorm.Requested, str
 			}
 			return req, claims
 		}
+	}
+	if c.Protocol == "saml" {
+		return authnorm.Requested{}, "" // nothing requested: phr only by attestation (rule 4) or amr attribute
 	}
 	switch c.Profile {
 	case store.ProfileOkta, store.ProfileDevMock:
@@ -305,8 +308,25 @@ func (s *Server) redirectURI(conn uuid.UUID) string {
 }
 
 // startLogin creates the transaction and redirects to the IdP.
-func (s *Server) startLogin(w http.ResponseWriter, r *http.Request, t store.Tenant, c *store.IdPConnection, purpose,
-	returnTo string, acr string, invitation *uuid.UUID) (any, error) {
+// loginStart describes a login transaction to create (startLogin).
+type loginStart struct {
+	purpose, returnTo, acr string
+	invitation             *uuid.UUID // bootstrap
+	// step-up: the session to upgrade and the external login that must
+	// sign in again; max_age=0 and prompt=login force a real re-authentication
+	session, expectedLogin *uuid.UUID
+	maxAge                 int64
+	prompt                 string
+}
+
+func (s *Server) startLogin(w http.ResponseWriter, r *http.Request, t store.Tenant, c *store.IdPConnection, ls loginStart) (any, error) {
+	switch c.Protocol {
+	case "saml":
+		return s.startSAMLLogin(w, r, t, c, ls)
+	case "oauth2":
+		return s.startOAuth2Login(w, r, t, c, ls)
+	}
+	purpose, returnTo, acr, invitation := ls.purpose, ls.returnTo, ls.acr, ls.invitation
 	if s.rp == nil {
 		return nil, errors.New("api: OIDC sign-in is not configured (no outbound HTTP client)")
 	}
@@ -318,10 +338,14 @@ func (s *Server) startLogin(w http.ResponseWriter, r *http.Request, t store.Tena
 	cookie, state, nonce, verifier := seal.RandomSecret(32), seal.RandomSecret(32), seal.RandomSecret(32), seal.RandomSecret(48)
 	stateHash := seal.SHA256Hex([]byte(state))
 	maxAge := loginMaxAge
+	if ls.purpose == "step_up" {
+		maxAge = ls.maxAge
+	}
 	req, claims := requestedAuthn(c, acr)
 	txn := &store.LoginTransaction{ID: uuid.New(), CookieHash: seal.SHA256Hex([]byte(cookie)), IdPConnectionID: c.ID,
 		Purpose: purpose, StateHash: &stateHash, Nonce: &nonce, RequiredTesseraACR: &acr, MaxAge: &maxAge,
-		BootstrapInvitationID: invitation, ReturnTo: returnTo, CreatedAt: now, ExpiresAt: now.Add(loginTxnTTL)}
+		BootstrapInvitationID: invitation, SessionID: ls.session, ExpectedExternalLoginID: ls.expectedLogin,
+		ReturnTo: returnTo, CreatedAt: now, ExpiresAt: now.Add(loginTxnTTL)}
 	if s.cfg.Sealer == nil {
 		return nil, errors.New("api: no sealer for the PKCE verifier")
 	}
@@ -329,7 +353,7 @@ func (s *Server) startLogin(w http.ResponseWriter, r *http.Request, t store.Tena
 		return nil, err
 	}
 	authURL, err := s.rp.AuthURL(r.Context(), rc, oidcrp.AuthRequest{RedirectURI: s.redirectURI(c.ID), State: state,
-		Nonce: nonce, Verifier: verifier, ACRValues: req.ACRValues, MaxAge: &maxAge, Claims: claims})
+		Nonce: nonce, Verifier: verifier, ACRValues: req.ACRValues, MaxAge: &maxAge, Claims: claims, Prompt: ls.prompt})
 	if err != nil {
 		return s.loginFailure(w, r, t.ID, oidcrp.ReasonOf(err), ojson.Object{{Key: "connection_id", Value: c.ID.String()}})
 	}
@@ -391,7 +415,7 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request, _ *params) (a
 	if conn == nil {
 		return s.loginFailure(w, r, t.ID, "unknown_connection", ojson.Object{{Key: "connection", Value: truncate(q.Get("connection"), 64)}})
 	}
-	return s.startLogin(w, r, t, conn, "login", returnTo, LoginACR(t.Settings), nil)
+	return s.startLogin(w, r, t, conn, loginStart{purpose: "login", returnTo: returnTo, acr: LoginACR(t.Settings)})
 }
 
 // bootstrapRedeem is GET /t/{slug}/bootstrap?code=: an unexpired, unused
@@ -429,7 +453,7 @@ func (s *Server) bootstrapRedeem(w http.ResponseWriter, r *http.Request, p *para
 		if conn, err = tx.IdPConnection(inv.IdPConnectionID); err != nil {
 			return err
 		}
-		if conn.Status != "active" || conn.Protocol != "oidc" {
+		if conn.Status != "active" || (conn.Protocol != "oidc" && conn.Protocol != "saml") {
 			reason = "unknown_connection"
 		}
 		return nil
@@ -439,48 +463,61 @@ func (s *Server) bootstrapRedeem(w http.ResponseWriter, r *http.Request, p *para
 	if reason != "" {
 		return s.loginFailure(w, r, t.ID, reason, nil)
 	}
-	return s.startLogin(w, r, t, conn, "bootstrap", "/", authnorm.ACRPhr, &inv.ID)
+	return s.startLogin(w, r, t, conn, loginStart{purpose: "bootstrap", returnTo: "/", acr: authnorm.ACRPhr, invitation: &inv.ID})
 }
 
 // ---------------------------------------------------------------- the callback
 
-// oidcCallback is GET /api/auth/oidc/{connection_id}/callback.
-func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request, p *params) (any, error) {
-	ctx := r.Context()
-	q := r.URL.Query()
+// loginTxnFromCookie resolves the login cookie to its active tenant and
+// transaction id; reason is set when the browser holds none that is usable.
+func (s *Server) loginTxnFromCookie(r *http.Request) (store.Tenant, uuid.UUID, string, error) {
 	c, err := r.Cookie(s.loginCookieName())
 	if err != nil || c.Value == "" || len(c.Value) > 128 {
-		return s.loginFailure(w, r, tenancy.ID{}, "login_cookie_missing", nil)
+		return store.Tenant{}, uuid.Nil, "login_cookie_missing", nil
 	}
 	var tid tenancy.ID
 	var txnID uuid.UUID
-	err = s.store.ReadSystem(ctx, "login transaction lookup", func(st *store.SystemTx) error {
+	err = s.store.ReadSystem(r.Context(), "login transaction lookup", func(st *store.SystemTx) error {
 		var err error
 		tid, txnID, err = st.LookupLoginTxnByCookieHash(seal.SHA256Hex([]byte(c.Value)))
 		return err
 	})
 	if errors.Is(err, store.ErrNotFound) {
-		return s.loginFailure(w, r, tenancy.ID{}, "login_transaction_unknown", nil)
+		return store.Tenant{}, uuid.Nil, "login_transaction_unknown", nil
 	}
 	if err != nil {
-		return nil, err
+		return store.Tenant{}, uuid.Nil, "", err
 	}
 	var tenant store.Tenant
-	if err := s.store.ReadSystem(ctx, "login tenant", func(st *store.SystemTx) error {
+	if err := s.store.ReadSystem(r.Context(), "login tenant", func(st *store.SystemTx) error {
 		var err error
 		tenant, err = st.TenantByID(tid)
 		return err
 	}); err != nil {
-		return nil, err
+		return store.Tenant{}, uuid.Nil, "", err
 	}
 	if tenant.Status != "active" {
-		return s.loginFailure(w, r, tenancy.ID{}, "unknown_tenant", nil)
+		return store.Tenant{}, uuid.Nil, "unknown_tenant", nil
 	}
+	return tenant, txnID, "", nil
+}
+
+// oidcCallback is GET /api/auth/oidc/{connection_id}/callback.
+func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	ctx := r.Context()
+	q := r.URL.Query()
+	tenant, txnID, reason, err := s.loginTxnFromCookie(r)
+	if err != nil {
+		return nil, err
+	}
+	if reason != "" {
+		return s.loginFailure(w, r, tenancy.ID{}, reason, nil)
+	}
+	tid := tenant.ID
 	// Load, check and consume the transaction in one committed step, so a
 	// replayed callback finds it used whatever happens afterwards.
 	var txn *store.LoginTransaction
 	var conn *store.IdPConnection
-	reason := ""
 	now := s.clock().UTC()
 	if err := s.store.InTenant(ctx, tid, func(tx *store.TenantTx) error {
 		var err error
@@ -507,8 +544,12 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request, p *params)
 			return nil
 		}
 		conn, err = tx.IdPConnection(txn.IdPConnectionID)
-		if err == nil && conn.Status != "active" {
+		switch {
+		case err != nil:
+		case conn.Status != "active":
 			reason = "connection_disabled"
+		case (conn.Protocol == "oauth2") != strings.HasPrefix(r.URL.Path, "/api/auth/oauth2/"):
+			reason = "connection_mismatch" // an OIDC transaction at the OAuth 2.0 callback or the reverse
 		}
 		return err
 	}); err != nil {
@@ -519,7 +560,13 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request, p *params)
 		if reason == "idp_error" {
 			extra = append(extra, ojson.KV{Key: "idp_error", Value: truncate(q.Get("error"), 64)})
 		}
+		if txn != nil && txn.Purpose == "step_up" && reason != "connection_mismatch" && reason != "state_mismatch" {
+			return s.stepUpFailure(w, r, tid, txn, "auth.step_up.failure", reason, extra)
+		}
 		return s.callbackFailure(w, r, txn, tid, reason, extra)
+	}
+	if conn.Protocol == "oauth2" {
+		return s.finishOAuth2Callback(w, r, tenant, conn, txn)
 	}
 	rc, err := s.rpConnection(tid, conn)
 	if err != nil {
@@ -529,10 +576,18 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request, p *params)
 	if err != nil {
 		return nil, err
 	}
-	tok, err := s.rp.Exchange(ctx, rc, oidcrp.Callback{Code: q.Get("code"), Iss: q.Get("iss"),
-		RedirectURI: s.redirectURI(conn.ID), Verifier: string(verifier), Nonce: deref(txn.Nonce), MaxAge: txn.MaxAge})
+	cb := oidcrp.Callback{Code: q.Get("code"), Iss: q.Get("iss"), RedirectURI: s.redirectURI(conn.ID),
+		Verifier: string(verifier), Nonce: deref(txn.Nonce), MaxAge: txn.MaxAge}
+	if txn.Purpose == "step_up" {
+		started := txn.CreatedAt
+		cb.NotBefore = &started // the IdP must really have re-authenticated
+	}
+	tok, err := s.rp.Exchange(ctx, rc, cb)
 	if err != nil {
 		s.log.Info("OIDC callback refused", "err", err, "request_id", audit.RequestID(ctx))
+		if txn.Purpose == "step_up" {
+			return s.stepUpFailure(w, r, tid, txn, "auth.step_up.failure", oidcrp.ReasonOf(err), nil)
+		}
 		return s.callbackFailure(w, r, txn, tid, oidcrp.ReasonOf(err), ojson.Object{{Key: "login_transaction_id", Value: txnID.String()}})
 	}
 	mapping, err := authnorm.ParseMapping(conn.AuthnMapping)
@@ -546,20 +601,40 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request, p *params)
 		authnorm.Claims{Subject: tok.Subject, ACR: tok.ACR, AMR: tok.AMR, ACRS: tok.ACRS, TID: tok.TID, OID: tok.OID,
 			AuthTime: &at, Raw: tok.Raw})
 	if err != nil {
+		if txn.Purpose == "step_up" {
+			return s.stepUpFailure(w, r, tid, txn, "auth.step_up.failure", "normalization_failed", nil)
+		}
 		return s.callbackFailure(w, r, txn, tid, "normalization_failed", ojson.Object{{Key: "error", Value: err.Error()}})
 	}
 	if txn.Purpose == "claim" {
 		return s.finishClaim(w, r, tenant, conn, txn, tok, res)
 	}
-	return s.finishOIDCLogin(w, r, tenant, conn, txn, tok, res)
+	if txn.Purpose == "step_up" {
+		return s.finishStepUp(w, r, tenant, conn, txn, res)
+	}
+	return s.finishLogin(w, r, tenant, conn, txn, idpProfile{email: tok.Email, name: tok.Name, groups: tok.Groups}, res)
 }
 
-// finishOIDCLogin resolves the user and creates the session.
-func (s *Server) finishOIDCLogin(w http.ResponseWriter, r *http.Request, tenant store.Tenant, conn *store.IdPConnection,
-	txn *store.LoginTransaction, tok *oidcrp.IDToken, res authnorm.Result) (any, error) {
+// idpProfile is what a sign-in tells about the user besides the subject:
+// display data (email is never an identifier) and IdP groups.
+type idpProfile struct {
+	email, name string
+	groups      []string
+}
+
+// finishLogin resolves the user and creates the session (OIDC callback or
+// SAML ACS; the transaction is consumed and the result normalized).
+func (s *Server) finishLogin(w http.ResponseWriter, r *http.Request, tenant store.Tenant, conn *store.IdPConnection,
+	txn *store.LoginTransaction, tok idpProfile, res authnorm.Result) (any, error) {
 	ctx := r.Context()
 	now := s.clock().UTC()
 	issuer := deref(conn.Issuer)
+	switch conn.Protocol {
+	case "saml":
+		issuer = deref(conn.IdPEntityID)
+	case "oauth2":
+		issuer = oauth2Issuer(conn)
+	}
 	var user *store.PlatformUser
 	reason := ""
 	var inv *store.BootstrapInvitation
@@ -584,7 +659,7 @@ func (s *Server) finishOIDCLogin(w http.ResponseWriter, r *http.Request, tenant 
 				reason = "connection_mismatch"
 			case !res.PhishingResistant:
 				reason = "bootstrap_requires_phr"
-			case !strings.EqualFold(strings.TrimSpace(tok.Email), inv.Email):
+			case !strings.EqualFold(strings.TrimSpace(tok.email), inv.Email):
 				reason = "bootstrap_email_mismatch"
 			}
 			if reason != "" {
@@ -616,14 +691,14 @@ func (s *Server) finishOIDCLogin(w http.ResponseWriter, r *http.Request, tenant 
 		return s.loginFailure(w, r, tenant.ID, reason, ojson.Object{{Key: "connection_id", Value: conn.ID.String()},
 			{Key: "subject", Value: truncate(res.Subject, 128)}})
 	}
-	groups := s.mappedGroupRoles(conn, tok)
+	groups := s.mappedGroupRoles(conn, tok.groups)
 	jitCreated := user == nil
-	o := loginOptions{via: "oidc", protocol: "oidc", purpose: txn.Purpose,
+	o := loginOptions{via: conn.Protocol, protocol: conn.Protocol, purpose: txn.Purpose,
 		detail: ojson.Object{{Key: "jit_created", Value: jitCreated}}}
 	if user == nil {
 		// a new user: its id is chosen now so the sign-in's events are
 		// attributed to it
-		email, name := strings.TrimSpace(tok.Email), strings.TrimSpace(tok.Name)
+		email, name := strings.TrimSpace(tok.email), strings.TrimSpace(tok.name)
 		if name == "" {
 			name = email
 		}
@@ -704,13 +779,13 @@ var errBootstrapRace = errors.New("api: the bootstrap invitation was consumed co
 // group_role_mapping gives the token's groups. Admin roles are never granted
 // from IdP groups (§7, E1): such mapping entries are ignored (and the schema
 // refuses them too).
-func (s *Server) mappedGroupRoles(conn *store.IdPConnection, tok *oidcrp.IDToken) []string {
+func (s *Server) mappedGroupRoles(conn *store.IdPConnection, idpGroups []string) []string {
 	var m map[string]string
 	if err := json.Unmarshal(conn.GroupRoleMapping, &m); err != nil || len(m) == 0 {
 		return nil
 	}
 	var out []string
-	for _, g := range tok.Groups {
+	for _, g := range idpGroups {
 		role, ok := m[g]
 		if !ok || slices.Contains(out, role) {
 			continue

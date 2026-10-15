@@ -2,6 +2,7 @@ package notify_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -113,6 +114,66 @@ func TestTranscript_RedactsAuthAndRecordsTLS(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestTranscript_AuthEchoIsScrubbed: a relay that answers AUTH with a 535 that
+// repeats the payload leaves no username, password or base64 form of them in
+// the Attempt, in its error, in the returned error, or in the stored log (the
+// email-log API serves the stored attempts as they are).
+func TestTranscript_AuthEchoIsScrubbed(t *testing.T) {
+	const user, pass = "relay-user", "hunter2-the-password"
+	serverConf, clientConf := relayCert(t)
+	s := testSealer(t)
+	sealed, _ := notify.SealPassword(s, pass)
+	b64 := base64.StdEncoding.EncodeToString
+	secrets := []string{pass, user, b64([]byte(pass)), b64([]byte(user)), sealed,
+		b64([]byte("\x00" + user + "\x00" + pass)), base64.RawStdEncoding.EncodeToString([]byte("\x00" + user + "\x00" + pass))}
+	smtpWith := func(t *testing.T) *notify.SMTP {
+		f := newFakeSMTPWith(t, func(f *fakeSMTP) { f.tlsConf, f.authEcho = serverConf, true })
+		c, err := notify.NewSMTP(config.Mail{Mode: config.MailSMTP, Host: "127.0.0.1", Port: f.port(), From: "tessera@example.com",
+			Username: user, PasswordSealed: sealed, TLS: config.SMTPStartTLS}, config.Dev, true, s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.TLSConfig = clientConf
+		return c
+	}
+	check := func(t *testing.T, what, text string) {
+		t.Helper()
+		for _, secret := range secrets {
+			if strings.Contains(text, secret) {
+				t.Errorf("%s contains %q:\n%s", what, secret, text)
+			}
+		}
+	}
+	t.Run("attempt", func(t *testing.T) {
+		a, err := smtpWith(t).SendRecorded(context.Background(), mail1())
+		if err == nil || !errors.Is(err, notify.ErrPermanent) || a.Outcome != notify.OutcomeRejected {
+			t.Fatalf("err %v outcome %s", err, a.Outcome)
+		}
+		raw, _ := json.Marshal(a)
+		check(t, "the attempt", string(raw))
+		check(t, "the returned error", err.Error())
+		var auth notify.Step
+		for _, st := range a.Steps {
+			if strings.HasPrefix(st.Command, "AUTH") {
+				auth = st
+			}
+		}
+		if auth.Code != 535 || auth.Command != "AUTH PLAIN <redacted>" || strings.Contains(auth.Reply, "authentication failed") {
+			t.Errorf("auth step = %+v: want the code kept and a fixed text", auth)
+		}
+	})
+	t.Run("stored log", func(t *testing.T) {
+		w := newWorld(t)
+		w.emit(notify.KindApprovalNeeded, "k", notify.Recipient{UserID: w.ann, Email: w.annEmail})
+		w.run(w.dispatcher(smtpWith(t), &clock{t: w.now}))
+		m := w.message(w.ann)
+		if m.Status != store.EmailRejected {
+			t.Fatalf("status = %s", m.Status)
+		}
+		check(t, "the stored attempts", string(m.Attempts))
+	})
 }
 
 func TestTranscript_StartTLSFailureIsAFailure(t *testing.T) {

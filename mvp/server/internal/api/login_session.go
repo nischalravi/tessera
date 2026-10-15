@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -132,4 +133,34 @@ func authnPurpose(p string) string {
 		return p
 	}
 	return "login"
+}
+
+func truncate(v string, n int) string {
+	if len(v) > n {
+		return v[:n]
+	}
+	return v
+}
+
+// clientAddr is the TCP peer address (forwarding headers are not trusted).
+func clientAddr(r *http.Request) *string {
+	host := r.RemoteAddr
+	if i := strings.LastIndexByte(host, ':'); i > 0 {
+		host = host[:i]
+	}
+	host = strings.Trim(host, "[]")
+	if host == "" {
+		return nil
+	}
+	host = truncate(host, 64)
+	return &host
+}
+
+func userAgent(r *http.Request) *string {
+	ua := r.UserAgent()
+	if ua == "" {
+		return nil
+	}
+	ua = truncate(ua, 256)
+	return &ua
 }
