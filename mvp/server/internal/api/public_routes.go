@@ -34,18 +34,17 @@ func needStepUp(p auth.Permission, req auth.AuthnRequirement) Route {
 // unauthenticated caller. testdata/contract/public_routes.golden snapshots
 // this list, so adding to it needs a reviewed diff.
 //
-// The SAML routes, the well-known documents and the OAuth AS routes of §16.1
-// join with the PRs that add them (PR9, PR10).
-// POST /api/auth/dev-login is registered only with TESSERA_ENV=dev or test
-// (§18.4) and is removed by PR7.
+// The well-known documents and the OAuth AS routes of §16.1 join with the PR
+// that adds them (PR10).
 var publicRoutes = []string{
 	"GET /api/health",
 	"GET /api/auth/discover",
 	"GET /api/auth/login",
 	"GET /api/auth/oidc/{connection_id}/callback",
+	"GET /api/auth/saml/{connection_id}/metadata",
+	"POST /api/auth/saml/{connection_id}/acs",
+	"GET /api/auth/oauth2/{connection_id}/callback",
 	"GET /t/{slug}/bootstrap",
-	"GET /api/auth/dev-login",
-	"POST /api/auth/dev-login",
 	"POST /public/t/{slug}/claim/start",
 	"POST /public/t/{slug}/claim/verify/send",
 	"POST /public/t/{slug}/claim/verify/check",

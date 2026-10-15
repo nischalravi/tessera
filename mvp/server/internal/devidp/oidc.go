@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -53,6 +54,7 @@ type pendingAuthz struct {
 	hasMaxAge     bool
 	loginHint     string
 	fault         Fault
+	github        bool // GitHub-style OAuth 2.0 (github.go): no ID token
 }
 
 // authCode is what an authorization code is redeemed for.
@@ -252,6 +254,9 @@ func (s *Server) parseAuthz(q url.Values, c *Client, redirectURI string) (pendin
 		if err != nil {
 			return p, "invalid_request", err.Error()
 		}
+		if slices.Contains(SAMLFaults(), f) || slices.Contains(GitHubFaults(), f) {
+			return p, "invalid_request", fmt.Sprintf("fault %q is a SAML fault; it does not apply to OIDC", f)
+		}
 		p.fault = f
 	}
 	if err := faultApplies(p.fault, p, prompt); err != nil {
@@ -341,7 +346,7 @@ func (s *Server) handleAuthorizeSubmit(w http.ResponseWriter, r *http.Request) {
 	case !user.has(method):
 		s.errorPage(w, http.StatusBadRequest, "That user has no such authenticator.")
 		return
-	case !slices.Contains(Profiles(), profile):
+	case !p.github && !slices.Contains(Profiles(), profile):
 		s.errorPage(w, http.StatusBadRequest, "Unknown profile.")
 		return
 	}

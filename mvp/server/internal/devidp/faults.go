@@ -55,24 +55,21 @@ func OIDCFaults() []Fault {
 		FaultKidUnknown, FaultJKUHeader, FaultSubChangeStepUp, FaultACRUnrequested, FaultNoIssParam}
 }
 
-// SAMLFaults lists the SAML faults of §18.5. They are reserved names: SAML is
-// a stub until PR9, so selecting one is refused. The design's SAML "expired"
-// is named saml_expired here so it cannot be confused with the OIDC fault.
+// SAMLFaults lists the SAML faults of §18.5 (saml.go). The design's SAML
+// "expired" is named saml_expired here so it cannot be confused with the
+// OIDC fault. A SAML fault has no effect on OIDC sign-ins and vice versa.
 func SAMLFaults() []Fault {
-	return []Fault{"unsigned_assertion", "signed_response_unsigned_assertion",
-		"xsw1", "xsw2", "xsw3", "xsw4", "xsw5", "xsw6", "xsw7", "xsw8",
-		"comment_in_nameid", "wrong_audience", "wrong_recipient", "saml_expired", "replay",
-		"unsolicited", "wrong_in_response_to"}
+	return []Fault{FaultUnsignedAssertion, FaultSignedResponseOnly,
+		FaultXSW1, FaultXSW2, FaultXSW3, FaultXSW4, FaultXSW5, FaultXSW6, FaultXSW7, FaultXSW8,
+		FaultCommentInNameID, FaultWrongAudience, FaultWrongRecipient, FaultSAMLExpired, FaultReplay,
+		FaultUnsolicited, FaultWrongInResponseTo}
 }
 
-// ParseFault accepts "" (no fault) or an OIDC fault name.
+// ParseFault accepts "" (no fault), an OIDC, SAML or GitHub fault name.
 func ParseFault(s string) (Fault, error) {
 	f := Fault(s)
-	switch {
-	case f == FaultNone || slices.Contains(OIDCFaults(), f):
+	if f == FaultNone || slices.Contains(OIDCFaults(), f) || slices.Contains(SAMLFaults(), f) || slices.Contains(GitHubFaults(), f) {
 		return f, nil
-	case slices.Contains(SAMLFaults(), f):
-		return FaultNone, fmt.Errorf("fault %q is a SAML fault; SAML is a stub until PR9", s)
 	}
 	return FaultNone, fmt.Errorf("unknown fault %q", s)
 }

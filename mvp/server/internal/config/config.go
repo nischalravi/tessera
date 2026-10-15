@@ -78,9 +78,6 @@ type Config struct {
 	RPID                   string
 	Notify                 string
 	DevIdPURL              string
-	// DevLogin is TESSERA_DEV_LOGIN: with TESSERA_ENV=test, the explicit
-	// opt-in for dev sign-in (loopback peers only). Refused in prod.
-	DevLogin bool
 	// Mail is the notification email delivery (issue #189).
 	Mail Mail
 	// NotifyMaxAttempts is how many times the dispatcher tries to send one
@@ -219,7 +216,6 @@ func Load(getenv func(string) string) (*Config, error) {
 			c.FrozenNow = t
 		}
 	}
-	c.DevLogin = boolean("TESSERA_DEV_LOGIN", false, false)
 	c.DevIdPURL = strings.TrimSpace(getenv("TESSERA_DEV_IDP_URL"))
 	if c.DevIdPURL == "" && !prod {
 		c.DevIdPURL = "http://127.0.0.1:8001"
@@ -299,9 +295,6 @@ func Load(getenv func(string) string) (*Config, error) {
 		}
 		if c.DevIdPURL != "" {
 			bad("TESSERA_DEV_IDP_URL must not be set with TESSERA_ENV=prod")
-		}
-		if c.DevLogin {
-			bad("TESSERA_DEV_LOGIN must not be set with TESSERA_ENV=prod")
 		}
 		switch {
 		case c.AuditAnchor == "":

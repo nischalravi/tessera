@@ -278,7 +278,9 @@ func (s *Server) claimAuthority(tx *store.TenantTx) (credential.Authority, *stor
 		return nil, nil, false, err
 	}
 	for _, c := range cs {
-		if c.Profile == a.Profile() {
+		// OIDC only: the claim needs a phishing-resistant sign-in, and OAuth 2.0
+		// sessions are AAL1 and never phishing resistant, and a claim signs in through the OIDC callback
+		if c.Protocol == "oidc" && c.Profile == a.Profile() {
 			return a, c, true, nil
 		}
 	}
