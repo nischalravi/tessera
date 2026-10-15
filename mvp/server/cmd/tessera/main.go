@@ -300,8 +300,9 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if err != nil {
 		return err
 	}
-	// Outbound calls to IdPs (discovery, JWKS, token) go through safehttp. A
-	// test server gets the production client (no loopback exception).
+	// Outbound calls to IdPs (discovery, JWKS, token) and the kill switch's
+	// provider calls (containment) go through safehttp. A test server gets the
+	// production client (no loopback exception).
 	outCfg := *cfg
 	if outCfg.Env == config.Test {
 		outCfg.Env, outCfg.OutboundAllowLoopback = config.Prod, false
@@ -312,13 +313,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	}
 	srv := api.New(api.Config{Store: st, Clock: clock, Policies: loader, Logger: logger,
 		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound,
-	// Outbound calls of the kill switch (containment) use the SSRF-guarded client.
-	outbound, err := safehttp.ForConfig(cfg)
-	if err != nil {
-		return err
-	}
-	srv := api.New(api.Config{Containment: &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock},
-		Store: st, Clock: clock, Policies: loader, Logger: logger,
+		Containment:    &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock},
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
 		HSTS: cfg.IsProd(), Env: cfg.Env, Identifiers: identifiers.NewKeyer(sealer), EmailMode: cfg.Mail.Mode, DevLogin: cfg.DevLogin, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, AuditAnchor: anchorURL})
 	sender, err := notify.NewSender(cfg.Mail, cfg.Env, cfg.OutboundAllowLoopback, sealer, config.DevMailPath(o.db), logger)
