@@ -251,20 +251,10 @@ func TestRequest_DecisionRules(t *testing.T) {
 		if _, err := requests.Approve(c, forBob.ID, w.alice, "", w.now); code(err) != "not_pending" {
 			t.Errorf("approve a denied line: %v", err)
 		}
-		// alice left before the decision
-		if err := c.TerminateIdentity(w.ids["alice"], w.now); err != nil {
-			return err
-		}
-		if _, err := requests.Approve(c, forAlice.ID, other0, "", w.now); code(err) != "beneficiary_not_active" {
-			t.Errorf("approve for a leaver: %v", err)
-		}
 		_, err := requests.Cancel(c, forAlice.ID, w.pat, w.now)
 		return err
 	})
-	// alice comes back; she asks again for herself; another approver grants; she removes it herself
-	w.tx(func(c *store.TenantTx) error {
-		return c.UpsertIdentity(&store.Identity{ExternalID: "alice", Name: "Alice", Type: "human", Status: "active", CreatedAt: w.now})
-	})
+	// alice asks again for herself; another approver grants; she removes it herself
 	again, err := w.submit(w.alice, false, []string{"alice"}, []string{"group:okta:platform"}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -290,6 +280,21 @@ func TestRequest_DecisionRules(t *testing.T) {
 	if w.edge("acct:okta:alice", "group:okta:platform") != nil {
 		t.Error("removed access is still granted")
 	}
+	// alice left before the decision (a terminated identity stays terminated, so this comes last)
+	leaving, err := w.submit(w.pat, true, []string{"alice"}, []string{"group:okta:platform"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.tx(func(c *store.TenantTx) error {
+		if err := c.TerminateIdentity(w.ids["alice"], w.now); err != nil {
+			return err
+		}
+		if _, err := requests.Approve(c, leaving[0].ID, other, "", w.now); code(err) != "beneficiary_not_active" {
+			t.Errorf("approve for a leaver: %v", err)
+		}
+		_, err := requests.Cancel(c, leaving[0].ID, w.pat, w.now)
+		return err
+	})
 }
 
 // A grant removed outside the request (an access review, a revoke) closes
