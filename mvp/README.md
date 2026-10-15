@@ -191,8 +191,11 @@ another, so a job that rolls back keeps its failed run, and `job.failed` is appe
 chain for alert rules to match. A request refused before the job ran (bad input, missing
 permission, a blocked gate) is not a run.
 
-`POST /api/jobs/{id}/retry` replays the run's API call as the signed-in user, through the whole
-middleware: the original route's permission and step-up apply. It is offered only for idempotent
+`POST /api/jobs/{id}/retry` runs the operation again as the signed-in user through a typed
+dispatcher, not a replayed HTTP request: the retry request is authenticated as usual, the original
+route's permission and step-up are rechecked for the caller as they are now, and the route
+registered for the run's kind runs with the recorded body (a connection comes from the run's
+`connection_id`). No cookie, `Authorization` or `DPoP` header is stored or forwarded. It is offered only for idempotent
 kinds (sync, validation, dry run, health re-run, JIT sweep), not for provisioning. The new run
 links `retry_of` and records `job.retried`. Runs still `running` after an hour are marked failed
 ("interrupted"), and runs are kept 30 days. Reading the history needs `jobs.read` (operator,

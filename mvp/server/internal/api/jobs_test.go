@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -141,6 +142,112 @@ func TestJobs_RetryNeedsTheJobsPermission(t *testing.T) {
 	}
 	if runs := admin.json("GET", "/api/jobs", "", 200).([]any); len(runs) != 1 {
 		t.Errorf("a refused retry was recorded: %v", runs)
+	}
+}
+
+// TestJobs_RetryDispatchesTypedNotHTTP: a retry authenticates the retry
+// request, rechecks the original route's permission, and runs the recorded
+// operation directly. It never re-enters the HTTP stack, so the ledger holds
+// one http.request event for the retry and none for the original route.
+func TestJobs_RetryDispatchesTypedNotHTTP(t *testing.T) {
+	st, _ := testkit.Tiny(t)
+	c := client{t, testServer(t, st)}
+	c.json("POST", "/api/connectors/sync", "{}", 200)
+	id := at(c.json("GET", "/api/jobs", "", 200), 0, "id").(string)
+	routeCount := func(route string) int {
+		n := 0
+		for _, e := range httpEvents(ledger(t, st.DB, st.Tenant)) {
+			var hf httpField
+			if err := json.Unmarshal(e.HTTP, &hf); err != nil {
+				t.Fatal(err)
+			}
+			if hf.Route != nil && *hf.Route == route {
+				n++
+			}
+		}
+		return n
+	}
+	if got := routeCount("/api/connectors/sync"); got != 1 {
+		t.Fatalf("sync http.request events before retry: %d, want 1", got)
+	}
+	c.json("POST", "/api/jobs/"+id+"/retry", "", 200)
+	if got := routeCount("/api/jobs/{job_id}/retry"); got != 1 {
+		t.Errorf("retry http.request events: %d, want 1", got)
+	}
+	if got := routeCount("/api/connectors/sync"); got != 1 {
+		t.Errorf("sync http.request events after retry: %d, want 1 (the retry must not replay the HTTP request)", got)
+	}
+	runs := c.json("GET", "/api/jobs", "", 200).([]any)
+	if len(runs) != 2 || at(runs, 0, "trigger") != "retry" || at(runs, 0, "retry_of") != id {
+		t.Errorf("runs after retry %v", runs)
+	}
+}
+
+// TestJobs_RetryRefusesAMismatchedRecord: the typed dispatcher runs the route
+// registered for the run's kind, whatever method, route or path the row
+// holds. A row that names another route is refused and nothing runs.
+func TestJobs_RetryRefusesAMismatchedRecord(t *testing.T) {
+	st, _ := testkit.Tiny(t)
+	c := client{t, testServer(t, st)}
+	const jid = "00000000-0000-4000-8000-0000000000f2"
+	testkit.Write(t, st, func(tx *store.TenantTx) error {
+		return tx.InsertJobRun(&store.JobRun{ID: jid, Kind: "sync", Trigger: "manual", Status: "failed", Actor: "x",
+			StartedAt: testkit.Now, Method: strp("POST"), Route: strp("/api/auth/logout"), Path: strp("/api/auth/logout"),
+			Body: strp("{}"), Retryable: true})
+	})
+	rec := c.do("POST", "/api/jobs/"+jid+"/retry", "")
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "not_retryable") {
+		t.Errorf("retry of a mismatched record: %d %s", rec.Code, rec.Body)
+	}
+	if rec := c.do("GET", "/api/auth/session", ""); rec.Code != http.StatusOK {
+		t.Errorf("the session did not survive: %d", rec.Code)
+	}
+}
+
+// TestJobs_RetryOfAConnectionJob: a validation retry takes its connection
+// from the run's connection_id, not from a stored URL.
+func TestJobs_RetryOfAConnectionJob(t *testing.T) {
+	c := newRD(t)
+	id := c.validatedConn("demo-ad", "Active Directory (demo)", `,"demo_fixed_checks":["range_retrieval"],"expected_counts":{"users":65,"groups":13}`)
+	runs := c.client.json("GET", "/api/jobs?kind=validation&connection_id="+id, "", 200).([]any)
+	if len(runs) == 0 {
+		t.Fatal("no validation run recorded")
+	}
+	jid := at(runs, 0, "id").(string)
+	if rec := c.do("POST", "/api/jobs/"+jid+"/retry", ""); rec.Code != http.StatusAccepted {
+		t.Fatalf("retry validation: %d %s", rec.Code, rec.Body)
+	}
+	after := c.client.json("GET", "/api/jobs?kind=validation&connection_id="+id, "", 200).([]any)
+	if len(after) != len(runs)+1 || at(after, 0, "trigger") != "retry" || at(after, 0, "retry_of") != jid {
+		t.Errorf("validation runs after retry %v", after)
+	}
+}
+
+// TestJobs_RetryPersistsNoCredentials: what a run keeps for a retry is the
+// route, the strict-schema body and the connection id; no request header and
+// no session token is stored.
+func TestJobs_RetryPersistsNoCredentials(t *testing.T) {
+	st, _ := testkit.Tiny(t)
+	c := client{t, testServer(t, st)}
+	c.json("POST", "/api/connectors/sync", "{}", 200)
+	id := at(c.json("GET", "/api/jobs", "", 200), 0, "id").(string)
+	c.json("POST", "/api/jobs/"+id+"/retry", "", 200)
+	var runs []*store.JobRun
+	testkit.Read(t, st, func(tx *store.TenantTx) error {
+		var err error
+		runs, err = tx.JobRuns(store.JobRunFilter{Limit: 50})
+		return err
+	})
+	if len(runs) != 2 {
+		t.Fatalf("%d runs, want 2", len(runs))
+	}
+	for _, j := range runs {
+		b, _ := json.Marshal(j)
+		for _, bad := range []string{"cookie", "authorization", "dpop", "bearer", "csrf", "tessera_session"} {
+			if strings.Contains(strings.ToLower(string(b)), bad) {
+				t.Errorf("run %s stores %q: %s", j.ID, bad, b)
+			}
+		}
 	}
 }
 

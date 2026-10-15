@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
@@ -23,7 +24,8 @@ import (
 
 // Job run history (issue #172). A route marked with a jobSpec records a run
 // around its transaction (serveJob); GET /api/jobs lists the runs and POST
-// /api/jobs/{job_id}/retry replays an idempotent one.
+// /api/jobs/{job_id}/retry runs an idempotent one again through a typed
+// dispatcher (retryJob).
 
 type jobSpec struct {
 	kind      string
@@ -36,13 +38,13 @@ func (rt *route) asJob(kind, connParam string) *route {
 	return rt
 }
 
-// retryKey carries the id of the run a replayed request retries.
+// retryKey carries the id of the run a retried operation re-runs.
 type retryKey struct{}
 
 func (s *Server) registerJobRoutes() {
 	s.handle(http.MethodGet, "/api/jobs", read, need(auth.PermJobsRead), s.listJobs)
 	s.handle(http.MethodGet, "/api/jobs/{job_id}", read, need(auth.PermJobsRead), s.getJob)
-	// noTenant: the retry replays another route, which opens its own transaction.
+	// noTenant: the retry runs another route's handler, which opens its own transaction.
 	s.handle(http.MethodPost, "/api/jobs/{job_id}/retry", noTenant, need(auth.PermJobsRead), s.retryJob)
 }
 
@@ -206,10 +208,11 @@ func (s *Server) getJob(_ http.ResponseWriter, r *http.Request, p *params) (any,
 	return viewJob(j), nil
 }
 
-// retryJob replays a retryable run's API call as the signed-in user: the
-// replayed request goes through the whole middleware again (session,
-// CSRF, the original route's permission and step-up, audit), and the new
-// run is recorded with retry_of and a job.retried event.
+// retryJob runs a retryable run's operation again as the signed-in user,
+// through a typed dispatcher rather than a replayed HTTP request: it
+// rechecks the original route's permission and step-up for the caller, then
+// runs that route's handler with the recorded body. The new run is recorded
+// with retry_of and a job.retried event.
 func (s *Server) retryJob(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
 	id := p.path["job_id"]
 	if !jobIDRE.MatchString(id) {
@@ -231,27 +234,74 @@ func (s *Server) retryJob(_ http.ResponseWriter, r *http.Request, p *params) (an
 		return nil, &readiness.Error{Status: http.StatusConflict, Code: "job_running", Msg: "this job is still running"}
 	}
 	if !j.Retryable || j.Method == nil || j.Path == nil || j.Body == nil {
-		return nil, &readiness.Error{Status: http.StatusConflict, Code: "not_retryable",
-			Msg: "this job cannot be retried from here: only idempotent jobs (sync, validation, dry run, health re-run, JIT sweep) are"}
+		return nil, notRetryable()
 	}
+	// The typed dispatcher: the route is the one registered for the run's
+	// kind, never one named by the stored row, and a row that disagrees with
+	// it is refused.
+	rt := s.retryRoute(j.Kind)
+	if rt == nil || *j.Method != rt.method || j.Route == nil || *j.Route != rt.pattern {
+		return nil, notRetryable()
+	}
+	vars := map[string]string{}
+	path := rt.pattern
+	if rt.job.connParam != "" {
+		// The connection comes from the run's connection_id, which is
+		// checked as an id before it is put into a path.
+		if j.ConnectionID == nil || !idRE.MatchString(*j.ConnectionID) {
+			return nil, notRetryable()
+		}
+		vars[rt.job.connParam] = *j.ConnectionID
+		path = strings.Replace(path, "{"+rt.job.connParam+"}", *j.ConnectionID, 1)
+	}
+	// This request is already authenticated (session, CSRF). Recheck the
+	// original route's permission and step-up against the caller as they are
+	// now; a caller who has lost the permission since the run cannot retry it.
+	if d := auth.Check(pr, rt.spec.Perm, rt.spec.Authn, s.clock()); d != nil {
+		return nil, denial{d}
+	}
+	// The operation runs on a request value that carries the recorded body and
+	// this request's context (principal and audit attribution) and nothing
+	// else: no cookie, Authorization or DPoP header is copied, so no
+	// credential is replayed, and nothing re-enters the HTTP stack.
 	ctx := context.WithValue(context.WithoutCancel(r.Context()), retryKey{}, j.ID)
-	inner, err := http.NewRequestWithContext(ctx, *j.Method, *j.Path, bytes.NewReader([]byte(*j.Body)))
+	inner, err := http.NewRequestWithContext(ctx, rt.method, path, bytes.NewReader([]byte(*j.Body)))
 	if err != nil {
 		return nil, err
-	}
-	for _, h := range []string{"Cookie", "Authorization", "DPoP", "Origin", "X-Tessera-Csrf", "User-Agent", "X-Forwarded-For"} {
-		if v := r.Header.Get(h); v != "" {
-			inner.Header.Set(h, v)
-		}
 	}
 	inner.Header.Set("Content-Type", "application/json")
 	inner.RemoteAddr = r.RemoteAddr
 	rec := &bufferedResponse{header: http.Header{}, status: http.StatusOK}
-	s.Handler().ServeHTTP(rec, inner)
-	return statusBody{rec.status, json.RawMessage(rec.body.Bytes())}, nil
+	out, err := s.serveJob(rt, rec, inner, &params{r: inner, path: vars}, pr.TenantID)
+	if err != nil {
+		return nil, err
+	}
+	if out == nil {
+		return statusBody{rec.status, json.RawMessage(rec.body.Bytes())}, nil
+	}
+	return out, nil
 }
 
-// bufferedResponse collects a replayed request's response.
+func notRetryable() error {
+	return &readiness.Error{Status: http.StatusConflict, Code: "not_retryable",
+		Msg: "this job cannot be retried from here: only idempotent jobs (sync, validation, dry run, health re-run, JIT sweep) are"}
+}
+
+// retryRoute is the route that runs a retryable kind: the one registered with
+// asJob for it. Kinds that are not idempotent have none.
+func (s *Server) retryRoute(kind string) *route {
+	if !jobs.Idempotent(kind) {
+		return nil
+	}
+	for _, rt := range s.routes {
+		if rt.job != nil && rt.job.kind == kind {
+			return rt
+		}
+	}
+	return nil
+}
+
+// bufferedResponse collects the response a retried handler writes itself.
 type bufferedResponse struct {
 	header http.Header
 	status int
