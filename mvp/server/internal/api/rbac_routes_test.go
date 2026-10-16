@@ -136,7 +136,7 @@ PUT    /api/groups/users/{id}/identity               groups.admin    STEP_UP_POL
 GET    /api/groups/pit/digests                       groups.admin    -  # issue #46
 GET    /api/groups/pit/verify                        groups.admin    -  # issue #46
 POST   /api/groups/pit/rebuild                       groups.admin    -  # issue #46
-POST   /api/groups/{id}/members:batch                groups.write    -  # issue #48: update, or optin / optout for oneself, per operation
+POST   /api/groups/{id}/members:batch               groups.write    -  # issue #48: update, or optin / optout for oneself, per operation
 POST   /api/groups:simulate                          groups.write    -  # issue #48: the privileges of the changes it simulates
 GET    /api/identities/{identity_id}/groups          groups.read     -  # issue #48: only the groups the caller may read
 GET    /api/openapi/groups.json                      auth.self       -  # issue #48
@@ -146,6 +146,37 @@ GET    /scim/v2/Groups                               groups.read     -  # issue 
 GET    /scim/v2/Groups/{id}                          groups.read     -  # issue #48: read
 GET    /scim/v2/Users                                groups.read     -  # issue #48
 GET    /scim/v2/Users/{id}                           groups.read     -  # issue #48
+GET    /api/groups/object-types                   groups.read     -  # issue #50: the object type vocabulary
+GET    /api/groups/services                          groups.read     -  # issue #50: the services the caller's groups grant (stem_view, view)
+GET    /api/groups/attr-defs                         groups.read     -  # issue #50: the definitions the caller may view (attr_view)
+POST   /api/groups/attr-defs                         groups.write    -  # issue #50: create on the folder
+GET    /api/groups/attr-defs/{id}                    groups.read     -  # issue #50: attr_view
+PATCH  /api/groups/attr-defs/{id}                    groups.write    -  # issue #50: attr_admin
+DELETE /api/groups/attr-defs/{id}                    groups.write    -  # issue #50: attr_admin
+GET    /api/groups/attr-defs/{id}/actions            groups.read     -  # issue #50: attr_view
+POST   /api/groups/attr-defs/{id}/actions            groups.write    -  # issue #50: attr_admin
+DELETE /api/groups/attr-defs/{id}/actions/{action_id} groups.write   -  # issue #50: attr_admin
+PUT    /api/groups/attr-defs/{id}/actions/{action_id}/implies groups.write -  # issue #50: attr_admin
+GET    /api/groups/attr-defs/{id}/privileges         groups.read     -  # issue #50: attr_admin
+POST   /api/groups/attr-defs/{id}/privileges         groups.write    -  # issue #50: attr_admin
+GET    /api/groups/attr-defs/{id}/privileges/effective groups.read   -  # issue #50: attr_view (own), attr_admin (another identity)
+DELETE /api/groups/attr-defs/{id}/privileges/{privilege_id} groups.write -  # issue #50: attr_admin
+GET    /api/groups/attr-names                        groups.read     -  # issue #50: attr_view on the definition
+POST   /api/groups/attr-names                        groups.write    -  # issue #50: attr_admin on the definition
+GET    /api/groups/attr-names/{id}                   groups.read     -  # issue #50: attr_view
+PATCH  /api/groups/attr-names/{id}                   groups.write    -  # issue #50: attr_admin
+DELETE /api/groups/attr-names/{id}                   groups.write    -  # issue #50: attr_admin
+PUT    /api/groups/attr-names/{id}/implies           groups.write    -  # issue #50: attr_admin
+GET    /api/groups/attr-assignments                  groups.read     -  # issue #50: attr_read and the owner's read privilege (filtered)
+POST   /api/groups/attr-assignments                  groups.write    -  # issue #50: attr_update and the owner's update privilege (attr_optin on oneself)
+GET    /api/groups/attr-assignments/{id}             groups.read     -  # issue #50: attr_read and the owner's read privilege
+PATCH  /api/groups/attr-assignments/{id}             groups.write    -  # issue #50: attr_update and the owner's update privilege
+DELETE /api/groups/attr-assignments/{id}             groups.write    -  # issue #50: attr_update and the owner's update privilege (attr_optout on oneself)
+PUT    /api/groups/attr-assignments/{id}/values      groups.write    -  # issue #50: attr_update and the owner's update privilege
+GET    /api/groups/{id}/object-types                 groups.read     -  # issue #50: view (lint findings need read)
+PUT    /api/groups/{id}/object-types                 groups.write    -  # issue #50: group_attr_update
+GET    /api/groups/folders/{id}/object-types         groups.read     -  # issue #50: stem_view
+PUT    /api/groups/folders/{id}/object-types         groups.write    -  # issue #50: stem_attr_update
 GET    /api/auth/session                             auth.self       -
 POST   /api/auth/logout                              auth.self       -
 GET    /api/auth/sessions                            auth.self       -

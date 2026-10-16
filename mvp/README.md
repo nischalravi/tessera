@@ -512,6 +512,86 @@ names, like the routes of GR-1 to GR-4; `TestGroupsRoutesRequirePrivilege` and t
   `internal/groups/api` (filter, selection, key store and expiry, OpenAPI), `internal/store`
   (`TestIsolation_GroupsAPIStatements`, `TestSavepoint`, `TestIsolation_IdempotencyTable`).
 
+#### Attribute framework, object types and services (GR-7, issue #50)
+
+Design `docs/design/groups-grouper-parity.md` §10.9, §3.5. Schema `0287_group_attrs.sql` (the design
+calls it `0104`; `0280`..`0285` are taken and `0286` belongs to another change): `grp_attr_defs`,
+`grp_attr_names`, `grp_attr_name_implies`, `grp_attr_actions`, `grp_attr_action_implies`,
+`grp_attr_assigns`, `grp_attr_values`. Code: `server/internal/groups/attrs` (`defs.go`, `names.go`,
+`actions.go`, `implies.go`, `assign.go`, `value.go`, `access.go`, `objecttypes.go`, `lint.go`,
+`services.go`), `server/internal/api/groups_attrs.go`.
+
+- **Definitions** live in a folder (their full name is the folder's name, `:`, and the extension,
+  derived, so renaming a folder rewrites nothing) and carry the eight `attr_*` privileges, which
+  GR-4 defines: they are held, inherited from folder rows with `applies_to: attr_defs`, explained and
+  revoked like the others, under `/api/groups/attr-defs/{id}/privileges`. A definition has an
+  `attr_type` (`attr limit perm type service`), a `value_type` (`marker string integer floating
+  timestamp member_id`), `multi_assign`, `multi_valued` and `assign_to`, the owner types it may sit
+  on (`folder group identity membership effective_membership attr_def assignment`). Types never
+  change; narrowing the flags is `409 attr_def_in_use` while assignments need the wider form. Its
+  creator gets `attr_admin`. A new definition has the action `assign`, which stays.
+- **Names, actions, implications.** A name implies other names of its definition (an assignment of
+  the first is also one of the others); an action implies other actions. The direct edges are set
+  with `PUT .../implies`; the closure is stored beside them and rebuilt for the definition after
+  every change, so reading it is a lookup. A loop is `409 {"error":"cycle","path":[...]}`.
+  `GET /api/groups/attr-assignments?owner_type=&owner=&effective=true` lists the names an owner has,
+  by assignment or implication.
+- **Assignments** put a name, with an action, on a folder, group, identity, direct membership,
+  attribute definition or another assignment (three levels deep at most), with `enabled_from` and
+  `disabled_at` and, for `perm` definitions, `disallowed`. A single-assign definition takes one
+  assignment of a name and action per owner (`409 already_assigned`). An effective membership is
+  derived, so it is read-only: `422 effective_membership_read_only`. A mirrored folder or group
+  refuses assignments (`409 folder_mirrored`). Removing an assignment removes the ones on it, and
+  deleting a folder, a direct membership or a definition removes the assignments on it (a folder with
+  definitions is not empty).
+- **Values** are typed by the definition. A floating value is a decimal string (`"12.5"`), never a
+  JSON number and never a float: it is stored as text, canonicalized (`"1.50"` is `"1.5"`), and
+  appears in the audit and change events as a string, so their hashes are float-free. An integer is a
+  JSON integer literal (no fraction or exponent), a timestamp an RFC 3339 string (stored in UTC), a
+  member id an identity of the tenant. A marker has no values; a single-valued definition takes one.
+- **Privileges of an assignment** are two-sided: `attr_update` on the definition and the owner's
+  update privilege (`stem_attr_update`, `group_attr_update`, `update` on a membership's group,
+  `attr_def_attr_update` on the owner definition, `attr_update` on an owner assignment's definition;
+  an identity owner needs nothing more). Reading needs `attr_read` and the owner's read privilege.
+  `attr_optin` / `attr_optout` let a person assign or remove the definition on their own identity or
+  membership. Definitions and names are seen with `attr_view`; editing them, their actions and
+  privileges takes `attr_admin`; creating a definition takes `create` on its folder. Listings show only
+  what the caller may see.
+- **Object types** (G-05) are the built-in definition `etc:objectTypes` (system-owned, created on the
+  first change; the `etc` folder holds it), with one name `etc:objectTypes:objectType`. Group types:
+  `ref basis policy bundle manual intermediate`; folder types: `etc org test service app security`.
+  `GET /api/groups/object-types` is the vocabulary; `GET|PUT /api/groups/{id}/object-types` and
+  `GET|PUT /api/groups/folders/{id}/object-types` `{types: [...]}` read and replace them (`view` /
+  `group_attr_update`, `stem_view` / `stem_attr_update`; the built-in definition's own privileges are not
+  asked). A copied group or folder keeps its types. `data_owner` and `member_description` stay
+  columns of the folder and group.
+- **Lint** is a closed list of warnings returned by the object-types read (the findings count
+  members, so they need `read`): `policy_direct_members` (a policy group with more than 10 direct
+  identity members), `bundle_direct_members`, `service_without_policy_groups`, and the info rule
+  `missing_data_owner`. No tenant code runs (K6).
+- **Services** (G-48): a folder with the type `service` appears in `GET /api/groups/services` for a
+  person who is an effective member of a policy group below it (both visible to the caller), with
+  those groups.
+- **Events and audit.** An assignment writes `attribute.assigned`, a change of dates or values
+  `attribute.value_changed`, a removal `attribute.removed` (data: the owner, ids, dates and the value
+  keys), and `groups.attr.{assigned,updated,values_set,removed}` plus `groups.attr_{def,name,action}.*`
+  audit events, in the change's transaction.
+
+| Route | Needs |
+|---|---|
+| `GET\|POST /api/groups/attr-defs`, `GET\|PATCH\|DELETE .../{id}` | list (`attr_view`, filtered); create `{folder, extension, attr_type, value_type, multi_assign, multi_valued, assign_to}` (`create`); read (`attr_view`); edit, delete (`attr_admin`) |
+| `GET\|POST .../attr-defs/{id}/actions`, `DELETE .../actions/{action_id}`, `PUT .../actions/{action_id}/implies` | `attr_view`; `attr_admin` |
+| `GET\|POST .../attr-defs/{id}/privileges`, `DELETE .../privileges/{privilege_id}`, `GET .../privileges/effective` | `attr_admin` (own effective: `attr_view`) |
+| `GET\|POST /api/groups/attr-names`, `GET\|PATCH\|DELETE .../{id}`, `PUT .../{id}/implies` | `attr_view`; `attr_admin` |
+| `GET\|POST /api/groups/attr-assignments`, `GET\|PATCH\|DELETE .../{id}`, `PUT .../{id}/values` | read: `attr_read` + owner read; write: `attr_update` + owner update (or `attr_optin` / `attr_optout` on oneself). `POST {name (id or full name), action (id or name), owner_type, owner, disallowed, enabled_from, disabled_at, values}` |
+| `GET /api/groups/object-types`, `GET\|PUT /api/groups/{id}/object-types`, `.../folders/{id}/object-types`, `GET /api/groups/services` | see above |
+
+- Tests: `go test ./internal/groups/attrs` (`TestValues_NoFloats`, `TestImplies_ClosureMaintenance`,
+  `TestAssign_OnAssignment`, `TestAttrPrivileges_*`, `TestObjectTypes`, `TestLint_*`, `TestServices`,
+  `TestEvents_InTheChangeTransaction`), `internal/api` (`TestGroupsRoutesRequirePrivilege` covers every
+  attribute route, `TestGroupsAttrsFlow`, `TestGroupsAttrsPrivileges`, `TestGroupsAttrsTenantIsolation`,
+  ...), `TestIsolation_GroupAttrTables` and `TestValues_NoFloatColumns` in `internal/store`.
+
 ### Audit ledger
 
 Every tenant has an append-only, hash-chained audit log (`audit_events`; design
