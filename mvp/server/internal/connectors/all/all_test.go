@@ -13,7 +13,7 @@ import (
 var now = time.Date(2026, 10, 8, 9, 30, 0, 0, time.UTC)
 
 func TestLoadRegistersOktaAndEntra(t *testing.T) {
-	for _, name := range []string{"okta", "entra"} {
+	for _, name := range []string{"okta", "entra", "github-scan", "aws-agentcore"} {
 		if _, ok := connectors.Factories[name]; !ok {
 			t.Errorf("connector %q is not registered", name)
 		}

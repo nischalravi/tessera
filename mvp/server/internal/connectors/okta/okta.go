@@ -67,6 +67,10 @@ type Config struct {
 	// EmitIdentities also emits an identity per user. Turn it off when an HR
 	// system is the authoritative source of identities.
 	EmitIdentities bool
+	// DiscoverAgents also reads the org's OAuth service apps as ai_agent
+	// identities with their credentials and API scope grants (issue #116).
+	// Off by default: it is additive.
+	DiscoverAgents bool
 	// MaxIncrementalAge is how long an incremental chain may run before a full
 	// read repairs what Okta does not report (deletions). Default 24h.
 	MaxIncrementalAge time.Duration
@@ -139,6 +143,7 @@ func New(cfg Config, rt connsync.Runtime, hc *http.Client, now func() time.Time)
 //	TESSERA_OKTA_KEY_ID             kid of that key
 //	TESSERA_OKTA_API_TOKEN          reference to an SSWS token (instead of OAuth)
 //	TESSERA_OKTA_EMIT_IDENTITIES    true (default) or false
+//	TESSERA_OKTA_DISCOVER_AGENTS    true or false (default): OAuth service apps as ai_agent identities
 //	TESSERA_OKTA_MAX_INCREMENTAL_AGE  duration, default 24h
 func FromEnv(getenv func(string) string, now time.Time) (connectors.Connector, error) {
 	cfg := Config{OrgURL: getenv("TESSERA_OKTA_ORG_URL"), ClientID: getenv("TESSERA_OKTA_CLIENT_ID"),
@@ -149,6 +154,13 @@ func FromEnv(getenv func(string) string, now time.Time) (connectors.Connector, e
 			return nil, errors.New("TESSERA_OKTA_EMIT_IDENTITIES must be true or false")
 		}
 		cfg.EmitIdentities = b
+	}
+	if v := getenv("TESSERA_OKTA_DISCOVER_AGENTS"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, errors.New("TESSERA_OKTA_DISCOVER_AGENTS must be true or false")
+		}
+		cfg.DiscoverAgents = b
 	}
 	if v := getenv("TESSERA_OKTA_MAX_INCREMENTAL_AGE"); v != "" {
 		d, err := time.ParseDuration(v)

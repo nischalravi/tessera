@@ -1,0 +1,8 @@
+{
+  "sha": "tree0000000000000000000000000000000000002",
+  "truncated": false,
+  "tree": [
+    {"path": "mcp.json", "type": "blob", "size": 200},
+    {"path": "main.go", "type": "blob", "size": 1000}
+  ]
+}

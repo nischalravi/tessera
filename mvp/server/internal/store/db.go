@@ -92,6 +92,8 @@ var tables = []string{
 	"containment_credentials", "containment_retries",
 	// connector sync checkpoints (schema/0251_connector_checkpoints.sql)
 	"connector_checkpoints",
+	// AI agent discovery (schema/0300_agent_discovery.sql)
+	"agent_profiles", "mcp_findings",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was

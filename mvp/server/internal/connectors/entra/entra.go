@@ -72,6 +72,10 @@ type Config struct {
 	// SignInActivity reads signInActivity (needs AuditLog.Read.All and Entra ID
 	// P1/P2). If Graph refuses, last sign-in is left empty and the sync goes on.
 	SignInActivity bool
+	// DiscoverAgents also reads Entra Agent ID agent identities and their
+	// sponsors (Graph beta; needs AgentIdentity.Read.All) and emits them as
+	// ai_agent identities (issue #116). Off by default: it is additive.
+	DiscoverAgents bool
 	// MaxIncrementalAge forces a full read after this long; zero never does
 	// (delta queries report deletions).
 	MaxIncrementalAge time.Duration
@@ -134,13 +138,14 @@ func New(cfg Config, rt connsync.Runtime, hc *http.Client, now func() time.Time)
 //	TESSERA_ENTRA_AUTHORITY_URL    default https://login.microsoftonline.com
 //	TESSERA_ENTRA_EMIT_IDENTITIES  true (default) or false
 //	TESSERA_ENTRA_SIGNIN_ACTIVITY  true (default) or false
+//	TESSERA_ENTRA_DISCOVER_AGENTS  true or false (default): Entra Agent ID agent identities
 //	TESSERA_ENTRA_MAX_INCREMENTAL_AGE  duration; default none
 func FromEnv(getenv func(string) string, now time.Time) (connectors.Connector, error) {
 	cfg := Config{TenantID: getenv("TESSERA_ENTRA_TENANT_ID"), ClientID: getenv("TESSERA_ENTRA_CLIENT_ID"),
 		GraphURL: getenv("TESSERA_ENTRA_GRAPH_URL"), AuthorityURL: getenv("TESSERA_ENTRA_AUTHORITY_URL"),
 		EmitIdentities: true, SignInActivity: true}
 	for name, dst := range map[string]*bool{"TESSERA_ENTRA_EMIT_IDENTITIES": &cfg.EmitIdentities,
-		"TESSERA_ENTRA_SIGNIN_ACTIVITY": &cfg.SignInActivity} {
+		"TESSERA_ENTRA_SIGNIN_ACTIVITY": &cfg.SignInActivity, "TESSERA_ENTRA_DISCOVER_AGENTS": &cfg.DiscoverAgents} {
 		if v := getenv(name); v != "" {
 			b, err := strconv.ParseBool(v)
 			if err != nil {

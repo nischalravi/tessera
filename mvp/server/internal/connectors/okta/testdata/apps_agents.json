@@ -1,0 +1,38 @@
+[
+  {
+    "id": "0oa1wiki000000001",
+    "name": "examplewiki",
+    "label": "Example Wiki",
+    "status": "ACTIVE",
+    "signOnMode": "SAML_2_0"
+  },
+  {
+    "id": "0oa1agentsupport01",
+    "name": "oidc_client",
+    "label": "Support Triage Agent",
+    "status": "ACTIVE",
+    "signOnMode": "OPENID_CONNECT",
+    "created": "2026-08-20T10:00:00.000Z",
+    "settings": {"oauthClient": {"application_type": "service", "grant_types": ["client_credentials"]}},
+    "credentials": {"oauthClient": {"client_id": "0oa1agentsupport01", "token_endpoint_auth_method": "private_key_jwt"}},
+    "profile": {"sponsor": "ada.fixture@example.com", "creator": "ben.sample@fixture.example"}
+  },
+  {
+    "id": "0oa1agentorphan001",
+    "name": "oidc_client",
+    "label": "Research Agent",
+    "status": "ACTIVE",
+    "signOnMode": "OPENID_CONNECT",
+    "created": "2026-07-01T10:00:00.000Z",
+    "settings": {"oauthClient": {"application_type": "service"}},
+    "credentials": {"oauthClient": {"client_id": "0oa1agentorphan001"}}
+  },
+  {
+    "id": "0oa1webapp0000001",
+    "name": "oidc_client",
+    "label": "Customer Portal",
+    "status": "ACTIVE",
+    "signOnMode": "OPENID_CONNECT",
+    "settings": {"oauthClient": {"application_type": "web"}}
+  }
+]

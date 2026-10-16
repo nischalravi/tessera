@@ -1,0 +1,6 @@
+{
+  "servers": {
+    // VS Code style: comments and trailing commas are allowed
+    "fetch": {"type": "http", "url": "https://fetch.example.com/mcp", "headers": {"Authorization": "Bearer @@BEARER@@"},},
+  },
+}

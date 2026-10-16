@@ -1,0 +1,48 @@
+{
+  "runtimes": [
+    {
+      "arn": "arn:aws:bedrock-agentcore:us-east-1:111122223333:runtime/support_copilot-AbC123",
+      "id": "support_copilot-AbC123",
+      "name": "support-copilot",
+      "status": "READY",
+      "created_at": "2026-09-10T12:00:00Z",
+      "created_by": "arn:aws:iam::111122223333:role/ci-deployer",
+      "execution_role_arn": "arn:aws:iam::111122223333:role/agentcore-support-copilot",
+      "tags": {"sponsor": "ada.fixture@example.com", "creator": "ben.sample@fixture.example"},
+      "credentials": [
+        {"id": "cred-oauth-1", "kind": "oauth_client_secret", "name": "crm oauth client", "created_at": "2026-05-01T08:00:00Z"},
+        {"id": "cred-key-1", "kind": "api_key", "name": "ticketing api key", "created_at": "2026-09-10T12:05:00Z"}
+      ],
+      "access": [
+        {"action": "s3:GetObject", "resource": "arn:aws:s3:::customer-records", "privileged": false, "tags": ["pii"], "environment": "prod"},
+        {"action": "bedrock:InvokeModel", "resource": "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude", "privileged": false, "tags": [], "environment": "prod"}
+      ]
+    },
+    {
+      "arn": "arn:aws:bedrock-agentcore:us-east-1:111122223333:runtime/ops_agent-XyZ789",
+      "id": "ops_agent-XyZ789",
+      "name": "ops-agent",
+      "status": "READY",
+      "created_at": "2026-08-01T12:00:00Z",
+      "created_by": "arn:aws:iam::111122223333:user/dana",
+      "execution_role_arn": "arn:aws:iam::111122223333:role/agentcore-ops",
+      "tags": {},
+      "credentials": [],
+      "access": [
+        {"action": "iam:PassRole", "resource": "arn:aws:iam::111122223333:role/*", "privileged": true, "tags": [], "environment": "prod"}
+      ]
+    },
+    {
+      "arn": "arn:aws:bedrock-agentcore:us-east-1:111122223333:runtime/old_bot-Q1w2e3",
+      "id": "old_bot-Q1w2e3",
+      "name": "old-bot",
+      "status": "DELETING",
+      "created_at": "2025-11-01T12:00:00Z",
+      "created_by": "arn:aws:iam::111122223333:user/dana",
+      "execution_role_arn": "arn:aws:iam::111122223333:role/agentcore-old",
+      "tags": {"sponsor": "ada.fixture@example.com"},
+      "credentials": [],
+      "access": []
+    }
+  ]
+}

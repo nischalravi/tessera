@@ -75,7 +75,9 @@ server/
       connsync/         shared framework of the production connectors: checkpoints, full vs
                         incremental, bounded backoff, size-bounded retrying client, URL checks
       okta/ entra/      production read connectors (see Production connectors)
-      all/              registers okta and entra (imported by cmd/tessera)
+      githubscan/       GitHub org scan for MCP configs and agent credentials (see AI agent discovery)
+      agentcore/        AWS Bedrock AgentCore agents, fixture-only (see AI agent discovery)
+      all/              registers okta, entra, github-scan and aws-agentcore (imported by cmd/tessera)
     ingest/             phased, idempotent upsert of connector output (cross-system refs resolve)
     store/              schema, row types and parameterized queries (database/sql, no ORM)
     audit/              hash-chained audit ledger: Record, the http.request middleware (fail-closed
@@ -150,7 +152,8 @@ The routes are documented at `/api/readiness/openapi.json`.
 ### Main API endpoints
 
 `GET /api/summary` · `GET /api/identities[?type=&q=]` · `GET /api/identities/{id}` · `GET /api/accounts[?system=]` ·
-`GET /api/graph?identity_id=|resource_id=` · `GET /api/nhi` ·
+`GET /api/graph?identity_id=|resource_id=` · `GET /api/nhi` · `GET /api/agents` ·
+`GET /api/agents/mcp-findings[?kind=mcp_server|agent_credential]` ·
 `GET /api/least-privilege/recommendations?unused_days=60&kind=remove|right_size|role_trim` ·
 `POST /api/least-privilege/revoke {edge_id, dry_run}` · `GET /api/policies` · `GET /api/violations` ·
 `POST /api/simulate {remove_edge_ids, add_edges:[{src,dst,duration_hours?}], disable_account_ids}` ·
@@ -647,6 +650,42 @@ TLS server. Live tests are skipped unless set (needs-human, never run in CI): `g
 [+ `TESSERA_OKTA_DEV_KEY_ID`]); `go test ./internal/connectors/entra -run Integration -v` with
 `TESSERA_ENTRA_DEV_TENANT_ID`, `TESSERA_ENTRA_DEV_CLIENT_ID`, `TESSERA_ENTRA_DEV_CLIENT_SECRET`.
 `internal/connectors/connsync` is what Google Workspace and Workday reuse.
+
+## AI agent discovery (issue #116)
+
+Tessera discovers AI agents, MCP servers and agent credentials from identity providers, the cloud and
+source code, and shows them on **Directory > Machine identities & agents** (a Source and a Sponsor
+column on the inventory, and an **MCP config findings** tab). Every discovered agent is an `ai_agent`
+identity with a creator, a sponsor and its credentials, so the existing policies apply unchanged:
+
+* `nhi-ownership` reports an agent with no **active** sponsor. The sponsor is the identity's owner
+  (the first sponsor whose account is enabled and who resolves to a person), which is what that
+  policy checks; a sponsor who left shows as `Inactive`.
+* `ai-agents-no-pii` reports an agent that can reach a resource tagged `pii`, and
+  `nhi-no-prod-admin` one with privileged prod access. No new policy was needed.
+
+| Source | Connector, and what turns it on | What it reads | Real or fixture-only |
+|---|---|---|---|
+| Entra Agent ID | `entra` with `TESSERA_ENTRA_DISCOVER_AGENTS=true` | Graph **beta** `servicePrincipals/microsoft.graph.agentIdentity`, its `sponsors`, `createdByAppId` and password/key credentials (ids, names and dates only). Needs `AgentIdentity.Read.All` in addition to the permissions above; a 403 or 404 means no agents, not a failed sync | Real HTTP code, tested on recorded fixtures only. The Graph beta shapes follow the documentation and were never run against a live tenant |
+| Okta | `okta` with `TESSERA_OKTA_DISCOVER_AGENTS=true` | OIDC **service apps** (`application_type=service`) as agents, their `credentials/secrets` (ids and dates only), `credentials/jwks` and API scope `grants` (a `.manage` scope is privileged) | Real HTTP code, tested on recorded fixtures only. Okta has no native creator or sponsor on an app, so the connector reads two custom app profile properties, `creator` and `sponsor` (an e-mail address or employee number); an app without them has no sponsor. Okta's own AI agent registry API is not used |
+| AWS Bedrock AgentCore | `TESSERA_CONNECTORS=aws-agentcore` with `TESSERA_AGENTCORE_SNAPSHOT=/abs/path.json` | agent runtimes, their credential providers and what the execution role reaches, from a recorded snapshot (`agentcore/testdata/runtimes.json` shows the shape). Creator is the `creator` tag or the creating principal, sponsor the `sponsor` tag | **Fixture-only.** The `agentcore.API` interface is what a live client implements; none is built and the AWS SDK is not a dependency. The connector refuses `TESSERA_ENV=prod` |
+| GitHub code scan | `TESSERA_CONNECTORS=github-scan` with `TESSERA_GITHUB_SCAN_ORG`, `TESSERA_GITHUB_SCAN_TOKEN` (an `env:` or `file:` reference to a read-only token: Contents and Metadata read) and optionally `TESSERA_GITHUB_SCAN_API_URL` | `.mcp.json`, `mcp.json`, `claude_desktop_config.json`, `.cursor/mcp.json`, `.vscode/mcp.json` and similar for MCP servers; `.env*` and `.claude/settings*.json` for credentials | Real read-only REST client (`githubscan.REST`, GET only, through `safehttp`, pages pinned to the host), tested on recorded fixtures only. Live test `-run Integration` needs `TESSERA_GITHUB_DEV_ORG` and `TESSERA_GITHUB_DEV_TOKEN`, skipped by default |
+
+What a code scan keeps. A finding is a repository, a path, where in the file (a JSON path or a line),
+for an MCP server its transport and target (a command and package, or a URL host, never a path or query),
+and for a secret its **type** (`github_token`, `anthropic_api_key`, `bearer_token`, `generic_secret` ...)
+and a fingerprint: the first 16 hex digits of a SHA-256 of the type and the matched text. The secret
+value is never stored, logged, audited or returned, and `${VAR}` style placeholders are not findings.
+The owner is the CODEOWNERS owner of the file (a person's e-mail first, else the first listed, a team
+stays a team) or else the author of the last commit that touched it; it links to an identity when the
+e-mail address (or `github:<login>` external id) matches one. Findings and agent profiles are replaced
+on every sync of their source, so a removed finding or agent disappears.
+
+Storage: `agent_profiles` (source, kind, creator and sponsor as the source spells them, links to
+identities) and `mcp_findings`, both tenant-scoped with cross-tenant guard triggers
+(`schema/0300_agent_discovery.sql`). `GET /api/agents` is the `ai_agent` inventory with source,
+creator, sponsor status and violating policy ids; `GET /api/nhi` is unchanged. The demo company
+supplies Okta-sourced agents and five sample findings, so the screens work without any connector.
 
 ## Adding a real connector
 

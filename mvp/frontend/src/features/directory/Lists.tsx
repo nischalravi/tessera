@@ -1,14 +1,15 @@
 import { FormEvent, useMemo, useState } from "react";
 import { Outlet, useNavigate, useSearchParams } from "react-router-dom";
 import { Ban, ClipboardCheck, KeyRound, Plus, RotateCcw, ShoppingCart, Users } from "lucide-react";
-import { AccountRow, ConnectorRow, Group, HrisEvent, IdentityRow, NhiRow, ResourceRow, api, fmtDay, relTime, useApi } from "../../api";
+import { AccountRow, ConnectorRow, Group, HrisEvent, IdentityRow, NhiRow, ResourceRow, api, fmtDay, relTime, useAgents, useApi } from "../../api";
 import { useIdentityActions } from "../../app/actions";
 import { usePersona } from "../../app/persona";
 import {
-  Avatar, Badge, Button, Callout, Chip, Column, Command, DataTable, Drawer, EmptyState, Flag, GroupTabs, IdLink, Page, PreviewBadge, RiskPill, Status, TypeBadge, useSelected, useToast,
+  Avatar, Badge, Button, Callout, Chip, Column, Command, DataTable, Drawer, EmptyState, Flag, GroupTabs, IdLink, Page, PreviewBadge, RiskPill, Status, Tabs, TypeBadge, useSelected, useToast,
 } from "../../components";
 import { ORGS, mockObjects, mockRoles, useMockState, useRoles } from "../../mocks";
 import { AgentCard } from "./AgentCards";
+import { McpFindings, SponsorCell, sourceLabel } from "./AgentFindings";
 import { AccountPanel, AppPanel, GroupPanel, IdentityPanel, OrgPanel, RolePanel } from "./Panels";
 import { ImportDrawer, PreviewFormDrawer, opts, uniq } from "./shared";
 
@@ -171,7 +172,18 @@ export function People() {
 
 // -------------------------------------------------------- machine identities
 export function Machine() {
+  const [params, setParams] = useSearchParams();
+  const tab = params.get("tab") === "mcp" ? "mcp" : "inventory";
+  const setTab = (t: "inventory" | "mcp") => {
+    const next = new URLSearchParams(params);
+    if (t === "mcp") next.set("tab", "mcp");
+    else next.delete("tab");
+    next.delete("selected");
+    setParams(next, { replace: true });
+  };
   const { data, error, reload } = useApi<NhiRow[]>("/nhi");
+  const { data: agentRows } = useAgents();
+  const agentOf = useMemo(() => new Map((agentRows ?? []).map((a) => [a.id, a])), [agentRows]);
   const [selected, setSelected] = useSelected();
   const acts = useIdentityActions();
   const toast = useToast();
@@ -183,6 +195,20 @@ export function Machine() {
     { id: "name", header: "Name", sort: (r) => r.name.toLowerCase(), csv: (r) => r.name, cell: (r) => <div className="row" style={{ flexWrap: "nowrap" }}><Avatar name={r.name} type={r.type} /><div style={{ minWidth: 0 }}><span className="name-link">{r.name}</span><div className="xs faint truncate">{r.kind}</div></div></div> },
     { id: "type", header: "Type", sort: (r) => r.type, cell: (r) => <TypeBadge type={r.type} />, hideNarrow: true },
     { id: "owner", header: "Owner", sort: (r) => r.owner?.name ?? "", cell: (r) => (r.owner ? <span className="small nowrap"><IdLink i={r.owner} /></span> : <Badge tone="critical">No owner</Badge>) },
+    // where an AI agent was discovered, and who created it (issue #116); other machine identities have none
+    {
+      id: "source", header: "Source", sort: (r) => agentOf.get(r.id)?.source ?? "", csv: (r) => agentOf.get(r.id)?.source ?? "",
+      cell: (r) => {
+        const a = agentOf.get(r.id);
+        return a ? <div><Chip mono>{sourceLabel(a.source)}</Chip>{a.creator && <div className="xs faint truncate">created by {a.creator}</div>}</div> : <span className="faint">-</span>;
+      },
+      hideNarrow: true,
+    },
+    // the sponsor is the owner the nhi-ownership policy checks, so "No sponsor" here is a violation there
+    {
+      id: "sponsor", header: "Sponsor", sort: (r) => agentOf.get(r.id)?.sponsor_status ?? "", csv: (r) => agentOf.get(r.id)?.sponsor_status ?? "",
+      cell: (r) => { const a = agentOf.get(r.id); return a ? <SponsorCell a={a} /> : <span className="faint">-</span>; },
+    },
     { id: "systems", header: "Systems", csv: (r) => r.systems.join(" "), cell: (r) => <div className="row tight" style={{ flexWrap: "nowrap" }}>{r.systems.map((s) => <Chip key={s} mono>{s}</Chip>)}</div>, hideNarrow: true },
     { id: "secret", header: "Oldest secret", num: true, sort: (r) => r.oldest_secret_days ?? -1, cell: (r) => (r.oldest_secret_days == null ? <span className="faint">-</span> : r.oldest_secret_days > 90 ? <Badge tone="warning">{r.oldest_secret_days} d</Badge> : `${r.oldest_secret_days} d`) },
     { id: "last", header: "Last active", sort: (r) => r.days_since_activity ?? 9999, cell: (r) => <span className="small nowrap">{r.days_since_activity == null ? "never" : r.days_since_activity === 0 ? "today" : `${r.days_since_activity} d ago`}</span>, hideNarrow: true },
@@ -191,6 +217,13 @@ export function Machine() {
   ];
   return (
     <Page title="Machine identities & agents" count={plural(data?.length, "identity", "identities")} crumbs={[IDENTITY, ["Machine identities & agents"]]}>
+      <Tabs
+        label="Machine identities and agents"
+        value={tab}
+        onChange={setTab}
+        tabs={[{ id: "inventory", label: "Inventory" }, { id: "mcp", label: "MCP config findings" }]}
+      />
+      {tab === "mcp" ? <McpFindings /> : <>
       <DataTable
         id="machine"
         rows={data}
@@ -198,12 +231,14 @@ export function Machine() {
         rowKey={(r) => r.id}
         columns={cols}
         initialSort={["risk", -1]}
-        searchText={(r) => `${r.name} ${r.kind} ${r.description ?? ""} ${r.owner?.name ?? ""} ${r.systems.join(" ")}`}
+        searchText={(r) => `${r.name} ${r.kind} ${r.description ?? ""} ${r.owner?.name ?? ""} ${r.systems.join(" ")} ${agentOf.get(r.id)?.source ?? ""} ${agentOf.get(r.id)?.creator ?? ""}`}
         searchPlaceholder="Search service accounts, keys, agents…"
         filters={[
           { id: "type", label: "Type", options: [{ value: "service", label: "Service account" }, { value: "ai_agent", label: "AI agent" }], get: (r) => r.type },
           { id: "flag", label: "Flag", options: [["orphaned", "No owner"], ["owner_left", "Owner left"], ["stale_secret", "Stale secret"], ["dormant", "Dormant"], ["privileged", "Privileged"], ["pii_access", "PII access"]].map(([value, label]) => ({ value, label })), get: (r) => r.flags },
           { id: "system", label: "System", options: opts(uniq((data ?? []).flatMap((r) => r.systems))), get: (r) => r.systems },
+          { id: "source", label: "Source", options: opts(uniq((agentRows ?? []).map((a) => a.source))).map((o) => ({ ...o, label: sourceLabel(o.value) })), get: (r) => agentOf.get(r.id)?.source },
+          { id: "sponsor", label: "Sponsor", options: [["active", "Active"], ["inactive", "Inactive"], ["none", "No sponsor"]].map(([value, label]) => ({ value, label })), get: (r) => agentOf.get(r.id)?.sponsor_status },
         ]}
         commands={[newCmd("Register", () => setNew(true), true)]}
         onRefresh={reload}
@@ -224,7 +259,8 @@ export function Machine() {
           {showAgents && <div className="grid g2">{agents.map((a) => <AgentCard key={a.id} a={a} />)}</div>}
         </div>
       )}
-      {selected && <IdentityPanel id={selected} onClose={() => setSelected(null)} />}
+      </>}
+      {selected && tab === "inventory" && <IdentityPanel id={selected} onClose={() => setSelected(null)} />}
       {newOpen && (
         <PreviewFormDrawer
           title="Register a machine identity"

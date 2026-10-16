@@ -177,6 +177,24 @@ func seedTenant(tb testing.TB, db *store.DB, id tenancy.ID, slug, sentinel strin
 		for i, e := range edges {
 			t.IDs[fmt.Sprintf("edge:%d", i)] = e.ID
 		}
+		// AI agent discovery (issue #116): the tiny world's agent has a profile, and a scan found
+		// an MCP server and a credential in code.
+		bot, owner := t.IDs["helper-bot"], t.IDs["alice"]
+		if err := c.UpsertAgentProfile(&store.AgentProfile{Source: "okta", ExternalID: "helper-bot", IdentityID: bot,
+			Kind: "okta_service_app", CreatorRef: mark("creator"), SponsorRef: mark("sponsor"), SponsorID: &owner}, Now); err != nil {
+			return err
+		}
+		for _, f := range []store.MCPFinding{
+			{Kind: "mcp_server", Location: "mcpServers.docs", Server: mark("docs"), Transport: "http", Target: "docs.example.com"},
+			{Kind: "agent_credential", Location: "mcpServers.docs.env.TOKEN", Server: mark("docs"), SecretType: "github_token",
+				Fingerprint: "0123456789abcdef"},
+		} {
+			f.Source, f.Org, f.Repo, f.Path = "github-scan", mark("org"), "repo", ".mcp.json"
+			f.OwnerRef, f.OwnerSource, f.OwnerID = mark("owner"), "committer", &owner
+			if err := c.UpsertMCPFinding(&f, Now); err != nil {
+				return err
+			}
+		}
 		return c.Audit(Now, mark("auditor"), "storetest.seeded", ojson.Object{{Key: "tenant", Value: mark(slug)}})
 	})
 	if err != nil {

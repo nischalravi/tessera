@@ -48,6 +48,8 @@ func (s *Server) registerRoutes() {
 	s.handle(G, "/api/resources", swept, need(auth.PermGraphRead), s.listResources)
 	s.handle(G, "/api/graph", swept, need(auth.PermGraphRead), s.graphView)
 	s.handle(G, "/api/nhi", swept, need(auth.PermGraphRead), s.nhiInventory)
+	s.handle(G, "/api/agents", swept, need(auth.PermGraphRead), s.listAgents)
+	s.handle(G, "/api/agents/mcp-findings", read, need(auth.PermGraphRead), s.listMCPFindings)
 	s.handle(G, "/api/least-privilege/recommendations", swept, need(auth.PermGraphRead), s.recommendations)
 	s.handle(P, "/api/least-privilege/revoke", write, need(auth.PermGraphRead), s.revoke)
 	s.handle(G, "/api/policies", swept, need(auth.PermGraphRead), s.listPolicies)

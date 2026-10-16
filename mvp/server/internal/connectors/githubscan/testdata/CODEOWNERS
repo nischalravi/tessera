@@ -1,0 +1,4 @@
+# Fixture CODEOWNERS
+*                 @acme/engineering
+/.mcp.json        @acme/ai-platform ada.fixture@example.com   # a person is preferred
+/.cursor/         @acme/ai-platform
