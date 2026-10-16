@@ -425,6 +425,15 @@ func kindOf(se *stmtEval) string {
 
 // finish assembles the Decision from the base verdict.
 func (e *evaluator) finish(v *verdict) *authz.Decision {
+	if e.opts.Fast {
+		// Bulk enumeration (internal/aws/query) keeps the outcome, the residual and
+		// the fidelity, not the trace, and building the trace is a quarter of the
+		// cost of a cell. The explanation never adds a fidelity reason.
+		fid, reasons := e.fidelity()
+		return &authz.Decision{Outcome: v.outcome, DenyKind: v.denyKind, Residual: v.residual, Fidelity: fid,
+			FidelityReasons: reasons, Request: e.req, EngineVersion: EngineVersion, CatalogVersion: e.cat.Version(),
+			SnapshotID: e.snap.ID}
+	}
 	x := &explainer{e: e, v: v, at: map[*stmtEval]int{}, seen: map[int]bool{}, aclStep: -1}
 	facts := x.build()
 	fid, reasons := e.fidelity()

@@ -634,6 +634,18 @@ cd ../frontend && npm run build && npm test   # npm test: node:test, no extra de
   normalised, both non-deterministic in Python itself (see `testdata/parity/README.md`).
 * **Security scanners:** gosec reports 0 issues; each of the few `#nosec` annotations carries a
   justification. govulncheck reports no vulnerabilities.
+* **AWS evaluator indexes and queries** (`internal/aws/index`, `internal/aws/query`, pure, no
+  behaviour change to the API yet). `TestAtomsEqualBruteForce` and `TestDiffEqualsBruteForce`
+  check atom-based answers against the engine cell by cell on small random tenants
+  (`awstest.NewWorld(seed)`); `TESSERA_EQUIV_SEEDS=200` runs more seeds and
+  `go test -fuzz FuzzAtomsEqualBruteForce ./internal/aws/query` explores others.
+  `go test -bench . -run XXX ./internal/aws/query` runs the benchmarks (track with `benchstat`).
+  The nightly SLO check against a synthetic tenant at twice the design's target scale is
+  `go test -tags slow -run TestPerf -timeout 90m ./internal/aws/query`. It needs about 8 GB of
+  memory and a quiet machine (the SLOs are for 16 vCPU). Options: `TESSERA_PERF_SCALE=1` for the
+  target itself, `TESSERA_PERF_SAMPLE=n` for the number of sampled principals,
+  `TESSERA_PERF_PROFILE=<dir>` for CPU and heap profiles (keep `<dir>` out of the repository), and
+  `TESSERA_PERF_ROOT=1` for the root-SCP diff.
 
 ## Server hardening
 
