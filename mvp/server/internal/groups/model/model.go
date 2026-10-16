@@ -41,12 +41,19 @@ type Env struct {
 	Engine      *engine.Engine
 	ByIdentity  *int64
 	TenantAdmin bool
+	// Cause and CauseRef stamp the events of the operation: empty is an API
+	// change; the policy repository sync says policy_repo and the commit.
+	Cause, CauseRef string
+	// System is the policy sync's own operation (GR-9): it may change the groups
+	// the policy repository manages, which the API may not.
+	System bool
 }
 
 var defaultEngine = engine.New(0)
 
 func (e Env) privs() privs.Env {
-	return privs.Env{Tx: e.Tx, Now: e.Now, By: e.By, ByIdentity: e.ByIdentity, TenantAdmin: e.TenantAdmin}
+	return privs.Env{Tx: e.Tx, Now: e.Now, By: e.By, ByIdentity: e.ByIdentity, TenantAdmin: e.TenantAdmin,
+		Cause: e.Cause, CauseRef: e.CauseRef}
 }
 
 // Privs is the same operation context for the privilege model.
@@ -316,8 +323,12 @@ func firstErr(err error) error {
 }
 
 // CreateGroupInput creates a group in Folder: basic by default, or a composite
-// (Definition composite with Op and Factors). Policy groups arrive with GR-9.
+// (Definition composite with Op and Factors). A policy group (Definition policy,
+// factors allow and deny) is only made by internal/groups/policygroups, which
+// sets PolicyRef; the API never does. ManagedBy is the writer (ui by default).
 type CreateGroupInput struct {
+	ManagedBy         store.ManagedBy
+	PolicyRef         *string
 	Folder            store.FolderID
 	Extension         string
 	DisplayExtension  string
@@ -380,12 +391,26 @@ func (e Env) CreateGroup(in CreateGroupInput) (*store.NativeGroup, error) {
 		}
 		o := in.Op
 		op = &o
+	case store.DefinitionPolicy:
+		if in.PolicyRef == nil {
+			return nil, invalid("invalid_definition", "definition is basic or composite (policy groups are made from policy files)")
+		}
+		if err := e.checkFactors("", store.CompComplement, in.Factors); err != nil {
+			return nil, err
+		}
 	default:
-		return nil, invalid("invalid_definition", "definition is basic or composite (policy groups arrive with GR-9)")
+		return nil, invalid("invalid_definition", "definition is basic or composite")
+	}
+	if in.PolicyRef != nil && def != store.DefinitionPolicy {
+		return nil, invalid("invalid_definition", "a policy reference is only for a policy group")
+	}
+	managedBy := in.ManagedBy
+	if managedBy == "" {
+		managedBy = store.ManagedByUI
 	}
 	g := &store.NativeGroup{FolderID: folder.ID, Extension: in.Extension, DisplayExtension: disp, Name: name,
 		DisplayName: displayName(folder.DisplayName, disp), Description: in.Description, Kind: in.Kind,
-		Definition: def, CompositeOp: op, ManagedBy: store.ManagedByUI, DataOwner: ownerPtr(in.DataOwner),
+		Definition: def, CompositeOp: op, PolicyRef: in.PolicyRef, ManagedBy: managedBy, DataOwner: ownerPtr(in.DataOwner),
 		MemberDescription: ownerPtr(in.MemberDescription), Requestable: in.Requestable, Status: store.GroupActive,
 		CreatedAt: e.Now, CreatedBy: e.By}
 	if err := e.Tx.InsertGrpGroup(g); err != nil {
@@ -400,7 +425,7 @@ func (e Env) CreateGroup(in CreateGroupInput) (*store.NativeGroup, error) {
 	detail := ojson.Object{{Key: "group_id", Value: string(g.ID)}, {Key: "name", Value: g.Name},
 		{Key: "folder_id", Value: string(folder.ID)}, {Key: "kind", Value: string(g.Kind)},
 		{Key: "definition", Value: string(def)}}
-	if def == store.DefinitionComposite {
+	if def != store.DefinitionBasic {
 		if err := e.eng().SetFactors(e.Tx, e.Now, g.ID, in.Factors); err != nil {
 			return nil, e.engineErr(err)
 		}
@@ -411,6 +436,9 @@ func (e Env) CreateGroup(in CreateGroupInput) (*store.NativeGroup, error) {
 			return nil, e.engineErr(err)
 		}
 		detail = append(detail, ojson.KV{Key: "op", Value: string(in.Op)}, ojson.KV{Key: "factors", Value: groupIDStrings(in.Factors)})
+		if in.ManagedBy != "" {
+			detail = append(detail, ojson.KV{Key: "managed_by", Value: string(in.ManagedBy)})
+		}
 		if g, err = e.Group(g.ID); err != nil { // the recompute may have left it pending
 			return nil, err
 		}
@@ -670,11 +698,24 @@ func (e Env) liveGroup(id store.GroupID) (*store.NativeGroup, *store.Folder, err
 	if g.Status == store.GroupDeleted {
 		return nil, nil, conflict("group_deleted", "the group is deleted; restore it first")
 	}
+	if err := e.notPolicyManaged(g); err != nil {
+		return nil, nil, err
+	}
 	f, err := e.Folder(g.FolderID)
 	if err != nil {
 		return nil, nil, err
 	}
 	return g, f, writable(f)
+}
+
+// notPolicyManaged refuses a change to a group the policy repository owns (its
+// definition, its compiled helper groups and the attribute groups): only the
+// policy sync (Env.System) may change it (design §8.5).
+func (e Env) notPolicyManaged(g *store.NativeGroup) error {
+	if g.ManagedBy == store.ManagedByPolicyRepo && !e.System {
+		return conflict("policy_managed", "group %q is managed by the policy repository: change its policy file", g.Name)
+	}
+	return nil
 }
 
 // UpdateGroup renames a group (keeping the old name as an alias) or edits its
@@ -1093,6 +1134,9 @@ func (e Env) DeleteGroup(id store.GroupID) error {
 	if g.Status == store.GroupDeleted {
 		return nil
 	}
+	if err := e.notPolicyManaged(g); err != nil {
+		return err
+	}
 	f, err := e.Folder(g.FolderID)
 	if err != nil {
 		return err
@@ -1123,6 +1167,9 @@ func (e Env) RestoreGroup(id store.GroupID) (*store.NativeGroup, error) {
 	}
 	if g.Status != store.GroupDeleted {
 		return nil, conflict("not_deleted", "the group is not deleted")
+	}
+	if err := e.notPolicyManaged(g); err != nil {
+		return nil, err
 	}
 	f, err := e.Folder(g.FolderID)
 	if err != nil {

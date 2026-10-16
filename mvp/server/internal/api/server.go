@@ -185,6 +185,7 @@ func New(cfg Config) *Server {
 	// the attribute routes name literal segments under /api/groups, so they come
 	// before the {id} routes (the first registered route that matches wins)
 	s.registerGroupsAttrRoutes()
+	s.registerGroupsPolicyRoutes()
 	s.registerGroupsFolderRoutes()
 	s.registerGroupsPrivilegeRoutes()
 	s.registerGroupsMemberRoutes()

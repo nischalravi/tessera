@@ -12,10 +12,26 @@ import (
 // (internal/groups/pit) applies the event as it is appended, so history is
 // never behind the data.
 
+// cause is the cause of the events of this operation: api, or what the policy
+// repository sync says (Env.Cause).
+func (e Env) cause() string {
+	if e.Cause != "" {
+		return e.Cause
+	}
+	return store.CauseAPI
+}
+
+// stamp gives an event the operation's cause reference (the commit of a policy
+// repository sync); without one the request id of the audit context is used.
+func (e Env) stamp(ev *events.Event) *events.Event {
+	ev.CauseRef = e.CauseRef
+	return ev
+}
+
 // emitFolder writes a folder event whose snapshot is f as it now is. extra
 // adds descriptive fields (the old name).
 func (e Env) emitFolder(typ string, f *store.Folder, extra map[string]any) error {
-	ev := events.New(typ, string(f.ID), e.Now, store.CauseAPI)
+	ev := e.stamp(events.New(typ, string(f.ID), e.Now, e.cause()))
 	if typ == events.FolderDeleted {
 		if extra == nil {
 			extra = map[string]any{}
@@ -37,12 +53,12 @@ func (e Env) emitGroup(typ string, g *store.NativeGroup, extra map[string]any) e
 			return err
 		}
 	}
-	ev := events.New(typ, string(g.ID), e.Now, store.CauseAPI)
+	ev := e.stamp(events.New(typ, string(g.ID), e.Now, e.cause()))
 	ev.Data = pit.ObjectData(pit.GroupSnapshot(g, factors), extra)
 	return pit.Emit(e.Tx, ev)
 }
 
 // emitDirect writes the event of a direct membership row.
 func (e Env) emitDirect(typ string, m *store.DirectMembership) error {
-	return pit.Emit(e.Tx, pit.DirectEvent(typ, m, e.Now, store.CauseAPI))
+	return pit.Emit(e.Tx, e.stamp(pit.DirectEvent(typ, m, e.Now, e.cause())))
 }

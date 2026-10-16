@@ -167,6 +167,11 @@ GET    /api/groups/{id}/object-types                 groups.read     -  # issue 
 PUT    /api/groups/{id}/object-types                 groups.write    -  # issue #50: group_attr_update
 GET    /api/groups/folders/{id}/object-types         groups.read     -  # issue #50: stem_view
 PUT    /api/groups/folders/{id}/object-types         groups.write    -  # issue #50: stem_attr_update
+POST   /api/groups/policy/validate                   groups.read     -  # issue #52: read on the groups the policy refers to
+POST   /api/groups/policy/diff                       groups.read     -  # issue #52: read on the policy groups compared and on the groups referred to
+POST   /api/groups/policy/apply                      groups.write    -  # issue #52: create on the folder or admin on the policy group, read on the groups referred to
+POST   /api/groups/policy/reindex                    groups.admin    -  # issue #52
+GET    /api/groups/{id}/policy                       groups.read     -  # issue #52: read
 GET    /api/auth/session                             auth.self       -
 POST   /api/auth/logout                              auth.self       -
 GET    /api/auth/sessions                            auth.self       -

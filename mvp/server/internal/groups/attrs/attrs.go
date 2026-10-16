@@ -59,10 +59,13 @@ type Env struct {
 	By          *string
 	ByIdentity  *int64
 	TenantAdmin bool
+	// Cause and CauseRef stamp the operation's events (api when empty).
+	Cause, CauseRef string
 }
 
 func (e Env) privs() privs.Env {
-	return privs.Env{Tx: e.Tx, Now: e.Now, By: e.By, ByIdentity: e.ByIdentity, TenantAdmin: e.TenantAdmin}
+	return privs.Env{Tx: e.Tx, Now: e.Now, By: e.By, ByIdentity: e.ByIdentity, TenantAdmin: e.TenantAdmin,
+		Cause: e.Cause, CauseRef: e.CauseRef}
 }
 
 func (e Env) audit(action, targetType, targetID string, detail ojson.Object) error {

@@ -101,6 +101,8 @@ var tables = []string{
 	// group attribute framework (schema/0287_group_attrs.sql)
 	"grp_attr_defs", "grp_attr_names", "grp_attr_name_implies", "grp_attr_actions", "grp_attr_action_implies",
 	"grp_attr_assigns", "grp_attr_values",
+	// policy groups as code (schema/0289_group_policy.sql)
+	"grp_policy_sources", "grp_policy_nodes", "grp_policy_uses",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was

@@ -138,6 +138,8 @@ type Env struct {
 	By          *string
 	ByIdentity  *int64
 	TenantAdmin bool
+	// Cause and CauseRef stamp the operation's events (api when empty).
+	Cause, CauseRef string
 }
 
 func (e Env) audit(action, targetType, targetID string, detail ojson.Object) error {

@@ -49,7 +49,12 @@ func snapshot(r *store.GrpPrivilege) json.RawMessage {
 }
 
 func (e Env) emit(typ string, r *store.GrpPrivilege) error {
-	ev := events.New(typ, r.ID, e.Now, store.CauseAPI)
+	cause := e.Cause
+	if cause == "" {
+		cause = store.CauseAPI
+	}
+	ev := events.New(typ, r.ID, e.Now, cause)
+	ev.CauseRef = e.CauseRef
 	ev.Data = pit.ObjectData(snapshot(r), map[string]any{"privilege_id": r.ID})
 	return pit.Emit(e.Tx, ev)
 }

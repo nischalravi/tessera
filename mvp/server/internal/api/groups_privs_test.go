@@ -94,6 +94,14 @@ func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 	asg := e.admin.call("POST", "/api/groups/attr-assignments", `{"name":"`+nm+`","owner_type":"group","owner":"`+g+`","values":["a"]}`, 201)["id"].(string)
 	apriv := e.grant("/api/groups/attr-defs/"+ad, "attr_view", "bob", "")
 
+	// policy groups (GR-9): a file for a new group in app that refers to g
+	polFile := func(group, ref string) string {
+		cedar := `permit (principal, action == Tessera::Action::"member", resource == Tessera::Group::"` + group + `") when { principal in Tessera::Group::"` + ref + `" };`
+		b, _ := json.Marshal(map[string]any{"files": []map[string]string{{"path": "groups/p.cedar", "cedar": cedar}}, "origin": "repo", "commit": "c1"})
+		return string(b)
+	}
+	polBody := polFile("root0:app:pol1", "root0:app:g")
+
 	type routeCase struct {
 		method, pattern, path, body string
 		privilege                   string // the privilege the first check asks; "" when the route is role-gated only
@@ -156,6 +164,12 @@ func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 		{"PUT", "/api/groups/{id}/object-types", "/api/groups/" + g + "/object-types", `{"types":["ref"]}`, "group_attr_update"},
 		{"GET", "/api/groups/folders/{id}/object-types", "/api/groups/folders/" + app + "/object-types", "", "stem_view"},
 		{"PUT", "/api/groups/folders/{id}/object-types", "/api/groups/folders/" + app + "/object-types", `{"types":["app"]}`, "stem_attr_update"},
+		// policy groups as code (GR-9)
+		{"POST", "/api/groups/policy/validate", "/api/groups/policy/validate", polBody, "read"},
+		{"POST", "/api/groups/policy/diff", "/api/groups/policy/diff", polBody, "read"},
+		{"POST", "/api/groups/policy/apply", "/api/groups/policy/apply", polBody, "create"},
+		{"POST", "/api/groups/policy/reindex", "/api/groups/policy/reindex", "", ""},
+		{"GET", "/api/groups/{id}/policy", "/api/groups/" + g + "/policy", "", "read"},
 		// tenant-wide maintenance and settings: groups.admin
 		{"GET", "/api/groups/pit/digests", "/api/groups/pit/digests", "", ""},
 		{"GET", "/api/groups/pit/verify", "/api/groups/pit/verify", "", ""},
@@ -211,6 +225,9 @@ func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 		if c.method == "GET" && !strings.Contains(c.pattern, "pit") && !strings.Contains(c.pattern, "engine") &&
 			!strings.Contains(c.pattern, "settings") {
 			continue
+		}
+		if c.pattern == "/api/groups/policy/validate" || c.pattern == "/api/groups/policy/diff" {
+			continue // POST, but reads: groups.read reaches them
 		}
 		if rec := viewer.do(c.method, c.path, c.body); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"forbidden"`) {
 			t.Errorf("viewer %s %s = %d %.100s, want 403 forbidden", c.method, c.path, rec.Code, rec.Body.String())
