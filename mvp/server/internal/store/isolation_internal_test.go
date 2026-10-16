@@ -316,6 +316,8 @@ var referenceColumns = map[string][]string{
 	"grp_pit_objects":   {"object_id"},
 	"grp_pit_direct":    {"group_id", "list_id", "member_identity_id", "member_group_id"},
 	"grp_pit_effective": {"group_id", "list_id", "identity_id"},
+	// an assignment names its owner by owner_type, with no foreign key
+	"grp_attr_assigns": {"owner_id"},
 }
 
 // immutableTables refuse every UPDATE (a trigger raises unconditionally), so

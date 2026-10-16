@@ -85,6 +85,14 @@ func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 	priv := e.grant("/api/groups/"+g, "update", "bob", "")
 	fpriv := e.grant("/api/groups/folders/"+app, "create", "bob", "")
 	other := "00000000-0000-4000-8000-00000000d00d"
+	// the attribute framework (GR-7): a definition with two names and two actions, an assignment, and a row on the definition
+	ad := e.admin.call("POST", "/api/groups/attr-defs", `{"folder":"`+app+`","extension":"tags","value_type":"string","multi_valued":true,`+
+		`"multi_assign":true,"assign_to":["group","folder","identity"]}`, 201)["id"].(string)
+	nm := e.admin.call("POST", "/api/groups/attr-names", `{"def":"`+ad+`","extension":"n"}`, 201)["id"].(string)
+	nm2 := e.admin.call("POST", "/api/groups/attr-names", `{"def":"`+ad+`","extension":"m"}`, 201)["id"].(string)
+	act2 := e.admin.call("POST", "/api/groups/attr-defs/"+ad+"/actions", `{"name":"extra"}`, 201)["id"].(string)
+	asg := e.admin.call("POST", "/api/groups/attr-assignments", `{"name":"`+nm+`","owner_type":"group","owner":"`+g+`","values":["a"]}`, 201)["id"].(string)
+	apriv := e.grant("/api/groups/attr-defs/"+ad, "attr_view", "bob", "")
 
 	type routeCase struct {
 		method, pattern, path, body string
@@ -120,6 +128,34 @@ func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 		{"DELETE", "/api/groups/{id}/privileges/{privilege_id}", "/api/groups/" + g + "/privileges/" + priv, "", "admin"},
 		// another identity's privileges need admin on the object, not view
 		{"GET", "/api/groups/{id}/privileges/effective", "/api/groups/" + g + "/privileges/effective?identity=" + fmt.Sprint(e.ident("bob")), "", "admin"},
+		// attribute definitions, names, actions and assignments (GR-7)
+		{"POST", "/api/groups/attr-defs", "/api/groups/attr-defs", `{"folder":"` + app + `","extension":"x","assign_to":["group"]}`, "create"},
+		{"GET", "/api/groups/attr-defs/{id}", "/api/groups/attr-defs/" + ad, "", "attr_view"},
+		{"PATCH", "/api/groups/attr-defs/{id}", "/api/groups/attr-defs/" + ad, `{"description":"x"}`, "attr_admin"},
+		{"DELETE", "/api/groups/attr-defs/{id}", "/api/groups/attr-defs/" + ad, "", "attr_admin"},
+		{"GET", "/api/groups/attr-defs/{id}/actions", "/api/groups/attr-defs/" + ad + "/actions", "", "attr_view"},
+		{"POST", "/api/groups/attr-defs/{id}/actions", "/api/groups/attr-defs/" + ad + "/actions", `{"name":"more"}`, "attr_admin"},
+		{"DELETE", "/api/groups/attr-defs/{id}/actions/{action_id}", "/api/groups/attr-defs/" + ad + "/actions/" + act2, "", "attr_admin"},
+		{"PUT", "/api/groups/attr-defs/{id}/actions/{action_id}/implies", "/api/groups/attr-defs/" + ad + "/actions/" + act2 + "/implies", `{"implies":[]}`, "attr_admin"},
+		{"GET", "/api/groups/attr-defs/{id}/privileges", "/api/groups/attr-defs/" + ad + "/privileges", "", "attr_admin"},
+		{"POST", "/api/groups/attr-defs/{id}/privileges", "/api/groups/attr-defs/" + ad + "/privileges", `{"privilege":"attr_view","holder_type":"everyone"}`, "attr_admin"},
+		{"GET", "/api/groups/attr-defs/{id}/privileges/effective", "/api/groups/attr-defs/" + ad + "/privileges/effective", "", "attr_view"},
+		{"GET", "/api/groups/attr-defs/{id}/privileges/effective", "/api/groups/attr-defs/" + ad + "/privileges/effective?identity=" + fmt.Sprint(e.ident("bob")), "", "attr_admin"},
+		{"DELETE", "/api/groups/attr-defs/{id}/privileges/{privilege_id}", "/api/groups/attr-defs/" + ad + "/privileges/" + apriv, "", "attr_admin"},
+		{"POST", "/api/groups/attr-names", "/api/groups/attr-names", `{"def":"` + ad + `","extension":"y"}`, "attr_admin"},
+		{"GET", "/api/groups/attr-names/{id}", "/api/groups/attr-names/" + nm, "", "attr_view"},
+		{"PATCH", "/api/groups/attr-names/{id}", "/api/groups/attr-names/" + nm, `{"description":"x"}`, "attr_admin"},
+		{"DELETE", "/api/groups/attr-names/{id}", "/api/groups/attr-names/" + nm2, "", "attr_admin"},
+		{"PUT", "/api/groups/attr-names/{id}/implies", "/api/groups/attr-names/" + nm + "/implies", `{"implies":["` + nm2 + `"]}`, "attr_admin"},
+		{"POST", "/api/groups/attr-assignments", "/api/groups/attr-assignments", `{"name":"` + nm + `","owner_type":"group","owner":"` + g + `","values":["b"]}`, "attr_update"},
+		{"GET", "/api/groups/attr-assignments/{id}", "/api/groups/attr-assignments/" + asg, "", "attr_read"},
+		{"PATCH", "/api/groups/attr-assignments/{id}", "/api/groups/attr-assignments/" + asg, `{"disabled_at":null}`, "attr_update"},
+		{"DELETE", "/api/groups/attr-assignments/{id}", "/api/groups/attr-assignments/" + asg, "", "attr_update"},
+		{"PUT", "/api/groups/attr-assignments/{id}/values", "/api/groups/attr-assignments/" + asg + "/values", `{"values":["c"]}`, "attr_update"},
+		{"GET", "/api/groups/{id}/object-types", "/api/groups/" + g + "/object-types", "", "view"},
+		{"PUT", "/api/groups/{id}/object-types", "/api/groups/" + g + "/object-types", `{"types":["ref"]}`, "group_attr_update"},
+		{"GET", "/api/groups/folders/{id}/object-types", "/api/groups/folders/" + app + "/object-types", "", "stem_view"},
+		{"PUT", "/api/groups/folders/{id}/object-types", "/api/groups/folders/" + app + "/object-types", `{"types":["app"]}`, "stem_attr_update"},
 		// tenant-wide maintenance and settings: groups.admin
 		{"GET", "/api/groups/pit/digests", "/api/groups/pit/digests", "", ""},
 		{"GET", "/api/groups/pit/verify", "/api/groups/pit/verify", "", ""},
@@ -131,7 +167,10 @@ func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 		{"PUT", "/api/groups/users/{id}/identity", "/api/groups/users/" + other + "/identity", `{"identity_id":null}`, ""},
 	}
 	// the listings are gated too, by filtering: the table below names them so none is forgotten
-	listings := []routeCase{{"GET", "/api/groups/folders", "", "", ""}, {"GET", "/api/groups/native", "", "", ""}}
+	listings := []routeCase{{"GET", "/api/groups/folders", "", "", ""}, {"GET", "/api/groups/native", "", "", ""},
+		{"GET", "/api/groups/attr-defs", "", "", ""}, {"GET", "/api/groups/attr-names", "", "", ""},
+		{"GET", "/api/groups/attr-assignments", "", "", ""}, {"GET", "/api/groups/services", "", "", ""},
+		{"GET", "/api/groups/object-types", "", "", ""}}
 	// every registered group route is in the table
 	have := map[string]bool{}
 	for _, c := range append(slices.Clone(cases), listings...) {
@@ -158,11 +197,14 @@ func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 		})
 	}
 	// the listings answer 200 and show nothing
-	for _, p := range []string{"/api/groups/folders", "/api/groups/native"} {
+	for _, p := range []string{"/api/groups/folders", "/api/groups/native", "/api/groups/attr-defs", "/api/groups/attr-names",
+		"/api/groups/attr-assignments", "/api/groups/services"} {
 		if items := nobody.call("GET", p, "", 200)["items"].([]any); len(items) != 0 {
 			t.Errorf("%s shows %d items to a user without view", p, len(items))
 		}
 	}
+	// the object type vocabulary is public to anyone who reaches the groups routes
+	nobody.call("GET", "/api/groups/object-types", "", 200)
 	// a user without the route's permission: viewer holds groups.read only
 	viewer := e.as("viewer", []auth.Role{auth.RoleViewer}, nil)
 	for _, c := range cases {

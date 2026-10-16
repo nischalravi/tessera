@@ -10,6 +10,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/attrs"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/events"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/naming"
@@ -875,6 +876,10 @@ func (e Env) CopyGroup(id store.GroupID, in CopyInput) (*store.NativeGroup, erro
 	if err := privs.GrantCreator(e.privs(), privs.GroupObject(cp.ID)); err != nil {
 		return nil, err
 	}
+	if err := e.copyObjectTypes(attrs.Owner{Type: store.AttrOwnerGroup, ID: string(src.ID)},
+		attrs.Owner{Type: store.AttrOwnerGroup, ID: string(cp.ID)}); err != nil {
+		return nil, err
+	}
 	return cp, e.audit("groups.group.copied", "group", string(cp.ID), ojson.Object{{Key: "group_id", Value: string(cp.ID)},
 		{Key: "source_id", Value: string(src.ID)}, {Key: "name", Value: cp.Name}, {Key: "folder_id", Value: string(dest.ID)}})
 }
@@ -971,6 +976,10 @@ func (e Env) CopyFolder(id store.FolderID, in CopyInput) (*store.Folder, error) 
 	if err := privs.GrantCreator(e.privs(), privs.FolderObject(top.ID)); err != nil {
 		return nil, err
 	}
+	if err := e.copyObjectTypes(attrs.Owner{Type: store.AttrOwnerFolder, ID: string(src.ID)},
+		attrs.Owner{Type: store.AttrOwnerFolder, ID: string(top.ID)}); err != nil {
+		return nil, err
+	}
 	newID := map[store.FolderID]store.FolderID{src.ID: top.ID}
 	for _, s := range subFolders {
 		n, d := rebased(s.Name, s.DisplayName, src, newName, newDisplay)
@@ -987,6 +996,10 @@ func (e Env) CopyFolder(id store.FolderID, in CopyInput) (*store.Folder, error) 
 		if err := privs.GrantDefaults(e.privs(), privs.FolderObject(c.ID)); err != nil {
 			return nil, err
 		}
+		if err := e.copyObjectTypes(attrs.Owner{Type: store.AttrOwnerFolder, ID: string(s.ID)},
+			attrs.Owner{Type: store.AttrOwnerFolder, ID: string(c.ID)}); err != nil {
+			return nil, err
+		}
 		newID[s.ID] = c.ID
 	}
 	copied := 0
@@ -1001,6 +1014,10 @@ func (e Env) CopyFolder(id store.FolderID, in CopyInput) (*store.Folder, error) 
 			return nil, err
 		}
 		if err := privs.GrantDefaults(e.privs(), privs.GroupObject(cp.ID)); err != nil {
+			return nil, err
+		}
+		if err := e.copyObjectTypes(attrs.Owner{Type: store.AttrOwnerGroup, ID: string(g.ID)},
+			attrs.Owner{Type: store.AttrOwnerGroup, ID: string(cp.ID)}); err != nil {
 			return nil, err
 		}
 		copied++
@@ -1036,12 +1053,20 @@ func (e Env) DeleteFolder(id store.FolderID) error {
 	if err != nil {
 		return err
 	}
-	if folders+groups > 0 {
-		ce := conflict("folder_not_empty", "the folder still holds %d subfolder(s) and %d group(s)", folders, groups)
-		ce.Extra = map[string]any{"folders": folders, "groups": groups}
+	defs, err := e.Tx.GrpAttrDefCountIn(f.ID)
+	if err != nil {
+		return err
+	}
+	if folders+groups+defs > 0 {
+		ce := conflict("folder_not_empty", "the folder still holds %d subfolder(s), %d group(s) and %d attribute definition(s)", folders, groups, defs)
+		ce.Extra = map[string]any{"folders": folders, "groups": groups, "attr_defs": defs}
 		return ce
 	}
 	if err := e.Tx.DeleteGrpAliasesOf(store.AliasFolder, string(f.ID)); err != nil {
+		return err
+	}
+	// the folder's attribute assignments end with it
+	if _, err := attrs.RemoveAllOf(e.Attrs(), attrs.Owner{Type: store.AttrOwnerFolder, ID: string(f.ID)}); err != nil {
 		return err
 	}
 	// the folder's privileges end with it; a row on a folder names no foreign key
