@@ -327,6 +327,53 @@ deleted group, or one outside its own `enabled_from`/`disabled_at`, is an empty 
   `go test -bench . ./internal/groups/engine` runs the 10%-of-reference-tenant benchmark
   (`TESSERA_GROUPS_BENCH_SCALE` percent, default 10).
 
+#### Group events and point-in-time history (GR-3, issue #46)
+
+Every change to a folder, group, direct membership or (from GR-4) privilege, and every effective
+membership the engine adds or removes, writes a row to `grp_events` in the same transaction, with a
+per-tenant gap-free `seq` (a counter row in `grp_event_heads`, bumped under the write lock, so a
+rolled-back change gives its number back). Rows are append-only (a trigger refuses `UPDATE`).
+Schema `0282_group_events.sql` (the design calls it `0103`): `grp_event_heads`, `grp_events`,
+`grp_event_cursors`, `grp_pit_{objects,direct,effective,privileges,digests}`, all tenant-scoped with
+cross-tenant guard triggers.
+
+- `server/internal/groups/events`: the §10.1 catalogue, `Append`, consumer cursors (`Poll`, `Ack`,
+  `Lag`) and CloudEvents 1.0 JSON encoding (`ToCloudEvent`: id `<tenant>/<seq>`, `sequence` extension).
+  The groups code calls `pit.Emit`, which appends the event, applies it to the PIT tables and moves the
+  `pit` cursor, all in the caller's transaction.
+- `server/internal/groups/pit`: the writer closes and opens half-open intervals `[start_at, end_at)`
+  (`start_seq`/`end_seq` are event seqs) for objects (a snapshot of names, folder, definition, status),
+  direct rows (with their own dates), effective memberships and privileges. The tables are derived
+  data: `Rebuild` replays `grp_events` (the whole tenant or one group), `CompareRebuild` rebuilds and
+  compares. `MembersAt`, `MembersBetween`, `DirectAt`, `DirectBetween`, `ObjectAt` are the queries.
+- Tamper evidence (K9): at 00:05 UTC `pit.Runner` writes, for each finished UTC day with events, a
+  Merkle root (RFC 6962 tree; leaves are SHA-256 of `0x00` and the RFC 8785 form of the event row) and
+  appends `groups.pit.digest {day, first_seq, last_seq, event_count, root}` to the audit ledger, whose
+  checkpoints are anchored outside the database. `VerifyDay` recomputes the root and also checks the
+  stored digest against the ledger's copy; an edited, deleted or added event of a digested day is a
+  `mismatch`. A server that was down catches up on the days it missed.
+- Retention: `TESSERA_GROUPS_RETENTION_DAYS` (default 2555, 7 years; 30 to 36500). Once a UTC day the
+  runner deletes events older than that (never past the last digested event, as a prefix of the
+  sequence) and PIT intervals that ended before it, and audits `groups.retention.pruned`. Digests are
+  kept; a day whose events were pruned verifies as `pruned`; `Rebuild` refuses (`history_pruned`)
+  rather than lose intervals whose events are gone. Weekly the runner rebuilds the PIT rows of a
+  sample of 20 groups and compares them with what was stored; a difference is repaired and audited
+  as `groups.pit.mismatch` (the schedule is in memory, so a restart postpones it by a week).
+
+| Route (all `groups.admin`) | |
+|---|---|
+| `GET /api/groups/{id}/members?as_of=T[&filter=effective\|direct]` | the members at an instant (RFC 3339, not in the future); effective by default; `group` is the group's snapshot then (name, status), null if it did not exist; deleted groups keep their history |
+| `GET /api/groups/{id}/members?between=T1,T2` | everyone who was a member at any time in the window (at most 366 days); `items` are intervals |
+| `GET /api/groups/pit/digests?limit=` | the daily digests, newest first |
+| `GET /api/groups/pit/verify[?day=YYYY-MM-DD]` | recompute a day's root (default: the newest 100 digests); statuses `ok`, `mismatch`, `ledger_mismatch`, `no_digest`, `pruned` |
+| `POST /api/groups/pit/rebuild` `{group_id?}` | rebuild the PIT rows from the events (audited as `groups.pit.rebuilt`) |
+
+- Event causes: `api` for direct changes, `engine` for effective changes (repairs by verification carry
+  `data.repair`), `timewheel` for the wheel's own runs; `cause_ref` is the request id when there is one.
+- Tests: `go test ./internal/groups/pit ./internal/groups/events` (`TestPIT_AsOfMatchesReplay`,
+  `TestPIT_DigestDetectsTamper`, `TestPIT_RebuildEqualsLive`, `TestEvents_GapFreeSeqUnderConcurrency`),
+  `TestIsolation_GroupEventTables` in `internal/store`, `TestGroupsPITAPI` in `internal/api`.
+
 ### Audit ledger
 
 Every tenant has an append-only, hash-chained audit log (`audit_events`; design

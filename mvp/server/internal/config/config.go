@@ -79,6 +79,10 @@ type Config struct {
 	// operations a group change may do inside its request; more is queued
 	// (design groups-grouper-parity.md §6.5).
 	GroupsSyncBudget int
+	// GroupsRetentionDays is TESSERA_GROUPS_RETENTION_DAYS (`groups.retention_days`):
+	// how long group events and point-in-time history are kept, 7 years by
+	// default (design §10.2).
+	GroupsRetentionDays int
 	// FrozenNow is TESSERA_NOW (tests and demos; refused in prod). The zero
 	// time means the wall clock; use Clock.
 	FrozenNow time.Time
@@ -159,6 +163,7 @@ func Load(getenv func(string) string) (*Config, error) {
 	c.AuditCheckpointSeconds = integer("TESSERA_AUDIT_CHECKPOINT_SECONDS", 300, 1, 86400)
 	c.AuditCheckpointEvents = integer("TESSERA_AUDIT_CHECKPOINT_EVENTS", 1000, 1, 1_000_000)
 	c.GroupsSyncBudget = integer("TESSERA_GROUPS_SYNC_BUDGET", 5000, 1, 10_000_000)
+	c.GroupsRetentionDays = integer("TESSERA_GROUPS_RETENTION_DAYS", 7*365, 30, 36_500)
 	c.AccessTokenTTLSeconds = integer("TESSERA_AT_TTL_SECONDS", 600, 1, MaxAccessTokenTTLSeconds)
 	c.DeviceCodeTTLSeconds = integer("TESSERA_DEVICE_CODE_TTL_SECONDS", 300, 1, MaxDeviceCodeTTLSeconds)
 	c.DPoPRSNonce = boolean("TESSERA_DPOP_RS_NONCE", false, false)

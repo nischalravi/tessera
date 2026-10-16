@@ -59,6 +59,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/pit"
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
@@ -343,6 +344,13 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		defer close(groupsDone)
 		groupsRunner.Loop(ctx)
 	}()
+	// group history: the daily Merkle digest (00:05 UTC), retention and the weekly rebuild check
+	historyDone := make(chan struct{})
+	historyRunner := &pit.Runner{DB: st, Clock: clock, Log: logger, RetentionDays: cfg.GroupsRetentionDays}
+	go func() {
+		defer close(historyDone)
+		historyRunner.Loop(ctx)
+	}()
 	errc := make(chan error, 1)
 	go func() { errc <- httpSrv.Serve(ln) }()
 	logger.Info("tessera API listening", "addr", ln.Addr().String())
@@ -354,6 +362,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		<-keysDone
 		<-ckptDone
 		<-groupsDone
+		<-historyDone
 		return err
 	case <-ctx.Done():
 	}
@@ -365,6 +374,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	<-keysDone
 	<-ckptDone
 	<-groupsDone
+	<-historyDone
 	if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 		return serveErr
 	}

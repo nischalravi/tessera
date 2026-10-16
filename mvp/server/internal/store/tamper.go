@@ -34,7 +34,9 @@ const (
 		DROP TRIGGER IF EXISTS audit_ckpt_immutable;
 		DROP TRIGGER IF EXISTS audit_ckpt_no_delete;
 		DROP TRIGGER IF EXISTS tg_audit_checkpoints_xtenant_upd;
-		DROP TRIGGER IF EXISTS audit_heads_forward;`
+		DROP TRIGGER IF EXISTS audit_heads_forward;
+		DROP TRIGGER IF EXISTS grp_events_no_update;
+		DROP TRIGGER IF EXISTS grp_pit_digests_no_update;`
 	tamperBreak  = `ALTER TABLE audit_events RENAME TO audit_events_broken`
 	tamperRepair = `ALTER TABLE audit_events_broken RENAME TO audit_events`
 )
@@ -52,7 +54,22 @@ var (
 		DELETE FROM audit_checkpoints WHERE tenant_id = @tenant AND seq > @seq`)
 	tamperRewindHead = tq("tamper.audit_chain_heads.rewind", `
 		UPDATE audit_chain_heads SET last_seq = @seq, last_hash = @hash WHERE tenant_id = @tenant`)
+	tamperGrpEventData = tq("tamper.grp_events.edit_data", `
+		UPDATE grp_events SET data = @data WHERE tenant_id = @tenant AND seq = @seq`)
+	tamperGrpEventDelete = tq("tamper.grp_events.delete", `
+		DELETE FROM grp_events WHERE tenant_id = @tenant AND seq = @seq`)
 )
+
+// EditGrpEventData overwrites the data of the group event at seq (triggers
+// must be dropped), as an attacker rewriting history would.
+func (a *AuditTamper) EditGrpEventData(ctx context.Context, t tenancy.ID, seq int64, data string) error {
+	return a.exec(ctx, t, tamperGrpEventData, sql.Named("data", data), sql.Named("seq", seq))
+}
+
+// DeleteGrpEvent deletes the group event at seq.
+func (a *AuditTamper) DeleteGrpEvent(ctx context.Context, t tenancy.ID, seq int64) error {
+	return a.exec(ctx, t, tamperGrpEventDelete, sql.Named("seq", seq))
+}
 
 // DropTriggers removes the append-only triggers (as a database owner could).
 // The next Open recreates them.

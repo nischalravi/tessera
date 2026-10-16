@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/events"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/naming"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -94,7 +95,7 @@ func (e Env) EnsureRoot() (*store.Folder, error) {
 	if _, err := e.Tx.EnsureGrpMembersList(); err != nil {
 		return nil, err
 	}
-	return root, nil
+	return root, e.emitFolder(events.FolderCreated, root, nil)
 }
 
 func (e Env) audit(action, targetType, targetID string, detail ojson.Object) error {
@@ -275,6 +276,9 @@ func (e Env) CreateFolder(in CreateFolderInput) (*store.Folder, error) {
 	if err := e.Tx.InsertGrpFolder(f); err != nil {
 		return nil, err
 	}
+	if err := e.emitFolder(events.FolderCreated, f, nil); err != nil {
+		return nil, err
+	}
 	return f, e.audit("groups.folder.created", "folder", string(f.ID), ojson.Object{
 		{Key: "folder_id", Value: string(f.ID)}, {Key: "name", Value: f.Name}, {Key: "parent_id", Value: string(parent.ID)}})
 }
@@ -368,12 +372,18 @@ func (e Env) CreateGroup(in CreateGroupInput) (*store.NativeGroup, error) {
 	if err := e.Tx.InsertGrpGroup(g); err != nil {
 		return nil, err
 	}
+	if err := e.emitGroup(events.GroupCreated, g, nil); err != nil {
+		return nil, err
+	}
 	detail := ojson.Object{{Key: "group_id", Value: string(g.ID)}, {Key: "name", Value: g.Name},
 		{Key: "folder_id", Value: string(folder.ID)}, {Key: "kind", Value: string(g.Kind)},
 		{Key: "definition", Value: string(def)}}
 	if def == store.DefinitionComposite {
 		if err := e.eng().SetFactors(e.Tx, e.Now, g.ID, in.Factors); err != nil {
 			return nil, e.engineErr(err)
+		}
+		if err := e.emitGroup(events.GroupDefinitionChanged, g, nil); err != nil {
+			return nil, err
 		}
 		if _, err := e.eng().RecomputeGroup(e.Tx, e.Now, g.ID); err != nil {
 			return nil, e.engineErr(err)
@@ -466,18 +476,26 @@ func (e Env) relocate(f *store.Folder, newParent *store.Folder, newExt, newDisp 
 		if err := e.setName(store.AliasFolder, string(s.ID), s.Name, fT[i].name); err != nil {
 			return 0, err
 		}
+		oldSub := s.Name
 		s.Name, s.DisplayName = fT[i].name, fT[i].display
 		if err := e.Tx.UpdateGrpFolder(s); err != nil {
 			return 0, wrap(err)
+		}
+		if err := e.emitFolder(events.FolderRenamed, s, map[string]any{"old_name": oldSub, "via": "ancestor"}); err != nil {
+			return 0, err
 		}
 	}
 	for i, g := range subGroups {
 		if err := e.setName(store.AliasGroup, string(g.ID), g.Name, gT[i].name); err != nil {
 			return 0, err
 		}
+		oldSub := g.Name
 		g.Name, g.DisplayName = gT[i].name, gT[i].display
 		if err := e.Tx.UpdateGrpGroup(g); err != nil {
 			return 0, wrap(err)
+		}
+		if err := e.emitGroup(events.GroupRenamed, g, map[string]any{"old_name": oldSub, "via": "ancestor"}); err != nil {
+			return 0, err
 		}
 	}
 	if err := e.setName(store.AliasFolder, string(f.ID), oldName, newName); err != nil {
@@ -557,9 +575,12 @@ func (e Env) UpdateFolder(id store.FolderID, in UpdateFolderInput) (*store.Folde
 	} else if err := e.Tx.UpdateGrpFolder(f); err != nil {
 		return nil, wrap(err)
 	}
-	action := "groups.folder.updated"
+	action, evType := "groups.folder.updated", events.FolderUpdated
 	if f.Name != old {
-		action = "groups.folder.renamed"
+		action, evType = "groups.folder.renamed", events.FolderRenamed
+	}
+	if err := e.emitFolder(evType, f, map[string]any{"old_name": old}); err != nil {
+		return nil, err
 	}
 	return f, e.audit(action, "folder", string(f.ID), ojson.Object{{Key: "folder_id", Value: string(f.ID)},
 		{Key: "old_name", Value: old}, {Key: "name", Value: f.Name}, {Key: "descendants", Value: descendants}})
@@ -583,6 +604,9 @@ func (e Env) MoveFolder(id store.FolderID, parent store.FolderID) (*store.Folder
 	old := f.Name
 	n, err := e.relocate(f, p, f.Extension, f.DisplayExtension)
 	if err != nil {
+		return nil, err
+	}
+	if err := e.emitFolder(events.FolderMoved, f, map[string]any{"old_name": old}); err != nil {
 		return nil, err
 	}
 	return f, e.audit("groups.folder.moved", "folder", string(f.ID), ojson.Object{{Key: "folder_id", Value: string(f.ID)},
@@ -703,6 +727,18 @@ func (e Env) UpdateGroup(id store.GroupID, in UpdateGroupInput) (*store.NativeGr
 	if err := e.placeGroup(g, folder); err != nil {
 		return nil, err
 	}
+	evType := events.GroupUpdated
+	switch {
+	case g.Name != old:
+		evType = events.GroupRenamed
+	case g.Status == store.GroupDisabled && oldStatus != store.GroupDisabled:
+		evType = events.GroupDisabled
+	case g.Status == store.GroupActive && oldStatus != store.GroupActive:
+		evType = events.GroupEnabled
+	}
+	if err := e.emitGroup(evType, g, map[string]any{"old_name": old, "old_status": oldStatus}); err != nil {
+		return nil, err
+	}
 	if membershipChanged {
 		if _, err := e.eng().RecomputeGroup(e.Tx, e.Now, g.ID); err != nil {
 			return nil, e.engineErr(err)
@@ -761,6 +797,9 @@ func (e Env) MoveGroup(id store.GroupID, folder store.FolderID) (*store.NativeGr
 	if err := e.placeGroup(g, dest); err != nil {
 		return nil, err
 	}
+	if err := e.emitGroup(events.GroupMoved, g, map[string]any{"old_name": old}); err != nil {
+		return nil, err
+	}
 	return g, e.audit("groups.group.moved", "group", string(g.ID), ojson.Object{{Key: "group_id", Value: string(g.ID)},
 		{Key: "old_name", Value: old}, {Key: "name", Value: g.Name}, {Key: "folder_id", Value: string(dest.ID)}})
 }
@@ -807,6 +846,9 @@ func (e Env) CopyGroup(id store.GroupID, in CopyInput) (*store.NativeGroup, erro
 	}
 	cp := copyGroup(src, dest, name, ext, disp, e)
 	if err := e.Tx.InsertGrpGroup(cp); err != nil {
+		return nil, err
+	}
+	if err := e.emitGroup(events.GroupCreated, cp, map[string]any{"copied_from": string(src.ID)}); err != nil {
 		return nil, err
 	}
 	return cp, e.audit("groups.group.copied", "group", string(cp.ID), ojson.Object{{Key: "group_id", Value: string(cp.ID)},
@@ -898,6 +940,9 @@ func (e Env) CopyFolder(id store.FolderID, in CopyInput) (*store.Folder, error) 
 	if err := e.Tx.InsertGrpFolder(top); err != nil {
 		return nil, err
 	}
+	if err := e.emitFolder(events.FolderCreated, top, map[string]any{"copied_from": string(src.ID)}); err != nil {
+		return nil, err
+	}
 	newID := map[store.FolderID]store.FolderID{src.ID: top.ID}
 	for _, s := range subFolders {
 		n, d := rebased(s.Name, s.DisplayName, src, newName, newDisplay)
@@ -908,6 +953,9 @@ func (e Env) CopyFolder(id store.FolderID, in CopyInput) (*store.Folder, error) 
 		if err := e.Tx.InsertGrpFolder(c); err != nil {
 			return nil, err
 		}
+		if err := e.emitFolder(events.FolderCreated, c, map[string]any{"copied_from": string(s.ID)}); err != nil {
+			return nil, err
+		}
 		newID[s.ID] = c.ID
 	}
 	copied := 0
@@ -916,6 +964,9 @@ func (e Env) CopyFolder(id store.FolderID, in CopyInput) (*store.Folder, error) 
 		cp := copyGroup(g, &store.Folder{ID: newID[g.FolderID]}, n, g.Extension, g.DisplayExtension, e)
 		cp.DisplayName = d
 		if err := e.Tx.InsertGrpGroup(cp); err != nil {
+			return nil, err
+		}
+		if err := e.emitGroup(events.GroupCreated, cp, map[string]any{"copied_from": string(g.ID)}); err != nil {
 			return nil, err
 		}
 		copied++
@@ -962,6 +1013,9 @@ func (e Env) DeleteFolder(id store.FolderID) error {
 	if err := e.Tx.DeleteGrpFolder(f.ID); err != nil {
 		return err
 	}
+	if err := e.emitFolder(events.FolderDeleted, f, map[string]any{"name": f.Name}); err != nil {
+		return err
+	}
 	return e.audit("groups.folder.deleted", "folder", string(f.ID), ojson.Object{{Key: "folder_id", Value: string(f.ID)},
 		{Key: "name", Value: f.Name}})
 }
@@ -986,6 +1040,9 @@ func (e Env) DeleteGroup(id store.GroupID) error {
 	g.Status = store.GroupDeleted
 	if err := e.Tx.UpdateGrpGroup(g); err != nil {
 		return wrap(err)
+	}
+	if err := e.emitGroup(events.GroupDeleted, g, nil); err != nil {
+		return err
 	}
 	// a deleted group is an empty set: its members leave it and everything it feeds
 	if _, err := e.eng().RecomputeGroup(e.Tx, e.Now, g.ID); err != nil {
@@ -1014,6 +1071,9 @@ func (e Env) RestoreGroup(id store.GroupID) (*store.NativeGroup, error) {
 	g.Status = store.GroupActive
 	if err := e.Tx.UpdateGrpGroup(g); err != nil {
 		return nil, wrap(err)
+	}
+	if err := e.emitGroup(events.GroupRestored, g, nil); err != nil {
+		return nil, err
 	}
 	if _, err := e.eng().RecomputeGroup(e.Tx, e.Now, g.ID); err != nil {
 		return nil, e.engineErr(err)

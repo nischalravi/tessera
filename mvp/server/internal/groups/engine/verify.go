@@ -6,6 +6,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/pit"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
@@ -322,6 +323,11 @@ func (v *verifier) effective(groups []*store.NativeGroup, level map[store.GroupI
 					}
 					if err != nil {
 						return err
+					}
+					if (had > 0) != (want > 0) { // a repair that changes who is a member is a change like any other
+						if err := pit.Emit(v.tx, pit.EffectiveEvent(gr.ID, l, id, want > 0, v.now, store.CauseEngine, true)); err != nil {
+							return err
+						}
 					}
 					v.repaired(Repair{Kind: "effective", Group: gr.ID, List: l, Identity: id, Had: int64(had), Want: int64(want)})
 				}

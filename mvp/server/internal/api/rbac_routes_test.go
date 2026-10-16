@@ -122,6 +122,9 @@ POST   /api/groups/{id}/convert-to-composite         groups.admin    -  # issue 
 PUT    /api/groups/{id}/composite                    groups.admin    -  # issue #45
 POST   /api/groups/engine/verify                     groups.admin    -  # issue #45
 GET    /api/groups/engine/ops/{seq}                  groups.admin    -  # issue #45
+GET    /api/groups/pit/digests                       groups.admin    -  # issue #46
+GET    /api/groups/pit/verify                        groups.admin    -  # issue #46
+POST   /api/groups/pit/rebuild                       groups.admin    -  # issue #46
 GET    /api/auth/session                             auth.self       -
 POST   /api/auth/logout                              auth.self       -
 GET    /api/auth/sessions                            auth.self       -
