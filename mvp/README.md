@@ -657,15 +657,31 @@ cd ../frontend && npm run build && npm test   # npm test: node:test, no extra de
 * Configuration (`internal/config`): with `TESSERA_ENV=prod` the server refuses to start on a
   non-https `TESSERA_PUBLIC_URL`, `TESSERA_COOKIE_SECURE=false`, no KEK, any
   `TESSERA_CORS_ORIGINS` (the production UI is same-origin, so CORS is off),
-  `TESSERA_OUTBOUND_ALLOW_LOOPBACK=true`, a `TESSERA_DEV_IDP_URL`, a missing or `file://`
-  `TESSERA_AUDIT_ANCHOR`, a frozen clock (`TESSERA_NOW`), or a `TESSERA_TRUSTED_PROXIES` prefix
-  broader than /8 (IPv4) or /32 (IPv6), and lists every problem at once. A /0 proxy prefix is
-  refused in every environment.
+  `TESSERA_OUTBOUND_ALLOW_LOOPBACK=true`, a `TESSERA_DEV_IDP_URL`, a `TESSERA_AUDIT_ANCHOR` that
+  is not `s3://bucket/prefix` (missing and `file://` included), a frozen clock (`TESSERA_NOW`), or
+  a `TESSERA_TRUSTED_PROXIES` prefix broader than /8 (IPv4) or /32 (IPv6), and lists every problem
+  at once. A /0 proxy prefix is refused in every environment. `TESSERA_COOKIE_SECURE=false` is
+  accepted only with `TESSERA_ENV=dev`, a `localhost`/`127.0.0.1` public URL and a loopback
+  `-addr`. `serve` and `seed` both need an explicit `TESSERA_ENV` (`run.sh` exports `dev`).
 * Keys: `seed` and `serve` run the ensure-keys step (one active and one next ES256 key per tenant
   and purpose, the platform Ed25519 key, daily rotation). Private keys are stored only sealed
-  under the KEK (`TESSERA_KEK` or `TESSERA_KEK_FILE`, base64 of 32 bytes, file mode 0600). In dev
-  a KEK is generated at `server/var/dev-kek`; if it is lost, the server refuses to start until
-  the database is reseeded.
+  under the KEK (`TESSERA_KEK` or `TESSERA_KEK_FILE`, base64 of 32 bytes, file mode 0600). Sealed
+  values are AES-256-GCM under `HKDF(KEK, "tessera/seal/v1")` (format version 2); version 1
+  values (the raw KEK, before #127) still open and are re-sealed lazily on write. In dev a KEK is
+  generated at `server/var/dev-kek` (temp file, then linked into place, never overwritten); if it
+  is lost, the server refuses to start until the database is reseeded. A stored public key that
+  fails validation is left out of a JWKS and logged as `keys.bad_public_jwk` with `alert=true`.
+  Emergency revocation and the JWKS cache trade-off: `docs/runbooks/signing-key-emergency-revocation.md`.
+  The tenant slugs `platform` and `platform-*` are reserved.
+* Outbound HTTP (`internal/safehttp`, built only by `safehttp.ForConfig`; tests use
+  `safehttp.NewForTest`, which `internal/archtest` bans elsewhere): https only, destination ports
+  443 and 8443 unless the connection's configured URL names its port (that host only), addresses
+  checked after DNS on every dial and redirect hop, numeric host spellings (`2130706433`,
+  `0177.0.0.1`) and zoned IPv6 literals refused. In dev the loopback exception (127.0.0.1, [::1])
+  allows plain http on any port, so the dev IdP on :8001 works; a `TESSERA_ENV=test` server gets
+  the production client.
+* Rate limits: per-IP buckets keyed by `ratelimit.IPKey` (IPv6 by /64); each key class (IP,
+  session, user code) has its own, smaller LRU, so one class cannot evict another's buckets.
 
 ## Go vs Python
 
