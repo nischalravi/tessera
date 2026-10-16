@@ -504,6 +504,14 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, sb.status, sb.body)
 		return
 	}
+	if fb, ok := out.(fileBody); ok {
+		w.Header().Set("Content-Type", fb.contentType)
+		w.Header().Set("Content-Disposition", `attachment; filename="`+fb.filename+`"`)
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(fb.data) // #nosec G705 -- an attachment download of a generated ZIP, never rendered as HTML
+		return
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -543,6 +551,14 @@ func detail(msg string) ojson.Object { return ojson.Object{{Key: "detail", Value
 type statusBody struct {
 	status int
 	body   any
+}
+
+// fileBody is a generated download, written after the request's tenant
+// transaction commits, so an export is never delivered without its audit
+// event.
+type fileBody struct {
+	contentType, filename string
+	data                  []byte
 }
 
 // rawJSON is a pre-encoded JSON response body.

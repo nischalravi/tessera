@@ -143,6 +143,14 @@ tenant-scoped like every other table; Admin → Connections → New
 connection → Active Directory (demo) walks the rest. Design: `docs/design/deployment-readiness.md`.
 The routes are documented at `/api/readiness/openapi.json`.
 
+**Evidence export** (design §7.6): `GET /api/connections/{id}/readiness/evidence` and
+`GET /api/insights/deployment-health/evidence` return a ZIP (`manifest.json`, `checklist.csv`,
+`checks.csv`, `findings.csv`, `skipped.csv`, `score.json`). The manifest holds the SHA-256 of every
+file, the template pins and config hashes, the ledger range and chain head, and the SOC 2, ISO 27001,
+SOX ITGC and PCI DSS control mapping text. Findings carry sample object ids only, never names. Each
+export appends `readiness.evidence.exported` (with the manifest hash) in the same transaction, and
+needs `connections.read` plus `audit.read` (auditor, tenant_admin).
+
 ### Main API endpoints
 
 `GET /api/summary` · `GET /api/identities[?type=&q=]` · `GET /api/identities/{id}` · `GET /api/accounts[?system=]` ·

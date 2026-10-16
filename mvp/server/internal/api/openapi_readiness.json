@@ -858,6 +858,67 @@
     ]
    }
   },
+  "/api/connections/{id}/readiness/evidence": {
+   "get": {
+    "summary": "Evidence export (ZIP) of one connection",
+    "description": "Permission: connections.read and audit.read. Returns manifest.json (SHA-256 of every file, template pins, ledger sequence range and chain head, control mapping), checklist.csv, checks.csv, findings.csv (sample object ids only), skipped.csv and score.json. Records readiness.evidence.exported with the manifest hash.",
+    "responses": {
+     "200": {
+      "description": "application/zip"
+     },
+     "403": {
+      "description": "audit.read is missing"
+     },
+     "404": {
+      "description": "No such connection"
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "X-Tessera-User",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "maxLength": 120
+      }
+     }
+    ]
+   }
+  },
+  "/api/insights/deployment-health/evidence": {
+   "get": {
+    "summary": "Evidence export (ZIP) of every connection of the tenant",
+    "description": "Permission: connections.read and audit.read. Same files as the connection export, with one row per connection. Records readiness.evidence.exported with the manifest hash.",
+    "responses": {
+     "200": {
+      "description": "application/zip"
+     },
+     "403": {
+      "description": "audit.read is missing"
+     }
+    },
+    "parameters": [
+     {
+      "name": "X-Tessera-User",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "maxLength": 120
+      }
+     }
+    ]
+   }
+  },
   "/api/insights/deployment-health/rerun": {
    "post": {
     "summary": "Re-run live checks (and optionally reconciliation) for all connections",

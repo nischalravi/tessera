@@ -20,6 +20,53 @@ func (s *Server) registerHealthRoutes() {
 	s.handle(http.MethodGet, "/api/insights/deployment-health", read, need(auth.PermConnectionsRead), s.rd(s.deploymentHealth))
 	s.handle(http.MethodPost, "/api/insights/deployment-health/rerun", phased, need(auth.PermConnectionsManage), s.rd(s.rerunHealth))
 	s.handle(http.MethodGet, "/api/connections/{id}/health", read, need(auth.PermConnectionsRead), s.rd(s.connectionHealth))
+	// Evidence exports (design §7.6). They are GETs on a write transaction:
+	// the readiness.evidence.exported event is appended in the transaction
+	// that builds the file. The design asks for connections.read plus
+	// audit.export; audit.export does not exist, so the handler also
+	// requires audit.read, the permission of the ledger export.
+	s.handle(http.MethodGet, "/api/connections/{id}/readiness/evidence", write, need(auth.PermConnectionsRead), s.exportConnectionEvidence)
+	s.handle(http.MethodGet, "/api/insights/deployment-health/evidence", write, need(auth.PermConnectionsRead), s.exportTenantEvidence)
+}
+
+// requireAuditRead is the second permission of the evidence routes.
+func requireAuditRead(r *http.Request) error {
+	if p, ok := auth.PrincipalFrom(r.Context()); ok && auth.EffectivePermissions(p).Has(auth.PermAuditRead) {
+		return nil
+	}
+	return &readiness.Error{Status: http.StatusForbidden, Code: "forbidden",
+		Msg: "the evidence export needs the " + string(auth.PermAuditRead) + " permission"}
+}
+
+func (s *Server) exportConnectionEvidence(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	id, err := connID(p)
+	if err != nil {
+		return nil, err
+	}
+	if err := requireAuditRead(r); err != nil {
+		return nil, err
+	}
+	ex, err := s.readiness.EvidenceOf(store.TxFrom(r.Context()), id, actor(r), s.clock(), nil)
+	if err != nil {
+		return nil, err
+	}
+	return fileBody{"application/zip", ex.Filename, ex.Zip}, nil
+}
+
+func (s *Server) exportTenantEvidence(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+	if err := requireAuditRead(r); err != nil {
+		return nil, err
+	}
+	c, now := store.TxFrom(r.Context()), s.clock()
+	d, err := s.dashboard(c, now)
+	if err != nil {
+		return nil, err
+	}
+	ex, err := s.readiness.EvidenceOf(c, "", actor(r), now, d)
+	if err != nil {
+		return nil, err
+	}
+	return fileBody{"application/zip", ex.Filename, ex.Zip}, nil
 }
 
 // legacyHR names an env-configured HR connector that is not governed by a

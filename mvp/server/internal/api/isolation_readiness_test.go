@@ -88,6 +88,8 @@ var readinessRouteCases = map[string][]rdCase{
 			body: `{"reason":"accepting a finding of another tenant"}`, key: "connection:ad"},
 	},
 	"GET /api/connections/{id}/health": {{method: "GET", path: onConn("/health"), key: "connection:ad"}},
+	"GET /api/connections/{id}/readiness/evidence": {
+		{method: "GET", path: onConn("/readiness/evidence"), key: "connection:ad"}},
 	// Template routes take a template id, which every tenant shares: see
 	// TestIsolation_ReadinessListRoutesNeverLeak (GET) and
 	// TestIsolation_ReadinessOverlayScoped (PUT).
@@ -152,6 +154,8 @@ func readinessGetPaths(r map[string]string) map[string]string {
 		"/api/connections/{id}/dry-runs/{run}":         conn + "/dry-runs/" + r["run:ad-dry"],
 		"/api/connections/{id}/findings":               conn + "/findings",
 		"/api/connections/{id}/health":                 conn + "/health",
+		"/api/connections/{id}/readiness/evidence":     conn + "/readiness/evidence",
+		"/api/insights/deployment-health/evidence":     "/api/insights/deployment-health/evidence",
 		"/api/readiness/templates":                     "/api/readiness/templates",
 		"/api/connections":                             "/api/connections",
 		"/api/insights/deployment-health":              "/api/insights/deployment-health",

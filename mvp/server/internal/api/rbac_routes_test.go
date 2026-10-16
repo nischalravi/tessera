@@ -99,6 +99,8 @@ POST   /api/connections/{id}/findings/{fid}/accept   connections.manage -
 GET    /api/connections/{id}/health                  connections.read   -
 GET    /api/insights/deployment-health               connections.read   -
 POST   /api/insights/deployment-health/rerun         connections.manage -
+GET    /api/connections/{id}/readiness/evidence      connections.read   -  (+ audit.read in the handler; the design's audit.export does not exist)
+GET    /api/insights/deployment-health/evidence      connections.read   -  (+ audit.read in the handler; the design's audit.export does not exist)
 GET    /api/auth/session                             auth.self       -
 POST   /api/auth/logout                              auth.self       -
 GET    /api/auth/sessions                            auth.self       -
