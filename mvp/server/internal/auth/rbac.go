@@ -73,6 +73,11 @@ const (
 	PermIdentitiesMerge     Permission = "identities.merge"
 	// kill switch (issue #106)
 	PermIdentitiesContain Permission = "identities.contain"
+	// verified help-desk resets (issue #108): helpdesk.reset starts, verifies
+	// and executes a case; helpdesk.approve gives the manager approval and the
+	// second approval and feeds the simulated signal feed.
+	PermHelpdeskReset   Permission = "helpdesk.reset"
+	PermHelpdeskApprove Permission = "helpdesk.approve"
 )
 
 // rolePermissions is the static role -> permission map (Cedar-ready, §12.1).
@@ -81,11 +86,12 @@ const (
 var rolePermissions = map[Role][]Permission{
 	RoleViewer: {PermGraphRead},
 	RoleOperator: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
-		PermReviewsDecide, PermHRISSimulateEvent},
+		PermReviewsDecide, PermHRISSimulateEvent, PermHelpdeskReset, PermHelpdeskApprove},
 	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead},
 	RolePolicyAdmin: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
 		PermReviewsDecide, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
-		PermIdentitiesCorrelate, PermIdentitiesMerge, PermIdentitiesContain},
+		PermIdentitiesCorrelate, PermIdentitiesMerge, PermIdentitiesContain,
+		PermHelpdeskReset, PermHelpdeskApprove},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
 		PermConnectionsActivate},

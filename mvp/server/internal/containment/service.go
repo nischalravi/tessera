@@ -275,6 +275,29 @@ func (s *Service) loadCredential(c *store.TenantTx, connectionID string) (*Crede
 	return &Credential{BaseURL: k.BaseURL, Org: k.Org, Token: string(tok)}, "", nil
 }
 
+// CredentialFor returns the stored provider credential of the live connection
+// for system, for other features that call the same provider (the help-desk
+// reset). A nil credential comes with why: no live connection or credential,
+// or one that cannot be unsealed.
+func (s *Service) CredentialFor(c *store.TenantTx, system string) (*Credential, string, error) {
+	conns, err := liveConnections(c)
+	if err != nil {
+		return nil, "", err
+	}
+	cn := conns[system]
+	if cn == nil {
+		return nil, "no live connection for " + system, nil
+	}
+	cred, why, err := s.loadCredential(c, cn.ID)
+	if err != nil {
+		return nil, "", err
+	}
+	if cred == nil && why == "" {
+		why = "no provider credential is configured for " + system
+	}
+	return cred, why, nil
+}
+
 // ---------------------------------------------------------------- run
 
 // Step outcomes.

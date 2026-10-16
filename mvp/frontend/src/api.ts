@@ -188,6 +188,8 @@ const LABELS: [RegExp, (m: RegExpMatchArray) => string][] = [
   [/^\/hris\/events\/([^/]+)\/execute$/, (m) => `Run the lifecycle plan for event ${m[1]}`],
   [/^\/connections\/([^/]+)\/(config|credential|activate|retire)$/, (m) => `${{ config: "Save the configuration of", credential: "Set the credential of", activate: "Activate", retire: "Retire" }[m[2]]} connection ${m[1]}`],
   [/^\/readiness\/overlays\/([^/]+)$/, (m) => `Save the readiness overlay for ${m[1]}`],
+  [/^\/helpdesk\/cases\/([^/]+)\/execute$/, () => "Run the verified reset"],
+  [/^\/helpdesk\/cases\/([^/]+)\/(manager|second)-approval$/, (m) => `Give the ${m[2]} approval on the reset case`],
 ];
 
 /** A plain-language name for an API action, shown before resuming it. */
@@ -727,6 +729,68 @@ export interface ContainmentRetry {
 }
 export const retryContainmentNow = (retryId: string) =>
   api<{ retry: ContainmentRetry }>(`/containment-retries/${encodeURIComponent(retryId)}/retry-now`, {});
+
+/** Verified help-desk resets (issue #108). */
+export type HelpdeskMethod = "push" | "callback" | "manager_approval" | "idv";
+export interface HelpdeskPolicy {
+  satisfied: boolean;
+  required_verifications: number;
+  counted_methods: HelpdeskMethod[];
+  needs_second_approver: boolean;
+  second_approved: boolean;
+  allowed_methods: HelpdeskMethod[];
+  missing: string[];
+}
+export interface HelpdeskVerification {
+  id: string;
+  method: HelpdeskMethod;
+  outcome: "passed" | "failed";
+  phishing_resistant: boolean;
+  verified_by: string;
+  evidence: string;
+  provider: string;
+  created_at: string;
+}
+export interface HelpdeskFinding {
+  id: string;
+  case_id: string;
+  identity_id: number;
+  rule: string;
+  detail: { device?: string; location?: string; reset_at?: string; device_added_at?: string; sign_in_at?: string; known_locations?: string[] };
+  created_at: string;
+}
+export interface HelpdeskCase {
+  id: string;
+  identity_id: number;
+  identity: string;
+  kind: "password" | "mfa";
+  system: "okta" | "entra" | "simulated";
+  reason: string;
+  status: "open" | "executing" | "executed" | "failed" | "cancelled";
+  privileged: boolean;
+  requested_by: string;
+  second_approver: string | null;
+  second_approved_at: string | null;
+  executed_by: string | null;
+  executed_at: string | null;
+  result: string[];
+  error: string;
+  created_at: string;
+  updated_at: string;
+  policy: HelpdeskPolicy;
+  verifications: HelpdeskVerification[];
+  findings: HelpdeskFinding[];
+}
+const hd = (id: string) => `/helpdesk/cases/${encodeURIComponent(id)}`;
+export const startHelpdeskCase = (b: { identity_id: number; kind: "password" | "mfa"; system: string; reason: string }) =>
+  api<HelpdeskCase>("/helpdesk/cases", b);
+export const verifyHelpdeskCase = (id: string, b: { method: HelpdeskMethod; evidence?: string; number_source?: "hr"; session_ref?: string }) =>
+  api<HelpdeskCase>(`${hd(id)}/verifications`, b);
+export const managerApproveHelpdeskCase = (id: string, evidence?: string) => api<HelpdeskCase>(`${hd(id)}/manager-approval`, { evidence });
+export const secondApproveHelpdeskCase = (id: string) => api<HelpdeskCase>(`${hd(id)}/second-approval`, {});
+export const cancelHelpdeskCase = (id: string) => api<HelpdeskCase>(`${hd(id)}/cancel`, {});
+/** The temporary access pass (Entra) is in the answer once; it is never stored or shown again. */
+export const executeHelpdeskCase = (id: string) => api<{ case: HelpdeskCase; temporary_access_pass?: string }>(`${hd(id)}/execute`, {});
 
 export const simulate = (body: { remove_edge_ids?: number[]; add_edges?: { src: string; dst: string; duration_hours?: number }[]; disable_account_ids?: number[] }) =>
   api<SimResult>("/simulate", { remove_edge_ids: [], add_edges: [], disable_account_ids: [], ...body });

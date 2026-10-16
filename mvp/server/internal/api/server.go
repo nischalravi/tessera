@@ -24,6 +24,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oidcrp"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
+	"github.com/nischalravi/tessera/mvp/server/internal/helpdesk"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
@@ -101,6 +102,10 @@ type Config struct {
 	// grants). Nil: a service with no outbound client, so every containment
 	// step is a manual task.
 	Containment *containment.Service
+	// Helpdesk runs the verified help-desk reset workflow (issue #108). Nil:
+	// live executors from the Containment credentials, and the simulators
+	// unless Env is "prod".
+	Helpdesk *helpdesk.Service
 	// AuditAppend overrides how the audit middleware writes http.request
 	// events (tests inject failures). Nil: the store.
 	AuditAppend func(ctx context.Context, t tenancy.ID, e store.AuditEvent) error
@@ -121,6 +126,8 @@ type Server struct {
 	readiness *readiness.Service
 	// containment is the kill switch (issue #106); never nil.
 	containment *containment.Service
+	// helpdesk is the verified reset workflow (issue #108); never nil.
+	helpdesk *helpdesk.Service
 }
 
 // New builds a server.
@@ -157,8 +164,17 @@ func New(cfg Config) *Server {
 	if cfg.Containment.Clock == nil {
 		cfg.Containment.Clock = cfg.Clock
 	}
-	s := &Server{cfg: cfg, containment: cfg.Containment, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
-		limits: newLimiters(cfg.RateLimits)}
+	if cfg.Helpdesk == nil {
+		// The live Okta and Entra executors reuse the kill switch's provider
+		// credentials and outbound client; the simulators never run in prod.
+		hc := cfg.Containment.HTTP
+		if hc == nil {
+			hc = cfg.OutboundHTTP
+		}
+		cfg.Helpdesk = &helpdesk.Service{HTTP: hc, Containment: cfg.Containment, Clock: cfg.Clock, Simulated: cfg.Env != "prod"}
+	}
+	s := &Server{cfg: cfg, containment: cfg.Containment, helpdesk: cfg.Helpdesk, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger,
+		readiness: cfg.Readiness, limits: newLimiters(cfg.RateLimits)}
 	if cfg.OutboundHTTP != nil {
 		rp, err := oidcrp.New(oidcrp.Config{HTTP: cfg.OutboundHTTP, Now: func() time.Time { return s.clock() }})
 		if err != nil {
@@ -175,6 +191,7 @@ func New(cfg Config) *Server {
 	s.registerAuditRoutes()
 	s.registerCorrelationRoutes()
 	s.registerContainmentRoutes()
+	s.registerHelpdeskRoutes()
 	s.registerReadinessRoutes()
 	s.registerAuthRoutes()
 	s.registerLoginRoutes()

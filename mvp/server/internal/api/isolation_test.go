@@ -180,6 +180,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/api/containment-retries/{retry_id}/retry-now" {
 			continue // TestContainmentRetriesAPI (a UUID, not a fixture id)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/helpdesk/cases/{case_id}") {
+			continue // TestHelpdeskTenantIsolation (a UUID, not a fixture id)
+		}
 		if rt.Pattern == "/api/auth/sessions/{session_id}" {
 			continue // TestIsolation_SessionCookieScoped (a UUID, not a fixture id)
 		}
@@ -235,11 +238,26 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 	if rec := serveOnce(isolationServer(t, f, f.A.ID).Handler(), http.MethodGet, "/api/identities", ""); !leaks(rec.Body.String()) {
 		t.Fatal("tenant A's own identities do not carry the sentinel; the leak check would never fire")
 	}
+	// Each tenant has a help-desk case; A's carries the sentinel through its identity's name.
+	caseIDs := map[string]string{}
+	for _, tn := range []storetest.Tenant{f.A, f.B} {
+		if err := f.DB.InTenant(context.Background(), tn.ID, func(c *store.TenantTx) error {
+			hc := &store.HelpdeskCase{IdentityID: tn.IDs["alice"], Kind: "mfa", System: "okta", Reason: "lost phone", RequestedBy: "agent"}
+			if err := c.InsertHelpdeskCase(hc, storetest.Now); err != nil {
+				return err
+			}
+			caseIDs[tn.Slug] = hc.ID
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	srv := isolationServer(t, f, f.B.ID)
 	h := srv.Handler()
 	b := f.B.IDs
 	param := regexp.MustCompile(`\{[a-z_]+\}`)
 	values := map[string]string{
+		"/api/helpdesk/cases/{case_id}":             caseIDs[f.B.Slug],
 		"/api/identities/{identity_id}":             fmt.Sprint(b["alice"]),
 		"/api/jml/leaver-plan/{identity_id}":        fmt.Sprint(b["alice"]),
 		"/api/identities/{identity_id}/containment": fmt.Sprint(b["alice"]),

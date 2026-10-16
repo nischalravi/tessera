@@ -43,6 +43,7 @@ const RolePage = named(objects, "RolePage");
 const EntitlementPage = named(objects, "EntitlementPage");
 const AppPage = named(objects, "AppPage");
 const OrgPage = named(objects, "OrgPage");
+const HelpDesk = named(() => import("../features/helpdesk/HelpDesk"), "HelpDesk");
 const RiskOverview = named(() => import("../features/insights/RiskOverview"), "RiskOverview");
 // cytoscape is the heaviest dependency; it only loads with the graph
 const GraphExplorer = lazy(() => import("../features/insights/GraphExplorer"));
@@ -105,6 +106,7 @@ export default function App() {
                       <Route path="orgs" element={<Orgs />} />
                       <Route path="groups" element={<Groups />} />
                     </Route>
+                    <Route path="/helpdesk" element={<HelpDesk />} />
                     <Route path="/directory/identities/:id" element={<IdentityPage />} />
                     <Route path="/directory/roles/:id" element={<RolePage />} />
                     <Route path="/directory/entitlements/:id" element={<EntitlementPage />} />

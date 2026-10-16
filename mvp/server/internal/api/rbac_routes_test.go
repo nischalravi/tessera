@@ -90,6 +90,16 @@ POST   /api/identities/{identity_id}/contain         identities.contain STEP_UP_
 GET    /api/identities/{identity_id}/containment     graph.read      -  # issue #106
 POST   /api/containment-retries/{retry_id}/retry-now identities.contain STEP_UP_POLICY  # issue #106
 PUT    /api/connections/{id}/containment-credential  connections.manage STEP_UP_POLICY  # issue #106
+GET    /api/helpdesk/cases                           graph.read      -  # issue #108
+POST   /api/helpdesk/cases                           helpdesk.reset  -  # issue #108
+GET    /api/helpdesk/cases/{case_id}                 graph.read      -  # issue #108
+POST   /api/helpdesk/cases/{case_id}/verifications   helpdesk.reset  -  # issue #108
+POST   /api/helpdesk/cases/{case_id}/manager-approval helpdesk.approve STEP_UP_POLICY  # issue #108
+POST   /api/helpdesk/cases/{case_id}/second-approval helpdesk.approve STEP_UP_POLICY  # issue #108
+POST   /api/helpdesk/cases/{case_id}/execute         helpdesk.reset  STEP_UP_POLICY  # issue #108
+POST   /api/helpdesk/cases/{case_id}/cancel          helpdesk.reset  -  # issue #108
+GET    /api/helpdesk/findings                        graph.read      -  # issue #108
+POST   /api/helpdesk/signals                         helpdesk.approve -  # issue #108
 POST   /api/connections/{id}/validate                connections.manage -
 GET    /api/connections/{id}/validations/{run}       connections.read   -
 POST   /api/connections/{id}/dry-run                 connections.manage -

@@ -90,6 +90,8 @@ var tables = []string{
 	"account_links", "identity_merges",
 	// identity containment (schema/0205_containment.sql)
 	"containment_credentials", "containment_retries",
+	// verified help-desk resets (schema/0254_helpdesk.sql)
+	"helpdesk_cases", "helpdesk_verifications", "helpdesk_signals", "helpdesk_findings",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was
