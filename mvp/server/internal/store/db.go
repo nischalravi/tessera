@@ -90,6 +90,8 @@ var tables = []string{
 	"account_links", "identity_merges",
 	// identity model for guests (schema/0226_identity_model.sql)
 	"guest_populations", "identity_source_records", "identity_identifiers", "affiliations",
+	// SIS and HRIS intake (schema/0310_intake.sql)
+	"org_sponsors", "intake_records", "identity_conversions",
 	// identity containment (schema/0205_containment.sql)
 	"containment_credentials", "containment_retries",
 }
