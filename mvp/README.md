@@ -586,6 +586,8 @@ calls it `0104`; `0280`..`0285` are taken and `0286` belongs to another change):
 | `GET\|POST /api/groups/attr-assignments`, `GET\|PATCH\|DELETE .../{id}`, `PUT .../{id}/values` | read: `attr_read` + owner read; write: `attr_update` + owner update (or `attr_optin` / `attr_optout` on oneself). `POST {name (id or full name), action (id or name), owner_type, owner, disallowed, enabled_from, disabled_at, values}` |
 | `GET /api/groups/object-types`, `GET\|PUT /api/groups/{id}/object-types`, `.../folders/{id}/object-types`, `GET /api/groups/services` | see above |
 
+- The attribute, object-type and service routes are in the groups OpenAPI document
+  (`GET /api/openapi/groups.json`), as `TestGroupsOpenAPI_CoversRoutes` requires.
 - Tests: `go test ./internal/groups/attrs` (`TestValues_NoFloats`, `TestImplies_ClosureMaintenance`,
   `TestAssign_OnAssignment`, `TestAttrPrivileges_*`, `TestObjectTypes`, `TestLint_*`, `TestServices`,
   `TestEvents_InTheChangeTransaction`), `internal/api` (`TestGroupsRoutesRequirePrivilege` covers every
@@ -654,7 +656,7 @@ the right. Arrow keys move between items.
 | Group | Items |
 |---|---|
 | (top) | **Home**, **Inbox** (count) |
-| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts (with *Account matches*), Roles (Preview), Organizations (Preview) |
+| **Identity** | Users, Machine identities & agents, Groups (*Managed groups* and *Connected groups*, with an *All entitlements* tab), Applications, Accounts (with *Account matches*), Roles (Preview), Organizations (Preview) |
 | **Access** | Request access, My access (with *My requests*), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
 | **Protection** | Policies & SoD (violations, policies, what-if simulation), Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
 | **Settings** | Connections (governed connections and the setup wizard), Admin |
@@ -678,6 +680,22 @@ Groups, Activity. Groups, applications, accounts, roles, organizations, policy v
 review items have their own panels. The panel is deep-linkable (`/directory/people?selected=16`,
 `/governance/policies?selected=<key>`, `/governance/reviews?item=<id>`), traps focus, closes
 with `Esc` and returns focus to the row. **Open full page** goes to the existing object page.
+
+**Groups (GR-8, issue #51).** Directory → Groups has a toggle (`?view=connected`): **Managed
+groups** (the native groups of the GR-1 to GR-7 API, the default) and **Connected groups** (those
+discovered in connected systems, as before). Code: `frontend/src/features/directory/groups/`, the
+client is `groups` in `src/api.ts`, the pure logic (folder tree, dates, preview text, history diff,
+application template) is `model.ts`, tested by `tests/groups-model.test.ts` and
+`tests/groups-api.test.ts`. None of it is a Preview: every screen reads and writes the real API, and the
+server decides access on each request (the UI only hides what cannot work).
+
+| Screen | Route | What it has |
+|---|---|---|
+| Folder browser | `/directory/groups[?folder=<id>]` | breadcrumb, folders then groups with type badges and member counts, only what the caller may view; filter chips (type, definition, group or role, status), search, *Include subfolders*, CSV export; a row opens the side panel (overview, first members) with *Open group page* / *Open folder page*; commands *New group*, *New folder*, *New application* |
+| Group page | `/directory/groups/<id>[?tab=]` | header (path, type badges, owner, status, a *Recalculating…* banner while `recompute_state` is pending); tabs **Members** (direct / indirect / effective / composite, search, enabled filter, paging, add and remove, CSV import and export, a *Trace* drawer with every path), **Definition** (composite operator and factors as a set expression; edit or convert), **Privileges** (direct rows, grant, revoke, and the explanation of every path), **Usage** (what a composite is built from), **History** (members on a date, compare two dates, anyone in a period), **Attributes** (object types with lint findings, attribute assignments) |
+| Folder page | `/directory/groups/folders/<id>[?tab=]` | contents, privileges with inheritance scope (`groups`, `folders`, `attr_defs`; one level or all), object types and attributes, details |
+| Change preview | a drawer | every member add or remove, CSV import and composite save calls `POST /api/groups:simulate` first and shows "+1,204 / −13 identities in 4 groups" with the groups changed; nothing is written until *Apply*. Batches carry an `Idempotency-Key` |
+| New application | a drawer | the Deployment Guide layout in one step (app, security and service folders; admin, reference, allow, allow-manual, deny groups; policy group `allow − deny`) as separate changes, safe to run again |
 
 **Inbox.** One queue for JIT and catalog approvals, access-review items, joiner/mover/leaver
 tasks and delegations, with keys: `j`/`k` move, `a` approve or keep, `d` deny, `r` revoke,

@@ -10,6 +10,7 @@ import {
 import { ORGS, mockObjects, mockRoles, useMockState, useRoles } from "../../mocks";
 import { AgentCard } from "./AgentCards";
 import { AccountPanel, AppPanel, GroupPanel, IdentityPanel, OrgPanel, RolePanel } from "./Panels";
+import { ViewToggle } from "./groups/ViewToggle";
 import { ImportDrawer, PreviewFormDrawer, opts, uniq } from "./shared";
 
 /** Identity lists each render their own page header; the layout only hosts them. */
@@ -419,7 +420,7 @@ function groupColumns(): Column<Group>[] {
   ];
 }
 
-function GroupList({ id, kinds, newLabel, title }: { id: string; kinds?: string[]; newLabel: string; title: string }) {
+function GroupList({ id, kinds, newLabel, title, toggle }: { id: string; kinds?: string[]; newLabel: string; title: string; toggle?: boolean }) {
   const { data, error, reload } = useApi<Group[]>("/groups");
   const nav = useNavigate();
   const [selected, setSelected] = useSelected();
@@ -450,6 +451,7 @@ function GroupList({ id, kinds, newLabel, title }: { id: string; kinds?: string[
         onRowClick={(r) => setSelected(r.id)}
         activeKey={selected}
         onImport={imp.onImport}
+        toolbarExtra={toggle ? <ViewToggle /> : undefined}
       />
       {open && <GroupPanel g={open} onClose={() => setSelected(null)} />}
       {newOpen && (
@@ -471,7 +473,8 @@ function GroupList({ id, kinds, newLabel, title }: { id: string; kinds?: string[
 
 export const Entitlements = () => <GroupList id="entitlements" title="Entitlements" newLabel="New entitlement" />;
 const GROUP_KINDS = ["group", "team", "security_group"];
-export const Groups = () => <GroupList id="groups" title="Groups" kinds={GROUP_KINDS} newLabel="New group" />;
+/** Connected groups: the groups of the connected systems. The managed (native) groups are in `groups/`. */
+export const ConnectedGroups = () => <GroupList id="groups" title="Groups" kinds={GROUP_KINDS} newLabel="New group" toggle />;
 
 // -------------------------------------------------------------------- apps
 export function Apps() {

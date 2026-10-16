@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 const cache = new Map<string, unknown>();
-const CHANGED = "tessera:api-changed";
+export const CHANGED = "tessera:api-changed";
 
 /** An API error with its status and parsed body (gate reports carry `blocking`). */
 export class ApiError extends Error {
@@ -103,9 +103,10 @@ function errorMessage(status: number, j: any): string {
   return j ? JSON.stringify(j.detail ?? j) : `${status}`;
 }
 
-export async function api<T = any>(path: string, body?: unknown, method?: string): Promise<T> {
+export async function api<T = any>(path: string, body?: unknown, method?: string, idempotencyKey?: string): Promise<T> {
   const m = method ?? (body !== undefined ? "POST" : "GET");
   const headers: Record<string, string> = {};
+  if (idempotencyKey) headers["idempotency-key"] = idempotencyKey;
   if (body !== undefined) headers["content-type"] = "application/json";
   if (m !== "GET" && m !== "HEAD" && csrfToken) headers["x-tessera-csrf"] = csrfToken;
   const epoch = sessionEpoch;
@@ -889,4 +890,119 @@ export const readiness = {
   retire: (id: string) => api<Connection>(`/connections/${id}/retire`, { confirm: true }),
   rerun: (reconcile = false) => api<{ results: { connection_id: string; name: string; validation_run_id: string | null; dry_run_id: string | null; skipped?: string }[]; dashboard: DeploymentHealth }>(
     "/insights/deployment-health/rerun", { reconcile }),
+};
+
+// ------------------------------------------------------------ native groups (Directory → Groups, GR-1 to GR-7)
+// Design docs/design/groups-grouper-parity.md §10.11. `GET /api/groups` is the connected-system groups;
+// the native (managed) groups are under /api/groups/native, /api/groups/folders and /api/groups/{id}.
+
+export interface GrpFolder {
+  id: string; parent_id: string | null; extension: string; display_extension: string; name: string; display_name: string;
+  description: string; data_owner: string | null; managed_by: string; created_at: string; version: number;
+}
+export type GrpDefinition = "basic" | "composite" | "policy";
+export type CompositeOp = "union" | "intersection" | "complement";
+export interface GrpGroup {
+  id: string; folder_id: string; extension: string; display_extension: string; name: string; display_name: string;
+  description: string; type: "group" | "role"; definition: GrpDefinition; composite_op: CompositeOp | null; factors?: string[];
+  managed_by: string; data_owner: string | null; member_description: string | null; status: string;
+  enabled_from: string | null; disabled_at: string | null; requestable: boolean; effective_count: number;
+  /** clean, pending (a queued recompute is running: the members are stale) or failed */
+  recompute_state: string; created_at: string; version: number;
+}
+export interface GrpList<T> { items: T[]; limit: number; offset: number }
+export interface GrpDirectMember {
+  id: string; type: "identity" | "group"; identity_id: number | null; group_id: string | null; name: string;
+  enabled_from: string | null; disabled_at: string | null; active: boolean; source: string; reason: string | null; created_at: string;
+}
+export interface GrpEffectiveMember { identity_id: number; name: string; support: number; since: string }
+export interface GrpMembers<T> { items: T[]; limit: number; offset: number; total: number; filter: string; stale: boolean }
+export type MemberFilter = "direct" | "indirect" | "effective" | "composite";
+export interface TraceStep { group_id: string; name: string; via: string; op?: string; role?: string }
+export interface MemberTrace { group_id: string; identity_id: number; member: boolean; stale: boolean; paths?: { steps: TraceStep[] }[]; truncated?: boolean }
+export interface MemberAnswer { member?: GrpDirectMember; effective: "applied" | "pending"; op: number | null }
+export interface BatchAdd { identity?: number; group?: string; enabled_from?: string; disabled_at?: string; reason?: string }
+export interface BatchBody { add?: BatchAdd[]; remove?: string[]; enabled_from?: string; disabled_at?: string; reason?: string; atomic?: boolean }
+export interface BatchResult { results?: { index: number; op: string; member_type: string; member: string; status: string; error: unknown }[]; effective?: string; op?: number | null }
+export interface SimChange { kind: string; group: string; identity?: number; member_group?: string; member?: string; enabled_from?: string; disabled_at?: string; reason?: string; op?: string; factors?: string[]; discard_members?: boolean }
+export interface SimMemberRef { identity_id: number; name: string }
+export interface SimGroupResult { group_id: string; name: string; targeted: boolean; before: number; after: number; added: number; removed: number; added_sample: SimMemberRef[]; removed_sample: SimMemberRef[] }
+export interface SimulationResult {
+  simulated: boolean; changes: { index: number; kind: string; group_id: string; name: string; status: string }[];
+  groups: SimGroupResult[]; added: number; removed: number; truncated: boolean;
+}
+export interface PitMember { identity_id?: number; group_id?: string; name: string; type?: string; source?: string; enabled_from?: string; disabled_at?: string; start_at: string; end_at: string | null }
+export interface PitMembers { group_id: string; as_of?: string; from?: string; to?: string; filter: string; group: { name?: string; status?: string } | null; items: PitMember[]; limit: number; offset: number; total: number }
+export interface PrivRow {
+  id: string; object_type: string; object_id: string; object_name: string; privilege: string; holder_type: string; holder_id: string | null;
+  holder_name: string; applies_to: string; scope: string; source: string; created_by: string | null; granted_by?: string; created_at: string;
+}
+export interface PrivPath { kind: string; role?: string; row?: PrivRow; via?: string; over_folder?: string; holder?: string; text: string }
+export interface PrivExplanation { privilege: string; allowed: boolean; paths: PrivPath[] }
+export interface GrpPrivGrant { privilege: string; holder_type: "identity" | "group" | "everyone"; identity?: number; group?: string; applies_to?: string; scope?: string }
+export interface AttrDef { id: string; folder_id: string; name: string; attr_type: string; value_type: string; multi_assign: boolean; multi_valued: boolean; assign_to: string[]; system: boolean; description: string }
+export interface AttrName { id: string; def_id: string; name: string; description: string; implies: string[]; implies_all: string[] }
+export interface AttrAssignment {
+  id: string; def_id: string; def: string; name_id: string; name: string; action_id: string; action: string; owner_type: string; owner: string;
+  disallowed: boolean; enabled_from: string | null; disabled_at: string | null; active: boolean; values: (string | number)[]; created_at: string; version: number;
+}
+export interface LintFinding { rule: string; severity: string; message: string }
+export interface ObjectTypes { object_type: string; object_id: string; types: string[]; vocabulary: string[]; lint: LintFinding[] }
+
+const qs = (o: Record<string, string | number | boolean | undefined | null>) => {
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries(o)) if (v !== undefined && v !== null && v !== "") p.set(k, String(v));
+  const s = p.toString();
+  return s ? `?${s}` : "";
+};
+const gid = encodeURIComponent;
+
+/** The native groups API. Every call is audited and privilege-checked on the server; nothing here decides access. */
+export const groups = {
+  // folders
+  listFolders: (o: { parent?: string; scope?: "one" | "sub"; q?: string; limit?: number; offset?: number } = {}) =>
+    api<GrpList<GrpFolder>>(`/groups/folders${qs({ limit: 500, ...o })}`),
+  folder: (id: string) => api<GrpFolder>(`/groups/folders/${gid(id)}`),
+  createFolder: (b: { parent?: string; extension: string; display_extension?: string; description?: string; data_owner?: string }) => api<GrpFolder>("/groups/folders", b),
+  updateFolder: (id: string, b: { extension?: string; display_extension?: string; description?: string; data_owner?: string; version?: number }) =>
+    api<GrpFolder>(`/groups/folders/${gid(id)}`, b, "PATCH"),
+  deleteFolder: (id: string) => api<{ id: string; deleted: boolean }>(`/groups/folders/${gid(id)}`, undefined, "DELETE"),
+  // groups
+  listGroups: (o: { folder?: string; scope?: "one" | "sub"; q?: string; type?: string; deleted?: boolean; limit?: number; offset?: number } = {}) =>
+    api<GrpList<GrpGroup>>(`/groups/native${qs({ limit: 500, ...o })}`),
+  group: (id: string) => api<GrpGroup>(`/groups/${gid(id)}`),
+  createGroup: (b: { folder: string; extension: string; display_extension?: string; description?: string; type?: string; data_owner?: string; member_description?: string; requestable?: boolean; definition?: string; composite_op?: string; factors?: string[] }) =>
+    api<GrpGroup>("/groups", b),
+  updateGroup: (id: string, b: Record<string, unknown>) => api<GrpGroup>(`/groups/${gid(id)}`, b, "PATCH"),
+  deleteGroup: (id: string) => api<{ id: string; deleted: boolean }>(`/groups/${gid(id)}`, undefined, "DELETE"),
+  restoreGroup: (id: string) => api<GrpGroup>(`/groups/${gid(id)}/restore`, {}),
+  // members
+  members: <T = GrpDirectMember | GrpEffectiveMember>(id: string, o: { filter?: MemberFilter; q?: string; sort?: string; enabled?: boolean; page?: number; limit?: number } = {}) =>
+    api<GrpMembers<T>>(`/groups/${gid(id)}/members${qs(o)}`),
+  addMember: (id: string, b: BatchAdd, key?: string) => api<MemberAnswer>(`/groups/${gid(id)}/members`, b, "POST", key),
+  removeMember: (id: string, member: string) => api<MemberAnswer>(`/groups/${gid(id)}/members/${gid(member)}`, undefined, "DELETE"),
+  trace: (id: string, identity: number) => api<MemberTrace>(`/groups/${gid(id)}/members/${identity}?trace=true`),
+  batch: (id: string, b: BatchBody, key?: string) => api<BatchResult>(`/groups/${gid(id)}/members:batch`, b, "POST", key),
+  simulate: (changes: SimChange[]) => api<SimulationResult>("/groups:simulate", { changes }),
+  setComposite: (id: string, b: { op: string; factors: string[] }) => api<GrpGroup>(`/groups/${gid(id)}/composite`, b, "PUT"),
+  convertToComposite: (id: string, b: { op: string; factors: string[]; discard_members?: boolean }) => api<GrpGroup>(`/groups/${gid(id)}/convert-to-composite`, b),
+  // history (point in time)
+  asOf: (id: string, at: string, filter: "effective" | "direct" = "effective") =>
+    api<PitMembers>(`/groups/${gid(id)}/members${qs({ as_of: at, filter, limit: 500 })}`),
+  between: (id: string, from: string, to: string) => api<PitMembers>(`/groups/${gid(id)}/members${qs({ between: `${from},${to}`, limit: 500 })}`),
+  // privileges
+  privileges: (kind: "group" | "folder", id: string) => api<{ object_type: string; object_id: string; items: PrivRow[] }>(`/groups/${kind === "folder" ? "folders/" : ""}${gid(id)}/privileges`),
+  grant: (kind: "group" | "folder", id: string, b: GrpPrivGrant) => api<PrivRow>(`/groups/${kind === "folder" ? "folders/" : ""}${gid(id)}/privileges`, b),
+  revoke: (kind: "group" | "folder", id: string, privilegeId: string) =>
+    api<{ id: string; revoked: boolean }>(`/groups/${kind === "folder" ? "folders/" : ""}${gid(id)}/privileges/${gid(privilegeId)}`, undefined, "DELETE"),
+  effectivePrivileges: (kind: "group" | "folder", id: string, identity?: number) =>
+    api<{ object_type: string; object_id: string; identity_id: number | null; privileges: PrivExplanation[] }>(`/groups/${kind === "folder" ? "folders/" : ""}${gid(id)}/privileges/effective${qs({ identity })}`),
+  // attributes and object types
+  attrNames: () => api<GrpList<AttrName>>(`/groups/attr-names${qs({ limit: 500 })}`),
+  attrDefs: () => api<GrpList<AttrDef>>(`/groups/attr-defs${qs({ limit: 500 })}`),
+  assignments: (ownerType: string, owner: string) => api<GrpList<AttrAssignment>>(`/groups/attr-assignments${qs({ owner_type: ownerType, owner, limit: 500 })}`),
+  assign: (b: { name: string; action: string; owner_type: string; owner: string; values?: (string | number)[]; enabled_from?: string; disabled_at?: string }) => api<AttrAssignment>("/groups/attr-assignments", b),
+  unassign: (id: string) => api<{ id: string; deleted: boolean }>(`/groups/attr-assignments/${gid(id)}`, undefined, "DELETE"),
+  objectTypes: (kind: "group" | "folder", id: string) => api<ObjectTypes>(`/groups/${kind === "folder" ? "folders/" : ""}${gid(id)}/object-types`),
+  setObjectTypes: (kind: "group" | "folder", id: string, types: string[]) => api<ObjectTypes>(`/groups/${kind === "folder" ? "folders/" : ""}${gid(id)}/object-types`, { types }, "PUT"),
 };

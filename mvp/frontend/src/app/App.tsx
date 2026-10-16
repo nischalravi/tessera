@@ -37,7 +37,9 @@ const Roles = named(directory, "Roles");
 const Entitlements = named(directory, "Entitlements");
 const Apps = named(directory, "Apps");
 const Orgs = named(directory, "Orgs");
-const Groups = named(directory, "Groups");
+const Groups = named(() => import("../features/directory/groups/GroupsRoute"), "GroupsRoute");
+const GroupPage = named(() => import("../features/directory/groups/GroupPage"), "GroupPage");
+const FolderPage = named(() => import("../features/directory/groups/FolderPage"), "FolderPage");
 const IdentityPage = named(() => import("../features/directory/IdentityPage"), "IdentityPage");
 const RolePage = named(objects, "RolePage");
 const EntitlementPage = named(objects, "EntitlementPage");
@@ -105,6 +107,8 @@ export default function App() {
                       <Route path="orgs" element={<Orgs />} />
                       <Route path="groups" element={<Groups />} />
                     </Route>
+                    <Route path="/directory/groups/folders/:id" element={<FolderPage />} />
+                    <Route path="/directory/groups/:id" element={<GroupPage />} />
                     <Route path="/directory/identities/:id" element={<IdentityPage />} />
                     <Route path="/directory/roles/:id" element={<RolePage />} />
                     <Route path="/directory/entitlements/:id" element={<EntitlementPage />} />
