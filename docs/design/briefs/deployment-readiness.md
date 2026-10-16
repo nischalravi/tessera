@@ -18,7 +18,7 @@ Connections to customer directories (AD, LDAP, Entra, Okta, Google, Workday, SCI
 - Live checks are read-only by construction: `connectors.Prober` has no write method. Least privilege is checked by reading effective rights, never by attempting writes. Test `TestProbers_ReadOnly` uses a recorder.
 - Bounds: 10 s per check, 120 s per run, at most 500 samples per class, concurrency 2, abort on first 429, one run per revision at a time (409), 6 runs/connection/h, 1 dry run in flight per tenant.
 - No secrets in results (tests scan serialised output for secret bytes). Samples hold fill counts, or ids and names only, capped at 10, expire after 30 days.
-- HTTP probes use `safehttp` plus per-template host allowlists. Private directories only via the Directory Agent (local allowlist, outbound mTLS, typed ops only; DR-11, not built). Credential endpoint is write-only.
+- HTTP probes use `safehttp` plus per-template host allowlists. Private directories only via the Directory Agent (local allowlist, outbound mTLS, typed ops only; DR-11, built). Credential endpoint is write-only.
 - Planned, not built: step-up, RBAC permissions (`connections.read|manage|activate`), two-person activation for `write_mode != off` (DR-10); ledger evidence events and export (DR-8).
 
 ## Layout (as built, mvp/server)
@@ -37,7 +37,7 @@ Connections to customer directories (AD, LDAP, Entra, Okta, Google, Workday, SCI
 
 Frontend (mvp/frontend/src): `features/admin/connections/{ConnectionsList,Wizard,ValidationResults,ReconReport,FindingDrawer,shared,index}`, `components/{Checklist,Stepper}.tsx`, `features/insights/DeploymentHealth.tsx`, `features/home/Home.tsx`, `features/inbox/`, `app/nav.ts`, `app/CommandPalette.tsx`, `api.ts`.
 
-Built since: `internal/safedial` (raw-TCP dialer, ports 389/636, dev-only `TESSERA_SAFEDIAL_ALLOW`, `Transport` seam for the agent) and `internal/connectors/ldap/probe.go` (real read-only prober; `readiness/liveprobe.go` wires it for non-demo `ldap` revisions; sealed passwords in `connection_secrets`). Not yet existing: `readiness/evidence.go`, `drift.go`, `internal/agent`, `cmd/tessera-agent`, `internal/connectors/{ad,entra,...}/probe.go`. Unsupported live answers (no Who Am I or Get Effective Rights) are `skipped` with `observed.unsupported`: the item stays pending and the template has no attestation alternative yet.
+Built since: `internal/safedial` (raw-TCP dialer, ports 389/636, dev-only `TESSERA_SAFEDIAL_ALLOW`; agent-side `AgentLocal` allowlist, no byte tunnel), `internal/agent` + `cmd/tessera-agent` (DR-11: typed ops, local allowlist, mTLS with key pinning, single-use hashed enrolment, `directory_agents`, Admin agent screen) and `internal/connectors/ldap/probe.go` (real read-only prober; `readiness/liveprobe.go` wires it for non-demo `ldap` revisions; sealed passwords in `connection_secrets`). Not yet existing: `readiness/evidence.go`, `drift.go`, `internal/connectors/{ad,entra,...}/probe.go`. Unsupported live answers (no Who Am I or Get Effective Rights) are `skipped` with `observed.unsupported`: the item stays pending and the template has no attestation alternative yet.
 
 ## Key names
 - Score: `levelWeight` required 5, recommended 2, optional 0; `severityPenalty` critical 15, high 8, medium 3, low 1; `PenaltyCap` 40; `RequiredCap` 49 (cap below 50 while a Required item fails); bands healthy, needs_attention, at_risk, not_ready.
@@ -56,7 +56,7 @@ Built since: `internal/safedial` (raw-TCP dialer, ports 389/636, dev-only `TESSE
 | DR-8 | evidence export, ledger events (needs Phase 0 PR3 #7, merged) | #89 | open |
 | DR-9 | drift, Degraded, scheduled re-runs, template upgrades | #90 | open |
 | DR-10 | tenancy finish, RBAC, step-up, two-person activation (needs #9, #12, #16) | #91 | open |
-| DR-11 | Directory agent, `safedial` (needs #6, merged) | #92 | open |
+| DR-11 | Directory agent, `safedial` (needs #6, merged) | #92 | in review |
 | DR-12..17 | live checks: AD, OpenLDAP/389-DS, Entra, Okta, Google, Workday (needs-human) | #93-#98 | open |
 | DR-18 | generic SCIM live checks | #99 | open |
 

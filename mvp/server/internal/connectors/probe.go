@@ -48,6 +48,15 @@ var ErrUnsupported = errors.New("connectors: operation not supported by this sys
 // (a private address without the Directory Agent, a port other than 389/636).
 var ErrTargetNotAllowed = errors.New("connectors: target not reachable from this deployment")
 
+// ErrAgentUnavailable is returned when the connection's Directory Agent cannot
+// take the operation (offline, busy or revoked). Tessera never falls back to a
+// direct dial.
+var ErrAgentUnavailable = errors.New("connectors: the Directory Agent is unavailable")
+
+// ErrAgentRefused is returned when the Directory Agent refused the operation
+// because the target is not on its local allowlist.
+var ErrAgentRefused = errors.New("connectors: the Directory Agent refused the target")
+
 // ConnInfo is the transport handshake.
 type ConnInfo struct {
 	Reachable     bool

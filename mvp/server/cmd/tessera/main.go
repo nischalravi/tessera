@@ -34,11 +34,14 @@
 //	                      dev_mock SAML connection pinning it (run.sh sets it)
 //	TESSERA_READINESS_SCENARIO  simulated validation scenario for demo connectors: gaps (default) or happy
 //	TESSERA_SAFEDIAL_ALLOW      dev only: host:port or CIDR:port private LDAP targets live checks may dial (see mvp/README.md "Live LDAP checks")
+//	TESSERA_AGENT_ADDR, TESSERA_AGENT_TLS_CERT, TESSERA_AGENT_TLS_KEY  the mutual-TLS listener Directory
+//	                      Agents connect to, and its certificate and key (see mvp/README.md "Directory Agent")
 //	TESSERA_READINESS_DEMO      "off" skips seeding the demo Okta connection (larkspur only) for Deployment health
 package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -54,6 +57,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/agent"
 	"github.com/nischalravi/tessera/mvp/server/internal/api"
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
@@ -304,6 +308,9 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	rsvc := readiness.NewService(templates, string(cfg.Env))
 	rsvc.Runner.Scenario = scenario
 	rsvc.Runner.Live.Sealer, rsvc.Runner.Live.Allow = sealer, allow
+	// Directory Agents (DR-11): private directories are probed through them.
+	agents := &agent.Service{DB: st, Hub: agent.NewHub(nil), Clock: clock}
+	rsvc.Runner.Live.Agents = agents
 	// Outbound calls to IdPs (discovery, JWKS, token) and the kill switch's
 	// provider calls (containment) go through safehttp. A test server gets the
 	// production client (no loopback exception).
@@ -319,7 +326,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound,
 		Containment:    &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock},
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
-		HSTS: cfg.IsProd(), Env: cfg.Env, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, Readiness: rsvc, AuditAnchor: anchorURL})
+		HSTS: cfg.IsProd(), Env: cfg.Env, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, Readiness: rsvc, Agents: agents, AuditAnchor: anchorURL})
 	checkpointer := &audit.Checkpointer{DB: st, Sealer: sealer, Sink: sink, Clock: timeutil.System, Issuer: cfg.PublicURL,
 		Every: time.Duration(cfg.AuditCheckpointSeconds) * time.Second, EveryEvents: int64(cfg.AuditCheckpointEvents),
 		Log: logger}
@@ -337,6 +344,32 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if err != nil {
 		return err
 	}
+	// The Directory Agent listener (DR-11): mutual TLS only, a separate port
+	// from the API, serving nothing but the agent protocol.
+	var agentSrv *http.Server
+	var agentLn net.Listener
+	if cfg.AgentAddr != "" {
+		tlsCfg, err := agent.ServerTLSConfig(cfg.AgentTLSCert, cfg.AgentTLSKey)
+		if err != nil {
+			_ = ln.Close()
+			return err
+		}
+		raw, err := net.Listen("tcp", cfg.AgentAddr)
+		if err != nil {
+			_ = ln.Close()
+			return err
+		}
+		agentLn = tls.NewListener(raw, tlsCfg)
+		agentSrv = &http.Server{
+			Handler:           agents.Handler(agent.PollWait),
+			ReadHeaderTimeout: readHeaderTimeout,
+			ReadTimeout:       readTimeout,
+			WriteTimeout:      agent.PollWait + 15*time.Second,
+			IdleTimeout:       idleTimeout,
+			MaxHeaderBytes:    16 << 10,
+			ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
+		}
+	}
 	sweepDone := make(chan struct{})
 	go func() {
 		defer close(sweepDone)
@@ -352,13 +385,21 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		defer close(ckptDone)
 		checkpointer.Loop(ctx, checkpointInterval)
 	}()
-	errc := make(chan error, 1)
+	errc := make(chan error, 2)
 	go func() { errc <- httpSrv.Serve(ln) }()
 	logger.Info("tessera API listening", "addr", ln.Addr().String())
+	if agentSrv != nil {
+		go func() { errc <- agentSrv.Serve(agentLn) }()
+		logger.Info("tessera agent listener (mutual TLS)", "addr", agentLn.Addr().String())
+	}
 
 	select {
 	case err := <-errc:
 		stop()
+		if agentSrv != nil {
+			_ = agentSrv.Close()
+		}
+		_ = httpSrv.Close()
 		<-sweepDone
 		<-keysDone
 		<-ckptDone
@@ -369,11 +410,18 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	err = httpSrv.Shutdown(shutdownCtx)
+	if agentSrv != nil {
+		if aerr := agentSrv.Shutdown(shutdownCtx); err == nil {
+			err = aerr
+		}
+	}
 	<-sweepDone
 	<-keysDone
 	<-ckptDone
-	if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
-		return serveErr
+	for i := 0; i < cap(errc) && (i == 0 || agentSrv != nil); i++ {
+		if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			return serveErr
+		}
 	}
 	return err
 }

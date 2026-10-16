@@ -180,6 +180,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/api/containment-retries/{retry_id}/retry-now" {
 			continue // TestContainmentRetriesAPI (a UUID, not a fixture id)
 		}
+		if rt.Pattern == "/api/agents/{id}/revoke" {
+			continue // TestAgentsAPI (a UUID, not a fixture id)
+		}
 		if rt.Pattern == "/api/auth/sessions/{session_id}" {
 			continue // TestIsolation_SessionCookieScoped (a UUID, not a fixture id)
 		}

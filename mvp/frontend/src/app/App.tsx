@@ -59,6 +59,7 @@ const NewConnection = named(connections, "NewConnection");
 const ConnectionDetail = named(connections, "ConnectionDetail");
 const ValidationResults = named(connections, "ValidationResults");
 const ReconReport = named(connections, "ReconReport");
+const AgentsList = named(connections, "AgentsList");
 const AdminSectionPage = named(admin, "AdminSectionPage");
 const MySessions = named(() => import("../features/account/MySessions"), "MySessions");
 
@@ -128,6 +129,7 @@ export default function App() {
                     <Route path="/admin" element={<Admin />} />
                     <Route path="/admin/connections" element={<ConnectionsList />} />
                     <Route path="/admin/connections/new" element={<NewConnection />} />
+                    <Route path="/admin/connections/agents" element={<AgentsList />} />
                     <Route path="/admin/connections/:id" element={<ConnectionDetail />} />
                     <Route path="/admin/connections/:id/validation/:run" element={<ValidationResults />} />
                     <Route path="/admin/connections/:id/reconciliation/:run" element={<ReconReport />} />

@@ -103,6 +103,13 @@ function errorMessage(status: number, j: any): string {
   return j ? JSON.stringify(j.detail ?? j) : `${status}`;
 }
 
+/**
+ * Writes that are never resumed after a step-up: their answer holds a secret shown once (an agent
+ * enrolment code). Replaying one in the background would create the agent and lose the code, so
+ * the user submits again after signing in.
+ */
+const NO_RESUME = /^\/agents$/;
+
 export async function api<T = any>(path: string, body?: unknown, method?: string): Promise<T> {
   const m = method ?? (body !== undefined ? "POST" : "GET");
   const headers: Record<string, string> = {};
@@ -128,7 +135,7 @@ export async function api<T = any>(path: string, body?: unknown, method?: string
     }
     if (res.status === 401 && j?.error === "step_up_required") {
       // remember what was being done (the request only, never a token) so it can resume after the step-up
-      if (m !== "GET" && m !== "HEAD") savePendingAction({ method: m, path, body, label: actionLabel(m, path), at: Date.now() });
+      if (m !== "GET" && m !== "HEAD" && !NO_RESUME.test(path)) savePendingAction({ method: m, path, body, label: actionLabel(m, path), at: Date.now() });
       window.dispatchEvent(new CustomEvent(STEP_UP, { detail: j }));
     }
     throw new ApiError(j ? errorMessage(res.status, j) : `${res.status} ${res.statusText}`, res.status, j);
@@ -188,6 +195,7 @@ const LABELS: [RegExp, (m: RegExpMatchArray) => string][] = [
   [/^\/hris\/events\/([^/]+)\/execute$/, (m) => `Run the lifecycle plan for event ${m[1]}`],
   [/^\/connections\/([^/]+)\/(config|credential|activate|retire)$/, (m) => `${{ config: "Save the configuration of", credential: "Set the credential of", activate: "Activate", retire: "Retire" }[m[2]]} connection ${m[1]}`],
   [/^\/readiness\/overlays\/([^/]+)$/, (m) => `Save the readiness overlay for ${m[1]}`],
+  [/^\/agents\/([^/]+)\/revoke$/, (m) => `Revoke Directory Agent ${m[1]}`],
 ];
 
 /** A plain-language name for an API action, shown before resuming it. */
@@ -889,4 +897,32 @@ export const readiness = {
   retire: (id: string) => api<Connection>(`/connections/${id}/retire`, { confirm: true }),
   rerun: (reconcile = false) => api<{ results: { connection_id: string; name: string; validation_run_id: string | null; dry_run_id: string | null; skipped?: string }[]; dashboard: DeploymentHealth }>(
     "/insights/deployment-health/rerun", { reconcile }),
+};
+
+// ------------------------------------------------------ Directory Agents (DR-11)
+export type AgentStatus = "pending" | "active" | "revoked";
+
+/** One Directory Agent. It carries no secret and no key pin. */
+export interface DirectoryAgent {
+  id: string; name: string; status: AgentStatus;
+  /** Polled Tessera recently (an active agent that is not online cannot answer checks). */
+  online: boolean;
+  /** Older than the version Tessera treats as current. */
+  outdated: boolean;
+  hostname?: string; os?: string; version?: string;
+  /** SHA-256 of the agent's local allowlist: changes when its allowed_targets change. */
+  allowlist_hash?: string;
+  last_seen_at?: string; enrolled_at?: string;
+  created_by: string; created_at: string;
+  revoked_at?: string; revoked_by?: string;
+  /** Prefix of a credential reference for a secret stored on this agent: agent:<id>/ */
+  credential_ref_prefix: string;
+}
+
+/** Issuing an enrolment code: the code is in this response only. */
+export interface AgentEnrolment { agent: DirectoryAgent; code: string; expires_at: string }
+
+export const agents = {
+  enrol: (name: string) => api<AgentEnrolment>("/agents", { name }),
+  revoke: (id: string) => api<DirectoryAgent>(`/agents/${id}/revoke`, {}),
 };

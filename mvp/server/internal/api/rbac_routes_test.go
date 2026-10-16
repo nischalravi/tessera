@@ -90,6 +90,9 @@ POST   /api/identities/{identity_id}/contain         identities.contain STEP_UP_
 GET    /api/identities/{identity_id}/containment     graph.read      -  # issue #106
 POST   /api/containment-retries/{retry_id}/retry-now identities.contain STEP_UP_POLICY  # issue #106
 PUT    /api/connections/{id}/containment-credential  connections.manage STEP_UP_POLICY  # issue #106
+GET    /api/agents                                   connections.read   -  # issue #92
+POST   /api/agents                                   connections.manage STEP_UP_POLICY  # issue #92
+POST   /api/agents/{id}/revoke                       connections.manage STEP_UP_POLICY  # issue #92
 POST   /api/connections/{id}/validate                connections.manage -
 GET    /api/connections/{id}/validations/{run}       connections.read   -
 POST   /api/connections/{id}/dry-run                 connections.manage -
@@ -298,5 +301,31 @@ func TestConnectionConfigNeedsStepUp(t *testing.T) {
 	fresh := signIn(t, f.DB, f.B.ID, authtest.User{Email: "conn-admin2@b.example", Roles: admin.Roles}, authtest.Phr, storetest.Now)
 	if rec := serve(h, authed(fresh, "PATCH", "/api/connections/x/config", body)); rec.Code == 401 || rec.Code == 403 {
 		t.Errorf("PATCH config with a fresh sign-in: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestAgentRoutesNeedStepUp: an enrolment code puts a host inside the customer
+// network on the path to the directory, so issuing one and revoking an agent
+// need a fresh phishing-resistant sign-in; viewers may only list.
+func TestAgentRoutesNeedStepUp(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	h := newIsolationServer(f).Handler()
+	admin := authtest.User{Email: "agent-admin@b.example", Roles: []auth.Role{auth.RoleTenantAdmin}}
+	stale := signIn(t, f.DB, f.B.ID, admin, authtest.Ctx{AAL: 2, Phr: true, AuthTime: storetest.Now.Add(-20 * time.Minute)}, storetest.Now)
+	for _, c := range []struct{ method, path string }{{"POST", "/api/agents"}, {"POST", "/api/agents/" + missingUUID + "/revoke"}} {
+		if rec := serve(h, authed(stale, c.method, c.path, `{"name":"dc-agent"}`)); rec.Code != 401 || !strings.Contains(rec.Body.String(), "step_up_required") {
+			t.Errorf("%s %s with a 20-minute-old sign-in: %d %s", c.method, c.path, rec.Code, rec.Body.String())
+		}
+	}
+	if rec := serve(h, authed(stale, "GET", "/api/agents", "")); rec.Code != 200 {
+		t.Errorf("listing needs no step-up: %d %s", rec.Code, rec.Body.String())
+	}
+	viewer := signIn(t, f.DB, f.B.ID, authtest.User{Email: "agent-viewer@b.example", Roles: []auth.Role{auth.RoleViewer}}, authtest.Phr, storetest.Now)
+	if rec := serve(h, authed(viewer, "POST", "/api/agents", `{"name":"dc-agent"}`)); rec.Code != 403 {
+		t.Errorf("a viewer issued an enrolment code: %d %s", rec.Code, rec.Body.String())
+	}
+	fresh := signIn(t, f.DB, f.B.ID, authtest.User{Email: "agent-admin2@b.example", Roles: admin.Roles}, authtest.Phr, storetest.Now)
+	if rec := serve(h, authed(fresh, "POST", "/api/agents", `{"name":"dc-agent"}`)); rec.Code != 201 {
+		t.Errorf("a fresh sign-in could not issue a code: %d %s", rec.Code, rec.Body.String())
 	}
 }

@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/agent"
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oauth2rp"
@@ -104,6 +105,11 @@ type Config struct {
 	// AuditAppend overrides how the audit middleware writes http.request
 	// events (tests inject failures). Nil: the store.
 	AuditAppend func(ctx context.Context, t tenancy.ID, e store.AuditEvent) error
+	// Agents is the Directory Agent service (DR-11) behind /api/agents. Nil: a
+	// service with its own in-memory hub (no agent listener is attached).
+	// New links it to readiness so connections that name an agent are probed
+	// through it.
+	Agents *agent.Service
 }
 
 // Server serves the API.
@@ -119,6 +125,7 @@ type Server struct {
 	oauth2 *oauth2rp.RP
 
 	readiness *readiness.Service
+	agents    *agent.Service
 	// containment is the kill switch (issue #106); never nil.
 	containment *containment.Service
 }
@@ -151,6 +158,12 @@ func New(cfg Config) *Server {
 		cfg.Readiness = readiness.NewService(reg, cfg.Env)
 		cfg.Readiness.Runner.Scenario = cfg.ReadinessScenario
 	}
+	if cfg.Agents == nil {
+		cfg.Agents = &agent.Service{DB: cfg.Store, Hub: agent.NewHub(nil), Clock: cfg.Clock}
+	}
+	if cfg.Readiness.Runner.Live.Agents == nil {
+		cfg.Readiness.Runner.Live.Agents = cfg.Agents
+	}
 	if cfg.Containment == nil {
 		cfg.Containment = &containment.Service{}
 	}
@@ -158,7 +171,7 @@ func New(cfg Config) *Server {
 		cfg.Containment.Clock = cfg.Clock
 	}
 	s := &Server{cfg: cfg, containment: cfg.Containment, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
-		limits: newLimiters(cfg.RateLimits)}
+		agents: cfg.Agents, limits: newLimiters(cfg.RateLimits)}
 	if cfg.OutboundHTTP != nil {
 		rp, err := oidcrp.New(oidcrp.Config{HTTP: cfg.OutboundHTTP, Now: func() time.Time { return s.clock() }})
 		if err != nil {
@@ -176,6 +189,7 @@ func New(cfg Config) *Server {
 	s.registerCorrelationRoutes()
 	s.registerContainmentRoutes()
 	s.registerReadinessRoutes()
+	s.registerAgentRoutes()
 	s.registerAuthRoutes()
 	s.registerLoginRoutes()
 	s.registerSAMLRoutes()

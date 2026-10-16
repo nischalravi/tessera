@@ -58,4 +58,8 @@ func lq(name, sql string) lstmt {
 // tenants and may be looked up before the tenant is known (design §14.2):
 // bearer-secret hashes. The schema meta-test allows a unique index on exactly
 // these columns not to start with tenant_id.
-var GlobalHashLookups = map[string]string{"sessions": "secret_hash", "login_transactions": "cookie_hash"}
+//
+// The Directory Agent adds two (DR-11): the hash of a single-use enrolment code
+// and the pin (hash) of an agent's public key, each unique across tenants.
+var GlobalHashLookups = map[string]string{"sessions": "secret_hash", "login_transactions": "cookie_hash",
+	"agent_enrolments": "token_hash", "directory_agents": "cert_pin"}

@@ -673,6 +673,11 @@ func TestIsolation_EveryRepoMethodClassified(t *testing.T) {
 		"RevokedGrants": true,
 		// Sealed connection credentials: TestIsolation_ConnectionSecrets.
 		"PutConnectionSecret": true, "ConnectionSecret": true,
+		// Directory agents and enrolment codes: TestIsolation_DirectoryAgents
+		// and TestIsolation_AgentEnrolmentSingleUse.
+		"InsertDirectoryAgent": true, "DirectoryAgent": true, "DirectoryAgents": true, "ActivateDirectoryAgent": true,
+		"TouchDirectoryAgent": true, "RevokeDirectoryAgent": true, "InsertAgentEnrolment": true, "AgentEnrolment": true,
+		"ConsumeAgentEnrolment": true,
 	}
 	for _, m := range []map[string]bool{keys(listCases), keys(getCases), keys(naturalKeyGets), keys(countCases),
 		keys(mutations), keys(insertCases), readinessCovered(), keysCovered(), auditCovered(), authCovered(), correlationCovered(), containmentCovered()} {

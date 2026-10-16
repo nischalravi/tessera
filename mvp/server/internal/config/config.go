@@ -71,7 +71,16 @@ type Config struct {
 	// LDAP checks against a lab directory). Dev only; syntax is checked by
 	// safedial.ParseAllow. Production reaches private directories through the
 	// Directory Agent instead.
-	SafedialAllow          string
+	SafedialAllow string
+	// AgentAddr is TESSERA_AGENT_ADDR: the address of the mutual-TLS listener
+	// the Directory Agents connect to (DR-11). Empty: no listener, and
+	// enrolled agents cannot connect. AgentTLSCert and AgentTLSKey
+	// (TESSERA_AGENT_TLS_CERT, TESSERA_AGENT_TLS_KEY) are that listener's
+	// certificate and key files, required whenever AgentAddr is set; the CA
+	// that signs the certificate is the one the agents pin.
+	AgentAddr              string
+	AgentTLSCert           string
+	AgentTLSKey            string
 	AuditAnchor            string
 	AuditCheckpointSeconds int
 	AuditCheckpointEvents  int
@@ -155,6 +164,15 @@ func Load(getenv func(string) string) (*Config, error) {
 	c.OutboundAllowLoopback = boolean("TESSERA_OUTBOUND_ALLOW_LOOPBACK", true, false)
 	// dev default: var/audit-anchors.jsonl next to the database (AnchorURL)
 	c.SafedialAllow = strings.TrimSpace(getenv("TESSERA_SAFEDIAL_ALLOW"))
+	c.AgentAddr = strings.TrimSpace(getenv("TESSERA_AGENT_ADDR"))
+	c.AgentTLSCert = strings.TrimSpace(getenv("TESSERA_AGENT_TLS_CERT"))
+	c.AgentTLSKey = strings.TrimSpace(getenv("TESSERA_AGENT_TLS_KEY"))
+	if c.AgentAddr != "" && (c.AgentTLSCert == "" || c.AgentTLSKey == "") {
+		bad("TESSERA_AGENT_ADDR needs TESSERA_AGENT_TLS_CERT and TESSERA_AGENT_TLS_KEY: the agent channel is mutual TLS only")
+	}
+	if c.AgentAddr == "" && (c.AgentTLSCert != "" || c.AgentTLSKey != "") {
+		bad("TESSERA_AGENT_TLS_CERT and TESSERA_AGENT_TLS_KEY are set without TESSERA_AGENT_ADDR")
+	}
 	c.AuditAnchor = str("TESSERA_AUDIT_ANCHOR", "", "")
 	if a := c.AuditAnchor; a != "" && !strings.HasPrefix(a, "file://") && !strings.HasPrefix(a, "s3://") {
 		bad("TESSERA_AUDIT_ANCHOR: %q is not a file:// or s3:// URL", a)

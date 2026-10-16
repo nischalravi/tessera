@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/agent"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/ldap"
@@ -26,9 +27,20 @@ type LiveOptions struct {
 	Sealer *seal.Sealer
 	// Allow is the dev-only private-target allowlist (TESSERA_SAFEDIAL_ALLOW).
 	Allow []safedial.AllowEntry
-	// Agent carries connections to private directories (the Directory Agent,
-	// DR-11; not built yet). Nil today.
-	Agent safedial.Transport
+	// Agents reaches the Directory Agents (DR-11). A connection whose
+	// credential reference is agent:<id>/<name> is probed only through its
+	// agent (typed operations; the agent holds the credential and enforces its
+	// own target allowlist), never by a direct dial. Nil: such a connection
+	// reports that no prober is available.
+	Agents AgentLink
+}
+
+// AgentLink is what readiness needs of the Directory Agent service: send a
+// typed job, and check that an agent of the tenant exists and is active.
+// *agent.Service implements it.
+type AgentLink interface {
+	agent.Dispatcher
+	Active(c *store.TenantTx, id string) (*agent.View, error)
 }
 
 // connectionSecretAAD binds a sealed credential to its tenant and reference,
@@ -43,6 +55,9 @@ func connectionSecretAAD(t tenancy.ID, ref string) []byte {
 // Sealer) get none. A secret that cannot be opened is an error: it fails
 // closed rather than binding with something else.
 func (s *Service) loadCredential(c *store.TenantTx, b *Bundle) error {
+	if !b.Simulated() && agentRef(b) {
+		return s.bindAgent(c, b)
+	}
 	if b.Simulated() || b.Rev.SecretRef == nil || !strings.HasPrefix(*b.Rev.SecretRef, "sealed:") || s.Runner.Live.Sealer == nil {
 		return nil
 	}
@@ -61,6 +76,33 @@ func (s *Service) loadCredential(c *store.TenantTx, b *Bundle) error {
 	return nil
 }
 
+// agentRef reports whether the revision's credential is on a Directory Agent.
+func agentRef(b *Bundle) bool {
+	return b.Rev != nil && b.Rev.SecretRef != nil && strings.HasPrefix(*b.Rev.SecretRef, "agent:")
+}
+
+// bindAgent resolves an agent:<id>/<name> credential reference: the agent
+// must exist in this tenant and be active (a revoked or foreign agent is an
+// error, so the run fails closed rather than falling back to a direct dial).
+// The secret is not here: the agent holds it.
+func (s *Service) bindAgent(c *store.TenantTx, b *Bundle) error {
+	id, name, ok := agent.ParseRef(*b.Rev.SecretRef)
+	if !ok {
+		return errors.New("readiness: the Directory Agent credential reference is malformed")
+	}
+	if s.Runner.Live.Agents == nil {
+		return nil // liveProber reports that no prober is available
+	}
+	if _, err := s.Runner.Live.Agents.Active(c, id); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return errors.New("readiness: the Directory Agent of this connection does not exist or is revoked")
+		}
+		return err
+	}
+	b.agentID, b.agentCred = id, name
+	return nil
+}
+
 // liveCapable reports whether a revision's checks run against the real
 // system (a real LDAP connection) rather than a simulation.
 func liveCapable(b *Bundle) bool { return !b.Simulated() && b.Template.ID == "ldap" }
@@ -73,20 +115,31 @@ func (o LiveOptions) liveProber(b *Bundle, now time.Time) (p connectors.Prober, 
 		return nil, false, nil
 	}
 	cfg := b.Config
-	if cfg.BindDN == "" || b.cred == "" {
-		return nil, true, errors.New("readiness: no bind DN or stored credential for the LDAP connection")
-	}
 	var roots *x509.CertPool
 	if cfg.CABundle != "" {
 		if roots, err = caPool(cfg.CABundle); err != nil {
 			return nil, true, err
 		}
 	}
+	if agentRef(b) {
+		// Private directory: typed operations through the Directory Agent. No
+		// direct dial and no fallback to one when the agent is unavailable.
+		if o.Agents == nil || b.agentID == "" || cfg.BindDN == "" {
+			return nil, true, errors.New("readiness: no Directory Agent, or no bind DN, for the LDAP connection")
+		}
+		rp, err := agent.NewRemoteProber(o.Agents, b.Conn.TenantID, b.agentID, agent.Target{Host: cfg.Host, Port: cfg.Port},
+			agent.ProbeConfig{BindDN: cfg.BindDN, CredName: b.agentCred, BaseDNs: cfg.BaseDNs, UserFilter: cfg.UserFilter,
+				CABundle: cfg.CABundle})
+		return rp, true, err
+	}
+	if cfg.BindDN == "" || b.cred == "" {
+		return nil, true, errors.New("readiness: no bind DN or stored credential for the LDAP connection")
+	}
 	env, allow := o.Env, o.Allow
 	if env != config.Dev {
 		env, allow = config.Prod, nil
 	}
-	d, err := safedial.New(safedial.Options{Env: env, Allow: allow, RootCAs: roots, Agent: o.Agent})
+	d, err := safedial.New(safedial.Options{Env: env, Allow: allow, RootCAs: roots})
 	if err != nil {
 		return nil, true, err
 	}
