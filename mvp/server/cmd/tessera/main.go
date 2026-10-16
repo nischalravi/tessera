@@ -60,6 +60,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/pit"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/rules"
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
@@ -300,8 +301,10 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		return err
 	}
 	groupsEngine := &engine.Engine{Budget: cfg.GroupsSyncBudget, Log: logger}
+	// group rules: webhooks go through the same safehttp client; email rules log (TESSERA_NOTIFY=log)
+	groupsRules := &rules.Runtime{Engine: groupsEngine, HTTP: outbound, Sealer: sealer, AllowHTTP: outCfg.OutboundAllowLoopback, Log: logger}
 	srv := api.New(api.Config{Store: st, Clock: clock, Policies: loader, Logger: logger,
-		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound, GroupsEngine: groupsEngine,
+		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound, GroupsEngine: groupsEngine, GroupsRules: groupsRules,
 		Containment:    &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock},
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
 		HSTS: cfg.IsProd(), Env: cfg.Env, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, AuditAnchor: anchorURL})
@@ -351,6 +354,13 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		defer close(historyDone)
 		historyRunner.Loop(ctx)
 	}()
+	// group rules: the rules that react to membership and creation events
+	rulesDone := make(chan struct{})
+	rulesRunner := &rules.Runner{DB: st, Runtime: groupsRules, Clock: clock, Log: logger}
+	go func() {
+		defer close(rulesDone)
+		rulesRunner.Loop(ctx)
+	}()
 	errc := make(chan error, 1)
 	go func() { errc <- httpSrv.Serve(ln) }()
 	logger.Info("tessera API listening", "addr", ln.Addr().String())
@@ -363,6 +373,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		<-ckptDone
 		<-groupsDone
 		<-historyDone
+		<-rulesDone
 		return err
 	case <-ctx.Done():
 	}
@@ -375,6 +386,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	<-ckptDone
 	<-groupsDone
 	<-historyDone
+	<-rulesDone
 	if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 		return serveErr
 	}

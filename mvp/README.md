@@ -443,6 +443,63 @@ inheritance, `explain.go`, `grant.go`, `settings.go`), `server/internal/api/grou
   route, `TestPrivs_ViewFiltersBrowseAndSearch`, `TestPrivs_GrantsGiveAccess`, ...),
   `TestIsolation_GroupPrivilegeTables` in `internal/store`.
 
+#### Group rules and membership constraints (GR-13, issue #56)
+
+Design `docs/design/groups-grouper-parity.md` §10.3, K6. Schema `0288_group_rules.sql` (the design's
+`0107_group_gov.sql`; `grp_rules` has `trigger_type` because `trigger` is an SQL keyword, and
+`grp_rule_settings`). Package `internal/groups/rules`.
+
+- **Closed vocabulary, no code.** A rule is owned by a folder (scope `one` or `sub`, default `sub`)
+  or a group, and has a `trigger`, `conditions` and one `action` with `params`. Triggers:
+  `membership.direct.added|removed`, `membership.effective.added|removed` (of an identity, in the
+  members list), `group.created`, `folder.created` (folder rules). Conditions: `identity_attribute`
+  (`department|title|type|status`, `equals|in`), `identity_in_group`, `identity_not_in_group`,
+  `membership_source`, `name_matches` (a glob over the new object's full name). Actions:
+  `veto {message}`, `require_member_of {group}`, `one_group_only`, `no_self_add`,
+  `add_disabled_date {days}`, `remove_from_group {group}`, `add_to_group {group, days}`,
+  `assign_privilege {privilege, holder_type, holder_identity|holder_group, applies_to, scope}`,
+  `notify {subject, message, to_identity}` (email) and `webhook {url, veto, fail_open}`.
+  `open_inbox_task`, `start_micro_certification`, `assign_object_type` and `mark_provisionable` are
+  refused with `422 action_unavailable` until GR-14, GR-7 and GR-11 land.
+- **Authority, checked twice.** Saving needs the route permission (`groups.write`) and `admin` on the
+  owner (`stem_admin` on a folder) and on every group the action changes; `read` on a group a condition
+  or a membership require looks at, `view` on a group named as a privilege holder. A rule acts with the
+  privileges of the user who last saved it, and the same check is made every time it fires; a rule
+  whose author lost them does nothing and records `rule.fired` with result `denied`. A veto rule whose
+  author lost them refuses the add instead (fail closed). A machine client cannot save a rule
+  (`403 rule_needs_user`). Deleting needs `admin` on the owner only.
+- **Built-in constraints** are rules: membership require (`require_member_of`: a veto on add, and the
+  member leaves when they leave the required group), one group only in a folder (`one_group_only`,
+  counts active direct memberships), no self-add. Not built yet: "no deletion of provisioned
+  groups" (needs the provisioning marks of GR-11); "no `everyone` without `tenant_admin`" is already
+  the GR-4 rule. A veto covers a direct add of an identity; adding a group to a group is not vetoed.
+- **When rules run.** Vetoes run in the request's transaction, before the row is written, through
+  `model.Guard`; a vetoed request is `409 {"error":"vetoed","rule":id}`. Acting rules react to the
+  group events through the `rules` cursor of the outbox (`rules.Runner`, started in `cmd/tessera`,
+  every 5 s); a rule never acts on events from before it was saved (`active_seq`), and not on its own
+  changes. Each firing writes `rule.fired` (PIT outbox) and `groups.rule.fired` (audit) in the same
+  transaction as what it did; changes a rule makes are caused by `rule`, with source `rule`.
+- **Webhooks** are signed (`Tessera-Signature: sha256=<HMAC-SHA256 of "<Tessera-Timestamp>.<body>">`,
+  the secret is sealed under the KEK and shown once in `signing_secret`, `rotate_secret: true` on a
+  `PUT` makes a new one) and go through the safehttp client with a 2 s timeout. A hook with `veto`
+  on `membership.direct.added` is called synchronously and answers `{"allow": false, "message"}` to
+  refuse; if it does not answer (error, non-2xx, timeout, unreadable) the add is refused unless
+  `fail_open`. Other hooks are told after the change; a failure is recorded, not undone.
+- **Email is off by default.** `notify` cannot be saved (`409 email_rules_disabled`) and a saved one
+  does not send until a tenant admin sets `email_enabled` in `PUT /api/groups/rules/settings`.
+  Tessera has no mail transport yet: a sent notification is a log line with ids (`TESSERA_NOTIFY=log`).
+
+| Route | |
+|---|---|
+| `GET\|POST /api/groups/{id}/rules`, `GET\|POST /api/groups/folders/{id}/rules` | the owner's rules; save `{name, scope, trigger, conditions, action, params, enabled}` (`201`) |
+| `PUT\|DELETE .../rules/{rule_id}` | replace a rule (the updater becomes its author; `rotate_secret`) or delete it |
+| `GET\|PUT /api/groups/rules/settings` | `{email_enabled}` (`groups.admin`) |
+
+- Tests: `go test ./internal/groups/rules` (`TestRules_PrivilegeCheckedAtFireTime`,
+  `TestMembershipRequire_VetoAndRemove`, `TestOneGroupOnly`, `TestEmailRulesOffByDefault`,
+  `TestVetoHookFailClosed`, `TestSpec_Validate`, ...), `internal/api` (`TestGroupsRoutesRequirePrivilege`,
+  `TestRulesAPI_*`), `TestIsolation_GroupRuleTables` in `internal/store`.
+
 ### Audit ledger
 
 Every tenant has an append-only, hash-chained audit log (`audit_events`; design

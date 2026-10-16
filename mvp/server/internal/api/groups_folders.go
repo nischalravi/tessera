@@ -209,7 +209,7 @@ func grpBodyID(field, v string) error {
 func (s *Server) grpEnv(r *http.Request, c *store.TenantTx, now time.Time) model.Env {
 	pr := principal(r)
 	env := model.Env{Tx: c, Now: now, Engine: s.cfg.GroupsEngine, ByIdentity: pr.IdentityID,
-		TenantAdmin: pr.ActiveRoles.Has(auth.RoleTenantAdmin)}
+		TenantAdmin: pr.ActiveRoles.Has(auth.RoleTenantAdmin), Guard: s.cfg.GroupsRules.Guard()}
 	if pr.UserID != nil {
 		u := pr.UserID.String()
 		env.By = &u

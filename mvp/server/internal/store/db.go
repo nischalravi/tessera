@@ -98,6 +98,8 @@ var tables = []string{
 	"grp_pit_privileges", "grp_pit_digests",
 	// group privileges (schema/0285_group_privs.sql)
 	"grp_privileges", "grp_priv_settings",
+	// group rules (schema/0288_group_rules.sql)
+	"grp_rules", "grp_rule_settings",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was

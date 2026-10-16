@@ -25,6 +25,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/rules"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
@@ -105,6 +106,11 @@ type Config struct {
 	// GroupsEngine is the native groups' membership engine, whose synchronous
 	// budget is TESSERA_GROUPS_SYNC_BUDGET. Nil: the defaults.
 	GroupsEngine *engine.Engine
+	// GroupsRules is what group rules need from outside the database: the
+	// outbound client for webhooks, the sealer for their secrets and the email
+	// notifier. Its veto rules are applied to every membership add. Nil: the
+	// defaults (no webhooks, email rules log).
+	GroupsRules *rules.Runtime
 	// AuditAppend overrides how the audit middleware writes http.request
 	// events (tests inject failures). Nil: the store.
 	AuditAppend func(ctx context.Context, t tenancy.ID, e store.AuditEvent) error
@@ -158,6 +164,9 @@ func New(cfg Config) *Server {
 	if cfg.GroupsEngine == nil {
 		cfg.GroupsEngine = engine.New(0)
 	}
+	if cfg.GroupsRules == nil {
+		cfg.GroupsRules = &rules.Runtime{Engine: cfg.GroupsEngine}
+	}
 	if cfg.Containment == nil {
 		cfg.Containment = &containment.Service{}
 	}
@@ -186,6 +195,7 @@ func New(cfg Config) *Server {
 	s.registerGroupsPrivilegeRoutes()
 	s.registerGroupsMemberRoutes()
 	s.registerGroupsHistoryRoutes()
+	s.registerGroupsRuleRoutes()
 	s.registerReadinessRoutes()
 	s.registerAuthRoutes()
 	s.registerLoginRoutes()
