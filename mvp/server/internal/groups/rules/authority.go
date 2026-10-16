@@ -6,9 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
-
-	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/privs"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
@@ -87,32 +84,12 @@ func Compile(r *store.GrpRule) (*Compiled, error) {
 
 // errNoAuthor is the reason a rule cannot act: its author no longer exists or
 // can no longer sign in.
-var errNoAuthor = errors.New("the rule's author is no longer an active user")
+var errNoAuthor = privs.ErrNoUser
 
 // SubjectOf is the privilege subject of a platform user at now, for a rule
-// that acts in the background: the identity the user is linked to, and
-// tenant_admin when the user holds that role (assigned and unexpired: there is
-// no session whose step-up could activate it).
+// that acts in the background (see privs.SubjectOfUser).
 func SubjectOf(tx *store.TenantTx, userID string, now time.Time) (privs.Subject, error) {
-	id, err := uuid.Parse(userID)
-	if err != nil {
-		return privs.Subject{}, errNoAuthor
-	}
-	u, err := tx.PlatformUser(id)
-	if errors.Is(err, store.ErrNotFound) {
-		return privs.Subject{}, errNoAuthor
-	}
-	if err != nil {
-		return privs.Subject{}, err
-	}
-	if u.Status != "active" {
-		return privs.Subject{}, errNoAuthor
-	}
-	as, err := tx.RoleAssignments(u.ID)
-	if err != nil {
-		return privs.Subject{}, err
-	}
-	return privs.Subject{Identity: u.IdentityID, TenantAdmin: auth.AssignedRoles(as, now).Has(auth.RoleTenantAdmin)}, nil
+	return privs.SubjectOfUser(tx, userID, now)
 }
 
 // authority is the answer to "may this rule act now": the subject it acts as

@@ -10,7 +10,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/attest"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/deprov"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/events"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/gov"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/inbox"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/model"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/pit"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/privs"
@@ -179,6 +183,14 @@ func (g guard) VetoAdd(e model.Env, grp *store.NativeGroup, identity int64, sour
 // closed: a rule that cannot be evaluated (its author lost the privileges it
 // needs, its hook does not answer, its row is damaged) refuses the add.
 func (rt *Runtime) veto(e model.Env, grp *store.NativeGroup, identity int64, source string) error {
+	// the built-in deprovisioning rule: no new direct membership for a deprovisioned identity
+	msg, err := deprov.Vetoed(e.Tx, e.Now, grp, identity, e.VetoOverride)
+	if err != nil {
+		return err
+	}
+	if msg != "" {
+		return model.Vetoed(msg, "deprovisioning")
+	}
 	rs, err := e.Tx.GrpRulesEnabled(TrigDirectAdded, "")
 	if err != nil || len(rs) == 0 {
 		return err
@@ -427,7 +439,10 @@ func refusal(err error) (string, bool) {
 	var pe *privs.Error
 	var de *privs.DeniedError
 	var re *Error
+	var ge *gov.Error
 	switch {
+	case errors.As(err, &ge):
+		return ge.Code, true
 	case errors.As(err, &me):
 		if me.Code == "vetoed" {
 			return "vetoed by another rule: " + me.Msg, true
@@ -548,6 +563,47 @@ func (rt *Runtime) perform(tx *store.TenantTx, now time.Time, c *Compiled, fe *f
 			return ResultFailed, "notification_failed", nil
 		}
 		return ResultApplied, "sent", nil
+
+	case ActOpenInboxTask:
+		obj := store.RuleOwnerGroup
+		if fe.Type == TrigFolderCreated {
+			obj = store.RuleOwnerFolder
+		}
+		id := fe.Created
+		if fe.Group != nil && !isCreateTrigger(fe.Type) {
+			id = string(fe.Group.ID)
+		}
+		var assignee *int64
+		if p.ToIdentity > 0 {
+			assignee = &p.ToIdentity
+		}
+		_, created, err := inbox.Open(tx, now, inbox.Input{Kind: store.TaskRule, Title: p.Subject,
+			Detail:     map[string]any{"rule": c.Rule.ID, "name": c.Rule.Name, "trigger": fe.Type, "event_seq": fe.Seq, "message": p.Message},
+			ObjectType: obj, ObjectID: id, Subject: fe.Identity, Assignee: assignee,
+			DedupeKey: fmt.Sprintf("rule:%s:%d", c.Rule.ID, fe.Seq)})
+		if err != nil {
+			return "", "", err
+		}
+		if !created {
+			return ResultSkipped, "already_open", nil
+		}
+		return ResultApplied, "task opened", nil
+
+	case ActMicroCertifyNew:
+		// the rule's author must administer the group whose member is certified
+		if err := privs.NewChecker(tx, now, rt.engine(), au.Subject).Require(privs.GroupObject(fe.Group.ID), privs.Admin); err != nil {
+			return "", "", err
+		}
+		camp, created, err := attest.Start(attest.Env{Tx: tx, Now: now, By: c.Rule.UpdatedBy, ByIdentity: au.Subject.Identity,
+			TenantAdmin: au.Subject.TenantAdmin, Engine: rt.engine(), Cause: store.CauseRule, CauseRef: c.Rule.ID},
+			fe.Group.ID, attest.StartInput{Kind: store.AttestMicro, Identity: *fe.Identity, WindowDays: p.Days, RuleID: c.Rule.ID})
+		if err != nil {
+			return "", "", err
+		}
+		if !created {
+			return ResultSkipped, "already_open", nil
+		}
+		return ResultApplied, "certification " + camp.ID + " started", nil
 
 	case ActWebhook:
 		status, _, err := rt.post(tx.Context(), tx.Tenant(), c, payloadOf(c, fe), now)

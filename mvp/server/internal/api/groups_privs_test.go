@@ -11,6 +11,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/authtest"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/deprov"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/store/storetest"
 )
@@ -88,6 +89,28 @@ func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 	rb := `{"name":"n","trigger":"membership.direct.added","action":"no_self_add"}`
 	grule := e.admin.call("POST", "/api/groups/"+g+"/rules", rb, 201)["id"].(string)
 	frule := e.admin.call("POST", "/api/groups/folders/"+app+"/rules", rb, 201)["id"].(string)
+	// GR-14: an attestation with an item and a task, a deprovisioning item, a saved report and its run
+	e.admin.call("POST", "/api/groups/"+g+"/members", fmt.Sprintf(`{"identity":%d}`, e.ident("alice")), 201)
+	camp := e.admin.call("POST", "/api/groups/"+g+"/attestation/campaigns", "", 201)["id"].(string)
+	item := e.admin.call("GET", "/api/groups/attestation/campaigns/"+camp, "", 200)["items"].([]any)[0].(map[string]any)["id"].(string)
+	task := e.admin.call("GET", "/api/groups/inbox/tasks", "", 200)["items"].([]any)[0].(map[string]any)["id"].(string)
+	aff := e.admin.group(app, "aff")
+	e.admin.call("PUT", "/api/groups/deprovisioning/settings", `{"affiliations":["`+aff+`"]}`, 200)
+	e.admin.call("POST", "/api/groups/"+aff+"/members", fmt.Sprintf(`{"identity":%d}`, e.ident("carol")), 201)
+	e.admin.call("POST", "/api/groups/"+g+"/members", fmt.Sprintf(`{"identity":%d}`, e.ident("carol")), 201)
+	e.admin.call("DELETE", "/api/groups/"+aff+"/members/"+fmt.Sprint(e.ident("carol")), "", 200)
+	if err := e.f.DB.InTenant(context.Background(), e.f.B.ID, func(tx *store.TenantTx) error {
+		_, err := deprov.Process(deprov.Env{Tx: tx, Now: storetest.Now}, 1000)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dp := e.admin.call("GET", "/api/groups/deprovisioning/items", "", 200)["items"].([]any)[0].(map[string]any)["id"].(string)
+	repBody := `{"name":"r","kind":"group_members","params":{"group":"` + g + `"}}`
+	rep := e.admin.call("POST", "/api/groups/reports/saved", repBody, 201)["id"].(string)
+	run := e.admin.call("POST", "/api/groups/reports/saved/"+rep+"/run", "", 200)["id"].(string)
+	settings := `{"interval_days":30,"window_days":14,"reviewers":"admins","reminder_days":[],"overdue_action":"none","enabled":true}`
+	adhoc := `{"kind":"group_members","params":{"group":"` + g + `"}}`
 
 	type routeCase struct {
 		method, pattern, path, body string
@@ -132,6 +155,29 @@ func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 		{"DELETE", "/api/groups/{id}/rules/{rule_id}", "/api/groups/" + g + "/rules/" + grule, "", "admin"},
 		{"GET", "/api/groups/rules/settings", "/api/groups/rules/settings", "", ""},
 		{"PUT", "/api/groups/rules/settings", "/api/groups/rules/settings", `{"email_enabled":false}`, ""},
+		// GR-14: attestation, Inbox, deprovisioning, reports and the Groups lens
+		{"GET", "/api/groups/{id}/attestation", "/api/groups/" + g + "/attestation", "", "admin"},
+		{"PUT", "/api/groups/{id}/attestation", "/api/groups/" + g + "/attestation", settings, "admin"},
+		{"DELETE", "/api/groups/{id}/attestation", "/api/groups/" + g + "/attestation", "", "admin"},
+		{"GET", "/api/groups/folders/{id}/attestation", "/api/groups/folders/" + app + "/attestation", "", "stem_admin"},
+		{"PUT", "/api/groups/folders/{id}/attestation", "/api/groups/folders/" + app + "/attestation", settings, "stem_admin"},
+		{"DELETE", "/api/groups/folders/{id}/attestation", "/api/groups/folders/" + app + "/attestation", "", "stem_admin"},
+		{"GET", "/api/groups/{id}/attestation/campaigns", "/api/groups/" + g + "/attestation/campaigns", "", "admin"},
+		{"POST", "/api/groups/{id}/attestation/campaigns", "/api/groups/" + g + "/attestation/campaigns", "", "admin"},
+		{"GET", "/api/groups/attestation/campaigns/{campaign_id}", "/api/groups/attestation/campaigns/" + camp, "", "admin"},
+		{"POST", "/api/groups/attestation/campaigns/{campaign_id}/items/{item_id}/decision",
+			"/api/groups/attestation/campaigns/" + camp + "/items/" + item + "/decision", `{"decision":"keep"}`, "admin"},
+		{"POST", "/api/groups/inbox/tasks/{task_id}/close", "/api/groups/inbox/tasks/" + task + "/close", "", "admin"},
+		{"GET", "/api/groups/deprovisioning/settings", "/api/groups/deprovisioning/settings", "", ""},
+		{"PUT", "/api/groups/deprovisioning/settings", "/api/groups/deprovisioning/settings", `{"affiliations":[]}`, ""},
+		{"GET", "/api/groups/folders/{id}/deprovisioning", "/api/groups/folders/" + app + "/deprovisioning", "", "stem_admin"},
+		{"PUT", "/api/groups/folders/{id}/deprovisioning", "/api/groups/folders/" + app + "/deprovisioning", `{"mode":"notify"}`, "stem_admin"},
+		{"DELETE", "/api/groups/folders/{id}/deprovisioning", "/api/groups/folders/" + app + "/deprovisioning", "", "stem_admin"},
+		{"POST", "/api/groups/deprovisioning/items/{item_id}/resolve", "/api/groups/deprovisioning/items/" + dp + "/resolve",
+			`{"action":"dismiss","reason":"x"}`, "stem_admin"},
+		{"POST", "/api/groups/reports/saved", "/api/groups/reports/saved", repBody, "read"},
+		{"POST", "/api/groups/reports/run", "/api/groups/reports/run", adhoc, "read"},
+		{"GET", "/api/groups/{id}/graph", "/api/groups/" + g + "/graph", "", "view"},
 		// another identity's privileges need admin on the object, not view
 		{"GET", "/api/groups/{id}/privileges/effective", "/api/groups/" + g + "/privileges/effective?identity=" + fmt.Sprint(e.ident("bob")), "", "admin"},
 		// tenant-wide maintenance and settings: groups.admin
@@ -145,7 +191,14 @@ func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 		{"PUT", "/api/groups/users/{id}/identity", "/api/groups/users/" + other + "/identity", `{"identity_id":null}`, ""},
 	}
 	// the listings are gated too, by filtering: the table below names them so none is forgotten
-	listings := []routeCase{{"GET", "/api/groups/folders", "", "", ""}, {"GET", "/api/groups/native", "", "", ""}}
+	listings := []routeCase{{"GET", "/api/groups/folders", "", "", ""}, {"GET", "/api/groups/native", "", "", ""},
+		{"GET", "/api/groups/inbox/tasks", "", "", ""}, {"GET", "/api/groups/deprovisioning/items", "", "", ""},
+		{"GET", "/api/groups/reports/saved", "", "", ""}, {"GET", "/api/groups/reports/catalogue", "", "", ""},
+		{"GET", "/api/groups/graph/identity/{identity_id}", "", "", ""},
+		// saved reports and their runs belong to the user who saved them: another user gets 404 (tested below)
+		{"GET", "/api/groups/reports/saved/{report_id}", "", "", ""}, {"PUT", "/api/groups/reports/saved/{report_id}", "", "", ""},
+		{"DELETE", "/api/groups/reports/saved/{report_id}", "", "", ""}, {"POST", "/api/groups/reports/saved/{report_id}/run", "", "", ""},
+		{"GET", "/api/groups/reports/saved/{report_id}/runs", "", "", ""}, {"GET", "/api/groups/reports/runs/{run_id}", "", "", ""}}
 	// every registered group route is in the table
 	have := map[string]bool{}
 	for _, c := range append(slices.Clone(cases), listings...) {
@@ -172,9 +225,20 @@ func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 		})
 	}
 	// the listings answer 200 and show nothing
-	for _, p := range []string{"/api/groups/folders", "/api/groups/native"} {
+	for _, p := range []string{"/api/groups/folders", "/api/groups/native", "/api/groups/inbox/tasks", "/api/groups/deprovisioning/items",
+		"/api/groups/reports/saved"} {
 		if items := nobody.call("GET", p, "", 200)["items"].([]any); len(items) != 0 {
 			t.Errorf("%s shows %d items to a user without view", p, len(items))
+		}
+	}
+	// someone else's saved report and its run are not found
+	for _, c := range []routeCase{
+		{"GET", "", "/api/groups/reports/saved/" + rep, "", ""}, {"PUT", "", "/api/groups/reports/saved/" + rep, repBody, ""},
+		{"DELETE", "", "/api/groups/reports/saved/" + rep, "", ""}, {"POST", "", "/api/groups/reports/saved/" + rep + "/run", "", ""},
+		{"GET", "", "/api/groups/reports/saved/" + rep + "/runs", "", ""}, {"GET", "", "/api/groups/reports/runs/" + run, "", ""},
+	} {
+		if rec := nobody.do(c.method, c.path, c.body); rec.Code != http.StatusNotFound {
+			t.Errorf("%s %s by another user = %d, want 404", c.method, c.path, rec.Code)
 		}
 	}
 	// a user without the route's permission: viewer holds groups.read only

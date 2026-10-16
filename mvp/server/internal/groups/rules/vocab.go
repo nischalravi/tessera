@@ -62,17 +62,17 @@ const (
 	ActAssignPrivilege = "assign_privilege"
 	ActNotify          = "notify"
 	ActWebhook         = "webhook"
+	// GR-14: the groups Inbox and attestation.
+	ActOpenInboxTask   = "open_inbox_task"
+	ActMicroCertifyNew = "start_micro_certification"
 )
 
 // planned are the design's actions that need a part that is not built yet
-// (the Inbox and micro-certifications of GR-14, object types of GR-7,
-// provisioning marks of GR-11). They are refused with their own error, so a
-// client can tell "later" from "never".
+// (object types of GR-7, provisioning marks of GR-11). They are refused with
+// their own error, so a client can tell "later" from "never".
 var planned = map[string]string{
-	"open_inbox_task":           "GR-14",
-	"start_micro_certification": "GR-14",
-	"assign_object_type":        "GR-7",
-	"mark_provisionable":        "GR-11",
+	"assign_object_type": "GR-7",
+	"mark_provisionable": "GR-11",
 }
 
 // Condition types.
@@ -207,7 +207,7 @@ func Triggers() []string {
 // Actions lists the vocabulary's actions.
 func Actions() []string {
 	return []string{ActVeto, ActRequireMemberOf, ActOneGroupOnly, ActNoSelfAdd, ActAddDisabledDate, ActRemoveFromGroup,
-		ActAddToGroup, ActAssignPrivilege, ActNotify, ActWebhook}
+		ActAddToGroup, ActAssignPrivilege, ActNotify, ActWebhook, ActOpenInboxTask, ActMicroCertifyNew}
 }
 
 var identityAttributes = []string{"department", "title", "type", "status"}
@@ -382,6 +382,24 @@ func (s *Spec) validateAction() error {
 			return invalid("invalid_fail_open", "fail_open belongs to a hook that can veto")
 		}
 		want.URL, want.Veto, want.FailOpen = p.URL, p.Veto, p.FailOpen
+	case ActOpenInboxTask:
+		// a task for the administrators of what the event is about (or one named identity)
+		if err := errFirst(checkText("subject", p.Subject, maxName, true), checkText("message", p.Message, maxMessage, false)); err != nil {
+			return err
+		}
+		if p.ToIdentity < 0 {
+			return invalid("invalid_to_identity", "to_identity is an identity id")
+		}
+		want.Subject, want.Message, want.ToIdentity = p.Subject, p.Message, p.ToIdentity
+	case ActMicroCertifyNew:
+		// a one-member certification of the membership that was just added
+		if err := onlyTrigger(TrigDirectAdded, TrigEffectiveAdded); err != nil {
+			return err
+		}
+		if p.Days < 0 || p.Days > 365 {
+			return invalid("invalid_days", "days is 0 (14) to 365")
+		}
+		want.Days = p.Days
 	default:
 		return invalid("invalid_action", "%q is not an action (%s)", s.Action, strings.Join(Actions(), ", "))
 	}

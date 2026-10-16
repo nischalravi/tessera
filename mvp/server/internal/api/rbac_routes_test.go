@@ -142,6 +142,37 @@ PUT    /api/groups/{id}/rules/{rule_id}              groups.write    -  # issue 
 DELETE /api/groups/{id}/rules/{rule_id}              groups.write    -  # issue #56: admin
 GET    /api/groups/rules/settings                    groups.admin    -  # issue #56
 PUT    /api/groups/rules/settings                    groups.admin    -  # issue #56
+GET    /api/groups/{id}/attestation                  groups.read     -  # issue #57: admin
+PUT    /api/groups/{id}/attestation                  groups.write    -  # issue #57: admin
+DELETE /api/groups/{id}/attestation                  groups.write    -  # issue #57: admin
+GET    /api/groups/folders/{id}/attestation          groups.read     -  # issue #57: stem_admin
+PUT    /api/groups/folders/{id}/attestation          groups.write    -  # issue #57: stem_admin
+DELETE /api/groups/folders/{id}/attestation          groups.write    -  # issue #57: stem_admin
+GET    /api/groups/{id}/attestation/campaigns        groups.read     -  # issue #57: admin
+POST   /api/groups/{id}/attestation/campaigns        groups.write    -  # issue #57: admin
+GET    /api/groups/attestation/campaigns/{campaign_id} groups.read   -  # issue #57: admin, or member of the reviewer group
+POST   /api/groups/attestation/campaigns/{campaign_id}/items/{item_id}/decision groups.write - # issue #57: admin, or member of the reviewer group
+GET    /api/groups/inbox/tasks                       groups.read     -  # issue #57: the tasks the caller administers or is assigned
+POST   /api/groups/inbox/tasks/{task_id}/close       groups.write    -  # issue #57: admin (stem_admin) on the task's object, or assignee
+GET    /api/groups/deprovisioning/settings           groups.admin    -  # issue #57
+PUT    /api/groups/deprovisioning/settings           groups.admin    -  # issue #57
+GET    /api/groups/folders/{id}/deprovisioning       groups.read     -  # issue #57: stem_admin
+PUT    /api/groups/folders/{id}/deprovisioning       groups.write    -  # issue #57: stem_admin
+DELETE /api/groups/folders/{id}/deprovisioning       groups.write    -  # issue #57: stem_admin
+GET    /api/groups/deprovisioning/items              groups.read     -  # issue #57: the folders the caller administers
+POST   /api/groups/deprovisioning/items/{item_id}/resolve groups.write -  # issue #57: stem_admin on the folder
+GET    /api/groups/reports/catalogue                 groups.read     -  # issue #57
+GET    /api/groups/reports/saved                     groups.read     -  # issue #57: the caller's own reports
+POST   /api/groups/reports/saved                     groups.write    -  # issue #57: the privilege the report's object needs
+GET    /api/groups/reports/saved/{report_id}         groups.read     -  # issue #57: owner or tenant admin
+PUT    /api/groups/reports/saved/{report_id}         groups.write    -  # issue #57: owner or tenant admin
+DELETE /api/groups/reports/saved/{report_id}         groups.write    -  # issue #57: owner or tenant admin
+POST   /api/groups/reports/saved/{report_id}/run     groups.write    -  # issue #57: owner or tenant admin; rows filtered by the caller's privileges
+GET    /api/groups/reports/saved/{report_id}/runs    groups.read     -  # issue #57: owner or tenant admin
+GET    /api/groups/reports/runs/{run_id}             groups.read     -  # issue #57: the user the run was made for, or a tenant admin
+POST   /api/groups/reports/run                       groups.write    -  # issue #57: the privilege the report's object needs
+GET    /api/groups/{id}/graph                        groups.read     -  # issue #57: view; nodes filtered by view
+GET    /api/groups/graph/identity/{identity_id}      groups.read     -  # issue #57: nodes filtered by view
 PUT    /api/groups/users/{id}/identity               groups.admin    STEP_UP_POLICY  # issue #47
 GET    /api/groups/pit/digests                       groups.admin    -  # issue #46
 GET    /api/groups/pit/verify                        groups.admin    -  # issue #46

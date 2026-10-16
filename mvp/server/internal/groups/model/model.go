@@ -47,6 +47,10 @@ type Env struct {
 	Guard       Guard
 	Cause       string
 	CauseRef    string
+	// VetoOverride is the reason an administrator gives to add an identity the
+	// deprovisioning rule would refuse (GR-14). The API sets it only after it
+	// checked the caller holds admin on the group; it is audited.
+	VetoOverride string
 }
 
 // Guard vets changes before the model makes them (internal/groups/rules

@@ -50,6 +50,7 @@ import (
 	"os/signal"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -58,8 +59,11 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/attest"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/deprov"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/pit"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/reports"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/rules"
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -361,6 +365,24 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		defer close(rulesDone)
 		rulesRunner.Loop(ctx)
 	}()
+	// group governance: attestation campaigns, deprovisioning and scheduled reports
+	govDone := make(chan struct{})
+	go func() {
+		defer close(govDone)
+		var wg sync.WaitGroup
+		for _, loop := range []func(context.Context){
+			(&attest.Runner{DB: st, Engine: groupsEngine, Clock: clock, Log: logger}).Loop,
+			(&deprov.Runner{DB: st, Engine: groupsEngine, Clock: clock, Log: logger}).Loop,
+			(&reports.Runner{DB: st, Engine: groupsEngine, Clock: clock, Log: logger}).Loop,
+		} {
+			wg.Add(1)
+			go func(loop func(context.Context)) {
+				defer wg.Done()
+				loop(ctx)
+			}(loop)
+		}
+		wg.Wait()
+	}()
 	errc := make(chan error, 1)
 	go func() { errc <- httpSrv.Serve(ln) }()
 	logger.Info("tessera API listening", "addr", ln.Addr().String())
@@ -374,6 +396,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		<-groupsDone
 		<-historyDone
 		<-rulesDone
+		<-govDone
 		return err
 	case <-ctx.Done():
 	}
@@ -387,6 +410,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	<-groupsDone
 	<-historyDone
 	<-rulesDone
+	<-govDone
 	if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 		return serveErr
 	}

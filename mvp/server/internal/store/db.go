@@ -100,6 +100,9 @@ var tables = []string{
 	"grp_privileges", "grp_priv_settings",
 	// group rules (schema/0288_group_rules.sql)
 	"grp_rules", "grp_rule_settings",
+	// group attestation, deprovisioning, Inbox and reports (schema/0292_group_attestation.sql)
+	"grp_inbox_tasks", "grp_attest_settings", "grp_attest_campaigns", "grp_attest_items", "grp_deprov_settings",
+	"grp_deprov_folders", "grp_deprovisioned", "grp_deprov_items", "grp_reports", "grp_report_runs",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was
