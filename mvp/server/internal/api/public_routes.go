@@ -45,6 +45,15 @@ var publicRoutes = []string{
 	"POST /api/auth/saml/{connection_id}/acs",
 	"GET /api/auth/oauth2/{connection_id}/callback",
 	"GET /t/{slug}/bootstrap",
+	// MCP authorization server (issue #115): discovery and the OAuth
+	// endpoints, rate-limited per IP; each opens its own tenant transaction
+	"GET /t/{slug}/.well-known/oauth-authorization-server",
+	"GET /t/{slug}/.well-known/oauth-protected-resource/{resource_id}",
+	"GET /t/{slug}/.well-known/jwks.json",
+	"POST /t/{slug}/oauth/token",
+	"POST /t/{slug}/oauth/introspect",
+	"POST /t/{slug}/oauth/revoke",
+	"POST /t/{slug}/oauth/decisions",
 }
 
 // PublicRoutes returns the allow-list.

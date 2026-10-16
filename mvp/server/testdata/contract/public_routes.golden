@@ -1,4 +1,11 @@
 GET /api/health
+GET /t/{slug}/.well-known/oauth-authorization-server
+GET /t/{slug}/.well-known/oauth-protected-resource/{resource_id}
+GET /t/{slug}/.well-known/jwks.json
+POST /t/{slug}/oauth/token
+POST /t/{slug}/oauth/introspect
+POST /t/{slug}/oauth/revoke
+POST /t/{slug}/oauth/decisions
 GET /api/auth/discover
 GET /api/auth/login
 GET /api/auth/oidc/{connection_id}/callback

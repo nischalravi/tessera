@@ -25,6 +25,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
+	"github.com/nischalravi/tessera/mvp/server/internal/mcpauth"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
@@ -121,6 +122,8 @@ type Server struct {
 	readiness *readiness.Service
 	// containment is the kill switch (issue #106); never nil.
 	containment *containment.Service
+	// mcp is the MCP authorization server (issue #115); never nil.
+	mcp *mcpauth.Service
 }
 
 // New builds a server.
@@ -159,6 +162,8 @@ func New(cfg Config) *Server {
 	}
 	s := &Server{cfg: cfg, containment: cfg.Containment, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
 		limits: newLimiters(cfg.RateLimits)}
+	s.mcp = &mcpauth.Service{HTTP: cfg.OutboundHTTP, Sealer: cfg.Sealer, Clock: func() time.Time { return s.clock() },
+		PolicyVersion: s.policyVersion}
 	if cfg.OutboundHTTP != nil {
 		rp, err := oidcrp.New(oidcrp.Config{HTTP: cfg.OutboundHTTP, Now: func() time.Time { return s.clock() }})
 		if err != nil {
@@ -175,6 +180,7 @@ func New(cfg Config) *Server {
 	s.registerAuditRoutes()
 	s.registerCorrelationRoutes()
 	s.registerContainmentRoutes()
+	s.registerMCPRoutes()
 	s.registerReadinessRoutes()
 	s.registerAuthRoutes()
 	s.registerLoginRoutes()

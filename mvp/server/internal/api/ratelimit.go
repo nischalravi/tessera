@@ -40,15 +40,18 @@ type RateLimit struct {
 type RateLimits struct {
 	Anonymous RateLimit // default 1 per 500 ms, burst 120
 	Auth      RateLimit // default 1 per 2 s, burst 30
+	OAuth     RateLimit // /t/{slug}/oauth/*, default 1 per 250 ms, burst 40
 	MaxKeys   int       // IPs tracked per bucket (LRU), default 10000
 }
 
 const (
-	defaultAnonEvery = 500 * time.Millisecond
-	defaultAnonBurst = 120
-	defaultAuthEvery = 2 * time.Second
-	defaultAuthBurst = 30
-	defaultRateKeys  = 10000
+	defaultOAuthEvery = 250 * time.Millisecond
+	defaultOAuthBurst = 40
+	defaultAnonEvery  = 500 * time.Millisecond
+	defaultAnonBurst  = 120
+	defaultAuthEvery  = 2 * time.Second
+	defaultAuthBurst  = 30
+	defaultRateKeys   = 10000
 )
 
 func (rl RateLimit) orDefault(every time.Duration, burst int) RateLimit {
@@ -62,9 +65,10 @@ func (rl RateLimit) orDefault(every time.Duration, burst int) RateLimit {
 }
 
 type limiters struct {
-	anon, auth *ratelimit.Limiter
-	anonEvery  time.Duration
-	authEvery  time.Duration
+	anon, auth, oauth *ratelimit.Limiter
+	anonEvery         time.Duration
+	authEvery         time.Duration
+	oauthEvery        time.Duration
 }
 
 func newLimiters(c RateLimits) *limiters {
@@ -74,8 +78,20 @@ func newLimiters(c RateLimits) *limiters {
 	}
 	anon := c.Anonymous.orDefault(defaultAnonEvery, defaultAnonBurst)
 	au := c.Auth.orDefault(defaultAuthEvery, defaultAuthBurst)
+	oa := c.OAuth.orDefault(defaultOAuthEvery, defaultOAuthBurst)
 	return &limiters{anon: ratelimit.New(anon.Every, anon.Burst, keys), auth: ratelimit.New(au.Every, au.Burst, keys),
-		anonEvery: anon.Every, authEvery: au.Every}
+		oauth: ratelimit.New(oa.Every, oa.Burst, keys), anonEvery: anon.Every, authEvery: au.Every, oauthEvery: oa.Every}
+}
+
+// isOAuthPath reports whether path is an authorization-server endpoint
+// (/t/{slug}/oauth/*), which has its own per-IP bucket on top of the others.
+func isOAuthPath(path string) bool {
+	rest, ok := strings.CutPrefix(path, "/t/")
+	if !ok {
+		return false
+	}
+	_, after, ok := strings.Cut(rest, "/")
+	return ok && strings.HasPrefix(after, "oauth/")
 }
 
 // rateKey is the limiter key of the request's client.
@@ -133,6 +149,11 @@ func (s *Server) rateLimit(next http.Handler) http.Handler {
 				tooMany(w, s.limits.authEvery)
 				return
 			}
+		}
+		if isOAuthPath(r.URL.Path) && !s.limits.oauth.Allow(key) {
+			w.Header().Set("Cache-Control", "no-store")
+			tooMany(w, s.limits.oauthEvery)
+			return
 		}
 		if _, err := r.Cookie(s.authn.Cookies.Name()); err != nil {
 			if !s.limits.anon.Allow(key) {

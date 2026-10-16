@@ -177,7 +177,7 @@ func TestEveryCallAudited(t *testing.T) {
 	viewer := signIn(t, f.DB, f.B.ID, authtest.User{Email: "vic@b.example", Roles: []auth.Role{auth.RoleViewer}},
 		authtest.Phr, storetest.Now)
 	for _, rt := range srv.Routes() {
-		if rt.Pattern == "/api/health" {
+		if rt.Pattern == "/api/health" || rt.Method == http.MethodGet && strings.Contains(rt.Pattern, "/.well-known/") {
 			continue // excluded from http.request (§13.4)
 		}
 		t.Run(rt.Method+" "+rt.Pattern, func(t *testing.T) {

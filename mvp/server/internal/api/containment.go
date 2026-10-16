@@ -88,6 +88,14 @@ func (s *Server) containIdentity(_ http.ResponseWriter, r *http.Request, p *para
 	if err != nil {
 		return nil, err
 	}
+	// the kill switch cuts MCP tokens first and on its own: the provider calls
+	// below can be slow or fail, and a live agent token must not wait for them
+	if err := p.scope.Write(ctx, func(c *store.TenantTx) error {
+		_, err := s.mcp.RevokeIdentity(c, id, "kill switch ("+job.Trigger+")")
+		return err
+	}); err != nil {
+		return nil, err
+	}
 	rep := s.runContainment(ctx, job)
 	retries, err := s.recordContainment(ctx, p, actor(r), job, rep)
 	if err != nil {
@@ -106,6 +114,11 @@ func (s *Server) recordContainment(ctx context.Context, p *params, by string, jo
 	err := p.scope.Write(ctx, func(c *store.TenantTx) error {
 		now := s.clock()
 		if err := containment.Record(c, now, by, rep); err != nil {
+			return err
+		}
+		// an agent's (or a user's) MCP tokens die with the containment, also
+		// when a provider step failed
+		if _, err := s.mcp.RevokeIdentity(c, rep.IdentityID, "identity contained ("+rep.Trigger+")"); err != nil {
 			return err
 		}
 		var err error

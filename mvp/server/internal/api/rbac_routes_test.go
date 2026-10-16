@@ -90,6 +90,25 @@ POST   /api/identities/{identity_id}/contain         identities.contain STEP_UP_
 GET    /api/identities/{identity_id}/containment     graph.read      -  # issue #106
 POST   /api/containment-retries/{retry_id}/retry-now identities.contain STEP_UP_POLICY  # issue #106
 PUT    /api/connections/{id}/containment-credential  connections.manage STEP_UP_POLICY  # issue #106
+GET    /t/{slug}/.well-known/oauth-authorization-server public  # issue #115
+GET    /t/{slug}/.well-known/oauth-protected-resource/{resource_id} public  # issue #115
+GET    /t/{slug}/.well-known/jwks.json               public  # issue #115
+POST   /t/{slug}/oauth/token                         public  # issue #115
+POST   /t/{slug}/oauth/introspect                    public  # issue #115
+POST   /t/{slug}/oauth/revoke                        public  # issue #115
+POST   /t/{slug}/oauth/decisions                     public  # issue #115
+GET    /t/{slug}/oauth/authorize                     auth.self       -  # issue #115
+GET    /api/mcp/authorizations/{id}                  auth.self       -  # issue #115
+POST   /api/mcp/authorizations/{id}/decision         auth.self       STEP_UP_POLICY  # issue #115
+GET    /api/mcp/clients                              graph.read      -  # issue #115
+POST   /api/mcp/clients                              agents.manage   STEP_UP_POLICY  # issue #115
+PUT    /api/mcp/clients/{id}                         agents.manage   STEP_UP_POLICY  # issue #115
+GET    /api/mcp/resources                            graph.read      -  # issue #115
+POST   /api/mcp/resources                            agents.manage   STEP_UP_POLICY  # issue #115
+PUT    /api/mcp/resources/{id}                       agents.manage   STEP_UP_POLICY  # issue #115
+GET    /api/mcp/tokens                               graph.read      -  # issue #115
+POST   /api/mcp/tokens/{jti}/revoke                  agents.manage   STEP_UP_POLICY  # issue #115
+GET    /api/mcp/decisions                            graph.read      -  # issue #115
 POST   /api/connections/{id}/validate                connections.manage -
 GET    /api/connections/{id}/validations/{run}       connections.read   -
 POST   /api/connections/{id}/dry-run                 connections.manage -

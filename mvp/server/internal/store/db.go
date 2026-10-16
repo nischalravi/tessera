@@ -90,6 +90,8 @@ var tables = []string{
 	"account_links", "identity_merges",
 	// identity containment (schema/0205_containment.sql)
 	"containment_credentials", "containment_retries",
+	// MCP authorization server (schema/0290_mcp_authz.sql)
+	"mcp_resources", "mcp_clients", "mcp_auth_requests", "mcp_tokens", "mcp_decisions", "mcp_actor_jtis",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was

@@ -890,3 +890,61 @@ export const readiness = {
   rerun: (reconcile = false) => api<{ results: { connection_id: string; name: string; validation_run_id: string | null; dry_run_id: string | null; skipped?: string }[]; dashboard: DeploymentHealth }>(
     "/insights/deployment-health/rerun", { reconcile }),
 };
+
+// ------------------------------------------------------------ agent authorization (issue #115)
+// The MCP authorization server's admin API: registered clients (client ID metadata documents),
+// resource servers, issued tokens and the decision log. Tokens themselves are never returned.
+
+export interface McpIdentityRef { id: number; name: string }
+export type McpClientStatus = "pending" | "active" | "disabled";
+export interface McpClient {
+  id: string; client_id: string; name: string; redirect_uris: string[]; loopback_redirect: boolean; has_keys: boolean;
+  agent: McpIdentityRef | null; status: McpClientStatus; fetched_at: string; expires_at: string; doc_sha256: string;
+}
+export interface McpResource {
+  id: string; resource: string; name: string; status: "active" | "disabled"; created_by: string; created_at: string;
+  metadata_path: string;
+  /** Shown once, when the resource is created. */
+  secret?: string;
+}
+export interface McpActor { sub: string; client_id?: string; act?: McpActor }
+export interface McpToken {
+  jti: string; client_id: string; subject: McpIdentityRef; agent: McpIdentityRef; audience: string; scope: string[];
+  act: McpActor | null; grant: "authorization_code" | "token_exchange"; policy_version: string; issued_at: string;
+  expires_at: string; revoked_at: string | null; revoked_reason: string; state: "active" | "expired" | "revoked";
+}
+export interface McpDecision {
+  id: number; at: string; kind: "issue" | "exchange" | "tool_call" | "revoke"; allow: boolean; reason: string; jti: string;
+  client_id: string; subject: McpIdentityRef | null; agent: McpIdentityRef | null; resource: string; tool: string;
+  requested_scope: string[]; granted_scope: string[]; policy_version: string;
+}
+export interface McpConsent {
+  id: string; status: "pending" | "approved" | "denied" | "redeemed";
+  client: { client_id: string; name: string; redirect_uris: string[]; loopback_redirect: boolean };
+  agent: McpIdentityRef; resource: string; requested_scope: string[]; granted_scope: string[]; expires_at: string; policy_version: string;
+}
+
+/** Where the browser may be sent after consent: the client's https redirect, or an http one on the user's own machine. */
+export function safeRedirect(u: string): boolean {
+  try {
+    const x = new URL(u);
+    if (x.protocol === "https:") return true;
+    return x.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(x.hostname);
+  } catch {
+    return false;
+  }
+}
+
+export const mcpAuthz = {
+  registerClient: (clientId: string) => api<McpClient>("/mcp/clients", { client_id: clientId }),
+  updateClient: (id: string, body: { agent_identity_id: number | null; status: McpClientStatus }) =>
+    api<McpClient>(`/mcp/clients/${encodeURIComponent(id)}`, body, "PUT"),
+  createResource: (resource: string, name: string) => api<McpResource>("/mcp/resources", { resource, name }),
+  updateResource: (id: string, status: "active" | "disabled") =>
+    api<McpResource>(`/mcp/resources/${encodeURIComponent(id)}`, { status }, "PUT"),
+  revokeToken: (jti: string) => api<{ revoked: boolean; jti: string }>(`/mcp/tokens/${encodeURIComponent(jti)}/revoke`, {}),
+  consent: (id: string) => api<McpConsent>(`/mcp/authorizations/${encodeURIComponent(id)}`),
+  /** The browser is sent to `redirect_to` (the client's redirect URI with the code, or the error). */
+  decide: (id: string, approve: boolean) =>
+    api<{ approved: boolean; redirect_to: string }>(`/mcp/authorizations/${encodeURIComponent(id)}/decision`, { approve }),
+};
