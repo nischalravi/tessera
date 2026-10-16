@@ -91,6 +91,8 @@ var tables = []string{
 	// business roles (schema/0206_business_roles.sql)
 	"business_roles", "business_role_entitlements", "business_role_versions", "business_role_members",
 	"business_role_requests",
+	// scheduled access reviews (schema/0207_review_schedules.sql)
+	"review_templates", "review_launches",
 	// account correlation (schema/0204_correlation.sql)
 	"account_links", "identity_merges",
 	// identity containment (schema/0205_containment.sql)

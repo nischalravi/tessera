@@ -175,7 +175,8 @@ The routes are documented at `/api/readiness/openapi.json`.
 `GET /api/correlation/queue` · `GET /api/correlation/decisions` ·
 `POST /api/accounts/{id}/link {identity_id, reason}` · `POST /api/accounts/{id}/not-person {reason}` ·
 `DELETE /api/accounts/{id}/link` · `POST /api/identities/{id}/merge {into, reason}` ·
-`GET /api/identity-merges` · `POST /api/identity-merges/{id}/unmerge {reason}`
+`GET /api/identity-merges` · `POST /api/identity-merges/{id}/unmerge {reason}` ·
+`GET|POST /api/reviews/schedules` · `PUT /api/reviews/schedules/{id}` · `POST /api/reviews/schedules/{id}/run`
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
@@ -244,6 +245,24 @@ Members, versions and drift need `graph.read`. The seed creates the demo company
 Rule members are seeded only where people already hold every entitlement, so seeding grants
 nothing: reconcile a role to see the rest. Not yet: provisioning into the target system (#103),
 role mining (Phase 3), and ABAC conditions in rules (#162).
+
+### Scheduled access reviews
+
+**Access reviews → Schedules** (issue #166) runs campaigns on a recurrence: once, every
+quarter, every six months or every year. A schedule sets:
+
+- **Scope:** one system or all; privileged grants only, or every risky grant.
+- **Review window:** how many days reviewers get, and when the reminder goes out.
+- **Close-out:** what happens to items nobody decided by the due date. Either they are revoked,
+  or they go to an escalation reviewer for a few days and are revoked after that.
+
+The scheduler (`reviews.scheduler`, every 5 minutes) launches due schedules. Each period
+(`2026-Q4`, `2026-H2`, `2026`) runs once, even after a restart. Periods missed while the server
+was down collapse into one run. The next run is counted from the scheduled time, so it doesn't
+drift. **Run now** launches outside the schedule. Reminders, escalations and close-outs are audit
+events; delivery by email or chat comes with alerting (#168). Reviewers are assigned as for
+manual campaigns: the manager, then the owner, then the security lead. The scheduler follows
+`TESSERA_NOW` in dev.
 
 ### Account correlation
 

@@ -695,6 +695,40 @@ export const cancelRequest = (id: string) => line(id, "cancel");
 export const removeRequest = (id: string, reason?: string) => line(id, "remove", reason ? { reason } : {});
 export const putCatalogItem = (groupId: number, body: Omit<CatalogEntry, "id" | "group" | "owner" | "updated_at"> & { owner_identity_id: number | null }) =>
   api<CatalogEntry>(`/catalog/items/${groupId}`, body, "PUT");
+
+// ---------------------------------------------------------------- scheduled reviews (issue #166)
+
+export type Recurrence = "once" | "quarterly" | "semiannual" | "annual";
+export interface ReviewLaunch {
+  id: string; period: string; campaign_id: number; launched_at: string; due_at: string;
+  reminded_at: string | null; escalated_at: string | null; closed_at: string | null; revoked: number;
+}
+export interface ReviewSchedule {
+  id: string;
+  name: string;
+  system: string | null;
+  privileged_only: boolean;
+  unused_days: number;
+  duration_days: number;
+  reminder_days: number;
+  close_out: "revoke" | "escalate";
+  escalation_reviewer: { id: number; name: string } | null;
+  escalation_days: number;
+  recurrence: Recurrence;
+  next_run_at: string | null;
+  enabled: boolean;
+  updated_at: string;
+  launches: ReviewLaunch[];
+}
+export interface ReviewScheduleInput {
+  name: string; system: string | null; privileged_only: boolean; unused_days: number; duration_days: number; reminder_days: number;
+  close_out: "revoke" | "escalate"; escalation_identity_id: number | null; escalation_days: number; recurrence: Recurrence;
+  first_run_at?: string; enabled: boolean;
+}
+export const createReviewSchedule = (b: ReviewScheduleInput) => api<ReviewSchedule>("/reviews/schedules", b);
+export const updateReviewSchedule = (id: string, b: ReviewScheduleInput) => api<ReviewSchedule>(`/reviews/schedules/${encodeURIComponent(id)}`, b, "PUT");
+export const runReviewSchedule = (id: string) => api<ReviewLaunch>(`/reviews/schedules/${encodeURIComponent(id)}/run`, {});
+
 // ---------------------------------------------------------------- account correlation (issue #160)
 
 export interface CorrAccount { id: number; system: string; external_id: string; username: string; kind: string; status: string; identity_id: number | null }
