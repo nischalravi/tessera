@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Error><Code>OwnershipControlsNotFoundError</Code><Message>The bucket ownership controls were not found</Message><BucketName>legacy.logs</BucketName><RequestId>R2</RequestId></Error>

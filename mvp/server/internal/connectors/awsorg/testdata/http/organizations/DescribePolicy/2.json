@@ -1,0 +1,1 @@
+{"Policy":{"PolicySummary":{"Id":"p-deny0001","Name":"DenyOtherRegions","Type":"SERVICE_CONTROL_POLICY","AwsManaged":false},"Content":"{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"Action\":\"*\",\"Resource\":\"*\",\"Condition\":{\"StringNotEquals\":{\"aws:RequestedRegion\":[\"us-east-1\"]}}}]}"}}

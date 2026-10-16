@@ -78,6 +78,11 @@ DELETE /api/connections/{id}/checklist/{item}/skip   connections.manage -
 POST   /api/connections/{id}/transition              connections.manage -
 POST   /api/connections/{id}/activate                connections.activate STEP_UP_POLICY
 POST   /api/connections/{id}/retire                  connections.manage STEP_UP_POLICY
+GET    /api/aws/connectors                           connections.read   -  # issue #26
+POST   /api/aws/connectors                           connections.manage STEP_UP_POLICY  # issue #26
+DELETE /api/aws/connectors/{id}                      connections.manage STEP_UP_POLICY  # issue #26
+GET    /api/aws/snapshots                            connections.read   -  # issue #26
+GET    /api/aws/snapshots/{id}                       connections.read   -  # issue #26
 GET    /api/correlation/queue                        graph.read      -  # issue #160
 GET    /api/correlation/decisions                    graph.read      -  # issue #160
 POST   /api/accounts/{account_id}/link               identities.correlate STEP_UP_POLICY  # issue #160

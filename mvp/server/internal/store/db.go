@@ -90,6 +90,9 @@ var tables = []string{
 	"account_links", "identity_merges",
 	// identity containment (schema/0205_containment.sql)
 	"containment_credentials", "containment_retries",
+	// AWS evaluator (schema/0320_aws_snapshots.sql)
+	"aws_connectors", "aws_snapshots", "aws_policy_documents", "aws_policy_attachments", "aws_org_nodes",
+	"aws_snapshot_entities", "aws_collection_findings", "aws_trust_edges", "aws_effective_permissions", "aws_explanations",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was
