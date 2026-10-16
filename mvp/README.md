@@ -168,11 +168,50 @@ The routes are documented at `/api/readiness/openapi.json`.
 `GET /api/correlation/queue` · `GET /api/correlation/decisions` ·
 `POST /api/accounts/{id}/link {identity_id, reason}` · `POST /api/accounts/{id}/not-person {reason}` ·
 `DELETE /api/accounts/{id}/link` · `POST /api/identities/{id}/merge {into, reason}` ·
-`GET /api/identity-merges` · `POST /api/identity-merges/{id}/unmerge {reason}`
+`GET /api/identity-merges` · `POST /api/identity-merges/{id}/unmerge {reason}` ·
+`GET /api/access/as-of?resource=&date=` · `GET|POST /api/evidence/packs` ·
+`GET /api/evidence/packs/{id}` · `GET /api/evidence/packs/{id}/download` (see "Point-in-time access and evidence packs")
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
 or HRIS execution is always the signed-in user.
+
+### Point-in-time access and evidence packs
+
+Issue #111; packages `server/internal/evidence`, `graph.BuildAsOf`, schema `0260` and `0261`.
+
+- **Edge history** (`edge_history`). Every write to `grant_edges` (connector sync and prune, JIT
+  approve, extend, revoke and sweep, manual grants, review, leaver and least-privilege revokes) opens or
+  closes a span `[valid_from, valid_to)` in the same transaction, in `store/repo_grants.go`, so no
+  caller can forget it. A span is half-open: the grant holds at the instant it was added and not at the
+  instant it was removed. A JIT grant also stops at its own `expires_at`, even if the sweeper deleted it
+  later; extending one closes the span and opens a new one. Deleting an edge needs the removal time, so
+  `DeleteEdge`, `DeleteJITEdge` and `SetEdgeExpiry` take an `at` argument. Applying the schema backfills a
+  span (from `created_at`) for any grant that has none, so existing databases start with today's grants
+  as of their creation time.
+- **`GET /api/access/as-of?resource=<id>&date=<date or datetime>`** (`graph.read`). Who could reach the
+  resource, per identity with permissions and paths. A date (`2026-03-31`) means the end of that day
+  (today means now); a datetime (`2026-03-31T09:30:00`, UTC) is that instant. A future instant is 422.
+  Only grants are historical: identities, accounts and the identity-account bindings are today's, so an
+  account disabled by a leaver plan still shows the access it had then. The UI offers it as an *As of*
+  date in Access graph → *Who can access…*.
+- **Evidence packs** (`evidence_packs`, immutable). `POST /api/evidence/packs {framework, from, to}`
+  with `framework` one of `soc2`, `sox_itgc`, `iso27001`, `pci_dss_v4` (`audit.read`: auditor and tenant
+  admin). `from` and `to` are dates or datetimes; a date `to` includes that day, the period is capped
+  at 731 days and ends no later than now. The pack, its ZIP and the ledger event
+  `evidence.pack_generated` (framework, period, manifest SHA-256) commit in one transaction; the ZIP is
+  written after commit. `GET /api/evidence/packs` lists them, `GET /api/evidence/packs/{id}` returns the
+  manifest and `.../download` the ZIP. Contents: `users.csv` (one row per account with its source
+  system; the manifest counts rows per source), `jml_leavers.csv` (per leaver event and system: hours
+  from the HR termination to the last grant removal, or `access_remains`; ids only), `review_campaigns.csv`
+  and `review_items.csv` (campaigns created in the period with decisions), `privileged_access.csv` (who
+  held privileged access at the end of the period, with the path), `revocations.csv` (grants revoked in
+  Tessera in the period, verified against Tessera's own graph, not the target system), `README.txt`,
+  `manifest.json` (SHA-256 and row count of every file, control mapping from the knowledge base) and
+  `manifest.sha256`. The same input gives the same bytes. CSV cells starting with `= + - @` get a leading
+  apostrophe. The PCI pack notes that exception-only campaigns may not satisfy requirement 7.2.4.
+  The review campaigns file is built from the campaigns and their items; there was no separate review
+  export to reuse.
 
 ### Account correlation
 
@@ -319,7 +358,7 @@ the right. Arrow keys move between items.
 | (top) | **Home**, **Inbox** (count) |
 | **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts (with *Account matches*), Roles (Preview), Organizations (Preview) |
 | **Access** | Request access, My access (with *My requests*), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
-| **Protection** | Policies & SoD (violations, policies, what-if simulation), Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
+| **Protection** | Policies & SoD (violations, policies, what-if simulation), Access graph (with an *As of* date for *Who can access…*), Evidence packs, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
 | **Settings** | Connections (governed connections and the setup wizard), Admin |
 
 **Home.** For the admin & security persona: the tenant name and a sync line, then tabs

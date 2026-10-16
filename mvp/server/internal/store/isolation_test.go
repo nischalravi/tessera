@@ -293,13 +293,15 @@ var mutations = map[string]func(c *store.TenantTx, a, b map[string]int64) error{
 	},
 	"DisableAccount": func(c *store.TenantTx, a, _ map[string]int64) error { return c.DisableAccount(a["acct:okta:alice"]) },
 	"SetEdgeExpiry": func(c *store.TenantTx, a, _ map[string]int64) error {
-		return c.SetEdgeExpiry(a["edge:jit-active"], storetest.Now)
+		return c.SetEdgeExpiry(a["edge:jit-active"], storetest.Now, storetest.Now)
 	},
-	"DeleteEdge": func(c *store.TenantTx, a, _ map[string]int64) error { return c.DeleteEdge(a["edge:0"]) },
+	"DeleteEdge": func(c *store.TenantTx, a, _ map[string]int64) error { return c.DeleteEdge(a["edge:0"], storetest.Now) },
 	"RevokeEdge": func(c *store.TenantTx, a, _ map[string]int64) error {
 		return c.RevokeEdge(a["edge:0"], storetest.Now, "test")
 	},
-	"DeleteJITEdge": func(c *store.TenantTx, a, _ map[string]int64) error { return c.DeleteJITEdge(a["edge:jit-active"]) },
+	"DeleteJITEdge": func(c *store.TenantTx, a, _ map[string]int64) error {
+		return c.DeleteJITEdge(a["edge:jit-active"], storetest.Now)
+	},
 	"DeleteExpiredJITEdges": func(c *store.TenantTx, _, _ map[string]int64) error {
 		_, err := c.DeleteExpiredJITEdges(storetest.Now.Add(1000 * time.Hour))
 		return err
@@ -673,7 +675,7 @@ func TestIsolation_EveryRepoMethodClassified(t *testing.T) {
 		"RevokedGrants": true,
 	}
 	for _, m := range []map[string]bool{keys(listCases), keys(getCases), keys(naturalKeyGets), keys(countCases),
-		keys(mutations), keys(insertCases), readinessCovered(), keysCovered(), auditCovered(), authCovered(), correlationCovered(), containmentCovered()} {
+		keys(mutations), keys(insertCases), readinessCovered(), keysCovered(), auditCovered(), authCovered(), correlationCovered(), containmentCovered(), evidenceCovered()} {
 		for k := range m {
 			covered[strings.SplitN(k, "/", 2)[0]] = true
 		}

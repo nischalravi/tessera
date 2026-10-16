@@ -1,5 +1,5 @@
 import {
-  AppWindow, BadgeCheck, Bot, Building2, ChartLine, ClipboardCheck, House, Inbox, KeyRound, Layers, LucideIcon, Network, Plug, Plus, Settings, ShieldCheck, Timer, Users, UsersRound,
+  AppWindow, BadgeCheck, Bot, Building2, ChartLine, ClipboardCheck, FileArchive, House, Inbox, KeyRound, Layers, LucideIcon, Network, Plug, Plus, Settings, ShieldCheck, Timer, Users, UsersRound,
 } from "lucide-react";
 
 export interface NavPage {
@@ -74,7 +74,8 @@ export const RAIL: RailGroup[] = [
     label: "Protection",
     items: [
       { id: "policies", label: "Policies & SoD", icon: ShieldCheck, path: "/governance/policies", keywords: "policy as code yaml simulation what-if violations" },
-      { id: "graph", label: "Access graph", icon: Network, path: "/insights/graph", keywords: "graph explorer paths who can access" },
+      { id: "graph", label: "Access graph", icon: Network, path: "/insights/graph", keywords: "graph explorer paths who can access as of date point in time" },
+      { id: "evidence", label: "Evidence packs", icon: FileArchive, path: "/governance/evidence", keywords: "audit evidence soc 2 sox itgc iso 27001 pci dss compliance export manifest auditor" },
       {
         id: "insights", label: "Insights", icon: ChartLine, path: "/insights/risk", also: ["/insights"], except: ["/insights/graph"], keywords: "risk dashboard kpi metrics",
         pages: [

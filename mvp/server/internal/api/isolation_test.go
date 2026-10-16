@@ -180,6 +180,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/api/containment-retries/{retry_id}/retry-now" {
 			continue // TestContainmentRetriesAPI (a UUID, not a fixture id)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/evidence/packs/{pack_id}") {
+			continue // TestEvidenceAPI_CrossTenant (a UUID, not a fixture id)
+		}
 		if rt.Pattern == "/api/auth/sessions/{session_id}" {
 			continue // TestIsolation_SessionCookieScoped (a UUID, not a fixture id)
 		}
@@ -246,6 +249,8 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		"/api/reviews/campaigns/{campaign_id}":      fmt.Sprint(b["campaign"]),
 		"/api/hris/events/{event_id}/plan":          fmt.Sprint(b["hris:leaver"]),
 		"/api/audit/events/{event_id}/proof":        latestEventID(t, f.DB, f.B.ID),
+		"/api/evidence/packs/{pack_id}":             seedEvidencePack(t, f, f.B.ID),
+		"/api/evidence/packs/{pack_id}/download":    seedEvidencePack(t, f, f.B.ID),
 	}
 	checked := 0
 	for _, rt := range srv.Routes() {
@@ -268,6 +273,10 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		if path == "/api/graph" {
 			queries = []string{fmt.Sprintf("?identity_id=%d", b["alice"]), fmt.Sprintf("?resource_id=%d", b["resource:aws:prod"]),
 				fmt.Sprintf("?identity_id=%d&perm_key=perm:%d", b["alice"], b["perm:aws:get-pii"])}
+		}
+		if path == "/api/access/as-of" {
+			queries = []string{fmt.Sprintf("?resource=%d&date=2026-10-08", b["resource:aws:prod"]),
+				fmt.Sprintf("?resource=%d&date=2026-10-08T09:00:00", b["resource:aws:customer-pii"])}
 		}
 		for i, q := range queries {
 			rec := serveOnce(h, http.MethodGet, path+q, "")

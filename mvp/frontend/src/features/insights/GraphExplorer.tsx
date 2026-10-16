@@ -2,7 +2,7 @@ import cytoscape, { Core } from "cytoscape";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Maximize, Minus, Plus } from "lucide-react";
-import { IdentityRow, ResourceRow, useApi } from "../../api";
+import { AsOfResult, IdentityRow, ResourceRow, asOfPath, useApi } from "../../api";
 import { useTheme } from "../../app/theme";
 import { Badge, Button, Chip, Loading, Page, Segmented, TypeBadge } from "../../components";
 
@@ -162,11 +162,43 @@ function GraphCanvas({ nodes, edges, focus, onSelect }: { nodes: GNode[]; edges:
   );
 }
 
+/** Who could reach the resource on a past date, from the grant history (GET /api/access/as-of). */
+function AsOfList({ data, error }: { data: AsOfResult | null; error: string | null }) {
+  if (!data) return <Loading error={error} />;
+  return (
+    <div className="stack-sm" style={{ padding: 16 }}>
+      <h3 style={{ margin: 0 }}>{data.count} {data.count === 1 ? "identity" : "identities"} could reach {data.resource.name} on {data.as_of.replace("T", " ")} UTC</h3>
+      <p className="small muted">From the grant history. Grants are as they were then; identities and accounts are current records.</p>
+      {data.count === 0 ? (
+        <div className="muted small">Nobody held a path to this resource at that time, or the grants were recorded later.</div>
+      ) : (
+        <div className="table-scroll">
+          <table>
+            <thead><tr><th>Identity</th><th>Permissions</th><th>Shortest path</th></tr></thead>
+            <tbody>
+              {data.identities.map((a) => (
+                <tr key={a.identity.id}>
+                  <td><Link to={`/directory/identities/${a.identity.id}`}>{a.identity.name}</Link> <TypeBadge type={a.identity.type} /></td>
+                  <td>{a.permissions.map((p) => <span key={p.permission_id} className="chip sys">{p.action}{p.privileged ? " (privileged)" : ""}{p.standing ? "" : " (JIT)"}</span>)}</td>
+                  <td className="small">{a.permissions[0]?.paths[0]?.text}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function GraphExplorer() {
   const [params, setParams] = useSearchParams();
   const identity = params.get("identity");
   const resource = params.get("resource");
   const perm = params.get("perm");
+  const asof = resource ? params.get("asof") : null;
+  const today = new Date().toISOString().slice(0, 10);
+  const { data: asOfData, error: asOfError } = useApi<AsOfResult>(resource && asof ? asOfPath(resource, asof) : null);
   const { data: idents } = useApi<IdentityRow[]>("/identities");
   const { data: resources } = useApi<ResourceRow[]>("/resources");
   const mode = resource ? "resource" : "identity";
@@ -196,9 +228,15 @@ export default function GraphExplorer() {
               {sorted.map((i) => <option key={i.id} value={i.id}>{i.name} ({i.type.replace("_", " ")})</option>)}
             </select>
           ) : (
-            <select className="input" aria-label="Resource" value={resource ?? ""} onChange={(e) => setParams({ resource: e.target.value })}>
-              {(resources ?? []).map((r) => <option key={r.id} value={r.id}>{r.name} ({r.identities_with_access} identities)</option>)}
-            </select>
+            <>
+              <select className="input" aria-label="Resource" value={resource ?? ""} onChange={(e) => setParams(asof ? { resource: e.target.value, asof } : { resource: e.target.value })}>
+                {(resources ?? []).map((r) => <option key={r.id} value={r.id}>{r.name} ({r.identities_with_access} identities)</option>)}
+              </select>
+              <label className="row tight small">As of
+                <input className="input" type="date" aria-label="As of date" value={asof ?? ""} max={today} onChange={(e) => setParams(e.target.value ? { resource: resource ?? "", asof: e.target.value } : { resource: resource ?? "" })} />
+              </label>
+              {asof && <Button onClick={() => setParams({ resource: resource ?? "" })}>Now</Button>}
+            </>
           )}
           {perm && <Button onClick={() => setParams({ identity: effectiveId ?? "" })}>Show all permissions</Button>}
         </>
@@ -207,7 +245,7 @@ export default function GraphExplorer() {
       <div className="graph-layout">
         <div className="card flush">
           <div className="graph-wrap">
-            {data ? <GraphCanvas nodes={data.nodes} edges={data.edges} focus={perm} onSelect={setSel} /> : <Loading error={error} />}
+            {asof ? <AsOfList data={asOfData} error={asOfError} /> : data ? <GraphCanvas nodes={data.nodes} edges={data.edges} focus={perm} onSelect={setSel} /> : <Loading error={error} />}
           </div>
         </div>
         <div className="stack">

@@ -183,7 +183,7 @@ func Approve(c *store.TenantTx, requestID int64, by store.UserRef, now, createdA
 			ExpiresAt: &expires, CreatedAt: createdAt})
 	} else {
 		edgeID = existing.ID
-		err = c.SetEdgeExpiry(edgeID, expires)
+		err = c.SetEdgeExpiry(edgeID, expires, createdAt)
 	}
 	if err != nil {
 		return nil, err
@@ -224,7 +224,7 @@ func Revoke(c *store.TenantTx, requestID int64, by store.UserRef, now time.Time)
 	if req == nil || req.Status != "approved" {
 		return nil, jitErr("request is not active")
 	}
-	if err := dropEdge(c, req); err != nil {
+	if err := dropEdge(c, req, now); err != nil {
 		return nil, err
 	}
 	req.Status, req.ExpiresAt = "revoked", &now
@@ -234,11 +234,11 @@ func Revoke(c *store.TenantTx, requestID int64, by store.UserRef, now time.Time)
 	return req, c.Audit(now, by.Display, "jit.revoke", ojson.Object{{Key: "request_id", Value: req.ID}})
 }
 
-func dropEdge(c *store.TenantTx, req *store.AccessRequest) error {
+func dropEdge(c *store.TenantTx, req *store.AccessRequest, now time.Time) error {
 	if req.EdgeID == nil || *req.EdgeID == 0 {
 		return nil
 	}
-	return c.DeleteJITEdge(*req.EdgeID)
+	return c.DeleteJITEdge(*req.EdgeID, now)
 }
 
 // NeedsSweep reports whether Sweep would change anything at now.
@@ -256,7 +256,7 @@ func Sweep(c *store.TenantTx, now time.Time) (int, error) {
 		return 0, err
 	}
 	for _, r := range reqs {
-		if err := dropEdge(c, r); err != nil {
+		if err := dropEdge(c, r, now); err != nil {
 			return 0, err
 		}
 		r.Status = "expired"
