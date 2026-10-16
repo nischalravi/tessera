@@ -248,6 +248,11 @@ func (s *Server) mcpToken(w http.ResponseWriter, r *http.Request, p *params) (an
 		in := mcpauth.ExchangeRequest{SubjectToken: f.Get("subject_token"), SubjectTokenType: f.Get("subject_token_type"),
 			ActorToken: f.Get("actor_token"), ActorTokenType: f.Get("actor_token_type"), Resource: f.Get("resource"),
 			Scope: f.Get("scope")}
+		// the actor assertion is checked against the client's keys: refresh an expired cache first, and fail closed
+		if err := s.mcp.RefreshActorClient(r.Context(), s.store, t.ID, in.ActorToken); err != nil {
+			oauthFail(w, http.StatusUnauthorized, "invalid_client", "the client's metadata document could not be refreshed")
+			return nil, nil
+		}
 		err := s.store.InTenant(r.Context(), t.ID, func(tx *store.TenantTx) error {
 			g, err := graph.Build(tx, s.clock())
 			if err != nil {
@@ -467,6 +472,12 @@ func (s *Server) mcpAuthorize(w http.ResponseWriter, r *http.Request, p *params)
 		return nil, nil
 	}
 	state := q.Get("state")
+	if client.Status != "active" || client.AgentIdentityID == nil {
+		// never redirect to the redirect URIs of a client an administrator has not approved:
+		// a pending client's document is attacker-chosen, so this would be an open redirect
+		oauthFail(w, http.StatusBadRequest, "unauthorized_client", "this client is not approved; ask an administrator to register it")
+		return nil, nil
+	}
 	fail := func(code, desc string) (any, error) {
 		authzRedirect(w, r, ru, map[string]string{"error": code, "error_description": desc, "state": state, "iss": iss})
 		return nil, nil

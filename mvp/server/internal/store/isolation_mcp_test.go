@@ -191,8 +191,71 @@ func TestIsolation_MCPCrossTenantReferences(t *testing.T) {
 	}
 }
 
+func TestIsolation_MCPContainment(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	ids := seedMCP(t, f)
+	now := storetest.Now
+	ctx := context.Background()
+	err := f.DB.InTenant(ctx, f.B.ID, func(c *store.TenantTx) error {
+		if first, err := c.MarkMCPContained(f.B.IDs["helper-bot"], "x", now); err != nil || !first {
+			t.Errorf("first mark = %v, %v", first, err)
+		}
+		if first, err := c.MarkMCPContained(f.B.IDs["helper-bot"], "x", now); err != nil || first {
+			t.Errorf("second mark = %v, %v", first, err)
+		}
+		if ok, err := c.MCPContained(f.A.IDs["helper-bot"]); err != nil || ok {
+			t.Errorf("A's identity looks contained in B: %v, %v", ok, err)
+		}
+		if n, err := c.DisableMCPClientsOfAgent(f.A.IDs["helper-bot"], now); err != nil || n != 0 {
+			t.Errorf("disable A's agent's clients from B = %d, %v", n, err)
+		}
+		if n, err := c.DenyMCPAuthRequestsOfIdentity(f.A.IDs["alice"]); err != nil || n != 0 {
+			t.Errorf("deny A's requests from B = %d, %v", n, err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// B naming A's identity is refused by the guard trigger
+	err = f.DB.InTenant(ctx, f.B.ID, func(c *store.TenantTx) error {
+		_, err := c.MarkMCPContained(f.A.IDs["alice"], "x", now)
+		return err
+	})
+	if !errors.Is(err, store.ErrCrossTenant) {
+		t.Errorf("marking A's identity from B = %v", err)
+	}
+	if err := f.DB.ReadTenant(ctx, f.A.ID, func(c *store.TenantTx) error {
+		cl, err := c.MCPClient("https://client.example/" + f.A.Slug + ".json")
+		if err != nil || cl.Status != "active" {
+			t.Errorf("A's client = %+v, %v", cl, err)
+		}
+		r, err := c.MCPAuthRequest(ids[f.A.Slug].request)
+		if err != nil || r.Status != store.MCPAuthPending {
+			t.Errorf("A's request = %+v, %v", r, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// in its own tenant the switch works on the client and the request
+	err = f.DB.InTenant(ctx, f.A.ID, func(c *store.TenantTx) error {
+		if n, err := c.DisableMCPClientsOfAgent(f.A.IDs["helper-bot"], now); err != nil || n != 1 {
+			t.Errorf("disable = %d, %v", n, err)
+		}
+		if n, err := c.DenyMCPAuthRequestsOfIdentity(f.A.IDs["helper-bot"]); err != nil || n != 1 {
+			t.Errorf("deny by agent = %d, %v", n, err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func mcpCovered() map[string]bool {
-	return map[string]bool{"InsertMCPResource": true, "MCPResources": true, "MCPResource": true, "MCPResourceByURI": true,
+	return map[string]bool{"MarkMCPContained": true, "MCPContained": true, "DisableMCPClientsOfAgent": true,
+		"DenyMCPAuthRequestsOfIdentity": true, "InsertMCPResource": true, "MCPResources": true, "MCPResource": true, "MCPResourceByURI": true,
 		"SetMCPResourceStatus": true, "UpsertMCPClient": true, "MCPClient": true, "MCPClients": true, "SetMCPClient": true,
 		"InsertMCPAuthRequest": true, "MCPAuthRequest": true, "MCPAuthRequestByCode": true, "DecideMCPAuthRequest": true,
 		"RedeemMCPAuthRequest": true, "InsertMCPToken": true, "MCPToken": true, "MCPTokens": true, "RevokeMCPToken": true,

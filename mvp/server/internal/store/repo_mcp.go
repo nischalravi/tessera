@@ -481,3 +481,58 @@ func (tx *TenantTx) UseMCPActorJTI(jtiHash string, expires, now time.Time) (bool
 	_, err = tx.exec(mcpJTIInsert, sql.Named("jti_hash", jtiHash), sql.Named("expires_at", RT(expires)))
 	return err == nil, err
 }
+
+// ---------------------------------------------------------------- containment (kill switch)
+
+var (
+	mcpContainedInsert = tq("mcp_contained.insert", `
+		INSERT INTO mcp_contained (tenant_id, identity_id, reason, contained_at)
+		VALUES (@tenant, @identity_id, @reason, @now)
+		ON CONFLICT (tenant_id, identity_id) DO NOTHING`)
+	mcpContainedCount = tq("mcp_contained.count", `
+		SELECT count(*) FROM mcp_contained c WHERE c.tenant_id = @tenant AND c.identity_id = @identity_id`)
+	mcpClientsDisableAgent = tq("mcp_clients.disable_agent", `
+		UPDATE mcp_clients SET status = 'disabled', updated_at = @now
+		WHERE tenant_id = @tenant AND agent_identity_id = @identity_id AND status <> 'disabled'`)
+	mcpAuthDenyIdentity = tq("mcp_auth_requests.deny_identity", `
+		UPDATE mcp_auth_requests SET status = 'denied', code_hash = NULL
+		WHERE mcp_auth_requests.tenant_id = @tenant AND status IN ('pending','approved') AND (user_identity_id = @identity_id
+			OR client_id IN (SELECT c.client_id FROM mcp_clients c WHERE c.tenant_id = @tenant AND c.agent_identity_id = @identity_id))`)
+)
+
+// MarkMCPContained records that the kill switch contained the identity and
+// reports whether this call was the first.
+func (tx *TenantTx) MarkMCPContained(identityID int64, reason string, now time.Time) (bool, error) {
+	res, err := tx.exec(mcpContainedInsert, sql.Named("identity_id", identityID), sql.Named("reason", reason), sql.Named("now", RT(now)))
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// MCPContained reports whether the identity was contained.
+func (tx *TenantTx) MCPContained(identityID int64) (bool, error) {
+	n, err := tx.count(mcpContainedCount, sql.Named("identity_id", identityID))
+	return n > 0, err
+}
+
+// DisableMCPClientsOfAgent disables every client bound to the agent and
+// returns how many were enabled.
+func (tx *TenantTx) DisableMCPClientsOfAgent(agentID int64, now time.Time) (int64, error) {
+	res, err := tx.exec(mcpClientsDisableAgent, sql.Named("identity_id", agentID), sql.Named("now", RT(now)))
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// DenyMCPAuthRequestsOfIdentity denies the pending and approved (unredeemed)
+// authorization requests of the user, and of the clients bound to the agent.
+func (tx *TenantTx) DenyMCPAuthRequestsOfIdentity(identityID int64) (int64, error) {
+	res, err := tx.exec(mcpAuthDenyIdentity, sql.Named("identity_id", identityID))
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}

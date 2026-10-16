@@ -292,7 +292,10 @@ signed with the tenant's `access_token` key from `internal/keys`; there are no r
   client signed with a key in its own metadata document (`iss = sub = client_id`, `aud` the issuer,
   five minutes at most, `jti` used once). The result has `sub` = the user, `act` = the agent (nested
   after the subject token's actors, at most 3 deep, no repeats), `aud` = the one `resource`, `jti`,
-  and a lifetime of 5 minutes at most.
+  and a lifetime of 5 minutes at most. The acting agent may only re-issue a token for the same
+  resource (another resource needs a different actor in the chain). The subject token's client,
+  agent and user must still be active, and the client's cached metadata (its keys) is refreshed
+  first when its one-hour cache has expired (`RefreshActorClient`; a failed refresh fails closed).
 - **Resource servers** (`/api/mcp/resources`) must be registered; a token is only issued for one.
   Registration shows a secret once; only its SHA-256 is stored.
 - **Decisions**: every issue, exchange, denial, revocation and tool-call decision is a row in
@@ -300,8 +303,12 @@ signed with the tenant's `access_token` key from `internal/keys`; there are no r
   `mcp.token.revoke`, `mcp.tool_call.decision`, `mcp.authorize.*`, `mcp.client.*`, `mcp.resource.*`)
   written in the same transaction, with the policy version (a digest of the policy documents).
 - **Kill switch**: `POST /api/identities/{id}/contain` first revokes every live token whose agent or
-  user is that identity (`mcp.tokens.revoke_identity`), before any provider call. Introspection also
-  checks the token's row, the client, the agent and the user on every call.
+  user is that identity (`mcp.tokens.revoke_identity`), before any provider call. In the same
+  transaction it marks the identity contained (`mcp_contained`, schema 0291), disables the clients
+  bound to it and denies its pending and approved authorization requests, so no code redeems, no
+  authorization starts and no exchange succeeds for it (as agent or as user) until an operator lifts
+  the containment. Introspection also checks the token's row, the client, the agent and the user on
+  every call. A client that is not active never gets an authorization redirect (400 page instead).
 - **Rate limits**: every `/t/{slug}/oauth/*` path has a per-IP bucket (default burst 40, one per
   250 ms) before the audit middleware, on top of the anonymous limit.
 - **UI**: Protection → Agent authorization (`/agents/authorization`): registered clients (bind and

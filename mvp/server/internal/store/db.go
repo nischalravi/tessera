@@ -92,6 +92,7 @@ var tables = []string{
 	"containment_credentials", "containment_retries",
 	// MCP authorization server (schema/0290_mcp_authz.sql)
 	"mcp_resources", "mcp_clients", "mcp_auth_requests", "mcp_tokens", "mcp_decisions", "mcp_actor_jtis",
+	"mcp_contained", // schema/0291_mcp_contained.sql
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was

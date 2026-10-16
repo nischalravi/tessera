@@ -45,6 +45,8 @@ type env struct {
 	key    *ecdsa.PrivateKey
 	shared string // the scope alice and the bot share
 	alone  string // alice's own scope
+	// craftClient, when set, is the client craftSubject issues tokens for
+	craftClient string
 }
 
 func newEnv(t *testing.T) *env {

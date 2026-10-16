@@ -353,15 +353,25 @@ func TestMCP_TokenExchangeOverHTTP(t *testing.T) {
 	x := newMCPFx(t, noRateLimits)
 	sub := x.userToken(x.resA)["access_token"].(string)
 	ex := url.Values{"grant_type": {mcpauth.GrantTokenExchange}, "subject_token": {sub}, "subject_token_type": {mcpauth.TypeAccessToken},
-		"actor_token": {x.actorAssertion()}, "actor_token_type": {mcpauth.TypeJWT}, "resource": {x.resB.uri},
+		"actor_token": {x.actorAssertion()}, "actor_token_type": {mcpauth.TypeJWT}, "resource": {x.resA.uri},
 		"scope": {x.shared + " aws:s3:GetObject:s3://customer-pii"}}
+	// the acting agent may not move the token to a resource the user did not consent to
+	moved := url.Values{}
+	for k, v := range ex {
+		moved[k] = v
+	}
+	moved.Set("resource", x.resB.uri)
+	moved.Set("actor_token", x.actorAssertion())
+	if rec := form(x.h, x.base+"/oauth/token", moved); rec.Code != 403 || jsonBody(t, rec)["error"] != "access_denied" {
+		t.Errorf("re-pointed exchange: %d %s", rec.Code, rec.Body)
+	}
 	rec := form(x.h, x.base+"/oauth/token", ex)
 	m := jsonBody(t, rec)
 	if rec.Code != 200 || m["scope"] != x.shared || m["issued_token_type"] != mcpauth.TypeAccessToken || m["refresh_token"] != nil {
 		t.Fatalf("exchange: %d %v", rec.Code, m)
 	}
-	in := jsonBody(t, x.introspect(m["access_token"].(string), x.resB))
-	if in["active"] != true || in["aud"] != x.resB.uri {
+	in := jsonBody(t, x.introspect(m["access_token"].(string), x.resA))
+	if in["active"] != true || in["aud"] != x.resA.uri {
 		t.Errorf("exchanged token = %v", in)
 	}
 	// the same actor assertion cannot be replayed
@@ -447,8 +457,8 @@ func TestMCP_AuthorizeRequestChecks(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if rec := get(x.alice, nil); rec.Code != 302 || !strings.Contains(rec.Header().Get("Location"), "error=unauthorized_client") {
-		t.Errorf("pending client: %d %s", rec.Code, rec.Header().Get("Location"))
+	if rec := get(x.alice, nil); rec.Code != 400 || rec.Header().Get("Location") != "" || !strings.Contains(rec.Body.String(), "unauthorized_client") {
+		t.Errorf("pending client: %d location %q %s", rec.Code, rec.Header().Get("Location"), rec.Body)
 	}
 }
 
@@ -576,6 +586,80 @@ func TestIsOAuthPath(t *testing.T) {
 }
 
 // ---------------------------------------------------------------- kill switch
+
+// The kill switch, through the real containIdentity route, also stops what has not
+// become a token yet: an approved code, a new authorization and an exchange.
+func TestMCP_ContainmentStopsNewTokens(t *testing.T) {
+	x := newMCPFx(t, noRateLimits)
+	sub := x.userToken(x.resA)["access_token"].(string)
+	// an approved code that has not been redeemed
+	rec := serve(x.h, authed(x.alice, "GET", x.authorizeURL(nil), ""))
+	id := strings.TrimPrefix(rec.Header().Get("Location"), "/agent-authorization?consent=")
+	rec = corrDo(x.h, x.alice, "POST", "/api/mcp/authorizations/"+id+"/decision", `{"approve":true}`)
+	u, err := url.Parse(jsonBody(t, rec)["redirect_to"].(string))
+	if rec.Code != 200 || err != nil || queryOf(u).Get("code") == "" {
+		t.Fatalf("approval: %d %s", rec.Code, rec.Body)
+	}
+	code := queryOf(u).Get("code")
+	// and a second request still waiting for consent
+	pending := serve(x.h, authed(x.alice, "GET", x.authorizeURL(nil), ""))
+	pendingID := strings.TrimPrefix(pending.Header().Get("Location"), "/agent-authorization?consent=")
+
+	rec = corrDo(x.h, x.admin, "POST", fmt.Sprintf("/api/identities/%d/contain", x.botID), `{"reason":"agent went off the rails"}`)
+	if rec.Code != 200 {
+		t.Fatalf("contain: %d %s", rec.Code, rec.Body)
+	}
+
+	rec = form(x.h, x.base+"/oauth/token", url.Values{"grant_type": {"authorization_code"}, "code": {code},
+		"code_verifier": {mcpVerifier}, "client_id": {mcpClientID}, "redirect_uri": {mcpRedirect}, "resource": {x.resA.uri}})
+	if rec.Code < 400 || strings.Contains(rec.Body.String(), "access_token") {
+		t.Errorf("an approved code redeemed after containment: %d %s", rec.Code, rec.Body)
+	}
+	if rec := serve(x.h, authed(x.alice, "GET", x.authorizeURL(nil), "")); rec.Code != 400 || rec.Header().Get("Location") != "" {
+		t.Errorf("a new authorize after containment: %d location %q", rec.Code, rec.Header().Get("Location"))
+	}
+	if rec := corrDo(x.h, x.alice, "POST", "/api/mcp/authorizations/"+pendingID+"/decision", `{"approve":true}`); rec.Code == 200 &&
+		strings.Contains(rec.Body.String(), "code=") {
+		t.Errorf("a pending request was approved after containment: %s", rec.Body)
+	}
+	ex := url.Values{"grant_type": {mcpauth.GrantTokenExchange}, "subject_token": {sub}, "subject_token_type": {mcpauth.TypeAccessToken},
+		"actor_token": {x.actorAssertion()}, "actor_token_type": {mcpauth.TypeJWT}, "resource": {x.resA.uri}, "scope": {x.shared}}
+	if rec := form(x.h, x.base+"/oauth/token", ex); rec.Code < 400 || strings.Contains(rec.Body.String(), "access_token") {
+		t.Errorf("an exchange after containment: %d %s", rec.Code, rec.Body)
+	}
+	if jsonBody(t, x.introspect(sub, x.resA))["active"] != false {
+		t.Error("the earlier token is still active")
+	}
+}
+
+// A client that is not active never gets a redirect to its (attacker-chosen) redirect URIs.
+func TestMCP_NoRedirectForUnapprovedClients(t *testing.T) {
+	x := newMCPFx(t, noRateLimits)
+	for _, status := range []string{"pending", "disabled"} {
+		if err := x.f.DB.InTenant(context.Background(), x.main.ID, func(c *store.TenantTx) error {
+			return c.SetMCPClient(mcpClientID, &x.botID, status, storetest.Now)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		// valid in every other way, so only the client's status can stop it
+		for name, mod := range map[string]func(q url.Values){"as registered": nil,
+			"bad PKCE":  func(q url.Values) { q.Del("code_challenge") },
+			"bad scope": func(q url.Values) { q.Set("scope", "x:y:z") }} {
+			rec := serve(x.h, authed(x.alice, "GET", x.authorizeURL(mod), ""))
+			if rec.Code != 400 || rec.Header().Get("Location") != "" || strings.Contains(rec.Body.String(), mcpRedirect) {
+				t.Errorf("%s client, %s: %d location %q", status, name, rec.Code, rec.Header().Get("Location"))
+			}
+		}
+	}
+	// an unknown client (its document cannot be fetched) never redirects either
+	rec := serve(x.h, authed(x.alice, "GET", x.authorizeURL(func(q url.Values) {
+		q.Set("client_id", "https://attacker.invalid/client.json")
+		q.Set("redirect_uri", "https://attacker.invalid/cb")
+	}), ""))
+	if rec.Code != 400 || rec.Header().Get("Location") != "" {
+		t.Errorf("unknown client: %d location %q", rec.Code, rec.Header().Get("Location"))
+	}
+}
 
 func TestMCP_KillSwitchRevokesAgentTokens(t *testing.T) {
 	x := newMCPFx(t, noRateLimits)
@@ -775,8 +859,8 @@ func TestMCP_RegisterClientFetchesTheDocument(t *testing.T) {
 		q.Set("client_id", id)
 		q.Set("redirect_uri", "https://new.example/cb")
 	}), ""))
-	if rec.Code != 302 || !strings.Contains(rec.Header().Get("Location"), "error=unauthorized_client") {
-		t.Errorf("authorize with a pending client: %d %s", rec.Code, rec.Header().Get("Location"))
+	if rec.Code != 400 || rec.Header().Get("Location") != "" {
+		t.Errorf("authorize with a pending client: %d location %q", rec.Code, rec.Header().Get("Location"))
 	}
 	rec = corrDo(x.h, x.admin, "PUT", "/api/mcp/clients/"+v.ID, fmt.Sprintf(`{"agent_identity_id":%d,"status":"active"}`, x.botID))
 	if rec.Code != 200 {

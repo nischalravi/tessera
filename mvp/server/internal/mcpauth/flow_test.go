@@ -266,7 +266,7 @@ func TestVerifyRejects(t *testing.T) {
 func TestExchange(t *testing.T) {
 	e := newEnv(t)
 	user := e.userToken(e.resA)
-	resp, oe := e.exchange(user.AccessToken, e.actorToken(actorOpts{}), e.resB, e.shared+" "+e.alone)
+	resp, oe := e.exchange(user.AccessToken, e.actorToken(actorOpts{}), e.resA, e.shared+" "+e.alone)
 	if oe != nil {
 		t.Fatalf("exchange: %+v", oe)
 	}
@@ -274,13 +274,13 @@ func TestExchange(t *testing.T) {
 		t.Errorf("response = %+v", resp)
 	}
 	c := e.claims(resp.AccessToken)
-	if c.Audience[0] != e.resB.Resource || c.Subject != SubjectOf(e.alice) || c.Act == nil || c.Act.Sub != SubjectOf(e.bot) {
+	if c.Audience[0] != e.resA.Resource || c.Subject != SubjectOf(e.alice) || c.Act == nil || c.Act.Sub != SubjectOf(e.bot) {
 		t.Errorf("claims = %+v act %+v", c, c.Act)
 	}
 	if c.Act.Act != nil {
 		t.Errorf("the same agent re-exchanging must not nest itself: %+v", c.Act)
 	}
-	if row := e.tokenRow(c.ID); row.GrantType != "token_exchange" || row.Audience != e.resB.Resource {
+	if row := e.tokenRow(c.ID); row.GrantType != "token_exchange" || row.Audience != e.resA.Resource {
 		t.Errorf("row = %+v", row)
 	}
 	if ds := e.decisions(); ds[0].Kind != store.MCPDecisionExchange || !ds[0].Allow || ds[0].PolicyVersion != testPolicy ||
@@ -304,18 +304,18 @@ func TestExchangeNeverWidensOrAcceptsEmpty(t *testing.T) {
 		"nothing real":                   "x:y:z",
 		"two things neither holds":       e.alone + " x:y:z",
 	} {
-		resp, oe := e.exchange(user.AccessToken, e.actorToken(actorOpts{}), e.resB, scope)
+		resp, oe := e.exchange(user.AccessToken, e.actorToken(actorOpts{}), e.resA, scope)
 		if resp != nil || oe == nil || oe.Code != "access_denied" {
 			t.Errorf("%s: %+v, %+v", name, resp, oe)
 		}
 	}
-	if _, oe := e.exchange(user.AccessToken, e.actorToken(actorOpts{}), e.resB, ""); oe == nil || oe.Code != "invalid_scope" {
+	if _, oe := e.exchange(user.AccessToken, e.actorToken(actorOpts{}), e.resA, ""); oe == nil || oe.Code != "invalid_scope" {
 		t.Errorf("no scope: %+v", oe)
 	}
 	// the subject token's own scope is a ceiling: a token that only carried the
 	// user's private scope cannot be exchanged for the shared one
 	row := e.craftSubject(e.alice, []string{e.alone}, nil, e.resA)
-	if _, oe := e.exchange(row, e.actorToken(actorOpts{}), e.resB, e.shared); oe == nil || oe.Code != "access_denied" {
+	if _, oe := e.exchange(row, e.actorToken(actorOpts{}), e.resA, e.shared); oe == nil || oe.Code != "access_denied" {
 		t.Errorf("exchange widened an upstream scope: %+v", oe)
 	}
 	if n := len(e.audit("mcp.token.deny")); n != 5 {
@@ -335,9 +335,13 @@ func (e *env) craftSubject(user int64, scope []string, act *Actor, res *store.MC
 	var raw string
 	e.write(func(tx *store.TenantTx) error {
 		jti := uuid.NewString()
+		cid := e.client.ClientID
+		if e.craftClient != "" {
+			cid = e.craftClient
+		}
 		c := Claims{Issuer: testIssuer, Subject: SubjectOf(user), Audience: jwt.Audience{res.Resource},
 			Expiry: jwt.NewNumericDate(e.now.Add(time.Minute)), IssuedAt: jwt.NewNumericDate(e.now), ID: jti,
-			Scope: JoinScope(scope), ClientID: e.client.ClientID, Act: act, PolicyVersion: testPolicy}
+			Scope: JoinScope(scope), ClientID: cid, Act: act, PolicyVersion: testPolicy}
 		var err error
 		if raw, err = Mint(tx, e.svc.Sealer, c); err != nil {
 			return err
@@ -355,7 +359,7 @@ func TestExchangeActChain(t *testing.T) {
 	other2, other3 := SubjectOf(e.alice+1001), SubjectOf(e.alice+1002)
 	t.Run("a sub-agent nests the chain", func(t *testing.T) {
 		subj := e.craftSubject(e.alice, []string{e.shared}, &Actor{Sub: other}, e.resA)
-		resp, oe := e.exchange(subj, e.actorToken(actorOpts{}), e.resB, e.shared)
+		resp, oe := e.exchange(subj, e.actorToken(actorOpts{}), e.resA, e.shared)
 		if oe != nil {
 			t.Fatalf("exchange: %+v", oe)
 		}
@@ -367,21 +371,21 @@ func TestExchangeActChain(t *testing.T) {
 	t.Run("the chain is bounded", func(t *testing.T) {
 		chain := &Actor{Sub: other, Act: &Actor{Sub: other2, Act: &Actor{Sub: other3}}} // depth 3: the bot would be the 4th
 		subj := e.craftSubject(e.alice, []string{e.shared}, chain, e.resA)
-		if _, oe := e.exchange(subj, e.actorToken(actorOpts{}), e.resB, e.shared); oe == nil || oe.Code != "access_denied" {
+		if _, oe := e.exchange(subj, e.actorToken(actorOpts{}), e.resA, e.shared); oe == nil || oe.Code != "access_denied" {
 			t.Errorf("exchange = %+v", oe)
 		}
 	})
 	t.Run("a subject token that is already too deep is not valid", func(t *testing.T) {
 		chain := &Actor{Sub: other, Act: &Actor{Sub: other2, Act: &Actor{Sub: other3, Act: &Actor{Sub: "identity:9"}}}}
 		subj := e.craftSubject(e.alice, []string{e.shared}, chain, e.resA)
-		if _, oe := e.exchange(subj, e.actorToken(actorOpts{}), e.resB, e.shared); oe == nil || oe.Code != "invalid_grant" {
+		if _, oe := e.exchange(subj, e.actorToken(actorOpts{}), e.resA, e.shared); oe == nil || oe.Code != "invalid_grant" {
 			t.Errorf("exchange = %+v", oe)
 		}
 	})
 	t.Run("an agent already deeper in the chain is a cycle", func(t *testing.T) {
 		chain := &Actor{Sub: other, Act: &Actor{Sub: SubjectOf(e.bot)}}
 		subj := e.craftSubject(e.alice, []string{e.shared}, chain, e.resA)
-		if _, oe := e.exchange(subj, e.actorToken(actorOpts{}), e.resB, e.shared); oe == nil || oe.Code != "access_denied" {
+		if _, oe := e.exchange(subj, e.actorToken(actorOpts{}), e.resA, e.shared); oe == nil || oe.Code != "access_denied" {
 			t.Errorf("exchange = %+v", oe)
 		}
 	})
@@ -427,7 +431,7 @@ func TestExchangeValidatesBothTokens(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			e := newEnv(t)
 			in := ExchangeRequest{SubjectToken: e.userToken(e.resA).AccessToken, SubjectTokenType: TypeAccessToken,
-				ActorToken: e.actorToken(actorOpts{}), ActorTokenType: TypeJWT, Resource: e.resB.Resource, Scope: e.shared}
+				ActorToken: e.actorToken(actorOpts{}), ActorTokenType: TypeJWT, Resource: e.resA.Resource, Scope: e.shared}
 			c.mod(e, &in)
 			if resp, oe := e.exchangeReq(in); resp != nil || oe == nil || oe.Code != c.want {
 				t.Fatalf("exchange = %+v, %+v; want %s", resp, oe, c.want)
@@ -437,10 +441,10 @@ func TestExchangeValidatesBothTokens(t *testing.T) {
 	t.Run("a replayed actor assertion", func(t *testing.T) {
 		e := newEnv(t)
 		subj, act := e.userToken(e.resA).AccessToken, e.actorToken(actorOpts{})
-		if _, oe := e.exchange(subj, act, e.resB, e.shared); oe != nil {
+		if _, oe := e.exchange(subj, act, e.resA, e.shared); oe != nil {
 			t.Fatalf("first use: %+v", oe)
 		}
-		if _, oe := e.exchange(subj, act, e.resB, e.shared); oe == nil || oe.Code != "invalid_client" {
+		if _, oe := e.exchange(subj, act, e.resA, e.shared); oe == nil || oe.Code != "invalid_client" {
 			t.Errorf("replay = %+v", oe)
 		}
 	})
@@ -448,7 +452,7 @@ func TestExchangeValidatesBothTokens(t *testing.T) {
 		e := newEnv(t)
 		subj := e.userToken(e.resA).AccessToken
 		e.now = e.now.Add(6 * time.Minute)
-		if _, oe := e.exchange(subj, e.actorToken(actorOpts{}), e.resB, e.shared); oe == nil || oe.Code != "invalid_grant" {
+		if _, oe := e.exchange(subj, e.actorToken(actorOpts{}), e.resA, e.shared); oe == nil || oe.Code != "invalid_grant" {
 			t.Errorf("exchange = %+v", oe)
 		}
 	})
@@ -457,7 +461,7 @@ func TestExchangeValidatesBothTokens(t *testing.T) {
 		r := e.userToken(e.resA)
 		jti := e.claims(r.AccessToken).ID
 		e.write(func(tx *store.TenantTx) error { return e.svc.RevokeToken(tx, jti, "test") })
-		if _, oe := e.exchange(r.AccessToken, e.actorToken(actorOpts{}), e.resB, e.shared); oe == nil || oe.Code != "invalid_grant" {
+		if _, oe := e.exchange(r.AccessToken, e.actorToken(actorOpts{}), e.resA, e.shared); oe == nil || oe.Code != "invalid_grant" {
 			t.Errorf("exchange = %+v", oe)
 		}
 	})
@@ -473,7 +477,7 @@ func TestExchangeValidatesBothTokens(t *testing.T) {
 			}
 			resp, oe, err = e.svc.Exchange(tx, g, "https://tessera.example/t/other", ExchangeRequest{SubjectToken: subj,
 				SubjectTokenType: TypeAccessToken, ActorToken: e.actorToken(actorOpts{aud: "https://tessera.example/t/other"}),
-				ActorTokenType: TypeJWT, Resource: e.resB.Resource, Scope: e.shared})
+				ActorTokenType: TypeJWT, Resource: e.resA.Resource, Scope: e.shared})
 			return err
 		})
 		if resp != nil || oe == nil {
@@ -484,7 +488,7 @@ func TestExchangeValidatesBothTokens(t *testing.T) {
 		e := newEnv(t)
 		subj := e.userToken(e.resA).AccessToken
 		e.write(func(tx *store.TenantTx) error { _, err := tx.DeleteAgentDelegations(); return err })
-		if _, oe := e.exchange(subj, e.actorToken(actorOpts{}), e.resB, e.shared); oe == nil || oe.Code != "access_denied" {
+		if _, oe := e.exchange(subj, e.actorToken(actorOpts{}), e.resA, e.shared); oe == nil || oe.Code != "access_denied" {
 			t.Errorf("exchange = %+v", oe)
 		}
 	})
@@ -492,7 +496,8 @@ func TestExchangeValidatesBothTokens(t *testing.T) {
 		e := newEnv(t)
 		subj := e.userToken(e.resA).AccessToken
 		e.write(func(tx *store.TenantTx) error { return tx.SetMCPClient(e.client.ClientID, &e.bot, "disabled", e.now) })
-		if _, oe := e.exchange(subj, e.actorToken(actorOpts{}), e.resB, e.shared); oe == nil || oe.Code != "invalid_client" {
+		// the subject token's own client is the disabled one, so that check answers first
+		if _, oe := e.exchange(subj, e.actorToken(actorOpts{}), e.resA, e.shared); oe == nil || oe.Code != "invalid_grant" {
 			t.Errorf("exchange = %+v", oe)
 		}
 	})
@@ -500,7 +505,7 @@ func TestExchangeValidatesBothTokens(t *testing.T) {
 		e := newEnv(t)
 		subj := e.userToken(e.resA).AccessToken
 		e.write(func(tx *store.TenantTx) error { return tx.TerminateIdentity(e.alice, e.now) })
-		if _, oe := e.exchange(subj, e.actorToken(actorOpts{}), e.resB, e.shared); oe == nil || oe.Code != "invalid_grant" {
+		if _, oe := e.exchange(subj, e.actorToken(actorOpts{}), e.resA, e.shared); oe == nil || oe.Code != "invalid_grant" {
 			t.Errorf("exchange = %+v", oe)
 		}
 	})
@@ -576,7 +581,7 @@ func TestKillSwitchRevokesAllAgentTokens(t *testing.T) {
 	e := newEnv(t)
 	a := e.userToken(e.resA).AccessToken
 	b := e.userToken(e.resB).AccessToken
-	x, oe := e.exchange(a, e.actorToken(actorOpts{}), e.resB, e.shared)
+	x, oe := e.exchange(b, e.actorToken(actorOpts{}), e.resB, e.shared)
 	if oe != nil {
 		t.Fatal(oe)
 	}

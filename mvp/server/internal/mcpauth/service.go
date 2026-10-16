@@ -1,6 +1,7 @@
 package mcpauth
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
@@ -20,6 +21,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 )
 
 // Token types of RFC 8693.
@@ -194,12 +196,44 @@ func activeAgent(tx *store.TenantTx, c *store.MCPClient) (*store.Identity, strin
 	if err != nil || a.Type != "ai_agent" || a.Status != "active" {
 		return nil, "the agent identity is not an active ai_agent"
 	}
+	if contained, err := tx.MCPContained(a.ID); err != nil || contained {
+		return nil, "the agent identity is contained"
+	}
 	return a, ""
 }
 
+// activeUser returns the identity when it is an active, uncontained person
+// (or other non-agent identity).
 func activeUser(tx *store.TenantTx, id int64) (*store.Identity, bool) {
 	u, err := tx.Identity(id)
-	return u, err == nil && u.Type != "ai_agent" && u.Status == "active"
+	if err != nil || u.Type == "ai_agent" || u.Status != "active" {
+		return u, false
+	}
+	contained, err := tx.MCPContained(id)
+	return u, err == nil && !contained
+}
+
+// liveRow reports why a token's record no longer counts: revoked, expired, or
+// its client, agent or user is not active any more ("" when it is live).
+func liveRow(tx *store.TenantTx, row *store.MCPToken, now time.Time) string {
+	switch {
+	case row.RevokedAt != nil:
+		return "token is revoked"
+	case !now.Before(row.ExpiresAt):
+		return "token has expired"
+	}
+	if cl, err := tx.MCPClient(row.ClientID); err != nil || cl.Status != "active" {
+		return "client is not active"
+	}
+	if a, err := tx.Identity(row.AgentID); err != nil || a.Status != "active" {
+		return "agent is not active"
+	} else if contained, err := tx.MCPContained(a.ID); err != nil || contained {
+		return "agent is contained"
+	}
+	if _, ok := activeUser(tx, row.SubjectID); !ok {
+		return "user is not active"
+	}
+	return ""
 }
 
 // hasDelegation reports whether the user has an unexpired delegation to the agent.
@@ -513,6 +547,9 @@ func (s *Service) Exchange(tx *store.TenantTx, g *graph.Snapshot, issuer string,
 	} else if err != nil {
 		return nil, nil, err
 	}
+	if why := liveRow(tx, row, now); why != "" {
+		return d(oerr(400, "invalid_grant", "subject_token: "+why))
+	}
 	uid, _ := SubjectID(sc.Subject)
 	t.subject = i64(uid)
 	user, ok := activeUser(tx, uid)
@@ -540,7 +577,11 @@ func (s *Service) Exchange(tx *store.TenantTx, g *graph.Snapshot, issuer string,
 	act := sc.Act
 	switch {
 	case act != nil && act.Sub == agentSub:
-		// the same actor exchanging again: the chain is unchanged
+		// the same actor exchanging again: the chain is unchanged, and the token
+		// may not be re-pointed at a resource the user did not consent to
+		if in.Resource != row.Audience {
+			return d(oerr(403, "access_denied", "the acting agent may not move this token to another resource"))
+		}
 	case act.Contains(agentSub):
 		return d(oerr(403, "access_denied", "the agent is already in the delegation chain"))
 	default:
@@ -563,6 +604,37 @@ func (s *Service) Exchange(tx *store.TenantTx, g *graph.Snapshot, issuer string,
 		return d(oerr(403, "access_denied", "the intersection of the user's, the agent's, the task's and the subject token's scopes is empty"))
 	}
 	return s.issue(tx, issuer, client, user, agent, res, scope, in.Scope, act, "token_exchange")
+}
+
+// RefreshActorClient refreshes the cached metadata document of the client an
+// actor assertion names, when that client is already known and its cache has
+// expired, so the keys the assertion is checked against are current. It must
+// run before Exchange, outside any transaction (it may fetch). It does not
+// fetch for an unknown client (an anonymous caller cannot make the server
+// fetch arbitrary URLs); a failed refresh is an error and the exchange fails
+// closed.
+func (s *Service) RefreshActorClient(ctx context.Context, db *store.DB, t tenancy.ID, rawActor string) error {
+	tok, err := jwt.ParseSigned(rawActor, []jose.SignatureAlgorithm{jose.ES256, jose.RS256, jose.EdDSA})
+	if err != nil {
+		return nil // verifyActor rejects it
+	}
+	var peek jwt.Claims
+	if tok.UnsafeClaimsWithoutVerification(&peek) != nil || peek.Issuer == "" {
+		return nil
+	}
+	var known bool
+	if err := db.ReadTenant(ctx, t, func(tx *store.TenantTx) error {
+		c, err := tx.MCPClient(peek.Issuer)
+		known = err == nil && !s.now().Before(c.ExpiresAt)
+		return nil
+	}); err != nil {
+		return err
+	}
+	if !known {
+		return nil
+	}
+	_, err = s.Client(ctx, db, t, peek.Issuer)
+	return err
 }
 
 // verifyActor validates an actor assertion: a JWT signed (ES256, RS256 or
@@ -588,6 +660,10 @@ func (s *Service) verifyActor(tx *store.TenantTx, issuer, raw string, now time.T
 		return bad("unknown client")
 	} else if err != nil {
 		return nil, nil, err
+	}
+	if !now.Before(client.ExpiresAt) {
+		// the cached document (and so its keys) is past its TTL: the caller must refresh it first
+		return bad("the client's metadata is stale")
 	}
 	var set jose.JSONWebKeySet
 	if json.Unmarshal([]byte(client.JWKS), &set) != nil {
@@ -658,20 +734,8 @@ func (s *Service) Introspect(tx *store.TenantTx, issuer, raw string, res *store.
 	} else if err != nil {
 		return nil, "", err
 	}
-	if row.RevokedAt != nil {
-		return &Introspection{}, "token is revoked", nil
-	}
-	if !now.Before(row.ExpiresAt) {
-		return &Introspection{}, "token has expired", nil
-	}
-	if cl, err := tx.MCPClient(row.ClientID); err != nil || cl.Status != "active" {
-		return &Introspection{}, "client is not active", nil
-	}
-	if a, err := tx.Identity(row.AgentID); err != nil || a.Status != "active" {
-		return &Introspection{}, "agent is not active", nil
-	}
-	if _, ok := activeUser(tx, row.SubjectID); !ok {
-		return &Introspection{}, "user is not active", nil
+	if why := liveRow(tx, row, now); why != "" {
+		return &Introspection{}, why, nil
 	}
 	scopes, _ := ParseScope(c.Scope)
 	return &Introspection{Active: true, Scope: c.Scope, ClientID: c.ClientID, TokenType: "Bearer", Exp: c.Expiry.Time().Unix(),
@@ -740,16 +804,33 @@ func (s *Service) RevokeToken(tx *store.TenantTx, jti, reason string) error {
 		granted: row.Scope})
 }
 
-// RevokeIdentity is the agent kill switch's hook: it revokes every live token
-// whose agent or user is the identity, and records it when any was.
+// RevokeIdentity is the kill switch's hook, all in the caller's transaction:
+// it marks the identity contained (so no new authorization, code redemption or
+// exchange succeeds for it as agent or user), disables the clients bound to
+// it, denies its pending and approved requests, and revokes every live token
+// whose agent or user it is. It records the event when anything changed and
+// returns the number of tokens revoked.
 func (s *Service) RevokeIdentity(tx *store.TenantTx, identityID int64, reason string) (int64, error) {
 	now := s.now()
+	first, err := tx.MarkMCPContained(identityID, reason, now)
+	if err != nil {
+		return 0, err
+	}
+	clients, err := tx.DisableMCPClientsOfAgent(identityID, now)
+	if err != nil {
+		return 0, err
+	}
+	reqs, err := tx.DenyMCPAuthRequestsOfIdentity(identityID)
+	if err != nil {
+		return 0, err
+	}
 	n, err := tx.RevokeMCPTokensOfIdentity(identityID, reason, now)
-	if err != nil || n == 0 {
+	if err != nil || (!first && n == 0 && clients == 0 && reqs == 0) {
 		return n, err
 	}
 	return n, s.record(tx, trail{kind: store.MCPDecisionRevoke, action: "mcp.tokens.revoke_identity", allow: true, reason: reason,
-		agent: i64(identityID), extra: ojson.Object{{Key: "identity_id", Value: identityID}, {Key: "tokens_revoked", Value: n}}})
+		agent: i64(identityID), extra: ojson.Object{{Key: "identity_id", Value: identityID}, {Key: "tokens_revoked", Value: n},
+			{Key: "clients_disabled", Value: clients}, {Key: "requests_denied", Value: reqs}}})
 }
 
 // RevokeClient revokes every live token of a client (it was disabled).
