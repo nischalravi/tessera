@@ -401,8 +401,9 @@ type SyncStats struct {
 func Sync(c *store.TenantTx, now time.Time, conns []connectors.Connector, since *time.Time) (SyncStats, error) {
 	var out SyncStats
 	var results []*connectors.DiscoveryResult
+	ctx := WithCheckpoints(c.Context(), c) // incremental connectors resume from, and save, their checkpoint here
 	for _, cn := range conns {
-		r, err := cn.Discover(c.Context())
+		r, err := cn.Discover(ctx)
 		if err != nil {
 			return out, fmt.Errorf("%s: discover: %w", cn.System(), err)
 		}
@@ -415,7 +416,7 @@ func Sync(c *store.TenantTx, now time.Time, conns []connectors.Connector, since 
 	out.Discovery = d
 	e, err := Events(c, func(yield func(connectors.Event) error) error {
 		for _, cn := range conns {
-			if err := cn.StreamEvents(c.Context(), since, yield); err != nil {
+			if err := cn.StreamEvents(ctx, since, yield); err != nil {
 				return fmt.Errorf("%s: events: %w", cn.System(), err)
 			}
 		}

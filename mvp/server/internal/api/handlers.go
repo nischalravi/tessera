@@ -11,6 +11,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/ingest"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
@@ -272,16 +273,25 @@ func (s *Server) listConnectors(_ http.ResponseWriter, r *http.Request, _ *param
 	return out, nil
 }
 
-func (s *Server) syncConnectors(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+func (s *Server) syncConnectors(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	// ?mode=full ignores connector checkpoints and re-reads every source.
+	mode := p.queryOptLiteral("mode", []string{"incremental", "full"})
+	if err := validated(p, nil); err != nil {
+		return nil, err
+	}
 	now := s.clock()
 	conns, err := s.cfg.Connectors(now)
 	if err != nil {
 		return nil, err
 	}
 	c := store.TxFrom(r.Context())
+	ctx := ingest.WithCheckpoints(r.Context(), c)
+	if mode != nil && *mode == "full" {
+		ctx = connsync.WithMode(ctx, connsync.Full)
+	}
 	var results []*connectors.DiscoveryResult
 	for _, cn := range conns {
-		res, err := cn.Discover(r.Context())
+		res, err := cn.Discover(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("%s: discover: %w", cn.System(), err)
 		}

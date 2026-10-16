@@ -12,7 +12,8 @@
 //
 //	TESSERA_DB            database path (or sqlite:///path); default ./tessera.db
 //	TESSERA_POLICY_DIR    read policies from this directory instead of the built-in copies
-//	TESSERA_CONNECTORS    connector spec, e.g. "demo" (default) or "demo-workday,okta"
+//	TESSERA_CONNECTORS    connector spec, e.g. "demo" (default) or "demo-workday,okta,entra"
+//	                      (okta and entra are the production connectors; see mvp/README.md)
 //	TESSERA_CORS_ORIGINS  comma-separated browser origins allowed by CORS
 //	                      (default: the dev UI on localhost/127.0.0.1, port UI_PORT or 5173;
 //	                      must be empty in prod)
@@ -57,6 +58,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	_ "github.com/nischalravi/tessera/mvp/server/internal/connectors/all" // registers the okta and entra connectors
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"

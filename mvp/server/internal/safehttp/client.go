@@ -20,11 +20,12 @@
 //   - 5 s total timeout and a 512 KiB response body limit (after
 //     decompression) by default. Proxies from the environment are ignored.
 //
-// Not yet wired: the readiness connectors (internal/connectors,
-// internal/readiness) only simulate their systems today; when a connector
-// makes real calls to a customer-configured endpoint, its *http.Client must
-// come from New. go-oidc and x/oauth2 take this client through
-// oidc.ClientContext and oauth2.HTTPClient (PR6).
+// The production connectors (internal/connectors/okta and entra) build their
+// client with connsync.NewHTTPClient, which wraps New with a longer timeout
+// and a larger body limit for API pages. The demo connectors and the readiness
+// checks only simulate their systems; any connector that makes real calls to a
+// customer-configured endpoint must get its *http.Client from New. go-oidc and
+// x/oauth2 take this client through oidc.ClientContext and oauth2.HTTPClient (PR6).
 package safehttp
 
 import (
