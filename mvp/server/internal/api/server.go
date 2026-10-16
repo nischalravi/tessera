@@ -182,6 +182,7 @@ func New(cfg Config) *Server {
 	s.registerAuditRoutes()
 	s.registerCorrelationRoutes()
 	s.registerContainmentRoutes()
+	s.registerGroupsSinkRoutes() // before the {id} routes, which would match "event-sinks"
 	s.registerGroupsFolderRoutes()
 	s.registerGroupsMemberRoutes()
 	s.registerGroupsHistoryRoutes()

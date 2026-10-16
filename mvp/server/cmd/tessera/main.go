@@ -59,6 +59,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/events/sinks"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/pit"
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -299,6 +300,10 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if err != nil {
 		return err
 	}
+	sinksNet, err := sinks.NewNetwork(&outCfg) // group event sinks (AWS over HTTPS, RabbitMQ and Kafka through the guarded dialer)
+	if err != nil {
+		return err
+	}
 	groupsEngine := &engine.Engine{Budget: cfg.GroupsSyncBudget, Log: logger}
 	srv := api.New(api.Config{Store: st, Clock: clock, Policies: loader, Logger: logger,
 		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound, GroupsEngine: groupsEngine,
@@ -351,6 +356,14 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		defer close(historyDone)
 		historyRunner.Loop(ctx)
 	}()
+	// group event sinks: SQS, SNS, RabbitMQ and Kafka delivery, through the same guarded network access
+	sinksDone := make(chan struct{})
+	sinksRunner := &sinks.Runner{DB: st, Svc: &sinks.Service{Sealer: sealer, AllowInsecure: sinksNet.AllowInsecure}, Open: sinksNet.Open,
+		Clock: clock, Log: logger}
+	go func() {
+		defer close(sinksDone)
+		sinksRunner.Loop(ctx)
+	}()
 	errc := make(chan error, 1)
 	go func() { errc <- httpSrv.Serve(ln) }()
 	logger.Info("tessera API listening", "addr", ln.Addr().String())
@@ -363,6 +376,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		<-ckptDone
 		<-groupsDone
 		<-historyDone
+		<-sinksDone
 		return err
 	case <-ctx.Done():
 	}
@@ -375,6 +389,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	<-ckptDone
 	<-groupsDone
 	<-historyDone
+	<-sinksDone
 	if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 		return serveErr
 	}

@@ -60,6 +60,7 @@ const ConnectionDetail = named(connections, "ConnectionDetail");
 const ValidationResults = named(connections, "ValidationResults");
 const ReconReport = named(connections, "ReconReport");
 const AdminSectionPage = named(admin, "AdminSectionPage");
+const EventSinks = named(() => import("../features/admin/EventSinks"), "EventSinks");
 const MySessions = named(() => import("../features/account/MySessions"), "MySessions");
 
 /** Redirect an old route to its new home, keeping the query string (e.g. /graph?identity=5). */
@@ -131,6 +132,7 @@ export default function App() {
                     <Route path="/admin/connections/:id" element={<ConnectionDetail />} />
                     <Route path="/admin/connections/:id/validation/:run" element={<ValidationResults />} />
                     <Route path="/admin/connections/:id/reconciliation/:run" element={<ReconReport />} />
+                    <Route path="/admin/event-sinks" element={<EventSinks />} />
                     <Route path="/admin/:section" element={<AdminSectionPage />} />
 
                     {/* routes from the previous UI */}

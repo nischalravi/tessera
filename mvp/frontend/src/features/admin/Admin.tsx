@@ -1,14 +1,14 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
-  ArrowLeftRight, Bell, CircleCheck, Clock, Download, FileBadge, Fingerprint, KeySquare, LucideIcon, Palette, Play, Plug, ScrollText, Search, Settings, ShieldCheck, UserCog,
+  ArrowLeftRight, Bell, CircleCheck, Clock, Download, FileBadge, Fingerprint, KeySquare, LucideIcon, Palette, Play, Plug, Radio, ScrollText, Search, Settings, ShieldCheck, UserCog,
 } from "lucide-react";
 import { AuditRow, AuditVerifyReport, api, fmtDate, relTime, useApi } from "../../api";
 import { fuzzy } from "../../app/fuzzy";
 import { Badge, Button, Callout, DataTable, EmptyState, Page, PreviewBadge, useToast } from "../../components";
 import { ADMIN_BY_ID, ADMIN_SECTIONS, AdminSection, useMockState } from "../../mocks";
 
-const ICONS: Record<string, LucideIcon> = { Plug, Fingerprint, UserCog, Bell, Palette, Clock, ScrollText, FileBadge, ArrowLeftRight, KeySquare };
+const ICONS: Record<string, LucideIcon> = { Plug, Fingerprint, UserCog, Bell, Palette, Clock, ScrollText, FileBadge, ArrowLeftRight, KeySquare, Radio };
 const Icon = ({ name, size = 18 }: { name: string; size?: number }) => {
   const C = ICONS[name] ?? Settings;
   return <C size={size} aria-hidden />;

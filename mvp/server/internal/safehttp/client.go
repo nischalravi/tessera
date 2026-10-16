@@ -97,15 +97,15 @@ func ForConfig(c *config.Config) (*http.Client, error) {
 	return New(Options{Env: c.Env, AllowLoopback: c.OutboundAllowLoopback})
 }
 
-// New returns an SSRF-guarded *http.Client.
-func New(o Options) (*http.Client, error) {
+// normalize validates o and fills in its defaults.
+func (o Options) normalize() (Options, error) {
 	switch o.Env {
 	case config.Dev, config.Prod:
 	default:
-		return nil, fmt.Errorf("safehttp: Options.Env must be %q or %q (got %q)", config.Dev, config.Prod, o.Env)
+		return o, fmt.Errorf("safehttp: Options.Env must be %q or %q (got %q)", config.Dev, config.Prod, o.Env)
 	}
 	if o.AllowLoopback && o.Env != config.Dev {
-		return nil, errors.New("safehttp: the loopback exception is only allowed with TESSERA_ENV=dev")
+		return o, errors.New("safehttp: the loopback exception is only allowed with TESSERA_ENV=dev")
 	}
 	if o.Timeout <= 0 {
 		o.Timeout = DefaultTimeout
@@ -124,6 +124,33 @@ func New(o Options) (*http.Client, error) {
 		allowed = append(allowed, strings.ToLower(strings.TrimSpace(h)))
 	}
 	o.AllowedRedirectHosts = allowed
+	return o, nil
+}
+
+// DialFunc has the signature of net.Dialer.DialContext.
+type DialFunc func(ctx context.Context, network, address string) (net.Conn, error)
+
+// NewDialer returns a dial function with the same address rules as New's
+// client, for protocols that are not HTTP (AMQP, Kafka): the host is resolved
+// once, every resolved address must pass Blocked (or be the dev loopback
+// exception), the socket address is checked again at connect, and only the
+// checked addresses are dialed. TLS is the caller's to add on top.
+func NewDialer(o Options) (DialFunc, error) {
+	o, err := o.normalize()
+	if err != nil {
+		return nil, err
+	}
+	d := &dialer{o: o}
+	d.net = net.Dialer{Timeout: o.Timeout, Control: d.control}
+	return d.dial, nil
+}
+
+// New returns an SSRF-guarded *http.Client.
+func New(o Options) (*http.Client, error) {
+	o, err := o.normalize()
+	if err != nil {
+		return nil, err
+	}
 
 	d := &dialer{o: o}
 	d.net = net.Dialer{Timeout: o.Timeout, Control: d.control}

@@ -890,3 +890,47 @@ export const readiness = {
   rerun: (reconcile = false) => api<{ results: { connection_id: string; name: string; validation_run_id: string | null; dry_run_id: string | null; skipped?: string }[]; dashboard: DeploymentHealth }>(
     "/insights/deployment-health/rerun", { reconcile }),
 };
+
+// ------------------------------------------------------ group event sinks (GR-18)
+export type SinkKind = "sqs" | "sns" | "rabbitmq" | "kafka";
+export type SinkState = "idle" | "ok" | "retrying";
+export type DeadLetterStatus = "dead" | "requeued" | "delivered" | "discarded";
+
+/** A sink's non-secret settings; which fields apply depends on the kind. */
+export interface SinkConfig {
+  region?: string; endpoint?: string; queue_url?: string; topic_arn?: string;
+  url?: string; exchange?: string; routing_key?: string;
+  brokers?: string[]; topic?: string; sasl?: "plain" | "scram-sha-256" | "scram-sha-512"; plaintext?: boolean;
+}
+
+/** Write-only: the API stores these sealed and never returns them. */
+export interface SinkCredentials { access_key_id?: string; secret_access_key?: string; session_token?: string; username?: string; password?: string }
+
+export interface GroupSink {
+  id: string; name: string; kind: SinkKind; enabled: boolean; config: SinkConfig; event_types: string[];
+  /** True when credentials are stored (their values are never returned). */
+  credentials_set: boolean;
+  state: SinkState; attempts: number; next_attempt_at: string | null; last_error: string;
+  last_delivered_seq: number; last_delivered_at: string | null; delivered_count: number;
+  cursor: number; lag: number; dead_letters: number; created_by: string; created_at: string; updated_at: string;
+}
+
+export interface GroupSinkList { items: GroupSink[]; kinds: SinkKind[]; max_sinks: number; allow_insecure: boolean }
+
+export interface SinkDeadLetter {
+  seq: number; event_type: string; object_id: string; attempts: number; last_error: string; status: DeadLetterStatus;
+  payload: Record<string, unknown>; created_at: string; updated_at: string;
+}
+
+export const SINKS_PATH = "/groups/event-sinks";
+
+export const groupSinks = {
+  create: (body: { name: string; kind: SinkKind; config: SinkConfig; credentials?: SinkCredentials; event_types: string[]; enabled: boolean; from: "now" | "start" }) =>
+    api<GroupSink>(SINKS_PATH, body),
+  patch: (id: string, body: { name?: string; enabled?: boolean; config?: SinkConfig; credentials?: SinkCredentials; event_types?: string[] }) =>
+    api<GroupSink>(`${SINKS_PATH}/${id}`, body, "PATCH"),
+  remove: (id: string) => api<{ id: string; deleted: boolean }>(`${SINKS_PATH}/${id}`, undefined, "DELETE"),
+  deadLettersPath: (id: string) => `${SINKS_PATH}/${id}/dead-letters?status=all&limit=100`,
+  redeliver: (id: string, seq: number) => api(`${SINKS_PATH}/${id}/dead-letters/${seq}/redeliver`, {}),
+  discard: (id: string, seq: number) => api(`${SINKS_PATH}/${id}/dead-letters/${seq}/discard`, {}),
+};

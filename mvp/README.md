@@ -374,6 +374,57 @@ cross-tenant guard triggers.
   `TestPIT_DigestDetectsTamper`, `TestPIT_RebuildEqualsLive`, `TestEvents_GapFreeSeqUnderConcurrency`),
   `TestIsolation_GroupEventTables` in `internal/store`, `TestGroupsPITAPI` in `internal/api`.
 
+#### Event streaming (GR-18, issue #61)
+
+A sink streams the outbox to **AWS SQS, AWS SNS, RabbitMQ or Kafka** as CloudEvents 1.0 JSON
+(`internal/groups/events/sinks`, schema `0284_group_event_sinks.sql`, tables `grp_event_sinks` and
+`grp_sink_dead_letters`). A runner in `cmd/tessera` (every 2 s) delivers for each enabled sink of each
+tenant. Admin UI: **Admin → Group event sinks** (`/admin/event-sinks`).
+
+- **Delivery is at least once and ordered per group.** A sink's position is its `grp_event_cursors` row
+  `sink:<id>`. The runner takes events in `seq` order, sends them one at a time and moves the cursor only
+  after the broker has accepted them, so a crash replays a batch: receivers drop a repeated CloudEvents
+  `id` (`<tenant>/<seq>`, also the SQS/SNS FIFO deduplication id, the AMQP message id and the Kafka
+  `ce_id` header). Per-group order: a FIFO queue or topic gets the group as `MessageGroupId`, Kafka keys
+  by group, RabbitMQ publishes in order on one confirm channel.
+- **Retries and dead letters.** A refused event is retried on later passes with backoff (1 s, 2 s, 4 s ...
+  up to 5 min) and nothing behind it is sent meanwhile. After 8 attempts it is written to
+  `grp_sink_dead_letters` with the exact message (audited as `groups.sink.dead_lettered`) and the stream
+  moves on. A dead letter can be sent again (`redeliver`: sent on the next pass, **out of order** with
+  respect to later events) or discarded. A sink that cannot be opened (bad credentials, blocked address)
+  shows `retrying` and loses nothing.
+- **Event filter.** `event_types` is a list of types (`group.created`) or prefixes ending in a dot
+  (`membership.`); empty sends everything. A new sink starts at the current head (`from: now`) or, with
+  `from: start`, at the oldest event still in the outbox.
+- **Security.** SQS and SNS use the stdlib SigV4 signer over `internal/safehttp` (HTTPS only). RabbitMQ
+  (`github.com/rabbitmq/amqp091-go`) and Kafka (`github.com/twmb/franz-go`, which also dials every broker
+  the cluster's metadata names) connect through `safehttp.NewDialer`, the same address checks as the
+  HTTP client (no loopback, private, link-local or metadata addresses; dev with the loopback exception
+  aside). TLS is required outside dev: `amqps://` only, Kafka over TLS (plain text only with
+  `TESSERA_ENV=dev`). Credentials are sealed with `internal/seal` (AAD: tenant, table, column, sink id),
+  never returned (`credentials_set` only), never audited or logged. A tenant may have 20 sinks.
+- Events keep their order across sinks only per sink; two sinks can be at different positions.
+
+| Route (all `groups.admin`; every change is audited in its own transaction) | |
+|---|---|
+| `GET /api/groups/event-sinks` | every sink with state (`idle`, `ok`, `retrying`), `lag`, `cursor`, `dead_letters`, last delivery |
+| `POST /api/groups/event-sinks` `{name, kind, config, credentials, event_types, enabled, from}` | create (`groups.sink.created`); 422 with `invalid_<field>` for a refused setting, 409 `name_taken`, 503 `sealing_unavailable` |
+| `GET`, `PATCH`, `DELETE /api/groups/event-sinks/{id}` | read, change (`config` and `credentials` replace the whole; omit `credentials` to keep them; a change clears the retry state), delete with cursor and dead letters |
+| `GET /api/groups/event-sinks/{id}/dead-letters?status=dead\|requeued\|delivered\|discarded\|all` | dead letters with the message |
+| `POST /api/groups/event-sinks/{id}/dead-letters/{seq}/redeliver` or `/discard` | requeue or give up (409 if the letter is not dead) |
+
+`config` by kind: SQS `region`, `queue_url`, `endpoint?`; SNS `region`, `topic_arn`, `endpoint?`;
+RabbitMQ `url` (`amqps://host[:port]/vhost`, no credentials), `exchange`, `routing_key?` (default: the
+event type); Kafka `brokers[]`, `topic`, `sasl?` (`plain`, `scram-sha-256`, `scram-sha-512`).
+`credentials`: SQS and SNS `access_key_id`, `secret_access_key`, `session_token?`; RabbitMQ and Kafka SASL
+`username`, `password`.
+
+- Tests: `go test ./internal/groups/events/sinks` (`TestSink_OrderedPerGroup`,
+  `TestSink_DeadLetterAfterRetries`, `TestSink_AtLeastOnce`, `TestSigV4_AWSVector`,
+  `TestNetwork_DialIsGuarded`; brokers are in-process fakes, SQS and SNS a TLS test server),
+  `TestIsolation_GroupEventSinks` in `internal/store`, `TestGroupsSinksAPI` in `internal/api`,
+  `tests/event-sinks.test.ts` in the frontend.
+
 ### Audit ledger
 
 Every tenant has an append-only, hash-chained audit log (`audit_events`; design

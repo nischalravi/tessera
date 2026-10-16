@@ -89,7 +89,10 @@ export const RAIL: RailGroup[] = [
     label: "Settings",
     items: [
       { id: "connections", label: "Connections", icon: Plug, path: "/admin/connections", keywords: "connectors sync okta aws github snowflake workday active directory ldap entra readiness wizard" },
-      { id: "admin", label: "Admin", icon: Settings, path: "/admin", except: ["/admin/connections"], keywords: "settings configuration audit jobs" },
+      {
+        id: "admin", label: "Admin", icon: Settings, path: "/admin", except: ["/admin/connections"], keywords: "settings configuration audit jobs",
+        pages: [{ path: "/admin/event-sinks", label: "Group event sinks", keywords: "streaming sqs sns rabbitmq kafka cloudevents queue topic dead letter outbox" }],
+      },
     ],
   },
 ];
