@@ -83,6 +83,10 @@ type Config struct {
 	// how long group events and point-in-time history are kept, 7 years by
 	// default (design §10.2).
 	GroupsRetentionDays int
+	// GroupsProvSQLDir is TESSERA_GROUPS_PROV_SQL_DIR: the directory of the SQLite
+	// files the group provisioning SQL target writes. Empty (the default)
+	// disables that target; a tenant chooses only a file name inside it.
+	GroupsProvSQLDir string
 	// FrozenNow is TESSERA_NOW (tests and demos; refused in prod). The zero
 	// time means the wall clock; use Clock.
 	FrozenNow time.Time
@@ -164,6 +168,7 @@ func Load(getenv func(string) string) (*Config, error) {
 	c.AuditCheckpointEvents = integer("TESSERA_AUDIT_CHECKPOINT_EVENTS", 1000, 1, 1_000_000)
 	c.GroupsSyncBudget = integer("TESSERA_GROUPS_SYNC_BUDGET", 5000, 1, 10_000_000)
 	c.GroupsRetentionDays = integer("TESSERA_GROUPS_RETENTION_DAYS", 7*365, 30, 36_500)
+	c.GroupsProvSQLDir = strings.TrimSpace(getenv("TESSERA_GROUPS_PROV_SQL_DIR"))
 	c.AccessTokenTTLSeconds = integer("TESSERA_AT_TTL_SECONDS", 600, 1, MaxAccessTokenTTLSeconds)
 	c.DeviceCodeTTLSeconds = integer("TESSERA_DEVICE_CODE_TTL_SECONDS", 300, 1, MaxDeviceCodeTTLSeconds)
 	c.DPoPRSNonce = boolean("TESSERA_DPOP_RS_NONCE", false, false)

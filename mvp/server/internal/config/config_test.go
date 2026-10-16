@@ -213,6 +213,17 @@ func TestGroupsRetentionDays(t *testing.T) {
 	}
 }
 
+func TestGroupsProvSQLDir(t *testing.T) {
+	c, err := config.Load(env(map[string]string{"TESSERA_ENV": "dev"}))
+	if err != nil || c.GroupsProvSQLDir != "" {
+		t.Fatalf("default = %q, %v; want the SQL target off", c.GroupsProvSQLDir, err)
+	}
+	c, err = config.Load(env(map[string]string{"TESSERA_ENV": "dev", "TESSERA_GROUPS_PROV_SQL_DIR": " /var/lib/tessera/prov "}))
+	if err != nil || c.GroupsProvSQLDir != "/var/lib/tessera/prov" {
+		t.Errorf("set = %q, %v", c.GroupsProvSQLDir, err)
+	}
+}
+
 func TestAnchorURL(t *testing.T) {
 	c, err := config.Load(env(map[string]string{}))
 	if err != nil {

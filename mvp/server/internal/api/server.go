@@ -25,6 +25,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/provisioning"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
@@ -105,6 +106,10 @@ type Config struct {
 	// GroupsEngine is the native groups' membership engine, whose synchronous
 	// budget is TESSERA_GROUPS_SYNC_BUDGET. Nil: the defaults.
 	GroupsEngine *engine.Engine
+	// Provisioning is the group provisioning service (issue #54): the same one
+	// the background runner uses. Nil: a service with no outbound clients, which
+	// can still hold provisioners but cannot reach a target.
+	Provisioning *provisioning.Service
 	// AuditAppend overrides how the audit middleware writes http.request
 	// events (tests inject failures). Nil: the store.
 	AuditAppend func(ctx context.Context, t tenancy.ID, e store.AuditEvent) error
@@ -158,6 +163,9 @@ func New(cfg Config) *Server {
 	if cfg.GroupsEngine == nil {
 		cfg.GroupsEngine = engine.New(0)
 	}
+	if cfg.Provisioning == nil {
+		cfg.Provisioning = &provisioning.Service{DB: cfg.Store, Sealer: cfg.Sealer, Clock: cfg.Clock, Log: cfg.Logger}
+	}
 	if cfg.Containment == nil {
 		cfg.Containment = &containment.Service{}
 	}
@@ -182,6 +190,7 @@ func New(cfg Config) *Server {
 	s.registerAuditRoutes()
 	s.registerCorrelationRoutes()
 	s.registerContainmentRoutes()
+	s.registerGroupsProvisioningRoutes() // before the {id} routes below: first match wins
 	s.registerGroupsFolderRoutes()
 	s.registerGroupsMemberRoutes()
 	s.registerGroupsHistoryRoutes()

@@ -316,6 +316,8 @@ var referenceColumns = map[string][]string{
 	"grp_pit_objects":   {"object_id"},
 	"grp_pit_direct":    {"group_id", "list_id", "member_identity_id", "member_group_id"},
 	"grp_pit_effective": {"group_id", "list_id", "identity_id"},
+	// a mark names a folder or a group, by object_type
+	"grp_provisionable": {"object_id"},
 }
 
 // immutableTables refuse every UPDATE (a trigger raises unconditionally), so

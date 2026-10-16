@@ -374,6 +374,84 @@ cross-tenant guard triggers.
   `TestPIT_DigestDetectsTamper`, `TestPIT_RebuildEqualsLive`, `TestEvents_GapFreeSeqUnderConcurrency`),
   `TestIsolation_GroupEventTables` in `internal/store`, `TestGroupsPITAPI` in `internal/api`.
 
+### Group provisioning (LDAP/AD, SCIM 2.0, SQL, webhook)
+
+A provisioner pushes the effective membership of marked groups to one target system (design
+`docs/design/groups-grouper-parity.md` §9.2, issue #54). Schema: `0283_group_prov.sql`
+(`grp_provisioners`, `grp_provisionable`, `grp_sync_groups`, `grp_sync_runs`, `grp_sync_ops`; the design
+numbers it 0106). Code: `server/internal/groups/provisioning`; SQL for the SQL target's database is
+`store.ExtSQLite` (the archtest keeps `database/sql` in `internal/store`).
+
+- **Desired state.** A mark names a group (`scope` self) or a folder (`one`: its own groups, `sub`: the
+  whole subtree) with `include` true or false. Marks are applied when evaluated and never copied onto
+  groups; the nearest mark wins, so `include=false` on a deeper folder or on a group cuts it out. A
+  group's target name, attributes and members' references come from templates (Go `text/template`, only
+  `lower upper replace truncateHash ldapEscape join`, output at most 4 KiB): `group_name` (default
+  `{{.Name}}`), `attrs` and `member_ref` (default `{{.Username}}`), fed by the group and by the member's
+  **active account** in `account_system`. A member with no account is counted in the run summary
+  (`unmapped_members`) and in diagnostics, never dropped silently; two groups with one target name are
+  both left alone (`conflicts`); a group the engine is still recomputing is skipped until its events
+  arrive; a disabled group is the empty set.
+- **Modes.** A provisioner starts in `adopt`: its first full sync reads the target, records the groups it
+  finds by name (`grp_sync_groups.status=adopted`) and the ops it would run (status `skipped`), and changes
+  nothing. `dry_run` records plans the same way. `active` applies. Switching to `active` needs a completed
+  full sync first (`409 review_required`). `paused` does nothing. The provisioner only ever changes or
+  deletes groups it owns (adopted or created by it).
+- **Full sync** at the provisioner's UTC time (`full_schedule` `"M H * * *"`, default 02:00), when a mark,
+  the config or the mode changes, and on request. **Incremental sync** consumes the provisioner's GR-3 event
+  cursor (`provisioner:<id>`, `events.Poll`/`Ack`): events of groups mark the group dirty, bursts are
+  coalesced for 2 s (at most 10 s), and the dirty groups are re-read, diffed and applied; a folder rename,
+  move or delete asks for a full sync. A full sync of an unchanged group skips the read when the target's
+  change token (LDAP `modifyTimestamp`, SCIM `meta.version`) equals the cached one (`grp_sync_groups`).
+- **Verification (README rule 4).** After `Apply` every touched group is re-read. An op is `verified` only
+  if the re-read shows it; otherwise the op is re-planned from what the target holds and retried (waits of
+  1 s and 4 s), and after three attempts it is `drift` (accepted but not kept) or `failed` (refused); both
+  also emit `provisioning.op.drift` / `.failed` events, and the group is retried by incremental passes
+  every 10 minutes. A target that cannot be read back (a webhook without `read_url`) leaves ops `applied`.
+- **Failsafes** (`failsafe`, per provisioner): `max_deletes` member removals per run (default 1000),
+  `max_delete_percent` of the target's memberships on full runs (default 2, only for targets with at least
+  50 memberships) and `max_group_deletes` (default 0). A plan over a limit is **held**: nothing is applied,
+  the run is `held` (audit `groups.prov.held`), and an admin approves with `POST .../sync
+  {"approve_failsafe":true}`, which covers the next full sync only. There is no Inbox yet, so a held or
+  drifted run is visible through the runs and ops routes and the audit ledger.
+- **Credentials** go in `secret` (`bind_password` for ldap/ad, `token` for scim2, `signing_secret` for
+  webhook), are sealed with the KEK (AAD: tenant, `grp_provisioners`, `secret_enc`, provisioner id), and are
+  never returned: a provisioner lists `secret_keys_set`. Errors and audit events never contain URLs with
+  tokens, credentials or response bodies.
+- **Network.** SCIM and webhook calls use a `safehttp` client (https only; plain http to loopback in dev);
+  LDAP connects through `safehttp.NewDialer` (the same address checks, after DNS resolution) and always uses
+  LDAPS or StartTLS with certificate verification (`ca_pem` for a private CA); `security: none` is accepted
+  only with `TESSERA_ENV=dev`. Webhooks are CloudEvents 1.0 JSON signed with
+  `X-Tessera-Signature: t=<unix>,v1=<hex HMAC-SHA256(signing_secret, "<t>." + body)>`; `X-Tessera-Delivery`
+  is the op id.
+
+| Target | `target` config | Notes |
+|---|---|---|
+| `ldap` | `url` (ldaps:// or ldap://), `security`, `base_dn`, `bind_dn`, `object_class` (`groupOfNames`, `groupOfUniqueNames`, `posixGroup`), `member_attr`, `empty_member`, `write_chunk`, `ca_pem` | groups under `base_dn`; member writes in chunks; a rename deletes and recreates (held for approval) |
+| `ad` | as `ldap`, plus `group_scope` (`global`, `universal`, `domain_local`) | `sAMAccountName` at most 64 characters (use `truncateHash`); ranged `member;range=` reads |
+| `scim2` | `base_url`, `profile` (`generic`, `aws_identity_center`, `github_emu`), `page_size` | members by SCIM user id (use `member_ref` `{{.ExternalID}}`); GitHub needs `attrs.externalId`; the AWS and GitHub profiles follow the vendors' documentation and are not tested against the live services |
+| `sql` | `file` (a name inside `TESSERA_GROUPS_PROV_SQL_DIR`) | SQLite only; rows `(group_name, member)` in `tessera_group_members`; no group objects, so removing a group removes its rows |
+| `webhook` | `url`, `read_url` (optional) | `read_url` takes the same signature and returns `{"groups":[{"name","members"}]}` |
+
+| Route (all `groups.admin`) | |
+|---|---|
+| `GET`, `POST /api/groups/provisioners` | list; create `{name, target_type, config, secret?, connection_id?, full_schedule?, failsafe?}` (starts in `adopt`) |
+| `GET`, `PATCH`, `DELETE /api/groups/provisioners/{id}` | read with last runs, op counts and event lag; update `{version, ...}` (mode, config, secret); delete (the target is not touched) |
+| `GET`, `PUT /api/groups/provisioners/{id}/marks`, `DELETE .../marks/{group\|folder}/{id}` | the marks; set `{object_type, object_id, scope?, include?, metadata?}`; remove |
+| `POST /api/groups/provisioners/{id}/sync` `{approve_failsafe?}` | ask for a full sync (`202`; the runner starts it within seconds) |
+| `GET /api/groups/provisioners/{id}/runs`, `.../ops?run=&status=`, `.../groups` | runs, ops, and the groups the provisioner owns on the target |
+| `POST /api/groups/provisioners/{id}/diagnose?group=&identity=` | why a group or identity is or is not provisioned, and the ops a sync would run, without applying them |
+
+- Config: `TESSERA_GROUPS_PROV_SQL_DIR` (default unset: the SQL target is off; set it to a directory
+  the server may write; a tenant chooses only a file name in it, and a file holding Tessera's own tables
+  is refused).
+- Tests: `go test ./internal/groups/provisioning` (`TestProvision_VerifiedOnlyAfterReread`,
+  `TestProvision_AdoptModeChangesNothing`, `TestProvision_FailsafeMaxDeletes`,
+  `TestProvision_IncrementalEqualsFull`; an in-memory LDAP directory with AD ranged attributes, an LDAP
+  wire server for LDAPS and StartTLS, a SCIM 2.0 test server, SQLite and webhook targets),
+  `TestIsolation_GroupProvTables` and `TestIsolation_GroupProvTablesGuarded` in `internal/store`,
+  `TestNewDialer` in `internal/safehttp`, `TestGroupsProvisioningAPI` in `internal/api`.
+
 ### Audit ledger
 
 Every tenant has an append-only, hash-chained audit log (`audit_events`; design

@@ -97,15 +97,15 @@ func ForConfig(c *config.Config) (*http.Client, error) {
 	return New(Options{Env: c.Env, AllowLoopback: c.OutboundAllowLoopback})
 }
 
-// New returns an SSRF-guarded *http.Client.
-func New(o Options) (*http.Client, error) {
+// normalize validates o and fills in the defaults.
+func normalize(o Options) (Options, error) {
 	switch o.Env {
 	case config.Dev, config.Prod:
 	default:
-		return nil, fmt.Errorf("safehttp: Options.Env must be %q or %q (got %q)", config.Dev, config.Prod, o.Env)
+		return o, fmt.Errorf("safehttp: Options.Env must be %q or %q (got %q)", config.Dev, config.Prod, o.Env)
 	}
 	if o.AllowLoopback && o.Env != config.Dev {
-		return nil, errors.New("safehttp: the loopback exception is only allowed with TESSERA_ENV=dev")
+		return o, errors.New("safehttp: the loopback exception is only allowed with TESSERA_ENV=dev")
 	}
 	if o.Timeout <= 0 {
 		o.Timeout = DefaultTimeout
@@ -124,6 +124,33 @@ func New(o Options) (*http.Client, error) {
 		allowed = append(allowed, strings.ToLower(strings.TrimSpace(h)))
 	}
 	o.AllowedRedirectHosts = allowed
+	return o, nil
+}
+
+// DialFunc connects to network and address.
+type DialFunc func(ctx context.Context, network, address string) (net.Conn, error)
+
+// NewDialer returns a dial function for protocols other than HTTP (LDAP) with
+// the same address rules as the HTTP client: the host is resolved once, a host
+// with any blocked address is refused outright, and the socket address is
+// checked again just before connect. Only Env, AllowLoopback, Timeout and
+// Resolver of o are used. The caller layers TLS on the connection.
+func NewDialer(o Options) (DialFunc, error) {
+	o, err := normalize(o)
+	if err != nil {
+		return nil, err
+	}
+	d := &dialer{o: o}
+	d.net = net.Dialer{Timeout: o.Timeout, Control: d.control}
+	return d.dial, nil
+}
+
+// New returns an SSRF-guarded *http.Client.
+func New(o Options) (*http.Client, error) {
+	o, err := normalize(o)
+	if err != nil {
+		return nil, err
+	}
 
 	d := &dialer{o: o}
 	d.net = net.Dialer{Timeout: o.Timeout, Control: d.control}

@@ -125,6 +125,19 @@ GET    /api/groups/engine/ops/{seq}                  groups.admin    -  # issue 
 GET    /api/groups/pit/digests                       groups.admin    -  # issue #46
 GET    /api/groups/pit/verify                        groups.admin    -  # issue #46
 POST   /api/groups/pit/rebuild                       groups.admin    -  # issue #46
+GET    /api/groups/provisioners                      groups.admin    -  # issue #54
+POST   /api/groups/provisioners                      groups.admin    -  # issue #54
+GET    /api/groups/provisioners/{id}                 groups.admin    -  # issue #54
+PATCH  /api/groups/provisioners/{id}                 groups.admin    -  # issue #54
+DELETE /api/groups/provisioners/{id}                 groups.admin    -  # issue #54
+GET    /api/groups/provisioners/{id}/marks           groups.admin    -  # issue #54
+PUT    /api/groups/provisioners/{id}/marks           groups.admin    -  # issue #54
+DELETE /api/groups/provisioners/{id}/marks/{mark_type}/{object} groups.admin    -  # issue #54
+POST   /api/groups/provisioners/{id}/sync            groups.admin    -  # issue #54
+GET    /api/groups/provisioners/{id}/runs            groups.admin    -  # issue #54
+GET    /api/groups/provisioners/{id}/ops             groups.admin    -  # issue #54
+GET    /api/groups/provisioners/{id}/groups          groups.admin    -  # issue #54
+POST   /api/groups/provisioners/{id}/diagnose        groups.admin    -  # issue #54
 GET    /api/auth/session                             auth.self       -
 POST   /api/auth/logout                              auth.self       -
 GET    /api/auth/sessions                            auth.self       -

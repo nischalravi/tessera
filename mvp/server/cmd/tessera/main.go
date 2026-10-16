@@ -60,6 +60,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/pit"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/provisioning"
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
@@ -248,6 +249,10 @@ const (
 	// (each is checkpointed every TESSERA_AUDIT_CHECKPOINT_SECONDS or
 	// _EVENTS new events, design §13.6).
 	checkpointInterval = 30 * time.Second
+	// group provisioning calls to customer systems: SCIM and webhook requests
+	// may take longer, and a SCIM group lists all its members in one response
+	provisioningHTTPTimeout = 30 * time.Second
+	provisioningMaxBody     = 16 << 20
 )
 
 func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Sealer, clock timeutil.Clock,
@@ -300,8 +305,24 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		return err
 	}
 	groupsEngine := &engine.Engine{Budget: cfg.GroupsSyncBudget, Log: logger}
+	// Group provisioning reaches customer systems through the same address
+	// guard: SCIM and webhooks through its own safehttp client (longer timeout,
+	// larger bodies: a SCIM group lists all its members), LDAP through the
+	// guarded dialer. Plain LDAP is for the dev directory only.
+	provOpts := safehttp.Options{Env: outCfg.Env, AllowLoopback: outCfg.OutboundAllowLoopback, Timeout: provisioningHTTPTimeout,
+		MaxBodyBytes: provisioningMaxBody}
+	provHTTP, err := safehttp.New(provOpts)
+	if err != nil {
+		return err
+	}
+	provDial, err := safehttp.NewDialer(provOpts)
+	if err != nil {
+		return err
+	}
+	provisioningSvc := &provisioning.Service{DB: st, Sealer: sealer, Clock: clock, Log: logger,
+		Deps: provisioning.Deps{HTTP: provHTTP, Dial: provDial, AllowPlainLDAP: cfg.Env == config.Dev, SQLDir: cfg.GroupsProvSQLDir}}
 	srv := api.New(api.Config{Store: st, Clock: clock, Policies: loader, Logger: logger,
-		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound, GroupsEngine: groupsEngine,
+		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound, GroupsEngine: groupsEngine, Provisioning: provisioningSvc,
 		Containment:    &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock},
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
 		HSTS: cfg.IsProd(), Env: cfg.Env, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, AuditAnchor: anchorURL})
@@ -351,6 +372,13 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		defer close(historyDone)
 		historyRunner.Loop(ctx)
 	}()
+	// group provisioning: full syncs (daily and on request) and incremental syncs of the group events
+	provisioningDone := make(chan struct{})
+	provisioningRunner := &provisioning.Runner{Svc: provisioningSvc, Clock: clock, Log: logger}
+	go func() {
+		defer close(provisioningDone)
+		provisioningRunner.Loop(ctx)
+	}()
 	errc := make(chan error, 1)
 	go func() { errc <- httpSrv.Serve(ln) }()
 	logger.Info("tessera API listening", "addr", ln.Addr().String())
@@ -363,6 +391,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		<-ckptDone
 		<-groupsDone
 		<-historyDone
+		<-provisioningDone
 		return err
 	case <-ctx.Done():
 	}
@@ -375,6 +404,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	<-ckptDone
 	<-groupsDone
 	<-historyDone
+	<-provisioningDone
 	if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 		return serveErr
 	}
