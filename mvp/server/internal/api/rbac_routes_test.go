@@ -99,6 +99,21 @@ POST   /api/connections/{id}/findings/{fid}/accept   connections.manage -
 GET    /api/connections/{id}/health                  connections.read   -
 GET    /api/insights/deployment-health               connections.read   -
 POST   /api/insights/deployment-health/rerun         connections.manage -
+GET    /api/groups/folders                           groups.admin    -  # issue #44
+POST   /api/groups/folders                           groups.admin    -  # issue #44
+GET    /api/groups/folders/{id}                      groups.admin    -  # issue #44
+PATCH  /api/groups/folders/{id}                      groups.admin    -  # issue #44
+DELETE /api/groups/folders/{id}                      groups.admin    -  # issue #44
+POST   /api/groups/folders/{id}/move                 groups.admin    -  # issue #44
+POST   /api/groups/folders/{id}/copy                 groups.admin    -  # issue #44
+GET    /api/groups/native                            groups.admin    -  # issue #44
+POST   /api/groups                                   groups.admin    -  # issue #44
+GET    /api/groups/{id}                              groups.admin    -  # issue #44
+PATCH  /api/groups/{id}                              groups.admin    -  # issue #44
+DELETE /api/groups/{id}                              groups.admin    -  # issue #44
+POST   /api/groups/{id}/move                         groups.admin    -  # issue #44
+POST   /api/groups/{id}/copy                         groups.admin    -  # issue #44
+POST   /api/groups/{id}/restore                      groups.admin    -  # issue #44
 GET    /api/auth/session                             auth.self       -
 POST   /api/auth/logout                              auth.self       -
 GET    /api/auth/sessions                            auth.self       -

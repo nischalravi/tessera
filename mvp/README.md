@@ -255,6 +255,41 @@ the run failed. Provider calls go through `internal/safehttp`.
   sessions: those re-reads cover refresh tokens and say so in the step's notes. `rotate_secret`
   still only stamps a timestamp.
 
+### Native groups (folders and groups)
+
+Groups owned by Tessera (design `docs/design/groups-grouper-parity.md`, issue #44 GR-1; not the
+connected-system `groups` table). Schema `0280_groups.sql` (`grp_*`: folders, name aliases, groups,
+composite factors, lists, direct memberships, and the engine tables, which stay empty until GR-2).
+Code: `server/internal/groups/naming` (`:` paths, `[A-Za-z0-9_.-]` segments of 1 to 255 characters,
+case-insensitive uniqueness, aliases), `server/internal/groups/model` (create, rename, move, copy,
+soft delete), `server/internal/api/groups_folders.go`. No UI yet (GR-8).
+
+- Folders form a tree under one root per tenant (created on the first write). Folders and groups
+  share one name space, unique per tenant ignoring case. Renaming or moving a folder renames its
+  whole subtree; every old name is kept as an **alias**: it still resolves and stays reserved, and
+  its owner can take it back. A folder is deleted only when empty; a group is soft-deleted
+  (`status: deleted`, restorable, keeps its name). Copies carry fields and structure, not memberships.
+- Routes (all need `groups.admin`, held by `tenant_admin` until GR-4; every route is audited):
+
+  | Route | |
+  |---|---|
+  | `GET /api/groups/folders?parent=&scope=one\|sub&q=&limit=&offset=` | list |
+  | `POST /api/groups/folders` `{parent, extension, display_extension, description, data_owner}` | create (`201`) |
+  | `GET\|PATCH\|DELETE /api/groups/folders/{id}` | read, edit or rename (`extension`, optional `version`), delete |
+  | `POST /api/groups/folders/{id}/move` `{parent}` and `.../copy` `{parent, extension}` | move, copy |
+  | `GET /api/groups/native?folder=&scope=&q=&type=group\|role&deleted=` | list groups (`GET /api/groups` is still the connected-system list) |
+  | `POST /api/groups` `{folder, extension, type, requestable, ...}` | create a basic group (`201`) |
+  | `GET\|PATCH\|DELETE /api/groups/{id}` | read, edit or rename (`status` active or disabled), soft delete |
+  | `POST /api/groups/{id}/move` `{folder}`, `.../copy` `{folder, extension}`, `.../restore` | move, copy, restore |
+
+- Errors: `404 not_found`; `409` `{error, detail}` with `name_taken`, `name_reserved_by_alias`,
+  `root_folder`, `move_into_self`, `copy_into_self`, `folder_not_empty` (with `folders` and `groups`
+  counts), `folder_mirrored`, `group_deleted`, `not_deleted`, `version_conflict`; `422` with
+  `invalid_name`, `invalid_type`, `invalid_status`, `invalid_scope`, and so on.
+- Audit events `groups.folder.{created,updated,renamed,moved,copied,deleted}` and
+  `groups.group.{created,updated,renamed,moved,copied,deleted,restored}`, written in the change's
+  transaction with the acting user; `GET /api/audit?target_type=group&target_id=` filters by object.
+
 ### Audit ledger
 
 Every tenant has an append-only, hash-chained audit log (`audit_events`; design
