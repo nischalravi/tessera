@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -1386,6 +1387,11 @@ func (s *Server) reviewDecide(_ http.ResponseWriter, r *http.Request, p *params)
 	var comment *string
 	if v, ok := body["comment"].(string); ok {
 		comment = &v
+		if utf8.RuneCountInString(v) > reviews.MaxCommentRunes {
+			return nil, &validationError{[]verr{{Type: "string_too_long", Loc: []any{"body", "comment"},
+				Msg:   fmt.Sprintf("String should have at most %d characters", reviews.MaxCommentRunes),
+				Input: v, Ctx: ojson.Object{{Key: "max_length", Value: reviews.MaxCommentRunes}}}}}
+		}
 	}
 	it, err := reviews.Decide(store.TxFrom(r.Context()), s.clock(), id, body["decision"].(string), principal(r).User(), comment)
 	if errors.Is(err, reviews.ErrUnknownItem) {
@@ -1400,9 +1406,14 @@ func (s *Server) reviewDecide(_ http.ResponseWriter, r *http.Request, p *params)
 		// nothing changed; the refusal itself is evidence of the control
 		// (returned as a body, not an error, so the audit event commits)
 		by := principal(r).User()
-		if err := store.TxFrom(r.Context()).Audit(s.clock(), by.Display, "review.decide.refused", ojson.Object{
-			{Key: "item_id", Value: de.ItemID}, {Key: "current", Value: de.Current},
-			{Key: "requested", Value: de.Requested}, {Key: "reason", Value: "review_item_decided"}}); err != nil {
+		det := ojson.Object{{Key: "item_id", Value: de.ItemID}, {Key: "current", Value: de.Current},
+			{Key: "requested", Value: de.Requested}, {Key: "reason", Value: "review_item_decided"}}
+		if comment != nil && *comment != "" {
+			det = append(det, ojson.KV{Key: "comment", Value: *comment})
+		}
+		if _, err := store.TxFrom(r.Context()).RecordAudit(store.AuditRecord{At: s.clock(), Action: "review.decide.refused",
+			LegacyActor: by.Display, Detail: det, TargetType: reviews.TargetType,
+			TargetID: strconv.FormatInt(de.ItemID, 10)}); err != nil {
 			return nil, err
 		}
 		return statusBody{http.StatusConflict, ojson.Object{{Key: "error", Value: "review_item_decided"},
