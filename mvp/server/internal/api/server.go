@@ -186,6 +186,8 @@ func New(cfg Config) *Server {
 	s.registerGroupsPrivilegeRoutes()
 	s.registerGroupsMemberRoutes()
 	s.registerGroupsHistoryRoutes()
+	s.registerGroupsAPIRoutes()
+	s.registerSCIMRoutes()
 	s.registerReadinessRoutes()
 	s.registerAuthRoutes()
 	s.registerLoginRoutes()
@@ -515,6 +517,10 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, sb.status, sb.body)
 		return
 	}
+	if sr, ok := out.(scimResponse); ok {
+		writeJSONAs(w, "application/scim+json", sr.status, sr.body)
+		return
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -560,6 +566,16 @@ type statusBody struct {
 type rawJSON []byte
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
+	writeJSONAs(w, "application/json", status, v)
+}
+
+// scimResponse is an answer of the SCIM server: application/scim+json (RFC 7644 §3.1).
+type scimResponse struct {
+	status int
+	body   any
+}
+
+func writeJSONAs(w http.ResponseWriter, contentType string, status int, v any) {
 	var body []byte
 	if raw, ok := v.(rawJSON); ok {
 		body = raw
@@ -570,7 +586,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 			return
 		}
 	}
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", contentType)
 	w.WriteHeader(status)
 	_, _ = w.Write(body) // #nosec G705 -- JSON-encoded body served as application/json with nosniff, never HTML
 }

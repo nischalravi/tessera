@@ -31,7 +31,8 @@ freshly seeded Go server through `httptest` and requires equal JSON.
 
     cd mvp/server && go test ./internal/api -run TestParity -v
 
-160 fixtures (`001`-`160`); the test logs `parity: N/160 fixtures passed`.
+179 fixtures (`001`-`179`): the 160 recorded from the Python backend and 19 added for
+the groups REST API (below). The test logs `parity: N/M fixtures passed`.
 
 ## Normalisation rules (applied to both sides before comparing)
 
@@ -151,3 +152,30 @@ other), and the JIT decision route is split into three routes.
   the sync the summary keeps the earlier remediation (`human` 58, `terminated` 4,
   fewer grants, effective and unused permissions, violations) and Marcus stays
   terminated, which also changes the order of the identity list.
+
+## Fixtures added for the groups REST API (issue #48, GR-5)
+
+`161`-`179` are new: no Python backend had these routes, so they were recorded from the Go
+server itself (a throwaway test that replays `001`-`160` and writes what the next requests
+return), checked by hand, and are replayed after the 160 so the data they read is the end state
+of that sequence. No existing fixture changed. They are as deterministic as the rest: a native
+group's id is random, so none creates one; they read what the seed gives (identities, the
+frozen clock) or are refused before anything is written.
+
+* `161` `GET /api/groups/native`: no native groups yet (the list is empty, 200).
+* `162`, `163` `GET /api/identities/{id}/groups`: an identity in no group, and an unknown identity (404).
+* `164`, `165` `POST /api/groups:simulate`: an empty change list (422 `empty_simulation`) and a
+  change naming an unknown group (404 with the change's `index`). A simulation that succeeds
+  needs a group, so it is covered in `internal/api/groups_simulate_test.go`.
+* `166`, `167` `POST /api/groups/{id}/members:batch`: an unknown group (404) and an empty batch (422).
+* `168` `GET /api/groups/{id}/members` with `filter`, `q`, `sort` and `page`: an unknown group is 404
+  before the parameters matter.
+* `169`, `170` `GET /scim/v2/ServiceProviderConfig` and `/ResourceTypes`: what the SCIM server supports.
+* `171` `GET /scim/v2/Users?startIndex=2&count=3`, `172` a filter
+  (`userType eq "ai_agent" and active eq true`), `173` one user, `174` `attributes=userName,displayName`,
+  `175` an unknown user (404 in SCIM's error format), `176` an unsupported filter attribute
+  (400 `invalidFilter`): the seed's 93 identities as SCIM users.
+* `177`, `178` `GET /scim/v2/Groups` (empty) and an unknown group (404).
+* `179` `POST /scim/v2/Users`: the server is read-only, so a write is `405`.
+
+SCIM answers are `application/scim+json`; the replay compares the body only.

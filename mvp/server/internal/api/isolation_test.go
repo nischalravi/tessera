@@ -122,6 +122,9 @@ var crossTenantCases = map[string]crossTenantCase{
 	"GET identity containment": {method: "GET", path: pathf("/api/identities/%d/containment"), key: "alice"},
 	"POST contain identity": {method: "POST", path: pathf("/api/identities/%d/contain"), key: "alice",
 		body: func(int64) string { return `{"reason":"suspected credential compromise"}` }},
+	// the groups REST API (GR-5): groups are UUIDs and are in TestGroupsAPI_Isolation; identities are here
+	"GET identity groups": {method: "GET", path: pathf("/api/identities/%d/groups"), key: "alice"},
+	"GET scim user":       {method: "GET", path: pathf("/scim/v2/Users/%d"), key: "alice"},
 }
 
 // routeParamKey maps each route with path parameters to the cases above.
@@ -141,6 +144,8 @@ var routeParamCases = map[string][]string{
 	"POST /api/identities/{identity_id}/merge":      {"POST merge identity"},
 	"POST /api/identities/{identity_id}/contain":    {"POST contain identity"},
 	"GET /api/identities/{identity_id}/containment": {"GET identity containment"},
+	"GET /api/identities/{identity_id}/groups":      {"GET identity groups"},
+	"GET /scim/v2/Users/{id}":                       {"GET scim user"},
 }
 
 // TestIsolation_RouteCrossTenant: as tenant B, every route with a path
@@ -180,8 +185,8 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/api/containment-retries/{retry_id}/retry-now" {
 			continue // TestContainmentRetriesAPI (a UUID, not a fixture id)
 		}
-		if strings.HasPrefix(rt.Pattern, "/api/groups/") {
-			continue // TestGroupsTenantIsolation (UUIDs, not fixture ids)
+		if strings.HasPrefix(rt.Pattern, "/api/groups/") || rt.Pattern == "/scim/v2/Groups/{id}" {
+			continue // TestGroupsTenantIsolation, TestGroupsAPI_Isolation (UUIDs, not fixture ids)
 		}
 		if rt.Pattern == "/api/auth/sessions/{session_id}" {
 			continue // TestIsolation_SessionCookieScoped (a UUID, not a fixture id)
@@ -246,6 +251,8 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		"/api/identities/{identity_id}":             fmt.Sprint(b["alice"]),
 		"/api/jml/leaver-plan/{identity_id}":        fmt.Sprint(b["alice"]),
 		"/api/identities/{identity_id}/containment": fmt.Sprint(b["alice"]),
+		"/api/identities/{identity_id}/groups":      fmt.Sprint(b["alice"]),
+		"/scim/v2/Users/{id}":                       fmt.Sprint(b["alice"]),
 		"/api/reviews/campaigns/{campaign_id}":      fmt.Sprint(b["campaign"]),
 		"/api/hris/events/{event_id}/plan":          fmt.Sprint(b["hris:leaver"]),
 		"/api/audit/events/{event_id}/proof":        latestEventID(t, f.DB, f.B.ID),
@@ -259,8 +266,8 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		if rp, ok := readinessGetPaths(f.B.Refs)[path]; ok && strings.Contains(path, "{") {
 			path = rp // tenant B's own readiness ids
 		}
-		if strings.HasPrefix(path, "/api/groups/") && strings.Contains(path, "{") {
-			continue // TestGroupsTenantIsolation (UUIDs, not fixture ids)
+		if (strings.HasPrefix(path, "/api/groups/") || path == "/scim/v2/Groups/{id}") && strings.Contains(path, "{") {
+			continue // TestGroupsTenantIsolation, TestGroupsAPI_Isolation (UUIDs, not fixture ids)
 		}
 		if strings.Contains(path, "{") {
 			v, ok := values[path]

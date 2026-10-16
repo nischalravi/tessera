@@ -136,6 +136,16 @@ PUT    /api/groups/users/{id}/identity               groups.admin    STEP_UP_POL
 GET    /api/groups/pit/digests                       groups.admin    -  # issue #46
 GET    /api/groups/pit/verify                        groups.admin    -  # issue #46
 POST   /api/groups/pit/rebuild                       groups.admin    -  # issue #46
+POST   /api/groups/{id}/members:batch                groups.write    -  # issue #48: update, or optin / optout for oneself, per operation
+POST   /api/groups:simulate                          groups.write    -  # issue #48: the privileges of the changes it simulates
+GET    /api/identities/{identity_id}/groups          groups.read     -  # issue #48: only the groups the caller may read
+GET    /api/openapi/groups.json                      auth.self       -  # issue #48
+GET    /scim/v2/ServiceProviderConfig                groups.read     -  # issue #48: read-only SCIM server
+GET    /scim/v2/ResourceTypes                        groups.read     -  # issue #48
+GET    /scim/v2/Groups                               groups.read     -  # issue #48: only the groups the caller may read
+GET    /scim/v2/Groups/{id}                          groups.read     -  # issue #48: read
+GET    /scim/v2/Users                                groups.read     -  # issue #48
+GET    /scim/v2/Users/{id}                           groups.read     -  # issue #48
 GET    /api/auth/session                             auth.self       -
 POST   /api/auth/logout                              auth.self       -
 GET    /api/auth/sessions                            auth.self       -
