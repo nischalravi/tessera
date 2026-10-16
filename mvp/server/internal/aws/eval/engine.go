@@ -48,7 +48,35 @@ type evaluator struct {
 	vpceUnknown      bool
 	rootDefault      bool
 
+	spec special
+
 	reasons map[string]*authz.FidelityReason
+}
+
+// special holds the SPECIAL terms of §7.2 step 4 (KMS grants, S3 ACLs) and the
+// S3 guardrail inputs for one request. They depend on the request, not on the
+// reading of an ambiguity, so they are computed once in prepare.
+type special struct {
+	// KMS (§7.6.1): grants to the requester, to its parent, and to its account
+	// root (a delegation).
+	kmsSelf, kmsParent, kmsRoot authz.Tri
+	kmsSteps                    []authz.ExplanationStep
+
+	// S3 (§7.6.2).
+	isS3       bool
+	eff        model.BPA // most restrictive setting across org, account and bucket
+	aclsOn     bool      // Object Ownership is not BucketOwnerEnforced
+	aclPublic  authz.Tri // a public-group ACL grant covers the request, after IgnorePublicAcls
+	aclAccount authz.Tri // an ACL grant to the requester's account covers the request
+	aclIgnored bool      // a public ACL grant was dropped by IgnorePublicAcls
+	aclSteps   []authz.ExplanationStep
+	// objCtx is the object-context requirement: true unless the object owner is
+	// another account. objCtxAlt is the reading that assumes it is, used when
+	// the owner is unknown (objFlag).
+	objCtx, objCtxAlt authz.Tri
+	objFlag           bool
+	bpa               authz.Tri // the BPA guardrail
+	bpaWhy            string
 }
 
 // Evaluate answers one request against an immutable snapshot (§7.2). It is
@@ -118,6 +146,8 @@ func (e *evaluator) prepare() error {
 	if err := e.gather(); err != nil {
 		return err
 	}
+	e.kmsTerms()
+	e.s3Terms()
 	return nil
 }
 
