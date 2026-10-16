@@ -1,0 +1,15 @@
+<AssumeRoleResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">
+  <AssumeRoleResult>
+    <Credentials>
+      <AccessKeyId>ASIAEXAMPLEEXAMPLE1</AccessKeyId>
+      <SecretAccessKey>secretsecretsecretsecretsecret0123456789</SecretAccessKey>
+      <SessionToken>FwoGZXIvYXdzEXAMPLETOKEN</SessionToken>
+      <Expiration>2099-01-01T00:00:00Z</Expiration>
+    </Credentials>
+    <AssumedRoleUser>
+      <AssumedRoleId>AROAEXAMPLE:tessera-collect</AssumedRoleId>
+      <Arn>arn:aws:sts::111111111111:assumed-role/TesseraReader/tessera-collect</Arn>
+    </AssumedRoleUser>
+  </AssumeRoleResult>
+  <ResponseMetadata><RequestId>00000000-0000-0000-0000-000000000001</RequestId></ResponseMetadata>
+</AssumeRoleResponse>

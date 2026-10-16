@@ -1,0 +1,1 @@
+{"Policy":{"PolicySummary":{"Id":"p-rcp00001","Name":"DataPerimeter","Type":"RESOURCE_CONTROL_POLICY","AwsManaged":false},"Content":"{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"Principal\":\"*\",\"Action\":\"s3:*\",\"Resource\":\"*\",\"Condition\":{\"StringNotEquals\":{\"aws:PrincipalOrgID\":\"o-example12345\"}}}]}"}}

@@ -1,0 +1,9 @@
+<GetTopicAttributesResponse xmlns="http://sns.amazonaws.com/doc/2010-03-31/">
+  <GetTopicAttributesResult>
+    <Attributes>
+      <entry><key>Owner</key><value>111111111111</value></entry>
+      <entry><key>Policy</key><value>{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::222222222222:root"},"Action":"sns:Publish","Resource":"arn:aws:sns:us-east-1:111111111111:alerts"}]}</value></entry>
+    </Attributes>
+  </GetTopicAttributesResult>
+  <ResponseMetadata><RequestId>r</RequestId></ResponseMetadata>
+</GetTopicAttributesResponse>

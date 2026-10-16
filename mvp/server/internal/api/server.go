@@ -176,6 +176,7 @@ func New(cfg Config) *Server {
 	s.registerCorrelationRoutes()
 	s.registerContainmentRoutes()
 	s.registerReadinessRoutes()
+	s.registerAWSRoutes()
 	s.registerAuthRoutes()
 	s.registerLoginRoutes()
 	s.registerSAMLRoutes()
