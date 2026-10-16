@@ -223,12 +223,15 @@ type world struct {
 	lost map[int64]map[int64]bool
 	// identities whose grants to check
 	touched map[int64]bool
+	// active birthright exclusions: role -> identity (issue #214)
+	excluded map[string]map[int64]bool
 }
 
 func load(tx *store.TenantTx, now time.Time) (*world, error) {
 	w := &world{tx: tx, now: now, roles: map[string]*store.BusinessRole{}, ents: map[string][]int64{},
 		members: map[int64]map[string]*store.RoleMember{}, groups: map[int64]*store.Group{},
-		people: map[int64]*store.Identity{}, lost: map[int64]map[int64]bool{}, touched: map[int64]bool{}}
+		people: map[int64]*store.Identity{}, lost: map[int64]map[int64]bool{}, touched: map[int64]bool{},
+		excluded: map[string]map[int64]bool{}}
 	rs, err := tx.BusinessRoles()
 	if err != nil {
 		return nil, err
@@ -249,6 +252,18 @@ func load(tx *store.TenantTx, now time.Time) (*world, error) {
 	}
 	for _, m := range ms {
 		w.member(m)
+	}
+	xs, err := tx.AllRoleExclusions()
+	if err != nil {
+		return nil, err
+	}
+	for _, x := range xs {
+		if x.Active() {
+			if w.excluded[x.RoleID] == nil {
+				w.excluded[x.RoleID] = map[int64]bool{}
+			}
+			w.excluded[x.RoleID][x.IdentityID] = true
+		}
 	}
 	return w, nil
 }
@@ -349,7 +364,7 @@ func (w *world) applyRule(roleID string) error {
 		}
 		for _, p := range people {
 			w.people[p.ID] = p
-			if rule.Matches(p) {
+			if rule.Matches(p) && !w.excluded[roleID][p.ID] { // an excluded person is not a rule match
 				matched[p.ID] = true
 				if _, ok := w.members[p.ID][roleID]; !ok {
 					w.add(roleID, p.ID, store.MemberRule, nil, nil)
@@ -1144,7 +1159,7 @@ func RoleDrift(tx *store.TenantTx, id string, now time.Time) (*Drift, error) {
 	}
 	need := (len(ents) + 1) / 2
 	for pid, gs := range holds {
-		if isMember[pid] || len(gs) < need || len(gs) == 0 {
+		if isMember[pid] || w.excluded[id][pid] || len(gs) < need || len(gs) == 0 {
 			continue
 		}
 		p, err := w.identity(pid)

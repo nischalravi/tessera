@@ -151,7 +151,7 @@ The routes are documented at `/api/readiness/openapi.json`.
 `POST /api/least-privilege/revoke {edge_id, dry_run}` · `GET /api/policies` · `GET /api/violations` ·
 `POST /api/simulate {remove_edge_ids, add_edges:[{src,dst,duration_hours?}], disable_account_ids}` ·
 `GET|POST /api/jit/requests` · `POST /api/jit/requests/{id}/approve|deny|revoke` ·
-`GET|POST /api/reviews/campaigns` · `POST /api/reviews/items/{id}/decision` ·
+`GET|POST /api/reviews/campaigns` · `POST /api/reviews/items/{id}/decision {decision, comment?, rule_action?}` ·
 `GET|POST /api/hris/events` (422 for an unknown `identity_id`) · `GET /api/hris/events/{id}/plan` · `POST /api/hris/events/{id}/execute` ·
 `GET /api/jml/leaver-plan/{identity_id}` · `POST /api/identities/{id}/contain` (kill switch, see "Identity containment") ·
 `PUT /api/connections/{id}/containment-credential` · `GET /api/accounts[?system=]` ·
@@ -176,7 +176,8 @@ The routes are documented at `/api/readiness/openapi.json`.
 `POST /api/accounts/{id}/link {identity_id, reason}` · `POST /api/accounts/{id}/not-person {reason}` ·
 `DELETE /api/accounts/{id}/link` · `POST /api/identities/{id}/merge {into, reason}` ·
 `GET /api/identity-merges` · `POST /api/identity-merges/{id}/unmerge {reason}` ·
-`GET|POST /api/reviews/schedules` · `PUT /api/reviews/schedules/{id}` · `POST /api/reviews/schedules/{id}/run`
+`GET|POST /api/reviews/schedules` · `PUT /api/reviews/schedules/{id}` · `POST /api/reviews/schedules/{id}/run` ·
+`GET /api/roles/{id}/exclusions|flags` · `POST /api/roles/{id}/exclusions/{identity_id}/remove`
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
@@ -263,6 +264,36 @@ drift. **Run now** launches outside the schedule. Reminders, escalations and clo
 events; delivery by email or chat comes with alerting (#168). Reviewers are assigned as for
 manual campaigns: the manager, then the owner, then the security lead. The scheduler follows
 `TESSERA_NOW` in dev.
+
+### Role memberships in reviews
+
+A campaign certifies what people hold *through* a business role as one item, the **membership**
+(issue #214): role, member and source (rule, request or manual), with the grants the role made
+listed under it in the side panel. Those grants are not separate items, so a reviewer can't revoke
+a grant the role would restore. A membership appears when one of its grants is risky (the same
+tests as any grant); a campaign or schedule **scoped to roles** reviews every membership of those
+roles, whatever the risk, and nothing else (the system and privileged scope then do not apply).
+Pick the roles in the schedule form (`role_ids`).
+
+Revoking a membership:
+
+- **Manual or request:** removed through `roles.Unassign`, so its removal plan takes the role's
+  grants that no other role justifies. Reconcile does not bring them back.
+- **Rule:** the person can't be removed while the rule matches, so the reviewer chooses
+  (`rule_action` in the decision; without one the API answers 422). **exclude** puts them on the
+  role's exclusion list (the membership and its grants go; birthright evaluation, every save and
+  Reconcile, skips them). The list is versioned: each add or removal is a new version, history is
+  kept, and `GET /api/roles/{id}/exclusions` shows it. Taking someone off (`roles.manage`) lets the
+  rule assign them again at the next save or Reconcile. **flag** removes nothing and records the
+  decision for the role owner (`GET /api/roles/{id}/flags`, audit `review.rule_flagged`).
+- **Old campaigns** still have items for a grant a role made. Revoking one is converted into a
+  revoke of the membership(s) that justify it (same choices for a rule member), rather than
+  refused (that would lose the decision) or applied to the edge alone (Reconcile would undo it).
+- **Close-out** of a scheduled review revokes undecided manual and request memberships and flags
+  undecided rule memberships; it never removes a rule member.
+
+Role removal, exclusion and the review decision are written, with their audit events
+(`role.unassign`, `role.exclude`, `review.revoke`), in the decision's transaction.
 
 ### Account correlation
 

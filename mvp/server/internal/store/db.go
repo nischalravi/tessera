@@ -93,6 +93,8 @@ var tables = []string{
 	"business_role_requests",
 	// scheduled access reviews (schema/0207_review_schedules.sql)
 	"review_templates", "review_launches",
+	// role memberships in reviews (schema/0270_review_role_memberships.sql)
+	"business_role_exclusions", "review_item_roles", "review_template_roles",
 	// account correlation (schema/0204_correlation.sql)
 	"account_links", "identity_merges",
 	// identity containment (schema/0205_containment.sql)

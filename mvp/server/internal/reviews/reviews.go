@@ -41,9 +41,14 @@ func deptKey(d *string) (string, bool) {
 
 // Scope narrows a campaign (issue #166): one system's grants (System, "" for
 // every system) and, with PrivilegedOnly, privileged grants only.
+//
+// RoleIDs (issue #214) scopes the campaign to business roles: it then reviews
+// every membership of those roles (and nothing else), whatever the risk, and
+// System and PrivilegedOnly do not apply.
 type Scope struct {
 	System         string
 	PrivilegedOnly bool
+	RoleIDs        []string
 }
 
 // GenerateCampaign creates a campaign with an item for every risky grant.
@@ -103,6 +108,10 @@ func GenerateScopedCampaign(c *store.TenantTx, now time.Time, name string, unuse
 		}
 	}
 
+	rv, err := loadRoleView(c, scope)
+	if err != nil {
+		return 0, err
+	}
 	campID, err := c.InsertCampaign(&store.ReviewCampaign{Name: name, CreatedAt: now, Status: "open", UnusedDays: unusedDays})
 	if err != nil {
 		return 0, err
@@ -131,10 +140,18 @@ func GenerateScopedCampaign(c *store.TenantTx, now time.Time, name string, unuse
 			for _, ep := range via {
 				privileged = privileged || ep.Privileged
 			}
-			if (scope.System != "" && g.Node(ag.Dst).System != scope.System) || (scope.PrivilegedOnly && !privileged) {
-				continue
+			just := rv.justifying(iid, ag)
+			if len(just) == 0 && rv.scoped() {
+				continue // a role-scoped campaign reviews memberships only
 			}
-			total++
+			if len(just) == 0 || !rv.scoped() {
+				if (scope.System != "" && g.Node(ag.Dst).System != scope.System) || (scope.PrivilegedOnly && !privileged) {
+					continue
+				}
+			}
+			if len(just) == 0 {
+				total++ // a grant a role made is counted with its membership
+			}
 			var last *time.Time
 			usedN, events := 0, 0
 			for _, ep := range via {
@@ -165,6 +182,12 @@ func GenerateScopedCampaign(c *store.TenantTx, now time.Time, name string, unuse
 			}
 			if ident.Type != "human" && (owner == nil || owner.Status != "active") {
 				reasons = append(reasons, "orphaned_nhi")
+			}
+			if len(just) > 0 {
+				// the role's grant is reviewed under its membership, not as an item
+				rv.add(just, iid, reasons, g.Label(ag.Acct)+" → "+g.Label(ag.Dst), privileged, len(via), usedN, events, last,
+					via, vnames)
+				continue
 			}
 			if len(reasons) == 0 {
 				continue
@@ -237,6 +260,11 @@ func GenerateScopedCampaign(c *store.TenantTx, now time.Time, name string, unuse
 			items++
 		}
 	}
+	mTotal, mItems, err := rv.emit(c, now, campID, people, securityLead)
+	if err != nil {
+		return 0, err
+	}
+	total, items = total+mTotal, items+mItems
 	if err := c.SetCampaignTotals(campID, total, total-items); err != nil {
 		return 0, err
 	}
