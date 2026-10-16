@@ -443,8 +443,11 @@ numbers it 0106). Code: `server/internal/groups/provisioning`; SQL for the SQL t
 | `POST /api/groups/provisioners/{id}/diagnose?group=&identity=` | why a group or identity is or is not provisioned, and the ops a sync would run, without applying them |
 
 - Config: `TESSERA_GROUPS_PROV_SQL_DIR` (default unset: the SQL target is off; set it to a directory
-  the server may write; a tenant chooses only a file name in it, and a file holding Tessera's own tables
-  is refused).
+  the server may write; a tenant chooses only a file name, which lives in the tenant's own
+  subdirectory `<dir>/<tenant-id>/<file>` (mode 0750, the segment comes from the session's tenant, never
+  from configuration), so two tenants naming the same file never share rows; a second provisioner of the
+  same tenant naming a file already in use is refused with `409 file_in_use`; a file holding Tessera's
+  own tables is refused).
 - Tests: `go test ./internal/groups/provisioning` (`TestProvision_VerifiedOnlyAfterReread`,
   `TestProvision_AdoptModeChangesNothing`, `TestProvision_FailsafeMaxDeletes`,
   `TestProvision_IncrementalEqualsFull`; an in-memory LDAP directory with AD ranged attributes, an LDAP

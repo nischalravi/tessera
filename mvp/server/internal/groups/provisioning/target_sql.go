@@ -46,7 +46,7 @@ func openSQL(ctx context.Context, spec TargetSpec) (Provisioner, error) {
 	if err != nil {
 		return nil, err
 	}
-	db, err := store.OpenExtSQLite(ctx, spec.Deps.SQLDir, cfg.File)
+	db, err := store.OpenExtSQLite(ctx, spec.Deps.SQLDir, spec.Tenant, cfg.File)
 	if err != nil {
 		return nil, err
 	}

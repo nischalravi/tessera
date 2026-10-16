@@ -306,7 +306,11 @@ func (s *Service) Create(tx *store.TenantTx, now time.Time, actor string, in Cre
 			return nil, err
 		}
 	}
-	p := &store.Provisioner{ID: uuid.NewString(), Name: in.Name, TargetType: in.TargetType, ConnectionID: in.ConnectionID,
+	id := uuid.NewString()
+	if err := checkSQLFile(tx, id, in.TargetType, in.Config); err != nil {
+		return nil, err
+	}
+	p := &store.Provisioner{ID: id, Name: in.Name, TargetType: in.TargetType, ConnectionID: in.ConnectionID,
 		Config: in.Config, Mode: store.ProvModeAdopt, FullSchedule: in.FullSchedule, Failsafe: in.Failsafe, CreatedBy: actor, CreatedAt: now}
 	if p.FullSchedule == "" {
 		p.FullSchedule = "0 2 * * *"
@@ -329,6 +333,48 @@ func (s *Service) Create(tx *store.TenantTx, now time.Time, actor string, in Cre
 		return nil, err
 	}
 	return tx.Provisioner(p.ID)
+}
+
+// FileInUseError is a SQL target file another provisioner of the tenant uses.
+type FileInUseError struct{ File string }
+
+func (e *FileInUseError) Error() string {
+	return fmt.Sprintf("another provisioner of this tenant already writes the file %q", e.File)
+}
+
+// checkSQLFile refuses a SQL target whose file another provisioner of the
+// tenant uses: two provisioners would delete each other's rows. self is the
+// provisioner being created or changed.
+func checkSQLFile(tx *store.TenantTx, self, typ string, config json.RawMessage) error {
+	if typ != TypeSQL {
+		return nil
+	}
+	file := sqlFileOf(config)
+	if file == "" {
+		return nil
+	}
+	ps, err := tx.Provisioners()
+	if err != nil {
+		return err
+	}
+	for _, o := range ps {
+		if o.ID != self && o.TargetType == TypeSQL && sqlFileOf(o.Config) == file {
+			return &FileInUseError{File: file}
+		}
+	}
+	return nil
+}
+
+func sqlFileOf(config json.RawMessage) string {
+	var c struct {
+		Target struct {
+			File string `json:"file"`
+		} `json:"target"`
+	}
+	if json.Unmarshal(config, &c) != nil {
+		return ""
+	}
+	return c.Target.File
 }
 
 // DuplicateError is a provisioner name already in use.
@@ -422,6 +468,9 @@ func (s *Service) Update(tx *store.TenantTx, now time.Time, actor, id string, in
 		} else if err != nil && !errors.Is(err, store.ErrNotFound) {
 			return nil, err
 		}
+	}
+	if err := checkSQLFile(tx, p.ID, p.TargetType, p.Config); err != nil {
+		return nil, err
 	}
 	if p.ConnectionID != nil {
 		if _, err := tx.Connection(*p.ConnectionID); err != nil {

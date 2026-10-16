@@ -148,9 +148,12 @@ func viewOp(o *store.SyncOp) opView {
 // provErr maps the provisioning package's refusals to the JSON errors.
 func provErr(err error) error {
 	var dup *provisioning.DuplicateError
+	var inUse *provisioning.FileInUseError
 	switch {
 	case err == nil:
 		return nil
+	case errors.As(err, &inUse):
+		return &readiness.Error{Status: http.StatusConflict, Code: "file_in_use", Msg: inUse.Error()}
 	case errors.As(err, &dup):
 		return &readiness.Error{Status: http.StatusConflict, Code: "name_taken", Msg: dup.Error()}
 	case errors.Is(err, provisioning.ErrConfig):

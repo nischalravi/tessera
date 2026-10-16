@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 )
 
 // ExtSQLite is the database of the SQL provisioning target (GR-11): a SQLite
@@ -22,8 +24,8 @@ import (
 // is why it lives here. Every statement is a constant with bound parameters
 // and a fixed table name; nothing from a tenant's configuration is ever
 // concatenated into SQL. A tenant chooses only a file name, which must be a
-// plain name inside the operator's directory, and a file that holds Tessera's
-// own tables is refused.
+// plain name inside the tenant's own subdirectory of the operator's directory,
+// and a file that holds Tessera's own tables is refused.
 
 // ExtSQLiteTable is the fixed table the target writes.
 const ExtSQLiteTable = "tessera_group_members"
@@ -32,6 +34,8 @@ const ExtSQLiteTable = "tessera_group_members"
 var ErrExtSQLite = errors.New("store: SQL target database")
 
 var extFileRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}\.(db|sqlite|sqlite3)$`)
+
+var extTenantRE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // ExtPair is one membership row.
 type ExtPair struct{ Group, Member string }
@@ -54,19 +58,26 @@ func ValidExtSQLiteName(name string) bool {
 	return extFileRE.MatchString(name) && !strings.Contains(name, "..")
 }
 
-// OpenExtSQLite opens (creating if needed) file name inside dir. dir is the
-// operator's setting; name is a plain file name from the tenant's configuration.
-func OpenExtSQLite(ctx context.Context, dir, name string) (*ExtSQLite, error) {
+// OpenExtSQLite opens (creating if needed) <dir>/<tenant>/<name>. dir is the
+// operator's setting; tenant is the trusted tenant id (never configuration), so
+// two tenants naming the same file get different files; name is a plain file
+// name from the tenant's configuration.
+func OpenExtSQLite(ctx context.Context, dir string, tenant tenancy.ID, name string) (*ExtSQLite, error) {
 	if dir == "" {
 		return nil, fmt.Errorf("%w: no directory is configured (TESSERA_GROUPS_PROV_SQL_DIR)", ErrExtSQLite)
 	}
 	if !ValidExtSQLiteName(name) {
 		return nil, fmt.Errorf("%w: file must be a plain name ending in .db, .sqlite or .sqlite3", ErrExtSQLite)
 	}
-	if err := os.MkdirAll(dir, 0o750); err != nil {
+	seg := tenant.String()
+	if tenant.IsZero() || !extTenantRE.MatchString(seg) {
+		return nil, fmt.Errorf("%w: no tenant", ErrExtSQLite)
+	}
+	tdir := filepath.Join(dir, seg)
+	if err := os.MkdirAll(tdir, 0o750); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrExtSQLite, err)
 	}
-	path := filepath.Join(dir, name)
+	path := filepath.Join(tdir, name)
 	q := url.Values{}
 	q.Add("_pragma", "busy_timeout(5000)")
 	q.Add("_pragma", "journal_mode(WAL)")

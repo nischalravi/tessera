@@ -3,6 +3,7 @@ package provisioning
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/model"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 )
 
 func sqlHarness(t *testing.T, n int, file string) (*harness, *store.Provisioner, string) {
@@ -47,7 +49,7 @@ func TestSQLTarget(t *testing.T) {
 	x.setMode(p.ID, store.ProvModeActive)
 
 	// rows other applications wrote are not Tessera's: a group Tessera does not own is never touched
-	db, err := store.OpenExtSQLite(context.Background(), dir, "members.db")
+	db, err := store.OpenExtSQLite(context.Background(), dir, tid, "members.db")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +63,7 @@ func TestSQLTarget(t *testing.T) {
 		t.Fatalf("run %s %+v", rep.Run.Status, rep.Summary)
 	}
 	read := func() map[string][]string {
-		db, err := store.OpenExtSQLite(context.Background(), dir, "members.db")
+		db, err := store.OpenExtSQLite(context.Background(), dir, tid, "members.db")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -101,21 +103,24 @@ func TestSQLTarget_Containment(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	for _, bad := range []string{"../x.db", "a/b.db", "x.txt", ".hidden.db", "", "x.db/../y.db", strings.Repeat("a", 70) + ".db", "x y.db"} {
-		if db, err := store.OpenExtSQLite(ctx, dir, bad); err == nil {
+		if db, err := store.OpenExtSQLite(ctx, dir, tid, bad); err == nil {
 			_ = db.Close()
 			t.Errorf("file name %q was accepted", bad)
 		}
 	}
-	if _, err := store.OpenExtSQLite(ctx, "", "x.db"); err == nil {
+	if _, err := store.OpenExtSQLite(ctx, "", tid, "x.db"); err == nil {
 		t.Error("an unset directory was accepted")
 	}
 	// Tessera's own database is refused, even if it is put in the directory
-	own, err := store.Open(ctx, filepath.Join(dir, "own.db"))
+	if err := os.MkdirAll(filepath.Join(dir, tid.String()), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	own, err := store.Open(ctx, filepath.Join(dir, tid.String(), "own.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = own.Close()
-	if db, err := store.OpenExtSQLite(ctx, dir, "own.db"); err == nil {
+	if db, err := store.OpenExtSQLite(ctx, dir, tid, "own.db"); err == nil {
 		_ = db.Close()
 		t.Error("a database holding Tessera's tables was accepted as a target")
 	}
@@ -131,7 +136,10 @@ func TestSQLTarget_Containment(t *testing.T) {
 		t.Errorf("a SQL target without a directory: %v", err)
 	}
 	// statements are parameterised: hostile values are data
-	db, err := store.OpenExtSQLite(ctx, dir, "m.db")
+	if _, err := store.OpenExtSQLite(ctx, dir, tenancy.ID{}, "m.db"); err == nil {
+		t.Error("a zero tenant was accepted")
+	}
+	db, err := store.OpenExtSQLite(ctx, dir, tid, "m.db")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,8 +151,91 @@ func TestSQLTarget_Containment(t *testing.T) {
 	if rows, err := db.Members(ctx, []string{evil}); err != nil || len(rows[evil]) != 1 {
 		t.Errorf("rows = %v, %v", rows, err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "m.db")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, tid.String(), "m.db")); err != nil {
 		t.Error(err)
+	}
+}
+
+// Two tenants naming the same file get different files: neither reads the
+// other's rows, and a sync in one never deletes the other's.
+func TestSQLTarget_TenantScopedFiles(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	tidB := tenancy.MustParse("00000000-0000-4000-8000-0000000000d9")
+	open := func(tn tenancy.ID) Provisioner {
+		c := mustCompile(t, nil)
+		c.Target = mustJSON(t, map[string]any{"file": "groups.db"})
+		p, err := openSQL(ctx, TargetSpec{Tenant: tn, Type: TypeSQL, Common: c, Deps: Deps{SQLDir: dir}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = p.Close() })
+		return p
+	}
+	a, b := open(tid), open(tidB)
+	if _, err := a.Apply(ctx, []Op{{ID: "1", Kind: OpMembers, Ref: TargetRef{Name: "eng"}, Add: []string{"alice", "bob"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := b.ReadAll(ctx, Scope{}); len(st.Groups) != 0 {
+		t.Fatalf("tenant B reads tenant A's rows: %v", st.Groups)
+	}
+	if st, _ := b.Read(ctx, []TargetRef{{Name: "eng"}}); len(st.Groups) != 0 {
+		t.Fatalf("tenant B reads tenant A's group: %v", st.Groups)
+	}
+	// B's "sync": it adds its own member and removes whatever it thinks is stale
+	if _, err := b.Apply(ctx, []Op{{ID: "2", Kind: OpMembers, Ref: TargetRef{Name: "eng"}, Add: []string{"carol"}, Remove: []string{"alice", "bob"}}}); err != nil {
+		t.Fatal(err)
+	}
+	stA, _ := a.ReadAll(ctx, Scope{})
+	if got := stA.Groups["eng"]; got == nil || len(got.Members) != 2 {
+		t.Fatalf("tenant A's rows after B's sync = %+v", got)
+	}
+	stB, _ := b.ReadAll(ctx, Scope{})
+	if got := stB.Groups["eng"]; got == nil || len(got.Members) != 1 || got.Members[0] != "carol" {
+		t.Fatalf("tenant B's rows = %+v", got)
+	}
+	for _, tn := range []tenancy.ID{tid, tidB} {
+		if st, err := os.Stat(filepath.Join(dir, tn.String())); err != nil || st.Mode().Perm()&0o007 != 0 {
+			t.Errorf("tenant directory %s: %v", tn, err)
+		}
+	}
+}
+
+// Two provisioners of one tenant may not write the same file.
+func TestSQLTarget_FileInUse(t *testing.T) {
+	x, p, _ := sqlHarness(t, 1, "shared.db")
+	create := func(name, file string) error {
+		return x.run(func(e model.Env) error {
+			_, err := x.svc.Create(e.Tx, x.now, "t", CreateInput{Name: name, TargetType: TypeSQL,
+				Config: mustJSON(t, map[string]any{"account_system": "dir", "target": map[string]any{"file": file}})})
+			return err
+		})
+	}
+	var inUse *FileInUseError
+	if err := create("second", "shared.db"); !errors.As(err, &inUse) {
+		t.Fatalf("a second provisioner on the same file = %v, want FileInUseError", err)
+	}
+	if err := create("third", "other.db"); err != nil {
+		t.Fatal(err)
+	}
+	// changing a provisioner onto a taken file is refused too; keeping its own file is not
+	err := x.run(func(e model.Env) error {
+		cur, _ := e.Tx.Provisioner(p.ID)
+		_, err := x.svc.Update(e.Tx, x.now, "t", p.ID, UpdateInput{Version: cur.Version,
+			Config: mustJSON(t, map[string]any{"account_system": "dir", "target": map[string]any{"file": "other.db"}})})
+		return err
+	})
+	if !errors.As(err, &inUse) {
+		t.Errorf("moving onto a taken file = %v", err)
+	}
+	err = x.run(func(e model.Env) error {
+		cur, _ := e.Tx.Provisioner(p.ID)
+		_, err := x.svc.Update(e.Tx, x.now, "t", p.ID, UpdateInput{Version: cur.Version,
+			Config: mustJSON(t, map[string]any{"account_system": "dir", "target": map[string]any{"file": "shared.db"}})})
+		return err
+	})
+	if err != nil {
+		t.Errorf("an unchanged file: %v", err)
 	}
 }
 
