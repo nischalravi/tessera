@@ -1,0 +1,13 @@
+{
+  "total": 1,
+  "data": [
+    {
+      "id": "EVT-3",
+      "type": "JOB_CHANGE",
+      "effectiveDate": "2026-11-30",
+      "worker": {"id": "w-1001", "employeeId": "E1001"},
+      "from": {"businessTitle": "Senior Platform Engineer", "supervisoryOrganization": {"id": "SUP-100", "descriptor": "Platform Engineering"}},
+      "to": {"businessTitle": "Senior SRE", "supervisoryOrganization": {"id": "SUP-300", "descriptor": "Site Reliability"}}
+    }
+  ]
+}

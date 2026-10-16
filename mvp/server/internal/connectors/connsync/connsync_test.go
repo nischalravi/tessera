@@ -163,6 +163,40 @@ func TestClientRetriesOn429HonouringRetryAfter(t *testing.T) {
 	}
 }
 
+func TestClientRetriesGoogleRateLimit403(t *testing.T) {
+	body := func(reason string) string {
+		return `{"error":{"code":403,"message":"leaky message","errors":[{"reason":"` + reason + `","message":"leaky"}],"status":"PERMISSION_DENIED"}}`
+	}
+	for _, tc := range []struct {
+		reason   string
+		retried  bool
+		rateLim  bool
+		wantCall int
+	}{
+		{"rateLimitExceeded", true, true, 4},
+		{"userRateLimitExceeded", true, true, 4},
+		{"insufficientPermissions", false, false, 1},
+		{"dailyLimitExceeded", false, false, 1},
+	} {
+		t.Run(tc.reason, func(t *testing.T) {
+			calls := 0
+			c, srv, _ := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				w.WriteHeader(http.StatusForbidden)
+				fmt.Fprint(w, body(tc.reason))
+			}, 0)
+			c.RetryOn = connsync.IsGoogleRateLimit
+			_, err := c.GetJSON(context.Background(), srv.URL+"/x", nil, &struct{}{})
+			if connsync.Status(err) != 403 || errors.Is(err, connsync.ErrRateLimited) != tc.rateLim || calls != tc.wantCall {
+				t.Errorf("err = %v, calls = %d", err, calls)
+			}
+			if err != nil && strings.Contains(err.Error(), "leaky") {
+				t.Errorf("error %q carries the body", err)
+			}
+		})
+	}
+}
+
 func TestClientHonoursOktaResetHeaderAndBoundsTheWait(t *testing.T) {
 	calls := 0
 	c, srv, ns := newClient(t, func(w http.ResponseWriter, r *http.Request) {

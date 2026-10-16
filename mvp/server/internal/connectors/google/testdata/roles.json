@@ -1,0 +1,9 @@
+{
+  "kind": "admin#directory#roles",
+  "items": [
+    {"roleId": "9100000001", "roleName": "_SEED_ADMIN_ROLE", "roleDescription": "Super Admin", "isSystemRole": true, "isSuperAdminRole": true},
+    {"roleId": "9100000002", "roleName": "Help Desk Admin", "roleDescription": "Resets passwords", "isSystemRole": true},
+    {"roleId": "9100000003", "roleName": "Groups Reader", "isSystemRole": true},
+    {"roleId": "9100000004", "roleName": "Unassigned Custom Role", "isSystemRole": false}
+  ]
+}

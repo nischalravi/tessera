@@ -12,8 +12,8 @@ import (
 
 var now = time.Date(2026, 10, 8, 9, 30, 0, 0, time.UTC)
 
-func TestLoadRegistersOktaAndEntra(t *testing.T) {
-	for _, name := range []string{"okta", "entra"} {
+func TestLoadRegistersTheProductionConnectors(t *testing.T) {
+	for _, name := range []string{"okta", "entra", "google", "workday"} {
 		if _, ok := connectors.Factories[name]; !ok {
 			t.Errorf("connector %q is not registered", name)
 		}
@@ -45,7 +45,15 @@ func TestLoadBuildsTheProductionConnectorsFromTheEnvironment(t *testing.T) {
 	t.Setenv("TESSERA_ENTRA_CLIENT_ID", "cid")
 	t.Setenv("TESSERA_ENTRA_CLIENT_SECRET", "env:TEST_ENTRA_SECRET")
 	t.Setenv("TEST_ENTRA_SECRET", "s")
-	conns, err := connectors.Load("demo-workday,okta,entra", now)
+	t.Setenv("TESSERA_GOOGLE_SERVICE_ACCOUNT_KEY", "env:TEST_GOOGLE_KEY")
+	t.Setenv("TEST_GOOGLE_KEY", testServiceAccountKey(t))
+	t.Setenv("TESSERA_GOOGLE_ADMIN_EMAIL", "admin@example.com")
+	t.Setenv("TESSERA_WORKDAY_BASE_URL", "https://wd2-impl-services1.workday.com")
+	t.Setenv("TESSERA_WORKDAY_TENANT", "fixture_tenant")
+	t.Setenv("TESSERA_WORKDAY_CLIENT_ID", "cid")
+	t.Setenv("TESSERA_WORKDAY_CLIENT_SECRET", "env:TEST_WORKDAY_SECRET")
+	t.Setenv("TEST_WORKDAY_SECRET", "s")
+	conns, err := connectors.Load("demo-workday,okta,entra,google,workday", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,15 +61,17 @@ func TestLoadBuildsTheProductionConnectorsFromTheEnvironment(t *testing.T) {
 	for _, c := range conns {
 		got = append(got, c.TypeName())
 	}
-	if strings.Join(got, ",") != "DemoWorkdayConnector,OktaConnector,EntraConnector" {
+	if strings.Join(got, ",") != "DemoWorkdayConnector,OktaConnector,EntraConnector,GoogleConnector,WorkdayConnector" {
 		t.Errorf("connectors = %v", got)
 	}
 }
 
 func TestLoadRefusesAnUnsafeOrIncompleteConfiguration(t *testing.T) {
-	for _, tc := range []struct{ name, spec string }{{"okta unconfigured", "okta"}, {"entra unconfigured", "entra"}} {
+	for _, tc := range []struct{ name, spec string }{{"okta unconfigured", "okta"}, {"entra unconfigured", "entra"},
+		{"google unconfigured", "google"}, {"workday unconfigured", "workday"}} {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, k := range []string{"TESSERA_OKTA_ORG_URL", "TESSERA_OKTA_API_TOKEN", "TESSERA_ENTRA_TENANT_ID"} {
+			for _, k := range []string{"TESSERA_OKTA_ORG_URL", "TESSERA_OKTA_API_TOKEN", "TESSERA_ENTRA_TENANT_ID",
+				"TESSERA_GOOGLE_SERVICE_ACCOUNT_KEY", "TESSERA_WORKDAY_BASE_URL"} {
 				t.Setenv(k, "")
 				_ = os.Unsetenv(k)
 			}

@@ -1,0 +1,9 @@
+{
+  "kind": "admin#directory#roleAssignments",
+  "items": [
+    {"roleAssignmentId": "1", "roleId": "9100000001", "assignedTo": "10000000001", "assigneeType": "user", "scopeType": "CUSTOMER"},
+    {"roleAssignmentId": "2", "roleId": "9100000002", "assignedTo": "g-plat", "assigneeType": "group", "scopeType": "CUSTOMER"},
+    {"roleAssignmentId": "3", "roleId": "9100000003", "assignedTo": "10000000002", "assigneeType": "user", "scopeType": "CUSTOMER"},
+    {"roleAssignmentId": "4", "roleId": "9100000002", "assignedTo": "99999999999", "assigneeType": "user", "scopeType": "CUSTOMER"}
+  ]
+}

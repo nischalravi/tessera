@@ -1,0 +1,30 @@
+{
+  "total": 8,
+  "data": [
+    {
+      "id": "EVT-5",
+      "type": "TERMINATE",
+      "effectiveDate": "2026-10-01",
+      "reason": "Voluntary",
+      "worker": {"id": "w-1002", "employeeId": "E1002"}
+    },
+    {
+      "id": "EVT-6",
+      "type": "HIRE",
+      "effectiveDate": "2021-04-12",
+      "worker": {"id": "w-1001", "employeeId": "E1001"}
+    },
+    {
+      "id": "EVT-7",
+      "type": "REHIRE",
+      "effectiveDate": "2026-10-02",
+      "worker": {"id": "w-1002", "employeeId": "E1002"}
+    },
+    {
+      "id": "EVT-8",
+      "type": "TERMINATE",
+      "effectiveDate": "next tuesday",
+      "worker": {"id": "w-1004", "employeeId": "E1004"}
+    }
+  ]
+}

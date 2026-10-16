@@ -1,0 +1,9 @@
+{
+  "kind": "admin#directory#members",
+  "members": [
+    {"id": "10000000003", "email": "cy.placeholder@example.com", "type": "USER", "role": "MEMBER"},
+    {"id": "ext-1", "email": "partner@partner.example.net", "type": "USER", "role": "MEMBER"},
+    {"id": "ext-2", "email": "outside@example.org", "type": "EXTERNAL", "role": "MEMBER"},
+    {"id": "C0fixture1", "type": "CUSTOMER", "role": "MEMBER"}
+  ]
+}

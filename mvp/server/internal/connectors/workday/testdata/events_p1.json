@@ -1,0 +1,35 @@
+{
+  "total": 8,
+  "data": [
+    {
+      "id": "EVT-1",
+      "type": "HIRE",
+      "effectiveDate": "2026-11-02",
+      "worker": {"id": "w-1003", "employeeId": "E1003", "descriptor": "Jordan Pending"},
+      "to": {"businessTitle": "Data Engineer", "supervisoryOrganization": {"id": "SUP-100", "descriptor": "Platform Engineering"}, "manager": {"employeeId": "E1000"}}
+    },
+    {
+      "id": "EVT-2",
+      "type": "TERMINATE",
+      "effectiveDate": "2026-12-31",
+      "reason": "Resignation",
+      "worker": {"id": "w-1004", "employeeId": "E1004"}
+    },
+    {
+      "id": "EVT-3",
+      "type": "JOB_CHANGE",
+      "effectiveDate": "2026-11-16",
+      "worker": {"id": "w-1001", "employeeId": "E1001"},
+      "from": {"businessTitle": "Platform Engineer", "supervisoryOrganization": {"id": "SUP-100", "descriptor": "Platform Engineering"}},
+      "to": {"businessTitle": "Senior SRE", "supervisoryOrganization": {"id": "SUP-300", "descriptor": "Site Reliability"}}
+    },
+    {
+      "id": "EVT-4",
+      "type": "MANAGER_CHANGE",
+      "effectiveDate": "2026-10-05",
+      "worker": {"id": "w-1005"},
+      "from": {"manager": {"id": "w-1000", "employeeId": "E1000"}},
+      "to": {"manager": {"id": "w-1001", "employeeId": "E1001"}}
+    }
+  ]
+}
