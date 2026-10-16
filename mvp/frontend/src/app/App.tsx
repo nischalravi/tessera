@@ -49,6 +49,7 @@ const GraphExplorer = lazy(() => import("../features/insights/GraphExplorer"));
 const LeastPrivilege = named(() => import("../features/insights/LeastPrivilege"), "LeastPrivilege");
 const SodConflicts = named(() => import("../features/insights/SodConflicts"), "SodConflicts");
 const DeploymentHealth = named(() => import("../features/insights/DeploymentHealth"), "DeploymentHealth");
+const MfaPosture = named(() => import("../features/insights/MfaPosture"), "MfaPosture");
 const Policies = named(() => import("../features/governance/Policies"), "Policies");
 const Reviews = named(() => import("../features/governance/Reviews"), "Reviews");
 const Lifecycle = named(() => import("../features/governance/Lifecycle"), "Lifecycle");
@@ -117,6 +118,7 @@ export default function App() {
                     <Route path="/insights/least-privilege" element={<LeastPrivilege />} />
                     <Route path="/insights/sod" element={<SodConflicts />} />
                     <Route path="/insights/deployment-health" element={<DeploymentHealth />} />
+                    <Route path="/insights/mfa" element={<MfaPosture />} />
                     <Route path="/insights/deployment" element={<Moved to="/insights/deployment-health" />} />
 
                     <Route path="/governance" element={<Navigate to="/governance/policies" replace />} />

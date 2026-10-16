@@ -99,6 +99,7 @@ POST   /api/connections/{id}/findings/{fid}/accept   connections.manage -
 GET    /api/connections/{id}/health                  connections.read   -
 GET    /api/insights/deployment-health               connections.read   -
 POST   /api/insights/deployment-health/rerun         connections.manage -
+GET    /api/mfa/posture                              graph.read      -  # issue #109
 GET    /api/auth/session                             auth.self       -
 POST   /api/auth/logout                              auth.self       -
 GET    /api/auth/sessions                            auth.self       -

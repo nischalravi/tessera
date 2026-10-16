@@ -1,0 +1,14 @@
+[
+  {"id": "ost1morgantotp0001", "factorType": "token:software:totp", "provider": "GOOGLE", "vendorName": "GOOGLE", "status": "ACTIVE",
+   "created": "2024-02-14T12:00:00.000Z", "lastUpdated": "2024-02-14T12:00:00.000Z", "profile": {"credentialId": "morgan@example.com"}},
+  {"id": "clf1morganvoice0001", "factorType": "call", "provider": "OKTA", "vendorName": "OKTA", "status": "ACTIVE",
+   "created": "2024-02-14T12:05:00.000Z", "lastUpdated": "2024-02-14T12:05:00.000Z", "profile": {"phoneNumber": "+1 XXX-XXX-5678"}},
+  {"id": "hwt1morganrsa000001", "factorType": "token", "provider": "RSA", "vendorName": "RSA", "status": "ACTIVE",
+   "created": "2021-05-05T12:05:00.000Z", "lastUpdated": "2021-05-05T12:05:00.000Z", "profile": {"credentialId": "morgan"}},
+  {"id": "emf1morganemail0001", "factorType": "email", "provider": "OKTA", "vendorName": "OKTA", "status": "ACTIVE",
+   "created": "2024-07-07T12:00:00.000Z", "lastUpdated": "2024-07-07T12:00:00.000Z", "profile": {"email": "m***@example.com"}},
+  {"id": "sgn1morganfastpass1", "factorType": "signed_nonce", "provider": "OKTA", "vendorName": "OKTA", "status": "ACTIVE",
+   "created": "2025-01-10T12:00:00.000Z", "lastUpdated": "2025-01-10T12:00:00.000Z", "profile": {"name": "Morgan's laptop"}},
+  {"id": "u2f1morgansecuritykey", "factorType": "u2f", "provider": "FIDO", "vendorName": "FIDO", "status": "ACTIVE",
+   "created": "2025-01-11T12:00:00.000Z", "lastUpdated": "2025-01-11T12:00:00.000Z", "profile": {"credentialId": "u2f-cred"}}
+]

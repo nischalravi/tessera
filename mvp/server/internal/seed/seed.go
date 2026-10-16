@@ -146,6 +146,8 @@ type Tenant struct {
 	Connectors []connectors.Connector
 	// Workflows, if set, runs after the connectors are synced.
 	Workflows func(c *store.TenantTx, now time.Time, policies []*policy.Policy) error
+	// MFA, if set, seeds the MFA posture report after the workflows.
+	MFA func(c *store.TenantTx, now time.Time) error
 	// DevIdP, when set, is the issuer of a dev_mock IdP connection seeded
 	// with Users as its bootstrap users (WithDevIdP; dev and test only).
 	DevIdP string
@@ -156,7 +158,7 @@ type Tenant struct {
 
 // Larkspur is the Larkspur Labs demo tenant over conns.
 func Larkspur(conns []connectors.Connector) Tenant {
-	return Tenant{ID: LarkspurID, Slug: LarkspurSlug, Name: "Larkspur Labs", Connectors: conns, Workflows: Workflows}
+	return Tenant{ID: LarkspurID, Slug: LarkspurSlug, Name: "Larkspur Labs", Connectors: conns, Workflows: Workflows, MFA: MFADemo}
 }
 
 // Globex is the second demo tenant: the tiny world with GlobexSentinel in
@@ -204,6 +206,11 @@ func Run(ctx context.Context, db *store.DB, now time.Time, policies []*policy.Po
 			}
 			if t.Workflows != nil {
 				if err := t.Workflows(c, now, policies); err != nil {
+					return err
+				}
+			}
+			if t.MFA != nil {
+				if err := t.MFA(c, now); err != nil {
 					return err
 				}
 			}

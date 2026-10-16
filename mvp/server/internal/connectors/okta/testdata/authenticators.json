@@ -1,0 +1,6 @@
+[
+  {"type": "app", "key": "okta_verify", "id": "aut1oktaverify00001", "name": "Okta Verify", "status": "ACTIVE",
+   "settings": {"channelBinding": {"style": "NUMBER_CHALLENGE", "required": "ALWAYS"}, "compliance": {"fips": "OPTIONAL"}, "userVerification": "PREFERRED"}},
+  {"type": "phone", "key": "phone_number", "id": "aut1phone0000000001", "name": "Phone", "status": "ACTIVE"},
+  {"type": "security_key", "key": "webauthn", "id": "aut1webauthn0000001", "name": "Security Key or Biometric", "status": "ACTIVE"}
+]

@@ -62,6 +62,38 @@ type AccountRecord struct {
 	Attributes map[string]string
 }
 
+// AuthSignals are what a source reports about how one account signs in.
+// Each fact is tri-state: nil is unknown. They are recorded as reported,
+// never inferred, and a connector that has no such field leaves them out.
+type AuthSignals struct {
+	Account          Ref   // kind account
+	HasLocalPassword *bool // the account can sign in with a password held by the app itself
+	MFAEnabled       *bool // the app enforces or has registered MFA for the account
+	SSOEnforced      *bool // the account can only sign in through the IdP
+}
+
+// AuthMethodRecord is one registered authentication method of an account.
+// Strength is a mfa.Strength value and Kind a mfa.Kind* value, set by the
+// connector's classifier.
+type AuthMethodRecord struct {
+	Account    Ref // kind account
+	ExternalID string
+	Strength   string
+	Kind       string
+	Label      string
+	EnrolledAt *time.Time
+}
+
+// AuthMethodSource says whether a connector read registered methods in this
+// run. Unavailable (for example a missing Graph scope) means no methods were
+// read: ingest keeps what it stored and the report shows the gap, so a missing
+// permission never looks like "nobody has MFA".
+type AuthMethodSource struct {
+	System      string
+	Unavailable bool
+	Detail      string
+}
+
 // GroupRecord is a group, team, role or security group.
 type GroupRecord struct {
 	System      string
@@ -128,6 +160,14 @@ type DiscoveryResult struct {
 	Edges       []EdgeRecord
 	Secrets     []SecretRecord
 	Delegations []DelegationRecord
+	// AuthMethods are the registered authentication methods of the accounts
+	// in AuthSource.System. Optional.
+	AuthMethods []AuthMethodRecord
+	// AuthSource is set by a connector that reads authentication methods.
+	AuthSource *AuthMethodSource
+	// AuthSignals are per-account password, MFA and SSO facts of apps and
+	// data platforms (Snowflake, GitHub, AWS IAM users). Optional.
+	AuthSignals []AuthSignals
 	// Stats are per-object-class attribute fill counts computed by the
 	// connector, so fill rates need no attribute values. Optional.
 	Stats *DiscoveryStats
