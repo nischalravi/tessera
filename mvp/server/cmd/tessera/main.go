@@ -58,6 +58,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
@@ -297,8 +298,9 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if err != nil {
 		return err
 	}
+	groupsEngine := &engine.Engine{Budget: cfg.GroupsSyncBudget, Log: logger}
 	srv := api.New(api.Config{Store: st, Clock: clock, Policies: loader, Logger: logger,
-		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound,
+		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound, GroupsEngine: groupsEngine,
 		Containment:    &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock},
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
 		HSTS: cfg.IsProd(), Env: cfg.Env, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, AuditAnchor: anchorURL})
@@ -334,6 +336,13 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		defer close(ckptDone)
 		checkpointer.Loop(ctx, checkpointInterval)
 	}()
+	// the groups engine's queue worker, time wheel and nightly verification
+	groupsDone := make(chan struct{})
+	groupsRunner := &engine.Runner{DB: st, Engine: groupsEngine, Clock: clock, Log: logger}
+	go func() {
+		defer close(groupsDone)
+		groupsRunner.Loop(ctx)
+	}()
 	errc := make(chan error, 1)
 	go func() { errc <- httpSrv.Serve(ln) }()
 	logger.Info("tessera API listening", "addr", ln.Addr().String())
@@ -344,6 +353,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		<-sweepDone
 		<-keysDone
 		<-ckptDone
+		<-groupsDone
 		return err
 	case <-ctx.Done():
 	}
@@ -354,6 +364,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	<-sweepDone
 	<-keysDone
 	<-ckptDone
+	<-groupsDone
 	if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 		return serveErr
 	}

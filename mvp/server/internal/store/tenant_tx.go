@@ -23,6 +23,10 @@ type TenantTx struct {
 	tx       *sql.Tx
 	tenant   tenancy.ID
 	readOnly bool
+	// stmts caches prepared statements for the life of the transaction (they
+	// are closed with it): the membership engine runs the same few statements
+	// thousands of times in one transaction.
+	stmts    map[string]*sql.Stmt
 	appended int64 // audit events appended (counted into AuditContext.Committed on commit)
 }
 
@@ -62,8 +66,28 @@ func (tx *TenantTx) exec(s tstmt, args ...sql.NamedArg) (sql.Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	res, err := tx.tx.ExecContext(tx.ctx, s.sql, a...)
+	st, err := tx.prepared(s)
+	if err != nil {
+		return nil, crossTenant(err)
+	}
+	res, err := st.ExecContext(tx.ctx, a...)
 	return res, crossTenant(err)
+}
+
+// prepared returns the transaction's prepared form of s, preparing it once.
+func (tx *TenantTx) prepared(s tstmt) (*sql.Stmt, error) {
+	if st, ok := tx.stmts[s.sql]; ok {
+		return st, nil
+	}
+	st, err := tx.tx.PrepareContext(tx.ctx, s.sql)
+	if err != nil {
+		return nil, err
+	}
+	if tx.stmts == nil {
+		tx.stmts = map[string]*sql.Stmt{}
+	}
+	tx.stmts[s.sql] = st
+	return st, nil
 }
 
 // crossTenant maps a cross-tenant reference refused by the schema's guard
@@ -89,7 +113,11 @@ func (tx *TenantTx) query(s tstmt, args ...sql.NamedArg) (*sql.Rows, error) {
 	if err != nil {
 		return nil, err
 	}
-	return tx.tx.QueryContext(tx.ctx, s.sql, a...)
+	st, err := tx.prepared(s)
+	if err != nil {
+		return nil, err
+	}
+	return st.QueryContext(tx.ctx, a...)
 }
 
 func (tx *TenantTx) queryRow(s tstmt, args ...sql.NamedArg) scanner {
@@ -97,7 +125,11 @@ func (tx *TenantTx) queryRow(s tstmt, args ...sql.NamedArg) scanner {
 	if err != nil {
 		return errScanner{err}
 	}
-	return tx.tx.QueryRowContext(tx.ctx, s.sql, a...)
+	st, err := tx.prepared(s)
+	if err != nil {
+		return errScanner{err}
+	}
+	return st.QueryRowContext(tx.ctx, a...)
 }
 
 // count runs a COUNT-style statement returning one integer.

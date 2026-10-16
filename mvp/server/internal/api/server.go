@@ -24,6 +24,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oidcrp"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
@@ -101,6 +102,9 @@ type Config struct {
 	// grants). Nil: a service with no outbound client, so every containment
 	// step is a manual task.
 	Containment *containment.Service
+	// GroupsEngine is the native groups' membership engine, whose synchronous
+	// budget is TESSERA_GROUPS_SYNC_BUDGET. Nil: the defaults.
+	GroupsEngine *engine.Engine
 	// AuditAppend overrides how the audit middleware writes http.request
 	// events (tests inject failures). Nil: the store.
 	AuditAppend func(ctx context.Context, t tenancy.ID, e store.AuditEvent) error
@@ -151,6 +155,9 @@ func New(cfg Config) *Server {
 		cfg.Readiness = readiness.NewService(reg, cfg.Env)
 		cfg.Readiness.Runner.Scenario = cfg.ReadinessScenario
 	}
+	if cfg.GroupsEngine == nil {
+		cfg.GroupsEngine = engine.New(0)
+	}
 	if cfg.Containment == nil {
 		cfg.Containment = &containment.Service{}
 	}
@@ -176,6 +183,7 @@ func New(cfg Config) *Server {
 	s.registerCorrelationRoutes()
 	s.registerContainmentRoutes()
 	s.registerGroupsFolderRoutes()
+	s.registerGroupsMemberRoutes()
 	s.registerReadinessRoutes()
 	s.registerAuthRoutes()
 	s.registerLoginRoutes()

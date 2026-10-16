@@ -290,6 +290,43 @@ soft delete), `server/internal/api/groups_folders.go`. No UI yet (GR-8).
   `groups.group.{created,updated,renamed,moved,copied,deleted,restored}`, written in the change's
   transaction with the acting user; `GET /api/audit?target_type=group&target_id=` filters by object.
 
+#### Membership engine (GR-2, issue #45)
+
+`server/internal/groups/engine` keeps `grp_effective` (the materialized members, with support counts)
+equal to the stored inputs: direct memberships, nesting and composite-factor edges (`grp_deps`) and
+composite definitions. `grp_closure` and `grp_levels` are maintained incrementally (schema
+`0281_groups_engine.sql` adds `grp_engine_state`). Changes recompute the affected identities in
+ascending level order from the stored rows, stopping where membership does not change. A disabled or
+deleted group, or one outside its own `enabled_from`/`disabled_at`, is an empty set.
+
+| Route (all `groups.admin`) | |
+|---|---|
+| `GET /api/groups/{id}/members?filter=direct\|effective&limit=&offset=` | members; `stale` is true while a recompute is queued |
+| `POST /api/groups/{id}/members` `{identity \| group, enabled_from, disabled_at, reason}` | add (`201`), update dates of an existing row (`200`), or `202` |
+| `GET /api/groups/{id}/members/{identity}` | hasMember; ignores a row whose `disabled_at` passed even if the time wheel lags |
+| `DELETE /api/groups/{id}/members/{identity-id \| group-id}` | remove (`200` or `202`) |
+| `POST /api/groups/{id}/convert-to-composite` `{op, factors, discard_members}` | basic to composite in place; direct members are `409 has_direct_members` unless discarded |
+| `PUT /api/groups/{id}/composite` `{op, factors}` | redefine a composite (`union`, `intersection` n-ary; `complement` = first minus second) |
+| `POST /api/groups` with `definition: composite`, `composite_op`, `factors` | create a composite |
+| `PATCH /api/groups/{id}` `enabled_from`, `disabled_at` (RFC 3339, `""` clears) | the group's own dates |
+| `POST /api/groups/engine/verify`, `GET /api/groups/engine/ops/{seq}` | full recompute and repair; progress of a `202` operation |
+
+- A composite has no direct members (`409 composite_no_members`). An edge whose parent is already a
+  descendant of the child is `409 {"error":"cycle","path":[names, child down to parent]}`.
+- `TESSERA_GROUPS_SYNC_BUDGET` (default 5000): the estimate is `|ancestors| x |identities affected|`.
+  Under it the change is applied in the request; over it the direct change commits, a
+  `grp_engine_queue` job is queued, the group is `recompute_state: pending` and the answer is `202`
+  with `op`. The background `engine.Runner` (started by `cmd/tessera`) drains the queue in chunks of
+  2,000 identities, runs the time wheel every 30 s (and at the next date boundary: a date takes
+  effect within 60 s) and verifies each tenant nightly.
+- Audit events `groups.member.{added,updated,removed}`, `groups.group.converted`,
+  `groups.composite.updated` (in the request's transaction) and, from the background job,
+  `groups.engine.{recomputed,verified,repaired}` and `groups.timewheel.applied`.
+- Tests: `go test ./internal/groups/engine` (oracle comparison; `TESSERA_ORACLE_SEEDS=500` for a
+  longer soak, `go test -fuzz=FuzzEngine_MatchesOracle` for the fuzzer);
+  `go test -bench . ./internal/groups/engine` runs the 10%-of-reference-tenant benchmark
+  (`TESSERA_GROUPS_BENCH_SCALE` percent, default 10).
+
 ### Audit ledger
 
 Every tenant has an append-only, hash-chained audit log (`audit_events`; design
