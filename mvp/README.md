@@ -269,7 +269,8 @@ soft delete), `server/internal/api/groups_folders.go`. No UI yet (GR-8).
   whole subtree; every old name is kept as an **alias**: it still resolves and stays reserved, and
   its owner can take it back. A folder is deleted only when empty; a group is soft-deleted
   (`status: deleted`, restorable, keeps its name). Copies carry fields and structure, not memberships.
-- Routes (all need `groups.admin`, held by `tenant_admin` until GR-4; every route is audited):
+- Routes (a route needs `groups.read` or `groups.write`, then the privilege of the folder or group,
+  see "Group privileges (GR-4)" below; every route is audited):
 
   | Route | |
   |---|---|
@@ -299,9 +300,9 @@ composite definitions. `grp_closure` and `grp_levels` are maintained incremental
 ascending level order from the stored rows, stopping where membership does not change. A disabled or
 deleted group, or one outside its own `enabled_from`/`disabled_at`, is an empty set.
 
-| Route (all `groups.admin`) | |
+| Route (`groups.read`/`groups.write`, then the privilege; the two engine routes `groups.admin`) | |
 |---|---|
-| `GET /api/groups/{id}/members?filter=direct\|effective&limit=&offset=` | members; `stale` is true while a recompute is queued |
+| `GET /api/groups/{id}/members?filter=direct\|effective&limit=&offset=` | members (`read`); `stale` is true while a recompute is queued |
 | `POST /api/groups/{id}/members` `{identity \| group, enabled_from, disabled_at, reason}` | add (`201`), update dates of an existing row (`200`), or `202` |
 | `GET /api/groups/{id}/members/{identity}` | hasMember; ignores a row whose `disabled_at` passed even if the time wheel lags |
 | `DELETE /api/groups/{id}/members/{identity-id \| group-id}` | remove (`200` or `202`) |
@@ -360,7 +361,7 @@ cross-tenant guard triggers.
   sample of 20 groups and compares them with what was stored; a difference is repaired and audited
   as `groups.pit.mismatch` (the schedule is in memory, so a restart postpones it by a week).
 
-| Route (all `groups.admin`) | |
+| Route (the two members reads need `read` on the group, the pit routes `groups.admin`) | |
 |---|---|
 | `GET /api/groups/{id}/members?as_of=T[&filter=effective\|direct]` | the members at an instant (RFC 3339, not in the future); effective by default; `group` is the group's snapshot then (name, status), null if it did not exist; deleted groups keep their history |
 | `GET /api/groups/{id}/members?between=T1,T2` | everyone who was a member at any time in the window (at most 366 days); `items` are intervals |
@@ -373,6 +374,74 @@ cross-tenant guard triggers.
 - Tests: `go test ./internal/groups/pit ./internal/groups/events` (`TestPIT_AsOfMatchesReplay`,
   `TestPIT_DigestDetectsTamper`, `TestPIT_RebuildEqualsLive`, `TestEvents_GapFreeSeqUnderConcurrency`),
   `TestIsolation_GroupEventTables` in `internal/store`, `TestGroupsPITAPI` in `internal/api`.
+
+#### Group privileges (GR-4, issue #47)
+
+Design `docs/design/groups-grouper-parity.md` §7. Schema `0285_group_privs.sql` (the design calls it
+`0102`; `0280`..`0284` are taken): `grp_privileges` and `grp_priv_settings`. Code:
+`server/internal/groups/privs` (`implies.go` the implication table, `check.go` checks and dynamic
+inheritance, `explain.go`, `grant.go`, `settings.go`), `server/internal/api/groups_privs.go`.
+
+- **Privileges.** Grouper's names, lower-cased: group `admin update read view optin optout
+  group_attr_read group_attr_update`; folder `stem_admin create stem_attr_read stem_attr_update
+  stem_view`; attribute definition `attr_admin attr_update attr_read attr_view attr_optin attr_optout
+  attr_def_attr_read attr_def_attr_update` (21 names: the design says 22 but lists 21, and the
+  schema CHECK has 21). `admin`, `stem_admin` and `attr_admin` imply every privilege of their object;
+  `update`, `read`, `optin`, `optout`, `create` imply the view privilege.
+- **Holders.** An identity, a group (every effective member holds it; `IsMember` re-checks the
+  direct rows' own dates), or `everyone`. A platform user holds its identity's privileges through
+  `platform_users.identity_id` (the column came with the auth core); a user without a link, and a
+  machine client, hold only what everyone holds and what their roles give.
+- **Dynamic inheritance.** A row on folder `F` with `applies_to` `groups`, `folders` or `attr_defs`
+  and `scope` `one` (objects whose parent is `F`) or `sub` (everything below) is applied when a
+  privilege is checked, never copied. `stem_admin` on a folder, by a row on it or inherited, is every
+  privilege on what is below it (the design's §7.2 example).
+- **Platform roles still apply.** An active `tenant_admin` holds every privilege (Grouper's wheel),
+  `auditor` the read ones (`read`, `view`, `*_attr_read`, `attr_read`, `attr_view`) everywhere, and
+  `viewer` the view ones when the tenant sets `groups_viewer_can_view: true` in its settings.
+- **Every group route is gated twice.** The route permission (`groups.read` for reads,
+  `groups.write` for changes, by role and token scope) lets the request in; the handler then needs
+  the privilege of the object. A refusal is `403 {"error":"privilege_required","privilege","object_type","object_id"}`.
+  `groups.admin` (tenant admins) is for tenant-wide routes: engine verify and operations, the three
+  `pit` routes, the privilege settings and identity links.
+
+  | Operation | Privilege |
+  |---|---|
+  | list folders, list groups | only rows the caller may view (`stem_view`, `view`) |
+  | read a folder, a group | `stem_view`, `view` |
+  | create a folder or group | `create` on the parent folder (before the first folder exists, a tenant admin) |
+  | edit, rename, delete a folder; edit, delete, restore a group | `stem_admin`; `admin` |
+  | move | `stem_admin` or `admin` on the object, and `create` on the destination |
+  | copy | `stem_admin` (folder) or `read` (group) on the source, and `create` on the destination |
+  | read members, hasMember, point-in-time members | `read` |
+  | add or remove a member | `update`, or `optin` / `optout` when the member is the caller; `read` on a nested group |
+  | convert to composite, set a composite | `admin`, and `read` on each factor |
+  | list, grant, revoke privileges | `stem_admin` / `admin` (a holder group also needs `view`) |
+
+- **Creator and default privileges.** The creator's identity becomes `admin` of a new group and
+  `stem_admin` of a new folder or copy (`source: creator_default`); a tenant admin with no identity
+  link needs none. `PUT /api/groups/privileges/settings` `{everyone_allowed, defaults}` sets the
+  **everyone policy** (which privileges may be granted to everyone; `admin`, `stem_admin` and
+  `attr_admin` never) and the grants to everyone made on each new object. Granting to everyone
+  (`holder_type: everyone`, or a default) needs an active `tenant_admin`.
+- **Events and audit.** A grant or revoke writes `privilege.granted` / `privilege.revoked` (the PIT
+  keeps when each privilege was held, in `grp_pit_privileges`) and `groups.privilege.{granted,revoked}`
+  in the change's transaction; so do deleting a folder (its rows go with it), saving the settings
+  (`groups.privilege.settings_changed`) and linking a user (`groups.user.identity_{linked,unlinked}`).
+
+| Route | |
+|---|---|
+| `GET\|POST /api/groups/{id}/privileges`, `GET\|POST /api/groups/folders/{id}/privileges` | the rows on the object; grant `{privilege, holder_type: identity\|group\|everyone, identity, group, applies_to: self\|groups\|folders\|attr_defs, scope: self\|one\|sub}` (`201`, or `200` for a grant that exists) |
+| `DELETE .../privileges/{privilege_id}` | revoke one row (the design has `DELETE .../privileges`; the row is in the path here) |
+| `GET .../privileges/effective[?identity=]` | for each privilege of the object, every path by which the identity (default: the caller) holds it, with a sentence such as "Ivan holds UPDATE on `app:foo:g` because they are in `app:foo:admins`, which holds STEM_ADMIN on folder `app:foo` ..."; another identity's needs `admin` |
+| `GET\|PUT /api/groups/privileges/settings` | the everyone policy and default privileges (`groups.admin`) |
+| `PUT /api/groups/users/{id}/identity` `{identity_id \| null}` | link a platform user to an identity (`groups.admin`, fresh phishing-resistant sign-in; audited) |
+
+- Tests: `go test ./internal/groups/privs` (`TestImplication` for all 21 privileges,
+  `TestPrivs_InheritanceOneVsSub`, `TestPrivs_ExplainListsAllPaths`,
+  `TestPrivs_EveryoneNeedsTenantAdmin`), `internal/api` (`TestGroupsRoutesRequirePrivilege` for every
+  route, `TestPrivs_ViewFiltersBrowseAndSearch`, `TestPrivs_GrantsGiveAccess`, ...),
+  `TestIsolation_GroupPrivilegeTables` in `internal/store`.
 
 ### Audit ledger
 

@@ -191,13 +191,9 @@ func TestGroupsPITTenantIsolation(t *testing.T) {
 func TestGroupsPITRoutesRequireTenantAdmin(t *testing.T) {
 	f := storetest.TwoTenants(t)
 	h := newIsolationServer(f).Handler()
-	id := "00000000-0000-4000-8000-000000000000"
-	at := url.QueryEscape(storetest.Now.Format(time.RFC3339))
 	for _, role := range []auth.Role{auth.RoleViewer, auth.RoleOperator, auth.RoleAuditor, auth.RolePolicyAdmin} {
 		l := signIn(t, f.DB, f.B.ID, authtest.User{Email: string(role) + "@b.example", Roles: []auth.Role{role}}, authtest.Phr, storetest.Now)
 		for _, tc := range [][3]string{
-			{"GET", "/api/groups/" + id + "/members?as_of=" + at, ""},
-			{"GET", "/api/groups/" + id + "/members?between=" + at + "," + at, ""},
 			{"GET", "/api/groups/pit/digests", ""}, {"GET", "/api/groups/pit/verify", ""},
 			{"POST", "/api/groups/pit/rebuild", ""},
 		} {

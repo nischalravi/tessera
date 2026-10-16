@@ -73,8 +73,13 @@ const (
 	PermIdentitiesMerge     Permission = "identities.merge"
 	// kill switch (issue #106)
 	PermIdentitiesContain Permission = "identities.contain"
-	// native groups (issue #44, GR-1): folder and group CRUD. tenant_admin only,
-	// until GR-4 brings the per-object privilege model.
+	// native groups (issue #44, GR-1; #47, GR-4). groups.read and groups.write
+	// let a principal reach the group routes; what it may do to each folder and
+	// group is then decided by the object's privileges (internal/groups/privs),
+	// checked in the handler. groups.admin is tenant-wide administration (engine
+	// and history maintenance, privilege settings, identity links): tenant_admin.
+	PermGroupsRead  Permission = "groups.read"
+	PermGroupsWrite Permission = "groups.write"
 	PermGroupsAdmin Permission = "groups.admin"
 )
 
@@ -82,16 +87,16 @@ const (
 // tenant_admin deliberately has no data-plane write permission: admins run
 // the platform, policy admins change access (separation of duties).
 var rolePermissions = map[Role][]Permission{
-	RoleViewer: {PermGraphRead},
+	RoleViewer: {PermGraphRead, PermGroupsRead},
 	RoleOperator: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
-		PermReviewsDecide, PermHRISSimulateEvent},
-	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead},
+		PermReviewsDecide, PermHRISSimulateEvent, PermGroupsRead, PermGroupsWrite},
+	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead, PermGroupsRead},
 	RolePolicyAdmin: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
 		PermReviewsDecide, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
-		PermIdentitiesCorrelate, PermIdentitiesMerge, PermIdentitiesContain},
+		PermIdentitiesCorrelate, PermIdentitiesMerge, PermIdentitiesContain, PermGroupsRead, PermGroupsWrite},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
-		PermConnectionsActivate, PermGroupsAdmin},
+		PermConnectionsActivate, PermGroupsAdmin, PermGroupsRead, PermGroupsWrite},
 	RoleBreakGlass: {PermAdminRead, PermBreakGlassRecover},
 }
 
@@ -172,10 +177,10 @@ const (
 )
 
 var scopePermissions = map[Scope][]Permission{
-	ScopeRead: {PermGraphRead, PermConnectionsRead},
+	ScopeRead: {PermGraphRead, PermConnectionsRead, PermGroupsRead},
 	ScopeWrite: {PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage, PermReviewsDecide,
 		PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
-		PermConnectionsManage, PermConnectionsActivate, PermGroupsAdmin},
+		PermConnectionsManage, PermConnectionsActivate, PermGroupsAdmin, PermGroupsWrite},
 	ScopeAudit: {PermAuditRead, PermAuditVerify},
 	ScopeAdmin: {PermAdminRead, PermAdminChangeReq, PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev,
 		PermBreakGlassRecover},
@@ -235,6 +240,10 @@ const (
 // ActivationSettings are the tenant settings that move role floors (§18.3).
 type ActivationSettings struct {
 	RequirePhrForAll bool // require_phr_for_all: raises the floor of every role to phr
+	// GroupsViewerCanView (groups_viewer_can_view) lets the viewer role see
+	// every native folder and group, Grouper's view-only admin (issue #47). Off
+	// by default; unreadable settings leave it off.
+	GroupsViewerCanView bool
 }
 
 // TenantSettings reads the activation settings from a tenant's settings
@@ -253,6 +262,11 @@ func TenantSettings(raw string) ActivationSettings {
 	var s ActivationSettings
 	if b, ok := v["require_phr_for_all"]; ok {
 		if err := json.Unmarshal(b, &s.RequirePhrForAll); err != nil {
+			return strict
+		}
+	}
+	if b, ok := v["groups_viewer_can_view"]; ok {
+		if err := json.Unmarshal(b, &s.GroupsViewerCanView); err != nil {
 			return strict
 		}
 	}

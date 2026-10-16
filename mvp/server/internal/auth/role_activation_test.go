@@ -190,11 +190,11 @@ func TestStepUpChallenge(t *testing.T) {
 // TestRolePermissionsMatchDesign pins the §12.1 table.
 func TestRolePermissionsMatchDesign(t *testing.T) {
 	want := map[auth.Role]string{
-		auth.RoleViewer:      "graph.read",
-		auth.RoleOperator:    "graph.read jit.request jit.decide jit.deny_revoke reviews.manage reviews.decide hris.simulate_event",
-		auth.RoleAuditor:     "graph.read audit.read audit.verify admin.read connections.read",
-		auth.RolePolicyAdmin: "graph.read jit.request jit.decide jit.deny_revoke reviews.manage reviews.decide hris.simulate_event grants.revoke hris.execute jit.sweep connectors.sync identities.correlate identities.merge identities.contain",
-		auth.RoleTenantAdmin: "graph.read audit.read audit.verify admin.read admin.change.request admin.change.approve admin.users.disable admin.sessions.revoke connections.read connections.manage connections.activate groups.admin",
+		auth.RoleViewer:      "graph.read groups.read",
+		auth.RoleOperator:    "graph.read jit.request jit.decide jit.deny_revoke reviews.manage reviews.decide hris.simulate_event groups.read groups.write",
+		auth.RoleAuditor:     "graph.read audit.read audit.verify admin.read connections.read groups.read",
+		auth.RolePolicyAdmin: "graph.read jit.request jit.decide jit.deny_revoke reviews.manage reviews.decide hris.simulate_event grants.revoke hris.execute jit.sweep connectors.sync identities.correlate identities.merge identities.contain groups.read groups.write",
+		auth.RoleTenantAdmin: "graph.read audit.read audit.verify admin.read admin.change.request admin.change.approve admin.users.disable admin.sessions.revoke connections.read connections.manage connections.activate groups.admin groups.read groups.write",
 		auth.RoleBreakGlass:  "admin.read breakglass.recover",
 	}
 	for r, w := range want {

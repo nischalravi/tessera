@@ -14,8 +14,10 @@ import (
 )
 
 // Group change events and point-in-time history (issue #46, GR-3; design
-// docs/design/groups-grouper-parity.md §10.1, §10.2). Every route needs
-// groups.admin, which only tenant_admin holds until GR-4.
+// docs/design/groups-grouper-parity.md §10.1, §10.2). The three pit routes are
+// tenant-wide history maintenance and need groups.admin (tenant_admin); a
+// point-in-time members read goes through the members route and needs the
+// group's read privilege (groups_members.go).
 //
 //	GET  /api/groups/{id}/members?as_of=T[&filter=effective|direct]       members at an instant
 //	GET  /api/groups/{id}/members?between=T1,T2[&filter=effective|direct]  members at any time in the window

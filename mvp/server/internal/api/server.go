@@ -183,6 +183,7 @@ func New(cfg Config) *Server {
 	s.registerCorrelationRoutes()
 	s.registerContainmentRoutes()
 	s.registerGroupsFolderRoutes()
+	s.registerGroupsPrivilegeRoutes()
 	s.registerGroupsMemberRoutes()
 	s.registerGroupsHistoryRoutes()
 	s.registerReadinessRoutes()

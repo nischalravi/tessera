@@ -144,7 +144,8 @@ func (a *Authenticator) Authenticate(r *http.Request) (*Principal, string, error
 		authn := ContextFromRecord(rec)
 		assigned := AssignedRoles(as, now)
 		// the floors of the session's own tenant (§18.3), read with the session
-		active, inactive := ActivateRoles(assigned, &authn, TenantSettings(tenant.Settings), now)
+		settings := TenantSettings(tenant.Settings)
+		active, inactive := ActivateRoles(assigned, &authn, settings, now)
 		uid, sessID := u.ID, s.ID
 		display := u.DisplayName
 		if u.Email != nil && *u.Email != "" {
@@ -152,7 +153,7 @@ func (a *Authenticator) Authenticate(r *http.Request) (*Principal, string, error
 		}
 		p = &Principal{Kind: KindUser, TenantID: tid, UserID: &uid, Display: display, SessionID: &sessID,
 			Authn: &authn, AssignedRoles: assigned, ActiveRoles: active, InactiveRoles: inactive, Via: ViaCookie,
-			session: s}
+			IdentityID: u.IdentityID, GroupsViewerView: settings.GroupsViewerCanView, session: s}
 		if s.CSRFSecret != nil {
 			p.csrfSecret = *s.CSRFSecret
 		}

@@ -96,6 +96,8 @@ var tables = []string{
 	// group events and point-in-time history (schema/0282_group_events.sql)
 	"grp_event_heads", "grp_events", "grp_event_cursors", "grp_pit_objects", "grp_pit_direct", "grp_pit_effective",
 	"grp_pit_privileges", "grp_pit_digests",
+	// group privileges (schema/0285_group_privs.sql)
+	"grp_privileges", "grp_priv_settings",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was
