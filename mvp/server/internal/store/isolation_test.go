@@ -673,11 +673,14 @@ func TestIsolation_EveryRepoMethodClassified(t *testing.T) {
 		"Audit": true,
 		// RevokedGrants has its own test: the shared fixture holds no tombstones.
 		"RevokedGrants": true,
+		// Sealed connection credentials: TestIsolation_ConnectionSecrets.
+		"PutConnectionSecret": true, "ConnectionSecret": true,
 		// HasPendingRequest has its own test (TestIsolation_PendingRequestUniquePerTenant).
 		"HasPendingRequest": true,
 	}
 	for _, m := range []map[string]bool{keys(listCases), keys(getCases), keys(naturalKeyGets), keys(countCases),
-		keys(mutations), keys(insertCases), readinessCovered(), keysCovered(), auditCovered(), authCovered(), correlationCovered(), containmentCovered(), groupsCovered()} {
+		keys(mutations), keys(insertCases), readinessCovered(), keysCovered(), auditCovered(), authCovered(), correlationCovered(), identityModelCovered(), containmentCovered(), groupsCovered(),
+		approvalsCovered(), lifecycleCovered(), notificationsCovered(), requestsCovered(), rolesCovered(), abacCovered(), sponsorshipsCovered(), adminCovered()} {
 		for k := range m {
 			covered[strings.SplitN(k, "/", 2)[0]] = true
 		}

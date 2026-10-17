@@ -80,14 +80,37 @@ var tables = []string{
 	"login_transactions",
 	// operator bootstrap (schema/0006_admin.sql)
 	"bootstrap_invitations",
+	// admin changes, admin notifications, operator recovery (schema/0008_admin_changes.sql)
+	"tenant_recoveries", "admin_change_requests", "admin_notifications",
 	// audit ledger (schema/0004_audit.sql)
 	"audit_events", "audit_chain_heads", "audit_checkpoints",
 	// deployment readiness (schema/0201-0203; revoked_grants is 0204)
 	"connections", "connection_revisions", "readiness_check_runs", "readiness_item_states", "readiness_attestations",
 	"readiness_skips", "readiness_overlays", "readiness_check_results", "recon_runs", "recon_findings", "readiness_scores",
 	"stg_identities", "stg_accounts", "stg_groups", "stg_memberships", "stg_attr_stats",
+	// sealed connection credentials (schema/0205)
+	"connection_secrets",
 	// account correlation (schema/0204_correlation.sql)
 	"account_links", "identity_merges",
+	// identity model for guests (schema/0226_identity_model.sql)
+	"guest_populations", "identity_source_records", "identity_identifiers", "affiliations",
+	// access requests (schema/0205_requests.sql)
+	"catalog_items", "access_request_lines", "access_request_events",
+	// business roles (schema/0206_business_roles.sql)
+	"business_roles", "business_role_entitlements", "business_role_versions", "business_role_members",
+	"business_role_requests",
+	// attribute conditions (schema/0221_abac.sql)
+	"abac_policies", "abac_policy_versions", "abac_bindings",
+	// identity lifecycle (schema/0220_lifecycle.sql)
+	"identity_lifecycle", "identity_lifecycle_events",
+	// approval routing (schema/0206_approvals.sql)
+	"approval_policies", "access_request_stages", "approval_delegations",
+	// notifications (schema/0223_notifications.sql)
+	"notifications", "notification_prefs",
+	// email delivery log (schema/0224_email_messages.sql)
+	"email_messages",
+	// sponsorships and invitations (schema/0227_sponsorships.sql)
+	"intake_records", "sponsorships", "sponsorship_events",
 	// identity containment (schema/0205_containment.sql)
 	"containment_credentials", "containment_retries",
 	// native groups (schema/0280_groups.sql); the engine tables stay empty until GR-2
