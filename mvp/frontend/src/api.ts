@@ -10,12 +10,51 @@ import { useCallback, useEffect, useState } from "react";
 const cache = new Map<string, unknown>();
 const CHANGED = "tessera:api-changed";
 
-/** An API error with its status and parsed body (gate reports carry `blocking`). */
+/** What went wrong, in the terms a screen cares about (components/errorCopy.ts words each one). */
+export type ErrorKind = "network" | "not_found" | "validation" | "forbidden" | "conflict" | "server";
+
+/** The kind for an HTTP status; 0 means the request never got an answer. */
+export function errorKind(status: number): ErrorKind {
+  if (status === 0) return "network";
+  if (status === 404) return "not_found";
+  if (status === 401 || status === 403) return "forbidden";
+  if (status === 409) return "conflict";
+  if (status === 408 || status === 429 || status >= 500) return "server";
+  return "validation"; // 400, 413, 422 and any other 4xx: the request itself was wrong
+}
+
+/**
+ * The error code and a plain message from an error body. The API answers `{"detail": "text"}`,
+ * `{"error": "code", "detail": "text"}` or, for request validation, `{"detail": [ ...items ]}`
+ * (a list is never a message: it is dropped here so raw JSON cannot reach the screen).
+ */
+export function parseErrorBody(body: any): { code: string | null; message: string | null } {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return { code: null, message: null };
+  const code = typeof body.error === "string" ? body.error : typeof body.code === "string" ? body.code : null;
+  const message = typeof body.detail === "string" ? body.detail : typeof body.message === "string" ? body.message : null;
+  return { code, message };
+}
+
+/**
+ * An API error: HTTP status (0 for a network failure), the server's error `code` and `message`
+ * from its JSON body, a `kind`, and the parsed body (gate reports carry `blocking`).
+ */
 export class ApiError extends Error {
+  readonly kind: ErrorKind;
+  readonly code: string | null;
+  readonly serverMessage: string | null;
   constructor(message: string, readonly status: number, readonly body: any) {
     super(message);
+    this.kind = errorKind(status);
+    ({ code: this.code, message: this.serverMessage } = parseErrorBody(body));
   }
 }
+
+/** True for an id that is a positive integer, the shape the API's numeric routes accept. */
+export const isNumericId = (id: string | undefined): id is string => !!id && /^[1-9][0-9]{0,15}$/.test(id);
+
+/** A validation error raised in the browser, before any request, for a link with a bad id. */
+export const invalidLink = () => new ApiError("That link isn't valid.", 400, null);
 
 /** A 429 from the per-IP sign-in limit: retry after retryAfter seconds. */
 export class RateLimitedError extends ApiError {
@@ -100,6 +139,7 @@ function errorMessage(status: number, j: any): string {
       return `${j.blocking?.length ?? 0} item(s) block this step`;
   }
   if (typeof j?.detail === "string") return j.detail;
+  if (Array.isArray(j?.detail) || status === 422) return "That request wasn't valid. Check the values and try again.";
   return j ? JSON.stringify(j.detail ?? j) : `${status}`;
 }
 
@@ -109,12 +149,17 @@ export async function api<T = any>(path: string, body?: unknown, method?: string
   if (body !== undefined) headers["content-type"] = "application/json";
   if (m !== "GET" && m !== "HEAD" && csrfToken) headers["x-tessera-csrf"] = csrfToken;
   const epoch = sessionEpoch;
-  const res = await fetch(`/api${path}`, {
-    method: m,
-    headers,
-    credentials: "same-origin",
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  let res: Response;
+  try {
+    res = await fetch(`/api${path}`, {
+      method: m,
+      headers,
+      credentials: "same-origin",
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    throw new ApiError("Tessera can't reach its API right now.", 0, null);
+  }
   if (!res.ok) {
     let j: any = null;
     try {
@@ -217,7 +262,7 @@ export const notifyChanged = () => window.dispatchEvent(new Event(CHANGED));
 
 export function useApi<T = any>(path: string | null) {
   const [data, setData] = useState<T | null>(() => (path ? (cached<T>(path) ?? null) : null));
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(false);
   const load = useCallback(() => {
     if (!path) return;
@@ -229,7 +274,7 @@ export function useApi<T = any>(path: string | null) {
         setData(d);
         setError(null);
       })
-      .catch((e) => alive && setError(String(e.message ?? e)))
+      .catch((e) => alive && setError(e instanceof ApiError ? e : new ApiError(String(e?.message ?? e), 0, null)))
       .finally(() => alive && setLoading(false));
     return () => {
       alive = false;
@@ -246,6 +291,9 @@ export function useApi<T = any>(path: string | null) {
   }, [load]);
   return { data, error, loading, reload: load };
 }
+
+/** Ask every mounted `useApi` to fetch again (the default Retry of an error panel). */
+export const refetchAll = () => window.dispatchEvent(new Event(CHANGED));
 
 // ------------------------------------------------------------------ types
 export type IdentityType = "human" | "service" | "ai_agent";
