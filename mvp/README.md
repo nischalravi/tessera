@@ -667,6 +667,12 @@ cd ../frontend && npm run build && npm test   # npm test: node:test, no extra de
   (FastAPI) backend with `record_python.py` on a frozen clock (2026-10-08T09:30:00 UTC) before it
   was removed; check out commit `aba5abb` to re-run the recorder against it. Only two values are
   normalised, both non-deterministic in Python itself (see `testdata/parity/README.md`).
+* **CI diagnostics.** `scripts/ci-diagnostics.sh` runs the CI and security-scan gates locally,
+  one log per step, into `logs/ci-<timestamp>/SUMMARY.md` (git-ignored). `--quick` skips the
+  race suite, `--only go,frontend,…` picks steps, and `--pr <n>` (with `gh` signed in) also saves
+  GitHub's runs, jobs, runners, annotations and job logs for that PR. It also checks that every
+  action version the workflows pin exists. Use it when CI is red: if every local step passes and
+  the jobs show `runner_id=0` with no steps, they never ran (see the annotations, usually billing).
 * **Security scanners:** gosec reports 0 issues; each of the few `#nosec` annotations carries a
   justification. govulncheck reports no vulnerabilities.
 
