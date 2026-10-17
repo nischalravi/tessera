@@ -104,7 +104,7 @@ server/
   testdata/parity/      golden request/response fixtures recorded from the original Python API
   tools/benchcmp/       end-to-end benchmark (seed, startup, p50/p95, RSS; optionally vs Python)
   scripts/install-tools.sh  pinned govulncheck + gosec
-frontend/               React 18 + Vite + TypeScript, react-router, cytoscape.js, lucide-react
+frontend/               React 19 + Vite 8 + TypeScript, react-router, cytoscape.js, lucide-react
   src/
     api.ts              the single API client (typed responses, cached useApi hook)
     app/                shell (top bar + left rail), routes, nav model, command palette, global search, theme, persona
