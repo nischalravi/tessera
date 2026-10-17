@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
+	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -321,6 +322,9 @@ func Decide(c *store.TenantTx, now time.Time, itemID int64, decision string, by 
 	}
 	if open == 0 {
 		if err := c.CompleteCampaign(item.CampaignID); err != nil {
+			return nil, err
+		}
+		if err := notify.ReviewClosed(c, now, item.CampaignID); err != nil {
 			return nil, err
 		}
 	}

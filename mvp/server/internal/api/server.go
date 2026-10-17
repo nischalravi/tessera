@@ -24,11 +24,15 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oidcrp"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/sponsorship"
+	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
+	"github.com/nischalravi/tessera/mvp/server/internal/lifecycle"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
+	"github.com/nischalravi/tessera/mvp/server/internal/requests"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
@@ -97,6 +101,12 @@ type Config struct {
 	// TrustedProxies (TESSERA_TRUSTED_PROXIES) are the peers whose
 	// X-Forwarded-For the rate limiter believes.
 	TrustedProxies []netip.Prefix
+	// EmailMode is the email delivery (config.MailOff, MailDev or MailSMTP):
+	// the preferences page says whether the email channels do anything.
+	EmailMode string
+	// Identifiers hashes the identifiers of invited guests under per-tenant
+	// keys derived from the KEK. Nil: invitations answer 503.
+	Identifiers *identifiers.Keyer
 	// Containment runs the kill switch's provider calls (revoke sessions and
 	// grants). Nil: a service with no outbound client, so every containment
 	// step is a manual task.
@@ -115,6 +125,7 @@ type Server struct {
 	routes []*route
 	authn  *auth.Authenticator
 	limits *limiters
+	guests *sponsorship.Service
 	rp     *oidcrp.RP
 	oauth2 *oauth2rp.RP
 
@@ -159,6 +170,7 @@ func New(cfg Config) *Server {
 	}
 	s := &Server{cfg: cfg, containment: cfg.Containment, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
 		limits: newLimiters(cfg.RateLimits)}
+	s.guests = sponsorship.New(cfg.Identifiers)
 	if cfg.OutboundHTTP != nil {
 		rp, err := oidcrp.New(oidcrp.Config{HTTP: cfg.OutboundHTTP, Now: func() time.Time { return s.clock() }})
 		if err != nil {
@@ -174,6 +186,13 @@ func New(cfg Config) *Server {
 	s.registerRoutes()
 	s.registerAuditRoutes()
 	s.registerCorrelationRoutes()
+	s.registerAffiliationRoutes()
+	s.registerRequestRoutes()
+	s.registerRoleRoutes()
+	s.registerLifecycleRoutes()
+	s.registerGuestRoutes()
+	s.registerNotificationRoutes()
+	s.registerEmailRoutes()
 	s.registerContainmentRoutes()
 	s.registerGroupsFolderRoutes()
 	s.registerReadinessRoutes()
@@ -239,7 +258,8 @@ func (s *Server) timeouts(stream, timed http.Handler) http.Handler {
 	})
 }
 
-// RunSweeper expires JIT grants of every active tenant, each in its own
+// RunSweeper expires JIT grants, closes due request lines and ends due
+// lifecycle terms (warnings first) of every active tenant, each in its own
 // tenant transaction, every interval until ctx is done. A failure in one
 // tenant is logged and does not stop the others.
 func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
@@ -249,6 +269,16 @@ func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
 	for {
 		if _, err := jit.SweepAll(ctx, s.store, s.clock()); err != nil && ctx.Err() == nil {
 			s.log.Error("jit sweep failed", "err", err)
+		}
+		if err := requests.SweepAll(audit.WithSystemActor(ctx, requests.Sweeper), s.store, s.clock()); err != nil && ctx.Err() == nil {
+			s.log.Error("request sweep failed", "err", err)
+		}
+		// sponsorships first: the last one to end ends the person, the lifecycle sweep then has nothing left
+		if err := s.guests.SweepAll(audit.WithSystemActor(ctx, sponsorship.Sweeper), s.store, s.clock()); err != nil && ctx.Err() == nil {
+			s.log.Error("sponsorship sweep failed", "err", err)
+		}
+		if err := lifecycle.SweepAll(audit.WithSystemActor(ctx, lifecycle.Sweeper), s.store, s.clock()); err != nil && ctx.Err() == nil {
+			s.log.Error("lifecycle sweep failed", "err", err)
 		}
 		if err := s.containment.SweepRetries(audit.WithSystemActor(ctx, "containment.sweeper"), s.store, "containment.sweeper"); err != nil && ctx.Err() == nil {
 			s.log.Error("containment retry sweep failed", "err", err)
@@ -261,24 +291,38 @@ func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
 	}
 }
 
-// sweepTenant expires one tenant's JIT grants, taking the write lock only
-// when there is work. The jit.expire events name the sweeper, not the
-// principal whose read happened to trigger the sweep.
+// sweepTenant expires one tenant's JIT grants and closes its due request
+// lines (requests.Sweep), taking the write lock only when there is work. The
+// events name the sweepers, not the principal whose read happened to trigger
+// the sweep.
 func (s *Server) sweepTenant(ctx context.Context, t tenancy.ID) error {
-	ctx = audit.AsSystem(ctx, "jit.sweeper")
 	now := s.clock()
-	var need bool
+	var needJIT, needReq bool
 	if err := s.store.ReadTenant(ctx, t, func(tx *store.TenantTx) error {
 		var err error
-		need, err = jit.NeedsSweep(tx, now)
+		if needJIT, err = jit.NeedsSweep(tx, now); err != nil {
+			return err
+		}
+		needReq, err = requests.NeedsSweep(tx, now)
 		return err
-	}); err != nil || !need {
+	}); err != nil {
 		return err
 	}
-	return s.store.InTenant(ctx, t, func(tx *store.TenantTx) error {
-		_, err := jit.Sweep(tx, now)
-		return err
-	})
+	if needJIT {
+		if err := s.store.InTenant(audit.AsSystem(ctx, "jit.sweeper"), t, func(tx *store.TenantTx) error {
+			_, err := jit.Sweep(tx, now)
+			return err
+		}); err != nil {
+			return err
+		}
+	}
+	if needReq {
+		return s.store.InTenant(audit.AsSystem(ctx, requests.Sweeper), t, func(tx *store.TenantTx) error {
+			_, err := requests.Sweep(tx, now)
+			return err
+		})
+	}
+	return nil
 }
 
 func (s *Server) policies() ([]*policy.Policy, error) { return s.cfg.Policies.Load() }

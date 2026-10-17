@@ -88,6 +88,23 @@ var tables = []string{
 	"stg_identities", "stg_accounts", "stg_groups", "stg_memberships", "stg_attr_stats",
 	// account correlation (schema/0204_correlation.sql)
 	"account_links", "identity_merges",
+	// identity model for guests (schema/0226_identity_model.sql)
+	"guest_populations", "identity_source_records", "identity_identifiers", "affiliations",
+	// access requests (schema/0205_requests.sql)
+	"catalog_items", "access_request_lines", "access_request_events",
+	// business roles (schema/0206_business_roles.sql)
+	"business_roles", "business_role_entitlements", "business_role_versions", "business_role_members",
+	"business_role_requests",
+	// identity lifecycle (schema/0220_lifecycle.sql)
+	"identity_lifecycle", "identity_lifecycle_events",
+	// approval routing (schema/0206_approvals.sql)
+	"approval_policies", "access_request_stages", "approval_delegations",
+	// notifications (schema/0223_notifications.sql)
+	"notifications", "notification_prefs",
+	// email delivery log (schema/0224_email_messages.sql)
+	"email_messages",
+	// sponsorships and invitations (schema/0227_sponsorships.sql)
+	"intake_records", "sponsorships", "sponsorship_events",
 	// identity containment (schema/0205_containment.sql)
 	"containment_credentials", "containment_retries",
 	// native groups (schema/0280_groups.sql); the engine tables stay empty until GR-2

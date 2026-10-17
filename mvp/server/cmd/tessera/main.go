@@ -6,6 +6,7 @@
 //	                                    (run.sh reseeds a database from before sign-in)
 //	tessera readiness lint [-dir path]   lint the readiness checklist templates
 //	tessera audit verify|checkpoint|export   verify, checkpoint or export the audit ledger (see audit.go)
+//	tessera notify seal-password             seal an SMTP password (stdin) for TESSERA_SMTP_PASSWORD_SEALED
 //	tessera admin create-tenant|add-idp|invite-admin   operator bootstrap of a tenant (see admin.go)
 //
 // Environment:
@@ -27,6 +28,10 @@
 //	                      IdP); prod refuses to start with any dev setting (§18.4).
 //	TESSERA_DEV_IDP_URL   the dev IdP's issuer: seeding (dev and test) creates a
 //	                      dev_mock connection to it with the bootstrap users
+//	TESSERA_NOTIFY_EMAIL  off, dev (the dev sink, never in prod) or smtp; default smtp when TESSERA_SMTP_HOST is set,
+//	                      else dev outside prod and off in prod. TESSERA_SMTP_HOST/_PORT/_USERNAME/_FROM/_TLS and
+//	                      TESSERA_SMTP_PASSWORD_SEALED configure the relay; TESSERA_NOTIFY_MAX_ATTEMPTS and
+//	                      TESSERA_NOTIFY_DIGEST_HOUR tune the dispatcher (see internal/config)
 //	DEVIDP_CLIENT_SECRET  the dev IdP client's secret, sealed into those connections
 //	                      (default tessera-dev-secret, as cmd/tessera-devidp)
 //	TESSERA_DEV_IDP_SAML_CERT  the dev IdP's SAML signing certificate (PEM, from
@@ -59,7 +64,9 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
+	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
+	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
@@ -97,6 +104,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	}
 	if cmd == "audit" {
 		return auditCmd(ctx, args, stdout, stderr)
+	}
+	if cmd == "notify" {
+		return notifyCmd(ctx, args, stdout, stderr)
 	}
 	if cmd == "admin" {
 		return adminCmd(ctx, args, stdout, stderr)
@@ -223,6 +233,10 @@ func seedDB(ctx context.Context, path string, cfg *config.Config, clock timeutil
 		tenants = seed.WithDevIdPClient(tenants, cfg.DevIdPURL, seed.DevIdPClient{Sealer: sealer, Secret: secret,
 			SAMLCert: strings.TrimSpace(os.Getenv("TESSERA_DEV_IDP_SAML_CERT")), GitHub: true})
 	}
+	keyer := identifiers.NewKeyer(sealer)
+	for i := range tenants {
+		tenants[i].Identifiers = keyer
+	}
 	stats, err := seed.Run(ctx, st, now, pols, tenants)
 	if err != nil {
 		return err
@@ -262,7 +276,8 @@ const (
 	idleTimeout       = 60 * time.Second
 	shutdownTimeout   = 10 * time.Second
 	sweepInterval     = 30 * time.Second
-	keysInterval      = 24 * time.Hour // keys.EnsureAll: rotation runs daily (design §10.6)
+	notifyInterval    = 15 * time.Second // the notification dispatcher (issue #189)
+	keysInterval      = 24 * time.Hour   // keys.EnsureAll: rotation runs daily (design §10.6)
 	// checkpointInterval is how often the checkpointer looks for due tenants
 	// (each is checkpointed every TESSERA_AUDIT_CHECKPOINT_SECONDS or
 	// _EVENTS new events, design §13.6).
@@ -318,7 +333,13 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound,
 		Containment:    &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock},
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
-		HSTS: cfg.IsProd(), Env: cfg.Env, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, AuditAnchor: anchorURL})
+		HSTS: cfg.IsProd(), Env: cfg.Env, Identifiers: identifiers.NewKeyer(sealer), EmailMode: cfg.Mail.Mode, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, AuditAnchor: anchorURL})
+	sender, err := notify.NewSender(cfg.Mail, cfg.Env, cfg.OutboundAllowLoopback, sealer, config.DevMailPath(o.db), logger)
+	if err != nil {
+		return err
+	}
+	dispatcher := &notify.Dispatcher{DB: st, Sender: sender, Clock: clock, Log: logger, MaxAttempts: cfg.NotifyMaxAttempts,
+		DigestHour: cfg.NotifyDigestHour, BaseURL: cfg.PublicURL}
 	checkpointer := &audit.Checkpointer{DB: st, Sealer: sealer, Sink: sink, Clock: timeutil.System, Issuer: cfg.PublicURL,
 		Every: time.Duration(cfg.AuditCheckpointSeconds) * time.Second, EveryEvents: int64(cfg.AuditCheckpointEvents),
 		Log: logger}
@@ -351,6 +372,11 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		defer close(ckptDone)
 		checkpointer.Loop(ctx, checkpointInterval)
 	}()
+	notifyDone := make(chan struct{})
+	go func() {
+		defer close(notifyDone)
+		dispatcher.Loop(ctx, notifyInterval)
+	}()
 	errc := make(chan error, 1)
 	go func() { errc <- httpSrv.Serve(ln) }()
 	logger.Info("tessera API listening", "addr", ln.Addr().String())
@@ -361,6 +387,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		<-sweepDone
 		<-keysDone
 		<-ckptDone
+		<-notifyDone
 		return err
 	case <-ctx.Done():
 	}
@@ -371,6 +398,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	<-sweepDone
 	<-keysDone
 	<-ckptDone
+	<-notifyDone
 	if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 		return serveErr
 	}
