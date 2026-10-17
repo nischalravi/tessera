@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 )
 
 // maxAttempts is how often a call is tried when the provider answers 429.
@@ -50,7 +52,9 @@ func newAPI(hc *http.Client, baseURL, def, scheme, token string, sleep sleepFunc
 	if sleep == nil {
 		sleep = sleepCtx
 	}
-	return &api{hc: hc, base: u, auth: scheme + " " + token, sleep: sleep}, nil
+	// the connection's base_url may name its own port (safehttp allows only
+	// 443 and 8443 otherwise)
+	return &api{hc: safehttp.WithConfiguredPorts(hc, u.String()), base: u, auth: scheme + " " + token, sleep: sleep}, nil
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) error {

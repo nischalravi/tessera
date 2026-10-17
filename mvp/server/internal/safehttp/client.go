@@ -14,16 +14,29 @@
 //     the 169.254.169.254 metadata address), CGNAT, multicast, reserved,
 //     documentation and translation ranges, IPv4-mapped and -compatible
 //     forms of all of these, and the Azure wire server 168.63.129.16.
-//   - Redirects are re-checked hop by hop (scheme, address) and may not leave
-//     the original host (scheme://host:port) unless the host is explicitly
-//     allowed. At most 3 redirects.
+//   - Destination ports: 443 and 8443 only, unless the connection's own
+//     configuration names the port in its URL (WithConfiguredPorts; that
+//     host and port only). The dev loopback exception (127.0.0.1, [::1])
+//     allows any port, so the dev IdP on :8001 keeps working.
+//   - Host names that are numeric (2130706433, 0177.0.0.1, 0x7f.1: forms a
+//     resolver may read as an IPv4 address) and IPv6 literals with a zone
+//     are refused before any lookup.
+//   - Redirects are re-checked hop by hop (scheme, port, address) and may not
+//     leave the original host (scheme://host:port) unless the host is
+//     explicitly allowed, and then only to an allowed port. At most 3
+//     redirects.
 //   - 5 s total timeout and a 512 KiB response body limit (after
 //     decompression) by default. Proxies from the environment are ignored.
+//
+// ForConfig is the only constructor for production code: Env and the
+// loopback exception come from a validated *config.Config, never from a call
+// site. Tests use NewForTest, which refuses to run outside a test binary
+// (and internal/archtest bans it from non-test files).
 //
 // Not yet wired: the readiness connectors (internal/connectors,
 // internal/readiness) only simulate their systems today; when a connector
 // makes real calls to a customer-configured endpoint, its *http.Client must
-// come from New. go-oidc and x/oauth2 take this client through
+// come from ForConfig. go-oidc and x/oauth2 take this client through
 // oidc.ClientContext and oauth2.HTTPClient (PR6).
 package safehttp
 
@@ -39,8 +52,10 @@ import (
 	"net/netip"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
+	"testing"
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
@@ -64,41 +79,124 @@ var (
 	ErrRedirect = errors.New("safehttp: redirect not allowed")
 	// ErrTooLarge: the response body exceeds the limit.
 	ErrTooLarge = errors.New("safehttp: response body too large")
+	// ErrPort: the destination port is not allowed.
+	ErrPort = errors.New("safehttp: destination port not allowed")
 )
+
+// defaultAllowedPorts are the destination ports allowed without a
+// configured URL naming another one.
+func defaultAllowedPorts() []int { return []int{443, 8443} }
 
 // Resolver looks up a host's addresses. *net.Resolver implements it.
 type Resolver interface {
 	LookupNetIP(ctx context.Context, network, host string) ([]netip.Addr, error)
 }
 
-// Options configure a client. The zero value except Env is a production
-// client with the defaults.
+// Options configure a test client (NewForTest). The zero value except Env
+// is a production client with the defaults. Production clients come only
+// from ForConfig.
 type Options struct {
 	// Env is config.Dev or config.Prod. It is required: the loopback
 	// exception and plain http exist only in dev.
 	Env string
 	// AllowLoopback lets the client reach 127.0.0.1 and ::1 (and use plain
-	// http to them). Dev only; New refuses it otherwise.
+	// http to them, on any port). Dev only; refused otherwise.
 	AllowLoopback bool
 	// AllowedRedirectHosts are extra host names redirects may go to
-	// (exact, case-insensitive). The address checks still apply.
+	// (exact, case-insensitive). The port and address checks still apply.
 	AllowedRedirectHosts []string
-	Timeout              time.Duration // total per request, including redirects and the body
-	MaxBodyBytes         int64
-	MaxRedirects         int
+	// AllowedPorts replaces the default destination ports (443, 8443).
+	AllowedPorts []int
+	Timeout      time.Duration // total per request, including redirects and the body
+	MaxBodyBytes int64
+	MaxRedirects int
 	// RootCAs replaces the system roots (a private CA, or a test server).
 	RootCAs *x509.CertPool
 	// Resolver replaces DNS resolution (custom DNS, tests).
 	Resolver Resolver
 }
 
-// ForConfig returns the client for the running configuration.
+// ForConfig returns the client for the running configuration, the only
+// constructor production code may use. The environment and the loopback
+// exception are the ones config.Load validated (config.Config.Outbound): a
+// hand-built Config is refused, and editing a loaded Config's fields has no
+// effect. A TESSERA_ENV=test server gets the production client (no loopback
+// exception).
 func ForConfig(c *config.Config) (*http.Client, error) {
-	return New(Options{Env: c.Env, AllowLoopback: c.OutboundAllowLoopback})
+	env, loopback, ok := c.Outbound()
+	if !ok {
+		return nil, errors.New("safehttp: ForConfig needs a configuration from config.Load")
+	}
+	o := Options{Env: config.Prod}
+	if env == config.Dev {
+		o = Options{Env: config.Dev, AllowLoopback: loopback}
+	}
+	return newClient(o)
 }
 
-// New returns an SSRF-guarded *http.Client.
-func New(o Options) (*http.Client, error) {
+// NewForTest returns a client with any Options, for tests only. It refuses
+// to run outside a test binary; internal/archtest bans it from non-test
+// files.
+func NewForTest(tb testing.TB, o Options) (*http.Client, error) {
+	if tb == nil || !testing.Testing() {
+		return nil, errors.New("safehttp: NewForTest is for tests only; use ForConfig")
+	}
+	tb.Helper()
+	return newClient(o)
+}
+
+// ports is a set of host|port pairs a connection's configuration names.
+type ports map[string]bool
+
+// portsKey carries a client's configured ports from the guard to the dialer.
+// It is unexported, so no caller can add ports through a context.
+type portsKey struct{}
+
+// WithConfiguredPorts returns a copy of c (a client from ForConfig) that
+// also allows the host and port of each configured URL naming a port
+// explicitly (for example an IdP issuer https://idp.example.com:9443). Only
+// that host gets the port: a redirect or a discovered endpoint on another
+// host still needs an allowed port. Callers pass URLs from the stored
+// connection configuration, never from a response. The copy shares c's
+// connection pool; c is unchanged. A client that is not a safehttp client is
+// returned as is.
+func WithConfiguredPorts(c *http.Client, urls ...string) *http.Client {
+	g, ok := c.Transport.(*guard)
+	if !ok {
+		return c
+	}
+	m := make(ports, len(g.ports)+len(urls))
+	for k := range g.ports {
+		m[k] = true
+	}
+	for _, s := range urls {
+		u, err := url.Parse(s)
+		if err != nil || u.Port() == "" || u.Hostname() == "" {
+			continue
+		}
+		m[hostPort(u.Hostname(), u.Port())] = true
+	}
+	return &http.Client{Transport: &guard{next: g.next, o: g.o, ports: m}, Timeout: c.Timeout,
+		CheckRedirect: checkRedirect(g.o, m), Jar: c.Jar}
+}
+
+func hostPort(host, port string) string { return strings.ToLower(host) + "|" + port }
+
+// portAllowed reports whether a request may connect to host:port.
+func portAllowed(o Options, configured ports, host, port string) bool {
+	p, err := strconv.Atoi(port)
+	if err != nil || p < 1 || p > 65535 {
+		return false
+	}
+	if o.AllowLoopback {
+		if a, err := netip.ParseAddr(host); err == nil && a.Zone() == "" && isDevLoopback(a) {
+			return true
+		}
+	}
+	return slices.Contains(o.AllowedPorts, p) || configured[hostPort(host, port)]
+}
+
+func newClient(o Options) (*http.Client, error) {
 	switch o.Env {
 	case config.Dev, config.Prod:
 	default:
@@ -106,6 +204,11 @@ func New(o Options) (*http.Client, error) {
 	}
 	if o.AllowLoopback && o.Env != config.Dev {
 		return nil, errors.New("safehttp: the loopback exception is only allowed with TESSERA_ENV=dev")
+	}
+	if len(o.AllowedPorts) == 0 {
+		o.AllowedPorts = defaultAllowedPorts()
+	} else {
+		o.AllowedPorts = slices.Clone(o.AllowedPorts)
 	}
 	if o.Timeout <= 0 {
 		o.Timeout = DefaultTimeout
@@ -141,7 +244,7 @@ func New(o Options) (*http.Client, error) {
 	return &http.Client{
 		Transport:     &guard{next: tr, o: o},
 		Timeout:       o.Timeout,
-		CheckRedirect: checkRedirect(o),
+		CheckRedirect: checkRedirect(o, nil),
 	}, nil
 }
 
@@ -152,7 +255,7 @@ type Response struct {
 	Body       []byte
 }
 
-// Get fetches rawURL with c (a client from New) and reads the whole body.
+// Get fetches rawURL with c (a client from ForConfig) and reads the whole body.
 func Get(ctx context.Context, c *http.Client, rawURL string) (*Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
@@ -175,16 +278,20 @@ func Get(ctx context.Context, c *http.Client, rawURL string) (*Response, error) 
 // guard checks every request the client sends (the first and each redirect)
 // and limits every response body.
 type guard struct {
-	next http.RoundTripper
-	o    Options
+	next  http.RoundTripper
+	o     Options
+	ports ports // WithConfiguredPorts
 }
 
 func (g *guard) RoundTrip(req *http.Request) (*http.Response, error) {
-	if err := checkURL(req.URL, g.o); err != nil {
+	if err := checkURL(req.URL, g.o, g.ports); err != nil {
 		if req.Body != nil {
 			_ = req.Body.Close()
 		}
 		return nil, err
+	}
+	if len(g.ports) > 0 { // for the dialer's own port check
+		req = req.WithContext(context.WithValue(req.Context(), portsKey{}, g.ports))
 	}
 	resp, err := g.next.RoundTrip(req)
 	if err != nil {
@@ -198,7 +305,7 @@ func (g *guard) RoundTrip(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
-func checkURL(u *url.URL, o Options) error {
+func checkURL(u *url.URL, o Options, configured ports) error {
 	scheme, host := strings.ToLower(u.Scheme), u.Hostname()
 	if scheme != "https" && scheme != "http" {
 		return fmt.Errorf("%w: %q", ErrScheme, u.Scheme)
@@ -209,18 +316,68 @@ func checkURL(u *url.URL, o Options) error {
 	if host == "" {
 		return fmt.Errorf("%w: no host", ErrURL)
 	}
+	if err := checkHost(host); err != nil {
+		return err
+	}
 	if scheme == "http" {
-		if o.Env == config.Dev && o.AllowLoopback {
-			if a, err := netip.ParseAddr(host); err == nil && isDevLoopback(a) {
-				return nil
-			}
+		a, err := netip.ParseAddr(host)
+		if !(o.Env == config.Dev && o.AllowLoopback && err == nil && isDevLoopback(a)) {
+			return fmt.Errorf("%w: http://%s (https only)", ErrScheme, host)
 		}
-		return fmt.Errorf("%w: http://%s (https only)", ErrScheme, host)
+	}
+	if p := port(u); !portAllowed(o, configured, host, p) {
+		return fmt.Errorf("%w: %s port %s", ErrPort, host, p)
 	}
 	return nil
 }
 
-func checkRedirect(o Options) func(*http.Request, []*http.Request) error {
+// checkHost refuses host forms that are not a plain DNS name or a canonical
+// IP literal: an IPv6 zone (scoped, never a public endpoint), and names whose
+// last label is numeric, which inet_aton-style resolvers read as IPv4
+// (2130706433 and 0177.0.0.1 are 127.0.0.1; 0x7f.1 too).
+func checkHost(host string) error {
+	if a, err := netip.ParseAddr(host); err == nil {
+		if a.Zone() != "" {
+			return fmt.Errorf("%w: %s has an IPv6 zone", ErrBlockedAddress, host)
+		}
+		return nil
+	}
+	if strings.ContainsAny(host, "%:[]") {
+		return fmt.Errorf("%w: invalid host %q", ErrURL, host)
+	}
+	labels := strings.Split(strings.TrimSuffix(host, "."), ".")
+	last := strings.ToLower(labels[len(labels)-1])
+	if numericLabel(last) {
+		return fmt.Errorf("%w: numeric host %q is not a canonical IP address", ErrURL, host)
+	}
+	return nil
+}
+
+func numericLabel(l string) bool {
+	if h, ok := strings.CutPrefix(l, "0x"); ok {
+		l = h
+		if l == "" {
+			return true
+		}
+		for _, c := range l {
+			if !strings.ContainsRune("0123456789abcdef", c) {
+				return false
+			}
+		}
+		return true
+	}
+	if l == "" {
+		return false
+	}
+	for _, c := range l {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func checkRedirect(o Options, configured ports) func(*http.Request, []*http.Request) error {
 	return func(req *http.Request, via []*http.Request) error {
 		if len(via) > o.MaxRedirects {
 			return fmt.Errorf("%w: more than %d redirects", ErrRedirect, o.MaxRedirects)
@@ -229,10 +386,18 @@ func checkRedirect(o Options) func(*http.Request, []*http.Request) error {
 		if strings.EqualFold(orig.Scheme, "https") && !strings.EqualFold(req.URL.Scheme, "https") {
 			return fmt.Errorf("%w: https downgraded to %s", ErrRedirect, req.URL.Scheme)
 		}
-		if sameOrigin(orig, req.URL) || slices.Contains(o.AllowedRedirectHosts, strings.ToLower(req.URL.Hostname())) {
+		if sameOrigin(orig, req.URL) {
 			return nil
 		}
-		return fmt.Errorf("%w: %s redirected to another host %s", ErrRedirect, orig.Host, req.URL.Host)
+		host := strings.ToLower(req.URL.Hostname())
+		if !slices.Contains(o.AllowedRedirectHosts, host) {
+			return fmt.Errorf("%w: %s redirected to another host %s", ErrRedirect, orig.Host, req.URL.Host)
+		}
+		// an allowed host is allowed on the allowed ports only
+		if p := port(req.URL); !portAllowed(o, configured, host, p) {
+			return fmt.Errorf("%w: %s redirected to %s on port %s", ErrRedirect, orig.Host, host, p)
+		}
+		return nil
 	}
 }
 
@@ -288,6 +453,15 @@ func (d *dialer) dial(ctx context.Context, network, address string) (net.Conn, e
 	if err != nil {
 		return nil, err
 	}
+	// the port and host form again, at the connection: a request that
+	// reached the transport without the guard cannot open a socket elsewhere
+	if err := checkHost(host); err != nil {
+		return nil, err
+	}
+	configured, _ := ctx.Value(portsKey{}).(ports)
+	if !portAllowed(d.o, configured, host, p) {
+		return nil, fmt.Errorf("%w: %s port %s", ErrPort, host, p)
+	}
 	var addrs []netip.Addr
 	if a, err := netip.ParseAddr(host); err == nil {
 		addrs = []netip.Addr{a}
@@ -323,6 +497,9 @@ func (d *dialer) control(_, address string, _ syscall.RawConn) error {
 }
 
 func (d *dialer) check(a netip.Addr) error {
+	if a.Zone() != "" { // a scoped (zoned) address is never a public endpoint
+		return fmt.Errorf("%w: %s has an IPv6 zone", ErrBlockedAddress, a)
+	}
 	a = a.Unmap()
 	if d.o.AllowLoopback && isDevLoopback(a) {
 		return nil
