@@ -7,7 +7,7 @@ import { Link, useNavigate } from "react-router-dom";
 import {
   Ban, ClipboardCheck, ExternalLink, Network, Pencil, RefreshCw, RotateCcw, Settings, ShieldAlert, ShieldCheck, ShoppingCart, Timer, UserCheck, UserRound,
 } from "lucide-react";
-import { AccountRow, ConnectorRow, Group, IdentityDetail, IdentityRow, ResourceRow, Violation, ago, api, fmtDay, invalidLink, isNumericId, relTime, useApi } from "../../api";
+import { AccountRow, ConnectorRow, Group, IdentityDetail, IdentityRow, ResourceRow, RolesView, Violation, ago, api, fmtDay, invalidLink, isNumericId, relTime, useApi } from "../../api";
 import { useIdentityActions } from "../../app/actions";
 import { usePersona } from "../../app/persona";
 import {

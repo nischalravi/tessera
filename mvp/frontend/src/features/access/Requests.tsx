@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Check, FileText, Pencil, Plus, Trash2, Undo2, X } from "lucide-react";
-import { RequestLine, RoleRequest, approveRequest, cancelRequest, denyRequest, fmtDate, relTime, removeRequest, roles as roleApi, useApi } from "../../api";
+import { ApiError, RequestLine, RoleRequest, approveRequest, cancelRequest, denyRequest, fmtDate, relTime, removeRequest, roles as roleApi, useApi } from "../../api";
 import { useSession } from "../../app/auth";
 import { usePersona } from "../../app/persona";
 import {
@@ -50,7 +50,7 @@ export function Requests() {
   );
 }
 
-function Lines({ rows, error, reload, tab }: { rows: RequestLine[] | null; error: string | null; reload: () => void; tab: Tab }) {
+function Lines({ rows, error, reload, tab }: { rows: RequestLine[] | null; error: ApiError | null; reload: () => void; tab: Tab }) {
   const [selected, setSelected] = useSelected();
   const open = rows?.find((r) => r.id === selected);
   const cols: Column<RequestLine>[] = [
@@ -126,7 +126,7 @@ function LinePanel({ id, onClose }: { id: string; onClose: () => void }) {
         </div>
       )}
     >
-      {!l ? <p className="small muted">{error ?? "Loading…"}</p> : (
+      {!l ? <p className="small muted">{error?.message ?? "Loading…"}</p> : (
         <>
           <dl className="kv">
             <dt>For</dt><dd><Link to={`/directory/identities/${l.beneficiary.id}`}>{l.beneficiary.name}</Link></dd>
