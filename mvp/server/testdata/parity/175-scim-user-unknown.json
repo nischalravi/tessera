@@ -1,0 +1,17 @@
+{
+ "name": "scim-user-unknown",
+ "request": {
+  "method": "GET",
+  "path": "/scim/v2/Users/99999"
+ },
+ "response": {
+  "status": 404,
+  "body": {
+   "schemas": [
+    "urn:ietf:params:scim:api:messages:2.0:Error"
+   ],
+   "status": "404",
+   "detail": "no such user"
+  }
+ }
+}

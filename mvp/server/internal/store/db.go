@@ -98,6 +98,10 @@ var tables = []string{
 	"grp_pit_privileges", "grp_pit_digests",
 	// group provisioning (schema/0283_group_prov.sql)
 	"grp_provisioners", "grp_provisionable", "grp_sync_groups", "grp_sync_runs", "grp_sync_ops",
+	// group privileges (schema/0285_group_privs.sql)
+	"grp_privileges", "grp_priv_settings",
+	// groups REST API idempotency keys (schema/0286_groups_api.sql)
+	"grp_idempotency",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was

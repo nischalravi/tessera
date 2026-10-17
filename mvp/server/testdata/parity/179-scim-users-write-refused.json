@@ -1,0 +1,14 @@
+{
+ "name": "scim-users-write-refused",
+ "request": {
+  "method": "POST",
+  "path": "/scim/v2/Users",
+  "body": {}
+ },
+ "response": {
+  "status": 405,
+  "body": {
+   "detail": "Method Not Allowed"
+  }
+ }
+}

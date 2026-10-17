@@ -13,6 +13,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/events"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/naming"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/privs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
@@ -27,14 +28,28 @@ const (
 // Env is one operation's context: the tenant transaction (which scopes every
 // query), the clock reading and the acting platform user. Engine is the
 // membership engine (its synchronous budget); nil uses the default.
+//
+// ByIdentity is the identity behind the acting user (it receives the creator
+// privileges of what the operation creates) and TenantAdmin says the user holds
+// an active tenant_admin role (GR-4). The model does not check privileges: the
+// API does, before it calls the model.
 type Env struct {
-	Tx     *store.TenantTx
-	Now    time.Time
-	By     *string
-	Engine *engine.Engine
+	Tx          *store.TenantTx
+	Now         time.Time
+	By          *string
+	Engine      *engine.Engine
+	ByIdentity  *int64
+	TenantAdmin bool
 }
 
 var defaultEngine = engine.New(0)
+
+func (e Env) privs() privs.Env {
+	return privs.Env{Tx: e.Tx, Now: e.Now, By: e.By, ByIdentity: e.ByIdentity, TenantAdmin: e.TenantAdmin}
+}
+
+// Privs is the same operation context for the privilege model.
+func (e Env) Privs() privs.Env { return e.privs() }
 
 func (e Env) eng() *engine.Engine {
 	if e.Engine != nil {
@@ -279,6 +294,9 @@ func (e Env) CreateFolder(in CreateFolderInput) (*store.Folder, error) {
 	if err := e.emitFolder(events.FolderCreated, f, nil); err != nil {
 		return nil, err
 	}
+	if err := privs.GrantCreator(e.privs(), privs.FolderObject(f.ID)); err != nil {
+		return nil, err
+	}
 	return f, e.audit("groups.folder.created", "folder", string(f.ID), ojson.Object{
 		{Key: "folder_id", Value: string(f.ID)}, {Key: "name", Value: f.Name}, {Key: "parent_id", Value: string(parent.ID)}})
 }
@@ -373,6 +391,9 @@ func (e Env) CreateGroup(in CreateGroupInput) (*store.NativeGroup, error) {
 		return nil, err
 	}
 	if err := e.emitGroup(events.GroupCreated, g, nil); err != nil {
+		return nil, err
+	}
+	if err := privs.GrantCreator(e.privs(), privs.GroupObject(g.ID)); err != nil {
 		return nil, err
 	}
 	detail := ojson.Object{{Key: "group_id", Value: string(g.ID)}, {Key: "name", Value: g.Name},
@@ -851,6 +872,9 @@ func (e Env) CopyGroup(id store.GroupID, in CopyInput) (*store.NativeGroup, erro
 	if err := e.emitGroup(events.GroupCreated, cp, map[string]any{"copied_from": string(src.ID)}); err != nil {
 		return nil, err
 	}
+	if err := privs.GrantCreator(e.privs(), privs.GroupObject(cp.ID)); err != nil {
+		return nil, err
+	}
 	return cp, e.audit("groups.group.copied", "group", string(cp.ID), ojson.Object{{Key: "group_id", Value: string(cp.ID)},
 		{Key: "source_id", Value: string(src.ID)}, {Key: "name", Value: cp.Name}, {Key: "folder_id", Value: string(dest.ID)}})
 }
@@ -943,6 +967,10 @@ func (e Env) CopyFolder(id store.FolderID, in CopyInput) (*store.Folder, error) 
 	if err := e.emitFolder(events.FolderCreated, top, map[string]any{"copied_from": string(src.ID)}); err != nil {
 		return nil, err
 	}
+	// the copier administers the copy; what is below it gets the defaults only
+	if err := privs.GrantCreator(e.privs(), privs.FolderObject(top.ID)); err != nil {
+		return nil, err
+	}
 	newID := map[store.FolderID]store.FolderID{src.ID: top.ID}
 	for _, s := range subFolders {
 		n, d := rebased(s.Name, s.DisplayName, src, newName, newDisplay)
@@ -956,6 +984,9 @@ func (e Env) CopyFolder(id store.FolderID, in CopyInput) (*store.Folder, error) 
 		if err := e.emitFolder(events.FolderCreated, c, map[string]any{"copied_from": string(s.ID)}); err != nil {
 			return nil, err
 		}
+		if err := privs.GrantDefaults(e.privs(), privs.FolderObject(c.ID)); err != nil {
+			return nil, err
+		}
 		newID[s.ID] = c.ID
 	}
 	copied := 0
@@ -967,6 +998,9 @@ func (e Env) CopyFolder(id store.FolderID, in CopyInput) (*store.Folder, error) 
 			return nil, err
 		}
 		if err := e.emitGroup(events.GroupCreated, cp, map[string]any{"copied_from": string(g.ID)}); err != nil {
+			return nil, err
+		}
+		if err := privs.GrantDefaults(e.privs(), privs.GroupObject(cp.ID)); err != nil {
 			return nil, err
 		}
 		copied++
@@ -1008,6 +1042,10 @@ func (e Env) DeleteFolder(id store.FolderID) error {
 		return ce
 	}
 	if err := e.Tx.DeleteGrpAliasesOf(store.AliasFolder, string(f.ID)); err != nil {
+		return err
+	}
+	// the folder's privileges end with it; a row on a folder names no foreign key
+	if _, err := privs.RevokeAllOf(e.privs(), privs.FolderObject(f.ID)); err != nil {
 		return err
 	}
 	if err := e.Tx.DeleteGrpFolder(f.ID); err != nil {

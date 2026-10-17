@@ -435,10 +435,17 @@ func (e Env) Factors(id store.GroupID) ([]store.GroupID, error) { return e.Tx.Gr
 
 // ---------------------------------------------------------------- reads
 
-// MemberQuery pages a members listing.
+// MemberQuery pages and narrows a members listing. Q is a case-insensitive
+// substring of the member's name (or email); Sort is name, -name, since or
+// -since; Enabled ("true" or "false") keeps the direct rows that count (or not)
+// right now; Indirect keeps the effective members without an active direct row.
 type MemberQuery struct {
-	Limit  int
-	Offset int
+	Limit    int
+	Offset   int
+	Q        string
+	Sort     string
+	Enabled  string
+	Indirect bool
 }
 
 // DirectMember is a direct membership with the member's name and whether the
@@ -455,12 +462,8 @@ func (e Env) DirectMembers(id store.GroupID, q MemberQuery) ([]DirectMember, int
 		return nil, 0, err
 	}
 	list := store.MembersListID(e.Tx.Tenant())
-	f := store.GrpDirectFilter{Group: id, List: list, Limit: q.Limit, Offset: q.Offset}
-	rows, err := e.Tx.GrpDirect(f)
-	if err != nil {
-		return nil, 0, err
-	}
-	total, err := e.Tx.GrpDirectCount(f)
+	rows, total, err := e.Tx.GrpDirectSearch(store.MemberSearch{Group: id, List: list, Q: q.Q, Sort: q.Sort, Enabled: q.Enabled,
+		Now: e.Now, Limit: q.Limit, Offset: q.Offset})
 	if err != nil {
 		return nil, 0, err
 	}
@@ -497,11 +500,9 @@ func (e Env) EffectiveMembers(id store.GroupID, q MemberQuery) (out []EffectiveM
 		return nil, 0, false, err
 	}
 	list := store.MembersListID(e.Tx.Tenant())
-	rows, err := e.Tx.GrpEffectiveList(id, list, q.Limit, q.Offset)
+	rows, total, err := e.Tx.GrpEffectiveSearch(store.MemberSearch{Group: id, List: list, Q: q.Q, Sort: q.Sort, Indirect: q.Indirect,
+		Now: e.Now, Limit: q.Limit, Offset: q.Offset})
 	if err != nil {
-		return nil, 0, false, err
-	}
-	if total, err = e.Tx.GrpEffectiveCount(id, list); err != nil {
 		return nil, 0, false, err
 	}
 	for _, r := range rows {

@@ -360,16 +360,14 @@ func TestGroupsMembersTenantIsolation(t *testing.T) {
 	b.call("GET", "/api/groups/engine/ops/1", "", 404) // B has issued no operations
 }
 
-func TestGroupsMemberRoutesRequireTenantAdmin(t *testing.T) {
+// TestGroupsEngineRoutesRequireTenantAdmin: the engine routes are tenant-wide
+// maintenance and need groups.admin (the per-group routes: groups_privs_test.go).
+func TestGroupsEngineRoutesRequireTenantAdmin(t *testing.T) {
 	f := storetest.TwoTenants(t)
 	h := newIsolationServer(f).Handler()
-	id := "00000000-0000-4000-8000-000000000000"
 	for _, role := range []auth.Role{auth.RoleViewer, auth.RoleOperator, auth.RoleAuditor, auth.RolePolicyAdmin} {
 		l := signIn(t, f.DB, f.B.ID, authtest.User{Email: string(role) + "@b.example", Roles: []auth.Role{role}}, authtest.Phr, storetest.Now)
 		for _, tc := range [][3]string{
-			{"GET", "/api/groups/" + id + "/members", ""}, {"POST", "/api/groups/" + id + "/members", `{"identity":1}`},
-			{"GET", "/api/groups/" + id + "/members/1", ""}, {"DELETE", "/api/groups/" + id + "/members/1", ""},
-			{"POST", "/api/groups/" + id + "/convert-to-composite", `{}`}, {"PUT", "/api/groups/" + id + "/composite", `{}`},
 			{"POST", "/api/groups/engine/verify", ""}, {"GET", "/api/groups/engine/ops/1", ""},
 		} {
 			if rec := serve(h, authed(l, tc[0], tc[1], tc[2])); rec.Code != http.StatusForbidden {
