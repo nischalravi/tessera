@@ -1320,7 +1320,7 @@ export interface Progress { pass: number; total: number; skipped: number }
 export interface TemplateRef { id: string; version: string; pin: string; display_name: string; overlay_version: number }
 
 export interface ConnConfig {
-  host?: string; port?: number; base_dns?: string[]; user_filter?: string; group_filter?: string; service_account_ous?: string[];
+  host?: string; port?: number; bind_dn?: string; ca_bundle?: string; base_dns?: string[]; user_filter?: string; group_filter?: string; service_account_ous?: string[];
   org_url?: string; tenant_id?: string; cloud?: string; customer?: string; domain?: string; base_url?: string;
   tenant_host?: string; api_version?: string; interface?: string; time_zone?: string;
   correlation_key?: string; hr_id_attribute?: string; technical_owner?: string; business_owner?: string;

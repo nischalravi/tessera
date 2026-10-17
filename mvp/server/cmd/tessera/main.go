@@ -38,6 +38,7 @@
 //	                      tessera-devidp -print-saml-cert): seeding also creates a
 //	                      dev_mock SAML connection pinning it (run.sh sets it)
 //	TESSERA_READINESS_SCENARIO  simulated validation scenario for demo connectors: gaps (default) or happy
+//	TESSERA_SAFEDIAL_ALLOW      dev only: host:port or CIDR:port private LDAP targets live checks may dial (see mvp/README.md "Live LDAP checks")
 //	TESSERA_READINESS_DEMO      "off" skips seeding the demo Okta connection (larkspur only) for Deployment health
 package main
 
@@ -69,6 +70,9 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
+	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
+	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
+	"github.com/nischalravi/tessera/mvp/server/internal/safedial"
 	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/seed"
@@ -322,6 +326,20 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if err != nil {
 		return err
 	}
+	// Live readiness checks: real LDAP probes open the sealed credential with
+	// the KEK and dial through safedial. Private targets need the dev-only
+	// allowlist (refused in prod by config) or, later, the Directory Agent.
+	templates, err := template.Default()
+	if err != nil {
+		return err
+	}
+	allow, err := safedial.ParseAllow(cfg.SafedialAllow)
+	if err != nil {
+		return fmt.Errorf("TESSERA_SAFEDIAL_ALLOW: %w", err)
+	}
+	rsvc := readiness.NewService(templates, string(cfg.Env))
+	rsvc.Runner.Scenario = scenario
+	rsvc.Runner.Live.Sealer, rsvc.Runner.Live.Allow = sealer, allow
 	// Outbound calls to IdPs (discovery, JWKS, token) and the kill switch's
 	// provider calls (containment) go through safehttp. A test server gets the
 	// production client (no loopback exception; ForConfig decides).
@@ -333,7 +351,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound,
 		Containment:    &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock},
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
-		HSTS: cfg.IsProd(), Env: cfg.Env, Identifiers: identifiers.NewKeyer(sealer), EmailMode: cfg.Mail.Mode, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, AuditAnchor: anchorURL})
+		HSTS: cfg.IsProd(), Env: cfg.Env, Identifiers: identifiers.NewKeyer(sealer), EmailMode: cfg.Mail.Mode, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, Readiness: rsvc, AuditAnchor: anchorURL})
 	sender, err := notify.NewSender(cfg.Mail, cfg.Env, cfg.OutboundAllowLoopback, sealer, config.DevMailPath(o.db), logger)
 	if err != nil {
 		return err
