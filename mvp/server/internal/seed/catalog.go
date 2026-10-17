@@ -11,7 +11,8 @@ import (
 
 // seedCatalog makes the demo's groups requestable (issue #164): ordinary
 // groups until removed; privileged ones (the JIT groups among them) for 8
-// hours by default and at most 72. It writes no audit event, so the ledger
+// hours by default and at most 72; each is approved by the person's manager,
+// then an access approver. It writes no audit event, so the ledger
 // of a fresh seed is unchanged.
 func seedCatalog(c *store.TenantTx, now time.Time) error {
 	groups, err := c.Groups()
@@ -29,6 +30,11 @@ func seedCatalog(c *store.TenantTx, now time.Time) error {
 		}
 		if err := c.PutCatalogItem(it); err != nil {
 			return fmt.Errorf("seed: catalog item for %s: %w", g.Name, err)
+		}
+		// routed to the person's manager, then an access approver (#165)
+		if err := c.PutApprovalPolicy(&store.ApprovalPolicy{CatalogItemID: it.ID, Stages: []string{store.StageManager, store.StageDecider},
+			EscalateAfterHours: 48, UpdatedAt: now}); err != nil {
+			return fmt.Errorf("seed: approval policy for %s: %w", g.Name, err)
 		}
 	}
 	return nil

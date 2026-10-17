@@ -78,13 +78,25 @@ DELETE /api/connections/{id}/checklist/{item}/skip   connections.manage -
 POST   /api/connections/{id}/transition              connections.manage -
 POST   /api/connections/{id}/activate                connections.activate STEP_UP_POLICY
 POST   /api/connections/{id}/retire                  connections.manage STEP_UP_POLICY
+GET    /api/correlation/queue                        graph.read      -  # issue #160
+GET    /api/correlation/decisions                    graph.read      -  # issue #160
+POST   /api/accounts/{account_id}/link               identities.correlate STEP_UP_POLICY  # issue #160
+POST   /api/accounts/{account_id}/not-person         identities.correlate STEP_UP_POLICY  # issue #160
+DELETE /api/accounts/{account_id}/link               identities.correlate STEP_UP_POLICY  # issue #160
+POST   /api/identities/{identity_id}/merge           identities.merge STEP_UP_POLICY  # issue #160
+GET    /api/identity-merges                          graph.read      -  # issue #160
+GET    /api/identities/{identity_id}/affiliations    graph.read      -  # issue #64
+GET    /api/identities/{identity_id}/identifiers     graph.read      -  # issue #64
+POST   /api/identities/{identity_id}/affiliations    identities.affiliate STEP_UP_POLICY  # issue #64
+POST   /api/affiliations/{affiliation_id}/end        identities.affiliate STEP_UP_POLICY  # issue #64
+POST   /api/identity-merges/{merge_id}/unmerge       identities.merge STEP_UP_POLICY  # issue #160
 GET    /api/catalog                                  requests.create -  # issue #164 (?all=1: catalog.manage in the handler)
 PUT    /api/catalog/items/{group_id}                 catalog.manage  STEP_UP_POLICY  # issue #164
 POST   /api/requests                                 requests.create -  # issue #164 (others: requests.create_for_others in the handler)
 GET    /api/requests                                 requests.create -  # issue #164 (scope=pending|all: requests.decide or graph.read)
 GET    /api/requests/{request_id}                    requests.create -  # issue #164
-POST   /api/requests/{request_id}/approve            requests.decide STEP_UP_POLICY  # issue #164
-POST   /api/requests/{request_id}/deny               requests.decide -  # issue #164
+POST   /api/requests/{request_id}/approve            requests.create STEP_UP_POLICY  # issue #164 (#165: the line's routing decides who)
+POST   /api/requests/{request_id}/deny               requests.create -  # issue #164 (#165: the line's routing decides who)
 POST   /api/requests/{request_id}/cancel             requests.create -  # issue #164 (the requester)
 POST   /api/requests/{request_id}/remove             requests.create -  # issue #164 (requests.decide, or the beneficiary)
 GET    /api/roles                                    requests.create -  # issue #161
@@ -110,14 +122,35 @@ GET    /api/role-requests                            requests.create -  # issue 
 POST   /api/role-requests/{request_id}/approve       requests.decide STEP_UP_POLICY  # issue #161
 POST   /api/role-requests/{request_id}/deny          requests.decide -  # issue #161
 POST   /api/role-requests/{request_id}/cancel        requests.create -  # issue #161 (the requester)
-GET    /api/correlation/queue                        graph.read      -  # issue #160
-GET    /api/correlation/decisions                    graph.read      -  # issue #160
-POST   /api/accounts/{account_id}/link               identities.correlate STEP_UP_POLICY  # issue #160
-POST   /api/accounts/{account_id}/not-person         identities.correlate STEP_UP_POLICY  # issue #160
-DELETE /api/accounts/{account_id}/link               identities.correlate STEP_UP_POLICY  # issue #160
-POST   /api/identities/{identity_id}/merge           identities.merge STEP_UP_POLICY  # issue #160
-GET    /api/identity-merges                          graph.read      -  # issue #160
-POST   /api/identity-merges/{merge_id}/unmerge       identities.merge STEP_UP_POLICY  # issue #160
+GET    /api/lifecycle                                graph.read      -  # issue #159
+GET    /api/lifecycle/sponsored                      requests.create -  # issue #159
+POST   /api/lifecycle/sweep                          lifecycle.manage -  # issue #159
+GET    /api/identities/{identity_id}/lifecycle       graph.read      -  # issue #159
+PUT    /api/identities/{identity_id}/lifecycle       lifecycle.manage STEP_UP_POLICY  # issue #159
+POST   /api/identities/{identity_id}/lifecycle/extend requests.create -  # issue #159 (the sponsor, or lifecycle.manage)
+POST   /api/guests/invitations                       guests.sponsor  STEP_UP_POLICY  # issue #65 (the sponsor policy decides who may sponsor)
+POST   /api/guests/invitations/bulk                  guests.sponsor  STEP_UP_POLICY  # issue #65 (dry_run too: it audits)
+GET    /api/guests                                   guests.sponsor  -  # issue #65 (sponsor=all: guests.read in the handler)
+GET    /api/sponsorships/approvals                   sponsorships.approve -  # issue #65
+GET    /api/sponsorships/{sponsorship_id}            guests.sponsor  -  # issue #65 (the sponsor, the transfer target, guests.read or sponsorships.approve)
+POST   /api/sponsorships/{sponsorship_id}/approve    sponsorships.approve STEP_UP_POLICY  # issue #65
+POST   /api/sponsorships/{sponsorship_id}/reject     sponsorships.approve STEP_UP_POLICY  # issue #65
+POST   /api/sponsorships/{sponsorship_id}/renew      guests.sponsor  STEP_UP_POLICY  # issue #65 (the sponsor)
+POST   /api/sponsorships/{sponsorship_id}/end        guests.sponsor  STEP_UP_POLICY  # issue #65 (the sponsor, or sponsorships.approve)
+POST   /api/sponsorships/{sponsorship_id}/transfer   guests.sponsor  STEP_UP_POLICY  # issue #65 (the sponsor)
+POST   /api/sponsorships/{sponsorship_id}/accept-transfer guests.sponsor STEP_UP_POLICY  # issue #65 (the person asked)
+GET    /api/approvals/inbox                          requests.create -  # issue #165
+GET    /api/approvals/delegates                      requests.create -  # issue #165
+GET    /api/approvals/delegations                    requests.create -  # issue #165 (?all=1: requests.decide)
+POST   /api/approvals/delegations                    requests.create -  # issue #165
+POST   /api/approvals/delegations/{delegation_id}/revoke requests.create -  # issue #165
+GET    /api/notifications                            auth.self       -  # issue #189 (the caller's own inbox)
+POST   /api/notifications/read                       auth.self       -  # issue #189
+GET    /api/notifications/preferences                auth.self       -  # issue #189
+PUT    /api/notifications/preferences                auth.self       -  # issue #189
+GET    /api/email/messages                           email.read      -  # issue #189
+GET    /api/email/messages/{message_id}              email.read      -  # issue #189
+POST   /api/email/messages/{message_id}/retry        email.manage    -  # issue #189
 POST   /api/identities/{identity_id}/contain         identities.contain STEP_UP_POLICY  # issue #106
 GET    /api/identities/{identity_id}/containment     graph.read      -  # issue #106
 POST   /api/containment-retries/{retry_id}/retry-now identities.contain STEP_UP_POLICY  # issue #106
@@ -192,6 +225,7 @@ func parseDesignRoutes(t *testing.T) []designRoute {
 // TestRoutesMatchDesignTable: the registered routes are exactly the design
 // table, with the same permission and step-up requirement.
 func TestRoutesMatchDesignTable(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	srv := newIsolationServer(f)
 	table := map[string]designRoute{}
@@ -235,6 +269,7 @@ var rbacRoles = []auth.Role{auth.RoleViewer, auth.RoleOperator, auth.RoleAuditor
 // active under an IdP sign-in, so it is refused everything but the
 // session's own routes.
 func TestRBACRouteMatrix(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	srv := newIsolationServer(f)
 	h := srv.Handler()
@@ -278,6 +313,7 @@ func TestRBACRouteMatrix(t *testing.T) {
 // needs grants.revoke (policy admins only) and a fresh phishing-resistant
 // sign-in (§16.2, checked in the handler because it depends on the body).
 func TestRevokeApplyNeedsGrantsRevoke(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	srv := newIsolationServer(f)
 	h := srv.Handler()
@@ -331,6 +367,7 @@ func containsPerm(ps []auth.Permission, p auth.Permission) bool {
 // its credential at another host or widen its write scope, so it needs the
 // same fresh phishing-resistant sign-in as setting the credential.
 func TestConnectionConfigNeedsStepUp(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	h := newIsolationServer(f).Handler()
 	admin := authtest.User{Email: "conn-admin@b.example", Roles: []auth.Role{auth.RoleTenantAdmin}}

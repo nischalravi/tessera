@@ -1,7 +1,7 @@
 import { FormEvent, useMemo, useState } from "react";
 import { Outlet, useNavigate, useSearchParams } from "react-router-dom";
 import { Ban, ClipboardCheck, KeyRound, Plus, RotateCcw, ShoppingCart, Users } from "lucide-react";
-import { AccountRow, ConnectorRow, Group, HrisEvent, IdentityRow, NhiRow, ResourceRow, api, fmtDay, relTime, useApi } from "../../api";
+import { AccountRow, ConnectorRow, Group, HrisEvent, IdentityRow, NhiRow, ResourceRow, api, fmtDay, relTime, useApi, LifecycleList } from "../../api";
 import { useIdentityActions } from "../../app/actions";
 import { usePersona } from "../../app/persona";
 import {
@@ -9,6 +9,7 @@ import {
 } from "../../components";
 import { ORGS, mockObjects, useMockState } from "../../mocks";
 import { AgentCard } from "./AgentCards";
+import { StateBadge, WORKER_LABEL } from "../lifecycle/parts";
 import { AccountPanel, AppPanel, GroupPanel, IdentityPanel, OrgPanel } from "./Panels";
 import { ImportDrawer, PreviewFormDrawer, opts, uniq } from "./shared";
 
@@ -123,6 +124,8 @@ function identityColumns(): Column<IdentityRow>[] {
 
 export function People() {
   const { data, error, reload } = useApi<IdentityRow[]>("/identities?type=human");
+  const { data: lc } = useApi<LifecycleList>("/lifecycle");
+  const worker = useMemo(() => new Map((lc?.rows ?? []).map((l) => [l.person.id, l])), [lc]);
   const [selected, setSelected] = useSelected();
   const acts = useIdentityActions();
   const nav = useNavigate();
@@ -130,7 +133,12 @@ export function People() {
   const [newOpen, setNew] = useDrawerParam("new");
   const imp = useImport();
   const rows = useMemo(() => data?.map((r) => (mock.disabled[r.id] && r.status === "active" ? { ...r, status: "disabled" } : r)) ?? null, [data, mock.disabled]);
-  const cols = useMemo(identityColumns, []);
+  const cols = useMemo(() => {
+    const c = identityColumns();
+    c.splice(2, 0, { id: "worker", header: "Worker type", sort: (r) => worker.get(r.id)?.worker_type ?? "employee",
+      cell: (r) => { const l = worker.get(r.id); return l && l.worker_type !== "employee" ? <span className="small">{WORKER_LABEL[l.worker_type]}{l.state === "ending" && <> <StateBadge l={l} /></>}</span> : <span className="small faint">Employee</span>; }, hideNarrow: true });
+    return c;
+  }, [worker]);
   return (
     <Page title="Users" count={plural(rows?.length, "identity", "identities")} crumbs={[IDENTITY, ["Users"]]}>
       <DataTable
@@ -144,6 +152,7 @@ export function People() {
         searchPlaceholder="Search name, email, team…"
         filters={[
           { id: "dept", label: "Department", options: opts(uniq((data ?? []).map((r) => r.department))), get: (r) => r.department },
+          { id: "worker", label: "Worker type", options: Object.entries(WORKER_LABEL).map(([value, label]) => ({ value, label })), get: (r) => worker.get(r.id)?.worker_type ?? "employee" },
           { id: "status", label: "Status", options: opts(["active", "disabled", "terminated"]), get: (r) => r.status },
           { id: "system", label: "System", options: opts(uniq((data ?? []).flatMap((r) => r.systems))), get: (r) => r.systems },
         ]}

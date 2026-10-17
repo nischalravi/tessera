@@ -211,8 +211,8 @@ func (b abacBody) spec() (abac.Spec, error) {
 	return s, nil
 }
 
-func abacActor(r *http.Request) (abac.Actor, error) {
-	a, err := requestActor(r)
+func (s *Server) abacActor(r *http.Request) (abac.Actor, error) {
+	a, err := s.requestActor(r)
 	return abac.Actor{UserID: a.UserID, Display: a.Display}, err
 }
 
@@ -220,7 +220,7 @@ func (s *Server) createAbacPolicy(_ http.ResponseWriter, r *http.Request, p *par
 	if err := validated(p, nil); err != nil {
 		return nil, err
 	}
-	by, err := abacActor(r)
+	by, err := s.abacActor(r)
 	if err != nil {
 		return nil, err
 	}
@@ -247,7 +247,7 @@ func (s *Server) updateAbacPolicy(_ http.ResponseWriter, r *http.Request, p *par
 	if err := validated(p, nil); err != nil {
 		return nil, err
 	}
-	by, err := abacActor(r)
+	by, err := s.abacActor(r)
 	if err != nil {
 		return nil, err
 	}
@@ -274,7 +274,7 @@ func (s *Server) retireAbacPolicy(_ http.ResponseWriter, r *http.Request, p *par
 	if err := validated(p, nil); err != nil {
 		return nil, err
 	}
-	by, err := abacActor(r)
+	by, err := s.abacActor(r)
 	if err != nil {
 		return nil, err
 	}
@@ -400,7 +400,7 @@ func (s *Server) bindCatalogPolicy(_ http.ResponseWriter, r *http.Request, p *pa
 	if err := validated(p, nil); err != nil {
 		return nil, err
 	}
-	by, err := abacActor(r)
+	by, err := s.abacActor(r)
 	if err != nil {
 		return nil, err
 	}

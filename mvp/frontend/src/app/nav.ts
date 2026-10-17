@@ -1,5 +1,5 @@
 import {
-  AppWindow, BadgeCheck, Bot, Building2, ChartLine, ClipboardCheck, House, Inbox, KeyRound, Layers, LucideIcon, Network, Plug, Plus, Settings, ShieldCheck, SlidersHorizontal, Timer, Users, UsersRound,
+  AppWindow, BadgeCheck, Bot, Building2, CalendarClock, ChartLine, ClipboardCheck, House, Inbox, KeyRound, Layers, LucideIcon, Network, Plug, Plus, Settings, ShieldCheck, SlidersHorizontal, Timer, UserPlus, Users, UsersRound,
 } from "lucide-react";
 
 export interface NavPage {
@@ -38,6 +38,7 @@ export const RAIL: RailGroup[] = [
     label: "Identity",
     items: [
       { id: "users", label: "Users", icon: Users, path: "/directory/people", keywords: "people employees humans identities" },
+      { id: "workers", label: "Contractors & guests", icon: CalendarClock, path: "/directory/workers", keywords: "contractors partners vendors interns guests temporary accounts expiry end date sponsor expiring" },
       { id: "machine", label: "Machine identities & agents", icon: Bot, path: "/directory/machine", keywords: "nhi service accounts api keys ai agents bots secrets" },
       {
         id: "groups", label: "Groups", icon: UsersRound, path: "/directory/groups", also: ["/directory/entitlements"], keywords: "okta groups teams",
@@ -60,6 +61,7 @@ export const RAIL: RailGroup[] = [
         id: "mine", label: "My access", icon: BadgeCheck, path: "/access/mine", also: ["/access/requests"], keywords: "what i have entitlements remove",
         pages: [{ path: "/access/requests", label: "My requests", keywords: "history drafts status submitted" }],
       },
+      { id: "guests", label: "Guests I sponsor", icon: UserPlus, path: "/access/guests", keywords: "guest sponsor invite visitor contractor volunteer partner sponsorship bulk csv approve transfer" },
       { id: "jit", label: "Just-in-time", icon: Timer, path: "/access/jit", keywords: "jit elevation temporary privileged break glass" },
       {
         id: "reviews", label: "Access reviews", icon: ClipboardCheck, path: "/governance/reviews", also: ["/governance/lifecycle", "/governance/workflows"], keywords: "certification campaigns attestation",

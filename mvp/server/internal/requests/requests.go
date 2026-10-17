@@ -31,6 +31,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/abac"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
+	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
@@ -70,6 +71,7 @@ type Actor struct {
 	Display    string
 	IdentityID *int64 // the person the user is, if linked
 	AAL        int    // authentication assurance level of the session (0: unknown); the context.aal attribute
+	Decider    bool   // holds requests.decide
 }
 
 func (a Actor) id() string { return a.UserID.String() }
@@ -243,7 +245,17 @@ func Submit(tx *store.TenantTx, s Submission, by Actor, forOthers bool, now time
 		if err := tx.InsertRequestLine(l); err != nil {
 			return "", nil, err
 		}
+		ben, err := tx.Identity(l.BeneficiaryID)
+		if err != nil {
+			return "", nil, err
+		}
+		if err := startStages(tx, l, ben, now); err != nil {
+			return "", nil, err
+		}
 		if err := event(tx, l.ID, "submitted", by, nil, now); err != nil {
+			return "", nil, err
+		}
+		if err := notifyWaiting(tx, l, now); err != nil {
 			return "", nil, err
 		}
 	}
@@ -392,13 +404,10 @@ func Approve(tx *store.TenantTx, id string, by Actor, reason string, now time.Ti
 	if err != nil {
 		return nil, err
 	}
-	switch {
-	case l.Status != store.RequestPending:
-		return nil, refuse(409, "not_pending", "the request is %s", l.Status)
-	case l.RequestedBy == by.id():
-		return nil, refuse(403, "self_approval", "you cannot approve a request you made")
-	case by.IdentityID != nil && *by.IdentityID == l.BeneficiaryID:
-		return nil, refuse(403, "self_approval", "you cannot approve access for yourself")
+	said := r // what the approver wrote, for the notification
+	auth, err := authorize(tx, l, by, now)
+	if err != nil {
+		return nil, err
 	}
 	// the person or account may have changed since the request (a leaver)
 	if ben, err := tx.Identity(l.BeneficiaryID); err != nil {
@@ -415,6 +424,27 @@ func Approve(tx *store.TenantTx, id string, by Actor, reason string, now time.Ti
 		return nil, err
 	} else if has {
 		return nil, refuse(409, "already_has_access", "the person already has this access; deny the request")
+	}
+	if auth.Stage != nil {
+		stages, err := tx.RequestStages(l.ID)
+		if err != nil {
+			return nil, err
+		}
+		more, err := approveStage(tx, l, auth, by, r, now)
+		if err != nil {
+			return nil, err
+		}
+		note := stageNote(auth, len(stages), r)
+		if more { // the next stage decides; nothing is granted yet
+			if err := event(tx, l.ID, "approved", by, note, now); err != nil {
+				return nil, err
+			}
+			if err := notifyWaiting(tx, l, now); err != nil { // the next stage's approvers
+				return nil, err
+			}
+			return l, tx.Audit(now, by.Display, "request.stage.approve", stageDetail(l, auth, r))
+		}
+		r = note
 	}
 	src, dst := graph.Key("account", l.AccountID), graph.Key("group", l.GroupID)
 	if old, err := tx.EdgeBetween(src, dst); err == nil { // an expired grant: replace it
@@ -442,6 +472,9 @@ func Approve(tx *store.TenantTx, id string, by Actor, reason string, now time.Ti
 	if err := event(tx, l.ID, "approved", by, r, now); err != nil {
 		return nil, err
 	}
+	if err := notify.RequestDecided(tx, now, l, true, uid, said); err != nil {
+		return nil, err
+	}
 	return l, tx.Audit(now, by.Display, "request.approve", lineDetail(l, r))
 }
 
@@ -455,8 +488,25 @@ func Deny(tx *store.TenantTx, id string, by Actor, reason string, now time.Time)
 	if err != nil {
 		return nil, err
 	}
-	if l.Status != store.RequestPending {
-		return nil, refuse(409, "not_pending", "the request is %s", l.Status)
+	said := r
+	auth, err := authorize(tx, l, by, now)
+	if err != nil {
+		return nil, err
+	}
+	if auth.Stage != nil {
+		st, uid := auth.Stage, by.id()
+		st.Status, st.DecidedBy, st.OnBehalfOf, st.DecidedAt, st.Reason = store.StageDenied, &uid, auth.OnBehalfOf, &now, r
+		if err := tx.SaveRequestStage(st, store.StageWaiting); err != nil {
+			return nil, err
+		}
+		if err := tx.CloseOpenStages(l.ID); err != nil {
+			return nil, err
+		}
+		stages, err := tx.RequestStages(l.ID)
+		if err != nil {
+			return nil, err
+		}
+		r = stageNote(auth, len(stages), r)
 	}
 	uid := by.id()
 	l.Status, l.DecidedBy, l.DecidedAt, l.DecisionReason, l.ClosedAt = store.RequestDenied, &uid, &now, r, &now
@@ -464,6 +514,9 @@ func Deny(tx *store.TenantTx, id string, by Actor, reason string, now time.Time)
 		return nil, err
 	}
 	if err := event(tx, l.ID, "denied", by, r, now); err != nil {
+		return nil, err
+	}
+	if err := notify.RequestDecided(tx, now, l, false, uid, said); err != nil {
 		return nil, err
 	}
 	return l, tx.Audit(now, by.Display, "request.deny", lineDetail(l, r))
@@ -483,6 +536,9 @@ func Cancel(tx *store.TenantTx, id string, by Actor, now time.Time) (*store.Requ
 	}
 	l.Status, l.ClosedAt = store.RequestCancelled, &now
 	if err := tx.SaveRequestLine(l, store.RequestPending); err != nil {
+		return nil, err
+	}
+	if err := tx.CloseOpenStages(l.ID); err != nil {
 		return nil, err
 	}
 	if err := event(tx, l.ID, "cancelled", by, nil, now); err != nil {
@@ -522,6 +578,18 @@ func Remove(tx *store.TenantTx, id string, by Actor, decider bool, reason string
 		return nil, err
 	}
 	return l, tx.Audit(now, by.Display, "request.remove", lineDetail(l, r))
+}
+
+func stageDetail(l *store.RequestLine, a *Authority, reason *string) ojson.Object {
+	d := ojson.Object{{Key: "request_id", Value: l.ID}, {Key: "stage", Value: a.Stage.Idx}, {Key: "kind", Value: a.Stage.Kind},
+		{Key: "escalated", Value: a.Escalated}}
+	if a.OnBehalfOf != nil {
+		d = append(d, ojson.KV{Key: "on_behalf_of", Value: *a.OnBehalfOf})
+	}
+	if reason != nil {
+		d = append(d, ojson.KV{Key: "reason", Value: *reason})
+	}
+	return d
 }
 
 func lineDetail(l *store.RequestLine, reason *string) ojson.Object {

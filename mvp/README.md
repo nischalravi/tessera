@@ -65,6 +65,10 @@ with SQLite through the pure-Go `modernc.org/sqlite` driver, so it needs no C to
 
 ```
 server/
+  cmd/tessera/          main: `serve` (default), `seed`, `audit verify|checkpoint|export` and
+                        `notify seal-password`; timeouts, graceful shutdown, JIT sweeper, audit
+                        checkpointer, notification dispatcher
+  cmd/tessera-devidp/   the dev IdP binary (development and tests only; see Dev sign-in)
   cmd/tessera/          main: `serve` (default), `seed` and `audit verify|checkpoint|export`; timeouts,
                         graceful shutdown, JIT sweeper, audit checkpointer
   cmd/tessera-devidp/   the dev IdP binary (development and tests only; see Signing in)
@@ -85,6 +89,7 @@ server/
     simulate/           what-if engine: apply edits to a snapshot copy, diff perms + violations
     leastpriv/          grant-level and role-level recommendations
     nhi/, jit/, reviews/, jml/, seed/
+    notify/             notification outbox, in-app inbox, email senders (dev sink, SMTP), dispatcher
     api/                HTTP routes under /api, FastAPI-compatible validation errors, OpenAPI/docs
     config/             typed settings from TESSERA_* variables; production guard rails
     seal/               AES-256-GCM sealing under the KEK (AAD-bound), random secrets, SHA-256 helpers
@@ -92,7 +97,7 @@ server/
     safehttp/           SSRF-guarded outbound HTTP client (https only, address checks after DNS)
     ratelimit/          keyed token-bucket limiter with a bounded key set
     ojson/, timeutil/   ordered JSON + Python float repr; CPython-compatible time arithmetic
-    testkit/            shared test fixtures (tiny world through a real Connector, seeded demo DB)
+    testkit/            shared test fixtures (tiny world through a real Connector, seeded demo DB; each is seeded once per test binary and handed out as a private copy per test)
     devidp/             dev IdP: mock OIDC issuer, vendor emulation profiles, fault injection;
                         devidptest/ runs it in-process for tests. Never imported by the API.
   policies/*.yaml       policy-as-code (embedded in the binary; run.sh reads them from disk)
@@ -151,7 +156,9 @@ The routes are documented at `/api/readiness/openapi.json`.
 `POST /api/least-privilege/revoke {edge_id, dry_run}` · `GET /api/policies` · `GET /api/violations` ·
 `POST /api/simulate {remove_edge_ids, add_edges:[{src,dst,duration_hours?}], disable_account_ids}` ·
 `GET|POST /api/jit/requests` · `POST /api/jit/requests/{id}/approve|deny|revoke` ·
-`GET|POST /api/reviews/campaigns` · `POST /api/reviews/items/{id}/decision` ·
+`GET|POST /api/reviews/campaigns` (`name` 1-200 characters after trimming, `unused_days` 1-3650, else 422) ·
+`POST /api/reviews/items/{id}/decision` (a decision is final: repeating it is a 200 no-op, a different one is
+`409 review_item_decided` and an audited `review.decide.refused`) ·
 `GET|POST /api/hris/events` (422 for an unknown `identity_id`) · `GET /api/hris/events/{id}/plan` · `POST /api/hris/events/{id}/execute` ·
 `GET /api/jml/leaver-plan/{identity_id}` · `POST /api/identities/{id}/contain` (kill switch, see "Identity containment") ·
 `PUT /api/connections/{id}/containment-credential` · `GET /api/accounts[?system=]` ·
@@ -169,20 +176,92 @@ The routes are documented at `/api/readiness/openapi.json`.
 `POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours}` ·
 `GET /api/requests[?scope=mine|pending|all&status=]` · `GET /api/requests/{id}` ·
 `POST /api/requests/{id}/approve|deny|cancel|remove {reason}` ·
-`GET|POST /api/roles` · `GET|PUT /api/roles/{id}` · `GET /api/roles/{id}/versions|drift` ·
-`POST /api/roles/{id}/retire|reconcile|members` · `POST /api/roles/{id}/members/{identity_id}/remove`
-(changes take `?dry_run=1`) · `GET|POST /api/role-requests` · `POST /api/role-requests/{id}/approve|deny|cancel` ·
 `GET|POST /api/abac/policies` · `GET|PUT /api/abac/policies/{id}` · `POST /api/abac/policies/{id}/retire` ·
 `POST /api/abac/simulate` · `GET /api/abac/bindings` · `PUT /api/catalog/items/{group_id}/policy` ·
+`GET /api/approvals/inbox` · `GET /api/approvals/delegates` · `GET|POST /api/approvals/delegations` ·
+`POST /api/approvals/delegations/{id}/revoke` ·
 `GET /api/correlation/queue` · `GET /api/correlation/decisions` ·
 `POST /api/accounts/{id}/link {identity_id, reason}` · `POST /api/accounts/{id}/not-person {reason}` ·
 `DELETE /api/accounts/{id}/link` · `POST /api/identities/{id}/merge {into, reason}` ·
-`GET /api/identity-merges` · `POST /api/identity-merges/{id}/unmerge {reason}`
+`GET /api/identity-merges` · `POST /api/identity-merges/{id}/unmerge {reason}` ·
+`GET /api/identities/{id}/affiliations` · `GET /api/identities/{id}/identifiers` ·
+`POST /api/identities/{id}/affiliations {type, org_unit?, population?, starts_at?, ends_at?, reason}` ·
+`POST /api/affiliations/{id}/end {reason}`
+`GET /api/catalog[?all=1]` · `PUT /api/catalog/items/{group_id}` ·
+`POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours}` ·
+`GET /api/requests[?scope=mine|pending|all&status=]` · `GET /api/requests/{id}` ·
+`POST /api/requests/{id}/approve|deny|cancel|remove {reason}` ·
+`GET|POST /api/roles` · `GET|PUT /api/roles/{id}` · `GET /api/roles/{id}/versions|drift` ·
+`POST /api/roles/{id}/retire|reconcile|members` · `POST /api/roles/{id}/members/{identity_id}/remove`
+(changes take `?dry_run=1`) · `GET|POST /api/role-requests` · `POST /api/role-requests/{id}/approve|deny|cancel` ·
+`GET /api/lifecycle[?state=upcoming|active|ending|ended]` · `GET /api/lifecycle/sponsored` · `POST /api/lifecycle/sweep` ·
+`GET|PUT /api/identities/{id}/lifecycle` · `POST /api/identities/{id}/lifecycle/extend {ends_at, reason}`
+`POST /api/guests/invitations` · `POST /api/guests/invitations/bulk {csv, dry_run}` ·
+`GET /api/guests[?sponsor=me|all&state=&population=]` · `GET /api/sponsorships/approvals` · `GET /api/sponsorships/{id}` ·
+`POST /api/sponsorships/{id}/approve|reject|renew|end|transfer|accept-transfer` ·
+`GET /api/approvals/inbox` · `GET /api/approvals/delegates` · `GET|POST /api/approvals/delegations` ·
+`POST /api/approvals/delegations/{id}/revoke` ·
+`GET /api/notifications[?unread=1&limit=]` · `POST /api/notifications/read {ids}|{all:true}` ·
+`GET|PUT /api/notifications/preferences {prefs:{kind:channel}}` ·
+`GET /api/email/messages[?status=&kind=&recipient=&limit=]` · `GET /api/email/messages/{id}` ·
+`POST /api/email/messages/{id}/retry`
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
 or HRIS execution is always the signed-in user.
 
+### Account correlation
+
+Connectors tie most accounts to a person. **Directory → Accounts → Account matches**
+(`/directory/matches`) handles the rest (issue #160):
+
+- **To review** lists user accounts with no person and no decision. A login that equals a
+  person's email, or matches the part before the @, is shown as a *proposal*. Tessera never
+  links on it by itself (self-asserted attributes, design K12).
+- **Link**, **Not a person** and **Release** pin a reviewer's decision (`account_links`).
+  Connector syncs keep it until someone releases it, which hands the account back to the
+  connector's mapping.
+- **Merge** (identity page, More actions → Merge into…) moves the merged identity's accounts,
+  account decisions, owned identities, reports and agent delegations to the identity kept. The
+  merged identity gets status `merged`; syncs keep it merged and resolve references to it to the
+  survivor. History (usage, reviews, requests, HRIS events) is not moved. An identity bound to a
+  Tessera sign-in user cannot be the merged side, because credentials never move.
+- **Undo** (Merges tab) works for 180 days. It moves back every recorded row that still points
+  at the survivor; rows changed since stay and are listed. Merges into an identity that was
+  merged later are undone last-first.
+
+Decisions need `identities.correlate`, merges `identities.merge` (both: policy admin), each
+with a fresh phishing-resistant sign-in and a reason. Every decision is audited.
+
+### Affiliations and identifiers
+
+The guest-accounts design (K1, `docs/design/guest-accounts-and-claim.md`) keeps **one identity per
+person with many affiliations**; issue #64 (GU-1) adds the data model and a read view. The identity
+page (**Affiliations & identifiers** tab) and the identity side panel (**Affiliations** tab) show,
+for a human:
+
+- **Affiliations** (`affiliations`): each relationship (employee, contractor, guest visitor, ...)
+  with its source, organization unit, population, start and end. The person's lifecycle state
+  (`active`, `expiring`, `expired`, ...) is **derived** from them, not stored
+  (`internal/identity/affiliations`). A person is active while any affiliation is.
+- **Identifiers** (`identity_identifiers`): email, employee ID, federated subjects and so on, each
+  with how it was verified. Lookups use `value_hmac`, an HMAC under a per-tenant key derived from the
+  KEK, so two records with the same email collide without anyone storing a lookup table of values.
+  The hash is never returned by the API.
+- **Source records** (`identity_source_records`): what each system of record said about the person.
+  No screen yet; matching and review arrive with GU-5.
+
+**Add** and **End** (policy admin, `identities.affiliate`, fresh phishing-resistant sign-in, reason
+required, audited) are for relationships an administrator may vouch for: guest visitor, contractor,
+volunteer, partner, alum, retiree. Employee, student, applicant, admit and pre-hire come only from the HR or
+student feed, so the API refuses them. Guest-like types need an end date, bounded by the population
+(`guest_populations`: 365 days; a guest visitor 30). Ending a running affiliation sets `ended`; one
+that had not started is `revoked`. An ended affiliation is history: the table refuses to change it.
+
+The seed back-fills one source record, one HR affiliation and the HR identifiers (email, employee
+ID) for every human, with no audit events and no change to any identity id. Identities that
+connectors add later are not back-filled until the lifecycle feed (GU-4, GU-11) lands. The worker
+type, sponsor and lifecycle state of a person belong to `identity_lifecycle` (issue #159), not here.
 ### Access requests
 
 **Access → Request access** is the catalog (issue #164). It lists every group a policy admin has
@@ -205,6 +284,21 @@ beneficiary can remove their own access; deciders can remove anyone's. The sweep
 expired lines, and lines whose grant was removed elsewhere (a review, a revoke). Each line
 keeps its history (submitted, approved, denied, cancelled, expired, removed), and each change
 is audited.
+
+**Approval routing** (issue #165). Each catalog item has ordered approval stages. Each stage is
+one of: the person's **manager**, the item's **owner**, or an **access approver** (anyone with
+`requests.decide`). A line copies its item's stages when it is filed. The first stage waits;
+each approval starts the next; the last one grants. Any stage's approver can deny.
+
+Managers and owners decide their stage from the **Inbox** or **Requests → Approvals**, as can
+anyone they delegated to (**Requests → Delegations**, up to 90 days). A stage escalates to the
+access approvers after the item's escalation hours (default 48). It escalates at once when no
+manager or owner signs in.
+
+Nobody decides a line they requested or that is for them, or for whoever delegated to them. Nobody
+decides two stages of the same line. The seed routes every demo item to the manager, then an access
+approver. Pat signs in as Anders Zeller, Vic's (Hana's) manager, so Vic's requests reach Pat
+first, then Olu or another access approver.
 
 Policy admins edit an item under **Directory → Entitlements → (group) → Request catalog**
 (`catalog.manage`). The seed puts every demo group in the catalog (privileged ones: 8 hours by
@@ -285,29 +379,196 @@ phishing-resistant sign-in, and binding a catalog item needs `catalog.manage` (s
 Not yet: location, worker type and custom HRIS fields (the identity record does not store them, so
 a test on one is always unknown and denies; they arrive with the HRIS attribute mapping).
 
-### Account correlation
+### Contractors, guests and end dates
 
-Connectors tie most accounts to a person. **Directory → Accounts → Account matches**
-(`/directory/matches`) handles the rest (issue #160):
+**Identity → Contractors & guests** (issue #159). Each person has a worker type: employee,
+contractor, intern, partner, vendor or guest. Every type except employee has:
+- a **sponsor**: an active employee accountable for them;
+- an **end date**, at most a year away;
+- optionally an organization and a start date.
 
-- **To review** lists user accounts with no person and no decision. A login that equals a
-  person's email, or matches the part before the @, is shown as a *proposal*. Tessera never
-  links on it by itself (self-asserted attributes, design K12).
-- **Link**, **Not a person** and **Release** pin a reviewer's decision (`account_links`).
-  Connector syncs keep it until someone releases it, which hands the account back to the
-  connector's mapping.
-- **Merge** (identity page, More actions → Merge into…) moves the merged identity's accounts,
-  account decisions, owned identities, reports and agent delegations to the identity kept. The
-  merged identity gets status `merged`; syncs keep it merged and resolve references to it to the
-  survivor. History (usage, reviews, requests, HRIS events) is not moved. An identity bound to a
-  Tessera sign-in user cannot be the merged side, because credentials never move.
-- **Undo** (Merges tab) works for 180 days. It moves back every recorded row that still points
-  at the survivor; rows changed since stay and are listed. Merges into an identity that was
-  merged later are undone last-first.
+A person without a lifecycle record is an employee with no end date. Policy admins set the
+lifecycle by hand (`lifecycle.manage`, with step-up). Otherwise it comes from the HRIS: a joiner
+event's `worker_type` and `end_date`, with the manager as sponsor unless
+`sponsor_external_id` names someone else.
 
-Decisions need `identities.correlate`, merges `identities.merge` (both: policy admin), each
-with a fresh phishing-resistant sign-in and a reason. Every decision is audited.
+- **Warnings.** The background sweeper warns 14, 7 and 1 days before the end date. Each
+  warning goes out once, as a history entry and an audit event (`lifecycle.warn`). The
+  notifications outbox (#189) delivers them through `lifecycle.Notify`.
+- **Extending.** The sponsor, or a lifecycle admin, moves the end date later, with a reason.
+  Nobody extends their own term. An extension restarts the warnings.
+- **The end.** On the end date the sweeper runs the person's **leaver plan**: accounts are
+  disabled, grants removed, JIT cancelled and ownership reassigned, as the JML leaver plan lists
+  them. It then terminates the identity, all in one transaction with `lifecycle.end`. The
+  sweep runs in the background loop, never on a read. Admins can also run it at once.
+- **Converting.** Changing the worker type is a conversion, for example contractor to employee,
+  which can drop the end date. It is recorded as `lifecycle.convert`.
 
+The Users list has a *Worker type* column and filter. The identity panel and page show the
+worker type, sponsor and dates, with *Extend* and *Change*. The page has three views:
+*Ending soon* (the next 14 days), *Everyone*, and *Sponsored by me*. The seed makes five demo
+people contractors, an intern, a vendor and a partner, ending 3 to 120 days out.
+
+A person with a live sponsorship (next section) has their lifecycle written by it: `PUT` and
+`extend` answer `409 managed_by_sponsorship`, and renewing goes through the sponsorship.
+
+Not yet:
+- provisioning the leaver plan into target systems (#103);
+- the guest claim flow (GU-6 #69 onward);
+- rehiring someone whose term has ended.
+
+### Guest sponsorships and invitations
+
+**Access → Guests I sponsor** (issue #65, GU-2; design `docs/design/guest-accounts-and-claim.md`
+§4.3, §8). A sponsor invites a visitor, contractor, volunteer or partner; the **sponsorship** records
+the sponsor's decision (who, purpose, population, access bundle, term, who approved, and the
+**policy version** that decided). Code: `internal/guests/sponsorship`.
+
+- **Sponsorship drives the lifecycle.** While it is active (made without approval, or approved) it
+  writes the guest's *affiliation* (`internal/identity/affiliations`, source `sponsorship`; type
+  `guest_visitor`, `contractor`, `volunteer` or `partner`) and their *lifecycle*
+  (`internal/lifecycle`, source `sponsorship`; worker type `guest` for visitors and volunteers,
+  `contractor`, `partner`). With several live sponsorships the lifecycle takes the sponsor of the
+  one that ends last and the latest end date: **a person stays active until their last sponsorship
+  ends**. Ending the last one ends the person now through the lifecycle end path (the leaver plan).
+  The affiliation stays `pending` until the guest completes their claim (GU-6).
+- **An invitation is self-asserted intake (K3).** It always creates a **new** identity (type human,
+  status `invited`, source `sponsorship`, external id `guest:<uuid>`), an unverified email
+  identifier marked as asserted by the sponsor (its issuer is the one invitation, so it never
+  collides with another person), a source record and an `intake_records` row (channel
+  `sponsor_invite` or `bulk_invite`, match mode `self_asserted`). Tessera never links it to an existing
+  person and never tells the sponsor whether the email matches one. The one exception: inviting
+  yourself is `422 cannot_sponsor_self`. Linking and merging are GU-5.
+- **Sponsor policy** (`internal/guests/sponsorship/default_policy.json`, evaluated in Go with the
+  semantics of the design's Cedar fragment until Cedar lands). Its version is
+  `<id>@<12 hex of the file's sha256>`; every decision stamps it on the sponsorship, its history and
+  the audit event. Defaults: only active employees sponsor (guests, contractors, interns, partners,
+  vendors and `invited` people cannot); at most 50 visitor, 25 contractor, 100 volunteer and 25
+  partner sponsorships at a time per sponsor, and 50 invitations a day; a term at most
+  `guest_populations.max_duration_days` (visitors 30 days); a contractor whose bundle holds a
+  privileged or high-risk group needs a second approver (`sponsorships.approve`, never the sponsor,
+  the guest or whoever made the request); such a bundle needs IAL 2 (`bundle_needs_ial2` if the
+  sponsor asks for less, otherwise the required IAL is raised). Refusals are `422` with stable codes
+  (`sponsor_not_eligible`, `sponsor_limit_reached`, `daily_invite_limit`, `exceeds_max_duration`,
+  `invalid_dates`, `bundle_needs_ial2`, `bundle_item_not_requestable`, `cannot_sponsor_self`, ...).
+- **Access bundle.** A list of requestable catalog items (the access catalog, #164), stored on the
+  sponsorship. **Granting it is GU-12**: nothing is granted in this release.
+- **Bulk invite.** CSV with the header `email,given_name,family_name,population,starts_at,ends_at,purpose`
+  (an optional `bundle` column of group ids separated by `;`), at most 500 rows. `dry_run` returns
+  per-row policy results and writes nothing (rows count against the limits as the real run would);
+  the real run creates the rows the policy permits and reports each row. One bad row never blocks
+  the others.
+- **Renew** re-runs the policy, needs a fresh justification and a new end at most the population
+  maximum from now. Where the policy asks for a second approver the sponsor cannot renew alone: a
+  holder of `sponsorships.approve` who is not the sponsor renews it. **End** by the sponsor is
+  `ended`; by an approver, or before it began, `revoked`. **Transfer** asks another eligible person to
+  take over; the sponsor stays until they **accept** (policy checked again as them); if nobody accepts
+  within 14 days the sponsorship ends. The sweeper (`sponsorship.sweeper`, before the lifecycle
+  sweep) ends sponsorships at their end date and expired transfers.
+- **Notifications** (outbox): approval needed (to holders of `sponsorships.approve`), approved or
+  rejected (to the sponsor), transfer requested (to the target). Reminders before the end are the
+  lifecycle warnings (#159).
+- **Permissions.** `guests.sponsor` (every role but break-glass: the policy decides eligibility),
+  `guests.read` (operator, auditor, policy admin, tenant admin: every guest; a sponsor always sees
+  their own, and the person asked to take a sponsorship over sees it), `sponsorships.approve`
+  (policy admin). Every change needs a fresh phishing-resistant sign-in. A sponsorship someone may
+  not see answers `404`. Audit actions: `sponsorship.create|approve|reject|renew|end|transfer|accept_transfer|expire|transfer_expire|bulk_invite|bulk_preview`.
+
+Not yet: the claim link and the guest's invitation email (GU-6; the intake's `invitation_status`
+stays `ready`), granting the bundle (GU-12), sponsor-leaver transfer from JML events and the
+transfer task in the Inbox (GU-11), self-registration (GU-3), resend and revoke invitation, and
+per-tenant sponsor policy editing. After pulling this change run `./run.sh --reseed`: it adds three
+tables and widens the lifecycle `source` check.
+themselves. Not yet: provisioning into the target system (#103), business roles (#161).
+
+### Notifications
+
+Issue #189. Requests, approvals, reviews and expiring access now tell people. Each notification is a
+row in the tenant's outbox (`schema/0223_notifications.sql`), written **in the same transaction** as
+the event that causes it, so a rolled-back event leaves none behind. The row is the person's in-app
+entry (the top-bar bell: unread count, mark as read) and, if they want it, an email.
+
+| Kind | Who is told | When |
+|---|---|---|
+| `request.approval_needed` | the approvers of the waiting stage (assignee and their delegates; deciders for a decider stage or one past due) | a request is submitted, and each time the next stage starts |
+| `request.approved`, `request.denied` | the requester and the beneficiary | the final decision |
+| `request.expiring` | the requester and the beneficiary | approved access ends within 24 hours |
+| `approval.escalated` | deciders and the stage's assignee | a stage passes its due time (not when it was due at once) |
+| `approval.delegated` | the delegate | someone delegates their approvals |
+| `review.launched`, `review.closed` | each reviewer of the campaign | campaign created, campaign complete |
+| `review.reminder` | reviewers with open items | once a week from the campaign's seventh day |
+| `jit.granted`, `jit.denied`, `jit.expiring` | the requester and the person | decision; access ends within the hour |
+| `access.ending` | the person (and others you name) | `notify.Expiring`, below |
+| `security.alert` | whoever the producer names | `notify.SecurityAlert`; **cannot be turned off** |
+
+People who do not sign in (a reviewer or owner with no platform user) are reached by email at their
+identity's address. Seeding and system jobs notify no one. The actor of a decision is never told of it.
+
+**Preferences.** Each user picks a channel per kind (**Notifications** in the UI, `/api/notifications/preferences`):
+`off`, `in_app`, `email`, `both` or `digest` (in the bell, plus one email a day). Defaults: `both` for
+approvals needed, escalations, review launches and reminders and security alerts, `in_app` for the rest.
+A user with no email address keeps an `email` choice in the bell.
+
+**Delivery.** A background dispatcher (every 15 seconds, `notify.Dispatcher`) claims due email in a short
+transaction (counting the attempt and leasing the row, so a crash retries after 5 minutes and a second
+dispatcher cannot send it twice), sends outside any transaction, and records each outcome in a second one.
+A failure is retried after a backoff of 30 s doubling to 1 h; after `TESSERA_NOTIFY_MAX_ATTEMPTS`
+(default 6), or on a permanent failure (a 5xx reply, an invalid address), the notification is a **dead
+letter**: it stays in the bell, its `delivery` is `dead` and its `last_error` says why. The
+email carries the notification id as its `Message-ID`. The digest is built per recipient once a day, from
+`TESSERA_NOTIFY_DIGEST_HOUR` UTC (default 8). **Every email send, retry, skip, dead letter and digest is an
+audit event** (`notification.send`, `notification.digest`; the address is never in it), as are
+mark-as-read and preference changes. The in-app entry itself is written with the audited event that causes it.
+
+**Email.** `TESSERA_NOTIFY_EMAIL` is `off`, `dev` or `smtp`; the default is `smtp` when `TESSERA_SMTP_HOST` is
+set, else `dev` outside production and `off` in production. The **dev sink** sends nothing: it logs and
+appends each message to `server/var/dev-mail.jsonl`. SMTP uses the standard library through
+`safehttp.NewDialer`, the same SSRF guard as every outbound call (private, loopback and metadata
+addresses refused; loopback allowed only in dev): `TESSERA_SMTP_HOST`, `_PORT` (587), `_FROM`, `_TLS`
+(`starttls` default, `tls`, `none` for dev), `_USERNAME` and `TESSERA_SMTP_PASSWORD_SEALED`. The password is
+never read in clear: `echo -n 'password' | tessera notify seal-password` prints it sealed under the KEK.
+Production refuses the dev sink, SMTP without TLS and a login without a sealed password. With email `off`
+due email is recorded as `skipped`.
+
+**Email delivery log.** Every email the dispatcher sends has a record (`schema/0224_email_messages.sql`),
+so an operator can see what happened without the relay's dashboard (**Admin → Email delivery**, or
+`GET /api/email/messages`). A record holds the message id, kind, recipient and subject (never the body),
+the envelope (`MAIL FROM`, `RCPT TO`), a **status**, the relay's **queue id** parsed from the final 250
+reply (`250 2.0.0 Ok: queued as ABC123`), and a list of attempts. Each attempt has start and finish
+times, the server banner, the EHLO capabilities, the TLS result (version, cipher, server certificate
+subject and issuer, or the error), and every command with the relay's reply, its code and its enhanced
+status code. The SMTP client is a small one on `net/textproto` so it can record this; AUTH is recorded as
+`AUTH PLAIN <redacted>`, the body as `<message body not recorded>`, and a transcript is capped (120 steps,
+24 KiB, 300 characters a field).
+
+| Status | Meaning | Retried |
+|---|---|---|
+| `queued`, `sending` | waiting for an attempt, or one is running | |
+| `accepted` | the relay answered 250 at the end of DATA | final |
+| `deferred` | a 4xx reply | yes, with backoff |
+| `rejected` | a 5xx reply, or an address that can never work | no |
+| `failed` | a network or TLS error, or a timeout | yes, with backoff |
+| `bounced` | reserved for bounce and DSN processing, a later step; nothing sets it yet | |
+
+**Accepted means accepted by the relay, not delivered to the inbox.** The UI says so. After the
+attempts run out a deferred or failed message is a dead letter; `POST /api/email/messages/{id}/retry`
+(audited as `email.message.retry`) queues one more attempt. Reading needs `email.read` (auditor and
+tenant admin), retrying `email.manage` (tenant admin). The dev sink records its sends too, with a
+one-step transcript. Not yet: bounce and DSN processing, per-tenant relay settings.
+
+**For other producers.** Write a notification from the transaction of your event:
+
+```go
+notify.Emit(tx, now, notify.Message{Kind: notify.KindSecurityAlert, Key: "role.grant:"+id,
+    Subject: "...", Body: "...", Link: "/admin"}, recipients...)   // idempotent per Key and recipient
+notify.SecurityAlert(tx, now, key, subject, body, link, recipients...) // admin-change notices (#16)
+notify.Expiring(tx, now, notify.Ending{Key: "identity:42", IdentityID: 42, Also: []int64{managerID},
+    What: "Ada's contract", EndsAt: end})   // end dates (#159): once per Key and end date
+```
+
+`notify.Identity`, `notify.User` and `notify.Deciders` build recipients. Add a kind to `notify.Kinds`
+(label, default, mandatory) and it appears in everyone's settings. Not yet: per-tenant SMTP and chat
+(the settings are server-wide), templates, per-kind digests.
 ### Identity containment (kill switch)
 
 A disabled account does not end its live sessions, refresh tokens or OAuth consents. Two plan
@@ -453,8 +714,8 @@ lose your place in the list.
 
 **Top bar** (48px, dark). The hamburger collapses the rail to icons (below 768px it opens the rail
 as a drawer), then the Tessera mark, the global search box (`/` focuses it; `⌘K` opens the
-palette), and on the right the Inbox with its count, recent activity (from the audit log),
-settings (theme: light, dark or match system), help (shortcuts) and the user menu with the
+palette), and on the right the Inbox with its count, the notification bell (unread count, the
+latest notifications, mark all as read, and **All notifications and settings**), settings (theme: light, dark or match system), help (shortcuts) and the user menu with the
 tenant name and the persona switcher.
 
 **Left rail** (236px, light). Active items are white with a blue left indicator; counts sit on
@@ -464,7 +725,7 @@ the right. Arrow keys move between items.
 |---|---|
 | (top) | **Home**, **Inbox** (count) |
 | **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts (with *Account matches*), Roles, Organizations (Preview) |
-| **Access** | Request access, My access (with *My requests*), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
+| **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
 | **Protection** | Policies & SoD (violations, policies, what-if simulation), Attribute policies, Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
 | **Settings** | Connections (governed connections and the setup wizard), Admin |
 

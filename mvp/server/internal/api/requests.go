@@ -40,24 +40,32 @@ func (s *Server) registerRequestRoutes() {
 	s.handle(P, "/api/requests", write, create, s.submitRequest)
 	s.handle(G, "/api/requests", read, create, s.listRequestLines)
 	s.handle(G, "/api/requests/{request_id}", read, create, s.getRequestLine)
-	s.handle(P, "/api/requests/{request_id}/approve", write, needStepUp(auth.PermRequestsDecide, auth.StepUpPolicy), s.approveRequestLine)
-	s.handle(P, "/api/requests/{request_id}/deny", write, need(auth.PermRequestsDecide), s.denyRequestLine)
+	// approvers are managers, owners, their delegates and deciders: the handler
+	// checks the line's routing (issue #165)
+	s.handle(P, "/api/requests/{request_id}/approve", write, needStepUp(auth.PermRequestsCreate, auth.StepUpPolicy), s.approveRequestLine)
+	s.handle(P, "/api/requests/{request_id}/deny", write, create, s.denyRequestLine)
 	s.handle(P, "/api/requests/{request_id}/cancel", write, create, s.cancelRequestLine)
 	s.handle(P, "/api/requests/{request_id}/remove", write, create, s.removeRequestLine)
+	s.handle(G, "/api/approvals/inbox", read, create, s.approvalInbox)
+	s.handle(G, "/api/approvals/delegates", read, create, s.approvalDelegates)
+	s.handle(G, "/api/approvals/delegations", read, create, s.listDelegations)
+	s.handle(P, "/api/approvals/delegations", write, create, s.createDelegation)
+	s.handle(P, "/api/approvals/delegations/{delegation_id}/revoke", write, create, s.revokeDelegation)
 }
 
 func (s *Server) can(r *http.Request, p auth.Permission) bool {
 	return auth.Check(principal(r), p, nil, s.clock()) == nil
 }
 
-// requestActor is the signed-in user, with the person they are.
-func requestActor(r *http.Request) (requests.Actor, error) {
+// requestActor is the signed-in user, with the person they are and whether
+// they hold requests.decide.
+func (s *Server) requestActor(r *http.Request) (requests.Actor, error) {
 	pr := principal(r)
 	if pr == nil || pr.UserID == nil {
 		return requests.Actor{}, &readiness.Error{Status: http.StatusForbidden, Code: "user_required",
 			Msg: "requests are made and decided by a signed-in user"}
 	}
-	a := requests.Actor{UserID: *pr.UserID, Display: pr.Display}
+	a := requests.Actor{UserID: *pr.UserID, Display: pr.Display, Decider: s.can(r, auth.PermRequestsDecide)}
 	if pr.Authn != nil {
 		a.AAL = pr.Authn.AAL
 	}
@@ -100,17 +108,23 @@ type userRef struct {
 }
 
 type catalogEntry struct {
-	ID                  *string    `json:"id"`
-	Group               groupRef   `json:"group"`
-	Requestable         bool       `json:"requestable"`
-	Description         string     `json:"description"`
-	Owner               *personRef `json:"owner"`
-	Risk                string     `json:"risk"`
-	EligibleTypes       []string   `json:"eligible_types"`
-	EligibleDepartments []string   `json:"eligible_departments"`
-	DefaultHours        *float64   `json:"default_hours"`
-	MaxHours            *float64   `json:"max_hours"`
-	UpdatedAt           *time.Time `json:"updated_at"`
+	ID                  *string      `json:"id"`
+	Group               groupRef     `json:"group"`
+	Requestable         bool         `json:"requestable"`
+	Description         string       `json:"description"`
+	Owner               *personRef   `json:"owner"`
+	Risk                string       `json:"risk"`
+	EligibleTypes       []string     `json:"eligible_types"`
+	EligibleDepartments []string     `json:"eligible_departments"`
+	DefaultHours        *float64     `json:"default_hours"`
+	MaxHours            *float64     `json:"max_hours"`
+	UpdatedAt           *time.Time   `json:"updated_at"`
+	Approval            approvalView `json:"approval"`
+}
+
+type approvalView struct {
+	Stages             []string `json:"stages"`
+	EscalateAfterHours float64  `json:"escalate_after_hours"`
 }
 
 type lineEvent struct {
@@ -138,10 +152,24 @@ type lineView struct {
 	ExpiresAt      *time.Time  `json:"expires_at"`
 	ClosedAt       *time.Time  `json:"closed_at"`
 	Events         []lineEvent `json:"events,omitempty"`
+	Stages         []stageView `json:"stages"`
 	// What the signed-in user may do with the line (the API checks again).
 	CanApprove bool `json:"can_approve"`
 	CanCancel  bool `json:"can_cancel"`
 	CanRemove  bool `json:"can_remove"`
+}
+
+type stageView struct {
+	Index      int        `json:"index"`
+	Kind       string     `json:"kind"`
+	Status     string     `json:"status"`
+	Assignee   *personRef `json:"assignee"`
+	DueAt      *time.Time `json:"due_at"`
+	Escalated  bool       `json:"escalated"`
+	DecidedBy  *userRef   `json:"decided_by"`
+	OnBehalfOf *userRef   `json:"on_behalf_of"`
+	DecidedAt  *time.Time `json:"decided_at"`
+	Reason     *string    `json:"reason"`
 }
 
 type accountRef struct {
@@ -207,7 +235,13 @@ func (v *viewer) entry(e requests.Entry) (catalogEntry, error) {
 	if g.Description != nil {
 		out.Description = *g.Description
 	}
+	out.Approval = approvalView{Stages: []string{store.StageDecider}, EscalateAfterHours: requests.DefaultEscalateHours}
 	if it := e.Item; it != nil {
+		stages, hours, err := requests.Policy(v.tx, it.ID)
+		if err != nil {
+			return out, err
+		}
+		out.Approval = approvalView{Stages: stages, EscalateAfterHours: hours}
 		out.ID, out.Requestable, out.Risk, out.DefaultHours, out.MaxHours = &it.ID, it.Requestable, it.Risk, it.DefaultHours, it.MaxHours
 		out.EligibleTypes, out.EligibleDepartments, out.UpdatedAt = it.EligibleTypes, it.EligibleDepartments, &it.UpdatedAt
 		if it.Description != "" {
@@ -245,9 +279,36 @@ func (s *Server) lineView(r *http.Request, v *viewer, l *store.RequestLine, me r
 		d := v.user(*l.DecidedBy)
 		out.DecidedBy = &d
 	}
-	decider := s.can(r, auth.PermRequestsDecide)
+	decider := me.Decider
 	mine := me.IdentityID != nil && *me.IdentityID == l.BeneficiaryID
-	out.CanApprove = decider && l.Status == store.RequestPending && l.RequestedBy != me.UserID.String() && !mine
+	if out.CanApprove, err = requests.CanDecide(v.tx, l, me, s.clock().UTC()); err != nil {
+		return out, err
+	}
+	stages, err := v.tx.RequestStages(l.ID)
+	if err != nil {
+		return out, err
+	}
+	out.Stages = make([]stageView, 0, len(stages))
+	for _, st := range stages {
+		sv := stageView{Index: st.Idx, Kind: st.Kind, Status: st.Status, DueAt: st.DueAt, DecidedAt: st.DecidedAt, Reason: st.Reason,
+			Escalated: st.Status == store.StageWaiting && st.DueAt != nil && !s.clock().Before(*st.DueAt)}
+		if st.AssigneeID != nil {
+			p, err := v.person(*st.AssigneeID)
+			if err != nil {
+				return out, err
+			}
+			sv.Assignee = &p
+		}
+		if st.DecidedBy != nil {
+			u := v.user(*st.DecidedBy)
+			sv.DecidedBy = &u
+		}
+		if st.OnBehalfOf != nil {
+			u := v.user(*st.OnBehalfOf)
+			sv.OnBehalfOf = &u
+		}
+		out.Stages = append(out.Stages, sv)
+	}
 	out.CanCancel = l.Status == store.RequestPending && l.RequestedBy == me.UserID.String()
 	out.CanRemove = l.Status == store.RequestApproved && (decider || mine)
 	if withEvents {
@@ -264,11 +325,13 @@ func (s *Server) lineView(r *http.Request, v *viewer, l *store.RequestLine, me r
 }
 
 // visible reports whether the signed-in user may see a line.
-func (s *Server) visible(r *http.Request, l *store.RequestLine, me requests.Actor) bool {
-	if l.RequestedBy == me.UserID.String() || (me.IdentityID != nil && *me.IdentityID == l.BeneficiaryID) {
-		return true
+func (s *Server) visible(r *http.Request, l *store.RequestLine, me requests.Actor) (bool, error) {
+	if l.RequestedBy == me.UserID.String() || (me.IdentityID != nil && *me.IdentityID == l.BeneficiaryID) ||
+		me.Decider || s.can(r, auth.PermGraphRead) {
+		return true, nil
 	}
-	return s.can(r, auth.PermRequestsDecide) || s.can(r, auth.PermGraphRead)
+	// an approver of the line (a manager, an owner or a delegate)
+	return requests.CanDecide(store.TxFrom(r.Context()), l, me, s.clock().UTC())
 }
 
 // ---------------------------------------------------------------- catalog
@@ -293,7 +356,7 @@ func (s *Server) catalog(_ http.ResponseWriter, r *http.Request, p *params) (any
 		}
 		out.Items = append(out.Items, ce)
 	}
-	if me, err := requestActor(r); err == nil && me.IdentityID != nil {
+	if me, err := s.requestActor(r); err == nil && me.IdentityID != nil {
 		p, err := v.person(*me.IdentityID)
 		if err != nil {
 			return nil, err
@@ -322,6 +385,9 @@ type catalogItemBody struct {
 	EligibleDepartments []string `json:"eligible_departments"`
 	DefaultHours        *float64 `json:"default_hours"`
 	MaxHours            *float64 `json:"max_hours"`
+	// optional: the approval stages (manager, owner, decider) and escalation hours
+	ApprovalStages     []string `json:"approval_stages"`
+	EscalateAfterHours *float64 `json:"escalate_after_hours"`
 }
 
 func (s *Server) putCatalogItem(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
@@ -329,7 +395,7 @@ func (s *Server) putCatalogItem(_ http.ResponseWriter, r *http.Request, p *param
 	if err := validated(p, nil); err != nil {
 		return nil, err
 	}
-	by, err := requestActor(r)
+	by, err := s.requestActor(r)
 	if err != nil {
 		return nil, err
 	}
@@ -343,6 +409,21 @@ func (s *Server) putCatalogItem(_ http.ResponseWriter, r *http.Request, p *param
 		EligibleDepartments: b.EligibleDepartments, DefaultHours: b.DefaultHours, MaxHours: b.MaxHours}, by, s.clock().UTC())
 	if err != nil {
 		return nil, reqErr(err)
+	}
+	if b.ApprovalStages != nil || b.EscalateAfterHours != nil {
+		stages, hours, err := requests.Policy(tx, it.ID)
+		if err != nil {
+			return nil, err
+		}
+		if b.ApprovalStages != nil {
+			stages = b.ApprovalStages
+		}
+		if b.EscalateAfterHours != nil {
+			hours = *b.EscalateAfterHours
+		}
+		if err := requests.SetPolicy(tx, it.ID, stages, hours, by, s.clock().UTC()); err != nil {
+			return nil, reqErr(err)
+		}
 	}
 	g, err := tx.Group(it.GroupID)
 	if err != nil {
@@ -361,7 +442,7 @@ type submitBody struct {
 }
 
 func (s *Server) submitRequest(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
-	by, err := requestActor(r)
+	by, err := s.requestActor(r)
 	if err != nil {
 		return nil, err
 	}
@@ -388,7 +469,7 @@ func (s *Server) submitRequest(_ http.ResponseWriter, r *http.Request, _ *params
 }
 
 func (s *Server) listRequestLines(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
-	me, err := requestActor(r)
+	me, err := s.requestActor(r)
 	if err != nil {
 		return nil, err
 	}
@@ -447,15 +528,23 @@ func validStatus(st string) bool {
 
 // line loads a line the signed-in user may see; others' look missing.
 func (s *Server) line(r *http.Request, p *params) (*store.RequestLine, requests.Actor, error) {
-	me, err := requestActor(r)
+	me, err := s.requestActor(r)
 	if err != nil {
 		return nil, me, err
 	}
+	missing := &readiness.Error{Status: http.StatusNotFound, Code: "request_not_found", Msg: "request not found"}
 	l, err := store.TxFrom(r.Context()).RequestLine(strings.TrimSpace(p.path["request_id"]))
-	if errors.Is(err, store.ErrNotFound) || (err == nil && !s.visible(r, l, me)) {
-		return nil, me, &readiness.Error{Status: http.StatusNotFound, Code: "request_not_found", Msg: "request not found"}
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, me, missing
+	} else if err != nil {
+		return nil, me, err
 	}
-	return l, me, err
+	if ok, err := s.visible(r, l, me); err != nil {
+		return nil, me, err
+	} else if !ok {
+		return nil, me, missing
+	}
+	return l, me, nil
 }
 
 func (s *Server) getRequestLine(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
@@ -503,8 +592,147 @@ func (s *Server) cancelRequestLine(_ http.ResponseWriter, r *http.Request, p *pa
 }
 
 func (s *Server) removeRequestLine(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
-	decider := s.can(r, auth.PermRequestsDecide)
 	return s.decideLine(r, p, true, func(tx *store.TenantTx, id string, me requests.Actor, reason string, now time.Time) (*store.RequestLine, error) {
-		return requests.Remove(tx, id, me, decider, reason, now)
+		return requests.Remove(tx, id, me, me.Decider, reason, now)
 	})
+}
+
+// ---------------------------------------------------------------- approvals
+
+type inboxItem struct {
+	Line       lineView `json:"line"`
+	Stage      *int     `json:"stage"`
+	Kind       string   `json:"kind"`
+	Escalated  bool     `json:"escalated"`
+	OnBehalfOf *userRef `json:"on_behalf_of"`
+}
+
+func (s *Server) approvalInbox(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+	me, err := s.requestActor(r)
+	if err != nil {
+		return nil, err
+	}
+	tx := store.TxFrom(r.Context())
+	pend, err := requests.Inbox(tx, me, s.clock().UTC())
+	if err != nil {
+		return nil, err
+	}
+	v := newViewer(tx)
+	out := make([]inboxItem, 0, len(pend))
+	for _, p := range pend {
+		lv, err := s.lineView(r, v, p.Line, me, false)
+		if err != nil {
+			return nil, err
+		}
+		it := inboxItem{Line: lv, Kind: store.StageDecider, Escalated: p.Authority.Escalated}
+		if st := p.Authority.Stage; st != nil {
+			idx := st.Idx
+			it.Stage, it.Kind = &idx, st.Kind
+		}
+		if p.Authority.OnBehalfOf != nil {
+			u := v.user(*p.Authority.OnBehalfOf)
+			it.OnBehalfOf = &u
+		}
+		out = append(out, it)
+	}
+	return out, nil
+}
+
+func (s *Server) approvalDelegates(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+	me, err := s.requestActor(r)
+	if err != nil {
+		return nil, err
+	}
+	users, err := store.TxFrom(r.Context()).PlatformUsers()
+	if err != nil {
+		return nil, err
+	}
+	out := []userRef{}
+	for _, u := range users {
+		if u.Status == "active" && u.ID != me.UserID && !u.IsBreakGlass {
+			out = append(out, userRef{u.ID.String(), u.DisplayName})
+		}
+	}
+	return out, nil
+}
+
+type delegationView struct {
+	ID        string     `json:"id"`
+	From      userRef    `json:"from"`
+	To        userRef    `json:"to"`
+	StartsAt  time.Time  `json:"starts_at"`
+	EndsAt    time.Time  `json:"ends_at"`
+	Reason    string     `json:"reason"`
+	CreatedAt time.Time  `json:"created_at"`
+	RevokedAt *time.Time `json:"revoked_at"`
+	Active    bool       `json:"active"`
+}
+
+func (s *Server) delegationView(v *viewer, d *store.ApprovalDelegationRow) delegationView {
+	now := s.clock()
+	return delegationView{ID: d.ID, From: v.user(d.FromUser), To: v.user(d.ToUser), StartsAt: d.StartsAt, EndsAt: d.EndsAt,
+		Reason: d.Reason, CreatedAt: d.CreatedAt, RevokedAt: d.RevokedAt,
+		Active: d.RevokedAt == nil && !now.Before(d.StartsAt) && now.Before(d.EndsAt)}
+}
+
+func (s *Server) listDelegations(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	me, err := s.requestActor(r)
+	if err != nil {
+		return nil, err
+	}
+	user := me.UserID.String()
+	if qs(p, "all") == "1" {
+		if !me.Decider {
+			return nil, denial{auth.Check(principal(r), auth.PermRequestsDecide, nil, s.clock())}
+		}
+		user = ""
+	}
+	tx := store.TxFrom(r.Context())
+	ds, err := tx.ApprovalDelegations(user)
+	if err != nil {
+		return nil, err
+	}
+	v := newViewer(tx)
+	out := make([]delegationView, 0, len(ds))
+	for _, d := range ds {
+		out = append(out, s.delegationView(v, d))
+	}
+	return out, nil
+}
+
+type delegationBody struct {
+	ToUserID string    `json:"to_user_id"`
+	StartsAt time.Time `json:"starts_at"`
+	EndsAt   time.Time `json:"ends_at"`
+	Reason   string    `json:"reason"`
+}
+
+func (s *Server) createDelegation(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+	me, err := s.requestActor(r)
+	if err != nil {
+		return nil, err
+	}
+	var b delegationBody
+	if err := decodeBody(r, &b, false); err != nil {
+		return nil, err
+	}
+	tx := store.TxFrom(r.Context())
+	d, err := requests.Delegate(tx, me, b.ToUserID, b.StartsAt, b.EndsAt, b.Reason, s.clock().UTC())
+	if err != nil {
+		return nil, reqErr(err)
+	}
+	return statusBody{http.StatusCreated, s.delegationView(newViewer(tx), d)}, nil
+}
+
+func (s *Server) revokeDelegation(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	me, err := s.requestActor(r)
+	if err != nil {
+		return nil, err
+	}
+	tx := store.TxFrom(r.Context())
+	d, err := requests.RevokeDelegation(tx, strings.TrimSpace(p.path["delegation_id"]), me, s.clock().UTC())
+	if err != nil {
+		return nil, reqErr(err)
+	}
+	return s.delegationView(newViewer(tx), d), nil
 }
