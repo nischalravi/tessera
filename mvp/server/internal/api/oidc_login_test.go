@@ -106,7 +106,7 @@ func newAuthEnv(t testing.TB, o authEnvOpts, users ...devidp.User) *oidcEnv {
 	if _, err := seed.Run(context.Background(), db, testkit.Now, testkit.Policies(t), tenants); err != nil {
 		t.Fatal(err)
 	}
-	hc, err := safehttp.New(safehttp.Options{Env: config.Dev, AllowLoopback: true})
+	hc, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Dev, AllowLoopback: true})
 	if err != nil {
 		t.Fatal(err)
 	}
