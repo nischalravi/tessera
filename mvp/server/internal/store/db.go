@@ -93,6 +93,8 @@ var tables = []string{
 	"business_role_requests",
 	// identity lifecycle (schema/0220_lifecycle.sql)
 	"identity_lifecycle", "identity_lifecycle_events",
+	// attribute conditions (schema/0221_abac.sql)
+	"abac_policies", "abac_policy_versions", "abac_bindings",
 	// account correlation (schema/0204_correlation.sql)
 	"account_links", "identity_merges",
 	// identity containment (schema/0205_containment.sql)
