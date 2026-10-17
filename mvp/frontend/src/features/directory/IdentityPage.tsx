@@ -9,6 +9,7 @@ import {
 } from "../../components";
 import { mockIdentityOps, mockObjects, useMockState } from "../../mocks";
 import { useSession } from "../../app/auth";
+import { AffiliationsSection, IdentifiersSection } from "./affiliations";
 import { MergeDialog } from "./correlation";
 import { ContainDialog } from "./containment";
 import { PreviewFormDrawer } from "./shared";
@@ -59,7 +60,7 @@ export function RevokeDrawer({ edgeId, onClose, onDone }: { edgeId: number; onCl
   );
 }
 
-type Tab = "access" | "grants" | "violations" | "recs" | "accounts" | "delegation" | "lifecycle";
+type Tab = "access" | "grants" | "violations" | "recs" | "accounts" | "affiliations" | "delegation" | "lifecycle";
 
 function Header({ d, disabledAt }: { d: IdentityDetail; disabledAt?: string }) {
   const acts = useIdentityActions();
@@ -191,6 +192,7 @@ export function IdentityPage() {
     { id: "recs", label: `Recommendations (${d.recommendations.length})` },
     { id: "accounts", label: `Accounts (${d.accounts.length})` },
   ];
+  if (!machine) tabs.push({ id: "affiliations", label: "Affiliations & identifiers" });
   if (d.delegations.length || d.owned_identities.length) tabs.push({ id: "delegation", label: "Delegation & ownership" });
   if (!machine) tabs.push({ id: "lifecycle", label: "Worker type & dates" });
 
@@ -273,6 +275,13 @@ export function IdentityPage() {
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {tab === "affiliations" && !machine && (
+        <div className="grid g2">
+          <div className="card"><AffiliationsSection identityId={d.id} name={d.name} human /></div>
+          <div className="card"><IdentifiersSection identityId={d.id} /></div>
         </div>
       )}
 

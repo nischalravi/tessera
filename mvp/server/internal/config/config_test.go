@@ -104,6 +104,11 @@ func TestProdRefusesEachUnsafeSetting(t *testing.T) {
 		{"access token TTL too long", []string{"TESSERA_AT_TTL_SECONDS", "901"}, "TESSERA_AT_TTL_SECONDS"},
 		{"device code TTL too long", []string{"TESSERA_DEVICE_CODE_TTL_SECONDS", "601"}, "TESSERA_DEVICE_CODE_TTL_SECONDS"},
 		{"bad boolean", []string{"TESSERA_COOKIE_SECURE", "maybe"}, "not a boolean"},
+		{"dev mail sink", []string{"TESSERA_NOTIFY_EMAIL", "dev"}, "dev sink"},
+		{"SMTP without TLS", []string{"TESSERA_SMTP_HOST", "smtp.example.com", "TESSERA_SMTP_FROM", "t@example.com", "TESSERA_SMTP_TLS", "none"},
+			"TESSERA_SMTP_TLS=none"},
+		{"SMTP login without a sealed password", []string{"TESSERA_SMTP_HOST", "smtp.example.com", "TESSERA_SMTP_FROM", "t@example.com",
+			"TESSERA_SMTP_USERNAME", "u"}, "TESSERA_SMTP_PASSWORD_SEALED is required"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -408,5 +413,41 @@ func TestTestEnvAndInsecureCookie(t *testing.T) {
 	c, err = config.Load(env(map[string]string{"TESSERA_ENV": "dev", "TESSERA_PUBLIC_URL": "https://tessera.example.com/app"}))
 	if err != nil || c.PublicOrigin() != "https://tessera.example.com" {
 		t.Errorf("public origin %q %v", c.PublicOrigin(), err)
+	}
+}
+
+// TestMailConfig: the email sender defaults by environment, and SMTP needs a
+// host and a from address.
+func TestMailConfig(t *testing.T) {
+	c, err := config.Load(env(safeProd()))
+	if err != nil || c.Mail.Mode != config.MailOff {
+		t.Errorf("prod default mail = %+v, %v; want off", c.Mail, err)
+	}
+	c, err = config.Load(env(with(safeProd(), "TESSERA_SMTP_HOST", "smtp.example.com", "TESSERA_SMTP_FROM", "Tessera <t@example.com>",
+		"TESSERA_SMTP_USERNAME", "u", "TESSERA_SMTP_PASSWORD_SEALED", testKEK)))
+	if err != nil || c.Mail.Mode != config.MailSMTP || c.Mail.Port != 587 || c.Mail.TLS != config.SMTPStartTLS {
+		t.Errorf("prod smtp mail = %+v, %v", c.Mail, err)
+	}
+	if strings.Contains(c.Mail.String(), testKEK) {
+		t.Error("Mail.String shows the sealed password")
+	}
+	for _, env0 := range []string{"dev", "test"} {
+		c, err = config.Load(env(map[string]string{"TESSERA_ENV": env0}))
+		if err != nil || c.Mail.Mode != config.MailDev || c.NotifyMaxAttempts != 6 || c.NotifyDigestHour != 8 {
+			t.Errorf("%s default mail = %+v, %v", env0, c, err)
+		}
+	}
+	for _, kv := range [][]string{
+		{"TESSERA_NOTIFY_EMAIL", "smtp"},
+		{"TESSERA_NOTIFY_EMAIL", "pigeon"},
+		{"TESSERA_SMTP_HOST", "smtp.example.com"},
+		{"TESSERA_SMTP_HOST", "smtp.example.com", "TESSERA_SMTP_FROM", "not an address"},
+		{"TESSERA_SMTP_TLS", "ssl"},
+		{"TESSERA_NOTIFY_MAX_ATTEMPTS", "0"},
+		{"TESSERA_NOTIFY_DIGEST_HOUR", "24"},
+	} {
+		if _, err := config.Load(env(with(map[string]string{"TESSERA_ENV": "dev"}, kv...))); err == nil {
+			t.Errorf("dev accepted %v", kv)
+		}
 	}
 }

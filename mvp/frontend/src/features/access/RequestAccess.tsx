@@ -372,7 +372,7 @@ export function RequestAccess() {
             </label>
             <label className="field">
               Justification
-              <textarea className="input" value={justification} onChange={(e) => setJustification(e.target.value)} placeholder="What do you need it for? Include a ticket if there is one." />
+              <textarea className="input" maxLength={1000} value={justification} onChange={(e) => setJustification(e.target.value)} placeholder="What do you need it for? Include a ticket if there is one." />
               <span className="hint">Approvers see this. At least a few words.</span>
             </label>
             {groups && <RiskPreview beneficiaries={beneficiaries} cart={cart} groups={groups} />}

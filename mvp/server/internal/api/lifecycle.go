@@ -88,8 +88,8 @@ func (s *Server) lifecycleView(r *http.Request, v *viewer, l *store.Lifecycle, m
 	return out, nil
 }
 
-func myIdentity(r *http.Request) *int64 {
-	me, err := requestActor(r)
+func (s *Server) myIdentity(r *http.Request) *int64 {
+	me, err := s.requestActor(r)
 	if err != nil {
 		return nil
 	}
@@ -106,7 +106,7 @@ func (s *Server) listLifecycle(_ http.ResponseWriter, r *http.Request, p *params
 	if err != nil {
 		return nil, err
 	}
-	v, me := newViewer(tx), myIdentity(r)
+	v, me := newViewer(tx), s.myIdentity(r)
 	out := make([]lifecycleView, 0, len(ls))
 	for _, l := range ls {
 		lv, err := s.lifecycleView(r, v, l, me)
@@ -121,7 +121,7 @@ func (s *Server) listLifecycle(_ http.ResponseWriter, r *http.Request, p *params
 }
 
 func (s *Server) sponsoredLifecycle(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
-	me := myIdentity(r)
+	me := s.myIdentity(r)
 	out := []lifecycleView{}
 	if me == nil {
 		return out, nil
@@ -177,7 +177,7 @@ func (s *Server) fullLifecycleView(r *http.Request, person *store.Identity, l *s
 		return lifecycleView{Person: pr, WorkerType: store.WorkerEmployee, State: lifecycle.StateActive, Source: "manual",
 			Default: true, CanManage: s.can(r, auth.PermLifecycleManage), Events: []lifecycleEvent{}}, nil
 	}
-	out, err := s.lifecycleView(r, v, l, myIdentity(r))
+	out, err := s.lifecycleView(r, v, l, s.myIdentity(r))
 	if err != nil {
 		return nil, err
 	}
@@ -214,7 +214,7 @@ func (s *Server) putLifecycle(_ http.ResponseWriter, r *http.Request, p *params)
 	if err != nil {
 		return nil, err
 	}
-	by, err := requestActor(r)
+	by, err := s.requestActor(r)
 	if err != nil {
 		return nil, err
 	}
@@ -249,7 +249,7 @@ func (s *Server) extendLifecycle(_ http.ResponseWriter, r *http.Request, p *para
 	if err != nil {
 		return nil, err
 	}
-	by, err := requestActor(r)
+	by, err := s.requestActor(r)
 	if err != nil {
 		return nil, err
 	}

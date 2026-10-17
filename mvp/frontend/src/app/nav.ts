@@ -1,5 +1,5 @@
 import {
-  AppWindow, BadgeCheck, Bot, Building2, CalendarClock, ChartLine, ClipboardCheck, House, Inbox, KeyRound, Layers, LucideIcon, Network, Plug, Plus, Settings, ShieldCheck, Timer, Users, UsersRound,
+  AppWindow, BadgeCheck, Bot, Building2, CalendarClock, ChartLine, ClipboardCheck, House, Inbox, KeyRound, Layers, LucideIcon, Network, Plug, Plus, Settings, ShieldCheck, Timer, UserPlus, Users, UsersRound,
 } from "lucide-react";
 
 export interface NavPage {
@@ -61,6 +61,7 @@ export const RAIL: RailGroup[] = [
         id: "mine", label: "My access", icon: BadgeCheck, path: "/access/mine", also: ["/access/requests"], keywords: "what i have entitlements remove",
         pages: [{ path: "/access/requests", label: "My requests", keywords: "history drafts status submitted" }],
       },
+      { id: "guests", label: "Guests I sponsor", icon: UserPlus, path: "/access/guests", keywords: "guest sponsor invite visitor contractor volunteer partner sponsorship bulk csv approve transfer" },
       { id: "jit", label: "Just-in-time", icon: Timer, path: "/access/jit", keywords: "jit elevation temporary privileged break glass" },
       {
         id: "reviews", label: "Access reviews", icon: ClipboardCheck, path: "/governance/reviews", also: ["/governance/lifecycle", "/governance/workflows"], keywords: "certification campaigns attestation",

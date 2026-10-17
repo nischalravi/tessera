@@ -286,42 +286,6 @@ func TestInferTeamAndBirthright(t *testing.T) {
 	}
 }
 
-// A contractor joiner from the HRIS gets a lifecycle row (issue #159): the
-// worker type and end date from the payload, the manager as sponsor.
-func TestExecuteJoinerRecordsContractorLifecycle(t *testing.T) {
-	st, ids := testkit.Tiny(t)
-	pols := testkit.Policies(t)
-	end := testkit.Now.Add(90 * 24 * time.Hour)
-	var evID int64
-	testkit.Write(t, st, func(c *store.TenantTx) error {
-		var err error
-		evID, err = c.InsertHrisEvent(&store.HrisEvent{ExternalID: "t-j", Type: "joiner", EffectiveAt: testkit.Now, Status: "pending",
-			Payload: ojson.Object{{Key: "name", Value: "Cass Contractor"}, {Key: "email", Value: "cass@example.com"},
-				{Key: "department", Value: "Engineering"}, {Key: "team", Value: "backend"}, {Key: "manager_external_id", Value: "carol"},
-				{Key: "worker_type", Value: "contractor"}, {Key: "end_date", Value: timeutil.ISO(end)}}})
-		return err
-	})
-	testkit.Write(t, st, func(c *store.TenantTx) error {
-		_, err := jml.ExecuteEvent(c, testkit.Now, evID, store.UserRef{Display: "jml-automation"}, pols)
-		return err
-	})
-	testkit.Read(t, st, func(c *store.TenantTx) error {
-		ev, err := c.HrisEvent(evID)
-		if err != nil || ev.IdentityID == nil {
-			t.Fatalf("event = %+v, %v", ev, err)
-		}
-		l, err := c.LifecycleFor(*ev.IdentityID)
-		if err != nil {
-			t.Fatalf("lifecycle: %v", err)
-		}
-		if l.WorkerType != store.WorkerContractor || l.Source != "hris" || l.EndsAt == nil || !l.EndsAt.Equal(end) ||
-			l.SponsorID == nil || *l.SponsorID != ids["carol"] {
-			t.Errorf("lifecycle = %+v", l)
-		}
-		return nil
-	})
-}
-
 // Containment steps (issue #106): a leaver plan carries revoke_sessions and
 // revoke_grants for an account on a system with a live connection, and
 // ExecuteEvent runs the plan whether or not they succeeded.
@@ -384,3 +348,39 @@ func TestLeaverContainmentSteps(t *testing.T) {
 }
 
 func stringOf(v any) string { s, _ := v.(string); return s }
+
+// A contractor joiner from the HRIS gets a lifecycle row (issue #159): the
+// worker type and end date from the payload, the manager as sponsor.
+func TestExecuteJoinerRecordsContractorLifecycle(t *testing.T) {
+	st, ids := testkit.Tiny(t)
+	pols := testkit.Policies(t)
+	end := testkit.Now.Add(90 * 24 * time.Hour)
+	var evID int64
+	testkit.Write(t, st, func(c *store.TenantTx) error {
+		var err error
+		evID, err = c.InsertHrisEvent(&store.HrisEvent{ExternalID: "t-j", Type: "joiner", EffectiveAt: testkit.Now, Status: "pending",
+			Payload: ojson.Object{{Key: "name", Value: "Cass Contractor"}, {Key: "email", Value: "cass@example.com"},
+				{Key: "department", Value: "Engineering"}, {Key: "team", Value: "backend"}, {Key: "manager_external_id", Value: "carol"},
+				{Key: "worker_type", Value: "contractor"}, {Key: "end_date", Value: timeutil.ISO(end)}}})
+		return err
+	})
+	testkit.Write(t, st, func(c *store.TenantTx) error {
+		_, err := jml.ExecuteEvent(c, testkit.Now, evID, store.UserRef{Display: "jml-automation"}, pols)
+		return err
+	})
+	testkit.Read(t, st, func(c *store.TenantTx) error {
+		ev, err := c.HrisEvent(evID)
+		if err != nil || ev.IdentityID == nil {
+			t.Fatalf("event = %+v, %v", ev, err)
+		}
+		l, err := c.LifecycleFor(*ev.IdentityID)
+		if err != nil {
+			t.Fatalf("lifecycle: %v", err)
+		}
+		if l.WorkerType != store.WorkerContractor || l.Source != "hris" || l.EndsAt == nil || !l.EndsAt.Equal(end) ||
+			l.SponsorID == nil || *l.SponsorID != ids["carol"] {
+			t.Errorf("lifecycle = %+v", l)
+		}
+		return nil
+	})
+}

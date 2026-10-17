@@ -13,6 +13,7 @@ import { usePersona } from "../../app/persona";
 import {
   Avatar, Badge, Chip, CommandBar, EmptyState, IdLink, Loading, PathView, PreviewBadge, RiskPill, Sev, SidePanel, Status, Tabs, TypeBadge, TYPE_LABEL, useToast,
 } from "../../components";
+import { AffiliationsSection, IdentifiersSection } from "./affiliations";
 import { LifecycleSection } from "../lifecycle/parts";
 import { ORGS, OrgUnit, mockIdentityOps, mockObjects, useMockState } from "../../mocks";
 import { useSession } from "../../app/auth";
@@ -37,7 +38,7 @@ const Section = ({ title, children, action }: { title: ReactNode; children: Reac
 );
 
 // ------------------------------------------------------------- identity
-type IdTab = "overview" | "access" | "groups" | "activity";
+type IdTab = "overview" | "person" | "access" | "groups" | "activity";
 
 export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void }) {
   const validId = isNumericId(id);
@@ -65,6 +66,7 @@ export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void
 
   const tabs: { id: IdTab; label: string }[] = [
     { id: "overview", label: "Overview" },
+    ...(human ? [{ id: "person" as const, label: "Affiliations" }] : []),
     { id: "access", label: `Access (${d.effective_permissions.length})` },
     { id: "groups", label: `Groups (${d.grants.length})` },
     { id: "activity", label: "Activity" },
@@ -99,6 +101,12 @@ export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void
       }
       tabs={<Tabs label="Identity details" tabs={tabs} value={tab} onChange={setTab} />}
     >
+      {tab === "person" && human && (
+        <div className="stack">
+          <AffiliationsSection identityId={d.id} name={d.name} human />
+          <IdentifiersSection identityId={d.id} />
+        </div>
+      )}
       {tab === "overview" && (
         <>
           <dl className="kv">

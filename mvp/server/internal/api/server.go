@@ -24,6 +24,8 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oidcrp"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/sponsorship"
+	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
 	"github.com/nischalravi/tessera/mvp/server/internal/lifecycle"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -99,6 +101,12 @@ type Config struct {
 	// TrustedProxies (TESSERA_TRUSTED_PROXIES) are the peers whose
 	// X-Forwarded-For the rate limiter believes.
 	TrustedProxies []netip.Prefix
+	// EmailMode is the email delivery (config.MailOff, MailDev or MailSMTP):
+	// the preferences page says whether the email channels do anything.
+	EmailMode string
+	// Identifiers hashes the identifiers of invited guests under per-tenant
+	// keys derived from the KEK. Nil: invitations answer 503.
+	Identifiers *identifiers.Keyer
 	// Containment runs the kill switch's provider calls (revoke sessions and
 	// grants). Nil: a service with no outbound client, so every containment
 	// step is a manual task.
@@ -117,6 +125,7 @@ type Server struct {
 	routes []*route
 	authn  *auth.Authenticator
 	limits *limiters
+	guests *sponsorship.Service
 	rp     *oidcrp.RP
 	oauth2 *oauth2rp.RP
 
@@ -161,6 +170,7 @@ func New(cfg Config) *Server {
 	}
 	s := &Server{cfg: cfg, containment: cfg.Containment, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
 		limits: newLimiters(cfg.RateLimits)}
+	s.guests = sponsorship.New(cfg.Identifiers)
 	if cfg.OutboundHTTP != nil {
 		rp, err := oidcrp.New(oidcrp.Config{HTTP: cfg.OutboundHTTP, Now: func() time.Time { return s.clock() }})
 		if err != nil {
@@ -175,10 +185,14 @@ func New(cfg Config) *Server {
 		Cookies: auth.Cookies{Insecure: cfg.InsecureCookie}}
 	s.registerRoutes()
 	s.registerAuditRoutes()
+	s.registerCorrelationRoutes()
+	s.registerAffiliationRoutes()
 	s.registerRequestRoutes()
 	s.registerRoleRoutes()
 	s.registerLifecycleRoutes()
-	s.registerCorrelationRoutes()
+	s.registerGuestRoutes()
+	s.registerNotificationRoutes()
+	s.registerEmailRoutes()
 	s.registerContainmentRoutes()
 	s.registerGroupsFolderRoutes()
 	s.registerReadinessRoutes()
@@ -258,6 +272,10 @@ func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
 		}
 		if err := requests.SweepAll(audit.WithSystemActor(ctx, requests.Sweeper), s.store, s.clock()); err != nil && ctx.Err() == nil {
 			s.log.Error("request sweep failed", "err", err)
+		}
+		// sponsorships first: the last one to end ends the person, the lifecycle sweep then has nothing left
+		if err := s.guests.SweepAll(audit.WithSystemActor(ctx, sponsorship.Sweeper), s.store, s.clock()); err != nil && ctx.Err() == nil {
+			s.log.Error("sponsorship sweep failed", "err", err)
 		}
 		if err := lifecycle.SweepAll(audit.WithSystemActor(ctx, lifecycle.Sweeper), s.store, s.containment, s.clock()); err != nil && ctx.Err() == nil {
 			s.log.Error("lifecycle sweep failed", "err", err)
@@ -611,6 +629,10 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSON(w, http.StatusBadRequest, detail("There was an error parsing the body"))
 	case errors.Is(err, context.Canceled):
 		// client went away; nothing useful to send
+	case errors.Is(err, context.DeadlineExceeded):
+		// the handler timeout's deadline passed inside the handler: the same
+		// 503 http.TimeoutHandler sends, whichever of the two gets there first
+		writeJSON(w, http.StatusServiceUnavailable, detail("Request timed out"))
 	default:
 		// Never echo internal errors (they may contain SQL or paths) to the client.
 		s.log.Error("request failed", "method", r.Method, "path", r.URL.Path, "err", err)
