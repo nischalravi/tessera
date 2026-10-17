@@ -55,6 +55,13 @@ test("a secret write drops an earlier pending action, so the resume never offers
   assert.equal(api.takePendingAction(), null);
 });
 
+test("a change request that carries a client secret is not kept; one without a secret is", async () => {
+  await assert.rejects(api.adminChanges.submit("idp_connection.create", { name: "okta" }, "s3cr3t-value"));
+  assert.equal(mem.size, 0);
+  await assert.rejects(api.adminChanges.submit("role.grant", { role: "auditor" }));
+  assert.equal(mem.size, 1);
+});
+
 test("a read refused for step-up keeps nothing", async () => {
   await assert.rejects(api.api("/audit"));
   assert.equal(mem.size, 0);

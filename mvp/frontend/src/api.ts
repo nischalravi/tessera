@@ -1587,7 +1587,9 @@ export interface AdminApiClients { available: boolean; clients: { id: string; na
 /** Admin-change workflow calls. Approving needs the hash of the payload the admin reviewed. */
 export const adminChanges = {
   submit: (type: ChangeType, payload: Record<string, unknown>, client_secret?: string) =>
-    api<AdminChange>("/admin/change-requests", client_secret ? { type, payload, client_secret } : { type, payload }),
+    client_secret
+      ? api<AdminChange>("/admin/change-requests", { type, payload, client_secret }, "POST", { noResume: true })
+      : api<AdminChange>("/admin/change-requests", { type, payload }),
   approve: (id: string, payload_hash: string) => api<AdminChange>(`/admin/change-requests/${id}/approve`, { payload_hash }),
   reject: (id: string) => api<AdminChange>(`/admin/change-requests/${id}/reject`, {}),
   cancel: (id: string) => api<AdminChange>(`/admin/change-requests/${id}/cancel`, {}),
