@@ -180,6 +180,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/api/containment-retries/{retry_id}/retry-now" {
 			continue // TestContainmentRetriesAPI (a UUID, not a fixture id)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/groups/") {
+			continue // TestGroupsTenantIsolation (UUIDs, not fixture ids)
+		}
 		if rt.Pattern == "/api/auth/sessions/{session_id}" {
 			continue // TestIsolation_SessionCookieScoped (a UUID, not a fixture id)
 		}
@@ -255,6 +258,9 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		path := rt.Pattern
 		if rp, ok := readinessGetPaths(f.B.Refs)[path]; ok && strings.Contains(path, "{") {
 			path = rp // tenant B's own readiness ids
+		}
+		if strings.HasPrefix(path, "/api/groups/") && strings.Contains(path, "{") {
+			continue // TestGroupsTenantIsolation (UUIDs, not fixture ids)
 		}
 		if strings.Contains(path, "{") {
 			v, ok := values[path]
