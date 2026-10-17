@@ -205,6 +205,10 @@ type field struct {
 	def      any
 	lits     []string
 	model    []field
+	// Optional constraints: ge/le bound kInt values; minLen/maxLen bound the
+	// trimmed length (in characters) of kStr values, which are stored trimmed.
+	ge, le         *int64
+	minLen, maxLen int
 }
 
 func modelTypeErr(l []any, v any) verr {
@@ -264,6 +268,16 @@ func validateField(raw any, f field, l []any) (any, []verr) {
 		if e != nil {
 			return nil, one(l, e)
 		}
+		if f.ge != nil && n < *f.ge {
+			return nil, []verr{{Type: "greater_than_equal", Loc: l,
+				Msg: "Input should be greater than or equal to " + strconv.FormatInt(*f.ge, 10), Input: raw,
+				Ctx: ojson.Object{{Key: "ge", Value: *f.ge}}}}
+		}
+		if f.le != nil && n > *f.le {
+			return nil, []verr{{Type: "less_than_equal", Loc: l,
+				Msg: "Input should be less than or equal to " + strconv.FormatInt(*f.le, 10), Input: raw,
+				Ctx: ojson.Object{{Key: "le", Value: *f.le}}}}
+		}
 		return n, nil
 	case kFloat:
 		n, e := toFloat(raw)
@@ -281,6 +295,20 @@ func validateField(raw any, f field, l []any) (any, []verr) {
 		s, e := toStr(raw)
 		if e != nil {
 			return nil, one(l, e)
+		}
+		if f.minLen > 0 || f.maxLen > 0 {
+			s = strings.TrimSpace(s)
+			n := utf8.RuneCountInString(s)
+			if n < f.minLen {
+				return nil, []verr{{Type: "string_too_short", Loc: l,
+					Msg: "String should have at least " + strconv.Itoa(f.minLen) + " character" + plural(f.minLen), Input: raw,
+					Ctx: ojson.Object{{Key: "min_length", Value: f.minLen}}}}
+			}
+			if f.maxLen > 0 && n > f.maxLen {
+				return nil, []verr{{Type: "string_too_long", Loc: l,
+					Msg: "String should have at most " + strconv.Itoa(f.maxLen) + " character" + plural(f.maxLen), Input: raw,
+					Ctx: ojson.Object{{Key: "max_length", Value: f.maxLen}}}}
+			}
 		}
 		return s, nil
 	case kLiteral:
@@ -504,3 +532,10 @@ func (p *params) queryOptLiteral(name string, lits []string) *string {
 }
 
 func i64(v int64) *int64 { return &v }
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}

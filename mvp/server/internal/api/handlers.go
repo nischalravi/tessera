@@ -1278,8 +1278,8 @@ func (s *Server) listCampaigns(_ http.ResponseWriter, r *http.Request, _ *params
 }
 
 var campaignFields = []field{
-	{name: "name", kind: kStr, def: "Exception-only review"},
-	{name: "unused_days", kind: kInt, def: int64(60)},
+	{name: "name", kind: kStr, def: "Exception-only review", minLen: 1, maxLen: 200},
+	{name: "unused_days", kind: kInt, def: int64(60), ge: i64(1), le: i64(3650)},
 }
 
 func (s *Server) createCampaign(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {

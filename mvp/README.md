@@ -151,7 +151,7 @@ The routes are documented at `/api/readiness/openapi.json`.
 `POST /api/least-privilege/revoke {edge_id, dry_run}` · `GET /api/policies` · `GET /api/violations` ·
 `POST /api/simulate {remove_edge_ids, add_edges:[{src,dst,duration_hours?}], disable_account_ids}` ·
 `GET|POST /api/jit/requests` · `POST /api/jit/requests/{id}/approve|deny|revoke` ·
-`GET|POST /api/reviews/campaigns` · `POST /api/reviews/items/{id}/decision` ·
+`GET|POST /api/reviews/campaigns {name?, unused_days?}` (422 unless `name` is 1-200 characters after trimming and `unused_days` is 1-3650) · `POST /api/reviews/items/{id}/decision` ·
 `GET|POST /api/hris/events` (422 for an unknown `identity_id`) · `GET /api/hris/events/{id}/plan` · `POST /api/hris/events/{id}/execute` ·
 `GET /api/jml/leaver-plan/{identity_id}` · `POST /api/identities/{id}/contain` (kill switch, see "Identity containment") ·
 `PUT /api/connections/{id}/containment-credential` · `GET /api/accounts[?system=]` ·
