@@ -55,6 +55,9 @@ var (
 			requested_at, decided_at, decided_by, expires_at, edge_id, requested_by_user_id, decided_by_user_id)
 		VALUES (@tenant, @identity_id, @account_id, @group_id, @justification, @duration_hours, @status,
 			@requested_at, @decided_at, @decided_by, @expires_at, @edge_id, @requested_by_user_id, @decided_by_user_id)`)
+	requestsPendingFor = tq("access_requests.count_pending_for", `
+		SELECT count(r.id) FROM access_requests r
+		WHERE r.tenant_id = @tenant AND r.identity_id = @identity_id AND r.group_id = @group_id AND r.status = 'pending'`)
 	requestsSave = tq("access_requests.save", `
 		UPDATE access_requests SET status = @status, decided_at = @decided_at, decided_by = @decided_by,
 			expires_at = @expires_at, edge_id = @edge_id, decided_by_user_id = @decided_by_user_id
@@ -125,11 +128,27 @@ func (tx *TenantTx) OpenRequestsFor(identityID int64) ([]*AccessRequest, error) 
 	return collect(tx, scanRequest, requestsOpenFor, sql.Named("identity_id", identityID))
 }
 
-// InsertRequest inserts an access request and returns its id.
+// HasPendingRequest reports whether the identity has a pending request for the group.
+func (tx *TenantTx) HasPendingRequest(identityID, groupID int64) (bool, error) {
+	n, err := tx.count(requestsPendingFor, sql.Named("identity_id", identityID), sql.Named("group_id", groupID))
+	return n > 0, err
+}
+
+// InsertRequest inserts an access request and returns its id. A second
+// pending request for the same identity and group (schema/0207) is refused
+// with ErrDuplicate.
 func (tx *TenantTx) InsertRequest(r *AccessRequest) (int64, error) {
 	if err := tx.own(r.TenantID); err != nil {
 		return 0, err
 	}
+	id, err := tx.insertRequest(r)
+	if isUnique(err) {
+		return 0, ErrDuplicate
+	}
+	return id, err
+}
+
+func (tx *TenantTx) insertRequest(r *AccessRequest) (int64, error) {
 	return tx.insert(requestsInsert, sql.Named("identity_id", r.IdentityID), sql.Named("account_id", r.AccountID),
 		sql.Named("group_id", r.GroupID), sql.Named("justification", r.Justification),
 		sql.Named("duration_hours", r.DurationHours), sql.Named("status", r.Status),
