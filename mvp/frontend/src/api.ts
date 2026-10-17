@@ -143,7 +143,10 @@ function errorMessage(status: number, j: any): string {
   return j ? JSON.stringify(j.detail ?? j) : `${status}`;
 }
 
-export async function api<T = any>(path: string, body?: unknown, method?: string): Promise<T> {
+/** noResume: never keep this request for resuming after a step-up (it carries a secret). */
+export interface ApiOptions { noResume?: boolean }
+
+export async function api<T = any>(path: string, body?: unknown, method?: string, opts?: ApiOptions): Promise<T> {
   const m = method ?? (body !== undefined ? "POST" : "GET");
   const headers: Record<string, string> = {};
   if (body !== undefined) headers["content-type"] = "application/json";
@@ -173,7 +176,7 @@ export async function api<T = any>(path: string, body?: unknown, method?: string
     }
     if (res.status === 401 && j?.error === "step_up_required") {
       // remember what was being done (the request only, never a token) so it can resume after the step-up
-      if (m !== "GET" && m !== "HEAD") savePendingAction({ method: m, path, body, label: actionLabel(m, path), at: Date.now() });
+      if (m !== "GET" && m !== "HEAD") savePendingAction({ method: m, path, body, label: actionLabel(m, path), at: Date.now() }, opts?.noResume);
       window.dispatchEvent(new CustomEvent(STEP_UP, { detail: j }));
     }
     throw new ApiError(j ? errorMessage(res.status, j) : `${res.status} ${res.statusText}`, res.status, j);
@@ -195,7 +198,27 @@ const PENDING = "tessera.pendingAction";
 /** A pending action older than this is discarded rather than resumed. */
 export const PENDING_TTL_MS = 10 * 60 * 1000;
 
-function savePendingAction(a: PendingAction): void {
+/**
+ * Field names that mark a body as carrying a secret (connection credentials, webhook and SIEM tokens,
+ * passwords, keys). A backstop: calls that send a secret also pass { noResume: true }.
+ */
+const SECRET_KEY = /secret|passw|^pass$|pwd|passphrase|token|private|credential|api[_-]?key|key$|signing|pem|authorization|bearer/i;
+
+/** True when the body, at any depth, has a field whose name marks a secret; a body nested too deep counts as one. */
+export function carriesSecret(v: unknown, depth = 0): boolean {
+  if (v === null || typeof v !== "object") return false;
+  if (depth > 8) return true;
+  return Object.entries(v as Record<string, unknown>).some(([k, x]) => SECRET_KEY.test(k) || carriesSecret(x, depth + 1));
+}
+
+function savePendingAction(a: PendingAction, noResume = false): void {
+  // A request that carries a secret is never written to browser storage: after the step-up the user
+  // enters it again, as when storage is unavailable. An earlier pending action is dropped too, so the
+  // resume prompt never offers a different action than the one just refused.
+  if (noResume || carriesSecret(a.body)) {
+    clearPendingAction();
+    return;
+  }
   try {
     sessionStorage.setItem(PENDING, JSON.stringify(a));
   } catch {
@@ -1436,7 +1459,7 @@ export const readiness = {
   create: (body: { name: string; connector_type: string; system?: string; config?: ConnConfig }) => api<Connection>("/connections", body),
   patchConfig: (id: string, patch: Partial<ConnConfig> | Record<string, unknown>) =>
     api<{ connection: Connection; new_revision: boolean; invalidated: string[]; fields: { field: string; msg: string }[] }>(`/connections/${id}/config`, patch, "PATCH"),
-  setCredential: (id: string, body: { secret?: string; reference?: string }) => api<RevisionView["credential"]>(`/connections/${id}/credential`, body, "PUT"),
+  setCredential: (id: string, body: { secret?: string; reference?: string }) => api<RevisionView["credential"]>(`/connections/${id}/credential`, body, "PUT", { noResume: true }),
   attest: (id: string, item: string, note: string) => api<Checklist>(`/connections/${id}/checklist/${item}/attest`, { note }),
   skip: (id: string, item: string, reason: string, review_by?: string) =>
     api<Checklist>(`/connections/${id}/checklist/${item}/skip`, review_by ? { reason, review_by } : { reason }),
