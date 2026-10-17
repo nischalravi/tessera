@@ -35,7 +35,8 @@ type harness struct {
 	svc    *loaders.Service
 	sealer *seal.Sealer
 	now    time.Time
-	dir    string
+	base   string // the loader data directory
+	dir    string // this tenant's directory under it
 	root   store.FolderID
 	ref    store.FolderID
 	idents map[string]int64 // "u0" -> identity id
@@ -59,8 +60,13 @@ func newHarness(t testing.TB) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := &harness{t: t, db: db, eng: engine.New(0), sealer: sealer, now: t0, dir: t.TempDir(), idents: map[string]int64{}}
-	h.svc = &loaders.Service{DB: db, Engine: h.eng, Clock: func() time.Time { return h.now }, Sealer: sealer, DataDir: h.dir}
+	base := t.TempDir()
+	dir := filepath.Join(base, tid.String()) // a tenant's files live in <data dir>/<tenant id>/
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	h := &harness{t: t, db: db, eng: engine.New(0), sealer: sealer, now: t0, base: base, dir: dir, idents: map[string]int64{}}
+	h.svc = &loaders.Service{DB: db, Engine: h.eng, Clock: func() time.Time { return h.now }, Sealer: sealer, DataDir: base}
 	h.must(func(e model.Env) error {
 		root, err := e.EnsureRoot()
 		if err != nil {

@@ -46,7 +46,11 @@ func newLoaderEnv(t *testing.T) (*privEnv, string) {
 		RateLimits: noRateLimits, Sealer: sealer, LoaderDataDir: dir})
 	e := &privEnv{t: t, f: f, srv: srv}
 	e.admin = e.as("admin", []auth.Role{auth.RoleTenantAdmin}, nil)
-	return e, dir
+	own := filepath.Join(dir, f.B.ID.String()) // tenant B's files: <data dir>/<tenant id>/
+	if err := os.MkdirAll(own, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	return e, own
 }
 
 func writeFile(t *testing.T, dir, name, content string) {

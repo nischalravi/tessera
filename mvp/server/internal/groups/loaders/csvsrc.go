@@ -26,7 +26,7 @@ type csvSource struct{ noChanges }
 
 func (csvSource) read(ctx context.Context, job LoaderJob, cfg *CSVConfig) ([]byte, error) {
 	if cfg.Path != "" {
-		path, err := confine(job.Env.DataDir, cfg.Path)
+		path, err := confine(job.Env.DataDir, job.Env.Tenant, cfg.Path)
 		if err != nil {
 			return nil, err
 		}

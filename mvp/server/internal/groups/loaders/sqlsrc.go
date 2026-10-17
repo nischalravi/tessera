@@ -11,29 +11,43 @@ import (
 	"strings"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 )
 
-// confine resolves a file name under the loader data directory. The name has
-// been validated at save time (no .., no absolute path); this also refuses a
-// symbolic link that leads out of the directory, and a missing directory.
-func confine(dataDir, rel string) (string, error) {
+// confine resolves a file name under the tenant's own directory,
+// <data dir>/<tenant id>/, so one tenant's loader never reads another's files.
+// The name has been validated at save time (no .., no absolute path); this
+// also refuses a symbolic link that leads out of the tenant's directory (to
+// another tenant's, or to anything else), and a missing directory.
+func confine(dataDir string, tenant tenancy.ID, rel string) (string, error) {
 	if dataDir == "" {
 		return "", conflict("loader_data_dir_unset", "no loader data directory is configured (TESSERA_LOADER_DATA_DIR): file sources are off")
 	}
-	root, err := filepath.EvalSymlinks(dataDir)
+	if tenant.IsZero() {
+		return "", conflict("source_file_outside", "the source file %q is outside the tenant's loader directory", rel)
+	}
+	base, err := filepath.EvalSymlinks(dataDir)
 	if err != nil {
 		return "", fmt.Errorf("loader data directory: %w", err)
 	}
-	root, err = filepath.Abs(root)
+	base, err = filepath.Abs(base)
 	if err != nil {
 		return "", err
+	}
+	// tenant.String() is a canonical UUID: no separator or dot can come from it
+	root, err := filepath.EvalSymlinks(filepath.Join(base, tenant.String()))
+	if err != nil {
+		return "", conflict("source_file_missing", "the source file %q cannot be opened: the tenant has no loader directory", rel)
+	}
+	if !strings.HasPrefix(root, base+string(filepath.Separator)) || filepath.Dir(root) != base {
+		return "", conflict("source_file_outside", "the tenant's loader directory is not under the loader data directory")
 	}
 	full, err := filepath.EvalSymlinks(filepath.Join(root, filepath.FromSlash(rel)))
 	if err != nil {
 		return "", conflict("source_file_missing", "the source file %q cannot be opened", rel)
 	}
 	if full != root && !strings.HasPrefix(full, root+string(filepath.Separator)) {
-		return "", conflict("source_file_outside", "the source file %q is outside the loader data directory", rel)
+		return "", conflict("source_file_outside", "the source file %q is outside the tenant's loader directory", rel)
 	}
 	return full, nil
 }
@@ -62,7 +76,7 @@ func requireColumns(cols []string, names ...string) ([]int, error) {
 }
 
 func (sqlSource) query(ctx context.Context, job LoaderJob, cfg *SQLConfig, q string, args map[string]string) (*store.ExtResult, error) {
-	path, err := confine(job.Env.DataDir, cfg.Database)
+	path, err := confine(job.Env.DataDir, job.Env.Tenant, cfg.Database)
 	if err != nil {
 		return nil, err
 	}

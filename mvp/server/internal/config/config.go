@@ -84,8 +84,8 @@ type Config struct {
 	// default (design §10.2).
 	GroupsRetentionDays int
 	// LoaderDataDir is TESSERA_LOADER_DATA_DIR: the directory the SQLite files
-	// and CSV files of group loaders must be under (design groups-grouper-parity.md
-	// §9.1). Empty (the default) turns file sources off. It must be absolute and
+	// and CSV files of group loaders live in, one subdirectory per tenant
+	// (<dir>/<tenant id>/; design groups-grouper-parity.md §9.1). Empty (the default) turns file sources off. It must be absolute and
 	// must not contain Tessera's own database.
 	LoaderDataDir string
 	// FrozenNow is TESSERA_NOW (tests and demos; refused in prod). The zero

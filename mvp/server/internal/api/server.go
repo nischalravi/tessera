@@ -107,8 +107,9 @@ type Config struct {
 	// GroupsEngine is the native groups' membership engine, whose synchronous
 	// budget is TESSERA_GROUPS_SYNC_BUDGET. Nil: the defaults.
 	GroupsEngine *engine.Engine
-	// LoaderDataDir is TESSERA_LOADER_DATA_DIR: the directory SQL and CSV file
-	// sources of group loaders must be under. Empty: file sources are off.
+	// LoaderDataDir is TESSERA_LOADER_DATA_DIR: the directory of the SQL and CSV
+	// file sources of group loaders, with a subdirectory <tenant id>/ per tenant
+	// (a loader reads only its own tenant's). Empty: file sources are off.
 	LoaderDataDir string
 	// AuditAppend overrides how the audit middleware writes http.request
 	// events (tests inject failures). Nil: the store.

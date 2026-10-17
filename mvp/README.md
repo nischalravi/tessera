@@ -587,9 +587,14 @@ taken is a failed run (`loader_name_taken`).
 `ldap_*`, `sftp_csv` and `hris_sis_feed` are designed but not built: they need an LDAP and an SSH
 library, which GR-10 did not add (`422 loader_type_unavailable`).
 
-- **Data directory.** SQL and CSV files must be under `TESSERA_LOADER_DATA_DIR` (absolute; unset turns
-  file sources off; refused if it contains the database). A name is validated at save time (no `..`,
-  no absolute path) and again at run time (symbolic links that leave the directory are refused). A SQL
+- **Data directory.** SQL and CSV files live in `TESSERA_LOADER_DATA_DIR` (absolute; unset turns file
+  sources off; refused if it contains the database), **one subdirectory per tenant**:
+  `<data dir>/<tenant id>/`. A loader's `path` or `database` is a name inside its own tenant's
+  subdirectory and nothing else: a name is validated at save time (no `..`, no absolute path) and
+  again at run time, when the path is resolved against the tenant's directory and symbolic links that
+  leave it (to another tenant's directory, to a file directly in the data directory or elsewhere) are
+  refused with `source_file_outside`; a tenant with no directory gets `source_file_missing`.
+  (`TestFiles_PerTenant`.) The operator creates and fills the directories. A SQL
   source is a SQLite file: the query must be one `SELECT` or `WITH` (first keyword parsed; no `;`,
   comments, `ATTACH`, `PRAGMA`, `INSERT`, `UPDATE`, `DELETE`, ...), runs on a read-only connection
   (`mode=ro`, `query_only`) with a 120 s timeout and a 1,000,000 row limit, and exceeding the limit is
