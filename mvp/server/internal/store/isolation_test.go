@@ -173,8 +173,9 @@ var getCases = map[string]func(c *store.TenantTx, ids map[string]int64) (any, er
 // naturalKeyGets look rows up by external id, which both tenants share:
 // each tenant must get its own row.
 var naturalKeyGets = map[string]func(c *store.TenantTx) (any, error){
-	"IdentityByExternalID": func(c *store.TenantTx) (any, error) { return c.IdentityByExternalID("alice") },
-	"GroupByXID":           func(c *store.TenantTx) (any, error) { return c.GroupByXID("aws", "ProdAdmin") },
+	"IdentityByExternalID":   func(c *store.TenantTx) (any, error) { return c.IdentityByExternalID("alice") },
+	"ActiveIdentityMatching": func(c *store.TenantTx) (any, error) { return c.ActiveIdentityMatching("", "alice") },
+	"GroupByXID":             func(c *store.TenantTx) (any, error) { return c.GroupByXID("aws", "ProdAdmin") },
 }
 
 func TestIsolation_GetOtherTenantNotFound(t *testing.T) {
