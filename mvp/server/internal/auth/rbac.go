@@ -117,7 +117,7 @@ var rolePermissions = map[Role][]Permission{
 		PermGuestsSponsor, PermGuestsRead, PermSponsorshipsApprove, PermIdentitiesContain},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
-		PermConnectionsActivate, PermRequestsCreate, PermEmailRead, PermEmailManage, PermGroupsAdmin},
+		PermConnectionsActivate, PermRequestsCreate, PermEmailRead, PermEmailManage, PermGuestsSponsor, PermGuestsRead, PermGroupsAdmin},
 	RoleBreakGlass: {PermAdminRead, PermBreakGlassRecover},
 }
 
