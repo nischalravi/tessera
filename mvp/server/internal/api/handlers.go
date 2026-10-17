@@ -255,20 +255,54 @@ func (s *Server) health(_ http.ResponseWriter, _ *http.Request, _ *params) (any,
 	return ojson.Object{{Key: "status", Value: "ok"}, {Key: "time", Value: timeutil.ISO(s.clock())}}, nil
 }
 
-func (s *Server) listConnectors(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+// source is one entry of the tenant's source list: a legacy connector or a
+// live governed connection (readiness state active or degraded).
+type source struct{ system, name, typeName string }
+
+// sources is the single source of truth for what counts as a source or
+// application: the legacy connectors plus the governed connections that are
+// live. Draft, not-yet-active and retired connections are not listed. A
+// governed connection on a system a legacy connector already covers is not
+// listed twice. /api/connectors, the Applications list and page and the Home
+// source and connection counts all read this list.
+func (s *Server) sources(c *store.TenantTx) ([]source, error) {
 	conns, err := s.cfg.Connectors(s.clock())
 	if err != nil {
 		return nil, err
 	}
-	c := store.TxFrom(r.Context())
-	out := []ojson.Object{}
+	var out []source
+	seen := map[string]bool{}
 	for _, cn := range conns {
-		n, err := c.CountSystem(cn.System())
+		out = append(out, source{cn.System(), cn.DisplayName(), cn.TypeName()})
+		seen[cn.System()] = true
+	}
+	live, err := s.readiness.ActiveConnections(c)
+	if err != nil {
+		return nil, err
+	}
+	for _, ac := range live {
+		if !seen[ac.System()] {
+			out = append(out, source{ac.System(), ac.Name(), ac.ConnectorType()})
+			seen[ac.System()] = true
+		}
+	}
+	return out, nil
+}
+
+func (s *Server) listConnectors(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+	c := store.TxFrom(r.Context())
+	srcs, err := s.sources(c)
+	if err != nil {
+		return nil, err
+	}
+	out := []ojson.Object{}
+	for _, cn := range srcs {
+		n, err := c.CountSystem(cn.system)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, ojson.Object{{Key: "system", Value: cn.System()}, {Key: "name", Value: cn.DisplayName()},
-			{Key: "type", Value: cn.TypeName()}, {Key: "accounts", Value: n.Accounts}, {Key: "groups", Value: n.Groups},
+		out = append(out, ojson.Object{{Key: "system", Value: cn.system}, {Key: "name", Value: cn.name},
+			{Key: "type", Value: cn.typeName}, {Key: "accounts", Value: n.Accounts}, {Key: "groups", Value: n.Groups},
 			{Key: "resources", Value: n.Resources}, {Key: "permissions", Value: n.Permissions}})
 	}
 	return out, nil
