@@ -26,6 +26,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
+	"github.com/nischalravi/tessera/mvp/server/internal/oauth"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
@@ -85,8 +86,18 @@ type Config struct {
 	// AuditAnchor is TESSERA_AUDIT_ANCHOR: POST /api/audit/verify checks
 	// checkpoints against it when it is a file:// URL.
 	AuditAnchor string
-	// PublicURL is TESSERA_PUBLIC_URL: the base of the OIDC redirect URIs.
+	// PublicURL is TESSERA_PUBLIC_URL: the base of the OIDC redirect URIs and
+	// of every OAuth issuer (PublicURL/t/{slug}) and DPoP htu.
 	PublicURL string
+	// APIAudience is TESSERA_API_AUDIENCE, the aud of access tokens (default
+	// PublicURL + "/api").
+	APIAudience string
+	// AccessTokenTTL (TESSERA_AT_TTL_SECONDS) and DeviceCodeTTL
+	// (TESSERA_DEVICE_CODE_TTL_SECONDS) default to 600 s and 300 s.
+	AccessTokenTTL, DeviceCodeTTL time.Duration
+	// DPoPRSNonce (TESSERA_DPOP_RS_NONCE) requires a DPoP server nonce on API
+	// requests too.
+	DPoPRSNonce bool
 	// Sealer opens connection client secrets and seals PKCE verifiers.
 	Sealer *seal.Sealer
 	// OutboundHTTP is the safehttp client for IdP discovery, JWKS and token
@@ -121,6 +132,9 @@ type Server struct {
 	limits *limiters
 	rp     *oidcrp.RP
 	oauth2 *oauth2rp.RP
+	// oauth is the authorization server of the CLI (internal/oauth); it also
+	// verifies the DPoP access tokens of API requests (authn.Tokens).
+	oauth *oauth.Service
 
 	readiness *readiness.Service
 	// containment is the kill switch (issue #106); never nil.
@@ -178,6 +192,20 @@ func New(cfg Config) *Server {
 	}
 	s.authn = &auth.Authenticator{DB: cfg.Store, Clock: func() time.Time { return s.clock() },
 		Cookies: auth.Cookies{Insecure: cfg.InsecureCookie}}
+	publicURL, audience := cfg.PublicURL, cfg.APIAudience
+	if publicURL == "" {
+		publicURL = "http://localhost" // unconfigured (tests): issuers and htu are still well-formed
+	}
+	if audience == "" {
+		audience = strings.TrimRight(publicURL, "/") + "/api"
+	}
+	var err error
+	if s.oauth, err = oauth.New(oauth.Config{DB: cfg.Store, Sealer: cfg.Sealer, Clock: func() time.Time { return s.clock() },
+		PublicURL: publicURL, APIAudience: audience, AccessTokenTTL: cfg.AccessTokenTTL, DeviceCodeTTL: cfg.DeviceCodeTTL,
+		RSNonce: cfg.DPoPRSNonce, Log: cfg.Logger, ClientIP: s.requestIP}); err != nil {
+		panic(err) // Store, Clock, PublicURL and APIAudience are set
+	}
+	s.authn.Tokens = s.oauth
 	s.registerRoutes()
 	s.registerAuditRoutes()
 	s.registerCorrelationRoutes()
@@ -194,6 +222,7 @@ func New(cfg Config) *Server {
 	s.registerSAMLRoutes()
 	s.registerOAuth2Routes()
 	s.registerStepUpRoutes()
+	s.registerOAuthRoutes()
 	s.checkPublicRoutes()
 	return s
 }

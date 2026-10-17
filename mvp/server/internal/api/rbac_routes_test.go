@@ -158,6 +158,14 @@ GET    /api/auth/saml/{connection_id}/metadata       public
 POST   /api/auth/saml/{connection_id}/acs            public
 GET    /api/auth/oauth2/{connection_id}/callback     public
 GET    /t/{slug}/bootstrap                           public
+GET    /t/{slug}/.well-known/oauth-authorization-server public
+GET    /t/{slug}/.well-known/jwks.json               public
+GET    /.well-known/oauth-protected-resource         public
+POST   /t/{slug}/oauth/device_authorization          public
+POST   /t/{slug}/oauth/token                         public
+POST   /t/{slug}/oauth/revoke                        public
+POST   /api/auth/device/lookup                       auth.self       -  # issue #14
+POST   /api/auth/device/approve                      auth.self       STEP_UP_ADMIN  # issue #14: max_age 300 s
 `
 
 type designRoute struct {
@@ -165,6 +173,7 @@ type designRoute struct {
 	public          bool
 	perm            auth.Permission
 	stepUp          bool
+	stepUpAdmin     bool // STEP_UP_ADMIN (300 s) rather than STEP_UP_POLICY (900 s)
 }
 
 func parseDesignRoutes(t *testing.T) []designRoute {
@@ -182,7 +191,8 @@ func parseDesignRoutes(t *testing.T) []designRoute {
 			if len(f) < 4 {
 				t.Fatalf("bad table line %q", line)
 			}
-			r.perm, r.stepUp = auth.Permission(f[2]), f[3] == "STEP_UP_POLICY"
+			r.perm, r.stepUpAdmin = auth.Permission(f[2]), f[3] == "STEP_UP_ADMIN"
+			r.stepUp = f[3] == "STEP_UP_POLICY" || r.stepUpAdmin
 		}
 		out = append(out, r)
 	}
@@ -210,8 +220,12 @@ func TestRoutesMatchDesignTable(t *testing.T) {
 		if rt.Public != d.public || rt.Perm != d.perm {
 			t.Errorf("%s: public=%t perm=%q, design public=%t perm=%q", k, rt.Public, rt.Perm, d.public, d.perm)
 		}
-		if (rt.Authn != nil) != d.stepUp || (rt.Authn != nil && *rt.Authn != auth.StepUpPolicy) {
-			t.Errorf("%s: step-up %v, design %t", k, rt.Authn, d.stepUp)
+		wantReq := auth.StepUpPolicy
+		if d.stepUpAdmin {
+			wantReq = auth.StepUpAdmin
+		}
+		if (rt.Authn != nil) != d.stepUp || (rt.Authn != nil && *rt.Authn != wantReq) {
+			t.Errorf("%s: step-up %v, design %t (admin %t)", k, rt.Authn, d.stepUp, d.stepUpAdmin)
 		}
 	}
 	for k := range table {

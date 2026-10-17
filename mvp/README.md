@@ -68,6 +68,8 @@ server/
   cmd/tessera/          main: `serve` (default), `seed` and `audit verify|checkpoint|export`; timeouts,
                         graceful shutdown, JIT sweeper, audit checkpointer
   cmd/tessera-devidp/   the dev IdP binary (development and tests only; see Signing in)
+  cmd/tessera-cli/      the reference command-line client: `login` (device grant + DPoP), `whoami`,
+                        `api`, `logout` (see Command-line sign-in)
   internal/
     connectors/         Connector interface + normalized record types, deterministic demo company
                         (pyrand.go reproduces CPython's Mersenne Twister so seed 7 gives the same
@@ -91,6 +93,10 @@ server/
     keys/               per-tenant ES256 signing keys and the platform Ed25519 key: rotation, JWKS
     safehttp/           SSRF-guarded outbound HTTP client (https only, address checks after DNS)
     ratelimit/          keyed token-bucket limiter with a bounded key set
+    oauth/              the OAuth authorization server (per-tenant issuer): device grant, refresh
+                        rotation with reuse detection, DPoP-bound JWT access tokens, RFC 8414/9728
+                        metadata; oauth/dpop validates DPoP proofs (RFC 9449)
+    cliauth/            the CLI's client library: device login, credentials file, DPoP calls
     ojson/, timeutil/   ordered JSON + Python float repr; CPython-compatible time arithmetic
     testkit/            shared test fixtures (tiny world through a real Connector, seeded demo DB)
     devidp/             dev IdP: mock OIDC issuer, vendor emulation profiles, fault injection;
@@ -833,6 +839,82 @@ only, and keeps its signing key in `server/var/devidp/` (mode 0600, git-ignored)
 Tessera's keys. `devidp.New` refuses `TESSERA_ENV=prod`. `TestIsolation_DevIdPNotImportedByAPI`
 (`internal/archtest`) proves from the import graph that `cmd/tessera` and `internal/api` never link
 the dev IdP.
+
+## Command-line sign-in (`tessera-cli`)
+
+The CLI and other non-browser clients use OAuth 2.0, not cookies (design §9.3, §10): Tessera is an
+authorization server for each tenant (issuer `TESSERA_PUBLIC_URL/t/{slug}`), with the **device
+authorization grant** (RFC 8628) and **refresh tokens**. Every token is sender-constrained with **DPoP**
+(RFC 9449): the CLI generates an ES256 key, and an access token (an RFC 9068 `at+jwt`, ES256, signed with
+the tenant's own key, 10 minutes, 5 minutes with `tessera:admin`) carries `cnf.jkt`, so a stolen token is
+useless without the key. Roles are not in the token: the API reads them on every request, and what a
+token may do is the intersection of the user's active roles and its scopes.
+
+**Dev flow.** `./run.sh` serves everything on the UI port (the dev server proxies `/api`, `/t/*/oauth/*`
+and `/.well-known/*`), and `TESSERA_PUBLIC_URL` defaults to `http://localhost:$UI_PORT`: that is the
+CLI's server URL, because DPoP proofs are bound to it.
+
+```bash
+cd server && go build -o /tmp/tessera-cli ./cmd/tessera-cli     # or: go run ./cmd/tessera-cli ...
+export TESSERA_ENV=dev                                             # lets the CLI use http and loopback
+tessera-cli login --server http://localhost:5173 --tenant larkspur
+#   To sign in to larkspur, open  http://localhost:5173/device  and enter the code  KDQV-TMWB
+tessera-cli whoami
+tessera-cli api GET /api/summary
+tessera-cli api -d '{"identity_id":1,"group_id":2,"justification":"on call"}' POST /api/jit/requests
+tessera-cli logout
+```
+
+Open `/device` in the browser as Pat, Alice or Ivan (the dev IdP users with a passkey: approving needs a
+phishing-resistant sign-in, and Olu and Vic have none), type the code, check who is asking, and approve.
+The CLI then acts as that user: with Pat the JIT example above works, with Alice (a tenant admin) only
+reads do. Approval needs the passkey sign-in within the last 5 minutes (`max_age` 300, step-up; the page
+sends you to re-authenticate and offers to resume).
+There is no pre-filled link or QR code: the user types the code. `--scope` asks for fewer scopes
+(default `tessera:read tessera:write`; `tessera:audit` and `tessera:admin` exist), and `--acr`,
+`--max-age` ask the approver for a stronger or fresher sign-in. Exit status: 0 ok, 1 error or an HTTP
+status of 400 or more, 2 usage, 3 the API wants a fresher sign-in (the message prints the `login`
+command that satisfies it; nothing is repeated on its own).
+
+**Credentials** are one file, `~/.config/tessera/credentials.json` (`$XDG_CONFIG_HOME/tessera`, or
+`$TESSERA_CONFIG_DIR`): the DPoP private key, the current refresh token and the cached access token,
+mode 0600 in a 0700 directory (the CLI refuses a file others can read; an OS keychain comes later).
+Refreshing is serialized with a lock file, because presenting one refresh token twice is treated as
+theft. `api` only takes paths on the signed-in server, so a token is never sent elsewhere. All of the
+CLI's HTTP goes through `internal/safehttp` (https only, no private addresses; `TESSERA_ENV=dev` adds
+http and loopback).
+
+| Route | Purpose |
+|---|---|
+| `GET /t/{slug}/.well-known/oauth-authorization-server` | RFC 8414 metadata of the tenant's issuer |
+| `GET /t/{slug}/.well-known/jwks.json` | the tenant's public access-token keys |
+| `GET /.well-known/oauth-protected-resource` | RFC 9728 metadata of the API (`authorization_servers` is the `/t/{slug}` template) |
+| `POST /t/{slug}/oauth/device_authorization` | start a device grant (10 per minute per IP); no `verification_uri_complete` |
+| `POST /t/{slug}/oauth/token` | `device_code` and `refresh_token` grants, DPoP proof and server nonce required |
+| `POST /t/{slug}/oauth/revoke` | RFC 7009: revokes the refresh token's family and the CLI session |
+| `POST /api/auth/device/lookup` | session; who is asking (client, address, time, scope); 5 wrong codes lock the session out of lookups for 10 minutes (`oauth.device.lookup_bruteforce`) |
+| `POST /api/auth/device/approve` | session and step-up (`max_age` 300, phishing-resistant); `{user_code, decision}` |
+
+API requests carry `Authorization: DPoP <token>` and a `DPoP` proof bound to the method, the URL
+(`TESSERA_PUBLIC_URL` + path), and the token (`ath`); a bound token under `Bearer` is refused. A refusal
+is `401 login_required` with `WWW-Authenticate: DPoP error=…`; a token session that needs a fresher
+sign-in gets `401 step_up_required` with `WWW-Authenticate: DPoP error="insufficient_user_authentication"`.
+No CSRF header is needed for a token (no ambient credential), and the request is audited as the user,
+through client `tessera-cli`.
+
+**Refresh tokens** rotate on every use (idle 12 hours, absolute 24 hours, or 12 with an active admin
+role: the CLI session's). A used token presented again revokes the whole family and the session and
+writes a critical `oauth.refresh.reuse_detected`; presenting a token with another DPoP key is
+`invalid_grant` and changes nothing. The first-party client `tessera-cli` exists in every tenant
+(created at seed and server start); a tenant can turn the device grant off with
+`tenants.settings.device_grant_enabled=false`. Machine clients and client credentials arrive with
+PR11; introspection (RFC 7662) is for them too and is not served yet.
+
+The authorization server is hand-written on go-jose (the design's §6 fallback), not on zitadel/oidc: see
+`internal/oauth/oauth.go` for why. Tests: `internal/oauth` (flow, refresh, tokens, metadata, fuzzing),
+`internal/oauth/dpop`, `internal/cliauth`, `internal/api/oauth_routes_test.go` and the CLI against an
+in-process server in `cmd/tessera-cli/e2e_test.go`. Fuzz targets: `FuzzValidateProof`,
+`FuzzVerifyAccessToken` (`go test -fuzz=FuzzValidateProof -fuzztime=30s ./internal/oauth/dpop`).
 
 ## Adding a real connector
 

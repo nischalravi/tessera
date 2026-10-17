@@ -61,6 +61,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/pit"
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
+	"github.com/nischalravi/tessera/mvp/server/internal/oauth"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
@@ -230,6 +231,10 @@ func seedDB(ctx context.Context, path string, cfg *config.Config, clock timeutil
 		return err
 	}
 	fmt.Fprintln(stdout, "Created the platform and per-tenant signing keys (private keys sealed under the KEK)")
+	if err := oauth.EnsureCLIClients(ctx, st, clock()); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "Registered the %s OAuth client in every tenant\n", oauth.CLIClientID)
 	fmt.Fprintf(stdout, "Seeded Tessera in %.1fs\n", time.Since(start).Seconds())
 	return nil
 }
@@ -279,6 +284,11 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if err := keys.EnsureAll(ctx, st, sealer, clock()); err != nil {
 		return err
 	}
+	// every tenant has the first-party CLI client (tenants created since the
+	// last start get it now)
+	if err := oauth.EnsureCLIClients(ctx, st, clock()); err != nil {
+		return err
+	}
 	scenario := os.Getenv("TESSERA_READINESS_SCENARIO")
 	if scenario != "" && !slices.Contains(connectors.ScenarioNames(), scenario) {
 		return fmt.Errorf("TESSERA_READINESS_SCENARIO: unknown scenario %q (have %v)", scenario, connectors.ScenarioNames())
@@ -302,6 +312,9 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	groupsEngine := &engine.Engine{Budget: cfg.GroupsSyncBudget, Log: logger}
 	srv := api.New(api.Config{Store: st, Clock: clock, Policies: loader, Logger: logger,
 		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound, GroupsEngine: groupsEngine,
+		APIAudience:    cfg.APIAudience,
+		AccessTokenTTL: time.Duration(cfg.AccessTokenTTLSeconds) * time.Second,
+		DeviceCodeTTL:  time.Duration(cfg.DeviceCodeTTLSeconds) * time.Second, DPoPRSNonce: cfg.DPoPRSNonce,
 		Containment:    &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock},
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
 		HSTS: cfg.IsProd(), Env: cfg.Env, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, AuditAnchor: anchorURL})
@@ -392,6 +405,9 @@ func runKeyRotation(ctx context.Context, st *store.DB, sealer *seal.Sealer, cloc
 		case <-t.C:
 			if err := keys.EnsureAll(ctx, st, sealer, clock()); err != nil && ctx.Err() == nil {
 				logger.Error("signing key rotation failed", "err", err)
+			}
+			if err := oauth.EnsureCLIClients(ctx, st, clock()); err != nil && ctx.Err() == nil {
+				logger.Error("registering the CLI client failed", "err", err)
 			}
 		}
 	}

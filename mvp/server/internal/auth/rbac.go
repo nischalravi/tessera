@@ -347,6 +347,12 @@ func Check(p *Principal, perm Permission, authn *AuthnRequirement, now time.Time
 		return &Denial{Status: http.StatusForbidden, Error: "forbidden"}
 	}
 	if !EffectivePermissions(p).Has(perm) {
+		// effective = perms(active roles) ∩ perms(scopes) (§12.3): when the
+		// roles are active and it is the token's scopes that lack the
+		// permission, the role is not the problem
+		if p.Scopes != nil && perms(p.ActiveRoles).Has(perm) {
+			return &Denial{Status: http.StatusForbidden, Error: "forbidden", Permission: perm}
+		}
 		if perms(p.AssignedRoles).Has(perm) {
 			return &Denial{Status: http.StatusForbidden, Error: "role_inactive", Permission: perm}
 		}
