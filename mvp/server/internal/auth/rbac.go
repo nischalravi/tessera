@@ -103,7 +103,7 @@ var rolePermissions = map[Role][]Permission{
 		PermIdentitiesCorrelate, PermIdentitiesMerge, PermIdentitiesContain},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
-		PermConnectionsActivate, PermGroupsAdmin},
+		PermConnectionsActivate, PermRequestsCreate, PermGroupsAdmin},
 	RoleBreakGlass: {PermAdminRead, PermBreakGlassRecover},
 }
 
@@ -187,7 +187,7 @@ var scopePermissions = map[Scope][]Permission{
 	ScopeRead: {PermGraphRead, PermConnectionsRead},
 	ScopeWrite: {PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage, PermReviewsDecide,
 		PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
-		PermConnectionsManage, PermConnectionsActivate, PermGroupsAdmin},
+		PermConnectionsManage, PermConnectionsActivate, PermRolesManage, PermLifecycleManage, PermGroupsAdmin},
 	ScopeAudit: {PermAuditRead, PermAuditVerify},
 	ScopeAdmin: {PermAdminRead, PermAdminChangeReq, PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev,
 		PermBreakGlassRecover},

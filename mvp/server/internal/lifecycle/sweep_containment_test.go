@@ -44,7 +44,7 @@ func newContainmentEnv(t *testing.T, credential bool) *containmentEnv {
 		_, _ = w.Write([]byte(`[]`))
 	}))
 	t.Cleanup(srv.Close)
-	hc, err := safehttp.New(safehttp.Options{Env: config.Dev, AllowLoopback: true})
+	hc, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Dev, AllowLoopback: true})
 	if err != nil {
 		t.Fatal(err)
 	}
