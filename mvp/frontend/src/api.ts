@@ -195,7 +195,19 @@ const PENDING = "tessera.pendingAction";
 /** A pending action older than this is discarded rather than resumed. */
 export const PENDING_TTL_MS = 10 * 60 * 1000;
 
+/** Keys that mark a body as carrying a secret (connection credentials, webhook and SIEM tokens, passwords). */
+const SECRET_KEY = /secret|password|passphrase|token|private|credential|api[_-]?key/i;
+
+/** True when the body, at any depth, has a field whose name marks a secret. */
+export function carriesSecret(v: unknown, depth = 0): boolean {
+  if (depth > 8 || v === null || typeof v !== "object") return false;
+  return Object.entries(v as Record<string, unknown>).some(([k, x]) => SECRET_KEY.test(k) || carriesSecret(x, depth + 1));
+}
+
 function savePendingAction(a: PendingAction): void {
+  // A body that carries a secret is never written to browser storage: after the step-up the user
+  // enters it again, as when storage is unavailable.
+  if (carriesSecret(a.body)) return;
   try {
     sessionStorage.setItem(PENDING, JSON.stringify(a));
   } catch {

@@ -34,6 +34,14 @@ test("a write refused for step-up is kept, labelled, and taken once", async () =
   assert.equal(api.takePendingAction(), null);
 });
 
+test("a write that carries a secret is not kept", async () => {
+  await assert.rejects(api.api("/connections/c1/credential", { secret: "s3cr3t-value" }, "PUT"));
+  assert.deepEqual(events, ["step-up"]);
+  assert.equal(mem.size, 0);
+  assert.equal(api.carriesSecret({ config: { webhook: { hmac_token: "x" } } }), true);
+  assert.equal(api.carriesSecret({ beneficiary_ids: [1, 2], justification: "on call" }), false);
+});
+
 test("a read refused for step-up keeps nothing", async () => {
   await assert.rejects(api.api("/audit"));
   assert.equal(mem.size, 0);
