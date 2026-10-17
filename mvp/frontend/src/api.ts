@@ -979,7 +979,13 @@ export const retryEmail = (id: string) => api<EmailMessage>(`/email/messages/${e
 // ---------------------------------------------------------------- business roles (issue #161)
 
 export type GroupRef = CatalogEntry["group"];
-export interface RoleRule { department: string[]; type: string[]; title: string[] }
+export interface RoleRule {
+  department: string[];
+  type: string[];
+  title: string[];
+  /** Id of an attribute policy (issue #162) the person must also satisfy; "" or absent: none. */
+  policy?: string;
+}
 export type MemberSource = "rule" | "request" | "manual";
 export interface RoleMember {
   person: PersonRef;
@@ -1311,6 +1317,64 @@ export interface ContainmentRetry {
 }
 export const retryContainmentNow = (retryId: string) =>
   api<{ retry: ContainmentRetry }>(`/containment-retries/${encodeURIComponent(retryId)}/retry-now`, {});
+
+// ---------------------------------------------------------------- attribute policies (issue #162)
+
+/** A condition: all/any/not over attribute tests, evaluated deterministically; a missing attribute denies. */
+export type AbacOp = "eq" | "ne" | "in" | "prefix" | "exists" | "gt" | "gte" | "lt" | "lte";
+export type AbacCondition =
+  | { all: AbacCondition[] }
+  | { any: AbacCondition[] }
+  | { not: AbacCondition }
+  | { attr: string; op: AbacOp; value?: string | number | boolean | (string | number | boolean)[] };
+export interface AbacAttribute { name: string; type: "string" | "number" | "boolean" | "time"; note: string }
+export interface AbacVersion { version: number; snapshot: { name?: string; description?: string; condition?: AbacCondition; status?: string }; note: string | null; actor: string; changed_at: string }
+export interface AbacPolicy {
+  id: string;
+  name: string;
+  description: string;
+  condition: AbacCondition;
+  status: "active" | "retired";
+  version: number;
+  created_at: string;
+  updated_by: { id: string; display_name: string } | null;
+  updated_at: string;
+  /** Birthright rules (role names) and catalog entitlements (system:name) that use it. */
+  used_by: { roles: string[]; catalog_items: string[] };
+  /** Only on GET /abac/policies/{id} and after a change. */
+  versions?: AbacVersion[];
+}
+export interface AbacList { can_manage: boolean; attributes: AbacAttribute[]; policies: AbacPolicy[] }
+export interface AbacPolicySpec { name: string; description: string; condition: AbacCondition; note?: string }
+export interface AbacSimPerson { id: number; name: string; type: IdentityType; status: string; department: string; title: string }
+export interface AbacSimulation {
+  evaluated: number;
+  matching: number;
+  before: number;
+  unchanged: number;
+  /** Identities for which the draft tests an attribute they lack (they are denied). */
+  missing_attributes: number;
+  /** The saved version compared against; 0: a new policy. */
+  current_version: number;
+  gain_count: number;
+  lose_count: number;
+  gains: AbacSimPerson[];
+  loses: AbacSimPerson[];
+  lists_truncated: boolean;
+}
+export interface AbacBinding { kind: "catalog_item"; target_id: string; target: string; policy_id: string }
+const abacPath = (id: string, rest = "") => `/abac/policies/${encodeURIComponent(id)}${rest}`;
+export const abac = {
+  create: (spec: AbacPolicySpec) => api<AbacPolicy>("/abac/policies", spec),
+  update: (id: string, version: number, spec: AbacPolicySpec) => api<AbacPolicy>(abacPath(id), { version, ...spec }, "PUT"),
+  retire: (id: string, reason: string) => api<AbacPolicy>(abacPath(id, "/retire"), { reason }),
+  /** Who gains and loses if the draft replaces the saved version (policyId omitted: a new policy). Changes nothing. */
+  simulate: (condition: AbacCondition, policyId?: string, extra?: { resource?: Record<string, string | number | boolean>; context?: Record<string, string | number | boolean> }) =>
+    api<AbacSimulation>("/abac/simulate", { condition, ...(policyId ? { policy_id: policyId } : {}), ...extra }),
+  /** Bind (or, with null, unbind) the policy that further restricts who may request a catalog entitlement. */
+  bindCatalog: (groupId: number, policyId: string | null) => api<{ catalog_item_id: string; policy_id: string | null }>(`/catalog/items/${groupId}/policy`, { policy_id: policyId }, "PUT"),
+};
+export const abacPaths = { list: "/abac/policies", one: (id: string) => abacPath(id), bindings: "/abac/bindings" };
 
 export const simulate = (body: { remove_edge_ids?: number[]; add_edges?: { src: string; dst: string; duration_hours?: number }[]; disable_account_ids?: number[] }) =>
   api<SimResult>("/simulate", { remove_edge_ids: [], add_edges: [], disable_account_ids: [], ...body });

@@ -97,6 +97,8 @@ var tables = []string{
 	// business roles (schema/0206_business_roles.sql)
 	"business_roles", "business_role_entitlements", "business_role_versions", "business_role_members",
 	"business_role_requests",
+	// attribute conditions (schema/0221_abac.sql)
+	"abac_policies", "abac_policy_versions", "abac_bindings",
 	// identity lifecycle (schema/0220_lifecycle.sql)
 	"identity_lifecycle", "identity_lifecycle_events",
 	// approval routing (schema/0206_approvals.sql)

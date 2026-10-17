@@ -109,6 +109,14 @@ POST   /api/roles/{role_id}/retire                   roles.manage    STEP_UP_POL
 POST   /api/roles/{role_id}/reconcile                roles.manage    STEP_UP_POLICY  # issue #161
 POST   /api/roles/{role_id}/members                  roles.manage    STEP_UP_POLICY  # issue #161
 POST   /api/roles/{role_id}/members/{identity_id}/remove roles.manage STEP_UP_POLICY  # issue #161
+GET    /api/abac/policies                            graph.read      -  # issue #162
+POST   /api/abac/policies                            roles.manage    STEP_UP_POLICY  # issue #162
+GET    /api/abac/policies/{policy_id}                graph.read      -  # issue #162
+PUT    /api/abac/policies/{policy_id}                roles.manage    STEP_UP_POLICY  # issue #162
+POST   /api/abac/policies/{policy_id}/retire         roles.manage    STEP_UP_POLICY  # issue #162
+POST   /api/abac/simulate                            graph.read      -  # issue #162
+GET    /api/abac/bindings                            graph.read      -  # issue #162
+PUT    /api/catalog/items/{group_id}/policy          catalog.manage  STEP_UP_POLICY  # issue #162
 POST   /api/role-requests                            requests.create -  # issue #161 (others: requests.create_for_others in the handler)
 GET    /api/role-requests                            requests.create -  # issue #161 (scope=pending|all: requests.decide or graph.read)
 POST   /api/role-requests/{request_id}/approve       requests.decide STEP_UP_POLICY  # issue #161
