@@ -564,6 +564,14 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_, _ = w.Write(body) // #nosec G705 -- JSON-encoded body served as application/json with nosniff, never HTML
 }
 
+// writeTimeout is the answer to a request whose deadline passed: the same 503
+// http.TimeoutHandler sends. A handler that sees its deadline expire (a
+// database call returning context.DeadlineExceeded) races the TimeoutHandler's
+// own timer, and whichever answer wins is sent, so both must agree.
+func writeTimeout(w http.ResponseWriter) {
+	writeJSON(w, http.StatusServiceUnavailable, detail("Request timed out"))
+}
+
 func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var he *httpError
 	var ve *validationError
@@ -584,6 +592,8 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSON(w, http.StatusBadRequest, detail("There was an error parsing the body"))
 	case errors.Is(err, context.Canceled):
 		// client went away; nothing useful to send
+	case errors.Is(err, context.DeadlineExceeded):
+		writeTimeout(w)
 	default:
 		// Never echo internal errors (they may contain SQL or paths) to the client.
 		s.log.Error("request failed", "method", r.Method, "path", r.URL.Path, "err", err)
