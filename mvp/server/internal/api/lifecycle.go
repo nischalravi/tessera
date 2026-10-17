@@ -30,7 +30,7 @@ func (s *Server) registerLifecycleRoutes() {
 	graph, create := need(auth.PermGraphRead), need(auth.PermRequestsCreate)
 	s.handle(G, "/api/lifecycle", read, graph, s.listLifecycle)
 	s.handle(G, "/api/lifecycle/sponsored", read, create, s.sponsoredLifecycle)
-	s.handle(P, "/api/lifecycle/sweep", write, need(auth.PermLifecycleManage), s.sweepLifecycle)
+	s.handle(P, "/api/lifecycle/sweep", phased, need(auth.PermLifecycleManage), s.sweepLifecycle)
 	s.handle(G, "/api/identities/{identity_id}/lifecycle", read, graph, s.getLifecycle)
 	s.handle(http.MethodPut, "/api/identities/{identity_id}/lifecycle", write, needStepUp(auth.PermLifecycleManage, auth.StepUpPolicy), s.putLifecycle)
 	s.handle(P, "/api/identities/{identity_id}/lifecycle/extend", write, create, s.extendLifecycle)
@@ -265,11 +265,11 @@ func (s *Server) extendLifecycle(_ http.ResponseWriter, r *http.Request, p *para
 	return s.fullLifecycleView(r, person, l)
 }
 
-func (s *Server) sweepLifecycle(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+func (s *Server) sweepLifecycle(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
 	if err := decodeBody(r, &struct{}{}, true); err != nil {
 		return nil, err
 	}
-	res, err := lifecycle.Sweep(store.TxFrom(r.Context()), s.clock().UTC())
+	res, err := lifecycle.SweepTenant(r.Context(), p.scope, s.containment, s.clock().UTC())
 	if err != nil {
 		return nil, err
 	}

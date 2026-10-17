@@ -277,7 +277,7 @@ func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
 		if err := s.guests.SweepAll(audit.WithSystemActor(ctx, sponsorship.Sweeper), s.store, s.clock()); err != nil && ctx.Err() == nil {
 			s.log.Error("sponsorship sweep failed", "err", err)
 		}
-		if err := lifecycle.SweepAll(audit.WithSystemActor(ctx, lifecycle.Sweeper), s.store, s.clock()); err != nil && ctx.Err() == nil {
+		if err := lifecycle.SweepAll(audit.WithSystemActor(ctx, lifecycle.Sweeper), s.store, s.containment, s.clock()); err != nil && ctx.Err() == nil {
 			s.log.Error("lifecycle sweep failed", "err", err)
 		}
 		if err := s.containment.SweepRetries(audit.WithSystemActor(ctx, "containment.sweeper"), s.store, "containment.sweeper"); err != nil && ctx.Err() == nil {
