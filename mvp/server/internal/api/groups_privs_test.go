@@ -132,6 +132,20 @@ func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 		{"GET", "/api/groups/privileges/settings", "/api/groups/privileges/settings", "", ""},
 		{"PUT", "/api/groups/privileges/settings", "/api/groups/privileges/settings", `{"everyone_allowed":[],"defaults":[]}`, ""},
 		{"PUT", "/api/groups/users/{id}/identity", "/api/groups/users/" + other + "/identity", `{"identity_id":null}`, ""},
+		// provisioning (GR-11): tenant-wide, groups.admin
+		{"GET", "/api/groups/provisioners", "/api/groups/provisioners", "", ""},
+		{"POST", "/api/groups/provisioners", "/api/groups/provisioners", `{}`, ""},
+		{"GET", "/api/groups/provisioners/{id}", "/api/groups/provisioners/" + other, "", ""},
+		{"PATCH", "/api/groups/provisioners/{id}", "/api/groups/provisioners/" + other, `{}`, ""},
+		{"DELETE", "/api/groups/provisioners/{id}", "/api/groups/provisioners/" + other, "", ""},
+		{"GET", "/api/groups/provisioners/{id}/marks", "/api/groups/provisioners/" + other + "/marks", "", ""},
+		{"PUT", "/api/groups/provisioners/{id}/marks", "/api/groups/provisioners/" + other + "/marks", `{}`, ""},
+		{"DELETE", "/api/groups/provisioners/{id}/marks/{mark_type}/{object}", "/api/groups/provisioners/" + other + "/marks/group/" + g, "", ""},
+		{"POST", "/api/groups/provisioners/{id}/sync", "/api/groups/provisioners/" + other + "/sync", `{}`, ""},
+		{"GET", "/api/groups/provisioners/{id}/runs", "/api/groups/provisioners/" + other + "/runs", "", ""},
+		{"GET", "/api/groups/provisioners/{id}/ops", "/api/groups/provisioners/" + other + "/ops", "", ""},
+		{"GET", "/api/groups/provisioners/{id}/groups", "/api/groups/provisioners/" + other + "/groups", "", ""},
+		{"POST", "/api/groups/provisioners/{id}/diagnose", "/api/groups/provisioners/" + other + "/diagnose", "", ""},
 	}
 	// the listings are gated too, by filtering: the table below names them so none is forgotten
 	listings := []routeCase{{"GET", "/api/groups/folders", "", "", ""}, {"GET", "/api/groups/native", "", "", ""},

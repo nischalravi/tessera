@@ -20,7 +20,7 @@ import (
 // not take one.
 type TenantTx struct {
 	ctx      context.Context
-	tx       *sql.Tx
+	tx       *xtx
 	tenant   tenancy.ID
 	readOnly bool
 	// stmts caches prepared statements for the life of the transaction (they
@@ -66,6 +66,10 @@ func (tx *TenantTx) exec(s tstmt, args ...sql.NamedArg) (sql.Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	if tx.tx.d == dialectPostgres {
+		res, err := tx.tx.ExecContext(tx.ctx, s.sql, a...)
+		return res, crossTenant(err)
+	}
 	st, err := tx.prepared(s)
 	if err != nil {
 		return nil, crossTenant(err)
@@ -75,11 +79,12 @@ func (tx *TenantTx) exec(s tstmt, args ...sql.NamedArg) (sql.Result, error) {
 }
 
 // prepared returns the transaction's prepared form of s, preparing it once.
+// SQLite only: Postgres statements are translated per call (xtx).
 func (tx *TenantTx) prepared(s tstmt) (*sql.Stmt, error) {
 	if st, ok := tx.stmts[s.sql]; ok {
 		return st, nil
 	}
-	st, err := tx.tx.PrepareContext(tx.ctx, s.sql)
+	st, err := tx.tx.tx.PrepareContext(tx.ctx, s.sql)
 	if err != nil {
 		return nil, err
 	}
@@ -90,17 +95,34 @@ func (tx *TenantTx) prepared(s tstmt) (*sql.Stmt, error) {
 	return st, nil
 }
 
-// crossTenant maps a cross-tenant reference refused by the schema's guard
-// triggers (schema/0001_tenancy.sql) to ErrCrossTenant.
+// crossTenant maps a cross-tenant reference refused by the schema (SQLite's
+// guard triggers in schema/0001_tenancy.sql; in Postgres the composite
+// foreign keys and node-key triggers) to ErrCrossTenant.
 func crossTenant(err error) error {
-	if err != nil && strings.Contains(err.Error(), "cross-tenant reference") {
+	if isReferenceViolation(err) {
 		return fmt.Errorf("%w: %v", ErrCrossTenant, err)
 	}
 	return err
 }
 
-// insert runs an INSERT and returns the new row id.
+// insert runs an INSERT and returns the new row id. Postgres has no
+// LastInsertId, so the statement gets RETURNING id (every table inserted into
+// this way has an integer id column).
 func (tx *TenantTx) insert(s tstmt, args ...sql.NamedArg) (int64, error) {
+	if tx.tx.d == dialectPostgres {
+		if tx.readOnly {
+			return 0, ErrReadOnly
+		}
+		a, err := tx.bind(args)
+		if err != nil {
+			return 0, err
+		}
+		var id int64
+		err = tx.tx.guard(tx.ctx, func() error {
+			return tx.tx.QueryRowContext(tx.ctx, s.sql+" RETURNING id", a...).Scan(&id)
+		})
+		return id, crossTenant(err)
+	}
 	res, err := tx.exec(s, args...)
 	if err != nil {
 		return 0, err
@@ -113,6 +135,9 @@ func (tx *TenantTx) query(s tstmt, args ...sql.NamedArg) (*sql.Rows, error) {
 	if err != nil {
 		return nil, err
 	}
+	if tx.tx.d == dialectPostgres {
+		return tx.tx.QueryContext(tx.ctx, s.sql, a...)
+	}
 	st, err := tx.prepared(s)
 	if err != nil {
 		return nil, err
@@ -124,6 +149,9 @@ func (tx *TenantTx) queryRow(s tstmt, args ...sql.NamedArg) scanner {
 	a, err := tx.bind(args)
 	if err != nil {
 		return errScanner{err}
+	}
+	if tx.tx.d == dialectPostgres {
+		return tx.tx.QueryRowContext(tx.ctx, s.sql, a...)
 	}
 	st, err := tx.prepared(s)
 	if err != nil {

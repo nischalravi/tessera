@@ -103,7 +103,7 @@ func newSeededServer(tb testing.TB) paritySrv {
 func newSeededServerWith(tb testing.TB, tenants func([]connectors.Connector) []seed.Tenant) paritySrv {
 	tb.Helper()
 	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(tb.TempDir(), "parity.db"))
+	st, err := store.Open(ctx, store.TestTarget(tb))
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -285,9 +285,26 @@ func diff(path string, want, got any) string {
 		return ""
 	}
 	if fmt.Sprintf("%T:%v", want, want) != fmt.Sprintf("%T:%v", got, got) {
+		if pgIDsMayDiffer(path, want, got) {
+			return ""
+		}
 		return fmt.Sprintf("%s: want %#v, got %#v", path, want, got)
 	}
 	return ""
+}
+
+// pgIDsMayDiffer: on Postgres (TESSERA_TEST_PG_URL) integer ids come from
+// sequences, which are not gapless: an upsert that finds its row (every
+// re-sync) still consumes a value, where SQLite's rowid reuses it. So the
+// numeric value of an "id" or "edge_id" member may differ there; everything
+// else, including the shape and the order of the response, must still match.
+// The SQLite run compares them exactly.
+func pgIDsMayDiffer(path string, want, got any) bool {
+	if store.PostgresTestURL() == "" || !(strings.HasSuffix(path, ".id") || strings.HasSuffix(path, ".edge_id")) {
+		return false
+	}
+	num := regexp.MustCompile(`^[0-9]+$`)
+	return num.MatchString(fmt.Sprint(want)) && num.MatchString(fmt.Sprint(got))
 }
 
 // replay checks one fixture against h.

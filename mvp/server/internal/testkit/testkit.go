@@ -15,7 +15,6 @@ package testkit
 
 import (
 	"context"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -50,7 +49,7 @@ type DB struct {
 // Open opens an empty database in a temporary directory.
 func Open(tb testing.TB) *store.DB {
 	tb.Helper()
-	st, err := store.Open(context.Background(), filepath.Join(tb.TempDir(), "test.db"))
+	st, err := store.Open(context.Background(), store.TestTarget(tb))
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -154,6 +153,7 @@ func Policies(tb testing.TB) []*policy.Policy {
 var (
 	demoOnce sync.Once
 	demoDir  string
+	demoSrc  string
 	demoErr  error
 )
 
@@ -168,30 +168,29 @@ func demoPath() (string, error) {
 			return
 		}
 		demoDir = dir
-		ctx := context.Background()
-		st, err := store.Open(ctx, filepath.Join(dir, "demo.db"))
-		if err != nil {
-			demoErr = err
-			return
-		}
-		defer st.Close()
-		pols, err := policy.NewLoader(policies.FS).Load()
-		if err != nil {
-			demoErr = err
-			return
-		}
-		conns, err := connectors.Load("demo", Now)
-		if err != nil {
-			demoErr = err
-			return
-		}
-		if _, err := seed.Run(ctx, st, Now, pols, []seed.Tenant{seed.Larkspur(conns)}); err != nil {
-			demoErr = err
-			return
-		}
-		demoErr = st.Checkpoint(ctx)
+		// A SQLite file in dir, or (TESSERA_TEST_PG_URL) a Postgres template database.
+		demoSrc, demoErr = store.TestSharedTarget(dir, "demo", func(target string) error {
+			ctx := context.Background()
+			st, err := store.Open(ctx, target)
+			if err != nil {
+				return err
+			}
+			defer st.Close()
+			pols, err := policy.NewLoader(policies.FS).Load()
+			if err != nil {
+				return err
+			}
+			conns, err := connectors.Load("demo", Now)
+			if err != nil {
+				return err
+			}
+			if _, err := seed.Run(ctx, st, Now, pols, []seed.Tenant{seed.Larkspur(conns)}); err != nil {
+				return err
+			}
+			return st.Checkpoint(ctx)
+		})
 	})
-	return filepath.Join(demoDir, "demo.db"), demoErr
+	return demoSrc, demoErr
 }
 
 // Demo returns a private, writable copy of the seeded demo company database
@@ -202,11 +201,7 @@ func Demo(tb testing.TB) *DB {
 	if err != nil {
 		tb.Fatal(err)
 	}
-	dst := filepath.Join(tb.TempDir(), "demo.db")
-	if err := copyFile(src, dst); err != nil {
-		tb.Fatal(err)
-	}
-	st, err := store.Open(context.Background(), dst)
+	st, err := store.Open(context.Background(), store.TestClone(tb, src))
 	if err != nil {
 		tb.Fatal(err)
 	}

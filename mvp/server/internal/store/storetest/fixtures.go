@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -58,7 +57,7 @@ type Fixture struct {
 func TwoTenants(tb testing.TB) *Fixture {
 	tb.Helper()
 	ctx := context.Background()
-	db, err := store.Open(ctx, filepath.Join(tb.TempDir(), "two-tenants.db"))
+	db, err := store.Open(ctx, store.TestTarget(tb))
 	if err != nil {
 		tb.Fatal(err)
 	}

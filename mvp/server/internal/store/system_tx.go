@@ -15,7 +15,7 @@ import (
 // lookups of design §14.2. It has no access to tenant-owned tables.
 type SystemTx struct {
 	ctx    context.Context
-	tx     *sql.Tx
+	tx     *xtx
 	reason string
 }
 
