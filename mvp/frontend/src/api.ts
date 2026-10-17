@@ -143,11 +143,21 @@ function errorMessage(status: number, j: any): string {
   return j ? JSON.stringify(j.detail ?? j) : `${status}`;
 }
 
-/** noResume: never keep this request for resuming after a step-up (it carries a secret). */
-export interface ApiOptions { noResume?: boolean }
-
-export async function api<T = any>(path: string, body?: unknown, method?: string, opts?: ApiOptions): Promise<T> {
+/** Call the API. A write refused for step-up is kept so it can resume after re-authentication. */
+export function api<T = any>(path: string, body?: unknown, method?: string): Promise<T> {
   const m = method ?? (body !== undefined ? "POST" : "GET");
+  return send<T>(path, body, m, () => savePendingAction({ method: m, path, body, label: actionLabel(m, path), at: Date.now() }));
+}
+
+/**
+ * Call the API with a body that carries a secret. It is never kept for resuming after a step-up: the body
+ * never reaches browser storage, and an earlier pending action is dropped so the resume never offers it.
+ */
+export function apiNoResume<T = any>(path: string, body: unknown, method = "POST"): Promise<T> {
+  return send<T>(path, body, method, clearPendingAction);
+}
+
+async function send<T>(path: string, body: unknown, m: string, onStepUp: () => void): Promise<T> {
   const headers: Record<string, string> = {};
   if (body !== undefined) headers["content-type"] = "application/json";
   if (m !== "GET" && m !== "HEAD" && csrfToken) headers["x-tessera-csrf"] = csrfToken;
@@ -176,7 +186,7 @@ export async function api<T = any>(path: string, body?: unknown, method?: string
     }
     if (res.status === 401 && j?.error === "step_up_required") {
       // remember what was being done (the request only, never a token) so it can resume after the step-up
-      if (m !== "GET" && m !== "HEAD") savePendingAction({ method: m, path, body, label: actionLabel(m, path), at: Date.now() }, opts?.noResume);
+      if (m !== "GET" && m !== "HEAD") onStepUp();
       window.dispatchEvent(new CustomEvent(STEP_UP, { detail: j }));
     }
     throw new ApiError(j ? errorMessage(res.status, j) : `${res.status} ${res.statusText}`, res.status, j);
@@ -211,11 +221,11 @@ export function carriesSecret(v: unknown, depth = 0): boolean {
   return Object.entries(v as Record<string, unknown>).some(([k, x]) => SECRET_KEY.test(k) || carriesSecret(x, depth + 1));
 }
 
-function savePendingAction(a: PendingAction, noResume = false): void {
+function savePendingAction(a: PendingAction): void {
   // A request that carries a secret is never written to browser storage: after the step-up the user
   // enters it again, as when storage is unavailable. An earlier pending action is dropped too, so the
   // resume prompt never offers a different action than the one just refused.
-  if (noResume || carriesSecret(a.body)) {
+  if (carriesSecret(a.body)) {
     clearPendingAction();
     return;
   }
@@ -1523,7 +1533,7 @@ export const readiness = {
   create: (body: { name: string; connector_type: string; system?: string; config?: ConnConfig }) => api<Connection>("/connections", body),
   patchConfig: (id: string, patch: Partial<ConnConfig> | Record<string, unknown>) =>
     api<{ connection: Connection; new_revision: boolean; invalidated: string[]; fields: { field: string; msg: string }[] }>(`/connections/${id}/config`, patch, "PATCH"),
-  setCredential: (id: string, body: { secret?: string; reference?: string }) => api<RevisionView["credential"]>(`/connections/${id}/credential`, body, "PUT", { noResume: true }),
+  setCredential: (id: string, body: { secret?: string; reference?: string }) => apiNoResume<RevisionView["credential"]>(`/connections/${id}/credential`, body, "PUT"),
   attest: (id: string, item: string, note: string) => api<Checklist>(`/connections/${id}/checklist/${item}/attest`, { note }),
   skip: (id: string, item: string, reason: string, review_by?: string) =>
     api<Checklist>(`/connections/${id}/checklist/${item}/skip`, review_by ? { reason, review_by } : { reason }),
@@ -1588,7 +1598,7 @@ export interface AdminApiClients { available: boolean; clients: { id: string; na
 export const adminChanges = {
   submit: (type: ChangeType, payload: Record<string, unknown>, client_secret?: string) =>
     client_secret
-      ? api<AdminChange>("/admin/change-requests", { type, payload, client_secret }, "POST", { noResume: true })
+      ? apiNoResume<AdminChange>("/admin/change-requests", { type, payload, client_secret })
       : api<AdminChange>("/admin/change-requests", { type, payload }),
   approve: (id: string, payload_hash: string) => api<AdminChange>(`/admin/change-requests/${id}/approve`, { payload_hash }),
   reject: (id: string) => api<AdminChange>(`/admin/change-requests/${id}/reject`, {}),
