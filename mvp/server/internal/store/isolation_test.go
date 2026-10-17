@@ -325,7 +325,8 @@ var mutations = map[string]func(c *store.TenantTx, a, b map[string]int64) error{
 	"SetCampaignTotals": func(c *store.TenantTx, a, _ map[string]int64) error { return c.SetCampaignTotals(a["campaign"], 9, 9) },
 	"CompleteCampaign":  func(c *store.TenantTx, a, _ map[string]int64) error { return c.CompleteCampaign(a["campaign"]) },
 	"DecideItem": func(c *store.TenantTx, a, _ map[string]int64) error {
-		return c.DecideItem(a["item"], "revoke", nil, storetest.Now, store.UserRef{})
+		_, err := c.DecideItem(a["item"], "revoke", nil, storetest.Now, store.UserRef{})
+		return err
 	},
 	"SetHrisEventIdentity": func(c *store.TenantTx, a, _ map[string]int64) error {
 		return c.SetHrisEventIdentity(a["hris:joiner"], a["bob"])
