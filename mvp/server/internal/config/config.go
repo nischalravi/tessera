@@ -7,8 +7,8 @@
 // joined. With TESSERA_ENV=prod it refuses to start when any of these hold:
 // the public URL is not https; COOKIE_SECURE is false; there is no KEK;
 // CORS_ORIGINS is not empty (the UI is same-origin in production, so CORS is
-// off, §11); OUTBOUND_ALLOW_LOOPBACK is true; TESSERA_SAFEDIAL_ALLOW is set; TESSERA_DEV_IDP_URL is set; the
-// audit anchor is missing or file://; TESSERA_NOW freezes the clock; a
+// off, §11); OUTBOUND_ALLOW_LOOPBACK is true; TESSERA_DEV_IDP_URL is set; the
+// audit anchor is not an s3:// URL (missing or file:// included); TESSERA_NOW freezes the clock; a
 // trusted-proxy prefix is shorter than /8 (IPv4) or /32 (IPv6). The guard rail on dev_mock IdP connections
 // needs the idp_connections table and lands with it (PR6).
 package config
@@ -86,6 +86,25 @@ type Config struct {
 	FrozenNow time.Time
 
 	kek *secretKey // decoded TESSERA_KEK or TESSERA_KEK_FILE; nil means "dev auto-generated"
+	// outbound is the validated environment and loopback exception, set
+	// only by Load. safehttp.ForConfig reads it (Outbound), so neither a
+	// hand-built Config nor one whose exported fields were edited after
+	// Load can turn the loopback exception on.
+	outbound *outboundSettings
+}
+
+type outboundSettings struct {
+	env           string
+	allowLoopback bool
+}
+
+// Outbound returns the environment and loopback exception validated by
+// Load; ok is false for a Config that Load did not return.
+func (c *Config) Outbound() (env string, allowLoopback, ok bool) {
+	if c == nil || c.outbound == nil {
+		return "", false, false
+	}
+	return c.outbound.env, c.outbound.allowLoopback, true
 }
 
 type secretKey struct{ b []byte }
@@ -259,11 +278,15 @@ func Load(getenv func(string) string) (*Config, error) {
 		if c.SafedialAllow != "" {
 			bad("TESSERA_SAFEDIAL_ALLOW must not be set with TESSERA_ENV=prod: private directories are reached through the Directory Agent")
 		}
+		// s3:// is the only off-host sink so far; a file:// anchor sits on
+		// the same host as the ledger it is meant to anchor.
 		switch {
 		case c.AuditAnchor == "":
 			bad("TESSERA_AUDIT_ANCHOR is required with TESSERA_ENV=prod (s3://…)")
 		case strings.HasPrefix(strings.ToLower(c.AuditAnchor), "file:"):
-			bad("TESSERA_AUDIT_ANCHOR must not be file:// with TESSERA_ENV=prod")
+			bad("TESSERA_AUDIT_ANCHOR must not be file:// with TESSERA_ENV=prod (use s3://…)")
+		case !strings.HasPrefix(c.AuditAnchor, "s3://") || len(c.AuditAnchor) == len("s3://"):
+			bad("TESSERA_AUDIT_ANCHOR must be an s3://bucket/prefix URL with TESSERA_ENV=prod (got %q)", c.AuditAnchor)
 		}
 	}
 	if len(errs) > 0 {
@@ -272,6 +295,7 @@ func Load(getenv func(string) string) (*Config, error) {
 		}
 		return nil, fmt.Errorf("config: %w", errors.Join(errs...))
 	}
+	c.outbound = &outboundSettings{env: c.Env, allowLoopback: c.OutboundAllowLoopback}
 	return c, nil
 }
 
@@ -358,29 +382,56 @@ func (c *Config) Sealer(devKEKPath string) (*seal.Sealer, error) {
 	k, err := readKEKFile(devKEKPath)
 	if errors.Is(err, fs.ErrNotExist) {
 		k = seal.RandomBytes(seal.KeySize)
-		if err := os.MkdirAll(filepath.Dir(devKEKPath), 0o700); err != nil {
-			return nil, fmt.Errorf("config: dev KEK: %w", err)
-		}
-		enc := base64.StdEncoding.EncodeToString(k) + "\n"
-		// O_EXCL: never overwrite a KEK another process just created.
-		f, err := os.OpenFile(devKEKPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 -- operator-chosen path
-		if err != nil {
-			if errors.Is(err, fs.ErrExist) {
-				return c.Sealer(devKEKPath)
+		switch err := writeDevKEK(devKEKPath, k); {
+		case errors.Is(err, fs.ErrExist):
+			// another process won the race: use its KEK (read once; no
+			// retry loop, e.g. on a dangling symlink)
+			if k, err = readKEKFile(devKEKPath); err != nil {
+				return nil, fmt.Errorf("config: dev KEK %s: %w", devKEKPath, err)
 			}
+		case err != nil:
 			return nil, fmt.Errorf("config: dev KEK: %w", err)
-		}
-		_, werr := f.WriteString(enc)
-		if cerr := f.Close(); werr == nil {
-			werr = cerr
-		}
-		if werr != nil {
-			return nil, fmt.Errorf("config: dev KEK: %w", werr)
 		}
 	} else if err != nil {
 		return nil, fmt.Errorf("config: dev KEK %s: %w", devKEKPath, err)
 	}
 	return seal.New(k)
+}
+
+// writeDevKEK writes k to a mode-0600 temp file in path's directory, syncs
+// it, and then links it into place, so path is either absent or holds a
+// complete KEK (a crash mid-write leaves only a temp file, never a torn
+// KEK). The link is atomic and, unlike rename, never replaces a KEK another
+// process placed first (fs.ErrExist).
+func writeDevKEK(path string, k []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(dir, ".dev-kek-*.tmp") // mode 0600
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer func() { _ = os.Remove(tmp) }()
+	_, werr := f.WriteString(base64.StdEncoding.EncodeToString(k) + "\n")
+	if werr == nil {
+		werr = f.Sync()
+	}
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr != nil {
+		return werr
+	}
+	if err := os.Link(tmp, path); err != nil {
+		return err
+	}
+	if d, err := os.Open(dir); err == nil { // #nosec G304 -- the KEK's own directory
+		_ = d.Sync() // persist the new directory entry
+		_ = d.Close()
+	}
+	return nil
 }
 
 func decodeKEK(s string) ([]byte, error) {
