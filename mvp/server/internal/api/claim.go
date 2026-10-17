@@ -64,12 +64,12 @@ type claimLimits struct {
 func newClaimLimits() *claimLimits {
 	const keys = 10000
 	return &claimLimits{
-		startIP:      ratelimit.New(time.Minute, 10, keys),           // 10 per IP per 10 minutes
-		startTenant:  ratelimit.New(600*time.Millisecond, 100, keys), // 100 per tenant per minute
-		sendSession:  ratelimit.New(200*time.Second, 3, keys),        // 3 per session per 10 minutes
-		sendDestHour: ratelimit.New(12*time.Minute, 5, keys),         // 5 per destination per hour
-		sendDestDay:  ratelimit.New(144*time.Minute, 10, keys),       // 10 per destination per day
-		resendEmail:  ratelimit.New(8*time.Hour, 3, keys),            // 3 per address per day
+		startIP:      ratelimit.New(ratelimit.ClassIP, time.Minute, 10, keys),               // 10 per IP per 10 minutes
+		startTenant:  ratelimit.New(ratelimit.ClassTenant, 600*time.Millisecond, 100, keys), // 100 per tenant per minute
+		sendSession:  ratelimit.New(ratelimit.ClassSession, 200*time.Second, 3, keys),       // 3 per session per 10 minutes
+		sendDestHour: ratelimit.New(ratelimit.ClassDestination, 12*time.Minute, 5, keys),    // 5 per destination per hour
+		sendDestDay:  ratelimit.New(ratelimit.ClassDestination, 144*time.Minute, 10, keys),  // 10 per destination per day
+		resendEmail:  ratelimit.New(ratelimit.ClassDestination, 8*time.Hour, 3, keys),       // 3 per address per day
 	}
 }
 
@@ -346,7 +346,7 @@ func (s *Server) claimStart(w http.ResponseWriter, r *http.Request, p *params) (
 	if !s.claimLim.startIP.AllowAt(s.rateKey(r), c.now) {
 		return s.claimThrottled(c, "start_ip", 10*time.Minute)
 	}
-	if c.ok && !s.claimLim.startTenant.AllowAt(c.t.ID.String(), c.now) {
+	if c.ok && !s.claimLim.startTenant.AllowAt(ratelimit.TenantKey(c.t.ID.String()), c.now) {
 		return s.claimThrottled(c, "start_tenant", time.Minute)
 	}
 	var replays *claim.Replays
@@ -434,11 +434,11 @@ func (s *Server) claimVerifySend(w http.ResponseWriter, r *http.Request, p *para
 			}
 		}
 		switch {
-		case !s.claimLim.sendSession.AllowAt(cur.IDHash, c.now):
+		case !s.claimLim.sendSession.AllowAt(ratelimit.SessionKey(cur.IDHash), c.now):
 			throttled = "send_session"
-		case !s.claimLim.sendDestHour.AllowAt(dest, c.now):
+		case !s.claimLim.sendDestHour.AllowAt(ratelimit.DestinationKey(dest), c.now):
 			throttled = "send_destination_hour"
-		case !s.claimLim.sendDestDay.AllowAt(dest, c.now):
+		case !s.claimLim.sendDestDay.AllowAt(ratelimit.DestinationKey(dest), c.now):
 			throttled = "send_destination_day"
 		}
 		if throttled != "" {
@@ -836,7 +836,7 @@ func (s *Server) claimResend(w http.ResponseWriter, r *http.Request, p *params) 
 		if err != nil {
 			return nil // not an address
 		}
-		if !s.claimLim.resendEmail.AllowAt(mac, c.now) {
+		if !s.claimLim.resendEmail.AllowAt(ratelimit.DestinationKey(mac), c.now) {
 			return claim.Audit(tx, c.now, "claim.throttled", ojson.Object{{Key: "scope", Value: "resend_email"}}, store.OutcomeDenied)
 		}
 		ss, err := s.claimSvc.FindByEmail(tx, b.Email)

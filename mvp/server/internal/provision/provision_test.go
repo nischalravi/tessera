@@ -47,7 +47,7 @@ func setup(t *testing.T, o fake.Options) *env {
 	e.fake = fake.New(o)
 	e.srv = httptest.NewServer(e.fake.Handler())
 	t.Cleanup(e.srv.Close)
-	hc, err := safehttp.New(safehttp.Options{Env: config.Dev, AllowLoopback: true})
+	hc, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Dev, AllowLoopback: true})
 	if err != nil {
 		t.Fatal(err)
 	}

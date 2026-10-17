@@ -22,7 +22,6 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oauth2rp"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oidcrp"
-	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/access"
@@ -41,7 +40,6 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 	"github.com/nischalravi/tessera/mvp/server/internal/requests"
-	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
@@ -201,11 +199,9 @@ func New(cfg Config) *Server {
 	}
 	provHTTP := cfg.OutboundHTTP // the provisioning worker sends through the same safehttp client
 	if provHTTP == nil {
-		hc, err := safehttp.New(safehttp.Options{Env: config.Prod})
-		if err != nil {
-			panic(err)
-		}
-		provHTTP = hc
+		// no safehttp client was configured (main always passes one): refuse
+		// every outbound call rather than build an unguarded client
+		provHTTP = &http.Client{Transport: refuseOutbound{}}
 	}
 	if cfg.Containment == nil {
 		cfg.Containment = &containment.Service{}
@@ -256,6 +252,7 @@ func New(cfg Config) *Server {
 	s.registerNotificationRoutes()
 	s.registerEmailRoutes()
 	s.registerContainmentRoutes()
+	s.registerGroupsFolderRoutes()
 	s.registerReadinessRoutes()
 	s.registerJobRoutes()
 	s.registerProvisioningRoutes()
@@ -870,4 +867,12 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// refuseOutbound is the provisioning client of a Server built without an
+// OutboundHTTP client: every request fails closed.
+type refuseOutbound struct{}
+
+func (refuseOutbound) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("api: no outbound HTTP client configured")
 }

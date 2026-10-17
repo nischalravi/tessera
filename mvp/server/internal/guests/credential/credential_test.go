@@ -31,7 +31,7 @@ func TestDevIdP_RefusesProduction(t *testing.T) {
 
 func TestDevIdP_RegistersTheGuest(t *testing.T) {
 	idp := devidptest.Start(t, devidp.Config{})
-	hc, err := safehttp.New(safehttp.Options{Env: config.Dev, AllowLoopback: true})
+	hc, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Dev, AllowLoopback: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestDevIdP_RegistersTheGuest(t *testing.T) {
 		t.Error("a bad reference was registered")
 	}
 	// the safehttp guard stands: a production-style client refuses loopback
-	prod, err := safehttp.New(safehttp.Options{Env: config.Prod})
+	prod, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Prod})
 	if err != nil {
 		t.Fatal(err)
 	}

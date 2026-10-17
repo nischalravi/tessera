@@ -299,7 +299,7 @@ func (e *env) writeBack() {
 	e.fake = fake.New(fake.Options{Token: "tok"})
 	srv := httptest.NewServer(e.fake.Handler())
 	e.t.Cleanup(srv.Close)
-	hc, err := safehttp.New(safehttp.Options{Env: config.Dev, AllowLoopback: true})
+	hc, err := safehttp.NewForTest(e.t, safehttp.Options{Env: config.Dev, AllowLoopback: true})
 	if err != nil {
 		e.t.Fatal(err)
 	}

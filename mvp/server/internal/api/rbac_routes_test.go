@@ -168,18 +168,21 @@ POST   /api/connections/{id}/findings/{fid}/accept   connections.manage -
 GET    /api/connections/{id}/health                  connections.read   -
 GET    /api/insights/deployment-health               connections.read   -
 POST   /api/insights/deployment-health/rerun         connections.manage -
-GET    /api/jobs                                     jobs.read       -  # issue #172
-GET    /api/jobs/{job_id}                            jobs.read       -  #
-POST   /api/jobs/{job_id}/retry                      jobs.read       -  # (the replayed route's own permission and step-up apply)
-GET    /api/provisioning/targets                     provisioning.read   -  # issue #103
-PUT    /api/provisioning/targets/{id}                connections.manage  STEP_UP_POLICY
-DELETE /api/provisioning/targets/{id}                connections.manage  STEP_UP_POLICY
-GET    /api/provisioning/ops                         provisioning.read   -
-GET    /api/provisioning/ops/{op_id}                 provisioning.read   -
-POST   /api/provisioning/ops/{op_id}/retry           provisioning.manage -
-POST   /api/provisioning/ops/{op_id}/cancel          provisioning.manage -
-POST   /api/provisioning/run                         provisioning.manage -
-GET    /api/provisioning/findings                    provisioning.read   -
+GET    /api/groups/folders                           groups.admin    -  # issue #44
+POST   /api/groups/folders                           groups.admin    -  # issue #44
+GET    /api/groups/folders/{id}                      groups.admin    -  # issue #44
+PATCH  /api/groups/folders/{id}                      groups.admin    -  # issue #44
+DELETE /api/groups/folders/{id}                      groups.admin    -  # issue #44
+POST   /api/groups/folders/{id}/move                 groups.admin    -  # issue #44
+POST   /api/groups/folders/{id}/copy                 groups.admin    -  # issue #44
+GET    /api/groups/native                            groups.admin    -  # issue #44
+POST   /api/groups                                   groups.admin    -  # issue #44
+GET    /api/groups/{id}                              groups.admin    -  # issue #44
+PATCH  /api/groups/{id}                              groups.admin    -  # issue #44
+DELETE /api/groups/{id}                              groups.admin    -  # issue #44
+POST   /api/groups/{id}/move                         groups.admin    -  # issue #44
+POST   /api/groups/{id}/copy                         groups.admin    -  # issue #44
+POST   /api/groups/{id}/restore                      groups.admin    -  # issue #44
 GET    /api/auth/session                             auth.self       -
 POST   /api/auth/logout                              auth.self       -
 GET    /api/auth/sessions                            auth.self       -
@@ -199,6 +202,18 @@ GET    /public/t/{slug}/claim/status                 public
 POST   /public/t/{slug}/claim/existing-account       public
 POST   /public/t/{slug}/claim/credential             public
 POST   /public/t/{slug}/claim/resend                 public
+GET    /api/provisioning/targets                     provisioning.read   -  # issue #103
+PUT    /api/provisioning/targets/{id}                connections.manage  STEP_UP_POLICY
+DELETE /api/provisioning/targets/{id}                connections.manage  STEP_UP_POLICY
+GET    /api/provisioning/ops                         provisioning.read   -
+GET    /api/provisioning/ops/{op_id}                 provisioning.read   -
+POST   /api/provisioning/ops/{op_id}/retry           provisioning.manage -
+POST   /api/provisioning/ops/{op_id}/cancel          provisioning.manage -
+POST   /api/provisioning/run                         provisioning.manage -
+GET    /api/provisioning/findings                    provisioning.read   -
+GET    /api/jobs                                     jobs.read       -  # issue #172
+GET    /api/jobs/{job_id}                            jobs.read       -  #
+POST   /api/jobs/{job_id}/retry                      jobs.read       -  # (the replayed route's own permission and step-up apply)
 `
 
 type designRoute struct {
@@ -233,6 +248,7 @@ func parseDesignRoutes(t *testing.T) []designRoute {
 // TestRoutesMatchDesignTable: the registered routes are exactly the design
 // table, with the same permission and step-up requirement.
 func TestRoutesMatchDesignTable(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	srv := newIsolationServer(f)
 	table := map[string]designRoute{}
@@ -276,6 +292,7 @@ var rbacRoles = []auth.Role{auth.RoleViewer, auth.RoleOperator, auth.RoleAuditor
 // active under an IdP sign-in, so it is refused everything but the
 // session's own routes.
 func TestRBACRouteMatrix(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	srv := newIsolationServer(f)
 	h := srv.Handler()
@@ -319,6 +336,7 @@ func TestRBACRouteMatrix(t *testing.T) {
 // needs grants.revoke (policy admins only) and a fresh phishing-resistant
 // sign-in (§16.2, checked in the handler because it depends on the body).
 func TestRevokeApplyNeedsGrantsRevoke(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	srv := newIsolationServer(f)
 	h := srv.Handler()
@@ -372,6 +390,7 @@ func containsPerm(ps []auth.Permission, p auth.Permission) bool {
 // its credential at another host or widen its write scope, so it needs the
 // same fresh phishing-resistant sign-in as setting the credential.
 func TestConnectionConfigNeedsStepUp(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	h := newIsolationServer(f).Handler()
 	admin := authtest.User{Email: "conn-admin@b.example", Roles: []auth.Role{auth.RoleTenantAdmin}}

@@ -381,6 +381,7 @@ kbd, .kbd {
 .faint { color: var(--text-3); }
 .small { font-size: var(--fs-sm); }
 .xs { font-size: var(--fs-xs); }
+.wrap-anywhere { overflow-wrap: anywhere; }
 .nowrap { white-space: nowrap; }
 .grow { flex: 1; min-width: 0; }
 .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
