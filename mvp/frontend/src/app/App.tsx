@@ -24,17 +24,20 @@ const connections = () => import("../features/admin/connections");
 
 const Home = named(() => import("../features/home/Home"), "Home");
 const Inbox = named(() => import("../features/inbox/Inbox"), "Inbox");
+const Notifications = named(() => import("../features/notifications/Notifications"), "Notifications");
 const RequestAccess = named(access, "RequestAccess");
 const MyAccess = named(access, "MyAccess");
 const Requests = named(access, "Requests");
 const JIT = named(access, "JIT");
+const Guests = named(access, "Guests");
 const DirectoryLayout = named(directory, "DirectoryLayout");
 const People = named(directory, "People");
 const Machine = named(directory, "Machine");
 const Accounts = named(directory, "Accounts");
+const Matches = named(() => import("../features/directory/Matches"), "Matches");
 const roles = () => import("../features/roles/Roles");
 const Roles = named(roles, "Roles");
-const Matches = named(() => import("../features/directory/Matches"), "Matches");
+const Workers = named(() => import("../features/lifecycle/Workers"), "Workers");
 const Entitlements = named(directory, "Entitlements");
 const Apps = named(directory, "Apps");
 const Orgs = named(directory, "Orgs");
@@ -87,12 +90,14 @@ export default function App() {
                     <Route path="/login" element={<Navigate to="/" replace />} />
                     <Route path="/sessions" element={<MySessions />} />
                     <Route path="/inbox" element={<Inbox />} />
+                    <Route path="/notifications" element={<Notifications />} />
 
                     <Route path="/access" element={<Navigate to="/access/request" replace />} />
                     <Route path="/access/request" element={<RequestAccess />} />
                     <Route path="/access/mine" element={<MyAccess />} />
                     <Route path="/access/requests" element={<Requests />} />
                     <Route path="/access/jit" element={<JIT />} />
+                    <Route path="/access/guests" element={<Guests />} />
 
                     <Route path="/directory" element={<DirectoryLayout />}>
                       <Route index element={<Navigate to="/directory/people" replace />} />
@@ -101,6 +106,7 @@ export default function App() {
                       <Route path="accounts" element={<Accounts />} />
                       <Route path="matches" element={<Matches />} />
                       <Route path="roles" element={<Roles />} />
+                      <Route path="workers" element={<Workers />} />
                       <Route path="entitlements" element={<Entitlements />} />
                       <Route path="apps" element={<Apps />} />
                       <Route path="orgs" element={<Orgs />} />

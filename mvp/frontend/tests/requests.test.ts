@@ -43,3 +43,13 @@ test("request calls send method, path, body and CSRF", async () => {
   );
   for (const c of calls) assert.equal(c.headers["x-tessera-csrf"], "csrf-vic");
 });
+
+test("delegation calls (issue #165)", async () => {
+  await api.createDelegation({ to_user_id: "u2", starts_at: "2026-10-11T00:00:00Z", ends_at: "2026-10-18T00:00:00Z", reason: "leave" });
+  await api.revokeDelegation("d/1");
+  assert.deepEqual(calls.map((c) => [c.method, c.url, c.body]), [
+    ["POST", "/api/approvals/delegations", { to_user_id: "u2", starts_at: "2026-10-11T00:00:00Z", ends_at: "2026-10-18T00:00:00Z", reason: "leave" }],
+    ["POST", "/api/approvals/delegations/d%2F1/revoke", {}],
+  ]);
+  for (const c of calls) assert.equal(c.headers["x-tessera-csrf"], "csrf-vic");
+});

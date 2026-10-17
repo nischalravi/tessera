@@ -290,7 +290,7 @@ func TestLeaverExecuteRunsContainment(t *testing.T) {
 		if got["containment.run"] != 1 || got["jml.leaver"] != 1 {
 			t.Errorf("audit %v", got)
 		}
-		if rec = corrDo(h, l, "POST", leaver(f), ""); rec.Code != 400 {
+		if rec = corrDo(h, l, "POST", leaver(f), ""); rec.Code != 409 {
 			t.Errorf("second execute: %d %s", rec.Code, rec.Body)
 		}
 	})

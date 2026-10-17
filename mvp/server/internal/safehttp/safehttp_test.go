@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -593,4 +594,42 @@ func TestIgnoresEnvironmentProxy(t *testing.T) {
 	if resp, err := get(client(t, o), srv.URL); err != nil || string(resp.Body) != "direct" {
 		t.Errorf("request went through the environment proxy: %v", err)
 	}
+}
+
+// TestNewDialer: the dialer for non-HTTP protocols applies the same address
+// rules: a host is judged by what it resolves to, and loopback needs dev.
+func TestNewDialer(t *testing.T) {
+	if _, err := safehttp.NewDialer(safehttp.Options{Env: config.Prod, AllowLoopback: true}); err == nil {
+		t.Error("the loopback exception was accepted in prod")
+	}
+	if _, err := safehttp.NewDialer(safehttp.Options{Env: "test"}); err == nil {
+		t.Error("an unknown environment was accepted")
+	}
+	r := dns(map[string][][]string{"mail.internal": {{"10.0.0.5"}}, "meta.example": {{"169.254.169.254"}}, "mixed.example": {{"8.8.8.8", "192.168.1.1"}}})
+	dial, err := safehttp.NewDialer(safehttp.Options{Env: config.Prod, Resolver: r, AllowedPorts: []int{25, 587}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, addr := range []string{"mail.internal:25", "meta.example:25", "mixed.example:587", "127.0.0.1:25", "[::1]:25"} {
+		if c, err := dial(context.Background(), "tcp", addr); !errors.Is(err, safehttp.ErrBlockedAddress) {
+			if c != nil {
+				_ = c.Close()
+			}
+			t.Errorf("dial %s = %v, want ErrBlockedAddress", addr, err)
+		}
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skip("no loopback listener:", err)
+	}
+	defer ln.Close()
+	dev, err := safehttp.NewDialer(safehttp.Options{Env: config.Dev, AllowLoopback: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := dev(context.Background(), "tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("dev loopback dial: %v", err)
+	}
+	_ = c.Close()
 }
