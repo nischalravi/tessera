@@ -1,16 +1,23 @@
-# Gitleaks configuration: the default rules, plus an allowlist for fake
-# credentials that tests and demo data need. Real secrets never belong in any
-# of these places; a finding anywhere else still fails the secrets check.
+# Gitleaks configuration: the default rules, plus an allowlist on the
+# generic-api-key rule only, for fake values that tests and demo data need.
+# High-confidence rules (AWS keys, GitHub tokens, private keys, Slack tokens and
+# so on) still fire everywhere, tests included.
 [extend]
 useDefault = true
 
-[allowlist]
-description = "Test fixtures, recorded test traffic and demo seed data"
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "Go tests, recorded test traffic and demo seed data"
 paths = [
-  '''_test\.go$''',                                   # unit tests use fake tokens to assert redaction
-  '''(^|/)testdata/''',                               # golden files and recorded API cassettes
+  '''^mvp/server/.*_test\.go$''',                          # unit tests use fake tokens to assert redaction
+  '''^mvp/server/testdata/''',                             # golden files and recorded API cassettes (request hashes)
   '''^mvp/server/internal/connectors/demo_company\.go$''', # demo tenant seed: fake commit SHAs and fingerprints
 ]
+
+[[rules.allowlists]]
+description = "Names of simulated providers"
 regexes = [
-  '''^simulated_[a-z0-9_]+$''',                       # names of simulated providers (helpdesk "simulated_fido2")
+  '''^simulated_[a-z0-9_]+$''',                            # helpdesk "simulated_fido2" authenticator
 ]
