@@ -1,35 +1,51 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Layers, Minus, Plus, Search, ShieldAlert, ShoppingCart, Timer, X } from "lucide-react";
-import { ConnectorRow, Group, IdentityRow, SimResult, api, jitCreate, simulate, useApi } from "../../api";
+import { BusinessRole, CatalogView, ConnectorRow, Group, IdentityRow, Risk, RolesView, SimResult, api, roles as roleApi, simulate, submitRequest, useApi } from "../../api";
 import { usePersona } from "../../app/persona";
-import { Badge, Button, Callout, EmptyState, FilterChips, Loading, Page, PreviewBadge, Segmented, Skeleton, useToast } from "../../components";
-import { BusinessRole, ROLES, RequestTarget, mockRequests, useMockState } from "../../mocks";
+import { Badge, Button, Callout, EmptyState, FilterChips, Loading, Page, Segmented, Skeleton, useToast } from "../../components";
+import { RequestTarget, mockRequests, useMockState } from "../../mocks";
 
-type CatalogKind = "all" | "role" | "entitlement" | "jit";
+type CatalogKind = "all" | "role" | "entitlement" | "privileged";
 type Who = "me" | "other" | "many";
 
-interface CatalogItem { key: string; target: RequestTarget; title: string; system: string | null; description: string; privileged: boolean; jit: boolean; role?: BusinessRole }
+/** A catalog card: a catalog item (catalogId) or a requestable business role (role). */
+interface CatalogItem {
+  key: string; target: RequestTarget; title: string; system: string | null; description: string; privileged: boolean;
+  catalogId?: string; risk?: Risk; defaultHours?: number | null; maxHours?: number | null; owner?: string; role?: BusinessRole;
+}
 
 const DURATIONS: [string, number | null][] = [["Until removed", null], ["1 hour", 1], ["4 hours", 4], ["8 hours", 8], ["24 hours", 24], ["72 hours", 72], ["7 days", 168], ["30 days", 720], ["90 days", 2160]];
 
+/** The requestable catalog (GET /api/catalog) plus the requestable business roles (GET /api/roles). */
 function useCatalog() {
-  const { data: groups } = useApi<Group[]>("/groups");
-  return useMemo<CatalogItem[] | null>(() => {
-    if (!groups) return null;
-    const ents: CatalogItem[] = groups.map((g) => ({
-      key: `g${g.id}`,
-      target: { kind: "group", groupId: g.id, name: `${g.system}:${g.name}`, system: g.system, privileged: g.privileged, jit: g.requestable },
-      title: `${g.system}:${g.name}`,
-      system: g.system,
-      description: g.description || `${g.kind.replace(/_/g, " ")} in ${g.system}`,
-      privileged: g.privileged,
-      jit: g.requestable,
+  const { data: view, error } = useApi<CatalogView>("/catalog");
+  const { data: rv, error: rolesError } = useApi<RolesView>("/roles");
+  const items = useMemo<CatalogItem[] | null>(() => {
+    if (!view) return null;
+    const ents: CatalogItem[] = view.items.filter((c) => c.id).map((c) => ({
+      key: `g${c.group.id}`,
+      target: { kind: "group", groupId: c.group.id, name: `${c.group.system}:${c.group.name}`, system: c.group.system, privileged: c.group.privileged, jit: false },
+      title: `${c.group.system}:${c.group.name}`,
+      system: c.group.system,
+      description: c.description || `${c.group.kind.replace(/_/g, " ")} in ${c.group.system}`,
+      privileged: c.group.privileged,
+      catalogId: c.id!,
+      risk: c.risk,
+      defaultHours: c.default_hours,
+      maxHours: c.max_hours,
+      owner: c.owner?.name,
     }));
-    const roles: CatalogItem[] = ROLES.map((r) => ({ key: r.id, target: { kind: "role", roleId: r.id, name: r.name }, title: r.name, system: null, description: r.description, privileged: r.risk === "high", jit: false, role: r }));
+    const roles: CatalogItem[] = (rv?.roles ?? []).filter((r) => r.status === "active" && r.requestable).map((r) => ({
+      key: r.id, target: { kind: "role", roleId: r.id, name: r.name }, title: r.name, system: null, description: r.description,
+      privileged: r.risk === "high", risk: r.risk, owner: r.owner?.name, role: r,
+    }));
     return [...roles, ...ents];
-  }, [groups]);
+  }, [view, rv]);
+  return { items, view, error: error ?? rolesError };
 }
+
+const hoursLabel = (h: number) => (h % 24 === 0 && h >= 48 ? `${h / 24} days` : `${h} h`);
 
 /** Group ids a cart item adds (roles expand to their real underlying groups). */
 function groupIdsFor(item: CatalogItem, groups: Group[]): Group[] {
@@ -37,8 +53,8 @@ function groupIdsFor(item: CatalogItem, groups: Group[]): Group[] {
     const id = item.target.groupId;
     return groups.filter((g) => g.id === id);
   }
-  const names = new Set((item.role?.entitlements ?? []).filter((e) => !e.includes("(JIT)")));
-  return groups.filter((g) => names.has(`${g.system}:${g.name}`));
+  const ids = new Set((item.role?.entitlements ?? []).map((e) => e.id));
+  return groups.filter((g) => ids.has(g.id));
 }
 
 interface Preview { name: string; sim: SimResult | null; missing: string[]; error?: string }
@@ -114,10 +130,11 @@ function RiskPreview({ beneficiaries, cart, groups }: { beneficiaries: { id: num
 
 export function RequestAccess() {
   const [params, setParams] = useSearchParams();
-  const { me, actor } = usePersona();
+  const { actor } = usePersona();
   const toast = useToast();
   const nav = useNavigate();
-  const catalog = useCatalog();
+  const { items: catalog, view, error: catalogError } = useCatalog();
+  const me = view?.me ?? null;
   const { data: groups } = useApi<Group[]>("/groups");
   const { data: idents } = useApi<IdentityRow[]>("/identities?status=active");
   const { data: conns } = useApi<ConnectorRow[]>("/connectors");
@@ -170,10 +187,15 @@ export function RequestAccess() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftParam, catalog]);
 
-  const hasJit = cart.some((c) => c.jit);
+  // the longest duration every item in the cart allows (null: no limit)
+  const maxHours = cart.reduce<number | null>((m, c) => (c.maxHours == null ? m : m == null ? c.maxHours : Math.min(m, c.maxHours)), null);
   useEffect(() => {
-    if (hasJit && (duration === null || duration > 72)) setDuration(4);
-  }, [hasJit, duration]);
+    if (duration != null && maxHours != null && duration > maxHours) setDuration(null);
+  }, [maxHours, duration]);
+  // nobody to request for: a sign-in without a person, and no right to request for others
+  useEffect(() => {
+    if (view && !view.me && who === "me") setWho("other");
+  }, [view, who]);
 
   const beneficiaries = useMemo(() => {
     if (who === "me") return me ? [{ id: me.id, name: me.name }] : [];
@@ -183,8 +205,8 @@ export function RequestAccess() {
   const results = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return (catalog ?? []).filter((c) =>
-      (kind === "all" || (kind === "role" && c.target.kind === "role") || (kind === "entitlement" && c.target.kind === "group") || (kind === "jit" && c.jit)) &&
-      (!system || c.system === system || (c.role?.entitlements.some((e) => e.startsWith(system + ":")) ?? false)) &&
+      (kind === "all" || (kind === "role" && c.target.kind === "role") || (kind === "entitlement" && c.target.kind === "group") || (kind === "privileged" && c.privileged)) &&
+      (!system || c.system === system || (c.role?.entitlements.some((e) => e.system === system) ?? false)) &&
       (!needle || `${c.title} ${c.description}`.toLowerCase().includes(needle)),
     );
   }, [catalog, q, kind, system]);
@@ -211,20 +233,27 @@ export function RequestAccess() {
   const submit = async () => {
     setBusy(true);
     try {
-      const jitItems = cart.filter((c) => c.jit && c.target.kind === "group");
-      const rest = cart.filter((c) => !jitItems.includes(c));
-      const jitIds: number[] = [];
-      for (const b of beneficiaries) {
-        for (const c of jitItems) {
-          if (c.target.kind !== "group") continue;
-          const r = await jitCreate({ identity_id: b.id, group_id: c.target.groupId, duration_hours: Math.min(72, duration ?? 4), justification: justification.trim() });
-          jitIds.push(r.id);
+      const real = cart.filter((c) => c.catalogId);
+      const roles = cart.filter((c) => !c.catalogId);
+      let n = 0;
+      if (real.length) {
+        const res = await submitRequest({
+          beneficiary_ids: beneficiaries.map((b) => b.id),
+          catalog_item_ids: real.map((c) => c.catalogId!),
+          justification: justification.trim(),
+          duration_hours: duration,
+        });
+        n += res.lines.length;
+      }
+      // a role is requested per person (one approval assigns the whole bundle)
+      for (const c of roles) {
+        for (const b of beneficiaries) {
+          await roleApi.request(c.role!.id, b.id, justification.trim());
+          n++;
         }
       }
-      if (rest.length) await mockRequests.submit({ ...payload(), items: rest.map((c) => c.target), jitIds });
-      else if (draftId) mockRequests.remove(draftId);
-      const n = beneficiaries.length * cart.length;
-      toast(`Submitted ${n} request${n === 1 ? "" : "s"}. Approvers have been notified.`);
+      if (draftId) mockRequests.remove(draftId);
+      toast(`Submitted ${n} request${n === 1 ? "" : "s"}. Approvers can see ${n === 1 ? "it" : "them"} now.`);
       setCart([]);
       setJustification("");
       setDraftId(undefined);
@@ -241,12 +270,12 @@ export function RequestAccess() {
     { id: "all", label: "All", count: catalog?.length },
     { id: "role", label: "Roles", count: catalog?.filter((c) => c.target.kind === "role").length },
     { id: "entitlement", label: "Entitlements", count: catalog?.filter((c) => c.target.kind === "group").length },
-    { id: "jit", label: "Just-in-time", count: catalog?.filter((c) => c.jit).length },
+    { id: "privileged", label: "Privileged", count: catalog?.filter((c) => c.privileged).length },
   ];
 
   return (
-    <Page title="Request access" crumbs={[["Access"], ["Request access"]]} sub="Find what you need, add it to your request, and see policy conflicts before you submit. Privileged access is granted just in time and removed automatically.">
-      <div className="split" style={{ gridTemplateColumns: "minmax(0,1fr) 380px" }}>
+    <Page title="Request access" crumbs={[["Access"], ["Request access"]]} sub="Find what you need, add it to your request, and see policy conflicts before you submit. Time-limited access is removed automatically when it ends.">
+      <div className="split request-split">
         <div className="stack">
           <div className="row">
             <label className="input-icon" style={{ flex: "1 1 260px" }}>
@@ -260,7 +289,7 @@ export function RequestAccess() {
             </select>
           </div>
           <FilterChips label="Catalog type" value={kind} onChange={setKind} options={kinds} />
-          {!catalog ? <Loading /> : results.length === 0 ? (
+          {!catalog ? <Loading error={catalogError} /> : results.length === 0 ? (
             <div className="card"><EmptyState title="Nothing in the catalog matches" icon={<Search size={18} />}>Try a system name like “snowflake”, or a job like “analyst”. If what you need isn't listed, ask the application owner to make it requestable.</EmptyState></div>
           ) : (
             <div className="catalog">
@@ -271,12 +300,14 @@ export function RequestAccess() {
                     {c.target.kind === "role" ? <span className="row tight"><Badge tone="accent"><Layers size={11} /> Role</Badge></span> : null}
                   </div>
                   <p className="small muted">{c.description}</p>
-                  {c.role && <div className="row tight">{c.role.entitlements.slice(0, 4).map((e) => <span key={e} className="chip sys">{e}</span>)}</div>}
+                  {c.role && <div className="row tight">{c.role.entitlements.slice(0, 4).map((e) => <span key={e.id} className="chip sys">{e.system}:{e.name}</span>)}{c.role.entitlements.length > 4 && <span className="chip">+{c.role.entitlements.length - 4}</span>}</div>}
                   <div className="cat-foot">
                     <span className="row tight">
-                      {c.jit && <Badge tone="info"><Timer size={11} /> Just-in-time</Badge>}
                       {c.privileged && <Badge tone="warning">Privileged</Badge>}
-                      {c.role && <PreviewBadge />}
+                      {c.risk && c.risk !== "low" && !c.privileged && <Badge tone="outline">{c.risk} risk</Badge>}
+                      {c.defaultHours != null && <Badge tone="info"><Timer size={11} /> {hoursLabel(c.defaultHours)}{c.maxHours != null ? `, up to ${hoursLabel(c.maxHours)}` : ""}</Badge>}
+                      {c.role?.held && <Badge tone="ok">You hold it</Badge>}
+                      {c.role?.pending && <Badge tone="info">You asked for it</Badge>}
                     </span>
                     <Button size="sm" variant={inCart(c) ? "default" : "primary"} icon={inCart(c) ? <Minus size={14} /> : <Plus size={14} />} onClick={() => toggle(c)} aria-pressed={inCart(c)} aria-label={`${inCart(c) ? "Remove" : "Add"} ${c.title}`}>
                       {inCart(c) ? "Remove" : "Add"}
@@ -293,8 +324,10 @@ export function RequestAccess() {
             <h2 className="row tight"><ShoppingCart size={16} aria-hidden /> Your request {cart.length > 0 && <Badge tone="accent">{cart.length}</Badge>}</h2>
             <div className="field">
               Request for
-              <Segmented label="Request for" value={who} onChange={(v) => { setWho(v); if (v === "me") setParams({}); }} options={[["me", "Me"], ["other", "Someone else"], ["many", "Several people"]]} />
+              <Segmented label="Request for" value={who} onChange={(v) => { setWho(v); if (v === "me") setParams({}); }}
+                options={[...(me ? [["me", "Me"] as ["me", string]] : []), ...(view?.can_request_for_others ? [["other", "Someone else"], ["many", "Several people"]] as [Who, string][] : [])]} />
             </div>
+            {view && !me && !view.can_request_for_others && <Callout tone="warn">Your sign-in is not linked to a person in the directory, and you can't request for others. Ask an administrator.</Callout>}
             {who !== "me" && (
               <div className="field">
                 {who === "other" ? "Person" : "People"}
@@ -324,7 +357,7 @@ export function RequestAccess() {
               <ul className="steps">
                 {cart.map((c) => (
                   <li key={c.key} className="step" style={{ padding: "6px 8px" }}>
-                    <span className="grow small"><b className={c.target.kind === "group" ? "sys" : ""}>{c.title}</b>{c.jit && <span className="faint"> · just-in-time</span>}</span>
+                    <span className="grow small"><b className={c.target.kind === "group" ? "sys" : ""}>{c.title}</b>{c.defaultHours != null && <span className="faint"> · {hoursLabel(c.defaultHours)} by default</span>}</span>
                     <Button size="sm" variant="ghost" icon={<X size={14} />} label={`Remove ${c.title}`} onClick={() => toggle(c)} />
                   </li>
                 ))}
@@ -333,9 +366,9 @@ export function RequestAccess() {
             <label className="field">
               Duration
               <select className="input" value={duration === null ? "" : String(duration)} onChange={(e) => setDuration(e.target.value ? Number(e.target.value) : null)}>
-                {DURATIONS.filter(([, h]) => !hasJit || (h !== null && h <= 72)).map(([l, h]) => <option key={l} value={h === null ? "" : h}>{l}</option>)}
+                {DURATIONS.filter(([, h]) => h === null || maxHours === null || h <= maxHours).map(([l, h]) => <option key={l} value={h === null ? "" : h}>{h === null ? "Each item's default" : l}</option>)}
               </select>
-              {hasJit && <span className="hint">Just-in-time access is limited to 72 hours.</span>}
+              <span className="hint">{maxHours != null ? `Items in this request allow at most ${hoursLabel(maxHours)}.` : "Items without a default stay until removed."}</span>
             </label>
             <label className="field">
               Justification
@@ -343,7 +376,7 @@ export function RequestAccess() {
               <span className="hint">Approvers see this. At least a few words.</span>
             </label>
             {groups && <RiskPreview beneficiaries={beneficiaries} cart={cart} groups={groups} />}
-            {cart.some((c) => !c.jit) && <Callout tone="neutral">Non-JIT items are recorded as a preview request in this browser until the request API ships. JIT items go to the real approval queue.</Callout>}
+            {cart.some((c) => !c.catalogId) && <Callout tone="neutral">A role is one request per person: approving it grants every entitlement in the role.</Callout>}
             <div className="row" style={{ justifyContent: "flex-end" }}>
               <Button onClick={saveDraft} disabled={!cart.length}>Save draft</Button>
               <Button variant="primary" onClick={submit} disabled={!canSubmit}>{busy ? "Submitting…" : `Submit${beneficiaries.length > 1 ? ` for ${beneficiaries.length}` : ""}`}</Button>
