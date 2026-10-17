@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -501,6 +502,18 @@ func syntheticChain(t *testing.T, db *store.DB, tn tenancy.ID, n int) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestWriteError_DeadlineIs503: a handler whose context deadline passed gets
+// the handler timeout's 503, not a 500, whichever of the handler and
+// http.TimeoutHandler answers first.
+func TestWriteError_DeadlineIs503(t *testing.T) {
+	s := &Server{log: slog.New(slog.DiscardHandler)}
+	rec := httptest.NewRecorder()
+	s.writeError(rec, httptest.NewRequest("GET", "/api/identities", nil), fmt.Errorf("query: %w", context.DeadlineExceeded))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("deadline error: %d, want 503", rec.Code)
 	}
 }
 
