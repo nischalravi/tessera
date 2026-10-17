@@ -7,7 +7,7 @@
 // joined. With TESSERA_ENV=prod it refuses to start when any of these hold:
 // the public URL is not https; COOKIE_SECURE is false; there is no KEK;
 // CORS_ORIGINS is not empty (the UI is same-origin in production, so CORS is
-// off, §11); OUTBOUND_ALLOW_LOOPBACK is true; TESSERA_DEV_IDP_URL is set; the
+// off, §11); OUTBOUND_ALLOW_LOOPBACK is true; TESSERA_SAFEDIAL_ALLOW is set; TESSERA_DEV_IDP_URL is set; the
 // audit anchor is not an s3:// URL (missing or file:// included); TESSERA_NOW freezes the clock; a
 // trusted-proxy prefix is shorter than /8 (IPv4) or /32 (IPv6). The guard rail on dev_mock IdP connections
 // needs the idp_connections table and lands with it (PR6).
