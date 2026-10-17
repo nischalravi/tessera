@@ -153,6 +153,7 @@ var routeParamCases = map[string][]string{
 // "request is not pending"); the design's "404" is therefore checked as
 // "indistinguishable from missing".
 func TestIsolation_RouteCrossTenant(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	srv := isolationServer(t, f, f.B.ID)
 	h := srv.Handler()
@@ -179,6 +180,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		}
 		if rt.Pattern == "/api/containment-retries/{retry_id}/retry-now" {
 			continue // TestContainmentRetriesAPI (a UUID, not a fixture id)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/groups/") {
+			continue // TestGroupsTenantIsolation (UUIDs, not fixture ids)
 		}
 		if rt.Pattern == "/api/auth/sessions/{session_id}" {
 			continue // TestIsolation_SessionCookieScoped (a UUID, not a fixture id)
@@ -233,6 +237,7 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 // own ids for path parameters) answers without any of tenant A's data. POST
 // routes that return tenant data are exercised too.
 func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	// Positive control: served as tenant A, the sentinel is visible.
 	if rec := serveOnce(isolationServer(t, f, f.A.ID).Handler(), http.MethodGet, "/api/identities", ""); !leaks(rec.Body.String()) {
@@ -261,6 +266,9 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		path := rt.Pattern
 		if rp, ok := readinessGetPaths(f.B.Refs)[path]; ok && strings.Contains(path, "{") {
 			path = rp // tenant B's own readiness ids
+		}
+		if strings.HasPrefix(path, "/api/groups/") && strings.Contains(path, "{") {
+			continue // TestGroupsTenantIsolation (UUIDs, not fixture ids)
 		}
 		if strings.Contains(path, "{") {
 			v, ok := values[path]
@@ -323,6 +331,7 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 // TestIsolation_GraphSnapshotScoped: tenant B's graph shares no node with
 // tenant A's, and /api/simulate with one of A's node keys is a 400.
 func TestIsolation_GraphSnapshotScoped(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	snap := func(id tenancy.ID) *graph.Snapshot {
 		var g *graph.Snapshot
@@ -361,6 +370,7 @@ func TestIsolation_GraphSnapshotScoped(t *testing.T) {
 // names in a header or query parameter; the request is recorded on the
 // platform chain, anonymous, with the reason.
 func TestIsolation_NoSessionFailsClosed(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	srv := isolationServer(t, f, f.B.ID)
 	h := srv.Anonymous()

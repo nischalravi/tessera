@@ -114,11 +114,12 @@ func VerifyCheckpointJWS(s string, pub map[string]ed25519.PublicKey) (Checkpoint
 }
 
 // PlatformPublicKeys returns the platform audit keys that can verify
-// checkpoints, by kid: active and retired ones, never revoked ones.
+// checkpoints, by kid: active and retired ones, never revoked ones. A bad
+// stored key is left out and alerted on slog.Default() (keys.PlatformJWKS).
 func PlatformPublicKeys(ctx context.Context, db *store.DB) (map[string]ed25519.PublicKey, error) {
 	out := map[string]ed25519.PublicKey{}
 	err := db.InSystem(ctx, "audit: platform public keys", func(sys *store.SystemTx) error {
-		set, err := keys.PlatformJWKS(sys)
+		set, err := keys.PlatformJWKS(sys, nil)
 		if err != nil {
 			return err
 		}
