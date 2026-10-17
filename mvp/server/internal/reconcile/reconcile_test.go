@@ -163,6 +163,53 @@ func TestRules_Load(t *testing.T) {
 	}
 }
 
+func TestCause_LeaverProcessSentence(t *testing.T) {
+	ts := func(days int) *string {
+		s := now.AddDate(0, 0, -days).Format("2006-01-02 15:04:05.000000")
+		return &s
+	}
+	cases := []struct {
+		name  string
+		terms []*string
+		want  string
+	}{
+		{"two accounts, none past grace", []*string{ts(3), ts(5)},
+			"2 accounts belong to people who left and are still enabled in Directory (0 left more than 14 days ago), and only here: the leaver process does not cover this system."},
+		{"two accounts, one past grace", []*string{ts(3), ts(30)},
+			"2 accounts belong to people who left and are still enabled in Directory (1 left more than 14 days ago), and only here: the leaver process does not cover this system."},
+		{"two accounts, all past grace", []*string{ts(20), ts(30)},
+			"2 accounts belong to people who left more than 14 days ago and are still enabled in Directory, and only here: the leaver process does not cover this system."},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var accts []*store.StagedAccount
+			ppl := map[int64]Person{}
+			for i, term := range c.terms {
+				id := int64(i + 1)
+				ppl[id] = Person{ID: id, Name: string(rune('A' + i)), Status: "terminated", TerminatedAt: term}
+				a := acct(string(rune('a'+i)), "user", map[string]string{})
+				a.Correlation = Correlated
+				a.IdentityID = &id
+				accts = append(accts, a)
+			}
+			fs, err := Analyze(Input{Snap: snapshotWith(accts), People: ppl})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, f := range fs {
+				if f.Code != "RF-06" || f.Variant != "b" {
+					continue
+				}
+				if f.Count != 2 || f.Cause == nil || f.Cause.Sentence != c.want {
+					t.Fatalf("count %d cause %+v, want sentence %q", f.Count, f.Cause, c.want)
+				}
+				return
+			}
+			t.Fatal("RF-06b not raised")
+		})
+	}
+}
+
 func TestExpired(t *testing.T) {
 	past := acct("p", "user", map[string]string{"accountExpires": "133000000000000000"}) // 2022
 	never := acct("n", "user", map[string]string{"accountExpires": "9223372036854775807"})

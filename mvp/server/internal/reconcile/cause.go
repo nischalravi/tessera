@@ -115,7 +115,15 @@ func (a *analysis) leaverProcess(hits []*store.StagedAccount) *Cause {
 			s += " Every other account was disabled: the leaver process does not cover this system."
 		}
 	} else {
-		s = fmt.Sprintf("%d people left more than %d days ago and are still enabled in %s", old, grace, sys)
+		// Count accounts (what the finding counts), not the subset past the
+		// grace period, so the sentence and the finding agree.
+		if old == len(hits) {
+			s = fmt.Sprintf("%s belong to people who left more than %d days ago and are still enabled in %s",
+				plural(len(hits), "account", "accounts"), grace, sys)
+		} else {
+			s = fmt.Sprintf("%s belong to people who left and are still enabled in %s (%d left more than %d days ago)",
+				plural(len(hits), "account", "accounts"), sys, old, grace)
+		}
 		if onlyHere == len(hits) {
 			s += ", and only here: the leaver process does not cover this system."
 		} else {
