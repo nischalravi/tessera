@@ -360,6 +360,45 @@ func Dump(tb testing.TB, db *store.DB, t tenancy.ID) string {
 	return string(b)
 }
 
+// IdentityKEK is the fixture's key-encryption key (identifier hashing only).
+var IdentityKEK = []byte("storetest-kek-0123456789abcdef!!")
+
+// IdentityKeyer hashes identifiers under IdentityKEK.
+func IdentityKeyer(tb testing.TB) *identifiers.Keyer {
+	tb.Helper()
+	s, err := seal.New(IdentityKEK)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return identifiers.NewKeyer(s)
+}
+
+// seedIdentityModel adds the populations, each person's back-filled source
+// record, affiliation and identifiers, and one guest affiliation for alice
+// whose org unit carries the tenant's sentinel (Refs["affiliation:guest"]).
+func seedIdentityModel(c *store.TenantTx, t *Tenant, mark func(string) string) error {
+	if err := identity.SeedPopulations(c, Now); err != nil {
+		return err
+	}
+	// the keyer is only needed for hashing; a failure here is a fixture bug
+	s, err := seal.New(IdentityKEK)
+	if err != nil {
+		return err
+	}
+	if _, err := identity.Backfill(c, identifiers.NewKeyer(s), Now); err != nil {
+		return err
+	}
+	unit, pop, end := mark("Visitor Services"), "guest", Now.Add(30*24*time.Hour)
+	a := &store.Affiliation{ID: uuid.NewString(), IdentityID: t.IDs["alice"], Type: store.AffGuestVisitor,
+		Source: store.AffSourceManual, OrgUnit: &unit, Population: &pop, StartsAt: Now, EndsAt: &end,
+		Status: store.AffActive, CreatedAt: Now}
+	if err := c.InsertAffiliation(a); err != nil {
+		return err
+	}
+	t.Refs["affiliation:guest"] = a.ID
+	return nil
+}
+
 var errSeedFailed = errors.New("storetest: seed failed")
 
 // seedTB is the testing.TB the one-time seed reports to: Fatal records the
