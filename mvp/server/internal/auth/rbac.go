@@ -75,6 +75,9 @@ const (
 	PermIdentitiesAffiliate Permission = "identities.affiliate"
 	// kill switch (issue #106)
 	PermIdentitiesContain Permission = "identities.contain"
+	// native groups (issue #44, GR-1): folder and group CRUD. tenant_admin only,
+	// until GR-4 brings the per-object privilege model.
+	PermGroupsAdmin Permission = "groups.admin"
 )
 
 // rolePermissions is the static role -> permission map (Cedar-ready, §12.1).
@@ -90,7 +93,7 @@ var rolePermissions = map[Role][]Permission{
 		PermIdentitiesCorrelate, PermIdentitiesMerge, PermIdentitiesAffiliate, PermIdentitiesContain},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
-		PermConnectionsActivate},
+		PermConnectionsActivate, PermGroupsAdmin},
 	RoleBreakGlass: {PermAdminRead, PermBreakGlassRecover},
 }
 
@@ -174,7 +177,7 @@ var scopePermissions = map[Scope][]Permission{
 	ScopeRead: {PermGraphRead, PermConnectionsRead},
 	ScopeWrite: {PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage, PermReviewsDecide,
 		PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
-		PermConnectionsManage, PermConnectionsActivate},
+		PermConnectionsManage, PermConnectionsActivate, PermGroupsAdmin},
 	ScopeAudit: {PermAuditRead, PermAuditVerify},
 	ScopeAdmin: {PermAdminRead, PermAdminChangeReq, PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev,
 		PermBreakGlassRecover},

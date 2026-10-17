@@ -92,6 +92,9 @@ var tables = []string{
 	"guest_populations", "identity_source_records", "identity_identifiers", "affiliations",
 	// identity containment (schema/0205_containment.sql)
 	"containment_credentials", "containment_retries",
+	// native groups (schema/0280_groups.sql); the engine tables stay empty until GR-2
+	"grp_folders", "grp_name_aliases", "grp_groups", "grp_composite_factors", "grp_lists", "grp_direct_memberships",
+	"grp_deps", "grp_closure", "grp_levels", "grp_effective", "grp_engine_queue",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was
@@ -123,6 +126,13 @@ func open(ctx context.Context, path string, fresh bool) (*DB, error) {
 	q.Add("_pragma", "busy_timeout(10000)")
 	q.Add("_pragma", "journal_mode(WAL)")
 	q.Add("_pragma", "synchronous(NORMAL)")
+	// Write transactions start with BEGIN IMMEDIATE (the driver leaves
+	// read-only ones deferred). A deferred write transaction that reads first
+	// (InTenant checks the tenant) and then writes must upgrade its WAL
+	// snapshot; if another handle on the file committed meanwhile, SQLite
+	// returns SQLITE_BUSY at once and busy_timeout does not apply (#126). The
+	// mutex below only serializes writers within one handle.
+	q.Set("_txlock", "immediate")
 	db, err := sql.Open("sqlite", "file:"+path+"?"+q.Encode())
 	if err != nil {
 		return nil, fmt.Errorf("store: open: %w", err)
