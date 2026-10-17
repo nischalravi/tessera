@@ -7,7 +7,7 @@
 // joined. With TESSERA_ENV=prod it refuses to start when any of these hold:
 // the public URL is not https; COOKIE_SECURE is false; there is no KEK;
 // CORS_ORIGINS is not empty (the UI is same-origin in production, so CORS is
-// off, §11); OUTBOUND_ALLOW_LOOPBACK is true; TESSERA_DEV_IDP_URL is set; the
+// off, §11); OUTBOUND_ALLOW_LOOPBACK is true; TESSERA_SAFEDIAL_ALLOW is set; TESSERA_DEV_IDP_URL is set; the
 // audit anchor is not an s3:// URL (missing or file:// included); TESSERA_NOW freezes the clock; a
 // trusted-proxy prefix is shorter than /8 (IPv4) or /32 (IPv6). The guard rail on dev_mock IdP connections
 // needs the idp_connections table and lands with it (PR6).
@@ -58,15 +58,21 @@ const (
 // printing a Config (even with %#v) never shows key bytes; String and
 // LogValue redact it as well.
 type Config struct {
-	Env                    string // Dev or Prod
-	PublicURL              string // issuer base; https in prod
-	APIAudience            string // access-token aud
-	DB                     string // SQLite path (or sqlite:///path)
-	KEKFile                string // TESSERA_KEK_FILE, when set
-	CookieSecure           bool
-	CORSOrigins            []string
-	TrustedProxies         []netip.Prefix
-	OutboundAllowLoopback  bool // safehttp may reach 127.0.0.1 / ::1 (dev only)
+	Env                   string // Dev or Prod
+	PublicURL             string // issuer base; https in prod
+	APIAudience           string // access-token aud
+	DB                    string // SQLite path (or sqlite:///path)
+	KEKFile               string // TESSERA_KEK_FILE, when set
+	CookieSecure          bool
+	CORSOrigins           []string
+	TrustedProxies        []netip.Prefix
+	OutboundAllowLoopback bool // safehttp may reach 127.0.0.1 / ::1 (dev only)
+	// SafedialAllow is TESSERA_SAFEDIAL_ALLOW: comma-separated host:port or
+	// CIDR:port entries a dev instance may dial on private addresses (live
+	// LDAP checks against a lab directory). Dev only; syntax is checked by
+	// safedial.ParseAllow. Production reaches private directories through the
+	// Directory Agent instead.
+	SafedialAllow          string
 	AuditAnchor            string
 	AuditCheckpointSeconds int
 	AuditCheckpointEvents  int
@@ -209,6 +215,7 @@ func Load(getenv func(string) string) (*Config, error) {
 	c.CORSOrigins = corsOrigins(getenv("TESSERA_CORS_ORIGINS"), getenv("UI_PORT"), prod)
 	c.OutboundAllowLoopback = boolean("TESSERA_OUTBOUND_ALLOW_LOOPBACK", true, false)
 	// dev default: var/audit-anchors.jsonl next to the database (AnchorURL)
+	c.SafedialAllow = strings.TrimSpace(getenv("TESSERA_SAFEDIAL_ALLOW"))
 	c.AuditAnchor = str("TESSERA_AUDIT_ANCHOR", "", "")
 	if a := c.AuditAnchor; a != "" && !strings.HasPrefix(a, "file://") && !strings.HasPrefix(a, "s3://") {
 		bad("TESSERA_AUDIT_ANCHOR: %q is not a file:// or s3:// URL", a)
@@ -312,6 +319,9 @@ func Load(getenv func(string) string) (*Config, error) {
 		}
 		if c.DevIdPURL != "" {
 			bad("TESSERA_DEV_IDP_URL must not be set with TESSERA_ENV=prod")
+		}
+		if c.SafedialAllow != "" {
+			bad("TESSERA_SAFEDIAL_ALLOW must not be set with TESSERA_ENV=prod: private directories are reached through the Directory Agent")
 		}
 		// s3:// is the only off-host sink so far; a file:// anchor sits on
 		// the same host as the ledger it is meant to anchor.

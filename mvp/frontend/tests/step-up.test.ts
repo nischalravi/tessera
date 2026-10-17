@@ -34,6 +34,27 @@ test("a write refused for step-up is kept, labelled, and taken once", async () =
   assert.equal(api.takePendingAction(), null);
 });
 
+test("a write that carries a secret is not kept", async () => {
+  await assert.rejects(api.api("/connections/c1/credential", { secret: "s3cr3t-value" }, "PUT"));
+  assert.deepEqual(events, ["step-up"]);
+  assert.equal(mem.size, 0);
+  assert.equal(api.carriesSecret({ config: { webhook: { hmac_token: "x" } } }), true);
+  assert.equal(api.carriesSecret({ beneficiary_ids: [1, 2], justification: "on call" }), false);
+  assert.equal(api.carriesSecret({ items: [{ name: "a" }, { ClientSecret: "x" }] }), true);
+  assert.equal(api.carriesSecret({ signing_key: "x" }), true);
+  let deep: any = { v: 1 };
+  for (let i = 0; i < 12; i++) deep = { n: deep };
+  assert.equal(api.carriesSecret(deep), true, "too deep to inspect counts as a secret");
+});
+
+test("a secret write drops an earlier pending action, so the resume never offers the wrong one", async () => {
+  await assert.rejects(api.api("/jit/requests/12/approve", {}));
+  assert.equal(mem.size, 1);
+  await assert.rejects(api.api("/connections/c1/credential", { reference: "vault://x" }, "PUT", { noResume: true }));
+  assert.equal(mem.size, 0);
+  assert.equal(api.takePendingAction(), null);
+});
+
 test("a read refused for step-up keeps nothing", async () => {
   await assert.rejects(api.api("/audit"));
   assert.equal(mem.size, 0);

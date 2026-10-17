@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/abac"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/roles"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -495,5 +496,115 @@ func TestRoleRequests(t *testing.T) {
 	})
 	if s := w.source("alice", "okta:payments-clerks"); s != "" {
 		t.Errorf("alice clerks after retire = %q", s)
+	}
+}
+
+// A birthright rule can name an attribute policy (issue #162): the lists and
+// the policy must both hold, a missing attribute fails the policy, and a
+// policy change takes effect at the next reconcile.
+func TestRulePolicy(t *testing.T) {
+	w := newWorld(t)
+	var pol *store.AbacPolicy
+	by := abac.Actor{UserID: w.pat.UserID, Display: "Pat"}
+	cond := func(s string) *abac.Node {
+		n, err := abac.Parse([]byte(s))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	w.tx(func(c *store.TenantTx) error {
+		var err error
+		pol, err = abac.Create(c, abac.Spec{Name: "Engineering humans", Condition: cond(
+			`{"all":[{"attr":"identity.department","op":"eq","value":"Engineering"},{"attr":"identity.type","op":"eq","value":"human"}]}`)}, by, w.now)
+		return err
+	})
+	spec := engSpec(w)
+	spec.Birthright = &roles.Rule{Policy: pol.ID}
+	res, err := w.create(spec, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := res.Role.ID
+	if m := w.members(id); len(m) != 2 || m["alice"] != "rule" || m["carol"] != "rule" {
+		t.Fatalf("members = %v", m)
+	}
+	// lists and policy together: Engineering AND title lists nobody has
+	both := engSpec(w)
+	both.Name = "Both"
+	both.Birthright = &roles.Rule{Policy: pol.ID, Title: []string{"Chief"}}
+	if r, err := w.create(both, true); err != nil || r.Plan.Members != 0 {
+		t.Errorf("lists and policy: %+v, %v", r, err)
+	}
+	// a rule naming a missing or retired policy is refused
+	bad := engSpec(w)
+	bad.Name = "Bad"
+	bad.Birthright = &roles.Rule{Policy: "00000000-0000-4000-8000-00000000dead"}
+	if _, err := w.create(bad, false); code(err) != "invalid_rule" {
+		t.Errorf("missing policy = %v", err)
+	}
+	// widening the policy changes nothing until the role is reconciled; then bob joins
+	w.tx(func(c *store.TenantTx) error {
+		if _, err := abac.Update(c, pol.ID, 1, abac.Spec{Name: pol.Name, Condition: cond(
+			`{"any":[{"attr":"identity.department","op":"eq","value":"Engineering"},{"attr":"identity.department","op":"eq","value":"Finance"}]}`)}, by, w.now); err != nil {
+			return err
+		}
+		if _, err := roles.Reconcile(c, id, w.pat, false, w.now); err != nil {
+			return err
+		}
+		// a policy a rule uses cannot be retired
+		if _, err := abac.Retire(c, pol.ID, "x", by, w.now); err == nil {
+			t.Error("a policy used by a rule was retired")
+		}
+		return nil
+	})
+	if m := w.members(id); m["bob"] != "rule" || len(m) != 3 {
+		t.Errorf("after widening: %v", m)
+	}
+	// someone with no department fails the policy rather than passing a negation
+	w.tx(func(c *store.TenantTx) error {
+		if err := c.SetIdentityDepartmentTitle(w.ids["bob"], nil, nil); err != nil {
+			return err
+		}
+		if _, err := abac.Update(c, pol.ID, 2, abac.Spec{Name: pol.Name, Condition: cond(
+			`{"not":{"attr":"identity.department","op":"eq","value":"Legal"}}`)}, by, w.now); err != nil {
+			return err
+		}
+		_, err := roles.Reconcile(c, id, w.pat, false, w.now)
+		return err
+	})
+	if m := w.members(id); m["bob"] != "" || m["alice"] != "rule" {
+		t.Errorf("a missing department granted by negation: %v", m)
+	}
+}
+
+func TestRuleMatch(t *testing.T) {
+	dept := "Finance"
+	i := &store.Identity{Type: "human", Status: "active", Department: &dept}
+	always := &abac.Node{Attr: "identity.type", Op: abac.OpExists}
+	attrs := abac.Attrs{"identity.type": "human"}
+	for _, c := range []struct {
+		name string
+		r    *roles.Rule
+		cond *abac.Node
+		want bool
+	}{
+		{"lists only", &roles.Rule{Department: []string{"Finance"}}, nil, true},
+		{"lists miss", &roles.Rule{Department: []string{"HR"}}, nil, false},
+		{"policy true", &roles.Rule{Policy: "p"}, always, true},
+		{"policy missing", &roles.Rule{Policy: "p"}, nil, false},
+		{"lists and policy", &roles.Rule{Policy: "p", Department: []string{"HR"}}, always, false},
+		{"empty rule", &roles.Rule{}, always, false},
+	} {
+		if got := c.r.Match(i, c.cond, attrs); got != c.want {
+			t.Errorf("%s: Match = %v, want %v", c.name, got, c.want)
+		}
+	}
+	if (&roles.Rule{Policy: "p"}).Matches(i) {
+		t.Error("Matches granted a policy rule without its condition")
+	}
+	i.Status = "terminated"
+	if (&roles.Rule{Policy: "p"}).Match(i, always, attrs) {
+		t.Error("an inactive identity matched")
 	}
 }

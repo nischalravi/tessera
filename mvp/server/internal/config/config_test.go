@@ -94,6 +94,7 @@ func TestProdRefusesEachUnsafeSetting(t *testing.T) {
 		{"trusted proxies broader than /32", []string{"TESSERA_TRUSTED_PROXIES", "2001:db8::/31"}, "broader than /32"},
 		{"trusted proxies mapped IPv4 broader than /8", []string{"TESSERA_TRUSTED_PROXIES", "::ffff:0:0/96"}, "broader than /104"},
 		{"outbound loopback", []string{"TESSERA_OUTBOUND_ALLOW_LOOPBACK", "true"}, "TESSERA_OUTBOUND_ALLOW_LOOPBACK must be false"},
+		{"safedial allowlist", []string{"TESSERA_SAFEDIAL_ALLOW", "192.168.1.10:636"}, "TESSERA_SAFEDIAL_ALLOW must not be set"},
 		{"dev IdP URL set", []string{"TESSERA_DEV_IDP_URL", "http://127.0.0.1:8001"}, "TESSERA_DEV_IDP_URL must not be set"},
 		{"file audit anchor", []string{"TESSERA_AUDIT_ANCHOR", "file://server/var/audit-anchors.jsonl"}, "must not be file://"},
 		{"audit anchor missing", []string{"TESSERA_AUDIT_ANCHOR", "<unset>"}, "TESSERA_AUDIT_ANCHOR is required"},
@@ -379,6 +380,18 @@ func TestConfigNeverPrintsKEK(t *testing.T) {
 			strings.Contains(out, fmt.Sprint(raw)) {
 			t.Errorf("KEK printed: %s", out)
 		}
+	}
+}
+
+// TestSafedialAllowDevOnly: the live-LDAP private-target allowlist is read in
+// dev and refused in prod (the Directory Agent is the production path).
+func TestSafedialAllowDevOnly(t *testing.T) {
+	c, err := config.Load(env(map[string]string{"TESSERA_ENV": "dev", "TESSERA_SAFEDIAL_ALLOW": " 192.168.1.10:636 "}))
+	if err != nil || c.SafedialAllow != "192.168.1.10:636" {
+		t.Fatalf("dev: %v %q", err, c.SafedialAllow)
+	}
+	if _, err := config.Load(env(with(safeProd(), "TESSERA_SAFEDIAL_ALLOW", "192.168.1.10:636"))); err == nil {
+		t.Fatal("prod accepted TESSERA_SAFEDIAL_ALLOW")
 	}
 }
 

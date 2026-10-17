@@ -8,8 +8,8 @@ import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Archive, ClipboardCheck, History, Pencil, Plus, RefreshCw, ShoppingCart, UserMinus, UserPlus } from "lucide-react";
 import {
-  BusinessRole, Group, IdentityRow, PersonRef, PlanStep, RoleChange, RoleDrift, RolePlan, RoleRule, RoleSpec, RoleVersion, RolesView,
-  fmtDate, relTime, rolePaths, roles as roleApi, useApi,
+  AbacList, BusinessRole, Group, IdentityRow, PersonRef, PlanStep, RoleChange, RoleDrift, RolePlan, RoleRule, RoleSpec, RoleVersion, RolesView,
+  fmtDate, relTime, abacPaths, rolePaths, roles as roleApi, useApi,
 } from "../../api";
 import { useIdentityActions } from "../../app/actions";
 import {
@@ -25,14 +25,14 @@ const gname = (g: { system: string; name: string }) => `${g.system}:${g.name}`;
 /** A short label for lists: "Engineering · 2 titles" (the full rule is in ruleText). */
 export function ruleShort(r: RoleRule | null): string | null {
   if (!r) return null;
-  const parts = [r.department.join(", "), r.type.length ? `${r.type.length} type${r.type.length === 1 ? "" : "s"}` : "", r.title.length ? `${r.title.length} title${r.title.length === 1 ? "" : "s"}` : ""];
+  const parts = [r.department.join(", "), r.type.length ? `${r.type.length} type${r.type.length === 1 ? "" : "s"}` : "", r.title.length ? `${r.title.length} title${r.title.length === 1 ? "" : "s"}` : "", r.policy ? "attribute policy" : ""];
   return parts.filter(Boolean).join(" · ") || null;
 }
 
 /** "Engineering; titles: Frontend Engineer" (null: no rule). */
 export function ruleText(r: RoleRule | null): string | null {
   if (!r) return null;
-  const parts = [r.department.join(", "), r.type.length ? `types: ${r.type.join(", ")}` : "", r.title.length ? `titles: ${r.title.join(", ")}` : ""];
+  const parts = [r.department.join(", "), r.type.length ? `types: ${r.type.join(", ")}` : "", r.title.length ? `titles: ${r.title.join(", ")}` : "", r.policy ? "an attribute policy" : ""];
   return parts.filter(Boolean).join("; ") || null;
 }
 
@@ -427,6 +427,7 @@ function toSpec(role?: BusinessRole): RoleSpec {
 export function RoleEditor({ role, onClose, onSaved }: { role?: BusinessRole; onClose: () => void; onSaved?: (r: BusinessRole) => void }) {
   const { data: groups } = useApi<Group[]>("/groups");
   const { data: people } = useApi<IdentityRow[]>("/identities?status=active");
+  const { data: abacView } = useApi<AbacList>(abacPaths.list);
   const toast = useToast();
   const [spec, setSpec] = useState<RoleSpec>(() => toSpec(role));
   const [useRule, setUseRule] = useState(!!role?.birthright);
@@ -438,7 +439,7 @@ export function RoleEditor({ role, onClose, onSaved }: { role?: BusinessRole; on
   const depts = useMemo(() => [...new Set((people ?? []).map((p) => p.department).filter((d): d is string => !!d))].sort(), [people]);
   const owners = useMemo(() => (people ?? []).filter((p) => p.type === "human"), [people]);
   const rule: RoleRule | null = useRule
-    ? { department: spec.birthright?.department ?? [], type: spec.birthright?.type ?? [], title: titles.split(",").map((t) => t.trim()).filter(Boolean) }
+    ? { department: spec.birthright?.department ?? [], type: spec.birthright?.type ?? [], title: titles.split(",").map((t) => t.trim()).filter(Boolean), policy: spec.birthright?.policy ?? "" }
     : null;
   const body: RoleSpec = { ...spec, birthright: rule };
   const sig = JSON.stringify(body);
@@ -448,7 +449,7 @@ export function RoleEditor({ role, onClose, onSaved }: { role?: BusinessRole; on
   const toggle = (list: string[], v: string) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
   const picked = new Set(spec.entitlement_group_ids);
   const shown = (groups ?? []).filter((g) => gname(g).toLowerCase().includes(q.toLowerCase()));
-  const ruleEmpty = useRule && !rule!.department.length && !rule!.type.length && !rule!.title.length;
+  const ruleEmpty = useRule && !rule!.department.length && !rule!.type.length && !rule!.title.length && !rule!.policy;
   const ready = spec.name.trim() !== "" && picked.size > 0 && !ruleEmpty;
   const go = async (dry: boolean) => {
     setBusy(true);
@@ -507,7 +508,13 @@ export function RoleEditor({ role, onClose, onSaved }: { role?: BusinessRole; on
                 <div className="row tight">{TYPES.map(([v, l]) => <label key={v} className="row tight small"><input type="checkbox" checked={!!spec.birthright?.type.includes(v)} onChange={() => setRule({ type: toggle(spec.birthright?.type ?? [], v) })} /> {l}</label>)}</div>
               </div>
               <label className="field small">Job titles (comma separated, exact)<input className="input" value={titles} onChange={(e) => setTitles(e.target.value)} placeholder="e.g. Frontend Engineer, Engineering Manager, Frontend" /></label>
-              {ruleEmpty && <p className="xs faint">Pick at least one department, type or title.</p>}
+              <label className="field small">Attribute policy (optional, must also hold)
+                <select className="input" value={spec.birthright?.policy ?? ""} onChange={(e) => setRule({ policy: e.target.value })}>
+                  <option value="">None</option>
+                  {(abacView?.policies ?? []).filter((p) => p.status === "active" || p.id === spec.birthright?.policy).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </label>
+              {ruleEmpty && <p className="xs faint">Pick at least one department, type, title or attribute policy.</p>}
             </div>
           )}
         </fieldset>

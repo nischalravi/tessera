@@ -28,6 +28,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/abac"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
@@ -69,6 +70,7 @@ type Actor struct {
 	UserID     uuid.UUID
 	Display    string
 	IdentityID *int64 // the person the user is, if linked
+	AAL        int    // authentication assurance level of the session (0: unknown); the context.aal attribute
 	Decider    bool   // holds requests.decide
 }
 
@@ -268,6 +270,34 @@ func Submit(tx *store.TenantTx, s Submission, by Actor, forOthers bool, now time
 	return batch, lines, nil
 }
 
+// attributeEligible applies the attribute policy bound to the item (issue
+// #162), on top of the type and department lists: the beneficiary's
+// attributes, the item's and the request context must satisfy its condition.
+// A missing attribute, or a policy that cannot be read, denies.
+func attributeEligible(tx *store.TenantTx, it *store.CatalogItem, g *store.Group, ben *store.Identity, by Actor,
+	now time.Time) error {
+	b, err := tx.AbacBinding(store.BindCatalogItem, it.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	p, err := tx.AbacPolicy(b.PolicyID)
+	if err != nil {
+		return err
+	}
+	cond, err := abac.Condition(p)
+	if err != nil || p.Status != store.AbacActive {
+		return refuse(409, "not_eligible", "%s is not eligible for %s (attribute policy %s cannot be evaluated)", ben.Name,
+			g.System+":"+g.Name, p.Name)
+	}
+	attrs := abac.Merge(abac.IdentityAttrs(ben, now), abac.ContextAttrs(now, by.AAL), abac.ItemAttrs(it, g))
+	if !abac.Eval(cond, attrs) {
+		return refuse(409, "not_eligible", "%s is not eligible for %s (attribute policy %s)", ben.Name, g.System+":"+g.Name, p.Name)
+	}
+	return nil
+}
+
 func line(tx *store.TenantTx, batch string, ben *store.Identity, itemID string, hours *float64, just string, by Actor,
 	now time.Time) (*store.RequestLine, error) {
 	it, err := tx.CatalogItem(itemID)
@@ -288,6 +318,9 @@ func line(tx *store.TenantTx, batch string, ben *store.Identity, itemID string, 
 		return nil, refuse(409, "not_eligible", "%s is not eligible for %s", ben.Name, name)
 	case len(it.EligibleDepartments) > 0 && (ben.Department == nil || !slices.Contains(it.EligibleDepartments, *ben.Department)):
 		return nil, refuse(409, "not_eligible", "%s is not eligible for %s (department)", ben.Name, name)
+	}
+	if err := attributeEligible(tx, it, g, ben, by, now); err != nil {
+		return nil, err
 	}
 	if hours == nil {
 		hours = it.DefaultHours

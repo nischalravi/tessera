@@ -194,6 +194,7 @@ func New(cfg Config) *Server {
 	s.registerAffiliationRoutes()
 	s.registerRequestRoutes()
 	s.registerRoleRoutes()
+	s.registerAbacRoutes()
 	s.registerLifecycleRoutes()
 	s.registerGuestRoutes()
 	s.registerNotificationRoutes()
@@ -283,7 +284,7 @@ func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
 		if err := s.guests.SweepAll(audit.WithSystemActor(ctx, sponsorship.Sweeper), s.store, s.clock()); err != nil && ctx.Err() == nil {
 			s.log.Error("sponsorship sweep failed", "err", err)
 		}
-		if err := lifecycle.SweepAll(audit.WithSystemActor(ctx, lifecycle.Sweeper), s.store, s.clock()); err != nil && ctx.Err() == nil {
+		if err := lifecycle.SweepAll(audit.WithSystemActor(ctx, lifecycle.Sweeper), s.store, s.containment, s.clock()); err != nil && ctx.Err() == nil {
 			s.log.Error("lifecycle sweep failed", "err", err)
 		}
 		if err := s.containment.SweepRetries(audit.WithSystemActor(ctx, "containment.sweeper"), s.store, "containment.sweeper"); err != nil && ctx.Err() == nil {
@@ -620,6 +621,20 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_, _ = w.Write(body) // #nosec G705 -- JSON-encoded body served as application/json with nosniff, never HTML
 }
 
+// timedOut reports whether err comes from the request's deadline passing: the
+// error wraps context.DeadlineExceeded, or the driver reported it in its own
+// words after the request context expired.
+func timedOut(r *http.Request, err error) bool {
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(r.Context().Err(), context.DeadlineExceeded)
+}
+
+// writeTimedOut answers with the same 503 http.TimeoutHandler sends, so a
+// request whose deadline passed inside the handler gets one answer whichever
+// of the two writes first.
+func writeTimedOut(w http.ResponseWriter) {
+	writeJSON(w, http.StatusServiceUnavailable, detail("Request timed out"))
+}
+
 func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var he *httpError
 	var ve *validationError
@@ -645,10 +660,8 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSON(w, http.StatusBadRequest, detail("There was an error parsing the body"))
 	case errors.Is(err, context.Canceled):
 		// client went away; nothing useful to send
-	case errors.Is(err, context.DeadlineExceeded):
-		// the handler timeout's deadline passed inside the handler: the same
-		// 503 http.TimeoutHandler sends, whichever of the two gets there first
-		writeJSON(w, http.StatusServiceUnavailable, detail("Request timed out"))
+	case timedOut(r, err):
+		writeTimedOut(w)
 	default:
 		// Never echo internal errors (they may contain SQL or paths) to the client.
 		s.log.Error("request failed", "method", r.Method, "path", r.URL.Path, "err", err)

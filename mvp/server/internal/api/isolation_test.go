@@ -207,6 +207,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if strings.HasPrefix(rt.Pattern, "/api/roles/{role_id}") || strings.HasPrefix(rt.Pattern, "/api/role-requests/{request_id}") {
 			continue // TestRolesAPI_CrossTenant (UUIDs, not fixture ids)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/abac/policies/{policy_id}") || rt.Pattern == "/api/catalog/items/{group_id}/policy" {
+			continue // TestAbacAPI_CrossTenant (UUIDs, not fixture ids)
+		}
 		if rt.Pattern == "/api/auth/oidc/{connection_id}/callback" || rt.Pattern == "/api/auth/oauth2/{connection_id}/callback" ||
 			rt.Pattern == "/t/{slug}/bootstrap" {
 			continue // TestIsolation_LoginCrossTenant (public; the tenant comes from the cookie or the slug)
@@ -298,7 +301,9 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 	lines := seedRequestLines(t, f)        // A's justification carries the sentinel
 	roleIDs, _ := seedRoles(t, f)          // and A's role description
 	sponsorships := seedSponsorships(t, f) // and A's sponsorship purpose
+	policyIDs := seedAbac(t, f)            // and A's policy name
 	values := map[string]string{
+		"/api/abac/policies/{policy_id}":             policyIDs[f.B.ID],
 		"/api/roles/{role_id}":                       roleIDs[f.B.ID],
 		"/api/roles/{role_id}/versions":              roleIDs[f.B.ID],
 		"/api/roles/{role_id}/drift":                 roleIDs[f.B.ID],
