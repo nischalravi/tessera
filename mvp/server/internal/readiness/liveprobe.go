@@ -31,10 +31,10 @@ type LiveOptions struct {
 	Agent safedial.Transport
 }
 
-// connectionSecretAAD binds a sealed credential to its tenant and reference,
-// so a blob copied to another row or tenant does not open.
-func connectionSecretAAD(t tenancy.ID, ref string) []byte {
-	return seal.AAD(t, "connection_secrets", "sealed", ref)
+// connectionSecretAAD binds a sealed credential to its tenant, connection and
+// reference, so a blob copied to another row or tenant does not open.
+func connectionSecretAAD(t tenancy.ID, connectionID, ref string) []byte {
+	return store.CredentialAAD(t, connectionID, store.PurposeBind, ref)
 }
 
 // loadCredential opens the sealed credential of a real revision into the
@@ -46,14 +46,14 @@ func (s *Service) loadCredential(c *store.TenantTx, b *Bundle) error {
 	if b.Simulated() || b.Rev.SecretRef == nil || !strings.HasPrefix(*b.Rev.SecretRef, "sealed:") || s.Runner.Live.Sealer == nil {
 		return nil
 	}
-	blob, err := c.ConnectionSecret(*b.Rev.SecretRef)
+	k, err := c.Credential(b.Conn.ID, store.PurposeBind, *b.Rev.SecretRef)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil // acknowledged but never stored (no Sealer when it was set)
 	}
 	if err != nil {
 		return err
 	}
-	pt, err := s.Runner.Live.Sealer.Open(blob, connectionSecretAAD(c.Tenant(), *b.Rev.SecretRef))
+	pt, err := s.Runner.Live.Sealer.Open(k.Sealed, connectionSecretAAD(c.Tenant(), b.Conn.ID, *b.Rev.SecretRef))
 	if err != nil {
 		return fmt.Errorf("readiness: the stored credential cannot be opened: %w", err)
 	}

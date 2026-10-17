@@ -303,8 +303,11 @@ the run failed. Provider calls go through `internal/safehttp`.
   More actions, and the identity side panel, "Contain".
 - **Credentials.** `PUT /api/connections/{id}/containment-credential` `{token, base_url, org}`
   (connections.manage, step-up) seals the provider token with the KEK (`internal/seal`, AAD bound to
-  tenant, table, column and connection) in `containment_credentials`; it is never returned or
-  logged. Okta needs `base_url` (the org URL), GitHub `org`; Entra and Google default to
+  tenant, table, column, connection and purpose) in `connection_credentials` (purpose
+  `containment`; the same sealed store holds the LDAP bind secret as purpose `bind`); it
+  is never returned or logged. On start, `serve` re-seals any rows left in the retired
+  `connection_secrets` and `containment_credentials` tables into it and drops them, in one
+  transaction, and refuses to start if a blob will not open under the KEK. Okta needs `base_url` (the org URL), GitHub `org`; Entra and Google default to
   `graph.microsoft.com` and `admin.googleapis.com`. Tokens: Okta API token (SSWS), Entra and Google
   bearer access tokens with the permission to revoke sessions (`User.RevokeSessions.All`,
   `DelegatedPermissionGrant.ReadWrite.All`; `admin.directory.user.security`), GitHub an owner's

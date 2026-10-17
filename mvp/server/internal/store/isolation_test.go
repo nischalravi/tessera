@@ -671,8 +671,8 @@ func TestIsolation_EveryRepoMethodClassified(t *testing.T) {
 		"Audit": true,
 		// RevokedGrants has its own test: the shared fixture holds no tombstones.
 		"RevokedGrants": true,
-		// Sealed connection credentials: TestIsolation_ConnectionSecrets.
-		"PutConnectionSecret": true, "ConnectionSecret": true,
+		// Sealed connection credentials: TestIsolation_ConnectionCredentials.
+		"PutCredential": true, "Credential": true, "Credentials": true, "DeleteCredential": true,
 	}
 	for _, m := range []map[string]bool{keys(listCases), keys(getCases), keys(naturalKeyGets), keys(countCases),
 		keys(mutations), keys(insertCases), readinessCovered(), keysCovered(), auditCovered(), authCovered(), correlationCovered(), containmentCovered()} {

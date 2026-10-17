@@ -86,17 +86,19 @@ var tables = []string{
 	"connections", "connection_revisions", "readiness_check_runs", "readiness_item_states", "readiness_attestations",
 	"readiness_skips", "readiness_overlays", "readiness_check_results", "recon_runs", "recon_findings", "readiness_scores",
 	"stg_identities", "stg_accounts", "stg_groups", "stg_memberships", "stg_attr_stats",
-	// sealed connection credentials (schema/0205)
-	"connection_secrets",
 	// account correlation (schema/0204_correlation.sql)
 	"account_links", "identity_merges",
-	// identity containment (schema/0205_containment.sql)
-	"containment_credentials", "containment_retries",
+	// sealed connection credentials (schema/0207_connection_credentials.sql)
+	"connection_credentials",
+	// identity containment (schema/0206_containment_retries.sql)
+	"containment_retries",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was
-// the mutable audit table before the hash-chained ledger (PR3).
-var legacyTables = []string{"audit_log"}
+// the mutable audit table before the hash-chained ledger (PR3);
+// connection_secrets and containment_credentials were merged into
+// connection_credentials (#220, see MigrateCredentials).
+var legacyTables = []string{"audit_log", "connection_secrets", "containment_credentials"}
 
 // DB owns the database handle. The *sql.DB is unexported and there is no
 // accessor: no other package can obtain a *sql.DB, *sql.Tx or *sql.Conn.

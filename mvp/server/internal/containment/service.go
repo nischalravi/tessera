@@ -71,7 +71,7 @@ type CredentialInput struct {
 }
 
 func credAAD(c *store.TenantTx, connectionID string) []byte {
-	return seal.AAD(c.Tenant(), "containment_credentials", "token_enc", connectionID)
+	return store.CredentialAAD(c.Tenant(), connectionID, store.PurposeContainment, "")
 }
 
 // PutCredential seals and stores the credential the kill switch uses for a
@@ -112,8 +112,8 @@ func (s *Service) PutCredential(c *store.TenantTx, connectionID string, in Crede
 	if err != nil {
 		return err
 	}
-	if err := c.PutContainmentCredential(&store.ContainmentCredential{ConnectionID: connectionID, BaseURL: in.BaseURL,
-		Org: in.Org, TokenEnc: enc, UpdatedBy: actor, UpdatedAt: now}); err != nil {
+	if err := c.PutCredential(&store.Credential{ConnectionID: connectionID, Purpose: store.PurposeContainment,
+		Sealed: enc, BaseURL: in.BaseURL, Org: in.Org, UpdatedBy: actor, UpdatedAt: now}); err != nil {
 		return err
 	}
 	return c.Audit(now, actor, "containment.credential_set", ojson.Object{{Key: "connection_id", Value: connectionID},
@@ -258,7 +258,7 @@ func (s *Service) BuildJob(c *store.TenantTx, identityID int64, trigger string, 
 // loadCredential returns the connection's credential (nil: none set), or why
 // a stored one cannot be used.
 func (s *Service) loadCredential(c *store.TenantTx, connectionID string) (*Credential, string, error) {
-	k, err := c.ContainmentCredential(connectionID)
+	k, err := c.Credential(connectionID, store.PurposeContainment, "")
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, "", nil
 	}
@@ -268,7 +268,7 @@ func (s *Service) loadCredential(c *store.TenantTx, connectionID string) (*Crede
 	if s.Sealer == nil {
 		return nil, "the stored credential cannot be unsealed: no key is configured", nil
 	}
-	tok, err := s.Sealer.Open(k.TokenEnc, credAAD(c, connectionID))
+	tok, err := s.Sealer.Open(k.Sealed, credAAD(c, connectionID))
 	if err != nil {
 		return nil, "the stored credential cannot be unsealed", nil
 	}
