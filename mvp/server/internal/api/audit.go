@@ -229,7 +229,7 @@ func (s *Server) auditCheckpoints(_ http.ResponseWriter, r *http.Request, p *par
 func (s *Server) auditKeys(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
 	var out any
 	err := s.store.InSystem(r.Context(), "GET /api/audit/keys", func(sys *store.SystemTx) error {
-		set, err := keys.PlatformJWKS(sys)
+		set, err := keys.PlatformJWKS(sys, s.log)
 		out = set
 		return err
 	})

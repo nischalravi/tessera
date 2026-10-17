@@ -706,7 +706,7 @@ func (s *SystemTx) lookup(st lstmt, setting, hash string) (tenancy.ID, uuid.UUID
 		}
 	}
 	var tid, id string
-	err := s.tx.QueryRowContext(s.ctx, st.sql, sql.Named("hash", hash)).Scan(&tid, &id)
+	err := s.db.queryRowIn(s.ctx, s.tx, st.sql, []any{sql.Named("hash", hash)}).Scan(&tid, &id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return tenancy.ID{}, uuid.Nil, ErrNotFound
 	}

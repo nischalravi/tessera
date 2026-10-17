@@ -150,6 +150,7 @@ other), and the JIT decision route is split into three routes.
   and none on `/api/health`).
 
 `067-audit` and `068-audit-limit` list only seed events and are unchanged.
+
 * `153-summary-after-sync`, `154-identities-after-sync` (UAT #134). The recorded
   Python backend let `POST /api/connectors/sync` undo the leaver plan and the
   grant revokes run earlier in the sequence: Marcus Bellweather came back as an
@@ -159,3 +160,9 @@ other), and the JIT decision route is split into three routes.
   the sync the summary keeps the earlier remediation (`human` 58, `terminated` 4,
   fewer grants, effective and unused permissions, violations) and Marcus stays
   terminated, which also changes the order of the identity list.
+
+## Fixtures changed for #137 / #142 (review decisions)
+
+* `114-review-unknown`: `POST /api/reviews/items/99999/decision` for an item
+  that does not exist is now 404 (was 400); the body `{"detail": "unknown
+  review item"}` is unchanged (part of #142: a missing resource is a 404).
