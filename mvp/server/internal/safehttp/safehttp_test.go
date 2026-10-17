@@ -606,7 +606,7 @@ func TestNewDialer(t *testing.T) {
 		t.Error("an unknown environment was accepted")
 	}
 	r := dns(map[string][][]string{"mail.internal": {{"10.0.0.5"}}, "meta.example": {{"169.254.169.254"}}, "mixed.example": {{"8.8.8.8", "192.168.1.1"}}})
-	dial, err := safehttp.NewDialer(safehttp.Options{Env: config.Prod, Resolver: r})
+	dial, err := safehttp.NewDialer(safehttp.Options{Env: config.Prod, Resolver: r, AllowedPorts: []int{25, 587}})
 	if err != nil {
 		t.Fatal(err)
 	}

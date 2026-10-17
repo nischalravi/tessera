@@ -256,7 +256,8 @@ type DialFunc func(ctx context.Context, network, address string) (net.Conn, erro
 // addresses is blocked (private, loopback, link-local, metadata and the
 // other ranges above), and only the checked addresses are connected to. The
 // dev loopback exception applies exactly as for New. Timeout, Env,
-// AllowLoopback and Resolver are the only options it reads.
+// AllowLoopback, AllowedPorts (the relay port; none by default) and
+// Resolver are the only options it reads.
 func NewDialer(o Options) (DialFunc, error) {
 	switch o.Env {
 	case config.Dev, config.Prod:

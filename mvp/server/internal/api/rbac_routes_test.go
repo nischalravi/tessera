@@ -226,6 +226,7 @@ func parseDesignRoutes(t *testing.T) []designRoute {
 // TestRoutesMatchDesignTable: the registered routes are exactly the design
 // table, with the same permission and step-up requirement.
 func TestRoutesMatchDesignTable(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	srv := newIsolationServer(f)
 	table := map[string]designRoute{}
@@ -269,6 +270,7 @@ var rbacRoles = []auth.Role{auth.RoleViewer, auth.RoleOperator, auth.RoleAuditor
 // active under an IdP sign-in, so it is refused everything but the
 // session's own routes.
 func TestRBACRouteMatrix(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	srv := newIsolationServer(f)
 	h := srv.Handler()
@@ -312,6 +314,7 @@ func TestRBACRouteMatrix(t *testing.T) {
 // needs grants.revoke (policy admins only) and a fresh phishing-resistant
 // sign-in (§16.2, checked in the handler because it depends on the body).
 func TestRevokeApplyNeedsGrantsRevoke(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	srv := newIsolationServer(f)
 	h := srv.Handler()
@@ -365,6 +368,7 @@ func containsPerm(ps []auth.Permission, p auth.Permission) bool {
 // its credential at another host or widen its write scope, so it needs the
 // same fresh phishing-resistant sign-in as setting the credential.
 func TestConnectionConfigNeedsStepUp(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	h := newIsolationServer(f).Handler()
 	admin := authtest.User{Email: "conn-admin@b.example", Roles: []auth.Role{auth.RoleTenantAdmin}}
