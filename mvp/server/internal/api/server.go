@@ -707,6 +707,10 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSON(w, http.StatusBadRequest, detail("There was an error parsing the body"))
 	case errors.Is(err, context.Canceled):
 		// client went away; nothing useful to send
+	case errors.Is(err, context.DeadlineExceeded):
+		// the handler timeout's deadline passed inside the handler: the same
+		// 503 http.TimeoutHandler sends, whichever of the two gets there first
+		writeJSON(w, http.StatusServiceUnavailable, detail("Request timed out"))
 	default:
 		// Never echo internal errors (they may contain SQL or paths) to the client.
 		s.log.Error("request failed", "method", r.Method, "path", r.URL.Path, "err", err)
