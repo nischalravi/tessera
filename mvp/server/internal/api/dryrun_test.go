@@ -76,6 +76,7 @@ func (c rdClient) liveRows() map[string]json.RawMessage {
 }
 
 func TestStage_NoLiveWrites(t *testing.T) {
+	t.Parallel()
 	c := newRD(t)
 	ad := c.adValidated()
 	okta := c.validatedConn("demo-okta", "Okta (demo)", "")
@@ -100,6 +101,7 @@ func TestStage_NoLiveWrites(t *testing.T) {
 }
 
 func TestFindings_Golden(t *testing.T) {
+	t.Parallel()
 	c := newRD(t)
 	ad := c.adValidatedMiscounted()
 	okta := c.validatedConn("demo-okta", "Okta (demo)", "")
@@ -224,6 +226,7 @@ func (c rdClient) downstreamPerms(name, system string) int {
 }
 
 func TestImpact_ThroughMapsTo(t *testing.T) {
+	t.Parallel()
 	c := newRD(t)
 	okta := c.validatedConn("demo-okta", "Okta (demo)", "")
 	dr := c.json("POST", "/api/connections/"+okta+"/dry-run", "", http.StatusAccepted)
@@ -240,6 +243,7 @@ func TestImpact_ThroughMapsTo(t *testing.T) {
 }
 
 func TestSamples_CappedAndMinimal(t *testing.T) {
+	t.Parallel()
 	c := newRD(t)
 	ad := c.adValidated()
 	dr := c.json("POST", "/api/connections/"+ad+"/dry-run", "", http.StatusAccepted)
@@ -270,6 +274,7 @@ func TestSamples_CappedAndMinimal(t *testing.T) {
 }
 
 func TestAccept_ReasonRequired(t *testing.T) {
+	t.Parallel()
 	c := newRD(t)
 	ad := c.adValidated()
 	dr := c.json("POST", "/api/connections/"+ad+"/dry-run", "", http.StatusAccepted)
@@ -313,6 +318,7 @@ func TestAccept_ReasonRequired(t *testing.T) {
 // TestWalkthrough_ADToActive follows the design's demo walkthrough (§12) for
 // Active Directory through activation and the first sync.
 func TestWalkthrough_ADToActive(t *testing.T) {
+	t.Parallel()
 	c := newRD(t)
 	ad := c.adValidated()
 	dr := c.json("POST", "/api/connections/"+ad+"/dry-run", "", http.StatusAccepted)

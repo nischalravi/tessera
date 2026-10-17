@@ -1,15 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Layers, Minus, Plus, Search, ShieldAlert, ShoppingCart, Timer, X } from "lucide-react";
-import { CatalogView, ConnectorRow, Group, IdentityRow, Risk, SimResult, api, simulate, submitRequest, useApi } from "../../api";
+import { BusinessRole, CatalogView, ConnectorRow, Group, IdentityRow, Risk, RolesView, SimResult, api, roles as roleApi, simulate, submitRequest, useApi } from "../../api";
 import { usePersona } from "../../app/persona";
-import { Badge, Button, Callout, EmptyState, FilterChips, Loading, Page, PreviewBadge, Segmented, Skeleton, useToast } from "../../components";
-import { BusinessRole, ROLES, RequestTarget, mockRequests, useMockState } from "../../mocks";
+import { Badge, Button, Callout, EmptyState, FilterChips, Loading, Page, Segmented, Skeleton, useToast } from "../../components";
+import { RequestTarget, mockRequests, useMockState } from "../../mocks";
 
 type CatalogKind = "all" | "role" | "entitlement" | "privileged";
 type Who = "me" | "other" | "many";
 
-/** A catalog card: a real catalog item (catalogId) or a Preview business role. */
+/** A catalog card: a catalog item (catalogId) or a requestable business role (role). */
 interface CatalogItem {
   key: string; target: RequestTarget; title: string; system: string | null; description: string; privileged: boolean;
   catalogId?: string; risk?: Risk; defaultHours?: number | null; maxHours?: number | null; owner?: string; role?: BusinessRole;
@@ -17,9 +17,10 @@ interface CatalogItem {
 
 const DURATIONS: [string, number | null][] = [["Until removed", null], ["1 hour", 1], ["4 hours", 4], ["8 hours", 8], ["24 hours", 24], ["72 hours", 72], ["7 days", 168], ["30 days", 720], ["90 days", 2160]];
 
-/** The requestable catalog (GET /api/catalog) plus the Preview business roles. */
+/** The requestable catalog (GET /api/catalog) plus the requestable business roles (GET /api/roles). */
 function useCatalog() {
   const { data: view, error } = useApi<CatalogView>("/catalog");
+  const { data: rv, error: rolesError } = useApi<RolesView>("/roles");
   const items = useMemo<CatalogItem[] | null>(() => {
     if (!view) return null;
     const ents: CatalogItem[] = view.items.filter((c) => c.id).map((c) => ({
@@ -35,10 +36,13 @@ function useCatalog() {
       maxHours: c.max_hours,
       owner: c.owner?.name,
     }));
-    const roles: CatalogItem[] = ROLES.map((r) => ({ key: r.id, target: { kind: "role", roleId: r.id, name: r.name }, title: r.name, system: null, description: r.description, privileged: r.risk === "high", role: r }));
+    const roles: CatalogItem[] = (rv?.roles ?? []).filter((r) => r.status === "active" && r.requestable).map((r) => ({
+      key: r.id, target: { kind: "role", roleId: r.id, name: r.name }, title: r.name, system: null, description: r.description,
+      privileged: r.risk === "high", risk: r.risk, owner: r.owner?.name, role: r,
+    }));
     return [...roles, ...ents];
-  }, [view]);
-  return { items, view, error };
+  }, [view, rv]);
+  return { items, view, error: error ?? rolesError };
 }
 
 const hoursLabel = (h: number) => (h % 24 === 0 && h >= 48 ? `${h / 24} days` : `${h} h`);
@@ -49,8 +53,8 @@ function groupIdsFor(item: CatalogItem, groups: Group[]): Group[] {
     const id = item.target.groupId;
     return groups.filter((g) => g.id === id);
   }
-  const names = new Set((item.role?.entitlements ?? []).filter((e) => !e.includes("(JIT)")));
-  return groups.filter((g) => names.has(`${g.system}:${g.name}`));
+  const ids = new Set((item.role?.entitlements ?? []).map((e) => e.id));
+  return groups.filter((g) => ids.has(g.id));
 }
 
 interface Preview { name: string; sim: SimResult | null; missing: string[]; error?: string }
@@ -202,7 +206,7 @@ export function RequestAccess() {
     const needle = q.trim().toLowerCase();
     return (catalog ?? []).filter((c) =>
       (kind === "all" || (kind === "role" && c.target.kind === "role") || (kind === "entitlement" && c.target.kind === "group") || (kind === "privileged" && c.privileged)) &&
-      (!system || c.system === system || (c.role?.entitlements.some((e) => e.startsWith(system + ":")) ?? false)) &&
+      (!system || c.system === system || (c.role?.entitlements.some((e) => e.system === system) ?? false)) &&
       (!needle || `${c.title} ${c.description}`.toLowerCase().includes(needle)),
     );
   }, [catalog, q, kind, system]);
@@ -241,10 +245,14 @@ export function RequestAccess() {
         });
         n += res.lines.length;
       }
-      if (roles.length) {
-        await mockRequests.submit({ ...payload(), items: roles.map((c) => c.target) });
-        n += roles.length * beneficiaries.length;
-      } else if (draftId) mockRequests.remove(draftId);
+      // a role is requested per person (one approval assigns the whole bundle)
+      for (const c of roles) {
+        for (const b of beneficiaries) {
+          await roleApi.request(c.role!.id, b.id, justification.trim());
+          n++;
+        }
+      }
+      if (draftId) mockRequests.remove(draftId);
       toast(`Submitted ${n} request${n === 1 ? "" : "s"}. Approvers can see ${n === 1 ? "it" : "them"} now.`);
       setCart([]);
       setJustification("");
@@ -292,13 +300,14 @@ export function RequestAccess() {
                     {c.target.kind === "role" ? <span className="row tight"><Badge tone="accent"><Layers size={11} /> Role</Badge></span> : null}
                   </div>
                   <p className="small muted">{c.description}</p>
-                  {c.role && <div className="row tight">{c.role.entitlements.slice(0, 4).map((e) => <span key={e} className="chip sys">{e}</span>)}</div>}
+                  {c.role && <div className="row tight">{c.role.entitlements.slice(0, 4).map((e) => <span key={e.id} className="chip sys">{e.system}:{e.name}</span>)}{c.role.entitlements.length > 4 && <span className="chip">+{c.role.entitlements.length - 4}</span>}</div>}
                   <div className="cat-foot">
                     <span className="row tight">
                       {c.privileged && <Badge tone="warning">Privileged</Badge>}
                       {c.risk && c.risk !== "low" && !c.privileged && <Badge tone="outline">{c.risk} risk</Badge>}
                       {c.defaultHours != null && <Badge tone="info"><Timer size={11} /> {hoursLabel(c.defaultHours)}{c.maxHours != null ? `, up to ${hoursLabel(c.maxHours)}` : ""}</Badge>}
-                      {c.role && <PreviewBadge />}
+                      {c.role?.held && <Badge tone="ok">You hold it</Badge>}
+                      {c.role?.pending && <Badge tone="info">You asked for it</Badge>}
                     </span>
                     <Button size="sm" variant={inCart(c) ? "default" : "primary"} icon={inCart(c) ? <Minus size={14} /> : <Plus size={14} />} onClick={() => toggle(c)} aria-pressed={inCart(c)} aria-label={`${inCart(c) ? "Remove" : "Add"} ${c.title}`}>
                       {inCart(c) ? "Remove" : "Add"}
@@ -363,11 +372,11 @@ export function RequestAccess() {
             </label>
             <label className="field">
               Justification
-              <textarea className="input" value={justification} onChange={(e) => setJustification(e.target.value)} placeholder="What do you need it for? Include a ticket if there is one." />
+              <textarea className="input" maxLength={1000} value={justification} onChange={(e) => setJustification(e.target.value)} placeholder="What do you need it for? Include a ticket if there is one." />
               <span className="hint">Approvers see this. At least a few words.</span>
             </label>
             {groups && <RiskPreview beneficiaries={beneficiaries} cart={cart} groups={groups} />}
-            {cart.some((c) => !c.catalogId) && <Callout tone="neutral">Business roles are a Preview: role requests are recorded in this browser only. Entitlements go to the real approval queue.</Callout>}
+            {cart.some((c) => !c.catalogId) && <Callout tone="neutral">A role is one request per person: approving it grants every entitlement in the role.</Callout>}
             <div className="row" style={{ justifyContent: "flex-end" }}>
               <Button onClick={saveDraft} disabled={!cart.length}>Save draft</Button>
               <Button variant="primary" onClick={submit} disabled={!canSubmit}>{busy ? "Submitting…" : `Submit${beneficiaries.length > 1 ? ` for ${beneficiaries.length}` : ""}`}</Button>

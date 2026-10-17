@@ -682,67 +682,6 @@ export const revokeSession = (id: string) => api<unknown>(`/auth/sessions/${enco
 
 export const hrisExecute = (eventId: number) => api(`/hris/events/${eventId}/execute`, {});
 
-// ---------------------------------------------------------------- access requests (issue #164)
-
-export type Risk = "low" | "medium" | "high";
-export interface PersonRef { id: number; name: string; type: IdentityType; status: string }
-export interface CatalogEntry {
-  /** null: the group is not in the catalog (only listed with ?all=1). */
-  id: string | null;
-  group: { id: number; system: string; name: string; kind: string; privileged: boolean };
-  requestable: boolean;
-  description: string;
-  owner: PersonRef | null;
-  risk: Risk;
-  eligible_types: string[];
-  eligible_departments: string[];
-  /** null: until removed. */
-  default_hours: number | null;
-  /** null: no limit. */
-  max_hours: number | null;
-  updated_at: string | null;
-}
-export interface CatalogView {
-  /** The person the signed-in user is; null when not linked (they request for others only). */
-  me: PersonRef | null;
-  can_request_for_others: boolean;
-  can_decide: boolean;
-  can_manage: boolean;
-  items: CatalogEntry[];
-}
-export type RequestStatus = "pending" | "approved" | "denied" | "cancelled" | "expired" | "removed";
-export interface RequestLine {
-  id: string;
-  batch_id: string;
-  status: RequestStatus;
-  catalog_item_id: string;
-  group: CatalogEntry["group"];
-  beneficiary: PersonRef;
-  account: { id: number; system: string; username: string };
-  requested_by: { id: string; display_name: string };
-  justification: string;
-  duration_hours: number | null;
-  requested_at: string;
-  decided_by: { id: string; display_name: string } | null;
-  decided_at: string | null;
-  decision_reason: string | null;
-  expires_at: string | null;
-  closed_at: string | null;
-  events?: { event: string; actor: string; note: string | null; at: string }[];
-  can_approve: boolean;
-  can_cancel: boolean;
-  can_remove: boolean;
-}
-
-export const submitRequest = (body: { beneficiary_ids: number[]; catalog_item_ids: string[]; justification: string; duration_hours?: number | null }) =>
-  api<{ batch_id: string; lines: RequestLine[] }>("/requests", body);
-const line = (id: string, action: string, body: object = {}) => api<RequestLine>(`/requests/${encodeURIComponent(id)}/${action}`, body);
-export const approveRequest = (id: string, reason?: string) => line(id, "approve", reason ? { reason } : {});
-export const denyRequest = (id: string, reason: string) => line(id, "deny", { reason });
-export const cancelRequest = (id: string) => line(id, "cancel");
-export const removeRequest = (id: string, reason?: string) => line(id, "remove", reason ? { reason } : {});
-export const putCatalogItem = (groupId: number, body: Omit<CatalogEntry, "id" | "group" | "owner" | "updated_at"> & { owner_identity_id: number | null }) =>
-  api<CatalogEntry>(`/catalog/items/${groupId}`, body, "PUT");
 // ---------------------------------------------------------------- account correlation (issue #160)
 
 export interface CorrAccount { id: number; system: string; external_id: string; username: string; kind: string; status: string; identity_id: number | null }
@@ -788,6 +727,519 @@ export const mergeIdentity = (mergedId: number, survivorId: number, reason: stri
 export const unmergeIdentity = (mergeId: string, reason: string) =>
   api<UnmergeResult>(`/identity-merges/${encodeURIComponent(mergeId)}/unmerge`, { reason });
 
+// ------------------------------------------------ affiliations and identifiers (issue #64)
+
+export type AffiliationType = "employee" | "student" | "applicant" | "admit" | "prehire" | "contractor" | "guest_visitor" | "volunteer" | "partner" | "alum" | "retiree";
+/** One relationship between a person and the organization. A person has many. */
+export interface Affiliation {
+  id: string;
+  identity_id: number;
+  type: AffiliationType;
+  source: "hris" | "sis" | "sponsorship" | "partner_org" | "manual";
+  source_ref: string | null;
+  org_unit: string | null;
+  population: string | null;
+  starts_at: string;
+  ends_at: string | null;
+  /** Stored status. */
+  status: "pending" | "active" | "ended" | "revoked";
+  /** What it is now: an active affiliation past its end reads as ended until the lifecycle sweep runs. */
+  effective_status: "pending" | "active" | "ended" | "revoked";
+  created_at: string;
+  ended_at: string | null;
+  end_reason: string | null;
+}
+/** Lifecycle state as far as affiliations determine it. */
+export type PersonState = "unaffiliated" | "prospective" | "active" | "expiring" | "expired" | "revoked" | "merged" | "invited";
+export interface PersonAffiliations { identity_id: number; lifecycle_state: PersonState; affiliations: Affiliation[] }
+export interface PersonIdentifier {
+  id: string;
+  type: string;
+  issuer: string;
+  /** Null for hashed-only identifiers: the value is never stored. */
+  value: string | null;
+  verified_at: string | null;
+  verified_by: "confirmation_code" | "federation" | "authoritative_source" | "proofing_agent" | null;
+  status: "active" | "retired";
+  source_system: string | null;
+}
+export interface AddAffiliationInput { type: AffiliationType; org_unit?: string; population?: string; starts_at?: string; ends_at?: string; reason: string }
+
+export const addAffiliation = (identityId: number, body: AddAffiliationInput) =>
+  api<Affiliation>(`/identities/${identityId}/affiliations`, body);
+export const endAffiliation = (affiliationId: string, reason: string) =>
+  api<Affiliation>(`/affiliations/${encodeURIComponent(affiliationId)}/end`, { reason });
+// ---------------------------------------------------------------- access requests (issue #164)
+
+export type Risk = "low" | "medium" | "high";
+export interface PersonRef { id: number; name: string; type: IdentityType; status: string }
+export interface CatalogEntry {
+  /** null: the group is not in the catalog (only listed with ?all=1). */
+  id: string | null;
+  group: { id: number; system: string; name: string; kind: string; privileged: boolean };
+  requestable: boolean;
+  description: string;
+  owner: PersonRef | null;
+  risk: Risk;
+  eligible_types: string[];
+  eligible_departments: string[];
+  /** null: until removed. */
+  default_hours: number | null;
+  /** null: no limit. */
+  max_hours: number | null;
+  updated_at: string | null;
+  /** Approval stages, in order (issue #165), and hours before a stage escalates to deciders. */
+  approval: { stages: StageKind[]; escalate_after_hours: number };
+}
+export type StageKind = "manager" | "owner" | "decider";
+export interface RequestStage {
+  index: number;
+  kind: StageKind;
+  status: "queued" | "waiting" | "approved" | "denied" | "closed";
+  assignee: PersonRef | null;
+  due_at: string | null;
+  escalated: boolean;
+  decided_by: { id: string; display_name: string } | null;
+  on_behalf_of: { id: string; display_name: string } | null;
+  decided_at: string | null;
+  reason: string | null;
+}
+/** A request line the signed-in user may decide now (GET /api/approvals/inbox). */
+export interface ApprovalItem {
+  line: RequestLine;
+  stage: number | null;
+  kind: StageKind;
+  escalated: boolean;
+  on_behalf_of: { id: string; display_name: string } | null;
+}
+export interface UserRef { id: string; display_name: string }
+export interface ApprovalDelegation {
+  id: string;
+  from: UserRef;
+  to: UserRef;
+  starts_at: string;
+  ends_at: string;
+  reason: string;
+  created_at: string;
+  revoked_at: string | null;
+  active: boolean;
+}
+export interface CatalogView {
+  /** The person the signed-in user is; null when not linked (they request for others only). */
+  me: PersonRef | null;
+  can_request_for_others: boolean;
+  can_decide: boolean;
+  can_manage: boolean;
+  items: CatalogEntry[];
+}
+export type RequestStatus = "pending" | "approved" | "denied" | "cancelled" | "expired" | "removed";
+export interface RequestLine {
+  id: string;
+  batch_id: string;
+  status: RequestStatus;
+  catalog_item_id: string;
+  group: CatalogEntry["group"];
+  beneficiary: PersonRef;
+  account: { id: number; system: string; username: string };
+  requested_by: { id: string; display_name: string };
+  justification: string;
+  duration_hours: number | null;
+  requested_at: string;
+  decided_by: { id: string; display_name: string } | null;
+  decided_at: string | null;
+  decision_reason: string | null;
+  expires_at: string | null;
+  closed_at: string | null;
+  events?: { event: string; actor: string; note: string | null; at: string }[];
+  stages: RequestStage[];
+  can_approve: boolean;
+  can_cancel: boolean;
+  can_remove: boolean;
+}
+
+export const submitRequest = (body: { beneficiary_ids: number[]; catalog_item_ids: string[]; justification: string; duration_hours?: number | null }) =>
+  api<{ batch_id: string; lines: RequestLine[] }>("/requests", body);
+const line = (id: string, action: string, body: object = {}) => api<RequestLine>(`/requests/${encodeURIComponent(id)}/${action}`, body);
+export const approveRequest = (id: string, reason?: string) => line(id, "approve", reason ? { reason } : {});
+export const denyRequest = (id: string, reason: string) => line(id, "deny", { reason });
+export const cancelRequest = (id: string) => line(id, "cancel");
+export const removeRequest = (id: string, reason?: string) => line(id, "remove", reason ? { reason } : {});
+export const putCatalogItem = (groupId: number, body: Omit<CatalogEntry, "id" | "group" | "owner" | "updated_at" | "approval"> & {
+  owner_identity_id: number | null; approval_stages?: StageKind[]; escalate_after_hours?: number;
+}) => api<CatalogEntry>(`/catalog/items/${groupId}`, body, "PUT");
+export const createDelegation = (body: { to_user_id: string; starts_at: string; ends_at: string; reason: string }) =>
+  api<ApprovalDelegation>("/approvals/delegations", body);
+export const revokeDelegation = (id: string) => api<ApprovalDelegation>(`/approvals/delegations/${encodeURIComponent(id)}/revoke`, {});
+
+// ---------------------------------------------------------------- notifications (issue #189)
+
+export type NotificationChannel = "off" | "in_app" | "email" | "both" | "digest";
+/** One entry of the signed-in user's inbox (the top-bar bell). */
+export interface AppNotification {
+  id: string;
+  kind: string;
+  subject: string;
+  body: string;
+  /** An app path such as /inbox; empty when there is none. */
+  link: string;
+  created_at: string;
+  read_at: string | null;
+  /** The email side: none, pending, digest, digested, sent, skipped or dead. */
+  delivery: string;
+}
+export interface NotificationList { unread: number; items: AppNotification[] }
+export interface NotificationKindPref {
+  kind: string;
+  label: string;
+  description: string;
+  /** Cannot be turned off. */
+  mandatory: boolean;
+  channel: NotificationChannel;
+  default: NotificationChannel;
+}
+export interface NotificationPrefs {
+  /** False when the server sends no email at all (TESSERA_NOTIFY_EMAIL=off). */
+  email_available: boolean;
+  /** True when email goes to the dev sink, a file, and is not delivered. */
+  email_dev_sink: boolean;
+  channels: NotificationChannel[];
+  kinds: NotificationKindPref[];
+}
+
+export const NOTIFICATIONS_PATH = "/notifications?limit=30";
+export const markNotificationsRead = (target: { ids: string[] } | { all: true }) =>
+  api<{ marked: number; unread: number }>("/notifications/read", target);
+export const putNotificationPrefs = (prefs: Record<string, NotificationChannel>) =>
+  api<NotificationPrefs>("/notifications/preferences", { prefs }, "PUT");
+
+// ---------------------------------------------------------------- email delivery log (issue #189)
+
+export type EmailStatus = "queued" | "sending" | "accepted" | "deferred" | "rejected" | "failed" | "bounced";
+export interface EmailStep { command: string; reply: string; code: number; enhanced?: string }
+/** One send attempt with its SMTP transaction. Credentials are redacted and the body is never recorded. */
+export interface EmailAttempt {
+  started_at: string;
+  finished_at: string;
+  outcome: EmailStatus;
+  banner?: string;
+  capabilities?: string[];
+  tls?: { version?: string; cipher?: string; server_subject?: string; server_issuer?: string; error?: string };
+  steps: EmailStep[];
+  mail_from?: string;
+  rcpt_to?: string;
+  queue_id?: string;
+  error?: string;
+  truncated?: boolean;
+}
+export interface EmailMessage {
+  id: string;
+  notification_id: string;
+  kind: string;
+  recipient: string;
+  subject: string;
+  mail_from: string | null;
+  rcpt_to: string | null;
+  status: EmailStatus;
+  /** The relay's queue id from its final 250 reply. */
+  queue_id: string | null;
+  attempt_count: number;
+  created_at: string;
+  updated_at: string;
+  /** Deferred or failed messages can be sent again. */
+  retryable: boolean;
+  /** Only in the detail. */
+  attempts?: EmailAttempt[];
+}
+export interface EmailList { statuses: EmailStatus[]; email_mode: string; messages: EmailMessage[] }
+export const retryEmail = (id: string) => api<EmailMessage>(`/email/messages/${encodeURIComponent(id)}/retry`, {});
+
+// ---------------------------------------------------------------- business roles (issue #161)
+
+export type GroupRef = CatalogEntry["group"];
+export interface RoleRule { department: string[]; type: string[]; title: string[] }
+export type MemberSource = "rule" | "request" | "manual";
+export interface RoleMember {
+  person: PersonRef;
+  source: MemberSource;
+  assigned_by: { id: string; display_name: string } | null;
+  assigned_at: string;
+  request_id: string | null;
+}
+export interface BusinessRole {
+  id: string;
+  name: string;
+  description: string;
+  owner: PersonRef | null;
+  risk: Risk;
+  requestable: boolean;
+  /** null: no birthright rule (members are assigned or requested). */
+  birthright: RoleRule | null;
+  status: "active" | "retired";
+  version: number;
+  entitlements: GroupRef[];
+  member_count: number;
+  created_at: string;
+  updated_by: { id: string; display_name: string } | null;
+  updated_at: string;
+  /** Only on GET /roles/{id} and after a change. */
+  members?: RoleMember[];
+  /** The signed-in user holds it / has a pending request for it. */
+  held: boolean;
+  pending: boolean;
+}
+export interface RolesView {
+  me: PersonRef | null;
+  can_manage: boolean;
+  can_decide: boolean;
+  can_request_for_others: boolean;
+  can_read_members: boolean;
+  roles: BusinessRole[];
+}
+export type PlanAction = "add_grant" | "remove_grant" | "keep_grant" | "no_account" | "add_member" | "remove_member";
+export interface PlanStep {
+  action: PlanAction;
+  identity_id: number;
+  identity: string;
+  role_id?: string;
+  role?: string;
+  source?: MemberSource;
+  group_id?: number;
+  group?: string;
+  account_id?: number;
+  edge_id?: number;
+  reason?: string;
+}
+export interface RolePlan {
+  dry_run: boolean;
+  steps: PlanStep[];
+  grants_added: number;
+  grants_removed: number;
+  members_added: number;
+  members_removed: number;
+  no_account: number;
+}
+export interface RoleChange { role: BusinessRole; plan: RolePlan }
+export interface RoleSpec {
+  name: string;
+  description: string;
+  owner_identity_id: number | null;
+  risk: Risk;
+  requestable: boolean;
+  birthright: RoleRule | null;
+  entitlement_group_ids: number[];
+  note?: string;
+}
+export interface RoleVersion { version: number; snapshot: Record<string, unknown>; note: string | null; actor: string; changed_at: string }
+export interface RoleDrift {
+  missing: { person: PersonRef; missing: GroupRef[] }[];
+  holders: { person: PersonRef; held: GroupRef[]; holds_all: boolean }[];
+}
+export interface RoleRequest {
+  id: string;
+  role: { id: string; name: string; risk: Risk };
+  beneficiary: PersonRef;
+  requested_by: { id: string; display_name: string };
+  justification: string;
+  status: "pending" | "approved" | "denied" | "cancelled";
+  requested_at: string;
+  decided_by: { id: string; display_name: string } | null;
+  decided_at: string | null;
+  decision_reason: string | null;
+  can_approve: boolean;
+  can_cancel: boolean;
+}
+
+const rolePath = (id: string, rest = "") => `/roles/${encodeURIComponent(id)}${rest}`;
+const dry = (d?: boolean) => (d ? "?dry_run=1" : "");
+export const roles = {
+  create: (spec: RoleSpec, dryRun?: boolean) => api<RoleChange>(`/roles${dry(dryRun)}`, spec),
+  update: (id: string, version: number, spec: RoleSpec, dryRun?: boolean) =>
+    api<RoleChange>(rolePath(id, dry(dryRun)), { version, ...spec }, "PUT"),
+  retire: (id: string, reason: string, dryRun?: boolean) => api<RoleChange>(rolePath(id, "/retire" + dry(dryRun)), { reason }),
+  reconcile: (id: string, dryRun?: boolean) => api<RoleChange>(rolePath(id, "/reconcile" + dry(dryRun)), {}),
+  assign: (id: string, identityId: number, reason: string, dryRun?: boolean) =>
+    api<RoleChange>(rolePath(id, "/members" + dry(dryRun)), { identity_id: identityId, reason }),
+  unassign: (id: string, identityId: number, reason: string, dryRun?: boolean) =>
+    api<RoleChange>(rolePath(id, `/members/${identityId}/remove` + dry(dryRun)), { reason }),
+  request: (roleId: string, beneficiaryId: number, justification: string) =>
+    api<RoleRequest>("/role-requests", { role_id: roleId, beneficiary_id: beneficiaryId, justification }),
+  approve: (id: string, reason?: string) => api<RoleRequest>(`/role-requests/${encodeURIComponent(id)}/approve`, reason ? { reason } : {}),
+  deny: (id: string, reason: string) => api<RoleRequest>(`/role-requests/${encodeURIComponent(id)}/deny`, { reason }),
+  cancel: (id: string) => api<RoleRequest>(`/role-requests/${encodeURIComponent(id)}/cancel`, {}),
+};
+export const rolePaths = { list: "/roles", one: (id: string) => rolePath(id), versions: (id: string) => rolePath(id, "/versions"), drift: (id: string) => rolePath(id, "/drift") };
+
+// ---------------------------------------------------------------- identity lifecycle (issue #159)
+
+export type WorkerType = "employee" | "contractor" | "intern" | "partner" | "vendor" | "guest";
+export const WORKER_TYPES: WorkerType[] = ["employee", "contractor", "intern", "partner", "vendor", "guest"];
+export type LifecycleState = "upcoming" | "active" | "ending" | "ended";
+export interface Lifecycle {
+  person: PersonRef;
+  worker_type: WorkerType;
+  sponsor: PersonRef | null;
+  organization: string | null;
+  starts_at: string | null;
+  ends_at: string | null;
+  ended_at: string | null;
+  state: LifecycleState;
+  /** Whole days until the end date (0 when due); null without one. */
+  days_left: number | null;
+  /** The smallest warning already sent (14, 7 or 1 days). */
+  warned_days: number | null;
+  source: "manual" | "hris" | "sponsorship";
+  updated_at: string | null;
+  /** No lifecycle row: an employee with no end date. */
+  default: boolean;
+  can_extend: boolean;
+  can_manage: boolean;
+  events?: { event: "set" | "extended" | "converted" | "warned" | "ended"; worker_type: string | null; ends_at: string | null; note: string | null; actor: string; at: string }[];
+}
+export interface LifecycleList { can_manage: boolean; rows: Lifecycle[] }
+export interface LifecycleSpec {
+  worker_type: WorkerType;
+  sponsor_identity_id: number | null;
+  organization: string | null;
+  starts_at: string | null;
+  ends_at: string | null;
+  reason: string;
+}
+const lcPath = (id: number, rest = "") => `/identities/${id}/lifecycle${rest}`;
+export const lifecycle = {
+  paths: { list: (state?: LifecycleState) => `/lifecycle${state ? `?state=${state}` : ""}`, sponsored: "/lifecycle/sponsored", one: (id: number) => lcPath(id) },
+  set: (id: number, spec: LifecycleSpec) => api<Lifecycle>(lcPath(id), spec, "PUT"),
+  extend: (id: number, endsAt: string, reason: string) => api<Lifecycle>(lcPath(id, "/extend"), { ends_at: endsAt, reason }),
+  sweep: () => api<{ warned: number; ended: number }>("/lifecycle/sweep", {}),
+};
+
+// ---------------------------------------------------------------- guest sponsorships (issue #65)
+
+export type GuestPopulationKey = "visitor" | "contractor" | "volunteer" | "partner";
+export type SponsorshipStatus = "requested" | "pending_approval" | "active" | "transfer_pending" | "ended" | "revoked" | "rejected";
+/** The status, with a running sponsorship told apart as upcoming, active or ending (within 14 days). */
+export type SponsorshipState = SponsorshipStatus | "upcoming" | "ending";
+export interface BundleItem { group_id: number; system: string; name: string; risk: Risk; privileged: boolean }
+export interface SponsorshipEvent {
+  event: string;
+  from_status: SponsorshipStatus | null;
+  to_status: SponsorshipStatus;
+  note: string | null;
+  policy_version: string;
+  actor: string;
+  at: string;
+}
+export interface Sponsorship {
+  id: string;
+  status: SponsorshipStatus;
+  state: SponsorshipState;
+  guest: PersonRef & { email: string | null };
+  sponsor: PersonRef;
+  population: GuestPopulationKey;
+  purpose: string;
+  bundle: BundleItem[];
+  required_ial: number;
+  required_aal: number;
+  starts_at: string;
+  ends_at: string;
+  /** Whole days until the end; null once it is over. */
+  days_left: number | null;
+  /** The version of the sponsor policy that made the last decision. */
+  policy_version: string;
+  created_by: UserRef | null;
+  created_at: string;
+  approved_by: UserRef | null;
+  approved_at: string | null;
+  transfer_to: PersonRef | null;
+  transfer_deadline: string | null;
+  ended_at: string | null;
+  end_reason: string | null;
+  /** "ready" until the claim flow (GU-6) sends the invitation. */
+  invitation: "ready" | "sent" | "claimed" | "revoked";
+  can_renew: boolean;
+  can_end: boolean;
+  can_transfer: boolean;
+  can_accept_transfer: boolean;
+  can_approve: boolean;
+  events?: SponsorshipEvent[];
+}
+export interface GuestPopulationInfo {
+  key: GuestPopulationKey;
+  name: string;
+  max_days: number;
+  max_active: number;
+  default_ial: number;
+  default_aal: number;
+  approval_with_sensitive_bundle: boolean;
+}
+export interface GuestList {
+  rows: Sponsorship[];
+  populations: GuestPopulationInfo[];
+  policy_version: string;
+  max_invites_per_day: number;
+  transfer_deadline_days: number;
+  /** The sponsor policy lets the signed-in person sponsor. */
+  can_sponsor: boolean;
+  can_read_all: boolean;
+  can_approve: boolean;
+}
+export interface InviteInput {
+  given_name: string;
+  family_name: string;
+  email: string;
+  population: GuestPopulationKey;
+  purpose: string;
+  /** Omitted: now. */
+  starts_at?: string;
+  ends_at: string;
+  /** Group ids of requestable catalog items. */
+  bundle?: number[];
+  required_ial?: number;
+}
+export type BulkRowStatus = "ok" | "needs_approval" | "created" | "refused";
+export interface BulkRowResult {
+  row: number;
+  email: string;
+  population: string;
+  status: BulkRowStatus;
+  /** The stable code of the rule that refused the row. */
+  code?: string;
+  message?: string;
+  needs_approval: boolean;
+  policy_version: string;
+  sponsorship_id?: string;
+}
+export interface BulkResult {
+  dry_run: boolean;
+  batch_id?: string;
+  policy_version: string;
+  rows: BulkRowResult[];
+  created: number;
+  would_create: number;
+  refused: number;
+}
+const spPath = (id: string, rest = "") => `/sponsorships/${encodeURIComponent(id)}${rest}`;
+export const guests = {
+  paths: {
+    list: (f: { sponsor?: "me" | "all"; state?: SponsorshipStatus; population?: GuestPopulationKey } = {}) => {
+      const q = new URLSearchParams();
+      if (f.sponsor) q.set("sponsor", f.sponsor);
+      if (f.state) q.set("state", f.state);
+      if (f.population) q.set("population", f.population);
+      return `/guests${q.size ? `?${q}` : ""}`;
+    },
+    one: (id: string) => spPath(id),
+    approvals: "/sponsorships/approvals",
+  },
+  invite: (body: InviteInput) => api<Sponsorship>("/guests/invitations", body),
+  /** csv: the file's text. dryRun judges every row against the sponsor policy and writes nothing. */
+  bulk: (csv: string, dryRun: boolean) => api<BulkResult>("/guests/invitations/bulk", { csv, dry_run: dryRun }),
+  approve: (id: string) => api<Sponsorship>(spPath(id, "/approve"), {}),
+  reject: (id: string, reason: string) => api<Sponsorship>(spPath(id, "/reject"), { reason }),
+  renew: (id: string, endsAt: string, justification: string) => api<Sponsorship>(spPath(id, "/renew"), { ends_at: endsAt, justification }),
+  end: (id: string, reason: string) => api<Sponsorship>(spPath(id, "/end"), { reason }),
+  transfer: (id: string, toIdentityId: number, reason: string) => api<Sponsorship>(spPath(id, "/transfer"), { to_identity_id: toIdentityId, reason }),
+  acceptTransfer: (id: string) => api<Sponsorship>(spPath(id, "/accept-transfer"), {}),
+};
 /** Kill switch (issue #106): revoke an identity's sessions, refresh tokens and OAuth grants at the providers. */
 export interface ContainmentStep {
   action: "revoke_sessions" | "revoke_grants";
