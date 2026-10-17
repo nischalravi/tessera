@@ -178,7 +178,8 @@ func NewSMTP(m config.Mail, env string, allowLoopback bool, s *seal.Sealer) (*SM
 	if env != config.Prod {
 		env = config.Dev
 	}
-	dial, err := safehttp.NewDialer(safehttp.Options{Env: env, AllowLoopback: allowLoopback && env == config.Dev})
+	// the relay port is the one port this dialer may connect to (safehttp allows none by default)
+	dial, err := safehttp.NewDialer(safehttp.Options{Env: env, AllowLoopback: allowLoopback && env == config.Dev, AllowedPorts: []int{m.Port}})
 	if err != nil {
 		return nil, err
 	}

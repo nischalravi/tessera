@@ -47,7 +47,7 @@ export function CatalogSettings({ groupId, privileged }: { groupId: number; priv
     setOwner(entry.owner ? String(entry.owner.id) : "");
   }, [entry, privileged]);
 
-  if (!view) return <p className="small muted">{first.error ?? "Loading…"}</p>;
+  if (!view) return <p className="small muted">{first.error?.message ?? "Loading…"}</p>;
   if (!manage) {
     if (!entry) return <p className="small muted">Not in the request catalog. Ask a policy admin to make it requestable.</p>;
     return (
