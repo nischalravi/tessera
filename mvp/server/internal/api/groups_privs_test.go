@@ -85,6 +85,9 @@ func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 	priv := e.grant("/api/groups/"+g, "update", "bob", "")
 	fpriv := e.grant("/api/groups/folders/"+app, "create", "bob", "")
 	other := "00000000-0000-4000-8000-00000000d00d"
+	ld := e.admin.call("POST", "/api/groups/loaders", `{"name":"L1","type":"csv","target_folder":"`+app+
+		`","config":{"path":"a.csv","group":"x","subject_column":"id"}}`, 201)["id"].(string)
+	run := "00000000-0000-4000-8000-00000000dead"
 
 	type routeCase struct {
 		method, pattern, path, body string
@@ -132,9 +135,26 @@ func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 		{"GET", "/api/groups/privileges/settings", "/api/groups/privileges/settings", "", ""},
 		{"PUT", "/api/groups/privileges/settings", "/api/groups/privileges/settings", `{"everyone_allowed":[],"defaults":[]}`, ""},
 		{"PUT", "/api/groups/users/{id}/identity", "/api/groups/users/" + other + "/identity", `{"identity_id":null}`, ""},
+		// GR-10, loaders: the privilege is on the loader's target folder. The routes that need groups.loader.admin
+		// (see loaderAdmin below) are asked as a policy admin, who holds that permission and no privilege.
+		{"POST", "/api/groups/loaders", "/api/groups/loaders", `{"name":"L2","type":"csv","target_folder":"` + app +
+			`","config":{"path":"a.csv","group":"x","subject_column":"id"}}`, "stem_admin"},
+		{"GET", "/api/groups/loaders/{id}", "/api/groups/loaders/" + ld, "", "stem_view"},
+		{"PATCH", "/api/groups/loaders/{id}", "/api/groups/loaders/" + ld, `{"schedule":"@hourly"}`, "stem_admin"},
+		{"POST", "/api/groups/loaders/{id}/run", "/api/groups/loaders/" + ld + "/run", `{"kind":"preview"}`, "stem_admin"},
+		{"GET", "/api/groups/loaders/{id}/runs", "/api/groups/loaders/" + ld + "/runs", "", "stem_view"},
+		{"GET", "/api/groups/loaders/{id}/runs/{run_id}", "/api/groups/loaders/" + ld + "/runs/" + run, "", "stem_admin"},
+		{"POST", "/api/groups/loaders/{id}/runs/{run_id}/approve", "/api/groups/loaders/" + ld + "/runs/" + run + "/approve", "", "stem_admin"},
+		{"POST", "/api/groups/loaders/{id}/runs/{run_id}/reject", "/api/groups/loaders/" + ld + "/runs/" + run + "/reject", "", "stem_admin"},
+		{"GET", "/api/groups/loaders/{id}/unresolved", "/api/groups/loaders/" + ld + "/unresolved", "", "stem_admin"},
 	}
+	loaderAdmin := map[string]bool{"POST /api/groups/loaders": true, "PATCH /api/groups/loaders/{id}": true,
+		"POST /api/groups/loaders/{id}/run": true, "POST /api/groups/loaders/{id}/runs/{run_id}/approve": true,
+		"POST /api/groups/loaders/{id}/runs/{run_id}/reject": true}
 	// the listings are gated too, by filtering: the table below names them so none is forgotten
 	listings := []routeCase{{"GET", "/api/groups/folders", "", "", ""}, {"GET", "/api/groups/native", "", "", ""},
+		// GR-10: the loaders and the held-run tasks show only what the caller may view (stem_view) or administer (stem_admin)
+		{"GET", "/api/groups/loaders", "", "", ""}, {"GET", "/api/groups/loader-tasks", "", "", ""},
 		// GR-5: what an identity belongs to, and the read-only SCIM server, show only what the caller may read
 		// (the SCIM routes answer in SCIM's error format: TestSCIM_PrivilegeAndAuth checks their 403s)
 		{"GET", "/api/identities/{identity_id}/groups", "", "", ""}, {"GET", "/scim/v2/Groups", "", "", ""},
@@ -159,19 +179,30 @@ func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 		}
 	}
 	nobody := e.user("nobody", "alice") // operator: reaches every route, holds no privilege
+	aliceID := e.ident("alice")
+	policyAdmin := e.as("nobody-pa", []auth.Role{auth.RolePolicyAdmin}, &aliceID) // holds groups.loader.admin, no privilege
 	for _, c := range cases {
 		t.Run("no privilege "+c.method+" "+c.pattern, func(t *testing.T) {
+			who := nobody
+			if loaderAdmin[c.method+" "+c.pattern] {
+				who = policyAdmin
+				// an operator is stopped by the role first: groups.loader.admin is not theirs
+				if rec := nobody.do(c.method, c.path, c.body); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"forbidden"`) ||
+					strings.Contains(rec.Body.String(), "privilege_required") {
+					t.Errorf("operator %s %s = %d %.200s, want 403 forbidden (the role)", c.method, c.path, rec.Code, rec.Body.String())
+				}
+			}
 			if c.privilege == "" {
-				if rec := nobody.do(c.method, c.path, c.body); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"forbidden"`) {
+				if rec := who.do(c.method, c.path, c.body); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"forbidden"`) {
 					t.Errorf("%s %s = %d %.200s, want 403 forbidden", c.method, c.path, rec.Code, rec.Body.String())
 				}
 				return
 			}
-			denied(t, nobody, c.method, c.path, c.body, c.privilege)
+			denied(t, who, c.method, c.path, c.body, c.privilege)
 		})
 	}
 	// the listings answer 200 and show nothing
-	for _, p := range []string{"/api/groups/folders", "/api/groups/native"} {
+	for _, p := range []string{"/api/groups/folders", "/api/groups/native", "/api/groups/loaders", "/api/groups/loader-tasks"} {
 		if items := nobody.call("GET", p, "", 200)["items"].([]any); len(items) != 0 {
 			t.Errorf("%s shows %d items to a user without view", p, len(items))
 		}

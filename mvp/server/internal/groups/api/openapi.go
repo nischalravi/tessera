@@ -42,6 +42,9 @@ type opDoc struct {
 	Result   string
 	Created  bool
 	Accepted bool
+	// Approval marks a possible 202 that says a second admin must approve the
+	// change (a SQL loader's configuration).
+	Approval bool
 }
 
 const (
@@ -103,6 +106,19 @@ var docList = []opDoc{
 	{Key: "POST /api/groups/pit/rebuild", Summary: "Rebuild the point-in-time rows from the events", Tag: "history"},
 	{Key: "POST /api/groups/engine/verify", Summary: "Recompute and repair the membership engine's tables", Tag: "engine"},
 	{Key: "GET /api/groups/engine/ops/{seq}", Summary: "Progress of a queued recompute (the op of a 202 answer)", Tag: "engine"},
+	{Key: "GET /api/groups/loaders", Summary: "List the loaders whose target folder the caller may view, with their job status", Tag: "loaders", Query: pairs(qPage)},
+	{Key: "POST /api/groups/loaders", Summary: "Create a loader (a SQL loader needs a second admin's approval)", Tag: "loaders", Body: "LoaderSpec",
+		Created: true, Approval: true},
+	{Key: "GET /api/groups/loaders/{id}", Summary: "Get a loader (its definition needs stem_admin on its folder)", Tag: "loaders"},
+	{Key: "PATCH /api/groups/loaders/{id}", Summary: "Change a loader (a SQL loader needs a second admin's approval, except turning it off)", Tag: "loaders",
+		Body: "LoaderSpec", Approval: true},
+	{Key: "POST /api/groups/loaders/{id}/run", Summary: "Run a loader now: full, incremental or a preview that applies nothing", Tag: "loaders", Body: "LoaderRunRequest"},
+	{Key: "GET /api/groups/loaders/{id}/runs", Summary: "A loader's runs, newest first", Tag: "loaders", Query: pairs(qPage)},
+	{Key: "GET /api/groups/loaders/{id}/runs/{run_id}", Summary: "One run, with its plan and downstream impact", Tag: "loaders"},
+	{Key: "POST /api/groups/loaders/{id}/runs/{run_id}/approve", Summary: "Apply a held run as it was computed", Tag: "loaders"},
+	{Key: "POST /api/groups/loaders/{id}/runs/{run_id}/reject", Summary: "Discard a held run", Tag: "loaders"},
+	{Key: "GET /api/groups/loaders/{id}/unresolved", Summary: "Subjects the source named that match no identity", Tag: "loaders", Query: pairs(qPage)},
+	{Key: "GET /api/groups/loader-tasks", Summary: "Inbox tasks of type loader_held: the runs a failsafe is holding", Tag: "loaders", Query: pairs(qPage)},
 	{Key: "GET /scim/v2/Groups", Summary: "SCIM: list the groups the caller may view, with their effective members", Tag: "scim", Query: pairs(qScim)},
 	{Key: "GET /scim/v2/Groups/{id}", Summary: "SCIM: one group", Tag: "scim", Query: pairs("excludedAttributes:attributes to leave out|attributes:attributes to return")},
 	{Key: "GET /scim/v2/Users", Summary: "SCIM: list identities as users", Tag: "scim", Query: pairs(qScim)},
@@ -198,6 +214,13 @@ func OpenAPI(routes []RouteInfo, cookie string) ([]byte, error) {
 		if d.Accepted {
 			resp["202"] = obj{"description": "The change is committed and the recompute is queued; op names the operation (GET /api/groups/engine/ops/{seq})"}
 		}
+		if d.Approval {
+			resp["202"] = obj{"description": "The loader runs a SQL query, so the change is not applied: change_request_id names the " +
+				"groups.loader.save request a second admin approves (POST /api/admin/change-requests/{id}/approve)"}
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/groups/loader") {
+			resp["502"] = errResp("A run could not read its source or apply its plan (loader_run_failed; the run is in the body)")
+		}
 		if strings.HasPrefix(rt.Pattern, "/scim/") {
 			resp["400"] = obj{"description": "Invalid filter (scimType invalidFilter)"}
 		}
@@ -249,6 +272,14 @@ func schemas() obj {
 		"MemberTrace": obj{"type": "object", "properties": obj{"group_id": str, "identity_id": integer, "member": boolean, "stale": boolean,
 			"paths": arr(obj{"type": "object", "properties": obj{"steps": arr(obj{"type": "object", "properties": obj{"group_id": str, "name": str,
 				"via": obj{"enum": []string{"start", "nested", "factor"}}, "op": str, "role": str}})}}), "truncated": boolean}},
+		"LoaderSpec": obj{"type": "object", "required": []string{"name", "type", "config", "target_folder"}, "properties": obj{"name": str,
+			"type":          obj{"enum": []string{"sql_simple", "sql_group_list", "csv", "connector_groups", "attribute", "recent_memberships"}},
+			"connection_id": str, "config": object, "target_folder": str, "name_template": str,
+			"on_missing_group": obj{"enum": []string{"empty", "disable", "delete", "keep"}}, "and_group": str,
+			"schedule":         obj{"type": "string", "description": "five-field cron in UTC, or @hourly, @daily, @weekly (default @daily)"},
+			"incremental_secs": integer, "failsafe": object, "status": obj{"enum": []string{"enabled", "disabled"}},
+			"secret": obj{"type": "string", "writeOnly": true, "description": "bearer token of a csv loader's url; sealed, never returned"}}},
+		"LoaderRunRequest": obj{"type": "object", "properties": obj{"kind": obj{"enum": []string{"full", "incremental", "preview"}, "default": "full"}}},
 		"BatchRequest": obj{"type": "object", "properties": obj{
 			"add":    arr(obj{"type": "object", "properties": obj{"identity": integer, "group": str, "enabled_from": str, "disabled_at": str, "reason": str}}),
 			"remove": arr(str), "enabled_from": str, "disabled_at": str, "reason": str,

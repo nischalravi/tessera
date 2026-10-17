@@ -47,7 +47,9 @@ CREATE TABLE IF NOT EXISTS admin_change_requests (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
   type TEXT NOT NULL CHECK (type IN ('role.grant','role.revoke','idp_connection.create','idp_connection.update_trust',
-    'idp_connection.update_cosmetic','idp_connection.disable','tenant.settings.update','tenant.security_contacts.update')),
+    'idp_connection.update_cosmetic','idp_connection.disable','tenant.settings.update','tenant.security_contacts.update',
+    -- issue #53, GR-10: a SQL loader's creation or change (internal/admin/change_loader.go)
+    'groups.loader.save')),
   payload TEXT NOT NULL CHECK (json_valid(payload) AND json_type(payload) = 'object'),
   payload_hash TEXT NOT NULL CHECK (length(payload_hash) = 64),
   secret_enc BLOB,

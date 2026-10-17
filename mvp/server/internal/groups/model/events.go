@@ -15,7 +15,7 @@ import (
 // emitFolder writes a folder event whose snapshot is f as it now is. extra
 // adds descriptive fields (the old name).
 func (e Env) emitFolder(typ string, f *store.Folder, extra map[string]any) error {
-	ev := events.New(typ, string(f.ID), e.Now, store.CauseAPI)
+	ev := events.New(typ, string(f.ID), e.Now, e.cause())
 	if typ == events.FolderDeleted {
 		if extra == nil {
 			extra = map[string]any{}
@@ -37,12 +37,12 @@ func (e Env) emitGroup(typ string, g *store.NativeGroup, extra map[string]any) e
 			return err
 		}
 	}
-	ev := events.New(typ, string(g.ID), e.Now, store.CauseAPI)
+	ev := events.New(typ, string(g.ID), e.Now, e.cause())
 	ev.Data = pit.ObjectData(pit.GroupSnapshot(g, factors), extra)
 	return pit.Emit(e.Tx, ev)
 }
 
 // emitDirect writes the event of a direct membership row.
 func (e Env) emitDirect(typ string, m *store.DirectMembership) error {
-	return pit.Emit(e.Tx, pit.DirectEvent(typ, m, e.Now, store.CauseAPI))
+	return pit.Emit(e.Tx, pit.DirectEvent(typ, m, e.Now, e.cause()))
 }

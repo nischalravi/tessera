@@ -146,6 +146,17 @@ GET    /scim/v2/Groups                               groups.read     -  # issue 
 GET    /scim/v2/Groups/{id}                          groups.read     -  # issue #48: read
 GET    /scim/v2/Users                                groups.read     -  # issue #48
 GET    /scim/v2/Users/{id}                           groups.read     -  # issue #48
+GET    /api/groups/loaders                           groups.read     -  # issue #53: the loaders whose folder the caller may view (stem_view)
+POST   /api/groups/loaders                           groups.loader.admin STEP_UP_POLICY  # issue #53: stem_admin on the folder; a SQL loader needs a second approver
+GET    /api/groups/loader-tasks                      groups.read     -  # issue #53: held runs (loader_held), for stem_admin on the folder
+GET    /api/groups/loaders/{id}                      groups.read     -  # issue #53: stem_view (the definition: stem_admin)
+PATCH  /api/groups/loaders/{id}                      groups.loader.admin STEP_UP_POLICY  # issue #53: stem_admin; a SQL loader needs a second approver
+POST   /api/groups/loaders/{id}/run                  groups.loader.admin -  # issue #53: stem_admin
+GET    /api/groups/loaders/{id}/runs                 groups.read     -  # issue #53: stem_view
+GET    /api/groups/loaders/{id}/runs/{run_id}        groups.read     -  # issue #53: stem_admin
+POST   /api/groups/loaders/{id}/runs/{run_id}/approve groups.loader.admin STEP_UP_POLICY  # issue #53: stem_admin
+POST   /api/groups/loaders/{id}/runs/{run_id}/reject groups.loader.admin STEP_UP_POLICY  # issue #53: stem_admin
+GET    /api/groups/loaders/{id}/unresolved           groups.read     -  # issue #53: stem_admin
 GET    /api/auth/session                             auth.self       -
 POST   /api/auth/logout                              auth.self       -
 GET    /api/auth/sessions                            auth.self       -

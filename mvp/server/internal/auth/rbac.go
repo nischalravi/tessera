@@ -81,6 +81,12 @@ const (
 	PermGroupsRead  Permission = "groups.read"
 	PermGroupsWrite Permission = "groups.write"
 	PermGroupsAdmin Permission = "groups.admin"
+	// groups.loader.admin configures and runs group loaders and decides their
+	// held runs (issue #53, GR-10; design groups-grouper-parity.md §9.1): the
+	// lesson of Grouper GRP-6311, where non-admins could configure loader jobs.
+	// It is tenant_admin and policy_admin; the loader's folder privilege
+	// (stem_admin) is then asked in the handler like every group route.
+	PermGroupsLoaderAdmin Permission = "groups.loader.admin"
 )
 
 // rolePermissions is the static role -> permission map (Cedar-ready, §12.1).
@@ -93,10 +99,11 @@ var rolePermissions = map[Role][]Permission{
 	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead, PermGroupsRead},
 	RolePolicyAdmin: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
 		PermReviewsDecide, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
-		PermIdentitiesCorrelate, PermIdentitiesMerge, PermIdentitiesContain, PermGroupsRead, PermGroupsWrite},
+		PermIdentitiesCorrelate, PermIdentitiesMerge, PermIdentitiesContain, PermGroupsRead, PermGroupsWrite,
+		PermGroupsLoaderAdmin},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
-		PermConnectionsActivate, PermGroupsAdmin, PermGroupsRead, PermGroupsWrite},
+		PermConnectionsActivate, PermGroupsAdmin, PermGroupsRead, PermGroupsWrite, PermGroupsLoaderAdmin},
 	RoleBreakGlass: {PermAdminRead, PermBreakGlassRecover},
 }
 
@@ -180,7 +187,7 @@ var scopePermissions = map[Scope][]Permission{
 	ScopeRead: {PermGraphRead, PermConnectionsRead, PermGroupsRead},
 	ScopeWrite: {PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage, PermReviewsDecide,
 		PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
-		PermConnectionsManage, PermConnectionsActivate, PermGroupsAdmin, PermGroupsWrite},
+		PermConnectionsManage, PermConnectionsActivate, PermGroupsAdmin, PermGroupsWrite, PermGroupsLoaderAdmin},
 	ScopeAudit: {PermAuditRead, PermAuditVerify},
 	ScopeAdmin: {PermAdminRead, PermAdminChangeReq, PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev,
 		PermBreakGlassRecover},

@@ -102,6 +102,8 @@ var tables = []string{
 	"grp_privileges", "grp_priv_settings",
 	// groups REST API idempotency keys (schema/0286_groups_api.sql)
 	"grp_idempotency",
+	// group loaders, their runs and unresolved subjects (schema/0293_group_loaders.sql)
+	"grp_loaders", "grp_loader_runs", "grp_loader_unresolved",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was

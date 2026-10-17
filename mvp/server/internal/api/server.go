@@ -26,6 +26,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/loaders"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
@@ -106,6 +107,9 @@ type Config struct {
 	// GroupsEngine is the native groups' membership engine, whose synchronous
 	// budget is TESSERA_GROUPS_SYNC_BUDGET. Nil: the defaults.
 	GroupsEngine *engine.Engine
+	// LoaderDataDir is TESSERA_LOADER_DATA_DIR: the directory SQL and CSV file
+	// sources of group loaders must be under. Empty: file sources are off.
+	LoaderDataDir string
 	// AuditAppend overrides how the audit middleware writes http.request
 	// events (tests inject failures). Nil: the store.
 	AuditAppend func(ctx context.Context, t tenancy.ID, e store.AuditEvent) error
@@ -128,6 +132,8 @@ type Server struct {
 	containment *containment.Service
 	// admin is the admin-change workflow (design §15); never nil.
 	admin *admin.Service
+	// loaders runs the group loaders (issue #53); never nil.
+	loaders *loaders.Service
 }
 
 // New builds a server.
@@ -171,6 +177,8 @@ func New(cfg Config) *Server {
 		limits: newLimiters(cfg.RateLimits)}
 	s.admin = &admin.Service{DB: cfg.Store, Clock: func() time.Time { return s.clock() }, Sealer: cfg.Sealer,
 		Prod: cfg.Env == "prod", Log: cfg.Logger}
+	s.loaders = &loaders.Service{DB: cfg.Store, Engine: cfg.GroupsEngine, Clock: func() time.Time { return s.clock() },
+		Sealer: cfg.Sealer, HTTP: cfg.OutboundHTTP, DataDir: cfg.LoaderDataDir, Log: cfg.Logger}
 	if cfg.OutboundHTTP != nil {
 		rp, err := oidcrp.New(oidcrp.Config{HTTP: cfg.OutboundHTTP, Now: func() time.Time { return s.clock() }})
 		if err != nil {
@@ -187,6 +195,7 @@ func New(cfg Config) *Server {
 	s.registerAuditRoutes()
 	s.registerCorrelationRoutes()
 	s.registerContainmentRoutes()
+	s.registerGroupsLoaderRoutes() // before /api/groups/{id}, which would also match "loaders"
 	s.registerGroupsFolderRoutes()
 	s.registerGroupsPrivilegeRoutes()
 	s.registerGroupsMemberRoutes()

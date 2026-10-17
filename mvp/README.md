@@ -559,6 +559,86 @@ names, like the routes of GR-1 to GR-4; `TestGroupsRoutesRequirePrivilege` and t
   `internal/groups/api` (filter, selection, key store and expiry, OpenAPI), `internal/store`
   (`TestIsolation_GroupsAPIStatements`, `TestSavepoint`, `TestIsolation_IdempotencyTable`).
 
+#### Group loaders (GR-10, issue #53)
+
+Design `docs/design/groups-grouper-parity.md` §9.1. Schema `0293_group_loaders.sql` (the design's
+`0105`; `0280` to `0292` are taken or reserved): `grp_loaders`, `grp_loader_runs`,
+`grp_loader_unresolved`, tenant-scoped with cross-tenant guard triggers. Code:
+`server/internal/groups/loaders` (the sources, failsafes, plans, impact, scheduler), the loader
+operations in `server/internal/groups/model/loader.go`, the handlers in
+`server/internal/api/groups_loaders.go` and the two-person change in
+`server/internal/admin/change_loader.go`. A loader is a connector job: a `GroupSource` reads a
+source, the subjects it names are resolved to identities, and the groups' loader-owned members are
+made to match, in one transaction with the run row, the audit event and the membership events
+(cause `loader`). A group a loader creates has `managed_by='loader'`: every members route, a
+composite conversion, a rename and a move answer `409 group_loader_managed` (the exception is a
+`_allow_manual` or `_deny_manual` group). A loader never takes over a group by name: a name that is
+taken is a failed run (`loader_name_taken`).
+
+| Type | Source |
+|---|---|
+| `sql_simple` | one group from one query returning `subject_id` (and `subject_source`) |
+| `sql_group_list` | many groups from `group_name`, `subject_id`; `groups_query` adds `display_name`, `description`; `incremental_query` returns `group_name`, `subject_id`, `op` (`add` or `remove`), `seq` for the rows after `@cursor` |
+| `csv` | a header-mapped file under the data directory, or an https URL (the loader's secret is its bearer token); the file's SHA-256 is recorded on the run |
+| `connector_groups` | the groups of a connection (by its `system`) with their member accounts mapped to identities |
+| `attribute` | one group per value of an identity attribute (`department`, `title`, `type`, `status`, `source`) |
+| `recent_memberships` | people who were effective members of a group in the last N days and are not now (`include_current` adds the current ones), read from the point-in-time history |
+
+`ldap_*`, `sftp_csv` and `hris_sis_feed` are designed but not built: they need an LDAP and an SSH
+library, which GR-10 did not add (`422 loader_type_unavailable`).
+
+- **Data directory.** SQL and CSV files must be under `TESSERA_LOADER_DATA_DIR` (absolute; unset turns
+  file sources off; refused if it contains the database). A name is validated at save time (no `..`,
+  no absolute path) and again at run time (symbolic links that leave the directory are refused). A SQL
+  source is a SQLite file: the query must be one `SELECT` or `WITH` (first keyword parsed; no `;`,
+  comments, `ATTACH`, `PRAGMA`, `INSERT`, `UPDATE`, `DELETE`, ...), runs on a read-only connection
+  (`mode=ro`, `query_only`) with a 120 s timeout and a 1,000,000 row limit, and exceeding the limit is
+  an error, never a cut-off. Other databases need a driver this PR did not add.
+- **Failsafes** (per loader, defaults filled in at save): removed from one group 20 % and 500;
+  `min_group_size` unset; groups emptied or deleted 5 %; unresolved subjects 2 %. A run that breaks
+  one is `held`: nothing is applied, the loader is `held` (no further runs; a preview is still
+  allowed), and the run keeps its plan and the downstream **impact** (people added and removed, the
+  groups, the parent and policy groups that contain a changed group, provisioned targets (none until
+  GR-11), and how many of the people who would be removed used some access in the last 30 days: usage is
+  per permission, not per native group, so this is an upper bound). The run is an Inbox task of type
+  `loader_held` (`GET /api/groups/loader-tasks`). **Approve applies the plan as it was computed**, not
+  as the source reads by then; reject discards it. Both are audited with `loader.run.approved` or
+  `loader.run.rejected` events. A rejected incremental run still moves the cursor on (the next full run
+  corrects the groups), otherwise the same changes would be held again.
+- **Unresolved subjects** (`GET .../unresolved`): a subject matches an identity exactly by the source it
+  names (`identity` external id, `email`, `tessera_id`, a connected account's system, or the source on
+  the identity), following merges; anything else is listed with the groups that named it, counted in
+  the failsafe, retried on every run, and leaves the list only when it resolves or the source stops
+  naming it.
+- **Schedules.** A five-field cron in UTC (or `@hourly`, `@daily`, `@weekly`), run by the scheduler
+  started in `cmd/tessera` (every 30 s it runs what is due; a failed run waits for the next firing).
+  A run started through the API is bounded by the request's 30 s handler timeout (a source that takes
+  longer is for the scheduler). `incremental_secs` (30 to 86400) runs the incremental feed after the
+  first full load. The job status
+  (state, next run, last run, lag) is part of the loader's answer: there is no `/api/admin/jobs` yet.
+- **Who may configure.** Create and change need the platform permission `groups.loader.admin`
+  (`tenant_admin`, `policy_admin`), a fresh phishing-resistant step-up (`STEP_UP_POLICY`) and `stem_admin`
+  on the target folder. A **SQL loader** is not saved by that request: it answers `202` with a
+  `groups.loader.save` admin change request (internal/admin) that another admin approves (so a tenant
+  needs two active admins); turning a loader off needs no approval. Run and preview need
+  `groups.loader.admin` and `stem_admin`; reading needs `stem_view` (the definition, the runs' detail and
+  the unresolved subjects need `stem_admin`). The credential of a CSV URL is sealed with `internal/seal`
+  (bound to the tenant and the loader), is never returned and is in no audit event or run.
+- Routes: `GET|POST /api/groups/loaders`, `GET|PATCH /api/groups/loaders/{id}`,
+  `POST .../{id}/run` (`{kind: full|incremental|preview}`; a failed run answers `502
+  loader_run_failed` with the run), `GET .../{id}/runs[/{run_id}]`, `POST .../runs/{run_id}/approve`
+  and `/reject`, `GET .../{id}/unresolved`, `GET /api/groups/loader-tasks`. There is no delete: turn a
+  loader off. Audit events `groups.loader.created|updated`, `groups.loader.run.applied|held|failed|
+  previewed|approved|rejected`.
+- Migration note: `admin_change_requests.type` gained `groups.loader.save` in `0008_admin_changes.sql`
+  (a database created before this change must be reseeded).
+- Tests: `internal/groups/loaders` (`TestFailsafe_HoldsAndShowsImpact`, `TestFailsafe_Rules`,
+  `TestUnresolved_NeverDropped`, `TestSQLLoader_RejectsWrites`, `TestRecentMemberships_FromPIT`,
+  `TestLoader_*`, `TestSQL_*`, `TestCSV_*`, `TestConnectorGroups_AndAttribute`, `TestRunner_RunsDueLoaders`),
+  `internal/api` (`TestLoadersAPI_*`, `TestGroupsRoutesRequirePrivilege`), `internal/admin`
+  (`TestLoaderSave_*`), `internal/store` (`TestIsolation_GroupLoader*`, `TestRunExtQuery`),
+  `internal/config` (`TestLoaderDataDir`).
+
 ### Audit ledger
 
 Every tenant has an append-only, hash-chained audit log (`audit_events`; design
