@@ -50,9 +50,16 @@ test("a write that carries a secret is not kept", async () => {
 test("a secret write drops an earlier pending action, so the resume never offers the wrong one", async () => {
   await assert.rejects(api.api("/jit/requests/12/approve", {}));
   assert.equal(mem.size, 1);
-  await assert.rejects(api.api("/connections/c1/credential", { reference: "vault://x" }, "PUT", { noResume: true }));
+  await assert.rejects(api.apiNoResume("/connections/c1/credential", { reference: "vault://x" }, "PUT"));
   assert.equal(mem.size, 0);
   assert.equal(api.takePendingAction(), null);
+});
+
+test("a change request that carries a client secret is not kept; one without a secret is", async () => {
+  await assert.rejects(api.adminChanges.submit("idp_connection.create", { name: "okta" }, "s3cr3t-value"));
+  assert.equal(mem.size, 0);
+  await assert.rejects(api.adminChanges.submit("role.grant", { role: "auditor" }));
+  assert.equal(mem.size, 1);
 });
 
 test("a read refused for step-up keeps nothing", async () => {

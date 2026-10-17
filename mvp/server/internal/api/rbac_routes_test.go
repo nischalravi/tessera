@@ -191,14 +191,32 @@ GET    /api/auth/saml/{connection_id}/metadata       public
 POST   /api/auth/saml/{connection_id}/acs            public
 GET    /api/auth/oauth2/{connection_id}/callback     public
 GET    /t/{slug}/bootstrap                           public
+GET    /api/admin/users                              admin.read      -  # issue #16
+POST   /api/admin/users/{user_id}/disable            admin.users.disable STEP_UP_ADMIN  # issue #16
+GET    /api/admin/idp-connections                    admin.read      -  # issue #16
+POST   /api/admin/idp-connections/{connection_id}/activate admin.change.request STEP_UP_ADMIN  # issue #16
+GET    /api/admin/change-requests                    admin.read      -  # issue #16
+POST   /api/admin/change-requests                    admin.change.request STEP_UP_ADMIN  # issue #16
+GET    /api/admin/change-requests/{change_id}        admin.read      -  # issue #16
+POST   /api/admin/change-requests/{change_id}/approve admin.change.approve STEP_UP_ADMIN  # issue #16
+POST   /api/admin/change-requests/{change_id}/reject admin.change.approve -  # issue #16
+POST   /api/admin/change-requests/{change_id}/cancel admin.change.request -  # issue #16
+POST   /api/admin/change-requests/{change_id}/apply  admin.change.approve STEP_UP_ADMIN  # issue #16
+GET    /api/admin/notifications                      admin.read      -  # issue #16
+GET    /api/admin/recovery                           admin.read      -  # issue #16
+POST   /api/admin/recovery/{recovery_id}/cancel      admin.change.request -  # issue #16
+GET    /api/admin/api-clients                        admin.read      -  # issue #16
 `
 
 type designRoute struct {
 	method, pattern string
 	public          bool
 	perm            auth.Permission
-	stepUp          bool
+	stepUp          string // "", STEP_UP_POLICY or STEP_UP_ADMIN
 }
+
+// stepUps maps the table's step-up column to the requirement it names.
+var stepUps = map[string]*auth.AuthnRequirement{"": nil, "STEP_UP_POLICY": &auth.StepUpPolicy, "STEP_UP_ADMIN": &auth.StepUpAdmin}
 
 func parseDesignRoutes(t *testing.T) []designRoute {
 	t.Helper()
@@ -215,7 +233,13 @@ func parseDesignRoutes(t *testing.T) []designRoute {
 			if len(f) < 4 {
 				t.Fatalf("bad table line %q", line)
 			}
-			r.perm, r.stepUp = auth.Permission(f[2]), f[3] == "STEP_UP_POLICY"
+			r.perm = auth.Permission(f[2])
+			if strings.HasPrefix(f[3], "STEP_UP_") {
+				r.stepUp = f[3]
+			}
+			if _, ok := stepUps[r.stepUp]; !ok {
+				t.Fatalf("unknown step-up %q in table line %q", f[3], line)
+			}
 		}
 		out = append(out, r)
 	}
@@ -244,8 +268,8 @@ func TestRoutesMatchDesignTable(t *testing.T) {
 		if rt.Public != d.public || rt.Perm != d.perm {
 			t.Errorf("%s: public=%t perm=%q, design public=%t perm=%q", k, rt.Public, rt.Perm, d.public, d.perm)
 		}
-		if (rt.Authn != nil) != d.stepUp || (rt.Authn != nil && *rt.Authn != auth.StepUpPolicy) {
-			t.Errorf("%s: step-up %v, design %t", k, rt.Authn, d.stepUp)
+		if want := stepUps[d.stepUp]; (rt.Authn == nil) != (want == nil) || (want != nil && *rt.Authn != *want) {
+			t.Errorf("%s: step-up %v, design %q", k, rt.Authn, d.stepUp)
 		}
 	}
 	for k := range table {

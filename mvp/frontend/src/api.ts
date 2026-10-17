@@ -143,11 +143,21 @@ function errorMessage(status: number, j: any): string {
   return j ? JSON.stringify(j.detail ?? j) : `${status}`;
 }
 
-/** noResume: never keep this request for resuming after a step-up (it carries a secret). */
-export interface ApiOptions { noResume?: boolean }
-
-export async function api<T = any>(path: string, body?: unknown, method?: string, opts?: ApiOptions): Promise<T> {
+/** Call the API. A write refused for step-up is kept so it can resume after re-authentication. */
+export function api<T = any>(path: string, body?: unknown, method?: string): Promise<T> {
   const m = method ?? (body !== undefined ? "POST" : "GET");
+  return send<T>(path, body, m, () => savePendingAction({ method: m, path, body, label: actionLabel(m, path), at: Date.now() }));
+}
+
+/**
+ * Call the API with a body that carries a secret. It is never kept for resuming after a step-up: the body
+ * never reaches browser storage, and an earlier pending action is dropped so the resume never offers it.
+ */
+export function apiNoResume<T = any>(path: string, body: unknown, method = "POST"): Promise<T> {
+  return send<T>(path, body, method, clearPendingAction);
+}
+
+async function send<T>(path: string, body: unknown, m: string, onStepUp: () => void): Promise<T> {
   const headers: Record<string, string> = {};
   if (body !== undefined) headers["content-type"] = "application/json";
   if (m !== "GET" && m !== "HEAD" && csrfToken) headers["x-tessera-csrf"] = csrfToken;
@@ -176,7 +186,7 @@ export async function api<T = any>(path: string, body?: unknown, method?: string
     }
     if (res.status === 401 && j?.error === "step_up_required") {
       // remember what was being done (the request only, never a token) so it can resume after the step-up
-      if (m !== "GET" && m !== "HEAD") savePendingAction({ method: m, path, body, label: actionLabel(m, path), at: Date.now() }, opts?.noResume);
+      if (m !== "GET" && m !== "HEAD") onStepUp();
       window.dispatchEvent(new CustomEvent(STEP_UP, { detail: j }));
     }
     throw new ApiError(j ? errorMessage(res.status, j) : `${res.status} ${res.statusText}`, res.status, j);
@@ -211,11 +221,11 @@ export function carriesSecret(v: unknown, depth = 0): boolean {
   return Object.entries(v as Record<string, unknown>).some(([k, x]) => SECRET_KEY.test(k) || carriesSecret(x, depth + 1));
 }
 
-function savePendingAction(a: PendingAction, noResume = false): void {
+function savePendingAction(a: PendingAction): void {
   // A request that carries a secret is never written to browser storage: after the step-up the user
   // enters it again, as when storage is unavailable. An earlier pending action is dropped too, so the
   // resume prompt never offers a different action than the one just refused.
-  if (noResume || carriesSecret(a.body)) {
+  if (carriesSecret(a.body)) {
     clearPendingAction();
     return;
   }
@@ -1523,7 +1533,7 @@ export const readiness = {
   create: (body: { name: string; connector_type: string; system?: string; config?: ConnConfig }) => api<Connection>("/connections", body),
   patchConfig: (id: string, patch: Partial<ConnConfig> | Record<string, unknown>) =>
     api<{ connection: Connection; new_revision: boolean; invalidated: string[]; fields: { field: string; msg: string }[] }>(`/connections/${id}/config`, patch, "PATCH"),
-  setCredential: (id: string, body: { secret?: string; reference?: string }) => api<RevisionView["credential"]>(`/connections/${id}/credential`, body, "PUT", { noResume: true }),
+  setCredential: (id: string, body: { secret?: string; reference?: string }) => apiNoResume<RevisionView["credential"]>(`/connections/${id}/credential`, body, "PUT"),
   attest: (id: string, item: string, note: string) => api<Checklist>(`/connections/${id}/checklist/${item}/attest`, { note }),
   skip: (id: string, item: string, reason: string, review_by?: string) =>
     api<Checklist>(`/connections/${id}/checklist/${item}/skip`, review_by ? { reason, review_by } : { reason }),
@@ -1538,3 +1548,71 @@ export const readiness = {
   rerun: (reconcile = false) => api<{ results: { connection_id: string; name: string; validation_run_id: string | null; dry_run_id: string | null; skipped?: string }[]; dashboard: DeploymentHealth }>(
     "/insights/deployment-health/rerun", { reconcile }),
 };
+
+// ------------------------------------------------------------ admin changes (design §15, §16.1)
+
+export type ChangeStatus = "pending_approval" | "cooling_off" | "applied" | "rejected" | "cancelled" | "expired" | "failed";
+
+/** The change types of design §15.2 that the API accepts. */
+export type ChangeType =
+  | "role.grant" | "role.revoke" | "idp_connection.create" | "idp_connection.update_trust" | "idp_connection.update_cosmetic"
+  | "idp_connection.disable" | "tenant.settings.update" | "tenant.security_contacts.update";
+
+interface AdminPersonRef { id: string; display_name: string }
+
+export interface AdminChange {
+  id: string; type: ChangeType; summary: string; status: ChangeStatus; target_id: string | null; two_person: boolean;
+  cooling_off_seconds: number; requested_by: AdminPersonRef; requested_at: string; expires_at: string; approved_by: AdminPersonRef | null;
+  approved_at: string | null; effective_at: string | null; decided_by: AdminPersonRef | null; decided_at: string | null;
+  applied_at: string | null; failure: string | null; test_login_at: string | null; payload_hash: string;
+  payload: Record<string, unknown> | null;
+  notifications?: AdminNotification[];
+}
+
+export interface AdminNotification {
+  id: string; kind: string; recipient_type: "admin" | "contact" | "operator"; recipient: string; subject: string;
+  change_request_id: string | null; recovery_id: string | null; created_at: string; delivered_at: string | null;
+}
+
+export interface AdminUser {
+  id: string; email: string | null; display_name: string; status: "active" | "disabled"; is_break_glass: boolean;
+  roles: { role: string; source: string; expires_at: string | null; change_request_id: string | null }[];
+  created_at: string; last_login_at: string | null; disabled_at: string | null; disabled_reason: string | null;
+}
+
+export interface AdminIdpConnection {
+  id: string; name: string; protocol: string; profile: string; status: "pending" | "active" | "disabled"; is_default: boolean;
+  verified_domains: string[]; issuer: string | null; assume_phishing_resistant: boolean; jit_provisioning: boolean;
+  default_role: string; created_at: string; updated_at: string; last_change_request_id: string | null;
+  activation: { change_request_id: string; requested_by: string; test_login_at: string | null; ready: boolean } | null;
+}
+
+export interface AdminRecovery {
+  id: string; status: "pending" | "cancelled" | "completed"; ticket: string; operator: string; co_operator: string;
+  not_before: string; created_at: string; cancelled_at: string | null; completed_at: string | null;
+}
+
+export interface AdminApiClients { available: boolean; clients: { id: string; name: string }[]; detail: string }
+
+/** Admin-change workflow calls. Approving needs the hash of the payload the admin reviewed. */
+export const adminChanges = {
+  submit: (type: ChangeType, payload: Record<string, unknown>, client_secret?: string) =>
+    client_secret
+      ? apiNoResume<AdminChange>("/admin/change-requests", { type, payload, client_secret })
+      : api<AdminChange>("/admin/change-requests", { type, payload }),
+  approve: (id: string, payload_hash: string) => api<AdminChange>(`/admin/change-requests/${id}/approve`, { payload_hash }),
+  reject: (id: string) => api<AdminChange>(`/admin/change-requests/${id}/reject`, {}),
+  cancel: (id: string) => api<AdminChange>(`/admin/change-requests/${id}/cancel`, {}),
+  apply: (id: string) => api<AdminChange>(`/admin/change-requests/${id}/apply`, {}),
+  activateConnection: (id: string) => api<{ id: string; status: string }>(`/admin/idp-connections/${id}/activate`, {}),
+  disableUser: (id: string, reason: string) => api<{ id: string; status: string }>(`/admin/users/${id}/disable`, { reason }),
+  cancelRecovery: (id: string) => api<AdminRecovery>(`/admin/recovery/${id}/cancel`, {}),
+};
+
+/** Seconds as "24 h", "5 min" for the cooling-off column. */
+export function fmtSpan(seconds: number): string {
+  if (seconds <= 0) return "none";
+  if (seconds % 3600 === 0) return `${seconds / 3600} h`;
+  if (seconds % 60 === 0) return `${seconds / 60} min`;
+  return `${seconds} s`;
+}
