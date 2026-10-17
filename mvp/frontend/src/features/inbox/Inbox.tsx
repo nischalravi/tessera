@@ -64,7 +64,7 @@ function JitDetail({ r }: { r: JitRequest }) {
         <dt>Access</dt><dd><span className="sys">{r.group.system}:{r.group.name}</span> {r.group.privileged && <Badge tone="warning">Privileged</Badge>}</dd>
         <dt>Duration</dt><dd>{r.duration_hours} hours, removed automatically</dd>
         <dt>Account</dt><dd className="sys">{r.account}</dd>
-        <dt>Justification</dt><dd>{r.justification}</dd>
+        <dt>Justification</dt><dd className="wrap-anywhere">{r.justification}</dd>
         <dt>Requested</dt><dd>{fmtDate(r.requested_at)}</dd>
       </dl>
       <div>
@@ -173,7 +173,7 @@ function Detail({ it }: { it: InboxItem }) {
             <dt>For</dt><dd>{it.req.beneficiaries.map((b) => b.name).join(", ")}</dd>
             <dt>Items</dt><dd>{it.req.items.map((i) => <div key={i.name} className="sys small">{i.name}</div>)}</dd>
             <dt>Duration</dt><dd>{it.req.durationHours ? `${it.req.durationHours} hours` : "Permanent until removed or reviewed"}</dd>
-            <dt>Justification</dt><dd>{it.req.justification || <span className="faint">None given</span>}</dd>
+            <dt>Justification</dt><dd className="wrap-anywhere">{it.req.justification ||<span className="faint">None given</span>}</dd>
           </dl>
         )}
         {it.kind === "review" && <ReviewDetail it={it} />}
