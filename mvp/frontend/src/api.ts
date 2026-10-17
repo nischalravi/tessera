@@ -1461,12 +1461,12 @@ export type ChangeType =
   | "role.grant" | "role.revoke" | "idp_connection.create" | "idp_connection.update_trust" | "idp_connection.update_cosmetic"
   | "idp_connection.disable" | "tenant.settings.update" | "tenant.security_contacts.update";
 
-interface PersonRef { id: string; display_name: string }
+interface AdminPersonRef { id: string; display_name: string }
 
 export interface AdminChange {
   id: string; type: ChangeType; summary: string; status: ChangeStatus; target_id: string | null; two_person: boolean;
-  cooling_off_seconds: number; requested_by: PersonRef; requested_at: string; expires_at: string; approved_by: PersonRef | null;
-  approved_at: string | null; effective_at: string | null; decided_by: PersonRef | null; decided_at: string | null;
+  cooling_off_seconds: number; requested_by: AdminPersonRef; requested_at: string; expires_at: string; approved_by: AdminPersonRef | null;
+  approved_at: string | null; effective_at: string | null; decided_by: AdminPersonRef | null; decided_at: string | null;
   applied_at: string | null; failure: string | null; test_login_at: string | null; payload_hash: string;
   payload: Record<string, unknown> | null;
   notifications?: AdminNotification[];
