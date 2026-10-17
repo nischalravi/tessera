@@ -24,7 +24,7 @@ const (
 
 func httpClient(t *testing.T) *http.Client {
 	t.Helper()
-	c, err := safehttp.New(safehttp.Options{Env: config.Dev, AllowLoopback: true})
+	c, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Dev, AllowLoopback: true})
 	if err != nil {
 		t.Fatal(err)
 	}

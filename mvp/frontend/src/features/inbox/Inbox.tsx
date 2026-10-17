@@ -66,7 +66,7 @@ function JitDetail({ r }: { r: JitRequest }) {
         <dt>Access</dt><dd><span className="sys">{r.group.system}:{r.group.name}</span> {r.group.privileged && <Badge tone="warning">Privileged</Badge>}</dd>
         <dt>Duration</dt><dd>{r.duration_hours} hours, removed automatically</dd>
         <dt>Account</dt><dd className="sys">{r.account}</dd>
-        <dt>Justification</dt><dd>{r.justification}</dd>
+        <dt>Justification</dt><dd className="wrap-anywhere">{r.justification}</dd>
         <dt>Requested</dt><dd>{fmtDate(r.requested_at)}</dd>
       </dl>
       <div>
@@ -177,7 +177,7 @@ function Detail({ it }: { it: InboxItem }) {
               <dt>Account</dt><dd className="sys small">{it.item.line.account.system}:{it.item.line.account.username}</dd>
               <dt>Requested by</dt><dd>{it.item.line.requested_by.display_name}</dd>
               <dt>Duration</dt><dd>{it.item.line.duration_hours ? `${it.item.line.duration_hours} hours` : "Until removed"}</dd>
-              <dt>Justification</dt><dd>{it.item.line.justification}</dd>
+              <dt>Justification</dt><dd className="wrap-anywhere">{it.item.line.justification}</dd>
               {it.item.on_behalf_of && <><dt>You decide for</dt><dd>{it.item.on_behalf_of.display_name} (delegation)</dd></>}
             </dl>
             <h3>Approval stages</h3>

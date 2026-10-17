@@ -132,8 +132,9 @@ var legacyTables = []string{"audit_log"}
 // Writes are serialized through one mutex so SQLite never sees two concurrent
 // writers; read-only tenant transactions (ReadTenant) run concurrently (WAL).
 type DB struct {
-	sql *sql.DB
-	mu  sync.Mutex
+	sql   *sql.DB
+	mu    sync.Mutex
+	stmts stmtCache
 }
 
 // Open opens (creating if needed) the database at path and applies the schema.
@@ -172,7 +173,10 @@ func open(ctx context.Context, path string, fresh bool) (*DB, error) {
 }
 
 // Close closes the database.
-func (d *DB) Close() error { return d.sql.Close() }
+func (d *DB) Close() error {
+	d.stmts.close()
+	return d.sql.Close()
+}
 
 // Checkpoint truncates the write-ahead log into the main database file, so the
 // file can be copied on its own (test fixtures).
@@ -276,7 +280,7 @@ func (d *DB) inTenant(ctx context.Context, t tenancy.ID, readOnly bool, fn func(
 	if err != nil {
 		return fmt.Errorf("store: begin: %w", err)
 	}
-	ttx := &TenantTx{ctx: ctx, tx: sqltx, tenant: t, readOnly: readOnly}
+	ttx := &TenantTx{ctx: ctx, db: d, tx: sqltx, tenant: t, readOnly: readOnly}
 	defer func() {
 		if p := recover(); p != nil {
 			_ = sqltx.Rollback()
@@ -332,7 +336,7 @@ func (d *DB) inSystemLocked(ctx context.Context, reason string, fn func(*SystemT
 		}
 		err = sqltx.Commit()
 	}()
-	return fn(&SystemTx{ctx: ctx, tx: sqltx, reason: reason})
+	return fn(&SystemTx{ctx: ctx, db: d, tx: sqltx, reason: reason})
 }
 
 // ReadSystem runs fn in one read-only system transaction. It does not take
@@ -357,7 +361,7 @@ func (d *DB) ReadSystem(ctx context.Context, reason string, fn func(*SystemTx) e
 		}
 		err = sqltx.Commit()
 	}()
-	return fn(&SystemTx{ctx: ctx, tx: sqltx, reason: reason})
+	return fn(&SystemTx{ctx: ctx, db: d, tx: sqltx, reason: reason})
 }
 
 // ForEachActiveTenant lists the active tenants (not _platform) in a SystemTx,

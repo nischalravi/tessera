@@ -915,7 +915,7 @@ func TestReviews_LaunchReminderAndClose(t *testing.T) {
 	}
 	// a decided campaign is not reminded about
 	w.tx(func(c *store.TenantTx) error {
-		if err := c.DecideItem(w.f.B.IDs["item"], "keep", nil, clk.now(), store.UserRef{}); err != nil {
+		if _, err := c.DecideItem(w.f.B.IDs["item"], "keep", nil, clk.now(), store.UserRef{}); err != nil {
 			return err
 		}
 		return c.CompleteCampaign(camp)

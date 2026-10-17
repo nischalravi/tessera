@@ -318,6 +318,9 @@ func Load(getenv func(string) string) (*Config, error) {
 		if c.DevIdPURL != "" {
 			bad("TESSERA_DEV_IDP_URL must not be set with TESSERA_ENV=prod")
 		}
+		if c.FakeTarget {
+			bad("TESSERA_DEV_FAKE_TARGET must not be set with TESSERA_ENV=prod (the fake provisioning target accepts any change)")
+		}
 		// s3:// is the only off-host sink so far; a file:// anchor sits on
 		// the same host as the ledger it is meant to anchor.
 		switch {

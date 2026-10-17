@@ -92,6 +92,37 @@ func TestJITRejectsStandingDuplicate(t *testing.T) {
 	})
 }
 
+func TestJITRejectsDuplicatePending(t *testing.T) {
+	st, ids := testkit.Tiny(t)
+	now := testkit.Now
+	create := func() (*store.AccessRequest, error) {
+		var r *store.AccessRequest
+		var err error
+		testkit.Write(t, st, func(c *store.TenantTx) error {
+			r, err = jit.CreateRequest(c, now, ids["alice"], ids["group:aws:ProdAdmin"], jit.Hours{N: 1}, "x", store.UserRef{})
+			return nil
+		})
+		return r, err
+	}
+	first, err := create()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = create()
+	var je *jit.Error
+	if !errors.As(err, &je) || je.Kind != jit.KindConflict || je.Code != jit.CodeDuplicatePending {
+		t.Fatalf("second request: err = %#v, want a duplicate_pending_request conflict", err)
+	}
+	// once the first is decided the identity may ask again
+	testkit.Write(t, st, func(c *store.TenantTx) error {
+		_, err := jit.Deny(c, first.ID, store.UserRef{Display: "x"}, now)
+		return err
+	})
+	if _, err := create(); err != nil {
+		t.Errorf("request after a denial: %v", err)
+	}
+}
+
 func TestCreateRequestValidation(t *testing.T) {
 	st, ids := testkit.Tiny(t)
 	tests := []struct {
@@ -108,6 +139,9 @@ func TestCreateRequestValidation(t *testing.T) {
 		{"zero hours", "alice", "aws:ProdAdmin", 0, "x", "duration must be between 0 and 72 hours"},
 		{"too long", "alice", "aws:ProdAdmin", 72.5, "x", "duration must be between 0 and 72 hours"},
 		{"blank justification", "alice", "aws:ProdAdmin", 1, "   ", "justification is required"},
+		{"justification at the cap", "alice", "aws:ProdAdmin", 1, strings.Repeat("é", jit.MaxJustification), ""},
+		{"justification over the cap", "alice", "aws:ProdAdmin", 1, strings.Repeat("é", jit.MaxJustification+1),
+			"justification must be at most 1000 characters"},
 		{"no receiving account", "helper-bot", "aws:ProdAdmin", 1, "x", "identity has no active account that can receive this grant"},
 		{"maximum duration", "alice", "aws:ProdAdmin", 72, "x", ""},
 	}
@@ -179,11 +213,27 @@ func TestDecisionStateMachine(t *testing.T) {
 		}, "request is not active"},
 		{"approve unknown", func(c *store.TenantTx) (*store.AccessRequest, error) {
 			return jit.Approve(c, 999, store.UserRef{Display: "x"}, now, now)
-		}, "request is not pending"},
+		}, "request not found"},
+		{"deny unknown", func(c *store.TenantTx) (*store.AccessRequest, error) {
+			return jit.Deny(c, 999, store.UserRef{Display: "x"}, now)
+		}, "request not found"},
+		{"revoke unknown", func(c *store.TenantTx) (*store.AccessRequest, error) {
+			return jit.Revoke(c, 999, store.UserRef{Display: "x"}, now)
+		}, "request not found"},
 	}
 	for _, tc := range tests {
-		if err := try(tc.fn); err == nil || err.Error() != tc.want {
+		err := try(tc.fn)
+		if err == nil || err.Error() != tc.want {
 			t.Errorf("%s: err = %v, want %q", tc.name, err, tc.want)
+			continue
+		}
+		wantKind := jit.KindConflict
+		if tc.want == "request not found" {
+			wantKind = jit.KindNotFound
+		}
+		var je *jit.Error
+		if !errors.As(err, &je) || je.Kind != wantKind {
+			t.Errorf("%s: err = %#v, want kind %d", tc.name, err, wantKind)
 		}
 	}
 	active := newReq()
