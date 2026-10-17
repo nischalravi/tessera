@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -22,8 +23,31 @@ import (
 // MaxHours is the longest grant that can be requested.
 const MaxHours = 72
 
-// Error is a request the caller can fix (mapped to HTTP 400).
-type Error struct{ Msg string }
+// MaxJustification is the longest justification, in characters (runes).
+const MaxJustification = 1000
+
+// Kind classifies an Error for the API: invalid input (400), an unknown
+// record (404) or a state conflict on an existing record (409).
+type Kind int
+
+const (
+	KindInvalid Kind = iota
+	KindNotFound
+	KindConflict
+)
+
+// Stable codes of the errors that carry one.
+const (
+	CodeJustificationTooLong = "justification_too_long"
+	CodeDuplicatePending     = "duplicate_pending_request"
+)
+
+// Error is a refused request. Kind says how the API maps it (400 by default).
+type Error struct {
+	Msg  string
+	Kind Kind
+	Code string // stable machine code, empty when the message is all there is
+}
 
 func (e *Error) Error() string { return e.Msg }
 
@@ -32,7 +56,11 @@ func (e *Error) Error() string { return e.Msg }
 // access (separation of duties: nobody grants themselves access).
 var ErrSelfApproval = errors.New("jit: the requester cannot approve their own request")
 
-func jitErr(format string, args ...any) error { return &Error{fmt.Sprintf(format, args...)} }
+func jitErr(format string, args ...any) error { return &Error{Msg: fmt.Sprintf(format, args...)} }
+
+func notFound(msg string) error { return &Error{Msg: msg, Kind: KindNotFound} }
+
+func conflict(code, msg string) error { return &Error{Msg: msg, Kind: KindConflict, Code: code} }
 
 // Hours is a requested duration. Whole marks a value supplied as an integer
 // (the API's default of 4, or the seed's literals): the creation response and
@@ -113,6 +141,10 @@ func CreateRequest(c *store.TenantTx, now time.Time, identityID, groupID int64, 
 	if justification == "" {
 		return nil, jitErr("justification is required")
 	}
+	if utf8.RuneCountInString(justification) > MaxJustification {
+		return nil, &Error{Msg: fmt.Sprintf("justification must be at most %d characters", MaxJustification),
+			Code: CodeJustificationTooLong}
+	}
 	acct, err := AccountFor(c, identityID, g)
 	if err != nil {
 		return nil, err
@@ -124,9 +156,19 @@ func CreateRequest(c *store.TenantTx, now time.Time, identityID, groupID int64, 
 	if standing {
 		return nil, jitErr("%s already holds %s as a standing grant", ident.Name, g.Name)
 	}
+	dup, err := c.HasPendingRequest(identityID, g.ID)
+	if err != nil {
+		return nil, err
+	}
+	if dup {
+		return nil, errDuplicatePending(ident.Name, g.Name)
+	}
 	id, err := c.InsertRequest(&store.AccessRequest{IdentityID: identityID, AccountID: acct.ID, GroupID: g.ID,
 		Justification: justification, DurationHours: hours.N, Status: "pending", RequestedAt: now,
 		RequestedByUserID: userID(by)})
+	if errors.Is(err, store.ErrDuplicate) { // the partial unique index, should a check ever race
+		return nil, errDuplicatePending(ident.Name, g.Name)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -137,13 +179,20 @@ func CreateRequest(c *store.TenantTx, now time.Time, identityID, groupID int64, 
 	return c.Request(id)
 }
 
+func errDuplicatePending(identity, group string) error {
+	return conflict(CodeDuplicatePending, fmt.Sprintf("%s already has a pending request for %s", identity, group))
+}
+
 func pending(c *store.TenantTx, id int64) (*store.AccessRequest, error) {
 	r, err := getOrNil(c.Request(id))
 	if err != nil {
 		return nil, err
 	}
-	if r == nil || r.Status != "pending" {
-		return nil, jitErr("request is not pending")
+	if r == nil {
+		return nil, notFound("request not found")
+	}
+	if r.Status != "pending" {
+		return nil, conflict("", "request is not pending")
 	}
 	return r, nil
 }
@@ -237,8 +286,11 @@ func Revoke(c *store.TenantTx, requestID int64, by store.UserRef, now time.Time)
 	if err != nil {
 		return nil, err
 	}
-	if req == nil || req.Status != "approved" {
-		return nil, jitErr("request is not active")
+	if req == nil {
+		return nil, notFound("request not found")
+	}
+	if req.Status != "approved" {
+		return nil, conflict("", "request is not active")
 	}
 	if err := dropEdge(c, req); err != nil {
 		return nil, err

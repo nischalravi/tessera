@@ -97,7 +97,7 @@ server/
     safehttp/           SSRF-guarded outbound HTTP client (https only, address checks after DNS)
     ratelimit/          keyed token-bucket limiter with a bounded key set
     ojson/, timeutil/   ordered JSON + Python float repr; CPython-compatible time arithmetic
-    testkit/            shared test fixtures (tiny world through a real Connector, seeded demo DB)
+    testkit/            shared test fixtures (tiny world through a real Connector, seeded demo DB; each is seeded once per test binary and handed out as a private copy per test)
     devidp/             dev IdP: mock OIDC issuer, vendor emulation profiles, fault injection;
                         devidptest/ runs it in-process for tests. Never imported by the API.
   policies/*.yaml       policy-as-code (embedded in the binary; run.sh reads them from disk)
@@ -156,7 +156,9 @@ The routes are documented at `/api/readiness/openapi.json`.
 `POST /api/least-privilege/revoke {edge_id, dry_run}` · `GET /api/policies` · `GET /api/violations` ·
 `POST /api/simulate {remove_edge_ids, add_edges:[{src,dst,duration_hours?}], disable_account_ids}` ·
 `GET|POST /api/jit/requests` · `POST /api/jit/requests/{id}/approve|deny|revoke` ·
-`GET|POST /api/reviews/campaigns` · `POST /api/reviews/items/{id}/decision` ·
+`GET|POST /api/reviews/campaigns` (`name` 1-200 characters after trimming, `unused_days` 1-3650, else 422) ·
+`POST /api/reviews/items/{id}/decision` (a decision is final: repeating it is a 200 no-op, a different one is
+`409 review_item_decided` and an audited `review.decide.refused`) ·
 `GET|POST /api/hris/events` (422 for an unknown `identity_id`) · `GET /api/hris/events/{id}/plan` · `POST /api/hris/events/{id}/execute` ·
 `GET /api/jml/leaver-plan/{identity_id}` · `POST /api/identities/{id}/contain` (kill switch, see "Identity containment") ·
 `PUT /api/connections/{id}/containment-credential` · `GET /api/accounts[?system=]` ·

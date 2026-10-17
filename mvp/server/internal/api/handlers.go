@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
@@ -20,6 +21,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
+	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/reviews"
 	"github.com/nischalravi/tessera/mvp/server/internal/simulate"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -254,20 +256,54 @@ func (s *Server) health(_ http.ResponseWriter, _ *http.Request, _ *params) (any,
 	return ojson.Object{{Key: "status", Value: "ok"}, {Key: "time", Value: timeutil.ISO(s.clock())}}, nil
 }
 
-func (s *Server) listConnectors(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+// source is one entry of the tenant's source list: a legacy connector or a
+// live governed connection (readiness state active or degraded).
+type source struct{ system, name, typeName string }
+
+// sources is the single source of truth for what counts as a source or
+// application: the legacy connectors plus the governed connections that are
+// live. Draft, not-yet-active and retired connections are not listed. A
+// governed connection on a system a legacy connector already covers is not
+// listed twice. /api/connectors, the Applications list and page and the Home
+// source and connection counts all read this list.
+func (s *Server) sources(c *store.TenantTx) ([]source, error) {
 	conns, err := s.cfg.Connectors(s.clock())
 	if err != nil {
 		return nil, err
 	}
-	c := store.TxFrom(r.Context())
-	out := []ojson.Object{}
+	var out []source
+	seen := map[string]bool{}
 	for _, cn := range conns {
-		n, err := c.CountSystem(cn.System())
+		out = append(out, source{cn.System(), cn.DisplayName(), cn.TypeName()})
+		seen[cn.System()] = true
+	}
+	live, err := s.readiness.ActiveConnections(c)
+	if err != nil {
+		return nil, err
+	}
+	for _, ac := range live {
+		if !seen[ac.System()] {
+			out = append(out, source{ac.System(), ac.Name(), ac.ConnectorType()})
+			seen[ac.System()] = true
+		}
+	}
+	return out, nil
+}
+
+func (s *Server) listConnectors(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+	c := store.TxFrom(r.Context())
+	srcs, err := s.sources(c)
+	if err != nil {
+		return nil, err
+	}
+	out := []ojson.Object{}
+	for _, cn := range srcs {
+		n, err := c.CountSystem(cn.system)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, ojson.Object{{Key: "system", Value: cn.System()}, {Key: "name", Value: cn.DisplayName()},
-			{Key: "type", Value: cn.TypeName()}, {Key: "accounts", Value: n.Accounts}, {Key: "groups", Value: n.Groups},
+		out = append(out, ojson.Object{{Key: "system", Value: cn.system}, {Key: "name", Value: cn.name},
+			{Key: "type", Value: cn.typeName}, {Key: "accounts", Value: n.Accounts}, {Key: "groups", Value: n.Groups},
 			{Key: "resources", Value: n.Resources}, {Key: "permissions", Value: n.Permissions}})
 	}
 	return out, nil
@@ -1136,10 +1172,22 @@ var jitFields = []field{
 
 func asJitError(err error) error {
 	var je *jit.Error
-	if errors.As(err, &je) {
-		return errStatus(http.StatusBadRequest, je.Msg)
+	if !errors.As(err, &je) {
+		return err
 	}
-	return err
+	status := http.StatusBadRequest
+	switch {
+	case je.Kind == jit.KindNotFound:
+		status = http.StatusNotFound
+	case je.Kind == jit.KindConflict:
+		status = http.StatusConflict
+	case je.Code != "":
+		status = http.StatusUnprocessableEntity // a field-specific refusal, like badRequest
+	}
+	if je.Code != "" {
+		return &readiness.Error{Status: status, Code: je.Code, Msg: je.Msg}
+	}
+	return errStatus(status, je.Msg)
 }
 
 func (s *Server) jitCreate(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
@@ -1283,10 +1331,54 @@ var campaignFields = []field{
 	{name: "unused_days", kind: kInt, def: int64(60)},
 }
 
+// Campaign input bounds. The unused-days range matches readiness stale_days
+// (1 to 3650); the name cap matches maxFilterLen.
+const (
+	maxCampaignName       = 200
+	minCampaignUnusedDays = 1
+	maxCampaignUnusedDays = 3650
+)
+
+// checkCampaign applies the semantic rules the field kinds cannot express and
+// returns the trimmed name. Errors are pydantic-style items with field-specific
+// types, at loc ["body", field].
+func checkCampaign(body map[string]any) (string, int64, []verr) {
+	var errs []verr
+	raw := body["name"].(string)
+	name := strings.TrimSpace(raw)
+	switch n := utf8.RuneCountInString(name); {
+	case n == 0:
+		errs = append(errs, verr{Type: "string_too_short", Loc: []any{"body", "name"},
+			Msg: "String should have at least 1 character", Input: raw, Ctx: ojson.Object{{Key: "min_length", Value: 1}}})
+	case n > maxCampaignName:
+		errs = append(errs, verr{Type: "string_too_long", Loc: []any{"body", "name"},
+			Msg: fmt.Sprintf("String should have at most %d characters", maxCampaignName), Input: raw,
+			Ctx: ojson.Object{{Key: "max_length", Value: maxCampaignName}}})
+	}
+	days := body["unused_days"].(int64)
+	switch {
+	case days < minCampaignUnusedDays:
+		errs = append(errs, verr{Type: "greater_than_equal", Loc: []any{"body", "unused_days"},
+			Msg:   fmt.Sprintf("Input should be greater than or equal to %d", minCampaignUnusedDays),
+			Input: days, Ctx: ojson.Object{{Key: "ge", Value: minCampaignUnusedDays}}})
+	case days > maxCampaignUnusedDays:
+		errs = append(errs, verr{Type: "less_than_equal", Loc: []any{"body", "unused_days"},
+			Msg:   fmt.Sprintf("Input should be less than or equal to %d", maxCampaignUnusedDays),
+			Input: days, Ctx: ojson.Object{{Key: "le", Value: maxCampaignUnusedDays}}})
+	}
+	return name, days, errs
+}
+
 func (s *Server) createCampaign(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
 	body, berrs, err := bodyModel(r, campaignFields, true)
 	if err != nil {
 		return nil, err
+	}
+	name, days := "", int64(0)
+	if len(berrs) == 0 {
+		var cerrs []verr
+		name, days, cerrs = checkCampaign(body)
+		berrs = append(berrs, cerrs...)
 	}
 	if err := validated(p, berrs); err != nil {
 		return nil, err
@@ -1296,7 +1388,7 @@ func (s *Server) createCampaign(_ http.ResponseWriter, r *http.Request, p *param
 		return nil, err
 	}
 	c := store.TxFrom(r.Context())
-	id, err := reviews.GenerateCampaign(c, s.clock(), body["name"].(string), int(body["unused_days"].(int64)), pols)
+	id, err := reviews.GenerateCampaign(c, s.clock(), name, int(days), pols)
 	if err != nil {
 		return nil, err
 	}
@@ -1349,9 +1441,26 @@ func (s *Server) reviewDecide(_ http.ResponseWriter, r *http.Request, p *params)
 		comment = &v
 	}
 	it, err := reviews.Decide(store.TxFrom(r.Context()), s.clock(), id, body["decision"].(string), principal(r).User(), comment)
+	if errors.Is(err, reviews.ErrUnknownItem) {
+		return nil, errStatus(http.StatusNotFound, "unknown review item")
+	}
 	var re *reviews.Error
 	if errors.As(err, &re) {
 		return nil, errStatus(http.StatusBadRequest, re.Msg)
+	}
+	var de *reviews.DecidedError
+	if errors.As(err, &de) {
+		// nothing changed; the refusal itself is evidence of the control
+		// (returned as a body, not an error, so the audit event commits)
+		by := principal(r).User()
+		if err := store.TxFrom(r.Context()).Audit(s.clock(), by.Display, "review.decide.refused", ojson.Object{
+			{Key: "item_id", Value: de.ItemID}, {Key: "current", Value: de.Current},
+			{Key: "requested", Value: de.Requested}, {Key: "reason", Value: "review_item_decided"}}); err != nil {
+			return nil, err
+		}
+		return statusBody{http.StatusConflict, ojson.Object{{Key: "error", Value: "review_item_decided"},
+			{Key: "detail", Value: "This review item was already decided as " + de.Current + "; a decision is final."},
+			{Key: "decision", Value: de.Current}}}, nil
 	}
 	if err != nil {
 		return nil, err

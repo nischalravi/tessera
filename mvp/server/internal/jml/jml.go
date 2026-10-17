@@ -24,6 +24,13 @@ type Error struct{ Msg string }
 
 func (e *Error) Error() string { return e.Msg }
 
+// The two ExecuteEvent refusals the API maps apart from other caller errors:
+// an unknown event is a 404, an event that is already executed a 409.
+var (
+	ErrEventNotFound = &Error{"event not found"}
+	ErrEventExecuted = &Error{"event already executed"}
+)
+
 type sysXID struct{ system, xid string }
 
 var eng = []sysXID{{"okta", "everyone"}, {"okta", "engineering"}, {"github", "team/all-engineers"}}
@@ -743,10 +750,10 @@ func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.User
 		return nil, err
 	}
 	if ev == nil {
-		return nil, &Error{"unknown event"}
+		return nil, ErrEventNotFound
 	}
 	if ev.Status == "executed" {
-		return nil, &Error{"event already executed"}
+		return nil, ErrEventExecuted
 	}
 	if ev.Type == "joiner" {
 		if err := CheckJoiner(c, ev.Payload); err != nil {
