@@ -358,6 +358,48 @@ jitter (honouring `Retry-After`); every `List*` follows its token to the last pa
   signature and reports calls with no recording. It does not enforce IAM; these are collection
   tests only. Fixtures are synthetic (fake account ids).
 
+### AWS evaluator in the MVP (`/api/aws/*`)
+
+Issue #30 (design §11). Set `TESSERA_AWS_CATALOG_DIR` (the catalog directory above, with a compiled
+artifact; `TESSERA_AWS_CATALOG_VERSION` picks a version, default the newest). Without it the
+evaluator routes answer `503 aws_catalog_unavailable` and nothing else changes.
+
+| Route | Permission | |
+|---|---|---|
+| `GET /api/aws/can?principal=&action=&resource=&profile=&snapshot=` | `graph.read` | one decision with its trace and `explanation_id` |
+| `GET /api/aws/principals/{arn}/effective?service=&profile=&limit=&cursor=` | `graph.read` | what a principal can do, paged; a larger answer than 200,000 cells needs `service=` |
+| `GET /api/aws/resources/{arn}/who-can?action=&profile=` | `graph.read` | principals that can, with decisions |
+| `GET /api/aws/explanations/{id}` | `graph.read` | a trace by id (from the store, else the recent ones held in memory) |
+| `POST /api/aws/simulate-policy-change` | `graph.read` | `{changes, base_snapshot?, profile?, head?, comment?: {pull_number}}`: who gains or loses what, plus the PR comment text |
+| `GET\|PUT /api/aws/pr-comment` | `connections.read` / `connections.manage` + step-up | the comment settings |
+
+`{arn}` may contain slashes. Profiles: `default` (current hour, TLS), `none`, `bare`, or a list of
+`any-network,mfa-session,now,tls`. Results carry fidelity (`exact`, `approximate`, `unsupported`);
+a policy the collector could not read makes the decisions it could affect `unsupported`
+(`POLICY_UNPARSEABLE`) and is listed as `collection_gaps`.
+
+`simulate-policy-change` ops (design §11.3): `put_policy_version attach detach put_inline
+delete_inline put_boundary delete_boundary put_resource_policy put_trust_policy attach_scp
+detach_scp put_scp attach_rcp detach_rcp put_rcp move_account create_grant retire_grant put_bpa
+put_ownership_controls`. For `put_inline`/`delete_inline` `policy_arn` is the inline policy's name,
+for `move_account` the new parent id, for `retire_grant` the grant id. `internal/aws/snapshot.Apply`
+builds the head snapshot; `internal/aws/render` writes the comment.
+
+**PR comment to GitHub** is off by default. `PUT /api/aws/pr-comment {enabled, repo: "owner/name",
+token}` seals the token under the KEK (never returned, never logged, not in audit events). Only a
+request with `comment.pull_number` posts, needs `connections.manage` and a fresh phishing-resistant
+sign-in, goes through `internal/safehttp` to `api.github.com`, and is audited
+(`aws.pr_comment.posted` / `.failed`).
+
+`awsorg.Service.Materialize` (run by `Collect` when `Service.Eval` is set) evaluates a snapshot and
+ingests what it confirms: accounts, role groups, permissions (action atom by resource atom) and
+`grants` edges with source `evaluator`, carrying explanation, outcome and fidelity
+(`schema/0321_aws_integration.sql`, a side table because there is no column migration), plus
+`can_assume` trust edges and the NHI trust flags `wildcard_oidc_trust`, `missing_external_id`,
+`public_trust`. Least privilege never recommends or applies a conditional, approximate or
+unsupported grant (`leastpriv.VerifyAWS` checks a candidate keeps the used calls and adds nothing).
+UI: Insights, AWS access.
+
 ## Web UI
 
 The UI follows an "admin center" layout: a dark top bar, a light left rail grouped by job, list

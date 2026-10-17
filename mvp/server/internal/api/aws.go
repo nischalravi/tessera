@@ -17,7 +17,7 @@ import (
 // read-only against AWS: it assumes a customer role with an external id and
 // collects snapshots (internal/connectors/awsorg). These routes manage the
 // connectors and list what they collected; the evaluator endpoints
-// (/api/aws/can and the rest of §11.2) arrive with PR-11. They use the
+// (/api/aws/can and the rest of §11.2, PR-11) are in aws_eval.go. These use the
 // connections.* permissions. Credentials are sealed on write and never
 // returned: a connector shows "credentials_set" only.
 //
@@ -36,6 +36,7 @@ func (s *Server) registerAWSRoutes() {
 	s.handle(D, "/api/aws/connectors/{id}", write, needStepUp(auth.PermConnectionsManage, auth.StepUpPolicy), s.rd(s.deleteAWSConnector))
 	s.handle(G, "/api/aws/snapshots", read, need(auth.PermConnectionsRead), s.rd(s.listAWSSnapshots))
 	s.handle(G, "/api/aws/snapshots/{id}", read, need(auth.PermConnectionsRead), s.rd(s.getAWSSnapshot))
+	s.registerAWSEvalRoutes()
 }
 
 func (s *Server) awsService() *awsorg.Service {

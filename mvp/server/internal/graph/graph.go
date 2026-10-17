@@ -58,8 +58,36 @@ type Node struct {
 type Edge struct {
 	Relation  string
 	EdgeID    *int64 // grant_edges id; nil for structural or simulated edges
-	Source    string // connector | jit | manual | simulated
+	Source    string // connector | jit | manual | simulated | evaluator
 	ExpiresAt *time.Time
+	// ExplanationID, Outcome and Fidelity are set on edges the AWS evaluator
+	// confirmed (design §11.2); "" is unset, which is every other edge.
+	ExplanationID, Outcome, Fidelity string
+}
+
+// RelCanAssume is the relation of a trust edge: the caller can assume the
+// role (design §11.4). Effective permissions follow every relation, so a human
+// reaches the permissions of each role reachable through can_assume with no
+// further rule.
+const RelCanAssume = "can_assume"
+
+// Evaluator outcomes and fidelities, as stored on an edge.
+const (
+	OutcomeAllow       = "allow"
+	OutcomeConditional = "conditional"
+	FidelityExact      = "exact"
+	FidelityApprox     = "approximate"
+	FidelityUnsupp     = "unsupported"
+)
+
+func fidelityRank(f string) int {
+	switch f {
+	case FidelityApprox:
+		return 1
+	case FidelityUnsupp:
+		return 2
+	}
+	return 0
 }
 
 // EffectivePermission is one permission an identity can exercise, with the
@@ -77,6 +105,28 @@ type EffectivePermission struct {
 	Paths        [][]string
 	// Standing is true when at least one path consists only of non-JIT grants.
 	Standing bool
+	// Conditional is true when every path to the permission depends on a
+	// condition the evaluator could not settle (design §11.2).
+	Conditional bool
+	// Fidelity is the evaluator's fidelity for the permission: the best of the
+	// paths that decide it ("" when no evaluated edge is on any path).
+	Fidelity string
+	// ExplanationIDs are the evaluator's explanations of the deciding paths,
+	// sorted.
+	ExplanationIDs []string
+}
+
+// Weak reports whether the permission rests on an evaluation that is
+// conditional, approximate or unsupported. Least privilege is generated only
+// from rows that are not weak, and never acts on one (design §11.5, spec R2).
+func (e *EffectivePermission) Weak() bool {
+	return e.Conditional || e.Fidelity == FidelityApprox || e.Fidelity == FidelityUnsupp
+}
+
+// Weak reports whether the evaluator found the grant conditional, approximate
+// or unsupported; an edge no evaluation touched is not weak.
+func (e *Edge) Weak() bool {
+	return e.Outcome == OutcomeConditional || e.Fidelity == FidelityApprox || e.Fidelity == FidelityUnsupp
 }
 
 // JITOnly reports whether the permission is reachable only through JIT grants.
@@ -219,7 +269,8 @@ func Build(c *store.TenantTx, now time.Time) (*Snapshot, error) {
 			continue
 		}
 		id := e.ID
-		g.setEdge(e.Src, e.Dst, &Edge{Relation: e.Relation, EdgeID: &id, Source: e.Source, ExpiresAt: e.ExpiresAt})
+		g.setEdge(e.Src, e.Dst, &Edge{Relation: e.Relation, EdgeID: &id, Source: e.Source, ExpiresAt: e.ExpiresAt,
+			ExplanationID: e.ExplanationID, Outcome: e.Outcome, Fidelity: e.Fidelity})
 	}
 	return g, nil
 }
@@ -355,6 +406,7 @@ func (g *Snapshot) EffectivePermissions(identityID int64) *Eff {
 		return e
 	}
 	result := &Eff{M: map[string]*EffectivePermission{}}
+	evals, npaths := map[string][]pathEval{}, map[string]int{}
 	start := Key("identity", identityID)
 	if !g.HasNode(start) {
 		return result
@@ -390,16 +442,93 @@ func (g *Snapshot) EffectivePermissions(identityID int64) *Eff {
 				if !g.PathHasJIT(np) {
 					ep.Standing = true
 				}
+				npaths[nxt]++
+				if pe, ok := g.pathEval(np); ok {
+					evals[nxt] = append(evals[nxt], pe)
+				}
 				continue
 			}
 			stack = append(stack, frame{nxt, np})
 		}
 	}
-	for _, ep := range result.M {
+	for k, ep := range result.M {
 		sort.SliceStable(ep.Paths, func(i, j int) bool { return len(ep.Paths[i]) < len(ep.Paths[j]) })
+		if pes := evals[k]; len(pes) > 0 {
+			ep.Conditional, ep.Fidelity, ep.ExplanationIDs = settle(pes, npaths[k])
+		}
 	}
 	g.eff[identityID] = result
 	return result
+}
+
+// pathEval is what the evaluator says of one path: the worst of its edges, and
+// their explanations.
+type pathEval struct {
+	conditional bool
+	fidelity    string
+	explanation []string
+}
+
+// pathEval summarizes the evaluated edges of a path; ok is false when none of
+// them was evaluated (every edge of a demo or manual path).
+func (g *Snapshot) pathEval(path []string) (pathEval, bool) {
+	var pe pathEval
+	evaluated := false
+	for i := 1; i < len(path); i++ {
+		e := g.edges[edgeKey{path[i-1], path[i]}]
+		if e == nil || (e.Outcome == "" && e.Fidelity == "" && e.ExplanationID == "") {
+			continue
+		}
+		evaluated = true
+		if e.Outcome == OutcomeConditional {
+			pe.conditional = true
+		}
+		if fidelityRank(e.Fidelity) > fidelityRank(pe.fidelity) || pe.fidelity == "" {
+			pe.fidelity = e.Fidelity
+		}
+		if e.ExplanationID != "" {
+			pe.explanation = append(pe.explanation, e.ExplanationID)
+		}
+	}
+	return pe, evaluated
+}
+
+// settle combines the evaluated paths to one permission. A permission is
+// granted when any path grants it, so it is conditional only if every path is,
+// and its fidelity is the best of the paths that decide it. A path with no
+// evaluated edge (a demo or manual grant) is unconditional, so it settles the
+// permission on its own: total is the number of paths, evaluated or not.
+func settle(pes []pathEval, total int) (conditional bool, fidelity string, ids []string) {
+	var deciding []pathEval
+	for _, pe := range pes {
+		if !pe.conditional {
+			deciding = append(deciding, pe)
+		}
+	}
+	switch {
+	case total > len(pes):
+		// a path no evaluation touches grants it: the permission is not conditional
+	case len(deciding) == 0:
+		conditional = true
+		deciding = pes
+	}
+	best := -1
+	for _, pe := range deciding {
+		if r := fidelityRank(pe.fidelity); best < 0 || r < best {
+			best, fidelity = r, pe.fidelity
+		}
+	}
+	seen := map[string]bool{}
+	for _, pe := range deciding {
+		for _, id := range pe.explanation {
+			if !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
+		}
+	}
+	sort.Strings(ids)
+	return conditional, fidelity, ids
 }
 
 // AllEffective computes effective permissions for every identity.

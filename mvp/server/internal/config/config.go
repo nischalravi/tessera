@@ -75,6 +75,11 @@ type Config struct {
 	RPID                   string
 	Notify                 string
 	DevIdPURL              string
+	// AWSCatalogDir (TESSERA_AWS_CATALOG_DIR) is the catalog directory with
+	// compiled/<version>.json.gz; empty leaves the AWS evaluator routes
+	// unavailable (503). AWSCatalogVersion picks a version (default: newest).
+	AWSCatalogDir     string
+	AWSCatalogVersion string
 	// FrozenNow is TESSERA_NOW (tests and demos; refused in prod). The zero
 	// time means the wall clock; use Clock.
 	FrozenNow time.Time
@@ -168,6 +173,11 @@ func Load(getenv func(string) string) (*Config, error) {
 		default:
 			c.FrozenNow = t
 		}
+	}
+	c.AWSCatalogDir = strings.TrimSpace(getenv("TESSERA_AWS_CATALOG_DIR"))
+	c.AWSCatalogVersion = strings.TrimSpace(getenv("TESSERA_AWS_CATALOG_VERSION"))
+	if v := c.AWSCatalogVersion; v != "" && (len(v) > 40 || strings.Trim(v, "0123456789abcdef-") != "") {
+		bad("TESSERA_AWS_CATALOG_VERSION: %q is not a compiled catalog version (<date>-<hex>)", v)
 	}
 	c.DevIdPURL = strings.TrimSpace(getenv("TESSERA_DEV_IDP_URL"))
 	if c.DevIdPURL == "" && !prod {

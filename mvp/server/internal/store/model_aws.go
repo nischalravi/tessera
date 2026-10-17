@@ -149,6 +149,17 @@ type AWSEffective struct {
 	CatalogVersion string
 }
 
+// AWSPRCommentSettings is a tenant's switch for the access-diff comment on a
+// GitHub pull request (schema/0321_aws_integration.sql). A tenant with no row
+// has it off. TokenEnc is the sealed token; it is never returned by the API.
+type AWSPRCommentSettings struct {
+	Enabled   bool
+	Repo      string // "owner/name"
+	TokenEnc  []byte
+	UpdatedBy string
+	UpdatedAt time.Time
+}
+
 // AWSExplanation is a content-addressed decision trace.
 type AWSExplanation struct {
 	ID    string

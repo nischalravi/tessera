@@ -9,6 +9,7 @@ export const InsightsTabs = () => (
       { to: "/insights/risk", label: "Risk overview" },
       { to: "/insights/least-privilege", label: "Least privilege" },
       { to: "/insights/sod", label: "SoD conflicts" },
+      { to: "/insights/aws", label: "AWS access" },
       { to: "/insights/deployment-health", label: "Deployment health" },
     ]}
   />

@@ -83,6 +83,13 @@ POST   /api/aws/connectors                           connections.manage STEP_UP_
 DELETE /api/aws/connectors/{id}                      connections.manage STEP_UP_POLICY  # issue #26
 GET    /api/aws/snapshots                            connections.read   -  # issue #26
 GET    /api/aws/snapshots/{id}                       connections.read   -  # issue #26
+GET    /api/aws/can                                  graph.read         -  # issue #30
+GET    /api/aws/principals/{arn}/effective           graph.read         -  # issue #30
+GET    /api/aws/resources/{arn}/who-can              graph.read         -  # issue #30
+GET    /api/aws/explanations/{id}                    graph.read         -  # issue #30
+POST   /api/aws/simulate-policy-change               graph.read         -  # issue #30 (a comment post: connections.manage + STEP_UP_POLICY in the handler)
+GET    /api/aws/pr-comment                           connections.read   -  # issue #30
+PUT    /api/aws/pr-comment                           connections.manage STEP_UP_POLICY  # issue #30
 GET    /api/correlation/queue                        graph.read      -  # issue #160
 GET    /api/correlation/decisions                    graph.read      -  # issue #160
 POST   /api/accounts/{account_id}/link               identities.correlate STEP_UP_POLICY  # issue #160
