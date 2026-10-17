@@ -16,6 +16,7 @@ import {
   rejectMergeRequest,
   relTime,
   useApi,
+  ApiError,
 } from "../../api";
 import { useSession } from "../../app/auth";
 import { Badge, Chip } from "../../components/Badge";
@@ -113,7 +114,7 @@ export function IdentityMatches() {
   );
 }
 
-type Loaded<T> = { data: T | null; error: string | null; reload: () => void };
+type Loaded<T> = { data: T | null; error: ApiError | null; reload: () => void };
 
 // ------------------------------------------------------------------ the queue
 
