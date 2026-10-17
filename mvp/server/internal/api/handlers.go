@@ -1446,6 +1446,15 @@ func (s *Server) hrisCreate(_ http.ResponseWriter, r *http.Request, p *params) (
 		return nil, errStatus(http.StatusBadRequest, "payload.to_team required")
 	}
 	c := store.TxFrom(r.Context())
+	if typ == "joiner" {
+		// Refuse at creation what execution would refuse; execution re-checks.
+		var ex *jml.ExistsError
+		if err := jml.CheckJoiner(c, payload); errors.As(err, &ex) {
+			return s.joinerRefused(c, "create", nil, ex, principal(r).User())
+		} else if err != nil {
+			return nil, err
+		}
+	}
 	if identityID != nil {
 		// An event for an identity that does not exist could never be planned or executed.
 		if ident, err := getOrNil(c.Identity(*identityID)); err != nil {
@@ -1470,6 +1479,23 @@ func (s *Server) hrisCreate(_ http.ResponseWriter, r *http.Request, p *params) (
 		return nil, err
 	}
 	return jml.ViewEvent(c, ev)
+}
+
+// joinerRefused audits a joiner refused because its email or HR id belongs to
+// an active identity, and answers 409 identity_exists naming that identity.
+// The caller's transaction commits, so nothing else may have been written.
+func (s *Server) joinerRefused(c *store.TenantTx, stage string, eventID *int64, ex *jml.ExistsError, by store.UserRef) (any, error) {
+	d := ojson.Object{{Key: "stage", Value: stage}, {Key: "existing_identity_id", Value: ex.ExistingID},
+		{Key: "matched_on", Value: ex.MatchedOn}, {Key: "reason", Value: "identity_exists"}}
+	if eventID != nil {
+		d = append(ojson.Object{{Key: "event_id", Value: *eventID}}, d...)
+	}
+	if err := c.Audit(s.clock(), by.Display, "jml.joiner.refused", d); err != nil {
+		return nil, err
+	}
+	return statusBody{http.StatusConflict, ojson.Object{{Key: "error", Value: "identity_exists"},
+		{Key: "detail", Value: ex.Error() + "; use the mover or rehire flow, or the account-match and merge tools."},
+		{Key: "existing_identity_id", Value: ex.ExistingID}, {Key: "matched_on", Value: ex.MatchedOn}}}, nil
 }
 
 func (s *Server) hrisPlan(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {

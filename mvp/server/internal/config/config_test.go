@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -97,6 +98,10 @@ func TestProdRefusesEachUnsafeSetting(t *testing.T) {
 		{"dev fake provisioning target", []string{"TESSERA_DEV_FAKE_TARGET", "1"}, "TESSERA_DEV_FAKE_TARGET must not be set"},
 		{"file audit anchor", []string{"TESSERA_AUDIT_ANCHOR", "file://server/var/audit-anchors.jsonl"}, "must not be file://"},
 		{"audit anchor missing", []string{"TESSERA_AUDIT_ANCHOR", "<unset>"}, "TESSERA_AUDIT_ANCHOR is required"},
+		{"file audit anchor, upper case", []string{"TESSERA_AUDIT_ANCHOR", "FILE:///srv/a.jsonl"}, "TESSERA_AUDIT_ANCHOR"},
+		{"audit anchor S3 upper case", []string{"TESSERA_AUDIT_ANCHOR", "S3://anchors/t"}, "TESSERA_AUDIT_ANCHOR"},
+		{"audit anchor s3 without a bucket", []string{"TESSERA_AUDIT_ANCHOR", "s3://"}, "must be an s3://bucket/prefix URL"},
+		{"audit anchor https", []string{"TESSERA_AUDIT_ANCHOR", "https://anchors.example.com/"}, "TESSERA_AUDIT_ANCHOR"},
 		{"access token TTL too long", []string{"TESSERA_AT_TTL_SECONDS", "901"}, "TESSERA_AT_TTL_SECONDS"},
 		{"device code TTL too long", []string{"TESSERA_DEVICE_CODE_TTL_SECONDS", "601"}, "TESSERA_DEVICE_CODE_TTL_SECONDS"},
 		{"bad boolean", []string{"TESSERA_COOKIE_SECURE", "maybe"}, "not a boolean"},
@@ -268,6 +273,78 @@ func TestDevKEKGeneratedOnceWithMode0600(t *testing.T) {
 	}
 }
 
+// TestDevKEKAtomicWrite (L8): the dev KEK is written to a temp file and
+// linked into place, so no temp file is left behind, concurrent first
+// starts all end up with the one KEK that was placed, and an existing
+// (even broken) KEK file is never replaced.
+func TestDevKEKAtomicWrite(t *testing.T) {
+	c, err := config.Load(env(map[string]string{"TESSERA_ENV": "dev"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "var")
+	path := filepath.Join(dir, "dev-kek")
+	const n = 16
+	var wg sync.WaitGroup
+	sealed := make([][]byte, n)
+	errs := make([]error, n)
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s, err := c.Sealer(path)
+			if err != nil {
+				errs[i] = err
+				return
+			}
+			sealed[i], errs[i] = s.Seal([]byte("v"), []byte("t|c|x"))
+		}()
+	}
+	wg.Wait()
+	final, err := c.Sealer(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range n {
+		if errs[i] != nil {
+			t.Fatalf("start %d: %v", i, errs[i])
+		}
+		if _, err := final.Open(sealed[i], []byte("t|c|x")); err != nil {
+			t.Errorf("start %d used another KEK than the one on disk", i)
+		}
+	}
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ents) != 1 || ents[0].Name() != "dev-kek" {
+		var names []string
+		for _, e := range ents {
+			names = append(names, e.Name())
+		}
+		t.Errorf("directory holds %v, want only dev-kek (no temp files)", names)
+	}
+	// an existing file is never overwritten, even a broken one
+	broken := filepath.Join(t.TempDir(), "dev-kek")
+	if err := os.WriteFile(broken, []byte("not a key\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Sealer(broken); err == nil {
+		t.Error("a broken KEK file was accepted")
+	}
+	if b, _ := os.ReadFile(broken); string(b) != "not a key\n" {
+		t.Errorf("the broken KEK file was replaced: %q", b)
+	}
+	// a dangling symlink in its place: refused, not looped on or replaced
+	dangling := filepath.Join(t.TempDir(), "dev-kek")
+	if err := os.Symlink(filepath.Join(t.TempDir(), "missing"), dangling); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Sealer(dangling); err == nil {
+		t.Error("a dangling KEK symlink was accepted")
+	}
+}
+
 func TestKEKFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "kek")
@@ -322,6 +399,12 @@ func TestTestEnvAndInsecureCookie(t *testing.T) {
 		{map[string]string{"TESSERA_ENV": "dev", "TESSERA_COOKIE_SECURE": "false", "TESSERA_PUBLIC_URL": "http://127.0.0.1:5173"}, true},
 		{map[string]string{"TESSERA_ENV": "dev", "TESSERA_COOKIE_SECURE": "false", "TESSERA_PUBLIC_URL": "http://tessera.test.example"}, false},
 		{map[string]string{"TESSERA_ENV": "test", "TESSERA_COOKIE_SECURE": "false"}, false},
+		// L8: only a localhost public URL, by exact host name
+		{map[string]string{"TESSERA_ENV": "dev", "TESSERA_COOKIE_SECURE": "false", "TESSERA_PUBLIC_URL": "http://localhost.evil.example:5173"}, false},
+		{map[string]string{"TESSERA_ENV": "dev", "TESSERA_COOKIE_SECURE": "false", "TESSERA_PUBLIC_URL": "http://127.0.0.2:5173"}, false},
+		{map[string]string{"TESSERA_ENV": "dev", "TESSERA_COOKIE_SECURE": "false", "TESSERA_PUBLIC_URL": "http://10.0.0.5:5173"}, false},
+		{map[string]string{"TESSERA_ENV": "dev", "TESSERA_COOKIE_SECURE": "false", "TESSERA_PUBLIC_URL": "http://[::ffff:7f00:1]:5173"}, false},
+		{with(safeProd(), "TESSERA_COOKIE_SECURE", "false", "TESSERA_PUBLIC_URL", "http://localhost:5173"), false},
 	} {
 		_, err := config.Load(env(tc.env))
 		if (err == nil) != tc.ok {

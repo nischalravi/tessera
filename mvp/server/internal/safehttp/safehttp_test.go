@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -52,11 +53,21 @@ func (f *fakeDNS) LookupNetIP(_ context.Context, _, host string) ([]netip.Addr, 
 
 func client(t *testing.T, o safehttp.Options) *http.Client {
 	t.Helper()
-	c, err := safehttp.New(o)
+	c, err := safehttp.NewForTest(t, o)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return c
+}
+
+// portNum is srv's port as an int (for Options.AllowedPorts).
+func portNum(t *testing.T, srv *httptest.Server) int {
+	t.Helper()
+	n, err := strconv.Atoi(port(t, srv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
 
 func get(c *http.Client, u string) (*safehttp.Response, error) {
@@ -91,19 +102,58 @@ func TestNewRefusesLoopbackOutsideDev(t *testing.T) {
 		{Env: "", AllowLoopback: false},
 		{Env: "staging"},
 	} {
-		if _, err := safehttp.New(o); err == nil {
-			t.Errorf("New(%+v) succeeded", o)
+		if _, err := safehttp.NewForTest(t, o); err == nil {
+			t.Errorf("NewForTest(%+v) succeeded", o)
 		}
+	}
+	if _, err := safehttp.NewForTest(nil, safehttp.Options{Env: config.Prod}); err == nil {
+		t.Error("NewForTest without a testing.TB succeeded")
 	}
 }
 
-func TestForConfig(t *testing.T) {
-	c, err := config.Load(func(k string) string { return map[string]string{"TESSERA_ENV": "dev"}[k] })
+func load(t *testing.T, m map[string]string) *config.Config {
+	t.Helper()
+	c, err := config.Load(func(k string) string { return m[k] })
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := safehttp.ForConfig(c); err != nil {
-		t.Error(err)
+	return c
+}
+
+// TestForConfig (L5): ForConfig takes the environment and the loopback
+// exception from config.Load only. A hand-built Config is refused, and a
+// loaded Config edited to dev + loopback afterwards still gets the
+// production client; a test server gets the production client too.
+func TestForConfig(t *testing.T) {
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) }))
+	defer plain.Close()
+	dev, err := safehttp.ForConfig(load(t, map[string]string{"TESSERA_ENV": "dev"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the dev IdP case: plain http to 127.0.0.1 on a non-default port
+	if resp, err := get(dev, plain.URL); err != nil || string(resp.Body) != "ok" {
+		t.Errorf("dev ForConfig to the loopback dev IdP: %v", err)
+	}
+	for _, c := range []*config.Config{nil, {Env: config.Dev, OutboundAllowLoopback: true}} {
+		if _, err := safehttp.ForConfig(c); err == nil {
+			t.Errorf("ForConfig(%v) of a hand-built config succeeded", c)
+		}
+	}
+	edited := load(t, map[string]string{"TESSERA_ENV": "test"})
+	prod := load(t, map[string]string{"TESSERA_ENV": "prod", "TESSERA_PUBLIC_URL": "https://tessera.example.com",
+		"TESSERA_KEK": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=", "TESSERA_AUDIT_ANCHOR": "s3://anchors/t"})
+	for name, c := range map[string]*config.Config{"test env": edited, "prod edited to dev": prod} {
+		if name == "prod edited to dev" {
+			c.Env, c.OutboundAllowLoopback = config.Dev, true
+		}
+		hc, err := safehttp.ForConfig(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := get(hc, plain.URL); !errors.Is(err, safehttp.ErrScheme) {
+			t.Errorf("%s: http to loopback = %v, want ErrScheme (production client)", name, err)
+		}
 	}
 }
 
@@ -164,6 +214,7 @@ func TestLoopbackOnlyInDev(t *testing.T) {
 	srv, devOpts := tlsServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) }))
 	p := port(t, srv)
 	for _, o := range []safehttp.Options{{Env: config.Prod, RootCAs: devOpts.RootCAs}, {Env: config.Dev, RootCAs: devOpts.RootCAs}} {
+		o.AllowedPorts = []int{portNum(t, srv)} // so the address check decides
 		c := client(t, o)
 		for _, u := range []string{srv.URL, "https://[::1]:" + p + "/"} {
 			if _, err := get(c, u); !errors.Is(err, safehttp.ErrBlockedAddress) {
@@ -211,6 +262,7 @@ func TestDNSRebinding(t *testing.T) {
 	srv, o := tlsServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) }))
 	r := dns(map[string][][]string{"example.com": {{"127.0.0.1"}, {"169.254.169.254"}}})
 	o.Resolver = r
+	o.AllowedPorts = []int{portNum(t, srv)}
 	u := "https://example.com:" + port(t, srv) + "/"
 	if _, err := get(client(t, o), u); err != nil {
 		t.Fatalf("first request: %v", err)
@@ -220,6 +272,96 @@ func TestDNSRebinding(t *testing.T) {
 	}
 	if n := r.calls["example.com"].Load(); n != 2 {
 		t.Errorf("%d lookups, want 2", n)
+	}
+}
+
+// TestSameHostRedirectRebinding: a same-host redirect is followed on a new
+// connection (the server closes the first), and the second DNS answer for
+// the same name is the metadata address. The hop is re-resolved and refused.
+func TestSameHostRedirectRebinding(t *testing.T) {
+	var finals atomic.Int32
+	srv, o := tlsServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/start" {
+			w.Header().Set("Connection", "close") // force a new dial for the redirect
+			http.Redirect(w, r, "/final", http.StatusFound)
+			return
+		}
+		finals.Add(1)
+		_, _ = w.Write([]byte("final"))
+	}))
+	r := dns(map[string][][]string{"example.com": {{"127.0.0.1"}, {"169.254.169.254"}}})
+	o.Resolver = r
+	o.AllowedPorts = []int{portNum(t, srv)}
+	_, err := get(client(t, o), "https://example.com:"+port(t, srv)+"/start")
+	if !errors.Is(err, safehttp.ErrBlockedAddress) {
+		t.Errorf("redirect after rebinding: %v, want ErrBlockedAddress", err)
+	}
+	if n := r.calls["example.com"].Load(); n != 2 {
+		t.Errorf("%d lookups, want 2 (the redirect hop must re-resolve)", n)
+	}
+	if finals.Load() != 0 {
+		t.Error("the redirect target was reached")
+	}
+}
+
+// TestPorts (L6): only 443 and 8443 by default; a port named by the
+// connection's configured URL is allowed for that host only; the dev
+// loopback exception allows any port on 127.0.0.1.
+func TestPorts(t *testing.T) {
+	srv, devOpts := tlsServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) }))
+	p := port(t, srv)
+	r := dns(map[string][][]string{"idp.example.com": {{"127.0.0.1"}}, "other.example.com": {{"127.0.0.1"}}})
+	o := devOpts
+	o.Resolver = r
+	c := client(t, o)
+	fetch := func(c *http.Client, u string) error {
+		_, err := get(c, u)
+		return err
+	}
+	// a host name on a non-default port, not configured: refused before DNS
+	for _, u := range []string{"https://idp.example.com:" + p + "/", "https://idp.example.com:22/", "https://idp.example.com:25/",
+		"https://idp.example.com:6379/", "https://idp.example.com:0/"} {
+		if err := fetch(c, u); !errors.Is(err, safehttp.ErrPort) {
+			t.Errorf("%s: %v, want ErrPort", u, err)
+		}
+	}
+	if n := r.calls["idp.example.com"].Load(); n != 0 {
+		t.Errorf("%d lookups for refused ports, want 0", n)
+	}
+	// the connection config names the port: allowed for that host only, on
+	// the derived client only
+	cc := safehttp.WithConfiguredPorts(c, "https://IDP.example.com:"+p+"/oauth2/default", "not a url", "https://noport.example/")
+	if err := fetch(cc, "https://idp.example.com:"+p+"/"); err != nil {
+		t.Errorf("configured port: %v", err)
+	}
+	if err := fetch(c, "https://idp.example.com:"+p+"/"); !errors.Is(err, safehttp.ErrPort) {
+		t.Errorf("the base client gained the configured port (shared pool): %v, want ErrPort", err)
+	}
+	if err := fetch(cc, "https://other.example.com:"+p+"/"); !errors.Is(err, safehttp.ErrPort) {
+		t.Errorf("configured port on another host: %v, want ErrPort", err)
+	}
+	if err := fetch(cc, "https://idp.example.com:9999/"); !errors.Is(err, safehttp.ErrPort) {
+		t.Errorf("another port on the configured host: %v, want ErrPort", err)
+	}
+	// a configured-port client still re-checks redirects to allow-listed
+	// hosts on other ports (L6)
+	ro := o
+	ro.AllowedRedirectHosts = []string{"other.example.com"}
+	redir, _ := tlsServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://other.example.com:"+p+"/", http.StatusFound)
+	}))
+	rc := safehttp.WithConfiguredPorts(client(t, ro), "https://idp.example.com:"+p+"/")
+	if err := fetch(rc, redir.URL); !errors.Is(err, safehttp.ErrRedirect) {
+		t.Errorf("redirect to an allow-listed host on a port configured for another host: %v, want ErrRedirect", err)
+	}
+	// dev loopback literal: any port (the dev IdP on :8001, test servers)
+	if err := fetch(c, srv.URL); err != nil {
+		t.Errorf("dev loopback literal on port %s: %v", p, err)
+	}
+	// prod: the loopback literal gets no port exception (and is blocked anyway)
+	prod := client(t, safehttp.Options{Env: config.Prod})
+	if _, err := get(prod, "https://8.8.8.8:22/"); !errors.Is(err, safehttp.ErrPort) {
+		t.Errorf("prod to port 22: %v, want ErrPort", err)
 	}
 }
 
@@ -264,8 +406,17 @@ func TestRedirects(t *testing.T) {
 			t.Errorf("%s: %v, want %v", path, err, want)
 		}
 	}
-	// An allowed redirect host is followed, and its address is still checked.
+	// An allow-listed redirect host on a port that is not allowed is refused
+	// at the redirect (L6), whatever its address.
 	o.AllowedRedirectHosts = []string{"EXAMPLE.com", "evil.example", "169.254.169.254"}
+	c = client(t, o)
+	if _, err := get(c, srv.URL+"/to-example"); !errors.Is(err, safehttp.ErrRedirect) ||
+		!strings.Contains(err.Error(), "on port "+otherPort) {
+		t.Errorf("allowed redirect host on another port: %v, want ErrRedirect naming the port", err)
+	}
+	// With the port allowed, an allowed redirect host is followed, and its
+	// address is still checked.
+	o.AllowedPorts = []int{443, portNum(t, other)}
 	c = client(t, o)
 	if resp, err := get(c, srv.URL+"/to-example"); err != nil || string(resp.Body) != "other" {
 		t.Errorf("allowed redirect host: %v", err)
@@ -372,6 +523,67 @@ func TestSchemes(t *testing.T) {
 	}
 	if resp, err := get(dev, plain.URL); err != nil || string(resp.Body) != "ok" {
 		t.Errorf("dev http to 127.0.0.1 with the loopback exception: %v", err)
+	}
+}
+
+// TestNumericHostForms: decimal, octal and hex spellings of 127.0.0.1 go
+// through the real resolver (no fake Resolver), which may read them as an
+// IPv4 address (getaddrinfo does). They are refused, never reach the
+// loopback server, even with the dev loopback exception, whose only
+// addresses are the literals 127.0.0.1 and [::1].
+func TestNumericHostForms(t *testing.T) {
+	var hits atomic.Int32
+	srv, devOpts := tlsServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	p := portNum(t, srv)
+	for _, o := range []safehttp.Options{{Env: config.Prod, RootCAs: devOpts.RootCAs}, devOpts} {
+		o.AllowedPorts = []int{p} // so only the host form decides
+		c := client(t, o)
+		for _, h := range []string{"2130706433", "0177.0.0.1", "0x7f.0.0.1", "0x7f000001", "127.1", "017700000001", "127.0.0.1.",
+			"2130706433.", "foo.0x7f"} {
+			u := fmt.Sprintf("https://%s:%d/", h, p)
+			_, err := get(c, u)
+			if err == nil {
+				t.Errorf("%s loopback=%t: %s fetched", o.Env, o.AllowLoopback, u)
+				continue
+			}
+			if !errors.Is(err, safehttp.ErrURL) && !errors.Is(err, safehttp.ErrBlockedAddress) {
+				t.Errorf("%s loopback=%t: %s: %v, want ErrURL or ErrBlockedAddress", o.Env, o.AllowLoopback, u, err)
+			}
+		}
+	}
+	if n := hits.Load(); n != 0 {
+		t.Errorf("the loopback server was reached %d times through a numeric host form", n)
+	}
+	// ordinary names with digits are still names
+	for _, h := range []string{"1password.example", "idp-01.example.com", "x.y1"} {
+		if _, err := get(client(t, safehttp.Options{Env: config.Prod,
+			Resolver: dns(map[string][][]string{h: {{"8.8.8.8"}}})}), "https://"+h+":1/"); errors.Is(err, safehttp.ErrURL) {
+			t.Errorf("%s refused as a numeric host: %v", h, err)
+		}
+	}
+}
+
+// TestIPv6Zones: an IPv6 literal with a zone (%25 in a URL) is refused,
+// including the zoned forms of the dev loopback ::1 and of public addresses,
+// and a zoned address in a DNS answer is refused at the dial.
+func TestIPv6Zones(t *testing.T) {
+	srv, devOpts := tlsServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) }))
+	p := port(t, srv)
+	devOpts.Resolver = dns(map[string][][]string{"zoned.example": {{"fe80::1%eth0"}}, "zoned-public.example": {{"2606:4700:4700::1111%eth0"}}})
+	for _, o := range []safehttp.Options{{Env: config.Prod, Resolver: devOpts.Resolver}, devOpts} {
+		c := client(t, o)
+		for _, u := range []string{
+			"https://[::1%25lo]:" + p + "/", "http://[::1%25lo]:" + p + "/", "https://[fe80::1%25eth0]/",
+			"https://[2606:4700:4700::1111%25eth0]/", "https://[::ffff:127.0.0.1%25eth0]:" + p + "/",
+			"https://zoned.example/", "https://zoned-public.example/",
+		} {
+			if _, err := get(c, u); !errors.Is(err, safehttp.ErrBlockedAddress) {
+				t.Errorf("%s loopback=%t: %s: %v, want ErrBlockedAddress", o.Env, o.AllowLoopback, u, err)
+			}
+		}
 	}
 }
 

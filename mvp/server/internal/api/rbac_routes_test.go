@@ -161,18 +161,21 @@ POST   /api/connections/{id}/findings/{fid}/accept   connections.manage -
 GET    /api/connections/{id}/health                  connections.read   -
 GET    /api/insights/deployment-health               connections.read   -
 POST   /api/insights/deployment-health/rerun         connections.manage -
-GET    /api/jobs                                     jobs.read       -  # issue #172
-GET    /api/jobs/{job_id}                            jobs.read       -  #
-POST   /api/jobs/{job_id}/retry                      jobs.read       -  # (the replayed route's own permission and step-up apply)
-GET    /api/provisioning/targets                     provisioning.read   -  # issue #103
-PUT    /api/provisioning/targets/{id}                connections.manage  STEP_UP_POLICY
-DELETE /api/provisioning/targets/{id}                connections.manage  STEP_UP_POLICY
-GET    /api/provisioning/ops                         provisioning.read   -
-GET    /api/provisioning/ops/{op_id}                 provisioning.read   -
-POST   /api/provisioning/ops/{op_id}/retry           provisioning.manage -
-POST   /api/provisioning/ops/{op_id}/cancel          provisioning.manage -
-POST   /api/provisioning/run                         provisioning.manage -
-GET    /api/provisioning/findings                    provisioning.read   -
+GET    /api/groups/folders                           groups.admin    -  # issue #44
+POST   /api/groups/folders                           groups.admin    -  # issue #44
+GET    /api/groups/folders/{id}                      groups.admin    -  # issue #44
+PATCH  /api/groups/folders/{id}                      groups.admin    -  # issue #44
+DELETE /api/groups/folders/{id}                      groups.admin    -  # issue #44
+POST   /api/groups/folders/{id}/move                 groups.admin    -  # issue #44
+POST   /api/groups/folders/{id}/copy                 groups.admin    -  # issue #44
+GET    /api/groups/native                            groups.admin    -  # issue #44
+POST   /api/groups                                   groups.admin    -  # issue #44
+GET    /api/groups/{id}                              groups.admin    -  # issue #44
+PATCH  /api/groups/{id}                              groups.admin    -  # issue #44
+DELETE /api/groups/{id}                              groups.admin    -  # issue #44
+POST   /api/groups/{id}/move                         groups.admin    -  # issue #44
+POST   /api/groups/{id}/copy                         groups.admin    -  # issue #44
+POST   /api/groups/{id}/restore                      groups.admin    -  # issue #44
 GET    /api/auth/session                             auth.self       -
 POST   /api/auth/logout                              auth.self       -
 GET    /api/auth/sessions                            auth.self       -

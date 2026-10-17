@@ -700,126 +700,40 @@ the run failed. Provider calls go through `internal/safehttp`.
   sessions: those re-reads cover refresh tokens and say so in the step's notes. `rotate_secret`
   still only stamps a timestamp.
 
-### Job run history
+### Native groups (folders and groups)
 
-Every run of a connector sync, provisioning (HRIS execute), connection validation, dry run,
-deployment-health re-run and JIT sweep is recorded in `job_runs` (`internal/jobs`), plus every
-audit anchoring run that did something or failed. A sweep that finds nothing is not recorded.
-Each record has the kind, trigger (manual, schedule or retry), status, duration, a result summary
-and a one-line error. The run row is written in its own transaction before the job and finished in
-another, so a job that rolls back keeps its failed run, and `job.failed` is appended to the audit
-chain for alert rules to match. A request refused before the job ran (bad input, missing
-permission, a blocked gate) is not a run.
+Groups owned by Tessera (design `docs/design/groups-grouper-parity.md`, issue #44 GR-1; not the
+connected-system `groups` table). Schema `0280_groups.sql` (`grp_*`: folders, name aliases, groups,
+composite factors, lists, direct memberships, and the engine tables, which stay empty until GR-2).
+Code: `server/internal/groups/naming` (`:` paths, `[A-Za-z0-9_.-]` segments of 1 to 255 characters,
+case-insensitive uniqueness, aliases), `server/internal/groups/model` (create, rename, move, copy,
+soft delete), `server/internal/api/groups_folders.go`. No UI yet (GR-8).
 
-`POST /api/jobs/{id}/retry` replays the run's API call as the signed-in user, through the whole
-middleware: the original route's permission and step-up apply. It is offered only for idempotent
-kinds (sync, validation, dry run, health re-run, JIT sweep), not for provisioning. The new run
-links `retry_of` and records `job.retried`. Runs still `running` after an hour are marked failed
-("interrupted"), and runs are kept 30 days. Reading the history needs `jobs.read` (operator,
-auditor, policy admin, tenant admin). Admin → Jobs lists the runs, with Failed, Running and job
-filter chips and a side panel showing the error, the result and Retry.
+- Folders form a tree under one root per tenant (created on the first write). Folders and groups
+  share one name space, unique per tenant ignoring case. Renaming or moving a folder renames its
+  whole subtree; every old name is kept as an **alias**: it still resolves and stays reserved, and
+  its owner can take it back. A folder is deleted only when empty; a group is soft-deleted
+  (`status: deleted`, restorable, keeps its name). Copies carry fields and structure, not memberships.
+- Routes (all need `groups.admin`, held by `tenant_admin` until GR-4; every route is audited):
 
-### Guest access: bundles and reference groups
+  | Route | |
+  |---|---|
+  | `GET /api/groups/folders?parent=&scope=one\|sub&q=&limit=&offset=` | list |
+  | `POST /api/groups/folders` `{parent, extension, display_extension, description, data_owner}` | create (`201`) |
+  | `GET\|PATCH\|DELETE /api/groups/folders/{id}` | read, edit or rename (`extension`, optional `version`), delete |
+  | `POST /api/groups/folders/{id}/move` `{parent}` and `.../copy` `{parent, extension}` | move, copy |
+  | `GET /api/groups/native?folder=&scope=&q=&type=group\|role&deleted=` | list groups (`GET /api/groups` is still the connected-system list) |
+  | `POST /api/groups` `{folder, extension, type, requestable, ...}` | create a basic group (`201`) |
+  | `GET\|PATCH\|DELETE /api/groups/{id}` | read, edit or rename (`status` active or disabled), soft delete |
+  | `POST /api/groups/{id}/move` `{folder}`, `.../copy` `{folder, extension}`, `.../restore` | move, copy, restore |
 
-Issue #75 (GU-12, design §8.2 and §9.3). The groups engine (GR-*) is not built, so these run on Tessera
-itself and move into the groups engine when GR-1/GR-2 land.
-
-- **Bundles.** The catalog items chosen at invite are recorded per sponsorship (`guest_bundle_items`, state
-  pending / granted / failed / removing / removed) when the sponsorship becomes active, and granted when the
-  claim completes (at once for a guest who is active already). For each system the bundle touches: with
-  write-back on, a `create_account` operation (key `guest:<sponsorship>:<system>:account`) if the guest has no
-  account there, then `add_entitlement` (`guest:<sponsorship>:<group>:add`), source `guest`. The membership edge
-  is written by the operation's completion only after the re-read shows it; a failed or mismatched operation
-  leaves no edge. With write-back off the account and edge are written directly. The edge has source
-  `guest_sponsorship`, its source_ref is the bundle item (the sponsorship), and it expires at the sponsorship's
-  end date (the graph drops it on time). Renewing extends it. Ending, revoking, a lapsed transfer or the end date
-  removes that sponsorship's memberships (`remove_entitlement` when write-back is on) unless another live
-  sponsorship of the guest still needs the group, so each sponsorship ends independently. Accounts are disabled
-  only when the last sponsorship ends, by the lifecycle leaver plan, which leaves the bundle's edges to the removal.
-  The sweeper reconciles what events missed. The state of each item is in the sponsorship view (Guests I
-  sponsor), on the person's page (Affiliations tab, `guests.read`) and the operations link back by
-  `sponsorship_id` in Admin, Provisioning.
-- **Reference groups.** System `tessera`, kind `reference`: `ref:guest:active|visitor|contractor|volunteer`,
-  `ref:partner:active`, `ref:ial:2`, `ref:sponsor:eligible`. Membership is derived from affiliations, identity
-  status (only claimed, active people count), assurance and the sponsor policy, and recomputed on affiliation,
-  claim and sponsorship changes and by the sweeper; edits by hand (or an access review revoke) are undone. They
-  appear in Groups and access reviews, policies can name them, and they are never provisioned. Not built:
-  `ref:applicant|admit|prehire` (need SIS/HRIS intake, GU-4) and `ref:partner:<org>` (partner orgs, GU-14).
-  People from the HR or student system count as IAL 2; guests use the assurance recorded at claim
-  (`identity_assurance`, IAL 0 today; the step-up that raises it is GU-7/GU-8).
-- **Guest requests.** A catalog item is open to guests only if it names their population (`populations` on
-  `PUT /api/catalog/items/{group_id}`). Approval goes to the guest's sponsor first (`sponsor` stage), then the
-  item's owner (or deciders). Privileged or high-risk items need IAL 2: a guest below it is refused with
-  `step_up_claim_required` (the step-up claim itself is not built).
-- **Not here.** Sponsor attestation campaign (needs frozen-population reviews, #110), Grouper external-subject
-  import (GR-15), policy groups as code (GR-9). Schema changes: new tables in `0229_guest_access.sql` and the
-  `sponsor` stage kind in `0206_approvals.sql`; reseed existing databases (`./run.sh --reseed`).
-- **Try it** with the dev fake target: `TESSERA_DEV_FAKE_TARGET=1`, Admin, Provisioning, set the Okta target to
-  kind `fake` with write-back on; put an Okta group in the catalog; invite a guest with it in the bundle; claim;
-  watch the operations verify and the item turn Granted.
-
-### Closed-loop provisioning
-
-Until issue #103 every write Tessera made (JML execute, review revoke, JIT revoke and expiry,
-least-privilege revoke) changed only its own graph. `internal/provision` is the engine that makes the
-change in the target system and checks that it happened.
-
-* **Operations.** `provisioning_ops` (schema `0225`) holds one row per change: create, update, disable
-  or delete an account, add or remove an entitlement. An idempotency key names the intent
-  (`jit:12:end`, `review:7:revoke`, `jml:3:0:disable_account`); submitting it twice gives one operation,
-  and it is sent to the target as `Idempotency-Key`. Every connector also reads before it writes, so
-  a repeated request converges.
-* **Lifecycle.** `queued` → `sent` → `pending_verification` → `verified`, or `mismatch` / `failed`
-  (and `cancelled` by an operator). A worker (every 5 s, `Server.RunProvisioning`; `POST
-  /api/provisioning/run` runs it now and is recorded as a `provision` job run) sends each operation and
-  **re-reads the target**. A send that fails for a transient reason (transport, 429, 5xx) is retried
-  with exponential backoff (5 s doubling to 10 min, 5 attempts); a refusal (401/403/400) fails it at
-  once. A re-read that disagrees is repeated 3 times, then the operation is a `mismatch` and a finding
-  (`provisioning_findings`, `verify_mismatch`, high for a disable or removal) is raised.
-* **Tessera changes only after verification.** An operation carries a completion (a graph edit, a
-  review decision, a JIT end) that runs in the same transaction that marks it `verified`. A failed or
-  unverified write therefore leaves the review item open, the account active and the JIT grant in place.
-  Retrying (or deciding again, or the next `POST …/retry`) re-queues the same operation.
-* **Write-back is per connection and off by default.** A target (`provisioning_targets`, schema
-  `0224`, one per connection) has a `write_back` switch. Off: the change edits the graph at once, as
-  before, and nothing reaches the target (so the parity fixtures are unchanged). On: the change goes
-  through the engine. Routing is by the connection's `system` (`provision.Submit`).
-* **Connectors.** `internal/provision/scim` is a SCIM 2.0 client (filtered, paginated lists; group
-  members read page by page; PATCH add/replace/remove, where a member is removed with the RFC 7644
-  filter path and, if the server refuses it, with a value list; `dialect: entra` sends capitalised
-  operations, string booleans and the value list, and every dialect reads `"True"`/`"False"`). `internal/provision/okta` is a native
-  Okta connector (users, lifecycle deactivate/delete, group membership, `Link` paging that must stay on
-  the org's origin). Credentials are sealed under the KEK (`internal/seal`, AAD = tenant, table,
-  column and row) and are write-only in the API. Every request goes through `internal/safehttp`.
-* **Limits.** Disabling or deleting an account through SCIM does not end sessions or tokens the
-  account already holds (SCIM does not imply it; knowledge base §4.6), so a verified disable is not
-  yet a verified kill: that needs session revocation or CAEP/SSF, which is future work.
-* **What is routed.** JML leaver/mover/joiner steps (disable, remove and add group, create account),
-  review revokes of group memberships, JIT revoke and expiry (the request stays `approved` and the edge
-  stays until the target confirms; the sweeper does not retry a failed removal, an operator does),
-  and the least-privilege revoke. Edges to permissions have no counterpart in a target and stay direct.
-* **Audit.** Each operation writes `provision.enqueued`, `provision.sent` and one of
-  `provision.verified`, `provision.mismatch`, `provision.failed`, plus `provision.retried`,
-  `provision.cancelled`; target changes write `provision.target_set` and `provision.target_removed`
-  (never the token). Completions write the event the direct path wrote (`jit.expire`, `review.revoke`,
-  `grant.revoke`).
-* **Permissions.** `provisioning.read` (operator, auditor, policy admin, tenant admin) and
-  `provisioning.manage` (policy admin, tenant admin: retry, cancel, run). Configuring a target needs
-  `connections.manage` with step-up.
-* **Dev fake target.** `TESSERA_DEV_FAKE_TARGET=1` (set by `run.sh`) starts an in-process fake SCIM
-  service on a loopback port (`internal/provision/fake`) and enables the `fake` target kind, with a
-  simulated fault: `fail_writes` (503) or `drop_writes` (accepted, never applied: a mismatch). The fake
-  treats users and groups it has never seen as already provisioned. Config refuses the setting with
-  `TESSERA_ENV=prod`, and an architecture test keeps the fake out of every package but `cmd/tessera`.
-* **Tests.** Recorded exchanges (`internal/provision/{scim,okta}/testdata`, replayed by
-  `internal/provision/replay`) pin Entra's string booleans, capitalised PATCH operations, paginated
-  large groups, Okta `Link` paging and error classification; engine tests cover backoff, idempotency,
-  mismatch findings, sealed credentials and tenant isolation; API and JML tests show a failed
-  target write leaving the review item, account and edges open.
-
-Admin → Provisioning lists the target systems (with the write-back switch) and the operations, with
-status, change and source filter chips, a side panel with the findings, request and Retry / Cancel,
-and Run now.
+- Errors: `404 not_found`; `409` `{error, detail}` with `name_taken`, `name_reserved_by_alias`,
+  `root_folder`, `move_into_self`, `copy_into_self`, `folder_not_empty` (with `folders` and `groups`
+  counts), `folder_mirrored`, `group_deleted`, `not_deleted`, `version_conflict`; `422` with
+  `invalid_name`, `invalid_type`, `invalid_status`, `invalid_scope`, and so on.
+- Audit events `groups.folder.{created,updated,renamed,moved,copied,deleted}` and
+  `groups.group.{created,updated,renamed,moved,copied,deleted,restored}`, written in the change's
+  transaction with the acting user; `GET /api/audit?target_type=group&target_id=` filters by object.
 
 ### Audit ledger
 
@@ -1197,6 +1111,12 @@ cd ../frontend && npm run build && npm test   # npm test: node:test, no extra de
   (FastAPI) backend with `record_python.py` on a frozen clock (2026-10-08T09:30:00 UTC) before it
   was removed; check out commit `aba5abb` to re-run the recorder against it. Only two values are
   normalised, both non-deterministic in Python itself (see `testdata/parity/README.md`).
+* **CI diagnostics.** `scripts/ci-diagnostics.sh` runs the CI and security-scan gates locally,
+  one log per step, into `logs/ci-<timestamp>/SUMMARY.md` (git-ignored). `--quick` skips the
+  race suite, `--only go,frontend,…` picks steps, and `--pr <n>` (with `gh` signed in) also saves
+  GitHub's runs, jobs, runners, annotations and job logs for that PR. It also checks that every
+  action version the workflows pin exists. Use it when CI is red: if every local step passes and
+  the jobs show `runner_id=0` with no steps, they never ran (see the annotations, usually billing).
 * **Security scanners:** gosec reports 0 issues; each of the few `#nosec` annotations carries a
   justification. govulncheck reports no vulnerabilities.
 
@@ -1222,16 +1142,31 @@ cd ../frontend && npm run build && npm test   # npm test: node:test, no extra de
 * Configuration (`internal/config`): with `TESSERA_ENV=prod` the server refuses to start on a
   non-https `TESSERA_PUBLIC_URL`, `TESSERA_COOKIE_SECURE=false`, no KEK, any
   `TESSERA_CORS_ORIGINS` (the production UI is same-origin, so CORS is off),
-  `TESSERA_OUTBOUND_ALLOW_LOOPBACK=true`, the dev mail sink (`TESSERA_NOTIFY_EMAIL=dev`), SMTP
-  without TLS, a `TESSERA_DEV_IDP_URL`, a missing or `file://`
-  `TESSERA_AUDIT_ANCHOR`, a frozen clock (`TESSERA_NOW`), or a `TESSERA_TRUSTED_PROXIES` prefix
-  broader than /8 (IPv4) or /32 (IPv6), and lists every problem at once. A /0 proxy prefix is
-  refused in every environment.
+  `TESSERA_OUTBOUND_ALLOW_LOOPBACK=true`, a `TESSERA_DEV_IDP_URL`, a `TESSERA_AUDIT_ANCHOR` that
+  is not `s3://bucket/prefix` (missing and `file://` included), a frozen clock (`TESSERA_NOW`), or
+  a `TESSERA_TRUSTED_PROXIES` prefix broader than /8 (IPv4) or /32 (IPv6), and lists every problem
+  at once. A /0 proxy prefix is refused in every environment. `TESSERA_COOKIE_SECURE=false` is
+  accepted only with `TESSERA_ENV=dev`, a `localhost`/`127.0.0.1` public URL and a loopback
+  `-addr`. `serve` and `seed` both need an explicit `TESSERA_ENV` (`run.sh` exports `dev`).
 * Keys: `seed` and `serve` run the ensure-keys step (one active and one next ES256 key per tenant
   and purpose, the platform Ed25519 key, daily rotation). Private keys are stored only sealed
-  under the KEK (`TESSERA_KEK` or `TESSERA_KEK_FILE`, base64 of 32 bytes, file mode 0600). In dev
-  a KEK is generated at `server/var/dev-kek`; if it is lost, the server refuses to start until
-  the database is reseeded.
+  under the KEK (`TESSERA_KEK` or `TESSERA_KEK_FILE`, base64 of 32 bytes, file mode 0600). Sealed
+  values are AES-256-GCM under `HKDF(KEK, "tessera/seal/v1")` (format version 2); version 1
+  values (the raw KEK, before #127) still open and are re-sealed lazily on write. In dev a KEK is
+  generated at `server/var/dev-kek` (temp file, then linked into place, never overwritten); if it
+  is lost, the server refuses to start until the database is reseeded. A stored public key that
+  fails validation is left out of a JWKS and logged as `keys.bad_public_jwk` with `alert=true`.
+  Emergency revocation and the JWKS cache trade-off: `docs/runbooks/signing-key-emergency-revocation.md`.
+  The tenant slugs `platform` and `platform-*` are reserved.
+* Outbound HTTP (`internal/safehttp`, built only by `safehttp.ForConfig`; tests use
+  `safehttp.NewForTest`, which `internal/archtest` bans elsewhere): https only, destination ports
+  443 and 8443 unless the connection's configured URL names its port (that host only), addresses
+  checked after DNS on every dial and redirect hop, numeric host spellings (`2130706433`,
+  `0177.0.0.1`) and zoned IPv6 literals refused. In dev the loopback exception (127.0.0.1, [::1])
+  allows plain http on any port, so the dev IdP on :8001 works; a `TESSERA_ENV=test` server gets
+  the production client.
+* Rate limits: per-IP buckets keyed by `ratelimit.IPKey` (IPv6 by /64); each key class (IP,
+  session, user code) has its own, smaller LRU, so one class cannot evict another's buckets.
 
 ## Go vs Python
 
@@ -1262,6 +1197,10 @@ OpenAPI document). Deliberate differences:
 * `violations.resolved` / `violations.introduced` in simulate and revoke responses are sorted by
   `key` (Python's order depended on the hash seed).
 * `POST /api/hris/events` returns `422` for an `identity_id` that does not exist; `GET .../plan` returns `409` (not `500`) for a stored event whose identity is gone.
+* A joiner whose email (case-insensitive, trimmed) or `payload.employee_id` (the HR id, stored as the identity's external id) matches an
+  *active* identity is refused with `409 {"error":"identity_exists","existing_identity_id":N,"matched_on":"email|hr_id"}`, at
+  `POST /api/hris/events` and, authoritatively, at `POST .../execute` (the event stays pending; the refusal is audited as
+  `jml.joiner.refused`). A terminated identity does not match, so a rehire joins as a new identity.
 * A connector sync never undoes Tessera-side decisions: terminated identities, disabled accounts, executed HRIS events and
   grants revoked by a leaver plan, access review or least-privilege revoke (tombstones in `revoked_grants`) stay as they are.
 * `add_edges[].duration_hours` simulates a time-boxed JIT grant, which never counts as standing access.

@@ -559,6 +559,46 @@ func JoinerPlan(c *store.TenantTx, payload ojson.Object) (Plan, error) {
 		{Key: "steps", Value: steps}}, nil
 }
 
+// ExistsError says a joiner matches an identity that is already active. The
+// operator should use the mover or rehire flow, or the account-match and
+// merge tools, instead of creating a second identity.
+type ExistsError struct {
+	ExistingID int64
+	MatchedOn  string // "email" or "hr_id"
+}
+
+func (e *ExistsError) Error() string {
+	return fmt.Sprintf("an active identity %d already has this %s", e.ExistingID, strings.Replace(e.MatchedOn, "_", " ", 1))
+}
+
+// joinerKeys is the joiner payload's email and HR employee id ("" if absent).
+func joinerKeys(payload ojson.Object) (email, hrID string) {
+	if s := optStr(payload, "email"); s != nil {
+		email = strings.TrimSpace(*s)
+	}
+	if s := optStr(payload, "employee_id"); s != nil {
+		hrID = strings.TrimSpace(*s)
+	}
+	return email, hrID
+}
+
+// CheckJoiner returns an *ExistsError if the joiner's email (case-insensitive,
+// trimmed) or HR employee id belongs to an active identity. A terminated
+// identity does not count: that person is a rehire. ExecuteEvent runs it
+// inside its write transaction, which makes the check authoritative.
+func CheckJoiner(c *store.TenantTx, payload ojson.Object) error {
+	email, hrID := joinerKeys(payload)
+	m, err := getOrNil(c.ActiveIdentityMatching(email, hrID))
+	if err != nil || m == nil {
+		return err
+	}
+	on := "hr_id"
+	if m.Email != nil && email != "" && strings.EqualFold(strings.TrimSpace(*m.Email), email) {
+		on = "email"
+	}
+	return &ExistsError{ExistingID: m.ID, MatchedOn: on}
+}
+
 func sortedKeys(m map[string]bool) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
@@ -922,6 +962,11 @@ func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.User
 	if ev.Status == "executed" {
 		return nil, &Error{"event already executed"}
 	}
+	if ev.Type == "joiner" {
+		if err := CheckJoiner(c, ev.Payload); err != nil {
+			return nil, err
+		}
+	}
 	plan, err := PlanForEvent(c, now, ev, false, policies)
 	if err != nil {
 		return nil, err
@@ -942,7 +987,18 @@ func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.User
 			}
 		}
 		source, hired := "workday", ev.EffectiveAt
-		id, err := c.InsertIdentity(&store.Identity{ExternalID: fmt.Sprintf("emp-new-%d", ev.ID),
+		// The HR employee id, when the event carries one, is the external id so a later
+		// duplicate is caught. A rehire's old (terminated) row still holds it, and the
+		// column is unique, so that case keeps the event-derived id.
+		xid := fmt.Sprintf("emp-new-%d", ev.ID)
+		if _, hrID := joinerKeys(p); hrID != "" {
+			if old, err := getOrNil(c.IdentityByExternalID(hrID)); err != nil {
+				return nil, err
+			} else if old == nil {
+				xid = hrID
+			}
+		}
+		id, err := c.InsertIdentity(&store.Identity{ExternalID: xid,
 			Name: pyStr(getAny(p, "name")), Email: optStr(p, "email"), Type: "human", Department: optStr(p, "department"),
 			Title: optStr(p, "title"), Status: "active", ManagerID: mgr, Source: &source, HiredAt: &hired, CreatedAt: now})
 		if err != nil {

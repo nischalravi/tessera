@@ -102,6 +102,9 @@ const (
 	PermProvisioningManage Permission = "provisioning.manage"
 	// kill switch (issue #106)
 	PermIdentitiesContain Permission = "identities.contain"
+	// native groups (issue #44, GR-1): folder and group CRUD. tenant_admin only,
+	// until GR-4 brings the per-object privilege model.
+	PermGroupsAdmin Permission = "groups.admin"
 )
 
 // rolePermissions is the static role -> permission map (Cedar-ready, §12.1).
@@ -123,8 +126,7 @@ var rolePermissions = map[Role][]Permission{
 		PermGuestsSponsor, PermGuestsRead, PermSponsorshipsApprove, PermJobsRead, PermProvisioningRead, PermProvisioningManage, PermIdentitiesContain},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
-		PermConnectionsActivate, PermRequestsCreate, PermEmailRead, PermEmailManage, PermGuestsSponsor, PermGuestsRead,
-		PermJobsRead, PermProvisioningRead, PermProvisioningManage},
+		PermConnectionsActivate, PermGroupsAdmin},
 	RoleBreakGlass: {PermAdminRead, PermBreakGlassRecover},
 }
 
@@ -208,7 +210,7 @@ var scopePermissions = map[Scope][]Permission{
 	ScopeRead: {PermGraphRead, PermConnectionsRead, PermJobsRead, PermProvisioningRead},
 	ScopeWrite: {PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage, PermReviewsDecide,
 		PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
-		PermConnectionsManage, PermConnectionsActivate, PermRolesManage, PermLifecycleManage, PermProvisioningManage},
+		PermConnectionsManage, PermConnectionsActivate, PermGroupsAdmin},
 	ScopeAudit: {PermAuditRead, PermAuditVerify},
 	ScopeAdmin: {PermEmailRead, PermEmailManage, PermAdminRead, PermAdminChangeReq, PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev,
 		PermBreakGlassRecover},

@@ -51,6 +51,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"slices"
@@ -145,6 +146,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if cmd == "serve" && !cfg.CookieSecure && !loopbackListen(o.addr) {
+		// config allows insecure cookies only in dev on a localhost public
+		// URL; the listener must be local too, or the session cookie
+		// crosses the network in clear
+		return fmt.Errorf("TESSERA_COOKIE_SECURE=false is allowed only with a loopback listen address (got -addr %s)", o.addr)
+	}
 	clock := cfg.Clock() // TESSERA_NOW, which config refuses in prod
 	sealer, err := cfg.Sealer(config.DevKEKPath(o.db))
 	if err != nil {
@@ -160,6 +167,20 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		}
 	}
 	return serve(ctx, o, cfg, sealer, clock, loader, logger)
+}
+
+// loopbackListen reports whether addr (host:port) listens on loopback only:
+// localhost, 127.0.0.0/8 or ::1. An empty host (all interfaces) is not.
+func loopbackListen(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	a, err := netip.ParseAddr(host)
+	return err == nil && a.Zone() == "" && a.Unmap().IsLoopback()
 }
 
 // dbPath accepts a plain path or the Python backend's sqlite:/// URL form.
@@ -306,12 +327,8 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	}
 	// Outbound calls to IdPs (discovery, JWKS, token) and the kill switch's
 	// provider calls (containment) go through safehttp. A test server gets the
-	// production client (no loopback exception).
-	outCfg := *cfg
-	if outCfg.Env == config.Test {
-		outCfg.Env, outCfg.OutboundAllowLoopback = config.Prod, false
-	}
-	outbound, err := safehttp.ForConfig(&outCfg)
+	// production client (no loopback exception; ForConfig decides).
+	outbound, err := safehttp.ForConfig(cfg)
 	if err != nil {
 		return err
 	}
