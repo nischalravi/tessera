@@ -288,6 +288,41 @@ the run failed. Provider calls go through `internal/safehttp`.
   sessions: those re-reads cover refresh tokens and say so in the step's notes. `rotate_secret`
   still only stamps a timestamp.
 
+### Native groups (folders and groups)
+
+Groups owned by Tessera (design `docs/design/groups-grouper-parity.md`, issue #44 GR-1; not the
+connected-system `groups` table). Schema `0280_groups.sql` (`grp_*`: folders, name aliases, groups,
+composite factors, lists, direct memberships, and the engine tables, which stay empty until GR-2).
+Code: `server/internal/groups/naming` (`:` paths, `[A-Za-z0-9_.-]` segments of 1 to 255 characters,
+case-insensitive uniqueness, aliases), `server/internal/groups/model` (create, rename, move, copy,
+soft delete), `server/internal/api/groups_folders.go`. No UI yet (GR-8).
+
+- Folders form a tree under one root per tenant (created on the first write). Folders and groups
+  share one name space, unique per tenant ignoring case. Renaming or moving a folder renames its
+  whole subtree; every old name is kept as an **alias**: it still resolves and stays reserved, and
+  its owner can take it back. A folder is deleted only when empty; a group is soft-deleted
+  (`status: deleted`, restorable, keeps its name). Copies carry fields and structure, not memberships.
+- Routes (all need `groups.admin`, held by `tenant_admin` until GR-4; every route is audited):
+
+  | Route | |
+  |---|---|
+  | `GET /api/groups/folders?parent=&scope=one\|sub&q=&limit=&offset=` | list |
+  | `POST /api/groups/folders` `{parent, extension, display_extension, description, data_owner}` | create (`201`) |
+  | `GET\|PATCH\|DELETE /api/groups/folders/{id}` | read, edit or rename (`extension`, optional `version`), delete |
+  | `POST /api/groups/folders/{id}/move` `{parent}` and `.../copy` `{parent, extension}` | move, copy |
+  | `GET /api/groups/native?folder=&scope=&q=&type=group\|role&deleted=` | list groups (`GET /api/groups` is still the connected-system list) |
+  | `POST /api/groups` `{folder, extension, type, requestable, ...}` | create a basic group (`201`) |
+  | `GET\|PATCH\|DELETE /api/groups/{id}` | read, edit or rename (`status` active or disabled), soft delete |
+  | `POST /api/groups/{id}/move` `{folder}`, `.../copy` `{folder, extension}`, `.../restore` | move, copy, restore |
+
+- Errors: `404 not_found`; `409` `{error, detail}` with `name_taken`, `name_reserved_by_alias`,
+  `root_folder`, `move_into_self`, `copy_into_self`, `folder_not_empty` (with `folders` and `groups`
+  counts), `folder_mirrored`, `group_deleted`, `not_deleted`, `version_conflict`; `422` with
+  `invalid_name`, `invalid_type`, `invalid_status`, `invalid_scope`, and so on.
+- Audit events `groups.folder.{created,updated,renamed,moved,copied,deleted}` and
+  `groups.group.{created,updated,renamed,moved,copied,deleted,restored}`, written in the change's
+  transaction with the acting user; `GET /api/audit?target_type=group&target_id=` filters by object.
+
 ### Audit ledger
 
 Every tenant has an append-only, hash-chained audit log (`audit_events`; design
@@ -690,15 +725,31 @@ cd ../frontend && npm run build && npm test   # npm test: node:test, no extra de
 * Configuration (`internal/config`): with `TESSERA_ENV=prod` the server refuses to start on a
   non-https `TESSERA_PUBLIC_URL`, `TESSERA_COOKIE_SECURE=false`, no KEK, any
   `TESSERA_CORS_ORIGINS` (the production UI is same-origin, so CORS is off),
-  `TESSERA_OUTBOUND_ALLOW_LOOPBACK=true`, a `TESSERA_DEV_IDP_URL`, a missing or `file://`
-  `TESSERA_AUDIT_ANCHOR`, a frozen clock (`TESSERA_NOW`), or a `TESSERA_TRUSTED_PROXIES` prefix
-  broader than /8 (IPv4) or /32 (IPv6), and lists every problem at once. A /0 proxy prefix is
-  refused in every environment.
+  `TESSERA_OUTBOUND_ALLOW_LOOPBACK=true`, a `TESSERA_DEV_IDP_URL`, a `TESSERA_AUDIT_ANCHOR` that
+  is not `s3://bucket/prefix` (missing and `file://` included), a frozen clock (`TESSERA_NOW`), or
+  a `TESSERA_TRUSTED_PROXIES` prefix broader than /8 (IPv4) or /32 (IPv6), and lists every problem
+  at once. A /0 proxy prefix is refused in every environment. `TESSERA_COOKIE_SECURE=false` is
+  accepted only with `TESSERA_ENV=dev`, a `localhost`/`127.0.0.1` public URL and a loopback
+  `-addr`. `serve` and `seed` both need an explicit `TESSERA_ENV` (`run.sh` exports `dev`).
 * Keys: `seed` and `serve` run the ensure-keys step (one active and one next ES256 key per tenant
   and purpose, the platform Ed25519 key, daily rotation). Private keys are stored only sealed
-  under the KEK (`TESSERA_KEK` or `TESSERA_KEK_FILE`, base64 of 32 bytes, file mode 0600). In dev
-  a KEK is generated at `server/var/dev-kek`; if it is lost, the server refuses to start until
-  the database is reseeded.
+  under the KEK (`TESSERA_KEK` or `TESSERA_KEK_FILE`, base64 of 32 bytes, file mode 0600). Sealed
+  values are AES-256-GCM under `HKDF(KEK, "tessera/seal/v1")` (format version 2); version 1
+  values (the raw KEK, before #127) still open and are re-sealed lazily on write. In dev a KEK is
+  generated at `server/var/dev-kek` (temp file, then linked into place, never overwritten); if it
+  is lost, the server refuses to start until the database is reseeded. A stored public key that
+  fails validation is left out of a JWKS and logged as `keys.bad_public_jwk` with `alert=true`.
+  Emergency revocation and the JWKS cache trade-off: `docs/runbooks/signing-key-emergency-revocation.md`.
+  The tenant slugs `platform` and `platform-*` are reserved.
+* Outbound HTTP (`internal/safehttp`, built only by `safehttp.ForConfig`; tests use
+  `safehttp.NewForTest`, which `internal/archtest` bans elsewhere): https only, destination ports
+  443 and 8443 unless the connection's configured URL names its port (that host only), addresses
+  checked after DNS on every dial and redirect hop, numeric host spellings (`2130706433`,
+  `0177.0.0.1`) and zoned IPv6 literals refused. In dev the loopback exception (127.0.0.1, [::1])
+  allows plain http on any port, so the dev IdP on :8001 works; a `TESSERA_ENV=test` server gets
+  the production client.
+* Rate limits: per-IP buckets keyed by `ratelimit.IPKey` (IPv6 by /64); each key class (IP,
+  session, user code) has its own, smaller LRU, so one class cannot evict another's buckets.
 
 ## Go vs Python
 
@@ -729,6 +780,10 @@ OpenAPI document). Deliberate differences:
 * `violations.resolved` / `violations.introduced` in simulate and revoke responses are sorted by
   `key` (Python's order depended on the hash seed).
 * `POST /api/hris/events` returns `422` for an `identity_id` that does not exist; `GET .../plan` returns `409` (not `500`) for a stored event whose identity is gone.
+* A joiner whose email (case-insensitive, trimmed) or `payload.employee_id` (the HR id, stored as the identity's external id) matches an
+  *active* identity is refused with `409 {"error":"identity_exists","existing_identity_id":N,"matched_on":"email|hr_id"}`, at
+  `POST /api/hris/events` and, authoritatively, at `POST .../execute` (the event stays pending; the refusal is audited as
+  `jml.joiner.refused`). A terminated identity does not match, so a rehire joins as a new identity.
 * A connector sync never undoes Tessera-side decisions: terminated identities, disabled accounts, executed HRIS events and
   grants revoked by a leaver plan, access review or least-privilege revoke (tombstones in `revoked_grants`) stay as they are.
 * `add_edges[].duration_hours` simulates a time-boxed JIT grant, which never counts as standing access.

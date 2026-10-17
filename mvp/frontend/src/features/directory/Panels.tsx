@@ -7,7 +7,7 @@ import { Link, useNavigate } from "react-router-dom";
 import {
   Ban, ClipboardCheck, ExternalLink, Network, Pencil, RefreshCw, RotateCcw, Settings, ShieldAlert, ShieldCheck, ShoppingCart, Timer, UserCheck, UserRound,
 } from "lucide-react";
-import { AccountRow, ConnectorRow, Group, IdentityDetail, IdentityRow, ResourceRow, Violation, ago, api, fmtDay, relTime, useApi } from "../../api";
+import { AccountRow, ConnectorRow, Group, IdentityDetail, IdentityRow, ResourceRow, Violation, ago, api, fmtDay, invalidLink, isNumericId, relTime, useApi } from "../../api";
 import { useIdentityActions } from "../../app/actions";
 import { usePersona } from "../../app/persona";
 import {
@@ -39,7 +39,9 @@ const Section = ({ title, children, action }: { title: ReactNode; children: Reac
 type IdTab = "overview" | "access" | "groups" | "activity";
 
 export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void }) {
-  const { data: d, error, reload } = useApi<IdentityDetail>(`/identities/${id}`);
+  const validId = isNumericId(id);
+  const { data: d, error: loadError, reload } = useApi<IdentityDetail>(validId ? `/identities/${id}` : null);
+  const error = validId ? loadError : invalidLink();
   const acts = useIdentityActions();
   const mock = useMockState();
   const { actor } = usePersona();
@@ -51,7 +53,7 @@ export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void
   const { can } = useSession();
 
   if (!d || String(d.id) !== id) {
-    return <SidePanel title={error ? "Couldn't load identity" : "Loading…"} onClose={onClose} fullHref={`/directory/identities/${id}`}><Loading error={error} kind="block" /></SidePanel>;
+    return <SidePanel title={error ? "Couldn't load identity" : "Loading…"} onClose={onClose} fullHref={`/directory/identities/${id}`}><Loading error={error} what="identity" kind="block" onRetry={reload} /></SidePanel>;
   }
   const human = d.type === "human";
   const status = mock.disabled[d.id] && d.status === "active" ? "disabled" : d.status;
