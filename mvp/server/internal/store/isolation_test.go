@@ -173,8 +173,9 @@ var getCases = map[string]func(c *store.TenantTx, ids map[string]int64) (any, er
 // naturalKeyGets look rows up by external id, which both tenants share:
 // each tenant must get its own row.
 var naturalKeyGets = map[string]func(c *store.TenantTx) (any, error){
-	"IdentityByExternalID": func(c *store.TenantTx) (any, error) { return c.IdentityByExternalID("alice") },
-	"GroupByXID":           func(c *store.TenantTx) (any, error) { return c.GroupByXID("aws", "ProdAdmin") },
+	"IdentityByExternalID":   func(c *store.TenantTx) (any, error) { return c.IdentityByExternalID("alice") },
+	"ActiveIdentityMatching": func(c *store.TenantTx) (any, error) { return c.ActiveIdentityMatching("", "alice") },
+	"GroupByXID":             func(c *store.TenantTx) (any, error) { return c.GroupByXID("aws", "ProdAdmin") },
 }
 
 func TestIsolation_GetOtherTenantNotFound(t *testing.T) {
@@ -673,7 +674,7 @@ func TestIsolation_EveryRepoMethodClassified(t *testing.T) {
 		"RevokedGrants": true,
 	}
 	for _, m := range []map[string]bool{keys(listCases), keys(getCases), keys(naturalKeyGets), keys(countCases),
-		keys(mutations), keys(insertCases), readinessCovered(), keysCovered(), auditCovered(), authCovered(), requestsCovered(), rolesCovered(), lifecycleCovered(), correlationCovered(), containmentCovered()} {
+		keys(mutations), keys(insertCases), readinessCovered(), keysCovered(), auditCovered(), authCovered(), correlationCovered(), containmentCovered(), groupsCovered()} {
 		for k := range m {
 			covered[strings.SplitN(k, "/", 2)[0]] = true
 		}

@@ -180,6 +180,7 @@ func New(cfg Config) *Server {
 	s.registerLifecycleRoutes()
 	s.registerCorrelationRoutes()
 	s.registerContainmentRoutes()
+	s.registerGroupsFolderRoutes()
 	s.registerReadinessRoutes()
 	s.registerAuthRoutes()
 	s.registerLoginRoutes()

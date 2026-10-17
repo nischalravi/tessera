@@ -41,7 +41,7 @@ export interface DataTableProps<T> {
   /** Stable id: namespaces saved views and the export filename. */
   id: string;
   rows: T[] | null;
-  error?: string | null;
+  error?: import("../api").ApiError | string | null;
   rowKey: (r: T) => string | number;
   columns: Column<T>[];
   searchText: (r: T) => string;
