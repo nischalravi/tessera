@@ -152,21 +152,8 @@ other), and the JIT decision route is split into three routes.
   fewer grants, effective and unused permissions, violations) and Marcus stays
   terminated, which also changes the order of the identity list.
 
-## Fixtures changed in #142 (status codes)
+## Fixtures changed for #137 / #142 (review decisions)
 
-The Python backend answered every refused JIT or HRIS action with 400,
-including an id that does not exist. #142 calls that a bug: an unknown id is
-now 404 and a state conflict on an existing record is 409 (as
-`hrisPlan` already answered). Only the status (and, for the two unknown ids,
-the message) changed.
-
-* `105-jit-unknown`: `POST /api/jit/requests/9999/approve` is 404
-  `{"detail": "request not found"}` (was 400 "request is not pending").
-* `140-execute-unknown`: `POST /api/hris/events/9999/execute` is 404
-  `{"detail": "event not found"}` (was 400 "unknown event").
-* `099-jit-approve-again`: approving a decided request is 409 (was 400);
-  the message "request is not pending" is unchanged.
-* `102-jit-revoke-denied`: revoking a request that is not active is 409
-  (was 400); the message "request is not active" is unchanged.
-* `135-execute-leaver-again`: executing an executed event is 409 (was 400);
-  the message "event already executed" is unchanged.
+* `114-review-unknown`: `POST /api/reviews/items/99999/decision` for an item
+  that does not exist is now 404 (was 400); the body `{"detail": "unknown
+  review item"}` is unchanged (part of #142: a missing resource is a 404).

@@ -300,7 +300,7 @@ var (
 	itemsDecide = tq("review_items.decide", `
 		UPDATE review_items SET decision = @decision, comment = @comment, decided_at = @decided_at,
 			decided_by_user_id = @decided_by_user_id
-		WHERE tenant_id = @tenant AND id = @id`)
+		WHERE tenant_id = @tenant AND id = @id AND (decision IS NULL OR decision = '')`)
 	itemsCountOpenInCampaign = tq("review_items.count_open_in_campaign", `
 		SELECT count(*) FROM review_items ri
 		WHERE ri.tenant_id = @tenant AND ri.campaign_id = @campaign_id AND (ri.decision IS NULL OR ri.decision = '')`)
@@ -366,10 +366,17 @@ func (tx *TenantTx) InsertReviewItem(x *ReviewItem) error {
 }
 
 // DecideItem records a decision on a review item, made by the platform user by.
-func (tx *TenantTx) DecideItem(id int64, decision string, comment *string, at time.Time, by UserRef) error {
-	_, err := tx.exec(itemsDecide, sql.Named("decision", decision), sql.Named("comment", SP(comment)),
+// The update is conditional on the item being undecided (NULL or empty), so
+// a decision is written once even under concurrent requests; applied is false
+// when the item was already decided (or does not exist in this tenant).
+func (tx *TenantTx) DecideItem(id int64, decision string, comment *string, at time.Time, by UserRef) (applied bool, err error) {
+	res, err := tx.exec(itemsDecide, sql.Named("decision", decision), sql.Named("comment", SP(comment)),
 		sql.Named("decided_at", T(at)), sql.Named("decided_by_user_id", by.idOrNil()), sql.Named("id", id))
-	return err
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
 // CountOpenItems counts a campaign's undecided items (NULL or empty decision).

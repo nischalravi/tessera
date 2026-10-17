@@ -70,7 +70,7 @@ func (f *fakeOkta) Calls() []string {
 
 func containServer(t *testing.T, f *storetest.Fixture) *Server {
 	t.Helper()
-	hc, err := safehttp.New(safehttp.Options{Env: config.Dev, AllowLoopback: true})
+	hc, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Dev, AllowLoopback: true})
 	if err != nil {
 		t.Fatal(err)
 	}
