@@ -279,7 +279,11 @@ func attributeEligible(tx *store.TenantTx, it *store.CatalogItem, g *store.Group
 		return refuse(409, "not_eligible", "%s is not eligible for %s (attribute policy %s cannot be evaluated)", ben.Name,
 			g.System+":"+g.Name, p.Name)
 	}
-	attrs := abac.Merge(abac.IdentityAttrs(ben, now), abac.ContextAttrs(now, by.AAL), abac.ItemAttrs(it, g))
+	resolver, err := abac.NewResolver(tx, now)
+	if err != nil {
+		return err
+	}
+	attrs := abac.Merge(resolver.Identity(ben), abac.ContextAttrs(now, by.AAL), abac.ItemAttrs(it, g))
 	if !abac.Eval(cond, attrs) {
 		return refuse(409, "not_eligible", "%s is not eligible for %s (attribute policy %s)", ben.Name, g.System+":"+g.Name, p.Name)
 	}
