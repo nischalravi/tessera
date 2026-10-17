@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Ban, ChevronDown, ChevronRight, ClipboardCheck, Ellipsis, GitMerge, Link2, ShieldAlert, Network, Pencil, RotateCcw, ShieldCheck, ShoppingCart, UserCheck } from "lucide-react";
-import { IdentityDetail, SimResult, ago, api, fmtDate, fmtDay, useApi } from "../../api";
+import { IdentityDetail, SimResult, ago, api, fmtDate, fmtDay, invalidLink, isNumericId, useApi } from "../../api";
 import { useIdentityActions } from "../../app/actions";
 import { usePersona } from "../../app/persona";
 import {
@@ -170,7 +170,9 @@ function Header({ d, disabledAt }: { d: IdentityDetail; disabledAt?: string }) {
 export function IdentityPage() {
   const { id } = useParams();
   const [params, setParams] = useSearchParams();
-  const { data: d, error, reload } = useApi<IdentityDetail>(`/identities/${id}`);
+  const validId = isNumericId(id);
+  const { data: d, error: loadError, reload } = useApi<IdentityDetail>(validId ? `/identities/${id}` : null);
+  const error = validId ? loadError : invalidLink();
   const mock = useMockState();
   const [open, setOpen] = useState<string | null>(null);
   const [filter, setFilter] = useState<"" | "unused" | "privileged" | "sensitive">("");
@@ -178,7 +180,7 @@ export function IdentityPage() {
   const tab = (params.get("tab") ?? "access") as Tab;
   const setTab = (t: Tab) => setParams({ tab: t }, { replace: true });
 
-  if (!d) return <Page title="Identity" crumbs={[["Identity"], ["…"]]}><Loading error={error} kind="page" /></Page>;
+  if (!d) return <Page title="Identity" crumbs={[["Identity"], ["…"]]}><Loading error={error} what="identity" kind="page" onRetry={reload} /></Page>;
 
   const machine = d.type !== "human";
   const crumbs: [string, string?][] = [["Identity"], machine ? ["Machine identities & agents", "/directory/machine"] : ["Users", "/directory/people"], [d.name]];
