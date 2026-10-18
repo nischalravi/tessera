@@ -70,6 +70,7 @@ const AdminUsers = named(() => import("../features/admin/Users"), "Users");
 const IdpConnections = named(() => import("../features/admin/IdpConnections"), "IdpConnections");
 const ChangeRequests = named(() => import("../features/admin/ChangeRequests"), "ChangeRequests");
 const ApiClients = named(() => import("../features/admin/ApiClients"), "ApiClients");
+const PlatformHealth = named(() => import("../features/admin/PlatformHealth"), "PlatformHealth");
 const ChangeBanner = named(() => import("../features/admin/ChangeBanner"), "ChangeBanner");
 
 /** The persistent banner of pending and cooling-off admin changes (design §15.2), for admins only. */
@@ -156,6 +157,7 @@ export default function App() {
                     <Route path="/admin/authentication" element={<IdpConnections />} />
                     <Route path="/admin/change-requests" element={<ChangeRequests />} />
                     <Route path="/admin/api-clients" element={<ApiClients />} />
+                    <Route path="/admin/platform-health" element={<PlatformHealth />} />
                     <Route path="/admin/:section" element={<AdminSectionPage />} />
 
                     {/* routes from the previous UI */}

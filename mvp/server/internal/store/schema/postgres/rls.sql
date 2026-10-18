@@ -696,3 +696,17 @@ DROP POLICY IF EXISTS tenant_isolation ON request_drafts;
 CREATE POLICY tenant_isolation ON request_drafts
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE review_templates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE review_templates FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON review_templates;
+CREATE POLICY tenant_isolation ON review_templates
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE review_launches ENABLE ROW LEVEL SECURITY;
+ALTER TABLE review_launches FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON review_launches;
+CREATE POLICY tenant_isolation ON review_launches
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
