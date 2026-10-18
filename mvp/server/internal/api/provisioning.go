@@ -322,7 +322,7 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 	credChanged := false
 	switch {
 	case in.Token != "":
-		if t.CredentialEnc, err = provision.SealToken(s.cfg.Sealer, c.Tenant(), t.ID, in.Token); err != nil {
+		if t.CredentialEnc, err = provision.SealToken(s.provSeal, c.Tenant(), t.ID, in.Token); err != nil {
 			return 0, nil, err
 		}
 		ver := store.NewID()

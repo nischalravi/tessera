@@ -94,8 +94,12 @@ type Config struct {
 	AuditAnchor string
 	// PublicURL is TESSERA_PUBLIC_URL: the base of the OIDC redirect URIs.
 	PublicURL string
-	// Sealer opens connection client secrets, seals PKCE verifiers and seals
-	// the config bundle signing keys (issue #170; nil: export is unavailable).
+	// Sealer opens connection client secrets, seals PKCE verifiers, provisioning
+	// target credentials and the config bundle signing keys under the KEK.
+	// Nil (tests only): sign-in with secrets and config export are unavailable,
+	// and provisioning uses a key generated for this process, so its
+	// credentials cannot be read after a restart. cmd/tessera always passes
+	// the real one.
 	Sealer *seal.Sealer
 	// OutboundHTTP is the safehttp client for IdP discovery, JWKS and token
 	// requests. Nil: browser sign-in through an IdP is unavailable.
@@ -144,6 +148,7 @@ type Server struct {
 
 	readiness *readiness.Service
 	prov      *provision.Engine
+	provSeal  *seal.Sealer // cfg.Sealer, or a per-process key when it is nil
 	// containment is the kill switch (issue #106); never nil.
 	containment *containment.Service
 	// admin is the admin-change workflow (design §15); never nil.
@@ -184,16 +189,17 @@ func New(cfg Config) *Server {
 	if cfg.Containment.Clock == nil {
 		cfg.Containment.Clock = cfg.Clock
 	}
-	if cfg.Sealer == nil {
+	provSeal := cfg.Sealer
+	if provSeal == nil {
 		sealer, err := seal.New(seal.RandomBytes(seal.KeySize))
 		if err != nil {
 			panic(err)
 		}
-		cfg.Sealer = sealer
+		provSeal = sealer
 	}
 	s := &Server{cfg: cfg, containment: cfg.Containment, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
-		limits: newLimiters(cfg.RateLimits)}
-	s.prov = &provision.Engine{DB: cfg.Store, Sealer: cfg.Sealer, HTTP: cfg.Outbound,
+		limits: newLimiters(cfg.RateLimits), provSeal: provSeal}
+	s.prov = &provision.Engine{DB: cfg.Store, Sealer: provSeal, HTTP: cfg.Outbound,
 		Clock: func() time.Time { return s.clock() }, Log: cfg.Logger.With("component", "provisioning")}
 	s.admin = &admin.Service{DB: cfg.Store, Clock: func() time.Time { return s.clock() }, Sealer: cfg.Sealer,
 		Prod: cfg.Env == "prod", Log: cfg.Logger}
@@ -224,6 +230,8 @@ func New(cfg Config) *Server {
 	s.registerContainmentRoutes()
 	s.registerGroupsFolderRoutes()
 	s.registerReadinessRoutes()
+	s.registerJobRoutes()
+	s.registerProvisioningRoutes()
 	s.registerTransportRoutes()
 	s.registerAuthRoutes()
 	s.registerLoginRoutes()

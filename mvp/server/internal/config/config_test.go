@@ -464,6 +464,22 @@ func TestTestEnvAndInsecureCookie(t *testing.T) {
 	}
 }
 
+// The fake provisioning target is a dev tool: off by default, on in dev when asked.
+func TestFakeTargetIsDevOnly(t *testing.T) {
+	for _, tc := range []struct {
+		env  map[string]string
+		want bool
+	}{
+		{map[string]string{"TESSERA_ENV": "dev"}, false},
+		{map[string]string{"TESSERA_ENV": "dev", "TESSERA_DEV_FAKE_TARGET": "1"}, true},
+	} {
+		c, err := config.Load(env(tc.env))
+		if err != nil || c.FakeTarget != tc.want {
+			t.Errorf("%v: FakeTarget = %v, %v; want %v", tc.env, c != nil && c.FakeTarget, err, tc.want)
+		}
+	}
+}
+
 func TestDevOnlyURL(t *testing.T) {
 	for raw, want := range map[string]bool{
 		"https://login.example.com/oauth2": false, "https://203.0.113.9/x": false, "not a url": false, "": false,
