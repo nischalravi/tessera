@@ -58,9 +58,9 @@ const (
 	PermConnectorsSync    Permission = "connectors.sync"
 	// Alerting (issue #168): read alerts; triage them (acknowledge,
 	// resolve, assign); configure rules and delivery channels.
-	PermAlertsRead        Permission = "alerts.read"
-	PermAlertsManage      Permission = "alerts.manage"
-	PermAlertsConfigure   Permission = "alerts.configure"
+	PermAlertsRead      Permission = "alerts.read"
+	PermAlertsManage    Permission = "alerts.manage"
+	PermAlertsConfigure Permission = "alerts.configure"
 	// PermOwnershipManage assigns owners to applications, entitlements,
 	// resources and machine identities (issue #167).
 	PermOwnershipManage   Permission = "ownership.manage"
