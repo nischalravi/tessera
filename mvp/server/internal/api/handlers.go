@@ -16,6 +16,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/ingest"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
 	"github.com/nischalravi/tessera/mvp/server/internal/jml"
+	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/leastpriv"
 	"github.com/nischalravi/tessera/mvp/server/internal/nhi"
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
@@ -42,7 +43,7 @@ func (s *Server) registerRoutes() {
 	G, P := http.MethodGet, http.MethodPost
 	s.handle(G, "/api/health", noTenant, publicRoute, s.health)
 	s.handle(G, "/api/connectors", read, need(auth.PermGraphRead), s.listConnectors)
-	s.handle(P, "/api/connectors/sync", write, need(auth.PermConnectorsSync), s.syncConnectors)
+	s.handle(P, "/api/connectors/sync", write, need(auth.PermConnectorsSync), s.syncConnectors).asJob(jobs.Sync, "")
 	s.handle(G, "/api/summary", swept, need(auth.PermGraphRead), s.summary)
 	s.handle(G, "/api/identities", swept, need(auth.PermGraphRead), s.listIdentities)
 	s.handle(G, "/api/identities/{identity_id}", swept, need(auth.PermGraphRead), s.identityDetail)
@@ -66,7 +67,7 @@ func (s *Server) registerRoutes() {
 		needStepUp(auth.PermJITDecide, auth.StepUpPolicy), s.jitDecide("approve"))
 	s.handle(P, "/api/jit/requests/{request_id}/deny", write, need(auth.PermJITDenyRevoke), s.jitDecide("deny"))
 	s.handle(P, "/api/jit/requests/{request_id}/revoke", write, need(auth.PermJITDenyRevoke), s.jitDecide("revoke"))
-	s.handle(P, "/api/jit/sweep", write, need(auth.PermJITSweep), s.jitSweep)
+	s.handle(P, "/api/jit/sweep", write, need(auth.PermJITSweep), s.jitSweep).asJob(jobs.JITSweep, "")
 	s.handle(G, "/api/reviews/campaigns", read, need(auth.PermGraphRead), s.listCampaigns)
 	s.handle(P, "/api/reviews/campaigns", write, need(auth.PermReviewsManage), s.createCampaign)
 	s.handle(G, "/api/reviews/campaigns/{campaign_id}", read, need(auth.PermGraphRead), s.campaign)
@@ -74,7 +75,7 @@ func (s *Server) registerRoutes() {
 	s.handle(G, "/api/hris/events", read, need(auth.PermGraphRead), s.hrisEvents)
 	s.handle(P, "/api/hris/events", write, need(auth.PermHRISSimulateEvent), s.hrisCreate)
 	s.handle(G, "/api/hris/events/{event_id}/plan", read, need(auth.PermGraphRead), s.hrisPlan)
-	s.handle(P, "/api/hris/events/{event_id}/execute", phased, needStepUp(auth.PermHRISExecute, auth.StepUpPolicy), s.hrisExecute)
+	s.handle(P, "/api/hris/events/{event_id}/execute", phased, needStepUp(auth.PermHRISExecute, auth.StepUpPolicy), s.hrisExecute).asJob(jobs.Provision, "")
 	s.handle(G, "/api/jml/leaver-plan/{identity_id}", read, need(auth.PermGraphRead), s.leaverPlan)
 	s.handle(G, "/openapi.json", noTenant, need(auth.PermAuthenticated), s.openAPI)
 	s.handle(G, "/docs", noTenant, need(auth.PermAuthenticated), s.swaggerUI)
@@ -844,6 +845,10 @@ func (s *Server) graphView(_ http.ResponseWriter, r *http.Request, p *params) (a
 	switch {
 	case identityID != nil:
 		start := graph.Key("identity", *identityID)
+		if n := g.Node(start); n == nil || n.Kind == "" {
+			// Unknown here, or another tenant's: the same answer either way.
+			return nil, errStatus(http.StatusNotFound, "identity not found")
+		}
 		nodes[start] = true
 		eff := g.EffectivePermissions(*identityID)
 		for _, pk := range eff.Keys {
@@ -861,6 +866,9 @@ func (s *Server) graphView(_ http.ResponseWriter, r *http.Request, p *params) (a
 		}
 	case resourceID != nil:
 		res := graph.Key("resource", *resourceID)
+		if n := g.Node(res); n == nil || n.Kind == "" {
+			return nil, errStatus(http.StatusNotFound, "resource not found")
+		}
 		nodes[res] = true
 		ids, who := g.WhoCanAccess(*resourceID)
 		for _, iid := range ids {
@@ -988,6 +996,10 @@ type revokeResult struct {
 	DryRun  bool     `json:"dry_run"`
 	Grant   grantRef `json:"grant"`
 	Applied *bool    `json:"applied,omitempty"`
+	// Provisioning is set when the revoke went to the target system through
+	// the provisioning engine (write-back on): applied is false until a
+	// re-read of the target confirms it, and the edge stays until then.
+	Provisioning *provisioningRef `json:"provisioning,omitempty"`
 }
 
 func (s *Server) revoke(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
@@ -1034,6 +1046,13 @@ func (s *Server) revokeEdge(r *http.Request, edgeID int64, dryRun bool) (*revoke
 	out := &revokeResult{Result: res, DryRun: dryRun,
 		Grant: grantRef{e.ID, e.Src, e.Dst, a.g.Label(e.Src) + " → " + a.g.Label(e.Dst)}}
 	if dryRun {
+		return out, nil
+	}
+	if op, err := routeGrantRevoke(c, a.now, e, out.Grant.Label, res.Summary.PermissionsRemoved); err != nil {
+		return nil, err
+	} else if op != nil {
+		applied := false
+		out.Applied, out.Provisioning = &applied, refOf(op)
 		return out, nil
 	}
 	if err := c.Audit(a.now, pr.Display, "grant.revoke", ojson.Object{{Key: "edge_id", Value: e.ID},

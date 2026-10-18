@@ -1,7 +1,7 @@
 import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Check, ClipboardCheck, Keyboard, KeyRound, ListChecks, Plug, Search, ShoppingCart, X } from "lucide-react";
-import { HrisEvent, JitRequest, SimResult, ago, approveRequest, denyRequest, fmtDate, hrisExecute, jitDecide, relTime, reviewDecide, simulate, useApi } from "../../api";
+import { Check, ClipboardCheck, Keyboard, KeyRound, ListChecks, Plug, Search, ShoppingCart, Trash2, X } from "lucide-react";
+import { HrisEvent, JitRequest, SimResult, ago, approveRequest, denyRequest, fmtDate, hrisExecute, jitDecide, relTime, removals, reviewDecide, simulate, useApi } from "../../api";
 import { usePersona } from "../../app/persona";
 import {
   Badge, Button, Callout, EmptyState, FilterChips, Flag, IdLink, Loading, Page, Tone, TypeBadge, useConfirm, useToast,
@@ -18,6 +18,11 @@ export function itemTitle(it: InboxItem): { icon: ReactNode; title: string; meta
       if (it.source === "jit") {
         const r = it.jit;
         return { icon: <KeyRound size={15} />, title: `${r.identity.name} requests ${r.group.system}:${r.group.name}`, meta: <>{r.duration_hours} h just-in-time · {r.group.privileged && <Badge tone="warning">Privileged</Badge>} {relTime(r.requested_at)}</>, tone: "info", kindLabel: KIND_LABEL.approval };
+      }
+      if (it.source === "removal") {
+        const q = it.removal;
+        return { icon: <Trash2 size={15} />, title: `${q.beneficiary.name} asks to lose ${q.group.system}:${q.group.name}`, tone: "info", kindLabel: KIND_LABEL.approval,
+          meta: <>Removal request · asked by {q.requested_by.display_name} {relTime(q.requested_at)}{q.group.privileged && <> <Badge tone="warning">Privileged</Badge></>}</> };
       }
       {
         const a = it.item, l = a.line;
@@ -169,6 +174,16 @@ function Detail({ it }: { it: InboxItem }) {
           <h2 style={{ marginTop: 8, fontSize: "var(--fs-lg)" }}>{t.title}</h2>
         </div>
         {it.kind === "approval" && it.source === "jit" && <JitDetail r={it.jit} />}
+        {it.kind === "approval" && it.source === "removal" && (
+          <dl className="kv">
+            <dt>For</dt><dd><Link to={`/directory/identities/${it.removal.beneficiary.id}`}>{it.removal.beneficiary.name}</Link></dd>
+            <dt>Access</dt><dd className="sys small">{it.removal.group.system}:{it.removal.group.name}</dd>
+            <dt>Account</dt><dd className="sys small">{it.removal.account.system}:{it.removal.account.username}</dd>
+            <dt>Requested by</dt><dd>{it.removal.requested_by.display_name}</dd>
+            <dt>Reason</dt><dd className="wrap-anywhere">{it.removal.justification}</dd>
+            <dt>If approved</dt><dd className="small">Tessera removes the grant from their access now and writes an audit record.</dd>
+          </dl>
+        )}
         {it.kind === "approval" && it.source === "request" && (
           <>
             <dl className="kv">
@@ -221,7 +236,14 @@ function useInboxActions() {
           return false;
         }
         if (it.source === "jit") await jitDecide(it.jit.id, verb === "approve" ? "approve" : "deny");
-        else if (verb === "approve") await approveRequest(it.item.line.id);
+        else if (it.source === "removal") {
+          if (verb === "approve") await removals.approve(it.removal.id);
+          else {
+            const reason = await confirm({ title: "Deny this removal request?", body: itemTitle(it).title, confirmLabel: "Deny", danger: true, reason: { label: "Reason (the requester sees it)", required: true } });
+            if (reason === null) return false;
+            await removals.deny(it.removal.id, reason);
+          }
+        } else if (verb === "approve") await approveRequest(it.item.line.id);
         else {
           const reason = await confirm({ title: "Deny this request?", body: itemTitle(it).title, confirmLabel: "Deny", danger: true, reason: { label: "Reason (the requester sees it)", required: true } });
           if (reason === null) return false;

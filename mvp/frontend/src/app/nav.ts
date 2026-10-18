@@ -50,7 +50,7 @@ export const RAIL: RailGroup[] = [
         pages: [{ path: "/directory/matches", label: "Account matches", keywords: "correlation link merge unmerge duplicate orphan uncorrelated" }],
       },
       { id: "roles", label: "Roles", icon: Layers, path: "/directory/roles", keywords: "business roles birthright drift" },
-      { id: "orgs", label: "Organizations", icon: Building2, path: "/directory/orgs", keywords: "departments org units cost centers", preview: true },
+      { id: "orgs", label: "Organizations", icon: Building2, path: "/directory/orgs", keywords: "departments org units cost centers" },
     ],
   },
   {
@@ -67,7 +67,7 @@ export const RAIL: RailGroup[] = [
         id: "reviews", label: "Access reviews", icon: ClipboardCheck, path: "/governance/reviews", also: ["/governance/lifecycle", "/governance/workflows"], keywords: "certification campaigns attestation",
         pages: [
           { path: "/governance/lifecycle", label: "Lifecycle", keywords: "joiner mover leaver jml hris workday onboarding offboarding" },
-          { path: "/governance/workflows", label: "Workflows", keywords: "approval routing escalation", preview: true },
+          { path: "/governance/workflows", label: "Workflows", keywords: "approval routing escalation" },
         ],
       },
     ],
