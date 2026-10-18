@@ -128,6 +128,12 @@ var tables = []string{
 	"intake_records", "sponsorships", "sponsorship_events",
 	// identity containment (schema/0205_containment.sql)
 	"containment_credentials", "containment_retries",
+	// identity disable / enable (schema/0310_identity_disables.sql)
+	"identity_disables", "identity_disable_accounts",
+	// removal requests (schema/0311_removal_requests.sql)
+	"removal_requests",
+	// request access drafts (schema/0312_request_drafts.sql)
+	"request_drafts",
 	// configuration transport (schema/0211_config_transport.sql)
 	"config_signing_keys", "config_trusted_signers", "config_imports",
 	// native groups (schema/0280_groups.sql); the engine tables stay empty until GR-2
