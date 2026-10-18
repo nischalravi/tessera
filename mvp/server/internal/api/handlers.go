@@ -817,6 +817,10 @@ func (s *Server) graphView(_ http.ResponseWriter, r *http.Request, p *params) (a
 	switch {
 	case identityID != nil:
 		start := graph.Key("identity", *identityID)
+		if n := g.Node(start); n == nil || n.Kind == "" {
+			// Unknown here, or another tenant's: the same answer either way.
+			return nil, errStatus(http.StatusNotFound, "identity not found")
+		}
 		nodes[start] = true
 		eff := g.EffectivePermissions(*identityID)
 		for _, pk := range eff.Keys {
@@ -834,6 +838,9 @@ func (s *Server) graphView(_ http.ResponseWriter, r *http.Request, p *params) (a
 		}
 	case resourceID != nil:
 		res := graph.Key("resource", *resourceID)
+		if n := g.Node(res); n == nil || n.Kind == "" {
+			return nil, errStatus(http.StatusNotFound, "resource not found")
+		}
 		nodes[res] = true
 		ids, who := g.WhoCanAccess(*resourceID)
 		for _, iid := range ids {
