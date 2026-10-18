@@ -67,7 +67,8 @@ type Fixture struct {
 // especially under -race) and the ids of its rows.
 var seeded struct {
 	once sync.Once
-	db   []byte
+	db   []byte // SQLite: the seeded file
+	src  string // Postgres: the template database
 	a, b Tenant
 	err  error
 }
@@ -82,11 +83,16 @@ func TwoTenants(tb testing.TB) *Fixture {
 	if seeded.err != nil {
 		tb.Fatal(seeded.err)
 	}
-	path := filepath.Join(tb.TempDir(), "two-tenants.db")
-	if err := os.WriteFile(path, seeded.db, 0o600); err != nil {
-		tb.Fatal(err)
+	target := seeded.src
+	if seeded.db != nil { // SQLite: a private copy of the seeded file
+		target = filepath.Join(tb.TempDir(), "two-tenants.db")
+		if err := os.WriteFile(target, seeded.db, 0o600); err != nil {
+			tb.Fatal(err)
+		}
+	} else { // Postgres: a database created from the seeded template
+		target = store.TestClone(tb, seeded.src)
 	}
-	db, err := store.Open(context.Background(), path)
+	db, err := store.Open(context.Background(), target)
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -105,12 +111,25 @@ func buildTemplate() {
 		return
 	}
 	defer os.RemoveAll(dir)
-	path := filepath.Join(dir, "two-tenants.db")
-	ctx := context.Background()
-	db, err := store.Open(ctx, path)
+	// A SQLite file in dir, or (TESSERA_TEST_PG_URL) a Postgres template database.
+	src, err := store.TestSharedTarget(dir, "two_tenants", seedTemplate)
 	if err != nil {
 		seeded.err = err
 		return
+	}
+	if store.IsPostgresDSN(src) {
+		seeded.src = src
+		return
+	}
+	seeded.db, seeded.err = os.ReadFile(src) // #nosec G304 -- path made above
+}
+
+// seedTemplate seeds the two tenants into the (empty) database at target.
+func seedTemplate(target string) error {
+	ctx := context.Background()
+	db, err := store.Open(ctx, target)
+	if err != nil {
+		return err
 	}
 	// seedTenant and seedReadiness report failures to a testing.TB; collect
 	// them in a recorder so a failed seed fails every test that needs it.
@@ -128,19 +147,13 @@ func buildTemplate() {
 	}()
 	if rec.msg != "" {
 		_ = db.Close()
-		seeded.err = errors.New(rec.msg)
-		return
+		return errors.New(rec.msg)
 	}
 	if err := db.Checkpoint(ctx); err != nil {
 		_ = db.Close()
-		seeded.err = err
-		return
+		return err
 	}
-	if err := db.Close(); err != nil {
-		seeded.err = err
-		return
-	}
-	seeded.db, seeded.err = os.ReadFile(path) // #nosec G304 -- path made above
+	return db.Close()
 }
 
 func seedTenant(tb testing.TB, db *store.DB, id tenancy.ID, slug, sentinel string) Tenant {
