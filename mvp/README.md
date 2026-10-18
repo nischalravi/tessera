@@ -228,6 +228,13 @@ connection on plain http or a private address, is refused. Applies are audited
 (`config.import.applied` with the bundle hash) and listed under Imports. Permission:
 `config.transport` (tenant admin); reading keys, signers and history needs `admin.read`.
 
+**Not in a bundle yet** (each needs cross-tenant id mapping for the groups and entitlements it
+names, so it is left for a follow-up rather than shipped half-checked): business roles and their
+versions and members, ABAC policies and bindings, catalog items and approval policies, tenant
+admin settings and security contacts (these change only through admin change requests), review
+schedules, alert rules, SIEM sinks, lifecycle rules and native groups. Set them up by hand in
+each environment; the bundle covers connections, readiness overlays and sign-in connections only.
+
 ### Main API endpoints
 
 `GET /api/summary` · `GET /api/identities[?type=&q=]` · `GET /api/identities/{id}` · `GET /api/accounts[?system=]` ·

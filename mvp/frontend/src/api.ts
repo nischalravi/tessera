@@ -1554,14 +1554,14 @@ export const readiness = {
 export interface SigningKey { kid: string; public_key: string; tenant: string; created_at: string | null }
 export interface TrustedSigner { kid: string; public_key: string; label: string; added_by: string | null; added_at: string }
 export interface ExportedBundle { hash: string; kid: string; file_name: string; excluded: { section: string; name: string; reason: string }[] | null; bundle: unknown }
-export type PlanAction = "add" | "change" | "remove" | "unchanged" | "manual";
-export interface PlanItem { section: "connections" | "overlays" | "identity_providers"; name: string; action: PlanAction; fields?: string[]; notes?: string[] }
+export type ImportAction = "add" | "change" | "remove" | "unchanged" | "manual";
+export interface PlanItem { section: "connections" | "overlays" | "identity_providers"; name: string; action: ImportAction; fields?: string[]; notes?: string[] }
 export interface ImportPlan {
   hash: string; digest: string; digest_prune: string; signer: string; signer_kid: string; exported_at: string; items: PlanItem[]; refusals: string[];
   source: { tenant_id: string; tenant: string; env: string; instance?: string; exported_by: string };
-  counts: Record<PlanAction, number>;
+  counts: Record<ImportAction, number>;
 }
-export interface ConfigImport { id: string; bundle_hash: string; signer_kid: string; source: string; exported_at: string; summary: Record<PlanAction, number>; applied_by: string | null; applied_at: string }
+export interface ConfigImport { id: string; bundle_hash: string; signer_kid: string; source: string; exported_at: string; summary: Record<ImportAction, number>; applied_by: string | null; applied_at: string }
 
 export const configTransport = {
   signingKey: () => api<{ key: SigningKey | null }>("/config/signing-key"),

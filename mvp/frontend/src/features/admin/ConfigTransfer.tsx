@@ -1,9 +1,9 @@
 import { useRef, useState } from "react";
 import { Copy, Download, FileUp, KeyRound, ShieldCheck, Trash2, Upload } from "lucide-react";
-import { ConfigImport, ImportPlan, PlanAction, SigningKey, TrustedSigner, configTransport, fmtDate, useApi } from "../../api";
+import { ConfigImport, ImportPlan, ImportAction, SigningKey, TrustedSigner, configTransport, fmtDate, useApi } from "../../api";
 import { Badge, Button, Callout, EmptyState, useConfirm, useToast } from "../../components";
 
-const ACTION_TONE: Record<PlanAction, "ok" | "warning" | "critical" | "neutral" | "outline"> = {
+const ACTION_TONE: Record<ImportAction, "ok" | "warning" | "critical" | "neutral" | "outline"> = {
   add: "ok", change: "warning", remove: "critical", manual: "outline", unchanged: "neutral",
 };
 const SECTION: Record<string, string> = { connections: "Connection", overlays: "Readiness overlay", identity_providers: "Sign-in connection" };
@@ -236,7 +236,7 @@ function SignersCard() {
     <div className="card stack-sm">
       <h2 className="row tight"><KeyRound size={16} aria-hidden /> Trusted signers</h2>
       <p className="small muted" style={{ margin: 0 }}>Only bundles signed by these keys can be imported here. This tenant's own key is not trusted unless you add it.</p>
-      {error && <Callout tone="bad">{error}</Callout>}
+      {error && <Callout tone="bad">{error.message}</Callout>}
       {data && data.length === 0 && <EmptyState title="No trusted signers yet">Add the public key of the tenant you import from.</EmptyState>}
       {data && data.length > 0 && (
         <div className="table-scroll">
