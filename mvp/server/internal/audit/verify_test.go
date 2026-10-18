@@ -351,10 +351,10 @@ func TestAnchorSinks(t *testing.T) {
 	f := newLedger(t)
 	f.record(t, tenantA, 2)
 	ck := f.checkpointer(t0)
-	ck.Sink = audit.S3Sink{URL: "s3://bucket/prefix"}
+	ck.Sink = &audit.S3Sink{Bucket: "bucket", Prefix: "prefix", Client: &stubS3{putErr: errors.New("S3 is down")}}
 	res, err := ck.Run(context.Background(), true)
 	if err != nil || res.Created != 1 || res.Failed != 1 || res.Anchored != 0 {
-		t.Fatalf("s3 stub: %+v %v", res, err)
+		t.Fatalf("failing s3 sink: %+v %v", res, err)
 	}
 	// the next run with a working sink anchors the failed checkpoint
 	res, err = f.checkpointer(t0).Run(context.Background(), false)
