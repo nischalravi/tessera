@@ -715,6 +715,39 @@ export const revokeSession = (id: string) => api<unknown>(`/auth/sessions/${enco
 
 export const hrisExecute = (eventId: number) => api(`/hris/events/${eventId}/execute`, {});
 
+// ---------------------------------------------------------------- scheduled reviews (issue #166)
+
+export type Recurrence = "once" | "quarterly" | "semiannual" | "annual";
+export interface ReviewLaunch {
+  id: string; period: string; campaign_id: number; launched_at: string; due_at: string;
+  reminded_at: string | null; escalated_at: string | null; closed_at: string | null; revoked: number;
+}
+export interface ReviewSchedule {
+  id: string;
+  name: string;
+  system: string | null;
+  privileged_only: boolean;
+  unused_days: number;
+  duration_days: number;
+  reminder_days: number;
+  close_out: "revoke" | "escalate";
+  escalation_reviewer: { id: number; name: string } | null;
+  escalation_days: number;
+  recurrence: Recurrence;
+  next_run_at: string | null;
+  enabled: boolean;
+  updated_at: string;
+  launches: ReviewLaunch[];
+}
+export interface ReviewScheduleInput {
+  name: string; system: string | null; privileged_only: boolean; unused_days: number; duration_days: number; reminder_days: number;
+  close_out: "revoke" | "escalate"; escalation_identity_id: number | null; escalation_days: number; recurrence: Recurrence;
+  first_run_at?: string; enabled: boolean;
+}
+export const createReviewSchedule = (b: ReviewScheduleInput) => api<ReviewSchedule>("/reviews/schedules", b);
+export const updateReviewSchedule = (id: string, b: ReviewScheduleInput) => api<ReviewSchedule>(`/reviews/schedules/${encodeURIComponent(id)}`, b, "PUT");
+export const runReviewSchedule = (id: string) => api<ReviewLaunch>(`/reviews/schedules/${encodeURIComponent(id)}/run`, {});
+
 // ---------------------------------------------------------------- account correlation (issue #160)
 
 export interface CorrAccount { id: number; system: string; external_id: string; username: string; kind: string; status: string; identity_id: number | null }
@@ -1749,6 +1782,155 @@ export const SIEM_HEALTH: Record<SiemSink["health"]["status"], { tone: "ok" | "i
   failing: { tone: "critical", label: "Failing" },
   paused: { tone: "outline", label: "Paused" },
 };
+// ---------------------------------------------------------------- alerts (#168)
+
+export type AlertSeverity = "low" | "medium" | "high" | "critical";
+export type AlertStatus = "open" | "acknowledged" | "resolved";
+
+export interface UserRef {
+  id: string;
+  name: string;
+}
+
+export interface AlertDeliveryRow {
+  id: string;
+  channel: string;
+  channel_kind: "email" | "webhook";
+  status: "pending" | "sent" | "failed";
+  attempts: number;
+  next_attempt_at: string | null;
+  last_error: string | null;
+  sent_at: string | null;
+}
+
+export interface AlertRow {
+  id: string;
+  rule: string;
+  rule_name: string;
+  key: string;
+  severity: AlertSeverity;
+  title: string;
+  detail: Record<string, unknown>;
+  status: AlertStatus;
+  count: number;
+  first_seen_at: string;
+  last_seen_at: string;
+  assignee: UserRef | null;
+  acknowledged_by: UserRef | null;
+  acknowledged_at: string | null;
+  resolved_by: UserRef | null;
+  resolved_at: string | null;
+  resolution: string | null;
+  deliveries?: AlertDeliveryRow[];
+}
+
+export interface AlertSummary {
+  open: number;
+  acknowledged: number;
+  by_severity: Partial<Record<AlertSeverity, number>>;
+}
+
+export interface AlertRule {
+  id: string;
+  name: string;
+  description: string;
+  kind: "event" | "detection";
+  enabled: boolean;
+  severity: AlertSeverity;
+  threshold: number;
+  window_minutes: number;
+  customized: boolean;
+  updated_at: string | null;
+  live: number;
+}
+
+export interface AlertChannel {
+  id: string;
+  name: string;
+  kind: "email" | "webhook";
+  /** Webhook URLs come back redacted (scheme, host and the last characters). */
+  target: string;
+  min_severity: AlertSeverity;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+  /** Only in the response that created the channel or rotated its secret. */
+  secret?: string;
+}
+
+export interface AlertChannelInput {
+  name: string;
+  kind?: "email" | "webhook";
+  /** Omit on update to keep the current target. */
+  target?: string;
+  min_severity: AlertSeverity;
+  enabled: boolean;
+  rotate_secret?: boolean;
+}
+
+export const ALERT_SEVERITIES: AlertSeverity[] = ["low", "medium", "high", "critical"];
+
+export const alertsApi = {
+  acknowledge: (id: string) => api<AlertRow>(`/alerts/${encodeURIComponent(id)}/acknowledge`, {}),
+  resolve: (id: string, note: string) => api<AlertRow>(`/alerts/${encodeURIComponent(id)}/resolve`, { note }),
+  assign: (id: string, assignee_user_id: string | null) => api<AlertRow>(`/alerts/${encodeURIComponent(id)}/assign`, { assignee_user_id }),
+  setRule: (id: string, body: { enabled: boolean; severity: AlertSeverity; threshold: number; window_minutes: number }) =>
+    api<AlertRule[]>(`/alerts/rules/${encodeURIComponent(id)}`, body, "PUT"),
+  createChannel: (body: AlertChannelInput) => api<AlertChannel>("/alerts/channels", body),
+  updateChannel: (id: string, body: AlertChannelInput) => api<AlertChannel>(`/alerts/channels/${encodeURIComponent(id)}`, body, "PUT"),
+  testChannel: (id: string) => api<{ ok: boolean; error?: string }>(`/alerts/channels/${encodeURIComponent(id)}/test`, {}),
+};
+
+/** Severity → badge tone. */
+export const severityTone = (s: AlertSeverity) => (s === "critical" ? "critical" : s === "high" ? "warning" : s === "medium" ? "info" : "neutral");
+// ------------------------------------------------------------- ownership (#167)
+
+export type OwnedKind = "app" | "group" | "resource" | "identity";
+
+export interface NamedRef {
+  id: number;
+  name: string;
+}
+
+export interface OwnedObject {
+  kind: OwnedKind;
+  key: string;
+  label: string;
+  primary_owner: NamedRef | null;
+  backup_owner: NamedRef | null;
+  owner_group: NamedRef | null;
+  purpose: string;
+  /** "tessera" when set here, "connector" when only the connector names an owner. */
+  source: "tessera" | "connector" | null;
+  updated_at: string | null;
+}
+
+export interface OwnershipList {
+  kind: OwnedKind;
+  counts: Record<OwnedKind, { total: number; unowned: number }>;
+  items: OwnedObject[];
+}
+
+export interface OwnershipInput {
+  primary_owner_id: number | null;
+  backup_owner_id: number | null;
+  owner_group_id: number | null;
+  purpose: string;
+}
+
+export const ownershipPath = (kind: OwnedKind) => `/ownership?kind=${kind}`;
+
+export const setOwnership = (kind: OwnedKind, key: string, body: OwnershipInput) =>
+  api<OwnedObject>(`/ownership/${kind}/${encodeURIComponent(key)}`, body, "PUT");
+
+export const bulkSetOwnership = (objects: { kind: OwnedKind; key: string }[], body: Omit<OwnershipInput, "purpose">) =>
+  api<{ updated: number }>("/ownership/bulk", { objects, ...body });
+
+/** The one object's row out of a kind's listing, or null. */
+export function ownedObject(list: OwnershipList | null, key: string | number): OwnedObject | null {
+  return list?.items.find((o) => o.key === String(key)) ?? null;
+}
+
 // ----------------------------------------------------- provisioning (#103)
 
 export type ProvStatus = "queued" | "sent" | "pending_verification" | "verified" | "mismatch" | "failed" | "cancelled";
@@ -1872,6 +2054,18 @@ export interface AdminIdpConnection {
 export interface AdminRecovery {
   id: string; status: "pending" | "cancelled" | "completed"; ticket: string; operator: string; co_operator: string;
   not_before: string; created_at: string; cancelled_at: string | null; completed_at: string | null;
+}
+
+/** GET /api/admin/platform-health: process-wide operational signals (no tenant data, no secrets). */
+export interface PlatformHealth {
+  generated_at: string; status: "ok" | "degraded"; max_loop_lag_seconds: number;
+  checks: { name: string; ok: boolean }[];
+  loops: { name: string; interval_seconds: number; gated: boolean; last_run_at: string | null; last_success_at: string | null; lag_seconds: number; runs: number; failures: number; healthy: boolean }[];
+  http: { requests: number; server_errors: number; p95_seconds: number | null };
+  audit: { writes: number; write_failures: number };
+  database: { open_connections: number; in_use: number; idle: number; pool_waits: number; busy_errors: number; tx_p95_seconds: number | null; lock_wait_p95_seconds: number | null };
+  logins: { method: string; success: number; failure: number }[];
+  connectors: { connector: string; op: string; calls: number; errors: number }[];
 }
 
 export interface AdminApiClients { available: boolean; clients: { id: string; name: string }[]; detail: string }

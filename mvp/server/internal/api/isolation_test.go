@@ -120,6 +120,12 @@ var crossTenantCases = map[string]crossTenantCase{
 	"GET graph by resource": {method: "GET", path: pathf("/api/graph?resource_id=%d"), key: "resource:aws:prod"},
 	"POST simulate disable account": {method: "POST", path: fixed("/api/simulate"), key: "acct:aws:svc-etl",
 		body: func(id int64) string { return fmt.Sprintf(`{"disable_account_ids":[%d]}`, id) }},
+	"PUT group ownership": {method: "PUT", path: pathf("/api/ownership/group/%d"), key: "group:okta:payments-approvers",
+		body: func(int64) string { return `{}` }},
+	"PUT identity ownership": {method: "PUT", path: pathf("/api/ownership/identity/%d"), key: "svc-etl",
+		body: func(int64) string { return `{}` }},
+	"POST bulk ownership": {method: "POST", path: fixed("/api/ownership/bulk"), key: "svc-etl",
+		body: func(id int64) string { return fmt.Sprintf(`{"objects":[{"kind":"identity","key":"%d"}]}`, id) }},
 	"PUT catalog item": {method: "PUT", path: pathf("/api/catalog/items/%d"), key: "group:okta:platform",
 		body: func(int64) string { return `{"requestable":true,"risk":"low"}` }},
 	"GET lifecycle": {method: "GET", path: pathf("/api/identities/%d/lifecycle"), key: "alice"},
@@ -175,6 +181,7 @@ var routeParamCases = map[string][]string{
 	"GET /api/identities/{identity_id}/affiliations":      {"GET identity affiliations"},
 	"GET /api/identities/{identity_id}/identifiers":       {"GET identity identifiers"},
 	"POST /api/identities/{identity_id}/affiliations":     {"POST add affiliation"},
+	"PUT /api/ownership/{kind}/{object_key}":              {"PUT group ownership", "PUT identity ownership"},
 	"POST /api/identities/{identity_id}/contain":          {"POST contain identity"},
 	"GET /api/identities/{identity_id}/containment":       {"GET identity containment"},
 	"GET /api/identities/{identity_id}/disables":          {"GET identity disables"},
@@ -206,6 +213,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		}
 		if rt.Pattern == "/api/audit/events/{event_id}/proof" {
 			continue // TestIsolation_AuditRoutes
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/reviews/schedules/{schedule_id}") {
+			continue // TestReviewSchedulesAPI_CrossTenant (a UUID, not a fixture id)
 		}
 		if strings.HasPrefix(rt.Pattern, "/api/jobs/{job_id}") {
 			continue // TestIsolation_JobRoutes (a UUID, not a fixture id)
@@ -267,6 +277,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		}
 		if strings.HasPrefix(rt.Pattern, "/api/siem/sinks/") {
 			continue // TestSiemAPI_CrossTenant (UUIDs, not fixture ids)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/alerts/") {
+			continue // TestAlertsAPI_CrossTenant (UUIDs and rule names, not fixture ids)
 		}
 		if strings.HasPrefix(rt.Pattern, "/api/admin/") {
 			continue // TestAdminAPI_CrossTenant (UUIDs, not fixture ids)
@@ -352,6 +365,7 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		"/api/email/messages/{message_id}":           seedEmailMessage(t, f, f.B, store.EmailDeferred),
 		"/api/identities/{identity_id}/containment":  fmt.Sprint(b["alice"]),
 		"/api/siem/sinks/{sink_id}/dead-letters":     seedSiemSink(t, f.DB, f.B.ID, "b"),
+		"/api/alerts/{alert_id}":                     seedAlert(t, f.DB, f.B.ID, "b"),
 		"/api/identities/{identity_id}/disables":     fmt.Sprint(b["alice"]),
 		"/api/orgs/{org_id}":                         orgs.RootID,
 	}

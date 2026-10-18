@@ -1,5 +1,5 @@
 import {
-  AppWindow, BadgeCheck, Bot, Building2, CalendarClock, ChartLine, ClipboardCheck, House, Inbox, KeyRound, Layers, LucideIcon, Network, Plug, Plus, Settings, ShieldCheck, SlidersHorizontal, Timer, UserPlus, Users, UsersRound,
+  AppWindow, BadgeCheck, BellRing, Bot, Building2, CalendarClock, ChartLine, ClipboardCheck, House, Inbox, KeyRound, Layers, LucideIcon, Network, Plug, Plus, Settings, ShieldCheck, SlidersHorizontal, Timer, UserCheck, UserPlus, Users, UsersRound,
 } from "lucide-react";
 
 export interface NavPage {
@@ -45,6 +45,7 @@ export const RAIL: RailGroup[] = [
         pages: [{ path: "/directory/entitlements", label: "Entitlements", keywords: "groups permissions aws roles snowflake okta" }],
       },
       { id: "apps", label: "Applications", icon: AppWindow, path: "/directory/apps", keywords: "apps systems endpoints connectors resources" },
+      { id: "ownership", label: "Ownership", icon: UserCheck, path: "/directory/ownership", keywords: "owners backup owner orphaned unowned accountable purpose" },
       {
         id: "accounts", label: "Accounts", icon: KeyRound, path: "/directory/accounts", also: ["/directory/matches"], keywords: "system accounts usernames",
         pages: [{ path: "/directory/matches", label: "Account matches", keywords: "correlation link merge unmerge duplicate orphan uncorrelated" }],
@@ -75,6 +76,7 @@ export const RAIL: RailGroup[] = [
   {
     label: "Protection",
     items: [
+      { id: "alerts", label: "Alerts", icon: BellRing, path: "/alerts", keywords: "alerting notifications incidents detections break glass sign-in failures webhook slack teams email" },
       { id: "policies", label: "Policies & SoD", icon: ShieldCheck, path: "/governance/policies", keywords: "policy as code yaml simulation what-if violations" },
       { id: "abac", label: "Attribute policies", icon: SlidersHorizontal, path: "/governance/attributes", keywords: "abac attribute conditions department location birthright eligibility simulate" },
       { id: "graph", label: "Access graph", icon: Network, path: "/insights/graph", keywords: "graph explorer paths who can access" },

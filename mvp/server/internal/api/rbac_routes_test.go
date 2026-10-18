@@ -47,6 +47,10 @@ GET    /api/reviews/campaigns                        graph.read      -
 POST   /api/reviews/campaigns                        reviews.manage  -
 GET    /api/reviews/campaigns/{campaign_id}          graph.read      -
 POST   /api/reviews/items/{item_id}/decision         reviews.decide  STEP_UP_POLICY
+GET    /api/reviews/schedules                        graph.read      -  # issue #166
+POST   /api/reviews/schedules                        reviews.manage  -  # issue #166
+PUT    /api/reviews/schedules/{schedule_id}          reviews.manage  -  # issue #166
+POST   /api/reviews/schedules/{schedule_id}/run      reviews.manage  -  # issue #166
 GET    /api/hris/events                              graph.read      -
 POST   /api/hris/events                              hris.simulate_event -
 GET    /api/hris/events/{event_id}/plan              graph.read      -
@@ -58,6 +62,21 @@ PUT    /api/siem/sinks/{sink_id}                     siem.configure  STEP_UP_POL
 POST   /api/siem/sinks/{sink_id}/rewind              siem.configure  -  # issue #169
 POST   /api/siem/sinks/{sink_id}/test                siem.configure  -  # issue #169
 GET    /api/siem/sinks/{sink_id}/dead-letters        siem.read       -  # issue #169
+GET    /api/alerts                                   alerts.read     -  # issue #168
+GET    /api/alerts/summary                           alerts.read     -  # issue #168
+GET    /api/alerts/rules                             alerts.read     -  # issue #168
+PUT    /api/alerts/rules/{rule_id}                   alerts.configure -  # issue #168
+GET    /api/alerts/channels                          alerts.configure -  # issue #168
+POST   /api/alerts/channels                          alerts.configure STEP_UP_POLICY  # issue #168
+PUT    /api/alerts/channels/{channel_id}             alerts.configure STEP_UP_POLICY  # issue #168
+POST   /api/alerts/channels/{channel_id}/test        alerts.configure -  # issue #168
+GET    /api/alerts/{alert_id}                        alerts.read     -  # issue #168
+POST   /api/alerts/{alert_id}/acknowledge            alerts.manage   -  # issue #168
+POST   /api/alerts/{alert_id}/resolve                alerts.manage   -  # issue #168
+POST   /api/alerts/{alert_id}/assign                 alerts.manage   -  # issue #168
+GET    /api/ownership                                graph.read      -  # issue #167
+PUT    /api/ownership/{kind}/{object_key}            ownership.manage -  # issue #167
+POST   /api/ownership/bulk                           ownership.manage -  # issue #167
 GET    /openapi.json                                 auth.self       -  #
 GET    /docs                                         auth.self       -  #
 GET    /docs/oauth2-redirect                         auth.self       -  #
@@ -248,6 +267,7 @@ GET    /api/admin/notifications                      admin.read      -  # issue 
 GET    /api/admin/recovery                           admin.read      -  # issue #16
 POST   /api/admin/recovery/{recovery_id}/cancel      admin.change.request -  # issue #16
 GET    /api/admin/api-clients                        admin.read      -  # issue #16
+GET    /api/admin/platform-health                    admin.read      -  # issue #303
 `
 
 type designRoute struct {

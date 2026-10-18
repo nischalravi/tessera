@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
-  ArrowLeftRight, Bell, Mail, Clock, Download, FileBadge, Fingerprint, KeySquare, LucideIcon, Palette, Plug, Radio, ScrollText, Search, Settings, ShieldCheck, UserCog,
+  Activity, ArrowLeftRight, Bell, Mail, Clock, Download, FileBadge, Fingerprint, KeySquare, LucideIcon, Palette, Plug, Radio, ScrollText, Search, Settings, ShieldCheck, UserCog,
 } from "lucide-react";
 import { AuditRow, AuditVerifyReport, api, fmtDate, useApi } from "../../api";
 import { fuzzy } from "../../app/fuzzy";
@@ -14,7 +14,7 @@ import { Provisioning } from "./Provisioning";
 import { ConfigTransfer } from "./ConfigTransfer";
 import { SiemSinks } from "./SiemSinks";
 
-const ICONS: Record<string, LucideIcon> = { Radio, Plug, Fingerprint, UserCog, Bell, Mail, Palette, Clock, ScrollText, FileBadge, ArrowLeftRight, KeySquare };
+const ICONS: Record<string, LucideIcon> = { Radio, Plug, Fingerprint, UserCog, Bell, Mail, Palette, Clock, ScrollText, FileBadge, ArrowLeftRight, KeySquare, Activity };
 const Icon = ({ name, size = 18 }: { name: string; size?: number }) => {
   const C = ICONS[name] ?? Settings;
   return <C size={size} aria-hidden />;
