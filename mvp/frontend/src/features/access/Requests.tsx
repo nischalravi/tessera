@@ -233,7 +233,7 @@ function Drafts({ drafts }: { drafts: ReturnType<typeof useMockState>["requests"
         <EmptyState title="No drafts" icon={<Pencil size={18} />}>Use “Save draft” on Request access to come back to a request later.</EmptyState>
       ) : (
         <table>
-          <thead><tr><th>Items</th><th>For</th><th>Saved</th><th /></tr></thead>
+          <thead><tr><th>Items</th><th>For</th><th>Saved</th><th><span className="sr-only">Actions</span></th></tr></thead>
           <tbody>
             {rows.map((d) => (
               <tr key={d.id}>
