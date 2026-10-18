@@ -680,7 +680,7 @@ func TestIsolation_EveryRepoMethodClassified(t *testing.T) {
 	}
 	for _, m := range []map[string]bool{keys(listCases), keys(getCases), keys(naturalKeyGets), keys(countCases),
 		keys(mutations), keys(insertCases), readinessCovered(), keysCovered(), auditCovered(), authCovered(), correlationCovered(), identityModelCovered(), containmentCovered(), groupsCovered(),
-		approvalsCovered(), lifecycleCovered(), notificationsCovered(), requestsCovered(), rolesCovered(), abacCovered(), sponsorshipsCovered(), adminCovered(), disablesCovered()} {
+		approvalsCovered(), lifecycleCovered(), notificationsCovered(), requestsCovered(), rolesCovered(), abacCovered(), sponsorshipsCovered(), adminCovered(), disablesCovered(), removalsCovered()} {
 		for k := range m {
 			covered[strings.SplitN(k, "/", 2)[0]] = true
 		}

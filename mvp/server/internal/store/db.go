@@ -115,6 +115,8 @@ var tables = []string{
 	"containment_credentials", "containment_retries",
 	// identity disable / enable (schema/0310_identity_disables.sql)
 	"identity_disables", "identity_disable_accounts",
+	// removal requests (schema/0311_removal_requests.sql)
+	"removal_requests",
 	// native groups (schema/0280_groups.sql); the engine tables stay empty until GR-2
 	"grp_folders", "grp_name_aliases", "grp_groups", "grp_composite_factors", "grp_lists", "grp_direct_memberships",
 	"grp_deps", "grp_closure", "grp_levels", "grp_effective", "grp_engine_queue",

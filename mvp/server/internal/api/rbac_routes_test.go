@@ -117,6 +117,11 @@ POST   /api/abac/policies/{policy_id}/retire         roles.manage    STEP_UP_POL
 POST   /api/abac/simulate                            graph.read      -  # issue #162
 GET    /api/abac/bindings                            graph.read      -  # issue #162
 PUT    /api/catalog/items/{group_id}/policy          catalog.manage  STEP_UP_POLICY  # issue #162
+POST   /api/removal-requests                         requests.create -  # wire-previews (others: requests.create_for_others in the handler)
+GET    /api/removal-requests                         requests.create -  # wire-previews (scope=pending|all: requests.decide or graph.read; approvals: what you may decide)
+POST   /api/removal-requests/{request_id}/approve    requests.create STEP_UP_POLICY  # wire-previews (the manager, a delegate or requests.decide: the handler checks)
+POST   /api/removal-requests/{request_id}/deny       requests.create -  # wire-previews
+POST   /api/removal-requests/{request_id}/cancel     requests.create -  # wire-previews (the requester)
 POST   /api/role-requests                            requests.create -  # issue #161 (others: requests.create_for_others in the handler)
 GET    /api/role-requests                            requests.create -  # issue #161 (scope=pending|all: requests.decide or graph.read)
 POST   /api/role-requests/{request_id}/approve       requests.decide STEP_UP_POLICY  # issue #161

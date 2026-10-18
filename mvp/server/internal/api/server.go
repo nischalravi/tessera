@@ -193,6 +193,7 @@ func New(cfg Config) *Server {
 	s.registerCorrelationRoutes()
 	s.registerAffiliationRoutes()
 	s.registerRequestRoutes()
+	s.registerRemovalRoutes()
 	s.registerRoleRoutes()
 	s.registerAbacRoutes()
 	s.registerLifecycleRoutes()

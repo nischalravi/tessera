@@ -897,6 +897,34 @@ export const approveRequest = (id: string, reason?: string) => line(id, "approve
 export const denyRequest = (id: string, reason: string) => line(id, "deny", { reason });
 export const cancelRequest = (id: string) => line(id, "cancel");
 export const removeRequest = (id: string, reason?: string) => line(id, "remove", reason ? { reason } : {});
+/** A request to remove one grant (account -> group) a person holds (My access > Request removal). */
+export interface RemovalRequest {
+  id: string;
+  group: CatalogEntry["group"];
+  account: { id: number; system: string; username: string };
+  beneficiary: PersonRef;
+  requested_by: { id: string; display_name: string };
+  justification: string;
+  status: "pending" | "approved" | "denied" | "cancelled";
+  requested_at: string;
+  decided_by: { id: string; display_name: string } | null;
+  decided_at: string | null;
+  decision_reason: string | null;
+  /** set on approval: revoked, request_removed (an approved access request was ended) or already_removed */
+  outcome: "revoked" | "request_removed" | "already_removed" | null;
+  can_approve: boolean;
+  can_cancel: boolean;
+}
+const removalPath = (id: string, action: string) => `/removal-requests/${encodeURIComponent(id)}/${action}`;
+export const removals = {
+  submit: (edgeId: number, justification: string) => api<RemovalRequest>("/removal-requests", { edge_id: edgeId, justification }),
+  approve: (id: string, reason?: string) => api<RemovalRequest>(removalPath(id, "approve"), reason ? { reason } : {}),
+  deny: (id: string, reason: string) => api<RemovalRequest>(removalPath(id, "deny"), { reason }),
+  cancel: (id: string) => api<RemovalRequest>(removalPath(id, "cancel"), {}),
+};
+/** scope: mine (default), approvals (what you may decide now), pending or all (requests.decide or graph.read). */
+export const removalsPath = (scope: "mine" | "approvals" | "pending" | "all" = "mine") => `/removal-requests?scope=${scope}`;
+
 export const putCatalogItem = (groupId: number, body: Omit<CatalogEntry, "id" | "group" | "owner" | "updated_at" | "approval"> & {
   owner_identity_id: number | null; approval_stages?: StageKind[]; escalate_after_hours?: number;
 }) => api<CatalogEntry>(`/catalog/items/${groupId}`, body, "PUT");
