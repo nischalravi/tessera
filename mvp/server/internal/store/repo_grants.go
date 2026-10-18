@@ -62,7 +62,10 @@ var (
 	edgesDeleteJIT = tq("grant_edges.delete_jit", `
 		DELETE FROM grant_edges WHERE tenant_id = @tenant AND id = @id AND source = 'jit'`)
 	edgesDeleteExpiredJIT = tq("grant_edges.delete_expired_jit", `
-		DELETE FROM grant_edges WHERE tenant_id = @tenant AND source = 'jit' AND expires_at <= @now`)
+		DELETE FROM grant_edges WHERE grant_edges.tenant_id = @tenant AND grant_edges.source = 'jit'
+			AND grant_edges.expires_at <= @now
+			AND grant_edges.id NOT IN (SELECT r.edge_id FROM access_requests r
+				WHERE r.tenant_id = @tenant AND r.status = 'approved' AND r.edge_id IS NOT NULL)`)
 )
 
 func scanEdge(s scanner) (*GrantEdge, error) {

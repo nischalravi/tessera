@@ -70,11 +70,18 @@ var (
 		SELECT count(*) FROM access_requests r WHERE r.tenant_id = @tenant`)
 	requestsCountStatus = tq("access_requests.count_status", `
 		SELECT count(r.id) FROM access_requests r WHERE r.tenant_id = @tenant AND r.status = @status`)
-	// jitNeedsSweep backs jit.NeedsSweep: both subqueries are tenant-scoped.
+	// jitNeedsSweep backs jit.NeedsSweep: every subquery is tenant-scoped.
+	// An expired approved request whose removal the provisioning engine already
+	// holds (key jit:<id>:end) waits for the target, not for a sweep, and its
+	// edge stays until then (see grant_edges.delete_expired_jit).
 	jitNeedsSweep = tq("jit.needs_sweep", `
 		SELECT (SELECT count(*) FROM access_requests r
-				WHERE r.tenant_id = @tenant AND r.status = 'approved' AND r.expires_at <= @now)
-			+ (SELECT count(*) FROM grant_edges e WHERE e.tenant_id = @tenant AND e.source = 'jit' AND e.expires_at <= @now)`)
+				WHERE r.tenant_id = @tenant AND r.status = 'approved' AND r.expires_at <= @now
+					AND NOT EXISTS (SELECT 1 FROM provisioning_ops o
+						WHERE o.tenant_id = @tenant AND o.idempotency_key = 'jit:' || r.id || ':end'))
+			+ (SELECT count(*) FROM grant_edges e WHERE e.tenant_id = @tenant AND e.source = 'jit' AND e.expires_at <= @now
+				AND e.id NOT IN (SELECT r.edge_id FROM access_requests r
+					WHERE r.tenant_id = @tenant AND r.status = 'approved' AND r.edge_id IS NOT NULL))`)
 )
 
 func scanRequest(s scanner) (*AccessRequest, error) {
