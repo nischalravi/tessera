@@ -21,7 +21,7 @@ import (
 type TenantTx struct {
 	ctx      context.Context
 	db       *DB
-	tx       *sql.Tx
+	tx       *xtx
 	tenant   tenancy.ID
 	readOnly bool
 	appended int64 // audit events appended (counted into AuditContext.Committed on commit)
@@ -67,17 +67,34 @@ func (tx *TenantTx) exec(s tstmt, args ...sql.NamedArg) (sql.Result, error) {
 	return res, crossTenant(err)
 }
 
-// crossTenant maps a cross-tenant reference refused by the schema's guard
-// triggers (schema/0001_tenancy.sql) to ErrCrossTenant.
+// crossTenant maps a cross-tenant reference refused by the schema (SQLite's
+// guard triggers in schema/0001_tenancy.sql; in Postgres the composite
+// foreign keys and node-key triggers) to ErrCrossTenant.
 func crossTenant(err error) error {
-	if err != nil && strings.Contains(err.Error(), "cross-tenant reference") {
+	if isReferenceViolation(err) {
 		return fmt.Errorf("%w: %v", ErrCrossTenant, err)
 	}
 	return err
 }
 
-// insert runs an INSERT and returns the new row id.
+// insert runs an INSERT and returns the new row id. Postgres has no
+// LastInsertId, so the statement gets RETURNING id (every table inserted into
+// this way has an integer id column).
 func (tx *TenantTx) insert(s tstmt, args ...sql.NamedArg) (int64, error) {
+	if tx.tx.d == dialectPostgres {
+		if tx.readOnly {
+			return 0, ErrReadOnly
+		}
+		a, err := tx.bind(args)
+		if err != nil {
+			return 0, err
+		}
+		var id int64
+		err = tx.tx.guard(tx.ctx, func() error {
+			return tx.tx.QueryRowContext(tx.ctx, s.sql+" RETURNING id", a...).Scan(&id)
+		})
+		return id, crossTenant(err)
+	}
 	res, err := tx.exec(s, args...)
 	if err != nil {
 		return 0, err

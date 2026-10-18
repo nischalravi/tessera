@@ -9,6 +9,7 @@ import { Badge, Button, Callout, DataTable, EmptyState, Page, PreviewBadge, useT
 import { EmailDelivery } from "../notifications/EmailDelivery";
 import { NotificationsAdminPanel } from "../notifications/Notifications";
 import { ADMIN_BY_ID, ADMIN_SECTIONS, AdminSection, useMockState } from "../../mocks";
+import { ConfigTransfer } from "./ConfigTransfer";
 
 const ICONS: Record<string, LucideIcon> = { Plug, Fingerprint, UserCog, Bell, Mail, Palette, Clock, ScrollText, FileBadge, ArrowLeftRight, KeySquare };
 const Icon = ({ name, size = 18 }: { name: string; size?: number }) => {
@@ -191,7 +192,7 @@ function AuditLog() {
   );
 }
 
-const LIVE: Record<string, () => React.JSX.Element> = { jobs: Jobs, audit: AuditLog, notifications: NotificationsAdminPanel, "email-delivery": EmailDelivery };
+const LIVE: Record<string, () => React.JSX.Element> = { jobs: Jobs, audit: AuditLog, "config-transfer": ConfigTransfer, notifications: NotificationsAdminPanel, "email-delivery": EmailDelivery };
 
 export function AdminSectionPage() {
   const { section } = useParams();

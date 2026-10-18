@@ -114,8 +114,20 @@ func TestRateLimit_AuthRoutes(t *testing.T) {
 			t.Errorf("discover %d: %d, want %d", i, code, want)
 		}
 	}
-	if code := serve(h, fromIP(authed(alice, "GET", "/api/auth/session", ""), "198.51.100.8:1")).Code; code != 429 {
-		t.Errorf("signed-in /api/auth/session from a limited IP: %d", code)
+	// Reading your own session is not a sign-in attempt: the UI does it on every page load (UAT #308).
+	for _, path := range []string{"/api/auth/session", "/api/auth/sessions"} {
+		if code := serve(h, fromIP(authed(alice, "GET", path, ""), "198.51.100.8:1")).Code; code != 200 {
+			t.Errorf("signed-in %s from a limited IP: %d", path, code)
+		}
+	}
+	// ... and does not use up the sign-in budget of a fresh IP.
+	for i := 0; i < 40; i++ {
+		if code := serve(h, fromIP(authed(alice, "GET", "/api/auth/session", ""), "198.51.100.9:1")).Code; code != 200 {
+			t.Fatalf("session read %d: %d", i, code)
+		}
+	}
+	if code := serve(h, fromIP(httptest.NewRequest("GET", "/api/auth/discover?tenant=larkspur", nil), "198.51.100.9:1")).Code; code != 200 {
+		t.Errorf("discover after 40 session reads: %d", code)
 	}
 	if code := serve(h, fromIP(authed(alice, "GET", "/api/identities", ""), "198.51.100.8:1")).Code; code != 200 {
 		t.Errorf("other routes of a signed-in user from that IP: %d", code)

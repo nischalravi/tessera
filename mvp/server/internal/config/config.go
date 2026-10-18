@@ -61,7 +61,7 @@ type Config struct {
 	Env                   string // Dev or Prod
 	PublicURL             string // issuer base; https in prod
 	APIAudience           string // access-token aud
-	DB                    string // SQLite path (or sqlite:///path)
+	DB                    string // SQLite path (or sqlite:///path), or a postgres:// DSN (carries a password: never log it)
 	KEKFile               string // TESSERA_KEK_FILE, when set
 	CookieSecure          bool
 	CORSOrigins           []string
@@ -261,6 +261,8 @@ func Load(getenv func(string) string) (*Config, error) {
 		bad("TESSERA_PUBLIC_URL: %v", err)
 	case prod && pub.Scheme != "https":
 		bad("TESSERA_PUBLIC_URL must be https with TESSERA_ENV=prod (got %s)", pub.Scheme)
+	case prod && DevOnlyURL(c.PublicURL) != "":
+		bad("TESSERA_PUBLIC_URL must not be %s with TESSERA_ENV=prod", DevOnlyURL(c.PublicURL))
 	}
 	// §11: the insecure-cookie fallback (Safari on http://localhost) only in
 	// dev, and only for a localhost public URL.
@@ -327,6 +329,12 @@ func Load(getenv func(string) string) (*Config, error) {
 		}
 		if c.DevIdPURL != "" {
 			bad("TESSERA_DEV_IDP_URL must not be set with TESSERA_ENV=prod")
+		}
+		if IsPostgresDSN(c.DB) {
+			// Never echo the DSN: it carries the password.
+			if msg := checkProdPostgres(c.DB); msg != "" {
+				bad("TESSERA_DB: %s", msg)
+			}
 		}
 		if c.SafedialAllow != "" {
 			bad("TESSERA_SAFEDIAL_ALLOW must not be set with TESSERA_ENV=prod: private directories are reached through the Directory Agent")
@@ -468,9 +476,9 @@ func (c *Config) AnchorURL(dbPath string) string {
 
 // DevAnchorURL is the dev anchor file for a database path.
 func DevAnchorURL(dbPath string) string {
-	p, err := filepath.Abs(filepath.Join(filepath.Dir(dbPath), "var", "audit-anchors.jsonl"))
+	p, err := filepath.Abs(filepath.Join(localDir(dbPath), "var", "audit-anchors.jsonl"))
 	if err != nil {
-		p = filepath.Join(filepath.Dir(dbPath), "var", "audit-anchors.jsonl")
+		p = filepath.Join(localDir(dbPath), "var", "audit-anchors.jsonl")
 	}
 	return "file://" + filepath.ToSlash(p)
 }
@@ -478,13 +486,51 @@ func DevAnchorURL(dbPath string) string {
 // DevKEKPath is where a dev KEK is generated: var/dev-kek next to the
 // database file (server/var/dev-kek for the default database).
 func DevKEKPath(dbPath string) string {
-	return filepath.Join(filepath.Dir(dbPath), "var", "dev-kek")
+	return filepath.Join(localDir(dbPath), "var", "dev-kek")
+}
+
+// localDir is the directory dev files (KEK, anchors) live in: next to a
+// SQLite database file, or the working directory for a Postgres DSN.
+func localDir(dbPath string) string {
+	if IsPostgresDSN(dbPath) {
+		return "."
+	}
+	return filepath.Dir(dbPath)
+}
+
+// IsPostgresDSN reports whether a database setting is a postgres:// URL.
+func IsPostgresDSN(s string) bool {
+	return strings.HasPrefix(s, "postgres://") || strings.HasPrefix(s, "postgresql://")
+}
+
+// checkProdPostgres returns what is wrong with a production Postgres DSN, or
+// "". It requires TLS to the server and an app_role: the application must run
+// as the non-owner role so row-level security binds it (design §14.3).
+func checkProdPostgres(dsn string) string {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return "is not a valid postgres:// URL"
+	}
+	q, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		return "is not a valid postgres:// URL"
+	}
+	var problems []string
+	switch q.Get("sslmode") {
+	case "require", "verify-ca", "verify-full":
+	default:
+		problems = append(problems, "sslmode must be require, verify-ca or verify-full with TESSERA_ENV=prod")
+	}
+	if q.Get("app_role") == "" {
+		problems = append(problems, "app_role (the NOSUPERUSER, NOBYPASSRLS role, usually tessera_app) is required with TESSERA_ENV=prod so row-level security applies")
+	}
+	return strings.Join(problems, "; ")
 }
 
 // DevMailPath is where the dev mail sink appends: var/dev-mail.jsonl next to
 // the database file.
 func DevMailPath(dbPath string) string {
-	return filepath.Join(filepath.Dir(dbPath), "var", "dev-mail.jsonl")
+	return filepath.Join(localDir(dbPath), "var", "dev-mail.jsonl")
 }
 
 // Sealer returns the KEK sealer. With no KEK configured (dev only; Load
@@ -581,6 +627,35 @@ func readKEKFile(path string) ([]byte, error) {
 		return nil, err
 	}
 	return decodeKEK(string(b))
+}
+
+// DevOnlyURL says why a URL may be used only in development: plain http,
+// or a host that is localhost or a loopback, private or link-local
+// address. "" means the URL is fine in production. Load applies it to
+// TESSERA_PUBLIC_URL, and the configuration import (internal/transport)
+// to every URL in a bundle applied to a production server.
+func DevOnlyURL(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	if u.Scheme == "http" || u.Scheme == "ws" {
+		return "plain " + u.Scheme
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return "a localhost address"
+	}
+	if a, err := netip.ParseAddr(host); err == nil {
+		a = a.Unmap()
+		switch {
+		case a.IsLoopback():
+			return "a loopback address"
+		case a.IsPrivate(), a.IsLinkLocalUnicast(), a.IsUnspecified():
+			return "a private or link-local address"
+		}
+	}
+	return ""
 }
 
 func parsePublicURL(s string) (*url.URL, error) {

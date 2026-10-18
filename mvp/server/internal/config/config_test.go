@@ -217,6 +217,40 @@ func TestAnchorURL(t *testing.T) {
 	}
 }
 
+// TestPostgresDSN: a postgres:// TESSERA_DB works in dev (dev files go in the
+// working directory, not in a directory named after the URL), and production
+// refuses a DSN without TLS or without the app_role that makes row-level
+// security apply, without echoing the DSN (it holds the password).
+func TestPostgresDSN(t *testing.T) {
+	dsn := "postgres://owner:s3cret-pw@db.example.com:5432/tessera?sslmode=require&app_role=tessera_app"
+	if _, err := config.Load(env(map[string]string{"TESSERA_DB": dsn})); err != nil {
+		t.Fatalf("dev with a postgres DSN: %v", err)
+	}
+	wd, _ := filepath.Abs(".")
+	if got, want := config.DevKEKPath(dsn), filepath.Join(".", "var", "dev-kek"); got != want {
+		t.Errorf("dev KEK path %q, want %q", got, want)
+	}
+	if got, want := config.DevAnchorURL(dsn), "file://"+filepath.ToSlash(filepath.Join(wd, "var", "audit-anchors.jsonl")); got != want {
+		t.Errorf("dev anchor %q, want %q", got, want)
+	}
+	if _, err := config.Load(env(with(safeProd(), "TESSERA_DB", dsn))); err != nil {
+		t.Errorf("prod with a safe DSN: %v", err)
+	}
+	for name, tc := range map[string]struct{ dsn, want string }{
+		"no sslmode":      {"postgres://o:s3cret-pw@db/tessera?app_role=tessera_app", "sslmode must be require"},
+		"sslmode disable": {"postgres://o:s3cret-pw@db/tessera?sslmode=disable&app_role=tessera_app", "sslmode must be require"},
+		"sslmode prefer":  {"postgres://o:s3cret-pw@db/tessera?sslmode=prefer&app_role=tessera_app", "sslmode must be require"},
+		"no app_role":     {"postgres://o:s3cret-pw@db/tessera?sslmode=verify-full", "app_role"},
+	} {
+		_, err := config.Load(env(with(safeProd(), "TESSERA_DB", tc.dsn)))
+		if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "TESSERA_DB") {
+			t.Errorf("%s: %v", name, err)
+		} else if strings.Contains(err.Error(), "s3cret-pw") {
+			t.Errorf("%s: the error echoes the DSN password: %v", name, err)
+		}
+	}
+}
+
 // TestClock: TESSERA_NOW freezes the clock in dev; unset, the wall clock runs.
 func TestClock(t *testing.T) {
 	c, err := config.Load(env(map[string]string{"TESSERA_ENV": "dev", "TESSERA_NOW": "2026-10-08T09:30:00"}))
@@ -426,6 +460,18 @@ func TestTestEnvAndInsecureCookie(t *testing.T) {
 	c, err = config.Load(env(map[string]string{"TESSERA_ENV": "dev", "TESSERA_PUBLIC_URL": "https://tessera.example.com/app"}))
 	if err != nil || c.PublicOrigin() != "https://tessera.example.com" {
 		t.Errorf("public origin %q %v", c.PublicOrigin(), err)
+	}
+}
+
+func TestDevOnlyURL(t *testing.T) {
+	for raw, want := range map[string]bool{
+		"https://login.example.com/oauth2": false, "https://203.0.113.9/x": false, "not a url": false, "": false,
+		"http://login.example.com": true, "https://localhost:8443": true, "https://api.localhost": true, "https://127.0.0.1:8001": true,
+		"https://[::1]/x": true, "https://10.1.2.3": true, "https://192.168.0.5": true, "https://169.254.169.254": true,
+	} {
+		if got := config.DevOnlyURL(raw) != ""; got != want {
+			t.Errorf("DevOnlyURL(%q) = %q, want dev-only %v", raw, config.DevOnlyURL(raw), want)
+		}
 	}
 }
 
