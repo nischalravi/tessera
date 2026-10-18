@@ -20,6 +20,7 @@ import (
 // not take one.
 type TenantTx struct {
 	ctx      context.Context
+	db       *DB
 	tx       *sql.Tx
 	tenant   tenancy.ID
 	readOnly bool
@@ -44,7 +45,7 @@ func (tx *TenantTx) own(t tenancy.ID) error {
 
 // bind appends @tenant to args, refusing a caller-supplied "tenant".
 func (tx *TenantTx) bind(args []sql.NamedArg) ([]any, error) {
-	out := make([]any, 0, len(args)+1)
+	out := make([]any, 0, len(args)) // append grows it by one for @tenant
 	for _, a := range args {
 		if strings.EqualFold(a.Name, "tenant") {
 			return nil, ErrCrossTenant // a caller tried to supply the tenant
@@ -62,7 +63,7 @@ func (tx *TenantTx) exec(s tstmt, args ...sql.NamedArg) (sql.Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	res, err := tx.tx.ExecContext(tx.ctx, s.sql, a...)
+	res, err := tx.db.execIn(tx.ctx, tx.tx, s.sql, a)
 	return res, crossTenant(err)
 }
 
@@ -89,7 +90,7 @@ func (tx *TenantTx) query(s tstmt, args ...sql.NamedArg) (*sql.Rows, error) {
 	if err != nil {
 		return nil, err
 	}
-	return tx.tx.QueryContext(tx.ctx, s.sql, a...)
+	return tx.db.queryIn(tx.ctx, tx.tx, s.sql, a)
 }
 
 func (tx *TenantTx) queryRow(s tstmt, args ...sql.NamedArg) scanner {
@@ -97,7 +98,7 @@ func (tx *TenantTx) queryRow(s tstmt, args ...sql.NamedArg) scanner {
 	if err != nil {
 		return errScanner{err}
 	}
-	return tx.tx.QueryRowContext(tx.ctx, s.sql, a...)
+	return tx.db.queryRowIn(tx.ctx, tx.tx, s.sql, a)
 }
 
 // count runs a COUNT-style statement returning one integer.

@@ -106,6 +106,48 @@ func TestServeRefusesWithoutExplicitEnv(t *testing.T) {
 	}
 }
 
+// TestSeedRefusesWithoutExplicitEnv (L8): `tessera seed` needs an explicit
+// TESSERA_ENV like serve (run.sh exports TESSERA_ENV=dev), and writes
+// nothing (no database, no dev KEK) when it is missing.
+func TestSeedRefusesWithoutExplicitEnv(t *testing.T) {
+	for _, env := range []string{"", "DEV", "development"} {
+		t.Run(env, func(t *testing.T) {
+			t.Setenv("TESSERA_ENV", env)
+			dir := t.TempDir()
+			db := filepath.Join(dir, "t.db")
+			var out, logs bytes.Buffer
+			err := run(context.Background(), []string{"seed", "-db", db}, &out, &logs)
+			if err == nil || !strings.Contains(err.Error(), "TESSERA_ENV=dev") {
+				t.Errorf("seed with TESSERA_ENV=%q: %v, want a refusal", env, err)
+			}
+			if ents, _ := os.ReadDir(dir); len(ents) != 0 {
+				t.Errorf("seed wrote %d entries before refusing", len(ents))
+			}
+		})
+	}
+}
+
+// TestInsecureCookieNeedsLoopbackListener (L8): TESSERA_COOKIE_SECURE=false
+// (dev, localhost public URL) refuses a listener that is not loopback.
+func TestInsecureCookieNeedsLoopbackListener(t *testing.T) {
+	t.Setenv("TESSERA_ENV", "dev")
+	t.Setenv("TESSERA_COOKIE_SECURE", "false")
+	for _, addr := range []string{"0.0.0.0:0", ":0", "[::]:0", "192.0.2.1:0"} {
+		var out, logs bytes.Buffer
+		err := run(context.Background(), []string{"serve", "-addr", addr, "-db", filepath.Join(t.TempDir(), "t.db")}, &out, &logs)
+		if err == nil || !strings.Contains(err.Error(), "loopback listen address") {
+			t.Errorf("-addr %s: %v, want a refusal", addr, err)
+		}
+	}
+	for addr, want := range map[string]bool{"127.0.0.1:8000": true, "localhost:8000": true, "[::1]:8000": true,
+		"127.0.0.2:1": true, "0.0.0.0:8000": false, ":8000": false, "[::ffff:127.0.0.1]:1": true, "[fe80::1%lo]:1": false,
+		"tessera.example.com:443": false, "nonsense": false} {
+		if got := loopbackListen(addr); got != want {
+			t.Errorf("loopbackListen(%s) = %t, want %t", addr, got, want)
+		}
+	}
+}
+
 // prodEnv sets a production configuration that passes every guard rail.
 func prodEnv(t *testing.T) {
 	t.Setenv("TESSERA_ENV", "prod")
