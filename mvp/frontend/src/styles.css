@@ -862,6 +862,7 @@ html { scroll-padding-top: calc(var(--topbar-h) + 8px); }
   .cmdbar .cmd { min-height: 44px; min-width: 44px; }
   .input, select.input, textarea.input { min-height: 44px; font-size: 16px; } /* 16px stops iOS zooming into the field */
   .rail-item { min-height: 44px; }
+  th button.sort { min-height: 44px; min-width: 44px; }
   .chk-hit { display: inline-grid; place-items: center; min-width: 44px; min-height: 44px; margin: -10px; cursor: pointer; }
   input[type="checkbox"], input[type="radio"] { width: 20px; height: 20px; }
   label:has(> input[type="radio"]), label:has(> input[type="checkbox"]) { min-height: 44px; display: flex; align-items: center; gap: 10px; }
