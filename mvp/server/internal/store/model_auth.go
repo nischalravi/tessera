@@ -233,7 +233,7 @@ type LoginTransaction struct {
 	TenantID                tenancy.ID
 	CookieHash              string
 	IdPConnectionID         uuid.UUID
-	Purpose                 string
+	Purpose                 string // login | step_up | device_approval | bootstrap | test
 	StateHash               *string
 	Nonce                   *string
 	PKCEVerifierEnc         []byte

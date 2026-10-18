@@ -29,6 +29,8 @@ Requirements: Go 1.27+ (the version in `server/go.mod`), Node 18+ (tested on 24)
 ./run.sh seed        # (re)seed the database only
 ./run.sh devidp      # run only the dev IdP (mock OIDC issuer for local sign-in)
 ./run.sh bench       # Go benchmarks + end-to-end latency, startup and memory of the server
+./run.sh backup      # encrypted online backup now (-dir /backups; see "Backup and restore")
+./run.sh restore F   # verify backup F and restore it over the database (stop the server first)
 ./run.sh audit-deps  # govulncheck ./... on the Go module (install with server/scripts/install-tools.sh)
 ```
 
@@ -277,6 +279,7 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `POST /api/accounts/{id}/link {identity_id, reason}` · `POST /api/accounts/{id}/not-person {reason}` ·
 `DELETE /api/accounts/{id}/link` · `POST /api/identities/{id}/merge {into, reason}` ·
 `GET /api/identity-merges` · `POST /api/identity-merges/{id}/unmerge {reason}` ·
+`GET|POST /api/reviews/schedules` · `PUT /api/reviews/schedules/{id}` · `POST /api/reviews/schedules/{id}/run` ·
 `GET /api/identities/{id}/affiliations` · `GET /api/identities/{id}/identifiers` ·
 `POST /api/identities/{id}/affiliations {type, org_unit?, population?, starts_at?, ends_at?, reason}` ·
 `POST /api/affiliations/{id}/end {reason}`
@@ -310,6 +313,24 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
 or HRIS execution is always the signed-in user.
+
+### Scheduled access reviews
+
+**Access reviews → Schedules** (issue #166) runs campaigns on a recurrence: once, every
+quarter, every six months or every year. A schedule sets:
+
+- **Scope:** one system or all; privileged grants only, or every risky grant.
+- **Review window:** how many days reviewers get, and when the reminder goes out.
+- **Close-out:** what happens to items nobody decided by the due date. Either they are revoked,
+  or they go to an escalation reviewer for a few days and are revoked after that.
+
+The scheduler (`reviews.scheduler`, every 5 minutes) launches due schedules. Each period
+(`2026-Q4`, `2026-H2`, `2026`) runs once, even after a restart. Periods missed while the server
+was down collapse into one run. The next run is counted from the scheduled time, so it doesn't
+drift. **Run now** launches outside the schedule. Reminders, escalations and close-outs are audit
+events; delivery by email or chat comes with alerting (#168). Reviewers are assigned as for
+manual campaigns: the manager, then the owner, then the security lead. The scheduler follows
+`TESSERA_NOW` in dev.
 
 ### Job run history
 
@@ -412,6 +433,11 @@ Authentication, Change requests, API clients, and a banner on every page while a
 | `idp_connection.update_cosmetic`, `.disable` | one admin | none | at once (disable ends the connection's sessions; refused for the last active connection) |
 | `tenant.settings.update` | a different admin if it **weakens** a setting | 24 h if weakening | merges the bounded settings of §18.3 and `min_admins` |
 | `tenant.security_contacts.update` | a different admin | 24 h | replaces the contacts |
+
+The test login: while signed in, the requester opens `GET /api/auth/login?connection=<id>&test=1`
+(login transactions have a `test` purpose, schema `0315`; OIDC and SAML). The callback records the
+test login on the requester's own session and returns to `/?test_login=ok`. It never creates a session,
+a user, an external login or a role, and only the requester of that connection can run it, once.
 
 Every submit and approve needs `STEP_UP_ADMIN` (phishing-resistant sign-in within 5 minutes). The payload
 is decoded into a typed struct with unknown fields refused; the approver echoes its SHA-256 (`payload_hash`)
@@ -1039,6 +1065,15 @@ credential endpoints, so give the process credentials through the SDK's other so
 safehttp client; trust a private CA through the system roots. `tessera audit verify -anchors`
 reads `file://` anchor files only; verifying against the bucket is a later step.
 
+## Operational monitoring (issue #303)
+
+`GET /livez` and `GET /readyz` (API listener, unauthenticated, constant-shape JSON, not audited) are the orchestrator probes. `GET /metrics` (Prometheus text) is served only on the separate internal listener `TESSERA_METRICS_ADDR` (dev default `127.0.0.1:9464`, `run.sh` uses `API_PORT+1000`; off in prod unless set to a loopback or private IP; `off` disables). `GET /api/admin/platform-health` (admin.read) backs Admin -> Platform health. `TESSERA_READY_MAX_LOOP_LAG_SECONDS` (default 300) is the loop-lag threshold of `/readyz`. Metrics, SLOs and alert rules: `docs/operations/slo.md`, `deploy/prometheus/tessera-rules.yml`.
+
+```bash
+curl -s http://127.0.0.1:9000/metrics | head      # with API_PORT=8000
+curl -s http://127.0.0.1:8000/readyz
+```
+
 ## Postgres
 
 SQLite stays the default and is unchanged. Set `TESSERA_DB` (or `-db`) to a Postgres DSN to use Postgres
@@ -1108,6 +1143,41 @@ dialect, schema-parity, DSN and `gen-rls` tests need no server and always run). 
 `internal/store/storetest`, `testkit` and the API parity replay run on Postgres (the parity replay
 accepts a different numeric `id`/`edge_id` there, see above). CI should run this with a Postgres 16
 service container and `TESSERA_REQUIRE_PG_TESTS=1`.
+
+### Backup and restore
+
+**SQLite only for now.** On a Postgres store (`TESSERA_DB=postgres://…`) `tessera backup create` refuses with
+`postgres_unsupported` and the scheduler logs that it is off; back up Postgres with `pg_dump` or your provider's
+snapshots (see `docs/runbooks/disaster-recovery.md`). `tessera backup restore` always writes a SQLite file. The
+backup holds every table in every schema file; the drill test `TestDrill_EverySchemaTableIsInTheBackup` checks
+that against the embedded schema, so a table added later cannot be left out unnoticed.
+
+`tessera backup create` (or `./run.sh backup`) takes an online `VACUUM INTO` snapshot while the
+server keeps serving. It seals the snapshot under the KEK in authenticated 1 MiB chunks, so an edited,
+reordered, truncated or extended file is refused, and writes `tessera-<UTC time>-<id>.tbak`.
+With `TESSERA_BACKUP_DIR` set, `tessera serve` also writes one every
+`TESSERA_BACKUP_EVERY_MINUTES` (default 360) and keeps the newest `TESSERA_BACKUP_KEEP` (default
+28). `-upload <presigned PUT URL>` copies a backup to object storage through `internal/safehttp`.
+
+`tessera backup verify -in F` and `tessera backup restore -in F [-db target] [-force]` (or
+`./run.sh restore F`) decrypt to a temporary file. They then check every tenant's audit chain, the
+checkpoint signatures, the anchors up to the backup's head, and the chain heads in the manifest.
+A restore installs the database only when all of these pass, and keeps the previous database as
+`<db>.pre-restore-<time>`. A refused backup exits 7 (`wrong_kek`, `tampered_backup`,
+`verification_failed`, `target_exists`). The report also says how many anchored events are newer
+than the backup, which is the data the restore loses. Backups and restores are recorded in the
+platform audit chain (`platform.backup.created`, `platform.backup.restored`).
+
+A restore also revokes the credentials the backup brings back: every active session (reason
+`restore`), pending sign-in transactions, unconsumed bootstrap invitations and the `access_token`
+signing keys, so users sign in again and the server mints fresh keys on start. The counts are in
+the report and the audit event. `replay_cache` entries consumed after the snapshot cannot be
+recovered; their SAML and DPoP windows are short.
+
+The KEK and the anchor source are not in the backup: keep the KEK in escrow, or no backup can be
+opened. RPO and RTO targets, the restore procedure, what to do after a restore (sign in again,
+re-sync) and the drill are in `docs/runbooks/disaster-recovery.md`. CI runs the drill as
+`TestBackupDRDrill`. HA on Postgres is a draft in `docs/design/ha-postgres.md`.
 
 ## Web UI
 
@@ -1557,10 +1627,6 @@ OpenAPI document). Deliberate differences:
 * No authentication or RBAC on the API or UI. Actor names on approvals and revokes are placeholders:
   the audit ledger records every request as `anonymous` and keeps the supplied name only as an
   unverified `claimed_actor`.
-* The test sign-in of a requested IdP connection (`GET /api/auth/login?connection=…&test=1`, design §15.2)
-  is not wired into the login flow yet: `admin.RecordTestLogin` records it and `POST
-  /api/admin/idp-connections/{id}/activate` requires it, but a connection created by a change request stays
-  `pending` until the login flow calls it (it needs a `test` purpose on `login_transactions`).
 * Revokes and JML plans change Tessera's graph only unless the connection has a provisioning target
   with write-back on (see Closed-loop provisioning); JIT approval and rotating secrets are not yet
   sent to targets, and only SCIM 2.0 and Okta have connectors (no Entra native connector yet).

@@ -715,6 +715,39 @@ export const revokeSession = (id: string) => api<unknown>(`/auth/sessions/${enco
 
 export const hrisExecute = (eventId: number) => api(`/hris/events/${eventId}/execute`, {});
 
+// ---------------------------------------------------------------- scheduled reviews (issue #166)
+
+export type Recurrence = "once" | "quarterly" | "semiannual" | "annual";
+export interface ReviewLaunch {
+  id: string; period: string; campaign_id: number; launched_at: string; due_at: string;
+  reminded_at: string | null; escalated_at: string | null; closed_at: string | null; revoked: number;
+}
+export interface ReviewSchedule {
+  id: string;
+  name: string;
+  system: string | null;
+  privileged_only: boolean;
+  unused_days: number;
+  duration_days: number;
+  reminder_days: number;
+  close_out: "revoke" | "escalate";
+  escalation_reviewer: { id: number; name: string } | null;
+  escalation_days: number;
+  recurrence: Recurrence;
+  next_run_at: string | null;
+  enabled: boolean;
+  updated_at: string;
+  launches: ReviewLaunch[];
+}
+export interface ReviewScheduleInput {
+  name: string; system: string | null; privileged_only: boolean; unused_days: number; duration_days: number; reminder_days: number;
+  close_out: "revoke" | "escalate"; escalation_identity_id: number | null; escalation_days: number; recurrence: Recurrence;
+  first_run_at?: string; enabled: boolean;
+}
+export const createReviewSchedule = (b: ReviewScheduleInput) => api<ReviewSchedule>("/reviews/schedules", b);
+export const updateReviewSchedule = (id: string, b: ReviewScheduleInput) => api<ReviewSchedule>(`/reviews/schedules/${encodeURIComponent(id)}`, b, "PUT");
+export const runReviewSchedule = (id: string) => api<ReviewLaunch>(`/reviews/schedules/${encodeURIComponent(id)}/run`, {});
+
 // ---------------------------------------------------------------- account correlation (issue #160)
 
 export interface CorrAccount { id: number; system: string; external_id: string; username: string; kind: string; status: string; identity_id: number | null }
@@ -1800,6 +1833,18 @@ export interface AdminIdpConnection {
 export interface AdminRecovery {
   id: string; status: "pending" | "cancelled" | "completed"; ticket: string; operator: string; co_operator: string;
   not_before: string; created_at: string; cancelled_at: string | null; completed_at: string | null;
+}
+
+/** GET /api/admin/platform-health: process-wide operational signals (no tenant data, no secrets). */
+export interface PlatformHealth {
+  generated_at: string; status: "ok" | "degraded"; max_loop_lag_seconds: number;
+  checks: { name: string; ok: boolean }[];
+  loops: { name: string; interval_seconds: number; gated: boolean; last_run_at: string | null; last_success_at: string | null; lag_seconds: number; runs: number; failures: number; healthy: boolean }[];
+  http: { requests: number; server_errors: number; p95_seconds: number | null };
+  audit: { writes: number; write_failures: number };
+  database: { open_connections: number; in_use: number; idle: number; pool_waits: number; busy_errors: number; tx_p95_seconds: number | null; lock_wait_p95_seconds: number | null };
+  logins: { method: string; success: number; failure: number }[];
+  connectors: { connector: string; op: string; calls: number; errors: number }[];
 }
 
 export interface AdminApiClients { available: boolean; clients: { id: string; name: string }[]; detail: string }

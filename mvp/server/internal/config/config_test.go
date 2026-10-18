@@ -559,3 +559,55 @@ func TestMailConfig(t *testing.T) {
 		}
 	}
 }
+
+// /metrics is never public by default (issue #303): off in prod unless set,
+// loopback in dev, and a prod address must be loopback or private.
+func TestMetricsAddr(t *testing.T) {
+	prod := func(kv ...string) map[string]string { return with(safeProd(), kv...) }
+	// defaults
+	if c, err := config.Load(env(prod())); err != nil || c.MetricsAddr != "" {
+		t.Errorf("prod default: %q %v (want off)", c.MetricsAddr, err)
+	}
+	if c, err := config.Load(env(map[string]string{"TESSERA_ENV": "dev"})); err != nil || c.MetricsAddr != config.MetricsDefaultAddr || !c.MetricsAddrDefault {
+		t.Errorf("dev default: %+v %v", c, err)
+	}
+	if c, err := config.Load(env(map[string]string{"TESSERA_ENV": "dev", "TESSERA_METRICS_ADDR": "off"})); err != nil || c.MetricsAddr != "" {
+		t.Errorf("dev off: %v", err)
+	}
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+		ok   bool
+	}{
+		{"prod loopback", prod("TESSERA_METRICS_ADDR", "127.0.0.1:9464"), true},
+		{"prod private", prod("TESSERA_METRICS_ADDR", "10.1.2.3:9464"), true},
+		{"prod ULA v6", prod("TESSERA_METRICS_ADDR", "[fd00::1]:9464"), true},
+		{"prod public ip", prod("TESSERA_METRICS_ADDR", "203.0.113.9:9464"), false},
+		{"prod hostname", prod("TESSERA_METRICS_ADDR", "metrics.example.com:9464"), false},
+		{"prod localhost name", prod("TESSERA_METRICS_ADDR", "localhost:9464"), false},
+		{"prod wildcard", prod("TESSERA_METRICS_ADDR", "0.0.0.0:9464"), false},
+		{"prod bare port", prod("TESSERA_METRICS_ADDR", ":9464"), false},
+		{"prod v6 wildcard", prod("TESSERA_METRICS_ADDR", "[::]:9464"), false},
+		{"prod wildcard opted in", prod("TESSERA_METRICS_ADDR", ":9464", "TESSERA_METRICS_ALLOW_WILDCARD", "true"), true},
+		{"prod public even when wildcard flag set", prod("TESSERA_METRICS_ADDR", "203.0.113.9:9464", "TESSERA_METRICS_ALLOW_WILDCARD", "true"), false},
+		{"prod bad port", prod("TESSERA_METRICS_ADDR", "10.0.0.1:0"), false},
+		{"prod no port", prod("TESSERA_METRICS_ADDR", "10.0.0.1"), false},
+		{"dev loopback", map[string]string{"TESSERA_ENV": "dev", "TESSERA_METRICS_ADDR": "127.0.0.1:9999"}, true},
+		{"dev localhost", map[string]string{"TESSERA_ENV": "dev", "TESSERA_METRICS_ADDR": "localhost:9999"}, true},
+		{"dev wildcard", map[string]string{"TESSERA_ENV": "dev", "TESSERA_METRICS_ADDR": ":9999"}, false},
+		{"dev private", map[string]string{"TESSERA_ENV": "dev", "TESSERA_METRICS_ADDR": "192.168.1.5:9999"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, err := config.Load(env(tc.env))
+			if (err == nil) != tc.ok {
+				t.Fatalf("err = %v, want ok=%v", err, tc.ok)
+			}
+			if err == nil && c.MetricsAddrDefault {
+				t.Error("an explicit address is not the default")
+			}
+		})
+	}
+	if _, err := config.Load(env(with(safeProd(), "TESSERA_READY_MAX_LOOP_LAG_SECONDS", "5"))); err == nil {
+		t.Error("lag threshold below 30s accepted")
+	}
+}
