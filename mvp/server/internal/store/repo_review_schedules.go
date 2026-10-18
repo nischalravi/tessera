@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// Scheduled access reviews (schema/0281_review_schedules.sql, issue #166).
+// Scheduled access reviews (schema/0316_review_schedules.sql, issue #166).
 
 // ReviewTemplate is a recurring campaign definition.
 type ReviewTemplate struct {
