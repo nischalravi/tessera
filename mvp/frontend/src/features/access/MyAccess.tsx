@@ -21,7 +21,7 @@ interface GrantRow {
 }
 
 export function MyAccess() {
-  const { me } = usePersona();
+  const { me, meResolved, actor } = usePersona();
   const [params] = useSearchParams();
   const [filter, setFilter] = useState<"all" | "unused" | "privileged">((params.get("filter") as "unused") ?? "all");
   const { data: d, error } = useApi<any>(me ? `/identities/${me.id}` : null);
@@ -79,7 +79,9 @@ export function MyAccess() {
       sub={me ? `Everything ${me.name} can use today, how it was granted, and when it was last used.` : undefined}
       actions={<ButtonLink to="/access/request" variant="primary" icon={<Plus size={15} />}>Request access</ButtonLink>}
     >
-      {!d ? <Loading error={error} kind="page" /> : (
+      {meResolved && !me ? (
+        <EmptyState title="No access record for your account">Your sign-in isn't linked to a person in this organization's directory yet, so there is no access to show. An administrator can link it from Directory → Account matches.</EmptyState>
+      ) : !d ? <Loading error={error} kind="page" /> : (
         <div className="stack">
           <div className="card">
             <div className="stat-row">
