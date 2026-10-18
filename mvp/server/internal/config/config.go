@@ -9,7 +9,8 @@
 // CORS_ORIGINS is not empty (the UI is same-origin in production, so CORS is
 // off, §11); OUTBOUND_ALLOW_LOOPBACK is true; TESSERA_SAFEDIAL_ALLOW is set; TESSERA_DEV_IDP_URL is set; the
 // audit anchor is not an s3:// URL (missing or file:// included); TESSERA_NOW freezes the clock; a
-// trusted-proxy prefix is shorter than /8 (IPv4) or /32 (IPv6). The guard rail on dev_mock IdP connections
+// trusted-proxy prefix is shorter than /8 (IPv4) or /32 (IPv6); TESSERA_METRICS_ADDR is a wildcard, hostname or public
+// address (/metrics is internal only). The guard rail on dev_mock IdP connections
 // needs the idp_connections table and lands with it (PR6).
 package config
 

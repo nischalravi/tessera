@@ -1592,6 +1592,18 @@ export interface AdminRecovery {
   not_before: string; created_at: string; cancelled_at: string | null; completed_at: string | null;
 }
 
+/** GET /api/admin/platform-health: process-wide operational signals (no tenant data, no secrets). */
+export interface PlatformHealth {
+  generated_at: string; status: "ok" | "degraded"; max_loop_lag_seconds: number;
+  checks: { name: string; ok: boolean }[];
+  loops: { name: string; interval_seconds: number; gated: boolean; last_run_at: string | null; last_success_at: string | null; lag_seconds: number; runs: number; failures: number; healthy: boolean }[];
+  http: { requests: number; server_errors: number; p95_seconds: number | null };
+  audit: { writes: number; write_failures: number };
+  database: { open_connections: number; in_use: number; idle: number; pool_waits: number; busy_errors: number; tx_p95_seconds: number | null; lock_wait_p95_seconds: number | null };
+  logins: { method: string; success: number; failure: number }[];
+  connectors: { connector: string; op: string; calls: number; errors: number }[];
+}
+
 export interface AdminApiClients { available: boolean; clients: { id: string; name: string }[]; detail: string }
 
 /** Admin-change workflow calls. Approving needs the hash of the payload the admin reviewed. */
