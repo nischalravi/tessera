@@ -15,9 +15,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/identity"
+	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/ingest"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
+	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 )
@@ -62,7 +67,8 @@ type Fixture struct {
 // especially under -race) and the ids of its rows.
 var seeded struct {
 	once sync.Once
-	db   []byte
+	db   []byte // SQLite: the seeded file
+	src  string // Postgres: the template database
 	a, b Tenant
 	err  error
 }
@@ -77,11 +83,16 @@ func TwoTenants(tb testing.TB) *Fixture {
 	if seeded.err != nil {
 		tb.Fatal(seeded.err)
 	}
-	path := filepath.Join(tb.TempDir(), "two-tenants.db")
-	if err := os.WriteFile(path, seeded.db, 0o600); err != nil {
-		tb.Fatal(err)
+	target := seeded.src
+	if seeded.db != nil { // SQLite: a private copy of the seeded file
+		target = filepath.Join(tb.TempDir(), "two-tenants.db")
+		if err := os.WriteFile(target, seeded.db, 0o600); err != nil {
+			tb.Fatal(err)
+		}
+	} else { // Postgres: a database created from the seeded template
+		target = store.TestClone(tb, seeded.src)
 	}
-	db, err := store.Open(context.Background(), path)
+	db, err := store.Open(context.Background(), target)
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -100,12 +111,25 @@ func buildTemplate() {
 		return
 	}
 	defer os.RemoveAll(dir)
-	path := filepath.Join(dir, "two-tenants.db")
-	ctx := context.Background()
-	db, err := store.Open(ctx, path)
+	// A SQLite file in dir, or (TESSERA_TEST_PG_URL) a Postgres template database.
+	src, err := store.TestSharedTarget(dir, "two_tenants", seedTemplate)
 	if err != nil {
 		seeded.err = err
 		return
+	}
+	if store.IsPostgresDSN(src) {
+		seeded.src = src
+		return
+	}
+	seeded.db, seeded.err = os.ReadFile(src) // #nosec G304 -- path made above
+}
+
+// seedTemplate seeds the two tenants into the (empty) database at target.
+func seedTemplate(target string) error {
+	ctx := context.Background()
+	db, err := store.Open(ctx, target)
+	if err != nil {
+		return err
 	}
 	// seedTenant and seedReadiness report failures to a testing.TB; collect
 	// them in a recorder so a failed seed fails every test that needs it.
@@ -123,19 +147,13 @@ func buildTemplate() {
 	}()
 	if rec.msg != "" {
 		_ = db.Close()
-		seeded.err = errors.New(rec.msg)
-		return
+		return errors.New(rec.msg)
 	}
 	if err := db.Checkpoint(ctx); err != nil {
 		_ = db.Close()
-		seeded.err = err
-		return
+		return err
 	}
-	if err := db.Close(); err != nil {
-		seeded.err = err
-		return
-	}
-	seeded.db, seeded.err = os.ReadFile(path) // #nosec G304 -- path made above
+	return db.Close()
 }
 
 func seedTenant(tb testing.TB, db *store.DB, id tenancy.ID, slug, sentinel string) Tenant {
@@ -159,6 +177,9 @@ func seedTenant(tb testing.TB, db *store.DB, id tenancy.ID, slug, sentinel strin
 			return err
 		}
 		if err := loadIDs(c, t.IDs); err != nil {
+			return err
+		}
+		if err := seedIdentityModel(c, &t, mark); err != nil {
 			return err
 		}
 		key := func(kind, k string) string { return fmt.Sprintf("%s:%d", kind, t.IDs[k]) }
@@ -350,6 +371,45 @@ func Dump(tb testing.TB, db *store.DB, t tenancy.ID) string {
 		tb.Fatal(err)
 	}
 	return string(b)
+}
+
+// IdentityKEK is the fixture's key-encryption key (identifier hashing only).
+var IdentityKEK = []byte("storetest-kek-0123456789abcdef!!")
+
+// IdentityKeyer hashes identifiers under IdentityKEK.
+func IdentityKeyer(tb testing.TB) *identifiers.Keyer {
+	tb.Helper()
+	s, err := seal.New(IdentityKEK)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return identifiers.NewKeyer(s)
+}
+
+// seedIdentityModel adds the populations, each person's back-filled source
+// record, affiliation and identifiers, and one guest affiliation for alice
+// whose org unit carries the tenant's sentinel (Refs["affiliation:guest"]).
+func seedIdentityModel(c *store.TenantTx, t *Tenant, mark func(string) string) error {
+	if err := identity.SeedPopulations(c, Now); err != nil {
+		return err
+	}
+	// the keyer is only needed for hashing; a failure here is a fixture bug
+	s, err := seal.New(IdentityKEK)
+	if err != nil {
+		return err
+	}
+	if _, err := identity.Backfill(c, identifiers.NewKeyer(s), Now); err != nil {
+		return err
+	}
+	unit, pop, end := mark("Visitor Services"), "guest", Now.Add(30*24*time.Hour)
+	a := &store.Affiliation{ID: uuid.NewString(), IdentityID: t.IDs["alice"], Type: store.AffGuestVisitor,
+		Source: store.AffSourceManual, OrgUnit: &unit, Population: &pop, StartsAt: Now, EndsAt: &end,
+		Status: store.AffActive, CreatedAt: Now}
+	if err := c.InsertAffiliation(a); err != nil {
+		return err
+	}
+	t.Refs["affiliation:guest"] = a.ID
+	return nil
 }
 
 var errSeedFailed = errors.New("storetest: seed failed")

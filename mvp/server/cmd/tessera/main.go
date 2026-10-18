@@ -6,11 +6,16 @@
 //	                                    (run.sh reseeds a database from before sign-in)
 //	tessera readiness lint [-dir path]   lint the readiness checklist templates
 //	tessera audit verify|checkpoint|export   verify, checkpoint or export the audit ledger (see audit.go)
+//	tessera notify seal-password             seal an SMTP password (stdin) for TESSERA_SMTP_PASSWORD_SEALED
 //	tessera admin create-tenant|add-idp|invite-admin   operator bootstrap of a tenant (see admin.go)
+//	tessera admin gen-rls [-out path] [-check]   render the Postgres row-level-security file (see genrls.go)
 //
 // Environment:
 //
-//	TESSERA_DB            database path (or sqlite:///path); default ./tessera.db
+//	TESSERA_DB            database path (or sqlite:///path), or a postgres:// DSN
+//	                      (postgres://owner@host/db?sslmode=require&app_role=tessera_app);
+//	                      default ./tessera.db
+//	TESSERA_AUDIT_ANCHOR  file:///path.jsonl (dev) or s3://bucket/prefix (S3 Object Lock; prod)
 //	TESSERA_POLICY_DIR    read policies from this directory instead of the built-in copies
 //	TESSERA_CONNECTORS    connector spec, e.g. "demo" (default) or "demo-workday,okta"
 //	TESSERA_CORS_ORIGINS  comma-separated browser origins allowed by CORS
@@ -27,12 +32,17 @@
 //	                      IdP); prod refuses to start with any dev setting (§18.4).
 //	TESSERA_DEV_IDP_URL   the dev IdP's issuer: seeding (dev and test) creates a
 //	                      dev_mock connection to it with the bootstrap users
+//	TESSERA_NOTIFY_EMAIL  off, dev (the dev sink, never in prod) or smtp; default smtp when TESSERA_SMTP_HOST is set,
+//	                      else dev outside prod and off in prod. TESSERA_SMTP_HOST/_PORT/_USERNAME/_FROM/_TLS and
+//	                      TESSERA_SMTP_PASSWORD_SEALED configure the relay; TESSERA_NOTIFY_MAX_ATTEMPTS and
+//	                      TESSERA_NOTIFY_DIGEST_HOUR tune the dispatcher (see internal/config)
 //	DEVIDP_CLIENT_SECRET  the dev IdP client's secret, sealed into those connections
 //	                      (default tessera-dev-secret, as cmd/tessera-devidp)
 //	TESSERA_DEV_IDP_SAML_CERT  the dev IdP's SAML signing certificate (PEM, from
 //	                      tessera-devidp -print-saml-cert): seeding also creates a
 //	                      dev_mock SAML connection pinning it (run.sh sets it)
 //	TESSERA_READINESS_SCENARIO  simulated validation scenario for demo connectors: gaps (default) or happy
+//	TESSERA_SAFEDIAL_ALLOW      dev only: host:port or CIDR:port private LDAP targets live checks may dial (see mvp/README.md "Live LDAP checks")
 //	TESSERA_READINESS_DEMO      "off" skips seeding the demo Okta connection (larkspur only) for Deployment health
 package main
 
@@ -59,9 +69,14 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
+	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
+	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
+	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
+	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
+	"github.com/nischalravi/tessera/mvp/server/internal/safedial"
 	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/seed"
@@ -98,13 +113,16 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if cmd == "audit" {
 		return auditCmd(ctx, args, stdout, stderr)
 	}
+	if cmd == "notify" {
+		return notifyCmd(ctx, args, stdout, stderr)
+	}
 	if cmd == "admin" {
 		return adminCmd(ctx, args, stdout, stderr)
 	}
 	fset := flag.NewFlagSet("tessera "+cmd, flag.ContinueOnError)
 	fset.SetOutput(stderr)
 	var o options
-	fset.StringVar(&o.db, "db", dbPath(os.Getenv("TESSERA_DB")), "SQLite database path")
+	fset.StringVar(&o.db, "db", dbPath(os.Getenv("TESSERA_DB")), "SQLite database path or postgres:// DSN")
 	if cmd == "serve" {
 		fset.StringVar(&o.addr, "addr", "127.0.0.1:8000", "listen address")
 		fset.BoolVar(&o.reseed, "reseed", false, "wipe and re-seed the database before serving")
@@ -149,12 +167,41 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if cmd == "seed" {
 		return seedDB(ctx, o.db, cfg, clock, loader, sealer, stdout)
 	}
-	if _, err := os.Stat(o.db); o.reseed || errors.Is(err, fs.ErrNotExist) {
+	seedNow, err := needsSeed(ctx, o, cfg)
+	if err != nil {
+		return err
+	}
+	if seedNow {
 		if err := seedDB(ctx, o.db, cfg, clock, loader, sealer, stdout); err != nil {
 			return err
 		}
 	}
 	return serve(ctx, o, cfg, sealer, clock, loader, logger)
+}
+
+// needsSeed reports whether serve must seed the demo tenants first: on
+// --reseed, or when there is nothing yet. For SQLite "nothing" is a missing
+// file. A Postgres database always exists, so there it is a database with no
+// tenant, and never in production (an empty production database is filled by
+// `tessera admin create-tenant`, not by demo data).
+func needsSeed(ctx context.Context, o options, cfg *config.Config) (bool, error) {
+	if !store.IsPostgresDSN(o.db) {
+		_, err := os.Stat(o.db)
+		return o.reseed || errors.Is(err, fs.ErrNotExist), nil
+	}
+	if o.reseed {
+		return true, nil
+	}
+	if cfg.IsProd() {
+		return false, nil
+	}
+	st, err := store.Open(ctx, o.db)
+	if err != nil {
+		return false, err
+	}
+	defer st.Close()
+	tenants, err := st.ActiveTenants(ctx)
+	return len(tenants) == 0, err
 }
 
 // loopbackListen reports whether addr (host:port) listens on loopback only:
@@ -223,6 +270,10 @@ func seedDB(ctx context.Context, path string, cfg *config.Config, clock timeutil
 		tenants = seed.WithDevIdPClient(tenants, cfg.DevIdPURL, seed.DevIdPClient{Sealer: sealer, Secret: secret,
 			SAMLCert: strings.TrimSpace(os.Getenv("TESSERA_DEV_IDP_SAML_CERT")), GitHub: true})
 	}
+	keyer := identifiers.NewKeyer(sealer)
+	for i := range tenants {
+		tenants[i].Identifiers = keyer
+	}
 	stats, err := seed.Run(ctx, st, now, pols, tenants)
 	if err != nil {
 		return err
@@ -262,7 +313,8 @@ const (
 	idleTimeout       = 60 * time.Second
 	shutdownTimeout   = 10 * time.Second
 	sweepInterval     = 30 * time.Second
-	keysInterval      = 24 * time.Hour // keys.EnsureAll: rotation runs daily (design §10.6)
+	notifyInterval    = 15 * time.Second // the notification dispatcher (issue #189)
+	keysInterval      = 24 * time.Hour   // keys.EnsureAll: rotation runs daily (design §10.6)
 	// checkpointInterval is how often the checkpointer looks for due tenants
 	// (each is checkpointed every TESSERA_AUDIT_CHECKPOINT_SECONDS or
 	// _EVENTS new events, design §13.6).
@@ -302,11 +354,20 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if scenario != "" && !slices.Contains(connectors.ScenarioNames(), scenario) {
 		return fmt.Errorf("TESSERA_READINESS_SCENARIO: unknown scenario %q (have %v)", scenario, connectors.ScenarioNames())
 	}
-	anchorURL := cfg.AnchorURL(o.db)
-	sink, err := audit.NewSink(anchorURL)
+	// Live readiness checks: real LDAP probes open the sealed credential with
+	// the KEK and dial through safedial. Private targets need the dev-only
+	// allowlist (refused in prod by config) or, later, the Directory Agent.
+	templates, err := template.Default()
 	if err != nil {
 		return err
 	}
+	allow, err := safedial.ParseAllow(cfg.SafedialAllow)
+	if err != nil {
+		return fmt.Errorf("TESSERA_SAFEDIAL_ALLOW: %w", err)
+	}
+	rsvc := readiness.NewService(templates, string(cfg.Env))
+	rsvc.Runner.Scenario = scenario
+	rsvc.Runner.Live.Sealer, rsvc.Runner.Live.Allow = sealer, allow
 	// Outbound calls to IdPs (discovery, JWKS, token) and the kill switch's
 	// provider calls (containment) go through safehttp. A test server gets the
 	// production client (no loopback exception; ForConfig decides).
@@ -314,12 +375,24 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if err != nil {
 		return err
 	}
+	// The s3:// anchor sink's AWS SDK client uses the same safehttp client.
+	anchorURL := cfg.AnchorURL(o.db)
+	sink, err := audit.NewSink(anchorURL, audit.WithHTTPClient(outbound))
+	if err != nil {
+		return err
+	}
 	srv := api.New(api.Config{Store: st, Clock: clock, Policies: loader, Logger: logger,
 		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound,
 		Containment:    &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock},
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
-		HSTS: cfg.IsProd(), Env: cfg.Env, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, AuditAnchor: anchorURL,
+		HSTS: cfg.IsProd(), Env: cfg.Env, Identifiers: identifiers.NewKeyer(sealer), EmailMode: cfg.Mail.Mode, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, Readiness: rsvc, AuditAnchor: anchorURL,
 		RateLimits: api.RateLimits{Auth: api.RateLimit{Burst: cfg.AuthRateBurst}, Anonymous: api.RateLimit{Burst: cfg.AnonRateBurst}}})
+	sender, err := notify.NewSender(cfg.Mail, cfg.Env, cfg.OutboundAllowLoopback, sealer, config.DevMailPath(o.db), logger)
+	if err != nil {
+		return err
+	}
+	dispatcher := &notify.Dispatcher{DB: st, Sender: sender, Clock: clock, Log: logger, MaxAttempts: cfg.NotifyMaxAttempts,
+		DigestHour: cfg.NotifyDigestHour, BaseURL: cfg.PublicURL}
 	checkpointer := &audit.Checkpointer{DB: st, Sealer: sealer, Sink: sink, Clock: timeutil.System, Issuer: cfg.PublicURL,
 		Every: time.Duration(cfg.AuditCheckpointSeconds) * time.Second, EveryEvents: int64(cfg.AuditCheckpointEvents),
 		Log: logger}
@@ -352,6 +425,11 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		defer close(ckptDone)
 		checkpointer.Loop(ctx, checkpointInterval)
 	}()
+	notifyDone := make(chan struct{})
+	go func() {
+		defer close(notifyDone)
+		dispatcher.Loop(ctx, notifyInterval)
+	}()
 	errc := make(chan error, 1)
 	go func() { errc <- httpSrv.Serve(ln) }()
 	logger.Info("tessera API listening", "addr", ln.Addr().String())
@@ -362,6 +440,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		<-sweepDone
 		<-keysDone
 		<-ckptDone
+		<-notifyDone
 		return err
 	case <-ctx.Done():
 	}
@@ -372,6 +451,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	<-sweepDone
 	<-keysDone
 	<-ckptDone
+	<-notifyDone
 	if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 		return serveErr
 	}

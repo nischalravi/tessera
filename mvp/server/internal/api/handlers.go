@@ -18,6 +18,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/jml"
 	"github.com/nischalravi/tessera/mvp/server/internal/leastpriv"
 	"github.com/nischalravi/tessera/mvp/server/internal/nhi"
+	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
@@ -816,6 +817,10 @@ func (s *Server) graphView(_ http.ResponseWriter, r *http.Request, p *params) (a
 	switch {
 	case identityID != nil:
 		start := graph.Key("identity", *identityID)
+		if n := g.Node(start); n == nil || n.Kind == "" {
+			// Unknown here, or another tenant's: the same answer either way.
+			return nil, errStatus(http.StatusNotFound, "identity not found")
+		}
 		nodes[start] = true
 		eff := g.EffectivePermissions(*identityID)
 		for _, pk := range eff.Keys {
@@ -833,6 +838,9 @@ func (s *Server) graphView(_ http.ResponseWriter, r *http.Request, p *params) (a
 		}
 	case resourceID != nil:
 		res := graph.Key("resource", *resourceID)
+		if n := g.Node(res); n == nil || n.Kind == "" {
+			return nil, errStatus(http.StatusNotFound, "resource not found")
+		}
 		nodes[res] = true
 		ids, who := g.WhoCanAccess(*resourceID)
 		for _, iid := range ids {
@@ -1389,6 +1397,11 @@ func (s *Server) createCampaign(_ http.ResponseWriter, r *http.Request, p *param
 	c := store.TxFrom(r.Context())
 	id, err := reviews.GenerateCampaign(c, s.clock(), name, int(days), pols)
 	if err != nil {
+		return nil, err
+	}
+	// the reviewers are told in the same transaction (issue #189); seeding calls
+	// GenerateCampaign directly and tells no one
+	if err := notify.ReviewLaunched(c, s.clock(), id); err != nil {
 		return nil, err
 	}
 	cmp, err := c.Campaign(id)

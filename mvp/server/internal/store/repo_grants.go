@@ -17,7 +17,7 @@ type GrantEdge struct {
 	TenantID  tenancy.ID
 	Src, Dst  string
 	Relation  string
-	Source    string // connector | jit | manual
+	Source    string // connector | jit | manual | request | role
 	ExpiresAt *time.Time
 	CreatedAt time.Time
 }
