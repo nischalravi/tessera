@@ -38,6 +38,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 	"github.com/nischalravi/tessera/mvp/server/internal/requests"
+	"github.com/nischalravi/tessera/mvp/server/internal/reviews"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
@@ -226,6 +227,7 @@ func New(cfg Config) *Server {
 		Cookies: auth.Cookies{Insecure: cfg.InsecureCookie}}
 	s.registerRoutes()
 	s.registerAuditRoutes()
+	s.registerReviewScheduleRoutes()
 	s.registerCorrelationRoutes()
 	s.registerAffiliationRoutes()
 	s.registerRequestRoutes()
@@ -310,6 +312,27 @@ func (s *Server) timeouts(stream, timed http.Handler) http.Handler {
 		// after authorization), so authentication is not cut short.
 		stream.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), streamDeadlineKey{}, deadline)))
 	})
+}
+
+// RunReviewScheduler launches due review schedules and progresses open
+// scheduled campaigns (reminders, escalation, close-out) in every active
+// tenant, every interval until ctx is done (issue #166).
+func (s *Server) RunReviewScheduler(ctx context.Context, interval time.Duration) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	ctx = audit.WithSystemActor(ctx, reviews.Scheduler)
+	for {
+		if pols, err := s.policies(); err != nil {
+			s.log.Error("review scheduler: policies", "err", err)
+		} else if err := reviews.TickAll(ctx, s.store, s.clock(), pols); err != nil && ctx.Err() == nil {
+			s.log.Error("review scheduler failed", "err", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
 }
 
 // SweeperLoops are the loop names RunSweeper reports to obs.DefaultLoops.

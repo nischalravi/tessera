@@ -47,6 +47,10 @@ GET    /api/reviews/campaigns                        graph.read      -
 POST   /api/reviews/campaigns                        reviews.manage  -
 GET    /api/reviews/campaigns/{campaign_id}          graph.read      -
 POST   /api/reviews/items/{item_id}/decision         reviews.decide  STEP_UP_POLICY
+GET    /api/reviews/schedules                        graph.read      -  # issue #166
+POST   /api/reviews/schedules                        reviews.manage  -  # issue #166
+PUT    /api/reviews/schedules/{schedule_id}          reviews.manage  -  # issue #166
+POST   /api/reviews/schedules/{schedule_id}/run      reviews.manage  -  # issue #166
 GET    /api/hris/events                              graph.read      -
 POST   /api/hris/events                              hris.simulate_event -
 GET    /api/hris/events/{event_id}/plan              graph.read      -
