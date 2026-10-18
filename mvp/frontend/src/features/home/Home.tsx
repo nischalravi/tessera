@@ -1,12 +1,11 @@
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowRight, ClipboardCheck, Inbox as InboxIcon, KeyRound, ShoppingCart, Timer, Users } from "lucide-react";
-import { AuditRow, ConnectorRow, DeploymentHealth, JitRequest, Policy, ReadinessSummary, Violation, relTime, useApi } from "../../api";
+import { ActivityEvent, AuditRow, ConnectorRow, DeploymentHealth, JitRequest, Policy, ReadinessSummary, RemovalRequest, RequestLine, Violation, activityPath, relTime, removalsPath, useApi } from "../../api";
 import { usePersona } from "../../app/persona";
 import { useSession } from "../../app/auth";
 import { Badge, Bar, Button, ButtonLink, EmptyState, Kpi, Loading, Page, Status, Tabs } from "../../components";
 import { DeploymentHealthBody, ReadinessAttentionCard, ReadinessKpi } from "../insights/DeploymentHealth";
 import { RiskyTable, Summary, Trend } from "../insights/RiskOverview";
-import { useMockState } from "../../mocks";
 import { InboxItem, useInbox, useOpenCampaigns } from "../inbox/model";
 import { itemTitle } from "../inbox/Inbox";
 
@@ -99,17 +98,19 @@ function RequestCta() {
   );
 }
 
-function MyRequests({ id, name }: { id: number; name: string }) {
+function MyRequests({ id }: { id: number }) {
   const { data: jit } = useApi<JitRequest[]>("/jit/requests");
-  const mock = useMockState();
+  const { data: lines } = useApi<RequestLine[]>("/requests?scope=mine");
+  const { data: removals } = useApi<RemovalRequest[]>(removalsPath("mine"));
   const mine = [
     ...(jit ?? []).filter((r) => r.identity.id === id).map((r) => ({ key: `j${r.id}`, label: `${r.group.system}:${r.group.name}`, status: r.status, at: r.requested_at, sub: `Just-in-time, ${r.duration_hours} h` })),
-    ...mock.requests.filter((r) => r.requester === name || r.beneficiaries.some((b) => b.id === id)).map((r) => ({ key: r.id, label: r.items.map((i) => i.name).join(", "), status: r.status, at: r.createdAt, sub: r.kind === "removal" ? "Removal request" : "Catalog request" })),
-  ].slice(0, 5);
+    ...(lines ?? []).map((l) => ({ key: l.id, label: `${l.group.system}:${l.group.name}`, status: l.status, at: l.requested_at, sub: "Catalog request" })),
+    ...(removals ?? []).filter((q) => q.beneficiary.id === id).map((q) => ({ key: q.id, label: `${q.group.system}:${q.group.name}`, status: q.status, at: q.requested_at, sub: "Removal request" })),
+  ].sort((a, b) => b.at.localeCompare(a.at)).slice(0, 5);
   return (
     <div className="card flush">
       <div className="card-h"><h2>Your recent requests</h2><Link to="/access/requests" className="small">History</Link></div>
-      {mine.length === 0 ? (
+      {!jit || !lines || !removals ? <Loading kind="block" /> : mine.length === 0 ? (
         <EmptyState title="No requests yet">Requests you make, and requests made for you, will show here with their status.</EmptyState>
       ) : (
         <table>
@@ -119,6 +120,49 @@ function MyRequests({ id, name }: { id: number; name: string }) {
                 <td><b className="small">{r.label}</b><div className="xs faint">{r.sub}</div></td>
                 <td className="nowrap"><Status s={r.status} /></td>
                 <td className="small faint nowrap hide-narrow">{relTime(r.at)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+const ACTIVITY_LABEL: Record<string, string> = {
+  "request.submit": "Submitted an access request",
+  "request.cancel": "Cancelled an access request",
+  "request.approve": "Approved an access request",
+  "request.deny": "Denied an access request",
+  "request.remove": "Removed access",
+  "request.draft.save": "Saved a request draft",
+  "request.draft.delete": "Deleted a request draft",
+  "removal.request.submit": "Asked for access to be removed",
+  "removal.request.approve": "Approved a removal request",
+  "removal.request.deny": "Denied a removal request",
+  "removal.request.cancel": "Cancelled a removal request",
+  "role.request.submit": "Requested a role",
+  "identity.disable": "Disabled an identity",
+  "identity.enable": "Enabled an identity",
+  "containment.run": "Ran containment",
+};
+const activityLabel = (a: string) => ACTIVITY_LABEL[a] ?? a.replace(/[._]/g, " ").replace(/^./, (c) => c.toUpperCase());
+
+/** Your own recent changes, from the audit ledger. It lists only what you did, never other people's activity. */
+function RecentActivity() {
+  const { data, error } = useApi<ActivityEvent[]>(activityPath(8));
+  return (
+    <div className="card flush">
+      <div className="card-h"><h2>Your recent activity</h2></div>
+      {!data ? <Loading error={error} kind="block" /> : data.length === 0 ? (
+        <EmptyState title="Nothing yet">Changes you make, such as requests and approvals, are listed here from the audit log.</EmptyState>
+      ) : (
+        <table>
+          <tbody>
+            {data.map((e) => (
+              <tr key={e.id}>
+                <td><b className="small">{activityLabel(e.action)}</b></td>
+                <td className="small faint nowrap">{relTime(e.occurred_at)}</td>
               </tr>
             ))}
           </tbody>
@@ -336,9 +380,10 @@ export function Home() {
         {me ? (
           <div className="grid g2">
             <YourAccess id={me.id} />
-            <MyRequests id={me.id} name={me.name} />
+            <MyRequests id={me.id} />
           </div>
         ) : <Loading kind="block" />}
+        <RecentActivity />
         <p className="xs faint">Viewing as {persona}. Switch persona in the user menu.</p>
       </div>
     </Page>

@@ -4,6 +4,7 @@ package jit
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -15,6 +16,8 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
+	"github.com/nischalravi/tessera/mvp/server/internal/provision"
+	"github.com/nischalravi/tessera/mvp/server/internal/provision/target"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
@@ -280,7 +283,9 @@ func notifyDecided(c *store.TenantTx, now time.Time, req *store.AccessRequest, b
 	return notify.JITDecided(c, now, req, by.ID.String())
 }
 
-// Revoke ends an active grant early.
+// Revoke ends an active grant early. When the group's system has a
+// connection with write-back on, the removal goes to the target and the
+// request stays approved (the grant stays) until a re-read confirms it.
 func Revoke(c *store.TenantTx, requestID int64, by store.UserRef, now time.Time) (*store.AccessRequest, error) {
 	req, err := getOrNil(c.Request(requestID))
 	if err != nil {
@@ -291,6 +296,11 @@ func Revoke(c *store.TenantTx, requestID int64, by store.UserRef, now time.Time)
 	}
 	if req.Status != "approved" {
 		return nil, conflict("", "request is not active")
+	}
+	if routed, _, err := routeEnd(c, now, req, "revoked", by.Display, false); err != nil {
+		return nil, err
+	} else if routed {
+		return req, nil
 	}
 	if err := dropEdge(c, req); err != nil {
 		return nil, err
@@ -309,6 +319,66 @@ func dropEdge(c *store.TenantTx, req *store.AccessRequest) error {
 	return c.DeleteJITEdge(*req.EdgeID)
 }
 
+// completeEnd is the provisioning completion that ends a grant once the
+// target no longer shows the membership.
+const completeEnd = "jit.end"
+
+type endData struct {
+	RequestID int64  `json:"request_id"`
+	Status    string `json:"status"` // revoked | expired
+	By        string `json:"by"`
+}
+
+func init() {
+	provision.RegisterCompletion(completeEnd, func(c *store.TenantTx, now time.Time, raw json.RawMessage) error {
+		var d endData
+		if err := json.Unmarshal(raw, &d); err != nil {
+			return err
+		}
+		req, err := getOrNil(c.Request(d.RequestID))
+		if err != nil {
+			return err
+		}
+		if req == nil || req.Status != "approved" {
+			return nil // ended some other way meanwhile
+		}
+		if err := dropEdge(c, req); err != nil {
+			return err
+		}
+		req.Status, req.ExpiresAt = d.Status, &now
+		if err := c.SaveRequest(req); err != nil {
+			return err
+		}
+		action := "jit.revoke"
+		if d.Status == "expired" {
+			action = "jit.expire"
+		}
+		return c.Audit(now, d.By, action, ojson.Object{{Key: "request_id", Value: req.ID}})
+	})
+}
+
+// routeEnd sends the removal of an approved grant to the target. It reports
+// whether the system is routed (a system without write-back is not) and
+// whether this call queued a new operation. background: the caller is the
+// sweeper, which must not retry an operation an operator has to look at.
+func routeEnd(c *store.TenantTx, now time.Time, req *store.AccessRequest, status, by string, background bool) (routed, created bool, err error) {
+	g, err := getOrNil(c.Group(req.GroupID))
+	if err != nil || g == nil {
+		return false, false, err
+	}
+	a, err := getOrNil(c.Account(req.AccountID))
+	if err != nil || a == nil {
+		return false, false, err
+	}
+	key := fmt.Sprintf("jit:%d:end", req.ID)
+	_, lookup := c.ProvOpByKey(key)
+	_, routed, err = provision.Submit(c, now, provision.Change{System: g.System, Kind: target.RemoveEntitlement,
+		Account: target.Account{Username: a.Username, ExternalID: a.ExternalID},
+		Group:   target.Group{ExternalID: g.ExternalID, Name: g.Name}, Source: provision.SourceJIT,
+		Key: key, Completion: completeEnd, Data: endData{RequestID: req.ID, Status: status, By: by}, NoRequeue: background})
+	return routed, routed && errors.Is(lookup, store.ErrNotFound), err
+}
+
 // NeedsSweep reports whether Sweep would change anything at now.
 func NeedsSweep(c *store.TenantTx, now time.Time) (bool, error) {
 	n, err := c.JITSweepPending(now)
@@ -323,7 +393,16 @@ func Sweep(c *store.TenantTx, now time.Time) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	expired := 0
 	for _, r := range reqs {
+		if routed, created, err := routeEnd(c, now, r, "expired", "system", true); err != nil {
+			return 0, err
+		} else if routed {
+			if created {
+				expired++ // counted when queued; the grant stays until the target confirms the removal
+			}
+			continue
+		}
 		if err := dropEdge(c, r); err != nil {
 			return 0, err
 		}
@@ -334,12 +413,13 @@ func Sweep(c *store.TenantTx, now time.Time) (int, error) {
 		if err := c.Audit(now, "system", "jit.expire", ojson.Object{{Key: "request_id", Value: r.ID}}); err != nil {
 			return 0, err
 		}
+		expired++
 	}
 	// orphan JIT edges (e.g. created directly) also expire
 	if _, err := c.DeleteExpiredJITEdges(now); err != nil {
 		return 0, err
 	}
-	return len(reqs), nil
+	return expired, nil
 }
 
 // SweepAll runs Sweep for every active tenant, each in its own tenant

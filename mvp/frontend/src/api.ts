@@ -715,6 +715,39 @@ export const revokeSession = (id: string) => api<unknown>(`/auth/sessions/${enco
 
 export const hrisExecute = (eventId: number) => api(`/hris/events/${eventId}/execute`, {});
 
+// ---------------------------------------------------------------- scheduled reviews (issue #166)
+
+export type Recurrence = "once" | "quarterly" | "semiannual" | "annual";
+export interface ReviewLaunch {
+  id: string; period: string; campaign_id: number; launched_at: string; due_at: string;
+  reminded_at: string | null; escalated_at: string | null; closed_at: string | null; revoked: number;
+}
+export interface ReviewSchedule {
+  id: string;
+  name: string;
+  system: string | null;
+  privileged_only: boolean;
+  unused_days: number;
+  duration_days: number;
+  reminder_days: number;
+  close_out: "revoke" | "escalate";
+  escalation_reviewer: { id: number; name: string } | null;
+  escalation_days: number;
+  recurrence: Recurrence;
+  next_run_at: string | null;
+  enabled: boolean;
+  updated_at: string;
+  launches: ReviewLaunch[];
+}
+export interface ReviewScheduleInput {
+  name: string; system: string | null; privileged_only: boolean; unused_days: number; duration_days: number; reminder_days: number;
+  close_out: "revoke" | "escalate"; escalation_identity_id: number | null; escalation_days: number; recurrence: Recurrence;
+  first_run_at?: string; enabled: boolean;
+}
+export const createReviewSchedule = (b: ReviewScheduleInput) => api<ReviewSchedule>("/reviews/schedules", b);
+export const updateReviewSchedule = (id: string, b: ReviewScheduleInput) => api<ReviewSchedule>(`/reviews/schedules/${encodeURIComponent(id)}`, b, "PUT");
+export const runReviewSchedule = (id: string) => api<ReviewLaunch>(`/reviews/schedules/${encodeURIComponent(id)}/run`, {});
+
 // ---------------------------------------------------------------- account correlation (issue #160)
 
 export interface CorrAccount { id: number; system: string; external_id: string; username: string; kind: string; status: string; identity_id: number | null }
@@ -897,6 +930,97 @@ export const approveRequest = (id: string, reason?: string) => line(id, "approve
 export const denyRequest = (id: string, reason: string) => line(id, "deny", { reason });
 export const cancelRequest = (id: string) => line(id, "cancel");
 export const removeRequest = (id: string, reason?: string) => line(id, "remove", reason ? { reason } : {});
+/** One of the signed-in user's own recent changes from the audit ledger (Home > Recent activity). */
+export interface ActivityEvent {
+  id: string;
+  action: string;
+  target_type: string | null;
+  target_id: string | null;
+  outcome: string;
+  occurred_at: string;
+}
+export const activityPath = (limit = 10) => `/activity?limit=${limit}`;
+
+/** Organizations (Directory > Organizations): read-only, derived from the departments in the HR data. */
+export interface OrgPerson { id: number; name: string; title: string | null; status: string }
+export interface OrgRow {
+  id: string;
+  name: string;
+  kind: "tenant" | "department";
+  parent_id: string | null;
+  /** people in it (the root counts everyone); active is the part who are active */
+  members: number;
+  active: number;
+  children: number;
+  /** derived: the person at the top of the department's reporting lines who leads others in it */
+  owner: OrgPerson | null;
+}
+export interface OrgDetail extends OrgRow {
+  parent: OrgRow | null;
+  owners: OrgPerson[];
+  child_orgs: OrgRow[];
+  people: (OrgPerson & { manager: OrgPerson | null; email: string | null })[];
+}
+export const orgsPath = "/orgs";
+export const orgPath = (id: string) => `${orgsPath}/${encodeURIComponent(id)}`;
+
+/** A saved, unsubmitted request (Access > Request access > Save draft), private to its user. It never submits by itself. */
+export type DraftItem =
+  | { kind: "group"; group_id: number; name: string; system: string; privileged: boolean }
+  | { kind: "role"; role_id: string; name: string; privileged: boolean };
+export interface RequestDraft {
+  id: string;
+  beneficiaries: { id: number; name: string }[];
+  items: DraftItem[];
+  duration_hours: number | null;
+  justification: string;
+  /** people and items the draft named that no longer exist */
+  unavailable: number;
+  created_at: string;
+  updated_at: string;
+}
+export interface RequestDraftInput {
+  beneficiary_ids: number[];
+  items: ({ kind: "group"; group_id: number } | { kind: "role"; role_id: string })[];
+  duration_hours: number | null;
+  justification: string;
+}
+export const draftsPath = "/request-drafts";
+export const draftPath = (id: string) => `${draftsPath}/${encodeURIComponent(id)}`;
+export const requestDrafts = {
+  /** Creates a draft, or replaces the one named by id. */
+  save: (input: RequestDraftInput, id?: string) => (id ? api<RequestDraft>(draftPath(id), input, "PUT") : api<RequestDraft>(draftsPath, input)),
+  remove: (id: string) => api<{ id: string; deleted: boolean }>(draftPath(id), undefined, "DELETE"),
+};
+
+/** A request to remove one grant (account -> group) a person holds (My access > Request removal). */
+export interface RemovalRequest {
+  id: string;
+  group: CatalogEntry["group"];
+  account: { id: number; system: string; username: string };
+  beneficiary: PersonRef;
+  requested_by: { id: string; display_name: string };
+  justification: string;
+  status: "pending" | "approved" | "denied" | "cancelled";
+  requested_at: string;
+  decided_by: { id: string; display_name: string } | null;
+  decided_at: string | null;
+  decision_reason: string | null;
+  /** set on approval: revoked, request_removed (an approved access request was ended) or already_removed */
+  outcome: "revoked" | "request_removed" | "already_removed" | null;
+  can_approve: boolean;
+  can_cancel: boolean;
+}
+const removalPath = (id: string, action: string) => `/removal-requests/${encodeURIComponent(id)}/${action}`;
+export const removals = {
+  submit: (edgeId: number, justification: string) => api<RemovalRequest>("/removal-requests", { edge_id: edgeId, justification }),
+  approve: (id: string, reason?: string) => api<RemovalRequest>(removalPath(id, "approve"), reason ? { reason } : {}),
+  deny: (id: string, reason: string) => api<RemovalRequest>(removalPath(id, "deny"), { reason }),
+  cancel: (id: string) => api<RemovalRequest>(removalPath(id, "cancel"), {}),
+};
+/** scope: mine (default), approvals (what you may decide now), pending or all (requests.decide or graph.read). */
+export const removalsPath = (scope: "mine" | "approvals" | "pending" | "all" = "mine") => `/removal-requests?scope=${scope}`;
+
 export const putCatalogItem = (groupId: number, body: Omit<CatalogEntry, "id" | "group" | "owner" | "updated_at" | "approval"> & {
   owner_identity_id: number | null; approval_stages?: StageKind[]; escalate_after_hours?: number;
 }) => api<CatalogEntry>(`/catalog/items/${groupId}`, body, "PUT");
@@ -1309,6 +1433,43 @@ export interface ContainmentReport {
 export const containIdentity = (identityId: number, reason: string) =>
   api<ContainmentReport>(`/identities/${identityId}/contain`, { reason });
 
+/** Disable / Enable of a person: Disable runs the kill switch's containment, then sets the accounts and the identity to disabled. */
+export interface DisableRecord {
+  id: string;
+  identity_id: number;
+  reason: string;
+  disabled_by: string;
+  disabled_at: string;
+  /** done, manual, retrying or none: how the provider-side containment of this Disable ended */
+  containment_status: "done" | "manual" | "retrying" | "none";
+  /** the accounts Disable set to disabled; Enable sets back these and nothing else */
+  accounts: { id: number; system: string; username: string }[];
+  enabled_by: string | null;
+  enabled_at: string | null;
+  enable_reason: string | null;
+}
+export interface DisableResult {
+  identity_id: number;
+  status: "disabled";
+  disable: DisableRecord;
+  containment: ContainmentReport & { status: "done" | "manual" | "retrying"; retry_ids?: string[] };
+}
+export interface EnableResult {
+  identity_id: number;
+  status: "active";
+  disable: DisableRecord;
+  restored: { id: number; system: string; username: string }[];
+  skipped: { id: number; system: string; username: string }[];
+  not_restored: string;
+  pending_containment_retries: number;
+}
+export const disableIdentity = (identityId: number, reason: string) =>
+  api<DisableResult>(`/identities/${identityId}/disable`, { reason });
+export const enableIdentity = (identityId: number, reason: string) =>
+  api<EnableResult>(`/identities/${identityId}/enable`, { reason });
+export const identityDisables = (identityId: number) =>
+  api<{ identity_id: number; disables: DisableRecord[] }>(`/identities/${identityId}/disables`);
+
 /** A containment step that failed and is queued for retry (or was given up on). */
 export interface ContainmentRetry {
   id: string;
@@ -1549,6 +1710,88 @@ export const readiness = {
     "/insights/deployment-health/rerun", { reconcile }),
 };
 
+// ----------------------------------------------------- provisioning (#103)
+
+export type ProvStatus = "queued" | "sent" | "pending_verification" | "verified" | "mismatch" | "failed" | "cancelled";
+export type ProvKind = "create_account" | "update_account" | "disable_account" | "delete_account" | "add_entitlement" | "remove_entitlement";
+
+export interface ProvOp {
+  id: string; connection_id: string; connection_name: string; system: string; kind: ProvKind; target: string;
+  source: "jml" | "review" | "jit" | "leastpriv" | "api"; status: ProvStatus; attempts: number; verify_attempts: number;
+  next_attempt_at: string; last_error: string | null; observed: string | null; requested_by: string; idempotency_key: string;
+  completion: string | null; created_at: string; updated_at: string; completed_at: string | null; can_retry: boolean; can_cancel: boolean;
+}
+
+export interface ProvFinding {
+  id: string; op_id: string; connection_id: string; code: string; severity: "high" | "medium" | "low"; title: string;
+  expected: string; observed: string; status: "open" | "resolved"; created_at: string; resolved_at: string | null;
+}
+
+export interface ProvOpDetail extends ProvOp { payload: { account?: Record<string, unknown>; group?: Record<string, unknown> }; findings: ProvFinding[] }
+
+export interface ProvTarget {
+  connection_id: string; connection_name: string; system: string; kind: "scim" | "okta" | "fake"; base_url: string;
+  dialect?: "standard" | "entra"; fault?: string; write_back: boolean; has_credential: boolean; credential_version: string | null; updated_at: string;
+}
+
+/** token is write-only: omit it to keep the stored credential. */
+export interface ProvTargetInput { kind: ProvTarget["kind"]; base_url: string; dialect?: string; fault?: string; token?: string; write_back: boolean }
+
+export const provisioning = {
+  targets: () => api<ProvTarget[]>("/provisioning/targets"),
+  putTarget: (connectionId: string, body: ProvTargetInput) => apiNoResume<ProvTarget>(`/provisioning/targets/${connectionId}`, body, "PUT"),
+  deleteTarget: (connectionId: string) => api<{ removed: boolean }>(`/provisioning/targets/${connectionId}`, undefined, "DELETE"),
+  get: (id: string) => api<ProvOpDetail>(`/provisioning/ops/${encodeURIComponent(id)}`),
+  retry: (id: string) => api<ProvOpDetail>(`/provisioning/ops/${encodeURIComponent(id)}/retry`, {}),
+  cancel: (id: string) => api<ProvOpDetail>(`/provisioning/ops/${encodeURIComponent(id)}/cancel`, {}),
+  /** Takes the due operations now instead of at the worker's next tick (every 5 seconds). */
+  run: () => api<{ processed: number; verified: number; mismatch: number; failed: number; retrying: number }>("/provisioning/run", {}),
+};
+
+// ----------------------------------------------------- job runs (#172)
+
+export interface JobRun {
+  id: string; kind: string; trigger: "manual" | "schedule" | "retry"; status: "running" | "succeeded" | "failed";
+  connection_id: string | null; method: string | null; path: string | null; retryable: boolean; retry_of: string | null;
+  actor: string; started_at: string; finished_at: string | null; duration_ms: number | null; result: unknown; error: string | null;
+}
+
+export const jobs = {
+  list: (q = "") => api<JobRun[]>(`/jobs${q}`),
+  get: (id: string) => api<JobRun>(`/jobs/${encodeURIComponent(id)}`),
+  /** Replays the run's API call as you; its own permission and step-up apply. */
+  retry: (id: string) => api<unknown>(`/jobs/${encodeURIComponent(id)}/retry`, {}),
+};
+
+// ------------------------------------------------- config transport (#170)
+
+export interface SigningKey { kid: string; public_key: string; tenant: string; created_at: string | null }
+export interface TrustedSigner { kid: string; public_key: string; label: string; added_by: string | null; added_at: string }
+export interface ExportedBundle { hash: string; kid: string; file_name: string; excluded: { section: string; name: string; reason: string }[] | null; bundle: unknown }
+export type ImportAction = "add" | "change" | "remove" | "unchanged" | "manual";
+export interface PlanItem { section: "connections" | "overlays" | "identity_providers"; name: string; action: ImportAction; fields?: string[]; notes?: string[] }
+export interface ImportPlan {
+  hash: string; digest: string; digest_prune: string; signer: string; signer_kid: string; exported_at: string; items: PlanItem[]; refusals: string[];
+  source: { tenant_id: string; tenant: string; env: string; instance?: string; exported_by: string };
+  counts: Record<ImportAction, number>;
+}
+export interface ConfigImport { id: string; bundle_hash: string; signer_kid: string; source: string; exported_at: string; summary: Record<ImportAction, number>; applied_by: string | null; applied_at: string }
+
+export const configTransport = {
+  signingKey: () => api<{ key: SigningKey | null }>("/config/signing-key"),
+  export: () => api<ExportedBundle>("/config/export", {}),
+  signers: () => api<TrustedSigner[]>("/config/trusted-signers"),
+  trust: (body: { kid: string; public_key: string; label: string }) => api<TrustedSigner>("/config/trusted-signers", body),
+  untrust: (kid: string) => api<{ removed: string }>(`/config/trusted-signers/${encodeURIComponent(kid)}`, undefined, "DELETE"),
+  /** bundle is the parsed exported file: the server verifies its signature, not its bytes. */
+  plan: (bundle: unknown) => api<ImportPlan>("/config/import/plan", bundle),
+  /** The apply is bound to the reviewed plan: plan.digest, or plan.digest_prune with prune. */
+  apply: (bundle: unknown, plan: ImportPlan, prune: boolean) =>
+    api<{ import_id: string; plan: ImportPlan }>(
+      `/config/import/apply?hash=${encodeURIComponent(plan.hash)}&digest=${encodeURIComponent(prune ? plan.digest_prune : plan.digest)}${prune ? "&prune=true" : ""}`, bundle),
+  imports: () => api<ConfigImport[]>("/config/imports"),
+};
+
 // ------------------------------------------------------------ admin changes (design §15, §16.1)
 
 export type ChangeStatus = "pending_approval" | "cooling_off" | "applied" | "rejected" | "cancelled" | "expired" | "failed";
@@ -1590,6 +1833,18 @@ export interface AdminIdpConnection {
 export interface AdminRecovery {
   id: string; status: "pending" | "cancelled" | "completed"; ticket: string; operator: string; co_operator: string;
   not_before: string; created_at: string; cancelled_at: string | null; completed_at: string | null;
+}
+
+/** GET /api/admin/platform-health: process-wide operational signals (no tenant data, no secrets). */
+export interface PlatformHealth {
+  generated_at: string; status: "ok" | "degraded"; max_loop_lag_seconds: number;
+  checks: { name: string; ok: boolean }[];
+  loops: { name: string; interval_seconds: number; gated: boolean; last_run_at: string | null; last_success_at: string | null; lag_seconds: number; runs: number; failures: number; healthy: boolean }[];
+  http: { requests: number; server_errors: number; p95_seconds: number | null };
+  audit: { writes: number; write_failures: number };
+  database: { open_connections: number; in_use: number; idle: number; pool_waits: number; busy_errors: number; tx_p95_seconds: number | null; lock_wait_p95_seconds: number | null };
+  logins: { method: string; success: number; failure: number }[];
+  connectors: { connector: string; op: string; calls: number; errors: number }[];
 }
 
 export interface AdminApiClients { available: boolean; clients: { id: string; name: string }[]; detail: string }

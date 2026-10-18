@@ -96,6 +96,7 @@ func TestProdRefusesEachUnsafeSetting(t *testing.T) {
 		{"outbound loopback", []string{"TESSERA_OUTBOUND_ALLOW_LOOPBACK", "true"}, "TESSERA_OUTBOUND_ALLOW_LOOPBACK must be false"},
 		{"safedial allowlist", []string{"TESSERA_SAFEDIAL_ALLOW", "192.168.1.10:636"}, "TESSERA_SAFEDIAL_ALLOW must not be set"},
 		{"dev IdP URL set", []string{"TESSERA_DEV_IDP_URL", "http://127.0.0.1:8001"}, "TESSERA_DEV_IDP_URL must not be set"},
+		{"dev fake provisioning target", []string{"TESSERA_DEV_FAKE_TARGET", "1"}, "TESSERA_DEV_FAKE_TARGET must not be set"},
 		{"file audit anchor", []string{"TESSERA_AUDIT_ANCHOR", "file://server/var/audit-anchors.jsonl"}, "must not be file://"},
 		{"audit anchor missing", []string{"TESSERA_AUDIT_ANCHOR", "<unset>"}, "TESSERA_AUDIT_ANCHOR is required"},
 		{"file audit anchor, upper case", []string{"TESSERA_AUDIT_ANCHOR", "FILE:///srv/a.jsonl"}, "TESSERA_AUDIT_ANCHOR"},
@@ -214,6 +215,40 @@ func TestAnchorURL(t *testing.T) {
 	}
 	if got := p.AnchorURL("x.db"); got != "s3://anchors/tessera" {
 		t.Errorf("prod anchor %q", got)
+	}
+}
+
+// TestPostgresDSN: a postgres:// TESSERA_DB works in dev (dev files go in the
+// working directory, not in a directory named after the URL), and production
+// refuses a DSN without TLS or without the app_role that makes row-level
+// security apply, without echoing the DSN (it holds the password).
+func TestPostgresDSN(t *testing.T) {
+	dsn := "postgres://owner:s3cret-pw@db.example.com:5432/tessera?sslmode=require&app_role=tessera_app"
+	if _, err := config.Load(env(map[string]string{"TESSERA_DB": dsn})); err != nil {
+		t.Fatalf("dev with a postgres DSN: %v", err)
+	}
+	wd, _ := filepath.Abs(".")
+	if got, want := config.DevKEKPath(dsn), filepath.Join(".", "var", "dev-kek"); got != want {
+		t.Errorf("dev KEK path %q, want %q", got, want)
+	}
+	if got, want := config.DevAnchorURL(dsn), "file://"+filepath.ToSlash(filepath.Join(wd, "var", "audit-anchors.jsonl")); got != want {
+		t.Errorf("dev anchor %q, want %q", got, want)
+	}
+	if _, err := config.Load(env(with(safeProd(), "TESSERA_DB", dsn))); err != nil {
+		t.Errorf("prod with a safe DSN: %v", err)
+	}
+	for name, tc := range map[string]struct{ dsn, want string }{
+		"no sslmode":      {"postgres://o:s3cret-pw@db/tessera?app_role=tessera_app", "sslmode must be require"},
+		"sslmode disable": {"postgres://o:s3cret-pw@db/tessera?sslmode=disable&app_role=tessera_app", "sslmode must be require"},
+		"sslmode prefer":  {"postgres://o:s3cret-pw@db/tessera?sslmode=prefer&app_role=tessera_app", "sslmode must be require"},
+		"no app_role":     {"postgres://o:s3cret-pw@db/tessera?sslmode=verify-full", "app_role"},
+	} {
+		_, err := config.Load(env(with(safeProd(), "TESSERA_DB", tc.dsn)))
+		if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "TESSERA_DB") {
+			t.Errorf("%s: %v", name, err)
+		} else if strings.Contains(err.Error(), "s3cret-pw") {
+			t.Errorf("%s: the error echoes the DSN password: %v", name, err)
+		}
 	}
 }
 
@@ -429,6 +464,34 @@ func TestTestEnvAndInsecureCookie(t *testing.T) {
 	}
 }
 
+// The fake provisioning target is a dev tool: off by default, on in dev when asked.
+func TestFakeTargetIsDevOnly(t *testing.T) {
+	for _, tc := range []struct {
+		env  map[string]string
+		want bool
+	}{
+		{map[string]string{"TESSERA_ENV": "dev"}, false},
+		{map[string]string{"TESSERA_ENV": "dev", "TESSERA_DEV_FAKE_TARGET": "1"}, true},
+	} {
+		c, err := config.Load(env(tc.env))
+		if err != nil || c.FakeTarget != tc.want {
+			t.Errorf("%v: FakeTarget = %v, %v; want %v", tc.env, c != nil && c.FakeTarget, err, tc.want)
+		}
+	}
+}
+
+func TestDevOnlyURL(t *testing.T) {
+	for raw, want := range map[string]bool{
+		"https://login.example.com/oauth2": false, "https://203.0.113.9/x": false, "not a url": false, "": false,
+		"http://login.example.com": true, "https://localhost:8443": true, "https://api.localhost": true, "https://127.0.0.1:8001": true,
+		"https://[::1]/x": true, "https://10.1.2.3": true, "https://192.168.0.5": true, "https://169.254.169.254": true,
+	} {
+		if got := config.DevOnlyURL(raw) != ""; got != want {
+			t.Errorf("DevOnlyURL(%q) = %q, want dev-only %v", raw, config.DevOnlyURL(raw), want)
+		}
+	}
+}
+
 // TestMailConfig: the email sender defaults by environment, and SMTP needs a
 // host and a from address.
 func TestMailConfig(t *testing.T) {
@@ -462,5 +525,57 @@ func TestMailConfig(t *testing.T) {
 		if _, err := config.Load(env(with(map[string]string{"TESSERA_ENV": "dev"}, kv...))); err == nil {
 			t.Errorf("dev accepted %v", kv)
 		}
+	}
+}
+
+// /metrics is never public by default (issue #303): off in prod unless set,
+// loopback in dev, and a prod address must be loopback or private.
+func TestMetricsAddr(t *testing.T) {
+	prod := func(kv ...string) map[string]string { return with(safeProd(), kv...) }
+	// defaults
+	if c, err := config.Load(env(prod())); err != nil || c.MetricsAddr != "" {
+		t.Errorf("prod default: %q %v (want off)", c.MetricsAddr, err)
+	}
+	if c, err := config.Load(env(map[string]string{"TESSERA_ENV": "dev"})); err != nil || c.MetricsAddr != config.MetricsDefaultAddr || !c.MetricsAddrDefault {
+		t.Errorf("dev default: %+v %v", c, err)
+	}
+	if c, err := config.Load(env(map[string]string{"TESSERA_ENV": "dev", "TESSERA_METRICS_ADDR": "off"})); err != nil || c.MetricsAddr != "" {
+		t.Errorf("dev off: %v", err)
+	}
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+		ok   bool
+	}{
+		{"prod loopback", prod("TESSERA_METRICS_ADDR", "127.0.0.1:9464"), true},
+		{"prod private", prod("TESSERA_METRICS_ADDR", "10.1.2.3:9464"), true},
+		{"prod ULA v6", prod("TESSERA_METRICS_ADDR", "[fd00::1]:9464"), true},
+		{"prod public ip", prod("TESSERA_METRICS_ADDR", "203.0.113.9:9464"), false},
+		{"prod hostname", prod("TESSERA_METRICS_ADDR", "metrics.example.com:9464"), false},
+		{"prod localhost name", prod("TESSERA_METRICS_ADDR", "localhost:9464"), false},
+		{"prod wildcard", prod("TESSERA_METRICS_ADDR", "0.0.0.0:9464"), false},
+		{"prod bare port", prod("TESSERA_METRICS_ADDR", ":9464"), false},
+		{"prod v6 wildcard", prod("TESSERA_METRICS_ADDR", "[::]:9464"), false},
+		{"prod wildcard opted in", prod("TESSERA_METRICS_ADDR", ":9464", "TESSERA_METRICS_ALLOW_WILDCARD", "true"), true},
+		{"prod public even when wildcard flag set", prod("TESSERA_METRICS_ADDR", "203.0.113.9:9464", "TESSERA_METRICS_ALLOW_WILDCARD", "true"), false},
+		{"prod bad port", prod("TESSERA_METRICS_ADDR", "10.0.0.1:0"), false},
+		{"prod no port", prod("TESSERA_METRICS_ADDR", "10.0.0.1"), false},
+		{"dev loopback", map[string]string{"TESSERA_ENV": "dev", "TESSERA_METRICS_ADDR": "127.0.0.1:9999"}, true},
+		{"dev localhost", map[string]string{"TESSERA_ENV": "dev", "TESSERA_METRICS_ADDR": "localhost:9999"}, true},
+		{"dev wildcard", map[string]string{"TESSERA_ENV": "dev", "TESSERA_METRICS_ADDR": ":9999"}, false},
+		{"dev private", map[string]string{"TESSERA_ENV": "dev", "TESSERA_METRICS_ADDR": "192.168.1.5:9999"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, err := config.Load(env(tc.env))
+			if (err == nil) != tc.ok {
+				t.Fatalf("err = %v, want ok=%v", err, tc.ok)
+			}
+			if err == nil && c.MetricsAddrDefault {
+				t.Error("an explicit address is not the default")
+			}
+		})
+	}
+	if _, err := config.Load(env(with(safeProd(), "TESSERA_READY_MAX_LOOP_LAG_SECONDS", "5"))); err == nil {
+		t.Error("lag threshold below 30s accepted")
 	}
 }

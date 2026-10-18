@@ -9,7 +9,8 @@
 // CORS_ORIGINS is not empty (the UI is same-origin in production, so CORS is
 // off, §11); OUTBOUND_ALLOW_LOOPBACK is true; TESSERA_SAFEDIAL_ALLOW is set; TESSERA_DEV_IDP_URL is set; the
 // audit anchor is not an s3:// URL (missing or file:// included); TESSERA_NOW freezes the clock; a
-// trusted-proxy prefix is shorter than /8 (IPv4) or /32 (IPv6). The guard rail on dev_mock IdP connections
+// trusted-proxy prefix is shorter than /8 (IPv4) or /32 (IPv6); TESSERA_METRICS_ADDR is a wildcard, hostname or public
+// address (/metrics is internal only). The guard rail on dev_mock IdP connections
 // needs the idp_connections table and lands with it (PR6).
 package config
 
@@ -19,6 +20,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/mail"
 	"net/netip"
 	"net/url"
@@ -61,7 +63,7 @@ type Config struct {
 	Env                   string // Dev or Prod
 	PublicURL             string // issuer base; https in prod
 	APIAudience           string // access-token aud
-	DB                    string // SQLite path (or sqlite:///path)
+	DB                    string // SQLite path (or sqlite:///path), or a postgres:// DSN (carries a password: never log it)
 	KEKFile               string // TESSERA_KEK_FILE, when set
 	CookieSecure          bool
 	CORSOrigins           []string
@@ -76,12 +78,21 @@ type Config struct {
 	AuditAnchor            string
 	AuditCheckpointSeconds int
 	AuditCheckpointEvents  int
-	AccessTokenTTLSeconds  int
-	DeviceCodeTTLSeconds   int
-	DPoPRSNonce            bool
-	RPID                   string
-	Notify                 string
-	DevIdPURL              string
+	// BackupDir (TESSERA_BACKUP_DIR) turns on scheduled encrypted backups
+	// every BackupEveryMinutes, keeping the newest BackupKeep (issue #171).
+	BackupDir             string
+	BackupEveryMinutes    int
+	BackupKeep            int
+	AccessTokenTTLSeconds int
+	DeviceCodeTTLSeconds  int
+	DPoPRSNonce           bool
+	RPID                  string
+	Notify                string
+	DevIdPURL             string
+	// FakeTarget is TESSERA_DEV_FAKE_TARGET: cmd/tessera starts an in-process
+	// fake SCIM target on a loopback port, so the provisioning screens can be
+	// demonstrated without a real system. Refused in prod.
+	FakeTarget bool
 	// Mail is the notification email delivery (issue #189).
 	Mail Mail
 	// NotifyMaxAttempts is how many times the dispatcher tries to send one
@@ -90,6 +101,20 @@ type Config struct {
 	// NotifyDigestHour is the UTC hour from which the daily digest is built
 	// (TESSERA_NOTIFY_DIGEST_HOUR).
 	NotifyDigestHour int
+	// MetricsAddr is TESSERA_METRICS_ADDR: where the internal /metrics
+	// listener binds (host:port). Empty means no metrics listener. Dev and
+	// test default to MetricsDefaultAddr (loopback); production defaults to
+	// off and, when set, must name a loopback or private IP literal (or the
+	// wildcard with TESSERA_METRICS_ALLOW_WILDCARD=true, for a container
+	// whose network policy limits the scraper). /metrics is never served on
+	// the public listener.
+	MetricsAddr string
+	// MetricsAddrDefault is true when MetricsAddr is the dev default rather
+	// than an operator's choice: a busy port is then a warning, not fatal.
+	MetricsAddrDefault bool
+	// ReadyMaxLoopLagSeconds is how long a background loop may go without a
+	// success before /readyz fails (TESSERA_READY_MAX_LOOP_LAG_SECONDS).
+	ReadyMaxLoopLagSeconds int
 	// FrozenNow is TESSERA_NOW (tests and demos; refused in prod). The zero
 	// time means the wall clock; use Clock.
 	FrozenNow time.Time
@@ -222,6 +247,9 @@ func Load(getenv func(string) string) (*Config, error) {
 	}
 	c.AuditCheckpointSeconds = integer("TESSERA_AUDIT_CHECKPOINT_SECONDS", 300, 1, 86400)
 	c.AuditCheckpointEvents = integer("TESSERA_AUDIT_CHECKPOINT_EVENTS", 1000, 1, 1_000_000)
+	c.BackupDir = str("TESSERA_BACKUP_DIR", "", "")
+	c.BackupEveryMinutes = integer("TESSERA_BACKUP_EVERY_MINUTES", 360, 5, 7*24*60)
+	c.BackupKeep = integer("TESSERA_BACKUP_KEEP", 28, 1, 10_000)
 	c.AccessTokenTTLSeconds = integer("TESSERA_AT_TTL_SECONDS", 600, 1, MaxAccessTokenTTLSeconds)
 	c.DeviceCodeTTLSeconds = integer("TESSERA_DEVICE_CODE_TTL_SECONDS", 300, 1, MaxDeviceCodeTTLSeconds)
 	c.DPoPRSNonce = boolean("TESSERA_DPOP_RS_NONCE", false, false)
@@ -229,6 +257,8 @@ func Load(getenv func(string) string) (*Config, error) {
 	c.NotifyMaxAttempts = integer("TESSERA_NOTIFY_MAX_ATTEMPTS", 6, 1, 20)
 	c.NotifyDigestHour = integer("TESSERA_NOTIFY_DIGEST_HOUR", 8, 0, 23)
 	c.Mail = loadMail(getenv, prod, integer, bad)
+	c.ReadyMaxLoopLagSeconds = integer("TESSERA_READY_MAX_LOOP_LAG_SECONDS", 300, 30, 86400)
+	c.MetricsAddr, c.MetricsAddrDefault = loadMetricsAddr(getenv, prod, boolean("TESSERA_METRICS_ALLOW_WILDCARD", false, false), bad)
 	if v := strings.TrimSpace(getenv("TESSERA_NOW")); v != "" {
 		t, err := timeutil.ParseISO(v)
 		switch {
@@ -240,6 +270,7 @@ func Load(getenv func(string) string) (*Config, error) {
 			c.FrozenNow = t
 		}
 	}
+	c.FakeTarget = boolean("TESSERA_DEV_FAKE_TARGET", false, false)
 	c.DevIdPURL = strings.TrimSpace(getenv("TESSERA_DEV_IDP_URL"))
 	if c.DevIdPURL == "" && !prod {
 		c.DevIdPURL = "http://127.0.0.1:8001"
@@ -253,6 +284,8 @@ func Load(getenv func(string) string) (*Config, error) {
 		bad("TESSERA_PUBLIC_URL: %v", err)
 	case prod && pub.Scheme != "https":
 		bad("TESSERA_PUBLIC_URL must be https with TESSERA_ENV=prod (got %s)", pub.Scheme)
+	case prod && DevOnlyURL(c.PublicURL) != "":
+		bad("TESSERA_PUBLIC_URL must not be %s with TESSERA_ENV=prod", DevOnlyURL(c.PublicURL))
 	}
 	// §11: the insecure-cookie fallback (Safari on http://localhost) only in
 	// dev, and only for a localhost public URL.
@@ -320,6 +353,15 @@ func Load(getenv func(string) string) (*Config, error) {
 		if c.DevIdPURL != "" {
 			bad("TESSERA_DEV_IDP_URL must not be set with TESSERA_ENV=prod")
 		}
+		if c.FakeTarget {
+			bad("TESSERA_DEV_FAKE_TARGET must not be set with TESSERA_ENV=prod (the fake provisioning target accepts any change)")
+		}
+		if IsPostgresDSN(c.DB) {
+			// Never echo the DSN: it carries the password.
+			if msg := checkProdPostgres(c.DB); msg != "" {
+				bad("TESSERA_DB: %s", msg)
+			}
+		}
 		if c.SafedialAllow != "" {
 			bad("TESSERA_SAFEDIAL_ALLOW must not be set with TESSERA_ENV=prod: private directories are reached through the Directory Agent")
 		}
@@ -342,6 +384,53 @@ func Load(getenv func(string) string) (*Config, error) {
 	}
 	c.outbound = &outboundSettings{env: c.Env, allowLoopback: c.OutboundAllowLoopback}
 	return c, nil
+}
+
+// MetricsDefaultAddr is the dev and test /metrics listener (loopback).
+const MetricsDefaultAddr = "127.0.0.1:9464"
+
+// loadMetricsAddr reads TESSERA_METRICS_ADDR ("off" disables it). Outside
+// production the listener must be loopback. In production it is off unless
+// set, and then it must be an IP literal that is loopback, private or
+// link-local: never a host name (which can resolve anywhere) and never a
+// public address. A wildcard bind needs TESSERA_METRICS_ALLOW_WILDCARD=true.
+func loadMetricsAddr(getenv func(string) string, prod, wildcardOK bool, bad func(string, ...any)) (addr string, isDefault bool) {
+	v := strings.TrimSpace(getenv("TESSERA_METRICS_ADDR"))
+	switch strings.ToLower(v) {
+	case "off", "none", "false":
+		return "", false
+	case "":
+		if prod {
+			return "", false
+		}
+		return MetricsDefaultAddr, true
+	}
+	host, port, err := net.SplitHostPort(v)
+	if err != nil {
+		bad("TESSERA_METRICS_ADDR: %q is not host:port", v)
+		return "", false
+	}
+	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+		bad("TESSERA_METRICS_ADDR: %q has no usable port", v)
+		return "", false
+	}
+	a, perr := netip.ParseAddr(host)
+	wildcard := host == "" || (perr == nil && a.IsUnspecified())
+	switch {
+	case wildcard && prod && !wildcardOK:
+		bad("TESSERA_METRICS_ADDR=%s listens on every interface with TESSERA_ENV=prod: bind a loopback or private address, or set TESSERA_METRICS_ALLOW_WILDCARD=true when a network policy limits the scraper", v)
+	case wildcard && !prod:
+		bad("TESSERA_METRICS_ADDR=%s: outside production /metrics listens on loopback only", v)
+	case wildcard:
+	case host == "localhost" && !prod:
+	case perr != nil:
+		bad("TESSERA_METRICS_ADDR: %q must be an IP literal (a host name can resolve to a public address)", v)
+	case prod && !(a.Unmap().IsLoopback() || a.Unmap().IsPrivate() || a.Unmap().IsLinkLocalUnicast()):
+		bad("TESSERA_METRICS_ADDR=%s is a public address: /metrics must not be exposed publicly (use a loopback or private address)", v)
+	case !prod && !a.Unmap().IsLoopback():
+		bad("TESSERA_METRICS_ADDR=%s: outside production /metrics listens on loopback only", v)
+	}
+	return v, false
 }
 
 // loadMail reads TESSERA_NOTIFY_EMAIL and TESSERA_SMTP_*: smtp when a host is
@@ -460,9 +549,9 @@ func (c *Config) AnchorURL(dbPath string) string {
 
 // DevAnchorURL is the dev anchor file for a database path.
 func DevAnchorURL(dbPath string) string {
-	p, err := filepath.Abs(filepath.Join(filepath.Dir(dbPath), "var", "audit-anchors.jsonl"))
+	p, err := filepath.Abs(filepath.Join(localDir(dbPath), "var", "audit-anchors.jsonl"))
 	if err != nil {
-		p = filepath.Join(filepath.Dir(dbPath), "var", "audit-anchors.jsonl")
+		p = filepath.Join(localDir(dbPath), "var", "audit-anchors.jsonl")
 	}
 	return "file://" + filepath.ToSlash(p)
 }
@@ -470,13 +559,51 @@ func DevAnchorURL(dbPath string) string {
 // DevKEKPath is where a dev KEK is generated: var/dev-kek next to the
 // database file (server/var/dev-kek for the default database).
 func DevKEKPath(dbPath string) string {
-	return filepath.Join(filepath.Dir(dbPath), "var", "dev-kek")
+	return filepath.Join(localDir(dbPath), "var", "dev-kek")
+}
+
+// localDir is the directory dev files (KEK, anchors) live in: next to a
+// SQLite database file, or the working directory for a Postgres DSN.
+func localDir(dbPath string) string {
+	if IsPostgresDSN(dbPath) {
+		return "."
+	}
+	return filepath.Dir(dbPath)
+}
+
+// IsPostgresDSN reports whether a database setting is a postgres:// URL.
+func IsPostgresDSN(s string) bool {
+	return strings.HasPrefix(s, "postgres://") || strings.HasPrefix(s, "postgresql://")
+}
+
+// checkProdPostgres returns what is wrong with a production Postgres DSN, or
+// "". It requires TLS to the server and an app_role: the application must run
+// as the non-owner role so row-level security binds it (design §14.3).
+func checkProdPostgres(dsn string) string {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return "is not a valid postgres:// URL"
+	}
+	q, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		return "is not a valid postgres:// URL"
+	}
+	var problems []string
+	switch q.Get("sslmode") {
+	case "require", "verify-ca", "verify-full":
+	default:
+		problems = append(problems, "sslmode must be require, verify-ca or verify-full with TESSERA_ENV=prod")
+	}
+	if q.Get("app_role") == "" {
+		problems = append(problems, "app_role (the NOSUPERUSER, NOBYPASSRLS role, usually tessera_app) is required with TESSERA_ENV=prod so row-level security applies")
+	}
+	return strings.Join(problems, "; ")
 }
 
 // DevMailPath is where the dev mail sink appends: var/dev-mail.jsonl next to
 // the database file.
 func DevMailPath(dbPath string) string {
-	return filepath.Join(filepath.Dir(dbPath), "var", "dev-mail.jsonl")
+	return filepath.Join(localDir(dbPath), "var", "dev-mail.jsonl")
 }
 
 // Sealer returns the KEK sealer. With no KEK configured (dev only; Load
@@ -573,6 +700,35 @@ func readKEKFile(path string) ([]byte, error) {
 		return nil, err
 	}
 	return decodeKEK(string(b))
+}
+
+// DevOnlyURL says why a URL may be used only in development: plain http,
+// or a host that is localhost or a loopback, private or link-local
+// address. "" means the URL is fine in production. Load applies it to
+// TESSERA_PUBLIC_URL, and the configuration import (internal/transport)
+// to every URL in a bundle applied to a production server.
+func DevOnlyURL(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	if u.Scheme == "http" || u.Scheme == "ws" {
+		return "plain " + u.Scheme
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return "a localhost address"
+	}
+	if a, err := netip.ParseAddr(host); err == nil {
+		a = a.Unmap()
+		switch {
+		case a.IsLoopback():
+			return "a loopback address"
+		case a.IsPrivate(), a.IsLinkLocalUnicast(), a.IsUnspecified():
+			return "a private or link-local address"
+		}
+	}
+	return ""
 }
 
 func parsePublicURL(s string) (*url.URL, error) {

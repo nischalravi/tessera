@@ -10,6 +10,14 @@ with the backend's requirements installed.
 `internal/api/parity_test.go` replays every fixture, in file order, against a
 freshly seeded Go server through `httptest` and requires equal JSON.
 
+On SQLite (the default) the comparison is exact. When the suite runs on
+Postgres (`TESSERA_TEST_PG_URL`), integer ids come from sequences, which are not
+gapless: an upsert that finds its row still consumes a value, where SQLite's
+rowid reuses it, so a later `id` or `edge_id` can be one higher. There, and only
+there, the test accepts a different numeric value for a member named `id` or
+`edge_id` (`pgIDsMayDiffer`); every other value, key and the order of the
+response must still match. No fixture was changed for this.
+
 ## How the recording is made deterministic
 
 * **Seed.** The demo company uses `random.Random(7)`. The Go port
@@ -133,6 +141,12 @@ other), and the JIT decision route is split into three routes.
   (`requester@larkspur.example`, `…00c3`, `authn.ctx_id` `…00c4`), the
   other domain events to `security-oncall@larkspur.example`. Events written
   by the seed (`system`) are unchanged, and so are every `id` and `seq`.
+  Issue #141: the `review.keep` (seq 125) and `review.revoke` (seq 127)
+  events now have a `target` (`{"type": "review_item", "id": "<item id>"}`,
+  ids 1 and 2) instead of `null`. The reviewer's comment is part of the
+  event: `review.keep` gains `detail.comment` (`"needed"`, sent by
+  `111-review-keep`); `review.revoke` is unchanged (its request has no
+  comment, and the key is added only when one is given).
 * `158-openapi`: the API description follows the contract:
   `RevokeIn.actor` and `ReviewDecisionIn.reviewer` are removed, the
   `DecisionIn` schema is gone, `/api/jit/requests/{request_id}/{action}`

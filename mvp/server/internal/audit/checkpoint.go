@@ -5,21 +5,33 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 	"github.com/go-jose/go-jose/v4"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
+	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -152,14 +164,32 @@ type Sink interface {
 	Anchor(ctx context.Context, a Anchor) (string, error)
 }
 
-// ErrS3NotImplemented is returned by the S3 Object Lock sink until PR14.
-var ErrS3NotImplemented = errors.New("audit: the s3:// anchor sink (S3 Object Lock) is not implemented yet (PR14)")
+// SinkOption configures NewSink.
+type SinkOption func(*sinkOptions)
+
+type sinkOptions struct {
+	httpClient *http.Client
+	s3         S3API
+}
+
+// WithHTTPClient sets the HTTP client the s3:// sink's AWS SDK client uses. It
+// must be the safehttp client: every outbound call goes through the SSRF guard.
+func WithHTTPClient(c *http.Client) SinkOption { return func(o *sinkOptions) { o.httpClient = c } }
+
+// WithS3Client injects the S3 client (tests); it replaces the SDK client that
+// WithHTTPClient would build.
+func WithS3Client(c S3API) SinkOption { return func(o *sinkOptions) { o.s3 = c } }
 
 // NewSink returns the sink for a TESSERA_AUDIT_ANCHOR URL: file:///path (or
 // file://relative/path) appends to a JSONL file; s3://bucket/prefix is the
-// production sink (a stub that always fails until PR14, so checkpoints stay
-// "failed" and verification reports them). An empty URL means no anchoring.
-func NewSink(anchorURL string) (Sink, error) {
+// production sink (S3 Object Lock, compliance mode), which needs
+// WithHTTPClient (the safehttp client) or WithS3Client. An empty URL means no
+// anchoring.
+func NewSink(anchorURL string, opts ...SinkOption) (Sink, error) {
+	var o sinkOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
 	switch {
 	case anchorURL == "":
 		return nil, nil
@@ -170,7 +200,17 @@ func NewSink(anchorURL string) (Sink, error) {
 		}
 		return &FileSink{Path: p}, nil
 	case strings.HasPrefix(anchorURL, "s3://"):
-		return S3Sink{URL: anchorURL}, nil
+		client := o.s3
+		if client == nil {
+			if o.httpClient == nil {
+				return nil, errors.New("audit: the s3:// anchor sink needs the safehttp client (every outbound call goes through it)")
+			}
+			var err error
+			if client, err = NewS3Client(context.Background(), o.httpClient); err != nil {
+				return nil, fmt.Errorf("audit: s3 anchor client: %w", err)
+			}
+		}
+		return NewS3Sink(anchorURL, client)
 	}
 	return nil, fmt.Errorf("audit: unsupported anchor URL %q (want file:// or s3://)", anchorURL)
 }
@@ -247,12 +287,167 @@ func countLines(path string) (int, error) {
 	}
 }
 
-// S3Sink is the production anchor sink (S3 Object Lock, compliance mode, 7
-// years), not implemented until PR14.
-type S3Sink struct{ URL string }
+// ---------------------------------------------------------------- S3 Object Lock sink
 
-// Anchor always fails with ErrS3NotImplemented.
-func (S3Sink) Anchor(context.Context, Anchor) (string, error) { return "", ErrS3NotImplemented }
+// S3API is the part of the AWS SDK for Go v2 *s3.Client that the sink uses, so
+// tests (and callers with their own client) can pass a stub.
+type S3API interface {
+	PutObject(ctx context.Context, in *s3.PutObjectInput, opts ...func(*s3.Options)) (*s3.PutObjectOutput, error)
+	HeadObject(ctx context.Context, in *s3.HeadObjectInput, opts ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
+}
+
+// NewS3Client builds the AWS SDK for Go v2 S3 client with all of its HTTP
+// traffic on hc, which must be the safehttp client (SSRF guard). Credentials
+// and the region come from the SDK's default chain (environment, shared
+// config, web identity / IRSA); the SDK's metadata-service lookups go through
+// hc too, so link-local metadata endpoints are blocked by safehttp: use
+// environment credentials or a web identity role.
+func NewS3Client(ctx context.Context, hc *http.Client) (S3API, error) {
+	if hc == nil {
+		return nil, errors.New("audit: NewS3Client needs an HTTP client")
+	}
+	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithHTTPClient(hc))
+	if err != nil {
+		return nil, err
+	}
+	return s3.NewFromConfig(cfg), nil
+}
+
+// S3RetentionYears is how long an anchored checkpoint is locked (design §13.6).
+const S3RetentionYears = 7
+
+var (
+	s3Bucket = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
+	s3TID    = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+)
+
+// ParseS3URL splits s3://bucket/prefix. The prefix may be empty; it never has
+// a leading or trailing slash, an empty segment, "." or "..".
+func ParseS3URL(anchorURL string) (bucket, prefix string, err error) {
+	u, err := url.Parse(anchorURL)
+	if err != nil || u.Scheme != "s3" || u.Host == "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+		return "", "", fmt.Errorf("audit: %q is not an s3://bucket/prefix URL", anchorURL)
+	}
+	if !s3Bucket.MatchString(u.Host) {
+		return "", "", fmt.Errorf("audit: invalid S3 bucket name %q", u.Host)
+	}
+	prefix = strings.Trim(u.Path, "/")
+	if prefix != "" {
+		if len(prefix) > 512 {
+			return "", "", errors.New("audit: S3 prefix too long")
+		}
+		for _, seg := range strings.Split(prefix, "/") {
+			if seg == "" || seg == "." || seg == ".." || strings.ContainsFunc(seg, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+				return "", "", fmt.Errorf("audit: invalid S3 prefix %q", prefix)
+			}
+		}
+	}
+	return u.Host, prefix, nil
+}
+
+// S3Sink stores one object per checkpoint at <prefix>/<tid>/<seq>.jws in a
+// bucket with Object Lock enabled (design §13.6). Each object is written in
+// COMPLIANCE mode, retained for S3RetentionYears, with If-None-Match: * so an
+// existing object is never replaced, and a SHA-256 checksum so S3 verifies the
+// body. anchor_ref is the object URL with its version id, which proves the
+// bucket is versioned (Object Lock requires it).
+type S3Sink struct {
+	Bucket, Prefix string
+	Client         S3API
+	// Now is the clock for the retention date (default time.Now).
+	Now func() time.Time
+}
+
+// NewS3Sink returns the sink for an s3://bucket/prefix URL.
+func NewS3Sink(anchorURL string, client S3API) (*S3Sink, error) {
+	if client == nil {
+		return nil, errors.New("audit: the S3 anchor sink needs a client")
+	}
+	bucket, prefix, err := ParseS3URL(anchorURL)
+	if err != nil {
+		return nil, err
+	}
+	return &S3Sink{Bucket: bucket, Prefix: prefix, Client: client}, nil
+}
+
+// Key is the object key of an anchor.
+func (s *S3Sink) Key(a Anchor) (string, error) {
+	if !s3TID.MatchString(a.TID) || a.Seq < 1 {
+		return "", fmt.Errorf("audit: cannot anchor tid %q seq %d", a.TID, a.Seq)
+	}
+	k := a.TID + "/" + strconv.FormatInt(a.Seq, 10) + ".jws"
+	if s.Prefix != "" {
+		k = s.Prefix + "/" + k
+	}
+	return k, nil
+}
+
+// Anchor stores a.JWS and returns "s3://bucket/key?versionId=<id>". If the
+// object already exists with the same checksum (an earlier attempt whose
+// response was lost), that object's version is returned; different content
+// under the same key is an error.
+func (s *S3Sink) Anchor(ctx context.Context, a Anchor) (string, error) {
+	if s.Client == nil {
+		return "", errors.New("audit: the S3 anchor sink has no client")
+	}
+	key, err := s.Key(a)
+	if err != nil {
+		return "", err
+	}
+	now := time.Now
+	if s.Now != nil {
+		now = s.Now
+	}
+	body := []byte(a.JWS)
+	sum := sha256.Sum256(body)
+	sum64 := base64.StdEncoding.EncodeToString(sum[:])
+	out, err := s.Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:                    aws.String(s.Bucket),
+		Key:                       aws.String(key),
+		Body:                      bytes.NewReader(body),
+		ContentType:               aws.String("application/jose"),
+		ChecksumSHA256:            aws.String(sum64),
+		IfNoneMatch:               aws.String("*"),
+		ObjectLockMode:            s3types.ObjectLockModeCompliance,
+		ObjectLockRetainUntilDate: aws.Time(now().UTC().AddDate(S3RetentionYears, 0, 0)),
+		Metadata:                  map[string]string{"tid": a.TID, "seq": strconv.FormatInt(a.Seq, 10), "head-hash": a.HeadHash},
+	})
+	var version string
+	switch {
+	case err == nil:
+		version = aws.ToString(out.VersionId)
+	case isS3PreconditionFailed(err):
+		h, herr := s.Client.HeadObject(ctx, &s3.HeadObjectInput{
+			Bucket: aws.String(s.Bucket), Key: aws.String(key), ChecksumMode: s3types.ChecksumModeEnabled})
+		if herr != nil {
+			return "", fmt.Errorf("audit: s3 anchor %s exists and cannot be read: %w", key, herr)
+		}
+		if aws.ToString(h.ChecksumSHA256) != sum64 {
+			return "", fmt.Errorf("audit: s3 anchor %s already holds different content", key)
+		}
+		version = aws.ToString(h.VersionId)
+	default:
+		return "", fmt.Errorf("audit: s3 anchor %s: %w", key, err)
+	}
+	if version == "" {
+		return "", fmt.Errorf("audit: s3 anchor %s has no version id: the bucket must be versioned with Object Lock enabled", key)
+	}
+	return "s3://" + s.Bucket + "/" + key + "?versionId=" + url.QueryEscape(version), nil
+}
+
+// isS3PreconditionFailed reports HTTP 412 / PreconditionFailed (If-None-Match
+// found the object) and the 409 ConditionalRequestConflict of a racing write.
+func isS3PreconditionFailed(err error) bool {
+	var ae smithy.APIError
+	if errors.As(err, &ae) {
+		switch ae.ErrorCode() {
+		case "PreconditionFailed", "ConditionalRequestConflict":
+			return true
+		}
+	}
+	var re *awshttp.ResponseError
+	return errors.As(err, &re) && re.HTTPStatusCode() == http.StatusPreconditionFailed
+}
 
 // AnchorSet is the content of an anchor source, for verification.
 type AnchorSet struct {
@@ -275,6 +470,28 @@ func (s *AnchorSet) Has(tid string, seq int64, jws string) bool {
 
 // ForTenant returns the anchors of tid, in the order they were anchored.
 func (s *AnchorSet) ForTenant(tid string) []Anchor { return s.byTenant[tid] }
+
+// Upto keeps only the anchors at or below each tenant's head seq (tenants
+// not in heads are dropped). Verifying a restored backup against the live
+// anchor source needs this: checkpoints anchored after the backup was taken
+// would otherwise read as truncation.
+func (s *AnchorSet) Upto(heads map[string]int64) *AnchorSet {
+	out := &AnchorSet{byKey: map[string][]string{}, byTenant: map[string][]Anchor{}, Lines: s.Lines}
+	for tid, as := range s.byTenant {
+		head, ok := heads[tid]
+		if !ok {
+			continue
+		}
+		for _, a := range as {
+			if a.Seq <= head {
+				k := anchorKey(a.TID, a.Seq)
+				out.byKey[k] = append(out.byKey[k], a.JWS)
+				out.byTenant[tid] = append(out.byTenant[tid], a)
+			}
+		}
+	}
+	return out
+}
 
 // maxAnchorLine caps one line of an anchor file.
 const maxAnchorLine = 16 << 10
@@ -330,6 +547,9 @@ type Checkpointer struct {
 	Log         *slog.Logger
 	// Only, when set, limits a run to the tenants it accepts (the CLI's -tenant).
 	Only func(store.Tenant) bool
+	// OnTenant, when set, is called after each tenant's turn with what it did
+	// (job run history, issue #172).
+	OnTenant func(ctx context.Context, t store.Tenant, started, finished time.Time, created bool, anchored, failed int, err error)
 }
 
 // maxAnchorAttempts is when a failing anchor is reported as an alert.
@@ -382,29 +602,47 @@ func (c *Checkpointer) Run(ctx context.Context, force bool) (RunResult, error) {
 		if t.Status != "active" || (c.Only != nil && !c.Only(t)) {
 			continue
 		}
-		due, err := c.due(ctx, t.ID, clock(), force)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("tenant %s: %w", t.Slug, err))
-			continue
+		started := clock()
+		created, a, f, err := c.runTenant(ctx, t, clock, force, loadKey, &key, log)
+		if c.OnTenant != nil {
+			c.OnTenant(ctx, t, started, clock(), created, a, f, err)
 		}
-		if due {
-			if err := loadKey(); err != nil {
-				return res, fmt.Errorf("audit: checkpoint key: %w", err)
-			}
-			if err := c.create(ctx, t, key, clock()); err != nil {
-				errs = append(errs, fmt.Errorf("tenant %s: %w", t.Slug, err))
-				continue
-			}
+		if created {
 			res.Created++
 		}
-		a, f, err := c.anchorPending(ctx, t, clock(), log)
 		res.Anchored += a
 		res.Failed += f
+		if errors.Is(err, errCheckpointKey) {
+			return res, err
+		}
 		if err != nil {
 			errs = append(errs, fmt.Errorf("tenant %s: %w", t.Slug, err))
 		}
 	}
 	return res, errors.Join(errs...)
+}
+
+var errCheckpointKey = errors.New("audit: checkpoint key")
+
+// runTenant is one tenant's turn: create a checkpoint when due, then anchor
+// pending ones.
+func (c *Checkpointer) runTenant(ctx context.Context, t store.Tenant, clock timeutil.Clock, force bool, loadKey func() error,
+	key **keys.SigningKey, log *slog.Logger) (created bool, anchored, failed int, err error) {
+	due, err := c.due(ctx, t.ID, clock(), force)
+	if err != nil {
+		return false, 0, 0, err
+	}
+	if due {
+		if err := loadKey(); err != nil {
+			return false, 0, 0, fmt.Errorf("%w: %w", errCheckpointKey, err)
+		}
+		if err := c.create(ctx, t, *key, clock()); err != nil {
+			return false, 0, 0, err
+		}
+		created = true
+	}
+	anchored, failed, err = c.anchorPending(ctx, t, clock(), log)
+	return created, anchored, failed, err
 }
 
 func (c *Checkpointer) due(ctx context.Context, t tenancy.ID, now time.Time, force bool) (bool, error) {
@@ -494,6 +732,9 @@ func (c *Checkpointer) anchorPending(ctx context.Context, t store.Tenant, now ti
 	return anchored, failed, nil
 }
 
+// CheckpointLoopName is the checkpointer's name in obs.DefaultLoops.
+const CheckpointLoopName = "audit_checkpoint"
+
 // Loop runs Run every interval until ctx ends.
 func (c *Checkpointer) Loop(ctx context.Context, interval time.Duration) {
 	t := time.NewTicker(interval)
@@ -502,8 +743,9 @@ func (c *Checkpointer) Loop(ctx context.Context, interval time.Duration) {
 	if log == nil {
 		log = slog.Default()
 	}
+	obs.DefaultLoops.Register(CheckpointLoopName, interval, true)
 	for {
-		if _, err := c.Run(ctx, false); err != nil && ctx.Err() == nil {
+		if err := obs.DefaultLoops.Run(CheckpointLoopName, func() error { _, err := c.Run(ctx, false); return err }); err != nil && ctx.Err() == nil {
 			log.Error("audit checkpoint run failed", "err", err)
 		}
 		select {
