@@ -200,7 +200,7 @@ type Item struct {
 type Job struct {
 	IdentityID int64
 	Identity   string
-	Trigger    string // manual, leaver, agent
+	Trigger    string // manual, leaver, agent, disable
 	Items      []Item
 }
 
