@@ -1,6 +1,8 @@
 package api
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
@@ -90,6 +93,123 @@ func TestReviewDecisionIsFinal(t *testing.T) {
 			})
 			if comment != nil {
 				t.Errorf("comment = %q, want unchanged (none)", *comment)
+			}
+		})
+	}
+}
+
+// The reviewer's comment and a target are part of the decision's audit event
+// (issue #141): in the API listing, the hashed export and the chain.
+func TestReviewDecisionAuditCarriesReason(t *testing.T) {
+	const reason = "Owner confirmed in <b>JIRA-1</b>: \"needed\"\né中"
+	tests := []struct {
+		name, decision, comment string
+		wantComment             bool
+	}{
+		{"keep with reason", "keep", reason, true},
+		{"revoke with reason", "revoke", reason, true},
+		{"keep without reason", "keep", "", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newRD(t)
+			body := fmt.Sprintf(`{"decision":%q}`, tc.decision)
+			if tc.comment != "" {
+				b, _ := json.Marshal(map[string]string{"decision": tc.decision, "comment": tc.comment})
+				body = string(b)
+			}
+			c.json("POST", "/api/reviews/items/1/decision", body, 200)
+			action := "review." + tc.decision
+
+			// the audit API
+			rec := c.do("GET", "/api/audit?action="+action, "")
+			var rows []map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &rows); err != nil || len(rows) != 1 {
+				t.Fatalf("GET /api/audit: %v: %s", err, rec.Body.String())
+			}
+			d, _ := rows[0]["detail"].(map[string]any)
+			got, has := d["comment"]
+			if has != tc.wantComment || (has && got != tc.comment) {
+				t.Errorf("detail.comment = %v (present %v), want %q (present %v)", got, has, tc.comment, tc.wantComment)
+			}
+			tg, _ := rows[0]["target"].(map[string]any)
+			if tg["type"] != "review_item" || tg["id"] != "1" {
+				t.Errorf("target = %v, want review_item/1", rows[0]["target"])
+			}
+
+			// the hashed export: every line verifies, and the decision carries both
+			sc := bufio.NewScanner(strings.NewReader(c.do("GET", "/api/audit/export", "").Body.String()))
+			sc.Buffer(nil, 1<<20)
+			found := false
+			for sc.Scan() {
+				if ok, _, err := audit.VerifyRecord(sc.Bytes()); err != nil || !ok {
+					t.Fatalf("export line does not verify: %v", err)
+				}
+				var line struct {
+					Action string `json:"action"`
+					Target struct {
+						Type *string `json:"type"`
+						ID   *string `json:"id"`
+					} `json:"target"`
+					Detail map[string]any `json:"detail"`
+				}
+				if err := json.Unmarshal(sc.Bytes(), &line); err != nil {
+					t.Fatal(err)
+				}
+				if line.Action != action {
+					continue
+				}
+				found = true
+				if got, has := line.Detail["comment"]; has != tc.wantComment || (has && got != tc.comment) {
+					t.Errorf("export detail.comment = %v", got)
+				}
+				if line.Target.Type == nil || *line.Target.Type != "review_item" || line.Target.ID == nil || *line.Target.ID != "1" {
+					t.Errorf("export target = %+v", line.Target)
+				}
+			}
+			if !found {
+				t.Error("decision not in the export")
+			}
+
+			// the chain verifies
+			var r audit.Report
+			vr := c.do("POST", "/api/audit/verify", `{}`)
+			if err := json.Unmarshal(vr.Body.Bytes(), &r); err != nil || vr.Code != 200 || r.Result != "ok" {
+				t.Errorf("verify: %d %s", vr.Code, vr.Body.String())
+			}
+		})
+	}
+}
+
+func TestReviewDecisionRefusalCarriesReasonAndTarget(t *testing.T) {
+	c := newRD(t)
+	c.json("POST", "/api/reviews/items/1/decision", `{"decision":"revoke"}`, 200)
+	c.json("POST", "/api/reviews/items/1/decision", `{"decision":"keep","comment":"changed my mind"}`, 409)
+	ev := reviewEvents(c, "review.decide.refused")
+	if len(ev) != 1 || !strings.Contains(string(ev[0].Detail), `"comment":"changed my mind"`) ||
+		ev[0].TargetType == nil || *ev[0].TargetType != "review_item" || ev[0].TargetID == nil || *ev[0].TargetID != "1" {
+		t.Errorf("refusal event = %+v", ev)
+	}
+}
+
+func TestReviewCommentLength(t *testing.T) {
+	tests := []struct {
+		name    string
+		comment string
+		want    int
+	}{
+		{"1000 runes", strings.Repeat("中", 1000), 200},
+		{"1001 runes", strings.Repeat("中", 1001), 422},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newRD(t)
+			rec := c.do("POST", "/api/reviews/items/1/decision", fmt.Sprintf(`{"decision":"keep","comment":%q}`, tc.comment))
+			if rec.Code != tc.want {
+				t.Fatalf("status %d, want %d: %.200s", rec.Code, tc.want, rec.Body.String())
+			}
+			if n := len(reviewEvents(c, "review.keep")); (n == 1) != (tc.want == 200) {
+				t.Errorf("review.keep events = %d", n)
 			}
 		})
 	}

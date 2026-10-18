@@ -438,20 +438,6 @@ CREATE POLICY tenant_isolation ON business_role_requests
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
-ALTER TABLE siem_sinks ENABLE ROW LEVEL SECURITY;
-ALTER TABLE siem_sinks FORCE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS tenant_isolation ON siem_sinks;
-CREATE POLICY tenant_isolation ON siem_sinks
-  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
-  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
-
-ALTER TABLE siem_dead_letters ENABLE ROW LEVEL SECURITY;
-ALTER TABLE siem_dead_letters FORCE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS tenant_isolation ON siem_dead_letters;
-CREATE POLICY tenant_isolation ON siem_dead_letters
-  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
-  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
-
 ALTER TABLE identity_lifecycle ENABLE ROW LEVEL SECURITY;
 ALTER TABLE identity_lifecycle FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON identity_lifecycle;
@@ -708,5 +694,19 @@ ALTER TABLE request_drafts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE request_drafts FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON request_drafts;
 CREATE POLICY tenant_isolation ON request_drafts
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE siem_sinks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE siem_sinks FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON siem_sinks;
+CREATE POLICY tenant_isolation ON siem_sinks
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE siem_dead_letters ENABLE ROW LEVEL SECURITY;
+ALTER TABLE siem_dead_letters FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON siem_dead_letters;
+CREATE POLICY tenant_isolation ON siem_dead_letters
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));

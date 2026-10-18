@@ -44,6 +44,7 @@ import (
 	"io/fs"
 	"net/url"
 	"slices"
+	"strings"
 	"sync"
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver
@@ -230,6 +231,26 @@ func (d *DB) Checkpoint(ctx context.Context) error {
 	return err
 }
 
+// ErrSnapshotUnsupported is returned by Snapshot on Postgres: tessera backup
+// is SQLite-only for now (back up Postgres with pg_dump or the managed
+// service's snapshots; see docs/runbooks/disaster-recovery.md).
+var ErrSnapshotUnsupported = errors.New("store: snapshot is SQLite-only; back up Postgres with pg_dump or your provider's snapshots")
+
+// IsPostgres reports whether the store runs on Postgres.
+func (d *DB) IsPostgres() bool { return d.d == dialectPostgres }
+
+// Snapshot writes a transactionally consistent copy of the whole database to
+// path with VACUUM INTO, while the server keeps serving. path must not exist.
+func (d *DB) Snapshot(ctx context.Context, path string) error {
+	if d.d == dialectPostgres {
+		return ErrSnapshotUnsupported
+	}
+	if _, err := d.sql.ExecContext(ctx, "VACUUM INTO ?", path); err != nil {
+		return fmt.Errorf("store: snapshot: %w", err)
+	}
+	return nil
+}
+
 // Migrate creates the schema and the reserved _platform tenant; drop=true
 // drops every table first (reseed). A database created before tenancy is
 // refused with ErrLegacySchema unless drop is set.
@@ -253,6 +274,9 @@ func (d *DB) Migrate(ctx context.Context, drop bool) error {
 	} else if legacy {
 		return ErrLegacySchema
 	}
+	if err := d.upgradeLoginTxnPurpose(ctx); err != nil {
+		return err
+	}
 	files, err := fs.Glob(schemaFS, "schema/*.sql")
 	if err != nil {
 		return err
@@ -272,6 +296,27 @@ func (d *DB) Migrate(ctx context.Context, drop bool) error {
 			sql.Named("created_at", T(nowUTC())))
 		return err
 	})
+}
+
+// upgradeLoginTxnPurpose lets a SQLite database created before the 'test'
+// login purpose (0315) take it: CREATE TABLE IF NOT EXISTS cannot change a
+// CHECK, so the table is dropped and the schema recreates it. Its rows are
+// ten-minute pre-auth state, so at worst an in-flight sign-in starts over.
+// Postgres does this in migration 0315.
+func (d *DB) upgradeLoginTxnPurpose(ctx context.Context) error {
+	var ddl string
+	err := d.sql.QueryRowContext(ctx,
+		`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'login_transactions'`).Scan(&ddl)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && strings.Contains(ddl, "'test'")) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := d.sql.ExecContext(ctx, "DROP TABLE login_transactions"); err != nil {
+		return fmt.Errorf("store: upgrade login_transactions: %w", err)
+	}
+	return nil
 }
 
 // legacySchema reports whether the database was created by an older server:

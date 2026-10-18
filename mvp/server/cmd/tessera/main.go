@@ -115,6 +115,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if cmd == "audit" {
 		return auditCmd(ctx, args, stdout, stderr)
 	}
+	if cmd == "backup" {
+		return backupCmd(ctx, args, stdout, stderr)
+	}
 	if cmd == "notify" {
 		return notifyCmd(ctx, args, stdout, stderr)
 	}
@@ -140,7 +143,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return st.Close()
 	}
 	if cmd != "seed" && cmd != "serve" {
-		return fmt.Errorf("unknown command %q (want serve, seed, check-db, readiness, audit or admin)", cmd)
+		return fmt.Errorf("unknown command %q (want serve, seed, check-db, readiness, audit, backup or admin)", cmd)
 	}
 	if os.Getenv("TESSERA_ENV") == "" {
 		// fail closed: the environment decides the guard rails (§18.4) and
@@ -450,6 +453,14 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		defer close(siemDone)
 		siemSvc.Run(ctx, siemInterval)
 	}()
+	backupDone := make(chan struct{})
+	go func() {
+		defer close(backupDone)
+		if cfg.BackupDir != "" {
+			logger.Info("scheduled backups on", "dir", cfg.BackupDir, "every_minutes", cfg.BackupEveryMinutes, "keep", cfg.BackupKeep)
+			runBackups(ctx, st, sealer, cfg, logger)
+		}
+	}()
 	notifyDone := make(chan struct{})
 	go func() {
 		defer close(notifyDone)
@@ -467,6 +478,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		<-keysDone
 		<-ckptDone
 		<-siemDone
+		<-backupDone
 		<-notifyDone
 		return err
 	case <-ctx.Done():
@@ -480,6 +492,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	<-keysDone
 	<-ckptDone
 	<-siemDone
+	<-backupDone
 	<-notifyDone
 	if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 		return serveErr
