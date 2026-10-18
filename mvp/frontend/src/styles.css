@@ -381,6 +381,7 @@ kbd, .kbd {
 .faint { color: var(--text-3); }
 .small { font-size: var(--fs-sm); }
 .xs { font-size: var(--fs-xs); }
+.wrap-anywhere { overflow-wrap: anywhere; }
 .nowrap { white-space: nowrap; }
 .grow { flex: 1; min-width: 0; }
 .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -833,3 +834,25 @@ fieldset.card { margin: 0; }
 .pick-list { list-style: none; margin: 4px 0 0; padding: 0; border: 1px solid var(--border); border-radius: var(--r-md, 6px); max-height: 260px; overflow-y: auto; font-weight: 400; }
 .pick-item { display: block; width: 100%; text-align: left; padding: 8px 10px; min-height: 44px; background: none; border: 0; color: var(--text); cursor: pointer; }
 .pick-item:hover, .pick-item:focus-visible { background: var(--surface-2, var(--hover)); }
+/* Request history (issue #164) */
+.timeline { list-style: none; margin: var(--s-2) 0 0; padding: 0 0 0 var(--s-3); border-left: 2px solid var(--border); display: grid; gap: var(--s-2); font-size: var(--fs-md); }
+.timeline > li { position: relative; }
+.timeline > li::before { content: ""; position: absolute; left: calc(-1 * var(--s-3) - 5px); top: 6px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent, #0f6cbd); }
+/* Request access: catalog beside the cart, stacked on narrow screens (issue #164, see #144) */
+.request-split { grid-template-columns: minmax(0, 1fr) 380px; }
+@media (max-width: 900px) { .request-split { grid-template-columns: minmax(0, 1fr); } .request-split .side-panel { position: static; max-height: none; } }
+
+/* Notifications (issue #189): the inbox list and the bell's unread entries. */
+.notif-list { list-style: none; margin: 0; padding: 0; }
+.notif-list li + li { border-top: 1px solid var(--border); }
+.notif-item { display: flex; gap: var(--s-3); width: 100%; padding: var(--s-3) var(--s-4); border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; align-items: flex-start; }
+.notif-item:hover { background: var(--surface-2); }
+.notif-item .notif-dot { flex: none; width: 8px; height: 8px; margin-top: 7px; border-radius: 50%; background: transparent; }
+.notif-item.unread .notif-dot { background: var(--accent-line); }
+.notif-item .notif-body { display: block; overflow-wrap: anywhere; white-space: pre-line; }
+.notif-unread { font-weight: 600; }
+
+/* Email delivery log (issue #189): attempt timeline and SMTP transcript. */
+.attempt-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s-4); }
+.attempt-list > li { border-left: 2px solid var(--border); padding-left: var(--s-3); }
+.transcript { margin: 0; padding: var(--s-2) var(--s-3); background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm); font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; }
