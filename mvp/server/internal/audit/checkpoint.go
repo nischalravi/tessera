@@ -470,6 +470,28 @@ func (s *AnchorSet) Has(tid string, seq int64, jws string) bool {
 // ForTenant returns the anchors of tid, in the order they were anchored.
 func (s *AnchorSet) ForTenant(tid string) []Anchor { return s.byTenant[tid] }
 
+// Upto keeps only the anchors at or below each tenant's head seq (tenants
+// not in heads are dropped). Verifying a restored backup against the live
+// anchor source needs this: checkpoints anchored after the backup was taken
+// would otherwise read as truncation.
+func (s *AnchorSet) Upto(heads map[string]int64) *AnchorSet {
+	out := &AnchorSet{byKey: map[string][]string{}, byTenant: map[string][]Anchor{}, Lines: s.Lines}
+	for tid, as := range s.byTenant {
+		head, ok := heads[tid]
+		if !ok {
+			continue
+		}
+		for _, a := range as {
+			if a.Seq <= head {
+				k := anchorKey(a.TID, a.Seq)
+				out.byKey[k] = append(out.byKey[k], a.JWS)
+				out.byTenant[tid] = append(out.byTenant[tid], a)
+			}
+		}
+	}
+	return out
+}
+
 // maxAnchorLine caps one line of an anchor file.
 const maxAnchorLine = 16 << 10
 
