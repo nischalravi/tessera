@@ -206,6 +206,35 @@ To point a local dev instance at a real LDAP or LLDAP server (for example an LLD
    It logs every check's status and message (never the password) and fails if TLS, bind, the base
    DNs or the people search do not pass.
 
+### Config transport (dev → test → prod)
+
+Admin → Export / import configuration moves a tenant's connections (config, owners, credential
+*references*), readiness overlays and sign-in connections to another tenant, usually on another
+instance, as a **signed bundle** (`server/internal/transport`). Export signs with the tenant's
+Ed25519 key (made on first export, sealed under the KEK; a server without a KEK cannot export).
+Import accepts only bundles signed by a **trusted signer**: paste the exporting tenant's public
+key under Trusted signers first (a tenant does not trust its own key implicitly). The preview
+lists add / change / remove / manual per item; apply is bound to the previewed plan (`digest`, or
+`digest_prune` with prune: the bundle, tenant, environment, current revisions, operations and prune
+mode), so a change here or a different prune choice since the preview is refused with
+`409 stale_plan` before anything is written; apply needs step-up, and never activates anything: new connections are drafts, config changes make a new
+draft revision, sign-in connections arrive as **pending**, and a changed existing sign-in
+connection is shown as manual (change it through an admin change request). Removals retire
+connections only with prune. A bundle never holds a secret: sealed credentials and client
+secrets stay behind (the plan says where to set them), retired connections and the dev IdP are
+left out, and a bundle whose config looks like it carries a secret is refused. On a prod server
+(`TESSERA_ENV=prod`) a bundle naming a localhost target or the dev IdP, or a sign-in
+connection on plain http or a private address, is refused. Applies are audited
+(`config.import.applied` with the bundle hash) and listed under Imports. Permission:
+`config.transport` (tenant admin); reading keys, signers and history needs `admin.read`.
+
+**Not in a bundle yet** (each needs cross-tenant id mapping for the groups and entitlements it
+names, so it is left for a follow-up rather than shipped half-checked): business roles and their
+versions and members, ABAC policies and bindings, catalog items and approval policies, tenant
+admin settings and security contacts (these change only through admin change requests), review
+schedules, alert rules, SIEM sinks, lifecycle rules and native groups. Set them up by hand in
+each environment; the bundle covers connections, readiness overlays and sign-in connections only.
+
 ### Main API endpoints
 
 `GET /api/summary` · `GET /api/identities[?type=&q=]` · `GET /api/identities/{id}` · `GET /api/accounts[?system=]` ·
@@ -274,6 +303,9 @@ To point a local dev instance at a real LDAP or LLDAP server (for example an LLD
 `GET /api/admin/change-requests/{id}` · `POST /api/admin/change-requests/{id}/approve|reject|cancel|apply` ·
 `GET /api/admin/notifications` · `GET /api/admin/recovery` · `POST /api/admin/recovery/{id}/cancel` ·
 `GET /api/admin/api-clients` (see "Admin changes")
+`GET /api/config/signing-key` · `POST /api/config/export` · `GET|POST /api/config/trusted-signers` ·
+`DELETE /api/config/trusted-signers/{kid}` · `POST /api/config/import/plan` (body: the bundle file) ·
+`POST /api/config/import/apply?hash=&digest=&prune=` · `GET /api/config/imports`
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke

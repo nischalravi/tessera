@@ -68,14 +68,8 @@ const (
 	PermConnectionsRead     Permission = "connections.read"
 	PermConnectionsManage   Permission = "connections.manage"
 	PermConnectionsActivate Permission = "connections.activate"
-	// Job run history (issue #172).
-	PermJobsRead Permission = "jobs.read"
-
-	// Closed-loop provisioning (issue #103). Configuring a target needs
-	// connections.manage; retrying, cancelling and running operations needs
-	// provisioning.manage.
-	PermProvisioningRead   Permission = "provisioning.read"
-	PermProvisioningManage Permission = "provisioning.manage"
+	// Config transport between tenants (issue #170).
+	PermConfigTransport Permission = "config.transport"
 	// account correlation (issue #160)
 	PermIdentitiesCorrelate Permission = "identities.correlate"
 	PermIdentitiesMerge     Permission = "identities.merge"
@@ -126,8 +120,7 @@ var rolePermissions = map[Role][]Permission{
 		PermJobsRead, PermProvisioningRead, PermProvisioningManage},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
-		PermConnectionsActivate, PermRequestsCreate, PermEmailRead, PermEmailManage, PermGroupsAdmin,
-		PermJobsRead, PermProvisioningRead, PermProvisioningManage},
+		PermConnectionsActivate, PermRequestsCreate, PermEmailRead, PermEmailManage, PermGroupsAdmin, PermConfigTransport},
 	RoleBreakGlass: {PermAdminRead, PermBreakGlassRecover},
 }
 
@@ -214,7 +207,7 @@ var scopePermissions = map[Scope][]Permission{
 		PermConnectionsManage, PermConnectionsActivate, PermRolesManage, PermLifecycleManage, PermGroupsAdmin, PermProvisioningManage},
 	ScopeAudit: {PermAuditRead, PermAuditVerify},
 	ScopeAdmin: {PermEmailRead, PermEmailManage, PermAdminRead, PermAdminChangeReq, PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev,
-		PermBreakGlassRecover},
+		PermBreakGlassRecover, PermConfigTransport},
 }
 
 // perms returns the union of the roles' permissions.

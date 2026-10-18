@@ -164,18 +164,14 @@ POST   /api/connections/{id}/findings/{fid}/accept   connections.manage -
 GET    /api/connections/{id}/health                  connections.read   -
 GET    /api/insights/deployment-health               connections.read   -
 POST   /api/insights/deployment-health/rerun         connections.manage -
-GET    /api/jobs                                     jobs.read       -  # issue #172
-GET    /api/jobs/{job_id}                            jobs.read       -  #
-POST   /api/jobs/{job_id}/retry                      jobs.read       -  # (the replayed route's own permission and step-up apply)
-GET    /api/provisioning/targets                     provisioning.read   -  # issue #103
-PUT    /api/provisioning/targets/{id}                connections.manage  STEP_UP_POLICY
-DELETE /api/provisioning/targets/{id}                connections.manage  STEP_UP_POLICY
-GET    /api/provisioning/ops                         provisioning.read   -
-GET    /api/provisioning/ops/{op_id}                 provisioning.read   -
-POST   /api/provisioning/ops/{op_id}/retry           provisioning.manage -
-POST   /api/provisioning/ops/{op_id}/cancel          provisioning.manage -
-POST   /api/provisioning/run                         provisioning.manage -
-GET    /api/provisioning/findings                    provisioning.read   -
+GET    /api/config/signing-key                       admin.read      -  # issue #170
+POST   /api/config/export                            config.transport -  #
+GET    /api/config/trusted-signers                   admin.read      -  #
+POST   /api/config/trusted-signers                   config.transport STEP_UP_POLICY #
+DELETE /api/config/trusted-signers/{kid}             config.transport STEP_UP_POLICY #
+POST   /api/config/import/plan                       config.transport -  #
+POST   /api/config/import/apply                      config.transport STEP_UP_POLICY #
+GET    /api/config/imports                           admin.read      -  #
 GET    /api/groups/folders                           groups.admin    -  # issue #44
 POST   /api/groups/folders                           groups.admin    -  # issue #44
 GET    /api/groups/folders/{id}                      groups.admin    -  # issue #44
