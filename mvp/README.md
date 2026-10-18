@@ -961,7 +961,7 @@ Every change to a folder, group, direct membership or (from GR-4) privilege, and
 membership the engine adds or removes, writes a row to `grp_events` in the same transaction, with a
 per-tenant gap-free `seq` (a counter row in `grp_event_heads`, bumped under the write lock, so a
 rolled-back change gives its number back). Rows are append-only (a trigger refuses `UPDATE`).
-Schema `0282_group_events.sql` (the design calls it `0103`): `grp_event_heads`, `grp_events`,
+Schema `0285_group_events.sql` (the design calls it `0103`): `grp_event_heads`, `grp_events`,
 `grp_event_cursors`, `grp_pit_{objects,direct,effective,privileges,digests}`, all tenant-scoped with
 cross-tenant guard triggers.
 

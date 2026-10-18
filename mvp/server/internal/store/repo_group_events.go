@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Group event outbox and point-in-time repository (schema/0282_group_events.sql).
+// Group event outbox and point-in-time repository (schema/0285_group_events.sql).
 // The rules of events and history live in internal/groups/events and
 // internal/groups/pit; this file is only their statements, all bound to the
 // transaction's tenant. Like repo_group_engine.go it avoids CTEs, UNION and
