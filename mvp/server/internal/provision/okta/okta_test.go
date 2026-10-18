@@ -32,7 +32,7 @@ func client(t *testing.T, name string) (*okta.Client, *replay.Cassette) {
 	srv := httptest.NewServer(cas.Handler(func() string { return base }))
 	base = srv.URL
 	t.Cleanup(srv.Close)
-	hc, err := safehttp.New(safehttp.Options{Env: config.Dev, AllowLoopback: true})
+	hc, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Dev, AllowLoopback: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func TestOkta_SendsSSWSAuthAndIdempotencyKey(t *testing.T) {
 		_, _ = w.Write([]byte(`{}`))
 	}))
 	defer srv.Close()
-	hc, _ := safehttp.New(safehttp.Options{Env: config.Dev, AllowLoopback: true})
+	hc, _ := safehttp.NewForTest(t, safehttp.Options{Env: config.Dev, AllowLoopback: true})
 	c := &okta.Client{HTTP: hc, BaseURL: srv.URL, Token: "t0k"}
 	if err := c.Apply(context.Background(), req(target.DisableAccount, alice)); err != nil {
 		t.Fatal(err)

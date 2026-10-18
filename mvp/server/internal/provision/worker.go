@@ -133,6 +133,9 @@ func (e *Engine) build(pt *store.ProvTarget, token string) (target.Connector, er
 	if e.Build != nil {
 		return e.Build(pt, token)
 	}
+	if e.HTTP == nil {
+		return nil, errors.New("no outbound client is configured")
+	}
 	var s Settings
 	if err := json.Unmarshal([]byte(pt.Settings), &s); err != nil {
 		return nil, fmt.Errorf("target settings are unreadable: %w", err)

@@ -263,7 +263,7 @@ function OpPanel({ id, onClose }: { id: string; onClose: () => void }) {
         </div>
       ) : undefined}
     >
-      {error && <Callout tone="bad">{error}</Callout>}
+      {error && <Callout tone="bad">{error.message}</Callout>}
       {op && (
         <div className="stack-sm">
           <p className="small muted" style={{ margin: 0 }}>{STATUS[op.status].help}</p>

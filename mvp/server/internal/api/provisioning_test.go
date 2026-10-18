@@ -76,7 +76,7 @@ func newProvHarness(t *testing.T, o fake.Options) *provHarness {
 	fs := httptest.NewServer(h.fake.Handler())
 	h.url = fs.URL + "/scim/v2"
 	t.Cleanup(fs.Close)
-	hc, err := safehttp.New(safehttp.Options{Env: config.Dev, AllowLoopback: true})
+	hc, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Dev, AllowLoopback: true})
 	if err != nil {
 		t.Fatal(err)
 	}
