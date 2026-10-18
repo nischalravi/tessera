@@ -44,10 +44,13 @@ import (
 	"io/fs"
 	"net/url"
 	"slices"
+	"strings"
 	"sync"
+	"time"
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver
 
+	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 )
 
@@ -99,6 +102,8 @@ var tables = []string{
 	"connections", "connection_revisions", "readiness_check_runs", "readiness_item_states", "readiness_attestations",
 	"readiness_skips", "readiness_overlays", "readiness_check_results", "recon_runs", "recon_findings", "readiness_scores",
 	"stg_identities", "stg_accounts", "stg_groups", "stg_memberships", "stg_attr_stats",
+	// scheduled access reviews (schema/0316_review_schedules.sql)
+	"review_templates", "review_launches",
 	// job run history (schema/0281_job_runs.sql)
 	"job_runs",
 	// closed-loop provisioning (schema/0282-0283)
@@ -165,7 +170,9 @@ func (d *DB) writeLock() func() {
 	if d.d == dialectPostgres {
 		return func() {}
 	}
+	start := time.Now()
 	d.mu.Lock()
+	obs.DBLockWait.Observe(time.Since(start).Seconds())
 	return d.mu.Unlock
 }
 
@@ -228,6 +235,26 @@ func (d *DB) Checkpoint(ctx context.Context) error {
 	return err
 }
 
+// ErrSnapshotUnsupported is returned by Snapshot on Postgres: tessera backup
+// is SQLite-only for now (back up Postgres with pg_dump or the managed
+// service's snapshots; see docs/runbooks/disaster-recovery.md).
+var ErrSnapshotUnsupported = errors.New("store: snapshot is SQLite-only; back up Postgres with pg_dump or your provider's snapshots")
+
+// IsPostgres reports whether the store runs on Postgres.
+func (d *DB) IsPostgres() bool { return d.d == dialectPostgres }
+
+// Snapshot writes a transactionally consistent copy of the whole database to
+// path with VACUUM INTO, while the server keeps serving. path must not exist.
+func (d *DB) Snapshot(ctx context.Context, path string) error {
+	if d.d == dialectPostgres {
+		return ErrSnapshotUnsupported
+	}
+	if _, err := d.sql.ExecContext(ctx, "VACUUM INTO ?", path); err != nil {
+		return fmt.Errorf("store: snapshot: %w", err)
+	}
+	return nil
+}
+
 // Migrate creates the schema and the reserved _platform tenant; drop=true
 // drops every table first (reseed). A database created before tenancy is
 // refused with ErrLegacySchema unless drop is set.
@@ -251,6 +278,9 @@ func (d *DB) Migrate(ctx context.Context, drop bool) error {
 	} else if legacy {
 		return ErrLegacySchema
 	}
+	if err := d.upgradeLoginTxnPurpose(ctx); err != nil {
+		return err
+	}
 	files, err := fs.Glob(schemaFS, "schema/*.sql")
 	if err != nil {
 		return err
@@ -270,6 +300,27 @@ func (d *DB) Migrate(ctx context.Context, drop bool) error {
 			sql.Named("created_at", T(nowUTC())))
 		return err
 	})
+}
+
+// upgradeLoginTxnPurpose lets a SQLite database created before the 'test'
+// login purpose (0315) take it: CREATE TABLE IF NOT EXISTS cannot change a
+// CHECK, so the table is dropped and the schema recreates it. Its rows are
+// ten-minute pre-auth state, so at worst an in-flight sign-in starts over.
+// Postgres does this in migration 0315.
+func (d *DB) upgradeLoginTxnPurpose(ctx context.Context) error {
+	var ddl string
+	err := d.sql.QueryRowContext(ctx,
+		`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'login_transactions'`).Scan(&ddl)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && strings.Contains(ddl, "'test'")) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := d.sql.ExecContext(ctx, "DROP TABLE login_transactions"); err != nil {
+		return fmt.Errorf("store: upgrade login_transactions: %w", err)
+	}
+	return nil
 }
 
 // legacySchema reports whether the database was created by an older server:
@@ -327,6 +378,12 @@ func (d *DB) inTenant(ctx context.Context, t tenancy.ID, readOnly bool, fn func(
 // inTenantOn is inTenant on a given pool (the application pool, or the owner
 // pool for the test-only audit tamper handle).
 func (d *DB) inTenantOn(ctx context.Context, pool *sql.DB, t tenancy.ID, readOnly bool, fn func(*TenantTx) error) (err error) {
+	kind := "tenant_write"
+	if readOnly {
+		kind = "tenant_read"
+	}
+	start := time.Now()
+	defer func() { d.observeTx(kind, start, err) }() // runs after the commit below, so err is final
 	raw, err := pool.BeginTx(ctx, &sql.TxOptions{ReadOnly: readOnly})
 	if err != nil {
 		return fmt.Errorf("store: begin: %w", err)
@@ -393,6 +450,8 @@ func (d *DB) InSystem(ctx context.Context, reason string, fn func(*SystemTx) err
 }
 
 func (d *DB) inSystemLocked(ctx context.Context, reason string, fn func(*SystemTx) error) (err error) {
+	start := time.Now()
+	defer func() { d.observeTx("system_write", start, err) }()
 	raw, err := d.sql.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin: %w", err)
@@ -419,6 +478,8 @@ func (d *DB) ReadSystem(ctx context.Context, reason string, fn func(*SystemTx) e
 	if reason == "" {
 		return errors.New("store: ReadSystem needs a reason")
 	}
+	start := time.Now()
+	defer func() { d.observeTx("system_read", start, err) }()
 	raw, err := d.sql.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return fmt.Errorf("store: begin: %w", err)
