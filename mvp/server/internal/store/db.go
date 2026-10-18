@@ -44,6 +44,7 @@ import (
 	"io/fs"
 	"net/url"
 	"slices"
+	"strings"
 	"sync"
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver
@@ -251,6 +252,9 @@ func (d *DB) Migrate(ctx context.Context, drop bool) error {
 	} else if legacy {
 		return ErrLegacySchema
 	}
+	if err := d.upgradeLoginTxnPurpose(ctx); err != nil {
+		return err
+	}
 	files, err := fs.Glob(schemaFS, "schema/*.sql")
 	if err != nil {
 		return err
@@ -270,6 +274,27 @@ func (d *DB) Migrate(ctx context.Context, drop bool) error {
 			sql.Named("created_at", T(nowUTC())))
 		return err
 	})
+}
+
+// upgradeLoginTxnPurpose lets a SQLite database created before the 'test'
+// login purpose (0315) take it: CREATE TABLE IF NOT EXISTS cannot change a
+// CHECK, so the table is dropped and the schema recreates it. Its rows are
+// ten-minute pre-auth state, so at worst an in-flight sign-in starts over.
+// Postgres does this in migration 0315.
+func (d *DB) upgradeLoginTxnPurpose(ctx context.Context) error {
+	var ddl string
+	err := d.sql.QueryRowContext(ctx,
+		`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'login_transactions'`).Scan(&ddl)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && strings.Contains(ddl, "'test'")) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := d.sql.ExecContext(ctx, "DROP TABLE login_transactions"); err != nil {
+		return fmt.Errorf("store: upgrade login_transactions: %w", err)
+	}
+	return nil
 }
 
 // legacySchema reports whether the database was created by an older server:
