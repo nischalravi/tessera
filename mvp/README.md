@@ -251,6 +251,8 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `GET|POST /api/hris/events` (422 for an unknown `identity_id`) · `GET /api/hris/events/{id}/plan` · `POST /api/hris/events/{id}/execute` ·
 `GET /api/jml/leaver-plan/{identity_id}` · `POST /api/identities/{id}/contain` (kill switch, see "Identity containment") · `POST /api/identities/{id}/disable|enable` ·
 `PUT /api/connections/{id}/containment-credential` · `GET /api/accounts[?system=]` ·
+`GET /api/ownership[?kind=app|group|resource|identity&unowned=]` · `PUT /api/ownership/{kind}/{object_key}` ·
+`POST /api/ownership/bulk` ·
 `GET /api/audit[?limit=&before_seq=&action=&actor_id=&target_type=&target_id=&from=&to=&include_http=]` ·
 `GET /api/audit/events/{event_id}/proof` · `GET /api/audit/checkpoints[?from_seq=]` · `GET /api/audit/keys` ·
 `POST /api/audit/verify {from_seq?, to_seq?}` · `GET /api/audit/export[?from_seq=&to_seq=]` (NDJSON) ·
@@ -279,6 +281,7 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `POST /api/accounts/{id}/link {identity_id, reason}` · `POST /api/accounts/{id}/not-person {reason}` ·
 `DELETE /api/accounts/{id}/link` · `POST /api/identities/{id}/merge {into, reason}` ·
 `GET /api/identity-merges` · `POST /api/identity-merges/{id}/unmerge {reason}` ·
+`GET|POST /api/reviews/schedules` · `PUT /api/reviews/schedules/{id}` · `POST /api/reviews/schedules/{id}/run` ·
 `GET /api/identities/{id}/affiliations` · `GET /api/identities/{id}/identifiers` ·
 `POST /api/identities/{id}/affiliations {type, org_unit?, population?, starts_at?, ends_at?, reason}` ·
 `POST /api/affiliations/{id}/end {reason}`
@@ -312,6 +315,41 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
 or HRIS execution is always the signed-in user.
+
+### Ownership
+
+Applications (by system name), entitlements (groups), resources and machine identities each have a
+primary owner, an optional backup owner, an optional owner group and a purpose (table `ownerships`,
+issue #167). Owners must be active people; the backup must differ from the primary. Setting needs
+`ownership.manage` (operator, policy_admin); reading needs `graph.read`. Every change is audited as
+`ownership.set`.
+
+- For a machine identity the primary owner is also `identities.owner_id`, so the NHI flags, reviews
+  and policies use it. Once set in Tessera, connector sync no longer overwrites it.
+- The leaver plan gains `reassign_ownership` steps: an object the leaver owns goes to its active
+  backup, else to the leaver's manager (else nobody); where the leaver is the backup, the slot is
+  cleared. Plans without ownership rows are unchanged.
+- UI: **Identity > Ownership** lists each kind with unowned counts, a "No owner" / "No backup" filter
+  and bulk **Assign owner**; the entitlement, application and machine-identity panels show the
+  owners with **Assign**/**Change**; the machine identity list has the same bulk action.
+
+### Scheduled access reviews
+
+**Access reviews → Schedules** (issue #166) runs campaigns on a recurrence: once, every
+quarter, every six months or every year. A schedule sets:
+
+- **Scope:** one system or all; privileged grants only, or every risky grant.
+- **Review window:** how many days reviewers get, and when the reminder goes out.
+- **Close-out:** what happens to items nobody decided by the due date. Either they are revoked,
+  or they go to an escalation reviewer for a few days and are revoked after that.
+
+The scheduler (`reviews.scheduler`, every 5 minutes) launches due schedules. Each period
+(`2026-Q4`, `2026-H2`, `2026`) runs once, even after a restart. Periods missed while the server
+was down collapse into one run. The next run is counted from the scheduled time, so it doesn't
+drift. **Run now** launches outside the schedule. Reminders, escalations and close-outs are audit
+events; delivery by email or chat comes with alerting (#168). Reviewers are assigned as for
+manual campaigns: the manager, then the owner, then the security lead. The scheduler follows
+`TESSERA_NOW` in dev.
 
 ### Job run history
 
@@ -397,6 +435,7 @@ change in the target system and checks that it happened.
 Admin → Provisioning lists the target systems (with the write-back switch) and the operations, with
 status, change and source filter chips, a side panel with the findings, request and Retry / Cancel,
 and Run now.
+
 ### Admin changes, notifications and operator recovery
 
 Changes that widen trust or privilege go through **change requests** (design §15, issue #16;
@@ -962,6 +1001,15 @@ credential endpoints, so give the process credentials through the SDK's other so
 safehttp client; trust a private CA through the system roots. `tessera audit verify -anchors`
 reads `file://` anchor files only; verifying against the bucket is a later step.
 
+## Operational monitoring (issue #303)
+
+`GET /livez` and `GET /readyz` (API listener, unauthenticated, constant-shape JSON, not audited) are the orchestrator probes. `GET /metrics` (Prometheus text) is served only on the separate internal listener `TESSERA_METRICS_ADDR` (dev default `127.0.0.1:9464`, `run.sh` uses `API_PORT+1000`; off in prod unless set to a loopback or private IP; `off` disables). `GET /api/admin/platform-health` (admin.read) backs Admin -> Platform health. `TESSERA_READY_MAX_LOOP_LAG_SECONDS` (default 300) is the loop-lag threshold of `/readyz`. Metrics, SLOs and alert rules: `docs/operations/slo.md`, `deploy/prometheus/tessera-rules.yml`.
+
+```bash
+curl -s http://127.0.0.1:9000/metrics | head      # with API_PORT=8000
+curl -s http://127.0.0.1:8000/readyz
+```
+
 ## Postgres
 
 SQLite stays the default and is unchanged. Set `TESSERA_DB` (or `-db`) to a Postgres DSN to use Postgres
@@ -1085,7 +1133,7 @@ the right. Arrow keys move between items.
 | Group | Items |
 |---|---|
 | (top) | **Home**, **Inbox** (count) |
-| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts (with *Account matches*), Roles, Organizations (live, read-only, derived from departments) |
+| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Ownership, Accounts (with *Account matches*), Roles, Organizations (live, read-only, derived from departments) |
 | **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
 | **Protection** | Policies & SoD (violations, policies, what-if simulation), Attribute policies, Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
 | **Settings** | Connections (governed connections and the setup wizard), Admin |

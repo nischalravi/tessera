@@ -269,3 +269,22 @@ func TestMiddleware_AnonymousReason(t *testing.T) {
 		t.Errorf("events %+v", c.events)
 	}
 }
+
+// Only the exact probe paths join /api/health and /.well-known as unaudited
+// (GET/HEAD); nothing else, and nothing under /api/, is excluded (issue #303).
+func TestDefaultExcluded_OnlyProbes(t *testing.T) {
+	for _, tc := range []struct {
+		method, path string
+		want         bool
+	}{
+		{"GET", "/livez", true}, {"HEAD", "/readyz", true}, {"GET", "/api/health", true},
+		{"POST", "/livez", false}, {"GET", "/livez/x", false}, {"GET", "/readyz/", false}, {"GET", "/metrics", false},
+		{"GET", "/api/livez", false}, {"GET", "/api/readyz", false}, {"GET", "/api/admin/platform-health", false},
+		{"GET", "/api/summary", false}, {"GET", "/api/audit", false},
+	} {
+		r := httptest.NewRequest(tc.method, tc.path, nil)
+		if got := audit.DefaultExcluded(r); got != tc.want {
+			t.Errorf("DefaultExcluded(%s %s) = %v, want %v", tc.method, tc.path, got, tc.want)
+		}
+	}
+}
