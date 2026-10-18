@@ -66,6 +66,9 @@ func (s *Server) requestActor(r *http.Request) (requests.Actor, error) {
 			Msg: "requests are made and decided by a signed-in user"}
 	}
 	a := requests.Actor{UserID: *pr.UserID, Display: pr.Display, Decider: s.can(r, auth.PermRequestsDecide)}
+	if pr.Authn != nil {
+		a.AAL = pr.Authn.AAL
+	}
 	u, err := store.TxFrom(r.Context()).PlatformUser(*pr.UserID)
 	if err != nil {
 		return a, err

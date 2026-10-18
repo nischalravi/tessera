@@ -191,7 +191,7 @@ function AuditLog() {
   );
 }
 
-const LIVE: Record<string, () => JSX.Element> = { jobs: Jobs, audit: AuditLog, notifications: NotificationsAdminPanel, "email-delivery": EmailDelivery };
+const LIVE: Record<string, () => React.JSX.Element> = { jobs: Jobs, audit: AuditLog, notifications: NotificationsAdminPanel, "email-delivery": EmailDelivery };
 
 export function AdminSectionPage() {
   const { section } = useParams();

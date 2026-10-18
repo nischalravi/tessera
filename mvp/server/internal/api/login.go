@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/admin"
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	authnorm "github.com/nischalravi/tessera/mvp/server/internal/auth/normalize"
@@ -99,7 +100,9 @@ func (s *Server) activeTenant(ctx context.Context, slug string) (store.Tenant, b
 	if err != nil {
 		return store.Tenant{}, false, err
 	}
-	return t, t.Status == "active" && t.ID != tenancy.Platform, nil
+	// a tenant in operator recovery (§15.5) still signs people in: its
+	// existing admins cancel the recovery, and its invitation is redeemed
+	return t, (t.Status == "active" || t.Status == "recovery") && t.ID != tenancy.Platform, nil
 }
 
 // loginConnections are a tenant's active OIDC, SAML and OAuth 2.0 connections that browser
@@ -450,6 +453,16 @@ func (s *Server) bootstrapRedeem(w http.ResponseWriter, r *http.Request, p *para
 			reason = "bootstrap_code_expired"
 			return nil
 		}
+		// an operator-recovery invitation (§15.5) works only from its
+		// not_before and only while the recovery is pending
+		if rec, err := tx.TenantRecoveryByInvitation(inv.ID); err == nil {
+			if rerr := admin.CheckWindow(rec, s.clock()); rerr != nil {
+				reason = rerr.Reason
+				return nil
+			}
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
 		if conn, err = tx.IdPConnection(inv.IdPConnectionID); err != nil {
 			return err
 		}
@@ -665,6 +678,16 @@ func (s *Server) finishLogin(w http.ResponseWriter, r *http.Request, tenant stor
 			if reason != "" {
 				return nil
 			}
+			// an operator-recovery invitation also needs its recovery pending and
+			// past not_before, and a phishing-resistant sign-in (§15.5)
+			if rec, err := tx.TenantRecoveryByInvitation(inv.ID); err == nil {
+				if rerr := admin.CheckRedemption(rec, res.PhishingResistant, now); rerr != nil {
+					reason = rerr.Reason
+					return nil
+				}
+			} else if !errors.Is(err, store.ErrNotFound) {
+				return err
+			}
 		}
 		l, err := tx.ExternalLoginBySubject(conn.ID, res.Subject)
 		switch {
@@ -755,10 +778,19 @@ func (s *Server) finishLogin(w http.ResponseWriter, r *http.Request, tenant stor
 				return err
 			}
 		}
-		_, err = audit.Record(ctx, tx, "recovery.invitation.consumed", ojson.Object{{Key: "invitation_id", Value: inv.ID.String()},
+		if _, err = audit.Record(ctx, tx, "recovery.invitation.consumed", ojson.Object{{Key: "invitation_id", Value: inv.ID.String()},
 			{Key: "user_id", Value: user.ID.String()}, {Key: "role", Value: store.RoleTenantAdmin}},
-			audit.At(now), audit.Target("bootstrap_invitation", inv.ID.String()))
-		return err
+			audit.At(now), audit.Target("bootstrap_invitation", inv.ID.String())); err != nil {
+			return err
+		}
+		// redeeming an operator-recovery invitation completes the recovery:
+		// the tenant is active again and everyone is told (§15.5 step 5)
+		if rec, err := tx.TenantRecoveryByInvitation(inv.ID); err == nil {
+			return s.admin.CompleteRecovery(tx, rec, user.ID, now)
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
+		return nil
 	}
 	_, err = s.completeLogin(w, r, tenant, conn, res, o)
 	if errors.Is(err, errBootstrapRace) {

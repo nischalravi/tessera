@@ -104,7 +104,7 @@ server/
   testdata/parity/      golden request/response fixtures recorded from the original Python API
   tools/benchcmp/       end-to-end benchmark (seed, startup, p50/p95, RSS; optionally vs Python)
   scripts/install-tools.sh  pinned govulncheck + gosec
-frontend/               React 18 + Vite + TypeScript, react-router, cytoscape.js, lucide-react
+frontend/               React 19 + Vite 8 + TypeScript, react-router, cytoscape.js, lucide-react
   src/
     api.ts              the single API client (typed responses, cached useApi hook)
     app/                shell (top bar + left rail), routes, nav model, command palette, global search, theme, persona
@@ -148,6 +148,64 @@ tenant-scoped like every other table; Admin → Connections → New
 connection → Active Directory (demo) walks the rest. Design: `docs/design/deployment-readiness.md`.
 The routes are documented at `/api/readiness/openapi.json`.
 
+#### Live LDAP checks
+
+Connections of type **OpenLDAP / 389-DS** (template `ldap`, which also covers LLDAP) run **real,
+read-only** checks instead of simulated ones: TLS handshake and chain, simple bind, Who Am I
+(RFC 4532), base-DN reads, a bounded people search, per-class attribute fill counts (counts only,
+no values), paging past the server's size limit, the change feed (syncrepl, accesslog or the
+389-DS retro changelog), the schema's custom attributes and, on 389-DS, the Get Effective Rights
+control. The prober (`server/internal/connectors/ldap`) can only bind, search, ask Who Am I and
+negotiate StartTLS, reads at most 500 objects per class, and sends a password only over a
+connection with a verified TLS 1.2+ channel. What a server cannot answer (no Who Am I, no Get
+Effective Rights, no `cn=Monitor` clock, as on LLDAP and OpenLDAP) is reported as **unsupported:
+an attestation is required**, never as a pass. Other connector types keep their simulated checks.
+
+Network path: `server/internal/safedial` shares safehttp's address policy for raw TCP. Only ports
+**636 (LDAPS)** and **389 (StartTLS required)** are dialled, private, loopback, link-local,
+CGNAT and metadata addresses are refused after DNS resolution, and TLS 1.2 or later is required.
+**The production path for a directory on a private network is the Directory Agent** (design
+`deployment-readiness.md` §5.3, DR-11, not built yet; `safedial.Transport` is the seam it will
+implement). Until then, a dev instance can reach a lab directory with an explicit allowlist.
+
+To point a local dev instance at a real LDAP or LLDAP server (for example an LLDAP on a NAS):
+
+1. Use **LDAPS** (port 636) and a certificate whose name matches the host name you configure.
+   (LLDAP: set `[ldaps_options] enabled = true`, `port = 6360`, `cert_file` and `key_file` in `lldap_config.toml`;
+   map 636 on the host if the container publishes 6360. Port 389 works only if the server offers StartTLS.)
+2. Create a **read-only bind account**. In LLDAP create a user such as `svc-tessera` and add it to the
+   `lldap_strict_readonly` group, not `lldap_admin` (a member of `lldap_admin` is reported as a root
+   identity and fails `ldap.svc.readonly`). On OpenLDAP and 389-DS use a dedicated entry with read ACLs,
+   never the rootDN or `cn=Directory Manager`.
+3. Start the dev server with the lab host allowlisted (dev only; `TESSERA_ENV=prod` refuses this variable):
+
+   ```bash
+   TESSERA_SAFEDIAL_ALLOW=192.168.1.20:636 ./run.sh     # host:port, CIDR:port or name:port; 389 or 636 only
+   ```
+
+4. In Admin → Connections → New connection → **OpenLDAP / 389-DS** set the host, port 636, the
+   **Bind DN** (for example `uid=svc-tessera,ou=people,dc=tessera,dc=test`) and, if the server
+   certificate is not from a public CA, paste the CA certificate (PEM, certificates only). Under
+   Scope set the base DNs (LLDAP: `ou=people,dc=tessera,dc=test` and `ou=groups,dc=tessera,dc=test`) and
+   the user filter (`(objectClass=inetOrgPerson)`), then save the password under Credential. It is
+   sealed under the KEK and never returned. Attest the base items, move to ready to validate and run
+   **Validate**.
+5. To check the prober against the lab outside the UI (read-only; nothing is committed, the target
+   comes from the environment):
+
+   ```bash
+   cd server
+   TESSERA_LDAP_TEST_URL=ldaps://192.168.1.20:636 \
+   TESSERA_LDAP_TEST_BIND_DN='uid=svc-tessera,ou=people,dc=tessera,dc=test' \
+   TESSERA_LDAP_TEST_PASSWORD='...' \
+   TESSERA_LDAP_TEST_BASE_DN='ou=people,dc=tessera,dc=test;ou=groups,dc=tessera,dc=test' \
+   TESSERA_LDAP_TEST_CA=/path/to/ca.pem \
+   go test -tags ldapinteg -run TestLive -v ./internal/connectors/ldap
+   ```
+
+   It logs every check's status and message (never the password) and fails if TLS, bind, the base
+   DNs or the people search do not pass.
+
 ### Main API endpoints
 
 `GET /api/summary` · `GET /api/identities[?type=&q=]` · `GET /api/identities/{id}` · `GET /api/accounts[?system=]` ·
@@ -176,6 +234,8 @@ The routes are documented at `/api/readiness/openapi.json`.
 `POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours}` ·
 `GET /api/requests[?scope=mine|pending|all&status=]` · `GET /api/requests/{id}` ·
 `POST /api/requests/{id}/approve|deny|cancel|remove {reason}` ·
+`GET|POST /api/abac/policies` · `GET|PUT /api/abac/policies/{id}` · `POST /api/abac/policies/{id}/retire` ·
+`POST /api/abac/simulate` · `GET /api/abac/bindings` · `PUT /api/catalog/items/{group_id}/policy` ·
 `GET /api/approvals/inbox` · `GET /api/approvals/delegates` · `GET|POST /api/approvals/delegations` ·
 `POST /api/approvals/delegations/{id}/revoke` ·
 `GET /api/correlation/queue` · `GET /api/correlation/decisions` ·
@@ -205,11 +265,58 @@ The routes are documented at `/api/readiness/openapi.json`.
 `GET /api/notifications[?unread=1&limit=]` · `POST /api/notifications/read {ids}|{all:true}` ·
 `GET|PUT /api/notifications/preferences {prefs:{kind:channel}}` ·
 `GET /api/email/messages[?status=&kind=&recipient=&limit=]` · `GET /api/email/messages/{id}` ·
-`POST /api/email/messages/{id}/retry`
+`POST /api/email/messages/{id}/retry` ·
+`GET /api/admin/users` · `POST /api/admin/users/{id}/disable {reason}` · `GET /api/admin/idp-connections` ·
+`POST /api/admin/idp-connections/{id}/activate` · `GET|POST /api/admin/change-requests` ·
+`GET /api/admin/change-requests/{id}` · `POST /api/admin/change-requests/{id}/approve|reject|cancel|apply` ·
+`GET /api/admin/notifications` · `GET /api/admin/recovery` · `POST /api/admin/recovery/{id}/cancel` ·
+`GET /api/admin/api-clients` (see "Admin changes")
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
 or HRIS execution is always the signed-in user.
+
+### Admin changes, notifications and operator recovery
+
+Changes that widen trust or privilege go through **change requests** (design §15, issue #16;
+`internal/admin`, routes in `internal/api/admin_routes.go`, UI under Settings → Admin: Users,
+Authentication, Change requests, API clients, and a banner on every page while a change is pending).
+
+| `type` | Who approves | Waits | Applies |
+|---|---|---|---|
+| `role.grant` of `policy_admin` or `tenant_admin` | a different `tenant_admin` | 24 h | adds the role, ends the target's sessions |
+| `role.grant` of viewer, operator, auditor | one admin | none | at once |
+| `role.revoke` of another user's admin role | a different admin | none | at once, never below the tenant's `min_admins` |
+| `role.revoke` of a non-admin role, or your own | one admin | none | at once |
+| `idp_connection.create` | a different admin | 24 h | creates the connection `pending`; it becomes `active` after the requester's successful test login (`POST …/activate`) |
+| `idp_connection.update_trust` | a different admin | 24 h | updates it and revokes every session that came through it |
+| `idp_connection.update_cosmetic`, `.disable` | one admin | none | at once (disable ends the connection's sessions; refused for the last active connection) |
+| `tenant.settings.update` | a different admin if it **weakens** a setting | 24 h if weakening | merges the bounded settings of §18.3 and `min_admins` |
+| `tenant.security_contacts.update` | a different admin | 24 h | replaces the contacts |
+
+Every submit and approve needs `STEP_UP_ADMIN` (phishing-resistant sign-in within 5 minutes). The payload
+is decoded into a typed struct with unknown fields refused; the approver echoes its SHA-256 (`payload_hash`)
+and a mismatch is 409. States: `pending_approval` → `cooling_off` → `applied`, or `rejected`, `cancelled`,
+`expired` (72 h without approval) or `failed` (the applier raised; recorded with the reason). Applying before
+`effective_at` is 409; the sweeper (`RunSweeper`) applies due changes and expires old ones, using the
+injected clock. A tenant with fewer than two admins can grant `tenant_admin` with one person and the 24 h;
+a change that needs two people is refused (`bootstrap_restricted`) until it has two. A client secret
+travels beside the payload, is sealed, and is cleared when the request ends; it never appears in the
+payload, audit, a response or a list. `api_client.*` and `breakglass.*` types arrive with the PRs that add
+their tables. Every transition writes an `admin.change.*` audit event and queues an `admin_notifications`
+row for every active tenant admin and security contact, in the same transaction (delivery is the
+notification outbox's job, issue #189; until then the rows and the banner are the notice).
+
+**Operator recovery** (all admins and break-glass keys lost, §15.5): two *different* operators run
+`tessera admin recover-tenant -tenant acme -operator <id> -co-operator <id> -ticket <ref> -connection <id>
+-email <address> -operator-phr -co-operator-phr` (the two flags attest that each signed in to the hardened
+operator host with a hardware key). The tenant moves to `status=recovery` (its admins can still sign in),
+a bootstrap invitation is created that works only after **72 hours** (`not_before`) and only with a
+phishing-resistant sign-in, and every admin and contact is told at once. Any existing admin cancels it
+under Change requests (the invitation is spent and both operators are told); redeeming it completes the
+recovery. It is audited in the tenant's chain and the platform chain.
+`tessera admin revoke-signing-key -tenant acme -kid <kid> -reason "…"` revokes one of a tenant's signing
+keys at once (a new one becomes active; audited as the operator).
 
 ### Account correlation
 
@@ -339,8 +446,46 @@ contains their value.
 Changing roles needs `roles.manage` (policy admins) and a fresh phishing-resistant sign-in.
 Members, versions and drift need `graph.read`. The seed creates the demo company's six roles.
 Rule members are seeded only where people already hold every entitlement, so seeding grants
-nothing: reconcile a role to see the rest. Not yet: provisioning into the target system (#103),
-role mining (Phase 3), and ABAC conditions in rules (#162).
+nothing: reconcile a role to see the rest. Not yet: provisioning into the target system (#103)
+and role mining (Phase 3).
+
+### Attribute policies (ABAC)
+
+**Protection → Attribute policies** (issue #162). A policy is a named, versioned condition in a
+small JSON language (`internal/abac`): `all` / `any` / `not` over tests
+`{"attr": "identity.department", "op": "eq", "value": "Finance"}`, with ops `eq`, `ne`, `in`,
+`prefix`, `exists`, `gt`, `gte`, `lt`, `lte` (numbers or RFC 3339 times). Attributes are
+`identity.*` (type, status, name, email, department, title, manager_id, has_manager, source,
+tenure_days), `resource.*` (name, risk, and for catalog items system and privileged) and `context.*`
+(time, hour, weekday in UTC, and `aal` when a signed-in user acts). It is data, never code:
+evaluation is a deterministic walk with limits on depth (8), size (100 parts) and lists (50).
+
+- **Missing attributes deny.** Evaluation is three-valued: a test on an attribute the subject lacks
+  is unknown, `not` of unknown is still unknown, and only a condition that is definitely true
+  grants. So `not (department = Legal)` does not grant to someone with no department. `exists` is
+  the one test that is never unknown.
+- **Where it applies.** *Birthright rules*: a role's rule has an optional `policy` (an attribute
+  policy id) that must hold on top of the department, type and title lists; the policy sees the
+  person, the role (`resource.name`, `resource.risk`) and the time. *Request eligibility*:
+  `PUT /api/catalog/items/{group_id}/policy {policy_id}` binds a policy to a catalog item, checked
+  on top of its eligible types and departments (`409 not_eligible`), with the item as the resource
+  and the requester's assurance level as `context.aal`. *SoD*: a policy file's
+  `subjects.condition` (the same language, as YAML) limits which identities are checked; an
+  identity that lacks a tested attribute stays in scope, because a detective control should
+  over-check rather than skip. Current rules and eligibility lists work unchanged.
+- **Versioning and audit.** Each save is the next version in `abac_policy_versions` (append-only,
+  with who and why); create, update, retire and binding changes are audited in the same
+  transaction (`abac.policy.*`, `abac.binding.*`). A role rule picks up a policy's new version at
+  the role's next save or reconcile; a policy a rule or catalog item uses cannot be retired.
+- **Simulate before saving.** `POST /api/abac/simulate {condition, policy_id?, resource?, context?}`
+  evaluates a draft against every identity and returns who matches, who gains and who loses
+  against the saved version (up to 200 each, with exact counts), and how many identities lack an
+  attribute the draft tests. It writes nothing; the editor requires a simulation before saving.
+
+Reading and simulating need `graph.read`; changing a policy needs `roles.manage` with a fresh
+phishing-resistant sign-in, and binding a catalog item needs `catalog.manage` (same step-up).
+Not yet: location, worker type and custom HRIS fields (the identity record does not store them, so
+a test on one is always unknown and denies; they arrive with the HRIS attribute mapping).
 
 ### Contractors, guests and end dates
 
@@ -360,7 +505,10 @@ event's `worker_type` and `end_date`, with the manager as sponsor unless
   notifications outbox (#189) delivers them through `lifecycle.Notify`.
 - **Extending.** The sponsor, or a lifecycle admin, moves the end date later, with a reason.
   Nobody extends their own term. An extension restarts the warnings.
-- **The end.** On the end date the sweeper runs the person's **leaver plan**: accounts are
+- **The end.** On the end date the sweeper first **contains** the person (sessions, refresh tokens
+  and OAuth grants revoked at connected providers, audited as `containment.run`). A failed step
+  becomes a retry and never blocks the end; if the sweep's time budget runs out first, the person
+  stays due for the next pass. Then it runs the person's **leaver plan**: accounts are
   disabled, grants removed, JIT cancelled and ownership reassigned, as the JML leaver plan lists
   them. It then terminates the identity, all in one transaction with `lifecycle.end`. The
   sweep runs in the background loop, never on a read. Admins can also run it at once.
@@ -501,7 +649,7 @@ the server verifies it with `crypto/ecdsa`, accepts ±60 s and lets each proof b
 stolen cookie is useless and a captured proof cannot carry another body (the path signed is the one
 the API sees: a reverse proxy must not rewrite it). One use is keyed on the signature's `r`, so the
 malleated form `(r, N−s)` of an accepted signature is a replay too, and it is recorded atomically in
-the tenant's database (`claim_proof_uses`, schema `0228_claim_proofs.sql`), so it holds across
+the tenant's database (`claim_proof_uses`, schema `0229_claim_proofs.sql`), so it holds across
 restarts and processes. Missing, bad, stale and
 replayed proofs get the same `401 {"error":"session_required"}` as no cookie at all and are audited
 as `claim.proof.rejected`. A session of one tenant is nothing at another.
@@ -792,10 +940,9 @@ the right. Arrow keys move between items.
 | Group | Items |
 |---|---|
 | (top) | **Home**, **Inbox** (count) |
-| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts (with *Account matches*), Roles (Preview), Organizations (Preview) |
-| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts, Roles, Organizations (Preview) |
+| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts (with *Account matches*), Roles, Organizations (Preview) |
 | **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
-| **Protection** | Policies & SoD (violations, policies, what-if simulation), Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
+| **Protection** | Policies & SoD (violations, policies, what-if simulation), Attribute policies, Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
 | **Settings** | Connections (governed connections and the setup wizard), Admin |
 
 **Home.** For the admin & security persona: the tenant name and a sync line, then tabs
@@ -1206,6 +1353,10 @@ OpenAPI document). Deliberate differences:
 * No authentication or RBAC on the API or UI. Actor names on approvals and revokes are placeholders:
   the audit ledger records every request as `anonymous` and keeps the supplied name only as an
   unverified `claimed_actor`.
+* The test sign-in of a requested IdP connection (`GET /api/auth/login?connection=…&test=1`, design §15.2)
+  is not wired into the login flow yet: `admin.RecordTestLogin` records it and `POST
+  /api/admin/idp-connections/{id}/activate` requires it, but a connection created by a change request stays
+  `pending` until the login flow calls it (it needs a `test` purpose on `login_transactions`).
 * Revokes and JML plans change Tessera's graph only. Nothing is written back to source systems.
   Connectors do not have a `provision()`/`deprovision()` interface yet.
 * There is no scheduled connector sync. Seeding runs discovery once, and `POST /api/connectors/sync`

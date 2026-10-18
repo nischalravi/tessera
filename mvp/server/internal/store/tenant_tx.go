@@ -45,7 +45,7 @@ func (tx *TenantTx) own(t tenancy.ID) error {
 
 // bind appends @tenant to args, refusing a caller-supplied "tenant".
 func (tx *TenantTx) bind(args []sql.NamedArg) ([]any, error) {
-	out := make([]any, 0, len(args)+1)
+	out := make([]any, 0, len(args)) // append grows it by one for @tenant
 	for _, a := range args {
 		if strings.EqualFold(a.Name, "tenant") {
 			return nil, ErrCrossTenant // a caller tried to supply the tenant

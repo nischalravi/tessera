@@ -523,6 +523,15 @@ func TestWriteError_DeadlineIs503(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("deadline error: %d, want 503", rec.Code)
 	}
+	// The driver may report the expired deadline in its own words
+	// ("interrupted"); the request's context still says why.
+	ctx, cancel := context.WithDeadline(context.Background(), time.Unix(0, 0))
+	defer cancel()
+	rec = httptest.NewRecorder()
+	s.writeError(rec, httptest.NewRequest("GET", "/api/identities", nil).WithContext(ctx), errors.New("interrupted (9)"))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("driver error after the deadline: %d, want 503", rec.Code)
+	}
 }
 
 // TestAudit_ExportStreamsLargeChain: the export of a large chain is streamed

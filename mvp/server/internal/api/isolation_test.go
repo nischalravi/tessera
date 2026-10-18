@@ -213,6 +213,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if strings.HasPrefix(rt.Pattern, "/api/roles/{role_id}") || strings.HasPrefix(rt.Pattern, "/api/role-requests/{request_id}") {
 			continue // TestRolesAPI_CrossTenant (UUIDs, not fixture ids)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/abac/policies/{policy_id}") || rt.Pattern == "/api/catalog/items/{group_id}/policy" {
+			continue // TestAbacAPI_CrossTenant (UUIDs, not fixture ids)
+		}
 		if rt.Pattern == "/api/auth/oidc/{connection_id}/callback" || rt.Pattern == "/api/auth/oauth2/{connection_id}/callback" ||
 			rt.Pattern == "/t/{slug}/bootstrap" {
 			continue // TestIsolation_LoginCrossTenant (public; the tenant comes from the cookie or the slug)
@@ -246,6 +249,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		}
 		if rt.Pattern == "/api/auth/sessions/{session_id}" {
 			continue // TestIsolation_SessionCookieScoped (a UUID, not a fixture id)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/admin/") {
+			continue // TestAdminAPI_CrossTenant (UUIDs, not fixture ids)
 		}
 		if _, ok := routeParamCases[rt.Method+" "+rt.Pattern]; !ok {
 			t.Errorf("route %s %s has path parameters but no cross-tenant case", rt.Method, rt.Pattern)
@@ -307,7 +313,9 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 	lines := seedRequestLines(t, f)        // A's justification carries the sentinel
 	roleIDs, _ := seedRoles(t, f)          // and A's role description
 	sponsorships := seedSponsorships(t, f) // and A's sponsorship purpose
+	policyIDs := seedAbac(t, f)            // and A's policy name
 	values := map[string]string{
+		"/api/abac/policies/{policy_id}":             policyIDs[f.B.ID],
 		"/api/roles/{role_id}":                       roleIDs[f.B.ID],
 		"/api/roles/{role_id}/versions":              roleIDs[f.B.ID],
 		"/api/roles/{role_id}/drift":                 roleIDs[f.B.ID],
@@ -328,6 +336,9 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 	for _, rt := range srv.Routes() {
 		if rt.Method != http.MethodGet || !rt.Tenant {
 			continue
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/admin/") && strings.Contains(rt.Pattern, "{") {
+			continue // TestAdminAPI_CrossTenant (UUIDs, not fixture ids)
 		}
 		path := rt.Pattern
 		if rp, ok := readinessGetPaths(f.B.Refs)[path]; ok && strings.Contains(path, "{") {

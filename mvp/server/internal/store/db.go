@@ -80,12 +80,16 @@ var tables = []string{
 	"login_transactions",
 	// operator bootstrap (schema/0006_admin.sql)
 	"bootstrap_invitations",
+	// admin changes, admin notifications, operator recovery (schema/0008_admin_changes.sql)
+	"tenant_recoveries", "admin_change_requests", "admin_notifications",
 	// audit ledger (schema/0004_audit.sql)
 	"audit_events", "audit_chain_heads", "audit_checkpoints",
 	// deployment readiness (schema/0201-0203; revoked_grants is 0204)
 	"connections", "connection_revisions", "readiness_check_runs", "readiness_item_states", "readiness_attestations",
 	"readiness_skips", "readiness_overlays", "readiness_check_results", "recon_runs", "recon_findings", "readiness_scores",
 	"stg_identities", "stg_accounts", "stg_groups", "stg_memberships", "stg_attr_stats",
+	// sealed connection credentials (schema/0205)
+	"connection_secrets",
 	// account correlation (schema/0204_correlation.sql)
 	"account_links", "identity_merges",
 	// identity model for guests (schema/0226_identity_model.sql)
@@ -95,6 +99,8 @@ var tables = []string{
 	// business roles (schema/0206_business_roles.sql)
 	"business_roles", "business_role_entitlements", "business_role_versions", "business_role_members",
 	"business_role_requests",
+	// attribute conditions (schema/0221_abac.sql)
+	"abac_policies", "abac_policy_versions", "abac_bindings",
 	// identity lifecycle (schema/0220_lifecycle.sql)
 	"identity_lifecycle", "identity_lifecycle_events",
 	// approval routing (schema/0206_approvals.sql)
@@ -107,7 +113,7 @@ var tables = []string{
 	"intake_records", "sponsorships", "sponsorship_events",
 	// guest claim (schema/0228_claim.sql)
 	"claim_tokens", "claim_sessions", "confirmation_codes",
-	// claim proof one-use memory (schema/0228_claim_proofs.sql)
+	// claim proof one-use memory (schema/0229_claim_proofs.sql)
 	"claim_proof_uses",
 	// identity containment (schema/0205_containment.sql)
 	"containment_credentials", "containment_retries",

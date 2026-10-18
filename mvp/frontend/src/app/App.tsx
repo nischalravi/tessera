@@ -3,7 +3,7 @@ import { Navigate, Route, Routes, useLocation, useParams } from "react-router-do
 import { ConfirmProvider } from "../components/Dialog";
 import { PageSkeleton } from "../components/Feedback";
 import { ToastProvider } from "../components/Toast";
-import { SessionProvider } from "./auth";
+import { SessionProvider, useSession } from "./auth";
 import { PaletteProvider } from "./CommandPalette";
 import { PersonaProvider } from "./persona";
 import { Shell } from "./Shell";
@@ -54,6 +54,7 @@ const LeastPrivilege = named(() => import("../features/insights/LeastPrivilege")
 const SodConflicts = named(() => import("../features/insights/SodConflicts"), "SodConflicts");
 const DeploymentHealth = named(() => import("../features/insights/DeploymentHealth"), "DeploymentHealth");
 const Policies = named(() => import("../features/governance/Policies"), "Policies");
+const AttributePolicies = named(() => import("../features/governance/AttributePolicies"), "AttributePolicies");
 const Reviews = named(() => import("../features/governance/Reviews"), "Reviews");
 const Lifecycle = named(() => import("../features/governance/Lifecycle"), "Lifecycle");
 const Workflows = named(() => import("../features/governance/Workflows"), "Workflows");
@@ -65,6 +66,17 @@ const ValidationResults = named(connections, "ValidationResults");
 const ReconReport = named(connections, "ReconReport");
 const AdminSectionPage = named(admin, "AdminSectionPage");
 const MySessions = named(() => import("../features/account/MySessions"), "MySessions");
+const AdminUsers = named(() => import("../features/admin/Users"), "Users");
+const IdpConnections = named(() => import("../features/admin/IdpConnections"), "IdpConnections");
+const ChangeRequests = named(() => import("../features/admin/ChangeRequests"), "ChangeRequests");
+const ApiClients = named(() => import("../features/admin/ApiClients"), "ApiClients");
+const ChangeBanner = named(() => import("../features/admin/ChangeBanner"), "ChangeBanner");
+
+/** The persistent banner of pending and cooling-off admin changes (design §15.2), for admins only. */
+function AdminBanner() {
+  const { can } = useSession();
+  return can("admin.read") ? <Suspense fallback={null}><ChangeBanner /></Suspense> : null;
+}
 
 /** Redirect an old route to its new home, keeping the query string (e.g. /graph?identity=5). */
 function Moved({ to }: { to: string }) {
@@ -96,6 +108,7 @@ export default function App() {
           <PersonaProvider>
             <PaletteProvider>
               <Shell>
+                <AdminBanner />
                 <Suspense fallback={<PageSkeleton />}>
                   <Routes>
                     <Route path="/" element={<Home />} />
@@ -141,6 +154,7 @@ export default function App() {
 
                     <Route path="/governance" element={<Navigate to="/governance/policies" replace />} />
                     <Route path="/governance/policies" element={<Policies />} />
+                    <Route path="/governance/attributes" element={<AttributePolicies />} />
                     <Route path="/governance/reviews" element={<Reviews />} />
                     <Route path="/governance/lifecycle" element={<Lifecycle />} />
                     <Route path="/governance/workflows" element={<Workflows />} />
@@ -151,6 +165,10 @@ export default function App() {
                     <Route path="/admin/connections/:id" element={<ConnectionDetail />} />
                     <Route path="/admin/connections/:id/validation/:run" element={<ValidationResults />} />
                     <Route path="/admin/connections/:id/reconciliation/:run" element={<ReconReport />} />
+                    <Route path="/admin/users" element={<AdminUsers />} />
+                    <Route path="/admin/authentication" element={<IdpConnections />} />
+                    <Route path="/admin/change-requests" element={<ChangeRequests />} />
+                    <Route path="/admin/api-clients" element={<ApiClients />} />
                     <Route path="/admin/:section" element={<AdminSectionPage />} />
 
                     {/* routes from the previous UI */}

@@ -143,8 +143,21 @@ function errorMessage(status: number, j: any): string {
   return j ? JSON.stringify(j.detail ?? j) : `${status}`;
 }
 
-export async function api<T = any>(path: string, body?: unknown, method?: string): Promise<T> {
+/** Call the API. A write refused for step-up is kept so it can resume after re-authentication. */
+export function api<T = any>(path: string, body?: unknown, method?: string): Promise<T> {
   const m = method ?? (body !== undefined ? "POST" : "GET");
+  return send<T>(path, body, m, () => savePendingAction({ method: m, path, body, label: actionLabel(m, path), at: Date.now() }));
+}
+
+/**
+ * Call the API with a body that carries a secret. It is never kept for resuming after a step-up: the body
+ * never reaches browser storage, and an earlier pending action is dropped so the resume never offers it.
+ */
+export function apiNoResume<T = any>(path: string, body: unknown, method = "POST"): Promise<T> {
+  return send<T>(path, body, method, clearPendingAction);
+}
+
+async function send<T>(path: string, body: unknown, m: string, onStepUp: () => void): Promise<T> {
   const headers: Record<string, string> = {};
   if (body !== undefined) headers["content-type"] = "application/json";
   if (m !== "GET" && m !== "HEAD" && csrfToken) headers["x-tessera-csrf"] = csrfToken;
@@ -173,7 +186,7 @@ export async function api<T = any>(path: string, body?: unknown, method?: string
     }
     if (res.status === 401 && j?.error === "step_up_required") {
       // remember what was being done (the request only, never a token) so it can resume after the step-up
-      if (m !== "GET" && m !== "HEAD") savePendingAction({ method: m, path, body, label: actionLabel(m, path), at: Date.now() });
+      if (m !== "GET" && m !== "HEAD") onStepUp();
       window.dispatchEvent(new CustomEvent(STEP_UP, { detail: j }));
     }
     throw new ApiError(j ? errorMessage(res.status, j) : `${res.status} ${res.statusText}`, res.status, j);
@@ -195,7 +208,27 @@ const PENDING = "tessera.pendingAction";
 /** A pending action older than this is discarded rather than resumed. */
 export const PENDING_TTL_MS = 10 * 60 * 1000;
 
+/**
+ * Field names that mark a body as carrying a secret (connection credentials, webhook and SIEM tokens,
+ * passwords, keys). A backstop: calls that send a secret also pass { noResume: true }.
+ */
+const SECRET_KEY = /secret|passw|^pass$|pwd|passphrase|token|private|credential|api[_-]?key|key$|signing|pem|authorization|bearer/i;
+
+/** True when the body, at any depth, has a field whose name marks a secret; a body nested too deep counts as one. */
+export function carriesSecret(v: unknown, depth = 0): boolean {
+  if (v === null || typeof v !== "object") return false;
+  if (depth > 8) return true;
+  return Object.entries(v as Record<string, unknown>).some(([k, x]) => SECRET_KEY.test(k) || carriesSecret(x, depth + 1));
+}
+
 function savePendingAction(a: PendingAction): void {
+  // A request that carries a secret is never written to browser storage: after the step-up the user
+  // enters it again, as when storage is unavailable. An earlier pending action is dropped too, so the
+  // resume prompt never offers a different action than the one just refused.
+  if (carriesSecret(a.body)) {
+    clearPendingAction();
+    return;
+  }
   try {
     sessionStorage.setItem(PENDING, JSON.stringify(a));
   } catch {
@@ -956,7 +989,13 @@ export const retryEmail = (id: string) => api<EmailMessage>(`/email/messages/${e
 // ---------------------------------------------------------------- business roles (issue #161)
 
 export type GroupRef = CatalogEntry["group"];
-export interface RoleRule { department: string[]; type: string[]; title: string[] }
+export interface RoleRule {
+  department: string[];
+  type: string[];
+  title: string[];
+  /** Id of an attribute policy (issue #162) the person must also satisfy; "" or absent: none. */
+  policy?: string;
+}
 export type MemberSource = "rule" | "request" | "manual";
 export interface RoleMember {
   person: PersonRef;
@@ -1301,6 +1340,64 @@ export interface ContainmentRetry {
 export const retryContainmentNow = (retryId: string) =>
   api<{ retry: ContainmentRetry }>(`/containment-retries/${encodeURIComponent(retryId)}/retry-now`, {});
 
+// ---------------------------------------------------------------- attribute policies (issue #162)
+
+/** A condition: all/any/not over attribute tests, evaluated deterministically; a missing attribute denies. */
+export type AbacOp = "eq" | "ne" | "in" | "prefix" | "exists" | "gt" | "gte" | "lt" | "lte";
+export type AbacCondition =
+  | { all: AbacCondition[] }
+  | { any: AbacCondition[] }
+  | { not: AbacCondition }
+  | { attr: string; op: AbacOp; value?: string | number | boolean | (string | number | boolean)[] };
+export interface AbacAttribute { name: string; type: "string" | "number" | "boolean" | "time"; note: string }
+export interface AbacVersion { version: number; snapshot: { name?: string; description?: string; condition?: AbacCondition; status?: string }; note: string | null; actor: string; changed_at: string }
+export interface AbacPolicy {
+  id: string;
+  name: string;
+  description: string;
+  condition: AbacCondition;
+  status: "active" | "retired";
+  version: number;
+  created_at: string;
+  updated_by: { id: string; display_name: string } | null;
+  updated_at: string;
+  /** Birthright rules (role names) and catalog entitlements (system:name) that use it. */
+  used_by: { roles: string[]; catalog_items: string[] };
+  /** Only on GET /abac/policies/{id} and after a change. */
+  versions?: AbacVersion[];
+}
+export interface AbacList { can_manage: boolean; attributes: AbacAttribute[]; policies: AbacPolicy[] }
+export interface AbacPolicySpec { name: string; description: string; condition: AbacCondition; note?: string }
+export interface AbacSimPerson { id: number; name: string; type: IdentityType; status: string; department: string; title: string }
+export interface AbacSimulation {
+  evaluated: number;
+  matching: number;
+  before: number;
+  unchanged: number;
+  /** Identities for which the draft tests an attribute they lack (they are denied). */
+  missing_attributes: number;
+  /** The saved version compared against; 0: a new policy. */
+  current_version: number;
+  gain_count: number;
+  lose_count: number;
+  gains: AbacSimPerson[];
+  loses: AbacSimPerson[];
+  lists_truncated: boolean;
+}
+export interface AbacBinding { kind: "catalog_item"; target_id: string; target: string; policy_id: string }
+const abacPath = (id: string, rest = "") => `/abac/policies/${encodeURIComponent(id)}${rest}`;
+export const abac = {
+  create: (spec: AbacPolicySpec) => api<AbacPolicy>("/abac/policies", spec),
+  update: (id: string, version: number, spec: AbacPolicySpec) => api<AbacPolicy>(abacPath(id), { version, ...spec }, "PUT"),
+  retire: (id: string, reason: string) => api<AbacPolicy>(abacPath(id, "/retire"), { reason }),
+  /** Who gains and loses if the draft replaces the saved version (policyId omitted: a new policy). Changes nothing. */
+  simulate: (condition: AbacCondition, policyId?: string, extra?: { resource?: Record<string, string | number | boolean>; context?: Record<string, string | number | boolean> }) =>
+    api<AbacSimulation>("/abac/simulate", { condition, ...(policyId ? { policy_id: policyId } : {}), ...extra }),
+  /** Bind (or, with null, unbind) the policy that further restricts who may request a catalog entitlement. */
+  bindCatalog: (groupId: number, policyId: string | null) => api<{ catalog_item_id: string; policy_id: string | null }>(`/catalog/items/${groupId}/policy`, { policy_id: policyId }, "PUT"),
+};
+export const abacPaths = { list: "/abac/policies", one: (id: string) => abacPath(id), bindings: "/abac/bindings" };
+
 // ---------------------------------------------------------------- guest claim (issue #69)
 
 /**
@@ -1334,9 +1431,9 @@ export interface ClaimSigner {
   /** The X-Claim-Proof header value for a request: a signature by the key bound at start over the request and its body ("" for none). */
   sign(method: string, path: string, nonce: string, body: string): Promise<string>;
 }
-export class ClaimError extends Error {
-  constructor(message: string, readonly status: number, readonly code: string) {
-    super(message);
+export class ClaimError extends ApiError {
+  constructor(message: string, status: number, code: string) {
+    super(message, status, { error: code, message });
   }
 }
 
@@ -1450,7 +1547,7 @@ export interface Progress { pass: number; total: number; skipped: number }
 export interface TemplateRef { id: string; version: string; pin: string; display_name: string; overlay_version: number }
 
 export interface ConnConfig {
-  host?: string; port?: number; base_dns?: string[]; user_filter?: string; group_filter?: string; service_account_ous?: string[];
+  host?: string; port?: number; bind_dn?: string; ca_bundle?: string; base_dns?: string[]; user_filter?: string; group_filter?: string; service_account_ous?: string[];
   org_url?: string; tenant_id?: string; cloud?: string; customer?: string; domain?: string; base_url?: string;
   tenant_host?: string; api_version?: string; interface?: string; time_zone?: string;
   correlation_key?: string; hr_id_attribute?: string; technical_owner?: string; business_owner?: string;
@@ -1566,7 +1663,7 @@ export const readiness = {
   create: (body: { name: string; connector_type: string; system?: string; config?: ConnConfig }) => api<Connection>("/connections", body),
   patchConfig: (id: string, patch: Partial<ConnConfig> | Record<string, unknown>) =>
     api<{ connection: Connection; new_revision: boolean; invalidated: string[]; fields: { field: string; msg: string }[] }>(`/connections/${id}/config`, patch, "PATCH"),
-  setCredential: (id: string, body: { secret?: string; reference?: string }) => api<RevisionView["credential"]>(`/connections/${id}/credential`, body, "PUT"),
+  setCredential: (id: string, body: { secret?: string; reference?: string }) => apiNoResume<RevisionView["credential"]>(`/connections/${id}/credential`, body, "PUT"),
   attest: (id: string, item: string, note: string) => api<Checklist>(`/connections/${id}/checklist/${item}/attest`, { note }),
   skip: (id: string, item: string, reason: string, review_by?: string) =>
     api<Checklist>(`/connections/${id}/checklist/${item}/skip`, review_by ? { reason, review_by } : { reason }),
@@ -1581,3 +1678,71 @@ export const readiness = {
   rerun: (reconcile = false) => api<{ results: { connection_id: string; name: string; validation_run_id: string | null; dry_run_id: string | null; skipped?: string }[]; dashboard: DeploymentHealth }>(
     "/insights/deployment-health/rerun", { reconcile }),
 };
+
+// ------------------------------------------------------------ admin changes (design §15, §16.1)
+
+export type ChangeStatus = "pending_approval" | "cooling_off" | "applied" | "rejected" | "cancelled" | "expired" | "failed";
+
+/** The change types of design §15.2 that the API accepts. */
+export type ChangeType =
+  | "role.grant" | "role.revoke" | "idp_connection.create" | "idp_connection.update_trust" | "idp_connection.update_cosmetic"
+  | "idp_connection.disable" | "tenant.settings.update" | "tenant.security_contacts.update";
+
+interface AdminPersonRef { id: string; display_name: string }
+
+export interface AdminChange {
+  id: string; type: ChangeType; summary: string; status: ChangeStatus; target_id: string | null; two_person: boolean;
+  cooling_off_seconds: number; requested_by: AdminPersonRef; requested_at: string; expires_at: string; approved_by: AdminPersonRef | null;
+  approved_at: string | null; effective_at: string | null; decided_by: AdminPersonRef | null; decided_at: string | null;
+  applied_at: string | null; failure: string | null; test_login_at: string | null; payload_hash: string;
+  payload: Record<string, unknown> | null;
+  notifications?: AdminNotification[];
+}
+
+export interface AdminNotification {
+  id: string; kind: string; recipient_type: "admin" | "contact" | "operator"; recipient: string; subject: string;
+  change_request_id: string | null; recovery_id: string | null; created_at: string; delivered_at: string | null;
+}
+
+export interface AdminUser {
+  id: string; email: string | null; display_name: string; status: "active" | "disabled"; is_break_glass: boolean;
+  roles: { role: string; source: string; expires_at: string | null; change_request_id: string | null }[];
+  created_at: string; last_login_at: string | null; disabled_at: string | null; disabled_reason: string | null;
+}
+
+export interface AdminIdpConnection {
+  id: string; name: string; protocol: string; profile: string; status: "pending" | "active" | "disabled"; is_default: boolean;
+  verified_domains: string[]; issuer: string | null; assume_phishing_resistant: boolean; jit_provisioning: boolean;
+  default_role: string; created_at: string; updated_at: string; last_change_request_id: string | null;
+  activation: { change_request_id: string; requested_by: string; test_login_at: string | null; ready: boolean } | null;
+}
+
+export interface AdminRecovery {
+  id: string; status: "pending" | "cancelled" | "completed"; ticket: string; operator: string; co_operator: string;
+  not_before: string; created_at: string; cancelled_at: string | null; completed_at: string | null;
+}
+
+export interface AdminApiClients { available: boolean; clients: { id: string; name: string }[]; detail: string }
+
+/** Admin-change workflow calls. Approving needs the hash of the payload the admin reviewed. */
+export const adminChanges = {
+  submit: (type: ChangeType, payload: Record<string, unknown>, client_secret?: string) =>
+    client_secret
+      ? apiNoResume<AdminChange>("/admin/change-requests", { type, payload, client_secret })
+      : api<AdminChange>("/admin/change-requests", { type, payload }),
+  approve: (id: string, payload_hash: string) => api<AdminChange>(`/admin/change-requests/${id}/approve`, { payload_hash }),
+  reject: (id: string) => api<AdminChange>(`/admin/change-requests/${id}/reject`, {}),
+  cancel: (id: string) => api<AdminChange>(`/admin/change-requests/${id}/cancel`, {}),
+  apply: (id: string) => api<AdminChange>(`/admin/change-requests/${id}/apply`, {}),
+  activateConnection: (id: string) => api<{ id: string; status: string }>(`/admin/idp-connections/${id}/activate`, {}),
+  disableUser: (id: string, reason: string) => api<{ id: string; status: string }>(`/admin/users/${id}/disable`, { reason }),
+  cancelRecovery: (id: string) => api<AdminRecovery>(`/admin/recovery/${id}/cancel`, {}),
+};
+
+/** Seconds as "24 h", "5 min" for the cooling-off column. */
+export function fmtSpan(seconds: number): string {
+  if (seconds <= 0) return "none";
+  if (seconds % 3600 === 0) return `${seconds / 3600} h`;
+  if (seconds % 60 === 0) return `${seconds / 60} min`;
+  return `${seconds} s`;
+}

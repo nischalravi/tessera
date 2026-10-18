@@ -6,9 +6,11 @@
 // person accountable for them, who is warned before the end (14, 7 and 1
 // days) and may extend it. A term is at most MaxTermDays from now; longer
 // engagements are extended, each extension audited. On the end date the
-// sweep runs the identity's leaver plan (disable accounts, remove grants,
-// cancel JIT, reassign ownership, as jml.LeaverPlan lists them) and
-// terminates the identity, in one transaction with its audit event.
+// sweep first contains the person (revokes sessions, refresh tokens and
+// OAuth grants at the providers; a failed step becomes a retry and never
+// blocks the end), then runs the identity's leaver plan (disable accounts,
+// remove grants, cancel JIT, reassign ownership, as jml.LeaverPlan lists
+// them) and terminates the identity, in one transaction with its audit event.
 //
 // An identity with no lifecycle row is an employee with no end date. The
 // lifecycle is set by hand (lifecycle.manage) or from the HRIS joiner
@@ -27,10 +29,12 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/jml"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/requests"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 )
 
@@ -511,16 +515,17 @@ func NeedsSweep(tx *store.TenantTx, now time.Time) (bool, error) {
 // SweepResult counts what a sweep did.
 type SweepResult struct{ Warned, Ended int }
 
-// Sweep sends due warnings and ends due terms: the leaver plan runs and the
-// identity is terminated (an identity terminated already, by the HRIS, is
-// only marked ended).
+// Sweep sends due warnings and ends due terms in the caller's transaction:
+// the leaver plan runs and the identity is terminated (an identity
+// terminated already, by the HRIS, is only marked ended). It runs no
+// containment, which calls the providers and so cannot run inside a
+// transaction; SweepTenant is the sweep that contains first.
 func Sweep(tx *store.TenantTx, now time.Time) (SweepResult, error) {
 	var res SweepResult
 	ls, err := tx.LifecyclesEndingBy(now.Add(days(WarnDays[0])))
 	if err != nil {
 		return res, err
 	}
-	by := Actor{Display: Sweeper}
 	for _, l := range ls {
 		end, warn := due(l, now)
 		if !end && warn == 0 {
@@ -531,45 +536,220 @@ func Sweep(tx *store.TenantTx, now time.Time) (SweepResult, error) {
 			return res, err
 		}
 		if end {
-			if _, err := endTerm(tx, l, p, by, Sweeper, nil, now); err != nil {
-				return res, err
-			}
+			_, err = endTerm(tx, l, p, Actor{Display: Sweeper}, Sweeper, nil, now)
 			res.Ended++
-			continue
+		} else {
+			err = warnOne(tx, l, p, warn, now)
+			res.Warned++
 		}
-		if err := tx.MarkLifecycleWarned(l.IdentityID, warn); err != nil {
+		if err != nil {
 			return res, err
 		}
-		left := *DaysLeft(l, now)
-		note := fmt.Sprintf("ends in %d day(s)", left)
-		l.WarnedDays = &warn
-		if err := event(tx, l, "warned", &note, by, now); err != nil {
-			return res, err
-		}
-		if Notify != nil {
-			if err := Notify.Expiring(tx, l, p, left); err != nil {
-				return res, err
-			}
-		}
-		if err := tx.Audit(now, Sweeper, "lifecycle.warn", append(detail(l, nil), ojson.KV{Key: "days_left", Value: left})); err != nil {
-			return res, err
-		}
-		res.Warned++
 	}
 	return res, nil
 }
 
-// SweepAll runs Sweep for every active tenant in its own transaction (the
-// background sweeper); a tenant with nothing due is left untouched. It is
-// not run on the read path: ending a term runs a leaver plan, which a read
-// should not set off.
-func SweepAll(ctx context.Context, db *store.DB, now time.Time) error {
-	return db.ForEachActiveTenant(ctx, func(_ context.Context, tx *store.TenantTx) error {
-		need, err := NeedsSweep(tx, now)
-		if err != nil || !need {
+func warnOne(tx *store.TenantTx, l *store.Lifecycle, p *store.Identity, warn int, now time.Time) error {
+	by := Actor{Display: Sweeper}
+	if err := tx.MarkLifecycleWarned(l.IdentityID, warn); err != nil {
+		return err
+	}
+	left := *DaysLeft(l, now)
+	note := fmt.Sprintf("ends in %d day(s)", left)
+	l.WarnedDays = &warn
+	if err := event(tx, l, "warned", &note, by, now); err != nil {
+		return err
+	}
+	if Notify != nil {
+		if err := Notify.Expiring(tx, l, p, left); err != nil {
 			return err
 		}
-		_, err = Sweep(tx, now)
-		return err
+	}
+	return tx.Audit(now, Sweeper, "lifecycle.warn", append(detail(l, nil), ojson.KV{Key: "days_left", Value: left}))
+}
+
+// Scope runs functions in one tenant's transactions (readiness.Scope).
+type Scope interface {
+	Read(ctx context.Context, fn func(*store.TenantTx) error) error
+	Write(ctx context.Context, fn func(*store.TenantTx) error) error
+}
+
+// SweepTenant sweeps one tenant in phases, as the HRIS leaver does (#106,
+// #223): a person whose term ended is contained (sessions, refresh tokens
+// and OAuth grants revoked at the providers) before they are ended.
+//
+//  1. Read: who is due, and each one's containment job (trigger
+//     "lifecycle"; only accounts on a live connection get steps).
+//  2. Run the jobs with no transaction open, within svc.SweepTimeout. A
+//     person the deadline left unstarted is skipped and stays due: they are
+//     never ended without containment.
+//  3. Write: warnings in one transaction, then one transaction per person
+//     that runs the leaver plan, records the containment run and queues a
+//     retry for each failed step. A failed step never blocks the end.
+//
+// A nil svc has no credentials: every step is a manual task.
+func SweepTenant(ctx context.Context, sc Scope, svc *containment.Service, now time.Time) (SweepResult, error) {
+	var res SweepResult
+	if svc == nil {
+		svc = &containment.Service{}
+	}
+	type work struct {
+		id  int64
+		job *containment.Job
+		rep *containment.Report
+	}
+	var ends []*work
+	warn := false
+	err := sc.Read(ctx, func(c *store.TenantTx) error {
+		ls, err := c.LifecyclesEndingBy(now.Add(days(WarnDays[0])))
+		if err != nil {
+			return err
+		}
+		for _, l := range ls {
+			end, w := due(l, now)
+			warn = warn || w > 0
+			if !end {
+				continue
+			}
+			wk := &work{id: l.IdentityID}
+			p, err := c.Identity(l.IdentityID)
+			if err != nil {
+				return err
+			}
+			if p.Status == "active" { // an identity ended by the HRIS was contained then
+				specs, err := containment.Steps(c, l.IdentityID, true)
+				if err != nil {
+					return err
+				}
+				if len(specs) > 0 {
+					if wk.job, err = svc.BuildJob(c, l.IdentityID, "lifecycle", specs); err != nil {
+						return err
+					}
+				}
+			}
+			ends = append(ends, wk)
+		}
+		return nil
 	})
+	if err != nil || (!warn && len(ends) == 0) {
+		return res, err
+	}
+
+	rctx, cancel := context.WithTimeout(ctx, svc.SweepTimeout())
+	defer cancel()
+	deadline, _ := rctx.Deadline()
+	for _, wk := range ends {
+		if wk.job == nil {
+			continue
+		}
+		if rctx.Err() != nil || !time.Now().Before(deadline) {
+			continue // unstarted: stays due for the next pass
+		}
+		wk.rep = svc.Run(rctx, wk.job)
+	}
+
+	var errs []error
+	if warn {
+		err := sc.Write(ctx, func(c *store.TenantTx) error {
+			ls, err := c.LifecyclesEndingBy(now.Add(days(WarnDays[0])))
+			if err != nil {
+				return err
+			}
+			n := 0
+			for _, l := range ls {
+				end, w := due(l, now)
+				if end || w == 0 {
+					continue
+				}
+				p, err := c.Identity(l.IdentityID)
+				if err != nil {
+					return err
+				}
+				if err := warnOne(c, l, p, w, now); err != nil {
+					return err
+				}
+				n++
+			}
+			res.Warned = n
+			return nil
+		})
+		if err != nil {
+			res.Warned = 0
+			errs = append(errs, err)
+		}
+	}
+	for _, wk := range ends {
+		if wk.job != nil && wk.rep == nil {
+			continue
+		}
+		ended := false
+		err := sc.Write(ctx, func(c *store.TenantTx) error {
+			ended = false
+			l, err := c.LifecycleFor(wk.id)
+			if errors.Is(err, store.ErrNotFound) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if end, _ := due(l, now); end { // not extended since the read
+				p, err := c.Identity(wk.id)
+				if err != nil {
+					return err
+				}
+				if _, err := endTerm(c, l, p, Actor{Display: Sweeper}, Sweeper, nil, now); err != nil {
+					return err
+				}
+				ended = true
+			}
+			if wk.rep == nil {
+				return nil
+			}
+			if err := containment.Record(c, now, Sweeper, wk.rep); err != nil {
+				return err
+			}
+			_, err = containment.EnqueueRetries(c, now, wk.job, wk.rep)
+			return err
+		})
+		if err != nil {
+			errs = append(errs, fmt.Errorf("identity %d: %w", wk.id, err))
+		} else if ended {
+			res.Ended++
+		}
+	}
+	return res, errors.Join(errs...)
+}
+
+type tenantScope struct {
+	db *store.DB
+	id tenancy.ID
+}
+
+func (s tenantScope) Read(ctx context.Context, fn func(*store.TenantTx) error) error {
+	return s.db.ReadTenant(ctx, s.id, fn)
+}
+
+func (s tenantScope) Write(ctx context.Context, fn func(*store.TenantTx) error) error {
+	return s.db.InTenant(ctx, s.id, fn)
+}
+
+// SweepAll runs SweepTenant for every active tenant (the background
+// sweeper); a tenant with nothing due is left untouched, and an error in one
+// tenant does not stop the others. It is not run on the read path: ending a
+// term runs a leaver plan, which a read should not set off.
+func SweepAll(ctx context.Context, db *store.DB, svc *containment.Service, now time.Time) error {
+	tenants, err := db.ActiveTenants(ctx)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, t := range tenants {
+		if ctx.Err() != nil {
+			return errors.Join(append(errs, ctx.Err())...)
+		}
+		if _, err := SweepTenant(ctx, tenantScope{db, t.ID}, svc, now); err != nil {
+			errs = append(errs, fmt.Errorf("tenant %s: %w", t.Slug, err))
+		}
+	}
+	return errors.Join(errs...)
 }
