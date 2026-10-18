@@ -434,6 +434,11 @@ Authentication, Change requests, API clients, and a banner on every page while a
 | `tenant.settings.update` | a different admin if it **weakens** a setting | 24 h if weakening | merges the bounded settings of §18.3 and `min_admins` |
 | `tenant.security_contacts.update` | a different admin | 24 h | replaces the contacts |
 
+The test login: while signed in, the requester opens `GET /api/auth/login?connection=<id>&test=1`
+(login transactions have a `test` purpose, schema `0315`; OIDC and SAML). The callback records the
+test login on the requester's own session and returns to `/?test_login=ok`. It never creates a session,
+a user, an external login or a role, and only the requester of that connection can run it, once.
+
 Every submit and approve needs `STEP_UP_ADMIN` (phishing-resistant sign-in within 5 minutes). The payload
 is decoded into a typed struct with unknown fields refused; the approver echoes its SHA-256 (`payload_hash`)
 and a mismatch is 409. States: `pending_approval` → `cooling_off` → `applied`, or `rejected`, `cancelled`,
@@ -1538,10 +1543,6 @@ OpenAPI document). Deliberate differences:
 * No authentication or RBAC on the API or UI. Actor names on approvals and revokes are placeholders:
   the audit ledger records every request as `anonymous` and keeps the supplied name only as an
   unverified `claimed_actor`.
-* The test sign-in of a requested IdP connection (`GET /api/auth/login?connection=…&test=1`, design §15.2)
-  is not wired into the login flow yet: `admin.RecordTestLogin` records it and `POST
-  /api/admin/idp-connections/{id}/activate` requires it, but a connection created by a change request stays
-  `pending` until the login flow calls it (it needs a `test` purpose on `login_transactions`).
 * Revokes and JML plans change Tessera's graph only unless the connection has a provisioning target
   with write-back on (see Closed-loop provisioning); JIT approval and rotating secrets are not yet
   sent to targets, and only SCIM 2.0 and Okta have connectors (no Entra native connector yet).

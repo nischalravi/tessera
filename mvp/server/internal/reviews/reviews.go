@@ -11,7 +11,9 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
@@ -25,6 +27,13 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 	"github.com/nischalravi/tessera/mvp/server/internal/usage"
 )
+
+// MaxCommentRunes caps a reviewer's comment (also the audit event's comment).
+const MaxCommentRunes = 1000
+
+// TargetType is the audit target type of review decision events; the target
+// id is the review item id.
+const TargetType = "review_item"
 
 // Error is a caller error (mapped to HTTP 400).
 type Error struct{ Msg string }
@@ -301,6 +310,9 @@ func Decide(c *store.TenantTx, now time.Time, itemID int64, decision string, by 
 	if decision != "keep" && decision != "revoke" {
 		return nil, &Error{"decision must be keep or revoke"}
 	}
+	if comment != nil && utf8.RuneCountInString(*comment) > MaxCommentRunes {
+		return nil, &Error{fmt.Sprintf("comment must be at most %d characters", MaxCommentRunes)}
+	}
 	item, err := c.Item(itemID)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, ErrUnknownItem
@@ -352,8 +364,12 @@ func applyDecision(c *store.TenantTx, now time.Time, item *store.ReviewItem, dec
 			return nil, err
 		}
 	}
-	if err := c.Audit(now, by.Display, "review."+decision, ojson.Object{{Key: "item_id", Value: item.ID},
-		{Key: "grant", Value: item.GrantLabel}}); err != nil {
+	det := ojson.Object{{Key: "item_id", Value: item.ID}, {Key: "grant", Value: item.GrantLabel}}
+	if comment != nil && *comment != "" {
+		det = append(det, ojson.KV{Key: "comment", Value: *comment})
+	}
+	if _, err := c.RecordAudit(store.AuditRecord{At: now, Action: "review." + decision, LegacyActor: by.Display,
+		Detail: det, TargetType: TargetType, TargetID: strconv.FormatInt(item.ID, 10)}); err != nil {
 		return nil, err
 	}
 	open, err := c.CountOpenItems(item.CampaignID)

@@ -539,7 +539,7 @@ func TestOIDCLogin_DisabledUser(t *testing.T) {
 	e.refused(e.signIn("00u-pat-policy", devidp.MethodPasskey, devidp.ProfileOkta), seed.LarkspurID, "user_disabled")
 }
 
-func devConnID(t *testing.T, db *store.DB, tn tenancy.ID) uuid.UUID {
+func devConnID(t testing.TB, db *store.DB, tn tenancy.ID) uuid.UUID {
 	t.Helper()
 	var id uuid.UUID
 	if err := db.ReadTenant(context.Background(), tn, func(tx *store.TenantTx) error {
