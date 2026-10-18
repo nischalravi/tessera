@@ -633,3 +633,16 @@ func TestNewDialer(t *testing.T) {
 	}
 	_ = c.Close()
 }
+
+func TestForCLIIsProduction(t *testing.T) {
+	c, err := safehttp.ForCLI(0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Timeout != safehttp.DefaultTimeout {
+		t.Fatalf("zero timeout should keep the default, got %v", c.Timeout)
+	}
+	if _, err := safehttp.Get(context.Background(), c, "http://127.0.0.1:1/"); err == nil {
+		t.Fatal("ForCLI must refuse plain http and loopback")
+	}
+}
