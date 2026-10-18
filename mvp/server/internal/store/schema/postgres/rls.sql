@@ -647,3 +647,24 @@ DROP POLICY IF EXISTS tenant_isolation ON grp_engine_queue;
 CREATE POLICY tenant_isolation ON grp_engine_queue
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE config_signing_keys ENABLE ROW LEVEL SECURITY;
+ALTER TABLE config_signing_keys FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON config_signing_keys;
+CREATE POLICY tenant_isolation ON config_signing_keys
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE config_trusted_signers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE config_trusted_signers FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON config_trusted_signers;
+CREATE POLICY tenant_isolation ON config_trusted_signers
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE config_imports ENABLE ROW LEVEL SECURITY;
+ALTER TABLE config_imports FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON config_imports;
+CREATE POLICY tenant_isolation ON config_imports
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));

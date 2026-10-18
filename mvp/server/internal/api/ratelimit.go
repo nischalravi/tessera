@@ -127,7 +127,7 @@ func markAuthenticated(ctx context.Context) {
 func (s *Server) rateLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		key := s.rateKey(r)
-		if r.URL.Path == "/api/auth" || strings.HasPrefix(r.URL.Path, "/api/auth/") {
+		if authAttempt(r) {
 			if !s.limits.auth.Allow(key) {
 				tooMany(w, s.limits.authEvery)
 				return
@@ -151,6 +151,21 @@ func (s *Server) rateLimit(next http.Handler) http.Handler {
 			s.limits.anon.Allow(key)
 		}
 	})
+}
+
+// authAttempt reports whether a request counts against the sign-in limit. Every /api/auth/*
+// request does, except a signed-in browser reading its own session or session list: the UI
+// fetches those on every page load, and counting them locked active users out (UAT #308).
+// Those reads still pass the authenticated path, so a bad cookie costs the anonymous budget.
+func authAttempt(r *http.Request) bool {
+	p := r.URL.Path
+	if p != "/api/auth" && !strings.HasPrefix(p, "/api/auth/") {
+		return false
+	}
+	if r.Method == http.MethodGet && (p == "/api/auth/session" || p == "/api/auth/sessions") {
+		return false
+	}
+	return true
 }
 
 func tooMany(w http.ResponseWriter, every time.Duration) {
