@@ -52,6 +52,7 @@ func TestRuleMatching(t *testing.T) {
 		{"signin_failures", ev("auth.login.failure", "failure", `{}`), true, "unknown"},
 		{"provisioning_failed", ev("connectors.sync", "error", `{}`), true, "connectors.sync"},
 		{"provisioning_failed", ev("connectors.sync", "success", `{}`), false, ""},
+		{"provisioning_failed", ev("job.failed", "success", `{}`), true, "job.failed"},
 		{"provisioning_failed", ev("jml.leaver", "failure", `{}`), true, "jml.leaver"},
 		{"provisioning_failed", ev("grant.revoke", "failure", `{}`), false, ""},
 	}

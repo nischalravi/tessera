@@ -139,10 +139,12 @@ var Rules = []*Rule{
 		Window:      time.Hour,
 		Description: "A connector sync, connection job, lifecycle (JML) run or admin change failed.",
 		Match: func(e *store.AuditEvent) (Hit, bool) {
-			if e.Outcome != store.OutcomeFailure && e.Outcome != store.OutcomeError {
+			// job.failed (internal/jobs) is itself the failure record, whatever its outcome
+			failed := e.Action == "job.failed" || e.Outcome == store.OutcomeFailure || e.Outcome == store.OutcomeError
+			if !failed {
 				return Hit{}, false
 			}
-			ok := e.Action == "admin.change.failed"
+			ok := e.Action == "admin.change.failed" || e.Action == "job.failed"
 			for _, p := range []string{"connectors.", "connection.", "jml.", "provisioning.", "readiness."} {
 				ok = ok || strings.HasPrefix(e.Action, p)
 			}

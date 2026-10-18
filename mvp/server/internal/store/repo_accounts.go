@@ -48,6 +48,8 @@ var (
 		VALUES (@tenant, @system, @external_id, @identity_id, @username, @kind, @status, @created_at, @last_login_at)`)
 	accountsDisable = tq("accounts.disable", `
 		UPDATE accounts SET status = 'disabled' WHERE tenant_id = @tenant AND id = @id`)
+	accountsEnable = tq("accounts.enable", `
+		UPDATE accounts SET status = 'active' WHERE tenant_id = @tenant AND id = @id AND status = 'disabled'`)
 	accountsCount = tq("accounts.count", `
 		SELECT count(a.id) FROM accounts a WHERE a.tenant_id = @tenant`)
 	accountsCountSystems = tq("accounts.count_systems", `
@@ -123,6 +125,16 @@ func (tx *TenantTx) InsertAccount(a *Account) (int64, error) {
 func (tx *TenantTx) DisableAccount(id int64) error {
 	_, err := tx.exec(accountsDisable, sql.Named("id", id))
 	return err
+}
+
+// EnableAccount sets a disabled account back to active; it reports whether the account was disabled.
+func (tx *TenantTx) EnableAccount(id int64) (bool, error) {
+	res, err := tx.exec(accountsEnable, sql.Named("id", id))
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
 // CountAccounts counts accounts.
