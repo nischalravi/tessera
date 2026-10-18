@@ -481,7 +481,7 @@ func (s *Server) bootstrapRedeem(w http.ResponseWriter, r *http.Request, p *para
 
 // ---------------------------------------------------------------- the callback
 
-// loginTxnFromCookie resolves the login cookie to its active tenant and
+// loginTxnFromCookie resolves the login cookie to its active (or recovering) tenant and
 // transaction id; reason is set when the browser holds none that is usable.
 func (s *Server) loginTxnFromCookie(r *http.Request) (store.Tenant, uuid.UUID, string, error) {
 	c, err := r.Cookie(s.loginCookieName())
@@ -509,7 +509,9 @@ func (s *Server) loginTxnFromCookie(r *http.Request) (store.Tenant, uuid.UUID, s
 	}); err != nil {
 		return store.Tenant{}, uuid.Nil, "", err
 	}
-	if tenant.Status != "active" {
+	// the same rule as activeTenant: a tenant in operator recovery (§15.5)
+	// still signs in, so its admins can cancel and the invitation redeems
+	if (tenant.Status != "active" && tenant.Status != "recovery") || tenant.ID == tenancy.Platform {
 		return store.Tenant{}, uuid.Nil, "unknown_tenant", nil
 	}
 	return tenant, txnID, "", nil
