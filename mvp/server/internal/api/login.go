@@ -19,6 +19,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	authnorm "github.com/nischalravi/tessera/mvp/server/internal/auth/normalize"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oidcrp"
+	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -179,6 +180,7 @@ func (s *Server) loginFailure(w http.ResponseWriter, r *http.Request, t tenancy.
 	if t.IsZero() {
 		t = tenancy.Platform
 	}
+	obs.Logins.Inc(loginMethodOfRoute(obs.RouteFrom(r.Context())), "failure")
 	detail := append(ojson.Object{{Key: "via", Value: "oidc"}, {Key: "reason", Value: reason}}, extra...)
 	if err := s.store.InTenant(r.Context(), t, func(tx *store.TenantTx) error {
 		_, err := audit.Record(r.Context(), tx, "auth.login.failure", detail, audit.At(s.clock()),
@@ -193,6 +195,29 @@ func (s *Server) loginFailure(w http.ResponseWriter, r *http.Request, t tenancy.
 	w.Header().Set("Cache-Control", "no-store")
 	http.Redirect(w, r, LoginErrorURL(rid), http.StatusFound)
 	return nil, nil
+}
+
+// loginMethodOfRoute names the sign-in method of a login route pattern for
+// the tessera_login_total label (a closed set, never a connection id).
+func loginMethodOfRoute(route string) string {
+	switch {
+	case strings.Contains(route, "/saml/"):
+		return "saml"
+	case strings.Contains(route, "/oauth2/"):
+		return "oauth2"
+	case strings.Contains(route, "/oidc/"):
+		return "oidc"
+	}
+	return "other"
+}
+
+// loginMethodOfProtocol is the same label for a connection's protocol.
+func loginMethodOfProtocol(protocol string) string {
+	switch protocol {
+	case "oidc", "saml", "oauth2":
+		return protocol
+	}
+	return "other"
 }
 
 // LoginErrorURL is where a refused sign-in lands: the UI's sign-in page.

@@ -20,6 +20,7 @@ import (
 	"github.com/go-jose/go-jose/v4"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
+	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -494,6 +495,9 @@ func (c *Checkpointer) anchorPending(ctx context.Context, t store.Tenant, now ti
 	return anchored, failed, nil
 }
 
+// CheckpointLoopName is the checkpointer's name in obs.DefaultLoops.
+const CheckpointLoopName = "audit_checkpoint"
+
 // Loop runs Run every interval until ctx ends.
 func (c *Checkpointer) Loop(ctx context.Context, interval time.Duration) {
 	t := time.NewTicker(interval)
@@ -502,8 +506,9 @@ func (c *Checkpointer) Loop(ctx context.Context, interval time.Duration) {
 	if log == nil {
 		log = slog.Default()
 	}
+	obs.DefaultLoops.Register(CheckpointLoopName, interval, true)
 	for {
-		if _, err := c.Run(ctx, false); err != nil && ctx.Err() == nil {
+		if err := obs.DefaultLoops.Run(CheckpointLoopName, func() error { _, err := c.Run(ctx, false); return err }); err != nil && ctx.Err() == nil {
 			log.Error("audit checkpoint run failed", "err", err)
 		}
 		select {

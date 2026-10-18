@@ -37,6 +37,7 @@ import (
 	"net/url"
 	"slices"
 	"sync"
+	"time"
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver
 
@@ -255,7 +256,7 @@ func (d *DB) InTenant(ctx context.Context, t tenancy.ID, fn func(*TenantTx) erro
 		d.RecordContextMissing(ctx, "store.InTenant called with the zero tenant id")
 		return ErrNoTenant
 	}
-	d.mu.Lock()
+	d.lockWrite()
 	defer d.mu.Unlock()
 	return d.inTenant(ctx, t, false, fn)
 }
@@ -272,6 +273,12 @@ func (d *DB) ReadTenant(ctx context.Context, t tenancy.ID, fn func(*TenantTx) er
 }
 
 func (d *DB) inTenant(ctx context.Context, t tenancy.ID, readOnly bool, fn func(*TenantTx) error) (err error) {
+	kind := "tenant_write"
+	if readOnly {
+		kind = "tenant_read"
+	}
+	start := time.Now()
+	defer func() { observeTx(kind, start, err) }() // runs after the commit below, so err is final
 	sqltx, err := d.sql.BeginTx(ctx, &sql.TxOptions{ReadOnly: readOnly})
 	if err != nil {
 		return fmt.Errorf("store: begin: %w", err)
@@ -311,12 +318,14 @@ func (d *DB) InSystem(ctx context.Context, reason string, fn func(*SystemTx) err
 	if reason == "" {
 		return errors.New("store: InSystem needs a reason")
 	}
-	d.mu.Lock()
+	d.lockWrite()
 	defer d.mu.Unlock()
 	return d.inSystemLocked(ctx, reason, fn)
 }
 
 func (d *DB) inSystemLocked(ctx context.Context, reason string, fn func(*SystemTx) error) (err error) {
+	start := time.Now()
+	defer func() { observeTx("system_write", start, err) }()
 	sqltx, err := d.sql.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin: %w", err)
@@ -342,6 +351,8 @@ func (d *DB) ReadSystem(ctx context.Context, reason string, fn func(*SystemTx) e
 	if reason == "" {
 		return errors.New("store: ReadSystem needs a reason")
 	}
+	start := time.Now()
+	defer func() { observeTx("system_read", start, err) }()
 	sqltx, err := d.sql.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return fmt.Errorf("store: begin: %w", err)
