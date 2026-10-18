@@ -471,6 +471,28 @@ func (s *AnchorSet) Has(tid string, seq int64, jws string) bool {
 // ForTenant returns the anchors of tid, in the order they were anchored.
 func (s *AnchorSet) ForTenant(tid string) []Anchor { return s.byTenant[tid] }
 
+// Upto keeps only the anchors at or below each tenant's head seq (tenants
+// not in heads are dropped). Verifying a restored backup against the live
+// anchor source needs this: checkpoints anchored after the backup was taken
+// would otherwise read as truncation.
+func (s *AnchorSet) Upto(heads map[string]int64) *AnchorSet {
+	out := &AnchorSet{byKey: map[string][]string{}, byTenant: map[string][]Anchor{}, Lines: s.Lines}
+	for tid, as := range s.byTenant {
+		head, ok := heads[tid]
+		if !ok {
+			continue
+		}
+		for _, a := range as {
+			if a.Seq <= head {
+				k := anchorKey(a.TID, a.Seq)
+				out.byKey[k] = append(out.byKey[k], a.JWS)
+				out.byTenant[tid] = append(out.byTenant[tid], a)
+			}
+		}
+	}
+	return out
+}
+
 // maxAnchorLine caps one line of an anchor file.
 const maxAnchorLine = 16 << 10
 
@@ -525,6 +547,9 @@ type Checkpointer struct {
 	Log         *slog.Logger
 	// Only, when set, limits a run to the tenants it accepts (the CLI's -tenant).
 	Only func(store.Tenant) bool
+	// OnTenant, when set, is called after each tenant's turn with what it did
+	// (job run history, issue #172).
+	OnTenant func(ctx context.Context, t store.Tenant, started, finished time.Time, created bool, anchored, failed int, err error)
 }
 
 // maxAnchorAttempts is when a failing anchor is reported as an alert.
@@ -577,29 +602,47 @@ func (c *Checkpointer) Run(ctx context.Context, force bool) (RunResult, error) {
 		if t.Status != "active" || (c.Only != nil && !c.Only(t)) {
 			continue
 		}
-		due, err := c.due(ctx, t.ID, clock(), force)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("tenant %s: %w", t.Slug, err))
-			continue
+		started := clock()
+		created, a, f, err := c.runTenant(ctx, t, clock, force, loadKey, &key, log)
+		if c.OnTenant != nil {
+			c.OnTenant(ctx, t, started, clock(), created, a, f, err)
 		}
-		if due {
-			if err := loadKey(); err != nil {
-				return res, fmt.Errorf("audit: checkpoint key: %w", err)
-			}
-			if err := c.create(ctx, t, key, clock()); err != nil {
-				errs = append(errs, fmt.Errorf("tenant %s: %w", t.Slug, err))
-				continue
-			}
+		if created {
 			res.Created++
 		}
-		a, f, err := c.anchorPending(ctx, t, clock(), log)
 		res.Anchored += a
 		res.Failed += f
+		if errors.Is(err, errCheckpointKey) {
+			return res, err
+		}
 		if err != nil {
 			errs = append(errs, fmt.Errorf("tenant %s: %w", t.Slug, err))
 		}
 	}
 	return res, errors.Join(errs...)
+}
+
+var errCheckpointKey = errors.New("audit: checkpoint key")
+
+// runTenant is one tenant's turn: create a checkpoint when due, then anchor
+// pending ones.
+func (c *Checkpointer) runTenant(ctx context.Context, t store.Tenant, clock timeutil.Clock, force bool, loadKey func() error,
+	key **keys.SigningKey, log *slog.Logger) (created bool, anchored, failed int, err error) {
+	due, err := c.due(ctx, t.ID, clock(), force)
+	if err != nil {
+		return false, 0, 0, err
+	}
+	if due {
+		if err := loadKey(); err != nil {
+			return false, 0, 0, fmt.Errorf("%w: %w", errCheckpointKey, err)
+		}
+		if err := c.create(ctx, t, *key, clock()); err != nil {
+			return false, 0, 0, err
+		}
+		created = true
+	}
+	anchored, failed, err = c.anchorPending(ctx, t, clock(), log)
+	return created, anchored, failed, err
 }
 
 func (c *Checkpointer) due(ctx context.Context, t tenancy.ID, now time.Time, force bool) (bool, error) {

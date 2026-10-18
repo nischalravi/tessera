@@ -101,6 +101,10 @@ var tables = []string{
 	"connections", "connection_revisions", "readiness_check_runs", "readiness_item_states", "readiness_attestations",
 	"readiness_skips", "readiness_overlays", "readiness_check_results", "recon_runs", "recon_findings", "readiness_scores",
 	"stg_identities", "stg_accounts", "stg_groups", "stg_memberships", "stg_attr_stats",
+	// job run history (schema/0281_job_runs.sql)
+	"job_runs",
+	// closed-loop provisioning (schema/0282-0283)
+	"provisioning_targets", "provisioning_ops", "provisioning_findings",
 	// sealed connection credentials (schema/0205)
 	"connection_secrets",
 	// account correlation (schema/0204_correlation.sql)
@@ -220,6 +224,26 @@ func (d *DB) Checkpoint(ctx context.Context) error {
 	}
 	_, err := d.sql.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)")
 	return err
+}
+
+// ErrSnapshotUnsupported is returned by Snapshot on Postgres: tessera backup
+// is SQLite-only for now (back up Postgres with pg_dump or the managed
+// service's snapshots; see docs/runbooks/disaster-recovery.md).
+var ErrSnapshotUnsupported = errors.New("store: snapshot is SQLite-only; back up Postgres with pg_dump or your provider's snapshots")
+
+// IsPostgres reports whether the store runs on Postgres.
+func (d *DB) IsPostgres() bool { return d.d == dialectPostgres }
+
+// Snapshot writes a transactionally consistent copy of the whole database to
+// path with VACUUM INTO, while the server keeps serving. path must not exist.
+func (d *DB) Snapshot(ctx context.Context, path string) error {
+	if d.d == dialectPostgres {
+		return ErrSnapshotUnsupported
+	}
+	if _, err := d.sql.ExecContext(ctx, "VACUUM INTO ?", path); err != nil {
+		return fmt.Errorf("store: snapshot: %w", err)
+	}
+	return nil
 }
 
 // Migrate creates the schema and the reserved _platform tenant; drop=true

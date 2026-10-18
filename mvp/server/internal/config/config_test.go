@@ -96,6 +96,7 @@ func TestProdRefusesEachUnsafeSetting(t *testing.T) {
 		{"outbound loopback", []string{"TESSERA_OUTBOUND_ALLOW_LOOPBACK", "true"}, "TESSERA_OUTBOUND_ALLOW_LOOPBACK must be false"},
 		{"safedial allowlist", []string{"TESSERA_SAFEDIAL_ALLOW", "192.168.1.10:636"}, "TESSERA_SAFEDIAL_ALLOW must not be set"},
 		{"dev IdP URL set", []string{"TESSERA_DEV_IDP_URL", "http://127.0.0.1:8001"}, "TESSERA_DEV_IDP_URL must not be set"},
+		{"dev fake provisioning target", []string{"TESSERA_DEV_FAKE_TARGET", "1"}, "TESSERA_DEV_FAKE_TARGET must not be set"},
 		{"file audit anchor", []string{"TESSERA_AUDIT_ANCHOR", "file://server/var/audit-anchors.jsonl"}, "must not be file://"},
 		{"audit anchor missing", []string{"TESSERA_AUDIT_ANCHOR", "<unset>"}, "TESSERA_AUDIT_ANCHOR is required"},
 		{"file audit anchor, upper case", []string{"TESSERA_AUDIT_ANCHOR", "FILE:///srv/a.jsonl"}, "TESSERA_AUDIT_ANCHOR"},
@@ -460,6 +461,22 @@ func TestTestEnvAndInsecureCookie(t *testing.T) {
 	c, err = config.Load(env(map[string]string{"TESSERA_ENV": "dev", "TESSERA_PUBLIC_URL": "https://tessera.example.com/app"}))
 	if err != nil || c.PublicOrigin() != "https://tessera.example.com" {
 		t.Errorf("public origin %q %v", c.PublicOrigin(), err)
+	}
+}
+
+// The fake provisioning target is a dev tool: off by default, on in dev when asked.
+func TestFakeTargetIsDevOnly(t *testing.T) {
+	for _, tc := range []struct {
+		env  map[string]string
+		want bool
+	}{
+		{map[string]string{"TESSERA_ENV": "dev"}, false},
+		{map[string]string{"TESSERA_ENV": "dev", "TESSERA_DEV_FAKE_TARGET": "1"}, true},
+	} {
+		c, err := config.Load(env(tc.env))
+		if err != nil || c.FakeTarget != tc.want {
+			t.Errorf("%v: FakeTarget = %v, %v; want %v", tc.env, c != nil && c.FakeTarget, err, tc.want)
+		}
 	}
 }
 
