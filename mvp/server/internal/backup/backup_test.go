@@ -15,6 +15,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/backup"
+	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
@@ -303,7 +304,7 @@ func TestUpload(t *testing.T) {
 		got, _ = io.ReadAll(r.Body)
 	}))
 	defer srv.Close()
-	client, err := safehttp.New(safehttp.Options{Env: "dev", AllowLoopback: true})
+	client, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Dev, AllowLoopback: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +314,7 @@ func TestUpload(t *testing.T) {
 	if want, _ := os.ReadFile(c.Path); !bytes.Equal(got, want) {
 		t.Error("uploaded bytes differ")
 	}
-	guarded, _ := safehttp.New(safehttp.Options{Env: "prod"})
+	guarded, _ := safehttp.NewForTest(t, safehttp.Options{Env: config.Prod})
 	if err := backup.Upload(context.Background(), guarded, srv.URL+"/x", c.Path); err == nil {
 		t.Error("the SSRF guard let a prod upload reach loopback")
 	}
