@@ -5,9 +5,9 @@ import { IdentityDetail, SimResult, ago, api, fmtDate, fmtDay, invalidLink, isNu
 import { useIdentityActions } from "../../app/actions";
 import { usePersona } from "../../app/persona";
 import {
-  Avatar, Badge, Button, Callout, Chip, Drawer, EmptyState, IdLink, Loading, Menu, Page, PathView, PreviewBadge, Segmented, Sev, SimulationView, Status, Tabs, TypeBadge, useToast,
+  Avatar, Badge, Button, Callout, Chip, Drawer, EmptyState, IdLink, Loading, Menu, Page, PathView, Segmented, Sev, SimulationView, Status, Tabs, TypeBadge, useToast,
 } from "../../components";
-import { mockIdentityOps, mockObjects, useMockState } from "../../mocks";
+import { mockObjects } from "../../mocks";
 import { useSession } from "../../app/auth";
 import { AffiliationsSection, IdentifiersSection } from "./affiliations";
 import { MergeDialog } from "./correlation";
@@ -62,7 +62,7 @@ export function RevokeDrawer({ edgeId, onClose, onDone }: { edgeId: number; onCl
 
 type Tab = "access" | "grants" | "violations" | "recs" | "accounts" | "affiliations" | "delegation" | "lifecycle";
 
-function Header({ d, disabledAt }: { d: IdentityDetail; disabledAt?: string }) {
+function Header({ d }: { d: IdentityDetail }) {
   const acts = useIdentityActions();
   const { actor } = usePersona();
   const toast = useToast();
@@ -72,7 +72,7 @@ function Header({ d, disabledAt }: { d: IdentityDetail; disabledAt?: string }) {
   const { can } = useSession();
   const nav = useNavigate();
   const human = d.type === "human";
-  const status = disabledAt && d.status === "active" ? "disabled" : d.status;
+  const status = d.status;
   return (
     <>
       <div className="object-head card">
@@ -83,7 +83,6 @@ function Header({ d, disabledAt }: { d: IdentityDetail; disabledAt?: string }) {
               <TypeBadge type={d.type} />
               <Status s={status} />
               {!human && !d.owner && <Badge tone="critical">No owner</Badge>}
-              {disabledAt && <PreviewBadge what="Disabled in this browser by a Preview action" />}
             </div>
             <div className="small muted" style={{ marginTop: 6 }}>
               {[d.title, d.department, d.email].filter(Boolean).join(" · ")}
@@ -98,9 +97,9 @@ function Header({ d, disabledAt }: { d: IdentityDetail; disabledAt?: string }) {
         </div>
         <div className="row tight object-actions" role="toolbar" aria-label="Actions">
           {status === "disabled" ? (
-            <Button size="sm" icon={<UserCheck size={14} />} onClick={async () => { await mockIdentityOps.enable(d.id, d.name, actor); toast(`${d.name} re-enabled (preview)`); }}>Enable</Button>
+            <Button size="sm" icon={<UserCheck size={14} />} disabled={!can("identities.contain")} title={can("identities.contain") ? undefined : "Needs the identities.contain permission"} onClick={() => acts.enable(d)}>Enable</Button>
           ) : (
-            <Button size="sm" variant="danger" icon={<Ban size={14} />} disabled={d.status === "terminated" || d.status === "merged"} onClick={() => acts.disable(d)}>Disable</Button>
+            <Button size="sm" variant="danger" icon={<Ban size={14} />} disabled={d.status !== "active" || !can("identities.contain")} title={can("identities.contain") ? undefined : "Needs the identities.contain permission"} onClick={() => acts.disable(d)}>Disable</Button>
           )}
           {human ? (
             <Button size="sm" icon={<RotateCcw size={14} />} disabled={status !== "active"} onClick={() => acts.resetPassword(d)}>Reset password</Button>
@@ -173,7 +172,6 @@ export function IdentityPage() {
   const validId = isNumericId(id);
   const { data: d, error: loadError, reload } = useApi<IdentityDetail>(validId ? `/identities/${id}` : null);
   const error = validId ? loadError : invalidLink();
-  const mock = useMockState();
   const [open, setOpen] = useState<string | null>(null);
   const [filter, setFilter] = useState<"" | "unused" | "privileged" | "sensitive">("");
   const [revoke, setRevoke] = useState<number | null>(null);
@@ -198,7 +196,7 @@ export function IdentityPage() {
 
   return (
     <Page title={d.name} crumbs={crumbs}>
-      <Header d={d} disabledAt={mock.disabled[d.id]} />
+      <Header d={d} />
       {d.description && <div className="mt"><Callout tone="neutral">{d.description}</Callout></div>}
       <div className="card mt">
         <div className="stat-row">

@@ -16,6 +16,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
+	"github.com/nischalravi/tessera/mvp/server/internal/orgs"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -145,6 +146,11 @@ var crossTenantCases = map[string]crossTenantCase{
 	"GET identity containment": {method: "GET", path: pathf("/api/identities/%d/containment"), key: "alice"},
 	"POST contain identity": {method: "POST", path: pathf("/api/identities/%d/contain"), key: "alice",
 		body: func(int64) string { return `{"reason":"suspected credential compromise"}` }},
+	"GET identity disables": {method: "GET", path: pathf("/api/identities/%d/disables"), key: "alice"},
+	"POST disable identity": {method: "POST", path: pathf("/api/identities/%d/disable"), key: "alice",
+		body: func(int64) string { return `{"reason":"suspected credential compromise"}` }},
+	"POST enable identity": {method: "POST", path: pathf("/api/identities/%d/enable"), key: "alice",
+		body: func(int64) string { return `{"reason":"suspected credential compromise"}` }},
 }
 
 // routeParamKey maps each route with path parameters to the cases above.
@@ -171,6 +177,9 @@ var routeParamCases = map[string][]string{
 	"POST /api/identities/{identity_id}/affiliations":     {"POST add affiliation"},
 	"POST /api/identities/{identity_id}/contain":          {"POST contain identity"},
 	"GET /api/identities/{identity_id}/containment":       {"GET identity containment"},
+	"GET /api/identities/{identity_id}/disables":          {"GET identity disables"},
+	"POST /api/identities/{identity_id}/disable":          {"POST disable identity"},
+	"POST /api/identities/{identity_id}/enable":           {"POST enable identity"},
 }
 
 // TestIsolation_RouteCrossTenant: as tenant B, every route with a path
@@ -209,6 +218,15 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		}
 		if strings.HasPrefix(rt.Pattern, "/api/approvals/delegations/{delegation_id}") {
 			continue // TestApprovalsAPI_CrossTenant (a UUID, not a fixture id)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/removal-requests/{request_id}") {
+			continue // TestRemovalAPI_StepUpAndCrossTenant (a UUID, not a fixture id)
+		}
+		if rt.Pattern == "/api/orgs/{org_id}" {
+			continue // TestOrgsAPI (ids are derived from department names, not fixture ids)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/request-drafts/{draft_id}") {
+			continue // TestRequestDraftsAPI (a UUID, private to its user)
 		}
 		if strings.HasPrefix(rt.Pattern, "/api/requests/{request_id}") {
 			continue // TestRequestsAPI_CrossTenant (a UUID, not a fixture id)
@@ -330,6 +348,8 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		"/api/audit/events/{event_id}/proof":         latestEventID(t, f.DB, f.B.ID),
 		"/api/email/messages/{message_id}":           seedEmailMessage(t, f, f.B, store.EmailDeferred),
 		"/api/identities/{identity_id}/containment":  fmt.Sprint(b["alice"]),
+		"/api/identities/{identity_id}/disables":     fmt.Sprint(b["alice"]),
+		"/api/orgs/{org_id}":                         orgs.RootID,
 	}
 	checked := 0
 	for _, rt := range srv.Routes() {
@@ -345,6 +365,9 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		}
 		if strings.HasPrefix(path, "/api/groups/") && strings.Contains(path, "{") {
 			continue // TestGroupsTenantIsolation (UUIDs, not fixture ids)
+		}
+		if path == "/api/request-drafts/{draft_id}" {
+			continue // TestRequestDraftsAPI (a UUID, private to its user)
 		}
 		if strings.Contains(path, "{") {
 			v, ok := values[path]
