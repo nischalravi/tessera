@@ -2,7 +2,9 @@ package readiness
 
 import (
 	"bytes"
+	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -16,8 +18,13 @@ import (
 // revision. Decoding is strict: an unknown field (for example "password") is
 // rejected, so a credential can never be smuggled into config text.
 type ConnConfig struct {
-	Host               string              `json:"host,omitempty"`
-	Port               int                 `json:"port,omitempty"`
+	Host string `json:"host,omitempty"`
+	Port int    `json:"port,omitempty"`
+	// BindDN is the LDAP bind identity (not a secret; the password is the
+	// sealed credential). CABundle is the PEM of the CA that signed the
+	// directory's certificate (public); empty means the system roots.
+	BindDN             string              `json:"bind_dn,omitempty"`
+	CABundle           string              `json:"ca_bundle,omitempty"`
 	BaseDNs            []string            `json:"base_dns,omitempty"`
 	UserFilter         string              `json:"user_filter,omitempty"`
 	GroupFilter        string              `json:"group_filter,omitempty"`
@@ -169,6 +176,18 @@ func Validate(cfg ConnConfig, t *template.Resolved) []FieldError {
 		}
 		text("user_filter", cfg.UserFilter, 1024)
 		text("group_filter", cfg.GroupFilter, 1024)
+		if cfg.BindDN != "" && (len(cfg.BindDN) > 512 || !dnRE.MatchString(cfg.BindDN)) {
+			bad("bind_dn", "must be a distinguished name")
+		}
+		if cfg.CABundle != "" {
+			if len(cfg.CABundle) > 64<<10 {
+				bad("ca_bundle", "longer than 64 KiB")
+			} else if strings.Contains(cfg.CABundle, "PRIVATE KEY") {
+				bad("ca_bundle", "must hold certificates only, never a private key")
+			} else if _, err := caPool(cfg.CABundle); err != nil {
+				bad("ca_bundle", "%v", err)
+			}
+		}
 	case "entra":
 		if !guidRE.MatchString(cfg.TenantID) {
 			bad("tenant_id", "must be the tenant GUID, not a domain")
@@ -240,6 +259,15 @@ func Validate(cfg ConnConfig, t *template.Resolved) []FieldError {
 		}
 	}
 	return errs
+}
+
+// caPool parses a PEM CA bundle.
+func caPool(pemData string) (*x509.CertPool, error) {
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM([]byte(pemData)) {
+		return nil, errors.New("holds no PEM certificate")
+	}
+	return pool, nil
 }
 
 // HostAllowed matches a host against allowlist patterns ("*.okta.com" matches
