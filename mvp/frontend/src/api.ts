@@ -1677,6 +1677,88 @@ export const readiness = {
     "/insights/deployment-health/rerun", { reconcile }),
 };
 
+// ----------------------------------------------------- provisioning (#103)
+
+export type ProvStatus = "queued" | "sent" | "pending_verification" | "verified" | "mismatch" | "failed" | "cancelled";
+export type ProvKind = "create_account" | "update_account" | "disable_account" | "delete_account" | "add_entitlement" | "remove_entitlement";
+
+export interface ProvOp {
+  id: string; connection_id: string; connection_name: string; system: string; kind: ProvKind; target: string;
+  source: "jml" | "review" | "jit" | "leastpriv" | "api"; status: ProvStatus; attempts: number; verify_attempts: number;
+  next_attempt_at: string; last_error: string | null; observed: string | null; requested_by: string; idempotency_key: string;
+  completion: string | null; created_at: string; updated_at: string; completed_at: string | null; can_retry: boolean; can_cancel: boolean;
+}
+
+export interface ProvFinding {
+  id: string; op_id: string; connection_id: string; code: string; severity: "high" | "medium" | "low"; title: string;
+  expected: string; observed: string; status: "open" | "resolved"; created_at: string; resolved_at: string | null;
+}
+
+export interface ProvOpDetail extends ProvOp { payload: { account?: Record<string, unknown>; group?: Record<string, unknown> }; findings: ProvFinding[] }
+
+export interface ProvTarget {
+  connection_id: string; connection_name: string; system: string; kind: "scim" | "okta" | "fake"; base_url: string;
+  dialect?: "standard" | "entra"; fault?: string; write_back: boolean; has_credential: boolean; credential_version: string | null; updated_at: string;
+}
+
+/** token is write-only: omit it to keep the stored credential. */
+export interface ProvTargetInput { kind: ProvTarget["kind"]; base_url: string; dialect?: string; fault?: string; token?: string; write_back: boolean }
+
+export const provisioning = {
+  targets: () => api<ProvTarget[]>("/provisioning/targets"),
+  putTarget: (connectionId: string, body: ProvTargetInput) => apiNoResume<ProvTarget>(`/provisioning/targets/${connectionId}`, body, "PUT"),
+  deleteTarget: (connectionId: string) => api<{ removed: boolean }>(`/provisioning/targets/${connectionId}`, undefined, "DELETE"),
+  get: (id: string) => api<ProvOpDetail>(`/provisioning/ops/${encodeURIComponent(id)}`),
+  retry: (id: string) => api<ProvOpDetail>(`/provisioning/ops/${encodeURIComponent(id)}/retry`, {}),
+  cancel: (id: string) => api<ProvOpDetail>(`/provisioning/ops/${encodeURIComponent(id)}/cancel`, {}),
+  /** Takes the due operations now instead of at the worker's next tick (every 5 seconds). */
+  run: () => api<{ processed: number; verified: number; mismatch: number; failed: number; retrying: number }>("/provisioning/run", {}),
+};
+
+// ----------------------------------------------------- job runs (#172)
+
+export interface JobRun {
+  id: string; kind: string; trigger: "manual" | "schedule" | "retry"; status: "running" | "succeeded" | "failed";
+  connection_id: string | null; method: string | null; path: string | null; retryable: boolean; retry_of: string | null;
+  actor: string; started_at: string; finished_at: string | null; duration_ms: number | null; result: unknown; error: string | null;
+}
+
+export const jobs = {
+  list: (q = "") => api<JobRun[]>(`/jobs${q}`),
+  get: (id: string) => api<JobRun>(`/jobs/${encodeURIComponent(id)}`),
+  /** Replays the run's API call as you; its own permission and step-up apply. */
+  retry: (id: string) => api<unknown>(`/jobs/${encodeURIComponent(id)}/retry`, {}),
+};
+
+// ------------------------------------------------- config transport (#170)
+
+export interface SigningKey { kid: string; public_key: string; tenant: string; created_at: string | null }
+export interface TrustedSigner { kid: string; public_key: string; label: string; added_by: string | null; added_at: string }
+export interface ExportedBundle { hash: string; kid: string; file_name: string; excluded: { section: string; name: string; reason: string }[] | null; bundle: unknown }
+export type ImportAction = "add" | "change" | "remove" | "unchanged" | "manual";
+export interface PlanItem { section: "connections" | "overlays" | "identity_providers"; name: string; action: ImportAction; fields?: string[]; notes?: string[] }
+export interface ImportPlan {
+  hash: string; digest: string; digest_prune: string; signer: string; signer_kid: string; exported_at: string; items: PlanItem[]; refusals: string[];
+  source: { tenant_id: string; tenant: string; env: string; instance?: string; exported_by: string };
+  counts: Record<ImportAction, number>;
+}
+export interface ConfigImport { id: string; bundle_hash: string; signer_kid: string; source: string; exported_at: string; summary: Record<ImportAction, number>; applied_by: string | null; applied_at: string }
+
+export const configTransport = {
+  signingKey: () => api<{ key: SigningKey | null }>("/config/signing-key"),
+  export: () => api<ExportedBundle>("/config/export", {}),
+  signers: () => api<TrustedSigner[]>("/config/trusted-signers"),
+  trust: (body: { kid: string; public_key: string; label: string }) => api<TrustedSigner>("/config/trusted-signers", body),
+  untrust: (kid: string) => api<{ removed: string }>(`/config/trusted-signers/${encodeURIComponent(kid)}`, undefined, "DELETE"),
+  /** bundle is the parsed exported file: the server verifies its signature, not its bytes. */
+  plan: (bundle: unknown) => api<ImportPlan>("/config/import/plan", bundle),
+  /** The apply is bound to the reviewed plan: plan.digest, or plan.digest_prune with prune. */
+  apply: (bundle: unknown, plan: ImportPlan, prune: boolean) =>
+    api<{ import_id: string; plan: ImportPlan }>(
+      `/config/import/apply?hash=${encodeURIComponent(plan.hash)}&digest=${encodeURIComponent(prune ? plan.digest_prune : plan.digest)}${prune ? "&prune=true" : ""}`, bundle),
+  imports: () => api<ConfigImport[]>("/config/imports"),
+};
+
 // ------------------------------------------------------------ admin changes (design §15, §16.1)
 
 export type ChangeStatus = "pending_approval" | "cooling_off" | "applied" | "rejected" | "cancelled" | "expired" | "failed";

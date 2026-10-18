@@ -1,14 +1,17 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
-  ArrowLeftRight, Bell, Mail, CircleCheck, Clock, Download, FileBadge, Fingerprint, KeySquare, LucideIcon, Palette, Play, Plug, ScrollText, Search, Settings, ShieldCheck, UserCog,
+  ArrowLeftRight, Bell, Mail, Clock, Download, FileBadge, Fingerprint, KeySquare, LucideIcon, Palette, Plug, ScrollText, Search, Settings, ShieldCheck, UserCog,
 } from "lucide-react";
-import { AuditRow, AuditVerifyReport, api, fmtDate, relTime, useApi } from "../../api";
+import { AuditRow, AuditVerifyReport, api, fmtDate, useApi } from "../../api";
 import { fuzzy } from "../../app/fuzzy";
 import { Badge, Button, Callout, DataTable, EmptyState, Page, PreviewBadge, useToast } from "../../components";
 import { EmailDelivery } from "../notifications/EmailDelivery";
 import { NotificationsAdminPanel } from "../notifications/Notifications";
 import { ADMIN_BY_ID, ADMIN_SECTIONS, AdminSection, useMockState } from "../../mocks";
+import { Jobs } from "./Jobs";
+import { Provisioning } from "./Provisioning";
+import { ConfigTransfer } from "./ConfigTransfer";
 
 const ICONS: Record<string, LucideIcon> = { Plug, Fingerprint, UserCog, Bell, Mail, Palette, Clock, ScrollText, FileBadge, ArrowLeftRight, KeySquare };
 const Icon = ({ name, size = 18 }: { name: string; size?: number }) => {
@@ -54,47 +57,6 @@ export function Admin() {
 }
 
 // ---------------------------------------------------------------- live bits
-function Jobs() {
-  const toast = useToast();
-  const [ran, setRan] = useState<Record<string, string>>({});
-  const [busy, setBusy] = useState<string | null>(null);
-  const jobs: { id: string; name: string; schedule: string; run: () => Promise<string> }[] = [
-    { id: "sync", name: "Connector sync", schedule: "On demand (demo)", run: async () => { const s = await api<Record<string, number>>("/connectors/sync", {}); return Object.entries(s).slice(0, 3).map(([k, v]) => `${v} ${k.replace(/_/g, " ")}`).join(", "); } },
-    { id: "sweep", name: "Just-in-time expiry sweeper", schedule: "Every 30 seconds", run: async () => { const r = await api<{ expired: number }>("/jit/sweep", {}); return `${r.expired} elevations expired`; } },
-  ];
-  const run = async (j: (typeof jobs)[number]) => {
-    setBusy(j.id);
-    try {
-      const out = await j.run();
-      setRan({ ...ran, [j.id]: new Date().toISOString() });
-      toast(`${j.name}: ${out}`);
-    } catch (e) {
-      toast((e as Error).message, { kind: "error" });
-    } finally {
-      setBusy(null);
-    }
-  };
-  return (
-    <div className="card flush">
-      <div className="table-scroll">
-        <table>
-          <thead><tr><th>Job</th><th>Schedule</th><th>Last run here</th><th /></tr></thead>
-          <tbody>
-            {jobs.map((j) => (
-              <tr key={j.id}>
-                <td><b>{j.name}</b></td>
-                <td className="small">{j.schedule}</td>
-                <td className="small">{ran[j.id] ? <span className="row tight"><CircleCheck size={13} style={{ color: "var(--ok)" }} aria-hidden /> {relTime(ran[j.id].replace("Z", ""))}</span> : <span className="faint">Not run from this page</span>}</td>
-                <td className="actions-cell"><Button size="sm" icon={<Play size={13} />} disabled={busy === j.id} onClick={() => run(j)}>Run now</Button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
 const OUTCOME_TONE: Record<string, "ok" | "warning" | "critical" | "neutral"> = { success: "ok", denied: "critical", failure: "warning", error: "critical" };
 
 /** Read-only view of the tenant's hash-chained audit ledger (design §13, §17). */
@@ -191,7 +153,7 @@ function AuditLog() {
   );
 }
 
-const LIVE: Record<string, () => React.JSX.Element> = { jobs: Jobs, audit: AuditLog, notifications: NotificationsAdminPanel, "email-delivery": EmailDelivery };
+const LIVE: Record<string, () => React.JSX.Element> = { jobs: Jobs, audit: AuditLog, provisioning: Provisioning, "config-transfer": ConfigTransfer, notifications: NotificationsAdminPanel, "email-delivery": EmailDelivery };
 
 export function AdminSectionPage() {
   const { section } = useParams();
