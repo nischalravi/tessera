@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 )
 
@@ -176,33 +177,27 @@ func (s *Syslog) Frame(r Record) []byte {
 	return append([]byte(strconv.Itoa(len(full))+" "), full...)
 }
 
-func (s *Syslog) resolve(ctx context.Context, host string) ([]netip.Addr, error) {
-	if a, err := netip.ParseAddr(host); err == nil {
-		return []netip.Addr{a}, nil
-	}
-	if s.Resolver != nil {
-		return s.Resolver(ctx, host)
-	}
-	return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+// resolverFunc adapts Syslog.Resolver to safehttp.Resolver.
+type resolverFunc func(ctx context.Context, host string) ([]netip.Addr, error)
+
+func (f resolverFunc) LookupNetIP(ctx context.Context, _, host string) ([]netip.Addr, error) {
+	return f(ctx, host)
 }
 
-// checkedAddr resolves host and returns the address to dial, refusing the
-// host if any of its addresses is blocked.
-func (s *Syslog) checkedAddr(ctx context.Context, host string) (netip.Addr, error) {
-	addrs, err := s.resolve(ctx, host)
-	if err != nil || len(addrs) == 0 {
-		return netip.Addr{}, retryable("syslog: cannot resolve %s", host)
+// dialer is the SSRF-guarded dialer of internal/safehttp (the one the SMTP
+// sender uses): the host is resolved once, refused if any address is
+// blocked, and only the checked addresses are connected to. Only the
+// collector's own port is allowed.
+func (s *Syslog) dialer(port int, timeout time.Duration) (safehttp.DialFunc, error) {
+	env := config.Prod
+	if s.Loopback {
+		env = config.Dev
 	}
-	for _, a := range addrs {
-		a = a.Unmap()
-		if s.Loopback && a.IsLoopback() {
-			continue
-		}
-		if safehttp.Blocked(a) {
-			return netip.Addr{}, &SendError{Permanent: true, Msg: fmt.Sprintf("syslog: %s resolves to a blocked address", host)}
-		}
+	o := safehttp.Options{Env: env, AllowLoopback: s.Loopback, AllowedPorts: []int{port}, Timeout: timeout}
+	if s.Resolver != nil {
+		o.Resolver = resolverFunc(s.Resolver)
 	}
-	return addrs[0].Unmap(), nil
+	return safehttp.NewDialer(o)
 }
 
 // Send writes the batch on one TLS connection.
@@ -211,25 +206,35 @@ func (s *Syslog) Send(ctx context.Context, batch []Record) error {
 	if err != nil {
 		return &SendError{Permanent: true, Msg: "syslog: target must be host:port"}
 	}
-	ip, err := s.checkedAddr(ctx, host)
-	if err != nil {
-		return err
+	portNum, err := strconv.Atoi(port)
+	if err != nil || portNum < 1 || portNum > 65535 {
+		return &SendError{Permanent: true, Msg: "syslog: target must be host:port"}
 	}
 	timeout := s.Timeout
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
+	dial, err := s.dialer(portNum, timeout)
+	if err != nil {
+		return &SendError{Permanent: true, Msg: fmt.Sprintf("syslog: %v", err)}
+	}
+	raw, err := dial(ctx, "tcp", s.Addr)
+	if err != nil {
+		if errors.Is(err, safehttp.ErrBlockedAddress) || errors.Is(err, safehttp.ErrPort) {
+			return &SendError{Permanent: true, Msg: fmt.Sprintf("syslog: %s resolves to a blocked address or port", host)}
+		}
+		return retryable("syslog: %v", err)
+	}
 	cfg := &tls.Config{ServerName: host, RootCAs: s.RootCAs, MinVersion: tls.VersionTLS12}
 	if s.tlsConfig != nil {
 		cfg = s.tlsConfig
 	}
-	d := &tls.Dialer{NetDialer: &net.Dialer{Timeout: timeout}, Config: cfg}
-	conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(ip.String(), port))
-	if err != nil {
-		return retryable("syslog: %v", err)
-	}
+	conn := tls.Client(raw, cfg)
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(timeout))
+	if err := conn.HandshakeContext(ctx); err != nil {
+		return retryable("syslog: %v", err)
+	}
 	var buf bytes.Buffer
 	for _, r := range batch {
 		buf.Write(s.Frame(r))

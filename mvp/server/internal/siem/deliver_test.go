@@ -321,7 +321,7 @@ func TestWebhookHECAndJSON(t *testing.T) {
 	js := w.create(t, siem.SinkSpec{Name: "Sentinel", Kind: "webhook", Format: siem.FormatJSON, Target: srv.URL + "/ingest",
 		Flavor: siem.FlavorJSON, Token: &bearer, Enabled: true})
 	w.events(t, 3)
-	client, err := safehttp.New(safehttp.Options{Env: config.Dev, AllowLoopback: true})
+	client, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Dev, AllowLoopback: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -505,7 +505,7 @@ func TestSSRFGuard(t *testing.T) {
 		t.Errorf("loopback outside dev: %v", err)
 	}
 	// webhooks: the production safehttp client refuses the metadata address
-	prod, err := safehttp.New(safehttp.Options{Env: config.Prod})
+	prod, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Prod})
 	if err != nil {
 		t.Fatal(err)
 	}
