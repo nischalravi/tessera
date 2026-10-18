@@ -206,6 +206,35 @@ To point a local dev instance at a real LDAP or LLDAP server (for example an LLD
    It logs every check's status and message (never the password) and fails if TLS, bind, the base
    DNs or the people search do not pass.
 
+### Config transport (dev → test → prod)
+
+Admin → Export / import configuration moves a tenant's connections (config, owners, credential
+*references*), readiness overlays and sign-in connections to another tenant, usually on another
+instance, as a **signed bundle** (`server/internal/transport`). Export signs with the tenant's
+Ed25519 key (made on first export, sealed under the KEK; a server without a KEK cannot export).
+Import accepts only bundles signed by a **trusted signer**: paste the exporting tenant's public
+key under Trusted signers first (a tenant does not trust its own key implicitly). The preview
+lists add / change / remove / manual per item; apply is bound to the previewed plan (`digest`, or
+`digest_prune` with prune: the bundle, tenant, environment, current revisions, operations and prune
+mode), so a change here or a different prune choice since the preview is refused with
+`409 stale_plan` before anything is written; apply needs step-up, and never activates anything: new connections are drafts, config changes make a new
+draft revision, sign-in connections arrive as **pending**, and a changed existing sign-in
+connection is shown as manual (change it through an admin change request). Removals retire
+connections only with prune. A bundle never holds a secret: sealed credentials and client
+secrets stay behind (the plan says where to set them), retired connections and the dev IdP are
+left out, and a bundle whose config looks like it carries a secret is refused. On a prod server
+(`TESSERA_ENV=prod`) a bundle naming a localhost target or the dev IdP, or a sign-in
+connection on plain http or a private address, is refused. Applies are audited
+(`config.import.applied` with the bundle hash) and listed under Imports. Permission:
+`config.transport` (tenant admin); reading keys, signers and history needs `admin.read`.
+
+**Not in a bundle yet** (each needs cross-tenant id mapping for the groups and entitlements it
+names, so it is left for a follow-up rather than shipped half-checked): business roles and their
+versions and members, ABAC policies and bindings, catalog items and approval policies, tenant
+admin settings and security contacts (these change only through admin change requests), review
+schedules, alert rules, SIEM sinks, lifecycle rules and native groups. Set them up by hand in
+each environment; the bundle covers connections, readiness overlays and sign-in connections only.
+
 ### Main API endpoints
 
 `GET /api/summary` · `GET /api/identities[?type=&q=]` · `GET /api/identities/{id}` · `GET /api/accounts[?system=]` ·
@@ -230,6 +259,12 @@ To point a local dev instance at a real LDAP or LLDAP server (for example an LLD
 `POST /api/auth/saml/{connection_id}/acs` · `GET /api/auth/oauth2/{connection_id}/callback` ·
 `GET /t/{slug}/bootstrap?code=` (public)
 `GET|POST /api/auth/dev-login` (dev and test only) ·
+`GET /api/jobs[?status=running|succeeded|failed&kind=&connection_id=&limit=]` · `GET /api/jobs/{job_id}` ·
+`POST /api/jobs/{job_id}/retry` ·
+`GET /api/provisioning/targets` · `PUT|DELETE /api/provisioning/targets/{connection_id}` ·
+`GET /api/provisioning/ops[?status=&kind=&connection_id=&limit=]` · `GET /api/provisioning/ops/{op_id}` ·
+`POST /api/provisioning/ops/{op_id}/retry|cancel` · `POST /api/provisioning/run` ·
+`GET /api/provisioning/findings[?status=open|resolved]` ·
 `GET /api/catalog[?all=1]` · `PUT /api/catalog/items/{group_id}` ·
 `POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours}` ·
 `GET /api/requests[?scope=mine|pending|all&status=]` · `GET /api/requests/{id}` ·
@@ -268,11 +303,98 @@ To point a local dev instance at a real LDAP or LLDAP server (for example an LLD
 `GET /api/admin/change-requests/{id}` · `POST /api/admin/change-requests/{id}/approve|reject|cancel|apply` ·
 `GET /api/admin/notifications` · `GET /api/admin/recovery` · `POST /api/admin/recovery/{id}/cancel` ·
 `GET /api/admin/api-clients` (see "Admin changes")
+`GET /api/config/signing-key` · `POST /api/config/export` · `GET|POST /api/config/trusted-signers` ·
+`DELETE /api/config/trusted-signers/{kid}` · `POST /api/config/import/plan` (body: the bundle file) ·
+`POST /api/config/import/apply?hash=&digest=&prune=` · `GET /api/config/imports`
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
 or HRIS execution is always the signed-in user.
 
+### Job run history
+
+Every run of a connector sync, provisioning (HRIS execute), connection validation, dry run,
+deployment-health re-run and JIT sweep is recorded in `job_runs` (`internal/jobs`), plus every
+audit anchoring run that did something or failed. A sweep that finds nothing is not recorded.
+Each record has the kind, trigger (manual, schedule or retry), status, duration, a result summary
+and a one-line error. The run row is written in its own transaction before the job and finished in
+another, so a job that rolls back keeps its failed run, and `job.failed` is appended to the audit
+chain for alert rules to match. A request refused before the job ran (bad input, missing
+permission, a blocked gate) is not a run.
+
+`POST /api/jobs/{id}/retry` runs the operation again as the signed-in user through a typed
+dispatcher, not a replayed HTTP request: the retry request is authenticated as usual, the original
+route's permission and step-up are rechecked for the caller as they are now, and the route
+registered for the run's kind runs with the recorded body (a connection comes from the run's
+`connection_id`). No cookie, `Authorization` or `DPoP` header is stored or forwarded. It is offered only for idempotent
+kinds (sync, validation, dry run, health re-run, JIT sweep), not for provisioning. The new run
+links `retry_of` and records `job.retried`. Runs still `running` after an hour are marked failed
+("interrupted"), and runs are kept 30 days. Reading the history needs `jobs.read` (operator,
+auditor, policy admin, tenant admin). Admin → Jobs lists the runs, with Failed, Running and job
+filter chips and a side panel showing the error, the result and Retry.
+
+### Closed-loop provisioning
+
+Until issue #103 every write Tessera made (JML execute, review revoke, JIT revoke and expiry,
+least-privilege revoke) changed only its own graph. `internal/provision` is the engine that makes the
+change in the target system and checks that it happened.
+
+* **Operations.** `provisioning_ops` (schema `0225`) holds one row per change: create, update, disable
+  or delete an account, add or remove an entitlement. An idempotency key names the intent
+  (`jit:12:end`, `review:7:revoke`, `jml:3:0:disable_account`); submitting it twice gives one operation,
+  and it is sent to the target as `Idempotency-Key`. Every connector also reads before it writes, so
+  a repeated request converges.
+* **Lifecycle.** `queued` → `sent` → `pending_verification` → `verified`, or `mismatch` / `failed`
+  (and `cancelled` by an operator). A worker (every 5 s, `Server.RunProvisioning`; `POST
+  /api/provisioning/run` runs it now and is recorded as a `provision` job run) sends each operation and
+  **re-reads the target**. A send that fails for a transient reason (transport, 429, 5xx) is retried
+  with exponential backoff (5 s doubling to 10 min, 5 attempts); a refusal (401/403/400) fails it at
+  once. A re-read that disagrees is repeated 3 times, then the operation is a `mismatch` and a finding
+  (`provisioning_findings`, `verify_mismatch`, high for a disable or removal) is raised.
+* **Tessera changes only after verification.** An operation carries a completion (a graph edit, a
+  review decision, a JIT end) that runs in the same transaction that marks it `verified`. A failed or
+  unverified write therefore leaves the review item open, the account active and the JIT grant in place.
+  Retrying (or deciding again, or the next `POST …/retry`) re-queues the same operation.
+* **Write-back is per connection and off by default.** A target (`provisioning_targets`, schema
+  `0224`, one per connection) has a `write_back` switch. Off: the change edits the graph at once, as
+  before, and nothing reaches the target (so the parity fixtures are unchanged). On: the change goes
+  through the engine. Routing is by the connection's `system` (`provision.Submit`).
+* **Connectors.** `internal/provision/scim` is a SCIM 2.0 client (filtered, paginated lists; group
+  members read page by page; PATCH add/replace/remove, where a member is removed with the RFC 7644
+  filter path and, if the server refuses it, with a value list; `dialect: entra` sends capitalised
+  operations, string booleans and the value list, and every dialect reads `"True"`/`"False"`). `internal/provision/okta` is a native
+  Okta connector (users, lifecycle deactivate/delete, group membership, `Link` paging that must stay on
+  the org's origin). Credentials are sealed under the KEK (`internal/seal`, AAD = tenant, table,
+  column and row) and are write-only in the API. Every request goes through `internal/safehttp`.
+* **Limits.** Disabling or deleting an account through SCIM does not end sessions or tokens the
+  account already holds (SCIM does not imply it; knowledge base §4.6), so a verified disable is not
+  yet a verified kill: that needs session revocation or CAEP/SSF, which is future work.
+* **What is routed.** JML leaver/mover/joiner steps (disable, remove and add group, create account),
+  review revokes of group memberships, JIT revoke and expiry (the request stays `approved` and the edge
+  stays until the target confirms; the sweeper does not retry a failed removal, an operator does),
+  and the least-privilege revoke. Edges to permissions have no counterpart in a target and stay direct.
+* **Audit.** Each operation writes `provision.enqueued`, `provision.sent` and one of
+  `provision.verified`, `provision.mismatch`, `provision.failed`, plus `provision.retried`,
+  `provision.cancelled`; target changes write `provision.target_set` and `provision.target_removed`
+  (never the token). Completions write the event the direct path wrote (`jit.expire`, `review.revoke`,
+  `grant.revoke`).
+* **Permissions.** `provisioning.read` (operator, auditor, policy admin, tenant admin) and
+  `provisioning.manage` (policy admin, tenant admin: retry, cancel, run). Configuring a target needs
+  `connections.manage` with step-up.
+* **Dev fake target.** `TESSERA_DEV_FAKE_TARGET=1` (set by `run.sh`) starts an in-process fake SCIM
+  service on a loopback port (`internal/provision/fake`) and enables the `fake` target kind, with a
+  simulated fault: `fail_writes` (503) or `drop_writes` (accepted, never applied: a mismatch). The fake
+  treats users and groups it has never seen as already provisioned. Config refuses the setting with
+  `TESSERA_ENV=prod`, and an architecture test keeps the fake out of every package but `cmd/tessera`.
+* **Tests.** Recorded exchanges (`internal/provision/{scim,okta}/testdata`, replayed by
+  `internal/provision/replay`) pin Entra's string booleans, capitalised PATCH operations, paginated
+  large groups, Okta `Link` paging and error classification; engine tests cover backoff, idempotency,
+  mismatch findings, sealed credentials and tenant isolation; API and JML tests show a failed
+  target write leaving the review item, account and edges open.
+
+Admin → Provisioning lists the target systems (with the write-back switch) and the operations, with
+status, change and source filter chips, a side panel with the findings, request and Retry / Cancel,
+and Run now.
 ### Admin changes, notifications and operator recovery
 
 Changes that widen trust or privilege go through **change requests** (design §15, issue #16;
@@ -788,7 +910,8 @@ actor a client names (request bodies have no `actor`, `approver` or `reviewer` f
 
 Every 5 minutes (or 1000 events) the server signs each chain head with the platform Ed25519 key and
 appends it to the anchor sink: `TESSERA_AUDIT_ANCHOR`, by default `var/audit-anchors.jsonl` next to
-the database (S3 Object Lock is a later step). To check a database:
+the database. In production it is `s3://bucket/prefix` (see "S3 Object Lock anchor" below). To check
+a database:
 
 ```bash
 cd server
@@ -835,6 +958,94 @@ keys) and writes a deterministic artifact. It prints the catalog version, the PR
 anything changed against the previous artifact; `-report` writes the full diff as Markdown.
 `internal/aws/catalog.Load(dir, version)` reads the artifact. See `catalog/aws/README.md` and
 `catalog/aws/THIRD_PARTY_NOTICES`.
+
+#### S3 Object Lock anchor
+
+`TESSERA_AUDIT_ANCHOR=s3://bucket/prefix` writes one object per checkpoint, `prefix/<tenant id>/<seq>.jws`
+(the checkpoint JWS), with `ObjectLockMode=COMPLIANCE`, retention of 7 years, `If-None-Match: *` (an
+existing object is never replaced) and a SHA-256 checksum. `anchor_ref` is
+`s3://bucket/key?versionId=<id>`; a response without a version id is a failure, because it means the
+bucket is not versioned with Object Lock enabled. The bucket must be created with Object Lock
+(versioning is then on) and the server's role needs `s3:PutObject`, `s3:PutObjectRetention` and
+`s3:GetObject`/`s3:GetObjectVersion` (the last two let a retried write recognise its own object).
+A failed anchor is retried with backoff and flagged after 3 attempts, as with the file sink.
+
+The AWS SDK for Go v2 client sends all of its HTTP traffic through `internal/safehttp` (the SSRF
+guard): no proxy, no private, link-local or loopback addresses, which also blocks the EC2/ECS
+credential endpoints, so give the process credentials through the SDK's other sources
+(environment, web identity / IRSA) and set `AWS_REGION`. `AWS_CA_BUNDLE` is not supported with the
+safehttp client; trust a private CA through the system roots. `tessera audit verify -anchors`
+reads `file://` anchor files only; verifying against the bucket is a later step.
+
+## Postgres
+
+SQLite stays the default and is unchanged. Set `TESSERA_DB` (or `-db`) to a Postgres DSN to use Postgres
+(design `docs/design/phase-0-platform-security.md` §14.3, §19 PR14):
+
+```bash
+export TESSERA_DB='postgres://tessera_owner:…@db.example.com:5432/tessera?sslmode=verify-full&app_role=tessera_app'
+```
+
+Two roles, created once by a DBA before the first start:
+
+```sql
+CREATE ROLE tessera_owner LOGIN PASSWORD '…' BYPASSRLS;   -- (or SUPERUSER) it owns the tables and runs the migrations
+CREATE ROLE tessera_app NOLOGIN NOSUPERUSER NOBYPASSRLS;   -- never owns a table, never bypasses row-level security
+GRANT tessera_app TO tessera_owner;                        -- lets the owner's connections SET ROLE tessera_app
+CREATE DATABASE tessera OWNER tessera_owner;
+```
+
+* The DSN's role runs the goose migrations (`internal/store/schema/postgres/*.sql`, embedded, applied
+  on every start under an advisory lock) and `rls.sql`. With `app_role` every connection that serves
+  requests then runs `SET ROLE tessera_app`. `TESSERA_ENV=prod` refuses a DSN without `app_role` or
+  without `sslmode=require|verify-ca|verify-full`. The owner should be a superuser or `BYPASSRLS`:
+  the cross-tenant guards for graph node keys are `SECURITY DEFINER` functions that must see other
+  tenants' rows. The role must exist before the migrations run (they grant it its privileges).
+* **Row-level security.** Every tenant table has `ENABLE` and `FORCE ROW LEVEL SECURITY` and a
+  `tenant_isolation` policy on `tenant_id = NULLIF(current_setting('app.tenant_id', true), '')`.
+  `DB.InTenant`/`ReadTenant` run `set_config('app.tenant_id', …, true)` (transaction-local, so a pooled
+  connection cannot carry a tenant into its next transaction); with no setting no row matches.
+  `sessions` and `login_transactions` also have a SELECT-only `lookup_by_hash` policy for the two
+  bearer-hash lookups (`app.lookup`). The repository's own `tenant_id = @tenant` predicates stay: RLS
+  is the second layer.
+* **`tessera admin gen-rls [-out path] [-check]`** renders `internal/store/schema/postgres/rls.sql` from
+  the Postgres schema (no database needed). After changing a Postgres migration run
+  `go run ./cmd/tessera admin gen-rls -out internal/store/schema/postgres/rls.sql`;
+  `TestPostgresRLSFileCurrent` fails while the committed file is stale.
+* **Foreign keys** between tenant tables are composite `(tenant_id, x_id) → (tenant_id, id)` against a
+  `UNIQUE (tenant_id, id)` on the parent, so the database refuses a reference into another tenant. Graph
+  node keys (`account:12`) and four "soft" references to rows that may be gone (`access_requests.edge_id`,
+  `review_items.edge_id`, `hris_events.identity_id`, `readiness_item_states.check_run_id`) keep a trigger.
+* **Audit tables** (`audit_events`, `audit_checkpoints`): `plpgsql` triggers refuse UPDATE, DELETE and
+  TRUNCATE, and `0900_roles.sql` revokes UPDATE, DELETE and TRUNCATE from `tessera_app` (only a
+  checkpoint's `anchor_*` columns stay updatable).
+* **What differs from SQLite.** Statements are written once, in SQLite's dialect, and translated
+  (`internal/store/dialect.go`: `@name` → `$n`, `INSERT OR IGNORE`, `instr`, a negative `LIMIT`).
+  Timestamps stay sortable `TEXT`. A failing statement runs inside a savepoint, so a handled unique or
+  reference violation does not abort the transaction (as in SQLite). Write transactions of one tenant
+  queue on an advisory lock (SQLite serializes all writers); other tenants and all readers run in
+  parallel. Integer ids come from sequences, which are not gapless (an upsert that finds its row still
+  consumes a value). `schema/postgres` is kept in step with the SQLite DDL by
+  `TestSchemaParity_SQLiteAndPostgres`.
+* `tessera serve` seeds the demo tenants into an empty Postgres database in dev (never in prod; `-reseed`
+  wipes and reseeds); production starts empty and is filled with `tessera admin create-tenant`.
+  `TESSERA_DB=postgres://… ./run.sh` works the same way: it never reseeds a Postgres database unless
+  you pass `--reseed`.
+
+Run the Postgres tests against any throwaway server (not production: every test creates and drops its
+own database, and the first run creates the `tessera_app` role):
+
+```bash
+export TESSERA_TEST_PG_URL='postgres://postgres@127.0.0.1:5432/postgres?sslmode=disable'
+cd server && go test ./...                      # the whole suite on Postgres, as tessera_app
+TESSERA_REQUIRE_PG_TESTS=1 go test ./internal/store/   # fail instead of skipping when it is unset
+```
+
+Without `TESSERA_TEST_PG_URL` the suite runs on SQLite and the Postgres-only tests skip (the
+dialect, schema-parity, DSN and `gen-rls` tests need no server and always run). With it,
+`internal/store/storetest`, `testkit` and the API parity replay run on Postgres (the parity replay
+accepts a different numeric `id`/`edge_id` there, see above). CI should run this with a Postgres 16
+service container and `TESSERA_REQUIRE_PG_TESTS=1`.
 
 ## Web UI
 
@@ -1169,6 +1380,10 @@ cd ../frontend && npm run build && npm test   # npm test: node:test, no extra de
   (FastAPI) backend with `record_python.py` on a frozen clock (2026-10-08T09:30:00 UTC) before it
   was removed; check out commit `aba5abb` to re-run the recorder against it. Only two values are
   normalised, both non-deterministic in Python itself (see `testdata/parity/README.md`).
+* **Postgres.** With `TESSERA_TEST_PG_URL` set (see "Postgres") the whole suite runs on Postgres 16 as
+  the non-owner `tessera_app` role, and `store/pg_isolation_test.go` checks row-level security,
+  composite foreign keys and the audit privileges. `TESSERA_REQUIRE_PG_TESTS=1` turns a missing
+  server into a failure.
 * **CI diagnostics.** `scripts/ci-diagnostics.sh` runs the CI and security-scan gates locally,
   one log per step, into `logs/ci-<timestamp>/SUMMARY.md` (git-ignored). `--quick` skips the
   race suite, `--only go,frontend,…` picks steps, and `--pr <n>` (with `gh` signed in) also saves
@@ -1201,9 +1416,10 @@ cd ../frontend && npm run build && npm test   # npm test: node:test, no extra de
   non-https `TESSERA_PUBLIC_URL`, `TESSERA_COOKIE_SECURE=false`, no KEK, any
   `TESSERA_CORS_ORIGINS` (the production UI is same-origin, so CORS is off),
   `TESSERA_OUTBOUND_ALLOW_LOOPBACK=true`, a `TESSERA_DEV_IDP_URL`, a `TESSERA_AUDIT_ANCHOR` that
-  is not `s3://bucket/prefix` (missing and `file://` included), a frozen clock (`TESSERA_NOW`), or
-  a `TESSERA_TRUSTED_PROXIES` prefix broader than /8 (IPv4) or /32 (IPv6), and lists every problem
-  at once. A /0 proxy prefix is refused in every environment. `TESSERA_COOKIE_SECURE=false` is
+  is not `s3://bucket/prefix` (missing and `file://` included), a frozen clock (`TESSERA_NOW`), a
+  `TESSERA_TRUSTED_PROXIES` prefix broader than /8 (IPv4) or /32 (IPv6), or a `postgres://`
+  `TESSERA_DB` without `sslmode=require` (or stricter) and `app_role`, and lists every problem
+  at once (never echoing the DSN). A /0 proxy prefix is refused in every environment. `TESSERA_COOKIE_SECURE=false` is
   accepted only with `TESSERA_ENV=dev`, a `localhost`/`127.0.0.1` public URL and a loopback
   `-addr`. `serve` and `seed` both need an explicit `TESSERA_ENV` (`run.sh` exports `dev`).
 * Keys: `seed` and `serve` run the ensure-keys step (one active and one next ES256 key per tenant
@@ -1273,8 +1489,9 @@ OpenAPI document). Deliberate differences:
   is not wired into the login flow yet: `admin.RecordTestLogin` records it and `POST
   /api/admin/idp-connections/{id}/activate` requires it, but a connection created by a change request stays
   `pending` until the login flow calls it (it needs a `test` purpose on `login_transactions`).
-* Revokes and JML plans change Tessera's graph only. Nothing is written back to source systems.
-  Connectors do not have a `provision()`/`deprovision()` interface yet.
+* Revokes and JML plans change Tessera's graph only unless the connection has a provisioning target
+  with write-back on (see Closed-loop provisioning); JIT approval and rotating secrets are not yet
+  sent to targets, and only SCIM 2.0 and Okta have connectors (no Entra native connector yet).
 * There is no scheduled connector sync. Seeding runs discovery once, and `POST /api/connectors/sync`
   re-runs discovery on demand.
 * Effective-permission paths are capped at 8 per permission, and "lost if removed" uses those paths.

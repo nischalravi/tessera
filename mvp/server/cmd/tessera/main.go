@@ -9,10 +9,14 @@
 //	tessera notify seal-password             seal an SMTP password (stdin) for TESSERA_SMTP_PASSWORD_SEALED
 //	tessera admin create-tenant|add-idp|invite-admin   operator bootstrap of a tenant (see admin.go)
 //	tessera catalog refresh|compile   fetch and compile the AWS action catalog (see catalog.go)
+//	tessera admin gen-rls [-out path] [-check]   render the Postgres row-level-security file (see genrls.go)
 //
 // Environment:
 //
-//	TESSERA_DB            database path (or sqlite:///path); default ./tessera.db
+//	TESSERA_DB            database path (or sqlite:///path), or a postgres:// DSN
+//	                      (postgres://owner@host/db?sslmode=require&app_role=tessera_app);
+//	                      default ./tessera.db
+//	TESSERA_AUDIT_ANCHOR  file:///path.jsonl (dev) or s3://bucket/prefix (S3 Object Lock; prod)
 //	TESSERA_POLICY_DIR    read policies from this directory instead of the built-in copies
 //	TESSERA_CONNECTORS    connector spec, e.g. "demo" (default) or "demo-workday,okta"
 //	TESSERA_CORS_ORIGINS  comma-separated browser origins allowed by CORS
@@ -71,6 +75,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
+	"github.com/nischalravi/tessera/mvp/server/internal/provision/fake"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 	"github.com/nischalravi/tessera/mvp/server/internal/safedial"
@@ -122,7 +127,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	fset := flag.NewFlagSet("tessera "+cmd, flag.ContinueOnError)
 	fset.SetOutput(stderr)
 	var o options
-	fset.StringVar(&o.db, "db", dbPath(os.Getenv("TESSERA_DB")), "SQLite database path")
+	fset.StringVar(&o.db, "db", dbPath(os.Getenv("TESSERA_DB")), "SQLite database path or postgres:// DSN")
 	if cmd == "serve" {
 		fset.StringVar(&o.addr, "addr", "127.0.0.1:8000", "listen address")
 		fset.BoolVar(&o.reseed, "reseed", false, "wipe and re-seed the database before serving")
@@ -167,12 +172,41 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if cmd == "seed" {
 		return seedDB(ctx, o.db, cfg, clock, loader, sealer, stdout)
 	}
-	if _, err := os.Stat(o.db); o.reseed || errors.Is(err, fs.ErrNotExist) {
+	seedNow, err := needsSeed(ctx, o, cfg)
+	if err != nil {
+		return err
+	}
+	if seedNow {
 		if err := seedDB(ctx, o.db, cfg, clock, loader, sealer, stdout); err != nil {
 			return err
 		}
 	}
 	return serve(ctx, o, cfg, sealer, clock, loader, logger)
+}
+
+// needsSeed reports whether serve must seed the demo tenants first: on
+// --reseed, or when there is nothing yet. For SQLite "nothing" is a missing
+// file. A Postgres database always exists, so there it is a database with no
+// tenant, and never in production (an empty production database is filled by
+// `tessera admin create-tenant`, not by demo data).
+func needsSeed(ctx context.Context, o options, cfg *config.Config) (bool, error) {
+	if !store.IsPostgresDSN(o.db) {
+		_, err := os.Stat(o.db)
+		return o.reseed || errors.Is(err, fs.ErrNotExist), nil
+	}
+	if o.reseed {
+		return true, nil
+	}
+	if cfg.IsProd() {
+		return false, nil
+	}
+	st, err := store.Open(ctx, o.db)
+	if err != nil {
+		return false, err
+	}
+	defer st.Close()
+	tenants, err := st.ActiveTenants(ctx)
+	return len(tenants) == 0, err
 }
 
 // loopbackListen reports whether addr (host:port) listens on loopback only:
@@ -284,8 +318,9 @@ const (
 	idleTimeout       = 60 * time.Second
 	shutdownTimeout   = 10 * time.Second
 	sweepInterval     = 30 * time.Second
-	notifyInterval    = 15 * time.Second // the notification dispatcher (issue #189)
+	provisionInterval = 5 * time.Second  // provisioning worker: sends queued operations and re-reads targets
 	keysInterval      = 24 * time.Hour   // keys.EnsureAll: rotation runs daily (design §10.6)
+	notifyInterval    = 15 * time.Second // the notification dispatcher (issue #189)
 	// checkpointInterval is how often the checkpointer looks for due tenants
 	// (each is checkpointed every TESSERA_AUDIT_CHECKPOINT_SECONDS or
 	// _EVENTS new events, design §13.6).
@@ -325,11 +360,6 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if scenario != "" && !slices.Contains(connectors.ScenarioNames(), scenario) {
 		return fmt.Errorf("TESSERA_READINESS_SCENARIO: unknown scenario %q (have %v)", scenario, connectors.ScenarioNames())
 	}
-	anchorURL := cfg.AnchorURL(o.db)
-	sink, err := audit.NewSink(anchorURL)
-	if err != nil {
-		return err
-	}
 	// Live readiness checks: real LDAP probes open the sealed credential with
 	// the KEK and dial through safedial. Private targets need the dev-only
 	// allowlist (refused in prod by config) or, later, the Directory Agent.
@@ -351,8 +381,22 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if err != nil {
 		return err
 	}
+	fakeURL, stopFake, err := startFakeTarget(cfg, logger)
+	if err != nil {
+		return err
+	}
+	defer stopFake()
+	// One shared outbound client: sign-in, containment and provisioning all
+	// send through it.
+	// The s3:// anchor sink's AWS SDK client uses the same safehttp client.
+	anchorURL := cfg.AnchorURL(o.db)
+	sink, err := audit.NewSink(anchorURL, audit.WithHTTPClient(outbound))
+	if err != nil {
+		return err
+	}
 	srv := api.New(api.Config{Store: st, Clock: clock, Policies: loader, Logger: logger,
 		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound,
+		Outbound: outbound, FakeTargetURL: fakeURL,
 		Containment:    &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock},
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
 		HSTS: cfg.IsProd(), Env: cfg.Env, Identifiers: identifiers.NewKeyer(sealer), EmailMode: cfg.Mail.Mode, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, Readiness: rsvc, AuditAnchor: anchorURL})
@@ -364,7 +408,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		DigestHour: cfg.NotifyDigestHour, BaseURL: cfg.PublicURL}
 	checkpointer := &audit.Checkpointer{DB: st, Sealer: sealer, Sink: sink, Clock: timeutil.System, Issuer: cfg.PublicURL,
 		Every: time.Duration(cfg.AuditCheckpointSeconds) * time.Second, EveryEvents: int64(cfg.AuditCheckpointEvents),
-		Log: logger}
+		Log: logger, OnTenant: api.RecordAnchorRun(st)}
 	httpSrv := &http.Server{
 		Addr:              o.addr,
 		Handler:           srv.Handler(),
@@ -383,6 +427,11 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	go func() {
 		defer close(sweepDone)
 		srv.RunSweeper(ctx, sweepInterval)
+	}()
+	provDone := make(chan struct{})
+	go func() {
+		defer close(provDone)
+		srv.RunProvisioning(ctx, provisionInterval)
 	}()
 	keysDone := make(chan struct{})
 	go func() {
@@ -407,6 +456,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	case err := <-errc:
 		stop()
 		<-sweepDone
+		<-provDone
 		<-keysDone
 		<-ckptDone
 		<-notifyDone
@@ -418,6 +468,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	defer cancel()
 	err = httpSrv.Shutdown(shutdownCtx)
 	<-sweepDone
+	<-provDone
 	<-keysDone
 	<-ckptDone
 	<-notifyDone
@@ -425,6 +476,33 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		return serveErr
 	}
 	return err
+}
+
+// startFakeTarget starts the in-process fake SCIM target on a loopback port
+// when TESSERA_DEV_FAKE_TARGET is set (config refuses it in prod) and returns
+// its base URL; with it off the URL is empty and the API refuses the "fake"
+// target kind.
+func startFakeTarget(cfg *config.Config, logger *slog.Logger) (string, func(), error) {
+	if !cfg.FakeTarget {
+		return "", func() {}, nil
+	}
+	if cfg.IsProd() || !cfg.OutboundAllowLoopback {
+		return "", nil, errors.New("TESSERA_DEV_FAKE_TARGET needs TESSERA_ENV=dev with TESSERA_OUTBOUND_ALLOW_LOOPBACK on")
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", nil, err
+	}
+	srv := &http.Server{Handler: fake.New(fake.Options{Lenient: true}).Handler(), ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout: readTimeout, WriteTimeout: readTimeout}
+	go func() {
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("fake provisioning target stopped", "err", err)
+		}
+	}()
+	url := "http://" + ln.Addr().String()
+	logger.Info("dev fake provisioning target listening", "url", url)
+	return url, func() { _ = srv.Close() }, nil
 }
 
 // runKeyRotation runs keys.EnsureAll every keysInterval until ctx ends.
