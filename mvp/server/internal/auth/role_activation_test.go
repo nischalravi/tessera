@@ -191,9 +191,9 @@ func TestStepUpChallenge(t *testing.T) {
 func TestRolePermissionsMatchDesign(t *testing.T) {
 	want := map[auth.Role]string{
 		auth.RoleViewer:      "graph.read requests.create guests.sponsor",
-		auth.RoleOperator:    "graph.read jit.request jit.decide jit.deny_revoke reviews.manage reviews.decide hris.simulate_event requests.create requests.create_for_others requests.decide guests.sponsor guests.read",
+		auth.RoleOperator:    "graph.read jit.request jit.decide jit.deny_revoke reviews.manage reviews.decide hris.simulate_event requests.create requests.create_for_others requests.decide guests.sponsor guests.read sod.mitigate",
 		auth.RoleAuditor:     "graph.read audit.read audit.verify admin.read connections.read requests.create email.read guests.sponsor guests.read",
-		auth.RolePolicyAdmin: "graph.read jit.request jit.decide jit.deny_revoke reviews.manage reviews.decide hris.simulate_event grants.revoke hris.execute jit.sweep connectors.sync identities.correlate identities.merge identities.affiliate requests.create requests.create_for_others requests.decide catalog.manage roles.manage lifecycle.manage guests.sponsor guests.read sponsorships.approve identities.contain sod.manage",
+		auth.RolePolicyAdmin: "graph.read jit.request jit.decide jit.deny_revoke reviews.manage reviews.decide hris.simulate_event grants.revoke hris.execute jit.sweep connectors.sync identities.correlate identities.merge identities.affiliate requests.create requests.create_for_others requests.decide catalog.manage roles.manage lifecycle.manage guests.sponsor guests.read sponsorships.approve identities.contain sod.manage sod.mitigate sod.approve",
 		auth.RoleTenantAdmin: "graph.read audit.read audit.verify admin.read admin.change.request admin.change.approve admin.users.disable admin.sessions.revoke connections.read connections.manage connections.activate requests.create email.read email.manage groups.admin",
 		auth.RoleBreakGlass:  "admin.read breakglass.recover",
 	}

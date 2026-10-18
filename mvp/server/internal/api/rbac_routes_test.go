@@ -183,6 +183,20 @@ POST   /api/sod/rulesets/{ruleset_id}/retire         sod.manage      STEP_UP_POL
 GET    /api/sod/rulesets/{ruleset_id}/export         graph.read      -  # issue #298
 POST   /api/sod/import-legacy                        sod.manage      STEP_UP_POLICY  # issue #298
 GET    /api/sod/violations                           graph.read      -  # issue #298
+GET    /api/sod/controls                             graph.read      -  # issue #298
+POST   /api/sod/controls                             sod.manage      STEP_UP_POLICY  # issue #298
+GET    /api/sod/controls/{control_id}                graph.read      -  # issue #298
+PUT    /api/sod/controls/{control_id}                sod.manage      STEP_UP_POLICY  # issue #298
+POST   /api/sod/controls/{control_id}/retire         sod.manage      STEP_UP_POLICY  # issue #298
+GET    /api/sod/mitigations                          graph.read      -  # issue #298
+POST   /api/sod/mitigations                          sod.mitigate    -  # issue #298
+POST   /api/sod/mitigations/{mitigation_id}/approve  sod.approve     STEP_UP_POLICY  # issue #298 (not the requester)
+POST   /api/sod/mitigations/{mitigation_id}/reject   sod.approve     -  # issue #298 (not the requester)
+POST   /api/sod/mitigations/{mitigation_id}/cancel   sod.mitigate    -  # issue #298 (the requester)
+POST   /api/sod/mitigations/{mitigation_id}/revoke   requests.create -  # issue #298 (risk owner or sod.approve; step-up in the handler)
+POST   /api/sod/violations/escalate                  sod.mitigate    -  # issue #298
+POST   /api/sod/violations/revoke                    graph.read      -  # issue #298 (applying: grants.revoke and step-up in the handler)
+GET    /api/sod/review-context                       graph.read      -  # issue #298
 POST   /api/sod/simulate                             requests.create -  # issue #298
 GET    /api/groups/folders                           groups.admin    -  # issue #44
 POST   /api/groups/folders                           groups.admin    -  # issue #44

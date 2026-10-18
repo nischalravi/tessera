@@ -99,6 +99,10 @@ const (
 	// separation of duties (issue #298): functions, risks and rulesets. Reading
 	// them (and the violations) is graph.read, like the policy violations.
 	PermSoDManage Permission = "sod.manage"
+	// SoD mitigations (issue #298): sod.mitigate requests a mitigation or acceptance,
+	// escalates a violation; sod.approve is the second person who decides it.
+	PermSoDMitigate Permission = "sod.mitigate"
+	PermSoDApprove  Permission = "sod.approve"
 )
 
 // rolePermissions is the static role -> permission map (Cedar-ready, §12.1).
@@ -110,14 +114,14 @@ var rolePermissions = map[Role][]Permission{
 	RoleViewer: {PermGraphRead, PermRequestsCreate, PermGuestsSponsor},
 	RoleOperator: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
 		PermReviewsDecide, PermHRISSimulateEvent, PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide,
-		PermGuestsSponsor, PermGuestsRead},
+		PermGuestsSponsor, PermGuestsRead, PermSoDMitigate},
 	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead, PermRequestsCreate, PermEmailRead,
 		PermGuestsSponsor, PermGuestsRead},
 	RolePolicyAdmin: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
 		PermReviewsDecide, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
 		PermIdentitiesCorrelate, PermIdentitiesMerge, PermIdentitiesAffiliate,
 		PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide, PermCatalogManage, PermRolesManage, PermLifecycleManage,
-		PermGuestsSponsor, PermGuestsRead, PermSponsorshipsApprove, PermIdentitiesContain, PermSoDManage},
+		PermGuestsSponsor, PermGuestsRead, PermSponsorshipsApprove, PermIdentitiesContain, PermSoDManage, PermSoDMitigate, PermSoDApprove},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
 		PermConnectionsActivate, PermRequestsCreate, PermEmailRead, PermEmailManage, PermGroupsAdmin},
@@ -204,7 +208,7 @@ var scopePermissions = map[Scope][]Permission{
 	ScopeRead: {PermGraphRead, PermConnectionsRead},
 	ScopeWrite: {PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage, PermReviewsDecide,
 		PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
-		PermConnectionsManage, PermConnectionsActivate, PermRolesManage, PermLifecycleManage, PermGroupsAdmin, PermSoDManage},
+		PermConnectionsManage, PermConnectionsActivate, PermRolesManage, PermLifecycleManage, PermGroupsAdmin, PermSoDManage, PermSoDMitigate, PermSoDApprove},
 	ScopeAudit: {PermAuditRead, PermAuditVerify},
 	ScopeAdmin: {PermEmailRead, PermEmailManage, PermAdminRead, PermAdminChangeReq, PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev,
 		PermBreakGlassRecover},

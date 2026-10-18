@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Ban, Check, ClipboardCheck, Network, Plus, UserRound, X } from "lucide-react";
-import { Campaign as CampaignT, IdentityRow, ReviewItem, ago, fmtDate, reviewDecide, useApi } from "../../api";
+import { Campaign as CampaignT, IdentityRow, ReviewItem, SodReviewContext, ago, fmtDate, reviewDecide, sodControlPaths, useApi } from "../../api";
 import { useIdentityActions } from "../../app/actions";
+import { EscalateDrawer, MitigateDrawer, Target } from "./MitigateDrawers";
+import { offers } from "./sodModel";
 import { Badge, Bar, Button, CommandBar, DataTable, EmptyState, FilterChips, Flag, IdLink, Loading, Page, Segmented, SidePanel, TypeBadge, flagLabel, useConfirm, useSelected, useToast, GovernanceTabs } from "../../components";
 
 function useDecide() {
@@ -27,7 +29,38 @@ function useDecide() {
   };
 }
 
-function ItemPanel({ it, onClose }: { it: ReviewItem; onClose: () => void }) {
+/** The SoD risks behind a review item's grant, with any mitigation, and a way to ask for one from the review. */
+function SodSection({ it, campaignId }: { it: ReviewItem; campaignId: number }) {
+  const { data, reload } = useApi<SodReviewContext>(sodControlPaths.reviewContext(campaignId));
+  const [act, setAct] = useState<null | { kind: "mitigate" | "escalate"; target: Target; offerAccept: boolean }>(null);
+  const mine = data?.items.find((x) => x.item_id === it.id)?.violations ?? [];
+  if (mine.length === 0) return null;
+  return (
+    <section className="stack-sm" aria-label="Separation of duties">
+      <h3 style={{ fontSize: "var(--fs-lg)", color: "var(--text)" }}>Separation of duties</h3>
+      {mine.map((v) => {
+        const target = { riskId: v.risk_id, riskName: v.risk_name, identityId: v.identity_id, identityName: it.identity.name };
+        const open = v.status === "open";
+        return (
+          <div key={v.risk_id} className="card stack-sm">
+            <div className="row tight"><Badge tone={v.priority === "critical" || v.priority === "high" ? "critical" : "warning"}>{v.priority}</Badge><b>{v.risk_name}</b></div>
+            <div className="small muted">{v.mitigation ? v.mitigation.label + (v.mitigation.control ? ` by ${v.mitigation.control}` : "") : "Not mitigated"}</div>
+            {data?.can_request && open && (
+              <div className="row tight">
+                {(offers(v, "mitigate") || offers(v, "accept")) && <Button size="sm" onClick={() => setAct({ kind: "mitigate", target, offerAccept: offers(v, "accept") })}>Request mitigation…</Button>}
+                {offers(v, "escalate") && <Button size="sm" onClick={() => setAct({ kind: "escalate", target, offerAccept: false })}>Escalate…</Button>}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {act?.kind === "mitigate" && <MitigateDrawer target={act.target} offerAccept={act.offerAccept} onClose={() => setAct(null)} onDone={reload} />}
+      {act?.kind === "escalate" && <EscalateDrawer target={act.target} onClose={() => setAct(null)} onDone={reload} />}
+    </section>
+  );
+}
+
+function ItemPanel({ it, campaignId, onClose }: { it: ReviewItem; campaignId: number; onClose: () => void }) {
   const decide = useDecide();
   const nav = useNavigate();
   const [acct, grant] = it.grant.split(" → ");
@@ -56,6 +89,7 @@ function ItemPanel({ it, onClose }: { it: ReviewItem; onClose: () => void }) {
         <div className="row tight">{it.reasons.map((r) => <Flag key={r} f={r} />)}</div>
         {c.violations.length > 0 && <div className="small muted">{c.violations.join("; ")}</div>}
       </section>
+      <SodSection it={it} campaignId={campaignId} />
       <dl className="kv">
         <dt>Granted through</dt><dd className="sys">{acct}</dd>
         <dt>Permissions used</dt><dd className="tnum">{c.permissions_used} of {c.permissions}</dd>
@@ -136,7 +170,7 @@ function Campaign({ id, identity, onRefresh, onStart }: { id: number; identity: 
         activeKey={selected}
         empty={<EmptyState title="Nothing to review here" icon={<ClipboardCheck size={18} />}>This campaign has no items for this view.</EmptyState>}
       />
-      {open && <ItemPanel it={open} onClose={() => setSelected(null)} />}
+      {open && <ItemPanel it={open} campaignId={id} onClose={() => setSelected(null)} />}
       <div className="xs faint">Tip: the Inbox shows your review items one at a time with keyboard shortcuts: A keeps, R revokes, J and K move.</div>
     </div>
   );

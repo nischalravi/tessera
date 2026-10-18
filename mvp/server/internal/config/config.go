@@ -90,6 +90,11 @@ type Config struct {
 	// NotifyDigestHour is the UTC hour from which the daily digest is built
 	// (TESSERA_NOTIFY_DIGEST_HOUR).
 	NotifyDigestHour int
+	// SoDMaxMitigationDays is the longest a SoD mitigation or acceptance may run
+	// (TESSERA_SOD_MAX_MITIGATION_DAYS, default 365); SoDWarnDays is how many days
+	// before it ends its owners are warned (TESSERA_SOD_WARN_DAYS, default 14).
+	SoDMaxMitigationDays int
+	SoDWarnDays          int
 	// FrozenNow is TESSERA_NOW (tests and demos; refused in prod). The zero
 	// time means the wall clock; use Clock.
 	FrozenNow time.Time
@@ -228,6 +233,8 @@ func Load(getenv func(string) string) (*Config, error) {
 	c.Notify = str("TESSERA_NOTIFY", "log", "log")
 	c.NotifyMaxAttempts = integer("TESSERA_NOTIFY_MAX_ATTEMPTS", 6, 1, 20)
 	c.NotifyDigestHour = integer("TESSERA_NOTIFY_DIGEST_HOUR", 8, 0, 23)
+	c.SoDMaxMitigationDays = integer("TESSERA_SOD_MAX_MITIGATION_DAYS", 365, 1, 3650)
+	c.SoDWarnDays = integer("TESSERA_SOD_WARN_DAYS", 14, 1, 365)
 	c.Mail = loadMail(getenv, prod, integer, bad)
 	if v := strings.TrimSpace(getenv("TESSERA_NOW")); v != "" {
 		t, err := timeutil.ParseISO(v)

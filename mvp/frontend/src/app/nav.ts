@@ -1,5 +1,5 @@
 import {
-  AppWindow, BadgeCheck, Bot, Building2, CalendarClock, ChartLine, ClipboardCheck, House, Inbox, KeyRound, Layers, LucideIcon, Network, Plug, Plus, Settings, ShieldCheck, SlidersHorizontal, Timer, UserPlus, Users, UsersRound,
+  AppWindow, BadgeCheck, Bot, Building2, CalendarClock, ChartLine, ClipboardCheck, House, Inbox, KeyRound, Layers, LucideIcon, Network, Plug, Plus, Settings, ShieldCheck, ShieldHalf, SlidersHorizontal, Timer, UserPlus, Users, UsersRound,
 } from "lucide-react";
 
 export interface NavPage {
@@ -76,6 +76,7 @@ export const RAIL: RailGroup[] = [
     label: "Protection",
     items: [
       { id: "policies", label: "Policies & SoD", icon: ShieldCheck, path: "/governance/policies", keywords: "policy as code yaml simulation what-if violations" },
+      { id: "mitigations", label: "Mitigating controls", icon: ShieldHalf, path: "/governance/mitigations", keywords: "sod mitigation control accept risk expiring approve evidence separation of duties" },
       { id: "abac", label: "Attribute policies", icon: SlidersHorizontal, path: "/governance/attributes", keywords: "abac attribute conditions department location birthright eligibility simulate" },
       { id: "graph", label: "Access graph", icon: Network, path: "/insights/graph", keywords: "graph explorer paths who can access" },
       {

@@ -1404,6 +1404,8 @@ export interface SodFunction {
   versions?: SodVersion[];
 }
 export interface SodRisk {
+  /** The remediation options the risk offers. */
+  remediation: SodRemediation[];
   id: string; key: string; name: string; description: string; priority: SodPriority; business_process: string; owner: SodPerson | null;
   ruleset: SodRef; functions: SodRef[]; subjects: SodSubjects; status: "active" | "retired"; version: number; created_at: string;
   updated_by: { id: string; display_name: string } | null; updated_at: string; violations?: number; versions?: SodVersion[];
@@ -1419,7 +1421,7 @@ export interface SodRulesetList { can_manage: boolean; /** No stored ruleset yet
 export interface SodFunctionSpec { key?: string; name: string; description: string; owner_id: number | null; selectors: SodSelector[]; note?: string }
 export interface SodRiskSpec {
   key?: string; name: string; description: string; priority: SodPriority; business_process: string; owner_id: number | null;
-  ruleset_id: string; function_ids: string[]; subjects: SodSubjects; note?: string;
+  ruleset_id: string; function_ids: string[]; subjects: SodSubjects; remediation?: SodRemediation[]; note?: string;
 }
 export interface SodRulesetSpec { key?: string; name: string; description: string; enabled: boolean; note?: string }
 export interface SodGrant { perm_key: string; action: string; resource: string; system: string; privileged: boolean; paths: string[] }
@@ -1427,9 +1429,16 @@ export interface SodViolation {
   key: string; risk_id: string; risk_key: string; risk_name: string; priority: SodPriority; ruleset: SodRef; business_process: string;
   identity_id: number; identity_name: string; function1: SodRef; function2: SodRef; entitlement: string; systems: string[];
   sides: [{ function: SodRef; grants: SodGrant[] }, { function: SodRef; grants: SodGrant[] }];
-  /** open; mitigation statuses arrive with mitigating controls. */
-  status: string; message: string; evidence: string[]; edges: [string, string][];
+  /** open, mitigated, accepted or mitigation_pending (a request waits for its second person; still open). */
+  status: SodViolationStatus; message: string; evidence: string[]; edges: [string, string][];
+  /** The remediation options the risk offers on this violation. */
+  remediation: SodRemediation[];
+  mitigation?: SodCover;
 }
+export type SodViolationStatus = "open" | "mitigated" | "accepted" | "mitigation_pending";
+export type SodRemediation = "revoke" | "mitigate" | "accept" | "escalate";
+/** What covers a violation now ("Mitigated until 2026-11-20"). */
+export interface SodCover { mitigation_id: string; kind: "control" | "accept"; status: SodViolationStatus; control?: string; ends_at: string; label: string }
 export interface SodViolationFilter { risk?: string; priority?: SodPriority; ruleset?: string; system?: string; business_process?: string; identity?: string }
 export interface SodImportResult { dry_run: boolean; ruleset: string; created: string[]; updated: string[]; unchanged: string[]; retired: string[] }
 export interface SodTrigger {
@@ -1465,6 +1474,63 @@ export const sod = {
   simulate: (beneficiaryIds: number[], catalogItemIds: string[], durationHours?: number) =>
     api<SodSimulation>("/sod/simulate", { beneficiary_ids: beneficiaryIds, catalog_item_ids: catalogItemIds, ...(durationHours ? { duration_hours: durationHours } : {}) }),
 };
+// ------------------------------------------------------------ SoD mitigating controls (issue #298)
+
+export type SodControlType = "preventive" | "detective" | "corrective";
+export type SodFrequency = "continuous" | "daily" | "weekly" | "monthly" | "quarterly" | "annually";
+export interface SodControl {
+  id: string; name: string; description: string; owner: SodPerson | null; type: SodControlType; frequency: SodFrequency;
+  evidence_requirement: string; status: "active" | "retired"; version: number; updated_by: { id: string; display_name: string } | null;
+  updated_at: string; active_mitigations: number;
+}
+export interface SodControlList { can_manage: boolean; types: SodControlType[]; frequencies: SodFrequency[]; controls: SodControl[] }
+export interface SodControlSpec { name: string; description: string; owner_id: number | null; type: SodControlType; frequency: SodFrequency; evidence_requirement: string }
+export type SodMitigationStatus = "pending" | "active" | "rejected" | "cancelled" | "expired" | "revoked";
+export interface SodMitigation {
+  id: string; risk: { id: string; key: string; name: string; priority: SodPriority }; identity: SodPerson; kind: "control" | "accept";
+  control: { id: string; name: string } | null; justification: string; evidence: string[]; status: SodMitigationStatus;
+  starts_at: string | null; ends_at: string; days_left: number | null; requested_by: { id: string; display_name: string }; requested_at: string;
+  decided_by: { id: string; display_name: string } | null; decided_at: string | null; decision_note: string | null;
+  revoked_by: { id: string; display_name: string } | null; revoke_reason: string | null; requested_by_me: boolean;
+}
+export interface SodMitigationList { can_request: boolean; can_approve: boolean; max_days: number; warn_days: number; mitigations: SodMitigation[] }
+export interface SodMitigationRequest { risk_id: string; identity_id: number; kind: "control" | "accept"; control_id?: string; justification: string; ends_at: string; evidence?: string[] }
+export interface SodReviewContext {
+  can_request: boolean;
+  items: { item_id: number; violations: { risk_id: string; risk_key: string; risk_name: string; priority: SodPriority; status: SodViolationStatus; mitigation?: SodCover; identity_id: number; remediation: SodRemediation[] }[] }[];
+}
+export const sodControls = {
+  create: (spec: SodControlSpec) => api<SodControl>("/sod/controls", spec),
+  update: (id: string, version: number, spec: SodControlSpec) => api<SodControl>(`/sod/controls/${encodeURIComponent(id)}`, { version, ...spec }, "PUT"),
+  retire: (id: string, reason: string) => api<SodControl>(`/sod/controls/${encodeURIComponent(id)}/retire`, { reason }),
+};
+const mitPath = (id: string, rest: string) => `/sod/mitigations/${encodeURIComponent(id)}/${rest}`;
+export const sodMitigations = {
+  request: (req: SodMitigationRequest) => api<SodMitigation>("/sod/mitigations", req),
+  approve: (id: string, note = "") => api<SodMitigation>(mitPath(id, "approve"), { note }),
+  reject: (id: string, note: string) => api<SodMitigation>(mitPath(id, "reject"), { note }),
+  cancel: (id: string) => api<SodMitigation>(mitPath(id, "cancel"), {}),
+  /** End an active mitigation early (the risk owner or an approver): the violation is open again. */
+  revoke: (id: string, reason: string) => api<SodMitigation>(mitPath(id, "revoke"), { reason }),
+};
+/** Remediation of a violation: send it to the risk owner, or remove a grant behind it (the risk must offer it). */
+export const sodRemediate = {
+  escalate: (riskId: string, identityId: number, note: string) => api<{ id: string }>("/sod/violations/escalate", { risk_id: riskId, identity_id: identityId, note }),
+  revoke: (riskId: string, identityId: number, edgeId: number, dryRun: boolean) =>
+    api<SimResult>("/sod/violations/revoke", { risk_id: riskId, identity_id: identityId, edge_id: edgeId, dry_run: dryRun }),
+};
+export const sodControlPaths = {
+  controls: "/sod/controls",
+  mitigations: (f: { status?: SodMitigationStatus; expiring_within_days?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (f.status) q.set("status", f.status);
+    if (f.expiring_within_days !== undefined) q.set("expiring_within_days", String(f.expiring_within_days));
+    const s = q.toString();
+    return `/sod/mitigations${s ? `?${s}` : ""}`;
+  },
+  reviewContext: (campaignId: number) => `/sod/review-context?campaign_id=${campaignId}`,
+};
+
 export const sodPaths = {
   functions: "/sod/functions", risks: "/sod/risks", rulesets: "/sod/rulesets",
   function: (id: string) => sodPath("functions", id), risk: (id: string) => sodPath("risks", id), ruleset: (id: string) => sodPath("rulesets", id),
