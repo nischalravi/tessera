@@ -1,16 +1,4 @@
-import type { AdminSection, DelegationItem, OrgUnit, Workflow } from "./types";
-
-export const ORGS: OrgUnit[] = [
-  { id: "org-root", name: "Larkspur Labs", parent: null, department: null, owner: "Rosalind Haverford", costCenter: "CC-1000" },
-  { id: "org-exec", name: "Executive", parent: "org-root", department: "Executive", owner: "Rosalind Haverford", costCenter: "CC-1010" },
-  { id: "org-eng", name: "Engineering", parent: "org-root", department: "Engineering", owner: "Caspian Arkwright", costCenter: "CC-2000" },
-  { id: "org-data", name: "Data", parent: "org-root", department: "Data", owner: "Sana Iyer", costCenter: "CC-2100" },
-  { id: "org-sec", name: "Security", parent: "org-root", department: "Security", owner: "Thandiwe Mokoena", costCenter: "CC-2200" },
-  { id: "org-fin", name: "Finance", parent: "org-root", department: "Finance", owner: "Beatrix Pemberton", costCenter: "CC-3000" },
-  { id: "org-sales", name: "Sales", parent: "org-root", department: "Sales", owner: "Yara Castellanos", costCenter: "CC-4000" },
-  { id: "org-support", name: "Support", parent: "org-root", department: "Support", owner: "Esme Thornbury", costCenter: "CC-4100" },
-  { id: "org-people", name: "People", parent: "org-root", department: "People", owner: "Mireille Delacroix", costCenter: "CC-5000" },
-];
+import type { AdminSection, Workflow } from "./types";
 
 export const WORKFLOWS: Workflow[] = [
   { id: "wf-low", name: "Low-risk request", trigger: "Access request, risk low", steps: ["Manager approves", "Auto-provision", "Verify by re-aggregation"], appliesTo: "Non-privileged groups and roles", enabled: true, sla: "2 business days" },
@@ -18,11 +6,6 @@ export const WORKFLOWS: Workflow[] = [
   { id: "wf-sod", name: "SoD exception", trigger: "Request introduces an SoD conflict", steps: ["Risk owner accepts", "Select mitigating control", "Set expiry"], appliesTo: "SoD policies", enabled: true, sla: "3 business days" },
   { id: "wf-mover", name: "Mover micro-review", trigger: "HRIS mover event", steps: ["New manager reviews retained access", "Remove unreviewed after 14 days"], appliesTo: "All movers", enabled: false, sla: "14 days" },
   { id: "wf-owner", name: "Machine identity owner change", trigger: "Owner leaves or changes team", steps: ["Reassign owner", "Rotate secrets", "Owner certifies scopes"], appliesTo: "Service accounts and AI agents", enabled: true, sla: "5 business days" },
-];
-
-export const DELEGATIONS: DelegationItem[] = [
-  { id: "dlg-1", from: "Kofi Mensah", to: "Ingrid Lindqvist", scope: "Access reviews for Backend team", until: "2026-10-24", reason: "Kofi is on leave for two weeks", status: "pending" },
-  { id: "dlg-2", from: "Sana Iyer", to: "Thandiwe Mokoena", scope: "Approvals for snowflake:ACCOUNTADMIN", until: "2026-10-15", reason: "Quarter-end freeze cover", status: "pending" },
 ];
 
 export const ADMIN_SECTIONS: AdminSection[] = [
