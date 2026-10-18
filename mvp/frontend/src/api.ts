@@ -10,56 +10,292 @@ import { useCallback, useEffect, useState } from "react";
 const cache = new Map<string, unknown>();
 const CHANGED = "tessera:api-changed";
 
-/** An API error with its status and parsed body (gate reports carry `blocking`). */
-export class ApiError extends Error {
-  constructor(message: string, readonly status: number, readonly body: any) {
-    super(message);
-  }
+/** What went wrong, in the terms a screen cares about (components/errorCopy.ts words each one). */
+export type ErrorKind = "network" | "not_found" | "validation" | "forbidden" | "conflict" | "server";
+
+/** The kind for an HTTP status; 0 means the request never got an answer. */
+export function errorKind(status: number): ErrorKind {
+  if (status === 0) return "network";
+  if (status === 404) return "not_found";
+  if (status === 401 || status === 403) return "forbidden";
+  if (status === 409) return "conflict";
+  if (status === 408 || status === 429 || status >= 500) return "server";
+  return "validation"; // 400, 413, 422 and any other 4xx: the request itself was wrong
 }
 
 /**
- * Name sent as X-Tessera-User so readiness actions (attest, skip, accept, activate) are
- * attributed. A placeholder until Phase 0 authentication; set from the persona.
+ * The error code and a plain message from an error body. The API answers `{"detail": "text"}`,
+ * `{"error": "code", "detail": "text"}` or, for request validation, `{"detail": [ ...items ]}`
+ * (a list is never a message: it is dropped here so raw JSON cannot reach the screen).
  */
-let apiActor: string | null = null;
-export const setApiActor = (name: string | null) => {
-  apiActor = name && /^[A-Za-z0-9._@+ -]{1,120}$/.test(name) ? name : null;
+export function parseErrorBody(body: any): { code: string | null; message: string | null } {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return { code: null, message: null };
+  const code = typeof body.error === "string" ? body.error : typeof body.code === "string" ? body.code : null;
+  const message = typeof body.detail === "string" ? body.detail : typeof body.message === "string" ? body.message : null;
+  return { code, message };
+}
+
+/**
+ * An API error: HTTP status (0 for a network failure), the server's error `code` and `message`
+ * from its JSON body, a `kind`, and the parsed body (gate reports carry `blocking`).
+ */
+export class ApiError extends Error {
+  readonly kind: ErrorKind;
+  readonly code: string | null;
+  readonly serverMessage: string | null;
+  constructor(message: string, readonly status: number, readonly body: any) {
+    super(message);
+    this.kind = errorKind(status);
+    ({ code: this.code, message: this.serverMessage } = parseErrorBody(body));
+  }
+}
+
+/** True for an id that is a positive integer, the shape the API's numeric routes accept. */
+export const isNumericId = (id: string | undefined): id is string => !!id && /^[1-9][0-9]{0,15}$/.test(id);
+
+/** A validation error raised in the browser, before any request, for a link with a bad id. */
+export const invalidLink = () => new ApiError("That link isn't valid.", 400, null);
+
+/** A 429 from the per-IP sign-in limit: retry after retryAfter seconds. */
+export class RateLimitedError extends ApiError {
+  constructor(readonly retryAfter: number) {
+    super("Too many sign-in attempts from this network.", 429, null);
+  }
+}
+
+/** The seconds a Retry-After header asks for (delta-seconds or an HTTP date), 1 to 300; 30 when absent or unreadable. */
+export function retryAfterSeconds(header: string | null, now: number = Date.now()): number {
+  const clamp = (n: number) => Math.min(300, Math.max(1, Math.ceil(n)));
+  if (!header) return 30;
+  const v = header.trim();
+  if (/^\d+$/.test(v)) return clamp(Number(v));
+  const at = Date.parse(v);
+  return Number.isNaN(at) ? 30 : clamp((at - now) / 1000);
+}
+
+function rateLimited(res: Response): RateLimitedError {
+  return new RateLimitedError(retryAfterSeconds(res.headers?.get("Retry-After") ?? null));
+}
+
+/**
+ * Session handling (design §11, §17). The browser holds only the HttpOnly session cookie,
+ * which the API sets at sign-in; this client never sees a token. Every state-changing request
+ * carries the session's CSRF token (from GET /api/auth/session) in X-Tessera-CSRF.
+ * The actor of every action is the signed-in user: nothing here names one.
+ */
+let csrfToken: string | null = null;
+export const setCsrfToken = (t: string | null) => {
+  csrfToken = t;
 };
 
-export async function api<T = any>(path: string, body?: unknown, method?: string): Promise<T> {
+/**
+ * Bumped whenever the signed-in session changes. A GET that started under an earlier session
+ * does not write its answer into the cache, so another user's data never shows after a switch.
+ */
+let sessionEpoch = 0;
+
+/**
+ * Forget everything tied to the current session: the CSRF token and every cached GET. Called on
+ * sign-out, on sign-in and when the API says the session is gone.
+ */
+export function resetSessionState(): void {
+  csrfToken = null;
+  cache.clear();
+  sessionEpoch++;
+}
+
+/** The cached answer for a GET path, if any. */
+export const cached = <T = unknown>(path: string): T | undefined => cache.get(path) as T | undefined;
+
+/** Fired when the API says the session is gone (401 login_required): the app shows sign-in. */
+export const SIGNED_OUT = "tessera:signed-out";
+/** Fired when an action needs a fresh phishing-resistant sign-in (401 step_up_required). */
+export const STEP_UP = "tessera:step-up";
+
+/**
+ * The message of a step_up_required error. The step-up dialog already explains it, so toasts
+ * drop it (components/Toast.tsx) rather than show it twice.
+ */
+export const STEP_UP_MESSAGE =
+  "This action needs a phishing-resistant sign-in in the last few minutes. Sign in again with a passkey, then retry.";
+
+/** A plain-language message for the API's error contract (§16.2). */
+function errorMessage(status: number, j: any): string {
+  switch (j?.error) {
+    case "login_required":
+      return "Your session ended. Sign in again.";
+    case "step_up_required":
+      return STEP_UP_MESSAGE;
+    case "role_inactive":
+      return "Your admin role is inactive because you signed in without a phishing-resistant method. Sign out and sign in again with a passkey through your organization's identity provider (a GitHub sign-in cannot activate admin roles).";
+    case "forbidden":
+      return `You don't have permission to do this${j.permission ? ` (needs ${j.permission})` : ""}.`;
+    case "csrf_failed":
+      return "The request was refused as a possible cross-site request. Reload the page and try again.";
+    case "audit_unavailable":
+      return "The audit log is unavailable, so Tessera refused the request. Try again shortly.";
+    case "activation_blocked":
+    case "transition_blocked":
+      return `${j.blocking?.length ?? 0} item(s) block this step`;
+  }
+  if (typeof j?.detail === "string") return j.detail;
+  if (Array.isArray(j?.detail) || status === 422) return "That request wasn't valid. Check the values and try again.";
+  return j ? JSON.stringify(j.detail ?? j) : `${status}`;
+}
+
+/** Call the API. A write refused for step-up is kept so it can resume after re-authentication. */
+export function api<T = any>(path: string, body?: unknown, method?: string): Promise<T> {
   const m = method ?? (body !== undefined ? "POST" : "GET");
-  const headers: Record<string, string> = { "content-type": "application/json" };
-  if (apiActor && m !== "GET") headers["x-tessera-user"] = apiActor;
-  const res = await fetch(`/api${path}`, {
-    method: m,
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  return send<T>(path, body, m, () => savePendingAction({ method: m, path, body, label: actionLabel(m, path), at: Date.now() }));
+}
+
+/**
+ * Call the API with a body that carries a secret. It is never kept for resuming after a step-up: the body
+ * never reaches browser storage, and an earlier pending action is dropped so the resume never offers it.
+ */
+export function apiNoResume<T = any>(path: string, body: unknown, method = "POST"): Promise<T> {
+  return send<T>(path, body, method, clearPendingAction);
+}
+
+async function send<T>(path: string, body: unknown, m: string, onStepUp: () => void): Promise<T> {
+  const headers: Record<string, string> = {};
+  if (body !== undefined) headers["content-type"] = "application/json";
+  if (m !== "GET" && m !== "HEAD" && csrfToken) headers["x-tessera-csrf"] = csrfToken;
+  const epoch = sessionEpoch;
+  let res: Response;
+  try {
+    res = await fetch(`/api${path}`, {
+      method: m,
+      headers,
+      credentials: "same-origin",
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    throw new ApiError("Tessera can't reach its API right now.", 0, null);
+  }
   if (!res.ok) {
-    let msg = `${res.status} ${res.statusText}`;
     let j: any = null;
     try {
       j = await res.json();
-      msg = typeof j.detail === "string" ? j.detail : j.error === "activation_blocked" || j.error === "transition_blocked"
-        ? `${j.blocking?.length ?? 0} item(s) block this step`
-        : JSON.stringify(j.detail ?? j);
     } catch {
       /* ignore */
     }
-    throw new ApiError(msg, res.status, j);
+    if (res.status === 401 && j?.error === "login_required") {
+      resetSessionState();
+      window.dispatchEvent(new Event(SIGNED_OUT));
+    }
+    if (res.status === 401 && j?.error === "step_up_required") {
+      // remember what was being done (the request only, never a token) so it can resume after the step-up
+      if (m !== "GET" && m !== "HEAD") onStepUp();
+      window.dispatchEvent(new CustomEvent(STEP_UP, { detail: j }));
+    }
+    throw new ApiError(j ? errorMessage(res.status, j) : `${res.status} ${res.statusText}`, res.status, j);
   }
   const data = (await res.json()) as T;
-  if (m === "GET") cache.set(path, data);
+  if (m === "GET") {
+    if (epoch === sessionEpoch) cache.set(path, data);
+  }
   else window.dispatchEvent(new Event(CHANGED));
   return data;
 }
+
+// ------------------------------------------------------------ step-up (design §9.4, §17)
+
+/** An action that needs a fresh sign-in, kept across the IdP round trip (sessionStorage, ten minutes). */
+export interface PendingAction { method: string; path: string; body?: unknown; label: string; at: number }
+
+const PENDING = "tessera.pendingAction";
+/** A pending action older than this is discarded rather than resumed. */
+export const PENDING_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * Field names that mark a body as carrying a secret (connection credentials, webhook and SIEM tokens,
+ * passwords, keys). A backstop: calls that send a secret also pass { noResume: true }.
+ */
+const SECRET_KEY = /secret|passw|^pass$|pwd|passphrase|token|private|credential|api[_-]?key|key$|signing|pem|authorization|bearer/i;
+
+/** True when the body, at any depth, has a field whose name marks a secret; a body nested too deep counts as one. */
+export function carriesSecret(v: unknown, depth = 0): boolean {
+  if (v === null || typeof v !== "object") return false;
+  if (depth > 8) return true;
+  return Object.entries(v as Record<string, unknown>).some(([k, x]) => SECRET_KEY.test(k) || carriesSecret(x, depth + 1));
+}
+
+function savePendingAction(a: PendingAction): void {
+  // A request that carries a secret is never written to browser storage: after the step-up the user
+  // enters it again, as when storage is unavailable. An earlier pending action is dropped too, so the
+  // resume prompt never offers a different action than the one just refused.
+  if (carriesSecret(a.body)) {
+    clearPendingAction();
+    return;
+  }
+  try {
+    sessionStorage.setItem(PENDING, JSON.stringify(a));
+  } catch {
+    /* storage unavailable: the user retries by hand after the step-up */
+  }
+}
+
+/** Forget the pending action (the user declined to resume it, or it ran). */
+export function clearPendingAction(): void {
+  try {
+    sessionStorage.removeItem(PENDING);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** The pending action, removed from storage; null when none or older than ten minutes. */
+export function takePendingAction(now = Date.now()): PendingAction | null {
+  let a: PendingAction | null = null;
+  try {
+    const raw = sessionStorage.getItem(PENDING);
+    a = raw ? (JSON.parse(raw) as PendingAction) : null;
+  } catch {
+    a = null;
+  }
+  clearPendingAction();
+  if (!a || typeof a.path !== "string" || !a.path.startsWith("/") || now - a.at > PENDING_TTL_MS || now < a.at) return null;
+  return a;
+}
+
+const LABELS: [RegExp, (m: RegExpMatchArray) => string][] = [
+  [/^\/jit\/requests\/(\d+)\/approve$/, (m) => `Approve JIT request #${m[1]}`],
+  [/^\/reviews\/items\/(\d+)\/decision$/, (m) => `Record the review decision on item #${m[1]}`],
+  [/^\/least-privilege\/revoke$/, () => "Revoke the grant"],
+  [/^\/hris\/events\/([^/]+)\/execute$/, (m) => `Run the lifecycle plan for event ${m[1]}`],
+  [/^\/connections\/([^/]+)\/(config|credential|activate|retire)$/, (m) => `${{ config: "Save the configuration of", credential: "Set the credential of", activate: "Activate", retire: "Retire" }[m[2]]} connection ${m[1]}`],
+  [/^\/readiness\/overlays\/([^/]+)$/, (m) => `Save the readiness overlay for ${m[1]}`],
+];
+
+/** A plain-language name for an API action, shown before resuming it. */
+export function actionLabel(method: string, path: string): string {
+  for (const [re, f] of LABELS) {
+    const m = path.match(re);
+    if (m) return f(m);
+  }
+  return `${method} ${path}`;
+}
+
+/** Where to go to satisfy a step_up_required answer, coming back to the current page. */
+export function stepUpHref(challenge: { step_up_url?: string; acr?: string; max_age?: number }): string {
+  const base = challenge.step_up_url ?? `/api/auth/step-up?${new URLSearchParams({ acr: challenge.acr ?? "urn:tessera:acr:phr", max_age: String(challenge.max_age ?? 900) })}`;
+  const q = new URLSearchParams(window.location.search);
+  q.delete("stepup");
+  q.delete("request_id");
+  const here = safeReturnTo(window.location.pathname + (q.size ? `?${q}` : ""));
+  return `${base}${base.includes("?") ? "&" : "?"}return_to=${encodeURIComponent(here)}`;
+}
+
+/** Run a resumed action (after a successful step-up). */
+export const runPendingAction = (a: PendingAction) => api(a.path, a.body, a.method);
 
 /** Tell mounted views that data changed outside `api()` (e.g. the mock layer). */
 export const notifyChanged = () => window.dispatchEvent(new Event(CHANGED));
 
 export function useApi<T = any>(path: string | null) {
-  const [data, setData] = useState<T | null>(() => (path ? ((cache.get(path) as T) ?? null) : null));
-  const [error, setError] = useState<string | null>(null);
+  const [data, setData] = useState<T | null>(() => (path ? (cached<T>(path) ?? null) : null));
+  const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(false);
   const load = useCallback(() => {
     if (!path) return;
@@ -71,14 +307,14 @@ export function useApi<T = any>(path: string | null) {
         setData(d);
         setError(null);
       })
-      .catch((e) => alive && setError(String(e.message ?? e)))
+      .catch((e) => alive && setError(e instanceof ApiError ? e : new ApiError(String(e?.message ?? e), 0, null)))
       .finally(() => alive && setLoading(false));
     return () => {
       alive = false;
     };
   }, [path]);
   useEffect(() => {
-    setData(path ? ((cache.get(path) as T) ?? null) : null);
+    setData(path ? (cached<T>(path) ?? null) : null);
     return load();
   }, [load, path]);
   useEffect(() => {
@@ -88,6 +324,9 @@ export function useApi<T = any>(path: string | null) {
   }, [load]);
   return { data, error, loading, reload: load };
 }
+
+/** Ask every mounted `useApi` to fetch again (the default Retry of an error panel). */
+export const refetchAll = () => window.dispatchEvent(new Event(CHANGED));
 
 // ------------------------------------------------------------------ types
 export type IdentityType = "human" | "service" | "ai_agent";
@@ -372,19 +611,782 @@ export interface NhiRow {
 export interface Policy { id: string; name: string; type: string; severity: string; description: string; enabled: boolean; source: string; violations: number }
 
 // -------------------------------------------------------------- actions
-/** Placeholder actor until Phase 0 auth: the persona's display name is recorded as the decider. */
-export const jitDecide = (id: number, action: "approve" | "deny" | "revoke", approver: string) =>
-  api<JitRequest>(`/jit/requests/${id}/${action}`, { approver });
+/** The decider is the signed-in user (the API records it from the session). */
+export const jitDecide = (id: number, action: "approve" | "deny" | "revoke") =>
+  api<JitRequest>(`/jit/requests/${id}/${action}`, {});
 
 export const jitCreate = (body: { identity_id: number; group_id: number; duration_hours: number; justification: string }) =>
   api<JitRequest>("/jit/requests", body);
 
-export const reviewDecide = (itemId: number, decision: "keep" | "revoke", reviewer: string, comment?: string) =>
-  api<{ id: number; decision: string }>(`/reviews/items/${itemId}/decision`, { decision, reviewer, comment: comment || null });
+export const reviewDecide = (itemId: number, decision: "keep" | "revoke", comment?: string) =>
+  api<{ id: number; decision: string }>(`/reviews/items/${itemId}/decision`, { decision, comment: comment || null });
+
+// -------------------------------------------------------------- session
+export interface SessionInfo {
+  user: { id: string; email: string | null; display_name: string };
+  tenant: { id: string; slug: string; name: string };
+  roles: string[];
+  active_roles: string[];
+  inactive_roles: { role: string; reason: string }[];
+  permissions: string[];
+  authn: { aal: number; phishing_resistant: boolean; phr_basis: string; acr: string; methods: string[]; auth_time: string };
+  session: { id: string; idle_expires_at: string; absolute_expires_at: string };
+  csrf_token: string;
+}
+
+/** The current session, or null when signed out. Not cached. */
+export async function getSession(): Promise<SessionInfo | null> {
+  const res = await fetch("/api/auth/session", { credentials: "same-origin" });
+  if (res.status === 401) {
+    resetSessionState();
+    return null;
+  }
+  if (res.status === 429) throw rateLimited(res);
+  if (!res.ok) throw new ApiError(`${res.status} ${res.statusText}`, res.status, null);
+  const s = (await res.json()) as SessionInfo;
+  setCsrfToken(s.csrf_token);
+  return s;
+}
+
+export async function logout(): Promise<void> {
+  try {
+    await api("/auth/logout", {});
+  } finally {
+    resetSessionState();
+  }
+}
+
+/** An IdP connection a tenant's users sign in through (GET /api/auth/discover). */
+export interface LoginConnection { id: string; name: string; protocol: string; default: boolean }
+
+/**
+ * Home-realm discovery: the sign-in connections of the tenant with this slug (optionally only
+ * those whose verified domains match the email). An unknown tenant answers the same way with no
+ * connections, so the page cannot tell which tenants exist.
+ */
+export async function discover(tenant: string, email?: string): Promise<LoginConnection[]> {
+  const q = new URLSearchParams({ tenant });
+  if (email) q.set("email", email);
+  const res = await fetch(`/api/auth/discover?${q}`, { credentials: "same-origin" });
+  if (res.status === 429) throw rateLimited(res);
+  if (!res.ok) throw new ApiError(`${res.status} ${res.statusText}`, res.status, null);
+  return ((await res.json()) as { connections: LoginConnection[] }).connections;
+}
+
+/** A same-site path to come back to after sign-in (never another origin, never /login). */
+export function safeReturnTo(path: string): string {
+  if (!path.startsWith("/") || path.startsWith("//") || /[\\\u0000-\u001f\u007f]/.test(path) || path.startsWith("/login")) return "/";
+  return path;
+}
+
+/**
+ * The URL that starts a sign-in through the IdP (the browser navigates there; the API answers
+ * with a redirect to the IdP and, afterwards, back to returnTo with the session cookie set).
+ */
+export function loginUrl(tenant: string, connection: string | null, returnTo: string): string {
+  const q = new URLSearchParams({ tenant, return_to: safeReturnTo(returnTo) });
+  if (connection) q.set("connection", connection);
+  return `/api/auth/login?${q}`;
+}
+
+/** Start a sign-in: forget the previous session's state, then leave for the IdP. */
+export function startLogin(tenant: string, connection: string | null, returnTo: string): void {
+  resetSessionState();
+  window.location.assign(loginUrl(tenant, connection, returnTo));
+}
+
+/** One of the signed-in user's sessions (GET /api/auth/sessions). */
+export interface MySession {
+  id: string;
+  kind: string;
+  status: string;
+  current: boolean;
+  created_at: string;
+  last_activity_at: string;
+  idle_expires_at: string;
+  absolute_expires_at: string;
+  revoked_at: string | null;
+  revoked_reason: string | null;
+  ip_first: string | null;
+}
+
+export const mySessions = () => api<MySession[]>("/auth/sessions");
+export const revokeSession = (id: string) => api<unknown>(`/auth/sessions/${encodeURIComponent(id)}`, undefined, "DELETE");
 
 export const hrisExecute = (eventId: number) => api(`/hris/events/${eventId}/execute`, {});
 
-export const simulate = (body: { remove_edge_ids?: number[]; add_edges?: { src: string; dst: string }[]; disable_account_ids?: number[] }) =>
+// ---------------------------------------------------------------- account correlation (issue #160)
+
+export interface CorrAccount { id: number; system: string; external_id: string; username: string; kind: string; status: string; identity_id: number | null }
+/** A person the account's login proposes. Proposals are never linked automatically. */
+export interface MatchCandidate { identity_id: number; name: string; email: string; rule: "email" | "email_local_part" }
+export interface MatchItem { account: CorrAccount; candidates: MatchCandidate[] }
+export interface LinkDecision {
+  account_id: number;
+  decision: "link" | "not_person";
+  identity_id: number | null;
+  previous_identity_id: number | null;
+  reason: string;
+  decided_by: string;
+  decided_at: string;
+}
+export interface MergeMove { table: string; id: number; column: string }
+export interface IdentityMerge {
+  id: string;
+  survivor_id: number;
+  survivor_name: string;
+  merged_id: number;
+  merged_name: string;
+  merged_status: string;
+  moves: MergeMove[];
+  reason: string;
+  merged_by: string;
+  merged_at: string;
+  unmerge_before: string;
+  unmerged_by: string | null;
+  unmerged_at: string | null;
+  unmerge_reason: string | null;
+}
+export interface UnmergeResult { merge: IdentityMerge; restored: MergeMove[]; kept: MergeMove[] }
+
+export const linkAccount = (accountId: number, identityId: number, reason: string) =>
+  api<{ account: CorrAccount; decision: LinkDecision }>(`/accounts/${accountId}/link`, { identity_id: identityId, reason });
+export const markNotPerson = (accountId: number, reason: string) =>
+  api<{ account: CorrAccount; decision: LinkDecision }>(`/accounts/${accountId}/not-person`, { reason });
+export const releaseAccount = (accountId: number) =>
+  api<{ account: CorrAccount; decision: LinkDecision }>(`/accounts/${accountId}/link`, undefined, "DELETE");
+export const mergeIdentity = (mergedId: number, survivorId: number, reason: string) =>
+  api<IdentityMerge>(`/identities/${mergedId}/merge`, { into: survivorId, reason });
+export const unmergeIdentity = (mergeId: string, reason: string) =>
+  api<UnmergeResult>(`/identity-merges/${encodeURIComponent(mergeId)}/unmerge`, { reason });
+
+// ------------------------------------------------ affiliations and identifiers (issue #64)
+
+export type AffiliationType = "employee" | "student" | "applicant" | "admit" | "prehire" | "contractor" | "guest_visitor" | "volunteer" | "partner" | "alum" | "retiree";
+/** One relationship between a person and the organization. A person has many. */
+export interface Affiliation {
+  id: string;
+  identity_id: number;
+  type: AffiliationType;
+  source: "hris" | "sis" | "sponsorship" | "partner_org" | "manual";
+  source_ref: string | null;
+  org_unit: string | null;
+  population: string | null;
+  starts_at: string;
+  ends_at: string | null;
+  /** Stored status. */
+  status: "pending" | "active" | "ended" | "revoked";
+  /** What it is now: an active affiliation past its end reads as ended until the lifecycle sweep runs. */
+  effective_status: "pending" | "active" | "ended" | "revoked";
+  created_at: string;
+  ended_at: string | null;
+  end_reason: string | null;
+}
+/** Lifecycle state as far as affiliations determine it. */
+export type PersonState = "unaffiliated" | "prospective" | "active" | "expiring" | "expired" | "revoked" | "merged" | "invited";
+export interface PersonAffiliations { identity_id: number; lifecycle_state: PersonState; affiliations: Affiliation[] }
+export interface PersonIdentifier {
+  id: string;
+  type: string;
+  issuer: string;
+  /** Null for hashed-only identifiers: the value is never stored. */
+  value: string | null;
+  verified_at: string | null;
+  verified_by: "confirmation_code" | "federation" | "authoritative_source" | "proofing_agent" | null;
+  status: "active" | "retired";
+  source_system: string | null;
+}
+export interface AddAffiliationInput { type: AffiliationType; org_unit?: string; population?: string; starts_at?: string; ends_at?: string; reason: string }
+
+export const addAffiliation = (identityId: number, body: AddAffiliationInput) =>
+  api<Affiliation>(`/identities/${identityId}/affiliations`, body);
+export const endAffiliation = (affiliationId: string, reason: string) =>
+  api<Affiliation>(`/affiliations/${encodeURIComponent(affiliationId)}/end`, { reason });
+// ---------------------------------------------------------------- access requests (issue #164)
+
+export type Risk = "low" | "medium" | "high";
+export interface PersonRef { id: number; name: string; type: IdentityType; status: string }
+export interface CatalogEntry {
+  /** null: the group is not in the catalog (only listed with ?all=1). */
+  id: string | null;
+  group: { id: number; system: string; name: string; kind: string; privileged: boolean };
+  requestable: boolean;
+  description: string;
+  owner: PersonRef | null;
+  risk: Risk;
+  eligible_types: string[];
+  eligible_departments: string[];
+  /** null: until removed. */
+  default_hours: number | null;
+  /** null: no limit. */
+  max_hours: number | null;
+  updated_at: string | null;
+  /** Approval stages, in order (issue #165), and hours before a stage escalates to deciders. */
+  approval: { stages: StageKind[]; escalate_after_hours: number };
+}
+export type StageKind = "manager" | "owner" | "decider";
+export interface RequestStage {
+  index: number;
+  kind: StageKind;
+  status: "queued" | "waiting" | "approved" | "denied" | "closed";
+  assignee: PersonRef | null;
+  due_at: string | null;
+  escalated: boolean;
+  decided_by: { id: string; display_name: string } | null;
+  on_behalf_of: { id: string; display_name: string } | null;
+  decided_at: string | null;
+  reason: string | null;
+}
+/** A request line the signed-in user may decide now (GET /api/approvals/inbox). */
+export interface ApprovalItem {
+  line: RequestLine;
+  stage: number | null;
+  kind: StageKind;
+  escalated: boolean;
+  on_behalf_of: { id: string; display_name: string } | null;
+}
+export interface UserRef { id: string; display_name: string }
+export interface ApprovalDelegation {
+  id: string;
+  from: UserRef;
+  to: UserRef;
+  starts_at: string;
+  ends_at: string;
+  reason: string;
+  created_at: string;
+  revoked_at: string | null;
+  active: boolean;
+}
+export interface CatalogView {
+  /** The person the signed-in user is; null when not linked (they request for others only). */
+  me: PersonRef | null;
+  can_request_for_others: boolean;
+  can_decide: boolean;
+  can_manage: boolean;
+  items: CatalogEntry[];
+}
+export type RequestStatus = "pending" | "approved" | "denied" | "cancelled" | "expired" | "removed";
+export interface RequestLine {
+  id: string;
+  batch_id: string;
+  status: RequestStatus;
+  catalog_item_id: string;
+  group: CatalogEntry["group"];
+  beneficiary: PersonRef;
+  account: { id: number; system: string; username: string };
+  requested_by: { id: string; display_name: string };
+  justification: string;
+  duration_hours: number | null;
+  requested_at: string;
+  decided_by: { id: string; display_name: string } | null;
+  decided_at: string | null;
+  decision_reason: string | null;
+  expires_at: string | null;
+  closed_at: string | null;
+  events?: { event: string; actor: string; note: string | null; at: string }[];
+  stages: RequestStage[];
+  can_approve: boolean;
+  can_cancel: boolean;
+  can_remove: boolean;
+}
+
+export const submitRequest = (body: { beneficiary_ids: number[]; catalog_item_ids: string[]; justification: string; duration_hours?: number | null }) =>
+  api<{ batch_id: string; lines: RequestLine[] }>("/requests", body);
+const line = (id: string, action: string, body: object = {}) => api<RequestLine>(`/requests/${encodeURIComponent(id)}/${action}`, body);
+export const approveRequest = (id: string, reason?: string) => line(id, "approve", reason ? { reason } : {});
+export const denyRequest = (id: string, reason: string) => line(id, "deny", { reason });
+export const cancelRequest = (id: string) => line(id, "cancel");
+export const removeRequest = (id: string, reason?: string) => line(id, "remove", reason ? { reason } : {});
+export const putCatalogItem = (groupId: number, body: Omit<CatalogEntry, "id" | "group" | "owner" | "updated_at" | "approval"> & {
+  owner_identity_id: number | null; approval_stages?: StageKind[]; escalate_after_hours?: number;
+}) => api<CatalogEntry>(`/catalog/items/${groupId}`, body, "PUT");
+export const createDelegation = (body: { to_user_id: string; starts_at: string; ends_at: string; reason: string }) =>
+  api<ApprovalDelegation>("/approvals/delegations", body);
+export const revokeDelegation = (id: string) => api<ApprovalDelegation>(`/approvals/delegations/${encodeURIComponent(id)}/revoke`, {});
+
+// ---------------------------------------------------------------- notifications (issue #189)
+
+export type NotificationChannel = "off" | "in_app" | "email" | "both" | "digest";
+/** One entry of the signed-in user's inbox (the top-bar bell). */
+export interface AppNotification {
+  id: string;
+  kind: string;
+  subject: string;
+  body: string;
+  /** An app path such as /inbox; empty when there is none. */
+  link: string;
+  created_at: string;
+  read_at: string | null;
+  /** The email side: none, pending, digest, digested, sent, skipped or dead. */
+  delivery: string;
+}
+export interface NotificationList { unread: number; items: AppNotification[] }
+export interface NotificationKindPref {
+  kind: string;
+  label: string;
+  description: string;
+  /** Cannot be turned off. */
+  mandatory: boolean;
+  channel: NotificationChannel;
+  default: NotificationChannel;
+}
+export interface NotificationPrefs {
+  /** False when the server sends no email at all (TESSERA_NOTIFY_EMAIL=off). */
+  email_available: boolean;
+  /** True when email goes to the dev sink, a file, and is not delivered. */
+  email_dev_sink: boolean;
+  channels: NotificationChannel[];
+  kinds: NotificationKindPref[];
+}
+
+export const NOTIFICATIONS_PATH = "/notifications?limit=30";
+export const markNotificationsRead = (target: { ids: string[] } | { all: true }) =>
+  api<{ marked: number; unread: number }>("/notifications/read", target);
+export const putNotificationPrefs = (prefs: Record<string, NotificationChannel>) =>
+  api<NotificationPrefs>("/notifications/preferences", { prefs }, "PUT");
+
+// ---------------------------------------------------------------- email delivery log (issue #189)
+
+export type EmailStatus = "queued" | "sending" | "accepted" | "deferred" | "rejected" | "failed" | "bounced";
+export interface EmailStep { command: string; reply: string; code: number; enhanced?: string }
+/** One send attempt with its SMTP transaction. Credentials are redacted and the body is never recorded. */
+export interface EmailAttempt {
+  started_at: string;
+  finished_at: string;
+  outcome: EmailStatus;
+  banner?: string;
+  capabilities?: string[];
+  tls?: { version?: string; cipher?: string; server_subject?: string; server_issuer?: string; error?: string };
+  steps: EmailStep[];
+  mail_from?: string;
+  rcpt_to?: string;
+  queue_id?: string;
+  error?: string;
+  truncated?: boolean;
+}
+export interface EmailMessage {
+  id: string;
+  notification_id: string;
+  kind: string;
+  recipient: string;
+  subject: string;
+  mail_from: string | null;
+  rcpt_to: string | null;
+  status: EmailStatus;
+  /** The relay's queue id from its final 250 reply. */
+  queue_id: string | null;
+  attempt_count: number;
+  created_at: string;
+  updated_at: string;
+  /** Deferred or failed messages can be sent again. */
+  retryable: boolean;
+  /** Only in the detail. */
+  attempts?: EmailAttempt[];
+}
+export interface EmailList { statuses: EmailStatus[]; email_mode: string; messages: EmailMessage[] }
+export const retryEmail = (id: string) => api<EmailMessage>(`/email/messages/${encodeURIComponent(id)}/retry`, {});
+
+// ---------------------------------------------------------------- business roles (issue #161)
+
+export type GroupRef = CatalogEntry["group"];
+export interface RoleRule {
+  department: string[];
+  type: string[];
+  title: string[];
+  /** Id of an attribute policy (issue #162) the person must also satisfy; "" or absent: none. */
+  policy?: string;
+}
+export type MemberSource = "rule" | "request" | "manual";
+export interface RoleMember {
+  person: PersonRef;
+  source: MemberSource;
+  assigned_by: { id: string; display_name: string } | null;
+  assigned_at: string;
+  request_id: string | null;
+}
+export interface BusinessRole {
+  id: string;
+  name: string;
+  description: string;
+  owner: PersonRef | null;
+  risk: Risk;
+  requestable: boolean;
+  /** null: no birthright rule (members are assigned or requested). */
+  birthright: RoleRule | null;
+  status: "active" | "retired";
+  version: number;
+  entitlements: GroupRef[];
+  member_count: number;
+  created_at: string;
+  updated_by: { id: string; display_name: string } | null;
+  updated_at: string;
+  /** Only on GET /roles/{id} and after a change. */
+  members?: RoleMember[];
+  /** The signed-in user holds it / has a pending request for it. */
+  held: boolean;
+  pending: boolean;
+}
+export interface RolesView {
+  me: PersonRef | null;
+  can_manage: boolean;
+  can_decide: boolean;
+  can_request_for_others: boolean;
+  can_read_members: boolean;
+  roles: BusinessRole[];
+}
+export type PlanAction = "add_grant" | "remove_grant" | "keep_grant" | "no_account" | "add_member" | "remove_member";
+export interface PlanStep {
+  action: PlanAction;
+  identity_id: number;
+  identity: string;
+  role_id?: string;
+  role?: string;
+  source?: MemberSource;
+  group_id?: number;
+  group?: string;
+  account_id?: number;
+  edge_id?: number;
+  reason?: string;
+}
+export interface RolePlan {
+  dry_run: boolean;
+  steps: PlanStep[];
+  grants_added: number;
+  grants_removed: number;
+  members_added: number;
+  members_removed: number;
+  no_account: number;
+}
+export interface RoleChange { role: BusinessRole; plan: RolePlan }
+export interface RoleSpec {
+  name: string;
+  description: string;
+  owner_identity_id: number | null;
+  risk: Risk;
+  requestable: boolean;
+  birthright: RoleRule | null;
+  entitlement_group_ids: number[];
+  note?: string;
+}
+export interface RoleVersion { version: number; snapshot: Record<string, unknown>; note: string | null; actor: string; changed_at: string }
+export interface RoleDrift {
+  missing: { person: PersonRef; missing: GroupRef[] }[];
+  holders: { person: PersonRef; held: GroupRef[]; holds_all: boolean }[];
+}
+export interface RoleRequest {
+  id: string;
+  role: { id: string; name: string; risk: Risk };
+  beneficiary: PersonRef;
+  requested_by: { id: string; display_name: string };
+  justification: string;
+  status: "pending" | "approved" | "denied" | "cancelled";
+  requested_at: string;
+  decided_by: { id: string; display_name: string } | null;
+  decided_at: string | null;
+  decision_reason: string | null;
+  can_approve: boolean;
+  can_cancel: boolean;
+}
+
+const rolePath = (id: string, rest = "") => `/roles/${encodeURIComponent(id)}${rest}`;
+const dry = (d?: boolean) => (d ? "?dry_run=1" : "");
+export const roles = {
+  create: (spec: RoleSpec, dryRun?: boolean) => api<RoleChange>(`/roles${dry(dryRun)}`, spec),
+  update: (id: string, version: number, spec: RoleSpec, dryRun?: boolean) =>
+    api<RoleChange>(rolePath(id, dry(dryRun)), { version, ...spec }, "PUT"),
+  retire: (id: string, reason: string, dryRun?: boolean) => api<RoleChange>(rolePath(id, "/retire" + dry(dryRun)), { reason }),
+  reconcile: (id: string, dryRun?: boolean) => api<RoleChange>(rolePath(id, "/reconcile" + dry(dryRun)), {}),
+  assign: (id: string, identityId: number, reason: string, dryRun?: boolean) =>
+    api<RoleChange>(rolePath(id, "/members" + dry(dryRun)), { identity_id: identityId, reason }),
+  unassign: (id: string, identityId: number, reason: string, dryRun?: boolean) =>
+    api<RoleChange>(rolePath(id, `/members/${identityId}/remove` + dry(dryRun)), { reason }),
+  request: (roleId: string, beneficiaryId: number, justification: string) =>
+    api<RoleRequest>("/role-requests", { role_id: roleId, beneficiary_id: beneficiaryId, justification }),
+  approve: (id: string, reason?: string) => api<RoleRequest>(`/role-requests/${encodeURIComponent(id)}/approve`, reason ? { reason } : {}),
+  deny: (id: string, reason: string) => api<RoleRequest>(`/role-requests/${encodeURIComponent(id)}/deny`, { reason }),
+  cancel: (id: string) => api<RoleRequest>(`/role-requests/${encodeURIComponent(id)}/cancel`, {}),
+};
+export const rolePaths = { list: "/roles", one: (id: string) => rolePath(id), versions: (id: string) => rolePath(id, "/versions"), drift: (id: string) => rolePath(id, "/drift") };
+
+// ---------------------------------------------------------------- identity lifecycle (issue #159)
+
+export type WorkerType = "employee" | "contractor" | "intern" | "partner" | "vendor" | "guest";
+export const WORKER_TYPES: WorkerType[] = ["employee", "contractor", "intern", "partner", "vendor", "guest"];
+export type LifecycleState = "upcoming" | "active" | "ending" | "ended";
+export interface Lifecycle {
+  person: PersonRef;
+  worker_type: WorkerType;
+  sponsor: PersonRef | null;
+  organization: string | null;
+  starts_at: string | null;
+  ends_at: string | null;
+  ended_at: string | null;
+  state: LifecycleState;
+  /** Whole days until the end date (0 when due); null without one. */
+  days_left: number | null;
+  /** The smallest warning already sent (14, 7 or 1 days). */
+  warned_days: number | null;
+  source: "manual" | "hris" | "sponsorship";
+  updated_at: string | null;
+  /** No lifecycle row: an employee with no end date. */
+  default: boolean;
+  can_extend: boolean;
+  can_manage: boolean;
+  events?: { event: "set" | "extended" | "converted" | "warned" | "ended"; worker_type: string | null; ends_at: string | null; note: string | null; actor: string; at: string }[];
+}
+export interface LifecycleList { can_manage: boolean; rows: Lifecycle[] }
+export interface LifecycleSpec {
+  worker_type: WorkerType;
+  sponsor_identity_id: number | null;
+  organization: string | null;
+  starts_at: string | null;
+  ends_at: string | null;
+  reason: string;
+}
+const lcPath = (id: number, rest = "") => `/identities/${id}/lifecycle${rest}`;
+export const lifecycle = {
+  paths: { list: (state?: LifecycleState) => `/lifecycle${state ? `?state=${state}` : ""}`, sponsored: "/lifecycle/sponsored", one: (id: number) => lcPath(id) },
+  set: (id: number, spec: LifecycleSpec) => api<Lifecycle>(lcPath(id), spec, "PUT"),
+  extend: (id: number, endsAt: string, reason: string) => api<Lifecycle>(lcPath(id, "/extend"), { ends_at: endsAt, reason }),
+  sweep: () => api<{ warned: number; ended: number }>("/lifecycle/sweep", {}),
+};
+
+// ---------------------------------------------------------------- guest sponsorships (issue #65)
+
+export type GuestPopulationKey = "visitor" | "contractor" | "volunteer" | "partner";
+export type SponsorshipStatus = "requested" | "pending_approval" | "active" | "transfer_pending" | "ended" | "revoked" | "rejected";
+/** The status, with a running sponsorship told apart as upcoming, active or ending (within 14 days). */
+export type SponsorshipState = SponsorshipStatus | "upcoming" | "ending";
+export interface BundleItem { group_id: number; system: string; name: string; risk: Risk; privileged: boolean }
+export interface SponsorshipEvent {
+  event: string;
+  from_status: SponsorshipStatus | null;
+  to_status: SponsorshipStatus;
+  note: string | null;
+  policy_version: string;
+  actor: string;
+  at: string;
+}
+export interface Sponsorship {
+  id: string;
+  status: SponsorshipStatus;
+  state: SponsorshipState;
+  guest: PersonRef & { email: string | null };
+  sponsor: PersonRef;
+  population: GuestPopulationKey;
+  purpose: string;
+  bundle: BundleItem[];
+  required_ial: number;
+  required_aal: number;
+  starts_at: string;
+  ends_at: string;
+  /** Whole days until the end; null once it is over. */
+  days_left: number | null;
+  /** The version of the sponsor policy that made the last decision. */
+  policy_version: string;
+  created_by: UserRef | null;
+  created_at: string;
+  approved_by: UserRef | null;
+  approved_at: string | null;
+  transfer_to: PersonRef | null;
+  transfer_deadline: string | null;
+  ended_at: string | null;
+  end_reason: string | null;
+  /** "ready" until the claim flow (GU-6) sends the invitation. */
+  invitation: "ready" | "sent" | "claimed" | "revoked";
+  can_renew: boolean;
+  can_end: boolean;
+  can_transfer: boolean;
+  can_accept_transfer: boolean;
+  can_approve: boolean;
+  events?: SponsorshipEvent[];
+}
+export interface GuestPopulationInfo {
+  key: GuestPopulationKey;
+  name: string;
+  max_days: number;
+  max_active: number;
+  default_ial: number;
+  default_aal: number;
+  approval_with_sensitive_bundle: boolean;
+}
+export interface GuestList {
+  rows: Sponsorship[];
+  populations: GuestPopulationInfo[];
+  policy_version: string;
+  max_invites_per_day: number;
+  transfer_deadline_days: number;
+  /** The sponsor policy lets the signed-in person sponsor. */
+  can_sponsor: boolean;
+  can_read_all: boolean;
+  can_approve: boolean;
+}
+export interface InviteInput {
+  given_name: string;
+  family_name: string;
+  email: string;
+  population: GuestPopulationKey;
+  purpose: string;
+  /** Omitted: now. */
+  starts_at?: string;
+  ends_at: string;
+  /** Group ids of requestable catalog items. */
+  bundle?: number[];
+  required_ial?: number;
+}
+export type BulkRowStatus = "ok" | "needs_approval" | "created" | "refused";
+export interface BulkRowResult {
+  row: number;
+  email: string;
+  population: string;
+  status: BulkRowStatus;
+  /** The stable code of the rule that refused the row. */
+  code?: string;
+  message?: string;
+  needs_approval: boolean;
+  policy_version: string;
+  sponsorship_id?: string;
+}
+export interface BulkResult {
+  dry_run: boolean;
+  batch_id?: string;
+  policy_version: string;
+  rows: BulkRowResult[];
+  created: number;
+  would_create: number;
+  refused: number;
+}
+const spPath = (id: string, rest = "") => `/sponsorships/${encodeURIComponent(id)}${rest}`;
+export const guests = {
+  paths: {
+    list: (f: { sponsor?: "me" | "all"; state?: SponsorshipStatus; population?: GuestPopulationKey } = {}) => {
+      const q = new URLSearchParams();
+      if (f.sponsor) q.set("sponsor", f.sponsor);
+      if (f.state) q.set("state", f.state);
+      if (f.population) q.set("population", f.population);
+      return `/guests${q.size ? `?${q}` : ""}`;
+    },
+    one: (id: string) => spPath(id),
+    approvals: "/sponsorships/approvals",
+  },
+  invite: (body: InviteInput) => api<Sponsorship>("/guests/invitations", body),
+  /** csv: the file's text. dryRun judges every row against the sponsor policy and writes nothing. */
+  bulk: (csv: string, dryRun: boolean) => api<BulkResult>("/guests/invitations/bulk", { csv, dry_run: dryRun }),
+  approve: (id: string) => api<Sponsorship>(spPath(id, "/approve"), {}),
+  reject: (id: string, reason: string) => api<Sponsorship>(spPath(id, "/reject"), { reason }),
+  renew: (id: string, endsAt: string, justification: string) => api<Sponsorship>(spPath(id, "/renew"), { ends_at: endsAt, justification }),
+  end: (id: string, reason: string) => api<Sponsorship>(spPath(id, "/end"), { reason }),
+  transfer: (id: string, toIdentityId: number, reason: string) => api<Sponsorship>(spPath(id, "/transfer"), { to_identity_id: toIdentityId, reason }),
+  acceptTransfer: (id: string) => api<Sponsorship>(spPath(id, "/accept-transfer"), {}),
+};
+/** Kill switch (issue #106): revoke an identity's sessions, refresh tokens and OAuth grants at the providers. */
+export interface ContainmentStep {
+  action: "revoke_sessions" | "revoke_grants";
+  system: string;
+  account: string;
+  outcome: "done" | "manual" | "failed";
+  revoked: number;
+  verified: boolean;
+  detail?: string;
+  notes?: string[];
+  started_at: string;
+  finished_at: string;
+  duration_ms: number;
+}
+export interface ContainmentReport {
+  identity_id: number;
+  identity: string;
+  trigger: string;
+  ok: boolean;
+  started_at: string;
+  finished_at: string;
+  duration_ms: number;
+  providers: { system: string; outcome: string; steps: number; failed: number; manual: number; duration_ms: number }[];
+  steps: ContainmentStep[];
+  manual_tasks: { system: string; account: string; action: string; instructions: string }[];
+}
+/** Resolves with the report; a failed run rejects with an ApiError whose body.report holds it. */
+export const containIdentity = (identityId: number, reason: string) =>
+  api<ContainmentReport>(`/identities/${identityId}/contain`, { reason });
+
+/** A containment step that failed and is queued for retry (or was given up on). */
+export interface ContainmentRetry {
+  id: string;
+  identity_id: number;
+  system: string;
+  account: string;
+  action: "revoke_sessions" | "revoke_grants";
+  trigger: string;
+  status: "pending" | "succeeded" | "gave_up";
+  attempts: number;
+  next_attempt_at: string | null;
+  last_error: string;
+  created_at: string;
+  updated_at: string;
+  manual_action?: string;
+}
+export const retryContainmentNow = (retryId: string) =>
+  api<{ retry: ContainmentRetry }>(`/containment-retries/${encodeURIComponent(retryId)}/retry-now`, {});
+
+// ---------------------------------------------------------------- attribute policies (issue #162)
+
+/** A condition: all/any/not over attribute tests, evaluated deterministically; a missing attribute denies. */
+export type AbacOp = "eq" | "ne" | "in" | "prefix" | "exists" | "gt" | "gte" | "lt" | "lte";
+export type AbacCondition =
+  | { all: AbacCondition[] }
+  | { any: AbacCondition[] }
+  | { not: AbacCondition }
+  | { attr: string; op: AbacOp; value?: string | number | boolean | (string | number | boolean)[] };
+export interface AbacAttribute { name: string; type: "string" | "number" | "boolean" | "time"; note: string }
+export interface AbacVersion { version: number; snapshot: { name?: string; description?: string; condition?: AbacCondition; status?: string }; note: string | null; actor: string; changed_at: string }
+export interface AbacPolicy {
+  id: string;
+  name: string;
+  description: string;
+  condition: AbacCondition;
+  status: "active" | "retired";
+  version: number;
+  created_at: string;
+  updated_by: { id: string; display_name: string } | null;
+  updated_at: string;
+  /** Birthright rules (role names) and catalog entitlements (system:name) that use it. */
+  used_by: { roles: string[]; catalog_items: string[] };
+  /** Only on GET /abac/policies/{id} and after a change. */
+  versions?: AbacVersion[];
+}
+export interface AbacList { can_manage: boolean; attributes: AbacAttribute[]; policies: AbacPolicy[] }
+export interface AbacPolicySpec { name: string; description: string; condition: AbacCondition; note?: string }
+export interface AbacSimPerson { id: number; name: string; type: IdentityType; status: string; department: string; title: string }
+export interface AbacSimulation {
+  evaluated: number;
+  matching: number;
+  before: number;
+  unchanged: number;
+  /** Identities for which the draft tests an attribute they lack (they are denied). */
+  missing_attributes: number;
+  /** The saved version compared against; 0: a new policy. */
+  current_version: number;
+  gain_count: number;
+  lose_count: number;
+  gains: AbacSimPerson[];
+  loses: AbacSimPerson[];
+  lists_truncated: boolean;
+}
+export interface AbacBinding { kind: "catalog_item"; target_id: string; target: string; policy_id: string }
+const abacPath = (id: string, rest = "") => `/abac/policies/${encodeURIComponent(id)}${rest}`;
+export const abac = {
+  create: (spec: AbacPolicySpec) => api<AbacPolicy>("/abac/policies", spec),
+  update: (id: string, version: number, spec: AbacPolicySpec) => api<AbacPolicy>(abacPath(id), { version, ...spec }, "PUT"),
+  retire: (id: string, reason: string) => api<AbacPolicy>(abacPath(id, "/retire"), { reason }),
+  /** Who gains and loses if the draft replaces the saved version (policyId omitted: a new policy). Changes nothing. */
+  simulate: (condition: AbacCondition, policyId?: string, extra?: { resource?: Record<string, string | number | boolean>; context?: Record<string, string | number | boolean> }) =>
+    api<AbacSimulation>("/abac/simulate", { condition, ...(policyId ? { policy_id: policyId } : {}), ...extra }),
+  /** Bind (or, with null, unbind) the policy that further restricts who may request a catalog entitlement. */
+  bindCatalog: (groupId: number, policyId: string | null) => api<{ catalog_item_id: string; policy_id: string | null }>(`/catalog/items/${groupId}/policy`, { policy_id: policyId }, "PUT"),
+};
+export const abacPaths = { list: "/abac/policies", one: (id: string) => abacPath(id), bindings: "/abac/bindings" };
+
+export const simulate = (body: { remove_edge_ids?: number[]; add_edges?: { src: string; dst: string; duration_hours?: number }[]; disable_account_ids?: number[] }) =>
   api<SimResult>("/simulate", { remove_edge_ids: [], add_edges: [], disable_account_ids: [], ...body });
 
 // ------------------------------------------------------------ formatting
@@ -415,7 +1417,7 @@ export interface Progress { pass: number; total: number; skipped: number }
 export interface TemplateRef { id: string; version: string; pin: string; display_name: string; overlay_version: number }
 
 export interface ConnConfig {
-  host?: string; port?: number; base_dns?: string[]; user_filter?: string; group_filter?: string; service_account_ous?: string[];
+  host?: string; port?: number; bind_dn?: string; ca_bundle?: string; base_dns?: string[]; user_filter?: string; group_filter?: string; service_account_ous?: string[];
   org_url?: string; tenant_id?: string; cloud?: string; customer?: string; domain?: string; base_url?: string;
   tenant_host?: string; api_version?: string; interface?: string; time_zone?: string;
   correlation_key?: string; hr_id_attribute?: string; technical_owner?: string; business_owner?: string;
@@ -531,7 +1533,7 @@ export const readiness = {
   create: (body: { name: string; connector_type: string; system?: string; config?: ConnConfig }) => api<Connection>("/connections", body),
   patchConfig: (id: string, patch: Partial<ConnConfig> | Record<string, unknown>) =>
     api<{ connection: Connection; new_revision: boolean; invalidated: string[]; fields: { field: string; msg: string }[] }>(`/connections/${id}/config`, patch, "PATCH"),
-  setCredential: (id: string, body: { secret?: string; reference?: string }) => api<RevisionView["credential"]>(`/connections/${id}/credential`, body, "PUT"),
+  setCredential: (id: string, body: { secret?: string; reference?: string }) => apiNoResume<RevisionView["credential"]>(`/connections/${id}/credential`, body, "PUT"),
   attest: (id: string, item: string, note: string) => api<Checklist>(`/connections/${id}/checklist/${item}/attest`, { note }),
   skip: (id: string, item: string, reason: string, review_by?: string) =>
     api<Checklist>(`/connections/${id}/checklist/${item}/skip`, review_by ? { reason, review_by } : { reason }),
@@ -546,3 +1548,71 @@ export const readiness = {
   rerun: (reconcile = false) => api<{ results: { connection_id: string; name: string; validation_run_id: string | null; dry_run_id: string | null; skipped?: string }[]; dashboard: DeploymentHealth }>(
     "/insights/deployment-health/rerun", { reconcile }),
 };
+
+// ------------------------------------------------------------ admin changes (design §15, §16.1)
+
+export type ChangeStatus = "pending_approval" | "cooling_off" | "applied" | "rejected" | "cancelled" | "expired" | "failed";
+
+/** The change types of design §15.2 that the API accepts. */
+export type ChangeType =
+  | "role.grant" | "role.revoke" | "idp_connection.create" | "idp_connection.update_trust" | "idp_connection.update_cosmetic"
+  | "idp_connection.disable" | "tenant.settings.update" | "tenant.security_contacts.update";
+
+interface AdminPersonRef { id: string; display_name: string }
+
+export interface AdminChange {
+  id: string; type: ChangeType; summary: string; status: ChangeStatus; target_id: string | null; two_person: boolean;
+  cooling_off_seconds: number; requested_by: AdminPersonRef; requested_at: string; expires_at: string; approved_by: AdminPersonRef | null;
+  approved_at: string | null; effective_at: string | null; decided_by: AdminPersonRef | null; decided_at: string | null;
+  applied_at: string | null; failure: string | null; test_login_at: string | null; payload_hash: string;
+  payload: Record<string, unknown> | null;
+  notifications?: AdminNotification[];
+}
+
+export interface AdminNotification {
+  id: string; kind: string; recipient_type: "admin" | "contact" | "operator"; recipient: string; subject: string;
+  change_request_id: string | null; recovery_id: string | null; created_at: string; delivered_at: string | null;
+}
+
+export interface AdminUser {
+  id: string; email: string | null; display_name: string; status: "active" | "disabled"; is_break_glass: boolean;
+  roles: { role: string; source: string; expires_at: string | null; change_request_id: string | null }[];
+  created_at: string; last_login_at: string | null; disabled_at: string | null; disabled_reason: string | null;
+}
+
+export interface AdminIdpConnection {
+  id: string; name: string; protocol: string; profile: string; status: "pending" | "active" | "disabled"; is_default: boolean;
+  verified_domains: string[]; issuer: string | null; assume_phishing_resistant: boolean; jit_provisioning: boolean;
+  default_role: string; created_at: string; updated_at: string; last_change_request_id: string | null;
+  activation: { change_request_id: string; requested_by: string; test_login_at: string | null; ready: boolean } | null;
+}
+
+export interface AdminRecovery {
+  id: string; status: "pending" | "cancelled" | "completed"; ticket: string; operator: string; co_operator: string;
+  not_before: string; created_at: string; cancelled_at: string | null; completed_at: string | null;
+}
+
+export interface AdminApiClients { available: boolean; clients: { id: string; name: string }[]; detail: string }
+
+/** Admin-change workflow calls. Approving needs the hash of the payload the admin reviewed. */
+export const adminChanges = {
+  submit: (type: ChangeType, payload: Record<string, unknown>, client_secret?: string) =>
+    client_secret
+      ? apiNoResume<AdminChange>("/admin/change-requests", { type, payload, client_secret })
+      : api<AdminChange>("/admin/change-requests", { type, payload }),
+  approve: (id: string, payload_hash: string) => api<AdminChange>(`/admin/change-requests/${id}/approve`, { payload_hash }),
+  reject: (id: string) => api<AdminChange>(`/admin/change-requests/${id}/reject`, {}),
+  cancel: (id: string) => api<AdminChange>(`/admin/change-requests/${id}/cancel`, {}),
+  apply: (id: string) => api<AdminChange>(`/admin/change-requests/${id}/apply`, {}),
+  activateConnection: (id: string) => api<{ id: string; status: string }>(`/admin/idp-connections/${id}/activate`, {}),
+  disableUser: (id: string, reason: string) => api<{ id: string; status: string }>(`/admin/users/${id}/disable`, { reason }),
+  cancelRecovery: (id: string) => api<AdminRecovery>(`/admin/recovery/${id}/cancel`, {}),
+};
+
+/** Seconds as "24 h", "5 min" for the cooling-off column. */
+export function fmtSpan(seconds: number): string {
+  if (seconds <= 0) return "none";
+  if (seconds % 3600 === 0) return `${seconds / 3600} h`;
+  if (seconds % 60 === 0) return `${seconds / 60} min`;
+  return `${seconds} s`;
+}

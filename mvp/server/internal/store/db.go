@@ -58,7 +58,7 @@ var (
 	ErrReadOnly = errors.New("store: write in a read-only transaction")
 	// ErrLegacySchema is returned by Open for a database created before
 	// tenancy; reseed it (./run.sh --reseed or tessera seed).
-	ErrLegacySchema = errors.New("store: database predates tenancy (no tenant_id columns); recreate it with `./run.sh --reseed` or `tessera seed` (both start from an empty schema)")
+	ErrLegacySchema = errors.New("store: database predates this server's schema (tenancy or sign-in); recreate it with `./run.sh --reseed` or `tessera seed` (both start from an empty schema)")
 )
 
 // GlobalTables are the only tables without tenant_id. The schema meta-test
@@ -72,15 +72,50 @@ var schemaFS embed.FS
 
 // tables in dependency order (parents first); Migrate(drop) drops them in reverse.
 var tables = []string{
-	"tenants", "platform_keys", "tenant_signing_keys", "identities", "accounts", "groups", "resources", "permissions", "grant_edges", "secrets",
-	"agent_delegations", "usage_events", "access_requests", "review_campaigns", "review_items",
+	"tenants", "platform_keys", "replay_cache", "tenant_signing_keys", "identities", "accounts", "groups", "resources", "permissions", "grant_edges", "secrets",
+	"revoked_grants", "agent_delegations", "usage_events", "access_requests", "review_campaigns", "review_items",
 	"hris_events",
+	// auth core (schema/0005_auth.sql)
+	"idp_connections", "platform_users", "external_logins", "role_assignments", "authn_contexts", "sessions",
+	"login_transactions",
+	// operator bootstrap (schema/0006_admin.sql)
+	"bootstrap_invitations",
+	// admin changes, admin notifications, operator recovery (schema/0008_admin_changes.sql)
+	"tenant_recoveries", "admin_change_requests", "admin_notifications",
 	// audit ledger (schema/0004_audit.sql)
 	"audit_events", "audit_chain_heads", "audit_checkpoints",
-	// deployment readiness (schema/0201-0203)
+	// deployment readiness (schema/0201-0203; revoked_grants is 0204)
 	"connections", "connection_revisions", "readiness_check_runs", "readiness_item_states", "readiness_attestations",
 	"readiness_skips", "readiness_overlays", "readiness_check_results", "recon_runs", "recon_findings", "readiness_scores",
 	"stg_identities", "stg_accounts", "stg_groups", "stg_memberships", "stg_attr_stats",
+	// sealed connection credentials (schema/0205)
+	"connection_secrets",
+	// account correlation (schema/0204_correlation.sql)
+	"account_links", "identity_merges",
+	// identity model for guests (schema/0226_identity_model.sql)
+	"guest_populations", "identity_source_records", "identity_identifiers", "affiliations",
+	// access requests (schema/0205_requests.sql)
+	"catalog_items", "access_request_lines", "access_request_events",
+	// business roles (schema/0206_business_roles.sql)
+	"business_roles", "business_role_entitlements", "business_role_versions", "business_role_members",
+	"business_role_requests",
+	// attribute conditions (schema/0221_abac.sql)
+	"abac_policies", "abac_policy_versions", "abac_bindings",
+	// identity lifecycle (schema/0220_lifecycle.sql)
+	"identity_lifecycle", "identity_lifecycle_events",
+	// approval routing (schema/0206_approvals.sql)
+	"approval_policies", "access_request_stages", "approval_delegations",
+	// notifications (schema/0223_notifications.sql)
+	"notifications", "notification_prefs",
+	// email delivery log (schema/0224_email_messages.sql)
+	"email_messages",
+	// sponsorships and invitations (schema/0227_sponsorships.sql)
+	"intake_records", "sponsorships", "sponsorship_events",
+	// identity containment (schema/0205_containment.sql)
+	"containment_credentials", "containment_retries",
+	// native groups (schema/0280_groups.sql); the engine tables stay empty until GR-2
+	"grp_folders", "grp_name_aliases", "grp_groups", "grp_composite_factors", "grp_lists", "grp_direct_memberships",
+	"grp_deps", "grp_closure", "grp_levels", "grp_effective", "grp_engine_queue",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was
@@ -93,8 +128,9 @@ var legacyTables = []string{"audit_log"}
 // Writes are serialized through one mutex so SQLite never sees two concurrent
 // writers; read-only tenant transactions (ReadTenant) run concurrently (WAL).
 type DB struct {
-	sql *sql.DB
-	mu  sync.Mutex
+	sql   *sql.DB
+	mu    sync.Mutex
+	stmts stmtCache
 }
 
 // Open opens (creating if needed) the database at path and applies the schema.
@@ -112,6 +148,13 @@ func open(ctx context.Context, path string, fresh bool) (*DB, error) {
 	q.Add("_pragma", "busy_timeout(10000)")
 	q.Add("_pragma", "journal_mode(WAL)")
 	q.Add("_pragma", "synchronous(NORMAL)")
+	// Write transactions start with BEGIN IMMEDIATE (the driver leaves
+	// read-only ones deferred). A deferred write transaction that reads first
+	// (InTenant checks the tenant) and then writes must upgrade its WAL
+	// snapshot; if another handle on the file committed meanwhile, SQLite
+	// returns SQLITE_BUSY at once and busy_timeout does not apply (#126). The
+	// mutex below only serializes writers within one handle.
+	q.Set("_txlock", "immediate")
 	db, err := sql.Open("sqlite", "file:"+path+"?"+q.Encode())
 	if err != nil {
 		return nil, fmt.Errorf("store: open: %w", err)
@@ -126,7 +169,10 @@ func open(ctx context.Context, path string, fresh bool) (*DB, error) {
 }
 
 // Close closes the database.
-func (d *DB) Close() error { return d.sql.Close() }
+func (d *DB) Close() error {
+	d.stmts.close()
+	return d.sql.Close()
+}
 
 // Checkpoint truncates the write-ahead log into the main database file, so the
 // file can be copied on its own (test fixtures).
@@ -176,20 +222,28 @@ func (d *DB) Migrate(ctx context.Context, drop bool) error {
 	})
 }
 
-// legacySchema reports whether identities exists without a tenant_id column.
+// legacySchema reports whether the database was created by an older server:
+// identities without tenant_id (before tenancy), or access_requests without
+// requested_by_user_id (before sign-in, PR5). CREATE TABLE IF NOT EXISTS
+// cannot add those columns, and the old rows have no platform users.
 func (d *DB) legacySchema(ctx context.Context) (bool, error) {
-	var n int
-	err := d.sql.QueryRowContext(ctx,
-		`SELECT count(*) FROM pragma_table_info('identities') WHERE name = 'tenant_id'`).Scan(&n)
-	if err != nil {
-		return false, err
+	for _, c := range []struct{ table, column string }{
+		{"identities", "tenant_id"}, {"access_requests", "requested_by_user_id"},
+	} {
+		var exists, n int
+		if err := d.sql.QueryRowContext(ctx,
+			`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, c.table).Scan(&exists); err != nil {
+			return false, err
+		}
+		if err := d.sql.QueryRowContext(ctx,
+			`SELECT count(*) FROM pragma_table_info(?) WHERE name = ?`, c.table, c.column).Scan(&n); err != nil {
+			return false, err
+		}
+		if exists == 1 && n == 0 {
+			return true, nil
+		}
 	}
-	var exists int
-	if err := d.sql.QueryRowContext(ctx,
-		`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'identities'`).Scan(&exists); err != nil {
-		return false, err
-	}
-	return exists == 1 && n == 0, nil
+	return false, nil
 }
 
 // InTenant runs fn in one write transaction scoped to t. A zero tenancy.ID or
@@ -222,7 +276,7 @@ func (d *DB) inTenant(ctx context.Context, t tenancy.ID, readOnly bool, fn func(
 	if err != nil {
 		return fmt.Errorf("store: begin: %w", err)
 	}
-	ttx := &TenantTx{ctx: ctx, tx: sqltx, tenant: t, readOnly: readOnly}
+	ttx := &TenantTx{ctx: ctx, db: d, tx: sqltx, tenant: t, readOnly: readOnly}
 	defer func() {
 		if p := recover(); p != nil {
 			_ = sqltx.Rollback()
@@ -278,7 +332,32 @@ func (d *DB) inSystemLocked(ctx context.Context, reason string, fn func(*SystemT
 		}
 		err = sqltx.Commit()
 	}()
-	return fn(&SystemTx{ctx: ctx, tx: sqltx, reason: reason})
+	return fn(&SystemTx{ctx: ctx, db: d, tx: sqltx, reason: reason})
+}
+
+// ReadSystem runs fn in one read-only system transaction. It does not take
+// the write lock, so the per-request session lookup (§14.2) runs concurrently
+// with other readers. Writes through it fail.
+func (d *DB) ReadSystem(ctx context.Context, reason string, fn func(*SystemTx) error) (err error) {
+	if reason == "" {
+		return errors.New("store: ReadSystem needs a reason")
+	}
+	sqltx, err := d.sql.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return fmt.Errorf("store: begin: %w", err)
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			_ = sqltx.Rollback()
+			panic(p)
+		}
+		if err != nil {
+			_ = sqltx.Rollback()
+			return
+		}
+		err = sqltx.Commit()
+	}()
+	return fn(&SystemTx{ctx: ctx, db: d, tx: sqltx, reason: reason})
 }
 
 // ForEachActiveTenant lists the active tenants (not _platform) in a SystemTx,
@@ -315,32 +394,6 @@ func (d *DB) ActiveTenants(ctx context.Context) ([]Tenant, error) {
 		return err
 	})
 	return out, err
-}
-
-// DevDefaultTenant resolves the tenant every API request uses until
-// authentication lands (Phase 0 PR5). It refuses unless env is "dev": there
-// is no other way for a request to choose a tenant yet, and production must
-// not have an implicit one.
-func (d *DB) DevDefaultTenant(ctx context.Context, env, slug string) (tenancy.ID, error) {
-	if env != "dev" {
-		return tenancy.ID{}, fmt.Errorf("store: a default tenant is only available when TESSERA_ENV=dev (got %q)", env)
-	}
-	var t Tenant
-	err := d.InSystem(ctx, "dev default tenant", func(s *SystemTx) error {
-		var err error
-		t, err = s.TenantBySlug(slug)
-		return err
-	})
-	if errors.Is(err, ErrNotFound) {
-		return tenancy.ID{}, fmt.Errorf("store: dev default tenant %q does not exist (seed the database)", slug)
-	}
-	if err != nil {
-		return tenancy.ID{}, err
-	}
-	if t.Status != "active" {
-		return tenancy.ID{}, fmt.Errorf("store: dev default tenant %q is %s", slug, t.Status)
-	}
-	return t.ID, nil
 }
 
 // RecordContextMissing writes a tenancy.context_missing event to the

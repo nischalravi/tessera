@@ -9,19 +9,52 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # Path filtering at job level (not top-level `paths:`) so skipped jobs still report
+  # as skipped, which satisfies required checks. Non-PR events always run everything.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read # paths-filter lists the PR's files
+    outputs:
+      go: ${{ github.event_name != 'pull_request' || steps.filter.outputs.go == 'true' }}
+      web: ${{ github.event_name != 'pull_request' || steps.filter.outputs.web == 'true' }}
+    steps:
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
+        id: filter
+        if: github.event_name == 'pull_request'
+        with:
+          filters: |
+            go:
+              - 'mvp/server/**'
+              - '.github/workflows/ci.yml'
+            web:
+              - 'mvp/frontend/**'
+              - '.github/workflows/ci.yml'
+
   backend:
     name: backend (Go)
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 35
     defaults:
       run:
         working-directory: mvp/server
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: mvp/server/go.mod
           cache-dependency-path: mvp/server/go.sum
+      - name: Schema number collisions
+        run: scripts/check-schema-prefixes.sh
       - run: go mod download
       - run: go mod verify
       - name: gofmt
@@ -33,16 +66,21 @@ jobs:
       - run: go build -trimpath -o bin/tessera ./cmd/tessera
 
   frontend:
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: mvp/frontend
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: "24"
           cache: npm
           cache-dependency-path: mvp/frontend/package-lock.json
       - run: npm ci
       - run: npm run build
+      # unit tests of the API client (node:test, no extra dependencies)
+      - run: npm test

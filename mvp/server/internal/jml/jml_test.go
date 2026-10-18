@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/jml"
@@ -12,6 +13,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/testkit"
+	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 )
 
 func TestMain(m *testing.M) { testkit.Main(m) }
@@ -146,7 +148,7 @@ func TestExecuteLeaverEventRemovesAllAccess(t *testing.T) {
 		return err
 	})
 	testkit.Write(t, st, func(c *store.TenantTx) error {
-		_, err := jml.ExecuteEvent(c, testkit.Now, evID, "jml-automation", pols)
+		_, err := jml.ExecuteEvent(c, testkit.Now, evID, store.UserRef{Display: "jml-automation"}, pols)
 		return err
 	})
 	testkit.Read(t, st, func(c *store.TenantTx) error {
@@ -187,7 +189,7 @@ func TestExecuteLeaverEventRemovesAllAccess(t *testing.T) {
 	})
 	// executing twice is refused
 	err := st.InTenant(t.Context(), st.Tenant, func(c *store.TenantTx) error {
-		_, err := jml.ExecuteEvent(c, testkit.Now, evID, "jml-automation", pols)
+		_, err := jml.ExecuteEvent(c, testkit.Now, evID, store.UserRef{Display: "jml-automation"}, pols)
 		return err
 	})
 	var je *jml.Error
@@ -282,4 +284,103 @@ func TestInferTeamAndBirthright(t *testing.T) {
 	if _, ok := jml.Birthright[*team]; !ok {
 		t.Errorf("inferred team %q has no birthright", *team)
 	}
+}
+
+// Containment steps (issue #106): a leaver plan carries revoke_sessions and
+// revoke_grants for an account on a system with a live connection, and
+// ExecuteEvent runs the plan whether or not they succeeded.
+func TestLeaverContainmentSteps(t *testing.T) {
+	st, ids := testkit.Tiny(t)
+	pols := testkit.Policies(t)
+	plan, err := read(st, func(c *store.TenantTx) (jml.Plan, error) {
+		return jml.LeaverPlan(c, testkit.Now, ids["alice"], false, pols)
+	})
+	if err != nil || len(stepsWith(plan, "revoke_sessions")) != 0 || len(stepsWith(plan, "revoke_grants")) != 0 {
+		t.Fatalf("no connection, yet containment steps: %v %v", err, steps(plan))
+	}
+
+	testkit.Write(t, st, func(c *store.TenantTx) error {
+		return c.InsertConnection(&store.Connection{ID: store.NewID(), Name: "Okta", ConnectorType: "okta", System: "okta",
+			Role: "account_source", CreatedAt: testkit.Now, UpdatedAt: testkit.Now})
+	})
+	plan, err = read(st, func(c *store.TenantTx) (jml.Plan, error) {
+		return jml.LeaverPlan(c, testkit.Now, ids["alice"], false, pols)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, grants := stepsWith(plan, "revoke_sessions"), stepsWith(plan, "revoke_grants")
+	if len(sess) != 1 || len(grants) != 1 || get(sess[0], "system") != "okta" {
+		t.Fatalf("steps: %v", steps(plan))
+	}
+	// containment comes before the grants are removed
+	idx := func(s jml.Step) int {
+		return slices.IndexFunc(steps(plan), func(x jml.Step) bool { return get(x, "action") == get(s, "action") })
+	}
+	if idx(sess[0]) > idx(stepsWith(plan, "remove_grant")[0]) {
+		t.Error("revoke_sessions is planned after remove_grant")
+	}
+	if specs := jml.ContainmentSpecs(plan); len(specs) != 2 {
+		t.Errorf("specs %+v", specs)
+	}
+
+	var evID int64
+	testkit.Write(t, st, func(c *store.TenantTx) error {
+		alice := ids["alice"]
+		var err error
+		evID, err = c.InsertHrisEvent(&store.HrisEvent{ExternalID: "t-c", Type: "leaver", IdentityID: &alice,
+			EffectiveAt: testkit.Now, Status: "pending"})
+		return err
+	})
+	// A failed or unrun containment step never blocks the leaver: ExecuteEvent
+	// applies the other steps (the failure is a retry task, made by the caller).
+	testkit.Write(t, st, func(c *store.TenantTx) error {
+		_, err := jml.ExecuteEvent(c, testkit.Now, evID, store.UserRef{Display: "x"}, pols)
+		return err
+	})
+	testkit.Read(t, st, func(c *store.TenantTx) error {
+		a, _ := c.Identity(ids["alice"])
+		if a.Status != "terminated" {
+			t.Errorf("alice is %s", a.Status)
+		}
+		return nil
+	})
+}
+
+func stringOf(v any) string { s, _ := v.(string); return s }
+
+// A contractor joiner from the HRIS gets a lifecycle row (issue #159): the
+// worker type and end date from the payload, the manager as sponsor.
+func TestExecuteJoinerRecordsContractorLifecycle(t *testing.T) {
+	st, ids := testkit.Tiny(t)
+	pols := testkit.Policies(t)
+	end := testkit.Now.Add(90 * 24 * time.Hour)
+	var evID int64
+	testkit.Write(t, st, func(c *store.TenantTx) error {
+		var err error
+		evID, err = c.InsertHrisEvent(&store.HrisEvent{ExternalID: "t-j", Type: "joiner", EffectiveAt: testkit.Now, Status: "pending",
+			Payload: ojson.Object{{Key: "name", Value: "Cass Contractor"}, {Key: "email", Value: "cass@example.com"},
+				{Key: "department", Value: "Engineering"}, {Key: "team", Value: "backend"}, {Key: "manager_external_id", Value: "carol"},
+				{Key: "worker_type", Value: "contractor"}, {Key: "end_date", Value: timeutil.ISO(end)}}})
+		return err
+	})
+	testkit.Write(t, st, func(c *store.TenantTx) error {
+		_, err := jml.ExecuteEvent(c, testkit.Now, evID, store.UserRef{Display: "jml-automation"}, pols)
+		return err
+	})
+	testkit.Read(t, st, func(c *store.TenantTx) error {
+		ev, err := c.HrisEvent(evID)
+		if err != nil || ev.IdentityID == nil {
+			t.Fatalf("event = %+v, %v", ev, err)
+		}
+		l, err := c.LifecycleFor(*ev.IdentityID)
+		if err != nil {
+			t.Fatalf("lifecycle: %v", err)
+		}
+		if l.WorkerType != store.WorkerContractor || l.Source != "hris" || l.EndsAt == nil || !l.EndsAt.Equal(end) ||
+			l.SponsorID == nil || *l.SponsorID != ids["carol"] {
+			t.Errorf("lifecycle = %+v", l)
+		}
+		return nil
+	})
 }

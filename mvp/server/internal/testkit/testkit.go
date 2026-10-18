@@ -15,6 +15,8 @@ package testkit
 
 import (
 	"context"
+	"maps"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -69,48 +71,109 @@ func CreateTenant(tb testing.TB, db *store.DB, id tenancy.ID, slug string) {
 	}
 }
 
+var tiny struct {
+	once sync.Once
+	db   []byte
+	ids  IDs
+	err  error
+}
+
 // Tiny returns a database whose tenant TinyTenant holds the tiny world (usage
-// relative to Now).
+// relative to Now). The world is loaded once per test binary; every call gets
+// its own copy of that database, with the same ids.
 func Tiny(tb testing.TB) (*DB, IDs) {
 	tb.Helper()
-	db := &DB{Open(tb), TinyTenant}
-	CreateTenant(tb, db.DB, TinyTenant, "tiny")
-	Write(tb, db, func(c *store.TenantTx) error {
-		_, err := ingest.Sync(c, Now, []connectors.Connector{TinyConnector{Now: Now}}, nil)
+	tiny.once.Do(buildTiny)
+	if tiny.err != nil {
+		tb.Fatal(tiny.err)
+	}
+	path := filepath.Join(tb.TempDir(), "test.db")
+	if err := os.WriteFile(path, tiny.db, 0o600); err != nil {
+		tb.Fatal(err)
+	}
+	st, err := store.Open(context.Background(), path)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	tb.Cleanup(func() { _ = st.Close() })
+	return &DB{st, TinyTenant}, maps.Clone(tiny.ids)
+}
+
+func buildTiny() {
+	dir, err := makeTempDir()
+	if err != nil {
+		tiny.err = err
+		return
+	}
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "tiny.db")
+	ctx := context.Background()
+	st, err := store.Open(ctx, path)
+	if err != nil {
+		tiny.err = err
+		return
+	}
+	defer st.Close()
+	err = st.InSystem(ctx, "test fixture", func(s *store.SystemTx) error {
+		_, err := s.CreateTenant(store.Tenant{ID: TinyTenant, Slug: "tiny", Name: "tiny", CreatedAt: Now})
 		return err
 	})
-	return db, LoadIDs(tb, db)
+	if err == nil {
+		err = st.InTenant(ctx, TinyTenant, func(c *store.TenantTx) error {
+			_, err := ingest.Sync(c, Now, []connectors.Connector{TinyConnector{Now: Now}}, nil)
+			return err
+		})
+	}
+	if err == nil {
+		err = st.ReadTenant(ctx, TinyTenant, func(c *store.TenantTx) error { tiny.ids, err = loadIDs(c); return err })
+	}
+	if err == nil {
+		err = st.Checkpoint(ctx)
+	}
+	if err == nil {
+		err = st.Close()
+	}
+	if err == nil {
+		tiny.db, err = os.ReadFile(path) // #nosec G304 -- path made above
+	}
+	tiny.err = err
 }
 
 // LoadIDs builds the id map for the current contents of db's tenant.
 func LoadIDs(tb testing.TB, db *DB) IDs {
 	tb.Helper()
-	ids := IDs{}
-	Read(tb, db, func(c *store.TenantTx) error {
-		idents, err := c.Identities()
-		if err != nil {
-			return err
-		}
-		for _, i := range idents {
-			ids[i.ExternalID] = i.ID
-		}
-		accts, err := c.Accounts()
-		if err != nil {
-			return err
-		}
-		for _, a := range accts {
-			ids["acct:"+a.System+":"+a.ExternalID] = a.ID
-		}
-		groups, err := c.Groups()
-		if err != nil {
-			return err
-		}
-		for _, g := range groups {
-			ids["group:"+g.System+":"+g.ExternalID] = g.ID
-		}
-		return nil
+	var ids IDs
+	Read(tb, db, func(c *store.TenantTx) (err error) {
+		ids, err = loadIDs(c)
+		return err
 	})
 	return ids
+}
+
+func loadIDs(c *store.TenantTx) (IDs, error) {
+	ids := IDs{}
+	idents, err := c.Identities()
+	if err != nil {
+		return nil, err
+	}
+	for _, i := range idents {
+		ids[i.ExternalID] = i.ID
+	}
+	accts, err := c.Accounts()
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range accts {
+		ids["acct:"+a.System+":"+a.ExternalID] = a.ID
+	}
+	groups, err := c.Groups()
+	if err != nil {
+		return nil, err
+	}
+	for _, g := range groups {
+		ids["group:"+g.System+":"+g.ExternalID] = g.ID
+	}
+	return ids, nil
 }
 
 // Read runs fn in a read-only transaction of db's tenant, failing the test on error.

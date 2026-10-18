@@ -12,9 +12,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
+	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
+	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/store/storetest"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
@@ -30,14 +33,28 @@ import (
 // missingID is an id no fixture row has.
 const missingID = 987654321
 
-func isolationServer(f *storetest.Fixture, tenant tenancy.ID) *Server {
+// isolationServer is a server over the two-tenant fixture, signed in as
+// testAdmin in tenant.
+func isolationServer(t testing.TB, f *storetest.Fixture, tenant tenancy.ID) testSrv {
+	t.Helper()
+	return asAdmin(t, newIsolationServer(f), f.DB, tenant, storetest.Now)
+}
+
+func newIsolationServer(f *storetest.Fixture) *Server {
+	kek, err := seal.New(storetest.IdentityKEK)
+	if err != nil {
+		panic(err)
+	}
 	return New(Config{
-		Store: f.DB, Tenant: tenant, Clock: timeutil.Frozen(storetest.Now), Policies: policy.NewLoader(policies.FS),
+		Identifiers: identifiers.NewKeyer(kek),
+		Store:       f.DB, Clock: timeutil.Frozen(storetest.Now), Policies: policy.NewLoader(policies.FS),
 		Connectors: func(now time.Time) ([]connectors.Connector, error) {
 			return []connectors.Connector{connectors.Tiny{Now: now}}, nil
 		},
 		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 		AllowedOrigins: []string{"http://localhost:5173"},
+		Env:            "test",
+		RateLimits:     noRateLimits, // the coverage tests send hundreds of anonymous requests
 	})
 }
 
@@ -102,17 +119,58 @@ var crossTenantCases = map[string]crossTenantCase{
 	"GET graph by resource": {method: "GET", path: pathf("/api/graph?resource_id=%d"), key: "resource:aws:prod"},
 	"POST simulate disable account": {method: "POST", path: fixed("/api/simulate"), key: "acct:aws:svc-etl",
 		body: func(id int64) string { return fmt.Sprintf(`{"disable_account_ids":[%d]}`, id) }},
+	"PUT catalog item": {method: "PUT", path: pathf("/api/catalog/items/%d"), key: "group:okta:platform",
+		body: func(int64) string { return `{"requestable":true,"risk":"low"}` }},
+	"GET lifecycle": {method: "GET", path: pathf("/api/identities/%d/lifecycle"), key: "alice"},
+	"PUT lifecycle": {method: "PUT", path: pathf("/api/identities/%d/lifecycle"), key: "alice",
+		body: func(int64) string { return `{"worker_type":"employee","reason":"x"}` }},
+	"POST lifecycle extend": {method: "POST", path: pathf("/api/identities/%d/lifecycle/extend"), key: "alice",
+		body: func(int64) string { return `{"ends_at":"2030-01-01T00:00:00Z","reason":"x"}` }},
+	"POST link account": {method: "POST", path: pathf("/api/accounts/%d/link"), key: "acct:okta:alice",
+		body: func(id int64) string { return fmt.Sprintf(`{"identity_id":%d,"reason":"x"}`, id) }},
+	"POST account not person": {method: "POST", path: pathf("/api/accounts/%d/not-person"), key: "acct:okta:alice",
+		body: func(int64) string { return `{"reason":"x"}` }},
+	"DELETE account link": {method: "DELETE", path: pathf("/api/accounts/%d/link"), key: "acct:okta:alice"},
+	"POST merge identity": {method: "POST", path: pathf("/api/identities/%d/merge"), key: "alice",
+		body: func(id int64) string { return fmt.Sprintf(`{"into":%d,"reason":"x"}`, id) }},
+	"GET identity affiliations": {method: "GET", path: pathf("/api/identities/%d/affiliations"), key: "alice"},
+	"GET identity identifiers":  {method: "GET", path: pathf("/api/identities/%d/identifiers"), key: "alice"},
+	// a bundle names catalog groups by id: tenant A's group is not in B's catalog, like a missing one
+	"POST invite bundle": {method: "POST", path: fixed("/api/guests/invitations"), key: "group:aws:ProdAdmin",
+		body: func(id int64) string {
+			return fmt.Sprintf(`{"given_name":"G","email":"g@x.example","population":"visitor","purpose":"x","ends_at":"2026-10-12T00:00:00Z","bundle":[%d]}`, id)
+		}},
+	"POST add affiliation": {method: "POST", path: pathf("/api/identities/%d/affiliations"), key: "alice",
+		body: func(int64) string { return `{"type":"alum","reason":"x"}` }},
+	"GET identity containment": {method: "GET", path: pathf("/api/identities/%d/containment"), key: "alice"},
+	"POST contain identity": {method: "POST", path: pathf("/api/identities/%d/contain"), key: "alice",
+		body: func(int64) string { return `{"reason":"suspected credential compromise"}` }},
 }
 
 // routeParamKey maps each route with path parameters to the cases above.
 var routeParamCases = map[string][]string{
-	"GET /api/identities/{identity_id}":            {"GET identity", "GET identity (nhi)"},
-	"GET /api/jml/leaver-plan/{identity_id}":       {"GET leaver plan"},
-	"GET /api/reviews/campaigns/{campaign_id}":     {"GET campaign"},
-	"GET /api/hris/events/{event_id}/plan":         {"GET hris plan"},
-	"POST /api/hris/events/{event_id}/execute":     {"POST hris execute"},
-	"POST /api/reviews/items/{item_id}/decision":   {"POST review decision"},
-	"POST /api/jit/requests/{request_id}/{action}": {"POST jit approve", "POST jit deny", "POST jit revoke"},
+	"GET /api/identities/{identity_id}":                   {"GET identity", "GET identity (nhi)"},
+	"GET /api/jml/leaver-plan/{identity_id}":              {"GET leaver plan"},
+	"GET /api/reviews/campaigns/{campaign_id}":            {"GET campaign"},
+	"GET /api/hris/events/{event_id}/plan":                {"GET hris plan"},
+	"POST /api/hris/events/{event_id}/execute":            {"POST hris execute"},
+	"POST /api/reviews/items/{item_id}/decision":          {"POST review decision"},
+	"POST /api/jit/requests/{request_id}/approve":         {"POST jit approve"},
+	"POST /api/jit/requests/{request_id}/deny":            {"POST jit deny"},
+	"POST /api/jit/requests/{request_id}/revoke":          {"POST jit revoke"},
+	"PUT /api/catalog/items/{group_id}":                   {"PUT catalog item"},
+	"GET /api/identities/{identity_id}/lifecycle":         {"GET lifecycle"},
+	"PUT /api/identities/{identity_id}/lifecycle":         {"PUT lifecycle"},
+	"POST /api/identities/{identity_id}/lifecycle/extend": {"POST lifecycle extend"},
+	"POST /api/accounts/{account_id}/link":                {"POST link account"},
+	"POST /api/accounts/{account_id}/not-person":          {"POST account not person"},
+	"DELETE /api/accounts/{account_id}/link":              {"DELETE account link"},
+	"POST /api/identities/{identity_id}/merge":            {"POST merge identity"},
+	"GET /api/identities/{identity_id}/affiliations":      {"GET identity affiliations"},
+	"GET /api/identities/{identity_id}/identifiers":       {"GET identity identifiers"},
+	"POST /api/identities/{identity_id}/affiliations":     {"POST add affiliation"},
+	"POST /api/identities/{identity_id}/contain":          {"POST contain identity"},
+	"GET /api/identities/{identity_id}/containment":       {"GET identity containment"},
 }
 
 // TestIsolation_RouteCrossTenant: as tenant B, every route with a path
@@ -125,8 +183,9 @@ var routeParamCases = map[string][]string{
 // "request is not pending"); the design's "404" is therefore checked as
 // "indistinguishable from missing".
 func TestIsolation_RouteCrossTenant(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
-	srv := isolationServer(f, f.B.ID)
+	srv := isolationServer(t, f, f.B.ID)
 	h := srv.Handler()
 
 	for _, rt := range srv.Routes() {
@@ -138,6 +197,49 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		}
 		if rt.Pattern == "/api/audit/events/{event_id}/proof" {
 			continue // TestIsolation_AuditRoutes
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/approvals/delegations/{delegation_id}") {
+			continue // TestApprovalsAPI_CrossTenant (a UUID, not a fixture id)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/requests/{request_id}") {
+			continue // TestRequestsAPI_CrossTenant (a UUID, not a fixture id)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/roles/{role_id}") || strings.HasPrefix(rt.Pattern, "/api/role-requests/{request_id}") {
+			continue // TestRolesAPI_CrossTenant (UUIDs, not fixture ids)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/abac/policies/{policy_id}") || rt.Pattern == "/api/catalog/items/{group_id}/policy" {
+			continue // TestAbacAPI_CrossTenant (UUIDs, not fixture ids)
+		}
+		if rt.Pattern == "/api/auth/oidc/{connection_id}/callback" || rt.Pattern == "/api/auth/oauth2/{connection_id}/callback" ||
+			rt.Pattern == "/t/{slug}/bootstrap" {
+			continue // TestIsolation_LoginCrossTenant (public; the tenant comes from the cookie or the slug)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/auth/saml/{connection_id}/") {
+			continue // TestIsolation_SAMLCrossTenant (public; the tenant comes from the cookie or the connection)
+		}
+		if rt.Pattern == "/api/identity-merges/{merge_id}/unmerge" {
+			continue // TestCorrelationAPI_CrossTenant (a UUID, not a fixture id)
+		}
+		if rt.Pattern == "/api/affiliations/{affiliation_id}/end" {
+			continue // TestAffiliationsAPI_CrossTenant (a UUID, not a fixture id)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/sponsorships/{sponsorship_id}") {
+			continue // TestSponsorshipsAPI_CrossTenant (a UUID, not a fixture id)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/email/messages/{message_id}") {
+			continue // TestEmailAPI_CrossTenant (a UUID, not a fixture id)
+		}
+		if rt.Pattern == "/api/containment-retries/{retry_id}/retry-now" {
+			continue // TestContainmentRetriesAPI (a UUID, not a fixture id)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/groups/") {
+			continue // TestGroupsTenantIsolation (UUIDs, not fixture ids)
+		}
+		if rt.Pattern == "/api/auth/sessions/{session_id}" {
+			continue // TestIsolation_SessionCookieScoped (a UUID, not a fixture id)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/admin/") {
+			continue // TestAdminAPI_CrossTenant (UUIDs, not fixture ids)
 		}
 		if _, ok := routeParamCases[rt.Method+" "+rt.Pattern]; !ok {
 			t.Errorf("route %s %s has path parameters but no cross-tenant case", rt.Method, rt.Pattern)
@@ -186,30 +288,52 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 // own ids for path parameters) answers without any of tenant A's data. POST
 // routes that return tenant data are exercised too.
 func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	// Positive control: served as tenant A, the sentinel is visible.
-	if rec := serveOnce(isolationServer(f, f.A.ID).Handler(), http.MethodGet, "/api/identities", ""); !leaks(rec.Body.String()) {
+	if rec := serveOnce(isolationServer(t, f, f.A.ID).Handler(), http.MethodGet, "/api/identities", ""); !leaks(rec.Body.String()) {
 		t.Fatal("tenant A's own identities do not carry the sentinel; the leak check would never fire")
 	}
-	srv := isolationServer(f, f.B.ID)
+	srv := isolationServer(t, f, f.B.ID)
 	h := srv.Handler()
 	b := f.B.IDs
 	param := regexp.MustCompile(`\{[a-z_]+\}`)
+	lines := seedRequestLines(t, f)        // A's justification carries the sentinel
+	roleIDs, _ := seedRoles(t, f)          // and A's role description
+	sponsorships := seedSponsorships(t, f) // and A's sponsorship purpose
+	policyIDs := seedAbac(t, f)            // and A's policy name
 	values := map[string]string{
-		"/api/identities/{identity_id}":        fmt.Sprint(b["alice"]),
-		"/api/jml/leaver-plan/{identity_id}":   fmt.Sprint(b["alice"]),
-		"/api/reviews/campaigns/{campaign_id}": fmt.Sprint(b["campaign"]),
-		"/api/hris/events/{event_id}/plan":     fmt.Sprint(b["hris:leaver"]),
-		"/api/audit/events/{event_id}/proof":   latestEventID(t, f.DB, f.B.ID),
+		"/api/abac/policies/{policy_id}":             policyIDs[f.B.ID],
+		"/api/roles/{role_id}":                       roleIDs[f.B.ID],
+		"/api/roles/{role_id}/versions":              roleIDs[f.B.ID],
+		"/api/roles/{role_id}/drift":                 roleIDs[f.B.ID],
+		"/api/requests/{request_id}":                 lines[f.B.ID],
+		"/api/sponsorships/{sponsorship_id}":         sponsorships[f.B.ID],
+		"/api/identities/{identity_id}":              fmt.Sprint(b["alice"]),
+		"/api/identities/{identity_id}/lifecycle":    fmt.Sprint(b["alice"]),
+		"/api/identities/{identity_id}/affiliations": fmt.Sprint(b["alice"]),
+		"/api/identities/{identity_id}/identifiers":  fmt.Sprint(b["alice"]),
+		"/api/jml/leaver-plan/{identity_id}":         fmt.Sprint(b["alice"]),
+		"/api/reviews/campaigns/{campaign_id}":       fmt.Sprint(b["campaign"]),
+		"/api/hris/events/{event_id}/plan":           fmt.Sprint(b["hris:leaver"]),
+		"/api/audit/events/{event_id}/proof":         latestEventID(t, f.DB, f.B.ID),
+		"/api/email/messages/{message_id}":           seedEmailMessage(t, f, f.B, store.EmailDeferred),
+		"/api/identities/{identity_id}/containment":  fmt.Sprint(b["alice"]),
 	}
 	checked := 0
 	for _, rt := range srv.Routes() {
 		if rt.Method != http.MethodGet || !rt.Tenant {
 			continue
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/admin/") && strings.Contains(rt.Pattern, "{") {
+			continue // TestAdminAPI_CrossTenant (UUIDs, not fixture ids)
+		}
 		path := rt.Pattern
 		if rp, ok := readinessGetPaths(f.B.Refs)[path]; ok && strings.Contains(path, "{") {
 			path = rp // tenant B's own readiness ids
+		}
+		if strings.HasPrefix(path, "/api/groups/") && strings.Contains(path, "{") {
+			continue // TestGroupsTenantIsolation (UUIDs, not fixture ids)
 		}
 		if strings.Contains(path, "{") {
 			v, ok := values[path]
@@ -272,6 +396,7 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 // TestIsolation_GraphSnapshotScoped: tenant B's graph shares no node with
 // tenant A's, and /api/simulate with one of A's node keys is a 400.
 func TestIsolation_GraphSnapshotScoped(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	snap := func(id tenancy.ID) *graph.Snapshot {
 		var g *graph.Snapshot
@@ -293,7 +418,7 @@ func TestIsolation_GraphSnapshotScoped(t *testing.T) {
 			t.Errorf("tenant B's graph has tenant A's node %s", n.Key)
 		}
 	}
-	h := isolationServer(f, f.B.ID).Handler()
+	h := isolationServer(t, f, f.B.ID).Handler()
 	for _, body := range []string{
 		fmt.Sprintf(`{"add_edges":[{"src":"account:%d","dst":"group:%d"}]}`, f.A.IDs["acct:okta:alice"], f.B.IDs["group:aws:ProdAdmin"]),
 		fmt.Sprintf(`{"add_edges":[{"src":"account:%d","dst":"group:%d"}]}`, f.B.IDs["acct:okta:alice"], f.A.IDs["group:aws:ProdAdmin"]),
@@ -305,33 +430,68 @@ func TestIsolation_GraphSnapshotScoped(t *testing.T) {
 	}
 }
 
-// TestIsolation_NoTenantFailsClosed: a server with no tenant (the zero
-// tenancy.ID) answers every tenant route with 500 and no data, and records
-// tenancy.context_missing on the platform tenant. Untenanted routes still work.
-func TestIsolation_NoTenantFailsClosed(t *testing.T) {
+// TestIsolation_NoSessionFailsClosed: without a session every non-public
+// route answers 401 login_required with no data, whatever tenant a client
+// names in a header or query parameter; the request is recorded on the
+// platform chain, anonymous, with the reason.
+func TestIsolation_NoSessionFailsClosed(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
-	srv := isolationServer(f, tenancy.ID{})
-	h := srv.Handler()
+	srv := isolationServer(t, f, f.B.ID)
+	h := srv.Anonymous()
 	for _, rt := range srv.Routes() {
-		path := regexp.MustCompile(`\{[a-z_]+\}`).ReplaceAllString(rt.Pattern, "1")
-		path = strings.Replace(path, "/1/1", "/1/approve", 1)
-		body := ""
-		if rt.Method == http.MethodPost {
-			body = `{}`
-		}
-		rec := serveOnce(h, rt.Method, path, body)
-		if !rt.Tenant {
-			if rec.Code != http.StatusOK {
-				t.Errorf("%s %s (no tenant data): status %d", rt.Method, path, rec.Code)
-			}
+		if rt.Public {
 			continue
 		}
-		if rec.Code != http.StatusInternalServerError {
-			t.Errorf("%s %s without a tenant: status %d, want 500: %.200s", rt.Method, path, rec.Code, rec.Body.String())
+		path := regexp.MustCompile(`\{[a-z_]+\}`).ReplaceAllString(rt.Pattern, "1") + "?tenant=" + f.A.Slug
+		body := ""
+		if rt.Method != http.MethodGet {
+			body = `{}`
+		}
+		req := httptest.NewRequest(rt.Method, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Tessera-Tenant", f.A.ID.String())
+		req.Header.Set("X-Tessera-User", "alice")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "login_required") {
+			t.Errorf("%s %s without a session: %d %.200s, want 401 login_required", rt.Method, path, rec.Code, rec.Body.String())
 		}
 		if leaks(rec.Body.String()) {
-			t.Errorf("%s %s without a tenant leaks data", rt.Method, path)
+			t.Errorf("%s %s without a session leaks data", rt.Method, path)
 		}
+	}
+	var events int
+	if err := f.DB.ReadTenant(context.Background(), tenancy.Platform, func(c *store.TenantTx) error {
+		log, err := c.AuditEvents(store.AuditFilter{IncludeHTTP: true})
+		for _, e := range log {
+			if e.Action == store.ActionHTTPRequest && e.ActorType == store.ActorAnonymous &&
+				strings.Contains(string(e.Detail), `"anonymous_reason":"no_session"`) {
+				events++
+			}
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if events == 0 {
+		t.Error("no anonymous http.request event recorded on the platform chain")
+	}
+}
+
+// TestIsolation_TenantContextMissing: a handler that reaches tenant data
+// without the tenant wrapper (a programming error) gets 500, not data, and
+// tenancy.context_missing is recorded on the platform tenant.
+func TestIsolation_TenantContextMissing(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	raw := newIsolationServer(f)
+	raw.handle(http.MethodGet, "/api/oops", noTenant, need(auth.PermGraphRead), func(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+		return store.TxFrom(r.Context()).Identities()
+	})
+	h := asAdmin(t, raw, f.DB, f.B.ID, storetest.Now).Handler()
+	rec := serveOnce(h, http.MethodGet, "/api/oops", "")
+	if rec.Code != http.StatusInternalServerError || leaks(rec.Body.String()) {
+		t.Errorf("handler without a tenant transaction: %d %.200s", rec.Code, rec.Body.String())
 	}
 	var events int
 	if err := f.DB.ReadTenant(context.Background(), tenancy.Platform, func(c *store.TenantTx) error {

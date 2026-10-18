@@ -104,7 +104,7 @@ func TestIsolation_EveryTableScopedOrAllowlisted(t *testing.T) {
 				if first == "tenant_id" {
 					tenantIndexed++
 				}
-				if x.unique && x.origin != "pk" && first != "tenant_id" {
+				if x.unique && x.origin != "pk" && first != "tenant_id" && !globalHashIndex(t, db, x.name, table) {
 					t.Errorf("unique index %s on %s does not start with tenant_id", x.name, table)
 				}
 			}
@@ -113,6 +113,31 @@ func TestIsolation_EveryTableScopedOrAllowlisted(t *testing.T) {
 			}
 		})
 	}
+}
+
+// globalHashIndex reports whether index is a single-column unique index on
+// the table's GlobalHashLookups column (the bearer-secret hashes of §14.2,
+// unique across tenants by design).
+func globalHashIndex(t *testing.T, db *DB, index, table string) bool {
+	t.Helper()
+	col, ok := GlobalHashLookups[table]
+	if !ok {
+		return false
+	}
+	rows, err := db.sql.QueryContext(context.Background(), `SELECT name FROM pragma_index_info(@i)`, sql.Named("i", index))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var cols []string
+	for rows.Next() {
+		var c string
+		if err := rows.Scan(&c); err != nil {
+			t.Fatal(err)
+		}
+		cols = append(cols, c)
+	}
+	return len(cols) == 1 && cols[0] == col
 }
 
 func sortedCopy(s []string) []string {
@@ -138,7 +163,11 @@ func TestIsolation_EveryStatementBindsTenant(t *testing.T) {
 	for _, n := range names {
 		st := statements[n]
 		t.Run(n, func(t *testing.T) {
-			if err := lintStatement(st.sql, st.system, GlobalTables); err != nil {
+			lint := lintStatement
+			if st.lookup {
+				lint = func(q string, _ bool, _ []string) error { return lintLookup(q) }
+			}
+			if err := lint(st.sql, st.system, GlobalTables); err != nil {
 				t.Errorf("%v\n%s", err, st.sql)
 			}
 		})
@@ -274,9 +303,19 @@ var referenceColumns = map[string][]string{
 	"audit_chain_heads": {"last_seq", "last_hash"},
 	"audit_checkpoints": {"seq", "head_hash"},
 	"grant_edges":       {"src", "dst"},
-	"access_requests":   {"edge_id"},
-	"review_items":      {"edge_id", "edge_src", "edge_dst"},
+	"access_requests":   {"edge_id", "requested_by_user_id", "decided_by_user_id"},
+	"review_items":      {"edge_id", "edge_src", "edge_dst", "decided_by_user_id"},
+	"hris_events":       {"executed_by_user_id"},
+	// platform users and sessions named without a declared foreign key
+	"role_assignments":   {"granted_by_user_id"},
+	"login_transactions": {"session_id", "expected_external_login_id", "bootstrap_invitation_id"},
+	// an alias names a folder or a group, by object_type
+	"grp_name_aliases": {"object_id"},
 }
+
+// immutableTables refuse every UPDATE (a trigger raises unconditionally), so
+// they need no UPDATE guard.
+var immutableTables = []string{"authn_contexts"}
 
 // TestIsolation_EveryReferenceGuarded checks that every foreign key (other
 // than tenant_id) and every reference column on a tenant table is covered by
@@ -305,15 +344,38 @@ func TestIsolation_EveryReferenceGuarded(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, ev := range []string{"ins", "upd"} {
-			name := "tg_" + table + "_xtenant_" + ev
-			var body string
-			err := db.sql.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = @n`,
-				sql.Named("n", name)).Scan(&body)
-			if len(cols) == 0 {
+			if len(cols) == 0 || (ev == "upd" && slices.Contains(immutableTables, table)) {
 				continue
 			}
+			// the guard is tg_<table>_xtenant_<ev>, plus any other
+			// tg_<table>_*xtenant* trigger on the same event (a later schema
+			// file guarding columns it added)
+			name := "tg_" + table + "_xtenant_" + ev
+			kind := map[string]string{"ins": "BEFORE INSERT", "upd": "BEFORE UPDATE"}[ev]
+			var body string
+			grows, err := db.sql.QueryContext(ctx, `SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND tbl_name = @t`,
+				sql.Named("t", table))
 			if err != nil {
-				t.Errorf("%s: %v (table %s has references %v)", name, err, table, cols)
+				t.Fatal(err)
+			}
+			found := false
+			for grows.Next() {
+				var n, b string
+				if err := grows.Scan(&n, &b); err != nil {
+					t.Fatal(err)
+				}
+				if n == name {
+					found = true
+				}
+				if strings.HasPrefix(n, "tg_"+table+"_") && strings.Contains(n, "xtenant") && strings.Contains(b, kind) {
+					body += b + "\n"
+				}
+			}
+			if err := grows.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if !found {
+				t.Errorf("%s: missing (table %s has references %v)", name, table, cols)
 				continue
 			}
 			for _, c := range cols {
@@ -321,7 +383,7 @@ func TestIsolation_EveryReferenceGuarded(t *testing.T) {
 					!strings.Contains(body, "NEW."+c+")") {
 					t.Errorf("%s does not guard %s.%s", name, table, c)
 				}
-				if ev == "upd" && !strings.Contains(body, c+",") && !strings.Contains(body, c+" ON") {
+				if ev == "upd" && !strings.Contains(body, " "+c+",") && !strings.Contains(body, " "+c+" ON") {
 					t.Errorf("%s does not fire on UPDATE OF %s", name, c)
 				}
 			}

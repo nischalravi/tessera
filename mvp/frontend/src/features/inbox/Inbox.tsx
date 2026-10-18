@@ -1,16 +1,16 @@
 import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { ArrowLeftRight, Check, ClipboardCheck, Keyboard, KeyRound, ListChecks, Plug, Search, ShoppingCart, X } from "lucide-react";
-import { HrisEvent, JitRequest, SimResult, ago, fmtDate, hrisExecute, jitDecide, relTime, reviewDecide, simulate, useApi } from "../../api";
+import { Check, ClipboardCheck, Keyboard, KeyRound, ListChecks, Plug, Search, ShoppingCart, X } from "lucide-react";
+import { HrisEvent, JitRequest, SimResult, ago, approveRequest, denyRequest, fmtDate, hrisExecute, jitDecide, relTime, reviewDecide, simulate, useApi } from "../../api";
 import { usePersona } from "../../app/persona";
 import {
-  Badge, Button, Callout, EmptyState, FilterChips, Flag, IdLink, Loading, Page, PreviewBadge, Tone, TypeBadge, useConfirm, useToast,
+  Badge, Button, Callout, EmptyState, FilterChips, Flag, IdLink, Loading, Page, Tone, TypeBadge, useConfirm, useToast,
 } from "../../components";
 import { isTyping, modalOpen } from "../../components/overlay";
-import { mockDelegations, mockRequests } from "../../mocks";
+import { STAGE_LABEL, Stages } from "../access/stages";
 import { InboxItem, InboxKind, useInbox } from "./model";
 
-const KIND_LABEL: Record<InboxKind, string> = { approval: "Approval", review: "Review", task: "Task", delegated: "Delegated", connection: "Connection" };
+const KIND_LABEL: Record<InboxKind, string> = { approval: "Approval", review: "Review", task: "Task", connection: "Connection" };
 
 export function itemTitle(it: InboxItem): { icon: ReactNode; title: string; meta: ReactNode; tone: Tone; kindLabel: string } {
   switch (it.kind) {
@@ -19,19 +19,21 @@ export function itemTitle(it: InboxItem): { icon: ReactNode; title: string; meta
         const r = it.jit;
         return { icon: <KeyRound size={15} />, title: `${r.identity.name} requests ${r.group.system}:${r.group.name}`, meta: <>{r.duration_hours} h just-in-time · {r.group.privileged && <Badge tone="warning">Privileged</Badge>} {relTime(r.requested_at)}</>, tone: "info", kindLabel: KIND_LABEL.approval };
       }
-      return { icon: <ShoppingCart size={15} />, title: `${it.req.requester} requests ${it.req.items.map((i) => i.name).join(", ")}`, meta: <>for {it.req.beneficiaries.map((b) => b.name).join(", ")} · {relTime(it.req.createdAt)} <PreviewBadge /></>, tone: "info", kindLabel: KIND_LABEL.approval };
+      {
+        const a = it.item, l = a.line;
+        return {
+          icon: <ShoppingCart size={15} />, title: `${l.beneficiary.name} needs ${l.group.system}:${l.group.name}`, tone: "info", kindLabel: KIND_LABEL.approval,
+          meta: <>{STAGE_LABEL[a.kind]} approval{a.on_behalf_of && ` for ${a.on_behalf_of.display_name}`} · asked by {l.requested_by.display_name} {relTime(l.requested_at)}{a.escalated && <> <Badge tone="warning">Escalated</Badge></>}{l.group.privileged && <> <Badge tone="warning">Privileged</Badge></>}</>,
+        };
+      }
     case "review": {
       const i = it.item;
       return { icon: <ClipboardCheck size={15} />, title: `${i.identity.name}: ${i.grant.split(" → ")[1] ?? i.grant}`, meta: <>{i.reasons.slice(0, 2).map((r) => <Flag key={r} f={r} />)} <span>last used {ago(i.context.days_since_used)}</span></>, tone: "accent", kindLabel: KIND_LABEL.review };
     }
     case "task": {
       const e = it.event;
-      const who = e.identity?.name ?? e.payload.name;
+      const who = e.identity?.name ?? e.payload.name ?? "unknown identity";
       return { icon: <ListChecks size={15} />, title: `${e.type[0].toUpperCase() + e.type.slice(1)}: ${who}`, meta: <>HRIS event {e.external_id} · effective {fmtDate(e.effective_at)}</>, tone: e.type === "leaver" ? "critical" : "neutral", kindLabel: KIND_LABEL.task };
-    }
-    case "delegated": {
-      const d = it.delegation;
-      return { icon: <ArrowLeftRight size={15} />, title: `${d.from} delegates ${d.scope.toLowerCase()} to ${d.to}`, meta: <>until {d.until} <PreviewBadge /></>, tone: "neutral", kindLabel: KIND_LABEL.delegated };
     }
     case "connection":
       return { icon: <Plug size={15} />, title: `${it.conn.name} is degraded`, meta: <>Readiness {it.conn.score} · write-back stopped, reads continue</>, tone: "warning", kindLabel: KIND_LABEL.connection };
@@ -48,13 +50,14 @@ function JitDetail({ r }: { r: JitRequest }) {
   useEffect(() => {
     if (!acct) return;
     let alive = true;
-    simulate({ add_edges: [{ src: `account:${acct.id}`, dst: `group:${r.group.id}` }] })
+    // A JIT grant is time-boxed: duration_hours makes the simulated edge non-standing, as it is once approved.
+    simulate({ add_edges: [{ src: `account:${acct.id}`, dst: `group:${r.group.id}`, duration_hours: r.duration_hours }] })
       .then((x) => alive && setSim(x))
       .catch((e) => alive && setSimErr(e.message));
     return () => {
       alive = false;
     };
-  }, [acct?.id, r.group.id]);
+  }, [acct?.id, r.group.id, r.duration_hours]);
   const prior = (all ?? []).filter((x) => x.identity.id === r.identity.id && x.group.id === r.group.id && x.id !== r.id);
   return (
     <div className="stack">
@@ -63,7 +66,7 @@ function JitDetail({ r }: { r: JitRequest }) {
         <dt>Access</dt><dd><span className="sys">{r.group.system}:{r.group.name}</span> {r.group.privileged && <Badge tone="warning">Privileged</Badge>}</dd>
         <dt>Duration</dt><dd>{r.duration_hours} hours, removed automatically</dd>
         <dt>Account</dt><dd className="sys">{r.account}</dd>
-        <dt>Justification</dt><dd>{r.justification}</dd>
+        <dt>Justification</dt><dd className="wrap-anywhere">{r.justification}</dd>
         <dt>Requested</dt><dd>{fmtDate(r.requested_at)}</dd>
       </dl>
       <div>
@@ -166,14 +169,20 @@ function Detail({ it }: { it: InboxItem }) {
           <h2 style={{ marginTop: 8, fontSize: "var(--fs-lg)" }}>{t.title}</h2>
         </div>
         {it.kind === "approval" && it.source === "jit" && <JitDetail r={it.jit} />}
-        {it.kind === "approval" && it.source === "catalog" && (
-          <dl className="kv">
-            <dt>Requested by</dt><dd>{it.req.requester}</dd>
-            <dt>For</dt><dd>{it.req.beneficiaries.map((b) => b.name).join(", ")}</dd>
-            <dt>Items</dt><dd>{it.req.items.map((i) => <div key={i.name} className="sys small">{i.name}</div>)}</dd>
-            <dt>Duration</dt><dd>{it.req.durationHours ? `${it.req.durationHours} hours` : "Permanent until removed or reviewed"}</dd>
-            <dt>Justification</dt><dd>{it.req.justification || <span className="faint">None given</span>}</dd>
-          </dl>
+        {it.kind === "approval" && it.source === "request" && (
+          <>
+            <dl className="kv">
+              <dt>For</dt><dd><Link to={`/directory/identities/${it.item.line.beneficiary.id}`}>{it.item.line.beneficiary.name}</Link></dd>
+              <dt>Access</dt><dd className="sys small">{it.item.line.group.system}:{it.item.line.group.name}</dd>
+              <dt>Account</dt><dd className="sys small">{it.item.line.account.system}:{it.item.line.account.username}</dd>
+              <dt>Requested by</dt><dd>{it.item.line.requested_by.display_name}</dd>
+              <dt>Duration</dt><dd>{it.item.line.duration_hours ? `${it.item.line.duration_hours} hours` : "Until removed"}</dd>
+              <dt>Justification</dt><dd className="wrap-anywhere">{it.item.line.justification}</dd>
+              {it.item.on_behalf_of && <><dt>You decide for</dt><dd>{it.item.on_behalf_of.display_name} (delegation)</dd></>}
+            </dl>
+            <h3>Approval stages</h3>
+            <Stages stages={it.item.line.stages} />
+          </>
         )}
         {it.kind === "review" && <ReviewDetail it={it} />}
         {it.kind === "task" && <TaskDetail e={it.event} />}
@@ -183,33 +192,23 @@ function Detail({ it }: { it: InboxItem }) {
             <Link className="btn" to={`/admin/connections/${it.conn.id}`}>Open the connection</Link>
           </div>
         )}
-        {it.kind === "delegated" && (
-          <dl className="kv">
-            <dt>From</dt><dd>{it.delegation.from}</dd>
-            <dt>To</dt><dd>{it.delegation.to}</dd>
-            <dt>Scope</dt><dd>{it.delegation.scope}</dd>
-            <dt>Until</dt><dd>{it.delegation.until}</dd>
-            <dt>Reason</dt><dd>{it.delegation.reason}</dd>
-          </dl>
-        )}
       </div>
     </div>
   );
 }
 
 // -------------------------------------------------------------- actions
-type Verb = "approve" | "deny" | "keep" | "revoke" | "run" | "accept" | "decline";
+type Verb = "approve" | "deny" | "keep" | "revoke" | "run";
 const VERBS: Record<InboxKind, { primary: Verb; secondary: Verb }> = {
   approval: { primary: "approve", secondary: "deny" },
   review: { primary: "keep", secondary: "revoke" },
   task: { primary: "run", secondary: "run" },
-  delegated: { primary: "accept", secondary: "decline" },
   connection: { primary: "run", secondary: "run" },
 };
-const VERB_LABEL: Record<Verb, string> = { approve: "Approve", deny: "Deny", keep: "Keep", revoke: "Revoke", run: "Run plan", accept: "Accept", decline: "Decline" };
+const VERB_LABEL: Record<Verb, string> = { approve: "Approve", deny: "Deny", keep: "Keep", revoke: "Revoke", run: "Run plan" };
 
 function useInboxActions() {
-  const { actor, me } = usePersona();
+  const { me } = usePersona();
   const confirm = useConfirm();
   const toast = useToast();
   const selfRequest = (it: InboxItem) => it.kind === "approval" && it.source === "jit" && it.jit.identity.id === me?.id;
@@ -221,8 +220,13 @@ function useInboxActions() {
           toast("You can't approve your own request. Someone else needs to decide.", { kind: "error" });
           return false;
         }
-        if (it.source === "jit") await jitDecide(it.jit.id, verb === "approve" ? "approve" : "deny", actor);
-        else await mockRequests.decide(it.req.id, verb === "approve" ? "approved" : "denied", actor);
+        if (it.source === "jit") await jitDecide(it.jit.id, verb === "approve" ? "approve" : "deny");
+        else if (verb === "approve") await approveRequest(it.item.line.id);
+        else {
+          const reason = await confirm({ title: "Deny this request?", body: itemTitle(it).title, confirmLabel: "Deny", danger: true, reason: { label: "Reason (the requester sees it)", required: true } });
+          if (reason === null) return false;
+          await denyRequest(it.item.line.id, reason);
+        }
         if (!opts.quiet) toast(`${verb === "approve" ? "Approved" : "Denied"}: ${itemTitle(it).title}`);
       } else if (it.kind === "review") {
         let comment: string | undefined;
@@ -235,7 +239,7 @@ function useInboxActions() {
           if (reason === null) return false;
           comment = reason;
         }
-        await reviewDecide(it.item.id, verb === "revoke" ? "revoke" : "keep", actor, comment);
+        await reviewDecide(it.item.id, verb === "revoke" ? "revoke" : "keep", comment);
         if (!opts.quiet) toast(`${verb === "revoke" ? "Revoked" : "Kept"}: ${itemTitle(it).title}`);
       } else if (it.kind === "task") {
         const ok = await confirm({ title: `Run the ${it.event.type} plan?`, body: "Executes every step in the plan against Tessera's graph and writes an audit record. Nothing is written back to source systems yet.", confirmLabel: "Run plan", danger: it.event.type === "leaver" });
@@ -244,9 +248,6 @@ function useInboxActions() {
         toast(`Plan executed: ${itemTitle(it).title}`);
       } else if (it.kind === "connection") {
         return false; // opened from its row
-      } else {
-        await mockDelegations.decide(it.delegation.id, verb === "accept" ? "accepted" : "declined", actor);
-        if (!opts.quiet) toast(`Delegation ${verb === "accept" ? "accepted" : "declined"}`);
       }
       return true;
     } catch (e: any) {
@@ -259,7 +260,7 @@ function useInboxActions() {
 
 // ----------------------------------------------------------------- page
 const FILTERS: { id: "all" | InboxKind; label: string }[] = [
-  { id: "all", label: "All" }, { id: "approval", label: "Approvals" }, { id: "review", label: "Reviews" }, { id: "task", label: "Tasks" }, { id: "delegated", label: "Delegated" }, { id: "connection", label: "Connections" },
+  { id: "all", label: "All" }, { id: "approval", label: "Approvals" }, { id: "review", label: "Reviews" }, { id: "task", label: "Tasks" }, { id: "connection", label: "Connections" },
 ];
 
 export function Inbox() {
@@ -342,7 +343,7 @@ export function Inbox() {
       else if (!current) return;
       else if (k === "x") setChecked((s) => { const n = new Set(s); if (n.has(current.key)) n.delete(current.key); else n.add(current.key); return n; });
       else if (k === "a") run(current, VERBS[current.kind].primary);
-      else if (k === "d" && (current.kind === "approval" || current.kind === "delegated")) run(current, VERBS[current.kind].secondary);
+      else if (k === "d" && current.kind === "approval") run(current, VERBS[current.kind].secondary);
       else if (k === "r" && current.kind === "review") run(current, "revoke");
     };
     window.addEventListener("keydown", onKey);
@@ -354,7 +355,7 @@ export function Inbox() {
   return (
     <Page
       title="Inbox"
-      sub="Approvals, access reviews, lifecycle tasks and delegations in one queue. Decide with the buttons or the keyboard."
+      sub="Approvals routed to you (including as a delegate), access reviews and lifecycle tasks in one queue. Decide with the buttons or the keyboard."
       actions={<Button variant="ghost" icon={<Keyboard size={15} />} onClick={() => setHelp(!help)} aria-expanded={help}>Shortcuts</Button>}
     >
       {help && (
@@ -399,7 +400,7 @@ export function Inbox() {
           )}
           {!items ? <Loading error={error} /> : visible.length === 0 ? (
             <EmptyState title={items.length ? "Nothing matches this filter" : "Inbox zero"} icon={<Check size={18} />} action={scope === "mine" && persona !== "admin" ? <Button size="sm" onClick={() => setScope("all")}>Show everyone's items</Button> : <Link to="/access/request" className="btn sm">Request access</Link>}>
-              {items.length ? "Try another filter or clear the search." : scope === "mine" ? "Nothing is assigned to you. Approvals, review items and tasks for you will appear here." : "No open approvals, reviews, tasks or delegations. Start an access review from Governance when you're ready."}
+              {items.length ? "Try another filter or clear the search." : scope === "mine" ? "Nothing is assigned to you. Approvals, review items and tasks for you will appear here." : "No open approvals, reviews or tasks. Start an access review from Governance when you're ready."}
             </EmptyState>
           ) : (
             <div ref={listRef} role="listbox" aria-label="Inbox items" aria-activedescendant={current ? `ib-${current.key}` : undefined} tabIndex={0}>

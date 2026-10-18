@@ -78,29 +78,105 @@ func TestServeSeedsAndShutsDownGracefully(t *testing.T) {
 	}
 }
 
-// TestServeRefusesWithoutDevEnv: until authentication lands the API has an
-// implicit tenant, so it must not start unless TESSERA_ENV=dev is explicit.
-func TestServeRefusesWithoutDevEnv(t *testing.T) {
-	for _, env := range []string{"", "prod", "DEV"} {
+// TestServeRefusesWithoutExplicitEnv: the environment decides the guard
+// rails and whether dev sign-in exists, so it must be explicit; and
+// production never seeds the demo tenants (a fresh production database is
+// created with the admin CLI, §15.3).
+func TestServeRefusesWithoutExplicitEnv(t *testing.T) {
+	for env, want := range map[string]string{
+		"":     "set TESSERA_ENV=dev",
+		"DEV":  "TESSERA_ENV=dev",
+		"prod": "refusing to seed demo tenants with TESSERA_ENV=prod",
+	} {
 		t.Run(env, func(t *testing.T) {
 			t.Setenv("TESSERA_ENV", env)
 			t.Setenv("TESSERA_NOW", "2026-10-08T09:30:00")
 			if env == "prod" { // a production configuration that passes every guard rail
-				t.Setenv("TESSERA_NOW", "")
-				t.Setenv("TESSERA_PUBLIC_URL", "https://tessera.example.com")
-				t.Setenv("TESSERA_KEK", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
-				t.Setenv("TESSERA_CORS_ORIGINS", "")
-				t.Setenv("TESSERA_AUDIT_ANCHOR", "s3://anchors/tessera")
+				prodEnv(t)
 			}
 			db := filepath.Join(t.TempDir(), "t.db")
 			var out, logs bytes.Buffer
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 			defer cancel()
 			err := run(ctx, []string{"serve", "-addr", freePort(t), "-db", db}, &out, &logs)
-			if err == nil || !strings.Contains(err.Error(), "TESSERA_ENV=dev") {
-				t.Errorf("serve with TESSERA_ENV=%q: %v, want a refusal naming TESSERA_ENV=dev", env, err)
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Errorf("serve with TESSERA_ENV=%q: %v, want a refusal naming %q", env, err, want)
 			}
 		})
+	}
+}
+
+// TestSeedRefusesWithoutExplicitEnv (L8): `tessera seed` needs an explicit
+// TESSERA_ENV like serve (run.sh exports TESSERA_ENV=dev), and writes
+// nothing (no database, no dev KEK) when it is missing.
+func TestSeedRefusesWithoutExplicitEnv(t *testing.T) {
+	for _, env := range []string{"", "DEV", "development"} {
+		t.Run(env, func(t *testing.T) {
+			t.Setenv("TESSERA_ENV", env)
+			dir := t.TempDir()
+			db := filepath.Join(dir, "t.db")
+			var out, logs bytes.Buffer
+			err := run(context.Background(), []string{"seed", "-db", db}, &out, &logs)
+			if err == nil || !strings.Contains(err.Error(), "TESSERA_ENV=dev") {
+				t.Errorf("seed with TESSERA_ENV=%q: %v, want a refusal", env, err)
+			}
+			if ents, _ := os.ReadDir(dir); len(ents) != 0 {
+				t.Errorf("seed wrote %d entries before refusing", len(ents))
+			}
+		})
+	}
+}
+
+// TestInsecureCookieNeedsLoopbackListener (L8): TESSERA_COOKIE_SECURE=false
+// (dev, localhost public URL) refuses a listener that is not loopback.
+func TestInsecureCookieNeedsLoopbackListener(t *testing.T) {
+	t.Setenv("TESSERA_ENV", "dev")
+	t.Setenv("TESSERA_COOKIE_SECURE", "false")
+	for _, addr := range []string{"0.0.0.0:0", ":0", "[::]:0", "192.0.2.1:0"} {
+		var out, logs bytes.Buffer
+		err := run(context.Background(), []string{"serve", "-addr", addr, "-db", filepath.Join(t.TempDir(), "t.db")}, &out, &logs)
+		if err == nil || !strings.Contains(err.Error(), "loopback listen address") {
+			t.Errorf("-addr %s: %v, want a refusal", addr, err)
+		}
+	}
+	for addr, want := range map[string]bool{"127.0.0.1:8000": true, "localhost:8000": true, "[::1]:8000": true,
+		"127.0.0.2:1": true, "0.0.0.0:8000": false, ":8000": false, "[::ffff:127.0.0.1]:1": true, "[fe80::1%lo]:1": false,
+		"tessera.example.com:443": false, "nonsense": false} {
+		if got := loopbackListen(addr); got != want {
+			t.Errorf("loopbackListen(%s) = %t, want %t", addr, got, want)
+		}
+	}
+}
+
+// prodEnv sets a production configuration that passes every guard rail.
+func prodEnv(t *testing.T) {
+	t.Setenv("TESSERA_ENV", "prod")
+	t.Setenv("TESSERA_NOW", "")
+	t.Setenv("TESSERA_PUBLIC_URL", "https://tessera.example.com")
+	t.Setenv("TESSERA_KEK", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
+	t.Setenv("TESSERA_CORS_ORIGINS", "")
+	t.Setenv("TESSERA_AUDIT_ANCHOR", "s3://anchors/tessera")
+	t.Setenv("TESSERA_DEV_IDP_URL", "")
+}
+
+// TestProdRefusesDevMockConnection: a database seeded in dev has dev_mock
+// IdP connections (the dev sign-in users); production refuses to serve it
+// (§18.4).
+func TestProdRefusesDevMockConnection(t *testing.T) {
+	t.Setenv("TESSERA_ENV", "dev")
+	t.Setenv("TESSERA_NOW", "2026-10-08T09:30:00")
+	t.Setenv("TESSERA_READINESS_DEMO", "off")
+	db := filepath.Join(t.TempDir(), "t.db")
+	var out, logs bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	if err := run(ctx, []string{"seed", "-db", db}, &out, &logs); err != nil {
+		t.Fatal(err)
+	}
+	prodEnv(t)
+	err := run(ctx, []string{"serve", "-addr", freePort(t), "-db", db}, &out, &logs)
+	if err == nil || !strings.Contains(err.Error(), "dev_mock IdP connection") {
+		t.Errorf("prod serve over a dev database: %v, want a dev_mock refusal", err)
 	}
 }
 
@@ -164,5 +240,15 @@ func TestReadinessLint(t *testing.T) {
 	}
 	if err := run(context.Background(), []string{"readiness"}, &out, &errb); err == nil {
 		t.Error("missing subcommand accepted")
+	}
+}
+
+// TestCheckDB: check-db passes on a database with this server's schema (the
+// refusal of an older schema is store.TestLegacySchema_*).
+func TestCheckDB(t *testing.T) {
+	var out, errb bytes.Buffer
+	fresh := filepath.Join(t.TempDir(), "fresh.db")
+	if err := run(context.Background(), []string{"check-db", "-db", fresh}, &out, &errb); err != nil {
+		t.Errorf("current schema: %v", err)
 	}
 }

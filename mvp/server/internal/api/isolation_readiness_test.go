@@ -44,6 +44,8 @@ var readinessRouteCases = map[string][]rdCase{
 		key: "connection:ad"}},
 	"PUT /api/connections/{id}/credential": {{method: "PUT", path: onConn("/credential"),
 		body: `{"reference":"vault:kv/tessera/other"}`, key: "connection:ad"}},
+	"PUT /api/connections/{id}/containment-credential": {{method: "PUT", path: onConn("/containment-credential"),
+		body: `{"token":"tok-from-another-tenant","base_url":"https://x.okta.com"}`, key: "connection"}},
 	"GET /api/connections/{id}/checklist": {{method: "GET", path: onConn("/checklist"), key: "connection:ad"}},
 	"POST /api/connections/{id}/checklist/{item}/attest": {{method: "POST", path: onConn("/checklist/base.owner/attest"),
 		body: `{"note":"attested from another tenant"}`, key: "connection:ad"}},
@@ -98,8 +100,9 @@ var readinessRouteCases = map[string][]rdCase{
 // id that exists nowhere (same status and body), never 200 or 403, never
 // with B's data, and tenant B is left untouched.
 func TestIsolation_ReadinessRouteCrossTenant(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
-	h := isolationServer(f, f.A.ID).Handler()
+	h := isolationServer(t, f, f.A.ID).Handler()
 	beforeB := storetest.ReadinessDump(t, f.DB, f.B.ID, f.B.Refs)
 	beforeBGraph := storetest.Dump(t, f.DB, f.B.ID)
 	for route, cases := range readinessRouteCases {
@@ -165,10 +168,11 @@ func readinessGetPaths(r map[string]string) map[string]string {
 // answer without any of tenant B's readiness data. Served as B, the same
 // routes do show B's sentinel (positive control).
 func TestIsolation_ReadinessListRoutesNeverLeak(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
-	srv := isolationServer(f, f.A.ID)
+	srv := isolationServer(t, f, f.A.ID)
 	h := srv.Handler()
-	hb := isolationServer(f, f.B.ID).Handler()
+	hb := isolationServer(t, f, f.B.ID).Handler()
 	for _, p := range []string{"/api/connections", "/api/insights/deployment-health", "/api/readiness/templates/ad",
 		"/api/connections/" + f.B.Refs["connection:ad"] + "/checklist"} {
 		if rec := serveOnce(hb, http.MethodGet, p, ""); !readinessLeaks(rec.Body.String()) {
@@ -225,8 +229,9 @@ func TestIsolation_ReadinessListRoutesNeverLeak(t *testing.T) {
 // changes only A's view of the shared template, and B's overlay never shows
 // in A.
 func TestIsolation_ReadinessOverlayScoped(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
-	ha, hb := isolationServer(f, f.A.ID).Handler(), isolationServer(f, f.B.ID).Handler()
+	ha, hb := isolationServer(t, f, f.A.ID).Handler(), isolationServer(t, f, f.B.ID).Handler()
 	beforeB := serveOnce(hb, http.MethodGet, "/api/readiness/templates/ad", "").Body.String()
 	rec := serveOnce(ha, http.MethodPut, "/api/readiness/overlays/ad",
 		`{"raise_levels":{"ad.svc.no_interactive":"required"}}`)
@@ -242,8 +247,9 @@ func TestIsolation_ReadinessOverlayScoped(t *testing.T) {
 // attestation, a skip and an activation attempt made as tenant A land in A's
 // audit log only.
 func TestIsolation_ReadinessAuditStampedWithOwnTenant(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
-	h := isolationServer(f, f.A.ID).Handler()
+	h := isolationServer(t, f, f.A.ID).Handler()
 	a := f.A.Refs
 	countIn := func(tn storetest.Tenant) map[string]int {
 		out := map[string]int{}

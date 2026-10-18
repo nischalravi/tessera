@@ -28,19 +28,19 @@ func TestJITLifecycle(t *testing.T) {
 	now := testkit.Now
 	var req *store.AccessRequest
 	testkit.Write(t, st, func(c *store.TenantTx) error {
-		_, err := jit.CreateRequest(c, now, ids["alice"], ids["group:okta:eng"], jit.Hours{N: 2}, "not requestable")
+		_, err := jit.CreateRequest(c, now, ids["alice"], ids["group:okta:eng"], jit.Hours{N: 2}, "not requestable", store.UserRef{})
 		var je *jit.Error
 		if !errors.As(err, &je) {
 			t.Errorf("non-requestable group: err = %v, want *jit.Error", err)
 		}
-		req, err = jit.CreateRequest(c, now, ids["alice"], ids["group:aws:ProdAdmin"], jit.Hours{N: 2, Whole: true}, "  incident  ")
+		req, err = jit.CreateRequest(c, now, ids["alice"], ids["group:aws:ProdAdmin"], jit.Hours{N: 2, Whole: true}, "  incident  ", store.UserRef{})
 		return err
 	})
 	if req.Status != "pending" || req.Justification != "incident" || req.AccountID != ids["acct:okta:alice"] {
 		t.Fatalf("request = %+v", req)
 	}
 	testkit.Write(t, st, func(c *store.TenantTx) error {
-		r, err := jit.Approve(c, req.ID, "approver", now, now)
+		r, err := jit.Approve(c, req.ID, store.UserRef{Display: "approver"}, now, now)
 		if err == nil && (r.ExpiresAt == nil || !r.ExpiresAt.Equal(now.Add(2*time.Hour)) || r.EdgeID == nil) {
 			t.Errorf("approved = %+v", r)
 		}
@@ -84,12 +84,43 @@ func TestJITRejectsStandingDuplicate(t *testing.T) {
 			CreatedAt: testkit.Now}); err != nil {
 			return err
 		}
-		_, err := jit.CreateRequest(c, testkit.Now, ids["alice"], ids["group:aws:ProdAdmin"], jit.Hours{N: 1}, "already has it")
+		_, err := jit.CreateRequest(c, testkit.Now, ids["alice"], ids["group:aws:ProdAdmin"], jit.Hours{N: 1}, "already has it", store.UserRef{})
 		if err == nil || !strings.Contains(err.Error(), "standing") {
 			t.Errorf("err = %v, want standing-grant error", err)
 		}
 		return nil
 	})
+}
+
+func TestJITRejectsDuplicatePending(t *testing.T) {
+	st, ids := testkit.Tiny(t)
+	now := testkit.Now
+	create := func() (*store.AccessRequest, error) {
+		var r *store.AccessRequest
+		var err error
+		testkit.Write(t, st, func(c *store.TenantTx) error {
+			r, err = jit.CreateRequest(c, now, ids["alice"], ids["group:aws:ProdAdmin"], jit.Hours{N: 1}, "x", store.UserRef{})
+			return nil
+		})
+		return r, err
+	}
+	first, err := create()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = create()
+	var je *jit.Error
+	if !errors.As(err, &je) || je.Kind != jit.KindConflict || je.Code != jit.CodeDuplicatePending {
+		t.Fatalf("second request: err = %#v, want a duplicate_pending_request conflict", err)
+	}
+	// once the first is decided the identity may ask again
+	testkit.Write(t, st, func(c *store.TenantTx) error {
+		_, err := jit.Deny(c, first.ID, store.UserRef{Display: "x"}, now)
+		return err
+	})
+	if _, err := create(); err != nil {
+		t.Errorf("request after a denial: %v", err)
+	}
 }
 
 func TestCreateRequestValidation(t *testing.T) {
@@ -108,6 +139,9 @@ func TestCreateRequestValidation(t *testing.T) {
 		{"zero hours", "alice", "aws:ProdAdmin", 0, "x", "duration must be between 0 and 72 hours"},
 		{"too long", "alice", "aws:ProdAdmin", 72.5, "x", "duration must be between 0 and 72 hours"},
 		{"blank justification", "alice", "aws:ProdAdmin", 1, "   ", "justification is required"},
+		{"justification at the cap", "alice", "aws:ProdAdmin", 1, strings.Repeat("é", jit.MaxJustification), ""},
+		{"justification over the cap", "alice", "aws:ProdAdmin", 1, strings.Repeat("é", jit.MaxJustification+1),
+			"justification must be at most 1000 characters"},
 		{"no receiving account", "helper-bot", "aws:ProdAdmin", 1, "x", "identity has no active account that can receive this grant"},
 		{"maximum duration", "alice", "aws:ProdAdmin", 72, "x", ""},
 	}
@@ -121,7 +155,7 @@ func TestCreateRequestValidation(t *testing.T) {
 				gid = 99999
 			}
 			_ = st.InTenant(t.Context(), st.Tenant, func(c *store.TenantTx) error {
-				_, err := jit.CreateRequest(c, testkit.Now, iid, gid, jit.Hours{N: tc.hours}, tc.just)
+				_, err := jit.CreateRequest(c, testkit.Now, iid, gid, jit.Hours{N: tc.hours}, tc.just, store.UserRef{})
 				if tc.wantErr == "" {
 					if err != nil {
 						t.Errorf("unexpected error %v", err)
@@ -141,7 +175,7 @@ func TestDecisionStateMachine(t *testing.T) {
 	newReq := func() int64 {
 		var id int64
 		testkit.Write(t, st, func(c *store.TenantTx) error {
-			r, err := jit.CreateRequest(c, now, ids["alice"], ids["group:aws:ProdAdmin"], jit.Hours{N: 1}, "x")
+			r, err := jit.CreateRequest(c, now, ids["alice"], ids["group:aws:ProdAdmin"], jit.Hours{N: 1}, "x", store.UserRef{})
 			if r != nil {
 				id = r.ID
 			}
@@ -158,7 +192,9 @@ func TestDecisionStateMachine(t *testing.T) {
 		return out
 	}
 	denied := newReq()
-	if err := try(func(c *store.TenantTx) (*store.AccessRequest, error) { return jit.Deny(c, denied, "x", now) }); err != nil {
+	if err := try(func(c *store.TenantTx) (*store.AccessRequest, error) {
+		return jit.Deny(c, denied, store.UserRef{Display: "x"}, now)
+	}); err != nil {
 		t.Fatal(err)
 	}
 	tests := []struct {
@@ -166,21 +202,49 @@ func TestDecisionStateMachine(t *testing.T) {
 		fn   func(*store.TenantTx) (*store.AccessRequest, error)
 		want string
 	}{
-		{"approve denied", func(c *store.TenantTx) (*store.AccessRequest, error) { return jit.Approve(c, denied, "x", now, now) }, "request is not pending"},
-		{"deny denied", func(c *store.TenantTx) (*store.AccessRequest, error) { return jit.Deny(c, denied, "x", now) }, "request is not pending"},
-		{"revoke denied", func(c *store.TenantTx) (*store.AccessRequest, error) { return jit.Revoke(c, denied, "x", now) }, "request is not active"},
-		{"approve unknown", func(c *store.TenantTx) (*store.AccessRequest, error) { return jit.Approve(c, 999, "x", now, now) }, "request is not pending"},
+		{"approve denied", func(c *store.TenantTx) (*store.AccessRequest, error) {
+			return jit.Approve(c, denied, store.UserRef{Display: "x"}, now, now)
+		}, "request is not pending"},
+		{"deny denied", func(c *store.TenantTx) (*store.AccessRequest, error) {
+			return jit.Deny(c, denied, store.UserRef{Display: "x"}, now)
+		}, "request is not pending"},
+		{"revoke denied", func(c *store.TenantTx) (*store.AccessRequest, error) {
+			return jit.Revoke(c, denied, store.UserRef{Display: "x"}, now)
+		}, "request is not active"},
+		{"approve unknown", func(c *store.TenantTx) (*store.AccessRequest, error) {
+			return jit.Approve(c, 999, store.UserRef{Display: "x"}, now, now)
+		}, "request not found"},
+		{"deny unknown", func(c *store.TenantTx) (*store.AccessRequest, error) {
+			return jit.Deny(c, 999, store.UserRef{Display: "x"}, now)
+		}, "request not found"},
+		{"revoke unknown", func(c *store.TenantTx) (*store.AccessRequest, error) {
+			return jit.Revoke(c, 999, store.UserRef{Display: "x"}, now)
+		}, "request not found"},
 	}
 	for _, tc := range tests {
-		if err := try(tc.fn); err == nil || err.Error() != tc.want {
+		err := try(tc.fn)
+		if err == nil || err.Error() != tc.want {
 			t.Errorf("%s: err = %v, want %q", tc.name, err, tc.want)
+			continue
+		}
+		wantKind := jit.KindConflict
+		if tc.want == "request not found" {
+			wantKind = jit.KindNotFound
+		}
+		var je *jit.Error
+		if !errors.As(err, &je) || je.Kind != wantKind {
+			t.Errorf("%s: err = %#v, want kind %d", tc.name, err, wantKind)
 		}
 	}
 	active := newReq()
-	if err := try(func(c *store.TenantTx) (*store.AccessRequest, error) { return jit.Approve(c, active, "x", now, now) }); err != nil {
+	if err := try(func(c *store.TenantTx) (*store.AccessRequest, error) {
+		return jit.Approve(c, active, store.UserRef{Display: "x"}, now, now)
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := try(func(c *store.TenantTx) (*store.AccessRequest, error) { return jit.Revoke(c, active, "x", now) }); err != nil {
+	if err := try(func(c *store.TenantTx) (*store.AccessRequest, error) {
+		return jit.Revoke(c, active, store.UserRef{Display: "x"}, now)
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if present, _ := hasIAMStar(t, st, ids["alice"], now); present {

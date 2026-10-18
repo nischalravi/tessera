@@ -1,14 +1,16 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
-  ArrowLeftRight, Bell, CircleCheck, Clock, Download, FileBadge, Fingerprint, KeySquare, LucideIcon, Palette, Play, Plug, ScrollText, Search, Settings, ShieldCheck, UserCog,
+  ArrowLeftRight, Bell, Mail, CircleCheck, Clock, Download, FileBadge, Fingerprint, KeySquare, LucideIcon, Palette, Play, Plug, ScrollText, Search, Settings, ShieldCheck, UserCog,
 } from "lucide-react";
 import { AuditRow, AuditVerifyReport, api, fmtDate, relTime, useApi } from "../../api";
 import { fuzzy } from "../../app/fuzzy";
 import { Badge, Button, Callout, DataTable, EmptyState, Page, PreviewBadge, useToast } from "../../components";
+import { EmailDelivery } from "../notifications/EmailDelivery";
+import { NotificationsAdminPanel } from "../notifications/Notifications";
 import { ADMIN_BY_ID, ADMIN_SECTIONS, AdminSection, useMockState } from "../../mocks";
 
-const ICONS: Record<string, LucideIcon> = { Plug, Fingerprint, UserCog, Bell, Palette, Clock, ScrollText, FileBadge, ArrowLeftRight, KeySquare };
+const ICONS: Record<string, LucideIcon> = { Plug, Fingerprint, UserCog, Bell, Mail, Palette, Clock, ScrollText, FileBadge, ArrowLeftRight, KeySquare };
 const Icon = ({ name, size = 18 }: { name: string; size?: number }) => {
   const C = ICONS[name] ?? Settings;
   return <C size={size} aria-hidden />;
@@ -125,7 +127,7 @@ function AuditLog() {
           </span>
         </div>
         <p className="small muted" style={{ margin: 0 }}>
-          Every event is linked to the one before it by a SHA-256 hash, and the chain head is signed and anchored outside the database every few minutes. Rows cannot be edited or deleted. Until sign-in arrives, requests are recorded as <b>anonymous</b>; a name sent by the browser is kept only as an unverified <code>claimed_actor</code>.
+          Every event is linked to the one before it by a SHA-256 hash, and the chain head is signed and anchored outside the database every few minutes. Rows cannot be edited or deleted. Every event names the signed-in user who caused it, with how they authenticated; requests without a session are recorded as <b>anonymous</b> with the reason. The browser cannot choose the actor.
         </p>
         {report && (
           <Callout tone={report.result === "ok" ? "ok" : report.result === "warning" ? "warn" : "bad"}>
@@ -189,7 +191,7 @@ function AuditLog() {
   );
 }
 
-const LIVE: Record<string, () => JSX.Element> = { jobs: Jobs, audit: AuditLog };
+const LIVE: Record<string, () => React.JSX.Element> = { jobs: Jobs, audit: AuditLog, notifications: NotificationsAdminPanel, "email-delivery": EmailDelivery };
 
 export function AdminSectionPage() {
   const { section } = useParams();

@@ -27,7 +27,7 @@ Branch protection is not available on the current GitHub plan for private reposi
 
 ## The team
 
-All agent definitions live in [`.claude/agents/`](../../.claude/agents/).
+All agent definitions live in [`.claude/agents/`](../../.claude/agents/). Every agent reads the root [`CLAUDE.md`](../../CLAUDE.md) (loaded automatically) and the matching brief in [`docs/design/briefs/`](../design/briefs/) before the full design docs. Each definition sets a `model:` (Opus for `iam-architect`, `iam-authz-expert` and `security-engineer`; Sonnet for the rest).
 
 | Agent | Role | Can change code? |
 |---|---|---|

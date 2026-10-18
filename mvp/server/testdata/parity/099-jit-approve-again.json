@@ -2,13 +2,10 @@
  "name": "jit-approve-again",
  "request": {
   "method": "POST",
-  "path": "/api/jit/requests/5/approve",
-  "body": {
-   "approver": "someone@larkspur.example"
-  }
+  "path": "/api/jit/requests/5/approve"
  },
  "response": {
-  "status": 400,
+  "status": 409,
   "body": {
    "detail": "request is not pending"
   }

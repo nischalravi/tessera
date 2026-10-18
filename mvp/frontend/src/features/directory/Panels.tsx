@@ -5,16 +5,21 @@
 import { ReactNode, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
-  Ban, ClipboardCheck, ExternalLink, Network, Pencil, RefreshCw, RotateCcw, Settings, ShieldCheck, ShoppingCart, Timer, UserCheck, UserRound,
+  Ban, ClipboardCheck, ExternalLink, Network, Pencil, RefreshCw, RotateCcw, Settings, ShieldAlert, ShieldCheck, ShoppingCart, Timer, UserCheck, UserRound,
 } from "lucide-react";
-import { AccountRow, ConnectorRow, Group, IdentityDetail, IdentityRow, ResourceRow, Violation, ago, api, fmtDay, relTime, useApi } from "../../api";
+import { AccountRow, ConnectorRow, Group, IdentityDetail, IdentityRow, ResourceRow, RolesView, Violation, ago, api, fmtDay, invalidLink, isNumericId, relTime, useApi } from "../../api";
 import { useIdentityActions } from "../../app/actions";
 import { usePersona } from "../../app/persona";
 import {
   Avatar, Badge, Chip, CommandBar, EmptyState, IdLink, Loading, PathView, PreviewBadge, RiskPill, Sev, SidePanel, Status, Tabs, TypeBadge, TYPE_LABEL, useToast,
 } from "../../components";
-import { BusinessRole, ORGS, OrgUnit, mockIdentityOps, mockObjects, useMockState, useRoles } from "../../mocks";
+import { AffiliationsSection, IdentifiersSection } from "./affiliations";
+import { LifecycleSection } from "../lifecycle/parts";
+import { ORGS, OrgUnit, mockIdentityOps, mockObjects, useMockState } from "../../mocks";
+import { useSession } from "../../app/auth";
+import { ContainDialog, ContainmentRetries } from "./containment";
 import { RevokeDrawer } from "./IdentityPage";
+import { CatalogSettings } from "./catalog";
 import { PreviewFormDrawer } from "./shared";
 
 const I = 16;
@@ -33,10 +38,12 @@ const Section = ({ title, children, action }: { title: ReactNode; children: Reac
 );
 
 // ------------------------------------------------------------- identity
-type IdTab = "overview" | "access" | "groups" | "activity";
+type IdTab = "overview" | "person" | "access" | "groups" | "activity";
 
 export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void }) {
-  const { data: d, error, reload } = useApi<IdentityDetail>(`/identities/${id}`);
+  const validId = isNumericId(id);
+  const { data: d, error: loadError, reload } = useApi<IdentityDetail>(validId ? `/identities/${id}` : null);
+  const error = validId ? loadError : invalidLink();
   const acts = useIdentityActions();
   const mock = useMockState();
   const { actor } = usePersona();
@@ -44,9 +51,11 @@ export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void
   const [tab, setTab] = useTab<IdTab>("overview", id);
   const [edit, setEdit] = useState(false);
   const [revoke, setRevoke] = useState<number | null>(null);
+  const [containing, setContaining] = useState(false);
+  const { can } = useSession();
 
   if (!d || String(d.id) !== id) {
-    return <SidePanel title={error ? "Couldn't load identity" : "Loading…"} onClose={onClose} fullHref={`/directory/identities/${id}`}><Loading error={error} kind="block" /></SidePanel>;
+    return <SidePanel title={error ? "Couldn't load identity" : "Loading…"} onClose={onClose} fullHref={`/directory/identities/${id}`}><Loading error={error} what="identity" kind="block" onRetry={reload} /></SidePanel>;
   }
   const human = d.type === "human";
   const status = mock.disabled[d.id] && d.status === "active" ? "disabled" : d.status;
@@ -57,6 +66,7 @@ export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void
 
   const tabs: { id: IdTab; label: string }[] = [
     { id: "overview", label: "Overview" },
+    ...(human ? [{ id: "person" as const, label: "Affiliations" }] : []),
     { id: "access", label: `Access (${d.effective_permissions.length})` },
     { id: "groups", label: `Groups (${d.grants.length})` },
     { id: "activity", label: "Activity" },
@@ -80,6 +90,9 @@ export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void
               : { label: "Rotate secret", icon: <RotateCcw size={I} />, onClick: async () => { await mockObjects.save("secret", d.name, actor, "update"); toast(`Secret rotation requested for ${d.name} (preview)`); } },
             { label: "Start review", icon: <ClipboardCheck size={I} />, onClick: () => acts.reviewAccess(d) },
             { label: "Open in graph", icon: <Network size={I} />, onClick: () => acts.openGraph(d) },
+            ...(can("identities.contain") && d.status !== "merged"
+              ? [{ label: "Contain", icon: <ShieldAlert size={I} />, danger: true, onClick: () => setContaining(true) }]
+              : []),
             status === "disabled"
               ? { label: "Enable", icon: <UserCheck size={I} />, onClick: async () => { await mockIdentityOps.enable(d.id, d.name, actor); toast(`${d.name} re-enabled (preview)`); } }
               : { label: "Disable", icon: <Ban size={I} />, danger: true, disabled: d.status === "terminated", onClick: () => acts.disable(d) },
@@ -88,6 +101,12 @@ export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void
       }
       tabs={<Tabs label="Identity details" tabs={tabs} value={tab} onChange={setTab} />}
     >
+      {tab === "person" && human && (
+        <div className="stack">
+          <AffiliationsSection identityId={d.id} name={d.name} human />
+          <IdentifiersSection identityId={d.id} />
+        </div>
+      )}
       {tab === "overview" && (
         <>
           <dl className="kv">
@@ -101,6 +120,8 @@ export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void
             {d.terminated_at && <><dt>Left</dt><dd>{fmtDay(d.terminated_at)}</dd></>}
             <dt>Last sign-in</dt><dd>{relTime(lastLogin)}</dd>
           </dl>
+          {human && <LifecycleSection id={d.id} compact />}
+          <ContainmentRetries identityId={d.id} canRetry={can("identities.contain")} />
           <Section title="Risk">
             <dl className="kv">
               <dt>Risk</dt><dd><RiskPill score={d.risk?.risk} /> <span className="faint small tnum">{Math.round(d.risk?.risk ?? 0)} / 100</span></dd>
@@ -250,6 +271,7 @@ export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void
         />
       )}
       {revoke !== null && <RevokeDrawer edgeId={revoke} onClose={() => setRevoke(null)} onDone={reload} />}
+      {containing && <ContainDialog identity={{ id: d.id, name: d.name }} onClose={() => setContaining(false)} />}
     </SidePanel>
   );
 }
@@ -296,11 +318,10 @@ export function AccountPanel({ a, onClose }: { a: AccountRow; onClose: () => voi
 // ----------------------------------------------------------- entitlement
 export function GroupPanel({ g, onClose }: { g: Group; onClose: () => void }) {
   const nav = useNavigate();
-  const roles = useRoles();
-  const [tab, setTab] = useTab<"overview" | "roles">("overview", g.id);
+  const { data: rv } = useApi<RolesView>("/roles");
+  const [tab, setTab] = useTab<"overview" | "catalog" | "roles">("overview", g.id);
   const [edit, setEdit] = useState(false);
-  const key = `${g.system}:${g.name}`;
-  const inRoles = roles.filter((r) => r.entitlements.some((e) => e.replace(" (JIT)", "") === key));
+  const inRoles = (rv?.roles ?? []).filter((r) => r.status === "active" && r.entitlements.some((e) => e.id === g.id));
   return (
     <SidePanel
       title={g.name}
@@ -319,9 +340,9 @@ export function GroupPanel({ g, onClose }: { g: Group; onClose: () => void }) {
           ]}
         />
       }
-      tabs={<Tabs label="Entitlement details" value={tab} onChange={setTab} tabs={[{ id: "overview", label: "Overview" }, { id: "roles", label: `Roles (${inRoles.length})` }]} />}
+      tabs={<Tabs label="Entitlement details" value={tab} onChange={setTab} tabs={[{ id: "overview", label: "Overview" }, { id: "catalog", label: "Request catalog" }, { id: "roles", label: `Roles (${inRoles.length})` }]} />}
     >
-      {tab === "overview" ? (
+      {tab === "catalog" ? <CatalogSettings groupId={g.id} privileged={g.privileged} /> : tab === "overview" ? (
         <>
           <p className="muted">{g.description ?? "No description from the source system."}</p>
           <dl className="kv">
@@ -330,14 +351,14 @@ export function GroupPanel({ g, onClose }: { g: Group; onClose: () => void }) {
             <dt>Kind</dt><dd>{g.kind.replace(/_/g, " ")}</dd>
             <dt>Privileged</dt><dd>{g.privileged ? <Badge tone="warning">Privileged</Badge> : "No"}</dd>
             <dt>Access model</dt><dd>{g.requestable ? <Badge tone="info">JIT-eligible</Badge> : "Standing access"}</dd>
-            <dt>Approval</dt><dd>{g.privileged ? "Manager, resource owner and security" : "Manager"}</dd>
+            <dt>Approval</dt><dd>A person with requests.decide (see the Request catalog tab)</dd>
             <dt>Review cadence</dt><dd>{g.privileged ? "Quarterly, plus exception reviews" : "Exception reviews only"}</dd>
           </dl>
         </>
       ) : (
         <Section title={<>Part of these roles <PreviewBadge /></>}>
           {inRoles.length === 0 ? <div className="small muted">Not bundled in any business role. People request it directly.</div> :
-            inRoles.map((r) => <div key={r.id} className="small"><Link to={`/directory/roles?selected=${r.id}`}>{r.name}</Link> <span className="faint">· {r.members} members</span></div>)}
+            inRoles.map((r) => <div key={r.id} className="small"><Link to={`/directory/roles?selected=${r.id}`}>{r.name}</Link> <span className="faint">· {r.member_count} members</span></div>)}
         </Section>
       )}
       {edit && (
@@ -409,68 +430,6 @@ export function AppPanel({ c, onClose }: { c: ConnectorRow; onClose: () => void 
             ))}
           </tbody>
         </table>
-      )}
-    </SidePanel>
-  );
-}
-
-// ----------------------------------------------------------------- role
-export function RolePanel({ role, onClose }: { role: BusinessRole; onClose: () => void }) {
-  const nav = useNavigate();
-  const acts = useIdentityActions();
-  const { data: groups } = useApi<Group[]>("/groups");
-  const [tab, setTab] = useTab<"overview" | "ents">("overview", role.id);
-  const [edit, setEdit] = useState(false);
-  const tone = role.risk === "high" ? "critical" : role.risk === "medium" ? "warning" : "ok";
-  return (
-    <SidePanel
-      title={role.name}
-      sub={<><PreviewBadge /><Badge tone={tone}>{role.risk[0].toUpperCase() + role.risk.slice(1)} risk</Badge></>}
-      onClose={onClose}
-      fullHref={`/directory/roles/${role.id}`}
-      commands={
-        <CommandBar
-          label={`Actions for ${role.name}`}
-          items={[
-            { label: "Request this role", icon: <ShoppingCart size={I} />, onClick: () => nav(`/access/request?add=${role.id}`) },
-            { label: "Edit", icon: <Pencil size={I} />, onClick: () => setEdit(true) },
-            { label: "Start review", icon: <ClipboardCheck size={I} />, onClick: () => acts.startCampaign() },
-          ]}
-        />
-      }
-      tabs={<Tabs label="Role details" value={tab} onChange={setTab} tabs={[{ id: "overview", label: "Overview" }, { id: "ents", label: `Entitlements (${role.entitlements.length})` }]} />}
-    >
-      {tab === "overview" ? (
-        <>
-          <p className="muted">{role.description}</p>
-          <dl className="kv">
-            <dt>Owner</dt><dd>{role.owner}</dd>
-            <dt>Birthright for</dt><dd>{role.birthright ?? <span className="faint">Nobody (request only)</span>}</dd>
-            <dt>Members</dt><dd className="tnum">{role.members}</dd>
-            <dt>Updated</dt><dd>{role.updated}</dd>
-          </dl>
-        </>
-      ) : (
-        <table>
-          <tbody>
-            {role.entitlements.map((e) => {
-              const k = e.replace(" (JIT)", "");
-              const g = (groups ?? []).find((x) => `${x.system}:${x.name}` === k);
-              return (
-                <tr key={e}>
-                  <td>{g ? <Link className="sys" to={`/directory/entitlements?selected=${g.id}`}>{k}</Link> : <span className="sys">{k}</span>}</td>
-                  <td style={{ textAlign: "right" }}>{e.endsWith(" (JIT)") && <Badge tone="info">JIT only</Badge>} {g?.privileged && <Badge tone="warning">Privileged</Badge>}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      )}
-      {edit && (
-        <PreviewFormDrawer title={`Edit ${role.name}`} kind="role" verb="update" onClose={() => setEdit(false)}
-          initial={{ name: role.name, description: role.description, owner: role.owner }}
-          fields={[{ id: "name", label: "Name", required: true }, { id: "description", label: "Description", textarea: true }, { id: "owner", label: "Owner" }]}
-        />
       )}
     </SidePanel>
   );

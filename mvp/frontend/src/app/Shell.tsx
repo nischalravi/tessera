@@ -1,17 +1,20 @@
 import { KeyboardEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { Bell, Check, CircleHelp, Inbox, Menu as MenuIcon, Monitor, Moon, Search, Settings, Sun } from "lucide-react";
-import { AuditRow, IdentityRow, relTime, useApi } from "../api";
+import { IdentityRow, markNotificationsRead, relTime, useApi } from "../api";
 import { Menu } from "../components/Menu";
 import { initials } from "../components";
+import { useToast } from "../components/Toast";
 import { isTyping, modalOpen } from "../components/overlay";
 import { useInbox } from "../features/inbox/model";
+import { useOpenNotification } from "../features/notifications/open";
+import { useNotifications } from "../features/notifications/model";
 import { MOD, usePalette } from "./CommandPalette";
 import { RAIL, isActive } from "./nav";
 import { PERSONAS, usePersona } from "./persona";
 import { ResultList, rankEntries, useEntityEntries } from "./search";
 import { store } from "./storage";
-import { TENANT } from "./tenant";
+import { useSession } from "./auth";
 import { ThemePref, useTheme } from "./theme";
 
 
@@ -156,29 +159,46 @@ const TbBtn = ({ label, children, t }: { label: string; children: ReactNode; t: 
 );
 
 function Notifications() {
-  const { data } = useApi<AuditRow[]>("/audit?limit=6");
+  const { data, reload } = useNotifications();
+  const open = useOpenNotification();
+  const toast = useToast();
   const nav = useNavigate();
-  const items = (data ?? []).slice(0, 6);
+  const items = (data?.items ?? []).slice(0, 8);
+  const unread = data?.unread ?? 0;
+  const markAll = async () => {
+    try {
+      await markNotificationsRead({ all: true });
+      reload();
+    } catch (e) {
+      toast((e as Error).message, { kind: "error" });
+    }
+  };
   return (
     <Menu
       label="Notifications"
       items={[
-        { heading: "Recent activity" },
+        { heading: unread ? `Notifications · ${unread} unread` : "Notifications" },
         ...(items.length
-          ? items.map((a) => ({
+          ? items.map((n) => ({
               label: (
                 <span className="grow">
-                  {a.action.replace(/[._]/g, " ")}
-                  <span className="faint small" style={{ display: "block" }}>{a.actor} · {relTime(a.at)}</span>
+                  <span className={n.read_at ? "" : "notif-unread"}>{n.subject}</span>
+                  <span className="faint small" style={{ display: "block" }}>{relTime(n.created_at)}</span>
                 </span>
               ),
-              onSelect: () => nav("/admin/audit"),
+              onSelect: () => open(n),
             }))
           : [{ label: <span className="faint">Nothing new</span> }]),
         "divider",
-        { label: "Open audit log", onSelect: () => nav("/admin/audit") },
+        ...(unread ? [{ label: "Mark all as read", icon: <Check size={14} />, onSelect: markAll }] : []),
+        { label: "All notifications and settings", onSelect: () => nav("/notifications") },
       ]}
-      trigger={(t) => <TbBtn label="Notifications" t={t}><Bell size={18} strokeWidth={1.7} /></TbBtn>}
+      trigger={(t) => (
+        <button type="button" className="tb-btn" aria-label={`Notifications${unread ? `, ${unread} unread` : ""}`} title="Notifications" {...t}>
+          <Bell size={18} strokeWidth={1.7} aria-hidden />
+          {unread ? <span className="tb-badge" aria-hidden>{unread > 99 ? "99+" : unread}</span> : null}
+        </button>
+      )}
     />
   );
 }
@@ -220,15 +240,28 @@ function HelpMenu() {
 }
 
 function UserMenu() {
-  const { persona, setPersona, actor, me } = usePersona();
+  const { persona, setPersona } = usePersona();
+  const { session, signOut, reauthenticate } = useSession();
+  const navigate = useNavigate();
   const p = PERSONAS.find((x) => x.id === persona)!;
+  const name = session.user.display_name;
+  const a = session.authn;
+  const assurance = `AAL${a.aal}${a.phishing_resistant ? " · phishing-resistant" : ""}`;
   return (
     <Menu
       label="User menu"
       items={[
-        { heading: `Signed in as ${actor} (demo)` },
+        { heading: `Signed in as ${session.user.email ?? name}` },
+        { label: <span className="faint small">{session.tenant.name} · {assurance} · signed in {relTime(a.auth_time.replace("Z", ""))}</span> },
+        { label: <span className="faint small">Roles: {session.active_roles.join(", ") || "none active"}</span> },
+        ...session.inactive_roles.map((r) => ({
+          label: <span className="small" style={{ color: "var(--warning, #9a6700)" }}>{r.role} is inactive: sign in with a passkey to use it</span>,
+          onSelect: () => { reauthenticate(); },
+        })),
+        ...(session.inactive_roles.length ? [{ label: "Re-authenticate", onSelect: () => { reauthenticate(); } }] : []),
+        { label: "My sessions", onSelect: () => navigate("/sessions") },
         "divider",
-        { heading: "View as" },
+        { heading: "View as (demo)" },
         ...PERSONAS.map((x) => ({
           label: (
             <span className="grow">
@@ -240,16 +273,17 @@ function UserMenu() {
           checked: persona === x.id,
           onSelect: () => setPersona(x.id),
         })),
+        { label: <span className="faint small">The view changes what Home emphasises, not what you're allowed to do: that comes from your roles.</span> },
         "divider",
-        { label: <span className="faint small">Persona is a demo stand-in until sign-in (Phase 0). It changes what Home shows, not what you're allowed to do.</span> },
+        { label: "Sign out", onSelect: () => { signOut(); } },
       ]}
       trigger={(t) => (
-        <button type="button" className="me" aria-label={`User menu: ${actor}, ${TENANT}, viewing as ${p.label}`} {...t}>
+        <button type="button" className="me" aria-label={`User menu: ${name}, ${session.tenant.name}, viewing as ${p.label}`} {...t}>
           <span className="tb-hide-sm">
-            {me?.name ?? actor}
-            <small>{TENANT} · {p.label}</small>
+            {name}
+            <small>{session.tenant.name} · {p.label}</small>
           </span>
-          <span className="avatar" aria-hidden>{initials(me?.name ?? actor)}</span>
+          <span className="avatar" aria-hidden>{initials(name)}</span>
         </button>
       )}
     />

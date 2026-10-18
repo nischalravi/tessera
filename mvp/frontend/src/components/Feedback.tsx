@@ -1,6 +1,9 @@
 import { CSSProperties, ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { CircleAlert, Info } from "lucide-react";
+import { ApiError, refetchAll } from "../api";
+import { Button } from "./Button";
+import { errorCopy } from "./errorCopy";
 
 export function EmptyState({ icon, title, children, action }: { icon?: ReactNode; title: string; children?: ReactNode; action?: ReactNode }) {
   return (
@@ -43,22 +46,30 @@ export function PageSkeleton() {
 }
 
 /** Loading placeholder that turns into an inline error when `error` is set. */
-export function Loading({ error, kind = "table" }: { error?: string | null; kind?: "table" | "page" | "block" }) {
-  if (error) return <ErrorNote error={error} />;
+export function Loading({ error, kind = "table", what, onRetry }: { error?: ApiError | string | null; kind?: "table" | "page" | "block"; what?: string; onRetry?: () => void }) {
+  if (error) return <ErrorNote error={error} what={what} onRetry={onRetry} />;
   if (kind === "page") return <PageSkeleton />;
   if (kind === "block") return <div style={{ padding: 16 }}><Skeleton /><Skeleton w="60%" style={{ marginTop: 8 }} /></div>;
   return <TableSkeleton />;
 }
 
-export function ErrorNote({ error }: { error: string }) {
+/**
+ * The shared panel for a failed load. It words the error by kind (errorCopy.ts), so a missing
+ * record, a bad link, a denial and an unreachable API each read differently. `what` names the
+ * thing ("identity", "application"). Retry shows only when trying again can help (network, 5xx);
+ * it refetches every mounted query unless `onRetry` says otherwise.
+ */
+export function ErrorNote({ error, what, onRetry }: { error: ApiError | string; what?: string; onRetry?: () => void }) {
+  const copy = typeof error === "string"
+    ? { text: `Couldn't load this: ${error}`, detail: undefined, retry: false }
+    : errorCopy(error.kind, what, error.serverMessage);
   return (
     <div className="callout bad" role="alert" style={{ margin: 12 }}>
       <CircleAlert size={16} />
-      <span>
-        {/^not found$/i.test(error)
-          ? "The running API doesn't have this endpoint. It was probably started before an update: restart it with ./run.sh, then reload."
-          : `Couldn't load this: ${error}. Check that the API is running on :8000, then reload.`}
-      </span>
+      <div className="grow">
+        <span>{copy.text}{copy.detail ? ` ${copy.detail}` : ""}</span>
+        {copy.retry && <div className="mt-sm"><Button size="sm" onClick={onRetry ?? refetchAll}>Retry</Button></div>}
+      </div>
     </div>
   );
 }

@@ -2,7 +2,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowRight, ClipboardCheck, Inbox as InboxIcon, KeyRound, ShoppingCart, Timer, Users } from "lucide-react";
 import { AuditRow, ConnectorRow, DeploymentHealth, JitRequest, Policy, ReadinessSummary, Violation, relTime, useApi } from "../../api";
 import { usePersona } from "../../app/persona";
-import { TENANT } from "../../app/tenant";
+import { useSession } from "../../app/auth";
 import { Badge, Bar, Button, ButtonLink, EmptyState, Kpi, Loading, Page, Status, Tabs } from "../../components";
 import { DeploymentHealthBody, ReadinessAttentionCard, ReadinessKpi } from "../insights/DeploymentHealth";
 import { RiskyTable, Summary, Trend } from "../insights/RiskOverview";
@@ -146,7 +146,7 @@ function TeamOverview({ meId }: { meId: number }) {
             <tbody>
               {pending.map((r) => (
                 <tr key={r.id}>
-                  <td><b className="small">{r.identity.name}</b><div className="xs faint">{r.justification}</div></td>
+                  <td><b className="small">{r.identity.name}</b><div className="xs faint wrap-anywhere">{r.justification}</div></td>
                   <td className="small"><span className="sys">{r.group.system}:{r.group.name}</span>{r.group.privileged && <> <Badge tone="warning">Privileged</Badge></>}</td>
                   <td className="small faint nowrap hide-narrow">{relTime(r.requested_at)}</td>
                 </tr>
@@ -234,6 +234,7 @@ function AdminHome() {
   const { items } = useInbox("mine");
   const attention = useAttention();
   const { data: rsum, error: rerr } = useApi<{ readiness: ReadinessSummary }>("/summary?include=readiness");
+  const TENANT = useSession().session.tenant.name;
   const lastSync = audit?.find((a) => /sync/i.test(a.action))?.at ?? null;
   const has = (s: string) => conns?.some((c) => c.system === s);
   const sev = d?.violations.by_severity ?? {};

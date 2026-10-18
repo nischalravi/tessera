@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
@@ -22,9 +23,11 @@ import (
 
 func TestMain(m *testing.M) { testkit.Main(m) }
 
-func testServer(st *testkit.DB, mutate ...func(*Config)) http.Handler {
+// testServer is a server over st, signed in as testAdmin in st's tenant.
+func testServer(t testing.TB, st *testkit.DB, mutate ...func(*Config)) http.Handler {
+	t.Helper()
 	cfg := Config{
-		Store: st.DB, Tenant: st.Tenant, Clock: timeutil.Frozen(testkit.Now), Policies: policy.NewLoader(policies.FS),
+		Store: st.DB, Clock: timeutil.Frozen(testkit.Now), Policies: policy.NewLoader(policies.FS),
 		Connectors:     func(time.Time) ([]connectors.Connector, error) { return connectors.Load("demo", testkit.Now) },
 		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 		AllowedOrigins: []string{"http://localhost:5173"},
@@ -32,7 +35,7 @@ func testServer(st *testkit.DB, mutate ...func(*Config)) http.Handler {
 	for _, m := range mutate {
 		m(&cfg)
 	}
-	return New(cfg).Handler()
+	return asAdmin(t, New(cfg), st.DB, st.Tenant, testkit.Now).Handler()
 }
 
 type client struct {
@@ -85,8 +88,9 @@ func at(v any, path ...any) any {
 }
 
 func TestRevokeDryRunAndApplyViaAPI(t *testing.T) {
+	t.Parallel()
 	st, ids := testkit.Tiny(t)
-	c := client{t, testServer(st)}
+	c := client{t, testServer(t, st)}
 	e := testkit.Get(t, st, func(c *store.TenantTx) (*store.GrantEdge, error) {
 		return c.EdgeBetween(graph.Key("account", ids["acct:okta:carol"]), graph.Key("group", ids["group:okta:platform"]))
 	})
@@ -118,7 +122,8 @@ func TestRevokeDryRunAndApplyViaAPI(t *testing.T) {
 }
 
 func TestAPISmoke(t *testing.T) {
-	c := client{t, testServer(testkit.Demo(t))}
+	t.Parallel() // its own database
+	c := client{t, testServer(t, testkit.Demo(t))}
 	summary := c.json("GET", "/api/summary", "", 200)
 	if at(summary, "identities", "ai_agent") != 6.0 || at(summary, "violations", "total").(float64) <= 0 {
 		t.Errorf("summary = %v", summary)
@@ -178,7 +183,8 @@ func TestAPISmoke(t *testing.T) {
 }
 
 func TestAccountsList(t *testing.T) {
-	c := client{t, testServer(testkit.Demo(t))}
+	t.Parallel()
+	c := client{t, testServer(t, testkit.Demo(t))}
 	rows := c.json("GET", "/api/accounts", "", 200).([]any)
 	if float64(len(rows)) != at(c.json("GET", "/api/summary", "", 200), "accounts") {
 		t.Errorf("accounts list length %d does not match summary", len(rows))
@@ -209,8 +215,9 @@ func TestAccountsList(t *testing.T) {
 }
 
 func TestRoutingAndErrors(t *testing.T) {
+	t.Parallel()
 	st, _ := testkit.Tiny(t)
-	c := client{t, testServer(st)}
+	c := client{t, testServer(t, st)}
 	tests := []struct {
 		method, path, body string
 		status             int
@@ -223,7 +230,10 @@ func TestRoutingAndErrors(t *testing.T) {
 		{"GET", "/api/graph", "", 400, `"identity_id or resource_id is required"`},
 		{"POST", "/api/simulate", `{"remove_edge_ids": [], "dryrun": true}`, 422, `"extra_forbidden"`},
 		{"POST", "/api/simulate", `{"a": 1} trailing`, 422, `"json_invalid"`},
-		{"POST", "/api/jit/requests/1/escalate", "", 422, `"literal_error"`},
+		// the decision routes are /approve, /deny and /revoke (§16.2); there is no {action}
+		{"POST", "/api/jit/requests/1/escalate", "", 404, `"Not Found"`},
+		{"POST", "/api/jit/requests/1/approve", `{"approver": "mallory@larkspur.example"}`, 422, `"extra_forbidden"`},
+		{"POST", "/api/least-privilege/revoke", `{"edge_id": 1, "actor": "mallory"}`, 422, `"extra_forbidden"`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
@@ -245,8 +255,9 @@ func TestRoutingAndErrors(t *testing.T) {
 }
 
 func TestBodySizeLimit(t *testing.T) {
+	t.Parallel()
 	st, _ := testkit.Tiny(t)
-	c := client{t, testServer(st, func(cfg *Config) { cfg.MaxBodyBytes = 64 })}
+	c := client{t, testServer(t, st, func(cfg *Config) { cfg.MaxBodyBytes = 64 })}
 	big := `{"remove_edge_ids": [` + strings.Repeat("1,", 100) + `1]}`
 	if rec := c.do("POST", "/api/simulate", big); rec.Code != http.StatusRequestEntityTooLarge {
 		t.Errorf("status = %d, want 413", rec.Code)
@@ -266,8 +277,9 @@ func TestBodySizeLimit(t *testing.T) {
 }
 
 func TestCORS(t *testing.T) {
+	t.Parallel()
 	st, _ := testkit.Tiny(t)
-	c := client{t, testServer(st)}
+	c := client{t, testServer(t, st)}
 	tests := []struct {
 		name, method, origin string
 		wantAllow            string
@@ -293,9 +305,9 @@ func TestCORS(t *testing.T) {
 
 func TestHandlerTimeout(t *testing.T) {
 	st, _ := testkit.Tiny(t)
-	srv := New(Config{Store: st.DB, Tenant: st.Tenant, Clock: timeutil.Frozen(testkit.Now), Policies: policy.NewLoader(policies.FS),
+	srv := New(Config{Store: st.DB, Clock: timeutil.Frozen(testkit.Now), Policies: policy.NewLoader(policies.FS),
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), HandlerTimeout: 20 * time.Millisecond})
-	srv.handle("GET", "/api/slow", read, func(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+	srv.handle("GET", "/api/slow", read, need(auth.PermGraphRead), func(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
 		select {
 		case <-time.After(time.Second):
 		case <-r.Context().Done():
@@ -303,24 +315,26 @@ func TestHandlerTimeout(t *testing.T) {
 		return nil, r.Context().Err()
 	})
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/slow", nil))
+	asAdmin(t, srv, st.DB, st.Tenant, testkit.Now).Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/slow", nil))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want 503", rec.Code)
 	}
 }
 
 func TestInternalErrorsAreNotLeaked(t *testing.T) {
+	t.Parallel()
 	st, _ := testkit.Tiny(t)
 	var logs strings.Builder
-	srv := New(Config{Store: st.DB, Tenant: st.Tenant, Clock: timeutil.Frozen(testkit.Now), Policies: policy.NewLoader(policies.FS),
+	srv := New(Config{Store: st.DB, Clock: timeutil.Frozen(testkit.Now), Policies: policy.NewLoader(policies.FS),
 		Logger: slog.New(slog.NewTextHandler(&logs, nil))})
-	srv.handle("GET", "/api/boom", read, func(http.ResponseWriter, *http.Request, *params) (any, error) {
+	srv.handle("GET", "/api/boom", read, need(auth.PermGraphRead), func(http.ResponseWriter, *http.Request, *params) (any, error) {
 		return nil, fmt.Errorf("SELECT secret FROM vault failed")
 	})
-	srv.handle("GET", "/api/panic", read, func(http.ResponseWriter, *http.Request, *params) (any, error) { panic("kaboom") })
+	srv.handle("GET", "/api/panic", read, need(auth.PermGraphRead), func(http.ResponseWriter, *http.Request, *params) (any, error) { panic("kaboom") })
+	h := asAdmin(t, srv, st.DB, st.Tenant, testkit.Now).Handler()
 	for _, path := range []string{"/api/boom", "/api/panic"} {
 		rec := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", path+"?token=abc123", nil))
+		h.ServeHTTP(rec, httptest.NewRequest("GET", path+"?token=abc123", nil))
 		if rec.Code != 500 || strings.Contains(rec.Body.String(), "vault") || strings.Contains(rec.Body.String(), "kaboom") {
 			t.Errorf("%s: %d %q", path, rec.Code, rec.Body.String())
 		}

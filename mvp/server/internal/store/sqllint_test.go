@@ -434,3 +434,38 @@ func list(toks []token, i int) ([][]token, int, error) {
 	}
 	return nil, i, fmt.Errorf("unterminated list")
 }
+
+// lintLookup checks one of the two §14.2 hash lookups (lq): exactly
+//
+//	SELECT x.tenant_id, x.id FROM <table> x WHERE x.<hash column> = @hash
+//
+// for a table and column of GlobalHashLookups, so a lookup can return
+// nothing but the pair needed to open the right tenant transaction.
+func lintLookup(sqlText string) error {
+	toks, err := tokenize(sqlText)
+	if err != nil {
+		return fmt.Errorf("cannot parse: %w", err)
+	}
+	var words []string
+	for _, t := range toks {
+		if t.kind == tParam {
+			words = append(words, "@"+t.text)
+			continue
+		}
+		words = append(words, t.text)
+	}
+	// select a . tenant_id , a . id from T a where a . col = @hash
+	bad := fmt.Errorf("a lookup must be SELECT x.tenant_id, x.id FROM t x WHERE x.<hash> = @hash")
+	if len(words) != 17 {
+		return bad
+	}
+	a, table, col := words[1], words[9], words[14]
+	want := []string{"select", a, ".", "tenant_id", ",", a, ".", "id", "from", table, a, "where", a, ".", col, "=", "@hash"}
+	if !slices.Equal(words, want) {
+		return bad
+	}
+	if GlobalHashLookups[table] != col {
+		return fmt.Errorf("lookup on %s.%s is not a GlobalHashLookups column", table, col)
+	}
+	return nil
+}
