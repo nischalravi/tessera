@@ -5,7 +5,7 @@
   "path": "/api/jit/requests/5/approve"
  },
  "response": {
-  "status": 400,
+  "status": 409,
   "body": {
    "detail": "request is not pending"
   }

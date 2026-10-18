@@ -35,6 +35,17 @@ type Service struct {
 	// RetryBudget bounds the provider calls of one RunRetries pass (default
 	// 25s); tests shorten it.
 	RetryBudget time.Duration
+	// SweepBudget bounds the provider calls of one lifecycle sweep pass of a
+	// tenant (default 25s); tests shorten it.
+	SweepBudget time.Duration
+}
+
+// SweepTimeout is the time one lifecycle sweep pass may spend on provider calls.
+func (s *Service) SweepTimeout() time.Duration {
+	if s.SweepBudget > 0 {
+		return s.SweepBudget
+	}
+	return 25 * time.Second
 }
 
 func (s *Service) now() time.Time {
@@ -189,7 +200,7 @@ type Item struct {
 type Job struct {
 	IdentityID int64
 	Identity   string
-	Trigger    string // manual, leaver, agent
+	Trigger    string // manual, leaver, agent, disable
 	Items      []Item
 }
 
