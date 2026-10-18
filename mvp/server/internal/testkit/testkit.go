@@ -73,7 +73,8 @@ func CreateTenant(tb testing.TB, db *store.DB, id tenancy.ID, slug string) {
 
 var tiny struct {
 	once sync.Once
-	db   []byte
+	db   []byte // SQLite: the loaded file
+	src  string // Postgres: the template database
 	ids  IDs
 	err  error
 }
@@ -87,11 +88,16 @@ func Tiny(tb testing.TB) (*DB, IDs) {
 	if tiny.err != nil {
 		tb.Fatal(tiny.err)
 	}
-	path := filepath.Join(tb.TempDir(), "test.db")
-	if err := os.WriteFile(path, tiny.db, 0o600); err != nil {
-		tb.Fatal(err)
+	target := tiny.src
+	if tiny.db != nil { // SQLite: a private copy of the loaded file
+		target = filepath.Join(tb.TempDir(), "test.db")
+		if err := os.WriteFile(target, tiny.db, 0o600); err != nil {
+			tb.Fatal(err)
+		}
+	} else { // Postgres: a database created from the loaded template
+		target = store.TestClone(tb, tiny.src)
 	}
-	st, err := store.Open(context.Background(), path)
+	st, err := store.Open(context.Background(), target)
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -106,35 +112,41 @@ func buildTiny() {
 		return
 	}
 	defer os.RemoveAll(dir)
-	path := filepath.Join(dir, "tiny.db")
-	ctx := context.Background()
-	st, err := store.Open(ctx, path)
-	if err != nil {
-		tiny.err = err
-		return
-	}
-	defer st.Close()
-	err = st.InSystem(ctx, "test fixture", func(s *store.SystemTx) error {
-		_, err := s.CreateTenant(store.Tenant{ID: TinyTenant, Slug: "tiny", Name: "tiny", CreatedAt: Now})
+	// A SQLite file in dir, or (TESSERA_TEST_PG_URL) a Postgres template database.
+	src, err := store.TestSharedTarget(dir, "tiny", func(target string) error {
+		ctx := context.Background()
+		st, err := store.Open(ctx, target)
+		if err != nil {
+			return err
+		}
+		defer st.Close()
+		err = st.InSystem(ctx, "test fixture", func(s *store.SystemTx) error {
+			_, err := s.CreateTenant(store.Tenant{ID: TinyTenant, Slug: "tiny", Name: "tiny", CreatedAt: Now})
+			return err
+		})
+		if err == nil {
+			err = st.InTenant(ctx, TinyTenant, func(c *store.TenantTx) error {
+				_, err := ingest.Sync(c, Now, []connectors.Connector{TinyConnector{Now: Now}}, nil)
+				return err
+			})
+		}
+		if err == nil {
+			err = st.ReadTenant(ctx, TinyTenant, func(c *store.TenantTx) error { tiny.ids, err = loadIDs(c); return err })
+		}
+		if err == nil {
+			err = st.Checkpoint(ctx)
+		}
+		if err == nil {
+			err = st.Close()
+		}
 		return err
 	})
 	if err == nil {
-		err = st.InTenant(ctx, TinyTenant, func(c *store.TenantTx) error {
-			_, err := ingest.Sync(c, Now, []connectors.Connector{TinyConnector{Now: Now}}, nil)
-			return err
-		})
-	}
-	if err == nil {
-		err = st.ReadTenant(ctx, TinyTenant, func(c *store.TenantTx) error { tiny.ids, err = loadIDs(c); return err })
-	}
-	if err == nil {
-		err = st.Checkpoint(ctx)
-	}
-	if err == nil {
-		err = st.Close()
-	}
-	if err == nil {
-		tiny.db, err = os.ReadFile(path) // #nosec G304 -- path made above
+		if store.IsPostgresDSN(src) {
+			tiny.src = src
+		} else {
+			tiny.db, err = os.ReadFile(src) // #nosec G304 -- path made above
+		}
 	}
 	tiny.err = err
 }

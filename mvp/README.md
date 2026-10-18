@@ -1236,6 +1236,10 @@ cd ../frontend && npm run build && npm test   # npm test: node:test, no extra de
   (FastAPI) backend with `record_python.py` on a frozen clock (2026-10-08T09:30:00 UTC) before it
   was removed; check out commit `aba5abb` to re-run the recorder against it. Only two values are
   normalised, both non-deterministic in Python itself (see `testdata/parity/README.md`).
+* **Postgres.** With `TESSERA_TEST_PG_URL` set (see "Postgres") the whole suite runs on Postgres 16 as
+  the non-owner `tessera_app` role, and `store/pg_isolation_test.go` checks row-level security,
+  composite foreign keys and the audit privileges. `TESSERA_REQUIRE_PG_TESTS=1` turns a missing
+  server into a failure.
 * **CI diagnostics.** `scripts/ci-diagnostics.sh` runs the CI and security-scan gates locally,
   one log per step, into `logs/ci-<timestamp>/SUMMARY.md` (git-ignored). `--quick` skips the
   race suite, `--only go,frontend,…` picks steps, and `--pr <n>` (with `gh` signed in) also saves
@@ -1268,9 +1272,10 @@ cd ../frontend && npm run build && npm test   # npm test: node:test, no extra de
   non-https `TESSERA_PUBLIC_URL`, `TESSERA_COOKIE_SECURE=false`, no KEK, any
   `TESSERA_CORS_ORIGINS` (the production UI is same-origin, so CORS is off),
   `TESSERA_OUTBOUND_ALLOW_LOOPBACK=true`, a `TESSERA_DEV_IDP_URL`, a `TESSERA_AUDIT_ANCHOR` that
-  is not `s3://bucket/prefix` (missing and `file://` included), a frozen clock (`TESSERA_NOW`), or
-  a `TESSERA_TRUSTED_PROXIES` prefix broader than /8 (IPv4) or /32 (IPv6), and lists every problem
-  at once. A /0 proxy prefix is refused in every environment. `TESSERA_COOKIE_SECURE=false` is
+  is not `s3://bucket/prefix` (missing and `file://` included), a frozen clock (`TESSERA_NOW`), a
+  `TESSERA_TRUSTED_PROXIES` prefix broader than /8 (IPv4) or /32 (IPv6), or a `postgres://`
+  `TESSERA_DB` without `sslmode=require` (or stricter) and `app_role`, and lists every problem
+  at once (never echoing the DSN). A /0 proxy prefix is refused in every environment. `TESSERA_COOKIE_SECURE=false` is
   accepted only with `TESSERA_ENV=dev`, a `localhost`/`127.0.0.1` public URL and a loopback
   `-addr`. `serve` and `seed` both need an explicit `TESSERA_ENV` (`run.sh` exports `dev`).
 * Keys: `seed` and `serve` run the ensure-keys step (one active and one next ES256 key per tenant

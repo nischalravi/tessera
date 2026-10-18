@@ -179,6 +179,31 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	return serve(ctx, o, cfg, sealer, clock, loader, logger)
 }
 
+// needsSeed reports whether serve must seed the demo tenants first: on
+// --reseed, or when there is nothing yet. For SQLite "nothing" is a missing
+// file. A Postgres database always exists, so there it is a database with no
+// tenant, and never in production (an empty production database is filled by
+// `tessera admin create-tenant`, not by demo data).
+func needsSeed(ctx context.Context, o options, cfg *config.Config) (bool, error) {
+	if !store.IsPostgresDSN(o.db) {
+		_, err := os.Stat(o.db)
+		return o.reseed || errors.Is(err, fs.ErrNotExist), nil
+	}
+	if o.reseed {
+		return true, nil
+	}
+	if cfg.IsProd() {
+		return false, nil
+	}
+	st, err := store.Open(ctx, o.db)
+	if err != nil {
+		return false, err
+	}
+	defer st.Close()
+	tenants, err := st.ActiveTenants(ctx)
+	return len(tenants) == 0, err
+}
+
 // loopbackListen reports whether addr (host:port) listens on loopback only:
 // localhost, 127.0.0.0/8 or ::1. An empty host (all interfaces) is not.
 func loopbackListen(addr string) bool {
@@ -328,11 +353,6 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	scenario := os.Getenv("TESSERA_READINESS_SCENARIO")
 	if scenario != "" && !slices.Contains(connectors.ScenarioNames(), scenario) {
 		return fmt.Errorf("TESSERA_READINESS_SCENARIO: unknown scenario %q (have %v)", scenario, connectors.ScenarioNames())
-	}
-	anchorURL := cfg.AnchorURL(o.db)
-	sink, err := audit.NewSink(anchorURL)
-	if err != nil {
-		return err
 	}
 	// Live readiness checks: real LDAP probes open the sealed credential with
 	// the KEK and dial through safedial. Private targets need the dev-only

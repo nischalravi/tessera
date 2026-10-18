@@ -61,7 +61,7 @@ type Config struct {
 	Env                   string // Dev or Prod
 	PublicURL             string // issuer base; https in prod
 	APIAudience           string // access-token aud
-	DB                    string // SQLite path (or sqlite:///path)
+	DB                    string // SQLite path (or sqlite:///path), or a postgres:// DSN (carries a password: never log it)
 	KEKFile               string // TESSERA_KEK_FILE, when set
 	CookieSecure          bool
 	CORSOrigins           []string
@@ -320,6 +320,12 @@ func Load(getenv func(string) string) (*Config, error) {
 		if c.DevIdPURL != "" {
 			bad("TESSERA_DEV_IDP_URL must not be set with TESSERA_ENV=prod")
 		}
+		if IsPostgresDSN(c.DB) {
+			// Never echo the DSN: it carries the password.
+			if msg := checkProdPostgres(c.DB); msg != "" {
+				bad("TESSERA_DB: %s", msg)
+			}
+		}
 		if c.SafedialAllow != "" {
 			bad("TESSERA_SAFEDIAL_ALLOW must not be set with TESSERA_ENV=prod: private directories are reached through the Directory Agent")
 		}
@@ -514,7 +520,7 @@ func checkProdPostgres(dsn string) string {
 // DevMailPath is where the dev mail sink appends: var/dev-mail.jsonl next to
 // the database file.
 func DevMailPath(dbPath string) string {
-	return filepath.Join(filepath.Dir(dbPath), "var", "dev-mail.jsonl")
+	return filepath.Join(localDir(dbPath), "var", "dev-mail.jsonl")
 }
 
 // Sealer returns the KEK sealer. With no KEK configured (dev only; Load

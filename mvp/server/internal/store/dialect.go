@@ -119,6 +119,9 @@ var pgOverrides = map[string]string{
 	"tenants.set_settings": `
 		UPDATE tenants SET settings = CAST(@settings AS TEXT) WHERE id = @id AND slug != '_platform'
 			AND CAST(@settings AS TEXT) IS JSON OBJECT`,
+	"tenants.set_security_contacts": `
+		UPDATE tenants SET security_contacts = CAST(@contacts AS TEXT) WHERE id = @id AND slug != '_platform'
+			AND CAST(@contacts AS TEXT) IS JSON ARRAY`,
 }
 
 // pgBySQL maps the SQLite text of an overridden statement to its override.

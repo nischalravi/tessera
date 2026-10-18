@@ -21,7 +21,7 @@ import (
 type TenantTx struct {
 	ctx      context.Context
 	db       *DB
-	tx       *sql.Tx
+	tx       *xtx
 	tenant   tenancy.ID
 	readOnly bool
 	appended int64 // audit events appended (counted into AuditContext.Committed on commit)

@@ -139,9 +139,22 @@ var legacyTables = []string{"audit_log"}
 // Writes are serialized through one mutex so SQLite never sees two concurrent
 // writers; read-only tenant transactions (ReadTenant) run concurrently (WAL).
 type DB struct {
-	sql   *sql.DB
+	sql   *sql.DB // the application pool
+	owner *sql.DB // Postgres: the migration role's pool (equal to sql when there is no app role)
+	d     dialect
 	mu    sync.Mutex
-	stmts stmtCache
+	stmts stmtCache // prepared statements (SQLite only; see stmtFor)
+}
+
+// writeLock serializes writers on SQLite (one writer at a time); Postgres
+// serializes through its own locks, so it takes none. Use as
+// `defer d.writeLock()()`.
+func (d *DB) writeLock() func() {
+	if d.d == dialectPostgres {
+		return func() {}
+	}
+	d.mu.Lock()
+	return d.mu.Unlock
 }
 
 // Open opens (creating if needed) the database at path and applies the schema.
@@ -186,7 +199,11 @@ func open(ctx context.Context, path string, fresh bool) (*DB, error) {
 // Close closes the database.
 func (d *DB) Close() error {
 	d.stmts.close()
-	return d.sql.Close()
+	err := d.sql.Close()
+	if d.owner != nil && d.owner != d.sql {
+		err = errors.Join(err, d.owner.Close())
+	}
+	return err
 }
 
 // Checkpoint truncates the write-ahead log into the main database file, so the
@@ -301,6 +318,28 @@ func (d *DB) inTenantOn(ctx context.Context, pool *sql.DB, t tenancy.ID, readOnl
 	raw, err := pool.BeginTx(ctx, &sql.TxOptions{ReadOnly: readOnly})
 	if err != nil {
 		return fmt.Errorf("store: begin: %w", err)
+	}
+	sqltx := &xtx{tx: raw, d: d.d}
+	if d.d == dialectPostgres {
+		// Transaction-local (is_local = true): a pooled connection can never
+		// carry the tenant into its next transaction. Row-level security reads
+		// this setting; with it unset, no tenant row matches (fail closed).
+		if _, err := raw.ExecContext(ctx, pgSetTenant, t.String()); err != nil {
+			_ = raw.Rollback()
+			return fmt.Errorf("store: set tenant: %w", err)
+		}
+		if !readOnly {
+			// SQLite runs one writer at a time, and the store's code (the
+			// readiness state machine, the audit chain head) is written for
+			// that. On Postgres writers of one tenant queue on a transaction-
+			// scoped advisory lock instead: no deadlocks or unique-key races
+			// between two requests of a tenant, while other tenants and all
+			// readers run in parallel.
+			if _, err := raw.ExecContext(ctx, pgLockTenant, t.String()); err != nil {
+				_ = raw.Rollback()
+				return fmt.Errorf("store: lock tenant: %w", err)
+			}
+		}
 	}
 	ttx := &TenantTx{ctx: ctx, db: d, tx: sqltx, tenant: t, readOnly: readOnly}
 	defer func() {

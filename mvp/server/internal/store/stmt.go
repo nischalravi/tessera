@@ -93,7 +93,16 @@ const prepareWait = 200 * time.Millisecond
 // stmtFor returns tx's view of the cached statement for query, preparing it
 // on first use. ok is false when the statement cannot be cached; the caller
 // then runs query directly (which also surfaces any real SQL error).
-func (d *DB) stmtFor(ctx context.Context, tx *sql.Tx, query string) (*sql.Stmt, bool) {
+//
+// The cache is SQLite only. On Postgres a statement must first be rebound
+// ($n placeholders, translatePG, which has its own cache) and writes run in a
+// savepoint (xtx.guard), so a prepared *sql.Stmt would bypass both: Postgres
+// always takes the direct path through xtx.
+func (d *DB) stmtFor(ctx context.Context, x *xtx, query string) (*sql.Stmt, bool) {
+	if x.d != dialectSQLite {
+		return nil, false
+	}
+	tx := x.tx
 	c := &d.stmts
 	c.mu.Lock()
 	st, ok := c.m[query]
@@ -151,21 +160,21 @@ func (d *DB) stmtFor(ctx context.Context, tx *sql.Tx, query string) (*sql.Stmt, 
 	return tx.StmtContext(ctx, st), true
 }
 
-func (d *DB) execIn(ctx context.Context, tx *sql.Tx, query string, args []any) (sql.Result, error) {
+func (d *DB) execIn(ctx context.Context, tx *xtx, query string, args []any) (sql.Result, error) {
 	if st, ok := d.stmtFor(ctx, tx, query); ok {
 		return st.ExecContext(ctx, args...)
 	}
 	return tx.ExecContext(ctx, query, args...)
 }
 
-func (d *DB) queryIn(ctx context.Context, tx *sql.Tx, query string, args []any) (*sql.Rows, error) {
+func (d *DB) queryIn(ctx context.Context, tx *xtx, query string, args []any) (*sql.Rows, error) {
 	if st, ok := d.stmtFor(ctx, tx, query); ok {
 		return st.QueryContext(ctx, args...)
 	}
 	return tx.QueryContext(ctx, query, args...)
 }
 
-func (d *DB) queryRowIn(ctx context.Context, tx *sql.Tx, query string, args []any) *sql.Row {
+func (d *DB) queryRowIn(ctx context.Context, tx *xtx, query string, args []any) rowScanner {
 	if st, ok := d.stmtFor(ctx, tx, query); ok {
 		return st.QueryRowContext(ctx, args...)
 	}

@@ -262,7 +262,7 @@ func (f fixedDNS) LookupNetIP(_ context.Context, _, host string) ([]netip.Addr, 
 func TestS3Sink_SafeHTTPBlocksInternalEndpoints(t *testing.T) {
 	awsEnv(t)
 	t.Setenv("AWS_ENDPOINT_URL_S3", "https://s3.internal.example")
-	hc, err := safehttp.New(safehttp.Options{Env: config.Prod, Resolver: fixedDNS{"s3.internal.example": "169.254.169.254", "bucket-name.s3.internal.example": "169.254.169.254"}})
+	hc, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Prod, Resolver: fixedDNS{"s3.internal.example": "169.254.169.254", "bucket-name.s3.internal.example": "169.254.169.254"}})
 	if err != nil {
 		t.Fatal(err)
 	}

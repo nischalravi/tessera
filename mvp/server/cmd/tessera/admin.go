@@ -46,7 +46,9 @@ const adminUsage = `usage:
   tessera admin invite-admin  -tenant slug -connection id -email address [-ttl 24h] [-db path]
   tessera admin recover-tenant -tenant slug -operator id -co-operator id -ticket ref -connection id -email address
                               -operator-phr -co-operator-phr [-db path]
-  tessera admin revoke-signing-key -tenant slug -kid kid -reason text [-db path]`
+  tessera admin revoke-signing-key -tenant slug -kid kid -reason text [-db path]
+  tessera admin gen-rls       [-out path] [-check]   (Postgres row-level security; needs no database)
+  (-db is a SQLite path or a postgres:// DSN)`
 
 // maxInviteTTL is the longest a bootstrap invitation may live (§15.3).
 const maxInviteTTL = 24 * time.Hour
