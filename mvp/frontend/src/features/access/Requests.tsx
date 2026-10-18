@@ -1,13 +1,11 @@
 import { FormEvent, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Check, FileText, Pencil, Plus, Trash2, Undo2, X } from "lucide-react";
-import { ApiError, ApprovalDelegation, ApprovalItem, RequestLine, RoleRequest, UserRef, approveRequest, cancelRequest, createDelegation, denyRequest, fmtDate, relTime, removeRequest, revokeDelegation, roles as roleApi, useApi } from "../../api";
+import { ApiError, ApprovalDelegation, ApprovalItem, RemovalRequest, RequestDraft, RequestLine, RoleRequest, UserRef, approveRequest, cancelRequest, createDelegation, denyRequest, draftsPath, fmtDate, relTime, removals, removalsPath, removeRequest, requestDrafts, revokeDelegation, roles as roleApi, useApi } from "../../api";
 import { useSession } from "../../app/auth";
-import { usePersona } from "../../app/persona";
 import {
-  Badge, Button, ButtonLink, Column, DataTable, EmptyState, MyAccessTabs, Page, SidePanel, Status, Tabs, useConfirm, useSelected, useToast,
+  Badge, Button, ButtonLink, Column, DataTable, EmptyState, Loading, MyAccessTabs, Page, SidePanel, Status, Tabs, useConfirm, useSelected, useToast,
 } from "../../components";
-import { mockRequests, useMockState } from "../../mocks";
 import { Stages } from "./stages";
 
 /**
@@ -32,15 +30,14 @@ export function Requests() {
   // business role requests (issue #161) are decided by requests.decide, not routed by stage
   const rolesPending = useApi<RoleRequest[]>(decider ? "/role-requests?scope=pending" : null);
   const { data, error, reload } = tab === "approvals" ? { data: approvals, error: inbox.error, reload: inbox.reload } : listed;
-  const { actor } = usePersona();
-  const mock = useMockState();
-  const drafts = mock.requests.filter((r) => r.status === "draft" && r.requester === actor);
+  const draftsApi = useApi<RequestDraft[]>(draftsPath);
+  const drafts = draftsApi.data;
   const tabs: { id: Tab; label: string }[] = [
     { id: "mine", label: "My requests" },
     { id: "approvals", label: `Approvals${approvals && (!decider || rolesPending.data) ? ` (${approvals.length + (rolesPending.data?.length ?? 0)})` : ""}` },
     ...(decider ? [{ id: "all" as Tab, label: "All requests" }] : []),
     { id: "delegations", label: "Delegations" },
-    { id: "drafts", label: `Drafts (${drafts.length})` },
+    { id: "drafts", label: `Drafts${drafts ? ` (${drafts.length})` : ""}` },
   ];
   return (
     <Page
@@ -51,7 +48,10 @@ export function Requests() {
       actions={<ButtonLink to="/access/request" variant="primary" icon={<Plus size={15} />}>New request</ButtonLink>}
     >
       <Tabs label="Request views" value={tab} onChange={(v) => setParams(v === "mine" ? {} : { tab: v })} tabs={tabs} />
-      {tab === "drafts" ? <Drafts drafts={drafts} /> : tab === "delegations" ? <Delegations /> : <Lines rows={data} error={error} reload={reload} tab={tab} />}
+      {tab === "drafts" ? <Drafts drafts={draftsApi.data} error={draftsApi.error} reload={draftsApi.reload} /> : tab === "delegations" ? <Delegations /> : <Lines rows={data} error={error} reload={reload} tab={tab} />}
+      {(tab === "mine" || tab === "all" || tab === "approvals") && (
+        <RemovalRequests scope={tab === "approvals" ? "approvals" : scope} />
+      )}
       {(tab === "mine" || tab === "all" || (tab === "approvals" && decider)) && (
         <RoleRequests scope={tab === "approvals" ? "pending" : scope} onChange={rolesPending.reload} />
       )}
@@ -162,6 +162,66 @@ function LinePanel({ id, onClose }: { id: string; onClose: () => void }) {
   );
 }
 
+/** Removal requests (My access > Request removal): one per grant; approval removes the grant from the person's access. */
+function RemovalRequests({ scope }: { scope: "mine" | "approvals" | "all" }) {
+  const { data, error, reload } = useApi<RemovalRequest[]>(removalsPath(scope));
+  const confirm = useConfirm();
+  const toast = useToast();
+  const [busy, setBusy] = useState<string | null>(null);
+  const act = async (q: RemovalRequest, o: { title: string; body?: string; label: string; danger?: boolean; reason?: "required" | "optional"; run: (reason: string) => Promise<unknown>; done: string }) => {
+    const reason = await confirm({
+      title: o.title, body: o.body, confirmLabel: o.label, danger: o.danger,
+      reason: o.reason ? { label: o.reason === "required" ? "Reason (the requester sees it)" : "Note (optional)", required: o.reason === "required" } : undefined,
+    });
+    if (reason == null) return;
+    setBusy(q.id);
+    try {
+      await o.run(reason);
+      toast(o.done);
+      reload();
+    } catch (e: any) {
+      toast(String(e.message ?? e), { kind: "error" });
+    } finally {
+      setBusy(null);
+    }
+  };
+  if (data && data.length === 0 && !error) return null;
+  const what = (q: RemovalRequest) => `${q.group.system}:${q.group.name}`;
+  const cols: Column<RemovalRequest>[] = [
+    { id: "what", header: "Access to remove", sort: (q) => what(q), cell: (q) => <span className="sys name-link">{what(q)}</span> },
+    { id: "for", header: "For", sort: (q) => q.beneficiary.name, cell: (q) => <span className="small">{q.beneficiary.name}</span> },
+    { id: "by", header: "Requested by", sort: (q) => q.requested_by.display_name, cell: (q) => <span className="small">{q.requested_by.display_name}<div className="xs faint truncate" style={{ maxWidth: 260 }}>{q.justification}</div></span>, hideNarrow: true },
+    { id: "status", header: "Status", sort: (q) => q.status, cell: (q) => <span className="nowrap"><Status s={q.status} />{q.decided_by && <div className="xs faint">by {q.decided_by.display_name}</div>}{q.outcome === "already_removed" && <div className="xs faint">already gone</div>}</span> },
+    { id: "at", header: "Requested", sort: (q) => q.requested_at, cell: (q) => <span className="small faint nowrap" title={fmtDate(q.requested_at)}>{relTime(q.requested_at)}</span> },
+    { id: "act", header: "Actions", cell: (q) => (
+      <span className="row tight" style={{ justifyContent: "flex-end", flexWrap: "nowrap" }}>
+        {q.can_approve && <Button size="sm" variant="primary" icon={<Check size={14} />} disabled={busy === q.id}
+          onClick={() => act(q, { title: `Remove ${what(q)} from ${q.beneficiary.name}?`, body: "Tessera removes the grant from their access now and writes an audit record. Nothing is written back to the source system yet.", label: "Approve removal", reason: "optional", run: (r) => removals.approve(q.id, r || undefined), done: "Approved: access removed" })}>Approve</Button>}
+        {q.can_approve && <Button size="sm" variant="danger" icon={<X size={14} />} disabled={busy === q.id}
+          onClick={() => act(q, { title: `Deny removal of ${what(q)}?`, label: "Deny", danger: true, reason: "required", run: (r) => removals.deny(q.id, r), done: "Denied: access kept" })}>Deny</Button>}
+        {q.can_cancel && <Button size="sm" icon={<Undo2 size={14} />} disabled={busy === q.id}
+          onClick={() => act(q, { title: "Cancel this removal request?", label: "Cancel request", run: () => removals.cancel(q.id), done: "Request cancelled" })}>Cancel</Button>}
+      </span>
+    ) },
+  ];
+  return (
+    <section className="mt" aria-labelledby="removal-requests-h">
+      <h2 id="removal-requests-h" className="h3">Removal requests</h2>
+      <DataTable
+        id={`removal-requests-${scope}`}
+        rows={data}
+        error={error}
+        rowKey={(q) => q.id}
+        columns={cols}
+        searchText={(q) => `${what(q)} ${q.beneficiary.name} ${q.requested_by.display_name} ${q.justification}`}
+        searchPlaceholder="Search access or people…"
+        onRefresh={reload}
+        rowLabel={(q) => `Removal of ${what(q)} for ${q.beneficiary.name}`}
+      />
+    </section>
+  );
+}
+
 /** Business role requests (issue #161): one per person and role; approval assigns the role. */
 function RoleRequests({ scope, onChange }: { scope: string; onChange: () => void }) {
   const { data, error, reload } = useApi<RoleRequest[]>(`/role-requests?scope=${scope}`);
@@ -223,26 +283,37 @@ function RoleRequests({ scope, onChange }: { scope: string; onChange: () => void
 }
 
 
-function Drafts({ drafts }: { drafts: ReturnType<typeof useMockState>["requests"] }) {
+/** Drafts are saved on the server for you. They never submit by themselves: resume one to review and send it. */
+function Drafts({ drafts, error, reload }: { drafts: RequestDraft[] | null; error: ApiError | null; reload: () => void }) {
   const nav = useNavigate();
   const confirm = useConfirm();
-  const rows = useMemo(() => drafts, [drafts]);
+  const toast = useToast();
+  if (!drafts) return <Loading error={error} what="drafts" kind="block" onRetry={reload} />;
+  const label = (d: RequestDraft) => d.items.map((i) => i.name).join(", ") || <span className="faint">No items yet</span>;
   return (
     <div className="card flush">
-      {rows.length === 0 ? (
-        <EmptyState title="No drafts" icon={<Pencil size={18} />}>Use “Save draft” on Request access to come back to a request later.</EmptyState>
+      {drafts.length === 0 ? (
+        <EmptyState title="No drafts" icon={<Pencil size={18} />}>Use “Save draft” on Request access to come back to a request later. A draft is never submitted until you submit it.</EmptyState>
       ) : (
         <table>
           <thead><tr><th>Items</th><th>For</th><th>Saved</th><th /></tr></thead>
           <tbody>
-            {rows.map((d) => (
+            {drafts.map((d) => (
               <tr key={d.id}>
-                <td><b className="sys">{d.items.map((i) => i.name).join(", ")}</b></td>
-                <td className="small">{d.beneficiaries.map((b) => b.name).join(", ")}</td>
-                <td className="small faint">{relTime(d.createdAt)}</td>
+                <td><b className="sys">{label(d)}</b>{d.unavailable > 0 && <div className="xs faint">{d.unavailable} no longer available</div>}</td>
+                <td className="small">{d.beneficiaries.map((b) => b.name).join(", ") || <span className="faint">Not chosen</span>}</td>
+                <td className="small faint" title={fmtDate(d.updated_at)}>{relTime(d.updated_at)}</td>
                 <td className="actions-cell">
-                  <Button size="sm" icon={<Pencil size={14} />} onClick={() => nav(`/access/request?draft=${d.id}`)}>Resume</Button>{" "}
-                  <Button size="sm" variant="ghost" icon={<Trash2 size={14} />} label="Delete draft" onClick={async () => { if ((await confirm({ title: "Delete this draft?", confirmLabel: "Delete", danger: true })) !== null) mockRequests.remove(d.id); }} />
+                  <Button size="sm" icon={<Pencil size={14} />} onClick={() => nav(`/access/request?draft=${encodeURIComponent(d.id)}`)}>Resume</Button>{" "}
+                  <Button size="sm" variant="ghost" icon={<Trash2 size={14} />} label="Delete draft" onClick={async () => {
+                    if ((await confirm({ title: "Delete this draft?", confirmLabel: "Delete", danger: true })) === null) return;
+                    try {
+                      await requestDrafts.remove(d.id);
+                      reload();
+                    } catch (e: any) {
+                      toast(String(e.message ?? e), { kind: "error" });
+                    }
+                  }} />
                 </td>
               </tr>
             ))}

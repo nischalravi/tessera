@@ -897,6 +897,97 @@ export const approveRequest = (id: string, reason?: string) => line(id, "approve
 export const denyRequest = (id: string, reason: string) => line(id, "deny", { reason });
 export const cancelRequest = (id: string) => line(id, "cancel");
 export const removeRequest = (id: string, reason?: string) => line(id, "remove", reason ? { reason } : {});
+/** One of the signed-in user's own recent changes from the audit ledger (Home > Recent activity). */
+export interface ActivityEvent {
+  id: string;
+  action: string;
+  target_type: string | null;
+  target_id: string | null;
+  outcome: string;
+  occurred_at: string;
+}
+export const activityPath = (limit = 10) => `/activity?limit=${limit}`;
+
+/** Organizations (Directory > Organizations): read-only, derived from the departments in the HR data. */
+export interface OrgPerson { id: number; name: string; title: string | null; status: string }
+export interface OrgRow {
+  id: string;
+  name: string;
+  kind: "tenant" | "department";
+  parent_id: string | null;
+  /** people in it (the root counts everyone); active is the part who are active */
+  members: number;
+  active: number;
+  children: number;
+  /** derived: the person at the top of the department's reporting lines who leads others in it */
+  owner: OrgPerson | null;
+}
+export interface OrgDetail extends OrgRow {
+  parent: OrgRow | null;
+  owners: OrgPerson[];
+  child_orgs: OrgRow[];
+  people: (OrgPerson & { manager: OrgPerson | null; email: string | null })[];
+}
+export const orgsPath = "/orgs";
+export const orgPath = (id: string) => `${orgsPath}/${encodeURIComponent(id)}`;
+
+/** A saved, unsubmitted request (Access > Request access > Save draft), private to its user. It never submits by itself. */
+export type DraftItem =
+  | { kind: "group"; group_id: number; name: string; system: string; privileged: boolean }
+  | { kind: "role"; role_id: string; name: string; privileged: boolean };
+export interface RequestDraft {
+  id: string;
+  beneficiaries: { id: number; name: string }[];
+  items: DraftItem[];
+  duration_hours: number | null;
+  justification: string;
+  /** people and items the draft named that no longer exist */
+  unavailable: number;
+  created_at: string;
+  updated_at: string;
+}
+export interface RequestDraftInput {
+  beneficiary_ids: number[];
+  items: ({ kind: "group"; group_id: number } | { kind: "role"; role_id: string })[];
+  duration_hours: number | null;
+  justification: string;
+}
+export const draftsPath = "/request-drafts";
+export const draftPath = (id: string) => `${draftsPath}/${encodeURIComponent(id)}`;
+export const requestDrafts = {
+  /** Creates a draft, or replaces the one named by id. */
+  save: (input: RequestDraftInput, id?: string) => (id ? api<RequestDraft>(draftPath(id), input, "PUT") : api<RequestDraft>(draftsPath, input)),
+  remove: (id: string) => api<{ id: string; deleted: boolean }>(draftPath(id), undefined, "DELETE"),
+};
+
+/** A request to remove one grant (account -> group) a person holds (My access > Request removal). */
+export interface RemovalRequest {
+  id: string;
+  group: CatalogEntry["group"];
+  account: { id: number; system: string; username: string };
+  beneficiary: PersonRef;
+  requested_by: { id: string; display_name: string };
+  justification: string;
+  status: "pending" | "approved" | "denied" | "cancelled";
+  requested_at: string;
+  decided_by: { id: string; display_name: string } | null;
+  decided_at: string | null;
+  decision_reason: string | null;
+  /** set on approval: revoked, request_removed (an approved access request was ended) or already_removed */
+  outcome: "revoked" | "request_removed" | "already_removed" | null;
+  can_approve: boolean;
+  can_cancel: boolean;
+}
+const removalPath = (id: string, action: string) => `/removal-requests/${encodeURIComponent(id)}/${action}`;
+export const removals = {
+  submit: (edgeId: number, justification: string) => api<RemovalRequest>("/removal-requests", { edge_id: edgeId, justification }),
+  approve: (id: string, reason?: string) => api<RemovalRequest>(removalPath(id, "approve"), reason ? { reason } : {}),
+  deny: (id: string, reason: string) => api<RemovalRequest>(removalPath(id, "deny"), { reason }),
+  cancel: (id: string) => api<RemovalRequest>(removalPath(id, "cancel"), {}),
+};
+/** scope: mine (default), approvals (what you may decide now), pending or all (requests.decide or graph.read). */
+export const removalsPath = (scope: "mine" | "approvals" | "pending" | "all" = "mine") => `/removal-requests?scope=${scope}`;
+
 export const putCatalogItem = (groupId: number, body: Omit<CatalogEntry, "id" | "group" | "owner" | "updated_at" | "approval"> & {
   owner_identity_id: number | null; approval_stages?: StageKind[]; escalate_after_hours?: number;
 }) => api<CatalogEntry>(`/catalog/items/${groupId}`, body, "PUT");
@@ -1308,6 +1399,43 @@ export interface ContainmentReport {
 /** Resolves with the report; a failed run rejects with an ApiError whose body.report holds it. */
 export const containIdentity = (identityId: number, reason: string) =>
   api<ContainmentReport>(`/identities/${identityId}/contain`, { reason });
+
+/** Disable / Enable of a person: Disable runs the kill switch's containment, then sets the accounts and the identity to disabled. */
+export interface DisableRecord {
+  id: string;
+  identity_id: number;
+  reason: string;
+  disabled_by: string;
+  disabled_at: string;
+  /** done, manual, retrying or none: how the provider-side containment of this Disable ended */
+  containment_status: "done" | "manual" | "retrying" | "none";
+  /** the accounts Disable set to disabled; Enable sets back these and nothing else */
+  accounts: { id: number; system: string; username: string }[];
+  enabled_by: string | null;
+  enabled_at: string | null;
+  enable_reason: string | null;
+}
+export interface DisableResult {
+  identity_id: number;
+  status: "disabled";
+  disable: DisableRecord;
+  containment: ContainmentReport & { status: "done" | "manual" | "retrying"; retry_ids?: string[] };
+}
+export interface EnableResult {
+  identity_id: number;
+  status: "active";
+  disable: DisableRecord;
+  restored: { id: number; system: string; username: string }[];
+  skipped: { id: number; system: string; username: string }[];
+  not_restored: string;
+  pending_containment_retries: number;
+}
+export const disableIdentity = (identityId: number, reason: string) =>
+  api<DisableResult>(`/identities/${identityId}/disable`, { reason });
+export const enableIdentity = (identityId: number, reason: string) =>
+  api<EnableResult>(`/identities/${identityId}/enable`, { reason });
+export const identityDisables = (identityId: number) =>
+  api<{ identity_id: number; disables: DisableRecord[] }>(`/identities/${identityId}/disables`);
 
 /** A containment step that failed and is queued for retry (or was given up on). */
 export interface ContainmentRetry {
