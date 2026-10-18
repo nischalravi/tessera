@@ -907,6 +907,12 @@ service container and `TESSERA_REQUIRE_PG_TESTS=1`.
 
 ### Backup and restore
 
+**SQLite only for now.** On a Postgres store (`TESSERA_DB=postgres://…`) `tessera backup create` refuses with
+`postgres_unsupported` and the scheduler logs that it is off; back up Postgres with `pg_dump` or your provider's
+snapshots (see `docs/runbooks/disaster-recovery.md`). `tessera backup restore` always writes a SQLite file. The
+backup holds every table in every schema file; the drill test `TestDrill_EverySchemaTableIsInTheBackup` checks
+that against the embedded schema, so a table added later cannot be left out unnoticed.
+
 `tessera backup create` (or `./run.sh backup`) takes an online `VACUUM INTO` snapshot while the
 server keeps serving. It seals the snapshot under the KEK in authenticated 1 MiB chunks, so an edited,
 reordered, truncated or extended file is refused, and writes `tessera-<UTC time>-<id>.tbak`.

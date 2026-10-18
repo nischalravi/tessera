@@ -125,6 +125,9 @@ func Create(ctx context.Context, db *store.DB, sealer *seal.Sealer, opts CreateO
 	if sealer == nil {
 		return nil, errors.New("backup: no KEK sealer")
 	}
+	if db.IsPostgres() {
+		return nil, refuse("postgres_unsupported", "%v", store.ErrSnapshotUnsupported)
+	}
 	if err := os.MkdirAll(opts.Dir, 0o700); err != nil {
 		return nil, fmt.Errorf("backup: %w", err)
 	}

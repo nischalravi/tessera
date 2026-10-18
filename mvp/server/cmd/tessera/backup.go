@@ -270,6 +270,10 @@ func backupList(dir string, w io.Writer) error {
 
 // runBackups takes a backup every interval until ctx ends (TESSERA_BACKUP_DIR).
 func runBackups(ctx context.Context, st *store.DB, sealer *seal.Sealer, cfg *config.Config, logger *slog.Logger) {
+	if st.IsPostgres() {
+		logger.Error("scheduled backups are SQLite-only; TESSERA_BACKUP_DIR is ignored on Postgres (use pg_dump or provider snapshots)")
+		return
+	}
 	every := time.Duration(cfg.BackupEveryMinutes) * time.Minute
 	t := time.NewTicker(every)
 	defer t.Stop()

@@ -113,3 +113,7 @@ the same directory or copy that file along.
 The current design gives you recovery, not availability: one SQLite file served by one
 process. Active/passive HA on Postgres, with stateless API replicas, depends on Postgres
 readiness (#18). The draft design is in `docs/design/ha-postgres.md`.
+
+## Postgres stores
+
+`tessera backup` is SQLite-only: on Postgres it refuses (`postgres_unsupported`). Use `pg_dump` or your provider's point-in-time snapshots, and verify the audit chain after a restore with `tessera audit verify`.
