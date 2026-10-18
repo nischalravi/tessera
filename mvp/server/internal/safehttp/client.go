@@ -134,6 +134,14 @@ func ForConfig(c *config.Config) (*http.Client, error) {
 	return newClient(o)
 }
 
+// ForCLI returns a production client (no loopback exception, https only,
+// default ports) with a longer timeout and a larger body limit, for the
+// `tessera catalog` command, which runs without a server configuration and
+// downloads large public files. Zero values keep the defaults.
+func ForCLI(timeout time.Duration, maxBodyBytes int64) (*http.Client, error) {
+	return newClient(Options{Env: config.Prod, Timeout: timeout, MaxBodyBytes: maxBodyBytes})
+}
+
 // NewForTest returns a client with any Options, for tests only. It refuses
 // to run outside a test binary; internal/archtest bans it from non-test
 // files.

@@ -173,7 +173,7 @@ func TestFetchUsesGuardedClient(t *testing.T) {
 	srv := fixtureServer(t, "upstream-v1", nil)
 	pool := x509.NewCertPool()
 	pool.AddCert(srv.Certificate())
-	c, err := safehttp.New(safehttp.Options{Env: config.Prod, RootCAs: pool})
+	c, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Prod, RootCAs: pool})
 	if err != nil {
 		t.Fatal(err)
 	}
