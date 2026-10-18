@@ -2,9 +2,8 @@
 import { ReactNode, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Network, Pencil, RefreshCw, Settings, ShoppingCart, Timer } from "lucide-react";
-import { AccountRow, ConnectorRow, Group, IdentityRow, ResourceRow, RolesView, api, relTime, useApi } from "../../api";
-import { Badge, Bar, Button, Callout, Chip, EmptyState, IdLink, Loading, Page, PreviewBadge, Status, TypeBadge, useToast } from "../../components";
-import { ORGS } from "../../mocks";
+import { AccountRow, ConnectorRow, Group, OrgDetail, ResourceRow, RolesView, api, orgPath, relTime, useApi } from "../../api";
+import { Badge, Button, Callout, Chip, EmptyState, IdLink, Loading, Page, Status, useToast } from "../../components";
 import { PreviewFormDrawer } from "./shared";
 
 function ObjectHead({ icon, meta, actions }: { icon?: ReactNode; meta: ReactNode; actions: ReactNode }) {
@@ -174,41 +173,35 @@ export function AppPage() {
 // -------------------------------------------------------------------- org
 export function OrgPage() {
   const { id } = useParams();
-  const org = ORGS.find((o) => o.id === id);
-  const { data: people, error } = useApi<IdentityRow[]>("/identities?type=human");
+  const { data: org, error, reload } = useApi<OrgDetail>(id ? orgPath(id) : null);
   const nav = useNavigate();
-  const [edit, setEdit] = useState(false);
-  if (!org) return <NotFound what="Organization" back={["Organizations", "/directory/orgs"]} />;
-  const members = (people ?? []).filter((p) => !org.department || p.department === org.department);
-  const children = ORGS.filter((o) => o.parent === org.id);
-  const parent = ORGS.find((o) => o.id === org.parent);
-  const active = members.filter((m) => m.status === "active");
+  if (error?.kind === "not_found") return <NotFound what="Organization" back={["Organizations", "/directory/orgs"]} />;
+  if (!org) return <Page title="Organization" crumbs={[["Identity"], ["Organizations", "/directory/orgs"], ["…"]]}><Loading error={error} what="organization" kind="page" onRetry={reload} /></Page>;
+  const active = org.people.filter((m) => m.status === "active");
   return (
-    <Page title={org.name} badge={<PreviewBadge />} crumbs={[["Identity"], ["Organizations", "/directory/orgs"], [org.name]]}>
+    <Page title={org.name} crumbs={[["Identity"], ["Organizations", "/directory/orgs"], [org.name]]}>
       <ObjectHead
-        meta={<div className="row"><span>Owner {org.owner}</span><span className="sys">{org.costCenter}</span>{parent && <span>Part of <Link to={`/directory/orgs/${parent.id}`}>{parent.name}</Link></span>}</div>}
-        actions={<>
+        meta={<div className="row"><span>Owners {org.owners.length ? org.owners.map((o) => o.name).join(", ") : "none found"}</span>{org.parent && <span>Part of <Link to={`/directory/orgs/${org.parent.id}`}>{org.parent.name}</Link></span>}</div>}
+        actions={
           <Button size="sm" variant="primary" icon={<ShoppingCart size={14} />} disabled={!active.length} onClick={() => nav(`/access/request?for=${active.map((m) => m.id).join(",")}`)}>Request access for everyone</Button>
-          <Button size="sm" icon={<Pencil size={14} />} onClick={() => setEdit(true)}>Edit</Button>
-        </>}
+        }
       />
-      {children.length > 0 && (
-        <div className="row mt">{children.map((c) => <Link key={c.id} to={`/directory/orgs/${c.id}`} className="btn sm">{c.name}</Link>)}</div>
+      {org.child_orgs.length > 0 && (
+        <div className="row mt">{org.child_orgs.map((c) => <Link key={c.id} to={`/directory/orgs/${c.id}`} className="btn sm">{c.name}</Link>)}</div>
       )}
       <div className="card flush mt">
-        <div className="card-h"><h2>People</h2><span className="small faint tnum">{members.length}</span></div>
-        {!people ? <Loading error={error} /> : members.length === 0 ? <EmptyState title="No members">Nobody is in this organization yet.</EmptyState> : (
+        <div className="card-h"><h2>People</h2><span className="small faint tnum">{org.people.length}</span></div>
+        {org.people.length === 0 ? <EmptyState title="No members">{org.kind === "tenant" ? "The people are in the departments below." : "Nobody is in this organization."}</EmptyState> : (
           <div className="table-scroll">
             <table>
-              <thead><tr><th>Name</th><th>Title</th><th>Status</th><th className="num hide-narrow">Violations</th><th>Risk</th></tr></thead>
+              <thead><tr><th>Name</th><th>Title</th><th className="hide-narrow">Manager</th><th>Status</th></tr></thead>
               <tbody>
-                {members.map((m) => (
+                {org.people.map((m) => (
                   <tr key={m.id} className="click" tabIndex={0} onClick={() => nav(`/directory/identities/${m.id}`)} onKeyDown={(e) => e.key === "Enter" && nav(`/directory/identities/${m.id}`)}>
-                    <td><b>{m.name}</b> <span className="hide-narrow"><TypeBadge type={m.type} /></span></td>
+                    <td><b>{m.name}</b></td>
                     <td className="small">{m.title}</td>
+                    <td className="small hide-narrow">{m.manager?.name ?? <span className="faint">-</span>}</td>
                     <td><Status s={m.status} /></td>
-                    <td className="num hide-narrow">{m.violations ?? 0}</td>
-                    <td style={{ width: 100 }}><Bar value={m.risk ?? 0} tone="risk" /></td>
                   </tr>
                 ))}
               </tbody>
@@ -216,13 +209,7 @@ export function OrgPage() {
           </div>
         )}
       </div>
-      {!org.department && <div className="mt"><Callout tone="neutral">The top-level organization lists everyone.</Callout></div>}
-      {edit && (
-        <PreviewFormDrawer title={`Edit ${org.name}`} kind="org" verb="update" onClose={() => setEdit(false)}
-          initial={{ name: org.name, owner: org.owner, costCenter: org.costCenter }}
-          fields={[{ id: "name", label: "Name", required: true }, { id: "owner", label: "Owner" }, { id: "costCenter", label: "Cost center" }]}
-        />
-      )}
+      <div className="mt"><Callout tone="neutral">Organizations are derived from the HR source's departments and managers. They are read-only here.</Callout></div>
     </Page>
   );
 }
