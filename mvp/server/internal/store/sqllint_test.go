@@ -88,6 +88,9 @@ func tokenize(sql string) ([]token, error) {
 			}
 			out = append(out, token{tIdent, strings.ToLower(sql[i:j]), depth})
 			i = j
+		case strings.HasPrefix(sql[i:], "||"): // string concatenation
+			out = append(out, token{tPunct, "||", depth})
+			i += 2
 		case c == '(':
 			out = append(out, token{tPunct, "(", depth})
 			depth++

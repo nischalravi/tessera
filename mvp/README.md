@@ -206,6 +206,35 @@ To point a local dev instance at a real LDAP or LLDAP server (for example an LLD
    It logs every check's status and message (never the password) and fails if TLS, bind, the base
    DNs or the people search do not pass.
 
+### Config transport (dev → test → prod)
+
+Admin → Export / import configuration moves a tenant's connections (config, owners, credential
+*references*), readiness overlays and sign-in connections to another tenant, usually on another
+instance, as a **signed bundle** (`server/internal/transport`). Export signs with the tenant's
+Ed25519 key (made on first export, sealed under the KEK; a server without a KEK cannot export).
+Import accepts only bundles signed by a **trusted signer**: paste the exporting tenant's public
+key under Trusted signers first (a tenant does not trust its own key implicitly). The preview
+lists add / change / remove / manual per item; apply is bound to the previewed plan (`digest`, or
+`digest_prune` with prune: the bundle, tenant, environment, current revisions, operations and prune
+mode), so a change here or a different prune choice since the preview is refused with
+`409 stale_plan` before anything is written; apply needs step-up, and never activates anything: new connections are drafts, config changes make a new
+draft revision, sign-in connections arrive as **pending**, and a changed existing sign-in
+connection is shown as manual (change it through an admin change request). Removals retire
+connections only with prune. A bundle never holds a secret: sealed credentials and client
+secrets stay behind (the plan says where to set them), retired connections and the dev IdP are
+left out, and a bundle whose config looks like it carries a secret is refused. On a prod server
+(`TESSERA_ENV=prod`) a bundle naming a localhost target or the dev IdP, or a sign-in
+connection on plain http or a private address, is refused. Applies are audited
+(`config.import.applied` with the bundle hash) and listed under Imports. Permission:
+`config.transport` (tenant admin); reading keys, signers and history needs `admin.read`.
+
+**Not in a bundle yet** (each needs cross-tenant id mapping for the groups and entitlements it
+names, so it is left for a follow-up rather than shipped half-checked): business roles and their
+versions and members, ABAC policies and bindings, catalog items and approval policies, tenant
+admin settings and security contacts (these change only through admin change requests), review
+schedules, alert rules, SIEM sinks, lifecycle rules and native groups. Set them up by hand in
+each environment; the bundle covers connections, readiness overlays and sign-in connections only.
+
 ### Main API endpoints
 
 `GET /api/summary` · `GET /api/identities[?type=&q=]` · `GET /api/identities/{id}` · `GET /api/accounts[?system=]` ·
@@ -218,7 +247,7 @@ To point a local dev instance at a real LDAP or LLDAP server (for example an LLD
 `POST /api/reviews/items/{id}/decision` (a decision is final: repeating it is a 200 no-op, a different one is
 `409 review_item_decided` and an audited `review.decide.refused`) ·
 `GET|POST /api/hris/events` (422 for an unknown `identity_id`) · `GET /api/hris/events/{id}/plan` · `POST /api/hris/events/{id}/execute` ·
-`GET /api/jml/leaver-plan/{identity_id}` · `POST /api/identities/{id}/contain` (kill switch, see "Identity containment") ·
+`GET /api/jml/leaver-plan/{identity_id}` · `POST /api/identities/{id}/contain` (kill switch, see "Identity containment") · `POST /api/identities/{id}/disable|enable` ·
 `PUT /api/connections/{id}/containment-credential` · `GET /api/accounts[?system=]` ·
 `GET /api/audit[?limit=&before_seq=&action=&actor_id=&target_type=&target_id=&from=&to=&include_http=]` ·
 `GET /api/audit/events/{event_id}/proof` · `GET /api/audit/checkpoints[?from_seq=]` · `GET /api/audit/keys` ·
@@ -230,6 +259,12 @@ To point a local dev instance at a real LDAP or LLDAP server (for example an LLD
 `POST /api/auth/saml/{connection_id}/acs` · `GET /api/auth/oauth2/{connection_id}/callback` ·
 `GET /t/{slug}/bootstrap?code=` (public)
 `GET|POST /api/auth/dev-login` (dev and test only) ·
+`GET /api/jobs[?status=running|succeeded|failed&kind=&connection_id=&limit=]` · `GET /api/jobs/{job_id}` ·
+`POST /api/jobs/{job_id}/retry` ·
+`GET /api/provisioning/targets` · `PUT|DELETE /api/provisioning/targets/{connection_id}` ·
+`GET /api/provisioning/ops[?status=&kind=&connection_id=&limit=]` · `GET /api/provisioning/ops/{op_id}` ·
+`POST /api/provisioning/ops/{op_id}/retry|cancel` · `POST /api/provisioning/run` ·
+`GET /api/provisioning/findings[?status=open|resolved]` ·
 `GET /api/catalog[?all=1]` · `PUT /api/catalog/items/{group_id}` ·
 `POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours}` ·
 `GET /api/requests[?scope=mine|pending|all&status=]` · `GET /api/requests/{id}` ·
@@ -268,11 +303,98 @@ To point a local dev instance at a real LDAP or LLDAP server (for example an LLD
 `GET /api/admin/change-requests/{id}` · `POST /api/admin/change-requests/{id}/approve|reject|cancel|apply` ·
 `GET /api/admin/notifications` · `GET /api/admin/recovery` · `POST /api/admin/recovery/{id}/cancel` ·
 `GET /api/admin/api-clients` (see "Admin changes")
+`GET /api/config/signing-key` · `POST /api/config/export` · `GET|POST /api/config/trusted-signers` ·
+`DELETE /api/config/trusted-signers/{kid}` · `POST /api/config/import/plan` (body: the bundle file) ·
+`POST /api/config/import/apply?hash=&digest=&prune=` · `GET /api/config/imports`
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
 or HRIS execution is always the signed-in user.
 
+### Job run history
+
+Every run of a connector sync, provisioning (HRIS execute), connection validation, dry run,
+deployment-health re-run and JIT sweep is recorded in `job_runs` (`internal/jobs`), plus every
+audit anchoring run that did something or failed. A sweep that finds nothing is not recorded.
+Each record has the kind, trigger (manual, schedule or retry), status, duration, a result summary
+and a one-line error. The run row is written in its own transaction before the job and finished in
+another, so a job that rolls back keeps its failed run, and `job.failed` is appended to the audit
+chain for alert rules to match. A request refused before the job ran (bad input, missing
+permission, a blocked gate) is not a run.
+
+`POST /api/jobs/{id}/retry` runs the operation again as the signed-in user through a typed
+dispatcher, not a replayed HTTP request: the retry request is authenticated as usual, the original
+route's permission and step-up are rechecked for the caller as they are now, and the route
+registered for the run's kind runs with the recorded body (a connection comes from the run's
+`connection_id`). No cookie, `Authorization` or `DPoP` header is stored or forwarded. It is offered only for idempotent
+kinds (sync, validation, dry run, health re-run, JIT sweep), not for provisioning. The new run
+links `retry_of` and records `job.retried`. Runs still `running` after an hour are marked failed
+("interrupted"), and runs are kept 30 days. Reading the history needs `jobs.read` (operator,
+auditor, policy admin, tenant admin). Admin → Jobs lists the runs, with Failed, Running and job
+filter chips and a side panel showing the error, the result and Retry.
+
+### Closed-loop provisioning
+
+Until issue #103 every write Tessera made (JML execute, review revoke, JIT revoke and expiry,
+least-privilege revoke) changed only its own graph. `internal/provision` is the engine that makes the
+change in the target system and checks that it happened.
+
+* **Operations.** `provisioning_ops` (schema `0225`) holds one row per change: create, update, disable
+  or delete an account, add or remove an entitlement. An idempotency key names the intent
+  (`jit:12:end`, `review:7:revoke`, `jml:3:0:disable_account`); submitting it twice gives one operation,
+  and it is sent to the target as `Idempotency-Key`. Every connector also reads before it writes, so
+  a repeated request converges.
+* **Lifecycle.** `queued` → `sent` → `pending_verification` → `verified`, or `mismatch` / `failed`
+  (and `cancelled` by an operator). A worker (every 5 s, `Server.RunProvisioning`; `POST
+  /api/provisioning/run` runs it now and is recorded as a `provision` job run) sends each operation and
+  **re-reads the target**. A send that fails for a transient reason (transport, 429, 5xx) is retried
+  with exponential backoff (5 s doubling to 10 min, 5 attempts); a refusal (401/403/400) fails it at
+  once. A re-read that disagrees is repeated 3 times, then the operation is a `mismatch` and a finding
+  (`provisioning_findings`, `verify_mismatch`, high for a disable or removal) is raised.
+* **Tessera changes only after verification.** An operation carries a completion (a graph edit, a
+  review decision, a JIT end) that runs in the same transaction that marks it `verified`. A failed or
+  unverified write therefore leaves the review item open, the account active and the JIT grant in place.
+  Retrying (or deciding again, or the next `POST …/retry`) re-queues the same operation.
+* **Write-back is per connection and off by default.** A target (`provisioning_targets`, schema
+  `0224`, one per connection) has a `write_back` switch. Off: the change edits the graph at once, as
+  before, and nothing reaches the target (so the parity fixtures are unchanged). On: the change goes
+  through the engine. Routing is by the connection's `system` (`provision.Submit`).
+* **Connectors.** `internal/provision/scim` is a SCIM 2.0 client (filtered, paginated lists; group
+  members read page by page; PATCH add/replace/remove, where a member is removed with the RFC 7644
+  filter path and, if the server refuses it, with a value list; `dialect: entra` sends capitalised
+  operations, string booleans and the value list, and every dialect reads `"True"`/`"False"`). `internal/provision/okta` is a native
+  Okta connector (users, lifecycle deactivate/delete, group membership, `Link` paging that must stay on
+  the org's origin). Credentials are sealed under the KEK (`internal/seal`, AAD = tenant, table,
+  column and row) and are write-only in the API. Every request goes through `internal/safehttp`.
+* **Limits.** Disabling or deleting an account through SCIM does not end sessions or tokens the
+  account already holds (SCIM does not imply it; knowledge base §4.6), so a verified disable is not
+  yet a verified kill: that needs session revocation or CAEP/SSF, which is future work.
+* **What is routed.** JML leaver/mover/joiner steps (disable, remove and add group, create account),
+  review revokes of group memberships, JIT revoke and expiry (the request stays `approved` and the edge
+  stays until the target confirms; the sweeper does not retry a failed removal, an operator does),
+  and the least-privilege revoke. Edges to permissions have no counterpart in a target and stay direct.
+* **Audit.** Each operation writes `provision.enqueued`, `provision.sent` and one of
+  `provision.verified`, `provision.mismatch`, `provision.failed`, plus `provision.retried`,
+  `provision.cancelled`; target changes write `provision.target_set` and `provision.target_removed`
+  (never the token). Completions write the event the direct path wrote (`jit.expire`, `review.revoke`,
+  `grant.revoke`).
+* **Permissions.** `provisioning.read` (operator, auditor, policy admin, tenant admin) and
+  `provisioning.manage` (policy admin, tenant admin: retry, cancel, run). Configuring a target needs
+  `connections.manage` with step-up.
+* **Dev fake target.** `TESSERA_DEV_FAKE_TARGET=1` (set by `run.sh`) starts an in-process fake SCIM
+  service on a loopback port (`internal/provision/fake`) and enables the `fake` target kind, with a
+  simulated fault: `fail_writes` (503) or `drop_writes` (accepted, never applied: a mismatch). The fake
+  treats users and groups it has never seen as already provisioned. Config refuses the setting with
+  `TESSERA_ENV=prod`, and an architecture test keeps the fake out of every package but `cmd/tessera`.
+* **Tests.** Recorded exchanges (`internal/provision/{scim,okta}/testdata`, replayed by
+  `internal/provision/replay`) pin Entra's string booleans, capitalised PATCH operations, paginated
+  large groups, Okta `Link` paging and error classification; engine tests cover backoff, idempotency,
+  mismatch findings, sealed credentials and tenant isolation; API and JML tests show a failed
+  target write leaving the review item, account and edges open.
+
+Admin → Provisioning lists the target systems (with the write-back switch) and the operations, with
+status, change and source filter chips, a side panel with the findings, request and Retry / Cancel,
+and Run now.
 ### Admin changes, notifications and operator recovery
 
 Changes that widen trust or privilege go through **change requests** (design §15, issue #16;
@@ -958,7 +1080,7 @@ the right. Arrow keys move between items.
 | Group | Items |
 |---|---|
 | (top) | **Home**, **Inbox** (count) |
-| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts (with *Account matches*), Roles, Organizations (Preview) |
+| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts (with *Account matches*), Roles, Organizations (live, read-only, derived from departments) |
 | **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
 | **Protection** | Policies & SoD (violations, policies, what-if simulation), Attribute policies, Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
 | **Settings** | Connections (governed connections and the setup wizard), Admin |
@@ -997,9 +1119,19 @@ machine identities, roles, entitlements and apps, and runs actions such as *Requ
 next. Choosing a person shows actions for them. Use the arrow keys, `Enter`, `Backspace` to go
 back a step and `Esc` to close. `/` focuses the top-bar search.
 
-**Preview features.** Some screens have no backend endpoint yet: organizations,
-workflows, catalog (non-JIT) requests, delegations, disable / reset password / edit, imports and
-most admin settings. They run on typed mock data in `src/mocks/`, keep their state in the
+**Live since the preview wiring.** These screens call the API (schema 0310 to 0312):
+
+| Screen | Calls | Notes |
+|---|---|---|
+| Identity Disable / Enable (identity page, panel, bulk, palette) | `POST /api/identities/{id}/disable`, `.../enable`, `GET .../disables` | `identities.contain` and a fresh phishing-resistant sign-in. Disable runs the kill switch's containment (revoke sessions, tokens, OAuth grants at connected providers), then sets the active accounts and the identity to disabled in one audited transaction (`identity.disable`). A failed provider step is retried and reported. Tessera does not suspend the account inside the provider. Enable (`identity.enable`) sets back only the accounts Disable disabled and that are still disabled. It cannot restore revoked sessions and grants, and says so. No Undo. |
+| My access > Request removal | `POST /api/removal-requests`, `GET ?scope=mine\|approvals\|pending\|all`, `.../{id}/approve\|deny\|cancel` | Shows in My requests and the approver's Inbox (the person's manager, a delegate, or `requests.decide`). Approval needs step-up and removes the grant (through `requests.Remove` when an approved request granted it, else a revoked grant with a tombstone). Just-in-time and role-held grants are refused. |
+| Request access drafts | `GET/POST /api/request-drafts`, `GET/PUT/DELETE .../{id}` | Private to the user, at most 50, checked for existence but never against policy. A draft never submits itself. |
+| Directory > Organizations | `GET /api/orgs`, `GET /api/orgs/{org_id}` | Read-only and derived: a root and one organization per department. Owners are the active people at the top of a department's reporting lines who lead others in it. No cost centers (the HR data has none). |
+| Home recent activity | `GET /api/activity` | The signed-in user's own audit events (action, target, outcome, time; no detail). "Your recent requests" reads real request lines. |
+
+**Preview features.** Some screens have no backend endpoint yet: workflows, reset password, generic
+object create / edit / import (accounts, machine identities, rotate secret) and most admin settings
+(Identity rules, Branding & labels, Certificates, Export / import configuration). They run on typed mock data in `src/mocks/`, keep their state in the
 browser's localStorage, and carry a **Preview** badge. To wire one up, add a function to
 `src/api.ts` that returns the same type and remove the badge.
 
@@ -1382,8 +1514,9 @@ OpenAPI document). Deliberate differences:
   is not wired into the login flow yet: `admin.RecordTestLogin` records it and `POST
   /api/admin/idp-connections/{id}/activate` requires it, but a connection created by a change request stays
   `pending` until the login flow calls it (it needs a `test` purpose on `login_transactions`).
-* Revokes and JML plans change Tessera's graph only. Nothing is written back to source systems.
-  Connectors do not have a `provision()`/`deprovision()` interface yet.
+* Revokes and JML plans change Tessera's graph only unless the connection has a provisioning target
+  with write-back on (see Closed-loop provisioning); JIT approval and rotating secrets are not yet
+  sent to targets, and only SCIM 2.0 and Okta have connectors (no Entra native connector yet).
 * There is no scheduled connector sync. Seeding runs discovery once, and `POST /api/connectors/sync`
   re-runs discovery on demand.
 * Effective-permission paths are capped at 8 per permission, and "lost if removed" uses those paths.

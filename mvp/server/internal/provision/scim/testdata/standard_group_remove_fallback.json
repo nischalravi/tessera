@@ -1,0 +1,250 @@
+{
+ "name": "a server that rejects the filter path (400) gets the value-list form",
+ "interactions": [
+  {
+   "request": {
+    "method": "GET",
+    "path": "/Users",
+    "query": {
+     "filter": "userName eq \"bob@larkspur.example\""
+    }
+   },
+   "response": {
+    "status": 200,
+    "headers": {
+     "Content-Type": "application/scim+json"
+    },
+    "body": {
+     "schemas": [
+      "urn:ietf:params:scim:api:messages:2.0:ListResponse"
+     ],
+     "totalResults": 1,
+     "startIndex": 1,
+     "itemsPerPage": 1,
+     "Resources": [
+      {
+       "id": "u-9",
+       "userName": "bob@larkspur.example",
+       "active": "True"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "request": {
+    "method": "GET",
+    "path": "/Groups",
+    "query": {
+     "filter": "externalId eq \"eng\""
+    }
+   },
+   "response": {
+    "status": 200,
+    "headers": {
+     "Content-Type": "application/scim+json"
+    },
+    "body": {
+     "schemas": [
+      "urn:ietf:params:scim:api:messages:2.0:ListResponse"
+     ],
+     "totalResults": 1,
+     "startIndex": 1,
+     "itemsPerPage": 1,
+     "Resources": [
+      {
+       "id": "g-1",
+       "displayName": "engineering",
+       "externalId": "eng"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "request": {
+    "method": "GET",
+    "path": "/Groups/g-1",
+    "query": {
+     "startIndex": "1",
+     "count": "100"
+    }
+   },
+   "response": {
+    "status": 200,
+    "headers": {
+     "Content-Type": "application/scim+json"
+    },
+    "body": {
+     "schemas": [
+      "urn:ietf:params:scim:schemas:core:2.0:Group"
+     ],
+     "id": "g-1",
+     "displayName": "engineering",
+     "members": [
+      {
+       "value": "m-1"
+      },
+      {
+       "value": "u-9"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "request": {
+    "method": "PATCH",
+    "path": "/Groups/g-1",
+    "body_contains": [
+     "\"op\":\"remove\"",
+     "members[value eq"
+    ]
+   },
+   "response": {
+    "status": 400,
+    "headers": {
+     "Content-Type": "application/scim+json"
+    },
+    "body": {
+     "schemas": [
+      "urn:ietf:params:scim:api:messages:2.0:Error"
+     ],
+     "status": "400",
+     "scimType": "invalidPath",
+     "detail": "filter paths are not supported"
+    }
+   }
+  },
+  {
+   "request": {
+    "method": "PATCH",
+    "path": "/Groups/g-1",
+    "body_contains": [
+     "\"op\":\"remove\"",
+     "\"path\":\"members\"",
+     "\"value\":[{\"value\":\"u-9\"}]"
+    ]
+   },
+   "response": {
+    "status": 200,
+    "headers": {
+     "Content-Type": "application/scim+json"
+    },
+    "body": {}
+   }
+  },
+  {
+   "request": {
+    "method": "GET",
+    "path": "/Users",
+    "query": {
+     "filter": "userName eq \"bob@larkspur.example\""
+    }
+   },
+   "response": {
+    "status": 200,
+    "headers": {
+     "Content-Type": "application/scim+json"
+    },
+    "body": {
+     "schemas": [
+      "urn:ietf:params:scim:api:messages:2.0:ListResponse"
+     ],
+     "totalResults": 1,
+     "startIndex": 1,
+     "itemsPerPage": 1,
+     "Resources": [
+      {
+       "id": "u-9",
+       "userName": "bob@larkspur.example",
+       "active": "True"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "request": {
+    "method": "GET",
+    "path": "/Groups",
+    "query": {
+     "filter": "externalId eq \"eng\""
+    }
+   },
+   "response": {
+    "status": 200,
+    "headers": {
+     "Content-Type": "application/scim+json"
+    },
+    "body": {
+     "schemas": [
+      "urn:ietf:params:scim:api:messages:2.0:ListResponse"
+     ],
+     "totalResults": 1,
+     "startIndex": 1,
+     "itemsPerPage": 1,
+     "Resources": [
+      {
+       "id": "g-1",
+       "displayName": "engineering",
+       "externalId": "eng"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "request": {
+    "method": "GET",
+    "path": "/Groups/g-1",
+    "query": {
+     "startIndex": "1",
+     "count": "100"
+    }
+   },
+   "response": {
+    "status": 200,
+    "headers": {
+     "Content-Type": "application/scim+json"
+    },
+    "body": {
+     "schemas": [
+      "urn:ietf:params:scim:schemas:core:2.0:Group"
+     ],
+     "id": "g-1",
+     "displayName": "engineering",
+     "members": [
+      {
+       "value": "m-1"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "request": {
+    "method": "GET",
+    "path": "/Groups/g-1",
+    "query": {
+     "startIndex": "2",
+     "count": "100"
+    }
+   },
+   "response": {
+    "status": 200,
+    "headers": {
+     "Content-Type": "application/scim+json"
+    },
+    "body": {
+     "schemas": [
+      "urn:ietf:params:scim:schemas:core:2.0:Group"
+     ],
+     "id": "g-1",
+     "displayName": "engineering",
+     "members": []
+    }
+   }
+  }
+ ]
+}

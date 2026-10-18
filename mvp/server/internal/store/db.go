@@ -99,6 +99,10 @@ var tables = []string{
 	"connections", "connection_revisions", "readiness_check_runs", "readiness_item_states", "readiness_attestations",
 	"readiness_skips", "readiness_overlays", "readiness_check_results", "recon_runs", "recon_findings", "readiness_scores",
 	"stg_identities", "stg_accounts", "stg_groups", "stg_memberships", "stg_attr_stats",
+	// job run history (schema/0281_job_runs.sql)
+	"job_runs",
+	// closed-loop provisioning (schema/0282-0283)
+	"provisioning_targets", "provisioning_ops", "provisioning_findings",
 	// sealed connection credentials (schema/0205)
 	"connection_secrets",
 	// account correlation (schema/0204_correlation.sql)
@@ -124,6 +128,14 @@ var tables = []string{
 	"intake_records", "sponsorships", "sponsorship_events",
 	// identity containment (schema/0205_containment.sql)
 	"containment_credentials", "containment_retries",
+	// identity disable / enable (schema/0310_identity_disables.sql)
+	"identity_disables", "identity_disable_accounts",
+	// removal requests (schema/0311_removal_requests.sql)
+	"removal_requests",
+	// request access drafts (schema/0312_request_drafts.sql)
+	"request_drafts",
+	// configuration transport (schema/0211_config_transport.sql)
+	"config_signing_keys", "config_trusted_signers", "config_imports",
 	// native groups (schema/0280_groups.sql, 0284_groups_engine.sql)
 	"grp_folders", "grp_name_aliases", "grp_groups", "grp_composite_factors", "grp_lists", "grp_direct_memberships",
 	"grp_deps", "grp_closure", "grp_levels", "grp_effective", "grp_engine_queue", "grp_engine_state",
