@@ -6,20 +6,6 @@
  * src/api.ts that returns the same type, and remove the badge.
  */
 
-export interface BusinessRole {
-  id: string;
-  name: string;
-  description: string;
-  owner: string;
-  /** Real group/role names from the connected systems (system:name) that the role bundles. */
-  entitlements: string[];
-  /** Department the role is a birthright for, if any. */
-  birthright?: string;
-  members: number;
-  risk: "low" | "medium" | "high";
-  updated: string;
-}
-
 export interface OrgUnit {
   id: string;
   name: string;

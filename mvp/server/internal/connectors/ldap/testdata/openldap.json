@@ -1,0 +1,209 @@
+{
+ "name": "openldap-shaped",
+ "rootdse": {
+  "objectClass": [
+   "top",
+   "OpenLDAProotDSE"
+  ],
+  "namingContexts": [
+   "dc=example,dc=org",
+   "cn=accesslog"
+  ],
+  "supportedLDAPVersion": [
+   "3"
+  ],
+  "subschemaSubentry": [
+   "cn=Subschema"
+  ],
+  "supportedControl": [
+   "1.2.840.113556.1.4.319",
+   "1.3.6.1.4.1.4203.1.9.1.1",
+   "1.3.6.1.4.1.4203.666.5.12"
+  ],
+  "supportedExtension": [
+   "1.3.6.1.4.1.4203.1.11.3",
+   "1.3.6.1.4.1.1466.20037"
+  ]
+ },
+ "whoami": true,
+ "paged": true,
+ "ger": false,
+ "root_binds": [
+  "cn=admin,dc=example,dc=org"
+ ],
+ "size_limit": 0,
+ "users": {
+  "cn=admin,dc=example,dc=org": "admin-secret-pw",
+  "uid=svc-tessera,ou=people,dc=example,dc=org": "ro-secret-pw"
+ },
+ "entries": [
+  {
+   "dn": "dc=example,dc=org",
+   "attrs": {
+    "objectClass": [
+     "top",
+     "dcObject",
+     "organization"
+    ],
+    "dc": [
+     "example"
+    ],
+    "o": [
+     "Example"
+    ]
+   }
+  },
+  {
+   "dn": "ou=people,dc=example,dc=org",
+   "attrs": {
+    "objectClass": [
+     "top",
+     "organizationalUnit"
+    ],
+    "ou": [
+     "people"
+    ]
+   }
+  },
+  {
+   "dn": "cn=accesslog",
+   "attrs": {
+    "objectClass": [
+     "top",
+     "auditContainer"
+    ],
+    "cn": [
+     "accesslog"
+    ]
+   }
+  },
+  {
+   "dn": "cn=admin,dc=example,dc=org",
+   "attrs": {
+    "objectClass": [
+     "simpleSecurityObject",
+     "organizationalRole"
+    ],
+    "cn": [
+     "admin"
+    ]
+   }
+  },
+  {
+   "dn": "olcDatabase={1}mdb,cn=config",
+   "attrs": {
+    "objectClass": [
+     "olcDatabaseConfig"
+    ],
+    "olcRootDN": [
+     "cn=admin,dc=example,dc=org"
+    ]
+   }
+  },
+  {
+   "dn": "uid=svc-tessera,ou=people,dc=example,dc=org",
+   "attrs": {
+    "objectClass": [
+     "top",
+     "person",
+     "inetOrgPerson",
+     "posixAccount"
+    ],
+    "uid": [
+     "svc-tessera"
+    ],
+    "cn": [
+     "Svc-Tessera Y"
+    ],
+    "sn": [
+     "Y"
+    ],
+    "mail": [
+     "svc-tessera@example.org"
+    ],
+    "entryUUID": [
+     "1ecb06ea-0001-4000-8000-000000000000"
+    ],
+    "createTimestamp": [
+     "20250101000000Z"
+    ],
+    "modifyTimestamp": [
+     "20250601000000Z"
+    ],
+    "employeeNumber": [
+     "Esvc-tessera"
+    ]
+   }
+  },
+  {
+   "dn": "uid=fred,ou=people,dc=example,dc=org",
+   "attrs": {
+    "objectClass": [
+     "top",
+     "person",
+     "inetOrgPerson",
+     "posixAccount"
+    ],
+    "uid": [
+     "fred"
+    ],
+    "cn": [
+     "Fred Y"
+    ],
+    "sn": [
+     "Y"
+    ],
+    "mail": [
+     "fred@example.org"
+    ],
+    "entryUUID": [
+     "3a29f15e-0001-4000-8000-000000000000"
+    ],
+    "createTimestamp": [
+     "20250101000000Z"
+    ],
+    "modifyTimestamp": [
+     "20250601000000Z"
+    ],
+    "employeeNumber": [
+     "Efred"
+    ]
+   }
+  },
+  {
+   "dn": "uid=gwen,ou=people,dc=example,dc=org",
+   "attrs": {
+    "objectClass": [
+     "top",
+     "person",
+     "inetOrgPerson",
+     "posixAccount"
+    ],
+    "uid": [
+     "gwen"
+    ],
+    "cn": [
+     "Gwen Y"
+    ],
+    "sn": [
+     "Y"
+    ],
+    "mail": [
+     "gwen@example.org"
+    ],
+    "entryUUID": [
+     "648bbdce-0001-4000-8000-000000000000"
+    ],
+    "createTimestamp": [
+     "20250101000000Z"
+    ],
+    "modifyTimestamp": [
+     "20250601000000Z"
+    ],
+    "employeeNumber": [
+     "Egwen"
+    ]
+   }
+  }
+ ]
+}

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -65,7 +67,7 @@ func (e *env) keys(purpose string) []*store.TenantSigningKey {
 func (e *env) jwks(purpose string, now time.Time) *jose.JSONWebKeySet {
 	e.t.Helper()
 	var set *jose.JSONWebKeySet
-	e.in(func(tx *store.TenantTx) (err error) { set, err = keys.JWKSFor(tx, purpose, now); return })
+	e.in(func(tx *store.TenantTx) (err error) { set, err = keys.JWKSFor(tx, purpose, now, nil); return })
 	return set
 }
 
@@ -384,7 +386,9 @@ func TestPublicKeyMismatchRefused(t *testing.T) {
 }
 
 // TestJWKSRefusesTamperedRows: a stored public_jwk that carries private
-// material or another kid is never published.
+// material, another kid or garbage is never published; it is skipped with an
+// alert, and the tenant's other keys are still published (L8: one bad row
+// does not fail the whole set).
 func TestJWKSRefusesTamperedRows(t *testing.T) {
 	e := setup(t)
 	p := store.KeyPurposeIdPClientAuth
@@ -402,6 +406,7 @@ func TestJWKSRefusesTamperedRows(t *testing.T) {
 	}{
 		"private JWK":  {"evil-20261008-cccccc", priv},
 		"kid mismatch": {"evil-20261008-dddddd", other},
+		"not JSON":     {"evil-20261008-eeeeee", []byte(`{"kty":`)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := setup(t)
@@ -409,14 +414,115 @@ func TestJWKSRefusesTamperedRows(t *testing.T) {
 				return tx.InsertSigningKey(&store.TenantSigningKey{KID: c.kid, TenantID: tx.Tenant(), Purpose: p,
 					Alg: keys.AlgES256, PublicJWK: c.jwk, PrivateKeyEnc: []byte{1}, Status: store.KeyNext, CreatedAt: t0})
 			})
-			err := e.f.DB.InTenant(context.Background(), e.tn.ID, func(tx *store.TenantTx) error {
-				_, err := keys.JWKSFor(tx, p, t0)
-				return err
-			})
-			if err == nil {
-				t.Error("JWKS published a tampered key")
+			e.ensure(t0) // activates the bad row and mints a good next key
+			var logs bytes.Buffer
+			log := slog.New(slog.NewJSONHandler(&logs, nil))
+			var set *jose.JSONWebKeySet
+			e.in(func(tx *store.TenantTx) (err error) { set, err = keys.JWKSFor(tx, p, t0, log); return })
+			ks := e.keys(p)
+			if len(ks) != 2 || ks[0].KID != c.kid {
+				t.Fatalf("keys %s", statuses(ks))
+			}
+			if got := kids(set); !slices.Equal(got, []string{ks[1].KID}) {
+				t.Errorf("JWKS kids %v, want only the good key %s", got, ks[1].KID)
+			}
+			raw, _ := json.Marshal(set)
+			if bytes.Contains(raw, []byte(`"d"`)) {
+				t.Error("JWKS carries private material")
+			}
+			var ev map[string]any
+			if err := json.Unmarshal(logs.Bytes(), &ev); err != nil {
+				t.Fatalf("no single alert logged: %q", logs.String())
+			}
+			if ev["msg"] != keys.BadKeyEvent || ev["level"] != "ERROR" || ev["alert"] != true || ev["kid"] != c.kid ||
+				ev["table"] != "tenant_signing_keys" {
+				t.Errorf("alert %v", ev)
+			}
+			if bytes.Contains(logs.Bytes(), []byte(`"d":`)) {
+				t.Error("the alert logged key material")
 			}
 		})
+	}
+}
+
+// TestRevokeKeyTwice: revoking an already revoked key is ErrNotFound and
+// changes nothing.
+func TestRevokeKeyTwice(t *testing.T) {
+	e := setup(t)
+	p := store.KeyPurposeAccessToken
+	e.ensure(t0)
+	kid := e.keys(p)[0].KID
+	e.in(func(tx *store.TenantTx) error { return keys.RevokeKey(tx, e.tn.Slug, kid, e.s, t0) })
+	before := statuses(e.keys(p))
+	err := e.f.DB.InTenant(context.Background(), e.tn.ID, func(tx *store.TenantTx) error {
+		return keys.RevokeKey(tx, e.tn.Slug, kid, e.s, t0.Add(time.Hour))
+	})
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("second RevokeKey(%s) = %v, want ErrNotFound", kid, err)
+	}
+	if after := statuses(e.keys(p)); after != before {
+		t.Errorf("states changed by a refused revoke: %q -> %q", before, after)
+	}
+	if slices.Contains(kids(e.jwks(p, t0.Add(time.Hour))), kid) {
+		t.Error("the revoked key is published")
+	}
+}
+
+// TestPlatformJWKSExcludesRevoked: a revoked platform key is never
+// published (and so never verifies a checkpoint), retired ones are; a bad
+// platform row is skipped with an alert.
+func TestPlatformJWKSExcludesRevoked(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	sys := func(fn func(*store.SystemTx) error) {
+		t.Helper()
+		if err := e.f.DB.InSystem(ctx, "test", fn); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, at := range []time.Duration{0, 365 * day, 730 * day} { // three keys: retired, retired, active
+		sys(func(s *store.SystemTx) error { return keys.EnsurePlatformKey(s, e.s, t0.Add(at)) })
+	}
+	var ks []store.PlatformKey
+	sys(func(s *store.SystemTx) (err error) { ks, err = s.PlatformKeys(store.KeyPurposeAuditCheckpoint); return })
+	if len(ks) != 3 {
+		t.Fatalf("%d platform keys", len(ks))
+	}
+	revoked := ks[1].KID
+	sys(func(s *store.SystemTx) error { return s.RevokePlatformKey(revoked) })
+	var set *jose.JSONWebKeySet
+	sys(func(s *store.SystemTx) (err error) { set, err = keys.PlatformJWKS(s, nil); return })
+	want := []string{ks[0].KID, ks[2].KID}
+	slices.Sort(want)
+	if got := kids(set); !slices.Equal(got, want) {
+		t.Errorf("platform JWKS %v, want %v (revoked %s excluded)", got, want, revoked)
+	}
+	pub, err := audit.PlatformPublicKeys(ctx, e.f.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := pub[revoked]; ok || len(pub) != 2 {
+		t.Errorf("verification keys %d, revoked included=%t", len(pub), ok)
+	}
+	// a corrupt platform row: skipped with an alert, the others still published
+	sys(func(s *store.SystemTx) error {
+		if err := s.RetirePlatformKey(ks[2].KID); err != nil {
+			return err
+		}
+		return s.InsertPlatformKey(store.PlatformKey{KID: "platform-20291008-zzzzzz", Purpose: store.KeyPurposeAuditCheckpoint,
+			Alg: keys.AlgEdDSA, PublicJWK: []byte(`{"kty":"OKP","crv":"Ed25519"}`), PrivateKeyEnc: []byte{1}, CreatedAt: t0.Add(800 * day)})
+	})
+	var logs bytes.Buffer
+	sys(func(s *store.SystemTx) (err error) {
+		set, err = keys.PlatformJWKS(s, slog.New(slog.NewTextHandler(&logs, nil)))
+		return
+	})
+	if got := kids(set); !slices.Equal(got, want) {
+		t.Errorf("platform JWKS with a corrupt row %v, want %v", got, want)
+	}
+	if out := logs.String(); !strings.Contains(out, keys.BadKeyEvent) || !strings.Contains(out, "alert=true") ||
+		!strings.Contains(out, "platform-20291008-zzzzzz") {
+		t.Errorf("no alert for the corrupt platform row: %q", out)
 	}
 }
 
@@ -453,7 +559,7 @@ func TestPlatformKey(t *testing.T) {
 	var set *jose.JSONWebKeySet
 	var sk *keys.SigningKey
 	sys(func(s *store.SystemTx) (err error) {
-		if set, err = keys.PlatformJWKS(s); err != nil {
+		if set, err = keys.PlatformJWKS(s, nil); err != nil {
 			return err
 		}
 		sk, err = keys.ActivePlatformKey(s, e.s)

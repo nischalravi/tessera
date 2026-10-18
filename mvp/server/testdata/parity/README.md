@@ -148,6 +148,7 @@ other), and the JIT decision route is split into three routes.
   and none on `/api/health`).
 
 `067-audit` and `068-audit-limit` list only seed events and are unchanged.
+
 * `153-summary-after-sync`, `154-identities-after-sync` (UAT #134). The recorded
   Python backend let `POST /api/connectors/sync` undo the leaver plan and the
   grant revokes run earlier in the sequence: Marcus Bellweather came back as an

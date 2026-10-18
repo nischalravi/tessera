@@ -2,6 +2,10 @@ package seal_test
 
 import (
 	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/hkdf"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -181,6 +185,105 @@ func TestDeriveKey(t *testing.T) {
 	}
 	if _, err := s.DeriveKey("", 32); err == nil {
 		t.Error("empty label accepted")
+	}
+	// key separation: no DeriveKey label can produce the sealing key
+	for _, l := range []string{"seal/v1", "seal", "seal/v2", "sealing"} {
+		if k, err := s.DeriveKey(l, 32); err == nil {
+			t.Errorf("DeriveKey(%q) = %x, want refused (reserved for the sealing key)", l, k)
+		}
+	}
+}
+
+// legacyV1 seals pt in the version 1 format (raw KEK as the AES-GCM key),
+// written independently of the package, as old databases hold it.
+func legacyV1(t *testing.T, kek, pt, aad []byte) []byte {
+	t.Helper()
+	block, err := aes.NewCipher(kek)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := append([]byte{seal.Version1}, seal.RandomBytes(12)...)
+	return g.Seal(out, out[1:], pt, append([]byte{seal.Version1}, aad...))
+}
+
+// TestSealVersions (L3): Seal writes version 2 under HKDF(KEK,
+// "tessera/seal/v1"), not under the raw KEK; version 1 values still open;
+// Reseal upgrades them; and the version byte cannot be swapped.
+func TestSealVersions(t *testing.T) {
+	kek := seal.RandomBytes(seal.KeySize)
+	s, err := seal.New(kek)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aad := seal.AAD(tenantA, "idp_connections", "client_secret_enc")
+	v2, err := s.Seal([]byte("v2 secret"), aad)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seal.Version(v2) != seal.Version2 {
+		t.Fatalf("Seal wrote version %d, want 2", seal.Version(v2))
+	}
+	// the v2 key is the HKDF output, computed independently here
+	sk, err := hkdf.Key(sha256.New, kek, nil, "tessera/seal/v1", 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, key := range map[string][]byte{"derived key": sk, "raw KEK": kek} {
+		block, _ := aes.NewCipher(key)
+		g, _ := cipher.NewGCM(block)
+		pt, err := g.Open(nil, v2[1:13], v2[13:], append([]byte{seal.Version2}, aad...))
+		if want := name == "derived key"; (err == nil) != want {
+			t.Errorf("v2 blob opened with the %s: %v (want ok=%t)", name, err, want)
+		}
+		if err == nil && string(pt) != "v2 secret" {
+			t.Errorf("v2 plaintext %q", pt)
+		}
+	}
+
+	v1 := legacyV1(t, kek, []byte("v1 secret"), aad)
+	if pt, err := s.Open(v1, aad); err != nil || string(pt) != "v1 secret" {
+		t.Fatalf("legacy v1 value: %q, %v", pt, err)
+	}
+	if _, err := s.Open(v1, seal.AAD(tenantB, "idp_connections", "client_secret_enc")); !errors.Is(err, seal.ErrOpen) {
+		t.Errorf("v1 value opened under another AAD: %v", err)
+	}
+	// downgrade / upgrade by rewriting the version byte: the key changes too
+	for name, blob := range map[string][]byte{"v2 relabelled v1": v2, "v1 relabelled v2": v1} {
+		c := append([]byte(nil), blob...)
+		c[0] ^= 3 // 1 <-> 2
+		if _, err := s.Open(c, aad); !errors.Is(err, seal.ErrOpen) {
+			t.Errorf("%s opened: %v", name, err)
+		}
+	}
+	for _, b := range []byte{0, 3, 0xff} {
+		c := append([]byte(nil), v2...)
+		c[0] = b
+		if _, err := s.Open(c, aad); !errors.Is(err, seal.ErrOpen) {
+			t.Errorf("version %d opened: %v", b, err)
+		}
+	}
+
+	// lazy migration
+	up, changed, err := s.Reseal(v1, aad)
+	if err != nil || !changed || seal.Version(up) != seal.Version2 {
+		t.Fatalf("Reseal(v1) = version %d, changed=%t, %v", seal.Version(up), changed, err)
+	}
+	if pt, err := s.Open(up, aad); err != nil || string(pt) != "v1 secret" {
+		t.Errorf("resealed value: %q, %v", pt, err)
+	}
+	same, changed, err := s.Reseal(v2, aad)
+	if err != nil || changed || !bytes.Equal(same, v2) {
+		t.Errorf("Reseal(v2) changed it: %t %v", changed, err)
+	}
+	if _, _, err := s.Reseal(v1, seal.AAD(tenantB, "idp_connections", "client_secret_enc")); !errors.Is(err, seal.ErrOpen) {
+		t.Errorf("Reseal under a wrong AAD: %v", err)
+	}
+	if _, _, err := newSealer(t).Reseal(v1, aad); !errors.Is(err, seal.ErrOpen) {
+		t.Errorf("Reseal under a wrong KEK: %v", err)
 	}
 }
 
