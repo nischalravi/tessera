@@ -7,7 +7,7 @@ import { Link, useNavigate } from "react-router-dom";
 import {
   Ban, ClipboardCheck, ExternalLink, Network, Pencil, RefreshCw, RotateCcw, Settings, ShieldAlert, ShieldCheck, ShoppingCart, Timer, UserCheck, UserRound,
 } from "lucide-react";
-import { AccountRow, ConnectorRow, Group, IdentityDetail, IdentityRow, ResourceRow, RolesView, Violation, ago, api, fmtDay, invalidLink, isNumericId, relTime, useApi } from "../../api";
+import { AccountRow, ConnectorRow, Group, IdentityDetail, OrgDetail, ResourceRow, RolesView, Violation, ago, api, fmtDay, invalidLink, isNumericId, orgPath, relTime, useApi } from "../../api";
 import { useIdentityActions } from "../../app/actions";
 import { usePersona } from "../../app/persona";
 import {
@@ -15,7 +15,7 @@ import {
 } from "../../components";
 import { AffiliationsSection, IdentifiersSection } from "./affiliations";
 import { LifecycleSection } from "../lifecycle/parts";
-import { ORGS, OrgUnit, mockIdentityOps, mockObjects, useMockState } from "../../mocks";
+import { mockObjects } from "../../mocks";
 import { useSession } from "../../app/auth";
 import { ContainDialog, ContainmentRetries } from "./containment";
 import { RevokeDrawer } from "./IdentityPage";
@@ -46,7 +46,6 @@ export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void
   const { data: d, error: loadError, reload } = useApi<IdentityDetail>(validId ? `/identities/${id}` : null);
   const error = validId ? loadError : invalidLink();
   const acts = useIdentityActions();
-  const mock = useMockState();
   const { actor } = usePersona();
   const toast = useToast();
   const [tab, setTab] = useTab<IdTab>("overview", id);
@@ -59,7 +58,7 @@ export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void
     return <SidePanel title={error ? "Couldn't load identity" : "Loading…"} onClose={onClose} fullHref={`/directory/identities/${id}`}><Loading error={error} what="identity" kind="block" onRetry={reload} /></SidePanel>;
   }
   const human = d.type === "human";
-  const status = mock.disabled[d.id] && d.status === "active" ? "disabled" : d.status;
+  const status = d.status;
   const lastLogin = d.accounts.map((a) => a.last_login_at).filter(Boolean).sort().pop() ?? null;
   const topRec = d.recommendations[0];
   const why = d.effective_permissions.find((p) => p.tags.length && p.unused) ?? d.effective_permissions.find((p) => p.privileged && p.unused) ?? d.effective_permissions.find((p) => p.tags.length);
@@ -95,8 +94,8 @@ export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void
               ? [{ label: "Contain", icon: <ShieldAlert size={I} />, danger: true, onClick: () => setContaining(true) }]
               : []),
             status === "disabled"
-              ? { label: "Enable", icon: <UserCheck size={I} />, onClick: async () => { await mockIdentityOps.enable(d.id, d.name, actor); toast(`${d.name} re-enabled (preview)`); } }
-              : { label: "Disable", icon: <Ban size={I} />, danger: true, disabled: d.status === "terminated", onClick: () => acts.disable(d) },
+              ? { label: "Enable", icon: <UserCheck size={I} />, disabled: !can("identities.contain"), onClick: () => acts.enable(d) }
+              : { label: "Disable", icon: <Ban size={I} />, danger: true, disabled: d.status !== "active" || !can("identities.contain"), onClick: () => acts.disable(d) },
           ]}
         />
       }
@@ -115,7 +114,7 @@ export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void
             <dt>{human ? "Job title" : "Kind"}</dt><dd>{d.title ?? <span className="faint">-</span>}</dd>
             <dt>Department</dt><dd>{d.department ?? <span className="faint">-</span>}</dd>
             {human ? <><dt>Manager</dt><dd><IdLink i={d.manager} /></dd></> : <OwnershipRows kind="identity" objectKey={d.id} label={d.name} />}
-            <dt>Status</dt><dd><Status s={status} />{mock.disabled[d.id] && <> <PreviewBadge what="Disabled in this browser by a Preview action" /></>}</dd>
+            <dt>Status</dt><dd><Status s={status} /></dd>
             {d.email && <><dt>Email</dt><dd className="truncate">{d.email}</dd></>}
             {d.hired_at && <><dt>Since</dt><dd>{fmtDay(d.hired_at)}</dd></>}
             {d.terminated_at && <><dt>Left</dt><dd>{fmtDay(d.terminated_at)}</dd></>}
@@ -439,17 +438,18 @@ export function AppPanel({ c, onClose }: { c: ConnectorRow; onClose: () => void 
 }
 
 // ------------------------------------------------------------------ org
-export function OrgPanel({ org, onClose }: { org: OrgUnit; onClose: () => void }) {
-  const { data: people, error } = useApi<IdentityRow[]>("/identities?type=human");
+export function OrgPanel({ id, onClose }: { id: string; onClose: () => void }) {
+  const { data: org, error, reload } = useApi<OrgDetail>(orgPath(id));
   const nav = useNavigate();
-  const [tab, setTab] = useTab<"overview" | "people">("overview", org.id);
-  const members = (people ?? []).filter((p) => !org.department || p.department === org.department);
-  const active = members.filter((m) => m.status === "active");
-  const parent = ORGS.find((o) => o.id === org.parent);
+  const [tab, setTab] = useTab<"overview" | "people">("overview", id);
+  if (!org || org.id !== id) {
+    return <SidePanel title={error ? "Couldn't load organization" : "Loading…"} onClose={onClose} fullHref={`/directory/orgs/${id}`}><Loading error={error} what="organization" kind="block" onRetry={reload} /></SidePanel>;
+  }
+  const active = org.people.filter((m) => m.status === "active");
   return (
     <SidePanel
       title={org.name}
-      sub={<><PreviewBadge /><span>{org.costCenter}</span></>}
+      sub={<span>{org.kind === "tenant" ? "Company" : "Department"}</span>}
       onClose={onClose}
       fullHref={`/directory/orgs/${org.id}`}
       commands={
@@ -458,24 +458,23 @@ export function OrgPanel({ org, onClose }: { org: OrgUnit; onClose: () => void }
           items={[{ label: "Request access for everyone", icon: <ShoppingCart size={I} />, disabled: !active.length, onClick: () => nav(`/access/request?for=${active.map((m) => m.id).join(",")}`) }]}
         />
       }
-      tabs={<Tabs label="Organization details" value={tab} onChange={setTab} tabs={[{ id: "overview", label: "Overview" }, { id: "people", label: `People (${people ? members.length : "…"})` }]} />}
+      tabs={<Tabs label="Organization details" value={tab} onChange={setTab} tabs={[{ id: "overview", label: "Overview" }, { id: "people", label: `People (${org.people.length})` }]} />}
     >
       {tab === "overview" ? (
         <dl className="kv">
-          <dt>Owner</dt><dd>{org.owner}</dd>
-          <dt>Cost center</dt><dd className="sys">{org.costCenter}</dd>
-          <dt>Part of</dt><dd>{parent ? parent.name : "Top level"}</dd>
-          <dt>Workday department</dt><dd>{org.department ?? "Everyone"}</dd>
-          <dt>Active people</dt><dd className="tnum">{people ? active.length : "…"}</dd>
+          <dt>Owners</dt><dd>{org.owners.length ? org.owners.map((o) => o.name).join(", ") : <span className="faint">None found</span>}</dd>
+          <dt>Part of</dt><dd>{org.parent ? org.parent.name : "Top level"}</dd>
+          {org.child_orgs.length > 0 && <><dt>Child organizations</dt><dd>{org.child_orgs.map((c) => c.name).join(", ")}</dd></>}
+          <dt>Active people</dt><dd className="tnum">{org.active}</dd>
+          <dt>All people</dt><dd className="tnum">{org.members}</dd>
         </dl>
-      ) : !people ? <Loading error={error} /> : (
+      ) : (
         <table>
           <tbody>
-            {members.map((m) => (
+            {org.people.map((m) => (
               <tr key={m.id} className="click" tabIndex={0} onClick={() => nav(`/directory/people?selected=${m.id}`)} onKeyDown={(e) => e.key === "Enter" && nav(`/directory/people?selected=${m.id}`)}>
                 <td>{m.name}<div className="xs faint">{m.title}</div></td>
                 <td><Status s={m.status} /></td>
-                <td style={{ textAlign: "right" }}><RiskPill score={m.risk} /></td>
               </tr>
             ))}
           </tbody>
