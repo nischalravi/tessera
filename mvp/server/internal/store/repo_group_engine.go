@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strconv"
 	"time"
@@ -151,7 +152,7 @@ var (
 	grpClosureAdd = tq("grp_closure.add", `
 		INSERT INTO grp_closure (tenant_id, ancestor_id, descendant_id, paths, min_depth)
 		VALUES (@tenant, @ancestor, @descendant, @paths, @min_depth)
-		ON CONFLICT (tenant_id, ancestor_id, descendant_id) DO UPDATE SET paths = paths + @paths, min_depth = MIN(min_depth, @min_depth)`)
+		ON CONFLICT (tenant_id, ancestor_id, descendant_id) DO UPDATE SET paths = grp_closure.paths + @paths, min_depth = CASE WHEN grp_closure.min_depth < @min_depth THEN grp_closure.min_depth ELSE @min_depth END`)
 	grpClosureSub = tq("grp_closure.sub", `UPDATE grp_closure SET paths = paths - @paths
 		WHERE tenant_id = @tenant AND ancestor_id = @ancestor AND descendant_id = @descendant`)
 	grpClosureSetDepth = tq("grp_closure.set_depth", `UPDATE grp_closure SET min_depth = @min_depth
@@ -218,8 +219,8 @@ var (
 	grpQueueSetPayload = tq("grp_queue.set_payload", `UPDATE grp_engine_queue SET payload = @payload WHERE tenant_id = @tenant AND seq = @seq`)
 	grpQueueDelete     = tq("grp_queue.delete", `DELETE FROM grp_engine_queue WHERE tenant_id = @tenant AND seq = @seq`)
 	grpQueueCount      = tq("grp_queue.count", `SELECT count(*) FROM grp_engine_queue q WHERE q.tenant_id = @tenant`)
-	grpQueueOfGroup    = tq("grp_queue.of_group", `SELECT count(*) FROM grp_engine_queue q
-		WHERE q.tenant_id = @tenant AND json_extract(q.payload, '$.group') = @group_id`)
+	// the payload is JSON text; the group is matched in Go (json_extract is SQLite-only)
+	grpQueuePayloads = tq("grp_queue.payloads", `SELECT q.payload FROM grp_engine_queue q WHERE q.tenant_id = @tenant`)
 )
 
 func scanGrpDirect(s scanner) (*DirectMembership, error) {
@@ -919,7 +920,25 @@ func (tx *TenantTx) GrpQueueLen() (int, error) { return tx.count(grpQueueCount) 
 
 // GrpQueuedFor counts the queued jobs on a group.
 func (tx *TenantTx) GrpQueuedFor(group GroupID) (int, error) {
-	return tx.count(grpQueueOfGroup, sql.Named("group_id", string(group)))
+	rows, err := tx.query(grpQueuePayloads)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	n := 0
+	for rows.Next() {
+		var payload string
+		if err := rows.Scan(&payload); err != nil {
+			return 0, err
+		}
+		var p struct {
+			Group string `json:"group"`
+		}
+		if json.Unmarshal([]byte(payload), &p) == nil && p.Group == string(group) {
+			n++
+		}
+	}
+	return n, rows.Err()
 }
 
 // GrpOpState says whether an operation id is still queued, finished or was
