@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"strings"
@@ -395,12 +396,16 @@ func (s *Server) myActivity(_ http.ResponseWriter, r *http.Request, p *params) (
 	if err := validated(p, nil); err != nil {
 		return nil, err
 	}
+	if limit > math.MaxInt32 {
+		return nil, badRequest("invalid_limit", "limit is 1 to 50")
+	}
+	limitInt := int(limit)
 	out := []ojson.Object{}
 	pr := principal(r)
 	if pr == nil || pr.UserID == nil {
 		return out, nil // a token principal has no person whose activity this is
 	}
-	rows, err := store.TxFrom(r.Context()).AuditEvents(store.AuditFilter{Limit: int(limit), ActorID: pr.UserID.String()})
+	rows, err := store.TxFrom(r.Context()).AuditEvents(store.AuditFilter{Limit: limitInt, ActorID: pr.UserID.String()})
 	if err != nil {
 		return nil, err
 	}

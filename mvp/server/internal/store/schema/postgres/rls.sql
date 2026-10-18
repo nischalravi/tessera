@@ -666,6 +666,7 @@ ALTER TABLE config_imports ENABLE ROW LEVEL SECURITY;
 ALTER TABLE config_imports FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON config_imports;
 CREATE POLICY tenant_isolation ON config_imports
+<<<<<<< HEAD
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
@@ -694,5 +695,7 @@ ALTER TABLE request_drafts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE request_drafts FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON request_drafts;
 CREATE POLICY tenant_isolation ON request_drafts
+=======
+>>>>>>> origin/agent/wire-previews
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
