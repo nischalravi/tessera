@@ -28,9 +28,11 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/sponsorship"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
+	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/lifecycle"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
+	"github.com/nischalravi/tessera/mvp/server/internal/provision"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 	"github.com/nischalravi/tessera/mvp/server/internal/requests"
@@ -93,8 +95,12 @@ type Config struct {
 	AuditAnchor string
 	// PublicURL is TESSERA_PUBLIC_URL: the base of the OIDC redirect URIs.
 	PublicURL string
-	// Sealer opens connection client secrets, seals PKCE verifiers and seals
-	// the config bundle signing keys (issue #170; nil: export is unavailable).
+	// Sealer opens connection client secrets, seals PKCE verifiers, provisioning
+	// target credentials and the config bundle signing keys under the KEK.
+	// Nil (tests only): sign-in with secrets and config export are unavailable,
+	// and provisioning uses a key generated for this process, so its
+	// credentials cannot be read after a restart. cmd/tessera always passes
+	// the real one.
 	Sealer *seal.Sealer
 	// OutboundHTTP is the safehttp client for IdP discovery, JWKS and token
 	// requests. Nil: browser sign-in through an IdP is unavailable.
@@ -108,6 +114,14 @@ type Config struct {
 	// Siem streams the audit ledger to tenants' SIEMs (issue #169); its
 	// Sealer seals sink tokens. Nil: tests of sinks are unavailable.
 	Siem *siem.Service
+	// Outbound is the safehttp client the provisioning worker sends through.
+	// Nil: no outbound client, so every provisioning call fails (as with
+	// Containment).
+	Outbound *http.Client
+	// FakeTargetURL is the base URL of the in-process fake SCIM target
+	// (TESSERA_DEV_FAKE_TARGET, dev only). Empty: the "fake" target kind is
+	// refused.
+	FakeTargetURL string
 	// EmailMode is the email delivery (config.MailOff, MailDev or MailSMTP):
 	// the preferences page says whether the email channels do anything.
 	EmailMode string
@@ -137,6 +151,8 @@ type Server struct {
 	oauth2 *oauth2rp.RP
 
 	readiness *readiness.Service
+	prov      *provision.Engine
+	provSeal  *seal.Sealer // cfg.Sealer, or a per-process key when it is nil
 	// containment is the kill switch (issue #106); never nil.
 	containment *containment.Service
 	// admin is the admin-change workflow (design §15); never nil.
@@ -177,8 +193,18 @@ func New(cfg Config) *Server {
 	if cfg.Containment.Clock == nil {
 		cfg.Containment.Clock = cfg.Clock
 	}
+	provSeal := cfg.Sealer
+	if provSeal == nil {
+		sealer, err := seal.New(seal.RandomBytes(seal.KeySize))
+		if err != nil {
+			panic(err)
+		}
+		provSeal = sealer
+	}
 	s := &Server{cfg: cfg, containment: cfg.Containment, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
-		limits: newLimiters(cfg.RateLimits)}
+		limits: newLimiters(cfg.RateLimits), provSeal: provSeal}
+	s.prov = &provision.Engine{DB: cfg.Store, Sealer: provSeal, HTTP: cfg.Outbound,
+		Clock: func() time.Time { return s.clock() }, Log: cfg.Logger.With("component", "provisioning")}
 	s.admin = &admin.Service{DB: cfg.Store, Clock: func() time.Time { return s.clock() }, Sealer: cfg.Sealer,
 		Prod: cfg.Env == "prod", Log: cfg.Logger}
 	s.guests = sponsorship.New(cfg.Identifiers)
@@ -200,6 +226,10 @@ func New(cfg Config) *Server {
 	s.registerCorrelationRoutes()
 	s.registerAffiliationRoutes()
 	s.registerRequestRoutes()
+	s.registerRemovalRoutes()
+	s.registerRequestDraftRoutes()
+	s.registerOrgRoutes()
+	s.registerActivityRoutes()
 	s.registerRoleRoutes()
 	s.registerAbacRoutes()
 	s.registerLifecycleRoutes()
@@ -209,6 +239,8 @@ func New(cfg Config) *Server {
 	s.registerContainmentRoutes()
 	s.registerGroupsFolderRoutes()
 	s.registerReadinessRoutes()
+	s.registerJobRoutes()
+	s.registerProvisioningRoutes()
 	s.registerTransportRoutes()
 	s.registerAuthRoutes()
 	s.registerLoginRoutes()
@@ -281,9 +313,14 @@ func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	ctx = audit.WithSystemActor(ctx, "jit.sweeper") // jit.expire events name the job
+	var maintained time.Time
 	for {
-		if _, err := jit.SweepAll(ctx, s.store, s.clock()); err != nil && ctx.Err() == nil {
-			s.log.Error("jit sweep failed", "err", err)
+		s.sweepAndRecord(ctx)
+		if now := s.clock(); now.Sub(maintained) >= jobMaintainGap {
+			if err := jobs.Maintain(ctx, s.store, now, jobStaleAfter, jobRetention); err != nil && ctx.Err() == nil {
+				s.log.Error("job history upkeep failed", "err", err)
+			}
+			maintained = now
 		}
 		if err := requests.SweepAll(audit.WithSystemActor(ctx, requests.Sweeper), s.store, s.clock()); err != nil && ctx.Err() == nil {
 			s.log.Error("request sweep failed", "err", err)
@@ -378,6 +415,8 @@ type route struct {
 	// closed like a read when its http.request event cannot be written
 	// (audit.AnswersRead).
 	answersRead bool
+	// job: the route runs a job whose runs are recorded (jobs.go).
+	job *jobSpec
 }
 
 // handle registers a route with its declared requirement (design §12.4). A
@@ -436,6 +475,13 @@ func (s *Server) serve(rt *route, w http.ResponseWriter, r *http.Request, p *par
 	if pr, ok := auth.PrincipalFrom(r.Context()); ok {
 		t = pr.TenantID
 	}
+	if rt.job != nil && !t.IsZero() {
+		return s.serveJob(rt, w, r, p, t)
+	}
+	return s.serveTenant(rt, w, r, p, t)
+}
+
+func (s *Server) serveTenant(rt *route, w http.ResponseWriter, r *http.Request, p *params, t tenancy.ID) (any, error) {
 	ctx := r.Context()
 	if rt.tenant == phased {
 		if t.IsZero() {
