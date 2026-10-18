@@ -1,0 +1,22 @@
+{
+ "name": "429 from Okta",
+ "interactions": [
+  {
+   "request": {
+    "method": "GET",
+    "path": "/api/v1/users",
+    "query": {
+     "search": "profile.login eq \"alice@larkspur.example\""
+    }
+   },
+   "response": {
+    "status": 429,
+    "headers": {},
+    "body": {
+     "errorCode": "E0000047",
+     "errorSummary": "API call exceeded rate limit due to too many requests."
+    }
+   }
+  }
+ ]
+}

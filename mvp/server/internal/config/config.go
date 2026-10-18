@@ -82,6 +82,10 @@ type Config struct {
 	RPID                   string
 	Notify                 string
 	DevIdPURL              string
+	// FakeTarget is TESSERA_DEV_FAKE_TARGET: cmd/tessera starts an in-process
+	// fake SCIM target on a loopback port, so the provisioning screens can be
+	// demonstrated without a real system. Refused in prod.
+	FakeTarget bool
 	// Mail is the notification email delivery (issue #189).
 	Mail Mail
 	// NotifyMaxAttempts is how many times the dispatcher tries to send one
@@ -240,6 +244,7 @@ func Load(getenv func(string) string) (*Config, error) {
 			c.FrozenNow = t
 		}
 	}
+	c.FakeTarget = boolean("TESSERA_DEV_FAKE_TARGET", false, false)
 	c.DevIdPURL = strings.TrimSpace(getenv("TESSERA_DEV_IDP_URL"))
 	if c.DevIdPURL == "" && !prod {
 		c.DevIdPURL = "http://127.0.0.1:8001"
@@ -321,6 +326,9 @@ func Load(getenv func(string) string) (*Config, error) {
 		}
 		if c.DevIdPURL != "" {
 			bad("TESSERA_DEV_IDP_URL must not be set with TESSERA_ENV=prod")
+		}
+		if c.FakeTarget {
+			bad("TESSERA_DEV_FAKE_TARGET must not be set with TESSERA_ENV=prod (the fake provisioning target accepts any change)")
 		}
 		if IsPostgresDSN(c.DB) {
 			// Never echo the DSN: it carries the password.
