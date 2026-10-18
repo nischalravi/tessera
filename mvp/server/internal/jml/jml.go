@@ -14,6 +14,8 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
+	"github.com/nischalravi/tessera/mvp/server/internal/provision"
+	"github.com/nischalravi/tessera/mvp/server/internal/provision/target"
 	"github.com/nischalravi/tessera/mvp/server/internal/simulate"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
@@ -629,21 +631,13 @@ func PlanForEvent(c *store.TenantTx, now time.Time, ev *store.HrisEvent, withImp
 	return JoinerPlan(c, ev.Payload)
 }
 
-func ensureAccount(c *store.TenantTx, now time.Time, ident *store.Identity, system string) (*store.Account, error) {
-	accts, err := c.IdentityAccounts(ident.ID)
-	if err != nil {
-		return nil, err
-	}
-	for _, a := range accts {
-		if a.System == system && a.Status == "active" {
-			return a, nil
-		}
-	}
-	var uname string
+// accountSpec is the username and external id a new account of ident in
+// system gets.
+func accountSpec(ident *store.Identity, system string) (uname, extID string, err error) {
 	switch system {
 	case "okta":
 		if ident.Email == nil {
-			return nil, fmt.Errorf("jml: %s has no email for an okta account", ident.Name)
+			return "", "", fmt.Errorf("jml: %s has no email for an okta account", ident.Name)
 		}
 		uname = *ident.Email
 	case "workday":
@@ -655,8 +649,25 @@ func ensureAccount(c *store.TenantTx, now time.Time, ident *store.Identity, syst
 		}
 		uname = strings.ReplaceAll(strings.SplitN(base, "@", 2)[0], ".", "-")
 	}
+	return uname, "tessera-" + system + "-" + ident.ExternalID, nil
+}
+
+func ensureAccount(c *store.TenantTx, now time.Time, ident *store.Identity, system string) (*store.Account, error) {
+	accts, err := c.IdentityAccounts(ident.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range accts {
+		if a.System == system && a.Status == "active" {
+			return a, nil
+		}
+	}
+	uname, extID, err := accountSpec(ident, system)
+	if err != nil {
+		return nil, err
+	}
 	iid := ident.ID
-	id, err := c.InsertAccount(&store.Account{System: system, ExternalID: "tessera-" + system + "-" + ident.ExternalID,
+	id, err := c.InsertAccount(&store.Account{System: system, ExternalID: extID,
 		IdentityID: &iid, Username: uname, Kind: "user", Status: "active", CreatedAt: &now})
 	if err != nil {
 		return nil, err
@@ -666,6 +677,10 @@ func ensureAccount(c *store.TenantTx, now time.Time, ident *store.Identity, syst
 
 func addGrant(c *store.TenantTx, now time.Time, ident *store.Identity, st Step) error {
 	gid, _ := stepInt(st, "group_id")
+	return addGrantTo(c, now, ident, gid)
+}
+
+func addGrantTo(c *store.TenantTx, now time.Time, ident *store.Identity, gid int64) error {
 	g, err := c.Group(gid)
 	if err != nil {
 		return err
@@ -702,19 +717,82 @@ func isContainment(action string) bool {
 	return action == containment.ActionRevokeSessions || action == containment.ActionRevokeGrants
 }
 
-func applyStep(c *store.TenantTx, now time.Time, ident *store.Identity, st Step) error {
+// Completions the provisioning engine runs once the target confirms a step.
+const (
+	completeEnsureAccount = "jml.ensure_account"
+	completeAddGrant      = "jml.add_grant"
+)
+
+type identitySystem struct {
+	IdentityID int64  `json:"identity_id"`
+	System     string `json:"system"`
+}
+
+type identityGroup struct {
+	IdentityID int64 `json:"identity_id"`
+	GroupID    int64 `json:"group_id"`
+}
+
+func init() {
+	provision.RegisterCompletion(completeEnsureAccount, func(c *store.TenantTx, now time.Time, raw json.RawMessage) error {
+		var d identitySystem
+		if err := json.Unmarshal(raw, &d); err != nil {
+			return err
+		}
+		ident, err := c.Identity(d.IdentityID)
+		if err != nil {
+			return err
+		}
+		_, err = ensureAccount(c, now, ident, d.System)
+		return err
+	})
+	provision.RegisterCompletion(completeAddGrant, func(c *store.TenantTx, now time.Time, raw json.RawMessage) error {
+		var d identityGroup
+		if err := json.Unmarshal(raw, &d); err != nil {
+			return err
+		}
+		ident, err := c.Identity(d.IdentityID)
+		if err != nil {
+			return err
+		}
+		return addGrantTo(c, now, ident, d.GroupID)
+	})
+}
+
+// route sends a step's change to the provisioning engine when the system's
+// connection has write-back on. It reports whether it did; the caller then
+// leaves the graph alone (the engine edits it once the target confirms).
+func route(c *store.TenantTx, now time.Time, ch provision.Change) (bool, error) {
+	_, routed, err := provision.Submit(c, now, ch)
+	return routed, err
+}
+
+func stepKey(eventID int64, idx int, action string) string {
+	return fmt.Sprintf("jml:%d:%d:%s", eventID, idx, action)
+}
+
+func applyStep(c *store.TenantTx, now time.Time, ident *store.Identity, st Step, eventID int64, idx int) error {
 	var err error
 	switch stepStr(st, "action") {
 	case containment.ActionRevokeSessions, containment.ActionRevokeGrants:
 		// run by the caller before ExecuteEvent; failures become retry tasks
 	case "disable_account":
 		id, _ := stepInt(st, "account_id")
-		err = c.DisableAccount(id)
+		var routed bool
+		if routed, err = routeDisable(c, now, id, stepKey(eventID, idx, "disable_account")); err == nil && !routed {
+			err = c.DisableAccount(id)
+		}
 	case "remove_grant":
 		id, _ := stepInt(st, "edge_id")
-		err = c.RevokeEdge(id, now, "jml")
+		var routed bool
+		if routed, err = routeRemoveGrant(c, now, id, stepKey(eventID, idx, "remove_grant")); err == nil && !routed {
+			err = c.RevokeEdge(id, now, "jml")
+		}
 	case "add_grant":
-		err = addGrant(c, now, ident, st)
+		var routed bool
+		if routed, err = routeAddGrant(c, now, ident, st, stepKey(eventID, idx, "add_grant")); err == nil && !routed {
+			err = addGrant(c, now, ident, st)
+		}
 	case "cancel_jit":
 		id, _ := stepInt(st, "request_id")
 		err = c.CancelRequest(id, now)
@@ -736,6 +814,112 @@ func applyStep(c *store.TenantTx, now time.Time, ident *store.Identity, st Step)
 		}
 	}
 	// create_account / review_grant / create_identity are informational for existing identities
+	return err
+}
+
+func routeDisable(c *store.TenantTx, now time.Time, accountID int64, key string) (bool, error) {
+	a, err := getOrNil(c.Account(accountID))
+	if err != nil || a == nil {
+		return false, err
+	}
+	return route(c, now, provision.Change{System: a.System, Kind: target.DisableAccount,
+		Account: target.Account{Username: a.Username, ExternalID: a.ExternalID}, Source: provision.SourceJML, Key: key,
+		Completion: provision.CompleteAccountDisable, Data: provision.AccountData{AccountID: accountID}})
+}
+
+// routeRemoveGrant routes the removal of a group membership. Edges to
+// permissions have no counterpart in a target and are never routed.
+func routeRemoveGrant(c *store.TenantTx, now time.Time, edgeID int64, key string) (bool, error) {
+	e, err := getOrNil(c.Edge(edgeID))
+	if err != nil || e == nil {
+		return false, err
+	}
+	kind, aid, err := graph.ParseKey(e.Src)
+	if err != nil || kind != "account" {
+		return false, nil
+	}
+	kind, gid, err := graph.ParseKey(e.Dst)
+	if err != nil || kind != "group" {
+		return false, nil
+	}
+	a, err := getOrNil(c.Account(aid))
+	if err != nil || a == nil {
+		return false, err
+	}
+	g, err := getOrNil(c.Group(gid))
+	if err != nil || g == nil {
+		return false, err
+	}
+	return route(c, now, provision.Change{System: g.System, Kind: target.RemoveEntitlement,
+		Account: target.Account{Username: a.Username, ExternalID: a.ExternalID},
+		Group:   target.Group{ExternalID: g.ExternalID, Name: g.Name}, Source: provision.SourceJML, Key: key,
+		Completion: provision.CompleteEdgeRemove, Data: provision.EdgeData{EdgeID: edgeID}})
+}
+
+func routeAddGrant(c *store.TenantTx, now time.Time, ident *store.Identity, st Step, key string) (bool, error) {
+	gid, _ := stepInt(st, "group_id")
+	g, err := getOrNil(c.Group(gid))
+	if err != nil || g == nil {
+		return false, err
+	}
+	if t, err := provision.Route(c, g.System); err != nil || t == nil {
+		return false, err
+	}
+	uname, extID, err := accountSpec(ident, g.System)
+	if err != nil {
+		return false, err
+	}
+	accts, err := c.IdentityAccounts(ident.ID)
+	if err != nil {
+		return false, err
+	}
+	have := false
+	for _, a := range accts {
+		if a.System == g.System && a.Status == "active" {
+			uname, extID, have = a.Username, a.ExternalID, true
+		}
+	}
+	if !have { // the identity has no account there yet: create it first
+		if err := routeEnsureAccount(c, now, ident, g.System, key+":account"); err != nil {
+			return false, err
+		}
+	}
+	return route(c, now, provision.Change{System: g.System, Kind: target.AddEntitlement,
+		Account: target.Account{Username: uname, ExternalID: extID},
+		Group:   target.Group{ExternalID: g.ExternalID, Name: g.Name}, Source: provision.SourceJML, Key: key,
+		Completion: completeAddGrant, Data: identityGroup{IdentityID: ident.ID, GroupID: gid}})
+}
+
+// routeEnsureAccount creates the joiner's account in the target when the
+// system's connection has write-back on. Without a target (or when the
+// account exists) it is a plain ensureAccount.
+func routeEnsureAccount(c *store.TenantTx, now time.Time, ident *store.Identity, system, key string) error {
+	if t, err := provision.Route(c, system); err != nil {
+		return err
+	} else if t != nil {
+		accts, err := c.IdentityAccounts(ident.ID)
+		if err != nil {
+			return err
+		}
+		for _, a := range accts {
+			if a.System == system && a.Status == "active" {
+				return nil // already there
+			}
+		}
+		uname, extID, err := accountSpec(ident, system)
+		if err != nil {
+			return err
+		}
+		acct := target.Account{Username: uname, ExternalID: extID, DisplayName: ident.Name}
+		if ident.Email != nil {
+			acct.Email = *ident.Email
+		}
+		_, err = route(c, now, provision.Change{System: system, Kind: target.CreateAccount, Account: acct,
+			Source: provision.SourceJML, Key: key, Completion: completeEnsureAccount,
+			Data: identitySystem{IdentityID: ident.ID, System: system}})
+		return err
+	}
+	_, err := ensureAccount(c, now, ident, system)
 	return err
 }
 
@@ -814,13 +998,13 @@ func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.User
 			}
 		}
 		for _, s := range append([]string{"workday"}, sortedKeys(sysSet)...) {
-			if _, err := ensureAccount(c, now, ident, s); err != nil {
+			if err := routeEnsureAccount(c, now, ident, s, fmt.Sprintf("jml:%d:account:%s", ev.ID, s)); err != nil {
 				return nil, err
 			}
 		}
-		for _, st := range steps {
+		for i, st := range steps {
 			if stepStr(st, "action") == "add_grant" {
-				if err := addGrant(c, now, ident, st); err != nil {
+				if err := applyStep(c, now, ident, st, ev.ID, i); err != nil {
 					return nil, err
 				}
 			}
@@ -830,8 +1014,8 @@ func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.User
 		if err != nil {
 			return nil, err
 		}
-		for _, st := range steps {
-			if err := applyStep(c, now, ident, st); err != nil {
+		for i, st := range steps {
+			if err := applyStep(c, now, ident, st, ev.ID, i); err != nil {
 				return nil, err
 			}
 		}
@@ -948,8 +1132,10 @@ func ExecuteLeaver(c *store.TenantTx, now time.Time, identityID int64) (Plan, er
 		return nil, err
 	}
 	steps, _ := getAny(plan, "steps").([]Step)
-	for _, st := range steps {
-		if err := applyStep(c, now, ident, st); err != nil {
+	for i, st := range steps {
+		// No HRIS event: a negative id keeps the provisioning keys of this
+		// identity's end-date leaver apart from every event's.
+		if err := applyStep(c, now, ident, st, -identityID, i); err != nil {
 			return nil, err
 		}
 	}
