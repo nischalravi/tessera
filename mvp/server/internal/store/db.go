@@ -229,6 +229,26 @@ func (d *DB) Checkpoint(ctx context.Context) error {
 	return err
 }
 
+// ErrSnapshotUnsupported is returned by Snapshot on Postgres: tessera backup
+// is SQLite-only for now (back up Postgres with pg_dump or the managed
+// service's snapshots; see docs/runbooks/disaster-recovery.md).
+var ErrSnapshotUnsupported = errors.New("store: snapshot is SQLite-only; back up Postgres with pg_dump or your provider's snapshots")
+
+// IsPostgres reports whether the store runs on Postgres.
+func (d *DB) IsPostgres() bool { return d.d == dialectPostgres }
+
+// Snapshot writes a transactionally consistent copy of the whole database to
+// path with VACUUM INTO, while the server keeps serving. path must not exist.
+func (d *DB) Snapshot(ctx context.Context, path string) error {
+	if d.d == dialectPostgres {
+		return ErrSnapshotUnsupported
+	}
+	if _, err := d.sql.ExecContext(ctx, "VACUUM INTO ?", path); err != nil {
+		return fmt.Errorf("store: snapshot: %w", err)
+	}
+	return nil
+}
+
 // Migrate creates the schema and the reserved _platform tenant; drop=true
 // drops every table first (reseed). A database created before tenancy is
 // refused with ErrLegacySchema unless drop is set.

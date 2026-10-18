@@ -29,6 +29,8 @@ Requirements: Go 1.27+ (the version in `server/go.mod`), Node 18+ (tested on 24)
 ./run.sh seed        # (re)seed the database only
 ./run.sh devidp      # run only the dev IdP (mock OIDC issuer for local sign-in)
 ./run.sh bench       # Go benchmarks + end-to-end latency, startup and memory of the server
+./run.sh backup      # encrypted online backup now (-dir /backups; see "Backup and restore")
+./run.sh restore F   # verify backup F and restore it over the database (stop the server first)
 ./run.sh audit-deps  # govulncheck ./... on the Go module (install with server/scripts/install-tools.sh)
 ```
 
@@ -1029,6 +1031,41 @@ dialect, schema-parity, DSN and `gen-rls` tests need no server and always run). 
 `internal/store/storetest`, `testkit` and the API parity replay run on Postgres (the parity replay
 accepts a different numeric `id`/`edge_id` there, see above). CI should run this with a Postgres 16
 service container and `TESSERA_REQUIRE_PG_TESTS=1`.
+
+### Backup and restore
+
+**SQLite only for now.** On a Postgres store (`TESSERA_DB=postgres://…`) `tessera backup create` refuses with
+`postgres_unsupported` and the scheduler logs that it is off; back up Postgres with `pg_dump` or your provider's
+snapshots (see `docs/runbooks/disaster-recovery.md`). `tessera backup restore` always writes a SQLite file. The
+backup holds every table in every schema file; the drill test `TestDrill_EverySchemaTableIsInTheBackup` checks
+that against the embedded schema, so a table added later cannot be left out unnoticed.
+
+`tessera backup create` (or `./run.sh backup`) takes an online `VACUUM INTO` snapshot while the
+server keeps serving. It seals the snapshot under the KEK in authenticated 1 MiB chunks, so an edited,
+reordered, truncated or extended file is refused, and writes `tessera-<UTC time>-<id>.tbak`.
+With `TESSERA_BACKUP_DIR` set, `tessera serve` also writes one every
+`TESSERA_BACKUP_EVERY_MINUTES` (default 360) and keeps the newest `TESSERA_BACKUP_KEEP` (default
+28). `-upload <presigned PUT URL>` copies a backup to object storage through `internal/safehttp`.
+
+`tessera backup verify -in F` and `tessera backup restore -in F [-db target] [-force]` (or
+`./run.sh restore F`) decrypt to a temporary file. They then check every tenant's audit chain, the
+checkpoint signatures, the anchors up to the backup's head, and the chain heads in the manifest.
+A restore installs the database only when all of these pass, and keeps the previous database as
+`<db>.pre-restore-<time>`. A refused backup exits 7 (`wrong_kek`, `tampered_backup`,
+`verification_failed`, `target_exists`). The report also says how many anchored events are newer
+than the backup, which is the data the restore loses. Backups and restores are recorded in the
+platform audit chain (`platform.backup.created`, `platform.backup.restored`).
+
+A restore also revokes the credentials the backup brings back: every active session (reason
+`restore`), pending sign-in transactions, unconsumed bootstrap invitations and the `access_token`
+signing keys, so users sign in again and the server mints fresh keys on start. The counts are in
+the report and the audit event. `replay_cache` entries consumed after the snapshot cannot be
+recovered; their SAML and DPoP windows are short.
+
+The KEK and the anchor source are not in the backup: keep the KEK in escrow, or no backup can be
+opened. RPO and RTO targets, the restore procedure, what to do after a restore (sign in again,
+re-sync) and the drill are in `docs/runbooks/disaster-recovery.md`. CI runs the drill as
+`TestBackupDRDrill`. HA on Postgres is a draft in `docs/design/ha-postgres.md`.
 
 ## Web UI
 
