@@ -3,7 +3,7 @@ package store
 import "time"
 
 // Types of the membership engine's tables (schema/0280_groups.sql engine
-// section, 0281_groups_engine.sql; design docs/design/groups-grouper-parity.md
+// section, 0284_groups_engine.sql; design docs/design/groups-grouper-parity.md
 // §6). The engine itself is internal/groups/engine.
 
 // DepKind says why a child group feeds a parent group.

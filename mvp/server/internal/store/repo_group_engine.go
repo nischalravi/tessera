@@ -10,7 +10,7 @@ import (
 )
 
 // Membership-engine repository (schema/0280_groups.sql engine section and
-// 0281_groups_engine.sql). The rules of the engine live in
+// 0284_groups_engine.sql). The rules of the engine live in
 // internal/groups/engine; this file is only its statements. All of them are
 // bound to the transaction's tenant.
 //

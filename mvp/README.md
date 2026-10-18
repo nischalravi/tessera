@@ -775,7 +775,7 @@ soft delete), `server/internal/api/groups_folders.go`. No UI yet (GR-8).
 `server/internal/groups/engine` keeps `grp_effective` (the materialized members, with support counts)
 equal to the stored inputs: direct memberships, nesting and composite-factor edges (`grp_deps`) and
 composite definitions. `grp_closure` and `grp_levels` are maintained incrementally (schema
-`0281_groups_engine.sql` adds `grp_engine_state`). Changes recompute the affected identities in
+`0284_groups_engine.sql` adds `grp_engine_state`). Changes recompute the affected identities in
 ascending level order from the stored rows, stopping where membership does not change. A disabled or
 deleted group, or one outside its own `enabled_from`/`disabled_at`, is an empty set.
 

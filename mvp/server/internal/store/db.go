@@ -113,7 +113,7 @@ var tables = []string{
 	"intake_records", "sponsorships", "sponsorship_events",
 	// identity containment (schema/0205_containment.sql)
 	"containment_credentials", "containment_retries",
-	// native groups (schema/0280_groups.sql, 0281_groups_engine.sql)
+	// native groups (schema/0280_groups.sql, 0284_groups_engine.sql)
 	"grp_folders", "grp_name_aliases", "grp_groups", "grp_composite_factors", "grp_lists", "grp_direct_memberships",
 	"grp_deps", "grp_closure", "grp_levels", "grp_effective", "grp_engine_queue", "grp_engine_state",
 }
