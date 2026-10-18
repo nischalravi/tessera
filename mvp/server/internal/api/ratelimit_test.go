@@ -134,14 +134,19 @@ func TestRateLimit_ClientBehindTrustedProxy(t *testing.T) {
 		{"10.1.2.3:443", "junk, 198.51.100.2", "198.51.100.2"},
 		{"10.1.2.3:443", "[::1], junk", "10.1.2.3"},
 		{"10.1.2.3:443", "2001:db8:1:2::7", "2001:db8:1:2::/64"},
+		{"10.1.2.3:443", "2001:db8:1:2:aaaa:bbbb:cccc:dddd", "2001:db8:1:2::/64"}, // same /64, same bucket
+		{"10.1.2.3:443", "fe80::1%eth0", "fe80::/64"},                             // zone dropped
+		{"10.1.2.3:443", "::ffff:198.51.100.3", "198.51.100.3"},
+		{"[2001:db8:9:9::1]:443", "", "2001:db8:9:9::/64"},
 		{"203.0.113.5:443", "198.51.100.1", "203.0.113.5"}, // untrusted peer: header ignored
+		{"not-an-address", "", "invalid"},
 	} {
 		r := httptest.NewRequest("GET", "/api/health", nil)
 		r.RemoteAddr = tc.peer
 		if tc.xff != "" {
 			r.Header.Set("X-Forwarded-For", tc.xff)
 		}
-		if got := s.rateKey(r); got != tc.want {
+		if got := s.rateKey(r).String(); got != tc.want {
 			t.Errorf("peer %s XFF %q: key %s, want %s", tc.peer, tc.xff, got, tc.want)
 		}
 	}

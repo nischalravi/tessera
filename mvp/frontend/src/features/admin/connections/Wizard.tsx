@@ -116,7 +116,7 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
   const [v, setV] = useState<Record<string, string>>({});
   useEffect(() => {
     setV({
-      host: cfg.host ?? "", port: String(cfg.port ?? ""), org_url: cfg.org_url ?? "", tenant_id: cfg.tenant_id ?? "", cloud: cfg.cloud ?? "",
+      host: cfg.host ?? "", port: String(cfg.port ?? ""), bind_dn: cfg.bind_dn ?? "", ca_bundle: cfg.ca_bundle ?? "", org_url: cfg.org_url ?? "", tenant_id: cfg.tenant_id ?? "", cloud: cfg.cloud ?? "",
       customer: cfg.customer ?? "", domain: cfg.domain ?? "", base_url: cfg.base_url ?? "", tenant_host: cfg.tenant_host ?? "",
       interface: cfg.interface ?? "", time_zone: cfg.time_zone ?? "", technical_owner: cfg.technical_owner ?? "", business_owner: cfg.business_owner ?? "",
       base_dns: (cfg.base_dns ?? []).join("\n"), service_account_ous: (cfg.service_account_ous ?? []).join("\n"), user_filter: cfg.user_filter ?? "",
@@ -146,7 +146,7 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
       if (now !== String(cfg[k] ?? "")) (next as Record<string, unknown>)[k] = now === "" ? null : now;
     };
     if (step === "connect") {
-      (["host", "org_url", "tenant_id", "cloud", "customer", "domain", "base_url", "tenant_host", "interface", "time_zone", "technical_owner", "business_owner"] as const).forEach(str);
+      (["host", "bind_dn", "ca_bundle", "org_url", "tenant_id", "cloud", "customer", "domain", "base_url", "tenant_host", "interface", "time_zone", "technical_owner", "business_owner"] as const).forEach(str);
       if (v.port && Number(v.port) !== cfg.port) next.port = Number(v.port);
     }
     if (step === "scope") {
@@ -189,6 +189,10 @@ function ConfigForm({ conn, step, onSaved }: { conn: Connection; step: "connect"
         <>
           <div className="form-grid">
             {(tid === "ad" || tid === "ldap") && <>{input("host", "Domain controller or server", "Host name only; LDAPS on 636 or StartTLS on 389.")}{input("port", "Port", undefined, { inputMode: "numeric" })}</>}
+            {tid === "ldap" && <>
+              {input("bind_dn", "Bind DN", "A dedicated read-only account (LLDAP: a member of lldap_strict_readonly), never the root DN. Its password is the credential below.")}
+              {area("ca_bundle", "CA certificate (PEM)", "Public certificates only: the CA that signed the server certificate. Empty uses the system roots.")}
+            </>}
             {tid === "okta" && input("org_url", "Org URL", "An Okta domain (*.okta.com) or a verified custom domain.")}
             {tid === "entra" && <>{input("tenant_id", "Tenant id", "The directory GUID from the Overview page, not a domain.")}{input("cloud", "Cloud", "global, usgov or china")}</>}
             {tid === "google" && <>{input("customer", "Customer", "my_customer or the customer id")}{input("domain", "Primary domain")}</>}

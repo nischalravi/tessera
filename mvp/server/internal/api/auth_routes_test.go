@@ -47,6 +47,7 @@ func authed(l authtest.Login, method, path, body string) *http.Request {
 // tenant (from the session), assigned/active/inactive roles, permissions,
 // the authentication summary, the session's expiry and the CSRF token.
 func TestAuthSession(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	h := newIsolationServer(f).Handler()
 	weak := signIn(t, f.DB, f.B.ID, authtest.User{Email: "ada@b.example", Display: "Ada",
@@ -86,6 +87,7 @@ func TestAuthSession(t *testing.T) {
 // TestAuthLogout: logout revokes the session, clears the cookie, is audited,
 // and the old cookie no longer works.
 func TestAuthLogout(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	h := newIsolationServer(f).Handler()
 	l := signIn(t, f.DB, f.B.ID, testAdmin, authtest.Phr, storetest.Now)
@@ -120,6 +122,7 @@ func TestAuthLogout(t *testing.T) {
 // another user's session is 404 without admin.sessions.revoke, and an admin
 // may revoke it; another tenant's session is always 404.
 func TestAuthSessionsAndRevoke(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	h := newIsolationServer(f).Handler()
 	vic := authtest.User{Email: "vic@b.example", Roles: []auth.Role{auth.RoleViewer}}
@@ -174,6 +177,7 @@ func TestAuthSessionsAndRevoke(t *testing.T) {
 // request without the CSRF token, from a foreign origin, or with a non-JSON
 // body is refused before the handler runs.
 func TestUnsafeRequestsNeedCSRFAndJSON(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	srv := newIsolationServer(f)
 	h := srv.Handler()
@@ -226,6 +230,7 @@ func domainEvents(evs []*store.AuditEvent) int {
 // frame-ancestors, nosniff, no-referrer, no-store on API responses, HSTS in
 // production, CORS with credentials only for configured origins.
 func TestSecurityHeaders(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	srv := newIsolationServer(f)
 	h := srv.Handler()
@@ -285,6 +290,7 @@ func sessionCookie(t *testing.T, rec *httptest.ResponseRecorder) *http.Cookie {
 // TestIsolation_SessionTenantOnly: a user of tenant A reaches only A's data,
 // whatever tenant the request names; B's objects are not found.
 func TestIsolation_SessionTenantOnly(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	h := newIsolationServer(f).Handler()
 	la := signIn(t, f.DB, f.A.ID, testAdmin, authtest.Phr, storetest.Now)
@@ -313,6 +319,7 @@ func TestIsolation_SessionTenantOnly(t *testing.T) {
 // approve it (403 self_approval, audited, nothing granted); another approver
 // can.
 func TestJITSelfApprovalRefused(t *testing.T) {
+	t.Parallel()
 	srv := newSeededServer(t) // the demo company; Priya (33) may request BreakGlassAdmin (24)
 	h := srv.Anonymous()
 	// the requester holds jit.decide too (operator), so only the self check stops them
@@ -356,6 +363,7 @@ func TestJITSelfApprovalRefused(t *testing.T) {
 // is applied to its own sessions on every request: an operator signed in
 // with AAL2 has an inactive role there, and is unaffected in another tenant.
 func TestTenantSettingsRaiseRoleFloor(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	h := newIsolationServer(f).Handler()
 	op := authtest.User{Email: "op@x.example", Display: "Op", Roles: []auth.Role{auth.RoleOperator}}

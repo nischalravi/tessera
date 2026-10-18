@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
+	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
@@ -29,6 +30,10 @@ import (
 type Error struct{ Msg string }
 
 func (e *Error) Error() string { return e.Msg }
+
+// ErrUnknownItem is returned for an item id that does not exist in the tenant
+// (mapped to HTTP 404).
+var ErrUnknownItem = &Error{"unknown review item"}
 
 type deptTarget struct {
 	dept string
@@ -243,42 +248,63 @@ func sortedSet(m map[string]bool) []string {
 	return out
 }
 
+// DecidedError refuses a decision that differs from the one already applied
+// to the item (mapped to HTTP 409, code review_item_decided).
+type DecidedError struct {
+	ItemID    int64
+	Current   string
+	Requested string
+}
+
+func (e *DecidedError) Error() string {
+	return fmt.Sprintf("review item already decided as %s", e.Current)
+}
+
+// resolved reports whether the item already has a decision: with a nil error
+// when it equals the requested one (idempotent), else with a DecidedError.
+func resolved(item *store.ReviewItem, requested string) (bool, error) {
+	if item.Decision == nil || *item.Decision == "" {
+		return false, nil
+	}
+	if *item.Decision == requested {
+		return true, nil
+	}
+	return true, &DecidedError{ItemID: item.ID, Current: *item.Decision, Requested: requested}
+}
+
 // Decide records keep/revoke on an item; revoke deletes the grant edge.
-// by is the reviewer (the request's principal).
-//
-// When the grant is a group membership in a system whose connection has
-// write-back on, a revoke does not decide the item: it queues the removal in
-// the target and returns the item still open. The provisioning engine decides
-// the item and deletes the edge once a re-read confirms the member is gone; a
-// failed or unverified write leaves the item open for the reviewer to retry.
+// by is the reviewer (the request's principal). A decided item is final:
+// repeating the same decision is a no-op, a different one is a *DecidedError
+// (the item is returned too, so the caller can report it).
 func Decide(c *store.TenantTx, now time.Time, itemID int64, decision string, by store.UserRef, comment *string) (*store.ReviewItem, error) {
 	if decision != "keep" && decision != "revoke" {
 		return nil, &Error{"decision must be keep or revoke"}
 	}
 	item, err := c.Item(itemID)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, &Error{"unknown review item"}
+		return nil, ErrUnknownItem
 	}
 	if err != nil {
 		return nil, err
 	}
-	key := fmt.Sprintf("review:%d:revoke", item.ID)
-	if op, err := provision.InFlight(c, key); err != nil {
-		return nil, err
-	} else if op != nil {
-		return nil, &Error{"a revoke for this item is waiting for the target system to confirm it"}
+	// A decided item is final. The same decision again is idempotent (nothing
+	// is written); a different one is refused. The conditional update below
+	// closes the race between this read and the write.
+	if done, rerr := resolved(item, decision); done {
+		return item, rerr
 	}
-	if decision == "revoke" {
-		if routed, err := routeRevoke(c, now, item, key, by, comment); err != nil || routed {
-			return item, err
+	applied, err := c.DecideItem(item.ID, decision, comment, now, by)
+	if err != nil {
+		return nil, err
+	}
+	if !applied { // decided by a concurrent request since the read
+		if item, err = c.Item(itemID); err != nil {
+			return nil, err
 		}
-	}
-	return applyDecision(c, now, item, decision, by, comment)
-}
-
-func applyDecision(c *store.TenantTx, now time.Time, item *store.ReviewItem, decision string, by store.UserRef, comment *string) (*store.ReviewItem, error) {
-	if err := c.DecideItem(item.ID, decision, comment, now, by); err != nil {
-		return nil, err
+		if done, rerr := resolved(item, decision); done {
+			return item, rerr
+		}
+		return nil, errors.New("review item decision was not applied")
 	}
 	item.Decision, item.Comment, item.DecidedAt = &decision, comment, &now
 	if decision == "revoke" {
@@ -300,6 +326,9 @@ func applyDecision(c *store.TenantTx, now time.Time, item *store.ReviewItem, dec
 	}
 	if open == 0 {
 		if err := c.CompleteCampaign(item.CampaignID); err != nil {
+			return nil, err
+		}
+		if err := notify.ReviewClosed(c, now, item.CampaignID); err != nil {
 			return nil, err
 		}
 	}

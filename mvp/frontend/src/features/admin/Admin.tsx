@@ -1,16 +1,18 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
-  ArrowLeftRight, Bell, Clock, Download, FileBadge, Fingerprint, KeySquare, LucideIcon, Palette, Plug, ScrollText, Search, Settings, ShieldCheck, UserCog,
+  ArrowLeftRight, Bell, Mail, CircleCheck, Clock, Download, FileBadge, Fingerprint, KeySquare, LucideIcon, Palette, Play, Plug, ScrollText, Search, Settings, ShieldCheck, UserCog,
 } from "lucide-react";
 import { AuditRow, AuditVerifyReport, api, fmtDate, useApi } from "../../api";
 import { fuzzy } from "../../app/fuzzy";
 import { Badge, Button, Callout, DataTable, EmptyState, Page, PreviewBadge, useToast } from "../../components";
+import { EmailDelivery } from "../notifications/EmailDelivery";
+import { NotificationsAdminPanel } from "../notifications/Notifications";
 import { ADMIN_BY_ID, ADMIN_SECTIONS, AdminSection, useMockState } from "../../mocks";
 import { Jobs } from "./Jobs";
 import { Provisioning } from "./Provisioning";
 
-const ICONS: Record<string, LucideIcon> = { Plug, Fingerprint, UserCog, Bell, Palette, Clock, ScrollText, FileBadge, ArrowLeftRight, KeySquare };
+const ICONS: Record<string, LucideIcon> = { Plug, Fingerprint, UserCog, Bell, Mail, Palette, Clock, ScrollText, FileBadge, ArrowLeftRight, KeySquare };
 const Icon = ({ name, size = 18 }: { name: string; size?: number }) => {
   const C = ICONS[name] ?? Settings;
   return <C size={size} aria-hidden />;
@@ -150,7 +152,7 @@ function AuditLog() {
   );
 }
 
-const LIVE: Record<string, () => JSX.Element> = { jobs: Jobs, audit: AuditLog, provisioning: Provisioning };
+const LIVE: Record<string, () => React.JSX.Element> = { jobs: Jobs, audit: AuditLog, notifications: NotificationsAdminPanel, "email-delivery": EmailDelivery };
 
 export function AdminSectionPage() {
   const { section } = useParams();

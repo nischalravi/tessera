@@ -1,0 +1,11 @@
+{
+  "id": "tessera-default-sponsor-policy",
+  "max_active_per_population": {"visitor": 50, "contractor": 25, "volunteer": 100, "partner": 25},
+  "max_invites_per_day": 50,
+  "ineligible_worker_types": ["contractor", "intern", "partner", "vendor", "guest"],
+  "approval_required": {"populations": ["contractor"], "when_bundle_sensitive": true},
+  "sensitive_bundle_min_ial": 2,
+  "default_ial": {"visitor": 0, "contractor": 1, "volunteer": 0, "partner": 0},
+  "transfer_deadline_days": 14,
+  "max_start_ahead_days": 365
+}
