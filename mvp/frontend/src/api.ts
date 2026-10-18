@@ -897,6 +897,35 @@ export const approveRequest = (id: string, reason?: string) => line(id, "approve
 export const denyRequest = (id: string, reason: string) => line(id, "deny", { reason });
 export const cancelRequest = (id: string) => line(id, "cancel");
 export const removeRequest = (id: string, reason?: string) => line(id, "remove", reason ? { reason } : {});
+/** A saved, unsubmitted request (Access > Request access > Save draft), private to its user. It never submits by itself. */
+export type DraftItem =
+  | { kind: "group"; group_id: number; name: string; system: string; privileged: boolean }
+  | { kind: "role"; role_id: string; name: string; privileged: boolean };
+export interface RequestDraft {
+  id: string;
+  beneficiaries: { id: number; name: string }[];
+  items: DraftItem[];
+  duration_hours: number | null;
+  justification: string;
+  /** people and items the draft named that no longer exist */
+  unavailable: number;
+  created_at: string;
+  updated_at: string;
+}
+export interface RequestDraftInput {
+  beneficiary_ids: number[];
+  items: ({ kind: "group"; group_id: number } | { kind: "role"; role_id: string })[];
+  duration_hours: number | null;
+  justification: string;
+}
+export const draftsPath = "/request-drafts";
+export const draftPath = (id: string) => `${draftsPath}/${encodeURIComponent(id)}`;
+export const requestDrafts = {
+  /** Creates a draft, or replaces the one named by id. */
+  save: (input: RequestDraftInput, id?: string) => (id ? api<RequestDraft>(draftPath(id), input, "PUT") : api<RequestDraft>(draftsPath, input)),
+  remove: (id: string) => api<{ id: string; deleted: boolean }>(draftPath(id), undefined, "DELETE"),
+};
+
 /** A request to remove one grant (account -> group) a person holds (My access > Request removal). */
 export interface RemovalRequest {
   id: string;

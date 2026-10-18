@@ -122,6 +122,11 @@ GET    /api/removal-requests                         requests.create -  # wire-p
 POST   /api/removal-requests/{request_id}/approve    requests.create STEP_UP_POLICY  # wire-previews (the manager, a delegate or requests.decide: the handler checks)
 POST   /api/removal-requests/{request_id}/deny       requests.create -  # wire-previews
 POST   /api/removal-requests/{request_id}/cancel     requests.create -  # wire-previews (the requester)
+GET    /api/request-drafts                           requests.create -  # wire-previews (the caller's own drafts)
+POST   /api/request-drafts                           requests.create -  # wire-previews
+GET    /api/request-drafts/{draft_id}                requests.create -  # wire-previews (the caller's own)
+PUT    /api/request-drafts/{draft_id}                requests.create -  # wire-previews (the caller's own)
+DELETE /api/request-drafts/{draft_id}                requests.create -  # wire-previews (the caller's own)
 POST   /api/role-requests                            requests.create -  # issue #161 (others: requests.create_for_others in the handler)
 GET    /api/role-requests                            requests.create -  # issue #161 (scope=pending|all: requests.decide or graph.read)
 POST   /api/role-requests/{request_id}/approve       requests.decide STEP_UP_POLICY  # issue #161

@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Layers, Minus, Plus, Search, ShieldAlert, ShoppingCart, Timer, X } from "lucide-react";
-import { BusinessRole, CatalogView, ConnectorRow, Group, IdentityRow, Risk, RolesView, SimResult, api, roles as roleApi, simulate, submitRequest, useApi } from "../../api";
-import { usePersona } from "../../app/persona";
+import { BusinessRole, CatalogView, ConnectorRow, Group, IdentityRow, DraftItem, RequestDraft, Risk, RolesView, SimResult, api, draftPath, requestDrafts, roles as roleApi, simulate, submitRequest, useApi } from "../../api";
 import { Badge, Button, Callout, EmptyState, FilterChips, Loading, Page, Segmented, Skeleton, useToast } from "../../components";
-import { RequestTarget, mockRequests, useMockState } from "../../mocks";
+
+/** What a catalog card stands for: one group (an entitlement) or one business role. */
+type RequestTarget = { kind: "group"; groupId: number; name: string; system: string; privileged: boolean; jit: boolean } | { kind: "role"; roleId: string; name: string };
 
 type CatalogKind = "all" | "role" | "entitlement" | "privileged";
 type Who = "me" | "other" | "many";
@@ -130,7 +131,6 @@ function RiskPreview({ beneficiaries, cart, groups }: { beneficiaries: { id: num
 
 export function RequestAccess() {
   const [params, setParams] = useSearchParams();
-  const { actor } = usePersona();
   const toast = useToast();
   const nav = useNavigate();
   const { items: catalog, view, error: catalogError } = useCatalog();
@@ -169,23 +169,27 @@ export function RequestAccess() {
   }, [addParam, catalog]);
 
   // resume a saved draft (?draft=id)
-  const mock = useMockState();
   const draftParam = params.get("draft");
+  const { data: draft, error: draftError } = useApi<RequestDraft>(draftParam ? draftPath(draftParam) : null);
   useEffect(() => {
-    if (!draftParam || !catalog) return;
-    const d = mock.requests.find((r) => r.id === draftParam);
-    if (!d) return;
-    const key = (t: RequestTarget) => (t.kind === "group" ? `g${t.groupId}` : t.roleId);
-    setCart(catalog.filter((c) => d.items.some((t) => key(t) === c.key)));
-    setJustification(d.justification);
-    setDuration(d.durationHours);
-    setDraftId(d.id);
-    if (me && !(d.beneficiaries.length === 1 && d.beneficiaries[0].id === me.id)) {
-      setWho(d.beneficiaries.length > 1 ? "many" : "other");
-      setOthers(d.beneficiaries.map((b) => b.id));
+    if (draftError) toast(`That draft couldn't be opened: ${draftError.message}`, { kind: "error" });
+  }, [draftError]);
+  useEffect(() => {
+    if (!draft || !catalog || draft.id !== draftParam) return;
+    const key = (t: DraftItem) => (t.kind === "group" ? `g${t.group_id}` : t.role_id);
+    // an item that is no longer requestable is not put back in the cart
+    setCart(catalog.filter((c) => draft.items.some((t) => key(t) === c.key)));
+    setJustification(draft.justification);
+    setDuration(draft.duration_hours);
+    setDraftId(draft.id);
+    if (me && !(draft.beneficiaries.length === 1 && draft.beneficiaries[0].id === me.id)) {
+      setWho(draft.beneficiaries.length > 1 ? "many" : "other");
+      setOthers(draft.beneficiaries.map((b) => b.id));
     }
+    const gone = draft.unavailable + draft.items.filter((t) => !catalog.some((c) => c.key === key(t))).length;
+    if (gone > 0) toast(`${gone} item${gone === 1 ? "" : "s"} or ${gone === 1 ? "person" : "people"} in this draft ${gone === 1 ? "is" : "are"} no longer available and ${gone === 1 ? "was" : "were"} left out.`, { kind: "info" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draftParam, catalog]);
+  }, [draft, catalog]);
 
   // the longest duration every item in the cart allows (null: no limit)
   const maxHours = cart.reduce<number | null>((m, c) => (c.maxHours == null ? m : m == null ? c.maxHours : Math.min(m, c.maxHours)), null);
@@ -214,20 +218,21 @@ export function RequestAccess() {
   const inCart = (c: CatalogItem) => cart.some((x) => x.key === c.key);
   const toggle = (c: CatalogItem) => setCart((xs) => (inCart(c) ? xs.filter((x) => x.key !== c.key) : [...xs, c]));
 
-  const payload = () => ({
-    id: draftId,
-    requester: actor,
-    beneficiaries,
-    items: cart.map((c) => c.target),
-    durationHours: duration,
-    justification,
-    kind: "grant" as const,
+  const draftInput = () => ({
+    beneficiary_ids: beneficiaries.map((b) => b.id),
+    items: cart.map((c) => (c.target.kind === "group" ? { kind: "group" as const, group_id: c.target.groupId } : { kind: "role" as const, role_id: c.target.roleId })),
+    duration_hours: duration,
+    justification: justification.trim(),
   });
 
-  const saveDraft = () => {
-    const d = mockRequests.saveDraft(payload());
-    setDraftId(d.id);
-    toast("Draft saved. Find it under Requests.", { action: { label: "Open", run: () => nav("/access/requests?tab=drafts") } });
+  const saveDraft = async () => {
+    try {
+      const d = await requestDrafts.save(draftInput(), draftId);
+      setDraftId(d.id);
+      toast("Draft saved. Find it under Requests.", { action: { label: "Open", run: () => nav("/access/requests?tab=drafts") } });
+    } catch (e: any) {
+      toast(`Couldn't save the draft: ${e.message}`, { kind: "error" });
+    }
   };
 
   const submit = async () => {
@@ -252,7 +257,7 @@ export function RequestAccess() {
           n++;
         }
       }
-      if (draftId) mockRequests.remove(draftId);
+      if (draftId) await requestDrafts.remove(draftId).catch(() => undefined); // the request is in; a draft left behind is harmless
       toast(`Submitted ${n} request${n === 1 ? "" : "s"}. Approvers can see ${n === 1 ? "it" : "them"} now.`);
       setCart([]);
       setJustification("");

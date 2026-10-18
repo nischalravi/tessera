@@ -212,6 +212,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if strings.HasPrefix(rt.Pattern, "/api/removal-requests/{request_id}") {
 			continue // TestRemovalAPI_StepUpAndCrossTenant (a UUID, not a fixture id)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/request-drafts/{draft_id}") {
+			continue // TestRequestDraftsAPI (a UUID, private to its user)
+		}
 		if strings.HasPrefix(rt.Pattern, "/api/requests/{request_id}") {
 			continue // TestRequestsAPI_CrossTenant (a UUID, not a fixture id)
 		}
@@ -346,6 +349,9 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		}
 		if strings.HasPrefix(path, "/api/groups/") && strings.Contains(path, "{") {
 			continue // TestGroupsTenantIsolation (UUIDs, not fixture ids)
+		}
+		if path == "/api/request-drafts/{draft_id}" {
+			continue // TestRequestDraftsAPI (a UUID, private to its user)
 		}
 		if strings.Contains(path, "{") {
 			v, ok := values[path]
