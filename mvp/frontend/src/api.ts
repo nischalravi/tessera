@@ -897,6 +897,29 @@ export const approveRequest = (id: string, reason?: string) => line(id, "approve
 export const denyRequest = (id: string, reason: string) => line(id, "deny", { reason });
 export const cancelRequest = (id: string) => line(id, "cancel");
 export const removeRequest = (id: string, reason?: string) => line(id, "remove", reason ? { reason } : {});
+/** Organizations (Directory > Organizations): read-only, derived from the departments in the HR data. */
+export interface OrgPerson { id: number; name: string; title: string | null; status: string }
+export interface OrgRow {
+  id: string;
+  name: string;
+  kind: "tenant" | "department";
+  parent_id: string | null;
+  /** people in it (the root counts everyone); active is the part who are active */
+  members: number;
+  active: number;
+  children: number;
+  /** derived: the person at the top of the department's reporting lines who leads others in it */
+  owner: OrgPerson | null;
+}
+export interface OrgDetail extends OrgRow {
+  parent: OrgRow | null;
+  owners: OrgPerson[];
+  child_orgs: OrgRow[];
+  people: (OrgPerson & { manager: OrgPerson | null; email: string | null })[];
+}
+export const orgsPath = "/orgs";
+export const orgPath = (id: string) => `${orgsPath}/${encodeURIComponent(id)}`;
+
 /** A saved, unsubmitted request (Access > Request access > Save draft), private to its user. It never submits by itself. */
 export type DraftItem =
   | { kind: "group"; group_id: number; name: string; system: string; privileged: boolean }

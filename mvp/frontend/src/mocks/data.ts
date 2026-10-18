@@ -1,16 +1,4 @@
-import type { AdminSection, DelegationItem, OrgUnit, Workflow } from "./types";
-
-export const ORGS: OrgUnit[] = [
-  { id: "org-root", name: "Larkspur Labs", parent: null, department: null, owner: "Rosalind Haverford", costCenter: "CC-1000" },
-  { id: "org-exec", name: "Executive", parent: "org-root", department: "Executive", owner: "Rosalind Haverford", costCenter: "CC-1010" },
-  { id: "org-eng", name: "Engineering", parent: "org-root", department: "Engineering", owner: "Caspian Arkwright", costCenter: "CC-2000" },
-  { id: "org-data", name: "Data", parent: "org-root", department: "Data", owner: "Sana Iyer", costCenter: "CC-2100" },
-  { id: "org-sec", name: "Security", parent: "org-root", department: "Security", owner: "Thandiwe Mokoena", costCenter: "CC-2200" },
-  { id: "org-fin", name: "Finance", parent: "org-root", department: "Finance", owner: "Beatrix Pemberton", costCenter: "CC-3000" },
-  { id: "org-sales", name: "Sales", parent: "org-root", department: "Sales", owner: "Yara Castellanos", costCenter: "CC-4000" },
-  { id: "org-support", name: "Support", parent: "org-root", department: "Support", owner: "Esme Thornbury", costCenter: "CC-4100" },
-  { id: "org-people", name: "People", parent: "org-root", department: "People", owner: "Mireille Delacroix", costCenter: "CC-5000" },
-];
+import type { AdminSection, DelegationItem, Workflow } from "./types";
 
 export const WORKFLOWS: Workflow[] = [
   { id: "wf-low", name: "Low-risk request", trigger: "Access request, risk low", steps: ["Manager approves", "Auto-provision", "Verify by re-aggregation"], appliesTo: "Non-privileged groups and roles", enabled: true, sla: "2 business days" },

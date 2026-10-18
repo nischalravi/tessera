@@ -6,16 +6,6 @@
  * src/api.ts that returns the same type, and remove the badge.
  */
 
-export interface OrgUnit {
-  id: string;
-  name: string;
-  parent: string | null;
-  /** Matches identity.department for membership counts. */
-  department: string | null;
-  owner: string;
-  costCenter: string;
-}
-
 export interface Workflow {
   id: string;
   name: string;

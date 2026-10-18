@@ -195,6 +195,7 @@ func New(cfg Config) *Server {
 	s.registerRequestRoutes()
 	s.registerRemovalRoutes()
 	s.registerRequestDraftRoutes()
+	s.registerOrgRoutes()
 	s.registerRoleRoutes()
 	s.registerAbacRoutes()
 	s.registerLifecycleRoutes()

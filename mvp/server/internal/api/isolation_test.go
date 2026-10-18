@@ -16,6 +16,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
+	"github.com/nischalravi/tessera/mvp/server/internal/orgs"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -212,6 +213,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if strings.HasPrefix(rt.Pattern, "/api/removal-requests/{request_id}") {
 			continue // TestRemovalAPI_StepUpAndCrossTenant (a UUID, not a fixture id)
 		}
+		if rt.Pattern == "/api/orgs/{org_id}" {
+			continue // TestOrgsAPI (ids are derived from department names, not fixture ids)
+		}
 		if strings.HasPrefix(rt.Pattern, "/api/request-drafts/{draft_id}") {
 			continue // TestRequestDraftsAPI (a UUID, private to its user)
 		}
@@ -334,6 +338,7 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		"/api/email/messages/{message_id}":           seedEmailMessage(t, f, f.B, store.EmailDeferred),
 		"/api/identities/{identity_id}/containment":  fmt.Sprint(b["alice"]),
 		"/api/identities/{identity_id}/disables":     fmt.Sprint(b["alice"]),
+		"/api/orgs/{org_id}":                         orgs.RootID,
 	}
 	checked := 0
 	for _, rt := range srv.Routes() {

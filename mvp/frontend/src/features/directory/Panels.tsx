@@ -7,7 +7,7 @@ import { Link, useNavigate } from "react-router-dom";
 import {
   Ban, ClipboardCheck, ExternalLink, Network, Pencil, RefreshCw, RotateCcw, Settings, ShieldAlert, ShieldCheck, ShoppingCart, Timer, UserCheck, UserRound,
 } from "lucide-react";
-import { AccountRow, ConnectorRow, Group, IdentityDetail, IdentityRow, ResourceRow, RolesView, Violation, ago, api, fmtDay, invalidLink, isNumericId, relTime, useApi } from "../../api";
+import { AccountRow, ConnectorRow, Group, IdentityDetail, OrgDetail, ResourceRow, RolesView, Violation, ago, api, fmtDay, invalidLink, isNumericId, orgPath, relTime, useApi } from "../../api";
 import { useIdentityActions } from "../../app/actions";
 import { usePersona } from "../../app/persona";
 import {
@@ -15,7 +15,7 @@ import {
 } from "../../components";
 import { AffiliationsSection, IdentifiersSection } from "./affiliations";
 import { LifecycleSection } from "../lifecycle/parts";
-import { ORGS, OrgUnit, mockObjects } from "../../mocks";
+import { mockObjects } from "../../mocks";
 import { useSession } from "../../app/auth";
 import { ContainDialog, ContainmentRetries } from "./containment";
 import { RevokeDrawer } from "./IdentityPage";
@@ -435,17 +435,18 @@ export function AppPanel({ c, onClose }: { c: ConnectorRow; onClose: () => void 
 }
 
 // ------------------------------------------------------------------ org
-export function OrgPanel({ org, onClose }: { org: OrgUnit; onClose: () => void }) {
-  const { data: people, error } = useApi<IdentityRow[]>("/identities?type=human");
+export function OrgPanel({ id, onClose }: { id: string; onClose: () => void }) {
+  const { data: org, error, reload } = useApi<OrgDetail>(orgPath(id));
   const nav = useNavigate();
-  const [tab, setTab] = useTab<"overview" | "people">("overview", org.id);
-  const members = (people ?? []).filter((p) => !org.department || p.department === org.department);
-  const active = members.filter((m) => m.status === "active");
-  const parent = ORGS.find((o) => o.id === org.parent);
+  const [tab, setTab] = useTab<"overview" | "people">("overview", id);
+  if (!org || org.id !== id) {
+    return <SidePanel title={error ? "Couldn't load organization" : "Loading…"} onClose={onClose} fullHref={`/directory/orgs/${id}`}><Loading error={error} what="organization" kind="block" onRetry={reload} /></SidePanel>;
+  }
+  const active = org.people.filter((m) => m.status === "active");
   return (
     <SidePanel
       title={org.name}
-      sub={<><PreviewBadge /><span>{org.costCenter}</span></>}
+      sub={<span>{org.kind === "tenant" ? "Company" : "Department"}</span>}
       onClose={onClose}
       fullHref={`/directory/orgs/${org.id}`}
       commands={
@@ -454,24 +455,23 @@ export function OrgPanel({ org, onClose }: { org: OrgUnit; onClose: () => void }
           items={[{ label: "Request access for everyone", icon: <ShoppingCart size={I} />, disabled: !active.length, onClick: () => nav(`/access/request?for=${active.map((m) => m.id).join(",")}`) }]}
         />
       }
-      tabs={<Tabs label="Organization details" value={tab} onChange={setTab} tabs={[{ id: "overview", label: "Overview" }, { id: "people", label: `People (${people ? members.length : "…"})` }]} />}
+      tabs={<Tabs label="Organization details" value={tab} onChange={setTab} tabs={[{ id: "overview", label: "Overview" }, { id: "people", label: `People (${org.people.length})` }]} />}
     >
       {tab === "overview" ? (
         <dl className="kv">
-          <dt>Owner</dt><dd>{org.owner}</dd>
-          <dt>Cost center</dt><dd className="sys">{org.costCenter}</dd>
-          <dt>Part of</dt><dd>{parent ? parent.name : "Top level"}</dd>
-          <dt>Workday department</dt><dd>{org.department ?? "Everyone"}</dd>
-          <dt>Active people</dt><dd className="tnum">{people ? active.length : "…"}</dd>
+          <dt>Owners</dt><dd>{org.owners.length ? org.owners.map((o) => o.name).join(", ") : <span className="faint">None found</span>}</dd>
+          <dt>Part of</dt><dd>{org.parent ? org.parent.name : "Top level"}</dd>
+          {org.child_orgs.length > 0 && <><dt>Child organizations</dt><dd>{org.child_orgs.map((c) => c.name).join(", ")}</dd></>}
+          <dt>Active people</dt><dd className="tnum">{org.active}</dd>
+          <dt>All people</dt><dd className="tnum">{org.members}</dd>
         </dl>
-      ) : !people ? <Loading error={error} /> : (
+      ) : (
         <table>
           <tbody>
-            {members.map((m) => (
+            {org.people.map((m) => (
               <tr key={m.id} className="click" tabIndex={0} onClick={() => nav(`/directory/people?selected=${m.id}`)} onKeyDown={(e) => e.key === "Enter" && nav(`/directory/people?selected=${m.id}`)}>
                 <td>{m.name}<div className="xs faint">{m.title}</div></td>
                 <td><Status s={m.status} /></td>
-                <td style={{ textAlign: "right" }}><RiskPill score={m.risk} /></td>
               </tr>
             ))}
           </tbody>

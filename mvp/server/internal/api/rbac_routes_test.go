@@ -122,6 +122,8 @@ GET    /api/removal-requests                         requests.create -  # wire-p
 POST   /api/removal-requests/{request_id}/approve    requests.create STEP_UP_POLICY  # wire-previews (the manager, a delegate or requests.decide: the handler checks)
 POST   /api/removal-requests/{request_id}/deny       requests.create -  # wire-previews
 POST   /api/removal-requests/{request_id}/cancel     requests.create -  # wire-previews (the requester)
+GET    /api/orgs                                     graph.read      -  # wire-previews (derived from departments)
+GET    /api/orgs/{org_id}                            graph.read      -  # wire-previews
 GET    /api/request-drafts                           requests.create -  # wire-previews (the caller's own drafts)
 POST   /api/request-drafts                           requests.create -  # wire-previews
 GET    /api/request-drafts/{draft_id}                requests.create -  # wire-previews (the caller's own)

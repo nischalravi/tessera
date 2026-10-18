@@ -1,6 +1,6 @@
 /**
  * Preview mock layer. Typed stand-ins for backend capabilities that do not exist yet:
- * organizations, workflows, non-JIT access requests, delegations,
+ * workflows, non-JIT access requests, delegations,
  * disable / reset-password actions and admin settings.
  *
  * State lives in this browser only (localStorage) so the demo feels real across reloads.
@@ -8,11 +8,11 @@
  */
 import { useSyncExternalStore } from "react";
 import { store } from "../app/storage";
-import { ADMIN_SECTIONS, DELEGATIONS, ORGS, WORKFLOWS } from "./data";
+import { ADMIN_SECTIONS, DELEGATIONS, WORKFLOWS } from "./data";
 import type { AccessRequestDraft, DelegationItem } from "./types";
 
 export * from "./types";
-export { ADMIN_SECTIONS, ORGS, WORKFLOWS };
+export { ADMIN_SECTIONS, WORKFLOWS };
 
 const delay = <T,>(v: T, ms = 350) => new Promise<T>((r) => setTimeout(() => r(v), ms));
 
