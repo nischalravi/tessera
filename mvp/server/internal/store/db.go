@@ -45,9 +45,11 @@ import (
 	"net/url"
 	"slices"
 	"sync"
+	"time"
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver
 
+	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 )
 
@@ -101,6 +103,10 @@ var tables = []string{
 	"stg_identities", "stg_accounts", "stg_groups", "stg_memberships", "stg_attr_stats",
 	// scheduled access reviews (schema/0316_review_schedules.sql)
 	"review_templates", "review_launches",
+	// job run history (schema/0281_job_runs.sql)
+	"job_runs",
+	// closed-loop provisioning (schema/0282-0283)
+	"provisioning_targets", "provisioning_ops", "provisioning_findings",
 	// sealed connection credentials (schema/0205)
 	"connection_secrets",
 	// account correlation (schema/0204_correlation.sql)
@@ -126,6 +132,14 @@ var tables = []string{
 	"intake_records", "sponsorships", "sponsorship_events",
 	// identity containment (schema/0205_containment.sql)
 	"containment_credentials", "containment_retries",
+	// identity disable / enable (schema/0310_identity_disables.sql)
+	"identity_disables", "identity_disable_accounts",
+	// removal requests (schema/0311_removal_requests.sql)
+	"removal_requests",
+	// request access drafts (schema/0312_request_drafts.sql)
+	"request_drafts",
+	// configuration transport (schema/0211_config_transport.sql)
+	"config_signing_keys", "config_trusted_signers", "config_imports",
 	// native groups (schema/0280_groups.sql); the engine tables stay empty until GR-2
 	"grp_folders", "grp_name_aliases", "grp_groups", "grp_composite_factors", "grp_lists", "grp_direct_memberships",
 	"grp_deps", "grp_closure", "grp_levels", "grp_effective", "grp_engine_queue",
@@ -155,7 +169,9 @@ func (d *DB) writeLock() func() {
 	if d.d == dialectPostgres {
 		return func() {}
 	}
+	start := time.Now()
 	d.mu.Lock()
+	obs.DBLockWait.Observe(time.Since(start).Seconds())
 	return d.mu.Unlock
 }
 
@@ -216,6 +232,26 @@ func (d *DB) Checkpoint(ctx context.Context) error {
 	}
 	_, err := d.sql.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)")
 	return err
+}
+
+// ErrSnapshotUnsupported is returned by Snapshot on Postgres: tessera backup
+// is SQLite-only for now (back up Postgres with pg_dump or the managed
+// service's snapshots; see docs/runbooks/disaster-recovery.md).
+var ErrSnapshotUnsupported = errors.New("store: snapshot is SQLite-only; back up Postgres with pg_dump or your provider's snapshots")
+
+// IsPostgres reports whether the store runs on Postgres.
+func (d *DB) IsPostgres() bool { return d.d == dialectPostgres }
+
+// Snapshot writes a transactionally consistent copy of the whole database to
+// path with VACUUM INTO, while the server keeps serving. path must not exist.
+func (d *DB) Snapshot(ctx context.Context, path string) error {
+	if d.d == dialectPostgres {
+		return ErrSnapshotUnsupported
+	}
+	if _, err := d.sql.ExecContext(ctx, "VACUUM INTO ?", path); err != nil {
+		return fmt.Errorf("store: snapshot: %w", err)
+	}
+	return nil
 }
 
 // Migrate creates the schema and the reserved _platform tenant; drop=true
@@ -317,6 +353,12 @@ func (d *DB) inTenant(ctx context.Context, t tenancy.ID, readOnly bool, fn func(
 // inTenantOn is inTenant on a given pool (the application pool, or the owner
 // pool for the test-only audit tamper handle).
 func (d *DB) inTenantOn(ctx context.Context, pool *sql.DB, t tenancy.ID, readOnly bool, fn func(*TenantTx) error) (err error) {
+	kind := "tenant_write"
+	if readOnly {
+		kind = "tenant_read"
+	}
+	start := time.Now()
+	defer func() { d.observeTx(kind, start, err) }() // runs after the commit below, so err is final
 	raw, err := pool.BeginTx(ctx, &sql.TxOptions{ReadOnly: readOnly})
 	if err != nil {
 		return fmt.Errorf("store: begin: %w", err)
@@ -383,6 +425,8 @@ func (d *DB) InSystem(ctx context.Context, reason string, fn func(*SystemTx) err
 }
 
 func (d *DB) inSystemLocked(ctx context.Context, reason string, fn func(*SystemTx) error) (err error) {
+	start := time.Now()
+	defer func() { d.observeTx("system_write", start, err) }()
 	raw, err := d.sql.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin: %w", err)
@@ -409,6 +453,8 @@ func (d *DB) ReadSystem(ctx context.Context, reason string, fn func(*SystemTx) e
 	if reason == "" {
 		return errors.New("store: ReadSystem needs a reason")
 	}
+	start := time.Now()
+	defer func() { d.observeTx("system_read", start, err) }()
 	raw, err := d.sql.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return fmt.Errorf("store: begin: %w", err)

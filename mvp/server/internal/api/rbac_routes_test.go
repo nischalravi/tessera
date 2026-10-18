@@ -121,6 +121,19 @@ POST   /api/abac/policies/{policy_id}/retire         roles.manage    STEP_UP_POL
 POST   /api/abac/simulate                            graph.read      -  # issue #162
 GET    /api/abac/bindings                            graph.read      -  # issue #162
 PUT    /api/catalog/items/{group_id}/policy          catalog.manage  STEP_UP_POLICY  # issue #162
+POST   /api/removal-requests                         requests.create -  # wire-previews (others: requests.create_for_others in the handler)
+GET    /api/removal-requests                         requests.create -  # wire-previews (scope=pending|all: requests.decide or graph.read; approvals: what you may decide)
+POST   /api/removal-requests/{request_id}/approve    requests.create STEP_UP_POLICY  # wire-previews (the manager, a delegate or requests.decide: the handler checks)
+POST   /api/removal-requests/{request_id}/deny       requests.create -  # wire-previews
+POST   /api/removal-requests/{request_id}/cancel     requests.create -  # wire-previews (the requester)
+GET    /api/activity                                 auth.self       -  # wire-previews (the caller's own ledger events)
+GET    /api/orgs                                     graph.read      -  # wire-previews (derived from departments)
+GET    /api/orgs/{org_id}                            graph.read      -  # wire-previews
+GET    /api/request-drafts                           requests.create -  # wire-previews (the caller's own drafts)
+POST   /api/request-drafts                           requests.create -  # wire-previews
+GET    /api/request-drafts/{draft_id}                requests.create -  # wire-previews (the caller's own)
+PUT    /api/request-drafts/{draft_id}                requests.create -  # wire-previews (the caller's own)
+DELETE /api/request-drafts/{draft_id}                requests.create -  # wire-previews (the caller's own)
 POST   /api/role-requests                            requests.create -  # issue #161 (others: requests.create_for_others in the handler)
 GET    /api/role-requests                            requests.create -  # issue #161 (scope=pending|all: requests.decide or graph.read)
 POST   /api/role-requests/{request_id}/approve       requests.decide STEP_UP_POLICY  # issue #161
@@ -157,6 +170,9 @@ GET    /api/email/messages/{message_id}              email.read      -  # issue 
 POST   /api/email/messages/{message_id}/retry        email.manage    -  # issue #189
 POST   /api/identities/{identity_id}/contain         identities.contain STEP_UP_POLICY  # issue #106
 GET    /api/identities/{identity_id}/containment     graph.read      -  # issue #106
+POST   /api/identities/{identity_id}/disable         identities.contain STEP_UP_POLICY  # wire-previews: containment, then disabled
+POST   /api/identities/{identity_id}/enable          identities.contain STEP_UP_POLICY  # wire-previews: restores what Disable disabled
+GET    /api/identities/{identity_id}/disables        graph.read      -  # wire-previews
 POST   /api/containment-retries/{retry_id}/retry-now identities.contain STEP_UP_POLICY  # issue #106
 PUT    /api/connections/{id}/containment-credential  connections.manage STEP_UP_POLICY  # issue #106
 POST   /api/connections/{id}/validate                connections.manage -
@@ -168,6 +184,26 @@ POST   /api/connections/{id}/findings/{fid}/accept   connections.manage -
 GET    /api/connections/{id}/health                  connections.read   -
 GET    /api/insights/deployment-health               connections.read   -
 POST   /api/insights/deployment-health/rerun         connections.manage -
+GET    /api/jobs                                     jobs.read       -  # issue #172
+GET    /api/jobs/{job_id}                            jobs.read       -  #
+POST   /api/jobs/{job_id}/retry                      jobs.read       -  # (the replayed route's own permission and step-up apply)
+GET    /api/provisioning/targets                     provisioning.read   -  # issue #103
+PUT    /api/provisioning/targets/{id}                connections.manage  STEP_UP_POLICY
+DELETE /api/provisioning/targets/{id}                connections.manage  STEP_UP_POLICY
+GET    /api/provisioning/ops                         provisioning.read   -
+GET    /api/provisioning/ops/{op_id}                 provisioning.read   -
+POST   /api/provisioning/ops/{op_id}/retry           provisioning.manage -
+POST   /api/provisioning/ops/{op_id}/cancel          provisioning.manage -
+POST   /api/provisioning/run                         provisioning.manage -
+GET    /api/provisioning/findings                    provisioning.read   -
+GET    /api/config/signing-key                       admin.read      -  # issue #170
+POST   /api/config/export                            config.transport -  #
+GET    /api/config/trusted-signers                   admin.read      -  #
+POST   /api/config/trusted-signers                   config.transport STEP_UP_POLICY #
+DELETE /api/config/trusted-signers/{kid}             config.transport STEP_UP_POLICY #
+POST   /api/config/import/plan                       config.transport -  #
+POST   /api/config/import/apply                      config.transport STEP_UP_POLICY #
+GET    /api/config/imports                           admin.read      -  #
 GET    /api/groups/folders                           groups.admin    -  # issue #44
 POST   /api/groups/folders                           groups.admin    -  # issue #44
 GET    /api/groups/folders/{id}                      groups.admin    -  # issue #44
@@ -210,6 +246,7 @@ GET    /api/admin/notifications                      admin.read      -  # issue 
 GET    /api/admin/recovery                           admin.read      -  # issue #16
 POST   /api/admin/recovery/{recovery_id}/cancel      admin.change.request -  # issue #16
 GET    /api/admin/api-clients                        admin.read      -  # issue #16
+GET    /api/admin/platform-health                    admin.read      -  # issue #303
 `
 
 type designRoute struct {

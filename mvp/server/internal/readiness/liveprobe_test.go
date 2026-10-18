@@ -18,7 +18,6 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
-	"github.com/nischalravi/tessera/mvp/server/internal/connectors/ldap"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 	"github.com/nischalravi/tessera/mvp/server/internal/safedial"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
@@ -170,7 +169,7 @@ func TestLive_ProberFor(t *testing.T) {
 		t.Errorf("demo AD: %T %v", p, err)
 	}
 	p, err = prober(ldapID, true)
-	if _, ok := p.(*ldap.Prober); !ok || err != nil {
+	if _, ok := p.(meteredProber); !ok || err != nil {
 		t.Errorf("ldap: %T %v", p, err)
 	}
 	// No credential loaded: fail closed, never a simulated prober for a real type.

@@ -26,11 +26,15 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/sponsorship"
+	"github.com/nischalravi/tessera/mvp/server/internal/health"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
+	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/lifecycle"
+	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
+	"github.com/nischalravi/tessera/mvp/server/internal/provision"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 	"github.com/nischalravi/tessera/mvp/server/internal/requests"
@@ -39,6 +43,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
+	"github.com/nischalravi/tessera/mvp/server/internal/transport"
 )
 
 // DefaultMaxBodyBytes caps request bodies (every request body is a small JSON object).
@@ -92,7 +97,12 @@ type Config struct {
 	AuditAnchor string
 	// PublicURL is TESSERA_PUBLIC_URL: the base of the OIDC redirect URIs.
 	PublicURL string
-	// Sealer opens connection client secrets and seals PKCE verifiers.
+	// Sealer opens connection client secrets, seals PKCE verifiers, provisioning
+	// target credentials and the config bundle signing keys under the KEK.
+	// Nil (tests only): sign-in with secrets and config export are unavailable,
+	// and provisioning uses a key generated for this process, so its
+	// credentials cannot be read after a restart. cmd/tessera always passes
+	// the real one.
 	Sealer *seal.Sealer
 	// OutboundHTTP is the safehttp client for IdP discovery, JWKS and token
 	// requests. Nil: browser sign-in through an IdP is unavailable.
@@ -103,6 +113,14 @@ type Config struct {
 	// TrustedProxies (TESSERA_TRUSTED_PROXIES) are the peers whose
 	// X-Forwarded-For the rate limiter believes.
 	TrustedProxies []netip.Prefix
+	// Outbound is the safehttp client the provisioning worker sends through.
+	// Nil: no outbound client, so every provisioning call fails (as with
+	// Containment).
+	Outbound *http.Client
+	// FakeTargetURL is the base URL of the in-process fake SCIM target
+	// (TESSERA_DEV_FAKE_TARGET, dev only). Empty: the "fake" target kind is
+	// refused.
+	FakeTargetURL string
 	// EmailMode is the email delivery (config.MailOff, MailDev or MailSMTP):
 	// the preferences page says whether the email channels do anything.
 	EmailMode string
@@ -113,6 +131,9 @@ type Config struct {
 	// grants). Nil: a service with no outbound client, so every containment
 	// step is a manual task.
 	Containment *containment.Service
+	// Health answers /readyz and the admin platform-health summary. Nil: a
+	// checker over Store and Sealer with the default loop-lag threshold.
+	Health *health.Checker
 	// AuditAppend overrides how the audit middleware writes http.request
 	// events (tests inject failures). Nil: the store.
 	AuditAppend func(ctx context.Context, t tenancy.ID, e store.AuditEvent) error
@@ -132,6 +153,8 @@ type Server struct {
 	oauth2 *oauth2rp.RP
 
 	readiness *readiness.Service
+	prov      *provision.Engine
+	provSeal  *seal.Sealer // cfg.Sealer, or a per-process key when it is nil
 	// containment is the kill switch (issue #106); never nil.
 	containment *containment.Service
 	// admin is the admin-change workflow (design §15); never nil.
@@ -172,8 +195,21 @@ func New(cfg Config) *Server {
 	if cfg.Containment.Clock == nil {
 		cfg.Containment.Clock = cfg.Clock
 	}
+	if cfg.Health == nil {
+		cfg.Health = health.New(cfg.Store, cfg.Sealer, nil, 0, cfg.Logger)
+	}
+	provSeal := cfg.Sealer
+	if provSeal == nil {
+		sealer, err := seal.New(seal.RandomBytes(seal.KeySize))
+		if err != nil {
+			panic(err)
+		}
+		provSeal = sealer
+	}
 	s := &Server{cfg: cfg, containment: cfg.Containment, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
-		limits: newLimiters(cfg.RateLimits)}
+		limits: newLimiters(cfg.RateLimits), provSeal: provSeal}
+	s.prov = &provision.Engine{DB: cfg.Store, Sealer: provSeal, HTTP: cfg.Outbound,
+		Clock: func() time.Time { return s.clock() }, Log: cfg.Logger.With("component", "provisioning")}
 	s.admin = &admin.Service{DB: cfg.Store, Clock: func() time.Time { return s.clock() }, Sealer: cfg.Sealer,
 		Prod: cfg.Env == "prod", Log: cfg.Logger}
 	s.guests = sponsorship.New(cfg.Identifiers)
@@ -195,6 +231,10 @@ func New(cfg Config) *Server {
 	s.registerCorrelationRoutes()
 	s.registerAffiliationRoutes()
 	s.registerRequestRoutes()
+	s.registerRemovalRoutes()
+	s.registerRequestDraftRoutes()
+	s.registerOrgRoutes()
+	s.registerActivityRoutes()
 	s.registerRoleRoutes()
 	s.registerAbacRoutes()
 	s.registerLifecycleRoutes()
@@ -204,12 +244,16 @@ func New(cfg Config) *Server {
 	s.registerContainmentRoutes()
 	s.registerGroupsFolderRoutes()
 	s.registerReadinessRoutes()
+	s.registerJobRoutes()
+	s.registerProvisioningRoutes()
+	s.registerTransportRoutes()
 	s.registerAuthRoutes()
 	s.registerLoginRoutes()
 	s.registerSAMLRoutes()
 	s.registerOAuth2Routes()
 	s.registerStepUpRoutes()
 	s.registerAdminRoutes()
+	s.registerOpsRoutes()
 	s.checkPublicRoutes()
 	return s
 }
@@ -242,7 +286,10 @@ func (s *Server) Handler() http.Handler {
 	// is written to the ledger.
 	h = s.rateLimit(h)
 	h = s.logRequests(h)
-	return s.securityHeaders(h)
+	h = s.securityHeaders(h)
+	// The probes /livez and /readyz are answered before the API pipeline
+	// (rate limit, audit, sessions): see probes. Metrics wrap everything.
+	return obs.Instrument(s.probes(h))
 }
 
 // streamDeadlineKey carries a streamed route's deadline to dispatch.
@@ -288,6 +335,10 @@ func (s *Server) RunReviewScheduler(ctx context.Context, interval time.Duration)
 	}
 }
 
+// SweeperLoops are the loop names RunSweeper reports to obs.DefaultLoops.
+var SweeperLoops = []string{"jit_sweep", "request_sweep", "sponsorship_sweep", "lifecycle_sweep", "containment_retries",
+	"admin_change_sweep"}
+
 // RunSweeper expires JIT grants, closes due request lines and ends due
 // lifecycle terms (warnings first) of every active tenant, each in its own
 // tenant transaction, every interval until ctx is done. A failure in one
@@ -296,28 +347,46 @@ func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	ctx = audit.WithSystemActor(ctx, "jit.sweeper") // jit.expire events name the job
+	// Each step is its own tracked loop (obs.DefaultLoops): a step that stalls or
+	// keeps failing shows as lag in /metrics, /readyz and Admin -> Platform health.
+	loops := obs.DefaultLoops
+	for _, name := range SweeperLoops {
+		loops.Register(name, interval, true)
+	}
+	step := func(name, what string, fn func() error) {
+		if err := loops.Run(name, fn); err != nil && ctx.Err() == nil {
+			s.log.Error(what+" failed", "err", err)
+		}
+	}
+	var maintained time.Time
 	for {
-		if _, err := jit.SweepAll(ctx, s.store, s.clock()); err != nil && ctx.Err() == nil {
-			s.log.Error("jit sweep failed", "err", err)
+		// sweepAndRecord logs its own failures and records the job runs
+		step("jit_sweep", "jit sweep", func() error { s.sweepAndRecord(ctx); return nil })
+		if now := s.clock(); now.Sub(maintained) >= jobMaintainGap {
+			if err := jobs.Maintain(ctx, s.store, now, jobStaleAfter, jobRetention); err != nil && ctx.Err() == nil {
+				s.log.Error("job history upkeep failed", "err", err)
+			}
+			maintained = now
 		}
-		if err := requests.SweepAll(audit.WithSystemActor(ctx, requests.Sweeper), s.store, s.clock()); err != nil && ctx.Err() == nil {
-			s.log.Error("request sweep failed", "err", err)
-		}
+		step("request_sweep", "request sweep", func() error {
+			return requests.SweepAll(audit.WithSystemActor(ctx, requests.Sweeper), s.store, s.clock())
+		})
 		// sponsorships first: the last one to end ends the person, the lifecycle sweep then has nothing left
-		if err := s.guests.SweepAll(audit.WithSystemActor(ctx, sponsorship.Sweeper), s.store, s.clock()); err != nil && ctx.Err() == nil {
-			s.log.Error("sponsorship sweep failed", "err", err)
-		}
-		if err := lifecycle.SweepAll(audit.WithSystemActor(ctx, lifecycle.Sweeper), s.store, s.containment, s.clock()); err != nil && ctx.Err() == nil {
-			s.log.Error("lifecycle sweep failed", "err", err)
-		}
-		if err := s.containment.SweepRetries(audit.WithSystemActor(ctx, "containment.sweeper"), s.store, "containment.sweeper"); err != nil && ctx.Err() == nil {
-			s.log.Error("containment retry sweep failed", "err", err)
-		}
+		step("sponsorship_sweep", "sponsorship sweep", func() error {
+			return s.guests.SweepAll(audit.WithSystemActor(ctx, sponsorship.Sweeper), s.store, s.clock())
+		})
+		step("lifecycle_sweep", "lifecycle sweep", func() error {
+			return lifecycle.SweepAll(audit.WithSystemActor(ctx, lifecycle.Sweeper), s.store, s.containment, s.clock())
+		})
+		step("containment_retries", "containment retry sweep", func() error {
+			return s.containment.SweepRetries(audit.WithSystemActor(ctx, "containment.sweeper"), s.store, "containment.sweeper")
+		})
 		// apply the admin changes whose cooling-off ended and expire the ones
 		// nobody approved in 72 hours (design §15.2)
-		if _, err := s.admin.Sweep(audit.WithSystemActor(ctx, "admin.sweeper")); err != nil && ctx.Err() == nil {
-			s.log.Error("admin change sweep failed", "err", err)
-		}
+		step("admin_change_sweep", "admin change sweep", func() error {
+			_, err := s.admin.Sweep(audit.WithSystemActor(ctx, "admin.sweeper"))
+			return err
+		})
 		select {
 		case <-ctx.Done():
 			return
@@ -393,6 +462,8 @@ type route struct {
 	// closed like a read when its http.request event cannot be written
 	// (audit.AnswersRead).
 	answersRead bool
+	// job: the route runs a job whose runs are recorded (jobs.go).
+	job *jobSpec
 }
 
 // handle registers a route with its declared requirement (design §12.4). A
@@ -451,6 +522,13 @@ func (s *Server) serve(rt *route, w http.ResponseWriter, r *http.Request, p *par
 	if pr, ok := auth.PrincipalFrom(r.Context()); ok {
 		t = pr.TenantID
 	}
+	if rt.job != nil && !t.IsZero() {
+		return s.serveJob(rt, w, r, p, t)
+	}
+	return s.serveTenant(rt, w, r, p, t)
+}
+
+func (s *Server) serveTenant(rt *route, w http.ResponseWriter, r *http.Request, p *params, t tenancy.ID) (any, error) {
 	ctx := r.Context()
 	if rt.tenant == phased {
 		if t.IsZero() {
@@ -559,6 +637,7 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	audit.SetRoute(r.Context(), rt.pattern, vars)
+	obs.SetRoute(r.Context(), rt.method+" "+rt.pattern) // the pattern, never the raw path: bounded metric labels
 	if rt.answersRead {
 		audit.AnswersRead(r.Context())
 	}
@@ -662,6 +741,7 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var he *httpError
 	var ve *validationError
 	var re *readiness.Error
+	var te *transport.Error
 	var dn denial
 	var ae *admin.Error
 	switch {
@@ -673,6 +753,8 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSON(w, ae.Status, ojson.Object{{Key: "error", Value: ae.Code}, {Key: "detail", Value: ae.Msg}})
 	case errors.As(err, &re):
 		writeJSON(w, re.Status, readinessErrorBody(re))
+	case errors.As(err, &te):
+		writeJSON(w, te.Status, map[string]any{"error": te.Code, "detail": te.Msg})
 	case errors.As(err, &he):
 		writeJSON(w, he.status, detail(he.msg))
 	case errors.As(err, &ve):
