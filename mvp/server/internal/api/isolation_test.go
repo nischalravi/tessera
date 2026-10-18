@@ -198,6 +198,12 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/api/audit/events/{event_id}/proof" {
 			continue // TestIsolation_AuditRoutes
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/jobs/{job_id}") {
+			continue // TestIsolation_JobRoutes (a UUID, not a fixture id)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/provisioning/") {
+			continue // TestIsolation_ProvisioningRoutes (UUIDs, not fixture ids)
+		}
 		if rt.Pattern == "/api/config/trusted-signers/{kid}" {
 			continue // TestIsolation_TrustedSignerScoped (a key id, not a fixture id)
 		}
@@ -306,6 +312,8 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 	sponsorships := seedSponsorships(t, f) // and A's sponsorship purpose
 	policyIDs := seedAbac(t, f)            // and A's policy name
 	values := map[string]string{
+		"/api/jobs/{job_id}":                         insertJobRun(t, f.DB, f.B.ID),
+		"/api/provisioning/ops/{op_id}":              insertProvOp(t, f.DB, f.B.ID, f.B.Refs["connection:ad"], "b-key"),
 		"/api/abac/policies/{policy_id}":             policyIDs[f.B.ID],
 		"/api/roles/{role_id}":                       roleIDs[f.B.ID],
 		"/api/roles/{role_id}/versions":              roleIDs[f.B.ID],

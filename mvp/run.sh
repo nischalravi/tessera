@@ -35,6 +35,9 @@ export TESSERA_DEV_IDP_URL="$DEVIDP_URL"
 export TESSERA_POLICY_DIR="${TESSERA_POLICY_DIR:-$SERVER/policies}"
 # local development: every API call needs a session; users sign in through the dev IdP
 export TESSERA_ENV="${TESSERA_ENV:-dev}"
+# dev only: an in-process fake SCIM target so Admin → Provisioning can be tried without a real
+# system (the API refuses it in production). TESSERA_DEV_FAKE_TARGET=0 turns it off.
+export TESSERA_DEV_FAKE_TARGET="${TESSERA_DEV_FAKE_TARGET:-1}"
 # the browser origin of the UI: the CSRF Origin check admits it
 export TESSERA_PUBLIC_URL="${TESSERA_PUBLIC_URL:-http://localhost:$UI_PORT}"
 

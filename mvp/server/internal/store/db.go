@@ -99,6 +99,10 @@ var tables = []string{
 	"connections", "connection_revisions", "readiness_check_runs", "readiness_item_states", "readiness_attestations",
 	"readiness_skips", "readiness_overlays", "readiness_check_results", "recon_runs", "recon_findings", "readiness_scores",
 	"stg_identities", "stg_accounts", "stg_groups", "stg_memberships", "stg_attr_stats",
+	// job run history (schema/0281_job_runs.sql)
+	"job_runs",
+	// closed-loop provisioning (schema/0282-0283)
+	"provisioning_targets", "provisioning_ops", "provisioning_findings",
 	// sealed connection credentials (schema/0205)
 	"connection_secrets",
 	// account correlation (schema/0204_correlation.sql)
