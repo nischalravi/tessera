@@ -619,3 +619,31 @@ DROP POLICY IF EXISTS tenant_isolation ON grp_engine_queue;
 CREATE POLICY tenant_isolation ON grp_engine_queue
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE identity_disables ENABLE ROW LEVEL SECURITY;
+ALTER TABLE identity_disables FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON identity_disables;
+CREATE POLICY tenant_isolation ON identity_disables
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE identity_disable_accounts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE identity_disable_accounts FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON identity_disable_accounts;
+CREATE POLICY tenant_isolation ON identity_disable_accounts
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE removal_requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE removal_requests FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON removal_requests;
+CREATE POLICY tenant_isolation ON removal_requests
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE request_drafts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE request_drafts FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON request_drafts;
+CREATE POLICY tenant_isolation ON request_drafts
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));

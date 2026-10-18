@@ -218,7 +218,7 @@ To point a local dev instance at a real LDAP or LLDAP server (for example an LLD
 `POST /api/reviews/items/{id}/decision` (a decision is final: repeating it is a 200 no-op, a different one is
 `409 review_item_decided` and an audited `review.decide.refused`) ·
 `GET|POST /api/hris/events` (422 for an unknown `identity_id`) · `GET /api/hris/events/{id}/plan` · `POST /api/hris/events/{id}/execute` ·
-`GET /api/jml/leaver-plan/{identity_id}` · `POST /api/identities/{id}/contain` (kill switch, see "Identity containment") ·
+`GET /api/jml/leaver-plan/{identity_id}` · `POST /api/identities/{id}/contain` (kill switch, see "Identity containment") · `POST /api/identities/{id}/disable|enable` ·
 `PUT /api/connections/{id}/containment-credential` · `GET /api/accounts[?system=]` ·
 `GET /api/audit[?limit=&before_seq=&action=&actor_id=&target_type=&target_id=&from=&to=&include_http=]` ·
 `GET /api/audit/events/{event_id}/proof` · `GET /api/audit/checkpoints[?from_seq=]` · `GET /api/audit/keys` ·
@@ -921,7 +921,7 @@ the right. Arrow keys move between items.
 | Group | Items |
 |---|---|
 | (top) | **Home**, **Inbox** (count) |
-| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts (with *Account matches*), Roles, Organizations (Preview) |
+| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts (with *Account matches*), Roles, Organizations (live, read-only, derived from departments) |
 | **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
 | **Protection** | Policies & SoD (violations, policies, what-if simulation), Attribute policies, Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
 | **Settings** | Connections (governed connections and the setup wizard), Admin |
@@ -960,9 +960,19 @@ machine identities, roles, entitlements and apps, and runs actions such as *Requ
 next. Choosing a person shows actions for them. Use the arrow keys, `Enter`, `Backspace` to go
 back a step and `Esc` to close. `/` focuses the top-bar search.
 
-**Preview features.** Some screens have no backend endpoint yet: organizations,
-workflows, catalog (non-JIT) requests, delegations, disable / reset password / edit, imports and
-most admin settings. They run on typed mock data in `src/mocks/`, keep their state in the
+**Live since the preview wiring.** These screens call the API (schema 0310 to 0312):
+
+| Screen | Calls | Notes |
+|---|---|---|
+| Identity Disable / Enable (identity page, panel, bulk, palette) | `POST /api/identities/{id}/disable`, `.../enable`, `GET .../disables` | `identities.contain` and a fresh phishing-resistant sign-in. Disable runs the kill switch's containment (revoke sessions, tokens, OAuth grants at connected providers), then sets the active accounts and the identity to disabled in one audited transaction (`identity.disable`). A failed provider step is retried and reported. Tessera does not suspend the account inside the provider. Enable (`identity.enable`) sets back only the accounts Disable disabled and that are still disabled. It cannot restore revoked sessions and grants, and says so. No Undo. |
+| My access > Request removal | `POST /api/removal-requests`, `GET ?scope=mine\|approvals\|pending\|all`, `.../{id}/approve\|deny\|cancel` | Shows in My requests and the approver's Inbox (the person's manager, a delegate, or `requests.decide`). Approval needs step-up and removes the grant (through `requests.Remove` when an approved request granted it, else a revoked grant with a tombstone). Just-in-time and role-held grants are refused. |
+| Request access drafts | `GET/POST /api/request-drafts`, `GET/PUT/DELETE .../{id}` | Private to the user, at most 50, checked for existence but never against policy. A draft never submits itself. |
+| Directory > Organizations | `GET /api/orgs`, `GET /api/orgs/{org_id}` | Read-only and derived: a root and one organization per department. Owners are the active people at the top of a department's reporting lines who lead others in it. No cost centers (the HR data has none). |
+| Home recent activity | `GET /api/activity` | The signed-in user's own audit events (action, target, outcome, time; no detail). "Your recent requests" reads real request lines. |
+
+**Preview features.** Some screens have no backend endpoint yet: workflows, reset password, generic
+object create / edit / import (accounts, machine identities, rotate secret) and most admin settings
+(Identity rules, Branding & labels, Certificates, Export / import configuration). They run on typed mock data in `src/mocks/`, keep their state in the
 browser's localStorage, and carry a **Preview** badge. To wire one up, add a function to
 `src/api.ts` that returns the same type and remove the badge.
 
