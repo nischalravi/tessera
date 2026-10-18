@@ -378,7 +378,7 @@ func (s *Server) startLogin(w http.ResponseWriter, r *http.Request, t store.Tena
 	return nil, nil
 }
 
-// authLogin is GET /api/auth/login?tenant=&connection=&return_to=.
+// authLogin is GET /api/auth/login?tenant=&connection=&return_to=[&test=1].
 func (s *Server) authLogin(w http.ResponseWriter, r *http.Request, _ *params) (any, error) {
 	q := r.URL.Query()
 	returnTo := q.Get("return_to")
@@ -394,6 +394,10 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request, _ *params) (a
 	}
 	if !store.ValidReturnTo(returnTo) {
 		return s.loginFailure(w, r, t.ID, "invalid_return_to", nil)
+	}
+	if q.Get("test") == "1" {
+		// the requester's test sign-in of a pending connection (§15.2)
+		return s.startTestLogin(w, r, t, q.Get("connection"), returnTo)
 	}
 	var conn *store.IdPConnection
 	if err := s.store.ReadTenant(r.Context(), t.ID, func(tx *store.TenantTx) error {
@@ -561,8 +565,8 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request, p *params)
 		conn, err = tx.IdPConnection(txn.IdPConnectionID)
 		switch {
 		case err != nil:
-		case conn.Status != "active":
-			reason = "connection_disabled"
+		case conn.Status != "active" && !(txn.Purpose == "test" && conn.Status == "pending"):
+			reason = "connection_disabled" // a test sign-in is the one use of a pending connection
 		case (conn.Protocol == "oauth2") != strings.HasPrefix(r.URL.Path, "/api/auth/oauth2/"):
 			reason = "connection_mismatch" // an OIDC transaction at the OAuth 2.0 callback or the reverse
 		}
@@ -638,6 +642,9 @@ type idpProfile struct {
 // SAML ACS; the transaction is consumed and the result normalized).
 func (s *Server) finishLogin(w http.ResponseWriter, r *http.Request, tenant store.Tenant, conn *store.IdPConnection,
 	txn *store.LoginTransaction, tok idpProfile, res authnorm.Result) (any, error) {
+	if txn.Purpose == "test" {
+		return s.finishTestLogin(w, r, tenant, conn, txn) // never a session, a user or a role
+	}
 	ctx := r.Context()
 	now := s.clock().UTC()
 	issuer := deref(conn.Issuer)
