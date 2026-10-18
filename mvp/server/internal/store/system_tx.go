@@ -16,7 +16,7 @@ import (
 type SystemTx struct {
 	ctx    context.Context
 	db     *DB
-	tx     *sql.Tx
+	tx     *xtx
 	reason string
 }
 

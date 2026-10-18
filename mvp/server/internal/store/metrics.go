@@ -11,18 +11,12 @@ import (
 // for the single-writer lock, and SQLITE_BUSY / locked failures. No SQL text,
 // tenant or error text is ever a label.
 
-// lockWrite takes the write lock and records how long it waited.
-func (d *DB) lockWrite() {
-	start := time.Now()
-	d.mu.Lock()
-	obs.DBLockWait.Observe(time.Since(start).Seconds())
-}
-
-func observeTx(kind string, start time.Time, err error) {
+func (d *DB) observeTx(kind string, start time.Time, err error) {
 	outcome := "ok"
 	if err != nil {
 		outcome = "error"
-		if isBusy(err) {
+		// SQLITE_BUSY exists only on SQLite; Postgres queues writers on its own locks
+		if d.d != dialectPostgres && isBusy(err) {
 			outcome = "busy"
 			obs.DBBusy.Inc(kind)
 		}

@@ -21,6 +21,9 @@ import (
 func openCold(t *testing.T) *DB {
 	t.Helper()
 	d := openTest(t)
+	if d.d != dialectSQLite {
+		t.Skip("the prepared-statement cache is SQLite only (see stmtFor)")
+	}
 	d.stmts.close()
 	d.stmts.prepares.Store(0)
 	return d
@@ -44,7 +47,7 @@ func countVia(ctx context.Context, d *DB, query string, args ...any) (int, error
 
 func countIn(ctx context.Context, d *DB, tx *sql.Tx, query string, args ...any) (int, error) {
 	var n int
-	err := d.queryRowIn(ctx, tx, query, args).Scan(&n)
+	err := d.queryRowIn(ctx, &xtx{tx: tx, d: d.d}, query, args).Scan(&n)
 	return n, err
 }
 
@@ -156,19 +159,19 @@ func TestStmtCache_Cancellation(t *testing.T) {
 		run  func(ctx context.Context, tx *sql.Tx) error
 	}{
 		{"query", func(ctx context.Context, tx *sql.Tx) error {
-			rows, err := d.queryIn(ctx, tx, query, []any{sql.Named("x", "none")})
+			rows, err := d.queryIn(ctx, &xtx{tx: tx, d: d.d}, query, []any{sql.Named("x", "none")})
 			if err == nil {
 				_ = rows.Close()
 			}
 			return err
 		}},
 		{"exec", func(ctx context.Context, tx *sql.Tx) error {
-			_, err := d.execIn(ctx, tx, `UPDATE tenants SET name = name WHERE id = @x -- cancelled`, []any{sql.Named("x", "none")})
+			_, err := d.execIn(ctx, &xtx{tx: tx, d: d.d}, `UPDATE tenants SET name = name WHERE id = @x -- cancelled`, []any{sql.Named("x", "none")})
 			return err
 		}},
 		{"queryRow", func(ctx context.Context, tx *sql.Tx) error {
 			var n int
-			return d.queryRowIn(ctx, tx, query, []any{sql.Named("x", "none")}).Scan(&n)
+			return d.queryRowIn(ctx, &xtx{tx: tx, d: d.d}, query, []any{sql.Named("x", "none")}).Scan(&n)
 		}},
 	}
 	for _, tc := range tests {
@@ -252,7 +255,7 @@ func TestStmtCache_CapRunsUncachedAndCorrect(t *testing.T) {
 	for i := range 10 {
 		query := fmt.Sprintf(`SELECT %d + @x -- cap %d`, i, i)
 		var got int
-		if err := d.queryRowIn(ctx, tx, query, []any{sql.Named("x", 100)}).Scan(&got); err != nil {
+		if err := d.queryRowIn(ctx, &xtx{tx: tx, d: d.d}, query, []any{sql.Named("x", 100)}).Scan(&got); err != nil {
 			t.Fatalf("statement %d: %v", i, err)
 		}
 		if want := 100 + i; got != want {

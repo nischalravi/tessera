@@ -17,7 +17,8 @@ import (
 //
 // Appends happen only through AppendAudit, inside the caller's transaction,
 // so a domain event commits or rolls back with the change it describes.
-// Writers are serialized per database (DB.mu, and SQLite's single writer);
+// Writers are serialized per database on SQLite (DB.mu, and SQLite's single
+// writer) and per tenant on Postgres (an advisory lock taken by inTenantOn);
 // the head row is advanced with a compare-and-set on last_seq, and the
 // schema's triggers refuse any event that does not extend the head, so a race
 // fails the transaction instead of forking the chain.
@@ -150,6 +151,8 @@ func (tx *TenantTx) AppendAudit(e AuditEvent) (AuditEvent, error) {
 	}
 	e.SchemaVersion = canon.Version
 
+	// The tenant's write transactions are serialized (DB.inTenantOn takes the
+	// per-tenant lock on Postgres), so reading the head here is safe.
 	var headAt string
 	var lastSeq int64
 	var lastHash string
