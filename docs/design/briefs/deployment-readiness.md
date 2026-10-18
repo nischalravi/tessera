@@ -37,7 +37,7 @@ Connections to customer directories (AD, LDAP, Entra, Okta, Google, Workday, SCI
 
 Frontend (mvp/frontend/src): `features/admin/connections/{ConnectionsList,Wizard,ValidationResults,ReconReport,FindingDrawer,shared,index}`, `components/{Checklist,Stepper}.tsx`, `features/insights/DeploymentHealth.tsx`, `features/home/Home.tsx`, `features/inbox/`, `app/nav.ts`, `app/CommandPalette.tsx`, `api.ts`.
 
-Not yet existing: `readiness/evidence.go`, `drift.go`, `internal/safedial`, `internal/agent`, `cmd/tessera-agent`, per-directory `internal/connectors/{ad,ldap,entra,...}/probe.go`.
+Built since: `internal/safedial` (raw-TCP dialer, ports 389/636, dev-only `TESSERA_SAFEDIAL_ALLOW`, `Transport` seam for the agent) and `internal/connectors/ldap/probe.go` (real read-only prober; `readiness/liveprobe.go` wires it for non-demo `ldap` revisions; sealed passwords in `connection_secrets`). Not yet existing: `readiness/evidence.go`, `drift.go`, `internal/agent`, `cmd/tessera-agent`, `internal/connectors/{ad,entra,...}/probe.go`. Unsupported live answers (no Who Am I or Get Effective Rights) are `skipped` with `observed.unsupported`: the item stays pending and the template has no attestation alternative yet.
 
 ## Key names
 - Score: `levelWeight` required 5, recommended 2, optional 0; `severityPenalty` critical 15, high 8, medium 3, low 1; `PenaltyCap` 40; `RequiredCap` 49 (cap below 50 while a Required item fails); bands healthy, needs_attention, at_risk, not_ready.

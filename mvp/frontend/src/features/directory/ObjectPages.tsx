@@ -1,11 +1,10 @@
 /** Object pages for roles, entitlements, applications and organizations. */
 import { ReactNode, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ClipboardCheck, Network, Pencil, RefreshCw, Settings, ShoppingCart, Timer } from "lucide-react";
-import { AccountRow, ConnectorRow, Group, IdentityRow, ResourceRow, api, relTime, useApi } from "../../api";
-import { useIdentityActions } from "../../app/actions";
+import { Network, Pencil, RefreshCw, Settings, ShoppingCart, Timer } from "lucide-react";
+import { AccountRow, ConnectorRow, Group, IdentityRow, ResourceRow, RolesView, api, relTime, useApi } from "../../api";
 import { Badge, Bar, Button, Callout, Chip, EmptyState, IdLink, Loading, Page, PreviewBadge, Status, TypeBadge, useToast } from "../../components";
-import { ORGS, useRoles } from "../../mocks";
+import { ORGS } from "../../mocks";
 import { PreviewFormDrawer } from "./shared";
 
 function ObjectHead({ icon, meta, actions }: { icon?: ReactNode; meta: ReactNode; actions: ReactNode }) {
@@ -28,91 +27,17 @@ function NotFound({ what, back }: { what: string; back: [string, string] }) {
   );
 }
 
-// ------------------------------------------------------------------- role
-export function RolePage() {
-  const { id } = useParams();
-  const role = useRoles().find((r) => r.id === id);
-  const { data: groups } = useApi<Group[]>("/groups");
-  const { data: people } = useApi<IdentityRow[]>("/identities?type=human&status=active");
-  const nav = useNavigate();
-  const acts = useIdentityActions();
-  const [edit, setEdit] = useState(false);
-  if (!role) return <NotFound what="Role" back={["Roles", "/directory/roles"]} />;
-  const birthright = (people ?? []).filter((p) => role.birthright && p.department === role.birthright);
-  return (
-    <Page title={role.name} badge={<PreviewBadge />} crumbs={[["Identity"], ["Roles", "/directory/roles"], [role.name]]}>
-      <ObjectHead
-        meta={<>
-          <div style={{ color: "var(--text)" }}>{role.description}</div>
-          <div className="row" style={{ marginTop: 6 }}>
-            <span>Owner {role.owner}</span>
-            {role.birthright && <span>Birthright for {role.birthright}</span>}
-            <span>Updated {role.updated}</span>
-            <Badge tone={role.risk === "high" ? "critical" : role.risk === "medium" ? "warning" : "ok"} dot>{role.risk} risk</Badge>
-          </div>
-        </>}
-        actions={<>
-          <Button size="sm" variant="primary" icon={<ShoppingCart size={14} />} onClick={() => nav(`/access/request?add=${role.id}`)}>Request this role</Button>
-          <Button size="sm" icon={<Pencil size={14} />} onClick={() => setEdit(true)}>Edit</Button>
-          <Button size="sm" icon={<ClipboardCheck size={14} />} onClick={() => acts.startCampaign()}>Start review</Button>
-        </>}
-      />
-      <div className="grid g21 mt">
-        <div className="card flush">
-          <div className="card-h"><h2>Entitlements in this role</h2><span className="small faint tnum">{role.entitlements.length}</span></div>
-          <div className="table-scroll">
-            <table>
-              <thead><tr><th>Entitlement</th><th>Kind</th><th>Privileged</th></tr></thead>
-              <tbody>
-                {role.entitlements.map((e) => {
-                  const jit = e.endsWith(" (JIT)");
-                  const key = e.replace(" (JIT)", "");
-                  const g = (groups ?? []).find((x) => `${x.system}:${x.name}` === key);
-                  return (
-                    <tr key={e}>
-                      <td>{g ? <Link to={`/directory/entitlements/${g.id}`} className="sys">{key}</Link> : <span className="sys">{key}</span>}{jit && <> <Badge tone="info">JIT only</Badge></>}</td>
-                      <td className="small">{g?.kind.replace(/_/g, " ") ?? <span className="faint">not discovered</span>}</td>
-                      <td>{g?.privileged ? <Badge tone="warning">Privileged</Badge> : <span className="faint">No</span>}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <div className="card stack-sm">
-          <h2>Who gets it automatically</h2>
-          {role.birthright ? (
-            <>
-              <div className="small muted">Everyone in {role.birthright} receives this role on their first day. {people ? `${birthright.length} people today.` : ""}</div>
-              {birthright.slice(0, 8).map((p) => <div key={p.id} className="small"><IdLink i={p} /> <span className="faint">{p.title}</span></div>)}
-              {birthright.length > 8 && <Link className="small" to="/directory/people">and {birthright.length - 8} more</Link>}
-            </>
-          ) : <div className="small muted">Nobody. This role is granted only by request and approval.</div>}
-        </div>
-      </div>
-      {edit && (
-        <PreviewFormDrawer title={`Edit ${role.name}`} kind="role" verb="update" onClose={() => setEdit(false)}
-          initial={{ name: role.name, description: role.description, owner: role.owner }}
-          fields={[{ id: "name", label: "Name", required: true }, { id: "description", label: "Description", textarea: true }, { id: "owner", label: "Owner" }]}
-        />
-      )}
-    </Page>
-  );
-}
-
 // ------------------------------------------------------------ entitlement
 export function EntitlementPage() {
   const { id } = useParams();
   const { data: groups, error } = useApi<Group[]>("/groups");
-  const roles = useRoles();
+  const { data: rv } = useApi<RolesView>("/roles");
   const nav = useNavigate();
   const [edit, setEdit] = useState(false);
   if (!groups) return <Page title="Entitlement" crumbs={[["Identity"], ["Entitlements", "/directory/entitlements"]]}><Loading error={error} kind="page" /></Page>;
   const g = groups.find((x) => String(x.id) === id);
   if (!g) return <NotFound what="Entitlement" back={["Entitlements", "/directory/entitlements"]} />;
-  const key = `${g.system}:${g.name}`;
-  const inRoles = roles.filter((r) => r.entitlements.some((e) => e.replace(" (JIT)", "") === key));
+  const inRoles = (rv?.roles ?? []).filter((r) => r.status === "active" && r.entitlements.some((e) => e.id === g.id));
   return (
     <Page title={g.name} crumbs={[["Identity"], ["Entitlements", "/directory/entitlements"], [g.name]]}>
       <ObjectHead
@@ -137,9 +62,9 @@ export function EntitlementPage() {
       />
       <div className="grid g2 mt">
         <div className="card stack-sm">
-          <h2>Part of these roles <PreviewBadge /></h2>
+          <h2>Part of these roles</h2>
           {inRoles.length === 0 ? <div className="small muted">Not bundled in any business role. People request it directly.</div> :
-            inRoles.map((r) => <div key={r.id} className="small"><Link to={`/directory/roles/${r.id}`}>{r.name}</Link> <span className="faint">· {r.members} members</span></div>)}
+            inRoles.map((r) => <div key={r.id} className="small"><Link to={`/directory/roles/${r.id}`}>{r.name}</Link> <span className="faint">· {r.member_count} members</span></div>)}
         </div>
         <div className="card stack-sm">
           <h2>Governance</h2>

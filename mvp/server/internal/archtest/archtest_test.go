@@ -371,3 +371,104 @@ func TestAuthtestOnlyInTests(t *testing.T) {
 		}
 	}
 }
+
+// safehttpPath is the SSRF-guarded client. Production code builds clients
+// only with safehttp.ForConfig (environment and loopback exception from the
+// validated config); safehttp.NewForTest takes any Options and is for tests.
+const safehttpPath = "github.com/nischalravi/tessera/mvp/server/internal/safehttp"
+
+// testOnlySafehttp are the safehttp identifiers non-test files may not use.
+var testOnlySafehttp = map[string]bool{"NewForTest": true}
+
+// checkSafehttpUse reports uses of test-only safehttp constructors in f.
+func checkSafehttpUse(fset *token.FileSet, f *ast.File) []string {
+	names := map[string]bool{}
+	for _, imp := range f.Imports {
+		if p, _ := strconv.Unquote(imp.Path.Value); p == safehttpPath {
+			name := "safehttp"
+			if imp.Name != nil {
+				name = imp.Name.Name
+			}
+			names[name] = true
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	var out []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		if x, ok := sel.X.(*ast.Ident); ok && names[x.Name] && testOnlySafehttp[sel.Sel.Name] {
+			out = append(out, fset.Position(sel.Pos()).String()+": safehttp."+sel.Sel.Name+" outside a _test.go file (use safehttp.ForConfig)")
+		}
+		return true
+	})
+	return out
+}
+
+// TestSafehttpForConfigOnly (L5): no non-test file of the module calls
+// safehttp.NewForTest, so production clients come only from ForConfig.
+func TestSafehttpForConfigOnly(t *testing.T) {
+	root := moduleRoot(t)
+	fset := token.NewFileSet()
+	files := 0
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if name := d.Name(); path != root && (strings.HasPrefix(name, ".") || name == "testdata" || name == "node_modules") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			return err
+		}
+		files++
+		for _, v := range checkSafehttpUse(fset, f) {
+			t.Error(v)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if files < 20 {
+		t.Fatalf("scanned %d files; the walk is not covering the module", files)
+	}
+}
+
+// TestSafehttpRuleCatchesViolations is the positive control.
+func TestSafehttpRuleCatchesViolations(t *testing.T) {
+	src := `package bad
+
+import (
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
+	sh "github.com/nischalravi/tessera/mvp/server/internal/safehttp"
+)
+
+func f() {
+	_, _ = safehttp.NewForTest(nil, safehttp.Options{Env: "dev", AllowLoopback: true})
+	g := sh.NewForTest
+	_, _ = safehttp.ForConfig(nil)
+	_ = g
+}
+`
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "bad.go", src, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := checkSafehttpUse(fset, f)
+	if len(got) != 2 {
+		t.Errorf("%d violations, want 2 (NewForTest under both import names):\n%s", len(got), strings.Join(got, "\n"))
+	}
+}
