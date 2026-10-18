@@ -1,5 +1,5 @@
 import {
-  AppWindow, BadgeCheck, BellRing, Bot, Building2, ChartLine, ClipboardCheck, House, Inbox, KeyRound, Layers, LucideIcon, Network, Plug, Plus, Settings, ShieldCheck, Timer, Users, UsersRound,
+  AppWindow, BadgeCheck, BellRing, Bot, Building2, CalendarClock, ChartLine, ClipboardCheck, House, Inbox, KeyRound, Layers, LucideIcon, Network, Plug, Plus, Settings, ShieldCheck, SlidersHorizontal, Timer, UserPlus, Users, UsersRound,
 } from "lucide-react";
 
 export interface NavPage {
@@ -38,6 +38,7 @@ export const RAIL: RailGroup[] = [
     label: "Identity",
     items: [
       { id: "users", label: "Users", icon: Users, path: "/directory/people", keywords: "people employees humans identities" },
+      { id: "workers", label: "Contractors & guests", icon: CalendarClock, path: "/directory/workers", keywords: "contractors partners vendors interns guests temporary accounts expiry end date sponsor expiring" },
       { id: "machine", label: "Machine identities & agents", icon: Bot, path: "/directory/machine", keywords: "nhi service accounts api keys ai agents bots secrets" },
       {
         id: "groups", label: "Groups", icon: UsersRound, path: "/directory/groups", also: ["/directory/entitlements"], keywords: "okta groups teams",
@@ -48,7 +49,7 @@ export const RAIL: RailGroup[] = [
         id: "accounts", label: "Accounts", icon: KeyRound, path: "/directory/accounts", also: ["/directory/matches"], keywords: "system accounts usernames",
         pages: [{ path: "/directory/matches", label: "Account matches", keywords: "correlation link merge unmerge duplicate orphan uncorrelated" }],
       },
-      { id: "roles", label: "Roles", icon: Layers, path: "/directory/roles", keywords: "business roles birthright", preview: true },
+      { id: "roles", label: "Roles", icon: Layers, path: "/directory/roles", keywords: "business roles birthright drift" },
       { id: "orgs", label: "Organizations", icon: Building2, path: "/directory/orgs", keywords: "departments org units cost centers", preview: true },
     ],
   },
@@ -60,6 +61,7 @@ export const RAIL: RailGroup[] = [
         id: "mine", label: "My access", icon: BadgeCheck, path: "/access/mine", also: ["/access/requests"], keywords: "what i have entitlements remove",
         pages: [{ path: "/access/requests", label: "My requests", keywords: "history drafts status submitted" }],
       },
+      { id: "guests", label: "Guests I sponsor", icon: UserPlus, path: "/access/guests", keywords: "guest sponsor invite visitor contractor volunteer partner sponsorship bulk csv approve transfer" },
       { id: "jit", label: "Just-in-time", icon: Timer, path: "/access/jit", keywords: "jit elevation temporary privileged break glass" },
       {
         id: "reviews", label: "Access reviews", icon: ClipboardCheck, path: "/governance/reviews", also: ["/governance/lifecycle", "/governance/workflows"], keywords: "certification campaigns attestation",
@@ -75,6 +77,7 @@ export const RAIL: RailGroup[] = [
     items: [
       { id: "alerts", label: "Alerts", icon: BellRing, path: "/alerts", keywords: "alerting notifications incidents detections break glass sign-in failures webhook slack teams email" },
       { id: "policies", label: "Policies & SoD", icon: ShieldCheck, path: "/governance/policies", keywords: "policy as code yaml simulation what-if violations" },
+      { id: "abac", label: "Attribute policies", icon: SlidersHorizontal, path: "/governance/attributes", keywords: "abac attribute conditions department location birthright eligibility simulate" },
       { id: "graph", label: "Access graph", icon: Network, path: "/insights/graph", keywords: "graph explorer paths who can access" },
       {
         id: "insights", label: "Insights", icon: ChartLine, path: "/insights/risk", also: ["/insights"], except: ["/insights/graph"], keywords: "risk dashboard kpi metrics",
