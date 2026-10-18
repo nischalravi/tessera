@@ -1,0 +1,35 @@
+# Condition keys that make an S3 policy statement non-public when pinned
+# through a positive operator to a fixed value (no wildcard, no variable);
+# design §4.1 fact 15 and §7.6 policy_is_public. Source: Amazon S3 User Guide,
+# "The meaning of public". Keys are matched case-insensitively.
+source: https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html#access-control-block-public-access-policy-status
+keys:
+  - name: aws:PrincipalArn
+    rule: fixed_value
+  - name: aws:PrincipalAccount
+    rule: fixed_value
+  - name: aws:PrincipalOrgID
+    rule: fixed_value
+  - name: aws:userid
+    rule: fixed_value
+    except_patterns:
+      - "AROLEID:*"
+  - name: aws:SourceIp
+    rule: ip_range
+    ipv4_max_cidr_size: 8   # a range broader than /8 is public; RFC 1918 ranges are excepted
+    ipv6_max_cidr_size: 32  # a range broader than /32 is public
+  - name: aws:SourceArn
+    rule: fixed_value
+  - name: aws:SourceVpc
+    rule: fixed_value
+  - name: aws:SourceVpce
+    rule: fixed_value
+  - name: aws:SourceOwner
+    rule: fixed_value
+  - name: aws:SourceAccount
+    rule: fixed_value
+  - name: s3:DataAccessPointArn
+    rule: fixed_value
+    bucket_policies_only: true  # the account must be fixed
+  - name: s3:DataAccessPointAccount
+    rule: fixed_value

@@ -1,0 +1,208 @@
+# Golden corpus, conditions: GC-13 to GC-30 (design section 14.2).
+
+- id: GC-13
+  title: A positive operator on a missing key does not match
+  principal: U
+  identity:
+    - {"Statement": [{"Effect": "Allow", "Action": "s3:GetObject", "Resource": "*", "Condition": {"StringEquals": {"aws:PrincipalTag/team": "data"}}}]}
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-bkt/a"}
+  expect: {outcome: DENY, deny_kind: implicit}
+  why: "[S8] missing key => no match."
+  verified: doc
+
+- id: GC-14
+  title: A negated operator on a missing key matches (over-grant pitfall)
+  principal: U
+  identity:
+    - {"Statement": [{"Effect": "Allow", "Action": "s3:GetObject", "Resource": "*", "Condition": {"StringNotEquals": {"aws:PrincipalTag/team": "contractor"}}}]}
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-bkt/a"}
+  expect: {outcome: ALLOW}
+  why: "[S8] 'If the policy condition requires that the key is not matched and the key is not present, the condition is true.'"
+  verified: doc
+
+- id: GC-15
+  title: A negated operator on a missing key in a Deny applies the Deny
+  principal: U
+  identity:
+    - allow_all
+    - {"Statement": [{"Effect": "Deny", "Action": "s3:*", "Resource": "*", "Condition": {"StringNotEquals": {"aws:PrincipalTag/team": "data"}}}]}
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-bkt/a"}
+  expect: {outcome: DENY, deny_kind: explicit}
+  why: "[S8]."
+  verified: doc
+
+- id: GC-16
+  title: StringLikeIfExists with a missing key
+  principal: U
+  identity:
+    - {"Statement": [{"Effect": "Allow", "Action": "ec2:RunInstances", "Resource": "*", "Condition": {"StringLikeIfExists": {"ec2:InstanceType": ["t3.*"]}}}]}
+  request: {action: "ec2:RunInstances", resource: "arn:aws:ec2:us-east-1:111111111111:security-group/sg-1"}
+  expect: {outcome: ALLOW}
+  note: "no InstanceType key in the request"
+  why: "[S8] IfExists => true when the key is absent."
+  verified: doc
+
+- id: GC-17
+  title: ForAllValues with a missing key is vacuously true
+  principal: U
+  identity:
+    - {"Statement": [{"Effect": "Allow", "Action": "ec2:CreateTags", "Resource": "*", "Condition": {"ForAllValues:StringEquals": {"aws:TagKeys": ["env", "cost-center"]}}}]}
+  request: {action: "ec2:CreateTags", resource: "arn:aws:ec2:us-east-1:111111111111:instance/i-1"}
+  expect: {outcome: ALLOW}
+  note: "aws:TagKeys absent"
+  why: "[S9] ForAllValues 'returns true if there are no context keys in the request'."
+  verified: doc
+
+- id: GC-18
+  title: ForAllValues plus Null:false closes the gap
+  principal: U
+  identity:
+    - {"Statement": [{"Effect": "Allow", "Action": "ec2:CreateTags", "Resource": "*", "Condition": {"ForAllValues:StringEquals": {"aws:TagKeys": ["env"]}, "Null": {"aws:TagKeys": "false"}}}]}
+  request: {action: "ec2:CreateTags", resource: "arn:aws:ec2:us-east-1:111111111111:instance/i-1"}
+  expect: {outcome: DENY, deny_kind: implicit}
+  why: "[S9] example table, last row: No match."
+  verified: doc
+
+- id: GC-19
+  title: ForAnyValue with a missing key is false
+  principal: U
+  identity:
+    - {"Statement": [{"Effect": "Allow", "Action": "ec2:DeleteTags", "Resource": "*", "Condition": {"ForAnyValue:StringEquals": {"aws:TagKeys": ["env"]}}}]}
+  request: {action: "ec2:DeleteTags", resource: "arn:aws:ec2:us-east-1:111111111111:instance/i-1"}
+  expect: {outcome: DENY, deny_kind: implicit}
+  why: "[S9]."
+  verified: doc
+
+- id: GC-20
+  title: Values OR within a key; keys and operators AND
+  principal: U
+  principal_tags: {team: ml}
+  identity:
+    - {"Statement": [{"Effect": "Allow", "Action": "s3:GetObject", "Resource": "*",
+                      "Condition": {"StringEquals": {"aws:PrincipalTag/team": ["data", "ml"], "aws:RequestedRegion": "eu-west-1"}}}]}
+  requests:
+    - action: "s3:GetObject"
+      resource: "arn:aws:s3:::tsr-bkt/a"
+      context: {"aws:RequestedRegion": "eu-west-1"}
+      expect: {outcome: ALLOW}
+    - action: "s3:GetObject"
+      resource: "arn:aws:s3:::tsr-bkt/a"
+      context: {"aws:RequestedRegion": "us-east-1"}
+      expect: {outcome: DENY, deny_kind: implicit}
+  why: "[S8] multiple values OR; multiple keys AND."
+  verified: doc
+
+- id: GC-21
+  title: Null:true allows only when the key is absent
+  principal: U
+  identity:
+    - {"Statement": [{"Effect": "Allow", "Action": "sqs:ListQueues", "Resource": "*", "Condition": {"Null": {"aws:TokenIssueTime": "true"}}}]}
+  request: {action: "sqs:ListQueues", resource: "*"}
+  expect: {outcome: ALLOW}
+  note: "long-term keys"
+  why: "TokenIssueTime is absent for long-term credentials [S8][S19]."
+  verified: doc
+
+- id: GC-22
+  title: An IpAddress allow fails through a VPC endpoint
+  principal: U
+  identity:
+    - {"Statement": [{"Effect": "Allow", "Action": "s3:GetObject", "Resource": "*", "Condition": {"IpAddress": {"aws:SourceIp": "203.0.113.0/24"}}}]}
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-bkt/a", context: {"aws:SourceVpce": "vpce-1"}}
+  expect: {outcome: DENY, deny_kind: implicit}
+  known_flags: [A17]
+  note: "aws:SourceIp is absent. PR-4's evaluator flags A17 for every IP operator on an absent aws:SourceIp, so the decision carries AMBIGUITY:A17 although the design lists no fidelity here."
+  why: "aws:SourceIp is absent via a VPCE [S8][S19]."
+  verified: doc
+
+- id: GC-23
+  title: A NotIpAddress deny applies through a VPC endpoint
+  principal: U
+  identity:
+    - allow_all
+    - {"Statement": [{"Effect": "Deny", "Action": "*", "Resource": "*", "Condition": {"NotIpAddress": {"aws:SourceIp": "203.0.113.0/24"}}}]}
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-bkt/a", context: {"aws:SourceVpce": "vpce-1"}}
+  expect: {outcome: DENY, deny_kind: explicit}
+  why: "Negated operator with a missing key => true [S8] (A17)."
+  verified: pending-probe:A17
+
+- id: GC-24
+  title: A policy variable resolves for an IAM user
+  principal: U
+  identity:
+    - &gc24 {"Statement": [{"Effect": "Allow", "Action": "s3:GetObject", "Resource": "arn:aws:s3:::tsr-home/${aws:username}/*"}]}
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-home/alice/notes.txt"}
+  expect: {outcome: ALLOW}
+  why: "[S10]."
+  verified: doc
+
+- id: GC-25
+  title: The same variable is null for a role session
+  principal: RS
+  identity:
+    - *gc24
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-home/app/notes.txt"}
+  expect: {outcome: DENY, deny_kind: implicit}
+  why: "aws:username is not present for roles [S10]; a Resource entry with a null variable matches nothing [S10]."
+  verified: doc
+
+- id: GC-26
+  title: A default value applies when the tag is absent
+  principal: U
+  identity:
+    - {"Statement": [{"Effect": "Allow", "Action": "s3:GetObject", "Resource": "arn:aws:s3:::tsr-team-${aws:PrincipalTag/team, 'company-wide'}/*"}]}
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-team-company-wide/x"}
+  expect: {outcome: ALLOW}
+  why: "[S10] default values."
+  verified: doc
+
+- id: GC-27
+  title: Version 2008-10-17 makes variables literal text
+  principal: U
+  identity:
+    - {"Version": "2008-10-17", "Statement": [{"Effect": "Allow", "Action": "s3:GetObject", "Resource": "arn:aws:s3:::tsr-home/${aws:username}/*"}]}
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-home/alice/notes.txt"}
+  expect: {outcome: DENY, deny_kind: implicit}
+  why: "[S10] variables are literal strings without Version 2012-10-17."
+  verified: doc
+
+- id: GC-28
+  title: Date condition on aws:CurrentTime
+  principal: U
+  identity:
+    - {"Statement": [{"Effect": "Allow", "Action": "s3:GetObject", "Resource": "*", "Condition": {"DateLessThan": {"aws:CurrentTime": "2026-10-01T00:00:00Z"}}}]}
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-bkt/a", context: {"aws:CurrentTime": "2026-10-08T12:00:00Z"}}
+  expect: {outcome: DENY, deny_kind: implicit}
+  why: "[S8] date operators."
+  verified: doc
+
+- id: GC-29
+  title: StringEqualsIgnoreCase
+  principal: U
+  principal_tags: {dept: Finance}
+  identity:
+    - {"Statement": [{"Effect": "Allow", "Action": "s3:GetObject", "Resource": "*", "Condition": {"StringEqualsIgnoreCase": {"aws:PrincipalTag/dept": "finance"}}}]}
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-bkt/a"}
+  expect: {outcome: ALLOW}
+  why: "[S8]."
+  verified: doc
+
+- id: GC-30
+  title: A service principal with an ArnEquals aws:SourceArn guard
+  principal: "sns.amazonaws.com"
+  resource_policies:
+    - resource: "arn:aws:sqs:us-east-1:111111111111:tsr-q"
+      policy: {"Statement": [{"Effect": "Allow", "Principal": {"Service": "sns.amazonaws.com"}, "Action": "sqs:SendMessage",
+                              "Resource": "arn:aws:sqs:us-east-1:111111111111:tsr-q",
+                              "Condition": {"ArnEquals": {"aws:SourceArn": "arn:aws:sns:us-east-1:111111111111:tsr-topic"}}}]}
+  requests:
+    - action: "sqs:SendMessage"
+      resource: "arn:aws:sqs:us-east-1:111111111111:tsr-q"
+      context: {"aws:SourceArn": "arn:aws:sns:us-east-1:111111111111:tsr-topic"}
+      expect: {outcome: ALLOW}
+    - action: "sqs:SendMessage"
+      resource: "arn:aws:sqs:us-east-1:111111111111:tsr-q"
+      context: {"aws:SourceArn": "arn:aws:sns:us-east-1:777788889999:tsr-topic"}
+      expect: {outcome: DENY, deny_kind: implicit}
+  why: "[S8] ARN operator example."
+  verified: doc
