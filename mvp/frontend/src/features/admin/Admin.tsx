@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
-  ArrowLeftRight, Bell, Mail, CircleCheck, Clock, Download, FileBadge, Fingerprint, KeySquare, LucideIcon, Palette, Play, Plug, ScrollText, Search, Settings, ShieldCheck, UserCog,
+  ArrowLeftRight, Bell, Mail, Clock, Download, FileBadge, Fingerprint, KeySquare, LucideIcon, Palette, Plug, ScrollText, Search, Settings, ShieldCheck, UserCog,
 } from "lucide-react";
 import { AuditRow, AuditVerifyReport, api, fmtDate, useApi } from "../../api";
 import { fuzzy } from "../../app/fuzzy";
