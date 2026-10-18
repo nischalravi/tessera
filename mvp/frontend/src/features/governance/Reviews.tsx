@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Ban, Check, ClipboardCheck, Network, Plus, UserRound, X } from "lucide-react";
+import { ReviewSchedules } from "./ReviewSchedules";
 import { Campaign as CampaignT, IdentityRow, ReviewItem, ago, fmtDate, reviewDecide, useApi } from "../../api";
 import { useIdentityActions } from "../../app/actions";
-import { Badge, Bar, Button, CommandBar, DataTable, EmptyState, FilterChips, Flag, IdLink, Loading, Page, Segmented, SidePanel, TypeBadge, flagLabel, useConfirm, useSelected, useToast, GovernanceTabs } from "../../components";
+import { Badge, Bar, Button, CommandBar, DataTable, EmptyState, FilterChips, Flag, IdLink, Loading, Page, Segmented, SidePanel, Tabs, TypeBadge, flagLabel, useConfirm, useSelected, useToast, GovernanceTabs } from "../../components";
 
 function useDecide() {
   const toast = useToast();
@@ -157,6 +158,9 @@ export function Reviews() {
     setParams(next, { replace: true });
   };
   const crumbs: [string, string?][] = [["Access"], ["Access reviews"]];
+  const view = params.get("view") === "schedules" ? "schedules" : "campaigns";
+  const setView = (v: string) => setParams(v === "schedules" ? { view: v } : {}, { replace: true });
+  const viewTabs = <Tabs label="Access review views" value={view} onChange={setView} tabs={[{ id: "campaigns", label: "Campaigns" }, { id: "schedules", label: "Schedules" }]} />;
   return (
     <Page tabs={<GovernanceTabs />}
       title="Access reviews"
@@ -168,7 +172,9 @@ export function Reviews() {
         <Segmented label="Unused threshold for new reviews" value={days} onChange={setDays} options={[["30", "30 d"], ["60", "60 d"], ["90", "90 d"]]} />
       </>}
     >
-      {!data ? <div className="card flush"><Loading error={error} /></div> : data.length === 0 ? (
+      {viewTabs}
+      {view === "schedules" ? <ReviewSchedules onLaunched={(id) => { reload(); setParams({ campaign: String(id) }, { replace: true }); }} /> :
+      !data ? <div className="card flush"><Loading error={error} /></div> : data.length === 0 ? (
         <div className="card"><EmptyState title="No reviews yet" icon={<ClipboardCheck size={18} />} action={<Button variant="primary" onClick={() => acts.startCampaign(Number(days))}>Start your first review</Button>}>
           A review collects only the access that needs a human decision. Everything with recent usage is auto-certified.
         </EmptyState></div>

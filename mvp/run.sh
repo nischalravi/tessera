@@ -179,6 +179,8 @@ if [ "${DEVIDP:-1}" != "0" ]; then
   fi
 fi
 
+# internal /metrics listener (loopback); one port per instance so several dev instances coexist
+export TESSERA_METRICS_ADDR="${TESSERA_METRICS_ADDR:-127.0.0.1:$((API_PORT + 1000))}"
 echo "==> starting API on http://127.0.0.1:$API_PORT"
 "$BIN" serve -addr "127.0.0.1:$API_PORT" -db "$DB" &
 PIDS+=($!)

@@ -1,8 +1,9 @@
 import { FormEvent, useMemo, useState } from "react";
 import { Outlet, useNavigate, useSearchParams } from "react-router-dom";
-import { Ban, ClipboardCheck, KeyRound, Plus, RotateCcw, ShoppingCart, Users } from "lucide-react";
+import { Ban, ClipboardCheck, KeyRound, Plus, RotateCcw, ShoppingCart, UserCheck, Users } from "lucide-react";
 import { AccountRow, ConnectorRow, Group, HrisEvent, IdentityRow, NhiRow, OrgRow, ResourceRow, api, fmtDay, relTime, useApi, LifecycleList, orgsPath } from "../../api";
 import { useIdentityActions } from "../../app/actions";
+import { useSession } from "../../app/auth";
 import { usePersona } from "../../app/persona";
 import {
   Avatar, Badge, Button, Callout, Chip, Column, Command, DataTable, Drawer, EmptyState, Flag, GroupTabs, IdLink, Page, RiskPill, Status, TypeBadge, useSelected, useToast,
@@ -11,6 +12,7 @@ import { mockObjects } from "../../mocks";
 import { AgentCard } from "./AgentCards";
 import { StateBadge, WORKER_LABEL } from "../lifecycle/parts";
 import { AccountPanel, AppPanel, GroupPanel, IdentityPanel, OrgPanel } from "./Panels";
+import { BulkOwnerDrawer } from "./owners";
 import { ImportDrawer, PreviewFormDrawer, opts, uniq } from "./shared";
 
 /** Identity lists each render their own page header; the layout only hosts them. */
@@ -186,6 +188,8 @@ export function Machine() {
   const [newOpen, setNew] = useDrawerParam("new");
   const { data: people } = useApi<IdentityRow[]>("/identities?type=human&status=active");
   const agents = (data ?? []).filter((x) => x.type === "ai_agent");
+  const { can } = useSession();
+  const [assign, setAssign] = useState<NhiRow[] | null>(null);
   const [showAgents, setShowAgents] = useState(false);
   const cols: Column<NhiRow>[] = [
     { id: "name", header: "Name", sort: (r) => r.name.toLowerCase(), csv: (r) => r.name, cell: (r) => <div className="row" style={{ flexWrap: "nowrap" }}><Avatar name={r.name} type={r.type} /><div style={{ minWidth: 0 }}><span className="name-link">{r.name}</span><div className="xs faint truncate">{r.kind}</div></div></div> },
@@ -216,6 +220,7 @@ export function Machine() {
         commands={[newCmd("Register", () => setNew(true), true)]}
         onRefresh={reload}
         bulkActions={[
+          ...(can("ownership.manage") ? [{ label: "Assign owner", icon: <UserCheck size={16} />, run: (rs: NhiRow[]) => setAssign(rs) }] : []),
           { label: "Rotate secrets", icon: <RotateCcw size={16} />, run: async (rs) => { await mockObjects.save("secret", `${rs.length} identities`, "bulk", "update"); toast(`Rotation requested for ${rs.length} identities (preview)`); } },
           { label: "Disable", icon: <Ban size={16} />, danger: true, run: (rs) => acts.disableMany(rs) },
         ]}
@@ -233,6 +238,7 @@ export function Machine() {
         </div>
       )}
       {selected && <IdentityPanel id={selected} onClose={() => setSelected(null)} />}
+      {assign && <BulkOwnerDrawer objects={assign.map((r) => ({ kind: "identity", key: String(r.id), label: r.name }))} onClose={() => setAssign(null)} onDone={reload} />}
       {newOpen && (
         <PreviewFormDrawer
           title="Register a machine identity"

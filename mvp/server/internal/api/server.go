@@ -26,16 +26,19 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/sponsorship"
+	"github.com/nischalravi/tessera/mvp/server/internal/health"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/lifecycle"
+	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 	"github.com/nischalravi/tessera/mvp/server/internal/requests"
+	"github.com/nischalravi/tessera/mvp/server/internal/reviews"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
@@ -128,6 +131,9 @@ type Config struct {
 	// grants). Nil: a service with no outbound client, so every containment
 	// step is a manual task.
 	Containment *containment.Service
+	// Health answers /readyz and the admin platform-health summary. Nil: a
+	// checker over Store and Sealer with the default loop-lag threshold.
+	Health *health.Checker
 	// AuditAppend overrides how the audit middleware writes http.request
 	// events (tests inject failures). Nil: the store.
 	AuditAppend func(ctx context.Context, t tenancy.ID, e store.AuditEvent) error
@@ -189,6 +195,9 @@ func New(cfg Config) *Server {
 	if cfg.Containment.Clock == nil {
 		cfg.Containment.Clock = cfg.Clock
 	}
+	if cfg.Health == nil {
+		cfg.Health = health.New(cfg.Store, cfg.Sealer, nil, 0, cfg.Logger)
+	}
 	provSeal := cfg.Sealer
 	if provSeal == nil {
 		sealer, err := seal.New(seal.RandomBytes(seal.KeySize))
@@ -218,6 +227,8 @@ func New(cfg Config) *Server {
 		Cookies: auth.Cookies{Insecure: cfg.InsecureCookie}}
 	s.registerRoutes()
 	s.registerAuditRoutes()
+	s.registerOwnershipRoutes()
+	s.registerReviewScheduleRoutes()
 	s.registerCorrelationRoutes()
 	s.registerAffiliationRoutes()
 	s.registerRequestRoutes()
@@ -243,6 +254,7 @@ func New(cfg Config) *Server {
 	s.registerOAuth2Routes()
 	s.registerStepUpRoutes()
 	s.registerAdminRoutes()
+	s.registerOpsRoutes()
 	s.checkPublicRoutes()
 	return s
 }
@@ -275,7 +287,10 @@ func (s *Server) Handler() http.Handler {
 	// is written to the ledger.
 	h = s.rateLimit(h)
 	h = s.logRequests(h)
-	return s.securityHeaders(h)
+	h = s.securityHeaders(h)
+	// The probes /livez and /readyz are answered before the API pipeline
+	// (rate limit, audit, sessions): see probes. Metrics wrap everything.
+	return obs.Instrument(s.probes(h))
 }
 
 // streamDeadlineKey carries a streamed route's deadline to dispatch.
@@ -300,6 +315,31 @@ func (s *Server) timeouts(stream, timed http.Handler) http.Handler {
 	})
 }
 
+// RunReviewScheduler launches due review schedules and progresses open
+// scheduled campaigns (reminders, escalation, close-out) in every active
+// tenant, every interval until ctx is done (issue #166).
+func (s *Server) RunReviewScheduler(ctx context.Context, interval time.Duration) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	ctx = audit.WithSystemActor(ctx, reviews.Scheduler)
+	for {
+		if pols, err := s.policies(); err != nil {
+			s.log.Error("review scheduler: policies", "err", err)
+		} else if err := reviews.TickAll(ctx, s.store, s.clock(), pols); err != nil && ctx.Err() == nil {
+			s.log.Error("review scheduler failed", "err", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
+// SweeperLoops are the loop names RunSweeper reports to obs.DefaultLoops.
+var SweeperLoops = []string{"jit_sweep", "request_sweep", "sponsorship_sweep", "lifecycle_sweep", "containment_retries",
+	"admin_change_sweep"}
+
 // RunSweeper expires JIT grants, closes due request lines and ends due
 // lifecycle terms (warnings first) of every active tenant, each in its own
 // tenant transaction, every interval until ctx is done. A failure in one
@@ -308,33 +348,46 @@ func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	ctx = audit.WithSystemActor(ctx, "jit.sweeper") // jit.expire events name the job
+	// Each step is its own tracked loop (obs.DefaultLoops): a step that stalls or
+	// keeps failing shows as lag in /metrics, /readyz and Admin -> Platform health.
+	loops := obs.DefaultLoops
+	for _, name := range SweeperLoops {
+		loops.Register(name, interval, true)
+	}
+	step := func(name, what string, fn func() error) {
+		if err := loops.Run(name, fn); err != nil && ctx.Err() == nil {
+			s.log.Error(what+" failed", "err", err)
+		}
+	}
 	var maintained time.Time
 	for {
-		s.sweepAndRecord(ctx)
+		// sweepAndRecord logs its own failures and records the job runs
+		step("jit_sweep", "jit sweep", func() error { s.sweepAndRecord(ctx); return nil })
 		if now := s.clock(); now.Sub(maintained) >= jobMaintainGap {
 			if err := jobs.Maintain(ctx, s.store, now, jobStaleAfter, jobRetention); err != nil && ctx.Err() == nil {
 				s.log.Error("job history upkeep failed", "err", err)
 			}
 			maintained = now
 		}
-		if err := requests.SweepAll(audit.WithSystemActor(ctx, requests.Sweeper), s.store, s.clock()); err != nil && ctx.Err() == nil {
-			s.log.Error("request sweep failed", "err", err)
-		}
+		step("request_sweep", "request sweep", func() error {
+			return requests.SweepAll(audit.WithSystemActor(ctx, requests.Sweeper), s.store, s.clock())
+		})
 		// sponsorships first: the last one to end ends the person, the lifecycle sweep then has nothing left
-		if err := s.guests.SweepAll(audit.WithSystemActor(ctx, sponsorship.Sweeper), s.store, s.clock()); err != nil && ctx.Err() == nil {
-			s.log.Error("sponsorship sweep failed", "err", err)
-		}
-		if err := lifecycle.SweepAll(audit.WithSystemActor(ctx, lifecycle.Sweeper), s.store, s.containment, s.clock()); err != nil && ctx.Err() == nil {
-			s.log.Error("lifecycle sweep failed", "err", err)
-		}
-		if err := s.containment.SweepRetries(audit.WithSystemActor(ctx, "containment.sweeper"), s.store, "containment.sweeper"); err != nil && ctx.Err() == nil {
-			s.log.Error("containment retry sweep failed", "err", err)
-		}
+		step("sponsorship_sweep", "sponsorship sweep", func() error {
+			return s.guests.SweepAll(audit.WithSystemActor(ctx, sponsorship.Sweeper), s.store, s.clock())
+		})
+		step("lifecycle_sweep", "lifecycle sweep", func() error {
+			return lifecycle.SweepAll(audit.WithSystemActor(ctx, lifecycle.Sweeper), s.store, s.containment, s.clock())
+		})
+		step("containment_retries", "containment retry sweep", func() error {
+			return s.containment.SweepRetries(audit.WithSystemActor(ctx, "containment.sweeper"), s.store, "containment.sweeper")
+		})
 		// apply the admin changes whose cooling-off ended and expire the ones
 		// nobody approved in 72 hours (design §15.2)
-		if _, err := s.admin.Sweep(audit.WithSystemActor(ctx, "admin.sweeper")); err != nil && ctx.Err() == nil {
-			s.log.Error("admin change sweep failed", "err", err)
-		}
+		step("admin_change_sweep", "admin change sweep", func() error {
+			_, err := s.admin.Sweep(audit.WithSystemActor(ctx, "admin.sweeper"))
+			return err
+		})
 		select {
 		case <-ctx.Done():
 			return
@@ -585,6 +638,7 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	audit.SetRoute(r.Context(), rt.pattern, vars)
+	obs.SetRoute(r.Context(), rt.method+" "+rt.pattern) // the pattern, never the raw path: bounded metric labels
 	if rt.answersRead {
 		audit.AnswersRead(r.Context())
 	}
