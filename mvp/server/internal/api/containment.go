@@ -182,13 +182,27 @@ func (s *Server) executeLeaver(r *http.Request, p *params, id int64) (any, error
 		}
 	}
 	var plan jml.Plan
+	var refusal any
 	err = p.scope.Write(ctx, func(c *store.TenantTx) error {
 		var err error
 		plan, err = jml.ExecuteEvent(c, s.clock(), id, principal(r).User(), pols)
+		var ex *jml.ExistsError
+		if errors.As(err, &ex) {
+			// ExecuteEvent wrote nothing before refusing; commit so the refusal is audited.
+			refusal, err = s.joinerRefused(c, "execute", &id, ex, principal(r).User())
+		}
 		return err
 	})
+	if refusal != nil && err == nil {
+		return refusal, nil
+	}
 	var je *jml.Error
-	if errors.As(err, &je) {
+	switch {
+	case errors.Is(err, jml.ErrEventNotFound):
+		return nil, errStatus(http.StatusNotFound, err.Error())
+	case errors.Is(err, jml.ErrEventExecuted):
+		return nil, errStatus(http.StatusConflict, err.Error())
+	case errors.As(err, &je):
 		return nil, errStatus(http.StatusBadRequest, je.Msg)
 	}
 	if err != nil {
