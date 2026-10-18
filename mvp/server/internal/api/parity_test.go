@@ -26,6 +26,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/seed"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/testkit"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 	"github.com/nischalravi/tessera/mvp/server/policies"
 )
@@ -92,24 +93,26 @@ func (s paritySrv) Handler() http.Handler {
 // larkspur tenant only: integer ids are global across tenants, so a second
 // tenant's rows would shift the ids the fixtures recorded for rows the replay
 // creates) and returns a server for larkspur on the frozen clock, signed in
-// as parityUser (JIT requests as parityRequester).
+// as parityUser (JIT requests as parityRequester). The seed is testkit.Demo's,
+// the same seed.Larkspur run at the same instant, copied from the
+// once-per-binary template instead of re-run: ids and ledger are identical.
 func newSeededServer(tb testing.TB) paritySrv {
 	tb.Helper()
-	return newSeededServerWith(tb, func(conns []connectors.Connector) []seed.Tenant {
-		return []seed.Tenant{seed.Larkspur(conns)}
-	})
+	if testkit.Now != FrozenNow {
+		tb.Fatal("testkit.Now and FrozenNow must agree: the parity replay uses the testkit demo database")
+	}
+	return newServer(tb, testkit.Demo(tb).DB)
 }
 
 func newSeededServerWith(tb testing.TB, tenants func([]connectors.Connector) []seed.Tenant) paritySrv {
 	tb.Helper()
 	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(tb.TempDir(), "parity.db"))
+	st, err := store.Open(ctx, store.TestTarget(tb))
 	if err != nil {
 		tb.Fatal(err)
 	}
 	tb.Cleanup(func() { _ = st.Close() })
-	loader := policy.NewLoader(policies.FS)
-	pols, err := loader.Load()
+	pols, err := policy.NewLoader(policies.FS).Load()
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -120,6 +123,12 @@ func newSeededServerWith(tb testing.TB, tenants func([]connectors.Connector) []s
 	if _, err := seed.Run(ctx, st, FrozenNow, pols, tenants(conns)); err != nil {
 		tb.Fatal(err)
 	}
+	return newServer(tb, st)
+}
+
+func newServer(tb testing.TB, st *store.DB) paritySrv {
+	tb.Helper()
+	loader := policy.NewLoader(policies.FS)
 	srv := New(Config{
 		Store: st, Clock: timeutil.Frozen(FrozenNow), Policies: loader,
 		Connectors: func(time.Time) ([]connectors.Connector, error) { return connectors.Load("demo", FrozenNow) },
@@ -285,9 +294,26 @@ func diff(path string, want, got any) string {
 		return ""
 	}
 	if fmt.Sprintf("%T:%v", want, want) != fmt.Sprintf("%T:%v", got, got) {
+		if pgIDsMayDiffer(path, want, got) {
+			return ""
+		}
 		return fmt.Sprintf("%s: want %#v, got %#v", path, want, got)
 	}
 	return ""
+}
+
+// pgIDsMayDiffer: on Postgres (TESSERA_TEST_PG_URL) integer ids come from
+// sequences, which are not gapless: an upsert that finds its row (every
+// re-sync) still consumes a value, where SQLite's rowid reuses it. So the
+// numeric value of an "id" or "edge_id" member may differ there; everything
+// else, including the shape and the order of the response, must still match.
+// The SQLite run compares them exactly.
+func pgIDsMayDiffer(path string, want, got any) bool {
+	if store.PostgresTestURL() == "" || !(strings.HasSuffix(path, ".id") || strings.HasSuffix(path, ".edge_id")) {
+		return false
+	}
+	num := regexp.MustCompile(`^[0-9]+$`)
+	return num.MatchString(fmt.Sprint(want)) && num.MatchString(fmt.Sprint(got))
 }
 
 // replay checks one fixture against h.
@@ -319,6 +345,7 @@ func replay(t *testing.T, h http.Handler, fx fixture) {
 }
 
 func TestParity(t *testing.T) {
+	t.Parallel() // its own database; the replay inside stays in fixture order
 	fixtures := loadFixtures(t)
 	h := newSeededServer(t).Handler()
 	passed := 0
@@ -337,6 +364,7 @@ func TestParity(t *testing.T) {
 // (After the first write, newly allocated integer ids differ, because ids are
 // global across tenants; the isolation tests cover that part.)
 func TestParity_SecondTenantPresent(t *testing.T) {
+	t.Parallel() // its own database
 	fixtures := loadFixtures(t)
 	h := newSeededServerWith(t, func(conns []connectors.Connector) []seed.Tenant {
 		return seed.DefaultTenants(conns, FrozenNow)
