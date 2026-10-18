@@ -2,7 +2,6 @@ package seed_test
 
 import (
 	"context"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"testing"
@@ -53,7 +52,7 @@ func TestSeedUsersMatchDevIdP(t *testing.T) {
 func TestSeedDevIdPConnection(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 10, 8, 9, 30, 0, 0, time.UTC)
-	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "s.db"))
+	db, err := store.Open(ctx, store.TestTarget(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +93,7 @@ func TestSeedDevIdPConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 	// without WithDevIdP there is no connection and no user
-	db2, err := store.Open(ctx, filepath.Join(t.TempDir(), "s2.db"))
+	db2, err := store.Open(ctx, store.TestTarget(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +119,7 @@ func TestSeedDevIdPConnection(t *testing.T) {
 func TestSeedDevIdPSAMLConnection(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 10, 8, 9, 30, 0, 0, time.UTC)
-	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "s.db"))
+	db, err := store.Open(ctx, store.TestTarget(t))
 	if err != nil {
 		t.Fatal(err)
 	}

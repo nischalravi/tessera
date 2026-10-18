@@ -1,0 +1,66 @@
+{
+ "name": "deactivate acknowledged, re-read still ACTIVE",
+ "interactions": [
+  {
+   "request": {
+    "method": "GET",
+    "path": "/api/v1/users",
+    "query": {
+     "search": "profile.login eq \"alice@larkspur.example\""
+    }
+   },
+   "response": {
+    "status": 200,
+    "headers": {},
+    "body": [
+     {
+      "id": "00u1",
+      "status": "ACTIVE",
+      "profile": {
+       "login": "alice@larkspur.example",
+       "email": "alice@larkspur.example",
+       "firstName": "Alice",
+       "lastName": "Park"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "request": {
+    "method": "POST",
+    "path": "/api/v1/users/00u1/lifecycle/deactivate"
+   },
+   "response": {
+    "status": 200,
+    "headers": {},
+    "body": {}
+   }
+  },
+  {
+   "request": {
+    "method": "GET",
+    "path": "/api/v1/users",
+    "query": {
+     "search": "profile.login eq \"alice@larkspur.example\""
+    }
+   },
+   "response": {
+    "status": 200,
+    "headers": {},
+    "body": [
+     {
+      "id": "00u1",
+      "status": "ACTIVE",
+      "profile": {
+       "login": "alice@larkspur.example",
+       "email": "alice@larkspur.example",
+       "firstName": "Alice",
+       "lastName": "Park"
+      }
+     }
+    ]
+   }
+  }
+ ]
+}

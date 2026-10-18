@@ -12,6 +12,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
@@ -49,7 +50,7 @@ func auditCmd(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	sub, args := args[0], args[1:]
 	fs := flag.NewFlagSet("tessera audit "+sub, flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	db := fs.String("db", dbPath(os.Getenv("TESSERA_DB")), "SQLite database path")
+	db := fs.String("db", dbPath(os.Getenv("TESSERA_DB")), "SQLite database path or postgres:// DSN")
 	tenant := fs.String("tenant", "", "tenant slug (_platform for the platform chain)")
 	all := fs.Bool("all", false, "every tenant, including _platform")
 	from := fs.Int64("from-seq", 0, "first seq (default: the first event)")
@@ -179,7 +180,16 @@ func auditCheckpoint(ctx context.Context, st *store.DB, dbFile string, tenants [
 	if err != nil {
 		return err
 	}
-	sink, err := audit.NewSink(cfg.AnchorURL(dbFile))
+	// The s3:// sink's AWS SDK client goes through safehttp like every outbound call.
+	outCfg := *cfg
+	if outCfg.Env == config.Test {
+		outCfg.Env, outCfg.OutboundAllowLoopback = config.Prod, false
+	}
+	outbound, err := safehttp.ForConfig(&outCfg)
+	if err != nil {
+		return err
+	}
+	sink, err := audit.NewSink(cfg.AnchorURL(dbFile), audit.WithHTTPClient(outbound))
 	if err != nil {
 		return err
 	}
