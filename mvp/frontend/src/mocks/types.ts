@@ -16,33 +16,6 @@ export interface Workflow {
   sla: string;
 }
 
-export type RequestTarget = { kind: "group"; groupId: number; name: string; system: string; privileged: boolean; jit: boolean } | { kind: "role"; roleId: string; name: string };
-
-export interface AccessRequestDraft {
-  id: string;
-  createdAt: string;
-  status: "draft" | "submitted" | "approved" | "denied";
-  requester: string;
-  beneficiaries: { id: number; name: string }[];
-  items: RequestTarget[];
-  durationHours: number | null;
-  justification: string;
-  /** Removal requests come from My access. */
-  kind: "grant" | "removal";
-  /** JIT request ids created through the real API for JIT-eligible items. */
-  jitIds?: number[];
-}
-
-export interface DelegationItem {
-  id: string;
-  from: string;
-  to: string;
-  scope: string;
-  until: string;
-  reason: string;
-  status: "pending" | "accepted" | "declined";
-}
-
 export interface AdminSection {
   id: string;
   title: string;

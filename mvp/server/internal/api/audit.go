@@ -379,3 +379,35 @@ func (s *Server) auditExport(w http.ResponseWriter, r *http.Request, p *params) 
 	}
 	return nil, nil
 }
+
+// GET /api/activity: the signed-in user's own recent changes from the audit
+// ledger (Home > Recent activity). It is the caller's view of the tenant's
+// ledger: events whose actor is the caller, never another person's, and only
+// the action, target, outcome and time, not the event's detail. Page reads
+// (http.request events) are left out. ?limit= is 1 to 50 (default 10). It
+// needs only a sign-in: it shows what the caller did, not what the tenant did.
+func (s *Server) registerActivityRoutes() {
+	s.handle(http.MethodGet, "/api/activity", read, need(auth.PermAuthenticated), s.myActivity)
+}
+
+func (s *Server) myActivity(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	limit := min(p.queryInt("limit", 10, i64(1), nil), 50)
+	if err := validated(p, nil); err != nil {
+		return nil, err
+	}
+	out := []ojson.Object{}
+	pr := principal(r)
+	if pr == nil || pr.UserID == nil {
+		return out, nil // a token principal has no person whose activity this is
+	}
+	rows, err := store.TxFrom(r.Context()).AuditEvents(store.AuditFilter{Limit: int(limit), ActorID: pr.UserID.String()})
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range rows {
+		out = append(out, ojson.Object{{Key: "id", Value: e.ID.String()}, {Key: "action", Value: e.Action},
+			{Key: "target_type", Value: e.TargetType}, {Key: "target_id", Value: e.TargetID}, {Key: "outcome", Value: e.Outcome},
+			{Key: "occurred_at", Value: e.OccurredAt.UTC().Format(audit.TimeLayout)}})
+	}
+	return out, nil
+}

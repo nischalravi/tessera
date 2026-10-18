@@ -1,4 +1,4 @@
-import type { AdminSection, DelegationItem, Workflow } from "./types";
+import type { AdminSection, Workflow } from "./types";
 
 export const WORKFLOWS: Workflow[] = [
   { id: "wf-low", name: "Low-risk request", trigger: "Access request, risk low", steps: ["Manager approves", "Auto-provision", "Verify by re-aggregation"], appliesTo: "Non-privileged groups and roles", enabled: true, sla: "2 business days" },
@@ -6,11 +6,6 @@ export const WORKFLOWS: Workflow[] = [
   { id: "wf-sod", name: "SoD exception", trigger: "Request introduces an SoD conflict", steps: ["Risk owner accepts", "Select mitigating control", "Set expiry"], appliesTo: "SoD policies", enabled: true, sla: "3 business days" },
   { id: "wf-mover", name: "Mover micro-review", trigger: "HRIS mover event", steps: ["New manager reviews retained access", "Remove unreviewed after 14 days"], appliesTo: "All movers", enabled: false, sla: "14 days" },
   { id: "wf-owner", name: "Machine identity owner change", trigger: "Owner leaves or changes team", steps: ["Reassign owner", "Rotate secrets", "Owner certifies scopes"], appliesTo: "Service accounts and AI agents", enabled: true, sla: "5 business days" },
-];
-
-export const DELEGATIONS: DelegationItem[] = [
-  { id: "dlg-1", from: "Kofi Mensah", to: "Ingrid Lindqvist", scope: "Access reviews for Backend team", until: "2026-10-24", reason: "Kofi is on leave for two weeks", status: "pending" },
-  { id: "dlg-2", from: "Sana Iyer", to: "Thandiwe Mokoena", scope: "Approvals for snowflake:ACCOUNTADMIN", until: "2026-10-15", reason: "Quarter-end freeze cover", status: "pending" },
 ];
 
 export const ADMIN_SECTIONS: AdminSection[] = [

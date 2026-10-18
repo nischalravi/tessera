@@ -897,6 +897,17 @@ export const approveRequest = (id: string, reason?: string) => line(id, "approve
 export const denyRequest = (id: string, reason: string) => line(id, "deny", { reason });
 export const cancelRequest = (id: string) => line(id, "cancel");
 export const removeRequest = (id: string, reason?: string) => line(id, "remove", reason ? { reason } : {});
+/** One of the signed-in user's own recent changes from the audit ledger (Home > Recent activity). */
+export interface ActivityEvent {
+  id: string;
+  action: string;
+  target_type: string | null;
+  target_id: string | null;
+  outcome: string;
+  occurred_at: string;
+}
+export const activityPath = (limit = 10) => `/activity?limit=${limit}`;
+
 /** Organizations (Directory > Organizations): read-only, derived from the departments in the HR data. */
 export interface OrgPerson { id: number; name: string; title: string | null; status: string }
 export interface OrgRow {

@@ -1,15 +1,13 @@
 /**
  * Preview mock layer. Typed stand-ins for backend capabilities that do not exist yet:
- * workflows, non-JIT access requests, delegations,
- * disable / reset-password actions and admin settings.
+ * workflows, reset-password and import actions, generic object create/edit and admin settings.
  *
  * State lives in this browser only (localStorage) so the demo feels real across reloads.
  * Nothing here calls the API, and nothing here invents API routes.
  */
 import { useSyncExternalStore } from "react";
 import { store } from "../app/storage";
-import { ADMIN_SECTIONS, DELEGATIONS, WORKFLOWS } from "./data";
-import type { AccessRequestDraft, DelegationItem } from "./types";
+import { ADMIN_SECTIONS, WORKFLOWS } from "./data";
 
 export * from "./types";
 export { ADMIN_SECTIONS, WORKFLOWS };
@@ -18,13 +16,11 @@ const delay = <T,>(v: T, ms = 350) => new Promise<T>((r) => setTimeout(() => r(v
 
 // --------------------------------------------------------- local store
 interface MockState {
-  requests: AccessRequestDraft[];
-  delegations: DelegationItem[];
   log: { at: string; actor: string; action: string; target: string }[];
 }
 
 const KEY = "mock.v1";
-const EMPTY: MockState = { requests: [], delegations: DELEGATIONS, log: [] };
+const EMPTY: MockState = { log: [] };
 let state: MockState = { ...EMPTY, ...store.get<Partial<MockState>>(KEY, {}) };
 const subs = new Set<() => void>();
 function commit(next: MockState) {
@@ -44,37 +40,6 @@ export function useMockState() {
 function log(actor: string, action: string, target: string) {
   return [{ at: new Date().toISOString(), actor, action, target }, ...state.log].slice(0, 200);
 }
-
-const newId = (p: string) => `${p}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-
-// ------------------------------------------------------------ requests
-export const mockRequests = {
-  saveDraft(d: Omit<AccessRequestDraft, "id" | "createdAt" | "status"> & { id?: string }) {
-    const id = d.id ?? newId("draft");
-    const rec: AccessRequestDraft = { ...d, id, createdAt: new Date().toISOString(), status: "draft" };
-    commit({ ...state, requests: [rec, ...state.requests.filter((r) => r.id !== id)] });
-    return rec;
-  },
-  async submit(d: Omit<AccessRequestDraft, "id" | "createdAt" | "status"> & { id?: string }) {
-    const rec: AccessRequestDraft = { ...d, id: d.id ?? newId("req"), createdAt: new Date().toISOString(), status: "submitted" };
-    commit({ ...state, requests: [rec, ...state.requests.filter((r) => r.id !== rec.id)], log: log(d.requester, d.kind === "removal" ? "request.removal" : "request.submit", rec.items.map((i) => i.name).join(", ")) });
-    return delay(rec);
-  },
-  async decide(id: string, decision: "approved" | "denied", actor: string) {
-    commit({ ...state, requests: state.requests.map((r) => (r.id === id ? { ...r, status: decision } : r)), log: log(actor, `request.${decision}`, id) });
-    return delay(true, 200);
-  },
-  remove(id: string) {
-    commit({ ...state, requests: state.requests.filter((r) => r.id !== id) });
-  },
-};
-
-export const mockDelegations = {
-  async decide(id: string, status: "accepted" | "declined", actor: string) {
-    commit({ ...state, delegations: state.delegations.map((d) => (d.id === id ? { ...d, status } : d)), log: log(actor, `delegation.${status}`, id) });
-    return delay(true, 200);
-  },
-};
 
 // -------------------------------------------------------- identity ops
 export const mockIdentityOps = {
