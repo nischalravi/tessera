@@ -153,6 +153,9 @@ GET    /api/email/messages/{message_id}              email.read      -  # issue 
 POST   /api/email/messages/{message_id}/retry        email.manage    -  # issue #189
 POST   /api/identities/{identity_id}/contain         identities.contain STEP_UP_POLICY  # issue #106
 GET    /api/identities/{identity_id}/containment     graph.read      -  # issue #106
+POST   /api/identities/{identity_id}/disable         identities.contain STEP_UP_POLICY  # wire-previews: containment, then disabled
+POST   /api/identities/{identity_id}/enable          identities.contain STEP_UP_POLICY  # wire-previews: restores what Disable disabled
+GET    /api/identities/{identity_id}/disables        graph.read      -  # wire-previews
 POST   /api/containment-retries/{retry_id}/retry-now identities.contain STEP_UP_POLICY  # issue #106
 PUT    /api/connections/{id}/containment-credential  connections.manage STEP_UP_POLICY  # issue #106
 POST   /api/connections/{id}/validate                connections.manage -

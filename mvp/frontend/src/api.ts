@@ -1309,6 +1309,43 @@ export interface ContainmentReport {
 export const containIdentity = (identityId: number, reason: string) =>
   api<ContainmentReport>(`/identities/${identityId}/contain`, { reason });
 
+/** Disable / Enable of a person: Disable runs the kill switch's containment, then sets the accounts and the identity to disabled. */
+export interface DisableRecord {
+  id: string;
+  identity_id: number;
+  reason: string;
+  disabled_by: string;
+  disabled_at: string;
+  /** done, manual, retrying or none: how the provider-side containment of this Disable ended */
+  containment_status: "done" | "manual" | "retrying" | "none";
+  /** the accounts Disable set to disabled; Enable sets back these and nothing else */
+  accounts: { id: number; system: string; username: string }[];
+  enabled_by: string | null;
+  enabled_at: string | null;
+  enable_reason: string | null;
+}
+export interface DisableResult {
+  identity_id: number;
+  status: "disabled";
+  disable: DisableRecord;
+  containment: ContainmentReport & { status: "done" | "manual" | "retrying"; retry_ids?: string[] };
+}
+export interface EnableResult {
+  identity_id: number;
+  status: "active";
+  disable: DisableRecord;
+  restored: { id: number; system: string; username: string }[];
+  skipped: { id: number; system: string; username: string }[];
+  not_restored: string;
+  pending_containment_retries: number;
+}
+export const disableIdentity = (identityId: number, reason: string) =>
+  api<DisableResult>(`/identities/${identityId}/disable`, { reason });
+export const enableIdentity = (identityId: number, reason: string) =>
+  api<EnableResult>(`/identities/${identityId}/enable`, { reason });
+export const identityDisables = (identityId: number) =>
+  api<{ identity_id: number; disables: DisableRecord[] }>(`/identities/${identityId}/disables`);
+
 /** A containment step that failed and is queued for retry (or was given up on). */
 export interface ContainmentRetry {
   id: string;

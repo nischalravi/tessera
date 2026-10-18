@@ -7,7 +7,7 @@ import { usePersona } from "../../app/persona";
 import {
   Avatar, Badge, Button, Callout, Chip, Column, Command, DataTable, Drawer, EmptyState, Flag, GroupTabs, IdLink, Page, PreviewBadge, RiskPill, Status, TypeBadge, useSelected, useToast,
 } from "../../components";
-import { ORGS, mockObjects, useMockState } from "../../mocks";
+import { ORGS, mockObjects } from "../../mocks";
 import { AgentCard } from "./AgentCards";
 import { StateBadge, WORKER_LABEL } from "../lifecycle/parts";
 import { AccountPanel, AppPanel, GroupPanel, IdentityPanel, OrgPanel } from "./Panels";
@@ -129,10 +129,9 @@ export function People() {
   const [selected, setSelected] = useSelected();
   const acts = useIdentityActions();
   const nav = useNavigate();
-  const mock = useMockState();
   const [newOpen, setNew] = useDrawerParam("new");
   const imp = useImport();
-  const rows = useMemo(() => data?.map((r) => (mock.disabled[r.id] && r.status === "active" ? { ...r, status: "disabled" } : r)) ?? null, [data, mock.disabled]);
+  const rows = data;
   const cols = useMemo(() => {
     const c = identityColumns();
     c.splice(2, 0, { id: "worker", header: "Worker type", sort: (r) => worker.get(r.id)?.worker_type ?? "employee",

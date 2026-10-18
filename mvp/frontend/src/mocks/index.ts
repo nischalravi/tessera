@@ -20,13 +20,11 @@ const delay = <T,>(v: T, ms = 350) => new Promise<T>((r) => setTimeout(() => r(v
 interface MockState {
   requests: AccessRequestDraft[];
   delegations: DelegationItem[];
-  /** identity id -> state set by preview actions */
-  disabled: Record<number, string>;
   log: { at: string; actor: string; action: string; target: string }[];
 }
 
 const KEY = "mock.v1";
-const EMPTY: MockState = { requests: [], delegations: DELEGATIONS, disabled: {}, log: [] };
+const EMPTY: MockState = { requests: [], delegations: DELEGATIONS, log: [] };
 let state: MockState = { ...EMPTY, ...store.get<Partial<MockState>>(KEY, {}) };
 const subs = new Set<() => void>();
 function commit(next: MockState) {
@@ -80,17 +78,6 @@ export const mockDelegations = {
 
 // -------------------------------------------------------- identity ops
 export const mockIdentityOps = {
-  /** Would disable every account in connected systems and revoke sessions. */
-  async disable(id: number, name: string, actor: string) {
-    commit({ ...state, disabled: { ...state.disabled, [id]: new Date().toISOString() }, log: log(actor, "identity.disable", name) });
-    return delay({ accounts: "all", sessionsRevoked: true });
-  },
-  async enable(id: number, name: string, actor: string) {
-    const disabled = { ...state.disabled };
-    delete disabled[id];
-    commit({ ...state, disabled, log: log(actor, "identity.enable", name) });
-    return delay(true);
-  },
   /** Would trigger a reset through the identity provider; Tessera never sees the password. */
   async resetPassword(name: string, actor: string) {
     commit({ ...state, log: log(actor, "identity.reset_password", name) });

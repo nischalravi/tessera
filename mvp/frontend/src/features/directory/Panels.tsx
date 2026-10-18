@@ -15,7 +15,7 @@ import {
 } from "../../components";
 import { AffiliationsSection, IdentifiersSection } from "./affiliations";
 import { LifecycleSection } from "../lifecycle/parts";
-import { ORGS, OrgUnit, mockIdentityOps, mockObjects, useMockState } from "../../mocks";
+import { ORGS, OrgUnit, mockObjects } from "../../mocks";
 import { useSession } from "../../app/auth";
 import { ContainDialog, ContainmentRetries } from "./containment";
 import { RevokeDrawer } from "./IdentityPage";
@@ -45,7 +45,6 @@ export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void
   const { data: d, error: loadError, reload } = useApi<IdentityDetail>(validId ? `/identities/${id}` : null);
   const error = validId ? loadError : invalidLink();
   const acts = useIdentityActions();
-  const mock = useMockState();
   const { actor } = usePersona();
   const toast = useToast();
   const [tab, setTab] = useTab<IdTab>("overview", id);
@@ -58,7 +57,7 @@ export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void
     return <SidePanel title={error ? "Couldn't load identity" : "Loading…"} onClose={onClose} fullHref={`/directory/identities/${id}`}><Loading error={error} what="identity" kind="block" onRetry={reload} /></SidePanel>;
   }
   const human = d.type === "human";
-  const status = mock.disabled[d.id] && d.status === "active" ? "disabled" : d.status;
+  const status = d.status;
   const lastLogin = d.accounts.map((a) => a.last_login_at).filter(Boolean).sort().pop() ?? null;
   const topRec = d.recommendations[0];
   const why = d.effective_permissions.find((p) => p.tags.length && p.unused) ?? d.effective_permissions.find((p) => p.privileged && p.unused) ?? d.effective_permissions.find((p) => p.tags.length);
@@ -94,8 +93,8 @@ export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void
               ? [{ label: "Contain", icon: <ShieldAlert size={I} />, danger: true, onClick: () => setContaining(true) }]
               : []),
             status === "disabled"
-              ? { label: "Enable", icon: <UserCheck size={I} />, onClick: async () => { await mockIdentityOps.enable(d.id, d.name, actor); toast(`${d.name} re-enabled (preview)`); } }
-              : { label: "Disable", icon: <Ban size={I} />, danger: true, disabled: d.status === "terminated", onClick: () => acts.disable(d) },
+              ? { label: "Enable", icon: <UserCheck size={I} />, disabled: !can("identities.contain"), onClick: () => acts.enable(d) }
+              : { label: "Disable", icon: <Ban size={I} />, danger: true, disabled: d.status !== "active" || !can("identities.contain"), onClick: () => acts.disable(d) },
           ]}
         />
       }
@@ -114,7 +113,7 @@ export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void
             <dt>{human ? "Job title" : "Kind"}</dt><dd>{d.title ?? <span className="faint">-</span>}</dd>
             <dt>Department</dt><dd>{d.department ?? <span className="faint">-</span>}</dd>
             {human ? <><dt>Manager</dt><dd><IdLink i={d.manager} /></dd></> : <><dt>Owner</dt><dd>{d.owner ? <IdLink i={d.owner} /> : <Badge tone="critical">No owner</Badge>}</dd></>}
-            <dt>Status</dt><dd><Status s={status} />{mock.disabled[d.id] && <> <PreviewBadge what="Disabled in this browser by a Preview action" /></>}</dd>
+            <dt>Status</dt><dd><Status s={status} /></dd>
             {d.email && <><dt>Email</dt><dd className="truncate">{d.email}</dd></>}
             {d.hired_at && <><dt>Since</dt><dd>{fmtDay(d.hired_at)}</dd></>}
             {d.terminated_at && <><dt>Left</dt><dd>{fmtDay(d.terminated_at)}</dd></>}
