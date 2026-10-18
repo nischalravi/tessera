@@ -112,6 +112,8 @@ var tables = []string{
 	"business_role_requests",
 	// attribute conditions (schema/0221_abac.sql)
 	"abac_policies", "abac_policy_versions", "abac_bindings",
+	// separation of duties: functions, risks, rulesets (schema/0300_sod.sql)
+	"sod_functions", "sod_rulesets", "sod_risks", "sod_risk_functions", "sod_versions",
 	// identity lifecycle (schema/0220_lifecycle.sql)
 	"identity_lifecycle", "identity_lifecycle_events",
 	// approval routing (schema/0206_approvals.sql)

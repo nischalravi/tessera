@@ -236,6 +236,10 @@ To point a local dev instance at a real LDAP or LLDAP server (for example an LLD
 `POST /api/requests/{id}/approve|deny|cancel|remove {reason}` ·
 `GET|POST /api/abac/policies` · `GET|PUT /api/abac/policies/{id}` · `POST /api/abac/policies/{id}/retire` ·
 `POST /api/abac/simulate` · `GET /api/abac/bindings` · `PUT /api/catalog/items/{group_id}/policy` ·
+`GET|POST /api/sod/functions|risks|rulesets` · `GET|PUT /api/sod/{functions|risks|rulesets}/{id}` ·
+`POST /api/sod/{functions|risks|rulesets}/{id}/retire` · `GET /api/sod/rulesets/{id}/export` ·
+`POST /api/sod/rulesets/import` · `POST /api/sod/import-legacy` · `GET /api/sod/violations` ·
+`POST /api/sod/simulate` ·
 `GET /api/approvals/inbox` · `GET /api/approvals/delegates` · `GET|POST /api/approvals/delegations` ·
 `POST /api/approvals/delegations/{id}/revoke` ·
 `GET /api/correlation/queue` · `GET /api/correlation/decisions` ·
@@ -483,6 +487,41 @@ Reading and simulating need `graph.read`; changing a policy needs `roles.manage`
 phishing-resistant sign-in, and binding a catalog item needs `catalog.manage` (same step-up).
 Not yet: location, worker type and custom HRIS fields (the identity record does not store them, so
 a test on one is always unknown and denies; they arrive with the HRIS attribute mapping).
+
+### SoD functions, risks and rulesets
+
+**Protection → Policies & SoD → Functions / Risks / Rulesets** (issue #298), the model behind
+**Insights → SoD conflicts** (`internal/sod`, schema `0300_sod.sql`).
+
+- **Function**: a named, reusable set of entitlements, with an owner. Each selector is a system
+  (blank: any) plus a permission id or an action name pattern (`*` wildcard, `\` escapes), optionally
+  narrowed by one resource attribute (`environment`, `tag`, `resource`, `privileged`): the
+  fine-grained "auth object / field / value" case.
+- **Risk**: name, description, priority (critical to low), business process, owner, and two or more
+  conflicting functions. Optional `subjects` limit who is checked (identity types, statuses, an ABAC
+  condition). A violation is one identity effectively holding at least one entitlement from each of
+  two of the risk's functions, by any path (roles, groups, direct grants); the two must be distinct
+  entitlements. A risk with more than two functions reports each conflicting pair.
+- **Ruleset**: a named group of risks, enabled or disabled per tenant. Functions, risks and rulesets
+  are versioned (`sod_versions`, append-only, with who and why); a ruleset's version holds its whole
+  document, so its history is the history of everything in it. Every change is audited in the same
+  transaction (`sod.function|risk|ruleset.*`). Export gives a YAML file (`schema: tessera.sod/v1`);
+  `POST /api/sod/rulesets/import {yaml, prune, dry_run}` makes the ruleset match a file (by key,
+  everything validated before anything is written; importing the same file changes nothing).
+- **Legacy policy files.** `separation_of_duties` YAML policies are converted to a ruleset "Legacy SoD
+  policies": each side of a conflict is a function, each policy a risk keyed by the policy id, so
+  violation keys, messages and results are unchanged (tests compare them on the tiny world and the
+  seeded larkspur tenant). `tessera seed` imports them; for any other tenant
+  `POST /api/sod/import-legacy` does it once. Until a tenant has a stored ruleset its policy files
+  are checked directly through the same engine.
+- **Detection and simulate.** `GET /api/sod/violations` lists violations per identity, risk and
+  function pair with the paths that grant each side; filters `risk`, `priority`, `ruleset`, `system`,
+  `business_process`, `identity`. `POST /api/sod/simulate {beneficiary_ids, catalog_item_ids,
+  duration_hours}` says which risks a request would trigger; Request access shows it as a warning
+  before submit (advisory; roles in the cart are not simulated yet).
+
+Reading is `graph.read`; changing needs `sod.manage` (policy admin) and a fresh phishing-resistant
+sign-in; simulate needs `requests.create` (and `requests.create_for_others` for other people).
 
 ### Contractors, guests and end dates
 
@@ -923,7 +962,7 @@ the right. Arrow keys move between items.
 | (top) | **Home**, **Inbox** (count) |
 | **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts (with *Account matches*), Roles, Organizations (Preview) |
 | **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
-| **Protection** | Policies & SoD (violations, policies, what-if simulation), Attribute policies, Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
+| **Protection** | Policies & SoD (violations, policies, what-if simulation, SoD functions, risks and rulesets), Attribute policies, Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
 | **Settings** | Connections (governed connections and the setup wizard), Admin |
 
 **Home.** For the admin & security persona: the tenant name and a sync line, then tabs

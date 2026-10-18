@@ -35,6 +35,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 	"github.com/nischalravi/tessera/mvp/server/internal/requests"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
+	"github.com/nischalravi/tessera/mvp/server/internal/sod"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
@@ -195,6 +196,7 @@ func New(cfg Config) *Server {
 	s.registerRequestRoutes()
 	s.registerRoleRoutes()
 	s.registerAbacRoutes()
+	s.registerSodRoutes()
 	s.registerLifecycleRoutes()
 	s.registerGuestRoutes()
 	s.registerNotificationRoutes()
@@ -337,7 +339,27 @@ func (s *Server) sweepTenant(ctx context.Context, t tenancy.ID) error {
 	return nil
 }
 
+// policies are the policy files; see effectivePolicies for what is evaluated.
 func (s *Server) policies() ([]*policy.Policy, error) { return s.cfg.Policies.Load() }
+
+// effectivePolicies is what the tenant's analysis evaluates: the policy files
+// other than separation of duties, plus one policy per SoD risk of its enabled
+// rulesets (or of its legacy YAML SoD policies while it has no rulesets).
+func (s *Server) effectivePolicies(tx *store.TenantTx) ([]*policy.Policy, error) {
+	files, err := s.policies()
+	if err != nil {
+		return nil, err
+	}
+	legacy, err := policy.LegacyBundle(files, false)
+	if err != nil {
+		return nil, err
+	}
+	risks, err := sod.Load(tx, legacy)
+	if err != nil {
+		return nil, err
+	}
+	return policy.Effective(files, risks), nil
+}
 
 // ---------------------------------------------------------------- routing
 
