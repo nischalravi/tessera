@@ -351,7 +351,7 @@ export function GroupPanel({ g, onClose }: { g: Group; onClose: () => void }) {
             <dt>System</dt><dd>{g.system}</dd>
             <dt>Kind</dt><dd>{g.kind.replace(/_/g, " ")}</dd>
             <dt>Privileged</dt><dd>{g.privileged ? <Badge tone="warning">Privileged</Badge> : "No"}</dd>
-            <OwnershipRows kind="group" objectKey={g.id} label={key} />
+            <OwnershipRows kind="group" objectKey={g.id} label={g.name} />
             <dt>Access model</dt><dd>{g.requestable ? <Badge tone="info">JIT-eligible</Badge> : "Standing access"}</dd>
             <dt>Approval</dt><dd>A person with requests.decide (see the Request catalog tab)</dd>
             <dt>Review cadence</dt><dd>{g.privileged ? "Quarterly, plus exception reviews" : "Exception reviews only"}</dd>
