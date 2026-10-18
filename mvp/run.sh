@@ -31,6 +31,9 @@ export TESSERA_DEV_IDP_URL="$DEVIDP_URL"
 export TESSERA_POLICY_DIR="${TESSERA_POLICY_DIR:-$SERVER/policies}"
 # local development: every API call needs a session; users sign in through the dev IdP
 export TESSERA_ENV="${TESSERA_ENV:-dev}"
+# dev only: an in-process fake SCIM target so Admin → Provisioning can be tried without a real
+# system (the API refuses it in production). TESSERA_DEV_FAKE_TARGET=0 turns it off.
+export TESSERA_DEV_FAKE_TARGET="${TESSERA_DEV_FAKE_TARGET:-1}"
 # the browser origin of the UI: the CSRF Origin check admits it
 export TESSERA_PUBLIC_URL="${TESSERA_PUBLIC_URL:-http://localhost:$UI_PORT}"
 
@@ -130,7 +133,13 @@ esac
 
 build_server
 setup_frontend
-if [ "${1:-}" = "--reseed" ] || [ ! -f "$DB" ]; then
+if [ "${1:-}" = "--reseed" ]; then
+  seed
+elif [[ "$DB" == postgres://* || "$DB" == postgresql://* ]]; then
+  # A Postgres database is never wiped implicitly (it is not a file that may be missing);
+  # `serve` seeds an empty one in dev, and --reseed wipes and reseeds it.
+  :
+elif [ ! -f "$DB" ]; then
   seed
 elif ! "$BIN" check-db -db "$DB" >/dev/null 2>&1; then
   # a database from an older schema (before tenancy or sign-in) has no users to sign in as

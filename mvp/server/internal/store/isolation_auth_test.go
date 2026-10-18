@@ -284,7 +284,8 @@ func TestIsolation_AuthInsertsRefused(t *testing.T) {
 			return c.SaveRequest(r)
 		},
 		"DecideItem/by A's user": func(c *store.TenantTx) error {
-			return c.DecideItem(f.B.IDs["item"], "keep", nil, now, store.UserRef{ID: a.user.ID, Display: "x"})
+			_, err := c.DecideItem(f.B.IDs["item"], "keep", nil, now, store.UserRef{ID: a.user.ID, Display: "x"})
+			return err
 		},
 		"MarkHrisEventExecuted/by A's user": func(c *store.TenantTx) error {
 			return c.MarkHrisEventExecuted(f.B.IDs["hris:leaver"], now, store.UserRef{ID: a.user.ID})
