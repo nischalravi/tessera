@@ -82,6 +82,10 @@ type Config struct {
 	RPID                   string
 	Notify                 string
 	DevIdPURL              string
+	// FakeTarget is TESSERA_DEV_FAKE_TARGET: cmd/tessera starts an in-process
+	// fake SCIM target on a loopback port, so the provisioning screens can be
+	// demonstrated without a real system. Refused in prod.
+	FakeTarget bool
 	// Mail is the notification email delivery (issue #189).
 	Mail Mail
 	// NotifyMaxAttempts is how many times the dispatcher tries to send one
@@ -240,6 +244,7 @@ func Load(getenv func(string) string) (*Config, error) {
 			c.FrozenNow = t
 		}
 	}
+	c.FakeTarget = boolean("TESSERA_DEV_FAKE_TARGET", false, false)
 	c.DevIdPURL = strings.TrimSpace(getenv("TESSERA_DEV_IDP_URL"))
 	if c.DevIdPURL == "" && !prod {
 		c.DevIdPURL = "http://127.0.0.1:8001"
@@ -253,6 +258,8 @@ func Load(getenv func(string) string) (*Config, error) {
 		bad("TESSERA_PUBLIC_URL: %v", err)
 	case prod && pub.Scheme != "https":
 		bad("TESSERA_PUBLIC_URL must be https with TESSERA_ENV=prod (got %s)", pub.Scheme)
+	case prod && DevOnlyURL(c.PublicURL) != "":
+		bad("TESSERA_PUBLIC_URL must not be %s with TESSERA_ENV=prod", DevOnlyURL(c.PublicURL))
 	}
 	// §11: the insecure-cookie fallback (Safari on http://localhost) only in
 	// dev, and only for a localhost public URL.
@@ -319,6 +326,9 @@ func Load(getenv func(string) string) (*Config, error) {
 		}
 		if c.DevIdPURL != "" {
 			bad("TESSERA_DEV_IDP_URL must not be set with TESSERA_ENV=prod")
+		}
+		if c.FakeTarget {
+			bad("TESSERA_DEV_FAKE_TARGET must not be set with TESSERA_ENV=prod (the fake provisioning target accepts any change)")
 		}
 		if IsPostgresDSN(c.DB) {
 			// Never echo the DSN: it carries the password.
@@ -617,6 +627,35 @@ func readKEKFile(path string) ([]byte, error) {
 		return nil, err
 	}
 	return decodeKEK(string(b))
+}
+
+// DevOnlyURL says why a URL may be used only in development: plain http,
+// or a host that is localhost or a loopback, private or link-local
+// address. "" means the URL is fine in production. Load applies it to
+// TESSERA_PUBLIC_URL, and the configuration import (internal/transport)
+// to every URL in a bundle applied to a production server.
+func DevOnlyURL(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	if u.Scheme == "http" || u.Scheme == "ws" {
+		return "plain " + u.Scheme
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return "a localhost address"
+	}
+	if a, err := netip.ParseAddr(host); err == nil {
+		a = a.Unmap()
+		switch {
+		case a.IsLoopback():
+			return "a loopback address"
+		case a.IsPrivate(), a.IsLinkLocalUnicast(), a.IsUnspecified():
+			return "a private or link-local address"
+		}
+	}
+	return ""
 }
 
 func parsePublicURL(s string) (*url.URL, error) {
