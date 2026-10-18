@@ -164,6 +164,14 @@ POST   /api/connections/{id}/findings/{fid}/accept   connections.manage -
 GET    /api/connections/{id}/health                  connections.read   -
 GET    /api/insights/deployment-health               connections.read   -
 POST   /api/insights/deployment-health/rerun         connections.manage -
+GET    /api/config/signing-key                       admin.read      -  # issue #170
+POST   /api/config/export                            config.transport -  #
+GET    /api/config/trusted-signers                   admin.read      -  #
+POST   /api/config/trusted-signers                   config.transport STEP_UP_POLICY #
+DELETE /api/config/trusted-signers/{kid}             config.transport STEP_UP_POLICY #
+POST   /api/config/import/plan                       config.transport -  #
+POST   /api/config/import/apply                      config.transport STEP_UP_POLICY #
+GET    /api/config/imports                           admin.read      -  #
 GET    /api/groups/folders                           groups.admin    -  # issue #44
 POST   /api/groups/folders                           groups.admin    -  # issue #44
 GET    /api/groups/folders/{id}                      groups.admin    -  # issue #44

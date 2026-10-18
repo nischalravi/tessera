@@ -68,6 +68,8 @@ const (
 	PermConnectionsRead     Permission = "connections.read"
 	PermConnectionsManage   Permission = "connections.manage"
 	PermConnectionsActivate Permission = "connections.activate"
+	// Config transport between tenants (issue #170).
+	PermConfigTransport Permission = "config.transport"
 	// account correlation (issue #160)
 	PermIdentitiesCorrelate Permission = "identities.correlate"
 	PermIdentitiesMerge     Permission = "identities.merge"
@@ -117,7 +119,7 @@ var rolePermissions = map[Role][]Permission{
 		PermGuestsSponsor, PermGuestsRead, PermSponsorshipsApprove, PermIdentitiesContain},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
-		PermConnectionsActivate, PermRequestsCreate, PermEmailRead, PermEmailManage, PermGroupsAdmin},
+		PermConnectionsActivate, PermRequestsCreate, PermEmailRead, PermEmailManage, PermGroupsAdmin, PermConfigTransport},
 	RoleBreakGlass: {PermAdminRead, PermBreakGlassRecover},
 }
 
@@ -204,7 +206,7 @@ var scopePermissions = map[Scope][]Permission{
 		PermConnectionsManage, PermConnectionsActivate, PermRolesManage, PermLifecycleManage, PermGroupsAdmin},
 	ScopeAudit: {PermAuditRead, PermAuditVerify},
 	ScopeAdmin: {PermEmailRead, PermEmailManage, PermAdminRead, PermAdminChangeReq, PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev,
-		PermBreakGlassRecover},
+		PermBreakGlassRecover, PermConfigTransport},
 }
 
 // perms returns the union of the roles' permissions.

@@ -271,6 +271,8 @@ func Load(getenv func(string) string) (*Config, error) {
 		bad("TESSERA_PUBLIC_URL: %v", err)
 	case prod && pub.Scheme != "https":
 		bad("TESSERA_PUBLIC_URL must be https with TESSERA_ENV=prod (got %s)", pub.Scheme)
+	case prod && DevOnlyURL(c.PublicURL) != "":
+		bad("TESSERA_PUBLIC_URL must not be %s with TESSERA_ENV=prod", DevOnlyURL(c.PublicURL))
 	}
 	// §11: the insecure-cookie fallback (Safari on http://localhost) only in
 	// dev, and only for a localhost public URL.
@@ -682,6 +684,35 @@ func readKEKFile(path string) ([]byte, error) {
 		return nil, err
 	}
 	return decodeKEK(string(b))
+}
+
+// DevOnlyURL says why a URL may be used only in development: plain http,
+// or a host that is localhost or a loopback, private or link-local
+// address. "" means the URL is fine in production. Load applies it to
+// TESSERA_PUBLIC_URL, and the configuration import (internal/transport)
+// to every URL in a bundle applied to a production server.
+func DevOnlyURL(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	if u.Scheme == "http" || u.Scheme == "ws" {
+		return "plain " + u.Scheme
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return "a localhost address"
+	}
+	if a, err := netip.ParseAddr(host); err == nil {
+		a = a.Unmap()
+		switch {
+		case a.IsLoopback():
+			return "a loopback address"
+		case a.IsPrivate(), a.IsLinkLocalUnicast(), a.IsUnspecified():
+			return "a private or link-local address"
+		}
+	}
+	return ""
 }
 
 func parsePublicURL(s string) (*url.URL, error) {

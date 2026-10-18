@@ -40,6 +40,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
+	"github.com/nischalravi/tessera/mvp/server/internal/transport"
 )
 
 // DefaultMaxBodyBytes caps request bodies (every request body is a small JSON object).
@@ -93,7 +94,8 @@ type Config struct {
 	AuditAnchor string
 	// PublicURL is TESSERA_PUBLIC_URL: the base of the OIDC redirect URIs.
 	PublicURL string
-	// Sealer opens connection client secrets and seals PKCE verifiers.
+	// Sealer opens connection client secrets, seals PKCE verifiers and seals
+	// the config bundle signing keys (issue #170; nil: export is unavailable).
 	Sealer *seal.Sealer
 	// OutboundHTTP is the safehttp client for IdP discovery, JWKS and token
 	// requests. Nil: browser sign-in through an IdP is unavailable.
@@ -210,6 +212,7 @@ func New(cfg Config) *Server {
 	s.registerContainmentRoutes()
 	s.registerGroupsFolderRoutes()
 	s.registerReadinessRoutes()
+	s.registerTransportRoutes()
 	s.registerAuthRoutes()
 	s.registerLoginRoutes()
 	s.registerSAMLRoutes()
@@ -666,6 +669,7 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var he *httpError
 	var ve *validationError
 	var re *readiness.Error
+	var te *transport.Error
 	var dn denial
 	var ae *admin.Error
 	switch {
@@ -677,6 +681,8 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSON(w, ae.Status, ojson.Object{{Key: "error", Value: ae.Code}, {Key: "detail", Value: ae.Msg}})
 	case errors.As(err, &re):
 		writeJSON(w, re.Status, readinessErrorBody(re))
+	case errors.As(err, &te):
+		writeJSON(w, te.Status, map[string]any{"error": te.Code, "detail": te.Msg})
 	case errors.As(err, &he):
 		writeJSON(w, he.status, detail(he.msg))
 	case errors.As(err, &ve):

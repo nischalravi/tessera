@@ -198,6 +198,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/api/audit/events/{event_id}/proof" {
 			continue // TestIsolation_AuditRoutes
 		}
+		if rt.Pattern == "/api/config/trusted-signers/{kid}" {
+			continue // TestIsolation_TrustedSignerScoped (a key id, not a fixture id)
+		}
 		if strings.HasPrefix(rt.Pattern, "/api/approvals/delegations/{delegation_id}") {
 			continue // TestApprovalsAPI_CrossTenant (a UUID, not a fixture id)
 		}
