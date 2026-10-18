@@ -146,7 +146,7 @@ function TeamOverview({ meId }: { meId: number }) {
             <tbody>
               {pending.map((r) => (
                 <tr key={r.id}>
-                  <td><b className="small">{r.identity.name}</b><div className="xs faint">{r.justification}</div></td>
+                  <td><b className="small">{r.identity.name}</b><div className="xs faint wrap-anywhere">{r.justification}</div></td>
                   <td className="small"><span className="sys">{r.group.system}:{r.group.name}</span>{r.group.privileged && <> <Badge tone="warning">Privileged</Badge></>}</td>
                   <td className="small faint nowrap hide-narrow">{relTime(r.requested_at)}</td>
                 </tr>

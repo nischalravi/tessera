@@ -107,23 +107,32 @@ func (a *analysis) leaverProcess(hits []*store.StagedAccount) *Cause {
 			onlyHere++
 		}
 	}
-	sys := a.snap.Meta.SystemName
-	var s string
-	if len(hits) == 1 {
-		s = fmt.Sprintf("%s left %d days ago and is still active in %s.", first.Name, firstDays, sys)
+	s := leaverSentence(a.snap.Meta.SystemName, first.Name, firstDays, len(hits), old, onlyHere, grace)
+	return &Cause{Analyser: "leaver_process", Sentence: s, Probable: true,
+		Numbers: map[string]any{"leavers": len(hits), "older_than_grace": old, "grace_days": grace, "enabled_only_here": onlyHere}}
+}
+
+// leaverSentence words the RF-06b cause. With several hits the leading number
+// is the finding's count (accounts), never a sub-count such as how many left
+// before the grace period, so the sentence and the finding cannot disagree.
+func leaverSentence(sys, firstName string, firstDays, hits, old, onlyHere, grace int) string {
+	if hits == 1 {
+		s := fmt.Sprintf("%s left %d days ago and is still active in %s.", firstName, firstDays, sys)
 		if onlyHere == 1 {
 			s += " Every other account was disabled: the leaver process does not cover this system."
 		}
-	} else {
-		s = fmt.Sprintf("%d people left more than %d days ago and are still enabled in %s", old, grace, sys)
-		if onlyHere == len(hits) {
-			s += ", and only here: the leaver process does not cover this system."
-		} else {
-			s += "."
-		}
+		return s
 	}
-	return &Cause{Analyser: "leaver_process", Sentence: s, Probable: true,
-		Numbers: map[string]any{"leavers": len(hits), "older_than_grace": old, "grace_days": grace, "enabled_only_here": onlyHere}}
+	var s string
+	if old == hits {
+		s = fmt.Sprintf("%d accounts of people who left more than %d days ago are still enabled in %s", hits, grace, sys)
+	} else {
+		s = fmt.Sprintf("%d accounts of people who left are still enabled in %s (%d left more than %d days ago)", hits, sys, old, grace)
+	}
+	if onlyHere == hits {
+		return s + ", and only here: the leaver process does not cover this system."
+	}
+	return s + "."
 }
 
 // scopeExclusion (RF-05): the out-of-scope groups share a DN suffix.

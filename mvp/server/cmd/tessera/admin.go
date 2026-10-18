@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -11,38 +10,43 @@ import (
 	"net/mail"
 	"net/url"
 	"os"
-	"slices"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"go.yaml.in/yaml/v3"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/admin"
 	"github.com/nischalravi/tessera/mvp/server/internal/api"
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
-	authnorm "github.com/nischalravi/tessera/mvp/server/internal/auth/normalize"
-	"github.com/nischalravi/tessera/mvp/server/internal/auth/oauth2rp"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/samlsp"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
+	"github.com/nischalravi/tessera/mvp/server/internal/keys"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 )
 
-// Operator bootstrap (design §15.3, §18.2):
+// Operator bootstrap and recovery (design §15.3, §15.5, §18.2):
 //
 //	tessera admin create-tenant -slug acme -name "Acme Corp"
 //	tessera admin add-idp       -tenant acme -file okta.yaml [-client-secret-file path]
 //	tessera admin invite-admin  -tenant acme -connection <id> -email jane@acme.com [-ttl 24h]
+//	tessera admin recover-tenant -tenant acme -operator <id> -co-operator <id> -ticket <ref> ...
+//	tessera admin revoke-signing-key -tenant acme -kid <kid> -reason "..."
 //
 // Every command runs as the operator (the OS user) and is audited in the
-// tenant's chain. invite-admin prints a one-time URL; only its hash is kept.
+// tenant's chain. invite-admin and recover-tenant print a one-time URL; only
+// its hash is kept.
 const adminUsage = `usage:
   tessera admin create-tenant -slug slug -name "Display name" [-db path]
   tessera admin add-idp       -tenant slug -file connection.yaml [-client-secret-file path] [-db path]
-  tessera admin invite-admin  -tenant slug -connection id -email address [-ttl 24h] [-db path]`
+  tessera admin invite-admin  -tenant slug -connection id -email address [-ttl 24h] [-db path]
+  tessera admin recover-tenant -tenant slug -operator id -co-operator id -ticket ref -connection id -email address
+                              -operator-phr -co-operator-phr [-db path]
+  tessera admin revoke-signing-key -tenant slug -kid kid -reason text [-db path]`
 
 // maxInviteTTL is the longest a bootstrap invitation may live (§15.3).
 const maxInviteTTL = 24 * time.Hour
@@ -81,6 +85,22 @@ func adminCmd(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		email := fset.String("email", "", "the invited admin's email at that IdP")
 		ttl := fset.Duration("ttl", maxInviteTTL, "how long the invitation is valid (at most 24h)")
 		run = func(e *adminEnv) error { return inviteAdmin(e, *tenant, *conn, *email, *ttl) }
+	case "recover-tenant":
+		in := recoverFlags{}
+		fset.StringVar(&in.tenant, "tenant", "", "tenant slug")
+		fset.StringVar(&in.operator, "operator", "", "id of the first Tessera operator")
+		fset.StringVar(&in.coOperator, "co-operator", "", "id of the second, different operator")
+		fset.StringVar(&in.ticket, "ticket", "", "the support ticket recording the two contacts' confirmation (§15.5 step 1)")
+		fset.StringVar(&in.connection, "connection", "", "IdP connection id the new admin signs in through")
+		fset.StringVar(&in.email, "email", "", "the new admin's email at that IdP")
+		fset.BoolVar(&in.operatorPhr, "operator-phr", false, "the first operator signed in to this hardened host with a hardware key")
+		fset.BoolVar(&in.coOperatorPhr, "co-operator-phr", false, "the second operator signed in to this hardened host with a hardware key")
+		run = func(e *adminEnv) error { return recoverTenant(e, in) }
+	case "revoke-signing-key":
+		tenant := fset.String("tenant", "", "tenant slug")
+		kid := fset.String("kid", "", "key id (from the tenant's JWKS)")
+		reason := fset.String("reason", "", "why the key is revoked (audited)")
+		run = func(e *adminEnv) error { return revokeSigningKey(e, *tenant, *kid, *reason) }
 	default:
 		return fmt.Errorf("unknown admin command %q\n%s", sub, adminUsage)
 	}
@@ -134,7 +154,9 @@ func createTenant(e *adminEnv, slug, name string) error {
 }
 
 // idpFile is a connection file (§18.2). Unknown keys are refused, so a typo
-// cannot silently weaken a setting. Secrets never live in it.
+// cannot silently weaken a setting. Secrets never live in it. The fields
+// are admin.IdPConfig's, which also validates them (the admin-change
+// workflow creates connections from the same shape).
 type idpFile struct {
 	Name             string            `yaml:"name"`
 	Protocol         string            `yaml:"protocol"`
@@ -181,225 +203,25 @@ func readIdPFile(path string) (*idpFile, error) {
 	return &f, nil
 }
 
-// validate checks a connection file and returns the store row it describes.
+// connection checks a connection file and returns the store row it
+// describes, active (the operator creates connections at bootstrap).
+// assume_phishing_resistant is refused here: it needs a two-person admin
+// change (§15.2).
 func (f *idpFile) connection(prod bool, now time.Time) (*store.IdPConnection, error) {
-	var errs []error
-	bad := func(format string, a ...any) { errs = append(errs, fmt.Errorf(format, a...)) }
-	if strings.TrimSpace(f.Name) == "" {
-		bad("name is required")
+	cfg := admin.IdPConfig{Name: f.Name, Protocol: f.Protocol, Profile: f.Profile, Issuer: f.Issuer, ClientID: f.ClientID,
+		ClientAuthMethod: f.ClientAuthMethod, Scopes: f.Scopes, IDTokenAlgs: f.IDTokenAlgs, VerifiedDomains: f.VerifiedDomains,
+		GroupsClaim: f.GroupsClaim, GroupRoleMapping: f.GroupRoleMapping, JITProvisioning: f.JITProvisioning,
+		DefaultRole: f.DefaultRole, Default: f.Default, EntraTenantID: f.EntraTenantID, StepUpRequest: f.StepUpRequest,
+		AuthnMapping: f.AuthnMapping, IdPEntityID: f.IdPEntityID, IdPSSOURL: f.IdPSSOURL, IdPSigningCerts: f.IdPSigningCerts,
+		SubjectSource: f.SubjectSource, AttributeMap: f.AttributeMap, AssumePhr: f.AssumePhr,
+		AuthorizationEndpoint: f.AuthorizationEndpoint, TokenEndpoint: f.TokenEndpoint, UserinfoEndpoint: f.UserinfoEndpoint,
+		SubjectField: f.SubjectField}
+	c, err := cfg.Connection(admin.IdPOptions{Prod: prod}, now)
+	if err != nil {
+		return nil, err
 	}
-	switch f.Protocol {
-	case "oidc", "saml", "oauth2":
-	default:
-		bad("protocol %q: want oidc, saml or oauth2", f.Protocol)
-	}
-	switch {
-	case f.Profile == store.ProfileDevMock:
-		if prod {
-			bad("profile dev_mock is refused with TESSERA_ENV=prod")
-		}
-	case f.Protocol == "saml" && f.Profile != store.ProfileGenericSAML:
-		bad("profile %q: SAML connections use generic_saml", f.Profile)
-	case f.Protocol == "oauth2" && f.Profile != store.ProfileGitHub && f.Profile != store.ProfileGenericOAuth2:
-		bad("profile %q: OAuth 2.0 connections use github or generic_oauth2", f.Profile)
-	case f.Protocol == "oidc" && !slices.Contains([]string{store.ProfileOkta, store.ProfileEntra, store.ProfileGoogle,
-		store.ProfileGenericOIDC}, f.Profile):
-		bad("profile %q: want okta, entra, google or generic_oidc", f.Profile)
-	}
-	if f.AssumePhr {
-		bad("assume_phishing_resistant needs a two-person admin change (design §15.2); it cannot be set here")
-	}
-	switch f.Protocol {
-	case "saml":
-		f.checkSAML(prod, bad)
-	case "oauth2":
-		f.checkOAuth2(prod, bad)
-	default:
-		f.checkOIDC(prod, bad)
-	}
-	if f.DefaultRole == "" {
-		f.DefaultRole = store.RoleViewer
-	}
-	if !slices.Contains([]string{store.RoleViewer, store.RoleOperator, store.RoleAuditor}, f.DefaultRole) {
-		bad("default_role %q: want viewer, operator or auditor", f.DefaultRole)
-	}
-	for g, r := range f.GroupRoleMapping {
-		if !slices.Contains([]string{store.RoleViewer, store.RoleOperator, store.RoleAuditor}, r) {
-			bad("group_role_mapping[%q] = %q: groups grant viewer, operator or auditor only (never admin roles)", g, r)
-		}
-	}
-	for _, a := range f.IDTokenAlgs {
-		if !slices.Contains([]string{"RS256", "PS256", "ES256", "EdDSA"}, a) {
-			bad("id_token_algs: %q is not allowed", a)
-		}
-	}
-	mapping := f.AuthnMapping
-	if f.EntraTenantID != "" {
-		if mapping == nil {
-			mapping = map[string]any{}
-		}
-		mapping["entra_tenant_id"] = f.EntraTenantID
-	}
-	enc := func(v any, def string) json.RawMessage {
-		if v == nil || (fmt.Sprint(v) == "map[]") {
-			return json.RawMessage(def)
-		}
-		b, err := json.Marshal(v)
-		if err != nil {
-			bad("%v", err)
-		}
-		return b
-	}
-	authnMapping := enc(mapping, "{}")
-	if _, err := authnorm.ParseMapping(authnMapping); err != nil {
-		bad("authn_mapping: %v", err)
-	}
-	if len(errs) > 0 {
-		return nil, errors.Join(errs...)
-	}
-	jit := false
-	if f.JITProvisioning != nil {
-		jit = *f.JITProvisioning
-	}
-	c := &store.IdPConnection{ID: uuid.New(), Name: strings.TrimSpace(f.Name), Protocol: f.Protocol, Profile: f.Profile,
-		Status: "active", IsDefault: f.Default, VerifiedDomains: enc(f.VerifiedDomains, "[]"), StepUpRequest: enc(f.StepUpRequest, "{}"),
-		AuthnMapping: authnMapping, GroupRoleMapping: enc(f.GroupRoleMapping, "{}"), JITProvisioning: jit,
-		DefaultRole: f.DefaultRole, PinCerts: true, CreatedAt: now, UpdatedAt: now}
-	switch f.Protocol {
-	case "saml":
-		entity, sso := f.IdPEntityID, f.IdPSSOURL
-		c.IdPEntityID, c.IdPSSOURL, c.IdPSigningCerts = &entity, &sso, enc(f.IdPSigningCerts, "[]")
-		c.SubjectSource, c.AttributeMap = f.SubjectSource, enc(f.AttributeMap, "{}")
-	case "oauth2":
-		oc := oauth2rp.Connection{Profile: f.Profile, AuthorizationURL: f.AuthorizationEndpoint, TokenURL: f.TokenEndpoint,
-			UserinfoURL: f.UserinfoEndpoint, SubjectField: f.SubjectField, Scopes: f.Scopes}.Defaults()
-		clientID := f.ClientID
-		c.ClientID, c.SubjectSource = &clientID, "field:"+oc.SubjectField
-		c.AuthorizationEndpoint, c.TokenEndpoint, c.UserinfoEndpoint = &oc.AuthorizationURL, &oc.TokenURL, &oc.UserinfoURL
-		if len(f.Scopes) == 0 && f.Profile == store.ProfileGitHub {
-			f.Scopes = []string{"read:user", "user:email"}
-		}
-		if len(f.Scopes) == 0 {
-			c.Scopes = json.RawMessage("[]")
-		}
-	default:
-		issuer, clientID, method := f.Issuer, f.ClientID, f.ClientAuthMethod
-		c.Issuer, c.ClientID, c.ClientAuthMethod = &issuer, &clientID, &method
-	}
-	if len(f.Scopes) > 0 {
-		c.Scopes = enc(f.Scopes, "[]")
-	}
-	if len(f.IDTokenAlgs) > 0 {
-		c.IDTokenAlgs = enc(f.IDTokenAlgs, "[]")
-	}
-	if f.GroupsClaim != "" {
-		g := f.GroupsClaim
-		c.GroupsClaim = &g
-	}
+	c.Status = "active"
 	return c, nil
-}
-
-// checkOIDC validates the OIDC fields.
-func (f *idpFile) checkOIDC(prod bool, bad func(string, ...any)) {
-	iss, err := url.Parse(f.Issuer)
-	switch {
-	case f.Issuer == "" || err != nil || iss.Host == "":
-		bad("issuer must be an absolute URL")
-	case prod && iss.Scheme != "https":
-		bad("issuer must be https with TESSERA_ENV=prod")
-	case strings.HasSuffix(f.Issuer, "/") || iss.RawQuery != "" || iss.Fragment != "":
-		bad("issuer %q must be exact: no trailing slash, query or fragment", f.Issuer)
-	case f.Profile == store.ProfileEntra && strings.Contains(f.Issuer, "{tenantid}"):
-		bad("issuer: Entra multi-tenant templates are not supported; configure the tenant-specific issuer")
-	}
-	if f.ClientID == "" {
-		bad("client_id is required")
-	}
-	switch f.ClientAuthMethod {
-	case "", "client_secret_basic":
-		f.ClientAuthMethod = "client_secret_basic"
-	case "private_key_jwt":
-		bad("client_auth_method private_key_jwt is not supported yet; use client_secret_basic")
-	default:
-		bad("client_auth_method %q: want client_secret_basic", f.ClientAuthMethod)
-	}
-	if f.Profile == store.ProfileEntra && f.EntraTenantID == "" {
-		bad("entra_tenant_id is required for the entra profile")
-	}
-}
-
-// checkOAuth2 validates an OAuth 2.0-only connection: the github profile
-// defaults its endpoints and subject field; generic_oauth2 needs all three
-// endpoints (https in prod) and the immutable id field.
-func (f *idpFile) checkOAuth2(prod bool, bad func(string, ...any)) {
-	if f.ClientID == "" {
-		bad("client_id is required")
-	}
-	if f.Issuer != "" || f.IdPEntityID != "" || f.SubjectSource != "" {
-		bad("issuer, idp_entity_id and subject_source are not OAuth 2.0 settings (use subject_field)")
-	}
-	switch f.ClientAuthMethod {
-	case "", "client_secret_basic":
-	default:
-		bad("client_auth_method %q: OAuth 2.0 connections use a client secret", f.ClientAuthMethod)
-	}
-	eps := map[string]string{"authorization_endpoint": f.AuthorizationEndpoint, "token_endpoint": f.TokenEndpoint,
-		"userinfo_endpoint": f.UserinfoEndpoint}
-	for name, v := range eps {
-		if v == "" {
-			if f.Profile != store.ProfileGitHub {
-				bad("%s is required for generic_oauth2", name)
-			}
-			continue
-		}
-		u, err := url.Parse(v)
-		switch {
-		case err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http"):
-			bad("%s must be an absolute URL", name)
-		case prod && u.Scheme != "https":
-			bad("%s must be https with TESSERA_ENV=prod", name)
-		}
-	}
-	switch strings.ToLower(f.SubjectField) {
-	case "":
-		if f.Profile != store.ProfileGitHub {
-			bad("subject_field is required for generic_oauth2: the user object's immutable id field")
-		}
-	case "email", "login", "username", "preferred_username", "name", "upn":
-		bad("subject_field %q: users are keyed on an immutable id, never a name or email", f.SubjectField)
-	}
-}
-
-// checkSAML validates the SAML fields: an exact entity ID, an SSO URL
-// (https in prod) and at least one pinned signing certificate.
-func (f *idpFile) checkSAML(prod bool, bad func(string, ...any)) {
-	if f.IdPEntityID == "" {
-		bad("idp_entity_id is required")
-	}
-	sso, err := url.Parse(f.IdPSSOURL)
-	switch {
-	case f.IdPSSOURL == "" || err != nil || sso.Host == "":
-		bad("idp_sso_url must be an absolute URL")
-	case prod && sso.Scheme != "https":
-		bad("idp_sso_url must be https with TESSERA_ENV=prod")
-	}
-	if len(f.IdPSigningCerts) == 0 {
-		bad("idp_signing_certs: pin at least one signing certificate")
-	} else if _, err := samlsp.ParseCerts(f.IdPSigningCerts); err != nil {
-		bad("idp_signing_certs: %v", err)
-	}
-	if f.SubjectSource != "" && f.SubjectSource != "nameid_persistent" &&
-		(!strings.HasPrefix(f.SubjectSource, "attribute:") || len(f.SubjectSource) == len("attribute:")) {
-		bad("subject_source %q: want nameid_persistent or attribute:<name> (never email)", f.SubjectSource)
-	}
-	for k := range f.AttributeMap {
-		if !slices.Contains([]string{"email", "name", "groups"}, k) {
-			bad("attribute_map: unknown key %q (want email, name, groups)", k)
-		}
-	}
-	if f.ClientID != "" || f.Issuer != "" {
-		bad("issuer and client_id are OIDC settings; a SAML connection uses idp_entity_id and idp_sso_url")
-	}
 }
 
 func lookupTenant(e *adminEnv, slug string) (store.Tenant, error) {
@@ -543,5 +365,71 @@ func inviteAdmin(e *adminEnv, slug, connID, email string, ttl time.Duration) err
 	}
 	fmt.Fprintf(e.stdout, "one-time bootstrap URL for %s (valid until %s; send it out of band):\n%s/t/%s/bootstrap?code=%s\n",
 		email, inv.ExpiresAt.Format(time.RFC3339), strings.TrimRight(e.cfg.PublicURL, "/"), t.Slug, url.QueryEscape(code))
+	return nil
+}
+
+// recoverFlags are the arguments of recover-tenant.
+type recoverFlags struct {
+	tenant, operator, coOperator, ticket, connection, email string
+	operatorPhr, coOperatorPhr                              bool
+}
+
+// recoverTenant is operator-assisted recovery (design §15.5): two different
+// operators, each attested phishing-resistant, move the tenant to status
+// recovery and create an invitation that works 72 hours later. Everything
+// is audited in the tenant's chain and the platform chain, and every admin
+// and security contact is notified at once.
+func recoverTenant(e *adminEnv, in recoverFlags) error {
+	t, err := lookupTenant(e, in.tenant)
+	if err != nil {
+		return err
+	}
+	conn, err := uuid.Parse(in.connection)
+	if err != nil {
+		return fmt.Errorf("recover-tenant: -connection %q is not a connection id", in.connection)
+	}
+	svc := &admin.Service{DB: e.db, Clock: func() time.Time { return e.now }, Sealer: e.sealer, Prod: e.cfg.IsProd()}
+	res, err := svc.RequestRecovery(e.ctx, admin.RecoveryRequest{Tenant: t.ID,
+		Operator:   admin.Operator{ID: in.operator, PhishingResistant: in.operatorPhr},
+		CoOperator: admin.Operator{ID: in.coOperator, PhishingResistant: in.coOperatorPhr},
+		Ticket:     in.ticket, ConnectionID: conn, Email: in.email})
+	if err != nil {
+		return fmt.Errorf("recover-tenant: %w", err)
+	}
+	fmt.Fprintf(e.stdout, "recovery %s requested for %s (ticket %s). All admins and security contacts were notified; "+
+		"any existing admin can cancel it.\none-time recovery URL for %s, usable from %s (phishing-resistant sign-in required; send it out of band):\n"+
+		"%s/t/%s/bootstrap?code=%s\n", res.Recovery.ID, t.Slug, res.Recovery.Ticket, in.email,
+		res.Recovery.NotBefore.Format(time.RFC3339), strings.TrimRight(e.cfg.PublicURL, "/"), t.Slug, url.QueryEscape(res.Code))
+	return nil
+}
+
+// revokeSigningKey revokes one of a tenant's signing keys (design §10.6: a
+// leaked key is revoked at once and dropped from the JWKS), restoring the
+// steady state if it was the active key.
+func revokeSigningKey(e *adminEnv, slug, kid, reason string) error {
+	t, err := lookupTenant(e, slug)
+	if err != nil {
+		return err
+	}
+	kid, reason = strings.TrimSpace(kid), strings.TrimSpace(reason)
+	if kid == "" || len(kid) > 200 {
+		return errors.New("revoke-signing-key: -kid is required")
+	}
+	if len(reason) < 3 || len(reason) > 500 {
+		return errors.New("revoke-signing-key: -reason is required (3 to 500 characters)")
+	}
+	if err := e.db.InTenant(e.ctx, t.ID, func(tx *store.TenantTx) error {
+		if err := keys.RevokeKey(tx, t.Slug, kid, e.sealer, e.now); errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("no active, next or retired signing key %q in %s", kid, slug)
+		} else if err != nil {
+			return err
+		}
+		_, err := audit.Record(e.ctx, tx, "keys.signing_key.revoked", ojson.Object{{Key: "kid", Value: kid},
+			{Key: "reason", Value: reason}}, audit.At(e.now), audit.Target("signing_key", kid))
+		return err
+	}); err != nil {
+		return fmt.Errorf("revoke-signing-key: %w", err)
+	}
+	fmt.Fprintf(e.stdout, "revoked signing key %s of %s; a new key is active and the JWKS no longer lists it\n", kid, t.Slug)
 	return nil
 }
