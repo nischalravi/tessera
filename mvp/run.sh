@@ -145,7 +145,13 @@ esac
 
 build_server
 setup_frontend
-if [ "${1:-}" = "--reseed" ] || [ ! -f "$DB" ]; then
+if [ "${1:-}" = "--reseed" ]; then
+  seed
+elif [[ "$DB" == postgres://* || "$DB" == postgresql://* ]]; then
+  # A Postgres database is never wiped implicitly (it is not a file that may be missing);
+  # `serve` seeds an empty one in dev, and --reseed wipes and reseeds it.
+  :
+elif [ ! -f "$DB" ]; then
   seed
 elif ! "$BIN" check-db -db "$DB" >/dev/null 2>&1; then
   # a database from an older schema (before tenancy or sign-in) has no users to sign in as
