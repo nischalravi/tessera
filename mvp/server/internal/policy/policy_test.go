@@ -270,3 +270,57 @@ func TestDemoPoliciesProduceExpectedFindings(t *testing.T) {
 		t.Errorf("terminated-access = %v, want %v", leavers, want)
 	}
 }
+
+// A subjects.condition (issue #162) narrows a policy to the identities for
+// which it is not false; an attribute an identity lacks keeps it in scope.
+func TestSubjectCondition(t *testing.T) {
+	st, ids := testkit.Tiny(t)
+	sod := func(cond any) map[string]any {
+		return map[string]any{"id": "sod-x", "type": "separation_of_duties", "severity": "high",
+			"subjects": map[string]any{"identity_types": []any{"human"}, "condition": cond},
+			"conflict": map[string]any{"a": []any{"payments:create"}, "b": []any{"payments:approve"}}}
+	}
+	dept := func(d string) map[string]any {
+		return map[string]any{"attr": "identity.department", "op": "eq", "value": d}
+	}
+	tests := []struct {
+		name string
+		cond any
+		want []int64
+	}{
+		{"in scope", dept("Finance"), []int64{ids["bob"]}},
+		{"out of scope", dept("Engineering"), []int64{}},
+		{"not Finance", map[string]any{"not": dept("Finance")}, []int64{}},
+		{"all", map[string]any{"all": []any{dept("Finance"), map[string]any{"attr": "identity.status", "op": "eq", "value": "active"}}}, []int64{ids["bob"]}},
+		{"missing attribute stays in scope", map[string]any{"attr": "identity.clearance", "op": "eq", "value": "s"}, []int64{ids["bob"]}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := policy.Parse(sod(tc.cond), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := identityIDs(violations(t, st, "", []*policy.Policy{p})); !slices.Equal(got, tc.want) {
+				t.Errorf("identities = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	// without the database the graph's own attributes are used
+	p, _ := policy.Parse(sod(dept("Finance")), "")
+	vs := testkit.Get(t, st, func(c *store.TenantTx) ([]policy.Violation, error) {
+		g, err := graph.Build(c, testkit.Now)
+		if err != nil {
+			return nil, err
+		}
+		return policy.Evaluate([]*policy.Policy{p}, policy.NewContext(g, nil, testkit.Now))
+	})
+	if got := identityIDs(vs); !slices.Equal(got, []int64{ids["bob"]}) {
+		t.Errorf("without a connection: %v", got)
+	}
+	for name, cond := range map[string]any{"unknown op": map[string]any{"attr": "identity.type", "op": "like", "value": "x"},
+		"not a condition": "Finance", "empty all": map[string]any{"all": []any{}}} {
+		if _, err := policy.Parse(sod(cond), ""); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+}

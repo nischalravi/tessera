@@ -24,6 +24,13 @@ type Error struct{ Msg string }
 
 func (e *Error) Error() string { return e.Msg }
 
+// The two ExecuteEvent refusals the API maps apart from other caller errors:
+// an unknown event is a 404, an event that is already executed a 409.
+var (
+	ErrEventNotFound = &Error{"event not found"}
+	ErrEventExecuted = &Error{"event already executed"}
+)
+
 type sysXID struct{ system, xid string }
 
 var eng = []sysXID{{"okta", "everyone"}, {"okta", "engineering"}, {"github", "team/all-engineers"}}
@@ -551,6 +558,46 @@ func JoinerPlan(c *store.TenantTx, payload ojson.Object) (Plan, error) {
 		{Key: "steps", Value: steps}}, nil
 }
 
+// ExistsError says a joiner matches an identity that is already active. The
+// operator should use the mover or rehire flow, or the account-match and
+// merge tools, instead of creating a second identity.
+type ExistsError struct {
+	ExistingID int64
+	MatchedOn  string // "email" or "hr_id"
+}
+
+func (e *ExistsError) Error() string {
+	return fmt.Sprintf("an active identity %d already has this %s", e.ExistingID, strings.Replace(e.MatchedOn, "_", " ", 1))
+}
+
+// joinerKeys is the joiner payload's email and HR employee id ("" if absent).
+func joinerKeys(payload ojson.Object) (email, hrID string) {
+	if s := optStr(payload, "email"); s != nil {
+		email = strings.TrimSpace(*s)
+	}
+	if s := optStr(payload, "employee_id"); s != nil {
+		hrID = strings.TrimSpace(*s)
+	}
+	return email, hrID
+}
+
+// CheckJoiner returns an *ExistsError if the joiner's email (case-insensitive,
+// trimmed) or HR employee id belongs to an active identity. A terminated
+// identity does not count: that person is a rehire. ExecuteEvent runs it
+// inside its write transaction, which makes the check authoritative.
+func CheckJoiner(c *store.TenantTx, payload ojson.Object) error {
+	email, hrID := joinerKeys(payload)
+	m, err := getOrNil(c.ActiveIdentityMatching(email, hrID))
+	if err != nil || m == nil {
+		return err
+	}
+	on := "hr_id"
+	if m.Email != nil && email != "" && strings.EqualFold(strings.TrimSpace(*m.Email), email) {
+		on = "email"
+	}
+	return &ExistsError{ExistingID: m.ID, MatchedOn: on}
+}
+
 func sortedKeys(m map[string]bool) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
@@ -714,10 +761,15 @@ func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.User
 		return nil, err
 	}
 	if ev == nil {
-		return nil, &Error{"unknown event"}
+		return nil, ErrEventNotFound
 	}
 	if ev.Status == "executed" {
-		return nil, &Error{"event already executed"}
+		return nil, ErrEventExecuted
+	}
+	if ev.Type == "joiner" {
+		if err := CheckJoiner(c, ev.Payload); err != nil {
+			return nil, err
+		}
 	}
 	plan, err := PlanForEvent(c, now, ev, false, policies)
 	if err != nil {
@@ -739,13 +791,27 @@ func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.User
 			}
 		}
 		source, hired := "workday", ev.EffectiveAt
-		id, err := c.InsertIdentity(&store.Identity{ExternalID: fmt.Sprintf("emp-new-%d", ev.ID),
+		// The HR employee id, when the event carries one, is the external id so a later
+		// duplicate is caught. A rehire's old (terminated) row still holds it, and the
+		// column is unique, so that case keeps the event-derived id.
+		xid := fmt.Sprintf("emp-new-%d", ev.ID)
+		if _, hrID := joinerKeys(p); hrID != "" {
+			if old, err := getOrNil(c.IdentityByExternalID(hrID)); err != nil {
+				return nil, err
+			} else if old == nil {
+				xid = hrID
+			}
+		}
+		id, err := c.InsertIdentity(&store.Identity{ExternalID: xid,
 			Name: pyStr(getAny(p, "name")), Email: optStr(p, "email"), Type: "human", Department: optStr(p, "department"),
 			Title: optStr(p, "title"), Status: "active", ManagerID: mgr, Source: &source, HiredAt: &hired, CreatedAt: now})
 		if err != nil {
 			return nil, err
 		}
 		if err := c.SetHrisEventIdentity(ev.ID, id); err != nil {
+			return nil, err
+		}
+		if err := joinerLifecycle(c, now, id, mgr, p); err != nil {
 			return nil, err
 		}
 		ident, err := c.Identity(id)
@@ -877,4 +943,59 @@ func ViewEvent(c *store.TenantTx, ev *store.HrisEvent) (EventView, error) {
 		}
 	}
 	return v, nil
+}
+
+// ExecuteLeaver runs an identity's leaver plan outside an HRIS event (an
+// identity reaching its end date, issue #159): every step of LeaverPlan is
+// applied and the identity is terminated, in the caller's transaction. The
+// caller writes the audit event.
+func ExecuteLeaver(c *store.TenantTx, now time.Time, identityID int64) (Plan, error) {
+	plan, err := LeaverPlan(c, now, identityID, false, nil)
+	if err != nil {
+		return nil, err
+	}
+	ident, err := c.Identity(identityID)
+	if err != nil {
+		return nil, err
+	}
+	steps, _ := getAny(plan, "steps").([]Step)
+	for _, st := range steps {
+		if err := applyStep(c, now, ident, st); err != nil {
+			return nil, err
+		}
+	}
+	return plan, c.TerminateIdentity(identityID, now)
+}
+
+// joinerLifecycle records a non-employee joiner's worker type, end date and
+// sponsor from the HRIS payload (worker_type, end_date, and
+// sponsor_external_id, else the manager), issue #159. An employee joiner
+// writes nothing.
+func joinerLifecycle(c *store.TenantTx, now time.Time, id int64, mgr *int64, p ojson.Object) error {
+	wt, _ := getAny(p, "worker_type").(string)
+	if wt == "" || wt == store.WorkerEmployee {
+		return nil
+	}
+	l := &store.Lifecycle{IdentityID: id, WorkerType: wt, SponsorID: mgr, Source: "hris", UpdatedAt: now}
+	if xid, ok := getAny(p, "sponsor_external_id").(string); ok {
+		sp, err := getOrNil(c.IdentityByExternalID(xid))
+		if err != nil {
+			return err
+		}
+		if sp != nil {
+			l.SponsorID = &sp.ID
+		}
+	}
+	end, _ := getAny(p, "end_date").(string)
+	t, err := timeutil.ParseISO(end)
+	if err != nil {
+		return &Error{fmt.Sprintf("a %s joiner needs an end_date", wt)}
+	}
+	l.EndsAt = &t
+	if err := c.PutLifecycle(l); err != nil {
+		return err
+	}
+	w := wt
+	return c.AddLifecycleEvent(&store.LifecycleEvent{IdentityID: id, Event: "set", WorkerType: &w, EndsAt: l.EndsAt,
+		Actor: "hris", At: now})
 }

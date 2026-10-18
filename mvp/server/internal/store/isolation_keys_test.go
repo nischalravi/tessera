@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -199,10 +200,52 @@ func TestPlatformKeys(t *testing.T) {
 			string(ks[0].PrivateKeyEnc) != "\x09" {
 			t.Errorf("platform keys: %+v", ks)
 		}
+		// revoke: a retired or active key once; never again, never unknown
+		for _, kid := range []string{"platform-1", "platform-2"} {
+			if err := s.RevokePlatformKey(kid); err != nil {
+				return err
+			}
+			if err := s.RevokePlatformKey(kid); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("revoke %s twice: %v", kid, err)
+			}
+			if err := s.RetirePlatformKey(kid); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("retire revoked %s: %v", kid, err)
+			}
+		}
+		if err := s.RevokePlatformKey("nope"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("revoke unknown: %v", err)
+		}
+		if ks, err = s.PlatformKeys(store.KeyPurposeAuditCheckpoint); err != nil {
+			return err
+		}
+		if len(ks) != 2 || ks[0].Status != store.KeyRevoked || ks[1].Status != store.KeyRevoked {
+			t.Errorf("after revoke: %+v", ks)
+		}
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestReservedSlugs (L8): "platform" and "platform-*" cannot be tenant slugs
+// (their key ids would look like platform key ids); similar names can.
+func TestReservedSlugs(t *testing.T) {
+	for s, want := range map[string]bool{"platform": false, "platform-eu": false, "_platform": false, "PLATFORM": false,
+		"platforms": true, "my-platform": true, "larkspur": true, "platformx": true} {
+		if got := store.ValidSlug(s); got != want {
+			t.Errorf("ValidSlug(%q) = %t, want %t", s, got, want)
+		}
+	}
+	f := storetest.TwoTenants(t)
+	for _, s := range []string{"platform", "platform-eu"} {
+		err := f.DB.InSystem(context.Background(), "test", func(sys *store.SystemTx) error {
+			_, err := sys.CreateTenant(store.Tenant{Slug: s, Name: "x"})
+			return err
+		})
+		if err == nil || !strings.Contains(err.Error(), "invalid tenant slug") {
+			t.Errorf("CreateTenant(%q) = %v, want refused", s, err)
+		}
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -93,12 +94,22 @@ func TestProdRefusesEachUnsafeSetting(t *testing.T) {
 		{"trusted proxies broader than /32", []string{"TESSERA_TRUSTED_PROXIES", "2001:db8::/31"}, "broader than /32"},
 		{"trusted proxies mapped IPv4 broader than /8", []string{"TESSERA_TRUSTED_PROXIES", "::ffff:0:0/96"}, "broader than /104"},
 		{"outbound loopback", []string{"TESSERA_OUTBOUND_ALLOW_LOOPBACK", "true"}, "TESSERA_OUTBOUND_ALLOW_LOOPBACK must be false"},
+		{"safedial allowlist", []string{"TESSERA_SAFEDIAL_ALLOW", "192.168.1.10:636"}, "TESSERA_SAFEDIAL_ALLOW must not be set"},
 		{"dev IdP URL set", []string{"TESSERA_DEV_IDP_URL", "http://127.0.0.1:8001"}, "TESSERA_DEV_IDP_URL must not be set"},
 		{"file audit anchor", []string{"TESSERA_AUDIT_ANCHOR", "file://server/var/audit-anchors.jsonl"}, "must not be file://"},
 		{"audit anchor missing", []string{"TESSERA_AUDIT_ANCHOR", "<unset>"}, "TESSERA_AUDIT_ANCHOR is required"},
+		{"file audit anchor, upper case", []string{"TESSERA_AUDIT_ANCHOR", "FILE:///srv/a.jsonl"}, "TESSERA_AUDIT_ANCHOR"},
+		{"audit anchor S3 upper case", []string{"TESSERA_AUDIT_ANCHOR", "S3://anchors/t"}, "TESSERA_AUDIT_ANCHOR"},
+		{"audit anchor s3 without a bucket", []string{"TESSERA_AUDIT_ANCHOR", "s3://"}, "must be an s3://bucket/prefix URL"},
+		{"audit anchor https", []string{"TESSERA_AUDIT_ANCHOR", "https://anchors.example.com/"}, "TESSERA_AUDIT_ANCHOR"},
 		{"access token TTL too long", []string{"TESSERA_AT_TTL_SECONDS", "901"}, "TESSERA_AT_TTL_SECONDS"},
 		{"device code TTL too long", []string{"TESSERA_DEVICE_CODE_TTL_SECONDS", "601"}, "TESSERA_DEVICE_CODE_TTL_SECONDS"},
 		{"bad boolean", []string{"TESSERA_COOKIE_SECURE", "maybe"}, "not a boolean"},
+		{"dev mail sink", []string{"TESSERA_NOTIFY_EMAIL", "dev"}, "dev sink"},
+		{"SMTP without TLS", []string{"TESSERA_SMTP_HOST", "smtp.example.com", "TESSERA_SMTP_FROM", "t@example.com", "TESSERA_SMTP_TLS", "none"},
+			"TESSERA_SMTP_TLS=none"},
+		{"SMTP login without a sealed password", []string{"TESSERA_SMTP_HOST", "smtp.example.com", "TESSERA_SMTP_FROM", "t@example.com",
+			"TESSERA_SMTP_USERNAME", "u"}, "TESSERA_SMTP_PASSWORD_SEALED is required"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -206,6 +217,40 @@ func TestAnchorURL(t *testing.T) {
 	}
 }
 
+// TestPostgresDSN: a postgres:// TESSERA_DB works in dev (dev files go in the
+// working directory, not in a directory named after the URL), and production
+// refuses a DSN without TLS or without the app_role that makes row-level
+// security apply, without echoing the DSN (it holds the password).
+func TestPostgresDSN(t *testing.T) {
+	dsn := "postgres://owner:s3cret-pw@db.example.com:5432/tessera?sslmode=require&app_role=tessera_app"
+	if _, err := config.Load(env(map[string]string{"TESSERA_DB": dsn})); err != nil {
+		t.Fatalf("dev with a postgres DSN: %v", err)
+	}
+	wd, _ := filepath.Abs(".")
+	if got, want := config.DevKEKPath(dsn), filepath.Join(".", "var", "dev-kek"); got != want {
+		t.Errorf("dev KEK path %q, want %q", got, want)
+	}
+	if got, want := config.DevAnchorURL(dsn), "file://"+filepath.ToSlash(filepath.Join(wd, "var", "audit-anchors.jsonl")); got != want {
+		t.Errorf("dev anchor %q, want %q", got, want)
+	}
+	if _, err := config.Load(env(with(safeProd(), "TESSERA_DB", dsn))); err != nil {
+		t.Errorf("prod with a safe DSN: %v", err)
+	}
+	for name, tc := range map[string]struct{ dsn, want string }{
+		"no sslmode":      {"postgres://o:s3cret-pw@db/tessera?app_role=tessera_app", "sslmode must be require"},
+		"sslmode disable": {"postgres://o:s3cret-pw@db/tessera?sslmode=disable&app_role=tessera_app", "sslmode must be require"},
+		"sslmode prefer":  {"postgres://o:s3cret-pw@db/tessera?sslmode=prefer&app_role=tessera_app", "sslmode must be require"},
+		"no app_role":     {"postgres://o:s3cret-pw@db/tessera?sslmode=verify-full", "app_role"},
+	} {
+		_, err := config.Load(env(with(safeProd(), "TESSERA_DB", tc.dsn)))
+		if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "TESSERA_DB") {
+			t.Errorf("%s: %v", name, err)
+		} else if strings.Contains(err.Error(), "s3cret-pw") {
+			t.Errorf("%s: the error echoes the DSN password: %v", name, err)
+		}
+	}
+}
+
 // TestClock: TESSERA_NOW freezes the clock in dev; unset, the wall clock runs.
 func TestClock(t *testing.T) {
 	c, err := config.Load(env(map[string]string{"TESSERA_ENV": "dev", "TESSERA_NOW": "2026-10-08T09:30:00"}))
@@ -262,6 +307,78 @@ func TestDevKEKGeneratedOnceWithMode0600(t *testing.T) {
 	}
 }
 
+// TestDevKEKAtomicWrite (L8): the dev KEK is written to a temp file and
+// linked into place, so no temp file is left behind, concurrent first
+// starts all end up with the one KEK that was placed, and an existing
+// (even broken) KEK file is never replaced.
+func TestDevKEKAtomicWrite(t *testing.T) {
+	c, err := config.Load(env(map[string]string{"TESSERA_ENV": "dev"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "var")
+	path := filepath.Join(dir, "dev-kek")
+	const n = 16
+	var wg sync.WaitGroup
+	sealed := make([][]byte, n)
+	errs := make([]error, n)
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s, err := c.Sealer(path)
+			if err != nil {
+				errs[i] = err
+				return
+			}
+			sealed[i], errs[i] = s.Seal([]byte("v"), []byte("t|c|x"))
+		}()
+	}
+	wg.Wait()
+	final, err := c.Sealer(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range n {
+		if errs[i] != nil {
+			t.Fatalf("start %d: %v", i, errs[i])
+		}
+		if _, err := final.Open(sealed[i], []byte("t|c|x")); err != nil {
+			t.Errorf("start %d used another KEK than the one on disk", i)
+		}
+	}
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ents) != 1 || ents[0].Name() != "dev-kek" {
+		var names []string
+		for _, e := range ents {
+			names = append(names, e.Name())
+		}
+		t.Errorf("directory holds %v, want only dev-kek (no temp files)", names)
+	}
+	// an existing file is never overwritten, even a broken one
+	broken := filepath.Join(t.TempDir(), "dev-kek")
+	if err := os.WriteFile(broken, []byte("not a key\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Sealer(broken); err == nil {
+		t.Error("a broken KEK file was accepted")
+	}
+	if b, _ := os.ReadFile(broken); string(b) != "not a key\n" {
+		t.Errorf("the broken KEK file was replaced: %q", b)
+	}
+	// a dangling symlink in its place: refused, not looped on or replaced
+	dangling := filepath.Join(t.TempDir(), "dev-kek")
+	if err := os.Symlink(filepath.Join(t.TempDir(), "missing"), dangling); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Sealer(dangling); err == nil {
+		t.Error("a dangling KEK symlink was accepted")
+	}
+}
+
 func TestKEKFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "kek")
@@ -300,6 +417,18 @@ func TestConfigNeverPrintsKEK(t *testing.T) {
 	}
 }
 
+// TestSafedialAllowDevOnly: the live-LDAP private-target allowlist is read in
+// dev and refused in prod (the Directory Agent is the production path).
+func TestSafedialAllowDevOnly(t *testing.T) {
+	c, err := config.Load(env(map[string]string{"TESSERA_ENV": "dev", "TESSERA_SAFEDIAL_ALLOW": " 192.168.1.10:636 "}))
+	if err != nil || c.SafedialAllow != "192.168.1.10:636" {
+		t.Fatalf("dev: %v %q", err, c.SafedialAllow)
+	}
+	if _, err := config.Load(env(with(safeProd(), "TESSERA_SAFEDIAL_ALLOW", "192.168.1.10:636"))); err == nil {
+		t.Fatal("prod accepted TESSERA_SAFEDIAL_ALLOW")
+	}
+}
+
 // TestTestEnvAndInsecureCookie: TESSERA_ENV=test is a non-production
 // environment; the insecure-cookie fallback is allowed only in dev on a
 // localhost public URL (§11).
@@ -316,6 +445,12 @@ func TestTestEnvAndInsecureCookie(t *testing.T) {
 		{map[string]string{"TESSERA_ENV": "dev", "TESSERA_COOKIE_SECURE": "false", "TESSERA_PUBLIC_URL": "http://127.0.0.1:5173"}, true},
 		{map[string]string{"TESSERA_ENV": "dev", "TESSERA_COOKIE_SECURE": "false", "TESSERA_PUBLIC_URL": "http://tessera.test.example"}, false},
 		{map[string]string{"TESSERA_ENV": "test", "TESSERA_COOKIE_SECURE": "false"}, false},
+		// L8: only a localhost public URL, by exact host name
+		{map[string]string{"TESSERA_ENV": "dev", "TESSERA_COOKIE_SECURE": "false", "TESSERA_PUBLIC_URL": "http://localhost.evil.example:5173"}, false},
+		{map[string]string{"TESSERA_ENV": "dev", "TESSERA_COOKIE_SECURE": "false", "TESSERA_PUBLIC_URL": "http://127.0.0.2:5173"}, false},
+		{map[string]string{"TESSERA_ENV": "dev", "TESSERA_COOKIE_SECURE": "false", "TESSERA_PUBLIC_URL": "http://10.0.0.5:5173"}, false},
+		{map[string]string{"TESSERA_ENV": "dev", "TESSERA_COOKIE_SECURE": "false", "TESSERA_PUBLIC_URL": "http://[::ffff:7f00:1]:5173"}, false},
+		{with(safeProd(), "TESSERA_COOKIE_SECURE", "false", "TESSERA_PUBLIC_URL", "http://localhost:5173"), false},
 	} {
 		_, err := config.Load(env(tc.env))
 		if (err == nil) != tc.ok {
@@ -325,5 +460,41 @@ func TestTestEnvAndInsecureCookie(t *testing.T) {
 	c, err = config.Load(env(map[string]string{"TESSERA_ENV": "dev", "TESSERA_PUBLIC_URL": "https://tessera.example.com/app"}))
 	if err != nil || c.PublicOrigin() != "https://tessera.example.com" {
 		t.Errorf("public origin %q %v", c.PublicOrigin(), err)
+	}
+}
+
+// TestMailConfig: the email sender defaults by environment, and SMTP needs a
+// host and a from address.
+func TestMailConfig(t *testing.T) {
+	c, err := config.Load(env(safeProd()))
+	if err != nil || c.Mail.Mode != config.MailOff {
+		t.Errorf("prod default mail = %+v, %v; want off", c.Mail, err)
+	}
+	c, err = config.Load(env(with(safeProd(), "TESSERA_SMTP_HOST", "smtp.example.com", "TESSERA_SMTP_FROM", "Tessera <t@example.com>",
+		"TESSERA_SMTP_USERNAME", "u", "TESSERA_SMTP_PASSWORD_SEALED", testKEK)))
+	if err != nil || c.Mail.Mode != config.MailSMTP || c.Mail.Port != 587 || c.Mail.TLS != config.SMTPStartTLS {
+		t.Errorf("prod smtp mail = %+v, %v", c.Mail, err)
+	}
+	if strings.Contains(c.Mail.String(), testKEK) {
+		t.Error("Mail.String shows the sealed password")
+	}
+	for _, env0 := range []string{"dev", "test"} {
+		c, err = config.Load(env(map[string]string{"TESSERA_ENV": env0}))
+		if err != nil || c.Mail.Mode != config.MailDev || c.NotifyMaxAttempts != 6 || c.NotifyDigestHour != 8 {
+			t.Errorf("%s default mail = %+v, %v", env0, c, err)
+		}
+	}
+	for _, kv := range [][]string{
+		{"TESSERA_NOTIFY_EMAIL", "smtp"},
+		{"TESSERA_NOTIFY_EMAIL", "pigeon"},
+		{"TESSERA_SMTP_HOST", "smtp.example.com"},
+		{"TESSERA_SMTP_HOST", "smtp.example.com", "TESSERA_SMTP_FROM", "not an address"},
+		{"TESSERA_SMTP_TLS", "ssl"},
+		{"TESSERA_NOTIFY_MAX_ATTEMPTS", "0"},
+		{"TESSERA_NOTIFY_DIGEST_HOUR", "24"},
+	} {
+		if _, err := config.Load(env(with(map[string]string{"TESSERA_ENV": "dev"}, kv...))); err == nil {
+			t.Errorf("dev accepted %v", kv)
+		}
 	}
 }

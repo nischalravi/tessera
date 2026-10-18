@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"strings"
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
@@ -37,6 +38,13 @@ var (
 		SELECT `+identityCols+` FROM identities i WHERE i.tenant_id = @tenant AND i.id = @id`)
 	identitiesByXID = tq("identities.by_external_id", `
 		SELECT `+identityCols+` FROM identities i WHERE i.tenant_id = @tenant AND i.external_id = @external_id`)
+	// An empty @email or @external_id matches nothing. lower() is SQLite's (ASCII).
+	identitiesActiveMatch = tq("identities.active_match", `
+		SELECT `+identityCols+` FROM identities i
+		WHERE i.tenant_id = @tenant AND i.status = 'active'
+			AND ((@email <> '' AND lower(trim(i.email)) = lower(@email))
+				OR (@external_id <> '' AND i.external_id = @external_id))
+		ORDER BY i.id LIMIT 1`)
 	identitiesOwnedBy = tq("identities.owned_by", `
 		SELECT `+identityCols+` FROM identities i WHERE i.tenant_id = @tenant AND i.owner_id = @owner_id ORDER BY i.id`)
 	identitiesManagedBy = tq("identities.managed_by", `
@@ -112,6 +120,16 @@ func (tx *TenantTx) Identity(id int64) (*Identity, error) {
 // IdentityByExternalID returns one identity by external id.
 func (tx *TenantTx) IdentityByExternalID(xid string) (*Identity, error) {
 	return one(tx, scanIdentity, identitiesByXID, sql.Named("external_id", xid))
+}
+
+// ActiveIdentityMatching returns the lowest-id active identity whose email
+// equals email (case-insensitive, trimmed) or whose external (HR) id equals
+// externalID; an empty argument matches nothing. ErrNotFound if none. Called
+// in the write transaction that then inserts, it is the joiner uniqueness
+// guard: writes are serialized, so no second insert can slip between the two.
+func (tx *TenantTx) ActiveIdentityMatching(email, externalID string) (*Identity, error) {
+	return one(tx, scanIdentity, identitiesActiveMatch, sql.Named("email", strings.TrimSpace(email)),
+		sql.Named("external_id", strings.TrimSpace(externalID)))
 }
 
 // IdentitiesOwnedBy returns the identities whose owner is ownerID, in id order.
