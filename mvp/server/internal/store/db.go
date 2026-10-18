@@ -46,9 +46,11 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver
 
+	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 )
 
@@ -166,7 +168,9 @@ func (d *DB) writeLock() func() {
 	if d.d == dialectPostgres {
 		return func() {}
 	}
+	start := time.Now()
 	d.mu.Lock()
+	obs.DBLockWait.Observe(time.Since(start).Seconds())
 	return d.mu.Unlock
 }
 
@@ -372,6 +376,12 @@ func (d *DB) inTenant(ctx context.Context, t tenancy.ID, readOnly bool, fn func(
 // inTenantOn is inTenant on a given pool (the application pool, or the owner
 // pool for the test-only audit tamper handle).
 func (d *DB) inTenantOn(ctx context.Context, pool *sql.DB, t tenancy.ID, readOnly bool, fn func(*TenantTx) error) (err error) {
+	kind := "tenant_write"
+	if readOnly {
+		kind = "tenant_read"
+	}
+	start := time.Now()
+	defer func() { d.observeTx(kind, start, err) }() // runs after the commit below, so err is final
 	raw, err := pool.BeginTx(ctx, &sql.TxOptions{ReadOnly: readOnly})
 	if err != nil {
 		return fmt.Errorf("store: begin: %w", err)
@@ -438,6 +448,8 @@ func (d *DB) InSystem(ctx context.Context, reason string, fn func(*SystemTx) err
 }
 
 func (d *DB) inSystemLocked(ctx context.Context, reason string, fn func(*SystemTx) error) (err error) {
+	start := time.Now()
+	defer func() { d.observeTx("system_write", start, err) }()
 	raw, err := d.sql.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin: %w", err)
@@ -464,6 +476,8 @@ func (d *DB) ReadSystem(ctx context.Context, reason string, fn func(*SystemTx) e
 	if reason == "" {
 		return errors.New("store: ReadSystem needs a reason")
 	}
+	start := time.Now()
+	defer func() { d.observeTx("system_read", start, err) }()
 	raw, err := d.sql.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return fmt.Errorf("store: begin: %w", err)

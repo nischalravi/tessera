@@ -242,6 +242,7 @@ GET    /api/admin/notifications                      admin.read      -  # issue 
 GET    /api/admin/recovery                           admin.read      -  # issue #16
 POST   /api/admin/recovery/{recovery_id}/cancel      admin.change.request -  # issue #16
 GET    /api/admin/api-clients                        admin.read      -  # issue #16
+GET    /api/admin/platform-health                    admin.read      -  # issue #303
 `
 
 type designRoute struct {

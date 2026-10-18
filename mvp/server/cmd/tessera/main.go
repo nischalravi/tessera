@@ -25,6 +25,11 @@
 //	                      private keys; in dev it is generated at var/dev-kek next to the database
 //	(internal/config lists every setting and the production guard rails that
 //	refuse to start with unsafe ones)
+//	TESSERA_METRICS_ADDR  host:port of the internal /metrics listener (separate from the API
+//	                      listener; default 127.0.0.1:9464 in dev, off in prod; "off" disables;
+//	                      prod accepts only a loopback or private IP, see internal/config)
+//	TESSERA_READY_MAX_LOOP_LAG_SECONDS  /readyz fails when a background loop has not
+//	                      succeeded for this long (default 300)
 //	TESSERA_NOW           freeze the clock at an ISO-8601 time (tests and demos; refused in prod)
 //	TESSERA_ENV           dev (run.sh sets it), test or prod. Every API route except
 //	                      the public allow-list needs a signed-in session, and the
@@ -69,9 +74,11 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
+	"github.com/nischalravi/tessera/mvp/server/internal/health"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
+	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision/fake"
@@ -380,20 +387,20 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if err != nil {
 		return err
 	}
+	obs.SetPoolStats(st.PoolStats)
+	checker := health.New(st, sealer, obs.DefaultLoops, time.Duration(cfg.ReadyMaxLoopLagSeconds)*time.Second, logger)
 	fakeURL, stopFake, err := startFakeTarget(cfg, logger)
 	if err != nil {
 		return err
 	}
 	defer stopFake()
-	// One shared outbound client: sign-in, containment and provisioning all
-	// send through it.
 	// The s3:// anchor sink's AWS SDK client uses the same safehttp client.
 	anchorURL := cfg.AnchorURL(o.db)
 	sink, err := audit.NewSink(anchorURL, audit.WithHTTPClient(outbound))
 	if err != nil {
 		return err
 	}
-	srv := api.New(api.Config{Store: st, Clock: clock, Policies: loader, Logger: logger,
+	srv := api.New(api.Config{Health: checker, Store: st, Clock: clock, Policies: loader, Logger: logger,
 		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound,
 		Outbound: outbound, FakeTargetURL: fakeURL,
 		Containment:    &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock},
@@ -421,6 +428,14 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	ln, err := net.Listen("tcp", o.addr)
 	if err != nil {
 		return err
+	}
+	metrics, err := newMetricsServer(cfg, o.addr, obs.Default, logger)
+	if err != nil {
+		_ = ln.Close()
+		return err
+	}
+	if metrics != nil {
+		go metrics.serve(logger)
 	}
 	sweepDone := make(chan struct{})
 	go func() {
@@ -461,6 +476,9 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 
 	select {
 	case err := <-errc:
+		if metrics != nil {
+			_ = metrics.srv.Close()
+		}
 		stop()
 		<-sweepDone
 		<-provDone
@@ -474,6 +492,9 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	logger.Info("shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
+	if metrics != nil {
+		_ = metrics.srv.Shutdown(shutdownCtx)
+	}
 	err = httpSrv.Shutdown(shutdownCtx)
 	<-sweepDone
 	<-provDone
@@ -518,12 +539,14 @@ func startFakeTarget(cfg *config.Config, logger *slog.Logger) (string, func(), e
 func runKeyRotation(ctx context.Context, st *store.DB, sealer *seal.Sealer, clock timeutil.Clock, logger *slog.Logger) {
 	t := time.NewTicker(keysInterval)
 	defer t.Stop()
+	// reported to /metrics but not gated: it runs once a day
+	obs.DefaultLoops.Register("key_rotation", keysInterval, false)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if err := keys.EnsureAll(ctx, st, sealer, clock()); err != nil && ctx.Err() == nil {
+			if err := obs.DefaultLoops.Run("key_rotation", func() error { return keys.EnsureAll(ctx, st, sealer, clock()) }); err != nil && ctx.Err() == nil {
 				logger.Error("signing key rotation failed", "err", err)
 			}
 		}
