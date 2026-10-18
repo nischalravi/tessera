@@ -400,6 +400,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	go func() {
 		defer close(alertsDone)
 		alertSvc.Run(ctx, alertsInterval)
+	}()
 	notifyDone := make(chan struct{})
 	go func() {
 		defer close(notifyDone)

@@ -240,6 +240,7 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		}
 		if strings.HasPrefix(rt.Pattern, "/api/alerts/") {
 			continue // TestAlertsAPI_CrossTenant (UUIDs and rule names, not fixture ids)
+		}
 		if strings.HasPrefix(rt.Pattern, "/api/admin/") {
 			continue // TestAdminAPI_CrossTenant (UUIDs, not fixture ids)
 		}

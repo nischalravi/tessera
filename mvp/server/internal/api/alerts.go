@@ -70,7 +70,7 @@ func alertActor(r *http.Request) (alerts.Actor, error) {
 	return alerts.Actor{UserID: pr.UserID.String(), Display: pr.Display}, nil
 }
 
-type userRef struct {
+type alertUserRef struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 }
@@ -98,21 +98,21 @@ type alertView struct {
 	Count          int             `json:"count"`
 	FirstSeenAt    time.Time       `json:"first_seen_at"`
 	LastSeenAt     time.Time       `json:"last_seen_at"`
-	Assignee       *userRef        `json:"assignee"`
-	AcknowledgedBy *userRef        `json:"acknowledged_by"`
+	Assignee       *alertUserRef   `json:"assignee"`
+	AcknowledgedBy *alertUserRef   `json:"acknowledged_by"`
 	AcknowledgedAt *time.Time      `json:"acknowledged_at"`
-	ResolvedBy     *userRef        `json:"resolved_by"`
+	ResolvedBy     *alertUserRef   `json:"resolved_by"`
 	ResolvedAt     *time.Time      `json:"resolved_at"`
 	Resolution     *string         `json:"resolution"`
 	Deliveries     *[]deliveryView `json:"deliveries,omitempty"`
 }
 
-type userNames struct {
+type alertUserNames struct {
 	tx    *store.TenantTx
-	cache map[string]*userRef
+	cache map[string]*alertUserRef
 }
 
-func (u *userNames) ref(id *string) (*userRef, error) {
+func (u *alertUserNames) ref(id *string) (*alertUserRef, error) {
 	if id == nil {
 		return nil, nil
 	}
@@ -121,20 +121,20 @@ func (u *userNames) ref(id *string) (*userRef, error) {
 	}
 	uid, err := uuid.Parse(*id)
 	if err != nil {
-		return &userRef{ID: *id, Name: *id}, nil
+		return &alertUserRef{ID: *id, Name: *id}, nil
 	}
 	pu, err := u.tx.PlatformUser(uid)
 	if errors.Is(err, store.ErrNotFound) {
-		return &userRef{ID: *id, Name: "unknown user"}, nil
+		return &alertUserRef{ID: *id, Name: "unknown user"}, nil
 	} else if err != nil {
 		return nil, err
 	}
-	v := &userRef{ID: *id, Name: pu.DisplayName}
+	v := &alertUserRef{ID: *id, Name: pu.DisplayName}
 	u.cache[*id] = v
 	return v, nil
 }
 
-func (u *userNames) view(a *store.Alert) (alertView, error) {
+func (u *alertUserNames) view(a *store.Alert) (alertView, error) {
 	v := alertView{ID: a.ID, Rule: a.RuleID, Key: a.DedupKey, Severity: a.Severity, Title: a.Title, Detail: json.RawMessage(a.Detail),
 		Status: a.Status, Count: a.Count, FirstSeenAt: a.FirstSeenAt, LastSeenAt: a.LastSeenAt, AcknowledgedAt: a.AcknowledgedAt,
 		ResolvedAt: a.ResolvedAt, Resolution: a.Resolution}
@@ -174,7 +174,7 @@ func (s *Server) listAlerts(_ http.ResponseWriter, r *http.Request, p *params) (
 	if err != nil {
 		return nil, err
 	}
-	u := &userNames{tx, map[string]*userRef{}}
+	u := &alertUserNames{tx, map[string]*alertUserRef{}}
 	out := make([]alertView, 0, len(as))
 	for _, a := range as {
 		v, err := u.view(a)
@@ -213,7 +213,7 @@ func (s *Server) getAlert(_ http.ResponseWriter, r *http.Request, p *params) (an
 	} else if err != nil {
 		return nil, err
 	}
-	v, err := (&userNames{tx, map[string]*userRef{}}).view(a)
+	v, err := (&alertUserNames{tx, map[string]*alertUserRef{}}).view(a)
 	if err != nil {
 		return nil, err
 	}
@@ -263,11 +263,11 @@ func (s *Server) alertAction(kind string) handlerFunc {
 		if err != nil {
 			return nil, alertErr(err)
 		}
-		return (&userNames{tx, map[string]*userRef{}}).view(a)
+		return (&alertUserNames{tx, map[string]*alertUserRef{}}).view(a)
 	}
 }
 
-type ruleView struct {
+type alertRuleView struct {
 	ID            string     `json:"id"`
 	Name          string     `json:"name"`
 	Description   string     `json:"description"`
@@ -287,9 +287,9 @@ func (s *Server) listAlertRules(_ http.ResponseWriter, r *http.Request, _ *param
 	if err != nil {
 		return nil, err
 	}
-	out := make([]ruleView, 0, len(rules))
+	out := make([]alertRuleView, 0, len(rules))
 	for _, e := range rules {
-		v := ruleView{ID: e.ID, Name: e.Name, Description: e.Description, Kind: e.Kind, Enabled: e.Enabled, Severity: e.Severity,
+		v := alertRuleView{ID: e.ID, Name: e.Name, Description: e.Description, Kind: e.Kind, Enabled: e.Enabled, Severity: e.Severity,
 			Threshold: e.Threshold, WindowMinutes: int(e.Window.Minutes()), Customized: e.Setting != nil}
 		if e.Setting != nil {
 			at := e.Setting.UpdatedAt

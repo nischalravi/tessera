@@ -299,7 +299,7 @@ func (m *recordingMailer) Send(_ context.Context, msg alerts.Message) error {
 
 func devClient(t *testing.T) *http.Client {
 	t.Helper()
-	c, err := safehttp.New(safehttp.Options{Env: config.Dev, AllowLoopback: true})
+	c, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Dev, AllowLoopback: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -439,7 +439,7 @@ func TestDeliveryGivesUp(t *testing.T) {
 // addresses, and channel validation refuses plain http.
 func TestWebhookSSRFGuard(t *testing.T) {
 	w := newWorld(t)
-	prod, err := safehttp.New(safehttp.Options{Env: config.Prod})
+	prod, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Prod})
 	if err != nil {
 		t.Fatal(err)
 	}
