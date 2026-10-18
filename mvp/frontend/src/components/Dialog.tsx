@@ -9,7 +9,7 @@ export interface ConfirmOptions {
   /** Destructive actions get a red confirm button. */
   danger?: boolean;
   /** Ask for a reason (e.g. high-risk certifications); `required` blocks confirm until filled. */
-  reason?: { label: string; required?: boolean; placeholder?: string };
+  reason?: { label: string; required?: boolean; placeholder?: string; /** the API's minimum, so confirm waits for it */ minLength?: number };
 }
 
 /** Resolves to the entered reason ("" when none was asked) on confirm, or null on cancel. */
@@ -23,7 +23,7 @@ function ConfirmDialog({ o, done }: { o: ConfirmOptions; done: (v: string | null
   const id = useId();
   const [reason, setReason] = useState("");
   useModal(ref, () => done(null));
-  const blocked = !!o.reason?.required && !reason.trim();
+  const blocked = !!o.reason?.required && reason.trim().length < (o.reason.minLength ?? 1);
   return (
     <div className="dialog-wrap">
       <div className="overlay" onClick={() => done(null)} aria-hidden />
@@ -41,6 +41,7 @@ function ConfirmDialog({ o, done }: { o: ConfirmOptions; done: (v: string | null
               <label className="field mt">
                 {o.reason.label}
                 <textarea className="input" data-autofocus value={reason} onChange={(e) => setReason(e.target.value)} placeholder={o.reason.placeholder} />
+                {o.reason.minLength ? <span className="small muted">At least {o.reason.minLength} characters.</span> : null}
               </label>
             )}
           </div>

@@ -12,18 +12,23 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  actions: read # read CI runs of the source head commit
 
 jobs:
   open-promotion-pr:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
       - name: Open promotion PR
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # PRs opened with GITHUB_TOKEN do not trigger workflows, so the promotion PR would get
+          # no CI. PROMOTE_TOKEN (fine-grained PAT or GitHub App token, contents + pull-requests
+          # write) fixes that; without it we fall back to GITHUB_TOKEN.
+          GH_TOKEN: ${{ secrets.PROMOTE_TOKEN || secrets.GITHUB_TOKEN }}
           TARGET: ${{ inputs.target }}
         run: |
           set -euo pipefail
@@ -42,8 +47,32 @@ jobs:
             exit 0
           fi
 
+          SHA=$(git rev-parse "origin/$SOURCE")
+
+          # Assert CI passed on the exact commit being promoted; wait up to 40 minutes for it.
+          deadline=$(( $(date +%s) + 2400 ))
+          while true; do
+            runs=$(gh run list --commit "$SHA" --workflow ci.yml --json status,conclusion)
+            total=$(jq 'length' <<<"$runs")
+            pending=$(jq '[.[] | select(.status != "completed")] | length' <<<"$runs")
+            ok=$(jq '[.[] | select(.conclusion == "success")] | length' <<<"$runs")
+            if [ "$total" -gt 0 ] && [ "$pending" = "0" ]; then
+              if [ "$ok" -gt 0 ]; then echo "CI succeeded on $SHA."; break; fi
+              echo "::error::CI did not succeed on $SOURCE head $SHA. Fix or re-run CI, then promote again."
+              exit 1
+            fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::No finished CI run for $SOURCE head $SHA within 40 minutes (runs found: $total, pending: $pending)."
+              exit 1
+            fi
+            echo "Waiting for CI on $SHA (runs: $total, pending: $pending)..."
+            sleep 30
+          done
+
           {
             echo "## Promotion: \`$SOURCE\` → \`$TARGET\`"
+            echo
+            echo "Source head: \`$SHA\` (CI verified green by the Promote workflow)."
             echo
             echo "$COUNT commits. Merge only after CI is green on \`$SOURCE\` and the QA checklist below is done."
             echo
