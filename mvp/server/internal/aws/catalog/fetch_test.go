@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/x509"
 	"errors"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -173,7 +175,16 @@ func TestFetchUsesGuardedClient(t *testing.T) {
 	srv := fixtureServer(t, "upstream-v1", nil)
 	pool := x509.NewCertPool()
 	pool.AddCert(srv.Certificate())
-	c, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Prod, RootCAs: pool})
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// allow the test server's port so the address guard, not the port guard, refuses it
+	c, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Prod, RootCAs: pool, AllowedPorts: []int{port}})
 	if err != nil {
 		t.Fatal(err)
 	}
