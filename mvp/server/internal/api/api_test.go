@@ -156,6 +156,9 @@ func TestAPISmoke(t *testing.T) {
 			t.Errorf("graph lacks %s nodes", k)
 		}
 	}
+	// An unknown identity or resource is a 404, not a 500 (UAT #306).
+	c.json("GET", "/api/graph?identity_id=99999999", "", 404)
+	c.json("GET", "/api/graph?resource_id=99999999", "", 404)
 	orphan := false
 	for _, n := range c.json("GET", "/api/nhi", "", 200).([]any) {
 		for _, f := range at(n, "flags").([]any) {
