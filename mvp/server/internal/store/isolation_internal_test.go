@@ -310,6 +310,8 @@ var referenceColumns = map[string][]string{
 	// platform users and sessions named without a declared foreign key
 	"role_assignments":   {"granted_by_user_id"},
 	"login_transactions": {"session_id", "expected_external_login_id", "bootstrap_invitation_id"},
+	// an alias names a folder or a group, by object_type
+	"grp_name_aliases": {"object_id"},
 }
 
 // immutableTables refuse every UPDATE (a trigger raises unconditionally), so

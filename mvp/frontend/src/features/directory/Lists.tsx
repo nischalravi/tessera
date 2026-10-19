@@ -1,15 +1,18 @@
 import { FormEvent, useMemo, useState } from "react";
 import { Outlet, useNavigate, useSearchParams } from "react-router-dom";
-import { Ban, ClipboardCheck, KeyRound, Plus, RotateCcw, ShoppingCart, Users } from "lucide-react";
-import { AccountRow, ConnectorRow, Group, HrisEvent, IdentityRow, NhiRow, ResourceRow, api, fmtDay, relTime, useApi } from "../../api";
+import { Ban, ClipboardCheck, KeyRound, Plus, RotateCcw, ShoppingCart, UserCheck, Users } from "lucide-react";
+import { AccountRow, ConnectorRow, Group, HrisEvent, IdentityRow, NhiRow, OrgRow, ResourceRow, api, fmtDay, relTime, useApi, LifecycleList, orgsPath } from "../../api";
 import { useIdentityActions } from "../../app/actions";
+import { useSession } from "../../app/auth";
 import { usePersona } from "../../app/persona";
 import {
-  Avatar, Badge, Button, Callout, Chip, Column, Command, DataTable, Drawer, EmptyState, Flag, GroupTabs, IdLink, Page, PreviewBadge, RiskPill, Status, TypeBadge, useSelected, useToast,
+  Avatar, Badge, Button, Callout, Chip, Column, Command, DataTable, Drawer, EmptyState, Flag, GroupTabs, IdLink, Page, RiskPill, Status, TypeBadge, useSelected, useToast,
 } from "../../components";
-import { ORGS, mockObjects, mockRoles, useMockState, useRoles } from "../../mocks";
+import { mockObjects } from "../../mocks";
 import { AgentCard } from "./AgentCards";
-import { AccountPanel, AppPanel, GroupPanel, IdentityPanel, OrgPanel, RolePanel } from "./Panels";
+import { StateBadge, WORKER_LABEL } from "../lifecycle/parts";
+import { AccountPanel, AppPanel, GroupPanel, IdentityPanel, OrgPanel } from "./Panels";
+import { BulkOwnerDrawer } from "./owners";
 import { ImportDrawer, PreviewFormDrawer, opts, uniq } from "./shared";
 
 /** Identity lists each render their own page header; the layout only hosts them. */
@@ -123,14 +126,20 @@ function identityColumns(): Column<IdentityRow>[] {
 
 export function People() {
   const { data, error, reload } = useApi<IdentityRow[]>("/identities?type=human");
+  const { data: lc } = useApi<LifecycleList>("/lifecycle");
+  const worker = useMemo(() => new Map((lc?.rows ?? []).map((l) => [l.person.id, l])), [lc]);
   const [selected, setSelected] = useSelected();
   const acts = useIdentityActions();
   const nav = useNavigate();
-  const mock = useMockState();
   const [newOpen, setNew] = useDrawerParam("new");
   const imp = useImport();
-  const rows = useMemo(() => data?.map((r) => (mock.disabled[r.id] && r.status === "active" ? { ...r, status: "disabled" } : r)) ?? null, [data, mock.disabled]);
-  const cols = useMemo(identityColumns, []);
+  const rows = data;
+  const cols = useMemo(() => {
+    const c = identityColumns();
+    c.splice(2, 0, { id: "worker", header: "Worker type", sort: (r) => worker.get(r.id)?.worker_type ?? "employee",
+      cell: (r) => { const l = worker.get(r.id); return l && l.worker_type !== "employee" ? <span className="small">{WORKER_LABEL[l.worker_type]}{l.state === "ending" && <> <StateBadge l={l} /></>}</span> : <span className="small faint">Employee</span>; }, hideNarrow: true });
+    return c;
+  }, [worker]);
   return (
     <Page title="Users" count={plural(rows?.length, "identity", "identities")} crumbs={[IDENTITY, ["Users"]]}>
       <DataTable
@@ -144,6 +153,7 @@ export function People() {
         searchPlaceholder="Search name, email, team…"
         filters={[
           { id: "dept", label: "Department", options: opts(uniq((data ?? []).map((r) => r.department))), get: (r) => r.department },
+          { id: "worker", label: "Worker type", options: Object.entries(WORKER_LABEL).map(([value, label]) => ({ value, label })), get: (r) => worker.get(r.id)?.worker_type ?? "employee" },
           { id: "status", label: "Status", options: opts(["active", "disabled", "terminated"]), get: (r) => r.status },
           { id: "system", label: "System", options: opts(uniq((data ?? []).flatMap((r) => r.systems))), get: (r) => r.systems },
         ]}
@@ -178,6 +188,8 @@ export function Machine() {
   const [newOpen, setNew] = useDrawerParam("new");
   const { data: people } = useApi<IdentityRow[]>("/identities?type=human&status=active");
   const agents = (data ?? []).filter((x) => x.type === "ai_agent");
+  const { can } = useSession();
+  const [assign, setAssign] = useState<NhiRow[] | null>(null);
   const [showAgents, setShowAgents] = useState(false);
   const cols: Column<NhiRow>[] = [
     { id: "name", header: "Name", sort: (r) => r.name.toLowerCase(), csv: (r) => r.name, cell: (r) => <div className="row" style={{ flexWrap: "nowrap" }}><Avatar name={r.name} type={r.type} /><div style={{ minWidth: 0 }}><span className="name-link">{r.name}</span><div className="xs faint truncate">{r.kind}</div></div></div> },
@@ -208,6 +220,7 @@ export function Machine() {
         commands={[newCmd("Register", () => setNew(true), true)]}
         onRefresh={reload}
         bulkActions={[
+          ...(can("ownership.manage") ? [{ label: "Assign owner", icon: <UserCheck size={16} />, run: (rs: NhiRow[]) => setAssign(rs) }] : []),
           { label: "Rotate secrets", icon: <RotateCcw size={16} />, run: async (rs) => { await mockObjects.save("secret", `${rs.length} identities`, "bulk", "update"); toast(`Rotation requested for ${rs.length} identities (preview)`); } },
           { label: "Disable", icon: <Ban size={16} />, danger: true, run: (rs) => acts.disableMany(rs) },
         ]}
@@ -225,6 +238,7 @@ export function Machine() {
         </div>
       )}
       {selected && <IdentityPanel id={selected} onClose={() => setSelected(null)} />}
+      {assign && <BulkOwnerDrawer objects={assign.map((r) => ({ kind: "identity", key: String(r.id), label: r.name }))} onClose={() => setAssign(null)} onDone={reload} />}
       {newOpen && (
         <PreviewFormDrawer
           title="Register a machine identity"
@@ -303,106 +317,6 @@ export function Accounts() {
       )}
       {imp.open && <ImportDrawer kind="accounts" label="accounts" columns={["username", "system", "kind", "owner_email", "status"]} rows={imp.file?.rows} fileName={imp.file?.name} onClose={imp.close} />}
     </Page>
-  );
-}
-
-// ------------------------------------------------------------------- roles
-export function Roles() {
-  const roles = useRoles();
-  const nav = useNavigate();
-  const acts = useIdentityActions();
-  const [selected, setSelected] = useSelected();
-  const open = roles.find((r) => r.id === selected);
-  const [newOpen, setNew] = useDrawerParam("new");
-  const imp = useImport();
-  return (
-    <Page title="Roles" count={plural(roles.length, "role")} crumbs={[IDENTITY, ["Roles"]]} badge={<PreviewBadge what="Business roles have no backend yet. They bundle real groups and roles from your connected systems." />} sub="Business roles bundle entitlements from several systems so people request one thing.">
-      <DataTable
-        id="roles"
-        rows={roles}
-        rowKey={(r) => r.id}
-        columns={[
-          { id: "name", header: "Role", sort: (r) => r.name, cell: (r) => <div><span className="name-link">{r.name}</span><div className="xs faint truncate" style={{ maxWidth: 420 }}>{r.description}</div></div> },
-          { id: "owner", header: "Owner", sort: (r) => r.owner, cell: (r) => <span className="small">{r.owner}</span>, hideNarrow: true },
-          { id: "ents", header: "Entitlements", num: true, sort: (r) => r.entitlements.length, cell: (r) => r.entitlements.length },
-          { id: "birth", header: "Birthright for", sort: (r) => r.birthright ?? "", cell: (r) => (r.birthright ? <Badge tone="outline">{r.birthright}</Badge> : <span className="faint">-</span>), hideNarrow: true },
-          { id: "members", header: "Members", num: true, sort: (r) => r.members, cell: (r) => r.members },
-          { id: "risk", header: "Risk", sort: (r) => ["low", "medium", "high"].indexOf(r.risk), csv: (r) => r.risk, cell: (r) => <Badge tone={r.risk === "high" ? "critical" : r.risk === "medium" ? "warning" : "ok"} dot>{cap(r.risk)}</Badge> },
-          { id: "updated", header: "Updated", sort: (r) => r.updated, cell: (r) => <span className="small nowrap">{r.updated}</span>, hideNarrow: true },
-        ]}
-        searchText={(r) => `${r.name} ${r.description} ${r.owner} ${r.entitlements.join(" ")}`}
-        searchPlaceholder="Search roles or the entitlements in them…"
-        filters={[
-          { id: "risk", label: "Risk", options: opts(["low", "medium", "high"]), get: (r) => r.risk },
-          { id: "birth", label: "Birthright", options: opts(uniq(roles.map((r) => r.birthright))), get: (r) => r.birthright },
-        ]}
-        commands={[
-          newCmd("New role", () => setNew(true), true),
-          { label: "Start review", icon: <ClipboardCheck size={16} />, onClick: () => acts.startCampaign() },
-        ]}
-        bulkActions={[{ label: "Request", icon: <ShoppingCart size={16} />, run: (rs) => nav(`/access/request?add=${rs.map((r) => r.id).join(",")}`) }]}
-        rowLabel={(r) => r.name}
-        onRowClick={(r) => setSelected(r.id)}
-        activeKey={selected}
-        onImport={imp.onImport}
-      />
-      {open && <RolePanel role={open} onClose={() => setSelected(null)} />}
-      {newOpen && <NewRoleDrawer onClose={() => setNew(false)} />}
-      {imp.open && <ImportDrawer kind="roles" label="roles" columns={["name", "description", "owner", "entitlements", "birthright"]} rows={imp.file?.rows} fileName={imp.file?.name} onClose={imp.close} />}
-    </Page>
-  );
-}
-
-function NewRoleDrawer({ onClose }: { onClose: () => void }) {
-  const { data: groups } = useApi<Group[]>("/groups");
-  const { actor } = usePersona();
-  const toast = useToast();
-  const nav = useNavigate();
-  const [f, setF] = useState({ name: "", description: "", owner: actor, birthright: "" });
-  const [picked, setPicked] = useState<string[]>([]);
-  const [q, setQ] = useState("");
-  const shown = (groups ?? []).filter((g) => `${g.system}:${g.name}`.toLowerCase().includes(q.toLowerCase()));
-  const risk = picked.some((p) => (groups ?? []).find((g) => `${g.system}:${g.name}` === p)?.privileged) ? "high" : picked.length > 3 ? "medium" : "low";
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    const r = await mockRoles.create({ name: f.name.trim(), description: f.description.trim(), owner: f.owner, birthright: f.birthright || undefined, entitlements: picked, risk }, actor);
-    toast(`Role “${r.name}” created (preview)`, { action: { label: "Open", run: () => nav(`/directory/roles/${r.id}`) } });
-    onClose();
-  };
-  return (
-    <Drawer title="New role" sub={<PreviewBadge />} onClose={onClose} wide
-      footer={<><Button onClick={onClose}>Cancel</Button><Button type="submit" form="new-role" variant="primary" disabled={!f.name.trim() || !picked.length}>Create role</Button></>}
-    >
-      <form id="new-role" className="stack" onSubmit={submit}>
-        <label className="field">Name<input className="input" data-autofocus value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="e.g. Payments engineer" /></label>
-        <label className="field">Description<textarea className="input" value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} placeholder="Who should have it and why" /></label>
-        <div className="grid g2">
-          <label className="field">Owner<input className="input" value={f.owner} onChange={(e) => setF({ ...f, owner: e.target.value })} /></label>
-          <label className="field">Birthright for
-            <select className="input" value={f.birthright} onChange={(e) => setF({ ...f, birthright: e.target.value })}>
-              <option value="">Nobody (request only)</option>
-              {ORGS.filter((o) => o.department).map((o) => <option key={o.id}>{o.department}</option>)}
-            </select>
-          </label>
-        </div>
-        <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
-          <legend className="spread" style={{ width: "100%" }}><span>Entitlements ({picked.length})</span><span className="xs faint">Risk if created: <b>{risk}</b></span></legend>
-          <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter entitlements…" aria-label="Filter entitlements" />
-          <div className="card flush" style={{ maxHeight: 260, overflow: "auto" }}>
-            {shown.map((g) => {
-              const k = `${g.system}:${g.name}`;
-              return (
-                <label key={g.id} className="row small" style={{ padding: "6px 12px", borderBottom: "1px solid var(--border)", flexWrap: "nowrap" }}>
-                  <input type="checkbox" checked={picked.includes(k)} onChange={(e) => setPicked(e.target.checked ? [...picked, k] : picked.filter((x) => x !== k))} />
-                  <span className="sys grow">{k}</span>
-                  {g.privileged && <Badge tone="warning">Privileged</Badge>}
-                </label>
-              );
-            })}
-          </div>
-        </fieldset>
-      </form>
-    </Drawer>
   );
 }
 
@@ -512,44 +426,31 @@ export function Apps() {
 
 // -------------------------------------------------------------------- orgs
 export function Orgs() {
-  const { data: idents } = useApi<IdentityRow[]>("/identities?type=human");
+  const { data, error, reload } = useApi<OrgRow[]>(orgsPath);
   const [selected, setSelected] = useSelected();
-  const open = ORGS.find((o) => o.id === selected);
-  const [newOpen, setNew] = useDrawerParam("new");
-  const imp = useImport();
-  const count = (dept: string | null) => (idents ?? []).filter((i) => (dept ? i.department === dept : true) && i.status === "active").length;
+  const byId = useMemo(() => new Map((data ?? []).map((o) => [o.id, o])), [data]);
   return (
-    <Page title="Organizations" count={plural(ORGS.length, "organization")} crumbs={[IDENTITY, ["Organizations"]]} badge={<PreviewBadge what="Org units come from the mock layer. Member counts are real, matched on department." />} sub="Org units mirror Workday departments. Owners approve requests and reviews by default.">
+    <Page title="Organizations" count={data ? plural(data.length, "organization") : undefined} crumbs={[IDENTITY, ["Organizations"]]}
+      sub="One organization per department in your HR source, under one root for the company. Owners are the people at the top of a department's reporting lines. Read-only: change departments and managers in the HR source.">
       <DataTable
         id="orgs"
-        rows={ORGS}
+        rows={data}
+        error={error}
+        onRefresh={reload}
         rowKey={(r) => r.id}
         columns={[
-          { id: "name", header: "Organization", sort: (r) => r.name, cell: (r) => <div><span className="name-link">{r.name}</span><div className="xs faint">{r.parent ? `in ${ORGS.find((o) => o.id === r.parent)?.name}` : "Top level"}</div></div> },
-          { id: "owner", header: "Owner", sort: (r) => r.owner, cell: (r) => <span className="small">{r.owner}</span> },
-          { id: "cc", header: "Cost center", sort: (r) => r.costCenter, cell: (r) => <span className="small sys">{r.costCenter}</span>, hideNarrow: true },
-          { id: "members", header: "Active people", num: true, sort: (r) => count(r.department), cell: (r) => (idents ? count(r.department) : "…") },
+          { id: "name", header: "Organization", sort: (r) => r.name, cell: (r) => <div><span className="name-link">{r.name}</span><div className="xs faint">{r.parent_id ? `in ${byId.get(r.parent_id)?.name ?? "the company"}` : "Top level"}</div></div> },
+          { id: "owner", header: "Owner", sort: (r) => r.owner?.name ?? "", cell: (r) => r.owner ? <span className="small">{r.owner.name}</span> : <span className="small faint">None found</span> },
+          { id: "members", header: "Active people", num: true, sort: (r) => r.active, cell: (r) => r.active },
+          { id: "total", header: "All people", num: true, sort: (r) => r.members, cell: (r) => r.members, hideNarrow: true },
         ]}
-        searchText={(r) => `${r.name} ${r.owner} ${r.costCenter}`}
+        searchText={(r) => `${r.name} ${r.owner?.name ?? ""}`}
         searchPlaceholder="Search organizations…"
-        commands={[newCmd("New organization", () => setNew(true), true)]}
         rowLabel={(r) => r.name}
         onRowClick={(r) => setSelected(r.id)}
         activeKey={selected}
-        onImport={imp.onImport}
       />
-      {open && <OrgPanel org={open} onClose={() => setSelected(null)} />}
-      {newOpen && (
-        <PreviewFormDrawer title="New organization" kind="org" onClose={() => setNew(false)}
-          fields={[
-            { id: "name", label: "Name", required: true },
-            { id: "parent", label: "Parent", options: ORGS.map((o) => o.name) },
-            { id: "owner", label: "Owner", required: true, options: (idents ?? []).map((i) => i.name).sort() },
-            { id: "costCenter", label: "Cost center", placeholder: "CC-0000" },
-          ]}
-        />
-      )}
-      {imp.open && <ImportDrawer kind="orgs" label="organizations" columns={["name", "parent", "owner_email", "cost_center"]} rows={imp.file?.rows} fileName={imp.file?.name} onClose={imp.close} />}
+      {selected && byId.has(selected) && <OrgPanel id={selected} onClose={() => setSelected(null)} />}
     </Page>
   );
 }
