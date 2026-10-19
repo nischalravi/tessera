@@ -1,0 +1,74 @@
+{
+  "activity_id": 2,
+  "activity_name": "Read",
+  "actor": {
+    "app_name": "Tessera",
+    "user": {
+      "name": "Alice (tenant admin)",
+      "type": "user",
+      "uid": "2b3c0e0e-1111-4222-8333-444455556666"
+    }
+  },
+  "api": {
+    "operation": "http.request",
+    "request": {
+      "uid": "req-4"
+    },
+    "service": {
+      "name": "tessera"
+    }
+  },
+  "category_name": "Application Activity",
+  "category_uid": 6,
+  "class_name": "API Activity",
+  "class_uid": 6003,
+  "http_request": {
+    "http_method": "GET",
+    "url": {
+      "path": "/api/identities/{identity_id}"
+    }
+  },
+  "http_response": {
+    "code": 200
+  },
+  "message": "http.request",
+  "metadata": {
+    "labels": [
+      "tenant:larkspur"
+    ],
+    "log_name": "tessera.audit",
+    "original_time": "2026-10-11T09:30:00.123Z",
+    "product": {
+      "feature": {
+        "name": "audit"
+      },
+      "name": "Tessera",
+      "vendor_name": "Tessera"
+    },
+    "sequence": 4,
+    "tenant_uid": "00000000-0000-4000-8000-0000000000aa",
+    "uid": "00000000-0000-4000-8000-000000000004",
+    "version": "1.3.0"
+  },
+  "severity": "Informational",
+  "severity_id": 1,
+  "src_endpoint": {
+    "ip": "203.0.113.7"
+  },
+  "status": "Success",
+  "status_detail": "success",
+  "status_id": 1,
+  "time": 1791711000123,
+  "type_name": "API Activity: Read",
+  "type_uid": 600302,
+  "unmapped": {
+    "tessera": {
+      "action": "http.request",
+      "hash": "hash4",
+      "outcome": "success",
+      "prev_hash": "prev4",
+      "seq": 4,
+      "tenant_id": "00000000-0000-4000-8000-0000000000aa"
+    }
+  }
+}

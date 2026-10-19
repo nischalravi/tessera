@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/admin"
+	"github.com/nischalravi/tessera/mvp/server/internal/alerts"
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oauth2rp"
@@ -41,6 +42,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/requests"
 	"github.com/nischalravi/tessera/mvp/server/internal/reviews"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
+	"github.com/nischalravi/tessera/mvp/server/internal/siem"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
@@ -114,6 +116,13 @@ type Config struct {
 	// TrustedProxies (TESSERA_TRUSTED_PROXIES) are the peers whose
 	// X-Forwarded-For the rate limiter believes.
 	TrustedProxies []netip.Prefix
+	// Siem streams the audit ledger to tenants' SIEMs (issue #169); its
+	// Sealer seals sink tokens. Nil: tests of sinks are unavailable.
+	Siem *siem.Service
+	// Alerts delivers alerts and sends channel tests (issue #168); its
+	// Sealer seals webhook secrets. Nil: channel tests are unavailable and
+	// webhook channels cannot be created.
+	Alerts *alerts.Service
 	// Outbound is the safehttp client the provisioning worker sends through.
 	// Nil: no outbound client, so every provisioning call fails (as with
 	// Containment).
@@ -228,6 +237,8 @@ func New(cfg Config) *Server {
 		Cookies: auth.Cookies{Insecure: cfg.InsecureCookie}}
 	s.registerRoutes()
 	s.registerAuditRoutes()
+	s.registerSiemRoutes()
+	s.registerAlertRoutes()
 	s.registerOwnershipRoutes()
 	s.registerReviewScheduleRoutes()
 	s.registerCorrelationRoutes()

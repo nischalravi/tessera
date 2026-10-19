@@ -56,6 +56,15 @@ const (
 	PermHRISExecute       Permission = "hris.execute"
 	PermJITSweep          Permission = "jit.sweep"
 	PermConnectorsSync    Permission = "connectors.sync"
+	// SIEM streaming (issue #169): see sinks and their health; add and
+	// change them.
+	PermSiemRead      Permission = "siem.read"
+	PermSiemConfigure Permission = "siem.configure"
+	// Alerting (issue #168): read alerts; triage them (acknowledge,
+	// resolve, assign); configure rules and delivery channels.
+	PermAlertsRead      Permission = "alerts.read"
+	PermAlertsManage    Permission = "alerts.manage"
+	PermAlertsConfigure Permission = "alerts.configure"
 	// PermOwnershipManage assigns owners to applications, entitlements,
 	// resources and machine identities (issue #167).
 	PermOwnershipManage   Permission = "ownership.manage"
@@ -127,19 +136,21 @@ var rolePermissions = map[Role][]Permission{
 	RoleViewer: {PermGraphRead, PermRequestsCreate, PermGuestsSponsor},
 	RoleOperator: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
 		PermReviewsDecide, PermHRISSimulateEvent, PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide,
-		PermGuestsSponsor, PermGuestsRead, PermJobsRead, PermProvisioningRead, PermOwnershipManage, PermDriftRead},
+		PermGuestsSponsor, PermGuestsRead, PermJobsRead, PermProvisioningRead, PermAlertsRead, PermAlertsManage, PermOwnershipManage, PermDriftRead},
 	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead, PermRequestsCreate, PermEmailRead,
-		PermGuestsSponsor, PermGuestsRead, PermJobsRead, PermProvisioningRead, PermDriftRead},
+		PermGuestsSponsor, PermGuestsRead, PermJobsRead, PermProvisioningRead, PermAlertsRead, PermSiemRead, PermDriftRead},
 	RolePolicyAdmin: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
 		PermReviewsDecide, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
 		PermIdentitiesCorrelate, PermIdentitiesMerge, PermIdentitiesAffiliate,
 		PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide, PermCatalogManage, PermRolesManage, PermLifecycleManage,
 		PermGuestsSponsor, PermGuestsRead, PermSponsorshipsApprove, PermIdentitiesContain,
-		PermJobsRead, PermProvisioningRead, PermProvisioningManage, PermOwnershipManage, PermDriftRead, PermDriftRemediate, PermDriftPolicy},
+		PermJobsRead, PermProvisioningRead, PermProvisioningManage, PermAlertsRead, PermAlertsManage, PermOwnershipManage,
+		PermDriftRead, PermDriftRemediate, PermDriftPolicy},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
 		PermConnectionsActivate, PermRequestsCreate, PermEmailRead, PermEmailManage, PermGroupsAdmin,
-		PermJobsRead, PermProvisioningRead, PermProvisioningManage, PermConfigTransport, PermDriftRead},
+		PermJobsRead, PermProvisioningRead, PermProvisioningManage, PermConfigTransport,
+		PermAlertsRead, PermAlertsManage, PermAlertsConfigure, PermSiemRead, PermSiemConfigure, PermDriftRead},
 	RoleBreakGlass: {PermAdminRead, PermBreakGlassRecover},
 }
 
@@ -223,11 +234,11 @@ var scopePermissions = map[Scope][]Permission{
 	ScopeRead: {PermGraphRead, PermConnectionsRead, PermJobsRead, PermProvisioningRead, PermDriftRead},
 	ScopeWrite: {PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage, PermReviewsDecide,
 		PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
-		PermConnectionsManage, PermConnectionsActivate, PermRolesManage, PermLifecycleManage, PermGroupsAdmin, PermProvisioningManage, PermOwnershipManage,
+		PermConnectionsManage, PermConnectionsActivate, PermRolesManage, PermLifecycleManage, PermGroupsAdmin, PermProvisioningManage, PermAlertsManage, PermOwnershipManage,
 		PermDriftRemediate, PermDriftPolicy},
-	ScopeAudit: {PermAuditRead, PermAuditVerify},
+	ScopeAudit: {PermAuditRead, PermAuditVerify, PermAlertsRead, PermSiemRead},
 	ScopeAdmin: {PermEmailRead, PermEmailManage, PermAdminRead, PermAdminChangeReq, PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev,
-		PermBreakGlassRecover, PermConfigTransport},
+		PermBreakGlassRecover, PermConfigTransport, PermAlertsConfigure, PermSiemConfigure},
 }
 
 // perms returns the union of the roles' permissions.

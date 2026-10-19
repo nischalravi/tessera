@@ -19,6 +19,34 @@ type explainer struct {
 	at    map[*stmtEval]int // statement → index of its step
 	dec   []authz.StmtRef
 	seen  map[int]bool
+	// aclStep is the index of the ACL summary step, or -1.
+	aclStep int
+}
+
+// specialSteps lists the KMS grants and S3 ACL grants that were considered and
+// the guardrails of §7.6 that applied.
+func (x *explainer) specialSteps() {
+	e, v := x.e, x.v
+	x.steps = append(x.steps, e.spec.kmsSteps...)
+	if e.prefix == "kms" && !e.res.none && e.class == classIAM && v.cross {
+		x.gateStep(authz.StageSpecialRule, v.gKMS, map[string]string{"action": e.action},
+			e.action+" can be authorized across accounts", kmsCrossAccountNote(e.action))
+	}
+	x.steps = append(x.steps, e.spec.aclSteps...)
+	if e.spec.aclsOn && len(e.spec.aclSteps) > 0 {
+		x.aclStep = x.gateStep(authz.StageS3ACL, e.spec.aclAny(), nil, "an ACL grant allows "+e.action, "no ACL grant allows "+e.action)
+	}
+	if e.spec.isS3 && e.spec.eff != (model.BPA{}) {
+		x.gateStep(authz.StageS3BPA, v.gS3, map[string]string{
+			"restrict_public_buckets": fmt.Sprint(e.spec.eff.RestrictPublicBuckets),
+			"ignore_public_acls":      fmt.Sprint(e.spec.eff.IgnorePublicAcls),
+		}, "Block Public Access does not block the request", e.spec.bpaWhy)
+	}
+}
+
+func kmsCrossAccountNote(action string) string {
+	return action + " cannot be used across accounts: only the cryptographic operations, CreateGrant, DescribeKey, " +
+		"GetKeyRotationStatus, GetPublicKey, ListGrants, RetireGrant and RevokeGrant can"
 }
 
 func (x *explainer) stmtStep(stage authz.Stage, se *stmtEval) {
@@ -151,6 +179,7 @@ func (x *explainer) build() map[string]string {
 		}
 		gateVPCE = x.gateStep(authz.StageVPCE, v.g, nil, "the VPC endpoint policy allows", "no VPC endpoint policy allows")
 	}
+	x.specialSteps()
 	gateGrant := x.gateStep(authz.StageResourcePolicy, v.grant, nil, "a grant path allows", "no grant path allows")
 
 	facts := map[string]string{}
@@ -241,6 +270,12 @@ func gateGrantIndex(steps []authz.ExplanationStep, i int) int {
 func (x *explainer) failure() (authz.Stage, *level, string) {
 	e, v := x.e, x.v
 	if v.denyKind == authz.Guardrail {
+		switch v.guard {
+		case authz.StageS3BPA:
+			return authz.StageS3BPA, nil, e.spec.bpaWhy
+		case authz.StageSpecialRule:
+			return authz.StageSpecialRule, nil, kmsCrossAccountNote(e.action)
+		}
 		return authz.StageVPCE, nil, "no VPC endpoint policy allows " + e.action
 	}
 	switch {
@@ -250,6 +285,9 @@ func (x *explainer) failure() (authz.Stage, *level, string) {
 		return authz.StageSCP, v.blockSCP, "no service control policy allows " + e.action + " (level " + v.blockSCP.node.ID + ")"
 	}
 	rbNotFalse := func(k MatchKind) bool { return !v.rb[k].IsFalse() }
+	if e.class == classAnonymous && e.spec.aclIgnored {
+		return authz.StageS3ACL, nil, "IgnorePublicAcls ignores the public ACL grants, so no ACL grant allows " + e.action
+	}
 	switch e.class {
 	case classService, classAnonymous, classProvider:
 		return authz.StageResourcePolicy, nil, "no resource-based policy allows " + e.action
@@ -300,9 +338,25 @@ func (x *explainer) decideAllow(facts map[string]string, rbpAllows []*stmtEval) 
 	}
 	switch {
 	case e.class != classIAM:
-		setStage(authz.StageResourcePolicy, firstTrue(rbpAllows, MatchSelf, MatchService, MatchWildcard))
+		pick := firstTrue(rbpAllows, MatchSelf, MatchService, MatchWildcard)
+		switch {
+		case pick == nil && e.spec.aclPublic.IsTrue():
+			x.grantStage(facts, authz.StageS3ACL)
+		case pick == nil && e.spec.kmsSelf.IsTrue():
+			x.grantStage(facts, authz.StageKMSGrant)
+		default:
+			setStage(authz.StageResourcePolicy, pick)
+		}
 	case v.cross:
-		setStage(authz.StageCrossAccount, firstTrue(rbpAllows, MatchSelf, MatchWildcardPrincipalARN, MatchWildcard, MatchParent, MatchAccount))
+		pick := firstTrue(rbpAllows, MatchSelf, MatchWildcardPrincipalARN, MatchWildcard, MatchParent, MatchAccount)
+		switch {
+		case pick == nil && e.spec.kmsSelf.Or(e.spec.kmsParent).IsTrue():
+			x.grantStage(facts, authz.StageKMSGrant)
+		case pick == nil && e.spec.aclAny().IsTrue():
+			x.grantStage(facts, authz.StageS3ACL)
+		default:
+			setStage(authz.StageCrossAccount, pick)
+		}
 		x.markStmt(idPick)
 		layers()
 	default:
@@ -310,6 +364,9 @@ func (x *explainer) decideAllow(facts map[string]string, rbpAllows []*stmtEval) 
 			setStage(authz.StageResourcePolicy, se)
 		} else if se := firstTrue(rbpAllows, MatchParent); se != nil && v.rb[MatchParent].And(v.pbOK).And(v.spOK).IsTrue() {
 			setStage(authz.StageResourcePolicy, se)
+			layers()
+		} else if x.grantOnly() {
+			x.grantStage(facts, authz.StageKMSGrant)
 			layers()
 		} else if idPick != nil {
 			setStage(authz.StageIdentity, idPick)
@@ -325,6 +382,38 @@ func (x *explainer) decideAllow(facts map[string]string, rbpAllows []*stmtEval) 
 	}
 }
 
+// grantOnly: a KMS grant allows and the identity path (with the key policy's
+// delegation) does not, so the grant is the justification.
+func (x *explainer) grantOnly() bool {
+	v := x.v
+	idp := v.idAllow.And(v.pbOK).And(v.spOK)
+	if v.explicit {
+		idp = idp.And(v.rb[MatchAccount])
+	}
+	return v.kg.IsTrue() && !idp.IsTrue()
+}
+
+// grantStage records a grant path (a KMS grant or an ACL) as the decisive stage.
+func (x *explainer) grantStage(facts map[string]string, s authz.Stage) {
+	facts["decisive_stage"] = string(s)
+	switch s {
+	case authz.StageS3ACL:
+		if x.aclStep >= 0 {
+			x.mark(x.aclStep)
+		}
+		facts["match_kind"] = "acl"
+	case authz.StageKMSGrant:
+		for i := range x.steps {
+			if x.steps[i].Stage == authz.StageKMSGrant && x.steps[i].Result == authz.ResultAllow {
+				x.mark(i)
+				facts["grant_id"] = x.steps[i].MatchedOn["grant_id"]
+				break
+			}
+		}
+		facts["match_kind"] = "kms_grant"
+	}
+}
+
 func kindOf(se *stmtEval) string {
 	for _, k := range []MatchKind{MatchSelf, MatchWildcardPrincipalARN, MatchWildcard, MatchParent, MatchAccount, MatchService} {
 		if se.kinds.Has(k) {
@@ -336,7 +425,16 @@ func kindOf(se *stmtEval) string {
 
 // finish assembles the Decision from the base verdict.
 func (e *evaluator) finish(v *verdict) *authz.Decision {
-	x := &explainer{e: e, v: v, at: map[*stmtEval]int{}, seen: map[int]bool{}}
+	if e.opts.Fast {
+		// Bulk enumeration (internal/aws/query) keeps the outcome, the residual and
+		// the fidelity, not the trace, and building the trace is a quarter of the
+		// cost of a cell. The explanation never adds a fidelity reason.
+		fid, reasons := e.fidelity()
+		return &authz.Decision{Outcome: v.outcome, DenyKind: v.denyKind, Residual: v.residual, Fidelity: fid,
+			FidelityReasons: reasons, Request: e.req, EngineVersion: EngineVersion, CatalogVersion: e.cat.Version(),
+			SnapshotID: e.snap.ID}
+	}
+	x := &explainer{e: e, v: v, at: map[*stmtEval]int{}, seen: map[int]bool{}, aclStep: -1}
 	facts := x.build()
 	fid, reasons := e.fidelity()
 	d := &authz.Decision{

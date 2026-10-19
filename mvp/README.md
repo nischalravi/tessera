@@ -251,12 +251,17 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `GET|POST /api/hris/events` (422 for an unknown `identity_id`) · `GET /api/hris/events/{id}/plan` · `POST /api/hris/events/{id}/execute` ·
 `GET /api/jml/leaver-plan/{identity_id}` · `POST /api/identities/{id}/contain` (kill switch, see "Identity containment") · `POST /api/identities/{id}/disable|enable` ·
 `PUT /api/connections/{id}/containment-credential` · `GET /api/accounts[?system=]` ·
+`GET|POST /api/siem/sinks` · `PUT /api/siem/sinks/{id}` · `POST /api/siem/sinks/{id}/rewind {seq}` ·
+`POST /api/siem/sinks/{id}/test` · `GET /api/siem/sinks/{id}/dead-letters` ·
+`GET /api/alerts[?status=open|acknowledged|resolved|live&severity=&rule=]` · `GET /api/alerts/summary` · `GET /api/alerts/{id}` ·
+`POST /api/alerts/{id}/acknowledge|resolve|assign` · `GET /api/alerts/rules` · `PUT /api/alerts/rules/{rule_id}` ·
+`GET|POST /api/alerts/channels` · `PUT /api/alerts/channels/{id}` · `POST /api/alerts/channels/{id}/test` ·
 `GET /api/ownership[?kind=app|group|resource|identity&unowned=]` · `PUT /api/ownership/{kind}/{object_key}` ·
 `POST /api/ownership/bulk` ·
 `GET /api/audit[?limit=&before_seq=&action=&actor_id=&target_type=&target_id=&from=&to=&include_http=]` ·
 `GET /api/audit/events/{event_id}/proof` · `GET /api/audit/checkpoints[?from_seq=]` · `GET /api/audit/keys` ·
 `POST /api/audit/verify {from_seq?, to_seq?}` · `GET /api/audit/export[?from_seq=&to_seq=]` (NDJSON) ·
-`GET /api/auth/session` · `POST /api/auth/logout` · `GET /api/auth/sessions` · `DELETE /api/auth/sessions/{session_id}` ·
+`GET /api/auth/session` (`user.identity_id` is the directory person the sign-in is linked to) · `POST /api/auth/logout` · `GET /api/auth/sessions` · `DELETE /api/auth/sessions/{session_id}` ·
 `GET /api/auth/step-up?acr=&max_age=&return_to=` ·
 `GET /api/auth/discover?tenant=&email=` · `GET /api/auth/login?tenant=&connection=&return_to=` (302 to the IdP) ·
 `GET /api/auth/oidc/{connection_id}/callback` · `GET /api/auth/saml/{connection_id}/metadata` ·
@@ -281,7 +286,7 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `POST /api/accounts/{id}/link {identity_id, reason}` · `POST /api/accounts/{id}/not-person {reason}` ·
 `DELETE /api/accounts/{id}/link` · `POST /api/identities/{id}/merge {into, reason}` ·
 `GET /api/identity-merges` · `POST /api/identity-merges/{id}/unmerge {reason}` ·
-`GET|POST /api/reviews/schedules` · `PUT /api/reviews/schedules/{id}` · `POST /api/reviews/schedules/{id}/run` ·
+`GET|POST /api/reviews/schedules` · `PUT /api/reviews/schedules/{id}` · `POST /api/reviews/schedules/{id}/run` (an unknown `system` is 422 `invalid_system`; a second run in the same second is 409 `already_launched`; a schedule with no grants in scope creates no campaign, audits `review.schedule.skipped` and answers 200 `{skipped, reason}`) ·
 `GET /api/identities/{id}/affiliations` · `GET /api/identities/{id}/identifiers` ·
 `POST /api/identities/{id}/affiliations {type, org_unit?, population?, starts_at?, ends_at?, reason}` ·
 `POST /api/affiliations/{id}/end {reason}`
@@ -316,6 +321,81 @@ Each route declares the permission it needs (design §12.1, §16.2; `api.Routes(
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
 or HRIS execution is always the signed-in user.
 
+### SIEM streaming
+
+`tessera serve` pushes each tenant's audit ledger to its SIEM sinks every 15 seconds (`internal/siem`, issue #169).
+The pull export (`/api/audit/export`) stays available.
+
+- **Destinations:**
+  - **Splunk HEC:** newline-separated HEC envelopes, sent with `Authorization: Splunk <token>`, `sourcetype` set to `tessera:audit` or `tessera:ocsf`, and `host` set to the tenant slug.
+  - **HTTPS JSON:** a JSON array of events with an optional bearer token. Use it for Microsoft Sentinel's Logs Ingestion API, Cribl or Logstash.
+  - **Syslog over TLS (RFC 5425):**
+    - Messages are RFC 5424 with octet-counting framing, facility 13 (log audit), and the severity taken from the event's outcome.
+    - Each message carries structured data `[tessera@32473 seq=… hash=…]`.
+    - The port defaults to 6514. A private CA can be given as PEM.
+- **Formats:**
+  - `json` is the export record. It carries `hash` and `prev_hash`, so the SIEM can recompute the chain.
+  - `ocsf` is OCSF 1.3: Authentication (3002) for sign-in and sign-out, Account Change (3001) for role grants and revokes and user disables, and API Activity (6003) for everything else.
+  - The chain fields go under `unmapped.tessera`.
+  - The mapping is pinned by golden files in `internal/siem/testdata`.
+- **Delivery:**
+  - At least once, in seq order, from a durable cursor per sink. The cursor moves only after the destination accepts a batch of up to 200 events, so restarts and outages leave no gaps.
+  - New sinks start at the current head by default, or can replay the whole ledger with `start: "beginning"`. **Replay** in the UI (a rewind) sends everything again.
+  - `http.request` events are left out unless `include_http` is set.
+  - Failures back off from 10 s up to 30 min.
+  - After 3 consecutive failures the sink shows as **failing**, recorded as audit event `siem.sink.failing` (and `siem.sink.recovered` when it recovers).
+  - A batch the destination rejects outright (a 4xx other than 408 or 429) is retried 5 times, then dead-lettered and skipped (`siem.sink.dead_letter`). Retryable errors are never skipped.
+- **Health:** healthy, catching up, retrying, failing or paused. The lag counts the events the sink still has to send.
+- **Security:**
+  - Webhooks go through `internal/safehttp`.
+  - Syslog collectors are checked against the same address rules after DNS resolution, and the dial goes to the checked address. Private, loopback (outside dev) and cloud-metadata addresses are refused.
+  - Tokens are sealed under the KEK, never returned, and kept out of the audit log.
+  - Webhook URLs are shown without their query string.
+  - Creating or changing a sink needs step-up.
+- **Permissions:**
+  - `siem.read`: auditor and tenant_admin, plus the `tessera:audit` scope.
+  - `siem.configure`: tenant_admin, plus the `tessera:admin` scope.
+- **UI:** **Admin > Log streaming (SIEM)** lists each sink with its health, delivered count, dead letters, and Test, Replay and Edit actions.
+- **Not yet:** S3-compatible bucket sinks.
+### Alerts
+
+The alert engine (`internal/alerts`, issue #168) runs every minute in `tessera serve`. It reads new audit
+events and matches them against built-in rules; detections run every 15 minutes. A tenant's first run
+starts at the current head, so history does not alert.
+
+| Rule | Fires on | Default |
+|---|---|---|
+| Break-glass access used | `auth.break_glass.used`, `breakglass.action` | critical, every event |
+| New administrator | `auth.role.granted`, `admin.role.granted` or an applied `role.grant*` admin change, for tenant_admin, policy_admin or break_glass | high |
+| MFA bypassed | `auth.mfa.bypass*` (#109) | high |
+| Repeated sign-in failures | `auth.login.failure` with the same email, subject or IP | medium, 5 in 15 min |
+| Provisioning or sync job failed | a failed `connectors.*`, `connection.*`, `jml.*`, `provisioning.*` or `readiness.*` event, `job.failed` (job run history), or `admin.change.failed` | high |
+| Audit anchoring failing | detection: checkpoints whose anchoring failed | critical, at 3 |
+| Privileged identity without an owner | detection: an active NHI or agent with privileged access and no owner, or an owner who left | high |
+
+- **Dedup and lifecycle.** There is one live alert per rule and subject; repeats raise its count.
+  - States are open, acknowledged and resolved. A detection resolves itself when the condition clears or the rule is switched off.
+  - Raising, acknowledging, assigning, resolving, rule and channel changes, deliveries and channel tests are all audited (`alert.*`).
+- **Rule settings.** Tenant admins can turn a rule on or off and change its severity, threshold and window (`alerts.configure`).
+- **Channels.**
+  - Email: a list of addresses.
+  - Webhook: an https URL. The payload has a `text` field, so Slack and Teams incoming webhooks accept it.
+  - Each channel takes alerts at or above its minimum severity.
+  - Webhooks go out through `internal/safehttp`, which refuses private, loopback (except in dev) and cloud-metadata addresses.
+  - Each webhook is signed: `X-Tessera-Signature: t=<unix>,v1=<hex HMAC-SHA256 of "<t>.<body>">`. The secret (`whsec_…`) is shown once, sealed under the KEK, and can be rotated.
+  - Creating or changing a channel needs step-up.
+  - Webhook URLs come back redacted, because Slack and Teams put their token in the path.
+- **Retries.** Deliveries wait in an outbox and are retried after 1 min, 5 min, 15 min, 1 h and 4 h, then marked failed.
+- **Email.** `TESSERA_NOTIFY` controls email:
+  - `log` (the default) writes each message to the server log.
+  - `smtp://user:pass@host:587?from=alerts@example.com` sends with STARTTLS required; a relay without STARTTLS is refused.
+  - `smtps://…` sends with implicit TLS.
+  - The SMTP host is operator configuration, so it does not go through `safehttp`.
+- **Permissions.**
+  - `alerts.read`: operator, auditor, policy_admin, tenant_admin.
+  - `alerts.manage` (triage): operator, policy_admin, tenant_admin.
+  - `alerts.configure`: tenant_admin.
+- **UI.** **Protection > Alerts** has three tabs: alerts with filter chips and a side panel, rules, and channels (tenant admins only). For anyone with `alerts.read`, the top-bar bell lists open alerts with a count.
 ### Ownership
 
 Applications (by system name), entitlements (groups), resources and machine identities each have a
@@ -1184,7 +1264,7 @@ the right. Arrow keys move between items.
 | (top) | **Home**, **Inbox** (count) |
 | **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Ownership, Accounts (with *Account matches*), Roles, Organizations (live, read-only, derived from departments) |
 | **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
-| **Protection** | Policies & SoD (violations, policies, what-if simulation), Attribute policies, Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
+| **Protection** | Alerts (alerts, rules, channels), Policies & SoD (violations, policies, what-if simulation), Attribute policies, Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
 | **Settings** | Connections (governed connections and the setup wizard), Admin |
 
 **Home.** For the admin & security persona: the tenant name and a sync line, then tabs
@@ -1519,6 +1599,18 @@ cd ../frontend && npm run build && npm test   # npm test: node:test, no extra de
   the jobs show `runner_id=0` with no steps, they never ran (see the annotations, usually billing).
 * **Security scanners:** gosec reports 0 issues; each of the few `#nosec` annotations carries a
   justification. govulncheck reports no vulnerabilities.
+* **AWS evaluator indexes and queries** (`internal/aws/index`, `internal/aws/query`, pure, no
+  behaviour change to the API yet). `TestAtomsEqualBruteForce` and `TestDiffEqualsBruteForce`
+  check atom-based answers against the engine cell by cell on small random tenants
+  (`awstest.NewWorld(seed)`); `TESSERA_EQUIV_SEEDS=200` runs more seeds and
+  `go test -fuzz FuzzAtomsEqualBruteForce ./internal/aws/query` explores others.
+  `go test -bench . -run XXX ./internal/aws/query` runs the benchmarks (track with `benchstat`).
+  The nightly SLO check against a synthetic tenant at twice the design's target scale is
+  `go test -tags slow -run TestPerf -timeout 90m ./internal/aws/query`. It needs about 8 GB of
+  memory and a quiet machine (the SLOs are for 16 vCPU). Options: `TESSERA_PERF_SCALE=1` for the
+  target itself, `TESSERA_PERF_SAMPLE=n` for the number of sampled principals,
+  `TESSERA_PERF_PROFILE=<dir>` for CPU and heap profiles (keep `<dir>` out of the repository), and
+  `TESSERA_PERF_ROOT=1` for the root-SCP diff.
 
 ## Server hardening
 

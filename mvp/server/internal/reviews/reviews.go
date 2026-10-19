@@ -62,6 +62,8 @@ func deptKey(d *string) (string, bool) {
 type Scope struct {
 	System         string
 	PrivilegedOnly bool
+	// SkipEmpty creates no campaign when no grant is in scope (the campaign id is 0).
+	SkipEmpty bool
 }
 
 // GenerateCampaign creates a campaign with an item for every risky grant.
@@ -121,10 +123,7 @@ func GenerateScopedCampaign(c *store.TenantTx, now time.Time, name string, unuse
 		}
 	}
 
-	campID, err := c.InsertCampaign(&store.ReviewCampaign{Name: name, CreatedAt: now, Status: "open", UnusedDays: unusedDays})
-	if err != nil {
-		return 0, err
-	}
+	var pending []*store.ReviewItem
 	total, items := 0, 0
 	for _, iid := range g.Identities(true) {
 		ident := people[iid]
@@ -247,12 +246,23 @@ func GenerateScopedCampaign(c *store.TenantTx, now time.Time, name string, unuse
 				reviewerID = &reviewer.ID
 			}
 			edgeID := *ag.Edge.EdgeID
-			if err := c.InsertReviewItem(&store.ReviewItem{CampaignID: campID, IdentityID: iid, EdgeID: &edgeID,
+			pending = append(pending, &store.ReviewItem{IdentityID: iid, EdgeID: &edgeID,
 				EdgeSrc: ag.Acct, EdgeDst: ag.Dst, GrantLabel: g.Label(ag.Acct) + " → " + g.Label(ag.Dst), Reasons: reasons,
-				Context: json.RawMessage(ctxJSON), ReviewerID: reviewerID}); err != nil {
-				return 0, err
-			}
+				Context: json.RawMessage(ctxJSON), ReviewerID: reviewerID})
 			items++
+		}
+	}
+	if total == 0 && scope.SkipEmpty {
+		return 0, nil
+	}
+	campID, err := c.InsertCampaign(&store.ReviewCampaign{Name: name, CreatedAt: now, Status: "open", UnusedDays: unusedDays})
+	if err != nil {
+		return 0, err
+	}
+	for _, it := range pending {
+		it.CampaignID = campID
+		if err := c.InsertReviewItem(it); err != nil {
+			return 0, err
 		}
 	}
 	if err := c.SetCampaignTotals(campID, total, total-items); err != nil {
