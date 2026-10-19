@@ -9,6 +9,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	authnorm "github.com/nischalravi/tessera/mvp/server/internal/auth/normalize"
+	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
@@ -124,6 +125,7 @@ func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, tenant st
 	sid := issued.Session.ID.String()
 	audit.SetPrincipal(ctx, audit.Principal{Tenant: tenant.ID, Actor: actor, SessionID: &sid, Authn: summary})
 	http.SetCookie(w, s.authn.Cookies.Session(issued.Secret))
+	obs.Logins.Inc(loginMethodOfProtocol(o.protocol), "success")
 	return issued, nil
 }
 

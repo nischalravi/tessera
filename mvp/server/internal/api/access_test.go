@@ -787,7 +787,7 @@ func TestAccess_RateKeyKeepsProxyFallback(t *testing.T) {
 		if tc.xff != "" {
 			req.Header.Set("X-Forwarded-For", tc.xff)
 		}
-		if got := s.rateKey(req); got != tc.want {
+		if got := s.rateKey(req).String(); got != tc.want {
 			t.Errorf("rateKey(xff %q) = %q, want %q", tc.xff, got, tc.want)
 		}
 	}

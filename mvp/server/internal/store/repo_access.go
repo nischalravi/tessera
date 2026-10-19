@@ -132,7 +132,7 @@ var (
 	polCount = tq("access_policies.count", `SELECT count(*) FROM access_policies p WHERE p.tenant_id = @tenant`)
 )
 
-func scanPolicy(s scanner) (*AccessPolicy, error) {
+func scanAccessPolicy(s scanner) (*AccessPolicy, error) {
 	var p AccessPolicy
 	var id, tid, ranges, created, updated string
 	var acr, by sql.NullString
@@ -228,13 +228,13 @@ func (tx *TenantTx) DeleteAccessPolicy(id uuid.UUID) error {
 
 // AccessPolicy returns one of this tenant's policies.
 func (tx *TenantTx) AccessPolicy(id uuid.UUID) (*AccessPolicy, error) {
-	return one(tx, scanPolicy, polGet, sql.Named("id", id.String()))
+	return one(tx, scanAccessPolicy, polGet, sql.Named("id", id.String()))
 }
 
 // AccessPolicies lists this tenant's policies in evaluation order (scope,
 // priority, age, id).
 func (tx *TenantTx) AccessPolicies() ([]*AccessPolicy, error) {
-	return collect(tx, scanPolicy, polList)
+	return collect(tx, scanAccessPolicy, polList)
 }
 
 // CountAccessPolicies counts this tenant's policies.

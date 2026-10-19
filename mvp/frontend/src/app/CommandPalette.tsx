@@ -84,7 +84,7 @@ function Palette({ initial, onClose }: { initial: string; onClose: () => void })
     { id: "a-review", group: "Actions", label: "Start access review", icon: <ClipboardCheck size={15} />, keywords: "certification campaign attestation", run: () => acts.startCampaign() },
     { id: "a-graph", group: "Actions", label: "Open graph for…", icon: <Network size={15} />, keywords: "paths explorer", next: pickIdentity("Open graph for", people, (i) => acts.openGraph(i), "Open graph") },
     { id: "a-reqfor", group: "Actions", label: "Request access for someone…", icon: <KeyRound size={15} />, keywords: "on behalf", next: pickIdentity("Request access for", people, (i) => acts.requestFor(i), "Request") },
-    { id: "a-role", group: "Actions", label: "Create role", icon: <Layers size={15} />, keywords: "new business role", hint: "Preview", run: () => nav("/directory/roles?new=1") },
+    { id: "a-role", group: "Actions", label: "Create role", icon: <Layers size={15} />, keywords: "new business role", run: () => nav("/directory/roles?new=1") },
     { id: "a-import", group: "Actions", label: "Bulk import users", icon: <Upload size={15} />, keywords: "csv upload bulk people", run: () => nav("/directory/people?import=1") },
     { id: "a-connection", group: "Actions", label: "New connection", icon: <Plug size={15} />, keywords: "connector directory ad ldap okta entra setup wizard readiness", run: () => nav("/admin/connections/new") },
     {

@@ -65,9 +65,9 @@ func accessNotFound(what string) error {
 	return accessError(http.StatusNotFound, "not_found", "no such "+what)
 }
 
-// pathUUID reads a UUID path segment; anything else is "not found", the same
+// accessPathUUID reads a UUID path segment; anything else is "not found", the same
 // answer as another tenant's id.
-func pathUUID(p *params, name, what string) (uuid.UUID, error) {
+func accessPathUUID(p *params, name, what string) (uuid.UUID, error) {
 	v := p.path[name]
 	if !idRE.MatchString(v) {
 		return uuid.Nil, accessNotFound(what)
@@ -79,7 +79,6 @@ func pathUUID(p *params, name, what string) (uuid.UUID, error) {
 	return id, nil
 }
 
-func isNotFound(err error) bool { return errors.Is(err, store.ErrNotFound) }
 
 // ---------------------------------------------------------------- validation
 
@@ -224,7 +223,7 @@ func (s *Server) createNetworkRange(r *http.Request, _ *params) (int, any, error
 }
 
 func (s *Server) updateNetworkRange(r *http.Request, p *params) (int, any, error) {
-	id, err := pathUUID(p, "id", "network range")
+	id, err := accessPathUUID(p, "id", "network range")
 	if err != nil {
 		return 0, nil, err
 	}
@@ -259,7 +258,7 @@ func (s *Server) updateNetworkRange(r *http.Request, p *params) (int, any, error
 }
 
 func (s *Server) deleteNetworkRange(r *http.Request, p *params) (int, any, error) {
-	id, err := pathUUID(p, "id", "network range")
+	id, err := accessPathUUID(p, "id", "network range")
 	if err != nil {
 		return 0, nil, err
 	}
@@ -472,7 +471,7 @@ func (s *Server) createAccessPolicy(r *http.Request, _ *params) (int, any, error
 }
 
 func (s *Server) updateAccessPolicy(r *http.Request, p *params) (int, any, error) {
-	id, err := pathUUID(p, "id", "policy")
+	id, err := accessPathUUID(p, "id", "policy")
 	if err != nil {
 		return 0, nil, err
 	}
@@ -510,7 +509,7 @@ func (s *Server) updateAccessPolicy(r *http.Request, p *params) (int, any, error
 }
 
 func (s *Server) deleteAccessPolicy(r *http.Request, p *params) (int, any, error) {
-	id, err := pathUUID(p, "id", "policy")
+	id, err := accessPathUUID(p, "id", "policy")
 	if err != nil {
 		return 0, nil, err
 	}
@@ -608,7 +607,7 @@ func (s *Server) listDeviceSignals(r *http.Request, _ *params) (int, any, error)
 }
 
 func (s *Server) setDeviceSignal(r *http.Request, p *params) (int, any, error) {
-	uid, err := pathUUID(p, "user_id", "user")
+	uid, err := accessPathUUID(p, "user_id", "user")
 	if err != nil {
 		return 0, nil, err
 	}
@@ -658,7 +657,7 @@ func (s *Server) setDeviceSignal(r *http.Request, p *params) (int, any, error) {
 }
 
 func (s *Server) clearDeviceSignal(r *http.Request, p *params) (int, any, error) {
-	uid, err := pathUUID(p, "user_id", "user")
+	uid, err := accessPathUUID(p, "user_id", "user")
 	if err != nil {
 		return 0, nil, err
 	}
