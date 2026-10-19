@@ -1,0 +1,67 @@
+{
+  "activity_id": 1,
+  "activity_name": "Create",
+  "actor": {
+    "app_name": "Tessera",
+    "user": {
+      "name": "alerts.engine",
+      "type": "system",
+      "uid": "alerts.engine"
+    }
+  },
+  "api": {
+    "operation": "alert.raised",
+    "service": {
+      "name": "tessera"
+    }
+  },
+  "category_name": "Application Activity",
+  "category_uid": 6,
+  "class_name": "API Activity",
+  "class_uid": 6003,
+  "message": "alert.raised",
+  "metadata": {
+    "labels": [
+      "tenant:larkspur"
+    ],
+    "log_name": "tessera.audit",
+    "original_time": "2026-10-11T09:30:00.123Z",
+    "product": {
+      "feature": {
+        "name": "audit"
+      },
+      "name": "Tessera",
+      "vendor_name": "Tessera"
+    },
+    "sequence": 5,
+    "tenant_uid": "00000000-0000-4000-8000-0000000000aa",
+    "uid": "00000000-0000-4000-8000-000000000005",
+    "version": "1.3.0"
+  },
+  "severity": "Critical",
+  "severity_id": 5,
+  "src_endpoint": {
+    "ip": "203.0.113.7"
+  },
+  "status": "Success",
+  "status_detail": "success",
+  "status_id": 1,
+  "time": 1791711000123,
+  "type_name": "API Activity: Create",
+  "type_uid": 600301,
+  "unmapped": {
+    "tessera": {
+      "action": "alert.raised",
+      "detail": {
+        "rule": "break_glass_used",
+        "severity": "critical",
+        "title": "Break-glass access used by Ivan"
+      },
+      "hash": "hash5",
+      "outcome": "success",
+      "prev_hash": "prev5",
+      "seq": 5,
+      "tenant_id": "00000000-0000-4000-8000-0000000000aa"
+    }
+  }
+}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -18,7 +19,7 @@ import (
 
 func (s *Server) registerHealthRoutes() {
 	s.handle(http.MethodGet, "/api/insights/deployment-health", read, need(auth.PermConnectionsRead), s.rd(s.deploymentHealth))
-	s.handle(http.MethodPost, "/api/insights/deployment-health/rerun", phased, need(auth.PermConnectionsManage), s.rd(s.rerunHealth))
+	s.handle(http.MethodPost, "/api/insights/deployment-health/rerun", phased, need(auth.PermConnectionsManage), s.rd(s.rerunHealth)).asJob(jobs.HealthRerun, "")
 	s.handle(http.MethodGet, "/api/connections/{id}/health", read, need(auth.PermConnectionsRead), s.rd(s.connectionHealth))
 	// Evidence exports (design §7.6). They are GETs on a write transaction:
 	// the readiness.evidence.exported event is appended in the transaction

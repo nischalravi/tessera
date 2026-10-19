@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/audit/canon"
+	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
@@ -63,8 +64,8 @@ type MiddlewareConfig struct {
 	// tests inject failures here.
 	Append func(ctx context.Context, t tenancy.ID, e store.AuditEvent) error
 	// Excluded reports requests that are not recorded (default: GET
-	// /api/health and the public /.well-known documents, which carry no
-	// tenant data).
+	// /api/health, the /livez and /readyz probes and the public /.well-known
+	// documents, which carry no tenant data).
 	Excluded func(*http.Request) bool
 }
 
@@ -74,13 +75,23 @@ var writeFailures atomic.Int64
 // not be written.
 func WriteFailures() int64 { return writeFailures.Load() }
 
+// IsProbePath reports the unauthenticated orchestrator probes /livez and
+// /readyz. They are polled every few seconds by every load balancer and
+// kubelet, return a constant-shape body without tenant data, and are served
+// ahead of the API pipeline (api.Server.Handler), so they never reach the
+// audit ledger. Everything under /api/ stays audited: only these two exact
+// paths (and GET /api/health, as before) are excluded, and
+// TestDefaultExcluded_OnlyProbes pins that. /metrics is not on the API
+// listener at all (see internal/obs and TESSERA_METRICS_ADDR).
+func IsProbePath(p string) bool { return p == "/livez" || p == "/readyz" }
+
 // DefaultExcluded is the design's exclusion list.
 func DefaultExcluded(r *http.Request) bool {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		return false
 	}
 	p := r.URL.Path
-	if p == "/api/health" || strings.HasPrefix(p, "/.well-known/") {
+	if p == "/api/health" || IsProbePath(p) || strings.HasPrefix(p, "/.well-known/") {
 		return true
 	}
 	if rest, ok := strings.CutPrefix(p, "/t/"); ok {
@@ -335,11 +346,14 @@ func (st *reqState) appendLocked(status int) error {
 	ctx := context.WithoutCancel(r.Context()) // a client that went away is still recorded
 	if err := cfg.Append(ctx, st.tenant, e); err != nil {
 		writeFailures.Add(1)
+		obs.AuditWrites.Inc("error")
+		obs.AuditWriteFailures.Inc()
 		cfg.Log.ErrorContext(ctx, "audit write failed", "critical", true, "request_id", st.requestID,
 			"method", r.Method, "route", deref(st.route), "status", status, "err", err,
 			"audit_write_failures_total", writeFailures.Load())
 		return err
 	}
+	obs.AuditWrites.Inc("ok")
 	return nil
 }
 

@@ -1,11 +1,14 @@
 import { KeyboardEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
-import { Bell, Check, CircleHelp, Inbox, Menu as MenuIcon, Monitor, Moon, Search, Settings, Sun } from "lucide-react";
-import { AuditRow, IdentityRow, relTime, useApi } from "../api";
+import { Bell, BellRing, Check, CircleHelp, Inbox, Menu as MenuIcon, Monitor, Moon, Search, Settings, Sun } from "lucide-react";
+import { AlertRow, IdentityRow, markNotificationsRead, relTime, severityTone, useApi } from "../api";
 import { Menu } from "../components/Menu";
-import { initials } from "../components";
+import { Badge, initials } from "../components";
+import { useToast } from "../components/Toast";
 import { isTyping, modalOpen } from "../components/overlay";
 import { useInbox } from "../features/inbox/model";
+import { useOpenNotification } from "../features/notifications/open";
+import { useNotifications } from "../features/notifications/model";
 import { MOD, usePalette } from "./CommandPalette";
 import { RAIL, isActive } from "./nav";
 import { PERSONAS, usePersona } from "./persona";
@@ -156,31 +159,88 @@ const TbBtn = ({ label, children, t }: { label: string; children: ReactNode; t: 
 );
 
 function Notifications() {
-  const { data } = useApi<AuditRow[]>("/audit?limit=6");
+  const { data, reload } = useNotifications();
+  const open = useOpenNotification();
+  const toast = useToast();
   const nav = useNavigate();
-  const items = (data ?? []).slice(0, 6);
+  const items = (data?.items ?? []).slice(0, 8);
+  const unread = data?.unread ?? 0;
+  const markAll = async () => {
+    try {
+      await markNotificationsRead({ all: true });
+      reload();
+    } catch (e) {
+      toast((e as Error).message, { kind: "error" });
+    }
+  };
   return (
     <Menu
       label="Notifications"
       items={[
-        { heading: "Recent activity" },
+        { heading: unread ? `Notifications · ${unread} unread` : "Notifications" },
+        ...(items.length
+          ? items.map((n) => ({
+              label: (
+                <span className="grow">
+                  <span className={n.read_at ? "" : "notif-unread"}>{n.subject}</span>
+                  <span className="faint small" style={{ display: "block" }}>{relTime(n.created_at)}</span>
+                </span>
+              ),
+              onSelect: () => open(n),
+            }))
+          : [{ label: <span className="faint">Nothing new</span> }]),
+        "divider",
+        ...(unread ? [{ label: "Mark all as read", icon: <Check size={14} />, onSelect: markAll }] : []),
+        { label: "All notifications and settings", onSelect: () => nav("/notifications") },
+      ]}
+      trigger={(t) => (
+        <button type="button" className="tb-btn" aria-label={`Notifications${unread ? `, ${unread} unread` : ""}`} title="Notifications" {...t}>
+          <Bell size={18} strokeWidth={1.7} aria-hidden />
+          {unread ? <span className="tb-badge" aria-hidden>{unread > 99 ? "99+" : unread}</span> : null}
+        </button>
+      )}
+    />
+  );
+}
+
+/** Live alerts (#168), newest first, with a count badge. */
+function AlertBell() {
+  const { data } = useApi<AlertRow[]>("/alerts?status=open");
+  const nav = useNavigate();
+  const items = (data ?? []).slice(0, 6);
+  const n = data?.length ?? 0;
+  return (
+    <Menu
+      label="Alerts"
+      items={[
+        { heading: n ? `${n} open ${n === 1 ? "alert" : "alerts"}` : "Alerts" },
         ...(items.length
           ? items.map((a) => ({
               label: (
                 <span className="grow">
-                  {a.action.replace(/[._]/g, " ")}
-                  <span className="faint small" style={{ display: "block" }}>{a.actor} · {relTime(a.at)}</span>
+                  <Badge tone={severityTone(a.severity)}>{a.severity}</Badge> {a.title}
+                  <span className="faint small" style={{ display: "block" }}>{a.rule_name} · {relTime(a.last_seen_at)}</span>
                 </span>
               ),
-              onSelect: () => nav("/admin/audit"),
+              onSelect: () => nav(`/alerts?selected=${encodeURIComponent(a.id)}`),
             }))
-          : [{ label: <span className="faint">Nothing new</span> }]),
+          : [{ label: <span className="faint">No open alerts</span> }]),
         "divider",
-        { label: "Open audit log", onSelect: () => nav("/admin/audit") },
+        { label: "Open alerts", onSelect: () => nav("/alerts") },
       ]}
-      trigger={(t) => <TbBtn label="Notifications" t={t}><Bell size={18} strokeWidth={1.7} /></TbBtn>}
+      trigger={(t) => (
+        <button type="button" className="tb-btn" aria-label={`Alerts${n ? `, ${n} open` : ""}`} title="Alerts" {...t}>
+          <BellRing size={18} strokeWidth={1.7} aria-hidden />
+          {n ? <span className="tb-badge" aria-hidden>{n > 99 ? "99+" : n}</span> : null}
+        </button>
+      )}
     />
   );
+}
+
+function AlertBellGate() {
+  const { can } = useSession();
+  return can("alerts.read") ? <span className="tb-hide-sm"><AlertBell /></span> : null;
 }
 
 function SettingsMenu() {
@@ -323,6 +383,7 @@ export function Shell({ children }: { children: ReactNode }) {
             <Inbox size={18} strokeWidth={1.7} aria-hidden />
             {count ? <span className="tb-badge" aria-hidden>{count > 99 ? "99+" : count}</span> : null}
           </button>
+          <AlertBellGate />
           <span className="tb-hide-sm"><Notifications /></span>
           <span className="tb-hide-sm"><SettingsMenu /></span>
           <span className="tb-hide-md"><HelpMenu /></span>

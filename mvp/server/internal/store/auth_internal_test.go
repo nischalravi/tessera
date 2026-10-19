@@ -132,3 +132,45 @@ func TestReplayCacheUseOnce(t *testing.T) {
 		t.Errorf("after expiry: %v", err)
 	}
 }
+
+// TestLoginTxnTestPurposeUpgrade: the schema accepts the 'test' login purpose
+// (0315), and a SQLite database created before it is upgraded by Migrate.
+func TestLoginTxnTestPurposeUpgrade(t *testing.T) {
+	db := openTest(t)
+	ctx := context.Background()
+	if _, err := db.sql.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+		t.Fatal(err)
+	}
+	insert := func(purpose string) error {
+		_, err := db.sql.ExecContext(ctx, `INSERT INTO login_transactions (id, tenant_id, cookie_hash, idp_connection_id,
+			purpose, return_to, created_at, expires_at) VALUES (?, '00000000-0000-0000-0000-000000000001', ?, 'c', ?, '/', 't', 't')`,
+			"lt-"+purpose, fmt.Sprintf("%064d", len(purpose)), purpose)
+		return err
+	}
+	if err := insert("test"); err != nil {
+		t.Fatalf("test purpose: %v", err)
+	}
+	if err := insert("nope"); err == nil {
+		t.Error("an unknown purpose was accepted")
+	}
+	// a pre-0315 table: recreate it with the old CHECK, then migrate
+	for _, q := range []string{`DROP TABLE login_transactions`, `CREATE TABLE login_transactions (
+		id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, cookie_hash TEXT NOT NULL UNIQUE, idp_connection_id TEXT NOT NULL,
+		purpose TEXT NOT NULL CHECK (purpose IN ('login','step_up','device_approval','bootstrap')),
+		state_hash TEXT, nonce TEXT, pkce_verifier_enc BLOB, saml_request_id TEXT, required_tessera_acr TEXT, max_age INTEGER,
+		session_id TEXT, expected_external_login_id TEXT, device_grant_id TEXT, bootstrap_invitation_id TEXT,
+		return_to TEXT NOT NULL DEFAULT '/', created_at TEXT NOT NULL, expires_at TEXT NOT NULL, consumed_at TEXT)`} {
+		if _, err := db.sql.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := insert("test"); err == nil {
+		t.Fatal("the old table accepted the test purpose")
+	}
+	if err := db.Migrate(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := insert("test"); err != nil {
+		t.Errorf("after Migrate: %v", err)
+	}
+}
