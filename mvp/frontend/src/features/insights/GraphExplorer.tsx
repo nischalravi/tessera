@@ -2,7 +2,7 @@ import cytoscape, { Core } from "cytoscape";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Maximize, Minus, Plus } from "lucide-react";
-import { AsOfResult, IdentityRow, ResourceRow, asOfPath, useApi } from "../../api";
+import { ApiError, AsOfResult, IdentityRow, ResourceRow, asOfPath, useApi } from "../../api";
 import { useTheme } from "../../app/theme";
 import { Badge, Button, Chip, Loading, Page, Segmented, TypeBadge } from "../../components";
 
@@ -163,7 +163,7 @@ function GraphCanvas({ nodes, edges, focus, onSelect }: { nodes: GNode[]; edges:
 }
 
 /** Who could reach the resource on a past date, from the grant history (GET /api/access/as-of). */
-function AsOfList({ data, error }: { data: AsOfResult | null; error: string | null }) {
+function AsOfList({ data, error }: { data: AsOfResult | null; error: ApiError | null }) {
   if (!data) return <Loading error={error} />;
   return (
     <div className="stack-sm" style={{ padding: 16 }}>

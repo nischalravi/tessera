@@ -36,7 +36,7 @@ function PackPanel({ id, onClose }: { id: string; onClose: () => void }) {
       onClose={onClose}
       commands={p && <Button icon={<Download size={16} />} onClick={() => download(p)}>Download ZIP</Button>}
     >
-      {error && <div className="small" role="alert">{error}</div>}
+      {error && <div className="small" role="alert">{error.message}</div>}
       {p && m && (
         <>
           <dl className="kv">
