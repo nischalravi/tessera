@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/admin"
+	"github.com/nischalravi/tessera/mvp/server/internal/agent"
 	"github.com/nischalravi/tessera/mvp/server/internal/alerts"
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
@@ -148,6 +149,11 @@ type Config struct {
 	// AuditAppend overrides how the audit middleware writes http.request
 	// events (tests inject failures). Nil: the store.
 	AuditAppend func(ctx context.Context, t tenancy.ID, e store.AuditEvent) error
+	// Agents is the Directory Agent service (DR-11) behind /api/agents. Nil: a
+	// service with its own in-memory hub (no agent listener is attached).
+	// New links it to readiness so connections that name an agent are probed
+	// through it.
+	Agents *agent.Service
 }
 
 // Server serves the API.
@@ -164,6 +170,7 @@ type Server struct {
 	oauth2 *oauth2rp.RP
 
 	readiness *readiness.Service
+	agents    *agent.Service
 	prov      *provision.Engine
 	provSeal  *seal.Sealer // cfg.Sealer, or a per-process key when it is nil
 	// containment is the kill switch (issue #106); never nil.
@@ -202,6 +209,12 @@ func New(cfg Config) *Server {
 		cfg.Readiness = readiness.NewService(reg, cfg.Env)
 		cfg.Readiness.Runner.Scenario = cfg.ReadinessScenario
 	}
+	if cfg.Agents == nil {
+		cfg.Agents = &agent.Service{DB: cfg.Store, Hub: agent.NewHub(nil), Clock: cfg.Clock}
+	}
+	if cfg.Readiness.Runner.Live.Agents == nil {
+		cfg.Readiness.Runner.Live.Agents = cfg.Agents
+	}
 	if cfg.Containment == nil {
 		cfg.Containment = &containment.Service{}
 	}
@@ -220,7 +233,7 @@ func New(cfg Config) *Server {
 		provSeal = sealer
 	}
 	s := &Server{cfg: cfg, containment: cfg.Containment, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
-		limits: newLimiters(cfg.RateLimits), provSeal: provSeal}
+		agents: cfg.Agents, limits: newLimiters(cfg.RateLimits), provSeal: provSeal}
 	s.prov = &provision.Engine{DB: cfg.Store, Sealer: provSeal, HTTP: cfg.Outbound,
 		Clock: func() time.Time { return s.clock() }, Log: cfg.Logger.With("component", "provisioning")}
 	s.admin = &admin.Service{DB: cfg.Store, Clock: func() time.Time { return s.clock() }, Sealer: cfg.Sealer,
@@ -263,6 +276,7 @@ func New(cfg Config) *Server {
 	s.registerContainmentRoutes()
 	s.registerGroupsFolderRoutes()
 	s.registerReadinessRoutes()
+	s.registerAgentRoutes()
 	s.registerJobRoutes()
 	s.registerQueueRoutes()
 	s.registerProvisioningRoutes()

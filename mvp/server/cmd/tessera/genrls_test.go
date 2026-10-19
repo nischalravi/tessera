@@ -39,6 +39,10 @@ func TestGenRLS(t *testing.T) {
 		"current_setting('app.lookup', true) = 'session_hash'",
 		"CREATE POLICY lookup_by_hash ON login_transactions FOR SELECT",
 		"current_setting('app.lookup', true) = 'login_cookie_hash'",
+		"CREATE POLICY lookup_by_hash ON directory_agents FOR SELECT",
+		"current_setting('app.lookup', true) = 'agent_cert_pin'",
+		"CREATE POLICY lookup_by_hash ON agent_enrolments FOR SELECT",
+		"current_setting('app.lookup', true) = 'agent_enrolment_hash'",
 		"ALTER TABLE audit_events FORCE ROW LEVEL SECURITY;",
 	} {
 		if !strings.Contains(out, want) {
@@ -50,8 +54,8 @@ func TestGenRLS(t *testing.T) {
 			t.Errorf("global table %s has row-level security", global)
 		}
 	}
-	if n := strings.Count(out, "CREATE POLICY lookup_by_hash"); n != 2 {
-		t.Errorf("%d lookup policies, want 2", n)
+	if n := strings.Count(out, "CREATE POLICY lookup_by_hash"); n != 4 {
+		t.Errorf("%d lookup policies, want 4", n)
 	}
 	// deterministic
 	again, err := runCLI(t, "admin", "gen-rls")

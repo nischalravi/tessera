@@ -20,6 +20,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/agent"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/ldap"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
@@ -62,6 +63,9 @@ type Bundle struct {
 	// cred is the opened credential of a real revision, loaded by Validate
 	// for one run. It never leaves the bundle and prints as [redacted].
 	cred ldap.Secret
+	// agentID and agentCred are the Directory Agent and the credential name
+	// on it, for an agent:<id>/<name> reference (bindAgent).
+	agentID, agentCred string
 }
 
 // Simulated reports whether the connection uses a demo (simulated) connector.
@@ -505,6 +509,21 @@ func (s *Service) SetCredential(c *store.TenantTx, connID string, in CredentialI
 	case in.Reference != "":
 		if !refRE.MatchString(in.Reference) {
 			return nil, unprocessable("invalid_credential", "reference must look like vault:<path> or agent:<id>/<name>")
+		}
+		if strings.HasPrefix(in.Reference, "agent:") {
+			id, _, ok := agent.ParseRef(in.Reference)
+			if !ok {
+				return nil, unprocessable("invalid_credential", "an agent reference must look like agent:<agent id>/<credential name>")
+			}
+			// The agent must be an active one of this tenant (another tenant's
+			// agent is indistinguishable from a missing one).
+			if s.Runner.Live.Agents != nil {
+				if _, err := s.Runner.Live.Agents.Active(c, id); errors.Is(err, store.ErrNotFound) {
+					return nil, unprocessable("unknown_agent", "no active Directory Agent with that id")
+				} else if err != nil {
+					return nil, err
+				}
+			}
 		}
 		ref = in.Reference
 	case in.Secret != "":

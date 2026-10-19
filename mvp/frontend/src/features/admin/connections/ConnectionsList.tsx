@@ -1,7 +1,7 @@
 /** Admin → Connections & integrations: governed connections and legacy demo connectors (§10.1). */
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Activity, Plus, RefreshCw } from "lucide-react";
+import { Activity, Plus, RefreshCw, Server } from "lucide-react";
 import { Connection, ConnectorRow, LegacyConnection, api, fmtDate, readiness, useApi } from "../../../api";
 import { Chip, DataTable, Page, useToast } from "../../../components";
 import { STATE_LABEL, ScoreCell, SimulatedBadge, StateBadge } from "./shared";
@@ -92,6 +92,7 @@ export function ConnectionsList() {
         commands={[
           { label: "New connection", icon: <Plus size={16} />, onClick: () => nav("/admin/connections/new") },
           { label: busy === "rerun" ? "Checking…" : "Run deployment health check", icon: <Activity size={16} />, disabled: !!busy, onClick: rerun },
+          { label: "Directory agents", icon: <Server size={16} />, onClick: () => nav("/admin/connections/agents") },
           { label: busy === "sync" ? "Syncing…" : "Sync legacy connectors", icon: <RefreshCw size={16} />, disabled: !!busy, onClick: syncLegacy },
         ]}
         onRowClick={(r) => nav(r.legacy ? (r.governed_by ? `/admin/connections/${r.governed_by}` : `/directory/apps?selected=${r.system}`) : `/admin/connections/${r.id}`)}

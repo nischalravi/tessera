@@ -249,6 +249,30 @@ To point a local dev instance at a real LDAP or LLDAP server (for example an LLD
    It logs every check's status and message (never the password) and fails if TLS, bind, the base
    DNs or the people search do not pass.
 
+#### Directory Agent (private directories, DR-11)
+
+Tessera never dials a private directory in production. A small agent (`cmd/tessera-agent`, Linux or
+Windows) runs inside the customer network, connects **outbound** to Tessera over mutual TLS and answers a
+closed set of typed, read-only operations (the nine `connectors.Prober` operations, nothing else: no
+commands, no raw LDAP, no proxying). The server sends typed jobs; the agent opens its own connection.
+
+- **Local allowlist.** The agent refuses any target not in `allowed_targets` of its own config file
+  (host:port, IP:port or CIDR:port; ports 389/636; the file must not be group/other-writable).
+- **Credentials stay on the agent.** `tessera-agent credential -config agent.json set NAME` reads the
+  password from stdin into a file store (0600; DPAPI-wrapped on Windows). In Tessera set the connection's
+  credential reference to `agent:<agent id>/NAME`.
+- **Enrolment.** Admin → Connections → Directory agents → Enrol: a single-use code (random, 15 minutes,
+  stored only as a hash, audited) is shown once. On the agent host run `tessera-agent enrol -config
+  agent.json` and paste it. Tessera then pins the agent's client key (SHA-256 of its public key) and the
+  agent pins Tessera's CA (`server_ca_file`). Revoke from the same screen.
+- **Server listener.** Set `TESSERA_AGENT_ADDR` with `TESSERA_AGENT_TLS_CERT` and `TESSERA_AGENT_TLS_KEY`
+  (a separate mutual-TLS port serving only `/agent/v1/*`).
+- **Agent config** (JSON): `{"server_url":"https://tessera.example:8443","server_ca_file":"ca.pem",
+  "state_dir":"/var/lib/tessera-agent","allowed_targets":["ldap.corp.example:636"]}`; then
+  `tessera-agent run -config agent.json`.
+- API: `GET /api/agents`, `POST /api/agents` (step-up; returns the code once), `POST /api/agents/{id}/revoke`
+  (step-up). Table `directory_agents`, `agent_enrolments` (schema 0250).
+- The Windows DPAPI store is cross-compiled and vetted (`GOOS=windows go vet`) but not run on Windows.
 ### Config transport (dev → test → prod)
 
 Admin → Export / import configuration moves a tenant's connections (config, owners, credential

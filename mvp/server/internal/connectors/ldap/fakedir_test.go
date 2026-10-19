@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"sort"
 	"strconv"
@@ -140,13 +141,22 @@ func (s *fakeServer) snapshot() (ops, writes []string) {
 	return append([]string(nil), s.ops...), append([]string(nil), s.writes...)
 }
 
-// transport sends every dial to this server: port 636 to the TLS listener,
-// anything else to the plain one (which can upgrade with StartTLS).
+// labResolver resolves every lab host name to one public address, so the
+// safedial address policy passes and TestDial can redirect the connection.
+type labResolver struct{}
+
+func (labResolver) LookupNetIP(context.Context, string, string) ([]netip.Addr, error) {
+	return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
+}
+
+// fakeTransport sends every checked dial to this server: port 636 to the TLS
+// listener, anything else to the plain one (which can upgrade with StartTLS).
+// Its dial method is safedial.Options.TestDial.
 type fakeTransport struct{ s *fakeServer }
 
-func (f fakeTransport) DialTarget(ctx context.Context, _ string, port int) (net.Conn, error) {
+func (f fakeTransport) dial(ctx context.Context, _, hostport string) (net.Conn, error) {
 	addr := f.s.plain.Addr().String()
-	if port == 636 {
+	if strings.HasSuffix(hostport, ":636") {
 		addr = f.s.secure.Addr().String()
 	}
 	var d net.Dialer

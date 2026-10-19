@@ -675,6 +675,11 @@ func TestIsolation_EveryRepoMethodClassified(t *testing.T) {
 		"RevokedGrants": true,
 		// Sealed connection credentials: TestIsolation_ConnectionCredentials.
 		"PutCredential": true, "Credential": true, "Credentials": true, "DeleteCredential": true,
+		// Directory agents and enrolment codes: TestIsolation_DirectoryAgents
+		// and TestIsolation_AgentEnrolmentSingleUse.
+		"InsertDirectoryAgent": true, "DirectoryAgent": true, "DirectoryAgents": true, "ActivateDirectoryAgent": true,
+		"TouchDirectoryAgent": true, "RevokeDirectoryAgent": true, "InsertAgentEnrolment": true, "AgentEnrolment": true,
+		"ConsumeAgentEnrolment": true,
 		// HasPendingRequest has its own test (TestIsolation_PendingRequestUniquePerTenant).
 		"HasPendingRequest": true,
 	}

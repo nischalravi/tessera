@@ -266,6 +266,7 @@ const LABELS: [RegExp, (m: RegExpMatchArray) => string][] = [
   [/^\/hris\/events\/([^/]+)\/execute$/, (m) => `Run the lifecycle plan for event ${m[1]}`],
   [/^\/connections\/([^/]+)\/(config|credential|activate|retire)$/, (m) => `${{ config: "Save the configuration of", credential: "Set the credential of", activate: "Activate", retire: "Retire" }[m[2]]} connection ${m[1]}`],
   [/^\/readiness\/overlays\/([^/]+)$/, (m) => `Save the readiness overlay for ${m[1]}`],
+  [/^\/agents\/([^/]+)\/revoke$/, (m) => `Revoke Directory Agent ${m[1]}`],
 ];
 
 /** A plain-language name for an API action, shown before resuming it. */
@@ -1878,6 +1879,34 @@ export const readiness = {
     "/insights/deployment-health/rerun", { reconcile }),
 };
 
+// ------------------------------------------------------ Directory Agents (DR-11)
+export type AgentStatus = "pending" | "active" | "revoked";
+
+/** One Directory Agent. It carries no secret and no key pin. */
+export interface DirectoryAgent {
+  id: string; name: string; status: AgentStatus;
+  /** Polled Tessera recently (an active agent that is not online cannot answer checks). */
+  online: boolean;
+  /** Older than the version Tessera treats as current. */
+  outdated: boolean;
+  hostname?: string; os?: string; version?: string;
+  /** SHA-256 of the agent's local allowlist: changes when its allowed_targets change. */
+  allowlist_hash?: string;
+  last_seen_at?: string; enrolled_at?: string;
+  created_by: string; created_at: string;
+  revoked_at?: string; revoked_by?: string;
+  /** Prefix of a credential reference for a secret stored on this agent: agent:<id>/ */
+  credential_ref_prefix: string;
+}
+
+/** Issuing an enrolment code: the code is in this response only. */
+export interface AgentEnrolment { agent: DirectoryAgent; code: string; expires_at: string }
+
+export const agents = {
+  // the answer holds a code shown once, so a step-up must not replay this call in the background
+  enrol: (name: string) => apiNoResume<AgentEnrolment>("/agents", { name }),
+  revoke: (id: string) => api<DirectoryAgent>(`/agents/${id}/revoke`, {}),
+};
 // ------------------------------------------------------------ SIEM sinks (#169)
 
 export type SiemKind = "syslog" | "webhook";
