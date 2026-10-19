@@ -1,0 +1,1119 @@
+{
+ "name": "remove member: filter-path PATCH, verify walks both pages and finds no member",
+ "interactions": [
+  {
+   "request": {
+    "method": "GET",
+    "path": "/Users",
+    "query": {
+     "filter": "userName eq \"bob@larkspur.example\""
+    }
+   },
+   "response": {
+    "status": 200,
+    "headers": {
+     "Content-Type": "application/scim+json"
+    },
+    "body": {
+     "schemas": [
+      "urn:ietf:params:scim:api:messages:2.0:ListResponse"
+     ],
+     "totalResults": 1,
+     "startIndex": 1,
+     "itemsPerPage": 1,
+     "Resources": [
+      {
+       "schemas": [
+        "urn:ietf:params:scim:schemas:core:2.0:User"
+       ],
+       "id": "u-9",
+       "userName": "bob@larkspur.example",
+       "displayName": "Alice Park",
+       "active": "true"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "request": {
+    "method": "GET",
+    "path": "/Groups",
+    "query": {
+     "filter": "externalId eq \"eng\""
+    }
+   },
+   "response": {
+    "status": 200,
+    "headers": {
+     "Content-Type": "application/scim+json"
+    },
+    "body": {
+     "schemas": [
+      "urn:ietf:params:scim:api:messages:2.0:ListResponse"
+     ],
+     "totalResults": 1,
+     "startIndex": 1,
+     "itemsPerPage": 1,
+     "Resources": [
+      {
+       "id": "g-1",
+       "displayName": "engineering",
+       "externalId": "eng",
+       "members": []
+      }
+     ]
+    }
+   }
+  },
+  {
+   "request": {
+    "method": "GET",
+    "path": "/Groups/g-1",
+    "query": {
+     "startIndex": "1",
+     "count": "100"
+    }
+   },
+   "response": {
+    "status": 200,
+    "headers": {
+     "Content-Type": "application/scim+json"
+    },
+    "body": {
+     "schemas": [
+      "urn:ietf:params:scim:schemas:core:2.0:Group"
+     ],
+     "id": "g-1",
+     "displayName": "engineering",
+     "members": [
+      {
+       "value": "m-0"
+      },
+      {
+       "value": "m-1"
+      },
+      {
+       "value": "m-2"
+      },
+      {
+       "value": "m-3"
+      },
+      {
+       "value": "m-4"
+      },
+      {
+       "value": "m-5"
+      },
+      {
+       "value": "m-6"
+      },
+      {
+       "value": "m-7"
+      },
+      {
+       "value": "m-8"
+      },
+      {
+       "value": "m-9"
+      },
+      {
+       "value": "m-10"
+      },
+      {
+       "value": "m-11"
+      },
+      {
+       "value": "m-12"
+      },
+      {
+       "value": "m-13"
+      },
+      {
+       "value": "m-14"
+      },
+      {
+       "value": "m-15"
+      },
+      {
+       "value": "m-16"
+      },
+      {
+       "value": "m-17"
+      },
+      {
+       "value": "m-18"
+      },
+      {
+       "value": "m-19"
+      },
+      {
+       "value": "m-20"
+      },
+      {
+       "value": "m-21"
+      },
+      {
+       "value": "m-22"
+      },
+      {
+       "value": "m-23"
+      },
+      {
+       "value": "m-24"
+      },
+      {
+       "value": "m-25"
+      },
+      {
+       "value": "m-26"
+      },
+      {
+       "value": "m-27"
+      },
+      {
+       "value": "m-28"
+      },
+      {
+       "value": "m-29"
+      },
+      {
+       "value": "m-30"
+      },
+      {
+       "value": "m-31"
+      },
+      {
+       "value": "m-32"
+      },
+      {
+       "value": "m-33"
+      },
+      {
+       "value": "m-34"
+      },
+      {
+       "value": "m-35"
+      },
+      {
+       "value": "m-36"
+      },
+      {
+       "value": "m-37"
+      },
+      {
+       "value": "m-38"
+      },
+      {
+       "value": "m-39"
+      },
+      {
+       "value": "m-40"
+      },
+      {
+       "value": "m-41"
+      },
+      {
+       "value": "m-42"
+      },
+      {
+       "value": "m-43"
+      },
+      {
+       "value": "m-44"
+      },
+      {
+       "value": "m-45"
+      },
+      {
+       "value": "m-46"
+      },
+      {
+       "value": "m-47"
+      },
+      {
+       "value": "m-48"
+      },
+      {
+       "value": "m-49"
+      },
+      {
+       "value": "m-50"
+      },
+      {
+       "value": "m-51"
+      },
+      {
+       "value": "m-52"
+      },
+      {
+       "value": "m-53"
+      },
+      {
+       "value": "m-54"
+      },
+      {
+       "value": "m-55"
+      },
+      {
+       "value": "m-56"
+      },
+      {
+       "value": "m-57"
+      },
+      {
+       "value": "m-58"
+      },
+      {
+       "value": "m-59"
+      },
+      {
+       "value": "m-60"
+      },
+      {
+       "value": "m-61"
+      },
+      {
+       "value": "m-62"
+      },
+      {
+       "value": "m-63"
+      },
+      {
+       "value": "m-64"
+      },
+      {
+       "value": "m-65"
+      },
+      {
+       "value": "m-66"
+      },
+      {
+       "value": "m-67"
+      },
+      {
+       "value": "m-68"
+      },
+      {
+       "value": "m-69"
+      },
+      {
+       "value": "m-70"
+      },
+      {
+       "value": "m-71"
+      },
+      {
+       "value": "m-72"
+      },
+      {
+       "value": "m-73"
+      },
+      {
+       "value": "m-74"
+      },
+      {
+       "value": "m-75"
+      },
+      {
+       "value": "m-76"
+      },
+      {
+       "value": "m-77"
+      },
+      {
+       "value": "m-78"
+      },
+      {
+       "value": "m-79"
+      },
+      {
+       "value": "m-80"
+      },
+      {
+       "value": "m-81"
+      },
+      {
+       "value": "m-82"
+      },
+      {
+       "value": "m-83"
+      },
+      {
+       "value": "m-84"
+      },
+      {
+       "value": "m-85"
+      },
+      {
+       "value": "m-86"
+      },
+      {
+       "value": "m-87"
+      },
+      {
+       "value": "m-88"
+      },
+      {
+       "value": "m-89"
+      },
+      {
+       "value": "m-90"
+      },
+      {
+       "value": "m-91"
+      },
+      {
+       "value": "m-92"
+      },
+      {
+       "value": "m-93"
+      },
+      {
+       "value": "m-94"
+      },
+      {
+       "value": "m-95"
+      },
+      {
+       "value": "m-96"
+      },
+      {
+       "value": "m-97"
+      },
+      {
+       "value": "m-98"
+      },
+      {
+       "value": "m-99"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "request": {
+    "method": "GET",
+    "path": "/Groups/g-1",
+    "query": {
+     "startIndex": "101",
+     "count": "100"
+    }
+   },
+   "response": {
+    "status": 200,
+    "headers": {
+     "Content-Type": "application/scim+json"
+    },
+    "body": {
+     "schemas": [
+      "urn:ietf:params:scim:schemas:core:2.0:Group"
+     ],
+     "id": "g-1",
+     "displayName": "engineering",
+     "members": [
+      {
+       "value": "m-100"
+      },
+      {
+       "value": "m-101"
+      },
+      {
+       "value": "m-102"
+      },
+      {
+       "value": "m-103"
+      },
+      {
+       "value": "m-104"
+      },
+      {
+       "value": "m-105"
+      },
+      {
+       "value": "m-106"
+      },
+      {
+       "value": "m-107"
+      },
+      {
+       "value": "m-108"
+      },
+      {
+       "value": "m-109"
+      },
+      {
+       "value": "m-110"
+      },
+      {
+       "value": "m-111"
+      },
+      {
+       "value": "m-112"
+      },
+      {
+       "value": "m-113"
+      },
+      {
+       "value": "m-114"
+      },
+      {
+       "value": "m-115"
+      },
+      {
+       "value": "m-116"
+      },
+      {
+       "value": "m-117"
+      },
+      {
+       "value": "m-118"
+      },
+      {
+       "value": "m-119"
+      },
+      {
+       "value": "m-120"
+      },
+      {
+       "value": "m-121"
+      },
+      {
+       "value": "m-122"
+      },
+      {
+       "value": "m-123"
+      },
+      {
+       "value": "m-124"
+      },
+      {
+       "value": "m-125"
+      },
+      {
+       "value": "m-126"
+      },
+      {
+       "value": "m-127"
+      },
+      {
+       "value": "m-128"
+      },
+      {
+       "value": "m-129"
+      },
+      {
+       "value": "m-130"
+      },
+      {
+       "value": "m-131"
+      },
+      {
+       "value": "m-132"
+      },
+      {
+       "value": "m-133"
+      },
+      {
+       "value": "m-134"
+      },
+      {
+       "value": "m-135"
+      },
+      {
+       "value": "m-136"
+      },
+      {
+       "value": "m-137"
+      },
+      {
+       "value": "m-138"
+      },
+      {
+       "value": "m-139"
+      },
+      {
+       "value": "u-9"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "request": {
+    "method": "PATCH",
+    "path": "/Groups/g-1",
+    "body_contains": [
+     "\"op\":\"remove\"",
+     "members[value eq"
+    ]
+   },
+   "response": {
+    "status": 200,
+    "headers": {
+     "Content-Type": "application/scim+json"
+    },
+    "body": {}
+   }
+  },
+  {
+   "request": {
+    "method": "GET",
+    "path": "/Users",
+    "query": {
+     "filter": "userName eq \"bob@larkspur.example\""
+    }
+   },
+   "response": {
+    "status": 200,
+    "headers": {
+     "Content-Type": "application/scim+json"
+    },
+    "body": {
+     "schemas": [
+      "urn:ietf:params:scim:api:messages:2.0:ListResponse"
+     ],
+     "totalResults": 1,
+     "startIndex": 1,
+     "itemsPerPage": 1,
+     "Resources": [
+      {
+       "schemas": [
+        "urn:ietf:params:scim:schemas:core:2.0:User"
+       ],
+       "id": "u-9",
+       "userName": "bob@larkspur.example",
+       "displayName": "Alice Park",
+       "active": "true"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "request": {
+    "method": "GET",
+    "path": "/Groups",
+    "query": {
+     "filter": "externalId eq \"eng\""
+    }
+   },
+   "response": {
+    "status": 200,
+    "headers": {
+     "Content-Type": "application/scim+json"
+    },
+    "body": {
+     "schemas": [
+      "urn:ietf:params:scim:api:messages:2.0:ListResponse"
+     ],
+     "totalResults": 1,
+     "startIndex": 1,
+     "itemsPerPage": 1,
+     "Resources": [
+      {
+       "id": "g-1",
+       "displayName": "engineering",
+       "externalId": "eng",
+       "members": []
+      }
+     ]
+    }
+   }
+  },
+  {
+   "request": {
+    "method": "GET",
+    "path": "/Groups/g-1",
+    "query": {
+     "startIndex": "1",
+     "count": "100"
+    }
+   },
+   "response": {
+    "status": 200,
+    "headers": {
+     "Content-Type": "application/scim+json"
+    },
+    "body": {
+     "schemas": [
+      "urn:ietf:params:scim:schemas:core:2.0:Group"
+     ],
+     "id": "g-1",
+     "displayName": "engineering",
+     "members": [
+      {
+       "value": "m-0"
+      },
+      {
+       "value": "m-1"
+      },
+      {
+       "value": "m-2"
+      },
+      {
+       "value": "m-3"
+      },
+      {
+       "value": "m-4"
+      },
+      {
+       "value": "m-5"
+      },
+      {
+       "value": "m-6"
+      },
+      {
+       "value": "m-7"
+      },
+      {
+       "value": "m-8"
+      },
+      {
+       "value": "m-9"
+      },
+      {
+       "value": "m-10"
+      },
+      {
+       "value": "m-11"
+      },
+      {
+       "value": "m-12"
+      },
+      {
+       "value": "m-13"
+      },
+      {
+       "value": "m-14"
+      },
+      {
+       "value": "m-15"
+      },
+      {
+       "value": "m-16"
+      },
+      {
+       "value": "m-17"
+      },
+      {
+       "value": "m-18"
+      },
+      {
+       "value": "m-19"
+      },
+      {
+       "value": "m-20"
+      },
+      {
+       "value": "m-21"
+      },
+      {
+       "value": "m-22"
+      },
+      {
+       "value": "m-23"
+      },
+      {
+       "value": "m-24"
+      },
+      {
+       "value": "m-25"
+      },
+      {
+       "value": "m-26"
+      },
+      {
+       "value": "m-27"
+      },
+      {
+       "value": "m-28"
+      },
+      {
+       "value": "m-29"
+      },
+      {
+       "value": "m-30"
+      },
+      {
+       "value": "m-31"
+      },
+      {
+       "value": "m-32"
+      },
+      {
+       "value": "m-33"
+      },
+      {
+       "value": "m-34"
+      },
+      {
+       "value": "m-35"
+      },
+      {
+       "value": "m-36"
+      },
+      {
+       "value": "m-37"
+      },
+      {
+       "value": "m-38"
+      },
+      {
+       "value": "m-39"
+      },
+      {
+       "value": "m-40"
+      },
+      {
+       "value": "m-41"
+      },
+      {
+       "value": "m-42"
+      },
+      {
+       "value": "m-43"
+      },
+      {
+       "value": "m-44"
+      },
+      {
+       "value": "m-45"
+      },
+      {
+       "value": "m-46"
+      },
+      {
+       "value": "m-47"
+      },
+      {
+       "value": "m-48"
+      },
+      {
+       "value": "m-49"
+      },
+      {
+       "value": "m-50"
+      },
+      {
+       "value": "m-51"
+      },
+      {
+       "value": "m-52"
+      },
+      {
+       "value": "m-53"
+      },
+      {
+       "value": "m-54"
+      },
+      {
+       "value": "m-55"
+      },
+      {
+       "value": "m-56"
+      },
+      {
+       "value": "m-57"
+      },
+      {
+       "value": "m-58"
+      },
+      {
+       "value": "m-59"
+      },
+      {
+       "value": "m-60"
+      },
+      {
+       "value": "m-61"
+      },
+      {
+       "value": "m-62"
+      },
+      {
+       "value": "m-63"
+      },
+      {
+       "value": "m-64"
+      },
+      {
+       "value": "m-65"
+      },
+      {
+       "value": "m-66"
+      },
+      {
+       "value": "m-67"
+      },
+      {
+       "value": "m-68"
+      },
+      {
+       "value": "m-69"
+      },
+      {
+       "value": "m-70"
+      },
+      {
+       "value": "m-71"
+      },
+      {
+       "value": "m-72"
+      },
+      {
+       "value": "m-73"
+      },
+      {
+       "value": "m-74"
+      },
+      {
+       "value": "m-75"
+      },
+      {
+       "value": "m-76"
+      },
+      {
+       "value": "m-77"
+      },
+      {
+       "value": "m-78"
+      },
+      {
+       "value": "m-79"
+      },
+      {
+       "value": "m-80"
+      },
+      {
+       "value": "m-81"
+      },
+      {
+       "value": "m-82"
+      },
+      {
+       "value": "m-83"
+      },
+      {
+       "value": "m-84"
+      },
+      {
+       "value": "m-85"
+      },
+      {
+       "value": "m-86"
+      },
+      {
+       "value": "m-87"
+      },
+      {
+       "value": "m-88"
+      },
+      {
+       "value": "m-89"
+      },
+      {
+       "value": "m-90"
+      },
+      {
+       "value": "m-91"
+      },
+      {
+       "value": "m-92"
+      },
+      {
+       "value": "m-93"
+      },
+      {
+       "value": "m-94"
+      },
+      {
+       "value": "m-95"
+      },
+      {
+       "value": "m-96"
+      },
+      {
+       "value": "m-97"
+      },
+      {
+       "value": "m-98"
+      },
+      {
+       "value": "m-99"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "request": {
+    "method": "GET",
+    "path": "/Groups/g-1",
+    "query": {
+     "startIndex": "101",
+     "count": "100"
+    }
+   },
+   "response": {
+    "status": 200,
+    "headers": {
+     "Content-Type": "application/scim+json"
+    },
+    "body": {
+     "schemas": [
+      "urn:ietf:params:scim:schemas:core:2.0:Group"
+     ],
+     "id": "g-1",
+     "displayName": "engineering",
+     "members": [
+      {
+       "value": "m-100"
+      },
+      {
+       "value": "m-101"
+      },
+      {
+       "value": "m-102"
+      },
+      {
+       "value": "m-103"
+      },
+      {
+       "value": "m-104"
+      },
+      {
+       "value": "m-105"
+      },
+      {
+       "value": "m-106"
+      },
+      {
+       "value": "m-107"
+      },
+      {
+       "value": "m-108"
+      },
+      {
+       "value": "m-109"
+      },
+      {
+       "value": "m-110"
+      },
+      {
+       "value": "m-111"
+      },
+      {
+       "value": "m-112"
+      },
+      {
+       "value": "m-113"
+      },
+      {
+       "value": "m-114"
+      },
+      {
+       "value": "m-115"
+      },
+      {
+       "value": "m-116"
+      },
+      {
+       "value": "m-117"
+      },
+      {
+       "value": "m-118"
+      },
+      {
+       "value": "m-119"
+      },
+      {
+       "value": "m-120"
+      },
+      {
+       "value": "m-121"
+      },
+      {
+       "value": "m-122"
+      },
+      {
+       "value": "m-123"
+      },
+      {
+       "value": "m-124"
+      },
+      {
+       "value": "m-125"
+      },
+      {
+       "value": "m-126"
+      },
+      {
+       "value": "m-127"
+      },
+      {
+       "value": "m-128"
+      },
+      {
+       "value": "m-129"
+      },
+      {
+       "value": "m-130"
+      },
+      {
+       "value": "m-131"
+      },
+      {
+       "value": "m-132"
+      },
+      {
+       "value": "m-133"
+      },
+      {
+       "value": "m-134"
+      },
+      {
+       "value": "m-135"
+      },
+      {
+       "value": "m-136"
+      },
+      {
+       "value": "m-137"
+      },
+      {
+       "value": "m-138"
+      },
+      {
+       "value": "m-139"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "request": {
+    "method": "GET",
+    "path": "/Groups/g-1",
+    "query": {
+     "startIndex": "141",
+     "count": "100"
+    }
+   },
+   "response": {
+    "status": 200,
+    "headers": {
+     "Content-Type": "application/scim+json"
+    },
+    "body": {
+     "schemas": [
+      "urn:ietf:params:scim:schemas:core:2.0:Group"
+     ],
+     "id": "g-1",
+     "displayName": "engineering",
+     "members": []
+    }
+   }
+  }
+ ]
+}

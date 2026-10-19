@@ -14,10 +14,12 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/admin"
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	authnorm "github.com/nischalravi/tessera/mvp/server/internal/auth/normalize"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oidcrp"
+	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -99,7 +101,9 @@ func (s *Server) activeTenant(ctx context.Context, slug string) (store.Tenant, b
 	if err != nil {
 		return store.Tenant{}, false, err
 	}
-	return t, t.Status == "active" && t.ID != tenancy.Platform, nil
+	// a tenant in operator recovery (§15.5) still signs people in: its
+	// existing admins cancel the recovery, and its invitation is redeemed
+	return t, (t.Status == "active" || t.Status == "recovery") && t.ID != tenancy.Platform, nil
 }
 
 // loginConnections are a tenant's active OIDC, SAML and OAuth 2.0 connections that browser
@@ -176,6 +180,7 @@ func (s *Server) loginFailure(w http.ResponseWriter, r *http.Request, t tenancy.
 	if t.IsZero() {
 		t = tenancy.Platform
 	}
+	obs.Logins.Inc(loginMethodOfRoute(obs.RouteFrom(r.Context())), "failure")
 	detail := append(ojson.Object{{Key: "via", Value: "oidc"}, {Key: "reason", Value: reason}}, extra...)
 	if err := s.store.InTenant(r.Context(), t, func(tx *store.TenantTx) error {
 		_, err := audit.Record(r.Context(), tx, "auth.login.failure", detail, audit.At(s.clock()),
@@ -190,6 +195,29 @@ func (s *Server) loginFailure(w http.ResponseWriter, r *http.Request, t tenancy.
 	w.Header().Set("Cache-Control", "no-store")
 	http.Redirect(w, r, LoginErrorURL(rid), http.StatusFound)
 	return nil, nil
+}
+
+// loginMethodOfRoute names the sign-in method of a login route pattern for
+// the tessera_login_total label (a closed set, never a connection id).
+func loginMethodOfRoute(route string) string {
+	switch {
+	case strings.Contains(route, "/saml/"):
+		return "saml"
+	case strings.Contains(route, "/oauth2/"):
+		return "oauth2"
+	case strings.Contains(route, "/oidc/"):
+		return "oidc"
+	}
+	return "other"
+}
+
+// loginMethodOfProtocol is the same label for a connection's protocol.
+func loginMethodOfProtocol(protocol string) string {
+	switch protocol {
+	case "oidc", "saml", "oauth2":
+		return protocol
+	}
+	return "other"
 }
 
 // LoginErrorURL is where a refused sign-in lands: the UI's sign-in page.
@@ -375,7 +403,7 @@ func (s *Server) startLogin(w http.ResponseWriter, r *http.Request, t store.Tena
 	return nil, nil
 }
 
-// authLogin is GET /api/auth/login?tenant=&connection=&return_to=.
+// authLogin is GET /api/auth/login?tenant=&connection=&return_to=[&test=1].
 func (s *Server) authLogin(w http.ResponseWriter, r *http.Request, _ *params) (any, error) {
 	q := r.URL.Query()
 	returnTo := q.Get("return_to")
@@ -391,6 +419,10 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request, _ *params) (a
 	}
 	if !store.ValidReturnTo(returnTo) {
 		return s.loginFailure(w, r, t.ID, "invalid_return_to", nil)
+	}
+	if q.Get("test") == "1" {
+		// the requester's test sign-in of a pending connection (§15.2)
+		return s.startTestLogin(w, r, t, q.Get("connection"), returnTo)
 	}
 	var conn *store.IdPConnection
 	if err := s.store.ReadTenant(r.Context(), t.ID, func(tx *store.TenantTx) error {
@@ -450,6 +482,16 @@ func (s *Server) bootstrapRedeem(w http.ResponseWriter, r *http.Request, p *para
 			reason = "bootstrap_code_expired"
 			return nil
 		}
+		// an operator-recovery invitation (§15.5) works only from its
+		// not_before and only while the recovery is pending
+		if rec, err := tx.TenantRecoveryByInvitation(inv.ID); err == nil {
+			if rerr := admin.CheckWindow(rec, s.clock()); rerr != nil {
+				reason = rerr.Reason
+				return nil
+			}
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
 		if conn, err = tx.IdPConnection(inv.IdPConnectionID); err != nil {
 			return err
 		}
@@ -468,7 +510,7 @@ func (s *Server) bootstrapRedeem(w http.ResponseWriter, r *http.Request, p *para
 
 // ---------------------------------------------------------------- the callback
 
-// loginTxnFromCookie resolves the login cookie to its active tenant and
+// loginTxnFromCookie resolves the login cookie to its active (or recovering) tenant and
 // transaction id; reason is set when the browser holds none that is usable.
 func (s *Server) loginTxnFromCookie(r *http.Request) (store.Tenant, uuid.UUID, string, error) {
 	c, err := r.Cookie(s.loginCookieName())
@@ -496,7 +538,9 @@ func (s *Server) loginTxnFromCookie(r *http.Request) (store.Tenant, uuid.UUID, s
 	}); err != nil {
 		return store.Tenant{}, uuid.Nil, "", err
 	}
-	if tenant.Status != "active" {
+	// the same rule as activeTenant: a tenant in operator recovery (§15.5)
+	// still signs in, so its admins can cancel and the invitation redeems
+	if (tenant.Status != "active" && tenant.Status != "recovery") || tenant.ID == tenancy.Platform {
 		return store.Tenant{}, uuid.Nil, "unknown_tenant", nil
 	}
 	return tenant, txnID, "", nil
@@ -546,8 +590,8 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request, p *params)
 		conn, err = tx.IdPConnection(txn.IdPConnectionID)
 		switch {
 		case err != nil:
-		case conn.Status != "active":
-			reason = "connection_disabled"
+		case conn.Status != "active" && !(txn.Purpose == "test" && conn.Status == "pending"):
+			reason = "connection_disabled" // a test sign-in is the one use of a pending connection
 		case (conn.Protocol == "oauth2") != strings.HasPrefix(r.URL.Path, "/api/auth/oauth2/"):
 			reason = "connection_mismatch" // an OIDC transaction at the OAuth 2.0 callback or the reverse
 		}
@@ -623,6 +667,9 @@ type idpProfile struct {
 // SAML ACS; the transaction is consumed and the result normalized).
 func (s *Server) finishLogin(w http.ResponseWriter, r *http.Request, tenant store.Tenant, conn *store.IdPConnection,
 	txn *store.LoginTransaction, tok idpProfile, res authnorm.Result) (any, error) {
+	if txn.Purpose == "test" {
+		return s.finishTestLogin(w, r, tenant, conn, txn) // never a session, a user or a role
+	}
 	ctx := r.Context()
 	now := s.clock().UTC()
 	issuer := deref(conn.Issuer)
@@ -662,6 +709,16 @@ func (s *Server) finishLogin(w http.ResponseWriter, r *http.Request, tenant stor
 			if reason != "" {
 				return nil
 			}
+			// an operator-recovery invitation also needs its recovery pending and
+			// past not_before, and a phishing-resistant sign-in (§15.5)
+			if rec, err := tx.TenantRecoveryByInvitation(inv.ID); err == nil {
+				if rerr := admin.CheckRedemption(rec, res.PhishingResistant, now); rerr != nil {
+					reason = rerr.Reason
+					return nil
+				}
+			} else if !errors.Is(err, store.ErrNotFound) {
+				return err
+			}
 		}
 		l, err := tx.ExternalLoginBySubject(conn.ID, res.Subject)
 		switch {
@@ -678,6 +735,10 @@ func (s *Server) finishLogin(w http.ResponseWriter, r *http.Request, tenant stor
 		}
 		if user.Status != "active" {
 			reason = "user_disabled"
+		} else if off, err := auth.IdentityDisabled(tx, user); err != nil {
+			return err
+		} else if off {
+			reason = auth.FailIdentityDisabled
 		}
 		return nil
 	})
@@ -752,10 +813,19 @@ func (s *Server) finishLogin(w http.ResponseWriter, r *http.Request, tenant stor
 				return err
 			}
 		}
-		_, err = audit.Record(ctx, tx, "recovery.invitation.consumed", ojson.Object{{Key: "invitation_id", Value: inv.ID.String()},
+		if _, err = audit.Record(ctx, tx, "recovery.invitation.consumed", ojson.Object{{Key: "invitation_id", Value: inv.ID.String()},
 			{Key: "user_id", Value: user.ID.String()}, {Key: "role", Value: store.RoleTenantAdmin}},
-			audit.At(now), audit.Target("bootstrap_invitation", inv.ID.String()))
-		return err
+			audit.At(now), audit.Target("bootstrap_invitation", inv.ID.String())); err != nil {
+			return err
+		}
+		// redeeming an operator-recovery invitation completes the recovery:
+		// the tenant is active again and everyone is told (§15.5 step 5)
+		if rec, err := tx.TenantRecoveryByInvitation(inv.ID); err == nil {
+			return s.admin.CompleteRecovery(tx, rec, user.ID, now)
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
+		return nil
 	}
 	_, err = s.completeLogin(w, r, tenant, conn, res, o)
 	if errors.Is(err, errBootstrapRace) {
