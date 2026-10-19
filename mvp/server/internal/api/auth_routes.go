@@ -29,9 +29,13 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, rt *route) (*
 	}
 	p, fail, err := s.authn.AuthenticateRequest(r)
 	if err != nil {
-		// The session or token could not be checked: fail closed.
-		s.log.Error("authentication failed", "method", r.Method, "path", r.URL.Path, "err", err)
+		// The session could not be checked: fail closed.
 		audit.SetAnonymous(r.Context(), "authentication_error")
+		if timedOut(r, err) {
+			writeTimedOut(w)
+			return r, false
+		}
+		s.log.Error("authentication failed", "method", r.Method, "path", r.URL.Path, "err", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return r, false
 	}
@@ -167,7 +171,7 @@ func (s *Server) authSession(_ http.ResponseWriter, r *http.Request, _ *params) 
 	}
 	return ojson.Object{
 		{Key: "user", Value: ojson.Object{{Key: "id", Value: u.ID.String()}, {Key: "email", Value: u.Email},
-			{Key: "display_name", Value: u.DisplayName}}},
+			{Key: "display_name", Value: u.DisplayName}, {Key: "identity_id", Value: u.IdentityID}}},
 		{Key: "tenant", Value: ojson.Object{{Key: "id", Value: tenant.ID.String()}, {Key: "slug", Value: tenant.Slug},
 			{Key: "name", Value: tenant.Name}}},
 		{Key: "roles", Value: roleNames(p.AssignedRoles.Sorted())},
