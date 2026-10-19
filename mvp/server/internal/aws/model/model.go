@@ -277,6 +277,9 @@ type S3BucketState struct {
 	BPAAccount      BPA        `json:"bpa_account"`
 	BPAOrg          *bool      `json:"bpa_org"`          // org level is all-or-none; nil if unknown
 	PolicyIsPublic  bool       `json:"policy_is_public"` // computed per §7.6.2
+	// ObjectACLs holds the ACLs of the objects the connector knows, by object
+	// ARN. Tessera does not inventory objects, so most are absent.
+	ObjectACLs map[string][]ACLGrant `json:"object_acls"`
 }
 
 // Resource is what the snapshot knows about one resource.

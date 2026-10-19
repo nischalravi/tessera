@@ -56,6 +56,18 @@ func (e *evaluator) assess(base *verdict) error {
 			gate(gateRBPExplicit, authz.ReasonServiceRBPRuleUnverified, "service "+e.prefix+" has no verified resource-policy rule")
 		}
 	}
+	if e.class == classIAM && !e.spec.kmsSelf.Or(e.spec.kmsParent).IsFalse() && base.cross {
+		gate(gateA12, authz.AmbiguityReason("A12"), "a cross-account KMS grant is counted without an identity allow")
+	}
+	if e.class == classIAM && !base.cross && !e.spec.kmsParent.IsFalse() {
+		gate(gateA12b, authz.AmbiguityReason("A12b"), "a KMS grant to a role ARN is capped by the role's boundary and session policy")
+	}
+	if !e.spec.kmsRoot.IsFalse() {
+		gate(gateKMSRoot, authz.AmbiguityReason("A12"), "a KMS grant to the account root is treated as a delegation")
+	}
+	if e.spec.objFlag {
+		gate(gateS3Owner, authz.ReasonCode(reasonS3ObjectOwnerUnknown), "the object owner is assumed to be the bucket owner")
+	}
 	if e.p.Kind == model.FederatedUserSession && len(e.sp) == 0 {
 		gate(gateA11, authz.AmbiguityReason("A11"), "a federated-user session has no session policy")
 	}
