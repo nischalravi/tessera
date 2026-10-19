@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -10,7 +11,9 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/authtest"
+	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/store/storetest"
+	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 )
 
 type disableOut struct {
@@ -180,4 +183,105 @@ func TestDisableEnableAPI_Access(t *testing.T) {
 	if st := identityStatus(t, h, l, alice); st != "active" {
 		t.Errorf("A's alice status = %s after B's disable", st)
 	}
+}
+
+// TestDisableAPI_SignsOutTheLinkedUser (#316): disabling an identity revokes
+// the sessions of the Tessera user linked to it and keeps them out while it is
+// disabled; the admin who disabled it cannot enable it (four eyes), the linked
+// user cannot, a second admin can, and the user can then sign in again.
+func TestDisableAPI_SignsOutTheLinkedUser(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	h := containServer(t, f).Handler()
+	alice := f.A.IDs["alice"]
+	linked := signIn(t, f.DB, f.A.ID, authtest.User{Email: "alice@a.example", Roles: []auth.Role{auth.RolePolicyAdmin},
+		IdentityID: &alice}, authtest.Phr, storetest.Now)
+	l := policyAdmin(t, f, f.A.ID, "pa@a.example")
+	l2 := policyAdmin(t, f, f.A.ID, "pa2@a.example")
+	disable := fmt.Sprintf("/api/identities/%d/disable", alice)
+	enable := fmt.Sprintf("/api/identities/%d/enable", alice)
+	const body = `{"reason":"suspected insider activity"}`
+
+	if rec := corrDo(h, linked, "GET", "/api/auth/session", ""); rec.Code != 200 {
+		t.Fatalf("session before disable: %d", rec.Code)
+	}
+	if rec := corrDo(h, l, "POST", disable, body); rec.Code != 200 {
+		t.Fatalf("disable: %d %s", rec.Code, rec.Body)
+	}
+	if rec := corrDo(h, linked, "GET", "/api/auth/session", ""); rec.Code != 401 {
+		t.Errorf("the linked user's session survived the disable: %d", rec.Code)
+	}
+	var reason string
+	if err := f.DB.ReadTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
+		s, err := c.Session(linked.SessionID)
+		if err == nil && s.RevokedReason != nil {
+			reason = *s.RevokedReason
+		}
+		return err
+	}); err != nil || reason != auth.RevokedIdentityDisabled {
+		t.Errorf("revoked reason %q, %v", reason, err)
+	}
+	if d := auditDetail(t, f, f.A.ID, "identity.disable"); !strings.Contains(d, `"sessions_revoked":1`) ||
+		!strings.Contains(d, linked.UserID.String()) {
+		t.Errorf("identity.disable detail %s", d)
+	}
+	// the linked user cannot use their session to re-enable themselves
+	if rec := corrDo(h, linked, "POST", enable, body); rec.Code != 401 {
+		t.Errorf("linked user enable: %d %s", rec.Code, rec.Body)
+	}
+	// nor can a new session be issued while the identity is disabled
+	if err := f.DB.ReadTenant(context.Background(), f.A.ID, func(tx *store.TenantTx) error {
+		u, err := tx.PlatformUser(linked.UserID)
+		if err != nil {
+			return err
+		}
+		if off, err := auth.IdentityDisabled(tx, u); err != nil || !off {
+			t.Errorf("IdentityDisabled = %v, %v", off, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := authtest.New(f.DB, f.A.ID, authtest.User{Email: "alice@a.example"}, authtest.Phr, storetest.Now); err == nil {
+		t.Error("a session was issued to a user whose identity is disabled")
+	}
+	// four eyes: the admin who disabled it cannot enable it
+	rec := corrDo(h, l, "POST", enable, body)
+	if rec.Code != 403 || !strings.Contains(rec.Body.String(), "four_eyes_required") {
+		t.Errorf("disabler enable: %d %s", rec.Code, rec.Body)
+	}
+	if st := identityStatus(t, h, l, alice); st != "disabled" {
+		t.Errorf("status after refused enable = %s", st)
+	}
+	if got := auditActions(t, f, f.A.ID); got["identity.enable.refused"] != 1 || got["identity.enable"] != 0 {
+		t.Errorf("audit actions %v", got)
+	}
+	// a second admin can
+	if rec := corrDo(h, l2, "POST", enable, body); rec.Code != 200 {
+		t.Fatalf("second admin enable: %d %s", rec.Code, rec.Body)
+	}
+	if got := auditActions(t, f, f.A.ID); got["identity.enable"] != 1 {
+		t.Errorf("audit actions %v", got)
+	}
+	again := signIn(t, f.DB, f.A.ID, authtest.User{ID: linked.UserID, Email: "alice@a.example", IdentityID: &alice},
+		authtest.Phr, storetest.Now)
+	if rec := corrDo(h, again, "GET", "/api/auth/session", ""); rec.Code != 200 {
+		t.Errorf("sign-in after enable: %d", rec.Code)
+	}
+}
+
+func auditDetail(t *testing.T, f *storetest.Fixture, tenant tenancy.ID, action string) string {
+	t.Helper()
+	var b strings.Builder
+	if err := f.DB.ReadTenant(context.Background(), tenant, func(c *store.TenantTx) error {
+		evs, err := c.AuditEvents(store.AuditFilter{})
+		for _, e := range evs {
+			if e.Action == action {
+				b.WriteString(string(e.Detail))
+			}
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return b.String()
 }
