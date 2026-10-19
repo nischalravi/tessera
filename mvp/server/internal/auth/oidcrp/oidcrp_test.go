@@ -37,7 +37,7 @@ func setup(t *testing.T) *env {
 	t.Helper()
 	clk := &clock{t: time.Now().UTC().Truncate(time.Second)}
 	idp := devidptest.Start(t, devidp.Config{Now: clk.now})
-	hc, err := safehttp.New(safehttp.Options{Env: config.Dev, AllowLoopback: true})
+	hc, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Dev, AllowLoopback: true})
 	if err != nil {
 		t.Fatal(err)
 	}

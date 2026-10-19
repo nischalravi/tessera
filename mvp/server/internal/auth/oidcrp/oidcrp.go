@@ -31,6 +31,9 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	jose "github.com/go-jose/go-jose/v4"
 	"golang.org/x/oauth2"
+
+	"github.com/nischalravi/tessera/mvp/server/internal/obs"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 )
 
 // Limits and windows (§10.4).
@@ -156,7 +159,13 @@ func New(cfg Config) (*RP, error) {
 	return &RP{cfg: cfg, cache: map[string]*provider{}}, nil
 }
 
-func (rp *RP) ctx(ctx context.Context) context.Context { return oidc.ClientContext(ctx, rp.cfg.HTTP) }
+// ctx carries the outbound client for go-oidc and x/oauth2. The client also
+// allows the port the connection's issuer URL names (safehttp only allows
+// 443 and 8443 otherwise); go-oidc keeps the client, not the context, for
+// its later JWKS fetches, so the allowance travels with it.
+func (rp *RP) ctx(ctx context.Context, c Connection) context.Context {
+	return oidc.ClientContext(ctx, safehttp.WithConfiguredPorts(rp.cfg.HTTP, c.Issuer))
+}
 
 // provider returns the connection's (cached) discovery.
 func (rp *RP) provider(ctx context.Context, c Connection) (*provider, error) {
@@ -175,7 +184,9 @@ func (rp *RP) provider(ctx context.Context, c Connection) (*provider, error) {
 	// the document's issuer to equal it exactly. The provider keeps the
 	// context's client for its JWKS fetches, so the context must not be the
 	// request's (it is cancelled when the request ends).
-	p, err := oidc.NewProvider(rp.ctx(context.WithoutCancel(ctx)), c.Issuer)
+	done := obs.StartCall(obs.ConnOIDC, "discovery")
+	p, err := oidc.NewProvider(rp.ctx(context.WithoutCancel(ctx), c), c.Issuer)
+	done(err)
 	if err != nil {
 		return nil, fail(ReasonDiscovery, err)
 	}
@@ -297,7 +308,7 @@ func (rp *RP) Exchange(ctx context.Context, c Connection, cb Callback) (*IDToken
 	if (pr.meta.IssParam || cb.Iss != "") && cb.Iss != c.Issuer {
 		return nil, fail(ReasonIssParam, fmt.Errorf("iss parameter %q", cb.Iss))
 	}
-	tok, err := rp.oauth(pr, c, cb.RedirectURI).Exchange(rp.ctx(ctx), cb.Code, oauth2.VerifierOption(cb.Verifier))
+	tok, err := rp.oauth(pr, c, cb.RedirectURI).Exchange(rp.ctx(ctx, c), cb.Code, oauth2.VerifierOption(cb.Verifier))
 	if err != nil {
 		return nil, fail(ReasonTokenExchange, err)
 	}
@@ -305,7 +316,7 @@ func (rp *RP) Exchange(ctx context.Context, c Connection, cb Callback) (*IDToken
 	if raw == "" {
 		return nil, fail(ReasonNoIDToken, nil)
 	}
-	v := pr.p.VerifierContext(rp.ctx(context.WithoutCancel(ctx)), &oidc.Config{ClientID: c.ClientID,
+	v := pr.p.VerifierContext(rp.ctx(context.WithoutCancel(ctx), c), &oidc.Config{ClientID: c.ClientID,
 		SupportedSigningAlgs: pr.algs, Now: rp.cfg.Now})
 	return ValidateIDToken(ctx, v, raw, Expect{Issuer: c.Issuer, ClientID: c.ClientID, Algs: pr.algs, Nonce: cb.Nonce,
 		MaxAge: cb.MaxAge, NotBefore: cb.NotBefore, Now: rp.cfg.Now()})

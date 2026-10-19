@@ -107,7 +107,7 @@ func newAuthEnv(t testing.TB, o authEnvOpts, users ...devidp.User) *oidcEnv {
 	if _, err := seed.Run(context.Background(), db, testkit.Now, testkit.Policies(t), tenants); err != nil {
 		t.Fatal(err)
 	}
-	hc, err := safehttp.New(safehttp.Options{Env: config.Dev, AllowLoopback: true})
+	hc, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Dev, AllowLoopback: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -540,7 +540,7 @@ func TestOIDCLogin_DisabledUser(t *testing.T) {
 	e.refused(e.signIn("00u-pat-policy", devidp.MethodPasskey, devidp.ProfileOkta), seed.LarkspurID, "user_disabled")
 }
 
-func devConnID(t *testing.T, db *store.DB, tn tenancy.ID) uuid.UUID {
+func devConnID(t testing.TB, db *store.DB, tn tenancy.ID) uuid.UUID {
 	t.Helper()
 	var id uuid.UUID
 	if err := db.ReadTenant(context.Background(), tn, func(tx *store.TenantTx) error {

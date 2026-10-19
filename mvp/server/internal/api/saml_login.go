@@ -238,7 +238,7 @@ func (s *Server) samlACS(w http.ResponseWriter, r *http.Request, p *params) (any
 			return err
 		}
 		conn, err = tx.IdPConnection(txn.IdPConnectionID)
-		if err == nil && (conn.Status != "active" || conn.Protocol != "saml") {
+		if err == nil && (conn.Protocol != "saml" || (conn.Status != "active" && !(txn.Purpose == "test" && conn.Status == "pending"))) {
 			reason = "connection_disabled"
 		}
 		return err
