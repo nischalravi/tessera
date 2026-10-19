@@ -215,7 +215,14 @@ func (e *evaluator) attachmentPath(id string, targets ...string) []string {
 func (e *evaluator) addDocs(ids []string, targets ...string) ([]*docEntry, error) {
 	var out []*docEntry
 	for _, id := range sortedPolicyIDs(e.snap, ids) {
-		d := e.docFor(id, e.attachmentPath(id, targets...))
+		// The attachment path is provenance for the explanation. It costs a scan
+		// of every attachment, so the bulk (Fast) mode of internal/aws/query,
+		// which keeps no trace, leaves it out.
+		var path []string
+		if !e.opts.Fast {
+			path = e.attachmentPath(id, targets...)
+		}
+		d := e.docFor(id, path)
 		if err := e.evalDoc(d); err != nil {
 			return nil, err
 		}
@@ -259,18 +266,9 @@ func (e *evaluator) gatherOrg() error {
 		return nil
 	}
 	// SCPs (§7.5).
-	switch {
-	case !org.SCPEnabled:
-		e.scpNA = "SCPs are not enabled in the organization"
-	case e.class != classIAM:
-		e.scpNA = "SCPs do not apply to service principals, anonymous callers or federation providers"
-	case org.PathTo(e.p.AccountID) == nil:
-		e.scpNA = "the principal's account is outside the organization, so its SCPs do not apply"
-	case e.p.AccountID == org.ManagementAccountID:
-		e.scpNA = "SCPs do not apply to the management account"
-	case e.p.IsServiceLinked:
-		e.scpNA = "SCPs do not apply to service-linked roles"
-	default:
+	if na := scpGate(org, e.class, e.p); na != "" {
+		e.scpNA = na
+	} else {
 		ls, err := e.orgLevels(e.p.AccountID, false, false)
 		if err != nil {
 			return err
