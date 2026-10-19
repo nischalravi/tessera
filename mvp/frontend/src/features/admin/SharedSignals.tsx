@@ -56,8 +56,8 @@ export function SharedSignals() {
   const [form, setForm] = useState<{ edit?: SsfTransmitter } | null>(null);
   const tx = useApi<{ transmitters: SsfTransmitter[] }>("/ssf/transmitters");
   const ev = useApi<{ events: SsfEvent[] }>("/ssf/events?limit=300");
-  const streams: Loaded<SsfTransmitter[]> = { data: tx.data?.transmitters ?? null, error: tx.error, reload: tx.reload };
-  const events: Loaded<SsfEvent[]> = { data: ev.data?.events ?? null, error: ev.error, reload: ev.reload };
+  const streams: Loaded<SsfTransmitter[]> = { data: tx.data?.transmitters ?? null, error: tx.error?.message ?? null, reload: tx.reload };
+  const events: Loaded<SsfEvent[]> = { data: ev.data?.events ?? null, error: ev.error?.message ?? null, reload: ev.reload };
   const unmatched = (events.data ?? []).filter((e) => e.status === "unmatched").length;
   const reloadAll = () => { tx.reload(); ev.reload(); };
   return (

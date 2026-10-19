@@ -358,9 +358,6 @@ func (s *Server) RunReviewScheduler(ctx context.Context, interval time.Duration)
 		} else if err := reviews.TickAll(ctx, s.store, s.clock(), pols); err != nil && ctx.Err() == nil {
 			s.log.Error("review scheduler failed", "err", err)
 		}
-		if err := s.ssf.PollAll(audit.WithSystemActor(ctx, "ssf.poller"), s.store); err != nil && ctx.Err() == nil {
-			s.log.Error("shared signals poll failed", "err", err)
-		}
 		select {
 		case <-ctx.Done():
 			return
@@ -371,7 +368,7 @@ func (s *Server) RunReviewScheduler(ctx context.Context, interval time.Duration)
 
 // SweeperLoops are the loop names RunSweeper reports to obs.DefaultLoops.
 var SweeperLoops = []string{"jit_sweep", "request_sweep", "sponsorship_sweep", "lifecycle_sweep", "containment_retries",
-	"admin_change_sweep"}
+	"admin_change_sweep", "ssf_poll"}
 
 // RunSweeper expires JIT grants, closes due request lines and ends due
 // lifecycle terms (warnings first) of every active tenant, each in its own
@@ -414,6 +411,9 @@ func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
 		})
 		step("containment_retries", "containment retry sweep", func() error {
 			return s.containment.SweepRetries(audit.WithSystemActor(ctx, "containment.sweeper"), s.store, "containment.sweeper")
+		})
+		step("ssf_poll", "shared signals poll", func() error {
+			return s.ssf.PollAll(audit.WithSystemActor(ctx, "ssf.poller"), s.store)
 		})
 		// apply the admin changes whose cooling-off ended and expire the ones
 		// nobody approved in 72 hours (design §15.2)

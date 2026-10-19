@@ -38,6 +38,7 @@ CREATE TABLE ssf_transmitters (
 CREATE UNIQUE INDEX ux_ssf_transmitters_name ON ssf_transmitters (tenant_id, name);
 
 CREATE TABLE ssf_events (
+  rowid BIGINT GENERATED ALWAYS AS IDENTITY,
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenants (id),
   transmitter_id TEXT NOT NULL,
