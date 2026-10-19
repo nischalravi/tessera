@@ -1,0 +1,50 @@
+# Golden corpus, symbolic ("can ever") decisions: GC-72 to GC-74.
+# Principal RS is the template session of role app; profile {} (nothing pinned).
+# Residuals are pinned semantically: residual_checks say whether the residual holds under a context.
+
+- id: GC-72
+  title: An MFA-conditioned allow gives a residual
+  principal: RS
+  mode: symbolic
+  identity:
+    - {"Statement": [{"Effect": "Allow", "Action": "s3:GetObject", "Resource": "*", "Condition": {"Bool": {"aws:MultiFactorAuthPresent": "true"}}}]}
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-bkt/a"}
+  expect:
+    outcome: CONDITIONAL
+    residual: "aws:MultiFactorAuthPresent = true"
+    residual_checks:
+      - {context: {"aws:MultiFactorAuthPresent": "true"}, holds: true}
+      - {context: {"aws:MultiFactorAuthPresent": "false"}, holds: false}
+      - {context: {"aws:MultiFactorAuthPresent": "absent"}, holds: false}
+  why: "section 9.4: the key is unknown for sessions."
+  verified: doc
+
+- id: GC-73
+  title: A region deny becomes a residual under symbolic context
+  principal: RS
+  mode: symbolic
+  identity:
+    - allow_all
+    - {"Statement": [{"Effect": "Deny", "NotAction": ["iam:*", "sts:*"], "Resource": "*", "Condition": {"StringNotEquals": {"aws:RequestedRegion": ["eu-west-1"]}}}]}
+  request: {action: "sqs:SendMessage", resource: "arn:aws:sqs:eu-west-1:111111111111:tsr-q"}
+  expect:
+    outcome: CONDITIONAL
+    residual: "aws:RequestedRegion present AND aws:RequestedRegion = eu-west-1"
+    residual_checks:
+      - {context: {"aws:RequestedRegion": "eu-west-1"}, holds: true}
+      - {context: {"aws:RequestedRegion": "us-east-1"}, holds: false}
+      - {context: {"aws:RequestedRegion": "absent"}, holds: false}
+  why: "section 9.4: RequestedRegion is unknown in symbolic mode, so the Deny's condition stays symbolic and the result is Allow and not psi. If the key were absent, the negated operator would be true and the Deny would apply, which is why presence appears in the residual."
+  verified: doc
+
+- id: GC-74
+  title: A symbolic residual that simplifies to a constant
+  principal: RS
+  mode: symbolic
+  identity:
+    - {"Statement": [{"Effect": "Allow", "Action": "s3:GetObject", "Resource": "*", "Condition": {"Bool": {"aws:SecureTransport": "true"}}},
+                     {"Effect": "Deny", "Action": "s3:GetObject", "Resource": "*", "Condition": {"Bool": {"aws:SecureTransport": "true"}}}]}
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-bkt/a"}
+  expect: {outcome: DENY, deny_kind: none}
+  why: "section 9.5: allow and not deny = (x and not x) on the same atom is unsatisfiable, so the result is DENY, not CONDITIONAL. deny_kind is null because it depends on context: a concrete request gives EXPLICIT when SecureTransport is true and IMPLICIT when it is false."
+  verified: doc

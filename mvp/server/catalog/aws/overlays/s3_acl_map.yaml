@@ -1,0 +1,53 @@
+# S3 ACL permission to access-policy action mapping (design §7.6, §4.1 fact 15).
+# Source: Amazon S3 User Guide, "Mapping of ACL permissions and access policy
+# permissions". FULL_CONTROL is the union of the other four permissions of the
+# same scope. Object-scope WRITE has no action mapping.
+source: https://docs.aws.amazon.com/AmazonS3/latest/userguide/acl-overview.html
+bucket:
+  READ:
+    - s3:ListBucket
+    - s3:ListBucketMultipartUploads
+    - s3:ListBucketVersions
+  WRITE:
+    - s3:DeleteObject
+    - s3:PutObject
+  READ_ACP:
+    - s3:GetBucketAcl
+  WRITE_ACP:
+    - s3:PutBucketAcl
+  FULL_CONTROL:
+    - s3:DeleteObject
+    - s3:GetBucketAcl
+    - s3:ListBucket
+    - s3:ListBucketMultipartUploads
+    - s3:ListBucketVersions
+    - s3:PutBucketAcl
+    - s3:PutObject
+object:
+  READ:
+    - s3:GetObject
+    - s3:GetObjectVersion
+  WRITE: []
+  READ_ACP:
+    - s3:GetObjectAcl
+    - s3:GetObjectVersionAcl
+  WRITE_ACP:
+    - s3:PutObjectAcl
+    - s3:PutObjectVersionAcl
+  FULL_CONTROL:
+    - s3:GetObject
+    - s3:GetObjectAcl
+    - s3:GetObjectVersion
+    - s3:GetObjectVersionAcl
+    - s3:PutObjectAcl
+    - s3:PutObjectVersionAcl
+groups:
+  - name: AllUsers
+    uri: http://acs.amazonaws.com/groups/global/AllUsers
+    public: true
+  - name: AuthenticatedUsers
+    uri: http://acs.amazonaws.com/groups/global/AuthenticatedUsers
+    public: true
+  - name: LogDelivery
+    uri: http://acs.amazonaws.com/groups/s3/LogDelivery
+    public: false
