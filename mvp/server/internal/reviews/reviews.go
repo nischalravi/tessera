@@ -11,7 +11,9 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
@@ -25,6 +27,13 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 	"github.com/nischalravi/tessera/mvp/server/internal/usage"
 )
+
+// MaxCommentRunes caps a reviewer's comment (also the audit event's comment).
+const MaxCommentRunes = 1000
+
+// TargetType is the audit target type of review decision events; the target
+// id is the review item id.
+const TargetType = "review_item"
 
 // Error is a caller error (mapped to HTTP 400).
 type Error struct{ Msg string }
@@ -48,8 +57,20 @@ func deptKey(d *string) (string, bool) {
 	return *d, false
 }
 
+// Scope narrows a campaign (issue #166): one system's grants (System, "" for
+// every system) and, with PrivilegedOnly, privileged grants only.
+type Scope struct {
+	System         string
+	PrivilegedOnly bool
+}
+
 // GenerateCampaign creates a campaign with an item for every risky grant.
 func GenerateCampaign(c *store.TenantTx, now time.Time, name string, unusedDays int, policies []*policy.Policy) (int64, error) {
+	return GenerateScopedCampaign(c, now, name, unusedDays, policies, Scope{})
+}
+
+// GenerateScopedCampaign is GenerateCampaign over the grants in scope.
+func GenerateScopedCampaign(c *store.TenantTx, now time.Time, name string, unusedDays int, policies []*policy.Policy, scope Scope) (int64, error) {
 	g, err := graph.Build(c, now)
 	if err != nil {
 		return 0, err
@@ -124,6 +145,13 @@ func GenerateCampaign(c *store.TenantTx, now time.Time, name string, unusedDays 
 			if len(via) == 0 {
 				continue
 			}
+			privileged := g.Node(ag.Dst).Privileged
+			for _, ep := range via {
+				privileged = privileged || ep.Privileged
+			}
+			if (scope.System != "" && g.Node(ag.Dst).System != scope.System) || (scope.PrivilegedOnly && !privileged) {
+				continue
+			}
 			total++
 			var last *time.Time
 			usedN, events := 0, 0
@@ -142,10 +170,6 @@ func GenerateCampaign(c *store.TenantTx, now time.Time, name string, unusedDays 
 			reasons := []string{}
 			if usedN == 0 {
 				reasons = append(reasons, fmt.Sprintf("unused_%dd", unusedDays))
-			}
-			privileged := g.Node(ag.Dst).Privileged
-			for _, ep := range via {
-				privileged = privileged || ep.Privileged
 			}
 			if privileged && (last == nil || timeutil.Days(now, *last) >= 30) {
 				reasons = append(reasons, "privileged_idle")
@@ -286,6 +310,9 @@ func Decide(c *store.TenantTx, now time.Time, itemID int64, decision string, by 
 	if decision != "keep" && decision != "revoke" {
 		return nil, &Error{"decision must be keep or revoke"}
 	}
+	if comment != nil && utf8.RuneCountInString(*comment) > MaxCommentRunes {
+		return nil, &Error{fmt.Sprintf("comment must be at most %d characters", MaxCommentRunes)}
+	}
 	item, err := c.Item(itemID)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, ErrUnknownItem
@@ -337,8 +364,12 @@ func applyDecision(c *store.TenantTx, now time.Time, item *store.ReviewItem, dec
 			return nil, err
 		}
 	}
-	if err := c.Audit(now, by.Display, "review."+decision, ojson.Object{{Key: "item_id", Value: item.ID},
-		{Key: "grant", Value: item.GrantLabel}}); err != nil {
+	det := ojson.Object{{Key: "item_id", Value: item.ID}, {Key: "grant", Value: item.GrantLabel}}
+	if comment != nil && *comment != "" {
+		det = append(det, ojson.KV{Key: "comment", Value: *comment})
+	}
+	if _, err := c.RecordAudit(store.AuditRecord{At: now, Action: "review." + decision, LegacyActor: by.Display,
+		Detail: det, TargetType: TargetType, TargetID: strconv.FormatInt(item.ID, 10)}); err != nil {
 		return nil, err
 	}
 	open, err := c.CountOpenItems(item.CampaignID)

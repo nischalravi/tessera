@@ -3,6 +3,7 @@ package store
 import (
 	"fmt"
 	"io/fs"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -278,9 +279,26 @@ func parseFS(fsys fs.FS, dir, skip string) ([]DDLTable, error) {
 			return nil, fmt.Errorf("%s: %w", f, err)
 		}
 		out = append(out, ts...)
+		// forward migrations that add a column: fold it into its table
+		for _, m := range addColumnRe.FindAllStringSubmatch(stripComments(string(b)), -1) {
+			for i := range out {
+				if out[i].Name != m[1] {
+					continue
+				}
+				col, err := parseTable(m[1], m[2]+" "+m[3]+" "+m[4])
+				if err != nil {
+					return nil, fmt.Errorf("%s: %w", f, err)
+				}
+				out[i].Columns = append(out[i].Columns, col.Columns...)
+			}
+		}
 	}
 	return out, nil
 }
+
+// addColumnRe matches ALTER TABLE t ADD COLUMN [IF NOT EXISTS] name TYPE rest;
+// (table, column, type, the rest of the statement).
+var addColumnRe = regexp.MustCompile(`(?is)ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)\s+(\w+)([^;]*);`)
 
 // PostgresRLSFile returns the embedded generated rls.sql.
 func PostgresRLSFile() ([]byte, error) { return pgSchemaFS.ReadFile("schema/postgres/" + pgRLSFile) }

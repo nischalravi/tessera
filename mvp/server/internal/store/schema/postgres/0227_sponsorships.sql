@@ -15,12 +15,7 @@ CREATE TABLE intake_records (
   sponsor_identity_id BIGINT,
   batch_id TEXT,
   status TEXT NOT NULL CHECK (status IN ('received','matching','review','resolved','rejected')),
-  invitation_status TEXT NOT NULL DEFAULT 'ready' CHECK (invitation_status IN ('ready','sent','claimed','revoked','expired')),
-  -- the claimant's own statement at the claim page's "do you already have an
-  -- account?" question (GU-6): recorded for the review queue, never used to link (K3)
-  existing_account TEXT CHECK (existing_account IN ('yes','no')),
-  existing_account_at TEXT,
-  claimed_at TEXT,
+  invitation_status TEXT NOT NULL DEFAULT 'ready' CHECK (invitation_status IN ('ready','sent','claimed','revoked')),
   created_at TEXT NOT NULL,
   UNIQUE (tenant_id, id),
   FOREIGN KEY (tenant_id, source_record_id) REFERENCES identity_source_records (tenant_id, id),

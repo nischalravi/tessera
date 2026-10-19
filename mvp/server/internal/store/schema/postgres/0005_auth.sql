@@ -148,7 +148,7 @@ CREATE TABLE login_transactions (
   tenant_id TEXT NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
   cookie_hash TEXT NOT NULL UNIQUE CHECK (length(cookie_hash) = 64),
   idp_connection_id TEXT NOT NULL,
-  purpose TEXT NOT NULL CHECK (purpose IN ('login','step_up','device_approval','bootstrap','claim')),
+  purpose TEXT NOT NULL CHECK (purpose IN ('login','step_up','device_approval','bootstrap','test')),
   state_hash TEXT, nonce TEXT, pkce_verifier_enc BYTEA, saml_request_id TEXT,
   required_tessera_acr TEXT, max_age BIGINT,
   session_id TEXT, expected_external_login_id TEXT, device_grant_id TEXT, bootstrap_invitation_id TEXT,

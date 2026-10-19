@@ -32,6 +32,7 @@ import (
 	jose "github.com/go-jose/go-jose/v4"
 	"golang.org/x/oauth2"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 )
 
@@ -183,7 +184,9 @@ func (rp *RP) provider(ctx context.Context, c Connection) (*provider, error) {
 	// the document's issuer to equal it exactly. The provider keeps the
 	// context's client for its JWKS fetches, so the context must not be the
 	// request's (it is cancelled when the request ends).
+	done := obs.StartCall(obs.ConnOIDC, "discovery")
 	p, err := oidc.NewProvider(rp.ctx(context.WithoutCancel(ctx), c), c.Issuer)
+	done(err)
 	if err != nil {
 		return nil, fail(ReasonDiscovery, err)
 	}

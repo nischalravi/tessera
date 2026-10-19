@@ -42,6 +42,7 @@ const Entitlements = named(directory, "Entitlements");
 const Apps = named(directory, "Apps");
 const Orgs = named(directory, "Orgs");
 const Groups = named(directory, "Groups");
+const Ownership = named(() => import("../features/directory/Ownership"), "Ownership");
 const IdentityPage = named(() => import("../features/directory/IdentityPage"), "IdentityPage");
 const RolePage = named(roles, "RolePage");
 const EntitlementPage = named(objects, "EntitlementPage");
@@ -70,6 +71,7 @@ const AdminUsers = named(() => import("../features/admin/Users"), "Users");
 const IdpConnections = named(() => import("../features/admin/IdpConnections"), "IdpConnections");
 const ChangeRequests = named(() => import("../features/admin/ChangeRequests"), "ChangeRequests");
 const ApiClients = named(() => import("../features/admin/ApiClients"), "ApiClients");
+const PlatformHealth = named(() => import("../features/admin/PlatformHealth"), "PlatformHealth");
 const ChangeBanner = named(() => import("../features/admin/ChangeBanner"), "ChangeBanner");
 
 /** The persistent banner of pending and cooling-off admin changes (design §15.2), for admins only. */
@@ -137,6 +139,7 @@ export default function App() {
                       <Route path="apps" element={<Apps />} />
                       <Route path="orgs" element={<Orgs />} />
                       <Route path="groups" element={<Groups />} />
+                      <Route path="ownership" element={<Ownership />} />
                     </Route>
                     <Route path="/directory/identities/:id" element={<IdentityPage />} />
                     <Route path="/directory/roles/:id" element={<RolePage />} />
@@ -169,6 +172,7 @@ export default function App() {
                     <Route path="/admin/authentication" element={<IdpConnections />} />
                     <Route path="/admin/change-requests" element={<ChangeRequests />} />
                     <Route path="/admin/api-clients" element={<ApiClients />} />
+                    <Route path="/admin/platform-health" element={<PlatformHealth />} />
                     <Route path="/admin/:section" element={<AdminSectionPage />} />
 
                     {/* routes from the previous UI */}
