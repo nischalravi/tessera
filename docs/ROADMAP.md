@@ -21,4 +21,4 @@ So we make what exists real before adding new areas.
 
 Issues that need real systems, credentials or paid services carry `needs-human` and wait for the founder, whatever their milestone.
 
-The checklist validation is re-run periodically, and this order is revisited each time.
+The product goal is every box in [`PRODUCT-CHECKLIST.md`](PRODUCT-CHECKLIST.md) checked: 64 capabilities in 13 areas, each with its status, evidence and the milestone that closes it. The checklist validation is re-run after each milestone, and this order is revisited each time.

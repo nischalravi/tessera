@@ -1,0 +1,92 @@
+# Golden corpus, role trust and AssumeRole: GC-55 to GC-59.
+
+- id: GC-55
+  title: Cross-account AssumeRole needs an identity allow when the trust names the account
+  principal: "arn:aws:iam::222222222222:user/dave"
+  identity: []
+  resource_policies:
+    - resource: "arn:aws:iam::111111111111:role/tsr-x"
+      kind: trust
+      policy: {"Statement": [{"Effect": "Allow", "Principal": {"AWS": "222222222222"}, "Action": "sts:AssumeRole"}]}
+  request: {action: "sts:AssumeRole", resource: "arn:aws:iam::111111111111:role/tsr-x"}
+  expect: {outcome: DENY, deny_kind: implicit, stage: identity}
+  why: "[S18][S31] the trusted account must grant sts:AssumeRole."
+  verified: doc
+
+- id: GC-56
+  title: An ExternalId condition with no ExternalId supplied
+  principal: "arn:aws:iam::222222222222:user/dave"
+  identity:
+    - {"Statement": [{"Effect": "Allow", "Action": "sts:AssumeRole", "Resource": "*"}]}
+  resource_policies:
+    - resource: "arn:aws:iam::111111111111:role/tsr-x"
+      kind: trust
+      policy: {"Statement": [{"Effect": "Allow", "Principal": {"AWS": "222222222222"}, "Action": "sts:AssumeRole",
+                              "Condition": {"StringEquals": {"sts:ExternalId": "tsr-42"}}}]}
+  request: {action: "sts:AssumeRole", resource: "arn:aws:iam::111111111111:role/tsr-x"}
+  expect: {outcome: DENY, deny_kind: implicit, stage: resource_policy}
+  note: "sts:ExternalId absent"
+  why: "[S8] missing key => no match."
+  verified: doc
+
+- id: GC-57
+  title: A same-account trust that names the user ARN, with no identity policy
+  principal: U
+  identity: []
+  resource_policies:
+    - resource: "arn:aws:iam::111111111111:role/tsr-x"
+      kind: trust
+      policy: {"Statement": [{"Effect": "Allow", "Principal": {"AWS": "arn:aws:iam::111111111111:user/alice"}, "Action": "sts:AssumeRole"}]}
+  request: {action: "sts:AssumeRole", resource: "arn:aws:iam::111111111111:role/tsr-x"}
+  expect: {outcome: ALLOW, fidelity: approximate, reasons: ["AMBIGUITY:A3"]}
+  why: "The same-account RBP matrix applied to trust policies; not stated explicitly in the docs."
+  verified: pending-probe:A3
+
+- id: GC-58
+  title: An identity allow alone cannot assume a role whose trust doesn't name the caller
+  principal: U
+  identity: [allow_all]
+  resource_policies:
+    - resource: "arn:aws:iam::111111111111:role/tsr-x"
+      kind: trust
+      policy: {"Statement": [{"Effect": "Allow", "Principal": {"Service": "ec2.amazonaws.com"}, "Action": "sts:AssumeRole"}]}
+  request: {action: "sts:AssumeRole", resource: "arn:aws:iam::111111111111:role/tsr-x"}
+  expect: {outcome: DENY, deny_kind: implicit, stage: resource_policy}
+  why: "[S1] role trust policies must explicitly allow the principal."
+  verified: doc
+
+- id: GC-59
+  title: GitHub OIDC trust with a wildcard sub, symbolic and concrete
+  principal: "arn:aws:iam::111111111111:oidc-provider/token.actions.githubusercontent.com"
+  resource_policies:
+    - resource: "arn:aws:iam::111111111111:role/tsr-gh"
+      kind: trust
+      policy: {"Statement": [{"Effect": "Allow", "Principal": {"Federated": "arn:aws:iam::111111111111:oidc-provider/token.actions.githubusercontent.com"},
+                              "Action": "sts:AssumeRoleWithWebIdentity",
+                              "Condition": {"StringEquals": {"token.actions.githubusercontent.com:aud": "sts.amazonaws.com"},
+                                            "StringLike": {"token.actions.githubusercontent.com:sub": "repo:acme/*"}}}]}
+  requests:
+    - mode: symbolic
+      caller: provider
+      action: "sts:AssumeRoleWithWebIdentity"
+      resource: "arn:aws:iam::111111111111:role/tsr-gh"
+      expect:
+        outcome: CONDITIONAL
+        residual: "token.actions.githubusercontent.com:aud = sts.amazonaws.com AND token.actions.githubusercontent.com:sub like repo:acme/*"
+        residual_checks:
+          - {context: {"token.actions.githubusercontent.com:aud": "sts.amazonaws.com", "token.actions.githubusercontent.com:sub": "repo:acme/web:ref:refs/heads/main"}, holds: true}
+          - {context: {"token.actions.githubusercontent.com:aud": "sts.amazonaws.com", "token.actions.githubusercontent.com:sub": "repo:evil/web:ref:refs/heads/main"}, holds: false}
+          - {context: {"token.actions.githubusercontent.com:aud": "other", "token.actions.githubusercontent.com:sub": "repo:acme/web"}, holds: false}
+        nhi_flag: wildcard_oidc_trust
+    - mode: concrete
+      action: "sts:AssumeRoleWithWebIdentity"
+      resource: "arn:aws:iam::111111111111:role/tsr-gh"
+      context: {"token.actions.githubusercontent.com:aud": "sts.amazonaws.com", "token.actions.githubusercontent.com:sub": "repo:acme/web:ref:refs/heads/main"}
+      expect: {outcome: ALLOW}
+    - mode: concrete
+      action: "sts:AssumeRoleWithWebIdentity"
+      resource: "arn:aws:iam::111111111111:role/tsr-gh"
+      context: {"token.actions.githubusercontent.com:aud": "sts.amazonaws.com", "token.actions.githubusercontent.com:sub": "repo:evil/web:ref:refs/heads/main"}
+      expect: {outcome: DENY, deny_kind: implicit, stage: resource_policy}
+  why: "[S5] OIDC federated principals; [S8] string operators."
+  verified: doc

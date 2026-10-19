@@ -100,6 +100,7 @@ var readinessRouteCases = map[string][]rdCase{
 // id that exists nowhere (same status and body), never 200 or 403, never
 // with B's data, and tenant B is left untouched.
 func TestIsolation_ReadinessRouteCrossTenant(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	h := isolationServer(t, f, f.A.ID).Handler()
 	beforeB := storetest.ReadinessDump(t, f.DB, f.B.ID, f.B.Refs)
@@ -167,6 +168,7 @@ func readinessGetPaths(r map[string]string) map[string]string {
 // answer without any of tenant B's readiness data. Served as B, the same
 // routes do show B's sentinel (positive control).
 func TestIsolation_ReadinessListRoutesNeverLeak(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	srv := isolationServer(t, f, f.A.ID)
 	h := srv.Handler()
@@ -227,6 +229,7 @@ func TestIsolation_ReadinessListRoutesNeverLeak(t *testing.T) {
 // changes only A's view of the shared template, and B's overlay never shows
 // in A.
 func TestIsolation_ReadinessOverlayScoped(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	ha, hb := isolationServer(t, f, f.A.ID).Handler(), isolationServer(t, f, f.B.ID).Handler()
 	beforeB := serveOnce(hb, http.MethodGet, "/api/readiness/templates/ad", "").Body.String()
@@ -244,6 +247,7 @@ func TestIsolation_ReadinessOverlayScoped(t *testing.T) {
 // attestation, a skip and an activation attempt made as tenant A land in A's
 // audit log only.
 func TestIsolation_ReadinessAuditStampedWithOwnTenant(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	h := isolationServer(t, f, f.A.ID).Handler()
 	a := f.A.Refs

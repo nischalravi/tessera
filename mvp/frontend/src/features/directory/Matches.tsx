@@ -64,7 +64,7 @@ export function Matches() {
   );
 }
 
-type Loaded<T> = { data: T | null; error: string | null; reload: () => void };
+type Loaded<T> = { data: T | null; error: import("../../api").ApiError | null; reload: () => void };
 
 /** Ask for a reason, run the action, and report the outcome. Resolves true when it ran. */
 function useDecide() {
