@@ -73,13 +73,37 @@ func (s *Server) casServiceAllowed(service string) bool {
 	return false
 }
 
+// redirectRegistered redirects to base plus add, after checking base against
+// the registered redirect URIs once more (OIDC redirect_uri, or a CAS
+// service URL, whose query is not part of the registration). A target that
+// matches nothing is refused with 400: the dev IdP never redirects to an
+// unregistered address, whatever the caller did before.
+func (s *Server) redirectRegistered(w http.ResponseWriter, r *http.Request, base string, add url.Values, status int, cas bool) {
+	ok := false
+	if cas {
+		ok = s.casServiceAllowed(base)
+	} else {
+		for _, c := range s.clients {
+			if c.redirectAllowed(base) {
+				ok = true
+				break
+			}
+		}
+	}
+	if !ok {
+		s.errorPage(w, http.StatusBadRequest, "The redirect target is not registered.")
+		return
+	}
+	http.Redirect(w, r, withParams(base, add), status) // #nosec G710 -- base matched a registered redirect URI just above
+}
+
 func (s *Server) handleCASLogin(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	now := s.now()
 	service := q.Get("service")
-	for k, v := range q {
+	for _, v := range q {
 		if len(v) > 1 {
-			s.errorPage(w, http.StatusBadRequest, "Parameter "+k+" is repeated.")
+			s.errorPage(w, http.StatusBadRequest, "A parameter is repeated.")
 			return
 		}
 	}
@@ -135,7 +159,7 @@ func (s *Server) issueCASTicket(w http.ResponseWriter, r *http.Request, ac authC
 		s.errorPage(w, http.StatusServiceUnavailable, "Too many outstanding tickets.")
 		return
 	}
-	http.Redirect(w, r, withParams(ac.authz.redirectURI, url.Values{"ticket": {ticket}}), status) // #nosec G710 -- the service matched a registered pattern
+	s.redirectRegistered(w, r, ac.authz.redirectURI, url.Values{"ticket": {ticket}}, status, true)
 }
 
 func (s *Server) handleCASValidate(w http.ResponseWriter, r *http.Request) {
@@ -159,7 +183,7 @@ func (s *Server) handleCASValidate(w http.ResponseWriter, r *http.Request) {
 	ac, ok := s.codes.take(ticket, now)
 	switch {
 	case !ok || !ac.authz.cas:
-		failure("INVALID_TICKET", "Ticket "+ticket+" not recognized")
+		failure("INVALID_TICKET", "Ticket not recognized")
 		return
 	case service != ac.authz.redirectURI:
 		failure("INVALID_SERVICE", "Ticket was issued for another service")
@@ -168,7 +192,7 @@ func (s *Server) handleCASValidate(w http.ResponseWriter, r *http.Request) {
 		failure("INVALID_TICKET", "Ticket was not issued from a new login (renew)")
 		return
 	case ac.authz.fault == FaultCASFailure:
-		failure("INVALID_TICKET", "Ticket "+ticket+" not recognized")
+		failure("INVALID_TICKET", "Ticket not recognized")
 		return
 	}
 	if ac.authz.fault == FaultCASTicketReuse { // a buggy server: the ticket validates again
