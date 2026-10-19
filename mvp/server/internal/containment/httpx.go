@@ -12,6 +12,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/nischalravi/tessera/mvp/server/internal/obs"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 )
 
 // maxAttempts is how often a call is tried when the provider answers 429.
@@ -50,7 +53,9 @@ func newAPI(hc *http.Client, baseURL, def, scheme, token string, sleep sleepFunc
 	if sleep == nil {
 		sleep = sleepCtx
 	}
-	return &api{hc: hc, base: u, auth: scheme + " " + token, sleep: sleep}, nil
+	// the connection's base_url may name its own port (safehttp allows only
+	// 443 and 8443 otherwise)
+	return &api{hc: safehttp.WithConfiguredPorts(hc, u.String()), base: u, auth: scheme + " " + token, sleep: sleep}, nil
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) error {
@@ -68,7 +73,11 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 // body is not empty). 429 is retried after Retry-After; a 404 returns an
 // error wrapping ErrNotFound; other non-2xx answers return a *StatusError.
 // path must already be escaped (esc).
-func (a *api) do(ctx context.Context, method, path string, q url.Values, body, out any) error {
+func (a *api) do(ctx context.Context, method, path string, q url.Values, body, out any) (err error) {
+	// one observation per logical call (retries on 429 included); a 404 is an
+	// answer, not a failure of the provider
+	done := obs.StartCall(obs.ConnContainment, "api")
+	defer func() { done(notFoundIsOK(err)) }()
 	u := *a.base
 	u.Path = strings.TrimRight(u.Path, "/") + path
 	u.RawPath = ""
@@ -146,3 +155,11 @@ func retryWait(h string, attempt int) time.Duration {
 }
 
 func esc(s string) string { return url.PathEscape(s) }
+
+// notFoundIsOK maps a provider's 404 answer to success for the call metrics.
+func notFoundIsOK(err error) error {
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	return err
+}

@@ -8,7 +8,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 )
 
-// Sealed connection credentials (schema/0207_connection_credentials.sql). The
+// Sealed connection credentials (schema/0345_connection_credentials.sql). The
 // secret is sealed by the caller (internal/readiness, internal/containment)
 // under CredentialAAD; the store only holds the sealed bytes.
 

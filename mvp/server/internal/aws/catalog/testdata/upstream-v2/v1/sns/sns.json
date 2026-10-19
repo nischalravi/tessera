@@ -1,0 +1,11 @@
+{
+  "Name" : "sns",
+  "Actions" : [
+    {"Name": "Publish", "ActionConditionKeys": [], "Annotations": {"Properties": {"IsList": false, "IsPermissionManagement": false, "IsTaggingOnly": false, "IsWrite": true}}, "Resources": [{"Name": "topic"}]}
+  ],
+  "ConditionKeys" : [],
+  "Resources" : [
+    {"Name": "topic", "ARNFormats": ["arn:${Partition}:sns:${Region}:${Account}:${TopicName}"]}
+  ],
+  "Version" : "v1.0"
+}

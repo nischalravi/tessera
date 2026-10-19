@@ -5,13 +5,14 @@ import (
 	"regexp"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
 var runIDRE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 func (s *Server) registerValidationRoutes() {
-	s.handle(http.MethodPost, "/api/connections/{id}/validate", phased, need(auth.PermConnectionsManage), s.rd(s.validate))
+	s.handle(http.MethodPost, "/api/connections/{id}/validate", phased, need(auth.PermConnectionsManage), s.rd(s.validate)).asJob(jobs.Validation, "id")
 	s.handle(http.MethodGet, "/api/connections/{id}/validations/{run}", read, need(auth.PermConnectionsRead), s.rd(s.getValidation))
 }
 

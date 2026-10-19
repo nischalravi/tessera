@@ -41,6 +41,9 @@ func (d *DB) MigrateCredentials(ctx context.Context, sealer *seal.Sealer) (Crede
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	var res CredentialMigration
+	if d.d == dialectPostgres {
+		return res, nil // Postgres never had the two old tables
+	}
 	hasSecrets, err := d.tableExists(ctx, legacySecretsTable)
 	if err != nil {
 		return res, err

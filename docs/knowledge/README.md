@@ -15,6 +15,8 @@ This README turns those documents into one map. It lists every IAM capability Te
 | 05 | [Privileged, cloud and machine identity](05-privileged-cloud-and-machine-identity.md) | PAM, JIT/ZSP, CIEM, secrets, NHI, OAuth grants, attack paths, real incidents | `iam-pam-nhi-expert` |
 | 06 | [AI agents and IAM architecture](06-ai-agents-and-iam-architecture.md) | Agent delegation, MCP authorization, agentic threats, reference architecture, KPIs | `iam-agent-identity-expert` |
 
+Companion register: [AWS evaluation ambiguities](aws-evaluation-ambiguities.md), the open questions in AWS's own IAM documentation, each with Tessera's default and the probe that would settle it.
+
 The expert agents live in [`.claude/agents/`](../../.claude/agents/). `iam-architect` plans capabilities end to end and pulls in the domain experts. In Claude Code, ask for one by name, for example *"use iam-authz-expert to review the AWS evaluator"*.
 
 References below use the form **D3·M1**: document 03, requirement 1 in its section 8.

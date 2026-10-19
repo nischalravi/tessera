@@ -1,0 +1,28 @@
+# KMS operations that can be authorized across accounts (design §4.1 fact 14).
+# Source: AWS KMS Developer Guide, "Allowing users in other accounts to use a
+# KMS key": cross-account use works only for the cryptographic operations,
+# CreateGrant, DescribeKey, GetKeyRotationStatus, GetPublicKey, ListGrants,
+# RetireGrant and RevokeGrant. Every other kms: action is same-account only.
+# Unverified entries are flagged here until a sandbox probe covers them.
+source: https://docs.aws.amazon.com/kms/latest/developerguide/key-policy-modifying-external-accounts.html
+actions:
+  - kms:CreateGrant
+  - kms:Decrypt
+  - kms:DeriveSharedSecret
+  - kms:DescribeKey
+  - kms:Encrypt
+  - kms:GenerateDataKey
+  - kms:GenerateDataKeyPair
+  - kms:GenerateDataKeyPairWithoutPlaintext
+  - kms:GenerateDataKeyWithoutPlaintext
+  - kms:GenerateMac
+  - kms:GetKeyRotationStatus
+  - kms:GetPublicKey
+  - kms:ListGrants
+  - kms:ReEncryptFrom
+  - kms:ReEncryptTo
+  - kms:RetireGrant
+  - kms:RevokeGrant
+  - kms:Sign
+  - kms:Verify
+  - kms:VerifyMac

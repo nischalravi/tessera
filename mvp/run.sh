@@ -8,6 +8,10 @@
 #   ./run.sh build      build the Go server and type-check/build the frontend
 #   ./run.sh seed       (re)seed the database only
 #   ./run.sh audit-deps govulncheck ./... on the Go module (install: server/scripts/install-tools.sh)
+#   ./run.sh backup     take an encrypted online backup now (server may be running; args go to
+#                       `tessera backup create`, e.g. -dir /backups -keep 28)
+#   ./run.sh restore F  verify backup F and restore it over the database (stop the server
+#                       first; the current database is kept as a .pre-restore copy)
 #   ./run.sh devidp     run only the dev IdP (mock OIDC issuer for local sign-in) in the foreground
 #   ./run.sh bench      Go benchmarks + end-to-end latency/startup/memory of the server
 #                       (set PYTHON=… PY_BACKEND=… to also measure a Python backend checkout)
@@ -31,6 +35,9 @@ export TESSERA_DEV_IDP_URL="$DEVIDP_URL"
 export TESSERA_POLICY_DIR="${TESSERA_POLICY_DIR:-$SERVER/policies}"
 # local development: every API call needs a session; users sign in through the dev IdP
 export TESSERA_ENV="${TESSERA_ENV:-dev}"
+# dev only: an in-process fake SCIM target so Admin → Provisioning can be tried without a real
+# system (the API refuses it in production). TESSERA_DEV_FAKE_TARGET=0 turns it off.
+export TESSERA_DEV_FAKE_TARGET="${TESSERA_DEV_FAKE_TARGET:-1}"
 # the browser origin of the UI: the CSRF Origin check admits it
 export TESSERA_PUBLIC_URL="${TESSERA_PUBLIC_URL:-http://localhost:$UI_PORT}"
 
@@ -109,6 +116,17 @@ case "${1:-}" in
     seed
     exit 0
     ;;
+  backup)
+    build_server
+    shift
+    exec "$BIN" backup create -db "$DB" "$@"
+    ;;
+  restore)
+    build_server
+    if [ -z "${2:-}" ]; then echo "usage: ./run.sh restore <backup.tbak> [tessera backup restore flags]" >&2; exit 2; fi
+    f="$2"; shift 2
+    exec "$BIN" backup restore -in "$f" -db "$DB" -force "$@"
+    ;;
   devidp)
     build_server
     echo "==> starting dev IdP on $DEVIDP_URL (development only; Ctrl+C to stop)"
@@ -130,7 +148,13 @@ esac
 
 build_server
 setup_frontend
-if [ "${1:-}" = "--reseed" ] || [ ! -f "$DB" ]; then
+if [ "${1:-}" = "--reseed" ]; then
+  seed
+elif [[ "$DB" == postgres://* || "$DB" == postgresql://* ]]; then
+  # A Postgres database is never wiped implicitly (it is not a file that may be missing);
+  # `serve` seeds an empty one in dev, and --reseed wipes and reseeds it.
+  :
+elif [ ! -f "$DB" ]; then
   seed
 elif ! "$BIN" check-db -db "$DB" >/dev/null 2>&1; then
   # a database from an older schema (before tenancy or sign-in) has no users to sign in as
@@ -155,6 +179,8 @@ if [ "${DEVIDP:-1}" != "0" ]; then
   fi
 fi
 
+# internal /metrics listener (loopback); one port per instance so several dev instances coexist
+export TESSERA_METRICS_ADDR="${TESSERA_METRICS_ADDR:-127.0.0.1:$((API_PORT + 1000))}"
 echo "==> starting API on http://127.0.0.1:$API_PORT"
 "$BIN" serve -addr "127.0.0.1:$API_PORT" -db "$DB" &
 PIDS+=($!)
