@@ -47,11 +47,18 @@ GET    /api/reviews/campaigns                        graph.read      -
 POST   /api/reviews/campaigns                        reviews.manage  -
 GET    /api/reviews/campaigns/{campaign_id}          graph.read      -
 POST   /api/reviews/items/{item_id}/decision         reviews.decide  STEP_UP_POLICY
+GET    /api/reviews/schedules                        graph.read      -  # issue #166
+POST   /api/reviews/schedules                        reviews.manage  -  # issue #166
+PUT    /api/reviews/schedules/{schedule_id}          reviews.manage  -  # issue #166
+POST   /api/reviews/schedules/{schedule_id}/run      reviews.manage  -  # issue #166
 GET    /api/hris/events                              graph.read      -
 POST   /api/hris/events                              hris.simulate_event -
 GET    /api/hris/events/{event_id}/plan              graph.read      -
 POST   /api/hris/events/{event_id}/execute           hris.execute    STEP_UP_POLICY
 GET    /api/jml/leaver-plan/{identity_id}            graph.read      -
+GET    /api/ownership                                graph.read      -  # issue #167
+PUT    /api/ownership/{kind}/{object_key}            ownership.manage -  # issue #167
+POST   /api/ownership/bulk                           ownership.manage -  # issue #167
 GET    /openapi.json                                 auth.self       -  #
 GET    /docs                                         auth.self       -  #
 GET    /docs/oauth2-redirect                         auth.self       -  #
@@ -276,6 +283,7 @@ GET    /api/admin/notifications                      admin.read      -  # issue 
 GET    /api/admin/recovery                           admin.read      -  # issue #16
 POST   /api/admin/recovery/{recovery_id}/cancel      admin.change.request -  # issue #16
 GET    /api/admin/api-clients                        admin.read      -  # issue #16
+GET    /api/admin/platform-health                    admin.read      -  # issue #303
 `
 
 type designRoute struct {

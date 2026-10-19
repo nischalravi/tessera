@@ -438,6 +438,13 @@ CREATE POLICY tenant_isolation ON business_role_requests
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE ownerships ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ownerships FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON ownerships;
+CREATE POLICY tenant_isolation ON ownerships
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 ALTER TABLE identity_lifecycle ENABLE ROW LEVEL SECURITY;
 ALTER TABLE identity_lifecycle FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON identity_lifecycle;
@@ -757,5 +764,19 @@ ALTER TABLE request_drafts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE request_drafts FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON request_drafts;
 CREATE POLICY tenant_isolation ON request_drafts
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE review_templates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE review_templates FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON review_templates;
+CREATE POLICY tenant_isolation ON review_templates
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE review_launches ENABLE ROW LEVEL SECURITY;
+ALTER TABLE review_launches FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON review_launches;
+CREATE POLICY tenant_isolation ON review_launches
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));

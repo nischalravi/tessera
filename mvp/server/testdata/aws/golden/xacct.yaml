@@ -1,0 +1,46 @@
+# Golden corpus, cross-account: GC-52 to GC-54. Bucket tsr-prod belongs to 111111111111.
+
+- id: GC-52
+  title: Cross-account allow needs both sides
+  principal: "arn:aws:sts::222222222222:assumed-role/Demo/s"
+  identity:
+    - {"Statement": [{"Effect": "Allow", "Action": "s3:*Object*", "Resource": "arn:aws:s3:::tsr-prod/*"}]}
+  resource_policies:
+    - resource: "arn:aws:s3:::tsr-prod"
+      policy: &prodpolicy {"Statement": [{"Effect": "Allow", "Principal": {"AWS": "arn:aws:iam::222222222222:role/Demo"},
+                                          "Action": ["s3:GetObject*", "s3:PutObject*"], "Resource": "arn:aws:s3:::tsr-prod/*"}]}
+  requests:
+    - action: "s3:PutObject"
+      resource: "arn:aws:s3:::tsr-prod/x"
+      expect: {outcome: ALLOW}
+    - action: "s3:DeleteObject"
+      resource: "arn:aws:s3:::tsr-prod/x"
+      expect: {outcome: DENY, deny_kind: implicit, stage: resource_policy}
+  why: "[S3] AWS's own cross-account example."
+  verified: doc
+
+- id: GC-53
+  title: Cross-account with the bucket allowing but no identity allow
+  principal: "arn:aws:sts::222222222222:assumed-role/Demo/s"
+  identity: []
+  resource_policies:
+    - resource: "arn:aws:s3:::tsr-prod"
+      policy: *prodpolicy
+  request: {action: "s3:PutObject", resource: "arn:aws:s3:::tsr-prod/x"}
+  expect: {outcome: DENY, deny_kind: implicit, stage: identity}
+  why: "[S3][S6] both evaluations must allow."
+  verified: doc
+
+- id: GC-54
+  title: Cross-account where the bucket names the account principal
+  principal: "arn:aws:sts::222222222222:assumed-role/Demo/s"
+  identity:
+    - {"Statement": [{"Effect": "Allow", "Action": "s3:*Object*", "Resource": "arn:aws:s3:::tsr-prod/*"}]}
+  resource_policies:
+    - resource: "arn:aws:s3:::tsr-prod"
+      policy: {"Statement": [{"Effect": "Allow", "Principal": {"AWS": "222222222222"},
+                              "Action": ["s3:GetObject*", "s3:PutObject*"], "Resource": "arn:aws:s3:::tsr-prod/*"}]}
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-prod/x"}
+  expect: {outcome: ALLOW}
+  why: "[S5][S6] the account delegates; Demo's identity policy allows."
+  verified: doc
