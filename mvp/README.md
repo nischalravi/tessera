@@ -251,6 +251,8 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `GET|POST /api/hris/events` (422 for an unknown `identity_id`) · `GET /api/hris/events/{id}/plan` · `POST /api/hris/events/{id}/execute` ·
 `GET /api/jml/leaver-plan/{identity_id}` · `POST /api/identities/{id}/contain` (kill switch, see "Identity containment") · `POST /api/identities/{id}/disable|enable` ·
 `PUT /api/connections/{id}/containment-credential` · `GET /api/accounts[?system=]` ·
+`GET|POST /api/siem/sinks` · `PUT /api/siem/sinks/{id}` · `POST /api/siem/sinks/{id}/rewind {seq}` ·
+`POST /api/siem/sinks/{id}/test` · `GET /api/siem/sinks/{id}/dead-letters` ·
 `GET /api/alerts[?status=open|acknowledged|resolved|live&severity=&rule=]` · `GET /api/alerts/summary` · `GET /api/alerts/{id}` ·
 `POST /api/alerts/{id}/acknowledge|resolve|assign` · `GET /api/alerts/rules` · `PUT /api/alerts/rules/{rule_id}` ·
 `GET|POST /api/alerts/channels` · `PUT /api/alerts/channels/{id}` · `POST /api/alerts/channels/{id}/test` ·
@@ -322,6 +324,42 @@ Each route declares the permission it needs (design §12.1, §16.2; `api.Routes(
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
 or HRIS execution is always the signed-in user.
 
+### SIEM streaming
+
+`tessera serve` pushes each tenant's audit ledger to its SIEM sinks every 15 seconds (`internal/siem`, issue #169).
+The pull export (`/api/audit/export`) stays available.
+
+- **Destinations:**
+  - **Splunk HEC:** newline-separated HEC envelopes, sent with `Authorization: Splunk <token>`, `sourcetype` set to `tessera:audit` or `tessera:ocsf`, and `host` set to the tenant slug.
+  - **HTTPS JSON:** a JSON array of events with an optional bearer token. Use it for Microsoft Sentinel's Logs Ingestion API, Cribl or Logstash.
+  - **Syslog over TLS (RFC 5425):**
+    - Messages are RFC 5424 with octet-counting framing, facility 13 (log audit), and the severity taken from the event's outcome.
+    - Each message carries structured data `[tessera@32473 seq=… hash=…]`.
+    - The port defaults to 6514. A private CA can be given as PEM.
+- **Formats:**
+  - `json` is the export record. It carries `hash` and `prev_hash`, so the SIEM can recompute the chain.
+  - `ocsf` is OCSF 1.3: Authentication (3002) for sign-in and sign-out, Account Change (3001) for role grants and revokes and user disables, and API Activity (6003) for everything else.
+  - The chain fields go under `unmapped.tessera`.
+  - The mapping is pinned by golden files in `internal/siem/testdata`.
+- **Delivery:**
+  - At least once, in seq order, from a durable cursor per sink. The cursor moves only after the destination accepts a batch of up to 200 events, so restarts and outages leave no gaps.
+  - New sinks start at the current head by default, or can replay the whole ledger with `start: "beginning"`. **Replay** in the UI (a rewind) sends everything again.
+  - `http.request` events are left out unless `include_http` is set.
+  - Failures back off from 10 s up to 30 min.
+  - After 3 consecutive failures the sink shows as **failing**, recorded as audit event `siem.sink.failing` (and `siem.sink.recovered` when it recovers).
+  - A batch the destination rejects outright (a 4xx other than 408 or 429) is retried 5 times, then dead-lettered and skipped (`siem.sink.dead_letter`). Retryable errors are never skipped.
+- **Health:** healthy, catching up, retrying, failing or paused. The lag counts the events the sink still has to send.
+- **Security:**
+  - Webhooks go through `internal/safehttp`.
+  - Syslog collectors are checked against the same address rules after DNS resolution, and the dial goes to the checked address. Private, loopback (outside dev) and cloud-metadata addresses are refused.
+  - Tokens are sealed under the KEK, never returned, and kept out of the audit log.
+  - Webhook URLs are shown without their query string.
+  - Creating or changing a sink needs step-up.
+- **Permissions:**
+  - `siem.read`: auditor and tenant_admin, plus the `tessera:audit` scope.
+  - `siem.configure`: tenant_admin, plus the `tessera:admin` scope.
+- **UI:** **Admin > Log streaming (SIEM)** lists each sink with its health, delivered count, dead letters, and Test, Replay and Edit actions.
+- **Not yet:** S3-compatible bucket sinks.
 ### Alerts
 
 The alert engine (`internal/alerts`, issue #168) runs every minute in `tessera serve`. It reads new audit
@@ -1640,6 +1678,18 @@ cd ../frontend && npm run build && npm test   # npm test: node:test, no extra de
   the jobs show `runner_id=0` with no steps, they never ran (see the annotations, usually billing).
 * **Security scanners:** gosec reports 0 issues; each of the few `#nosec` annotations carries a
   justification. govulncheck reports no vulnerabilities.
+* **AWS evaluator indexes and queries** (`internal/aws/index`, `internal/aws/query`, pure, no
+  behaviour change to the API yet). `TestAtomsEqualBruteForce` and `TestDiffEqualsBruteForce`
+  check atom-based answers against the engine cell by cell on small random tenants
+  (`awstest.NewWorld(seed)`); `TESSERA_EQUIV_SEEDS=200` runs more seeds and
+  `go test -fuzz FuzzAtomsEqualBruteForce ./internal/aws/query` explores others.
+  `go test -bench . -run XXX ./internal/aws/query` runs the benchmarks (track with `benchstat`).
+  The nightly SLO check against a synthetic tenant at twice the design's target scale is
+  `go test -tags slow -run TestPerf -timeout 90m ./internal/aws/query`. It needs about 8 GB of
+  memory and a quiet machine (the SLOs are for 16 vCPU). Options: `TESSERA_PERF_SCALE=1` for the
+  target itself, `TESSERA_PERF_SAMPLE=n` for the number of sampled principals,
+  `TESSERA_PERF_PROFILE=<dir>` for CPU and heap profiles (keep `<dir>` out of the repository), and
+  `TESSERA_PERF_ROOT=1` for the root-SCP diff.
 
 ## Server hardening
 

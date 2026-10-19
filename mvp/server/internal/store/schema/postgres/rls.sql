@@ -780,3 +780,17 @@ DROP POLICY IF EXISTS tenant_isolation ON alert_cursors;
 CREATE POLICY tenant_isolation ON alert_cursors
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE siem_sinks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE siem_sinks FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON siem_sinks;
+CREATE POLICY tenant_isolation ON siem_sinks
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE siem_dead_letters ENABLE ROW LEVEL SECURITY;
+ALTER TABLE siem_dead_letters FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON siem_dead_letters;
+CREATE POLICY tenant_isolation ON siem_dead_letters
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
