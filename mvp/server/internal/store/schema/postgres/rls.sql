@@ -745,3 +745,38 @@ DROP POLICY IF EXISTS tenant_isolation ON review_launches;
 CREATE POLICY tenant_isolation ON review_launches
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE alert_rule_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE alert_rule_settings FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON alert_rule_settings;
+CREATE POLICY tenant_isolation ON alert_rule_settings
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE alerts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE alerts FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON alerts;
+CREATE POLICY tenant_isolation ON alerts
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE alert_channels ENABLE ROW LEVEL SECURITY;
+ALTER TABLE alert_channels FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON alert_channels;
+CREATE POLICY tenant_isolation ON alert_channels
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE alert_deliveries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE alert_deliveries FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON alert_deliveries;
+CREATE POLICY tenant_isolation ON alert_deliveries
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE alert_cursors ENABLE ROW LEVEL SECURITY;
+ALTER TABLE alert_cursors FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON alert_cursors;
+CREATE POLICY tenant_isolation ON alert_cursors
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));

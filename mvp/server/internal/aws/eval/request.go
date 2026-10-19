@@ -4,7 +4,7 @@ import "errors"
 
 // EngineVersion is recorded on every decision (§6.1). Bump it when a change
 // can alter a decision or a trace.
-const EngineVersion = "aws-eval/0.1.0"
+const EngineVersion = "aws-eval/0.2.0"
 
 // Catalog is the engine's view of the action, resource and condition-key
 // catalog (§10). internal/aws/catalog satisfies it; the engine never reads
@@ -29,6 +29,59 @@ type Catalog interface {
 	// verified is false for a service no probe or doc has covered; the engine
 	// then applies the union rule and flags SERVICE_RBP_RULE_UNVERIFIED.
 	RequiresExplicitRBP(servicePrefix string) (explicit, verified bool)
+	// KMSCrossAccountOp reports whether a kms: action can be authorized across
+	// accounts: the cryptographic operations, CreateGrant, DescribeKey,
+	// GetKeyRotationStatus, GetPublicKey, ListGrants, RetireGrant and
+	// RevokeGrant (§7.6.1; overlay kms_xacct_ops.yaml). Any other kms: action
+	// on a key in another account is a guardrail deny.
+	KMSCrossAccountOp(action string) bool
+	// S3ACLActions lists the access-policy actions an ACL permission ("READ",
+	// "WRITE", "READ_ACP", "WRITE_ACP", "FULL_CONTROL") stands for at a scope
+	// (§7.6.2; overlay s3_acl_map.yaml).
+	S3ACLActions(scope S3ACLScope, permission string) []string
+	// S3ACLGroup describes a predefined ACL group by URI.
+	S3ACLGroup(uri string) (S3ACLGroup, bool)
+	// S3PublicFixedKey reports whether a lower-cased condition key can make a
+	// statement of a public-looking policy non-public, and how
+	// (overlay s3_public_fixed_keys.yaml).
+	S3PublicFixedKey(lowerKey string) (S3PublicKeyRule, bool)
+}
+
+// S3ACLScope is where an ACL lives: on a bucket or on an object.
+type S3ACLScope uint8
+
+const (
+	S3ACLBucket S3ACLScope = iota
+	S3ACLObject
+)
+
+// S3ACLGroup is a predefined ACL grantee group.
+type S3ACLGroup struct {
+	Name   string // "AllUsers", "AuthenticatedUsers", "LogDelivery"
+	Public bool   // AllUsers and AuthenticatedUsers
+}
+
+// S3PublicRuleKind says how a condition key pins a policy statement.
+type S3PublicRuleKind uint8
+
+const (
+	// S3FixedValue: every value is fixed (no wildcard, no variable).
+	S3FixedValue S3PublicRuleKind = iota
+	// S3IPRange: every range is no broader than the CIDR limits, or private.
+	S3IPRange
+)
+
+// S3PublicKeyRule is one entry of s3_public_fixed_keys.yaml.
+type S3PublicKeyRule struct {
+	Kind S3PublicRuleKind
+	// ExceptPatterns are values that do not pin the key (aws:userid
+	// "AROLEID:*": a role id with any session name).
+	ExceptPatterns []string
+	// IPv4MaxCIDR and IPv6MaxCIDR: a range with a shorter prefix is public.
+	IPv4MaxCIDR, IPv6MaxCIDR int
+	// BucketPoliciesOnly: the key counts for bucket policies, not for access
+	// point policies.
+	BucketPoliciesOnly bool
 }
 
 // SessionSpec describes a hypothetical session (§7.3): it overrides what the
@@ -62,6 +115,10 @@ type EvaluationRequest struct {
 	// ViaAWSService marks a call made by an AWS service on the principal's
 	// behalf; otherwise aws:ViaAWSService and aws:CalledVia* are absent.
 	ViaAWSService bool `json:"via_aws_service"`
+	// S3ObjectOwner is the account that owns the object, when it is not the
+	// bucket owner (§7.6.2 object context). Empty means the bucket owner is
+	// assumed, and the decision carries S3_OBJECT_OWNER_UNKNOWN if that matters.
+	S3ObjectOwner string `json:"s3_object_owner"`
 }
 
 // Platform implements authz.Request.
@@ -88,4 +145,8 @@ const (
 	// reasonResourceAccountUnknown: the resource's owning account is not in the
 	// snapshot, so same-account was assumed.
 	reasonResourceAccountUnknown = "RESOURCE_ACCOUNT_UNKNOWN"
+	// reasonS3ObjectOwnerUnknown: an object action on a bucket whose ACLs are
+	// enabled; Tessera does not inventory objects, so the object owner is
+	// assumed to be the bucket owner (§7.6.2).
+	reasonS3ObjectOwnerUnknown = "S3_OBJECT_OWNER_UNKNOWN"
 )
