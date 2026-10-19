@@ -1,0 +1,22 @@
+{
+ "name": "401 from Okta",
+ "interactions": [
+  {
+   "request": {
+    "method": "GET",
+    "path": "/api/v1/users",
+    "query": {
+     "search": "profile.login eq \"alice@larkspur.example\""
+    }
+   },
+   "response": {
+    "status": 401,
+    "headers": {},
+    "body": {
+     "errorCode": "E0000011",
+     "errorSummary": "Invalid token provided"
+    }
+   }
+  }
+ ]
+}

@@ -1,0 +1,72 @@
+{
+ "name": "create with activate=true; user is firstName/lastName from the display name",
+ "interactions": [
+  {
+   "request": {
+    "method": "GET",
+    "path": "/api/v1/users",
+    "query": {
+     "search": "profile.login eq \"bob@larkspur.example\""
+    }
+   },
+   "response": {
+    "status": 200,
+    "headers": {},
+    "body": []
+   }
+  },
+  {
+   "request": {
+    "method": "POST",
+    "path": "/api/v1/users",
+    "query": {
+     "activate": "true"
+    },
+    "body_contains": [
+     "\"firstName\":\"Bob\"",
+     "\"lastName\":\"Ng\"",
+     "\"login\":\"bob@larkspur.example\""
+    ]
+   },
+   "response": {
+    "status": 200,
+    "headers": {},
+    "body": {
+     "id": "00u2",
+     "status": "PROVISIONED",
+     "profile": {
+      "login": "bob@larkspur.example",
+      "email": "bob@larkspur.example",
+      "firstName": "Alice",
+      "lastName": "Park"
+     }
+    }
+   }
+  },
+  {
+   "request": {
+    "method": "GET",
+    "path": "/api/v1/users",
+    "query": {
+     "search": "profile.login eq \"bob@larkspur.example\""
+    }
+   },
+   "response": {
+    "status": 200,
+    "headers": {},
+    "body": [
+     {
+      "id": "00u2",
+      "status": "PROVISIONED",
+      "profile": {
+       "login": "bob@larkspur.example",
+       "email": "bob@larkspur.example",
+       "firstName": "Alice",
+       "lastName": "Park"
+      }
+     }
+    ]
+   }
+  }
+ ]
+}

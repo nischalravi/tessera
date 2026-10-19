@@ -1,0 +1,113 @@
+{
+ "name": "a Link rel=next naming another host is refused",
+ "interactions": [
+  {
+   "request": {
+    "method": "GET",
+    "path": "/api/v1/users",
+    "query": {
+     "search": "profile.login eq \"bob@larkspur.example\""
+    }
+   },
+   "response": {
+    "status": 200,
+    "headers": {},
+    "body": [
+     {
+      "id": "00u2",
+      "status": "ACTIVE",
+      "profile": {
+       "login": "bob@larkspur.example",
+       "email": "bob@larkspur.example",
+       "firstName": "Alice",
+       "lastName": "Park"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "request": {
+    "method": "GET",
+    "path": "/api/v1/groups/00g1"
+   },
+   "response": {
+    "status": 200,
+    "headers": {},
+    "body": {
+     "id": "00g1",
+     "profile": {
+      "name": "engineering"
+     }
+    }
+   }
+  },
+  {
+   "request": {
+    "method": "GET",
+    "path": "/api/v1/groups/00g1/users",
+    "query": {
+     "limit": "200"
+    }
+   },
+   "response": {
+    "status": 200,
+    "headers": {
+     "Link": "<http://evil.example/api/v1/groups/00g1/users?after=abc>; rel=\"next\""
+    },
+    "body": [
+     {
+      "id": "00u100",
+      "status": "ACTIVE",
+      "profile": {
+       "login": "m0@larkspur.example",
+       "email": "m0@larkspur.example",
+       "firstName": "Alice",
+       "lastName": "Park"
+      }
+     },
+     {
+      "id": "00u101",
+      "status": "ACTIVE",
+      "profile": {
+       "login": "m1@larkspur.example",
+       "email": "m1@larkspur.example",
+       "firstName": "Alice",
+       "lastName": "Park"
+      }
+     },
+     {
+      "id": "00u102",
+      "status": "ACTIVE",
+      "profile": {
+       "login": "m2@larkspur.example",
+       "email": "m2@larkspur.example",
+       "firstName": "Alice",
+       "lastName": "Park"
+      }
+     },
+     {
+      "id": "00u103",
+      "status": "ACTIVE",
+      "profile": {
+       "login": "m3@larkspur.example",
+       "email": "m3@larkspur.example",
+       "firstName": "Alice",
+       "lastName": "Park"
+      }
+     },
+     {
+      "id": "00u104",
+      "status": "ACTIVE",
+      "profile": {
+       "login": "m4@larkspur.example",
+       "email": "m4@larkspur.example",
+       "firstName": "Alice",
+       "lastName": "Park"
+      }
+     }
+    ]
+   }
+  }
+ ]
+}

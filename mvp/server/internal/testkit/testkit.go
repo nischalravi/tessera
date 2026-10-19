@@ -15,6 +15,8 @@ package testkit
 
 import (
 	"context"
+	"maps"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -50,7 +52,7 @@ type DB struct {
 // Open opens an empty database in a temporary directory.
 func Open(tb testing.TB) *store.DB {
 	tb.Helper()
-	st, err := store.Open(context.Background(), filepath.Join(tb.TempDir(), "test.db"))
+	st, err := store.Open(context.Background(), store.TestTarget(tb))
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -69,48 +71,121 @@ func CreateTenant(tb testing.TB, db *store.DB, id tenancy.ID, slug string) {
 	}
 }
 
+var tiny struct {
+	once sync.Once
+	db   []byte // SQLite: the loaded file
+	src  string // Postgres: the template database
+	ids  IDs
+	err  error
+}
+
 // Tiny returns a database whose tenant TinyTenant holds the tiny world (usage
-// relative to Now).
+// relative to Now). The world is loaded once per test binary; every call gets
+// its own copy of that database, with the same ids.
 func Tiny(tb testing.TB) (*DB, IDs) {
 	tb.Helper()
-	db := &DB{Open(tb), TinyTenant}
-	CreateTenant(tb, db.DB, TinyTenant, "tiny")
-	Write(tb, db, func(c *store.TenantTx) error {
-		_, err := ingest.Sync(c, Now, []connectors.Connector{TinyConnector{Now: Now}}, nil)
+	tiny.once.Do(buildTiny)
+	if tiny.err != nil {
+		tb.Fatal(tiny.err)
+	}
+	target := tiny.src
+	if tiny.db != nil { // SQLite: a private copy of the loaded file
+		target = filepath.Join(tb.TempDir(), "test.db")
+		if err := os.WriteFile(target, tiny.db, 0o600); err != nil {
+			tb.Fatal(err)
+		}
+	} else { // Postgres: a database created from the loaded template
+		target = store.TestClone(tb, tiny.src)
+	}
+	st, err := store.Open(context.Background(), target)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	tb.Cleanup(func() { _ = st.Close() })
+	return &DB{st, TinyTenant}, maps.Clone(tiny.ids)
+}
+
+func buildTiny() {
+	dir, err := makeTempDir()
+	if err != nil {
+		tiny.err = err
+		return
+	}
+	defer os.RemoveAll(dir)
+	// A SQLite file in dir, or (TESSERA_TEST_PG_URL) a Postgres template database.
+	src, err := store.TestSharedTarget(dir, "tiny", func(target string) error {
+		ctx := context.Background()
+		st, err := store.Open(ctx, target)
+		if err != nil {
+			return err
+		}
+		defer st.Close()
+		err = st.InSystem(ctx, "test fixture", func(s *store.SystemTx) error {
+			_, err := s.CreateTenant(store.Tenant{ID: TinyTenant, Slug: "tiny", Name: "tiny", CreatedAt: Now})
+			return err
+		})
+		if err == nil {
+			err = st.InTenant(ctx, TinyTenant, func(c *store.TenantTx) error {
+				_, err := ingest.Sync(c, Now, []connectors.Connector{TinyConnector{Now: Now}}, nil)
+				return err
+			})
+		}
+		if err == nil {
+			err = st.ReadTenant(ctx, TinyTenant, func(c *store.TenantTx) error { tiny.ids, err = loadIDs(c); return err })
+		}
+		if err == nil {
+			err = st.Checkpoint(ctx)
+		}
+		if err == nil {
+			err = st.Close()
+		}
 		return err
 	})
-	return db, LoadIDs(tb, db)
+	if err == nil {
+		if store.IsPostgresDSN(src) {
+			tiny.src = src
+		} else {
+			tiny.db, err = os.ReadFile(src) // #nosec G304 -- path made above
+		}
+	}
+	tiny.err = err
 }
 
 // LoadIDs builds the id map for the current contents of db's tenant.
 func LoadIDs(tb testing.TB, db *DB) IDs {
 	tb.Helper()
-	ids := IDs{}
-	Read(tb, db, func(c *store.TenantTx) error {
-		idents, err := c.Identities()
-		if err != nil {
-			return err
-		}
-		for _, i := range idents {
-			ids[i.ExternalID] = i.ID
-		}
-		accts, err := c.Accounts()
-		if err != nil {
-			return err
-		}
-		for _, a := range accts {
-			ids["acct:"+a.System+":"+a.ExternalID] = a.ID
-		}
-		groups, err := c.Groups()
-		if err != nil {
-			return err
-		}
-		for _, g := range groups {
-			ids["group:"+g.System+":"+g.ExternalID] = g.ID
-		}
-		return nil
+	var ids IDs
+	Read(tb, db, func(c *store.TenantTx) (err error) {
+		ids, err = loadIDs(c)
+		return err
 	})
 	return ids
+}
+
+func loadIDs(c *store.TenantTx) (IDs, error) {
+	ids := IDs{}
+	idents, err := c.Identities()
+	if err != nil {
+		return nil, err
+	}
+	for _, i := range idents {
+		ids[i.ExternalID] = i.ID
+	}
+	accts, err := c.Accounts()
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range accts {
+		ids["acct:"+a.System+":"+a.ExternalID] = a.ID
+	}
+	groups, err := c.Groups()
+	if err != nil {
+		return nil, err
+	}
+	for _, g := range groups {
+		ids["group:"+g.System+":"+g.ExternalID] = g.ID
+	}
+	return ids, nil
 }
 
 // Read runs fn in a read-only transaction of db's tenant, failing the test on error.
@@ -154,6 +229,7 @@ func Policies(tb testing.TB) []*policy.Policy {
 var (
 	demoOnce sync.Once
 	demoDir  string
+	demoSrc  string
 	demoErr  error
 )
 
@@ -168,30 +244,29 @@ func demoPath() (string, error) {
 			return
 		}
 		demoDir = dir
-		ctx := context.Background()
-		st, err := store.Open(ctx, filepath.Join(dir, "demo.db"))
-		if err != nil {
-			demoErr = err
-			return
-		}
-		defer st.Close()
-		pols, err := policy.NewLoader(policies.FS).Load()
-		if err != nil {
-			demoErr = err
-			return
-		}
-		conns, err := connectors.Load("demo", Now)
-		if err != nil {
-			demoErr = err
-			return
-		}
-		if _, err := seed.Run(ctx, st, Now, pols, []seed.Tenant{seed.Larkspur(conns)}); err != nil {
-			demoErr = err
-			return
-		}
-		demoErr = st.Checkpoint(ctx)
+		// A SQLite file in dir, or (TESSERA_TEST_PG_URL) a Postgres template database.
+		demoSrc, demoErr = store.TestSharedTarget(dir, "demo", func(target string) error {
+			ctx := context.Background()
+			st, err := store.Open(ctx, target)
+			if err != nil {
+				return err
+			}
+			defer st.Close()
+			pols, err := policy.NewLoader(policies.FS).Load()
+			if err != nil {
+				return err
+			}
+			conns, err := connectors.Load("demo", Now)
+			if err != nil {
+				return err
+			}
+			if _, err := seed.Run(ctx, st, Now, pols, []seed.Tenant{seed.Larkspur(conns)}); err != nil {
+				return err
+			}
+			return st.Checkpoint(ctx)
+		})
 	})
-	return filepath.Join(demoDir, "demo.db"), demoErr
+	return demoSrc, demoErr
 }
 
 // Demo returns a private, writable copy of the seeded demo company database
@@ -202,11 +277,7 @@ func Demo(tb testing.TB) *DB {
 	if err != nil {
 		tb.Fatal(err)
 	}
-	dst := filepath.Join(tb.TempDir(), "demo.db")
-	if err := copyFile(src, dst); err != nil {
-		tb.Fatal(err)
-	}
-	st, err := store.Open(context.Background(), dst)
+	st, err := store.Open(context.Background(), store.TestClone(tb, src))
 	if err != nil {
 		tb.Fatal(err)
 	}

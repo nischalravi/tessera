@@ -1,0 +1,69 @@
+{
+  "activity_id": 7,
+  "activity_name": "Attach Policy",
+  "actor": {
+    "app_name": "Tessera",
+    "user": {
+      "name": "Alice (tenant admin)",
+      "type": "user",
+      "uid": "2b3c0e0e-1111-4222-8333-444455556666"
+    }
+  },
+  "category_name": "Identity & Access Management",
+  "category_uid": 3,
+  "class_name": "Account Change",
+  "class_uid": 3001,
+  "message": "auth.role.granted",
+  "metadata": {
+    "labels": [
+      "tenant:larkspur"
+    ],
+    "log_name": "tessera.audit",
+    "original_time": "2026-10-11T09:30:00.123Z",
+    "product": {
+      "feature": {
+        "name": "audit"
+      },
+      "name": "Tessera",
+      "vendor_name": "Tessera"
+    },
+    "sequence": 3,
+    "tenant_uid": "00000000-0000-4000-8000-0000000000aa",
+    "uid": "00000000-0000-4000-8000-000000000003",
+    "version": "1.3.0"
+  },
+  "policy": {
+    "name": "tenant_admin"
+  },
+  "severity": "Informational",
+  "severity_id": 1,
+  "src_endpoint": {
+    "ip": "203.0.113.7"
+  },
+  "status": "Success",
+  "status_detail": "success",
+  "status_id": 1,
+  "time": 1791711000123,
+  "type_name": "Account Change: Attach Policy",
+  "type_uid": 300107,
+  "unmapped": {
+    "tessera": {
+      "action": "auth.role.granted",
+      "detail": {
+        "role": "tenant_admin",
+        "user": "pat@larkspur.example"
+      },
+      "hash": "hash3",
+      "outcome": "success",
+      "prev_hash": "prev3",
+      "seq": 3,
+      "target_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "target_type": "platform_user",
+      "tenant_id": "00000000-0000-4000-8000-0000000000aa"
+    }
+  },
+  "user": {
+    "name": "pat@larkspur.example",
+    "uid": "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+  }
+}

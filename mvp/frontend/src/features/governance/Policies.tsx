@@ -5,6 +5,7 @@ import { Group, IdentityDetail, IdentityRow, Policy, SimResult, Violation, simul
 import { useIdentityActions } from "../../app/actions";
 import { Badge, Button, Callout, DataTable, EmptyState, Loading, Page, Sev, SimulationView, Tabs, useSelected } from "../../components";
 import { ViolationPanel } from "../directory/Panels";
+import { SodFunctionsView, SodRisksView, SodRulesetsView } from "./SodModel";
 
 function Simulator() {
   const { data: idents } = useApi<IdentityRow[]>("/identities?status=active");
@@ -73,7 +74,7 @@ function Simulator() {
   );
 }
 
-type View = "violations" | "policies" | "simulate";
+type View = "violations" | "policies" | "simulate" | "functions" | "risks" | "rulesets";
 
 export function Policies() {
   const { data: policies, error, reload: reloadPolicies } = useApi<Policy[]>("/policies");
@@ -98,6 +99,9 @@ export function Policies() {
       { id: "violations", label: `Violations${violations ? ` (${violations.length})` : ""}` },
       { id: "policies", label: `Policies${policies ? ` (${policies.length})` : ""}` },
       { id: "simulate", label: "What-if simulation" },
+      { id: "functions", label: "Functions" },
+      { id: "risks", label: "Risks" },
+      { id: "rulesets", label: "Rulesets" },
     ]} />
   );
   if (!policies) return <Page title="Policies & SoD" crumbs={crumbs} tabs={tabs}><Loading error={error} kind="page" /></Page>;
@@ -108,7 +112,10 @@ export function Policies() {
       count={violations ? `${violations.length} open violation${violations.length === 1 ? "" : "s"}` : undefined}
       crumbs={crumbs}
       tabs={tabs}
-      sub={view === "policies" ? <>Policies are YAML files in <code>server/policies/</code>, evaluated against the effective-permission graph. Edit a file and reload; no restart needed.</> : undefined}
+      sub={view === "functions" ? "Reusable sets of entitlements, such as “Create supplier payments”. Risks name the functions nobody should hold together."
+        : view === "risks" ? "A risk is a prioritised conflict between two or more functions. An identity violates it by holding an entitlement of each, through any path."
+        : view === "rulesets" ? "Rulesets group risks, can be switched off per tenant, keep their versions and round-trip as YAML files."
+        : view === "policies" ? <>Policies are YAML files in <code>server/policies/</code>, evaluated against the effective-permission graph. Edit a file and reload; no restart needed.</> : undefined}
     >
       {view === "violations" && (
         <>
@@ -165,6 +172,9 @@ export function Policies() {
         </div>
       )}
       {view === "simulate" && <div style={{ maxWidth: 820 }}><Simulator /></div>}
+      {view === "functions" && <SodFunctionsView />}
+      {view === "risks" && <SodRisksView />}
+      {view === "rulesets" && <SodRulesetsView />}
     </Page>
   );
 }

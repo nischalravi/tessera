@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
@@ -15,10 +17,13 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/ingest"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
 	"github.com/nischalravi/tessera/mvp/server/internal/jml"
+	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/leastpriv"
 	"github.com/nischalravi/tessera/mvp/server/internal/nhi"
+	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
+	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/reviews"
 	"github.com/nischalravi/tessera/mvp/server/internal/simulate"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -38,7 +43,7 @@ func (s *Server) registerRoutes() {
 	G, P := http.MethodGet, http.MethodPost
 	s.handle(G, "/api/health", noTenant, publicRoute, s.health)
 	s.handle(G, "/api/connectors", read, need(auth.PermGraphRead), s.listConnectors)
-	s.handle(P, "/api/connectors/sync", write, need(auth.PermConnectorsSync), s.syncConnectors)
+	s.handle(P, "/api/connectors/sync", write, need(auth.PermConnectorsSync), s.syncConnectors).asJob(jobs.Sync, "")
 	s.handle(G, "/api/summary", swept, need(auth.PermGraphRead), s.summary)
 	s.handle(G, "/api/identities", swept, need(auth.PermGraphRead), s.listIdentities)
 	s.handle(G, "/api/identities/{identity_id}", swept, need(auth.PermGraphRead), s.identityDetail)
@@ -62,7 +67,7 @@ func (s *Server) registerRoutes() {
 		needStepUp(auth.PermJITDecide, auth.StepUpPolicy), s.jitDecide("approve"))
 	s.handle(P, "/api/jit/requests/{request_id}/deny", write, need(auth.PermJITDenyRevoke), s.jitDecide("deny"))
 	s.handle(P, "/api/jit/requests/{request_id}/revoke", write, need(auth.PermJITDenyRevoke), s.jitDecide("revoke"))
-	s.handle(P, "/api/jit/sweep", write, need(auth.PermJITSweep), s.jitSweep)
+	s.handle(P, "/api/jit/sweep", write, need(auth.PermJITSweep), s.jitSweep).asJob(jobs.JITSweep, "")
 	s.handle(G, "/api/reviews/campaigns", read, need(auth.PermGraphRead), s.listCampaigns)
 	s.handle(P, "/api/reviews/campaigns", write, need(auth.PermReviewsManage), s.createCampaign)
 	s.handle(G, "/api/reviews/campaigns/{campaign_id}", read, need(auth.PermGraphRead), s.campaign)
@@ -70,7 +75,7 @@ func (s *Server) registerRoutes() {
 	s.handle(G, "/api/hris/events", read, need(auth.PermGraphRead), s.hrisEvents)
 	s.handle(P, "/api/hris/events", write, need(auth.PermHRISSimulateEvent), s.hrisCreate)
 	s.handle(G, "/api/hris/events/{event_id}/plan", read, need(auth.PermGraphRead), s.hrisPlan)
-	s.handle(P, "/api/hris/events/{event_id}/execute", phased, needStepUp(auth.PermHRISExecute, auth.StepUpPolicy), s.hrisExecute)
+	s.handle(P, "/api/hris/events/{event_id}/execute", phased, needStepUp(auth.PermHRISExecute, auth.StepUpPolicy), s.hrisExecute).asJob(jobs.Provision, "")
 	s.handle(G, "/api/jml/leaver-plan/{identity_id}", read, need(auth.PermGraphRead), s.leaverPlan)
 	s.handle(G, "/openapi.json", noTenant, need(auth.PermAuthenticated), s.openAPI)
 	s.handle(G, "/docs", noTenant, need(auth.PermAuthenticated), s.swaggerUI)
@@ -106,7 +111,7 @@ func (s *Server) newAnalysis(c *store.TenantTx) (*analysis, error) {
 			}
 		}
 	}
-	pols, err := s.policies()
+	pols, err := s.effectivePolicies(c)
 	if err != nil {
 		return nil, err
 	}
@@ -253,20 +258,54 @@ func (s *Server) health(_ http.ResponseWriter, _ *http.Request, _ *params) (any,
 	return ojson.Object{{Key: "status", Value: "ok"}, {Key: "time", Value: timeutil.ISO(s.clock())}}, nil
 }
 
-func (s *Server) listConnectors(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+// source is one entry of the tenant's source list: a legacy connector or a
+// live governed connection (readiness state active or degraded).
+type source struct{ system, name, typeName string }
+
+// sources is the single source of truth for what counts as a source or
+// application: the legacy connectors plus the governed connections that are
+// live. Draft, not-yet-active and retired connections are not listed. A
+// governed connection on a system a legacy connector already covers is not
+// listed twice. /api/connectors, the Applications list and page and the Home
+// source and connection counts all read this list.
+func (s *Server) sources(c *store.TenantTx) ([]source, error) {
 	conns, err := s.cfg.Connectors(s.clock())
 	if err != nil {
 		return nil, err
 	}
-	c := store.TxFrom(r.Context())
-	out := []ojson.Object{}
+	var out []source
+	seen := map[string]bool{}
 	for _, cn := range conns {
-		n, err := c.CountSystem(cn.System())
+		out = append(out, source{cn.System(), cn.DisplayName(), cn.TypeName()})
+		seen[cn.System()] = true
+	}
+	live, err := s.readiness.ActiveConnections(c)
+	if err != nil {
+		return nil, err
+	}
+	for _, ac := range live {
+		if !seen[ac.System()] {
+			out = append(out, source{ac.System(), ac.Name(), ac.ConnectorType()})
+			seen[ac.System()] = true
+		}
+	}
+	return out, nil
+}
+
+func (s *Server) listConnectors(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+	c := store.TxFrom(r.Context())
+	srcs, err := s.sources(c)
+	if err != nil {
+		return nil, err
+	}
+	out := []ojson.Object{}
+	for _, cn := range srcs {
+		n, err := c.CountSystem(cn.system)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, ojson.Object{{Key: "system", Value: cn.System()}, {Key: "name", Value: cn.DisplayName()},
-			{Key: "type", Value: cn.TypeName()}, {Key: "accounts", Value: n.Accounts}, {Key: "groups", Value: n.Groups},
+		out = append(out, ojson.Object{{Key: "system", Value: cn.system}, {Key: "name", Value: cn.name},
+			{Key: "type", Value: cn.typeName}, {Key: "accounts", Value: n.Accounts}, {Key: "groups", Value: n.Groups},
 			{Key: "resources", Value: n.Resources}, {Key: "permissions", Value: n.Permissions}})
 	}
 	return out, nil
@@ -780,6 +819,10 @@ func (s *Server) graphView(_ http.ResponseWriter, r *http.Request, p *params) (a
 	switch {
 	case identityID != nil:
 		start := graph.Key("identity", *identityID)
+		if n := g.Node(start); n == nil || n.Kind == "" {
+			// Unknown here, or another tenant's: the same answer either way.
+			return nil, errStatus(http.StatusNotFound, "identity not found")
+		}
 		nodes[start] = true
 		eff := g.EffectivePermissions(*identityID)
 		for _, pk := range eff.Keys {
@@ -797,6 +840,9 @@ func (s *Server) graphView(_ http.ResponseWriter, r *http.Request, p *params) (a
 		}
 	case resourceID != nil:
 		res := graph.Key("resource", *resourceID)
+		if n := g.Node(res); n == nil || n.Kind == "" {
+			return nil, errStatus(http.StatusNotFound, "resource not found")
+		}
 		nodes[res] = true
 		ids, who := g.WhoCanAccess(*resourceID)
 		for _, iid := range ids {
@@ -924,6 +970,10 @@ type revokeResult struct {
 	DryRun  bool     `json:"dry_run"`
 	Grant   grantRef `json:"grant"`
 	Applied *bool    `json:"applied,omitempty"`
+	// Provisioning is set when the revoke went to the target system through
+	// the provisioning engine (write-back on): applied is false until a
+	// re-read of the target confirms it, and the edge stays until then.
+	Provisioning *provisioningRef `json:"provisioning,omitempty"`
 }
 
 func (s *Server) revoke(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
@@ -966,6 +1016,13 @@ func (s *Server) revoke(_ http.ResponseWriter, r *http.Request, p *params) (any,
 	if dryRun {
 		return out, nil
 	}
+	if op, err := routeGrantRevoke(c, a.now, e, out.Grant.Label, res.Summary.PermissionsRemoved); err != nil {
+		return nil, err
+	} else if op != nil {
+		applied := false
+		out.Applied, out.Provisioning = &applied, refOf(op)
+		return out, nil
+	}
 	if err := c.Audit(a.now, pr.Display, "grant.revoke", ojson.Object{{Key: "edge_id", Value: e.ID},
 		{Key: "grant", Value: out.Grant.Label}, {Key: "permissions_removed", Value: res.Summary.PermissionsRemoved}}); err != nil {
 		return nil, err
@@ -993,11 +1050,29 @@ func (s *Server) listPolicies(_ http.ResponseWriter, r *http.Request, _ *params)
 	for _, v := range viols {
 		counts[v.PolicyID]++
 	}
+	files, err := s.policies()
+	if err != nil {
+		return nil, err
+	}
+	listed := map[string]bool{}
+	for _, pol := range files {
+		listed[pol.ID] = true
+	}
+	shown := append([]*policy.Policy{}, files...)
+	for _, pol := range a.policies { // SoD risks that no policy file defines
+		if pol.Type == policy.TypeSoDRisk && !listed[pol.ID] {
+			shown = append(shown, pol)
+		}
+	}
 	out := []ojson.Object{}
-	for _, pol := range a.policies {
-		out = append(out, ojson.Object{{Key: "id", Value: pol.ID}, {Key: "name", Value: pol.Name}, {Key: "type", Value: pol.Type},
+	for _, pol := range shown {
+		typ, src := pol.Type, pol.Source
+		if typ == policy.TypeSoDRisk {
+			typ, src = "separation_of_duties", "managed as a risk in Policies & SoD (not a policy file)"
+		}
+		out = append(out, ojson.Object{{Key: "id", Value: pol.ID}, {Key: "name", Value: pol.Name}, {Key: "type", Value: typ},
 			{Key: "severity", Value: pol.Severity}, {Key: "description", Value: pol.Description}, {Key: "enabled", Value: pol.Enabled},
-			{Key: "source", Value: pol.Source}, {Key: "violations", Value: counts[pol.ID]}})
+			{Key: "source", Value: src}, {Key: "violations", Value: counts[pol.ID]}})
 	}
 	return out, nil
 }
@@ -1135,10 +1210,22 @@ var jitFields = []field{
 
 func asJitError(err error) error {
 	var je *jit.Error
-	if errors.As(err, &je) {
-		return errStatus(http.StatusBadRequest, je.Msg)
+	if !errors.As(err, &je) {
+		return err
 	}
-	return err
+	status := http.StatusBadRequest
+	switch {
+	case je.Kind == jit.KindNotFound:
+		status = http.StatusNotFound
+	case je.Kind == jit.KindConflict:
+		status = http.StatusConflict
+	case je.Code != "":
+		status = http.StatusUnprocessableEntity // a field-specific refusal, like badRequest
+	}
+	if je.Code != "" {
+		return &readiness.Error{Status: status, Code: je.Code, Msg: je.Msg}
+	}
+	return errStatus(status, je.Msg)
 }
 
 func (s *Server) jitCreate(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
@@ -1282,21 +1369,70 @@ var campaignFields = []field{
 	{name: "unused_days", kind: kInt, def: int64(60)},
 }
 
+// Campaign input bounds. The unused-days range matches readiness stale_days
+// (1 to 3650); the name cap matches maxFilterLen.
+const (
+	maxCampaignName       = 200
+	minCampaignUnusedDays = 1
+	maxCampaignUnusedDays = 3650
+)
+
+// checkCampaign applies the semantic rules the field kinds cannot express and
+// returns the trimmed name. Errors are pydantic-style items with field-specific
+// types, at loc ["body", field].
+func checkCampaign(body map[string]any) (string, int64, []verr) {
+	var errs []verr
+	raw := body["name"].(string)
+	name := strings.TrimSpace(raw)
+	switch n := utf8.RuneCountInString(name); {
+	case n == 0:
+		errs = append(errs, verr{Type: "string_too_short", Loc: []any{"body", "name"},
+			Msg: "String should have at least 1 character", Input: raw, Ctx: ojson.Object{{Key: "min_length", Value: 1}}})
+	case n > maxCampaignName:
+		errs = append(errs, verr{Type: "string_too_long", Loc: []any{"body", "name"},
+			Msg: fmt.Sprintf("String should have at most %d characters", maxCampaignName), Input: raw,
+			Ctx: ojson.Object{{Key: "max_length", Value: maxCampaignName}}})
+	}
+	days := body["unused_days"].(int64)
+	switch {
+	case days < minCampaignUnusedDays:
+		errs = append(errs, verr{Type: "greater_than_equal", Loc: []any{"body", "unused_days"},
+			Msg:   fmt.Sprintf("Input should be greater than or equal to %d", minCampaignUnusedDays),
+			Input: days, Ctx: ojson.Object{{Key: "ge", Value: minCampaignUnusedDays}}})
+	case days > maxCampaignUnusedDays:
+		errs = append(errs, verr{Type: "less_than_equal", Loc: []any{"body", "unused_days"},
+			Msg:   fmt.Sprintf("Input should be less than or equal to %d", maxCampaignUnusedDays),
+			Input: days, Ctx: ojson.Object{{Key: "le", Value: maxCampaignUnusedDays}}})
+	}
+	return name, days, errs
+}
+
 func (s *Server) createCampaign(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
 	body, berrs, err := bodyModel(r, campaignFields, true)
 	if err != nil {
 		return nil, err
 	}
+	name, days := "", int64(0)
+	if len(berrs) == 0 {
+		var cerrs []verr
+		name, days, cerrs = checkCampaign(body)
+		berrs = append(berrs, cerrs...)
+	}
 	if err := validated(p, berrs); err != nil {
 		return nil, err
 	}
-	pols, err := s.policies()
+	c := store.TxFrom(r.Context())
+	pols, err := s.effectivePolicies(c)
 	if err != nil {
 		return nil, err
 	}
-	c := store.TxFrom(r.Context())
-	id, err := reviews.GenerateCampaign(c, s.clock(), body["name"].(string), int(body["unused_days"].(int64)), pols)
+	id, err := reviews.GenerateCampaign(c, s.clock(), name, int(days), pols)
 	if err != nil {
+		return nil, err
+	}
+	// the reviewers are told in the same transaction (issue #189); seeding calls
+	// GenerateCampaign directly and tells no one
+	if err := notify.ReviewLaunched(c, s.clock(), id); err != nil {
 		return nil, err
 	}
 	cmp, err := c.Campaign(id)
@@ -1341,11 +1477,38 @@ func (s *Server) reviewDecide(_ http.ResponseWriter, r *http.Request, p *params)
 	var comment *string
 	if v, ok := body["comment"].(string); ok {
 		comment = &v
+		if utf8.RuneCountInString(v) > reviews.MaxCommentRunes {
+			return nil, &validationError{[]verr{{Type: "string_too_long", Loc: []any{"body", "comment"},
+				Msg:   fmt.Sprintf("String should have at most %d characters", reviews.MaxCommentRunes),
+				Input: v, Ctx: ojson.Object{{Key: "max_length", Value: reviews.MaxCommentRunes}}}}}
+		}
 	}
 	it, err := reviews.Decide(store.TxFrom(r.Context()), s.clock(), id, body["decision"].(string), principal(r).User(), comment)
+	if errors.Is(err, reviews.ErrUnknownItem) {
+		return nil, errStatus(http.StatusNotFound, "unknown review item")
+	}
 	var re *reviews.Error
 	if errors.As(err, &re) {
 		return nil, errStatus(http.StatusBadRequest, re.Msg)
+	}
+	var de *reviews.DecidedError
+	if errors.As(err, &de) {
+		// nothing changed; the refusal itself is evidence of the control
+		// (returned as a body, not an error, so the audit event commits)
+		by := principal(r).User()
+		det := ojson.Object{{Key: "item_id", Value: de.ItemID}, {Key: "current", Value: de.Current},
+			{Key: "requested", Value: de.Requested}, {Key: "reason", Value: "review_item_decided"}}
+		if comment != nil && *comment != "" {
+			det = append(det, ojson.KV{Key: "comment", Value: *comment})
+		}
+		if _, err := store.TxFrom(r.Context()).RecordAudit(store.AuditRecord{At: s.clock(), Action: "review.decide.refused",
+			LegacyActor: by.Display, Detail: det, TargetType: reviews.TargetType,
+			TargetID: strconv.FormatInt(de.ItemID, 10)}); err != nil {
+			return nil, err
+		}
+		return statusBody{http.StatusConflict, ojson.Object{{Key: "error", Value: "review_item_decided"},
+			{Key: "detail", Value: "This review item was already decided as " + de.Current + "; a decision is final."},
+			{Key: "decision", Value: de.Current}}}, nil
 	}
 	if err != nil {
 		return nil, err
@@ -1428,6 +1591,15 @@ func (s *Server) hrisCreate(_ http.ResponseWriter, r *http.Request, p *params) (
 		return nil, errStatus(http.StatusBadRequest, "payload.to_team required")
 	}
 	c := store.TxFrom(r.Context())
+	if typ == "joiner" {
+		// Refuse at creation what execution would refuse; execution re-checks.
+		var ex *jml.ExistsError
+		if err := jml.CheckJoiner(c, payload); errors.As(err, &ex) {
+			return s.joinerRefused(c, "create", nil, ex, principal(r).User())
+		} else if err != nil {
+			return nil, err
+		}
+	}
 	if identityID != nil {
 		// An event for an identity that does not exist could never be planned or executed.
 		if ident, err := getOrNil(c.Identity(*identityID)); err != nil {
@@ -1454,16 +1626,33 @@ func (s *Server) hrisCreate(_ http.ResponseWriter, r *http.Request, p *params) (
 	return jml.ViewEvent(c, ev)
 }
 
+// joinerRefused audits a joiner refused because its email or HR id belongs to
+// an active identity, and answers 409 identity_exists naming that identity.
+// The caller's transaction commits, so nothing else may have been written.
+func (s *Server) joinerRefused(c *store.TenantTx, stage string, eventID *int64, ex *jml.ExistsError, by store.UserRef) (any, error) {
+	d := ojson.Object{{Key: "stage", Value: stage}, {Key: "existing_identity_id", Value: ex.ExistingID},
+		{Key: "matched_on", Value: ex.MatchedOn}, {Key: "reason", Value: "identity_exists"}}
+	if eventID != nil {
+		d = append(ojson.Object{{Key: "event_id", Value: *eventID}}, d...)
+	}
+	if err := c.Audit(s.clock(), by.Display, "jml.joiner.refused", d); err != nil {
+		return nil, err
+	}
+	return statusBody{http.StatusConflict, ojson.Object{{Key: "error", Value: "identity_exists"},
+		{Key: "detail", Value: ex.Error() + "; use the mover or rehire flow, or the account-match and merge tools."},
+		{Key: "existing_identity_id", Value: ex.ExistingID}, {Key: "matched_on", Value: ex.MatchedOn}}}, nil
+}
+
 func (s *Server) hrisPlan(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
 	id := p.pathInt("event_id")
 	if err := validated(p, nil); err != nil {
 		return nil, err
 	}
-	pols, err := s.policies()
+	c := store.TxFrom(r.Context())
+	pols, err := s.effectivePolicies(c)
 	if err != nil {
 		return nil, err
 	}
-	c := store.TxFrom(r.Context())
 	ev, err := getOrNil(c.HrisEvent(id))
 	if err != nil {
 		return nil, err
@@ -1503,11 +1692,12 @@ func (s *Server) leaverPlan(_ http.ResponseWriter, r *http.Request, p *params) (
 	if err := validated(p, nil); err != nil {
 		return nil, err
 	}
-	pols, err := s.policies()
+	tx := store.TxFrom(r.Context())
+	pols, err := s.effectivePolicies(tx)
 	if err != nil {
 		return nil, err
 	}
-	plan, err := jml.LeaverPlan(store.TxFrom(r.Context()), s.clock(), id, true, pols)
+	plan, err := jml.LeaverPlan(tx, s.clock(), id, true, pols)
 	var je *jml.Error
 	if errors.As(err, &je) {
 		return nil, errStatus(http.StatusNotFound, je.Msg)

@@ -70,7 +70,7 @@ func (f *fakeOkta) Calls() []string {
 
 func containServer(t *testing.T, f *storetest.Fixture) *Server {
 	t.Helper()
-	hc, err := safehttp.New(safehttp.Options{Env: config.Dev, AllowLoopback: true})
+	hc, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Dev, AllowLoopback: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +290,7 @@ func TestLeaverExecuteRunsContainment(t *testing.T) {
 		if got["containment.run"] != 1 || got["jml.leaver"] != 1 {
 			t.Errorf("audit %v", got)
 		}
-		if rec = corrDo(h, l, "POST", leaver(f), ""); rec.Code != 400 {
+		if rec = corrDo(h, l, "POST", leaver(f), ""); rec.Code != 409 {
 			t.Errorf("second execute: %d %s", rec.Code, rec.Body)
 		}
 	})
