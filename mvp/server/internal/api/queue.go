@@ -19,6 +19,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/queue"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/requests"
+	"github.com/nischalravi/tessera/mvp/server/internal/sod"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
@@ -37,7 +38,7 @@ const maxSweepAttempts = 3
 
 // SweeperLoops are the queue kinds whose runs are tracked as loops in
 // obs.DefaultLoops (lag in /metrics, /readyz and Admin -> Platform health).
-var SweeperLoops = []string{jobs.JITSweep, jobs.SweepRequests, jobs.SweepLifecycle, jobs.SweepAdminChanges, jobs.ContainmentRetry}
+var SweeperLoops = []string{jobs.JITSweep, jobs.SweepRequests, jobs.SweepLifecycle, jobs.SweepAdminChanges, jobs.ContainmentRetry, jobs.SweepSoDMitigations}
 
 // tracked reports each run of a kind's handler, in any tenant, to its loop.
 func tracked(kind string, h queue.Handler) queue.Handler {
@@ -59,9 +60,10 @@ func (s *Server) newQueue() *queue.Queue {
 	q.Register(jobs.SweepLifecycle, queue.Kind{Handler: tracked(jobs.SweepLifecycle, s.queueLifecycleSweep), Actor: lifecycle.Sweeper})
 	q.Register(jobs.SweepAdminChanges, queue.Kind{Handler: tracked(jobs.SweepAdminChanges, s.queueAdminSweep), Actor: "admin.sweeper"})
 	q.Register(jobs.ContainmentRetry, queue.Kind{Handler: tracked(jobs.ContainmentRetry, s.queueContainmentRetries), Actor: "containment.sweeper"})
+	q.Register(jobs.SweepSoDMitigations, queue.Kind{Handler: tracked(jobs.SweepSoDMitigations, s.queueSoDSweep), Actor: sod.Sweeper})
 	q.Register(jobs.Maintenance, queue.Kind{Handler: s.queueMaintenance, Actor: "queue.worker"})
 	every := "@every " + SweepInterval.String()
-	for _, k := range []string{jobs.JITSweep, jobs.SweepRequests, jobs.SweepLifecycle, jobs.SweepAdminChanges, jobs.ContainmentRetry} {
+	for _, k := range []string{jobs.JITSweep, jobs.SweepRequests, jobs.SweepLifecycle, jobs.SweepAdminChanges, jobs.ContainmentRetry, jobs.SweepSoDMitigations} {
 		q.Schedule(k, k, every, maxSweepAttempts)
 	}
 	q.Schedule(jobs.Maintenance, jobs.Maintenance, "@every "+jobMaintainGap.String(), 1)
@@ -131,6 +133,16 @@ func (s *Server) queueAdminSweep(ctx context.Context, j queue.Job) (any, error) 
 func (s *Server) queueContainmentRetries(ctx context.Context, j queue.Job) (any, error) {
 	_, err := s.containment.RunRetries(audit.WithSystemActor(ctx, "containment.sweeper"), s.store, j.Tenant, "containment.sweeper", "")
 	return nil, err
+}
+
+// queueSoDSweep warns about SoD mitigations ending soon and closes the ones
+// whose end date has passed (the violation is open again).
+func (s *Server) queueSoDSweep(ctx context.Context, j queue.Job) (any, error) {
+	now := s.clock()
+	return nil, s.store.InTenant(audit.WithSystemActor(ctx, sod.Sweeper), j.Tenant, func(tx *store.TenantTx) error {
+		_, _, err := sod.Sweep(tx, now, s.cfg.SoD)
+		return err
+	})
 }
 
 func (s *Server) queueMaintenance(ctx context.Context, j queue.Job) (any, error) {

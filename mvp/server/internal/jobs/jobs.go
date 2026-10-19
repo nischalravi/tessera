@@ -32,16 +32,17 @@ const (
 	AuditAnchor = "audit_anchor"
 
 	// Kinds of the durable queue's recurring jobs (issue #300).
-	SweepRequests     = "sweep_requests"
-	SweepLifecycle    = "sweep_lifecycle"
-	SweepAdminChanges = "sweep_admin_changes"
-	ContainmentRetry  = "containment_retries"
-	Maintenance       = "job_maintenance"
+	SweepRequests       = "sweep_requests"
+	SweepLifecycle      = "sweep_lifecycle"
+	SweepAdminChanges   = "sweep_admin_changes"
+	ContainmentRetry    = "containment_retries"
+	SweepSoDMitigations = "sweep_sod_mitigations"
+	Maintenance         = "job_maintenance"
 )
 
 // Kinds lists every kind, for filters.
 var Kinds = []string{Sync, Provision, Validation, DryRun, HealthRerun, JITSweep, AuditAnchor,
-	SweepRequests, SweepLifecycle, SweepAdminChanges, ContainmentRetry, Maintenance}
+	SweepRequests, SweepLifecycle, SweepAdminChanges, ContainmentRetry, SweepSoDMitigations, Maintenance}
 
 // Idempotent reports whether running a kind again with the same input is
 // safe: it reads a source and converges, or re-checks. Provisioning is not:

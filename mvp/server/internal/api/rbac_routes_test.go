@@ -56,6 +56,24 @@ POST   /api/hris/events                              hris.simulate_event -
 GET    /api/hris/events/{event_id}/plan              graph.read      -
 POST   /api/hris/events/{event_id}/execute           hris.execute    STEP_UP_POLICY
 GET    /api/jml/leaver-plan/{identity_id}            graph.read      -
+GET    /api/siem/sinks                               siem.read       -  # issue #169
+POST   /api/siem/sinks                               siem.configure  STEP_UP_POLICY  # issue #169
+PUT    /api/siem/sinks/{sink_id}                     siem.configure  STEP_UP_POLICY  # issue #169
+POST   /api/siem/sinks/{sink_id}/rewind              siem.configure  -  # issue #169
+POST   /api/siem/sinks/{sink_id}/test                siem.configure  -  # issue #169
+GET    /api/siem/sinks/{sink_id}/dead-letters        siem.read       -  # issue #169
+GET    /api/alerts                                   alerts.read     -  # issue #168
+GET    /api/alerts/summary                           alerts.read     -  # issue #168
+GET    /api/alerts/rules                             alerts.read     -  # issue #168
+PUT    /api/alerts/rules/{rule_id}                   alerts.configure -  # issue #168
+GET    /api/alerts/channels                          alerts.configure -  # issue #168
+POST   /api/alerts/channels                          alerts.configure STEP_UP_POLICY  # issue #168
+PUT    /api/alerts/channels/{channel_id}             alerts.configure STEP_UP_POLICY  # issue #168
+POST   /api/alerts/channels/{channel_id}/test        alerts.configure -  # issue #168
+GET    /api/alerts/{alert_id}                        alerts.read     -  # issue #168
+POST   /api/alerts/{alert_id}/acknowledge            alerts.manage   -  # issue #168
+POST   /api/alerts/{alert_id}/resolve                alerts.manage   -  # issue #168
+POST   /api/alerts/{alert_id}/assign                 alerts.manage   -  # issue #168
 GET    /api/ownership                                graph.read      -  # issue #167
 PUT    /api/ownership/{kind}/{object_key}            ownership.manage -  # issue #167
 POST   /api/ownership/bulk                           ownership.manage -  # issue #167
@@ -187,6 +205,40 @@ POST   /api/connections/{id}/findings/{fid}/accept   connections.manage -
 GET    /api/connections/{id}/health                  connections.read   -
 GET    /api/insights/deployment-health               connections.read   -
 POST   /api/insights/deployment-health/rerun         connections.manage -
+GET    /api/sod/functions                            graph.read      -  # issue #298
+POST   /api/sod/functions                            sod.manage      STEP_UP_POLICY  # issue #298
+GET    /api/sod/functions/{function_id}              graph.read      -  # issue #298
+PUT    /api/sod/functions/{function_id}              sod.manage      STEP_UP_POLICY  # issue #298
+POST   /api/sod/functions/{function_id}/retire       sod.manage      STEP_UP_POLICY  # issue #298
+GET    /api/sod/risks                                graph.read      -  # issue #298
+POST   /api/sod/risks                                sod.manage      STEP_UP_POLICY  # issue #298
+GET    /api/sod/risks/{risk_id}                      graph.read      -  # issue #298
+PUT    /api/sod/risks/{risk_id}                      sod.manage      STEP_UP_POLICY  # issue #298
+POST   /api/sod/risks/{risk_id}/retire               sod.manage      STEP_UP_POLICY  # issue #298
+GET    /api/sod/rulesets                             graph.read      -  # issue #298
+POST   /api/sod/rulesets                             sod.manage      STEP_UP_POLICY  # issue #298
+POST   /api/sod/rulesets/import                      sod.manage      STEP_UP_POLICY  # issue #298
+GET    /api/sod/rulesets/{ruleset_id}                graph.read      -  # issue #298
+PUT    /api/sod/rulesets/{ruleset_id}                sod.manage      STEP_UP_POLICY  # issue #298
+POST   /api/sod/rulesets/{ruleset_id}/retire         sod.manage      STEP_UP_POLICY  # issue #298
+GET    /api/sod/rulesets/{ruleset_id}/export         graph.read      -  # issue #298
+POST   /api/sod/import-legacy                        sod.manage      STEP_UP_POLICY  # issue #298
+GET    /api/sod/violations                           graph.read      -  # issue #298
+GET    /api/sod/controls                             graph.read      -  # issue #298
+POST   /api/sod/controls                             sod.manage      STEP_UP_POLICY  # issue #298
+GET    /api/sod/controls/{control_id}                graph.read      -  # issue #298
+PUT    /api/sod/controls/{control_id}                sod.manage      STEP_UP_POLICY  # issue #298
+POST   /api/sod/controls/{control_id}/retire         sod.manage      STEP_UP_POLICY  # issue #298
+GET    /api/sod/mitigations                          graph.read      -  # issue #298
+POST   /api/sod/mitigations                          sod.mitigate    -  # issue #298
+POST   /api/sod/mitigations/{mitigation_id}/approve  sod.approve     STEP_UP_POLICY  # issue #298 (not the requester)
+POST   /api/sod/mitigations/{mitigation_id}/reject   sod.approve     -  # issue #298 (not the requester)
+POST   /api/sod/mitigations/{mitigation_id}/cancel   sod.mitigate    -  # issue #298 (the requester)
+POST   /api/sod/mitigations/{mitigation_id}/revoke   requests.create -  # issue #298 (risk owner or sod.approve; step-up in the handler)
+POST   /api/sod/violations/escalate                  sod.mitigate    -  # issue #298
+POST   /api/sod/violations/revoke                    graph.read      -  # issue #298 (applying: grants.revoke and step-up in the handler)
+GET    /api/sod/review-context                       graph.read      -  # issue #298
+POST   /api/sod/simulate                             requests.create -  # issue #298
 GET    /api/jobs                                     jobs.read       -  # issue #172
 GET    /api/jobs/{job_id}                            jobs.read       -  #
 POST   /api/jobs/{job_id}/retry                      jobs.read       -  # (the replayed route's own permission and step-up apply)

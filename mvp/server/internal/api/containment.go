@@ -354,12 +354,12 @@ func (s *Server) putContainmentCredential(r *http.Request, p *params) (int, any,
 // response says containment is incomplete (containment.status "retrying").
 func (s *Server) executeLeaver(r *http.Request, p *params, id int64) (any, error) {
 	ctx := r.Context()
-	pols, err := s.policies()
-	if err != nil {
-		return nil, err
-	}
 	var job *containment.Job
-	err = p.scope.Read(ctx, func(c *store.TenantTx) error {
+	err := p.scope.Read(ctx, func(c *store.TenantTx) error {
+		pols, err := s.effectivePolicies(c)
+		if err != nil {
+			return err
+		}
 		ev, err := c.HrisEvent(id)
 		if err != nil || ev.Type != "leaver" || ev.Status == "executed" || ev.IdentityID == nil {
 			return nil // ExecuteEvent below answers as it always did
@@ -388,7 +388,10 @@ func (s *Server) executeLeaver(r *http.Request, p *params, id int64) (any, error
 	var plan jml.Plan
 	var refusal any
 	err = p.scope.Write(ctx, func(c *store.TenantTx) error {
-		var err error
+		pols, err := s.effectivePolicies(c)
+		if err != nil {
+			return err
+		}
 		plan, err = jml.ExecuteEvent(c, s.clock(), id, principal(r).User(), pols)
 		var ex *jml.ExistsError
 		if errors.As(err, &ex) {

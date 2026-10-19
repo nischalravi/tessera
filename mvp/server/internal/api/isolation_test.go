@@ -247,6 +247,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if strings.HasPrefix(rt.Pattern, "/api/roles/{role_id}") || strings.HasPrefix(rt.Pattern, "/api/role-requests/{request_id}") {
 			continue // TestRolesAPI_CrossTenant (UUIDs, not fixture ids)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/sod/") {
+			continue // TestSodAPI_CrossTenant (UUIDs, not fixture ids)
+		}
 		if strings.HasPrefix(rt.Pattern, "/api/abac/policies/{policy_id}") || rt.Pattern == "/api/catalog/items/{group_id}/policy" {
 			continue // TestAbacAPI_CrossTenant (UUIDs, not fixture ids)
 		}
@@ -277,6 +280,12 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		}
 		if rt.Pattern == "/api/auth/sessions/{session_id}" {
 			continue // TestIsolation_SessionCookieScoped (a UUID, not a fixture id)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/siem/sinks/") {
+			continue // TestSiemAPI_CrossTenant (UUIDs, not fixture ids)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/alerts/") {
+			continue // TestAlertsAPI_CrossTenant (UUIDs and rule names, not fixture ids)
 		}
 		if strings.HasPrefix(rt.Pattern, "/api/admin/") {
 			continue // TestAdminAPI_CrossTenant (UUIDs, not fixture ids)
@@ -361,6 +370,8 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		"/api/audit/events/{event_id}/proof":         latestEventID(t, f.DB, f.B.ID),
 		"/api/email/messages/{message_id}":           seedEmailMessage(t, f, f.B, store.EmailDeferred),
 		"/api/identities/{identity_id}/containment":  fmt.Sprint(b["alice"]),
+		"/api/siem/sinks/{sink_id}/dead-letters":     seedSiemSink(t, f.DB, f.B.ID, "b"),
+		"/api/alerts/{alert_id}":                     seedAlert(t, f.DB, f.B.ID, "b"),
 		"/api/identities/{identity_id}/disables":     fmt.Sprint(b["alice"]),
 		"/api/orgs/{org_id}":                         orgs.RootID,
 	}
@@ -378,6 +389,9 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		}
 		if strings.HasPrefix(path, "/api/groups/") && strings.Contains(path, "{") {
 			continue // TestGroupsTenantIsolation (UUIDs, not fixture ids)
+		}
+		if strings.HasPrefix(path, "/api/sod/") && strings.Contains(path, "{") {
+			continue // TestSodAPI_CrossTenant (UUIDs, not fixture ids)
 		}
 		if path == "/api/request-drafts/{draft_id}" {
 			continue // TestRequestDraftsAPI (a UUID, private to its user)

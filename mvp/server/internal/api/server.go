@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/admin"
+	"github.com/nischalravi/tessera/mvp/server/internal/alerts"
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oauth2rp"
@@ -39,6 +40,8 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/requests"
 	"github.com/nischalravi/tessera/mvp/server/internal/reviews"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
+	"github.com/nischalravi/tessera/mvp/server/internal/siem"
+	"github.com/nischalravi/tessera/mvp/server/internal/sod"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
@@ -91,6 +94,8 @@ type Config struct {
 	// ReadinessScenario selects the simulated validation scenario
 	// (TESSERA_READINESS_SCENARIO; default "gaps").
 	ReadinessScenario string
+	// SoD are the mitigation limits (TESSERA_SOD_MAX_MITIGATION_DAYS, TESSERA_SOD_WARN_DAYS); zero values default.
+	SoD sod.Settings
 	// AuditAnchor is TESSERA_AUDIT_ANCHOR: POST /api/audit/verify checks
 	// checkpoints against it when it is a file:// URL.
 	AuditAnchor string
@@ -112,6 +117,13 @@ type Config struct {
 	// TrustedProxies (TESSERA_TRUSTED_PROXIES) are the peers whose
 	// X-Forwarded-For the rate limiter believes.
 	TrustedProxies []netip.Prefix
+	// Siem streams the audit ledger to tenants' SIEMs (issue #169); its
+	// Sealer seals sink tokens. Nil: tests of sinks are unavailable.
+	Siem *siem.Service
+	// Alerts delivers alerts and sends channel tests (issue #168); its
+	// Sealer seals webhook secrets. Nil: channel tests are unavailable and
+	// webhook channels cannot be created.
+	Alerts *alerts.Service
 	// Outbound is the safehttp client the provisioning worker sends through.
 	// Nil: no outbound client, so every provisioning call fails (as with
 	// Containment).
@@ -229,6 +241,8 @@ func New(cfg Config) *Server {
 	s.queue = s.newQueue()
 	s.registerRoutes()
 	s.registerAuditRoutes()
+	s.registerSiemRoutes()
+	s.registerAlertRoutes()
 	s.registerOwnershipRoutes()
 	s.registerReviewScheduleRoutes()
 	s.registerCorrelationRoutes()
@@ -240,6 +254,8 @@ func New(cfg Config) *Server {
 	s.registerActivityRoutes()
 	s.registerRoleRoutes()
 	s.registerAbacRoutes()
+	s.registerSodRoutes()
+	s.registerSodControlRoutes()
 	s.registerLifecycleRoutes()
 	s.registerGuestRoutes()
 	s.registerNotificationRoutes()
@@ -373,7 +389,27 @@ func (s *Server) sweepTenant(ctx context.Context, t tenancy.ID) error {
 	return nil
 }
 
+// policies are the policy files; see effectivePolicies for what is evaluated.
 func (s *Server) policies() ([]*policy.Policy, error) { return s.cfg.Policies.Load() }
+
+// effectivePolicies is what the tenant's analysis evaluates: the policy files
+// other than separation of duties, plus one policy per SoD risk of its enabled
+// rulesets (or of its legacy YAML SoD policies while it has no rulesets).
+func (s *Server) effectivePolicies(tx *store.TenantTx) ([]*policy.Policy, error) {
+	files, err := s.policies()
+	if err != nil {
+		return nil, err
+	}
+	legacy, err := policy.LegacyBundle(files, false)
+	if err != nil {
+		return nil, err
+	}
+	risks, err := sod.Load(tx, legacy)
+	if err != nil {
+		return nil, err
+	}
+	return policy.Effective(files, risks), nil
+}
 
 // ---------------------------------------------------------------- routing
 
