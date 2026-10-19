@@ -766,3 +766,10 @@ DROP POLICY IF EXISTS tenant_isolation ON siem_dead_letters;
 CREATE POLICY tenant_isolation ON siem_dead_letters
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE connection_activation_requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE connection_activation_requests FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON connection_activation_requests;
+CREATE POLICY tenant_isolation ON connection_activation_requests
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));

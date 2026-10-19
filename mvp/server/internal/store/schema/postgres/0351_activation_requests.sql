@@ -5,6 +5,7 @@
 -- +goose Up
 
 CREATE TABLE connection_activation_requests (
+  rowid BIGINT GENERATED ALWAYS AS IDENTITY,
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenants (id),
   connection_id TEXT NOT NULL,
