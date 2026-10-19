@@ -1,0 +1,101 @@
+# Golden corpus, SCPs (org: O1, section 14.1): GC-42 to GC-48.
+# O1: root r-1 -> ou-prod -> account 111111111111; r-1 -> ou-allow (SCP AllowEC2Only) -> account 222222222222;
+# management account 999999999999 directly under r-1. Every other level has FullAWSAccess.
+
+- id: GC-42
+  title: SCPs intersect per level; an OU allowlist without FullAWSAccess blocks S3
+  org: {base: O1}
+  principal: "arn:aws:iam::222222222222:user/carol"
+  identity: [allow_all]
+  request: {action: "s3:ListAllMyBuckets", resource: "*"}
+  expect: {outcome: DENY, deny_kind: implicit, stage: scp, blocking_level: ou-allow}
+  why: "[S4] an Allow must exist at every level; ou-allow has only ec2:*."
+  verified: doc
+
+- id: GC-43
+  title: An SCP deny at the OU overrides allows at the root and the account
+  org:
+    base: O1
+    scp_add:
+      ou-prod: [{"Statement": [{"Effect": "Deny", "Action": "s3:DeleteBucket", "Resource": "*"}]}]
+  principal: U
+  identity: [allow_all]
+  request: {action: "s3:DeleteBucket", resource: "arn:aws:s3:::tsr-bkt"}
+  expect: {outcome: DENY, deny_kind: explicit, stage: explicit_deny, decisive_level: ou-prod}
+  why: "[S4]."
+  verified: doc
+
+- id: GC-44
+  title: The management account is exempt from SCPs
+  org:
+    base: O1
+    scp_add:
+      r-1: [{"Statement": [{"Effect": "Deny", "Action": "s3:*", "Resource": "*"}]}]
+  principal: "arn:aws:iam::999999999999:user/admin"
+  identity: [allow_all]
+  request: {action: "s3:ListAllMyBuckets", resource: "*"}
+  expect: {outcome: ALLOW, scp: not_applicable}
+  why: "[S4a] SCPs don't affect users or roles in the management account."
+  verified: doc
+
+- id: GC-45
+  title: Service-linked roles are exempt from SCPs
+  org:
+    base: O1
+    scp_add:
+      r-1: [{"Statement": [{"Effect": "Deny", "Action": "s3:*", "Resource": "*"}]}]
+  principal: "arn:aws:sts::111111111111:assumed-role/AWSServiceRoleForExample/svc"
+  role_path: "/aws-service-role/"
+  identity:
+    - {"Statement": [{"Effect": "Allow", "Action": "s3:GetObject", "Resource": "*"}]}
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-bkt/a"}
+  expect: {outcome: ALLOW, scp: not_applicable}
+  why: "[S4a] SCPs do not affect any service-linked role."
+  verified: doc
+
+- id: GC-46
+  title: A member account's root user is subject to SCPs
+  org:
+    base: O1
+    scp_add:
+      ou-prod: [{"Statement": [{"Effect": "Deny", "Action": "s3:DeleteBucket", "Resource": "*"}]}]
+  principal: "arn:aws:iam::111111111111:root"
+  request: {action: "s3:DeleteBucket", resource: "arn:aws:s3:::tsr-bkt"}
+  expect: {outcome: DENY, deny_kind: explicit}
+  why: "[S4a] SCPs affect the member account's root user."
+  verified: doc
+
+- id: GC-47
+  title: An external principal is not subject to the resource account's SCPs
+  org:
+    base: O1
+    scp_add:
+      ou-prod: [{"Statement": [{"Effect": "Deny", "Action": "s3:GetObject", "Resource": "*"}]}]
+  principal: "arn:aws:sts::333333333333:assumed-role/partner/s"
+  identity: [allow_all]
+  bucket_policy: {"Statement": [{"Effect": "Allow", "Principal": {"AWS": "arn:aws:iam::333333333333:role/partner"}, "Action": "s3:GetObject", "Resource": "arn:aws:s3:::tsr-bkt/*"}]}
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-bkt/a"}
+  expect: {outcome: ALLOW}
+  note: "bucket tsr-bkt is in 111111111111 (ou-prod)"
+  why: "[S4a] SCPs 'don't affect users or roles from accounts outside the organization'; no RCP restricts it."
+  verified: doc
+
+- id: GC-48
+  title: An SCP Allow with a Condition (full IAM language, Sept 2025)
+  org:
+    base: O1
+    scp_set:
+      ou-allow: [{"Statement": [{"Effect": "Allow", "Action": "*", "Resource": "*", "Condition": {"StringEquals": {"aws:RequestedRegion": "eu-west-1"}}}]}]
+  principal: "arn:aws:iam::222222222222:user/carol"
+  identity: [allow_all]
+  requests:
+    - action: "sqs:ListQueues"
+      resource: "*"
+      context: {"aws:RequestedRegion": "us-east-1"}
+      expect: {outcome: DENY, deny_kind: implicit, stage: scp, blocking_level: ou-allow}
+    - action: "sqs:ListQueues"
+      resource: "*"
+      context: {"aws:RequestedRegion": "eu-west-1"}
+      expect: {outcome: ALLOW}
+  why: "[S4b][S30] conditions allowed in SCP Allow statements."
+  verified: pending-probe:A2

@@ -3,7 +3,6 @@ package store
 import (
 	"database/sql"
 	"errors"
-	"strings"
 	"time"
 )
 
@@ -11,7 +10,7 @@ import (
 // tenant-scoped (tq) and linted like the rest of the store.
 
 func isUnique(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
+	return isUniqueViolation(err)
 }
 
 const connCols = `c.id, c.tenant_id, c.name, c.connector_type, c.system, c.role, c.active_revision_id, c.health,
