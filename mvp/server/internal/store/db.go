@@ -110,8 +110,8 @@ var tables = []string{
 	"job_runs",
 	// closed-loop provisioning (schema/0282-0283)
 	"provisioning_targets", "provisioning_ops", "provisioning_findings",
-	// sealed connection credentials (schema/0205)
-	"connection_secrets",
+	// sealed connection credentials (schema/0345_connection_credentials.sql)
+	"connection_credentials",
 	// account correlation (schema/0204_correlation.sql)
 	"account_links", "identity_merges",
 	// identity model for guests (schema/0226_identity_model.sql)
@@ -137,8 +137,8 @@ var tables = []string{
 	"email_messages",
 	// sponsorships and invitations (schema/0227_sponsorships.sql)
 	"intake_records", "sponsorships", "sponsorship_events",
-	// identity containment (schema/0205_containment.sql)
-	"containment_credentials", "containment_retries",
+	// identity containment (schema/0206_containment_retries.sql)
+	"containment_retries",
 	// attestation instead of an unsupported live check (schema/0343_live_attestations.sql)
 	"readiness_live_attestations",
 	// two-person activation (schema/0351_activation_requests.sql)
@@ -163,8 +163,10 @@ var tables = []string{
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was
-// the mutable audit table before the hash-chained ledger (PR3).
-var legacyTables = []string{"audit_log"}
+// the mutable audit table before the hash-chained ledger (PR3);
+// connection_secrets and containment_credentials were merged into
+// connection_credentials (#220, see MigrateCredentials).
+var legacyTables = []string{"audit_log", "connection_secrets", "containment_credentials"}
 
 // DB owns the database handle. The *sql.DB is unexported and there is no
 // accessor: no other package can obtain a *sql.DB, *sql.Tx or *sql.Conn.

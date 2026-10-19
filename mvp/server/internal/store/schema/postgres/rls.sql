@@ -333,13 +333,6 @@ CREATE POLICY tenant_isolation ON identity_merges
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
-ALTER TABLE containment_credentials ENABLE ROW LEVEL SECURITY;
-ALTER TABLE containment_credentials FORCE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS tenant_isolation ON containment_credentials;
-CREATE POLICY tenant_isolation ON containment_credentials
-  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
-  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
-
 ALTER TABLE containment_retries ENABLE ROW LEVEL SECURITY;
 ALTER TABLE containment_retries FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON containment_retries;
@@ -351,13 +344,6 @@ ALTER TABLE revoked_grants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE revoked_grants FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON revoked_grants;
 CREATE POLICY tenant_isolation ON revoked_grants
-  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
-  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
-
-ALTER TABLE connection_secrets ENABLE ROW LEVEL SECURITY;
-ALTER TABLE connection_secrets FORCE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS tenant_isolation ON connection_secrets;
-CREATE POLICY tenant_isolation ON connection_secrets
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
@@ -848,6 +834,13 @@ ALTER TABLE readiness_live_attestations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE readiness_live_attestations FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON readiness_live_attestations;
 CREATE POLICY tenant_isolation ON readiness_live_attestations
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE connection_credentials ENABLE ROW LEVEL SECURITY;
+ALTER TABLE connection_credentials FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON connection_credentials;
+CREATE POLICY tenant_isolation ON connection_credentials
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 

@@ -490,7 +490,7 @@ var refRE = regexp.MustCompile(`^(vault|agent):[A-Za-z0-9._/:@-]{1,200}$`)
 // SetCredential records a credential reference on the in-progress revision.
 //
 // A submitted secret is sealed under the KEK (internal/seal, AAD bound to the
-// tenant and reference) and stored in connection_secrets when the service has
+// tenant, connection and reference) and stored in connection_credentials when the service has
 // a Sealer (Runner.Live.Sealer); the revision keeps only the sealed:<id>
 // reference. Without a Sealer the value is discarded, as before: demo
 // connectors need no secret and a real connector then has no credential to
@@ -530,11 +530,12 @@ func (s *Service) SetCredential(c *store.TenantTx, connID string, in CredentialI
 		return nil, err
 	}
 	if in.Secret != "" && s.Runner.Live.Sealer != nil {
-		blob, err := s.Runner.Live.Sealer.Seal([]byte(in.Secret), connectionSecretAAD(c.Tenant(), ref))
+		blob, err := s.Runner.Live.Sealer.Seal([]byte(in.Secret), connectionSecretAAD(c.Tenant(), b.Conn.ID, ref))
 		if err != nil {
 			return nil, err
 		}
-		if err := c.PutConnectionSecret(ref, blob, now); err != nil {
+		if err := c.PutCredential(&store.Credential{ConnectionID: b.Conn.ID, Purpose: store.PurposeBind, Ref: ref,
+			Sealed: blob, UpdatedBy: actor, UpdatedAt: now}); err != nil {
 			return nil, err
 		}
 	}

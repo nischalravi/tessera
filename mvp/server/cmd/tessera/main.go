@@ -354,6 +354,14 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		return err
 	}
 	defer st.Close()
+	// #220: move the rows of the two retired credential tables into
+	// connection_credentials (a no-op once they are gone). A blob that does not
+	// open aborts startup rather than losing a credential.
+	if m, err := st.MigrateCredentials(ctx, sealer); err != nil {
+		return err
+	} else if m != (store.CredentialMigration{}) {
+		logger.Info("credentials migrated", "bind", m.Bind, "containment", m.Containment, "orphaned_dropped", m.Orphaned)
+	}
 	if _, err := loader.Load(); err != nil { // fail fast on broken policy files
 		return err
 	}
