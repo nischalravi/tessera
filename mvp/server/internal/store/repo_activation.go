@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// Two-person activation requests (schema/0208_activation_requests.sql,
+// Two-person activation requests (schema/0351_activation_requests.sql,
 // deployment readiness DR-10). Only internal/readiness decides when a request
 // may be made, approved or applied; the store keeps the rows.
 

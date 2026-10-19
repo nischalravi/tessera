@@ -7,13 +7,14 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/ingest"
+	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
 func (s *Server) registerDryRunRoutes() {
-	s.handle(http.MethodPost, "/api/connections/{id}/dry-run", phased, need(auth.PermConnectionsManage), s.rd(s.dryRun))
+	s.handle(http.MethodPost, "/api/connections/{id}/dry-run", phased, need(auth.PermConnectionsManage), s.rd(s.dryRun)).asJob(jobs.DryRun, "id")
 	s.handle(http.MethodGet, "/api/connections/{id}/dry-runs/{run}", read, need(auth.PermConnectionsRead), s.rd(s.getDryRun))
 	s.handle(http.MethodGet, "/api/connections/{id}/findings", read, need(auth.PermConnectionsRead), s.rd(s.listFindings))
 	s.handle(http.MethodPost, "/api/connections/{id}/findings/{fid}/accept", write, need(auth.PermConnectionsManage), s.rd(s.acceptFinding))

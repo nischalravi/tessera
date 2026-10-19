@@ -20,6 +20,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/ldap"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -41,7 +42,9 @@ type Service struct {
 
 // NewService returns a service over a template registry.
 func NewService(reg *template.Registry, env string) *Service {
-	return &Service{Templates: reg, Env: env, LiveTTL: DefaultLiveTTL}
+	s := &Service{Templates: reg, Env: env, LiveTTL: DefaultLiveTTL}
+	s.Runner.Live.Env = env
+	return s
 }
 
 // Bundle is a revision with everything needed to evaluate it.
@@ -55,6 +58,10 @@ type Bundle struct {
 	Evidence   *Evidence
 	Eval       *Evaluation
 	LiveTTL    time.Duration
+
+	// cred is the opened credential of a real revision, loaded by Validate
+	// for one run. It never leaves the bundle and prints as [redacted].
+	cred ldap.Secret
 }
 
 // Simulated reports whether the connection uses a demo (simulated) connector.
@@ -479,10 +486,14 @@ var refRE = regexp.MustCompile(`^(vault|agent):[A-Za-z0-9._/:@-]{1,200}$`)
 
 // SetCredential records a credential reference on the in-progress revision.
 //
-// Until Phase 0 sealing (§7.1) exists the MVP does not persist secret
-// values at all: a submitted secret is acknowledged with a sealed:<id>
-// reference and a new version, and the value itself is discarded. Demo
-// connectors need no secret, and no real connector can run before DR-10.
+// A submitted secret is sealed under the KEK (internal/seal, AAD bound to the
+// tenant and reference) and stored in connection_secrets when the service has
+// a Sealer (Runner.Live.Sealer); the revision keeps only the sealed:<id>
+// reference. Without a Sealer the value is discarded, as before: demo
+// connectors need no secret and a real connector then has no credential to
+// run with.
+// A replaced credential's row is kept: a new revision copies its predecessor's
+// reference, so the live revision may still use it.
 func (s *Service) SetCredential(c *store.TenantTx, connID string, in CredentialInput, actor string, now time.Time) (*Bundle, error) {
 	var ref string
 	switch {
@@ -514,6 +525,15 @@ func (s *Service) SetCredential(c *store.TenantTx, connID string, in CredentialI
 	}
 	if err := c.UpdateRevisionSecret(rev.ID, ref, version, hash, now); err != nil {
 		return nil, err
+	}
+	if in.Secret != "" && s.Runner.Live.Sealer != nil {
+		blob, err := s.Runner.Live.Sealer.Seal([]byte(in.Secret), connectionSecretAAD(c.Tenant(), ref))
+		if err != nil {
+			return nil, err
+		}
+		if err := c.PutConnectionSecret(ref, blob, now); err != nil {
+			return nil, err
+		}
 	}
 	kind, _, _ := strings.Cut(ref, ":")
 	if err := c.Audit(now, actor, "connection.credential_set", ojson.Object{{Key: "connection_id", Value: b.Conn.ID},

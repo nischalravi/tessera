@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -20,7 +19,7 @@ var t0 = time.Date(2026, 10, 8, 9, 30, 0, 0, time.UTC)
 // newStore opens a fresh database with one tenant and returns that tenant's scope.
 func newStore(t *testing.T) Scope {
 	t.Helper()
-	db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "r.db"))
+	db, err := store.Open(context.Background(), store.TestTarget(t))
 	if err != nil {
 		t.Fatal(err)
 	}

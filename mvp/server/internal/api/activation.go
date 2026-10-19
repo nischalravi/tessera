@@ -27,7 +27,7 @@ func (s *Server) registerActivationRoutes() {
 
 // person is the acting principal as the two-person rule sees it. Routes that
 // use it are user-only (a step-up route refuses API clients; reject checks).
-func person(r *http.Request) (readiness.Person, error) {
+func activationPerson(r *http.Request) (readiness.Person, error) {
 	p := principal(r)
 	if p.Kind != auth.KindUser || p.UserID == nil {
 		return readiness.Person{}, &readiness.Error{Status: http.StatusForbidden, Code: "interactive_authentication_required",
@@ -100,7 +100,7 @@ func (s *Server) approveActivation(r *http.Request, p *params) (int, any, error)
 	if err != nil {
 		return 0, nil, err
 	}
-	by, err := person(r)
+	by, err := activationPerson(r)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -128,7 +128,7 @@ func (s *Server) rejectActivation(r *http.Request, p *params) (int, any, error) 
 	if err != nil {
 		return 0, nil, err
 	}
-	by, err := person(r)
+	by, err := activationPerson(r)
 	if err != nil {
 		return 0, nil, err
 	}

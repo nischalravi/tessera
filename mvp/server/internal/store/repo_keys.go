@@ -133,7 +133,25 @@ var (
 		SELECT `+platformKeyCols+` FROM platform_keys p WHERE p.purpose = @purpose ORDER BY p.created_at, p.rowid`)
 	platformKeysRetire = sq("platform_keys.retire", `
 		UPDATE platform_keys SET status = 'retired' WHERE kid = @kid AND status = 'active'`)
+	platformKeysRevoke = sq("platform_keys.revoke", `
+		UPDATE platform_keys SET status = 'revoked' WHERE kid = @kid AND status IN ('active', 'retired')`)
 )
+
+// RevokePlatformKey marks an active or retired platform key revoked (an
+// emergency: it is never published again, so checkpoints it signed no
+// longer verify). ErrNotFound for an unknown or already revoked kid.
+func (s *SystemTx) RevokePlatformKey(kid string) error {
+	res, err := s.exec(platformKeysRevoke, sql.Named("kid", kid))
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n != 1 {
+		return ErrNotFound
+	}
+	return nil
+}
 
 // InsertPlatformKey adds an active platform key (ErrDuplicate if one is
 // already active for the purpose).

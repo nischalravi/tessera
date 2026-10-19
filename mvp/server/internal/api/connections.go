@@ -452,7 +452,7 @@ func (s *Server) activate(r *http.Request, p *params) (int, any, error) {
 			return err
 		}
 		if two {
-			by, err := person(r)
+			by, err := activationPerson(r)
 			if err != nil {
 				return err
 			}
