@@ -1,0 +1,52 @@
+# Golden corpus, S3 ACLs, Object Ownership and Block Public Access: GC-65 to GC-68.
+# The bucket is tsr-bkt (arn:aws:s3:::tsr-bkt), owned by account 111111111111.
+# Expectations are those of design §14.2; do not edit one to make a test pass.
+
+- id: GC-65
+  title: IgnorePublicAcls neutralizes a public-read ACL for anonymous callers
+  bucket:
+    object_ownership: ObjectWriter
+    bpa: {bucket: {IgnorePublicAcls: true}}
+    object_acl:
+      "arn:aws:s3:::tsr-bkt/a.txt": [{grantee: AllUsers, perm: READ}]
+  principal: anonymous
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-bkt/a.txt"}
+  expect: {outcome: DENY, deny_kind: implicit, stage: s3_acl}
+  why: "[S17] IgnorePublicAcls ignores all public ACLs."
+  verified: doc
+
+- id: GC-66
+  title: RestrictPublicBuckets blocks a cross-account statement inside a public policy
+  bucket:
+    bpa: {bucket: {RestrictPublicBuckets: true}}
+  bucket_policy:
+    Statement:
+      - {"Effect": "Allow", "Principal": {"AWS": "222222222222"}, "Action": "s3:GetObject", "Resource": "arn:aws:s3:::tsr-bkt/*"}
+      - {"Effect": "Allow", "Principal": "*", "Action": "s3:GetObject", "Resource": "arn:aws:s3:::tsr-bkt/*"}
+  principal: "arn:aws:iam::222222222222:user/dave"
+  identity: [allow_all]
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-bkt/a"}
+  expect: {outcome: DENY, deny_kind: guardrail, stage: s3_bpa}
+  why: "[S17] statement 3 makes the policy public, so RestrictPublicBuckets disables Account-2's access (AWS's own example)."
+  verified: doc
+
+- id: GC-67
+  title: BucketOwnerEnforced disables ACL grants
+  bucket:
+    object_ownership: BucketOwnerEnforced
+    bucket_acl: [{grantee: "canonical(222222222222)", perm: READ}]
+  principal: "arn:aws:iam::222222222222:user/dave"
+  identity: [allow_all]
+  request: {action: "s3:ListBucket", resource: "arn:aws:s3:::tsr-bkt"}
+  expect: {outcome: DENY, deny_kind: implicit, stage: resource_policy}
+  why: "[S16] ACLs disabled; no resource-side allow."
+  verified: doc
+
+- id: GC-68
+  title: An anonymous public bucket policy works with BPA off
+  bucket_policy: {"Statement": [{"Effect": "Allow", "Principal": "*", "Action": "s3:GetObject", "Resource": "arn:aws:s3:::tsr-bkt/*"}]}
+  principal: anonymous
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-bkt/a"}
+  expect: {outcome: ALLOW}
+  why: "[S5] '*' with Allow grants public access."
+  verified: doc

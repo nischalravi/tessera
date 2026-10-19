@@ -70,6 +70,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/alerts"
 	"github.com/nischalravi/tessera/mvp/server/internal/api"
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
@@ -404,6 +405,10 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	defer stopFake()
 	// The s3:// anchor sink's AWS SDK client uses the same safehttp client.
 	anchorURL := cfg.AnchorURL(o.db)
+	alertSvc, err := newAlertService(cfg, st, sealer, outbound, clock, logger)
+	if err != nil {
+		return err
+	}
 	sink, err := audit.NewSink(anchorURL, audit.WithHTTPClient(outbound))
 	if err != nil {
 		return err
@@ -413,7 +418,8 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		Outbound: outbound, FakeTargetURL: fakeURL,
 		Containment:    &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock},
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
-		HSTS: cfg.IsProd(), Env: cfg.Env, Identifiers: identifiers.NewKeyer(sealer), EmailMode: cfg.Mail.Mode, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, Readiness: rsvc, AuditAnchor: anchorURL})
+		HSTS: cfg.IsProd(), Env: cfg.Env, Identifiers: identifiers.NewKeyer(sealer), EmailMode: cfg.Mail.Mode, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, Readiness: rsvc, AuditAnchor: anchorURL,
+		Alerts: alertSvc})
 	sender, err := notify.NewSender(cfg.Mail, cfg.Env, cfg.OutboundAllowLoopback, sealer, config.DevMailPath(o.db), logger)
 	if err != nil {
 		return err
@@ -484,6 +490,11 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		defer close(historyDone)
 		historyRunner.Loop(ctx)
 	}()
+	alertsDone := make(chan struct{})
+	go func() {
+		defer close(alertsDone)
+		alertSvc.Run(ctx, alertsInterval)
+	}()
 	backupDone := make(chan struct{})
 	go func() {
 		defer close(backupDone)
@@ -514,6 +525,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		<-ckptDone
 		<-groupsDone
 		<-historyDone
+		<-alertsDone
 		<-backupDone
 		<-notifyDone
 		return err
@@ -533,6 +545,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	<-ckptDone
 	<-groupsDone
 	<-historyDone
+	<-alertsDone
 	<-backupDone
 	<-notifyDone
 	if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
@@ -584,4 +597,19 @@ func runKeyRotation(ctx context.Context, st *store.DB, sealer *seal.Sealer, cloc
 			}
 		}
 	}
+}
+
+// alertsInterval is how often the alert engine reads new audit events and
+// sends due deliveries (detections run every 15 minutes).
+const alertsInterval = time.Minute
+
+// newAlertService builds the alert engine and deliverer (issue #168):
+// webhooks through the SSRF-guarded client, email per TESSERA_NOTIFY.
+func newAlertService(cfg *config.Config, st *store.DB, sealer *seal.Sealer, client *http.Client, clock timeutil.Clock, logger *slog.Logger) (*alerts.Service, error) {
+	mailer, err := alerts.NewMailer(cfg.Notify, logger)
+	if err != nil {
+		return nil, err
+	}
+	return &alerts.Service{DB: st, Sealer: sealer, HTTP: client, Mail: mailer, Clock: clock, Log: logger,
+		PublicURL: cfg.PublicURL}, nil
 }

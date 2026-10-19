@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/admin"
+	"github.com/nischalravi/tessera/mvp/server/internal/alerts"
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oauth2rp"
@@ -114,6 +115,10 @@ type Config struct {
 	// TrustedProxies (TESSERA_TRUSTED_PROXIES) are the peers whose
 	// X-Forwarded-For the rate limiter believes.
 	TrustedProxies []netip.Prefix
+	// Alerts delivers alerts and sends channel tests (issue #168); its
+	// Sealer seals webhook secrets. Nil: channel tests are unavailable and
+	// webhook channels cannot be created.
+	Alerts *alerts.Service
 	// Outbound is the safehttp client the provisioning worker sends through.
 	// Nil: no outbound client, so every provisioning call fails (as with
 	// Containment).
@@ -234,6 +239,7 @@ func New(cfg Config) *Server {
 		Cookies: auth.Cookies{Insecure: cfg.InsecureCookie}}
 	s.registerRoutes()
 	s.registerAuditRoutes()
+	s.registerAlertRoutes()
 	s.registerOwnershipRoutes()
 	s.registerReviewScheduleRoutes()
 	s.registerCorrelationRoutes()

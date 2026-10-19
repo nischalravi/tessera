@@ -1,9 +1,9 @@
 import { KeyboardEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
-import { Bell, Check, CircleHelp, Inbox, Menu as MenuIcon, Monitor, Moon, Search, Settings, Sun } from "lucide-react";
-import { IdentityRow, markNotificationsRead, relTime, useApi } from "../api";
+import { Bell, BellRing, Check, CircleHelp, Inbox, Menu as MenuIcon, Monitor, Moon, Search, Settings, Sun } from "lucide-react";
+import { AlertRow, IdentityRow, markNotificationsRead, relTime, severityTone, useApi } from "../api";
 import { Menu } from "../components/Menu";
-import { initials } from "../components";
+import { Badge, initials } from "../components";
 import { useToast } from "../components/Toast";
 import { isTyping, modalOpen } from "../components/overlay";
 import { useInbox } from "../features/inbox/model";
@@ -203,6 +203,46 @@ function Notifications() {
   );
 }
 
+/** Live alerts (#168), newest first, with a count badge. */
+function AlertBell() {
+  const { data } = useApi<AlertRow[]>("/alerts?status=open");
+  const nav = useNavigate();
+  const items = (data ?? []).slice(0, 6);
+  const n = data?.length ?? 0;
+  return (
+    <Menu
+      label="Alerts"
+      items={[
+        { heading: n ? `${n} open ${n === 1 ? "alert" : "alerts"}` : "Alerts" },
+        ...(items.length
+          ? items.map((a) => ({
+              label: (
+                <span className="grow">
+                  <Badge tone={severityTone(a.severity)}>{a.severity}</Badge> {a.title}
+                  <span className="faint small" style={{ display: "block" }}>{a.rule_name} · {relTime(a.last_seen_at)}</span>
+                </span>
+              ),
+              onSelect: () => nav(`/alerts?selected=${encodeURIComponent(a.id)}`),
+            }))
+          : [{ label: <span className="faint">No open alerts</span> }]),
+        "divider",
+        { label: "Open alerts", onSelect: () => nav("/alerts") },
+      ]}
+      trigger={(t) => (
+        <button type="button" className="tb-btn" aria-label={`Alerts${n ? `, ${n} open` : ""}`} title="Alerts" {...t}>
+          <BellRing size={18} strokeWidth={1.7} aria-hidden />
+          {n ? <span className="tb-badge" aria-hidden>{n > 99 ? "99+" : n}</span> : null}
+        </button>
+      )}
+    />
+  );
+}
+
+function AlertBellGate() {
+  const { can } = useSession();
+  return can("alerts.read") ? <span className="tb-hide-sm"><AlertBell /></span> : null;
+}
+
 function SettingsMenu() {
   const { pref, setPref } = useTheme();
   const nav = useNavigate();
@@ -343,6 +383,7 @@ export function Shell({ children }: { children: ReactNode }) {
             <Inbox size={18} strokeWidth={1.7} aria-hidden />
             {count ? <span className="tb-badge" aria-hidden>{count > 99 ? "99+" : count}</span> : null}
           </button>
+          <AlertBellGate />
           <span className="tb-hide-sm"><Notifications /></span>
           <span className="tb-hide-sm"><SettingsMenu /></span>
           <span className="tb-hide-md"><HelpMenu /></span>

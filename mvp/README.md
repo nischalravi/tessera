@@ -251,6 +251,9 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `GET|POST /api/hris/events` (422 for an unknown `identity_id`) · `GET /api/hris/events/{id}/plan` · `POST /api/hris/events/{id}/execute` ·
 `GET /api/jml/leaver-plan/{identity_id}` · `POST /api/identities/{id}/contain` (kill switch, see "Identity containment") · `POST /api/identities/{id}/disable|enable` ·
 `PUT /api/connections/{id}/containment-credential` · `GET /api/accounts[?system=]` ·
+`GET /api/alerts[?status=open|acknowledged|resolved|live&severity=&rule=]` · `GET /api/alerts/summary` · `GET /api/alerts/{id}` ·
+`POST /api/alerts/{id}/acknowledge|resolve|assign` · `GET /api/alerts/rules` · `PUT /api/alerts/rules/{rule_id}` ·
+`GET|POST /api/alerts/channels` · `PUT /api/alerts/channels/{id}` · `POST /api/alerts/channels/{id}/test` ·
 `GET /api/ownership[?kind=app|group|resource|identity&unowned=]` · `PUT /api/ownership/{kind}/{object_key}` ·
 `POST /api/ownership/bulk` ·
 `GET /api/audit[?limit=&before_seq=&action=&actor_id=&target_type=&target_id=&from=&to=&include_http=]` ·
@@ -316,6 +319,45 @@ Each route declares the permission it needs (design §12.1, §16.2; `api.Routes(
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
 or HRIS execution is always the signed-in user.
 
+### Alerts
+
+The alert engine (`internal/alerts`, issue #168) runs every minute in `tessera serve`. It reads new audit
+events and matches them against built-in rules; detections run every 15 minutes. A tenant's first run
+starts at the current head, so history does not alert.
+
+| Rule | Fires on | Default |
+|---|---|---|
+| Break-glass access used | `auth.break_glass.used`, `breakglass.action` | critical, every event |
+| New administrator | `auth.role.granted`, `admin.role.granted` or an applied `role.grant*` admin change, for tenant_admin, policy_admin or break_glass | high |
+| MFA bypassed | `auth.mfa.bypass*` (#109) | high |
+| Repeated sign-in failures | `auth.login.failure` with the same email, subject or IP | medium, 5 in 15 min |
+| Provisioning or sync job failed | a failed `connectors.*`, `connection.*`, `jml.*`, `provisioning.*` or `readiness.*` event, `job.failed` (job run history), or `admin.change.failed` | high |
+| Audit anchoring failing | detection: checkpoints whose anchoring failed | critical, at 3 |
+| Privileged identity without an owner | detection: an active NHI or agent with privileged access and no owner, or an owner who left | high |
+
+- **Dedup and lifecycle.** There is one live alert per rule and subject; repeats raise its count.
+  - States are open, acknowledged and resolved. A detection resolves itself when the condition clears or the rule is switched off.
+  - Raising, acknowledging, assigning, resolving, rule and channel changes, deliveries and channel tests are all audited (`alert.*`).
+- **Rule settings.** Tenant admins can turn a rule on or off and change its severity, threshold and window (`alerts.configure`).
+- **Channels.**
+  - Email: a list of addresses.
+  - Webhook: an https URL. The payload has a `text` field, so Slack and Teams incoming webhooks accept it.
+  - Each channel takes alerts at or above its minimum severity.
+  - Webhooks go out through `internal/safehttp`, which refuses private, loopback (except in dev) and cloud-metadata addresses.
+  - Each webhook is signed: `X-Tessera-Signature: t=<unix>,v1=<hex HMAC-SHA256 of "<t>.<body>">`. The secret (`whsec_…`) is shown once, sealed under the KEK, and can be rotated.
+  - Creating or changing a channel needs step-up.
+  - Webhook URLs come back redacted, because Slack and Teams put their token in the path.
+- **Retries.** Deliveries wait in an outbox and are retried after 1 min, 5 min, 15 min, 1 h and 4 h, then marked failed.
+- **Email.** `TESSERA_NOTIFY` controls email:
+  - `log` (the default) writes each message to the server log.
+  - `smtp://user:pass@host:587?from=alerts@example.com` sends with STARTTLS required; a relay without STARTTLS is refused.
+  - `smtps://…` sends with implicit TLS.
+  - The SMTP host is operator configuration, so it does not go through `safehttp`.
+- **Permissions.**
+  - `alerts.read`: operator, auditor, policy_admin, tenant_admin.
+  - `alerts.manage` (triage): operator, policy_admin, tenant_admin.
+  - `alerts.configure`: tenant_admin.
+- **UI.** **Protection > Alerts** has three tabs: alerts with filter chips and a side panel, rules, and channels (tenant admins only). For anyone with `alerts.read`, the top-bar bell lists open alerts with a count.
 ### Ownership
 
 Applications (by system name), entitlements (groups), resources and machine identities each have a
@@ -1310,7 +1352,7 @@ the right. Arrow keys move between items.
 | (top) | **Home**, **Inbox** (count) |
 | **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Ownership, Accounts (with *Account matches*), Roles, Organizations (live, read-only, derived from departments) |
 | **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
-| **Protection** | Policies & SoD (violations, policies, what-if simulation), Attribute policies, Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
+| **Protection** | Alerts (alerts, rules, channels), Policies & SoD (violations, policies, what-if simulation), Attribute policies, Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
 | **Settings** | Connections (governed connections and the setup wizard), Admin |
 
 **Home.** For the admin & security persona: the tenant name and a sync line, then tabs
@@ -1645,6 +1687,18 @@ cd ../frontend && npm run build && npm test   # npm test: node:test, no extra de
   the jobs show `runner_id=0` with no steps, they never ran (see the annotations, usually billing).
 * **Security scanners:** gosec reports 0 issues; each of the few `#nosec` annotations carries a
   justification. govulncheck reports no vulnerabilities.
+* **AWS evaluator indexes and queries** (`internal/aws/index`, `internal/aws/query`, pure, no
+  behaviour change to the API yet). `TestAtomsEqualBruteForce` and `TestDiffEqualsBruteForce`
+  check atom-based answers against the engine cell by cell on small random tenants
+  (`awstest.NewWorld(seed)`); `TESSERA_EQUIV_SEEDS=200` runs more seeds and
+  `go test -fuzz FuzzAtomsEqualBruteForce ./internal/aws/query` explores others.
+  `go test -bench . -run XXX ./internal/aws/query` runs the benchmarks (track with `benchstat`).
+  The nightly SLO check against a synthetic tenant at twice the design's target scale is
+  `go test -tags slow -run TestPerf -timeout 90m ./internal/aws/query`. It needs about 8 GB of
+  memory and a quiet machine (the SLOs are for 16 vCPU). Options: `TESSERA_PERF_SCALE=1` for the
+  target itself, `TESSERA_PERF_SAMPLE=n` for the number of sampled principals,
+  `TESSERA_PERF_PROFILE=<dir>` for CPU and heap profiles (keep `<dir>` out of the repository), and
+  `TESSERA_PERF_ROOT=1` for the root-SCP diff.
 
 ## Server hardening
 
