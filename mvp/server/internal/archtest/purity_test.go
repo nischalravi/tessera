@@ -20,9 +20,36 @@ import (
 var pureDirs = []string{
 	"internal/aws/eval",
 	"internal/aws/glob",
+	"internal/aws/index",
 	"internal/aws/model",
 	"internal/aws/policy",
+	"internal/aws/query",
 	"internal/aws/snapshot",
+}
+
+// awstestPkg is the synthetic-snapshot generator and fake catalog that the
+// evaluator's tests and benchmarks share. Only tests may import it.
+const awstestPkg = "internal/aws/awstest"
+
+// TestAWSTestkitOnlyInTests proves from the import graph of non-test files that
+// nothing but tests imports internal/aws/awstest.
+func TestAWSTestkitOnlyInTests(t *testing.T) {
+	graph := moduleImports(t, moduleRoot(t))
+	if _, ok := graph[awstestPkg]; !ok {
+		t.Fatalf("package %s not found; the test is not looking at the module", awstestPkg)
+	}
+	for pkg, deps := range graph {
+		for _, dep := range deps {
+			if dep == awstestPkg {
+				t.Errorf("%s imports %s outside a _test.go file", pkg, dep)
+			}
+		}
+	}
+	for _, root := range productionRoots {
+		if chain := reachable(graph, root, awstestPkg); chain != nil {
+			t.Errorf("%s links the evaluator test kit: %s", root, strings.Join(chain, " -> "))
+		}
+	}
 }
 
 // pureBannedImports are exact paths; a trailing "/" bans a whole tree.

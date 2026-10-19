@@ -205,3 +205,29 @@ func TestFastSkipsAssessment(t *testing.T) {
 		t.Fatalf("%+v, %v", d, err)
 	}
 }
+
+// Fast mode leaves out the trace and the attachment paths, nothing that decides:
+// on every golden request it gives the outcome, deny kind and residual of the
+// full evaluation.
+func TestFastDecidesLikeFull(t *testing.T) {
+	for _, c := range loadCases(t) {
+		w := buildWorld(t, c, nil)
+		for i, r := range c.allRequests() {
+			full, err := eval.Evaluate(context.Background(), w.snap, fakeCatalog{}, c.request(w, r), eval.Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			fast, err := eval.Evaluate(context.Background(), w.snap, fakeCatalog{}, c.request(w, r), eval.Options{Fast: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fast.Outcome != full.Outcome || fast.DenyKind != full.DenyKind ||
+				authz.Render(fast.Residual, authz.RenderOptions{}) != authz.Render(full.Residual, authz.RenderOptions{}) {
+				t.Errorf("%s request %d: fast %s/%s, full %s/%s", c.ID, i, fast.Outcome, fast.DenyKind, full.Outcome, full.DenyKind)
+			}
+			if len(fast.Steps) != 0 {
+				t.Errorf("%s request %d: fast mode built a trace", c.ID, i)
+			}
+		}
+	}
+}
