@@ -284,6 +284,9 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `POST /api/sod/{functions|risks|rulesets}/{id}/retire` · `GET /api/sod/rulesets/{id}/export` ·
 `POST /api/sod/rulesets/import` · `POST /api/sod/import-legacy` · `GET /api/sod/violations` ·
 `POST /api/sod/simulate` ·
+`GET|POST /api/sod/controls` · `GET|PUT /api/sod/controls/{id}` · `POST /api/sod/controls/{id}/retire` ·
+`GET|POST /api/sod/mitigations` · `POST /api/sod/mitigations/{id}/approve|reject|cancel|revoke` ·
+`POST /api/sod/violations/escalate` · `POST /api/sod/violations/revoke` · `GET /api/sod/review-context` ·
 `GET /api/approvals/inbox` · `GET /api/approvals/delegates` · `GET|POST /api/approvals/delegations` ·
 `POST /api/approvals/delegations/{id}/revoke` ·
 `GET /api/correlation/queue` · `GET /api/correlation/decisions` ·
@@ -780,6 +783,40 @@ one is always unknown and denies; they arrive with the HRIS attribute mapping).
 
 Reading is `graph.read`; changing needs `sod.manage` (policy admin) and a fresh phishing-resistant
 sign-in; simulate needs `requests.create` (and `requests.create_for_others` for other people).
+
+### Mitigating controls and remediation of SoD violations
+
+**Protection → Mitigating controls** and the actions in the **SoD conflicts** side panel (issue #298).
+
+- **Control library** (`sod_controls`): name, description, an owner (an identity), type (preventive,
+  detective, corrective), frequency and the evidence the owner must show. Changes need `sod.manage`
+  and are audited (`sod.control.*`); a control that covers a pending or active mitigation cannot be retired.
+- **Mitigation** (`sod_mitigations`): one person's violation of one risk, covered by a control or
+  accepted, with a justification, optional evidence references and a **mandatory end date** no
+  further away than `TESSERA_SOD_MAX_MITIGATION_DAYS` (default 365). It is requested by one person
+  (`sod.mitigate`) and approved or rejected by another (`sod.approve`, approval also needs a fresh
+  phishing-resistant sign-in): the server refuses the requester (`403 four_eyes`). Only one request
+  per person and risk is pending or active. Request, approval, rejection, withdrawal and early end
+  are audited in the same transaction (`sod.mitigation.*`).
+- **Status.** An active mitigation shows the violation as "Mitigated until <date>" (or "Accepted
+  until"), a pending one as "Mitigation requested" (still open). Mitigated and accepted violations
+  are left out of the open counts (`/api/violations`, `/api/policies`, summaries, `open` in
+  `GET /api/sod/violations`) but always listed in the SoD report with their cover.
+- **Remediation options.** A risk offers some of `revoke`, `mitigate`, `accept`, `escalate`
+  (`remediation` on the risk and in its YAML; none stated: all four). The API refuses an option the
+  risk does not offer (`409 option_not_offered`). Revoke goes through the existing revoke path
+  (`POST /api/sod/violations/revoke`, dry run first, only for a grant behind the violation);
+  escalate notifies the risk owner and is recorded (`sod_escalations`).
+- **Expiry.** The sweeper warns the control owner and the person's manager
+  `TESSERA_SOD_WARN_DAYS` (default 14) before the end date, once, through the notification outbox.
+  When the end date passes the mitigation expires (`sod.mitigation.expire`), the violation is open
+  again (it counts as open the moment the date passes, even before the sweeper runs) and the risk and
+  control owners are told. A risk owner or an approver can end an active mitigation early
+  (`POST /api/sod/mitigations/{id}/revoke`, with a reason and a fresh sign-in).
+- **Reviews and evidence.** `GET /api/sod/review-context?campaign_id=` lists, for each review item,
+  the SoD risks behind its grant with any mitigation; the review panel shows them and lets a reviewer
+  request a mitigation or escalate. Every step is an audit event, so `GET /api/audit/export`
+  carries violations' mitigations and their approvals.
 
 ### Contractors, guests and end dates
 
@@ -1286,7 +1323,7 @@ the right. Arrow keys move between items.
 | (top) | **Home**, **Inbox** (count) |
 | **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Ownership, Accounts (with *Account matches*), Roles, Organizations (live, read-only, derived from departments) |
 | **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
-| **Protection** | Alerts (alerts, rules, channels), Policies & SoD (violations, policies, what-if simulation, SoD functions, risks and rulesets), Attribute policies, Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
+| **Protection** | Alerts (alerts, rules, channels), Policies & SoD (violations, policies, what-if simulation, SoD functions, risks and rulesets), Mitigating controls (mitigations, control library), Attribute policies, Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
 | **Settings** | Connections (governed connections and the setup wizard), Admin |
 
 **Home.** For the admin & security persona: the tenant name and a sync line, then tabs

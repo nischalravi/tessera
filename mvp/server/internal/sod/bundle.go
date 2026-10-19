@@ -58,6 +58,8 @@ type RiskDoc struct {
 	Owner           string    `json:"owner,omitempty" yaml:"owner,omitempty"`
 	Functions       []string  `json:"functions" yaml:"functions"`
 	Subjects        *Subjects `json:"subjects,omitempty" yaml:"subjects,omitempty"`
+	// Remediation lists the options offered on a violation (revoke, mitigate, accept, escalate); omitted: all.
+	Remediation []string `json:"remediation,omitempty" yaml:"remediation,omitempty"`
 }
 
 // MarshalYAML renders the bundle as a YAML file.
@@ -113,6 +115,14 @@ func BundleOf(tx *store.TenantTx, rs *store.SodRuleset) (*Bundle, error) {
 	if err != nil {
 		return nil, err
 	}
+	optRows, err := tx.SodRiskOptions()
+	if err != nil {
+		return nil, err
+	}
+	optsOf := map[string][]string{}
+	for _, o := range optRows {
+		optsOf[o.RiskID] = append(optsOf[o.RiskID], o.Option)
+	}
 	xid := func(id *int64) string {
 		if id == nil {
 			return ""
@@ -138,7 +148,7 @@ func BundleOf(tx *store.TenantTx, rs *store.SodRuleset) (*Bundle, error) {
 			continue
 		}
 		doc := RiskDoc{Key: r.Key, Name: r.Name, Description: r.Description, Priority: r.Priority,
-			BusinessProcess: r.BusinessProcess, Owner: xid(r.OwnerID), Functions: []string{}}
+			BusinessProcess: r.BusinessProcess, Owner: xid(r.OwnerID), Functions: []string{}, Remediation: orderOptions(optsOf[r.ID])}
 		for _, fid := range linked[r.ID] {
 			if f := fnByID[fid]; f != nil {
 				doc.Functions = append(doc.Functions, f.Key)
@@ -292,7 +302,8 @@ func (w *Writer) Import(b *Bundle, opt ImportOptions) (*ImportResult, error) {
 			subj = *d.Subjects
 		}
 		in := RiskInput{Key: d.Key, Name: d.Name, Description: d.Description, Priority: d.Priority,
-			BusinessProcess: d.BusinessProcess, OwnerID: owner, RulesetID: rs.ID, FunctionIDs: ids, Subjects: subj, Note: "imported"}
+			BusinessProcess: d.BusinessProcess, OwnerID: owner, RulesetID: rs.ID, FunctionIDs: ids, Subjects: subj,
+			Remediation: d.Remediation, Note: "imported"}
 		r, err := w.Tx.SodRiskByKey(d.Key)
 		switch {
 		case errors.Is(err, store.ErrNotFound):
@@ -354,8 +365,12 @@ func (w *Writer) riskDoc(r *store.SodRisk) (RiskDoc, error) {
 	if err != nil {
 		return RiskDoc{}, err
 	}
+	opts, err := RiskOptions(w.Tx, r.ID)
+	if err != nil {
+		return RiskDoc{}, err
+	}
 	d := RiskDoc{Key: r.Key, Name: r.Name, Description: r.Description, Priority: r.Priority, BusinessProcess: r.BusinessProcess,
-		Functions: keys}
+		Functions: keys, Remediation: opts}
 	if r.OwnerID != nil {
 		if i, err := w.Tx.Identity(*r.OwnerID); err == nil {
 			d.Owner = i.ExternalID
@@ -524,6 +539,12 @@ func validateBundle(b *Bundle) error {
 				return wrap("risk "+r.Key, err)
 			}
 		}
+		if _, err := normalizeOptions(r.Remediation); err != nil {
+			return wrap("risk "+r.Key, err)
+		}
+	}
+	for i := range b.Risks { // the canonical form: nil means every option
+		b.Risks[i].Remediation, _ = normalizeOptions(b.Risks[i].Remediation)
 	}
 	return nil
 }

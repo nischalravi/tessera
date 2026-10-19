@@ -125,6 +125,8 @@ var tables = []string{
 	"abac_policies", "abac_policy_versions", "abac_bindings",
 	// separation of duties: functions, risks, rulesets (schema/0300_sod.sql)
 	"sod_functions", "sod_rulesets", "sod_risks", "sod_risk_functions", "sod_versions",
+	// SoD mitigating controls (schema/0301_sod_controls.sql)
+	"sod_controls", "sod_mitigations", "sod_risk_options", "sod_escalations",
 	// identity lifecycle (schema/0220_lifecycle.sql)
 	"identity_lifecycle", "identity_lifecycle_events",
 	// approval routing (schema/0206_approvals.sql)

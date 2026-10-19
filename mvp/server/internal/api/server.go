@@ -95,6 +95,8 @@ type Config struct {
 	// ReadinessScenario selects the simulated validation scenario
 	// (TESSERA_READINESS_SCENARIO; default "gaps").
 	ReadinessScenario string
+	// SoD are the mitigation limits (TESSERA_SOD_MAX_MITIGATION_DAYS, TESSERA_SOD_WARN_DAYS); zero values default.
+	SoD sod.Settings
 	// AuditAnchor is TESSERA_AUDIT_ANCHOR: POST /api/audit/verify checks
 	// checkpoints against it when it is a file:// URL.
 	AuditAnchor string
@@ -251,6 +253,7 @@ func New(cfg Config) *Server {
 	s.registerRoleRoutes()
 	s.registerAbacRoutes()
 	s.registerSodRoutes()
+	s.registerSodControlRoutes()
 	s.registerLifecycleRoutes()
 	s.registerGuestRoutes()
 	s.registerNotificationRoutes()
@@ -394,6 +397,9 @@ func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
 		})
 		step("containment_retries", "containment retry sweep", func() error {
 			return s.containment.SweepRetries(audit.WithSystemActor(ctx, "containment.sweeper"), s.store, "containment.sweeper")
+		})
+		step("sod_mitigation_sweep", "sod mitigation sweep", func() error {
+			return sod.SweepAll(audit.WithSystemActor(ctx, sod.Sweeper), s.store, s.clock(), s.cfg.SoD)
 		})
 		// apply the admin changes whose cooling-off ended and expire the ones
 		// nobody approved in 72 hours (design §15.2)
