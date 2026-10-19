@@ -381,6 +381,7 @@ var Catalog = []Attribute{
 	{"identity.has_manager", "boolean", ""},
 	{"identity.source", "string", "system the identity came from"},
 	{"identity.tenure_days", "number", "days since hire"},
+	{"identity.worker_type", "string", "people only: employee, contractor, intern, partner, vendor or guest (no lifecycle record: employee)"},
 	{"resource.name", "string", "the role or catalog entitlement"},
 	{"resource.risk", "string", "low, medium or high"},
 	{"resource.system", "string", "catalog entitlements: the connected system"},
