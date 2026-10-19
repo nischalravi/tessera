@@ -15,6 +15,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/sponsorship"
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/lifecycle"
+	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 	"github.com/nischalravi/tessera/mvp/server/internal/queue"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/requests"
@@ -34,15 +35,30 @@ const SweepInterval = 30 * time.Second
 // it is dead (visible, retryable) and the next window tries again anyway.
 const maxSweepAttempts = 3
 
+// SweeperLoops are the queue kinds whose runs are tracked as loops in
+// obs.DefaultLoops (lag in /metrics, /readyz and Admin -> Platform health).
+var SweeperLoops = []string{jobs.JITSweep, jobs.SweepRequests, jobs.SweepLifecycle, jobs.SweepAdminChanges, jobs.ContainmentRetry}
+
+// tracked reports each run of a kind's handler, in any tenant, to its loop.
+func tracked(kind string, h queue.Handler) queue.Handler {
+	return func(ctx context.Context, j queue.Job) (result any, err error) {
+		_ = obs.DefaultLoops.Run(kind, func() error { result, err = h(ctx, j); return err })
+		return result, err
+	}
+}
+
 func (s *Server) newQueue() *queue.Queue {
+	for _, k := range SweeperLoops {
+		obs.DefaultLoops.Register(k, SweepInterval, true)
+	}
 	q := &queue.Queue{DB: s.store, Clock: func() time.Time { return s.clock() }, Log: s.log.With("component", "queue")}
 	// jit_sweep is also the manual POST /api/jit/sweep: its runs carry the
 	// route so the run history can retry them.
-	q.Register(jobs.JITSweep, queue.Kind{Handler: s.queueJITSweep, Actor: "jit.sweeper", Method: http.MethodPost, Route: "/api/jit/sweep"})
-	q.Register(jobs.SweepRequests, queue.Kind{Handler: s.queueRequestSweep, Actor: requests.Sweeper})
-	q.Register(jobs.SweepLifecycle, queue.Kind{Handler: s.queueLifecycleSweep, Actor: lifecycle.Sweeper})
-	q.Register(jobs.SweepAdminChanges, queue.Kind{Handler: s.queueAdminSweep, Actor: "admin.sweeper"})
-	q.Register(jobs.ContainmentRetry, queue.Kind{Handler: s.queueContainmentRetries, Actor: "containment.sweeper"})
+	q.Register(jobs.JITSweep, queue.Kind{Handler: tracked(jobs.JITSweep, s.queueJITSweep), Actor: "jit.sweeper", Method: http.MethodPost, Route: "/api/jit/sweep"})
+	q.Register(jobs.SweepRequests, queue.Kind{Handler: tracked(jobs.SweepRequests, s.queueRequestSweep), Actor: requests.Sweeper})
+	q.Register(jobs.SweepLifecycle, queue.Kind{Handler: tracked(jobs.SweepLifecycle, s.queueLifecycleSweep), Actor: lifecycle.Sweeper})
+	q.Register(jobs.SweepAdminChanges, queue.Kind{Handler: tracked(jobs.SweepAdminChanges, s.queueAdminSweep), Actor: "admin.sweeper"})
+	q.Register(jobs.ContainmentRetry, queue.Kind{Handler: tracked(jobs.ContainmentRetry, s.queueContainmentRetries), Actor: "containment.sweeper"})
 	q.Register(jobs.Maintenance, queue.Kind{Handler: s.queueMaintenance, Actor: "queue.worker"})
 	every := "@every " + SweepInterval.String()
 	for _, k := range []string{jobs.JITSweep, jobs.SweepRequests, jobs.SweepLifecycle, jobs.SweepAdminChanges, jobs.ContainmentRetry} {

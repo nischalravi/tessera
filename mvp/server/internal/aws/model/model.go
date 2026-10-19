@@ -54,6 +54,12 @@ type PolicyDoc struct {
 	Statements []Statement `json:"statements"`
 	AWSManaged bool        `json:"aws_managed"`
 	FetchedAt  time.Time   `json:"fetched_at"` // for staleness; zero if unknown
+	// Unparseable is "" for a document that parsed cleanly. Otherwise it says why
+	// the document cannot be trusted (a parse error, or a statement dropped as an
+	// ingest anomaly) and the engine fails closed (§3.3): every decision this
+	// document could affect is UNSUPPORTED with POLICY_UNPARSEABLE. A document
+	// that failed to parse keeps its raw bytes and has no statements.
+	Unparseable string `json:"unparseable"`
 }
 
 // VariablesEnabled reports whether policy variables are substituted in this

@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
+	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
@@ -105,13 +106,17 @@ func (d *Dispatcher) defaults() {
 	}
 }
 
+// LoopName is the dispatcher's name in obs.DefaultLoops (the notifications outbox).
+const LoopName = "notifications_outbox"
+
 // Loop runs RunOnce every interval until ctx ends. A failure is logged and
 // does not stop the loop.
 func (d *Dispatcher) Loop(ctx context.Context, interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
+	obs.DefaultLoops.Register(LoopName, interval, true)
 	for {
-		if _, err := d.RunOnce(ctx); err != nil && ctx.Err() == nil {
+		if err := obs.DefaultLoops.Run(LoopName, func() error { _, err := d.RunOnce(ctx); return err }); err != nil && ctx.Err() == nil {
 			d.Log.Error("notification dispatch failed", "err", err)
 		}
 		select {

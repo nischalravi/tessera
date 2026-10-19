@@ -31,6 +31,7 @@ import (
 	"github.com/go-jose/go-jose/v4"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
+	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -470,6 +471,28 @@ func (s *AnchorSet) Has(tid string, seq int64, jws string) bool {
 // ForTenant returns the anchors of tid, in the order they were anchored.
 func (s *AnchorSet) ForTenant(tid string) []Anchor { return s.byTenant[tid] }
 
+// Upto keeps only the anchors at or below each tenant's head seq (tenants
+// not in heads are dropped). Verifying a restored backup against the live
+// anchor source needs this: checkpoints anchored after the backup was taken
+// would otherwise read as truncation.
+func (s *AnchorSet) Upto(heads map[string]int64) *AnchorSet {
+	out := &AnchorSet{byKey: map[string][]string{}, byTenant: map[string][]Anchor{}, Lines: s.Lines}
+	for tid, as := range s.byTenant {
+		head, ok := heads[tid]
+		if !ok {
+			continue
+		}
+		for _, a := range as {
+			if a.Seq <= head {
+				k := anchorKey(a.TID, a.Seq)
+				out.byKey[k] = append(out.byKey[k], a.JWS)
+				out.byTenant[tid] = append(out.byTenant[tid], a)
+			}
+		}
+	}
+	return out
+}
+
 // maxAnchorLine caps one line of an anchor file.
 const maxAnchorLine = 16 << 10
 
@@ -709,6 +732,9 @@ func (c *Checkpointer) anchorPending(ctx context.Context, t store.Tenant, now ti
 	return anchored, failed, nil
 }
 
+// CheckpointLoopName is the checkpointer's name in obs.DefaultLoops.
+const CheckpointLoopName = "audit_checkpoint"
+
 // Loop runs Run every interval until ctx ends.
 func (c *Checkpointer) Loop(ctx context.Context, interval time.Duration) {
 	t := time.NewTicker(interval)
@@ -717,8 +743,9 @@ func (c *Checkpointer) Loop(ctx context.Context, interval time.Duration) {
 	if log == nil {
 		log = slog.Default()
 	}
+	obs.DefaultLoops.Register(CheckpointLoopName, interval, true)
 	for {
-		if _, err := c.Run(ctx, false); err != nil && ctx.Err() == nil {
+		if err := obs.DefaultLoops.Run(CheckpointLoopName, func() error { _, err := c.Run(ctx, false); return err }); err != nil && ctx.Err() == nil {
 			log.Error("audit checkpoint run failed", "err", err)
 		}
 		select {

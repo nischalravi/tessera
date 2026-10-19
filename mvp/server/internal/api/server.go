@@ -26,8 +26,10 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/sponsorship"
+	"github.com/nischalravi/tessera/mvp/server/internal/health"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
+	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision"
@@ -35,6 +37,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 	"github.com/nischalravi/tessera/mvp/server/internal/requests"
+	"github.com/nischalravi/tessera/mvp/server/internal/reviews"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
@@ -127,6 +130,9 @@ type Config struct {
 	// grants). Nil: a service with no outbound client, so every containment
 	// step is a manual task.
 	Containment *containment.Service
+	// Health answers /readyz and the admin platform-health summary. Nil: a
+	// checker over Store and Sealer with the default loop-lag threshold.
+	Health *health.Checker
 	// AuditAppend overrides how the audit middleware writes http.request
 	// events (tests inject failures). Nil: the store.
 	AuditAppend func(ctx context.Context, t tenancy.ID, e store.AuditEvent) error
@@ -190,6 +196,9 @@ func New(cfg Config) *Server {
 	if cfg.Containment.Clock == nil {
 		cfg.Containment.Clock = cfg.Clock
 	}
+	if cfg.Health == nil {
+		cfg.Health = health.New(cfg.Store, cfg.Sealer, nil, 0, cfg.Logger)
+	}
 	provSeal := cfg.Sealer
 	if provSeal == nil {
 		sealer, err := seal.New(seal.RandomBytes(seal.KeySize))
@@ -220,6 +229,8 @@ func New(cfg Config) *Server {
 	s.queue = s.newQueue()
 	s.registerRoutes()
 	s.registerAuditRoutes()
+	s.registerOwnershipRoutes()
+	s.registerReviewScheduleRoutes()
 	s.registerCorrelationRoutes()
 	s.registerAffiliationRoutes()
 	s.registerRequestRoutes()
@@ -246,6 +257,7 @@ func New(cfg Config) *Server {
 	s.registerOAuth2Routes()
 	s.registerStepUpRoutes()
 	s.registerAdminRoutes()
+	s.registerOpsRoutes()
 	s.checkPublicRoutes()
 	return s
 }
@@ -278,7 +290,10 @@ func (s *Server) Handler() http.Handler {
 	// is written to the ledger.
 	h = s.rateLimit(h)
 	h = s.logRequests(h)
-	return s.securityHeaders(h)
+	h = s.securityHeaders(h)
+	// The probes /livez and /readyz are answered before the API pipeline
+	// (rate limit, audit, sessions): see probes. Metrics wrap everything.
+	return obs.Instrument(s.probes(h))
 }
 
 // streamDeadlineKey carries a streamed route's deadline to dispatch.
@@ -301,6 +316,27 @@ func (s *Server) timeouts(stream, timed http.Handler) http.Handler {
 		// after authorization), so authentication is not cut short.
 		stream.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), streamDeadlineKey{}, deadline)))
 	})
+}
+
+// RunReviewScheduler launches due review schedules and progresses open
+// scheduled campaigns (reminders, escalation, close-out) in every active
+// tenant, every interval until ctx is done (issue #166).
+func (s *Server) RunReviewScheduler(ctx context.Context, interval time.Duration) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	ctx = audit.WithSystemActor(ctx, reviews.Scheduler)
+	for {
+		if pols, err := s.policies(); err != nil {
+			s.log.Error("review scheduler: policies", "err", err)
+		} else if err := reviews.TickAll(ctx, s.store, s.clock(), pols); err != nil && ctx.Err() == nil {
+			s.log.Error("review scheduler failed", "err", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
 }
 
 // sweepTenant expires one tenant's JIT grants and closes its due request
@@ -545,6 +581,7 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	audit.SetRoute(r.Context(), rt.pattern, vars)
+	obs.SetRoute(r.Context(), rt.method+" "+rt.pattern) // the pattern, never the raw path: bounded metric labels
 	if rt.answersRead {
 		audit.AnswersRead(r.Context())
 	}

@@ -8,6 +8,7 @@
 //	tessera audit verify|checkpoint|export   verify, checkpoint or export the audit ledger (see audit.go)
 //	tessera notify seal-password             seal an SMTP password (stdin) for TESSERA_SMTP_PASSWORD_SEALED
 //	tessera admin create-tenant|add-idp|invite-admin   operator bootstrap of a tenant (see admin.go)
+//	tessera catalog refresh|compile   fetch and compile the AWS action catalog (see catalog.go)
 //	tessera admin gen-rls [-out path] [-check]   render the Postgres row-level-security file (see genrls.go)
 //
 // Environment:
@@ -25,6 +26,11 @@
 //	                      private keys; in dev it is generated at var/dev-kek next to the database
 //	(internal/config lists every setting and the production guard rails that
 //	refuse to start with unsafe ones)
+//	TESSERA_METRICS_ADDR  host:port of the internal /metrics listener (separate from the API
+//	                      listener; default 127.0.0.1:9464 in dev, off in prod; "off" disables;
+//	                      prod accepts only a loopback or private IP, see internal/config)
+//	TESSERA_READY_MAX_LOOP_LAG_SECONDS  /readyz fails when a background loop has not
+//	                      succeeded for this long (default 300)
 //	TESSERA_NOW           freeze the clock at an ISO-8601 time (tests and demos; refused in prod)
 //	TESSERA_ENV           dev (run.sh sets it), test or prod. Every API route except
 //	                      the public allow-list needs a signed-in session, and the
@@ -69,9 +75,11 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
+	"github.com/nischalravi/tessera/mvp/server/internal/health"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
+	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision/fake"
@@ -114,11 +122,17 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if cmd == "audit" {
 		return auditCmd(ctx, args, stdout, stderr)
 	}
+	if cmd == "backup" {
+		return backupCmd(ctx, args, stdout, stderr)
+	}
 	if cmd == "notify" {
 		return notifyCmd(ctx, args, stdout, stderr)
 	}
 	if cmd == "admin" {
 		return adminCmd(ctx, args, stdout, stderr)
+	}
+	if cmd == "catalog" {
+		return catalogCmd(ctx, args, stdout, stderr)
 	}
 	fset := flag.NewFlagSet("tessera "+cmd, flag.ContinueOnError)
 	fset.SetOutput(stderr)
@@ -139,7 +153,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return st.Close()
 	}
 	if cmd != "seed" && cmd != "serve" {
-		return fmt.Errorf("unknown command %q (want serve, seed, check-db, readiness, audit or admin)", cmd)
+		return fmt.Errorf("unknown command %q (want serve, seed, check-db, readiness, audit, backup, admin or catalog)", cmd)
 	}
 	if os.Getenv("TESSERA_ENV") == "" {
 		// fail closed: the environment decides the guard rails (§18.4) and
@@ -313,6 +327,7 @@ const (
 	writeTimeout      = api.DefaultHandlerTimeout + 15*time.Second
 	idleTimeout       = 60 * time.Second
 	shutdownTimeout   = 10 * time.Second
+	reviewInterval    = 5 * time.Minute  // scheduled access reviews (issue #166)
 	provisionInterval = 5 * time.Second  // provisioning worker: sends queued operations and re-reads targets
 	keysInterval      = 24 * time.Hour   // keys.EnsureAll: rotation runs daily (design §10.6)
 	notifyInterval    = 15 * time.Second // the notification dispatcher (issue #189)
@@ -376,20 +391,20 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if err != nil {
 		return err
 	}
+	obs.SetPoolStats(st.PoolStats)
+	checker := health.New(st, sealer, obs.DefaultLoops, time.Duration(cfg.ReadyMaxLoopLagSeconds)*time.Second, logger)
 	fakeURL, stopFake, err := startFakeTarget(cfg, logger)
 	if err != nil {
 		return err
 	}
 	defer stopFake()
-	// One shared outbound client: sign-in, containment and provisioning all
-	// send through it.
 	// The s3:// anchor sink's AWS SDK client uses the same safehttp client.
 	anchorURL := cfg.AnchorURL(o.db)
 	sink, err := audit.NewSink(anchorURL, audit.WithHTTPClient(outbound))
 	if err != nil {
 		return err
 	}
-	srv := api.New(api.Config{Store: st, Clock: clock, Policies: loader, Logger: logger,
+	srv := api.New(api.Config{Health: checker, Store: st, Clock: clock, Policies: loader, Logger: logger,
 		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound,
 		Outbound: outbound, FakeTargetURL: fakeURL,
 		Containment:    &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock},
@@ -418,10 +433,23 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if err != nil {
 		return err
 	}
+	metrics, err := newMetricsServer(cfg, o.addr, obs.Default, logger)
+	if err != nil {
+		_ = ln.Close()
+		return err
+	}
+	if metrics != nil {
+		go metrics.serve(logger)
+	}
 	sweepDone := make(chan struct{})
 	go func() {
 		defer close(sweepDone)
 		srv.RunQueue(ctx)
+	}()
+	reviewsDone := make(chan struct{})
+	go func() {
+		defer close(reviewsDone)
+		srv.RunReviewScheduler(ctx, reviewInterval)
 	}()
 	provDone := make(chan struct{})
 	go func() {
@@ -438,6 +466,14 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		defer close(ckptDone)
 		checkpointer.Loop(ctx, checkpointInterval)
 	}()
+	backupDone := make(chan struct{})
+	go func() {
+		defer close(backupDone)
+		if cfg.BackupDir != "" {
+			logger.Info("scheduled backups on", "dir", cfg.BackupDir, "every_minutes", cfg.BackupEveryMinutes, "keep", cfg.BackupKeep)
+			runBackups(ctx, st, sealer, cfg, logger)
+		}
+	}()
 	notifyDone := make(chan struct{})
 	go func() {
 		defer close(notifyDone)
@@ -449,11 +485,16 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 
 	select {
 	case err := <-errc:
+		if metrics != nil {
+			_ = metrics.srv.Close()
+		}
 		stop()
 		<-sweepDone
+		<-reviewsDone
 		<-provDone
 		<-keysDone
 		<-ckptDone
+		<-backupDone
 		<-notifyDone
 		return err
 	case <-ctx.Done():
@@ -461,11 +502,16 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	logger.Info("shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
+	if metrics != nil {
+		_ = metrics.srv.Shutdown(shutdownCtx)
+	}
 	err = httpSrv.Shutdown(shutdownCtx)
 	<-sweepDone
+	<-reviewsDone
 	<-provDone
 	<-keysDone
 	<-ckptDone
+	<-backupDone
 	<-notifyDone
 	if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 		return serveErr
@@ -504,12 +550,14 @@ func startFakeTarget(cfg *config.Config, logger *slog.Logger) (string, func(), e
 func runKeyRotation(ctx context.Context, st *store.DB, sealer *seal.Sealer, clock timeutil.Clock, logger *slog.Logger) {
 	t := time.NewTicker(keysInterval)
 	defer t.Stop()
+	// reported to /metrics but not gated: it runs once a day
+	obs.DefaultLoops.Register("key_rotation", keysInterval, false)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if err := keys.EnsureAll(ctx, st, sealer, clock()); err != nil && ctx.Err() == nil {
+			if err := obs.DefaultLoops.Run("key_rotation", func() error { return keys.EnsureAll(ctx, st, sealer, clock()) }); err != nil && ctx.Err() == nil {
 				logger.Error("signing key rotation failed", "err", err)
 			}
 		}

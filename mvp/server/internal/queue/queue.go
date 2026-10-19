@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
+	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
@@ -60,6 +61,11 @@ type Kind struct {
 	// them (see jobs.Record).
 	Method, Route string
 }
+
+// jobRuns counts finished attempts by kind and result (ok, error, dead,
+// released). Kinds are registered in code, so the label set is closed.
+var jobRuns = obs.Default.NewCounter("tessera_queue_job_runs_total",
+	"Queue job attempts by kind and result (ok, error, dead, released).", "kind", "result")
 
 type permanent struct{ err error }
 
@@ -505,12 +511,21 @@ func (q *Queue) run(t tenancy.ID, sj *store.QueueJob) {
 	}
 	if err != nil && q.workCtx.Err() != nil && errors.Is(err, context.Canceled) {
 		// Shutdown interrupted it: hand it back without using the attempt.
+		jobRuns.Inc(job.Kind, "released")
 		if rerr := q.DB.InTenant(bg, t, func(tx *store.TenantTx) error {
 			return tx.ReleaseQueueJob(job.ID, q.Owner, finished)
 		}); rerr != nil {
 			q.Log.Error("queue release failed", "job", job.ID, "kind", job.Kind, "err", rerr)
 		}
 		return
+	}
+	switch {
+	case err == nil:
+		jobRuns.Inc(job.Kind, "ok")
+	case job.Attempt >= job.MaxAttempts || errors.As(err, new(permanent)):
+		jobRuns.Inc(job.Kind, "dead")
+	default:
+		jobRuns.Inc(job.Kind, "error")
 	}
 	if ferr := q.finish(bg, job, finished, err); ferr != nil {
 		q.Log.Error("queue bookkeeping failed", "job", job.ID, "kind", job.Kind, "err", ferr)

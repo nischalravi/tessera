@@ -9,7 +9,8 @@
 // CORS_ORIGINS is not empty (the UI is same-origin in production, so CORS is
 // off, §11); OUTBOUND_ALLOW_LOOPBACK is true; TESSERA_SAFEDIAL_ALLOW is set; TESSERA_DEV_IDP_URL is set; the
 // audit anchor is not an s3:// URL (missing or file:// included); TESSERA_NOW freezes the clock; a
-// trusted-proxy prefix is shorter than /8 (IPv4) or /32 (IPv6). The guard rail on dev_mock IdP connections
+// trusted-proxy prefix is shorter than /8 (IPv4) or /32 (IPv6); TESSERA_METRICS_ADDR is a wildcard, hostname or public
+// address (/metrics is internal only). The guard rail on dev_mock IdP connections
 // needs the idp_connections table and lands with it (PR6).
 package config
 
@@ -19,6 +20,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/mail"
 	"net/netip"
 	"net/url"
@@ -76,12 +78,17 @@ type Config struct {
 	AuditAnchor            string
 	AuditCheckpointSeconds int
 	AuditCheckpointEvents  int
-	AccessTokenTTLSeconds  int
-	DeviceCodeTTLSeconds   int
-	DPoPRSNonce            bool
-	RPID                   string
-	Notify                 string
-	DevIdPURL              string
+	// BackupDir (TESSERA_BACKUP_DIR) turns on scheduled encrypted backups
+	// every BackupEveryMinutes, keeping the newest BackupKeep (issue #171).
+	BackupDir             string
+	BackupEveryMinutes    int
+	BackupKeep            int
+	AccessTokenTTLSeconds int
+	DeviceCodeTTLSeconds  int
+	DPoPRSNonce           bool
+	RPID                  string
+	Notify                string
+	DevIdPURL             string
 	// FakeTarget is TESSERA_DEV_FAKE_TARGET: cmd/tessera starts an in-process
 	// fake SCIM target on a loopback port, so the provisioning screens can be
 	// demonstrated without a real system. Refused in prod.
@@ -94,6 +101,20 @@ type Config struct {
 	// NotifyDigestHour is the UTC hour from which the daily digest is built
 	// (TESSERA_NOTIFY_DIGEST_HOUR).
 	NotifyDigestHour int
+	// MetricsAddr is TESSERA_METRICS_ADDR: where the internal /metrics
+	// listener binds (host:port). Empty means no metrics listener. Dev and
+	// test default to MetricsDefaultAddr (loopback); production defaults to
+	// off and, when set, must name a loopback or private IP literal (or the
+	// wildcard with TESSERA_METRICS_ALLOW_WILDCARD=true, for a container
+	// whose network policy limits the scraper). /metrics is never served on
+	// the public listener.
+	MetricsAddr string
+	// MetricsAddrDefault is true when MetricsAddr is the dev default rather
+	// than an operator's choice: a busy port is then a warning, not fatal.
+	MetricsAddrDefault bool
+	// ReadyMaxLoopLagSeconds is how long a background loop may go without a
+	// success before /readyz fails (TESSERA_READY_MAX_LOOP_LAG_SECONDS).
+	ReadyMaxLoopLagSeconds int
 	// FrozenNow is TESSERA_NOW (tests and demos; refused in prod). The zero
 	// time means the wall clock; use Clock.
 	FrozenNow time.Time
@@ -226,6 +247,9 @@ func Load(getenv func(string) string) (*Config, error) {
 	}
 	c.AuditCheckpointSeconds = integer("TESSERA_AUDIT_CHECKPOINT_SECONDS", 300, 1, 86400)
 	c.AuditCheckpointEvents = integer("TESSERA_AUDIT_CHECKPOINT_EVENTS", 1000, 1, 1_000_000)
+	c.BackupDir = str("TESSERA_BACKUP_DIR", "", "")
+	c.BackupEveryMinutes = integer("TESSERA_BACKUP_EVERY_MINUTES", 360, 5, 7*24*60)
+	c.BackupKeep = integer("TESSERA_BACKUP_KEEP", 28, 1, 10_000)
 	c.AccessTokenTTLSeconds = integer("TESSERA_AT_TTL_SECONDS", 600, 1, MaxAccessTokenTTLSeconds)
 	c.DeviceCodeTTLSeconds = integer("TESSERA_DEVICE_CODE_TTL_SECONDS", 300, 1, MaxDeviceCodeTTLSeconds)
 	c.DPoPRSNonce = boolean("TESSERA_DPOP_RS_NONCE", false, false)
@@ -233,6 +257,8 @@ func Load(getenv func(string) string) (*Config, error) {
 	c.NotifyMaxAttempts = integer("TESSERA_NOTIFY_MAX_ATTEMPTS", 6, 1, 20)
 	c.NotifyDigestHour = integer("TESSERA_NOTIFY_DIGEST_HOUR", 8, 0, 23)
 	c.Mail = loadMail(getenv, prod, integer, bad)
+	c.ReadyMaxLoopLagSeconds = integer("TESSERA_READY_MAX_LOOP_LAG_SECONDS", 300, 30, 86400)
+	c.MetricsAddr, c.MetricsAddrDefault = loadMetricsAddr(getenv, prod, boolean("TESSERA_METRICS_ALLOW_WILDCARD", false, false), bad)
 	if v := strings.TrimSpace(getenv("TESSERA_NOW")); v != "" {
 		t, err := timeutil.ParseISO(v)
 		switch {
@@ -358,6 +384,53 @@ func Load(getenv func(string) string) (*Config, error) {
 	}
 	c.outbound = &outboundSettings{env: c.Env, allowLoopback: c.OutboundAllowLoopback}
 	return c, nil
+}
+
+// MetricsDefaultAddr is the dev and test /metrics listener (loopback).
+const MetricsDefaultAddr = "127.0.0.1:9464"
+
+// loadMetricsAddr reads TESSERA_METRICS_ADDR ("off" disables it). Outside
+// production the listener must be loopback. In production it is off unless
+// set, and then it must be an IP literal that is loopback, private or
+// link-local: never a host name (which can resolve anywhere) and never a
+// public address. A wildcard bind needs TESSERA_METRICS_ALLOW_WILDCARD=true.
+func loadMetricsAddr(getenv func(string) string, prod, wildcardOK bool, bad func(string, ...any)) (addr string, isDefault bool) {
+	v := strings.TrimSpace(getenv("TESSERA_METRICS_ADDR"))
+	switch strings.ToLower(v) {
+	case "off", "none", "false":
+		return "", false
+	case "":
+		if prod {
+			return "", false
+		}
+		return MetricsDefaultAddr, true
+	}
+	host, port, err := net.SplitHostPort(v)
+	if err != nil {
+		bad("TESSERA_METRICS_ADDR: %q is not host:port", v)
+		return "", false
+	}
+	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+		bad("TESSERA_METRICS_ADDR: %q has no usable port", v)
+		return "", false
+	}
+	a, perr := netip.ParseAddr(host)
+	wildcard := host == "" || (perr == nil && a.IsUnspecified())
+	switch {
+	case wildcard && prod && !wildcardOK:
+		bad("TESSERA_METRICS_ADDR=%s listens on every interface with TESSERA_ENV=prod: bind a loopback or private address, or set TESSERA_METRICS_ALLOW_WILDCARD=true when a network policy limits the scraper", v)
+	case wildcard && !prod:
+		bad("TESSERA_METRICS_ADDR=%s: outside production /metrics listens on loopback only", v)
+	case wildcard:
+	case host == "localhost" && !prod:
+	case perr != nil:
+		bad("TESSERA_METRICS_ADDR: %q must be an IP literal (a host name can resolve to a public address)", v)
+	case prod && !(a.Unmap().IsLoopback() || a.Unmap().IsPrivate() || a.Unmap().IsLinkLocalUnicast()):
+		bad("TESSERA_METRICS_ADDR=%s is a public address: /metrics must not be exposed publicly (use a loopback or private address)", v)
+	case !prod && !a.Unmap().IsLoopback():
+		bad("TESSERA_METRICS_ADDR=%s: outside production /metrics listens on loopback only", v)
+	}
+	return v, false
 }
 
 // loadMail reads TESSERA_NOTIFY_EMAIL and TESSERA_SMTP_*: smtp when a host is
