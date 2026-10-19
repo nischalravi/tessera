@@ -202,7 +202,7 @@ func (s *Server) mcpJWKS(w http.ResponseWriter, r *http.Request, p *params) (any
 	var set any
 	if err := s.store.ReadTenant(r.Context(), t.ID, func(tx *store.TenantTx) error {
 		var err error
-		set, err = keys.JWKSFor(tx, store.KeyPurposeAccessToken, s.clock())
+		set, err = keys.JWKSFor(tx, store.KeyPurposeAccessToken, s.clock(), s.log)
 		return err
 	}); err != nil {
 		return nil, err

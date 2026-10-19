@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// MCP authorization server storage (schema/0290_mcp_authz.sql). Secrets are
+// MCP authorization server storage (schema/0356_mcp_authz.sql). Secrets are
 // hashes (resource secrets, authorization codes); access tokens are never
 // stored, only their jti and metadata.
 

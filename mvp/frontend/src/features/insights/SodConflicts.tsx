@@ -1,81 +1,110 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { Scale } from "lucide-react";
-import { IdentityDetail, Policy, Violation, useApi } from "../../api";
-import { Button, Callout, EmptyState, Loading, Page, Sev, InsightsTabs } from "../../components";
+import { AlertTriangle, ShieldCheck as Shield, Undo2, UserX, Scale as ScaleIcon } from "lucide-react";
+import { IdentityDetail, SodMitigationList, SodViolation, sodControlPaths, sodPaths, useApi } from "../../api";
+import { Badge, Button, Callout, CommandBar, DataTable, EmptyState, InsightsTabs, Page, Sev, SidePanel, useSelected } from "../../components";
+import { EndEarlyDrawer, EscalateDrawer, MitigateDrawer, Target } from "../governance/MitigateDrawers";
 import { RevokeDrawer } from "../directory/IdentityPage";
+import { PRIORITIES, distinct, offers, openCount, sortViolations, statusLabel } from "../governance/sodModel";
 
-/** Pull the two permission sets out of a separation_of_duties policy's YAML for display. */
-function conflictSides(src: string): [string, string] | null {
-  const a = src.match(/^\s*a:\s*\[(.*)\]/m)?.[1];
-  const b = src.match(/^\s*b:\s*\[(.*)\]/m)?.[1];
-  const clean = (s: string) => s.replace(/["']/g, "").split(",").map((x) => x.trim()).join(", ");
-  return a && b ? [clean(a), clean(b)] : null;
-}
+const opts = (vs: SodViolation[], get: (v: SodViolation) => string | string[]) => distinct(vs, get).map((value) => ({ value, label: value }));
 
-/** One conflict: shows both toxic paths and lets you dry-run removing either side. */
-function Conflict({ v }: { v: Violation & { edges?: [string, string][] } }) {
-  const { data: d, reload } = useApi<IdentityDetail>(v.identity_id ? `/identities/${v.identity_id}` : null);
+/** One conflict: both halves with the paths that grant them, and a dry-run revoke of either. */
+function ConflictPanel({ v, onClose, onChanged }: { v: SodViolation; onClose: () => void; onChanged: () => void }) {
+  const { data: d, reload } = useApi<IdentityDetail>(`/identities/${v.identity_id}`);
+  const { data: mits, reload: reloadMits } = useApi<SodMitigationList>(sodControlPaths.mitigations());
   const [revoke, setRevoke] = useState<number | null>(null);
-  const sides = (v.edges ?? []).map(([src, dst]) => d?.grants.find((g) => g.src === src && g.dst === dst)).filter((g) => !!g);
+  const [drawer, setDrawer] = useState<null | "mitigate" | "accept" | "escalate" | "end">(null);
+  const grants = v.edges.map(([src, dst]) => d?.grants.find((g) => g.src === src && g.dst === dst)).filter((g) => !!g);
+  const target: Target = { riskId: v.risk_id, riskName: v.risk_name, identityId: v.identity_id, identityName: v.identity_name };
+  const covered = !!v.mitigation && v.status !== "open";
+  const canRequest = !!mits?.can_request && v.status === "open";
+  const live = mits?.mitigations.find((m) => m.id === v.mitigation?.mitigation_id);
+  const done = () => { reload(); reloadMits(); onChanged(); };
   return (
-    <div className="card stack-sm">
-      <div className="spread">
-        <div className="row"><Sev s={v.severity} />{v.identity_id ? <Link to={`/directory/identities/${v.identity_id}`}><b>{v.identity_name}</b></Link> : <b>{v.identity_name}</b>}</div>
-        <span className="xs faint">{v.policy_name}</span>
-      </div>
-      <div>{v.message}</div>
-      {v.evidence.map((e, i) => <div key={i} className="small muted sys">{e}</div>)}
-      {sides.length > 0 && (
-        <div className="row mt-sm">
-          <span className="small muted">Resolve by removing</span>
-          {sides.map((g) => g.edge_id && <Button key={g.edge_id} size="sm" onClick={() => setRevoke(g.edge_id)}>{g.label}…</Button>)}
+    <>
+      <SidePanel title={v.identity_name} sub={<><Sev s={v.priority} /> <Badge tone={v.status === "open" ? "critical" : v.status === "mitigation_pending" ? "warning" : "ok"}>{v.mitigation?.label ?? statusLabel(v.status)}</Badge></>} onClose={onClose} fullHref={`/directory/identities/${v.identity_id}`} fullLabel="Open person"
+        commands={<CommandBar label={`Actions for ${v.identity_name}`} items={[
+          canRequest && offers(v, "mitigate") && { label: "Mitigate…", icon: <Shield size={16} />, onClick: () => setDrawer("mitigate") },
+          canRequest && offers(v, "accept") && { label: "Accept…", icon: <ScaleIcon size={16} />, onClick: () => setDrawer("accept") },
+          canRequest && offers(v, "escalate") && { label: "Escalate…", icon: <AlertTriangle size={16} />, onClick: () => setDrawer("escalate") },
+          covered && live?.status === "active" && { label: "End early…", icon: <Undo2 size={16} />, danger: true, onClick: () => setDrawer("end") },
+          ...(v.status === "open" || v.status === "mitigation_pending" ? grants.filter(() => offers(v, "revoke")).map((g) => g.edge_id ? { label: `Revoke ${g.label}…`, icon: <UserX size={16} />, onClick: () => setRevoke(g.edge_id) } : null) : []),
+        ]} />}>
+        <div className="stack">
+          <div><b>{v.risk_name}</b><div className="small muted">{v.ruleset.name}{v.business_process ? ` · ${v.business_process}` : ""}</div></div>
+          {covered && v.mitigation && (
+            <Callout tone="ok">{v.mitigation.label}{v.mitigation.control ? ` by ${v.mitigation.control}` : ""}. It is left out of the open counts and stays in reports. When it ends the violation opens again.</Callout>
+          )}
+          {v.status === "mitigation_pending" && <Callout tone="warn">A request is waiting for a second person to approve it. Until then the violation is open.</Callout>}
+          <p>{v.message}</p>
+          {v.sides.map((side, i) => (
+            <section key={i} className="stack-sm" aria-label={`Side ${i + 1}: ${side.function.name}`}>
+              <h3>{i + 1}. {side.function.name}</h3>
+              {side.grants.map((g) => (
+                <div key={g.perm_key} className="card stack-sm">
+                  <div className="small"><b className="sys">{g.action}</b> on {g.resource} <span className="faint">({g.system})</span></div>
+                  {g.paths.map((p, j) => <div key={j} className="small muted sys">{p}</div>)}
+                </div>
+              ))}
+            </section>
+          ))}
+          <p className="xs faint">Options this risk offers: {v.remediation.join(", ")}. Resolve by removing either side, or cover it with a control another person approves.</p>
         </div>
-      )}
-      {revoke !== null && <RevokeDrawer edgeId={revoke} onClose={() => setRevoke(null)} onDone={reload} />}
-    </div>
+      </SidePanel>
+      {revoke !== null && <RevokeDrawer edgeId={revoke} via={{ riskId: v.risk_id, identityId: v.identity_id }} onClose={() => setRevoke(null)} onDone={done} />}
+      {(drawer === "mitigate" || drawer === "accept") && <MitigateDrawer target={target} kind={drawer === "accept" ? "accept" : "control"} offerControl={drawer === "mitigate"} offerAccept={drawer === "accept"} onClose={() => setDrawer(null)} onDone={done} />}
+      {drawer === "end" && live && <EndEarlyDrawer mitigationId={live.id} label={`${v.identity_name}: ${v.risk_name}`} onClose={() => setDrawer(null)} onDone={done} />}
+      {drawer === "escalate" && <EscalateDrawer target={target} onClose={() => setDrawer(null)} onDone={done} />}
+    </>
   );
 }
 
 export function SodConflicts() {
-  const { data: policies, error } = useApi<Policy[]>("/policies");
-  const { data: violations } = useApi<(Violation & { edges?: [string, string][] })[]>("/violations");
+  const { data, error, reload } = useApi<{ total: number; violations: SodViolation[] }>(sodPaths.violations());
+  const [selected, setSelected] = useSelected();
+  const rows = data ? sortViolations(data.violations) : null;
+  const open = rows?.find((v) => v.key === selected);
+  const all = rows ?? [];
   const crumbs: [string, string?][] = [["Protection"], ["Insights", "/insights"], ["SoD conflicts"]];
-  if (!policies) return <Page tabs={<InsightsTabs />} title="SoD conflicts" crumbs={crumbs}><Loading error={error} kind="page" /></Page>;
-  const sod = policies.filter((p) => p.type === "separation_of_duties");
-  const ids = new Set(sod.map((p) => p.id));
-  const conflicts = (violations ?? []).filter((v) => ids.has(v.policy_id));
   return (
-    <Page tabs={<InsightsTabs />} title="Separation-of-duties conflicts" crumbs={crumbs} sub="People and machine identities who can complete both halves of a sensitive process, through any combination of groups, roles and systems. Checked against effective permissions, not role names.">
-      <div className="grid g12">
-        <div className="stack">
-          <h2>Rules</h2>
-          {sod.length === 0 && <div className="card"><EmptyState title="No SoD rules">Add a policy of type <code>separation_of_duties</code> in <code>server/policies/</code>.</EmptyState></div>}
-          {sod.map((p) => {
-            const s = conflictSides(p.source);
-            return (
-              <div key={p.id} className="card stack-sm">
-                <div className="spread"><Sev s={p.severity} /><span className="xs faint tnum">{p.violations} conflict{p.violations === 1 ? "" : "s"}</span></div>
-                <b>{p.name}</b>
-                <div className="small muted">{p.description}</div>
-                {s && (
-                  <dl className="kv">
-                    <dt>Side A</dt><dd className="sys small">{s[0]}</dd>
-                    <dt>Side B</dt><dd className="sys small">{s[1]}</dd>
-                  </dl>
-                )}
-              </div>
-            );
-          })}
-          <Callout tone="neutral">Access requests are checked against these rules before they are submitted. A request that would create a conflict needs an SoD exception.</Callout>
-        </div>
-        <div className="stack">
-          <h2>Current conflicts <span className="faint tnum">({violations ? conflicts.length : "…"})</span></h2>
-          {!violations ? <div className="card"><Loading kind="block" /></div> : conflicts.length === 0 ? (
-            <div className="card"><EmptyState title="No conflicts" icon={<Scale size={18} />}>Nobody can both create and approve under the current rules.</EmptyState></div>
-          ) : conflicts.map((v) => <Conflict key={v.key} v={v} />)}
-        </div>
-      </div>
+    <Page tabs={<InsightsTabs />} title="Separation-of-duties conflicts" count={rows ? `${openCount(rows)} open of ${rows.length} conflict${rows.length === 1 ? "" : "s"}` : undefined} crumbs={crumbs}
+      sub={<>People and machine identities who hold an entitlement of each of two conflicting functions, through any combination of groups, roles and systems. Define the rules under <Link to="/governance/policies?view=risks">Policies & SoD</Link>.</>}>
+      <DataTable
+        id="sod-conflicts"
+        rows={rows}
+        error={error}
+        rowKey={(v) => v.key}
+        columns={[
+          { id: "risk", header: "Risk", sort: (v) => v.risk_name, cell: (v) => <div><span className="name-link">{v.risk_name}</span><div className="xs faint">{v.identity_name}</div></div> },
+          { id: "priority", header: "Priority", sort: (v) => PRIORITIES.indexOf(v.priority) * -1, csv: (v) => v.priority, cell: (v) => <Sev s={v.priority} /> },
+          { id: "f1", header: "Function 1", sort: (v) => v.function1.name, cell: (v) => v.function1.name, hideNarrow: true },
+          { id: "f2", header: "Function 2", sort: (v) => v.function2.name, cell: (v) => v.function2.name, hideNarrow: true },
+          { id: "ent", header: "Entitlement", sort: (v) => v.entitlement, cell: (v) => <span className="sys small">{v.entitlement}</span>, hideNarrow: true },
+          { id: "sys", header: "System", sort: (v) => v.systems.join(), csv: (v) => v.systems.join(" "), cell: (v) => v.systems.join(", "), hideNarrow: true },
+          { id: "ruleset", header: "Ruleset", sort: (v) => v.ruleset.name, cell: (v) => v.ruleset.name, hideNarrow: true },
+          { id: "process", header: "Business process", sort: (v) => v.business_process, cell: (v) => v.business_process || <span className="faint">-</span>, hideNarrow: true },
+          { id: "status", header: "Status", sort: (v) => v.status, cell: (v) => <Badge tone={v.status === "open" ? "critical" : v.status === "mitigation_pending" ? "warning" : "ok"}>{v.mitigation?.label ?? statusLabel(v.status)}</Badge> },
+        ]}
+        initialSort={["priority", 1]}
+        searchText={(v) => `${v.identity_name} ${v.risk_name} ${v.function1.name} ${v.function2.name} ${v.entitlement} ${v.message}`}
+        searchPlaceholder="Search conflicts, people or entitlements…"
+        filters={[
+          { id: "priority", label: "Priority", options: PRIORITIES.map((p) => ({ value: p, label: p[0].toUpperCase() + p.slice(1) })), get: (v) => v.priority },
+          { id: "risk", label: "Risk", options: opts(all, (v) => v.risk_name), get: (v) => v.risk_name },
+          { id: "ruleset", label: "Ruleset", options: opts(all, (v) => v.ruleset.name), get: (v) => v.ruleset.name },
+          { id: "system", label: "System", options: opts(all, (v) => v.systems), get: (v) => v.systems },
+          { id: "process", label: "Business process", options: opts(all, (v) => v.business_process), get: (v) => v.business_process },
+          { id: "status", label: "Status", options: opts(all, (v) => v.status).map((o) => ({ ...o, label: statusLabel(o.value) })), get: (v) => v.status },
+        ]}
+        onRefresh={reload}
+        rowLabel={(v) => `${v.identity_name}: ${v.risk_name}`}
+        onRowClick={(v) => setSelected(v.key)}
+        activeKey={selected}
+        empty={<EmptyState title="No conflicts" icon={<Scale size={18} />} action={<Link to="/governance/policies?view=risks"><Button>Review the risks</Button></Link>}>Nobody holds both halves of any enabled risk.</EmptyState>}
+      />
+      {open && <ConflictPanel v={open} onClose={() => setSelected(null)} onChanged={reload} />}
     </Page>
   );
 }

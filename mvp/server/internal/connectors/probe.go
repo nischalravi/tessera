@@ -39,6 +39,15 @@ var ProberOps = []string{"connect", "authenticate", "root_info", "object_exists"
 // ErrRateLimited is returned by a prober that saw HTTP 429; the run aborts.
 var ErrRateLimited = errors.New("connectors: rate limited")
 
+// ErrUnsupported is returned when the system does not offer an operation (for
+// example no server clock, or no Get Effective Rights control). The check is
+// reported as skipped with "unsupported", never as a pass.
+var ErrUnsupported = errors.New("connectors: operation not supported by this system")
+
+// ErrTargetNotAllowed is returned when the network policy refuses the target
+// (a private address without the Directory Agent, a port other than 389/636).
+var ErrTargetNotAllowed = errors.New("connectors: target not reachable from this deployment")
+
 // ConnInfo is the transport handshake.
 type ConnInfo struct {
 	Reachable     bool
@@ -58,7 +67,11 @@ type AuthInfo struct {
 	Roles         []string   // application roles claim (Entra)
 	RefusedScopes []string   // forbidden scopes requested on purpose and refused (Google)
 	ExpiresAt     *time.Time // credential or certificate expiry, when reported
-	RootIdentity  bool       // LDAP: bound as the root DN
+	RootIdentity  bool       // LDAP: bound as the root DN, or an administrator group member (LLDAP)
+	// IdentityUnverified: the server has no Who Am I (RFC 4532), so the bound
+	// identity could not be read back. A root identity may still be detected
+	// from other evidence; otherwise the check needs an attestation.
+	IdentityUnverified bool
 }
 
 // RootInfo is directory or service metadata.
@@ -72,6 +85,7 @@ type RootInfo struct {
 	Capabilities      []string
 	CustomAttributes  int
 	OrgUnits          int
+	Missing           []string // SCIM: discovery documents that could not be read
 }
 
 // SampleQuery is one bounded read. Op selects what is sampled.
@@ -99,6 +113,14 @@ type SampleStats struct {
 	FullCount    int
 	Fields       []string // field names returned (Workday field inventory)
 	Available    bool     // the read returned data (roles, rules, sign-in activity...)
+	// SCIM paging and members reads: what was inconsistent ("code: detail";
+	// empty means consistent), pages read, the server's totalResults and the
+	// reverse lookup of group membership through users' groups.
+	Findings       []string
+	Pages          int
+	TotalResults   int
+	ReverseChecked bool
+	ReverseCount   int
 }
 
 // Rights are the bound identity's effective rights, read rather than tried.
@@ -108,6 +130,9 @@ type Rights struct {
 	AdminCount     bool
 	Replication    bool     // DS-Replication-Get-Changes-All
 	AdminRoles     []string // admin roles of the app or impersonated subject
+	// Unsupported: the system offers no way to read effective rights (no Get
+	// Effective Rights control), so the check needs an attestation.
+	Unsupported bool
 }
 
 // FeedInfo is the incremental-change capability.
@@ -120,6 +145,8 @@ type FeedInfo struct {
 // RateInfo is the rate-limit headroom observed.
 type RateInfo struct {
 	Limit, Remaining, Throttled int
+	// Retries made after HTTP 429 and the longest Retry-After (seconds) seen.
+	Retries, RetryAfterSeconds int
 }
 
 // Simulator is implemented by simulated probers: a scenario may override a

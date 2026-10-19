@@ -118,7 +118,7 @@ func cimdServer(t *testing.T, h http.HandlerFunc) (*httptest.Server, *http.Clien
 	}))
 	t.Cleanup(srv.Close)
 	pool := srv.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
-	hc, err := safehttp.New(safehttp.Options{Env: config.Dev, AllowLoopback: true, RootCAs: pool, MaxBodyBytes: 64 << 10})
+	hc, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Dev, AllowLoopback: true, RootCAs: pool, MaxBodyBytes: 64 << 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +199,7 @@ func TestFetchDocument(t *testing.T) {
 	})
 	t.Run("a production client cannot reach loopback", func(t *testing.T) {
 		srv, _, hits := cimdServer(t, func(w http.ResponseWriter, r *http.Request) {})
-		hc, err := safehttp.New(safehttp.Options{Env: config.Prod})
+		hc, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Prod})
 		if err != nil {
 			t.Fatal(err)
 		}

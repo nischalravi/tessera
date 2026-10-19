@@ -77,7 +77,7 @@ func newMCPFx(t *testing.T, limits RateLimits) *mcpFx {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hc, err := safehttp.New(safehttp.Options{Env: config.Dev, AllowLoopback: true})
+	hc, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Dev, AllowLoopback: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -841,7 +841,7 @@ func TestMCP_RegisterClientFetchesTheDocument(t *testing.T) {
 	t.Cleanup(srv.Close)
 	x := newMCPFx(t, noRateLimits)
 	pool := srv.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
-	hc, err := safehttp.New(safehttp.Options{Env: config.Dev, AllowLoopback: true, RootCAs: pool})
+	hc, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Dev, AllowLoopback: true, RootCAs: pool})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -44,20 +44,12 @@ func (s *Server) registerMCPAdminRoutes() {
 
 func iso(t time.Time) string { return t.UTC().Format(time.RFC3339) }
 
-func isoPtr(t *time.Time) *string {
-	if t == nil {
-		return nil
-	}
-	s := iso(*t)
-	return &s
-}
-
 type nameRef struct {
 	ID   int64  `json:"id"`
 	Name string `json:"name"`
 }
 
-func refOf(ids map[int64]*store.Identity, id int64) *nameRef {
+func mcpRefOf(ids map[int64]*store.Identity, id int64) *nameRef {
 	if i := ids[id]; i != nil {
 		return &nameRef{ID: id, Name: i.Name}
 	}
@@ -87,7 +79,7 @@ func clientViewOf(c *store.MCPClient, ids map[int64]*store.Identity) clientView 
 	v := clientView{ID: c.ID, ClientID: c.ClientID, Name: c.Name, RedirectURIs: uris, LoopbackRedirect: mcpauth.HasLoopbackRedirect(uris),
 		HasKeys: len(set.Keys) > 0, Status: c.Status, FetchedAt: iso(c.FetchedAt), ExpiresAt: iso(c.ExpiresAt), DocSHA256: c.DocSHA256}
 	if c.AgentIdentityID != nil {
-		v.Agent = refOf(ids, *c.AgentIdentityID)
+		v.Agent = mcpRefOf(ids, *c.AgentIdentityID)
 	}
 	return v
 }
@@ -376,7 +368,7 @@ func (s *Server) mcpListTokens(r *http.Request, _ *params) (int, any, error) {
 		if !json.Valid(act) {
 			act = json.RawMessage("null")
 		}
-		out = append(out, tokenView{JTI: t.JTI, ClientID: t.ClientID, Subject: refOf(ids, t.SubjectID), Agent: refOf(ids, t.AgentID),
+		out = append(out, tokenView{JTI: t.JTI, ClientID: t.ClientID, Subject: mcpRefOf(ids, t.SubjectID), Agent: mcpRefOf(ids, t.AgentID),
 			Audience: t.Audience, Scope: strings.Fields(t.Scope), Act: act, Grant: t.GrantType, PolicyVersion: t.PolicyVersion,
 			IssuedAt: iso(t.IssuedAt), ExpiresAt: iso(t.ExpiresAt), RevokedAt: isoPtr(t.RevokedAt), RevokedReason: t.RevokedReason,
 			State: state})
@@ -438,10 +430,10 @@ func (s *Server) mcpListDecisions(r *http.Request, p *params) (int, any, error) 
 			Resource: d.Resource, Tool: d.Tool, RequestedScope: strings.Fields(d.RequestedScope),
 			GrantedScope: strings.Fields(d.GrantedScope), PolicyVersion: d.PolicyVersion}
 		if d.SubjectID != nil {
-			v.Subject = refOf(ids, *d.SubjectID)
+			v.Subject = mcpRefOf(ids, *d.SubjectID)
 		}
 		if d.AgentID != nil {
-			v.Agent = refOf(ids, *d.AgentID)
+			v.Agent = mcpRefOf(ids, *d.AgentID)
 		}
 		out = append(out, v)
 	}

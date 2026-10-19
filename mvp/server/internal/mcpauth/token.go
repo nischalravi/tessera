@@ -109,7 +109,7 @@ func Verify(tx *store.TenantTx, raw, issuer string, now time.Time) (*Claims, err
 	if typ, _ := h.ExtraHeaders[jose.HeaderType].(string); typ != TokenType || h.KeyID == "" {
 		return nil, ErrTokenInvalid
 	}
-	set, err := keys.JWKSFor(tx, store.KeyPurposeAccessToken, now)
+	set, err := keys.JWKSFor(tx, store.KeyPurposeAccessToken, now, nil)
 	if err != nil {
 		return nil, err
 	}

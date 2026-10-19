@@ -1,0 +1,370 @@
+package safedial
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"errors"
+	"math/big"
+	"net"
+	"net/netip"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/nischalravi/tessera/mvp/server/internal/config"
+)
+
+type fakeResolver struct {
+	mu    sync.Mutex
+	addrs map[string][]netip.Addr
+	calls int
+}
+
+func (r *fakeResolver) LookupNetIP(_ context.Context, _, host string) ([]netip.Addr, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls++
+	if a, ok := r.addrs[host]; ok {
+		return a, nil
+	}
+	return nil, errors.New("no such host")
+}
+
+// recDial records the addresses it is asked to dial and never connects.
+type recDial struct {
+	mu    sync.Mutex
+	addrs []string
+}
+
+func (d *recDial) dial(_ context.Context, _, addr string) (net.Conn, error) {
+	d.mu.Lock()
+	d.addrs = append(d.addrs, addr)
+	d.mu.Unlock()
+	c, s := net.Pipe()
+	_ = s.Close()
+	return c, nil
+}
+
+func mustAllow(t *testing.T, s string) []AllowEntry {
+	t.Helper()
+	a, err := ParseAllow(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+
+// TestSafedial_BlocksPrivateUnlessAgent: private, loopback, CGNAT, link-local
+// and metadata targets are refused; a dev allowlist admits private ones but
+// never metadata; with an agent Transport (the production path, DR-11) the
+// agent carries the connection. The Directory Agent itself is not built in
+// this change: the test uses a fake Transport.
+func TestSafedial_BlocksPrivateUnlessAgent(t *testing.T) {
+	res := &fakeResolver{addrs: map[string][]netip.Addr{
+		"lab.example":      {netip.MustParseAddr("192.168.1.10")},
+		"meta.example":     {netip.MustParseAddr("169.254.169.254")},
+		"mixed.example":    {netip.MustParseAddr("93.184.216.34"), netip.MustParseAddr("10.0.0.5")},
+		"public.example":   {netip.MustParseAddr("93.184.216.34")},
+		"cgnat.example":    {netip.MustParseAddr("100.64.1.1")},
+		"loop.example":     {netip.MustParseAddr("127.0.0.1")},
+		"v6.example":       {netip.MustParseAddr("fd12::1")},
+		"mapped.example":   {netip.MustParseAddr("::ffff:10.0.0.9")},
+		"aws6meta.example": {netip.MustParseAddr("fd00:ec2::254")},
+	}}
+	cases := []struct {
+		name    string
+		allow   string
+		host    string
+		port    int
+		blocked bool
+	}{
+		{"private refused", "", "lab.example", 636, true},
+		{"private literal refused", "", "192.168.1.10", 636, true},
+		{"loopback refused", "", "127.0.0.1", 389, true},
+		{"loopback name refused", "", "loop.example", 636, true},
+		{"cgnat refused", "", "cgnat.example", 636, true},
+		{"metadata refused", "", "169.254.169.254", 636, true},
+		{"metadata name refused", "", "meta.example", 636, true},
+		{"mapped private refused", "", "mapped.example", 636, true},
+		{"ula refused", "", "v6.example", 636, true},
+		{"mixed public and private refused", "", "mixed.example", 636, true},
+		{"public allowed", "", "public.example", 636, false},
+		{"allowlisted ip", "192.168.1.10:636", "192.168.1.10", 636, false},
+		{"allowlisted name", "lab.example:636", "lab.example", 636, false},
+		{"allowlisted cidr", "192.168.1.0/24:636", "lab.example", 636, false},
+		{"allowlist is per port", "192.168.1.10:636", "192.168.1.10", 389, true},
+		{"allowlist is per host", "192.168.1.11:636", "lab.example", 636, true},
+		{"allowlist cannot admit metadata", "169.254.169.254:636", "169.254.169.254", 636, true},
+		{"allowlist cannot admit metadata by name", "meta.example:636", "meta.example", 636, true},
+		{"allowlist cannot admit aws v6 metadata", "aws6meta.example:636", "aws6meta.example", 636, true},
+		{"allowlist admits a mixed host only when every private address is listed", "10.0.0.0/24:636", "mixed.example", 636, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rd := &recDial{}
+			d, err := New(Options{Env: config.Dev, Allow: mustAllow(t, c.allow), Resolver: res, dial: rd.dial})
+			if err != nil {
+				t.Fatal(err)
+			}
+			conn, err := d.dialChecked(context.Background(), c.host, c.port)
+			if c.blocked {
+				if !errors.Is(err, ErrBlockedAddress) {
+					t.Fatalf("want ErrBlockedAddress, got %v", err)
+				}
+				if len(rd.addrs) != 0 {
+					t.Fatalf("dialed %v despite the block", rd.addrs)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = conn.Close()
+		})
+	}
+
+	t.Run("agent carries private targets", func(t *testing.T) {
+		ag := &fakeAgent{}
+		before := res.calls
+		d, err := New(Options{Env: config.Prod, Resolver: res, Agent: ag})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Port 389: no TLS here, the StartTLS exchange belongs to the caller.
+		c, err := d.Dial(context.Background(), "lab.example", 389, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		if ag.host != "lab.example" || ag.port != 389 || res.calls != before {
+			t.Errorf("agent got %q:%d, local lookups %d", ag.host, ag.port, res.calls)
+		}
+		if c.Secure() {
+			t.Error("an unupgraded 389 connection must not report Secure")
+		}
+	})
+}
+
+type fakeAgent struct {
+	host string
+	port int
+}
+
+func (a *fakeAgent) DialTarget(_ context.Context, host string, port int) (net.Conn, error) {
+	a.host, a.port = host, port
+	c, s := net.Pipe()
+	_ = s.Close()
+	return c, nil
+}
+
+// TestSafedial_BlocksRebinding: the name is resolved once, every address is
+// checked after resolution and the checked IP (not the name) is dialed.
+func TestSafedial_BlocksRebinding(t *testing.T) {
+	// A resolver that rebinds: public on the first answer, private after.
+	rb := &rebindResolver{}
+	rd := &recDial{}
+	d, err := New(Options{Env: config.Prod, Resolver: rb, dial: rd.dial})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := d.dialChecked(context.Background(), "rebind.example", 636)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close()
+	if rb.calls != 1 {
+		t.Errorf("resolved %d times; want exactly once", rb.calls)
+	}
+	if len(rd.addrs) != 1 || rd.addrs[0] != "93.184.216.34:636" {
+		t.Errorf("dialed %v; want the checked IP, not the name", rd.addrs)
+	}
+
+	// A second lookup would now answer 10.0.0.1: the dial never asks again.
+	if _, err := d.dialChecked(context.Background(), "rebind.example", 636); !errors.Is(err, ErrBlockedAddress) {
+		t.Errorf("after rebinding got %v; want ErrBlockedAddress", err)
+	}
+
+	// Literal private addresses are refused before any dial.
+	d2, _ := New(Options{Env: config.Prod, Resolver: &fakeResolver{addrs: map[string][]netip.Addr{
+		"x.example": {netip.MustParseAddr("93.184.216.34")}}}, DialTimeout: 50 * time.Millisecond})
+	if _, err := d2.dialChecked(context.Background(), "10.1.2.3", 636); !errors.Is(err, ErrBlockedAddress) {
+		t.Errorf("private literal: %v", err)
+	}
+}
+
+type rebindResolver struct{ calls int }
+
+func (r *rebindResolver) LookupNetIP(context.Context, string, string) ([]netip.Addr, error) {
+	r.calls++
+	if r.calls == 1 {
+		return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
+	}
+	return []netip.Addr{netip.MustParseAddr("10.0.0.1")}, nil
+}
+
+func TestSafedial_PortAllowlist(t *testing.T) {
+	d, _ := New(Options{Env: config.Dev, Resolver: &fakeResolver{}})
+	for _, p := range []int{0, 22, 80, 443, 3306, 3268, 3269, 8080, 65535, -1} {
+		if _, err := d.Dial(context.Background(), "93.184.216.34", p, false); !errors.Is(err, ErrPort) {
+			t.Errorf("port %d: got %v; want ErrPort", p, err)
+		}
+	}
+	for _, h := range []string{"", " ", "a/b", "user@host", "a b"} {
+		if _, err := d.Dial(context.Background(), h, 636, false); !errors.Is(err, ErrHost) {
+			t.Errorf("host %q: got %v; want ErrHost", h, err)
+		}
+	}
+}
+
+// serverCert makes a CA and a leaf for name valid for the given window.
+func serverCert(t *testing.T, name string, notAfter time.Time) (tls.Certificate, *x509.CertPool) {
+	t.Helper()
+	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caT := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "Test CA"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(24 * time.Hour), IsCA: true,
+		BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
+	caDER, _ := x509.CreateCertificate(rand.Reader, caT, caT, &caKey.PublicKey, caKey)
+	ca, _ := x509.ParseCertificate(caDER)
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	lt := &x509.Certificate{SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: name}, DNSNames: []string{name},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: notAfter, KeyUsage: x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	der, _ := x509.CreateCertificate(rand.Reader, lt, ca, &key.PublicKey, caKey)
+	pool := x509.NewCertPool()
+	pool.AddCert(ca)
+	return tls.Certificate{Certificate: [][]byte{der, caDER}, PrivateKey: key}, pool
+}
+
+// pipeDial answers every dial with a TLS server on the far end of a pipe.
+func pipeDial(cert tls.Certificate, min, max uint16) func(context.Context, string, string) (net.Conn, error) {
+	return func(context.Context, string, string) (net.Conn, error) {
+		c, s := net.Pipe()
+		go func() {
+			ts := tls.Server(s, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: min, MaxVersion: max})
+			if ts.Handshake() == nil {
+				_, _ = ts.Read(make([]byte, 1)) // hold until the client closes
+			}
+			_ = s.Close()
+		}()
+		return c, nil
+	}
+}
+
+func TestSafedial_LDAPSHandshake(t *testing.T) {
+	cert, roots := serverCert(t, "ldap.lab.example", time.Now().Add(90*24*time.Hour))
+	res := &fakeResolver{addrs: map[string][]netip.Addr{"ldap.lab.example": {netip.MustParseAddr("93.184.216.34")}}}
+
+	d, _ := New(Options{Env: config.Prod, Resolver: res, RootCAs: roots, dial: pipeDial(cert, tls.VersionTLS12, 0)})
+	c, err := d.Dial(context.Background(), "ldap.lab.example", PortLDAPS, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, ok := c.TLSState()
+	if !ok || !c.Secure() {
+		t.Fatal("LDAPS connection is not secure")
+	}
+	rep := Inspect(st, "ldap.lab.example", roots, time.Now())
+	if !rep.ChainValid || !rep.HostnameMatch || rep.TLSVersion != "1.3" || rep.Issuer != "Test CA" {
+		t.Errorf("report: %+v", rep)
+	}
+	_ = c.Close()
+
+	// A verifying dial without the CA fails; an inspect dial reports it.
+	d2, _ := New(Options{Env: config.Prod, Resolver: res, dial: pipeDial(cert, tls.VersionTLS12, 0)})
+	if _, err := d2.Dial(context.Background(), "ldap.lab.example", PortLDAPS, false); err == nil {
+		t.Fatal("untrusted chain accepted")
+	}
+	c, err = d2.Dial(context.Background(), "ldap.lab.example", PortLDAPS, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, _ = c.TLSState()
+	if rep := Inspect(st, "ldap.lab.example", nil, time.Now()); rep.ChainValid || !rep.HostnameMatch {
+		t.Errorf("inspect report: %+v", rep)
+	}
+	if rep := Inspect(st, "other.example", roots, time.Now()); rep.HostnameMatch || !rep.ChainValid {
+		t.Errorf("hostname report: %+v", rep)
+	}
+	_ = c.Close()
+}
+
+func TestSafedial_RefusesOldTLS(t *testing.T) {
+	cert, roots := serverCert(t, "ldap.lab.example", time.Now().Add(90*24*time.Hour))
+	res := &fakeResolver{addrs: map[string][]netip.Addr{"ldap.lab.example": {netip.MustParseAddr("93.184.216.34")}}}
+	d, _ := New(Options{Env: config.Prod, Resolver: res, RootCAs: roots, dial: pipeDial(cert, tls.VersionTLS10, tls.VersionTLS11)})
+	if _, err := d.Dial(context.Background(), "ldap.lab.example", PortLDAPS, false); err == nil {
+		t.Fatal("TLS 1.1 accepted")
+	}
+	c := &Conn{}
+	if err := c.SetTLS(tls.ConnectionState{HandshakeComplete: true, Version: tls.VersionTLS11}); !errors.Is(err, ErrNoTLS) {
+		t.Errorf("SetTLS(TLS1.1) = %v", err)
+	}
+	if err := c.SetTLS(tls.ConnectionState{}); !errors.Is(err, ErrNoTLS) {
+		t.Errorf("SetTLS(none) = %v", err)
+	}
+	if c.Secure() {
+		t.Error("Secure after refused SetTLS")
+	}
+}
+
+// TestSafedial_PlaintextRefused: a 389 connection is not secure until StartTLS
+// has been negotiated, and the config always demands TLS 1.2.
+func TestSafedial_PlaintextRefused(t *testing.T) {
+	rd := &recDial{}
+	d, _ := New(Options{Env: config.Prod, Resolver: &fakeResolver{addrs: map[string][]netip.Addr{
+		"ldap.lab.example": {netip.MustParseAddr("93.184.216.34")}}}, dial: rd.dial})
+	c, err := d.Dial(context.Background(), "ldap.lab.example", PortStartTLS, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if !c.StartTLSPort || c.Secure() {
+		t.Error("389 must start insecure and require StartTLS")
+	}
+	if _, ok := c.TLSState(); ok {
+		t.Error("no TLS state before StartTLS")
+	}
+	cfg := c.TLSConfig()
+	if cfg.MinVersion < tls.VersionTLS12 || cfg.InsecureSkipVerify || cfg.ServerName != "ldap.lab.example" {
+		t.Errorf("tls config: %+v", cfg)
+	}
+}
+
+func TestSafedial_ProdRefusesAllowlist(t *testing.T) {
+	if _, err := New(Options{Env: config.Prod, Allow: mustAllow(t, "192.168.1.10:636")}); err == nil {
+		t.Fatal("prod dialer accepted an allowlist")
+	}
+	if _, err := New(Options{Env: "staging"}); err == nil {
+		t.Fatal("unknown env accepted")
+	}
+	// The config layer refuses the variable in prod (internal/config tests);
+	// ForConfig also rejects bad syntax in dev.
+	if _, err := ForConfig(&config.Config{Env: config.Dev, SafedialAllow: "0.0.0.0/0:636"}, nil, nil); err == nil {
+		t.Fatal("0.0.0.0/0 accepted")
+	}
+}
+
+func TestParseAllow(t *testing.T) {
+	good := []string{"", "192.168.1.10:636", "lab.example:389", "10.1.0.0/16:636", "[fd12:3456::1]:636", "[fd12:3456:789a:1::/64]:636",
+		"192.168.1.10:636, nas.lan:389"}
+	for _, s := range good {
+		if _, err := ParseAllow(s); err != nil {
+			t.Errorf("%q: %v", s, err)
+		}
+	}
+	bad := []string{"*", "*.lan:636", "0.0.0.0/0:636", "10.0.0.0/8:636", "::/0:636", "[fd00::/16]:636", "192.168.1.10", "192.168.1.10:80",
+		"192.168.1.10:0", "host_name:636", ":636", "user@host:636", "192.168.1.10:6360", "10.0.0.0/33:636", "http://x:636"}
+	for _, s := range bad {
+		if _, err := ParseAllow(s); err == nil {
+			t.Errorf("%q accepted", s)
+		} else if strings.Contains(err.Error(), "password") {
+			t.Errorf("error leaks input: %v", err)
+		}
+	}
+}

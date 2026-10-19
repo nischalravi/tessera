@@ -5,9 +5,9 @@
   "path": "/api/jit/requests/9999/approve"
  },
  "response": {
-  "status": 400,
+  "status": 404,
   "body": {
-   "detail": "request is not pending"
+   "detail": "request not found"
   }
  }
 }
