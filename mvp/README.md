@@ -251,10 +251,17 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `GET|POST /api/hris/events` (422 for an unknown `identity_id`) · `GET /api/hris/events/{id}/plan` · `POST /api/hris/events/{id}/execute` ·
 `GET /api/jml/leaver-plan/{identity_id}` · `POST /api/identities/{id}/contain` (kill switch, see "Identity containment") · `POST /api/identities/{id}/disable|enable` ·
 `PUT /api/connections/{id}/containment-credential` · `GET /api/accounts[?system=]` ·
+`GET|POST /api/siem/sinks` · `PUT /api/siem/sinks/{id}` · `POST /api/siem/sinks/{id}/rewind {seq}` ·
+`POST /api/siem/sinks/{id}/test` · `GET /api/siem/sinks/{id}/dead-letters` ·
+`GET /api/alerts[?status=open|acknowledged|resolved|live&severity=&rule=]` · `GET /api/alerts/summary` · `GET /api/alerts/{id}` ·
+`POST /api/alerts/{id}/acknowledge|resolve|assign` · `GET /api/alerts/rules` · `PUT /api/alerts/rules/{rule_id}` ·
+`GET|POST /api/alerts/channels` · `PUT /api/alerts/channels/{id}` · `POST /api/alerts/channels/{id}/test` ·
+`GET /api/ownership[?kind=app|group|resource|identity&unowned=]` · `PUT /api/ownership/{kind}/{object_key}` ·
+`POST /api/ownership/bulk` ·
 `GET /api/audit[?limit=&before_seq=&action=&actor_id=&target_type=&target_id=&from=&to=&include_http=]` ·
 `GET /api/audit/events/{event_id}/proof` · `GET /api/audit/checkpoints[?from_seq=]` · `GET /api/audit/keys` ·
 `POST /api/audit/verify {from_seq?, to_seq?}` · `GET /api/audit/export[?from_seq=&to_seq=]` (NDJSON) ·
-`GET /api/auth/session` · `POST /api/auth/logout` · `GET /api/auth/sessions` · `DELETE /api/auth/sessions/{session_id}` ·
+`GET /api/auth/session` (`user.identity_id` is the directory person the sign-in is linked to) · `POST /api/auth/logout` · `GET /api/auth/sessions` · `DELETE /api/auth/sessions/{session_id}` ·
 `GET /api/auth/step-up?acr=&max_age=&return_to=` ·
 `GET /api/auth/discover?tenant=&email=` · `GET /api/auth/login?tenant=&connection=&return_to=` (302 to the IdP) ·
 `GET /api/auth/oidc/{connection_id}/callback` · `GET /api/auth/saml/{connection_id}/metadata` ·
@@ -273,13 +280,17 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `POST /api/requests/{id}/approve|deny|cancel|remove {reason}` ·
 `GET|POST /api/abac/policies` · `GET|PUT /api/abac/policies/{id}` · `POST /api/abac/policies/{id}/retire` ·
 `POST /api/abac/simulate` · `GET /api/abac/bindings` · `PUT /api/catalog/items/{group_id}/policy` ·
+`GET|POST /api/sod/functions|risks|rulesets` · `GET|PUT /api/sod/{functions|risks|rulesets}/{id}` ·
+`POST /api/sod/{functions|risks|rulesets}/{id}/retire` · `GET /api/sod/rulesets/{id}/export` ·
+`POST /api/sod/rulesets/import` · `POST /api/sod/import-legacy` · `GET /api/sod/violations` ·
+`POST /api/sod/simulate` ·
 `GET /api/approvals/inbox` · `GET /api/approvals/delegates` · `GET|POST /api/approvals/delegations` ·
 `POST /api/approvals/delegations/{id}/revoke` ·
 `GET /api/correlation/queue` · `GET /api/correlation/decisions` ·
 `POST /api/accounts/{id}/link {identity_id, reason}` · `POST /api/accounts/{id}/not-person {reason}` ·
 `DELETE /api/accounts/{id}/link` · `POST /api/identities/{id}/merge {into, reason}` ·
 `GET /api/identity-merges` · `POST /api/identity-merges/{id}/unmerge {reason}` ·
-`GET|POST /api/reviews/schedules` · `PUT /api/reviews/schedules/{id}` · `POST /api/reviews/schedules/{id}/run` ·
+`GET|POST /api/reviews/schedules` · `PUT /api/reviews/schedules/{id}` · `POST /api/reviews/schedules/{id}/run` (an unknown `system` is 422 `invalid_system`; a second run in the same second is 409 `already_launched`; a schedule with no grants in scope creates no campaign, audits `review.schedule.skipped` and answers 200 `{skipped, reason}`) ·
 `GET /api/identities/{id}/affiliations` · `GET /api/identities/{id}/identifiers` ·
 `POST /api/identities/{id}/affiliations {type, org_unit?, population?, starts_at?, ends_at?, reason}` ·
 `POST /api/affiliations/{id}/end {reason}`
@@ -313,6 +324,98 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
 or HRIS execution is always the signed-in user.
+
+### SIEM streaming
+
+`tessera serve` pushes each tenant's audit ledger to its SIEM sinks every 15 seconds (`internal/siem`, issue #169).
+The pull export (`/api/audit/export`) stays available.
+
+- **Destinations:**
+  - **Splunk HEC:** newline-separated HEC envelopes, sent with `Authorization: Splunk <token>`, `sourcetype` set to `tessera:audit` or `tessera:ocsf`, and `host` set to the tenant slug.
+  - **HTTPS JSON:** a JSON array of events with an optional bearer token. Use it for Microsoft Sentinel's Logs Ingestion API, Cribl or Logstash.
+  - **Syslog over TLS (RFC 5425):**
+    - Messages are RFC 5424 with octet-counting framing, facility 13 (log audit), and the severity taken from the event's outcome.
+    - Each message carries structured data `[tessera@32473 seq=… hash=…]`.
+    - The port defaults to 6514. A private CA can be given as PEM.
+- **Formats:**
+  - `json` is the export record. It carries `hash` and `prev_hash`, so the SIEM can recompute the chain.
+  - `ocsf` is OCSF 1.3: Authentication (3002) for sign-in and sign-out, Account Change (3001) for role grants and revokes and user disables, and API Activity (6003) for everything else.
+  - The chain fields go under `unmapped.tessera`.
+  - The mapping is pinned by golden files in `internal/siem/testdata`.
+- **Delivery:**
+  - At least once, in seq order, from a durable cursor per sink. The cursor moves only after the destination accepts a batch of up to 200 events, so restarts and outages leave no gaps.
+  - New sinks start at the current head by default, or can replay the whole ledger with `start: "beginning"`. **Replay** in the UI (a rewind) sends everything again.
+  - `http.request` events are left out unless `include_http` is set.
+  - Failures back off from 10 s up to 30 min.
+  - After 3 consecutive failures the sink shows as **failing**, recorded as audit event `siem.sink.failing` (and `siem.sink.recovered` when it recovers).
+  - A batch the destination rejects outright (a 4xx other than 408 or 429) is retried 5 times, then dead-lettered and skipped (`siem.sink.dead_letter`). Retryable errors are never skipped.
+- **Health:** healthy, catching up, retrying, failing or paused. The lag counts the events the sink still has to send.
+- **Security:**
+  - Webhooks go through `internal/safehttp`.
+  - Syslog collectors are checked against the same address rules after DNS resolution, and the dial goes to the checked address. Private, loopback (outside dev) and cloud-metadata addresses are refused.
+  - Tokens are sealed under the KEK, never returned, and kept out of the audit log.
+  - Webhook URLs are shown without their query string.
+  - Creating or changing a sink needs step-up.
+- **Permissions:**
+  - `siem.read`: auditor and tenant_admin, plus the `tessera:audit` scope.
+  - `siem.configure`: tenant_admin, plus the `tessera:admin` scope.
+- **UI:** **Admin > Log streaming (SIEM)** lists each sink with its health, delivered count, dead letters, and Test, Replay and Edit actions.
+- **Not yet:** S3-compatible bucket sinks.
+### Alerts
+
+The alert engine (`internal/alerts`, issue #168) runs every minute in `tessera serve`. It reads new audit
+events and matches them against built-in rules; detections run every 15 minutes. A tenant's first run
+starts at the current head, so history does not alert.
+
+| Rule | Fires on | Default |
+|---|---|---|
+| Break-glass access used | `auth.break_glass.used`, `breakglass.action` | critical, every event |
+| New administrator | `auth.role.granted`, `admin.role.granted` or an applied `role.grant*` admin change, for tenant_admin, policy_admin or break_glass | high |
+| MFA bypassed | `auth.mfa.bypass*` (#109) | high |
+| Repeated sign-in failures | `auth.login.failure` with the same email, subject or IP | medium, 5 in 15 min |
+| Provisioning or sync job failed | a failed `connectors.*`, `connection.*`, `jml.*`, `provisioning.*` or `readiness.*` event, `job.failed` (job run history), or `admin.change.failed` | high |
+| Audit anchoring failing | detection: checkpoints whose anchoring failed | critical, at 3 |
+| Privileged identity without an owner | detection: an active NHI or agent with privileged access and no owner, or an owner who left | high |
+
+- **Dedup and lifecycle.** There is one live alert per rule and subject; repeats raise its count.
+  - States are open, acknowledged and resolved. A detection resolves itself when the condition clears or the rule is switched off.
+  - Raising, acknowledging, assigning, resolving, rule and channel changes, deliveries and channel tests are all audited (`alert.*`).
+- **Rule settings.** Tenant admins can turn a rule on or off and change its severity, threshold and window (`alerts.configure`).
+- **Channels.**
+  - Email: a list of addresses.
+  - Webhook: an https URL. The payload has a `text` field, so Slack and Teams incoming webhooks accept it.
+  - Each channel takes alerts at or above its minimum severity.
+  - Webhooks go out through `internal/safehttp`, which refuses private, loopback (except in dev) and cloud-metadata addresses.
+  - Each webhook is signed: `X-Tessera-Signature: t=<unix>,v1=<hex HMAC-SHA256 of "<t>.<body>">`. The secret (`whsec_…`) is shown once, sealed under the KEK, and can be rotated.
+  - Creating or changing a channel needs step-up.
+  - Webhook URLs come back redacted, because Slack and Teams put their token in the path.
+- **Retries.** Deliveries wait in an outbox and are retried after 1 min, 5 min, 15 min, 1 h and 4 h, then marked failed.
+- **Email.** `TESSERA_NOTIFY` controls email:
+  - `log` (the default) writes each message to the server log.
+  - `smtp://user:pass@host:587?from=alerts@example.com` sends with STARTTLS required; a relay without STARTTLS is refused.
+  - `smtps://…` sends with implicit TLS.
+  - The SMTP host is operator configuration, so it does not go through `safehttp`.
+- **Permissions.**
+  - `alerts.read`: operator, auditor, policy_admin, tenant_admin.
+  - `alerts.manage` (triage): operator, policy_admin, tenant_admin.
+  - `alerts.configure`: tenant_admin.
+- **UI.** **Protection > Alerts** has three tabs: alerts with filter chips and a side panel, rules, and channels (tenant admins only). For anyone with `alerts.read`, the top-bar bell lists open alerts with a count.
+### Ownership
+
+Applications (by system name), entitlements (groups), resources and machine identities each have a
+primary owner, an optional backup owner, an optional owner group and a purpose (table `ownerships`,
+issue #167). Owners must be active people; the backup must differ from the primary. Setting needs
+`ownership.manage` (operator, policy_admin); reading needs `graph.read`. Every change is audited as
+`ownership.set`.
+
+- For a machine identity the primary owner is also `identities.owner_id`, so the NHI flags, reviews
+  and policies use it. Once set in Tessera, connector sync no longer overwrites it.
+- The leaver plan gains `reassign_ownership` steps: an object the leaver owns goes to its active
+  backup, else to the leaver's manager (else nobody); where the leaver is the backup, the slot is
+  cleared. Plans without ownership rows are unchanged.
+- UI: **Identity > Ownership** lists each kind with unowned counts, a "No owner" / "No backup" filter
+  and bulk **Assign owner**; the entitlement, application and machine-identity panels show the
+  owners with **Assign**/**Change**; the machine identity list has the same bulk action.
 
 ### Scheduled access reviews
 
@@ -396,8 +499,8 @@ change in the target system and checks that it happened.
   and the least-privilege revoke. Edges to permissions have no counterpart in a target and stay direct.
 * **Audit.** Each operation writes `provision.enqueued`, `provision.sent` and one of
   `provision.verified`, `provision.mismatch`, `provision.failed`, plus `provision.retried`,
-  `provision.cancelled`; target changes write `provision.target_set` and `provision.target_removed`
-  (never the token). Completions write the event the direct path wrote (`jit.expire`, `review.revoke`,
+  `provision.cancelled`; target changes write `provision.target_set` (with the target's origin and `credential`: `none`, `kept`, `set`, `rotated` or `cleared`, plus `previous_kind`/`previous_origin` when it moved) and `provision.target_removed`
+  (never the token). A stored token never follows a target to another kind or origin (scheme, host, port): such an edit needs a new token or gets 422 `credential_required`; a path-only change on the same origin keeps it. Completions write the event the direct path wrote (`jit.expire`, `review.revoke`,
   `grant.revoke`).
 * **Permissions.** `provisioning.read` (operator, auditor, policy admin, tenant admin) and
   `provisioning.manage` (policy admin, tenant admin: retry, cancel, run). Configuring a target needs
@@ -416,6 +519,7 @@ change in the target system and checks that it happened.
 Admin → Provisioning lists the target systems (with the write-back switch) and the operations, with
 status, change and source filter chips, a side panel with the findings, request and Retry / Cancel,
 and Run now.
+
 ### Admin changes, notifications and operator recovery
 
 Changes that widen trust or privilege go through **change requests** (design §15, issue #16;
@@ -601,7 +705,7 @@ small JSON language (`internal/abac`): `all` / `any` / `not` over tests
 `{"attr": "identity.department", "op": "eq", "value": "Finance"}`, with ops `eq`, `ne`, `in`,
 `prefix`, `exists`, `gt`, `gte`, `lt`, `lte` (numbers or RFC 3339 times). Attributes are
 `identity.*` (type, status, name, email, department, title, manager_id, has_manager, source,
-tenure_days), `resource.*` (name, risk, and for catalog items system and privileged) and `context.*`
+tenure_days, worker_type), `resource.*` (name, risk, and for catalog items system and privileged) and `context.*`
 (time, hour, weekday in UTC, and `aal` when a signed-in user acts). It is data, never code:
 evaluation is a deterministic walk with limits on depth (8), size (100 parts) and lists (50).
 
@@ -629,8 +733,53 @@ evaluation is a deterministic walk with limits on depth (8), size (100 parts) an
 
 Reading and simulating need `graph.read`; changing a policy needs `roles.manage` with a fresh
 phishing-resistant sign-in, and binding a catalog item needs `catalog.manage` (same step-up).
-Not yet: location, worker type and custom HRIS fields (the identity record does not store them, so
-a test on one is always unknown and denies; they arrive with the HRIS attribute mapping).
+
+`identity.worker_type` (issue #215) is the person's worker type from the lifecycle record (see
+"Contractors, guests and end dates"): `employee`, `contractor`, `intern`, `partner`, `vendor` or
+`guest`, so `{"attr": "identity.worker_type", "op": "in", "value": ["contractor", "vendor"]}` selects
+non-employees. A person with no lifecycle record is an employee; services and AI agents have no
+worker type, so a test on it is unknown for them and denies. An unrecognised value simply matches
+no one. The attribute editor lists it (the list comes from the server). Attributes stored outside
+the identity record are loaded by `abac.Resolver` (`internal/abac/resolver.go`), once per
+transaction and tenant, and every evaluation site (roles, request eligibility, SoD subjects,
+simulation) uses it, so a new one is added in one place and the attribute catalog.
+Not yet: location and custom HRIS fields (the identity record does not store them, so a test on
+one is always unknown and denies; they arrive with the HRIS attribute mapping).
+
+### SoD functions, risks and rulesets
+
+**Protection → Policies & SoD → Functions / Risks / Rulesets** (issue #298), the model behind
+**Insights → SoD conflicts** (`internal/sod`, schema `0300_sod.sql`).
+
+- **Function**: a named, reusable set of entitlements, with an owner. Each selector is a system
+  (blank: any) plus a permission id or an action name pattern (`*` wildcard, `\` escapes), optionally
+  narrowed by one resource attribute (`environment`, `tag`, `resource`, `privileged`): the
+  fine-grained "auth object / field / value" case.
+- **Risk**: name, description, priority (critical to low), business process, owner, and two or more
+  conflicting functions. Optional `subjects` limit who is checked (identity types, statuses, an ABAC
+  condition). A violation is one identity effectively holding at least one entitlement from each of
+  two of the risk's functions, by any path (roles, groups, direct grants); the two must be distinct
+  entitlements. A risk with more than two functions reports each conflicting pair.
+- **Ruleset**: a named group of risks, enabled or disabled per tenant. Functions, risks and rulesets
+  are versioned (`sod_versions`, append-only, with who and why); a ruleset's version holds its whole
+  document, so its history is the history of everything in it. Every change is audited in the same
+  transaction (`sod.function|risk|ruleset.*`). Export gives a YAML file (`schema: tessera.sod/v1`);
+  `POST /api/sod/rulesets/import {yaml, prune, dry_run}` makes the ruleset match a file (by key,
+  everything validated before anything is written; importing the same file changes nothing).
+- **Legacy policy files.** `separation_of_duties` YAML policies are converted to a ruleset "Legacy SoD
+  policies": each side of a conflict is a function, each policy a risk keyed by the policy id, so
+  violation keys, messages and results are unchanged (tests compare them on the tiny world and the
+  seeded larkspur tenant). `tessera seed` imports them; for any other tenant
+  `POST /api/sod/import-legacy` does it once. Until a tenant has a stored ruleset its policy files
+  are checked directly through the same engine.
+- **Detection and simulate.** `GET /api/sod/violations` lists violations per identity, risk and
+  function pair with the paths that grant each side; filters `risk`, `priority`, `ruleset`, `system`,
+  `business_process`, `identity`. `POST /api/sod/simulate {beneficiary_ids, catalog_item_ids,
+  duration_hours}` says which risks a request would trigger; Request access shows it as a warning
+  before submit (advisory; roles in the cart are not simulated yet).
+
+Reading is `graph.read`; changing needs `sod.manage` (policy admin) and a fresh phishing-resistant
+sign-in; simulate needs `requests.create` (and `requests.create_for_others` for other people).
 
 ### Contractors, guests and end dates
 
@@ -1095,6 +1244,28 @@ opened. RPO and RTO targets, the restore procedure, what to do after a restore (
 re-sync) and the drill are in `docs/runbooks/disaster-recovery.md`. CI runs the drill as
 `TestBackupDRDrill`. HA on Postgres is a draft in `docs/design/ha-postgres.md`.
 
+## AWS action catalog
+
+The AWS effective-permission evaluator (design `docs/design/aws-effective-permission-evaluator.md`
+§10) needs a versioned catalog of actions, resource types and condition keys. It is built offline,
+never at request time. Run from `server/`:
+
+```sh
+go run ./cmd/tessera catalog refresh -dir catalog/aws            # fetch a snapshot of today's upstream data
+go run ./cmd/tessera catalog compile -dir catalog/aws -report diff.md   # verify, merge overlays, write compiled/<version>.json.gz
+```
+
+`refresh` downloads the AWS Service Reference JSON (about 450 services), the RCP service list from
+the Organizations guide and the iam-dataset file pinned in `catalog/aws/iam-dataset.lock` (commit
+and SHA-256), all through `internal/safehttp`, into `catalog/aws/snapshots/<date>/`. Snapshots are
+immutable and carry a `MANIFEST.json` of SHA-256 digests. `compile` refuses a snapshot that differs
+from its manifest, merges the reviewed overlays in `catalog/aws/overlays/` (RCP services, KMS
+cross-account operations, global keys, S3 ACL map, resource-policy rules, opt-in regions, S3 public
+keys) and writes a deterministic artifact. It prints the catalog version, the PR title, and whether
+anything changed against the previous artifact; `-report` writes the full diff as Markdown.
+`internal/aws/catalog.Load(dir, version)` reads the artifact. See `catalog/aws/README.md` and
+`catalog/aws/THIRD_PARTY_NOTICES`.
+
 ## Web UI
 
 The UI follows an "admin center" layout: a dark top bar, a light left rail grouped by job, list
@@ -1113,9 +1284,9 @@ the right. Arrow keys move between items.
 | Group | Items |
 |---|---|
 | (top) | **Home**, **Inbox** (count) |
-| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts (with *Account matches*), Roles, Organizations (live, read-only, derived from departments) |
+| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Ownership, Accounts (with *Account matches*), Roles, Organizations (live, read-only, derived from departments) |
 | **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
-| **Protection** | Policies & SoD (violations, policies, what-if simulation), Attribute policies, Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
+| **Protection** | Alerts (alerts, rules, channels), Policies & SoD (violations, policies, what-if simulation, SoD functions, risks and rulesets), Attribute policies, Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
 | **Settings** | Connections (governed connections and the setup wizard), Admin |
 
 **Home.** For the admin & security persona: the tenant name and a sync line, then tabs
@@ -1156,7 +1327,7 @@ back a step and `Esc` to close. `/` focuses the top-bar search.
 
 | Screen | Calls | Notes |
 |---|---|---|
-| Identity Disable / Enable (identity page, panel, bulk, palette) | `POST /api/identities/{id}/disable`, `.../enable`, `GET .../disables` | `identities.contain` and a fresh phishing-resistant sign-in. Disable runs the kill switch's containment (revoke sessions, tokens, OAuth grants at connected providers), then sets the active accounts and the identity to disabled in one audited transaction (`identity.disable`). A failed provider step is retried and reported. Tessera does not suspend the account inside the provider. Enable (`identity.enable`) sets back only the accounts Disable disabled and that are still disabled. It cannot restore revoked sessions and grants, and says so. No Undo. |
+| Identity Disable / Enable (identity page, panel, bulk, palette) | `POST /api/identities/{id}/disable`, `.../enable`, `GET .../disables` | `identities.contain` and a fresh phishing-resistant sign-in. Disable runs the kill switch's containment (revoke sessions, tokens, OAuth grants at connected providers), then sets the active accounts and the identity to disabled in one audited transaction (`identity.disable`). A failed provider step is retried and reported. Tessera does not suspend the account inside the provider. Any Tessera user linked to the identity is signed out in the same transaction (sessions revoked with reason `identity_disabled`, counted in the event) and refused at sign-in, step-up and on every request while the identity stays disabled. Enable (`identity.enable`) sets back only the accounts Disable disabled and that are still disabled. Enable is refused (403, `identity.enable.refused`) for a user linked to the identity (`self_enable_not_allowed`) and, when the identity is linked to a Tessera user, for the admin who disabled it (`four_eyes_required`: a second admin enables it). It cannot restore revoked sessions and grants, and says so. No Undo. |
 | My access > Request removal | `POST /api/removal-requests`, `GET ?scope=mine\|approvals\|pending\|all`, `.../{id}/approve\|deny\|cancel` | Shows in My requests and the approver's Inbox (the person's manager, a delegate, or `requests.decide`). Approval needs step-up and removes the grant (through `requests.Remove` when an approved request granted it, else a revoked grant with a tombstone). Just-in-time and role-held grants are refused. |
 | Request access drafts | `GET/POST /api/request-drafts`, `GET/PUT/DELETE .../{id}` | Private to the user, at most 50, checked for existence but never against policy. A draft never submits itself. |
 | Directory > Organizations | `GET /api/orgs`, `GET /api/orgs/{org_id}` | Read-only and derived: a root and one organization per department. Owners are the active people at the top of a department's reporting lines who lead others in it. No cost centers (the HR data has none). |
@@ -1450,6 +1621,18 @@ cd ../frontend && npm run build && npm test   # npm test: node:test, no extra de
   the jobs show `runner_id=0` with no steps, they never ran (see the annotations, usually billing).
 * **Security scanners:** gosec reports 0 issues; each of the few `#nosec` annotations carries a
   justification. govulncheck reports no vulnerabilities.
+* **AWS evaluator indexes and queries** (`internal/aws/index`, `internal/aws/query`, pure, no
+  behaviour change to the API yet). `TestAtomsEqualBruteForce` and `TestDiffEqualsBruteForce`
+  check atom-based answers against the engine cell by cell on small random tenants
+  (`awstest.NewWorld(seed)`); `TESSERA_EQUIV_SEEDS=200` runs more seeds and
+  `go test -fuzz FuzzAtomsEqualBruteForce ./internal/aws/query` explores others.
+  `go test -bench . -run XXX ./internal/aws/query` runs the benchmarks (track with `benchstat`).
+  The nightly SLO check against a synthetic tenant at twice the design's target scale is
+  `go test -tags slow -run TestPerf -timeout 90m ./internal/aws/query`. It needs about 8 GB of
+  memory and a quiet machine (the SLOs are for 16 vCPU). Options: `TESSERA_PERF_SCALE=1` for the
+  target itself, `TESSERA_PERF_SAMPLE=n` for the number of sampled principals,
+  `TESSERA_PERF_PROFILE=<dir>` for CPU and heap profiles (keep `<dir>` out of the repository), and
+  `TESSERA_PERF_ROOT=1` for the root-SCP diff.
 
 ## Server hardening
 

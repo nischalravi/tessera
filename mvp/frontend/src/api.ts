@@ -5,7 +5,7 @@
  * last data instantly while it refreshes. Any successful write broadcasts a change event and
  * every mounted `useApi` refetches, so counts (Inbox badge, KPIs) stay consistent.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 const cache = new Map<string, unknown>();
 const CHANGED = "tessera:api-changed";
@@ -293,7 +293,11 @@ export const runPendingAction = (a: PendingAction) => api(a.path, a.body, a.meth
 /** Tell mounted views that data changed outside `api()` (e.g. the mock layer). */
 export const notifyChanged = () => window.dispatchEvent(new Event(CHANGED));
 
+/** True for a 403: the session lacks the permission, so asking again changes nothing. */
+export const isDenied = (e: unknown): boolean => e instanceof ApiError && e.status === 403;
+
 export function useApi<T = any>(path: string | null) {
+  const denied = useRef(false);
   const [data, setData] = useState<T | null>(() => (path ? (cached<T>(path) ?? null) : null));
   const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(false);
@@ -304,21 +308,29 @@ export function useApi<T = any>(path: string | null) {
     api<T>(path)
       .then((d) => {
         if (!alive) return;
+        denied.current = false;
         setData(d);
         setError(null);
       })
-      .catch((e) => alive && setError(e instanceof ApiError ? e : new ApiError(String(e?.message ?? e), 0, null)))
+      .catch((e) => {
+        if (!alive) return;
+        denied.current = isDenied(e);
+        setError(e instanceof ApiError ? e : new ApiError(String(e?.message ?? e), 0, null));
+      })
       .finally(() => alive && setLoading(false));
     return () => {
       alive = false;
     };
   }, [path]);
   useEffect(() => {
+    denied.current = false;
     setData(path ? (cached<T>(path) ?? null) : null);
     return load();
   }, [load, path]);
   useEffect(() => {
-    const on = () => load();
+    const on = () => {
+      if (!denied.current) load(); // a 403 does not fix itself: no refetch storm
+    };
     window.addEventListener(CHANGED, on);
     return () => window.removeEventListener(CHANGED, on);
   }, [load]);
@@ -623,7 +635,8 @@ export const reviewDecide = (itemId: number, decision: "keep" | "revoke", commen
 
 // -------------------------------------------------------------- session
 export interface SessionInfo {
-  user: { id: string; email: string | null; display_name: string };
+  /** identity_id: the directory person the server linked this sign-in to; null when unlinked. */
+  user: { id: string; email: string | null; display_name: string; identity_id: number | null };
   tenant: { id: string; slug: string; name: string };
   roles: string[];
   active_roles: string[];
@@ -1547,6 +1560,91 @@ export const abac = {
 };
 export const abacPaths = { list: "/abac/policies", one: (id: string) => abacPath(id), bindings: "/abac/bindings" };
 
+// ---------------------------------------------------------------- SoD functions, risks, rulesets (issue #298)
+
+export type SodPriority = "critical" | "high" | "medium" | "low";
+export type SodAttribute = "environment" | "tag" | "resource" | "privileged";
+/** Picks entitlements: a system plus a permission id or an action name pattern (`*` wildcard), optionally narrowed by a resource attribute. */
+export interface SodSelector { system?: string; entitlement_id?: number; name_pattern?: string; attribute?: SodAttribute; value?: string }
+export interface SodSubjects { identity_types?: IdentityType[]; statuses?: string[]; condition?: AbacCondition }
+export interface SodPerson { id: number; name: string; type: IdentityType; status: string }
+export interface SodVersion { version: number; snapshot: Record<string, unknown>; note: string | null; actor: string; changed_at: string }
+export interface SodRef { id: string; key: string; name: string }
+export interface SodFunction {
+  id: string; key: string; name: string; description: string; owner: SodPerson | null; selectors: SodSelector[];
+  status: "active" | "retired"; version: number; created_at: string; updated_by: { id: string; display_name: string } | null; updated_at: string;
+  used_by: SodRef[];
+  /** Only on GET /sod/functions/{id} and after a change. */
+  versions?: SodVersion[];
+}
+export interface SodRisk {
+  id: string; key: string; name: string; description: string; priority: SodPriority; business_process: string; owner: SodPerson | null;
+  ruleset: SodRef; functions: SodRef[]; subjects: SodSubjects; status: "active" | "retired"; version: number; created_at: string;
+  updated_by: { id: string; display_name: string } | null; updated_at: string; violations?: number; versions?: SodVersion[];
+}
+export interface SodRuleset {
+  id: string; key: string; name: string; description: string; enabled: boolean; status: "active" | "retired"; version: number;
+  created_at: string; updated_by: { id: string; display_name: string } | null; updated_at: string; risks: number; violations?: number;
+  versions?: SodVersion[];
+}
+export interface SodFunctionList { can_manage: boolean; attributes: SodAttribute[]; functions: SodFunction[] }
+export interface SodRiskList { can_manage: boolean; priorities: SodPriority[]; risks: SodRisk[] }
+export interface SodRulesetList { can_manage: boolean; /** No stored ruleset yet: the policy files are checked. */ legacy: boolean; rulesets: SodRuleset[] }
+export interface SodFunctionSpec { key?: string; name: string; description: string; owner_id: number | null; selectors: SodSelector[]; note?: string }
+export interface SodRiskSpec {
+  key?: string; name: string; description: string; priority: SodPriority; business_process: string; owner_id: number | null;
+  ruleset_id: string; function_ids: string[]; subjects: SodSubjects; note?: string;
+}
+export interface SodRulesetSpec { key?: string; name: string; description: string; enabled: boolean; note?: string }
+export interface SodGrant { perm_key: string; action: string; resource: string; system: string; privileged: boolean; paths: string[] }
+export interface SodViolation {
+  key: string; risk_id: string; risk_key: string; risk_name: string; priority: SodPriority; ruleset: SodRef; business_process: string;
+  identity_id: number; identity_name: string; function1: SodRef; function2: SodRef; entitlement: string; systems: string[];
+  sides: [{ function: SodRef; grants: SodGrant[] }, { function: SodRef; grants: SodGrant[] }];
+  /** open; mitigation statuses arrive with mitigating controls. */
+  status: string; message: string; evidence: string[]; edges: [string, string][];
+}
+export interface SodViolationFilter { risk?: string; priority?: SodPriority; ruleset?: string; system?: string; business_process?: string; identity?: string }
+export interface SodImportResult { dry_run: boolean; ruleset: string; created: string[]; updated: string[]; unchanged: string[]; retired: string[] }
+export interface SodTrigger {
+  risk_id: string; risk_key: string; risk_name: string; priority: SodPriority; business_process: string; ruleset: SodRef;
+  identity_id: number; identity_name: string; function1: SodRef; function2: SodRef; entitlement: string; message: string;
+}
+export interface SodSimulation { checked: number; skipped: { beneficiary_id: number; catalog_item_id: string; reason: string }[]; would_trigger: SodTrigger[]; highest_priority: SodPriority | "" }
+
+const sodPath = (kind: "functions" | "risks" | "rulesets", id: string, rest = "") => `/sod/${kind}/${encodeURIComponent(id)}${rest}`;
+/** Query string of the SoD violations filters (empty values are left out). */
+export function sodViolationQuery(f: SodViolationFilter): string {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(f)) if (v) q.set(k, v);
+  const s = q.toString();
+  return s ? `?${s}` : "";
+}
+export const sod = {
+  createFunction: (spec: SodFunctionSpec) => api<SodFunction>("/sod/functions", spec),
+  updateFunction: (id: string, version: number, spec: SodFunctionSpec) => api<SodFunction>(sodPath("functions", id), { version, ...spec }, "PUT"),
+  retireFunction: (id: string, reason: string) => api<SodFunction>(sodPath("functions", id, "/retire"), { reason }),
+  createRisk: (spec: SodRiskSpec) => api<SodRisk>("/sod/risks", spec),
+  updateRisk: (id: string, version: number, spec: SodRiskSpec) => api<SodRisk>(sodPath("risks", id), { version, ...spec }, "PUT"),
+  retireRisk: (id: string, reason: string) => api<SodRisk>(sodPath("risks", id, "/retire"), { reason }),
+  createRuleset: (spec: SodRulesetSpec) => api<SodRuleset>("/sod/rulesets", spec),
+  updateRuleset: (id: string, version: number, spec: SodRulesetSpec) => api<SodRuleset>(sodPath("rulesets", id), { version, ...spec }, "PUT"),
+  retireRuleset: (id: string, reason: string) => api<SodRuleset>(sodPath("rulesets", id, "/retire"), { reason }),
+  /** The ruleset as a YAML file (access as code). */
+  exportRuleset: (id: string) => api<{ filename: string; version: number; yaml: string }>(sodPath("rulesets", id, "/export")),
+  importRuleset: (yaml: string, opts: { prune?: boolean; dry_run?: boolean } = {}) => api<SodImportResult>("/sod/rulesets/import", { yaml, ...opts }),
+  /** One-time import of the separation_of_duties policy files as a ruleset. */
+  importLegacy: (dryRun = false) => api<SodImportResult>("/sod/import-legacy", { dry_run: dryRun }),
+  /** Which risks would these requested items trigger? Changes nothing; used before an access request is submitted. */
+  simulate: (beneficiaryIds: number[], catalogItemIds: string[], durationHours?: number) =>
+    apiNoResume<SodSimulation>("/sod/simulate", { beneficiary_ids: beneficiaryIds, catalog_item_ids: catalogItemIds, ...(durationHours ? { duration_hours: durationHours } : {}) }),
+};
+export const sodPaths = {
+  functions: "/sod/functions", risks: "/sod/risks", rulesets: "/sod/rulesets",
+  function: (id: string) => sodPath("functions", id), risk: (id: string) => sodPath("risks", id), ruleset: (id: string) => sodPath("rulesets", id),
+  violations: (f: SodViolationFilter = {}) => `/sod/violations${sodViolationQuery(f)}`,
+};
+
 export const simulate = (body: { remove_edge_ids?: number[]; add_edges?: { src: string; dst: string; duration_hours?: number }[]; disable_account_ids?: number[] }) =>
   api<SimResult>("/simulate", { remove_edge_ids: [], add_edges: [], disable_account_ids: [], ...body });
 
@@ -1710,6 +1808,227 @@ export const readiness = {
     "/insights/deployment-health/rerun", { reconcile }),
 };
 
+// ------------------------------------------------------------ SIEM sinks (#169)
+
+export type SiemKind = "syslog" | "webhook";
+export type SiemFormat = "json" | "ocsf";
+export type SiemFlavor = "hec" | "json" | "";
+
+export interface SiemSink {
+  id: string;
+  name: string;
+  kind: SiemKind;
+  format: SiemFormat;
+  /** host:port, or the webhook URL without its query string. */
+  target: string;
+  flavor: SiemFlavor;
+  has_ca: boolean;
+  has_token: boolean;
+  include_http: boolean;
+  enabled: boolean;
+  cursor_seq: number;
+  head_seq: number;
+  health: { status: "healthy" | "catching_up" | "degraded" | "failing" | "paused"; lag: number };
+  attempts: number;
+  next_attempt_at: string | null;
+  last_error: string | null;
+  last_success_at: string | null;
+  delivered_count: number;
+  dead_letter_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SiemSinkInput {
+  name: string;
+  kind?: SiemKind;
+  format: SiemFormat;
+  /** Omit on update to keep the current target. */
+  target?: string;
+  flavor?: SiemFlavor;
+  /** Omit on update to keep; "" removes it. */
+  ca_pem?: string;
+  /** Omit to keep the stored token; "" removes it. */
+  token?: string;
+  include_http: boolean;
+  enabled: boolean;
+  /** Creation only. */
+  start?: "now" | "beginning";
+}
+
+export interface SiemDeadLetter {
+  id: string;
+  from_seq: number;
+  to_seq: number;
+  events: number;
+  error: string;
+  created_at: string;
+}
+
+export const siemApi = {
+  create: (body: SiemSinkInput) => api<SiemSink>("/siem/sinks", body),
+  update: (id: string, body: SiemSinkInput) => api<SiemSink>(`/siem/sinks/${encodeURIComponent(id)}`, body, "PUT"),
+  rewind: (id: string, seq: number) => api<SiemSink>(`/siem/sinks/${encodeURIComponent(id)}/rewind`, { seq }),
+  test: (id: string) => api<{ ok: boolean; error?: string }>(`/siem/sinks/${encodeURIComponent(id)}/test`, {}),
+};
+
+/** Health → badge tone and label. */
+export const SIEM_HEALTH: Record<SiemSink["health"]["status"], { tone: "ok" | "info" | "warning" | "critical" | "outline"; label: string }> = {
+  healthy: { tone: "ok", label: "Healthy" },
+  catching_up: { tone: "info", label: "Catching up" },
+  degraded: { tone: "warning", label: "Retrying" },
+  failing: { tone: "critical", label: "Failing" },
+  paused: { tone: "outline", label: "Paused" },
+};
+// ---------------------------------------------------------------- alerts (#168)
+
+export type AlertSeverity = "low" | "medium" | "high" | "critical";
+export type AlertStatus = "open" | "acknowledged" | "resolved";
+
+export interface UserRef {
+  id: string;
+  name: string;
+}
+
+export interface AlertDeliveryRow {
+  id: string;
+  channel: string;
+  channel_kind: "email" | "webhook";
+  status: "pending" | "sent" | "failed";
+  attempts: number;
+  next_attempt_at: string | null;
+  last_error: string | null;
+  sent_at: string | null;
+}
+
+export interface AlertRow {
+  id: string;
+  rule: string;
+  rule_name: string;
+  key: string;
+  severity: AlertSeverity;
+  title: string;
+  detail: Record<string, unknown>;
+  status: AlertStatus;
+  count: number;
+  first_seen_at: string;
+  last_seen_at: string;
+  assignee: UserRef | null;
+  acknowledged_by: UserRef | null;
+  acknowledged_at: string | null;
+  resolved_by: UserRef | null;
+  resolved_at: string | null;
+  resolution: string | null;
+  deliveries?: AlertDeliveryRow[];
+}
+
+export interface AlertSummary {
+  open: number;
+  acknowledged: number;
+  by_severity: Partial<Record<AlertSeverity, number>>;
+}
+
+export interface AlertRule {
+  id: string;
+  name: string;
+  description: string;
+  kind: "event" | "detection";
+  enabled: boolean;
+  severity: AlertSeverity;
+  threshold: number;
+  window_minutes: number;
+  customized: boolean;
+  updated_at: string | null;
+  live: number;
+}
+
+export interface AlertChannel {
+  id: string;
+  name: string;
+  kind: "email" | "webhook";
+  /** Webhook URLs come back redacted (scheme, host and the last characters). */
+  target: string;
+  min_severity: AlertSeverity;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+  /** Only in the response that created the channel or rotated its secret. */
+  secret?: string;
+}
+
+export interface AlertChannelInput {
+  name: string;
+  kind?: "email" | "webhook";
+  /** Omit on update to keep the current target. */
+  target?: string;
+  min_severity: AlertSeverity;
+  enabled: boolean;
+  rotate_secret?: boolean;
+}
+
+export const ALERT_SEVERITIES: AlertSeverity[] = ["low", "medium", "high", "critical"];
+
+export const alertsApi = {
+  acknowledge: (id: string) => api<AlertRow>(`/alerts/${encodeURIComponent(id)}/acknowledge`, {}),
+  resolve: (id: string, note: string) => api<AlertRow>(`/alerts/${encodeURIComponent(id)}/resolve`, { note }),
+  assign: (id: string, assignee_user_id: string | null) => api<AlertRow>(`/alerts/${encodeURIComponent(id)}/assign`, { assignee_user_id }),
+  setRule: (id: string, body: { enabled: boolean; severity: AlertSeverity; threshold: number; window_minutes: number }) =>
+    api<AlertRule[]>(`/alerts/rules/${encodeURIComponent(id)}`, body, "PUT"),
+  createChannel: (body: AlertChannelInput) => api<AlertChannel>("/alerts/channels", body),
+  updateChannel: (id: string, body: AlertChannelInput) => api<AlertChannel>(`/alerts/channels/${encodeURIComponent(id)}`, body, "PUT"),
+  testChannel: (id: string) => api<{ ok: boolean; error?: string }>(`/alerts/channels/${encodeURIComponent(id)}/test`, {}),
+};
+
+/** Severity → badge tone. */
+export const severityTone = (s: AlertSeverity) => (s === "critical" ? "critical" : s === "high" ? "warning" : s === "medium" ? "info" : "neutral");
+// ------------------------------------------------------------- ownership (#167)
+
+export type OwnedKind = "app" | "group" | "resource" | "identity";
+
+export interface NamedRef {
+  id: number;
+  name: string;
+}
+
+export interface OwnedObject {
+  kind: OwnedKind;
+  key: string;
+  label: string;
+  primary_owner: NamedRef | null;
+  backup_owner: NamedRef | null;
+  owner_group: NamedRef | null;
+  purpose: string;
+  /** "tessera" when set here, "connector" when only the connector names an owner. */
+  source: "tessera" | "connector" | null;
+  updated_at: string | null;
+}
+
+export interface OwnershipList {
+  kind: OwnedKind;
+  counts: Record<OwnedKind, { total: number; unowned: number }>;
+  items: OwnedObject[];
+}
+
+export interface OwnershipInput {
+  primary_owner_id: number | null;
+  backup_owner_id: number | null;
+  owner_group_id: number | null;
+  purpose: string;
+}
+
+export const ownershipPath = (kind: OwnedKind) => `/ownership?kind=${kind}`;
+
+export const setOwnership = (kind: OwnedKind, key: string, body: OwnershipInput) =>
+  api<OwnedObject>(`/ownership/${kind}/${encodeURIComponent(key)}`, body, "PUT");
+
+export const bulkSetOwnership = (objects: { kind: OwnedKind; key: string }[], body: Omit<OwnershipInput, "purpose">) =>
+  api<{ updated: number }>("/ownership/bulk", { objects, ...body });
+
+/** The one object's row out of a kind's listing, or null. */
+export function ownedObject(list: OwnershipList | null, key: string | number): OwnedObject | null {
+  return list?.items.find((o) => o.key === String(key)) ?? null;
+}
+
 // ----------------------------------------------------- provisioning (#103)
 
 export type ProvStatus = "queued" | "sent" | "pending_verification" | "verified" | "mismatch" | "failed" | "cancelled";
@@ -1734,7 +2053,7 @@ export interface ProvTarget {
   dialect?: "standard" | "entra"; fault?: string; write_back: boolean; has_credential: boolean; credential_version: string | null; updated_at: string;
 }
 
-/** token is write-only: omit it to keep the stored credential. */
+/** token is write-only: omit it to keep the stored credential. A change of kind or origin (scheme, host, port) needs a new token (422 credential_required). */
 export interface ProvTargetInput { kind: ProvTarget["kind"]; base_url: string; dialect?: string; fault?: string; token?: string; write_back: boolean }
 
 export const provisioning = {

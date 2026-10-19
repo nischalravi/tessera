@@ -1,6 +1,7 @@
 import { ReactNode, createContext, useContext, useMemo, useState } from "react";
 import { IdentityRow, useApi } from "../api";
 import { useOptionalSession } from "./auth";
+import { resolveMe } from "./me";
 import { store } from "./storage";
 
 /**
@@ -19,7 +20,7 @@ export const PERSONAS: { id: Persona; label: string; who: string; blurb: string 
 interface PersonaCtx {
   persona: Persona;
   setPersona: (p: Persona) => void;
-  /** The signed-in user's identity in this tenant, matched by email; null when there is none. */
+  /** The signed-in user's identity in this tenant, the identity the server linked the sign-in to, else matched by email; null when there is none. */
   me: IdentityRow | null;
   /** True once the directory has loaded, so a null `me` means "no identity", not "still loading". */
   meResolved: boolean;
@@ -35,9 +36,8 @@ export function PersonaProvider({ children }: { children: ReactNode }) {
   const { data } = useApi<IdentityRow[]>("/identities");
   const who = PERSONAS.find((p) => p.id === persona)!.who;
   const session = useOptionalSession()?.session ?? null;
-  const email = session?.user.email?.toLowerCase() ?? null;
   // "My" pages show the signed-in user, never the demo persona: the persona only changes emphasis.
-  const me = useMemo(() => (email ? data?.find((i) => i.email?.toLowerCase() === email) ?? null : null), [data, email]);
+  const me = useMemo(() => resolveMe(data, session?.user), [data, session?.user]);
   const actor = session?.user.display_name ?? me?.name ?? who;
   const setPersona = (p: Persona) => {
     setP(p);

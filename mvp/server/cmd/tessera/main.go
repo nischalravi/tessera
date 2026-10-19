@@ -8,6 +8,7 @@
 //	tessera audit verify|checkpoint|export   verify, checkpoint or export the audit ledger (see audit.go)
 //	tessera notify seal-password             seal an SMTP password (stdin) for TESSERA_SMTP_PASSWORD_SEALED
 //	tessera admin create-tenant|add-idp|invite-admin   operator bootstrap of a tenant (see admin.go)
+//	tessera catalog refresh|compile   fetch and compile the AWS action catalog (see catalog.go)
 //	tessera admin gen-rls [-out path] [-check]   render the Postgres row-level-security file (see genrls.go)
 //
 // Environment:
@@ -69,6 +70,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/alerts"
 	"github.com/nischalravi/tessera/mvp/server/internal/api"
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
@@ -88,6 +90,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/seed"
+	"github.com/nischalravi/tessera/mvp/server/internal/siem"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 	"github.com/nischalravi/tessera/mvp/server/policies"
@@ -130,6 +133,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if cmd == "admin" {
 		return adminCmd(ctx, args, stdout, stderr)
 	}
+	if cmd == "catalog" {
+		return catalogCmd(ctx, args, stdout, stderr)
+	}
 	fset := flag.NewFlagSet("tessera "+cmd, flag.ContinueOnError)
 	fset.SetOutput(stderr)
 	var o options
@@ -149,7 +155,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return st.Close()
 	}
 	if cmd != "seed" && cmd != "serve" {
-		return fmt.Errorf("unknown command %q (want serve, seed, check-db, readiness, audit, backup or admin)", cmd)
+		return fmt.Errorf("unknown command %q (want serve, seed, check-db, readiness, audit, backup, admin or catalog)", cmd)
 	}
 	if os.Getenv("TESSERA_ENV") == "" {
 		// fail closed: the environment decides the guard rails (§18.4) and
@@ -332,6 +338,8 @@ const (
 	// (each is checkpointed every TESSERA_AUDIT_CHECKPOINT_SECONDS or
 	// _EVENTS new events, design §13.6).
 	checkpointInterval = 30 * time.Second
+	// siemInterval is how often SIEM sinks are pushed what is new in the ledger (#169).
+	siemInterval = 15 * time.Second
 )
 
 func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Sealer, clock timeutil.Clock,
@@ -397,16 +405,23 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	defer stopFake()
 	// The s3:// anchor sink's AWS SDK client uses the same safehttp client.
 	anchorURL := cfg.AnchorURL(o.db)
+	alertSvc, err := newAlertService(cfg, st, sealer, outbound, clock, logger)
+	if err != nil {
+		return err
+	}
 	sink, err := audit.NewSink(anchorURL, audit.WithHTTPClient(outbound))
 	if err != nil {
 		return err
 	}
+	siemSvc := &siem.Service{DB: st, Sealer: sealer, HTTP: outbound, Clock: clock, Log: logger,
+		Dev: cfg.Env == config.Dev && cfg.OutboundAllowLoopback}
 	srv := api.New(api.Config{Health: checker, Store: st, Clock: clock, Policies: loader, Logger: logger,
 		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound,
 		Outbound: outbound, FakeTargetURL: fakeURL,
 		Containment:    &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock},
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
-		HSTS: cfg.IsProd(), Env: cfg.Env, Identifiers: identifiers.NewKeyer(sealer), EmailMode: cfg.Mail.Mode, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, Readiness: rsvc, AuditAnchor: anchorURL})
+		HSTS: cfg.IsProd(), Env: cfg.Env, Identifiers: identifiers.NewKeyer(sealer), EmailMode: cfg.Mail.Mode, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, Readiness: rsvc, AuditAnchor: anchorURL,
+		Siem: siemSvc, Alerts: alertSvc})
 	sender, err := notify.NewSender(cfg.Mail, cfg.Env, cfg.OutboundAllowLoopback, sealer, config.DevMailPath(o.db), logger)
 	if err != nil {
 		return err
@@ -463,6 +478,16 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		defer close(ckptDone)
 		checkpointer.Loop(ctx, checkpointInterval)
 	}()
+	siemDone := make(chan struct{})
+	go func() {
+		defer close(siemDone)
+		siemSvc.Run(ctx, siemInterval)
+	}()
+	alertsDone := make(chan struct{})
+	go func() {
+		defer close(alertsDone)
+		alertSvc.Run(ctx, alertsInterval)
+	}()
 	backupDone := make(chan struct{})
 	go func() {
 		defer close(backupDone)
@@ -491,6 +516,8 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		<-provDone
 		<-keysDone
 		<-ckptDone
+		<-siemDone
+		<-alertsDone
 		<-backupDone
 		<-notifyDone
 		return err
@@ -508,6 +535,8 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	<-provDone
 	<-keysDone
 	<-ckptDone
+	<-siemDone
+	<-alertsDone
 	<-backupDone
 	<-notifyDone
 	if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
@@ -559,4 +588,19 @@ func runKeyRotation(ctx context.Context, st *store.DB, sealer *seal.Sealer, cloc
 			}
 		}
 	}
+}
+
+// alertsInterval is how often the alert engine reads new audit events and
+// sends due deliveries (detections run every 15 minutes).
+const alertsInterval = time.Minute
+
+// newAlertService builds the alert engine and deliverer (issue #168):
+// webhooks through the SSRF-guarded client, email per TESSERA_NOTIFY.
+func newAlertService(cfg *config.Config, st *store.DB, sealer *seal.Sealer, client *http.Client, clock timeutil.Clock, logger *slog.Logger) (*alerts.Service, error) {
+	mailer, err := alerts.NewMailer(cfg.Notify, logger)
+	if err != nil {
+		return nil, err
+	}
+	return &alerts.Service{DB: st, Sealer: sealer, HTTP: client, Mail: mailer, Clock: clock, Log: logger,
+		PublicURL: cfg.PublicURL}, nil
 }

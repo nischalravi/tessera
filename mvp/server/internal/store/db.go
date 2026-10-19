@@ -102,6 +102,8 @@ var tables = []string{
 	"connections", "connection_revisions", "readiness_check_runs", "readiness_item_states", "readiness_attestations",
 	"readiness_skips", "readiness_overlays", "readiness_check_results", "recon_runs", "recon_findings", "readiness_scores",
 	"stg_identities", "stg_accounts", "stg_groups", "stg_memberships", "stg_attr_stats",
+	// ownership (schema/0208_ownership.sql)
+	"ownerships",
 	// scheduled access reviews (schema/0316_review_schedules.sql)
 	"review_templates", "review_launches",
 	// job run history (schema/0281_job_runs.sql)
@@ -121,6 +123,8 @@ var tables = []string{
 	"business_role_requests",
 	// attribute conditions (schema/0221_abac.sql)
 	"abac_policies", "abac_policy_versions", "abac_bindings",
+	// separation of duties: functions, risks, rulesets (schema/0300_sod.sql)
+	"sod_functions", "sod_rulesets", "sod_risks", "sod_risk_functions", "sod_versions",
 	// identity lifecycle (schema/0220_lifecycle.sql)
 	"identity_lifecycle", "identity_lifecycle_events",
 	// approval routing (schema/0206_approvals.sql)
@@ -133,6 +137,10 @@ var tables = []string{
 	"intake_records", "sponsorships", "sponsorship_events",
 	// identity containment (schema/0205_containment.sql)
 	"containment_credentials", "containment_retries",
+	// SIEM sinks (schema/0210_siem.sql)
+	"siem_sinks", "siem_dead_letters",
+	// alerting (schema/0209_alerts.sql)
+	"alert_rule_settings", "alerts", "alert_channels", "alert_deliveries", "alert_cursors",
 	// identity disable / enable (schema/0310_identity_disables.sql)
 	"identity_disables", "identity_disable_accounts",
 	// removal requests (schema/0311_removal_requests.sql)
