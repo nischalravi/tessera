@@ -1,0 +1,32 @@
+{
+  "id": "refused-dropped-anomaly",
+  "description": "A statement with both Action and NotAction is a Dropped ingest anomaly: AWS would reject it, so the check is excluded and counted.",
+  "synthetic": true,
+  "spec": {
+    "id": "refused-dropped-anomaly",
+    "stratum": "S2",
+    "fixture_version": "synthetic-1",
+    "principal_arn": "arn:aws:iam::111111111111:user/alice",
+    "policy_source_arn": "",
+    "action": "s3:GetObject",
+    "resource": "arn:aws:s3:::tsr-bkt/k",
+    "identity": [
+      "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"s3:GetObject\",\"NotAction\":\"s3:PutObject\",\"Resource\":\"*\"}]}"
+    ],
+    "boundary": null,
+    "scp_levels": null,
+    "resource_policy": "",
+    "resource_owner": "",
+    "context": null,
+    "exclusions": null,
+    "features": null
+  },
+  "iam_cassette": {
+    "fixture_version": "synthetic-1",
+    "entries": []
+  },
+  "expect": {
+    "verdict": "excluded",
+    "exclusion": "dropped_anomaly"
+  }
+}

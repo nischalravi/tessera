@@ -74,6 +74,11 @@ server/
   cmd/tessera/          main: `serve` (default), `seed` and `audit verify|checkpoint|export`; timeouts,
                         graceful shutdown, JIT sweeper, audit checkpointer
   cmd/tessera-devidp/   the dev IdP binary (development and tests only; see Signing in)
+  cmd/tessera-harness/  AWS evaluator differential harness, offline subcommands: `replay` re-runs the
+                        recorded corpus with no AWS credentials or network (`go run ./cmd/tessera-harness
+                        replay` from `server/`; exits 1 unless every case concludes what it expects);
+                        `gate -report FILE` applies the nightly gate (Wilson bound, coverage, S1). Never
+                        linked by the server (archtest). The nightly subcommand arrives with PR-9.
   internal/
     connectors/         Connector interface + normalized record types, deterministic demo company
                         (pyrand.go reproduces CPython's Mersenne Twister so seed 7 gives the same
@@ -102,8 +107,16 @@ server/
     testkit/            shared test fixtures (tiny world through a real Connector, seeded demo DB; each is seeded once per test binary and handed out as a private copy per test)
     devidp/             dev IdP: mock OIDC issuer, vendor emulation profiles, fault injection;
                         devidptest/ runs it in-process for tests. Never imported by the API.
+    aws/harness/        differential harness: request specs, oracle clients (SimulateCustomPolicy,
+                        SimulatePrincipalPolicy, Access Analyzer, probes), comparator and metrics M1-M4/C,
+                        Wilson-bound gate, triage store, delta-debug minimizer, replay corpus. Does I/O, so it
+                        sits outside the pure evaluator packages; only cmd/tessera-harness imports it.
+    aws/awstest/        HTTP-layer cassette record and replay for AWS SDK clients (aws.HTTPClient)
   policies/*.yaml       policy-as-code (embedded in the binary; run.sh reads them from disk)
   testdata/parity/      golden request/response fixtures recorded from the original Python API
+  testdata/aws/cassettes/  harness replay corpus, one JSON case per file (spec, oracle responses, expected
+                        verdict). All current cases are synthetic (`"synthetic": true`); real recordings
+                        come with the sandbox in PR-9.
   tools/benchcmp/       end-to-end benchmark (seed, startup, p50/p95, RSS; optionally vs Python)
   scripts/install-tools.sh  pinned govulncheck + gosec
 frontend/               React 19 + Vite 8 + TypeScript, react-router, cytoscape.js, lucide-react
