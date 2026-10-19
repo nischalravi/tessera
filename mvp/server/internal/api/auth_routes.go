@@ -150,7 +150,7 @@ func (s *Server) authSession(_ http.ResponseWriter, r *http.Request, _ *params) 
 	}
 	return ojson.Object{
 		{Key: "user", Value: ojson.Object{{Key: "id", Value: u.ID.String()}, {Key: "email", Value: u.Email},
-			{Key: "display_name", Value: u.DisplayName}}},
+			{Key: "display_name", Value: u.DisplayName}, {Key: "identity_id", Value: u.IdentityID}}},
 		{Key: "tenant", Value: ojson.Object{{Key: "id", Value: tenant.ID.String()}, {Key: "slug", Value: tenant.Slug},
 			{Key: "name", Value: tenant.Name}}},
 		{Key: "roles", Value: roleNames(p.AssignedRoles.Sorted())},

@@ -5,7 +5,7 @@
  * last data instantly while it refreshes. Any successful write broadcasts a change event and
  * every mounted `useApi` refetches, so counts (Inbox badge, KPIs) stay consistent.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 const cache = new Map<string, unknown>();
 const CHANGED = "tessera:api-changed";
@@ -293,7 +293,11 @@ export const runPendingAction = (a: PendingAction) => api(a.path, a.body, a.meth
 /** Tell mounted views that data changed outside `api()` (e.g. the mock layer). */
 export const notifyChanged = () => window.dispatchEvent(new Event(CHANGED));
 
+/** True for a 403: the session lacks the permission, so asking again changes nothing. */
+export const isDenied = (e: unknown): boolean => e instanceof ApiError && e.status === 403;
+
 export function useApi<T = any>(path: string | null) {
+  const denied = useRef(false);
   const [data, setData] = useState<T | null>(() => (path ? (cached<T>(path) ?? null) : null));
   const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(false);
@@ -304,21 +308,29 @@ export function useApi<T = any>(path: string | null) {
     api<T>(path)
       .then((d) => {
         if (!alive) return;
+        denied.current = false;
         setData(d);
         setError(null);
       })
-      .catch((e) => alive && setError(e instanceof ApiError ? e : new ApiError(String(e?.message ?? e), 0, null)))
+      .catch((e) => {
+        if (!alive) return;
+        denied.current = isDenied(e);
+        setError(e instanceof ApiError ? e : new ApiError(String(e?.message ?? e), 0, null));
+      })
       .finally(() => alive && setLoading(false));
     return () => {
       alive = false;
     };
   }, [path]);
   useEffect(() => {
+    denied.current = false;
     setData(path ? (cached<T>(path) ?? null) : null);
     return load();
   }, [load, path]);
   useEffect(() => {
-    const on = () => load();
+    const on = () => {
+      if (!denied.current) load(); // a 403 does not fix itself: no refetch storm
+    };
     window.addEventListener(CHANGED, on);
     return () => window.removeEventListener(CHANGED, on);
   }, [load]);
@@ -623,7 +635,8 @@ export const reviewDecide = (itemId: number, decision: "keep" | "revoke", commen
 
 // -------------------------------------------------------------- session
 export interface SessionInfo {
-  user: { id: string; email: string | null; display_name: string };
+  /** identity_id: the directory person the server linked this sign-in to; null when unlinked. */
+  user: { id: string; email: string | null; display_name: string; identity_id: number | null };
   tenant: { id: string; slug: string; name: string };
   roles: string[];
   active_roles: string[];
