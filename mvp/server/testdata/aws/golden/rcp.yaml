@@ -1,0 +1,51 @@
+# Golden corpus, RCPs (org: O1, RCPs enabled): GC-49 to GC-51.
+
+- id: GC-49
+  title: An RCP blocks principals outside the org, despite the bucket policy
+  org:
+    base: O1
+    rcp_add:
+      ou-prod: [{"Statement": [{"Effect": "Deny", "Principal": "*", "Action": "s3:*", "Resource": "*",
+                                "Condition": {"StringNotEqualsIfExists": {"aws:PrincipalOrgID": "o-sbx"}, "BoolIfExists": {"aws:PrincipalIsAWSService": "false"}}}]}]
+  principal: "arn:aws:sts::333333333333:assumed-role/partner/s"
+  principal_org: "o-ext"
+  identity: [allow_all]
+  bucket_policy: {"Statement": [{"Effect": "Allow", "Principal": {"AWS": "arn:aws:iam::333333333333:role/partner"}, "Action": "s3:GetObject", "Resource": "arn:aws:s3:::tsr-bkt/*"}]}
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-bkt/a"}
+  expect: {outcome: DENY, deny_kind: explicit, stage: explicit_deny, policy_kind: rcp}
+  note: "the partner account is in org o-ext, so aws:PrincipalOrgID = o-ext"
+  why: "[S5a] RCPs apply to resources in member accounts regardless of the principal's org."
+  verified: doc
+
+- id: GC-50
+  title: RCPs do not apply to resources in the management account
+  org:
+    base: O1
+    rcp_add:
+      r-1: [{"Statement": [{"Effect": "Deny", "Principal": "*", "Action": "s3:*", "Resource": "*",
+                            "Condition": {"StringNotEqualsIfExists": {"aws:PrincipalOrgID": "o-sbx"}, "BoolIfExists": {"aws:PrincipalIsAWSService": "false"}}}]}]
+  buckets: {"tsr-mgmt-bkt": "999999999999"}
+  principal: "arn:aws:sts::333333333333:assumed-role/partner/s"
+  principal_org: "o-ext"
+  identity: [allow_all]
+  resource_policies:
+    - resource: "arn:aws:s3:::tsr-mgmt-bkt"
+      policy: {"Statement": [{"Effect": "Allow", "Principal": {"AWS": "arn:aws:iam::333333333333:role/partner"}, "Action": "s3:GetObject", "Resource": "arn:aws:s3:::tsr-mgmt-bkt/*"}]}
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-mgmt-bkt/a"}
+  expect: {outcome: ALLOW, rcp: not_applicable}
+  why: "[S5a] RCPs don't affect resources in the management account."
+  verified: doc
+
+- id: GC-51
+  title: An RCP naming a service that does not support RCPs has no effect
+  org:
+    base: O1
+    rcp_add:
+      ou-prod: [{"Statement": [{"Effect": "Deny", "Principal": "*", "Action": "lambda:InvokeFunction", "Resource": "*"}]}]
+  principal: U
+  identity:
+    - {"Statement": [{"Effect": "Allow", "Action": "lambda:InvokeFunction", "Resource": "*"}]}
+  request: {action: "lambda:InvokeFunction", resource: "arn:aws:lambda:us-east-1:111111111111:function:tsr-fn"}
+  expect: {outcome: ALLOW, fidelity: approximate, reasons: ["AMBIGUITY:A14"]}
+  why: "[S5a] Lambda is not in the RCP service list; attach-time behaviour unverified."
+  verified: pending-probe:A14

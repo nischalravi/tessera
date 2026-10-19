@@ -6,7 +6,7 @@ import (
 )
 
 // Baseline is a live revision's activation baseline and the monitoring state
-// of its scheduled re-runs (schema/0209_readiness_baselines.sql). Snapshot and
+// of its scheduled re-runs (schema/0355_readiness_baselines.sql). Snapshot and
 // LastCounts are JSON owned by internal/readiness.
 type Baseline struct {
 	RevisionID string

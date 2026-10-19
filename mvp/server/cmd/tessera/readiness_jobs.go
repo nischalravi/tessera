@@ -12,7 +12,6 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/ingest"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
-	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 )
@@ -21,24 +20,19 @@ import (
 // live checks or reconciliation are due (the due intervals are days).
 const readinessInterval = 15 * time.Minute
 
-// newReadinessService builds the deployment-readiness service the API and the
-// scheduler share. TESSERA_READINESS_LIVE_CHECK_DAYS (1 to 7, default 1) sets
-// how often live checks re-run on active connections (design §7.4).
-func newReadinessService(env, scenario string) (*readiness.Service, error) {
-	reg, err := template.Default()
-	if err != nil {
-		return nil, err
-	}
-	svc := readiness.NewService(reg, env)
-	svc.Runner.Scenario = scenario
+// configureReadinessSchedule sets the scheduled re-run intervals of the
+// deployment-readiness service the API and the scheduler share.
+// TESSERA_READINESS_LIVE_CHECK_DAYS (1 to 7, default 1) sets how often live
+// checks re-run on active connections (design §7.4).
+func configureReadinessSchedule(svc *readiness.Service) error {
 	if v := os.Getenv("TESSERA_READINESS_LIVE_CHECK_DAYS"); v != "" {
 		days, err := strconv.Atoi(v)
 		if err != nil || days < 1 || days > 7 {
-			return nil, fmt.Errorf("TESSERA_READINESS_LIVE_CHECK_DAYS: %q is not a number of days from 1 to 7", v)
+			return fmt.Errorf("TESSERA_READINESS_LIVE_CHECK_DAYS: %q is not a number of days from 1 to 7", v)
 		}
 		svc.Runner.LiveEvery = time.Duration(days) * 24 * time.Hour
 	}
-	return svc, nil
+	return nil
 }
 
 // runReadinessScheduler re-runs the live checks and reconciliation of every

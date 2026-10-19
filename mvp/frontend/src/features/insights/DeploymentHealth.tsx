@@ -9,10 +9,10 @@ import { Link, useNavigate } from "react-router-dom";
 import { Activity, Download, Plug, RefreshCw } from "lucide-react";
 import {
   AttentionEntry, Band, ConnectionHealthRow, DeploymentHealth as Health, DriftView, ReadinessSummary, ScoreBreakdown, SkippedRow, fmtDate, fmtDay,
-  readiness, useApi,
+  ApiError, readiness, useApi,
 } from "../../api";
 import {
-  Badge, Button, ButtonLink, Callout, DataTable, EmptyState, InsightsTabs, Kpi, Loading, Page, Segmented, Sev, SidePanel, useSelected, useToast,
+  Badge, Button, ButtonLink, Callout, DataTable, EmptyState, ErrorNote, InsightsTabs, Kpi, Loading, Page, Segmented, Sev, SidePanel, useSelected, useToast,
 } from "../../components";
 import { BAND_LABEL, STATE_LABEL, ScoreCell, SimulatedBadge, StateBadge } from "../admin/connections/shared";
 
@@ -49,7 +49,7 @@ export function NeedsAttentionList({ entries, limit, compact }: { entries: Atten
 }
 
 /** The Home card KPI: tenant score, band as tone, and what needs attention. */
-export function ReadinessKpi({ data, error }: { data: ReadinessSummary | null | undefined; error?: string | null }) {
+export function ReadinessKpi({ data, error }: { data: ReadinessSummary | null | undefined; error?: unknown }) {
   if (error) return <Kpi label="Deployment readiness" value="–" sub={<span className="err">Couldn't load readiness</span>} to="/insights/deployment-health" />;
   if (!data) return <Kpi label="Deployment readiness" value="…" sub="Loading" />;
   return (
@@ -64,14 +64,14 @@ export function ReadinessKpi({ data, error }: { data: ReadinessSummary | null | 
 }
 
 /** Home's "Needs attention" card: the top three deployment entries. */
-export function ReadinessAttentionCard({ data, error }: { data: ReadinessSummary | null | undefined; error?: string | null }) {
+export function ReadinessAttentionCard({ data, error }: { data: ReadinessSummary | null | undefined; error?: ApiError | null }) {
   return (
     <div className="card">
       <div className="spread" style={{ marginBottom: 4 }}>
         <h2>Needs attention</h2>
         <Link to="/insights/deployment-health" className="small">Deployment health</Link>
       </div>
-      {error ? <Callout tone="bad">Couldn't load deployment health: {error}</Callout> : <NeedsAttentionList entries={data ? data.top : null} limit={3} compact />}
+      {error ? <ErrorNote error={error} what="deployment health report" /> : <NeedsAttentionList entries={data ? data.top : null} limit={3} compact />}
     </div>
   );
 }

@@ -5,9 +5,9 @@
   "path": "/api/hris/events/9999/execute"
  },
  "response": {
-  "status": 400,
+  "status": 404,
   "body": {
-   "detail": "unknown event"
+   "detail": "event not found"
   }
  }
 }

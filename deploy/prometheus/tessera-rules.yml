@@ -1,0 +1,355 @@
+# Tessera SLO recording and alert rules (issue #303). Generated shape: see docs/operations/slo.md.
+# Metric names are pinned by mvp/server/internal/obs/testdata/metrics.golden.
+# Validate with: promtool check rules deploy/prometheus/tessera-rules.yml
+groups:
+  - name: tessera-sli-recording
+    interval: 30s
+    rules:
+      - record: tessera:sli_error_ratio:rate5m
+        expr: sum(rate(tessera_login_total{result="failure"}[5m])) / sum(rate(tessera_login_total[5m]))
+        labels:
+          sli: login
+      - record: tessera:sli_error_ratio:rate30m
+        expr: sum(rate(tessera_login_total{result="failure"}[30m])) / sum(rate(tessera_login_total[30m]))
+        labels:
+          sli: login
+      - record: tessera:sli_error_ratio:rate1h
+        expr: sum(rate(tessera_login_total{result="failure"}[1h])) / sum(rate(tessera_login_total[1h]))
+        labels:
+          sli: login
+      - record: tessera:sli_error_ratio:rate2h
+        expr: sum(rate(tessera_login_total{result="failure"}[2h])) / sum(rate(tessera_login_total[2h]))
+        labels:
+          sli: login
+      - record: tessera:sli_error_ratio:rate6h
+        expr: sum(rate(tessera_login_total{result="failure"}[6h])) / sum(rate(tessera_login_total[6h]))
+        labels:
+          sli: login
+      - record: tessera:sli_error_ratio:rate1d
+        expr: sum(rate(tessera_login_total{result="failure"}[1d])) / sum(rate(tessera_login_total[1d]))
+        labels:
+          sli: login
+      - record: tessera:sli_error_ratio:rate3d
+        expr: sum(rate(tessera_login_total{result="failure"}[3d])) / sum(rate(tessera_login_total[3d]))
+        labels:
+          sli: login
+      - record: tessera:sli_error_ratio:rate5m
+        expr: sum(rate(tessera_http_requests_total{class="5xx"}[5m])) / sum(rate(tessera_http_requests_total[5m]))
+        labels:
+          sli: api_availability
+      - record: tessera:sli_error_ratio:rate30m
+        expr: sum(rate(tessera_http_requests_total{class="5xx"}[30m])) / sum(rate(tessera_http_requests_total[30m]))
+        labels:
+          sli: api_availability
+      - record: tessera:sli_error_ratio:rate1h
+        expr: sum(rate(tessera_http_requests_total{class="5xx"}[1h])) / sum(rate(tessera_http_requests_total[1h]))
+        labels:
+          sli: api_availability
+      - record: tessera:sli_error_ratio:rate2h
+        expr: sum(rate(tessera_http_requests_total{class="5xx"}[2h])) / sum(rate(tessera_http_requests_total[2h]))
+        labels:
+          sli: api_availability
+      - record: tessera:sli_error_ratio:rate6h
+        expr: sum(rate(tessera_http_requests_total{class="5xx"}[6h])) / sum(rate(tessera_http_requests_total[6h]))
+        labels:
+          sli: api_availability
+      - record: tessera:sli_error_ratio:rate1d
+        expr: sum(rate(tessera_http_requests_total{class="5xx"}[1d])) / sum(rate(tessera_http_requests_total[1d]))
+        labels:
+          sli: api_availability
+      - record: tessera:sli_error_ratio:rate3d
+        expr: sum(rate(tessera_http_requests_total{class="5xx"}[3d])) / sum(rate(tessera_http_requests_total[3d]))
+        labels:
+          sli: api_availability
+      - record: tessera:sli_error_ratio:rate5m
+        expr: 1 - (sum(rate(tessera_http_request_duration_seconds_bucket{le="1"}[5m])) / sum(rate(tessera_http_request_duration_seconds_count[5m])))
+        labels:
+          sli: api_latency
+      - record: tessera:sli_error_ratio:rate30m
+        expr: 1 - (sum(rate(tessera_http_request_duration_seconds_bucket{le="1"}[30m])) / sum(rate(tessera_http_request_duration_seconds_count[30m])))
+        labels:
+          sli: api_latency
+      - record: tessera:sli_error_ratio:rate1h
+        expr: 1 - (sum(rate(tessera_http_request_duration_seconds_bucket{le="1"}[1h])) / sum(rate(tessera_http_request_duration_seconds_count[1h])))
+        labels:
+          sli: api_latency
+      - record: tessera:sli_error_ratio:rate2h
+        expr: 1 - (sum(rate(tessera_http_request_duration_seconds_bucket{le="1"}[2h])) / sum(rate(tessera_http_request_duration_seconds_count[2h])))
+        labels:
+          sli: api_latency
+      - record: tessera:sli_error_ratio:rate6h
+        expr: 1 - (sum(rate(tessera_http_request_duration_seconds_bucket{le="1"}[6h])) / sum(rate(tessera_http_request_duration_seconds_count[6h])))
+        labels:
+          sli: api_latency
+      - record: tessera:sli_error_ratio:rate1d
+        expr: 1 - (sum(rate(tessera_http_request_duration_seconds_bucket{le="1"}[1d])) / sum(rate(tessera_http_request_duration_seconds_count[1d])))
+        labels:
+          sli: api_latency
+      - record: tessera:sli_error_ratio:rate3d
+        expr: 1 - (sum(rate(tessera_http_request_duration_seconds_bucket{le="1"}[3d])) / sum(rate(tessera_http_request_duration_seconds_count[3d])))
+        labels:
+          sli: api_latency
+      - record: tessera:sli_error_ratio:rate5m
+        expr: sum(rate(tessera_audit_write_failures_total[5m])) / sum(rate(tessera_audit_writes_total[5m]))
+        labels:
+          sli: audit_write
+      - record: tessera:sli_error_ratio:rate30m
+        expr: sum(rate(tessera_audit_write_failures_total[30m])) / sum(rate(tessera_audit_writes_total[30m]))
+        labels:
+          sli: audit_write
+      - record: tessera:sli_error_ratio:rate1h
+        expr: sum(rate(tessera_audit_write_failures_total[1h])) / sum(rate(tessera_audit_writes_total[1h]))
+        labels:
+          sli: audit_write
+      - record: tessera:sli_error_ratio:rate2h
+        expr: sum(rate(tessera_audit_write_failures_total[2h])) / sum(rate(tessera_audit_writes_total[2h]))
+        labels:
+          sli: audit_write
+      - record: tessera:sli_error_ratio:rate6h
+        expr: sum(rate(tessera_audit_write_failures_total[6h])) / sum(rate(tessera_audit_writes_total[6h]))
+        labels:
+          sli: audit_write
+      - record: tessera:sli_error_ratio:rate1d
+        expr: sum(rate(tessera_audit_write_failures_total[1d])) / sum(rate(tessera_audit_writes_total[1d]))
+        labels:
+          sli: audit_write
+      - record: tessera:sli_error_ratio:rate3d
+        expr: sum(rate(tessera_audit_write_failures_total[3d])) / sum(rate(tessera_audit_writes_total[3d]))
+        labels:
+          sli: audit_write
+  - name: tessera-slo-burn-rate
+    rules:
+      - alert: TesseraSLOBurnLogin1H
+        expr: >-
+          tessera:sli_error_ratio:rate1h{sli="login"} > 0.144
+          and
+          tessera:sli_error_ratio:rate5m{sli="login"} > 0.144
+        labels:
+          severity: page
+          sli: login
+        annotations:
+          summary: "login SLO (99%) burning budget at 14.4x over 1h and 5m"
+          description: "Sign-in refusals over all sign-in outcomes. Both windows exceed 14.4x the 99% budget. See docs/operations/slo.md."
+      - alert: TesseraSLOBurnLogin6H
+        expr: >-
+          tessera:sli_error_ratio:rate6h{sli="login"} > 0.06
+          and
+          tessera:sli_error_ratio:rate30m{sli="login"} > 0.06
+        labels:
+          severity: page
+          sli: login
+        annotations:
+          summary: "login SLO (99%) burning budget at 6x over 6h and 30m"
+          description: "Sign-in refusals over all sign-in outcomes. Both windows exceed 6x the 99% budget. See docs/operations/slo.md."
+      - alert: TesseraSLOBurnLogin1D
+        expr: >-
+          tessera:sli_error_ratio:rate1d{sli="login"} > 0.03
+          and
+          tessera:sli_error_ratio:rate2h{sli="login"} > 0.03
+        labels:
+          severity: ticket
+          sli: login
+        annotations:
+          summary: "login SLO (99%) burning budget at 3x over 1d and 2h"
+          description: "Sign-in refusals over all sign-in outcomes. Both windows exceed 3x the 99% budget. See docs/operations/slo.md."
+      - alert: TesseraSLOBurnLogin3D
+        expr: >-
+          tessera:sli_error_ratio:rate3d{sli="login"} > 0.01
+          and
+          tessera:sli_error_ratio:rate6h{sli="login"} > 0.01
+        labels:
+          severity: ticket
+          sli: login
+        annotations:
+          summary: "login SLO (99%) burning budget at 1x over 3d and 6h"
+          description: "Sign-in refusals over all sign-in outcomes. Both windows exceed 1x the 99% budget. See docs/operations/slo.md."
+      - alert: TesseraSLOBurnApiAvailability1H
+        expr: >-
+          tessera:sli_error_ratio:rate1h{sli="api_availability"} > 0.0144
+          and
+          tessera:sli_error_ratio:rate5m{sli="api_availability"} > 0.0144
+        labels:
+          severity: page
+          sli: api_availability
+        annotations:
+          summary: "api_availability SLO (99.9%) burning budget at 14.4x over 1h and 5m"
+          description: "API 5xx responses over all responses. Both windows exceed 14.4x the 99.9% budget. See docs/operations/slo.md."
+      - alert: TesseraSLOBurnApiAvailability6H
+        expr: >-
+          tessera:sli_error_ratio:rate6h{sli="api_availability"} > 0.006
+          and
+          tessera:sli_error_ratio:rate30m{sli="api_availability"} > 0.006
+        labels:
+          severity: page
+          sli: api_availability
+        annotations:
+          summary: "api_availability SLO (99.9%) burning budget at 6x over 6h and 30m"
+          description: "API 5xx responses over all responses. Both windows exceed 6x the 99.9% budget. See docs/operations/slo.md."
+      - alert: TesseraSLOBurnApiAvailability1D
+        expr: >-
+          tessera:sli_error_ratio:rate1d{sli="api_availability"} > 0.003
+          and
+          tessera:sli_error_ratio:rate2h{sli="api_availability"} > 0.003
+        labels:
+          severity: ticket
+          sli: api_availability
+        annotations:
+          summary: "api_availability SLO (99.9%) burning budget at 3x over 1d and 2h"
+          description: "API 5xx responses over all responses. Both windows exceed 3x the 99.9% budget. See docs/operations/slo.md."
+      - alert: TesseraSLOBurnApiAvailability3D
+        expr: >-
+          tessera:sli_error_ratio:rate3d{sli="api_availability"} > 0.001
+          and
+          tessera:sli_error_ratio:rate6h{sli="api_availability"} > 0.001
+        labels:
+          severity: ticket
+          sli: api_availability
+        annotations:
+          summary: "api_availability SLO (99.9%) burning budget at 1x over 3d and 6h"
+          description: "API 5xx responses over all responses. Both windows exceed 1x the 99.9% budget. See docs/operations/slo.md."
+      - alert: TesseraSLOBurnApiLatency1H
+        expr: >-
+          tessera:sli_error_ratio:rate1h{sli="api_latency"} > 0.72
+          and
+          tessera:sli_error_ratio:rate5m{sli="api_latency"} > 0.72
+        labels:
+          severity: page
+          sli: api_latency
+        annotations:
+          summary: "api_latency SLO (95%) burning budget at 14.4x over 1h and 5m"
+          description: "API requests slower than 1 s over all requests (p95 target: 95% under 1 s). Both windows exceed 14.4x the 95% budget. See docs/operations/slo.md."
+      - alert: TesseraSLOBurnApiLatency6H
+        expr: >-
+          tessera:sli_error_ratio:rate6h{sli="api_latency"} > 0.3
+          and
+          tessera:sli_error_ratio:rate30m{sli="api_latency"} > 0.3
+        labels:
+          severity: page
+          sli: api_latency
+        annotations:
+          summary: "api_latency SLO (95%) burning budget at 6x over 6h and 30m"
+          description: "API requests slower than 1 s over all requests (p95 target: 95% under 1 s). Both windows exceed 6x the 95% budget. See docs/operations/slo.md."
+      - alert: TesseraSLOBurnApiLatency1D
+        expr: >-
+          tessera:sli_error_ratio:rate1d{sli="api_latency"} > 0.15
+          and
+          tessera:sli_error_ratio:rate2h{sli="api_latency"} > 0.15
+        labels:
+          severity: ticket
+          sli: api_latency
+        annotations:
+          summary: "api_latency SLO (95%) burning budget at 3x over 1d and 2h"
+          description: "API requests slower than 1 s over all requests (p95 target: 95% under 1 s). Both windows exceed 3x the 95% budget. See docs/operations/slo.md."
+      - alert: TesseraSLOBurnApiLatency3D
+        expr: >-
+          tessera:sli_error_ratio:rate3d{sli="api_latency"} > 0.05
+          and
+          tessera:sli_error_ratio:rate6h{sli="api_latency"} > 0.05
+        labels:
+          severity: ticket
+          sli: api_latency
+        annotations:
+          summary: "api_latency SLO (95%) burning budget at 1x over 3d and 6h"
+          description: "API requests slower than 1 s over all requests (p95 target: 95% under 1 s). Both windows exceed 1x the 95% budget. See docs/operations/slo.md."
+      - alert: TesseraSLOBurnAuditWrite1H
+        expr: >-
+          tessera:sli_error_ratio:rate1h{sli="audit_write"} > 0.0144
+          and
+          tessera:sli_error_ratio:rate5m{sli="audit_write"} > 0.0144
+        labels:
+          severity: page
+          sli: audit_write
+        annotations:
+          summary: "audit_write SLO (99.9%) burning budget at 14.4x over 1h and 5m"
+          description: "http.request audit events that failed to write over all attempts. Both windows exceed 14.4x the 99.9% budget. See docs/operations/slo.md."
+      - alert: TesseraSLOBurnAuditWrite6H
+        expr: >-
+          tessera:sli_error_ratio:rate6h{sli="audit_write"} > 0.006
+          and
+          tessera:sli_error_ratio:rate30m{sli="audit_write"} > 0.006
+        labels:
+          severity: page
+          sli: audit_write
+        annotations:
+          summary: "audit_write SLO (99.9%) burning budget at 6x over 6h and 30m"
+          description: "http.request audit events that failed to write over all attempts. Both windows exceed 6x the 99.9% budget. See docs/operations/slo.md."
+      - alert: TesseraSLOBurnAuditWrite1D
+        expr: >-
+          tessera:sli_error_ratio:rate1d{sli="audit_write"} > 0.003
+          and
+          tessera:sli_error_ratio:rate2h{sli="audit_write"} > 0.003
+        labels:
+          severity: ticket
+          sli: audit_write
+        annotations:
+          summary: "audit_write SLO (99.9%) burning budget at 3x over 1d and 2h"
+          description: "http.request audit events that failed to write over all attempts. Both windows exceed 3x the 99.9% budget. See docs/operations/slo.md."
+      - alert: TesseraSLOBurnAuditWrite3D
+        expr: >-
+          tessera:sli_error_ratio:rate3d{sli="audit_write"} > 0.001
+          and
+          tessera:sli_error_ratio:rate6h{sli="audit_write"} > 0.001
+        labels:
+          severity: ticket
+          sli: audit_write
+        annotations:
+          summary: "audit_write SLO (99.9%) burning budget at 1x over 3d and 6h"
+          description: "http.request audit events that failed to write over all attempts. Both windows exceed 1x the 99.9% budget. See docs/operations/slo.md."
+  - name: tessera-loop-freshness
+    rules:
+      - alert: TesseraLoopStale
+        expr: max by (loop) (tessera_loop_lag_seconds{loop!="key_rotation"}) > 300
+        for: 5m
+        labels:
+          severity: page
+          sli: loop_freshness
+        annotations:
+          summary: "Background loop {{ $labels.loop }} has not succeeded for over 5 minutes"
+          description: "/readyz fails closed at the same threshold (TESSERA_READY_MAX_LOOP_LAG_SECONDS). See docs/operations/slo.md."
+      - alert: TesseraLoopLagging
+        expr: max by (loop) (tessera_loop_lag_seconds{loop!="key_rotation"}) > 120
+        for: 10m
+        labels:
+          severity: ticket
+          sli: loop_freshness
+        annotations:
+          summary: "Background loop {{ $labels.loop }} lag above 2 minutes"
+      - alert: TesseraKeyRotationStale
+        expr: tessera_loop_lag_seconds{loop="key_rotation"} > 172800
+        for: 15m
+        labels:
+          severity: ticket
+          sli: loop_freshness
+        annotations:
+          summary: "Signing key rotation has not succeeded for 2 days"
+  - name: tessera-saturation
+    rules:
+      - alert: TesseraNotReady
+        expr: min(tessera_readiness_check_ok) == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "A /readyz check is failing: {{ $labels.check }}"
+      - alert: TesseraDatabaseBusy
+        expr: sum(increase(tessera_db_busy_total[10m])) > 0
+        labels:
+          severity: ticket
+        annotations:
+          summary: "SQLITE_BUSY errors in the last 10 minutes (SQLite only)"
+      - alert: TesseraDatabaseLockWaitHigh
+        expr: histogram_quantile(0.95, sum by (le) (rate(tessera_db_write_lock_wait_seconds_bucket[10m]))) > 1
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "p95 wait for the database write lock above 1 s"
+      - alert: TesseraConnectorErrors
+        expr: >-
+          sum by (connector) (rate(tessera_connector_calls_total{result="error"}[15m]))
+          / sum by (connector) (rate(tessera_connector_calls_total[15m])) > 0.5
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "More than half of {{ $labels.connector }} calls fail"
