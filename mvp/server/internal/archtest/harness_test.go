@@ -11,7 +11,6 @@ import (
 // recorder internal/aws/awstest.
 const (
 	harnessPkg  = "internal/aws/harness"
-	awstestPkg  = "internal/aws/awstest"
 	harnessMain = "cmd/tessera-harness"
 )
 
