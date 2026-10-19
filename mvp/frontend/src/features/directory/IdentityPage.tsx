@@ -1,27 +1,29 @@
 import { Fragment, useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Ban, ChevronDown, ChevronRight, ClipboardCheck, Ellipsis, GitMerge, Link2, ShieldAlert, Network, Pencil, RotateCcw, ShieldCheck, ShoppingCart, UserCheck } from "lucide-react";
-import { IdentityDetail, SimResult, ago, api, fmtDate, fmtDay, useApi } from "../../api";
+import { IdentityDetail, SimResult, ago, api, fmtDate, fmtDay, invalidLink, isNumericId, sodRemediate, useApi } from "../../api";
 import { useIdentityActions } from "../../app/actions";
 import { usePersona } from "../../app/persona";
 import {
-  Avatar, Badge, Button, Callout, Chip, Drawer, EmptyState, IdLink, Loading, Menu, Page, PathView, PreviewBadge, Segmented, Sev, SimulationView, Status, Tabs, TypeBadge, useToast,
+  Avatar, Badge, Button, Callout, Chip, Drawer, EmptyState, IdLink, Loading, Menu, Page, PathView, Segmented, Sev, SimulationView, Status, Tabs, TypeBadge, useToast,
 } from "../../components";
-import { mockIdentityOps, mockObjects, useMockState } from "../../mocks";
+import { mockObjects } from "../../mocks";
 import { useSession } from "../../app/auth";
+import { AffiliationsSection, IdentifiersSection } from "./affiliations";
 import { MergeDialog } from "./correlation";
 import { ContainDialog } from "./containment";
 import { PreviewFormDrawer } from "./shared";
+import { LifecycleSection } from "../lifecycle/parts";
 
 /** Dry-run first, then apply: shows the blast radius of removing one grant before anything changes. */
-export function RevokeDrawer({ edgeId, onClose, onDone }: { edgeId: number; onClose: () => void; onDone?: () => void }) {
+export function RevokeDrawer({ edgeId, via, onClose, onDone }: { edgeId: number; via?: { riskId: string; identityId: number }; onClose: () => void; onDone?: () => void }) {
   const toast = useToast();
   const [res, setRes] = useState<SimResult | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     let alive = true;
-    api<SimResult>("/least-privilege/revoke", { edge_id: edgeId, dry_run: true })
+    (via ? sodRemediate.revoke(via.riskId, via.identityId, edgeId, true) : api<SimResult>("/least-privilege/revoke", { edge_id: edgeId, dry_run: true }))
       .then((r) => alive && setRes(r))
       .catch((e) => alive && setErr(e.message));
     return () => {
@@ -31,7 +33,7 @@ export function RevokeDrawer({ edgeId, onClose, onDone }: { edgeId: number; onCl
   const apply = async () => {
     setBusy(true);
     try {
-      const r = await api<SimResult>("/least-privilege/revoke", { edge_id: edgeId, dry_run: false });
+      const r = await (via ? sodRemediate.revoke(via.riskId, via.identityId, edgeId, false) : api<SimResult>("/least-privilege/revoke", { edge_id: edgeId, dry_run: false }));
       setRes(r);
       toast("Grant revoked. An audit record was written.");
       onDone?.();
@@ -58,9 +60,9 @@ export function RevokeDrawer({ edgeId, onClose, onDone }: { edgeId: number; onCl
   );
 }
 
-type Tab = "access" | "grants" | "violations" | "recs" | "accounts" | "delegation";
+type Tab = "access" | "grants" | "violations" | "recs" | "accounts" | "affiliations" | "delegation" | "lifecycle";
 
-function Header({ d, disabledAt }: { d: IdentityDetail; disabledAt?: string }) {
+function Header({ d }: { d: IdentityDetail }) {
   const acts = useIdentityActions();
   const { actor } = usePersona();
   const toast = useToast();
@@ -70,7 +72,7 @@ function Header({ d, disabledAt }: { d: IdentityDetail; disabledAt?: string }) {
   const { can } = useSession();
   const nav = useNavigate();
   const human = d.type === "human";
-  const status = disabledAt && d.status === "active" ? "disabled" : d.status;
+  const status = d.status;
   return (
     <>
       <div className="object-head card">
@@ -81,7 +83,6 @@ function Header({ d, disabledAt }: { d: IdentityDetail; disabledAt?: string }) {
               <TypeBadge type={d.type} />
               <Status s={status} />
               {!human && !d.owner && <Badge tone="critical">No owner</Badge>}
-              {disabledAt && <PreviewBadge what="Disabled in this browser by a Preview action" />}
             </div>
             <div className="small muted" style={{ marginTop: 6 }}>
               {[d.title, d.department, d.email].filter(Boolean).join(" · ")}
@@ -96,9 +97,9 @@ function Header({ d, disabledAt }: { d: IdentityDetail; disabledAt?: string }) {
         </div>
         <div className="row tight object-actions" role="toolbar" aria-label="Actions">
           {status === "disabled" ? (
-            <Button size="sm" icon={<UserCheck size={14} />} onClick={async () => { await mockIdentityOps.enable(d.id, d.name, actor); toast(`${d.name} re-enabled (preview)`); }}>Enable</Button>
+            <Button size="sm" icon={<UserCheck size={14} />} disabled={!can("identities.contain")} title={can("identities.contain") ? undefined : "Needs the identities.contain permission"} onClick={() => acts.enable(d)}>Enable</Button>
           ) : (
-            <Button size="sm" variant="danger" icon={<Ban size={14} />} disabled={d.status === "terminated" || d.status === "merged"} onClick={() => acts.disable(d)}>Disable</Button>
+            <Button size="sm" variant="danger" icon={<Ban size={14} />} disabled={d.status !== "active" || !can("identities.contain")} title={can("identities.contain") ? undefined : "Needs the identities.contain permission"} onClick={() => acts.disable(d)}>Disable</Button>
           )}
           {human ? (
             <Button size="sm" icon={<RotateCcw size={14} />} disabled={status !== "active"} onClick={() => acts.resetPassword(d)}>Reset password</Button>
@@ -168,15 +169,16 @@ function Header({ d, disabledAt }: { d: IdentityDetail; disabledAt?: string }) {
 export function IdentityPage() {
   const { id } = useParams();
   const [params, setParams] = useSearchParams();
-  const { data: d, error, reload } = useApi<IdentityDetail>(`/identities/${id}`);
-  const mock = useMockState();
+  const validId = isNumericId(id);
+  const { data: d, error: loadError, reload } = useApi<IdentityDetail>(validId ? `/identities/${id}` : null);
+  const error = validId ? loadError : invalidLink();
   const [open, setOpen] = useState<string | null>(null);
   const [filter, setFilter] = useState<"" | "unused" | "privileged" | "sensitive">("");
   const [revoke, setRevoke] = useState<number | null>(null);
   const tab = (params.get("tab") ?? "access") as Tab;
   const setTab = (t: Tab) => setParams({ tab: t }, { replace: true });
 
-  if (!d) return <Page title="Identity" crumbs={[["Identity"], ["…"]]}><Loading error={error} kind="page" /></Page>;
+  if (!d) return <Page title="Identity" crumbs={[["Identity"], ["…"]]}><Loading error={error} what="identity" kind="page" onRetry={reload} /></Page>;
 
   const machine = d.type !== "human";
   const crumbs: [string, string?][] = [["Identity"], machine ? ["Machine identities & agents", "/directory/machine"] : ["Users", "/directory/people"], [d.name]];
@@ -188,11 +190,13 @@ export function IdentityPage() {
     { id: "recs", label: `Recommendations (${d.recommendations.length})` },
     { id: "accounts", label: `Accounts (${d.accounts.length})` },
   ];
+  if (!machine) tabs.push({ id: "affiliations", label: "Affiliations & identifiers" });
   if (d.delegations.length || d.owned_identities.length) tabs.push({ id: "delegation", label: "Delegation & ownership" });
+  if (!machine) tabs.push({ id: "lifecycle", label: "Worker type & dates" });
 
   return (
     <Page title={d.name} crumbs={crumbs}>
-      <Header d={d} disabledAt={mock.disabled[d.id]} />
+      <Header d={d} />
       {d.description && <div className="mt"><Callout tone="neutral">{d.description}</Callout></div>}
       <div className="card mt">
         <div className="stat-row">
@@ -208,6 +212,7 @@ export function IdentityPage() {
         <Tabs label="Identity sections" tabs={tabs} value={tab} onChange={setTab} />
       </div>
 
+      {tab === "lifecycle" && !machine && <div className="card"><LifecycleSection id={d.id} /></div>}
       {tab === "access" && (
         <div className="card flush">
           <div className="card-h">
@@ -268,6 +273,13 @@ export function IdentityPage() {
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {tab === "affiliations" && !machine && (
+        <div className="grid g2">
+          <div className="card"><AffiliationsSection identityId={d.id} name={d.name} human /></div>
+          <div className="card"><IdentifiersSection identityId={d.id} /></div>
         </div>
       )}
 

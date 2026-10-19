@@ -1,0 +1,56 @@
+{
+  "id": "sim-paginated",
+  "description": "IsTruncated with a Marker: the first page is empty, the second has the result.",
+  "synthetic": true,
+  "spec": {
+    "id": "sim-paginated",
+    "stratum": "S2",
+    "fixture_version": "synthetic-1",
+    "principal_arn": "arn:aws:iam::111111111111:user/alice",
+    "policy_source_arn": "",
+    "action": "s3:GetObject",
+    "resource": "arn:aws:s3:::tsr-bkt/k",
+    "identity": [
+      "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"s3:GetObject\",\"Resource\":\"arn:aws:s3:::tsr-bkt/*\"}]}"
+    ],
+    "boundary": null,
+    "scp_levels": null,
+    "resource_policy": "",
+    "resource_owner": "",
+    "context": null,
+    "exclusions": null,
+    "features": null
+  },
+  "iam_cassette": {
+    "fixture_version": "synthetic-1",
+    "entries": [
+      {
+        "key": "12e9d7b135b93c399086db910f1f82968826371bee69887e18fb691b46d9ec91",
+        "request": "POST iam.amazonaws.com/\nAction=SimulateCustomPolicy\nActionNames.member.1=s3:GetObject\nContextEntries.member.1.ContextKeyName=aws:PrincipalArn\nContextEntries.member.1.ContextKeyType=string\nContextEntries.member.1.ContextKeyValues.member.1=arn:aws:iam::111111111111:user/alice\nMaxItems=1000\nPolicyInputList.member.1={\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"s3:GetObject\",\"Resource\":\"arn:aws:s3:::tsr-bkt/*\"}]}\nResourceArns.member.1=arn:aws:s3:::tsr-bkt/k\nVersion=2010-05-08\n",
+        "responses": [
+          {
+            "status": 200,
+            "headers": {
+              "Content-Type": "text/xml"
+            },
+            "body": "<SimulateCustomPolicyResponse xmlns=\"https://iam.amazonaws.com/doc/2010-05-08/\"><SimulateCustomPolicyResult><EvaluationResults></EvaluationResults><IsTruncated>true</IsTruncated><Marker>marker-1</Marker></SimulateCustomPolicyResult><ResponseMetadata><RequestId>00000000-0000-0000-0000-000000000000</RequestId></ResponseMetadata></SimulateCustomPolicyResponse>"
+          }
+        ]
+      },
+      {
+        "key": "c8de25a6130e19766220d9b0f77b8f44eafeab41620cf3ccbdb0b7a7ea9e6b07",
+        "request": "POST iam.amazonaws.com/\nAction=SimulateCustomPolicy\nActionNames.member.1=s3:GetObject\nContextEntries.member.1.ContextKeyName=aws:PrincipalArn\nContextEntries.member.1.ContextKeyType=string\nContextEntries.member.1.ContextKeyValues.member.1=arn:aws:iam::111111111111:user/alice\nMarker=marker-1\nMaxItems=1000\nPolicyInputList.member.1={\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"s3:GetObject\",\"Resource\":\"arn:aws:s3:::tsr-bkt/*\"}]}\nResourceArns.member.1=arn:aws:s3:::tsr-bkt/k\nVersion=2010-05-08\n",
+        "responses": [
+          {
+            "status": 200,
+            "headers": {
+              "Content-Type": "text/xml"
+            },
+            "body": "<SimulateCustomPolicyResponse xmlns=\"https://iam.amazonaws.com/doc/2010-05-08/\"><SimulateCustomPolicyResult><EvaluationResults><member><EvalActionName>s3:GetObject</EvalActionName><EvalResourceName>arn:aws:s3:::tsr-bkt/k</EvalResourceName><EvalDecision>allowed</EvalDecision><MatchedStatements><member><SourcePolicyId>PolicyInputList.1</SourcePolicyId><SourcePolicyType>IAM Policy</SourcePolicyType><StartPosition><Line>1</Line><Column>1</Column></StartPosition><EndPosition><Line>1</Line><Column>2</Column></EndPosition></member></MatchedStatements><MissingContextValues></MissingContextValues></member></EvaluationResults><IsTruncated>false</IsTruncated></SimulateCustomPolicyResult><ResponseMetadata><RequestId>00000000-0000-0000-0000-000000000000</RequestId></ResponseMetadata></SimulateCustomPolicyResponse>"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {}
+}

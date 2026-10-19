@@ -1,0 +1,10 @@
+# Code owners: a pull request that changes these files needs the owner's review
+# (enforced when the branch ruleset requires code-owner review).
+
+# Secret-scanning configuration: a change here could allowlist a real secret
+# in the same pull request that adds it.
+/.gitleaks.toml    @nischalravi
+/.gitleaksignore   @nischalravi
+
+# This file, so the rules above cannot be removed without the same review.
+/.github/CODEOWNERS @nischalravi

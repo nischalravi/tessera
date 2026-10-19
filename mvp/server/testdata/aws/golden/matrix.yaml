@@ -1,0 +1,125 @@
+# Golden corpus, boundaries, session policies and the principal-type matrix:
+# GC-31 to GC-41 (design section 14.2). Same account; bucket tsr-bkt belongs to 111111111111.
+# For session principals, identity/boundary/tags describe the role the session was issued from.
+
+- id: GC-31
+  title: An identity allow capped by a boundary
+  principal: U
+  identity: [allow_all]
+  boundary: {"Statement": [{"Effect": "Allow", "Action": ["ec2:*"], "Resource": "*"}]}
+  request: {action: "iam:CreateUser", resource: "arn:aws:iam::111111111111:user/x"}
+  expect: {outcome: DENY, deny_kind: implicit, stage: boundary}
+  why: "[S2] Shirley example."
+  verified: doc
+
+- id: GC-32
+  title: A bucket policy granting the user ARN bypasses an implicit deny in the boundary and identity
+  principal: U
+  identity: []
+  boundary: &ec2only {"Statement": [{"Effect": "Allow", "Action": "ec2:*", "Resource": "*"}]}
+  bucket_policy: {"Statement": [{"Effect": "Allow", "Principal": {"AWS": "arn:aws:iam::111111111111:user/alice"}, "Action": "s3:GetObject", "Resource": "arn:aws:s3:::tsr-bkt/*"}]}
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-bkt/a"}
+  expect: {outcome: ALLOW, stage: resource_policy, match_kind: SELF}
+  why: "[S1][S2] a same-account RBP grant to an IAM user ARN is not limited by an implicit deny in identity or boundary."
+  verified: doc
+
+- id: GC-33
+  title: An explicit deny in the boundary still wins over a user-ARN grant
+  principal: U
+  identity: []
+  boundary: {"Statement": [{"Effect": "Allow", "Action": "ec2:*", "Resource": "*"},
+                           {"Effect": "Deny", "Action": "s3:*", "Resource": "arn:aws:s3:::tsr-bkt/*"}]}
+  bucket_policy: {"Statement": [{"Effect": "Allow", "Principal": {"AWS": "arn:aws:iam::111111111111:user/alice"}, "Action": "s3:GetObject", "Resource": "arn:aws:s3:::tsr-bkt/*"}]}
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-bkt/a"}
+  expect: {outcome: DENY, deny_kind: explicit, stage: explicit_deny}
+  why: "[S2][S6] 'an explicit deny in the permission boundary is effective'."
+  verified: doc
+
+- id: GC-34
+  title: A bucket policy granting the role ARN, with no identity policy and no boundary
+  principal: RS
+  identity: []
+  bucket_policy: &rolegrant {"Statement": [{"Effect": "Allow", "Principal": {"AWS": "arn:aws:iam::111111111111:role/app"}, "Action": "s3:GetObject", "Resource": "arn:aws:s3:::tsr-bkt/*"}]}
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-bkt/a"}
+  expect: {outcome: ALLOW, match_kind: PARENT}
+  why: "[S1] the role-ARN grant is limited only by boundary and session policy, not by identity."
+  verified: doc
+
+- id: GC-35
+  title: A role-ARN grant is capped by the role's boundary
+  principal: RS
+  identity: []
+  boundary: *ec2only
+  bucket_policy: *rolegrant
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-bkt/a"}
+  expect: {outcome: DENY, deny_kind: implicit, stage: boundary}
+  why: "[S1][S6] 'if you specify a role ARN, an explicit allow in the permission boundary is required'."
+  verified: doc
+
+- id: GC-36
+  title: A session-ARN grant is not capped by the boundary
+  principal: RS
+  identity: []
+  boundary: *ec2only
+  bucket_policy: {"Statement": [{"Effect": "Allow", "Principal": {"AWS": "arn:aws:sts::111111111111:assumed-role/app/s1"}, "Action": "s3:GetObject", "Resource": "arn:aws:s3:::tsr-bkt/*"}]}
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-bkt/a"}
+  expect: {outcome: ALLOW, match_kind: SELF}
+  why: "[S1][S2] grants to the session are not limited by identity, boundary or session policy."
+  verified: doc
+
+- id: GC-37
+  title: A role-ARN grant is capped by a session policy
+  principal: RS
+  identity: []
+  session_policy: {"Statement": [{"Effect": "Allow", "Action": "ec2:*", "Resource": "*"}]}
+  bucket_policy: *rolegrant
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-bkt/a"}
+  expect: {outcome: DENY, deny_kind: implicit, stage: session}
+  why: "[S6] (session and RBP) or (session and identity)."
+  verified: doc
+
+- id: GC-38
+  title: Wildcard principal plus aws:PrincipalArn is not capped by the boundary
+  principal: RS
+  identity: []
+  boundary: *ec2only
+  bucket_policy: {"Statement": [{"Effect": "Allow", "Principal": "*", "Action": "s3:GetObject", "Resource": "arn:aws:s3:::tsr-bkt/*",
+                                 "Condition": {"ArnEquals": {"aws:PrincipalArn": "arn:aws:iam::111111111111:role/app"}}}]}
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-bkt/a"}
+  expect: {outcome: ALLOW, match_kind: WILDCARD_PRINCIPALARN}
+  note: "A policy-public check would also apply if BPA RestrictPublicBuckets were on; it is off here."
+  why: "[S1][S5] 'Permissions boundaries and session policies do not limit permissions granted using aws:PrincipalArn with a wildcard (*) in Principal, unless the identity-based policies contain an explicit deny.'"
+  verified: doc
+
+- id: GC-39
+  title: A same-account grant to the account principal delegates; identity is still needed
+  principal: U
+  identity: []
+  bucket_policy: {"Statement": [{"Effect": "Allow", "Principal": {"AWS": "arn:aws:iam::111111111111:root"}, "Action": "s3:GetObject", "Resource": "arn:aws:s3:::tsr-bkt/*"}]}
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-bkt/a"}
+  expect: {outcome: DENY, deny_kind: implicit, stage: identity}
+  why: "[S5] the account principal 'delegates authority to the account and does not limit permissions to only the root user'."
+  verified: doc
+
+- id: GC-40
+  title: A session policy intersects the identity policy
+  principal: RS
+  identity:
+    - {"Statement": [{"Effect": "Allow", "Action": "s3:*", "Resource": "*"}]}
+  session_policy: {"Statement": [{"Effect": "Allow", "Action": "s3:GetObject", "Resource": "*"}]}
+  request: {action: "s3:PutObject", resource: "arn:aws:s3:::tsr-bkt/a"}
+  expect: {outcome: DENY, deny_kind: implicit, stage: session}
+  why: "[S6]."
+  verified: doc
+
+- id: GC-41
+  title: A federated-user session granted directly by ARN
+  principal: "arn:aws:sts::111111111111:federated-user/bob"
+  identity: []
+  session_policy: {"Statement": [{"Effect": "Allow", "Action": "ec2:*", "Resource": "*"}]}
+  bucket_policy: {"Statement": [{"Effect": "Allow", "Principal": {"AWS": "arn:aws:sts::111111111111:federated-user/bob"}, "Action": "s3:GetObject", "Resource": "arn:aws:s3:::tsr-bkt/*"}]}
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-bkt/a"}
+  expect: {outcome: ALLOW, match_kind: SELF}
+  note: "parent user bob; the session policy allows only ec2:*"
+  why: "[S1][S2] federated-user ARN grants are direct to the session."
+  verified: doc

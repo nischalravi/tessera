@@ -92,7 +92,7 @@ export function HelpDesk() {
   );
 }
 
-type Loaded<T> = { data: T | null; error: string | null; reload: () => void };
+type Loaded<T> = { data: T | null; error: { message: string } | null; reload: () => void };
 
 function Cases({ q }: { q: Loaded<{ cases: HelpdeskCase[] }> }) {
   const [selected, setSelected] = useSelected();
@@ -115,7 +115,7 @@ function Cases({ q }: { q: Loaded<{ cases: HelpdeskCase[] }> }) {
       <DataTable
         id="helpdesk-cases"
         rows={rows}
-        error={q.error}
+        error={q.error?.message ?? null}
         rowKey={(r) => r.id}
         columns={cols}
         searchText={(r) => `${r.identity} ${r.system} ${r.kind} ${r.requested_by}`}
@@ -291,7 +291,7 @@ function Detections({ q }: { q: Loaded<{ findings: HelpdeskFinding[] }> }) {
     <DataTable
       id="helpdesk-findings"
       rows={q.data?.findings ?? null}
-      error={q.error}
+      error={q.error?.message ?? null}
       rowKey={(r) => r.id}
       columns={cols}
       searchText={(r) => `${r.detail.device ?? ""} ${r.detail.location ?? ""}`}

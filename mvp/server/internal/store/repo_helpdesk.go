@@ -159,7 +159,7 @@ var (
 		SELECT u.id FROM platform_users u WHERE u.tenant_id = @tenant AND u.identity_id = @identity_id ORDER BY u.id`)
 )
 
-func uuidArg(u *uuid.UUID) any {
+func helpdeskUUIDArg(u *uuid.UUID) any {
 	if u == nil || *u == uuid.Nil {
 		return nil
 	}
@@ -244,7 +244,7 @@ func (tx *TenantTx) InsertHelpdeskCase(c *HelpdeskCase, now time.Time) error {
 	_, err := tx.exec(helpdeskCaseInsert, sql.Named("id", c.ID), sql.Named("identity_id", c.IdentityID),
 		sql.Named("kind", c.Kind), sql.Named("system", c.System), sql.Named("reason", c.Reason),
 		sql.Named("privileged", B(c.Privileged)), sql.Named("requested_by", c.RequestedBy),
-		sql.Named("requested_by_user_id", uuidArg(c.RequestedByUserID)), sql.Named("now", RT(now)))
+		sql.Named("requested_by_user_id", helpdeskUUIDArg(c.RequestedByUserID)), sql.Named("now", RT(now)))
 	return err
 }
 
@@ -297,7 +297,7 @@ func (tx *TenantTx) InsertHelpdeskVerification(v *HelpdeskVerification, now time
 	_, err := tx.exec(helpdeskVerificationInsert, sql.Named("id", v.ID), sql.Named("case_id", v.CaseID),
 		sql.Named("method", v.Method), sql.Named("outcome", v.Outcome),
 		sql.Named("phishing_resistant", B(v.PhishingResistant)), sql.Named("verified_by", v.VerifiedBy),
-		sql.Named("verified_by_user_id", uuidArg(v.VerifiedByUserID)), sql.Named("evidence", v.Evidence),
+		sql.Named("verified_by_user_id", helpdeskUUIDArg(v.VerifiedByUserID)), sql.Named("evidence", v.Evidence),
 		sql.Named("provider", v.Provider), sql.Named("now", RT(now)))
 	return err
 }

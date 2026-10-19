@@ -287,7 +287,10 @@
     "actor_type": "user",
     "actor_id": "00000000-0000-4000-8000-0000000000c1",
     "outcome": "success",
-    "target": null,
+    "target": {
+     "type": "review_item",
+     "id": "2"
+    },
     "request_id": "<uuid>",
     "authn": {
      "ctx_id": "00000000-0000-4000-8000-0000000000c2",
@@ -308,14 +311,18 @@
     "action": "review.keep",
     "detail": {
      "item_id": 1,
-     "grant": "github:caspian-arkwr → github:org-owners"
+     "grant": "github:caspian-arkwr → github:org-owners",
+     "comment": "needed"
     },
     "event_id": "<uuid>",
     "seq": 125,
     "actor_type": "user",
     "actor_id": "00000000-0000-4000-8000-0000000000c1",
     "outcome": "success",
-    "target": null,
+    "target": {
+     "type": "review_item",
+     "id": "1"
+    },
     "request_id": "<uuid>",
     "authn": {
      "ctx_id": "00000000-0000-4000-8000-0000000000c2",
