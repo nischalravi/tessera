@@ -111,7 +111,7 @@ func (s *Server) newAnalysis(c *store.TenantTx) (*analysis, error) {
 			}
 		}
 	}
-	pols, err := s.policies()
+	pols, err := s.effectivePolicies(c)
 	if err != nil {
 		return nil, err
 	}
@@ -1050,11 +1050,29 @@ func (s *Server) listPolicies(_ http.ResponseWriter, r *http.Request, _ *params)
 	for _, v := range viols {
 		counts[v.PolicyID]++
 	}
+	files, err := s.policies()
+	if err != nil {
+		return nil, err
+	}
+	listed := map[string]bool{}
+	for _, pol := range files {
+		listed[pol.ID] = true
+	}
+	shown := append([]*policy.Policy{}, files...)
+	for _, pol := range a.policies { // SoD risks that no policy file defines
+		if pol.Type == policy.TypeSoDRisk && !listed[pol.ID] {
+			shown = append(shown, pol)
+		}
+	}
 	out := []ojson.Object{}
-	for _, pol := range a.policies {
-		out = append(out, ojson.Object{{Key: "id", Value: pol.ID}, {Key: "name", Value: pol.Name}, {Key: "type", Value: pol.Type},
+	for _, pol := range shown {
+		typ, src := pol.Type, pol.Source
+		if typ == policy.TypeSoDRisk {
+			typ, src = "separation_of_duties", "managed as a risk in Policies & SoD (not a policy file)"
+		}
+		out = append(out, ojson.Object{{Key: "id", Value: pol.ID}, {Key: "name", Value: pol.Name}, {Key: "type", Value: typ},
 			{Key: "severity", Value: pol.Severity}, {Key: "description", Value: pol.Description}, {Key: "enabled", Value: pol.Enabled},
-			{Key: "source", Value: pol.Source}, {Key: "violations", Value: counts[pol.ID]}})
+			{Key: "source", Value: src}, {Key: "violations", Value: counts[pol.ID]}})
 	}
 	return out, nil
 }
@@ -1403,11 +1421,11 @@ func (s *Server) createCampaign(_ http.ResponseWriter, r *http.Request, p *param
 	if err := validated(p, berrs); err != nil {
 		return nil, err
 	}
-	pols, err := s.policies()
+	c := store.TxFrom(r.Context())
+	pols, err := s.effectivePolicies(c)
 	if err != nil {
 		return nil, err
 	}
-	c := store.TxFrom(r.Context())
 	id, err := reviews.GenerateCampaign(c, s.clock(), name, int(days), pols)
 	if err != nil {
 		return nil, err
@@ -1630,11 +1648,11 @@ func (s *Server) hrisPlan(_ http.ResponseWriter, r *http.Request, p *params) (an
 	if err := validated(p, nil); err != nil {
 		return nil, err
 	}
-	pols, err := s.policies()
+	c := store.TxFrom(r.Context())
+	pols, err := s.effectivePolicies(c)
 	if err != nil {
 		return nil, err
 	}
-	c := store.TxFrom(r.Context())
 	ev, err := getOrNil(c.HrisEvent(id))
 	if err != nil {
 		return nil, err
@@ -1674,11 +1692,12 @@ func (s *Server) leaverPlan(_ http.ResponseWriter, r *http.Request, p *params) (
 	if err := validated(p, nil); err != nil {
 		return nil, err
 	}
-	pols, err := s.policies()
+	tx := store.TxFrom(r.Context())
+	pols, err := s.effectivePolicies(tx)
 	if err != nil {
 		return nil, err
 	}
-	plan, err := jml.LeaverPlan(store.TxFrom(r.Context()), s.clock(), id, true, pols)
+	plan, err := jml.LeaverPlan(tx, s.clock(), id, true, pols)
 	var je *jml.Error
 	if errors.As(err, &je) {
 		return nil, errStatus(http.StatusNotFound, je.Msg)
