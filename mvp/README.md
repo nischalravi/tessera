@@ -261,7 +261,7 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `GET /api/audit[?limit=&before_seq=&action=&actor_id=&target_type=&target_id=&from=&to=&include_http=]` ·
 `GET /api/audit/events/{event_id}/proof` · `GET /api/audit/checkpoints[?from_seq=]` · `GET /api/audit/keys` ·
 `POST /api/audit/verify {from_seq?, to_seq?}` · `GET /api/audit/export[?from_seq=&to_seq=]` (NDJSON) ·
-`GET /api/auth/session` · `POST /api/auth/logout` · `GET /api/auth/sessions` · `DELETE /api/auth/sessions/{session_id}` ·
+`GET /api/auth/session` (`user.identity_id` is the directory person the sign-in is linked to) · `POST /api/auth/logout` · `GET /api/auth/sessions` · `DELETE /api/auth/sessions/{session_id}` ·
 `GET /api/auth/step-up?acr=&max_age=&return_to=` ·
 `GET /api/auth/discover?tenant=&email=` · `GET /api/auth/login?tenant=&connection=&return_to=` (302 to the IdP) ·
 `GET /api/auth/oidc/{connection_id}/callback` · `GET /api/auth/saml/{connection_id}/metadata` ·
@@ -286,7 +286,7 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `POST /api/accounts/{id}/link {identity_id, reason}` · `POST /api/accounts/{id}/not-person {reason}` ·
 `DELETE /api/accounts/{id}/link` · `POST /api/identities/{id}/merge {into, reason}` ·
 `GET /api/identity-merges` · `POST /api/identity-merges/{id}/unmerge {reason}` ·
-`GET|POST /api/reviews/schedules` · `PUT /api/reviews/schedules/{id}` · `POST /api/reviews/schedules/{id}/run` ·
+`GET|POST /api/reviews/schedules` · `PUT /api/reviews/schedules/{id}` · `POST /api/reviews/schedules/{id}/run` (an unknown `system` is 422 `invalid_system`; a second run in the same second is 409 `already_launched`; a schedule with no grants in scope creates no campaign, audits `review.schedule.skipped` and answers 200 `{skipped, reason}`) ·
 `GET /api/identities/{id}/affiliations` · `GET /api/identities/{id}/identifiers` ·
 `POST /api/identities/{id}/affiliations {type, org_unit?, population?, starts_at?, ends_at?, reason}` ·
 `POST /api/affiliations/{id}/end {reason}` ·
@@ -498,8 +498,8 @@ change in the target system and checks that it happened.
   and the least-privilege revoke. Edges to permissions have no counterpart in a target and stay direct.
 * **Audit.** Each operation writes `provision.enqueued`, `provision.sent` and one of
   `provision.verified`, `provision.mismatch`, `provision.failed`, plus `provision.retried`,
-  `provision.cancelled`; target changes write `provision.target_set` and `provision.target_removed`
-  (never the token). Completions write the event the direct path wrote (`jit.expire`, `review.revoke`,
+  `provision.cancelled`; target changes write `provision.target_set` (with the target's origin and `credential`: `none`, `kept`, `set`, `rotated` or `cleared`, plus `previous_kind`/`previous_origin` when it moved) and `provision.target_removed`
+  (never the token). A stored token never follows a target to another kind or origin (scheme, host, port): such an edit needs a new token or gets 422 `credential_required`; a path-only change on the same origin keeps it. Completions write the event the direct path wrote (`jit.expire`, `review.revoke`,
   `grant.revoke`).
 * **Permissions.** `provisioning.read` (operator, auditor, policy admin, tenant admin) and
   `provisioning.manage` (policy admin, tenant admin: retry, cancel, run). Configuring a target needs
@@ -704,7 +704,7 @@ small JSON language (`internal/abac`): `all` / `any` / `not` over tests
 `{"attr": "identity.department", "op": "eq", "value": "Finance"}`, with ops `eq`, `ne`, `in`,
 `prefix`, `exists`, `gt`, `gte`, `lt`, `lte` (numbers or RFC 3339 times). Attributes are
 `identity.*` (type, status, name, email, department, title, manager_id, has_manager, source,
-tenure_days), `resource.*` (name, risk, and for catalog items system and privileged) and `context.*`
+tenure_days, worker_type), `resource.*` (name, risk, and for catalog items system and privileged) and `context.*`
 (time, hour, weekday in UTC, and `aal` when a signed-in user acts). It is data, never code:
 evaluation is a deterministic walk with limits on depth (8), size (100 parts) and lists (50).
 
@@ -732,8 +732,18 @@ evaluation is a deterministic walk with limits on depth (8), size (100 parts) an
 
 Reading and simulating need `graph.read`; changing a policy needs `roles.manage` with a fresh
 phishing-resistant sign-in, and binding a catalog item needs `catalog.manage` (same step-up).
-Not yet: location, worker type and custom HRIS fields (the identity record does not store them, so
-a test on one is always unknown and denies; they arrive with the HRIS attribute mapping).
+
+`identity.worker_type` (issue #215) is the person's worker type from the lifecycle record (see
+"Contractors, guests and end dates"): `employee`, `contractor`, `intern`, `partner`, `vendor` or
+`guest`, so `{"attr": "identity.worker_type", "op": "in", "value": ["contractor", "vendor"]}` selects
+non-employees. A person with no lifecycle record is an employee; services and AI agents have no
+worker type, so a test on it is unknown for them and denies. An unrecognised value simply matches
+no one. The attribute editor lists it (the list comes from the server). Attributes stored outside
+the identity record are loaded by `abac.Resolver` (`internal/abac/resolver.go`), once per
+transaction and tenant, and every evaluation site (roles, request eligibility, SoD subjects,
+simulation) uses it, so a new one is added in one place and the attribute catalog.
+Not yet: location and custom HRIS fields (the identity record does not store them, so a test on
+one is always unknown and denies; they arrive with the HRIS attribute mapping).
 
 ### Contractors, guests and end dates
 

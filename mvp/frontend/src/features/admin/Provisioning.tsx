@@ -216,7 +216,7 @@ function TargetPanel({ target, onClose }: { target: ProvTarget | null; onClose: 
         )}
         {kind !== "fake" && (
           <label className="field">{kind === "okta" ? "API token" : "Bearer token"}
-            <input className="input" type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} placeholder={target?.has_credential ? "Stored; leave empty to keep it" : ""} />
+            <input className="input" type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} placeholder={target?.has_credential ? "Stored; leave empty to keep it (same kind and host only)" : ""} />
             <span className="hint">Write-only. Sealed under the platform key and never shown again.</span>
           </label>
         )}
