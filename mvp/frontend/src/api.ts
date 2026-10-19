@@ -1730,6 +1730,23 @@ export const jobs = {
   retry: (id: string) => api<unknown>(`/jobs/${encodeURIComponent(id)}/retry`, {}),
 };
 
+// ------------------------------------------------ durable job queue (#300)
+
+export type QueueStatus = "queued" | "running" | "succeeded" | "failed" | "dead";
+export interface QueueJob {
+  id: string; kind: string; status: QueueStatus; run_at: string; attempts: number; max_attempts: number; last_error: string;
+  lease_owner: string | null; lease_expires_at: string | null; schedule_id: string | null; created_at: string; updated_at: string;
+  finished_at: string | null;
+}
+export interface QueueSchedule {
+  name: string; kind: string; spec: string; enabled: boolean; max_attempts: number; next_run_at: string; last_enqueued_at: string | null;
+}
+
+export const queue = {
+  /** Puts a dead job back in the queue with a fresh attempt budget (step-up, audited). */
+  retry: (id: string) => api<QueueJob>(`/queue/jobs/${encodeURIComponent(id)}/retry`, {}),
+};
+
 // ------------------------------------------------- config transport (#170)
 
 export interface SigningKey { kid: string; public_key: string; tenant: string; created_at: string | null }

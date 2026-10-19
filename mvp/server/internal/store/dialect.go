@@ -119,6 +119,12 @@ var pgOverrides = map[string]string{
 	"tenants.set_settings": `
 		UPDATE tenants SET settings = CAST(@settings AS TEXT) WHERE id = @id AND slug != '_platform'
 			AND CAST(@settings AS TEXT) IS JSON OBJECT`,
+	// Two workers must never claim one row: lock the candidates, skip the ones
+	// another transaction holds (issue #300).
+	"queue_jobs.candidates": `
+		SELECT ` + queueJobCols + ` FROM queue_jobs q
+		WHERE q.tenant_id = @tenant AND instr(@kinds, ',' || q.kind || ',') > 0 AND ` + queueDue + `
+		ORDER BY q.run_at, q.id LIMIT @limit FOR UPDATE OF q SKIP LOCKED`,
 	"tenants.set_security_contacts": `
 		UPDATE tenants SET security_contacts = CAST(@contacts AS TEXT) WHERE id = @id AND slug != '_platform'
 			AND CAST(@contacts AS TEXT) IS JSON ARRAY`,

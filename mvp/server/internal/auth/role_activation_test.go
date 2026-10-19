@@ -194,7 +194,7 @@ func TestRolePermissionsMatchDesign(t *testing.T) {
 		auth.RoleOperator:    "graph.read jit.request jit.decide jit.deny_revoke reviews.manage reviews.decide hris.simulate_event requests.create requests.create_for_others requests.decide guests.sponsor guests.read jobs.read provisioning.read",
 		auth.RoleAuditor:     "graph.read audit.read audit.verify admin.read connections.read requests.create email.read guests.sponsor guests.read jobs.read provisioning.read",
 		auth.RolePolicyAdmin: "graph.read jit.request jit.decide jit.deny_revoke reviews.manage reviews.decide hris.simulate_event grants.revoke hris.execute jit.sweep connectors.sync identities.correlate identities.merge identities.affiliate requests.create requests.create_for_others requests.decide catalog.manage roles.manage lifecycle.manage guests.sponsor guests.read sponsorships.approve identities.contain jobs.read provisioning.read provisioning.manage",
-		auth.RoleTenantAdmin: "graph.read audit.read audit.verify admin.read admin.change.request admin.change.approve admin.users.disable admin.sessions.revoke connections.read connections.manage connections.activate requests.create email.read email.manage groups.admin jobs.read provisioning.read provisioning.manage config.transport",
+		auth.RoleTenantAdmin: "graph.read audit.read audit.verify admin.read admin.change.request admin.change.approve admin.users.disable admin.sessions.revoke connections.read connections.manage connections.activate requests.create email.read email.manage groups.admin jobs.read jobs.manage provisioning.read provisioning.manage config.transport",
 		auth.RoleBreakGlass:  "admin.read breakglass.recover",
 	}
 	for r, w := range want {

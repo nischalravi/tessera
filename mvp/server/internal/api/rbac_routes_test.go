@@ -183,6 +183,9 @@ POST   /api/insights/deployment-health/rerun         connections.manage -
 GET    /api/jobs                                     jobs.read       -  # issue #172
 GET    /api/jobs/{job_id}                            jobs.read       -  #
 POST   /api/jobs/{job_id}/retry                      jobs.read       -  # (the replayed route's own permission and step-up apply)
+GET    /api/queue/jobs                               jobs.read       -  # issue #300
+GET    /api/queue/schedules                          jobs.read       -  #
+POST   /api/queue/jobs/{job_id}/retry                jobs.manage     STEP_UP_POLICY  #
 GET    /api/provisioning/targets                     provisioning.read   -  # issue #103
 PUT    /api/provisioning/targets/{id}                connections.manage  STEP_UP_POLICY
 DELETE /api/provisioning/targets/{id}                connections.manage  STEP_UP_POLICY

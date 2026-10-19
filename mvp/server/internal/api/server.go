@@ -28,11 +28,10 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/sponsorship"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
-	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
-	"github.com/nischalravi/tessera/mvp/server/internal/lifecycle"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision"
+	"github.com/nischalravi/tessera/mvp/server/internal/queue"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 	"github.com/nischalravi/tessera/mvp/server/internal/requests"
@@ -153,6 +152,8 @@ type Server struct {
 	containment *containment.Service
 	// admin is the admin-change workflow (design §15); never nil.
 	admin *admin.Service
+	// queue is the durable job queue (issue #300); never nil.
+	queue *queue.Queue
 }
 
 // New builds a server.
@@ -216,6 +217,7 @@ func New(cfg Config) *Server {
 	}
 	s.authn = &auth.Authenticator{DB: cfg.Store, Clock: func() time.Time { return s.clock() },
 		Cookies: auth.Cookies{Insecure: cfg.InsecureCookie}}
+	s.queue = s.newQueue()
 	s.registerRoutes()
 	s.registerAuditRoutes()
 	s.registerCorrelationRoutes()
@@ -235,6 +237,7 @@ func New(cfg Config) *Server {
 	s.registerGroupsFolderRoutes()
 	s.registerReadinessRoutes()
 	s.registerJobRoutes()
+	s.registerQueueRoutes()
 	s.registerProvisioningRoutes()
 	s.registerTransportRoutes()
 	s.registerAuthRoutes()
@@ -298,49 +301,6 @@ func (s *Server) timeouts(stream, timed http.Handler) http.Handler {
 		// after authorization), so authentication is not cut short.
 		stream.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), streamDeadlineKey{}, deadline)))
 	})
-}
-
-// RunSweeper expires JIT grants, closes due request lines and ends due
-// lifecycle terms (warnings first) of every active tenant, each in its own
-// tenant transaction, every interval until ctx is done. A failure in one
-// tenant is logged and does not stop the others.
-func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
-	t := time.NewTicker(interval)
-	defer t.Stop()
-	ctx = audit.WithSystemActor(ctx, "jit.sweeper") // jit.expire events name the job
-	var maintained time.Time
-	for {
-		s.sweepAndRecord(ctx)
-		if now := s.clock(); now.Sub(maintained) >= jobMaintainGap {
-			if err := jobs.Maintain(ctx, s.store, now, jobStaleAfter, jobRetention); err != nil && ctx.Err() == nil {
-				s.log.Error("job history upkeep failed", "err", err)
-			}
-			maintained = now
-		}
-		if err := requests.SweepAll(audit.WithSystemActor(ctx, requests.Sweeper), s.store, s.clock()); err != nil && ctx.Err() == nil {
-			s.log.Error("request sweep failed", "err", err)
-		}
-		// sponsorships first: the last one to end ends the person, the lifecycle sweep then has nothing left
-		if err := s.guests.SweepAll(audit.WithSystemActor(ctx, sponsorship.Sweeper), s.store, s.clock()); err != nil && ctx.Err() == nil {
-			s.log.Error("sponsorship sweep failed", "err", err)
-		}
-		if err := lifecycle.SweepAll(audit.WithSystemActor(ctx, lifecycle.Sweeper), s.store, s.containment, s.clock()); err != nil && ctx.Err() == nil {
-			s.log.Error("lifecycle sweep failed", "err", err)
-		}
-		if err := s.containment.SweepRetries(audit.WithSystemActor(ctx, "containment.sweeper"), s.store, "containment.sweeper"); err != nil && ctx.Err() == nil {
-			s.log.Error("containment retry sweep failed", "err", err)
-		}
-		// apply the admin changes whose cooling-off ended and expire the ones
-		// nobody approved in 72 hours (design §15.2)
-		if _, err := s.admin.Sweep(audit.WithSystemActor(ctx, "admin.sweeper")); err != nil && ctx.Err() == nil {
-			s.log.Error("admin change sweep failed", "err", err)
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-		}
-	}
 }
 
 // sweepTenant expires one tenant's JIT grants and closes its due request

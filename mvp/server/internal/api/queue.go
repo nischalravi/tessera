@@ -1,0 +1,253 @@
+package api
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/url"
+	"regexp"
+	"slices"
+	"strconv"
+	"time"
+
+	"github.com/nischalravi/tessera/mvp/server/internal/audit"
+	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/sponsorship"
+	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
+	"github.com/nischalravi/tessera/mvp/server/internal/lifecycle"
+	"github.com/nischalravi/tessera/mvp/server/internal/queue"
+	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
+	"github.com/nischalravi/tessera/mvp/server/internal/requests"
+	"github.com/nischalravi/tessera/mvp/server/internal/store"
+)
+
+// The durable job queue (issue #300). The background work that used to be one
+// ticker goroutine (RunSweeper) is a set of queue kinds with a schedule row
+// per tenant; any number of instances can run it, because a job is leased to
+// one worker at a time. Admin routes list the queue and schedules and retry
+// a dead job.
+
+// SweepInterval is how often each sweeper schedule fires.
+const SweepInterval = 30 * time.Second
+
+// maxSweepAttempts: a failing sweep is retried a couple of times; after that
+// it is dead (visible, retryable) and the next window tries again anyway.
+const maxSweepAttempts = 3
+
+func (s *Server) newQueue() *queue.Queue {
+	q := &queue.Queue{DB: s.store, Clock: func() time.Time { return s.clock() }, Log: s.log.With("component", "queue")}
+	// jit_sweep is also the manual POST /api/jit/sweep: its runs carry the
+	// route so the run history can retry them.
+	q.Register(jobs.JITSweep, queue.Kind{Handler: s.queueJITSweep, Actor: "jit.sweeper", Method: http.MethodPost, Route: "/api/jit/sweep"})
+	q.Register(jobs.SweepRequests, queue.Kind{Handler: s.queueRequestSweep, Actor: requests.Sweeper})
+	q.Register(jobs.SweepLifecycle, queue.Kind{Handler: s.queueLifecycleSweep, Actor: lifecycle.Sweeper})
+	q.Register(jobs.SweepAdminChanges, queue.Kind{Handler: s.queueAdminSweep, Actor: "admin.sweeper"})
+	q.Register(jobs.ContainmentRetry, queue.Kind{Handler: s.queueContainmentRetries, Actor: "containment.sweeper"})
+	q.Register(jobs.Maintenance, queue.Kind{Handler: s.queueMaintenance, Actor: "queue.worker"})
+	every := "@every " + SweepInterval.String()
+	for _, k := range []string{jobs.JITSweep, jobs.SweepRequests, jobs.SweepLifecycle, jobs.SweepAdminChanges, jobs.ContainmentRetry} {
+		q.Schedule(k, k, every, maxSweepAttempts)
+	}
+	q.Schedule(jobs.Maintenance, jobs.Maintenance, "@every "+jobMaintainGap.String(), 1)
+	return q
+}
+
+// Queue is the job queue (tests drive it with Tick and Wait).
+func (s *Server) Queue() *queue.Queue { return s.queue }
+
+// RunQueue works the job queue until ctx is done: the sweepers, the
+// containment retry sweep and job history upkeep.
+func (s *Server) RunQueue(ctx context.Context) { s.queue.Run(ctx) }
+
+// A sweep that finds nothing returns no result, so it leaves no job run.
+
+func (s *Server) queueJITSweep(ctx context.Context, j queue.Job) (any, error) {
+	n, err := s.sweepCount(audit.WithSystemActor(ctx, "jit.sweeper"), j.Tenant, s.clock())
+	if n == 0 && err == nil {
+		return nil, nil
+	}
+	return map[string]int{"expired": n}, err
+}
+
+func (s *Server) queueRequestSweep(ctx context.Context, j queue.Job) (any, error) {
+	now := s.clock()
+	return nil, s.store.InTenant(audit.WithSystemActor(ctx, requests.Sweeper), j.Tenant, func(tx *store.TenantTx) error {
+		need, err := requests.NeedsSweep(tx, now)
+		if err != nil || !need {
+			return err
+		}
+		_, err = requests.Sweep(tx, now)
+		return err
+	})
+}
+
+// queueLifecycleSweep ends sponsorships first: the last one to end ends the
+// person, and the lifecycle sweep then has nothing left. They are one job so
+// that order holds however many workers run.
+func (s *Server) queueLifecycleSweep(ctx context.Context, j queue.Job) (any, error) {
+	now := s.clock()
+	err := s.store.InTenant(audit.WithSystemActor(ctx, sponsorship.Sweeper), j.Tenant, func(tx *store.TenantTx) error {
+		need, err := sponsorship.NeedsSweep(tx, now)
+		if err != nil || !need {
+			return err
+		}
+		_, err = s.guests.Sweep(tx, now)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	_, err = lifecycle.SweepTenant(audit.WithSystemActor(ctx, lifecycle.Sweeper), readiness.Scope{DB: s.store, Tenant: j.Tenant},
+		s.containment, now)
+	return nil, err
+}
+
+// queueAdminSweep applies the admin changes whose cooling-off ended and
+// expires the ones nobody approved in 72 hours (design §15.2).
+func (s *Server) queueAdminSweep(ctx context.Context, j queue.Job) (any, error) {
+	_, err := s.admin.SweepTenant(audit.WithSystemActor(ctx, "admin.sweeper"), j.Tenant)
+	return nil, err
+}
+
+// queueContainmentRetries re-runs the containment retry tasks that are due.
+// Each task keeps its own backoff and 24-hour give-up (containment_retries);
+// the queue adds the lease, so two instances never run a tenant's tasks at once.
+func (s *Server) queueContainmentRetries(ctx context.Context, j queue.Job) (any, error) {
+	_, err := s.containment.RunRetries(audit.WithSystemActor(ctx, "containment.sweeper"), s.store, j.Tenant, "containment.sweeper", "")
+	return nil, err
+}
+
+func (s *Server) queueMaintenance(ctx context.Context, j queue.Job) (any, error) {
+	now := s.clock()
+	return nil, s.store.InTenant(ctx, j.Tenant, func(tx *store.TenantTx) error {
+		if err := jobs.MaintainTx(tx, now, jobStaleAfter, jobRetention); err != nil {
+			return err
+		}
+		_, err := s.queue.Prune(tx)
+		return err
+	})
+}
+
+// ---------------------------------------------------------------- routes
+
+func (s *Server) registerQueueRoutes() {
+	s.handle(http.MethodGet, "/api/queue/jobs", read, need(auth.PermJobsRead), s.listQueueJobs)
+	s.handle(http.MethodGet, "/api/queue/schedules", read, need(auth.PermJobsRead), s.listQueueSchedules)
+	s.handle(http.MethodPost, "/api/queue/jobs/{job_id}/retry", write, needStepUp(auth.PermJobsManage, auth.StepUpPolicy), s.retryQueueJob)
+}
+
+type queueJobView struct {
+	ID             string  `json:"id"`
+	Kind           string  `json:"kind"`
+	Status         string  `json:"status"`
+	RunAt          string  `json:"run_at"`
+	Attempts       int     `json:"attempts"`
+	MaxAttempts    int     `json:"max_attempts"`
+	LastError      string  `json:"last_error"`
+	LeaseOwner     *string `json:"lease_owner"`
+	LeaseExpiresAt *string `json:"lease_expires_at"`
+	ScheduleID     *string `json:"schedule_id"`
+	CreatedAt      string  `json:"created_at"`
+	UpdatedAt      string  `json:"updated_at"`
+	FinishedAt     *string `json:"finished_at"`
+}
+
+func isoPtr(t *time.Time) *string {
+	if t == nil {
+		return nil
+	}
+	v := t.UTC().Format(time.RFC3339)
+	return &v
+}
+
+func viewQueueJob(j *store.QueueJob) queueJobView {
+	return queueJobView{ID: j.ID, Kind: j.Kind, Status: j.Status, RunAt: j.RunAt.UTC().Format(time.RFC3339),
+		Attempts: j.Attempts, MaxAttempts: j.MaxAttempts, LastError: j.LastError, LeaseOwner: j.LeaseOwner,
+		LeaseExpiresAt: isoPtr(j.LeaseExpiresAt), ScheduleID: j.ScheduleID, CreatedAt: j.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt: j.UpdatedAt.UTC().Format(time.RFC3339), FinishedAt: isoPtr(j.FinishedAt)}
+}
+
+type queueScheduleView struct {
+	Name           string  `json:"name"`
+	Kind           string  `json:"kind"`
+	Spec           string  `json:"spec"`
+	Enabled        bool    `json:"enabled"`
+	MaxAttempts    int     `json:"max_attempts"`
+	NextRunAt      string  `json:"next_run_at"`
+	LastEnqueuedAt *string `json:"last_enqueued_at"`
+}
+
+var (
+	queueStatuses = []string{store.QueueQueued, store.QueueRunning, store.QueueSucceeded, store.QueueFailed, store.QueueDead}
+	queueKindRE   = regexp.MustCompile(`^[a-z][a-z0-9_.-]{0,63}$`)
+)
+
+func (s *Server) listQueueJobs(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+	q, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		return nil, badRequest("invalid_query", "the query string is not valid")
+	}
+	f := store.QueueJobFilter{Status: q.Get("status"), Kind: q.Get("kind"), Limit: 200}
+	if f.Status != "" && !slices.Contains(queueStatuses, f.Status) {
+		return nil, badRequest("invalid_status", "status must be queued, running, succeeded, failed or dead")
+	}
+	if f.Kind != "" && !queueKindRE.MatchString(f.Kind) {
+		return nil, badRequest("invalid_kind", "unknown job kind")
+	}
+	if l := q.Get("limit"); l != "" {
+		n, err := strconv.Atoi(l)
+		if err != nil || n < 1 || n > 500 {
+			return nil, badRequest("invalid_limit", "limit must be 1 to 500")
+		}
+		f.Limit = n
+	}
+	js, err := store.TxFrom(r.Context()).QueueJobs(f)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]queueJobView, 0, len(js))
+	for _, j := range js {
+		out = append(out, viewQueueJob(j))
+	}
+	return out, nil
+}
+
+func (s *Server) listQueueSchedules(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+	ss, err := store.TxFrom(r.Context()).QueueSchedules()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]queueScheduleView, 0, len(ss))
+	for _, v := range ss {
+		out = append(out, queueScheduleView{Name: v.Name, Kind: v.Kind, Spec: v.Spec, Enabled: v.Enabled,
+			MaxAttempts: v.MaxAttempts, NextRunAt: v.NextRunAt.UTC().Format(time.RFC3339), LastEnqueuedAt: isoPtr(v.LastEnqueuedAt)})
+	}
+	return out, nil
+}
+
+// retryQueueJob puts a dead job back in the queue with a fresh attempt
+// budget, and audits it (queue.job_retried).
+func (s *Server) retryQueueJob(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	id := p.path["job_id"]
+	if !idRE.MatchString(id) {
+		return nil, &httpError{http.StatusNotFound, "Not Found"}
+	}
+	c := store.TxFrom(r.Context())
+	j, err := c.QueueJob(id)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, &httpError{http.StatusNotFound, "Not Found"}
+	} else if err != nil {
+		return nil, err
+	}
+	if j.Status != store.QueueDead {
+		return nil, &readiness.Error{Status: http.StatusConflict, Code: "not_dead", Msg: "only a dead job can be retried"}
+	}
+	if err := s.queue.Retry(c, id, actor(r)); err != nil {
+		return nil, err
+	}
+	j, err = c.QueueJob(id)
+	if err != nil {
+		return nil, err
+	}
+	return viewQueueJob(j), nil
+}

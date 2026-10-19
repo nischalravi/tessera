@@ -30,10 +30,18 @@ const (
 	HealthRerun = "health_rerun"
 	JITSweep    = "jit_sweep"
 	AuditAnchor = "audit_anchor"
+
+	// Kinds of the durable queue's recurring jobs (issue #300).
+	SweepRequests     = "sweep_requests"
+	SweepLifecycle    = "sweep_lifecycle"
+	SweepAdminChanges = "sweep_admin_changes"
+	ContainmentRetry  = "containment_retries"
+	Maintenance       = "job_maintenance"
 )
 
 // Kinds lists every kind, for filters.
-var Kinds = []string{Sync, Provision, Validation, DryRun, HealthRerun, JITSweep, AuditAnchor}
+var Kinds = []string{Sync, Provision, Validation, DryRun, HealthRerun, JITSweep, AuditAnchor,
+	SweepRequests, SweepLifecycle, SweepAdminChanges, ContainmentRetry, Maintenance}
 
 // Idempotent reports whether running a kind again with the same input is
 // safe: it reads a source and converges, or re-checks. Provisioning is not:
@@ -162,12 +170,17 @@ func Record(ctx context.Context, db *store.DB, t tenancy.ID, s Start, started, f
 // active tenant.
 func Maintain(ctx context.Context, db *store.DB, now time.Time, staleAfter, retention time.Duration) error {
 	return db.ForEachActiveTenant(ctx, func(_ context.Context, tx *store.TenantTx) error {
-		if _, err := tx.FailStaleJobRuns(now.Add(-staleAfter), now, "interrupted: the process running this job stopped before it finished"); err != nil {
-			return err
-		}
-		_, err := tx.PruneJobRuns(now.Add(-retention))
-		return err
+		return MaintainTx(tx, now, staleAfter, retention)
 	})
+}
+
+// MaintainTx is Maintain for the tenant of tx.
+func MaintainTx(tx *store.TenantTx, now time.Time, staleAfter, retention time.Duration) error {
+	if _, err := tx.FailStaleJobRuns(now.Add(-staleAfter), now, "interrupted: the process running this job stopped before it finished"); err != nil {
+		return err
+	}
+	_, err := tx.PruneJobRuns(now.Add(-retention))
+	return err
 }
 
 // ErrorSummary is a one-line error message of at most 500 characters.
