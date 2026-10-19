@@ -1,0 +1,60 @@
+# AWS global condition keys: type, whether the key is multivalued (ArrayOf*)
+# and when AWS puts it in the request context (design §9.1, §9.2).
+# Source: IAM User Guide, "AWS global condition context keys".
+# availability is one of:
+#   always       in every request
+#   principal    derived from the calling principal
+#   session      temporary credentials only
+#   resource     derived from the resource
+#   network      depends on the request path (internet or VPC endpoint)
+#   conditional  only in specific scenarios (service calls, tagging, ...)
+# Key names ending in "/${TagKey}" take a tag key as suffix.
+source: https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html
+keys:
+  - {name: "aws:AssumedRoot", type: bool, availability: session}
+  - {name: "aws:CalledVia", type: string, multivalued: true, availability: conditional}
+  - {name: "aws:CalledViaFirst", type: string, availability: conditional}
+  - {name: "aws:CalledViaLast", type: string, availability: conditional}
+  - {name: "aws:CurrentTime", type: date, availability: always}
+  - {name: "aws:EpochTime", type: date, availability: always}
+  - {name: "aws:Ec2InstanceSourcePrivateIPv4", type: ip, availability: conditional}
+  - {name: "aws:Ec2InstanceSourceVpc", type: string, availability: conditional}
+  - {name: "aws:FederatedProvider", type: string, availability: session}
+  - {name: "aws:MultiFactorAuthAge", type: numeric, availability: session}
+  - {name: "aws:MultiFactorAuthPresent", type: bool, availability: session}
+  - {name: "aws:PrincipalAccount", type: string, availability: principal}
+  - {name: "aws:PrincipalArn", type: arn, availability: principal}
+  - {name: "aws:PrincipalIsAWSService", type: bool, availability: conditional}
+  - {name: "aws:PrincipalOrgID", type: string, availability: principal}
+  - {name: "aws:PrincipalOrgPaths", type: string, multivalued: true, availability: principal}
+  - {name: "aws:PrincipalServiceName", type: string, availability: conditional}
+  - {name: "aws:PrincipalServiceNamesList", type: string, multivalued: true, availability: conditional}
+  - {name: "aws:PrincipalTag/${TagKey}", type: string, availability: principal}
+  - {name: "aws:PrincipalType", type: string, availability: always}
+  - {name: "aws:Referer", type: string, availability: conditional}
+  - {name: "aws:RequestedRegion", type: string, availability: always}
+  - {name: "aws:RequestTag/${TagKey}", type: string, availability: conditional}
+  - {name: "aws:ResourceAccount", type: string, availability: resource}
+  - {name: "aws:ResourceOrgID", type: string, availability: resource}
+  - {name: "aws:ResourceOrgPaths", type: string, multivalued: true, availability: resource}
+  - {name: "aws:ResourceTag/${TagKey}", type: string, availability: resource}
+  - {name: "aws:SecureTransport", type: bool, availability: always}
+  - {name: "aws:SourceAccount", type: string, availability: conditional}
+  - {name: "aws:SourceArn", type: arn, availability: conditional}
+  - {name: "aws:SourceIdentity", type: string, availability: session}
+  - {name: "aws:SourceIp", type: ip, availability: network}
+  - {name: "aws:SourceOrgID", type: string, availability: conditional}
+  - {name: "aws:SourceOrgPaths", type: string, multivalued: true, availability: conditional}
+  - {name: "aws:SourceOwner", type: string, availability: conditional}
+  - {name: "aws:SourceVpc", type: string, availability: network}
+  - {name: "aws:SourceVpce", type: string, availability: network}
+  - {name: "aws:TagKeys", type: string, multivalued: true, availability: conditional}
+  - {name: "aws:TokenIssueTime", type: date, availability: session}
+  - {name: "aws:UserAgent", type: string, availability: conditional}
+  - {name: "aws:userid", type: string, availability: principal}
+  - {name: "aws:username", type: string, availability: principal}
+  - {name: "aws:ViaAWSService", type: bool, availability: conditional}
+  - {name: "aws:VpceAccount", type: string, availability: network}
+  - {name: "aws:VpceOrgID", type: string, availability: network}
+  - {name: "aws:VpceOrgPaths", type: string, multivalued: true, availability: network}
+  - {name: "aws:VpcSourceIp", type: ip, availability: network}

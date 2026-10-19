@@ -235,6 +235,9 @@ func Set(tx *store.TenantTx, identityID int64, s Spec, by Actor, now time.Time) 
 	if err != nil {
 		return nil, err
 	}
+	if err := refuseIfSponsored(tx, identityID); err != nil {
+		return nil, err
+	}
 	switch {
 	case p.Type != "human":
 		return nil, refuse(422, "not_a_person", "machine identities have owners, not a lifecycle")
@@ -292,6 +295,9 @@ func Extend(tx *store.TenantTx, identityID int64, to time.Time, reason string, b
 	} else if err != nil {
 		return nil, err
 	}
+	if err := refuseIfSponsored(tx, identityID); err != nil {
+		return nil, err
+	}
 	sponsor := by.IdentityID != nil && l.SponsorID != nil && *by.IdentityID == *l.SponsorID
 	switch {
 	case !manager && !sponsor:
@@ -322,6 +328,147 @@ func Extend(tx *store.TenantTx, identityID int64, to time.Time, reason string, b
 		return nil, err
 	}
 	return l, tx.Audit(now, by.Display, "lifecycle.extend", detail(l, r))
+}
+
+// ---------------------------------------------------------------- sponsorships
+
+// refuseIfSponsored stops a manual change to a person whose lifecycle their
+// sponsorships own (issue #65): there is one source of truth, and a renewal
+// goes through the sponsorship.
+func refuseIfSponsored(tx *store.TenantTx, identityID int64) error {
+	ss, err := tx.Sponsorships(store.SponsorshipFilter{Guest: identityID})
+	if err != nil {
+		return err
+	}
+	for _, s := range ss {
+		if s.Live() {
+			return refuse(409, "managed_by_sponsorship", "this person is sponsored: renew, transfer or end the sponsorship instead")
+		}
+	}
+	return nil
+}
+
+// Sponsored is the lifecycle a person's live sponsorships imply: the worker
+// type of the population, the sponsor of the sponsorship that ends last, and
+// the latest end (a person stays active until their last sponsorship ends).
+type Sponsored struct {
+	WorkerType string
+	SponsorID  int64
+	StartsAt   time.Time
+	EndsAt     time.Time
+	Note       string
+}
+
+// ApplySponsored writes the lifecycle a person's sponsorships imply, as a
+// history event but without an audit event: the sponsorship's own audit event
+// in the caller's transaction records the change. An invited guest, who has
+// not claimed their account yet, may have one; a term that has ended may not
+// be revived.
+func ApplySponsored(tx *store.TenantTx, identityID int64, sp Sponsored, by Actor, now time.Time) (*store.Lifecycle, error) {
+	p, err := person(tx, identityID)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case p.Type != "human":
+		return nil, refuse(422, "not_a_person", "machine identities have owners, not a lifecycle")
+	case !slices.Contains(WorkerTypes, sp.WorkerType) || sp.WorkerType == store.WorkerEmployee:
+		return nil, refuse(422, "invalid_worker_type", "a sponsored person is not an employee")
+	case sp.SponsorID == identityID:
+		return nil, refuse(422, "sponsor_is_self", "nobody sponsors themselves")
+	case !sp.EndsAt.After(now) || !sp.EndsAt.After(sp.StartsAt):
+		return nil, refuse(422, "invalid_end", "the end date is in the past")
+	}
+	old, err := tx.LifecycleFor(identityID)
+	if errors.Is(err, store.ErrNotFound) {
+		old = nil
+	} else if err != nil {
+		return nil, err
+	}
+	if old != nil && old.EndedAt != nil {
+		return nil, refuse(409, "ended", "this term has ended")
+	}
+	starts, ends, sponsor := sp.StartsAt, sp.EndsAt, sp.SponsorID
+	l := &store.Lifecycle{IdentityID: identityID, WorkerType: sp.WorkerType, SponsorID: &sponsor, StartsAt: &starts, EndsAt: &ends,
+		Source: "sponsorship", UpdatedBy: uidp(by), UpdatedAt: now}
+	if old != nil {
+		l.Organization = old.Organization
+		if sameTime(old.EndsAt, l.EndsAt) {
+			l.WarnedDays = old.WarnedDays
+		}
+	}
+	if err := tx.PutLifecycle(l); err != nil {
+		return nil, err
+	}
+	ev := "set"
+	switch {
+	case old != nil && old.WorkerType != l.WorkerType:
+		ev = "converted"
+	case old != nil && old.EndsAt != nil && l.EndsAt.After(*old.EndsAt):
+		ev = "extended"
+	}
+	note := &sp.Note
+	if sp.Note == "" {
+		note = nil
+	}
+	return l, event(tx, l, ev, note, by, now)
+}
+
+// EndNow ends a person's term now, as the sweep does on the end date: the
+// leaver plan runs for an active identity, an invited one that never claimed
+// is terminated, and the lifecycle is marked ended, in the caller's
+// transaction, with a lifecycle.end audit event. A person with no running
+// term is left alone (ended is false). reason is the history note.
+func EndNow(tx *store.TenantTx, identityID int64, reason string, by Actor, now time.Time) (steps int, ended bool, err error) {
+	l, err := tx.LifecycleFor(identityID)
+	if errors.Is(err, store.ErrNotFound) || err == nil && l.EndedAt != nil {
+		return 0, false, nil
+	} else if err != nil {
+		return 0, false, err
+	}
+	p, err := person(tx, identityID)
+	if err != nil {
+		return 0, false, err
+	}
+	steps, err = endTerm(tx, l, p, by, by.Display, &reason, now)
+	return steps, err == nil, err
+}
+
+// endTerm runs the leaver plan (or terminates an identity that never became
+// active), marks the lifecycle ended and writes the history, notification and
+// audit events.
+func endTerm(tx *store.TenantTx, l *store.Lifecycle, p *store.Identity, by Actor, auditActor string, note *string, now time.Time) (int, error) {
+	steps := 0
+	switch p.Status {
+	case "active":
+		plan, err := jml.ExecuteLeaver(tx, now, l.IdentityID)
+		if err != nil {
+			return 0, err
+		}
+		if s, ok := plan.Get("steps"); ok {
+			if ss, ok := s.([]jml.Step); ok {
+				steps = len(ss)
+			}
+		}
+	case "invited":
+		if err := tx.TerminateIdentity(l.IdentityID, now); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.MarkLifecycleEnded(l.IdentityID, now); err != nil {
+		return 0, err
+	}
+	l.EndedAt = &now
+	if err := event(tx, l, "ended", note, by, now); err != nil {
+		return 0, err
+	}
+	if Notify != nil {
+		if err := Notify.Ended(tx, l, p); err != nil {
+			return 0, err
+		}
+	}
+	d := append(detail(l, nil), ojson.KV{Key: "leaver_steps", Value: steps}, ojson.KV{Key: "was_active", Value: p.Status == "active"})
+	return steps, tx.Audit(now, auditActor, "lifecycle.end", d)
 }
 
 // ---------------------------------------------------------------- sweep
@@ -389,7 +536,7 @@ func Sweep(tx *store.TenantTx, now time.Time) (SweepResult, error) {
 			return res, err
 		}
 		if end {
-			err = endOne(tx, l, p, now)
+			_, err = endTerm(tx, l, p, Actor{Display: Sweeper}, Sweeper, nil, now)
 			res.Ended++
 		} else {
 			err = warnOne(tx, l, p, warn, now)
@@ -400,38 +547,6 @@ func Sweep(tx *store.TenantTx, now time.Time) (SweepResult, error) {
 		}
 	}
 	return res, nil
-}
-
-// endOne runs the leaver plan of an active person, terminates them and
-// marks the term ended, with its audit event, in the caller's transaction.
-func endOne(tx *store.TenantTx, l *store.Lifecycle, p *store.Identity, now time.Time) error {
-	by := Actor{Display: Sweeper}
-	steps := 0
-	if p.Status == "active" {
-		plan, err := jml.ExecuteLeaver(tx, now, l.IdentityID)
-		if err != nil {
-			return err
-		}
-		if s, ok := plan.Get("steps"); ok {
-			if ss, ok := s.([]jml.Step); ok {
-				steps = len(ss)
-			}
-		}
-	}
-	if err := tx.MarkLifecycleEnded(l.IdentityID, now); err != nil {
-		return err
-	}
-	l.EndedAt = &now
-	if err := event(tx, l, "ended", nil, by, now); err != nil {
-		return err
-	}
-	if Notify != nil {
-		if err := Notify.Ended(tx, l, p); err != nil {
-			return err
-		}
-	}
-	d := append(detail(l, nil), ojson.KV{Key: "leaver_steps", Value: steps}, ojson.KV{Key: "was_active", Value: p.Status == "active"})
-	return tx.Audit(now, Sweeper, "lifecycle.end", d)
 }
 
 func warnOne(tx *store.TenantTx, l *store.Lifecycle, p *store.Identity, warn int, now time.Time) error {
@@ -582,7 +697,7 @@ func SweepTenant(ctx context.Context, sc Scope, svc *containment.Service, now ti
 				if err != nil {
 					return err
 				}
-				if err := endOne(c, l, p, now); err != nil {
+				if _, err := endTerm(c, l, p, Actor{Display: Sweeper}, Sweeper, nil, now); err != nil {
 					return err
 				}
 				ended = true

@@ -173,8 +173,9 @@ var getCases = map[string]func(c *store.TenantTx, ids map[string]int64) (any, er
 // naturalKeyGets look rows up by external id, which both tenants share:
 // each tenant must get its own row.
 var naturalKeyGets = map[string]func(c *store.TenantTx) (any, error){
-	"IdentityByExternalID": func(c *store.TenantTx) (any, error) { return c.IdentityByExternalID("alice") },
-	"GroupByXID":           func(c *store.TenantTx) (any, error) { return c.GroupByXID("aws", "ProdAdmin") },
+	"IdentityByExternalID":   func(c *store.TenantTx) (any, error) { return c.IdentityByExternalID("alice") },
+	"ActiveIdentityMatching": func(c *store.TenantTx) (any, error) { return c.ActiveIdentityMatching("", "alice") },
+	"GroupByXID":             func(c *store.TenantTx) (any, error) { return c.GroupByXID("aws", "ProdAdmin") },
 }
 
 func TestIsolation_GetOtherTenantNotFound(t *testing.T) {
@@ -324,7 +325,8 @@ var mutations = map[string]func(c *store.TenantTx, a, b map[string]int64) error{
 	"SetCampaignTotals": func(c *store.TenantTx, a, _ map[string]int64) error { return c.SetCampaignTotals(a["campaign"], 9, 9) },
 	"CompleteCampaign":  func(c *store.TenantTx, a, _ map[string]int64) error { return c.CompleteCampaign(a["campaign"]) },
 	"DecideItem": func(c *store.TenantTx, a, _ map[string]int64) error {
-		return c.DecideItem(a["item"], "revoke", nil, storetest.Now, store.UserRef{})
+		_, err := c.DecideItem(a["item"], "revoke", nil, storetest.Now, store.UserRef{})
+		return err
 	},
 	"SetHrisEventIdentity": func(c *store.TenantTx, a, _ map[string]int64) error {
 		return c.SetHrisEventIdentity(a["hris:joiner"], a["bob"])
@@ -671,9 +673,14 @@ func TestIsolation_EveryRepoMethodClassified(t *testing.T) {
 		"Audit": true,
 		// RevokedGrants has its own test: the shared fixture holds no tombstones.
 		"RevokedGrants": true,
+		// Sealed connection credentials: TestIsolation_ConnectionSecrets.
+		"PutConnectionSecret": true, "ConnectionSecret": true,
+		// HasPendingRequest has its own test (TestIsolation_PendingRequestUniquePerTenant).
+		"HasPendingRequest": true,
 	}
 	for _, m := range []map[string]bool{keys(listCases), keys(getCases), keys(naturalKeyGets), keys(countCases),
-		keys(mutations), keys(insertCases), readinessCovered(), keysCovered(), auditCovered(), authCovered(), requestsCovered(), rolesCovered(), lifecycleCovered(), abacCovered(), correlationCovered(), containmentCovered()} {
+		keys(mutations), keys(insertCases), readinessCovered(), keysCovered(), auditCovered(), authCovered(), jobsCovered(), provisioningCovered(), correlationCovered(), identityModelCovered(), containmentCovered(), groupsCovered(), transportCovered(), alertsCovered(), siemCovered(),
+		approvalsCovered(), lifecycleCovered(), notificationsCovered(), requestsCovered(), rolesCovered(), abacCovered(), sponsorshipsCovered(), adminCovered(), disablesCovered(), removalsCovered(), requestDraftsCovered(), reviewSchedulesCovered(), ownershipCovered()} {
 		for k := range m {
 			covered[strings.SplitN(k, "/", 2)[0]] = true
 		}
@@ -717,6 +724,34 @@ func TestIsolation_AuditStampedWithOwnTenant(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+}
+
+// TestIsolation_PendingRequestUniquePerTenant: both tenants hold a pending
+// request for alice and ProdAdmin (the fixture). HasPendingRequest sees only
+// the caller's tenant (A's ids are unknown to B), a second pending request in
+// B is refused with ErrDuplicate by the partial unique index, and a decided
+// request does not count.
+func TestIsolation_PendingRequestUniquePerTenant(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	inB(t, f, func(c *store.TenantTx) error {
+		if ok, err := c.HasPendingRequest(f.A.IDs["alice"], f.A.IDs["group:aws:ProdAdmin"]); err != nil || ok {
+			t.Errorf("tenant B sees A's pending request: %v, %v", ok, err)
+		}
+		bAlice, bGroup := f.B.IDs["alice"], f.B.IDs["group:aws:ProdAdmin"]
+		if ok, err := c.HasPendingRequest(bAlice, bGroup); err != nil || !ok {
+			t.Errorf("tenant B misses its own pending request: %v, %v", ok, err)
+		}
+		dup := &store.AccessRequest{IdentityID: bAlice, AccountID: f.B.IDs["acct:okta:alice"], GroupID: bGroup,
+			Justification: "again", DurationHours: 1, Status: "pending", RequestedAt: storetest.Now}
+		if _, err := c.InsertRequest(dup); !errors.Is(err, store.ErrDuplicate) {
+			t.Errorf("second pending request: err = %v, want ErrDuplicate", err)
+		}
+		dup.Status = "denied"
+		if _, err := c.InsertRequest(dup); err != nil {
+			t.Errorf("a decided request must not collide: %v", err)
+		}
+		return nil
+	})
 }
 
 // TestIsolation_RevokedGrantsOwnTenantOnly: a tombstone written in A is not

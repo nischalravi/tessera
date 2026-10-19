@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/identity"
+	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/ingest"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
@@ -151,6 +153,9 @@ type Tenant struct {
 	// with Users as its bootstrap users (WithDevIdP; dev and test only).
 	DevIdP string
 	Users  []User
+	// Identifiers, when set, hashes the identifiers the back-fill records for
+	// each person (identity_identifiers). Nil skips them.
+	Identifiers *identifiers.Keyer
 	// DevIdPClient seals the dev IdP connection's client secret (optional).
 	DevIdPClient *DevIdPClient
 }
@@ -207,6 +212,14 @@ func Run(ctx context.Context, db *store.DB, now time.Time, policies []*policy.Po
 				if err := t.Workflows(c, now, policies); err != nil {
 					return err
 				}
+			}
+			// populations, then each person's source record, affiliation and identifiers
+			// (written without audit events: this describes data already there)
+			if err := identity.SeedPopulations(c, now); err != nil {
+				return err
+			}
+			if _, err := identity.Backfill(c, t.Identifiers, now); err != nil {
+				return err
 			}
 			if err := seedAuth(c, t, now); err != nil {
 				return err

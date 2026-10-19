@@ -1,0 +1,149 @@
+# Golden corpus, basics and the grammar: GC-01 to GC-12
+# (docs/design/aws-effective-permission-evaluator.md section 14.2).
+# Format: see section 14.1 and the field notes in internal/aws/eval/golden_test.go.
+# Defaults: principal U; mode concrete; policy Version 2012-10-17 when omitted;
+# bucket tsr-bkt belongs to account A (111111111111).
+
+- id: GC-01
+  title: Implicit deny with no policies
+  principal: U
+  identity: []
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-bkt/a.txt"}
+  expect: {outcome: DENY, deny_kind: implicit, stage: identity}
+  why: "All requests are implicitly denied by default except root [S1]."
+  verified: doc
+
+- id: GC-02
+  title: Identity allow
+  principal: U
+  identity:
+    - {"Statement": [{"Effect": "Allow", "Action": "s3:GetObject", "Resource": "arn:aws:s3:::tsr-bkt/*"}]}
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-bkt/a.txt"}
+  expect: {outcome: ALLOW}
+  why: "Identity allow; no limiters [S1]."
+  verified: doc
+
+- id: GC-03
+  title: Explicit deny overrides allow
+  principal: U
+  identity:
+    - {"Statement": [{"Effect": "Allow", "Action": "s3:*", "Resource": "*"},
+                     {"Effect": "Deny", "Action": "s3:*", "Resource": "arn:aws:s3:::*log*"}]}
+  request: {action: "s3:PutObject", resource: "arn:aws:s3:::tsr-applog/x"}
+  expect: {outcome: DENY, deny_kind: explicit, stage: explicit_deny, decisive: "identity#1"}
+  why: "Deny matches 'arn:aws:s3:::*log*' ('*' spans '/' in the resource part); explicit deny wins [S1][S11]."
+  verified: doc
+
+- id: GC-04
+  title: Action names are case-insensitive
+  principal: U
+  identity:
+    - {"Statement": [{"Effect": "Allow", "Action": "S3:getobject", "Resource": "*"}]}
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-bkt/a"}
+  expect: {outcome: ALLOW}
+  why: "Actions are case-insensitive [S4b]."
+  verified: doc
+
+- id: GC-05
+  title: Resource ARNs are case-sensitive
+  principal: U
+  identity:
+    - {"Statement": [{"Effect": "Allow", "Action": "s3:GetObject", "Resource": "arn:aws:s3:::TSR-BKT/*"}]}
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-bkt/a"}
+  expect: {outcome: DENY, deny_kind: implicit, stage: identity}
+  why: "Resource matching is case-sensitive [S11]."
+  verified: doc
+
+- id: GC-06
+  title: "'*' crosses '/' inside the resource segment"
+  principal: U
+  identity:
+    - &gc06 {"Statement": [{"Effect": "Allow", "Action": "s3:GetObject", "Resource": "arn:aws:s3:::tsr-bkt/*/test/*"}]}
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-bkt/1/2/test/object.jpg"}
+  expect: {outcome: ALLOW}
+  why: "AWS's own example list includes 1/2/test/object.jpg [S11]."
+  verified: doc
+
+- id: GC-07
+  title: The same pattern needs the literal '/test/'
+  principal: U
+  identity:
+    - *gc06
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-bkt/test/object.jpg"}
+  expect: {outcome: DENY, deny_kind: implicit, stage: identity}
+  why: "Listed as a non-match [S11]."
+  verified: doc
+
+- id: GC-08
+  title: "'?' matches exactly one character"
+  principal: U
+  identity:
+    - {"Statement": [{"Effect": "Allow", "Action": "sqs:SendMessage", "Resource": "arn:aws:sqs:us-east-1:111111111111:q?"}]}
+  requests:
+    - action: "sqs:SendMessage"
+      resource: "arn:aws:sqs:us-east-1:111111111111:q1"
+      expect: {outcome: ALLOW}
+    - action: "sqs:SendMessage"
+      resource: "arn:aws:sqs:us-east-1:111111111111:q10"
+      expect: {outcome: DENY, deny_kind: implicit}
+  why: "'?' is a single-character wildcard [S11]."
+  verified: doc
+
+- id: GC-09
+  title: NotAction with Allow and Resource '*' grants everything else
+  principal: U
+  identity:
+    - {"Statement": [{"Effect": "Allow", "NotAction": "iam:*", "Resource": "*"}]}
+  requests:
+    - action: "ec2:DescribeInstances"
+      resource: "*"
+      expect: {outcome: ALLOW}
+    - action: "iam:CreateUser"
+      resource: "arn:aws:iam::111111111111:user/bob"
+      expect: {outcome: DENY, deny_kind: implicit}
+  why: "NotAction with Allow matches every unlisted action [S12]."
+  verified: doc
+
+- id: GC-10
+  title: NotAction with Allow scoped by Resource does not reach other services
+  principal: U
+  identity:
+    - {"Statement": [{"Effect": "Allow", "NotAction": "s3:DeleteBucket", "Resource": "arn:aws:s3:::*"}]}
+  request: {action: "ec2:DescribeInstances", resource: "*"}
+  expect: {outcome: DENY, deny_kind: implicit, stage: identity}
+  why: "Other services' actions aren't applicable to S3 resources [S12]; a Resource that isn't '*' does not match an action without resource-level permissions (section 8.3)."
+  verified: doc
+
+- id: GC-11
+  title: NotResource with Deny denies everything outside the listed resources
+  principal: U
+  identity:
+    - {"Statement": [{"Effect": "Allow", "Action": "s3:*", "Resource": "*"},
+                     {"Effect": "Deny", "Action": "s3:*", "NotResource": ["arn:aws:s3:::hr/Payroll", "arn:aws:s3:::hr/Payroll/*"]}]}
+  requests:
+    - action: "s3:GetObject"
+      resource: "arn:aws:s3:::other/x"
+      expect: {outcome: DENY, deny_kind: explicit, decisive: "identity#1"}
+    - action: "s3:GetObject"
+      resource: "arn:aws:s3:::hr/Payroll/p1"
+      expect: {outcome: ALLOW}
+  why: "[S12] NotResource example."
+  verified: doc
+
+- id: GC-12
+  title: Deny NotAction plus BoolIfExists on MFA, with long-term keys
+  principal: U
+  note: "access keys, so aws:MultiFactorAuthPresent is ABSENT"
+  identity:
+    - allow_all
+    - {"Statement": [{"Effect": "Deny", "NotAction": "iam:*", "Resource": "*",
+                      "Condition": {"BoolIfExists": {"aws:MultiFactorAuthPresent": "false"}}}]}
+  requests:
+    - action: "ec2:DescribeInstances"
+      resource: "*"
+      expect: {outcome: DENY, deny_kind: explicit}
+    - action: "iam:GetUser"
+      resource: "arn:aws:iam::111111111111:user/alice"
+      expect: {outcome: ALLOW}
+  why: "IfExists with a missing key is true, so the Deny applies [S8]; the MFA key is absent for long-term credentials [S19]."
+  verified: doc

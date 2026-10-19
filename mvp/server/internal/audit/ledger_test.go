@@ -47,7 +47,7 @@ type ledgerFixture struct {
 func newLedger(t *testing.T) *ledgerFixture {
 	t.Helper()
 	dir := t.TempDir()
-	path := filepath.Join(dir, "audit.db")
+	path := store.TestTarget(t)
 	db, err := store.Open(context.Background(), path)
 	if err != nil {
 		t.Fatal(err)

@@ -14,6 +14,9 @@
 -- warned, ended), append-only; the audit ledger holds the same changes
 -- hash-chained.
 --
+-- source 'sponsorship' marks a row written from the person's sponsorships (issue #65):
+-- while one is live the sponsorships own the row and the API refuses to edit it.
+--
 -- Tenant-owned: guard triggers refuse references to another tenant's rows.
 CREATE TABLE IF NOT EXISTS identity_lifecycle (
   id INTEGER PRIMARY KEY,
@@ -26,7 +29,7 @@ CREATE TABLE IF NOT EXISTS identity_lifecycle (
   ends_at TEXT,
   warned_days INTEGER,
   ended_at TEXT,
-  source TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('manual','hris')),
+  source TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('manual','hris','sponsorship')),
   updated_by TEXT REFERENCES platform_users (id),
   updated_at TEXT NOT NULL,
   UNIQUE (tenant_id, identity_id),
