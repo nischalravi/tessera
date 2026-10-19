@@ -163,7 +163,7 @@ var (
 		WHERE tenant_id = @tenant AND id = @id AND status = @from`)
 
 	edgesTo = tq("grant_edges.to", `
-		SELECT `+edgeCols+` FROM grant_edges e WHERE e.tenant_id = @tenant AND e.dst = @dst ORDER BY e.id`)
+		SELECT `+edgeCols+edgeFrom+`WHERE e.tenant_id = @tenant AND e.dst = @dst ORDER BY e.id`)
 	edgesDeleteRole = tq("grant_edges.delete_role", `
 		DELETE FROM grant_edges WHERE tenant_id = @tenant AND id = @id AND source = 'role'`)
 )

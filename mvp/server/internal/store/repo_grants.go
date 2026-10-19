@@ -17,23 +17,46 @@ type GrantEdge struct {
 	TenantID  tenancy.ID
 	Src, Dst  string
 	Relation  string
-	Source    string // connector | jit | manual | request | role
+	Source    string // connector | jit | manual | request | role | evaluator
 	ExpiresAt *time.Time
 	CreatedAt time.Time
+	// ExplanationID, Outcome ("allow" | "conditional") and Fidelity ("exact" |
+	// "approximate" | "unsupported") are set only on edges the AWS evaluator
+	// confirmed (design §11.2); "" means unset, which is every other edge.
+	ExplanationID, Outcome, Fidelity string
 }
 
-const edgeCols = `e.id, e.tenant_id, e.src, e.dst, e.relation, e.source, e.expires_at, e.created_at`
+// EdgeSourceEvaluator is the source of an edge the AWS evaluator confirmed.
+const EdgeSourceEvaluator = "evaluator"
+
+// edgeCols are the columns of an edge, with the evaluator's fields from the
+// side table (schema/0321_aws_integration.sql) that edgeFrom joins.
+const edgeCols = `e.id, e.tenant_id, e.src, e.dst, e.relation, e.source, e.expires_at, e.created_at,
+	COALESCE(v.explanation_id, ''), COALESCE(v.outcome, ''), COALESCE(v.fidelity, '')`
+
+const edgeFrom = ` FROM grant_edges e LEFT JOIN aws_edge_evaluations v ON v.tenant_id = @tenant AND v.edge_id = e.id `
 
 var (
 	edgesList = tq("grant_edges.list", `
-		SELECT `+edgeCols+` FROM grant_edges e WHERE e.tenant_id = @tenant ORDER BY e.id`)
+		SELECT `+edgeCols+edgeFrom+`WHERE e.tenant_id = @tenant ORDER BY e.id`)
 	edgesGet = tq("grant_edges.get", `
-		SELECT `+edgeCols+` FROM grant_edges e WHERE e.tenant_id = @tenant AND e.id = @id`)
+		SELECT `+edgeCols+edgeFrom+`WHERE e.tenant_id = @tenant AND e.id = @id`)
 	edgesBetween = tq("grant_edges.between", `
-		SELECT `+edgeCols+` FROM grant_edges e WHERE e.tenant_id = @tenant AND e.src = @src AND e.dst = @dst
+		SELECT `+edgeCols+edgeFrom+`WHERE e.tenant_id = @tenant AND e.src = @src AND e.dst = @dst
 		ORDER BY e.id LIMIT 1`)
 	edgesFrom = tq("grant_edges.from", `
-		SELECT `+edgeCols+` FROM grant_edges e WHERE e.tenant_id = @tenant AND e.src = @src ORDER BY e.id`)
+		SELECT `+edgeCols+edgeFrom+`WHERE e.tenant_id = @tenant AND e.src = @src ORDER BY e.id`)
+	edgesUpsertEvaluator = tq("grant_edges.upsert_evaluator", `
+		INSERT INTO grant_edges (tenant_id, src, dst, relation, source, created_at)
+		VALUES (@tenant, @src, @dst, @relation, 'evaluator', @created_at)
+		ON CONFLICT (tenant_id, src, dst) DO UPDATE SET relation = excluded.relation WHERE grant_edges.source = 'evaluator'`)
+	edgeEvalUpsert = tq("aws_edge_evaluations.upsert", `
+		INSERT INTO aws_edge_evaluations (tenant_id, edge_id, explanation_id, outcome, fidelity)
+		VALUES (@tenant, @edge_id, @explanation_id, @outcome, @fidelity)
+		ON CONFLICT (tenant_id, edge_id) DO UPDATE SET explanation_id = excluded.explanation_id, outcome = excluded.outcome,
+			fidelity = excluded.fidelity`)
+	edgeEvalDelete = tq("aws_edge_evaluations.delete", `
+		DELETE FROM aws_edge_evaluations WHERE tenant_id = @tenant AND edge_id = @id`)
 	edgesCountStanding = tq("grant_edges.count_standing_between", `
 		SELECT count(*) FROM grant_edges e WHERE e.tenant_id = @tenant AND e.src = @src AND e.dst = @dst
 		AND e.source != 'jit'`)
@@ -72,7 +95,8 @@ func scanEdge(s scanner) (*GrantEdge, error) {
 	var e GrantEdge
 	var tid string
 	var exp, created nullTime
-	if err := s.Scan(&e.ID, &tid, &e.Src, &e.Dst, &e.Relation, &e.Source, &exp, &created); err != nil {
+	if err := s.Scan(&e.ID, &tid, &e.Src, &e.Dst, &e.Relation, &e.Source, &exp, &created,
+		&e.ExplanationID, &e.Outcome, &e.Fidelity); err != nil {
 		return nil, err
 	}
 	var err error
@@ -124,6 +148,36 @@ func (tx *TenantTx) UpsertConnectorEdge(src, dst, relation string, createdAt tim
 	return err
 }
 
+// EdgeEvaluation is what the AWS evaluator confirmed about a grant edge.
+type EdgeEvaluation struct {
+	ExplanationID, Outcome, Fidelity string
+}
+
+// UpsertEvaluatorEdge inserts an edge the AWS evaluator confirmed, or updates
+// the one it made before, with the evaluation's explanation, outcome and
+// fidelity. An edge from another source (manual, JIT, a demo connector) keeps
+// its source and gets no evaluation. A grant revoked inside Tessera is not
+// brought back. It reports whether an edge now carries the evaluation.
+func (tx *TenantTx) UpsertEvaluatorEdge(src, dst, relation string, createdAt time.Time, ev EdgeEvaluation) (bool, error) {
+	if n, err := tx.count(revokedCount, sql.Named("src", src), sql.Named("dst", dst)); err != nil || n > 0 {
+		return false, err
+	}
+	if _, err := tx.exec(edgesUpsertEvaluator, sql.Named("src", src), sql.Named("dst", dst), sql.Named("relation", relation),
+		sql.Named("created_at", T(createdAt))); err != nil {
+		return false, err
+	}
+	e, err := tx.EdgeBetween(src, dst)
+	if err != nil {
+		return false, err
+	}
+	if e.Source != EdgeSourceEvaluator {
+		return false, nil
+	}
+	_, err = tx.exec(edgeEvalUpsert, sql.Named("edge_id", e.ID), sql.Named("explanation_id", ev.ExplanationID),
+		sql.Named("outcome", ev.Outcome), sql.Named("fidelity", ev.Fidelity))
+	return err == nil, err
+}
+
 // InsertEdge inserts a grant edge and returns its id.
 func (tx *TenantTx) InsertEdge(e *GrantEdge) (int64, error) {
 	if err := tx.own(e.TenantID); err != nil {
@@ -141,6 +195,9 @@ func (tx *TenantTx) SetEdgeExpiry(id int64, expires time.Time) error {
 
 // DeleteEdge deletes a grant edge by id.
 func (tx *TenantTx) DeleteEdge(id int64) error {
+	if _, err := tx.exec(edgeEvalDelete, sql.Named("id", id)); err != nil {
+		return err
+	}
 	_, err := tx.exec(edgesDelete, sql.Named("id", id))
 	return err
 }

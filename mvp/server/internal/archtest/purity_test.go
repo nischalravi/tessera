@@ -24,6 +24,7 @@ var pureDirs = []string{
 	"internal/aws/model",
 	"internal/aws/policy",
 	"internal/aws/query",
+	"internal/aws/render",
 	"internal/aws/snapshot",
 }
 

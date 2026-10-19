@@ -1,4 +1,4 @@
--- Postgres dialect of schema/0321_aws_snapshots.sql (AWS evaluator PR-7, issue #26, kept in parity with the
+-- Postgres dialect of schema/0319_aws_snapshots.sql (AWS evaluator PR-7, issue #26, kept in parity with the
 -- SQLite file by TestSchemaParity_SQLiteAndPostgres). The cross-tenant guard triggers become
 -- composite foreign keys (tenant_id, x_id) -> (tenant_id, id), which the (tenant_id, id) primary
 -- keys of aws_snapshots and aws_policy_documents already allow; see 0001_tenancy.sql.

@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// AWS evaluator persistence (schema/0321_aws_snapshots.sql). Every statement
+// AWS evaluator persistence (schema/0319_aws_snapshots.sql). Every statement
 // is tenant-scoped (tq) and linted like the rest of the store. The snapshot
 // tables are append-only: there is no UPDATE or DELETE of a snapshot row.
 

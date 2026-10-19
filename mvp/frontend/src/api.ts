@@ -1907,6 +1907,44 @@ export const agents = {
   enrol: (name: string) => apiNoResume<AgentEnrolment>("/agents", { name }),
   revoke: (id: string) => api<DirectoryAgent>(`/agents/${id}/revoke`, {}),
 };
+
+// ---------------------------------------------------------------- AWS evaluator (/api/aws, design §11.2)
+
+export interface AwsReason { code: string; outcome_sensitive: boolean; detail?: string }
+export interface AwsCell { outcome: string; deny_kind?: string; fidelity: string; fidelity_reasons: AwsReason[]; residual: string | null }
+export interface AwsGap { kind: string; source_arn: string; policy_kind: string; code: string; detail: string; scope: string }
+export interface AwsCan {
+  decision: { outcome: string; fidelity: string; steps: unknown[] };
+  explanation_id: string;
+  summary: string;
+  narrative: string;
+  snapshot: { id: string; taken_at: string };
+  profile: string;
+  collection_gaps: AwsGap[];
+}
+export interface AwsPolicyChange { op: string; target_arn: string; document?: string | null; policy_arn?: string | null }
+export interface AwsDiffChange {
+  principals: string[]; actions: string[]; resources: string[];
+  action_count: number; resource_count: number;
+  kind: "gained" | "lost" | "conditional_changed" | "fidelity_changed";
+  before: AwsCell | null; after: AwsCell | null; trace: string[]; used_days_ago: number | null; gap: boolean;
+}
+export interface AwsSimulation {
+  base_snapshot: string; head_snapshot: string; profile: string; catalog_version: string; engine_version: string;
+  summary: { gained: number; lost: number; conditional_changed: number; fidelity_changed: number; principals_affected: number };
+  changes: AwsDiffChange[]; omitted_changes: number; comment: string; collection_gaps: AwsGap[];
+  pr_comment: { status: string; url?: string; error?: string };
+}
+
+export const awsCan = (principal: string, action: string, resource: string, profile = "default") =>
+  api<AwsCan>(`/aws/can?${new URLSearchParams({ principal, action, resource, profile })}`);
+
+export const awsSimulate = (changes: AwsPolicyChange[], head?: string, pullNumber?: number) =>
+  api<AwsSimulation>("/aws/simulate-policy-change", {
+    changes,
+    ...(head ? { head } : {}),
+    ...(pullNumber ? { comment: { pull_number: pullNumber } } : {}),
+  });
 // ------------------------------------------------------------ SIEM sinks (#169)
 
 export type SiemKind = "syslog" | "webhook";

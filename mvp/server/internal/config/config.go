@@ -87,6 +87,11 @@ type Config struct {
 	AuditAnchor            string
 	AuditCheckpointSeconds int
 	AuditCheckpointEvents  int
+	// AWSCatalogDir (TESSERA_AWS_CATALOG_DIR) is the catalog directory with
+	// compiled/<version>.json.gz; empty leaves the AWS evaluator routes
+	// unavailable (503). AWSCatalogVersion picks a version (default: newest).
+	AWSCatalogDir     string
+	AWSCatalogVersion string
 	// BackupDir (TESSERA_BACKUP_DIR) turns on scheduled encrypted backups
 	// every BackupEveryMinutes, keeping the newest BackupKeep (issue #171).
 	BackupDir             string
@@ -294,6 +299,11 @@ func Load(getenv func(string) string) (*Config, error) {
 		default:
 			c.FrozenNow = t
 		}
+	}
+	c.AWSCatalogDir = strings.TrimSpace(getenv("TESSERA_AWS_CATALOG_DIR"))
+	c.AWSCatalogVersion = strings.TrimSpace(getenv("TESSERA_AWS_CATALOG_VERSION"))
+	if v := c.AWSCatalogVersion; v != "" && (len(v) > 40 || strings.Trim(v, "0123456789abcdef-") != "") {
+		bad("TESSERA_AWS_CATALOG_VERSION: %q is not a compiled catalog version (<date>-<hex>)", v)
 	}
 	c.FakeTarget = boolean("TESSERA_DEV_FAKE_TARGET", false, false)
 	c.DevIdPURL = strings.TrimSpace(getenv("TESSERA_DEV_IDP_URL"))

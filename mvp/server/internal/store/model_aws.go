@@ -7,7 +7,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 )
 
-// AWS evaluator persistence (schema/0321_aws_snapshots.sql; design
+// AWS evaluator persistence (schema/0319_aws_snapshots.sql; design
 // docs/design/aws-effective-permission-evaluator.md §6.2). The store holds
 // plain values: internal/connectors/awsorg maps its model.Snapshot to and
 // from these rows, so the store imports nothing from the evaluator.
@@ -34,7 +34,7 @@ const (
 )
 
 // AWS snapshot entity kinds (the JSON bodies of what §6.2's tables do not
-// hold: see schema/0321_aws_snapshots.sql).
+// hold: see schema/0319_aws_snapshots.sql).
 const (
 	AWSEntityPrincipal      = "principal"
 	AWSEntityResource       = "resource"
@@ -147,6 +147,17 @@ type AWSEffective struct {
 	ExplanationID  string
 	EngineVersion  string
 	CatalogVersion string
+}
+
+// AWSPRCommentSettings is a tenant's switch for the access-diff comment on a
+// GitHub pull request (schema/0321_aws_integration.sql). A tenant with no row
+// has it off. TokenEnc is the sealed token; it is never returned by the API.
+type AWSPRCommentSettings struct {
+	Enabled   bool
+	Repo      string // "owner/name"
+	TokenEnc  []byte
+	UpdatedBy string
+	UpdatedAt time.Time
 }
 
 // AWSExplanation is a content-addressed decision trace.

@@ -157,6 +157,13 @@ type Config struct {
 	// New links it to readiness so connections that name an agent are probed
 	// through it.
 	Agents *agent.Service
+	// AWSCatalog returns the action catalog the AWS evaluator runs against
+	// (see CatalogFromDir). Nil: the /api/aws evaluator routes answer 503
+	// aws_catalog_unavailable; everything else is unaffected.
+	AWSCatalog func() (*AWSCatalog, error)
+	// GitHubAPIBase is where the access-diff comment is posted (default
+	// https://api.github.com). Tests point it at a local server.
+	GitHubAPIBase string
 }
 
 // Server serves the API.
@@ -178,6 +185,8 @@ type Server struct {
 	provSeal  *seal.Sealer // cfg.Sealer, or a per-process key when it is nil
 	// containment is the kill switch (issue #106); never nil.
 	containment *containment.Service
+	// aws holds the AWS evaluator's engines and explanations (aws_eval.go).
+	aws awsRuntime
 	// admin is the admin-change workflow (design §15); never nil.
 	admin *admin.Service
 	// queue is the durable job queue (issue #300); never nil.
@@ -568,22 +577,35 @@ func (s *Server) serveTenant(rt *route, w http.ResponseWriter, r *http.Request, 
 	return out, err
 }
 
+// multiSegmentVar is the one path variable that may span several segments: an
+// ARN, which can hold slashes ("role/Name", an S3 object key). A pattern has at
+// most one; it takes the segments the literal ones around it leave over.
+const multiSegmentVar = "{arn}"
+
 func (rt *route) match(path string) (map[string]string, bool) {
 	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
-	if len(parts) != len(rt.segs) {
+	extra := len(parts) - len(rt.segs) // segments beyond one per pattern segment
+	if extra != 0 && (extra < 0 || !slices.Contains(rt.segs, multiSegmentVar)) {
 		return nil, false
 	}
 	var vars map[string]string
-	for i, seg := range rt.segs {
+	pi := 0
+	for _, seg := range rt.segs {
+		n := 1
+		if seg == multiSegmentVar {
+			n += extra
+		}
+		got := parts[pi : pi+n]
+		pi += n
 		if strings.HasPrefix(seg, "{") {
-			if parts[i] == "" {
+			if slices.Contains(got, "") {
 				return nil, false
 			}
 			if vars == nil {
 				vars = map[string]string{}
 			}
-			vars[seg[1:len(seg)-1]] = parts[i]
-		} else if seg != parts[i] {
+			vars[seg[1:len(seg)-1]] = strings.Join(got, "/")
+		} else if seg != got[0] {
 			return nil, false
 		}
 	}

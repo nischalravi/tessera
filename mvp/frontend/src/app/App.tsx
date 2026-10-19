@@ -48,6 +48,7 @@ const RolePage = named(roles, "RolePage");
 const EntitlementPage = named(objects, "EntitlementPage");
 const AppPage = named(objects, "AppPage");
 const OrgPage = named(objects, "OrgPage");
+const AwsAccess = named(() => import("../features/insights/AwsAccess"), "AwsAccess");
 const RiskOverview = named(() => import("../features/insights/RiskOverview"), "RiskOverview");
 // cytoscape is the heaviest dependency; it only loads with the graph
 const GraphExplorer = lazy(() => import("../features/insights/GraphExplorer"));
@@ -152,6 +153,7 @@ export default function App() {
                     <Route path="/insights/graph" element={<GraphExplorer />} />
                     <Route path="/insights/least-privilege" element={<LeastPrivilege />} />
                     <Route path="/insights/sod" element={<SodConflicts />} />
+                    <Route path="/insights/aws" element={<AwsAccess />} />
                     <Route path="/insights/deployment-health" element={<DeploymentHealth />} />
                     <Route path="/insights/deployment" element={<Moved to="/insights/deployment-health" />} />
 

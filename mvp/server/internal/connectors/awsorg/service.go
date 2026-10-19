@@ -40,6 +40,10 @@ type Service struct {
 	CatalogVersion string
 	// Clock defaults to time.Now.
 	Clock func() time.Time
+	// Eval, when set, makes Collect evaluate the snapshot it stored and bring
+	// the MVP's graph up to date with the result (Materialize, PR-11). Nil:
+	// a collection only stores the snapshot.
+	Eval *EvalConfig
 }
 
 func (s *Service) now() time.Time {
@@ -180,6 +184,13 @@ func (s *Service) Collect(ctx context.Context, db *store.DB, tenant tenancy.ID, 
 	})
 	if err != nil {
 		return nil, err
+	}
+	if s.Eval != nil {
+		// The snapshot is stored either way; a failed evaluation is reported
+		// with it, so the caller keeps the snapshot and sees the error.
+		if _, err := s.Materialize(ctx, db, tenant, hdr.ID, actor); err != nil {
+			return hdr, fmt.Errorf("awsorg: snapshot %s is stored but was not evaluated: %w", hdr.ID, err)
+		}
 	}
 	return hdr, nil
 }

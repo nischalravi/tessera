@@ -301,5 +301,104 @@ func awsCovered() map[string]bool {
 		"AddAWSOrgNode": true, "AWSOrgNodes": true, "AddAWSEntity": true, "AWSEntities": true,
 		"AddAWSFinding": true, "AWSFindings": true, "AddAWSTrustEdge": true, "AWSTrustEdges": true,
 		"AddAWSEffective": true, "ListAWSEffectiveByPrincipal": true, "PutAWSExplanation": true, "AWSExplanation": true,
+		"UpsertEvaluatorEdge": true, "AWSPRCommentSettings": true, "PutAWSPRCommentSettings": true,
+	}
+}
+
+// The MVP integration tables (issue #30, PR-11; schema/0321): the evaluator's
+// fields of a grant edge and the pull request comment settings are a tenant's
+// own.
+func TestIsolation_AWSIntegrationTables(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	later := storetest.Now.Add(time.Hour)
+	ev := func(slug string) store.EdgeEvaluation {
+		return store.EdgeEvaluation{ExplanationID: "x-" + slug, Outcome: "conditional", Fidelity: "approximate"}
+	}
+	for _, tn := range []storetest.Tenant{f.A, f.B} {
+		err := f.DB.InTenant(context.Background(), tn.ID, func(c *store.TenantTx) error {
+			ok, err := c.UpsertEvaluatorEdge("account:900", "perm:901", "grants", storetest.Now, ev(tn.Slug))
+			if err != nil || !ok {
+				t.Fatalf("%s: UpsertEvaluatorEdge = %v, %v", tn.Slug, ok, err)
+			}
+			return c.PutAWSPRCommentSettings(&store.AWSPRCommentSettings{Enabled: true, Repo: "o/" + tn.Slug,
+				TokenEnc: []byte("sealed-" + tn.Slug), UpdatedBy: "test"}, later)
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tn := range []storetest.Tenant{f.A, f.B} {
+		if err := f.DB.ReadTenant(context.Background(), tn.ID, func(c *store.TenantTx) error {
+			e, err := c.EdgeBetween("account:900", "perm:901")
+			if err != nil || e.Source != store.EdgeSourceEvaluator || e.ExplanationID != "x-"+tn.Slug || e.Outcome != "conditional" || e.Fidelity != "approximate" {
+				t.Errorf("%s: EdgeBetween = %+v, %v; want its own evaluation", tn.Slug, e, err)
+			}
+			s, err := c.AWSPRCommentSettings()
+			if err != nil || !s.Enabled || s.Repo != "o/"+tn.Slug || string(s.TokenEnc) != "sealed-"+tn.Slug {
+				t.Errorf("%s: AWSPRCommentSettings = %+v, %v; want its own", tn.Slug, s, err)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// B updating its evaluation or settings leaves A's untouched
+	inB(t, f, func(c *store.TenantTx) error {
+		if _, err := c.UpsertEvaluatorEdge("account:900", "perm:901", "grants", later,
+			store.EdgeEvaluation{ExplanationID: "b-new", Outcome: "allow", Fidelity: "exact"}); err != nil {
+			return err
+		}
+		return c.PutAWSPRCommentSettings(&store.AWSPRCommentSettings{Repo: "o/changed", UpdatedBy: "test"}, later)
+	})
+	if err := f.DB.ReadTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
+		e, err := c.EdgeBetween("account:900", "perm:901")
+		if err != nil || e.ExplanationID != "x-"+f.A.Slug || e.Outcome != "conditional" {
+			t.Errorf("A's edge = %+v, %v; B's write changed it", e, err)
+		}
+		if s, err := c.AWSPRCommentSettings(); err != nil || !s.Enabled || s.Repo != "o/"+f.A.Slug {
+			t.Errorf("A's settings = %+v, %v; B's write changed them", s, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// deleting an edge deletes its evaluation, and a manual edge is never taken over
+	inA(t, f, func(c *store.TenantTx) error {
+		e, err := c.EdgeBetween("account:900", "perm:901")
+		if err != nil {
+			return err
+		}
+		if err := c.DeleteEdge(e.ID); err != nil {
+			return err
+		}
+		if _, err := c.InsertEdge(&store.GrantEdge{Src: "account:900", Dst: "perm:901", Relation: "direct_grant", Source: "manual", CreatedAt: storetest.Now}); err != nil {
+			return err
+		}
+		ok, err := c.UpsertEvaluatorEdge("account:900", "perm:901", "grants", later, ev("A"))
+		if err != nil || ok {
+			t.Errorf("UpsertEvaluatorEdge over a manual edge = %v, %v; want false", ok, err)
+		}
+		m, err := c.EdgeBetween("account:900", "perm:901")
+		if err != nil || m.Source != "manual" || m.Relation != "direct_grant" || m.ExplanationID != "" {
+			t.Errorf("manual edge = %+v, %v; want it untouched", m, err)
+		}
+		return nil
+	})
+}
+
+// A tenant that never set the pull request comment settings has it off, and
+// nothing is stored for it.
+func TestAWSPRCommentSettingsDefaultOff(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	if err := f.DB.ReadTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
+		s, err := c.AWSPRCommentSettings()
+		if err != nil || s.Enabled || s.Repo != "" || len(s.TokenEnc) != 0 {
+			t.Errorf("default settings = %+v, %v; want off", s, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }

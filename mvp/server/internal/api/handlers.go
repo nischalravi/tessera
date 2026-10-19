@@ -1039,6 +1039,11 @@ func (s *Server) revokeEdge(r *http.Request, edgeID int64, dryRun bool) (*revoke
 	if e == nil {
 		return nil, errStatus(http.StatusNotFound, "grant not found")
 	}
+	if !dryRun && (e.Outcome == graph.OutcomeConditional || e.Fidelity == graph.FidelityApprox || e.Fidelity == graph.FidelityUnsupp) {
+		// least privilege never acts on a grant the evaluator found conditional,
+		// approximate or unsupported (design §11.5, spec R2)
+		return nil, errStatus(http.StatusConflict, "this grant rests on a conditional or approximate evaluation; review it by hand")
+	}
 	res, err := simulate.Run(c, simulate.Request{RemoveEdgeIDs: []int64{edgeID}},
 		simulate.Inputs{Now: a.now, Policies: a.policies, Usage: a.u, Base: a.g})
 	if err != nil {

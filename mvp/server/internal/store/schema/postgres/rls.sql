@@ -955,6 +955,20 @@ CREATE POLICY tenant_isolation ON aws_explanations
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE aws_edge_evaluations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE aws_edge_evaluations FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON aws_edge_evaluations;
+CREATE POLICY tenant_isolation ON aws_edge_evaluations
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE aws_pr_comment_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE aws_pr_comment_settings FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON aws_pr_comment_settings;
+CREATE POLICY tenant_isolation ON aws_pr_comment_settings
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 ALTER TABLE connection_activation_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE connection_activation_requests FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON connection_activation_requests;
