@@ -9,6 +9,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ApprovalItem, Campaign, ConnectionHealthRow, DeploymentHealth, HrisEvent, JitRequest, RemovalRequest, ReviewItem, api, removalsPath, useApi } from "../../api";
 import { Persona, usePersona } from "../../app/persona";
+import { useSession } from "../../app/auth";
 
 export type InboxKind = "approval" | "review" | "task" | "connection";
 
@@ -56,13 +57,14 @@ function assigned(i: InboxItem, persona: Persona, meId: number | undefined): boo
 
 export function useInbox(scope: "mine" | "all" = "mine") {
   const { persona, me } = usePersona();
+  const { can } = useSession();
   const { data: jit, error: jitErr } = useApi<JitRequest[]>("/jit/requests");
   const { data: hris, error: hrisErr } = useApi<HrisEvent[]>("/hris/events");
   const campaigns = useOpenCampaigns();
   const { data: approvals, error: apprErr } = useApi<ApprovalItem[]>("/approvals/inbox");
   const { data: removalReqs, error: removalErr } = useApi<RemovalRequest[]>(removalsPath("approvals"));
   // Degraded connections become tasks (§7.5). A failure here must not empty the inbox.
-  const { data: health } = useApi<DeploymentHealth>(persona === "admin" ? "/insights/deployment-health" : null);
+  const { data: health } = useApi<DeploymentHealth>(persona === "admin" && can("connections.read") ? "/insights/deployment-health" : null);
 
   const all = useMemo<InboxItem[] | null>(() => {
     if (!jit || !hris || !campaigns || !approvals || !removalReqs) return null;
