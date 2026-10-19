@@ -37,7 +37,7 @@ type rig struct {
 
 func httpClient(t testing.TB) *http.Client {
 	t.Helper()
-	hc, err := safehttp.New(safehttp.Options{Env: config.Dev, AllowLoopback: true})
+	hc, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Dev, AllowLoopback: true})
 	if err != nil {
 		t.Fatal(err)
 	}

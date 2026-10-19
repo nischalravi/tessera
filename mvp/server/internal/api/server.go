@@ -42,6 +42,8 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/reviews"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/siem"
+	"github.com/nischalravi/tessera/mvp/server/internal/sod"
+	"github.com/nischalravi/tessera/mvp/server/internal/ssf"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
@@ -140,6 +142,10 @@ type Config struct {
 	// grants). Nil: a service with no outbound client, so every containment
 	// step is a manual task.
 	Containment *containment.Service
+	// SSF is the Shared Signals receiver (issue #114): push endpoint, stream
+	// management, polling. Nil: a service with no outbound client and no key,
+	// which refuses to hold secrets, so no stream can be configured.
+	SSF *ssf.Service
 	// Health answers /readyz and the admin platform-health summary. Nil: a
 	// checker over Store and Sealer with the default loop-lag threshold.
 	Health *health.Checker
@@ -166,6 +172,8 @@ type Server struct {
 	provSeal  *seal.Sealer // cfg.Sealer, or a per-process key when it is nil
 	// containment is the kill switch (issue #106); never nil.
 	containment *containment.Service
+	// ssf is the Shared Signals receiver (issue #114); never nil.
+	ssf *ssf.Service
 	// admin is the admin-change workflow (design §15); never nil.
 	admin *admin.Service
 }
@@ -215,7 +223,16 @@ func New(cfg Config) *Server {
 		}
 		provSeal = sealer
 	}
-	s := &Server{cfg: cfg, containment: cfg.Containment, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
+	if cfg.Containment.DB == nil {
+		cfg.Containment.DB = cfg.Store // the lease that serializes edits of the AWS Deny policy
+	}
+	if cfg.SSF == nil {
+		cfg.SSF = &ssf.Service{Containment: cfg.Containment}
+	}
+	if cfg.SSF.Clock == nil {
+		cfg.SSF.Clock = cfg.Clock
+	}
+	s := &Server{cfg: cfg, ssf: cfg.SSF, containment: cfg.Containment, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
 		limits: newLimiters(cfg.RateLimits), provSeal: provSeal}
 	s.prov = &provision.Engine{DB: cfg.Store, Sealer: provSeal, HTTP: cfg.Outbound,
 		Clock: func() time.Time { return s.clock() }, Log: cfg.Logger.With("component", "provisioning")}
@@ -249,11 +266,13 @@ func New(cfg Config) *Server {
 	s.registerActivityRoutes()
 	s.registerRoleRoutes()
 	s.registerAbacRoutes()
+	s.registerSodRoutes()
 	s.registerLifecycleRoutes()
 	s.registerGuestRoutes()
 	s.registerNotificationRoutes()
 	s.registerEmailRoutes()
 	s.registerContainmentRoutes()
+	s.registerSSFRoutes()
 	s.registerGroupsFolderRoutes()
 	s.registerReadinessRoutes()
 	s.registerJobRoutes()
@@ -338,6 +357,9 @@ func (s *Server) RunReviewScheduler(ctx context.Context, interval time.Duration)
 			s.log.Error("review scheduler: policies", "err", err)
 		} else if err := reviews.TickAll(ctx, s.store, s.clock(), pols); err != nil && ctx.Err() == nil {
 			s.log.Error("review scheduler failed", "err", err)
+		}
+		if err := s.ssf.PollAll(audit.WithSystemActor(ctx, "ssf.poller"), s.store); err != nil && ctx.Err() == nil {
+			s.log.Error("shared signals poll failed", "err", err)
 		}
 		select {
 		case <-ctx.Done():
@@ -441,7 +463,27 @@ func (s *Server) sweepTenant(ctx context.Context, t tenancy.ID) error {
 	return nil
 }
 
+// policies are the policy files; see effectivePolicies for what is evaluated.
 func (s *Server) policies() ([]*policy.Policy, error) { return s.cfg.Policies.Load() }
+
+// effectivePolicies is what the tenant's analysis evaluates: the policy files
+// other than separation of duties, plus one policy per SoD risk of its enabled
+// rulesets (or of its legacy YAML SoD policies while it has no rulesets).
+func (s *Server) effectivePolicies(tx *store.TenantTx) ([]*policy.Policy, error) {
+	files, err := s.policies()
+	if err != nil {
+		return nil, err
+	}
+	legacy, err := policy.LegacyBundle(files, false)
+	if err != nil {
+		return nil, err
+	}
+	risks, err := sod.Load(tx, legacy)
+	if err != nil {
+		return nil, err
+	}
+	return policy.Effective(files, risks), nil
+}
 
 // ---------------------------------------------------------------- routing
 

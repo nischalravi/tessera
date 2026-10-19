@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// Shared Signals receiver (schema/0207_ssf.sql). Secrets are sealed by
+// Shared Signals receiver (schema/0353_ssf.sql). Secrets are sealed by
 // internal/ssf; the store only holds the sealed bytes.
 
 // SSF transmitter statuses and delivery methods.

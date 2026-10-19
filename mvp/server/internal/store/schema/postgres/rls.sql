@@ -676,6 +676,41 @@ CREATE POLICY tenant_isolation ON config_imports
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE sod_functions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sod_functions FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON sod_functions;
+CREATE POLICY tenant_isolation ON sod_functions
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE sod_rulesets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sod_rulesets FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON sod_rulesets;
+CREATE POLICY tenant_isolation ON sod_rulesets
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE sod_risks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sod_risks FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON sod_risks;
+CREATE POLICY tenant_isolation ON sod_risks
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE sod_risk_functions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sod_risk_functions FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON sod_risk_functions;
+CREATE POLICY tenant_isolation ON sod_risk_functions
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE sod_versions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sod_versions FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON sod_versions;
+CREATE POLICY tenant_isolation ON sod_versions
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 ALTER TABLE identity_disables ENABLE ROW LEVEL SECURITY;
 ALTER TABLE identity_disables FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON identity_disables;
@@ -764,5 +799,33 @@ ALTER TABLE siem_dead_letters ENABLE ROW LEVEL SECURITY;
 ALTER TABLE siem_dead_letters FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON siem_dead_letters;
 CREATE POLICY tenant_isolation ON siem_dead_letters
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE ssf_transmitters ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ssf_transmitters FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON ssf_transmitters;
+CREATE POLICY tenant_isolation ON ssf_transmitters
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE ssf_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ssf_events FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON ssf_events;
+CREATE POLICY tenant_isolation ON ssf_events
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE containment_policy_leases ENABLE ROW LEVEL SECURITY;
+ALTER TABLE containment_policy_leases FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON containment_policy_leases;
+CREATE POLICY tenant_isolation ON containment_policy_leases
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE containment_policy_denials ENABLE ROW LEVEL SECURITY;
+ALTER TABLE containment_policy_denials FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON containment_policy_denials;
+CREATE POLICY tenant_isolation ON containment_policy_denials
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));

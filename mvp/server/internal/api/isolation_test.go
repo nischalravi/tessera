@@ -244,6 +244,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if strings.HasPrefix(rt.Pattern, "/api/roles/{role_id}") || strings.HasPrefix(rt.Pattern, "/api/role-requests/{request_id}") {
 			continue // TestRolesAPI_CrossTenant (UUIDs, not fixture ids)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/sod/") {
+			continue // TestSodAPI_CrossTenant (UUIDs, not fixture ids)
+		}
 		if strings.HasPrefix(rt.Pattern, "/api/abac/policies/{policy_id}") || rt.Pattern == "/api/catalog/items/{group_id}/policy" {
 			continue // TestAbacAPI_CrossTenant (UUIDs, not fixture ids)
 		}
@@ -268,6 +271,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		}
 		if rt.Pattern == "/api/containment-retries/{retry_id}/retry-now" {
 			continue // TestContainmentRetriesAPI (a UUID, not a fixture id)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/ssf/transmitters/{id}") || strings.HasPrefix(rt.Pattern, "/public/t/") {
+			continue // TestSSFAPI_CrossTenant (UUIDs, not fixture ids)
 		}
 		if strings.HasPrefix(rt.Pattern, "/api/groups/") {
 			continue // TestGroupsTenantIsolation (UUIDs, not fixture ids)
@@ -368,6 +374,7 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		"/api/siem/sinks/{sink_id}/dead-letters":     seedSiemSink(t, f.DB, f.B.ID, "b"),
 		"/api/alerts/{alert_id}":                     seedAlert(t, f.DB, f.B.ID, "b"),
 		"/api/identities/{identity_id}/disables":     fmt.Sprint(b["alice"]),
+		"/api/ssf/transmitters/{id}":                 ssfIDs[f.B.Slug],
 		"/api/orgs/{org_id}":                         orgs.RootID,
 	}
 	checked := 0
@@ -384,6 +391,9 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		}
 		if strings.HasPrefix(path, "/api/groups/") && strings.Contains(path, "{") {
 			continue // TestGroupsTenantIsolation (UUIDs, not fixture ids)
+		}
+		if strings.HasPrefix(path, "/api/sod/") && strings.Contains(path, "{") {
+			continue // TestSodAPI_CrossTenant (UUIDs, not fixture ids)
 		}
 		if path == "/api/request-drafts/{draft_id}" {
 			continue // TestRequestDraftsAPI (a UUID, private to its user)

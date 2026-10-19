@@ -120,6 +120,15 @@ func (s *Server) containIdentity(_ http.ResponseWriter, r *http.Request, p *para
 	return rep, nil
 }
 
+// revokeLocalSessions ends the identity's Tessera sessions (and audits it) in
+// one write transaction: the part of containment that needs no provider.
+func (s *Server) revokeLocalSessions(ctx context.Context, p *params, by string, identityID int64, trigger string) error {
+	return p.scope.Write(ctx, func(c *store.TenantTx) error {
+		_, err := containment.RevokeLocal(c, s.clock(), by, identityID, trigger)
+		return err
+	})
+}
+
 func checkReason(reason string) error {
 	if n := len(strings.TrimSpace(reason)); n < 10 || n > 500 {
 		return badRequest("invalid_reason", "reason is required: 10 to 500 characters")
@@ -247,6 +256,35 @@ func (s *Server) enableIdentity(_ http.ResponseWriter, r *http.Request, p *param
 		return nil, err
 	}
 	c := store.TxFrom(r.Context())
+	if _, err := c.Identity(id); errors.Is(err, store.ErrNotFound) {
+		return nil, errStatus(http.StatusNotFound, "identity not found")
+	} else if err != nil {
+		return nil, err
+	}
+	var me *store.PlatformUser
+	if pr := principal(r); pr != nil && pr.UserID != nil {
+		u, err := c.PlatformUser(*pr.UserID)
+		if err != nil {
+			return nil, err
+		}
+		me = u
+	}
+	refusal, err := containment.EnableRefusal(c, id, me, actor(r))
+	if err != nil {
+		return nil, err
+	}
+	if refusal != "" {
+		// nothing changed; the refusal itself is evidence of the control
+		if err := c.Audit(s.clock(), actor(r), "identity.enable.refused", ojson.Object{{Key: "identity_id", Value: id},
+			{Key: "reason", Value: refusal}}); err != nil {
+			return nil, err
+		}
+		msg := "You cannot enable an identity linked to your own Tessera user; another admin must do it."
+		if refusal == containment.RefuseFourEyes {
+			msg = "This identity is linked to a Tessera user, so a second admin, not the one who disabled it, must enable it."
+		}
+		return statusBody{http.StatusForbidden, ojson.Object{{Key: "error", Value: refusal}, {Key: "detail", Value: msg}}}, nil
+	}
 	res, err := containment.Enable(c, id, actor(r), strings.TrimSpace(b.Reason), s.clock())
 	switch {
 	case errors.Is(err, store.ErrNotFound):
@@ -358,13 +396,13 @@ func (s *Server) putContainmentCredential(r *http.Request, p *params) (int, any,
 // response says containment is incomplete (containment.status "retrying").
 func (s *Server) executeLeaver(r *http.Request, p *params, id int64) (any, error) {
 	ctx := r.Context()
-	pols, err := s.policies()
-	if err != nil {
-		return nil, err
-	}
 	var job *containment.Job
 	var leaverID *int64
-	err = p.scope.Read(ctx, func(c *store.TenantTx) error {
+	err := p.scope.Read(ctx, func(c *store.TenantTx) error {
+		pols, err := s.effectivePolicies(c)
+		if err != nil {
+			return err
+		}
 		ev, err := c.HrisEvent(id)
 		if err != nil || ev.Type != "leaver" || ev.Status == "executed" || ev.IdentityID == nil {
 			return nil // ExecuteEvent below answers as it always did
@@ -400,7 +438,10 @@ func (s *Server) executeLeaver(r *http.Request, p *params, id int64) (any, error
 	var plan jml.Plan
 	var refusal any
 	err = p.scope.Write(ctx, func(c *store.TenantTx) error {
-		var err error
+		pols, err := s.effectivePolicies(c)
+		if err != nil {
+			return err
+		}
 		plan, err = jml.ExecuteEvent(c, s.clock(), id, principal(r).User(), pols)
 		var ex *jml.ExistsError
 		if errors.As(err, &ex) {

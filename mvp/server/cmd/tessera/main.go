@@ -91,6 +91,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/seed"
 	"github.com/nischalravi/tessera/mvp/server/internal/siem"
+	"github.com/nischalravi/tessera/mvp/server/internal/ssf"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 	"github.com/nischalravi/tessera/mvp/server/policies"
@@ -415,10 +416,12 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	}
 	siemSvc := &siem.Service{DB: st, Sealer: sealer, HTTP: outbound, Clock: clock, Log: logger,
 		Dev: cfg.Env == config.Dev && cfg.OutboundAllowLoopback}
+	containmentSvc := &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock, DB: st}
 	srv := api.New(api.Config{Health: checker, Store: st, Clock: clock, Policies: loader, Logger: logger,
 		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound,
 		Outbound: outbound, FakeTargetURL: fakeURL,
-		Containment:    &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock},
+		Containment:    containmentSvc,
+		SSF:            &ssf.Service{HTTP: outbound, Sealer: sealer, Clock: clock, Containment: containmentSvc},
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
 		HSTS: cfg.IsProd(), Env: cfg.Env, Identifiers: identifiers.NewKeyer(sealer), EmailMode: cfg.Mail.Mode, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, Readiness: rsvc, AuditAnchor: anchorURL,
 		Siem: siemSvc, Alerts: alertSvc})

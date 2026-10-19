@@ -1502,6 +1502,91 @@ export interface ContainmentRetry {
 export const retryContainmentNow = (retryId: string) =>
   api<{ retry: ContainmentRetry }>(`/containment-retries/${encodeURIComponent(retryId)}/retry-now`, {});
 
+// ------------------------------------------------ shared signals receiver (issue #114)
+export type SsfStatus = "enabled" | "paused" | "disabled";
+export type SsfEventStatus = "received" | "matched" | "actioned" | "no_action" | "unmatched" | "ignored" | "failed";
+
+/** A transmitter (an SSF stream). It never carries a secret: `secret_set` says one is stored. */
+export interface SsfTransmitter {
+  id: string;
+  name: string;
+  issuer: string;
+  audience: string;
+  jwks_url: string;
+  inline_jwks: boolean;
+  delivery: "push" | "poll";
+  poll_url: string;
+  verification_url: string;
+  subject_system: string;
+  connection_id: string | null;
+  status: SsfStatus;
+  secret_set: boolean;
+  api_token_set: boolean;
+  /** Push streams: the path the transmitter delivers to (on this server's origin). */
+  receiver_path?: string;
+  last_event_at: string | null;
+  last_error: string;
+  last_error_at: string | null;
+  last_polled_at: string | null;
+  verification_pending: boolean;
+  verified_at: string | null;
+  pending_acks: number;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** One received event and what became of it. Latencies are in milliseconds. */
+export interface SsfEvent {
+  id: string;
+  transmitter_id: string;
+  jti: string;
+  via: "push" | "poll";
+  event_type: string;
+  /** Short name: session-revoked, credential-change, account-disabled, verification or unknown. */
+  event: string;
+  subject_format: string;
+  subject: string;
+  identity_id: number | null;
+  status: SsfEventStatus;
+  outcome: string;
+  steps: number;
+  steps_failed: number;
+  received_at: string;
+  iat_at: string;
+  actioned_at: string | null;
+  /** Receipt to the last action done. */
+  latency_ms: number | null;
+  /** The SET's iat to the last action done. */
+  iat_latency_ms: number | null;
+}
+
+export interface SsfInput {
+  name: string;
+  issuer: string;
+  audience: string;
+  delivery: "push" | "poll";
+  subject_system: string;
+  status?: SsfStatus;
+  jwks_url?: string;
+  /** Inline public keys: a JWKS document as a string. */
+  jwks?: unknown;
+  poll_url?: string;
+  verification_url?: string;
+  /** Push: the secret the transmitter presents (blank: generate). Poll: the token Tessera presents. */
+  secret?: string;
+  rotate_secret?: boolean;
+  api_token?: string;
+  discover?: boolean;
+}
+/** `receiver_secret` is present once, when Tessera generated the secret of a push stream. */
+export interface SsfSaved { transmitter: SsfTransmitter; receiver_secret?: string }
+
+export const createSsfTransmitter = (input: SsfInput) => api<SsfSaved>("/ssf/transmitters", input);
+export const updateSsfTransmitter = (id: string, input: SsfInput) => api<SsfSaved>(`/ssf/transmitters/${encodeURIComponent(id)}`, input, "PUT");
+export const deleteSsfTransmitter = (id: string) => api<{ deleted: boolean }>(`/ssf/transmitters/${encodeURIComponent(id)}`, undefined, "DELETE");
+export const verifySsfTransmitter = (id: string) => api<{ requested: boolean }>(`/ssf/transmitters/${encodeURIComponent(id)}/verify`, {});
+
 // ---------------------------------------------------------------- attribute policies (issue #162)
 
 /** A condition: all/any/not over attribute tests, evaluated deterministically; a missing attribute denies. */
@@ -1559,6 +1644,91 @@ export const abac = {
   bindCatalog: (groupId: number, policyId: string | null) => api<{ catalog_item_id: string; policy_id: string | null }>(`/catalog/items/${groupId}/policy`, { policy_id: policyId }, "PUT"),
 };
 export const abacPaths = { list: "/abac/policies", one: (id: string) => abacPath(id), bindings: "/abac/bindings" };
+
+// ---------------------------------------------------------------- SoD functions, risks, rulesets (issue #298)
+
+export type SodPriority = "critical" | "high" | "medium" | "low";
+export type SodAttribute = "environment" | "tag" | "resource" | "privileged";
+/** Picks entitlements: a system plus a permission id or an action name pattern (`*` wildcard), optionally narrowed by a resource attribute. */
+export interface SodSelector { system?: string; entitlement_id?: number; name_pattern?: string; attribute?: SodAttribute; value?: string }
+export interface SodSubjects { identity_types?: IdentityType[]; statuses?: string[]; condition?: AbacCondition }
+export interface SodPerson { id: number; name: string; type: IdentityType; status: string }
+export interface SodVersion { version: number; snapshot: Record<string, unknown>; note: string | null; actor: string; changed_at: string }
+export interface SodRef { id: string; key: string; name: string }
+export interface SodFunction {
+  id: string; key: string; name: string; description: string; owner: SodPerson | null; selectors: SodSelector[];
+  status: "active" | "retired"; version: number; created_at: string; updated_by: { id: string; display_name: string } | null; updated_at: string;
+  used_by: SodRef[];
+  /** Only on GET /sod/functions/{id} and after a change. */
+  versions?: SodVersion[];
+}
+export interface SodRisk {
+  id: string; key: string; name: string; description: string; priority: SodPriority; business_process: string; owner: SodPerson | null;
+  ruleset: SodRef; functions: SodRef[]; subjects: SodSubjects; status: "active" | "retired"; version: number; created_at: string;
+  updated_by: { id: string; display_name: string } | null; updated_at: string; violations?: number; versions?: SodVersion[];
+}
+export interface SodRuleset {
+  id: string; key: string; name: string; description: string; enabled: boolean; status: "active" | "retired"; version: number;
+  created_at: string; updated_by: { id: string; display_name: string } | null; updated_at: string; risks: number; violations?: number;
+  versions?: SodVersion[];
+}
+export interface SodFunctionList { can_manage: boolean; attributes: SodAttribute[]; functions: SodFunction[] }
+export interface SodRiskList { can_manage: boolean; priorities: SodPriority[]; risks: SodRisk[] }
+export interface SodRulesetList { can_manage: boolean; /** No stored ruleset yet: the policy files are checked. */ legacy: boolean; rulesets: SodRuleset[] }
+export interface SodFunctionSpec { key?: string; name: string; description: string; owner_id: number | null; selectors: SodSelector[]; note?: string }
+export interface SodRiskSpec {
+  key?: string; name: string; description: string; priority: SodPriority; business_process: string; owner_id: number | null;
+  ruleset_id: string; function_ids: string[]; subjects: SodSubjects; note?: string;
+}
+export interface SodRulesetSpec { key?: string; name: string; description: string; enabled: boolean; note?: string }
+export interface SodGrant { perm_key: string; action: string; resource: string; system: string; privileged: boolean; paths: string[] }
+export interface SodViolation {
+  key: string; risk_id: string; risk_key: string; risk_name: string; priority: SodPriority; ruleset: SodRef; business_process: string;
+  identity_id: number; identity_name: string; function1: SodRef; function2: SodRef; entitlement: string; systems: string[];
+  sides: [{ function: SodRef; grants: SodGrant[] }, { function: SodRef; grants: SodGrant[] }];
+  /** open; mitigation statuses arrive with mitigating controls. */
+  status: string; message: string; evidence: string[]; edges: [string, string][];
+}
+export interface SodViolationFilter { risk?: string; priority?: SodPriority; ruleset?: string; system?: string; business_process?: string; identity?: string }
+export interface SodImportResult { dry_run: boolean; ruleset: string; created: string[]; updated: string[]; unchanged: string[]; retired: string[] }
+export interface SodTrigger {
+  risk_id: string; risk_key: string; risk_name: string; priority: SodPriority; business_process: string; ruleset: SodRef;
+  identity_id: number; identity_name: string; function1: SodRef; function2: SodRef; entitlement: string; message: string;
+}
+export interface SodSimulation { checked: number; skipped: { beneficiary_id: number; catalog_item_id: string; reason: string }[]; would_trigger: SodTrigger[]; highest_priority: SodPriority | "" }
+
+const sodPath = (kind: "functions" | "risks" | "rulesets", id: string, rest = "") => `/sod/${kind}/${encodeURIComponent(id)}${rest}`;
+/** Query string of the SoD violations filters (empty values are left out). */
+export function sodViolationQuery(f: SodViolationFilter): string {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(f)) if (v) q.set(k, v);
+  const s = q.toString();
+  return s ? `?${s}` : "";
+}
+export const sod = {
+  createFunction: (spec: SodFunctionSpec) => api<SodFunction>("/sod/functions", spec),
+  updateFunction: (id: string, version: number, spec: SodFunctionSpec) => api<SodFunction>(sodPath("functions", id), { version, ...spec }, "PUT"),
+  retireFunction: (id: string, reason: string) => api<SodFunction>(sodPath("functions", id, "/retire"), { reason }),
+  createRisk: (spec: SodRiskSpec) => api<SodRisk>("/sod/risks", spec),
+  updateRisk: (id: string, version: number, spec: SodRiskSpec) => api<SodRisk>(sodPath("risks", id), { version, ...spec }, "PUT"),
+  retireRisk: (id: string, reason: string) => api<SodRisk>(sodPath("risks", id, "/retire"), { reason }),
+  createRuleset: (spec: SodRulesetSpec) => api<SodRuleset>("/sod/rulesets", spec),
+  updateRuleset: (id: string, version: number, spec: SodRulesetSpec) => api<SodRuleset>(sodPath("rulesets", id), { version, ...spec }, "PUT"),
+  retireRuleset: (id: string, reason: string) => api<SodRuleset>(sodPath("rulesets", id, "/retire"), { reason }),
+  /** The ruleset as a YAML file (access as code). */
+  exportRuleset: (id: string) => api<{ filename: string; version: number; yaml: string }>(sodPath("rulesets", id, "/export")),
+  importRuleset: (yaml: string, opts: { prune?: boolean; dry_run?: boolean } = {}) => api<SodImportResult>("/sod/rulesets/import", { yaml, ...opts }),
+  /** One-time import of the separation_of_duties policy files as a ruleset. */
+  importLegacy: (dryRun = false) => api<SodImportResult>("/sod/import-legacy", { dry_run: dryRun }),
+  /** Which risks would these requested items trigger? Changes nothing; used before an access request is submitted. */
+  simulate: (beneficiaryIds: number[], catalogItemIds: string[], durationHours?: number) =>
+    apiNoResume<SodSimulation>("/sod/simulate", { beneficiary_ids: beneficiaryIds, catalog_item_ids: catalogItemIds, ...(durationHours ? { duration_hours: durationHours } : {}) }),
+};
+export const sodPaths = {
+  functions: "/sod/functions", risks: "/sod/risks", rulesets: "/sod/rulesets",
+  function: (id: string) => sodPath("functions", id), risk: (id: string) => sodPath("risks", id), ruleset: (id: string) => sodPath("rulesets", id),
+  violations: (f: SodViolationFilter = {}) => `/sod/violations${sodViolationQuery(f)}`,
+};
 
 export const simulate = (body: { remove_edge_ids?: number[]; add_edges?: { src: string; dst: string; duration_hours?: number }[]; disable_account_ids?: number[] }) =>
   api<SimResult>("/simulate", { remove_edge_ids: [], add_edges: [], disable_account_ids: [], ...body });
@@ -1968,7 +2138,7 @@ export interface ProvTarget {
   dialect?: "standard" | "entra"; fault?: string; write_back: boolean; has_credential: boolean; credential_version: string | null; updated_at: string;
 }
 
-/** token is write-only: omit it to keep the stored credential. */
+/** token is write-only: omit it to keep the stored credential. A change of kind or origin (scheme, host, port) needs a new token (422 credential_required). */
 export interface ProvTargetInput { kind: ProvTarget["kind"]; base_url: string; dialect?: string; fault?: string; token?: string; write_back: boolean }
 
 export const provisioning = {

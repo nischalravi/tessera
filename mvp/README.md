@@ -251,6 +251,8 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `GET|POST /api/hris/events` (422 for an unknown `identity_id`) · `GET /api/hris/events/{id}/plan` · `POST /api/hris/events/{id}/execute` ·
 `GET /api/jml/leaver-plan/{identity_id}` · `POST /api/identities/{id}/contain` (kill switch, see "Identity containment") · `POST /api/identities/{id}/disable|enable` ·
 `PUT /api/connections/{id}/containment-credential` · `GET /api/accounts[?system=]` ·
+`GET|POST /api/ssf/transmitters` · `GET|PUT|DELETE /api/ssf/transmitters/{id}` · `POST /api/ssf/transmitters/{id}/verify` ·
+`GET /api/ssf/events` · `POST /public/t/{slug}/ssf/{transmitter_id}/events` (SSF push, see "Shared Signals receiver") ·
 `GET|POST /api/siem/sinks` · `PUT /api/siem/sinks/{id}` · `POST /api/siem/sinks/{id}/rewind {seq}` ·
 `POST /api/siem/sinks/{id}/test` · `GET /api/siem/sinks/{id}/dead-letters` ·
 `GET /api/alerts[?status=open|acknowledged|resolved|live&severity=&rule=]` · `GET /api/alerts/summary` · `GET /api/alerts/{id}` ·
@@ -280,6 +282,10 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `POST /api/requests/{id}/approve|deny|cancel|remove {reason}` ·
 `GET|POST /api/abac/policies` · `GET|PUT /api/abac/policies/{id}` · `POST /api/abac/policies/{id}/retire` ·
 `POST /api/abac/simulate` · `GET /api/abac/bindings` · `PUT /api/catalog/items/{group_id}/policy` ·
+`GET|POST /api/sod/functions|risks|rulesets` · `GET|PUT /api/sod/{functions|risks|rulesets}/{id}` ·
+`POST /api/sod/{functions|risks|rulesets}/{id}/retire` · `GET /api/sod/rulesets/{id}/export` ·
+`POST /api/sod/rulesets/import` · `POST /api/sod/import-legacy` · `GET /api/sod/violations` ·
+`POST /api/sod/simulate` ·
 `GET /api/approvals/inbox` · `GET /api/approvals/delegates` · `GET|POST /api/approvals/delegations` ·
 `POST /api/approvals/delegations/{id}/revoke` ·
 `GET /api/correlation/queue` · `GET /api/correlation/decisions` ·
@@ -495,8 +501,8 @@ change in the target system and checks that it happened.
   and the least-privilege revoke. Edges to permissions have no counterpart in a target and stay direct.
 * **Audit.** Each operation writes `provision.enqueued`, `provision.sent` and one of
   `provision.verified`, `provision.mismatch`, `provision.failed`, plus `provision.retried`,
-  `provision.cancelled`; target changes write `provision.target_set` and `provision.target_removed`
-  (never the token). Completions write the event the direct path wrote (`jit.expire`, `review.revoke`,
+  `provision.cancelled`; target changes write `provision.target_set` (with the target's origin and `credential`: `none`, `kept`, `set`, `rotated` or `cleared`, plus `previous_kind`/`previous_origin` when it moved) and `provision.target_removed`
+  (never the token). A stored token never follows a target to another kind or origin (scheme, host, port): such an edit needs a new token or gets 422 `credential_required`; a path-only change on the same origin keeps it. Completions write the event the direct path wrote (`jit.expire`, `review.revoke`,
   `grant.revoke`).
 * **Permissions.** `provisioning.read` (operator, auditor, policy admin, tenant admin) and
   `provisioning.manage` (policy admin, tenant admin: retry, cancel, run). Configuring a target needs
@@ -701,7 +707,7 @@ small JSON language (`internal/abac`): `all` / `any` / `not` over tests
 `{"attr": "identity.department", "op": "eq", "value": "Finance"}`, with ops `eq`, `ne`, `in`,
 `prefix`, `exists`, `gt`, `gte`, `lt`, `lte` (numbers or RFC 3339 times). Attributes are
 `identity.*` (type, status, name, email, department, title, manager_id, has_manager, source,
-tenure_days), `resource.*` (name, risk, and for catalog items system and privileged) and `context.*`
+tenure_days, worker_type), `resource.*` (name, risk, and for catalog items system and privileged) and `context.*`
 (time, hour, weekday in UTC, and `aal` when a signed-in user acts). It is data, never code:
 evaluation is a deterministic walk with limits on depth (8), size (100 parts) and lists (50).
 
@@ -729,8 +735,53 @@ evaluation is a deterministic walk with limits on depth (8), size (100 parts) an
 
 Reading and simulating need `graph.read`; changing a policy needs `roles.manage` with a fresh
 phishing-resistant sign-in, and binding a catalog item needs `catalog.manage` (same step-up).
-Not yet: location, worker type and custom HRIS fields (the identity record does not store them, so
-a test on one is always unknown and denies; they arrive with the HRIS attribute mapping).
+
+`identity.worker_type` (issue #215) is the person's worker type from the lifecycle record (see
+"Contractors, guests and end dates"): `employee`, `contractor`, `intern`, `partner`, `vendor` or
+`guest`, so `{"attr": "identity.worker_type", "op": "in", "value": ["contractor", "vendor"]}` selects
+non-employees. A person with no lifecycle record is an employee; services and AI agents have no
+worker type, so a test on it is unknown for them and denies. An unrecognised value simply matches
+no one. The attribute editor lists it (the list comes from the server). Attributes stored outside
+the identity record are loaded by `abac.Resolver` (`internal/abac/resolver.go`), once per
+transaction and tenant, and every evaluation site (roles, request eligibility, SoD subjects,
+simulation) uses it, so a new one is added in one place and the attribute catalog.
+Not yet: location and custom HRIS fields (the identity record does not store them, so a test on
+one is always unknown and denies; they arrive with the HRIS attribute mapping).
+
+### SoD functions, risks and rulesets
+
+**Protection → Policies & SoD → Functions / Risks / Rulesets** (issue #298), the model behind
+**Insights → SoD conflicts** (`internal/sod`, schema `0300_sod.sql`).
+
+- **Function**: a named, reusable set of entitlements, with an owner. Each selector is a system
+  (blank: any) plus a permission id or an action name pattern (`*` wildcard, `\` escapes), optionally
+  narrowed by one resource attribute (`environment`, `tag`, `resource`, `privileged`): the
+  fine-grained "auth object / field / value" case.
+- **Risk**: name, description, priority (critical to low), business process, owner, and two or more
+  conflicting functions. Optional `subjects` limit who is checked (identity types, statuses, an ABAC
+  condition). A violation is one identity effectively holding at least one entitlement from each of
+  two of the risk's functions, by any path (roles, groups, direct grants); the two must be distinct
+  entitlements. A risk with more than two functions reports each conflicting pair.
+- **Ruleset**: a named group of risks, enabled or disabled per tenant. Functions, risks and rulesets
+  are versioned (`sod_versions`, append-only, with who and why); a ruleset's version holds its whole
+  document, so its history is the history of everything in it. Every change is audited in the same
+  transaction (`sod.function|risk|ruleset.*`). Export gives a YAML file (`schema: tessera.sod/v1`);
+  `POST /api/sod/rulesets/import {yaml, prune, dry_run}` makes the ruleset match a file (by key,
+  everything validated before anything is written; importing the same file changes nothing).
+- **Legacy policy files.** `separation_of_duties` YAML policies are converted to a ruleset "Legacy SoD
+  policies": each side of a conflict is a function, each policy a risk keyed by the policy id, so
+  violation keys, messages and results are unchanged (tests compare them on the tiny world and the
+  seeded larkspur tenant). `tessera seed` imports them; for any other tenant
+  `POST /api/sod/import-legacy` does it once. Until a tenant has a stored ruleset its policy files
+  are checked directly through the same engine.
+- **Detection and simulate.** `GET /api/sod/violations` lists violations per identity, risk and
+  function pair with the paths that grant each side; filters `risk`, `priority`, `ruleset`, `system`,
+  `business_process`, `identity`. `POST /api/sod/simulate {beneficiary_ids, catalog_item_ids,
+  duration_hours}` says which risks a request would trigger; Request access shows it as a warning
+  before submit (advisory; roles in the cart are not simulated yet).
+
+Reading is `graph.read`; changing needs `sod.manage` (policy admin) and a fresh phishing-resistant
+sign-in; simulate needs `requests.create` (and `requests.create_for_others` for other people).
 
 ### Contractors, guests and end dates
 
@@ -982,6 +1033,196 @@ the run failed. Provider calls go through `internal/safehttp`.
 - **Still manual or not covered.** Okta has no API that lists IdP sessions and Google none for
   sessions: those re-reads cover refresh tokens and say so in the step's notes. `rotate_secret`
   still only stamps a timestamp.
+
+### Shared Signals receiver (SSF, CAEP, RISC)
+
+A revocation at one provider should reach the others. Tessera receives OpenID Shared Signals
+Framework events from transmitters such as Okta and runs the kill switch on the subject's other
+linked accounts (design: issue #114, package `server/internal/ssf`, schema `0353_ssf.sql`).
+
+| Event (type URI) | Kill-switch steps on the identity's **other** linked accounts |
+|---|---|
+| CAEP `session-revoked` | `revoke_sessions` |
+| CAEP `credential-change` | `revoke_sessions` and `revoke_grants` |
+| RISC `account-disabled` | `revoke_sessions` and `revoke_grants` (the full contain) |
+| SSF `verification` | recorded; it verifies the transmitter when it carries the state Tessera asked for |
+| anything else | acknowledged, recorded as `ignored` and audited |
+
+"Other" means every account with a live kill-switch connection except those on the transmitter's
+own system (`subject_system`): the transmitter already acted there. Steps run through
+`containment.BuildJob` with trigger `ssf`; a failed step becomes a `containment_retries` task like
+any other (24 hours of retries). Each event row (`ssf_events`) records `received_at`, the subject,
+the matched identity, the outcome, `latency_ms` (receipt to the last action done) and
+`iat_latency_ms` (the SET's `iat` to the last action done).
+
+**Setup.**
+1. As a policy admin (`ssf.configure`, step-up) open Admin → Shared Signals → Add transmitter, or
+   `POST /api/ssf/transmitters`: `name`, `issuer` (the SET's `iss`), `audience` (its `aud`),
+   `delivery` (`push` or `poll`), `subject_system` (where subjects resolve: `okta`, `entra`, ...) or
+   `connection_id`, and the signing keys as `jwks_url` or an inline `jwks` (public keys only).
+   `discover: true` fills a blank JWKS URL and `verification_url` from
+   `<issuer>/.well-known/ssf-configuration` (fetched through `internal/safehttp`; its `issuer` must
+   equal the configured one).
+2. **Push** (RFC 8935). A push stream gets a generated receiver secret, returned once as
+   `receiver_secret` (stored sealed). Configure the transmitter to POST each SET to
+   `https://<tessera>/public/t/<tenant-slug>/ssf/<transmitter-id>/events` with
+   `Authorization: Bearer <secret>` and `Content-Type: application/secevent+jwt`. Answers: `202` when
+   accepted, otherwise `400 {"err": ..., "description": ...}` with `invalid_request`, `invalid_key`,
+   `authentication_failed` or `access_denied` (a paused or disabled stream). An unknown tenant, an
+   unknown stream, a malformed id and a wrong or missing secret all get the same
+   `authentication_failed` answer, so the endpoint reveals nothing about what exists. The secret is
+   compared in constant time. The route is public but rate limited per client address with the
+   anonymous bucket (`TESSERA_TRUSTED_PROXIES` applies), before anything is written. A key endpoint
+   that cannot be reached is a `503`: deliver again later.
+3. **Poll** (RFC 8936). Give `poll_url` and `secret` (the bearer token for that endpoint, sealed).
+   The sweeper loop (30 s) sends `{"ack":[...],"returnImmediately":true,"maxEvents":25,"setErrs":{...}}`
+   and follows `moreAvailable` up to 4 times per sweep. A jti is acknowledged in the **next** request
+   and only after its event row is committed; a SET that fails validation is reported in `setErrs`;
+   a SET that hit an error of ours is neither, so the transmitter delivers it again. Acks and errors
+   wait in the transmitter row until a poll carrying them succeeds.
+4. `POST /api/ssf/transmitters/{id}/verify` asks the transmitter's verification endpoint (with its
+   `api_token`, or the poll token) for a verification event; the stream shows *Verified* when the
+   state comes back.
+
+**Validation** (`ssf.ParseSET`). The JWS must be in compact form and signed with RS256, ES256 or
+PS256 against the transmitter's JWKS (the key named by `kid`; `alg` none, HMAC and every other
+algorithm are refused before any key is tried). `iss` must equal the configured issuer, `aud` must
+contain the configured audience, `iat` is required, at most 2 minutes ahead and at most 24 hours old,
+`exp` is absent or in the future, `nbf` not in the future, `jti` is required, and `events` holds
+exactly one event. A SET is at most 64 KiB. A `jti` is accepted once per transmitter
+(`UNIQUE (tenant_id, transmitter_id, jti)`): a replay is acknowledged, audited as
+`ssf.event_replayed` and not processed again; a delivery that was recorded but never finished is
+resumed. Keys from `jwks_url` are cached for 10 minutes and re-fetched once (at most every 30 s)
+when a SET names an unknown key. `FuzzParseSET` fuzzes the parser.
+
+**Subjects.** `iss_sub` and `opaque` resolve against the account external id, `email` and `account`
+(`acct:` URIs) against the account username or the identity's email (case-insensitive), `complex`
+through its `user` (the session is kept in the event's subject label). The subject comes from the
+event's `subject`, else the SET's `sub_id`, else the legacy `sub` claim. A subject that matches no
+account of `subject_system`, matches an account no identity owns, or matches accounts of several
+identities is recorded as **unmatched** (with the reason), audited as `ssf.event_unmatched` and
+shown in the UI. It is never dropped and never acted on.
+
+**Audit.** `ssf.event_received`, `ssf.event_actioned` (steps, failures, retries queued,
+`latency_ms`, `iat_latency_ms`), `ssf.event_unmatched`, `ssf.event_ignored`, `ssf.event_replayed`,
+`ssf.event_rejected` (the reason, never the token), `ssf.transmitter_created|updated|deleted`,
+`ssf.verification_requested|received`, plus the `containment.*` events of the run. Audit details
+carry no SET, secret or key.
+
+**Routes and permissions.** `GET /api/ssf/transmitters`, `GET /api/ssf/transmitters/{id}` (with its
+recent events), `GET /api/ssf/events[?transmitter_id=&limit=]`: `graph.read`. `POST /api/ssf/transmitters`,
+`PUT|DELETE /api/ssf/transmitters/{id}`, `POST /api/ssf/transmitters/{id}/verify`: `ssf.configure`
+(policy admin) with a fresh phishing-resistant sign-in. A `PUT` keeps a blank secret and blank keys;
+`rotate_secret: true` issues a new push secret. Stream status is `enabled`, `paused` or
+`disabled` (only `enabled` accepts or polls), with `last_event_at`, `last_error` and `last_polled_at`.
+UI: Admin → Shared Signals (transmitters and events, with a side panel each).
+
+#### AWS IAM Identity Center revoker
+
+AWS has no API that ends a workforce user's sessions. `revoke_sessions` for an
+`aws_identity_center` account follows AWS's documented procedure
+([Revoke user access](https://docs.aws.amazon.com/singlesignon/latest/userguide/revoke-user-permissions.html),
+[Prepare to revoke an active IAM role session](https://docs.aws.amazon.com/singlesignon/latest/userguide/prereqs-revoking-user-permissions.html))
+as far as an API reaches. The account's external id is the identity store `UserId`.
+
+1. `identitystore:DescribeUser` (a stale id fails the step).
+2. The Deny policy must be attached (`organizations:ListTargetsForPolicy` returns at least one
+   target) and its statement must be a dedicated deny-all (see the prerequisite below). A policy that
+   is unattached, or whose `identitystore:userId` statement is narrower, fails the step: a user id in
+   a statement that does not deny everything proves nothing, so the step is never reported verified.
+3. The `UserId` goes into the Deny policy (`organizations:DescribePolicy`, then `UpdatePolicy`; a
+   `ConcurrentModificationException` is retried from a fresh read). Edits are serialized per policy:
+   a worker takes a lease on (tenant, policy id) in the database
+   (`containment_policy_leases`, 60 s, released when done), merges the complete desired set (every
+   user id Tessera holds for the policy, pending or active within the last 12 hours, from
+   `containment_policy_denials`, plus what the policy has now), writes it, then re-reads the policy
+   and checks every expected entry is there. A missing entry is added again; if it is still missing
+   after 4 attempts the step fails. A worker that cannot get the lease within 25 s fails the step,
+   which is queued for retry.
+4. The user's permission set assignments are deleted
+   (`sso-admin:ListAccountAssignmentsForPrincipal`, `DeleteAccountAssignment`, then
+   `DescribeAccountAssignmentDeletionStatus` until `SUCCEEDED`), so no new role session can start.
+5. Verify re-reads the attachment, the policy (the `UserId` is in the deny-all statement) and the
+   assignments (none left).
+
+**External writers.** The lease only orders Tessera's own workers; AWS offers no compare-and-set on
+`UpdatePolicy`. If someone edits the Deny policy by hand or from another tool at the same moment, their
+write can replace Tessera's. Tessera notices (the read-back), adds its entries again and fails the
+step rather than report it verified if it cannot. Edit the policy through the console between
+Tessera runs, and keep the single deny-all statement: another statement that names
+`identitystore:userId` makes the policy ambiguous and is refused.
+
+**Tessera's own sessions.** Containment also ends the identity's sessions inside Tessera, whether or
+not the identity has an account on a kill-switch connection: every active session of every platform
+user linked to it (`platform_users.identity_id`, or a sign-in through an IdP connection whose subject
+is the external id of one of the identity's accounts), in a write transaction with a
+`containment.local_sessions_revoked` audit event (users and sessions counted; written when the identity
+has linked platform users, so an identity nobody signs in as adds no event). The SSF receiver,
+`POST /api/identities/{id}/contain` and the leaver execution all do it, before any provider call. A
+revoked session is refused with `401` on its next request. Tessera keeps no refresh tokens or OAuth
+grants of its own, so the session is its only bearer credential.
+
+Manual tasks in the report: delete the AWS access portal session in the console (no API), disable
+the user at the external identity provider and remove group-based access at the source, and remove
+the entry from the Deny policy after 12 hours. **Tessera never removes the Deny entry**: role
+sessions last up to 12 hours, and a job that deletes entries from a policy the customer owns is a
+risk for a 36-byte gain. An SCP holds 5,120 characters (about 100 user ids), so remove old ids from
+time to time; a full policy fails the step with that message (nothing partial: no assignment is
+deleted when the policy could not be updated).
+
+**Prerequisite: create the Deny policy first.** In AWS Organizations create a service control policy
+with this content (the condition key and placeholder are the ones AWS documents), attach it to the
+accounts or organizational units whose Identity Center roles you want to be able to cut off, and
+give Tessera its policy id (`p-...`):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Deny",
+      "Action": ["*"],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "identitystore:userId": ["Add user ID here"]
+        }
+      }
+    }
+  ]
+}
+```
+
+Tessera accepts only this shape: one `Deny` statement, `Action` `"*"` (a string or `["*"]`),
+`Resource` `"*"` (or none), no `NotAction`, `NotResource` or other element, and as its only condition
+`StringEquals` on `identitystore:userId`. A narrower statement (some actions, one resource, a second
+condition such as a source IP) would not end the user's role sessions, so a user id in it is not
+proof, and the step fails with an error that says so. The policy must also be attached to a target.
+
+The placeholder matches no user and stays in the list. Tessera adds user ids next to it. The AWS
+credential is an IAM user (or role session) in the management account that may call
+`organizations:DescribePolicy`, `organizations:ListTargetsForPolicy`, `organizations:UpdatePolicy` on that policy,
+`identitystore:DescribeUser`, `sso:ListAccountAssignmentsForPrincipal`,
+`sso:DeleteAccountAssignment` and `sso:DescribeAccountAssignmentDeletionStatus` (the sso-admin API; check the
+DeleteAccountAssignment reference for anything else AWS requires of the caller, which Tessera cannot verify
+in advance). Store it on the connection (system
+`aws_identity_center`; connections.manage, step-up), sealed like the other provider credentials:
+
+```
+PUT /api/connections/{id}/containment-credential
+{"aws": {"access_key_id": "AKIA...", "secret_access_key": "...", "session_token": "",
+         "region": "us-east-1", "policy_id": "p-0a1b2c3d4e",
+         "identity_store_id": "d-1234567890",
+         "instance_arn": "arn:aws:sso:::instance/ssoins-7223a1b2c3d4e5f6"},
+ "base_url": ""}
+```
+
+`region` is the Identity Center region (Organizations is called in `us-east-1`, the commercial
+partition). `base_url` replaces every AWS endpoint (a VPC endpoint, or a test server). Requests are
+SigV4 signed by `internal/containment/sigv4` (standard library only, tested against vectors of
+AWS's published test suite in `testdata/suite.json`) and sent through `internal/safehttp`, so the
+endpoints must be public https hosts. The fixtures in `internal/containment/testdata/aws.json`
+record every call, including a throttle, a concurrent modification and a full policy.
 
 ### Native groups (folders and groups)
 
@@ -1237,8 +1478,8 @@ the right. Arrow keys move between items.
 | (top) | **Home**, **Inbox** (count) |
 | **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Ownership, Accounts (with *Account matches*), Roles, Organizations (live, read-only, derived from departments) |
 | **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
-| **Protection** | Alerts (alerts, rules, channels), Policies & SoD (violations, policies, what-if simulation), Attribute policies, Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
-| **Settings** | Connections (governed connections and the setup wizard), Admin |
+| **Protection** | Alerts (alerts, rules, channels), Policies & SoD (violations, policies, what-if simulation, SoD functions, risks and rulesets), Attribute policies, Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
+| **Settings** | Connections (governed connections and the setup wizard), Shared Signals (SSF transmitters and received events), Admin |
 
 **Home.** For the admin & security persona: the tenant name and a sync line, then tabs
 (Overview, Monitoring, Deployment health, Recommendations). Overview has the KPI cards
@@ -1278,7 +1519,7 @@ back a step and `Esc` to close. `/` focuses the top-bar search.
 
 | Screen | Calls | Notes |
 |---|---|---|
-| Identity Disable / Enable (identity page, panel, bulk, palette) | `POST /api/identities/{id}/disable`, `.../enable`, `GET .../disables` | `identities.contain` and a fresh phishing-resistant sign-in. Disable runs the kill switch's containment (revoke sessions, tokens, OAuth grants at connected providers), then sets the active accounts and the identity to disabled in one audited transaction (`identity.disable`). A failed provider step is retried and reported. Tessera does not suspend the account inside the provider. Enable (`identity.enable`) sets back only the accounts Disable disabled and that are still disabled. It cannot restore revoked sessions and grants, and says so. No Undo. |
+| Identity Disable / Enable (identity page, panel, bulk, palette) | `POST /api/identities/{id}/disable`, `.../enable`, `GET .../disables` | `identities.contain` and a fresh phishing-resistant sign-in. Disable runs the kill switch's containment (revoke sessions, tokens, OAuth grants at connected providers), then sets the active accounts and the identity to disabled in one audited transaction (`identity.disable`). A failed provider step is retried and reported. Tessera does not suspend the account inside the provider. Any Tessera user linked to the identity is signed out in the same transaction (sessions revoked with reason `identity_disabled`, counted in the event) and refused at sign-in, step-up and on every request while the identity stays disabled. Enable (`identity.enable`) sets back only the accounts Disable disabled and that are still disabled. Enable is refused (403, `identity.enable.refused`) for a user linked to the identity (`self_enable_not_allowed`) and, when the identity is linked to a Tessera user, for the admin who disabled it (`four_eyes_required`: a second admin enables it). It cannot restore revoked sessions and grants, and says so. No Undo. |
 | My access > Request removal | `POST /api/removal-requests`, `GET ?scope=mine\|approvals\|pending\|all`, `.../{id}/approve\|deny\|cancel` | Shows in My requests and the approver's Inbox (the person's manager, a delegate, or `requests.decide`). Approval needs step-up and removes the grant (through `requests.Remove` when an approved request granted it, else a revoked grant with a tombstone). Just-in-time and role-held grants are refused. |
 | Request access drafts | `GET/POST /api/request-drafts`, `GET/PUT/DELETE .../{id}` | Private to the user, at most 50, checked for existence but never against policy. A draft never submits itself. |
 | Directory > Organizations | `GET /api/orgs`, `GET /api/orgs/{org_id}` | Read-only and derived: a root and one organization per department. Owners are the active people at the top of a department's reporting lines who lead others in it. No cost centers (the HR data has none). |

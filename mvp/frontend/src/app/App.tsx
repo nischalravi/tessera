@@ -158,6 +158,7 @@ export default function App() {
                     <Route path="/admin/connections/:id" element={<ConnectionDetail />} />
                     <Route path="/admin/connections/:id/validation/:run" element={<ValidationResults />} />
                     <Route path="/admin/connections/:id/reconciliation/:run" element={<ReconReport />} />
+                    <Route path="/admin/shared-signals" element={<SharedSignals />} />
                     <Route path="/admin/users" element={<AdminUsers />} />
                     <Route path="/admin/authentication" element={<IdpConnections />} />
                     <Route path="/admin/change-requests" element={<ChangeRequests />} />

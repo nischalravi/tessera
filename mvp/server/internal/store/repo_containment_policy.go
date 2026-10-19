@@ -8,7 +8,7 @@ import (
 )
 
 // Containment's local sessions and the shared Deny policy lease
-// (schema/0208_containment_policy.sql).
+// (schema/0354_containment_policy.sql).
 
 const (
 	DenialPending = "pending" // written to the ledger, not yet verified in the policy
