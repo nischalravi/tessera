@@ -135,6 +135,8 @@ var tables = []string{
 	"intake_records", "sponsorships", "sponsorship_events",
 	// identity containment (schema/0205_containment.sql)
 	"containment_credentials", "containment_retries",
+	// SIEM sinks (schema/0210_siem.sql)
+	"siem_sinks", "siem_dead_letters",
 	// alerting (schema/0209_alerts.sql)
 	"alert_rule_settings", "alerts", "alert_channels", "alert_deliveries", "alert_cursors",
 	// identity disable / enable (schema/0310_identity_disables.sql)
