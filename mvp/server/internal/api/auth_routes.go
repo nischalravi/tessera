@@ -52,9 +52,13 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, rt *route) (*
 		Authn: p.AuditAuthn(now)})
 	r = r.WithContext(ctx)
 	if !auth.SafeMethod(r.Method) {
-		if hasBody(r) && !jsonContentType(r) {
+		if hasBody(r) && !jsonContentType(r) && !bodyTypeIs(r, rt.spec.BodyType) {
+			detail := "request bodies must be application/json"
+			if rt.spec.BodyType != "" {
+				detail += " or " + rt.spec.BodyType
+			}
 			writeJSON(w, http.StatusUnsupportedMediaType, ojson.Object{{Key: "error", Value: "unsupported_media_type"},
-				{Key: "detail", Value: "request bodies must be application/json"}})
+				{Key: "detail", Value: detail}})
 			return r, false
 		}
 		if err := auth.CheckCSRF(r, p, s.csrfOrigins()); err != nil {
@@ -76,6 +80,16 @@ func hasBody(r *http.Request) bool { return r.ContentLength != 0 }
 func jsonContentType(r *http.Request) bool {
 	mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	return err == nil && mt == "application/json"
+}
+
+// bodyTypeIs reports whether the body is declared as the route's own media
+// type (never true for a route with none).
+func bodyTypeIs(r *http.Request, want string) bool {
+	if want == "" {
+		return false
+	}
+	mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	return err == nil && mt == want
 }
 
 // principal returns the request's authenticated principal. Every non-public

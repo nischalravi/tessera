@@ -63,6 +63,7 @@ const Reviews = named(() => import("../features/governance/Reviews"), "Reviews")
 const Lifecycle = named(() => import("../features/governance/Lifecycle"), "Lifecycle");
 const Workflows = named(() => import("../features/governance/Workflows"), "Workflows");
 const Admin = named(admin, "Admin");
+const FlatFiles = named(() => import("../features/admin/FlatFiles"), "FlatFiles");
 const ConnectionsList = named(connections, "ConnectionsList");
 const NewConnection = named(connections, "NewConnection");
 const ConnectionDetail = named(connections, "ConnectionDetail");
@@ -173,6 +174,7 @@ export default function App() {
                     <Route path="/admin/connections/:id" element={<ConnectionDetail />} />
                     <Route path="/admin/connections/:id/validation/:run" element={<ValidationResults />} />
                     <Route path="/admin/connections/:id/reconciliation/:run" element={<ReconReport />} />
+                    <Route path="/admin/flat-files" element={<FlatFiles />} />
                     <Route path="/admin/users" element={<AdminUsers />} />
                     <Route path="/admin/authentication" element={<IdpConnections />} />
                     <Route path="/admin/change-requests" element={<ChangeRequests />} />

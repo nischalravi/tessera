@@ -13,6 +13,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/flatfile"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/ingest"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
@@ -1063,6 +1064,9 @@ func (s *Server) revokeEdge(r *http.Request, edgeID int64, dryRun bool) (*revoke
 	}
 	if err := c.Audit(a.now, pr.Display, "grant.revoke", ojson.Object{{Key: "edge_id", Value: e.ID},
 		{Key: "grant", Value: out.Grant.Label}, {Key: "permissions_removed", Value: res.Summary.PermissionsRemoved}}); err != nil {
+		return nil, err
+	}
+	if err := flatfile.GrantRevoked(c, a.now, pr.Display, e.ID, "revoke"); err != nil {
 		return nil, err
 	}
 	if err := c.RevokeEdge(e.ID, a.now, "least-privilege"); err != nil {

@@ -117,6 +117,11 @@ const (
 	PermEmailManage Permission = "email.manage"
 	// kill switch (issue #106)
 	PermIdentitiesContain Permission = "identities.contain"
+	// flat-file import for disconnected apps (issue #105): column mappings,
+	// uploads, and closing a manual fulfilment task by hand
+	PermFlatfileManage     Permission = "flatfile.manage"
+	PermFlatfileUpload     Permission = "flatfile.upload"
+	PermFlatfileCloseTasks Permission = "flatfile.close_tasks"
 	// native groups (issue #44, GR-1): folder and group CRUD. tenant_admin only,
 	// until GR-4 brings the per-object privilege model.
 	PermGroupsAdmin Permission = "groups.admin"
@@ -137,7 +142,7 @@ const (
 var rolePermissions = map[Role][]Permission{
 	RoleViewer: {PermGraphRead, PermRequestsCreate, PermGuestsSponsor},
 	RoleOperator: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
-		PermReviewsDecide, PermHRISSimulateEvent, PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide,
+		PermReviewsDecide, PermHRISSimulateEvent, PermFlatfileUpload, PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide,
 		PermGuestsSponsor, PermGuestsRead, PermJobsRead, PermProvisioningRead, PermAlertsRead, PermAlertsManage, PermOwnershipManage, PermSoDMitigate},
 	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead, PermRequestsCreate, PermEmailRead,
 		PermGuestsSponsor, PermGuestsRead, PermJobsRead, PermProvisioningRead, PermAlertsRead, PermSiemRead},
@@ -146,12 +151,13 @@ var rolePermissions = map[Role][]Permission{
 		PermIdentitiesCorrelate, PermIdentitiesMerge, PermIdentitiesAffiliate,
 		PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide, PermCatalogManage, PermRolesManage, PermLifecycleManage,
 		PermGuestsSponsor, PermGuestsRead, PermSponsorshipsApprove, PermIdentitiesContain,
-		PermJobsRead, PermProvisioningRead, PermProvisioningManage, PermAlertsRead, PermAlertsManage, PermOwnershipManage, PermSoDManage, PermSoDMitigate, PermSoDApprove},
+		PermJobsRead, PermProvisioningRead, PermProvisioningManage, PermAlertsRead, PermAlertsManage, PermOwnershipManage, PermSoDManage, PermSoDMitigate, PermSoDApprove,
+		PermFlatfileUpload, PermFlatfileCloseTasks},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
 		PermConnectionsActivate, PermRequestsCreate, PermEmailRead, PermEmailManage, PermGroupsAdmin,
 		PermJobsRead, PermJobsManage, PermProvisioningRead, PermProvisioningManage, PermConfigTransport,
-		PermAlertsRead, PermAlertsManage, PermAlertsConfigure, PermSiemRead, PermSiemConfigure},
+		PermAlertsRead, PermAlertsManage, PermAlertsConfigure, PermSiemRead, PermSiemConfigure, PermFlatfileManage},
 	RoleBreakGlass: {PermAdminRead, PermBreakGlassRecover},
 }
 
@@ -235,7 +241,7 @@ var scopePermissions = map[Scope][]Permission{
 	ScopeRead: {PermGraphRead, PermConnectionsRead, PermJobsRead, PermProvisioningRead},
 	ScopeWrite: {PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage, PermReviewsDecide,
 		PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
-		PermConnectionsManage, PermConnectionsActivate, PermRolesManage, PermLifecycleManage, PermGroupsAdmin, PermProvisioningManage, PermJobsManage, PermAlertsManage, PermOwnershipManage, PermSoDManage, PermSoDMitigate, PermSoDApprove},
+		PermConnectionsManage, PermConnectionsActivate, PermRolesManage, PermLifecycleManage, PermGroupsAdmin, PermProvisioningManage, PermJobsManage, PermAlertsManage, PermOwnershipManage, PermSoDManage, PermSoDMitigate, PermSoDApprove, PermFlatfileManage, PermFlatfileUpload, PermFlatfileCloseTasks},
 	ScopeAudit: {PermAuditRead, PermAuditVerify, PermAlertsRead, PermSiemRead},
 	ScopeAdmin: {PermEmailRead, PermEmailManage, PermAdminRead, PermAdminChangeReq, PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev,
 		PermBreakGlassRecover, PermConfigTransport, PermAlertsConfigure, PermSiemConfigure},

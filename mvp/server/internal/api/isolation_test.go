@@ -291,6 +291,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/api/auth/sessions/{session_id}" {
 			continue // TestIsolation_SessionCookieScoped (a UUID, not a fixture id)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/flatfile/") {
+			continue // TestFlatfileAPI_CrossTenant (a system name or a UUID, not a fixture id)
+		}
 		if strings.HasPrefix(rt.Pattern, "/api/siem/sinks/") {
 			continue // TestSiemAPI_CrossTenant (UUIDs, not fixture ids)
 		}
@@ -391,6 +394,9 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 	for _, rt := range srv.Routes() {
 		if rt.Method != http.MethodGet || !rt.Tenant {
 			continue
+		}
+		if rt.Pattern == "/api/flatfile/uploads/{upload_id}" {
+			continue // TestFlatfileAPI_CrossTenant (a UUID; the list route below is checked here)
 		}
 		if strings.HasPrefix(rt.Pattern, "/api/admin/") && strings.Contains(rt.Pattern, "{") {
 			continue // TestAdminAPI_CrossTenant (UUIDs, not fixture ids)
