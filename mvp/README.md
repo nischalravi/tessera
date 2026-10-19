@@ -102,6 +102,7 @@ server/
     seal/               AES-256-GCM sealing under the KEK (AAD-bound), random secrets, SHA-256 helpers
     keys/               per-tenant ES256 signing keys and the platform Ed25519 key: rotation, JWKS
     safehttp/           SSRF-guarded outbound HTTP client (https only, address checks after DNS)
+    connectors/scim/    read-only live prober for generic SCIM 2.0 applications (readiness DR-18)
     ratelimit/          keyed token-bucket limiter with a bounded key set
     ojson/, timeutil/   ordered JSON + Python float repr; CPython-compatible time arithmetic
     testkit/            shared test fixtures (tiny world through a real Connector, seeded demo DB; each is seeded once per test binary and handed out as a private copy per test)
@@ -162,6 +163,21 @@ Okta (demo) connection for the `larkspur` tenant only (`TESSERA_READINESS_DEMO=o
 tenant-scoped like every other table; Admin → Connections → New
 connection → Active Directory (demo) walks the rest. Design: `docs/design/deployment-readiness.md`.
 The routes are documented at `/api/readiness/openapi.json`.
+
+**Generic SCIM live checks (DR-18).** A non-demo `scim_app` connection runs its live checks
+against the real application (`server/internal/connectors/scim`, results not labelled Simulated,
+so they can satisfy the gate). The prober is GET only and every request goes through
+`internal/safehttp`. It reads `/ServiceProviderConfig`, `/ResourceTypes` and `/Schemas`
+(`scim_discovery`); walks `startIndex`/`count` and compares `totalResults` with what the pages
+returned (`paging`); compares each group's members on the list call, on `GET /Groups/{id}` and by
+reverse lookup through users' `groups` (`members_complete`); and records 429s, `Retry-After` and
+retries (`rate_headroom`). Bounds: 10 pages, 500 objects, 120 requests, 2 retries per request and
+no wait longer than 3 s per 429 (a longer `Retry-After` aborts the run as rate limited). The
+bearer token is the connection's sealed credential (`connection_secrets`, opened with the KEK like
+the LDAP bind password); without one the live checks report an error instead of running
+unauthenticated. The client is the shared outbound one, with the connection's configured port
+allowed (`safehttp.WithConfiguredPorts`). Tests use an in-process SCIM server
+with misbehaviour switches (`internal/connectors/scim/fakescim_test.go`).
 
 #### Live LDAP checks
 
