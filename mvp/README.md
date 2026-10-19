@@ -1830,3 +1830,13 @@ OpenAPI document). Deliberate differences:
 * Delegated agent scopes are shown and compared with what the principal holds, but they do not
   narrow the agent's own effective permissions.
 * SQLite and a per-request graph rebuild are fine for this demo but would not scale to large tenants.
+
+## Offline migration assessment
+
+The report-only `tessera migration assess` command assesses bounded IIQ XML or
+Tessera normalized JSON packs for SailPoint/Saviynt. It requires explicit tenant,
+product and source-instance labels, a local file and an explicit `--out` path.
+It writes a private JSON report, refusing overwrites without `--force`,
+without opening the database or changing access. Native vendor compatibility is
+unverified; unsupported logic is reported as blocking diagnostics.
+See [the contract, examples and phase limits](../docs/migration-assessment.md).
