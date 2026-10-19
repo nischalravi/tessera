@@ -1646,7 +1646,7 @@ export const sod = {
   importLegacy: (dryRun = false) => api<SodImportResult>("/sod/import-legacy", { dry_run: dryRun }),
   /** Which risks would these requested items trigger? Changes nothing; used before an access request is submitted. */
   simulate: (beneficiaryIds: number[], catalogItemIds: string[], durationHours?: number) =>
-    api<SodSimulation>("/sod/simulate", { beneficiary_ids: beneficiaryIds, catalog_item_ids: catalogItemIds, ...(durationHours ? { duration_hours: durationHours } : {}) }),
+    apiNoResume<SodSimulation>("/sod/simulate", { beneficiary_ids: beneficiaryIds, catalog_item_ids: catalogItemIds, ...(durationHours ? { duration_hours: durationHours } : {}) }),
 };
 // ------------------------------------------------------------ SoD mitigating controls (issue #298)
 

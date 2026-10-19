@@ -199,7 +199,11 @@ func subjectCondition(spec map[string]any) (*abac.Node, error) {
 func (c *Context) attrs(n *graph.Node) abac.Attrs {
 	if c.Conn != nil {
 		if i, err := c.Conn.Identity(n.ID); err == nil {
-			return abac.Merge(abac.IdentityAttrs(i, c.Now), abac.ContextAttrs(c.Now, 0))
+			ia := abac.IdentityAttrs(i, c.Now)
+			if r, err := abac.NewResolver(c.Conn, c.Now); err == nil {
+				ia = r.Identity(i)
+			}
+			return abac.Merge(ia, abac.ContextAttrs(c.Now, 0))
 		}
 	}
 	a := abac.Attrs{"identity.type": n.Type, "identity.status": n.Status, "identity.name": n.Label}
