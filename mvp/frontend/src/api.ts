@@ -1560,6 +1560,91 @@ export const abac = {
 };
 export const abacPaths = { list: "/abac/policies", one: (id: string) => abacPath(id), bindings: "/abac/bindings" };
 
+// ---------------------------------------------------------------- SoD functions, risks, rulesets (issue #298)
+
+export type SodPriority = "critical" | "high" | "medium" | "low";
+export type SodAttribute = "environment" | "tag" | "resource" | "privileged";
+/** Picks entitlements: a system plus a permission id or an action name pattern (`*` wildcard), optionally narrowed by a resource attribute. */
+export interface SodSelector { system?: string; entitlement_id?: number; name_pattern?: string; attribute?: SodAttribute; value?: string }
+export interface SodSubjects { identity_types?: IdentityType[]; statuses?: string[]; condition?: AbacCondition }
+export interface SodPerson { id: number; name: string; type: IdentityType; status: string }
+export interface SodVersion { version: number; snapshot: Record<string, unknown>; note: string | null; actor: string; changed_at: string }
+export interface SodRef { id: string; key: string; name: string }
+export interface SodFunction {
+  id: string; key: string; name: string; description: string; owner: SodPerson | null; selectors: SodSelector[];
+  status: "active" | "retired"; version: number; created_at: string; updated_by: { id: string; display_name: string } | null; updated_at: string;
+  used_by: SodRef[];
+  /** Only on GET /sod/functions/{id} and after a change. */
+  versions?: SodVersion[];
+}
+export interface SodRisk {
+  id: string; key: string; name: string; description: string; priority: SodPriority; business_process: string; owner: SodPerson | null;
+  ruleset: SodRef; functions: SodRef[]; subjects: SodSubjects; status: "active" | "retired"; version: number; created_at: string;
+  updated_by: { id: string; display_name: string } | null; updated_at: string; violations?: number; versions?: SodVersion[];
+}
+export interface SodRuleset {
+  id: string; key: string; name: string; description: string; enabled: boolean; status: "active" | "retired"; version: number;
+  created_at: string; updated_by: { id: string; display_name: string } | null; updated_at: string; risks: number; violations?: number;
+  versions?: SodVersion[];
+}
+export interface SodFunctionList { can_manage: boolean; attributes: SodAttribute[]; functions: SodFunction[] }
+export interface SodRiskList { can_manage: boolean; priorities: SodPriority[]; risks: SodRisk[] }
+export interface SodRulesetList { can_manage: boolean; /** No stored ruleset yet: the policy files are checked. */ legacy: boolean; rulesets: SodRuleset[] }
+export interface SodFunctionSpec { key?: string; name: string; description: string; owner_id: number | null; selectors: SodSelector[]; note?: string }
+export interface SodRiskSpec {
+  key?: string; name: string; description: string; priority: SodPriority; business_process: string; owner_id: number | null;
+  ruleset_id: string; function_ids: string[]; subjects: SodSubjects; note?: string;
+}
+export interface SodRulesetSpec { key?: string; name: string; description: string; enabled: boolean; note?: string }
+export interface SodGrant { perm_key: string; action: string; resource: string; system: string; privileged: boolean; paths: string[] }
+export interface SodViolation {
+  key: string; risk_id: string; risk_key: string; risk_name: string; priority: SodPriority; ruleset: SodRef; business_process: string;
+  identity_id: number; identity_name: string; function1: SodRef; function2: SodRef; entitlement: string; systems: string[];
+  sides: [{ function: SodRef; grants: SodGrant[] }, { function: SodRef; grants: SodGrant[] }];
+  /** open; mitigation statuses arrive with mitigating controls. */
+  status: string; message: string; evidence: string[]; edges: [string, string][];
+}
+export interface SodViolationFilter { risk?: string; priority?: SodPriority; ruleset?: string; system?: string; business_process?: string; identity?: string }
+export interface SodImportResult { dry_run: boolean; ruleset: string; created: string[]; updated: string[]; unchanged: string[]; retired: string[] }
+export interface SodTrigger {
+  risk_id: string; risk_key: string; risk_name: string; priority: SodPriority; business_process: string; ruleset: SodRef;
+  identity_id: number; identity_name: string; function1: SodRef; function2: SodRef; entitlement: string; message: string;
+}
+export interface SodSimulation { checked: number; skipped: { beneficiary_id: number; catalog_item_id: string; reason: string }[]; would_trigger: SodTrigger[]; highest_priority: SodPriority | "" }
+
+const sodPath = (kind: "functions" | "risks" | "rulesets", id: string, rest = "") => `/sod/${kind}/${encodeURIComponent(id)}${rest}`;
+/** Query string of the SoD violations filters (empty values are left out). */
+export function sodViolationQuery(f: SodViolationFilter): string {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(f)) if (v) q.set(k, v);
+  const s = q.toString();
+  return s ? `?${s}` : "";
+}
+export const sod = {
+  createFunction: (spec: SodFunctionSpec) => api<SodFunction>("/sod/functions", spec),
+  updateFunction: (id: string, version: number, spec: SodFunctionSpec) => api<SodFunction>(sodPath("functions", id), { version, ...spec }, "PUT"),
+  retireFunction: (id: string, reason: string) => api<SodFunction>(sodPath("functions", id, "/retire"), { reason }),
+  createRisk: (spec: SodRiskSpec) => api<SodRisk>("/sod/risks", spec),
+  updateRisk: (id: string, version: number, spec: SodRiskSpec) => api<SodRisk>(sodPath("risks", id), { version, ...spec }, "PUT"),
+  retireRisk: (id: string, reason: string) => api<SodRisk>(sodPath("risks", id, "/retire"), { reason }),
+  createRuleset: (spec: SodRulesetSpec) => api<SodRuleset>("/sod/rulesets", spec),
+  updateRuleset: (id: string, version: number, spec: SodRulesetSpec) => api<SodRuleset>(sodPath("rulesets", id), { version, ...spec }, "PUT"),
+  retireRuleset: (id: string, reason: string) => api<SodRuleset>(sodPath("rulesets", id, "/retire"), { reason }),
+  /** The ruleset as a YAML file (access as code). */
+  exportRuleset: (id: string) => api<{ filename: string; version: number; yaml: string }>(sodPath("rulesets", id, "/export")),
+  importRuleset: (yaml: string, opts: { prune?: boolean; dry_run?: boolean } = {}) => api<SodImportResult>("/sod/rulesets/import", { yaml, ...opts }),
+  /** One-time import of the separation_of_duties policy files as a ruleset. */
+  importLegacy: (dryRun = false) => api<SodImportResult>("/sod/import-legacy", { dry_run: dryRun }),
+  /** Which risks would these requested items trigger? Changes nothing; used before an access request is submitted. */
+  simulate: (beneficiaryIds: number[], catalogItemIds: string[], durationHours?: number) =>
+    apiNoResume<SodSimulation>("/sod/simulate", { beneficiary_ids: beneficiaryIds, catalog_item_ids: catalogItemIds, ...(durationHours ? { duration_hours: durationHours } : {}) }),
+};
+export const sodPaths = {
+  functions: "/sod/functions", risks: "/sod/risks", rulesets: "/sod/rulesets",
+  function: (id: string) => sodPath("functions", id), risk: (id: string) => sodPath("risks", id), ruleset: (id: string) => sodPath("rulesets", id),
+  violations: (f: SodViolationFilter = {}) => `/sod/violations${sodViolationQuery(f)}`,
+};
+
 export const simulate = (body: { remove_edge_ids?: number[]; add_edges?: { src: string; dst: string; duration_hours?: number }[]; disable_account_ids?: number[] }) =>
   api<SimResult>("/simulate", { remove_edge_ids: [], add_edges: [], disable_account_ids: [], ...body });
 

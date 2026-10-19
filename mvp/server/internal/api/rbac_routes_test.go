@@ -205,6 +205,26 @@ POST   /api/connections/{id}/findings/{fid}/accept   connections.manage -
 GET    /api/connections/{id}/health                  connections.read   -
 GET    /api/insights/deployment-health               connections.read   -
 POST   /api/insights/deployment-health/rerun         connections.manage -
+GET    /api/sod/functions                            graph.read      -  # issue #298
+POST   /api/sod/functions                            sod.manage      STEP_UP_POLICY  # issue #298
+GET    /api/sod/functions/{function_id}              graph.read      -  # issue #298
+PUT    /api/sod/functions/{function_id}              sod.manage      STEP_UP_POLICY  # issue #298
+POST   /api/sod/functions/{function_id}/retire       sod.manage      STEP_UP_POLICY  # issue #298
+GET    /api/sod/risks                                graph.read      -  # issue #298
+POST   /api/sod/risks                                sod.manage      STEP_UP_POLICY  # issue #298
+GET    /api/sod/risks/{risk_id}                      graph.read      -  # issue #298
+PUT    /api/sod/risks/{risk_id}                      sod.manage      STEP_UP_POLICY  # issue #298
+POST   /api/sod/risks/{risk_id}/retire               sod.manage      STEP_UP_POLICY  # issue #298
+GET    /api/sod/rulesets                             graph.read      -  # issue #298
+POST   /api/sod/rulesets                             sod.manage      STEP_UP_POLICY  # issue #298
+POST   /api/sod/rulesets/import                      sod.manage      STEP_UP_POLICY  # issue #298
+GET    /api/sod/rulesets/{ruleset_id}                graph.read      -  # issue #298
+PUT    /api/sod/rulesets/{ruleset_id}                sod.manage      STEP_UP_POLICY  # issue #298
+POST   /api/sod/rulesets/{ruleset_id}/retire         sod.manage      STEP_UP_POLICY  # issue #298
+GET    /api/sod/rulesets/{ruleset_id}/export         graph.read      -  # issue #298
+POST   /api/sod/import-legacy                        sod.manage      STEP_UP_POLICY  # issue #298
+GET    /api/sod/violations                           graph.read      -  # issue #298
+POST   /api/sod/simulate                             requests.create -  # issue #298
 GET    /api/jobs                                     jobs.read       -  # issue #172
 GET    /api/jobs/{job_id}                            jobs.read       -  #
 POST   /api/jobs/{job_id}/retry                      jobs.read       -  # (the replayed route's own permission and step-up apply)
