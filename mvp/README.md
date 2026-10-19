@@ -1434,6 +1434,43 @@ anything changed against the previous artifact; `-report` writes the full diff a
 `internal/aws/catalog.Load(dir, version)` reads the artifact. See `catalog/aws/README.md` and
 `catalog/aws/THIRD_PARTY_NOTICES`.
 
+### AWS connector (read-only)
+
+`internal/connectors/awsorg` collects one `model.Snapshot` of an AWS estate for the evaluator
+(design §11.1): Organizations (tree, SCPs, RCPs), IAM (`GetAccountAuthorizationDetails`: users,
+groups, roles, managed policies, boundaries, trust policies), and the resource policies of S3, S3
+access points, KMS (and grants), SQS, SNS, Secrets Manager, Lambda, ECR and VPC endpoints, plus
+Identity Center assignments. It uses **no AWS SDK**: each call is an HTTPS request signed by the
+stdlib SigV4 signer (`internal/aws/sigv4`, tested against the published `get-vanilla` vector) and
+sent through `internal/safehttp`. Throttling and 5xx are retried with exponential backoff and full
+jitter (honouring `Retry-After`); every `List*` follows its token to the last page.
+
+- **Credentials.** The connector holds an access key pair, sealed with `internal/seal` (AAD bound to
+  tenant, table, column and connector id) and never returned by the API. It signs only
+  `sts:AssumeRole` with it; everything else is read as the customer's role (default `TesseraReader`)
+  in each account, with an `sts:ExternalId` the connector generates and shows (`external_id`) for
+  the role's trust policy. `awsorg.ReaderPolicy()` is the role's permissions policy: only List and
+  Read actions, verified against the action catalog (`CheckReadOnly`, tested).
+- **Fail closed (design §3.3).** A stored policy that does not parse, a statement dropped as an
+  ingest anomaly, and a read that fails (an account that refuses the role, a bucket policy that is
+  denied, a list that fails) are never skipped: each is a *finding* with the scope of decisions it
+  could affect. `Findings.Unsupported(Request)` returns the `POLICY_UNPARSEABLE` reasons for a
+  request; the evaluator (PR-5) returns such a decision as `UNSUPPORTED`.
+- **Persistence.** `schema/0321_aws_snapshots.sql` has the §6.2 tables (`aws_snapshots`,
+  `aws_policy_documents`, `aws_policy_attachments`, `aws_org_nodes`, `aws_trust_edges`,
+  `aws_effective_permissions`, `aws_explanations`) plus `aws_connectors`, `aws_snapshot_entities`
+  and `aws_collection_findings`. The snapshot id is a content hash, per tenant; persisting an
+  unchanged estate writes nothing. `awsorg.Persist` / `awsorg.Load` write and rebuild a snapshot.
+- **API** (connections permissions; writes need step-up): `GET|POST /api/aws/connectors`,
+  `DELETE /api/aws/connectors/{id}`, `GET /api/aws/snapshots`, `GET /api/aws/snapshots/{id}`.
+  `POST /api/aws/connectors` takes `{name, config: {regions, account_ids, management_account_id,
+  role_name, identity_center_region}, credentials: {access_key_id, secret_access_key}}`. Running a
+  collection (`awsorg.Service.Collect`) is not a route yet: a run can outlast the request timeout.
+- **Tests** use `internal/aws/awstest` (test-only): `Replay` serves recorded responses from
+  `internal/connectors/awsorg/testdata/http/<service>/<operation>/<n>.<ext>`, verifies every
+  signature and reports calls with no recording. It does not enforce IAM; these are collection
+  tests only. Fixtures are synthetic (fake account ids).
+
 ## Web UI
 
 The UI follows an "admin center" layout: a dark top bar, a light left rail grouped by job, list

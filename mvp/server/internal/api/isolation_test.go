@@ -278,6 +278,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/api/agents/{id}/revoke" {
 			continue // TestAgentsAPI (a UUID, not a fixture id)
 		}
+		if rt.Pattern == "/api/aws/connectors/{id}" || rt.Pattern == "/api/aws/snapshots/{id}" {
+			continue // TestAWSAPI_*, and store.TestIsolation_AWSTables (UUIDs and content hashes, not fixture ids)
+		}
 		if strings.HasPrefix(rt.Pattern, "/api/groups/") {
 			continue // TestGroupsTenantIsolation (UUIDs, not fixture ids)
 		}
@@ -387,6 +390,9 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 			continue // TestAdminAPI_CrossTenant (UUIDs, not fixture ids)
 		}
 		path := rt.Pattern
+		if path == "/api/aws/snapshots/{id}" {
+			continue // a content hash, not a fixture id: TestAWSAPI_Snapshots and store.TestIsolation_AWSTables
+		}
 		if rp, ok := readinessGetPaths(f.B.Refs)[path]; ok && strings.Contains(path, "{") {
 			path = rp // tenant B's own readiness ids
 		}

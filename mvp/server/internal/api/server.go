@@ -289,6 +289,7 @@ func New(cfg Config) *Server {
 	s.registerGroupsFolderRoutes()
 	s.registerReadinessRoutes()
 	s.registerAgentRoutes()
+	s.registerAWSRoutes()
 	s.registerJobRoutes()
 	s.registerQueueRoutes()
 	s.registerProvisioningRoutes()

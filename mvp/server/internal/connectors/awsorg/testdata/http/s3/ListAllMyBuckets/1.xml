@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ListAllMyBucketsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Owner>
+    <ID>79a59df900b949e55d96a1e698fbacedfd6e09d98eacf8f8d5218e7cd47ef2be</ID>
+    <DisplayName>acme</DisplayName>
+  </Owner>
+  <Buckets>
+    <Bucket>
+      <Name>prod-pii</Name>
+      <CreationDate>2024-01-01T00:00:00.000Z</CreationDate>
+      <BucketRegion>us-east-1</BucketRegion>
+    </Bucket>
+    <Bucket>
+      <Name>legacy.logs</Name>
+      <CreationDate>2020-01-01T00:00:00.000Z</CreationDate>
+      <BucketRegion>us-east-1</BucketRegion>
+    </Bucket>
+  </Buckets>
+</ListAllMyBucketsResult>

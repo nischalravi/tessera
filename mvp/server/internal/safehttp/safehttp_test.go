@@ -157,6 +157,30 @@ func TestForConfig(t *testing.T) {
 	}
 }
 
+// TestForConfigLimits: the same environment rules as ForConfig with other
+// limits; a hand-built Config is refused.
+func TestForConfigLimits(t *testing.T) {
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) }))
+	defer plain.Close()
+	hc, err := safehttp.ForConfigLimits(load(t, map[string]string{"TESSERA_ENV": "dev"}), time.Minute, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp, err := get(hc, plain.URL); err != nil || string(resp.Body) != "ok" {
+		t.Errorf("dev ForConfigLimits to loopback: %v", err)
+	}
+	test, err := safehttp.ForConfigLimits(load(t, map[string]string{"TESSERA_ENV": "test"}), time.Minute, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := get(test, plain.URL); !errors.Is(err, safehttp.ErrScheme) {
+		t.Errorf("test env: http to loopback = %v, want ErrScheme", err)
+	}
+	if _, err := safehttp.ForConfigLimits(&config.Config{Env: config.Dev, OutboundAllowLoopback: true}, 0, 0); err == nil {
+		t.Error("ForConfigLimits of a hand-built config succeeded")
+	}
+}
+
 // TestBlocksAddresses: every listed range is refused before any connection,
 // in prod and also in dev with the loopback exception on (which permits only
 // 127.0.0.1 and ::1).

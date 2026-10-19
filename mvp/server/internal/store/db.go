@@ -147,6 +147,9 @@ var tables = []string{
 	"connection_activation_requests",
 	// directory agent (schema/0250_directory_agents.sql)
 	"directory_agents", "agent_enrolments",
+	// AWS evaluator (schema/0321_aws_snapshots.sql)
+	"aws_connectors", "aws_snapshots", "aws_policy_documents", "aws_policy_attachments", "aws_org_nodes",
+	"aws_snapshot_entities", "aws_collection_findings", "aws_trust_edges", "aws_effective_permissions", "aws_explanations",
 	// SIEM sinks (schema/0210_siem.sql)
 	"siem_sinks", "siem_dead_letters",
 	// alerting (schema/0209_alerts.sql)

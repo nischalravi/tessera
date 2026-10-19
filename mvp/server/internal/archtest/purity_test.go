@@ -183,3 +183,28 @@ func f() {
 		t.Errorf("net/netip and time.Time flagged: %v", v)
 	}
 }
+
+// awsreplayPkg is the AWS connector's HTTP replay double (the SigV4-aware one
+// the connector tests use, distinct from the awstest cassette replay).
+const awsreplayPkg = "internal/aws/awsreplay"
+
+// TestAWSReplayOnlyInTests proves nothing outside _test.go files imports the
+// connector's HTTP replay double, and no production binary links it.
+func TestAWSReplayOnlyInTests(t *testing.T) {
+	graph := moduleImports(t, moduleRoot(t))
+	if _, ok := graph[awsreplayPkg]; !ok {
+		t.Fatalf("package %s not found; the test is not looking at the module", awsreplayPkg)
+	}
+	for pkg, deps := range graph {
+		for _, dep := range deps {
+			if dep == awsreplayPkg {
+				t.Errorf("%s imports %s outside a _test.go file", pkg, dep)
+			}
+		}
+	}
+	for _, root := range productionRoots {
+		if chain := reachable(graph, root, awsreplayPkg); chain != nil {
+			t.Errorf("%s links the AWS replay double: %s", root, strings.Join(chain, " -> "))
+		}
+	}
+}
