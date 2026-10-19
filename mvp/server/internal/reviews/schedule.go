@@ -107,18 +107,20 @@ func ValidateTemplate(tx *store.TenantTx, t *store.ReviewTemplate) error {
 			return specErr("invalid_system", "%q is not one of this organization's systems", *t.System)
 		}
 	}
-	if t.CloseOut == "escalate" {
-		if t.EscalationIdentityID == nil {
-			return specErr("escalation_reviewer_required", "escalation needs a reviewer")
-		}
+	if t.EscalationIdentityID != nil { // checked whatever the close-out; another tenant's id is unknown
 		i, err := tx.Identity(*t.EscalationIdentityID)
-		if errors.Is(err, store.ErrNotFound) {
-			return specErr("escalation_reviewer_not_found", "escalation reviewer not found")
+		if errors.Is(err, store.ErrNotFound) || (err == nil && i.Status != "active") {
+			return specErr("unknown_escalation_identity", "escalation_identity_id is not an active identity in this organization")
 		} else if err != nil {
 			return err
 		}
-		if i.Type != "human" || i.Status != "active" {
+		if t.CloseOut == "escalate" && i.Type != "human" {
 			return specErr("escalation_reviewer_not_active", "the escalation reviewer is an active person")
+		}
+	}
+	if t.CloseOut == "escalate" {
+		if t.EscalationIdentityID == nil {
+			return specErr("escalation_reviewer_required", "escalation needs a reviewer")
 		}
 	} else {
 		t.EscalationIdentityID = nil
