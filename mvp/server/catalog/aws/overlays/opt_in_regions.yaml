@@ -1,0 +1,41 @@
+# Opt-in (disabled by default) AWS regions (design §7.8). A service principal
+# calling from one of these regions is regionalized, for example
+# s3.ap-east-1.amazonaws.com instead of s3.amazonaws.com.
+# Source: AWS Regions documentation, "Enable or disable AWS Regions".
+source: https://docs.aws.amazon.com/accounts/latest/reference/manage-acct-regions.html
+principal_format: "{service}.{region}.amazonaws.com"
+regions:
+  - name: af-south-1
+    description: Africa (Cape Town)
+  - name: ap-east-1
+    description: Asia Pacific (Hong Kong)
+  - name: ap-east-2
+    description: Asia Pacific (Taipei)
+  - name: ap-south-2
+    description: Asia Pacific (Hyderabad)
+  - name: ap-southeast-3
+    description: Asia Pacific (Jakarta)
+  - name: ap-southeast-4
+    description: Asia Pacific (Melbourne)
+  - name: ap-southeast-5
+    description: Asia Pacific (Malaysia)
+  - name: ap-southeast-6
+    description: Asia Pacific (New Zealand)
+  - name: ap-southeast-7
+    description: Asia Pacific (Thailand)
+  - name: ca-west-1
+    description: Canada West (Calgary)
+  - name: eu-central-2
+    description: Europe (Zurich)
+  - name: eu-south-1
+    description: Europe (Milan)
+  - name: eu-south-2
+    description: Europe (Spain)
+  - name: il-central-1
+    description: Israel (Tel Aviv)
+  - name: me-central-1
+    description: Middle East (UAE)
+  - name: me-south-1
+    description: Middle East (Bahrain)
+  - name: mx-central-1
+    description: Mexico (Central)
