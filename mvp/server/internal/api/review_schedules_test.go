@@ -118,3 +118,34 @@ func reviewAudit(t *testing.T, f *storetest.Fixture) map[string]int {
 	}
 	return out
 }
+
+// #318 and #317: an unknown system is refused at create and update, and a
+// second manual run in the same second is a clean 409.
+func TestReviewSchedulesAPI_SystemAndDoubleRun(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	h := newIsolationServer(f).Handler()
+	op := signIn(t, f.DB, f.B.ID, authtest.User{Email: "op@b.example", Roles: []auth.Role{auth.RoleOperator}}, authtest.Phr, storetest.Now)
+	mk := func(system string) string {
+		return `{"name":"x","recurrence":"once","system":"` + system + `","first_run_at":"2030-01-01T00:00:00Z"}`
+	}
+	for _, c := range []struct {
+		system string
+		code   int
+	}{{"nosuchsystem", 422}, {"AWS", 422}, {"aws", 201}} {
+		rec := schedDo(h, op, "POST", "/api/reviews/schedules", mk(c.system))
+		if rec.Code != c.code || (c.code == 422 && !strings.Contains(rec.Body.String(), "invalid_system")) {
+			t.Errorf("create system %q: %d %s", c.system, rec.Code, rec.Body)
+		}
+	}
+	rec := schedDo(h, op, "POST", "/api/reviews/schedules", mk("aws"))
+	var v scheduleView
+	_ = json.Unmarshal(rec.Body.Bytes(), &v)
+	if rec := schedDo(h, op, "PUT", "/api/reviews/schedules/"+v.ID, mk("awss")); rec.Code != 422 || !strings.Contains(rec.Body.String(), "invalid_system") {
+		t.Errorf("update to an unknown system: %d %s", rec.Code, rec.Body)
+	}
+	first := schedDo(h, op, "POST", "/api/reviews/schedules/"+v.ID+"/run", "")
+	second := schedDo(h, op, "POST", "/api/reviews/schedules/"+v.ID+"/run", "")
+	if first.Code != 201 || second.Code != 409 || !strings.Contains(second.Body.String(), "already_launched") {
+		t.Errorf("run twice: %d then %d %s", first.Code, second.Code, second.Body)
+	}
+}

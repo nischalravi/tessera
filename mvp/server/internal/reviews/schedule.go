@@ -98,6 +98,15 @@ func ValidateTemplate(tx *store.TenantTx, t *store.ReviewTemplate) error {
 			t.System = &s
 		}
 	}
+	if t.System != nil { // a typo would certify nothing, silently
+		n, err := tx.CountSystem(*t.System)
+		if err != nil {
+			return err
+		}
+		if n.Accounts+n.Groups+n.Resources+n.Permissions == 0 {
+			return specErr("invalid_system", "%q is not one of this organization's systems", *t.System)
+		}
+	}
 	if t.CloseOut == "escalate" {
 		if t.EscalationIdentityID == nil {
 			return specErr("escalation_reviewer_required", "escalation needs a reviewer")
@@ -117,16 +126,25 @@ func ValidateTemplate(tx *store.TenantTx, t *store.ReviewTemplate) error {
 	return nil
 }
 
+// ErrAlreadyLaunched is a run of a period that already launched.
+var ErrAlreadyLaunched = errors.New("this period already launched")
+
 // Launch starts a template's campaign for period, due after its duration.
+// When nothing is in scope it creates no campaign: it audits
+// review.schedule.skipped with the reason and returns a nil launch.
 func Launch(tx *store.TenantTx, t *store.ReviewTemplate, period string, now time.Time, policies []*policy.Policy, actor string) (*store.ReviewLaunch, error) {
 	name := t.Name + " · " + period
 	sys := ""
 	if t.System != nil {
 		sys = *t.System
 	}
-	campID, err := GenerateScopedCampaign(tx, now, name, t.UnusedDays, policies, Scope{System: sys, PrivilegedOnly: t.PrivilegedOnly})
+	campID, err := GenerateScopedCampaign(tx, now, name, t.UnusedDays, policies, Scope{System: sys, PrivilegedOnly: t.PrivilegedOnly, SkipEmpty: true})
 	if err != nil {
 		return nil, err
+	}
+	if campID == 0 {
+		return nil, tx.Audit(now, actor, "review.schedule.skipped", ojson.Object{{Key: "template_id", Value: t.ID},
+			{Key: "period", Value: period}, {Key: "reason", Value: "no grants in scope"}})
 	}
 	l := &store.ReviewLaunch{ID: uuid.NewString(), TemplateID: t.ID, PeriodKey: period, CampaignID: campID, LaunchedAt: now,
 		DueAt: now.Add(time.Duration(t.DurationDays) * 24 * time.Hour)}
@@ -137,17 +155,24 @@ func Launch(tx *store.TenantTx, t *store.ReviewTemplate, period string, now time
 		{Key: "period", Value: period}, {Key: "campaign_id", Value: campID}, {Key: "due_at", Value: timeutil.ISO(l.DueAt)}})
 }
 
-// RunNow launches a template outside its schedule (period "manual-<time>").
+// RunNow launches a template outside its schedule (period "manual-<time>"). A
+// nil launch with a nil error means nothing was in scope and no campaign was made.
 func RunNow(tx *store.TenantTx, id string, now time.Time, policies []*policy.Policy, actor string) (*store.ReviewLaunch, error) {
 	t, err := tx.ReviewTemplate(id)
 	if err != nil {
 		return nil, err
 	}
-	return Launch(tx, t, "manual-"+now.UTC().Format("20060102T150405Z"), now, policies, actor)
+	period := "manual-" + now.UTC().Format("20060102T150405Z")
+	if done, err := tx.ReviewPeriodLaunched(t.ID, period); err != nil {
+		return nil, err
+	} else if done { // a double click in the same second
+		return nil, ErrAlreadyLaunched
+	}
+	return Launch(tx, t, period, now, policies, actor)
 }
 
 // TickResult counts what one tick did.
-type TickResult struct{ Launched, Reminded, Escalated, Closed, Revoked int }
+type TickResult struct{ Launched, Reminded, Escalated, Closed, Revoked, Skipped int }
 
 // Tick launches due templates and progresses open runs, in one tenant.
 func Tick(tx *store.TenantTx, now time.Time, policies []*policy.Policy) (TickResult, error) {
@@ -167,10 +192,15 @@ func Tick(tx *store.TenantTx, now time.Time, policies []*policy.Policy) (TickRes
 		if done, err := tx.ReviewPeriodLaunched(t.ID, period); err != nil {
 			return res, err
 		} else if !done {
-			if _, err := Launch(tx, t, period, now, policies, Scheduler); err != nil {
+			l, err := Launch(tx, t, period, now, policies, Scheduler)
+			if err != nil {
 				return res, err
 			}
-			res.Launched++
+			if l == nil {
+				res.Skipped++
+			} else {
+				res.Launched++
+			}
 		}
 		if err := tx.AdvanceReviewTemplate(t.ID, scheduled, next); err != nil {
 			return res, err

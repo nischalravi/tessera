@@ -5,7 +5,7 @@
  * last data instantly while it refreshes. Any successful write broadcasts a change event and
  * every mounted `useApi` refetches, so counts (Inbox badge, KPIs) stay consistent.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 const cache = new Map<string, unknown>();
 const CHANGED = "tessera:api-changed";
@@ -293,7 +293,11 @@ export const runPendingAction = (a: PendingAction) => api(a.path, a.body, a.meth
 /** Tell mounted views that data changed outside `api()` (e.g. the mock layer). */
 export const notifyChanged = () => window.dispatchEvent(new Event(CHANGED));
 
+/** True for a 403: the session lacks the permission, so asking again changes nothing. */
+export const isDenied = (e: unknown): boolean => e instanceof ApiError && e.status === 403;
+
 export function useApi<T = any>(path: string | null) {
+  const denied = useRef(false);
   const [data, setData] = useState<T | null>(() => (path ? (cached<T>(path) ?? null) : null));
   const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(false);
@@ -304,21 +308,29 @@ export function useApi<T = any>(path: string | null) {
     api<T>(path)
       .then((d) => {
         if (!alive) return;
+        denied.current = false;
         setData(d);
         setError(null);
       })
-      .catch((e) => alive && setError(e instanceof ApiError ? e : new ApiError(String(e?.message ?? e), 0, null)))
+      .catch((e) => {
+        if (!alive) return;
+        denied.current = isDenied(e);
+        setError(e instanceof ApiError ? e : new ApiError(String(e?.message ?? e), 0, null));
+      })
       .finally(() => alive && setLoading(false));
     return () => {
       alive = false;
     };
   }, [path]);
   useEffect(() => {
+    denied.current = false;
     setData(path ? (cached<T>(path) ?? null) : null);
     return load();
   }, [load, path]);
   useEffect(() => {
-    const on = () => load();
+    const on = () => {
+      if (!denied.current) load(); // a 403 does not fix itself: no refetch storm
+    };
     window.addEventListener(CHANGED, on);
     return () => window.removeEventListener(CHANGED, on);
   }, [load]);
@@ -623,7 +635,8 @@ export const reviewDecide = (itemId: number, decision: "keep" | "revoke", commen
 
 // -------------------------------------------------------------- session
 export interface SessionInfo {
-  user: { id: string; email: string | null; display_name: string };
+  /** identity_id: the directory person the server linked this sign-in to; null when unlinked. */
+  user: { id: string; email: string | null; display_name: string; identity_id: number | null };
   tenant: { id: string; slug: string; name: string };
   roles: string[];
   active_roles: string[];
@@ -1710,6 +1723,78 @@ export const readiness = {
     "/insights/deployment-health/rerun", { reconcile }),
 };
 
+// ------------------------------------------------------------ SIEM sinks (#169)
+
+export type SiemKind = "syslog" | "webhook";
+export type SiemFormat = "json" | "ocsf";
+export type SiemFlavor = "hec" | "json" | "";
+
+export interface SiemSink {
+  id: string;
+  name: string;
+  kind: SiemKind;
+  format: SiemFormat;
+  /** host:port, or the webhook URL without its query string. */
+  target: string;
+  flavor: SiemFlavor;
+  has_ca: boolean;
+  has_token: boolean;
+  include_http: boolean;
+  enabled: boolean;
+  cursor_seq: number;
+  head_seq: number;
+  health: { status: "healthy" | "catching_up" | "degraded" | "failing" | "paused"; lag: number };
+  attempts: number;
+  next_attempt_at: string | null;
+  last_error: string | null;
+  last_success_at: string | null;
+  delivered_count: number;
+  dead_letter_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SiemSinkInput {
+  name: string;
+  kind?: SiemKind;
+  format: SiemFormat;
+  /** Omit on update to keep the current target. */
+  target?: string;
+  flavor?: SiemFlavor;
+  /** Omit on update to keep; "" removes it. */
+  ca_pem?: string;
+  /** Omit to keep the stored token; "" removes it. */
+  token?: string;
+  include_http: boolean;
+  enabled: boolean;
+  /** Creation only. */
+  start?: "now" | "beginning";
+}
+
+export interface SiemDeadLetter {
+  id: string;
+  from_seq: number;
+  to_seq: number;
+  events: number;
+  error: string;
+  created_at: string;
+}
+
+export const siemApi = {
+  create: (body: SiemSinkInput) => api<SiemSink>("/siem/sinks", body),
+  update: (id: string, body: SiemSinkInput) => api<SiemSink>(`/siem/sinks/${encodeURIComponent(id)}`, body, "PUT"),
+  rewind: (id: string, seq: number) => api<SiemSink>(`/siem/sinks/${encodeURIComponent(id)}/rewind`, { seq }),
+  test: (id: string) => api<{ ok: boolean; error?: string }>(`/siem/sinks/${encodeURIComponent(id)}/test`, {}),
+};
+
+/** Health → badge tone and label. */
+export const SIEM_HEALTH: Record<SiemSink["health"]["status"], { tone: "ok" | "info" | "warning" | "critical" | "outline"; label: string }> = {
+  healthy: { tone: "ok", label: "Healthy" },
+  catching_up: { tone: "info", label: "Catching up" },
+  degraded: { tone: "warning", label: "Retrying" },
+  failing: { tone: "critical", label: "Failing" },
+  paused: { tone: "outline", label: "Paused" },
+};
 // ---------------------------------------------------------------- alerts (#168)
 
 export type AlertSeverity = "low" | "medium" | "high" | "critical";
