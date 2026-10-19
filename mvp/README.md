@@ -311,7 +311,7 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `POST /api/simulate {remove_edge_ids, add_edges:[{src,dst,duration_hours?}], disable_account_ids}` ·
 `GET|POST /api/jit/requests` · `POST /api/jit/requests/{id}/approve|deny|revoke` ·
 `GET|POST /api/reviews/campaigns` (`name` 1-200 characters after trimming, `unused_days` 1-3650, else 422) ·
-`POST /api/reviews/items/{id}/decision` (a decision is final: repeating it is a 200 no-op, a different one is
+`POST /api/reviews/items/{id}/decision {decision, comment?, rule_action?}` (a decision is final: repeating it is a 200 no-op, a different one is
 `409 review_item_decided` and an audited `review.decide.refused`) ·
 `GET|POST /api/hris/events` (422 for an unknown `identity_id`) · `GET /api/hris/events/{id}/plan` · `POST /api/hris/events/{id}/execute` ·
 `GET /api/jml/leaver-plan/{identity_id}` · `POST /api/identities/{id}/contain` (kill switch, see "Identity containment") · `POST /api/identities/{id}/disable|enable` ·
@@ -359,6 +359,7 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `DELETE /api/accounts/{id}/link` · `POST /api/identities/{id}/merge {into, reason}` ·
 `GET /api/identity-merges` · `POST /api/identity-merges/{id}/unmerge {reason}` ·
 `GET|POST /api/reviews/schedules` · `PUT /api/reviews/schedules/{id}` · `POST /api/reviews/schedules/{id}/run` (an unknown `system` is 422 `invalid_system`; a second run in the same second is 409 `already_launched`; a schedule with no grants in scope creates no campaign, audits `review.schedule.skipped` and answers 200 `{skipped, reason}`) ·
+`GET /api/roles/{id}/exclusions|flags` · `POST /api/roles/{id}/exclusions/{identity_id}/remove` ·
 `GET /api/identities/{id}/affiliations` · `GET /api/identities/{id}/identifiers` ·
 `POST /api/identities/{id}/affiliations {type, org_unit?, population?, starts_at?, ends_at?, reason}` ·
 `POST /api/affiliations/{id}/end {reason}`
@@ -502,6 +503,36 @@ drift. **Run now** launches outside the schedule. Reminders, escalations and clo
 events; delivery by email or chat comes with alerting (#168). Reviewers are assigned as for
 manual campaigns: the manager, then the owner, then the security lead. The scheduler follows
 `TESSERA_NOW` in dev.
+
+### Role memberships in reviews
+
+A campaign certifies what people hold *through* a business role as one item, the **membership**
+(issue #214): role, member and source (rule, request or manual), with the grants the role made
+listed under it in the side panel. Those grants are not separate items, so a reviewer can't revoke
+a grant the role would restore. A membership appears when one of its grants is risky (the same
+tests as any grant); a campaign or schedule **scoped to roles** reviews every membership of those
+roles, whatever the risk, and nothing else (the system and privileged scope then do not apply).
+Pick the roles in the schedule form (`role_ids`).
+
+Revoking a membership:
+
+- **Manual or request:** removed through `roles.Unassign`, so its removal plan takes the role's
+  grants that no other role justifies. Reconcile does not bring them back.
+- **Rule:** the person can't be removed while the rule matches, so the reviewer chooses
+  (`rule_action` in the decision; without one the API answers 422). **exclude** puts them on the
+  role's exclusion list (the membership and its grants go; birthright evaluation, every save and
+  Reconcile, skips them). The list is versioned: each add or removal is a new version, history is
+  kept, and `GET /api/roles/{id}/exclusions` shows it. Taking someone off (`roles.manage`) lets the
+  rule assign them again at the next save or Reconcile. **flag** removes nothing and records the
+  decision for the role owner (`GET /api/roles/{id}/flags`, audit `review.rule_flagged`).
+- **Old campaigns** still have items for a grant a role made. Revoking one is converted into a
+  revoke of the membership(s) that justify it (same choices for a rule member), rather than
+  refused (that would lose the decision) or applied to the edge alone (Reconcile would undo it).
+- **Close-out** of a scheduled review revokes undecided manual and request memberships and flags
+  undecided rule memberships; it never removes a rule member.
+
+Role removal, exclusion and the review decision are written, with their audit events
+(`role.unassign`, `role.exclude`, `review.revoke`), in the decision's transaction.
 
 ### Job run history
 

@@ -114,6 +114,8 @@ var tables = []string{
 	"provisioning_targets", "provisioning_ops", "provisioning_findings",
 	// sealed connection credentials (schema/0345_connection_credentials.sql)
 	"connection_credentials",
+	// role memberships in reviews (schema/0340_review_role_memberships.sql)
+	"business_role_exclusions", "review_item_roles", "review_template_roles",
 	// account correlation (schema/0204_correlation.sql)
 	"account_links", "identity_merges",
 	// identity model for guests (schema/0226_identity_model.sql)

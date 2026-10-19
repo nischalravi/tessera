@@ -279,6 +279,7 @@ func New(cfg Config) *Server {
 	s.registerAlertRoutes()
 	s.registerOwnershipRoutes()
 	s.registerReviewScheduleRoutes()
+	s.registerRoleReviewRoutes()
 	s.registerCorrelationRoutes()
 	s.registerAffiliationRoutes()
 	s.registerRequestRoutes()

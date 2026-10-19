@@ -397,12 +397,22 @@ export interface ReviewItem {
     violations: string[];
     peer_coverage: number | null;
     sample_permissions: string[];
+    /** Role membership items: the grants the role made sit under the membership (issue #214). */
+    membership?: { role_id: string; role: string; source: RoleMemberSource; assigned_at: string; grants: string[] };
   };
   reviewer: IdentityBrief | null;
   decision: "keep" | "revoke" | null;
   comment: string | null;
   decided_at: string | null;
+  /** "membership": the item certifies a business-role membership; absent for a grant. */
+  kind?: "membership";
+  role?: { id: string; name: string };
+  member_source?: RoleMemberSource;
+  /** How a revoked membership was resolved. */
+  resolution?: "unassign" | "exclude" | "flag" | null;
 }
+export type RoleMemberSource = "rule" | "request" | "manual";
+export type RuleAction = "exclude" | "flag";
 
 export interface Campaign {
   id: number;
@@ -631,8 +641,10 @@ export const jitDecide = (id: number, action: "approve" | "deny" | "revoke") =>
 export const jitCreate = (body: { identity_id: number; group_id: number; duration_hours: number; justification: string }) =>
   api<JitRequest>("/jit/requests", body);
 
-export const reviewDecide = (itemId: number, decision: "keep" | "revoke", comment?: string) =>
-  api<{ id: number; decision: string }>(`/reviews/items/${itemId}/decision`, { decision, comment: comment || null });
+/** ruleAction: revoking a rule membership needs exclude (from the rule) or flag (to the role owner). */
+export const reviewDecide = (itemId: number, decision: "keep" | "revoke", comment?: string, ruleAction?: RuleAction) =>
+  api<{ id: number; decision: string; resolution?: string }>(`/reviews/items/${itemId}/decision`,
+    { decision, comment: comment || null, ...(ruleAction ? { rule_action: ruleAction } : {}) });
 
 // -------------------------------------------------------------- session
 export interface SessionInfo {
@@ -752,11 +764,15 @@ export interface ReviewSchedule {
   enabled: boolean;
   updated_at: string;
   launches: ReviewLaunch[];
+  /** Business roles whose memberships it reviews (none: grants). */
+  role_ids: string[];
 }
 export interface ReviewScheduleInput {
   name: string; system: string | null; privileged_only: boolean; unused_days: number; duration_days: number; reminder_days: number;
   close_out: "revoke" | "escalate"; escalation_identity_id: number | null; escalation_days: number; recurrence: Recurrence;
   first_run_at?: string; enabled: boolean;
+  /** Omitted: kept on update. */
+  role_ids?: string[];
 }
 export const createReviewSchedule = (b: ReviewScheduleInput) => api<ReviewSchedule>("/reviews/schedules", b);
 export const updateReviewSchedule = (id: string, b: ReviewScheduleInput) => api<ReviewSchedule>(`/reviews/schedules/${encodeURIComponent(id)}`, b, "PUT");

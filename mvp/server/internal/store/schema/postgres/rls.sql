@@ -830,6 +830,27 @@ CREATE POLICY tenant_isolation ON queue_jobs
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE business_role_exclusions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE business_role_exclusions FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON business_role_exclusions;
+CREATE POLICY tenant_isolation ON business_role_exclusions
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE review_item_roles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE review_item_roles FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON review_item_roles;
+CREATE POLICY tenant_isolation ON review_item_roles
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE review_template_roles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE review_template_roles FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON review_template_roles;
+CREATE POLICY tenant_isolation ON review_template_roles
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 ALTER TABLE break_glass_credentials ENABLE ROW LEVEL SECURITY;
 ALTER TABLE break_glass_credentials FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON break_glass_credentials;

@@ -10,18 +10,25 @@ export interface ConfirmOptions {
   danger?: boolean;
   /** Ask for a reason (e.g. high-risk certifications); `required` blocks confirm until filled. */
   reason?: { label: string; required?: boolean; placeholder?: string; /** the API's minimum, so confirm waits for it */ minLength?: number };
+  /** Ask the user to pick one option (radio group); the first is preselected. */
+  choice?: { label: string; options: { value: string; label: string; hint?: string }[] };
 }
 
 /** Resolves to the entered reason ("" when none was asked) on confirm, or null on cancel. */
 type ConfirmFn = (o: ConfirmOptions) => Promise<string | null>;
+/** Like ConfirmFn, with the chosen option ("" when none was asked). */
+type ChoiceFn = (o: ConfirmOptions) => Promise<{ reason: string; choice: string } | null>;
 
 const Ctx = createContext<ConfirmFn>(async () => null);
+const ChoiceCtx = createContext<ChoiceFn>(async () => null);
 export const useConfirm = () => useContext(Ctx);
+export const useConfirmChoice = () => useContext(ChoiceCtx);
 
-function ConfirmDialog({ o, done }: { o: ConfirmOptions; done: (v: string | null) => void }) {
+function ConfirmDialog({ o, done }: { o: ConfirmOptions; done: (v: { reason: string; choice: string } | null) => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const id = useId();
   const [reason, setReason] = useState("");
+  const [choice, setChoice] = useState(o.choice?.options[0]?.value ?? "");
   useModal(ref, () => done(null));
   const blocked = !!o.reason?.required && reason.trim().length < (o.reason.minLength ?? 1);
   return (
@@ -31,12 +38,23 @@ function ConfirmDialog({ o, done }: { o: ConfirmOptions; done: (v: string | null
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            if (!blocked) done(reason.trim());
+            if (!blocked) done({ reason: reason.trim(), choice });
           }}
         >
           <div className="dlg-b">
             <h2 id={id}>{o.title}</h2>
             {o.body && <div className="muted">{o.body}</div>}
+            {o.choice && (
+              <fieldset className="field mt" style={{ border: 0, padding: 0 }}>
+                <legend>{o.choice.label}</legend>
+                {o.choice.options.map((opt) => (
+                  <label key={opt.value} className="row tight" style={{ alignItems: "flex-start", marginTop: 6 }}>
+                    <input type="radio" name={`${id}-choice`} value={opt.value} checked={choice === opt.value} onChange={() => setChoice(opt.value)} />
+                    <span>{opt.label}{opt.hint && <span className="xs faint" style={{ display: "block" }}>{opt.hint}</span>}</span>
+                  </label>
+                ))}
+              </fieldset>
+            )}
             {o.reason && (
               <label className="field mt">
                 {o.reason.label}
@@ -58,20 +76,23 @@ function ConfirmDialog({ o, done }: { o: ConfirmOptions; done: (v: string | null
 }
 
 export function ConfirmProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<{ o: ConfirmOptions; resolve: (v: string | null) => void } | null>(null);
-  const confirm = useCallback<ConfirmFn>((o) => new Promise((resolve) => setState({ o, resolve })), []);
+  const [state, setState] = useState<{ o: ConfirmOptions; resolve: (v: { reason: string; choice: string } | null) => void } | null>(null);
+  const withChoice = useCallback<ChoiceFn>((o) => new Promise((resolve) => setState({ o, resolve })), []);
+  const confirm = useCallback<ConfirmFn>(async (o) => (await withChoice(o))?.reason ?? null, [withChoice]);
   return (
     <Ctx.Provider value={confirm}>
-      {children}
-      {state && (
-        <ConfirmDialog
-          o={state.o}
-          done={(v) => {
-            state.resolve(v);
-            setState(null);
-          }}
-        />
-      )}
+      <ChoiceCtx.Provider value={withChoice}>
+        {children}
+        {state && (
+          <ConfirmDialog
+            o={state.o}
+            done={(v) => {
+              state.resolve(v);
+              setState(null);
+            }}
+          />
+        )}
+      </ChoiceCtx.Provider>
     </Ctx.Provider>
   );
 }

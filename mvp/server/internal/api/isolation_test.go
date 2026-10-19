@@ -368,6 +368,8 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		"/api/roles/{role_id}":                       roleIDs[f.B.ID],
 		"/api/roles/{role_id}/versions":              roleIDs[f.B.ID],
 		"/api/roles/{role_id}/drift":                 roleIDs[f.B.ID],
+		"/api/roles/{role_id}/exclusions":            roleIDs[f.B.ID],
+		"/api/roles/{role_id}/flags":                 roleIDs[f.B.ID],
 		"/api/requests/{request_id}":                 lines[f.B.ID],
 		"/api/sponsorships/{sponsorship_id}":         sponsorships[f.B.ID],
 		"/api/identities/{identity_id}":              fmt.Sprint(b["alice"]),
