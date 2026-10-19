@@ -396,6 +396,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if err != nil {
 		return err
 	}
+	rsvc.Runner.SCIM.Client = outbound
 	obs.SetPoolStats(st.PoolStats)
 	checker := health.New(st, sealer, obs.DefaultLoops, time.Duration(cfg.ReadyMaxLoopLagSeconds)*time.Second, logger)
 	fakeURL, stopFake, err := startFakeTarget(cfg, logger)

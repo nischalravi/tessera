@@ -14,6 +14,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/scim"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 )
 
 const (
@@ -268,7 +269,7 @@ func serve(t *testing.T, f *fakeSCIM) (srv *httptest.Server, baseURL string, roo
 
 func devClient(t *testing.T, rootCAs *x509.CertPool, timeout time.Duration) *http.Client {
 	t.Helper()
-	hc, err := scim.NewClient(scim.ClientOptions{Env: config.Dev, AllowLoopback: true, RootCAs: rootCAs, Timeout: timeout})
+	hc, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Dev, AllowLoopback: true, RootCAs: rootCAs, Timeout: timeout, MaxBodyBytes: scim.MaxBodyBytes})
 	if err != nil {
 		t.Fatal(err)
 	}

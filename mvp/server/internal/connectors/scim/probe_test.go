@@ -203,7 +203,7 @@ func TestRateLimit_LongRetryAfterIsNotWaitedFor(t *testing.T) {
 func TestSlowServer_TimesOut(t *testing.T) {
 	f := &fakeSCIM{Delay: 400 * time.Millisecond}
 	_, base, pool := serve(t, f)
-	hc, err := scim.NewClient(scim.ClientOptions{Env: config.Dev, AllowLoopback: true, RootCAs: pool, Timeout: 50 * time.Millisecond})
+	hc, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Dev, AllowLoopback: true, RootCAs: pool, Timeout: 50 * time.Millisecond, MaxBodyBytes: scim.MaxBodyBytes})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +256,7 @@ func TestTransport_Evidence(t *testing.T) {
 func TestProd_LoopbackBlocked(t *testing.T) {
 	f := &fakeSCIM{}
 	_, base, pool := serve(t, f)
-	hc, err := scim.NewClient(scim.ClientOptions{Env: config.Prod, RootCAs: pool, Timeout: time.Second})
+	hc, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Prod, RootCAs: pool, Timeout: time.Second, MaxBodyBytes: scim.MaxBodyBytes})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,16 +265,16 @@ func TestProd_LoopbackBlocked(t *testing.T) {
 	if err != nil || ci.Reachable {
 		t.Errorf("connect: %+v %v", ci, err)
 	}
-	if _, err := p.Authenticate(context.Background()); !errors.Is(err, safehttp.ErrBlockedAddress) {
+	if _, err := p.Authenticate(context.Background()); !isGuardRefusal(err) {
 		t.Errorf("authenticate: %v", err)
 	}
-	if _, err := p.RootInfo(context.Background()); !errors.Is(err, safehttp.ErrBlockedAddress) {
+	if _, err := p.RootInfo(context.Background()); !isGuardRefusal(err) {
 		t.Errorf("root info: %v", err)
 	}
 	if n, _, _, _ := f.seen(); n != 0 {
 		t.Errorf("%d requests reached a loopback server in prod mode", n)
 	}
-	if _, err := scim.NewClient(scim.ClientOptions{Env: config.Prod, AllowLoopback: true}); err == nil {
+	if _, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Prod, AllowLoopback: true, MaxBodyBytes: scim.MaxBodyBytes}); err == nil {
 		t.Error("prod client with the loopback exception was allowed")
 	}
 }
@@ -400,4 +400,10 @@ func TestAuth_NoTokenIsNotAuthenticated(t *testing.T) {
 	if n, _, _, _ := r.f.seen(); n != 0 {
 		t.Errorf("%d requests without a credential", n)
 	}
+}
+
+// isGuardRefusal: the SSRF guard refused the destination, by address or (for a
+// non-default port) by port, whichever it checks first.
+func isGuardRefusal(err error) bool {
+	return errors.Is(err, safehttp.ErrBlockedAddress) || errors.Is(err, safehttp.ErrPort)
 }

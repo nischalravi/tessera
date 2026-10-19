@@ -71,24 +71,10 @@ type Config struct {
 	BaseURL string
 	// Token is the bearer token (a sealed connection credential, opened by the caller).
 	Token Secret
-	// Client must come from NewClient (internal/safehttp).
+	// Client must be a client from internal/safehttp (safehttp.ForConfig).
 	Client *http.Client
 	// Sleep waits between retries; nil uses a context-aware timer. Tests inject one.
 	Sleep func(ctx context.Context, d time.Duration) error
-}
-
-// ClientOptions configure NewClient.
-type ClientOptions struct {
-	Env           string // config.Dev or config.Prod
-	AllowLoopback bool   // dev only
-	RootCAs       *x509.CertPool
-	Timeout       time.Duration // per request (default safehttp's 5 s)
-}
-
-// NewClient returns the SSRF-guarded client the Prober requires.
-func NewClient(o ClientOptions) (*http.Client, error) {
-	return safehttp.New(safehttp.Options{Env: o.Env, AllowLoopback: o.AllowLoopback, RootCAs: o.RootCAs,
-		Timeout: o.Timeout, MaxBodyBytes: MaxBodyBytes})
 }
 
 // Prober implements connectors.Prober for a SCIM 2.0 service.
