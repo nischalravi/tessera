@@ -420,8 +420,9 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	srv := api.New(api.Config{Health: checker, Store: st, Clock: clock, Policies: loader, Logger: logger,
 		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound,
 		Outbound: outbound, FakeTargetURL: fakeURL,
-		Containment:    containmentSvc,
-		SSF:            &ssf.Service{HTTP: outbound, Sealer: sealer, Clock: clock, Containment: containmentSvc},
+		Containment: containmentSvc,
+		SSF: &ssf.Service{HTTP: outbound, Sealer: sealer, Clock: clock, Containment: containmentSvc,
+			Dev: cfg.Env == config.Dev && cfg.OutboundAllowLoopback},
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
 		HSTS: cfg.IsProd(), Env: cfg.Env, Identifiers: identifiers.NewKeyer(sealer), EmailMode: cfg.Mail.Mode, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, Readiness: rsvc, AuditAnchor: anchorURL,
 		Siem: siemSvc, Alerts: alertSvc})

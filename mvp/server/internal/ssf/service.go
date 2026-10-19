@@ -34,6 +34,10 @@ type Service struct {
 	Skew, MaxAge time.Duration
 	// ContainTimeout bounds the provider calls of one event (default 20s).
 	ContainTimeout time.Duration
+	// Dev allows http:// and loopback IP literals in transmitter URLs (as
+	// safehttp's loopback exception does); otherwise only https to a host that
+	// is not a private, loopback or link-local address.
+	Dev bool
 
 	jwksMu sync.Mutex
 	jwks   map[string]jwksEntry

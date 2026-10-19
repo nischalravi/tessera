@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
@@ -44,6 +46,38 @@ func scrubErr(err error) error {
 	return err
 }
 
+// outboundURL checks a transmitter-configured URL before any request is built:
+// https (http only with Dev), a host, no user info, and no IP literal in a
+// private, loopback or link-local range (loopback literals only with Dev). The
+// safehttp client repeats these checks at dial time, after DNS resolution.
+func (s *Service) outboundURL(raw string) (*url.URL, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, errors.New("the URL is not valid")
+	}
+	switch {
+	case u.Scheme == "https":
+	case u.Scheme == "http" && s.Dev:
+	default:
+		return nil, errors.New("the URL must use https")
+	}
+	if u.Hostname() == "" {
+		return nil, errors.New("the URL has no host")
+	}
+	if u.User != nil {
+		return nil, errors.New("the URL must not carry user info")
+	}
+	if a, err := netip.ParseAddr(u.Hostname()); err == nil {
+		if a.Zone() != "" {
+			return nil, errors.New("the URL host is not allowed")
+		}
+		if !(s.Dev && a.Unmap().IsLoopback()) && safehttp.Blocked(a) {
+			return nil, errors.New("the URL host is not allowed")
+		}
+	}
+	return u, nil
+}
+
 // do sends a request and returns the status and body (at most maxBody bytes).
 func (s *Service) do(ctx context.Context, method, rawURL, bearer string, body any, maxBody int64) (int, []byte, error) {
 	if s.HTTP == nil {
@@ -57,7 +91,11 @@ func (s *Service) do(ctx context.Context, method, rawURL, bearer string, body an
 		}
 		rd = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, rawURL, rd)
+	u, err := s.outboundURL(rawURL)
+	if err != nil {
+		return 0, nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, method, u.String(), rd)
 	if err != nil {
 		return 0, nil, errors.New("the URL is not valid")
 	}

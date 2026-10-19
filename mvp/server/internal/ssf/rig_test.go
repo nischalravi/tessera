@@ -52,7 +52,7 @@ func newRig(t *testing.T) *rig {
 		t.Fatal(err)
 	}
 	clock := timeutil.Frozen(now)
-	svc := &Service{HTTP: httpClient(t), Sealer: sealer, Clock: clock,
+	svc := &Service{HTTP: httpClient(t), Sealer: sealer, Clock: clock, Dev: true,
 		Containment: &containment.Service{Sealer: sealer, Clock: clock}} // no HTTP: provider calls fail
 	r := &rig{t: t, f: f, svc: svc, sg: newSigner(t, jose.ES256, "k1"), alice: f.A.IDs["alice"]}
 	jwks, _ := json.Marshal(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{r.sg.jwk}})

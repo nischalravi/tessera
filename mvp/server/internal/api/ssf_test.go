@@ -231,7 +231,7 @@ func ssfServer(t *testing.T, f *storetest.Fixture, rl RateLimits) *Server {
 		Connectors: func(now time.Time) ([]connectors.Connector, error) {
 			return []connectors.Connector{connectors.Tiny{Now: now}}, nil
 		},
-		Containment: cs, SSF: &ssf.Service{HTTP: hc, Sealer: sealer, Clock: clock, Containment: cs},
+		Containment: cs, SSF: &ssf.Service{HTTP: hc, Sealer: sealer, Clock: clock, Containment: cs, Dev: true},
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Env:    "test", RateLimits: rl, AllowedOrigins: []string{"http://localhost:5173"},
 	})
