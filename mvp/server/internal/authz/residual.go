@@ -4,8 +4,8 @@ package authz
 // symbolic ("can ever") evaluation cannot decide a request (§9.4).
 //
 // Residual is a closed sum type: only Const, And, Or, Not and Atom implement
-// it, because the marker method is unexported. Simplification and rendering
-// arrive with the condition evaluator (PR-4).
+// it, because the marker method is unexported. Simplify and Render
+// (simplify.go, render.go) work on this type.
 type Residual interface{ isResidual() }
 
 // Const is the constant true or false.

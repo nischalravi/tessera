@@ -239,10 +239,21 @@ func probeErr(err error) Result {
 		return Result{Status: Error, Message: "the system rate-limited the check (HTTP 429)", Observed: map[string]any{"rate_limited": true}}
 	case errors.Is(err, context.DeadlineExceeded):
 		return Result{Status: Error, Message: "the check timed out"}
+	case errors.Is(err, connectors.ErrUnsupported):
+		return unsupported("this system does not expose it")
+	case errors.Is(err, connectors.ErrTargetNotAllowed):
+		return Result{Status: Error, Message: "the target is not reachable from this deployment: private directories need the Directory Agent"}
 	case errors.Is(err, ErrOpNotAllowed):
 		return Result{Status: Error, Message: "the check called a prober operation it did not declare"}
 	}
 	return Result{Status: Error, Message: "the system did not answer the read-only probe"}
+}
+
+// unsupported is the result of a check the system cannot answer: skipped, so
+// it never counts as a pass, and the message says what to do.
+func unsupported(why string) Result {
+	return Result{Status: Skipped, Message: "Not verifiable live: " + why + ". An attestation is required.",
+		Observed: map[string]any{"unsupported": true}}
 }
 
 func pass(msg string, obs map[string]any) Result {

@@ -1,0 +1,67 @@
+{
+  "activity_id": 1,
+  "activity_name": "Logon",
+  "actor": {
+    "app_name": "Tessera",
+    "session": {
+      "uid": "sess-1"
+    },
+    "user": {
+      "name": "Alice (tenant admin)",
+      "type": "user",
+      "uid": "2b3c0e0e-1111-4222-8333-444455556666"
+    }
+  },
+  "category_name": "Identity & Access Management",
+  "category_uid": 3,
+  "class_name": "Authentication",
+  "class_uid": 3002,
+  "is_mfa": true,
+  "message": "auth.login.success",
+  "metadata": {
+    "labels": [
+      "tenant:larkspur"
+    ],
+    "log_name": "tessera.audit",
+    "original_time": "2026-10-11T09:30:00.123Z",
+    "product": {
+      "feature": {
+        "name": "audit"
+      },
+      "name": "Tessera",
+      "vendor_name": "Tessera"
+    },
+    "sequence": 1,
+    "tenant_uid": "00000000-0000-4000-8000-0000000000aa",
+    "uid": "00000000-0000-4000-8000-000000000001",
+    "version": "1.3.0"
+  },
+  "severity": "Informational",
+  "severity_id": 1,
+  "src_endpoint": {
+    "ip": "203.0.113.7"
+  },
+  "status": "Success",
+  "status_detail": "success",
+  "status_id": 1,
+  "time": 1791711000123,
+  "type_name": "Authentication: Logon",
+  "type_uid": 300201,
+  "unmapped": {
+    "tessera": {
+      "action": "auth.login.success",
+      "detail": {
+        "protocol": "oidc"
+      },
+      "hash": "hash1",
+      "outcome": "success",
+      "prev_hash": "prev1",
+      "seq": 1,
+      "tenant_id": "00000000-0000-4000-8000-0000000000aa"
+    }
+  },
+  "user": {
+    "name": "Alice (tenant admin)",
+    "uid": "2b3c0e0e-1111-4222-8333-444455556666"
+  }
+}

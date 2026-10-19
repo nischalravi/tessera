@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// Flat-file import for disconnected applications (schema/0207_flatfile.sql).
+// Flat-file import for disconnected applications (schema/0352_flatfile.sql).
 // The parsing, delta and task rules live in internal/flatfile; the store only
 // holds the rows.
 

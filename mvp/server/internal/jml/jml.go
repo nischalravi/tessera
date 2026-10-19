@@ -15,6 +15,8 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
+	"github.com/nischalravi/tessera/mvp/server/internal/provision"
+	"github.com/nischalravi/tessera/mvp/server/internal/provision/target"
 	"github.com/nischalravi/tessera/mvp/server/internal/simulate"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
@@ -24,6 +26,13 @@ import (
 type Error struct{ Msg string }
 
 func (e *Error) Error() string { return e.Msg }
+
+// The two ExecuteEvent refusals the API maps apart from other caller errors:
+// an unknown event is a 404, an event that is already executed a 409.
+var (
+	ErrEventNotFound = &Error{"event not found"}
+	ErrEventExecuted = &Error{"event already executed"}
+)
 
 type sysXID struct{ system, xid string }
 
@@ -245,10 +254,18 @@ func LeaverPlan(c *store.TenantTx, now time.Time, identityID int64, withImpact b
 	if manager != nil {
 		newOwner, newOwnerName = manager.ID, manager.Name
 	}
+	handover, err := ownershipHandover(c, identityID, newOwner, newOwnerName)
+	if err != nil {
+		return nil, err
+	}
 	for _, n := range owned {
+		to, toName := newOwner, newOwnerName
+		if h, ok := handover[store.OwnedIdentity+"/"+strconv.FormatInt(n.ID, 10)]; ok {
+			to, toName = h.primary, h.primaryName
+		}
 		steps = append(steps, Step{{Key: "action", Value: "reassign_owner"}, {Key: "identity_id", Value: n.ID},
-			{Key: "system", Value: "tessera"}, {Key: "target", Value: n.Name}, {Key: "new_owner_id", Value: newOwner},
-			{Key: "detail", Value: fmt.Sprintf("Transfer ownership of %s (%s) to %s", n.Name, n.Type, newOwnerName)}})
+			{Key: "system", Value: "tessera"}, {Key: "target", Value: n.Name}, {Key: "new_owner_id", Value: to},
+			{Key: "detail", Value: fmt.Sprintf("Transfer ownership of %s (%s) to %s", n.Name, n.Type, toName)}})
 		nAccts, err := c.IdentityAccounts(n.ID)
 		if err != nil {
 			return nil, err
@@ -268,6 +285,7 @@ func LeaverPlan(c *store.TenantTx, now time.Time, identityID int64, withImpact b
 			}
 		}
 	}
+	steps = append(steps, handoverSteps(handover)...)
 	dels, err := c.Delegations()
 	if err != nil {
 		return nil, err
@@ -543,6 +561,46 @@ func JoinerPlan(c *store.TenantTx, payload ojson.Object) (Plan, error) {
 		{Key: "steps", Value: steps}}, nil
 }
 
+// ExistsError says a joiner matches an identity that is already active. The
+// operator should use the mover or rehire flow, or the account-match and
+// merge tools, instead of creating a second identity.
+type ExistsError struct {
+	ExistingID int64
+	MatchedOn  string // "email" or "hr_id"
+}
+
+func (e *ExistsError) Error() string {
+	return fmt.Sprintf("an active identity %d already has this %s", e.ExistingID, strings.Replace(e.MatchedOn, "_", " ", 1))
+}
+
+// joinerKeys is the joiner payload's email and HR employee id ("" if absent).
+func joinerKeys(payload ojson.Object) (email, hrID string) {
+	if s := optStr(payload, "email"); s != nil {
+		email = strings.TrimSpace(*s)
+	}
+	if s := optStr(payload, "employee_id"); s != nil {
+		hrID = strings.TrimSpace(*s)
+	}
+	return email, hrID
+}
+
+// CheckJoiner returns an *ExistsError if the joiner's email (case-insensitive,
+// trimmed) or HR employee id belongs to an active identity. A terminated
+// identity does not count: that person is a rehire. ExecuteEvent runs it
+// inside its write transaction, which makes the check authoritative.
+func CheckJoiner(c *store.TenantTx, payload ojson.Object) error {
+	email, hrID := joinerKeys(payload)
+	m, err := getOrNil(c.ActiveIdentityMatching(email, hrID))
+	if err != nil || m == nil {
+		return err
+	}
+	on := "hr_id"
+	if m.Email != nil && email != "" && strings.EqualFold(strings.TrimSpace(*m.Email), email) {
+		on = "email"
+	}
+	return &ExistsError{ExistingID: m.ID, MatchedOn: on}
+}
+
 func sortedKeys(m map[string]bool) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
@@ -583,21 +641,13 @@ func PlanForEvent(c *store.TenantTx, now time.Time, ev *store.HrisEvent, withImp
 	return JoinerPlan(c, ev.Payload)
 }
 
-func ensureAccount(c *store.TenantTx, now time.Time, ident *store.Identity, system string) (*store.Account, error) {
-	accts, err := c.IdentityAccounts(ident.ID)
-	if err != nil {
-		return nil, err
-	}
-	for _, a := range accts {
-		if a.System == system && a.Status == "active" {
-			return a, nil
-		}
-	}
-	var uname string
+// accountSpec is the username and external id a new account of ident in
+// system gets.
+func accountSpec(ident *store.Identity, system string) (uname, extID string, err error) {
 	switch system {
 	case "okta":
 		if ident.Email == nil {
-			return nil, fmt.Errorf("jml: %s has no email for an okta account", ident.Name)
+			return "", "", fmt.Errorf("jml: %s has no email for an okta account", ident.Name)
 		}
 		uname = *ident.Email
 	case "workday":
@@ -609,8 +659,25 @@ func ensureAccount(c *store.TenantTx, now time.Time, ident *store.Identity, syst
 		}
 		uname = strings.ReplaceAll(strings.SplitN(base, "@", 2)[0], ".", "-")
 	}
+	return uname, "tessera-" + system + "-" + ident.ExternalID, nil
+}
+
+func ensureAccount(c *store.TenantTx, now time.Time, ident *store.Identity, system string) (*store.Account, error) {
+	accts, err := c.IdentityAccounts(ident.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range accts {
+		if a.System == system && a.Status == "active" {
+			return a, nil
+		}
+	}
+	uname, extID, err := accountSpec(ident, system)
+	if err != nil {
+		return nil, err
+	}
 	iid := ident.ID
-	id, err := c.InsertAccount(&store.Account{System: system, ExternalID: "tessera-" + system + "-" + ident.ExternalID,
+	id, err := c.InsertAccount(&store.Account{System: system, ExternalID: extID,
 		IdentityID: &iid, Username: uname, Kind: "user", Status: "active", CreatedAt: &now})
 	if err != nil {
 		return nil, err
@@ -620,6 +687,10 @@ func ensureAccount(c *store.TenantTx, now time.Time, ident *store.Identity, syst
 
 func addGrant(c *store.TenantTx, now time.Time, ident *store.Identity, st Step) error {
 	gid, _ := stepInt(st, "group_id")
+	return addGrantTo(c, now, ident, gid)
+}
+
+func addGrantTo(c *store.TenantTx, now time.Time, ident *store.Identity, gid int64) error {
 	g, err := c.Group(gid)
 	if err != nil {
 		return err
@@ -656,30 +727,95 @@ func isContainment(action string) bool {
 	return action == containment.ActionRevokeSessions || action == containment.ActionRevokeGrants
 }
 
-func applyStep(c *store.TenantTx, now time.Time, by string, ident *store.Identity, st Step) error {
+// Completions the provisioning engine runs once the target confirms a step.
+const (
+	completeEnsureAccount = "jml.ensure_account"
+	completeAddGrant      = "jml.add_grant"
+)
+
+type identitySystem struct {
+	IdentityID int64  `json:"identity_id"`
+	System     string `json:"system"`
+}
+
+type identityGroup struct {
+	IdentityID int64 `json:"identity_id"`
+	GroupID    int64 `json:"group_id"`
+}
+
+func init() {
+	provision.RegisterCompletion(completeEnsureAccount, func(c *store.TenantTx, now time.Time, raw json.RawMessage) error {
+		var d identitySystem
+		if err := json.Unmarshal(raw, &d); err != nil {
+			return err
+		}
+		ident, err := c.Identity(d.IdentityID)
+		if err != nil {
+			return err
+		}
+		_, err = ensureAccount(c, now, ident, d.System)
+		return err
+	})
+	provision.RegisterCompletion(completeAddGrant, func(c *store.TenantTx, now time.Time, raw json.RawMessage) error {
+		var d identityGroup
+		if err := json.Unmarshal(raw, &d); err != nil {
+			return err
+		}
+		ident, err := c.Identity(d.IdentityID)
+		if err != nil {
+			return err
+		}
+		return addGrantTo(c, now, ident, d.GroupID)
+	})
+}
+
+// route sends a step's change to the provisioning engine when the system's
+// connection has write-back on. It reports whether it did; the caller then
+// leaves the graph alone (the engine edits it once the target confirms).
+func route(c *store.TenantTx, now time.Time, ch provision.Change) (bool, error) {
+	_, routed, err := provision.Submit(c, now, ch)
+	return routed, err
+}
+
+func stepKey(eventID int64, idx int, action string) string {
+	return fmt.Sprintf("jml:%d:%d:%s", eventID, idx, action)
+}
+
+func applyStep(c *store.TenantTx, now time.Time, by string, ident *store.Identity, st Step, eventID int64, idx int) error {
 	var err error
 	switch stepStr(st, "action") {
 	case containment.ActionRevokeSessions, containment.ActionRevokeGrants:
 		// run by the caller before ExecuteEvent; failures become retry tasks
 	case "disable_account":
 		id, _ := stepInt(st, "account_id")
-		if err = c.DisableAccount(id); err == nil {
-			// an app with no connector cannot be disabled from here: a manual task (issue #105)
-			err = flatfile.AccountDisabled(c, now, by, id, "leaver")
+		var routed bool
+		if routed, err = routeDisable(c, now, id, stepKey(eventID, idx, "disable_account")); err == nil && !routed {
+			if err = c.DisableAccount(id); err == nil {
+				// an app with no connector cannot be disabled from here: a manual task (issue #105)
+				err = flatfile.AccountDisabled(c, now, by, id, "leaver")
+			}
 		}
 	case "remove_grant":
 		id, _ := stepInt(st, "edge_id")
-		if err = flatfile.GrantRevoked(c, now, by, id, "leaver"); err == nil {
-			err = c.RevokeEdge(id, now, "jml")
+		var routed bool
+		if routed, err = routeRemoveGrant(c, now, id, stepKey(eventID, idx, "remove_grant")); err == nil && !routed {
+			if err = flatfile.GrantRevoked(c, now, by, id, "leaver"); err == nil {
+				err = c.RevokeEdge(id, now, "jml")
+			}
 		}
 	case "add_grant":
-		err = addGrant(c, now, ident, st)
+		var routed bool
+		if routed, err = routeAddGrant(c, now, ident, st, stepKey(eventID, idx, "add_grant")); err == nil && !routed {
+			err = addGrant(c, now, ident, st)
+		}
 	case "cancel_jit":
 		id, _ := stepInt(st, "request_id")
 		err = c.CancelRequest(id, now)
 	case "reassign_owner":
 		id, _ := stepInt(st, "identity_id")
 		err = c.SetIdentityOwner(id, optInt(stepGet(st, "new_owner_id")))
+	case "reassign_ownership":
+		err = reassignOwnership(c, now, st)
 	case "rotate_secret":
 		id, _ := stepInt(st, "secret_id")
 		err = c.SetSecretRotated(id, now)
@@ -698,6 +834,112 @@ func applyStep(c *store.TenantTx, now time.Time, by string, ident *store.Identit
 	return err
 }
 
+func routeDisable(c *store.TenantTx, now time.Time, accountID int64, key string) (bool, error) {
+	a, err := getOrNil(c.Account(accountID))
+	if err != nil || a == nil {
+		return false, err
+	}
+	return route(c, now, provision.Change{System: a.System, Kind: target.DisableAccount,
+		Account: target.Account{Username: a.Username, ExternalID: a.ExternalID}, Source: provision.SourceJML, Key: key,
+		Completion: provision.CompleteAccountDisable, Data: provision.AccountData{AccountID: accountID}})
+}
+
+// routeRemoveGrant routes the removal of a group membership. Edges to
+// permissions have no counterpart in a target and are never routed.
+func routeRemoveGrant(c *store.TenantTx, now time.Time, edgeID int64, key string) (bool, error) {
+	e, err := getOrNil(c.Edge(edgeID))
+	if err != nil || e == nil {
+		return false, err
+	}
+	kind, aid, err := graph.ParseKey(e.Src)
+	if err != nil || kind != "account" {
+		return false, nil
+	}
+	kind, gid, err := graph.ParseKey(e.Dst)
+	if err != nil || kind != "group" {
+		return false, nil
+	}
+	a, err := getOrNil(c.Account(aid))
+	if err != nil || a == nil {
+		return false, err
+	}
+	g, err := getOrNil(c.Group(gid))
+	if err != nil || g == nil {
+		return false, err
+	}
+	return route(c, now, provision.Change{System: g.System, Kind: target.RemoveEntitlement,
+		Account: target.Account{Username: a.Username, ExternalID: a.ExternalID},
+		Group:   target.Group{ExternalID: g.ExternalID, Name: g.Name}, Source: provision.SourceJML, Key: key,
+		Completion: provision.CompleteEdgeRemove, Data: provision.EdgeData{EdgeID: edgeID}})
+}
+
+func routeAddGrant(c *store.TenantTx, now time.Time, ident *store.Identity, st Step, key string) (bool, error) {
+	gid, _ := stepInt(st, "group_id")
+	g, err := getOrNil(c.Group(gid))
+	if err != nil || g == nil {
+		return false, err
+	}
+	if t, err := provision.Route(c, g.System); err != nil || t == nil {
+		return false, err
+	}
+	uname, extID, err := accountSpec(ident, g.System)
+	if err != nil {
+		return false, err
+	}
+	accts, err := c.IdentityAccounts(ident.ID)
+	if err != nil {
+		return false, err
+	}
+	have := false
+	for _, a := range accts {
+		if a.System == g.System && a.Status == "active" {
+			uname, extID, have = a.Username, a.ExternalID, true
+		}
+	}
+	if !have { // the identity has no account there yet: create it first
+		if err := routeEnsureAccount(c, now, ident, g.System, key+":account"); err != nil {
+			return false, err
+		}
+	}
+	return route(c, now, provision.Change{System: g.System, Kind: target.AddEntitlement,
+		Account: target.Account{Username: uname, ExternalID: extID},
+		Group:   target.Group{ExternalID: g.ExternalID, Name: g.Name}, Source: provision.SourceJML, Key: key,
+		Completion: completeAddGrant, Data: identityGroup{IdentityID: ident.ID, GroupID: gid}})
+}
+
+// routeEnsureAccount creates the joiner's account in the target when the
+// system's connection has write-back on. Without a target (or when the
+// account exists) it is a plain ensureAccount.
+func routeEnsureAccount(c *store.TenantTx, now time.Time, ident *store.Identity, system, key string) error {
+	if t, err := provision.Route(c, system); err != nil {
+		return err
+	} else if t != nil {
+		accts, err := c.IdentityAccounts(ident.ID)
+		if err != nil {
+			return err
+		}
+		for _, a := range accts {
+			if a.System == system && a.Status == "active" {
+				return nil // already there
+			}
+		}
+		uname, extID, err := accountSpec(ident, system)
+		if err != nil {
+			return err
+		}
+		acct := target.Account{Username: uname, ExternalID: extID, DisplayName: ident.Name}
+		if ident.Email != nil {
+			acct.Email = *ident.Email
+		}
+		_, err = route(c, now, provision.Change{System: system, Kind: target.CreateAccount, Account: acct,
+			Source: provision.SourceJML, Key: key, Completion: completeEnsureAccount,
+			Data: identitySystem{IdentityID: ident.ID, System: system}})
+		return err
+	}
+	_, err := ensureAccount(c, now, ident, system)
+	return err
+}
+
 // ExecuteEvent applies an HRIS event's plan and marks it executed.
 // by is the platform user who executes it (the request's principal). The
 // containment steps (revoke_sessions, revoke_grants) are not applied here:
@@ -709,10 +951,15 @@ func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.User
 		return nil, err
 	}
 	if ev == nil {
-		return nil, &Error{"unknown event"}
+		return nil, ErrEventNotFound
 	}
 	if ev.Status == "executed" {
-		return nil, &Error{"event already executed"}
+		return nil, ErrEventExecuted
+	}
+	if ev.Type == "joiner" {
+		if err := CheckJoiner(c, ev.Payload); err != nil {
+			return nil, err
+		}
 	}
 	plan, err := PlanForEvent(c, now, ev, false, policies)
 	if err != nil {
@@ -734,13 +981,27 @@ func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.User
 			}
 		}
 		source, hired := "workday", ev.EffectiveAt
-		id, err := c.InsertIdentity(&store.Identity{ExternalID: fmt.Sprintf("emp-new-%d", ev.ID),
+		// The HR employee id, when the event carries one, is the external id so a later
+		// duplicate is caught. A rehire's old (terminated) row still holds it, and the
+		// column is unique, so that case keeps the event-derived id.
+		xid := fmt.Sprintf("emp-new-%d", ev.ID)
+		if _, hrID := joinerKeys(p); hrID != "" {
+			if old, err := getOrNil(c.IdentityByExternalID(hrID)); err != nil {
+				return nil, err
+			} else if old == nil {
+				xid = hrID
+			}
+		}
+		id, err := c.InsertIdentity(&store.Identity{ExternalID: xid,
 			Name: pyStr(getAny(p, "name")), Email: optStr(p, "email"), Type: "human", Department: optStr(p, "department"),
 			Title: optStr(p, "title"), Status: "active", ManagerID: mgr, Source: &source, HiredAt: &hired, CreatedAt: now})
 		if err != nil {
 			return nil, err
 		}
 		if err := c.SetHrisEventIdentity(ev.ID, id); err != nil {
+			return nil, err
+		}
+		if err := joinerLifecycle(c, now, id, mgr, p); err != nil {
 			return nil, err
 		}
 		ident, err := c.Identity(id)
@@ -754,13 +1015,13 @@ func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.User
 			}
 		}
 		for _, s := range append([]string{"workday"}, sortedKeys(sysSet)...) {
-			if _, err := ensureAccount(c, now, ident, s); err != nil {
+			if err := routeEnsureAccount(c, now, ident, s, fmt.Sprintf("jml:%d:account:%s", ev.ID, s)); err != nil {
 				return nil, err
 			}
 		}
-		for _, st := range steps {
+		for i, st := range steps {
 			if stepStr(st, "action") == "add_grant" {
-				if err := addGrant(c, now, ident, st); err != nil {
+				if err := applyStep(c, now, by.Display, ident, st, ev.ID, i); err != nil {
 					return nil, err
 				}
 			}
@@ -770,8 +1031,8 @@ func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.User
 		if err != nil {
 			return nil, err
 		}
-		for _, st := range steps {
-			if err := applyStep(c, now, by.Display, ident, st); err != nil {
+		for i, st := range steps {
+			if err := applyStep(c, now, by.Display, ident, st, ev.ID, i); err != nil {
 				return nil, err
 			}
 		}
@@ -872,4 +1133,61 @@ func ViewEvent(c *store.TenantTx, ev *store.HrisEvent) (EventView, error) {
 		}
 	}
 	return v, nil
+}
+
+// ExecuteLeaver runs an identity's leaver plan outside an HRIS event (an
+// identity reaching its end date, issue #159): every step of LeaverPlan is
+// applied and the identity is terminated, in the caller's transaction. The
+// caller writes the audit event.
+func ExecuteLeaver(c *store.TenantTx, now time.Time, identityID int64) (Plan, error) {
+	plan, err := LeaverPlan(c, now, identityID, false, nil)
+	if err != nil {
+		return nil, err
+	}
+	ident, err := c.Identity(identityID)
+	if err != nil {
+		return nil, err
+	}
+	steps, _ := getAny(plan, "steps").([]Step)
+	for i, st := range steps {
+		// No HRIS event: a negative id keeps the provisioning keys of this
+		// identity's end-date leaver apart from every event's.
+		if err := applyStep(c, now, "system", ident, st, -identityID, i); err != nil {
+			return nil, err
+		}
+	}
+	return plan, c.TerminateIdentity(identityID, now)
+}
+
+// joinerLifecycle records a non-employee joiner's worker type, end date and
+// sponsor from the HRIS payload (worker_type, end_date, and
+// sponsor_external_id, else the manager), issue #159. An employee joiner
+// writes nothing.
+func joinerLifecycle(c *store.TenantTx, now time.Time, id int64, mgr *int64, p ojson.Object) error {
+	wt, _ := getAny(p, "worker_type").(string)
+	if wt == "" || wt == store.WorkerEmployee {
+		return nil
+	}
+	l := &store.Lifecycle{IdentityID: id, WorkerType: wt, SponsorID: mgr, Source: "hris", UpdatedAt: now}
+	if xid, ok := getAny(p, "sponsor_external_id").(string); ok {
+		sp, err := getOrNil(c.IdentityByExternalID(xid))
+		if err != nil {
+			return err
+		}
+		if sp != nil {
+			l.SponsorID = &sp.ID
+		}
+	}
+	end, _ := getAny(p, "end_date").(string)
+	t, err := timeutil.ParseISO(end)
+	if err != nil {
+		return &Error{fmt.Sprintf("a %s joiner needs an end_date", wt)}
+	}
+	l.EndsAt = &t
+	if err := c.PutLifecycle(l); err != nil {
+		return err
+	}
+	w := wt
+	return c.AddLifecycleEvent(&store.LifecycleEvent{IdentityID: id, Event: "set", WorkerType: &w, EndsAt: l.EndsAt,
+		Actor: "hris", At: now})
 }

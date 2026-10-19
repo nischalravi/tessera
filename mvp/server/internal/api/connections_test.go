@@ -83,6 +83,7 @@ func (c rdClient) attest(id, item string) {
 }
 
 func TestConnections_CreateAndChecklist(t *testing.T) {
+	t.Parallel()
 	c := newRD(t)
 	id := c.createAD()
 	v := c.json("GET", "/api/connections/"+id, "", http.StatusOK)
@@ -122,6 +123,7 @@ func TestConnections_CreateAndChecklist(t *testing.T) {
 }
 
 func TestActivate_409GateReport(t *testing.T) {
+	t.Parallel()
 	c := newRD(t)
 	id := c.createAD()
 	c.attest(id, "base.owner")
@@ -161,6 +163,7 @@ func TestActivate_409GateReport(t *testing.T) {
 }
 
 func TestSkipRequired_422(t *testing.T) {
+	t.Parallel()
 	c := newRD(t)
 	id := c.createAD()
 	r := c.json("POST", "/api/connections/"+id+"/checklist/ad.bind/skip", `{"reason":"we will fix this after go-live"}`, http.StatusUnprocessableEntity)
@@ -174,6 +177,7 @@ func TestSkipRequired_422(t *testing.T) {
 }
 
 func TestSkipReasonMinLength(t *testing.T) {
+	t.Parallel()
 	c := newRD(t)
 	id := c.createAD()
 	path := "/api/connections/" + id + "/checklist/ad.tls.signing_cb/skip"
@@ -205,6 +209,7 @@ func TestSkipReasonMinLength(t *testing.T) {
 }
 
 func TestCredential_NeverReturned(t *testing.T) {
+	t.Parallel()
 	c := newRD(t)
 	id := c.createAD()
 	const secret = "Corr3ct-H0rse-Battery-Staple"
@@ -222,6 +227,7 @@ func TestCredential_NeverReturned(t *testing.T) {
 }
 
 func TestLegacyConnectors_Unchanged(t *testing.T) {
+	t.Parallel()
 	c := newRD(t)
 	before := c.do("GET", "/api/connectors", "").Body.String()
 	v := c.json("POST", "/api/connections", `{"name":"Okta (demo)","connector_type":"demo-okta"}`, http.StatusCreated)
@@ -267,6 +273,7 @@ func TestLegacyConnectors_Unchanged(t *testing.T) {
 }
 
 func TestValidation_API(t *testing.T) {
+	t.Parallel()
 	c := newRD(t)
 	id := c.createAD()
 	r := c.json("POST", "/api/connections/"+id+"/validate", "", http.StatusConflict)

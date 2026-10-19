@@ -67,8 +67,6 @@ func seedFlatfile(t *testing.T, f *storetest.Fixture) map[string]flatIDs {
 	return out
 }
 
-func ptr[T any](v T) *T { return &v }
-
 func TestIsolation_FlatfileReads(t *testing.T) {
 	f := storetest.TwoTenants(t)
 	ids := seedFlatfile(t, f)

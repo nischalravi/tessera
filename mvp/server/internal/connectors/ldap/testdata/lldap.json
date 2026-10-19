@@ -1,0 +1,359 @@
+{
+ "name": "lldap-shaped",
+ "rootdse": {
+  "objectClass": [
+   "top"
+  ],
+  "vendorName": [
+   "LLDAP"
+  ],
+  "vendorVersion": [
+   "lldap_0.6.1"
+  ],
+  "namingContexts": [
+   "dc=tessera,dc=test"
+  ],
+  "supportedLDAPVersion": [
+   "3"
+  ]
+ },
+ "whoami": false,
+ "paged": true,
+ "ger": false,
+ "size_limit": 0,
+ "users": {
+  "uid=svc-tessera,ou=people,dc=tessera,dc=test": "ro-secret-pw",
+  "uid=admin,ou=people,dc=tessera,dc=test": "admin-secret-pw"
+ },
+ "entries": [
+  {
+   "dn": "dc=tessera,dc=test",
+   "attrs": {
+    "objectClass": [
+     "top",
+     "domain"
+    ],
+    "dc": [
+     "tessera"
+    ]
+   }
+  },
+  {
+   "dn": "ou=people,dc=tessera,dc=test",
+   "attrs": {
+    "objectClass": [
+     "top",
+     "organizationalUnit"
+    ],
+    "ou": [
+     "people"
+    ]
+   }
+  },
+  {
+   "dn": "ou=groups,dc=tessera,dc=test",
+   "attrs": {
+    "objectClass": [
+     "top",
+     "organizationalUnit"
+    ],
+    "ou": [
+     "groups"
+    ]
+   }
+  },
+  {
+   "dn": "uid=svc-tessera,ou=people,dc=tessera,dc=test",
+   "attrs": {
+    "objectClass": [
+     "person",
+     "inetOrgPerson",
+     "posixAccount",
+     "mailAccount",
+     "top"
+    ],
+    "uid": [
+     "svc-tessera"
+    ],
+    "cn": [
+     "Tessera Reader"
+    ],
+    "sn": [
+     "Reader"
+    ],
+    "mail": [
+     "svc@tessera.test"
+    ],
+    "entryUUID": [
+     "1ecb06ea-0001-4000-8000-000000000000"
+    ],
+    "createTimestamp": [
+     "20250101000000Z"
+    ],
+    "modifyTimestamp": [
+     "20250601000000Z"
+    ],
+    "memberOf": [
+     "cn=lldap_strict_readonly,ou=groups,dc=tessera,dc=test"
+    ]
+   }
+  },
+  {
+   "dn": "uid=admin,ou=people,dc=tessera,dc=test",
+   "attrs": {
+    "objectClass": [
+     "person",
+     "inetOrgPerson",
+     "posixAccount",
+     "mailAccount",
+     "top"
+    ],
+    "uid": [
+     "admin"
+    ],
+    "cn": [
+     "Administrator"
+    ],
+    "sn": [
+     "Administrator"
+    ],
+    "mail": [
+     "admin@tessera.test"
+    ],
+    "entryUUID": [
+     "880e0d76-0001-4000-8000-000000000000"
+    ],
+    "createTimestamp": [
+     "20250101000000Z"
+    ],
+    "modifyTimestamp": [
+     "20250601000000Z"
+    ],
+    "memberOf": [
+     "cn=lldap_admin,ou=groups,dc=tessera,dc=test"
+    ]
+   }
+  },
+  {
+   "dn": "uid=alice,ou=people,dc=tessera,dc=test",
+   "attrs": {
+    "objectClass": [
+     "person",
+     "inetOrgPerson",
+     "posixAccount",
+     "mailAccount",
+     "top"
+    ],
+    "uid": [
+     "alice"
+    ],
+    "cn": [
+     "Alice Archer"
+    ],
+    "sn": [
+     "Archer"
+    ],
+    "mail": [
+     "alice@tessera.test"
+    ],
+    "entryUUID": [
+     "278ebc47-0001-4000-8000-000000000000"
+    ],
+    "createTimestamp": [
+     "20250101000000Z"
+    ],
+    "modifyTimestamp": [
+     "20250601000000Z"
+    ],
+    "memberOf": [
+     "cn=devs,ou=groups,dc=tessera,dc=test"
+    ]
+   }
+  },
+  {
+   "dn": "uid=bob,ou=people,dc=tessera,dc=test",
+   "attrs": {
+    "objectClass": [
+     "person",
+     "inetOrgPerson",
+     "posixAccount",
+     "mailAccount",
+     "top"
+    ],
+    "uid": [
+     "bob"
+    ],
+    "cn": [
+     "Bob Baker"
+    ],
+    "sn": [
+     "Baker"
+    ],
+    "mail": [
+     "bob@tessera.test"
+    ],
+    "entryUUID": [
+     "f5cbb140-0001-4000-8000-000000000000"
+    ],
+    "createTimestamp": [
+     "20250101000000Z"
+    ],
+    "modifyTimestamp": [
+     "20250601000000Z"
+    ],
+    "memberOf": [
+     "cn=devs,ou=groups,dc=tessera,dc=test",
+     "cn=ops,ou=groups,dc=tessera,dc=test"
+    ]
+   }
+  },
+  {
+   "dn": "uid=carol,ou=people,dc=tessera,dc=test",
+   "attrs": {
+    "objectClass": [
+     "person",
+     "inetOrgPerson",
+     "posixAccount",
+     "mailAccount",
+     "top"
+    ],
+    "uid": [
+     "carol"
+    ],
+    "cn": [
+     "Carol Chen"
+    ],
+    "sn": [
+     "Chen"
+    ],
+    "mail": [
+     "carol@tessera.test"
+    ],
+    "entryUUID": [
+     "6a3e8cc3-0001-4000-8000-000000000000"
+    ],
+    "createTimestamp": [
+     "20250101000000Z"
+    ],
+    "modifyTimestamp": [
+     "20250601000000Z"
+    ],
+    "memberOf": [
+     "cn=ops,ou=groups,dc=tessera,dc=test"
+    ]
+   }
+  },
+  {
+   "dn": "cn=lldap_admin,ou=groups,dc=tessera,dc=test",
+   "attrs": {
+    "objectClass": [
+     "groupOfUniqueNames",
+     "top"
+    ],
+    "cn": [
+     "lldap_admin"
+    ],
+    "entryUUID": [
+     "b8c0b102-0002-4000-8000-000000000000"
+    ],
+    "createTimestamp": [
+     "20250101000000Z"
+    ],
+    "modifyTimestamp": [
+     "20250601000000Z"
+    ],
+    "member": [
+     "uid=admin,ou=people,dc=tessera,dc=test"
+    ],
+    "uniqueMember": [
+     "uid=admin,ou=people,dc=tessera,dc=test"
+    ]
+   }
+  },
+  {
+   "dn": "cn=lldap_strict_readonly,ou=groups,dc=tessera,dc=test",
+   "attrs": {
+    "objectClass": [
+     "groupOfUniqueNames",
+     "top"
+    ],
+    "cn": [
+     "lldap_strict_readonly"
+    ],
+    "entryUUID": [
+     "08dcb9eb-0002-4000-8000-000000000000"
+    ],
+    "createTimestamp": [
+     "20250101000000Z"
+    ],
+    "modifyTimestamp": [
+     "20250601000000Z"
+    ],
+    "member": [
+     "uid=svc-tessera,ou=people,dc=tessera,dc=test"
+    ],
+    "uniqueMember": [
+     "uid=svc-tessera,ou=people,dc=tessera,dc=test"
+    ]
+   }
+  },
+  {
+   "dn": "cn=devs,ou=groups,dc=tessera,dc=test",
+   "attrs": {
+    "objectClass": [
+     "groupOfUniqueNames",
+     "top"
+    ],
+    "cn": [
+     "devs"
+    ],
+    "entryUUID": [
+     "6b754875-0002-4000-8000-000000000000"
+    ],
+    "createTimestamp": [
+     "20250101000000Z"
+    ],
+    "modifyTimestamp": [
+     "20250601000000Z"
+    ],
+    "member": [
+     "uid=alice,ou=people,dc=tessera,dc=test",
+     "uid=bob,ou=people,dc=tessera,dc=test"
+    ],
+    "uniqueMember": [
+     "uid=alice,ou=people,dc=tessera,dc=test",
+     "uid=bob,ou=people,dc=tessera,dc=test"
+    ]
+   }
+  },
+  {
+   "dn": "cn=ops,ou=groups,dc=tessera,dc=test",
+   "attrs": {
+    "objectClass": [
+     "groupOfUniqueNames",
+     "top"
+    ],
+    "cn": [
+     "ops"
+    ],
+    "entryUUID": [
+     "5af90c7f-0002-4000-8000-000000000000"
+    ],
+    "createTimestamp": [
+     "20250101000000Z"
+    ],
+    "modifyTimestamp": [
+     "20250601000000Z"
+    ],
+    "member": [
+     "uid=bob,ou=people,dc=tessera,dc=test",
+     "uid=carol,ou=people,dc=tessera,dc=test"
+    ],
+    "uniqueMember": [
+     "uid=bob,ou=people,dc=tessera,dc=test",
+     "uid=carol,ou=people,dc=tessera,dc=test"
+    ]
+   }
+  }
+ ]
+}
