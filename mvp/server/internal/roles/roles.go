@@ -398,9 +398,13 @@ func (w *world) applyRule(roleID string) error {
 		}
 		var cond *abac.Node
 		var shared abac.Attrs
+		var resolver *abac.Resolver
 		if rule.Policy != "" {
 			conds, err := abac.Active(w.tx)
 			if err != nil {
+				return err
+			}
+			if resolver, err = abac.NewResolver(w.tx, w.now); err != nil {
 				return err
 			}
 			cond = conds[rule.Policy]
@@ -410,7 +414,7 @@ func (w *world) applyRule(roleID string) error {
 			w.people[p.ID] = p
 			var attrs abac.Attrs
 			if cond != nil {
-				attrs = abac.Merge(abac.IdentityAttrs(p, w.now), shared)
+				attrs = abac.Merge(resolver.Identity(p), shared)
 			}
 			if rule.Match(p, cond, attrs) {
 				matched[p.ID] = true

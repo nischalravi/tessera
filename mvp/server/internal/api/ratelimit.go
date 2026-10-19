@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -118,8 +119,8 @@ func (s *Server) trustedProxy(a netip.Addr) bool {
 type authenticatedKey struct{}
 
 func markAuthenticated(ctx context.Context) {
-	if b, ok := ctx.Value(authenticatedKey{}).(*bool); ok {
-		*b = true
+	if b, ok := ctx.Value(authenticatedKey{}).(*atomic.Bool); ok {
+		b.Store(true)
 	}
 }
 
@@ -145,9 +146,12 @@ func (s *Server) rateLimit(next http.Handler) http.Handler {
 			tooMany(w, s.limits.anonEvery)
 			return
 		}
-		authenticated := false
+		// The flag is set by the handler, which http.TimeoutHandler runs on its
+		// own goroutine and which can outlive next.ServeHTTP once the timeout
+		// fires, so it is atomic.
+		var authenticated atomic.Bool
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), authenticatedKey{}, &authenticated)))
-		if !authenticated {
+		if !authenticated.Load() {
 			s.limits.anon.Allow(key)
 		}
 	})
