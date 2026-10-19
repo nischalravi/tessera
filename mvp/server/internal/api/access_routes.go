@@ -79,7 +79,6 @@ func accessPathUUID(p *params, name, what string) (uuid.UUID, error) {
 	return id, nil
 }
 
-
 // ---------------------------------------------------------------- validation
 
 func validName(v string) (string, error) {
