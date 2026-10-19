@@ -402,7 +402,7 @@ func (s *Server) issueCode(w http.ResponseWriter, r *http.Request, p pendingAuth
 	if p.fault != FaultNoIssParam {
 		v.Set("iss", s.issuer)
 	}
-	http.Redirect(w, r, withParams(p.redirectURI, v), status)
+	s.redirectRegistered(w, r, p.redirectURI, v, status, p.cas)
 }
 
 // redirectError sends an OAuth error to a validated redirect_uri, with the
@@ -416,7 +416,7 @@ func (s *Server) redirectError(w http.ResponseWriter, r *http.Request, redirectU
 	if r.Method == http.MethodPost {
 		status = http.StatusSeeOther
 	}
-	http.Redirect(w, r, withParams(redirectURI, v), status) // #nosec G710 -- redirectURI was matched against the client's registered URIs
+	s.redirectRegistered(w, r, redirectURI, v, status, false)
 }
 
 func withParams(base string, add url.Values) string {
@@ -764,7 +764,8 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	if target := q.Get("post_logout_redirect_uri"); target != "" {
 		for _, c := range s.clients {
-			if slices.Contains(c.PostLogoutRedirectURIs, target) {
+			if i := slices.Index(c.PostLogoutRedirectURIs, target); i >= 0 {
+				target := c.PostLogoutRedirectURIs[i] // the registered string, never the request's
 				v := url.Values{}
 				if st := q.Get("state"); st != "" {
 					v.Set("state", st)

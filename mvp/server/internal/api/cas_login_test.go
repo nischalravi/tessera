@@ -57,6 +57,9 @@ func (e *oidcEnv) casStart(target, sub string, m devidp.Method, fault devidp.Fau
 	if rec.Code != http.StatusFound {
 		e.t.Fatalf("%s: %d %s", target, rec.Code, rec.Body.String())
 	}
+	if rec.Body.Len() != 0 {
+		e.t.Errorf("%s: the redirect to the CAS server has a body %q; it must be empty", target, rec.Body.String())
+	}
 	a := attempt{login: rec, cookie: cookieNamed(rec, LoginCookieName)}
 	loc := rec.Header().Get("Location")
 	if fault != devidp.FaultNone {

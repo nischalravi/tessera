@@ -81,7 +81,9 @@ func (s *Server) startCASLogin(w http.ResponseWriter, r *http.Request, t store.T
 	}
 	http.SetCookie(w, s.loginCookie(cookie, int(loginTxnTTL/time.Second)))
 	w.Header().Set("Cache-Control", "no-store")
-	http.Redirect(w, r, loginURL, http.StatusFound)
+	// no body: a redirect page would echo the URL back
+	w.Header().Set("Location", loginURL)
+	w.WriteHeader(http.StatusFound)
 	return nil, nil
 }
 
