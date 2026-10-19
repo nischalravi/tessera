@@ -177,6 +177,11 @@ func (s *Service) finalize(tx *store.TenantTx, ss *store.Sponsorship, status, ev
 			return err
 		}
 	}
+	if s.Claim != nil {
+		if err := s.Claim.RevokeIfIssued(tx, ss, reason, now); err != nil {
+			return err
+		}
+	}
 	return s.syncPerson(tx, ss.GuestIdentityID, by, now, reason)
 }
 

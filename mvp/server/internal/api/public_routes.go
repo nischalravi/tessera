@@ -52,6 +52,13 @@ var publicRoutes = []string{
 	"GET /t/{slug}/bootstrap",
 	"POST /api/auth/break-glass/options",
 	"POST /api/auth/break-glass/verify",
+	"POST /public/t/{slug}/claim/start",
+	"POST /public/t/{slug}/claim/verify/send",
+	"POST /public/t/{slug}/claim/verify/check",
+	"GET /public/t/{slug}/claim/status",
+	"POST /public/t/{slug}/claim/existing-account",
+	"POST /public/t/{slug}/claim/credential",
+	"POST /public/t/{slug}/claim/resend",
 }
 
 // PublicRoutes returns the allow-list.

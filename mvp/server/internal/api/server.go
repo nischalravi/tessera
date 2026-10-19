@@ -27,10 +27,13 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oidcrp"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/claim"
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/credential"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/sponsorship"
 	"github.com/nischalravi/tessera/mvp/server/internal/health"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
+	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
@@ -142,6 +145,18 @@ type Config struct {
 	// Identifiers hashes the identifiers of invited guests under per-tenant
 	// keys derived from the KEK. Nil: invitations answer 503.
 	Identifiers *identifiers.Keyer
+	// Secrets hands one-time secrets (claim links, confirmation codes) to the
+	// notification dispatcher through memory, never the database; share the
+	// instance with the Dispatcher. Nil: the API makes its own (nothing is
+	// mailed without a dispatcher holding it).
+	Secrets *notify.Secrets
+	// Credential is the credential authority guests set up their sign-in
+	// through (guest claim, internal/guests/credential). Nil: the claim stops
+	// at the credential step and stays pending.
+	Credential credential.Authority
+	// ClaimMinDuration is the minimum time of a claim start or resend (default
+	// 300 ms); tests shorten it.
+	ClaimMinDuration time.Duration
 	// Containment runs the kill switch's provider calls (revoke sessions and
 	// grants). Nil: a service with no outbound client, so every containment
 	// step is a manual task.
@@ -176,8 +191,12 @@ type Server struct {
 	authn  *auth.Authenticator
 	limits *limiters
 	guests *sponsorship.Service
-	rp     *oidcrp.RP
-	oauth2 *oauth2rp.RP
+
+	claimSvc *claim.Service
+	claimLim *claimLimits
+	names    nameCache
+	rp       *oidcrp.RP
+	oauth2   *oauth2rp.RP
 
 	readiness *readiness.Service
 	agents    *agent.Service
@@ -261,6 +280,15 @@ func New(cfg Config) *Server {
 		}
 	}
 	s.guests = sponsorship.New(cfg.Identifiers)
+	s.claimLim = newClaimLimits()
+	if cfg.Identifiers != nil && cfg.PublicURL != "" {
+		if cfg.Secrets == nil {
+			cfg.Secrets = notify.NewSecrets()
+			s.cfg.Secrets = cfg.Secrets
+		}
+		s.claimSvc = claim.New(cfg.Identifiers, cfg.Secrets, cfg.PublicURL, s.tenantName)
+		s.guests.Claim = s.claimSvc
+	}
 	if cfg.OutboundHTTP != nil {
 		rp, err := oidcrp.New(oidcrp.Config{HTTP: cfg.OutboundHTTP, Now: func() time.Time { return s.clock() }})
 		if err != nil {
@@ -294,6 +322,7 @@ func New(cfg Config) *Server {
 	s.registerSodControlRoutes()
 	s.registerLifecycleRoutes()
 	s.registerGuestRoutes()
+	s.registerClaimRoutes()
 	s.registerNotificationRoutes()
 	s.registerEmailRoutes()
 	s.registerContainmentRoutes()
@@ -952,7 +981,7 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		default:
 			h.Set("Content-Security-Policy", cspAPI)
 		}
-		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/t/") {
+		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/t/") || strings.HasPrefix(r.URL.Path, "/public/") {
 			h.Set("Cache-Control", "no-store")
 		}
 		if s.cfg.HSTS {

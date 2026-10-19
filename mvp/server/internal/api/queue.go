@@ -12,6 +12,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/claim"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/sponsorship"
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/lifecycle"
@@ -100,7 +101,8 @@ func (s *Server) queueRequestSweep(ctx context.Context, j queue.Job) (any, error
 }
 
 // queueLifecycleSweep ends sponsorships first: the last one to end ends the
-// person, and the lifecycle sweep then has nothing left. They are one job so
+// person, and the lifecycle sweep then has nothing left. Guest claim links are
+// swept in the same job (#202). They are one job so
 // that order holds however many workers run.
 func (s *Server) queueLifecycleSweep(ctx context.Context, j queue.Job) (any, error) {
 	now := s.clock()
@@ -114,6 +116,19 @@ func (s *Server) queueLifecycleSweep(ctx context.Context, j queue.Job) (any, err
 	})
 	if err != nil {
 		return nil, err
+	}
+	if s.claimSvc != nil { // expire guest claim links, and the invitations whose last link lapsed unused
+		err = s.store.InTenant(audit.WithSystemActor(ctx, "claim.sweeper"), j.Tenant, func(tx *store.TenantTx) error {
+			need, err := claim.NeedsSweep(tx, now)
+			if err != nil || !need {
+				return err
+			}
+			_, err = s.claimSvc.Sweep(tx, now)
+			return err
+		})
+		if err != nil {
+			return nil, err
+		}
 	}
 	_, err = lifecycle.SweepTenant(audit.WithSystemActor(ctx, lifecycle.Sweeper), readiness.Scope{DB: s.store, Tenant: j.Tenant},
 		s.containment, now)

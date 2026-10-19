@@ -536,6 +536,34 @@ CREATE POLICY tenant_isolation ON sponsorship_events
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE claim_tokens ENABLE ROW LEVEL SECURITY;
+ALTER TABLE claim_tokens FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON claim_tokens;
+CREATE POLICY tenant_isolation ON claim_tokens
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE claim_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE claim_sessions FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON claim_sessions;
+CREATE POLICY tenant_isolation ON claim_sessions
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE confirmation_codes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE confirmation_codes FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON confirmation_codes;
+CREATE POLICY tenant_isolation ON confirmation_codes
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE claim_proof_uses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE claim_proof_uses FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON claim_proof_uses;
+CREATE POLICY tenant_isolation ON claim_proof_uses
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 ALTER TABLE edge_history ENABLE ROW LEVEL SECURITY;
 ALTER TABLE edge_history FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON edge_history;

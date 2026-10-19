@@ -16,8 +16,9 @@
 // identity (status invited) with an unverified, sponsor-asserted email
 // identifier and an intake record. It never links to an existing person and
 // never says whether the email matches one, except that nobody can sponsor
-// themselves. Linking and merging are GU-5. The invitation is left "ready";
-// the claim link and the guest's email are GU-6. The access bundle is stored
+// themselves. Linking and merging are GU-5. When the sponsorship becomes
+// active the claim link and the guest's email are issued (internal/guests/claim,
+// GU-6) and the invitation reads "sent"; without TESSERA_PUBLIC_URL it stays "ready". The access bundle is stored
 // on the sponsorship; granting it is GU-12. Sponsor leaver transfers are GU-11.
 //
 // Every function works in the caller's tenant transaction, which also
@@ -36,6 +37,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/claim"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/affiliations"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/lifecycle"
@@ -91,6 +93,10 @@ func (a Actor) Is(id int64) bool { return a.IdentityID != nil && *a.IdentityID =
 type Service struct {
 	Policy *Policy
 	Keyer  *identifiers.Keyer
+	// Claim issues the guest's claim link and invitation email when a
+	// sponsorship becomes active (GU-6) and revokes it when the sponsorship
+	// ends. Nil, or not Ready: the invitation stays "ready" and nothing is sent.
+	Claim *claim.Service
 }
 
 // New returns a Service with the default policy.

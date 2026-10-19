@@ -158,6 +158,10 @@ var tables = []string{
 	"flatfile_mappings", "flatfile_uploads", "flatfile_upload_errors", "flatfile_changes", "flatfile_records", "flatfile_tasks",
 	// point-in-time access and evidence packs (schema/0260-0261)
 	"edge_history", "evidence_packs",
+	// guest claim (schema/0228_claim.sql)
+	"claim_tokens", "claim_sessions", "confirmation_codes",
+	// claim proof one-use memory (schema/0229_claim_proofs.sql)
+	"claim_proof_uses",
 	// SIEM sinks (schema/0210_siem.sql)
 	"siem_sinks", "siem_dead_letters",
 	// alerting (schema/0209_alerts.sql)
@@ -335,16 +339,16 @@ func (d *DB) Migrate(ctx context.Context, drop bool) error {
 	})
 }
 
-// upgradeLoginTxnPurpose lets a SQLite database created before the 'test'
-// login purpose (0315) take it: CREATE TABLE IF NOT EXISTS cannot change a
+// upgradeLoginTxnPurpose lets a SQLite database created before the 'test' and 'claim'
+// login purposes (0315, 0319) take them: CREATE TABLE IF NOT EXISTS cannot change a
 // CHECK, so the table is dropped and the schema recreates it. Its rows are
 // ten-minute pre-auth state, so at worst an in-flight sign-in starts over.
-// Postgres does this in migration 0315.
+// Postgres does this in migrations 0315 and 0319.
 func (d *DB) upgradeLoginTxnPurpose(ctx context.Context) error {
 	var ddl string
 	err := d.sql.QueryRowContext(ctx,
 		`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'login_transactions'`).Scan(&ddl)
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && strings.Contains(ddl, "'test'")) {
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && strings.Contains(ddl, "'test'") && strings.Contains(ddl, "'claim'")) {
 		return nil
 	}
 	if err != nil {

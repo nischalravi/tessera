@@ -36,6 +36,10 @@ const (
 	MatchSelfAsserted    = "self_asserted"
 	IntakeReceived       = "received"
 	InvitationReady      = "ready"
+	InvitationSent       = "sent"
+	InvitationClaimed    = "claimed"
+	InvitationRevoked    = "revoked"
+	InvitationExpired    = "expired"
 )
 
 // IntakeRecord is how a person came to the organization.
@@ -49,6 +53,11 @@ type IntakeRecord struct {
 	BatchID           *string
 	Status            string
 	InvitationStatus  string
+	// ExistingAccount is the claimant's own answer to "do you already have an
+	// account?" ("yes" or "no"), for the review queue; it never links (K3).
+	ExistingAccount   *string
+	ExistingAccountAt *time.Time
+	ClaimedAt         *time.Time
 	CreatedAt         time.Time
 }
 
@@ -107,7 +116,7 @@ type SponsorshipFilter struct {
 }
 
 const intakeCols = `r.id, r.channel, r.match_mode, r.source_record_id, r.submitted_by, r.sponsor_identity_id, r.batch_id,
-	r.status, r.invitation_status, r.created_at`
+	r.status, r.invitation_status, r.existing_account, r.existing_account_at, r.claimed_at, r.created_at`
 
 const sponsorCols = `s.id, s.guest_identity_id, s.intake_id, s.sponsor_identity_id, s.population, s.purpose, s.access_bundle,
 	s.required_ial, s.required_aal, s.starts_at, s.ends_at, s.status, s.policy_version, s.approved_by, s.approved_at,
@@ -178,14 +187,22 @@ var (
 
 func scanIntake(s scanner) (*IntakeRecord, error) {
 	var r IntakeRecord
-	var src, by, batch sql.NullString
+	var src, by, batch, existing sql.NullString
 	var sponsor sql.NullInt64
-	var at nullTime
-	if err := s.Scan(&r.ID, &r.Channel, &r.MatchMode, &src, &by, &sponsor, &batch, &r.Status, &r.InvitationStatus, &at); err != nil {
+	var existingAt, claimedAt, at nullTime
+	if err := s.Scan(&r.ID, &r.Channel, &r.MatchMode, &src, &by, &sponsor, &batch, &r.Status, &r.InvitationStatus,
+		&existing, &existingAt, &claimedAt, &at); err != nil {
 		return nil, err
 	}
 	r.SourceRecordID, r.SubmittedBy, r.SponsorIdentityID, r.BatchID = strp(src), strp(by), intp(sponsor), strp(batch)
+	r.ExistingAccount = strp(existing)
 	var err error
+	if r.ExistingAccountAt, err = existingAt.ptr(); err != nil {
+		return nil, err
+	}
+	if r.ClaimedAt, err = claimedAt.ptr(); err != nil {
+		return nil, err
+	}
 	r.CreatedAt, err = at.val()
 	return &r, err
 }

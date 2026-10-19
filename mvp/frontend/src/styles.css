@@ -856,3 +856,19 @@ fieldset.card { margin: 0; }
 .attempt-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s-4); }
 .attempt-list > li { border-left: 2px solid var(--border); padding-left: var(--s-3); }
 .transcript { margin: 0; padding: var(--s-2) var(--s-3); background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm); font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; }
+
+/* ------------------------------------------------------------------ guest claim page (/claim) */
+.claim-wrap { min-height: 100vh; display: flex; justify-content: center; align-items: flex-start; padding: 24px 12px; background: var(--surface-2); color: var(--text); }
+.claim { width: 100%; max-width: 32rem; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-md); padding: 20px 16px; display: flex; flex-direction: column; gap: 14px; }
+.claim-brand { margin: 0; font-size: var(--fs-sm); font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: .04em; }
+.claim-h { margin: 0; font-size: 1.35rem; line-height: 1.25; }
+.claim-h:focus { outline: none; }
+.claim-h:focus-visible { outline: 2px solid var(--focus); outline-offset: 4px; }
+.claim p { margin: 0; line-height: 1.5; }
+.claim-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: var(--fs-sm); color: var(--text-2); }
+.claim-steps li.now { color: var(--text); font-weight: 600; border-bottom: 2px solid var(--accent-line); }
+.claim-steps li.done { color: var(--text-3); }
+.claim-code { font-size: 1.3rem; letter-spacing: .25em; max-width: 12rem; }
+.claim-choices { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.claim input.input, .claim .btn { min-height: 40px; }
+@media (max-width: 400px) { .claim { padding: 16px 12px; border-left: 0; border-right: 0; border-radius: 0; } .claim-wrap { padding: 0; } }

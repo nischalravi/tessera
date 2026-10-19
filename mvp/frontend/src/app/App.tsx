@@ -104,7 +104,20 @@ function Moved({ to }: { to: string }) {
   return <Navigate to={path + search} replace />;
 }
 
+// the guest's claim page: public, outside the admin shell and its sign-in
+const ClaimPage = lazy(() => import("../public/claim/ClaimPage"));
+
 export default function App() {
+  const { pathname } = useLocation();
+  if (pathname === "/claim") {
+    return (
+      <ThemeProvider>
+        <Suspense fallback={<PageSkeleton />}>
+          <ClaimPage />
+        </Suspense>
+      </ThemeProvider>
+    );
+  }
   return (
     <ThemeProvider>
       <ToastProvider>
