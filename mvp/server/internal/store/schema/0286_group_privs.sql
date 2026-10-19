@@ -1,6 +1,6 @@
 -- Group privileges (issue #47, GR-4; design docs/design/groups-grouper-parity.md
--- §5.3, §7). The design numbers this file 0102; 0280..0284 are taken here, so it
--- is 0285.
+-- §5.3, §7). The design numbers this file 0102; 0280..0285 are taken here, so it
+-- is 0286.
 --
 -- A grp_privileges row says that a holder (an identity, every effective member
 -- of a group, or everyone) holds a privilege on an object (a folder, a group or,

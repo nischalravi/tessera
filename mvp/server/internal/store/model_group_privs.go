@@ -6,7 +6,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 )
 
-// Group privileges (schema/0285_group_privs.sql, issue #47, GR-4; design
+// Group privileges (schema/0286_group_privs.sql, issue #47, GR-4; design
 // docs/design/groups-grouper-parity.md §7). The rules (implication, dynamic
 // inheritance, checks) live in internal/groups/privs; this is the stored row.
 

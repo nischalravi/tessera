@@ -7,7 +7,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// Group privilege repository (schema/0285_group_privs.sql, issue #47, GR-4).
+// Group privilege repository (schema/0286_group_privs.sql, issue #47, GR-4).
 // The rules of the privilege model live in internal/groups/privs; this file is
 // only its statements, all bound to the transaction's tenant.
 

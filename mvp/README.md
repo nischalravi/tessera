@@ -1067,7 +1067,7 @@ cross-tenant guard triggers.
 
 #### Group privileges (GR-4, issue #47)
 
-Design `docs/design/groups-grouper-parity.md` §7. Schema `0285_group_privs.sql` (the design calls it
+Design `docs/design/groups-grouper-parity.md` §7. Schema `0286_group_privs.sql` (the design calls it
 `0102`; `0280`..`0284` are taken): `grp_privileges` and `grp_priv_settings`. Code:
 `server/internal/groups/privs` (`implies.go` the implication table, `check.go` checks and dynamic
 inheritance, `explain.go`, `grant.go`, `settings.go`), `server/internal/api/groups_privs.go`.
