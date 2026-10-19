@@ -347,6 +347,12 @@ func (tx *TenantTx) RequestEvents(lineID string) ([]*RequestEvent, error) {
 
 // DeleteRequestEdge deletes a grant edge if it was granted by a request.
 func (tx *TenantTx) DeleteRequestEdge(id int64) error {
-	_, err := tx.exec(edgesDeleteRequest, sql.Named("id", id))
-	return err
+	res, err := tx.exec(edgesDeleteRequest, sql.Named("id", id))
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		return err
+	}
+	return tx.closeEdgeIntent(id, CloseRequestEnded, nowUTC())
 }

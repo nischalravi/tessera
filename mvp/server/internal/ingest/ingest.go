@@ -12,6 +12,7 @@ package ingest
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -274,6 +275,9 @@ func Discovery(c *store.TenantTx, now time.Time, results []*connectors.Discovery
 			st.Edges++
 		}
 	}
+	if err := recordObserved(c, now, results); err != nil {
+		return st, err
+	}
 	if pruneEdges {
 		edges, err := c.Edges()
 		if err != nil {
@@ -323,6 +327,40 @@ func Discovery(c *store.TenantTx, now time.Time, results []*connectors.Discovery
 	}
 	st.Delegations = len(dels)
 	return st, nil
+}
+
+// recordObserved stores what the systems reported as observed entitlements,
+// one run per system (issue #301): every account -> group edge the connectors
+// emitted, whether or not Tessera revoked the grant on its side. It never
+// writes intended grants: a connector reports access, it does not intend it.
+func recordObserved(c *store.TenantTx, now time.Time, results []*connectors.DiscoveryResult) error {
+	bySystem := map[string][]store.ObservedRow{}
+	for _, r := range results {
+		for _, rec := range r.Accounts {
+			if _, ok := bySystem[rec.System]; !ok {
+				bySystem[rec.System] = nil
+			}
+		}
+		for _, rec := range r.Edges {
+			if rec.Src.Kind != "account" || rec.Dst.Kind != "group" {
+				continue
+			}
+			bySystem[rec.Src.System] = append(bySystem[rec.Src.System], store.ObservedRow{System: rec.Src.System,
+				AccountRef: rec.Src.ExternalID, EntitlementKind: rec.Dst.Kind, EntitlementSystem: rec.Dst.System,
+				EntitlementRef: rec.Dst.ExternalID})
+		}
+	}
+	systems := make([]string, 0, len(bySystem))
+	for sys := range bySystem {
+		systems = append(systems, sys)
+	}
+	sort.Strings(systems)
+	for _, sys := range systems {
+		if _, err := c.RecordObservedRun(sys, now, bySystem[sys]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // EventStats counts ingested events.

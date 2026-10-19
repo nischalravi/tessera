@@ -104,6 +104,8 @@ var tables = []string{
 	"stg_identities", "stg_accounts", "stg_groups", "stg_memberships", "stg_attr_stats",
 	// scheduled access reviews (schema/0316_review_schedules.sql)
 	"review_templates", "review_launches",
+	// intended and observed access, drift and its remediation policy (schema/0330-0331)
+	"intended_grants", "observed_runs", "observed_entitlements", "access_drift", "remediation_policies",
 	// job run history (schema/0281_job_runs.sql)
 	"job_runs",
 	// closed-loop provisioning (schema/0282-0283)

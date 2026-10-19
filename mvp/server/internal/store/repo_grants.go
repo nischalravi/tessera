@@ -20,6 +20,12 @@ type GrantEdge struct {
 	Source    string // connector | jit | manual | request | role
 	ExpiresAt *time.Time
 	CreatedAt time.Time
+	// Ref and Provenance describe the intent behind a new edge (see
+	// repo_access_model.go): Ref names what approved it (a request line, a
+	// role id, a JIT request) and Provenance overrides the one the source
+	// implies (a birthright role grant). They are not stored in grant_edges.
+	Ref        string
+	Provenance string
 }
 
 const edgeCols = `e.id, e.tenant_id, e.src, e.dst, e.relation, e.source, e.expires_at, e.created_at`
@@ -129,20 +135,30 @@ func (tx *TenantTx) InsertEdge(e *GrantEdge) (int64, error) {
 	if err := tx.own(e.TenantID); err != nil {
 		return 0, err
 	}
-	return tx.insert(edgesInsert, sql.Named("src", e.Src), sql.Named("dst", e.Dst), sql.Named("relation", e.Relation),
+	id, err := tx.insert(edgesInsert, sql.Named("src", e.Src), sql.Named("dst", e.Dst), sql.Named("relation", e.Relation),
 		sql.Named("source", e.Source), sql.Named("expires_at", TP(e.ExpiresAt)), sql.Named("created_at", T(e.CreatedAt)))
+	if err != nil {
+		return 0, err
+	}
+	// intent beside the live edge, in the same transaction; none for a connector edge
+	return id, tx.recordEdgeIntent(id, e)
 }
 
 // SetEdgeExpiry sets a grant edge's expiry.
 func (tx *TenantTx) SetEdgeExpiry(id int64, expires time.Time) error {
-	_, err := tx.exec(edgesSetExpiry, sql.Named("expires_at", T(expires)), sql.Named("id", id))
+	if _, err := tx.exec(edgesSetExpiry, sql.Named("expires_at", T(expires)), sql.Named("id", id)); err != nil {
+		return err
+	}
+	_, err := tx.exec(intendedSetExpiry, sql.Named("valid_until", T(expires)), sql.Named("edge_id", id))
 	return err
 }
 
 // DeleteEdge deletes a grant edge by id.
 func (tx *TenantTx) DeleteEdge(id int64) error {
-	_, err := tx.exec(edgesDelete, sql.Named("id", id))
-	return err
+	if _, err := tx.exec(edgesDelete, sql.Named("id", id)); err != nil {
+		return err
+	}
+	return tx.closeEdgeIntent(id, CloseRemoved, nowUTC())
 }
 
 // RevokeEdge deletes a grant edge and records a tombstone, so a later connector
@@ -159,7 +175,17 @@ func (tx *TenantTx) RevokeEdge(id int64, at time.Time, reason string) error {
 		sql.Named("at", T(at))); err != nil {
 		return err
 	}
-	return tx.DeleteEdge(id)
+	if _, err := tx.exec(edgesDelete, sql.Named("id", id)); err != nil {
+		return err
+	}
+	return tx.closeEdgeIntent(id, reasonOrDefault(reason), at)
+}
+
+func reasonOrDefault(r string) string {
+	if r == "" {
+		return CloseRemoved
+	}
+	return r
 }
 
 // RevokedGrant is a tombstone left by RevokeEdge.
@@ -192,12 +218,22 @@ func (tx *TenantTx) RevokedGrants() ([]*RevokedGrant, error) {
 
 // DeleteJITEdge deletes a grant edge by id if it is a JIT edge.
 func (tx *TenantTx) DeleteJITEdge(id int64) error {
-	_, err := tx.exec(edgesDeleteJIT, sql.Named("id", id))
-	return err
+	res, err := tx.exec(edgesDeleteJIT, sql.Named("id", id))
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		return err
+	}
+	return tx.closeEdgeIntent(id, CloseJITEnded, nowUTC())
 }
 
 // DeleteExpiredJITEdges deletes JIT edges that expired at or before now.
 func (tx *TenantTx) DeleteExpiredJITEdges(now time.Time) (int64, error) {
+	// close the intent first: the statement reads the edges the delete removes
+	if _, err := tx.exec(intendedCloseExpiredJIT, sql.Named("now", T(now)), sql.Named("at", T(now))); err != nil {
+		return 0, err
+	}
 	res, err := tx.exec(edgesDeleteExpiredJIT, sql.Named("now", T(now)))
 	if err != nil {
 		return 0, err

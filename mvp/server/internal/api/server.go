@@ -37,6 +37,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/provision"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
+	"github.com/nischalravi/tessera/mvp/server/internal/reconcile"
 	"github.com/nischalravi/tessera/mvp/server/internal/requests"
 	"github.com/nischalravi/tessera/mvp/server/internal/reviews"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
@@ -246,6 +247,7 @@ func New(cfg Config) *Server {
 	s.registerReadinessRoutes()
 	s.registerJobRoutes()
 	s.registerProvisioningRoutes()
+	s.registerDriftRoutes()
 	s.registerTransportRoutes()
 	s.registerAuthRoutes()
 	s.registerLoginRoutes()
@@ -337,7 +339,11 @@ func (s *Server) RunReviewScheduler(ctx context.Context, interval time.Duration)
 
 // SweeperLoops are the loop names RunSweeper reports to obs.DefaultLoops.
 var SweeperLoops = []string{"jit_sweep", "request_sweep", "sponsorship_sweep", "lifecycle_sweep", "containment_retries",
-	"admin_change_sweep"}
+	"admin_change_sweep", "drift_sweep"}
+
+// driftEvery is the least time between two drift reconciliations of the sweeper
+// (a sync reconciles at once; the sweeper catches what time changes: expiries).
+const driftEvery = 5 * time.Minute
 
 // RunSweeper expires JIT grants, closes due request lines and ends due
 // lifecycle terms (warnings first) of every active tenant, each in its own
@@ -358,7 +364,7 @@ func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
 			s.log.Error(what+" failed", "err", err)
 		}
 	}
-	var maintained time.Time
+	var maintained, driftSwept time.Time
 	for {
 		// sweepAndRecord logs its own failures and records the job runs
 		step("jit_sweep", "jit sweep", func() error { s.sweepAndRecord(ctx); return nil })
@@ -386,6 +392,13 @@ func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
 		step("admin_change_sweep", "admin change sweep", func() error {
 			_, err := s.admin.Sweep(audit.WithSystemActor(ctx, "admin.sweeper"))
 			return err
+		})
+		step("drift_sweep", "drift sweep", func() error {
+			if now := s.clock(); now.Sub(driftSwept) >= driftEvery {
+				driftSwept = now
+				return reconcile.SweepDrift(audit.WithSystemActor(ctx, "drift.sweeper"), s.store, now, "drift.sweeper")
+			}
+			return nil
 		})
 		select {
 		case <-ctx.Done():

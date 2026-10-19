@@ -24,6 +24,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
+	"github.com/nischalravi/tessera/mvp/server/internal/reconcile"
 	"github.com/nischalravi/tessera/mvp/server/internal/reviews"
 	"github.com/nischalravi/tessera/mvp/server/internal/simulate"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -331,6 +332,10 @@ func (s *Server) syncConnectors(_ http.ResponseWriter, r *http.Request, _ *param
 		return nil, err
 	}
 	if err := c.Audit(now, "system", "connectors.sync", stats.Object()); err != nil {
+		return nil, err
+	}
+	// reconcile intended with the access the sync just observed (issue #301)
+	if _, err := reconcile.RunDrift(c, now, "system"); err != nil {
 		return nil, err
 	}
 	return stats.Object(), nil

@@ -460,7 +460,7 @@ func Approve(tx *store.TenantTx, id string, by Actor, reason string, now time.Ti
 		exp = &t
 	}
 	edge, err := tx.InsertEdge(&store.GrantEdge{Src: src, Dst: dst, Relation: "member_of", Source: "request",
-		ExpiresAt: exp, CreatedAt: now})
+		ExpiresAt: exp, CreatedAt: now, Ref: "line:" + l.ID})
 	if err != nil {
 		return nil, err
 	}

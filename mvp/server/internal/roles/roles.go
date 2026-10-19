@@ -362,6 +362,27 @@ func (w *world) wanted(identity int64) map[int64][]string {
 	return out
 }
 
+// intentOf says why a role grants the group to the person, for the intended
+// grant behind the new edge: the first active role (by id) that carries the
+// group, and "birthright" when the person is in it by its rule.
+func (w *world) intentOf(identity, gid int64) (provenance, ref string) {
+	rids := make([]string, 0, len(w.members[identity]))
+	for rid := range w.members[identity] {
+		rids = append(rids, rid)
+	}
+	sort.Strings(rids)
+	for _, rid := range rids {
+		if r := w.roles[rid]; r == nil || r.Status != store.RoleActive || !slices.Contains(w.ents[rid], gid) {
+			continue
+		}
+		if w.members[identity][rid].Source == store.MemberRule {
+			return store.ProvBirthright, "role:" + rid
+		}
+		return store.ProvRole, "role:" + rid
+	}
+	return store.ProvRole, ""
+}
+
 // applyRule brings a role's rule members in step with its rule.
 func (w *world) applyRule(roleID string) error {
 	r := w.roles[roleID]
@@ -653,8 +674,9 @@ func (w *world) execute(p *Plan) error {
 			} else if !errors.Is(err, store.ErrNotFound) {
 				return err
 			}
+			prov, ref := w.intentOf(s.IdentityID, s.GroupID)
 			if _, err := w.tx.InsertEdge(&store.GrantEdge{Src: src, Dst: dst, Relation: "member_of", Source: "role",
-				CreatedAt: w.now}); err != nil {
+				CreatedAt: w.now, Ref: ref, Provenance: prov}); err != nil {
 				return err
 			}
 		case RemoveGrant:
