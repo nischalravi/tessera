@@ -148,8 +148,11 @@ func TestInsecureCookieNeedsLoopbackListener(t *testing.T) {
 	}
 }
 
-// prodEnv sets a production configuration that passes every guard rail.
+// prodEnv sets a production configuration that passes every guard rail. It
+// clears the dev-serve variables that ./run.sh exports, so the tests do not
+// depend on the caller's environment.
 func prodEnv(t *testing.T) {
+	t.Setenv("TESSERA_DEV_FAKE_TARGET", "")
 	t.Setenv("TESSERA_ENV", "prod")
 	t.Setenv("TESSERA_NOW", "")
 	t.Setenv("TESSERA_PUBLIC_URL", "https://tessera.example.com")
