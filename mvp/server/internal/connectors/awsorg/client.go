@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/aws/sigv4"
+	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 )
 
@@ -52,10 +53,10 @@ const (
 // NewHTTPClient returns the *http.Client the connector must use: safehttp's
 // SSRF-guarded client (https only, every resolved address checked in the
 // dialer, no proxies, no redirects off the host) with limits sized for AWS API
-// responses. env is "dev" or "prod" (config.Dev, config.Prod).
-func NewHTTPClient(env string, allowLoopback bool) (*http.Client, error) {
-	return safehttp.New(safehttp.Options{Env: env, AllowLoopback: allowLoopback,
-		Timeout: httpTimeout, MaxBodyBytes: httpMaxBodyBytes})
+// responses. The environment and the loopback exception come from the
+// validated configuration (safehttp.ForConfigLimits).
+func NewHTTPClient(c *config.Config) (*http.Client, error) {
+	return safehttp.ForConfigLimits(c, httpTimeout, httpMaxBodyBytes)
 }
 
 // Doer sends one request. *http.Client from NewHTTPClient is the production
