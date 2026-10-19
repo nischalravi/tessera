@@ -62,9 +62,9 @@ func (s *Server) WSFedURL() string { return s.issuer + pathWSFed }
 func (s *Server) handleWSFed(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	now := s.now()
-	for k, v := range q {
+	for _, v := range q {
 		if len(v) > 1 {
-			s.errorPage(w, http.StatusBadRequest, "Parameter "+k+" is repeated.")
+			s.errorPage(w, http.StatusBadRequest, "A parameter is repeated.")
 			return
 		}
 	}
