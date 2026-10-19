@@ -26,7 +26,7 @@ type env struct {
 func setup(t *testing.T) *env {
 	t.Helper()
 	idp := devidptest.Start(t, devidp.Config{})
-	hc, err := safehttp.New(safehttp.Options{Env: config.Dev, AllowLoopback: true})
+	hc, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Dev, AllowLoopback: true})
 	if err != nil {
 		t.Fatal(err)
 	}
