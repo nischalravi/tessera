@@ -604,7 +604,7 @@ func Remediate(tx *store.TenantTx, now time.Time, actor, id, action string) (*st
 		return nil, err
 	}
 	if !ValidAction(d.Class, action) {
-		return nil, &Error{400, "invalid_action", action + " does not apply to " + d.Class + " drift"}
+		return nil, &Error{422, "invalid_action", action + " does not apply to " + d.Class + " drift"}
 	}
 	if d.Status != store.DriftOpen {
 		return nil, &Error{409, "not_open", "only open drift can be remediated (this one is " + d.Status + ")"}
@@ -619,7 +619,7 @@ func Remediate(tx *store.TenantTx, now time.Time, actor, id, action string) (*st
 func Accept(tx *store.TenantTx, now time.Time, actor, id, reason string) (*store.AccessDrift, error) {
 	reason = strings.TrimSpace(reason)
 	if reason == "" || len([]rune(reason)) > 500 {
-		return nil, &Error{400, "invalid_reason", "a reason of at most 500 characters is required"}
+		return nil, &Error{422, "invalid_reason", "a reason of at most 500 characters is required"}
 	}
 	d, err := tx.AccessDrift(id)
 	if errors.Is(err, store.ErrNotFound) {

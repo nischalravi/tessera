@@ -270,9 +270,10 @@ func TestDrift_PolicyOwnerTask(t *testing.T) {
 	s := newScene(t)
 	s.policy("okta", "", store.DriftRogue, store.ActionOwnerTask)
 	s.policy("okta", "gStale", store.DriftStale, store.ActionOwnerTask)
+	s.policy("okta", "", store.DriftOrphan, store.ActionOwnerTask)
 	s.run()
 	d := s.oktaDrift()
-	for _, k := range []string{"rogue/gRogue", "stale/gStale"} {
+	for _, k := range []string{"rogue/gRogue", "stale/gStale", "orphan/ghost"} {
 		x := d[k]
 		if x.Action != store.ActionOwnerTask || x.Status != store.DriftRemediating || x.RemediationRef == nil {
 			t.Errorf("%s = %+v", k, x)
@@ -282,13 +283,14 @@ func TestDrift_PolicyOwnerTask(t *testing.T) {
 		t.Error("a policy for rogue drift acted on missing drift")
 	}
 	s.inA(func(c *store.TenantTx) error {
+		// the orphan has no owner, so the people who decide access are told
 		ns, err := c.Notifications(s.user, false, 10)
-		if err != nil || len(ns) != 2 {
+		if err != nil || len(ns) != 1 || ns[0].Kind != "security.alert" {
 			t.Errorf("inbox = %d, %v", len(ns), err)
 		}
 		return nil
 	})
-	if s.audited("drift.remediate") != 2 {
+	if s.audited("drift.remediate") != 3 {
 		t.Errorf("remediation events = %d", s.audited("drift.remediate"))
 	}
 }

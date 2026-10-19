@@ -199,6 +199,13 @@ POST   /api/provisioning/ops/{op_id}/retry           provisioning.manage -
 POST   /api/provisioning/ops/{op_id}/cancel          provisioning.manage -
 POST   /api/provisioning/run                         provisioning.manage -
 GET    /api/provisioning/findings                    provisioning.read   -
+GET    /api/access-drift                             drift.read      -  # issue #301
+POST   /api/access-drift/run                         drift.remediate -
+POST   /api/access-drift/{drift_id}/accept           drift.remediate STEP_UP_POLICY
+POST   /api/access-drift/{drift_id}/remediate        drift.remediate STEP_UP_POLICY
+GET    /api/remediation-policies                     drift.read      -
+PUT    /api/remediation-policies                     drift.policy    STEP_UP_POLICY
+DELETE /api/remediation-policies/{policy_id}         drift.policy    STEP_UP_POLICY
 GET    /api/config/signing-key                       admin.read      -  # issue #170
 POST   /api/config/export                            config.transport -  #
 GET    /api/config/trusted-signers                   admin.read      -  #
