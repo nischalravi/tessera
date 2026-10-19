@@ -15,16 +15,17 @@ import (
 // lookups of design §14.2. It has no access to tenant-owned tables.
 type SystemTx struct {
 	ctx    context.Context
-	tx     *sql.Tx
+	db     *DB
+	tx     *xtx
 	reason string
 }
 
 func (s *SystemTx) exec(st sstmt, args ...sql.NamedArg) (sql.Result, error) {
-	return s.tx.ExecContext(s.ctx, st.sql, namedArgs(args)...)
+	return s.db.execIn(s.ctx, s.tx, st.sql, namedArgs(args))
 }
 
 func (s *SystemTx) query(st sstmt, args ...sql.NamedArg) (*sql.Rows, error) {
-	return s.tx.QueryContext(s.ctx, st.sql, namedArgs(args)...)
+	return s.db.queryIn(s.ctx, s.tx, st.sql, namedArgs(args))
 }
 
 func namedArgs(args []sql.NamedArg) []any {

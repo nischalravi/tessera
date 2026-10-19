@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,7 +16,7 @@ import (
 // JSON array of §15.2 and §15.5.
 type Tenant struct {
 	ID        tenancy.ID
-	Slug      string // ^[a-z0-9][a-z0-9-]{2,39}$; "_platform" is reserved
+	Slug      string // ^[a-z0-9][a-z0-9-]{2,39}$; "_platform", "platform" and "platform-*" are reserved
 	Name      string
 	Status    string // active | suspended | recovery
 	Cell      string // "local"
@@ -31,8 +32,16 @@ const PlatformSlug = "_platform"
 
 var slugRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{2,39}$`)
 
+// ReservedSlug is reserved for the platform: tenant key ids are
+// "{slug}-{yyyymmdd}-{rand6}" and platform key ids "platform-{yyyymmdd}-
+// {rand6}", so a tenant named "platform" (or "platform-…") would mint key
+// ids indistinguishable from, or confusable with, the platform's.
+const ReservedSlug = "platform"
+
 // ValidSlug reports whether s may be used as a (non-reserved) tenant slug.
-func ValidSlug(s string) bool { return slugRE.MatchString(s) }
+func ValidSlug(s string) bool {
+	return slugRE.MatchString(s) && s != ReservedSlug && !strings.HasPrefix(s, ReservedSlug+"-")
+}
 
 // ---------------------------------------------------------------- auth core (PR5)
 //
@@ -224,7 +233,7 @@ type LoginTransaction struct {
 	TenantID                tenancy.ID
 	CookieHash              string
 	IdPConnectionID         uuid.UUID
-	Purpose                 string
+	Purpose                 string // login | step_up | device_approval | bootstrap | test
 	StateHash               *string
 	Nonce                   *string
 	PKCEVerifierEnc         []byte

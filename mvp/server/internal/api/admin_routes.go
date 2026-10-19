@@ -201,10 +201,10 @@ func (s *Server) adminActivateConnection(_ http.ResponseWriter, r *http.Request,
 
 // ---------------------------------------------------------------- change requests
 
-// changeView renders a request for the API. names maps user ids to display
+// adminChangeView renders a request for the API. names maps user ids to display
 // names. The sealed secret and the payload's hash input are never included
 // beyond the payload itself (which holds no secret).
-func changeView(tx *store.TenantTx, ch *store.AdminChange, names map[uuid.UUID]string, now time.Time) ojson.Object {
+func adminChangeView(tx *store.TenantTx, ch *store.AdminChange, names map[uuid.UUID]string, now time.Time) ojson.Object {
 	who := func(id *uuid.UUID) any {
 		if id == nil {
 			return nil
@@ -278,7 +278,7 @@ func (s *Server) adminChanges(_ http.ResponseWriter, r *http.Request, p *params)
 		if status != "" && status != "open" && ch.Status != status {
 			continue
 		}
-		out = append(out, changeView(tx, ch, names, now))
+		out = append(out, adminChangeView(tx, ch, names, now))
 	}
 	return ojson.Object{{Key: "change_requests", Value: out}, {Key: "types", Value: admin.Types()}}, nil
 }
@@ -301,7 +301,7 @@ func (s *Server) adminChange(_ http.ResponseWriter, r *http.Request, p *params) 
 	if err != nil {
 		return nil, err
 	}
-	v := changeView(tx, ch, names, s.clock())
+	v := adminChangeView(tx, ch, names, s.clock())
 	return append(v, ojson.KV{Key: "notifications", Value: notificationViews(notifs, names)}), nil
 }
 
@@ -313,7 +313,7 @@ func (s *Server) changeResponse(r *http.Request, ch *store.AdminChange) (any, er
 		if err != nil {
 			return err
 		}
-		out = changeView(tx, ch, names, s.clock())
+		out = adminChangeView(tx, ch, names, s.clock())
 		return nil
 	})
 	return out, err

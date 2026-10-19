@@ -24,22 +24,27 @@ const connections = () => import("../features/admin/connections");
 
 const Home = named(() => import("../features/home/Home"), "Home");
 const Inbox = named(() => import("../features/inbox/Inbox"), "Inbox");
+const Notifications = named(() => import("../features/notifications/Notifications"), "Notifications");
 const RequestAccess = named(access, "RequestAccess");
 const MyAccess = named(access, "MyAccess");
 const Requests = named(access, "Requests");
 const JIT = named(access, "JIT");
+const Guests = named(access, "Guests");
 const DirectoryLayout = named(directory, "DirectoryLayout");
 const People = named(directory, "People");
 const Machine = named(directory, "Machine");
 const Accounts = named(directory, "Accounts");
 const Matches = named(() => import("../features/directory/Matches"), "Matches");
-const Roles = named(directory, "Roles");
+const roles = () => import("../features/roles/Roles");
+const Roles = named(roles, "Roles");
+const Workers = named(() => import("../features/lifecycle/Workers"), "Workers");
 const Entitlements = named(directory, "Entitlements");
 const Apps = named(directory, "Apps");
 const Orgs = named(directory, "Orgs");
 const Groups = named(directory, "Groups");
+const Ownership = named(() => import("../features/directory/Ownership"), "Ownership");
 const IdentityPage = named(() => import("../features/directory/IdentityPage"), "IdentityPage");
-const RolePage = named(objects, "RolePage");
+const RolePage = named(roles, "RolePage");
 const EntitlementPage = named(objects, "EntitlementPage");
 const AppPage = named(objects, "AppPage");
 const OrgPage = named(objects, "OrgPage");
@@ -49,7 +54,9 @@ const GraphExplorer = lazy(() => import("../features/insights/GraphExplorer"));
 const LeastPrivilege = named(() => import("../features/insights/LeastPrivilege"), "LeastPrivilege");
 const SodConflicts = named(() => import("../features/insights/SodConflicts"), "SodConflicts");
 const DeploymentHealth = named(() => import("../features/insights/DeploymentHealth"), "DeploymentHealth");
+const Alerts = named(() => import("../features/alerts/Alerts"), "Alerts");
 const Policies = named(() => import("../features/governance/Policies"), "Policies");
+const AttributePolicies = named(() => import("../features/governance/AttributePolicies"), "AttributePolicies");
 const Reviews = named(() => import("../features/governance/Reviews"), "Reviews");
 const Lifecycle = named(() => import("../features/governance/Lifecycle"), "Lifecycle");
 const Workflows = named(() => import("../features/governance/Workflows"), "Workflows");
@@ -65,6 +72,7 @@ const AdminUsers = named(() => import("../features/admin/Users"), "Users");
 const IdpConnections = named(() => import("../features/admin/IdpConnections"), "IdpConnections");
 const ChangeRequests = named(() => import("../features/admin/ChangeRequests"), "ChangeRequests");
 const ApiClients = named(() => import("../features/admin/ApiClients"), "ApiClients");
+const PlatformHealth = named(() => import("../features/admin/PlatformHealth"), "PlatformHealth");
 const ChangeBanner = named(() => import("../features/admin/ChangeBanner"), "ChangeBanner");
 const BreakGlass = named(() => import("../features/admin/BreakGlass"), "BreakGlass");
 const BreakGlassNotice = named(() => import("../features/admin/BreakGlass"), "BreakGlassNotice");
@@ -108,12 +116,14 @@ export default function App() {
                     <Route path="/login" element={<Navigate to="/" replace />} />
                     <Route path="/sessions" element={<MySessions />} />
                     <Route path="/inbox" element={<Inbox />} />
+                    <Route path="/notifications" element={<Notifications />} />
 
                     <Route path="/access" element={<Navigate to="/access/request" replace />} />
                     <Route path="/access/request" element={<RequestAccess />} />
                     <Route path="/access/mine" element={<MyAccess />} />
                     <Route path="/access/requests" element={<Requests />} />
                     <Route path="/access/jit" element={<JIT />} />
+                    <Route path="/access/guests" element={<Guests />} />
 
                     <Route path="/directory" element={<DirectoryLayout />}>
                       <Route index element={<Navigate to="/directory/people" replace />} />
@@ -122,10 +132,12 @@ export default function App() {
                       <Route path="accounts" element={<Accounts />} />
                       <Route path="matches" element={<Matches />} />
                       <Route path="roles" element={<Roles />} />
+                      <Route path="workers" element={<Workers />} />
                       <Route path="entitlements" element={<Entitlements />} />
                       <Route path="apps" element={<Apps />} />
                       <Route path="orgs" element={<Orgs />} />
                       <Route path="groups" element={<Groups />} />
+                      <Route path="ownership" element={<Ownership />} />
                     </Route>
                     <Route path="/directory/identities/:id" element={<IdentityPage />} />
                     <Route path="/directory/roles/:id" element={<RolePage />} />
@@ -142,7 +154,9 @@ export default function App() {
                     <Route path="/insights/deployment" element={<Moved to="/insights/deployment-health" />} />
 
                     <Route path="/governance" element={<Navigate to="/governance/policies" replace />} />
+                    <Route path="/alerts" element={<Alerts />} />
                     <Route path="/governance/policies" element={<Policies />} />
+                    <Route path="/governance/attributes" element={<AttributePolicies />} />
                     <Route path="/governance/reviews" element={<Reviews />} />
                     <Route path="/governance/lifecycle" element={<Lifecycle />} />
                     <Route path="/governance/workflows" element={<Workflows />} />
@@ -158,6 +172,7 @@ export default function App() {
                     <Route path="/admin/change-requests" element={<ChangeRequests />} />
                     <Route path="/admin/api-clients" element={<ApiClients />} />
                     <Route path="/admin/break-glass" element={<BreakGlass />} />
+                    <Route path="/admin/platform-health" element={<PlatformHealth />} />
                     <Route path="/admin/:section" element={<AdminSectionPage />} />
 
                     {/* routes from the previous UI */}

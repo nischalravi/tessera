@@ -690,7 +690,7 @@ func (tx *TenantTx) execOwnTenant(s sstmt, args ...sql.NamedArg) error {
 	if tx.readOnly {
 		return ErrReadOnly
 	}
-	a := make([]any, 0, len(args)+1)
+	a := make([]any, 0, len(args)) // append grows it by one for @id
 	for _, x := range args {
 		a = append(a, x)
 	}

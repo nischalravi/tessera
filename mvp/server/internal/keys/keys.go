@@ -31,6 +31,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"time"
 
@@ -234,8 +235,12 @@ func PublishedKeys(tx *store.TenantTx, purpose string, now time.Time) ([]*Tenant
 
 // JWKSFor returns this tenant's public JWK Set for purpose at now, for
 // GET /t/{slug}/.well-known/jwks.json (served with Cache-Control:
-// max-age=300). It contains only public keys.
-func JWKSFor(tx *store.TenantTx, purpose string, now time.Time) (*jose.JSONWebKeySet, error) {
+// max-age=300). It contains only public keys. A stored key that is not a
+// valid public signing key with its row's kid and algorithm (a tampered or
+// corrupt row) is left out and reported to log (nil: slog.Default()) as an
+// alert; the other keys are still published, so one bad row does not take
+// every relying party's verification down.
+func JWKSFor(tx *store.TenantTx, purpose string, now time.Time, log *slog.Logger) (*jose.JSONWebKeySet, error) {
 	ks, err := PublishedKeys(tx, purpose, now)
 	if err != nil {
 		return nil, err
@@ -244,11 +249,26 @@ func JWKSFor(tx *store.TenantTx, purpose string, now time.Time) (*jose.JSONWebKe
 	for _, k := range ks {
 		jwk, err := parsePublicJWK(k.PublicJWK, k.KID, k.Alg)
 		if err != nil {
-			return nil, err
+			badKey(log, "tenant_signing_keys", k.KID, purpose, err, slog.String("tenant_id", tx.Tenant().String()))
+			continue
 		}
 		set.Keys = append(set.Keys, jwk)
 	}
 	return set, nil
+}
+
+// BadKeyEvent is the log message of a stored public key left out of a JWKS.
+const BadKeyEvent = "keys.bad_public_jwk"
+
+// badKey logs a key left out of a JWKS at error level with alert=true, the
+// marker operators page on.
+func badKey(log *slog.Logger, table, kid, purpose string, err error, attrs ...any) {
+	if log == nil {
+		log = slog.Default()
+	}
+	args := append([]any{slog.Bool("alert", true), slog.String("table", table), slog.String("kid", kid),
+		slog.String("purpose", purpose), slog.String("err", err.Error())}, attrs...)
+	log.Error(BadKeyEvent, args...)
 }
 
 // SigningKey is an unsealed private key and its kid.
@@ -331,8 +351,10 @@ func EnsurePlatformKey(sys *store.SystemTx, s *seal.Sealer, now time.Time) error
 }
 
 // PlatformJWKS returns every non-revoked platform public key (for GET
-// /api/audit/keys, PR3).
-func PlatformJWKS(sys *store.SystemTx) (*jose.JSONWebKeySet, error) {
+// /api/audit/keys, PR3). Like JWKSFor, a bad stored key is left out and
+// reported to log (nil: slog.Default()) as an alert; checkpoints it signed
+// then fail verification instead of every checkpoint failing.
+func PlatformJWKS(sys *store.SystemTx, log *slog.Logger) (*jose.JSONWebKeySet, error) {
 	ks, err := sys.PlatformKeys(store.KeyPurposeAuditCheckpoint)
 	if err != nil {
 		return nil, err
@@ -344,7 +366,8 @@ func PlatformJWKS(sys *store.SystemTx) (*jose.JSONWebKeySet, error) {
 		}
 		jwk, err := parsePublicJWK(k.PublicJWK, k.KID, k.Alg)
 		if err != nil {
-			return nil, err
+			badKey(log, "platform_keys", k.KID, k.Purpose, err)
+			continue
 		}
 		set.Keys = append(set.Keys, jwk)
 	}

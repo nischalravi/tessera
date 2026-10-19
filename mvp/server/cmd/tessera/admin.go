@@ -46,7 +46,9 @@ const adminUsage = `usage:
   tessera admin invite-admin  -tenant slug -connection id -email address [-ttl 24h] [-db path]
   tessera admin recover-tenant -tenant slug -operator id -co-operator id -ticket ref -connection id -email address
                               -operator-phr -co-operator-phr [-db path]
-  tessera admin revoke-signing-key -tenant slug -kid kid -reason text [-db path]`
+  tessera admin revoke-signing-key -tenant slug -kid kid -reason text [-db path]
+  tessera admin gen-rls       [-out path] [-check]   (Postgres row-level security; needs no database)
+  (-db is a SQLite path or a postgres:// DSN)`
 
 // maxInviteTTL is the longest a bootstrap invitation may live (§15.3).
 const maxInviteTTL = 24 * time.Hour
@@ -65,9 +67,12 @@ func adminCmd(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		return errors.New(adminUsage)
 	}
 	sub, args := args[0], args[1:]
+	if sub == "gen-rls" {
+		return genRLS(args, stdout, stderr)
+	}
 	fset := flag.NewFlagSet("tessera admin "+sub, flag.ContinueOnError)
 	fset.SetOutput(stderr)
-	dbFlag := fset.String("db", dbPath(os.Getenv("TESSERA_DB")), "SQLite database path")
+	dbFlag := fset.String("db", dbPath(os.Getenv("TESSERA_DB")), "SQLite database path or postgres:// DSN")
 	var run func(e *adminEnv) error
 	switch sub {
 	case "create-tenant":

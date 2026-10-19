@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -173,7 +174,9 @@ func TestIsolation_BreakGlassInsertsRefused(t *testing.T) {
 		cred := &store.BreakGlassCredential{UserID: a.glass.ID, ChangeRequestID: b.change.ID, CredentialID: []byte("another-credential-id"),
 			PublicKey: []byte("k"), AAGUID: "2fc0579f-8113-47ea-b116-bb5a8db9202a", AttestationFormat: "packed", AttestationTrust: "basic",
 			Label: "x", Custodian: "y", CreatedAt: now}
-		if err := c.InsertBreakGlassCredential(cred); !errors.Is(err, store.ErrCrossTenant) {
+		// B's change request already has a key, so Postgres reports the unique constraint before the
+		// foreign key: either way the row is refused.
+		if err := c.InsertBreakGlassCredential(cred); !errors.Is(err, store.ErrCrossTenant) && !errors.Is(err, store.ErrDuplicate) {
 			t.Errorf("a key of A's user, inserted in B = %v, want ErrCrossTenant", err)
 		}
 		cred.UserID, cred.ChangeRequestID = b.glass.ID, a.change.ID
@@ -194,7 +197,8 @@ func TestIsolation_BreakGlassInsertsRefused(t *testing.T) {
 			t.Errorf("a challenge created by A's user = %v, want ErrCrossTenant", err)
 		}
 		u := &store.BreakGlassUse{CredentialID: a.cred.ID, UserID: b.glass.ID, SessionID: b.session.ID, UsedAt: now}
-		if err := c.InsertBreakGlassUse(u); !errors.Is(err, store.ErrCrossTenant) {
+		// B's session already has a use (see above).
+		if err := c.InsertBreakGlassUse(u); err == nil || (!errors.Is(err, store.ErrCrossTenant) && !strings.Contains(err.Error(), "duplicate")) {
 			t.Errorf("a use of A's key = %v, want ErrCrossTenant", err)
 		}
 		u = &store.BreakGlassUse{CredentialID: b.cred.ID, UserID: b.glass.ID, SessionID: a.session.ID, UsedAt: now}

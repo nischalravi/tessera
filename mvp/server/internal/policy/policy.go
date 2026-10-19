@@ -18,6 +18,7 @@
 package policy
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"path"
@@ -28,6 +29,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/abac"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
@@ -169,7 +171,42 @@ func Parse(d map[string]any, source string) (*Policy, error) {
 			p.Spec[k] = v
 		}
 	}
+	if _, err := subjectCondition(p.Spec); err != nil {
+		return nil, fmt.Errorf("policy %s: subjects.condition: %w", id, err)
+	}
 	return p, nil
+}
+
+// subjectCondition reads the optional attribute condition of a policy's
+// subjects (issue #162): identities for which it is false are not checked.
+// The condition is the JSON language of internal/abac, written as YAML. An
+// attribute an identity lacks makes the condition unknown, and a detective
+// control errs toward checking: the identity stays in scope.
+func subjectCondition(spec map[string]any) (*abac.Node, error) {
+	raw, ok := mapOf(spec["subjects"])["condition"]
+	if !ok {
+		return nil, nil
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return nil, err
+	}
+	return abac.Parse(b)
+}
+
+// attrs are the attributes a subject condition sees: everything stored when
+// the context has the database, otherwise what the graph node carries.
+func (c *Context) attrs(n *graph.Node) abac.Attrs {
+	if c.Conn != nil {
+		if i, err := c.Conn.Identity(n.ID); err == nil {
+			return abac.Merge(abac.IdentityAttrs(i, c.Now), abac.ContextAttrs(c.Now, 0))
+		}
+	}
+	a := abac.Attrs{"identity.type": n.Type, "identity.status": n.Status, "identity.name": n.Label}
+	if n.Department != nil && *n.Department != "" {
+		a["identity.department"] = *n.Department
+	}
+	return abac.Merge(a, abac.ContextAttrs(c.Now, 0))
 }
 
 // ------------------------------------------------------------------ context
@@ -316,9 +353,14 @@ func (c *Context) subjects(spec map[string]any) []int64 {
 	if v, ok := subj["statuses"]; ok {
 		statuses = asList(v)
 	}
+	cond, err := subjectCondition(spec)
+	if err != nil {
+		return nil // unreachable: Parse refuses an unreadable condition
+	}
 	var out []int64
 	for _, n := range c.idents {
-		if (len(types) == 0 || contains(types, n.Type)) && contains(statuses, n.Status) {
+		if (len(types) == 0 || contains(types, n.Type)) && contains(statuses, n.Status) &&
+			(cond == nil || cond.Tri(c.attrs(n)) != abac.False) {
 			out = append(out, n.ID)
 		}
 	}
