@@ -19,6 +19,7 @@ import { mockObjects } from "../../mocks";
 import { useSession } from "../../app/auth";
 import { ContainDialog, ContainmentRetries } from "./containment";
 import { RevokeDrawer } from "./IdentityPage";
+import { OwnershipRows } from "./owners";
 import { CatalogSettings } from "./catalog";
 import { PreviewFormDrawer } from "./shared";
 
@@ -112,7 +113,7 @@ export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void
             <dt>Display name</dt><dd>{d.name}</dd>
             <dt>{human ? "Job title" : "Kind"}</dt><dd>{d.title ?? <span className="faint">-</span>}</dd>
             <dt>Department</dt><dd>{d.department ?? <span className="faint">-</span>}</dd>
-            {human ? <><dt>Manager</dt><dd><IdLink i={d.manager} /></dd></> : <><dt>Owner</dt><dd>{d.owner ? <IdLink i={d.owner} /> : <Badge tone="critical">No owner</Badge>}</dd></>}
+            {human ? <><dt>Manager</dt><dd><IdLink i={d.manager} /></dd></> : <OwnershipRows kind="identity" objectKey={d.id} label={d.name} />}
             <dt>Status</dt><dd><Status s={status} /></dd>
             {d.email && <><dt>Email</dt><dd className="truncate">{d.email}</dd></>}
             {d.hired_at && <><dt>Since</dt><dd>{fmtDay(d.hired_at)}</dd></>}
@@ -349,6 +350,7 @@ export function GroupPanel({ g, onClose }: { g: Group; onClose: () => void }) {
             <dt>System</dt><dd>{g.system}</dd>
             <dt>Kind</dt><dd>{g.kind.replace(/_/g, " ")}</dd>
             <dt>Privileged</dt><dd>{g.privileged ? <Badge tone="warning">Privileged</Badge> : "No"}</dd>
+            <OwnershipRows kind="group" objectKey={g.id} label={g.name} />
             <dt>Access model</dt><dd>{g.requestable ? <Badge tone="info">JIT-eligible</Badge> : "Standing access"}</dd>
             <dt>Approval</dt><dd>A person with requests.decide (see the Request catalog tab)</dd>
             <dt>Review cadence</dt><dd>{g.privileged ? "Quarterly, plus exception reviews" : "Exception reviews only"}</dd>
@@ -410,6 +412,7 @@ export function AppPanel({ c, onClose }: { c: ConnectorRow; onClose: () => void 
       {tab === "overview" ? (
         <dl className="kv">
           <dt>System</dt><dd className="sys">{c.system}</dd>
+          <OwnershipRows kind="app" objectKey={c.system} label={c.system} />
           <dt>Connector</dt><dd>{c.type}</dd>
           <dt>Accounts</dt><dd className="tnum">{c.accounts}</dd>
           <dt>Groups & roles</dt><dd className="tnum">{c.groups}</dd>

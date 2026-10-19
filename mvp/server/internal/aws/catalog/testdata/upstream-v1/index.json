@@ -1,0 +1,13 @@
+[ {
+  "service" : "kms",
+  "url" : "https://servicereference.us-east-1.amazonaws.com/v1/kms/kms.json",
+  "modified" : 1790000001
+}, {
+  "service" : "s3",
+  "url" : "https://servicereference.us-east-1.amazonaws.com/v1/s3/s3.json",
+  "modified" : 1790000002
+}, {
+  "service" : "sqs",
+  "url" : "https://servicereference.us-east-1.amazonaws.com/v1/sqs/sqs.json",
+  "modified" : 1790000003
+} ]

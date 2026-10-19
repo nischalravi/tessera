@@ -102,6 +102,8 @@ var tables = []string{
 	"connections", "connection_revisions", "readiness_check_runs", "readiness_item_states", "readiness_attestations",
 	"readiness_skips", "readiness_overlays", "readiness_check_results", "recon_runs", "recon_findings", "readiness_scores",
 	"stg_identities", "stg_accounts", "stg_groups", "stg_memberships", "stg_attr_stats",
+	// ownership (schema/0208_ownership.sql)
+	"ownerships",
 	// scheduled access reviews (schema/0316_review_schedules.sql)
 	"review_templates", "review_launches",
 	// intended and observed access, drift and its remediation policy (schema/0330-0331)

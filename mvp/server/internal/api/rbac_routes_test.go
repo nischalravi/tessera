@@ -56,6 +56,9 @@ POST   /api/hris/events                              hris.simulate_event -
 GET    /api/hris/events/{event_id}/plan              graph.read      -
 POST   /api/hris/events/{event_id}/execute           hris.execute    STEP_UP_POLICY
 GET    /api/jml/leaver-plan/{identity_id}            graph.read      -
+GET    /api/ownership                                graph.read      -  # issue #167
+PUT    /api/ownership/{kind}/{object_key}            ownership.manage -  # issue #167
+POST   /api/ownership/bulk                           ownership.manage -  # issue #167
 GET    /openapi.json                                 auth.self       -  #
 GET    /docs                                         auth.self       -  #
 GET    /docs/oauth2-redirect                         auth.self       -  #
