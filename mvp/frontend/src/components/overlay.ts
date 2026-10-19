@@ -9,7 +9,7 @@ const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), selec
 /** Open modals, innermost last: only the top one reacts to Escape / Tab. */
 const stack: symbol[] = [];
 
-export function useModal(ref: RefObject<HTMLElement>, onClose: () => void, opts: { initialFocus?: boolean } = {}) {
+export function useModal(ref: RefObject<HTMLElement | null>, onClose: () => void, opts: { initialFocus?: boolean } = {}) {
   const close = useRef(onClose);
   close.current = onClose;
   useEffect(() => {

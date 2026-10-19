@@ -167,7 +167,7 @@ func newFakeGitHub(t *testing.T) (*fakeGitHub, func(*Config)) {
 	t.Cleanup(srv.Close)
 	pool := x509.NewCertPool()
 	pool.AddCert(srv.Certificate())
-	hc, err := safehttp.New(safehttp.Options{Env: config.Dev, AllowLoopback: true, RootCAs: pool})
+	hc, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Dev, AllowLoopback: true, RootCAs: pool})
 	if err != nil {
 		t.Fatal(err)
 	}

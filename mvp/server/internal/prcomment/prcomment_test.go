@@ -36,7 +36,7 @@ func server(t *testing.T, h http.HandlerFunc) (*prcomment.Poster, *seen) {
 	t.Cleanup(srv.Close)
 	pool := x509.NewCertPool()
 	pool.AddCert(srv.Certificate())
-	c, err := safehttp.New(safehttp.Options{Env: config.Dev, AllowLoopback: true, RootCAs: pool})
+	c, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Dev, AllowLoopback: true, RootCAs: pool})
 	if err != nil {
 		t.Fatal(err)
 	}

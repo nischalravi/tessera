@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/aws/catalog"
-	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 )
 
@@ -31,11 +30,8 @@ compile   verifies a snapshot against its manifest, merges the overlays in
 // newCatalogFetcher builds the production fetcher: every request goes through
 // the SSRF-guarded client. Tests replace it.
 var newCatalogFetcher = func() (*catalog.Fetcher, error) {
-	c, err := safehttp.New(safehttp.Options{
-		Env:          config.Prod, // no loopback or plain http exception
-		Timeout:      2 * time.Minute,
-		MaxBodyBytes: 32 << 20,
-	})
+	// Production client: no loopback or plain http exception.
+	c, err := safehttp.ForCLI(2*time.Minute, 32<<20)
 	if err != nil {
 		return nil, err
 	}
