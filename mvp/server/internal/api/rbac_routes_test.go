@@ -56,6 +56,24 @@ POST   /api/hris/events                              hris.simulate_event -
 GET    /api/hris/events/{event_id}/plan              graph.read      -
 POST   /api/hris/events/{event_id}/execute           hris.execute    STEP_UP_POLICY
 GET    /api/jml/leaver-plan/{identity_id}            graph.read      -
+GET    /api/siem/sinks                               siem.read       -  # issue #169
+POST   /api/siem/sinks                               siem.configure  STEP_UP_POLICY  # issue #169
+PUT    /api/siem/sinks/{sink_id}                     siem.configure  STEP_UP_POLICY  # issue #169
+POST   /api/siem/sinks/{sink_id}/rewind              siem.configure  -  # issue #169
+POST   /api/siem/sinks/{sink_id}/test                siem.configure  -  # issue #169
+GET    /api/siem/sinks/{sink_id}/dead-letters        siem.read       -  # issue #169
+GET    /api/alerts                                   alerts.read     -  # issue #168
+GET    /api/alerts/summary                           alerts.read     -  # issue #168
+GET    /api/alerts/rules                             alerts.read     -  # issue #168
+PUT    /api/alerts/rules/{rule_id}                   alerts.configure -  # issue #168
+GET    /api/alerts/channels                          alerts.configure -  # issue #168
+POST   /api/alerts/channels                          alerts.configure STEP_UP_POLICY  # issue #168
+PUT    /api/alerts/channels/{channel_id}             alerts.configure STEP_UP_POLICY  # issue #168
+POST   /api/alerts/channels/{channel_id}/test        alerts.configure -  # issue #168
+GET    /api/alerts/{alert_id}                        alerts.read     -  # issue #168
+POST   /api/alerts/{alert_id}/acknowledge            alerts.manage   -  # issue #168
+POST   /api/alerts/{alert_id}/resolve                alerts.manage   -  # issue #168
+POST   /api/alerts/{alert_id}/assign                 alerts.manage   -  # issue #168
 GET    /api/ownership                                graph.read      -  # issue #167
 PUT    /api/ownership/{kind}/{object_key}            ownership.manage -  # issue #167
 POST   /api/ownership/bulk                           ownership.manage -  # issue #167

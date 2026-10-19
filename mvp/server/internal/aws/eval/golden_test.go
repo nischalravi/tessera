@@ -64,6 +64,94 @@ type goldenCase struct {
 	Verified   string        `yaml:"verified"`
 	KnownFlags []string      `yaml:"known_flags"` // ambiguity ids a verified:doc case is allowed to carry
 	Note       string        `yaml:"note"`
+	// KMS and S3 state (PR-6). The key is goldenKeyARN; the bucket is tsr-bkt.
+	KeyPolicy any           `yaml:"key_policy"`
+	Grant     *goldenGrant  `yaml:"grant"`
+	Bucket    *goldenBucket `yaml:"bucket"`
+}
+
+const goldenKeyARN = "arn:aws:kms:us-east-1:111111111111:key/k1"
+
+// goldenGrant is one KMS grant on the key.
+type goldenGrant struct {
+	Grantee     string   `yaml:"grantee"`
+	Retiring    string   `yaml:"retiring"` // the retiring principal, if any
+	Operations  []string `yaml:"operations"`
+	Constraints struct {
+		EncryptionContextEquals map[string]string `yaml:"EncryptionContextEquals"`
+		EncryptionContextSubset map[string]string `yaml:"EncryptionContextSubset"`
+		SourceArn               string            `yaml:"SourceArn"`
+	} `yaml:"constraints"`
+}
+
+// goldenBucket is the S3 state of tsr-bkt. Absent fields keep the defaults of
+// §14.1: BucketOwnerEnforced and no Block Public Access.
+type goldenBucket struct {
+	ObjectOwnership string `yaml:"object_ownership"`
+	BPA             struct {
+		Account goldenBPA `yaml:"account"`
+		Bucket  goldenBPA `yaml:"bucket"`
+	} `yaml:"bpa"`
+	BPAOrg    *bool                  `yaml:"bpa_org"` // org-level Block Public Access, all or none
+	BucketACL []goldenACL            `yaml:"bucket_acl"`
+	ObjectACL map[string][]goldenACL `yaml:"object_acl"` // by object ARN
+}
+
+type goldenBPA struct {
+	BlockPublicAcls       bool `yaml:"BlockPublicAcls"`
+	IgnorePublicAcls      bool `yaml:"IgnorePublicAcls"`
+	BlockPublicPolicy     bool `yaml:"BlockPublicPolicy"`
+	RestrictPublicBuckets bool `yaml:"RestrictPublicBuckets"`
+}
+
+func (b goldenBPA) model() model.BPA { return model.BPA(b) }
+
+// goldenACL grants Perm to Grantee: AllUsers, AuthenticatedUsers, LogDelivery
+// or canonical(<account>).
+type goldenACL struct {
+	Grantee string `yaml:"grantee"`
+	Perm    string `yaml:"perm"`
+}
+
+func (a goldenACL) model() model.ACLGrant {
+	if rest, ok := strings.CutPrefix(a.Grantee, "canonical("); ok {
+		return model.ACLGrant{GranteeType: "CanonicalUser", Grantee: "canonical-" + strings.TrimSuffix(rest, ")"), Permission: a.Perm}
+	}
+	uri := map[string]string{
+		"AllUsers":           "http://acs.amazonaws.com/groups/global/AllUsers",
+		"AuthenticatedUsers": "http://acs.amazonaws.com/groups/global/AuthenticatedUsers",
+		"LogDelivery":        "http://acs.amazonaws.com/groups/s3/LogDelivery",
+	}[a.Grantee]
+	return model.ACLGrant{GranteeType: "Group", Grantee: uri, Permission: a.Perm}
+}
+
+func aclModels(in []goldenACL) []model.ACLGrant {
+	var out []model.ACLGrant
+	for _, a := range in {
+		out = append(out, a.model())
+	}
+	return out
+}
+
+// bucketState is the snapshot state of a bucket; spec is nil for buckets the
+// case does not describe.
+func bucketState(arn, owner string, spec *goldenBucket) *model.S3BucketState {
+	st := &model.S3BucketState{BucketARN: arn, OwnerAccount: owner, ObjectOwnership: "BucketOwnerEnforced"}
+	if spec == nil {
+		return st
+	}
+	if spec.ObjectOwnership != "" {
+		st.ObjectOwnership = spec.ObjectOwnership
+	}
+	st.BPAAccount, st.BPABucket, st.BPAOrg = spec.BPA.Account.model(), spec.BPA.Bucket.model(), spec.BPAOrg
+	st.BucketACL = aclModels(spec.BucketACL)
+	if len(spec.ObjectACL) > 0 {
+		st.ObjectACLs = map[string][]model.ACLGrant{}
+		for k, v := range spec.ObjectACL {
+			st.ObjectACLs[k] = aclModels(v)
+		}
+	}
+	return st
 }
 
 // goldenOrg is the shared fixture O1 plus per-case changes.
@@ -80,7 +168,9 @@ type goldenReq struct {
 	Context  map[string]any `yaml:"context"`
 	Mode     string         `yaml:"mode"`
 	Caller   string         `yaml:"caller"` // "provider": the OIDC provider calls AssumeRoleWithWebIdentity
-	Expect   *goldenExpect  `yaml:"expect"`
+	// ObjectOwner is the account that owns the S3 object (eval.EvaluationRequest.S3ObjectOwner).
+	ObjectOwner string        `yaml:"object_owner"`
+	Expect      *goldenExpect `yaml:"expect"`
 }
 
 type goldenExpect struct {
@@ -126,6 +216,71 @@ func (fakeCatalog) RequiresExplicitRBP(p string) (bool, bool) {
 		return true, true
 	}
 	return false, false
+}
+
+// The overlay facts of catalog/aws/overlays (PR-2): kms_xacct_ops.yaml,
+// s3_acl_map.yaml and s3_public_fixed_keys.yaml.
+var fakeKMSCrossAccountOps = map[string]bool{
+	"kms:creategrant": true, "kms:decrypt": true, "kms:derivesharedsecret": true, "kms:describekey": true,
+	"kms:encrypt": true, "kms:generatedatakey": true, "kms:generatedatakeypair": true,
+	"kms:generatedatakeypairwithoutplaintext": true, "kms:generatedatakeywithoutplaintext": true,
+	"kms:generatemac": true, "kms:getkeyrotationstatus": true, "kms:getpublickey": true, "kms:listgrants": true,
+	"kms:reencryptfrom": true, "kms:reencryptto": true, "kms:retiregrant": true, "kms:revokegrant": true,
+	"kms:sign": true, "kms:verify": true, "kms:verifymac": true,
+}
+
+var fakeACLMap = map[eval.S3ACLScope]map[string][]string{
+	eval.S3ACLBucket: {
+		"READ":         {"s3:ListBucket", "s3:ListBucketMultipartUploads", "s3:ListBucketVersions"},
+		"WRITE":        {"s3:DeleteObject", "s3:PutObject"},
+		"READ_ACP":     {"s3:GetBucketAcl"},
+		"WRITE_ACP":    {"s3:PutBucketAcl"},
+		"FULL_CONTROL": {"s3:DeleteObject", "s3:GetBucketAcl", "s3:ListBucket", "s3:ListBucketMultipartUploads", "s3:ListBucketVersions", "s3:PutBucketAcl", "s3:PutObject"},
+	},
+	eval.S3ACLObject: {
+		"READ":         {"s3:GetObject", "s3:GetObjectVersion"},
+		"WRITE":        {},
+		"READ_ACP":     {"s3:GetObjectAcl", "s3:GetObjectVersionAcl"},
+		"WRITE_ACP":    {"s3:PutObjectAcl", "s3:PutObjectVersionAcl"},
+		"FULL_CONTROL": {"s3:GetObject", "s3:GetObjectAcl", "s3:GetObjectVersion", "s3:GetObjectVersionAcl", "s3:PutObjectAcl", "s3:PutObjectVersionAcl"},
+	},
+}
+
+var fakeACLGroups = map[string]eval.S3ACLGroup{
+	"http://acs.amazonaws.com/groups/global/AllUsers":           {Name: "AllUsers", Public: true},
+	"http://acs.amazonaws.com/groups/global/AuthenticatedUsers": {Name: "AuthenticatedUsers", Public: true},
+	"http://acs.amazonaws.com/groups/s3/LogDelivery":            {Name: "LogDelivery"},
+}
+
+var fakePublicKeys = map[string]eval.S3PublicKeyRule{
+	"aws:principalarn":     {Kind: eval.S3FixedValue},
+	"aws:principalaccount": {Kind: eval.S3FixedValue},
+	"aws:principalorgid":   {Kind: eval.S3FixedValue},
+	"aws:userid":           {Kind: eval.S3FixedValue, ExceptPatterns: []string{"AROLEID:*"}},
+	"aws:sourceip":         {Kind: eval.S3IPRange, IPv4MaxCIDR: 8, IPv6MaxCIDR: 32},
+	"aws:sourcearn":        {Kind: eval.S3FixedValue},
+	"aws:sourcevpc":        {Kind: eval.S3FixedValue},
+	"aws:sourcevpce":       {Kind: eval.S3FixedValue},
+	"aws:sourceowner":      {Kind: eval.S3FixedValue},
+	"aws:sourceaccount":    {Kind: eval.S3FixedValue},
+	// The account must be fixed; the rest of the ARN may use wildcards.
+	"s3:dataaccesspointarn":     {Kind: eval.S3FixedValue, BucketPoliciesOnly: true},
+	"s3:dataaccesspointaccount": {Kind: eval.S3FixedValue},
+}
+
+func (fakeCatalog) KMSCrossAccountOp(a string) bool {
+	return fakeKMSCrossAccountOps[strings.ToLower(a)]
+}
+func (fakeCatalog) S3ACLActions(s eval.S3ACLScope, perm string) []string {
+	return fakeACLMap[s][perm]
+}
+func (fakeCatalog) S3ACLGroup(uri string) (eval.S3ACLGroup, bool) {
+	g, ok := fakeACLGroups[uri]
+	return g, ok
+}
+func (fakeCatalog) S3PublicFixedKey(k string) (eval.S3PublicKeyRule, bool) {
+	r, ok := fakePublicKeys[k]
+	return r, ok
 }
 
 func loadCases(t testing.TB) []goldenCase {
@@ -272,6 +427,27 @@ func buildWorld(t testing.TB, c goldenCase, shuffle func([]func())) *goldenWorld
 		}
 	}
 
+	if c.KeyPolicy != nil {
+		attach(goldenKeyARN, model.PolicyKMSKey, true, c.KeyPolicy, 0)
+	}
+	if g := c.Grant; g != nil {
+		alias := func(s string) string {
+			if a, ok := principalAliases[s]; ok {
+				return a
+			}
+			return s
+		}
+		grantee := alias(g.Grantee)
+		do(func() {
+			b.AddKMSGrant(model.KMSGrant{KeyARN: goldenKeyARN, GrantID: "grant-1", GranteePrincipal: grantee, Operations: g.Operations,
+				ConstraintsECEquals: g.Constraints.EncryptionContextEquals, ConstraintsECSubset: g.Constraints.EncryptionContextSubset,
+				ConstraintSourceARN: g.Constraints.SourceArn, RetiringPrincipal: alias(g.Retiring)})
+		})
+	}
+	for _, acct := range []string{acctA, acctB, acctX} {
+		do(func() { b.SetCanonicalID("canonical-"+acct, acct) })
+	}
+
 	// Buckets mentioned by any request (and tsr-bkt) belong to account A unless the case says otherwise.
 	buckets := map[string]string{"tsr-bkt": acctA}
 	reqs := c.allRequests()
@@ -288,9 +464,11 @@ func buildWorld(t testing.TB, c goldenCase, shuffle func([]func())) *goldenWorld
 	}
 	for name, owner := range buckets {
 		arn := "arn:aws:s3:::" + name
-		do(func() {
-			b.AddS3Bucket(&model.S3BucketState{BucketARN: arn, OwnerAccount: owner, ObjectOwnership: "BucketOwnerEnforced"})
-		})
+		var spec *goldenBucket
+		if name == "tsr-bkt" {
+			spec = c.Bucket
+		}
+		do(func() { b.AddS3Bucket(bucketState(arn, owner, spec)) })
 	}
 
 	if c.Org != nil {
@@ -411,6 +589,7 @@ func ctxValues(m map[string]any) map[string]eval.ContextValue {
 
 func (c goldenCase) request(w *goldenWorld, r goldenReq) *eval.EvaluationRequest {
 	req := &eval.EvaluationRequest{PrincipalARN: w.principal, Action: r.Action, ResourceARN: r.Resource, Context: ctxValues(r.Context)}
+	req.S3ObjectOwner = r.ObjectOwner
 	if r.Caller == "provider" {
 		req.PrincipalARN = "arn:aws:iam::111111111111:oidc-provider/token.actions.githubusercontent.com"
 	}
@@ -463,14 +642,11 @@ func TestGolden(t *testing.T) {
 	}
 }
 
-// goldenRequired lists GC-01..GC-59 and GC-69..GC-74 (PR-5's scope; GC-60..68
-// are KMS and S3, PR-6).
+// goldenRequired lists GC-01..GC-74: PR-5 covers all but GC-60..68, the KMS and
+// S3 cases of PR-6.
 func goldenRequired() []string {
 	var ids []string
 	for i := 1; i <= 74; i++ {
-		if i >= 60 && i <= 68 {
-			continue
-		}
 		ids = append(ids, fmt.Sprintf("GC-%02d", i))
 	}
 	return ids
