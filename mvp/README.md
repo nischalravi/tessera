@@ -457,8 +457,8 @@ change in the target system and checks that it happened.
   and the least-privilege revoke. Edges to permissions have no counterpart in a target and stay direct.
 * **Audit.** Each operation writes `provision.enqueued`, `provision.sent` and one of
   `provision.verified`, `provision.mismatch`, `provision.failed`, plus `provision.retried`,
-  `provision.cancelled`; target changes write `provision.target_set` and `provision.target_removed`
-  (never the token). Completions write the event the direct path wrote (`jit.expire`, `review.revoke`,
+  `provision.cancelled`; target changes write `provision.target_set` (with the target's origin and `credential`: `none`, `kept`, `set`, `rotated` or `cleared`, plus `previous_kind`/`previous_origin` when it moved) and `provision.target_removed`
+  (never the token). A stored token never follows a target to another kind or origin (scheme, host, port): such an edit needs a new token or gets 422 `credential_required`; a path-only change on the same origin keeps it. Completions write the event the direct path wrote (`jit.expire`, `review.revoke`,
   `grant.revoke`).
 * **Permissions.** `provisioning.read` (operator, auditor, policy admin, tenant admin) and
   `provisioning.manage` (policy admin, tenant admin: retry, cancel, run). Configuring a target needs
