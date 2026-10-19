@@ -201,6 +201,7 @@ func New(cfg Config) *Server {
 		}
 		cfg.Readiness = readiness.NewService(reg, cfg.Env)
 		cfg.Readiness.Runner.Scenario = cfg.ReadinessScenario
+		cfg.Readiness.Runner.SCIM.Client = cfg.OutboundHTTP
 	}
 	if cfg.Containment == nil {
 		cfg.Containment = &containment.Service{}
@@ -261,6 +262,7 @@ func New(cfg Config) *Server {
 	s.registerNotificationRoutes()
 	s.registerEmailRoutes()
 	s.registerContainmentRoutes()
+	s.registerEvidenceRoutes()
 	s.registerGroupsFolderRoutes()
 	s.registerReadinessRoutes()
 	s.registerJobRoutes()
@@ -641,6 +643,10 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 	}
 	if sb, ok := out.(statusBody); ok {
 		writeJSON(w, sb.status, sb.body)
+		return
+	}
+	if fb, ok := out.(fileBody); ok {
+		writeFile(w, fb)
 		return
 	}
 	writeJSON(w, http.StatusOK, out)

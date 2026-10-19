@@ -196,6 +196,11 @@ POST   /api/identities/{identity_id}/enable          identities.contain STEP_UP_
 GET    /api/identities/{identity_id}/disables        graph.read      -  # wire-previews
 POST   /api/containment-retries/{retry_id}/retry-now identities.contain STEP_UP_POLICY  # issue #106
 PUT    /api/connections/{id}/containment-credential  connections.manage STEP_UP_POLICY  # issue #106
+GET    /api/access/as-of                             graph.read      -  # issue #111
+GET    /api/evidence/packs                           audit.read      -  # issue #111
+POST   /api/evidence/packs                           audit.read      -  # issue #111
+GET    /api/evidence/packs/{pack_id}                 audit.read      -  # issue #111
+GET    /api/evidence/packs/{pack_id}/download        audit.read      -  # issue #111
 POST   /api/connections/{id}/validate                connections.manage -
 GET    /api/connections/{id}/validations/{run}       connections.read   -
 POST   /api/connections/{id}/dry-run                 connections.manage -
