@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { BreakGlassUse } from "../src/api.ts";
-import { breakGlassSlug, inBreakGlassSession, minutesLeft, sessionNotice, unexplainedItems } from "../src/features/admin/breakGlassState.ts";
+import { breakGlassPath, breakGlassSlug, inBreakGlassSession, minutesLeft, sessionNotice, unexplainedItems } from "../src/features/admin/breakGlassState.ts";
 import { b64uToBytes, bytesToB64u, ceremonyMessage, creationOptions, requestOptions } from "../src/features/admin/webauthn.ts";
 
 test("base64url round-trips every byte value, without padding", () => {
@@ -118,4 +118,11 @@ test("the browser's refusals are explained in plain words", () => {
   assert.match(ceremonyMessage({ name: "NotSupportedError" }), /PIN or fingerprint/);
   assert.match(ceremonyMessage({ name: "SecurityError" }), /own Tessera address/);
   assert.equal(ceremonyMessage(new Error("boom")), "boom");
+});
+
+test("the break-glass link is built only from a plain slug, encoded", () => {
+  assert.equal(breakGlassPath(" Larkspur "), "/t/larkspur/break-glass");
+  for (const bad of ["", "a/b", "javascript:alert(1)", "//evil.example", "a b", "<img src=x onerror=1>", "x".repeat(64), "a?b=c", "a#b"]) {
+    assert.equal(breakGlassPath(bad), null, bad);
+  }
 });

@@ -10,6 +10,16 @@ export function breakGlassSlug(pathname: string): string | null {
   return m ? m[1] : null;
 }
 
+/**
+ * The same-origin path of a tenant's break-glass sign-in, or null unless the typed organization is a
+ * plain slug (allow-list: lower-case letters, digits and hyphens). Typed text never reaches an href
+ * except through this check, and the slug is encoded, so it cannot add a scheme, host or markup.
+ */
+export function breakGlassPath(typed: string): string | null {
+  const slug = typed.trim().toLowerCase();
+  return /^[a-z0-9-]{1,63}$/.test(slug) ? `/t/${encodeURIComponent(slug)}/break-glass` : null;
+}
+
 /** True for a session that signed in with a break-glass key (its only active role is break_glass). */
 export const inBreakGlassSession = (s: Pick<SessionInfo, "active_roles">): boolean => s.active_roles.includes("break_glass");
 

@@ -7,7 +7,7 @@ import { useConfirm } from "../components/Dialog";
 import { useToast } from "../components/Toast";
 import { Button } from "../components/Button";
 import { Callout } from "../components/Feedback";
-import { breakGlassSlug } from "../features/admin/breakGlassState";
+import { breakGlassPath, breakGlassSlug } from "../features/admin/breakGlassState";
 import { store } from "./storage";
 
 // its own chunk: only a person signing in with a hardware key loads it
@@ -187,6 +187,7 @@ function returnTo(): string {
  */
 function SignIn() {
   const [tenant, setTenant] = useState(() => store.get<string>(LAST_TENANT, ""));
+  const glassPath = breakGlassPath(tenant);
   const [connections, setConnections] = useState<LoginConnection[] | null>(null);
   const [asked, setAsked] = useState("");
   const [busy, setBusy] = useState(false);
@@ -249,9 +250,9 @@ function SignIn() {
           <p className="faint small">You will sign in at your identity provider. Use a passkey or security key to activate admin roles.</p>
         </div>
       )}
-      {tenant.trim() && /^[a-z0-9-]{1,63}$/.test(tenant.trim().toLowerCase()) && (
+      {glassPath && (
         <p className="faint small" style={{ margin: 0 }}>
-          Identity provider unavailable? <a href={`/t/${tenant.trim().toLowerCase()}/break-glass`}>Sign in with a break-glass key</a>.
+          Identity provider unavailable? <a href={glassPath}>Sign in with a break-glass key</a>.
         </p>
       )}
     </SignInFrame>
