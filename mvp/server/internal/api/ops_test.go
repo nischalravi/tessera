@@ -166,11 +166,11 @@ func TestLoginMethodLabels(t *testing.T) {
 	}
 }
 
-func TestRunSweeper_ReportsEveryStepAsALoop(t *testing.T) {
+func TestRunQueue_ReportsEverySweepAsALoop(t *testing.T) {
 	e := newAdminEnv(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { e.srv.RunSweeper(ctx, time.Hour); close(done) }()
+	go func() { e.srv.RunQueue(ctx); close(done) }()
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		ran := 0

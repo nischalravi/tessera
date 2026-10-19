@@ -30,12 +30,11 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/health"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
-	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
-	"github.com/nischalravi/tessera/mvp/server/internal/lifecycle"
 	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision"
+	"github.com/nischalravi/tessera/mvp/server/internal/queue"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 	"github.com/nischalravi/tessera/mvp/server/internal/requests"
@@ -171,6 +170,8 @@ type Server struct {
 	containment *containment.Service
 	// admin is the admin-change workflow (design §15); never nil.
 	admin *admin.Service
+	// queue is the durable job queue (issue #300); never nil.
+	queue *queue.Queue
 }
 
 // New builds a server.
@@ -237,6 +238,7 @@ func New(cfg Config) *Server {
 	}
 	s.authn = &auth.Authenticator{DB: cfg.Store, Clock: func() time.Time { return s.clock() },
 		Cookies: auth.Cookies{Insecure: cfg.InsecureCookie}}
+	s.queue = s.newQueue()
 	s.registerRoutes()
 	s.registerAuditRoutes()
 	s.registerSiemRoutes()
@@ -262,6 +264,7 @@ func New(cfg Config) *Server {
 	s.registerGroupsFolderRoutes()
 	s.registerReadinessRoutes()
 	s.registerJobRoutes()
+	s.registerQueueRoutes()
 	s.registerProvisioningRoutes()
 	s.registerTransportRoutes()
 	s.registerAuthRoutes()
@@ -344,69 +347,6 @@ func (s *Server) RunReviewScheduler(ctx context.Context, interval time.Duration)
 		} else if err := reviews.TickAll(ctx, s.store, s.clock(), pols); err != nil && ctx.Err() == nil {
 			s.log.Error("review scheduler failed", "err", err)
 		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-		}
-	}
-}
-
-// SweeperLoops are the loop names RunSweeper reports to obs.DefaultLoops.
-var SweeperLoops = []string{"jit_sweep", "request_sweep", "sponsorship_sweep", "lifecycle_sweep", "containment_retries",
-	"admin_change_sweep"}
-
-// RunSweeper expires JIT grants, closes due request lines and ends due
-// lifecycle terms (warnings first) of every active tenant, each in its own
-// tenant transaction, every interval until ctx is done. A failure in one
-// tenant is logged and does not stop the others.
-func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
-	t := time.NewTicker(interval)
-	defer t.Stop()
-	ctx = audit.WithSystemActor(ctx, "jit.sweeper") // jit.expire events name the job
-	// Each step is its own tracked loop (obs.DefaultLoops): a step that stalls or
-	// keeps failing shows as lag in /metrics, /readyz and Admin -> Platform health.
-	loops := obs.DefaultLoops
-	for _, name := range SweeperLoops {
-		loops.Register(name, interval, true)
-	}
-	step := func(name, what string, fn func() error) {
-		if err := loops.Run(name, fn); err != nil && ctx.Err() == nil {
-			s.log.Error(what+" failed", "err", err)
-		}
-	}
-	var maintained time.Time
-	for {
-		// sweepAndRecord logs its own failures and records the job runs
-		step("jit_sweep", "jit sweep", func() error { s.sweepAndRecord(ctx); return nil })
-		if now := s.clock(); now.Sub(maintained) >= jobMaintainGap {
-			if err := jobs.Maintain(ctx, s.store, now, jobStaleAfter, jobRetention); err != nil && ctx.Err() == nil {
-				s.log.Error("job history upkeep failed", "err", err)
-			}
-			maintained = now
-		}
-		step("request_sweep", "request sweep", func() error {
-			return requests.SweepAll(audit.WithSystemActor(ctx, requests.Sweeper), s.store, s.clock())
-		})
-		// sponsorships first: the last one to end ends the person, the lifecycle sweep then has nothing left
-		step("sponsorship_sweep", "sponsorship sweep", func() error {
-			return s.guests.SweepAll(audit.WithSystemActor(ctx, sponsorship.Sweeper), s.store, s.clock())
-		})
-		step("lifecycle_sweep", "lifecycle sweep", func() error {
-			return lifecycle.SweepAll(audit.WithSystemActor(ctx, lifecycle.Sweeper), s.store, s.containment, s.clock())
-		})
-		step("containment_retries", "containment retry sweep", func() error {
-			return s.containment.SweepRetries(audit.WithSystemActor(ctx, "containment.sweeper"), s.store, "containment.sweeper")
-		})
-		step("sod_mitigation_sweep", "sod mitigation sweep", func() error {
-			return sod.SweepAll(audit.WithSystemActor(ctx, sod.Sweeper), s.store, s.clock(), s.cfg.SoD)
-		})
-		// apply the admin changes whose cooling-off ended and expire the ones
-		// nobody approved in 72 hours (design §15.2)
-		step("admin_change_sweep", "admin change sweep", func() error {
-			_, err := s.admin.Sweep(audit.WithSystemActor(ctx, "admin.sweeper"))
-			return err
-		})
 		select {
 		case <-ctx.Done():
 			return

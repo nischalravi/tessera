@@ -330,7 +330,6 @@ const (
 	writeTimeout      = api.DefaultHandlerTimeout + 15*time.Second
 	idleTimeout       = 60 * time.Second
 	shutdownTimeout   = 10 * time.Second
-	sweepInterval     = 30 * time.Second
 	reviewInterval    = 5 * time.Minute  // scheduled access reviews (issue #166)
 	provisionInterval = 5 * time.Second  // provisioning worker: sends queued operations and re-reads targets
 	keysInterval      = 24 * time.Hour   // keys.EnsureAll: rotation runs daily (design §10.6)
@@ -458,7 +457,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	sweepDone := make(chan struct{})
 	go func() {
 		defer close(sweepDone)
-		srv.RunSweeper(ctx, sweepInterval)
+		srv.RunQueue(ctx)
 	}()
 	reviewsDone := make(chan struct{})
 	go func() {

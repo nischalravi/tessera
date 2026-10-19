@@ -149,6 +149,8 @@ var tables = []string{
 	"removal_requests",
 	// request access drafts (schema/0312_request_drafts.sql)
 	"request_drafts",
+	// durable job queue (schema/0320_queue.sql)
+	"queue_jobs", "queue_schedules",
 	// configuration transport (schema/0211_config_transport.sql)
 	"config_signing_keys", "config_trusted_signers", "config_imports",
 	// native groups (schema/0280_groups.sql); the engine tables stay empty until GR-2

@@ -460,6 +460,45 @@ links `retry_of` and records `job.retried`. Runs still `running` after an hour a
 auditor, policy admin, tenant admin). Admin → Jobs lists the runs, with Failed, Running and job
 filter chips and a side panel showing the error, the result and Retry.
 
+### Durable job queue
+
+`internal/queue` is the one engine for background work (issue #300). Rows live in `queue_jobs` (kind,
+JSON payload, idempotency key unique per tenant and kind, `run_at`, attempts, `max_attempts`,
+`last_error`, lease owner and expiry, status `queued | running | succeeded | failed | dead`) and
+`queue_schedules` (name, kind, spec, `next_run_at`), both tenant-owned with RLS and cross-tenant guards.
+All SQL is in `internal/store/repo_queue.go`, reached through the tenant handle; a worker finds tenants
+the way the old sweepers did (active tenant list), then works each one in its own transaction.
+
+* **Claiming.** A worker claims due rows (queued or failed with `run_at` past, or running with an expired
+  lease) by setting a lease in one write transaction: `BEGIN IMMEDIATE` on SQLite, `FOR UPDATE ... SKIP
+  LOCKED` on Postgres (`pgOverrides`, on top of the per-tenant advisory lock). Each claim counts an
+  attempt; a handler heartbeats every lease/3 (60 s lease), and a lost lease cancels the handler. A
+  job whose lease expires after its last attempt is dead, not run again. Delivery is at least once.
+* **Failure.** A failed attempt becomes `failed` and runs again after `10s * 2^(n-1)` (cap 15 min, plus or
+  minus 20% jitter); after `max_attempts`, or on `queue.Permanent(err)`, it is `dead` and
+  `queue.job_dead` is audited. `POST /api/queue/jobs/{id}/retry` puts a dead job back with a fresh
+  budget (`jobs.manage`, tenant admin, step-up; `queue.job_retried` audited).
+* **Schedules.** Specs are `@every 30s` or 5-field cron (UTC). A worker that finds a schedule due moves
+  `next_run_at` and enqueues the job (key `schedule:name:window`) in one transaction, so a window runs
+  once however many workers poll; after downtime it fires once, not per missed window. Schedules are
+  declared in code (`Server.newQueue`) and created for each tenant on first sight.
+* **Workers.** `Queue.Run` polls every 2 s with 4 concurrent jobs, rotating the tenant it starts with.
+  On shutdown it stops claiming, waits up to 10 s, then cancels running handlers and releases their leases
+  (queued again, attempt given back). `tessera serve` runs it as `Server.RunQueue`.
+* **On the queue now.** The sweepers that `RunSweeper` ran, as per-tenant schedules every 30 s:
+  `jit_sweep`, `sweep_requests`, `sweep_lifecycle` (sponsorships, then lifecycle: one job so the order
+  holds), `sweep_admin_changes`, and `containment_retries`, plus `job_maintenance` every 10 min (stale
+  `job_runs`, retention, pruning succeeded queue jobs after 7 days). The containment retry sweep runs
+  `RunRetries` under a lease; each `containment_retries` row keeps its own backoff (1m, 5m, 15m, 1h) and
+  24 h give-up, which are tested domain rules, so the queue adds exclusion, not a second backoff.
+* **Run history.** A job execution that returns a result or an error is recorded as a `job_runs` row
+  (kind = the queue kind, trigger `schedule`, or `retry` from the second attempt), so the run history of
+  #172 and Admin → Jobs show it, and a failure appends `job.failed`. A sweep that finds nothing returns no
+  result and records nothing, as before. `GET /api/queue/jobs?status=&kind=` and `GET
+  /api/queue/schedules` (`jobs.read`) feed the Queue section of Admin → Jobs.
+* **Not on the queue yet.** The notification outbox (own dead-letter state and loop) and provisioning
+  operations (`provision.Engine`) keep their loops, and the audit checkpointer its own; see Known gaps.
+
 ### Closed-loop provisioning
 
 Until issue #103 every write Tessera made (JML execute, review revoke, JIT revoke and expiry,
@@ -550,7 +589,7 @@ Every submit and approve needs `STEP_UP_ADMIN` (phishing-resistant sign-in withi
 is decoded into a typed struct with unknown fields refused; the approver echoes its SHA-256 (`payload_hash`)
 and a mismatch is 409. States: `pending_approval` → `cooling_off` → `applied`, or `rejected`, `cancelled`,
 `expired` (72 h without approval) or `failed` (the applier raised; recorded with the reason). Applying before
-`effective_at` is 409; the sweeper (`RunSweeper`) applies due changes and expires old ones, using the
+`effective_at` is 409; the sweeper (the `sweep_admin_changes` queue job) applies due changes and expires old ones, using the
 injected clock. A tenant with fewer than two admins can grant `tenant_admin` with one person and the 24 h;
 a change that needs two people is refused (`bootstrap_restricted`) until it has two. A client secret
 travels beside the payload, is sealed, and is cleared when the request ends; it never appears in the
@@ -1042,7 +1081,7 @@ the run failed. Provider calls go through `internal/safehttp`.
   the leaver's `jml.leaver` event.
 - **Retry tasks** (`containment_retries`, schema 0206). One open task per account and step, with
   identity, connection, step, attempts, `next_attempt_at`, last error and status `pending`,
-  `succeeded` or `gave_up`. The sweeper (the 30 s `RunSweeper` loop, clock-aware like the rest)
+  `succeeded` or `gave_up`. The sweeper (the 30 s `containment_retries` queue job, clock-aware like the rest)
   retries a due task, re-running the step and its verification, with backoff 1 m, 5 m, 15 m,
   1 h, then hourly, until about 24 h after the first failure; then it marks it `gave_up`. Each
   attempt is audited (`containment.retry_attempt`, plus `containment.retry_scheduled`,
@@ -1766,6 +1805,10 @@ OpenAPI document). Deliberate differences:
 * Revokes and JML plans change Tessera's graph only unless the connection has a provisioning target
   with write-back on (see Closed-loop provisioning); JIT approval and rotating secrets are not yet
   sent to targets, and only SCIM 2.0 and Okta have connectors (no Entra native connector yet).
+* The durable queue (see Durable job queue) runs the sweepers and the containment retry sweep. The
+  notification outbox and provisioning operations still run their own loops, so they are not safe on more
+  than one instance yet; moving them is the follow-up. There is no queue depth or oldest-job-age metric
+  yet (only `tessera_queue_job_runs_total` and the per-sweep loop lag in `obs.DefaultLoops`), and schedules cannot be edited or disabled through the API.
 * There is no scheduled connector sync. Seeding runs discovery once, and `POST /api/connectors/sync`
   re-runs discovery on demand.
 * Effective-permission paths are capped at 8 per permission, and "lost if removed" uses those paths.

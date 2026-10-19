@@ -829,3 +829,17 @@ DROP POLICY IF EXISTS tenant_isolation ON siem_dead_letters;
 CREATE POLICY tenant_isolation ON siem_dead_letters
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE queue_schedules ENABLE ROW LEVEL SECURITY;
+ALTER TABLE queue_schedules FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON queue_schedules;
+CREATE POLICY tenant_isolation ON queue_schedules
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE queue_jobs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE queue_jobs FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON queue_jobs;
+CREATE POLICY tenant_isolation ON queue_jobs
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
