@@ -85,7 +85,9 @@ func (s *Server) startWSFedLogin(w http.ResponseWriter, r *http.Request, t store
 	}
 	http.SetCookie(w, s.loginCookie(cookie, int(loginTxnTTL/time.Second)))
 	w.Header().Set("Cache-Control", "no-store")
-	http.Redirect(w, r, signin, http.StatusFound)
+	// no body: a redirect page would echo the URL back
+	w.Header().Set("Location", signin)
+	w.WriteHeader(http.StatusFound)
 	return nil, nil
 }
 
