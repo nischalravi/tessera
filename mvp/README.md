@@ -755,7 +755,7 @@ small JSON language (`internal/abac`): `all` / `any` / `not` over tests
 `{"attr": "identity.department", "op": "eq", "value": "Finance"}`, with ops `eq`, `ne`, `in`,
 `prefix`, `exists`, `gt`, `gte`, `lt`, `lte` (numbers or RFC 3339 times). Attributes are
 `identity.*` (type, status, name, email, department, title, manager_id, has_manager, source,
-tenure_days), `resource.*` (name, risk, and for catalog items system and privileged) and `context.*`
+tenure_days, worker_type), `resource.*` (name, risk, and for catalog items system and privileged) and `context.*`
 (time, hour, weekday in UTC, and `aal` when a signed-in user acts). It is data, never code:
 evaluation is a deterministic walk with limits on depth (8), size (100 parts) and lists (50).
 
@@ -783,8 +783,18 @@ evaluation is a deterministic walk with limits on depth (8), size (100 parts) an
 
 Reading and simulating need `graph.read`; changing a policy needs `roles.manage` with a fresh
 phishing-resistant sign-in, and binding a catalog item needs `catalog.manage` (same step-up).
-Not yet: location, worker type and custom HRIS fields (the identity record does not store them, so
-a test on one is always unknown and denies; they arrive with the HRIS attribute mapping).
+
+`identity.worker_type` (issue #215) is the person's worker type from the lifecycle record (see
+"Contractors, guests and end dates"): `employee`, `contractor`, `intern`, `partner`, `vendor` or
+`guest`, so `{"attr": "identity.worker_type", "op": "in", "value": ["contractor", "vendor"]}` selects
+non-employees. A person with no lifecycle record is an employee; services and AI agents have no
+worker type, so a test on it is unknown for them and denies. An unrecognised value simply matches
+no one. The attribute editor lists it (the list comes from the server). Attributes stored outside
+the identity record are loaded by `abac.Resolver` (`internal/abac/resolver.go`), once per
+transaction and tenant, and every evaluation site (roles, request eligibility, SoD subjects,
+simulation) uses it, so a new one is added in one place and the attribute catalog.
+Not yet: location and custom HRIS fields (the identity record does not store them, so a test on
+one is always unknown and denies; they arrive with the HRIS attribute mapping).
 
 ### Contractors, guests and end dates
 
