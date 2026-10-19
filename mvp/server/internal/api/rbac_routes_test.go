@@ -312,6 +312,13 @@ GET    /api/admin/recovery                           admin.read      -  # issue 
 POST   /api/admin/recovery/{recovery_id}/cancel      admin.change.request -  # issue #16
 GET    /api/admin/api-clients                        admin.read      -  # issue #16
 GET    /api/admin/platform-health                    admin.read      -  # issue #303
+POST   /api/auth/break-glass/options                 public
+POST   /api/auth/break-glass/verify                  public
+GET    /api/admin/break-glass                        admin.read      -  # issue #17
+POST   /api/admin/break-glass/registration/options   admin.change.request STEP_UP_ADMIN  # issue #17
+POST   /api/admin/break-glass/registration/verify    admin.change.request STEP_UP_ADMIN  # issue #17
+POST   /api/admin/break-glass/actions/{action}       breakglass.recover -  # issue #17
+POST   /api/admin/break-glass/uses/{use_id}/attest   admin.change.request -  # issue #17
 `
 
 type designRoute struct {

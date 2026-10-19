@@ -2234,9 +2234,9 @@ export type ChangeStatus = "pending_approval" | "cooling_off" | "applied" | "rej
 /** The change types of design §15.2 that the API accepts. */
 export type ChangeType =
   | "role.grant" | "role.revoke" | "idp_connection.create" | "idp_connection.update_trust" | "idp_connection.update_cosmetic"
-  | "idp_connection.disable" | "tenant.settings.update" | "tenant.security_contacts.update";
+  | "idp_connection.disable" | "tenant.settings.update" | "tenant.security_contacts.update" | "breakglass.register" | "breakglass.revoke";
 
-interface AdminPersonRef { id: string; display_name: string }
+export interface AdminPersonRef { id: string; display_name: string }
 
 export interface AdminChange {
   id: string; type: ChangeType; summary: string; status: ChangeStatus; target_id: string | null; two_person: boolean;
@@ -2248,7 +2248,7 @@ export interface AdminChange {
 }
 
 export interface AdminNotification {
-  id: string; kind: string; recipient_type: "admin" | "contact" | "operator"; recipient: string; subject: string;
+  id: string; kind: string; severity: "info" | "critical"; recipient_type: "admin" | "contact" | "operator"; recipient: string; subject: string;
   change_request_id: string | null; recovery_id: string | null; created_at: string; delivered_at: string | null;
 }
 
@@ -2297,6 +2297,51 @@ export const adminChanges = {
   activateConnection: (id: string) => api<{ id: string; status: string }>(`/admin/idp-connections/${id}/activate`, {}),
   disableUser: (id: string, reason: string) => api<{ id: string; status: string }>(`/admin/users/${id}/disable`, { reason }),
   cancelRecovery: (id: string) => api<AdminRecovery>(`/admin/recovery/${id}/cancel`, {}),
+};
+
+// ------------------------------------------------------------ break-glass (design §9.6, §15.4)
+
+/** A WebAuthn options document as the API sends it (go-webauthn JSON: binary values are base64url). */
+export type WebAuthnOptionsJSON = { publicKey: Record<string, any> };
+
+export interface BreakGlassKey {
+  id: string; user_id: string; user: string; label: string; custodian: string; aaguid: string; attestation_format: string;
+  attestation_trust: "basic" | "attca" | "mds_verified"; transports: string[]; change_request_id: string; created_at: string;
+  last_used_at: string | null; revoked_at: string | null;
+}
+
+/** An applied breakglass.register request whose key has not been registered yet (24 h window). */
+export interface BreakGlassEnrolment {
+  change_request_id: string; user_id: string; label: string; custodian: string; requested_by: AdminPersonRef; window_closes_at: string;
+}
+
+/** One break-glass sign-in, open until an admin says why it happened. */
+export interface BreakGlassUse {
+  id: string; session_id: string; credential_id: string; key: string; used_at: string; ip: string | null; answered: boolean;
+  answered_at: string | null; answered_by: AdminPersonRef | null; reason: string | null;
+}
+
+/** What a break-glass session may do (§15.4). */
+export type BreakGlassAction = "idp_connection.disable" | "idp_connection.update_trust" | "role.grant" | "sessions.revoke_all";
+
+export interface BreakGlassOverview {
+  available: boolean; keys: BreakGlassKey[]; open_enrolments: BreakGlassEnrolment[]; uses: BreakGlassUse[]; unanswered_uses: number;
+  aaguid_allowlist: string[]; actions: BreakGlassAction[];
+}
+
+/** Break-glass calls. Registration is an admin's (step-up); the actions are the break-glass session's alone. */
+export const breakGlass = {
+  registrationOptions: (changeRequestId: string) =>
+    api<WebAuthnOptionsJSON>("/admin/break-glass/registration/options", { change_request_id: changeRequestId }),
+  registrationVerify: (changeRequestId: string, credential: unknown) =>
+    api<BreakGlassKey>("/admin/break-glass/registration/verify", { change_request_id: changeRequestId, credential }),
+  action: (action: BreakGlassAction, payload: Record<string, unknown> = {}) =>
+    api<{ action: BreakGlassAction; revoked_sessions: number; change_request?: AdminChange }>(`/admin/break-glass/actions/${action}`, payload),
+  attest: (useId: string, reason: string) => api<BreakGlassUse>(`/admin/break-glass/uses/${useId}/attest`, { reason }),
+  /** The sign-in page's two calls (no session yet): options for the tenant's keys, then the signed assertion. */
+  signInOptions: (tenant: string) => api<WebAuthnOptionsJSON>("/auth/break-glass/options", { tenant }),
+  signIn: (tenant: string, credential: unknown) =>
+    api<{ ok: boolean; redirect: string; expires_at: string; idle_timeout_s: number }>("/auth/break-glass/verify", { tenant, credential }),
 };
 
 /** Seconds as "24 h", "5 min" for the cooling-off column. */

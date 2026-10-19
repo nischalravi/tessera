@@ -19,7 +19,7 @@ import (
 )
 
 // The admin routes of design §16.1 (all /api/admin/* except break-glass,
-// which arrives in PR13):
+// which are in breakglass_routes.go):
 //
 //	GET  /api/admin/users                                   users and their roles
 //	POST /api/admin/users/{user_id}/disable                 {reason}: disable now, revoke sessions
@@ -406,7 +406,7 @@ func notificationViews(ns []*store.AdminNotification, names map[uuid.UUID]string
 			recovery = n.RecoveryID.String()
 		}
 		out = append(out, ojson.Object{{Key: "id", Value: n.ID.String()}, {Key: "kind", Value: n.Kind},
-			{Key: "recipient_type", Value: n.RecipientType}, {Key: "recipient", Value: rcpt}, {Key: "subject", Value: n.Subject},
+			{Key: "severity", Value: admin.NotificationSeverity(n.Kind)}, {Key: "recipient_type", Value: n.RecipientType}, {Key: "recipient", Value: rcpt}, {Key: "subject", Value: n.Subject},
 			{Key: "change_request_id", Value: change}, {Key: "recovery_id", Value: recovery},
 			{Key: "created_at", Value: rt3339(n.CreatedAt)}, {Key: "delivered_at", Value: opt(n.DeliveredAt)}})
 	}

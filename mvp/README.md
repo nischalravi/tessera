@@ -644,6 +644,8 @@ Authentication, Change requests, API clients, and a banner on every page while a
 | `idp_connection.update_cosmetic`, `.disable` | one admin | none | at once (disable ends the connection's sessions; refused for the last active connection) |
 | `tenant.settings.update` | a different admin if it **weakens** a setting | 24 h if weakening | merges the bounded settings of §18.3 and `min_admins` |
 | `tenant.security_contacts.update` | a different admin | 24 h | replaces the contacts |
+| `breakglass.register` | a different admin | 24 h | creates the break-glass user (or adds a key to one) and opens a 24 h window for the requester to register the key |
+| `breakglass.revoke` | one admin | none | revokes the key and ends its sessions |
 
 The test login: while signed in, the requester opens `GET /api/auth/login?connection=<id>&test=1`
 (login transactions have a `test` purpose, schema `0315`; OIDC and SAML). The callback records the
@@ -658,10 +660,32 @@ and a mismatch is 409. States: `pending_approval` → `cooling_off` → `applied
 injected clock. A tenant with fewer than two admins can grant `tenant_admin` with one person and the 24 h;
 a change that needs two people is refused (`bootstrap_restricted`) until it has two. A client secret
 travels beside the payload, is sealed, and is cleared when the request ends; it never appears in the
-payload, audit, a response or a list. `api_client.*` and `breakglass.*` types arrive with the PRs that add
-their tables. Every transition writes an `admin.change.*` audit event and queues an `admin_notifications`
+payload, audit, a response or a list. `api_client.*` types arrive with the PRs that add their table.
+Every transition writes an `admin.change.*` audit event and queues an `admin_notifications`
 row for every active tenant admin and security contact, in the same transaction (delivery is the
 notification outbox's job, issue #189; until then the rows and the banner are the notice).
+
+**Break-glass** (IdP down, misconfigured or compromised, §9.6, §15.4; `internal/admin/breakglass.go`,
+schema `0009_breakglass.sql`, UI **Admin → Break-glass** and `/t/<slug>/break-glass`). Needs `TESSERA_RP_ID`
+(default `localhost`) and `TESSERA_PUBLIC_URL`; without them the ceremonies answer 503. go-webauthn v0.18.2
+with direct attestation, cross-platform keys, no resident key, user verification required.
+- **Enrol**: a `breakglass.register` request (above), then the requester calls
+  `POST /api/admin/break-glass/registration/options` and `/verify` (`{change_request_id[, credential]}`,
+  `STEP_UP_ADMIN`) within 24 h. Our own checks refuse a backup-eligible key (BE flag), a `none` or self
+  attestation, a missing user verification and, when the tenant setting `breakglass_aaguid_allowlist`
+  (set with `tenant.settings.update`; narrowing is immediate, widening needs two admins and 24 h) is not
+  empty, an AAGUID that is not on it. Refusals are audited (`breakglass.registration.rejected`) and spend the challenge.
+  The attestation chain is not yet checked against FIDO MDS3 (OQ11), so keys are recorded with trust `basic`.
+- **Use**: `POST /api/auth/break-glass/options` and `/verify` (public, JSON, `{tenant[, credential]}`). The
+  challenge is single use; a sign count that does not rise is refused and raises a critical notification.
+  The session has kind `break_glass`, only the role `break_glass` (`admin.read` + `breakglass.recover`), 15 min
+  idle and 60 min absolute. It writes `auth.break_glass.used` (tenant and platform chain) and a critical
+  notification (`severity: critical`) to every admin, contact and `tessera-security-operations`.
+- **Actions**: `POST /api/admin/break-glass/actions/{idp_connection.disable | idp_connection.update_trust | role.grant | sessions.revoke_all}`;
+  the first three file the normal change request with no approver and a 1 h cooling-off any admin can cancel
+  (`role.grant` only for `tenant_admin`); `sessions.revoke_all` ends every other session at once. Audited as `breakglass.action`.
+- **After**: `GET /api/admin/break-glass` lists keys, open enrolments and uses (30 days); every use stays on
+  the admin banner until an admin answers `POST …/uses/{use_id}/attest {reason}`.
 
 **Operator recovery** (all admins and break-glass keys lost, §15.5): two *different* operators run
 `tessera admin recover-tenant -tenant acme -operator <id> -co-operator <id> -ticket <ref> -connection <id>

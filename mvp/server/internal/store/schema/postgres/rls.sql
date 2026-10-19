@@ -830,6 +830,27 @@ CREATE POLICY tenant_isolation ON queue_jobs
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE break_glass_credentials ENABLE ROW LEVEL SECURITY;
+ALTER TABLE break_glass_credentials FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON break_glass_credentials;
+CREATE POLICY tenant_isolation ON break_glass_credentials
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE break_glass_challenges ENABLE ROW LEVEL SECURITY;
+ALTER TABLE break_glass_challenges FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON break_glass_challenges;
+CREATE POLICY tenant_isolation ON break_glass_challenges
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE break_glass_uses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE break_glass_uses FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON break_glass_uses;
+CREATE POLICY tenant_isolation ON break_glass_uses
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 ALTER TABLE readiness_live_attestations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE readiness_live_attestations FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON readiness_live_attestations;

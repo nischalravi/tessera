@@ -102,6 +102,9 @@ type Config struct {
 	AuditAnchor string
 	// PublicURL is TESSERA_PUBLIC_URL: the base of the OIDC redirect URIs.
 	PublicURL string
+	// RPID is TESSERA_RP_ID, the WebAuthn relying party id of break-glass
+	// keys. Empty (or no PublicOrigin): break-glass is unavailable.
+	RPID string
 	// Sealer opens connection client secrets, seals PKCE verifiers, provisioning
 	// target credentials and the config bundle signing keys under the KEK.
 	// Nil (tests only): sign-in with secrets and config export are unavailable,
@@ -238,6 +241,15 @@ func New(cfg Config) *Server {
 		Clock: func() time.Time { return s.clock() }, Log: cfg.Logger.With("component", "provisioning")}
 	s.admin = &admin.Service{DB: cfg.Store, Clock: func() time.Time { return s.clock() }, Sealer: cfg.Sealer,
 		Prod: cfg.Env == "prod", Log: cfg.Logger}
+	if cfg.RPID != "" && cfg.PublicOrigin != "" {
+		// the ceremony runs on the public origin (and, in dev, the CORS origins)
+		origins := s.csrfOrigins()
+		if wa, err := admin.NewWebAuthn(cfg.RPID, origins); err != nil {
+			cfg.Logger.Error("break-glass is unavailable: the WebAuthn relying party is invalid", "rp_id", cfg.RPID, "err", err)
+		} else {
+			s.admin.WebAuthn = wa
+		}
+	}
 	s.guests = sponsorship.New(cfg.Identifiers)
 	if cfg.OutboundHTTP != nil {
 		rp, err := oidcrp.New(oidcrp.Config{HTTP: cfg.OutboundHTTP, Now: func() time.Time { return s.clock() }})
@@ -287,6 +299,7 @@ func New(cfg Config) *Server {
 	s.registerOAuth2Routes()
 	s.registerStepUpRoutes()
 	s.registerAdminRoutes()
+	s.registerBreakGlassRoutes()
 	s.registerOpsRoutes()
 	s.checkPublicRoutes()
 	return s
