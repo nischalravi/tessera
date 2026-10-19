@@ -47,6 +47,7 @@ func (s *Server) registerReadinessRoutes() {
 	s.handle(P, "/api/connections/{id}/transition", write, need(auth.PermConnectionsManage), s.rd(s.transition))
 	s.handle(P, "/api/connections/{id}/activate", write, needStepUp(auth.PermConnectionsActivate, auth.StepUpPolicy), s.rd(s.activate))
 	s.handle(P, "/api/connections/{id}/retire", write, needStepUp(auth.PermConnectionsManage, auth.StepUpPolicy), s.rd(s.retire))
+	s.registerActivationRoutes()
 	s.registerValidationRoutes()
 	s.registerDryRunRoutes()
 	s.registerHealthRoutes()
@@ -460,7 +461,27 @@ func (s *Server) activate(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, err
 	}
 	var out any
+	status := http.StatusOK
 	err = s.write(r, func(c *store.TenantTx, now time.Time) error {
+		// A write-enabled revision needs a second person (DR-10): this call
+		// opens the request and a different person approves it.
+		two, err := s.readiness.RequiresSecondPerson(c, id)
+		if err != nil {
+			return err
+		}
+		if two {
+			by, err := activationPerson(r)
+			if err != nil {
+				return err
+			}
+			req, err := s.readiness.RequestActivation(c, id, by, now)
+			if err != nil {
+				return err
+			}
+			status = http.StatusAccepted
+			out = map[string]any{"status": "pending_approval", "request": activationOf(req)}
+			return nil
+		}
 		_, ac, err := s.readiness.Activate(c, id, actor(r), now)
 		if err != nil {
 			return err
@@ -471,7 +492,7 @@ func (s *Server) activate(r *http.Request, p *params) (int, any, error) {
 		out, err = s.connectionView(c, id, now)
 		return err
 	})
-	return http.StatusOK, out, err
+	return status, out, err
 }
 
 func (s *Server) retire(r *http.Request, p *params) (int, any, error) {

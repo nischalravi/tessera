@@ -30,8 +30,8 @@ import (
 // mutating ones expect a write transaction.
 type Service struct {
 	Templates *template.Registry
-	// Env is TESSERA_ENV. Until DR-10 (RBAC, step-up), non-demo connector
-	// types can be activated only when it is "dev".
+	// Env is TESSERA_ENV. DR-10 lifted the rule that non-demo connector types
+	// can be activated only when it is "dev"; nothing reads it now.
 	Env     string
 	LiveTTL time.Duration
 	Runner  RunnerOptions
@@ -138,6 +138,13 @@ func (s *Service) loadEvidence(c *store.TenantTx, conn *store.Connection, rev *s
 		return nil, err
 	}
 	if ev.Skips, err = c.Skips(rev.ID); err != nil {
+		return nil, err
+	}
+	if req, err := c.LatestActivationRequest(conn.ID); err == nil {
+		if req.Status == store.ActivationApplied && req.RevisionID == rev.ID {
+			ev.Approval = req
+		}
+	} else if !errors.Is(err, store.ErrNotFound) {
 		return nil, err
 	}
 	conns, err := c.Connections()
