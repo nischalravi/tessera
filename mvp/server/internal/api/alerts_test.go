@@ -116,7 +116,7 @@ func TestAlertsAPI(t *testing.T) {
 	}
 	var ch channelView
 	_ = json.Unmarshal(rec.Body.Bytes(), &ch)
-	if ch.Target != "https://hooks.slack.com/…CRET" {
+	if ch.Target != "https://hooks.slack.com/…" { // no tail of the secret path (#333)
 		t.Errorf("redacted target %q", ch.Target)
 	}
 	rec = alertsDo(h, admin, "GET", "/api/alerts/channels", "")

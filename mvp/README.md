@@ -420,7 +420,10 @@ starts at the current head, so history does not alert.
   - Webhooks go out through `internal/safehttp`, which refuses private, loopback (except in dev) and cloud-metadata addresses.
   - Each webhook is signed: `X-Tessera-Signature: t=<unix>,v1=<hex HMAC-SHA256 of "<t>.<body>">`. The secret (`whsec_…`) is shown once, sealed under the KEK, and can be rotated.
   - Creating or changing a channel needs step-up.
-  - Webhook URLs come back redacted, because Slack and Teams put their token in the path.
+  - Webhook URLs (alert channels and SIEM sinks) come back as `scheme://host[:port]/…`, because Slack, Teams and
+    Sumo Logic put their token in the path or query. Send errors are scrubbed the same way before they reach
+    `last_error`, a test response or the audit ledger (`safehttp.ScrubError`, #333). Ledger entries written before
+    the fix keep their original text (the ledger is append-only).
 - **Retries.** Deliveries wait in an outbox and are retried after 1 min, 5 min, 15 min, 1 h and 4 h, then marked failed.
 - **Email.** `TESSERA_NOTIFY` controls email:
   - `log` (the default) writes each message to the server log.
