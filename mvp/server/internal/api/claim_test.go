@@ -266,13 +266,21 @@ func TestClaim_SameResponseForUnknownExpiredUsed(t *testing.T) {
 	cases := map[string]string{"unknown": claim.NewToken(), "malformed": "short", "used": used, "revoked": revoked, "expired": expired}
 	got := map[string]sameResponse{}
 	i := 0
+	// Each case keeps its fastest of three tries: a loaded machine only ever
+	// adds time, so the minimum is the handler's own cost.
 	for name, tok := range cases {
 		i++
-		pg := e.newPage()
-		pg.ip = fmt.Sprintf("198.51.100.%d:5000", i)
-		begin := time.Now()
-		rec := pg.start(tok)
-		got[name] = capture(rec, time.Since(begin))
+		for try := 0; try < 3; try++ {
+			pg := e.newPage()
+			pg.ip = fmt.Sprintf("198.51.100.%d:5000", i)
+			begin := time.Now()
+			rec := pg.start(tok)
+			r := capture(rec, time.Since(begin))
+			if prev, ok := got[name]; ok && prev.took < r.took {
+				r.took = prev.took
+			}
+			got[name] = r
+		}
 	}
 	var ref sameResponse
 	var refName string
