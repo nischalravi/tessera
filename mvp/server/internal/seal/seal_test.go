@@ -349,3 +349,23 @@ func TestHashing(t *testing.T) {
 		t.Error("Equal is wrong")
 	}
 }
+
+func TestSealRefusesOversizePlaintext(t *testing.T) {
+	s := newSealer(t)
+	aad := []byte("test")
+	for _, tc := range []struct {
+		name string
+		n    int
+		err  error
+	}{{"at the cap", seal.MaxPlaintext, nil}, {"over the cap", seal.MaxPlaintext + 1, seal.ErrTooLarge}} {
+		sealed, err := s.Seal(make([]byte, tc.n), aad)
+		if !errors.Is(err, tc.err) {
+			t.Errorf("%s: err = %v, want %v", tc.name, err, tc.err)
+		}
+		if tc.err == nil {
+			if got, err := s.Open(sealed, aad); err != nil || len(got) != tc.n {
+				t.Errorf("%s: round trip: %v, %d bytes", tc.name, err, len(got))
+			}
+		}
+	}
+}

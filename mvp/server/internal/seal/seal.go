@@ -120,11 +120,21 @@ func (s *Sealer) String() string { return "seal.Sealer{KEK:REDACTED}" }
 // GoString never reveals the key (fmt %#v).
 func (s *Sealer) GoString() string { return s.String() }
 
+// MaxPlaintext bounds what Seal accepts: sealed values are secrets, keys and
+// backup chunks (1 MiB), never bulk data. The cap also bounds the allocation.
+const MaxPlaintext = 16 << 20
+
+// ErrTooLarge is returned by Seal for a plaintext over MaxPlaintext.
+var ErrTooLarge = errors.New("seal: plaintext too large")
+
 // Seal encrypts plaintext bound to aad. aad must not be empty: every sealed
 // value is bound to where it is stored (build it with AAD).
 func (s *Sealer) Seal(plaintext, aad []byte) ([]byte, error) {
 	if len(aad) == 0 {
 		return nil, errors.New("seal: Seal needs an AAD")
+	}
+	if len(plaintext) > MaxPlaintext {
+		return nil, ErrTooLarge
 	}
 	out := make([]byte, 1+nonceSize, overhead+len(plaintext))
 	out[0] = Version2
