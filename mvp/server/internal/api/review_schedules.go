@@ -235,8 +235,15 @@ func (s *Server) runReviewSchedule(_ http.ResponseWriter, r *http.Request, p *pa
 		return nil, err
 	}
 	l, err := reviews.RunNow(store.TxFrom(r.Context()), t.ID, s.clock().UTC(), pols, principal(r).Display)
+	if errors.Is(err, reviews.ErrAlreadyLaunched) {
+		return nil, &readiness.Error{Status: http.StatusConflict, Code: "already_launched",
+			Msg: "this schedule was just run; wait a second and run it again"}
+	}
 	if err != nil {
 		return nil, err
+	}
+	if l == nil { // nothing in scope: no campaign, the skip is audited
+		return statusBody{http.StatusOK, map[string]any{"skipped": true, "reason": "no grants are in scope for this schedule, so no campaign was created"}}, nil
 	}
 	return statusBody{http.StatusCreated, launchView{l.ID, l.PeriodKey, l.CampaignID, l.LaunchedAt, l.DueAt, l.RemindedAt,
 		l.EscalatedAt, l.ClosedAt, l.Revoked}}, nil

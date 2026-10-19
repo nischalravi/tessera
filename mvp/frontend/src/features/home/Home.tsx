@@ -3,7 +3,7 @@ import { ArrowRight, ClipboardCheck, Inbox as InboxIcon, KeyRound, ShoppingCart,
 import { ActivityEvent, AuditRow, ConnectorRow, DeploymentHealth, JitRequest, Policy, ReadinessSummary, RemovalRequest, RequestLine, Violation, activityPath, relTime, removalsPath, useApi } from "../../api";
 import { usePersona } from "../../app/persona";
 import { useSession } from "../../app/auth";
-import { Badge, Bar, Button, ButtonLink, EmptyState, Kpi, Loading, Page, Status, Tabs } from "../../components";
+import { Badge, Bar, Button, ButtonLink, Callout, EmptyState, Kpi, Loading, Page, Status, Tabs } from "../../components";
 import { DeploymentHealthBody, ReadinessAttentionCard, ReadinessKpi } from "../insights/DeploymentHealth";
 import { RiskyTable, Summary, Trend } from "../insights/RiskOverview";
 import { InboxItem, useInbox, useOpenCampaigns } from "../inbox/model";
@@ -257,7 +257,9 @@ type HomeTab = "overview" | "monitoring" | "deployment" | "recommendations";
 
 /** Home → Deployment health: the compact dashboard, linking to Insights. */
 function DeploymentTab() {
-  const { data, error } = useApi<DeploymentHealth>("/insights/deployment-health");
+  const allowed = useSession().can("connections.read");
+  const { data, error } = useApi<DeploymentHealth>(allowed ? "/insights/deployment-health" : null);
+  if (!allowed) return <Callout tone="info">Deployment health needs the connections.read permission, which your roles do not include.</Callout>;
   if (!data) return <Loading error={error} kind="page" />;
   return (
     <div className="stack">
@@ -274,7 +276,8 @@ function AdminHome() {
   const { data: d, error } = useApi<Summary>("/summary");
   const { data: conns } = useApi<ConnectorRow[]>("/connectors");
   const { data: policies } = useApi<Policy[]>("/policies");
-  const { data: audit } = useApi<AuditRow[]>("/audit?limit=100");
+  const { can } = useSession();
+  const { data: audit } = useApi<AuditRow[]>(can("audit.read") ? "/audit?limit=100" : null);
   const { items } = useInbox("mine");
   const attention = useAttention();
   const { data: rsum, error: rerr } = useApi<{ readiness: ReadinessSummary }>("/summary?include=readiness");

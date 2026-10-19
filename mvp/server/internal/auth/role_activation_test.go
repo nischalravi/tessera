@@ -191,10 +191,10 @@ func TestStepUpChallenge(t *testing.T) {
 func TestRolePermissionsMatchDesign(t *testing.T) {
 	want := map[auth.Role]string{
 		auth.RoleViewer:      "graph.read requests.create guests.sponsor",
-		auth.RoleOperator:    "graph.read jit.request jit.decide jit.deny_revoke reviews.manage reviews.decide hris.simulate_event requests.create requests.create_for_others requests.decide guests.sponsor guests.read jobs.read provisioning.read ownership.manage",
-		auth.RoleAuditor:     "graph.read audit.read audit.verify admin.read connections.read requests.create email.read guests.sponsor guests.read jobs.read provisioning.read",
-		auth.RolePolicyAdmin: "graph.read jit.request jit.decide jit.deny_revoke reviews.manage reviews.decide hris.simulate_event grants.revoke hris.execute jit.sweep connectors.sync identities.correlate identities.merge identities.affiliate requests.create requests.create_for_others requests.decide catalog.manage roles.manage lifecycle.manage guests.sponsor guests.read sponsorships.approve identities.contain jobs.read provisioning.read provisioning.manage ownership.manage sod.manage",
-		auth.RoleTenantAdmin: "graph.read audit.read audit.verify admin.read admin.change.request admin.change.approve admin.users.disable admin.sessions.revoke connections.read connections.manage connections.activate requests.create email.read email.manage groups.admin jobs.read provisioning.read provisioning.manage config.transport",
+		auth.RoleOperator:    "graph.read jit.request jit.decide jit.deny_revoke reviews.manage reviews.decide hris.simulate_event requests.create requests.create_for_others requests.decide guests.sponsor guests.read jobs.read provisioning.read alerts.read alerts.manage ownership.manage",
+		auth.RoleAuditor:     "graph.read audit.read audit.verify admin.read connections.read requests.create email.read guests.sponsor guests.read jobs.read provisioning.read alerts.read siem.read",
+		auth.RolePolicyAdmin: "graph.read jit.request jit.decide jit.deny_revoke reviews.manage reviews.decide hris.simulate_event grants.revoke hris.execute jit.sweep connectors.sync identities.correlate identities.merge identities.affiliate requests.create requests.create_for_others requests.decide catalog.manage roles.manage lifecycle.manage guests.sponsor guests.read sponsorships.approve identities.contain jobs.read provisioning.read provisioning.manage alerts.read alerts.manage ownership.manage sod.manage",
+		auth.RoleTenantAdmin: "graph.read audit.read audit.verify admin.read admin.change.request admin.change.approve admin.users.disable admin.sessions.revoke connections.read connections.manage connections.activate requests.create email.read email.manage groups.admin jobs.read provisioning.read provisioning.manage config.transport alerts.read alerts.manage alerts.configure siem.read siem.configure",
 		auth.RoleBreakGlass:  "admin.read breakglass.recover",
 	}
 	for r, w := range want {

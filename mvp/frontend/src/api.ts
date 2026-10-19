@@ -5,7 +5,7 @@
  * last data instantly while it refreshes. Any successful write broadcasts a change event and
  * every mounted `useApi` refetches, so counts (Inbox badge, KPIs) stay consistent.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 const cache = new Map<string, unknown>();
 const CHANGED = "tessera:api-changed";
@@ -293,7 +293,11 @@ export const runPendingAction = (a: PendingAction) => api(a.path, a.body, a.meth
 /** Tell mounted views that data changed outside `api()` (e.g. the mock layer). */
 export const notifyChanged = () => window.dispatchEvent(new Event(CHANGED));
 
+/** True for a 403: the session lacks the permission, so asking again changes nothing. */
+export const isDenied = (e: unknown): boolean => e instanceof ApiError && e.status === 403;
+
 export function useApi<T = any>(path: string | null) {
+  const denied = useRef(false);
   const [data, setData] = useState<T | null>(() => (path ? (cached<T>(path) ?? null) : null));
   const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(false);
@@ -304,21 +308,29 @@ export function useApi<T = any>(path: string | null) {
     api<T>(path)
       .then((d) => {
         if (!alive) return;
+        denied.current = false;
         setData(d);
         setError(null);
       })
-      .catch((e) => alive && setError(e instanceof ApiError ? e : new ApiError(String(e?.message ?? e), 0, null)))
+      .catch((e) => {
+        if (!alive) return;
+        denied.current = isDenied(e);
+        setError(e instanceof ApiError ? e : new ApiError(String(e?.message ?? e), 0, null));
+      })
       .finally(() => alive && setLoading(false));
     return () => {
       alive = false;
     };
   }, [path]);
   useEffect(() => {
+    denied.current = false;
     setData(path ? (cached<T>(path) ?? null) : null);
     return load();
   }, [load, path]);
   useEffect(() => {
-    const on = () => load();
+    const on = () => {
+      if (!denied.current) load(); // a 403 does not fix itself: no refetch storm
+    };
     window.addEventListener(CHANGED, on);
     return () => window.removeEventListener(CHANGED, on);
   }, [load]);
@@ -623,7 +635,8 @@ export const reviewDecide = (itemId: number, decision: "keep" | "revoke", commen
 
 // -------------------------------------------------------------- session
 export interface SessionInfo {
-  user: { id: string; email: string | null; display_name: string };
+  /** identity_id: the directory person the server linked this sign-in to; null when unlinked. */
+  user: { id: string; email: string | null; display_name: string; identity_id: number | null };
   tenant: { id: string; slug: string; name: string };
   roles: string[];
   active_roles: string[];
@@ -1795,6 +1808,179 @@ export const readiness = {
     "/insights/deployment-health/rerun", { reconcile }),
 };
 
+// ------------------------------------------------------------ SIEM sinks (#169)
+
+export type SiemKind = "syslog" | "webhook";
+export type SiemFormat = "json" | "ocsf";
+export type SiemFlavor = "hec" | "json" | "";
+
+export interface SiemSink {
+  id: string;
+  name: string;
+  kind: SiemKind;
+  format: SiemFormat;
+  /** host:port, or the webhook URL without its query string. */
+  target: string;
+  flavor: SiemFlavor;
+  has_ca: boolean;
+  has_token: boolean;
+  include_http: boolean;
+  enabled: boolean;
+  cursor_seq: number;
+  head_seq: number;
+  health: { status: "healthy" | "catching_up" | "degraded" | "failing" | "paused"; lag: number };
+  attempts: number;
+  next_attempt_at: string | null;
+  last_error: string | null;
+  last_success_at: string | null;
+  delivered_count: number;
+  dead_letter_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SiemSinkInput {
+  name: string;
+  kind?: SiemKind;
+  format: SiemFormat;
+  /** Omit on update to keep the current target. */
+  target?: string;
+  flavor?: SiemFlavor;
+  /** Omit on update to keep; "" removes it. */
+  ca_pem?: string;
+  /** Omit to keep the stored token; "" removes it. */
+  token?: string;
+  include_http: boolean;
+  enabled: boolean;
+  /** Creation only. */
+  start?: "now" | "beginning";
+}
+
+export interface SiemDeadLetter {
+  id: string;
+  from_seq: number;
+  to_seq: number;
+  events: number;
+  error: string;
+  created_at: string;
+}
+
+export const siemApi = {
+  create: (body: SiemSinkInput) => api<SiemSink>("/siem/sinks", body),
+  update: (id: string, body: SiemSinkInput) => api<SiemSink>(`/siem/sinks/${encodeURIComponent(id)}`, body, "PUT"),
+  rewind: (id: string, seq: number) => api<SiemSink>(`/siem/sinks/${encodeURIComponent(id)}/rewind`, { seq }),
+  test: (id: string) => api<{ ok: boolean; error?: string }>(`/siem/sinks/${encodeURIComponent(id)}/test`, {}),
+};
+
+/** Health → badge tone and label. */
+export const SIEM_HEALTH: Record<SiemSink["health"]["status"], { tone: "ok" | "info" | "warning" | "critical" | "outline"; label: string }> = {
+  healthy: { tone: "ok", label: "Healthy" },
+  catching_up: { tone: "info", label: "Catching up" },
+  degraded: { tone: "warning", label: "Retrying" },
+  failing: { tone: "critical", label: "Failing" },
+  paused: { tone: "outline", label: "Paused" },
+};
+// ---------------------------------------------------------------- alerts (#168)
+
+export type AlertSeverity = "low" | "medium" | "high" | "critical";
+export type AlertStatus = "open" | "acknowledged" | "resolved";
+
+export interface UserRef {
+  id: string;
+  name: string;
+}
+
+export interface AlertDeliveryRow {
+  id: string;
+  channel: string;
+  channel_kind: "email" | "webhook";
+  status: "pending" | "sent" | "failed";
+  attempts: number;
+  next_attempt_at: string | null;
+  last_error: string | null;
+  sent_at: string | null;
+}
+
+export interface AlertRow {
+  id: string;
+  rule: string;
+  rule_name: string;
+  key: string;
+  severity: AlertSeverity;
+  title: string;
+  detail: Record<string, unknown>;
+  status: AlertStatus;
+  count: number;
+  first_seen_at: string;
+  last_seen_at: string;
+  assignee: UserRef | null;
+  acknowledged_by: UserRef | null;
+  acknowledged_at: string | null;
+  resolved_by: UserRef | null;
+  resolved_at: string | null;
+  resolution: string | null;
+  deliveries?: AlertDeliveryRow[];
+}
+
+export interface AlertSummary {
+  open: number;
+  acknowledged: number;
+  by_severity: Partial<Record<AlertSeverity, number>>;
+}
+
+export interface AlertRule {
+  id: string;
+  name: string;
+  description: string;
+  kind: "event" | "detection";
+  enabled: boolean;
+  severity: AlertSeverity;
+  threshold: number;
+  window_minutes: number;
+  customized: boolean;
+  updated_at: string | null;
+  live: number;
+}
+
+export interface AlertChannel {
+  id: string;
+  name: string;
+  kind: "email" | "webhook";
+  /** Webhook URLs come back redacted (scheme, host and the last characters). */
+  target: string;
+  min_severity: AlertSeverity;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+  /** Only in the response that created the channel or rotated its secret. */
+  secret?: string;
+}
+
+export interface AlertChannelInput {
+  name: string;
+  kind?: "email" | "webhook";
+  /** Omit on update to keep the current target. */
+  target?: string;
+  min_severity: AlertSeverity;
+  enabled: boolean;
+  rotate_secret?: boolean;
+}
+
+export const ALERT_SEVERITIES: AlertSeverity[] = ["low", "medium", "high", "critical"];
+
+export const alertsApi = {
+  acknowledge: (id: string) => api<AlertRow>(`/alerts/${encodeURIComponent(id)}/acknowledge`, {}),
+  resolve: (id: string, note: string) => api<AlertRow>(`/alerts/${encodeURIComponent(id)}/resolve`, { note }),
+  assign: (id: string, assignee_user_id: string | null) => api<AlertRow>(`/alerts/${encodeURIComponent(id)}/assign`, { assignee_user_id }),
+  setRule: (id: string, body: { enabled: boolean; severity: AlertSeverity; threshold: number; window_minutes: number }) =>
+    api<AlertRule[]>(`/alerts/rules/${encodeURIComponent(id)}`, body, "PUT"),
+  createChannel: (body: AlertChannelInput) => api<AlertChannel>("/alerts/channels", body),
+  updateChannel: (id: string, body: AlertChannelInput) => api<AlertChannel>(`/alerts/channels/${encodeURIComponent(id)}`, body, "PUT"),
+  testChannel: (id: string) => api<{ ok: boolean; error?: string }>(`/alerts/channels/${encodeURIComponent(id)}/test`, {}),
+};
+
+/** Severity → badge tone. */
+export const severityTone = (s: AlertSeverity) => (s === "critical" ? "critical" : s === "high" ? "warning" : s === "medium" ? "info" : "neutral");
 // ------------------------------------------------------------- ownership (#167)
 
 export type OwnedKind = "app" | "group" | "resource" | "identity";

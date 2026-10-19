@@ -48,7 +48,35 @@ type evaluator struct {
 	vpceUnknown      bool
 	rootDefault      bool
 
+	spec special
+
 	reasons map[string]*authz.FidelityReason
+}
+
+// special holds the SPECIAL terms of §7.2 step 4 (KMS grants, S3 ACLs) and the
+// S3 guardrail inputs for one request. They depend on the request, not on the
+// reading of an ambiguity, so they are computed once in prepare.
+type special struct {
+	// KMS (§7.6.1): grants to the requester, to its parent, and to its account
+	// root (a delegation).
+	kmsSelf, kmsParent, kmsRoot authz.Tri
+	kmsSteps                    []authz.ExplanationStep
+
+	// S3 (§7.6.2).
+	isS3       bool
+	eff        model.BPA // most restrictive setting across org, account and bucket
+	aclsOn     bool      // Object Ownership is not BucketOwnerEnforced
+	aclPublic  authz.Tri // a public-group ACL grant covers the request, after IgnorePublicAcls
+	aclAccount authz.Tri // an ACL grant to the requester's account covers the request
+	aclIgnored bool      // a public ACL grant was dropped by IgnorePublicAcls
+	aclSteps   []authz.ExplanationStep
+	// objCtx is the object-context requirement: true unless the object owner is
+	// another account. objCtxAlt is the reading that assumes it is, used when
+	// the owner is unknown (objFlag).
+	objCtx, objCtxAlt authz.Tri
+	objFlag           bool
+	bpa               authz.Tri // the BPA guardrail
+	bpaWhy            string
 }
 
 // Evaluate answers one request against an immutable snapshot (§7.2). It is
@@ -118,6 +146,8 @@ func (e *evaluator) prepare() error {
 	if err := e.gather(); err != nil {
 		return err
 	}
+	e.kmsTerms()
+	e.s3Terms()
 	return nil
 }
 
@@ -185,7 +215,14 @@ func (e *evaluator) attachmentPath(id string, targets ...string) []string {
 func (e *evaluator) addDocs(ids []string, targets ...string) ([]*docEntry, error) {
 	var out []*docEntry
 	for _, id := range sortedPolicyIDs(e.snap, ids) {
-		d := e.docFor(id, e.attachmentPath(id, targets...))
+		// The attachment path is provenance for the explanation. It costs a scan
+		// of every attachment, so the bulk (Fast) mode of internal/aws/query,
+		// which keeps no trace, leaves it out.
+		var path []string
+		if !e.opts.Fast {
+			path = e.attachmentPath(id, targets...)
+		}
+		d := e.docFor(id, path)
 		if err := e.evalDoc(d); err != nil {
 			return nil, err
 		}
@@ -229,18 +266,9 @@ func (e *evaluator) gatherOrg() error {
 		return nil
 	}
 	// SCPs (§7.5).
-	switch {
-	case !org.SCPEnabled:
-		e.scpNA = "SCPs are not enabled in the organization"
-	case e.class != classIAM:
-		e.scpNA = "SCPs do not apply to service principals, anonymous callers or federation providers"
-	case org.PathTo(e.p.AccountID) == nil:
-		e.scpNA = "the principal's account is outside the organization, so its SCPs do not apply"
-	case e.p.AccountID == org.ManagementAccountID:
-		e.scpNA = "SCPs do not apply to the management account"
-	case e.p.IsServiceLinked:
-		e.scpNA = "SCPs do not apply to service-linked roles"
-	default:
+	if na := scpGate(org, e.class, e.p); na != "" {
+		e.scpNA = na
+	} else {
 		ls, err := e.orgLevels(e.p.AccountID, false, false)
 		if err != nil {
 			return err
