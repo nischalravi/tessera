@@ -187,6 +187,18 @@ type ItemView struct {
 	*ItemEval
 	Attestation *AttestationView `json:"attestation"`
 	Skip        *SkipView        `json:"skip"`
+	// LiveAttestation stands in for a live check the system cannot answer.
+	LiveAttestation *LiveAttestationView `json:"live_attestation"`
+}
+
+// LiveAttestationView is who attested in place of an unsupported live check.
+type LiveAttestationView struct {
+	Attester string `json:"attester"`
+	Actor    string `json:"actor"`
+	Reason   string `json:"reason"`
+	Evidence string `json:"evidence"`
+	At       string `json:"at"`
+	Stale    bool   `json:"stale"`
 }
 
 // AttestationView is who attested an item.
@@ -233,6 +245,11 @@ func Checklist(b *Bundle, now time.Time) *ChecklistView {
 		iv := ItemView{ItemEval: it}
 		if a := it.Attestation; a != nil {
 			iv.Attestation = &AttestationView{Actor: a.ActorID, Note: a.Note, At: store.RT(a.AttestedAt), Stale: a.ItemHash != it.ItemHash}
+		}
+		if a := it.LiveAttest; a != nil {
+			stale, _ := liveAttestationFresh(a, it.ItemHash, now, b.LiveTTL)
+			iv.LiveAttestation = &LiveAttestationView{Attester: a.Attester, Actor: a.ActorID, Reason: a.Reason, Evidence: a.Evidence,
+				At: store.RT(a.AttestedAt), Stale: !stale}
 		}
 		if k := it.Skip; k != nil {
 			iv.Skip = &SkipView{Actor: k.ActorID, Reason: k.Reason, ReviewBy: store.RT(k.ReviewBy), At: store.RT(k.SkippedAt),

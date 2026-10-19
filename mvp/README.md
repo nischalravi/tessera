@@ -176,6 +176,18 @@ connection with a verified TLS 1.2+ channel. What a server cannot answer (no Who
 Effective Rights, no `cn=Monitor` clock, as on LLDAP and OpenLDAP) is reported as **unsupported:
 an attestation is required**, never as a pass. Other connector types keep their simulated checks.
 
+**Attest instead of an unsupported check.** A template item may mark a live verification
+`on_unsupported: attestation` (the only value; the vocabulary stays closed). The `ldap` template does
+so for `ldap.svc.no_write` (effective rights) and `ldap.svc.readonly` (bind identity without Who Am I).
+When that check reports unsupported, `POST /api/connections/{id}/checklist/{item}/attest-instead`
+(`connections.manage`, step-up) takes `{attester, reason, evidence}`: a named attester, a reason of at
+least 20 characters and evidence text of at least 10. It is stored in `readiness_live_attestations`,
+bound to the item's config fields (a change to them makes it stale), expires after the live TTL (24 h)
+like live results, and is audited as `readiness.item.attested_instead` in the same transaction. A
+`fail` or `error` result can never be attested (422 `live_check_not_unsupported`), and a simulated
+result never passes for a real connector type. In the checklist, an item whose live check is
+unsupported shows an "Attest instead" form.
+
 Network path: `server/internal/safedial` shares safehttp's address policy for raw TCP. Only ports
 **636 (LDAPS)** and **389 (StartTLS required)** are dialled, private, loopback, link-local,
 CGNAT and metadata addresses are refused after DNS resolution, and TLS 1.2 or later is required.

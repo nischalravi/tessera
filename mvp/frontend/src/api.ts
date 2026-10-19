@@ -1770,14 +1770,16 @@ export interface Connection {
 
 export interface LegacyConnection { legacy: true; system: string; name: string; type: string; state: "legacy"; governed_by: string | null; connector_type: "legacy" }
 
-export interface Verify { kind: "attestation" | "live" | "data"; check?: string; params?: Record<string, unknown> }
-export interface Part { kind: Verify["kind"]; check?: string; status: ItemStatus; reason?: string; simulated?: boolean; run_id?: string; observed?: Record<string, unknown>; message?: string }
+export interface Verify { kind: "attestation" | "live" | "data"; check?: string; params?: Record<string, unknown>; on_unsupported?: "attestation" }
+export interface Part { kind: Verify["kind"]; check?: string; status: ItemStatus; reason?: string; simulated?: boolean; run_id?: string; observed?: Record<string, unknown>; message?: string; unsupported?: boolean }
 
 export interface ChecklistItem {
   id: string; title: string; category: string; level: Level; template_level?: Level; why: string; verify: Verify[];
   remediation: { hint: string; link?: string }; depends_on?: string[]; config_fields?: string[]; source?: string;
   applicable: boolean; status: ItemStatus; reason?: string; blocked_by?: string[]; live_blocked_by?: string[]; parts: Part[];
   attestation: { actor: string; note: string; at: string; stale: boolean } | null;
+  /** An attestation standing in for a live check the system reported unsupported. */
+  live_attestation: { attester: string; actor: string; reason: string; evidence: string; at: string; stale: boolean } | null;
   skip: { actor: string; reason: string; review_by: string; at: string; expired: boolean } | null;
 }
 
@@ -1860,6 +1862,8 @@ export const readiness = {
     api<{ connection: Connection; new_revision: boolean; invalidated: string[]; fields: { field: string; msg: string }[] }>(`/connections/${id}/config`, patch, "PATCH"),
   setCredential: (id: string, body: { secret?: string; reference?: string }) => apiNoResume<RevisionView["credential"]>(`/connections/${id}/credential`, body, "PUT"),
   attest: (id: string, item: string, note: string) => api<Checklist>(`/connections/${id}/checklist/${item}/attest`, { note }),
+  attestInstead: (id: string, item: string, body: { attester: string; reason: string; evidence: string }) =>
+    api<Checklist>(`/connections/${id}/checklist/${item}/attest-instead`, body),
   skip: (id: string, item: string, reason: string, review_by?: string) =>
     api<Checklist>(`/connections/${id}/checklist/${item}/skip`, review_by ? { reason, review_by } : { reason }),
   unskip: (id: string, item: string) => api<Checklist>(`/connections/${id}/checklist/${item}/skip`, undefined, "DELETE"),

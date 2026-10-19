@@ -843,3 +843,10 @@ DROP POLICY IF EXISTS tenant_isolation ON queue_jobs;
 CREATE POLICY tenant_isolation ON queue_jobs
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE readiness_live_attestations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE readiness_live_attestations FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON readiness_live_attestations;
+CREATE POLICY tenant_isolation ON readiness_live_attestations
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));

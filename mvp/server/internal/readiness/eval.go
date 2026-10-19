@@ -51,13 +51,15 @@ type resultKey struct{ item, check string }
 // Evidence is everything the gate reads for one revision.
 type Evidence struct {
 	Attestations map[string]*store.Attestation
-	Skips        map[string]*store.Skip
-	LiveRun      *RunInfo
-	Live         map[resultKey]*ResultInfo
-	DataRun      *RunInfo
-	Data         map[resultKey]*ResultInfo
-	Findings     []FindingInfo
-	TenantTypes  map[string]bool // template ids of the tenant's other connections
+	// LiveAttestations stand in for live checks the system reported unsupported.
+	LiveAttestations map[string]*store.LiveAttestation
+	Skips            map[string]*store.Skip
+	LiveRun          *RunInfo
+	Live             map[resultKey]*ResultInfo
+	DataRun          *RunInfo
+	Data             map[resultKey]*ResultInfo
+	Findings         []FindingInfo
+	TenantTypes      map[string]bool // template ids of the tenant's other connections
 }
 
 // Part is the evaluation of one verification of an item.
@@ -70,6 +72,9 @@ type Part struct {
 	RunID     string              `json:"run_id,omitempty"`
 	Observed  map[string]any      `json:"observed,omitempty"`
 	Message   string              `json:"message,omitempty"`
+	// Unsupported marks a fresh live result the system could not answer. When
+	// the verification declares on_unsupported, an attestation may stand in.
+	Unsupported bool `json:"unsupported,omitempty"`
 }
 
 // ItemEval is the evaluated state of one checklist item.
@@ -82,12 +87,13 @@ type ItemEval struct {
 	// LiveBlockedBy are dependencies that stop the item's live checks from
 	// running: like BlockedBy, but data checks (which need a dry run, which
 	// needs validation) are ignored.
-	LiveBlockedBy []string           `json:"live_blocked_by,omitempty"`
-	Parts         []Part             `json:"parts"`
-	Attestation   *store.Attestation `json:"-"`
-	Skip          *store.Skip        `json:"-"`
-	ItemHash      string             `json:"-"`
-	own           string             // status before dependencies and skips
+	LiveBlockedBy []string               `json:"live_blocked_by,omitempty"`
+	Parts         []Part                 `json:"parts"`
+	Attestation   *store.Attestation     `json:"-"`
+	Skip          *store.Skip            `json:"-"`
+	LiveAttest    *store.LiveAttestation `json:"-"`
+	ItemHash      string                 `json:"-"`
+	own           string                 // status before dependencies and skips
 	ownReason     string
 }
 
@@ -168,7 +174,7 @@ func (b *Bundle) Evaluate(now time.Time, liveTTL time.Duration) (*Evaluation, er
 				}
 			}
 		}
-		ie.Attestation, ie.Skip = ev.Attestations[it.ID], ev.Skips[it.ID]
+		ie.Attestation, ie.Skip, ie.LiveAttest = ev.Attestations[it.ID], ev.Skips[it.ID], ev.LiveAttestations[it.ID]
 		out.Items = append(out.Items, ie)
 		out.byID[it.ID] = ie
 	}
@@ -307,6 +313,12 @@ func (b *Bundle) evalPart(ie *ItemEval, v template.Verify, now time.Time, liveTT
 			p.Status, p.Reason = StatusStale, fmt.Sprintf("live evidence older than %s", fmtTTL(liveTTL))
 		case r.Simulated && !IsDemoType(b.Conn.ConnectorType):
 			p.Status, p.Reason = StatusPending, "a simulated result cannot satisfy a gate for a real connector type"
+		case v.Kind == template.Live && unsupportedResult(r):
+			p.Unsupported = true
+			p.Status, p.Reason = StatusPending, r.Message
+			if v.OnUnsupported == template.Attestation {
+				p.Status, p.Reason = b.evalLiveAttestation(ie, now, liveTTL, &p)
+			}
 		default:
 			switch r.Status {
 			case "pass", "warn":
@@ -321,6 +333,46 @@ func (b *Bundle) evalPart(ie *ItemEval, v template.Verify, now time.Time, liveTT
 		}
 	}
 	return p
+}
+
+// unsupportedResult reports whether a live result is the system saying it
+// cannot answer the check (skipped, observed.unsupported). A fail or an error
+// is never unsupported, so it can never be attested away.
+func unsupportedResult(r *ResultInfo) bool {
+	u, _ := r.Observed["unsupported"].(bool)
+	return r.Status == "skipped" && u
+}
+
+// liveAttestationFresh reports whether a live attestation holds for the item:
+// bound to the fields the item depends on, and not older than the live TTL.
+// The binding is the per-item hash (the item's config_fields: for the LDAP
+// items the bind DN, trusted CA and port among them), not the whole
+// ConfigHash, which an unrelated edit would invalidate. The stored
+// ConfigHash is kept for the audit trail only.
+func liveAttestationFresh(a *store.LiveAttestation, itemHash string, now time.Time, ttl time.Duration) (ok bool, reason string) {
+	switch {
+	case a == nil:
+		return false, ""
+	case a.ItemHash != itemHash:
+		return false, "configuration changed since it was attested; attest again"
+	case now.Sub(a.AttestedAt) > ttl:
+		return false, fmt.Sprintf("attestation older than %s; attest again", fmtTTL(ttl))
+	}
+	return true, ""
+}
+
+// evalLiveAttestation judges the attestation that stands in for an
+// unsupported live check.
+func (b *Bundle) evalLiveAttestation(ie *ItemEval, now time.Time, ttl time.Duration, p *Part) (status, reason string) {
+	a := b.Evidence.LiveAttestations[ie.ID]
+	if a == nil {
+		return StatusPending, "the system cannot answer this check; attest instead"
+	}
+	if ok, why := liveAttestationFresh(a, ie.ItemHash, now, ttl); !ok {
+		return StatusStale, why
+	}
+	p.Message = fmt.Sprintf("attested by %s on %s (live check unsupported)", a.Attester, a.AttestedAt.Format("2006-01-02"))
+	return StatusPass, ""
 }
 
 func fmtTTL(d time.Duration) string {

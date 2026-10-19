@@ -365,6 +365,63 @@
     }
    }
   },
+  "/api/connections/{id}/checklist/{item}/attest-instead": {
+   "post": {
+    "summary": "Attest in place of a live check the system reports unsupported",
+    "description": "Permission: connections.manage; step-up required. Only items whose template declares on_unsupported: attestation, and only while the latest live result is unsupported (a failed result cannot be attested).",
+    "responses": {
+     "200": {
+      "description": "Checklist"
+     },
+     "409": {
+      "description": "dependencies_not_passing (gate report)"
+     },
+     "422": {
+      "description": "attester_required, reason_too_short, evidence_required, not_attestable_instead, live_check_not_unsupported"
+     },
+     "401": {
+      "description": "step_up_required"
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "item",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "X-Tessera-User",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "maxLength": 120
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/AttestInstead"
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/connections/{id}/checklist/{item}/skip": {
    "post": {
     "summary": "Skip a Recommended item with a reason (at least 20 characters)",
@@ -1188,6 +1245,32 @@
      "note": {
       "type": "string",
       "minLength": 10
+     }
+    }
+   },
+   "AttestInstead": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "attester",
+     "reason",
+     "evidence"
+    ],
+    "properties": {
+     "attester": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 120
+     },
+     "reason": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 2000
+     },
+     "evidence": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 4000
      }
     }
    },
