@@ -71,17 +71,43 @@ func (a *AuditTamper) DeleteGrpEvent(ctx context.Context, t tenancy.ID, seq int6
 	return a.exec(ctx, t, tamperGrpEventDelete, sql.Named("seq", seq))
 }
 
+// Postgres has no DROP of a plain trigger set that Open can bring back, so the
+// handle disables the user triggers on the three audit tables (as the table
+// owner could) and Migrate enables them again. Only the owner pool may do
+// this or touch the audit tables: the application role has neither privilege.
+const tamperDisableTriggersPG = `
+	ALTER TABLE audit_events DISABLE TRIGGER USER;
+	ALTER TABLE audit_checkpoints DISABLE TRIGGER USER;
+	ALTER TABLE audit_chain_heads DISABLE TRIGGER USER;`
+
+// pool is the connection pool the handle writes through: the application
+// pool on SQLite, the owner pool on Postgres.
+func (a *AuditTamper) pool() *sql.DB {
+	if a.db.d == dialectPostgres {
+		return a.db.owner
+	}
+	return a.db.sql
+}
+
 // DropTriggers removes the append-only triggers (as a database owner could).
 // The next Open recreates them.
 func (a *AuditTamper) DropTriggers(ctx context.Context) error {
-	a.db.mu.Lock()
-	defer a.db.mu.Unlock()
-	_, err := a.db.sql.ExecContext(ctx, tamperDropTriggers)
+	defer a.db.writeLock()()
+	q := tamperDropTriggers
+	if a.db.d == dialectPostgres {
+		q = tamperDisableTriggersPG
+	}
+	_, err := a.pool().ExecContext(ctx, q)
 	return err
 }
 
+func (a *AuditTamper) inTenant(ctx context.Context, t tenancy.ID, fn func(*TenantTx) error) error {
+	defer a.db.writeLock()()
+	return a.db.inTenantOn(ctx, a.pool(), t, false, fn)
+}
+
 func (a *AuditTamper) exec(ctx context.Context, t tenancy.ID, s tstmt, args ...sql.NamedArg) error {
-	return a.db.InTenant(ctx, t, func(tx *TenantTx) error {
+	return a.inTenant(ctx, t, func(tx *TenantTx) error {
 		res, err := tx.exec(s, args...)
 		if err != nil {
 			return err
@@ -114,7 +140,7 @@ func (a *AuditTamper) ReplaceCheckpointJWS(ctx context.Context, t tenancy.ID, se
 // with rewindHead it moves the chain head back to seq, so the database alone
 // shows a consistent, shorter chain (triggers must be dropped).
 func (a *AuditTamper) TruncateTail(ctx context.Context, t tenancy.ID, seq int64, deleteCheckpoints, rewindHead bool) error {
-	return a.db.InTenant(ctx, t, func(tx *TenantTx) error {
+	return a.inTenant(ctx, t, func(tx *TenantTx) error {
 		res, err := tx.exec(tamperDeleteTail, sql.Named("seq", seq))
 		if err != nil {
 			return err
@@ -143,16 +169,14 @@ func (a *AuditTamper) TruncateTail(ctx context.Context, t tenancy.ID, seq int64,
 // Break makes every audit append fail (the events table disappears) while the
 // rest of the database keeps working; Repair undoes it.
 func (a *AuditTamper) Break(ctx context.Context) error {
-	a.db.mu.Lock()
-	defer a.db.mu.Unlock()
-	_, err := a.db.sql.ExecContext(ctx, tamperBreak)
+	defer a.db.writeLock()()
+	_, err := a.pool().ExecContext(ctx, tamperBreak)
 	return err
 }
 
 // Repair undoes Break.
 func (a *AuditTamper) Repair(ctx context.Context) error {
-	a.db.mu.Lock()
-	defer a.db.mu.Unlock()
-	_, err := a.db.sql.ExecContext(ctx, tamperRepair)
+	defer a.db.writeLock()()
+	_, err := a.pool().ExecContext(ctx, tamperRepair)
 	return err
 }

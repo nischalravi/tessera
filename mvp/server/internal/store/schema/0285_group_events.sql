@@ -1,7 +1,7 @@
 -- Group change events and point-in-time history (issue #46, GR-3; design
 -- docs/design/groups-grouper-parity.md §5.3 "0103_group_events", §10.1, §10.2).
 -- The design numbers this file 0103; the repo's native-groups files start at
--- 0280, so it is 0282 here.
+-- 0280, so it is 0285 here.
 --
 -- grp_events is the outbox: every committed change to a folder, group,
 -- membership or privilege writes one row in the same transaction, with a

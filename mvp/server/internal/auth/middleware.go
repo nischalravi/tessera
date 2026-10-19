@@ -95,7 +95,9 @@ func (a *Authenticator) Authenticate(r *http.Request) (*Principal, string, error
 	if err != nil {
 		return nil, "", err
 	}
-	if tenant.Status != "active" || tid == tenancy.Platform {
+	// A tenant in operator recovery (§15.5) stays signed-in: the existing
+	// admins' sessions must work so they can cancel the recovery.
+	if (tenant.Status != "active" && tenant.Status != "recovery") || tid == tenancy.Platform {
 		return nil, FailTenantInactive, nil
 	}
 	now := a.Clock().UTC()

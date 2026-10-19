@@ -1,0 +1,95 @@
+{
+ "name": "the group id is unknown to Okta: found by exact name among q= matches",
+ "interactions": [
+  {
+   "request": {
+    "method": "GET",
+    "path": "/api/v1/users",
+    "query": {
+     "search": "profile.login eq \"bob@larkspur.example\""
+    }
+   },
+   "response": {
+    "status": 200,
+    "headers": {},
+    "body": [
+     {
+      "id": "00u2",
+      "status": "ACTIVE",
+      "profile": {
+       "login": "bob@larkspur.example",
+       "email": "bob@larkspur.example",
+       "firstName": "Alice",
+       "lastName": "Park"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "request": {
+    "method": "GET",
+    "path": "/api/v1/groups/eng"
+   },
+   "response": {
+    "status": 404,
+    "headers": {},
+    "body": {
+     "errorCode": "E0000007",
+     "errorSummary": "Not found: Resource not found: eng (UserGroup)"
+    }
+   }
+  },
+  {
+   "request": {
+    "method": "GET",
+    "path": "/api/v1/groups",
+    "query": {
+     "q": "engineering"
+    }
+   },
+   "response": {
+    "status": 200,
+    "headers": {},
+    "body": [
+     {
+      "id": "00g9",
+      "profile": {
+       "name": "engineering-leads"
+      }
+     },
+     {
+      "id": "00g1",
+      "profile": {
+       "name": "Engineering"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "request": {
+    "method": "GET",
+    "path": "/api/v1/groups/00g1/users",
+    "query": {
+     "limit": "200"
+    }
+   },
+   "response": {
+    "status": 200,
+    "headers": {},
+    "body": []
+   }
+  },
+  {
+   "request": {
+    "method": "PUT",
+    "path": "/api/v1/groups/00g1/users/00u2"
+   },
+   "response": {
+    "status": 204,
+    "headers": {}
+   }
+  }
+ ]
+}

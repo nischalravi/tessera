@@ -1,0 +1,98 @@
+{
+ "name": "Entra: PATCH acknowledged, re-read still active",
+ "interactions": [
+  {
+   "request": {
+    "method": "GET",
+    "path": "/Users",
+    "query": {
+     "filter": "userName eq \"alice@larkspur.example\""
+    }
+   },
+   "response": {
+    "status": 200,
+    "headers": {
+     "Content-Type": "application/scim+json"
+    },
+    "body": {
+     "schemas": [
+      "urn:ietf:params:scim:api:messages:2.0:ListResponse"
+     ],
+     "totalResults": 1,
+     "startIndex": 1,
+     "itemsPerPage": 1,
+     "Resources": [
+      {
+       "schemas": [
+        "urn:ietf:params:scim:schemas:core:2.0:User"
+       ],
+       "id": "u-1",
+       "userName": "alice@larkspur.example",
+       "displayName": "Alice Park",
+       "active": "True"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "request": {
+    "method": "PATCH",
+    "path": "/Users/u-1",
+    "body_contains": [
+     "\"op\":\"Replace\"",
+     "\"value\":\"False\""
+    ]
+   },
+   "response": {
+    "status": 200,
+    "headers": {
+     "Content-Type": "application/scim+json"
+    },
+    "body": {
+     "schemas": [
+      "urn:ietf:params:scim:schemas:core:2.0:User"
+     ],
+     "id": "u-1",
+     "userName": "alice@larkspur.example",
+     "displayName": "Alice Park",
+     "active": "False"
+    }
+   }
+  },
+  {
+   "request": {
+    "method": "GET",
+    "path": "/Users",
+    "query": {
+     "filter": "userName eq \"alice@larkspur.example\""
+    }
+   },
+   "response": {
+    "status": 200,
+    "headers": {
+     "Content-Type": "application/scim+json"
+    },
+    "body": {
+     "schemas": [
+      "urn:ietf:params:scim:api:messages:2.0:ListResponse"
+     ],
+     "totalResults": 1,
+     "startIndex": 1,
+     "itemsPerPage": 1,
+     "Resources": [
+      {
+       "schemas": [
+        "urn:ietf:params:scim:schemas:core:2.0:User"
+       ],
+       "id": "u-1",
+       "userName": "alice@larkspur.example",
+       "displayName": "Alice Park",
+       "active": "True"
+      }
+     ]
+    }
+   }
+  }
+ ]
+}
