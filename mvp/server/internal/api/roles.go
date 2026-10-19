@@ -64,6 +64,7 @@ type ruleView struct {
 	Department []string `json:"department"`
 	Type       []string `json:"type"`
 	Title      []string `json:"title"`
+	Policy     string   `json:"policy"` // id of the attribute policy ("" : none)
 }
 
 type roleView struct {
@@ -124,7 +125,7 @@ func (v *viewer) roleView(r *store.BusinessRole, ents []int64, members int) (rol
 		return out, err
 	}
 	if rule != nil {
-		out.Birthright = &ruleView{nonNilS(rule.Department), nonNilS(rule.Type), nonNilS(rule.Title)}
+		out.Birthright = &ruleView{nonNilS(rule.Department), nonNilS(rule.Type), nonNilS(rule.Title), rule.Policy}
 	}
 	for _, g := range ents {
 		gr, err := v.group(g)
@@ -172,7 +173,7 @@ func (s *Server) listRoles(_ http.ResponseWriter, r *http.Request, _ *params) (a
 	for _, e := range ents {
 		byRole[e.RoleID] = append(byRole[e.RoleID], e.GroupID)
 	}
-	me, _ := requestActor(r)
+	me, _ := s.requestActor(r)
 	held := map[string]bool{}
 	for _, m := range members {
 		counts[m.RoleID]++
@@ -365,7 +366,7 @@ func (b roleBody) spec() roles.Spec {
 	s := roles.Spec{Name: b.Name, Description: b.Description, OwnerIdentityID: b.OwnerIdentityID, Risk: b.Risk,
 		Requestable: b.Requestable, Entitlements: b.Entitlements, Note: b.Note}
 	if b.Birthright != nil {
-		s.Birthright = &roles.Rule{Department: b.Birthright.Department, Type: b.Birthright.Type, Title: b.Birthright.Title}
+		s.Birthright = &roles.Rule{Department: b.Birthright.Department, Type: b.Birthright.Type, Title: b.Birthright.Title, Policy: b.Birthright.Policy}
 	}
 	return s
 }
@@ -397,7 +398,7 @@ func (s *Server) createRole(_ http.ResponseWriter, r *http.Request, p *params) (
 	if err := validated(p, nil); err != nil {
 		return nil, err
 	}
-	by, err := requestActor(r)
+	by, err := s.requestActor(r)
 	if err != nil {
 		return nil, err
 	}
@@ -421,7 +422,7 @@ func (s *Server) updateRole(_ http.ResponseWriter, r *http.Request, p *params) (
 	if err := validated(p, nil); err != nil {
 		return nil, err
 	}
-	by, err := requestActor(r)
+	by, err := s.requestActor(r)
 	if err != nil {
 		return nil, err
 	}
@@ -446,7 +447,7 @@ func (s *Server) roleChange(r *http.Request, p *params, allowEmpty bool, fn func
 	if err := validated(p, nil); err != nil {
 		return nil, err
 	}
-	by, err := requestActor(r)
+	by, err := s.requestActor(r)
 	if err != nil {
 		return nil, err
 	}
@@ -550,7 +551,7 @@ type roleRequestBody struct {
 }
 
 func (s *Server) submitRoleRequest(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
-	by, err := requestActor(r)
+	by, err := s.requestActor(r)
 	if err != nil {
 		return nil, err
 	}
@@ -574,7 +575,7 @@ func (s *Server) submitRoleRequest(_ http.ResponseWriter, r *http.Request, _ *pa
 }
 
 func (s *Server) listRoleRequests(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
-	me, err := requestActor(r)
+	me, err := s.requestActor(r)
 	if err != nil {
 		return nil, err
 	}
@@ -614,7 +615,7 @@ func (s *Server) listRoleRequests(_ http.ResponseWriter, r *http.Request, p *par
 
 // roleRequest loads a request the signed-in user may see; others' look missing.
 func (s *Server) roleRequest(r *http.Request, p *params) (*store.RoleRequest, roles.Actor, error) {
-	me, err := requestActor(r)
+	me, err := s.requestActor(r)
 	if err != nil {
 		return nil, me, err
 	}

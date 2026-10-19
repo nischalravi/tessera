@@ -325,10 +325,15 @@ func DecideItem(c *store.TenantTx, now time.Time, itemID int64, decision string,
 	}
 	item, err = c.Item(itemID)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, "", &Error{"unknown review item"}
+		return nil, "", ErrUnknownItem
 	}
 	if err != nil {
 		return nil, "", err
+	}
+	// A decided item is final, as in Decide: the same decision again is a
+	// no-op, a different one is a *DecidedError.
+	if done, rerr := resolved(item, decision); done {
+		return item, "", rerr
 	}
 	ir, err := c.ReviewItemRole(itemID)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {

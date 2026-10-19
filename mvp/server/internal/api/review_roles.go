@@ -112,7 +112,7 @@ func (s *Server) removeRoleExclusion(_ http.ResponseWriter, r *http.Request, p *
 	if err := validated(p, nil); err != nil {
 		return nil, err
 	}
-	by, err := requestActor(r)
+	by, err := s.requestActor(r)
 	if err != nil {
 		return nil, err
 	}

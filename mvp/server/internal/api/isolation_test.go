@@ -15,7 +15,10 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
+	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
+	"github.com/nischalravi/tessera/mvp/server/internal/orgs"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
+	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/store/storetest"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
@@ -39,8 +42,13 @@ func isolationServer(t testing.TB, f *storetest.Fixture, tenant tenancy.ID) test
 }
 
 func newIsolationServer(f *storetest.Fixture) *Server {
+	kek, err := seal.New(storetest.IdentityKEK)
+	if err != nil {
+		panic(err)
+	}
 	return New(Config{
-		Store: f.DB, Clock: timeutil.Frozen(storetest.Now), Policies: policy.NewLoader(policies.FS),
+		Identifiers: identifiers.NewKeyer(kek),
+		Store:       f.DB, Clock: timeutil.Frozen(storetest.Now), Policies: policy.NewLoader(policies.FS),
 		Connectors: func(now time.Time) ([]connectors.Connector, error) {
 			return []connectors.Connector{connectors.Tiny{Now: now}}, nil
 		},
@@ -112,8 +120,19 @@ var crossTenantCases = map[string]crossTenantCase{
 	"GET graph by resource": {method: "GET", path: pathf("/api/graph?resource_id=%d"), key: "resource:aws:prod"},
 	"POST simulate disable account": {method: "POST", path: fixed("/api/simulate"), key: "acct:aws:svc-etl",
 		body: func(id int64) string { return fmt.Sprintf(`{"disable_account_ids":[%d]}`, id) }},
+	"PUT group ownership": {method: "PUT", path: pathf("/api/ownership/group/%d"), key: "group:okta:payments-approvers",
+		body: func(int64) string { return `{}` }},
+	"PUT identity ownership": {method: "PUT", path: pathf("/api/ownership/identity/%d"), key: "svc-etl",
+		body: func(int64) string { return `{}` }},
+	"POST bulk ownership": {method: "POST", path: fixed("/api/ownership/bulk"), key: "svc-etl",
+		body: func(id int64) string { return fmt.Sprintf(`{"objects":[{"kind":"identity","key":"%d"}]}`, id) }},
 	"PUT catalog item": {method: "PUT", path: pathf("/api/catalog/items/%d"), key: "group:okta:platform",
 		body: func(int64) string { return `{"requestable":true,"risk":"low"}` }},
+	"GET lifecycle": {method: "GET", path: pathf("/api/identities/%d/lifecycle"), key: "alice"},
+	"PUT lifecycle": {method: "PUT", path: pathf("/api/identities/%d/lifecycle"), key: "alice",
+		body: func(int64) string { return `{"worker_type":"employee","reason":"x"}` }},
+	"POST lifecycle extend": {method: "POST", path: pathf("/api/identities/%d/lifecycle/extend"), key: "alice",
+		body: func(int64) string { return `{"ends_at":"2030-01-01T00:00:00Z","reason":"x"}` }},
 	"POST link account": {method: "POST", path: pathf("/api/accounts/%d/link"), key: "acct:okta:alice",
 		body: func(id int64) string { return fmt.Sprintf(`{"identity_id":%d,"reason":"x"}`, id) }},
 	"POST account not person": {method: "POST", path: pathf("/api/accounts/%d/not-person"), key: "acct:okta:alice",
@@ -121,29 +140,53 @@ var crossTenantCases = map[string]crossTenantCase{
 	"DELETE account link": {method: "DELETE", path: pathf("/api/accounts/%d/link"), key: "acct:okta:alice"},
 	"POST merge identity": {method: "POST", path: pathf("/api/identities/%d/merge"), key: "alice",
 		body: func(id int64) string { return fmt.Sprintf(`{"into":%d,"reason":"x"}`, id) }},
+	"GET identity affiliations": {method: "GET", path: pathf("/api/identities/%d/affiliations"), key: "alice"},
+	"GET identity identifiers":  {method: "GET", path: pathf("/api/identities/%d/identifiers"), key: "alice"},
+	// a bundle names catalog groups by id: tenant A's group is not in B's catalog, like a missing one
+	"POST invite bundle": {method: "POST", path: fixed("/api/guests/invitations"), key: "group:aws:ProdAdmin",
+		body: func(id int64) string {
+			return fmt.Sprintf(`{"given_name":"G","email":"g@x.example","population":"visitor","purpose":"x","ends_at":"2026-10-12T00:00:00Z","bundle":[%d]}`, id)
+		}},
+	"POST add affiliation": {method: "POST", path: pathf("/api/identities/%d/affiliations"), key: "alice",
+		body: func(int64) string { return `{"type":"alum","reason":"x"}` }},
 	"GET identity containment": {method: "GET", path: pathf("/api/identities/%d/containment"), key: "alice"},
 	"POST contain identity": {method: "POST", path: pathf("/api/identities/%d/contain"), key: "alice",
+		body: func(int64) string { return `{"reason":"suspected credential compromise"}` }},
+	"GET identity disables": {method: "GET", path: pathf("/api/identities/%d/disables"), key: "alice"},
+	"POST disable identity": {method: "POST", path: pathf("/api/identities/%d/disable"), key: "alice",
+		body: func(int64) string { return `{"reason":"suspected credential compromise"}` }},
+	"POST enable identity": {method: "POST", path: pathf("/api/identities/%d/enable"), key: "alice",
 		body: func(int64) string { return `{"reason":"suspected credential compromise"}` }},
 }
 
 // routeParamKey maps each route with path parameters to the cases above.
 var routeParamCases = map[string][]string{
-	"GET /api/identities/{identity_id}":             {"GET identity", "GET identity (nhi)"},
-	"GET /api/jml/leaver-plan/{identity_id}":        {"GET leaver plan"},
-	"GET /api/reviews/campaigns/{campaign_id}":      {"GET campaign"},
-	"GET /api/hris/events/{event_id}/plan":          {"GET hris plan"},
-	"POST /api/hris/events/{event_id}/execute":      {"POST hris execute"},
-	"POST /api/reviews/items/{item_id}/decision":    {"POST review decision"},
-	"POST /api/jit/requests/{request_id}/approve":   {"POST jit approve"},
-	"POST /api/jit/requests/{request_id}/deny":      {"POST jit deny"},
-	"POST /api/jit/requests/{request_id}/revoke":    {"POST jit revoke"},
-	"PUT /api/catalog/items/{group_id}":             {"PUT catalog item"},
-	"POST /api/accounts/{account_id}/link":          {"POST link account"},
-	"POST /api/accounts/{account_id}/not-person":    {"POST account not person"},
-	"DELETE /api/accounts/{account_id}/link":        {"DELETE account link"},
-	"POST /api/identities/{identity_id}/merge":      {"POST merge identity"},
-	"POST /api/identities/{identity_id}/contain":    {"POST contain identity"},
-	"GET /api/identities/{identity_id}/containment": {"GET identity containment"},
+	"GET /api/identities/{identity_id}":                   {"GET identity", "GET identity (nhi)"},
+	"GET /api/jml/leaver-plan/{identity_id}":              {"GET leaver plan"},
+	"GET /api/reviews/campaigns/{campaign_id}":            {"GET campaign"},
+	"GET /api/hris/events/{event_id}/plan":                {"GET hris plan"},
+	"POST /api/hris/events/{event_id}/execute":            {"POST hris execute"},
+	"POST /api/reviews/items/{item_id}/decision":          {"POST review decision"},
+	"POST /api/jit/requests/{request_id}/approve":         {"POST jit approve"},
+	"POST /api/jit/requests/{request_id}/deny":            {"POST jit deny"},
+	"POST /api/jit/requests/{request_id}/revoke":          {"POST jit revoke"},
+	"PUT /api/catalog/items/{group_id}":                   {"PUT catalog item"},
+	"GET /api/identities/{identity_id}/lifecycle":         {"GET lifecycle"},
+	"PUT /api/identities/{identity_id}/lifecycle":         {"PUT lifecycle"},
+	"POST /api/identities/{identity_id}/lifecycle/extend": {"POST lifecycle extend"},
+	"POST /api/accounts/{account_id}/link":                {"POST link account"},
+	"POST /api/accounts/{account_id}/not-person":          {"POST account not person"},
+	"DELETE /api/accounts/{account_id}/link":              {"DELETE account link"},
+	"POST /api/identities/{identity_id}/merge":            {"POST merge identity"},
+	"GET /api/identities/{identity_id}/affiliations":      {"GET identity affiliations"},
+	"GET /api/identities/{identity_id}/identifiers":       {"GET identity identifiers"},
+	"POST /api/identities/{identity_id}/affiliations":     {"POST add affiliation"},
+	"PUT /api/ownership/{kind}/{object_key}":              {"PUT group ownership", "PUT identity ownership"},
+	"POST /api/identities/{identity_id}/contain":          {"POST contain identity"},
+	"GET /api/identities/{identity_id}/containment":       {"GET identity containment"},
+	"GET /api/identities/{identity_id}/disables":          {"GET identity disables"},
+	"POST /api/identities/{identity_id}/disable":          {"POST disable identity"},
+	"POST /api/identities/{identity_id}/enable":           {"POST enable identity"},
 }
 
 // TestIsolation_RouteCrossTenant: as tenant B, every route with a path
@@ -156,6 +199,7 @@ var routeParamCases = map[string][]string{
 // "request is not pending"); the design's "404" is therefore checked as
 // "indistinguishable from missing".
 func TestIsolation_RouteCrossTenant(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	srv := isolationServer(t, f, f.B.ID)
 	h := srv.Handler()
@@ -170,14 +214,38 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/api/audit/events/{event_id}/proof" {
 			continue // TestIsolation_AuditRoutes
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/reviews/schedules/{schedule_id}") {
+			continue // TestReviewSchedulesAPI_CrossTenant (a UUID, not a fixture id)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/jobs/{job_id}") {
+			continue // TestIsolation_JobRoutes (a UUID, not a fixture id)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/provisioning/") {
+			continue // TestIsolation_ProvisioningRoutes (UUIDs, not fixture ids)
+		}
+		if rt.Pattern == "/api/config/trusted-signers/{kid}" {
+			continue // TestIsolation_TrustedSignerScoped (a key id, not a fixture id)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/approvals/delegations/{delegation_id}") {
+			continue // TestApprovalsAPI_CrossTenant (a UUID, not a fixture id)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/removal-requests/{request_id}") {
+			continue // TestRemovalAPI_StepUpAndCrossTenant (a UUID, not a fixture id)
+		}
+		if rt.Pattern == "/api/orgs/{org_id}" {
+			continue // TestOrgsAPI (ids are derived from department names, not fixture ids)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/request-drafts/{draft_id}") {
+			continue // TestRequestDraftsAPI (a UUID, private to its user)
+		}
 		if strings.HasPrefix(rt.Pattern, "/api/requests/{request_id}") {
 			continue // TestRequestsAPI_CrossTenant (a UUID, not a fixture id)
 		}
 		if strings.HasPrefix(rt.Pattern, "/api/roles/{role_id}") || strings.HasPrefix(rt.Pattern, "/api/role-requests/{request_id}") {
 			continue // TestRolesAPI_CrossTenant (UUIDs, not fixture ids)
 		}
-		if strings.HasPrefix(rt.Pattern, "/api/reviews/schedules/{schedule_id}") {
-			continue // TestReviewSchedulesAPI_CrossTenant (a UUID, not a fixture id)
+		if strings.HasPrefix(rt.Pattern, "/api/abac/policies/{policy_id}") || rt.Pattern == "/api/catalog/items/{group_id}/policy" {
+			continue // TestAbacAPI_CrossTenant (UUIDs, not fixture ids)
 		}
 		if rt.Pattern == "/api/auth/oidc/{connection_id}/callback" || rt.Pattern == "/api/auth/oauth2/{connection_id}/callback" ||
 			rt.Pattern == "/t/{slug}/bootstrap" {
@@ -189,11 +257,32 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/api/identity-merges/{merge_id}/unmerge" {
 			continue // TestCorrelationAPI_CrossTenant (a UUID, not a fixture id)
 		}
+		if rt.Pattern == "/api/affiliations/{affiliation_id}/end" {
+			continue // TestAffiliationsAPI_CrossTenant (a UUID, not a fixture id)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/sponsorships/{sponsorship_id}") {
+			continue // TestSponsorshipsAPI_CrossTenant (a UUID, not a fixture id)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/email/messages/{message_id}") {
+			continue // TestEmailAPI_CrossTenant (a UUID, not a fixture id)
+		}
 		if rt.Pattern == "/api/containment-retries/{retry_id}/retry-now" {
 			continue // TestContainmentRetriesAPI (a UUID, not a fixture id)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/groups/") {
+			continue // TestGroupsTenantIsolation (UUIDs, not fixture ids)
+		}
 		if rt.Pattern == "/api/auth/sessions/{session_id}" {
 			continue // TestIsolation_SessionCookieScoped (a UUID, not a fixture id)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/siem/sinks/") {
+			continue // TestSiemAPI_CrossTenant (UUIDs, not fixture ids)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/alerts/") {
+			continue // TestAlertsAPI_CrossTenant (UUIDs and rule names, not fixture ids)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/admin/") {
+			continue // TestAdminAPI_CrossTenant (UUIDs, not fixture ids)
 		}
 		if _, ok := routeParamCases[rt.Method+" "+rt.Pattern]; !ok {
 			t.Errorf("route %s %s has path parameters but no cross-tenant case", rt.Method, rt.Pattern)
@@ -242,6 +331,7 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 // own ids for path parameters) answers without any of tenant A's data. POST
 // routes that return tenant data are exercised too.
 func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	// Positive control: served as tenant A, the sentinel is visible.
 	if rec := serveOnce(isolationServer(t, f, f.A.ID).Handler(), http.MethodGet, "/api/identities", ""); !leaks(rec.Body.String()) {
@@ -251,30 +341,53 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 	h := srv.Handler()
 	b := f.B.IDs
 	param := regexp.MustCompile(`\{[a-z_]+\}`)
-	lines := seedRequestLines(t, f) // A's justification carries the sentinel
-	roleIDs, _ := seedRoles(t, f)   // and A's role description
+	lines := seedRequestLines(t, f)        // A's justification carries the sentinel
+	roleIDs, _ := seedRoles(t, f)          // and A's role description
+	sponsorships := seedSponsorships(t, f) // and A's sponsorship purpose
+	policyIDs := seedAbac(t, f)            // and A's policy name
 	values := map[string]string{
-		"/api/roles/{role_id}":                      roleIDs[f.B.ID],
-		"/api/roles/{role_id}/versions":             roleIDs[f.B.ID],
-		"/api/roles/{role_id}/drift":                roleIDs[f.B.ID],
-		"/api/roles/{role_id}/exclusions":           roleIDs[f.B.ID],
-		"/api/roles/{role_id}/flags":                roleIDs[f.B.ID],
-		"/api/requests/{request_id}":                lines[f.B.ID],
-		"/api/identities/{identity_id}":             fmt.Sprint(b["alice"]),
-		"/api/jml/leaver-plan/{identity_id}":        fmt.Sprint(b["alice"]),
-		"/api/reviews/campaigns/{campaign_id}":      fmt.Sprint(b["campaign"]),
-		"/api/hris/events/{event_id}/plan":          fmt.Sprint(b["hris:leaver"]),
-		"/api/audit/events/{event_id}/proof":        latestEventID(t, f.DB, f.B.ID),
-		"/api/identities/{identity_id}/containment": fmt.Sprint(b["alice"]),
+		"/api/jobs/{job_id}":                         insertJobRun(t, f.DB, f.B.ID),
+		"/api/provisioning/ops/{op_id}":              insertProvOp(t, f.DB, f.B.ID, f.B.Refs["connection:ad"], "b-key"),
+		"/api/abac/policies/{policy_id}":             policyIDs[f.B.ID],
+		"/api/roles/{role_id}":                       roleIDs[f.B.ID],
+		"/api/roles/{role_id}/versions":              roleIDs[f.B.ID],
+		"/api/roles/{role_id}/drift":                 roleIDs[f.B.ID],
+		"/api/roles/{role_id}/exclusions":            roleIDs[f.B.ID],
+		"/api/roles/{role_id}/flags":                 roleIDs[f.B.ID],
+		"/api/requests/{request_id}":                 lines[f.B.ID],
+		"/api/sponsorships/{sponsorship_id}":         sponsorships[f.B.ID],
+		"/api/identities/{identity_id}":              fmt.Sprint(b["alice"]),
+		"/api/identities/{identity_id}/lifecycle":    fmt.Sprint(b["alice"]),
+		"/api/identities/{identity_id}/affiliations": fmt.Sprint(b["alice"]),
+		"/api/identities/{identity_id}/identifiers":  fmt.Sprint(b["alice"]),
+		"/api/jml/leaver-plan/{identity_id}":         fmt.Sprint(b["alice"]),
+		"/api/reviews/campaigns/{campaign_id}":       fmt.Sprint(b["campaign"]),
+		"/api/hris/events/{event_id}/plan":           fmt.Sprint(b["hris:leaver"]),
+		"/api/audit/events/{event_id}/proof":         latestEventID(t, f.DB, f.B.ID),
+		"/api/email/messages/{message_id}":           seedEmailMessage(t, f, f.B, store.EmailDeferred),
+		"/api/identities/{identity_id}/containment":  fmt.Sprint(b["alice"]),
+		"/api/siem/sinks/{sink_id}/dead-letters":     seedSiemSink(t, f.DB, f.B.ID, "b"),
+		"/api/alerts/{alert_id}":                     seedAlert(t, f.DB, f.B.ID, "b"),
+		"/api/identities/{identity_id}/disables":     fmt.Sprint(b["alice"]),
+		"/api/orgs/{org_id}":                         orgs.RootID,
 	}
 	checked := 0
 	for _, rt := range srv.Routes() {
 		if rt.Method != http.MethodGet || !rt.Tenant {
 			continue
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/admin/") && strings.Contains(rt.Pattern, "{") {
+			continue // TestAdminAPI_CrossTenant (UUIDs, not fixture ids)
+		}
 		path := rt.Pattern
 		if rp, ok := readinessGetPaths(f.B.Refs)[path]; ok && strings.Contains(path, "{") {
 			path = rp // tenant B's own readiness ids
+		}
+		if strings.HasPrefix(path, "/api/groups/") && strings.Contains(path, "{") {
+			continue // TestGroupsTenantIsolation (UUIDs, not fixture ids)
+		}
+		if path == "/api/request-drafts/{draft_id}" {
+			continue // TestRequestDraftsAPI (a UUID, private to its user)
 		}
 		if strings.Contains(path, "{") {
 			v, ok := values[path]
@@ -337,6 +450,7 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 // TestIsolation_GraphSnapshotScoped: tenant B's graph shares no node with
 // tenant A's, and /api/simulate with one of A's node keys is a 400.
 func TestIsolation_GraphSnapshotScoped(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	snap := func(id tenancy.ID) *graph.Snapshot {
 		var g *graph.Snapshot
@@ -375,6 +489,7 @@ func TestIsolation_GraphSnapshotScoped(t *testing.T) {
 // names in a header or query parameter; the request is recorded on the
 // platform chain, anonymous, with the reason.
 func TestIsolation_NoSessionFailsClosed(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	srv := isolationServer(t, f, f.B.ID)
 	h := srv.Anonymous()

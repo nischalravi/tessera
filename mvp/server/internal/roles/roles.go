@@ -36,6 +36,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/abac"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -66,15 +67,18 @@ func refuse(status int, code, format string, args ...any) error {
 // ---------------------------------------------------------------- rule
 
 // Rule is a birthright rule: an active identity matches when, for every
-// non-empty list, its attribute is in the list.
+// non-empty list, its attribute is in the list and, if the rule names an
+// attribute policy (issue #162), the policy's condition holds for the person.
+// A missing attribute fails the policy.
 type Rule struct {
 	Department []string `json:"department,omitempty"`
 	Type       []string `json:"type,omitempty"`
 	Title      []string `json:"title,omitempty"`
+	Policy     string   `json:"policy,omitempty"` // id of an abac policy
 }
 
 func (r *Rule) empty() bool {
-	return r == nil || (len(r.Department) == 0 && len(r.Type) == 0 && len(r.Title) == 0)
+	return r == nil || (len(r.Department) == 0 && len(r.Type) == 0 && len(r.Title) == 0 && r.Policy == "")
 }
 
 func clean(vs []string) []string {
@@ -92,21 +96,36 @@ func (r *Rule) normalized() *Rule {
 	if r == nil {
 		return nil
 	}
-	n := &Rule{Department: clean(r.Department), Type: clean(r.Type), Title: clean(r.Title)}
+	n := &Rule{Department: clean(r.Department), Type: clean(r.Type), Title: clean(r.Title), Policy: strings.TrimSpace(r.Policy)}
 	if n.empty() {
 		return nil
 	}
 	return n
 }
 
-// Matches reports whether the identity is active and matches every list.
+// Matches reports whether the identity is active and matches every list. A
+// rule that names a policy never matches here (use Match with its condition).
 func (r *Rule) Matches(i *store.Identity) bool {
-	if r.empty() || i.Status != "active" {
+	if r.empty() || r.Policy != "" || i.Status != "active" {
 		return false
 	}
+	return r.lists(i)
+}
+
+func (r *Rule) lists(i *store.Identity) bool {
 	in := func(list []string, v *string) bool { return len(list) == 0 || (v != nil && slices.Contains(list, *v)) }
 	t := i.Type
 	return in(r.Department, i.Department) && in(r.Type, &t) && in(r.Title, i.Title)
+}
+
+// Match reports whether the identity is active, matches every list and, when
+// the rule names a policy, satisfies cond (the policy's condition, nil when
+// the policy is missing or retired: then nothing matches) with attrs.
+func (r *Rule) Match(i *store.Identity, cond *abac.Node, attrs abac.Attrs) bool {
+	if r.empty() || i.Status != "active" || !r.lists(i) {
+		return false
+	}
+	return r.Policy == "" || abac.Eval(cond, attrs)
 }
 
 // ParseRule reads a stored rule (nil: no rule).
@@ -165,6 +184,15 @@ func (w *world) validate(s *Spec, selfID string) error {
 		return refuse(422, "too_many_entitlements", "a role grants at most %d entitlements", MaxEntitlements)
 	}
 	if r := s.Birthright; r != nil {
+		if r.Policy != "" {
+			if p, err := w.tx.AbacPolicy(r.Policy); errors.Is(err, store.ErrNotFound) {
+				return refuse(422, "invalid_rule", "attribute policy not found")
+			} else if err != nil {
+				return err
+			} else if p.Status != store.AbacActive {
+				return refuse(422, "invalid_rule", "attribute policy %s is retired", p.Name)
+			}
+		}
 		if len(r.Department)+len(r.Type)+len(r.Title) > MaxRuleValues {
 			return refuse(422, "invalid_rule", "a rule lists at most %d values", MaxRuleValues)
 		}
@@ -362,9 +390,23 @@ func (w *world) applyRule(roleID string) error {
 		if err != nil {
 			return err
 		}
+		var cond *abac.Node
+		var shared abac.Attrs
+		if rule.Policy != "" {
+			conds, err := abac.Active(w.tx)
+			if err != nil {
+				return err
+			}
+			cond = conds[rule.Policy]
+			shared = abac.Merge(abac.ContextAttrs(w.now, 0), abac.RoleAttrs(r))
+		}
 		for _, p := range people {
 			w.people[p.ID] = p
-			if rule.Matches(p) && !w.excluded[roleID][p.ID] { // an excluded person is not a rule match
+			var attrs abac.Attrs
+			if cond != nil {
+				attrs = abac.Merge(abac.IdentityAttrs(p, w.now), shared)
+			}
+			if rule.Match(p, cond, attrs) && !w.excluded[roleID][p.ID] { // an excluded person is not a rule match
 				matched[p.ID] = true
 				if _, ok := w.members[p.ID][roleID]; !ok {
 					w.add(roleID, p.ID, store.MemberRule, nil, nil)

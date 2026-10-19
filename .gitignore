@@ -21,3 +21,6 @@ dist/
 .DS_Store
 .idea/
 .vscode/
+
+# CI diagnostics output (mvp/scripts/ci-diagnostics.sh)
+mvp/logs/

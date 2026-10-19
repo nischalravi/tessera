@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// Role memberships in access reviews (schema/0270_review_role_memberships.sql,
+// Role memberships in access reviews (schema/0340_review_role_memberships.sql,
 // issue #214): the birthright exclusion list, review items that certify a
 // membership, and the roles a review schedule is scoped to.
 
