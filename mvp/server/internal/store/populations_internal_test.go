@@ -11,7 +11,7 @@ import (
 
 // TestPopulationImmutability: a frozen population can be neither updated nor
 // deleted, an auto-decision keeps its rule and sample flag, and a QA decision
-// is recorded once (schema/0207_review_populations.sql).
+// is recorded once (schema/0350_review_populations.sql).
 func TestPopulationImmutability(t *testing.T) {
 	db := openTest(t)
 	ctx := context.Background()

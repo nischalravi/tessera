@@ -50,6 +50,7 @@ func auditActions(t *testing.T, f *storetest.Fixture, tenant tenancy.ID) map[str
 }
 
 func TestCorrelationAPI_LinkMergeUnmerge(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	h := newIsolationServer(f).Handler()
 	ids := f.B.IDs
@@ -126,6 +127,7 @@ func TestCorrelationAPI_LinkMergeUnmerge(t *testing.T) {
 }
 
 func TestCorrelationAPI_NeedsPermissionAndStepUp(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	h := newIsolationServer(f).Handler()
 	ids := f.B.IDs
@@ -162,6 +164,7 @@ func TestCorrelationAPI_NeedsPermissionAndStepUp(t *testing.T) {
 // Tenant B cannot read, undo, or link to tenant A's rows: A's ids answer
 // exactly like missing ones.
 func TestCorrelationAPI_CrossTenant(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	h := newIsolationServer(f).Handler()
 	la := policyAdmin(t, f, f.A.ID, "pa@a.example")

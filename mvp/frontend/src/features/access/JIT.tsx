@@ -81,7 +81,7 @@ export function JIT() {
                       <tr key={r.id}>
                         <td><IdLink i={r.identity} /><div style={{ marginTop: 3 }}><TypeBadge type={r.identity.type} /></div></td>
                         <td><b className="sys">{r.group.system}:{r.group.name}</b><div className="xs faint">{r.duration_hours} h via {r.account}</div></td>
-                        <td className="small hide-narrow" style={{ maxWidth: 280 }}>{r.justification}<div className="xs faint">requested {fmtDate(r.requested_at)}</div></td>
+                        <td className="small hide-narrow wrap-anywhere" style={{ maxWidth: 280 }}>{r.justification}<div className="xs faint">requested {fmtDate(r.requested_at)}</div></td>
                         <td className="small">
                           <Status s={r.status === "approved" ? "active" : r.status} />
                           {r.status === "approved" && r.expires_at && <div style={{ marginTop: 4 }}><Countdown until={r.expires_at} /></div>}
@@ -123,7 +123,7 @@ export function JIT() {
             <span className="hint">Up to 72. Try 0.05 (3 minutes), approve it, and watch it expire.</span>
           </label>
           <label className="field">Justification
-            <textarea className="input" value={form.justification} onChange={(e) => setForm({ ...form, justification: e.target.value })} placeholder="Incident or ticket reference" />
+            <textarea className="input" maxLength={1000} value={form.justification} onChange={(e) => setForm({ ...form, justification: e.target.value })} placeholder="Incident or ticket reference" />
           </label>
           <Button type="submit" variant="primary" disabled={busy || !form.identity_id || !form.group_id || !form.justification}>Submit request</Button>
         </form>

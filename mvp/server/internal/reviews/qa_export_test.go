@@ -317,7 +317,7 @@ func TestExportContent(t *testing.T) {
 		w2 := newWorld(t)
 		w2.larkspur(func(c *store.TenantTx) error {
 			it, _ := c.CampaignItems(seedCampaign)
-			if err := c.DecideItem(it[0].ID, "revoke", nil, now, store.UserRef{}); err != nil {
+			if _, err := c.DecideItem(it[0].ID, "revoke", nil, now, store.UserRef{}); err != nil {
 				return err
 			}
 			e, err := reviews.BuildExport(c, seedCampaign, now)

@@ -20,7 +20,8 @@ import (
 // not take one.
 type TenantTx struct {
 	ctx      context.Context
-	tx       *sql.Tx
+	db       *DB
+	tx       *xtx
 	tenant   tenancy.ID
 	readOnly bool
 	appended int64 // audit events appended (counted into AuditContext.Committed on commit)
@@ -44,7 +45,7 @@ func (tx *TenantTx) own(t tenancy.ID) error {
 
 // bind appends @tenant to args, refusing a caller-supplied "tenant".
 func (tx *TenantTx) bind(args []sql.NamedArg) ([]any, error) {
-	out := make([]any, 0, len(args)+1)
+	out := make([]any, 0, len(args)) // append grows it by one for @tenant
 	for _, a := range args {
 		if strings.EqualFold(a.Name, "tenant") {
 			return nil, ErrCrossTenant // a caller tried to supply the tenant
@@ -62,21 +63,38 @@ func (tx *TenantTx) exec(s tstmt, args ...sql.NamedArg) (sql.Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	res, err := tx.tx.ExecContext(tx.ctx, s.sql, a...)
+	res, err := tx.db.execIn(tx.ctx, tx.tx, s.sql, a)
 	return res, crossTenant(err)
 }
 
-// crossTenant maps a cross-tenant reference refused by the schema's guard
-// triggers (schema/0001_tenancy.sql) to ErrCrossTenant.
+// crossTenant maps a cross-tenant reference refused by the schema (SQLite's
+// guard triggers in schema/0001_tenancy.sql; in Postgres the composite
+// foreign keys and node-key triggers) to ErrCrossTenant.
 func crossTenant(err error) error {
-	if err != nil && strings.Contains(err.Error(), "cross-tenant reference") {
+	if isReferenceViolation(err) {
 		return fmt.Errorf("%w: %v", ErrCrossTenant, err)
 	}
 	return err
 }
 
-// insert runs an INSERT and returns the new row id.
+// insert runs an INSERT and returns the new row id. Postgres has no
+// LastInsertId, so the statement gets RETURNING id (every table inserted into
+// this way has an integer id column).
 func (tx *TenantTx) insert(s tstmt, args ...sql.NamedArg) (int64, error) {
+	if tx.tx.d == dialectPostgres {
+		if tx.readOnly {
+			return 0, ErrReadOnly
+		}
+		a, err := tx.bind(args)
+		if err != nil {
+			return 0, err
+		}
+		var id int64
+		err = tx.tx.guard(tx.ctx, func() error {
+			return tx.tx.QueryRowContext(tx.ctx, s.sql+" RETURNING id", a...).Scan(&id)
+		})
+		return id, crossTenant(err)
+	}
 	res, err := tx.exec(s, args...)
 	if err != nil {
 		return 0, err
@@ -89,7 +107,7 @@ func (tx *TenantTx) query(s tstmt, args ...sql.NamedArg) (*sql.Rows, error) {
 	if err != nil {
 		return nil, err
 	}
-	return tx.tx.QueryContext(tx.ctx, s.sql, a...)
+	return tx.db.queryIn(tx.ctx, tx.tx, s.sql, a)
 }
 
 func (tx *TenantTx) queryRow(s tstmt, args ...sql.NamedArg) scanner {
@@ -97,7 +115,7 @@ func (tx *TenantTx) queryRow(s tstmt, args ...sql.NamedArg) scanner {
 	if err != nil {
 		return errScanner{err}
 	}
-	return tx.tx.QueryRowContext(tx.ctx, s.sql, a...)
+	return tx.db.queryRowIn(tx.ctx, tx.tx, s.sql, a)
 }
 
 // count runs a COUNT-style statement returning one integer.

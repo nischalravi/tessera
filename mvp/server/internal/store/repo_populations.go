@@ -112,7 +112,7 @@ var (
 		ON CONFLICT (tenant_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
 )
 
-func scanPopulation(s scanner) (*ReviewPopulation, error) {
+func scanReviewPopulation(s scanner) (*ReviewPopulation, error) {
 	var x ReviewPopulation
 	var tid, counts, syncs, scope string
 	var created nullTime
@@ -196,7 +196,7 @@ func (tx *TenantTx) InsertReviewPopulation(p *ReviewPopulation, rows []*Populati
 // ReviewPopulation returns a campaign's frozen population header
 // (ErrNotFound for a campaign launched before populations were frozen).
 func (tx *TenantTx) ReviewPopulation(campaignID int64) (*ReviewPopulation, error) {
-	return one(tx, scanPopulation, populationGet, sql.Named("campaign_id", campaignID))
+	return one(tx, scanReviewPopulation, populationGet, sql.Named("campaign_id", campaignID))
 }
 
 // PopulationRows returns a frozen population's rows in canonical order.
