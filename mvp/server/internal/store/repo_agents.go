@@ -229,11 +229,11 @@ func (tx *TenantTx) ConsumeAgentEnrolment(id string, now time.Time) error {
 // tenant and row id (ErrNotFound if none). One of the reads of a tenant table
 // outside a TenantTx (design §14.2).
 func (s *SystemTx) LookupAgentEnrolmentByTokenHash(hash string) (tenancy.ID, uuid.UUID, error) {
-	return s.lookup(enrolLookup, hash)
+	return s.lookup(enrolLookup, "agent_enrolment_hash", hash)
 }
 
 // LookupDirectoryAgentByCertPin resolves an agent key pin to its tenant and
 // agent id (ErrNotFound if none).
 func (s *SystemTx) LookupDirectoryAgentByCertPin(pin string) (tenancy.ID, uuid.UUID, error) {
-	return s.lookup(agentLookup, pin)
+	return s.lookup(agentLookup, "agent_cert_pin", pin)
 }

@@ -1,6 +1,7 @@
 package readiness
 
 import (
+	"context"
 	"crypto/x509"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/ldap"
+	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 	"github.com/nischalravi/tessera/mvp/server/internal/safedial"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -145,5 +147,52 @@ func (o LiveOptions) liveProber(b *Bundle, now time.Time) (p connectors.Prober, 
 	}
 	lp, err := ldap.New(ldap.Config{Host: cfg.Host, Port: cfg.Port, BindDN: cfg.BindDN, Password: b.cred, BaseDNs: cfg.BaseDNs,
 		UserFilter: cfg.UserFilter, RootCAs: roots, Dialer: d, Now: func() time.Time { return now }})
-	return lp, true, err
+	if err != nil {
+		return nil, true, err
+	}
+	return meteredProber{lp}, true, nil
+}
+
+// meteredProber records each real directory operation in the connector call
+// metrics (tessera_connector_*; connector "ldap", op = the operation name).
+// An unsupported operation is an answer, not a failure.
+type meteredProber struct{ connectors.Prober }
+
+func observe[T any](op string, fn func() (T, error)) (T, error) {
+	done := obs.StartCall(obs.ConnLDAP, op)
+	v, err := fn()
+	if errors.Is(err, connectors.ErrUnsupported) {
+		done(nil)
+	} else {
+		done(err)
+	}
+	return v, err
+}
+
+func (m meteredProber) Connect(ctx context.Context) (connectors.ConnInfo, error) {
+	return observe("connect", func() (connectors.ConnInfo, error) { return m.Prober.Connect(ctx) })
+}
+
+func (m meteredProber) Authenticate(ctx context.Context) (connectors.AuthInfo, error) {
+	return observe("authenticate", func() (connectors.AuthInfo, error) { return m.Prober.Authenticate(ctx) })
+}
+
+func (m meteredProber) RootInfo(ctx context.Context) (connectors.RootInfo, error) {
+	return observe("root_info", func() (connectors.RootInfo, error) { return m.Prober.RootInfo(ctx) })
+}
+
+func (m meteredProber) ObjectExists(ctx context.Context, ref string) (bool, error) {
+	return observe("object_exists", func() (bool, error) { return m.Prober.ObjectExists(ctx, ref) })
+}
+
+func (m meteredProber) Sample(ctx context.Context, q connectors.SampleQuery) (connectors.SampleStats, error) {
+	return observe("sample", func() (connectors.SampleStats, error) { return m.Prober.Sample(ctx, q) })
+}
+
+func (m meteredProber) EffectiveRights(ctx context.Context, ref string) (connectors.Rights, error) {
+	return observe("effective_rights", func() (connectors.Rights, error) { return m.Prober.EffectiveRights(ctx, ref) })
+}
+
+func (m meteredProber) ChangeFeed(ctx context.Context) (connectors.FeedInfo, error) {
+	return observe("change_feed", func() (connectors.FeedInfo, error) { return m.Prober.ChangeFeed(ctx) })
 }

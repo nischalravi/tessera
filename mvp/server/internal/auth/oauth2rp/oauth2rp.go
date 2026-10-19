@@ -28,6 +28,8 @@ import (
 	"unicode"
 
 	"golang.org/x/oauth2"
+
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 )
 
 // Profiles (store.ProfileGitHub, store.ProfileGenericOAuth2).
@@ -180,7 +182,10 @@ func (rp *RP) Exchange(ctx context.Context, c Connection, code, redirectURI, ver
 	if err := c.check(); err != nil {
 		return nil, err
 	}
-	tok, err := c.oauth(redirectURI).Exchange(context.WithValue(ctx, oauth2.HTTPClient, rp.http), code,
+	// the configured endpoints may name their own ports (safehttp allows
+	// only 443 and 8443 otherwise)
+	hc := safehttp.WithConfiguredPorts(rp.http, c.TokenURL, c.UserinfoURL, c.EmailsURL)
+	tok, err := c.oauth(redirectURI).Exchange(context.WithValue(ctx, oauth2.HTTPClient, hc), code,
 		oauth2.VerifierOption(verifier))
 	if err != nil {
 		return nil, fail(ReasonTokenExchange, err)
@@ -191,7 +196,7 @@ func (rp *RP) Exchange(ctx context.Context, c Connection, code, redirectURI, ver
 	if t := strings.ToLower(tok.TokenType); t != "" && t != "bearer" {
 		return nil, fail(ReasonTokenType, fmt.Errorf("token_type %q", tok.TokenType))
 	}
-	raw, err := rp.get(ctx, c.UserinfoURL, tok.AccessToken)
+	raw, err := get(ctx, hc, c.UserinfoURL, tok.AccessToken)
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +216,7 @@ func (rp *RP) Exchange(ctx context.Context, c Connection, code, redirectURI, ver
 	u := &User{Subject: sub, Login: str(v["login"]), Name: str(v["name"]), Email: str(v["email"]), Raw: raw}
 	if c.EmailsURL != "" {
 		// best effort: display data only
-		if b, err := rp.get(ctx, c.EmailsURL, tok.AccessToken); err == nil {
+		if b, err := get(ctx, hc, c.EmailsURL, tok.AccessToken); err == nil {
 			var es []struct {
 				Email             string `json:"email"`
 				Primary, Verified bool
@@ -229,14 +234,14 @@ func (rp *RP) Exchange(ctx context.Context, c Connection, code, redirectURI, ver
 	return u, nil
 }
 
-func (rp *RP) get(ctx context.Context, u, token string) ([]byte, error) {
+func get(ctx context.Context, hc *http.Client, u, token string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, fail(ReasonConfig, err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/json")
-	resp, err := rp.http.Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		return nil, fail(ReasonUserAPI, err)
 	}
