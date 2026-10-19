@@ -1,0 +1,37 @@
+# Golden corpus, NotPrincipal: GC-69 to GC-71. Principal RS; the role's identity policy is Allow*.
+
+- id: GC-69
+  title: Listing only the role ARN in NotPrincipal still denies its sessions (account missing)
+  principal: RS
+  identity: [allow_all]
+  bucket_policy: {"Statement": [{"Effect": "Deny", "NotPrincipal": {"AWS": "arn:aws:iam::111111111111:role/app"}, "Action": "s3:*",
+                                 "Resource": ["arn:aws:s3:::tsr-bkt", "arn:aws:s3:::tsr-bkt/*"]}]}
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-bkt/a"}
+  expect: {outcome: DENY, deny_kind: explicit}
+  why: "[S7] you must also list the account ARN; AWS may validate the account first."
+  verified: doc
+
+- id: GC-70
+  title: NotPrincipal with Deny always denies a principal that has a boundary
+  principal: RS
+  identity: [allow_all]
+  boundary: allow_all
+  bucket_policy: {"Statement": [{"Effect": "Deny",
+                                 "NotPrincipal": {"AWS": ["arn:aws:iam::111111111111:root", "arn:aws:iam::111111111111:role/app", "arn:aws:sts::111111111111:assumed-role/app/s1"]},
+                                 "Action": "s3:*", "Resource": ["arn:aws:s3:::tsr-bkt", "arn:aws:s3:::tsr-bkt/*"]}]}
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-bkt/a"}
+  expect: {outcome: DENY, deny_kind: explicit}
+  why: "[S7][S2] 'will always deny any IAM principal that has a permissions boundary'."
+  verified: doc
+
+- id: GC-71
+  title: NotPrincipal listing the account and the role exempts the session (no boundary)
+  principal: RS
+  identity: [allow_all]
+  bucket_policy: {"Statement": [{"Effect": "Deny",
+                                 "NotPrincipal": {"AWS": ["arn:aws:iam::111111111111:root", "arn:aws:iam::111111111111:role/app"]},
+                                 "Action": "s3:*", "Resource": ["arn:aws:s3:::tsr-bkt", "arn:aws:s3:::tsr-bkt/*"]}]}
+  request: {action: "s3:GetObject", resource: "arn:aws:s3:::tsr-bkt/a"}
+  expect: {outcome: ALLOW, fidelity: approximate, reasons: ["AMBIGUITY:A4"]}
+  why: "[S7] recommends listing the role and the account; whether the session ARN is also needed is unverified."
+  verified: pending-probe:A4
