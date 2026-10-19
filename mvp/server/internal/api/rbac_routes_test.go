@@ -222,6 +222,11 @@ GET    /api/flatfile/uploads                         graph.read      -  # issue 
 GET    /api/flatfile/uploads/{upload_id}             graph.read      -  # issue #105
 GET    /api/flatfile/tasks                           graph.read      -  # issue #105
 POST   /api/flatfile/tasks/{task_id}/close           flatfile.close_tasks STEP_UP_POLICY  # issue #105
+GET    /api/access/as-of                             graph.read      -  # issue #111
+GET    /api/evidence/packs                           audit.read      -  # issue #111
+POST   /api/evidence/packs                           audit.read      -  # issue #111
+GET    /api/evidence/packs/{pack_id}                 audit.read      -  # issue #111
+GET    /api/evidence/packs/{pack_id}/download        audit.read      -  # issue #111
 POST   /api/connections/{id}/validate                connections.manage -
 GET    /api/connections/{id}/validations/{run}       connections.read   -
 POST   /api/connections/{id}/dry-run                 connections.manage -

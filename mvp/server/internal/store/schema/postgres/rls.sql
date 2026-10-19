@@ -536,6 +536,20 @@ CREATE POLICY tenant_isolation ON sponsorship_events
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE edge_history ENABLE ROW LEVEL SECURITY;
+ALTER TABLE edge_history FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON edge_history;
+CREATE POLICY tenant_isolation ON edge_history
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE evidence_packs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE evidence_packs FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON evidence_packs;
+CREATE POLICY tenant_isolation ON evidence_packs
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 ALTER TABLE grp_folders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE grp_folders FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON grp_folders;

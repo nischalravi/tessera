@@ -299,7 +299,7 @@ func discovery(c *store.TenantTx, now time.Time, results []*connectors.Discovery
 		}
 		for _, e := range edges {
 			if (e.Source == "connector" || e.Source == store.EdgeSourceEvaluator) && !seen[[2]string{e.Src, e.Dst}] {
-				if err := c.DeleteEdge(e.ID); err != nil {
+				if err := c.DeleteEdge(e.ID, now); err != nil {
 					return st, err
 				}
 			}

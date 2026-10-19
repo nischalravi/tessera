@@ -102,6 +102,7 @@ server/
     seal/               AES-256-GCM sealing under the KEK (AAD-bound), random secrets, SHA-256 helpers
     keys/               per-tenant ES256 signing keys and the platform Ed25519 key: rotation, JWKS
     safehttp/           SSRF-guarded outbound HTTP client (https only, address checks after DNS)
+    connectors/scim/    read-only live prober for generic SCIM 2.0 applications (readiness DR-18)
     ratelimit/          keyed token-bucket limiter with a bounded key set
     ojson/, timeutil/   ordered JSON + Python float repr; CPython-compatible time arithmetic
     testkit/            shared test fixtures (tiny world through a real Connector, seeded demo DB; each is seeded once per test binary and handed out as a private copy per test)
@@ -178,6 +179,21 @@ caller can skip the second person. This request table stands in for the `connect
 admin-change type until Phase 0's admin-change workflow (PR12) lands. Non-demo connector types are
 no longer refused with `phase0_required`: the gate alone decides (simulated evidence never
 satisfies it).
+
+**Generic SCIM live checks (DR-18).** A non-demo `scim_app` connection runs its live checks
+against the real application (`server/internal/connectors/scim`, results not labelled Simulated,
+so they can satisfy the gate). The prober is GET only and every request goes through
+`internal/safehttp`. It reads `/ServiceProviderConfig`, `/ResourceTypes` and `/Schemas`
+(`scim_discovery`); walks `startIndex`/`count` and compares `totalResults` with what the pages
+returned (`paging`); compares each group's members on the list call, on `GET /Groups/{id}` and by
+reverse lookup through users' `groups` (`members_complete`); and records 429s, `Retry-After` and
+retries (`rate_headroom`). Bounds: 10 pages, 500 objects, 120 requests, 2 retries per request and
+no wait longer than 3 s per 429 (a longer `Retry-After` aborts the run as rate limited). The
+bearer token is the connection's sealed credential (`connection_secrets`, opened with the KEK like
+the LDAP bind password); without one the live checks report an error instead of running
+unauthenticated. The client is the shared outbound one, with the connection's configured port
+allowed (`safehttp.WithConfiguredPorts`). Tests use an in-process SCIM server
+with misbehaviour switches (`internal/connectors/scim/fakescim_test.go`).
 
 #### Live LDAP checks
 
@@ -358,6 +374,8 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `POST /api/accounts/{id}/link {identity_id, reason}` · `POST /api/accounts/{id}/not-person {reason}` ·
 `DELETE /api/accounts/{id}/link` · `POST /api/identities/{id}/merge {into, reason}` ·
 `GET /api/identity-merges` · `POST /api/identity-merges/{id}/unmerge {reason}` ·
+`GET /api/access/as-of?resource=&date=` · `GET|POST /api/evidence/packs` ·
+`GET /api/evidence/packs/{id}` · `GET /api/evidence/packs/{id}/download` (see "Point-in-time access and evidence packs")
 `GET|POST /api/reviews/schedules` · `PUT /api/reviews/schedules/{id}` · `POST /api/reviews/schedules/{id}/run` (an unknown `system` is 422 `invalid_system`; a second run in the same second is 409 `already_launched`; a schedule with no grants in scope creates no campaign, audits `review.schedule.skipped` and answers 200 `{skipped, reason}`) ·
 `GET /api/roles/{id}/exclusions|flags` · `POST /api/roles/{id}/exclusions/{identity_id}/remove` ·
 `GET /api/identities/{id}/affiliations` · `GET /api/identities/{id}/identifiers` ·
@@ -393,6 +411,43 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
 or HRIS execution is always the signed-in user.
+
+### Point-in-time access and evidence packs
+
+Issue #111; packages `server/internal/evidence`, `graph.BuildAsOf`, schema `0260` and `0261`.
+
+- **Edge history** (`edge_history`). Every write to `grant_edges` (connector sync and prune, JIT
+  approve, extend, revoke and sweep, manual grants, review, leaver and least-privilege revokes) opens or
+  closes a span `[valid_from, valid_to)` in the same transaction, in `store/repo_grants.go`, so no
+  caller can forget it. A span is half-open: the grant holds at the instant it was added and not at the
+  instant it was removed. A JIT grant also stops at its own `expires_at`, even if the sweeper deleted it
+  later; extending one closes the span and opens a new one. Deleting an edge needs the removal time, so
+  `DeleteEdge`, `DeleteJITEdge` and `SetEdgeExpiry` take an `at` argument. Applying the schema backfills a
+  span (from `created_at`) for any grant that has none, so existing databases start with today's grants
+  as of their creation time.
+- **`GET /api/access/as-of?resource=<id>&date=<date or datetime>`** (`graph.read`). Who could reach the
+  resource, per identity with permissions and paths. A date (`2026-03-31`) means the end of that day
+  (today means now); a datetime (`2026-03-31T09:30:00`, UTC) is that instant. A future instant is 422.
+  Only grants are historical: identities, accounts and the identity-account bindings are today's, so an
+  account disabled by a leaver plan still shows the access it had then. The UI offers it as an *As of*
+  date in Access graph → *Who can access…*.
+- **Evidence packs** (`evidence_packs`, immutable). `POST /api/evidence/packs {framework, from, to}`
+  with `framework` one of `soc2`, `sox_itgc`, `iso27001`, `pci_dss_v4` (`audit.read`: auditor and tenant
+  admin). `from` and `to` are dates or datetimes; a date `to` includes that day, the period is capped
+  at 731 days and ends no later than now. The pack, its ZIP and the ledger event
+  `evidence.pack_generated` (framework, period, manifest SHA-256) commit in one transaction; the ZIP is
+  written after commit. `GET /api/evidence/packs` lists them, `GET /api/evidence/packs/{id}` returns the
+  manifest and `.../download` the ZIP. Contents: `users.csv` (one row per account with its source
+  system; the manifest counts rows per source), `jml_leavers.csv` (per leaver event and system: hours
+  from the HR termination to the last grant removal, or `access_remains`; ids only), `review_campaigns.csv`
+  and `review_items.csv` (campaigns created in the period with decisions), `privileged_access.csv` (who
+  held privileged access at the end of the period, with the path), `revocations.csv` (grants revoked in
+  Tessera in the period, verified against Tessera's own graph, not the target system), `README.txt`,
+  `manifest.json` (SHA-256 and row count of every file, control mapping from the knowledge base) and
+  `manifest.sha256`. The same input gives the same bytes. CSV cells starting with `= + - @` get a leading
+  apostrophe. The PCI pack notes that exception-only campaigns may not satisfy requirement 7.2.4.
+  The review campaigns file is built from the campaigns and their items; there was no separate review
+  export to reuse.
 
 ### SIEM streaming
 
@@ -1616,7 +1671,7 @@ the right. Arrow keys move between items.
 | (top) | **Home**, **Inbox** (count) |
 | **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Ownership, Accounts (with *Account matches*), Roles, Organizations (live, read-only, derived from departments) |
 | **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
-| **Protection** | Alerts (alerts, rules, channels), Policies & SoD (violations, policies, what-if simulation, SoD functions, risks and rulesets), Mitigating controls (mitigations, control library), Attribute policies, Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
+| **Protection** | Alerts (alerts, rules, channels), Policies & SoD (violations, policies, what-if simulation, SoD functions, risks and rulesets), Mitigating controls (mitigations, control library), Attribute policies, Access graph (with an *As of* date for *Who can access…*), Evidence packs, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
 | **Settings** | Connections (governed connections and the setup wizard), Admin |
 
 **Home.** For the admin & security persona: the tenant name and a sync line, then tabs

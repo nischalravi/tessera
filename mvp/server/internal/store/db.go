@@ -156,6 +156,8 @@ var tables = []string{
 	"aws_edge_evaluations", "aws_pr_comment_settings",
 	// flat-file import for disconnected apps (schema/0352_flatfile.sql)
 	"flatfile_mappings", "flatfile_uploads", "flatfile_upload_errors", "flatfile_changes", "flatfile_records", "flatfile_tasks",
+	// point-in-time access and evidence packs (schema/0260-0261)
+	"edge_history", "evidence_packs",
 	// SIEM sinks (schema/0210_siem.sql)
 	"siem_sinks", "siem_dead_letters",
 	// alerting (schema/0209_alerts.sql)

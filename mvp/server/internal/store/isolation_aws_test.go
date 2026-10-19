@@ -370,7 +370,7 @@ func TestIsolation_AWSIntegrationTables(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if err := c.DeleteEdge(e.ID); err != nil {
+		if err := c.DeleteEdge(e.ID, time.Now()); err != nil {
 			return err
 		}
 		if _, err := c.InsertEdge(&store.GrantEdge{Src: "account:900", Dst: "perm:901", Relation: "direct_grant", Source: "manual", CreatedAt: storetest.Now}); err != nil {

@@ -363,7 +363,7 @@ func TestDrift(t *testing.T) {
 		if e == nil || e.Source != "role" {
 			t.Fatalf("bob eng = %+v", e)
 		}
-		if err := c.DeleteEdge(e.ID); err != nil {
+		if err := c.DeleteEdge(e.ID, time.Now()); err != nil {
 			return err
 		}
 		d, err := roles.RoleDrift(c, id, w.now)

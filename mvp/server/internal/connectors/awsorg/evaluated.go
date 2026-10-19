@@ -632,7 +632,7 @@ func (s *Service) Materialize(ctx context.Context, db *store.DB, tenant tenancy.
 			return err
 		}
 		stats.Ingested = st
-		if stats.Pruned, err = pruneEvaluatorEdges(c, m.Result); err != nil {
+		if stats.Pruned, err = pruneEvaluatorEdges(c, now, m.Result); err != nil {
 			return err
 		}
 		return c.Audit(now, actor, "aws.snapshot.materialized", ojson.Object{{Key: "snapshot_id", Value: snapshotID},
@@ -687,7 +687,7 @@ type MaterializeStats struct {
 
 // pruneEvaluatorEdges removes the evaluator's edges that this evaluation did
 // not produce: a permission the engine no longer confirms is not kept.
-func pruneEvaluatorEdges(c *store.TenantTx, r *connectors.DiscoveryResult) (int, error) {
+func pruneEvaluatorEdges(c *store.TenantTx, now time.Time, r *connectors.DiscoveryResult) (int, error) {
 	keep := map[[2]string]bool{}
 	nodes, err := nodeKeys(c)
 	if err != nil {
@@ -705,7 +705,7 @@ func pruneEvaluatorEdges(c *store.TenantTx, r *connectors.DiscoveryResult) (int,
 	n := 0
 	for _, e := range edges {
 		if e.Source == store.EdgeSourceEvaluator && !keep[[2]string{e.Src, e.Dst}] {
-			if err := c.DeleteEdge(e.ID); err != nil {
+			if err := c.DeleteEdge(e.ID, now); err != nil {
 				return n, err
 			}
 			n++

@@ -427,7 +427,7 @@ func TestRevokeRefusesWeakEvaluatedGrants(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if err := tx.DeleteEdge(e.ID); err != nil {
+		if err := tx.DeleteEdge(e.ID, time.Now()); err != nil {
 			return err
 		}
 		_, err = tx.UpsertEvaluatorEdge(e.Src, e.Dst, e.Relation, testkit.Now, store.EdgeEvaluation{ExplanationID: "x", Outcome: "allow", Fidelity: "approximate"})

@@ -220,6 +220,7 @@ func New(cfg Config) *Server {
 		}
 		cfg.Readiness = readiness.NewService(reg, cfg.Env)
 		cfg.Readiness.Runner.Scenario = cfg.ReadinessScenario
+		cfg.Readiness.Runner.SCIM.Client = cfg.OutboundHTTP
 	}
 	if cfg.Agents == nil {
 		cfg.Agents = &agent.Service{DB: cfg.Store, Hub: agent.NewHub(nil), Clock: cfg.Clock}
@@ -297,6 +298,7 @@ func New(cfg Config) *Server {
 	s.registerEmailRoutes()
 	s.registerContainmentRoutes()
 	s.registerFlatfileRoutes()
+	s.registerEvidenceRoutes()
 	s.registerGroupsFolderRoutes()
 	s.registerReadinessRoutes()
 	s.registerAgentRoutes()
@@ -693,6 +695,10 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 	}
 	if sb, ok := out.(statusBody); ok {
 		writeJSON(w, sb.status, sb.body)
+		return
+	}
+	if fb, ok := out.(fileBody); ok {
+		writeFile(w, fb)
 		return
 	}
 	writeJSON(w, http.StatusOK, out)

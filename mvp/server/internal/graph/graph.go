@@ -204,15 +204,34 @@ func (g *Snapshot) setEdge(src, dst string, e *Edge) {
 // Build builds the live graph of the transaction's tenant. Expired JIT edges
 // are excluded. The snapshot is per-tenant by construction: its only input is
 // a tenant transaction, so another tenant's node keys are unknown nodes.
-func Build(c *store.TenantTx, now time.Time) (*Snapshot, error) {
+func Build(c *store.TenantTx, now time.Time) (*Snapshot, error) { return build(c, now, false) }
+
+// BuildAsOf builds the graph as it was at instant at: the grant edges are the
+// ones edge_history says held then (half-open: held at the instant they were
+// added, not at the instant they were removed or expired). Everything else is
+// current state, because only grants are recorded historically: the nodes and
+// the identity-account bindings are today's. An account's status today (say,
+// disabled by a leaver plan) must not hide access it had then, so accounts are
+// treated as active, and an identity is terminated only from its
+// terminated_at.
+func BuildAsOf(c *store.TenantTx, at time.Time) (*Snapshot, error) { return build(c, at, true) }
+
+func build(c *store.TenantTx, now time.Time, asOf bool) (*Snapshot, error) {
 	g := New()
 	idents, err := c.Identities()
 	if err != nil {
 		return nil, err
 	}
 	for _, i := range idents {
+		status := i.Status
+		if asOf {
+			status = "active"
+			if i.TerminatedAt != nil && !now.Before(*i.TerminatedAt) {
+				status = "terminated"
+			}
+		}
 		g.AddNode(&Node{Key: Key("identity", i.ID), Kind: "identity", Label: i.Name, ID: i.ID, Type: i.Type,
-			Status: i.Status, Department: i.Department})
+			Status: status, Department: i.Department})
 	}
 	resources, err := c.Resources()
 	if err != nil {
@@ -228,8 +247,12 @@ func Build(c *store.TenantTx, now time.Time) (*Snapshot, error) {
 	}
 	for _, a := range accounts {
 		k := Key("account", a.ID)
+		status := a.Status
+		if asOf {
+			status = "active"
+		}
 		g.AddNode(&Node{Key: k, Kind: "account", Label: a.System + ":" + a.Username, ID: a.ID, System: a.System,
-			Status: a.Status, AccountKind: a.Kind, IdentityID: a.IdentityID})
+			Status: status, AccountKind: a.Kind, IdentityID: a.IdentityID})
 		if a.IdentityID != nil {
 			g.setEdge(Key("identity", *a.IdentityID), k, &Edge{Relation: "has_account", Source: "connector"})
 		}
@@ -256,6 +279,19 @@ func Build(c *store.TenantTx, now time.Time) (*Snapshot, error) {
 			Action: p.Action, Privileged: p.Privileged, ResourceID: p.ResourceID, ResourceName: res.Label,
 			Environment: res.Environment, Tags: res.Tags})
 		g.setEdge(k, res.Key, &Edge{Relation: "on", Source: "connector"})
+	}
+	if asOf {
+		spans, err := c.EdgeSpansAsOf(now)
+		if err != nil {
+			return nil, err
+		}
+		for _, s := range spans {
+			if !s.HeldAt(now) || !g.HasNode(s.Src) || !g.HasNode(s.Dst) {
+				continue
+			}
+			g.setEdge(s.Src, s.Dst, &Edge{Relation: s.Relation, EdgeID: s.EdgeID, Source: s.Source, ExpiresAt: s.ExpiresAt})
+		}
+		return g, nil
 	}
 	edges, err := c.Edges()
 	if err != nil {

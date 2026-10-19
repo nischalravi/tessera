@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/aws/awstest"
 	"github.com/nischalravi/tessera/mvp/server/internal/aws/eval"
@@ -167,7 +168,7 @@ func TestGrantRecommendationsSkipWeakEvaluatedGrants(t *testing.T) {
 				}
 				for _, e := range edges {
 					if e.Src == graph.Key("account", ids["acct:aws:svc-etl"]) {
-						if err := c.DeleteEdge(e.ID); err != nil {
+						if err := c.DeleteEdge(e.ID, time.Now()); err != nil {
 							return err
 						}
 						ok, err := c.UpsertEvaluatorEdge(e.Src, e.Dst, e.Relation, testkit.Now,
