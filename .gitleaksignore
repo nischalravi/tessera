@@ -2,3 +2,12 @@
 402b9c28be7933968c2128d372845f1b8df15979:docs/design/phase-0-platform-security.md:generic-api-key:2432
 # False positive: a fake credential in a test asserting the API never returns stored secrets.
 1dadcc300f616a64fe333ec138fa7cc3a4cff881:mvp/server/internal/api/connections_test.go:generic-api-key:187
+# Fake values in tests that match high-confidence rules (the .gitleaks.toml allowlist covers only generic-api-key):
+# the RFC 9449 example DPoP proof, and AWS-style example access key ids in the rotation tests.
+213c433ab2340479ffab148a804f94db24716724:mvp/server/internal/rotation/engine_test.go:aws-access-token:49
+213c433ab2340479ffab148a804f94db24716724:mvp/server/internal/rotation/engine_test.go:aws-access-token:54
+213c433ab2340479ffab148a804f94db24716724:mvp/server/internal/rotation/engine_test.go:aws-access-token:81
+213c433ab2340479ffab148a804f94db24716724:mvp/server/internal/rotation/providers_test.go:aws-access-token:23
+213c433ab2340479ffab148a804f94db24716724:mvp/server/internal/rotation/service_test.go:aws-access-token:31
+213c433ab2340479ffab148a804f94db24716724:mvp/server/internal/rotation/service_test.go:aws-access-token:562
+c73adc25304be8eff315fb27c64292a817bdcc9f:mvp/server/internal/oauth/dpop/dpop_test.go:jwt:527

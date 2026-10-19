@@ -9,6 +9,7 @@ import (
 )
 
 func TestSummary_ReadinessBlock(t *testing.T) {
+	t.Parallel()
 	c := newRD(t)
 	// Without the opt-in the summary is exactly the recorded response (parity).
 	plain := c.json("GET", "/api/summary", "", http.StatusOK)
@@ -41,6 +42,7 @@ func TestSummary_ReadinessBlock(t *testing.T) {
 }
 
 func TestDeploymentHealth_API(t *testing.T) {
+	t.Parallel()
 	c := newRD(t)
 	d := c.json("GET", "/api/insights/deployment-health", "", http.StatusOK)
 	if d["tenant"].(map[string]any)["score"] != nil || len(d["connections"].([]any)) != 0 {
@@ -130,6 +132,7 @@ func TestDeploymentHealth_API(t *testing.T) {
 
 // Every deployment-readiness route is documented in /api/readiness/openapi.json.
 func TestReadinessOpenAPI_CoversRoutes(t *testing.T) {
+	t.Parallel()
 	c := newRD(t)
 	doc := c.json("GET", "/api/readiness/openapi.json", "", http.StatusOK)
 	paths := doc["paths"].(map[string]any)

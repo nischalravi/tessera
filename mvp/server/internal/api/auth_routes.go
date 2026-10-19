@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"errors"
 	"mime"
 	"net/http"
@@ -29,17 +28,14 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, rt *route) (*
 		return r, true
 	}
 	p, reason, err := s.authn.Authenticate(r)
-	if errors.Is(err, context.DeadlineExceeded) {
-		// The request timed out while its session was being checked: the
-		// timeout answer, not a 500 (see writeTimeout).
-		audit.SetAnonymous(r.Context(), "authentication_error")
-		writeTimeout(w)
-		return r, false
-	}
 	if err != nil {
 		// The session could not be checked: fail closed.
-		s.log.Error("authentication failed", "method", r.Method, "path", r.URL.Path, "err", err)
 		audit.SetAnonymous(r.Context(), "authentication_error")
+		if timedOut(r, err) {
+			writeTimedOut(w)
+			return r, false
+		}
+		s.log.Error("authentication failed", "method", r.Method, "path", r.URL.Path, "err", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return r, false
 	}
