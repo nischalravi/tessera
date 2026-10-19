@@ -1,0 +1,151 @@
+{
+  "Name" : "s3",
+  "Actions" : [ {
+    "Name" : "GetObject",
+    "ActionConditionKeys" : [ "s3:TlsVersion", "s3:ResourceAccount" ],
+    "Annotations" : {
+      "Properties" : {
+        "IsList" : false,
+        "IsPermissionManagement" : false,
+        "IsTaggingOnly" : false,
+        "IsWrite" : false
+      }
+    },
+    "Resources" : [ {
+      "Name" : "accesspointobject"
+    }, {
+      "Name" : "object"
+    } ]
+  }, {
+    "Name" : "GetObjectAcl",
+    "ActionConditionKeys" : [ "s3:ResourceAccount" ],
+    "Annotations" : {
+      "Properties" : {
+        "IsList" : false,
+        "IsPermissionManagement" : false,
+        "IsTaggingOnly" : false,
+        "IsWrite" : false
+      }
+    },
+    "Resources" : [ {
+      "Name" : "object"
+    } ]
+  }, {
+    "Name" : "ListBucket",
+    "ActionConditionKeys" : [ "s3:prefix", "s3:delimiter", "s3:max-keys" ],
+    "Annotations" : {
+      "Properties" : {
+        "IsList" : true,
+        "IsPermissionManagement" : false,
+        "IsTaggingOnly" : false,
+        "IsWrite" : false
+      }
+    },
+    "Resources" : [ {
+      "Name" : "bucket"
+    } ]
+  }, {
+    "Name" : "PutBucketPolicy",
+    "ActionConditionKeys" : [ "aws:ResourceTag/${TagKey}" ],
+    "Annotations" : {
+      "Properties" : {
+        "IsList" : false,
+        "IsPermissionManagement" : true,
+        "IsTaggingOnly" : false,
+        "IsWrite" : true
+      }
+    },
+    "Resources" : [ {
+      "Name" : "bucket"
+    } ]
+  }, {
+    "Name" : "PutObject",
+    "ActionConditionKeys" : [ "s3:RequestObjectTag/<key>", "s3:x-amz-acl", "s3:TlsVersion" ],
+    "Annotations" : {
+      "Properties" : {
+        "IsList" : false,
+        "IsPermissionManagement" : false,
+        "IsTaggingOnly" : false,
+        "IsWrite" : true
+      }
+    },
+    "Resources" : [ {
+      "Name" : "object"
+    } ]
+  }, {
+    "Name" : "PutObjectTagging",
+    "ActionConditionKeys" : [ ],
+    "Annotations" : {
+      "Properties" : {
+        "IsList" : false,
+        "IsPermissionManagement" : false,
+        "IsTaggingOnly" : true,
+        "IsWrite" : true
+      }
+    },
+    "Resources" : [ {
+      "Name" : "object"
+    } ]
+  }, {
+    "Name" : "ListAllMyBuckets",
+    "ActionConditionKeys" : [ ],
+    "Annotations" : {
+      "Properties" : {
+        "IsList" : true,
+        "IsPermissionManagement" : false,
+        "IsTaggingOnly" : false,
+        "IsWrite" : false
+      }
+    },
+    "Resources" : [ ]
+  } ],
+  "ConditionKeys" : [ {
+    "Name" : "aws:ResourceTag/${TagKey}",
+    "Types" : [ "String" ]
+  }, {
+    "Name" : "aws:TagKeys",
+    "Types" : [ "ArrayOfString" ]
+  }, {
+    "Name" : "s3:RequestObjectTag/<key>",
+    "Types" : [ "String" ]
+  }, {
+    "Name" : "s3:ResourceAccount",
+    "Types" : [ "String" ]
+  }, {
+    "Name" : "s3:TlsVersion",
+    "Types" : [ "Numeric" ]
+  }, {
+    "Name" : "s3:delimiter",
+    "Types" : [ "String" ]
+  }, {
+    "Name" : "s3:max-keys",
+    "Types" : [ "Numeric" ]
+  }, {
+    "Name" : "s3:prefix",
+    "Types" : [ "String" ]
+  }, {
+    "Name" : "s3:x-amz-acl",
+    "Types" : [ "String" ]
+  } ],
+  "Operations" : [ {
+    "Name" : "GetObject",
+    "AuthorizedActions" : [ {
+      "Name" : "GetObject",
+      "Service" : "s3"
+    } ]
+  } ],
+  "Resources" : [ {
+    "Name" : "accesspointobject",
+    "ARNFormats" : [ "arn:${Partition}:s3:${Region}:${Account}:accesspoint/${AccessPointName}/object/${ObjectName}" ],
+    "ConditionKeys" : [ "aws:ResourceTag/${TagKey}" ]
+  }, {
+    "Name" : "bucket",
+    "ARNFormats" : [ "arn:${Partition}:s3:::${BucketName}" ],
+    "ConditionKeys" : [ "aws:ResourceTag/${TagKey}" ]
+  }, {
+    "Name" : "object",
+    "ARNFormats" : [ "arn:${Partition}:s3:::${BucketName}/${ObjectName}" ],
+    "ConditionKeys" : [ "s3:RequestObjectTag/<key>" ]
+  } ],
+  "Version" : "v1.4"
+}

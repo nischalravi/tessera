@@ -15,7 +15,8 @@ Layout: `mvp/server` (Go API, SQLite), `mvp/frontend` (React + TypeScript + Vite
 
 ## Backend rules (`mvp/server`)
 
-- Go, stdlib `net/http`, `database/sql` + `modernc.org/sqlite` (pure Go), plain SQL, no ORM.
+- Go, stdlib `net/http`, `database/sql`, plain SQL, no ORM. The store supports SQLite (`modernc.org/sqlite`, pure Go; the dev and single-node default) and Postgres (pgx via `database/sql`, row-level security; `TESSERA_DB=postgres://…`).
+- **Both dialects.** Statements are written once in SQLite's dialect and translated for Postgres (`internal/store/dialect.go`). Every new schema file needs a Postgres variant in `internal/store/schema/postgres/` (composite `(tenant_id, id)` foreign keys, then `go run ./cmd/tessera admin gen-rls -out internal/store/schema/postgres/rls.sql`), and every new statement must translate. `TestSchemaParity_*`, `TestPostgresStatementsTranslate` and `TestPostgresRowidColumns` enforce it with no database; run the suite once with `TESSERA_TEST_PG_URL` set (see `mvp/README.md` "Postgres") before a PR that touches the store.
 - **All SQL lives in `internal/store`**, as constants, reached through the tenant-scoped handle (`DB.InTenant` / `ReadTenant` give a `*TenantTx`; repo methods take no tenant argument). `internal/archtest` bans `database/sql`, drivers and Query/Exec calls elsewhere; `store/sqllint_test.go` requires every statement to bind `@tenant`.
 - Every tenant table has `tenant_id`, plus triggers that block cross-tenant references. Add a schema file under `internal/store/schema` and an isolation test for each new table.
 - Audit ledger (`internal/audit`): append-only, hash-chained. Every API request is audited. Reads fail closed (`503 audit_unavailable`) if the event cannot be written, and mutating requests need their domain event in the same transaction.

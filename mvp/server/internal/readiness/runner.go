@@ -23,11 +23,13 @@ type RunnerOptions struct {
 	RunTimeout     time.Duration // whole run (default 120 s)
 	MaxRunsPerHour int           // per connection (default 6)
 	Scenario       string        // demo scenario (default connectors.DefaultScenario)
-	// ProberFor returns the prober for a revision. The default is the
-	// simulated scenario prober: no real directory is contacted in the MVP.
+	// ProberFor returns the prober for a revision. The default is the real
+	// LDAP prober for non-demo ldap revisions (see Live) and the simulated
+	// scenario prober for everything else; simulated results can never gate
+	// a real connector type.
 	ProberFor func(b *Bundle, now time.Time) (connectors.Prober, error)
-	// SCIM configures the real prober for non-demo scim_app revisions (DR-18).
-	SCIM SCIMLiveOptions
+	// Live configures the real probers (credential opening, network policy).
+	Live LiveOptions
 }
 
 func (o *RunnerOptions) withDefaults() RunnerOptions {
@@ -45,9 +47,9 @@ func (o *RunnerOptions) withDefaults() RunnerOptions {
 		r.Scenario = connectors.DefaultScenario
 	}
 	if r.ProberFor == nil {
-		scenario, scimOpts := r.Scenario, r.SCIM
+		scenario, live := r.Scenario, r.Live
 		r.ProberFor = func(b *Bundle, now time.Time) (connectors.Prober, error) {
-			if p, ok, err := scimOpts.prober(b, now); ok {
+			if p, ok, err := live.liveProber(b, now); ok {
 				return p, err
 			}
 			var fixed []string
@@ -80,6 +82,9 @@ func checkEnv(b *Bundle, p connectors.Prober, now time.Time) checks.Env {
 	var m map[string]any
 	_ = json.Unmarshal(raw, &m)
 	for k, v := range m {
+		if k == "ca_bundle" { // public certificates; their base64 would trip the secret-shape scan
+			continue
+		}
 		switch x := v.(type) {
 		case string:
 			env.ConfigStrings[k] = x
@@ -129,6 +134,9 @@ func (s *Service) Validate(ctx context.Context, st Scope, connID, actor string, 
 		if b, err = s.Load(c, rev, start); err != nil {
 			return err
 		}
+		if err = s.loadCredential(c, b); err != nil {
+			return err
+		}
 		if rev.State == store.StateDraft {
 			return blocked("not_ready_to_validate", b.Gate(store.StateReadyToValidate, start))
 		}
@@ -150,7 +158,7 @@ func (s *Service) Validate(ctx context.Context, st Scope, connID, actor string, 
 		if n >= opts.MaxRunsPerHour {
 			return newErr(http.StatusTooManyRequests, "rate_limited", "at most %d validation runs per connection per hour", opts.MaxRunsPerHour)
 		}
-		run = &store.CheckRun{ID: store.NewID(), RevisionID: rev.ID, Kind: kind, Simulated: !scimLive(b), Status: "running",
+		run = &store.CheckRun{ID: store.NewID(), RevisionID: rev.ID, Kind: kind, Simulated: !liveCapable(b), Status: "running",
 			ActorID: actor, ConfigHash: b.ConfigHash, StartedAt: start}
 		if err := c.InsertCheckRun(run); err != nil {
 			return err

@@ -7,16 +7,20 @@ import { Link, useNavigate } from "react-router-dom";
 import {
   Ban, ClipboardCheck, ExternalLink, Network, Pencil, RefreshCw, RotateCcw, Settings, ShieldAlert, ShieldCheck, ShoppingCart, Timer, UserCheck, UserRound,
 } from "lucide-react";
-import { AccountRow, ConnectorRow, Group, IdentityDetail, IdentityRow, ResourceRow, Violation, ago, api, fmtDay, relTime, useApi } from "../../api";
+import { AccountRow, ConnectorRow, Group, IdentityDetail, OrgDetail, ResourceRow, RolesView, Violation, ago, api, fmtDay, invalidLink, isNumericId, orgPath, relTime, useApi } from "../../api";
 import { useIdentityActions } from "../../app/actions";
 import { usePersona } from "../../app/persona";
 import {
   Avatar, Badge, Chip, CommandBar, EmptyState, IdLink, Loading, PathView, PreviewBadge, RiskPill, Sev, SidePanel, Status, Tabs, TypeBadge, TYPE_LABEL, useToast,
 } from "../../components";
-import { BusinessRole, ORGS, OrgUnit, mockIdentityOps, mockObjects, useMockState, useRoles } from "../../mocks";
+import { AffiliationsSection, IdentifiersSection } from "./affiliations";
+import { LifecycleSection } from "../lifecycle/parts";
+import { mockObjects } from "../../mocks";
 import { useSession } from "../../app/auth";
 import { ContainDialog, ContainmentRetries } from "./containment";
 import { RevokeDrawer } from "./IdentityPage";
+import { OwnershipRows } from "./owners";
+import { CatalogSettings } from "./catalog";
 import { PreviewFormDrawer } from "./shared";
 
 const I = 16;
@@ -35,12 +39,13 @@ const Section = ({ title, children, action }: { title: ReactNode; children: Reac
 );
 
 // ------------------------------------------------------------- identity
-type IdTab = "overview" | "access" | "groups" | "activity";
+type IdTab = "overview" | "person" | "access" | "groups" | "activity";
 
 export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void }) {
-  const { data: d, error, reload } = useApi<IdentityDetail>(`/identities/${id}`);
+  const validId = isNumericId(id);
+  const { data: d, error: loadError, reload } = useApi<IdentityDetail>(validId ? `/identities/${id}` : null);
+  const error = validId ? loadError : invalidLink();
   const acts = useIdentityActions();
-  const mock = useMockState();
   const { actor } = usePersona();
   const toast = useToast();
   const [tab, setTab] = useTab<IdTab>("overview", id);
@@ -50,10 +55,10 @@ export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void
   const { can } = useSession();
 
   if (!d || String(d.id) !== id) {
-    return <SidePanel title={error ? "Couldn't load identity" : "Loading…"} onClose={onClose} fullHref={`/directory/identities/${id}`}><Loading error={error} kind="block" /></SidePanel>;
+    return <SidePanel title={error ? "Couldn't load identity" : "Loading…"} onClose={onClose} fullHref={`/directory/identities/${id}`}><Loading error={error} what="identity" kind="block" onRetry={reload} /></SidePanel>;
   }
   const human = d.type === "human";
-  const status = mock.disabled[d.id] && d.status === "active" ? "disabled" : d.status;
+  const status = d.status;
   const lastLogin = d.accounts.map((a) => a.last_login_at).filter(Boolean).sort().pop() ?? null;
   const topRec = d.recommendations[0];
   const why = d.effective_permissions.find((p) => p.tags.length && p.unused) ?? d.effective_permissions.find((p) => p.privileged && p.unused) ?? d.effective_permissions.find((p) => p.tags.length);
@@ -61,6 +66,7 @@ export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void
 
   const tabs: { id: IdTab; label: string }[] = [
     { id: "overview", label: "Overview" },
+    ...(human ? [{ id: "person" as const, label: "Affiliations" }] : []),
     { id: "access", label: `Access (${d.effective_permissions.length})` },
     { id: "groups", label: `Groups (${d.grants.length})` },
     { id: "activity", label: "Activity" },
@@ -88,26 +94,33 @@ export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void
               ? [{ label: "Contain", icon: <ShieldAlert size={I} />, danger: true, onClick: () => setContaining(true) }]
               : []),
             status === "disabled"
-              ? { label: "Enable", icon: <UserCheck size={I} />, onClick: async () => { await mockIdentityOps.enable(d.id, d.name, actor); toast(`${d.name} re-enabled (preview)`); } }
-              : { label: "Disable", icon: <Ban size={I} />, danger: true, disabled: d.status === "terminated", onClick: () => acts.disable(d) },
+              ? { label: "Enable", icon: <UserCheck size={I} />, disabled: !can("identities.contain"), onClick: () => acts.enable(d) }
+              : { label: "Disable", icon: <Ban size={I} />, danger: true, disabled: d.status !== "active" || !can("identities.contain"), onClick: () => acts.disable(d) },
           ]}
         />
       }
       tabs={<Tabs label="Identity details" tabs={tabs} value={tab} onChange={setTab} />}
     >
+      {tab === "person" && human && (
+        <div className="stack">
+          <AffiliationsSection identityId={d.id} name={d.name} human />
+          <IdentifiersSection identityId={d.id} />
+        </div>
+      )}
       {tab === "overview" && (
         <>
           <dl className="kv">
             <dt>Display name</dt><dd>{d.name}</dd>
             <dt>{human ? "Job title" : "Kind"}</dt><dd>{d.title ?? <span className="faint">-</span>}</dd>
             <dt>Department</dt><dd>{d.department ?? <span className="faint">-</span>}</dd>
-            {human ? <><dt>Manager</dt><dd><IdLink i={d.manager} /></dd></> : <><dt>Owner</dt><dd>{d.owner ? <IdLink i={d.owner} /> : <Badge tone="critical">No owner</Badge>}</dd></>}
-            <dt>Status</dt><dd><Status s={status} />{mock.disabled[d.id] && <> <PreviewBadge what="Disabled in this browser by a Preview action" /></>}</dd>
+            {human ? <><dt>Manager</dt><dd><IdLink i={d.manager} /></dd></> : <OwnershipRows kind="identity" objectKey={d.id} label={d.name} />}
+            <dt>Status</dt><dd><Status s={status} /></dd>
             {d.email && <><dt>Email</dt><dd className="truncate">{d.email}</dd></>}
             {d.hired_at && <><dt>Since</dt><dd>{fmtDay(d.hired_at)}</dd></>}
             {d.terminated_at && <><dt>Left</dt><dd>{fmtDay(d.terminated_at)}</dd></>}
             <dt>Last sign-in</dt><dd>{relTime(lastLogin)}</dd>
           </dl>
+          {human && <LifecycleSection id={d.id} compact />}
           <ContainmentRetries identityId={d.id} canRetry={can("identities.contain")} />
           <Section title="Risk">
             <dl className="kv">
@@ -305,11 +318,10 @@ export function AccountPanel({ a, onClose }: { a: AccountRow; onClose: () => voi
 // ----------------------------------------------------------- entitlement
 export function GroupPanel({ g, onClose }: { g: Group; onClose: () => void }) {
   const nav = useNavigate();
-  const roles = useRoles();
-  const [tab, setTab] = useTab<"overview" | "roles">("overview", g.id);
+  const { data: rv } = useApi<RolesView>("/roles");
+  const [tab, setTab] = useTab<"overview" | "catalog" | "roles">("overview", g.id);
   const [edit, setEdit] = useState(false);
-  const key = `${g.system}:${g.name}`;
-  const inRoles = roles.filter((r) => r.entitlements.some((e) => e.replace(" (JIT)", "") === key));
+  const inRoles = (rv?.roles ?? []).filter((r) => r.status === "active" && r.entitlements.some((e) => e.id === g.id));
   return (
     <SidePanel
       title={g.name}
@@ -328,9 +340,9 @@ export function GroupPanel({ g, onClose }: { g: Group; onClose: () => void }) {
           ]}
         />
       }
-      tabs={<Tabs label="Entitlement details" value={tab} onChange={setTab} tabs={[{ id: "overview", label: "Overview" }, { id: "roles", label: `Roles (${inRoles.length})` }]} />}
+      tabs={<Tabs label="Entitlement details" value={tab} onChange={setTab} tabs={[{ id: "overview", label: "Overview" }, { id: "catalog", label: "Request catalog" }, { id: "roles", label: `Roles (${inRoles.length})` }]} />}
     >
-      {tab === "overview" ? (
+      {tab === "catalog" ? <CatalogSettings groupId={g.id} privileged={g.privileged} /> : tab === "overview" ? (
         <>
           <p className="muted">{g.description ?? "No description from the source system."}</p>
           <dl className="kv">
@@ -338,15 +350,16 @@ export function GroupPanel({ g, onClose }: { g: Group; onClose: () => void }) {
             <dt>System</dt><dd>{g.system}</dd>
             <dt>Kind</dt><dd>{g.kind.replace(/_/g, " ")}</dd>
             <dt>Privileged</dt><dd>{g.privileged ? <Badge tone="warning">Privileged</Badge> : "No"}</dd>
+            <OwnershipRows kind="group" objectKey={g.id} label={g.name} />
             <dt>Access model</dt><dd>{g.requestable ? <Badge tone="info">JIT-eligible</Badge> : "Standing access"}</dd>
-            <dt>Approval</dt><dd>{g.privileged ? "Manager, resource owner and security" : "Manager"}</dd>
+            <dt>Approval</dt><dd>A person with requests.decide (see the Request catalog tab)</dd>
             <dt>Review cadence</dt><dd>{g.privileged ? "Quarterly, plus exception reviews" : "Exception reviews only"}</dd>
           </dl>
         </>
       ) : (
         <Section title={<>Part of these roles <PreviewBadge /></>}>
           {inRoles.length === 0 ? <div className="small muted">Not bundled in any business role. People request it directly.</div> :
-            inRoles.map((r) => <div key={r.id} className="small"><Link to={`/directory/roles?selected=${r.id}`}>{r.name}</Link> <span className="faint">· {r.members} members</span></div>)}
+            inRoles.map((r) => <div key={r.id} className="small"><Link to={`/directory/roles?selected=${r.id}`}>{r.name}</Link> <span className="faint">· {r.member_count} members</span></div>)}
         </Section>
       )}
       {edit && (
@@ -399,6 +412,7 @@ export function AppPanel({ c, onClose }: { c: ConnectorRow; onClose: () => void 
       {tab === "overview" ? (
         <dl className="kv">
           <dt>System</dt><dd className="sys">{c.system}</dd>
+          <OwnershipRows kind="app" objectKey={c.system} label={c.system} />
           <dt>Connector</dt><dd>{c.type}</dd>
           <dt>Accounts</dt><dd className="tnum">{c.accounts}</dd>
           <dt>Groups & roles</dt><dd className="tnum">{c.groups}</dd>
@@ -423,80 +437,19 @@ export function AppPanel({ c, onClose }: { c: ConnectorRow; onClose: () => void 
   );
 }
 
-// ----------------------------------------------------------------- role
-export function RolePanel({ role, onClose }: { role: BusinessRole; onClose: () => void }) {
-  const nav = useNavigate();
-  const acts = useIdentityActions();
-  const { data: groups } = useApi<Group[]>("/groups");
-  const [tab, setTab] = useTab<"overview" | "ents">("overview", role.id);
-  const [edit, setEdit] = useState(false);
-  const tone = role.risk === "high" ? "critical" : role.risk === "medium" ? "warning" : "ok";
-  return (
-    <SidePanel
-      title={role.name}
-      sub={<><PreviewBadge /><Badge tone={tone}>{role.risk[0].toUpperCase() + role.risk.slice(1)} risk</Badge></>}
-      onClose={onClose}
-      fullHref={`/directory/roles/${role.id}`}
-      commands={
-        <CommandBar
-          label={`Actions for ${role.name}`}
-          items={[
-            { label: "Request this role", icon: <ShoppingCart size={I} />, onClick: () => nav(`/access/request?add=${role.id}`) },
-            { label: "Edit", icon: <Pencil size={I} />, onClick: () => setEdit(true) },
-            { label: "Start review", icon: <ClipboardCheck size={I} />, onClick: () => acts.startCampaign() },
-          ]}
-        />
-      }
-      tabs={<Tabs label="Role details" value={tab} onChange={setTab} tabs={[{ id: "overview", label: "Overview" }, { id: "ents", label: `Entitlements (${role.entitlements.length})` }]} />}
-    >
-      {tab === "overview" ? (
-        <>
-          <p className="muted">{role.description}</p>
-          <dl className="kv">
-            <dt>Owner</dt><dd>{role.owner}</dd>
-            <dt>Birthright for</dt><dd>{role.birthright ?? <span className="faint">Nobody (request only)</span>}</dd>
-            <dt>Members</dt><dd className="tnum">{role.members}</dd>
-            <dt>Updated</dt><dd>{role.updated}</dd>
-          </dl>
-        </>
-      ) : (
-        <table>
-          <tbody>
-            {role.entitlements.map((e) => {
-              const k = e.replace(" (JIT)", "");
-              const g = (groups ?? []).find((x) => `${x.system}:${x.name}` === k);
-              return (
-                <tr key={e}>
-                  <td>{g ? <Link className="sys" to={`/directory/entitlements?selected=${g.id}`}>{k}</Link> : <span className="sys">{k}</span>}</td>
-                  <td style={{ textAlign: "right" }}>{e.endsWith(" (JIT)") && <Badge tone="info">JIT only</Badge>} {g?.privileged && <Badge tone="warning">Privileged</Badge>}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      )}
-      {edit && (
-        <PreviewFormDrawer title={`Edit ${role.name}`} kind="role" verb="update" onClose={() => setEdit(false)}
-          initial={{ name: role.name, description: role.description, owner: role.owner }}
-          fields={[{ id: "name", label: "Name", required: true }, { id: "description", label: "Description", textarea: true }, { id: "owner", label: "Owner" }]}
-        />
-      )}
-    </SidePanel>
-  );
-}
-
 // ------------------------------------------------------------------ org
-export function OrgPanel({ org, onClose }: { org: OrgUnit; onClose: () => void }) {
-  const { data: people, error } = useApi<IdentityRow[]>("/identities?type=human");
+export function OrgPanel({ id, onClose }: { id: string; onClose: () => void }) {
+  const { data: org, error, reload } = useApi<OrgDetail>(orgPath(id));
   const nav = useNavigate();
-  const [tab, setTab] = useTab<"overview" | "people">("overview", org.id);
-  const members = (people ?? []).filter((p) => !org.department || p.department === org.department);
-  const active = members.filter((m) => m.status === "active");
-  const parent = ORGS.find((o) => o.id === org.parent);
+  const [tab, setTab] = useTab<"overview" | "people">("overview", id);
+  if (!org || org.id !== id) {
+    return <SidePanel title={error ? "Couldn't load organization" : "Loading…"} onClose={onClose} fullHref={`/directory/orgs/${id}`}><Loading error={error} what="organization" kind="block" onRetry={reload} /></SidePanel>;
+  }
+  const active = org.people.filter((m) => m.status === "active");
   return (
     <SidePanel
       title={org.name}
-      sub={<><PreviewBadge /><span>{org.costCenter}</span></>}
+      sub={<span>{org.kind === "tenant" ? "Company" : "Department"}</span>}
       onClose={onClose}
       fullHref={`/directory/orgs/${org.id}`}
       commands={
@@ -505,24 +458,23 @@ export function OrgPanel({ org, onClose }: { org: OrgUnit; onClose: () => void }
           items={[{ label: "Request access for everyone", icon: <ShoppingCart size={I} />, disabled: !active.length, onClick: () => nav(`/access/request?for=${active.map((m) => m.id).join(",")}`) }]}
         />
       }
-      tabs={<Tabs label="Organization details" value={tab} onChange={setTab} tabs={[{ id: "overview", label: "Overview" }, { id: "people", label: `People (${people ? members.length : "…"})` }]} />}
+      tabs={<Tabs label="Organization details" value={tab} onChange={setTab} tabs={[{ id: "overview", label: "Overview" }, { id: "people", label: `People (${org.people.length})` }]} />}
     >
       {tab === "overview" ? (
         <dl className="kv">
-          <dt>Owner</dt><dd>{org.owner}</dd>
-          <dt>Cost center</dt><dd className="sys">{org.costCenter}</dd>
-          <dt>Part of</dt><dd>{parent ? parent.name : "Top level"}</dd>
-          <dt>Workday department</dt><dd>{org.department ?? "Everyone"}</dd>
-          <dt>Active people</dt><dd className="tnum">{people ? active.length : "…"}</dd>
+          <dt>Owners</dt><dd>{org.owners.length ? org.owners.map((o) => o.name).join(", ") : <span className="faint">None found</span>}</dd>
+          <dt>Part of</dt><dd>{org.parent ? org.parent.name : "Top level"}</dd>
+          {org.child_orgs.length > 0 && <><dt>Child organizations</dt><dd>{org.child_orgs.map((c) => c.name).join(", ")}</dd></>}
+          <dt>Active people</dt><dd className="tnum">{org.active}</dd>
+          <dt>All people</dt><dd className="tnum">{org.members}</dd>
         </dl>
-      ) : !people ? <Loading error={error} /> : (
+      ) : (
         <table>
           <tbody>
-            {members.map((m) => (
+            {org.people.map((m) => (
               <tr key={m.id} className="click" tabIndex={0} onClick={() => nav(`/directory/people?selected=${m.id}`)} onKeyDown={(e) => e.key === "Enter" && nav(`/directory/people?selected=${m.id}`)}>
                 <td>{m.name}<div className="xs faint">{m.title}</div></td>
                 <td><Status s={m.status} /></td>
-                <td style={{ textAlign: "right" }}><RiskPill score={m.risk} /></td>
               </tr>
             ))}
           </tbody>

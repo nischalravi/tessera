@@ -210,7 +210,10 @@ func init() {
 			return probeErr(err)
 		}
 		if a.RootIdentity || strings.EqualFold(a.Identity, "cn=Directory Manager") {
-			return fail("The bind DN is the root DN, which bypasses all access control.", nil)
+			return fail("The bind DN is the root DN or an administrator, which bypasses access control.", nil)
+		}
+		if a.IdentityUnverified {
+			return unsupported("the server has no Who Am I operation (RFC 4532)")
 		}
 		return pass("Bound as a dedicated service entry.", map[string]any{"identity": a.Identity})
 	})
@@ -535,6 +538,9 @@ func init() {
 		return pass("The service account is in no privileged group.", obs)
 	}))
 	noWrite := func(_ Env, r connectors.Rights) Result {
+		if r.Unsupported {
+			return unsupported("the server has no Get Effective Rights control")
+		}
 		obs := map[string]any{"writable": len(r.Writable)}
 		if len(r.Writable) > 0 {
 			return fail(fmt.Sprintf("The account can write %d sampled objects or attributes.", len(r.Writable)), obs)

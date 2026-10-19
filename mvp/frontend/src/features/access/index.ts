@@ -1,3 +1,4 @@
+export { Guests } from "./Guests";
 export { JIT } from "./JIT";
 export { MyAccess } from "./MyAccess";
 export { RequestAccess } from "./RequestAccess";
