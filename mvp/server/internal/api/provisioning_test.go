@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -538,5 +539,94 @@ func TestProvisioning_JITExpiryFailureIsNotRetriedBySweeper(t *testing.T) {
 	ops := h.ops("")
 	if len(ops) != 1 || at(ops, 0, "status") != "failed" || at(ops, 0, "attempts") != float64(5) {
 		t.Errorf("the sweeper retried or duplicated a failed operation: %v", ops)
+	}
+}
+
+// TestProvisioning_StoredTokenNeverFollowsAMovedTarget (#315): an edit that
+// changes the target's origin or kind without a new token is refused, so the
+// sealed token is never sent to the new destination; a path-only edit on the
+// same origin keeps it; a move with a new token rotates it; the ledger says
+// which.
+func TestProvisioning_StoredTokenNeverFollowsAMovedTarget(t *testing.T) {
+	const oldToken = "old-secret-token"
+	h := newProvHarness(t, fake.Options{Token: oldToken})
+	h.seedTarget()
+	var mu sync.Mutex
+	var seen []string
+	mover := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Header.Get("Authorization"))
+		mu.Unlock()
+		http.Error(w, "nope", http.StatusTeapot)
+	}))
+	t.Cleanup(mover.Close)
+	moved := mover.URL + "/scim/v2"
+
+	v := h.target(`{"kind":"scim","base_url":"`+h.url+`","token":"`+oldToken+`","write_back":true}`, 200)
+	ver := v["credential_version"]
+	for name, body := range map[string]string{
+		"origin": `{"kind":"scim","base_url":"` + moved + `","write_back":true}`,
+		"scheme": `{"kind":"scim","base_url":"` + strings.Replace(h.url, "http://", "https://", 1) + `","write_back":true}`,
+		"kind":   `{"kind":"okta","base_url":"` + h.url + `","write_back":true}`,
+	} {
+		rec := h.c.do("PUT", "/api/provisioning/targets/"+h.conn, body)
+		if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "credential_required") {
+			t.Errorf("%s change without a token: %d %s", name, rec.Code, rec.Body)
+		}
+	}
+	got := h.c.json("GET", "/api/provisioning/targets", "", 200)
+	if b, _ := json.Marshal(got); !strings.Contains(string(b), h.url) || strings.Contains(string(b), mover.URL) {
+		t.Errorf("a refused edit moved the target: %s", b)
+	}
+	// A path-only change on the same origin keeps the token: same host, same
+	// trust boundary, and the token was issued for that host.
+	samePath := strings.Replace(h.url, "/scim/v2", "/tenant-a/scim/v2", 1)
+	v = h.target(`{"kind":"scim","base_url":"`+samePath+`","write_back":true}`, 200)
+	if v["has_credential"] != true || v["credential_version"] != ver {
+		t.Errorf("path-only edit: %v", v)
+	}
+	h.target(`{"kind":"scim","base_url":"`+h.url+`","write_back":true}`, 200)
+
+	// the worker still writes to the original target with its token, and the
+	// other host never sees a request
+	h.c.json("POST", "/api/least-privilege/revoke", fmt.Sprintf(`{"edge_id":%d,"dry_run":false}`, h.edgeID("alice", "eng")), 200)
+	if st := h.run(); st.Verified != 1 {
+		t.Errorf("run = %+v", st)
+	}
+	mu.Lock()
+	if len(seen) != 0 {
+		t.Errorf("the moved-to host got requests: %q", seen)
+	}
+	mu.Unlock()
+
+	// a move with a new token rotates the credential and records both origins
+	v = h.target(`{"kind":"scim","base_url":"`+moved+`","token":"new-token","write_back":true}`, 200)
+	if v["has_credential"] != true || v["credential_version"] == ver {
+		t.Errorf("rebound target: %v", v)
+	}
+	d := h.auditDetail()
+	if !strings.Contains(d, `"credential":"rotated"`) || !strings.Contains(d, `"previous_origin":"`+targetOrigin(h.url)+`"`) ||
+		!strings.Contains(d, `"credential":"kept"`) || strings.Contains(d, "credential_changed") ||
+		strings.Contains(d, oldToken) || strings.Contains(d, "new-token") {
+		t.Errorf("audit = %s", d)
+	}
+	// a change to the dev fake drops the token
+	v = h.target(`{"kind":"fake","write_back":true}`, 200)
+	if v["has_credential"] != false || !strings.Contains(h.auditDetail(), `"credential":"cleared"`) {
+		t.Errorf("fake target: %v", v)
+	}
+}
+
+func TestTargetOrigin(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://X.example/scim/v2":     "https://x.example:443",
+		"https://x.example:443/a":       "https://x.example:443",
+		"http://x.example/a":            "http://x.example:80",
+		"http://127.0.0.1:8401/scim/v2": "http://127.0.0.1:8401",
+		"https://[::1]:9/":              "https://[::1]:9",
+	} {
+		if got := targetOrigin(in); got != want {
+			t.Errorf("targetOrigin(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
