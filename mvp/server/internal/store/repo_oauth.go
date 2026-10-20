@@ -9,7 +9,7 @@ import (
 )
 
 // The OAuth authorization server's repositories (design §7.4,
-// schema/0207_oauth.sql). Every statement is tenant-scoped (tq).
+// schema/0358_oauth.sql). Every statement is tenant-scoped (tq).
 
 // ---------------------------------------------------------------- api_clients
 

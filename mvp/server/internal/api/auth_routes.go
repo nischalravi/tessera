@@ -29,7 +29,8 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, rt *route) (*
 	}
 	p, fail, err := s.authn.AuthenticateRequest(r)
 	if err != nil {
-		// The session could not be checked: fail closed.
+		// The session or token could not be checked: fail closed.
+		s.log.Error("authentication failed", "method", r.Method, "path", r.URL.Path, "err", err)
 		audit.SetAnonymous(r.Context(), "authentication_error")
 		if timedOut(r, err) {
 			writeTimedOut(w)

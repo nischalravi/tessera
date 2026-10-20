@@ -80,6 +80,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
+	"github.com/nischalravi/tessera/mvp/server/internal/oauth"
 	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
@@ -91,6 +92,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/seed"
 	"github.com/nischalravi/tessera/mvp/server/internal/siem"
+	"github.com/nischalravi/tessera/mvp/server/internal/sod"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 	"github.com/nischalravi/tessera/mvp/server/policies"
@@ -130,6 +132,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if cmd == "notify" {
 		return notifyCmd(ctx, args, stdout, stderr)
 	}
+	if cmd == "migration" {
+		return migrationCmd(args, stdout, stderr)
+	}
 	if cmd == "admin" {
 		return adminCmd(ctx, args, stdout, stderr)
 	}
@@ -155,7 +160,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return st.Close()
 	}
 	if cmd != "seed" && cmd != "serve" {
-		return fmt.Errorf("unknown command %q (want serve, seed, check-db, readiness, audit, backup, admin or catalog)", cmd)
+		return fmt.Errorf("unknown command %q (want serve, seed, check-db, readiness, audit, backup, migration, admin or catalog)", cmd)
 	}
 	if os.Getenv("TESSERA_ENV") == "" {
 		// fail closed: the environment decides the guard rails (§18.4) and
@@ -333,7 +338,6 @@ const (
 	writeTimeout      = api.DefaultHandlerTimeout + 15*time.Second
 	idleTimeout       = 60 * time.Second
 	shutdownTimeout   = 10 * time.Second
-	sweepInterval     = 30 * time.Second
 	reviewInterval    = 5 * time.Minute  // scheduled access reviews (issue #166)
 	provisionInterval = 5 * time.Second  // provisioning worker: sends queued operations and re-reads targets
 	keysInterval      = 24 * time.Hour   // keys.EnsureAll: rotation runs daily (design §10.6)
@@ -405,6 +409,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	if err != nil {
 		return err
 	}
+	rsvc.Runner.SCIM.Client = outbound
 	obs.SetPoolStats(st.PoolStats)
 	checker := health.New(st, sealer, obs.DefaultLoops, time.Duration(cfg.ReadyMaxLoopLagSeconds)*time.Second, logger)
 	fakeURL, stopFake, err := startFakeTarget(cfg, logger)
@@ -425,12 +430,15 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	siemSvc := &siem.Service{DB: st, Sealer: sealer, HTTP: outbound, Clock: clock, Log: logger,
 		Dev: cfg.Env == config.Dev && cfg.OutboundAllowLoopback}
 	srv := api.New(api.Config{Health: checker, Store: st, Clock: clock, Policies: loader, Logger: logger,
-		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound,
+		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound, APIAudience: cfg.APIAudience,
+		AccessTokenTTL: time.Duration(cfg.AccessTokenTTLSeconds) * time.Second,
+		DeviceCodeTTL:  time.Duration(cfg.DeviceCodeTTLSeconds) * time.Second, DPoPRSNonce: cfg.DPoPRSNonce,
 		Outbound: outbound, FakeTargetURL: fakeURL,
 		Containment:    &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock},
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
 		HSTS: cfg.IsProd(), Env: cfg.Env, Identifiers: identifiers.NewKeyer(sealer), EmailMode: cfg.Mail.Mode, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, Readiness: rsvc, AuditAnchor: anchorURL,
-		Siem: siemSvc, Alerts: alertSvc})
+		Siem: siemSvc, Alerts: alertSvc,
+		SoD: sod.Settings{MaxDays: cfg.SoDMaxMitigationDays, WarnDays: cfg.SoDWarnDays}})
 	sender, err := notify.NewSender(cfg.Mail, cfg.Env, cfg.OutboundAllowLoopback, sealer, config.DevMailPath(o.db), logger)
 	if err != nil {
 		return err
@@ -465,7 +473,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	sweepDone := make(chan struct{})
 	go func() {
 		defer close(sweepDone)
-		srv.RunSweeper(ctx, sweepInterval)
+		srv.RunQueue(ctx)
 	}()
 	reviewsDone := make(chan struct{})
 	go func() {

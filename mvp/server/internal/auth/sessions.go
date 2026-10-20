@@ -55,7 +55,28 @@ const (
 	RevokedIdPDisabled  = "idp_disabled"
 	RevokedRTReuse      = "rt_reuse"
 	RevokedReplaced     = "replaced" // the browser signed in again
+	// RevokedIdentityDisabled: the governed identity the user is linked to
+	// was disabled (containment.Disable, #316).
+	RevokedIdentityDisabled = "identity_disabled"
 )
+
+// IdentityDisabled reports whether u is linked to a governed identity that
+// Tessera has disabled. Such a user may not sign in or use a session until
+// the identity is enabled again (#316); every sign-in path and the session
+// middleware check it.
+func IdentityDisabled(tx *store.TenantTx, u *store.PlatformUser) (bool, error) {
+	if u == nil || u.IdentityID == nil {
+		return false, nil
+	}
+	ident, err := tx.Identity(*u.IdentityID)
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return ident.Status == "disabled", nil
+}
 
 // secretBytes is the size of session secrets and CSRF secrets.
 const secretBytes = 32
@@ -148,6 +169,17 @@ func CreateSession(tx *store.TenantTx, in SessionInput) (Issued, error) {
 	}
 	if in.User.Status != "active" {
 		return Issued{}, fmt.Errorf("auth: user %s is %s", in.User.ID, in.User.Status)
+	}
+	// Re-read the user in tx: a sign-in may have linked it to an identity
+	// since the caller loaded it.
+	if cur, err := tx.PlatformUser(in.User.ID); err == nil {
+		if off, err := IdentityDisabled(tx, cur); err != nil {
+			return Issued{}, err
+		} else if off {
+			return Issued{}, fmt.Errorf("auth: user %s is linked to a disabled identity", in.User.ID)
+		}
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return Issued{}, err
 	}
 	if in.Authn.UserID != in.User.ID {
 		return Issued{}, fmt.Errorf("auth: the authentication context belongs to another user")

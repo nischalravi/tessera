@@ -221,7 +221,7 @@ func (s *Service) VerifyAccessToken(r *http.Request) (*auth.VerifiedToken, *auth
 	var c rawClaims
 	var reason string
 	err = s.db.ReadTenant(ctx, tenant.ID, func(tx *store.TenantTx) error {
-		set, err := keys.JWKSFor(tx, store.KeyPurposeAccessToken, now)
+		set, err := keys.JWKSFor(tx, store.KeyPurposeAccessToken, now, s.cfg.Log)
 		if err != nil {
 			return err
 		}

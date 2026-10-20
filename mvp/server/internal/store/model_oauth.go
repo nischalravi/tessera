@@ -8,7 +8,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 )
 
-// The rows of schema/0207_oauth.sql (design §7.4). Device codes, user codes
+// The rows of schema/0358_oauth.sql (design §7.4). Device codes, user codes
 // and refresh tokens appear only as SHA-256 hex digests.
 
 // API client kinds and states.
