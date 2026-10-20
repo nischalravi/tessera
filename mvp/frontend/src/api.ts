@@ -1364,6 +1364,7 @@ export interface SponsorshipEvent {
   actor: string;
   at: string;
 }
+export type InvitationState = "ready" | "sent" | "claiming" | "expired" | "claimed" | "revoked";
 export interface Sponsorship {
   id: string;
   status: SponsorshipStatus;
@@ -1389,8 +1390,15 @@ export interface Sponsorship {
   transfer_deadline: string | null;
   ended_at: string | null;
   end_reason: string | null;
-  /** "ready" until the claim flow (GU-6) sends the invitation. */
-  invitation: "ready" | "sent" | "claimed" | "revoked";
+  /**
+   * The guest's invitation: "ready" (not sent: the claim is not set up), "sent" (the link is out),
+   * "claiming" (they opened it and are part way), "expired" (it ran out unused), "claimed" or "revoked".
+   */
+  invitation: InvitationState;
+  /** When the newest link stops working (sent invitations only). */
+  invitation_expires_at: string | null;
+  can_resend_invitation: boolean;
+  can_revoke_invitation: boolean;
   can_renew: boolean;
   can_end: boolean;
   can_transfer: boolean;
@@ -1475,6 +1483,10 @@ export const guests = {
   end: (id: string, reason: string) => api<Sponsorship>(spPath(id, "/end"), { reason }),
   transfer: (id: string, toIdentityId: number, reason: string) => api<Sponsorship>(spPath(id, "/transfer"), { to_identity_id: toIdentityId, reason }),
   acceptTransfer: (id: string) => api<Sponsorship>(spPath(id, "/accept-transfer"), {}),
+  /** A new claim link by email; the earlier ones stop working. */
+  resendInvitation: (guestId: number) => api<Sponsorship>(`/guests/${guestId}/resend-invitation`, {}),
+  /** Cancel the invitation: its links and open claim sessions stop working. */
+  revokeInvitation: (guestId: number) => api<Sponsorship>(`/guests/${guestId}/revoke-invitation`, {}),
 };
 /** Kill switch (issue #106): revoke an identity's sessions, refresh tokens and OAuth grants at the providers. */
 export interface ContainmentStep {
@@ -1848,6 +1860,124 @@ export const sodPaths = {
   violations: (f: SodViolationFilter = {}) => `/sod/violations${sodViolationQuery(f)}`,
 };
 
+// ---------------------------------------------------------------- guest claim (issue #69)
+
+/**
+ * The public claim API (/public/t/{slug}/claim): a guest with no Tessera session finishing an
+ * invitation. It has none of the admin session's assumptions: no CSRF token, no session cache and
+ * no sign-out handling. Instead every request carries the claim session's cookie (HttpOnly, set by
+ * the API) and a proof signed with the key this page generated (see public/claim/proof.ts), so a
+ * stolen cookie alone is useless. The claim link's token travels in the URL fragment and in the
+ * POST body of `start`, never in a path or query.
+ */
+export type ClaimStep = "verify_contact" | "verify_identity" | "existing_account" | "credential" | "complete";
+export interface ClaimStatus {
+  step: ClaimStep;
+  steps: ClaimStep[];
+  first_name: string;
+  tenant: string;
+  sponsor: string;
+  population: GuestPopulationKey;
+  ends_at: string;
+  /** Why the claim waits: "" (it does not), the organization's own set-up, or identity verification. */
+  pending: "" | "organization" | "identity_verification";
+  complete: boolean;
+}
+export interface ClaimStart {
+  /** "check_link" for every link that does not work, whatever the reason; otherwise the first step. */
+  next: "check_link" | ClaimStep;
+  nonce?: string;
+  status?: ClaimStatus;
+}
+export interface ClaimSigner {
+  /** The X-Claim-Proof header value for a request: a signature by the key bound at start over the request and its body ("" for none). */
+  sign(method: string, path: string, nonce: string, body: string): Promise<string>;
+}
+export class ClaimError extends ApiError {
+  constructor(message: string, status: number, code: string) {
+    super(message, status, { error: code, message });
+  }
+}
+
+export const claimPath = (slug: string, rest: string) => `/public/t/${encodeURIComponent(slug)}/claim/${rest}`;
+
+async function claimFetch<T>(slug: string, method: "GET" | "POST", rest: string, body: unknown, signer: ClaimSigner, nonce: string): Promise<T> {
+  const path = claimPath(slug, rest);
+  // serialize once: the proof signs exactly the bytes that are sent
+  const payload = body !== undefined ? JSON.stringify(body) : undefined;
+  const headers: Record<string, string> = { "x-claim-proof": await signer.sign(method, path, nonce, payload ?? "") };
+  if (payload !== undefined) headers["content-type"] = "application/json";
+  const res = await fetch(path, {
+    method,
+    headers,
+    credentials: "same-origin",
+    cache: "no-store",
+    referrerPolicy: "no-referrer",
+    body: payload,
+  });
+  let j: any = null;
+  try {
+    j = await res.json();
+  } catch {
+    /* no body */
+  }
+  if (!res.ok) throw new ClaimError(claimMessage(res.status, j), res.status, j?.error ?? "error");
+  return j as T;
+}
+
+function claimMessage(status: number, j: any): string {
+  switch (j?.error) {
+    case "session_required":
+      return "Your sign-up session ended. Open the link in your invitation email again, or ask for a new one.";
+    case "rate_limited":
+      return "Too many tries. Wait a few minutes and try again.";
+    case "code_invalid":
+      return j.message ?? "That code did not work.";
+    case "authority_unavailable":
+      return j.message ?? "We could not reach the sign-in service. Try again in a moment.";
+    case "wrong_step":
+      return "That step is not open yet.";
+  }
+  return j?.message ?? `Something went wrong (${status}).`;
+}
+
+/** The claim client. `nonce` is the session's, from `start`; the signer holds the key. */
+export const claimApi = {
+  /** Exchange the link's token for a session (sets the cookie). `publicKey` is the page's public JWK. */
+  start: (slug: string, token: string, publicKey: JsonWebKey, signer: ClaimSigner) =>
+    claimFetch<ClaimStart>(slug, "POST", "start", { token, key: publicKey }, signer, ""),
+  status: (slug: string, signer: ClaimSigner, nonce: string) => claimFetch<ClaimStatus>(slug, "GET", "status", undefined, signer, nonce),
+  sendCode: (slug: string, signer: ClaimSigner, nonce: string) =>
+    claimFetch<{ status: string; message: string }>(slug, "POST", "verify/send", undefined, signer, nonce),
+  checkCode: (slug: string, signer: ClaimSigner, nonce: string, code: string) =>
+    claimFetch<{ ok: boolean; step: ClaimStep }>(slug, "POST", "verify/check", { code }, signer, nonce),
+  existingAccount: (slug: string, signer: ClaimSigner, nonce: string, answer: "yes" | "no") =>
+    claimFetch<{ ok: boolean; step: ClaimStep; message: string }>(slug, "POST", "existing-account", { answer }, signer, nonce),
+  /** Set up the sign-in: a redirect to the credential authority, or "pending" when the organization has not set one up. */
+  credential: (slug: string, signer: ClaimSigner, nonce: string) =>
+    claimFetch<{ status: "redirect" | "pending"; redirect?: string; pending?: string; message?: string }>(slug, "POST", "credential", undefined, signer, nonce),
+};
+
+/** "Send me a new link": the answer is the same whether or not an invitation exists. No session, so no proof. */
+export async function claimResend(slug: string, email: string): Promise<string> {
+  const res = await fetch(claimPath(slug, "resend"), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    credentials: "same-origin",
+    cache: "no-store",
+    referrerPolicy: "no-referrer",
+    body: JSON.stringify({ email }),
+  });
+  if (res.status === 429) throw new ClaimError("Too many tries. Wait a while and try again.", 429, "rate_limited");
+  let j: any = null;
+  try {
+    j = await res.json();
+  } catch {
+    /* no body */
+  }
+  return j?.message ?? "If an invitation exists for this address, we have sent a new link.";
+}
+
 export const simulate = (body: { remove_edge_ids?: number[]; add_edges?: { src: string; dst: string; duration_hours?: number }[]; disable_account_ids?: number[] }) =>
   api<SimResult>("/simulate", { remove_edge_ids: [], add_edges: [], disable_account_ids: [], ...body });
 
@@ -2032,9 +2162,24 @@ export interface AttentionEntry {
   fix: { kind: "item" | "finding"; item_id?: string; finding_id?: string; href: string };
 }
 
+export interface DriftEvent { kind: string; severity: "high" | "medium" | "low"; subject: string; sentence: string; was?: number; now?: number }
+export interface TemplateUpgrade { pin: string; available: string; major: boolean; new_required: string[]; new_other: number; first_seen_at?: string; grace_ends_at?: string; overdue: boolean }
+export interface DriftView {
+  connection_id: string; connection_name: string; revision_id: string; state: RevisionState;
+  baseline: { captured_at: string; score: number; config_hash: string; findings: number; accounts: number; groups: number };
+  score: number; accounts: number; groups: number; findings: number; events: DriftEvent[]; template_upgrade: TemplateUpgrade | null;
+  fail_streak: number; degraded_reason?: string; degraded_at?: string; last_scheduled_run_at?: string; score_series: { at: string; score: number }[];
+}
+/** An Inbox task from deployment readiness (source "connection"): a degraded connection. */
+export interface ReadinessTask {
+  id: string; kind: "connection"; connection_id: string; connection_name: string; owner: string | null; severity: string; title: string;
+  reason: string; since: string; href: string;
+}
+
 export interface ConnectionHealthRow {
   id: string; name: string; connector_type: string; state: RevisionState; health: string; simulated: boolean; score: number; band: Band;
-  counted: boolean; accounts: number; blocking: number; last_validated: string | null; last_dry_run: string | null; drift: unknown;
+  counted: boolean; accounts: number; blocking: number; last_validated: string | null; last_dry_run: string | null;
+  drift: { events: number; high: number; template_update: boolean } | null;
 }
 
 export interface SkippedRow { connection_id: string; connection_name: string; item_id: string; item_title: string; level: string; actor: string; reason: string; skipped_at: string; review_by: string; expired: boolean }
@@ -2043,7 +2188,7 @@ export interface DeploymentHealth {
   generated_at: string;
   tenant: { score: number | null; band: Band | ""; capped: boolean; cap_reason?: string; hr_source: string; connections_counted: number; formula: string };
   kpis: { accounts_correlated_pct?: number; orphans: number; dormant: number; privileged_accounts: number; open_critical_high: number; connections_in_setup: number; degraded: number };
-  connections: ConnectionHealthRow[]; needs_attention: AttentionEntry[]; skipped: SkippedRow[]; drift: unknown[];
+  connections: ConnectionHealthRow[]; needs_attention: AttentionEntry[]; skipped: SkippedRow[]; drift: DriftView[]; tasks: ReadinessTask[];
   schedule: Record<string, string>; scenario: string;
 }
 
@@ -2403,6 +2548,33 @@ export const provisioning = {
   cancel: (id: string) => api<ProvOpDetail>(`/provisioning/ops/${encodeURIComponent(id)}/cancel`, {}),
   /** Takes the due operations now instead of at the worker's next tick (every 5 seconds). */
   run: () => api<{ processed: number; verified: number; mismatch: number; failed: number; retrying: number }>("/provisioning/run", {}),
+};
+
+// ----------------------------------------------------- access drift (#301)
+
+export type DriftClass = "missing" | "rogue" | "orphan" | "stale";
+export type DriftStatus = "open" | "remediating" | "resolved" | "accepted";
+export type DriftAction = "auto_provision" | "auto_revoke" | "owner_task" | "report_only";
+
+export interface DriftItem {
+  id: string; class: DriftClass; status: DriftStatus; system: string; entitlement: string; entitlement_name: string;
+  account_ref: string; account: string; identity: { id: number | null; name: string } | null; owner: { id: number | null; name: string } | null;
+  intended_id: string | null; observed_id: number | null; action: DriftAction | "none"; remediation_ref: string | null;
+  remediation_note: string | null; remediation_at: string | null; detected_at: string; updated_at: string; resolved_at: string | null;
+  accepted_by: string | null; accepted_reason: string | null; can_remediate: boolean; can_accept: boolean;
+}
+
+export interface DriftList { items: DriftItem[]; counts: { by_class: Partial<Record<DriftClass, number>>; by_status: Partial<Record<DriftStatus, number>> } }
+
+export interface RemediationPolicy { id: string; system: string; entitlement_ref: string; drift_class: DriftClass; action: DriftAction; created_by: string; updated_at: string }
+export interface RemediationPolicyInput { system: string; entitlement_ref: string; drift_class: DriftClass; action: DriftAction }
+
+export const drift = {
+  run: () => api<{ opened: number; reopened: number; updated: number; resolved: number; actions: number }>("/access-drift/run", {}),
+  accept: (id: string, reason: string) => api<DriftItem>(`/access-drift/${encodeURIComponent(id)}/accept`, { reason }),
+  remediate: (id: string, action: DriftAction) => api<DriftItem>(`/access-drift/${encodeURIComponent(id)}/remediate`, { action }),
+  putPolicy: (body: RemediationPolicyInput) => api<RemediationPolicy>("/remediation-policies", body, "PUT"),
+  deletePolicy: (id: string) => api<{ removed: boolean }>(`/remediation-policies/${encodeURIComponent(id)}`, undefined, "DELETE"),
 };
 
 // ----------------------------------------------------- job runs (#172)

@@ -607,7 +607,7 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request, p *params)
 		if txn != nil && txn.Purpose == "step_up" && reason != "connection_mismatch" && reason != "state_mismatch" {
 			return s.stepUpFailure(w, r, tid, txn, "auth.step_up.failure", reason, extra)
 		}
-		return s.loginFailure(w, r, tid, reason, extra)
+		return s.callbackFailure(w, r, txn, tid, reason, extra)
 	}
 	if conn.Protocol == "oauth2" {
 		return s.finishOAuth2Callback(w, r, tenant, conn, txn)
@@ -632,7 +632,7 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request, p *params)
 		if txn.Purpose == "step_up" {
 			return s.stepUpFailure(w, r, tid, txn, "auth.step_up.failure", oidcrp.ReasonOf(err), nil)
 		}
-		return s.loginFailure(w, r, tid, oidcrp.ReasonOf(err), ojson.Object{{Key: "login_transaction_id", Value: txnID.String()}})
+		return s.callbackFailure(w, r, txn, tid, oidcrp.ReasonOf(err), ojson.Object{{Key: "login_transaction_id", Value: txnID.String()}})
 	}
 	mapping, err := authnorm.ParseMapping(conn.AuthnMapping)
 	if err != nil {
@@ -648,7 +648,10 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request, p *params)
 		if txn.Purpose == "step_up" {
 			return s.stepUpFailure(w, r, tid, txn, "auth.step_up.failure", "normalization_failed", nil)
 		}
-		return s.loginFailure(w, r, tid, "normalization_failed", ojson.Object{{Key: "error", Value: err.Error()}})
+		return s.callbackFailure(w, r, txn, tid, "normalization_failed", ojson.Object{{Key: "error", Value: err.Error()}})
+	}
+	if txn.Purpose == "claim" {
+		return s.finishClaim(w, r, tenant, conn, txn, tok, res)
 	}
 	if txn.Purpose == "step_up" {
 		return s.finishStepUp(w, r, tenant, conn, txn, res)

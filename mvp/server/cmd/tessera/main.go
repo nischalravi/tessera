@@ -49,6 +49,8 @@
 //	                      tessera-devidp -print-saml-cert): seeding also creates a
 //	                      dev_mock SAML connection pinning it (run.sh sets it)
 //	TESSERA_READINESS_SCENARIO  simulated validation scenario for demo connectors: gaps (default) or happy
+//	TESSERA_READINESS_LIVE_CHECK_DAYS  how often live checks re-run on active connections, 1 to 7 days (default 1)
+//	TESSERA_READINESS_SCHEDULER "off" stops the scheduled re-runs, drift and Degraded detection
 //	TESSERA_SAFEDIAL_ALLOW      dev only: host:port or CIDR:port private LDAP targets live checks may dial (see mvp/README.md "Live LDAP checks")
 //	TESSERA_AGENT_ADDR, TESSERA_AGENT_TLS_CERT, TESSERA_AGENT_TLS_KEY  the mutual-TLS listener Directory
 //	                      Agents connect to, and its certificate and key (see mvp/README.md "Directory Agent")
@@ -83,6 +85,9 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/all"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/pit"
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/credential"
 	"github.com/nischalravi/tessera/mvp/server/internal/health"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
@@ -426,6 +431,9 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	// Directory Agents (DR-11): private directories are probed through them.
 	agents := &agent.Service{DB: st, Hub: agent.NewHub(nil), Clock: clock}
 	rsvc.Runner.Live.Agents = agents
+	if err := configureReadinessSchedule(rsvc); err != nil {
+		return err
+	}
 	// Outbound calls to IdPs (discovery, JWKS, token) and the kill switch's
 	// provider calls (containment) go through safehttp. A test server gets the
 	// production client (no loopback exception; ForConfig decides).
@@ -437,11 +445,25 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	all.Register(outbound, connsync.RuntimeFromConfig(cfg)) // okta and entra connectors use the shared client
 	obs.SetPoolStats(st.PoolStats)
 	checker := health.New(st, sealer, obs.DefaultLoops, time.Duration(cfg.ReadyMaxLoopLagSeconds)*time.Second, logger)
+	groupsEngine := &engine.Engine{Budget: cfg.GroupsSyncBudget, Log: logger}
 	fakeURL, stopFake, err := startFakeTarget(cfg, logger)
 	if err != nil {
 		return err
 	}
 	defer stopFake()
+	// One shared outbound client: sign-in, containment and provisioning all
+	// send through it.
+	// One-time secrets (claim links, confirmation codes) go from the API to the
+	// dispatcher through memory only.
+	secrets := notify.NewSecrets()
+	// The guest claim's credential authority: the dev IdP, in development only.
+	// Without one (production today) a claim stops at the credential step.
+	var authority credential.Authority
+	if cfg.Env == config.Dev && cfg.DevIdPURL != "" {
+		if authority, err = credential.NewDevIdP(cfg.Env, outbound); err != nil {
+			return err
+		}
+	}
 	// The s3:// anchor sink's AWS SDK client uses the same safehttp client.
 	anchorURL := cfg.AnchorURL(o.db)
 	alertSvc, err := newAlertService(cfg, st, sealer, outbound, clock, logger)
@@ -455,7 +477,8 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	siemSvc := &siem.Service{DB: st, Sealer: sealer, HTTP: outbound, Clock: clock, Log: logger,
 		Dev: cfg.Env == config.Dev && cfg.OutboundAllowLoopback}
 	srv := api.New(api.Config{Health: checker, Store: st, Clock: clock, Policies: loader, Logger: logger,
-		PublicURL: cfg.PublicURL, RPID: cfg.RPID, Sealer: sealer, OutboundHTTP: outbound, APIAudience: cfg.APIAudience,
+		Secrets: secrets, Credential: authority,
+		PublicURL: cfg.PublicURL, RPID: cfg.RPID, Sealer: sealer, OutboundHTTP: outbound, GroupsEngine: groupsEngine, APIAudience: cfg.APIAudience,
 		AccessTokenTTL: time.Duration(cfg.AccessTokenTTLSeconds) * time.Second,
 		DeviceCodeTTL:  time.Duration(cfg.DeviceCodeTTLSeconds) * time.Second, DPoPRSNonce: cfg.DPoPRSNonce,
 		Outbound: outbound, FakeTargetURL: fakeURL,
@@ -469,7 +492,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		return err
 	}
 	dispatcher := &notify.Dispatcher{DB: st, Sender: sender, Clock: clock, Log: logger, MaxAttempts: cfg.NotifyMaxAttempts,
-		DigestHour: cfg.NotifyDigestHour, BaseURL: cfg.PublicURL}
+		DigestHour: cfg.NotifyDigestHour, BaseURL: cfg.PublicURL, Secrets: secrets}
 	checkpointer := &audit.Checkpointer{DB: st, Sealer: sealer, Sink: sink, Clock: timeutil.System, Issuer: cfg.PublicURL,
 		Every: time.Duration(cfg.AuditCheckpointSeconds) * time.Second, EveryEvents: int64(cfg.AuditCheckpointEvents),
 		Log: logger, OnTenant: api.RecordAnchorRun(st)}
@@ -546,6 +569,11 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		defer close(ckptDone)
 		checkpointer.Loop(ctx, checkpointInterval)
 	}()
+	rdyDone := make(chan struct{})
+	go func() {
+		defer close(rdyDone)
+		runReadinessScheduler(ctx, rsvc, st, clock, logger)
+	}()
 	siemDone := make(chan struct{})
 	go func() {
 		defer close(siemDone)
@@ -563,6 +591,20 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 			logger.Info("scheduled backups on", "dir", cfg.BackupDir, "every_minutes", cfg.BackupEveryMinutes, "keep", cfg.BackupKeep)
 			runBackups(ctx, st, sealer, cfg, logger)
 		}
+	}()
+	// the groups engine's queue worker, time wheel and nightly verification
+	groupsDone := make(chan struct{})
+	groupsRunner := &engine.Runner{DB: st, Engine: groupsEngine, Clock: clock, Log: logger}
+	go func() {
+		defer close(groupsDone)
+		groupsRunner.Loop(ctx)
+	}()
+	// group history: the daily Merkle digest (00:05 UTC), retention and the weekly rebuild check
+	historyDone := make(chan struct{})
+	historyRunner := &pit.Runner{DB: st, Clock: clock, Log: logger, RetentionDays: cfg.GroupsRetentionDays}
+	go func() {
+		defer close(historyDone)
+		historyRunner.Loop(ctx)
 	}()
 	notifyDone := make(chan struct{})
 	go func() {
@@ -592,9 +634,12 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		<-provDone
 		<-keysDone
 		<-ckptDone
+		<-rdyDone
 		<-siemDone
 		<-alertsDone
 		<-backupDone
+		<-groupsDone
+		<-historyDone
 		<-notifyDone
 		return err
 	case <-ctx.Done():
@@ -616,9 +661,12 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	<-provDone
 	<-keysDone
 	<-ckptDone
+	<-rdyDone
 	<-siemDone
 	<-alertsDone
 	<-backupDone
+	<-groupsDone
+	<-historyDone
 	<-notifyDone
 	for i := 0; i < cap(errc) && (i == 0 || agentSrv != nil); i++ {
 		if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {

@@ -312,11 +312,16 @@ var referenceColumns = map[string][]string{
 	"login_transactions": {"session_id", "expected_external_login_id", "bootstrap_invitation_id"},
 	// an alias names a folder or a group, by object_type
 	"grp_name_aliases": {"object_id"},
+	// events and PIT rows outlive what they name, so they declare no foreign keys; the guards still apply
+	"grp_events":        {"object_id", "identity_id", "member_group_id", "list_id"},
+	"grp_pit_objects":   {"object_id"},
+	"grp_pit_direct":    {"group_id", "list_id", "member_identity_id", "member_group_id"},
+	"grp_pit_effective": {"group_id", "list_id", "identity_id"},
 }
 
 // immutableTables refuse every UPDATE (a trigger raises unconditionally), so
 // they need no UPDATE guard.
-var immutableTables = []string{"authn_contexts"}
+var immutableTables = []string{"authn_contexts", "grp_events"}
 
 // TestIsolation_EveryReferenceGuarded checks that every foreign key (other
 // than tenant_id) and every reference column on a tenant table is covered by

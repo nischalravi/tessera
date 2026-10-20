@@ -23,6 +23,9 @@ type RunnerOptions struct {
 	RunTimeout     time.Duration // whole run (default 120 s)
 	MaxRunsPerHour int           // per connection (default 6)
 	Scenario       string        // demo scenario (default connectors.DefaultScenario)
+	// Scheduled re-run intervals (§7.4, Scheduler): live checks every 1 to 7
+	// days (default 1), post-activation reconciliation weekly.
+	LiveEvery, ReconEvery time.Duration
 	// ProberFor returns the prober for a revision. The default is the real
 	// LDAP prober for non-demo ldap revisions (see Live) and the simulated
 	// scenario prober for everything else; simulated results can never gate
@@ -47,6 +50,12 @@ func (o *RunnerOptions) withDefaults() RunnerOptions {
 	}
 	if r.Scenario == "" {
 		r.Scenario = connectors.DefaultScenario
+	}
+	if r.LiveEvery < 24*time.Hour || r.LiveEvery > 7*24*time.Hour {
+		r.LiveEvery = 24 * time.Hour
+	}
+	if r.ReconEvery <= 0 {
+		r.ReconEvery = 7 * 24 * time.Hour
 	}
 	if r.ProberFor == nil {
 		scenario, live, scimOpts := r.Scenario, r.Live, r.SCIM

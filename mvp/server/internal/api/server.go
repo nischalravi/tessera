@@ -27,10 +27,14 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oidcrp"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/claim"
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/credential"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/sponsorship"
 	"github.com/nischalravi/tessera/mvp/server/internal/health"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
+	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/oauth"
 	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -153,6 +157,18 @@ type Config struct {
 	// Identifiers hashes the identifiers of invited guests under per-tenant
 	// keys derived from the KEK. Nil: invitations answer 503.
 	Identifiers *identifiers.Keyer
+	// Secrets hands one-time secrets (claim links, confirmation codes) to the
+	// notification dispatcher through memory, never the database; share the
+	// instance with the Dispatcher. Nil: the API makes its own (nothing is
+	// mailed without a dispatcher holding it).
+	Secrets *notify.Secrets
+	// Credential is the credential authority guests set up their sign-in
+	// through (guest claim, internal/guests/credential). Nil: the claim stops
+	// at the credential step and stays pending.
+	Credential credential.Authority
+	// ClaimMinDuration is the minimum time of a claim start or resend (default
+	// 300 ms); tests shorten it.
+	ClaimMinDuration time.Duration
 	// Containment runs the kill switch's provider calls (revoke sessions and
 	// grants). Nil: a service with no outbound client, so every containment
 	// step is a manual task.
@@ -160,6 +176,9 @@ type Config struct {
 	// Health answers /readyz and the admin platform-health summary. Nil: a
 	// checker over Store and Sealer with the default loop-lag threshold.
 	Health *health.Checker
+	// GroupsEngine is the native groups' membership engine, whose synchronous
+	// budget is TESSERA_GROUPS_SYNC_BUDGET. Nil: the defaults.
+	GroupsEngine *engine.Engine
 	// AuditAppend overrides how the audit middleware writes http.request
 	// events (tests inject failures). Nil: the store.
 	AuditAppend func(ctx context.Context, t tenancy.ID, e store.AuditEvent) error
@@ -187,8 +206,12 @@ type Server struct {
 	authn  *auth.Authenticator
 	limits *limiters
 	guests *sponsorship.Service
-	rp     *oidcrp.RP
-	oauth2 *oauth2rp.RP
+
+	claimSvc *claim.Service
+	claimLim *claimLimits
+	names    nameCache
+	rp       *oidcrp.RP
+	oauth2   *oauth2rp.RP
 	// oauth is the authorization server of the CLI (internal/oauth); it also
 	// verifies the DPoP access tokens of API requests (authn.Tokens).
 	oauth *oauth.Service
@@ -242,6 +265,9 @@ func New(cfg Config) *Server {
 	if cfg.Readiness.Runner.Live.Agents == nil {
 		cfg.Readiness.Runner.Live.Agents = cfg.Agents
 	}
+	if cfg.GroupsEngine == nil {
+		cfg.GroupsEngine = engine.New(0)
+	}
 	if cfg.Containment == nil {
 		cfg.Containment = &containment.Service{}
 	}
@@ -275,6 +301,15 @@ func New(cfg Config) *Server {
 		}
 	}
 	s.guests = sponsorship.New(cfg.Identifiers)
+	s.claimLim = newClaimLimits()
+	if cfg.Identifiers != nil && cfg.PublicURL != "" {
+		if cfg.Secrets == nil {
+			cfg.Secrets = notify.NewSecrets()
+			s.cfg.Secrets = cfg.Secrets
+		}
+		s.claimSvc = claim.New(cfg.Identifiers, cfg.Secrets, cfg.PublicURL, s.tenantName)
+		s.guests.Claim = s.claimSvc
+	}
 	if cfg.OutboundHTTP != nil {
 		rp, err := oidcrp.New(oidcrp.Config{HTTP: cfg.OutboundHTTP, Now: func() time.Time { return s.clock() }})
 		if err != nil {
@@ -322,18 +357,23 @@ func New(cfg Config) *Server {
 	s.registerSodControlRoutes()
 	s.registerLifecycleRoutes()
 	s.registerGuestRoutes()
+	s.registerClaimRoutes()
 	s.registerNotificationRoutes()
 	s.registerEmailRoutes()
 	s.registerContainmentRoutes()
 	s.registerFlatfileRoutes()
 	s.registerEvidenceRoutes()
 	s.registerGroupsFolderRoutes()
+	s.registerGroupsPrivilegeRoutes()
+	s.registerGroupsMemberRoutes()
+	s.registerGroupsHistoryRoutes()
 	s.registerReadinessRoutes()
 	s.registerAgentRoutes()
 	s.registerAWSRoutes()
 	s.registerJobRoutes()
 	s.registerQueueRoutes()
 	s.registerProvisioningRoutes()
+	s.registerDriftRoutes()
 	s.registerTransportRoutes()
 	s.registerAuthRoutes()
 	s.registerLoginRoutes()
@@ -425,6 +465,10 @@ func (s *Server) RunReviewScheduler(ctx context.Context, interval time.Duration)
 		}
 	}
 }
+
+// driftEvery is how often the queue reconciles intended and observed access
+// (a sync reconciles at once; the schedule catches what time changes: expiries).
+const driftEvery = 5 * time.Minute
 
 // sweepTenant expires one tenant's JIT grants and closes its due request
 // lines (requests.Sweep), taking the write lock only when there is work. The
@@ -678,8 +722,8 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 			alt += "/"
 		}
 		// Only same-origin absolute paths that match a registered route are
-		// redirected to; "//host" (protocol-relative) targets are refused.
-		if strings.HasPrefix(alt, "/") && !strings.HasPrefix(alt, "//") {
+		// redirected to; "//host" and "/\\host" (protocol-relative) targets are refused.
+		if strings.HasPrefix(alt, "/") && !strings.HasPrefix(alt, "//") && !strings.HasPrefix(alt, `/\`) {
 			if rt2, _, allowed2 := s.find(r.Method, alt); rt2 != nil || len(allowed2) > 0 {
 				u := url.URL{Path: alt, RawQuery: r.URL.RawQuery}
 				http.Redirect(w, r, u.RequestURI(), http.StatusTemporaryRedirect) // #nosec G710 -- target is a registered same-origin route
@@ -985,7 +1029,7 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		default:
 			h.Set("Content-Security-Policy", cspAPI)
 		}
-		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/t/") {
+		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/t/") || strings.HasPrefix(r.URL.Path, "/public/") {
 			h.Set("Cache-Control", "no-store")
 		}
 		if s.cfg.HSTS {

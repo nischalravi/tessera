@@ -205,6 +205,33 @@ the LDAP bind password); without one the live checks report an error instead of 
 unauthenticated. The client is the shared outbound one, with the connection's configured port
 allowed (`safehttp.WithConfiguredPorts`). Tests use an in-process SCIM server
 with misbehaviour switches (`internal/connectors/scim/fakescim_test.go`).
+**After activation** (design §7.4, §7.5). Activation stores a baseline of the live revision
+(`readiness_baselines`: score, item states, finding and object counts, config hash). A background
+scheduler (`readiness.Scheduler`, started by `tessera serve`, a pass every 15 minutes) re-runs the
+live checks of every active or degraded connection daily and reconciles it weekly in live mode (the
+same staging scratch tables and findings as a dry run; it never writes the live graph), then
+compares the evidence with the baseline. Drift is newly failing checks (a newly failing check on the
+service account's effective rights is reported as a change made outside Tessera), finding counts
+beyond ±10% or ±25 objects, object counts beyond ±5% between consecutive runs, credentials within
+30 days of expiry, and a newer template minor release that adds Required items (30-day grace from
+when the release is first seen). A revision moves `active → degraded` when a Required live check
+fails on two consecutive scheduled runs (an administrator's on-demand re-run does not count), its
+credential is within 7 days of expiry, or the template grace period ends; it recovers when none of
+these hold. While degraded, reads continue and write-back stops: `Service.CanWrite` is false and
+`Service.RequireWrite` refuses (409 `connection_degraded`), enforced on the server. The Inbox
+shows a task per degraded connection (`tasks` in `GET /api/insights/deployment-health`), and
+`GET /api/connections/{id}/health` and the dashboard carry `drift`. Settings:
+`TESSERA_READINESS_LIVE_CHECK_DAYS` (1 to 7, default 1) and `TESSERA_READINESS_SCHEDULER=off`.
+Not wired yet: the "sync failed for 24 hours" and "cursor lost three times in 7 days" triggers
+(`readiness.ExternalSignals`; nothing records them yet), and Admin → Jobs (set `Scheduler.Hook`
+to the `job_runs` wrapper of #172).
+**Evidence export** (design §7.6): `GET /api/connections/{id}/readiness/evidence` and
+`GET /api/insights/deployment-health/evidence` return a ZIP (`manifest.json`, `checklist.csv`,
+`checks.csv`, `findings.csv`, `skipped.csv`, `score.json`). The manifest holds the SHA-256 of every
+file, the template pins and config hashes, the ledger range and chain head, and the SOC 2, ISO 27001,
+SOX ITGC and PCI DSS control mapping text. Findings carry sample object ids only, never names. Each
+export appends `readiness.evidence.exported` (with the manifest hash) in the same transaction, and
+needs `connections.read` plus `audit.read` (auditor, tenant_admin).
 
 #### Live LDAP checks
 
@@ -391,7 +418,7 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `GET /api/roles/{id}/exclusions|flags` · `POST /api/roles/{id}/exclusions/{identity_id}/remove` ·
 `GET /api/identities/{id}/affiliations` · `GET /api/identities/{id}/identifiers` ·
 `POST /api/identities/{id}/affiliations {type, org_unit?, population?, starts_at?, ends_at?, reason}` ·
-`POST /api/affiliations/{id}/end {reason}`
+`POST /api/affiliations/{id}/end {reason}` ·
 `GET /api/catalog[?all=1]` · `PUT /api/catalog/items/{group_id}` ·
 `POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours}` ·
 `GET /api/requests[?scope=mine|pending|all&status=]` · `GET /api/requests/{id}` ·
@@ -404,6 +431,9 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `POST /api/guests/invitations` · `POST /api/guests/invitations/bulk {csv, dry_run}` ·
 `GET /api/guests[?sponsor=me|all&state=&population=]` · `GET /api/sponsorships/approvals` · `GET /api/sponsorships/{id}` ·
 `POST /api/sponsorships/{id}/approve|reject|renew|end|transfer|accept-transfer` ·
+`POST /api/guests/{identity_id}/resend-invitation|revoke-invitation` ·
+`POST /public/t/{slug}/claim/start|verify/send|verify/check|existing-account|credential|resend` ·
+`GET /public/t/{slug}/claim/status` (public: the guest's claim, see Guest claim) ·
 `GET /api/approvals/inbox` · `GET /api/approvals/delegates` · `GET|POST /api/approvals/delegations` ·
 `POST /api/approvals/delegations/{id}/revoke` ·
 `GET /api/notifications[?unread=1&limit=]` · `POST /api/notifications/read {ids}|{all:true}` ·
@@ -602,6 +632,33 @@ Revoking a membership:
 
 Role removal, exclusion and the review decision are written, with their audit events
 (`role.unassign`, `role.exclude`, `review.revoke`), in the decision's transaction.
+
+### Intended and observed access, and drift (issue #301)
+
+Tessera keeps what was **decided** apart from what systems **report**:
+
+* `intended_grants` (schema 0330): identity x target entitlement, with provenance (`request`, `role`,
+  `birthright`, `jit`, `review_keep`, `manual`), a validity window and an owner. Approvals, role assignment,
+  JIT, a review "keep" and admin grants write it in the same transaction as their `grant_edges` write
+  (`InsertEdge`, `SetEdgeExpiry`, `RevokeEdge`, `Delete*Edge`, `KeepIntent` in `internal/store/repo_access_model.go`);
+  revoking or expiring closes the row (`closed_at`, `close_reason`), it is never deleted.
+* `observed_runs` / `observed_entitlements`: the account -> group memberships each system reported in its latest
+  connector run (one run per system; the snapshot replaces the previous one). Only `ingest.Discovery` writes them.
+* `access_drift` (schema 0331): one row per difference, classes `missing` (intended, not shown), `rogue` (shown, never
+  intended), `orphan` (account with no identity), `stale` (shown after the intent ended); status `open`,
+  `remediating`, `resolved`, `accepted`. `internal/reconcile/drift.go` finds them after each sync and every 5 minutes
+  on the sweeper (`drift_sweep`); reruns are idempotent (a row is opened, reopened, updated or resolved, never duplicated).
+* `remediation_policies`: per system, or per entitlement of a system, and class: `auto_provision` (missing only) and
+  `auto_revoke` (rogue, stale, orphan) go through the provisioning engine (needs a write-back target, else an owner task),
+  `owner_task` puts a security alert in the Inbox of the owner (the identity's owner or manager) or of the people who decide
+  access, `report_only` (the default) records only. Every action writes a `drift.remediate` audit event in the same transaction.
+* `grant_edges` is unchanged and stays the live model for the graph, insights, SoD and reviews. On a deployment that predates
+  the tables the first reconciliation backfills both sets from it (`BackfillAccessModel`).
+
+Routes: `GET /api/access-drift[?class=&status=&system=&identity_id=&limit=]` (`drift.read`) · `POST /api/access-drift/run`,
+`POST /api/access-drift/{drift_id}/accept` (`{"reason"}`) and `/remediate` (`{"action"}`) (`drift.remediate`, step-up) ·
+`GET /api/remediation-policies` · `PUT /api/remediation-policies` and `DELETE /api/remediation-policies/{policy_id}`
+(`drift.policy`, policy admin, step-up). UI: Governance, Drift.
 
 ### Job run history
 
@@ -1144,11 +1201,116 @@ the sponsor's decision (who, purpose, population, access bundle, term, who appro
   (policy admin). Every change needs a fresh phishing-resistant sign-in. A sponsorship someone may
   not see answers `404`. Audit actions: `sponsorship.create|approve|reject|renew|end|transfer|accept_transfer|expire|transfer_expire|bulk_invite|bulk_preview`.
 
-Not yet: the claim link and the guest's invitation email (GU-6; the intake's `invitation_status`
-stays `ready`), granting the bundle (GU-12), sponsor-leaver transfer from JML events and the
-transfer task in the Inbox (GU-11), self-registration (GU-3), resend and revoke invitation, and
-per-tenant sponsor policy editing. After pulling this change run `./run.sh --reseed`: it adds three
-tables and widens the lifecycle `source` check.
+Not yet: granting the bundle (GU-12), sponsor-leaver transfer from JML events and the transfer task
+in the Inbox (GU-11), self-registration (GU-3), and per-tenant sponsor policy editing. The invitation's
+claim link, email, resend and revoke are in "Guest claim" below.
+
+### Guest claim
+
+Issue #69 (GU-6; design `docs/design/guest-accounts-and-claim.md` §6, §7.1, §9.2, §10). A guest turns
+an invitation into a sign-in. Code: `internal/guests/claim` (links, sessions, codes, completion),
+`internal/guests/credential` (the credential authority), `internal/api/claim*.go`, schema
+`0228_claim.sql`, the page `frontend/src/public/claim/`. This branch merges #10's OIDC sign-in, whose
+callback the claim reuses.
+
+**Flow.** When a sponsorship becomes active (made without approval, or approved) Tessera issues a
+claim link and emails it through the notification outbox (so it shows in Admin → Email delivery);
+resend and revoke are `POST /api/guests/{identity_id}/resend-invitation|revoke-invitation` (the
+sponsor or a holder of `sponsorships.approve`, fresh phishing-resistant sign-in) and buttons in the
+Guests I sponsor side panel. The intake's `invitation_status` goes `ready` (nothing sent: the claim
+needs `TESSERA_PUBLIC_URL` and the KEK) → `sent` → `claimed`, `revoked` or `expired` (a sweeper marks
+the last; the panel also reads an old link as expired at once; "Guest is setting up" is a link in use).
+The link is `<TESSERA_PUBLIC_URL>/claim#t=<43 characters>`. The page reads the token from the
+**fragment**, removes it with `history.replaceState`, and starts the claim:
+
+1. **start**: the token is exchanged once for a claim session (cookie `__Host-tessera_claim`; in the
+   dev insecure-cookie mode `tessera_claim`, like the login cookie), 60 minutes idle and 24 hours at most.
+2. **verify_contact**: a 6-digit code to the invited address (10 minutes, 5 tries, then void). It
+   proves control of the address once, for the claim (A0, 800-63A contact verification); it is never an
+   authenticator (`docs/knowledge/01`: email is not an acceptable out-of-band authenticator).
+3. **existing_account**: "Do you already have an account with the organization?", asked of every
+   claimant. "No" continues. "Yes" is recorded on the intake (`existing_account`, for the review
+   queue) and the guest is told an administrator will follow up. **It never links** (K3): matching
+   and linking are GU-5, whose seam is `claim.Service.OnExistingAccount`.
+4. **credential**: the guest is sent to the bound credential authority to sign in. The claim
+   completes only on a sign-in at the sponsorship's required AAL, as the account that was set up for
+   this claim, through that authority (§7.1): then identity `invited` → `active`, the sponsorship's
+   affiliation `pending` → `active`, the intake `claimed`, the sponsor told (`guest.claimed`), and a
+   **new platform user with no roles**, linked to the identity, whose external login is the
+   `(issuer, subject)` of that sign-in (never the email), exists. Tessera creates no session for it.
+5. With no authority configured (production today) the claim stops at step 4 with "your organization
+   will finish setting up your sign-in" and stays pending. An IAL above 0 (IDV, GU-7) stops at
+   `verify_identity`. The step list is `claim.Steps`; terms (GU-10) go in as another step.
+
+**Security properties.** The token is 256 bits from `crypto/rand`, stored only as
+`SHA-256("tessera-claim-v1|"+tenant+"|"+token)`, single use (one atomic `UPDATE … WHERE
+status='issued' AND expires_at>now`, checked by rows affected because the store's SQL lint forbids
+`RETURNING`), 7 days for visitors and 14 for the others (never past the sponsorship's end), bound to
+the intake and the invited address's tenant-keyed hash. A new invitation revokes the earlier tokens
+and open sessions of the intake. The token is never in a log, an audit event, a notification row, the
+delivery log (it never records bodies) or a URL path or query. It reaches the email without being
+stored: the notification row only says "send the invitation", and `notify.Secrets` (memory) hands the
+link line to the dispatcher at send time and forgets it when the message is final. A restart between
+queueing and sending loses it: the message becomes a dead letter with a clear error and the sponsor
+resends (the same goes for confirmation codes). Codes are stored as a keyed hash (HKDF from the KEK),
+compared in constant time.
+Unknown, malformed, expired, used and revoked tokens get an identical `200 {"next":"check_link"}` with
+identical headers after a 300 ms floor (a dummy hash comparison keeps the path alike); `claim.start.refused`
+records the real reason. `Referrer-Policy: no-referrer` and `Cache-Control: no-store` are on every
+response. **Key binding (T20, implemented)**: the page makes a WebCrypto ECDSA P-256 key,
+non-extractable, keeps it in IndexedDB and sends the public JWK with `start`. Every request carries
+`X-Claim-Proof: <unix seconds>.<base64url r||s>`, a signature over
+`"tessera-claim-proof-v2\n"+METHOD+"\n"+PATH+"\n"+seconds+"\n"+session nonce+"\n"+base64url(SHA-256(body))`;
+the server verifies it with `crypto/ecdsa`, accepts ±60 s and lets each proof be used once, so a
+stolen cookie is useless and a captured proof cannot carry another body (the path signed is the one
+the API sees: a reverse proxy must not rewrite it). One use is keyed on the signature's `r`, so the
+malleated form `(r, N−s)` of an accepted signature is a replay too, and it is recorded atomically in
+the tenant's database (`claim_proof_uses`, schema `0229_claim_proofs.sql`), so it holds across
+restarts and processes. Missing, bad, stale and
+replayed proofs get the same `401 {"error":"session_required"}` as no cookie at all and are audited
+as `claim.proof.rejected`. A session of one tenant is nothing at another.
+
+**Public routes** (`/public/t/{slug}/claim/…`, registered `noTenant` and public; each resolves the
+tenant from the slug, opens its own tenant transaction and writes its domain events in it; the
+`http.request` event goes to the tenant's chain as an anonymous caller):
+`POST start {token, key}` · `POST verify/send` · `POST verify/check {code}` · `GET status` (step, first
+name, organization, sponsor, population, end date, nothing else) · `POST existing-account {answer}` ·
+`POST credential` (answers `{redirect}`) · `POST resend {email}` ("If an invitation exists for this
+address, we have sent a new link."). The design's `GET credential/callback` is the existing
+`/api/auth/oidc/{connection_id}/callback` with the login purpose `claim`; it sends the browser back to
+`/claim?result=complete|failed`. The Vite dev server proxies `/public/t`.
+
+**Rate limits** (`internal/ratelimit`, in process, token buckets of N per window; throttles are
+audited as `claim.throttled` without a token or code): start 10 per IP per 10 minutes (client IP as
+the API's rate limiter, trusting `TESSERA_TRUSTED_PROXIES`) and 100 per tenant per minute (429; no
+bot challenge yet); verify/send 3 per session per 10 minutes, 5 per address per hour, 10 per day
+(the answer is the same when throttled); verify/check 5 tries per code; resend 3 per address per day.
+
+**Audit actions:** `claim.invitation.issue|revoke|expire`, `claim.start`, `claim.start.refused`,
+`claim.code.send|failed|locked`, `claim.verify_contact`, `claim.existing_account`,
+`claim.credential.start|pending|failed`, `claim.complete`, `claim.throttled`, `claim.proof.rejected`.
+
+**Dev completion path** (the only credential authority so far; GU-8 does the real ones): outside
+production with the dev IdP configured, `credential.DevIdP` registers the guest with the dev IdP over
+HTTP through `internal/safehttp` (loopback allowed in dev only) at the dev-only
+`POST <issuer>/_register` (client authentication as `tessera-dev`; only `guest-…` subjects; users.yaml
+users cannot be replaced) with a passkey, then the claim redirects to the normal OIDC sign-in with
+`login_hint` and `prompt=login`; the callback binds `guest-<id>`, which is the only sign-in it accepts.
+To try it: `./run.sh --reseed`; sign in at http://localhost:5173 as Pat (policy admin; his account is a
+Larkspur employee) and invite a guest at Access → Guests I sponsor; the dev mail sink
+(`server/var/dev-mail.jsonl`, written by the dispatcher within about 15 seconds) holds the email: open
+its `/claim#t=…` link, ask for a code (also in the sink), answer the question, choose "Continue to
+sign-in" and pick the passkey for the guest on the dev IdP page. Back on `/claim` the guest sees
+"You are all set"; the panel shows the invitation as claimed. Checked by hand: the page is plain HTML
+and CSS, no third-party scripts, works at 360 px; `npm test` covers its model and client, `go test
+./internal/api -run TestClaim` the API end to end.
+
+**Deferred:** matching and linking on "yes" (GU-5), identity verification and IAL above 0 (GU-7), real
+credential authorities, passwords, MFA enrolment, the Tessera-hosted service (GU-8), terms and
+consent, recovery (GU-10), SMS codes, claim codes for letters, a bot challenge, and shared (multi-node)
+rate-limit state. Parity fixtures are unchanged. After pulling this change run `./run.sh --reseed`:
+it adds the claim tables and three columns to `intake_records`, widens its `invitation_status` check
+and allows the login purpose `claim`.
 themselves. Not yet: provisioning into the target system (#103), business roles (#161).
 
 ### Notifications
@@ -1366,7 +1528,8 @@ soft delete), `server/internal/api/groups_folders.go`. No UI yet (GR-8).
   whole subtree; every old name is kept as an **alias**: it still resolves and stays reserved, and
   its owner can take it back. A folder is deleted only when empty; a group is soft-deleted
   (`status: deleted`, restorable, keeps its name). Copies carry fields and structure, not memberships.
-- Routes (all need `groups.admin`, held by `tenant_admin` until GR-4; every route is audited):
+- Routes (a route needs `groups.read` or `groups.write`, then the privilege of the folder or group,
+  see "Group privileges (GR-4)" below; every route is audited):
 
   | Route | |
   |---|---|
@@ -1386,6 +1549,158 @@ soft delete), `server/internal/api/groups_folders.go`. No UI yet (GR-8).
 - Audit events `groups.folder.{created,updated,renamed,moved,copied,deleted}` and
   `groups.group.{created,updated,renamed,moved,copied,deleted,restored}`, written in the change's
   transaction with the acting user; `GET /api/audit?target_type=group&target_id=` filters by object.
+
+#### Membership engine (GR-2, issue #45)
+
+`server/internal/groups/engine` keeps `grp_effective` (the materialized members, with support counts)
+equal to the stored inputs: direct memberships, nesting and composite-factor edges (`grp_deps`) and
+composite definitions. `grp_closure` and `grp_levels` are maintained incrementally (schema
+`0284_groups_engine.sql` adds `grp_engine_state`). Changes recompute the affected identities in
+ascending level order from the stored rows, stopping where membership does not change. A disabled or
+deleted group, or one outside its own `enabled_from`/`disabled_at`, is an empty set.
+
+| Route (`groups.read`/`groups.write`, then the privilege; the two engine routes `groups.admin`) | |
+|---|---|
+| `GET /api/groups/{id}/members?filter=direct\|effective&limit=&offset=` | members (`read`); `stale` is true while a recompute is queued |
+| `POST /api/groups/{id}/members` `{identity \| group, enabled_from, disabled_at, reason}` | add (`201`), update dates of an existing row (`200`), or `202` |
+| `GET /api/groups/{id}/members/{identity}` | hasMember; ignores a row whose `disabled_at` passed even if the time wheel lags |
+| `DELETE /api/groups/{id}/members/{identity-id \| group-id}` | remove (`200` or `202`) |
+| `POST /api/groups/{id}/convert-to-composite` `{op, factors, discard_members}` | basic to composite in place; direct members are `409 has_direct_members` unless discarded |
+| `PUT /api/groups/{id}/composite` `{op, factors}` | redefine a composite (`union`, `intersection` n-ary; `complement` = first minus second) |
+| `POST /api/groups` with `definition: composite`, `composite_op`, `factors` | create a composite |
+| `PATCH /api/groups/{id}` `enabled_from`, `disabled_at` (RFC 3339, `""` clears) | the group's own dates |
+| `POST /api/groups/engine/verify`, `GET /api/groups/engine/ops/{seq}` | full recompute and repair; progress of a `202` operation |
+
+- A composite has no direct members (`409 composite_no_members`). An edge whose parent is already a
+  descendant of the child is `409 {"error":"cycle","path":[names, child down to parent]}`.
+- `TESSERA_GROUPS_SYNC_BUDGET` (default 5000): the estimate is `|ancestors| x |identities affected|`.
+  Under it the change is applied in the request; over it the direct change commits, a
+  `grp_engine_queue` job is queued, the group is `recompute_state: pending` and the answer is `202`
+  with `op`. The background `engine.Runner` (started by `cmd/tessera`) drains the queue in chunks of
+  2,000 identities, runs the time wheel every 30 s (and at the next date boundary: a date takes
+  effect within 60 s) and verifies each tenant nightly.
+- Audit events `groups.member.{added,updated,removed}`, `groups.group.converted`,
+  `groups.composite.updated` (in the request's transaction) and, from the background job,
+  `groups.engine.{recomputed,verified,repaired}` and `groups.timewheel.applied`.
+- Tests: `go test ./internal/groups/engine` (oracle comparison; `TESSERA_ORACLE_SEEDS=500` for a
+  longer soak, `go test -fuzz=FuzzEngine_MatchesOracle` for the fuzzer);
+  `go test -bench . ./internal/groups/engine` runs the 10%-of-reference-tenant benchmark
+  (`TESSERA_GROUPS_BENCH_SCALE` percent, default 10).
+
+#### Group events and point-in-time history (GR-3, issue #46)
+
+Every change to a folder, group, direct membership or (from GR-4) privilege, and every effective
+membership the engine adds or removes, writes a row to `grp_events` in the same transaction, with a
+per-tenant gap-free `seq` (a counter row in `grp_event_heads`, bumped under the write lock, so a
+rolled-back change gives its number back). Rows are append-only (a trigger refuses `UPDATE`).
+Schema `0285_group_events.sql` (the design calls it `0103`): `grp_event_heads`, `grp_events`,
+`grp_event_cursors`, `grp_pit_{objects,direct,effective,privileges,digests}`, all tenant-scoped with
+cross-tenant guard triggers.
+
+- `server/internal/groups/events`: the §10.1 catalogue, `Append`, consumer cursors (`Poll`, `Ack`,
+  `Lag`) and CloudEvents 1.0 JSON encoding (`ToCloudEvent`: id `<tenant>/<seq>`, `sequence` extension).
+  The groups code calls `pit.Emit`, which appends the event, applies it to the PIT tables and moves the
+  `pit` cursor, all in the caller's transaction.
+- `server/internal/groups/pit`: the writer closes and opens half-open intervals `[start_at, end_at)`
+  (`start_seq`/`end_seq` are event seqs) for objects (a snapshot of names, folder, definition, status),
+  direct rows (with their own dates), effective memberships and privileges. The tables are derived
+  data: `Rebuild` replays `grp_events` (the whole tenant or one group), `CompareRebuild` rebuilds and
+  compares. `MembersAt`, `MembersBetween`, `DirectAt`, `DirectBetween`, `ObjectAt` are the queries.
+- Tamper evidence (K9): at 00:05 UTC `pit.Runner` writes, for each finished UTC day with events, a
+  Merkle root (RFC 6962 tree; leaves are SHA-256 of `0x00` and the RFC 8785 form of the event row) and
+  appends `groups.pit.digest {day, first_seq, last_seq, event_count, root}` to the audit ledger, whose
+  checkpoints are anchored outside the database. `VerifyDay` recomputes the root and also checks the
+  stored digest against the ledger's copy; an edited, deleted or added event of a digested day is a
+  `mismatch`. A server that was down catches up on the days it missed.
+- Retention: `TESSERA_GROUPS_RETENTION_DAYS` (default 2555, 7 years; 30 to 36500). Once a UTC day the
+  runner deletes events older than that (never past the last digested event, as a prefix of the
+  sequence) and PIT intervals that ended before it, and audits `groups.retention.pruned`. Digests are
+  kept; a day whose events were pruned verifies as `pruned`; `Rebuild` refuses (`history_pruned`)
+  rather than lose intervals whose events are gone. Weekly the runner rebuilds the PIT rows of a
+  sample of 20 groups and compares them with what was stored; a difference is repaired and audited
+  as `groups.pit.mismatch` (the schedule is in memory, so a restart postpones it by a week).
+
+| Route (the two members reads need `read` on the group, the pit routes `groups.admin`) | |
+|---|---|
+| `GET /api/groups/{id}/members?as_of=T[&filter=effective\|direct]` | the members at an instant (RFC 3339, not in the future); effective by default; `group` is the group's snapshot then (name, status), null if it did not exist; deleted groups keep their history |
+| `GET /api/groups/{id}/members?between=T1,T2` | everyone who was a member at any time in the window (at most 366 days); `items` are intervals |
+| `GET /api/groups/pit/digests?limit=` | the daily digests, newest first |
+| `GET /api/groups/pit/verify[?day=YYYY-MM-DD]` | recompute a day's root (default: the newest 100 digests); statuses `ok`, `mismatch`, `ledger_mismatch`, `no_digest`, `pruned` |
+| `POST /api/groups/pit/rebuild` `{group_id?}` | rebuild the PIT rows from the events (audited as `groups.pit.rebuilt`) |
+
+- Event causes: `api` for direct changes, `engine` for effective changes (repairs by verification carry
+  `data.repair`), `timewheel` for the wheel's own runs; `cause_ref` is the request id when there is one.
+- Tests: `go test ./internal/groups/pit ./internal/groups/events` (`TestPIT_AsOfMatchesReplay`,
+  `TestPIT_DigestDetectsTamper`, `TestPIT_RebuildEqualsLive`, `TestEvents_GapFreeSeqUnderConcurrency`),
+  `TestIsolation_GroupEventTables` in `internal/store`, `TestGroupsPITAPI` in `internal/api`.
+
+#### Group privileges (GR-4, issue #47)
+
+Design `docs/design/groups-grouper-parity.md` §7. Schema `0286_group_privs.sql` (the design calls it
+`0102`; `0280`..`0284` are taken): `grp_privileges` and `grp_priv_settings`. Code:
+`server/internal/groups/privs` (`implies.go` the implication table, `check.go` checks and dynamic
+inheritance, `explain.go`, `grant.go`, `settings.go`), `server/internal/api/groups_privs.go`.
+
+- **Privileges.** Grouper's names, lower-cased: group `admin update read view optin optout
+  group_attr_read group_attr_update`; folder `stem_admin create stem_attr_read stem_attr_update
+  stem_view`; attribute definition `attr_admin attr_update attr_read attr_view attr_optin attr_optout
+  attr_def_attr_read attr_def_attr_update` (21 names: the design says 22 but lists 21, and the
+  schema CHECK has 21). `admin`, `stem_admin` and `attr_admin` imply every privilege of their object;
+  `update`, `read`, `optin`, `optout`, `create` imply the view privilege.
+- **Holders.** An identity, a group (every effective member holds it; `IsMember` re-checks the
+  direct rows' own dates), or `everyone`. A platform user holds its identity's privileges through
+  `platform_users.identity_id` (the column came with the auth core); a user without a link, and a
+  machine client, hold only what everyone holds and what their roles give.
+- **Dynamic inheritance.** A row on folder `F` with `applies_to` `groups`, `folders` or `attr_defs`
+  and `scope` `one` (objects whose parent is `F`) or `sub` (everything below) is applied when a
+  privilege is checked, never copied. `stem_admin` on a folder, by a row on it or inherited, is every
+  privilege on what is below it (the design's §7.2 example).
+- **Platform roles still apply.** An active `tenant_admin` holds every privilege (Grouper's wheel),
+  `auditor` the read ones (`read`, `view`, `*_attr_read`, `attr_read`, `attr_view`) everywhere, and
+  `viewer` the view ones when the tenant sets `groups_viewer_can_view: true` in its settings.
+- **Every group route is gated twice.** The route permission (`groups.read` for reads,
+  `groups.write` for changes, by role and token scope) lets the request in; the handler then needs
+  the privilege of the object. A refusal is `403 {"error":"privilege_required","privilege","object_type","object_id"}`.
+  `groups.admin` (tenant admins) is for tenant-wide routes: engine verify and operations, the three
+  `pit` routes, the privilege settings and identity links.
+
+  | Operation | Privilege |
+  |---|---|
+  | list folders, list groups | only rows the caller may view (`stem_view`, `view`) |
+  | read a folder, a group | `stem_view`, `view` |
+  | create a folder or group | `create` on the parent folder (before the first folder exists, a tenant admin) |
+  | edit, rename, delete a folder; edit, delete, restore a group | `stem_admin`; `admin` |
+  | move | `stem_admin` or `admin` on the object, and `create` on the destination |
+  | copy | `stem_admin` (folder) or `read` (group) on the source, and `create` on the destination |
+  | read members, hasMember, point-in-time members | `read` |
+  | add or remove a member | `update`, or `optin` / `optout` when the member is the caller; `read` on a nested group |
+  | convert to composite, set a composite | `admin`, and `read` on each factor |
+  | list, grant, revoke privileges | `stem_admin` / `admin` (a holder group also needs `view`) |
+
+- **Creator and default privileges.** The creator's identity becomes `admin` of a new group and
+  `stem_admin` of a new folder or copy (`source: creator_default`); a tenant admin with no identity
+  link needs none. `PUT /api/groups/privileges/settings` `{everyone_allowed, defaults}` sets the
+  **everyone policy** (which privileges may be granted to everyone; `admin`, `stem_admin` and
+  `attr_admin` never) and the grants to everyone made on each new object. Granting to everyone
+  (`holder_type: everyone`, or a default) needs an active `tenant_admin`.
+- **Events and audit.** A grant or revoke writes `privilege.granted` / `privilege.revoked` (the PIT
+  keeps when each privilege was held, in `grp_pit_privileges`) and `groups.privilege.{granted,revoked}`
+  in the change's transaction; so do deleting a folder (its rows go with it), saving the settings
+  (`groups.privilege.settings_changed`) and linking a user (`groups.user.identity_{linked,unlinked}`).
+
+| Route | |
+|---|---|
+| `GET\|POST /api/groups/{id}/privileges`, `GET\|POST /api/groups/folders/{id}/privileges` | the rows on the object; grant `{privilege, holder_type: identity\|group\|everyone, identity, group, applies_to: self\|groups\|folders\|attr_defs, scope: self\|one\|sub}` (`201`, or `200` for a grant that exists) |
+| `DELETE .../privileges/{privilege_id}` | revoke one row (the design has `DELETE .../privileges`; the row is in the path here) |
+| `GET .../privileges/effective[?identity=]` | for each privilege of the object, every path by which the identity (default: the caller) holds it, with a sentence such as "Ivan holds UPDATE on `app:foo:g` because they are in `app:foo:admins`, which holds STEM_ADMIN on folder `app:foo` ..."; another identity's needs `admin` |
+| `GET\|PUT /api/groups/privileges/settings` | the everyone policy and default privileges (`groups.admin`) |
+| `PUT /api/groups/users/{id}/identity` `{identity_id \| null}` | link a platform user to an identity (`groups.admin`, fresh phishing-resistant sign-in; audited) |
+
+- Tests: `go test ./internal/groups/privs` (`TestImplication` for all 21 privileges,
+  `TestPrivs_InheritanceOneVsSub`, `TestPrivs_ExplainListsAllPaths`,
+  `TestPrivs_EveryoneNeedsTenantAdmin`), `internal/api` (`TestGroupsRoutesRequirePrivilege` for every
+  route, `TestPrivs_ViewFiltersBrowseAndSearch`, `TestPrivs_GrantsGiveAccess`, ...),
+  `TestIsolation_GroupPrivilegeTables` in `internal/store`.
 
 ### Audit ledger
 
@@ -1800,8 +2115,6 @@ balancer, list it in `TESSERA_TRUSTED_PROXIES` so the limit applies to the `X-Fo
 A tenant's `require_phr_for_all` setting (`tenants.settings`, §18.3) makes every role need a
 phishing-resistant sign-in in that tenant. Other session routes: `GET /api/auth/session`,
 `POST /api/auth/logout`, `GET /api/auth/sessions`, `DELETE /api/auth/sessions/{session_id}`.
-
-### Dev IdP
 
 ### Sign-in through the IdP (OIDC)
 

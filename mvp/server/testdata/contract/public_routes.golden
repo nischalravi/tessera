@@ -1,4 +1,11 @@
 GET /api/health
+POST /public/t/{slug}/claim/start
+POST /public/t/{slug}/claim/verify/send
+POST /public/t/{slug}/claim/verify/check
+GET /public/t/{slug}/claim/status
+POST /public/t/{slug}/claim/existing-account
+POST /public/t/{slug}/claim/credential
+POST /public/t/{slug}/claim/resend
 GET /api/auth/discover
 GET /api/auth/login
 GET /api/auth/oidc/{connection_id}/callback

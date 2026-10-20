@@ -392,6 +392,12 @@ func (tx *TenantTx) EdgesTo(dst string) ([]*GrantEdge, error) {
 
 // DeleteRoleEdge deletes a grant edge if it was granted by a role.
 func (tx *TenantTx) DeleteRoleEdge(id int64) error {
-	_, err := tx.exec(edgesDeleteRole, sql.Named("id", id))
-	return err
+	res, err := tx.exec(edgesDeleteRole, sql.Named("id", id))
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		return err
+	}
+	return tx.closeEdgeIntent(id, CloseRoleRemoved, nowUTC())
 }

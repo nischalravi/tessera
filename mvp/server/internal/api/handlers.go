@@ -26,6 +26,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
+	"github.com/nischalravi/tessera/mvp/server/internal/reconcile"
 	"github.com/nischalravi/tessera/mvp/server/internal/reviews"
 	"github.com/nischalravi/tessera/mvp/server/internal/simulate"
 	"github.com/nischalravi/tessera/mvp/server/internal/sod"
@@ -371,6 +372,10 @@ func (s *Server) syncConnectors(_ http.ResponseWriter, r *http.Request, p *param
 	if err := c.Audit(now, "system", "connectors.sync", stats.Object()); err != nil {
 		return nil, err
 	}
+	// reconcile intended with the access the sync just observed (issue #301)
+	if _, err := reconcile.RunDrift(c, now, "system"); err != nil {
+		return nil, err
+	}
 	return stats.Object(), nil
 }
 
@@ -613,7 +618,7 @@ func sortedKeys(m map[string]bool) []string {
 
 func (s *Server) identityDetail(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
 	id := p.pathInt("identity_id")
-	unusedDays := int(p.queryInt("unused_days", 60, nil, nil))
+	unusedDays := clampInt(p.queryInt("unused_days", 60, nil, nil))
 	if err := validated(p, nil); err != nil {
 		return nil, err
 	}
@@ -964,7 +969,7 @@ func (s *Server) nhiInventory(_ http.ResponseWriter, r *http.Request, p *params)
 // ---------------------------------------------------------------- least privilege
 
 func (s *Server) recommendations(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
-	days := int(p.queryInt("unused_days", 60, i64(1), i64(90)))
+	days := clampInt(p.queryInt("unused_days", 60, i64(1), i64(90)))
 	kind, itype := p.queryOptStr("kind"), p.queryOptStr("identity_type")
 	if err := validated(p, nil); err != nil {
 		return nil, err
@@ -1486,7 +1491,7 @@ func (s *Server) createCampaign(_ http.ResponseWriter, r *http.Request, p *param
 	if err != nil {
 		return nil, err
 	}
-	id, err := reviews.GenerateCampaign(c, s.clock(), name, int(days), pols)
+	id, err := reviews.GenerateCampaign(c, s.clock(), name, clampInt(days), pols)
 	if err != nil {
 		return nil, err
 	}

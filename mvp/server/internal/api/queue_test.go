@@ -64,7 +64,7 @@ func TestQueueAPI(t *testing.T) {
 	// The schedules exist for both tenants and fired once: every sweep ran.
 	var scheds []queueScheduleView
 	rec := corrDo(h, auditor, "GET", "/api/queue/schedules", "")
-	if err := json.Unmarshal(rec.Body.Bytes(), &scheds); err != nil || rec.Code != 200 || len(scheds) != 7 {
+	if err := json.Unmarshal(rec.Body.Bytes(), &scheds); err != nil || rec.Code != 200 || len(scheds) != 8 {
 		t.Fatalf("schedules: %d %s", rec.Code, rec.Body)
 	}
 	for _, s := range scheds {
@@ -74,7 +74,7 @@ func TestQueueAPI(t *testing.T) {
 	}
 	var list []queueJobView
 	rec = corrDo(h, auditor, "GET", "/api/queue/jobs?limit=100", "")
-	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil || rec.Code != 200 || len(list) != 7 {
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil || rec.Code != 200 || len(list) != 8 {
 		t.Fatalf("jobs: %d %s", rec.Code, rec.Body)
 	}
 	seen := map[string]bool{}
@@ -84,7 +84,7 @@ func TestQueueAPI(t *testing.T) {
 			t.Errorf("job %s is %s after %d attempts: %s", j.Kind, j.Status, j.Attempts, j.LastError)
 		}
 	}
-	for _, k := range []string{jobs.JITSweep, jobs.SweepRequests, jobs.SweepLifecycle, jobs.SweepAdminChanges, jobs.ContainmentRetry, jobs.SweepSoDMitigations, jobs.Maintenance} {
+	for _, k := range []string{jobs.JITSweep, jobs.SweepRequests, jobs.SweepLifecycle, jobs.SweepAdminChanges, jobs.ContainmentRetry, jobs.SweepSoDMitigations, jobs.SweepDrift, jobs.Maintenance} {
 		if !seen[k] {
 			t.Errorf("no %s job ran", k)
 		}

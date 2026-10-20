@@ -110,6 +110,8 @@ var tables = []string{
 	"ownerships",
 	// scheduled access reviews (schema/0316_review_schedules.sql)
 	"review_templates", "review_launches",
+	// intended and observed access, drift and its remediation policy (schema/0330-0331)
+	"intended_grants", "observed_runs", "observed_entitlements", "access_drift", "remediation_policies",
 	// job run history (schema/0281_job_runs.sql)
 	"job_runs",
 	// closed-loop provisioning (schema/0282-0283)
@@ -162,6 +164,12 @@ var tables = []string{
 	"connector_checkpoints",
 	// point-in-time access and evidence packs (schema/0260-0261)
 	"edge_history", "evidence_packs",
+	// guest claim (schema/0228_claim.sql)
+	"claim_tokens", "claim_sessions", "confirmation_codes",
+	// claim proof one-use memory (schema/0229_claim_proofs.sql)
+	"claim_proof_uses",
+	// readiness drift baselines (schema/0355_readiness_baselines.sql)
+	"readiness_baselines",
 	// SIEM sinks (schema/0210_siem.sql)
 	"siem_sinks", "siem_dead_letters",
 	// alerting (schema/0209_alerts.sql)
@@ -176,9 +184,14 @@ var tables = []string{
 	"queue_jobs", "queue_schedules",
 	// configuration transport (schema/0211_config_transport.sql)
 	"config_signing_keys", "config_trusted_signers", "config_imports",
-	// native groups (schema/0280_groups.sql); the engine tables stay empty until GR-2
+	// native groups (schema/0280_groups.sql, 0284_groups_engine.sql)
 	"grp_folders", "grp_name_aliases", "grp_groups", "grp_composite_factors", "grp_lists", "grp_direct_memberships",
-	"grp_deps", "grp_closure", "grp_levels", "grp_effective", "grp_engine_queue",
+	"grp_deps", "grp_closure", "grp_levels", "grp_effective", "grp_engine_queue", "grp_engine_state",
+	// group events and point-in-time history (schema/0285_group_events.sql)
+	"grp_event_heads", "grp_events", "grp_event_cursors", "grp_pit_objects", "grp_pit_direct", "grp_pit_effective",
+	"grp_pit_privileges", "grp_pit_digests",
+	// group privileges (schema/0286_group_privs.sql)
+	"grp_privileges", "grp_priv_settings",
 	// third-party OAuth app inventory (schema/0361_oauth_apps.sql)
 	"oauth_apps", "oauth_grants", "oauth_sync_state",
 }
@@ -341,16 +354,16 @@ func (d *DB) Migrate(ctx context.Context, drop bool) error {
 	})
 }
 
-// upgradeLoginTxnPurpose lets a SQLite database created before the 'test'
-// login purpose (0315) take it: CREATE TABLE IF NOT EXISTS cannot change a
+// upgradeLoginTxnPurpose lets a SQLite database created before the 'test' and 'claim'
+// login purposes (0315, 0319) take them: CREATE TABLE IF NOT EXISTS cannot change a
 // CHECK, so the table is dropped and the schema recreates it. Its rows are
 // ten-minute pre-auth state, so at worst an in-flight sign-in starts over.
-// Postgres does this in migration 0315.
+// Postgres does this in migrations 0315 and 0319.
 func (d *DB) upgradeLoginTxnPurpose(ctx context.Context) error {
 	var ddl string
 	err := d.sql.QueryRowContext(ctx,
 		`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'login_transactions'`).Scan(&ddl)
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && strings.Contains(ddl, "'test'")) {
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && strings.Contains(ddl, "'test'") && strings.Contains(ddl, "'claim'")) {
 		return nil
 	}
 	if err != nil {

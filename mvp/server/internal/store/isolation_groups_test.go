@@ -12,8 +12,8 @@ import (
 // Native groups (issue #44, GR-1): a tenant sees and changes only its own
 // folders, groups, aliases and lists; another tenant's id looks nonexistent,
 // and a row naming another tenant's folder or group is refused by the guard
-// triggers. The engine tables have no repository yet; the internal test
-// TestIsolation_GroupsTablesGuarded covers their triggers.
+// triggers. The engine tables are covered in isolation_groups_engine_test.go,
+// and their triggers raw by TestIsolation_GroupsTablesGuarded.
 
 type grpIDs struct{ root, folder, group string }
 

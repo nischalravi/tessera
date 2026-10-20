@@ -21,6 +21,7 @@ export const GovernanceTabs = () => (
     tabs={[
       { to: "/governance/reviews", label: "Access reviews" },
       { to: "/governance/lifecycle", label: "Lifecycle" },
+      { to: "/governance/drift", label: "Drift" },
       { to: "/governance/workflows", label: <>Workflows <PreviewBadge /></> },
     ]}
   />

@@ -59,6 +59,13 @@ var publicRoutes = []string{
 	"POST /t/{slug}/oauth/device_authorization",
 	"POST /t/{slug}/oauth/token",
 	"POST /t/{slug}/oauth/revoke",
+	"POST /public/t/{slug}/claim/start",
+	"POST /public/t/{slug}/claim/verify/send",
+	"POST /public/t/{slug}/claim/verify/check",
+	"GET /public/t/{slug}/claim/status",
+	"POST /public/t/{slug}/claim/existing-account",
+	"POST /public/t/{slug}/claim/credential",
+	"POST /public/t/{slug}/claim/resend",
 	"POST /t/{slug}/oauth/introspect",
 }
 

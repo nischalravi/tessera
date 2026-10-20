@@ -338,12 +338,7 @@ func (s *Server) handleAuthorizeSubmit(w http.ResponseWriter, r *http.Request) {
 	sub, m, _ := strings.Cut(f.Get("choice"), " ")
 	method := Method(m)
 	profile := Profile(f.Get("profile"))
-	var user *User
-	for i := range s.users {
-		if s.users[i].Sub == sub {
-			user = &s.users[i]
-		}
-	}
+	user := s.findUser(sub)
 	switch {
 	case user == nil:
 		s.errorPage(w, http.StatusBadRequest, "Unknown user.")
@@ -396,7 +391,7 @@ func (s *Server) issueCode(w http.ResponseWriter, r *http.Request, p pendingAuth
 	if p.fault != FaultNoIssParam {
 		v.Set("iss", s.issuer)
 	}
-	http.Redirect(w, r, withParams(p.redirectURI, v), status)
+	s.redirectRegistered(w, r, p.redirectURI, v, status)
 }
 
 // redirectError sends an OAuth error to a validated redirect_uri, with the
@@ -410,7 +405,30 @@ func (s *Server) redirectError(w http.ResponseWriter, r *http.Request, redirectU
 	if r.Method == http.MethodPost {
 		status = http.StatusSeeOther
 	}
-	http.Redirect(w, r, withParams(redirectURI, v), status) // #nosec G710 -- redirectURI was matched against the client's registered URIs
+	s.redirectRegistered(w, r, redirectURI, v, status)
+}
+
+// redirectRegistered redirects to base plus add, after checking base against
+// the registered redirect URIs once more. A target that matches nothing is
+// refused with 400: the dev IdP never redirects to an unregistered address,
+// whatever the caller did before.
+func (s *Server) redirectRegistered(w http.ResponseWriter, r *http.Request, base string, add url.Values, status int) {
+	target := ""
+	for _, c := range s.clients {
+		// an exact registration: redirect to the stored string, never the request's copy
+		if i := slices.Index(c.RedirectURIs, base); i >= 0 {
+			target = c.RedirectURIs[i]
+			break
+		}
+		if target == "" && c.redirectAllowed(base) {
+			target = base // matched a wildcard registration (loopback ports)
+		}
+	}
+	if target == "" {
+		s.errorPage(w, http.StatusBadRequest, "The redirect target is not registered.")
+		return
+	}
+	http.Redirect(w, r, withParams(target, add), status) // #nosec G710 -- target is a registered redirect URI (exact or wildcard match)
 }
 
 func withParams(base string, add url.Values) string {
@@ -758,12 +776,13 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	if target := q.Get("post_logout_redirect_uri"); target != "" {
 		for _, c := range s.clients {
-			if slices.Contains(c.PostLogoutRedirectURIs, target) {
+			// redirect to the registered string itself, never the caller's copy of it
+			if i := slices.Index(c.PostLogoutRedirectURIs, target); i >= 0 {
 				v := url.Values{}
 				if st := q.Get("state"); st != "" {
 					v.Set("state", st)
 				}
-				http.Redirect(w, r, withParams(target, v), http.StatusFound) // #nosec G710 -- target is a registered post-logout URI
+				http.Redirect(w, r, withParams(c.PostLogoutRedirectURIs[i], v), http.StatusFound) // #nosec G710 -- a registered post-logout URI
 				return
 			}
 		}

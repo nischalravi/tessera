@@ -150,8 +150,34 @@ func TestLoginTxnTestPurposeUpgrade(t *testing.T) {
 	if err := insert("test"); err != nil {
 		t.Fatalf("test purpose: %v", err)
 	}
+	if err := insert("claim"); err != nil {
+		t.Fatalf("claim purpose: %v", err)
+	}
 	if err := insert("nope"); err == nil {
 		t.Error("an unknown purpose was accepted")
+	}
+	// a table that has 'test' but not 'claim' (0315 without 0319) is upgraded too
+	for _, q := range []string{`DROP TABLE login_transactions`, `CREATE TABLE login_transactions (
+		id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, cookie_hash TEXT NOT NULL UNIQUE, idp_connection_id TEXT NOT NULL,
+		purpose TEXT NOT NULL CHECK (purpose IN ('login','step_up','device_approval','bootstrap','test')),
+		state_hash TEXT, nonce TEXT, pkce_verifier_enc BLOB, saml_request_id TEXT, required_tessera_acr TEXT, max_age INTEGER,
+		session_id TEXT, expected_external_login_id TEXT, device_grant_id TEXT, bootstrap_invitation_id TEXT,
+		return_to TEXT NOT NULL DEFAULT '/', created_at TEXT NOT NULL, expires_at TEXT NOT NULL, consumed_at TEXT)`} {
+		if _, err := db.sql.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := insert("claim"); err == nil {
+		t.Fatal("the 0315-era table accepted the claim purpose")
+	}
+	if err := db.Migrate(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := insert("claim"); err != nil {
+		t.Errorf("after Migrate: %v", err)
+	}
+	if err := db.Migrate(ctx, false); err != nil {
+		t.Fatal(err)
 	}
 	// a pre-0315 table: recreate it with the old CHECK, then migrate
 	for _, q := range []string{`DROP TABLE login_transactions`, `CREATE TABLE login_transactions (

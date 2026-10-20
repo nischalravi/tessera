@@ -32,7 +32,12 @@ CREATE TABLE IF NOT EXISTS intake_records (
   sponsor_identity_id INTEGER REFERENCES identities (id),
   batch_id TEXT,
   status TEXT NOT NULL CHECK (status IN ('received','matching','review','resolved','rejected')),
-  invitation_status TEXT NOT NULL DEFAULT 'ready' CHECK (invitation_status IN ('ready','sent','claimed','revoked')),
+  invitation_status TEXT NOT NULL DEFAULT 'ready' CHECK (invitation_status IN ('ready','sent','claimed','revoked','expired')),
+  -- the claimant's own statement at the claim page's "do you already have an
+  -- account?" question (GU-6): recorded for the review queue, never used to link (K3)
+  existing_account TEXT CHECK (existing_account IN ('yes','no')),
+  existing_account_at TEXT,
+  claimed_at TEXT,
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_intake_records_sponsor ON intake_records (tenant_id, sponsor_identity_id, created_at);

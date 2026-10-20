@@ -193,6 +193,8 @@ POST   /api/sponsorships/{sponsorship_id}/renew      guests.sponsor  STEP_UP_POL
 POST   /api/sponsorships/{sponsorship_id}/end        guests.sponsor  STEP_UP_POLICY  # issue #65 (the sponsor, or sponsorships.approve)
 POST   /api/sponsorships/{sponsorship_id}/transfer   guests.sponsor  STEP_UP_POLICY  # issue #65 (the sponsor)
 POST   /api/sponsorships/{sponsorship_id}/accept-transfer guests.sponsor STEP_UP_POLICY  # issue #65 (the person asked)
+POST   /api/guests/{identity_id}/resend-invitation   guests.sponsor  STEP_UP_POLICY  # issue #69 (the sponsor, or sponsorships.approve; checked in the handler)
+POST   /api/guests/{identity_id}/revoke-invitation   guests.sponsor  STEP_UP_POLICY  # issue #69 (the sponsor, or sponsorships.approve; checked in the handler)
 GET    /api/approvals/inbox                          requests.create -  # issue #165
 GET    /api/approvals/delegates                      requests.create -  # issue #165
 GET    /api/approvals/delegations                    requests.create -  # issue #165 (?all=1: requests.decide)
@@ -239,6 +241,8 @@ POST   /api/connections/{id}/activation/approve      connections.activate STEP_U
 POST   /api/connections/{id}/activation/reject       connections.activate -  # DR-10
 GET    /api/insights/deployment-health               connections.read   -
 POST   /api/insights/deployment-health/rerun         connections.manage -
+GET    /api/connections/{id}/readiness/evidence      connections.read   -  (+ audit.read in the handler; the design's audit.export does not exist)
+GET    /api/insights/deployment-health/evidence      connections.read   -  (+ audit.read in the handler; the design's audit.export does not exist)
 GET    /api/sod/functions                            graph.read      -  # issue #298
 POST   /api/sod/functions                            sod.manage      STEP_UP_POLICY  # issue #298
 GET    /api/sod/functions/{function_id}              graph.read      -  # issue #298
@@ -288,6 +292,13 @@ POST   /api/provisioning/ops/{op_id}/retry           provisioning.manage -
 POST   /api/provisioning/ops/{op_id}/cancel          provisioning.manage -
 POST   /api/provisioning/run                         provisioning.manage -
 GET    /api/provisioning/findings                    provisioning.read   -
+GET    /api/access-drift                             drift.read      -  # issue #301
+POST   /api/access-drift/run                         drift.remediate -
+POST   /api/access-drift/{drift_id}/accept           drift.remediate STEP_UP_POLICY
+POST   /api/access-drift/{drift_id}/remediate        drift.remediate STEP_UP_POLICY
+GET    /api/remediation-policies                     drift.read      -
+PUT    /api/remediation-policies                     drift.policy    STEP_UP_POLICY
+DELETE /api/remediation-policies/{policy_id}         drift.policy    STEP_UP_POLICY
 GET    /api/config/signing-key                       admin.read      -  # issue #170
 POST   /api/config/export                            config.transport -  #
 GET    /api/config/trusted-signers                   admin.read      -  #
@@ -306,21 +317,43 @@ POST   /t/{slug}/oauth/revoke                        public
 POST   /t/{slug}/oauth/introspect                    public
 POST   /api/auth/device/lookup                       auth.self       -  # issue #14
 POST   /api/auth/device/approve                      auth.self       STEP_UP_ADMIN  # issue #14: max_age 300 s
-GET    /api/groups/folders                           groups.admin    -  # issue #44
-POST   /api/groups/folders                           groups.admin    -  # issue #44
-GET    /api/groups/folders/{id}                      groups.admin    -  # issue #44
-PATCH  /api/groups/folders/{id}                      groups.admin    -  # issue #44
-DELETE /api/groups/folders/{id}                      groups.admin    -  # issue #44
-POST   /api/groups/folders/{id}/move                 groups.admin    -  # issue #44
-POST   /api/groups/folders/{id}/copy                 groups.admin    -  # issue #44
-GET    /api/groups/native                            groups.admin    -  # issue #44
-POST   /api/groups                                   groups.admin    -  # issue #44
-GET    /api/groups/{id}                              groups.admin    -  # issue #44
-PATCH  /api/groups/{id}                              groups.admin    -  # issue #44
-DELETE /api/groups/{id}                              groups.admin    -  # issue #44
-POST   /api/groups/{id}/move                         groups.admin    -  # issue #44
-POST   /api/groups/{id}/copy                         groups.admin    -  # issue #44
-POST   /api/groups/{id}/restore                      groups.admin    -  # issue #44
+GET    /api/groups/folders                           groups.read     -  # issue #44, #47: the folders the caller may view
+POST   /api/groups/folders                           groups.write    -  # issue #44, #47: create on the parent
+GET    /api/groups/folders/{id}                      groups.read     -  # issue #44, #47: stem_view
+PATCH  /api/groups/folders/{id}                      groups.write    -  # issue #44, #47: stem_admin
+DELETE /api/groups/folders/{id}                      groups.write    -  # issue #44, #47: stem_admin
+POST   /api/groups/folders/{id}/move                 groups.write    -  # issue #44, #47: stem_admin, create on the destination
+POST   /api/groups/folders/{id}/copy                 groups.write    -  # issue #44, #47: stem_admin, create on the destination
+GET    /api/groups/native                            groups.read     -  # issue #44, #47: the groups the caller may view
+POST   /api/groups                                   groups.write    -  # issue #44, #47: create on the folder
+GET    /api/groups/{id}                              groups.read     -  # issue #44, #47: view
+PATCH  /api/groups/{id}                              groups.write    -  # issue #44, #47: admin
+DELETE /api/groups/{id}                              groups.write    -  # issue #44, #47: admin
+POST   /api/groups/{id}/move                         groups.write    -  # issue #44, #47: admin, create on the destination
+POST   /api/groups/{id}/copy                         groups.write    -  # issue #44, #47: read, create on the destination
+POST   /api/groups/{id}/restore                      groups.write    -  # issue #44, #47: admin
+GET    /api/groups/{id}/members                      groups.read     -  # issue #45, #47: read
+POST   /api/groups/{id}/members                      groups.write    -  # issue #45, #47: update, or optin for oneself
+GET    /api/groups/{id}/members/{member}             groups.read     -  # issue #45, #47: read
+DELETE /api/groups/{id}/members/{member}             groups.write    -  # issue #45, #47: update, or optout for oneself
+POST   /api/groups/{id}/convert-to-composite         groups.write    -  # issue #45, #47: admin, read on the factors
+PUT    /api/groups/{id}/composite                    groups.write    -  # issue #45, #47: admin, read on the factors
+POST   /api/groups/engine/verify                     groups.admin    -  # issue #45
+GET    /api/groups/engine/ops/{seq}                  groups.admin    -  # issue #45
+GET    /api/groups/folders/{id}/privileges           groups.read     -  # issue #47: stem_admin
+POST   /api/groups/folders/{id}/privileges           groups.write    -  # issue #47: stem_admin
+GET    /api/groups/folders/{id}/privileges/effective groups.read     -  # issue #47: stem_view (own), stem_admin (another identity)
+DELETE /api/groups/folders/{id}/privileges/{privilege_id} groups.write -  # issue #47: stem_admin
+GET    /api/groups/{id}/privileges                   groups.read     -  # issue #47: admin
+POST   /api/groups/{id}/privileges                   groups.write    -  # issue #47: admin
+GET    /api/groups/{id}/privileges/effective         groups.read     -  # issue #47: view (own), admin (another identity)
+DELETE /api/groups/{id}/privileges/{privilege_id}    groups.write    -  # issue #47: admin
+GET    /api/groups/privileges/settings               groups.admin    -  # issue #47
+PUT    /api/groups/privileges/settings               groups.admin    -  # issue #47
+PUT    /api/groups/users/{id}/identity               groups.admin    STEP_UP_POLICY  # issue #47
+GET    /api/groups/pit/digests                       groups.admin    -  # issue #46
+GET    /api/groups/pit/verify                        groups.admin    -  # issue #46
+POST   /api/groups/pit/rebuild                       groups.admin    -  # issue #46
 GET    /api/auth/session                             auth.self       -
 POST   /api/auth/logout                              auth.self       -
 GET    /api/auth/sessions                            auth.self       -
@@ -349,6 +382,13 @@ GET    /api/admin/api-clients/{client_id}            admin.read      -  # issue 
 GET    /api/admin/recovery                           admin.read      -  # issue #16
 POST   /api/admin/recovery/{recovery_id}/cancel      admin.change.request -  # issue #16
 GET    /api/admin/api-clients                        admin.read      -  # issue #16
+POST   /public/t/{slug}/claim/start                 public  # issue #69: the guest's claim, by link token, cookie and key proof
+POST   /public/t/{slug}/claim/verify/send            public
+POST   /public/t/{slug}/claim/verify/check           public
+GET    /public/t/{slug}/claim/status                 public
+POST   /public/t/{slug}/claim/existing-account       public
+POST   /public/t/{slug}/claim/credential             public
+POST   /public/t/{slug}/claim/resend                 public
 GET    /api/admin/platform-health                    admin.read      -  # issue #303
 POST   /api/auth/break-glass/options                 public
 POST   /api/auth/break-glass/verify                  public
@@ -473,8 +513,11 @@ func TestRBACRouteMatrix(t *testing.T) {
 				// auth.self: any principal, whatever its roles
 				allowed := d.perm == auth.PermAuthenticated ||
 					(role != auth.RoleBreakGlass && containsPerm(auth.RolePermissions(role), d.perm))
+				// a group route's handler may still refuse for want of the folder's or
+				// group's privilege (403 privilege_required, issue #47): the handler ran
+				privDenied := rec.Code == http.StatusForbidden && strings.Contains(rec.Body.String(), `"privilege_required"`)
 				switch {
-				case allowed && (rec.Code == http.StatusUnauthorized || rec.Code == http.StatusForbidden):
+				case allowed && !privDenied && (rec.Code == http.StatusUnauthorized || rec.Code == http.StatusForbidden):
 					t.Errorf("%s: %d %.200s, want the handler to run", role, rec.Code, rec.Body.String())
 				case !allowed && rec.Code != http.StatusForbidden:
 					t.Errorf("%s: %d %.200s, want 403", role, rec.Code, rec.Body.String())

@@ -55,6 +55,7 @@ var readinessLists = map[string]func(c *store.TenantTx, r refs) (any, error){
 		id := r["connection:ad"]
 		return c.ScoreSeries("connection", &id, 100)
 	},
+	"Baselines":         func(c *store.TenantTx, _ refs) (any, error) { return c.Baselines() },
 	"StagedAccounts":    func(c *store.TenantTx, r refs) (any, error) { return c.StagedAccounts(r["run:ad-dry"]) },
 	"StagedIdentities":  func(c *store.TenantTx, r refs) (any, error) { return c.StagedIdentities(r["run:ad-dry"]) },
 	"StagedGroups":      func(c *store.TenantTx, r refs) (any, error) { return c.StagedGroups(r["run:ad-dry"]) },
@@ -63,7 +64,7 @@ var readinessLists = map[string]func(c *store.TenantTx, r refs) (any, error){
 	"OwnedIdentityXIDs": func(c *store.TenantTx, _ refs) (any, error) { return c.OwnedIdentityXIDs() },
 }
 
-var readinessUnparameterized = []string{"Connections", "AllSkips", "OwnedIdentityXIDs"}
+var readinessUnparameterized = []string{"Connections", "AllSkips", "OwnedIdentityXIDs", "Baselines"}
 
 func TestIsolation_ReadinessRepoReturnsOnlyOwnRows(t *testing.T) {
 	f := storetest.TwoTenants(t)
@@ -124,6 +125,7 @@ var readinessGets = map[string]func(c *store.TenantTx, r refs) (any, error){
 	"CheckRun":       func(c *store.TenantTx, r refs) (any, error) { return c.CheckRun(r["run:ad-live"]) },
 	"ReconRunByID":   func(c *store.TenantTx, r refs) (any, error) { return c.ReconRunByID(r["run:ad-dry"]) },
 	"FindingByID":    func(c *store.TenantTx, r refs) (any, error) { return c.FindingByID(r["finding:ad"]) },
+	"Baseline":       func(c *store.TenantTx, r refs) (any, error) { return c.Baseline(r["revision:ad"]) },
 	"LatestLiveRun":  func(c *store.TenantTx, r refs) (any, error) { return notNil(c.LatestLiveRun(r["revision:ad"])) },
 	"LatestDryRun":   func(c *store.TenantTx, r refs) (any, error) { return notNil(c.LatestDryRun(r["revision:ad"])) },
 	"RunningLiveRun": func(c *store.TenantTx, r refs) (any, error) { return notNil(c.RunningLiveRun(r["revision:ad"])) },
@@ -264,6 +266,9 @@ var readinessMutations = map[string]func(c *store.TenantTx, a, b refs) error{
 		return c.UpdateRevisionSecret(b["revision:ad"], "vault:x", "1", "h", storetest.Now)
 	},
 	"BumpEvidence": func(c *store.TenantTx, _, b refs) error { return c.BumpEvidence(b["revision:ad"], storetest.Now) },
+	"UpdateBaselineMonitor": func(c *store.TenantTx, _, b refs) error {
+		return c.UpdateBaselineMonitor(&store.Baseline{RevisionID: b["revision:ad"], FailStreak: 99, LastRunAt: &storetest.Now})
+	},
 	"SetRevisionState": func(c *store.TenantTx, _, b refs) error {
 		return ignoreConflict(c.SetRevisionState(store.StateChange{RevisionID: b["revision:ad"], From: store.StateDraft,
 			To: store.StateRetired, Now: storetest.Now}))
@@ -402,6 +407,10 @@ var readinessCrossRefs = map[string]func(c *store.TenantTx, a, b refs, bIdentity
 		return c.InsertFinding(&store.Finding{ID: store.NewID(), RunID: b["run:ad-dry"], ConnectionID: a["connection:ad"],
 			Code: "RF-01", Title: "x", Severity: "low", Samples: "[]", Impact: "{}", Status: "open",
 			FirstSeenAt: storetest.Now, LastSeenAt: storetest.Now})
+	},
+	"InsertBaseline.revision_id": func(c *store.TenantTx, _, b refs, _ int64) error {
+		return c.InsertBaseline(&store.Baseline{RevisionID: b["revision:ad"], CapturedAt: storetest.Now, Score: 1, ConfigHash: "x",
+			Snapshot: "{}"})
 	},
 	"RecordScore.connection_id": func(c *store.TenantTx, _, b refs, _ int64) error {
 		id := b["connection:ad"]

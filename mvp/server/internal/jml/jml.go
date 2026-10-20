@@ -704,7 +704,8 @@ func addGrantTo(c *store.TenantTx, now time.Time, ident *store.Identity, gid int
 	if err != nil || existing != nil {
 		return err
 	}
-	_, err = c.InsertEdge(&store.GrantEdge{Src: src, Dst: dst, Relation: "member_of", Source: "manual", CreatedAt: now})
+	_, err = c.InsertEdge(&store.GrantEdge{Src: src, Dst: dst, Relation: "member_of", Source: "manual", CreatedAt: now,
+		Ref: "jml:" + ident.ExternalID})
 	return err
 }
 
