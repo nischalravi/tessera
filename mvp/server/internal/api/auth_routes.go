@@ -30,7 +30,14 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, rt *route) (*
 	p, fail, err := s.authn.AuthenticateRequest(r)
 	if err != nil {
 		// The session or token could not be checked: fail closed.
-		s.log.Error("authentication failed", "method", r.Method, "path", r.URL.Path, "err", err)
+		if clientCanceled(r, err) {
+			// The client hung up mid-check (#310). That is neither an
+			// authentication failure nor an outage: nobody is left to answer.
+			audit.SetAnonymous(r.Context(), "client_canceled")
+			s.log.Debug("request canceled by client during authentication", "method", r.Method, "path", r.URL.Path)
+			w.WriteHeader(statusClientClosed)
+			return r, false
+		}
 		audit.SetAnonymous(r.Context(), "authentication_error")
 		if timedOut(r, err) {
 			writeTimedOut(w)

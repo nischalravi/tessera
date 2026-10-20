@@ -3483,7 +3483,7 @@ id, and the reason is in the audit log (`auth.login.failure`), never in the URL.
 | Ivan (`00u-ivan-admin2`) | larkspur | also policy_admin | the second holder of `identities.contain`, so an identity Pat disabled can be enabled under four eyes (#335) |
 | Pat (`00u-pat-policy`) | larkspur | policy_admin | read, JIT and review decisions, revoke grants, run HRIS plans, sync connectors |
 | Olu (`00u-olu-operator`) | larkspur | operator | read, request and decide JIT, review decisions |
-| Vic (`00u-vic-viewer`) | larkspur | viewer | read (with MFA; his only authenticator in the dev IdP is a password) |
+| Vic (`00u-vic-viewer`) | larkspur | viewer | read (with MFA: password + OTP in the dev IdP; password-only sign-in leaves him no active role) |
 | Gina (`00u-gina-globex`) | globex | tenant_admin | the second tenant |
 
 Approvals, review decisions, HRIS execution, applying a revoke and editing a connection's config or
