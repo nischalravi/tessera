@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
+	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
@@ -163,8 +164,13 @@ func (s *Service) introspection(ctx context.Context, t store.Tenant, token strin
 			if err != nil {
 				return err
 			}
-			live = u.Status == "active"
-			return nil
+			if live = u.Status == "active"; !live {
+				return nil
+			}
+			// the person's identity must be active too (#359)
+			off, err := auth.IdentityInactive(tx, u)
+			live = !off
+			return err
 		})
 		if err != nil {
 			return nil, "", err
