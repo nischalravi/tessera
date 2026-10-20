@@ -239,16 +239,60 @@ export function carriesSecret(v: unknown, depth = 0): boolean {
   return Object.entries(v as Record<string, unknown>).some(([k, x]) => SECRET_KEY.test(k) || carriesSecret(x, depth + 1));
 }
 
+/** A body field name that may be stored: a plain snake_case or camelCase word, never a secret-looking one. */
+const STORABLE_KEY = /^[A-Za-z][A-Za-z0-9_]{0,48}$/;
+
+/**
+ * A copy of a request body made only of what is safe to keep in browser storage: strings, finite numbers,
+ * booleans and null, in arrays and plain objects of bounded depth and size. Any other value (functions,
+ * dates, class instances), a field name outside STORABLE_KEY or one that marks a secret makes it null, so
+ * the action is kept without a body rather than with a partial one.
+ */
+export function storableBody(v: unknown, depth = 0): unknown | null {
+  if (v === null || typeof v === "boolean") return v;
+  if (typeof v === "string") return v.length <= 4000 ? v : null;
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  if (depth > 6) return null;
+  if (Array.isArray(v)) {
+    if (v.length > 500) return null;
+    const out: unknown[] = [];
+    for (const x of v) {
+      const c = storableBody(x, depth + 1);
+      if (c === null && x !== null) return null;
+      out.push(c);
+    }
+    return out;
+  }
+  if (typeof v !== "object" || Object.getPrototypeOf(v) !== Object.prototype) return null;
+  const out: Record<string, unknown> = {};
+  for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+    if (x === undefined) continue;
+    if (!STORABLE_KEY.test(k) || SECRET_KEY.test(k)) return null;
+    const c = storableBody(x, depth + 1);
+    if (c === null && x !== null) return null;
+    out[k] = c;
+  }
+  return out;
+}
+
 function savePendingAction(a: PendingAction): void {
-  // A request that carries a secret is never written to browser storage: after the step-up the user
-  // enters it again, as when storage is unavailable. An earlier pending action is dropped too, so the
-  // resume prompt never offers a different action than the one just refused.
+  // Only a rebuilt copy of the body (storableBody) is kept, never the caller's object. A request that
+  // carries a secret, or a body that cannot be rebuilt, is not written to browser storage: after the
+  // step-up the user repeats it. An earlier pending action is dropped too, so the resume prompt never
+  // offers a different action than the one just refused.
   if (carriesSecret(a.body)) {
     clearPendingAction();
     return;
   }
+  const body = a.body === undefined ? undefined : storableBody(a.body);
+  if (a.body !== undefined && body === null && a.body !== null) {
+    clearPendingAction();
+    return;
+  }
+  const kept: PendingAction = { method: String(a.method), path: a.path, label: String(a.label), at: Number(a.at) };
+  if (body !== undefined) kept.body = body;
   try {
-    sessionStorage.setItem(PENDING, JSON.stringify(a));
+    sessionStorage.setItem(PENDING, JSON.stringify(kept));
   } catch {
     /* storage unavailable: the user retries by hand after the step-up */
   }
