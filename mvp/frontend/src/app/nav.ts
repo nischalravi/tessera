@@ -122,7 +122,8 @@ export const RAIL: RailGroup[] = [
       {
         id: "admin", label: "Admin", icon: Settings, path: "/admin", except: ["/admin/connections", "/admin/shared-signals", "/admin/flat-files", "/admin/conditional-access"], keywords: "settings configuration audit jobs",
         pages: [{ path: "/admin/guests", label: "Guests and external identities", keywords: "guest settings matching lifecycle terms sponsor codes populations recovery cases sponsor policy" },
-          { path: "/admin/event-sinks", label: "Group event sinks", keywords: "streaming sqs sns rabbitmq kafka cloudevents queue topic dead letter outbox" }],
+          { path: "/admin/event-sinks", label: "Group event sinks", keywords: "streaming sqs sns rabbitmq kafka cloudevents queue topic dead letter outbox" },
+          { path: "/admin/request-settings", label: "Request settings", keywords: "access request justification duration maximum default attachments history visibility request for others manager" }],
       },
     ],
   },

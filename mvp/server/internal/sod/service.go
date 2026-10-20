@@ -35,6 +35,10 @@ type Writer struct {
 	By    Actor
 	Now   time.Time
 	Quiet bool
+	// OnActivate runs, in the same transaction, when a mitigation becomes
+	// active. The API uses it to queue the job that re-opens the violation at
+	// the end date.
+	OnActivate func(m *store.SodMitigation) error
 
 	batch bool
 	dirty map[string]string // ruleset id -> note, touched once at the end of a batch

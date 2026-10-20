@@ -499,7 +499,8 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `POST /api/provisioning/ops/{op_id}/retry|cancel` · `POST /api/provisioning/run` ·
 `GET /api/provisioning/findings[?status=open|resolved]` ·
 `GET /api/catalog[?all=1]` · `PUT /api/catalog/items/{group_id}` ·
-`POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours}` ·
+`GET|PUT /api/request-settings` (tenant request settings; PUT: catalog.manage + step-up) ·
+`POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours, attachments?}` ·
 `GET /api/requests[?scope=mine|pending|all&status=]` · `GET /api/requests/{id}` ·
 `POST /api/requests/{id}/approve|deny|cancel|remove {reason}` ·
 `GET|POST /api/abac/policies` · `GET|PUT /api/abac/policies/{id}` · `POST /api/abac/policies/{id}/retire` ·
@@ -510,6 +511,7 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `POST /api/sod/simulate` ·
 `GET|POST /api/sod/controls` · `GET|PUT /api/sod/controls/{id}` · `POST /api/sod/controls/{id}/retire` ·
 `GET|POST /api/sod/mitigations` · `POST /api/sod/mitigations/{id}/approve|reject|cancel|revoke` ·
+`PUT /api/sod/rulesets/{id}/remediation {options, escalate_to_id}` ·
 `POST /api/sod/violations/escalate` · `POST /api/sod/violations/revoke` · `GET /api/sod/review-context` ·
 `GET /api/approvals/inbox` · `GET /api/approvals/delegates` · `GET|POST /api/approvals/delegations` ·
 `POST /api/approvals/delegations/{id}/revoke` ·
@@ -540,7 +542,8 @@ when a second reviewer is needed) ·
 `POST /api/identities/{id}/affiliations {type, org_unit?, population?, starts_at?, ends_at?, reason}` ·
 `POST /api/affiliations/{id}/end {reason}` ·
 `GET /api/catalog[?all=1]` · `PUT /api/catalog/items/{group_id}` ·
-`POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours}` ·
+`GET|PUT /api/request-settings` (tenant request settings; PUT: catalog.manage + step-up) ·
+`POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours, attachments?}` ·
 `GET /api/requests[?scope=mine|pending|all&status=]` · `GET /api/requests/{id}` ·
 `POST /api/requests/{id}/approve|deny|cancel|remove {reason}` ·
 `GET|POST /api/roles` · `GET|PUT /api/roles/{id}` · `GET /api/roles/{id}/versions|drift` ·
@@ -1325,7 +1328,20 @@ sign-in; simulate needs `requests.create` (and `requests.create_for_others` for 
   (`remediation` on the risk and in its YAML; none stated: all four). The API refuses an option the
   risk does not offer (`409 option_not_offered`). Revoke goes through the existing revoke path
   (`POST /api/sod/violations/revoke`, dry run first, only for a grant behind the violation);
-  escalate notifies the risk owner and is recorded (`sod_escalations`).
+  escalate sends an inbox item (a notification) to the ruleset's escalation approver, else the risk
+  owner, and is recorded (`sod_escalations`, `sod.violation.escalate` with who it went to).
+  **Per ruleset or per risk:** a risk with options of its own offers those; otherwise it inherits its
+  ruleset's (`PUT /api/sod/rulesets/{id}/remediation`, `sod.manage` + step-up, audited as
+  `sod.ruleset.remediation`, table `sod_ruleset_remediation`); with neither it offers all four. The
+  ruleset's `escalate_to_id` names the escalation approver. Risks, rulesets and violations carry the
+  effective `remediation` (and, on risks and violations, `escalate_to`); risks also `remediation_source`
+  (`risk`, `ruleset` or `default`). The options are set in **Policies & SoD**: a ruleset's *Violation
+  options* command and the risk editor. The ruleset's options are not part of its YAML file.
+- **Accept until a date** is a mitigation of kind `accept` with a justification, an end date and
+  four-eyes approval. Its accountable owner is the risk owner (the one told when it ends). Approving it
+  queues a job (`sod_mitigation_expire`, idempotency key `sod-expire:<id>`, `run_at` the end date) in the
+  same transaction; when it runs the mitigation expires and the violation is open again. The periodic
+  sweeper is the backstop.
 - **Expiry.** The sweeper warns the control owner and the person's manager
   `TESSERA_SOD_WARN_DAYS` (default 14) before the end date, once, through the notification outbox.
   When the end date passes the mitigation expires (`sod.mitigation.expire`), the violation is open
@@ -1336,6 +1352,25 @@ sign-in; simulate needs `requests.create` (and `requests.create_for_others` for 
   the SoD risks behind its grant with any mitigation; the review panel shows them and lets a reviewer
   request a mitigation or escalate. Every step is an audit event, so `GET /api/audit/export`
   carries violations' mitigations and their approvals.
+
+### Request settings
+
+**Admin → Request settings** (`/admin/request-settings`, issue #298) holds the tenant-wide rules for
+access requests, in `request_settings` (one row per tenant; none saved means the defaults below).
+`GET /api/request-settings` is open to anyone who can request (the request form reads it);
+`PUT /api/request-settings {version, ...}` needs `catalog.manage` and a fresh phishing-resistant
+sign-in, is versioned (`409 version_conflict` on a stale version) and audited as
+`request.settings.update` with the values it replaced. `requests.Submit` enforces them, so a client
+cannot bypass them:
+
+| Setting | Default | Enforced as |
+|---|---|---|
+| `justification_required`, `justification_min_length` | required, 1 | `422 justification_required` (length counted after trimming) |
+| `default_hours` | none | used when neither the request nor the item names a duration |
+| `max_hours` | none | `422 duration_too_long`; "until removed" is refused (`duration_required`) unless a default applies |
+| `attachments_allowed` | off | `attachments` on `POST /api/requests`: `422 attachments_not_allowed`. An attachment is a reference (a link or ticket id, at most 5); Tessera stores no files, the references are in the `request.submit` audit event |
+| `history_visibility` | `readers` | `involved`: graph readers no longer see other people's requests (the people on a request, its approvers and deciders still do) |
+| `for_others` | `permission` | `nobody`, `managers` (the beneficiary's manager only) or `permission` (`requests.create_for_others`): `403 for_others_not_allowed`. Business-role requests (`/api/role-requests`) are not covered |
 
 ### Contractors, guests and end dates
 
@@ -3344,7 +3379,7 @@ the right. Arrow keys move between items.
 | **Identity** | Users (with *Identity matches*), Machine identities & agents, Groups (*Managed groups* and *Connected groups*, with an *All entitlements* tab), Secret rotation (Secrets, Rotation jobs, Policies & adapters, Vendor compromised), Applications, Ownership, Accounts (with *Account matches*), Help desk, Roles, Organizations (live, read-only, derived from departments) |
 | **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals, registration requests, sponsor code, recovery), Just-in-time, Access reviews (with *Lifecycle*, *Guest lifecycle* and *Workflows* tabs) |
 | **Protection** | Alerts (alerts, rules, channels), Policies & SoD (violations, policies, what-if simulation, SoD functions, risks and rulesets), Mitigating controls (mitigations, control library), Attribute policies, Access graph (with an *As of* date for *Who can access…*), Evidence packs, Insights (Risk overview, Least privilege, SoD conflicts, MFA posture, Deployment health) |
-| **Settings** | Connections (governed connections and the setup wizard), Flat-file apps, Conditional access (network ranges, policies, device signals), Shared Signals (SSF transmitters and received events), Admin (including *Guests and external identities*) |
+| **Settings** | Connections (governed connections and the setup wizard), Flat-file apps, Conditional access (network ranges, policies, device signals), Shared Signals (SSF transmitters and received events), Admin (including *Guests and external identities* and *Request settings*) |
 
 **Home.** For the admin & security persona: the tenant name and a sync line, then tabs
 (Overview, Monitoring, Deployment health, Recommendations). Overview has the KPI cards

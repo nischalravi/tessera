@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -70,6 +71,7 @@ func (s *Server) newQueue() *queue.Queue {
 	q.Register(jobs.SweepAdminChanges, queue.Kind{Handler: tracked(jobs.SweepAdminChanges, s.queueAdminSweep), Actor: "admin.sweeper"})
 	q.Register(jobs.ContainmentRetry, queue.Kind{Handler: tracked(jobs.ContainmentRetry, s.queueContainmentRetries), Actor: "containment.sweeper"})
 	q.Register(jobs.SweepSoDMitigations, queue.Kind{Handler: tracked(jobs.SweepSoDMitigations, s.queueSoDSweep), Actor: sod.Sweeper})
+	q.Register(jobs.SoDMitigationExpire, queue.Kind{Handler: s.queueSoDExpire, Actor: sod.Sweeper})
 	q.Register(jobs.SweepSSFPoll, queue.Kind{Handler: tracked(jobs.SweepSSFPoll, s.queueSSFPoll), Actor: "ssf.poller"})
 	q.Register(jobs.SweepDrift, queue.Kind{Handler: tracked(jobs.SweepDrift, s.queueDriftSweep), Actor: "drift.sweeper"})
 	q.Register(jobs.GuestLifecycle, queue.Kind{Handler: tracked(jobs.GuestLifecycle, s.queueGuestLifecycleSweep), Actor: guestlife.Sweeper})
@@ -194,6 +196,32 @@ func (s *Server) queueSoDSweep(ctx context.Context, j queue.Job) (any, error) {
 		_, _, err := sod.Sweep(tx, now, s.cfg.SoD)
 		return err
 	})
+}
+
+// sodExpirePayload is the payload of a jobs.SoDMitigationExpire job.
+type sodExpirePayload struct {
+	MitigationID string `json:"mitigation_id"`
+}
+
+// queueSoDExpire re-opens the violation of one mitigation at its end date
+// (issue #298). The job is queued in the transaction that activates the
+// mitigation, to run at its end date; the periodic sweep is the backstop.
+func (s *Server) queueSoDExpire(ctx context.Context, j queue.Job) (any, error) {
+	var p sodExpirePayload
+	if err := json.Unmarshal([]byte(j.Payload), &p); err != nil || p.MitigationID == "" {
+		return nil, queue.Permanent(errors.New("sod_mitigation_expire: bad payload"))
+	}
+	now := s.clock()
+	var reopened bool
+	err := s.store.InTenant(audit.WithSystemActor(ctx, sod.Sweeper), j.Tenant, func(tx *store.TenantTx) error {
+		var err error
+		reopened, err = sod.ExpireOne(tx, now, p.MitigationID)
+		return err
+	})
+	if err != nil || !reopened {
+		return nil, err
+	}
+	return map[string]any{"mitigation_id": p.MitigationID, "reopened": true}, nil
 }
 
 // queueDriftSweep reconciles one tenant's intended and observed access: it opens,
