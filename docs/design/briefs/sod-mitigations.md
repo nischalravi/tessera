@@ -14,7 +14,11 @@
 - Import validates everything first (`plan`), then writes; `prune` retires risks the file drops.
 
 ## PR 2 (`agent/298-mitigating-controls`, on PR 1)
-See the PR description: control library, four-eyes mitigations with mandatory end date, remediation options per risk, expiry sweep, review context, evidence export, UI.
+- Schema `0301_sod_controls.sql`: `sod_controls`, `sod_mitigations` (partial unique index: one pending or active per risk x identity), `sod_risk_options` (no rows: all four options), `sod_escalations`.
+- Four-eyes is enforced in `internal/sod/mitigation.go` (`DecideMitigation`: decider != `requested_by`), not only in the route table. `sod.mitigate` requests and escalates; `sod.approve` decides (approve needs step-up). Early end: risk owner or `sod.approve`, step-up checked in the handler.
+- `sod.Covers` gives each violation its status (open, mitigation_pending, mitigated, accepted); a mitigation whose end date has passed stops covering immediately, the sweeper (`sod.Sweep`, in `RunSweeper`) then closes it, warns (`notify.Expiring`) and alerts. `analysis.withoutMitigated` takes covered SoD violations out of `/api/violations` and counts; `/api/sod/violations` keeps them with `open`.
+- Revoke option reuses `revokeEdge` (the least-privilege revoke); review items get SoD context from `/api/sod/review-context` (a new endpoint, so the review parity fixtures are unchanged).
+- Config: `TESSERA_SOD_MAX_MITIGATION_DAYS` (365), `TESSERA_SOD_WARN_DAYS` (14).
 
 ## Read when changing this
-`internal/sod/{model,detect,service,bundle,compile}.go`, `internal/policy/sod.go`, `internal/api/sod.go`, `frontend/src/features/governance/{SodModel.tsx,sodModel.ts}`, `frontend/src/features/insights/SodConflicts.tsx`, `frontend/tests/sod.test.ts`.
+`internal/sod/{model,detect,service,bundle,compile}.go`, `internal/policy/sod.go`, `internal/api/sod.go`, `frontend/src/features/governance/{SodModel.tsx,sodModel.ts}`, `frontend/src/features/insights/SodConflicts.tsx`, `internal/sod/{controls,mitigation}.go`, `internal/api/sod_controls.go`, `frontend/src/features/governance/{Mitigations,MitigateDrawers}.tsx`, `frontend/tests/sod.test.ts`.

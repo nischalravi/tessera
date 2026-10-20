@@ -120,6 +120,7 @@ type sodRiskView struct {
 	Ruleset         sod.RulesetRef  `json:"ruleset"`
 	Functions       []sod.Ref       `json:"functions"`
 	Subjects        json.RawMessage `json:"subjects"`
+	Remediation     []string        `json:"remediation"` // options offered on a violation
 	Status          string          `json:"status"`
 	Version         int             `json:"version"`
 	CreatedAt       time.Time       `json:"created_at"`
@@ -152,13 +153,14 @@ type sodCatalog struct {
 	risks     map[string]*store.SodRisk
 	rulesets  map[string]*store.SodRuleset
 	fnOfRisk  map[string][]string
+	options   map[string][]string
 	counts    map[string]int // violations by risk key, when asked
 }
 
 func (s *Server) loadSod(r *http.Request, withCounts bool) (*sodCatalog, error) {
 	tx := store.TxFrom(r.Context())
 	c := &sodCatalog{v: newViewer(tx), functions: map[string]*store.SodFunction{}, risks: map[string]*store.SodRisk{},
-		rulesets: map[string]*store.SodRuleset{}, fnOfRisk: map[string][]string{}}
+		rulesets: map[string]*store.SodRuleset{}, fnOfRisk: map[string][]string{}, options: map[string][]string{}}
 	fs, err := tx.SodFunctions()
 	if err != nil {
 		return nil, err
@@ -187,6 +189,13 @@ func (s *Server) loadSod(r *http.Request, withCounts bool) (*sodCatalog, error) 
 	for _, l := range links {
 		c.fnOfRisk[l.RiskID] = append(c.fnOfRisk[l.RiskID], l.FunctionID)
 	}
+	opts, err := tx.SodRiskOptions()
+	if err != nil {
+		return nil, err
+	}
+	for _, o := range opts {
+		c.options[o.RiskID] = append(c.options[o.RiskID], o.Option)
+	}
 	if withCounts {
 		a, err := s.newAnalysis(tx)
 		if err != nil {
@@ -198,7 +207,9 @@ func (s *Server) loadSod(r *http.Request, withCounts bool) (*sodCatalog, error) 
 		}
 		c.counts = map[string]int{}
 		for _, v := range vs {
-			c.counts[v.RiskKey]++
+			if !sod.Closes(v.Status) { // mitigated and accepted ones are not open
+				c.counts[v.RiskKey]++
+			}
 		}
 	}
 	return c, nil
@@ -241,7 +252,13 @@ func (c *sodCatalog) function(f *store.SodFunction) sodFunctionView {
 func (c *sodCatalog) risk(x *store.SodRisk) sodRiskView {
 	out := sodRiskView{ID: x.ID, Key: x.Key, Name: x.Name, Description: x.Description, Priority: x.Priority,
 		BusinessProcess: x.BusinessProcess, Owner: c.owner(x.OwnerID), Subjects: json.RawMessage(x.Subjects), Status: x.Status,
-		Version: x.Version, CreatedAt: x.CreatedAt, UpdatedBy: c.updatedBy(x.UpdatedBy), UpdatedAt: x.UpdatedAt, Functions: []sod.Ref{}}
+		Version: x.Version, CreatedAt: x.CreatedAt, UpdatedBy: c.updatedBy(x.UpdatedBy), UpdatedAt: x.UpdatedAt, Functions: []sod.Ref{},
+		Remediation: []string{}}
+	for _, o := range sod.RemediationOptions {
+		if sod.Offers(c.options[x.ID], o) {
+			out.Remediation = append(out.Remediation, o)
+		}
+	}
 	if rs := c.rulesets[x.RulesetID]; rs != nil {
 		out.Ruleset = sod.RulesetRef{ID: rs.ID, Key: rs.Key, Name: rs.Name}
 	}
@@ -417,12 +434,13 @@ type sodRiskBody struct {
 	RulesetID       string       `json:"ruleset_id"`
 	FunctionIDs     []string     `json:"function_ids"`
 	Subjects        sod.Subjects `json:"subjects"`
+	Remediation     []string     `json:"remediation"`
 	Note            string       `json:"note"`
 }
 
 func (b sodRiskBody) input() sod.RiskInput {
 	return sod.RiskInput{Key: b.Key, Name: b.Name, Description: b.Description, Priority: b.Priority, BusinessProcess: b.BusinessProcess,
-		OwnerID: b.OwnerID, RulesetID: strings.TrimSpace(b.RulesetID), FunctionIDs: b.FunctionIDs, Subjects: b.Subjects, Note: b.Note}
+		OwnerID: b.OwnerID, RulesetID: strings.TrimSpace(b.RulesetID), FunctionIDs: b.FunctionIDs, Subjects: b.Subjects, Remediation: b.Remediation, Note: b.Note}
 }
 
 func (s *Server) listSodRisks(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
@@ -741,8 +759,22 @@ func (a *analysis) sodRisks() []*sod.Risk {
 	return out
 }
 
+// sodDetect lists every violation with its status: open, or covered by a
+// mitigation (mitigated, accepted) or awaiting one (mitigation_pending).
 func (s *Server) sodDetect(a *analysis) ([]sod.Violation, error) {
-	return policy.NewContext(a.g, a.c, a.now).SoD(a.sodRisks()), nil
+	vs := policy.NewContext(a.g, a.c, a.now).SoD(a.sodRisks())
+	cov, err := sod.Covers(a.c, a.now)
+	if err != nil {
+		return nil, err
+	}
+	cov.Apply(vs)
+	return vs, nil
+}
+
+// sodViolationView is a violation with the remediation options its risk offers.
+type sodViolationView struct {
+	sod.Violation
+	Remediation []string `json:"remediation"`
 }
 
 func (s *Server) sodViolations(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
@@ -752,6 +784,7 @@ func (s *Server) sodViolations(_ http.ResponseWriter, r *http.Request, p *params
 	system := p.queryOptStr("system")
 	process := p.queryOptStr("business_process")
 	identity := p.queryOptStr("identity")
+	status := p.queryOptLiteral("status", []string{sod.StatusOpen, sod.StatusMitigated, sod.StatusAccepted, sod.StatusPending})
 	if err := validated(p, nil); err != nil {
 		return nil, err
 	}
@@ -774,23 +807,43 @@ func (s *Server) sodViolations(_ http.ResponseWriter, r *http.Request, p *params
 			idID = n
 		}
 	}
-	out := []sod.Violation{}
+	explicit := map[string][]string{}
+	opts, err := store.TxFrom(r.Context()).SodRiskOptions()
+	if err != nil {
+		return nil, err
+	}
+	for _, o := range opts {
+		explicit[o.RiskID] = append(explicit[o.RiskID], o.Option)
+	}
+	out := []sodViolationView{}
+	open := 0
 	for _, v := range all {
 		switch {
 		case risk != nil && v.RiskKey != *risk && v.RiskID != *risk:
 		case priority != nil && v.Priority != *priority:
+		case status != nil && v.Status != *status:
 		case ruleset != nil && v.Ruleset.Key != *ruleset && v.Ruleset.ID != *ruleset:
 		case system != nil && !slices.Contains(v.Systems, *system):
 		case process != nil && !strings.EqualFold(v.BusinessProcess, *process):
 		case identity != nil && v.IdentityID != idID && !strings.Contains(strings.ToLower(v.IdentityName), strings.ToLower(*identity)):
 		default:
-			out = append(out, v)
+			view := sodViolationView{Violation: v, Remediation: []string{}}
+			for _, o := range sod.RemediationOptions {
+				if sod.Offers(explicit[v.RiskID], o) {
+					view.Remediation = append(view.Remediation, o)
+				}
+			}
+			out = append(out, view)
+			if !sod.Closes(v.Status) {
+				open++
+			}
 		}
 	}
 	return struct {
-		Total      int             `json:"total"`
-		Violations []sod.Violation `json:"violations"`
-	}{len(out), out}, nil
+		Total      int                `json:"total"`
+		Open       int                `json:"open"` // not covered by a mitigation or an acceptance
+		Violations []sodViolationView `json:"violations"`
+	}{len(out), open, out}, nil
 }
 
 // ---------------------------------------------------------------- simulate

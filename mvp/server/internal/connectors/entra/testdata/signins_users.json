@@ -1,0 +1,17 @@
+{
+  "value": [
+    {
+      "id": "aaaaaaaa-0000-4000-8000-000000000001",
+      "signInActivity": {
+        "lastSignInDateTime": "2026-10-06T08:00:00Z",
+        "lastSuccessfulSignInDateTime": "2026-10-07T09:15:00Z",
+        "lastNonInteractiveSignInDateTime": "2026-10-07T09:20:00Z"
+      }
+    },
+    {"id": "aaaaaaaa-0000-4000-8000-000000000002", "signInActivity": null},
+    {
+      "id": "aaaaaaaa-0000-4000-8000-000000000003",
+      "signInActivity": {"lastSignInDateTime": "2025-12-01T10:00:00Z"}
+    }
+  ]
+}

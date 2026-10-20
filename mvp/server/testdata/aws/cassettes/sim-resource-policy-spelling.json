@@ -1,0 +1,43 @@
+{
+  "id": "sim-resource-policy-spelling",
+  "description": "SourcePolicyType enum mismatch: the service returns the display string \"Resource Policy\" where the docs say \"resource\".",
+  "synthetic": true,
+  "spec": {
+    "id": "sim-resource-policy-spelling",
+    "stratum": "S2",
+    "fixture_version": "synthetic-1",
+    "principal_arn": "arn:aws:iam::111111111111:user/alice",
+    "policy_source_arn": "",
+    "action": "s3:GetObject",
+    "resource": "arn:aws:s3:::tsr-bkt/k",
+    "identity": [
+      "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"ec2:DescribeInstances\",\"Resource\":\"*\"}]}"
+    ],
+    "boundary": null,
+    "scp_levels": null,
+    "resource_policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:user/alice\"},\"Action\":\"s3:GetObject\",\"Resource\":\"arn:aws:s3:::tsr-bkt/*\"}]}",
+    "resource_owner": "111111111111",
+    "context": null,
+    "exclusions": null,
+    "features": null
+  },
+  "iam_cassette": {
+    "fixture_version": "synthetic-1",
+    "entries": [
+      {
+        "key": "e8843084a9c198a90ea7c27e96c08afb1a8df5d480f7421a4f6c487ff8ea3285",
+        "request": "POST iam.amazonaws.com/\nAction=SimulateCustomPolicy\nActionNames.member.1=s3:GetObject\nCallerArn=arn:aws:iam::111111111111:user/alice\nContextEntries.member.1.ContextKeyName=aws:PrincipalArn\nContextEntries.member.1.ContextKeyType=string\nContextEntries.member.1.ContextKeyValues.member.1=arn:aws:iam::111111111111:user/alice\nMaxItems=1000\nPolicyInputList.member.1={\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"ec2:DescribeInstances\",\"Resource\":\"*\"}]}\nResourceArns.member.1=arn:aws:s3:::tsr-bkt/k\nResourceOwner=arn:aws:iam::111111111111:root\nResourcePolicy={\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:user/alice\"},\"Action\":\"s3:GetObject\",\"Resource\":\"arn:aws:s3:::tsr-bkt/*\"}]}\nVersion=2010-05-08\n",
+        "responses": [
+          {
+            "status": 200,
+            "headers": {
+              "Content-Type": "text/xml"
+            },
+            "body": "<SimulateCustomPolicyResponse xmlns=\"https://iam.amazonaws.com/doc/2010-05-08/\"><SimulateCustomPolicyResult><EvaluationResults><member><EvalActionName>s3:GetObject</EvalActionName><EvalResourceName>arn:aws:s3:::tsr-bkt/k</EvalResourceName><EvalDecision>allowed</EvalDecision><MatchedStatements><member><SourcePolicyId>ResourcePolicy</SourcePolicyId><SourcePolicyType>Resource Policy</SourcePolicyType><StartPosition><Line>1</Line><Column>1</Column></StartPosition><EndPosition><Line>1</Line><Column>2</Column></EndPosition></member></MatchedStatements><MissingContextValues></MissingContextValues></member></EvaluationResults><IsTruncated>false</IsTruncated></SimulateCustomPolicyResult><ResponseMetadata><RequestId>00000000-0000-0000-0000-000000000000</RequestId></ResponseMetadata></SimulateCustomPolicyResponse>"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {}
+}

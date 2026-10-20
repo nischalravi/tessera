@@ -187,3 +187,39 @@ func (s *Subjects) validate() error {
 	}
 	return nil
 }
+
+// Remediation options a risk can offer on a violation: remove an entitlement
+// (through the revoke path), cover it with a mitigating control, accept it
+// until a date, or send it to the risk owner.
+const (
+	OptRevoke   = "revoke"
+	OptMitigate = "mitigate"
+	OptAccept   = "accept"
+	OptEscalate = "escalate"
+)
+
+// RemediationOptions lists them in display order; a risk offers all of them unless it says otherwise.
+var RemediationOptions = []string{OptRevoke, OptMitigate, OptAccept, OptEscalate}
+
+// normalizeOptions validates a risk's explicit options and returns them in
+// display order; nil means "all four" (none given, or all given).
+func normalizeOptions(in []string) ([]string, error) {
+	if len(in) == 0 {
+		return nil, nil
+	}
+	for _, o := range in {
+		if !contains(RemediationOptions, o) {
+			return nil, refuse(422, "invalid_remediation", "remediation options are %s", strings.Join(RemediationOptions, ", "))
+		}
+	}
+	var out []string
+	for _, o := range RemediationOptions {
+		if contains(in, o) {
+			out = append(out, o)
+		}
+	}
+	if len(out) == len(RemediationOptions) {
+		return nil, nil
+	}
+	return out, nil
+}
