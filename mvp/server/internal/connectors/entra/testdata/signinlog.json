@@ -1,0 +1,9 @@
+{
+  "value": [
+    {"createdDateTime": "2026-10-05T09:00:00Z", "userId": "aaaaaaaa-0000-4000-8000-000000000001", "appId": "22220000-0000-4000-8000-000000000002", "status": {"errorCode": 0}},
+    {"createdDateTime": "2026-10-05T17:00:00Z", "userId": "aaaaaaaa-0000-4000-8000-000000000001", "appId": "22220000-0000-4000-8000-000000000002", "status": {"errorCode": 0}},
+    {"createdDateTime": "2026-10-06T09:00:00Z", "userId": "aaaaaaaa-0000-4000-8000-000000000002", "appId": "22220000-0000-4000-8000-000000000002", "status": {"errorCode": 0}},
+    {"createdDateTime": "2026-10-06T10:00:00Z", "userId": "aaaaaaaa-0000-4000-8000-000000000002", "appId": "22220000-0000-4000-8000-000000000002", "status": {"errorCode": 50126}},
+    {"createdDateTime": "2026-10-06T11:00:00Z", "userId": "aaaaaaaa-0000-4000-8000-000000000002", "appId": "99990000-0000-4000-8000-000000000009", "status": {"errorCode": 0}}
+  ]
+}

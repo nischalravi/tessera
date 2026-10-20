@@ -33,10 +33,10 @@
 // site. Tests use NewForTest, which refuses to run outside a test binary
 // (and internal/archtest bans it from non-test files).
 //
-// Not yet wired: the readiness connectors (internal/connectors,
-// internal/readiness) only simulate their systems today; when a connector
-// makes real calls to a customer-configured endpoint, its *http.Client must
-// come from ForConfig. go-oidc and x/oauth2 take this client through
+// The demo connectors and the readiness checks only simulate their systems.
+// The production connectors (internal/connectors/okta and entra) call a
+// customer-configured endpoint with the server's shared outbound client
+// (api.Config.OutboundHTTP, built by ForConfig); they never build their own. go-oidc and x/oauth2 take this client through
 // oidc.ClientContext and oauth2.HTTPClient (PR6).
 package safehttp
 
@@ -134,6 +134,37 @@ func ForConfig(c *config.Config) (*http.Client, error) {
 	return newClient(o)
 }
 
+// ForConfigLimits is ForConfig with a different total timeout and body limit,
+// for a caller whose responses are far larger than OIDC discovery (the AWS
+// connector's IAM and Organizations pages). The SSRF guard is unchanged; zero
+// values keep the defaults.
+func ForConfigLimits(c *config.Config, timeout time.Duration, maxBodyBytes int64) (*http.Client, error) {
+	env, loopback, ok := c.Outbound()
+	if !ok {
+		return nil, errors.New("safehttp: ForConfigLimits needs a configuration from config.Load")
+	}
+	o := Options{Env: config.Prod}
+	if env == config.Dev {
+		o = Options{Env: config.Dev, AllowLoopback: loopback}
+	}
+	o.Timeout, o.MaxBodyBytes = timeout, maxBodyBytes
+	return newClient(o)
+}
+
+// ForCLIEnv is ForCLI for a command-line tool whose user names the
+// environment (the reference CLI reads TESSERA_ENV): only "dev" gets the
+// loopback exception and plain http, so a CLI pointed at a local development
+// server works; any other value, an empty one included, gets the production
+// rules. The server never uses it (ForConfig decides there, from the validated
+// configuration). Zero timeout and maxBodyBytes keep the defaults.
+func ForCLIEnv(env string, timeout time.Duration, maxBodyBytes int64) (*http.Client, error) {
+	o := Options{Env: config.Prod, Timeout: timeout, MaxBodyBytes: maxBodyBytes}
+	if env == config.Dev {
+		o.Env, o.AllowLoopback = config.Dev, true
+	}
+	return newClient(o)
+}
+
 // ForCLI returns a production client (no loopback exception, https only,
 // default ports) with a longer timeout and a larger body limit, for the
 // `tessera catalog` command, which runs without a server configuration and
@@ -198,6 +229,9 @@ func portAllowed(o Options, configured ports, host, port string) bool {
 	}
 	if o.AllowLoopback {
 		if a, err := netip.ParseAddr(host); err == nil && a.Zone() == "" && isDevLoopback(a) {
+			return true
+		}
+		if isDevLocalhost(host) {
 			return true
 		}
 	}
@@ -359,7 +393,7 @@ func checkURL(u *url.URL, o Options, configured ports) error {
 	}
 	if scheme == "http" {
 		a, err := netip.ParseAddr(host)
-		if !(o.Env == config.Dev && o.AllowLoopback && err == nil && isDevLoopback(a)) {
+		if !(o.Env == config.Dev && o.AllowLoopback && ((err == nil && isDevLoopback(a)) || isDevLocalhost(host))) {
 			return fmt.Errorf("%w: http://%s (https only)", ErrScheme, host)
 		}
 	}
@@ -552,6 +586,12 @@ var (
 	devLoopback4 = netip.MustParseAddr("127.0.0.1")
 	devLoopback6 = netip.IPv6Loopback()
 )
+
+// isDevLocalhost is the exact name "localhost", which run.sh publishes as the
+// dev issuer (TESSERA_PUBLIC_URL=http://localhost:$UI_PORT; a WebAuthn RP ID
+// cannot be an IP). Only the dev loopback exception uses it, and the dialer
+// still checks every resolved address.
+func isDevLocalhost(host string) bool { return strings.EqualFold(host, "localhost") }
 
 func isDevLoopback(a netip.Addr) bool {
 	a = a.WithZone("").Unmap()

@@ -3,6 +3,7 @@ package store
 import (
 	"fmt"
 	"io/fs"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -278,16 +279,34 @@ func parseFS(fsys fs.FS, dir, skip string) ([]DDLTable, error) {
 			return nil, fmt.Errorf("%s: %w", f, err)
 		}
 		out = append(out, ts...)
+		// forward migrations that add a column: fold it into its table
+		for _, m := range addColumnRe.FindAllStringSubmatch(stripComments(string(b)), -1) {
+			for i := range out {
+				if out[i].Name != m[1] {
+					continue
+				}
+				col, err := parseTable(m[1], m[2]+" "+m[3]+" "+m[4])
+				if err != nil {
+					return nil, fmt.Errorf("%s: %w", f, err)
+				}
+				out[i].Columns = append(out[i].Columns, col.Columns...)
+			}
+		}
 	}
 	return out, nil
 }
+
+// addColumnRe matches ALTER TABLE t ADD COLUMN [IF NOT EXISTS] name TYPE rest;
+// (table, column, type, the rest of the statement).
+var addColumnRe = regexp.MustCompile(`(?is)ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)\s+(\w+)([^;]*);`)
 
 // PostgresRLSFile returns the embedded generated rls.sql.
 func PostgresRLSFile() ([]byte, error) { return pgSchemaFS.ReadFile("schema/postgres/" + pgRLSFile) }
 
 // hashLookupSetting is the app.lookup value that unlocks the narrow SELECT
 // policy of each GlobalHashLookups table (design §14.2, §14.3).
-var hashLookupSetting = map[string]string{"sessions": "session_hash", "login_transactions": "login_cookie_hash"}
+var hashLookupSetting = map[string]string{"sessions": "session_hash", "login_transactions": "login_cookie_hash",
+	"agent_enrolments": "agent_enrolment_hash", "directory_agents": "agent_cert_pin"}
 
 // GenerateRLS renders rls.sql from the Postgres schema (design §14.3): for
 // every table with a tenant_id column that is not a GlobalTable, ENABLE and

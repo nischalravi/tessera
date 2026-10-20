@@ -1,0 +1,4 @@
+<DescribeVpcEndpointsResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
+  <requestId>r2</requestId>
+  <vpcEndpointSet/>
+</DescribeVpcEndpointsResponse>

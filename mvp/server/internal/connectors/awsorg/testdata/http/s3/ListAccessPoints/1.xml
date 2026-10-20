@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ListAccessPointsResult xmlns="http://awss3control.amazonaws.com/doc/2018-08-20/">
+  <AccessPointList>
+    <AccessPoint>
+      <Name>ap-data</Name>
+      <NetworkOrigin>Internet</NetworkOrigin>
+      <Bucket>prod-pii</Bucket>
+      <AccessPointArn>arn:aws:s3:us-east-1:111111111111:accesspoint/ap-data</AccessPointArn>
+    </AccessPoint>
+  </AccessPointList>
+</ListAccessPointsResult>

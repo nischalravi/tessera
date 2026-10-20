@@ -107,18 +107,20 @@ func ValidateTemplate(tx *store.TenantTx, t *store.ReviewTemplate) error {
 			return specErr("invalid_system", "%q is not one of this organization's systems", *t.System)
 		}
 	}
-	if t.CloseOut == "escalate" {
-		if t.EscalationIdentityID == nil {
-			return specErr("escalation_reviewer_required", "escalation needs a reviewer")
-		}
+	if t.EscalationIdentityID != nil { // checked whatever the close-out; another tenant's id is unknown
 		i, err := tx.Identity(*t.EscalationIdentityID)
 		if errors.Is(err, store.ErrNotFound) {
-			return specErr("escalation_reviewer_not_found", "escalation reviewer not found")
+			return specErr("unknown_escalation_identity", "escalation_identity_id is not an identity in this organization")
 		} else if err != nil {
 			return err
 		}
-		if i.Type != "human" || i.Status != "active" {
+		if i.Status != "active" || (t.CloseOut == "escalate" && i.Type != "human") {
 			return specErr("escalation_reviewer_not_active", "the escalation reviewer is an active person")
+		}
+	}
+	if t.CloseOut == "escalate" {
+		if t.EscalationIdentityID == nil {
+			return specErr("escalation_reviewer_required", "escalation needs a reviewer")
 		}
 	} else {
 		t.EscalationIdentityID = nil
@@ -138,7 +140,12 @@ func Launch(tx *store.TenantTx, t *store.ReviewTemplate, period string, now time
 	if t.System != nil {
 		sys = *t.System
 	}
-	campID, err := GenerateScopedCampaign(tx, now, name, t.UnusedDays, policies, Scope{System: sys, PrivilegedOnly: t.PrivilegedOnly, SkipEmpty: true})
+	roleIDs, err := tx.ReviewTemplateRoles(t.ID)
+	if err != nil {
+		return nil, err
+	}
+	campID, err := GenerateScopedCampaign(tx, now, name, t.UnusedDays, policies,
+		Scope{System: sys, PrivilegedOnly: t.PrivilegedOnly, SkipEmpty: true, RoleIDs: roleIDs})
 	if err != nil {
 		return nil, err
 	}
@@ -285,7 +292,8 @@ func progress(tx *store.TenantTx, l *store.ReviewLaunch, now time.Time, res *Tic
 	}
 	note := "not reviewed by the deadline"
 	for _, it := range open {
-		if _, err := Decide(tx, now, it.ID, "revoke", store.UserRef{Display: Scheduler}, &note); err != nil {
+		// a rule membership is flagged to the role owner rather than removed
+		if _, _, err := DecideItem(tx, now, it.ID, "revoke", store.UserRef{Display: Scheduler}, &note, ChoiceFlag); err != nil {
 			return err
 		}
 	}

@@ -159,6 +159,18 @@ var Rules = []*Rule{
 		},
 	},
 	{
+		ID: "access_drift", Name: "Access drift needs action", Kind: "event", Severity: "medium", Threshold: 1, Window: time.Hour,
+		Description: "Reconciliation found access that differs from what was approved, and its remediation policy acted on it (#301).",
+		Match: func(e *store.AuditEvent) (Hit, bool) {
+			if e.Action != "drift.remediate" || e.Outcome != store.OutcomeSuccess {
+				return Hit{}, false
+			}
+			d := detailOf(e)
+			return Hit{Key: orStr(str(d, "drift_id"), "drift"),
+				Title: fmt.Sprintf("Access drift (%s) in %s: %s", orStr(str(d, "class"), "unknown"), orStr(str(d, "system"), "a system"), orStr(str(d, "action"), "acted on"))}, true
+		},
+	},
+	{
 		ID: "audit_anchor_failed", Name: "Audit anchoring failing", Kind: "detection", Severity: "critical", Threshold: 3,
 		Description: "Audit checkpoints could not be anchored outside the database, so tampering might go unnoticed.",
 		Detect: func(tx *store.TenantTx, _ time.Time) ([]Finding, error) {

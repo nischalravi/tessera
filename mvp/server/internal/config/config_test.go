@@ -193,6 +193,38 @@ func TestDevDefaults(t *testing.T) {
 
 // TestAnchorURL: dev anchors next to the database unless TESSERA_AUDIT_ANCHOR
 // says otherwise; prod uses only the configured sink.
+func TestGroupsSyncBudget(t *testing.T) {
+	c, err := config.Load(env(map[string]string{"TESSERA_ENV": "dev"}))
+	if err != nil || c.GroupsSyncBudget != 5000 {
+		t.Fatalf("default = %v, %v; want 5000", c, err)
+	}
+	c, err = config.Load(env(map[string]string{"TESSERA_ENV": "dev", "TESSERA_GROUPS_SYNC_BUDGET": "250"}))
+	if err != nil || c.GroupsSyncBudget != 250 {
+		t.Errorf("set = %v, %v; want 250", c, err)
+	}
+	for _, bad := range []string{"0", "-1", "lots", "99999999999"} {
+		if _, err := config.Load(env(map[string]string{"TESSERA_ENV": "dev", "TESSERA_GROUPS_SYNC_BUDGET": bad})); err == nil {
+			t.Errorf("TESSERA_GROUPS_SYNC_BUDGET=%q was accepted", bad)
+		}
+	}
+}
+
+func TestGroupsRetentionDays(t *testing.T) {
+	c, err := config.Load(env(map[string]string{"TESSERA_ENV": "dev"}))
+	if err != nil || c.GroupsRetentionDays != 7*365 {
+		t.Fatalf("default = %v, %v; want 7 years", c, err)
+	}
+	c, err = config.Load(env(map[string]string{"TESSERA_ENV": "dev", "TESSERA_GROUPS_RETENTION_DAYS": "400"}))
+	if err != nil || c.GroupsRetentionDays != 400 {
+		t.Errorf("set = %v, %v; want 400", c, err)
+	}
+	for _, bad := range []string{"0", "29", "-1", "years", "99999"} {
+		if _, err := config.Load(env(map[string]string{"TESSERA_ENV": "dev", "TESSERA_GROUPS_RETENTION_DAYS": bad})); err == nil {
+			t.Errorf("TESSERA_GROUPS_RETENTION_DAYS=%q was accepted", bad)
+		}
+	}
+}
+
 func TestAnchorURL(t *testing.T) {
 	c, err := config.Load(env(map[string]string{}))
 	if err != nil {
@@ -427,6 +459,28 @@ func TestSafedialAllowDevOnly(t *testing.T) {
 	}
 	if _, err := config.Load(env(with(safeProd(), "TESSERA_SAFEDIAL_ALLOW", "192.168.1.10:636"))); err == nil {
 		t.Fatal("prod accepted TESSERA_SAFEDIAL_ALLOW")
+	}
+}
+
+// TestAgentListenerConfig: the Directory Agent listener is mutual TLS only, so
+// an address needs its certificate and key, and they need the address; prod
+// accepts the complete set.
+func TestAgentListenerConfig(t *testing.T) {
+	c, err := config.Load(env(with(safeProd(), "TESSERA_AGENT_ADDR", ":8443", "TESSERA_AGENT_TLS_CERT", "/etc/t/a.crt", "TESSERA_AGENT_TLS_KEY", "/etc/t/a.key")))
+	if err != nil || c.AgentAddr != ":8443" || c.AgentTLSCert != "/etc/t/a.crt" || c.AgentTLSKey != "/etc/t/a.key" {
+		t.Fatalf("prod with a complete agent listener: %v %+v", err, c)
+	}
+	if c, err := config.Load(env(safeProd())); err != nil || c.AgentAddr != "" {
+		t.Fatalf("no listener by default: %v", err)
+	}
+	for name, kv := range map[string][]string{
+		"address only":      {"TESSERA_AGENT_ADDR", ":8443"},
+		"address and cert":  {"TESSERA_AGENT_ADDR", ":8443", "TESSERA_AGENT_TLS_CERT", "/c"},
+		"cert and key only": {"TESSERA_AGENT_TLS_CERT", "/c", "TESSERA_AGENT_TLS_KEY", "/k"},
+	} {
+		if _, err := config.Load(env(with(safeProd(), kv...))); err == nil {
+			t.Errorf("%s accepted", name)
+		}
 	}
 }
 

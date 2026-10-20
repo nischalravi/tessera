@@ -19,18 +19,27 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/admin"
+	"github.com/nischalravi/tessera/mvp/server/internal/agent"
 	"github.com/nischalravi/tessera/mvp/server/internal/alerts"
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/auth/casclient"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oauth2rp"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oidcrp"
+	"github.com/nischalravi/tessera/mvp/server/internal/condaccess"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/claim"
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/credential"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/sponsorship"
 	"github.com/nischalravi/tessera/mvp/server/internal/health"
+	"github.com/nischalravi/tessera/mvp/server/internal/helpdesk"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
 	"github.com/nischalravi/tessera/mvp/server/internal/mcpauth"
+	"github.com/nischalravi/tessera/mvp/server/internal/notify"
+	"github.com/nischalravi/tessera/mvp/server/internal/oauth"
 	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
@@ -100,8 +109,21 @@ type Config struct {
 	// AuditAnchor is TESSERA_AUDIT_ANCHOR: POST /api/audit/verify checks
 	// checkpoints against it when it is a file:// URL.
 	AuditAnchor string
-	// PublicURL is TESSERA_PUBLIC_URL: the base of the OIDC redirect URIs.
+	// PublicURL is TESSERA_PUBLIC_URL: the base of the OIDC redirect URIs and
+	// of every OAuth issuer (PublicURL/t/{slug}) and DPoP htu.
 	PublicURL string
+	// RPID is TESSERA_RP_ID, the WebAuthn relying party id of break-glass
+	// keys. Empty (or no PublicOrigin): break-glass is unavailable.
+	RPID string
+	// APIAudience is TESSERA_API_AUDIENCE, the aud of access tokens (default
+	// PublicURL + "/api").
+	APIAudience string
+	// AccessTokenTTL (TESSERA_AT_TTL_SECONDS) and DeviceCodeTTL
+	// (TESSERA_DEVICE_CODE_TTL_SECONDS) default to 600 s and 300 s.
+	AccessTokenTTL, DeviceCodeTTL time.Duration
+	// DPoPRSNonce (TESSERA_DPOP_RS_NONCE) requires a DPoP server nonce on API
+	// requests too.
+	DPoPRSNonce bool
 	// Sealer opens connection client secrets, seals PKCE verifiers, provisioning
 	// target credentials and the config bundle signing keys under the KEK.
 	// Nil (tests only): sign-in with secrets and config export are unavailable,
@@ -118,6 +140,10 @@ type Config struct {
 	// TrustedProxies (TESSERA_TRUSTED_PROXIES) are the peers whose
 	// X-Forwarded-For the rate limiter believes.
 	TrustedProxies []netip.Prefix
+	// DeviceSignals is the source of device-compliance signals for
+	// conditional access. Nil: the signals admins set (condaccess.StoreSignals);
+	// the CAEP receiver (#114) will plug in here.
+	DeviceSignals condaccess.SignalSource
 	// Siem streams the audit ledger to tenants' SIEMs (issue #169); its
 	// Sealer seals sink tokens. Nil: tests of sinks are unavailable.
 	Siem *siem.Service
@@ -139,16 +165,47 @@ type Config struct {
 	// Identifiers hashes the identifiers of invited guests under per-tenant
 	// keys derived from the KEK. Nil: invitations answer 503.
 	Identifiers *identifiers.Keyer
+	// Secrets hands one-time secrets (claim links, confirmation codes) to the
+	// notification dispatcher through memory, never the database; share the
+	// instance with the Dispatcher. Nil: the API makes its own (nothing is
+	// mailed without a dispatcher holding it).
+	Secrets *notify.Secrets
+	// Credential is the credential authority guests set up their sign-in
+	// through (guest claim, internal/guests/credential). Nil: the claim stops
+	// at the credential step and stays pending.
+	Credential credential.Authority
+	// ClaimMinDuration is the minimum time of a claim start or resend (default
+	// 300 ms); tests shorten it.
+	ClaimMinDuration time.Duration
 	// Containment runs the kill switch's provider calls (revoke sessions and
 	// grants). Nil: a service with no outbound client, so every containment
 	// step is a manual task.
 	Containment *containment.Service
+	// Helpdesk runs the verified help-desk reset workflow (issue #108). Nil:
+	// live executors from the Containment credentials, and the simulators
+	// unless Env is "prod".
+	Helpdesk *helpdesk.Service
 	// Health answers /readyz and the admin platform-health summary. Nil: a
 	// checker over Store and Sealer with the default loop-lag threshold.
 	Health *health.Checker
+	// GroupsEngine is the native groups' membership engine, whose synchronous
+	// budget is TESSERA_GROUPS_SYNC_BUDGET. Nil: the defaults.
+	GroupsEngine *engine.Engine
 	// AuditAppend overrides how the audit middleware writes http.request
 	// events (tests inject failures). Nil: the store.
 	AuditAppend func(ctx context.Context, t tenancy.ID, e store.AuditEvent) error
+	// Agents is the Directory Agent service (DR-11) behind /api/agents. Nil: a
+	// service with its own in-memory hub (no agent listener is attached).
+	// New links it to readiness so connections that name an agent are probed
+	// through it.
+	Agents *agent.Service
+	// AWSCatalog returns the action catalog the AWS evaluator runs against
+	// (see CatalogFromDir). Nil: the /api/aws evaluator routes answer 503
+	// aws_catalog_unavailable; everything else is unaffected.
+	AWSCatalog func() (*AWSCatalog, error)
+	// GitHubAPIBase is where the access-diff comment is posted (default
+	// https://api.github.com). Tests point it at a local server.
+	GitHubAPIBase string
 }
 
 // Server serves the API.
@@ -161,16 +218,31 @@ type Server struct {
 	authn  *auth.Authenticator
 	limits *limiters
 	guests *sponsorship.Service
-	rp     *oidcrp.RP
-	oauth2 *oauth2rp.RP
+
+	claimSvc *claim.Service
+	claimLim *claimLimits
+	names    nameCache
+	rp       *oidcrp.RP
+	oauth2   *oauth2rp.RP
+	// signals supplies device-compliance signals to conditional access.
+	signals condaccess.SignalSource
+	cas     *casclient.Client
+	// oauth is the authorization server of the CLI (internal/oauth); it also
+	// verifies the DPoP access tokens of API requests (authn.Tokens).
+	oauth *oauth.Service
 
 	readiness *readiness.Service
+	agents    *agent.Service
 	prov      *provision.Engine
 	provSeal  *seal.Sealer // cfg.Sealer, or a per-process key when it is nil
 	// containment is the kill switch (issue #106); never nil.
 	containment *containment.Service
 	// mcp is the MCP authorization server (issue #115); never nil.
 	mcp *mcpauth.Service
+	// aws holds the AWS evaluator's engines and explanations (aws_eval.go).
+	aws awsRuntime
+	// helpdesk is the verified reset workflow (issue #108); never nil.
+	helpdesk *helpdesk.Service
 	// admin is the admin-change workflow (design §15); never nil.
 	admin *admin.Service
 	// queue is the durable job queue (issue #300); never nil.
@@ -206,6 +278,18 @@ func New(cfg Config) *Server {
 		cfg.Readiness.Runner.Scenario = cfg.ReadinessScenario
 		cfg.Readiness.Runner.SCIM.Client = cfg.OutboundHTTP
 	}
+	if cfg.Agents == nil {
+		cfg.Agents = &agent.Service{DB: cfg.Store, Hub: agent.NewHub(nil), Clock: cfg.Clock}
+	}
+	if cfg.Readiness.Runner.Live.Agents == nil {
+		cfg.Readiness.Runner.Live.Agents = cfg.Agents
+	}
+	if cfg.GroupsEngine == nil {
+		cfg.GroupsEngine = engine.New(0)
+		if cfg.DeviceSignals == nil {
+			cfg.DeviceSignals = condaccess.StoreSignals{}
+		}
+	}
 	if cfg.Containment == nil {
 		cfg.Containment = &containment.Service{}
 	}
@@ -223,15 +307,42 @@ func New(cfg Config) *Server {
 		}
 		provSeal = sealer
 	}
-	s := &Server{cfg: cfg, containment: cfg.Containment, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
-		limits: newLimiters(cfg.RateLimits), provSeal: provSeal}
+	if cfg.Helpdesk == nil {
+		// The live Okta and Entra executors reuse the kill switch's provider
+		// credentials and outbound client; the simulators never run in prod.
+		hc := cfg.Containment.HTTP
+		if hc == nil {
+			hc = cfg.OutboundHTTP
+		}
+		cfg.Helpdesk = &helpdesk.Service{HTTP: hc, Containment: cfg.Containment, Clock: cfg.Clock, Simulated: cfg.Env != "prod"}
+	}
+	s := &Server{cfg: cfg, containment: cfg.Containment, helpdesk: cfg.Helpdesk, signals: cfg.DeviceSignals, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
+		agents: cfg.Agents, limits: newLimiters(cfg.RateLimits), provSeal: provSeal}
 	s.mcp = &mcpauth.Service{HTTP: cfg.OutboundHTTP, AllowLoopback: cfg.Env == "dev", Sealer: cfg.Sealer, Clock: func() time.Time { return s.clock() },
 		PolicyVersion: s.policyVersion}
 	s.prov = &provision.Engine{DB: cfg.Store, Sealer: provSeal, HTTP: cfg.Outbound,
 		Clock: func() time.Time { return s.clock() }, Log: cfg.Logger.With("component", "provisioning")}
 	s.admin = &admin.Service{DB: cfg.Store, Clock: func() time.Time { return s.clock() }, Sealer: cfg.Sealer,
 		Prod: cfg.Env == "prod", Log: cfg.Logger}
+	if cfg.RPID != "" && cfg.PublicOrigin != "" {
+		// the ceremony runs on the public origin (and, in dev, the CORS origins)
+		origins := s.csrfOrigins()
+		if wa, err := admin.NewWebAuthn(cfg.RPID, origins); err != nil {
+			cfg.Logger.Error("break-glass is unavailable: the WebAuthn relying party is invalid", "rp_id", cfg.RPID, "err", err)
+		} else {
+			s.admin.WebAuthn = wa
+		}
+	}
 	s.guests = sponsorship.New(cfg.Identifiers)
+	s.claimLim = newClaimLimits()
+	if cfg.Identifiers != nil && cfg.PublicURL != "" {
+		if cfg.Secrets == nil {
+			cfg.Secrets = notify.NewSecrets()
+			s.cfg.Secrets = cfg.Secrets
+		}
+		s.claimSvc = claim.New(cfg.Identifiers, cfg.Secrets, cfg.PublicURL, s.tenantName)
+		s.guests.Claim = s.claimSvc
+	}
 	if cfg.OutboundHTTP != nil {
 		rp, err := oidcrp.New(oidcrp.Config{HTTP: cfg.OutboundHTTP, Now: func() time.Time { return s.clock() }})
 		if err != nil {
@@ -241,16 +352,34 @@ func New(cfg Config) *Server {
 		if s.oauth2, err = oauth2rp.New(cfg.OutboundHTTP); err != nil {
 			panic(err) // HTTP is set
 		}
+		if s.cas, err = casclient.New(cfg.OutboundHTTP); err != nil {
+			panic(err) // HTTP is set
+		}
 	}
 	s.authn = &auth.Authenticator{DB: cfg.Store, Clock: func() time.Time { return s.clock() },
 		Cookies: auth.Cookies{Insecure: cfg.InsecureCookie}}
 	s.queue = s.newQueue()
+	publicURL, audience := cfg.PublicURL, cfg.APIAudience
+	if publicURL == "" {
+		publicURL = "http://localhost" // unconfigured (tests): issuers and htu are still well-formed
+	}
+	if audience == "" {
+		audience = strings.TrimRight(publicURL, "/") + "/api"
+	}
+	var err error
+	if s.oauth, err = oauth.New(oauth.Config{DB: cfg.Store, Sealer: cfg.Sealer, Clock: func() time.Time { return s.clock() },
+		PublicURL: publicURL, APIAudience: audience, AccessTokenTTL: cfg.AccessTokenTTL, DeviceCodeTTL: cfg.DeviceCodeTTL,
+		RSNonce: cfg.DPoPRSNonce, Log: cfg.Logger, ClientIP: s.requestIP}); err != nil {
+		panic(err) // Store, Clock, PublicURL and APIAudience are set
+	}
+	s.authn.Tokens = s.oauth
 	s.registerRoutes()
 	s.registerAuditRoutes()
 	s.registerSiemRoutes()
 	s.registerAlertRoutes()
 	s.registerOwnershipRoutes()
 	s.registerReviewScheduleRoutes()
+	s.registerRoleReviewRoutes()
 	s.registerCorrelationRoutes()
 	s.registerAffiliationRoutes()
 	s.registerRequestRoutes()
@@ -264,23 +393,39 @@ func New(cfg Config) *Server {
 	s.registerSodControlRoutes()
 	s.registerLifecycleRoutes()
 	s.registerGuestRoutes()
+	s.registerClaimRoutes()
 	s.registerNotificationRoutes()
 	s.registerEmailRoutes()
 	s.registerContainmentRoutes()
 	s.registerMCPRoutes()
+	s.registerFlatfileRoutes()
 	s.registerEvidenceRoutes()
+	s.registerReviewPopulationRoutes()
+	s.registerHelpdeskRoutes()
 	s.registerGroupsFolderRoutes()
+	s.registerGroupsPrivilegeRoutes()
+	s.registerGroupsMemberRoutes()
+	s.registerGroupsHistoryRoutes()
 	s.registerReadinessRoutes()
+	s.registerAgentRoutes()
+	s.registerAWSRoutes()
 	s.registerJobRoutes()
 	s.registerQueueRoutes()
 	s.registerProvisioningRoutes()
+	s.registerDriftRoutes()
 	s.registerTransportRoutes()
 	s.registerAuthRoutes()
 	s.registerLoginRoutes()
 	s.registerSAMLRoutes()
 	s.registerOAuth2Routes()
+	s.registerCASRoutes()
+	s.registerWSFedRoutes()
 	s.registerStepUpRoutes()
+	s.registerAccessRoutes()
+	s.registerOAuthRoutes()
 	s.registerAdminRoutes()
+	s.registerBreakGlassRoutes()
+	s.registerAdminClientRoutes()
 	s.registerOpsRoutes()
 	s.checkPublicRoutes()
 	return s
@@ -362,6 +507,10 @@ func (s *Server) RunReviewScheduler(ctx context.Context, interval time.Duration)
 		}
 	}
 }
+
+// driftEvery is how often the queue reconciles intended and observed access
+// (a sync reconciles at once; the schedule catches what time changes: expiries).
+const driftEvery = 5 * time.Minute
 
 // sweepTenant expires one tenant's JIT grants and closes its due request
 // lines (requests.Sweep), taking the write lock only when there is work. The
@@ -548,22 +697,35 @@ func (s *Server) serveTenant(rt *route, w http.ResponseWriter, r *http.Request, 
 	return out, err
 }
 
+// multiSegmentVar is the one path variable that may span several segments: an
+// ARN, which can hold slashes ("role/Name", an S3 object key). A pattern has at
+// most one; it takes the segments the literal ones around it leave over.
+const multiSegmentVar = "{arn}"
+
 func (rt *route) match(path string) (map[string]string, bool) {
 	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
-	if len(parts) != len(rt.segs) {
+	extra := len(parts) - len(rt.segs) // segments beyond one per pattern segment
+	if extra != 0 && (extra < 0 || !slices.Contains(rt.segs, multiSegmentVar)) {
 		return nil, false
 	}
 	var vars map[string]string
-	for i, seg := range rt.segs {
+	pi := 0
+	for _, seg := range rt.segs {
+		n := 1
+		if seg == multiSegmentVar {
+			n += extra
+		}
+		got := parts[pi : pi+n]
+		pi += n
 		if strings.HasPrefix(seg, "{") {
-			if parts[i] == "" {
+			if slices.Contains(got, "") {
 				return nil, false
 			}
 			if vars == nil {
 				vars = map[string]string{}
 			}
-			vars[seg[1:len(seg)-1]] = parts[i]
-		} else if seg != parts[i] {
+			vars[seg[1:len(seg)-1]] = strings.Join(got, "/")
+		} else if seg != got[0] {
 			return nil, false
 		}
 	}
@@ -602,8 +764,8 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 			alt += "/"
 		}
 		// Only same-origin absolute paths that match a registered route are
-		// redirected to; "//host" (protocol-relative) targets are refused.
-		if strings.HasPrefix(alt, "/") && !strings.HasPrefix(alt, "//") {
+		// redirected to; "//host" and "/\\host" (protocol-relative) targets are refused.
+		if strings.HasPrefix(alt, "/") && !strings.HasPrefix(alt, "//") && !strings.HasPrefix(alt, `/\`) {
 			if rt2, _, allowed2 := s.find(r.Method, alt); rt2 != nil || len(allowed2) > 0 {
 				u := url.URL{Path: alt, RawQuery: r.URL.RawQuery}
 				http.Redirect(w, r, u.RequestURI(), http.StatusTemporaryRedirect) // #nosec G710 -- target is a registered same-origin route
@@ -651,6 +813,10 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, sb.status, sb.body)
 		return
 	}
+	if db, ok := out.(deniedBody); ok {
+		auth.WriteDenial(w, db.d)
+		return
+	}
 	if fb, ok := out.(fileBody); ok {
 		writeFile(w, fb)
 		return
@@ -669,9 +835,12 @@ func (s *Server) attribute(r *http.Request) {
 		audit.SetAnonymous(r.Context(), reason)
 	default:
 		markAuthenticated(r.Context())
-		sid := p.SessionID.String()
-		audit.SetPrincipal(r.Context(), audit.Principal{Tenant: p.TenantID, Actor: p.AuditActor(), SessionID: &sid,
-			Authn: p.AuditAuthn(s.clock())})
+		ap := audit.Principal{Tenant: p.TenantID, Actor: p.AuditActor(), Authn: p.AuditAuthn(s.clock())}
+		if p.SessionID != nil { // a machine client has no session
+			sid := p.SessionID.String()
+			ap.SessionID = &sid
+		}
+		audit.SetPrincipal(r.Context(), ap)
 	}
 }
 
@@ -906,7 +1075,7 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		default:
 			h.Set("Content-Security-Policy", cspAPI)
 		}
-		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/t/") {
+		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/t/") || strings.HasPrefix(r.URL.Path, "/public/") {
 			h.Set("Cache-Control", "no-store")
 		}
 		if s.cfg.HSTS {

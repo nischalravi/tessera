@@ -12,12 +12,14 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/claim"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/sponsorship"
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/lifecycle"
 	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 	"github.com/nischalravi/tessera/mvp/server/internal/queue"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
+	"github.com/nischalravi/tessera/mvp/server/internal/reconcile"
 	"github.com/nischalravi/tessera/mvp/server/internal/requests"
 	"github.com/nischalravi/tessera/mvp/server/internal/sod"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -38,7 +40,7 @@ const maxSweepAttempts = 3
 
 // SweeperLoops are the queue kinds whose runs are tracked as loops in
 // obs.DefaultLoops (lag in /metrics, /readyz and Admin -> Platform health).
-var SweeperLoops = []string{jobs.JITSweep, jobs.SweepRequests, jobs.SweepLifecycle, jobs.SweepAdminChanges, jobs.ContainmentRetry, jobs.SweepSoDMitigations}
+var SweeperLoops = []string{jobs.JITSweep, jobs.SweepRequests, jobs.SweepLifecycle, jobs.SweepAdminChanges, jobs.ContainmentRetry, jobs.SweepSoDMitigations, jobs.SweepDrift}
 
 // tracked reports each run of a kind's handler, in any tenant, to its loop.
 func tracked(kind string, h queue.Handler) queue.Handler {
@@ -50,7 +52,11 @@ func tracked(kind string, h queue.Handler) queue.Handler {
 
 func (s *Server) newQueue() *queue.Queue {
 	for _, k := range SweeperLoops {
-		obs.DefaultLoops.Register(k, SweepInterval, true)
+		every := SweepInterval
+		if k == jobs.SweepDrift {
+			every = driftEvery
+		}
+		obs.DefaultLoops.Register(k, every, true)
 	}
 	q := &queue.Queue{DB: s.store, Clock: func() time.Time { return s.clock() }, Log: s.log.With("component", "queue")}
 	// jit_sweep is also the manual POST /api/jit/sweep: its runs carry the
@@ -61,11 +67,13 @@ func (s *Server) newQueue() *queue.Queue {
 	q.Register(jobs.SweepAdminChanges, queue.Kind{Handler: tracked(jobs.SweepAdminChanges, s.queueAdminSweep), Actor: "admin.sweeper"})
 	q.Register(jobs.ContainmentRetry, queue.Kind{Handler: tracked(jobs.ContainmentRetry, s.queueContainmentRetries), Actor: "containment.sweeper"})
 	q.Register(jobs.SweepSoDMitigations, queue.Kind{Handler: tracked(jobs.SweepSoDMitigations, s.queueSoDSweep), Actor: sod.Sweeper})
+	q.Register(jobs.SweepDrift, queue.Kind{Handler: tracked(jobs.SweepDrift, s.queueDriftSweep), Actor: "drift.sweeper"})
 	q.Register(jobs.Maintenance, queue.Kind{Handler: s.queueMaintenance, Actor: "queue.worker"})
 	every := "@every " + SweepInterval.String()
 	for _, k := range []string{jobs.JITSweep, jobs.SweepRequests, jobs.SweepLifecycle, jobs.SweepAdminChanges, jobs.ContainmentRetry, jobs.SweepSoDMitigations} {
 		q.Schedule(k, k, every, maxSweepAttempts)
 	}
+	q.Schedule(jobs.SweepDrift, jobs.SweepDrift, "@every "+driftEvery.String(), maxSweepAttempts)
 	q.Schedule(jobs.Maintenance, jobs.Maintenance, "@every "+jobMaintainGap.String(), 1)
 	return q
 }
@@ -100,7 +108,8 @@ func (s *Server) queueRequestSweep(ctx context.Context, j queue.Job) (any, error
 }
 
 // queueLifecycleSweep ends sponsorships first: the last one to end ends the
-// person, and the lifecycle sweep then has nothing left. They are one job so
+// person, and the lifecycle sweep then has nothing left. Guest claim links are
+// swept in the same job (#202). They are one job so
 // that order holds however many workers run.
 func (s *Server) queueLifecycleSweep(ctx context.Context, j queue.Job) (any, error) {
 	now := s.clock()
@@ -114,6 +123,19 @@ func (s *Server) queueLifecycleSweep(ctx context.Context, j queue.Job) (any, err
 	})
 	if err != nil {
 		return nil, err
+	}
+	if s.claimSvc != nil { // expire guest claim links, and the invitations whose last link lapsed unused
+		err = s.store.InTenant(audit.WithSystemActor(ctx, "claim.sweeper"), j.Tenant, func(tx *store.TenantTx) error {
+			need, err := claim.NeedsSweep(tx, now)
+			if err != nil || !need {
+				return err
+			}
+			_, err = s.claimSvc.Sweep(tx, now)
+			return err
+		})
+		if err != nil {
+			return nil, err
+		}
 	}
 	_, err = lifecycle.SweepTenant(audit.WithSystemActor(ctx, lifecycle.Sweeper), readiness.Scope{DB: s.store, Tenant: j.Tenant},
 		s.containment, now)
@@ -141,6 +163,16 @@ func (s *Server) queueSoDSweep(ctx context.Context, j queue.Job) (any, error) {
 	now := s.clock()
 	return nil, s.store.InTenant(audit.WithSystemActor(ctx, sod.Sweeper), j.Tenant, func(tx *store.TenantTx) error {
 		_, _, err := sod.Sweep(tx, now, s.cfg.SoD)
+		return err
+	})
+}
+
+// queueDriftSweep reconciles one tenant's intended and observed access: it opens,
+// updates and resolves drift and runs the remediation policies (issue #301).
+func (s *Server) queueDriftSweep(ctx context.Context, j queue.Job) (any, error) {
+	now := s.clock()
+	return nil, s.store.InTenant(audit.WithSystemActor(ctx, "drift.sweeper"), j.Tenant, func(tx *store.TenantTx) error {
+		_, err := reconcile.RunDrift(tx, now, "drift.sweeper")
 		return err
 	})
 }

@@ -44,39 +44,39 @@ func (s *Server) registerMCPAdminRoutes() {
 
 func iso(t time.Time) string { return t.UTC().Format(time.RFC3339) }
 
-type nameRef struct {
+type mcpNameRef struct {
 	ID   int64  `json:"id"`
 	Name string `json:"name"`
 }
 
-func mcpRefOf(ids map[int64]*store.Identity, id int64) *nameRef {
+func mcpRefOf(ids map[int64]*store.Identity, id int64) *mcpNameRef {
 	if i := ids[id]; i != nil {
-		return &nameRef{ID: id, Name: i.Name}
+		return &mcpNameRef{ID: id, Name: i.Name}
 	}
-	return &nameRef{ID: id, Name: "(unknown)"}
+	return &mcpNameRef{ID: id, Name: "(unknown)"}
 }
 
-type clientView struct {
-	ID               string   `json:"id"`
-	ClientID         string   `json:"client_id"`
-	Name             string   `json:"name"`
-	RedirectURIs     []string `json:"redirect_uris"`
-	LoopbackRedirect bool     `json:"loopback_redirect"`
-	HasKeys          bool     `json:"has_keys"`
-	Agent            *nameRef `json:"agent"`
-	Status           string   `json:"status"`
-	FetchedAt        string   `json:"fetched_at"`
-	ExpiresAt        string   `json:"expires_at"`
-	DocSHA256        string   `json:"doc_sha256"`
+type mcpClientView struct {
+	ID               string      `json:"id"`
+	ClientID         string      `json:"client_id"`
+	Name             string      `json:"name"`
+	RedirectURIs     []string    `json:"redirect_uris"`
+	LoopbackRedirect bool        `json:"loopback_redirect"`
+	HasKeys          bool        `json:"has_keys"`
+	Agent            *mcpNameRef `json:"agent"`
+	Status           string      `json:"status"`
+	FetchedAt        string      `json:"fetched_at"`
+	ExpiresAt        string      `json:"expires_at"`
+	DocSHA256        string      `json:"doc_sha256"`
 }
 
-func clientViewOf(c *store.MCPClient, ids map[int64]*store.Identity) clientView {
+func clientViewOf(c *store.MCPClient, ids map[int64]*store.Identity) mcpClientView {
 	uris := mcpauth.RedirectURIsOf(c)
 	var set struct {
 		Keys []json.RawMessage `json:"keys"`
 	}
 	_ = json.Unmarshal([]byte(c.JWKS), &set)
-	v := clientView{ID: c.ID, ClientID: c.ClientID, Name: c.Name, RedirectURIs: uris, LoopbackRedirect: mcpauth.HasLoopbackRedirect(uris),
+	v := mcpClientView{ID: c.ID, ClientID: c.ClientID, Name: c.Name, RedirectURIs: uris, LoopbackRedirect: mcpauth.HasLoopbackRedirect(uris),
 		HasKeys: len(set.Keys) > 0, Status: c.Status, FetchedAt: iso(c.FetchedAt), ExpiresAt: iso(c.ExpiresAt), DocSHA256: c.DocSHA256}
 	if c.AgentIdentityID != nil {
 		v.Agent = mcpRefOf(ids, *c.AgentIdentityID)
@@ -94,7 +94,7 @@ func (s *Server) mcpListClients(r *http.Request, _ *params) (int, any, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	out := []clientView{}
+	out := []mcpClientView{}
 	for _, c := range cs {
 		out = append(out, clientViewOf(c, ids))
 	}
@@ -213,7 +213,7 @@ type resourceView struct {
 
 func (s *Server) resourceViewOf(slug string, x *store.MCPResource) resourceView {
 	return resourceView{ID: x.ID, Resource: x.Resource, Name: x.Name, Status: x.Status, CreatedBy: x.CreatedBy,
-		CreatedAt: iso(x.CreatedAt), MetadataURL: "/t/" + slug + "/.well-known/oauth-protected-resource/" + x.ID}
+		CreatedAt: iso(x.CreatedAt), MetadataURL: "/t/" + slug + mcpIssuerSuffix + "/.well-known/oauth-protected-resource/" + x.ID}
 }
 
 // mcpSlug is the principal's tenant slug (a read-only lookup, safe to call
@@ -330,8 +330,8 @@ func (s *Server) mcpUpdateResource(r *http.Request, p *params) (int, any, error)
 type tokenView struct {
 	JTI           string          `json:"jti"`
 	ClientID      string          `json:"client_id"`
-	Subject       *nameRef        `json:"subject"`
-	Agent         *nameRef        `json:"agent"`
+	Subject       *mcpNameRef     `json:"subject"`
+	Agent         *mcpNameRef     `json:"agent"`
 	Audience      string          `json:"audience"`
 	Scope         []string        `json:"scope"`
 	Act           json.RawMessage `json:"act"`
@@ -398,20 +398,20 @@ func (s *Server) mcpRevokeToken(r *http.Request, p *params) (int, any, error) {
 }
 
 type mcpDecisionView struct {
-	ID             int64    `json:"id"`
-	At             string   `json:"at"`
-	Kind           string   `json:"kind"`
-	Allow          bool     `json:"allow"`
-	Reason         string   `json:"reason"`
-	JTI            string   `json:"jti"`
-	ClientID       string   `json:"client_id"`
-	Subject        *nameRef `json:"subject"`
-	Agent          *nameRef `json:"agent"`
-	Resource       string   `json:"resource"`
-	Tool           string   `json:"tool"`
-	RequestedScope []string `json:"requested_scope"`
-	GrantedScope   []string `json:"granted_scope"`
-	PolicyVersion  string   `json:"policy_version"`
+	ID             int64       `json:"id"`
+	At             string      `json:"at"`
+	Kind           string      `json:"kind"`
+	Allow          bool        `json:"allow"`
+	Reason         string      `json:"reason"`
+	JTI            string      `json:"jti"`
+	ClientID       string      `json:"client_id"`
+	Subject        *mcpNameRef `json:"subject"`
+	Agent          *mcpNameRef `json:"agent"`
+	Resource       string      `json:"resource"`
+	Tool           string      `json:"tool"`
+	RequestedScope []string    `json:"requested_scope"`
+	GrantedScope   []string    `json:"granted_scope"`
+	PolicyVersion  string      `json:"policy_version"`
 }
 
 func (s *Server) mcpListDecisions(r *http.Request, p *params) (int, any, error) {

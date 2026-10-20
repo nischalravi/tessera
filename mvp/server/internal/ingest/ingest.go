@@ -12,6 +12,7 @@ package ingest
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -183,6 +184,19 @@ func (s DiscoveryStats) Object() ojson.Object {
 // Discovery upserts discovery results. pruneEdges deletes connector edges
 // that no connector reported any more.
 func Discovery(c *store.TenantTx, now time.Time, results []*connectors.DiscoveryResult, pruneEdges bool) (DiscoveryStats, error) {
+	return discovery(c, now, results, pruneEdges, true)
+}
+
+// Import upserts the records of one disconnected app (a flat-file import,
+// issue #105) through the same phases as Discovery, correlating accounts with
+// the same resolver. Unlike Discovery it leaves the agent delegations alone:
+// a file of one app says nothing about them. Edges are never pruned here; the
+// importer removes what its delta says is gone.
+func Import(c *store.TenantTx, now time.Time, res *connectors.DiscoveryResult) (DiscoveryStats, error) {
+	return discovery(c, now, []*connectors.DiscoveryResult{res}, false, false)
+}
+
+func discovery(c *store.TenantTx, now time.Time, results []*connectors.DiscoveryResult, pruneEdges, delegations bool) (DiscoveryStats, error) {
 	var st DiscoveryStats
 	// 1. identities (two passes so manager/owner refs resolve)
 	for _, r := range results {
@@ -268,11 +282,19 @@ func Discovery(c *store.TenantTx, now time.Time, results []*connectors.Discovery
 				return st, fmt.Errorf("unresolved edge %v -> %v", rec.Src, rec.Dst)
 			}
 			seen[[2]string{src, dst}] = true
-			if err := c.UpsertConnectorEdge(src, dst, rec.Relation, now); err != nil {
+			if ev := rec.Evaluation; ev != nil {
+				if _, err := c.UpsertEvaluatorEdge(src, dst, rec.Relation, now,
+					store.EdgeEvaluation{ExplanationID: ev.ExplanationID, Outcome: ev.Outcome, Fidelity: ev.Fidelity}); err != nil {
+					return st, err
+				}
+			} else if err := c.UpsertConnectorEdge(src, dst, rec.Relation, now); err != nil {
 				return st, err
 			}
 			st.Edges++
 		}
+	}
+	if err := recordObserved(c, now, results); err != nil {
+		return st, err
 	}
 	if pruneEdges {
 		edges, err := c.Edges()
@@ -280,7 +302,7 @@ func Discovery(c *store.TenantTx, now time.Time, results []*connectors.Discovery
 			return st, err
 		}
 		for _, e := range edges {
-			if e.Source == "connector" && !seen[[2]string{e.Src, e.Dst}] {
+			if (e.Source == "connector" || e.Source == store.EdgeSourceEvaluator) && !seen[[2]string{e.Src, e.Dst}] {
 				if err := c.DeleteEdge(e.ID, now); err != nil {
 					return st, err
 				}
@@ -301,6 +323,9 @@ func Discovery(c *store.TenantTx, now time.Time, results []*connectors.Discovery
 			}
 			st.Secrets++
 		}
+	}
+	if !delegations {
+		return st, nil
 	}
 	// 8. delegations (replace wholesale, this tenant only: the Python MVP's
 	// unscoped bulk delete would have removed every tenant's delegations)
@@ -323,6 +348,40 @@ func Discovery(c *store.TenantTx, now time.Time, results []*connectors.Discovery
 	}
 	st.Delegations = len(dels)
 	return st, nil
+}
+
+// recordObserved stores what the systems reported as observed entitlements,
+// one run per system (issue #301): every account -> group edge the connectors
+// emitted, whether or not Tessera revoked the grant on its side. It never
+// writes intended grants: a connector reports access, it does not intend it.
+func recordObserved(c *store.TenantTx, now time.Time, results []*connectors.DiscoveryResult) error {
+	bySystem := map[string][]store.ObservedRow{}
+	for _, r := range results {
+		for _, rec := range r.Accounts {
+			if _, ok := bySystem[rec.System]; !ok {
+				bySystem[rec.System] = nil
+			}
+		}
+		for _, rec := range r.Edges {
+			if rec.Src.Kind != "account" || rec.Dst.Kind != "group" {
+				continue
+			}
+			bySystem[rec.Src.System] = append(bySystem[rec.Src.System], store.ObservedRow{System: rec.Src.System,
+				AccountRef: rec.Src.ExternalID, EntitlementKind: rec.Dst.Kind, EntitlementSystem: rec.Dst.System,
+				EntitlementRef: rec.Dst.ExternalID})
+		}
+	}
+	systems := make([]string, 0, len(bySystem))
+	for sys := range bySystem {
+		systems = append(systems, sys)
+	}
+	sort.Strings(systems)
+	for _, sys := range systems {
+		if _, err := c.RecordObservedRun(sys, now, bySystem[sys]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // EventStats counts ingested events.
@@ -401,8 +460,9 @@ type SyncStats struct {
 func Sync(c *store.TenantTx, now time.Time, conns []connectors.Connector, since *time.Time) (SyncStats, error) {
 	var out SyncStats
 	var results []*connectors.DiscoveryResult
+	ctx := WithCheckpoints(c.Context(), c) // incremental connectors resume from, and save, their checkpoint here
 	for _, cn := range conns {
-		r, err := cn.Discover(c.Context())
+		r, err := cn.Discover(ctx)
 		if err != nil {
 			return out, fmt.Errorf("%s: discover: %w", cn.System(), err)
 		}
@@ -415,7 +475,7 @@ func Sync(c *store.TenantTx, now time.Time, conns []connectors.Connector, since 
 	out.Discovery = d
 	e, err := Events(c, func(yield func(connectors.Event) error) error {
 		for _, cn := range conns {
-			if err := cn.StreamEvents(c.Context(), since, yield); err != nil {
+			if err := cn.StreamEvents(ctx, since, yield); err != nil {
 				return fmt.Errorf("%s: events: %w", cn.System(), err)
 			}
 		}

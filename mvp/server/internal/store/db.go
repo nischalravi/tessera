@@ -86,32 +86,41 @@ var pgSchemaFS embed.FS
 
 // tables in dependency order (parents first); Migrate(drop) drops them in reverse.
 var tables = []string{
-	"tenants", "platform_keys", "replay_cache", "tenant_signing_keys", "identities", "accounts", "groups", "resources", "permissions", "grant_edges", "secrets",
-	"revoked_grants", "agent_delegations", "usage_events", "access_requests", "review_campaigns", "review_items",
+	"tenants", "platform_keys", "replay_cache", "tenant_signing_keys", "identities", "accounts", "groups", "resources", "permissions", "grant_edges", "secrets", "revoked_grants", "agent_delegations", "usage_events", "access_requests", "review_campaigns", "review_items",
 	"hris_events",
 	// auth core (schema/0005_auth.sql)
 	"idp_connections", "platform_users", "external_logins", "role_assignments", "authn_contexts", "sessions",
 	"login_transactions",
 	// operator bootstrap (schema/0006_admin.sql)
 	"bootstrap_invitations",
+	// OAuth authorization server (schema/0358_oauth.sql)
+	"api_clients", "device_grants", "refresh_tokens",
 	// admin changes, admin notifications, operator recovery (schema/0008_admin_changes.sql)
 	"tenant_recoveries", "admin_change_requests", "admin_notifications",
+	// break-glass keys, WebAuthn challenges and uses (schema/0009_breakglass.sql)
+	"break_glass_credentials", "break_glass_challenges", "break_glass_uses",
 	// audit ledger (schema/0004_audit.sql)
 	"audit_events", "audit_chain_heads", "audit_checkpoints",
 	// deployment readiness (schema/0201-0203; revoked_grants is 0204)
 	"connections", "connection_revisions", "readiness_check_runs", "readiness_item_states", "readiness_attestations",
 	"readiness_skips", "readiness_overlays", "readiness_check_results", "recon_runs", "recon_findings", "readiness_scores",
 	"stg_identities", "stg_accounts", "stg_groups", "stg_memberships", "stg_attr_stats",
+	// conditional access (schema/0222)
+	"network_ranges", "access_policies", "device_compliance_signals",
 	// ownership (schema/0208_ownership.sql)
 	"ownerships",
 	// scheduled access reviews (schema/0316_review_schedules.sql)
 	"review_templates", "review_launches",
+	// intended and observed access, drift and its remediation policy (schema/0330-0331)
+	"intended_grants", "observed_runs", "observed_entitlements", "access_drift", "remediation_policies",
 	// job run history (schema/0281_job_runs.sql)
 	"job_runs",
 	// closed-loop provisioning (schema/0282-0283)
 	"provisioning_targets", "provisioning_ops", "provisioning_findings",
-	// sealed connection credentials (schema/0205)
-	"connection_secrets",
+	// sealed connection credentials (schema/0345_connection_credentials.sql)
+	"connection_credentials",
+	// role memberships in reviews (schema/0340_review_role_memberships.sql)
+	"business_role_exclusions", "review_item_roles", "review_template_roles",
 	// account correlation (schema/0204_correlation.sql)
 	"account_links", "identity_merges",
 	// identity model for guests (schema/0226_identity_model.sql)
@@ -137,13 +146,38 @@ var tables = []string{
 	"email_messages",
 	// sponsorships and invitations (schema/0227_sponsorships.sql)
 	"intake_records", "sponsorships", "sponsorship_events",
-	// identity containment (schema/0205_containment.sql)
-	"containment_credentials", "containment_retries",
 	// MCP authorization server (schema/0356_mcp_authz.sql)
 	"mcp_resources", "mcp_clients", "mcp_auth_requests", "mcp_tokens", "mcp_decisions", "mcp_actor_jtis",
 	"mcp_contained", // schema/0357_mcp_contained.sql
+	// identity containment (schema/0206_containment_retries.sql)
+	"containment_retries",
+	// attestation instead of an unsupported live check (schema/0343_live_attestations.sql)
+	"readiness_live_attestations",
+	// two-person activation (schema/0351_activation_requests.sql)
+	"connection_activation_requests",
+	// directory agent (schema/0250_directory_agents.sql)
+	"directory_agents", "agent_enrolments",
+	// AWS evaluator (schema/0319_aws_snapshots.sql)
+	"aws_connectors", "aws_snapshots", "aws_policy_documents", "aws_policy_attachments", "aws_org_nodes",
+	"aws_snapshot_entities", "aws_collection_findings", "aws_trust_edges", "aws_effective_permissions", "aws_explanations",
+	// AWS evaluator MVP integration (schema/0321_aws_integration.sql)
+	"aws_edge_evaluations", "aws_pr_comment_settings",
+	// flat-file import for disconnected apps (schema/0352_flatfile.sql)
+	"flatfile_mappings", "flatfile_uploads", "flatfile_upload_errors", "flatfile_changes", "flatfile_records", "flatfile_tasks",
+	// connector sync checkpoints (schema/0360_connector_checkpoints.sql)
+	"connector_checkpoints",
 	// point-in-time access and evidence packs (schema/0260-0261)
 	"edge_history", "evidence_packs",
+	// guest claim (schema/0228_claim.sql)
+	"claim_tokens", "claim_sessions", "confirmation_codes",
+	// claim proof one-use memory (schema/0229_claim_proofs.sql)
+	"claim_proof_uses",
+	// readiness drift baselines (schema/0355_readiness_baselines.sql)
+	"readiness_baselines",
+	// frozen review populations and tenant settings (schema/0350_review_populations.sql)
+	"review_populations", "review_population_rows", "review_auto_decisions", "tenant_settings",
+	// verified help-desk resets (schema/0254_helpdesk.sql)
+	"helpdesk_cases", "helpdesk_verifications", "helpdesk_signals", "helpdesk_findings",
 	// SIEM sinks (schema/0210_siem.sql)
 	"siem_sinks", "siem_dead_letters",
 	// alerting (schema/0209_alerts.sql)
@@ -158,14 +192,23 @@ var tables = []string{
 	"queue_jobs", "queue_schedules",
 	// configuration transport (schema/0211_config_transport.sql)
 	"config_signing_keys", "config_trusted_signers", "config_imports",
-	// native groups (schema/0280_groups.sql); the engine tables stay empty until GR-2
+	// native groups (schema/0280_groups.sql, 0284_groups_engine.sql)
 	"grp_folders", "grp_name_aliases", "grp_groups", "grp_composite_factors", "grp_lists", "grp_direct_memberships",
-	"grp_deps", "grp_closure", "grp_levels", "grp_effective", "grp_engine_queue",
+	"grp_deps", "grp_closure", "grp_levels", "grp_effective", "grp_engine_queue", "grp_engine_state",
+	// group events and point-in-time history (schema/0285_group_events.sql)
+	"grp_event_heads", "grp_events", "grp_event_cursors", "grp_pit_objects", "grp_pit_direct", "grp_pit_effective",
+	"grp_pit_privileges", "grp_pit_digests",
+	// group privileges (schema/0286_group_privs.sql)
+	"grp_privileges", "grp_priv_settings",
+	// third-party OAuth app inventory (schema/0361_oauth_apps.sql)
+	"oauth_apps", "oauth_grants", "oauth_sync_state",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was
-// the mutable audit table before the hash-chained ledger (PR3).
-var legacyTables = []string{"audit_log"}
+// the mutable audit table before the hash-chained ledger (PR3);
+// connection_secrets and containment_credentials were merged into
+// connection_credentials (#220, see MigrateCredentials).
+var legacyTables = []string{"audit_log", "connection_secrets", "containment_credentials"}
 
 // DB owns the database handle. The *sql.DB is unexported and there is no
 // accessor: no other package can obtain a *sql.DB, *sql.Tx or *sql.Conn.
@@ -319,16 +362,16 @@ func (d *DB) Migrate(ctx context.Context, drop bool) error {
 	})
 }
 
-// upgradeLoginTxnPurpose lets a SQLite database created before the 'test'
-// login purpose (0315) take it: CREATE TABLE IF NOT EXISTS cannot change a
+// upgradeLoginTxnPurpose lets a SQLite database created before the 'test' and 'claim'
+// login purposes (0315, 0319) take them: CREATE TABLE IF NOT EXISTS cannot change a
 // CHECK, so the table is dropped and the schema recreates it. Its rows are
 // ten-minute pre-auth state, so at worst an in-flight sign-in starts over.
-// Postgres does this in migration 0315.
+// Postgres does this in migrations 0315 and 0319.
 func (d *DB) upgradeLoginTxnPurpose(ctx context.Context) error {
 	var ddl string
 	err := d.sql.QueryRowContext(ctx,
 		`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'login_transactions'`).Scan(&ddl)
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && strings.Contains(ddl, "'test'")) {
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && strings.Contains(ddl, "'test'") && strings.Contains(ddl, "'claim'")) {
 		return nil
 	}
 	if err != nil {
@@ -361,7 +404,15 @@ func (d *DB) legacySchema(ctx context.Context) (bool, error) {
 			return true, nil
 		}
 	}
-	return false, nil
+	// admin_change_requests from before break-glass (PR13) has a type CHECK
+	// that refuses breakglass.*, and SQLite cannot widen a CHECK in place.
+	var def sql.NullString
+	err := d.sql.QueryRowContext(ctx,
+		`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'admin_change_requests'`).Scan(&def)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, err
+	}
+	return def.Valid && !strings.Contains(def.String, "breakglass.register"), nil
 }
 
 // InTenant runs fn in one write transaction scoped to t. A zero tenancy.ID or

@@ -81,7 +81,7 @@ function FormDialog({ title, onClose, onSubmit, submitLabel, busy, error, childr
 
 // ---------------------------------------------------------------- consent
 
-/** The page an MCP client sends the user to (via /t/{slug}/oauth/authorize): approve or deny what it asked for. */
+/** The page an MCP client sends the user to (via /t/{slug}/mcp/oauth/authorize): approve or deny what it asked for. */
 function ConsentCard({ id, onDone }: { id: string; onDone: () => void }) {
   const { data, error } = useApi<McpConsent>(`/mcp/authorizations/${encodeURIComponent(id)}`);
   const [busy, setBusy] = useState(false);

@@ -30,6 +30,12 @@ var bannedImports = []string{
 	"unsafe",
 }
 
+// unsafeAllowed are the files outside the store that may import unsafe (every
+// other rule still applies to them). There is one: the Directory Agent's
+// Windows DPAPI wrapper (DR-11), which must read and free a native buffer.
+// TestUnsafeExemptionIsNarrow pins it to a Windows-only file.
+var unsafeAllowed = map[string]bool{"internal/agent/dpapi_windows.go": true}
+
 // bannedCalls are method names that run SQL or reach a raw connection.
 var bannedCalls = map[string]bool{
 	"Query": true, "QueryContext": true, "QueryRow": true, "QueryRowContext": true,
@@ -166,6 +172,9 @@ func TestIsolation_NoRawSQLOutsideStore(t *testing.T) {
 		}
 		files++
 		for _, v := range checkFile(fset, f) {
+			if unsafeAllowed[rel] && strings.HasSuffix(v, "imports unsafe (only "+storeDir+" may)") {
+				continue // the one exemption, see unsafeAllowed
+			}
 			t.Error(v)
 		}
 		return nil
@@ -230,7 +239,7 @@ func f(db *sql.DB, tx *sql.Tx, r *http.Request, v rf.Value) {
 const devidpPkg = "internal/devidp"
 
 // productionRoots are the packages of the production binary and the API.
-var productionRoots = []string{"cmd/tessera", "internal/api"}
+var productionRoots = []string{"cmd/tessera", "cmd/tessera-agent", "internal/api"}
 
 // moduleImports maps every package directory of the module (module-relative)
 // to the module-internal packages its non-test files import. Build tags are
@@ -496,5 +505,60 @@ func f() {
 	got := checkSafehttpUse(fset, f)
 	if len(got) != 2 {
 		t.Errorf("%d violations, want 2 (NewForTest under both import names):\n%s", len(got), strings.Join(got, "\n"))
+	}
+}
+
+// TestUnsafeExemptionIsNarrow: the unsafe exemption is one Windows-only file
+// and nothing else in it relaxes (it still may not touch SQL or reflect).
+func TestUnsafeExemptionIsNarrow(t *testing.T) {
+	root := moduleRoot(t)
+	if len(unsafeAllowed) != 1 {
+		t.Fatalf("%d unsafe exemptions; there must be exactly one", len(unsafeAllowed))
+	}
+	for rel := range unsafeAllowed {
+		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasSuffix(rel, "_windows.go") || !strings.HasPrefix(string(raw), "//go:build windows\n") {
+			t.Errorf("%s must be a Windows-only file (name suffix and build tag)", rel)
+		}
+	}
+}
+
+// TestDialSeamOnlyInTests: safedial's TestDial hook redirects a checked
+// connection to a lab server. Production code must never set it, so it is
+// named only in safedial itself, the agent executor that passes it through
+// from tests, and _test.go files.
+func TestDialSeamOnlyInTests(t *testing.T) {
+	root := moduleRoot(t)
+	allowed := map[string]bool{"internal/safedial/safedial.go": true, "internal/agent/executor.go": true}
+	n := 0
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if name := d.Name(); path != root && (strings.HasPrefix(name, ".") || name == "testdata" || name == "node_modules") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		n++
+		rel, _ := filepath.Rel(root, path)
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(string(raw), "TestDial") && !allowed[filepath.ToSlash(rel)] {
+			t.Errorf("%s names safedial's TestDial seam", rel)
+		}
+		return nil
+	})
+	if err != nil || n < 50 {
+		t.Fatalf("walk: %v, %d files", err, n)
 	}
 }

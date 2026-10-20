@@ -55,6 +55,9 @@ func TestRuleMatching(t *testing.T) {
 		{"provisioning_failed", ev("job.failed", "success", `{}`), true, "job.failed"},
 		{"provisioning_failed", ev("jml.leaver", "failure", `{}`), true, "jml.leaver"},
 		{"provisioning_failed", ev("grant.revoke", "failure", `{}`), false, ""},
+		{"access_drift", ev("drift.remediate", "success", `{"drift_id":"d1","class":"rogue","system":"okta","action":"owner_task"}`), true, "d1"},
+		{"access_drift", ev("drift.remediate", "failure", `{"drift_id":"d1"}`), false, ""},
+		{"access_drift", ev("drift.accept", "success", `{"drift_id":"d1"}`), false, ""},
 	}
 	for _, tc := range cases {
 		r := alerts.RuleByID(tc.rule)

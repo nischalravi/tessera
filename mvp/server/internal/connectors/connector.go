@@ -96,6 +96,17 @@ type PermissionRecord struct {
 type EdgeRecord struct {
 	Src, Dst Ref
 	Relation string
+	// Evaluation is set on an edge the AWS evaluator confirmed (design §11.2);
+	// ingest then stores the edge with source "evaluator" and these fields.
+	// Nil for every other edge.
+	Evaluation *EdgeEvaluation
+}
+
+// EdgeEvaluation says what the evaluator established about an edge:
+// ExplanationID names its trace, Outcome is "allow" or "conditional", and
+// Fidelity is "exact", "approximate" or "unsupported".
+type EdgeEvaluation struct {
+	ExplanationID, Outcome, Fidelity string
 }
 
 // SecretRecord is a credential bound to an account.

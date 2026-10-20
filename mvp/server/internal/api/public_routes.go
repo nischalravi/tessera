@@ -15,6 +15,17 @@ type Route struct {
 	Public bool
 	Perm   auth.Permission
 	Authn  *auth.AuthnRequirement
+	// BodyType is the one non-JSON media type the route takes as its body
+	// (the flat-file upload takes text/csv). Every other unsafe request must
+	// be application/json. The type must not be CORS-safelisted, so a
+	// cross-site form cannot send it (text/plain, for one, is).
+	BodyType string
+	// NoConditionalAccess exempts a step-up route from the tenant's
+	// privileged-scope conditional access policies (still permission and
+	// step-up). Only the conditional access management routes set it: a policy
+	// that denies the admin's own network must not lock the admin out of
+	// fixing it.
+	NoConditionalAccess bool
 }
 
 // publicRoute is the requirement of a route on the allow-list.
@@ -29,13 +40,22 @@ func needStepUp(p auth.Permission, req auth.AuthnRequirement) Route {
 	return Route{Perm: p, Authn: &r}
 }
 
+// needStepUpExempt is needStepUp for a route conditional access never
+// blocks (see Route.NoConditionalAccess).
+func needStepUpExempt(p auth.Permission, req auth.AuthnRequirement) Route {
+	r := needStepUp(p, req)
+	r.NoConditionalAccess = true
+	return r
+}
+
 // publicRoutes is the exact allow-list of routes served without a session
 // (design §16.1). Every other route answers 401 login_required to an
 // unauthenticated caller. testdata/contract/public_routes.golden snapshots
 // this list, so adding to it needs a reviewed diff.
 //
-// The well-known documents and the OAuth AS routes of §16.1 join with the PR
-// that adds them (PR10).
+// The OAuth AS routes (PR10, PR11) are public because their credential is the
+// device code, the refresh token, the DPoP proof or the machine client's signed
+// assertion in the request itself.
 var publicRoutes = []string{
 	"GET /api/health",
 	"GET /api/auth/discover",
@@ -44,16 +64,35 @@ var publicRoutes = []string{
 	"GET /api/auth/saml/{connection_id}/metadata",
 	"POST /api/auth/saml/{connection_id}/acs",
 	"GET /api/auth/oauth2/{connection_id}/callback",
+	"GET /api/auth/cas/{connection_id}/callback",
+	"POST /api/auth/wsfed/{connection_id}/callback",
 	"GET /t/{slug}/bootstrap",
-	// MCP authorization server (issue #115): discovery and the OAuth
-	// endpoints, rate-limited per IP; each opens its own tenant transaction
+	"POST /api/auth/break-glass/options",
+	"POST /api/auth/break-glass/verify",
 	"GET /t/{slug}/.well-known/oauth-authorization-server",
-	"GET /t/{slug}/.well-known/oauth-protected-resource/{resource_id}",
 	"GET /t/{slug}/.well-known/jwks.json",
+	"GET /.well-known/oauth-protected-resource",
+	"POST /t/{slug}/oauth/device_authorization",
 	"POST /t/{slug}/oauth/token",
-	"POST /t/{slug}/oauth/introspect",
 	"POST /t/{slug}/oauth/revoke",
-	"POST /t/{slug}/oauth/decisions",
+	"POST /public/t/{slug}/claim/start",
+	"POST /public/t/{slug}/claim/verify/send",
+	"POST /public/t/{slug}/claim/verify/check",
+	"GET /public/t/{slug}/claim/status",
+	"POST /public/t/{slug}/claim/existing-account",
+	"POST /public/t/{slug}/claim/credential",
+	"POST /public/t/{slug}/claim/resend",
+	"POST /t/{slug}/oauth/introspect",
+	// MCP authorization server (issue #115), its own issuer
+	// {PUBLIC_URL}/t/{slug}/mcp: discovery and the OAuth
+	// endpoints, rate-limited per IP; each opens its own tenant transaction
+	"GET /t/{slug}/mcp/.well-known/oauth-authorization-server",
+	"GET /t/{slug}/mcp/.well-known/oauth-protected-resource/{resource_id}",
+	"GET /t/{slug}/mcp/.well-known/jwks.json",
+	"POST /t/{slug}/mcp/oauth/token",
+	"POST /t/{slug}/mcp/oauth/introspect",
+	"POST /t/{slug}/mcp/oauth/revoke",
+	"POST /t/{slug}/mcp/oauth/decisions",
 }
 
 // PublicRoutes returns the allow-list.

@@ -19,21 +19,23 @@ import (
 )
 
 // MCP authorization server (issue #115): OAuth 2.1 for MCP clients under the
-// MCP authorization spec 2025-11-25, per tenant at {PUBLIC_URL}/t/{slug}.
+// MCP authorization spec 2025-11-25, per tenant at {PUBLIC_URL}/t/{slug}/mcp: its own issuer, apart
+// from the CLI and machine-client server of internal/oauth at {PUBLIC_URL}/t/{slug},
+// so neither accepts the other's tokens (both check iss) and their routes never collide.
 //
 // Public (the OAuth endpoints; each opens its own tenant transaction):
 //
-//	GET  /t/{slug}/.well-known/oauth-authorization-server         RFC 8414 metadata
-//	GET  /t/{slug}/.well-known/oauth-protected-resource/{id}      RFC 9728 metadata of a registered resource
-//	GET  /t/{slug}/.well-known/jwks.json                          access-token keys
-//	POST /t/{slug}/oauth/token                                    authorization_code (PKCE S256) and RFC 8693 token exchange
-//	POST /t/{slug}/oauth/introspect                               RFC 7662, resource-server Basic auth
-//	POST /t/{slug}/oauth/revoke                                   RFC 7009, by the token's holder
-//	POST /t/{slug}/oauth/decisions                                a resource server asks about a tool call, Basic auth
+//	GET  /t/{slug}/mcp/.well-known/oauth-authorization-server     RFC 8414 metadata
+//	GET  /t/{slug}/mcp/.well-known/oauth-protected-resource/{id}    RFC 9728 metadata of a registered resource
+//	GET  /t/{slug}/mcp/.well-known/jwks.json                      access-token keys
+//	POST /t/{slug}/mcp/oauth/token                                authorization_code (PKCE S256) and RFC 8693 token exchange
+//	POST /t/{slug}/mcp/oauth/introspect                           RFC 7662, resource-server Basic auth
+//	POST /t/{slug}/mcp/oauth/revoke                               RFC 7009, by the token's holder
+//	POST /t/{slug}/mcp/oauth/decisions                            a resource server asks about a tool call, Basic auth
 //
 // Signed in (browser session):
 //
-//	GET  /t/{slug}/oauth/authorize                                validates, stores a pending request, sends the user to the consent page
+//	GET  /t/{slug}/mcp/oauth/authorize                            validates, stores a pending request, sends the user to the consent page
 //	GET  /api/mcp/authorizations/{id}                             the consent page's data
 //	POST /api/mcp/authorizations/{id}/decision                    approve or deny (step-up)
 //
@@ -41,14 +43,14 @@ import (
 
 func (s *Server) registerMCPRoutes() {
 	const G, P = http.MethodGet, http.MethodPost
-	s.handle(G, "/t/{slug}/.well-known/oauth-authorization-server", noTenant, publicRoute, s.mcpASMetadata)
-	s.handle(G, "/t/{slug}/.well-known/oauth-protected-resource/{resource_id}", noTenant, publicRoute, s.mcpPRM)
-	s.handle(G, "/t/{slug}/.well-known/jwks.json", noTenant, publicRoute, s.mcpJWKS)
-	s.handle(P, "/t/{slug}/oauth/token", noTenant, publicRoute, s.mcpToken)
-	s.handle(P, "/t/{slug}/oauth/introspect", noTenant, publicRoute, s.mcpIntrospect)
-	s.handle(P, "/t/{slug}/oauth/revoke", noTenant, publicRoute, s.mcpRevoke)
-	s.handle(P, "/t/{slug}/oauth/decisions", noTenant, publicRoute, s.mcpDecisions)
-	s.handle(G, "/t/{slug}/oauth/authorize", noTenant, need(auth.PermAuthenticated), s.mcpAuthorize)
+	s.handle(G, "/t/{slug}/mcp/.well-known/oauth-authorization-server", noTenant, publicRoute, s.mcpASMetadata)
+	s.handle(G, "/t/{slug}/mcp/.well-known/oauth-protected-resource/{resource_id}", noTenant, publicRoute, s.mcpPRM)
+	s.handle(G, "/t/{slug}/mcp/.well-known/jwks.json", noTenant, publicRoute, s.mcpJWKS)
+	s.handle(P, "/t/{slug}/mcp/oauth/token", noTenant, publicRoute, s.mcpToken)
+	s.handle(P, "/t/{slug}/mcp/oauth/introspect", noTenant, publicRoute, s.mcpIntrospect)
+	s.handle(P, "/t/{slug}/mcp/oauth/revoke", noTenant, publicRoute, s.mcpRevoke)
+	s.handle(P, "/t/{slug}/mcp/oauth/decisions", noTenant, publicRoute, s.mcpDecisions)
+	s.handle(G, "/t/{slug}/mcp/oauth/authorize", noTenant, need(auth.PermAuthenticated), s.mcpAuthorize)
 	s.handle(G, "/api/mcp/authorizations/{id}", read, need(auth.PermAuthenticated), s.mcpConsent)
 	s.handle(P, "/api/mcp/authorizations/{id}/decision", noTenant, needStepUp(auth.PermAuthenticated, auth.StepUpPolicy), s.mcpConsentDecision)
 	s.registerMCPAdminRoutes()
@@ -102,8 +104,20 @@ func (s *Server) mcpTenant(w http.ResponseWriter, r *http.Request, p *params) (s
 		oauthFail(w, http.StatusNotFound, "invalid_request", "unknown tenant")
 		return store.Tenant{}, "", false
 	}
-	return t, s.cfg.PublicURL + "/t/" + t.Slug, true
+	return t, s.mcpIssuer(t.Slug), true
 }
+
+// mcpIssuer is the MCP authorization server's issuer for a tenant:
+// {PUBLIC_URL}/t/{slug}/mcp. It must differ from internal/oauth's issuer
+// ({PUBLIC_URL}/t/{slug}): both sign with the tenant's access-token key, and
+// the issuer is what keeps an MCP token from being accepted by the API (and
+// a CLI token by an MCP resource server).
+func (s *Server) mcpIssuer(slug string) string {
+	return s.cfg.PublicURL + "/t/" + slug + mcpIssuerSuffix
+}
+
+// mcpIssuerSuffix is the issuer path below /t/{slug}.
+const mcpIssuerSuffix = "/mcp"
 
 // mcpForm parses an application/x-www-form-urlencoded POST body (never the
 // query string); a parameter given twice is refused.
@@ -410,9 +424,9 @@ func principalIdentity(tx *store.TenantTx, pr *auth.Principal) (int64, bool, err
 	return *u.IdentityID, true, nil
 }
 
-// queryOf is the parsed query of u (the archtest bans .Query() calls on
+// mcpQueryOf is the parsed query of u (the archtest bans .Query() calls on
 // anything but a request URL).
-func queryOf(u *url.URL) url.Values {
+func mcpQueryOf(u *url.URL) url.Values {
 	q, _ := url.ParseQuery(u.RawQuery)
 	return q
 }
@@ -424,7 +438,7 @@ func authzRedirect(w http.ResponseWriter, r *http.Request, base string, kv map[s
 		oauthFail(w, http.StatusBadRequest, "invalid_request", "bad redirect_uri")
 		return
 	}
-	q := queryOf(u)
+	q := mcpQueryOf(u)
 	for k, v := range kv {
 		if v != "" {
 			q.Set(k, v)
@@ -616,7 +630,7 @@ func (s *Server) mcpConsentDecision(w http.ResponseWriter, r *http.Request, p *p
 	}); err != nil {
 		return nil, err
 	}
-	iss := s.cfg.PublicURL + "/t/" + tenant.Slug
+	iss := s.mcpIssuer(tenant.Slug)
 	var out map[string]any
 	err := s.store.InTenant(ctx, pr.TenantID, func(tx *store.TenantTx) error {
 		req, ok, err := ownRequest(tx, pr, p.path["id"])
@@ -647,7 +661,7 @@ func (s *Server) mcpConsentDecision(w http.ResponseWriter, r *http.Request, p *p
 		if err != nil {
 			return err
 		}
-		q := queryOf(u)
+		q := mcpQueryOf(u)
 		for k, v := range kv {
 			if v != "" {
 				q.Set(k, v)

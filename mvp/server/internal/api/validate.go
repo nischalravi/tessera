@@ -504,3 +504,15 @@ func (p *params) queryOptLiteral(name string, lits []string) *string {
 }
 
 func i64(v int64) *int64 { return &v }
+
+// clampInt narrows a validated int64 query or body number to int with an explicit
+// range check, so the conversion is safe whatever the platform's int size.
+func clampInt(n int64) int {
+	if n > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	if n < math.MinInt32 {
+		return math.MinInt32
+	}
+	return int(n)
+}

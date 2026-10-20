@@ -103,7 +103,10 @@ func (w *Webhook) Send(ctx context.Context, batch []Record) error {
 	}
 	resp, err := w.Client.Do(req)
 	if err != nil {
-		return retryable("webhook: %v", err)
+		// The URL may carry the collector's credential in its path or query, and
+		// this error becomes last_error and audit detail: it never carries more
+		// than scheme://host[:port]/… (#333).
+		return retryable("webhook: %s", safehttp.ScrubError(err, w.URL))
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))

@@ -1,0 +1,23 @@
+[
+  {
+    "id": "IFIFAX2BIRGUSTQ",
+    "label": "Super Administrator",
+    "type": "SUPER_ADMIN",
+    "status": "ACTIVE",
+    "assignmentType": "USER"
+  },
+  {
+    "id": "IFIFAX2BIRGUSTR",
+    "label": "Read-only Administrator",
+    "type": "READ_ONLY_ADMIN",
+    "status": "ACTIVE",
+    "assignmentType": "USER"
+  },
+  {
+    "id": "IFIFAX2BIRGUSTS",
+    "label": "Old Administrator",
+    "type": "APP_ADMIN",
+    "status": "INACTIVE",
+    "assignmentType": "USER"
+  }
+]

@@ -8,7 +8,7 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Activity, Download, Plug, RefreshCw } from "lucide-react";
 import {
-  AttentionEntry, Band, ConnectionHealthRow, DeploymentHealth as Health, ReadinessSummary, ScoreBreakdown, SkippedRow, fmtDate, fmtDay,
+  AttentionEntry, Band, ConnectionHealthRow, DeploymentHealth as Health, DriftView, ReadinessSummary, ScoreBreakdown, SkippedRow, fmtDate, fmtDay,
   ApiError, readiness, useApi,
 } from "../../api";
 import {
@@ -123,6 +123,38 @@ function Breakdown({ id, name }: { id: string; name: string }) {
   );
 }
 
+/** Per live connection: the activation baseline against now, and what drifted. */
+function DriftRows({ drift, days }: { drift: DriftView[]; days: number }) {
+  if (drift.length === 0) return <p className="small faint">No live connection has a baseline yet. One is captured when a connection is activated.</p>;
+  const since = Date.now() - days * 86_400_000;
+  return (
+    <div className="stack-sm">
+      {drift.map((d) => {
+        const start = d.score_series.find((p) => Date.parse(p.at) >= since)?.score ?? d.baseline.score;
+        const delta = d.score - start;
+        return (
+          <div key={d.connection_id} className="stack-sm">
+            <div className="spread">
+              <b><Link to={`/admin/connections/${d.connection_id}`}>{d.connection_name}</Link> {d.state === "degraded" && <Badge tone="warning">Degraded</Badge>}</b>
+              <span className="small">
+                Score {d.baseline.score} → {d.score} ({delta === 0 ? "no change" : `${delta > 0 ? "+" : ""}${delta}`} in {days} days) · findings {d.baseline.findings} → {d.findings} · accounts {d.baseline.accounts} → {d.accounts}
+              </span>
+            </div>
+            {d.degraded_reason && <div className="small">Degraded: {d.degraded_reason}</div>}
+            {d.events.length === 0 && !d.template_upgrade && <div className="small faint">No drift from the baseline.</div>}
+            {d.events.map((e) => (
+              <div key={e.kind + e.subject} className="small row tight"><Sev s={e.severity} /><span>{e.sentence}</span></div>
+            ))}
+            {d.template_upgrade && d.events.every((e) => e.kind !== "template_update") && (
+              <div className="small faint">Template update available: {d.template_upgrade.available}{d.template_upgrade.major ? " (a major release needs a new revision)" : ""}.</div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export function DeploymentHealthBody({ data, compact }: { data: Health; compact?: boolean }) {
   const nav = useNavigate();
   const [selected, setSelected] = useSelected();
@@ -183,7 +215,12 @@ export function DeploymentHealthBody({ data, compact }: { data: Health; compact?
               { id: "score", header: "Score", sort: (r) => r.score, cell: (r) => <ScoreCell score={r.score} band={r.band} /> },
               { id: "blocking", header: "Blocking", num: true, sort: (r) => r.blocking, cell: (r) => r.blocking },
               { id: "validated", header: "Last validated", sort: (r) => r.last_validated ?? "", cell: (r) => <span className="small">{r.last_validated ? fmtDate(r.last_validated) : "Never"}</span>, hideNarrow: true },
-              { id: "drift", header: "Drift", cell: () => <span className="faint small" title="Drift since activation arrives with DR-9">–</span>, hideNarrow: true },
+              {
+                id: "drift", header: "Drift", sort: (r) => r.drift?.events ?? 0, csv: (r) => String(r.drift?.events ?? 0), hideNarrow: true,
+                cell: (r) => r.drift && r.drift.events > 0
+                  ? <Badge tone={r.drift.high > 0 ? "critical" : "warning"}>{r.drift.events} since activation</Badge>
+                  : <span className="faint small" title={r.drift ? "No drift from the activation baseline" : "Only live connections have a baseline"}>–</span>,
+              },
             ]}
             searchText={(r) => `${r.name} ${r.connector_type} ${r.state}`}
             empty={<EmptyState title="No governed connections yet" icon={<Plug size={18} />} action={<ButtonLink to="/admin/connections/new" variant="primary">New connection</ButtonLink>}>Create a connection to see its readiness here.</EmptyState>}
@@ -215,7 +252,18 @@ export function DeploymentHealthBody({ data, compact }: { data: Health; compact?
           </div>
           <div className="card">
             <div className="spread"><h2>Drift since activation</h2><Segmented label="Drift window" value={driftWindow} onChange={setDriftWindow} options={[["7", "7 days"], ["30", "30 days"], ["90", "90 days"]]} /></div>
-            <p className="small muted mt-sm">Baselines are captured at activation. Comparing scores, findings and object counts against them, and moving connections to Degraded, arrives with scheduled re-runs (DR-9). Score history is already recorded on every change.</p>
+            <p className="small muted mt-sm">
+              A baseline is captured at activation. Live checks re-run {data.schedule.live_checks} and reconciliation {data.schedule.reconciliation}; each run is compared with the baseline.
+              Two failing runs of a Required check, a credential close to expiry or a template grace period that ends move a connection to Degraded: reads continue, write-back stops.
+            </p>
+            <DriftRows drift={data.drift} days={Number(driftWindow)} />
+            {data.tasks.map((t) => (
+              <div key={t.id} className="att">
+                <span className="att-bar" aria-hidden />
+                <div className="grow"><b>{t.title}</b><div className="small faint">Inbox task · {t.reason}{t.owner && <> · owner {t.owner}</>}</div></div>
+                <ButtonLink size="sm" to={t.href}>Open</ButtonLink>
+              </div>
+            ))}
           </div>
         </>
       )}

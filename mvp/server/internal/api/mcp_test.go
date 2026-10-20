@@ -81,7 +81,7 @@ func newMCPFx(t *testing.T, limits RateLimits) *mcpFx {
 	if err != nil {
 		t.Fatal(err)
 	}
-	x := &mcpFx{t: t, f: f, main: f.B, other: f.A, base: "/t/" + f.B.Slug, issuer: mcpPublic + "/t/" + f.B.Slug, aliceID: f.B.IDs["alice"],
+	x := &mcpFx{t: t, f: f, main: f.B, other: f.A, base: "/t/" + f.B.Slug + "/mcp", issuer: mcpPublic + "/t/" + f.B.Slug + "/mcp", aliceID: f.B.IDs["alice"],
 		botID: f.B.IDs["helper-bot"], shared: "snowflake:SELECT:snowflake/CUSTOMERS", hc: hc}
 	if x.key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader); err != nil {
 		t.Fatal(err)
@@ -175,11 +175,11 @@ func (x *mcpFx) userToken(res mcpRes) map[string]any {
 		x.t.Fatalf("decision: %d %s", rec.Code, rec.Body)
 	}
 	u, err := url.Parse(jsonBody(x.t, rec)["redirect_to"].(string))
-	if err != nil || queryOf(u).Get("code") == "" || queryOf(u).Get("state") != "st-1" || queryOf(u).Get("iss") != x.issuer ||
+	if err != nil || mcpQueryOf(u).Get("code") == "" || mcpQueryOf(u).Get("state") != "st-1" || mcpQueryOf(u).Get("iss") != x.issuer ||
 		u.Scheme+"://"+u.Host+u.Path != mcpRedirect {
 		x.t.Fatalf("redirect_to = %v, %v", u, err)
 	}
-	rec = form(x.h, x.base+"/oauth/token", url.Values{"grant_type": {"authorization_code"}, "code": {queryOf(u).Get("code")},
+	rec = form(x.h, x.base+"/oauth/token", url.Values{"grant_type": {"authorization_code"}, "code": {mcpQueryOf(u).Get("code")},
 		"code_verifier": {mcpVerifier}, "client_id": {mcpClientID}, "redirect_uri": {mcpRedirect}, "resource": {res.uri}})
 	if rec.Code != 200 {
 		x.t.Fatalf("token: %d %s", rec.Code, rec.Body)
@@ -242,11 +242,11 @@ func TestMCP_Discovery(t *testing.T) {
 		t.Errorf("jwks: %d %s", rec.Code, rec.Body)
 	}
 	// another tenant's slug serves that tenant's issuer, an unknown one is a 404
-	if rec := serve(x.h, httptest.NewRequest("GET", "/t/nobody/.well-known/oauth-authorization-server", nil)); rec.Code != 404 {
+	if rec := serve(x.h, httptest.NewRequest("GET", "/t/nobody/mcp/.well-known/oauth-authorization-server", nil)); rec.Code != 404 {
 		t.Errorf("unknown tenant: %d", rec.Code)
 	}
 	// a resource of tenant A is unknown under tenant B's slug
-	if rec := serve(x.h, httptest.NewRequest("GET", "/t/"+x.other.Slug+"/.well-known/oauth-protected-resource/"+x.resA.id, nil)); rec.Code != 404 {
+	if rec := serve(x.h, httptest.NewRequest("GET", "/t/"+x.other.Slug+"/mcp/.well-known/oauth-protected-resource/"+x.resA.id, nil)); rec.Code != 404 {
 		t.Errorf("cross-tenant PRM: %d", rec.Code)
 	}
 }
@@ -438,11 +438,11 @@ func TestMCP_AuthorizeRequestChecks(t *testing.T) {
 	} {
 		rec := get(x.alice, c.mod)
 		loc, err := url.Parse(rec.Header().Get("Location"))
-		if rec.Code != 302 || err != nil || loc.Scheme+"://"+loc.Host+loc.Path != mcpRedirect || queryOf(loc).Get("error") != c.want ||
-			queryOf(loc).Get("iss") != x.issuer {
+		if rec.Code != 302 || err != nil || loc.Scheme+"://"+loc.Host+loc.Path != mcpRedirect || mcpQueryOf(loc).Get("error") != c.want ||
+			mcpQueryOf(loc).Get("iss") != x.issuer {
 			t.Errorf("%s: %d %s", name, rec.Code, rec.Header().Get("Location"))
 		}
-		if name != "state too long" && queryOf(loc).Get("state") != "st-1" {
+		if name != "state too long" && mcpQueryOf(loc).Get("state") != "st-1" {
 			t.Errorf("%s: state not echoed: %s", name, loc)
 		}
 	}
@@ -536,7 +536,7 @@ func TestMCP_TokenEndpointHygiene(t *testing.T) {
 		t.Errorf("GET token: %d", rec.Code)
 	}
 	// unknown tenant
-	if rec := form(x.h, "/t/nobody/oauth/token", url.Values{"grant_type": {"authorization_code"}}); rec.Code != 404 {
+	if rec := form(x.h, "/t/nobody/mcp/oauth/token", url.Values{"grant_type": {"authorization_code"}}); rec.Code != 404 {
 		t.Errorf("unknown tenant: %d", rec.Code)
 	}
 	// no response leaks a token or a secret
@@ -577,8 +577,9 @@ func TestMCP_OAuthEndpointsAreRateLimited(t *testing.T) {
 }
 
 func TestIsOAuthPath(t *testing.T) {
-	for p, want := range map[string]bool{"/t/a/oauth/token": true, "/t/a/oauth/authorize": true, "/t/a/.well-known/jwks.json": false,
-		"/api/mcp/clients": false, "/t/a/bootstrap": false, "/oauth/token": false, "/t/oauth/token": false, "/t/a/oauthx": false} {
+	for p, want := range map[string]bool{"/t/a/mcp/oauth/token": true, "/t/a/mcp/oauth/authorize": true, "/t/a/mcp/.well-known/jwks.json": false,
+		"/t/a/oauth/token": false, "/api/mcp/clients": false, "/t/a/bootstrap": false, "/mcp/oauth/token": false, "/t/mcp/oauth/token": false,
+		"/t/a/mcp/oauthx": false} {
 		if got := isOAuthPath(p); got != want {
 			t.Errorf("isOAuthPath(%q) = %v", p, got)
 		}
@@ -597,10 +598,10 @@ func TestMCP_ContainmentStopsNewTokens(t *testing.T) {
 	id := strings.TrimPrefix(rec.Header().Get("Location"), "/agent-authorization?consent=")
 	rec = corrDo(x.h, x.alice, "POST", "/api/mcp/authorizations/"+id+"/decision", `{"approve":true}`)
 	u, err := url.Parse(jsonBody(t, rec)["redirect_to"].(string))
-	if rec.Code != 200 || err != nil || queryOf(u).Get("code") == "" {
+	if rec.Code != 200 || err != nil || mcpQueryOf(u).Get("code") == "" {
 		t.Fatalf("approval: %d %s", rec.Code, rec.Body)
 	}
-	code := queryOf(u).Get("code")
+	code := mcpQueryOf(u).Get("code")
 	// and a second request still waiting for consent
 	pending := serve(x.h, authed(x.alice, "GET", x.authorizeURL(nil), ""))
 	pendingID := strings.TrimPrefix(pending.Header().Get("Location"), "/agent-authorization?consent=")
@@ -725,7 +726,7 @@ func TestMCP_AdminAPI(t *testing.T) {
 	}
 	// clients: bound to an ai_agent only
 	rec = corrDo(x.h, x.admin, "GET", "/api/mcp/clients", "")
-	var cs []clientView
+	var cs []mcpClientView
 	if err := json.Unmarshal(rec.Body.Bytes(), &cs); err != nil || len(cs) != 1 || cs[0].Status != "active" || cs[0].Agent == nil ||
 		cs[0].Agent.ID != x.botID || !cs[0].HasKeys {
 		t.Fatalf("clients: %d %s", rec.Code, rec.Body)
@@ -821,7 +822,7 @@ func TestMCP_CrossTenant(t *testing.T) {
 	}
 	// tenant A's resource credentials do not open tenant B's endpoints
 	tokA := x.userToken(x.resA)["access_token"].(string)
-	if rec := form(x.h, "/t/"+x.other.Slug+"/oauth/introspect", url.Values{"token": {tokA}}, x.resA.id, x.resA.secret); rec.Code != 401 {
+	if rec := form(x.h, "/t/"+x.other.Slug+"/mcp/oauth/introspect", url.Values{"token": {tokA}}, x.resA.id, x.resA.secret); rec.Code != 401 {
 		t.Errorf("tenant A's resource secret at tenant B: %d", rec.Code)
 	}
 	// and a token of tenant A is not active at tenant B's issuer
@@ -850,7 +851,7 @@ func TestMCP_RegisterClientFetchesTheDocument(t *testing.T) {
 	doc = `{"client_id":"SELF","client_name":"New Agent","redirect_uris":["https://new.example/cb"]}`
 	id := srv.URL + "/clients/new.json"
 	rec := corrDo(x.h, x.admin, "POST", "/api/mcp/clients", fmt.Sprintf(`{"client_id":%q}`, id))
-	var v clientView
+	var v mcpClientView
 	if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil || rec.Code != 200 || v.Status != "pending" || v.Agent != nil || v.Name != "New Agent" {
 		t.Fatalf("register: %d %s", rec.Code, rec.Body)
 	}

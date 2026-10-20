@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/base32"
 	"errors"
 	"flag"
 	"fmt"
@@ -10,6 +12,7 @@ import (
 	"net/mail"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -23,6 +26,8 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/samlsp"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
+	"github.com/nischalravi/tessera/mvp/server/internal/oauth"
+	"github.com/nischalravi/tessera/mvp/server/internal/oauth/dpop"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -36,6 +41,7 @@ import (
 //	tessera admin invite-admin  -tenant acme -connection <id> -email jane@acme.com [-ttl 24h]
 //	tessera admin recover-tenant -tenant acme -operator <id> -co-operator <id> -ticket <ref> ...
 //	tessera admin revoke-signing-key -tenant acme -kid <kid> -reason "..."
+//	tessera admin add-client    -tenant acme -name "ETL" -owner jane@acme.com -jwks-file pub.jwks -scope "tessera:read" -roles viewer
 //
 // Every command runs as the operator (the OS user) and is audited in the
 // tenant's chain. invite-admin and recover-tenant print a one-time URL; only
@@ -48,6 +54,8 @@ const adminUsage = `usage:
                               -operator-phr -co-operator-phr [-db path]
   tessera admin revoke-signing-key -tenant slug -kid kid -reason text [-db path]
   tessera admin gen-rls       [-out path] [-check]   (Postgres row-level security; needs no database)
+  tessera admin add-client    -tenant slug -name "Display name" -owner user-id-or-email -jwks-file public.jwks
+                              -scope "tessera:read ..." -roles viewer,operator,auditor [-dpop=false] [-db path]
   (-db is a SQLite path or a postgres:// DSN)`
 
 // maxInviteTTL is the longest a bootstrap invitation may live (§15.3).
@@ -106,6 +114,18 @@ func adminCmd(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		kid := fset.String("kid", "", "key id (from the tenant's JWKS)")
 		reason := fset.String("reason", "", "why the key is revoked (audited)")
 		run = func(e *adminEnv) error { return revokeSigningKey(e, *tenant, *kid, *reason) }
+	case "add-client":
+		tenant := fset.String("tenant", "", "tenant slug")
+		name := fset.String("name", "", "display name of the machine client")
+		owner := fset.String("owner", "", "the accountable owner: the id or email of an active user of the tenant")
+		jwksFile := fset.String("jwks-file", "", "file holding the client's PUBLIC keys as a JWKS (EC P-256 or Ed25519, each with a kid)")
+		scope := fset.String("scope", "", "scopes the client may be granted (space or comma separated)")
+		roles := fset.String("roles", "", "roles the client acts with: viewer, operator, auditor (comma separated)")
+		dpopFlag := fset.Bool("dpop", true, "require DPoP-bound tokens; -dpop=false lets the client use Bearer tokens")
+		run = func(e *adminEnv) error {
+			return addClient(e, addClientArgs{tenant: *tenant, name: *name, owner: *owner, jwksFile: *jwksFile, scope: *scope,
+				roles: *roles, dpop: *dpopFlag})
+		}
 	default:
 		return fmt.Errorf("unknown admin command %q\n%s", sub, adminUsage)
 	}
@@ -192,6 +212,11 @@ type idpFile struct {
 	TokenEndpoint         string `yaml:"token_endpoint"`
 	UserinfoEndpoint      string `yaml:"userinfo_endpoint"`
 	SubjectField          string `yaml:"subject_field"` // the user object's immutable id field ("id" for github)
+	// CAS 3.0 (protocol: cas)
+	CASServerURL string `yaml:"cas_server_url"`
+	// WS-Federation (protocol: wsfed): idp_entity_id is the token issuer,
+	// idp_signing_certs the pinned token-signing certificates
+	WSFedEndpoint string `yaml:"wsfed_endpoint"` // the passive endpoint, e.g. https://adfs.corp.example/adfs/ls/
 }
 
 func readIdPFile(path string) (*idpFile, error) {
@@ -220,7 +245,8 @@ func (f *idpFile) connection(prod bool, now time.Time) (*store.IdPConnection, er
 		AuthnMapping: f.AuthnMapping, IdPEntityID: f.IdPEntityID, IdPSSOURL: f.IdPSSOURL, IdPSigningCerts: f.IdPSigningCerts,
 		SubjectSource: f.SubjectSource, AttributeMap: f.AttributeMap, AssumePhr: f.AssumePhr,
 		AuthorizationEndpoint: f.AuthorizationEndpoint, TokenEndpoint: f.TokenEndpoint, UserinfoEndpoint: f.UserinfoEndpoint,
-		SubjectField: f.SubjectField}
+		SubjectField: f.SubjectField, CASServerURL: f.CASServerURL,
+		WSFedEndpoint: f.WSFedEndpoint}
 	c, err := cfg.Connection(admin.IdPOptions{Prod: prod}, now)
 	if err != nil {
 		return nil, err
@@ -281,8 +307,17 @@ func addIdP(e *adminEnv, slug, file, secretFile string) error {
 		return nil
 	}
 	path := "oidc"
-	if c.Protocol == "oauth2" {
+	switch c.Protocol {
+	case "oauth2":
 		path = "oauth2"
+	case "wsfed":
+		fmt.Fprintf(e.stdout, "register a relying party trust: identifier (realm) %s\nWS-Federation passive endpoint (reply) %s\n",
+			api.WSFedRealm(e.cfg.PublicURL, c.ID), api.WSFedReply(e.cfg.PublicURL, c.ID))
+		return nil
+	case "cas":
+		fmt.Fprintf(e.stdout, "register this service URL pattern at the CAS server: %s/api/auth/cas/%s/callback?state=*\n",
+			strings.TrimRight(e.cfg.PublicURL, "/"), c.ID)
+		return nil
 	}
 	fmt.Fprintf(e.stdout, "redirect URI to register at the IdP: %s/api/auth/%s/%s/callback\n",
 		strings.TrimRight(e.cfg.PublicURL, "/"), path, c.ID)
@@ -292,6 +327,9 @@ func addIdP(e *adminEnv, slug, file, secretFile string) error {
 // sealConnectionSecrets seals an OIDC client secret (from secretFile), or
 // generates and seals a SAML connection's SP signing key.
 func sealConnectionSecrets(e *adminEnv, t tenancy.ID, c *store.IdPConnection, secretFile string) error {
+	if c.Protocol == "cas" || c.Protocol == "wsfed" {
+		return nil // no client secret: CAS tickets are validated at the server, WS-Federation tokens are signed
+	}
 	if c.Protocol == "saml" {
 		keyPEM, certPEM, err := samlsp.GenerateSPKey("Tessera SP "+c.ID.String(), e.now)
 		if err != nil {
@@ -354,7 +392,7 @@ func inviteAdmin(e *adminEnv, slug, connID, email string, ttl time.Duration) err
 		} else if err != nil {
 			return err
 		}
-		if c.Status != "active" || (c.Protocol != "oidc" && c.Protocol != "saml") {
+		if c.Status != "active" || (c.Protocol != "oidc" && c.Protocol != "saml" && c.Protocol != "cas" && c.Protocol != "wsfed") {
 			return fmt.Errorf("connection %s is not an active OIDC or SAML connection", id)
 		}
 		if err := tx.InsertBootstrapInvitation(inv); err != nil {
@@ -437,4 +475,146 @@ func revokeSigningKey(e *adminEnv, slug, kid, reason string) error {
 	}
 	fmt.Fprintf(e.stdout, "revoked signing key %s of %s; a new key is active and the JWKS no longer lists it\n", kid, t.Slug)
 	return nil
+}
+
+// machineRoles are the roles a machine client may be given: never an admin
+// role, and approvals and policy changes stay human-only (§9.5).
+var machineRoles = []string{string(auth.RoleViewer), string(auth.RoleOperator), string(auth.RoleAuditor)}
+
+type addClientArgs struct {
+	tenant, name, owner, jwksFile, scope, roles string
+	dpop                                        bool
+}
+
+// addClient registers a machine client (§9.5, §19 PR11). Until the change
+// request workflow of PR12, this operator command is the way to create one. It
+// takes only PUBLIC keys: the client keeps its private key, so there is no
+// secret to print or store. Nothing here can grant an admin role.
+func addClient(e *adminEnv, a addClientArgs) error {
+	t, err := lookupTenant(e, a.tenant)
+	if err != nil {
+		return err
+	}
+	name := strings.TrimSpace(a.name)
+	if name == "" || len(name) > 200 {
+		return errors.New("add-client: -name is required (at most 200 characters)")
+	}
+	if a.jwksFile == "" {
+		return errors.New("add-client: -jwks-file is required")
+	}
+	raw, err := os.ReadFile(a.jwksFile) // #nosec G304 G703 -- a path the operator passes to their own CLI
+	if err != nil {
+		return err
+	}
+	set, jwks, err := oauth.ParseClientJWKS(raw)
+	if err != nil {
+		return fmt.Errorf("add-client: -jwks-file: %w", err)
+	}
+	var thumbprints []any
+	for i := range set.Keys {
+		jkt, err := dpop.Thumbprint(&set.Keys[i])
+		if err != nil {
+			return fmt.Errorf("add-client: key %d: %w", i, err)
+		}
+		thumbprints = append(thumbprints, jkt)
+	}
+	scopes := splitList(a.scope)
+	if len(scopes) == 0 {
+		return errors.New("add-client: -scope is required")
+	}
+	for _, s := range scopes {
+		if !slices.Contains(oauth.MachineScopes, s) {
+			return fmt.Errorf("add-client: unknown scope %q (one of %s)", s, strings.Join(oauth.MachineScopes, ", "))
+		}
+	}
+	roles := splitList(a.roles)
+	if len(roles) == 0 {
+		return errors.New("add-client: -roles is required")
+	}
+	for _, r := range roles {
+		if !slices.Contains(machineRoles, r) {
+			return fmt.Errorf("add-client: a machine client cannot have the role %q (allowed: %s)", r, strings.Join(machineRoles, ", "))
+		}
+	}
+	clientID, err := newClientID()
+	if err != nil {
+		return err
+	}
+	c := &store.APIClient{ClientID: clientID, Name: name, Kind: store.ClientMachine, // #nosec G101 -- names of an auth method and a grant, not a credential
+		GrantTypes: []string{oauth.GrantClientCredentials}, TokenEndpointAuthMethod: "private_key_jwt", JWKS: jwks,
+		DPoPRequired: a.dpop, AllowedScopes: scopes, Roles: roles, Status: store.ClientActive, CreatedAt: e.now}
+	if err := e.db.InTenant(e.ctx, t.ID, func(tx *store.TenantTx) error {
+		owner, err := findOwner(tx, a.owner)
+		if err != nil {
+			return err
+		}
+		c.OwnerUserID = &owner.ID
+		if err := tx.InsertAPIClient(c); err != nil {
+			return err
+		}
+		_, err = audit.Record(e.ctx, tx, "oauth.client.created", ojson.Object{{Key: "client_id", Value: c.ClientID},
+			{Key: "name", Value: c.Name}, {Key: "kind", Value: c.Kind}, {Key: "owner_user_id", Value: owner.ID.String()},
+			{Key: "roles", Value: stringsAny(roles)}, {Key: "scopes", Value: stringsAny(scopes)},
+			{Key: "dpop_required", Value: c.DPoPRequired}, {Key: "key_thumbprints", Value: thumbprints}},
+			audit.At(e.now), audit.Target("api_client", c.ID.String()))
+		return err
+	}); err != nil {
+		return fmt.Errorf("add-client: %w", err)
+	}
+	base := strings.TrimRight(e.cfg.PublicURL, "/") + "/t/" + t.Slug
+	fmt.Fprintf(e.stdout, "added machine client %s (%s) to %s\ntoken endpoint %s/oauth/token (the assertion's aud must be exactly that URL)\n",
+		c.ClientID, c.Name, t.Slug, base)
+	if !c.DPoPRequired {
+		fmt.Fprintln(e.stdout, "warning: DPoP is not required; a token this client gets without a DPoP proof is a Bearer token")
+	}
+	return nil
+}
+
+// newClientID is "tsc_" and 16 base32 characters (80 random bits).
+func newClientID() (string, error) {
+	b := make([]byte, 10)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return "tsc_" + strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b)), nil
+}
+
+// splitList splits a comma or space separated list, dropping repeats.
+func splitList(s string) []string {
+	var out []string
+	for _, f := range strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' }) {
+		if !slices.Contains(out, f) {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+func stringsAny(ss []string) []any {
+	out := make([]any, len(ss))
+	for i, s := range ss {
+		out[i] = s
+	}
+	return out
+}
+
+// findOwner resolves -owner (a user id or an email) to an active user of the
+// tenant of tx: every machine client has an accountable owner.
+func findOwner(tx *store.TenantTx, owner string) (*store.PlatformUser, error) {
+	if owner == "" {
+		return nil, errors.New("-owner is required (the user accountable for this client)")
+	}
+	users, err := tx.PlatformUsers()
+	if err != nil {
+		return nil, err
+	}
+	for _, u := range users {
+		if u.ID.String() == owner || (u.Email != nil && strings.EqualFold(*u.Email, owner)) {
+			if u.Status != "active" {
+				return nil, fmt.Errorf("the owner %q is not an active user", owner)
+			}
+			return u, nil
+		}
+	}
+	return nil, fmt.Errorf("no user %q in this tenant", owner)
 }

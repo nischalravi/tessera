@@ -80,7 +80,8 @@ func (s *Server) stepUpFailure(w http.ResponseWriter, r *http.Request, t tenancy
 // authStepUp is GET /api/auth/step-up?acr=&max_age=&return_to=.
 func (s *Server) authStepUp(w http.ResponseWriter, r *http.Request, _ *params) (any, error) {
 	p := principal(r)
-	if p.Kind != auth.KindUser || p.SessionID == nil || p.UserID == nil {
+	// a browser flow for a browser session: a CLI session steps up through the device flow
+	if p.Kind != auth.KindUser || p.SessionID == nil || p.UserID == nil || p.Via != auth.ViaCookie {
 		auth.WriteDenial(w, &auth.Denial{Status: http.StatusForbidden, Error: "interactive_authentication_required"})
 		return nil, nil
 	}
@@ -128,7 +129,7 @@ func (s *Server) authStepUp(w http.ResponseWriter, r *http.Request, _ *params) (
 		if err != nil {
 			return err
 		}
-		if c.Status != "active" || (c.Protocol != "oidc" && c.Protocol != "saml") {
+		if c.Status != "active" || (c.Protocol != "oidc" && c.Protocol != "saml" && c.Protocol != "cas" && c.Protocol != "wsfed") {
 			return nil
 		}
 		ls, err := tx.ExternalLoginsForUser(*p.UserID)
@@ -244,7 +245,8 @@ func (s *Server) finishStepUp(w http.ResponseWriter, r *http.Request, tenant sto
 			Purpose: "step_up", ACR: res.ACR, AMR: res.AMR, Methods: res.Methods, AAL: res.AAL,
 			PhishingResistant: res.PhishingResistant, PhrBasis: res.PhrBasis, TesseraACR: res.TesseraACR,
 			AuthTime: res.AuthTime, IP: ip, UserAgent: ua, MappingProfile: res.MappingProfile,
-			MappingVersion: res.MappingVersion, ClaimsSHA256: res.ClaimsSHA256, CreatedAt: now}
+			MappingVersion: res.MappingVersion, ClaimsSHA256: res.ClaimsSHA256, CreatedAt: now,
+			Device: res.Device.JSON()}
 		if err := tx.InsertAuthnContext(rec); err != nil {
 			return err
 		}

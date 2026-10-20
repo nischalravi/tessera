@@ -87,7 +87,8 @@ func newEnv(t *testing.T, l lab, mutate ...func(*fakeDir, *Config)) *testEnv {
 		m(d, &cfg)
 	}
 	srv := startFake(t, d, tcfg)
-	dialer, err := safedial.New(safedial.Options{Env: config.Prod, Agent: fakeTransport{srv}, RootCAs: cfg.RootCAs})
+	dialer, err := safedial.New(safedial.Options{Env: config.Prod, RootCAs: cfg.RootCAs, Resolver: labResolver{},
+		TestDial: fakeTransport{srv}.dial})
 	if err != nil {
 		t.Fatal(err)
 	}

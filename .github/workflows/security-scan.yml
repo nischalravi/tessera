@@ -4,6 +4,7 @@ on:
   push:
     branches: [dev, test, prod]
   pull_request:
+  merge_group:
   schedule:
     - cron: "0 14 * * 1" # Mondays 14:00 UTC, before the weekly triage
   workflow_dispatch:
