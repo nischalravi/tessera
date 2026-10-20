@@ -188,6 +188,26 @@ the LDAP bind password); without one the live checks report an error instead of 
 unauthenticated. The client is the shared outbound one, with the connection's configured port
 allowed (`safehttp.WithConfiguredPorts`). Tests use an in-process SCIM server
 with misbehaviour switches (`internal/connectors/scim/fakescim_test.go`).
+**After activation** (design §7.4, §7.5). Activation stores a baseline of the live revision
+(`readiness_baselines`: score, item states, finding and object counts, config hash). A background
+scheduler (`readiness.Scheduler`, started by `tessera serve`, a pass every 15 minutes) re-runs the
+live checks of every active or degraded connection daily and reconciles it weekly in live mode (the
+same staging scratch tables and findings as a dry run; it never writes the live graph), then
+compares the evidence with the baseline. Drift is newly failing checks (a newly failing check on the
+service account's effective rights is reported as a change made outside Tessera), finding counts
+beyond ±10% or ±25 objects, object counts beyond ±5% between consecutive runs, credentials within
+30 days of expiry, and a newer template minor release that adds Required items (30-day grace from
+when the release is first seen). A revision moves `active → degraded` when a Required live check
+fails on two consecutive scheduled runs (an administrator's on-demand re-run does not count), its
+credential is within 7 days of expiry, or the template grace period ends; it recovers when none of
+these hold. While degraded, reads continue and write-back stops: `Service.CanWrite` is false and
+`Service.RequireWrite` refuses (409 `connection_degraded`), enforced on the server. The Inbox
+shows a task per degraded connection (`tasks` in `GET /api/insights/deployment-health`), and
+`GET /api/connections/{id}/health` and the dashboard carry `drift`. Settings:
+`TESSERA_READINESS_LIVE_CHECK_DAYS` (1 to 7, default 1) and `TESSERA_READINESS_SCHEDULER=off`.
+Not wired yet: the "sync failed for 24 hours" and "cursor lost three times in 7 days" triggers
+(`readiness.ExternalSignals`; nothing records them yet), and Admin → Jobs (set `Scheduler.Hook`
+to the `job_runs` wrapper of #172).
 
 #### Live LDAP checks
 
@@ -1784,6 +1804,72 @@ The authorization server is hand-written on go-jose (the design's §6 fallback),
 `internal/oauth/dpop`, `internal/cliauth`, `internal/api/oauth_routes_test.go` and the CLI against an
 in-process server in `cmd/tessera-cli/e2e_test.go`. Fuzz targets: `FuzzValidateProof`,
 `FuzzVerifyAccessToken` (`go test -fuzz=FuzzValidateProof -fuzztime=30s ./internal/oauth/dpop`).
+## Production connectors: Okta and Entra ID
+
+`TESSERA_CONNECTORS=okta`, `entra` or `okta,entra` (also mixed with `demo-*` names) runs the real
+read connectors instead of the demo ones. The default stays `demo`. Both are read-only (every
+request is a GET, except the OAuth token request), send every call through `internal/safehttp`
+(https only, private and link-local addresses refused, redirects and page links pinned to the
+configured host), and never log or audit tokens, secrets, keys or response bodies. Errors carry the
+HTTP status and the provider's short error code only.
+
+Credentials are references, never literals: `env:NAME` (an environment variable) or
+`file:/absolute/path` (a mounted secret file). A literal in the variable is refused. The sealed and
+vault references of the connection credential store plug into the same resolver when that store lands.
+
+| Variable | Meaning |
+|---|---|
+| `TESSERA_OKTA_ORG_URL` | `https://<org>.okta.com` (a custom domain also works): https, a well-formed domain, no path |
+| `TESSERA_OKTA_CLIENT_ID`, `TESSERA_OKTA_PRIVATE_KEY`, `TESSERA_OKTA_KEY_ID` | OAuth 2.0 service app with `private_key_jwt` (preferred): client id, key reference (PEM, RSA 2048+ or P-256), the key's `kid` |
+| `TESSERA_OKTA_API_TOKEN` | reference to an SSWS token, instead of OAuth (set one or the other, not both) |
+| `TESSERA_OKTA_EMIT_IDENTITIES` | `true` (default): also create an identity per user. `false` when an HR system is authoritative |
+| `TESSERA_OKTA_MAX_INCREMENTAL_AGE` | default `24h`: a full read repairs deletions at least this often |
+| `TESSERA_ENTRA_TENANT_ID`, `TESSERA_ENTRA_CLIENT_ID` | directory (tenant) GUID and application (client) id |
+| `TESSERA_ENTRA_CLIENT_SECRET` | reference to the client secret |
+| `TESSERA_ENTRA_GRAPH_URL`, `TESSERA_ENTRA_AUTHORITY_URL` | default `https://graph.microsoft.com` and `https://login.microsoftonline.com`; set for national clouds |
+| `TESSERA_ENTRA_EMIT_IDENTITIES`, `TESSERA_ENTRA_SIGNIN_ACTIVITY` | both default `true` (the second reads last sign-in) |
+| `TESSERA_ENTRA_MAX_INCREMENTAL_AGE` | default none (delta queries report deletions) |
+
+Minimum read-only permissions:
+
+* **Okta.** OAuth scopes `okta.users.read`, `okta.groups.read`, `okta.apps.read`, `okta.roles.read`
+  and `okta.logs.read` (usage events), and the service app needs the **Read-only Administrator**
+  admin role. For SSWS, a token of a Read-only Administrator. Without `okta.roles.read` role data is
+  skipped, without `okta.logs.read` no usage events are produced; neither fails the sync.
+* **Entra ID** (application permissions, admin consent): `User.Read.All`, `Group.Read.All`,
+  `GroupMember.Read.All`, `Application.Read.All`, `RoleManagement.Read.Directory`, and optionally
+  `AuditLog.Read.All` (last sign-in and usage events; needs Entra ID P1/P2). If Graph refuses
+  `signInActivity` (403) the sync goes on without last sign-in. Entra needs no write permission.
+
+What is mapped: users become accounts (Okta `lastLogin`, Entra `signInActivity`) and, unless turned
+off, identities keyed by `employeeNumber`/`employeeId` (else `okta:<id>`/`entra:<id>`) with the
+e-mail address for correlation; groups and memberships (Entra nested groups become group-in-group
+`member_of` edges; Okta has no nested groups); apps (Okta apps, Entra enterprise apps and apps the
+tenant owns) as resources with an `access` permission and one per Entra app role, user and group
+assignments as `direct_grant` and `grants` edges; administrator roles (Okta roles on users and
+groups, Entra directory roles) as privileged `role` groups; Entra service principals the tenant owns
+as `service` accounts. Usage events are app sign-ins aggregated per user, app and day (Okta System
+Log, Entra sign-in log). Okta group role assignments are re-read with the group, so a role granted
+to an unchanged group appears at the next full read (within `MaxIncrementalAge`).
+
+Sync modes. Checkpoints live in `connector_checkpoints` (tenant-scoped, same transaction as the
+ingest, so a failed ingest rolls the checkpoint back). The first sync, a missing or unreadable
+checkpoint, `POST /api/connectors/sync?mode=full`, and a chain older than `MaxIncrementalAge` read
+everything. Otherwise Okta reads users and groups changed since the watermark (`search=lastUpdated
+gt ...`) and Entra follows the stored `deltaLink`s of `users/delta` and `groups/delta` (an expired
+token, HTTP 410 or `syncStateNotFound`, falls back to a full read). Apps, assignments and roles are
+re-read on every sync. Rate limits: 429 and 502/503/504 are retried with `Retry-After`
+(or Okta's `X-Rate-Limit-Reset`), bounded to 60 seconds a wait and 5 tries, and the client pauses
+when `X-Rate-Limit-Remaining` hits 0. Ingest does not delete accounts and groups that vanish from a
+source; it prunes only connector edges.
+
+Tests run on synthetic recorded fixtures (`okta/testdata`, `entra/testdata`) through an `httptest`
+TLS server. Live tests are skipped unless set (needs-human, never run in CI): `go test
+./internal/connectors/okta -run Integration -v` with `TESSERA_OKTA_DEV_ORG_URL` and
+`TESSERA_OKTA_DEV_API_TOKEN` (or `TESSERA_OKTA_DEV_CLIENT_ID` + `TESSERA_OKTA_DEV_PRIVATE_KEY_FILE`
+[+ `TESSERA_OKTA_DEV_KEY_ID`]); `go test ./internal/connectors/entra -run Integration -v` with
+`TESSERA_ENTRA_DEV_TENANT_ID`, `TESSERA_ENTRA_DEV_CLIENT_ID`, `TESSERA_ENTRA_DEV_CLIENT_SECRET`.
+`internal/connectors/connsync` is what Google Workspace and Workday reuse.
 
 ## Adding a real connector
 

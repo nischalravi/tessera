@@ -858,6 +858,13 @@ CREATE POLICY tenant_isolation ON queue_jobs
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE readiness_baselines ENABLE ROW LEVEL SECURITY;
+ALTER TABLE readiness_baselines FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON readiness_baselines;
+CREATE POLICY tenant_isolation ON readiness_baselines
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 ALTER TABLE api_clients ENABLE ROW LEVEL SECURITY;
 ALTER TABLE api_clients FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON api_clients;

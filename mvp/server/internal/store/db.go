@@ -145,6 +145,8 @@ var tables = []string{
 	"connector_checkpoints",
 	// point-in-time access and evidence packs (schema/0260-0261)
 	"edge_history", "evidence_packs",
+	// readiness drift baselines (schema/0355_readiness_baselines.sql)
+	"readiness_baselines",
 	// SIEM sinks (schema/0210_siem.sql)
 	"siem_sinks", "siem_dead_letters",
 	// alerting (schema/0209_alerts.sql)
