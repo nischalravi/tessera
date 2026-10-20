@@ -74,6 +74,7 @@ const ReconReport = named(connections, "ReconReport");
 const AgentsList = named(connections, "AgentsList");
 const AdminSectionPage = named(admin, "AdminSectionPage");
 const MySessions = named(() => import("../features/account/MySessions"), "MySessions");
+const DeviceApprove = lazy(() => import("../pages/DeviceApprove"));
 const AdminUsers = named(() => import("../features/admin/Users"), "Users");
 const IdpConnections = named(() => import("../features/admin/IdpConnections"), "IdpConnections");
 const ChangeRequests = named(() => import("../features/admin/ChangeRequests"), "ChangeRequests");
@@ -134,6 +135,8 @@ export default function App() {
                     {/* signed in already: the sign-in page (and its error) has nothing left to do */}
                     <Route path="/login" element={<Navigate to="/" replace />} />
                     <Route path="/sessions" element={<MySessions />} />
+                    {/* where `tessera-cli login` sends you (design §9.3): type the code, decide */}
+                    <Route path="/device" element={<DeviceApprove />} />
                     <Route path="/inbox" element={<Inbox />} />
                     <Route path="/notifications" element={<Notifications />} />
 

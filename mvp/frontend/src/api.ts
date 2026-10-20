@@ -134,6 +134,10 @@ function errorMessage(status: number, j: any): string {
       return "The request was refused as a possible cross-site request. Reload the page and try again.";
     case "audit_unavailable":
       return "The audit log is unavailable, so Tessera refused the request. Try again shortly.";
+    case "lookup_locked": {
+      const mins = Math.max(1, Math.ceil((Number(j.retry_after) || 600) / 60));
+      return `Too many wrong codes. Command-line approvals are paused for this session; try again in ${mins} minute${mins === 1 ? "" : "s"}.`;
+    }
     case "activation_blocked":
     case "transition_blocked":
       return `${j.blocking?.length ?? 0} item(s) block this step`;
@@ -281,6 +285,7 @@ const LABELS: [RegExp, (m: RegExpMatchArray) => string][] = [
   [/^\/agents\/([^/]+)\/revoke$/, (m) => `Revoke Directory Agent ${m[1]}`],
   [/^\/flatfile\/apps\/([^/]+)\/mapping$/, (m) => `Save the column mapping of ${m[1]}`],
   [/^\/flatfile\/tasks\/([^/]+)\/close$/, () => "Close the manual task"],
+  [/^\/auth\/device\/approve$/, () => "Approve the command-line sign-in"],
 ];
 
 /** A plain-language name for an API action, shown before resuming it. */
@@ -754,6 +759,30 @@ export const mySessions = () => api<MySession[]>("/auth/sessions");
 export const revokeSession = (id: string) => api<unknown>(`/auth/sessions/${encodeURIComponent(id)}`, undefined, "DELETE");
 
 export const hrisExecute = (eventId: number) => api(`/hris/events/${eventId}/execute`, {});
+
+// ---------------------------------------------------------------- command-line sign-in (design §9.3)
+
+/** What a device code asks for: shown to the person who must decide. */
+export interface DeviceRequest {
+  client: string;
+  client_id: string;
+  scope: string[];
+  requested_at: string;
+  request_ip: string;
+  expires_at: string;
+  /** The sign-in the approval needs (a fresh phishing-resistant one, 300 s or less old). */
+  requires: { acr: string; max_age: number };
+}
+
+/** Look up a user code the command line printed (wrong codes are counted: five lock the session out for ten minutes). */
+export const deviceLookup = (userCode: string) => api<DeviceRequest>("/auth/device/lookup", { user_code: userCode });
+
+/**
+ * Approve or deny the device. Approval needs a sign-in within five minutes: without one the API
+ * answers step_up_required, which opens the step-up dialog and resumes this call afterwards.
+ */
+export const deviceDecide = (userCode: string, decision: "approve" | "deny") =>
+  api<{ status: "approved" | "denied" }>("/auth/device/approve", { user_code: userCode, decision });
 
 // ---------------------------------------------------------------- scheduled reviews (issue #166)
 
