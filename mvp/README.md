@@ -111,8 +111,9 @@ server/
     connectors/scim/    read-only live prober for generic SCIM 2.0 applications (readiness DR-18)
     ratelimit/          keyed token-bucket limiter with a bounded key set
     oauth/              the OAuth authorization server (per-tenant issuer): device grant, refresh
-                        rotation with reuse detection, DPoP-bound JWT access tokens, RFC 8414/9728
-                        metadata; oauth/dpop validates DPoP proofs (RFC 9449)
+                        rotation with reuse detection, client credentials for machine clients
+                        (private_key_jwt, RFC 7523), introspection (RFC 7662), DPoP-bound JWT access
+                        tokens, RFC 8414/9728 metadata; oauth/dpop validates DPoP proofs (RFC 9449)
     cliauth/            the CLI's client library: device login, credentials file, DPoP calls
     ojson/, timeutil/   ordered JSON + Python float repr; CPython-compatible time arithmetic
     testkit/            shared test fixtures (tiny world through a real Connector, seeded demo DB; each is seeded once per test binary and handed out as a private copy per test)
@@ -1869,6 +1870,7 @@ cd server
 TESSERA_ENV=dev go run ./cmd/tessera admin create-tenant -slug acme -name "Acme Corp"
 TESSERA_ENV=dev go run ./cmd/tessera admin add-idp -tenant acme -file okta.yaml -client-secret-file okta.secret
 TESSERA_ENV=dev go run ./cmd/tessera admin invite-admin -tenant acme -connection <id> -email jane@acme.example
+TESSERA_ENV=dev go run ./cmd/tessera admin add-client -tenant acme -name "ETL" -owner jane@acme.example -jwks-file etl.pub.jwks -scope tessera:read -roles viewer   # see Machine clients
 ```
 
 `add-idp` reads a connection file (§18.2; unknown keys are refused, secrets are never in it). OIDC uses
@@ -1953,7 +1955,6 @@ Tessera's keys. `devidp.New` refuses `TESSERA_ENV=prod`. `TestIsolation_DevIdPNo
 (`internal/archtest`) proves from the import graph that `cmd/tessera` and `internal/api` never link
 the dev IdP.
 
-<<<<<<< HEAD
 ## Production connectors: Okta and Entra ID
 
 `TESSERA_CONNECTORS=okta`, `entra` or `okta,entra` (also mixed with `demo-*` names) runs the real
@@ -2020,7 +2021,6 @@ TLS server. Live tests are skipped unless set (needs-human, never run in CI): `g
 [+ `TESSERA_OKTA_DEV_KEY_ID`]); `go test ./internal/connectors/entra -run Integration -v` with
 `TESSERA_ENTRA_DEV_TENANT_ID`, `TESSERA_ENTRA_DEV_CLIENT_ID`, `TESSERA_ENTRA_DEV_CLIENT_SECRET`.
 `internal/connectors/connsync` is what Google Workspace and Workday reuse.
-=======
 ## Command-line sign-in (`tessera-cli`)
 
 The CLI and other non-browser clients use OAuth 2.0, not cookies (design §9.3, §10): Tessera is an
@@ -2071,7 +2071,7 @@ http and loopback).
 | `GET /t/{slug}/.well-known/jwks.json` | the tenant's public access-token keys |
 | `GET /.well-known/oauth-protected-resource` | RFC 9728 metadata of the API (`authorization_servers` is the `/t/{slug}` template) |
 | `POST /t/{slug}/oauth/device_authorization` | start a device grant (10 per minute per IP); no `verification_uri_complete` |
-| `POST /t/{slug}/oauth/token` | `device_code` and `refresh_token` grants, DPoP proof and server nonce required |
+| `POST /t/{slug}/oauth/token` | `device_code` and `refresh_token` grants, DPoP proof and server nonce required (and `client_credentials`: see Machine clients) |
 | `POST /t/{slug}/oauth/revoke` | RFC 7009: revokes the refresh token's family and the CLI session |
 | `POST /api/auth/device/lookup` | session; who is asking (client, address, time, scope); 5 wrong codes lock the session out of lookups for 10 minutes (`oauth.device.lookup_bruteforce`) |
 | `POST /api/auth/device/approve` | session and step-up (`max_age` 300, phishing-resistant); `{user_code, decision}` |
@@ -2088,15 +2088,65 @@ role: the CLI session's). A used token presented again revokes the whole family 
 writes a critical `oauth.refresh.reuse_detected`; presenting a token with another DPoP key is
 `invalid_grant` and changes nothing. The first-party client `tessera-cli` exists in every tenant
 (created at seed and server start); a tenant can turn the device grant off with
-`tenants.settings.device_grant_enabled=false`. Machine clients and client credentials arrive with
-PR11; introspection (RFC 7662) is for them too and is not served yet.
+`tenants.settings.device_grant_enabled=false`.
 
 The authorization server is hand-written on go-jose (the design's §6 fallback), not on zitadel/oidc: see
-`internal/oauth/oauth.go` for why. Tests: `internal/oauth` (flow, refresh, tokens, metadata, fuzzing),
-`internal/oauth/dpop`, `internal/cliauth`, `internal/api/oauth_routes_test.go` and the CLI against an
-in-process server in `cmd/tessera-cli/e2e_test.go`. Fuzz targets: `FuzzValidateProof`,
-`FuzzVerifyAccessToken` (`go test -fuzz=FuzzValidateProof -fuzztime=30s ./internal/oauth/dpop`).
->>>>>>> origin/dev
+`internal/oauth/oauth.go` for why. Tests: `internal/oauth` (flow, refresh, tokens, metadata, machine
+clients, fuzzing), `internal/oauth/dpop`, `internal/cliauth`, `internal/api/oauth_routes_test.go`,
+`internal/api/admin_clients_test.go` and the CLI against an in-process server in
+`cmd/tessera-cli/e2e_test.go`. Fuzz targets: `FuzzValidateProof`, `FuzzVerifyAccessToken`,
+`FuzzParseClientAssertion` (`go test -fuzz=FuzzValidateProof -fuzztime=30s ./internal/oauth/dpop`;
+`go test -run xxx -fuzz=FuzzParseClientAssertion -fuzztime=30s ./internal/oauth`).
+
+### Machine clients (client credentials)
+
+A service, pipeline or agent that has no person behind it is a **machine client** (design §9.5): it has
+its own key pair, gets its own tokens with the `client_credentials` grant, and is audited as an
+`api_client`. There is no client secret. The client keeps a private key (EC P-256 or Ed25519) and the
+tenant registers the public key; the client proves itself on every token request with a short-lived signed
+JWT (**RFC 7523 `private_key_jwt`**, `internal/oauth/clientauth.go`):
+
+- `alg` is `ES256` or `EdDSA`, nothing else (HS256, RS256 and `none` are refused), and the header has no
+  `jku`, `x5u`, `jwk`, `x5c` or `crit`; the signature must verify with a key registered for that client.
+- `iss` = `sub` = the `client_id`; `aud` is exactly the URL of the endpoint it is sent to (for example
+  `https://tessera.example.com/t/acme/oauth/token`, as one string); `exp` is in the future and at most 300
+  seconds after `iat`; `jti` is unique and is accepted once (in `replay_cache`, until `exp`).
+- A failed authentication is `401 invalid_client` with no reason; the reason is in the audit event
+  `oauth.client_auth.failed`.
+
+```bash
+# register: a PUBLIC key set (each key needs a kid), an accountable owner, roles and scopes
+TESSERA_ENV=dev go run ./cmd/tessera admin add-client -tenant acme -name "Nightly ETL" \
+  -owner jane@acme.example -jwks-file etl.pub.jwks -scope "tessera:read tessera:audit" -roles viewer,auditor
+#   added machine client tsc_… ; token endpoint https://…/t/acme/oauth/token
+
+# a token (DPoP proof header and the server's DPoP-Nonce as for the CLI; scope is optional)
+curl -X POST "$TESSERA_PUBLIC_URL/t/acme/oauth/token" -H "DPoP: $PROOF" \
+  -d grant_type=client_credentials -d client_id=tsc_… -d scope=tessera:read \
+  -d client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer -d client_assertion=$JWT
+```
+
+`add-client` takes only public keys, is audited as the operator (`oauth.client.created`), and refuses admin
+roles: a machine client may hold `viewer`, `operator` and `auditor` only, and its `roles` are read on every
+request like a user's. `-dpop=false` registers a client that may skip DPoP (it then gets a `Bearer` token and
+the command warns; sending a proof anyway still binds the token). Creating and changing clients moves to
+the change-request workflow in PR12. The token is an `at+jwt` of 10 minutes (5 with `tessera:admin`),
+`sub` = `cli_<client row id>`, with no `sid`, no refresh token, and `cnf.jkt` when DPoP-bound.
+
+What a machine principal may do is the intersection of its roles and its scopes (the scope is the subset of
+the client's registered `allowed_scopes` it asked for, all of them if it asked for none). It can never
+satisfy step-up: every route that needs a fresh sign-in (approvals, policy changes, device approval) is
+`403 interactive_authentication_required`, and `/api/auth/session`, `logout`, `sessions` are for users only.
+A disabled client, or one whose roles or scopes are narrowed, is cut off on the next request.
+
+| Route | Purpose |
+|---|---|
+| `POST /t/{slug}/oauth/token` | also `client_credentials`: `client_assertion_type`, `client_assertion`, optional `scope`; DPoP proof and nonce when the client requires DPoP |
+| `POST /t/{slug}/oauth/introspect` | RFC 7662: the same client authentication (`aud` = the introspect URL) for a client registered with the `tessera:introspect` scope; `{"active": false}` for anything that is not an active token of this tenant (expired, revoked session, other tenant, malformed) |
+| `GET /api/admin/api-clients` · `/{client_id}` | `admin.read`: the tenant's clients with their public keys (kid, alg, thumbprint), roles, scopes, owner, last use. Read-only |
+
+The RFC 8414 metadata advertises `client_credentials`, `private_key_jwt` (`ES256`, `EdDSA`) and the
+`introspection_endpoint`.
 
 ## Adding a real connector
 

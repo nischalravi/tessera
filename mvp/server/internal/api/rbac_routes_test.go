@@ -303,6 +303,7 @@ GET    /.well-known/oauth-protected-resource         public
 POST   /t/{slug}/oauth/device_authorization          public
 POST   /t/{slug}/oauth/token                         public
 POST   /t/{slug}/oauth/revoke                        public
+POST   /t/{slug}/oauth/introspect                    public
 POST   /api/auth/device/lookup                       auth.self       -  # issue #14
 POST   /api/auth/device/approve                      auth.self       STEP_UP_ADMIN  # issue #14: max_age 300 s
 GET    /api/groups/folders                           groups.admin    -  # issue #44
@@ -343,6 +344,8 @@ POST   /api/admin/change-requests/{change_id}/reject admin.change.approve -  # i
 POST   /api/admin/change-requests/{change_id}/cancel admin.change.request -  # issue #16
 POST   /api/admin/change-requests/{change_id}/apply  admin.change.approve STEP_UP_ADMIN  # issue #16
 GET    /api/admin/notifications                      admin.read      -  # issue #16
+GET    /api/admin/api-clients                        admin.read      -  # issue #15
+GET    /api/admin/api-clients/{client_id}            admin.read      -  # issue #15
 GET    /api/admin/recovery                           admin.read      -  # issue #16
 POST   /api/admin/recovery/{recovery_id}/cancel      admin.change.request -  # issue #16
 GET    /api/admin/api-clients                        admin.read      -  # issue #16

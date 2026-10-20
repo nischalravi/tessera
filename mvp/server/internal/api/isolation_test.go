@@ -300,6 +300,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if strings.HasPrefix(rt.Pattern, "/api/flatfile/") {
 			continue // TestFlatfileAPI_CrossTenant (a system name or a UUID, not a fixture id)
 		}
+		if rt.Pattern == "/api/admin/api-clients/{client_id}" {
+			continue // TestAdminAPIClients_CrossTenant (a client_id string, not a fixture id)
+		}
 		if strings.HasPrefix(rt.Pattern, "/api/siem/sinks/") {
 			continue // TestSiemAPI_CrossTenant (UUIDs, not fixture ids)
 		}
@@ -362,6 +365,9 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 	if rec := serveOnce(isolationServer(t, f, f.A.ID).Handler(), http.MethodGet, "/api/identities", ""); !leaks(rec.Body.String()) {
 		t.Fatal("tenant A's own identities do not carry the sentinel; the leak check would never fire")
 	}
+	// each tenant has an OAuth client; tenant A's carries the sentinel
+	seedClient(t, f.DB, f.A.ID, "tsc_client_a", "ETL "+storetest.Sentinel)
+	seedClient(t, f.DB, f.B.ID, "tsc_client_b", "ETL B")
 	srv := isolationServer(t, f, f.B.ID)
 	h := srv.Handler()
 	b := f.B.IDs
@@ -372,6 +378,7 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 	policyIDs := seedAbac(t, f)            // and A's policy name
 	values := map[string]string{
 		"/api/jobs/{job_id}":                         insertJobRun(t, f.DB, f.B.ID),
+		"/api/admin/api-clients/{client_id}":         "tsc_client_b",
 		"/api/provisioning/ops/{op_id}":              insertProvOp(t, f.DB, f.B.ID, f.B.Refs["connection:ad"], "b-key"),
 		"/api/abac/policies/{policy_id}":             policyIDs[f.B.ID],
 		"/api/roles/{role_id}":                       roleIDs[f.B.ID],
