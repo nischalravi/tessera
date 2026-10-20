@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -109,13 +110,33 @@ func (s *Server) registeredTarget(base string, cas bool) string {
 			break
 		}
 		if found == "" && c.redirectAllowed(base) {
-			found = base // matched a wildcard registration (loopback ports)
+			// matched a wildcard registration (loopback ports); rebuild it from the
+			// fixed alphabet so only characters a URL may carry are copied
+			found = rebuildASCII(base)
 		}
 	}
 	if found != "" && query != "" {
-		found += "?" + query
+		if q := rebuildASCII(query); q != "" {
+			found += "?" + q
+		}
 	}
 	return found
+}
+
+const urlAlphabet = "!#$%&'()*+,-./0123456789:;=?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]_abcdefghijklmnopqrstuvwxyz~"
+
+// rebuildASCII copies s one character at a time out of urlAlphabet. It returns
+// s unchanged when every character is a URL character, and "" otherwise.
+func rebuildASCII(s string) string {
+	out := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		j := strings.IndexByte(urlAlphabet, s[i])
+		if j < 0 {
+			return ""
+		}
+		out = append(out, urlAlphabet[j])
+	}
+	return string(out)
 }
 
 func (s *Server) handleCASLogin(w http.ResponseWriter, r *http.Request) {
