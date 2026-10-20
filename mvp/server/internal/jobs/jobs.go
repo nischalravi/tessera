@@ -47,6 +47,9 @@ const (
 	// CertificateExpiry is the daily check that raises an alert 30 and 7 days before a certificate expires.
 	CertificateExpiry = "certificate_expiry"
 
+	// ArchiveSweep moves records past their retention into sealed archive segments (issue #298).
+	ArchiveSweep = "archive_sweep"
+
 	// GuestLifecycle is the guest lifecycle sweep: reminders, transfer deadlines,
 	// step-up renewals, conversions, grace and retention (issue #74).
 	GuestLifecycle = "guest_lifecycle"
@@ -54,7 +57,7 @@ const (
 
 // Kinds lists every kind, for filters.
 var Kinds = []string{Sync, Provision, Validation, DryRun, HealthRerun, JITSweep, AuditAnchor,
-	SweepRequests, SweepLifecycle, SweepAdminChanges, ContainmentRetry, SweepSoDMitigations, SoDMitigationExpire, SweepDrift, SweepSSFPoll, Maintenance, GuestLifecycle, RoleMining, CertificateExpiry}
+	SweepRequests, SweepLifecycle, SweepAdminChanges, ContainmentRetry, SweepSoDMitigations, SoDMitigationExpire, SweepDrift, SweepSSFPoll, Maintenance, GuestLifecycle, RoleMining, CertificateExpiry, ArchiveSweep}
 
 // Idempotent reports whether running a kind again with the same input is
 // safe: it reads a source and converges, or re-checks. Provisioning is not:
@@ -189,10 +192,18 @@ func Maintain(ctx context.Context, db *store.DB, now time.Time, staleAfter, rete
 
 // MaintainTx is Maintain for the tenant of tx.
 func MaintainTx(tx *store.TenantTx, now time.Time, staleAfter, retention time.Duration) error {
-	if _, err := tx.FailStaleJobRuns(now.Add(-staleAfter), now, "interrupted: the process running this job stopped before it finished"); err != nil {
+	if err := FailStaleTx(tx, now, staleAfter); err != nil {
 		return err
 	}
 	_, err := tx.PruneJobRuns(now.Add(-retention))
+	return err
+}
+
+// FailStaleTx fails the runs left running for longer than staleAfter in the
+// tenant of tx. With archiving on, the archival job (internal/archive) removes
+// finished runs after it has archived them, so maintenance only does this.
+func FailStaleTx(tx *store.TenantTx, now time.Time, staleAfter time.Duration) error {
+	_, err := tx.FailStaleJobRuns(now.Add(-staleAfter), now, "interrupted: the process running this job stopped before it finished")
 	return err
 }
 

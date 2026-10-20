@@ -1893,6 +1893,27 @@ CREATE POLICY tenant_isolation ON sod_ruleset_remediation
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE retention_policies ENABLE ROW LEVEL SECURITY;
+ALTER TABLE retention_policies FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON retention_policies;
+CREATE POLICY tenant_isolation ON retention_policies
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE archive_segments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE archive_segments FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON archive_segments;
+CREATE POLICY tenant_isolation ON archive_segments
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE archive_segment_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE archive_segment_items FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON archive_segment_items;
+CREATE POLICY tenant_isolation ON archive_segment_items
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 ALTER TABLE tenant_certificates ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tenant_certificates FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON tenant_certificates;

@@ -539,7 +539,16 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	}
 	provisioningSvc := &provisioning.Service{DB: st, Sealer: sealer, Clock: clock, Log: logger,
 		Deps: provisioning.Deps{HTTP: provHTTP, Dial: provDial, AllowPlainLDAP: cfg.Env == config.Dev, SQLDir: cfg.GroupsProvSQLDir}}
-	srv := api.New(api.Config{Health: checker, Store: st, Clock: clock, Policies: loader, Logger: logger,
+	archiveSvc, err := newArchive(cfg, o.db, st, sealer, clock, logger)
+	if err != nil {
+		return err
+	}
+	if archiveSvc.Enabled() {
+		logger.Info("archiving on", "location", archiveSvc.Store.Location())
+	} else {
+		logger.Warn("archiving is off: no archive store is configured (TESSERA_ARCHIVE_DIR or TESSERA_ARCHIVE_URL); nothing is archived or deleted")
+	}
+	srv := api.New(api.Config{Health: checker, Store: st, Clock: clock, Policies: loader, Logger: logger, Archive: archiveSvc,
 		Secrets: secrets, Credential: authority,
 		PublicURL: cfg.PublicURL, RPID: cfg.RPID, Sealer: sealer, OutboundHTTP: outbound, GroupsEngine: groupsEngine, GroupsRules: groupsRules, Provisioning: provisioningSvc, LoaderDataDir: cfg.LoaderDataDir, APIAudience: cfg.APIAudience,
 		AccessTokenTTL: time.Duration(cfg.AccessTokenTTLSeconds) * time.Second,

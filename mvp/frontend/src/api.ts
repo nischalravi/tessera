@@ -3756,7 +3756,8 @@ export type ChangeStatus = "pending_approval" | "cooling_off" | "applied" | "rej
 /** The change types of design §15.2 that the API accepts. */
 export type ChangeType =
   | "role.grant" | "role.revoke" | "idp_connection.create" | "idp_connection.update_trust" | "idp_connection.update_cosmetic"
-  | "idp_connection.disable" | "tenant.settings.update" | "tenant.security_contacts.update" | "breakglass.register" | "breakglass.revoke";
+  | "idp_connection.disable" | "tenant.settings.update" | "tenant.security_contacts.update" | "breakglass.register" | "breakglass.revoke"
+  | "groups.loader.save" | "retention.update";
 
 export interface AdminPersonRef { id: string; display_name: string }
 
@@ -3805,6 +3806,65 @@ export interface PlatformHealth {
 }
 
 export interface AdminApiClients { available: boolean; clients: { id: string; name: string }[]; detail: string }
+
+// ------------------------------------------------------------ log retention and the archive (issue #298)
+
+/** The data classes with a retention setting, in the order the archival job runs them. */
+export type RetentionClass = "audit" | "review_campaigns" | "requests" | "job_runs" | "notifications";
+
+export interface RetentionSetting {
+  class: RetentionClass; label: string; days: number; custom: boolean; default_days: number; min_days: number; max_days: number;
+  /** What the age of a record is counted from. */
+  basis: string; updated_at?: string; updated_by?: string;
+}
+
+export interface ArchiveStatus { enabled: boolean; location: "local" | "remote" | ""; every_seconds: number }
+
+/** GET /api/admin/retention. */
+export interface RetentionView { archive: ArchiveStatus; settings: RetentionSetting[] }
+
+export type SegmentStatus = "written" | "verified" | "purged" | "failed";
+
+export interface ArchiveSegment {
+  id: string; class: RetentionClass; status: SegmentStatus; count: number;
+  /** Audit segments: the chain range they cover. */
+  seq_from?: number; seq_to?: number; range_from: string; range_to: string; first_hash?: string; last_hash?: string;
+  sha256: string; size_bytes: number; location: "local" | "remote"; created_at: string; verified_at: string | null; purged_at: string | null;
+}
+
+/** GET /api/admin/archive/segments. */
+export interface ArchiveList { archive: ArchiveStatus; segments: ArchiveSegment[] }
+
+/** POST /api/admin/archive/segments/{id}/verify: a segment that fails is the answer (ok false), not an error. */
+export interface SegmentCheck { segment_id: string; ok: boolean; checks: string[] | null; problem?: string; records: number; checked_at: string }
+
+export const archive = {
+  verify: (id: string) => api<SegmentCheck>(`/admin/archive/segments/${encodeURIComponent(id)}/verify`, {}),
+};
+
+/**
+ * The segment's records as NDJSON, for saving (the read-only restore). The server checks the segment first and
+ * refuses a tampered one (409). A step-up is asked for like any other action.
+ */
+export async function downloadArchiveSegment(id: string): Promise<Blob> {
+  let res: Response;
+  try {
+    res = await fetch(`/api/admin/archive/segments/${encodeURIComponent(id)}/export`, { credentials: "same-origin" });
+  } catch {
+    throw new ApiError("Tessera can't reach its API right now.", 0, null);
+  }
+  if (!res.ok) {
+    let j: any = null;
+    try {
+      j = await res.json();
+    } catch {
+      /* ignore */
+    }
+    if (res.status === 401 && j?.error === "step_up_required") window.dispatchEvent(new CustomEvent(STEP_UP, { detail: j }));
+    throw new ApiError(j ? errorMessage(res.status, j) : `${res.status} ${res.statusText}`, res.status, j);
+  }
+  return res.blob();
+}
 
 /** Admin-change workflow calls. Approving needs the hash of the payload the admin reviewed. */
 export const adminChanges = {
