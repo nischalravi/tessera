@@ -1,0 +1,5 @@
+[
+  {"id": "oag1grant000000001", "scopeId": "okta.users.read", "issuer": "https://example.okta.com", "status": "ACTIVE"},
+  {"id": "oag1grant000000002", "scopeId": "okta.groups.manage", "issuer": "https://example.okta.com", "status": "ACTIVE"},
+  {"id": "oag1grant000000003", "scopeId": "okta.logs.read", "issuer": "https://example.okta.com", "status": "INACTIVE"}
+]

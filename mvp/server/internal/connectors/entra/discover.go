@@ -156,8 +156,19 @@ func (c *Connector) Discover(ctx context.Context) (*connectors.DiscoveryResult, 
 	if c.cfg.SignInActivity {
 		signIn = c.readSignIns(ctx)
 	}
+	var agents []*eAgent
+	agentsRead := false
+	if c.cfg.DiscoverAgents {
+		if agents, agentsRead, err = c.readAgents(ctx); err != nil {
+			return nil, err
+		}
+		apps = c.markAgents(apps, agents)
+	}
 	res := c.build(st, apps, roles, signIn)
 	res.AuthMethods, res.AuthSource = c.readAuthMethods(ctx, st)
+	if agentsRead {
+		c.applyAgents(res, agents)
+	}
 	c.save(ctx, st, next, start, full)
 	return res, nil
 }

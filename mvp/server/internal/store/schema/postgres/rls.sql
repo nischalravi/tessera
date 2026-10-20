@@ -1521,3 +1521,17 @@ DROP POLICY IF EXISTS tenant_isolation ON identity_conversions;
 CREATE POLICY tenant_isolation ON identity_conversions
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE agent_profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_profiles FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON agent_profiles;
+CREATE POLICY tenant_isolation ON agent_profiles
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE mcp_findings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE mcp_findings FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON mcp_findings;
+CREATE POLICY tenant_isolation ON mcp_findings
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));

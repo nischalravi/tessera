@@ -214,6 +214,8 @@ var tables = []string{
 	"guest_registrations", "guest_sponsor_codes",
 	// MFA posture (schema/0255_mfa_posture.sql)
 	"auth_methods", "auth_method_sources", "account_auth_signals", "mfa_posture_snapshots",
+	// AI agent discovery (schema/0368_agent_discovery.sql)
+	"agent_profiles", "mcp_findings",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was

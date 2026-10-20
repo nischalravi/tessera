@@ -174,6 +174,9 @@ func (r *Resolver) ID(kind, system, xid string) (int64, bool) {
 // DiscoveryStats counts records ingested per type (keys in API order).
 type DiscoveryStats struct {
 	Identities, Resources, Permissions, Groups, Accounts, Edges, Secrets, Delegations int
+	// Agents and MCPFindings (issue #116) are not in Object(): the sync
+	// response keeps its shape.
+	Agents, MCPFindings int
 }
 
 // Object renders the stats as an ordered JSON object.
@@ -358,6 +361,10 @@ func discovery(c *store.TenantTx, now time.Time, results []*connectors.Discovery
 		if err := mfa.RecordSnapshot(c, now); err != nil {
 			return st, err
 		}
+	}
+	// 10. agent profiles and MCP findings (issue #116)
+	if err := agentDiscovery(c, now, results, &st); err != nil {
+		return st, err
 	}
 	return st, nil
 }

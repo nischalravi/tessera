@@ -864,6 +864,12 @@ func (c *DemoCompany) buildAgents() {
 			Owner: &IdentityRef{ExternalID: c.P(ag.owner).EID}, Description: sp(ag.desc),
 		})
 		c.setType(ag.xid, "ai_agent")
+		// provenance for the agent inventory (issue #116): the demo agents are Okta service apps
+		// created and sponsored by their owner
+		owner := &IdentityRef{ExternalID: c.P(ag.owner).EID}
+		c.R["okta"].Agents = append(c.R["okta"].Agents, AgentRecord{System: "okta", ExternalID: ag.xid,
+			Identity: IdentityRef{ExternalID: ag.xid}, Kind: "okta_service_app", Creator: owner, CreatorRef: ag.owner,
+			Sponsor: owner, SponsorRef: ag.owner})
 		oa := c.account("okta", "agent/"+ag.xid, ag.xid+"@agents."+Domain, ag.xid, "agent", "active", nil)
 		c.member(oa, oktaAgents)
 		sysAcct := c.account(ag.system, "agent/"+ag.xid, ag.xid, ag.xid, "agent", "active", nil)
@@ -875,6 +881,45 @@ func (c *DemoCompany) buildAgents() {
 			})
 		}
 	}
+	c.R["okta"].AgentSnapshotOf = append(c.R["okta"].AgentSnapshotOf, "okta")
+	c.buildMCPFindings()
+}
+
+// buildMCPFindings is what a scan of the demo GitHub org reports (issue #116):
+// MCP servers in committed configs and credentials of the kinds agents use. The
+// fingerprints are made up; no value exists to find.
+func (c *DemoCompany) buildMCPFindings() {
+	person := func(name string) *IdentityRef { return &IdentityRef{ExternalID: c.P(name).EID} }
+	add := func(repo, path, loc, kind string, mod func(*MCPFindingRecord)) {
+		r := MCPFindingRecord{System: "github-scan", Kind: kind, Org: "larkspur", Repo: repo, Path: path, Location: loc,
+			OwnerSource: "none"}
+		mod(&r)
+		c.R["github"].MCPFindings = append(c.R["github"].MCPFindings, r)
+	}
+	committer := func(r *MCPFindingRecord, name, sha string) {
+		r.OwnerRef, r.OwnerSource, r.Owner, r.CommitSHA = c.P(name).Email(), "committer", person(name), sha
+	}
+	add("web-app", ".mcp.json", "mcpServers.github", "mcp_server", func(r *MCPFindingRecord) {
+		committer(r, "Kofi Mensah", "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678")
+		r.Server, r.Transport, r.Target = "github", "stdio", "npx @modelcontextprotocol/server-github"
+	})
+	add("web-app", ".mcp.json", "mcpServers.github.env.GITHUB_PERSONAL_ACCESS_TOKEN", "agent_credential", func(r *MCPFindingRecord) {
+		committer(r, "Kofi Mensah", "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678")
+		r.Server, r.Transport, r.Target = "github", "stdio", "npx @modelcontextprotocol/server-github"
+		r.SecretType, r.Fingerprint = "github_token", "9f2c41d07ab3e581"
+	})
+	add("data-pipelines", ".cursor/mcp.json", "mcpServers.warehouse", "mcp_server", func(r *MCPFindingRecord) {
+		r.OwnerRef, r.OwnerSource = "github-team:larkspur/data", "codeowners"
+		r.Server, r.Transport, r.Target = "warehouse", "http", "mcp.larkspur.example"
+	})
+	add("ml-models", ".env", "L7", "agent_credential", func(r *MCPFindingRecord) {
+		committer(r, "Sana Iyer", "0f1e2d3c4b5a69788796a5b4c3d2e1f001122334")
+		r.SecretType, r.Fingerprint = "anthropic_api_key", "3b7e90c2d41f6a58"
+	})
+	add("infra-terraform", "tools/mcp.json", "servers.ops", "mcp_server", func(r *MCPFindingRecord) {
+		r.Server, r.Transport, r.Target = "ops", "sse", "ops-agent.larkspur.example"
+	})
+	c.R["github"].AgentSnapshotOf = append(c.R["github"].AgentSnapshotOf, "github-scan")
 }
 
 // ---------------------------------------------------------------- usage

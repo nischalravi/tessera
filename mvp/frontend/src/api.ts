@@ -686,6 +686,63 @@ export interface NhiRow {
   delegations: { chain: { name: string; role: string; status: string }[]; scopes: string[]; exceeds_principal: string[] }[];
 }
 
+/** Who is responsible for an agent or a finding (the API's nhi.Owner). */
+export interface PersonBrief { id: number; name: string; status: string; department: string | null }
+
+/** An AI agent in the inventory: where it was discovered, who created and sponsors it (issue #116). */
+export interface AgentRow {
+  id: number;
+  name: string;
+  status: string;
+  description: string | null;
+  /** The system the agent was discovered in (entra, okta, aws-agentcore ...). */
+  source: string;
+  /** What it is there: entra_agent_identity, okta_service_app, bedrock_agentcore_runtime. */
+  source_kind: string | null;
+  creator: string | null;
+  sponsor: PersonBrief | null;
+  /** The sponsor as the source spells it, kept when it did not resolve to a person. */
+  sponsor_ref: string | null;
+  /** active, inactive (the sponsor left or is disabled) or none. */
+  sponsor_status: "active" | "inactive" | "none";
+  systems: string[];
+  credentials: number;
+  oldest_secret_days: number | null;
+  effective_permissions: number;
+  privileged_permissions: number;
+  flags: string[];
+  risk: number;
+  /** Ids of the policies the agent violates. */
+  violations: string[];
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+}
+
+/** An MCP server or an agent credential found in source code. Never a secret value. */
+export interface McpFinding {
+  id: number;
+  source: string;
+  kind: "mcp_server" | "agent_credential";
+  org: string;
+  repo: string;
+  path: string;
+  location: string;
+  server: string | null;
+  transport: string | null;
+  target: string | null;
+  /** The type of secret (github_token, anthropic_api_key ...). */
+  secret_type: string | null;
+  /** First 16 hex digits of a hash of the secret: identifies it without revealing it. */
+  fingerprint: string | null;
+  owner: { source: "codeowners" | "committer" | "none"; ref: string | null; identity: PersonBrief | null };
+  commit_sha: string | null;
+  first_seen_at: string;
+  last_seen_at: string;
+}
+
+export const useAIAgents = () => useApi<AgentRow[]>("/ai-agents");
+export const useMcpFindings = () => useApi<McpFinding[]>("/ai-agents/mcp-findings");
+
 export interface Policy { id: string; name: string; type: string; severity: string; description: string; enabled: boolean; source: string; violations: number }
 
 // -------------------------------------------------------------- actions

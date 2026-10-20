@@ -1,0 +1,42 @@
+{
+  "value": [
+    {
+      "@odata.type": "#microsoft.graph.agentIdentity",
+      "id": "dddddddd-0000-4000-8000-000000000001",
+      "appId": "44440000-0000-4000-8000-000000000001",
+      "displayName": "Support Triage Agent",
+      "accountEnabled": true,
+      "createdByAppId": "11110000-0000-4000-8000-000000000001",
+      "createdDateTime": "2026-09-01T10:00:00Z",
+      "passwordCredentials": [
+        {"keyId": "eeeeeeee-0000-4000-8000-000000000001", "displayName": "triage secret", "startDateTime": "2026-06-01T00:00:00Z", "endDateTime": "2027-06-01T00:00:00Z", "hint": "zq7", "secretText": null},
+        {"keyId": "eeeeeeee-0000-4000-8000-000000000002", "displayName": "old secret", "startDateTime": "2024-01-01T00:00:00Z", "endDateTime": "2025-01-01T00:00:00Z", "hint": "old", "secretText": null}
+      ],
+      "keyCredentials": [
+        {"keyId": "eeeeeeee-0000-4000-8000-000000000003", "displayName": "triage cert", "startDateTime": "2026-08-01T00:00:00Z", "endDateTime": "2027-08-01T00:00:00Z"}
+      ]
+    },
+    {
+      "@odata.type": "#microsoft.graph.agentIdentity",
+      "id": "dddddddd-0000-4000-8000-000000000002",
+      "appId": "44440000-0000-4000-8000-000000000002",
+      "displayName": "Orphan Research Agent",
+      "accountEnabled": true,
+      "createdByAppId": "",
+      "createdDateTime": "2026-07-15T08:00:00Z",
+      "passwordCredentials": [],
+      "keyCredentials": []
+    },
+    {
+      "@odata.type": "#microsoft.graph.agentIdentity",
+      "id": "dddddddd-0000-4000-8000-000000000003",
+      "appId": "44440000-0000-4000-8000-000000000003",
+      "displayName": "Left Sponsor Agent",
+      "accountEnabled": true,
+      "createdByAppId": "33330000-0000-4000-8000-000000000003",
+      "createdDateTime": "2026-05-02T08:00:00Z",
+      "passwordCredentials": [],
+      "keyCredentials": []
+    }
+  ]
+}

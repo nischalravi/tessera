@@ -22,14 +22,22 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/agentcore"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/entra"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/githubscan"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/google"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/okta"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/workday"
 )
 
-// Register adds the okta, entra, google and workday factories. hc is the
+// Agent discovery (issue #116): "github-scan" reads MCP configs and agent
+// credentials from a GitHub org (TESSERA_GITHUB_SCAN_*); "aws-agentcore" reads
+// a recorded AgentCore snapshot (TESSERA_AGENTCORE_SNAPSHOT) and refuses prod,
+// as no live AgentCore client exists. Entra and Okta discover agents when
+// TESSERA_ENTRA_DISCOVER_AGENTS / TESSERA_OKTA_DISCOVER_AGENTS is true.
+//
+// Register adds the okta, entra, google, workday, github-scan and aws-agentcore factories. hc is the
 // server's shared outbound client and rt comes from the validated configuration.
 func Register(hc *http.Client, rt connsync.Runtime) {
 	connectors.Factories["okta"] = func(now time.Time) (connectors.Connector, error) {
@@ -43,5 +51,11 @@ func Register(hc *http.Client, rt connsync.Runtime) {
 	}
 	connectors.Factories["workday"] = func(now time.Time) (connectors.Connector, error) {
 		return workday.FromEnv(os.Getenv, now, rt, hc)
+	}
+	connectors.Factories["github-scan"] = func(now time.Time) (connectors.Connector, error) {
+		return githubscan.FromEnv(os.Getenv, now, rt, hc)
+	}
+	connectors.Factories["aws-agentcore"] = func(now time.Time) (connectors.Connector, error) {
+		return agentcore.FromEnv(os.Getenv, now)
 	}
 }
