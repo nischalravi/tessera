@@ -1,0 +1,42 @@
+[
+  {
+    "id": "00u1averyexample01",
+    "status": "ACTIVE",
+    "created": "2024-03-01T10:00:00.000Z",
+    "activated": "2024-03-01T10:05:00.000Z",
+    "statusChanged": "2024-03-01T10:05:00.000Z",
+    "lastLogin": "2026-10-07T08:15:00.000Z",
+    "lastUpdated": "2026-09-30T12:00:00.000Z",
+    "passwordChanged": "2026-01-10T09:00:00.000Z",
+    "type": {"id": "oty1example0000001"},
+    "profile": {
+      "firstName": "Avery",
+      "lastName": "Example",
+      "displayName": "Avery Example",
+      "login": "avery.example@example.com",
+      "email": "avery.example@example.com",
+      "employeeNumber": "E1001",
+      "department": "Engineering",
+      "title": "Staff Engineer",
+      "managerId": "00u1morganexample2",
+      "userType": "Employee"
+    },
+    "credentials": {"provider": {"type": "OKTA", "name": "OKTA"}},
+    "_links": {"self": {"href": "https://example.okta.com/api/v1/users/00u1averyexample01"}}
+  },
+  {
+    "id": "00u1morganexample2",
+    "status": "ACTIVE",
+    "created": "2023-11-15T09:00:00.000Z",
+    "lastLogin": null,
+    "lastUpdated": "2026-08-01T12:00:00.000Z",
+    "profile": {
+      "firstName": "Morgan",
+      "lastName": "Sample",
+      "login": "morgan.sample@example.com",
+      "email": "morgan.sample@example.com",
+      "department": "Engineering",
+      "title": "Engineering Manager"
+    }
+  }
+]

@@ -1,0 +1,4 @@
+[
+  {"id": "00u1morganexample2", "scope": "USER", "status": "ACTIVE", "credentials": {"userName": "morgan.sample@example.com"}},
+  {"id": "00u1averyexample01", "scope": "GROUP", "status": "ACTIVE", "credentials": {"userName": "avery.example@example.com"}}
+]
