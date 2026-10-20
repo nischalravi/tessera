@@ -500,7 +500,8 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `GET /api/provisioning/findings[?status=open|resolved]` ·
 `GET /api/catalog[?all=1]` · `PUT /api/catalog/items/{group_id}` ·
 `GET|PUT /api/request-settings` (tenant request settings; PUT: catalog.manage + step-up) ·
-`POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours, attachments?}` ·
+`GET|POST /api/questionnaires` · `GET /api/questionnaires/needed?catalog_item_ids=|role_id=|review_campaign_id=|review_item_id=` · `GET|PUT /api/questionnaires/{id}` · `POST /api/questionnaires/{id}/retire` · `PUT /api/questionnaires/{id}/attachments` (questionnaires; `needed`: requests.create, the rest catalog.manage) ·
+`POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours, attachments?, answers?}` ·
 `GET /api/requests[?scope=mine|pending|all&status=]` · `GET /api/requests/{id}` ·
 `POST /api/requests/{id}/approve|deny|cancel|remove {reason}` ·
 `GET|POST /api/abac/policies` · `GET|PUT /api/abac/policies/{id}` · `POST /api/abac/policies/{id}/retire` ·
@@ -543,7 +544,8 @@ when a second reviewer is needed) ·
 `POST /api/affiliations/{id}/end {reason}` ·
 `GET /api/catalog[?all=1]` · `PUT /api/catalog/items/{group_id}` ·
 `GET|PUT /api/request-settings` (tenant request settings; PUT: catalog.manage + step-up) ·
-`POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours, attachments?}` ·
+`GET|POST /api/questionnaires` · `GET /api/questionnaires/needed?catalog_item_ids=|role_id=|review_campaign_id=|review_item_id=` · `GET|PUT /api/questionnaires/{id}` · `POST /api/questionnaires/{id}/retire` · `PUT /api/questionnaires/{id}/attachments` (questionnaires; `needed`: requests.create, the rest catalog.manage) ·
+`POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours, attachments?, answers?}` ·
 `GET /api/requests[?scope=mine|pending|all&status=]` · `GET /api/requests/{id}` ·
 `POST /api/requests/{id}/approve|deny|cancel|remove {reason}` ·
 `GET|POST /api/roles` · `GET|PUT /api/roles/{id}` · `GET /api/roles/{id}/versions|drift` ·
@@ -1371,6 +1373,46 @@ cannot bypass them:
 | `attachments_allowed` | off | `attachments` on `POST /api/requests`: `422 attachments_not_allowed`. An attachment is a reference (a link or ticket id, at most 5); Tessera stores no files, the references are in the `request.submit` audit event |
 | `history_visibility` | `readers` | `involved`: graph readers no longer see other people's requests (the people on a request, its approvers and deciders still do) |
 | `for_others` | `permission` | `nobody`, `managers` (the beneficiary's manager only) or `permission` (`requests.create_for_others`): `403 for_others_not_allowed`. Business-role requests (`/api/role-requests`) are not covered |
+
+### Questionnaires
+
+**Governance → Questionnaires** (`/governance/questionnaires`, issue #298) holds forms asked of requesters and reviewers
+("why do you need this?", risk questions for privileged items). Tables `questionnaires`,
+`questionnaire_versions` (append-only), `questionnaire_attachments` and `questionnaire_answers`
+(schema `0450`).
+
+- **Definition.** A title, a description and ordered questions of six types: `short_text`, `long_text`,
+  `single_choice`, `multi_choice`, `yes_no`, `date`. Each has a `required` flag; text questions a `max_length`
+  (default 200 short, 2000 long; at most 500 and 5000), choice questions 2 to 20 distinct `options`. At most 30
+  questions. A question keeps its `id` across versions.
+- **Versions.** `PUT /api/questionnaires/{id} {version, title, description, questions}` appends the next version
+  (`409 version_conflict` if the caller read an older one). An answer stores the version it was given against, so
+  an approver always sees the question as it was asked. `POST .../retire` stops it being asked and removes its
+  attachments; its answers stay. Create, edit, retire and attach need `catalog.manage` and are audited
+  (`questionnaire.create|update|retire|attach`).
+- **Where it is asked** (`PUT /api/questionnaires/{id}/attachments {targets:[{kind,target_id}]}`, one questionnaire per
+  target): a `catalog_item` or `business_role` (the requester answers at submit); `privileged` (target `*`: every
+  catalog item whose group has the `privileged` flag, and every `high`-risk role, which is the role version of that flag);
+  or a `review_campaign`. An item can ask two questionnaires (its own and the privileged one); a cart asks each once.
+- **Requests.** `POST /api/requests` and `POST /api/role-requests` take `answers: {questionnaire_id: {question_id: value}}`
+  (string, boolean or list of strings by type). The server validates them against the version in force:
+  `422 questionnaire_required`, `answer_required`, `invalid_answer`, `unknown_question`, `unexpected_questionnaire`.
+  The form reads what to ask from `GET /api/questionnaires/needed`. The `request.submit` and `role.request.submit`
+  audit events carry `questionnaires: [{questionnaire_id, version, answers_hash}]` (SHA-256 of the answers as JSON
+  with sorted keys), not the answers. Approvers see the answers with the questions in the request side panel
+  (`GET /api/requests/{id}`, `questionnaires`) and on role requests.
+- **Access reviews: answered per decision**, not once per campaign. Review items are decided one by one, each decision
+  has its own audit event and a campaign has several reviewers, so the answers belong to the decision.
+  `POST /api/reviews/items/{id}/decision` takes `answers: {question_id: value}` for the campaign's questionnaire; a
+  decision without them is refused with `422`, and an already decided item asks nothing. The answers are stored with
+  the item and a `review.answers` audit event (in the same transaction) records the questionnaire, its version and
+  the hash. In the UI a campaign with a questionnaire is decided from the item panel, which shows the form; the row
+  buttons open the panel and bulk keep is off. The Inbox quick keys do not show the form: the server refuses with
+  the questionnaire's name, and the decision is made from Governance → Access reviews.
+- **Evidence packs** (#258) get `questionnaire_answers.csv`: answers given in the period with the version, hash and
+  answers JSON, listed under SOC 2 CC6.2, SOX ITGC-Provisioning and ISO A.5.18.
+- Not covered: onboarding (joiner) has no hook for a form (HRIS-driven, no person to answer); answers are not saved
+  in request drafts; removal requests, JIT and SoD mitigation requests ask nothing.
 
 ### Contractors, guests and end dates
 

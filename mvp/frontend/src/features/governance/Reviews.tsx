@@ -2,7 +2,9 @@ import { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Ban, Check, ClipboardCheck, Download, Fingerprint, Network, Plus, UserRound, X } from "lucide-react";
 import { ReviewSchedules } from "./ReviewSchedules";
-import { Campaign as CampaignT, CampaignPopulation, IdentityRow, QAItem, ReviewItem, SodReviewContext, RuleAction, ago, downloadPopulationExport, fmtDate, qaDecide, reviewDecide, sodControlPaths, useApi } from "../../api";
+import { QuestionnaireForm, formReady } from "../access/QuestionnaireForm";
+import { answersPayload } from "./questionnaireModel";
+import { AnswersByQuestionnaire, Campaign as CampaignT, CampaignPopulation, IdentityRow, QAItem, QuestionnaireAnswers, QuestionnaireNeed, ReviewItem, SodReviewContext, RuleAction, ago, downloadPopulationExport, fmtDate, neededPath, qaDecide, reviewDecide, sodControlPaths, useApi } from "../../api";
 import { useIdentityActions } from "../../app/actions";
 import { EscalateDrawer, MitigateDrawer, Target } from "./MitigateDrawers";
 import { offers } from "./sodModel";
@@ -25,7 +27,7 @@ function useDecide() {
   const toast = useToast();
   const confirm = useConfirm();
   const choose = useConfirmChoice();
-  return async (it: ReviewItem, decision: "keep" | "revoke") => {
+  return async (it: ReviewItem, decision: "keep" | "revoke", answers?: QuestionnaireAnswers) => {
     const { title: grant, membership } = accessOf(it);
     let comment: string | undefined;
     let action: RuleAction | undefined;
@@ -53,7 +55,7 @@ function useDecide() {
       comment = r;
     }
     try {
-      await reviewDecide(it.id, decision, comment, action);
+      await reviewDecide(it.id, decision, comment, action, answers);
       toast(decision === "keep" ? `Kept ${grant} for ${it.identity.name}` : action === "flag" ? `Flagged the rule for ${grant} to its owner` : `Revoked ${grant} from ${it.identity.name}`);
       return true;
     } catch (e) {
@@ -94,9 +96,14 @@ function SodSection({ it, campaignId }: { it: ReviewItem; campaignId: number }) 
   );
 }
 
-function ItemPanel({ it, campaignId, onClose }: { it: ReviewItem; campaignId: number; onClose: () => void }) {
+function ItemPanel({ it, campaignId, needs, onClose }: { it: ReviewItem; campaignId: number; needs: QuestionnaireNeed[]; onClose: () => void }) {
   const decide = useDecide();
   const nav = useNavigate();
+  // the campaign's questionnaire (Governance → Questionnaires): answered with each decision
+  const [answers, setAnswers] = useState<AnswersByQuestionnaire>({});
+  const asks = needs.length > 0 && !it.decision;
+  const ready = !asks || formReady(needs, answers);
+  const given = () => (asks ? answersPayload(needs, answers)?.[needs[0].id] : undefined);
   const { title: grant, sub: acct, membership } = accessOf(it);
   const c = it.context;
   const m = c.membership;
@@ -111,8 +118,8 @@ function ItemPanel({ it, campaignId, onClose }: { it: ReviewItem; campaignId: nu
         <CommandBar
           label="Decision"
           items={[
-            { label: "Keep", icon: <Check size={16} />, disabled: !!it.decision, onClick: () => decide(it, "keep") },
-            { label: "Revoke", icon: <Ban size={16} />, danger: true, disabled: !!it.decision, onClick: () => decide(it, "revoke") },
+            { label: "Keep", icon: <Check size={16} />, disabled: !!it.decision || !ready, onClick: () => decide(it, "keep", given()) },
+            { label: "Revoke", icon: <Ban size={16} />, danger: true, disabled: !!it.decision || !ready, onClick: () => decide(it, "revoke", given()) },
             { label: "Open identity", icon: <UserRound size={16} />, onClick: () => nav(`/directory/${it.identity.type === "human" ? "people" : "machine"}?selected=${it.identity.id}`) },
             { label: "Open in graph", icon: <Network size={16} />, onClick: () => nav(`/insights/graph?identity=${it.identity.id}`) },
           ]}
@@ -125,6 +132,12 @@ function ItemPanel({ it, campaignId, onClose }: { it: ReviewItem; campaignId: nu
         {c.violations.length > 0 && <div className="small muted">{c.violations.join("; ")}</div>}
       </section>
       <SodSection it={it} campaignId={campaignId} />
+      {asks && (
+        <section className="stack-sm" aria-label="Questions for this decision">
+          <QuestionnaireForm needs={needs} value={answers} onChange={setAnswers} />
+          {!ready && <p className="hint" role="status">Answer the required questions to keep or revoke.</p>}
+        </section>
+      )}
       <dl className="kv">
         {membership ? <><dt>Role</dt><dd>{it.role?.name}</dd><dt>Assigned by</dt><dd>{SOURCE_LABEL[it.member_source ?? "manual"]}</dd></> : <><dt>Granted through</dt><dd className="sys">{acct}</dd></>}
         <dt>Permissions used</dt><dd className="tnum">{c.permissions_used} of {c.permissions}</dd>
@@ -237,6 +250,8 @@ function PopulationPanel({ id, onClose }: { id: number; onClose: () => void }) {
 function Campaign({ id, identity, onRefresh, onStart }: { id: number; identity: number | null; onRefresh: () => void; onStart: () => void }) {
   const { data, error, reload } = useApi<CampaignT>(`/reviews/campaigns/${id}`);
   const decide = useDecide();
+  const { data: ask } = useApi<{ questionnaires: QuestionnaireNeed[] }>(neededPath({ reviewCampaignId: id }));
+  const needs = ask?.questionnaires ?? [];
   const [selected, setSelected] = useSelected("item");
   const [showPop, setShowPop] = useState(false);
   if (!data) return <div className="card flush"><Loading error={error} /></div>;
@@ -270,8 +285,9 @@ function Campaign({ id, identity, onRefresh, onStart }: { id: number; identity: 
             id: "decision", header: "Decision", sort: (it) => it.decision ?? "", csv: (it) => it.decision ?? "open",
             cell: (it) => it.decision ? <Badge tone={it.decision === "revoke" ? "critical" : "ok"}>{it.decision === "revoke" ? (it.resolution === "flag" ? "Flagged" : "Revoked") : "Kept"}</Badge> : (
               <div className="row tight" style={{ flexWrap: "nowrap" }} onClick={(e) => e.stopPropagation()}>
-                <Button size="sm" onClick={() => decide(it, "keep")}>Keep</Button>
-                <Button size="sm" variant="danger" onClick={() => decide(it, "revoke")}>Revoke</Button>
+                {/* a campaign with questions: the decision is made in the panel, beside the form */}
+                <Button size="sm" onClick={() => (needs.length ? setSelected(it.id) : decide(it, "keep"))}>{needs.length ? "Answer and keep" : "Keep"}</Button>
+                <Button size="sm" variant="danger" onClick={() => (needs.length ? setSelected(it.id) : decide(it, "revoke"))}>{needs.length ? "Answer and revoke" : "Revoke"}</Button>
               </div>
             ),
           },
@@ -289,7 +305,7 @@ function Campaign({ id, identity, onRefresh, onStart }: { id: number; identity: 
           { label: "Population & export", icon: <Fingerprint size={16} />, onClick: () => { setSelected(null); setShowPop(true); } },
         ]}
         onRefresh={() => { reload(); onRefresh(); }}
-        bulkActions={[
+        bulkActions={needs.length ? [] : [
           { label: "Keep", icon: <Check size={16} />, run: async (rs) => { for (const it of rs.filter((x) => !x.decision)) await decide(it, "keep"); } },
         ]}
         rowLabel={(it) => `${it.identity.name}, ${it.grant}`}
@@ -297,7 +313,7 @@ function Campaign({ id, identity, onRefresh, onStart }: { id: number; identity: 
         activeKey={selected}
         empty={<EmptyState title="Nothing to review here" icon={<ClipboardCheck size={18} />}>This campaign has no items for this view.</EmptyState>}
       />
-      {open && !showPop && <ItemPanel it={open} campaignId={id} onClose={() => setSelected(null)} />}
+      {open && !showPop && <ItemPanel key={open.id} it={open} campaignId={id} needs={needs} onClose={() => setSelected(null)} />}
       {showPop && <PopulationPanel id={id} onClose={() => setShowPop(false)} />}
       <div className="xs faint">Tip: the Inbox shows your review items one at a time with keyboard shortcuts: A keeps, R revokes, J and K move.</div>
     </div>

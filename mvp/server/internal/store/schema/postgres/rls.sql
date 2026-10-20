@@ -1892,3 +1892,31 @@ DROP POLICY IF EXISTS tenant_isolation ON sod_ruleset_remediation;
 CREATE POLICY tenant_isolation ON sod_ruleset_remediation
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE questionnaires ENABLE ROW LEVEL SECURITY;
+ALTER TABLE questionnaires FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON questionnaires;
+CREATE POLICY tenant_isolation ON questionnaires
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE questionnaire_versions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE questionnaire_versions FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON questionnaire_versions;
+CREATE POLICY tenant_isolation ON questionnaire_versions
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE questionnaire_attachments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE questionnaire_attachments FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON questionnaire_attachments;
+CREATE POLICY tenant_isolation ON questionnaire_attachments
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE questionnaire_answers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE questionnaire_answers FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON questionnaire_answers;
+CREATE POLICY tenant_isolation ON questionnaire_answers
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
