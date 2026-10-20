@@ -283,9 +283,11 @@ func New(cfg Config) *Server {
 	}
 	if cfg.GroupsEngine == nil {
 		cfg.GroupsEngine = engine.New(0)
-		if cfg.DeviceSignals == nil {
-			cfg.DeviceSignals = condaccess.StoreSignals{}
-		}
+	}
+	// independent of GroupsEngine: cmd/tessera sets one, and a nil source
+	// panics the first sign-in that reaches conditional access
+	if cfg.DeviceSignals == nil {
+		cfg.DeviceSignals = condaccess.StoreSignals{}
 	}
 	if cfg.Containment == nil {
 		cfg.Containment = &containment.Service{}
