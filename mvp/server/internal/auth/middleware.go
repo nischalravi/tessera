@@ -39,6 +39,9 @@ type Authenticator struct {
 	DB      *store.DB
 	Clock   func() time.Time
 	Cookies Cookies
+	// Tokens verifies Authorization: DPoP credentials (internal/oauth). Nil:
+	// every Authorization header is refused (token.go).
+	Tokens TokenVerifier
 }
 
 // RequestSession returns the tenant and id of the session the request's
@@ -71,6 +74,28 @@ func (a *Authenticator) RequestSession(r *http.Request) (t tenancy.ID, sid uuid.
 // expiry are enforced here on every request; activity is recorded at most
 // once per TouchInterval.
 func (a *Authenticator) Authenticate(r *http.Request) (*Principal, string, error) {
+	p, f, err := a.AuthenticateRequest(r)
+	if f != nil {
+		return p, f.Reason, err
+	}
+	return p, "", err
+}
+
+// AuthenticateRequest is Authenticate with the failure's challenge. A request
+// carrying an Authorization header is a token request: it is authenticated
+// by its DPoP-bound access token only, never by a cookie it may also carry.
+func (a *Authenticator) AuthenticateRequest(r *http.Request) (*Principal, *Failure, error) {
+	if len(r.Header.Values("Authorization")) > 0 {
+		return a.authenticateToken(r)
+	}
+	p, reason, err := a.authenticateCookie(r)
+	if reason != "" {
+		return p, &Failure{Reason: reason}, err
+	}
+	return p, nil, err
+}
+
+func (a *Authenticator) authenticateCookie(r *http.Request) (*Principal, string, error) {
 	c, err := r.Cookie(a.Cookies.Name())
 	if err != nil || c.Value == "" {
 		return nil, FailNoSession, nil
@@ -200,6 +225,96 @@ func (a *Authenticator) Authenticate(r *http.Request) (*Principal, string, error
 		s.LastActivityAt, s.IdleExpiresAt = now, idleExpires
 	}
 	return p, "", nil
+}
+
+// authenticateToken resolves an Authorization: DPoP request to a Principal
+// (design §10.4 step 6): the token and proof were verified by a.Tokens; the
+// session it names must be an active CLI session of the token's user, within
+// its idle and absolute expiry, and the user must be active. Roles are read
+// now, from the database, and activated by the session's authentication
+// context; the effective permissions are further limited by the token's scopes
+// (§12.3).
+func (a *Authenticator) authenticateToken(r *http.Request) (*Principal, *Failure, error) {
+	if a.Tokens == nil {
+		return nil, &Failure{Reason: FailInvalidToken}, nil
+	}
+	vt, tf, err := a.Tokens.VerifyAccessToken(r)
+	if err != nil {
+		return nil, nil, err
+	}
+	if tf != nil {
+		return nil, &Failure{Reason: tf.Reason, Challenge: tf.Challenge, Nonce: tf.Nonce}, nil
+	}
+	if vt.Tenant.Status != "active" || vt.Tenant.ID == tenancy.Platform {
+		return nil, &Failure{Reason: FailTenantInactive, Challenge: `DPoP error="invalid_token"`}, nil
+	}
+	now := a.Clock().UTC()
+	var p *Principal
+	var reason string
+	var expire bool
+	err = a.DB.ReadTenant(r.Context(), vt.Tenant.ID, func(tx *store.TenantTx) error {
+		s, err := tx.Session(vt.SessionID)
+		if err != nil {
+			return err
+		}
+		switch {
+		case s.Kind != store.SessionCLI || s.UserID != vt.UserID || (s.ClientID != nil && *s.ClientID != vt.ClientID):
+			reason = FailInvalidSession
+			return nil
+		case s.Status == store.SessionRevoked:
+			reason = FailRevoked
+			return nil
+		case s.Status != store.SessionActive:
+			reason = FailExpired
+			return nil
+		case !now.Before(s.IdleExpiresAt) || !now.Before(s.AbsoluteExpiresAt):
+			reason, expire = FailExpired, true
+			return nil
+		}
+		u, err := tx.PlatformUser(s.UserID)
+		if err != nil {
+			return err
+		}
+		if u.Status != "active" {
+			reason = FailUserDisabled
+			return nil
+		}
+		rec, err := tx.AuthnContext(s.CurrentAuthnContextID)
+		if err != nil {
+			return err
+		}
+		as, err := tx.RoleAssignments(u.ID)
+		if err != nil {
+			return err
+		}
+		authn := ContextFromRecord(rec)
+		assigned := AssignedRoles(as, now)
+		active, inactive := ActivateRoles(assigned, &authn, TenantSettings(vt.Tenant.Settings), now)
+		uid, sessID := u.ID, s.ID
+		display := u.DisplayName
+		if u.Email != nil && *u.Email != "" {
+			display = *u.Email
+		}
+		p = &Principal{Kind: KindUser, TenantID: vt.Tenant.ID, UserID: &uid, ClientID: vt.ClientID, Display: display,
+			SessionID: &sessID, Authn: &authn, AssignedRoles: assigned, ActiveRoles: active, InactiveRoles: inactive,
+			Scopes: ScopeSetOf(vt.Scopes), Via: ViaDPoP, session: s}
+		return nil
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, &Failure{Reason: FailInvalidSession, Challenge: `DPoP error="invalid_token"`}, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	if expire {
+		_ = a.DB.InTenant(context.WithoutCancel(r.Context()), vt.Tenant.ID, func(tx *store.TenantTx) error {
+			return tx.ExpireSession(vt.SessionID)
+		})
+	}
+	if p == nil {
+		return nil, &Failure{Reason: reason, Challenge: `DPoP error="invalid_token"`}, nil
+	}
+	return p, nil, nil
 }
 
 // Middleware is Authenticate as net/http middleware: it stores the principal

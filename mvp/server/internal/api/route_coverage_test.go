@@ -180,8 +180,8 @@ func TestEveryCallAudited(t *testing.T) {
 	viewer := signIn(t, f.DB, f.B.ID, authtest.User{Email: "vic@b.example", Roles: []auth.Role{auth.RoleViewer}},
 		authtest.Phr, storetest.Now)
 	for _, rt := range srv.Routes() {
-		if rt.Pattern == "/api/health" {
-			continue // excluded from http.request (§13.4)
+		if rt.Pattern == "/api/health" || (rt.Method == http.MethodGet && strings.Contains(rt.Pattern, "/.well-known/")) {
+			continue // excluded from http.request (§13.4, audit.DefaultExcluded): TestOAuth_WellKnownNotAudited
 		}
 		t.Run(rt.Method+" "+rt.Pattern, func(t *testing.T) {
 			// a fresh session per route: logout and session revocation end theirs
