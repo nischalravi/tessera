@@ -171,6 +171,8 @@ var tables = []string{
 	"claim_proof_uses",
 	// readiness drift baselines (schema/0355_readiness_baselines.sql)
 	"readiness_baselines",
+	// frozen review populations and tenant settings (schema/0350_review_populations.sql)
+	"review_populations", "review_population_rows", "review_auto_decisions", "tenant_settings",
 	// SIEM sinks (schema/0210_siem.sql)
 	"siem_sinks", "siem_dead_letters",
 	// alerting (schema/0209_alerts.sql)

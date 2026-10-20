@@ -47,6 +47,10 @@ GET    /api/reviews/campaigns                        graph.read      -
 POST   /api/reviews/campaigns                        reviews.manage  -
 GET    /api/reviews/campaigns/{campaign_id}          graph.read      -
 POST   /api/reviews/items/{item_id}/decision         reviews.decide  STEP_UP_POLICY
+GET    /api/reviews/campaigns/{campaign_id}/population  graph.read   -  # issue #110
+GET    /api/reviews/campaigns/{campaign_id}/export   reviews.export  -  # issue #110
+POST   /api/reviews/qa/{qa_id}/decision              reviews.decide  STEP_UP_POLICY  # issue #110
+PUT    /api/reviews/settings                         reviews.manage  -  # issue #110
 GET    /api/reviews/schedules                        graph.read      -  # issue #166
 POST   /api/reviews/schedules                        reviews.manage  -  # issue #166
 PUT    /api/reviews/schedules/{schedule_id}          reviews.manage  -  # issue #166

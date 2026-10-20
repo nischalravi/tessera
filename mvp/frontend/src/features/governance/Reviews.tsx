@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { Ban, Check, ClipboardCheck, Network, Plus, UserRound, X } from "lucide-react";
+import { Ban, Check, ClipboardCheck, Download, Fingerprint, Network, Plus, UserRound, X } from "lucide-react";
 import { ReviewSchedules } from "./ReviewSchedules";
-import { Campaign as CampaignT, IdentityRow, ReviewItem, SodReviewContext, RuleAction, ago, fmtDate, reviewDecide, sodControlPaths, useApi } from "../../api";
+import { Campaign as CampaignT, CampaignPopulation, IdentityRow, QAItem, ReviewItem, SodReviewContext, RuleAction, ago, downloadPopulationExport, fmtDate, qaDecide, reviewDecide, sodControlPaths, useApi } from "../../api";
 import { useIdentityActions } from "../../app/actions";
 import { EscalateDrawer, MitigateDrawer, Target } from "./MitigateDrawers";
 import { offers } from "./sodModel";
@@ -155,10 +155,90 @@ function ItemPanel({ it, campaignId, onClose }: { it: ReviewItem; campaignId: nu
   );
 }
 
+/** The campaign's frozen population: proof of completeness for an auditor (hash, counts, QA sample) and its export. */
+function PopulationPanel({ id, onClose }: { id: number; onClose: () => void }) {
+  const { data, error, reload } = useApi<CampaignPopulation>(`/reviews/campaigns/${id}/population`);
+  const toast = useToast();
+  const confirm = useConfirm();
+  const download = async (format: "csv" | "json") => {
+    try {
+      await downloadPopulationExport(id, format);
+      toast(`Exported the population as ${format.toUpperCase()}`);
+    } catch (e) {
+      toast((e as Error).message, { kind: "error" });
+    }
+  };
+  const qa = async (q: QAItem, decision: "keep" | "revoke") => {
+    let comment: string | undefined;
+    if (decision === "revoke") {
+      const r = await confirm({ title: `Overturn the auto-certification of ${q.grant.split(" → ")[1] ?? q.grant}?`, body: `Removes it from ${q.identity} as soon as you confirm. The overturn is recorded with your name.`, confirmLabel: "Overturn and revoke", danger: true, reason: { label: "Comment (optional)", placeholder: "Why the rule was wrong" } });
+      if (r === null) return;
+      comment = r;
+    }
+    try {
+      await qaDecide(q.id, decision, comment);
+      toast(decision === "keep" ? "Auto-certification confirmed" : "Auto-certification overturned");
+      reload();
+    } catch (e) {
+      toast((e as Error).message, { kind: "error" });
+    }
+  };
+  return (
+    <SidePanel
+      title="Frozen population"
+      sub={data ? <>{data.hash_match ? <Badge tone="ok">Hash verified</Badge> : <Badge tone="critical">Hash mismatch</Badge>}<span>{data.item_count} grants</span></> : undefined}
+      onClose={onClose}
+      commands={<CommandBar label="Export" items={[
+        { label: "Export CSV", icon: <Download size={16} />, disabled: !data, onClick: () => download("csv") },
+        { label: "Export JSON", icon: <Download size={16} />, disabled: !data, onClick: () => download("json") },
+      ]} />}
+    >
+      {!data ? <Loading error={error} /> : (
+        <>
+          <dl className="kv">
+            <dt>Population hash</dt><dd className="sys" style={{ wordBreak: "break-all" }}>{data.population_hash}</dd>
+            <dt>Frozen at</dt><dd>{fmtDate(data.frozen_at)}</dd>
+            <dt>Grants in scope</dt><dd className="tnum">{data.item_count}</dd>
+            <dt>Rules</dt><dd className="sys">{data.rules_version}</dd>
+            <dt>By system</dt>
+            <dd><div className="row tight">{Object.entries(data.system_counts).map(([s, n]) => <span key={s} className="chip sys">{s} · {n}{data.source_syncs[s] ? ` · synced ${fmtDate(data.source_syncs[s]!)}` : ""}</span>)}</div></dd>
+          </dl>
+          <section className="stack-sm">
+            <h3 style={{ fontSize: "var(--fs-lg)", color: "var(--text)" }}>Auto-certification QA</h3>
+            <dl className="kv">
+              <dt>Auto-certified</dt><dd className="tnum">{data.qa.auto_certified}</dd>
+              <dt>Sampled for QA ({data.qa_sample_pct}%)</dt><dd className="tnum">{data.qa.sampled}</dd>
+              <dt>QA decided</dt><dd className="tnum">{data.qa.decided}</dd>
+              <dt>Overturned</dt><dd className="tnum">{data.qa.overturned}</dd>
+            </dl>
+            {data.qa_queue.length === 0 ? <div className="small faint">No auto-certified grants were sampled.</div> : (
+              <ul className="stack-sm" style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                {data.qa_queue.map((q) => (
+                  <li key={q.id} className="spread">
+                    <span className="small">{q.identity}<div className="xs faint sys">{q.grant}</div></span>
+                    {q.qa_decision ? <Badge tone={q.overturned ? "critical" : "ok"}>{q.overturned ? "Overturned" : "Confirmed"}</Badge> : (
+                      <span className="row tight" style={{ flexWrap: "nowrap" }}>
+                        <Button size="sm" onClick={() => qa(q, "keep")}>Confirm</Button>
+                        <Button size="sm" variant="danger" onClick={() => qa(q, "revoke")}>Overturn</Button>
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+          <div className="xs faint">The hash covers every grant in scope, not only those sent to reviewers. Recompute it from the export with the published algorithm (README, “Review populations”).</div>
+        </>
+      )}
+    </SidePanel>
+  );
+}
+
 function Campaign({ id, identity, onRefresh, onStart }: { id: number; identity: number | null; onRefresh: () => void; onStart: () => void }) {
   const { data, error, reload } = useApi<CampaignT>(`/reviews/campaigns/${id}`);
   const decide = useDecide();
   const [selected, setSelected] = useSelected("item");
+  const [showPop, setShowPop] = useState(false);
   if (!data) return <div className="card flush"><Loading error={error} /></div>;
   const all = (data.review_items ?? []).filter((i) => identity === null || i.identity.id === identity);
   const open = all.find((i) => String(i.id) === selected);
@@ -204,17 +284,21 @@ function Campaign({ id, identity, onRefresh, onStart }: { id: number; identity: 
           { id: "reason", label: "Reason", options: Object.keys(data.reasons).map((r) => ({ value: r, label: flagLabel(r) })), get: (it) => it.reasons },
           { id: "type", label: "Identity type", options: [{ value: "human", label: "Person" }, { value: "service", label: "Service account" }, { value: "ai_agent", label: "AI agent" }], get: (it) => it.identity.type },
         ]}
-        commands={[{ label: "Start review", icon: <Plus size={16} />, onClick: onStart }]}
+        commands={[
+          { label: "Start review", icon: <Plus size={16} />, onClick: onStart },
+          { label: "Population & export", icon: <Fingerprint size={16} />, onClick: () => { setSelected(null); setShowPop(true); } },
+        ]}
         onRefresh={() => { reload(); onRefresh(); }}
         bulkActions={[
           { label: "Keep", icon: <Check size={16} />, run: async (rs) => { for (const it of rs.filter((x) => !x.decision)) await decide(it, "keep"); } },
         ]}
         rowLabel={(it) => `${it.identity.name}, ${it.grant}`}
-        onRowClick={(it) => setSelected(it.id)}
+        onRowClick={(it) => { setShowPop(false); setSelected(it.id); }}
         activeKey={selected}
         empty={<EmptyState title="Nothing to review here" icon={<ClipboardCheck size={18} />}>This campaign has no items for this view.</EmptyState>}
       />
-      {open && <ItemPanel it={open} campaignId={id} onClose={() => setSelected(null)} />}
+      {open && !showPop && <ItemPanel it={open} campaignId={id} onClose={() => setSelected(null)} />}
+      {showPop && <PopulationPanel id={id} onClose={() => setShowPop(false)} />}
       <div className="xs faint">Tip: the Inbox shows your review items one at a time with keyboard shortcuts: A keeps, R revokes, J and K move.</div>
     </div>
   );
