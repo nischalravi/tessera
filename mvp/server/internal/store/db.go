@@ -201,6 +201,8 @@ var tables = []string{
 	"guest_bundle_items", "identity_assurance", "catalog_item_populations",
 	// identity matching, merge requests, settings and claim links (schema/0363_matching.sql)
 	"match_results", "identity_merge_requests", "matching_settings", "claim_links",
+	// SIS and HRIS intake (schema/0367_intake.sql)
+	"org_sponsors", "intake_events", "identity_conversions",
 	// third-party OAuth app inventory (schema/0361_oauth_apps.sql)
 	"oauth_apps", "oauth_grants", "oauth_sync_state",
 	// guest lifecycle (schema/0364_guest_lifecycle.sql)

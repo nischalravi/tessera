@@ -1472,3 +1472,24 @@ DROP POLICY IF EXISTS tenant_isolation ON guest_sponsor_codes;
 CREATE POLICY tenant_isolation ON guest_sponsor_codes
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE org_sponsors ENABLE ROW LEVEL SECURITY;
+ALTER TABLE org_sponsors FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON org_sponsors;
+CREATE POLICY tenant_isolation ON org_sponsors
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE intake_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE intake_events FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON intake_events;
+CREATE POLICY tenant_isolation ON intake_events
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE identity_conversions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE identity_conversions FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON identity_conversions;
+CREATE POLICY tenant_isolation ON identity_conversions
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));

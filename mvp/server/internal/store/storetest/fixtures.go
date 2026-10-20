@@ -452,7 +452,43 @@ func seedIdentityModel(c *store.TenantTx, t *Tenant, mark func(string) string) e
 		return err
 	}
 	t.Refs["affiliation:guest"] = a.ID
-	return nil
+	return seedIntake(c, t, a, mark)
+}
+
+// seedIntake adds an organizational sponsor, an intake event whose detail
+// carries the tenant's sentinel (Refs["intake"]) and a conversion of alice
+// from her employee affiliation to the guest one (Refs["conversion"]).
+func seedIntake(c *store.TenantTx, t *Tenant, guest *store.Affiliation, mark func(string) string) error {
+	if err := c.PutOrgSponsor(&store.OrgSponsor{Key: "admissions", Name: mark("Office of Admissions"),
+		Population: "applicant", CreatedAt: Now}); err != nil {
+		return err
+	}
+	sponsor, eff := "admissions", Now
+	rec := &store.IntakeEvent{ID: uuid.NewString(), Channel: store.ChannelSIS, MatchMode: store.MatchAuthoritative,
+		SponsorOrg: &sponsor, EventKey: "sis:evt-1", EventType: "admitted", EffectiveAt: &eff, Status: store.IntakeEventResolved,
+		Detail: `{"outcome":"started","note":"` + mark("fixture") + `"}`, CreatedAt: Now}
+	if err := c.InsertIntakeEvent(rec); err != nil {
+		return err
+	}
+	t.Refs["intake"] = rec.ID
+	affs, err := c.AffiliationsFor(t.IDs["alice"])
+	if err != nil {
+		return err
+	}
+	for _, from := range affs {
+		if from.Type != store.AffEmployee {
+			continue
+		}
+		v := &store.Conversion{ID: uuid.NewString(), IdentityID: t.IDs["alice"], FromAffiliationID: from.ID,
+			ToAffiliationID: guest.ID, FromType: from.Type, ToType: guest.Type, Trigger: store.ConvSISStatus,
+			IntakeID: &rec.ID, EffectiveAt: Now, CreatedAt: Now}
+		if err := c.InsertConversion(v); err != nil {
+			return err
+		}
+		t.Refs["conversion"] = v.ID
+		return nil
+	}
+	return errors.New("storetest: alice has no employee affiliation")
 }
 
 var errSeedFailed = errors.New("storetest: seed failed")

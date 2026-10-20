@@ -1627,6 +1627,38 @@ notify.Expiring(tx, now, notify.Ending{Key: "identity:42", IdentityID: 42, Also:
 `notify.Identity`, `notify.User` and `notify.Deciders` build recipients. Add a kind to `notify.Kinds`
 (label, default, mandatory) and it appears in everyone's settings. Not yet: per-tenant SMTP and chat
 (the settings are server-wide), templates, per-kind digests.
+
+### SIS and HRIS intake (applicants, admits, pre-hires)
+
+Issue #67 (GU-4, package `internal/intake`, schema `0367_intake.sql`) turns feed records into
+affiliations on **one identity** (design §4.1, §8.4). There is no API route or screen yet: the
+entry points are `intake.ApplySIS`, `intake.ApplyHRIS` and `intake.Run(conns, since)`, called
+inside a tenant transaction, so each change and its audit event commit together.
+
+- **SIS** (`connectors.SisConnector`, `SisRecord`): `applied` starts an `applicant` affiliation;
+  `admitted`/`deposited` converts it to `admit`; `matriculated` converts to `student`;
+  `withdrawn`/`denied` revoke an open application. An older status arriving late changes nothing.
+- **HRIS** (generic over `connectors.HrisEventRecord`): a **future-dated joiner** is an accepted offer
+  and starts a `prehire` affiliation (ending at the start date + 30 days if no hire arrives); the
+  same joiner once its date has passed converts it to `employee`; a **leaver (or a joiner with
+  `rescinded: true`) for a worker who has not started** revokes the pre-hire. Payload keys: `worker_id`
+  (or the event's identity), `name`, `personal_email` (or `email`), `department`, `title`,
+  `manager_external_id`. Joiners and leavers for people who were never pre-hires are the JML
+  process's and are ignored. The identity's external id is the worker id, so the HR sync that later
+  discovers the employee lands on the same identity.
+- **Matching is authoritative only.** A record attaches to a person by the system of record's own id
+  or an authoritative identifier (`applicant_id`, `student_id`, `employee_id`). A personal email that
+  another person already holds does not link: the record is held as an intake event in `review` and
+  nothing is created (GU-5 owns the review queue).
+- **Organizational sponsors** (`org_sponsors`: `admissions`, `hr`) stand behind these populations
+  instead of an individual. **Intake events** (`intake_events`, one per event key, so a replayed
+  feed is a no-op) and **conversions** (`identity_conversions`, append-only) are the history. Audit
+  actions: `intake.sis.*`, `intake.hris.*` and `identity.conversion`; details carry ids and outcomes,
+  never names or emails.
+- **Demo feeds**: `connectors.NewDemoSIS` and `connectors.NewDemoPrehireHRIS` are staged only (not in
+  the default `demo` spec or `TESSERA_CONNECTORS`), so the seeded demo tenant is unchanged.
+  Not yet stored: date of birth and phone (sealed by the PR that first needs them).
+
 ### Identity containment (kill switch)
 
 A disabled account does not end its live sessions, refresh tokens or OAuth consents. Two plan
