@@ -94,6 +94,8 @@ var tables = []string{
 	"login_transactions",
 	// operator bootstrap (schema/0006_admin.sql)
 	"bootstrap_invitations",
+	// OAuth authorization server (schema/0358_oauth.sql)
+	"api_clients", "device_grants", "refresh_tokens",
 	// admin changes, admin notifications, operator recovery (schema/0008_admin_changes.sql)
 	"tenant_recoveries", "admin_change_requests", "admin_notifications",
 	// audit ledger (schema/0004_audit.sql)
@@ -139,6 +141,8 @@ var tables = []string{
 	"intake_records", "sponsorships", "sponsorship_events",
 	// identity containment (schema/0205_containment.sql)
 	"containment_credentials", "containment_retries",
+	// connector sync checkpoints (schema/0360_connector_checkpoints.sql)
+	"connector_checkpoints",
 	// point-in-time access and evidence packs (schema/0260-0261)
 	"edge_history", "evidence_packs",
 	// SIEM sinks (schema/0210_siem.sql)

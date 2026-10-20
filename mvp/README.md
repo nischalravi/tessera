@@ -74,6 +74,8 @@ server/
   cmd/tessera/          main: `serve` (default), `seed` and `audit verify|checkpoint|export`; timeouts,
                         graceful shutdown, JIT sweeper, audit checkpointer
   cmd/tessera-devidp/   the dev IdP binary (development and tests only; see Signing in)
+  cmd/tessera-cli/      the reference command-line client: `login` (device grant + DPoP), `whoami`,
+                        `api`, `logout` (see Command-line sign-in)
   cmd/tessera-harness/  AWS evaluator differential harness, offline subcommands: `replay` re-runs the
                         recorded corpus with no AWS credentials or network (`go run ./cmd/tessera-harness
                         replay` from `server/`; exits 1 unless every case concludes what it expects);
@@ -83,6 +85,10 @@ server/
     connectors/         Connector interface + normalized record types, deterministic demo company
                         (pyrand.go reproduces CPython's Mersenne Twister so seed 7 gives the same
                         company the Python backend generated), registry (TESSERA_CONNECTORS)
+      connsync/         shared framework of the production connectors: checkpoints, full vs
+                        incremental, bounded backoff, size-bounded retrying client, URL checks
+      okta/ entra/      production read connectors (see Production connectors)
+      all/              registers okta and entra (imported by cmd/tessera)
     ingest/             phased, idempotent upsert of connector output (cross-system refs resolve)
     store/              schema, row types and parameterized queries (database/sql, no ORM)
     audit/              hash-chained audit ledger: Record, the http.request middleware (fail-closed
@@ -104,6 +110,10 @@ server/
     safehttp/           SSRF-guarded outbound HTTP client (https only, address checks after DNS)
     connectors/scim/    read-only live prober for generic SCIM 2.0 applications (readiness DR-18)
     ratelimit/          keyed token-bucket limiter with a bounded key set
+    oauth/              the OAuth authorization server (per-tenant issuer): device grant, refresh
+                        rotation with reuse detection, DPoP-bound JWT access tokens, RFC 8414/9728
+                        metadata; oauth/dpop validates DPoP proofs (RFC 9449)
+    cliauth/            the CLI's client library: device login, credentials file, DPoP calls
     ojson/, timeutil/   ordered JSON + Python float repr; CPython-compatible time arithmetic
     testkit/            shared test fixtures (tiny world through a real Connector, seeded demo DB; each is seeded once per test binary and handed out as a private copy per test)
     devidp/             dev IdP: mock OIDC issuer, vendor emulation profiles, fault injection;
@@ -280,11 +290,11 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `GET|POST /api/hris/events` (422 for an unknown `identity_id`) · `GET /api/hris/events/{id}/plan` · `POST /api/hris/events/{id}/execute` ·
 `GET /api/jml/leaver-plan/{identity_id}` · `POST /api/identities/{id}/contain` (kill switch, see "Identity containment") · `POST /api/identities/{id}/disable|enable` ·
 `PUT /api/connections/{id}/containment-credential` · `GET /api/accounts[?system=]` ·
-`GET|POST /api/siem/sinks` · `PUT /api/siem/sinks/{id}` · `POST /api/siem/sinks/{id}/rewind {seq}` ·
+`GET|POST /api/siem/sinks` · `PUT /api/siem/sinks/{id}` (moving the target to another origin, or syslog host:port, while a token is stored needs a new `token`, else 422 `credential_required`; a path-only change keeps it) · `POST /api/siem/sinks/{id}/rewind {seq}` ·
 `POST /api/siem/sinks/{id}/test` · `GET /api/siem/sinks/{id}/dead-letters` ·
 `GET /api/alerts[?status=open|acknowledged|resolved|live&severity=&rule=]` · `GET /api/alerts/summary` · `GET /api/alerts/{id}` ·
 `POST /api/alerts/{id}/acknowledge|resolve|assign` · `GET /api/alerts/rules` · `PUT /api/alerts/rules/{rule_id}` ·
-`GET|POST /api/alerts/channels` · `PUT /api/alerts/channels/{id}` · `POST /api/alerts/channels/{id}/test` ·
+`GET|POST /api/alerts/channels` · `PUT /api/alerts/channels/{id}` (a webhook moved to another origin needs `rotate_secret: true`, else 422 `credential_required`) · `POST /api/alerts/channels/{id}/test` ·
 `GET /api/ownership[?kind=app|group|resource|identity&unowned=]` · `PUT /api/ownership/{kind}/{object_key}` ·
 `POST /api/ownership/bulk` ·
 `GET /api/audit[?limit=&before_seq=&action=&actor_id=&target_type=&target_id=&from=&to=&include_http=]` ·
@@ -1723,6 +1733,151 @@ Tessera's keys. `devidp.New` refuses `TESSERA_ENV=prod`. `TestIsolation_DevIdPNo
 (`internal/archtest`) proves from the import graph that `cmd/tessera` and `internal/api` never link
 the dev IdP.
 
+<<<<<<< HEAD
+## Production connectors: Okta and Entra ID
+
+`TESSERA_CONNECTORS=okta`, `entra` or `okta,entra` (also mixed with `demo-*` names) runs the real
+read connectors instead of the demo ones. The default stays `demo`. Both are read-only (every
+request is a GET, except the OAuth token request), send every call through `internal/safehttp`
+(https only, private and link-local addresses refused, redirects and page links pinned to the
+configured host), and never log or audit tokens, secrets, keys or response bodies. Errors carry the
+HTTP status and the provider's short error code only.
+
+Credentials are references, never literals: `env:NAME` (an environment variable) or
+`file:/absolute/path` (a mounted secret file). A literal in the variable is refused. The sealed and
+vault references of the connection credential store plug into the same resolver when that store lands.
+
+| Variable | Meaning |
+|---|---|
+| `TESSERA_OKTA_ORG_URL` | `https://<org>.okta.com` (a custom domain also works): https, a well-formed domain, no path |
+| `TESSERA_OKTA_CLIENT_ID`, `TESSERA_OKTA_PRIVATE_KEY`, `TESSERA_OKTA_KEY_ID` | OAuth 2.0 service app with `private_key_jwt` (preferred): client id, key reference (PEM, RSA 2048+ or P-256), the key's `kid` |
+| `TESSERA_OKTA_API_TOKEN` | reference to an SSWS token, instead of OAuth (set one or the other, not both) |
+| `TESSERA_OKTA_EMIT_IDENTITIES` | `true` (default): also create an identity per user. `false` when an HR system is authoritative |
+| `TESSERA_OKTA_MAX_INCREMENTAL_AGE` | default `24h`: a full read repairs deletions at least this often |
+| `TESSERA_ENTRA_TENANT_ID`, `TESSERA_ENTRA_CLIENT_ID` | directory (tenant) GUID and application (client) id |
+| `TESSERA_ENTRA_CLIENT_SECRET` | reference to the client secret |
+| `TESSERA_ENTRA_GRAPH_URL`, `TESSERA_ENTRA_AUTHORITY_URL` | default `https://graph.microsoft.com` and `https://login.microsoftonline.com`; set for national clouds |
+| `TESSERA_ENTRA_EMIT_IDENTITIES`, `TESSERA_ENTRA_SIGNIN_ACTIVITY` | both default `true` (the second reads last sign-in) |
+| `TESSERA_ENTRA_MAX_INCREMENTAL_AGE` | default none (delta queries report deletions) |
+
+Minimum read-only permissions:
+
+* **Okta.** OAuth scopes `okta.users.read`, `okta.groups.read`, `okta.apps.read`, `okta.roles.read`
+  and `okta.logs.read` (usage events), and the service app needs the **Read-only Administrator**
+  admin role. For SSWS, a token of a Read-only Administrator. Without `okta.roles.read` role data is
+  skipped, without `okta.logs.read` no usage events are produced; neither fails the sync.
+* **Entra ID** (application permissions, admin consent): `User.Read.All`, `Group.Read.All`,
+  `GroupMember.Read.All`, `Application.Read.All`, `RoleManagement.Read.Directory`, and optionally
+  `AuditLog.Read.All` (last sign-in and usage events; needs Entra ID P1/P2). If Graph refuses
+  `signInActivity` (403) the sync goes on without last sign-in. Entra needs no write permission.
+
+What is mapped: users become accounts (Okta `lastLogin`, Entra `signInActivity`) and, unless turned
+off, identities keyed by `employeeNumber`/`employeeId` (else `okta:<id>`/`entra:<id>`) with the
+e-mail address for correlation; groups and memberships (Entra nested groups become group-in-group
+`member_of` edges; Okta has no nested groups); apps (Okta apps, Entra enterprise apps and apps the
+tenant owns) as resources with an `access` permission and one per Entra app role, user and group
+assignments as `direct_grant` and `grants` edges; administrator roles (Okta roles on users and
+groups, Entra directory roles) as privileged `role` groups; Entra service principals the tenant owns
+as `service` accounts. Usage events are app sign-ins aggregated per user, app and day (Okta System
+Log, Entra sign-in log). Okta group role assignments are re-read with the group, so a role granted
+to an unchanged group appears at the next full read (within `MaxIncrementalAge`).
+
+Sync modes. Checkpoints live in `connector_checkpoints` (tenant-scoped, same transaction as the
+ingest, so a failed ingest rolls the checkpoint back). The first sync, a missing or unreadable
+checkpoint, `POST /api/connectors/sync?mode=full`, and a chain older than `MaxIncrementalAge` read
+everything. Otherwise Okta reads users and groups changed since the watermark (`search=lastUpdated
+gt ...`) and Entra follows the stored `deltaLink`s of `users/delta` and `groups/delta` (an expired
+token, HTTP 410 or `syncStateNotFound`, falls back to a full read). Apps, assignments and roles are
+re-read on every sync. Rate limits: 429 and 502/503/504 are retried with `Retry-After`
+(or Okta's `X-Rate-Limit-Reset`), bounded to 60 seconds a wait and 5 tries, and the client pauses
+when `X-Rate-Limit-Remaining` hits 0. Ingest does not delete accounts and groups that vanish from a
+source; it prunes only connector edges.
+
+Tests run on synthetic recorded fixtures (`okta/testdata`, `entra/testdata`) through an `httptest`
+TLS server. Live tests are skipped unless set (needs-human, never run in CI): `go test
+./internal/connectors/okta -run Integration -v` with `TESSERA_OKTA_DEV_ORG_URL` and
+`TESSERA_OKTA_DEV_API_TOKEN` (or `TESSERA_OKTA_DEV_CLIENT_ID` + `TESSERA_OKTA_DEV_PRIVATE_KEY_FILE`
+[+ `TESSERA_OKTA_DEV_KEY_ID`]); `go test ./internal/connectors/entra -run Integration -v` with
+`TESSERA_ENTRA_DEV_TENANT_ID`, `TESSERA_ENTRA_DEV_CLIENT_ID`, `TESSERA_ENTRA_DEV_CLIENT_SECRET`.
+`internal/connectors/connsync` is what Google Workspace and Workday reuse.
+=======
+## Command-line sign-in (`tessera-cli`)
+
+The CLI and other non-browser clients use OAuth 2.0, not cookies (design §9.3, §10): Tessera is an
+authorization server for each tenant (issuer `TESSERA_PUBLIC_URL/t/{slug}`), with the **device
+authorization grant** (RFC 8628) and **refresh tokens**. Every token is sender-constrained with **DPoP**
+(RFC 9449): the CLI generates an ES256 key, and an access token (an RFC 9068 `at+jwt`, ES256, signed with
+the tenant's own key, 10 minutes, 5 minutes with `tessera:admin`) carries `cnf.jkt`, so a stolen token is
+useless without the key. Roles are not in the token: the API reads them on every request, and what a
+token may do is the intersection of the user's active roles and its scopes.
+
+**Dev flow.** `./run.sh` serves everything on the UI port (the dev server proxies `/api`, `/t/*/oauth/*`
+and `/.well-known/*`), and `TESSERA_PUBLIC_URL` defaults to `http://localhost:$UI_PORT`: that is the
+CLI's server URL, because DPoP proofs are bound to it.
+
+```bash
+cd server && go build -o /tmp/tessera-cli ./cmd/tessera-cli     # or: go run ./cmd/tessera-cli ...
+export TESSERA_ENV=dev                                             # lets the CLI use http and loopback
+tessera-cli login --server http://localhost:5173 --tenant larkspur
+#   To sign in to larkspur, open  http://localhost:5173/device  and enter the code  KDQV-TMWB
+tessera-cli whoami
+tessera-cli api GET /api/summary
+tessera-cli api -d '{"identity_id":1,"group_id":2,"justification":"on call"}' POST /api/jit/requests
+tessera-cli logout
+```
+
+Open `/device` in the browser as Pat, Alice or Ivan (the dev IdP users with a passkey: approving needs a
+phishing-resistant sign-in, and Olu and Vic have none), type the code, check who is asking, and approve.
+The CLI then acts as that user: with Pat the JIT example above works, with Alice (a tenant admin) only
+reads do. Approval needs the passkey sign-in within the last 5 minutes (`max_age` 300, step-up; the page
+sends you to re-authenticate and offers to resume).
+There is no pre-filled link or QR code: the user types the code. `--scope` asks for fewer scopes
+(default `tessera:read tessera:write`; `tessera:audit` and `tessera:admin` exist), and `--acr`,
+`--max-age` ask the approver for a stronger or fresher sign-in. Exit status: 0 ok, 1 error or an HTTP
+status of 400 or more, 2 usage, 3 the API wants a fresher sign-in (the message prints the `login`
+command that satisfies it; nothing is repeated on its own).
+
+**Credentials** are one file, `~/.config/tessera/credentials.json` (`$XDG_CONFIG_HOME/tessera`, or
+`$TESSERA_CONFIG_DIR`): the DPoP private key, the current refresh token and the cached access token,
+mode 0600 in a 0700 directory (the CLI refuses a file others can read; an OS keychain comes later).
+Refreshing is serialized with a lock file, because presenting one refresh token twice is treated as
+theft. `api` only takes paths on the signed-in server, so a token is never sent elsewhere. All of the
+CLI's HTTP goes through `internal/safehttp` (https only, no private addresses; `TESSERA_ENV=dev` adds
+http and loopback).
+
+| Route | Purpose |
+|---|---|
+| `GET /t/{slug}/.well-known/oauth-authorization-server` | RFC 8414 metadata of the tenant's issuer |
+| `GET /t/{slug}/.well-known/jwks.json` | the tenant's public access-token keys |
+| `GET /.well-known/oauth-protected-resource` | RFC 9728 metadata of the API (`authorization_servers` is the `/t/{slug}` template) |
+| `POST /t/{slug}/oauth/device_authorization` | start a device grant (10 per minute per IP); no `verification_uri_complete` |
+| `POST /t/{slug}/oauth/token` | `device_code` and `refresh_token` grants, DPoP proof and server nonce required |
+| `POST /t/{slug}/oauth/revoke` | RFC 7009: revokes the refresh token's family and the CLI session |
+| `POST /api/auth/device/lookup` | session; who is asking (client, address, time, scope); 5 wrong codes lock the session out of lookups for 10 minutes (`oauth.device.lookup_bruteforce`) |
+| `POST /api/auth/device/approve` | session and step-up (`max_age` 300, phishing-resistant); `{user_code, decision}` |
+
+API requests carry `Authorization: DPoP <token>` and a `DPoP` proof bound to the method, the URL
+(`TESSERA_PUBLIC_URL` + path), and the token (`ath`); a bound token under `Bearer` is refused. A refusal
+is `401 login_required` with `WWW-Authenticate: DPoP error=…`; a token session that needs a fresher
+sign-in gets `401 step_up_required` with `WWW-Authenticate: DPoP error="insufficient_user_authentication"`.
+No CSRF header is needed for a token (no ambient credential), and the request is audited as the user,
+through client `tessera-cli`.
+
+**Refresh tokens** rotate on every use (idle 12 hours, absolute 24 hours, or 12 with an active admin
+role: the CLI session's). A used token presented again revokes the whole family and the session and
+writes a critical `oauth.refresh.reuse_detected`; presenting a token with another DPoP key is
+`invalid_grant` and changes nothing. The first-party client `tessera-cli` exists in every tenant
+(created at seed and server start); a tenant can turn the device grant off with
+`tenants.settings.device_grant_enabled=false`. Machine clients and client credentials arrive with
+PR11; introspection (RFC 7662) is for them too and is not served yet.
+
+The authorization server is hand-written on go-jose (the design's §6 fallback), not on zitadel/oidc: see
+`internal/oauth/oauth.go` for why. Tests: `internal/oauth` (flow, refresh, tokens, metadata, fuzzing),
+`internal/oauth/dpop`, `internal/cliauth`, `internal/api/oauth_routes_test.go` and the CLI against an
+in-process server in `cmd/tessera-cli/e2e_test.go`. Fuzz targets: `FuzzValidateProof`,
+`FuzzVerifyAccessToken` (`go test -fuzz=FuzzValidateProof -fuzztime=30s ./internal/oauth/dpop`).
+>>>>>>> origin/dev
+
 ## Adding a real connector
 
 1. Implement `connectors.Connector` (`internal/connectors/connector.go`):
@@ -1754,9 +1909,11 @@ the dev IdP.
    edges, for example an Okta group mapped to an AWS role through SAML, are emitted by whichever
    connector can see them, using `Ref{Kind, System, ExternalID}`. Ingestion runs in phases, so
    the order of connectors does not matter.
-3. Register a factory in `connectors.Factories` (`Factories["okta"] = func(time.Time) (Connector, error) {…}`)
-   and run with, for example, `TESSERA_CONNECTORS=demo-workday,okta,demo-aws,...`. You can replace
-   demo connectors one system at a time. Read credentials from the environment and never log them.
+3. Register a factory in `connectors.Factories` from `internal/connectors/all` (a connector imports
+   package `connectors`, so it cannot be registered there) and run with, for example,
+   `TESSERA_CONNECTORS=demo-workday,okta,demo-aws,...`. You can replace demo connectors one system at
+   a time. Read credentials through `connsync.ResolveSecret`, use
+   the server's shared outbound client (`safehttp.ForConfig`, passed in through `all.Register`) instead of building your own, and never log them. Use `connsync` for checkpoints and backoff.
 4. `internal/testkit.TinyConnector` is a minimal working connector you can use as a template.
 
 ## Testing and quality gates
@@ -1903,7 +2060,7 @@ OpenAPI document). Deliberate differences:
   than one instance yet; moving them is the follow-up. There is no queue depth or oldest-job-age metric
   yet (only `tessera_queue_job_runs_total` and the per-sweep loop lag in `obs.DefaultLoops`), and schedules cannot be edited or disabled through the API.
 * There is no scheduled connector sync. Seeding runs discovery once, and `POST /api/connectors/sync`
-  re-runs discovery on demand.
+  re-runs discovery on demand (`?mode=full` ignores connector checkpoints).
 * Effective-permission paths are capped at 8 per permission, and "lost if removed" uses those paths.
 * AWS permissions are modelled as discrete actions on resources. IAM policy conditions, deny
   statements, SCPs and wildcard expansion are not evaluated.

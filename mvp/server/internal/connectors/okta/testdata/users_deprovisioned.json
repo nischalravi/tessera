@@ -1,0 +1,15 @@
+[
+  {
+    "id": "00u1drewexample004",
+    "status": "DEPROVISIONED",
+    "created": "2022-05-05T09:00:00.000Z",
+    "lastLogin": "2025-12-31T17:00:00.000Z",
+    "lastUpdated": "2026-01-02T12:00:00.000Z",
+    "profile": {
+      "firstName": "Drew",
+      "lastName": "Leaver",
+      "login": "drew.leaver@example.com",
+      "email": "drew.leaver@example.com"
+    }
+  }
+]
