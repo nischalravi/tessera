@@ -75,6 +75,11 @@ type Config struct {
 	// MaxIncrementalAge forces a full read after this long; zero never does
 	// (delta queries report deletions).
 	MaxIncrementalAge time.Duration
+	// SkipAuthMethods turns off reading each user's registered authentication
+	// methods (one request per enabled member user per sync) for the MFA
+	// posture report. Reading them needs UserAuthenticationMethod.Read.All; if
+	// Graph refuses, the report shows the gap and the sync goes on.
+	SkipAuthMethods bool
 }
 
 // Connector implements connectors.Connector for Entra ID.
@@ -137,6 +142,8 @@ func New(cfg Config, rt connsync.Runtime, hc *http.Client, now func() time.Time)
 //	TESSERA_ENTRA_AUTHORITY_URL    default https://login.microsoftonline.com
 //	TESSERA_ENTRA_EMIT_IDENTITIES  true (default) or false
 //	TESSERA_ENTRA_SIGNIN_ACTIVITY  true (default) or false
+//	TESSERA_ENTRA_AUTH_METHODS     true (default) or false: read authentication methods (MFA posture;
+//	                               needs UserAuthenticationMethod.Read.All)
 //	TESSERA_ENTRA_MAX_INCREMENTAL_AGE  duration; default none
 //
 // rt and hc come from the validated server configuration (connsync.RuntimeFromConfig,
@@ -154,6 +161,13 @@ func FromEnv(getenv func(string) string, now time.Time, rt connsync.Runtime, hc 
 			}
 			*dst = b
 		}
+	}
+	if v := getenv("TESSERA_ENTRA_AUTH_METHODS"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, errors.New("TESSERA_ENTRA_AUTH_METHODS must be true or false")
+		}
+		cfg.SkipAuthMethods = !b
 	}
 	if v := getenv("TESSERA_ENTRA_MAX_INCREMENTAL_AGE"); v != "" {
 		d, err := time.ParseDuration(v)

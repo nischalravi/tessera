@@ -157,6 +157,7 @@ func (c *Connector) Discover(ctx context.Context) (*connectors.DiscoveryResult, 
 		signIn = c.readSignIns(ctx)
 	}
 	res := c.build(st, apps, roles, signIn)
+	res.AuthMethods, res.AuthSource = c.readAuthMethods(ctx, st)
 	c.save(ctx, st, next, start, full)
 	return res, nil
 }

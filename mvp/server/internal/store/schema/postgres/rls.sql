@@ -613,6 +613,34 @@ CREATE POLICY tenant_isolation ON helpdesk_findings
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE auth_methods ENABLE ROW LEVEL SECURITY;
+ALTER TABLE auth_methods FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON auth_methods;
+CREATE POLICY tenant_isolation ON auth_methods
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE auth_method_sources ENABLE ROW LEVEL SECURITY;
+ALTER TABLE auth_method_sources FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON auth_method_sources;
+CREATE POLICY tenant_isolation ON auth_method_sources
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE account_auth_signals ENABLE ROW LEVEL SECURITY;
+ALTER TABLE account_auth_signals FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON account_auth_signals;
+CREATE POLICY tenant_isolation ON account_auth_signals
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE mfa_posture_snapshots ENABLE ROW LEVEL SECURITY;
+ALTER TABLE mfa_posture_snapshots FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON mfa_posture_snapshots;
+CREATE POLICY tenant_isolation ON mfa_posture_snapshots
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 ALTER TABLE edge_history ENABLE ROW LEVEL SECURITY;
 ALTER TABLE edge_history FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON edge_history;

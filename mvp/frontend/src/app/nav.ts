@@ -95,6 +95,7 @@ export const RAIL: RailGroup[] = [
           { path: "/insights/least-privilege", label: "Least privilege", keywords: "unused recommendations right size revoke" },
           { path: "/insights/sod", label: "SoD conflicts", keywords: "segregation separation of duties toxic combination" },
           { path: "/insights/aws", label: "AWS access", keywords: "aws effective permissions can who can policy change simulate diff pull request" },
+          { path: "/insights/mfa", label: "MFA posture", keywords: "mfa multi-factor passkey fido2 webauthn phishing-resistant authentication methods okta entra sso bypass local password coverage" },
           { path: "/insights/deployment-health", label: "Deployment health", keywords: "readiness checklist deployment gaps connection setup reconciliation orphans missed" },
         ],
       },

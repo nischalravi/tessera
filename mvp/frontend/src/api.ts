@@ -3364,3 +3364,44 @@ export function fmtSpan(seconds: number): string {
   if (seconds % 60 === 0) return `${seconds / 60} min`;
   return `${seconds} s`;
 }
+// ---- MFA posture (GET /api/mfa/posture)
+
+/** Method class, strongest first; "none" is covered-but-nothing-registered, "unknown" is not covered by any IdP read. */
+export type MfaClass = "phishing_resistant" | "push_number_match" | "push" | "otp" | "sms_voice" | "none" | "unknown";
+export interface MfaMethod { system: string; account: string; kind: string; strength: MfaClass; label: string; enrolled_at: string | null }
+export interface MfaIdentity {
+  id: number; name: string; department: string; title: string;
+  privileged: boolean; privileged_groups: string[]; privileged_via: string[];
+  best: MfaClass; passkey: boolean; methods: MfaMethod[]; systems: string[];
+}
+export interface MfaCounts {
+  total: number; phishing_resistant: number; push_number_match: number; push: number; otp: number; sms_voice: number;
+  no_mfa: number; unknown: number; passkey_enrolled: number;
+}
+export interface MfaGroup extends MfaCounts { key: string }
+export interface MfaSource { system: string; status: "ok" | "unavailable"; detail: string; updated_at: string }
+export interface MfaAppFinding {
+  account_id: number; system: string; username: string; identity_id: number | null; identity_name: string;
+  privileged: boolean; issues: ("local_password" | "no_mfa" | "sso_not_enforced")[];
+}
+export interface MfaAppSystem { system: string; accounts: number; with_signals: number; flagged: number }
+export interface MfaPosture {
+  as_of: string;
+  departments: string[];
+  sources: MfaSource[];
+  summary: { totals: MfaCounts; by_department: MfaGroup[]; by_privileged_group: MfaGroup[]; privileged_totals: MfaCounts };
+  trend: (MfaCounts & { date: string })[];
+  identities: MfaIdentity[];
+  app_findings: MfaAppFinding[];
+  app_systems: MfaAppSystem[];
+  classes: { key: MfaClass; label: string }[];
+}
+
+/** The posture path with its filters; `privileged` is "" (all), "true" or "false". */
+export const mfaPosturePath = (department: string, privileged: "" | "true" | "false") => {
+  const q = new URLSearchParams();
+  if (department) q.set("department", department);
+  if (privileged) q.set("privileged", privileged);
+  const s = q.toString();
+  return `/mfa/posture${s ? `?${s}` : ""}`;
+};

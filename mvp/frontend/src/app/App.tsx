@@ -59,6 +59,7 @@ const LeastPrivilege = named(() => import("../features/insights/LeastPrivilege")
 const SodConflicts = named(() => import("../features/insights/SodConflicts"), "SodConflicts");
 const DeploymentHealth = named(() => import("../features/insights/DeploymentHealth"), "DeploymentHealth");
 const Alerts = named(() => import("../features/alerts/Alerts"), "Alerts");
+const MfaPosture = named(() => import("../features/insights/MfaPosture"), "MfaPosture");
 const Policies = named(() => import("../features/governance/Policies"), "Policies");
 const Mitigations = named(() => import("../features/governance/Mitigations"), "Mitigations");
 const AttributePolicies = named(() => import("../features/governance/AttributePolicies"), "AttributePolicies");
@@ -205,6 +206,7 @@ export default function App() {
                     <Route path="/insights/sod" element={<SodConflicts />} />
                     <Route path="/insights/aws" element={<AwsAccess />} />
                     <Route path="/insights/deployment-health" element={<DeploymentHealth />} />
+                    <Route path="/insights/mfa" element={<MfaPosture />} />
                     <Route path="/insights/deployment" element={<Moved to="/insights/deployment-health" />} />
 
                     <Route path="/governance" element={<Navigate to="/governance/policies" replace />} />

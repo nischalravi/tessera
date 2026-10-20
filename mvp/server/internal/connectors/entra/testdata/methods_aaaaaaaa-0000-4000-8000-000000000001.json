@@ -1,0 +1,14 @@
+{
+  "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#users('aaaaaaaa-0000-4000-8000-000000000001')/authentication/methods",
+  "value": [
+    {"@odata.type": "#microsoft.graph.passwordAuthenticationMethod", "id": "28c10230-6103-485e-b985-444c60001490", "createdDateTime": null},
+    {"@odata.type": "#microsoft.graph.fido2AuthenticationMethod", "id": "f0000001-0000-4000-8000-000000000001", "displayName": "YubiKey 5 NFC",
+     "createdDateTime": "2025-04-01T10:00:00Z", "aaGuid": "73bb0cd4-e502-49b8-9c6f-b59445bf720b", "model": "YubiKey 5 NFC"},
+    {"@odata.type": "#microsoft.graph.windowsHelloForBusinessAuthenticationMethod", "id": "f0000001-0000-4000-8000-000000000002",
+     "displayName": "ADA-LAPTOP", "createdDateTime": "2025-02-10T08:00:00Z", "keyStrength": "normal"},
+    {"@odata.type": "#microsoft.graph.microsoftAuthenticatorAuthenticationMethod", "id": "f0000001-0000-4000-8000-000000000003",
+     "displayName": "Ada's iPhone", "deviceTag": "SoftwareTokenActivated", "phoneAppVersion": "6.8.1", "createdDateTime": "2024-09-09T09:09:09Z"},
+    {"@odata.type": "#microsoft.graph.phoneAuthenticationMethod", "id": "3179e48a-750b-4051-897c-87b9720928f7",
+     "phoneNumber": "+1 5555550100", "phoneType": "mobile", "smsSignInState": "notAllowedByPolicy"}
+  ]
+}

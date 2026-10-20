@@ -412,6 +412,7 @@ PUT    /api/groups/users/{id}/identity               groups.admin    STEP_UP_POL
 GET    /api/groups/pit/digests                       groups.admin    -  # issue #46
 GET    /api/groups/pit/verify                        groups.admin    -  # issue #46
 POST   /api/groups/pit/rebuild                       groups.admin    -  # issue #46
+GET    /api/mfa/posture                              graph.read      -  # issue #109
 GET    /api/auth/session                             auth.self       -
 POST   /api/auth/logout                              auth.self       -
 GET    /api/auth/sessions                            auth.self       -

@@ -12,6 +12,8 @@
 //   - secret_max_age: secrets older than max_age_days since creation/rotation.
 //   - nhi_ownership: service accounts and AI agents need an active human owner.
 //   - terminated_with_access: terminated identities must not retain effective access.
+//   - mfa_required: privileged identities need a registered method of at least
+//     the `require` class (default phishing_resistant; see internal/mfa).
 //
 // Graph-based policies are evaluated against a graph.Snapshot, so the same
 // code evaluates the live graph and simulated (what-if) graphs.
@@ -31,6 +33,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/abac"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
+	"github.com/nischalravi/tessera/mvp/server/internal/mfa"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 )
@@ -634,8 +637,58 @@ func evalNHIOwnership(p *Policy, c *Context) ([]Violation, error) {
 	return out, nil
 }
 
+// evalMFARequired flags privileged people whose strongest registered method is
+// weaker than the policy's `require` class (default phishing_resistant). A
+// person is privileged when they are in a privileged group or hold a
+// privileged permission (internal/mfa). A person none of whose accounts is in
+// a system that reported its methods is skipped: unknown is not a violation.
+func evalMFARequired(p *Policy, c *Context) ([]Violation, error) {
+	if c.Conn == nil {
+		return nil, nil
+	}
+	required := mfa.PhishingResistant
+	if v, ok := p.Spec["require"]; ok {
+		required = mfa.Strength(fmt.Sprint(v))
+		if !required.Valid() {
+			return nil, fmt.Errorf("policy %s: require must be one of %v", p.ID, mfa.Strengths)
+		}
+	}
+	data, err := mfa.Load(c.Conn, c.Now)
+	if err != nil {
+		return nil, err
+	}
+	byID := map[int64]*mfa.Identity{}
+	for _, v := range data.Identities {
+		byID[v.ID] = v
+	}
+	var out []Violation
+	for _, iid := range c.subjects(p.Spec) {
+		v := byID[iid]
+		if v == nil || !v.Privileged || v.Best == mfa.Unknown || v.Best.Rank() >= required.Rank() {
+			continue
+		}
+		name := c.byID[iid].Label
+		state := "has no MFA method registered"
+		if v.Best != mfa.None {
+			state = "their strongest MFA method is " + strings.ToLower(v.Best.Label())
+		}
+		msg := fmt.Sprintf("%s has privileged access (%s) but %s; policy requires %s MFA", name, v.PrivilegedVia[0], state,
+			strings.ToLower(required.Label()))
+		evidence := []string{}
+		for _, m := range v.Methods {
+			evidence = append(evidence, fmt.Sprintf("%s: %s (%s)", m.System, m.Kind, m.Strength.Label()))
+		}
+		if len(evidence) == 0 {
+			evidence = append(evidence, "no registered authentication method in "+strings.Join(v.Systems, ", "))
+		}
+		out = append(out, newViolation(p, iid, name, fmt.Sprintf("%s:%d", p.ID, iid), msg, evidence, nil))
+	}
+	return out, nil
+}
+
 // Evaluators maps policy types to evaluator functions.
 var Evaluators = map[string]func(*Policy, *Context) ([]Violation, error){
+	"mfa_required":           evalMFARequired,
 	"separation_of_duties":   evalSoD,
 	"no_standing_access":     evalNoStanding,
 	"forbidden_access":       evalForbidden,

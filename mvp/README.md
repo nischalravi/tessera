@@ -472,7 +472,8 @@ when a second reviewer is needed) ·
 `GET /api/admin/api-clients` (see "Admin changes")
 `GET /api/config/signing-key` · `POST /api/config/export` · `GET|POST /api/config/trusted-signers` ·
 `DELETE /api/config/trusted-signers/{kid}` · `POST /api/config/import/plan` (body: the bundle file) ·
-`POST /api/config/import/apply?hash=&digest=&prune=` · `GET /api/config/imports`
+`POST /api/config/import/apply?hash=&digest=&prune=` · `GET /api/config/imports` ·
+`GET /api/mfa/posture[?department=&privileged=]` (see "MFA posture")
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
@@ -2436,7 +2437,7 @@ the right. Arrow keys move between items.
 | (top) | **Home**, **Inbox** (count) |
 | **Identity** | Users (with *Identity matches*), Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Ownership, Accounts (with *Account matches*), Help desk, Roles, Organizations (live, read-only, derived from departments) |
 | **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals, registration requests, sponsor code, recovery), Just-in-time, Access reviews (with *Lifecycle*, *Guest lifecycle* and *Workflows* tabs) |
-| **Protection** | Alerts (alerts, rules, channels), Policies & SoD (violations, policies, what-if simulation, SoD functions, risks and rulesets), Mitigating controls (mitigations, control library), Attribute policies, Access graph (with an *As of* date for *Who can access…*), Evidence packs, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
+| **Protection** | Alerts (alerts, rules, channels), Policies & SoD (violations, policies, what-if simulation, SoD functions, risks and rulesets), Mitigating controls (mitigations, control library), Attribute policies, Access graph (with an *As of* date for *Who can access…*), Evidence packs, Insights (Risk overview, Least privilege, SoD conflicts, MFA posture, Deployment health) |
 | **Settings** | Connections (governed connections and the setup wizard), Flat-file apps, Conditional access (network ranges, policies, device signals), Admin (including *Guests and external identities*) |
 
 **Home.** For the admin & security persona: the tenant name and a sync line, then tabs
@@ -2800,11 +2801,14 @@ vault references of the connection credential store plug into the same resolver 
 | `TESSERA_OKTA_API_TOKEN` | reference to an SSWS token, instead of OAuth (set one or the other, not both) |
 | `TESSERA_OKTA_EMIT_IDENTITIES` | `true` (default): also create an identity per user. `false` when an HR system is authoritative |
 | `TESSERA_OKTA_MAX_INCREMENTAL_AGE` | default `24h`: a full read repairs deletions at least this often |
+| `TESSERA_OKTA_AUTH_METHODS` | `true` (default): read each active user's enrolled factors for the MFA posture report (one request per user per sync). `false` turns it off |
+| `TESSERA_OKTA_PUSH_NUMBER_MATCH` | default `false`. Set `true` if Okta Verify push always requires number matching and the authenticator settings cannot be read (see "MFA posture") |
 | `TESSERA_ENTRA_TENANT_ID`, `TESSERA_ENTRA_CLIENT_ID` | directory (tenant) GUID and application (client) id |
 | `TESSERA_ENTRA_CLIENT_SECRET` | reference to the client secret |
 | `TESSERA_ENTRA_GRAPH_URL`, `TESSERA_ENTRA_AUTHORITY_URL` | default `https://graph.microsoft.com` and `https://login.microsoftonline.com`; set for national clouds |
 | `TESSERA_ENTRA_EMIT_IDENTITIES`, `TESSERA_ENTRA_SIGNIN_ACTIVITY` | both default `true` (the second reads last sign-in) |
 | `TESSERA_ENTRA_MAX_INCREMENTAL_AGE` | default none (delta queries report deletions) |
+| `TESSERA_ENTRA_AUTH_METHODS` | `true` (default): read each enabled member user's registered authentication methods for the MFA posture report (one request per user per sync). `false` turns it off |
 | `TESSERA_GOOGLE_SERVICE_ACCOUNT_KEY` | reference to the service account's JSON key file (`file:/abs/path` or `env:NAME`); only `client_email`, `private_key` and `private_key_id` are used |
 | `TESSERA_GOOGLE_ADMIN_EMAIL` | the administrator the service account impersonates (domain-wide delegation) |
 | `TESSERA_GOOGLE_CUSTOMER`, `TESSERA_GOOGLE_DOMAIN` | default `my_customer`; optionally limit users to one domain |
@@ -2824,11 +2828,19 @@ Minimum read-only permissions:
 * **Okta.** OAuth scopes `okta.users.read`, `okta.groups.read`, `okta.apps.read`, `okta.roles.read`
   and `okta.logs.read` (usage events), and the service app needs the **Read-only Administrator**
   admin role. For SSWS, a token of a Read-only Administrator. Without `okta.roles.read` role data is
-  skipped, without `okta.logs.read` no usage events are produced; neither fails the sync.
+  skipped, without `okta.logs.read` no usage events are produced; neither fails the sync. The MFA
+  posture report reads `GET /api/v1/users/{id}/factors` (`okta.users.read` and the admin role above;
+  a 403 marks Okta's methods unavailable) and `GET /api/v1/authenticators` for the Okta Verify number
+  challenge setting (`okta.authenticators.read`, add it to the service app's scopes; without it push
+  counts as plain push unless `TESSERA_OKTA_PUSH_NUMBER_MATCH=true`).
 * **Entra ID** (application permissions, admin consent): `User.Read.All`, `Group.Read.All`,
   `GroupMember.Read.All`, `Application.Read.All`, `RoleManagement.Read.Directory`, and optionally
   `AuditLog.Read.All` (last sign-in and usage events; needs Entra ID P1/P2). If Graph refuses
   `signInActivity` (403) the sync goes on without last sign-in. Entra needs no write permission.
+  The MFA posture report needs one more read-only application permission,
+  **`UserAuthenticationMethod.Read.All`** (admin consent), for `GET /users/{id}/authentication/methods`.
+  Without it Graph answers 403: the sync goes on, Entra's methods are marked unavailable, and its
+  people show as Unknown in the report (never as having no MFA).
 * **Google Workspace.** A service account with domain-wide delegation, granted in the Admin console
   (Security, API controls, Domain-wide delegation) exactly these read-only scopes, all under
   `https://www.googleapis.com/auth/`: `admin.directory.user.readonly`,
@@ -3044,6 +3056,69 @@ A disabled client, or one whose roles or scopes are narrowed, is cut off on the 
 
 The RFC 8414 metadata advertises `client_credentials`, `private_key_jwt` (`ES256`, `EdDSA`) and the
 `introspection_endpoint`.
+
+## MFA posture
+
+Insights → MFA posture (`GET /api/mfa/posture[?department=&privileged=true|false]`, permission
+`graph.read`) shows how strongly each person can authenticate, coverage per department and per
+privileged group, passkey enrolment over time, and app accounts that bypass SSO or MFA. Code:
+`internal/mfa` (classification and report), `internal/connectors/{okta,entra}/authmethods.go`
+(ingest), `internal/ingest/authposture.go`, `internal/store/repo_mfa.go`, schema
+`0255_mfa_posture.sql`, UI `frontend/src/features/insights/MfaPosture.tsx`.
+
+**Method classes** (`mfa.Strength`, strongest first):
+
+| Class | Okta factor types | Entra method types |
+|---|---|---|
+| `phishing_resistant` | `webauthn` (passkey), `u2f` (security key), `signed_nonce` (Okta FastPass) | `fido2`, `windowsHelloForBusiness`, `x509Certificate` |
+| `push_number_match` | `push` when the Okta Verify authenticator has `channelBinding` `NUMBER_CHALLENGE` required `ALWAYS` (or `TESSERA_OKTA_PUSH_NUMBER_MATCH=true`) | `microsoftAuthenticator`, `passwordlessMicrosoftAuthenticator` (Microsoft enforces number matching) |
+| `push` | `push` without number matching | none |
+| `otp` | `token:software:totp`, `token:hotp`, `token:hardware`, `token` | `softwareOath`, `hardwareOath` |
+| `sms_voice` | `sms`, `call`, `email` | `phone` (mobile/alternateMobile: SMS; office: voice) |
+
+Not MFA and ignored: Okta security questions and non-ACTIVE factors; Entra `password`,
+`temporaryAccessPass` and the SSPR-only `email` method. A person's class is their strongest active
+method; `none` means their IdP was read and reported no method; `unknown` means none of their accounts
+is in a system whose methods could be read. A system that returns 403 (or fails) is stored as
+`unavailable` in `auth_method_sources`, its previously stored methods are kept, and the page shows a
+warning. A missing scope never turns into "no MFA". The report counts active human identities;
+"privileged" means a (transitive, unexpired) member of a privileged group, including through `maps_to`,
+or holder of a privileged permission.
+
+**Snapshots.** `mfa_posture_snapshots` holds one row per day, dimension (`all`, `department`,
+`privileged_group`) and group, written at the end of each ingest that carried authentication posture
+(the last sync of a UTC day wins). The page's trend reads the `all` rows.
+
+**Policy type `mfa_required`.** Produces a violation for each privileged identity whose strongest method
+is below `require` (default `phishing_resistant`; also `push_number_match`, `push`, `otp`, `sms_voice`).
+Identities whose MFA is unknown are skipped. It is not enabled by default: a default policy file would
+change the recorded `/api/policies` and `/api/violations` parity fixtures. To turn it on, add this to
+`server/policies/mfa-required.yaml` (and refresh those fixtures, explained in
+`testdata/parity/README.md`):
+
+```yaml
+id: mfa-required-privileged
+name: Privileged identities need phishing-resistant MFA
+type: mfa_required
+severity: high
+description: People with privileged access must have a passkey, security key, Windows Hello, certificate or FastPass.
+require: phishing_resistant
+```
+
+**Apps and data platforms** (Snowflake, GitHub, AWS IAM users). `account_auth_signals` stores, per
+account, `has_local_password`, `mfa_enabled` and `sso_enforced` as the connector reported them (NULL =
+unknown). A connector fills `DiscoveryResult.AuthSignals`; the page flags a local password, no MFA or SSO
+not enforced, and lists systems that report nothing as a data gap. Today no production connector for
+these platforms exists (only the demo ones, which carry no such attributes), so on a real tenant the
+table stays empty. Attribute mapping to implement with each connector: Snowflake `SHOW USERS`
+(`has_password`, `ext_authn_duo`/`ext_authn_uid`, `disabled`; no per-user SSO flag), GitHub org members
+(`two_factor_authentication` via the 2FA filter, SAML identity link via GraphQL `samlIdentity`), AWS IAM
+(`GetLoginProfile` for a console password, `ListMFADevices`; IAM users have no SSO flag). Entra and Okta
+accounts are IdPs and are judged by their methods, not by these flags.
+
+**Demo data.** `tessera seed` (tenant `larkspur` only) runs `seed.MFADemo`: Okta methods and app flags
+are synthetic, chosen by a stable hash of the account id, with passkey enrolment dates spread over the
+last 90 days and snapshot history computed from them. The demo is labelled as such here, not in the UI.
 
 ## Adding a real connector
 

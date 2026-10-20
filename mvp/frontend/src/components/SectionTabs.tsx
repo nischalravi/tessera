@@ -10,6 +10,7 @@ export const InsightsTabs = () => (
       { to: "/insights/least-privilege", label: "Least privilege" },
       { to: "/insights/sod", label: "SoD conflicts" },
       { to: "/insights/aws", label: "AWS access" },
+      { to: "/insights/mfa", label: "MFA posture" },
       { to: "/insights/deployment-health", label: "Deployment health" },
     ]}
   />

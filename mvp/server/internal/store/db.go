@@ -212,6 +212,8 @@ var tables = []string{
 	"terms_documents", "terms_assignments", "terms_acceptances", "attribute_consents", "recovery_cases", "recovery_codes",
 	// guest self-registration (schema/0366_guest_registration.sql)
 	"guest_registrations", "guest_sponsor_codes",
+	// MFA posture (schema/0255_mfa_posture.sql)
+	"auth_methods", "auth_method_sources", "account_auth_signals", "mfa_posture_snapshots",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was
