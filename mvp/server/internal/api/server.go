@@ -722,8 +722,8 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 			alt += "/"
 		}
 		// Only same-origin absolute paths that match a registered route are
-		// redirected to; "//host" (protocol-relative) targets are refused.
-		if strings.HasPrefix(alt, "/") && !strings.HasPrefix(alt, "//") {
+		// redirected to; "//host" and "/\\host" (protocol-relative) targets are refused.
+		if strings.HasPrefix(alt, "/") && !strings.HasPrefix(alt, "//") && !strings.HasPrefix(alt, `/\`) {
 			if rt2, _, allowed2 := s.find(r.Method, alt); rt2 != nil || len(allowed2) > 0 {
 				u := url.URL{Path: alt, RawQuery: r.URL.RawQuery}
 				http.Redirect(w, r, u.RequestURI(), http.StatusTemporaryRedirect) // #nosec G710 -- target is a registered same-origin route
