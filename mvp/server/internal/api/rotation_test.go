@@ -32,7 +32,7 @@ type rotAPI struct {
 func newRotAPI(t *testing.T) *rotAPI {
 	t.Helper()
 	f := storetest.TwoTenants(t)
-	srv := newIsolationServer(f)
+	srv := newRotationIsolationServer(f)
 	a := &rotAPI{t: t, f: f, srv: srv, h: asAdmin(t, srv, f.DB, f.B.ID, storetest.Now).Handler()}
 	a.eng = &rotation.Engine{DB: f.DB, Service: srv.rotation, Clock: timeutil.Frozen(storetest.Now),
 		Factory: &rotation.Factory{Sealer: srv.cfg.Sealer, AllowFake: true, Now: timeutil.Frozen(storetest.Now)}}
@@ -243,7 +243,7 @@ func toStrings(l []any) []string {
 // resistant sign-in; reading needs only graph.read.
 func TestRotationAPI_PermissionsAndStepUp(t *testing.T) {
 	f := storetest.TwoTenants(t)
-	srv := newIsolationServer(f)
+	srv := newRotationIsolationServer(f)
 	h := srv.Handler()
 	stale := authtest.Ctx{AAL: 2, Phr: true, AuthTime: storetest.Now.Add(-20 * time.Minute)}
 	admin := authtest.User{Email: "rot-admin@b.example", Roles: []auth.Role{auth.RolePolicyAdmin}}
@@ -290,7 +290,7 @@ func TestRotationAPI_PermissionsAndStepUp(t *testing.T) {
 // Plans are dry runs: they fail closed like a read when their http.request event cannot be written.
 func TestRotationAPI_PlansAreAuditedReads(t *testing.T) {
 	f := storetest.TwoTenants(t)
-	srv := newIsolationServer(f)
+	srv := newRotationIsolationServer(f)
 	for _, rt := range srv.Routes() {
 		if rt.Method == "POST" && (rt.Pattern == "/api/rotation/plan" || rt.Pattern == "/api/rotation/bulk/plan") {
 			if rt.Write {
@@ -303,7 +303,7 @@ func TestRotationAPI_PlansAreAuditedReads(t *testing.T) {
 // Every rotation route is documented in /api/rotation/openapi.json.
 func TestRotationOpenAPI_CoversRoutes(t *testing.T) {
 	f := storetest.TwoTenants(t)
-	srv := newIsolationServer(f)
+	srv := newRotationIsolationServer(f)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/api/rotation/openapi.json", nil)
 	signIn(t, f.DB, f.B.ID, testAdmin, authtest.Phr, storetest.Now).Apply(req)

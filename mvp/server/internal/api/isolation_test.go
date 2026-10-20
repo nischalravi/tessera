@@ -41,12 +41,20 @@ func isolationServer(t testing.TB, f *storetest.Fixture, tenant tenancy.ID) test
 	return asAdmin(t, newIsolationServer(f), f.DB, tenant, storetest.Now)
 }
 
-func newIsolationServer(f *storetest.Fixture) *Server {
+func newIsolationServer(f *storetest.Fixture) *Server { return newIsolationServerWith(f, nil) }
+
+// newRotationIsolationServer is newIsolationServer with a KEK for adapter
+// credentials and the simulated rotation adapter admitted.
+func newRotationIsolationServer(f *storetest.Fixture) *Server {
+	return newIsolationServerWith(f, func(c *Config) { c.Sealer, c.RotationFake = testSealer(), true })
+}
+
+func newIsolationServerWith(f *storetest.Fixture, mutate func(*Config)) *Server {
 	kek, err := seal.New(storetest.IdentityKEK)
 	if err != nil {
 		panic(err)
 	}
-	return New(Config{
+	cfg := Config{
 		Identifiers: identifiers.NewKeyer(kek),
 		Store:       f.DB, Clock: timeutil.Frozen(storetest.Now), Policies: policy.NewLoader(policies.FS),
 		Connectors: func(now time.Time) ([]connectors.Connector, error) {
@@ -56,9 +64,11 @@ func newIsolationServer(f *storetest.Fixture) *Server {
 		AllowedOrigins: []string{"http://localhost:5173"},
 		Env:            "test",
 		RateLimits:     noRateLimits, // the coverage tests send hundreds of anonymous requests
-		Sealer:         testSealer(),
-		RotationFake:   true,
-	})
+	}
+	if mutate != nil {
+		mutate(&cfg)
+	}
+	return New(cfg)
 }
 
 // testSealer is a throwaway KEK for adapter credentials.

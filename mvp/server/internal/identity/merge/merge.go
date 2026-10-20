@@ -309,6 +309,14 @@ func precheck(tx *store.TenantTx, in Input) error {
 	case m.Type != s.Type:
 		return refuse(409, "type_mismatch", "identities of different types cannot be merged")
 	}
+	// credentials never move: a person who signs in is merged the other way, or
+	// their user is disabled first (dev's rule, checked before any request is filed)
+	if users, err := tx.UsersLinkedTo(m.ID); err != nil {
+		return err
+	} else if len(users) > 0 {
+		return refuse(409, "merged_identity_signs_in",
+			"the identity to merge has an active sign-in user; credentials never move, so merge the other way or disable the user first")
+	}
 	return nil
 }
 

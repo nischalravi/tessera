@@ -120,7 +120,7 @@ var (
 		INSERT INTO catalog_item_populations (tenant_id, catalog_item_id, population) VALUES (@tenant, @item, @population)`)
 
 	edgesBySource = tq("grant_edges.by_source", `
-		SELECT `+edgeCols+` FROM grant_edges e WHERE e.tenant_id = @tenant AND e.source = @source ORDER BY e.id`)
+		SELECT `+edgeCols+edgeFrom+`WHERE e.tenant_id = @tenant AND e.source = @source ORDER BY e.id`)
 )
 
 func scanBundleItem(s scanner) (*BundleItem, error) {

@@ -2,6 +2,8 @@ package store_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -30,11 +32,11 @@ type termsRows struct {
 func seedTerms(t *testing.T, db *store.DB, tn storetest.Tenant, tag string) termsRows {
 	t.Helper()
 	r := termsRows{claimRows: seedClaim(t, db, tn, tag), doc: uuid.NewString(), accept: uuid.NewString(), recCase: uuid.NewString(),
-		recCode: uuid.NewString(), group: tn.IDs["group:okta:payments-clerks"], key: "aup-" + tag, codeHash: hex64("5" + tag)}
+		recCode: uuid.NewString(), group: tn.IDs["group:okta:payments-clerks"], key: "aup-" + tag, codeHash: termsHash("5" + tag)}
 	now := storetest.Now
 	err := db.InTenant(context.Background(), tn.ID, func(c *store.TenantTx) error {
 		if err := c.InsertTermsDocument(&store.TermsDocument{ID: r.doc, Key: r.key, Version: 1, Title: "Acceptable use " + tag,
-			Body: "text " + tag, TextSHA256: hex64("7" + tag), GraceDays: 14, CreatedBy: "x", CreatedAt: now}); err != nil {
+			Body: "text " + tag, TextSHA256: termsHash("7" + tag), GraceDays: 14, CreatedBy: "x", CreatedAt: now}); err != nil {
 			return err
 		}
 		pop := store.PopVisitor
@@ -46,7 +48,7 @@ func seedTerms(t *testing.T, db *store.DB, tn storetest.Tenant, tag string) term
 		}
 		sess := r.session
 		if _, err := c.InsertTermsAcceptance(&store.TermsAcceptance{ID: r.accept, IdentityID: r.guest, DocumentID: r.doc, Key: r.key, Version: 1,
-			TextSHA256: hex64("7" + tag), Context: store.TermsContextClaim, SessionHash: &sess, AcceptedAt: now}); err != nil {
+			TextSHA256: termsHash("7" + tag), Context: store.TermsContextClaim, SessionHash: &sess, AcceptedAt: now}); err != nil {
 			return err
 		}
 		if _, err := c.InsertAttributeConsent(&store.AttributeConsent{ID: uuid.NewString(), IdentityID: r.guest, SessionHash: r.session,
@@ -195,18 +197,18 @@ var termsMutations = map[string]func(c *store.TenantTx, a, b termsRows) error{
 	},
 	"InsertTermsAcceptance/A's document": func(c *store.TenantTx, a, b termsRows) error {
 		_, err := c.InsertTermsAcceptance(&store.TermsAcceptance{ID: uuid.NewString(), IdentityID: b.guest, DocumentID: a.doc, Key: "k", Version: 1,
-			TextSHA256: hex64("1"), Context: store.TermsContextSignin, AcceptedAt: storetest.Now})
+			TextSHA256: termsHash("1"), Context: store.TermsContextSignin, AcceptedAt: storetest.Now})
 		return err
 	},
 	"InsertTermsAcceptance/A's person": func(c *store.TenantTx, a, b termsRows) error {
 		_, err := c.InsertTermsAcceptance(&store.TermsAcceptance{ID: uuid.NewString(), IdentityID: a.guest, DocumentID: b.doc, Key: "k", Version: 1,
-			TextSHA256: hex64("1"), Context: store.TermsContextSignin, AcceptedAt: storetest.Now})
+			TextSHA256: termsHash("1"), Context: store.TermsContextSignin, AcceptedAt: storetest.Now})
 		return err
 	},
 	"InsertTermsAcceptance/A's session": func(c *store.TenantTx, a, b termsRows) error {
 		s := a.session
 		_, err := c.InsertTermsAcceptance(&store.TermsAcceptance{ID: uuid.NewString(), IdentityID: b.guest, DocumentID: b.doc, Key: "k2", Version: 2,
-			TextSHA256: hex64("1"), Context: store.TermsContextClaim, SessionHash: &s, AcceptedAt: storetest.Now})
+			TextSHA256: termsHash("1"), Context: store.TermsContextClaim, SessionHash: &s, AcceptedAt: storetest.Now})
 		return err
 	},
 	"InsertAttributeConsent/A's session": func(c *store.TenantTx, a, b termsRows) error {
@@ -215,7 +217,7 @@ var termsMutations = map[string]func(c *store.TenantTx, a, b termsRows) error{
 		return err
 	},
 	"InsertAttributeConsent/A's person": func(c *store.TenantTx, a, b termsRows) error {
-		_, err := c.InsertAttributeConsent(&store.AttributeConsent{ID: uuid.NewString(), IdentityID: a.guest, SessionHash: hex64("3"),
+		_, err := c.InsertAttributeConsent(&store.AttributeConsent{ID: uuid.NewString(), IdentityID: a.guest, SessionHash: termsHash("3"),
 			Authority: "home_idp", Offered: "[]", Consented: "[]", ConsentedAt: storetest.Now})
 		return err
 	},
@@ -232,7 +234,7 @@ var termsMutations = map[string]func(c *store.TenantTx, a, b termsRows) error{
 			IssuedBy: "x", Via: store.RecoveryViaDesk, CreatedAt: storetest.Now})
 	},
 	"InsertRecoveryCode/A's person": func(c *store.TenantTx, a, _ termsRows) error {
-		return c.InsertRecoveryCode(&store.RecoveryCode{ID: uuid.NewString(), IdentityID: a.guest, Batch: "x", CodeHash: hex64("2"), CreatedAt: storetest.Now})
+		return c.InsertRecoveryCode(&store.RecoveryCode{ID: uuid.NewString(), IdentityID: a.guest, Batch: "x", CodeHash: termsHash("2"), CreatedAt: storetest.Now})
 	},
 }
 
@@ -267,7 +269,7 @@ func TestTerms_SchemaRules(t *testing.T) {
 	}
 	fail("a duplicate version", f.DB.InTenant(ctx, f.B.ID, func(c *store.TenantTx) error {
 		return c.InsertTermsDocument(&store.TermsDocument{ID: uuid.NewString(), Key: b.key, Version: 1, Title: "t", Body: "b",
-			TextSHA256: hex64("4"), GraceDays: 1, CreatedAt: now})
+			TextSHA256: termsHash("4"), GraceDays: 1, CreatedAt: now})
 	}))
 	fail("a short hash", f.DB.InTenant(ctx, f.B.ID, func(c *store.TenantTx) error {
 		return c.InsertTermsDocument(&store.TermsDocument{ID: uuid.NewString(), Key: b.key, Version: 2, Title: "t", Body: "b",
@@ -275,7 +277,7 @@ func TestTerms_SchemaRules(t *testing.T) {
 	}))
 	fail("an unbounded grace period", f.DB.InTenant(ctx, f.B.ID, func(c *store.TenantTx) error {
 		return c.InsertTermsDocument(&store.TermsDocument{ID: uuid.NewString(), Key: b.key, Version: 2, Title: "t", Body: "b",
-			TextSHA256: hex64("4"), GraceDays: 4000, CreatedAt: now})
+			TextSHA256: termsHash("4"), GraceDays: 4000, CreatedAt: now})
 	}))
 	fail("an assignment to nothing", f.DB.InTenant(ctx, f.B.ID, func(c *store.TenantTx) error {
 		return c.ReplaceTermsAssignments(b.key, []*store.TermsAssignment{{ID: uuid.NewString(), Key: b.key, Scope: "x", CreatedAt: now}})
@@ -283,7 +285,7 @@ func TestTerms_SchemaRules(t *testing.T) {
 	// an acceptance is recorded once per person and version, and stays
 	inB(t, f, func(c *store.TenantTx) error {
 		fresh, err := c.InsertTermsAcceptance(&store.TermsAcceptance{ID: uuid.NewString(), IdentityID: b.guest, DocumentID: b.doc, Key: b.key,
-			Version: 1, TextSHA256: hex64("7b"), Context: store.TermsContextSignin, AcceptedAt: now})
+			Version: 1, TextSHA256: termsHash("7b"), Context: store.TermsContextSignin, AcceptedAt: now})
 		if err != nil || fresh {
 			t.Errorf("a second acceptance of the same version = %v, %v (want not fresh)", fresh, err)
 		}
@@ -338,4 +340,10 @@ func termsCovered() map[string]bool {
 		out[k] = true // TestIsolation_TermsReads, and the inserts in the mutation cases and seeds
 	}
 	return out
+}
+
+// termsHash is a deterministic 64-character hex digest of s.
+func termsHash(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
 }
