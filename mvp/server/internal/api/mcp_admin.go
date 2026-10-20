@@ -275,6 +275,12 @@ func (s *Server) mcpCreateResource(r *http.Request, _ *params) (int, any, error)
 		{Key: "resource_id", Value: x.ID}, {Key: "name", Value: b.Name}}); err != nil {
 		return 0, nil, err
 	}
+	// The status is the column's default; read the stored row so the response
+	// matches the list.
+	x, err := tx.MCPResource(x.ID)
+	if err != nil {
+		return 0, nil, err
+	}
 	slug, err := s.mcpSlug(r)
 	if err != nil {
 		return 0, nil, err

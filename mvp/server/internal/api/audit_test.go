@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
+	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/store/storetest"
@@ -544,8 +545,15 @@ func TestAudit_ExportStreamsLargeChain(t *testing.T) {
 	total := len(ledger(t, f.DB, f.B.ID))
 	srv := isolationServer(t, f, f.B.ID)
 	srv.cfg.HandlerTimeout = time.Millisecond // every buffered route would time out
+	// A buffered route that only ends when its deadline does: the timeout is
+	// then certain to fire first, however the scheduler treats the 1 ms.
+	srv.handle(http.MethodGet, "/api/test/blocks-until-deadline", noTenant, need(auth.PermGraphRead),
+		func(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+			<-r.Context().Done()
+			return nil, r.Context().Err()
+		})
 	h := srv.Handler()
-	if rec := serveOnce(h, "GET", "/api/identities", ""); rec.Code != http.StatusServiceUnavailable {
+	if rec := serveOnce(h, "GET", "/api/test/blocks-until-deadline", ""); rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("a buffered route with a 1ms handler timeout: %d, want the timeout's 503", rec.Code)
 	}
 
