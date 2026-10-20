@@ -473,6 +473,9 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `GET|POST /api/siem/sinks` · `PUT /api/siem/sinks/{id}` · `POST /api/siem/sinks/{id}/rewind {seq}` ·
 `GET|POST /api/siem/sinks` · `PUT /api/siem/sinks/{id}` (moving the target to another origin, or syslog host:port, while a token is stored needs a new `token`, else 422 `credential_required`; a path-only change keeps it) · `POST /api/siem/sinks/{id}/rewind {seq}` ·
 `POST /api/siem/sinks/{id}/test` · `GET /api/siem/sinks/{id}/dead-letters` ·
+`GET|POST /api/admin/certificates` · `POST /api/admin/certificates/generate {connection_id}` · `POST /api/admin/certificates/{id}/promote|retire` ·
+`GET|PUT /api/admin/branding` · `GET /api/auth/branding?tenant=` · `GET /api/auth/branding/logo?tenant=` (the last two are public, see "Certificates, branding and identity rules") ·
+`GET /api/admin/identity-rules` ·
 `GET /api/alerts[?status=open|acknowledged|resolved|live&severity=&rule=]` · `GET /api/alerts/summary` · `GET /api/alerts/{id}` ·
 `POST /api/alerts/{id}/acknowledge|resolve|assign` · `GET /api/alerts/rules` · `PUT /api/alerts/rules/{rule_id}` ·
 `GET|POST /api/alerts/channels` · `PUT /api/alerts/channels/{id}` (a webhook moved to another origin needs `rotate_secret: true`, else 422 `credential_required`) · `POST /api/alerts/channels/{id}/test` ·
@@ -551,6 +554,8 @@ when a second reviewer is needed) ·
 `GET|POST /api/roles` · `GET|PUT /api/roles/{id}` · `GET /api/roles/{id}/versions|drift` ·
 `POST /api/roles/{id}/retire|reconcile|members` · `POST /api/roles/{id}/members/{identity_id}/remove`
 (changes take `?dry_run=1`) · `GET|POST /api/role-requests` · `POST /api/role-requests/{id}/approve|deny|cancel` ·
+`GET|POST /api/role-mining/runs` · `GET /api/role-mining/runs/{id}` · `GET /api/role-mining/candidates/{id}` ·
+`POST /api/role-mining/candidates/{id}/accept|dismiss` (role mining, below) ·
 `GET /api/lifecycle[?state=upcoming|active|ending|ended]` · `GET /api/lifecycle/sponsored` · `POST /api/lifecycle/sweep` ·
 `GET|PUT /api/identities/{id}/lifecycle` · `POST /api/identities/{id}/lifecycle/extend {ends_at, reason}`
 `POST /api/guests/invitations` · `POST /api/guests/invitations/bulk {csv, dry_run}` ·
@@ -703,6 +708,61 @@ The pull export (`/api/audit/export`) stays available.
   - `siem.configure`: tenant_admin, plus the `tessera:admin` scope.
 - **UI:** **Admin > Log streaming (SIEM)** lists each sink with its health, delivered count, dead letters, and Test, Replay and Edit actions.
 - **Not yet:** S3-compatible bucket sinks.
+### Certificates, branding and identity rules
+
+Three Admin settings pages that were Previews are live (`/admin/certificates`, `/admin/branding`, `/admin/identity-rules`).
+
+**Certificates** (`internal/certs`, schema `0410_certificates.sql`). `GET /api/admin/certificates` lists everything Tessera
+holds, with subject, issuer, SANs, validity, SHA-256 fingerprint, key algorithm and where it is used: the SP key of each SAML
+connection (`idp_connections`), uploaded and rotating certificates (`tenant_certificates`), the tenant's signing keys
+(`internal/keys`, public key only) and the pinned mTLS key of each active directory agent. No call returns a private key.
+
+* **Upload.** `POST /api/admin/certificates {purpose, label, certificate_pem, private_key_pem, connection_id?}` with purpose
+  `saml_sp | mtls_client | signing | encryption`. The upload must be PEM (one certificate, an unencrypted key), the key must match the
+  certificate, the certificate must not be expired, RSA keys must be at least 2048 bits (EC: P-256 or stronger), no SHA-1 or MD5
+  signature, and each field is at most 16 KiB. A SAML key must be RSA. The key is re-encoded as PKCS#8 and sealed with
+  `internal/seal` (AAD binds tenant, table, column and row id). Refusals are 422 with a code (`cert_expired`, `weak_key`,
+  `weak_signature`, `key_mismatch`, `bad_pem`, `bad_key`, `key_not_rsa`), 413 `cert_too_large`, 409 `duplicate_certificate`.
+* **SAML SP rotation.** `POST /api/admin/certificates/generate {connection_id}` (or an upload with purpose `saml_sp`) adds a
+  `next` key. While it waits, `GET /api/auth/saml/{id}/metadata` lists both certificates (the overlap window), so the identity
+  provider can trust the new one before it is used; sign-in keeps signing with the active key. `POST .../{id}/promote` copies the
+  sealed key onto the connection, makes the new certificate active and retires the old one (its key is destroyed). One waiting
+  key per connection (409 `rotation_in_progress`); the active key cannot be retired (409 `in_use`). `POST .../{id}/retire`
+  discards a waiting key or retires an uploaded certificate.
+* **Access.** Listing needs `connections.read`; every change needs `connections.manage` and a fresh strong sign-in (step-up), and
+  writes `certificate.uploaded|generated|promoted|retired` in the same transaction (no key material in the event).
+* **Expiry alerts.** The durable queue kind `certificate_expiry` runs daily (`17 6 * * *` UTC) and calls
+  `alerts.RunScheduled`, which runs the alert rule `certificate_expiry` (kind `scheduled`: the alerts engine's own 15-minute
+  detections skip it). A certificate in use (active or waiting) with 30 days or fewer left gets one alert; inside 7 days (or once
+  expired) the alert becomes the 7-day one and the 30-day one resolves. Retiring or rotating a certificate resolves its alert.
+  The rule's severity can be changed, or the rule switched off, under Alerts > Rules like any other.
+* **Limits.** An uploaded `mtls_client` certificate is stored sealed, can name a connector and is monitored for expiry, but no
+  connector reads it yet (connectors do not use client certificates today). The directory agent's key is shown by its pin only,
+  because Tessera does not hold the agent's certificate.
+
+**Branding** (`internal/branding`, schema `0411_branding.sql`). `GET|PUT /api/admin/branding` saves the product name, a button
+colour and its text colour, and a logo. Reading needs `admin.read`; saving needs `email.manage` (tenant admin) and a step-up,
+and is audited as `branding.updated`.
+
+* The colour pair must reach WCAG AA (4.5:1): a pair below it is refused with 422 `low_contrast` and the ratio. An empty text
+  colour is chosen automatically (white or black). Pages only override the button colours (`--accent`, `--accent-hover`,
+  `--on-accent`); text and link colours stay the theme's.
+* The logo is `{content_type, data_base64}`: PNG or JPEG only (SVG is refused with `svg_not_allowed`), at most 256 KiB, 32 to
+  1024 pixels each way, checked by decoding it, and the declared type must match the bytes. It is stored in the table.
+* Public, unauthenticated, rate limited: `GET /api/auth/branding?tenant=<slug>` (name, colours, logo URL; a tenant that does not
+  exist or has no branding gets the same default answer) and `GET /api/auth/branding/logo?tenant=<slug>`, served with
+  `Content-Type: image/png|jpeg`, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`, an
+  ETag and `Cache-Control: public, max-age=300`.
+* Used by the sign-in page, the guest claim, register and renew pages (name, logo, button colours) and by email (subject
+  prefix, link line and footer say the product name; emails are plain text, so no logo). Without branding everything says Tessera.
+
+**Identity rules** (`GET /api/admin/identity-rules`, `graph.read`). One read of what the identity engines apply: the matching
+rules with their tier (`internal/identity/match.Catalog`, kept in step by a test), the thresholds, the tenant's matching settings
+(changed with the existing `PUT /api/admin/matching`, `identity.matching.configure`, also editable on the page), the correlation
+proposals of `internal/correlation`, the group naming rules of `internal/groups/naming` and the machine-identity dormancy
+threshold of `internal/nhi`. It lists what is not configurable yet: the authoritative source per attribute, the order of the
+correlation rules and per-type dormancy thresholds have no engine behind them.
+
 ### Alerts
 
 The alert engine (`internal/alerts`, issue #168) runs every minute in `tessera serve`. It reads new audit
@@ -1222,8 +1282,54 @@ contains their value.
 Changing roles needs `roles.manage` (policy admins) and a fresh phishing-resistant sign-in.
 Members, versions and drift need `graph.read`. The seed creates the demo company's six roles.
 Rule members are seeded only where people already hold every entitlement, so seeding grants
-nothing: reconcile a role to see the rest. Not yet: provisioning into the target system (#103)
-and role mining (Phase 3).
+nothing: reconcile a role to see the rest. Not yet: provisioning into the target system (#103).
+
+#### Role mining
+
+**Directory → Roles → Mining** (issue #298, `internal/roles/mining`, schema `0420_role_mining.sql`,
+tables `role_mining_runs` and `role_mining_candidates`). A run suggests business roles from the
+access people hold today. It is deterministic: no random seed and no ML service, so the same data
+and settings always give the same candidates (the run stores its parameters and a SHA-256
+`snapshot_hash` over the algorithm, the parameters and the filtered input).
+
+- **Input.** Every active person's standing entitlements: groups reached by an active account
+  through a grant that does not expire (JIT and other timed grants are left out). Optional filters:
+  department, job title and identity type (`human`, `service`, `ai_agent`). The identity model has
+  no location or organization column yet, so those cannot be filtered on.
+- **Method.** Drop entitlements held by fewer than `min_members` people (default 3). People with
+  the same remaining set share a profile; profiles are ordered (most people, largest set, key) and
+  clustered by Jaccard similarity to a cluster's first profile (`min_similarity`, default 60%). A
+  cluster's core is the intersection of its profiles. A core of at least `min_entitlements`
+  (default 2) becomes a candidate whose **coverage** is everyone in the filtered population who
+  holds all of it. A set equal to an existing role's is not listed again; a near match names the
+  similar role.
+- **Per candidate.** The entitlement set, the people who hold all of it, **outliers** (covered
+  people who also hold an entitlement under 25% of the others have), the **suggested birthright
+  rule** (the attribute among department, title and type whose values best predict coverage, by
+  F1, with precision and recall; none when F1 is under 50), and a **confidence** from 0 to 100:
+  40% rule F1, 30% cohesion (how close members are to the set), 30% size (people against three
+  times `min_members`).
+- **Bounds.** At most 20,000 people per run (a filter narrows it; more is `too_many_identities`),
+  people holding over 300 entitlements are skipped, 3,000 profiles are clustered, 40 million
+  comparison steps (a run that hits a bound is marked `truncated`), 100 candidates, two minutes.
+  Everything is integer maths, so results do not vary by platform.
+- **Queue.** A run over at most 500 people is computed in the request (`201`); a larger one, or
+  one sent with `"async": true`, is a `role_mining` job on the durable queue (`202`, status
+  `queued`, then `succeeded` or `failed`; the page polls). One run is active at a time (`409
+  run_in_progress`; a run still queued after an hour no longer blocks).
+- **Review.** `accept` creates a business role through the roles service (versioned, audited as
+  `role.create`) with the candidate's entitlements, a name you may change, a description of how it
+  was mined (including the suggested rule), risk `high` when it holds a privileged entitlement
+  and `medium` otherwise (or the one you choose). You may drop entitlements before accepting, not
+  add. **The role has no members, no birthright rule and is not requestable**, so accepting grants
+  and removes nothing; assigning people, adding the rule and requesting follow the usual role
+  flows and approvals. `dismiss` needs a reason. A candidate is decided once. Audit events:
+  `role_mining.run`, `role_mining.complete`, `role_mining.accept`, `role_mining.dismiss`.
+
+Reading needs `graph.read`; starting a run and dismissing need `roles.manage`; accepting needs
+`roles.manage` and a fresh phishing-resistant sign-in, like creating a role. The demo tenant
+`larkspur` yields a dozen candidates on a default run (Sales, Data, People, Security, and the
+engineering teams), each with a department or title rule.
 
 ### Attribute policies (ABAC)
 
@@ -3418,7 +3524,7 @@ the right. Arrow keys move between items.
 | Group | Items |
 |---|---|
 | (top) | **Home**, **Inbox** (count) |
-| **Identity** | Users (with *Identity matches*), Machine identities & agents, Groups (*Managed groups* and *Connected groups*, with an *All entitlements* tab), Secret rotation (Secrets, Rotation jobs, Policies & adapters, Vendor compromised), Applications, Ownership, Accounts (with *Account matches*), Help desk, Roles, Organizations (live, read-only, derived from departments) |
+| **Identity** | Users (with *Identity matches*), Machine identities & agents, Groups (*Managed groups* and *Connected groups*, with an *All entitlements* tab), Secret rotation (Secrets, Rotation jobs, Policies & adapters, Vendor compromised), Applications, Ownership, Accounts (with *Account matches*), Help desk, Roles (with a *Mining* tab), Organizations (live, read-only, derived from departments) |
 | **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals, registration requests, sponsor code, recovery), Just-in-time, Access reviews (with *Lifecycle*, *Guest lifecycle* and *Workflows* tabs) |
 | **Protection** | Alerts (alerts, rules, channels), Policies & SoD (violations, policies, what-if simulation, SoD functions, risks and rulesets), Mitigating controls (mitigations, control library), Attribute policies, Access graph (with an *As of* date for *Who can access…*), Evidence packs, Insights (Risk overview, Least privilege, SoD conflicts, MFA posture, Deployment health) |
 | **Settings** | Connections (governed connections and the setup wizard), Flat-file apps, Conditional access (network ranges, policies, device signals), Shared Signals (SSF transmitters and received events), Admin (including *Guests and external identities* and *Request settings*) |
@@ -3515,7 +3621,7 @@ back a step and `Esc` to close. `/` focuses the top-bar search.
 
 **Preview features.** Some screens have no backend endpoint yet: workflows, reset password, generic
 object create / edit / import (accounts, machine identities, rotate secret) and most admin settings
-(Identity rules, Branding & labels, Certificates, Export / import configuration). They run on typed mock data in `src/mocks/`, keep their state in the
+(Export / import configuration; Identity rules, Branding & labels and Certificates are live, see "Certificates, branding and identity rules"). They run on typed mock data in `src/mocks/`, keep their state in the
 browser's localStorage, and carry a **Preview** badge. To wire one up, add a function to
 `src/api.ts` that returns the same type and remove the badge.
 

@@ -1893,6 +1893,34 @@ CREATE POLICY tenant_isolation ON sod_ruleset_remediation
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE tenant_certificates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tenant_certificates FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON tenant_certificates;
+CREATE POLICY tenant_isolation ON tenant_certificates
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE tenant_branding ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tenant_branding FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON tenant_branding;
+CREATE POLICY tenant_isolation ON tenant_branding
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE role_mining_runs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE role_mining_runs FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON role_mining_runs;
+CREATE POLICY tenant_isolation ON role_mining_runs
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE role_mining_candidates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE role_mining_candidates FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON role_mining_candidates;
+CREATE POLICY tenant_isolation ON role_mining_candidates
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 ALTER TABLE questionnaires ENABLE ROW LEVEL SECURITY;
 ALTER TABLE questionnaires FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON questionnaires;

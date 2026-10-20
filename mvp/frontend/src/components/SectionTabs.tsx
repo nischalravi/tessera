@@ -41,6 +41,16 @@ export const MyAccessTabs = () => (
   />
 );
 
+export const RoleTabs = () => (
+  <LinkTabs
+    label="Roles"
+    tabs={[
+      { to: "/directory/roles", label: "Roles", end: true },
+      { to: "/directory/roles/mining", label: "Mining" },
+    ]}
+  />
+);
+
 export const GroupTabs = () => (
   <LinkTabs
     label="Groups"

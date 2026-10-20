@@ -133,6 +133,10 @@ type Connection struct {
 	ACSURL     string // <public>/api/auth/saml/<id>/acs
 	SPKey      *rsa.PrivateKey
 	SPCert     []byte // DER
+	// NextSPCerts are certificates being rotated in (DER): published in the SP
+	// metadata beside SPCert so identity providers trust them before the
+	// promotion, never used to sign.
+	NextSPCerts [][]byte
 }
 
 func (c Connection) sp(now time.Time) (*saml2.SAMLServiceProvider, error) {
@@ -520,12 +524,22 @@ func Metadata(c Connection, now time.Time) ([]byte, error) {
 	ed := types.EntityDescriptor{ValidUntil: now.UTC().Add(7 * 24 * time.Hour), EntityID: c.SPEntityID,
 		SPSSODescriptor: &types.SPSSODescriptor{AuthnRequestsSigned: true, WantAssertionsSigned: true,
 			ProtocolSupportEnumeration: NSProtocol,
-			KeyDescriptors: []types.KeyDescriptor{{Use: "signing", KeyInfo: dsigtypes.KeyInfo{X509Data: dsigtypes.X509Data{
-				X509Certificates: []dsigtypes.X509Certificate{{Data: base64.StdEncoding.EncodeToString(c.SPCert)}}}}}},
-			AssertionConsumerServices: []types.IndexedEndpoint{{Binding: saml2.BindingHttpPost, Location: c.ACSURL, Index: 1}}}}
+			KeyDescriptors:             spKeyDescriptors(c),
+			AssertionConsumerServices:  []types.IndexedEndpoint{{Binding: saml2.BindingHttpPost, Location: c.ACSURL, Index: 1}}}}
 	b, err := xml.MarshalIndent(ed, "", "  ")
 	if err != nil {
 		return nil, err
 	}
 	return append([]byte(xml.Header), b...), nil
+}
+
+// spKeyDescriptors lists the active SP certificate first, then the ones being
+// rotated in.
+func spKeyDescriptors(c Connection) []types.KeyDescriptor {
+	var out []types.KeyDescriptor
+	for _, der := range append([][]byte{c.SPCert}, c.NextSPCerts...) {
+		out = append(out, types.KeyDescriptor{Use: "signing", KeyInfo: dsigtypes.KeyInfo{X509Data: dsigtypes.X509Data{
+			X509Certificates: []dsigtypes.X509Certificate{{Data: base64.StdEncoding.EncodeToString(der)}}}}})
+	}
+	return out
 }

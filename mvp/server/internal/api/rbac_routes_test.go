@@ -68,6 +68,14 @@ POST   /api/siem/sinks                               siem.configure  STEP_UP_POL
 PUT    /api/siem/sinks/{sink_id}                     siem.configure  STEP_UP_POLICY  # issue #169
 POST   /api/siem/sinks/{sink_id}/rewind              siem.configure  -  # issue #169
 POST   /api/siem/sinks/{sink_id}/test                siem.configure  -  # issue #169
+GET    /api/admin/certificates                       connections.read    -
+POST   /api/admin/certificates                       connections.manage  STEP_UP_POLICY  # Admin > Certificates
+POST   /api/admin/certificates/generate              connections.manage  STEP_UP_POLICY
+POST   /api/admin/certificates/{certificate_id}/promote connections.manage  STEP_UP_POLICY
+POST   /api/admin/certificates/{certificate_id}/retire  connections.manage  STEP_UP_POLICY
+GET    /api/admin/branding                           admin.read      -  # Admin > Branding
+PUT    /api/admin/branding                           email.manage    STEP_UP_POLICY
+GET    /api/admin/identity-rules                     graph.read      -  # Admin > Identity rules
 GET    /api/siem/sinks/{sink_id}/dead-letters        siem.read       -  # issue #169
 GET    /api/alerts                                   alerts.read     -  # issue #168
 GET    /api/alerts/summary                           alerts.read     -  # issue #168
@@ -180,6 +188,12 @@ POST   /api/requests/{request_id}/approve            requests.create STEP_UP_POL
 POST   /api/requests/{request_id}/deny               requests.create -  # issue #164 (#165: the line's routing decides who)
 POST   /api/requests/{request_id}/cancel             requests.create -  # issue #164 (the requester)
 POST   /api/requests/{request_id}/remove             requests.create -  # issue #164 (requests.decide, or the beneficiary)
+GET    /api/role-mining/runs                         graph.read      -  # issue #298
+POST   /api/role-mining/runs                         roles.manage    -  # issue #298 (analysis only; changes nothing)
+GET    /api/role-mining/runs/{run_id}                graph.read      -  # issue #298
+GET    /api/role-mining/candidates/{candidate_id}    graph.read      -  # issue #298
+POST   /api/role-mining/candidates/{candidate_id}/accept roles.manage STEP_UP_POLICY  # issue #298 (creates a draft role, like POST /api/roles)
+POST   /api/role-mining/candidates/{candidate_id}/dismiss roles.manage -  # issue #298
 GET    /api/roles                                    requests.create -  # issue #161
 POST   /api/roles                                    roles.manage    STEP_UP_POLICY  # issue #161
 GET    /api/roles/{role_id}                          graph.read      -  # issue #161
@@ -597,6 +611,8 @@ GET    /api/auth/sessions                            auth.self       -
 GET    /api/auth/step-up                             auth.self       -
 DELETE /api/auth/sessions/{session_id}               auth.self       -  (another user's: admin.sessions.revoke + STEP_UP_ADMIN in the handler)
 GET    /api/auth/discover                            public
+GET    /api/auth/branding                            public
+GET    /api/auth/branding/logo                       public
 GET    /api/auth/login                               public
 GET    /api/auth/oidc/{connection_id}/callback       public
 GET    /api/auth/saml/{connection_id}/metadata       public
