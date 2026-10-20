@@ -413,18 +413,22 @@ func (s *Server) redirectError(w http.ResponseWriter, r *http.Request, redirectU
 // refused with 400: the dev IdP never redirects to an unregistered address,
 // whatever the caller did before.
 func (s *Server) redirectRegistered(w http.ResponseWriter, r *http.Request, base string, add url.Values, status int) {
-	ok := false
+	target := ""
 	for _, c := range s.clients {
-		if c.redirectAllowed(base) {
-			ok = true
+		// an exact registration: redirect to the stored string, never the request's copy
+		if i := slices.Index(c.RedirectURIs, base); i >= 0 {
+			target = c.RedirectURIs[i]
 			break
 		}
+		if target == "" && c.redirectAllowed(base) {
+			target = base // matched a wildcard registration (loopback ports)
+		}
 	}
-	if !ok {
+	if target == "" {
 		s.errorPage(w, http.StatusBadRequest, "The redirect target is not registered.")
 		return
 	}
-	http.Redirect(w, r, withParams(base, add), status) // #nosec G710 -- base matched a registered redirect URI just above
+	http.Redirect(w, r, withParams(target, add), status) // #nosec G710 -- target is a registered redirect URI (exact or wildcard match)
 }
 
 func withParams(base string, add url.Values) string {
