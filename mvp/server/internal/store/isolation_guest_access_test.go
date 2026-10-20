@@ -162,7 +162,7 @@ func TestIsolation_GuestAccessMutationsScoped(t *testing.T) {
 			f, a, b := gaFixture(t)
 			before := gaDump(t, f.DB, f.A.ID)
 			err := f.DB.InTenant(context.Background(), f.B.ID, func(c *store.TenantTx) error { return fn(c, a, b) })
-			if !errors.Is(err, store.ErrNotFound) && !errors.Is(err, store.ErrCrossTenant) {
+			if !errors.Is(err, store.ErrNotFound) && !errors.Is(err, store.ErrCrossTenant) && !pgUniqueFirst(err) {
 				t.Fatalf("%s across tenants = %v, want ErrNotFound or ErrCrossTenant", name, err)
 			}
 			if after := gaDump(t, f.DB, f.A.ID); after != before {

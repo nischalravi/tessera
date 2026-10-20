@@ -4,6 +4,9 @@
 
 -- +goose Up
 
+-- rotation_jobs points at a secret by a composite key.
+ALTER TABLE secrets ADD UNIQUE (tenant_id, id);
+
 CREATE TABLE rotation_adapters (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenants (id),

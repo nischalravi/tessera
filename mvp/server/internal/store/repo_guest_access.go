@@ -107,8 +107,8 @@ var (
 		ON CONFLICT (tenant_id, identity_id) DO UPDATE SET
 			source = CASE WHEN excluded.ial > identity_assurance.ial THEN excluded.source ELSE identity_assurance.source END,
 			recorded_at = CASE WHEN excluded.ial > identity_assurance.ial THEN excluded.recorded_at ELSE identity_assurance.recorded_at END,
-			aal = MAX(identity_assurance.aal, excluded.aal),
-			ial = MAX(identity_assurance.ial, excluded.ial)`)
+			aal = CASE WHEN excluded.aal > identity_assurance.aal THEN excluded.aal ELSE identity_assurance.aal END,
+			ial = CASE WHEN excluded.ial > identity_assurance.ial THEN excluded.ial ELSE identity_assurance.ial END`)
 
 	catalogPopsList = tq("catalog_item_populations.list", `
 		SELECT p.catalog_item_id, p.population FROM catalog_item_populations p

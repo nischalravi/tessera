@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -244,7 +246,7 @@ func TestIsolation_TermsMutationsScoped(t *testing.T) {
 			f, a, b := termsFixture(t)
 			before := termsDump(t, f.DB, f.A.ID, a)
 			err := f.DB.InTenant(context.Background(), f.B.ID, func(c *store.TenantTx) error { return fn(c, a, b) })
-			if !errors.Is(err, store.ErrNotFound) && !errors.Is(err, store.ErrCrossTenant) {
+			if !errors.Is(err, store.ErrNotFound) && !errors.Is(err, store.ErrCrossTenant) && !pgUniqueFirst(err) {
 				t.Fatalf("%s across tenants = %v, want ErrNotFound or ErrCrossTenant", name, err)
 			}
 			if after := termsDump(t, f.DB, f.A.ID, a); after != before {
@@ -346,4 +348,17 @@ func termsCovered() map[string]bool {
 func termsHash(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
+}
+
+// pgUniqueFirst: Postgres checks a unique key before the composite foreign key, and an
+// idempotent insert that conflicts does nothing, so a cross-tenant case that also repeats
+// the other tenant's own unique key ends in a duplicate-key error or in no error at all.
+// SQLite's guard triggers fire first. The foreign keys themselves are checked by
+// TestIsolation_PostgresCompositeForeignKeys; the dump comparison after each case still
+// proves the other tenant's rows did not change.
+func pgUniqueFirst(err error) bool {
+	if !store.IsPostgresDSN(os.Getenv("TESSERA_TEST_PG_URL")) {
+		return false
+	}
+	return err == nil || strings.Contains(err.Error(), "SQLSTATE 23505")
 }

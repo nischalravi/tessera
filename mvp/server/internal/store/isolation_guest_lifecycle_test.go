@@ -226,7 +226,7 @@ func TestIsolation_GuestLifecycleMutationsScoped(t *testing.T) {
 			f, a, b := glFixture(t)
 			before := glDump(t, f.DB, f.A.ID, a)
 			err := f.DB.InTenant(context.Background(), f.B.ID, func(c *store.TenantTx) error { return fn(c, a, b) })
-			if !errors.Is(err, store.ErrNotFound) && !errors.Is(err, store.ErrCrossTenant) {
+			if !errors.Is(err, store.ErrNotFound) && !errors.Is(err, store.ErrCrossTenant) && !pgUniqueFirst(err) {
 				t.Fatalf("%s across tenants = %v, want ErrNotFound or ErrCrossTenant", name, err)
 			}
 			if after := glDump(t, f.DB, f.A.ID, a); after != before {

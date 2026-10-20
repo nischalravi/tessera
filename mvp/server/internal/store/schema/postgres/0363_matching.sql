@@ -131,13 +131,18 @@ CREATE TRIGGER claim_links_no_delete BEFORE DELETE ON claim_links
 -- tenant, and then nothing else may change in the same statement (a final row
 -- stays final). Every other rule of the old triggers is kept.
 
+-- A trigger WHEN condition cannot hold a subquery, so the "open merge between these two
+-- identities" test is a function.
+CREATE OR REPLACE FUNCTION tessera_merge_pair(t TEXT, a BIGINT, b BIGINT) RETURNS boolean LANGUAGE sql STABLE AS $fn$
+	SELECT EXISTS (SELECT 1 FROM identity_merges m WHERE m.tenant_id = t AND m.unmerged_at IS NULL
+		AND ((m.merged_id = a AND m.survivor_id = b) OR (m.survivor_id = a AND m.merged_id = b)))
+$fn$;
+
 DROP TRIGGER affiliations_immutable ON affiliations;
 CREATE TRIGGER affiliations_immutable BEFORE UPDATE ON affiliations
 	FOR EACH ROW WHEN (NEW.id <> OLD.id OR NEW.tenant_id <> OLD.tenant_id OR NEW.type <> OLD.type OR NEW.source <> OLD.source
 		OR NEW.starts_at <> OLD.starts_at OR NEW.created_at <> OLD.created_at
-		OR (NEW.identity_id <> OLD.identity_id AND NOT EXISTS (SELECT 1 FROM identity_merges m
-			WHERE m.tenant_id = NEW.tenant_id AND m.unmerged_at IS NULL
-			AND ((m.merged_id = OLD.identity_id AND m.survivor_id = NEW.identity_id) OR (m.survivor_id = OLD.identity_id AND m.merged_id = NEW.identity_id))))
+		OR (NEW.identity_id <> OLD.identity_id AND NOT tessera_merge_pair(NEW.tenant_id, OLD.identity_id, NEW.identity_id))
 		OR (OLD.status IN ('ended','revoked') AND (NEW.status <> OLD.status OR NEW.source_ref IS DISTINCT FROM OLD.source_ref
 			OR NEW.org_unit IS DISTINCT FROM OLD.org_unit OR NEW.partner_org_id IS DISTINCT FROM OLD.partner_org_id OR NEW.population IS DISTINCT FROM OLD.population
 			OR NEW.ends_at IS DISTINCT FROM OLD.ends_at OR NEW.created_by IS DISTINCT FROM OLD.created_by OR NEW.ended_by IS DISTINCT FROM OLD.ended_by
@@ -148,9 +153,7 @@ DROP TRIGGER sponsorships_immutable ON sponsorships;
 CREATE TRIGGER sponsorships_immutable BEFORE UPDATE ON sponsorships
 	FOR EACH ROW WHEN (NEW.id <> OLD.id OR NEW.tenant_id <> OLD.tenant_id OR NEW.intake_id <> OLD.intake_id
 		OR NEW.population <> OLD.population OR NEW.starts_at <> OLD.starts_at OR NEW.created_at <> OLD.created_at
-		OR (NEW.guest_identity_id <> OLD.guest_identity_id AND NOT EXISTS (SELECT 1 FROM identity_merges m
-			WHERE m.tenant_id = NEW.tenant_id AND m.unmerged_at IS NULL
-			AND ((m.merged_id = OLD.guest_identity_id AND m.survivor_id = NEW.guest_identity_id) OR (m.survivor_id = OLD.guest_identity_id AND m.merged_id = NEW.guest_identity_id))))
+		OR (NEW.guest_identity_id <> OLD.guest_identity_id AND NOT tessera_merge_pair(NEW.tenant_id, OLD.guest_identity_id, NEW.guest_identity_id))
 		OR (OLD.status IN ('ended','revoked','rejected') AND (NEW.status <> OLD.status OR NEW.sponsor_identity_id <> OLD.sponsor_identity_id
 			OR NEW.purpose <> OLD.purpose OR NEW.access_bundle <> OLD.access_bundle OR NEW.required_ial <> OLD.required_ial
 			OR NEW.required_aal <> OLD.required_aal OR NEW.ends_at <> OLD.ends_at OR NEW.policy_version <> OLD.policy_version
@@ -164,9 +167,7 @@ DROP TRIGGER guest_bundle_items_immutable ON guest_bundle_items;
 CREATE TRIGGER guest_bundle_items_immutable BEFORE UPDATE ON guest_bundle_items
 	FOR EACH ROW WHEN (NEW.id <> OLD.id OR NEW.tenant_id <> OLD.tenant_id OR NEW.sponsorship_id <> OLD.sponsorship_id
 		OR NEW.group_id <> OLD.group_id OR NEW.created_at <> OLD.created_at
-		OR (NEW.guest_identity_id <> OLD.guest_identity_id AND NOT EXISTS (SELECT 1 FROM identity_merges m
-			WHERE m.tenant_id = NEW.tenant_id AND m.unmerged_at IS NULL
-			AND ((m.merged_id = OLD.guest_identity_id AND m.survivor_id = NEW.guest_identity_id) OR (m.survivor_id = OLD.guest_identity_id AND m.merged_id = NEW.guest_identity_id))))
+		OR (NEW.guest_identity_id <> OLD.guest_identity_id AND NOT tessera_merge_pair(NEW.tenant_id, OLD.guest_identity_id, NEW.guest_identity_id))
 		OR (OLD.status = 'removed' AND (NEW.status <> OLD.status OR NEW.system <> OLD.system OR NEW.account_op_id IS DISTINCT FROM OLD.account_op_id
 			OR NEW.grant_op_id IS DISTINCT FROM OLD.grant_op_id OR NEW.remove_op_id IS DISTINCT FROM OLD.remove_op_id OR NEW.edge_id IS DISTINCT FROM OLD.edge_id
 			OR NEW.expires_at <> OLD.expires_at OR NEW.updated_at <> OLD.updated_at OR NEW.granted_at IS DISTINCT FROM OLD.granted_at

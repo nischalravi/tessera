@@ -240,7 +240,7 @@ func TestRotationSchemaRules(t *testing.T) {
 		j.State = store.RotVerified // no verification recorded
 		return c.UpdateRotationJob(j, store.RotPending, storetest.Now)
 	})
-	if err == nil || !strings.Contains(err.Error(), "CHECK constraint") {
+	if err == nil || (!strings.Contains(err.Error(), "CHECK constraint") && !strings.Contains(err.Error(), "violates check constraint")) {
 		t.Errorf("verified without a recorded re-read: %v, want a CHECK failure", err)
 	}
 	// with the observation it is accepted, and the sealed bytes stay bytes
