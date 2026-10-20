@@ -929,6 +929,8 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 func (s *Server) attribute(r *http.Request) {
 	p, reason, err := s.authn.Authenticate(r)
 	switch {
+	case err != nil && clientCanceled(r, err):
+		audit.SetAnonymous(r.Context(), "client_canceled")
 	case err != nil:
 		audit.SetAnonymous(r.Context(), "authentication_error")
 	case p == nil:
@@ -999,6 +1001,17 @@ func writeJSONAs(w http.ResponseWriter, contentType string, status int, v any) {
 // words after the request context expired.
 func timedOut(r *http.Request, err error) bool {
 	return errors.Is(err, context.DeadlineExceeded) || errors.Is(r.Context().Err(), context.DeadlineExceeded)
+}
+
+// statusClientClosed is nginx's 499: the client closed the request before an
+// answer. It is a 4xx so the audit event is not an error outcome and it is
+// never read as a server outage; the client that caused it never sees it.
+const statusClientClosed = 499
+
+// clientCanceled reports that the client aborted the request (context
+// canceled), not that a deadline passed or a dependency failed.
+func clientCanceled(r *http.Request, err error) bool {
+	return !timedOut(r, err) && (errors.Is(err, context.Canceled) || errors.Is(r.Context().Err(), context.Canceled))
 }
 
 // writeTimedOut answers with the same 503 http.TimeoutHandler sends, so a

@@ -1,10 +1,13 @@
 package api
 
 import (
+	"bytes"
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -61,5 +64,51 @@ func TestHandlerTimeout_NeverInternalError(t *testing.T) {
 		if rec.Code != http.StatusServiceUnavailable {
 			t.Fatalf("request %d: status %d, want 503; body %q", i, rec.Code, rec.Body.String())
 		}
+	}
+}
+
+// TestClientAbort_NotAnAuthFailure (#310): a client that hangs up while its
+// session is being checked is logged as neither an authentication failure nor
+// an audit write failure, and the answer is not a 503 (which reads as an
+// outage). A request whose deadline passed keeps the documented 503.
+func TestClientAbort_NotAnAuthFailure(t *testing.T) {
+	st, _ := testkit.Tiny(t)
+	var logs bytes.Buffer
+	srv := New(Config{Store: st.DB, Clock: timeutil.Frozen(testkit.Now), Policies: policy.NewLoader(policies.FS),
+		Logger: slog.New(slog.NewTextHandler(&logs, nil)), RateLimits: noRateLimits})
+	srv.handle("GET", "/api/abort", read, need(auth.PermGraphRead), func(_ http.ResponseWriter, _ *http.Request, _ *params) (any, error) {
+		return map[string]string{"ok": "1"}, nil
+	})
+	h := signIn(t, st.DB, st.Tenant, testAdmin, authtest.Phr, testkit.Now).Handler(srv.Handler())
+
+	for _, c := range []struct {
+		name     string
+		deadline bool
+		wantCode int
+	}{
+		{"client abort", false, statusClientClosed},
+		{"deadline", true, http.StatusServiceUnavailable},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			logs.Reset()
+			ctx, cancel := context.WithCancel(context.Background())
+			if c.deadline {
+				cancel()
+				ctx, cancel = context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+			} else {
+				cancel()
+			}
+			defer cancel()
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/abort", nil).WithContext(ctx))
+			if rec.Code != c.wantCode {
+				t.Errorf("status %d, want %d; body %q", rec.Code, c.wantCode, rec.Body.String())
+			}
+			for _, bad := range []string{"authentication failed", "audit write failed", "audit_unavailable"} {
+				if strings.Contains(logs.String(), bad) || strings.Contains(rec.Body.String(), bad) {
+					t.Errorf("reported %q for a request the client gave up on: %s", bad, logs.String())
+				}
+			}
+		})
 	}
 }

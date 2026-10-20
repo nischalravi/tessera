@@ -1,5 +1,5 @@
 import {
-  AppWindow, BadgeCheck, BellRing, Bot, Building2, CalendarClock, ChartLine, ClipboardCheck, FileArchive, FileUp, House, Inbox, KeyRound, Layers, LifeBuoy, LockKeyhole, LucideIcon, Network, Plug, Plus, Radio, RotateCw, Settings, ShieldAlert, ShieldCheck, ShieldHalf, SlidersHorizontal, Timer, UserCheck, UserPlus, Users, UsersRound,
+  AppWindow, BadgeCheck, BellRing, Bot, Building2, CalendarClock, ChartLine, ClipboardCheck, FileArchive, FileUp, House, Inbox, KeyRound, Layers, LifeBuoy, LockKeyhole, type LucideIcon, Network, Plug, Plus, Radio, RotateCw, Settings, ShieldAlert, ShieldCheck, ShieldHalf, SlidersHorizontal, Timer, UserCheck, UserPlus, Users, UsersRound,
 } from "lucide-react";
 
 export interface NavPage {
@@ -19,6 +19,8 @@ export interface RailItem extends NavPage {
   except?: string[];
   /** Pages reachable from this item's tabs; listed in the palette, not in the rail. */
   pages?: NavPage[];
+  /** The permission the page needs; the rail hides the item from a session without it (the server still decides). */
+  perm?: string;
 }
 
 export interface RailGroup {
@@ -74,7 +76,7 @@ export const RAIL: RailGroup[] = [
         id: "mine", label: "My access", icon: BadgeCheck, path: "/access/mine", also: ["/access/requests"], keywords: "what i have entitlements remove",
         pages: [{ path: "/access/requests", label: "My requests", keywords: "history drafts status submitted" }],
       },
-      { id: "guests", label: "Guests I sponsor", icon: UserPlus, path: "/access/guests", keywords: "guest sponsor invite visitor contractor volunteer partner sponsorship bulk csv approve transfer" },
+      { id: "guests", label: "Guests I sponsor", icon: UserPlus, path: "/access/guests", perm: "guests.sponsor", keywords: "guest sponsor invite visitor contractor volunteer partner sponsorship bulk csv approve transfer" },
       { id: "jit", label: "Just-in-time", icon: Timer, path: "/access/jit", keywords: "jit elevation temporary privileged break glass" },
       {
         id: "reviews", label: "Access reviews", icon: ClipboardCheck, path: "/governance/reviews", also: ["/governance/lifecycle", "/governance/guest-lifecycle", "/governance/terms", "/governance/workflows", "/governance/drift"], keywords: "certification campaigns attestation",
@@ -133,6 +135,11 @@ export function isActive(item: RailItem, pathname: string) {
   if (item.path === "/") return pathname === "/";
   if (item.except?.some((p) => under(pathname, p))) return false;
   return under(pathname, item.path) || !!item.also?.some((p) => under(pathname, p));
+}
+
+/** The rail without the entries the session lacks the permission for; empty groups drop out. */
+export function visibleRail(can: (permission: string) => boolean): RailGroup[] {
+  return RAIL.map((g) => ({ ...g, items: g.items.filter((i) => !i.perm || can(i.perm)) })).filter((g) => g.items.length > 0);
 }
 
 export function railItemFor(pathname: string) {
