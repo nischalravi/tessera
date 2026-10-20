@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -81,6 +82,11 @@ type world struct {
 	dir    string
 	tenant tenancy.ID
 	slug   string
+	// answered, while login waits for the browser, is closed once the browser
+	// has answered the device code. The CLI's polling sleeps wait for it before
+	// moving the fake clock on, so a slow machine (-race) cannot expire the code
+	// before it is approved.
+	answered atomic.Pointer[chan struct{}]
 }
 
 const slug = "tiny"
@@ -147,6 +153,12 @@ func (w *world) runWith(stdout *syncBuf, args ...string) result {
 		stdout: o, stderr: &errb, now: w.clock.Now,
 		sleep: func(ctx context.Context, d time.Duration) error {
 			time.Sleep(10 * time.Millisecond)
+			if ch := w.answered.Load(); ch != nil {
+				select {
+				case <-*ch:
+				case <-time.After(30 * time.Second):
+				}
+			}
 			w.clock.Advance(d)
 			return ctx.Err()
 		}})
@@ -179,6 +191,9 @@ var codeRE = regexp.MustCompile(`[BCDFGHJKLMNPQRSTVWXZ]{4}-[BCDFGHJKLMNPQRSTVWXZ
 func (w *world) login(email string, roles []auth.Role, decision string, extra ...string) result {
 	w.t.Helper()
 	var out syncBuf
+	answered := make(chan struct{})
+	w.answered.Store(&answered)
+	defer w.answered.Store(nil)
 	done := make(chan result, 1)
 	go func() {
 		args := append([]string{"login", "--server", w.srv.URL, "--tenant", w.slug}, extra...)
@@ -188,10 +203,12 @@ func (w *world) login(email string, roles []auth.Role, decision string, extra ..
 	for {
 		if code := codeRE.FindString(out.String()); code != "" {
 			w.browser(email, roles, code, decision)
+			close(answered)
 			break
 		}
 		select {
 		case r := <-done: // the command ended without printing a code
+			close(answered)
 			return r
 		default:
 		}
