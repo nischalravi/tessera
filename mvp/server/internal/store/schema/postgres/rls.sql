@@ -1346,3 +1346,31 @@ DROP POLICY IF EXISTS tenant_isolation ON catalog_item_populations;
 CREATE POLICY tenant_isolation ON catalog_item_populations
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE match_results ENABLE ROW LEVEL SECURITY;
+ALTER TABLE match_results FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON match_results;
+CREATE POLICY tenant_isolation ON match_results
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE identity_merge_requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE identity_merge_requests FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON identity_merge_requests;
+CREATE POLICY tenant_isolation ON identity_merge_requests
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE matching_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE matching_settings FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON matching_settings;
+CREATE POLICY tenant_isolation ON matching_settings
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE claim_links ENABLE ROW LEVEL SECURITY;
+ALTER TABLE claim_links FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON claim_links;
+CREATE POLICY tenant_isolation ON claim_links
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));

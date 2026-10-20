@@ -288,6 +288,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/api/identity-merges/{merge_id}/unmerge" {
 			continue // TestCorrelationAPI_CrossTenant (a UUID, not a fixture id)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/identity-matches/{match_id}") || strings.HasPrefix(rt.Pattern, "/api/identity-merge-requests/{merge_request_id}") {
+			continue // TestMatchingAPI_CrossTenant (UUIDs, not fixture ids)
+		}
 		if rt.Pattern == "/api/affiliations/{affiliation_id}/end" {
 			continue // TestAffiliationsAPI_CrossTenant (a UUID, not a fixture id)
 		}

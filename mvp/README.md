@@ -416,7 +416,12 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `POST /api/approvals/delegations/{id}/revoke` ·
 `GET /api/correlation/queue` · `GET /api/correlation/decisions` ·
 `POST /api/accounts/{id}/link {identity_id, reason}` · `POST /api/accounts/{id}/not-person {reason}` ·
-`DELETE /api/accounts/{id}/link` · `POST /api/identities/{id}/merge {into, reason}` ·
+`DELETE /api/accounts/{id}/link` · `POST /api/identities/{id}/merge {into, reason}` (202 and a request
+when a second reviewer is needed) ·
+`GET /api/identity-matches[?status=review|reverification|decided|all&limit=]` ·
+`POST /api/identity-matches/{match_id}/decide {decision: link|new_person|reject, reason}` ·
+`GET /api/identity-merge-requests[?status=]` · `POST /api/identity-merge-requests/{id}/approve {}|reject {reason}` ·
+`GET|PUT /api/admin/matching {auto_link_tier_b, require_review_tier_a, unmerge_window_days}` ·
 `GET /api/identity-merges` · `POST /api/identity-merges/{id}/unmerge {reason}` ·
 `GET /api/access/as-of?resource=&date=` · `GET|POST /api/evidence/packs` ·
 `GET /api/evidence/packs/{id}` · `GET /api/evidence/packs/{id}/download` (see "Point-in-time access and evidence packs")
@@ -966,12 +971,18 @@ Connectors tie most accounts to a person. **Directory → Accounts → Account m
   Connector syncs keep it until someone releases it, which hands the account back to the
   connector's mapping.
 - **Merge** (identity page, More actions → Merge into…) moves the merged identity's accounts,
-  account decisions, owned identities, reports and agent delegations to the identity kept. The
-  merged identity gets status `merged`; syncs keep it merged and resolve references to it to the
-  survivor. History (usage, reviews, requests, HRIS events) is not moved. An identity bound to a
-  Tessera sign-in user cannot be the merged side, because credentials never move.
-- **Undo** (Merges tab) works for 180 days. It moves back every recorded row that still points
-  at the survivor; rows changed since stay and are listed. Merges into an identity that was
+  account decisions, owned identities, reports and agent delegations to the identity kept, and
+  since GU-5 also its source records, identifiers, affiliations, sponsorships, access bundle
+  items, lifecycle record and pending access requests (see Identity matching and merging below).
+  The merged identity gets status `merged`; syncs keep it merged and resolve references to it to
+  the survivor. History (usage, reviews, decided requests, HRIS events) is not moved. Credentials
+  never move: the merged person's sign-in users are disabled and their sessions ended (a user that
+  holds a role blocks the merge until the role is removed). A merge where either person holds
+  privileged access, has IAL 2 or more or is an employee needs a second reviewer.
+- **Undo** (Merges tab) works for 180 days by default (the tenant can set another window, under
+  Identity matches → Settings). It moves back every recorded row that still points
+  at the survivor; rows changed since stay and are listed, and so are the rows created after the
+  merge, which stay with the survivor (`created_after`). Merges into an identity that was
   merged later are undone last-first.
 
 Decisions need `identities.correlate`, merges `identities.merge` (both: policy admin), each
@@ -1328,9 +1339,16 @@ The link is `<TESSERA_PUBLIC_URL>/claim#t=<43 characters>`. The page reads the t
    proves control of the address once, for the claim (A0, 800-63A contact verification); it is never an
    authenticator (`docs/knowledge/01`: email is not an acceptable out-of-band authenticator).
 3. **existing_account**: "Do you already have an account with the organization?", asked of every
-   claimant. "No" continues. "Yes" is recorded on the intake (`existing_account`, for the review
-   queue) and the guest is told an administrator will follow up. **It never links** (K3): matching
-   and linking are GU-5, whose seam is `claim.Service.OnExistingAccount`.
+   claimant. "No" continues. "Yes" is recorded on the intake (`existing_account`) and answers
+   `{status:"redirect", redirect}`: a sign-in as that account at the tenant's identity provider (login
+   purpose `claim`, recorded as a `claim_links` row, `prompt=login`, the sponsorship's AAL). The answer
+   itself never links (K3). When the sign-in comes back and the person who signed in is one of the
+   candidates the matcher found for this invitation, the intake is **linked by sign-in** (Tier A): the
+   sponsorship, affiliations and bundle become theirs, no credential is created, the claim completes
+   (`/claim?result=complete`). Otherwise nothing is linked and the claim goes on at step 4 as a new
+   identity with the suspicion still in the review queue (`/claim?result=continue`, the same for every
+   reason). Whether the matcher found anything never shows: every claimant gets the same question and
+   the same answer.
 4. **credential**: the guest is sent to the bound credential authority to sign in. The claim
    completes only on a sign-in at the sponsorship's required AAL, as the account that was set up for
    this claim, through that authority (§7.1): then identity `invited` → `active`, the sponsorship's
@@ -1377,7 +1395,7 @@ name, organization, sponsor, population, end date, nothing else) · `POST existi
 `POST credential` (answers `{redirect}`) · `POST resend {email}` ("If an invitation exists for this
 address, we have sent a new link."). The design's `GET credential/callback` is the existing
 `/api/auth/oidc/{connection_id}/callback` with the login purpose `claim`; it sends the browser back to
-`/claim?result=complete|failed`. The Vite dev server proxies `/public/t`.
+`/claim?result=complete|failed|continue`. The Vite dev server proxies `/public/t`.
 
 **Rate limits** (`internal/ratelimit`, in process, token buckets of N per window; throttles are
 audited as `claim.throttled` without a token or code): start 10 per IP per 10 minutes (client IP as
@@ -1387,7 +1405,8 @@ bot challenge yet); verify/send 3 per session per 10 minutes, 5 per address per 
 
 **Audit actions:** `claim.invitation.issue|revoke|expire`, `claim.start`, `claim.start.refused`,
 `claim.code.send|failed|locked`, `claim.verify_contact`, `claim.existing_account`,
-`claim.credential.start|pending|failed`, `claim.complete`, `claim.throttled`, `claim.proof.rejected`.
+`claim.credential.start|pending|failed`, `claim.complete`, `claim.link`, `claim.link.failed`, `claim.throttled`,
+`claim.proof.rejected`.
 
 **Dev completion path** (the only credential authority so far; GU-8 does the real ones): outside
 production with the dev IdP configured, `credential.DevIdP` registers the guest with the dev IdP over
@@ -1404,13 +1423,67 @@ sign-in" and pick the passkey for the guest on the dev IdP page. Back on `/claim
 and CSS, no third-party scripts, works at 360 px; `npm test` covers its model and client, `go test
 ./internal/api -run TestClaim` the API end to end.
 
-**Deferred:** matching and linking on "yes" (GU-5), identity verification and IAL above 0 (GU-7), real
+**Deferred:** identity verification and IAL above 0 (GU-7), real
 credential authorities, passwords, MFA enrolment, the Tessera-hosted service (GU-8), terms and
 consent, recovery (GU-10), SMS codes, claim codes for letters, a bot challenge, and shared (multi-node)
 rate-limit state. Parity fixtures are unchanged. After pulling this change run `./run.sh --reseed`:
 it adds the claim tables and three columns to `intake_records`, widens its `invitation_status` check
 and allows the login purpose `claim`.
 themselves. Not yet: provisioning into the target system (#103), business roles (#161).
+
+### Identity matching and merging
+
+Issue #68 (GU-5; design `docs/design/guest-accounts-and-claim.md` §5, §6.5, §9). Code:
+`internal/identity/match` (the matcher), `internal/correlation` (the merge engine of #160, extended: there
+is no second engine), `internal/identity/merge` (policy around it), `internal/api/matching.go`, schema
+`0363_matching.sql`, the page `frontend/src/features/directory/IdentityMatches.tsx`.
+
+**Matcher.** Names are normalized (Unicode NFKC, case folding, diacritics removed, "given family" and "family
+given" order, preferred names) and compared with Jaro-Winkler (tested against the published reference values).
+Tiers (§5.3) and the rules that fire: **A** exact (the same source record already linked, the same authoritative
+identifier in two sources, the same federated `(issuer, subject)` already bound, or the claimant signed in as the
+person), **B** strong (verified email, date of birth and name similarity 0.92 or more), **C** possible (name 0.85 and
+date of birth, the same verified email, the same verified phone), **D** none. A date of birth is kept only as a keyed
+hash (`dob_key` in a source record), and a day-and-month transposition still compares equal. Modes: *authoritative*
+(HRIS, SIS: Tier A auto-links, Tier B only if the tenant allows it and both sides are authoritative, otherwise review),
+*self-asserted* (sponsor invitations: **never auto-links**; a match is a "suspected existing person" flag),
+*federated* (an existing binding auto-binds). Every result is a `match_results` row with the tier, score, the rules
+fired and the attributes compared **masked**, so "why did this match" is answerable for every link. Sponsor
+invitations (single and bulk) run the matcher; nothing the sponsor sees depends on it. The matcher is exposed in
+authoritative mode and tested, but no authoritative intake path exists yet (SIS/HRIS intake is GU-4). A national-identifier
+rule is deliberately absent (design §13.4 is open); `match.NationalIDRule` marks where it would go.
+
+**Review queue.** Directory → Users → **Identity matches** (`/directory/identity-matches`; the Inbox shows a banner with
+the count): one item per intake with the candidates side by side with the invited person, masked attributes, the
+rules that fired, the candidate's affiliations, privileged access and IAL, and the decision with a reason:
+**link**, **new person**, **reject intake** (the invitation and sponsorship end). Tabs: To review, Second reviewer,
+Waiting for sign-in, Decided, Settings. The seeded demo tenant has one item: `./run.sh --reseed`.
+
+**Four eyes.** A merge, or a reviewer's link, where either person holds privileged access, has IAL 2 or more (recorded, or
+an HR or student record, vetted at hire) or is an employee does not apply when asked. It becomes a pending
+`identity_merge_requests` row (HTTP 202) that a **different** reviewer approves or rejects (the requester can withdraw
+it); a self-approval is refused by the API and by the table. A link by sign-in is proof of possession and needs none.
+
+**Reverification (§5.5.3).** A reviewer's link needs the claimant at the existing person's IAL. While the claimant's IAL
+is lower nothing is linked and no access is granted: the decision is recorded as `reverification_required` and completes
+when the claimant signs in as the existing person (the claim's "yes" step). An IAL 2 employee is never linked to someone
+who proved only email control.
+
+**What a merge does.** One transaction, one ledger entry listing the moves (`identity.merge`): the engine moves the
+rows (each recorded so an unmerge restores it); the merged person's sign-in users are disabled and sessions ended
+(credentials never transfer; the survivor's are untouched; a user with a role blocks the merge); both people's contact
+channels are told through the notification outbox (a security alert that names no one); the intakes' claim links stop
+working; bundle memberships follow the moved accounts and waiting bundles are granted, and the reference groups are
+recomputed, through `internal/guests/access` (`access.Merged`). Unmerge replays the moves in reverse within the window,
+recomputes both people and lists what was created since. A merge is refused when it would make a person their own sponsor.
+
+**Deviations and follow-ups.** The groups engine (GR-1/GR-2) is not built, so group memberships move through the
+GU-12 access code instead; one ledger entry lists all moves instead of one event per moved item; routes use `/decide`,
+`/approve`, `/unmerge` path segments like the rest of the API, not the design's colon actions. Follow-ups: the TAP ID
+Match-compatible endpoint (`PUT /match/api/1/v1/people/{sor}/{sorid}`, tenant flag, needs a reference-id table and a
+choice of intake channel), a "this wasn't me" link in the merge notification (a public freeze endpoint and incident),
+wiring the matcher to SIS/HRIS intake (GU-4), the national-identifier rule, and a blocking index for large tenants (the
+matcher scans every person per intake, once per bulk file).
 
 ### Notifications
 
@@ -2143,7 +2216,7 @@ the right. Arrow keys move between items.
 | Group | Items |
 |---|---|
 | (top) | **Home**, **Inbox** (count) |
-| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Ownership, Accounts (with *Account matches*), Help desk, Roles, Organizations (live, read-only, derived from departments) |
+| **Identity** | Users (with *Identity matches*), Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Ownership, Accounts (with *Account matches*), Help desk, Roles, Organizations (live, read-only, derived from departments) |
 | **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
 | **Protection** | Alerts (alerts, rules, channels), Policies & SoD (violations, policies, what-if simulation, SoD functions, risks and rulesets), Mitigating controls (mitigations, control library), Attribute policies, Access graph (with an *As of* date for *Who can access…*), Evidence packs, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
 | **Settings** | Connections (governed connections and the setup wizard), Flat-file apps, Conditional access (network ranges, policies, device signals), Admin |

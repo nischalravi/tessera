@@ -136,3 +136,18 @@ func SweepTenant(tx *store.TenantTx, now time.Time, eligible Eligibility) error 
 	_, err := Recompute(tx, now, Sweeper, 0, eligible)
 	return err
 }
+
+// Merged is what a merge (or an undone one) sets in motion for one of the two
+// people (design §5.4, issue #68). Group memberships move with the accounts the
+// merge re-pointed; the groups engine (GR-1, GR-2) that will own them is not
+// built, so Tessera-managed memberships go through this package: the bundle
+// items now on the person are granted if they are waiting (provisioning
+// operations where write-back is on), and the reference groups are recomputed
+// from the affiliations the person now has.
+func Merged(tx *store.TenantTx, now time.Time, actor string, personID int64) error {
+	if err := GrantPending(tx, personID, actor, now); err != nil {
+		return err
+	}
+	_, err := Recompute(tx, now, actor, personID, nil)
+	return err
+}

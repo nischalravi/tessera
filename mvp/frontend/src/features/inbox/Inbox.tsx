@@ -1,7 +1,8 @@
 import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Check, ClipboardCheck, Keyboard, KeyRound, ListChecks, Plug, Search, ShoppingCart, Trash2, X } from "lucide-react";
-import { HrisEvent, JitRequest, SimResult, ago, approveRequest, denyRequest, fmtDate, hrisExecute, jitDecide, relTime, removals, reviewDecide, simulate, useApi } from "../../api";
+import { HrisEvent, IdentityMatchList, JitRequest, SimResult, ago, approveRequest, denyRequest, fmtDate, hrisExecute, jitDecide, relTime, removals, reviewDecide, simulate, useApi } from "../../api";
+import { useSession } from "../../app/auth";
 import { usePersona } from "../../app/persona";
 import {
   Badge, Button, Callout, EmptyState, FilterChips, Flag, IdLink, Loading, Page, Tone, TypeBadge, useConfirm, useToast,
@@ -286,6 +287,21 @@ const FILTERS: { id: "all" | InboxKind; label: string }[] = [
   { id: "all", label: "All" }, { id: "approval", label: "Approvals" }, { id: "review", label: "Reviews" }, { id: "task", label: "Tasks" }, { id: "connection", label: "Connections" },
 ];
 
+/** Identity matches waiting for a reviewer (issue #68), for people who may decide them. */
+function IdentityMatchBanner() {
+  const { can } = useSession();
+  const { data } = useApi<IdentityMatchList>(can("identity_matches.review") ? "/identity-matches?status=review" : null);
+  if (!data || data.count === 0) return null;
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <Callout tone="warn">
+        {data.count} identity {data.count === 1 ? "match waits" : "matches wait"} for a reviewer: someone invited or imported might already be in Tessera.{" "}
+        <Link to="/directory/identity-matches">Review identity matches</Link>
+      </Callout>
+    </div>
+  );
+}
+
 export function Inbox() {
   const { persona } = usePersona();
   const [params, setParams] = useSearchParams();
@@ -394,6 +410,7 @@ export function Inbox() {
           </div>
         </div>
       )}
+      <IdentityMatchBanner />
       <div className="spread" style={{ marginBottom: 12, flexWrap: "wrap" }}>
         <FilterChips label="Filter inbox" value={filter} onChange={(v) => setParams(v === "all" ? {} : { filter: v })} options={FILTERS.map((f) => ({ ...f, count: counts[f.id] ?? 0 }))} />
         <div className="row">

@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
+	"github.com/nischalravi/tessera/mvp/server/internal/identity/match"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
@@ -165,6 +166,7 @@ func (s *Service) BulkInvite(tx *store.TenantTx, by Actor, rows []Row, dryRun bo
 		res.BatchID = uuid.NewString()
 	}
 	carry, seen := &Carry{}, map[string]bool{}
+	pool := &match.Pool{} // the people a row can match are loaded once for the file
 	for _, row := range rows {
 		rr := RowResult{Row: row.Line, Email: strings.TrimSpace(row.Invite.Email), Population: row.Invite.Population, PolicyVersion: s.Policy.Version}
 		refused := func(code, msg string, rules []string) {
@@ -204,7 +206,7 @@ func (s *Service) BulkInvite(tx *store.TenantTx, by Actor, rows []Row, dryRun bo
 				res.WouldCreate++
 				break
 			}
-			out, err := s.writeInvite(tx, by, p, store.ChannelBulkInvite, res.BatchID, now)
+			out, err := s.writeInvite(tx, by, p, store.ChannelBulkInvite, res.BatchID, pool, now)
 			if err != nil {
 				return nil, err
 			}

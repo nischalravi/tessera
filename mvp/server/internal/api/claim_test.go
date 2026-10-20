@@ -898,6 +898,42 @@ func TestClaim_NoAuthorityStaysPending(t *testing.T) {
 	}
 }
 
+// TestClaimSignInConnection: only an OIDC connection signs a claimant in as an
+// existing person, whatever the default is.
+func TestClaimSignInConnection(t *testing.T) {
+	mk := func(name, proto string, def bool) *store.IdPConnection {
+		return &store.IdPConnection{Name: name, Protocol: proto, IsDefault: def}
+	}
+	oidc, oidc2 := mk("oidc", "oidc", false), mk("oidc2", "oidc", false)
+	oauth, saml := mk("oauth", "oauth2", true), mk("saml", "saml", false)
+	for name, tc := range map[string]struct {
+		in   []*store.IdPConnection
+		want *store.IdPConnection
+	}{
+		"none":                       {nil, nil},
+		"sole oidc":                  {[]*store.IdPConnection{oidc}, oidc},
+		"sole oauth2":                {[]*store.IdPConnection{oauth}, nil},
+		"sole saml":                  {[]*store.IdPConnection{saml}, nil},
+		"oauth2 default, oidc other": {[]*store.IdPConnection{oauth, oidc}, oidc},
+		"oidc and saml":              {[]*store.IdPConnection{saml, oidc}, oidc},
+		"two oidc, no default":       {[]*store.IdPConnection{oidc, oidc2}, nil},
+		"two oidc, one default":      {[]*store.IdPConnection{oidc, mk("d", "oidc", true)}, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := claimSignInConnection(tc.in)
+			if name == "two oidc, one default" {
+				if got == nil || !got.IsDefault {
+					t.Errorf("got %+v, want the default OIDC connection", got)
+				}
+				return
+			}
+			if got != tc.want {
+				t.Errorf("got %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestClaim_OnlyOIDCConnectionsServeAClaim: OAuth 2.0 sessions are AAL1 and
 // never phishing resistant, and the SAML callback does not serve claims, so
 // a claim never works through such a connection even when its profile is the
@@ -932,7 +968,8 @@ func TestClaim_OnlyOIDCConnectionsServeAClaim(t *testing.T) {
 	}
 }
 
-// TestClaim_ExistingAccountNeverLinks: "yes" is recorded for review and links nothing.
+// TestClaim_ExistingAccountNeverLinks: "yes" is recorded for review and, by itself,
+// links nothing: it only starts a sign-in as that person (claim_link_test.go).
 func TestClaim_ExistingAccountNeverLinks(t *testing.T) {
 	e := newClaimEnv(t, claimOpts{})
 	const email = "hasone@guest.example"
@@ -946,7 +983,7 @@ func TestClaim_ExistingAccountNeverLinks(t *testing.T) {
 	}
 	rec := pg.post("existing-account", `{"answer":"yes"}`)
 	m := decodeMap(t, rec)
-	if rec.Code != 200 || m["step"] != "credential" || !strings.Contains(m["message"].(string), "administrator will follow up") {
+	if rec.Code != 200 || m["step"] != "credential" || m["status"] != "redirect" || m["redirect"] == "" {
 		t.Fatalf("yes: %d %s", rec.Code, rec.Body)
 	}
 	if err := e.db.ReadTenant(context.Background(), e.tenant, func(tx *store.TenantTx) error {

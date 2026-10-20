@@ -36,6 +36,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/health"
 	"github.com/nischalravi/tessera/mvp/server/internal/helpdesk"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
+	"github.com/nischalravi/tessera/mvp/server/internal/identity/match"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/oauth"
@@ -329,6 +330,9 @@ func New(cfg Config) *Server {
 		}
 	}
 	s.guests = sponsorship.New(cfg.Identifiers)
+	if cfg.Identifiers != nil {
+		s.guests.Matcher = match.New(cfg.Identifiers)
+	}
 	s.claimLim = newClaimLimits()
 	if cfg.Identifiers != nil && cfg.PublicURL != "" {
 		if cfg.Secrets == nil {
@@ -376,6 +380,7 @@ func New(cfg Config) *Server {
 	s.registerReviewScheduleRoutes()
 	s.registerRoleReviewRoutes()
 	s.registerCorrelationRoutes()
+	s.registerMatchingRoutes()
 	s.registerAffiliationRoutes()
 	s.registerRequestRoutes()
 	s.registerRemovalRoutes()

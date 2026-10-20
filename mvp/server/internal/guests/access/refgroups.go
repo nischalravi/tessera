@@ -39,6 +39,8 @@ const (
 	RefIAL2               = "ref:ial:2"
 	RefSponsorEligible    = "ref:sponsor:eligible"
 	ialEmployeeEquivalent = 2 // a person from the HR or student system was vetted at hire
+	// EmployeeEquivalentIAL is that level, for callers that compare assurance (identity merges).
+	EmployeeEquivalentIAL = ialEmployeeEquivalent
 )
 
 // RefGroup describes one reference group.

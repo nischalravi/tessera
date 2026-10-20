@@ -171,8 +171,9 @@ func (s *Service) CheckCode(tx *store.TenantTx, sess *store.ClaimSession, submit
 // ExistingAccount records the claimant's answer to "do you already have an
 // account?". It is asked of every claimant, so asking it reveals nothing. The
 // answer is stored on the intake for the review queue and never links anyone
-// (K3); matching is GU-5 (see Service.OnExistingAccount). It moves the claim to
-// the credential step.
+// (K3). A "yes" is followed by a sign-in as the existing person (the API starts
+// it; the callback links by sign-in, CompleteLinked). It moves the claim to the
+// credential step: if the sign-in does not link, that is where the claim goes on.
 func (s *Service) ExistingAccount(tx *store.TenantTx, sess *store.ClaimSession, answer string, now time.Time) error {
 	if answer != "yes" && answer != "no" {
 		return refuse(422, "invalid_answer", "answer is yes or no")
@@ -183,15 +184,6 @@ func (s *Service) ExistingAccount(tx *store.TenantTx, sess *store.ClaimSession, 
 	if err := tx.SetIntakeExistingAccount(sess.IntakeID, answer, now); err != nil {
 		return err
 	}
-	if s.OnExistingAccount != nil {
-		in, err := tx.Intake(sess.IntakeID)
-		if err != nil {
-			return err
-		}
-		if err := s.OnExistingAccount(tx, in, answer); err != nil {
-			return err
-		}
-	}
 	v := readVerified(sess)
 	v.ExistingAt = now.UTC().Format("2006-01-02T15:04:05Z")
 	saveVerified(sess, v)
@@ -201,6 +193,37 @@ func (s *Service) ExistingAccount(tx *store.TenantTx, sess *store.ClaimSession, 
 	}
 	return auditEvent(tx, now, "claim.existing_account", "intake", sess.IntakeID, ojson.Object{{Key: "intake_id", Value: sess.IntakeID},
 		{Key: "answer", Value: answer}, {Key: "linked", Value: false}})
+}
+
+// ---------------------------------------------------------------- link by sign-in
+
+// ErrLinkNotReady is a link by sign-in for a claim that is not open.
+var ErrLinkNotReady = errors.New("claim: the claim is not open")
+
+// Linked is what a link by sign-in did to the claim: the invitation is done, as
+// the person the claimant signed in as. No credential was created for the guest
+// and none was transferred; the person's own credential is the one that proved it.
+// The caller has already linked the intake (merge.LinkBySignIn, which moved the
+// sponsorship, bundle and affiliations to the person, started the affiliations
+// and told the sponsor); this closes the claim session and records the assurance
+// the sign-in reached.
+func (s *Service) CompleteLinked(tx *store.TenantTx, sess *store.ClaimSession, person int64, b Binding, now time.Time) error {
+	if sess.CompletedAt != nil || sess.RevokedAt != nil || sess.Step == StepComplete {
+		return ErrLinkNotReady
+	}
+	if err := tx.PutIdentityAssurance(&store.Assurance{IdentityID: person, IAL: 0, AAL: b.AAL, Source: "claim_link", RecordedAt: now}); err != nil {
+		return err
+	}
+	v := readVerified(sess)
+	v.AAL, v.ACR, v.Authority = b.AAL, b.ACR, "existing_account"
+	saveVerified(sess, v)
+	sess.Step, sess.CompletedAt, sess.LastSeenAt = StepComplete, &now, now
+	if err := tx.SaveClaimSession(sess); err != nil {
+		return err
+	}
+	return auditEvent(tx, now, "claim.complete", "identity", int64s(person), ojson.Object{{Key: "intake_id", Value: sess.IntakeID},
+		{Key: "identity_id", Value: person}, {Key: "linked_by_sign_in", Value: true}, {Key: "connection_id", Value: b.ConnectionID.String()},
+		{Key: "aal", Value: b.AAL}, {Key: "acr", Value: b.ACR}})
 }
 
 // ---------------------------------------------------------------- credential

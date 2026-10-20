@@ -199,6 +199,8 @@ var tables = []string{
 	"grp_privileges", "grp_priv_settings",
 	// guest access bundles, assurance and catalog populations (schema/0362_guest_access.sql)
 	"guest_bundle_items", "identity_assurance", "catalog_item_populations",
+	// identity matching, merge requests, settings and claim links (schema/0363_matching.sql)
+	"match_results", "identity_merge_requests", "matching_settings", "claim_links",
 	// third-party OAuth app inventory (schema/0361_oauth_apps.sql)
 	"oauth_apps", "oauth_grants", "oauth_sync_state",
 }

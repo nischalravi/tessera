@@ -135,6 +135,13 @@ GET    /api/identities/{identity_id}/access-bundle   guests.read     -  # issue 
 GET    /api/refgroups                                graph.read      -  # issue #75
 POST   /api/refgroups/reconcile                      lifecycle.manage -  # issue #75
 POST   /api/identity-merges/{merge_id}/unmerge       identities.merge STEP_UP_POLICY  # issue #160
+GET    /api/identity-matches                         identity_matches.review -  # issue #68
+POST   /api/identity-matches/{match_id}/decide       identity_matches.review STEP_UP_POLICY  # issue #68
+GET    /api/identity-merge-requests                  identities.merge -  # issue #68
+POST   /api/identity-merge-requests/{merge_request_id}/approve identities.merge STEP_UP_POLICY  # issue #68
+POST   /api/identity-merge-requests/{merge_request_id}/reject  identities.merge STEP_UP_POLICY  # issue #68
+GET    /api/admin/matching                           matching.configure -  # issue #68
+PUT    /api/admin/matching                           matching.configure STEP_UP_POLICY  # issue #68
 GET    /api/catalog                                  requests.create -  # issue #164 (?all=1: catalog.manage in the handler)
 PUT    /api/catalog/items/{group_id}                 catalog.manage  STEP_UP_POLICY  # issue #164
 POST   /api/requests                                 requests.create -  # issue #164 (others: requests.create_for_others in the handler)

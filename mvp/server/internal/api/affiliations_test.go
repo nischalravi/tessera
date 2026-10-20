@@ -144,13 +144,25 @@ func TestAffiliationsAPI_DerivedStateAndMerged(t *testing.T) {
 		t.Errorf("after ending the last affiliation: %s", v.LifecycleState)
 	}
 	carol := f.B.IDs["carol"]
-	if rec := corrDo(h, l, "POST", fmt.Sprintf("/api/identities/%d/merge", carol), fmt.Sprintf(`{"into":%d,"reason":"dup"}`, f.B.IDs["alice"])); rec.Code != 200 {
+	// both are employees: the merge waits for a second reviewer
+	rec := corrDo(h, l, "POST", fmt.Sprintf("/api/identities/%d/merge", carol), fmt.Sprintf(`{"into":%d,"reason":"dup"}`, f.B.IDs["alice"]))
+	if rec.Code != 202 {
 		t.Fatalf("merge: %d %s", rec.Code, rec.Body)
+	}
+	var pend struct {
+		Request mergeRequestView `json:"request"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &pend); err != nil {
+		t.Fatal(err)
+	}
+	l2 := policyAdmin(t, f, f.B.ID, "pa2@b.example")
+	if rec := corrDo(h, l2, "POST", "/api/identity-merge-requests/"+pend.Request.ID+"/approve", `{}`); rec.Code != 200 {
+		t.Fatalf("approve: %d %s", rec.Code, rec.Body)
 	}
 	if v := decodeAffs(t, corrDo(h, l, "GET", fmt.Sprintf("/api/identities/%d/affiliations", carol), "")); v.LifecycleState != "merged" {
 		t.Errorf("merged identity reads %s", v.LifecycleState)
 	}
-	rec := corrDo(h, l, "POST", fmt.Sprintf("/api/identities/%d/affiliations", carol), `{"type":"alum","reason":"x"}`)
+	rec = corrDo(h, l, "POST", fmt.Sprintf("/api/identities/%d/affiliations", carol), `{"type":"alum","reason":"x"}`)
 	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "identity_merged") {
 		t.Errorf("add to merged: %d %s", rec.Code, rec.Body)
 	}

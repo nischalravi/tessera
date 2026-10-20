@@ -66,11 +66,6 @@ type Service struct {
 	IdleTTL, AbsoluteTTL, CodeTTL time.Duration
 	// Replays is the memory of accepted proofs (see proof.go).
 	Replays *Replays
-	// OnExistingAccount is the seam for matching (GU-5): it is called with the
-	// claimant's answer to "do you already have an account?", in the claim's
-	// transaction, after the answer is recorded on the intake. Today it is nil:
-	// a "yes" is only recorded for review and never links (K3).
-	OnExistingAccount func(tx *store.TenantTx, intake *store.IntakeRecord, answer string) error
 }
 
 // New returns a Service.
@@ -419,7 +414,18 @@ func (s *Service) StatusOf(tx *store.TenantTx, sess *store.ClaimSession) (*Statu
 	if err != nil {
 		return nil, err
 	}
-	all, err := tx.Sponsorships(store.SponsorshipFilter{Guest: sess.IdentityID})
+	// after a link by sign-in the guest's sponsorship belongs to the person they linked to
+	holder := sess.IdentityID
+	if guest.Status == store.IdentityStatusMerged {
+		surv, err := tx.MergeSurvivors()
+		if err != nil {
+			return nil, err
+		}
+		if to, ok := surv[holder]; ok {
+			holder = to
+		}
+	}
+	all, err := tx.Sponsorships(store.SponsorshipFilter{Guest: holder})
 	if err != nil {
 		return nil, err
 	}

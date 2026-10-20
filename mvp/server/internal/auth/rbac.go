@@ -100,6 +100,10 @@ const (
 	// account correlation (issue #160)
 	PermIdentitiesCorrelate Permission = "identities.correlate"
 	PermIdentitiesMerge     Permission = "identities.merge"
+	// identity matching (guest accounts design §5, issue #68): the review queue
+	// and the matching settings
+	PermIdentityMatchesReview Permission = "identity_matches.review"
+	PermMatchingConfigure     Permission = "matching.configure"
 	// affiliations of a person (guest accounts design, issue #64)
 	PermIdentitiesAffiliate Permission = "identities.affiliate"
 	// access requests (issue #164)
@@ -172,6 +176,7 @@ var rolePermissions = map[Role][]Permission{
 	RolePolicyAdmin: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
 		PermReviewsDecide, PermReviewsExport, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
 		PermIdentitiesCorrelate, PermIdentitiesMerge, PermIdentitiesAffiliate,
+		PermIdentityMatchesReview, PermMatchingConfigure,
 		PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide, PermCatalogManage, PermRolesManage, PermLifecycleManage,
 		PermGuestsSponsor, PermGuestsRead, PermSponsorshipsApprove, PermIdentitiesContain,
 		PermJobsRead, PermProvisioningRead, PermProvisioningManage, PermAlertsRead, PermAlertsManage, PermOwnershipManage, PermSoDManage, PermSoDMitigate, PermSoDApprove,

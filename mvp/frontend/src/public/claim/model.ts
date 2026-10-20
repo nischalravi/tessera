@@ -77,11 +77,21 @@ export function viewOf(s: ClaimStatus): ClaimView {
   return { kind: "step", step: s.step };
 }
 
-/** ?result=complete|failed, which the credential authority's callback sends the browser back with. */
-export function resultFromSearch(search: string): "complete" | "failed" | null {
+export type ClaimResult = "complete" | "failed" | "continue";
+
+/**
+ * ?result=complete|failed|continue, which the sign-in callbacks send the browser back with.
+ * "continue" is a sign-in as an existing account that did not link anything: it looks the same whatever the
+ * reason, and the claim goes on at the credential step.
+ */
+export function resultFromSearch(search: string): ClaimResult | null {
   const v = new URLSearchParams(search).get("result");
-  return v === "complete" || v === "failed" ? v : null;
+  return v === "complete" || v === "failed" || v === "continue" ? v : null;
 }
+
+/** Where a "yes, I have an account" answer sends the browser: the sign-in the API started, or nowhere. */
+export const signInRedirect = (r: { status?: string; redirect?: string }): string | null =>
+  r.status === "redirect" && typeof r.redirect === "string" && r.redirect !== "" ? r.redirect : null;
 
 /** Population in a sentence. */
 export const POPULATION_PHRASE: Record<string, string> = {

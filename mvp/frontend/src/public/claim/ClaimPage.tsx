@@ -12,7 +12,7 @@ import { ClaimError, ClaimSigner, ClaimStatus, ClaimStep, claimApi, claimResend,
 import { Button } from "../../components/Button";
 import { Callout } from "../../components/Feedback";
 import { dropKey, loadKey, loadNonce, newKey, dropNonce, saveNonce } from "./keystore";
-import { POPULATION_PHRASE, STEP_LABEL, ClaimView, codeReady, emailOk, normalizeCode, resultFromSearch, stepIndex, tenantSlug, tokenFromHash, viewOf, visibleSteps } from "./model";
+import { POPULATION_PHRASE, STEP_LABEL, ClaimResult, ClaimView, codeReady, emailOk, normalizeCode, resultFromSearch, signInRedirect, stepIndex, tenantSlug, tokenFromHash, viewOf, visibleSteps } from "./model";
 import { publicJwk, signerFor } from "./proof";
 
 const message = (e: unknown) => (e instanceof ClaimError ? e.message : "Something went wrong. Try again.");
@@ -28,7 +28,7 @@ export default function ClaimPage() {
   const [conn, setConn] = useState<Conn | null>(null);
   const [status, setStatus] = useState<ClaimStatus | null>(null);
   const [view, setView] = useState<ClaimView>({ kind: "loading" });
-  const [failed, setFailed] = useState(false);
+  const [result, setResult] = useState<ClaimResult | null>(null);
   const started = useRef(false);
 
   const show = useCallback((s: ClaimStatus) => {
@@ -44,7 +44,7 @@ export default function ClaimPage() {
     const result = resultFromSearch(window.location.search);
     // the token never stays in the address bar, history or a bookmark
     window.history.replaceState(null, "", window.location.pathname);
-    setFailed(result === "failed");
+    setResult(result);
     (async () => {
       try {
         if (token) {
@@ -93,11 +93,14 @@ export default function ClaimPage() {
         {status && view.kind !== "check_link" && view.kind !== "loading" && (
           <>
             {view.kind !== "complete" && <Progress status={status} />}
-            {failed && view.kind === "step" && view.step === "credential" && (
+            {result === "failed" && view.kind === "step" && view.step === "credential" && (
               <Callout tone="bad">We could not finish your sign-in. It may not have been strong enough, or it was for a different account. Try again.</Callout>
             )}
+            {result === "continue" && view.kind === "step" && view.step === "credential" && (
+              <Callout tone="info">That sign-in was not added to this invitation. You can carry on and set up a new sign-in below.</Callout>
+            )}
             {view.kind === "step" && conn && (
-              <StepView step={view.step} status={status} conn={conn} onStatus={(s) => { setFailed(false); show(s); }} />
+              <StepView step={view.step} status={status} conn={conn} onStatus={(s) => { setResult(null); show(s); }} />
             )}
             {view.kind === "waiting" && <Waiting why={view.why} />}
             {view.kind === "complete" && <Done status={status} />}
@@ -238,31 +241,36 @@ function VerifyContact({ status, conn, onDone }: { status: ClaimStatus; conn: Co
 
 function ExistingAccount({ status, conn, onDone }: { status: ClaimStatus; conn: Conn; onDone: () => Promise<void> }) {
   const [answer, setAnswer] = useState<"yes" | "no" | "">("");
-  const [note, setNote] = useState<string | null>(null);
   const a = useAction();
   const go = (e: FormEvent) => {
     e.preventDefault();
     if (!answer) return;
     return a.run(async () => {
       const r = await claimApi.existingAccount(conn.slug, conn.signer, conn.nonce, answer);
-      if (r.message) setNote(r.message);
+      // "yes": sign in with that account. If it is the account this invitation is for, the invitation
+      // is added to it; if not, nothing changes and the claim goes on. Either way the page says nothing
+      // about whether an account was expected.
+      const to = signInRedirect(r);
+      if (to) {
+        window.location.assign(to);
+        return;
+      }
       await onDone();
     });
   };
   return (
     <>
       <Heading>Do you already have an account with {status.tenant}?</Heading>
-      <p>Everyone is asked this. Your answer does not change what happens next: this account is set up either way.</p>
+      <p>Everyone is asked this. If you say yes, you sign in with that account first, so this invitation can be added to it. If you say no, you set up a new sign-in.</p>
       <form onSubmit={go} className="stack">
         <fieldset className="claim-choices">
           <legend className="sr-only">Do you already have an account with {status.tenant}?</legend>
           <label className="row tight"><input type="radio" name="existing" value="no" checked={answer === "no"} onChange={() => setAnswer("no")} /> No, I do not</label>
           <label className="row tight"><input type="radio" name="existing" value="yes" checked={answer === "yes"} onChange={() => setAnswer("yes")} /> Yes, I do</label>
         </fieldset>
-        {answer === "yes" && <p className="xs">An administrator will follow up about your existing account. You can carry on setting up this one.</p>}
-        <div><Button variant="primary" type="submit" disabled={!answer || a.busy}>Continue</Button></div>
+        {answer === "yes" && <p className="xs">Next you sign in with your existing account, using a passkey if you have one.</p>}
+        <div><Button variant="primary" type="submit" disabled={!answer || a.busy}>{answer === "yes" ? "Sign in" : "Continue"}</Button></div>
       </form>
-      {note && <div role="status" aria-live="polite"><Callout tone="ok">{note}</Callout></div>}
       <div role="status" aria-live="polite">{a.err && <Callout tone="bad">{a.err}</Callout>}</div>
     </>
   );

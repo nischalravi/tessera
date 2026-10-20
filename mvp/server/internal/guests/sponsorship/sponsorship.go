@@ -40,6 +40,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/claim"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/affiliations"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
+	"github.com/nischalravi/tessera/mvp/server/internal/identity/match"
 	"github.com/nischalravi/tessera/mvp/server/internal/lifecycle"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/requests"
@@ -97,6 +98,11 @@ type Service struct {
 	// sponsorship becomes active (GU-6) and revokes it when the sponsorship
 	// ends. Nil, or not Ready: the invitation stays "ready" and nothing is sent.
 	Claim *claim.Service
+	// Matcher looks for the invited person among the people already known
+	// (GU-5). It only records what it finds for a reviewer: an invitation is
+	// self-asserted, never links, and nothing the sponsor sees depends on it.
+	// Nil: no matching.
+	Matcher *match.Matcher
 }
 
 // New returns a Service with the default policy.
