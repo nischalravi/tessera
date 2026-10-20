@@ -1,0 +1,2 @@
+privilege,holder_type,holder,applies_to,scope,source
+stem_view,everyone,,self,self,api

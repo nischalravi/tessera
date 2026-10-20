@@ -479,6 +479,8 @@ func New(cfg Config) *Server {
 	s.registerGroupsAPIRoutes()
 	s.registerSCIMRoutes()
 	s.registerGroupsRuleRoutes()
+	s.registerGroupsGovRoutes()
+	s.registerGroupsReportRoutes()
 	s.registerReadinessRoutes()
 	s.registerAgentRoutes()
 	s.registerAWSRoutes()

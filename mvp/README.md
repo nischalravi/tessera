@@ -2759,6 +2759,49 @@ Cedar library, so the fragment's parser and its evaluator (the PDP of §8.6) are
   `TestPolicyGroups_PDPAgreesWithEngine`, `TestSync_RecordsCommitOnEveryChange`, apply, diff, indexer),
   `internal/api` (`TestGroupsRoutesRequirePrivilege` covers the policy routes, `TestGroupsPolicyAPI`),
   `TestIsolation_GroupPolicy*` in `internal/store`, `TestGroupsPolicyValidate` in `cmd/tessera`.
+#### Group attestation, deprovisioning, the Inbox and reports (GR-14, issue #57)
+
+Design `docs/design/groups-grouper-parity.md` §10.4, §10.5, §10.7. Schema `0292_group_attestation.sql`;
+packages `internal/groups/{attest,deprov,inbox,reports,viz,gov}`; background jobs (`attest.Runner`,
+`deprov.Runner`, `reports.Runner`) start with the server. Every route needs the route permission
+and the object privilege (403 `privilege_required`).
+
+- **Attestation** is a group-membership campaign of `internal/reviews` (`reviews.GenerateGroupCampaign`):
+  every effective member is an item with usage context (the identity's permission use, how the
+  membership was granted, peer coverage). The population is **frozen** at the start: count and
+  SHA-256 are stored and `population_verified` in the campaign answer recomputes them. Settings
+  (interval, window, reviewers `admins` or a group, reminder days, overdue action `none` |
+  `disable_group` | `remove_unattested`) sit on a group or folder; a group takes its nearest
+  folder's. A revoke removes the direct membership through the engine with the decider's
+  privileges and reads it back (`apply_state`). Nested members cannot be removed here (skipped,
+  say so). The overdue action acts as the user who saved the settings, checked again when it fires:
+  without the privilege nothing happens and the group's admins get an `attestation_overdue` task.
+  Scheduled campaigns start `interval_days` after the last one (or after the settings were saved).
+- **Inbox**: `GET /api/groups/inbox/tasks`, `POST /api/groups/inbox/tasks/{task_id}/close`. A task names
+  its object and is shown to whoever holds admin (stem_admin on a folder) on it, or is assigned.
+- **Rules** now offer `open_inbox_task` (`params.subject`, `message`, `to_identity`) and
+  `start_micro_certification` (`params.days`, default 14; the rule's author needs admin on the group).
+- **Deprovisioning**: `PUT /api/groups/deprovisioning/settings` names the affiliation groups (and the
+  veto switch); `PUT /api/groups/folders/{id}/deprovisioning` sets `notify` | `auto_after` (days) |
+  `auto_now`. When an identity leaves every affiliation (group events), or is no longer active, one item
+  and Inbox task per folder with its direct memberships or privileges is opened. Automatic removal acts
+  as the user who saved the folder's mode. `POST /api/groups/deprovisioning/items/{item_id}/resolve`
+  `{action: remove|dismiss, reason}`. A built-in rule vetoes new direct memberships of a
+  deprovisioned identity (`409 vetoed`, rule `deprovisioning`); `override_reason` on
+  `POST /api/groups/{id}/members` lets a group admin through, audited. Joining an affiliation lifts it.
+- **Reports** come from a fixed catalogue (`GET /api/groups/reports/catalogue`); three need later parts
+  (`available: false`). Saved reports (`/api/groups/reports/saved...`) run on demand or daily, weekly or
+  monthly as their owner with the privileges the owner holds then; rows are filtered by the subject's
+  privileges, output is CSV (formula cells quoted) or JSON, capped at 10,000 rows (`truncated`). Runs are
+  kept (last 10) and read back only by the owner or a tenant admin. Delivery is `store`, or `email`
+  (a "ready" notice without data, gated by the rules email setting). S3 delivery is not built.
+- **Groups lens**: `GET /api/groups/{id}/graph?up=&down=` and `GET /api/groups/graph/identity/{id}`;
+  nodes the caller may not view are neither drawn nor walked through. No UI yet (GR-8).
+- Tests: `go test ./internal/groups/gov` (`TestAttestation_FrozenPopulation`,
+  `TestAttestation_OverdueRemovesAndVerifies`, `TestDeprov_AffiliationLossCreatesTasks`, report golden
+  files in `testdata/reports` (rewrite with `-update`), `TestVisualization_RespectsView`, ...),
+  `internal/api` (`TestGroupsRoutesRequirePrivilege`, `TestAttestationAPI_*`, `TestDeprovAPI_*`),
+  `TestIsolation_GroupAttestationTables` in `internal/store`.
 
 ### Audit ledger
 

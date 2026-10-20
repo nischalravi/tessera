@@ -888,7 +888,8 @@ func TestSpec_Validate(t *testing.T) {
 		{"folder rule defaults to sub", onFolder("f", "", rules.TrigDirectAdded, rules.ActNoSelfAdd, rules.Params{}), ""},
 		{"unknown trigger", onGroup("x", "membership.sideways", rules.ActNoSelfAdd, rules.Params{}), "invalid_trigger"},
 		{"unknown action", onGroup("x", rules.TrigDirectAdded, "run_script", rules.Params{}), "invalid_action"},
-		{"a planned action", onGroup("x", rules.TrigDirectAdded, "open_inbox_task", rules.Params{}), "action_unavailable"},
+		{"a planned action", onGroup("x", rules.TrigDirectAdded, "assign_object_type", rules.Params{}), "action_unavailable"},
+		{"an inbox task without a title", onGroup("x", rules.TrigDirectAdded, rules.ActOpenInboxTask, rules.Params{}), "invalid_subject"},
 		{"group rule with a scope", func() rules.Spec {
 			s := onGroup("x", rules.TrigDirectAdded, rules.ActNoSelfAdd, rules.Params{})
 			s.Scope = "sub"

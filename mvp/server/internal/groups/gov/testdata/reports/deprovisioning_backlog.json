@@ -1,0 +1,23 @@
+{
+  "kind": "deprovisioning_backlog",
+  "generated_at": "2026-10-10T09:30:00Z",
+  "columns": [
+    "folder",
+    "identity",
+    "mode",
+    "opened_at",
+    "age_days",
+    "due_at"
+  ],
+  "rows": [
+    [
+      "other",
+      "Dave",
+      "notify",
+      "2026-10-08T09:30:00Z",
+      "2",
+      ""
+    ]
+  ],
+  "truncated": false
+}

@@ -1,0 +1,15 @@
+{
+  "kind": "policy_direct_exceptions",
+  "generated_at": "2026-10-10T09:30:00Z",
+  "columns": [
+    "group",
+    "direct_members"
+  ],
+  "rows": [
+    [
+      "app:pol",
+      "3"
+    ]
+  ],
+  "truncated": false
+}

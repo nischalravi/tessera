@@ -1,0 +1,37 @@
+{
+  "kind": "group_members",
+  "generated_at": "2026-10-10T09:30:00Z",
+  "columns": [
+    "identity_id",
+    "name",
+    "email",
+    "status",
+    "membership",
+    "source",
+    "enabled_from",
+    "disabled_at"
+  ],
+  "rows": [
+    [
+      "13",
+      "Alice",
+      "alice@b.example",
+      "active",
+      "direct",
+      "api",
+      "",
+      ""
+    ],
+    [
+      "14",
+      "Bob",
+      "bob@b.example",
+      "active",
+      "direct",
+      "api",
+      "",
+      ""
+    ]
+  ],
+  "truncated": false
+}

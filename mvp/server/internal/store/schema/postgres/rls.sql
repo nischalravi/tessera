@@ -970,6 +970,76 @@ CREATE POLICY tenant_isolation ON config_imports
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE grp_inbox_tasks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_inbox_tasks FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_inbox_tasks;
+CREATE POLICY tenant_isolation ON grp_inbox_tasks
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_attest_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_attest_settings FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_attest_settings;
+CREATE POLICY tenant_isolation ON grp_attest_settings
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_attest_campaigns ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_attest_campaigns FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_attest_campaigns;
+CREATE POLICY tenant_isolation ON grp_attest_campaigns
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_attest_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_attest_items FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_attest_items;
+CREATE POLICY tenant_isolation ON grp_attest_items
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_deprov_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_deprov_settings FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_deprov_settings;
+CREATE POLICY tenant_isolation ON grp_deprov_settings
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_deprov_folders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_deprov_folders FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_deprov_folders;
+CREATE POLICY tenant_isolation ON grp_deprov_folders
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_deprovisioned ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_deprovisioned FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_deprovisioned;
+CREATE POLICY tenant_isolation ON grp_deprovisioned
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_deprov_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_deprov_items FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_deprov_items;
+CREATE POLICY tenant_isolation ON grp_deprov_items
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_reports ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_reports FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_reports;
+CREATE POLICY tenant_isolation ON grp_reports
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_report_runs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_report_runs FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_report_runs;
+CREATE POLICY tenant_isolation ON grp_report_runs
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 ALTER TABLE sod_functions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE sod_functions FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON sod_functions;

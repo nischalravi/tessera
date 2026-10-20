@@ -234,6 +234,9 @@ func (s *Server) addGrpMember(r *http.Request, p *params) (int, any, error) {
 		EnabledFrom *string `json:"enabled_from"`
 		DisabledAt  *string `json:"disabled_at"`
 		Reason      string  `json:"reason"`
+		// OverrideReason adds an identity the deprovisioning rule refuses (it left every
+		// affiliation); it needs admin on the group and is audited (GR-14).
+		OverrideReason string `json:"override_reason"`
 	}
 	if err := decodeBody(r, &in, false); err != nil {
 		return 0, nil, err
@@ -245,6 +248,9 @@ func (s *Server) addGrpMember(r *http.Request, p *params) (int, any, error) {
 	}
 	if in.Identity != nil && *in.Identity < 1 {
 		return 0, nil, badRequest("invalid_identity", "identity must be an identity id")
+	}
+	if len(in.OverrideReason) > 1000 {
+		return 0, nil, badRequest("invalid_override_reason", "override_reason is at most 1000 characters")
 	}
 	from, err := grpTimeBody("enabled_from", in.EnabledFrom)
 	if err != nil {
@@ -263,10 +269,16 @@ func (s *Server) addGrpMember(r *http.Request, p *params) (int, any, error) {
 			return 0, nil, err
 		}
 	}
+	if in.OverrideReason != "" {
+		if err := grpErr(ck.Require(privs.GroupObject(store.GroupID(id)), privs.Admin)); err != nil {
+			return 0, nil, err
+		}
+	}
 	var res *model.AddResult
 	var view memberView
 	err = s.grpWrite(r, func(e model.Env) error {
 		var err error
+		e.VetoOverride = in.OverrideReason
 		res, err = e.AddMember(store.GroupID(id), model.MemberInput{Identity: in.Identity, Group: store.GroupID(in.Group),
 			EnabledFrom: from, DisabledAt: to, Reason: in.Reason})
 		if err != nil {
