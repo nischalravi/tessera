@@ -466,6 +466,27 @@ CREATE POLICY tenant_isolation ON abac_bindings
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE network_ranges ENABLE ROW LEVEL SECURITY;
+ALTER TABLE network_ranges FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON network_ranges;
+CREATE POLICY tenant_isolation ON network_ranges
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE access_policies ENABLE ROW LEVEL SECURITY;
+ALTER TABLE access_policies FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON access_policies;
+CREATE POLICY tenant_isolation ON access_policies
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE device_compliance_signals ENABLE ROW LEVEL SECURITY;
+ALTER TABLE device_compliance_signals FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON device_compliance_signals;
+CREATE POLICY tenant_isolation ON device_compliance_signals
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE notifications FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON notifications;
@@ -1218,5 +1239,12 @@ ALTER TABLE refresh_tokens ENABLE ROW LEVEL SECURITY;
 ALTER TABLE refresh_tokens FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON refresh_tokens;
 CREATE POLICY tenant_isolation ON refresh_tokens
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE connector_checkpoints ENABLE ROW LEVEL SECURITY;
+ALTER TABLE connector_checkpoints FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON connector_checkpoints;
+CREATE POLICY tenant_isolation ON connector_checkpoints
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));

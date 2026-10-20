@@ -21,6 +21,7 @@ const directory = () => import("../features/directory/Lists");
 const objects = () => import("../features/directory/ObjectPages");
 const admin = () => import("../features/admin/Admin");
 const connections = () => import("../features/admin/connections");
+const conditionalAccess = () => import("../features/admin/access");
 
 const Home = named(() => import("../features/home/Home"), "Home");
 const Inbox = named(() => import("../features/inbox/Inbox"), "Inbox");
@@ -72,6 +73,7 @@ const ConnectionDetail = named(connections, "ConnectionDetail");
 const ValidationResults = named(connections, "ValidationResults");
 const ReconReport = named(connections, "ReconReport");
 const AgentsList = named(connections, "AgentsList");
+const ConditionalAccess = named(conditionalAccess, "ConditionalAccess");
 const AdminSectionPage = named(admin, "AdminSectionPage");
 const MySessions = named(() => import("../features/account/MySessions"), "MySessions");
 const DeviceApprove = lazy(() => import("../pages/DeviceApprove"));
@@ -195,6 +197,7 @@ export default function App() {
                     <Route path="/admin/connections/:id/validation/:run" element={<ValidationResults />} />
                     <Route path="/admin/connections/:id/reconciliation/:run" element={<ReconReport />} />
                     <Route path="/admin/flat-files" element={<FlatFiles />} />
+                    <Route path="/admin/conditional-access" element={<ConditionalAccess />} />
                     <Route path="/admin/users" element={<AdminUsers />} />
                     <Route path="/admin/authentication" element={<IdpConnections />} />
                     <Route path="/admin/change-requests" element={<ChangeRequests />} />

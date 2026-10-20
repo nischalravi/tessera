@@ -752,10 +752,34 @@ func (s *Server) finishLogin(w http.ResponseWriter, r *http.Request, tenant stor
 		return s.loginFailure(w, r, tenant.ID, reason, ojson.Object{{Key: "connection_id", Value: conn.ID.String()},
 			{Key: "subject", Value: truncate(res.Subject, 128)}})
 	}
+	// Conditional access (issue #163): the tenant's sign-in policies see the
+	// client address and the IdP's device claims. The operator bootstrap is
+	// exempt, so a policy can never block the recovery of a tenant.
+	var accessDetail ojson.KV
+	if txn.Purpose != "bootstrap" {
+		var uid *uuid.UUID
+		if user != nil {
+			uid = &user.ID
+		}
+		dec, err := s.signinAccess(ctx, tenant.ID, r, uid, res)
+		if err != nil {
+			return nil, err
+		}
+		if dec.Evaluated > 0 {
+			accessDetail = ojson.KV{Key: "conditional_access", Value: dec.Audit()}
+		}
+		if why := signinRefusal(dec, res, now); why != "" {
+			return s.loginFailure(w, r, tenant.ID, why, ojson.Object{{Key: "connection_id", Value: conn.ID.String()},
+				{Key: "subject", Value: truncate(res.Subject, 128)}, accessDetail})
+		}
+	}
 	groups := s.mappedGroupRoles(conn, tok.groups)
 	jitCreated := user == nil
 	o := loginOptions{via: conn.Protocol, protocol: conn.Protocol, purpose: txn.Purpose,
 		detail: ojson.Object{{Key: "jit_created", Value: jitCreated}}}
+	if accessDetail.Key != "" {
+		o.detail = append(o.detail, accessDetail)
+	}
 	if user == nil {
 		// a new user: its id is chosen now so the sign-in's events are
 		// attributed to it

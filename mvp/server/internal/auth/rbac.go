@@ -92,6 +92,10 @@ const (
 	PermProvisioningManage Permission = "provisioning.manage"
 	// Config transport between tenants (issue #170).
 	PermConfigTransport Permission = "config.transport"
+	// Conditional access (issue #163): network ranges, access policies and
+	// the device-compliance signal.
+	PermConditionalAccessRead   Permission = "conditional_access.read"
+	PermConditionalAccessManage Permission = "conditional_access.manage"
 	// account correlation (issue #160)
 	PermIdentitiesCorrelate Permission = "identities.correlate"
 	PermIdentitiesMerge     Permission = "identities.merge"
@@ -157,7 +161,7 @@ var rolePermissions = map[Role][]Permission{
 		PermReviewsDecide, PermHRISSimulateEvent, PermFlatfileUpload, PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide,
 		PermGuestsSponsor, PermGuestsRead, PermJobsRead, PermProvisioningRead, PermAlertsRead, PermAlertsManage, PermOwnershipManage, PermSoDMitigate, PermDriftRead, PermGroupsRead, PermGroupsWrite},
 	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead, PermRequestsCreate, PermEmailRead,
-		PermGuestsSponsor, PermGuestsRead, PermJobsRead, PermProvisioningRead, PermAlertsRead, PermSiemRead, PermDriftRead, PermGroupsRead},
+		PermGuestsSponsor, PermGuestsRead, PermJobsRead, PermProvisioningRead, PermAlertsRead, PermSiemRead, PermDriftRead, PermGroupsRead, PermConditionalAccessRead},
 	RolePolicyAdmin: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
 		PermReviewsDecide, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
 		PermIdentitiesCorrelate, PermIdentitiesMerge, PermIdentitiesAffiliate,
@@ -170,7 +174,7 @@ var rolePermissions = map[Role][]Permission{
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
 		PermConnectionsActivate, PermRequestsCreate, PermEmailRead, PermEmailManage, PermGuestsSponsor, PermGuestsRead, PermGroupsAdmin,
 		PermJobsRead, PermJobsManage, PermProvisioningRead, PermProvisioningManage, PermConfigTransport,
-		PermAlertsRead, PermAlertsManage, PermAlertsConfigure, PermSiemRead, PermSiemConfigure, PermFlatfileManage, PermDriftRead, PermGroupsRead, PermGroupsWrite},
+		PermAlertsRead, PermAlertsManage, PermAlertsConfigure, PermSiemRead, PermSiemConfigure, PermFlatfileManage, PermDriftRead, PermGroupsRead, PermGroupsWrite, PermConditionalAccessRead, PermConditionalAccessManage},
 	RoleBreakGlass: {PermAdminRead, PermBreakGlassRecover},
 }
 
@@ -251,13 +255,13 @@ const (
 )
 
 var scopePermissions = map[Scope][]Permission{
-	ScopeRead: {PermGraphRead, PermConnectionsRead, PermJobsRead, PermProvisioningRead, PermDriftRead, PermGroupsRead},
+	ScopeRead: {PermGraphRead, PermConnectionsRead, PermJobsRead, PermProvisioningRead, PermDriftRead, PermGroupsRead, PermConditionalAccessRead},
 	ScopeWrite: {PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage, PermReviewsDecide,
 		PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
 		PermConnectionsManage, PermConnectionsActivate, PermRolesManage, PermLifecycleManage, PermGroupsAdmin, PermProvisioningManage, PermJobsManage, PermAlertsManage, PermOwnershipManage, PermSoDManage, PermSoDMitigate, PermSoDApprove, PermFlatfileManage, PermFlatfileUpload, PermFlatfileCloseTasks, PermDriftRemediate, PermDriftPolicy, PermGroupsWrite},
 	ScopeAudit: {PermAuditRead, PermAuditVerify, PermAlertsRead, PermSiemRead},
 	ScopeAdmin: {PermEmailRead, PermEmailManage, PermAdminRead, PermAdminChangeReq, PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev,
-		PermBreakGlassRecover, PermConfigTransport, PermAlertsConfigure, PermSiemConfigure},
+		PermBreakGlassRecover, PermConfigTransport, PermAlertsConfigure, PermSiemConfigure, PermConditionalAccessManage},
 }
 
 // perms returns the union of the roles' permissions.

@@ -1,5 +1,5 @@
 import {
-  AppWindow, BadgeCheck, BellRing, Bot, Building2, CalendarClock, ChartLine, ClipboardCheck, FileArchive, FileUp, House, Inbox, KeyRound, Layers, LucideIcon, Network, Plug, Plus, Settings, ShieldCheck, ShieldHalf, SlidersHorizontal, Timer, UserCheck, UserPlus, Users, UsersRound,
+  AppWindow, BadgeCheck, BellRing, Bot, Building2, CalendarClock, ChartLine, ClipboardCheck, FileArchive, FileUp, House, Inbox, KeyRound, Layers, LucideIcon, Network, Plug, Plus, Settings, ShieldAlert, ShieldCheck, ShieldHalf, SlidersHorizontal, Timer, UserCheck, UserPlus, Users, UsersRound,
 } from "lucide-react";
 
 export interface NavPage {
@@ -98,8 +98,9 @@ export const RAIL: RailGroup[] = [
     label: "Settings",
     items: [
       { id: "connections", label: "Connections", icon: Plug, path: "/admin/connections", keywords: "connectors sync okta aws github snowflake workday active directory ldap entra readiness wizard" },
+      { id: "conditional-access", label: "Conditional access", icon: ShieldAlert, path: "/admin/conditional-access", keywords: "network location ip range device posture compliant managed step-up deny report-only policy sign-in trusted proxy" },
       { id: "flat-files", label: "Flat-file apps", icon: FileUp, path: "/admin/flat-files", keywords: "csv import upload disconnected applications no connector manual tasks column mapping sftp" },
-      { id: "admin", label: "Admin", icon: Settings, path: "/admin", except: ["/admin/connections", "/admin/flat-files"], keywords: "settings configuration audit jobs" },
+      { id: "admin", label: "Admin", icon: Settings, path: "/admin", except: ["/admin/connections", "/admin/flat-files", "/admin/conditional-access"], keywords: "settings configuration audit jobs" },
     ],
   },
 ];

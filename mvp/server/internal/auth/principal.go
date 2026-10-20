@@ -75,13 +75,15 @@ type AuthnContext struct {
 	TesseraACR        ACR
 	AuthTime          time.Time
 	IdPConnectionID   *uuid.UUID
+	// Device is the device posture the IdP asserted at sign-in (issue #163).
+	Device normalize.Device
 }
 
 // ContextFromRecord converts a stored record.
 func ContextFromRecord(x *store.AuthnContextRecord) AuthnContext {
 	c := AuthnContext{ID: x.ID, UserID: x.UserID, Protocol: x.Protocol, AAL: x.AAL, PhishingResistant: x.PhishingResistant,
 		PhrBasis: x.PhrBasis, Methods: x.Methods, AMR: x.AMR, TesseraACR: ACR(x.TesseraACR), AuthTime: x.AuthTime,
-		IdPConnectionID: x.IdPConnectionID}
+		IdPConnectionID: x.IdPConnectionID, Device: normalize.ParseDevice(x.Device)}
 	if x.ACR != nil {
 		c.ACR = *x.ACR
 	}

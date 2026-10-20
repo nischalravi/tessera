@@ -25,6 +25,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oauth2rp"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oidcrp"
+	"github.com/nischalravi/tessera/mvp/server/internal/condaccess"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
@@ -136,6 +137,10 @@ type Config struct {
 	// TrustedProxies (TESSERA_TRUSTED_PROXIES) are the peers whose
 	// X-Forwarded-For the rate limiter believes.
 	TrustedProxies []netip.Prefix
+	// DeviceSignals is the source of device-compliance signals for
+	// conditional access. Nil: the signals admins set (condaccess.StoreSignals);
+	// the CAEP receiver (#114) will plug in here.
+	DeviceSignals condaccess.SignalSource
 	// Siem streams the audit ledger to tenants' SIEMs (issue #169); its
 	// Sealer seals sink tokens. Nil: tests of sinks are unavailable.
 	Siem *siem.Service
@@ -212,6 +217,8 @@ type Server struct {
 	names    nameCache
 	rp       *oidcrp.RP
 	oauth2   *oauth2rp.RP
+	// signals supplies device-compliance signals to conditional access.
+	signals condaccess.SignalSource
 	// oauth is the authorization server of the CLI (internal/oauth); it also
 	// verifies the DPoP access tokens of API requests (authn.Tokens).
 	oauth *oauth.Service
@@ -267,6 +274,9 @@ func New(cfg Config) *Server {
 	}
 	if cfg.GroupsEngine == nil {
 		cfg.GroupsEngine = engine.New(0)
+		if cfg.DeviceSignals == nil {
+			cfg.DeviceSignals = condaccess.StoreSignals{}
+		}
 	}
 	if cfg.Containment == nil {
 		cfg.Containment = &containment.Service{}
@@ -285,7 +295,7 @@ func New(cfg Config) *Server {
 		}
 		provSeal = sealer
 	}
-	s := &Server{cfg: cfg, containment: cfg.Containment, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
+	s := &Server{cfg: cfg, containment: cfg.Containment, signals: cfg.DeviceSignals, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
 		agents: cfg.Agents, limits: newLimiters(cfg.RateLimits), provSeal: provSeal}
 	s.prov = &provision.Engine{DB: cfg.Store, Sealer: provSeal, HTTP: cfg.Outbound,
 		Clock: func() time.Time { return s.clock() }, Log: cfg.Logger.With("component", "provisioning")}
@@ -380,6 +390,7 @@ func New(cfg Config) *Server {
 	s.registerSAMLRoutes()
 	s.registerOAuth2Routes()
 	s.registerStepUpRoutes()
+	s.registerAccessRoutes()
 	s.registerOAuthRoutes()
 	s.registerAdminRoutes()
 	s.registerBreakGlassRoutes()
@@ -768,6 +779,10 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 	}
 	if sb, ok := out.(statusBody); ok {
 		writeJSON(w, sb.status, sb.body)
+		return
+	}
+	if db, ok := out.(deniedBody); ok {
+		auth.WriteDenial(w, db.d)
 		return
 	}
 	if fb, ok := out.(fileBody); ok {

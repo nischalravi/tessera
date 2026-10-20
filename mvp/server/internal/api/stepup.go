@@ -245,7 +245,8 @@ func (s *Server) finishStepUp(w http.ResponseWriter, r *http.Request, tenant sto
 			Purpose: "step_up", ACR: res.ACR, AMR: res.AMR, Methods: res.Methods, AAL: res.AAL,
 			PhishingResistant: res.PhishingResistant, PhrBasis: res.PhrBasis, TesseraACR: res.TesseraACR,
 			AuthTime: res.AuthTime, IP: ip, UserAgent: ua, MappingProfile: res.MappingProfile,
-			MappingVersion: res.MappingVersion, ClaimsSHA256: res.ClaimsSHA256, CreatedAt: now}
+			MappingVersion: res.MappingVersion, ClaimsSHA256: res.ClaimsSHA256, CreatedAt: now,
+			Device: res.Device.JSON()}
 		if err := tx.InsertAuthnContext(rec); err != nil {
 			return err
 		}

@@ -86,8 +86,7 @@ var pgSchemaFS embed.FS
 
 // tables in dependency order (parents first); Migrate(drop) drops them in reverse.
 var tables = []string{
-	"tenants", "platform_keys", "replay_cache", "tenant_signing_keys", "identities", "accounts", "groups", "resources", "permissions", "grant_edges", "secrets",
-	"revoked_grants", "agent_delegations", "usage_events", "access_requests", "review_campaigns", "review_items",
+	"tenants", "platform_keys", "replay_cache", "tenant_signing_keys", "identities", "accounts", "groups", "resources", "permissions", "grant_edges", "secrets", "revoked_grants", "agent_delegations", "usage_events", "access_requests", "review_campaigns", "review_items",
 	"hris_events",
 	// auth core (schema/0005_auth.sql)
 	"idp_connections", "platform_users", "external_logins", "role_assignments", "authn_contexts", "sessions",
@@ -106,6 +105,8 @@ var tables = []string{
 	"connections", "connection_revisions", "readiness_check_runs", "readiness_item_states", "readiness_attestations",
 	"readiness_skips", "readiness_overlays", "readiness_check_results", "recon_runs", "recon_findings", "readiness_scores",
 	"stg_identities", "stg_accounts", "stg_groups", "stg_memberships", "stg_attr_stats",
+	// conditional access (schema/0222)
+	"network_ranges", "access_policies", "device_compliance_signals",
 	// ownership (schema/0208_ownership.sql)
 	"ownerships",
 	// scheduled access reviews (schema/0316_review_schedules.sql)
@@ -160,6 +161,8 @@ var tables = []string{
 	"aws_edge_evaluations", "aws_pr_comment_settings",
 	// flat-file import for disconnected apps (schema/0352_flatfile.sql)
 	"flatfile_mappings", "flatfile_uploads", "flatfile_upload_errors", "flatfile_changes", "flatfile_records", "flatfile_tasks",
+	// connector sync checkpoints (schema/0360_connector_checkpoints.sql)
+	"connector_checkpoints",
 	// point-in-time access and evidence packs (schema/0260-0261)
 	"edge_history", "evidence_packs",
 	// guest claim (schema/0228_claim.sql)

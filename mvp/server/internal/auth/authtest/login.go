@@ -50,6 +50,9 @@ type Ctx struct {
 	// WebAuthn is a break-glass sign-in: a WebAuthn-attested context and a
 	// session of kind break_glass.
 	WebAuthn bool
+	// Device is the JSON of the device claims the IdP asserted (for example
+	// `{"managed":true,"compliant":false}`); empty: none.
+	Device string
 }
 
 // Common contexts.
@@ -206,11 +209,15 @@ func Record(user uuid.UUID, c Ctx, now time.Time) *store.AuthnContextRecord {
 	if c.Phrh {
 		aal = 3
 	}
+	var device *string
+	if c.Device != "" {
+		device = &c.Device
+	}
 	protocol, purpose := "oidc", "login"
 	if c.WebAuthn {
 		protocol, purpose, basis = "webauthn", "break_glass", "webauthn_attested"
 	}
-	return &store.AuthnContextRecord{ID: c.ID, UserID: user, Protocol: protocol, Purpose: purpose, AAL: aal,
+	return &store.AuthnContextRecord{ID: c.ID, UserID: user, Device: device, Protocol: protocol, Purpose: purpose, AAL: aal,
 		PhishingResistant: c.Phr || c.Phrh, PhrBasis: basis, TesseraACR: string(acr), AuthTime: at.UTC(),
 		MappingProfile: "authtest", MappingVersion: 1, ClaimsSHA256: "authtest", CreatedAt: now}
 }

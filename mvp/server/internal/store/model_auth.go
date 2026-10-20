@@ -202,6 +202,9 @@ type AuthnContextRecord struct {
 	MappingVersion    int
 	ClaimsSHA256      string
 	CreatedAt         time.Time
+	// Device is the JSON of the device claims the IdP asserted at sign-in
+	// (managed, compliant; absent keys are unknown), nil when it asserted none.
+	Device *string
 }
 
 // Session is a server-side session. SecretHash is the SHA-256 hex of the

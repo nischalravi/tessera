@@ -85,6 +85,10 @@ server/
     connectors/         Connector interface + normalized record types, deterministic demo company
                         (pyrand.go reproduces CPython's Mersenne Twister so seed 7 gives the same
                         company the Python backend generated), registry (TESSERA_CONNECTORS)
+      connsync/         shared framework of the production connectors: checkpoints, full vs
+                        incremental, bounded backoff, size-bounded retrying client, URL checks
+      okta/ entra/      production read connectors (see Production connectors)
+      all/              registers okta and entra (imported by cmd/tessera)
     ingest/             phased, idempotent upsert of connector output (cross-system refs resolve)
     store/              schema, row types and parameterized queries (database/sql, no ORM)
     audit/              hash-chained audit ledger: Record, the http.request middleware (fail-closed
@@ -365,11 +369,11 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `GET|POST /api/hris/events` (422 for an unknown `identity_id`) · `GET /api/hris/events/{id}/plan` · `POST /api/hris/events/{id}/execute` ·
 `GET /api/jml/leaver-plan/{identity_id}` · `POST /api/identities/{id}/contain` (kill switch, see "Identity containment") · `POST /api/identities/{id}/disable|enable` ·
 `PUT /api/connections/{id}/containment-credential` · `GET /api/accounts[?system=]` ·
-`GET|POST /api/siem/sinks` · `PUT /api/siem/sinks/{id}` · `POST /api/siem/sinks/{id}/rewind {seq}` ·
+`GET|POST /api/siem/sinks` · `PUT /api/siem/sinks/{id}` (moving the target to another origin, or syslog host:port, while a token is stored needs a new `token`, else 422 `credential_required`; a path-only change keeps it) · `POST /api/siem/sinks/{id}/rewind {seq}` ·
 `POST /api/siem/sinks/{id}/test` · `GET /api/siem/sinks/{id}/dead-letters` ·
 `GET /api/alerts[?status=open|acknowledged|resolved|live&severity=&rule=]` · `GET /api/alerts/summary` · `GET /api/alerts/{id}` ·
 `POST /api/alerts/{id}/acknowledge|resolve|assign` · `GET /api/alerts/rules` · `PUT /api/alerts/rules/{rule_id}` ·
-`GET|POST /api/alerts/channels` · `PUT /api/alerts/channels/{id}` · `POST /api/alerts/channels/{id}/test` ·
+`GET|POST /api/alerts/channels` · `PUT /api/alerts/channels/{id}` (a webhook moved to another origin needs `rotate_secret: true`, else 422 `credential_required`) · `POST /api/alerts/channels/{id}/test` ·
 `GET /api/ownership[?kind=app|group|resource|identity&unowned=]` · `PUT /api/ownership/{kind}/{object_key}` ·
 `POST /api/ownership/bulk` ·
 `GET /api/audit[?limit=&before_seq=&action=&actor_id=&target_type=&target_id=&from=&to=&include_http=]` ·
@@ -380,7 +384,10 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `GET /api/auth/discover?tenant=&email=` · `GET /api/auth/login?tenant=&connection=&return_to=` (302 to the IdP) ·
 `GET /api/auth/oidc/{connection_id}/callback` · `GET /api/auth/saml/{connection_id}/metadata` ·
 `POST /api/auth/saml/{connection_id}/acs` · `GET /api/auth/oauth2/{connection_id}/callback` ·
-`GET /t/{slug}/bootstrap?code=` (public)
+`GET /t/{slug}/bootstrap?code=` (public) ·
+`GET|POST /api/access/policies` · `PUT|DELETE /api/access/policies/{id}` · `GET|POST /api/access/networks` ·
+`PUT|DELETE /api/access/networks/{id}` · `GET /api/access/users` · `GET /api/access/device-signals` ·
+`PUT|DELETE /api/access/device-signals/{user_id}` · `POST /api/access/evaluate` (conditional access, below) ·
 `GET|POST /api/auth/dev-login` (dev and test only) ·
 `GET /api/jobs[?status=running|succeeded|failed&kind=&connection_id=&limit=]` · `GET /api/jobs/{job_id}` ·
 `POST /api/jobs/{job_id}/retry` ·
@@ -448,6 +455,46 @@ Each route declares the permission it needs (design §12.1, §16.2; `api.Routes(
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
 or HRIS execution is always the signed-in user.
 
+### Conditional access (network location and device posture)
+
+Beyond step-up, a tenant can decide **allow, require step-up or deny** by where a request comes from and
+what is known about the device (issue #163; Settings → **Conditional access**, `/admin/conditional-access`).
+Policies have a **scope**: `signin` (the Tessera sign-in, at the OIDC callback and SAML ACS) or
+`privileged` (every route that already needs a fresh sign-in: JIT approval, review decisions, revoking
+grants, HRIS execution, connection changes). Conditions, all of which must hold:
+
+* **Network**: `in` or `not_in` named ranges (CIDRs, IPv4 and IPv6). The address is the **trusted-proxy
+  client IP**: the TCP peer, or, only when the peer is in `TESSERA_TRUSTED_PROXIES`, the rightmost
+  `X-Forwarded-For` entry that is not itself a trusted proxy. A header from any other peer is ignored, so a
+  client cannot name its own address (the rate limiter uses the same function). An address that cannot be
+  determined is in no range.
+* **Device**: `unmanaged` or `not_compliant`. Posture comes from the IdP's claims at sign-in (OIDC claims or
+  SAML attributes `device_managed` and `device_compliant`, renamable per connection with
+  `authn_mapping.device_managed_claim` / `device_compliant_claim`; stored on the authentication context) and
+  from the user's **device-compliance signal**. "Not compliant" from either source wins; a device the IdP says
+  nothing about counts as unmanaged and not compliant. Signals are set by an admin (source `manual`, optional
+  expiry) through `condaccess.SignalSource`; the CAEP receiver of #114 is not built, and will write
+  `caep` signals into the same table or implement that interface.
+
+Policies are checked in priority order and **the first enforced match decides**; no match is allow. `report_only`
+policies are evaluated and recorded with the outcome they would have had but never change the result;
+`disabled` ones are ignored. Outcomes: `deny` refuses a sign-in (`auth.login.failure`, reason
+`conditional_access_denied`) or answers `403 conditional_access_denied`; `step_up` names an ACR (aal2, phr, phrh)
+and optional `max_age`. On a sign-in the authentication itself must already meet it (else
+`conditional_access_step_up_required`); on a privileged route it tightens the route's own requirement, so the
+client gets the usual `401 step_up_required` challenge. The permission is checked before policies, so a caller
+without it learns nothing of them. The operator bootstrap sign-in and the conditional access routes themselves
+are exempt (a policy cannot lock an admin out of fixing it).
+
+Every evaluation that had a policy to check is audited with its inputs (`access.decision`, or the
+`conditional_access` detail of `auth.login.success` / `auth.login.failure`): scope, outcome, deciding policy,
+report-only hits, client IP and how it was resolved (`peer` or `x_forwarded_for`), device managed, compliance and
+its source. When a trusted proxy does not say who the client is (`X-Forwarded-For` missing or malformed, or every hop a trusted proxy), the client is unresolved: it is never given the proxy's address, every network condition on a deny or step-up policy holds for it (`in` and `not_in` alike, so a blocklist and an off-network rule both apply) and none on an allow policy does, and the event records `client_ip_unresolved`; rate limiting still keys on the proxy. Changes to ranges, policies and signals are `access.network.*`, `access.policy.*` and
+`access.device_signal.*` events in the same transaction. Reading needs `conditional_access.read` (auditor,
+tenant admin); changing needs `conditional_access.manage` (tenant admin) and a fresh phishing-resistant
+sign-in. A tenant is limited to 100 policies and 100 ranges. `POST /api/access/evaluate` answers what the
+current policies would decide for a described request without recording anything. In the dev IdP, Alice's
+device is managed and compliant and Olu's is neither (`device:` in `users.yaml`).
 ### Point-in-time access and evidence packs
 
 Issue #111; packages `server/internal/evidence`, `graph.BuildAsOf`, schema `0260` and `0261`.
@@ -1990,6 +2037,10 @@ the right. Arrow keys move between items.
 | Group | Items |
 |---|---|
 | (top) | **Home**, **Inbox** (count) |
+| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts (with *Account matches*), Roles (Preview), Organizations (Preview) |
+| **Access** | Request access, My access (with *My requests*), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
+| **Protection** | Policies & SoD (violations, policies, what-if simulation), Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
+| **Settings** | Connections (governed connections and the setup wizard), Conditional access (network ranges, policies, device signals), Admin |
 | **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Ownership, Accounts (with *Account matches*), Roles, Organizations (live, read-only, derived from departments) |
 | **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
 | **Protection** | Alerts (alerts, rules, channels), Policies & SoD (violations, policies, what-if simulation, SoD functions, risks and rulesets), Mitigating controls (mitigations, control library), Attribute policies, Access graph (with an *As of* date for *Who can access…*), Evidence packs, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
@@ -2259,6 +2310,72 @@ Tessera's keys. `devidp.New` refuses `TESSERA_ENV=prod`. `TestIsolation_DevIdPNo
 (`internal/archtest`) proves from the import graph that `cmd/tessera` and `internal/api` never link
 the dev IdP.
 
+## Production connectors: Okta and Entra ID
+
+`TESSERA_CONNECTORS=okta`, `entra` or `okta,entra` (also mixed with `demo-*` names) runs the real
+read connectors instead of the demo ones. The default stays `demo`. Both are read-only (every
+request is a GET, except the OAuth token request), send every call through `internal/safehttp`
+(https only, private and link-local addresses refused, redirects and page links pinned to the
+configured host), and never log or audit tokens, secrets, keys or response bodies. Errors carry the
+HTTP status and the provider's short error code only.
+
+Credentials are references, never literals: `env:NAME` (an environment variable) or
+`file:/absolute/path` (a mounted secret file). A literal in the variable is refused. The sealed and
+vault references of the connection credential store plug into the same resolver when that store lands.
+
+| Variable | Meaning |
+|---|---|
+| `TESSERA_OKTA_ORG_URL` | `https://<org>.okta.com` (a custom domain also works): https, a well-formed domain, no path |
+| `TESSERA_OKTA_CLIENT_ID`, `TESSERA_OKTA_PRIVATE_KEY`, `TESSERA_OKTA_KEY_ID` | OAuth 2.0 service app with `private_key_jwt` (preferred): client id, key reference (PEM, RSA 2048+ or P-256), the key's `kid` |
+| `TESSERA_OKTA_API_TOKEN` | reference to an SSWS token, instead of OAuth (set one or the other, not both) |
+| `TESSERA_OKTA_EMIT_IDENTITIES` | `true` (default): also create an identity per user. `false` when an HR system is authoritative |
+| `TESSERA_OKTA_MAX_INCREMENTAL_AGE` | default `24h`: a full read repairs deletions at least this often |
+| `TESSERA_ENTRA_TENANT_ID`, `TESSERA_ENTRA_CLIENT_ID` | directory (tenant) GUID and application (client) id |
+| `TESSERA_ENTRA_CLIENT_SECRET` | reference to the client secret |
+| `TESSERA_ENTRA_GRAPH_URL`, `TESSERA_ENTRA_AUTHORITY_URL` | default `https://graph.microsoft.com` and `https://login.microsoftonline.com`; set for national clouds |
+| `TESSERA_ENTRA_EMIT_IDENTITIES`, `TESSERA_ENTRA_SIGNIN_ACTIVITY` | both default `true` (the second reads last sign-in) |
+| `TESSERA_ENTRA_MAX_INCREMENTAL_AGE` | default none (delta queries report deletions) |
+
+Minimum read-only permissions:
+
+* **Okta.** OAuth scopes `okta.users.read`, `okta.groups.read`, `okta.apps.read`, `okta.roles.read`
+  and `okta.logs.read` (usage events), and the service app needs the **Read-only Administrator**
+  admin role. For SSWS, a token of a Read-only Administrator. Without `okta.roles.read` role data is
+  skipped, without `okta.logs.read` no usage events are produced; neither fails the sync.
+* **Entra ID** (application permissions, admin consent): `User.Read.All`, `Group.Read.All`,
+  `GroupMember.Read.All`, `Application.Read.All`, `RoleManagement.Read.Directory`, and optionally
+  `AuditLog.Read.All` (last sign-in and usage events; needs Entra ID P1/P2). If Graph refuses
+  `signInActivity` (403) the sync goes on without last sign-in. Entra needs no write permission.
+
+What is mapped: users become accounts (Okta `lastLogin`, Entra `signInActivity`) and, unless turned
+off, identities keyed by `employeeNumber`/`employeeId` (else `okta:<id>`/`entra:<id>`) with the
+e-mail address for correlation; groups and memberships (Entra nested groups become group-in-group
+`member_of` edges; Okta has no nested groups); apps (Okta apps, Entra enterprise apps and apps the
+tenant owns) as resources with an `access` permission and one per Entra app role, user and group
+assignments as `direct_grant` and `grants` edges; administrator roles (Okta roles on users and
+groups, Entra directory roles) as privileged `role` groups; Entra service principals the tenant owns
+as `service` accounts. Usage events are app sign-ins aggregated per user, app and day (Okta System
+Log, Entra sign-in log). Okta group role assignments are re-read with the group, so a role granted
+to an unchanged group appears at the next full read (within `MaxIncrementalAge`).
+
+Sync modes. Checkpoints live in `connector_checkpoints` (tenant-scoped, same transaction as the
+ingest, so a failed ingest rolls the checkpoint back). The first sync, a missing or unreadable
+checkpoint, `POST /api/connectors/sync?mode=full`, and a chain older than `MaxIncrementalAge` read
+everything. Otherwise Okta reads users and groups changed since the watermark (`search=lastUpdated
+gt ...`) and Entra follows the stored `deltaLink`s of `users/delta` and `groups/delta` (an expired
+token, HTTP 410 or `syncStateNotFound`, falls back to a full read). Apps, assignments and roles are
+re-read on every sync. Rate limits: 429 and 502/503/504 are retried with `Retry-After`
+(or Okta's `X-Rate-Limit-Reset`), bounded to 60 seconds a wait and 5 tries, and the client pauses
+when `X-Rate-Limit-Remaining` hits 0. Ingest does not delete accounts and groups that vanish from a
+source; it prunes only connector edges.
+
+Tests run on synthetic recorded fixtures (`okta/testdata`, `entra/testdata`) through an `httptest`
+TLS server. Live tests are skipped unless set (needs-human, never run in CI): `go test
+./internal/connectors/okta -run Integration -v` with `TESSERA_OKTA_DEV_ORG_URL` and
+`TESSERA_OKTA_DEV_API_TOKEN` (or `TESSERA_OKTA_DEV_CLIENT_ID` + `TESSERA_OKTA_DEV_PRIVATE_KEY_FILE`
+[+ `TESSERA_OKTA_DEV_KEY_ID`]); `go test ./internal/connectors/entra -run Integration -v` with
+`TESSERA_ENTRA_DEV_TENANT_ID`, `TESSERA_ENTRA_DEV_CLIENT_ID`, `TESSERA_ENTRA_DEV_CLIENT_SECRET`.
+`internal/connectors/connsync` is what Google Workspace and Workday reuse.
 ## Command-line sign-in (`tessera-cli`)
 
 The CLI and other non-browser clients use OAuth 2.0, not cookies (design §9.3, §10): Tessera is an
@@ -2366,9 +2483,11 @@ in-process server in `cmd/tessera-cli/e2e_test.go`. Fuzz targets: `FuzzValidateP
    edges, for example an Okta group mapped to an AWS role through SAML, are emitted by whichever
    connector can see them, using `Ref{Kind, System, ExternalID}`. Ingestion runs in phases, so
    the order of connectors does not matter.
-3. Register a factory in `connectors.Factories` (`Factories["okta"] = func(time.Time) (Connector, error) {…}`)
-   and run with, for example, `TESSERA_CONNECTORS=demo-workday,okta,demo-aws,...`. You can replace
-   demo connectors one system at a time. Read credentials from the environment and never log them.
+3. Register a factory in `connectors.Factories` from `internal/connectors/all` (a connector imports
+   package `connectors`, so it cannot be registered there) and run with, for example,
+   `TESSERA_CONNECTORS=demo-workday,okta,demo-aws,...`. You can replace demo connectors one system at
+   a time. Read credentials through `connsync.ResolveSecret`, use
+   the server's shared outbound client (`safehttp.ForConfig`, passed in through `all.Register`) instead of building your own, and never log them. Use `connsync` for checkpoints and backoff.
 4. `internal/testkit.TinyConnector` is a minimal working connector you can use as a template.
 
 ## Testing and quality gates
@@ -2515,7 +2634,7 @@ OpenAPI document). Deliberate differences:
   than one instance yet; moving them is the follow-up. There is no queue depth or oldest-job-age metric
   yet (only `tessera_queue_job_runs_total` and the per-sweep loop lag in `obs.DefaultLoops`), and schedules cannot be edited or disabled through the API.
 * There is no scheduled connector sync. Seeding runs discovery once, and `POST /api/connectors/sync`
-  re-runs discovery on demand.
+  re-runs discovery on demand (`?mode=full` ignores connector checkpoints).
 * Effective-permission paths are capped at 8 per permission, and "lost if removed" uses those paths.
 * AWS permissions are modelled as discrete actions on resources. IAM policy conditions, deny
   statements, SCPs and wildcard expansion are not evaluated.

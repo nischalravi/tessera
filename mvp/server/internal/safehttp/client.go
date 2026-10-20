@@ -33,10 +33,10 @@
 // site. Tests use NewForTest, which refuses to run outside a test binary
 // (and internal/archtest bans it from non-test files).
 //
-// Not yet wired: the readiness connectors (internal/connectors,
-// internal/readiness) only simulate their systems today; when a connector
-// makes real calls to a customer-configured endpoint, its *http.Client must
-// come from ForConfig. go-oidc and x/oauth2 take this client through
+// The demo connectors and the readiness checks only simulate their systems.
+// The production connectors (internal/connectors/okta and entra) call a
+// customer-configured endpoint with the server's shared outbound client
+// (api.Config.OutboundHTTP, built by ForConfig); they never build their own. go-oidc and x/oauth2 take this client through
 // oidc.ClientContext and oauth2.HTTPClient (PR6).
 package safehttp
 
