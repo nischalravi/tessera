@@ -94,6 +94,9 @@ func goldenCases() []goldenCase {
 			{1, 7, 3, "svc-etl", "svc-etl", "aws", "ProdAdmin \"break glass\" <ops>", "account:5", "group:9", "standing_grant", "review"},
 			{2, 12, 4, "zoë.o'brien", "zoë", "github", "Org owners ✓ \\ backslash", "account:6", "group:10", "standing_grant", "auto_certified"},
 			{3, 4021, 17, "alice@larkspur.example", "alice", "okta", "Okta Admins", "account:31", "group:12", "standing_grant", "auto_certified"}}},
+		{Name: "role membership rows (issue #365)", Rows: []goldenRow{
+			{1, 0, 17, "alice@larkspur.example", "", "business_role", "Role AP Clerk", "role:ap-clerk", "identity:17", "role_membership", "review"},
+			{2, 4021, 17, "alice@larkspur.example", "alice", "okta", "Okta Admins", "account:31", "group:12", "standing_grant", "review"}}},
 	}
 }
 

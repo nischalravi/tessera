@@ -79,6 +79,42 @@
         "{\"account_ref\":\"alice\",\"disposition\":\"auto_certified\",\"edge_dst\":\"group:12\",\"edge_id\":4021,\"edge_src\":\"account:31\",\"entitlement\":\"Okta Admins\",\"identity_id\":17,\"identity_ref\":\"alice@larkspur.example\",\"in_scope_reason\":\"standing_grant\",\"ordinal\":3,\"system\":\"okta\"}"
       ],
       "hash": "7c65d5121f0351c99a6ebe19e06a2eb91385111da7e6897353dc7c001281cd53"
+    },
+    {
+      "name": "role membership rows (issue #365)",
+      "rows": [
+        {
+          "ordinal": 1,
+          "edge_id": 0,
+          "identity_id": 17,
+          "identity_ref": "alice@larkspur.example",
+          "account_ref": "",
+          "system": "business_role",
+          "entitlement": "Role AP Clerk",
+          "edge_src": "role:ap-clerk",
+          "edge_dst": "identity:17",
+          "in_scope_reason": "role_membership",
+          "disposition": "review"
+        },
+        {
+          "ordinal": 2,
+          "edge_id": 4021,
+          "identity_id": 17,
+          "identity_ref": "alice@larkspur.example",
+          "account_ref": "alice",
+          "system": "okta",
+          "entitlement": "Okta Admins",
+          "edge_src": "account:31",
+          "edge_dst": "group:12",
+          "in_scope_reason": "standing_grant",
+          "disposition": "review"
+        }
+      ],
+      "canonical": [
+        "{\"account_ref\":\"\",\"disposition\":\"review\",\"edge_dst\":\"identity:17\",\"edge_id\":0,\"edge_src\":\"role:ap-clerk\",\"entitlement\":\"Role AP Clerk\",\"identity_id\":17,\"identity_ref\":\"alice@larkspur.example\",\"in_scope_reason\":\"role_membership\",\"ordinal\":1,\"system\":\"business_role\"}",
+        "{\"account_ref\":\"alice\",\"disposition\":\"review\",\"edge_dst\":\"group:12\",\"edge_id\":4021,\"edge_src\":\"account:31\",\"entitlement\":\"Okta Admins\",\"identity_id\":17,\"identity_ref\":\"alice@larkspur.example\",\"in_scope_reason\":\"standing_grant\",\"ordinal\":2,\"system\":\"okta\"}"
+      ],
+      "hash": "6f4835f630d15758582cea17e121eb9f5301aede4a8fc64417934d4e15226088"
     }
   ]
 }
