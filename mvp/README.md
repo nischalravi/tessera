@@ -843,6 +843,9 @@ change in the target system and checks that it happened.
   simulated fault: `fail_writes` (503) or `drop_writes` (accepted, never applied: a mismatch). The fake
   treats users and groups it has never seen as already provisioned. Config refuses the setting with
   `TESSERA_ENV=prod`, and an architecture test keeps the fake out of every package but `cmd/tessera`.
+  The test launcher (`./run.sh test`) clears `TESSERA_DEV_FAKE_TARGET` before vet and tests so its local
+  fake-target default does not affect the production-refusal checks; production still rejects the fake
+  target when it is explicitly enabled.
 * **Tests.** Recorded exchanges (`internal/provision/{scim,okta}/testdata`, replayed by
   `internal/provision/replay`) pin Entra's string booleans, capitalised PATCH operations, paginated
   large groups, Okta `Link` paging and error classification; engine tests cover backoff, idempotency,

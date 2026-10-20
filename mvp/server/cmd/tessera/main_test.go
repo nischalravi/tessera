@@ -83,6 +83,7 @@ func TestServeSeedsAndShutsDownGracefully(t *testing.T) {
 // production never seeds the demo tenants (a fresh production database is
 // created with the admin CLI, §15.3).
 func TestServeRefusesWithoutExplicitEnv(t *testing.T) {
+	t.Setenv("TESSERA_DEV_FAKE_TARGET", "")
 	for env, want := range map[string]string{
 		"":     "set TESSERA_ENV=dev",
 		"DEV":  "TESSERA_ENV=dev",
@@ -160,12 +161,14 @@ func prodEnv(t *testing.T) {
 	t.Setenv("TESSERA_CORS_ORIGINS", "")
 	t.Setenv("TESSERA_AUDIT_ANCHOR", "s3://anchors/tessera")
 	t.Setenv("TESSERA_DEV_IDP_URL", "")
+	t.Setenv("TESSERA_DEV_FAKE_TARGET", "") // a shell that exports it must not trip the prod guard
 }
 
 // TestProdRefusesDevMockConnection: a database seeded in dev has dev_mock
 // IdP connections (the dev sign-in users); production refuses to serve it
 // (§18.4).
 func TestProdRefusesDevMockConnection(t *testing.T) {
+	t.Setenv("TESSERA_DEV_FAKE_TARGET", "")
 	t.Setenv("TESSERA_ENV", "dev")
 	t.Setenv("TESSERA_NOW", "2026-10-08T09:30:00")
 	t.Setenv("TESSERA_READINESS_DEMO", "off")
