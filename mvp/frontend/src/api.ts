@@ -220,7 +220,7 @@ async function send<T>(path: string, body: unknown, m: string, onStepUp: () => v
 // ------------------------------------------------------------ step-up (design §9.4, §17)
 
 /** An action that needs a fresh sign-in, kept across the IdP round trip (sessionStorage, ten minutes). */
-export interface PendingAction { method: string; path: string; body?: unknown; label: string; at: number }
+export interface PendingAction { method: string; path: string; body?: unknown; label: string; at: number; needsBody?: boolean }
 
 const PENDING = "tessera.pendingAction";
 /** A pending action older than this is discarded rather than resumed. */
@@ -239,58 +239,37 @@ export function carriesSecret(v: unknown, depth = 0): boolean {
   return Object.entries(v as Record<string, unknown>).some(([k, x]) => SECRET_KEY.test(k) || carriesSecret(x, depth + 1));
 }
 
-/** A body field name that may be stored: a plain snake_case or camelCase word, never a secret-looking one. */
-const STORABLE_KEY = /^[A-Za-z][A-Za-z0-9_]{0,48}$/;
+const PATH_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/-_.~%:,+@=&?!";
+const METHODS = ["POST", "PUT", "PATCH", "DELETE"];
 
-/**
- * A copy of a request body made only of what is safe to keep in browser storage: strings, finite numbers,
- * booleans and null, in arrays and plain objects of bounded depth and size. Any other value (functions,
- * dates, class instances), a field name outside STORABLE_KEY or one that marks a secret makes it null, so
- * the action is kept without a body rather than with a partial one.
- */
-export function storableBody(v: unknown, depth = 0): unknown | null {
-  if (v === null || typeof v === "boolean") return v;
-  if (typeof v === "string") return v.length <= 4000 ? v : null;
-  if (typeof v === "number") return Number.isFinite(v) ? v : null;
-  if (depth > 6) return null;
-  if (Array.isArray(v)) {
-    if (v.length > 500) return null;
-    const out: unknown[] = [];
-    for (const x of v) {
-      const c = storableBody(x, depth + 1);
-      if (c === null && x !== null) return null;
-      out.push(c);
-    }
-    return out;
-  }
-  if (typeof v !== "object" || Object.getPrototypeOf(v) !== Object.prototype) return null;
-  const out: Record<string, unknown> = {};
-  for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
-    if (x === undefined) continue;
-    if (!STORABLE_KEY.test(k) || SECRET_KEY.test(k)) return null;
-    const c = storableBody(x, depth + 1);
-    if (c === null && x !== null) return null;
-    out[k] = c;
+/** Copy s one character at a time out of PATH_ALPHABET: "" when s holds any other character. */
+function fromAlphabet(s: string): string {
+  let out = "";
+  for (const ch of s) {
+    const i = PATH_ALPHABET.indexOf(ch);
+    if (i < 0) return "";
+    out += PATH_ALPHABET[i];
   }
   return out;
 }
 
+/** Request bodies kept in memory for a resume without a page reload; never written to browser storage. */
+const pendingBodies = new Map<string, unknown>();
+
 function savePendingAction(a: PendingAction): void {
-  // Only a rebuilt copy of the body (storableBody) is kept, never the caller's object. A request that
-  // carries a secret, or a body that cannot be rebuilt, is not written to browser storage: after the
-  // step-up the user repeats it. An earlier pending action is dropped too, so the resume prompt never
-  // offers a different action than the one just refused.
-  if (carriesSecret(a.body)) {
-    clearPendingAction();
-    return;
-  }
-  const body = a.body === undefined ? undefined : storableBody(a.body);
-  if (a.body !== undefined && body === null && a.body !== null) {
-    clearPendingAction();
-    return;
-  }
-  const kept: PendingAction = { method: String(a.method), path: a.path, label: String(a.label), at: Number(a.at) };
-  if (body !== undefined) kept.body = body;
+  // Browser storage holds only values rebuilt from constants: an allow-listed method, the path copied
+  // from a fixed alphabet, the label recomputed from that path, and a timestamp. The body stays in
+  // memory (pendingBodies), so a full page reload across the identity provider drops it and the user
+  // submits again; an action with an empty body ({}) needs none and resumes. An earlier pending
+  // action is dropped, so the resume prompt never offers a different action than the one just refused.
+  clearPendingAction();
+  const method = METHODS.find((m) => m === a.method);
+  const path = fromAlphabet(a.path);
+  if (!method || !path.startsWith("/") || carriesSecret(a.body)) return;
+  const needsBody = !(a.body === undefined || (typeof a.body === "object" && a.body !== null && Object.keys(a.body).length === 0));
+  if (needsBody) pendingBodies.set(PENDING, a.body);
+  const kept: PendingAction = { method, path, label: actionLabel(method, path), at: Date.now() };
+  if (needsBody) kept.needsBody = true;
   try {
     sessionStorage.setItem(PENDING, JSON.stringify(kept));
   } catch {
@@ -300,6 +279,7 @@ function savePendingAction(a: PendingAction): void {
 
 /** Forget the pending action (the user declined to resume it, or it ran). */
 export function clearPendingAction(): void {
+  pendingBodies.delete(PENDING);
   try {
     sessionStorage.removeItem(PENDING);
   } catch {
@@ -316,7 +296,9 @@ export function takePendingAction(now = Date.now()): PendingAction | null {
   } catch {
     a = null;
   }
+  const body = pendingBodies.get(PENDING);
   clearPendingAction();
+  if (a && a.needsBody && body !== undefined) a.body = body;
   if (!a || typeof a.path !== "string" || !a.path.startsWith("/") || now - a.at > PENDING_TTL_MS || now < a.at) return null;
   return a;
 }
@@ -357,7 +339,12 @@ export function stepUpHref(challenge: { step_up_url?: string; acr?: string; max_
 }
 
 /** Run a resumed action (after a successful step-up). */
-export const runPendingAction = (a: PendingAction) => api(a.path, a.body, a.method);
+export const runPendingAction = (a: PendingAction) => {
+  if (a.needsBody && a.body === undefined) {
+    return Promise.reject(new Error("The page reloaded during the sign-in, so the form was not kept. Fill it in and submit again."));
+  }
+  return api(a.path, a.body ?? (a.method === "DELETE" ? undefined : {}), a.method);
+};
 
 /** Tell mounted views that data changed outside `api()` (e.g. the mock layer). */
 export const notifyChanged = () => window.dispatchEvent(new Event(CHANGED));

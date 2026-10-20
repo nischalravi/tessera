@@ -19,34 +19,38 @@ let status = 401;
 
 const api = await import("../src/api.ts");
 
-test("storableBody keeps primitives, arrays and plain objects only", () => {
-  assert.deepEqual(api.storableBody({ reason: "r", n: 3, ok: true, none: null, ids: [1, 2], nested: { a: "b" } }), {
-    reason: "r", n: 3, ok: true, none: null, ids: [1, 2], nested: { a: "b" },
-  });
-  assert.equal(api.storableBody({ when: new Date() }), null);
-  assert.equal(api.storableBody({ f: () => 1 }), null);
-  assert.equal(api.storableBody({ "bad key": 1 }), null);
-  assert.equal(api.storableBody({ client_secret: "x" }), null);
-});
-
-test("a write refused for step-up is stored as a rebuilt copy and resumes", async () => {
+test("an empty-body write is stored from constants and resumes", async () => {
   store.clear();
-  const body = { reason: "approved by phone", extra: undefined };
-  await assert.rejects(api.api("/jit/requests/5/approve", body));
-  const raw = store.get("tessera.pendingAction");
-  assert.ok(raw);
-  const a = JSON.parse(raw!);
-  assert.deepEqual(Object.keys(a).sort(), ["at", "body", "label", "method", "path"]);
-  assert.deepEqual(a.body, { reason: "approved by phone" });
+  await assert.rejects(api.api("/jit/requests/5/approve", {}));
+  const a = JSON.parse(store.get("tessera.pendingAction")!);
+  assert.deepEqual(Object.keys(a).sort(), ["at", "label", "method", "path"]);
   assert.equal(a.label, "Approve JIT request #5");
   const taken = api.takePendingAction();
   assert.equal(taken?.path, "/jit/requests/5/approve");
+  status = 200;
+  await api.runPendingAction(taken!);
+  status = 401;
 });
 
-test("bodies with secrets or unstorable values are not stored", async () => {
+test("a body is kept in memory only: never in storage", async () => {
+  store.clear();
+  await assert.rejects(api.api("/flatfile/tasks/t1/close", { reason: "private note" }));
+  const raw = store.get("tessera.pendingAction")!;
+  assert.ok(!raw.includes("private note"));
+  assert.equal(JSON.parse(raw).needsBody, true);
+  const taken = api.takePendingAction();
+  assert.deepEqual(taken?.body, { reason: "private note" });
+  // after a reload the body is gone: the resume refuses rather than sending an empty form
+  store.set("tessera.pendingAction", raw);
+  const reloaded = api.takePendingAction();
+  assert.equal(reloaded?.body, undefined);
+  await assert.rejects(api.runPendingAction(reloaded!), /submit again/);
+});
+
+test("secrets, odd methods and odd paths are not stored", async () => {
   store.clear();
   await assert.rejects(api.api("/connections/okta/credential", { client_secret: "s" }));
   assert.equal(store.size, 0);
-  await assert.rejects(api.api("/x", { when: new Date() }));
+  await assert.rejects(api.api("/x<script>", {}));
   assert.equal(store.size, 0);
 });
