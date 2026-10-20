@@ -434,8 +434,9 @@ const identityLinkWindow = 72 * time.Hour
 //   - a user is linked only to an active identity (identity_not_active);
 //   - a user whose identity is not active (terminated, disabled) keeps the
 //     link, so their sign-in stays blocked (identity_inactive);
-//   - linking a user that has no link applies at once, but changing or
-//     removing an existing link needs two admins: the first admin's request
+//   - linking a user that has no link applies at once, unless another user
+//     is already linked to that identity (#376); changing or removing an
+//     existing link always needs two admins: the first admin's request
 //     answers 202 and waits, the same admin repeating it is refused
 //     (four_eyes_required), and a second admin's identical change applies it
 //     and revokes the user's sessions and CLI refresh tokens.
@@ -489,21 +490,38 @@ func (s *Server) linkGrpUserIdentity(r *http.Request, p *params) (int, any, erro
 		if in.IdentityID == nil {
 			action = "groups.user.identity_unlinked"
 		}
-		if was != nil && !sameLink(was, in.IdentityID) {
-			// the user's current identity must be active: unlinking or
-			// relinking a terminated or disabled person would give them
-			// their sign-in back
-			cur, err := c.Identity(*was)
-			if err != nil && !errors.Is(err, store.ErrNotFound) {
+		// a first link to an identity that another user is already linked to
+		// would let this user act as that person (approval stages, guest
+		// recovery), so it needs two admins like a change (issue #376)
+		shared := false
+		if was == nil && in.IdentityID != nil {
+			others, err := c.UsersLinkedTo(*in.IdentityID)
+			if err != nil {
 				return err
 			}
-			if cur == nil || cur.Status != "active" {
-				st := "missing"
-				if cur != nil {
-					st = cur.Status
+			for _, o := range others {
+				if o != uid.String() {
+					shared = true
 				}
-				return &readiness.Error{Status: http.StatusConflict, Code: "identity_inactive",
-					Msg: "the user's identity is " + st + ", so their sign-in is blocked; the link stays until the identity is enabled again"}
+			}
+		}
+		if (was != nil && !sameLink(was, in.IdentityID)) || shared {
+			if was != nil {
+				// the user's current identity must be active: unlinking or
+				// relinking a terminated or disabled person would give them
+				// their sign-in back
+				cur, err := c.Identity(*was)
+				if err != nil && !errors.Is(err, store.ErrNotFound) {
+					return err
+				}
+				if cur == nil || cur.Status != "active" {
+					st := "missing"
+					if cur != nil {
+						st = cur.Status
+					}
+					return &readiness.Error{Status: http.StatusConflict, Code: "identity_inactive",
+						Msg: "the user's identity is " + st + ", so their sign-in is blocked; the link stays until the identity is enabled again"}
+				}
 			}
 			pend, err := c.IdentityLinkRequest(uid)
 			if err != nil && !errors.Is(err, store.ErrNotFound) {
@@ -514,7 +532,7 @@ func (s *Server) linkGrpUserIdentity(r *http.Request, p *params) (int, any, erro
 			switch {
 			case matches && pend.RequestedByUserID == by.ID:
 				return &readiness.Error{Status: http.StatusForbidden, Code: "four_eyes_required",
-					Msg: "changing an existing identity link needs a second admin: another tenant admin must make the same change"}
+					Msg: "this identity link change needs a second admin: another tenant admin must make the same change"}
 			case !matches:
 				req := &store.IdentityLinkRequest{UserID: uid, IdentityID: in.IdentityID, PreviousIdentityID: was,
 					RequestedByUserID: by.ID, RequestedBy: by.Display, RequestedAt: now, ExpiresAt: now.Add(identityLinkWindow)}

@@ -872,3 +872,67 @@ func TestPrivs_IdentityLinkFourEyes(t *testing.T) {
 		t.Errorf("audit actions %v", got)
 	}
 }
+
+// A first link to an identity another user is already linked to takes two
+// admins (issue #376); a first link to an unshared identity still applies at once.
+func TestPrivs_SharedIdentityLinkFourEyes(t *testing.T) {
+	e := newPrivEnv(t)
+	h := e.srv.Handler()
+	login := func(name string, roles []auth.Role, identity *int64) authtest.Login {
+		return signIn(t, e.f.DB, e.f.B.ID, authtest.User{Email: name + "@b.example", Roles: roles, IdentityID: identity}, authtest.Phr, storetest.Now)
+	}
+	put := func(by, user authtest.Login, identity int64) (int, string) {
+		t.Helper()
+		rec := corrDo(h, by, "PUT", "/api/groups/users/"+user.UserID.String()+"/identity", fmt.Sprintf(`{"identity_id":%d}`, identity))
+		return rec.Code, rec.Body.String()
+	}
+	linkOf := func(user authtest.Login) *int64 {
+		t.Helper()
+		var id *int64
+		if err := e.f.DB.ReadTenant(context.Background(), e.f.B.ID, func(c *store.TenantTx) error {
+			u, err := c.PlatformUser(user.UserID)
+			if err == nil {
+				id = u.IdentityID
+			}
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	admins := []auth.Role{auth.RoleTenantAdmin}
+	bob, carol := e.ident("bob"), e.ident("carol")
+	a1, a2 := login("a1", admins, nil), login("a2", admins, nil)
+	login("owner", []auth.Role{auth.RoleOperator}, &bob)
+	vic := login("vic", []auth.Role{auth.RoleOperator}, nil)
+
+	// an unshared identity still links at once
+	if code, body := put(a1, vic, carol); code != 200 {
+		t.Fatalf("unshared first link: %d %s", code, body)
+	}
+	other := login("other", []auth.Role{auth.RoleOperator}, nil)
+
+	// a shared identity: one admin leaves it pending and cannot confirm it alone
+	code, body := put(a1, other, bob)
+	if code != 202 || !strings.Contains(body, "pending_second_admin") {
+		t.Fatalf("first admin: %d %s", code, body)
+	}
+	code, body = put(a1, other, bob)
+	if code != 403 || !strings.Contains(body, "four_eyes_required") {
+		t.Fatalf("same admin again: %d %s", code, body)
+	}
+	if l := linkOf(other); l != nil {
+		t.Fatalf("one admin linked a shared identity: %v", *l)
+	}
+	// a second admin applies it
+	if code, body = put(a2, other, bob); code != 200 {
+		t.Fatalf("second admin: %d %s", code, body)
+	}
+	if l := linkOf(other); l == nil || *l != bob {
+		t.Fatalf("the confirmed link was not applied: %v", l)
+	}
+	got := auditActions(t, e.f, e.f.B.ID)
+	if got["groups.user.identity_change_requested"] != 1 || got["groups.user.identity_linked"] < 2 {
+		t.Errorf("audit actions %v", got)
+	}
+}
