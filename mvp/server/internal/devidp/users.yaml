@@ -10,7 +10,7 @@
 #                   password_otp  password + one-time code: MFA, not phishing-resistant
 #                   password      password only
 - {sub: "00u-alice-admin", email: alice.admin@larkspur.example, name: "Alice (tenant admin)", tenant: larkspur, groups: ["Tessera Viewers"], roles: [tenant_admin], authenticators: [passkey, password_otp, password]}
-- {sub: "00u-ivan-admin2", email: ivan.admin@larkspur.example, name: "Ivan (2nd admin)", tenant: larkspur, roles: [tenant_admin], authenticators: [passkey, hardware_key, password_otp]}
+- {sub: "00u-ivan-admin2", email: ivan.admin@larkspur.example, name: "Ivan (2nd admin)", tenant: larkspur, roles: [tenant_admin, policy_admin], authenticators: [passkey, hardware_key, password_otp]}
 - {sub: "00u-pat-policy", email: pat.policy@larkspur.example, name: "Pat (policy admin)", tenant: larkspur, roles: [policy_admin], authenticators: [passkey, password_otp]}
 - {sub: "00u-olu-operator", email: olu@larkspur.example, name: "Olu (operator)", tenant: larkspur, groups: ["Tessera Operators"], roles: [operator], authenticators: [password_otp, password]}
 - {sub: "00u-vic-viewer", email: vic@larkspur.example, name: "Vic (viewer)", tenant: larkspur, groups: ["Tessera Viewers"], roles: [viewer], authenticators: [password]}

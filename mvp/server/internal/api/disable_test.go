@@ -234,8 +234,8 @@ func TestDisableAPI_SignsOutTheLinkedUser(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if off, err := auth.IdentityDisabled(tx, u); err != nil || !off {
-			t.Errorf("IdentityDisabled = %v, %v", off, err)
+		if off, err := auth.IdentityInactive(tx, u); err != nil || !off {
+			t.Errorf("IdentityInactive = %v, %v", off, err)
 		}
 		return nil
 	}); err != nil {
