@@ -244,6 +244,9 @@ POST   /api/sod/violations/escalate                  sod.mitigate    -  # issue 
 POST   /api/sod/violations/revoke                    graph.read      -  # issue #298 (applying: grants.revoke and step-up in the handler)
 GET    /api/sod/review-context                       graph.read      -  # issue #298
 POST   /api/sod/simulate                             requests.create -  # issue #298
+GET    /api/agents                                   connections.read   -  # issue #92
+POST   /api/agents                                   connections.manage STEP_UP_POLICY  # issue #92
+POST   /api/agents/{id}/revoke                       connections.manage STEP_UP_POLICY  # issue #92
 GET    /api/jobs                                     jobs.read       -  # issue #172
 GET    /api/jobs/{job_id}                            jobs.read       -  #
 POST   /api/jobs/{job_id}/retry                      jobs.read       -  # (the replayed route's own permission and step-up apply)

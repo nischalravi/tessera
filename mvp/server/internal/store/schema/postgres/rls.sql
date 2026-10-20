@@ -858,6 +858,26 @@ CREATE POLICY tenant_isolation ON queue_jobs
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE directory_agents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE directory_agents FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON directory_agents;
+CREATE POLICY tenant_isolation ON directory_agents
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+DROP POLICY IF EXISTS lookup_by_hash ON directory_agents;
+CREATE POLICY lookup_by_hash ON directory_agents FOR SELECT
+  USING (current_setting('app.lookup', true) = 'agent_cert_pin');
+
+ALTER TABLE agent_enrolments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_enrolments FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON agent_enrolments;
+CREATE POLICY tenant_isolation ON agent_enrolments
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+DROP POLICY IF EXISTS lookup_by_hash ON agent_enrolments;
+CREATE POLICY lookup_by_hash ON agent_enrolments FOR SELECT
+  USING (current_setting('app.lookup', true) = 'agent_enrolment_hash');
+
 ALTER TABLE api_clients ENABLE ROW LEVEL SECURITY;
 ALTER TABLE api_clients FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON api_clients;

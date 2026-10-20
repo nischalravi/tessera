@@ -278,6 +278,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/api/containment-retries/{retry_id}/retry-now" {
 			continue // TestContainmentRetriesAPI (a UUID, not a fixture id)
 		}
+		if rt.Pattern == "/api/agents/{id}/revoke" {
+			continue // TestAgentsAPI (a UUID, not a fixture id)
+		}
 		if strings.HasPrefix(rt.Pattern, "/api/evidence/packs/{pack_id}") {
 			continue // TestEvidenceAPI_CrossTenant (a UUID, not a fixture id)
 		}
