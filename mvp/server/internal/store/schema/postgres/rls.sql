@@ -878,3 +878,10 @@ DROP POLICY IF EXISTS tenant_isolation ON refresh_tokens;
 CREATE POLICY tenant_isolation ON refresh_tokens
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE connector_checkpoints ENABLE ROW LEVEL SECURITY;
+ALTER TABLE connector_checkpoints FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON connector_checkpoints;
+CREATE POLICY tenant_isolation ON connector_checkpoints
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));

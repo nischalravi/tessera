@@ -141,6 +141,8 @@ var tables = []string{
 	"intake_records", "sponsorships", "sponsorship_events",
 	// identity containment (schema/0205_containment.sql)
 	"containment_credentials", "containment_retries",
+	// connector sync checkpoints (schema/0360_connector_checkpoints.sql)
+	"connector_checkpoints",
 	// point-in-time access and evidence packs (schema/0260-0261)
 	"edge_history", "evidence_packs",
 	// SIEM sinks (schema/0210_siem.sql)
