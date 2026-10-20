@@ -456,11 +456,130 @@ GET    /api/groups/{id}/privileges/effective         groups.read     -  # issue 
 DELETE /api/groups/{id}/privileges/{privilege_id}    groups.write    -  # issue #47: admin
 GET    /api/groups/privileges/settings               groups.admin    -  # issue #47
 PUT    /api/groups/privileges/settings               groups.admin    -  # issue #47
+GET    /api/groups/folders/{id}/rules                groups.read     -  # issue #56: stem_admin
+POST   /api/groups/folders/{id}/rules                groups.write    -  # issue #56: stem_admin, and admin on what the action touches
+PUT    /api/groups/folders/{id}/rules/{rule_id}      groups.write    -  # issue #56: stem_admin, and admin on what the action touches
+DELETE /api/groups/folders/{id}/rules/{rule_id}      groups.write    -  # issue #56: stem_admin
+GET    /api/groups/{id}/rules                        groups.read     -  # issue #56: admin
+POST   /api/groups/{id}/rules                        groups.write    -  # issue #56: admin, and admin on what the action touches
+PUT    /api/groups/{id}/rules/{rule_id}              groups.write    -  # issue #56: admin, and admin on what the action touches
+DELETE /api/groups/{id}/rules/{rule_id}              groups.write    -  # issue #56: admin
+GET    /api/groups/rules/settings                    groups.admin    -  # issue #56
+PUT    /api/groups/rules/settings                    groups.admin    -  # issue #56
+GET    /api/groups/{id}/attestation                  groups.read     -  # issue #57: admin
+PUT    /api/groups/{id}/attestation                  groups.write    -  # issue #57: admin
+DELETE /api/groups/{id}/attestation                  groups.write    -  # issue #57: admin
+GET    /api/groups/folders/{id}/attestation          groups.read     -  # issue #57: stem_admin
+PUT    /api/groups/folders/{id}/attestation          groups.write    -  # issue #57: stem_admin
+DELETE /api/groups/folders/{id}/attestation          groups.write    -  # issue #57: stem_admin
+GET    /api/groups/{id}/attestation/campaigns        groups.read     -  # issue #57: admin
+POST   /api/groups/{id}/attestation/campaigns        groups.write    -  # issue #57: admin
+GET    /api/groups/attestation/campaigns/{campaign_id} groups.read   -  # issue #57: admin, or member of the reviewer group
+POST   /api/groups/attestation/campaigns/{campaign_id}/items/{item_id}/decision groups.write - # issue #57: admin, or member of the reviewer group
+GET    /api/groups/inbox/tasks                       groups.read     -  # issue #57: the tasks the caller administers or is assigned
+POST   /api/groups/inbox/tasks/{task_id}/close       groups.write    -  # issue #57: admin (stem_admin) on the task's object, or assignee
+GET    /api/groups/deprovisioning/settings           groups.admin    -  # issue #57
+PUT    /api/groups/deprovisioning/settings           groups.admin    -  # issue #57
+GET    /api/groups/folders/{id}/deprovisioning       groups.read     -  # issue #57: stem_admin
+PUT    /api/groups/folders/{id}/deprovisioning       groups.write    -  # issue #57: stem_admin
+DELETE /api/groups/folders/{id}/deprovisioning       groups.write    -  # issue #57: stem_admin
+GET    /api/groups/deprovisioning/items              groups.read     -  # issue #57: the folders the caller administers
+POST   /api/groups/deprovisioning/items/{item_id}/resolve groups.write -  # issue #57: stem_admin on the folder
+GET    /api/groups/reports/catalogue                 groups.read     -  # issue #57
+GET    /api/groups/reports/saved                     groups.read     -  # issue #57: the caller's own reports
+POST   /api/groups/reports/saved                     groups.write    -  # issue #57: the privilege the report's object needs
+GET    /api/groups/reports/saved/{report_id}         groups.read     -  # issue #57: owner or tenant admin
+PUT    /api/groups/reports/saved/{report_id}         groups.write    -  # issue #57: owner or tenant admin
+DELETE /api/groups/reports/saved/{report_id}         groups.write    -  # issue #57: owner or tenant admin
+POST   /api/groups/reports/saved/{report_id}/run     groups.write    -  # issue #57: owner or tenant admin; rows filtered by the caller's privileges
+GET    /api/groups/reports/saved/{report_id}/runs    groups.read     -  # issue #57: owner or tenant admin
+GET    /api/groups/reports/runs/{run_id}             groups.read     -  # issue #57: the user the run was made for, or a tenant admin
+POST   /api/groups/reports/run                       groups.write    -  # issue #57: the privilege the report's object needs
+GET    /api/groups/{id}/graph                        groups.read     -  # issue #57: view; nodes filtered by view
+GET    /api/groups/graph/identity/{identity_id}      groups.read     -  # issue #57: nodes filtered by view
 PUT    /api/groups/users/{id}/identity               groups.admin    STEP_UP_POLICY  # issue #47
 GET    /api/groups/pit/digests                       groups.admin    -  # issue #46
 GET    /api/groups/pit/verify                        groups.admin    -  # issue #46
 POST   /api/groups/pit/rebuild                       groups.admin    -  # issue #46
 GET    /api/mfa/posture                              graph.read      -  # issue #109
+POST   /api/groups/{id}/members:batch                groups.write    -  # issue #48: update, or optin / optout for oneself, per operation
+POST   /api/groups:simulate                          groups.write    -  # issue #48: the privileges of the changes it simulates
+GET    /api/identities/{identity_id}/groups          groups.read     -  # issue #48: only the groups the caller may read
+GET    /api/openapi/groups.json                      auth.self       -  # issue #48
+GET    /scim/v2/ServiceProviderConfig                groups.read     -  # issue #48: read-only SCIM server
+GET    /scim/v2/ResourceTypes                        groups.read     -  # issue #48
+GET    /scim/v2/Groups                               groups.read     -  # issue #48: only the groups the caller may read
+GET    /scim/v2/Groups/{id}                          groups.read     -  # issue #48: read
+GET    /scim/v2/Users                                groups.read     -  # issue #48
+GET    /scim/v2/Users/{id}                           groups.read     -  # issue #48
+GET    /api/groups/object-types                      groups.read     -  # issue #50: the object type vocabulary
+GET    /api/groups/services                          groups.read     -  # issue #50: the services the caller's groups grant (stem_view, view)
+GET    /api/groups/attr-defs                         groups.read     -  # issue #50: the definitions the caller may view (attr_view)
+POST   /api/groups/attr-defs                         groups.write    -  # issue #50: create on the folder
+GET    /api/groups/attr-defs/{id}                    groups.read     -  # issue #50: attr_view
+PATCH  /api/groups/attr-defs/{id}                    groups.write    -  # issue #50: attr_admin
+DELETE /api/groups/attr-defs/{id}                    groups.write    -  # issue #50: attr_admin
+GET    /api/groups/attr-defs/{id}/actions            groups.read     -  # issue #50: attr_view
+POST   /api/groups/attr-defs/{id}/actions            groups.write    -  # issue #50: attr_admin
+DELETE /api/groups/attr-defs/{id}/actions/{action_id} groups.write   -  # issue #50: attr_admin
+PUT    /api/groups/attr-defs/{id}/actions/{action_id}/implies groups.write -  # issue #50: attr_admin
+GET    /api/groups/attr-defs/{id}/privileges         groups.read     -  # issue #50: attr_admin
+POST   /api/groups/attr-defs/{id}/privileges         groups.write    -  # issue #50: attr_admin
+GET    /api/groups/attr-defs/{id}/privileges/effective groups.read   -  # issue #50: attr_view (own), attr_admin (another identity)
+DELETE /api/groups/attr-defs/{id}/privileges/{privilege_id} groups.write -  # issue #50: attr_admin
+GET    /api/groups/attr-names                        groups.read     -  # issue #50: attr_view on the definition
+POST   /api/groups/attr-names                        groups.write    -  # issue #50: attr_admin on the definition
+GET    /api/groups/attr-names/{id}                   groups.read     -  # issue #50: attr_view
+PATCH  /api/groups/attr-names/{id}                   groups.write    -  # issue #50: attr_admin
+DELETE /api/groups/attr-names/{id}                   groups.write    -  # issue #50: attr_admin
+PUT    /api/groups/attr-names/{id}/implies           groups.write    -  # issue #50: attr_admin
+GET    /api/groups/attr-assignments                  groups.read     -  # issue #50: attr_read and the owner's read privilege (filtered)
+POST   /api/groups/attr-assignments                  groups.write    -  # issue #50: attr_update and the owner's update privilege (attr_optin on oneself)
+GET    /api/groups/attr-assignments/{id}             groups.read     -  # issue #50: attr_read and the owner's read privilege
+PATCH  /api/groups/attr-assignments/{id}             groups.write    -  # issue #50: attr_update and the owner's update privilege
+DELETE /api/groups/attr-assignments/{id}             groups.write    -  # issue #50: attr_update and the owner's update privilege (attr_optout on oneself)
+PUT    /api/groups/attr-assignments/{id}/values      groups.write    -  # issue #50: attr_update and the owner's update privilege
+GET    /api/groups/{id}/object-types                 groups.read     -  # issue #50: view (lint findings need read)
+PUT    /api/groups/{id}/object-types                 groups.write    -  # issue #50: group_attr_update
+GET    /api/groups/folders/{id}/object-types         groups.read     -  # issue #50: stem_view
+PUT    /api/groups/folders/{id}/object-types         groups.write    -  # issue #50: stem_attr_update
+POST   /api/groups/policy/validate                   groups.read     -  # issue #52: read on the groups the policy refers to
+POST   /api/groups/policy/diff                       groups.read     -  # issue #52: read on the policy groups compared and on the groups referred to
+POST   /api/groups/policy/apply                      groups.write    -  # issue #52: create on the folder or admin on the policy group, read on the groups referred to
+POST   /api/groups/policy/reindex                    groups.admin    -  # issue #52
+GET    /api/groups/{id}/policy                       groups.read     -  # issue #52: read
+GET    /api/groups/loaders                           groups.read     -  # issue #53: the loaders whose folder the caller may view (stem_view)
+POST   /api/groups/loaders                           groups.loader.admin STEP_UP_POLICY  # issue #53: stem_admin on the folder; a SQL loader needs a second approver
+GET    /api/groups/loader-tasks                      groups.read     -  # issue #53: held runs (loader_held), for stem_admin on the folder
+GET    /api/groups/loaders/{id}                      groups.read     -  # issue #53: stem_view (the definition: stem_admin)
+PATCH  /api/groups/loaders/{id}                      groups.loader.admin STEP_UP_POLICY  # issue #53: stem_admin; a SQL loader needs a second approver
+POST   /api/groups/loaders/{id}/run                  groups.loader.admin -  # issue #53: stem_admin
+GET    /api/groups/loaders/{id}/runs                 groups.read     -  # issue #53: stem_view
+GET    /api/groups/loaders/{id}/runs/{run_id}        groups.read     -  # issue #53: stem_admin
+POST   /api/groups/loaders/{id}/runs/{run_id}/approve groups.loader.admin STEP_UP_POLICY  # issue #53: stem_admin
+POST   /api/groups/loaders/{id}/runs/{run_id}/reject groups.loader.admin STEP_UP_POLICY  # issue #53: stem_admin
+GET    /api/groups/loaders/{id}/unresolved           groups.read     -  # issue #53: stem_admin
+GET    /api/groups/provisioners                      groups.admin    -  # issue #54
+POST   /api/groups/provisioners                      groups.admin    -  # issue #54
+GET    /api/groups/provisioners/{id}                 groups.admin    -  # issue #54
+PATCH  /api/groups/provisioners/{id}                 groups.admin    -  # issue #54
+DELETE /api/groups/provisioners/{id}                 groups.admin    -  # issue #54
+GET    /api/groups/provisioners/{id}/marks           groups.admin    -  # issue #54
+PUT    /api/groups/provisioners/{id}/marks           groups.admin    -  # issue #54
+DELETE /api/groups/provisioners/{id}/marks/{mark_type}/{object} groups.admin    -  # issue #54
+POST   /api/groups/provisioners/{id}/sync            groups.admin    -  # issue #54
+GET    /api/groups/provisioners/{id}/runs            groups.admin    -  # issue #54
+GET    /api/groups/provisioners/{id}/ops             groups.admin    -  # issue #54
+GET    /api/groups/provisioners/{id}/groups          groups.admin    -  # issue #54
+POST   /api/groups/provisioners/{id}/diagnose        groups.admin    -  # issue #54
+GET    /api/groups/event-sinks                       groups.admin    -  # issue #61
+POST   /api/groups/event-sinks                       groups.admin    -  # issue #61
+GET    /api/groups/event-sinks/{id}                  groups.admin    -  # issue #61
+PATCH  /api/groups/event-sinks/{id}                  groups.admin    -  # issue #61
+DELETE /api/groups/event-sinks/{id}                  groups.admin    -  # issue #61
+GET    /api/groups/event-sinks/{id}/dead-letters     groups.admin    -  # issue #61
+POST   /api/groups/event-sinks/{id}/dead-letters/{seq}/redeliver groups.admin    -  # issue #61
+POST   /api/groups/event-sinks/{id}/dead-letters/{seq}/discard   groups.admin    -  # issue #61
 GET    /api/auth/session                             auth.self       -
 POST   /api/auth/logout                              auth.self       -
 GET    /api/auth/sessions                            auth.self       -

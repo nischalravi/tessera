@@ -1,0 +1,25 @@
+{
+  "kind": "attestation_status",
+  "generated_at": "2026-10-10T09:30:00Z",
+  "columns": [
+    "group",
+    "status",
+    "started_at",
+    "due_at",
+    "population",
+    "undecided",
+    "overdue"
+  ],
+  "rows": [
+    [
+      "app:a",
+      "open",
+      "2026-10-08T09:30:00Z",
+      "2026-11-07T09:30:00Z",
+      "2",
+      "2",
+      "no"
+    ]
+  ],
+  "truncated": false
+}

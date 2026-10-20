@@ -1,0 +1,22 @@
+{
+  "kind": "groups_of_person",
+  "generated_at": "2026-10-10T09:30:00Z",
+  "columns": [
+    "group",
+    "membership",
+    "status"
+  ],
+  "rows": [
+    [
+      "app:a",
+      "direct",
+      "active"
+    ],
+    [
+      "app:b",
+      "nested",
+      "active"
+    ]
+  ],
+  "truncated": false
+}

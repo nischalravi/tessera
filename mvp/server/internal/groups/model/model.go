@@ -10,6 +10,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/attrs"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/events"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/naming"
@@ -33,6 +34,10 @@ const (
 // privileges of what the operation creates) and TenantAdmin says the user holds
 // an active tenant_admin role (GR-4). The model does not check privileges: the
 // API does, before it calls the model.
+//
+// Guard (GR-13) vets a change before it is made; nil vets nothing. Cause and
+// CauseRef say what the change's events are caused by (default: the API); the
+// rules runner sets them to rule and the rule's id.
 type Env struct {
 	Tx          *store.TenantTx
 	Now         time.Time
@@ -40,12 +45,41 @@ type Env struct {
 	Engine      *engine.Engine
 	ByIdentity  *int64
 	TenantAdmin bool
+	Guard       Guard
+	Cause       string
+	CauseRef    string
+	// System is the policy sync's own operation (GR-9): it may change the groups
+	// the policy repository manages, which the API may not.
+	System bool
+	// VetoOverride is the reason an administrator gives to add an identity the
+	// deprovisioning rule would refuse (GR-14). The API sets it only after it
+	// checked the caller holds admin on the group; it is audited.
+	VetoOverride string
+}
+
+// Guard vets changes before the model makes them (internal/groups/rules
+// implements it). A refusal is returned as the operation's error, usually a
+// Vetoed conflict.
+type Guard interface {
+	// VetoAdd is asked before an identity is added directly to a group's members
+	// list (not when the dates of an existing row change). source is where the
+	// add comes from (api, rule, ...).
+	VetoAdd(e Env, g *store.NativeGroup, identity int64, source string) error
+}
+
+// cause is the cause type of the events the operation writes.
+func (e Env) cause() string {
+	if e.Cause != "" {
+		return e.Cause
+	}
+	return store.CauseAPI
 }
 
 var defaultEngine = engine.New(0)
 
 func (e Env) privs() privs.Env {
-	return privs.Env{Tx: e.Tx, Now: e.Now, By: e.By, ByIdentity: e.ByIdentity, TenantAdmin: e.TenantAdmin}
+	return privs.Env{Tx: e.Tx, Now: e.Now, By: e.By, ByIdentity: e.ByIdentity, TenantAdmin: e.TenantAdmin,
+		Cause: e.Cause, CauseRef: e.CauseRef}
 }
 
 // Privs is the same operation context for the privilege model.
@@ -315,8 +349,12 @@ func firstErr(err error) error {
 }
 
 // CreateGroupInput creates a group in Folder: basic by default, or a composite
-// (Definition composite with Op and Factors). Policy groups arrive with GR-9.
+// (Definition composite with Op and Factors). A policy group (Definition policy,
+// factors allow and deny) is only made by internal/groups/policygroups, which
+// sets PolicyRef; the API never does. ManagedBy is the writer (ui by default).
 type CreateGroupInput struct {
+	ManagedBy         store.ManagedBy
+	PolicyRef         *string
 	Folder            store.FolderID
 	Extension         string
 	DisplayExtension  string
@@ -379,12 +417,26 @@ func (e Env) CreateGroup(in CreateGroupInput) (*store.NativeGroup, error) {
 		}
 		o := in.Op
 		op = &o
+	case store.DefinitionPolicy:
+		if in.PolicyRef == nil {
+			return nil, invalid("invalid_definition", "definition is basic or composite (policy groups are made from policy files)")
+		}
+		if err := e.checkFactors("", store.CompComplement, in.Factors); err != nil {
+			return nil, err
+		}
 	default:
-		return nil, invalid("invalid_definition", "definition is basic or composite (policy groups arrive with GR-9)")
+		return nil, invalid("invalid_definition", "definition is basic or composite")
+	}
+	if in.PolicyRef != nil && def != store.DefinitionPolicy {
+		return nil, invalid("invalid_definition", "a policy reference is only for a policy group")
+	}
+	managedBy := in.ManagedBy
+	if managedBy == "" {
+		managedBy = store.ManagedByUI
 	}
 	g := &store.NativeGroup{FolderID: folder.ID, Extension: in.Extension, DisplayExtension: disp, Name: name,
 		DisplayName: displayName(folder.DisplayName, disp), Description: in.Description, Kind: in.Kind,
-		Definition: def, CompositeOp: op, ManagedBy: store.ManagedByUI, DataOwner: ownerPtr(in.DataOwner),
+		Definition: def, CompositeOp: op, PolicyRef: in.PolicyRef, ManagedBy: managedBy, DataOwner: ownerPtr(in.DataOwner),
 		MemberDescription: ownerPtr(in.MemberDescription), Requestable: in.Requestable, Status: store.GroupActive,
 		CreatedAt: e.Now, CreatedBy: e.By}
 	if err := e.Tx.InsertGrpGroup(g); err != nil {
@@ -399,7 +451,7 @@ func (e Env) CreateGroup(in CreateGroupInput) (*store.NativeGroup, error) {
 	detail := ojson.Object{{Key: "group_id", Value: string(g.ID)}, {Key: "name", Value: g.Name},
 		{Key: "folder_id", Value: string(folder.ID)}, {Key: "kind", Value: string(g.Kind)},
 		{Key: "definition", Value: string(def)}}
-	if def == store.DefinitionComposite {
+	if def != store.DefinitionBasic {
 		if err := e.eng().SetFactors(e.Tx, e.Now, g.ID, in.Factors); err != nil {
 			return nil, e.engineErr(err)
 		}
@@ -410,6 +462,9 @@ func (e Env) CreateGroup(in CreateGroupInput) (*store.NativeGroup, error) {
 			return nil, e.engineErr(err)
 		}
 		detail = append(detail, ojson.KV{Key: "op", Value: string(in.Op)}, ojson.KV{Key: "factors", Value: groupIDStrings(in.Factors)})
+		if in.ManagedBy != "" {
+			detail = append(detail, ojson.KV{Key: "managed_by", Value: string(in.ManagedBy)})
+		}
 		if g, err = e.Group(g.ID); err != nil { // the recompute may have left it pending
 			return nil, err
 		}
@@ -669,11 +724,24 @@ func (e Env) liveGroup(id store.GroupID) (*store.NativeGroup, *store.Folder, err
 	if g.Status == store.GroupDeleted {
 		return nil, nil, conflict("group_deleted", "the group is deleted; restore it first")
 	}
+	if err := e.notPolicyManaged(g); err != nil {
+		return nil, nil, err
+	}
 	f, err := e.Folder(g.FolderID)
 	if err != nil {
 		return nil, nil, err
 	}
 	return g, f, writable(f)
+}
+
+// notPolicyManaged refuses a change to a group the policy repository owns (its
+// definition, its compiled helper groups and the attribute groups): only the
+// policy sync (Env.System) may change it (design §8.5).
+func (e Env) notPolicyManaged(g *store.NativeGroup) error {
+	if g.ManagedBy == store.ManagedByPolicyRepo && !e.System {
+		return conflict("policy_managed", "group %q is managed by the policy repository: change its policy file", g.Name)
+	}
+	return nil
 }
 
 // UpdateGroup renames a group (keeping the old name as an alias) or edits its
@@ -688,6 +756,9 @@ func (e Env) UpdateGroup(id store.GroupID, in UpdateGroupInput) (*store.NativeGr
 	}
 	if g.ManagedBy == store.ManagedByGrouperMirror {
 		return nil, conflict("folder_mirrored", "group %q is mirrored from Grouper and is read-only here", g.Name)
+	}
+	if g.ManagedBy == store.ManagedByLoader && in.Extension != nil && *in.Extension != g.Extension {
+		return nil, loaderManaged(g) // the loader finds its groups by name
 	}
 	old := g.Name
 	before := *g
@@ -814,6 +885,9 @@ func (e Env) MoveGroup(id store.GroupID, folder store.FolderID) (*store.NativeGr
 	if g.FolderID == dest.ID {
 		return g, nil
 	}
+	if g.ManagedBy == store.ManagedByLoader {
+		return nil, loaderManaged(g)
+	}
 	old := g.Name
 	if err := e.placeGroup(g, dest); err != nil {
 		return nil, err
@@ -873,6 +947,10 @@ func (e Env) CopyGroup(id store.GroupID, in CopyInput) (*store.NativeGroup, erro
 		return nil, err
 	}
 	if err := privs.GrantCreator(e.privs(), privs.GroupObject(cp.ID)); err != nil {
+		return nil, err
+	}
+	if err := e.copyObjectTypes(attrs.Owner{Type: store.AttrOwnerGroup, ID: string(src.ID)},
+		attrs.Owner{Type: store.AttrOwnerGroup, ID: string(cp.ID)}); err != nil {
 		return nil, err
 	}
 	return cp, e.audit("groups.group.copied", "group", string(cp.ID), ojson.Object{{Key: "group_id", Value: string(cp.ID)},
@@ -971,6 +1049,10 @@ func (e Env) CopyFolder(id store.FolderID, in CopyInput) (*store.Folder, error) 
 	if err := privs.GrantCreator(e.privs(), privs.FolderObject(top.ID)); err != nil {
 		return nil, err
 	}
+	if err := e.copyObjectTypes(attrs.Owner{Type: store.AttrOwnerFolder, ID: string(src.ID)},
+		attrs.Owner{Type: store.AttrOwnerFolder, ID: string(top.ID)}); err != nil {
+		return nil, err
+	}
 	newID := map[store.FolderID]store.FolderID{src.ID: top.ID}
 	for _, s := range subFolders {
 		n, d := rebased(s.Name, s.DisplayName, src, newName, newDisplay)
@@ -987,6 +1069,10 @@ func (e Env) CopyFolder(id store.FolderID, in CopyInput) (*store.Folder, error) 
 		if err := privs.GrantDefaults(e.privs(), privs.FolderObject(c.ID)); err != nil {
 			return nil, err
 		}
+		if err := e.copyObjectTypes(attrs.Owner{Type: store.AttrOwnerFolder, ID: string(s.ID)},
+			attrs.Owner{Type: store.AttrOwnerFolder, ID: string(c.ID)}); err != nil {
+			return nil, err
+		}
 		newID[s.ID] = c.ID
 	}
 	copied := 0
@@ -1001,6 +1087,10 @@ func (e Env) CopyFolder(id store.FolderID, in CopyInput) (*store.Folder, error) 
 			return nil, err
 		}
 		if err := privs.GrantDefaults(e.privs(), privs.GroupObject(cp.ID)); err != nil {
+			return nil, err
+		}
+		if err := e.copyObjectTypes(attrs.Owner{Type: store.AttrOwnerGroup, ID: string(g.ID)},
+			attrs.Owner{Type: store.AttrOwnerGroup, ID: string(cp.ID)}); err != nil {
 			return nil, err
 		}
 		copied++
@@ -1036,12 +1126,24 @@ func (e Env) DeleteFolder(id store.FolderID) error {
 	if err != nil {
 		return err
 	}
-	if folders+groups > 0 {
-		ce := conflict("folder_not_empty", "the folder still holds %d subfolder(s) and %d group(s)", folders, groups)
-		ce.Extra = map[string]any{"folders": folders, "groups": groups}
+	defs, err := e.Tx.GrpAttrDefCountIn(f.ID)
+	if err != nil {
+		return err
+	}
+	if folders+groups+defs > 0 {
+		ce := conflict("folder_not_empty", "the folder still holds %d subfolder(s), %d group(s) and %d attribute definition(s)", folders, groups, defs)
+		ce.Extra = map[string]any{"folders": folders, "groups": groups, "attr_defs": defs}
 		return ce
 	}
 	if err := e.Tx.DeleteGrpAliasesOf(store.AliasFolder, string(f.ID)); err != nil {
+		return err
+	}
+	// the folder's attribute assignments end with it
+	if _, err := attrs.RemoveAllOf(e.Attrs(), attrs.Owner{Type: store.AttrOwnerFolder, ID: string(f.ID)}); err != nil {
+		return err
+	}
+	// its rules end with it (a rule names its owner with no foreign key)
+	if _, err := e.Tx.DeleteGrpRulesOf(store.RuleOwnerFolder, string(f.ID)); err != nil {
 		return err
 	}
 	// the folder's privileges end with it; a row on a folder names no foreign key
@@ -1067,6 +1169,9 @@ func (e Env) DeleteGroup(id store.GroupID) error {
 	}
 	if g.Status == store.GroupDeleted {
 		return nil
+	}
+	if err := e.notPolicyManaged(g); err != nil {
+		return err
 	}
 	f, err := e.Folder(g.FolderID)
 	if err != nil {
@@ -1098,6 +1203,9 @@ func (e Env) RestoreGroup(id store.GroupID) (*store.NativeGroup, error) {
 	}
 	if g.Status != store.GroupDeleted {
 		return nil, conflict("not_deleted", "the group is not deleted")
+	}
+	if err := e.notPolicyManaged(g); err != nil {
+		return nil, err
 	}
 	f, err := e.Folder(g.FolderID)
 	if err != nil {

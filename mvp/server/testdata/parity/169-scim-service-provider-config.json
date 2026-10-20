@@ -1,0 +1,42 @@
+{
+ "name": "scim-service-provider-config",
+ "request": {
+  "method": "GET",
+  "path": "/scim/v2/ServiceProviderConfig"
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "authenticationSchemes": [],
+   "bulk": {
+    "maxOperations": 0,
+    "maxPayloadSize": 0,
+    "supported": false
+   },
+   "changePassword": {
+    "supported": false
+   },
+   "documentationUri": "/api/openapi/groups.json",
+   "etag": {
+    "supported": false
+   },
+   "filter": {
+    "maxResults": 200,
+    "supported": true
+   },
+   "meta": {
+    "location": "/scim/v2/ServiceProviderConfig",
+    "resourceType": "ServiceProviderConfig"
+   },
+   "patch": {
+    "supported": false
+   },
+   "schemas": [
+    "urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig"
+   ],
+   "sort": {
+    "supported": false
+   }
+  }
+ }
+}

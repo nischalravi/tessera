@@ -1,0 +1,17 @@
+{
+ "name": "identity-groups-empty",
+ "request": {
+  "method": "GET",
+  "path": "/api/identities/1/groups"
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "identity_id": 1,
+   "filter": "effective",
+   "items": [],
+   "limit": 100,
+   "offset": 0
+  }
+ }
+}

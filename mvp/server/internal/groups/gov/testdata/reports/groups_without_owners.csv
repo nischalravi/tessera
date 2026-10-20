@@ -1,0 +1,6 @@
+group,folder,status
+app:aff,app,active
+app:b,app,active
+app:c,app,active
+app:pol,app,active
+other:x,other,active

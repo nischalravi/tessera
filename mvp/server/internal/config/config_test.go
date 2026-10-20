@@ -226,6 +226,47 @@ func TestGroupsRetentionDays(t *testing.T) {
 	}
 }
 
+// TestLoaderDataDir: file sources of group loaders are off unless the data
+// directory is set, and it is refused if it is relative or contains the database.
+func TestLoaderDataDir(t *testing.T) {
+	c, err := config.Load(env(map[string]string{"TESSERA_ENV": "dev"}))
+	if err != nil || c.LoaderDataDir != "" {
+		t.Fatalf("default = %q, %v; want off", c.LoaderDataDir, err)
+	}
+	dir := t.TempDir()
+	c, err = config.Load(env(map[string]string{"TESSERA_ENV": "dev", "TESSERA_LOADER_DATA_DIR": dir, "TESSERA_DB": filepath.Join(t.TempDir(), "t.db")}))
+	if err != nil || c.LoaderDataDir != dir {
+		t.Errorf("set = %q, %v; want %s", c.LoaderDataDir, err, dir)
+	}
+	for name, vars := range map[string]map[string]string{
+		"relative":         {"TESSERA_LOADER_DATA_DIR": "data/loaders"},
+		"holds the db":     {"TESSERA_LOADER_DATA_DIR": dir, "TESSERA_DB": filepath.Join(dir, "t.db")},
+		"holds the db too": {"TESSERA_LOADER_DATA_DIR": dir, "TESSERA_DB": filepath.Join(dir, "sub", "t.db")},
+		"is a parent":      {"TESSERA_LOADER_DATA_DIR": filepath.Dir(dir), "TESSERA_DB": filepath.Join(dir, "t.db")},
+	} {
+		vars["TESSERA_ENV"] = "dev"
+		if _, err := config.Load(env(vars)); err == nil {
+			t.Errorf("%s: TESSERA_LOADER_DATA_DIR was accepted", name)
+		}
+	}
+	// a sibling directory that shares a name prefix is not inside it
+	other := dir + "-other"
+	if _, err := config.Load(env(map[string]string{"TESSERA_ENV": "dev", "TESSERA_LOADER_DATA_DIR": dir, "TESSERA_DB": filepath.Join(other, "t.db")})); err != nil {
+		t.Errorf("a database next to the directory was refused: %v", err)
+	}
+}
+
+func TestGroupsProvSQLDir(t *testing.T) {
+	c, err := config.Load(env(map[string]string{"TESSERA_ENV": "dev"}))
+	if err != nil || c.GroupsProvSQLDir != "" {
+		t.Fatalf("default = %q, %v; want the SQL target off", c.GroupsProvSQLDir, err)
+	}
+	c, err = config.Load(env(map[string]string{"TESSERA_ENV": "dev", "TESSERA_GROUPS_PROV_SQL_DIR": " /var/lib/tessera/prov "}))
+	if err != nil || c.GroupsProvSQLDir != "/var/lib/tessera/prov" {
+		t.Errorf("set = %q, %v", c.GroupsProvSQLDir, err)
+	}
+}
+
 func TestAnchorURL(t *testing.T) {
 	c, err := config.Load(env(map[string]string{}))
 	if err != nil {

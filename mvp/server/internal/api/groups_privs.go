@@ -8,8 +8,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/attrs"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/gov"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/model"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/privs"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/rules"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -83,9 +86,24 @@ func privilegeRequired(d *privs.DeniedError) error {
 func privErr(err error) error {
 	var d *privs.DeniedError
 	var pe *privs.Error
+	var ae *attrs.Error
+	var re *rules.Error
+	var ge *gov.Error
 	switch {
 	case errors.As(err, &d):
 		return privilegeRequired(d)
+	case errors.As(err, &ae):
+		status := map[attrs.Kind]int{attrs.NotFound: http.StatusNotFound, attrs.Conflict: http.StatusConflict,
+			attrs.Invalid: http.StatusUnprocessableEntity, attrs.Forbidden: http.StatusForbidden}[ae.Kind]
+		return &readiness.Error{Status: status, Code: ae.Code, Msg: ae.Msg, Extra: ae.Extra}
+	case errors.As(err, &ge):
+		status := map[gov.Kind]int{gov.KindNotFound: http.StatusNotFound, gov.KindConflict: http.StatusConflict,
+			gov.KindInvalid: http.StatusUnprocessableEntity, gov.KindForbidden: http.StatusForbidden}[ge.Kind]
+		return &readiness.Error{Status: status, Code: ge.Code, Msg: ge.Msg, Extra: ge.Extra}
+	case errors.As(err, &re):
+		status := map[rules.Kind]int{rules.NotFound: http.StatusNotFound, rules.Conflict: http.StatusConflict,
+			rules.Invalid: http.StatusUnprocessableEntity, rules.Forbidden: http.StatusForbidden}[re.Kind]
+		return &readiness.Error{Status: status, Code: re.Code, Msg: re.Msg, Extra: re.Extra}
 	case errors.As(err, &pe):
 		status := map[privs.Kind]int{privs.NotFound: http.StatusNotFound, privs.Conflict: http.StatusConflict,
 			privs.Invalid: http.StatusUnprocessableEntity, privs.Forbidden: http.StatusForbidden}[pe.Kind]
@@ -180,24 +198,38 @@ func (s *Server) privHandlers(t privs.ObjectType) privHandlers { return privHand
 
 // admin is the privilege that administers an object of the type.
 func (h privHandlers) admin() privs.Privilege {
-	if h.typ == privs.Folder {
+	switch h.typ {
+	case privs.Folder:
 		return privs.StemAdmin
+	case privs.AttrDef:
+		return privs.AttrAdmin
 	}
 	return privs.Admin
 }
 
 func (h privHandlers) view() privs.Privilege {
-	if h.typ == privs.Folder {
+	switch h.typ {
+	case privs.Folder:
 		return privs.StemView
+	case privs.AttrDef:
+		return privs.AttrView
 	}
 	return privs.View
 }
 
-// object loads the path's folder or group (404) and requires p on it (403).
+// object loads the path's folder, group or attribute definition (404) and
+// requires p on it (403).
 func (h privHandlers) object(r *http.Request, p *params, ck *privs.Checker, need privs.Privilege) (privs.Object, error) {
 	id, err := grpPathID(p, string(h.typ))
 	if err != nil {
 		return privs.Object{}, err
+	}
+	if h.typ == privs.AttrDef {
+		d, err := h.s.attrDefFor(r, ck, id, need)
+		if err != nil {
+			return privs.Object{}, err
+		}
+		return privs.AttrDefObject(d.ID), nil
 	}
 	if h.typ == privs.Folder {
 		f, err := h.s.grpFolderFor(r, ck, id, need)
@@ -402,8 +434,9 @@ const identityLinkWindow = 72 * time.Hour
 //   - a user is linked only to an active identity (identity_not_active);
 //   - a user whose identity is not active (terminated, disabled) keeps the
 //     link, so their sign-in stays blocked (identity_inactive);
-//   - linking a user that has no link applies at once, but changing or
-//     removing an existing link needs two admins: the first admin's request
+//   - linking a user that has no link applies at once, unless another user
+//     is already linked to that identity (#376); changing or removing an
+//     existing link always needs two admins: the first admin's request
 //     answers 202 and waits, the same admin repeating it is refused
 //     (four_eyes_required), and a second admin's identical change applies it
 //     and revokes the user's sessions and CLI refresh tokens.
@@ -457,21 +490,38 @@ func (s *Server) linkGrpUserIdentity(r *http.Request, p *params) (int, any, erro
 		if in.IdentityID == nil {
 			action = "groups.user.identity_unlinked"
 		}
-		if was != nil && !sameLink(was, in.IdentityID) {
-			// the user's current identity must be active: unlinking or
-			// relinking a terminated or disabled person would give them
-			// their sign-in back
-			cur, err := c.Identity(*was)
-			if err != nil && !errors.Is(err, store.ErrNotFound) {
+		// a first link to an identity that another user is already linked to
+		// would let this user act as that person (approval stages, guest
+		// recovery), so it needs two admins like a change (issue #376)
+		shared := false
+		if was == nil && in.IdentityID != nil {
+			others, err := c.UsersLinkedTo(*in.IdentityID)
+			if err != nil {
 				return err
 			}
-			if cur == nil || cur.Status != "active" {
-				st := "missing"
-				if cur != nil {
-					st = cur.Status
+			for _, o := range others {
+				if o != uid.String() {
+					shared = true
 				}
-				return &readiness.Error{Status: http.StatusConflict, Code: "identity_inactive",
-					Msg: "the user's identity is " + st + ", so their sign-in is blocked; the link stays until the identity is enabled again"}
+			}
+		}
+		if (was != nil && !sameLink(was, in.IdentityID)) || shared {
+			if was != nil {
+				// the user's current identity must be active: unlinking or
+				// relinking a terminated or disabled person would give them
+				// their sign-in back
+				cur, err := c.Identity(*was)
+				if err != nil && !errors.Is(err, store.ErrNotFound) {
+					return err
+				}
+				if cur == nil || cur.Status != "active" {
+					st := "missing"
+					if cur != nil {
+						st = cur.Status
+					}
+					return &readiness.Error{Status: http.StatusConflict, Code: "identity_inactive",
+						Msg: "the user's identity is " + st + ", so their sign-in is blocked; the link stays until the identity is enabled again"}
+				}
 			}
 			pend, err := c.IdentityLinkRequest(uid)
 			if err != nil && !errors.Is(err, store.ErrNotFound) {
@@ -482,7 +532,7 @@ func (s *Server) linkGrpUserIdentity(r *http.Request, p *params) (int, any, erro
 			switch {
 			case matches && pend.RequestedByUserID == by.ID:
 				return &readiness.Error{Status: http.StatusForbidden, Code: "four_eyes_required",
-					Msg: "changing an existing identity link needs a second admin: another tenant admin must make the same change"}
+					Msg: "this identity link change needs a second admin: another tenant admin must make the same change"}
 			case !matches:
 				req := &store.IdentityLinkRequest{UserID: uid, IdentityID: in.IdentityID, PreviousIdentityID: was,
 					RequestedByUserID: by.ID, RequestedBy: by.Display, RequestedAt: now, ExpiresAt: now.Add(identityLinkWindow)}

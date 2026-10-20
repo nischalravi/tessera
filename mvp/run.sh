@@ -15,6 +15,8 @@
 #   ./run.sh devidp     run only the dev IdP (mock OIDC issuer for local sign-in) in the foreground
 #   ./run.sh bench      Go benchmarks + end-to-end latency/startup/memory of the server
 #                       (set PYTHON=… PY_BACKEND=… to also measure a Python backend checkout)
+#   ./run.sh bench groups  the groups scale gate: a synthetic large-university tenant, every target of
+#                       the groups design section 6.7 (engine, provisioning, PIT, REST); see mvp/README.md
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 SERVER="$ROOT/server"
@@ -135,6 +137,26 @@ case "${1:-}" in
     start_devidp
     ;;
   bench)
+    if [ "${2:-}" = "groups" ]; then
+      # the groups scale gate (design section 6.7): a synthetic university tenant, every target measured
+      # in the engine, provisioning, PIT and (below) the REST layer. Slow: 10% takes tens of minutes.
+      #   ./run.sh bench groups [-percent 10] [-samples 500] [-md out.md] [-json out.json] [-enforce]
+      cd "$SERVER"
+      shift 2
+      echo "==> groups scale gate: engine, provisioning, point in time"
+      rc=0
+      "$GO" run ./cmd/tessera-bench groups "$@" || rc=$?
+      percent=10
+      prev=""
+      for a in "$@"; do
+        if [ "$prev" = "-percent" ]; then percent="$a"; fi
+        prev="$a"
+      done
+      echo "==> groups scale gate: REST (${percent}% tenant)"
+      TESSERA_ENV=test TESSERA_GROUPS_SCALE_GATE=1 TESSERA_GROUPS_SCALE_PERCENT="$percent" \
+        "$GO" test -count=1 -run 'TestGroupsScaleGate_REST$' -timeout 3h -v ./internal/api || rc=$?
+      exit "$rc"
+    fi
     build_server
     cd "$SERVER"
     echo "==> Go benchmarks (graph and effective permissions)"

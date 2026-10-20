@@ -31,6 +31,7 @@ Requirements: Go 1.27+ (the version in `server/go.mod`), Node 18+ (tested on 24)
 ./run.sh bench       # Go benchmarks + end-to-end latency, startup and memory of the server
 ./run.sh backup      # encrypted online backup now (-dir /backups; see "Backup and restore")
 ./run.sh restore F   # verify backup F and restore it over the database (stop the server first)
+./run.sh bench groups  # the groups scale gate: a synthetic university tenant, every target of the groups design 6.7 (slow)
 ./run.sh audit-deps  # govulncheck ./... on the Go module (install with server/scripts/install-tools.sh)
 ```
 
@@ -75,7 +76,7 @@ server/
                         graceful shutdown, JIT sweeper, audit checkpointer
   cmd/tessera-devidp/   the dev IdP binary (development and tests only; see Signing in)
   cmd/tessera-cli/      the reference command-line client: `login` (device grant + DPoP), `whoami`,
-                        `api`, `logout` (see Command-line sign-in)
+                        `api`, `groups` (commands and plans), `logout` (see Command-line sign-in)
   cmd/tessera-harness/  AWS evaluator differential harness, offline subcommands: `replay` re-runs the
                         recorded corpus with no AWS credentials or network (`go run ./cmd/tessera-harness
                         replay` from `server/`; exits 1 unless every case concludes what it expects);
@@ -1524,7 +1525,7 @@ address, we have sent a new link."). The design's `GET credential/callback` is t
 **Rate limits** (`internal/ratelimit`, in process, token buckets of N per window; throttles are
 audited as `claim.throttled` without a token or code): start 10 per IP per 10 minutes (client IP as
 the API's rate limiter, trusting `TESSERA_TRUSTED_PROXIES`) and 100 per tenant per minute (429; no
-bot challenge yet); verify/send 3 per session per 10 minutes, 5 per address per hour, 10 per day
+bot challenge yet); guest renewal-request has its own buckets, 10 per IP per hour and 100 per tenant per minute, apart from start's; verify/send 3 per session per 10 minutes, 5 per address per hour, 10 per day
 (the answer is the same when throttled); verify/check 5 tries per code; resend 3 per address per day.
 
 **Audit actions:** `claim.invitation.issue|revoke|expire`, `claim.start`, `claim.start.refused`,
@@ -2209,7 +2210,7 @@ modified.
   `/renew#t=<token>`: only its SHA-256 is stored and the link is handed to the mailer through memory only (like
   the claim link). `POST /public/t/{slug}/guest/renewal-request {token}` spends the token once and opens a
   renewal-request task for the sponsor; every call (good, bad, spent, unknown tenant) answers the same `202
-  {"status":"received"}` after the same minimum time, with an Origin check and a per-tenant rate limit.
+  {"status":"received"}` after the same minimum time, with an Origin check, a per-IP limit (10 per hour) and a per-tenant limit (100 per minute), neither shared with claim/start.
 - **Renewal and step-up.** Renewal re-runs the sponsor policy (eligible, within limits, at most the maximum).
   If the guest's `identity_assurance` is below what the sponsorship now needs (its own requirement, the
   population default, the bundle minimum) the renewal is **recorded and held** (`sponsorship_stepups`, event
@@ -2362,7 +2363,7 @@ deleted group, or one outside its own `enabled_from`/`disabled_at`, is an empty 
 
 | Route (`groups.read`/`groups.write`, then the privilege; the two engine routes `groups.admin`) | |
 |---|---|
-| `GET /api/groups/{id}/members?filter=direct\|effective&limit=&offset=` | members (`read`); `stale` is true while a recompute is queued |
+| `GET /api/groups/{id}/members?filter=direct\|effective&limit=&offset=` | members (`read`); `stale` is true while a recompute is queued (more filters in "Groups REST API", GR-5) |
 | `POST /api/groups/{id}/members` `{identity \| group, enabled_from, disabled_at, reason}` | add (`201`), update dates of an existing row (`200`), or `202` |
 | `GET /api/groups/{id}/members/{identity}` | hasMember; ignores a row whose `disabled_at` passed even if the time wheel lags |
 | `DELETE /api/groups/{id}/members/{identity-id \| group-id}` | remove (`200` or `202`) |
@@ -2502,6 +2503,543 @@ inheritance, `explain.go`, `grant.go`, `settings.go`), `server/internal/api/grou
   `TestPrivs_EveryoneNeedsTenantAdmin`), `internal/api` (`TestGroupsRoutesRequirePrivilege` for every
   route, `TestPrivs_ViewFiltersBrowseAndSearch`, `TestPrivs_GrantsGiveAccess`, ...),
   `TestIsolation_GroupPrivilegeTables` in `internal/store`.
+
+#### Groups REST API and SCIM server (GR-5, issue #48)
+
+Design `docs/design/groups-grouper-parity.md` §10.11. Schema `0376_groups_api.sql` (`0285` is the
+last numbered file before it; `0287` is another PR's): `grp_idempotency`. Code:
+`server/internal/groups/api` (idempotency keys, the SCIM resources and filter, the OpenAPI document),
+`server/internal/groups/model/{batch,trace,simulate}.go` (the operations), and the handlers in
+`server/internal/api/{groups_members,groups_api,scim}.go`. (The design puts the whole API in
+`internal/groups/api`; the handlers need the server's routing, authentication and audit, so they sit
+beside the other group routes, as GR-1 to GR-4 did, and `internal/groups/api` holds what does not
+depend on `net/http`.) Every route needs its route permission and then the privilege of the group it
+names, like the routes of GR-1 to GR-4; `TestGroupsRoutesRequirePrivilege` and the rbac table list them.
+
+| Route | |
+|---|---|
+| `GET /api/groups/{id}/members?filter=direct\|indirect\|effective\|composite&list=members&enabled=true\|false&q=&sort=name\|-name\|since\|-since&page=&limit=&offset=` | `direct` (default): the rows, `enabled` keeps those that count now or not; `effective`: every identity; `indirect`: effective members with no active direct row of their own (they come through nesting or factors); `composite`: the members a composite definition gives (none for a basic group). `q` is a substring of the member's name (or email), `page` is 1-based with `limit` (instead of `offset`). Needs `read` |
+| `GET /api/groups/{id}/members?as_of=T` and `?between=T1,T2` | as GR-3; `q`, `sort`, `enabled` and `page` are refused with them |
+| `GET /api/groups/{id}/members/{identity}?trace=true` | adds `paths`: every way the identity is a member, each a list of steps from the group down to the group whose direct row names the identity (`via`: `start`, `nested`, `factor`; `op`: the composite's operator; at most 100 paths, then `truncated`). A complement is explained by its left factor, an intersection by all of its factors |
+| `POST /api/groups/{id}/members:batch` `{add:[{identity \| group, enabled_from, disabled_at, reason}], remove:["<identity id or group id>"], enabled_from, disabled_at, reason, atomic}` | 1 to 1,000 operations on one group (adds first, then removes; a member in both lists is `422 conflicting_operations`). **Atomic by default**: the first refused operation undoes the whole batch and the answer is its error with `index`. With `"atomic": false` every operation stands or falls by itself (a savepoint each) and `results[i]` says `created`, `updated`, `removed` or `failed` with the error; if every operation was refused for want of a privilege the answer is `403` instead. Each operation asks the privileges of the single routes (`update`, or `optin`/`optout` for oneself, `read` on a nested group), each writes its own event, and the batch writes `groups.member.batch`. `200`, or `202` with `ops` when a recompute was queued |
+| `GET /api/identities/{identity_id}/groups?filter=effective\|direct\|indirect&as_of=T&limit=&offset=` | the groups an identity is in, by name, only those the caller holds `read` on (read, because it tells who is a member); `as_of` answers from the point-in-time history. `groups.read` |
+| `POST /api/groups:simulate` `{changes:[{kind: add_member\|remove_member\|set_composite\|convert_to_composite, group, identity, member_group, member, op, factors, discard_members, ...}]}` | what the changes (at most 100) would do: `groups[]` with `before`, `after`, `added`, `removed` and a sample of the identities, for the groups the changes name (`targeted`) and for every group above them (downstream); `changes[]` says created, updated or removed. Needs `groups.write` and the privileges of the changes themselves. **Writes nothing**: see below |
+| `GET /api/openapi/groups.json` | the OpenAPI 3.1 document of the groups, SCIM and identity-groups routes, built from the server's route table (`x-tessera-permission` per operation); `TestGroupsOpenAPI_CoversRoutes` fails if a route has no entry |
+| `GET /scim/v2/Groups[/{id}]`, `/scim/v2/Users[/{id}]`, `/scim/v2/ServiceProviderConfig`, `/scim/v2/ResourceTypes` | the read-only SCIM 2.0 server, below |
+
+- **Idempotency.** `POST /members`, `DELETE /members/{member}` and the batch accept
+  `Idempotency-Key` (1 to 255 of `A-Za-z0-9._~:+=-`). The first answer (2xx) is stored with the
+  change, in its transaction, in `grp_idempotency`; for 24 hours the same key with the same method,
+  path and body replays that answer (`Idempotent-Replayed: true`) and writes nothing. The key is
+  scoped to the tenant and the caller (`user:<id>`, or `client:<id>` for a machine client), so two
+  callers never share one; the same key with another request is `422 idempotency_key_reused`. A
+  refused request stores nothing. Expired keys are purged by the tenant's next keyed write; the table
+  is immutable (a trigger) and has no cross-table references, so it needs no cross-tenant guard.
+- **Simulation writes nothing.** It runs the real operations, the real engine included (with a budget
+  of 100,000 row operations, so it never queues), inside a savepoint, reads the effective changes back
+  from the events the engine wrote, and rolls the savepoint back: rows, events, audit events, the
+  queue and the counters all return to what they were. The request's own `http.request` event is the
+  only trace, and the route fails closed like a read if that cannot be written.
+  `TestSimulate_NoSideEffects` compares every groups table, the event head, the engine state and the
+  audit ledger before and after. A change too big for the budget is `422 simulation_too_large`.
+- **SCIM authentication.** There is no separate credential. The SCIM server is authenticated like
+  every other route: the request needs a signed-in principal (a session cookie today; `Principal`
+  already has the `api_client` kind for the token principals of the machine-client work) whose roles
+  hold `groups.read`, the tenant is the principal's and never a header or path, and nothing is served
+  anonymously (`TestSCIM_PrivilegeAndAuth` tries a bearer token, a tenant header and a stray cookie).
+  A provisioning tool therefore needs a machine client when those land; until then the SCIM server is
+  usable by signed-in people and by tests. `ServiceProviderConfig.authenticationSchemes` is empty
+  because no SCIM scheme names this sign-in.
+- **SCIM resources.** `Users` are the tenant's identities (`id` the identity id, `userName` the email
+  or else the external id, `active` is status `active`, `userType` the identity type, `groups` on a
+  single user: the groups the caller may read). `Groups` are the native groups the caller holds `read`
+  on (`id` the group id, `displayName` the full `:` name, `members` the effective identities: the first
+  100 on a list, 1,000 on a single group, with `memberCount` and `membersTruncated` in the extension
+  `urn:tessera:params:scim:schemas:extension:group:2.0:Group`); a deleted group does not exist, a
+  disabled one has no members. `filter` supports `eq ne co sw ew gt ge lt le pr`, `and or not` and
+  parentheses (strings compare without case) on `id displayName` (Groups) and `id userName
+  displayName externalId emails.value active userType title` (Users), `startIndex` and `count` page
+  (`count` at most 200), `attributes` and `excludedAttributes` select. Errors are SCIM's
+  (`urn:ietf:params:scim:api:messages:2.0:Error`, `scimType` `invalidFilter` or `invalidValue`);
+  answers are `application/scim+json`. Sorting, PATCH, bulk and ETags are not supported, and there
+  are no write routes (`405`).
+- Audit events `groups.member.batch` (and one `groups.member.*` per operation); reads, simulations and
+  replays write only the `http.request` event.
+- Parity fixtures `161`-`179` (`testdata/parity/README.md`).
+- Tests: `internal/api` (`TestMembers_FiltersSearchSortAndPaging`, `TestMembers_Trace`,
+  `TestBatch_AtomicAndIdempotent`, `TestBatch_NonAtomicReportsEachOperation`, `TestBatch_Validation`,
+  `TestBatch_PrivilegesPerOperation`, `TestIdempotency_SingleMembershipRoutes`, `TestIdentityGroups`,
+  `TestSimulate_*`, `TestGroupsOpenAPI_CoversRoutes`, `TestSCIM_*`, `TestGroupsAPI_Isolation`),
+  `internal/groups/api` (filter, selection, key store and expiry, OpenAPI), `internal/store`
+  (`TestIsolation_GroupsAPIStatements`, `TestSavepoint`, `TestIsolation_IdempotencyTable`).
+#### Attribute framework, object types and services (GR-7, issue #50)
+
+Design `docs/design/groups-grouper-parity.md` §10.9, §3.5. Schema `0287_group_attrs.sql` (the design
+calls it `0104`; `0280`..`0285` are taken and `0286` belongs to another change): `grp_attr_defs`,
+`grp_attr_names`, `grp_attr_name_implies`, `grp_attr_actions`, `grp_attr_action_implies`,
+`grp_attr_assigns`, `grp_attr_values`. Code: `server/internal/groups/attrs` (`defs.go`, `names.go`,
+`actions.go`, `implies.go`, `assign.go`, `value.go`, `access.go`, `objecttypes.go`, `lint.go`,
+`services.go`), `server/internal/api/groups_attrs.go`.
+
+- **Definitions** live in a folder (their full name is the folder's name, `:`, and the extension,
+  derived, so renaming a folder rewrites nothing) and carry the eight `attr_*` privileges, which
+  GR-4 defines: they are held, inherited from folder rows with `applies_to: attr_defs`, explained and
+  revoked like the others, under `/api/groups/attr-defs/{id}/privileges`. A definition has an
+  `attr_type` (`attr limit perm type service`), a `value_type` (`marker string integer floating
+  timestamp member_id`), `multi_assign`, `multi_valued` and `assign_to`, the owner types it may sit
+  on (`folder group identity membership effective_membership attr_def assignment`). Types never
+  change; narrowing the flags is `409 attr_def_in_use` while assignments need the wider form. Its
+  creator gets `attr_admin`. A new definition has the action `assign`, which stays.
+- **Names, actions, implications.** A name implies other names of its definition (an assignment of
+  the first is also one of the others); an action implies other actions. The direct edges are set
+  with `PUT .../implies`; the closure is stored beside them and rebuilt for the definition after
+  every change, so reading it is a lookup. A loop is `409 {"error":"cycle","path":[...]}`.
+  `GET /api/groups/attr-assignments?owner_type=&owner=&effective=true` lists the names an owner has,
+  by assignment or implication.
+- **Assignments** put a name, with an action, on a folder, group, identity, direct membership,
+  attribute definition or another assignment (three levels deep at most), with `enabled_from` and
+  `disabled_at` and, for `perm` definitions, `disallowed`. A single-assign definition takes one
+  assignment of a name and action per owner (`409 already_assigned`). An effective membership is
+  derived, so it is read-only: `422 effective_membership_read_only`. A mirrored folder or group
+  refuses assignments (`409 folder_mirrored`). Removing an assignment removes the ones on it, and
+  deleting a folder, a direct membership or a definition removes the assignments on it (a folder with
+  definitions is not empty).
+- **Values** are typed by the definition. A floating value is a decimal string (`"12.5"`), never a
+  JSON number and never a float: it is stored as text, canonicalized (`"1.50"` is `"1.5"`), and
+  appears in the audit and change events as a string, so their hashes are float-free. An integer is a
+  JSON integer literal (no fraction or exponent), a timestamp an RFC 3339 string (stored in UTC), a
+  member id an identity of the tenant. A marker has no values; a single-valued definition takes one.
+- **Privileges of an assignment** are two-sided: `attr_update` on the definition and the owner's
+  update privilege (`stem_attr_update`, `group_attr_update`, `update` on a membership's group,
+  `attr_def_attr_update` on the owner definition, `attr_update` on an owner assignment's definition;
+  an identity owner needs nothing more). Reading needs `attr_read` and the owner's read privilege.
+  `attr_optin` / `attr_optout` let a person assign or remove the definition on their own identity or
+  membership. Definitions and names are seen with `attr_view`; editing them, their actions and
+  privileges takes `attr_admin`; creating a definition takes `create` on its folder. Listings show only
+  what the caller may see.
+- **Object types** (G-05) are the built-in definition `etc:objectTypes` (system-owned, created on the
+  first change; the `etc` folder holds it), with one name `etc:objectTypes:objectType`. Group types:
+  `ref basis policy bundle manual intermediate`; folder types: `etc org test service app security`.
+  `GET /api/groups/object-types` is the vocabulary; `GET|PUT /api/groups/{id}/object-types` and
+  `GET|PUT /api/groups/folders/{id}/object-types` `{types: [...]}` read and replace them (`view` /
+  `group_attr_update`, `stem_view` / `stem_attr_update`; the built-in definition's own privileges are not
+  asked). A copied group or folder keeps its types. `data_owner` and `member_description` stay
+  columns of the folder and group.
+- **Lint** is a closed list of warnings returned by the object-types read (the findings count
+  members, so they need `read`): `policy_direct_members` (a policy group with more than 10 direct
+  identity members), `bundle_direct_members`, `service_without_policy_groups`, and the info rule
+  `missing_data_owner`. No tenant code runs (K6).
+- **Services** (G-48): a folder with the type `service` appears in `GET /api/groups/services` for a
+  person who is an effective member of a policy group below it (both visible to the caller), with
+  those groups.
+- **Events and audit.** An assignment writes `attribute.assigned`, a change of dates or values
+  `attribute.value_changed`, a removal `attribute.removed` (data: the owner, ids, dates and the value
+  keys), and `groups.attr.{assigned,updated,values_set,removed}` plus `groups.attr_{def,name,action}.*`
+  audit events, in the change's transaction.
+
+| Route | Needs |
+|---|---|
+| `GET\|POST /api/groups/attr-defs`, `GET\|PATCH\|DELETE .../{id}` | list (`attr_view`, filtered); create `{folder, extension, attr_type, value_type, multi_assign, multi_valued, assign_to}` (`create`); read (`attr_view`); edit, delete (`attr_admin`) |
+| `GET\|POST .../attr-defs/{id}/actions`, `DELETE .../actions/{action_id}`, `PUT .../actions/{action_id}/implies` | `attr_view`; `attr_admin` |
+| `GET\|POST .../attr-defs/{id}/privileges`, `DELETE .../privileges/{privilege_id}`, `GET .../privileges/effective` | `attr_admin` (own effective: `attr_view`) |
+| `GET\|POST /api/groups/attr-names`, `GET\|PATCH\|DELETE .../{id}`, `PUT .../{id}/implies` | `attr_view`; `attr_admin` |
+| `GET\|POST /api/groups/attr-assignments`, `GET\|PATCH\|DELETE .../{id}`, `PUT .../{id}/values` | read: `attr_read` + owner read; write: `attr_update` + owner update (or `attr_optin` / `attr_optout` on oneself). `POST {name (id or full name), action (id or name), owner_type, owner, disallowed, enabled_from, disabled_at, values}` |
+| `GET /api/groups/object-types`, `GET\|PUT /api/groups/{id}/object-types`, `.../folders/{id}/object-types`, `GET /api/groups/services` | see above |
+
+- The attribute, object-type and service routes are in the groups OpenAPI document
+  (`GET /api/openapi/groups.json`), as `TestGroupsOpenAPI_CoversRoutes` requires.
+- Tests: `go test ./internal/groups/attrs` (`TestValues_NoFloats`, `TestImplies_ClosureMaintenance`,
+  `TestAssign_OnAssignment`, `TestAttrPrivileges_*`, `TestObjectTypes`, `TestLint_*`, `TestServices`,
+  `TestEvents_InTheChangeTransaction`), `internal/api` (`TestGroupsRoutesRequirePrivilege` covers every
+  attribute route, `TestGroupsAttrsFlow`, `TestGroupsAttrsPrivileges`, `TestGroupsAttrsTenantIsolation`,
+  ...), `TestIsolation_GroupAttrTables` and `TestValues_NoFloatColumns` in `internal/store`.
+#### Group rules and membership constraints (GR-13, issue #56)
+
+Design `docs/design/groups-grouper-parity.md` §10.3, K6. Schema `0288_group_rules.sql` (the design's
+`0107_group_gov.sql`; `grp_rules` has `trigger_type` because `trigger` is an SQL keyword, and
+`grp_rule_settings`). Package `internal/groups/rules`.
+
+- **Closed vocabulary, no code.** A rule is owned by a folder (scope `one` or `sub`, default `sub`)
+  or a group, and has a `trigger`, `conditions` and one `action` with `params`. Triggers:
+  `membership.direct.added|removed`, `membership.effective.added|removed` (of an identity, in the
+  members list), `group.created`, `folder.created` (folder rules). Conditions: `identity_attribute`
+  (`department|title|type|status`, `equals|in`), `identity_in_group`, `identity_not_in_group`,
+  `membership_source`, `name_matches` (a glob over the new object's full name). Actions:
+  `veto {message}`, `require_member_of {group}`, `one_group_only`, `no_self_add`,
+  `add_disabled_date {days}`, `remove_from_group {group}`, `add_to_group {group, days}`,
+  `assign_privilege {privilege, holder_type, holder_identity|holder_group, applies_to, scope}`,
+  `notify {subject, message, to_identity}` (email) and `webhook {url, veto, fail_open}`.
+  `open_inbox_task`, `start_micro_certification`, `assign_object_type` and `mark_provisionable` are
+  refused with `422 action_unavailable` until GR-14, GR-7 and GR-11 land.
+- **Authority, checked twice.** Saving needs the route permission (`groups.write`) and `admin` on the
+  owner (`stem_admin` on a folder) and on every group the action changes; `read` on a group a condition
+  or a membership require looks at, `view` on a group named as a privilege holder. A rule acts with the
+  privileges of the user who last saved it, and the same check is made every time it fires; a rule
+  whose author lost them does nothing and records `rule.fired` with result `denied`. A veto rule whose
+  author lost them refuses the add instead (fail closed). A machine client cannot save a rule
+  (`403 rule_needs_user`). Deleting needs `admin` on the owner only.
+- **Built-in constraints** are rules: membership require (`require_member_of`: a veto on add, and the
+  member leaves when they leave the required group), one group only in a folder (`one_group_only`,
+  counts active direct memberships), no self-add. Not built yet: "no deletion of provisioned
+  groups" (needs the provisioning marks of GR-11); "no `everyone` without `tenant_admin`" is already
+  the GR-4 rule. A veto covers a direct add of an identity; adding a group to a group is not vetoed.
+- **When rules run.** Vetoes run in the request's transaction, before the row is written, through
+  `model.Guard`; a vetoed request is `409 {"error":"vetoed","rule":id}`. Acting rules react to the
+  group events through the `rules` cursor of the outbox (`rules.Runner`, started in `cmd/tessera`,
+  every 5 s); a rule never acts on events from before it was saved (`active_seq`), and not on its own
+  changes. Each firing writes `rule.fired` (PIT outbox) and `groups.rule.fired` (audit) in the same
+  transaction as what it did; changes a rule makes are caused by `rule`, with source `rule`.
+- **Webhooks** are signed (`Tessera-Signature: sha256=<HMAC-SHA256 of "<Tessera-Timestamp>.<body>">`,
+  the secret is sealed under the KEK and shown once in `signing_secret`, `rotate_secret: true` on a
+  `PUT` makes a new one) and go through the safehttp client with a 2 s timeout. A hook with `veto`
+  on `membership.direct.added` is called synchronously and answers `{"allow": false, "message"}` to
+  refuse; if it does not answer (error, non-2xx, timeout, unreadable) the add is refused unless
+  `fail_open`. Other hooks are told after the change; a failure is recorded, not undone.
+- **Email is off by default.** `notify` cannot be saved (`409 email_rules_disabled`) and a saved one
+  does not send until a tenant admin sets `email_enabled` in `PUT /api/groups/rules/settings`.
+  Tessera has no mail transport yet: a sent notification is a log line with ids (`TESSERA_NOTIFY=log`).
+
+| Route | |
+|---|---|
+| `GET\|POST /api/groups/{id}/rules`, `GET\|POST /api/groups/folders/{id}/rules` | the owner's rules; save `{name, scope, trigger, conditions, action, params, enabled}` (`201`) |
+| `PUT\|DELETE .../rules/{rule_id}` | replace a rule (the updater becomes its author; `rotate_secret`) or delete it |
+| `GET\|PUT /api/groups/rules/settings` | `{email_enabled}` (`groups.admin`) |
+
+- Tests: `go test ./internal/groups/rules` (`TestRules_PrivilegeCheckedAtFireTime`,
+  `TestMembershipRequire_VetoAndRemove`, `TestOneGroupOnly`, `TestEmailRulesOffByDefault`,
+  `TestVetoHookFailClosed`, `TestSpec_Validate`, ...), `internal/api` (`TestGroupsRoutesRequirePrivilege`,
+  `TestRulesAPI_*`), `TestIsolation_GroupRuleTables` in `internal/store`.
+
+#### Policy groups as code (GR-9, issue #52)
+
+A policy group (`definition: policy`) is the precomputed `allow - deny` of design §8: a Cedar file of a
+restricted fragment says who belongs, and it is compiled to composite groups the engine already
+evaluates. Schema `0289_group_policy.sql` (`grp_policy_sources`, `grp_policy_nodes`, `grp_policy_uses`).
+Code: `server/internal/groups/policygroups`, `server/internal/api/groups_policy.go`. The repository has no
+Cedar library, so the fragment's parser and its evaluator (the PDP of §8.6) are written in
+`policygroups`; the fragment is valid Cedar. Example layout and a CI snippet:
+`docs/design/groups-policy-repo-example.md`.
+
+- The fragment (design §8.2): `permit`/`forbid` on `Tessera::Action::"member"` with resource
+  `Tessera::Group::"<name>"`; conditions use only `principal in Tessera::Group::"x"`,
+  `principal.attr == "v"`, `principal.attr in ["a","b"]`, `principal.attr.contains("v")`,
+  `principal has attr`, `&&`, `||`, `!` and `unless`. Context, resource attributes, arithmetic, dates,
+  extension functions, `like`, `is` and `if` are refused with a line and column. Attributes come from a
+  schema (`DefaultSchema`: the identity's `type`, `status`, `department`, `title`, `source`); an optional
+  attribute must be guarded (`principal has department && principal.department == "cs"`), as Cedar's
+  validator requires, which makes "missing attribute" mean the same in the engine and in Cedar. A permit or
+  forbid needs a condition, and a result of the form "everyone except ..." is refused
+  (`unbounded_negation`): a group lists members.
+- Members are `(⋃ permits) − (⋃ forbids)`. Compilation hash-conses subtrees: identical ones, in any file,
+  are one internal group `sys:policy:_n<hash>`; `principal.campus == "main"` is the group
+  `sys:attr:campus:main`, a basic group whose direct members have `source = attribute`, kept current by the
+  indexer (`POST /api/groups/policy/reindex`, and on every apply). Groups the policy repository manages
+  (`managed_by = policy_repo`: the policy groups of a repository sync, the internal and the attribute
+  groups) refuse every other writer with `409 policy_managed`; the policy group itself takes no direct
+  members.
+- Every apply writes `groups.policy.applied` (origin, commit, groups, counts) to the audit ledger, and every
+  event of a repository sync (group, membership, effective membership, privilege and attribute events) has
+  `cause_type = policy_repo` and `cause_ref = <commit>`, also when the engine queue does the work later.
+  Each policy group records `policy_ref {path, commit, compiled_sha256}`.
+
+| Route (`groups.read` / `groups.write`, then the privilege) | |
+|---|---|
+| `POST /api/groups/policy/validate` `{files:[{path, cedar}]}` | findings and references, writes nothing (`read` on the groups referred to) |
+| `POST /api/groups/policy/diff` `{files, full}` | simulation: per policy group `status` (new, changed, unchanged, removed), counts and a sample of who joins and leaves |
+| `POST /api/groups/policy/apply` `{origin: repo\|ui, commit, files, full}` | one change in one transaction: `create` on the folder of a new group, `admin` on an existing one (and on those a `full` sync retires), `read` on the groups referred to; `422 invalid_policy` with `diagnostics`; `202` when a recompute is queued |
+| `POST /api/groups/policy/reindex` (`groups.admin`) | bring the attribute groups in line with the identities |
+| `GET /api/groups/{id}/policy` | the Cedar text, origin, path, commit and digest (`read`) |
+
+- CLI: `tessera groups policy validate [-dir path]` checks the `*.cedar` files offline (fragment, schema,
+  guards, unbounded negation; it cannot know the tenant's groups). `diff` and `apply` are the two API calls
+  above, made by CI with a machine client.
+- Not done in this step: a webhook or poll that fetches the repository (the sync takes a snapshot,
+  `policygroups.Source`/`DirSource`; fetching is the caller's), a tenant-specific schema (the API uses
+  `DefaultSchema`), hooking the indexer to identity ingestion (it runs on apply and on the reindex route),
+  and the usage facts in a diff ("3 of the 13 removed used Foo").
+- Tests: `go test ./internal/groups/policygroups` (`TestFragment_RejectsUnsupported`,
+  `TestCompile_EquivalentToNaive` and its fuzz target, `TestHashConsing_SharesSubtrees`,
+  `TestPolicyGroups_PDPAgreesWithEngine`, `TestSync_RecordsCommitOnEveryChange`, apply, diff, indexer),
+  `internal/api` (`TestGroupsRoutesRequirePrivilege` covers the policy routes, `TestGroupsPolicyAPI`),
+  `TestIsolation_GroupPolicy*` in `internal/store`, `TestGroupsPolicyValidate` in `cmd/tessera`.
+#### Group attestation, deprovisioning, the Inbox and reports (GR-14, issue #57)
+
+Design `docs/design/groups-grouper-parity.md` §10.4, §10.5, §10.7. Schema `0292_group_attestation.sql`;
+packages `internal/groups/{attest,deprov,inbox,reports,viz,gov}`; background jobs (`attest.Runner`,
+`deprov.Runner`, `reports.Runner`) start with the server. Every route needs the route permission
+and the object privilege (403 `privilege_required`).
+
+- **Attestation** is a group-membership campaign of `internal/reviews` (`reviews.GenerateGroupCampaign`):
+  every effective member is an item with usage context (the identity's permission use, how the
+  membership was granted, peer coverage). The population is **frozen** at the start: count and
+  SHA-256 are stored and `population_verified` in the campaign answer recomputes them. Settings
+  (interval, window, reviewers `admins` or a group, reminder days, overdue action `none` |
+  `disable_group` | `remove_unattested`) sit on a group or folder; a group takes its nearest
+  folder's. A revoke removes the direct membership through the engine with the decider's
+  privileges and reads it back (`apply_state`). Nested members cannot be removed here (skipped,
+  say so). The overdue action acts as the user who saved the settings, checked again when it fires:
+  without the privilege nothing happens and the group's admins get an `attestation_overdue` task.
+  Scheduled campaigns start `interval_days` after the last one (or after the settings were saved).
+- **Inbox**: `GET /api/groups/inbox/tasks`, `POST /api/groups/inbox/tasks/{task_id}/close`. A task names
+  its object and is shown to whoever holds admin (stem_admin on a folder) on it, or is assigned.
+- **Rules** now offer `open_inbox_task` (`params.subject`, `message`, `to_identity`) and
+  `start_micro_certification` (`params.days`, default 14; the rule's author needs admin on the group).
+- **Deprovisioning**: `PUT /api/groups/deprovisioning/settings` names the affiliation groups (and the
+  veto switch); `PUT /api/groups/folders/{id}/deprovisioning` sets `notify` | `auto_after` (days) |
+  `auto_now`. When an identity leaves every affiliation (group events), or is no longer active, one item
+  and Inbox task per folder with its direct memberships or privileges is opened. Automatic removal acts
+  as the user who saved the folder's mode. `POST /api/groups/deprovisioning/items/{item_id}/resolve`
+  `{action: remove|dismiss, reason}`. A built-in rule vetoes new direct memberships of a
+  deprovisioned identity (`409 vetoed`, rule `deprovisioning`); `override_reason` on
+  `POST /api/groups/{id}/members` lets a group admin through, audited. Joining an affiliation lifts it.
+- **Reports** come from a fixed catalogue (`GET /api/groups/reports/catalogue`); three need later parts
+  (`available: false`). Saved reports (`/api/groups/reports/saved...`) run on demand or daily, weekly or
+  monthly as their owner with the privileges the owner holds then; rows are filtered by the subject's
+  privileges, output is CSV (formula cells quoted) or JSON, capped at 10,000 rows (`truncated`). Runs are
+  kept (last 10) and read back only by the owner or a tenant admin. Delivery is `store`, or `email`
+  (a "ready" notice without data, gated by the rules email setting). S3 delivery is not built.
+- **Groups lens**: `GET /api/groups/{id}/graph?up=&down=` and `GET /api/groups/graph/identity/{id}`;
+  nodes the caller may not view are neither drawn nor walked through. No UI yet (GR-8).
+- Tests: `go test ./internal/groups/gov` (`TestAttestation_FrozenPopulation`,
+  `TestAttestation_OverdueRemovesAndVerifies`, `TestDeprov_AffiliationLossCreatesTasks`, report golden
+  files in `testdata/reports` (rewrite with `-update`), `TestVisualization_RespectsView`, ...),
+  `internal/api` (`TestGroupsRoutesRequirePrivilege`, `TestAttestationAPI_*`, `TestDeprovAPI_*`),
+  `TestIsolation_GroupAttestationTables` in `internal/store`.
+
+#### Group loaders (GR-10, issue #53)
+
+Design `docs/design/groups-grouper-parity.md` §9.1. Schema `0377_group_loaders.sql` (the design's
+`0105`; `0280` to `0292` are taken or reserved): `grp_loaders`, `grp_loader_runs`,
+`grp_loader_unresolved`, tenant-scoped with cross-tenant guard triggers. Code:
+`server/internal/groups/loaders` (the sources, failsafes, plans, impact, scheduler), the loader
+operations in `server/internal/groups/model/loader.go`, the handlers in
+`server/internal/api/groups_loaders.go` and the two-person change in
+`server/internal/admin/change_loader.go`. A loader is a connector job: a `GroupSource` reads a
+source, the subjects it names are resolved to identities, and the groups' loader-owned members are
+made to match, in one transaction with the run row, the audit event and the membership events
+(cause `loader`). A group a loader creates has `managed_by='loader'`: every members route, a
+composite conversion, a rename and a move answer `409 group_loader_managed` (the exception is a
+`_allow_manual` or `_deny_manual` group). A loader never takes over a group by name: a name that is
+taken is a failed run (`loader_name_taken`).
+
+| Type | Source |
+|---|---|
+| `sql_simple` | one group from one query returning `subject_id` (and `subject_source`) |
+| `sql_group_list` | many groups from `group_name`, `subject_id`; `groups_query` adds `display_name`, `description`; `incremental_query` returns `group_name`, `subject_id`, `op` (`add` or `remove`), `seq` for the rows after `@cursor` |
+| `csv` | a header-mapped file under the data directory, or an https URL (the loader's secret is its bearer token); the file's SHA-256 is recorded on the run |
+| `connector_groups` | the groups of a connection (by its `system`) with their member accounts mapped to identities |
+| `attribute` | one group per value of an identity attribute (`department`, `title`, `type`, `status`, `source`) |
+| `recent_memberships` | people who were effective members of a group in the last N days and are not now (`include_current` adds the current ones), read from the point-in-time history |
+
+`ldap_*`, `sftp_csv` and `hris_sis_feed` are designed but not built: they need an LDAP and an SSH
+library, which GR-10 did not add (`422 loader_type_unavailable`).
+
+- **Data directory.** SQL and CSV files live in `TESSERA_LOADER_DATA_DIR` (absolute; unset turns file
+  sources off; refused if it contains the database), **one subdirectory per tenant**:
+  `<data dir>/<tenant id>/`. A loader's `path` or `database` is a name inside its own tenant's
+  subdirectory and nothing else: a name is validated at save time (no `..`, no absolute path) and
+  again at run time, when the path is resolved against the tenant's directory and symbolic links that
+  leave it (to another tenant's directory, to a file directly in the data directory or elsewhere) are
+  refused with `source_file_outside`; a tenant with no directory gets `source_file_missing`.
+  (`TestFiles_PerTenant`.) The operator creates and fills the directories. A SQL
+  source is a SQLite file: the query must be one `SELECT` or `WITH` (first keyword parsed; no `;`,
+  comments, `ATTACH`, `PRAGMA`, `INSERT`, `UPDATE`, `DELETE`, ...), runs on a read-only connection
+  (`mode=ro`, `query_only`) with a 120 s timeout and a 1,000,000 row limit, and exceeding the limit is
+  an error, never a cut-off. Other databases need a driver this PR did not add.
+- **Failsafes** (per loader, defaults filled in at save): removed from one group 20 % and 500;
+  `min_group_size` unset; groups emptied or deleted 5 %; unresolved subjects 2 %. A run that breaks
+  one is `held`: nothing is applied, the loader is `held` (no further runs; a preview is still
+  allowed), and the run keeps its plan and the downstream **impact** (people added and removed, the
+  groups, the parent and policy groups that contain a changed group, provisioned targets (none until
+  GR-11), and how many of the people who would be removed used some access in the last 30 days: usage is
+  per permission, not per native group, so this is an upper bound). The run is an Inbox task of type
+  `loader_held` (`GET /api/groups/loader-tasks`). **Approve applies the plan as it was computed**, not
+  as the source reads by then; reject discards it. Both are audited with `loader.run.approved` or
+  `loader.run.rejected` events. A rejected incremental run still moves the cursor on (the next full run
+  corrects the groups), otherwise the same changes would be held again.
+- **Unresolved subjects** (`GET .../unresolved`): a subject matches an identity exactly by the source it
+  names (`identity` external id, `email`, `tessera_id`, a connected account's system, or the source on
+  the identity), following merges; anything else is listed with the groups that named it, counted in
+  the failsafe, retried on every run, and leaves the list only when it resolves or the source stops
+  naming it.
+- **Schedules.** A five-field cron in UTC (or `@hourly`, `@daily`, `@weekly`), run by the scheduler
+  started in `cmd/tessera` (every 30 s it runs what is due; a failed run waits for the next firing).
+  A run started through the API is bounded by the request's 30 s handler timeout (a source that takes
+  longer is for the scheduler). `incremental_secs` (30 to 86400) runs the incremental feed after the
+  first full load. The job status
+  (state, next run, last run, lag) is part of the loader's answer: there is no `/api/admin/jobs` yet.
+- **Who may configure.** Create and change need the platform permission `groups.loader.admin`
+  (`tenant_admin`, `policy_admin`), a fresh phishing-resistant step-up (`STEP_UP_POLICY`) and `stem_admin`
+  on the target folder. A **SQL loader** is not saved by that request: it answers `202` with a
+  `groups.loader.save` admin change request (internal/admin) that another admin approves (so a tenant
+  needs two active admins); turning a loader off needs no approval. Run and preview need
+  `groups.loader.admin` and `stem_admin`; reading needs `stem_view` (the definition, the runs' detail and
+  the unresolved subjects need `stem_admin`). The credential of a CSV URL is sealed with `internal/seal`
+  (bound to the tenant and the loader), is never returned and is in no audit event or run.
+- Routes: `GET|POST /api/groups/loaders`, `GET|PATCH /api/groups/loaders/{id}`,
+  `POST .../{id}/run` (`{kind: full|incremental|preview}`; a failed run answers `502
+  loader_run_failed` with the run), `GET .../{id}/runs[/{run_id}]`, `POST .../runs/{run_id}/approve`
+  and `/reject`, `GET .../{id}/unresolved`, `GET /api/groups/loader-tasks`. There is no delete: turn a
+  loader off. Audit events `groups.loader.created|updated`, `groups.loader.run.applied|held|failed|
+  previewed|approved|rejected`.
+- Migration note: `admin_change_requests.type` gained `groups.loader.save` in `0008_admin_changes.sql`
+  (a database created before this change must be reseeded).
+- Tests: `internal/groups/loaders` (`TestFailsafe_HoldsAndShowsImpact`, `TestFailsafe_Rules`,
+  `TestUnresolved_NeverDropped`, `TestSQLLoader_RejectsWrites`, `TestRecentMemberships_FromPIT`,
+  `TestLoader_*`, `TestSQL_*`, `TestCSV_*`, `TestConnectorGroups_AndAttribute`, `TestRunner_RunsDueLoaders`),
+  `internal/api` (`TestLoadersAPI_*`, `TestGroupsRoutesRequirePrivilege`), `internal/admin`
+  (`TestLoaderSave_*`), `internal/store` (`TestIsolation_GroupLoader*`, `TestRunExtQuery`),
+  `internal/config` (`TestLoaderDataDir`).
+### Group provisioning (LDAP/AD, SCIM 2.0, SQL, webhook)
+
+A provisioner pushes the effective membership of marked groups to one target system (design
+`docs/design/groups-grouper-parity.md` §9.2, issue #54). Schema: `0378_group_prov.sql`
+(`grp_provisioners`, `grp_provisionable`, `grp_sync_groups`, `grp_sync_runs`, `grp_sync_ops`; the design
+numbers it 0106). Code: `server/internal/groups/provisioning`; SQL for the SQL target's database is
+`store.ExtSQLite` (the archtest keeps `database/sql` in `internal/store`).
+
+- **Desired state.** A mark names a group (`scope` self) or a folder (`one`: its own groups, `sub`: the
+  whole subtree) with `include` true or false. Marks are applied when evaluated and never copied onto
+  groups; the nearest mark wins, so `include=false` on a deeper folder or on a group cuts it out. A
+  group's target name, attributes and members' references come from templates (Go `text/template`, only
+  `lower upper replace truncateHash ldapEscape join`, output at most 4 KiB): `group_name` (default
+  `{{.Name}}`), `attrs` and `member_ref` (default `{{.Username}}`), fed by the group and by the member's
+  **active account** in `account_system`. A member with no account is counted in the run summary
+  (`unmapped_members`) and in diagnostics, never dropped silently; two groups with one target name are
+  both left alone (`conflicts`); a group the engine is still recomputing is skipped until its events
+  arrive; a disabled group is the empty set.
+- **Modes.** A provisioner starts in `adopt`: its first full sync reads the target, records the groups it
+  finds by name (`grp_sync_groups.status=adopted`) and the ops it would run (status `skipped`), and changes
+  nothing. `dry_run` records plans the same way. `active` applies. Switching to `active` needs a completed
+  full sync first (`409 review_required`). `paused` does nothing. The provisioner only ever changes or
+  deletes groups it owns (adopted or created by it).
+- **Full sync** at the provisioner's UTC time (`full_schedule` `"M H * * *"`, default 02:00), when a mark,
+  the config or the mode changes, and on request. **Incremental sync** consumes the provisioner's GR-3 event
+  cursor (`provisioner:<id>`, `events.Poll`/`Ack`): events of groups mark the group dirty, bursts are
+  coalesced for 2 s (at most 10 s), and the dirty groups are re-read, diffed and applied; a folder rename,
+  move or delete asks for a full sync. A full sync of an unchanged group skips the read when the target's
+  change token (LDAP `modifyTimestamp`, SCIM `meta.version`) equals the cached one (`grp_sync_groups`).
+- **Verification (README rule 4).** After `Apply` every touched group is re-read. An op is `verified` only
+  if the re-read shows it; otherwise the op is re-planned from what the target holds and retried (waits of
+  1 s and 4 s), and after three attempts it is `drift` (accepted but not kept) or `failed` (refused); both
+  also emit `provisioning.op.drift` / `.failed` events, and the group is retried by incremental passes
+  every 10 minutes. A target that cannot be read back (a webhook without `read_url`) leaves ops `applied`.
+- **Failsafes** (`failsafe`, per provisioner): `max_deletes` member removals per run (default 1000),
+  `max_delete_percent` of the target's memberships on full runs (default 2, only for targets with at least
+  50 memberships) and `max_group_deletes` (default 0). A plan over a limit is **held**: nothing is applied,
+  the run is `held` (audit `groups.prov.held`), and an admin approves with `POST .../sync
+  {"approve_failsafe":true}`, which covers the next full sync only. There is no Inbox yet, so a held or
+  drifted run is visible through the runs and ops routes and the audit ledger.
+- **Credentials** go in `secret` (`bind_password` for ldap/ad, `token` for scim2, `signing_secret` for
+  webhook), are sealed with the KEK (AAD: tenant, `grp_provisioners`, `secret_enc`, provisioner id), and are
+  never returned: a provisioner lists `secret_keys_set`. Errors and audit events never contain URLs with
+  tokens, credentials or response bodies.
+- **Network.** SCIM and webhook calls use a `safehttp` client (https only; plain http to loopback in dev);
+  LDAP connects through `safehttp.NewDialer` (the same address checks, after DNS resolution) and always uses
+  LDAPS or StartTLS with certificate verification (`ca_pem` for a private CA); `security: none` is accepted
+  only with `TESSERA_ENV=dev`. Webhooks are CloudEvents 1.0 JSON signed with
+  `X-Tessera-Signature: t=<unix>,v1=<hex HMAC-SHA256(signing_secret, "<t>." + body)>`; `X-Tessera-Delivery`
+  is the op id.
+
+| Target | `target` config | Notes |
+|---|---|---|
+| `ldap` | `url` (ldaps:// or ldap://), `security`, `base_dn`, `bind_dn`, `object_class` (`groupOfNames`, `groupOfUniqueNames`, `posixGroup`), `member_attr`, `empty_member`, `write_chunk`, `ca_pem` | groups under `base_dn`; member writes in chunks; a rename deletes and recreates (held for approval) |
+| `ad` | as `ldap`, plus `group_scope` (`global`, `universal`, `domain_local`) | `sAMAccountName` at most 64 characters (use `truncateHash`); ranged `member;range=` reads |
+| `scim2` | `base_url`, `profile` (`generic`, `aws_identity_center`, `github_emu`), `page_size` | members by SCIM user id (use `member_ref` `{{.ExternalID}}`); GitHub needs `attrs.externalId`; the AWS and GitHub profiles follow the vendors' documentation and are not tested against the live services |
+| `sql` | `file` (a name inside `TESSERA_GROUPS_PROV_SQL_DIR`) | SQLite only; rows `(group_name, member)` in `tessera_group_members`; no group objects, so removing a group removes its rows |
+| `webhook` | `url`, `read_url` (optional) | `read_url` takes the same signature and returns `{"groups":[{"name","members"}]}` |
+
+| Route (all `groups.admin`) | |
+|---|---|
+| `GET`, `POST /api/groups/provisioners` | list; create `{name, target_type, config, secret?, connection_id?, full_schedule?, failsafe?}` (starts in `adopt`) |
+| `GET`, `PATCH`, `DELETE /api/groups/provisioners/{id}` | read with last runs, op counts and event lag; update `{version, ...}` (mode, config, secret); delete (the target is not touched) |
+| `GET`, `PUT /api/groups/provisioners/{id}/marks`, `DELETE .../marks/{group\|folder}/{id}` | the marks; set `{object_type, object_id, scope?, include?, metadata?}`; remove |
+| `POST /api/groups/provisioners/{id}/sync` `{approve_failsafe?}` | ask for a full sync (`202`; the runner starts it within seconds) |
+| `GET /api/groups/provisioners/{id}/runs`, `.../ops?run=&status=`, `.../groups` | runs, ops, and the groups the provisioner owns on the target |
+| `POST /api/groups/provisioners/{id}/diagnose?group=&identity=` | why a group or identity is or is not provisioned, and the ops a sync would run, without applying them |
+
+- Config: `TESSERA_GROUPS_PROV_SQL_DIR` (default unset: the SQL target is off; set it to a directory
+  the server may write; a tenant chooses only a file name, which lives in the tenant's own
+  subdirectory `<dir>/<tenant-id>/<file>` (mode 0750, the segment comes from the session's tenant, never
+  from configuration), so two tenants naming the same file never share rows; a second provisioner of the
+  same tenant naming a file already in use is refused with `409 file_in_use`; a file holding Tessera's
+  own tables is refused).
+- Tests: `go test ./internal/groups/provisioning` (`TestProvision_VerifiedOnlyAfterReread`,
+  `TestProvision_AdoptModeChangesNothing`, `TestProvision_FailsafeMaxDeletes`,
+  `TestProvision_IncrementalEqualsFull`; an in-memory LDAP directory with AD ranged attributes, an LDAP
+  wire server for LDAPS and StartTLS, a SCIM 2.0 test server, SQLite and webhook targets),
+  `TestIsolation_GroupProvTables` and `TestIsolation_GroupProvTablesGuarded` in `internal/store`,
+  `TestGroupsProvisioningAPI` in `internal/api`.
+#### Event streaming (GR-18, issue #61)
+
+A sink streams the outbox to **AWS SQS, AWS SNS, RabbitMQ or Kafka** as CloudEvents 1.0 JSON
+(`internal/groups/events/sinks`, schema `0379_group_event_sinks.sql`, tables `grp_event_sinks` and
+`grp_sink_dead_letters`). A runner in `cmd/tessera` (every 2 s) delivers for each enabled sink of each
+tenant. Admin UI: **Admin → Group event sinks** (`/admin/event-sinks`).
+
+- **Delivery is at least once and ordered per group.** A sink's position is its `grp_event_cursors` row
+  `sink:<id>`. The runner takes events in `seq` order, sends them one at a time and moves the cursor only
+  after the broker has accepted them, so a crash replays a batch: receivers drop a repeated CloudEvents
+  `id` (`<tenant>/<seq>`, also the SQS/SNS FIFO deduplication id, the AMQP message id and the Kafka
+  `ce_id` header). Per-group order: a FIFO queue or topic gets the group as `MessageGroupId`, Kafka keys
+  by group, RabbitMQ publishes in order on one confirm channel.
+- **Retries and dead letters.** A refused event is retried on later passes with backoff (1 s, 2 s, 4 s ...
+  up to 5 min) and nothing behind it is sent meanwhile. After 8 attempts it is written to
+  `grp_sink_dead_letters` with the exact message (audited as `groups.sink.dead_lettered`) and the stream
+  moves on. A dead letter can be sent again (`redeliver`: sent on the next pass, **out of order** with
+  respect to later events) or discarded. A sink that cannot be opened (bad credentials, blocked address)
+  shows `retrying` and loses nothing.
+- **Event filter.** `event_types` is a list of types (`group.created`) or prefixes ending in a dot
+  (`membership.`); empty sends everything. A new sink starts at the current head (`from: now`) or, with
+  `from: start`, at the oldest event still in the outbox.
+- **Security.** SQS and SNS use the stdlib SigV4 signer over `internal/safehttp` (HTTPS only). RabbitMQ
+  (`github.com/rabbitmq/amqp091-go`) and Kafka (`github.com/twmb/franz-go`, which also dials every broker
+  the cluster's metadata names) connect through `safehttp.NewDialer`, the same address checks as the
+  HTTP client (no loopback, private, link-local or metadata addresses; dev with the loopback exception
+  aside). TLS is required outside dev: `amqps://` only, Kafka over TLS (plain text only with
+  `TESSERA_ENV=dev`). Credentials are sealed with `internal/seal` (AAD: tenant, table, column, sink id),
+  never returned (`credentials_set` only), never audited or logged. A tenant may have 20 sinks.
+- Events keep their order across sinks only per sink; two sinks can be at different positions.
+
+| Route (all `groups.admin`; every change is audited in its own transaction) | |
+|---|---|
+| `GET /api/groups/event-sinks` | every sink with state (`idle`, `ok`, `retrying`), `lag`, `cursor`, `dead_letters`, last delivery |
+| `POST /api/groups/event-sinks` `{name, kind, config, credentials, event_types, enabled, from}` | create (`groups.sink.created`); 422 with `invalid_<field>` for a refused setting, 409 `name_taken`, 503 `sealing_unavailable` |
+| `GET`, `PATCH`, `DELETE /api/groups/event-sinks/{id}` | read, change (`config` and `credentials` replace the whole; omit `credentials` to keep them; a change clears the retry state), delete with cursor and dead letters |
+| `GET /api/groups/event-sinks/{id}/dead-letters?status=dead\|requeued\|delivered\|discarded\|all` | dead letters with the message |
+| `POST /api/groups/event-sinks/{id}/dead-letters/{seq}/redeliver` or `/discard` | requeue or give up (409 if the letter is not dead) |
+
+`config` by kind: SQS `region`, `queue_url`, `endpoint?`; SNS `region`, `topic_arn`, `endpoint?`;
+RabbitMQ `url` (`amqps://host[:port]/vhost`, no credentials), `exchange`, `routing_key?` (default: the
+event type); Kafka `brokers[]`, `topic`, `sasl?` (`plain`, `scram-sha-256`, `scram-sha-512`).
+`credentials`: SQS and SNS `access_key_id`, `secret_access_key`, `session_token?`; RabbitMQ and Kafka SASL
+`username`, `password`.
+
+- Tests: `go test ./internal/groups/events/sinks` (`TestSink_OrderedPerGroup`,
+  `TestSink_DeadLetterAfterRetries`, `TestSink_AtLeastOnce`, `TestSigV4_AWSVector`,
+  `TestNetwork_DialIsGuarded`; brokers are in-process fakes, SQS and SNS a TLS test server),
+  `TestIsolation_GroupEventSinks` in `internal/store`, `TestGroupsSinksAPI` in `internal/api`,
+  `tests/event-sinks.test.ts` in the frontend.
+
+#### Groups scale gate (GR-17, issue #60)
+
+Design `docs/design/groups-scale-gate.md` (targets: `groups-grouper-parity.md` §6.7). `internal/groups/benchgen`
+generates a "large university" tenant at a percentage of the reference size and measures every target of the
+table; `cmd/tessera-bench groups` runs it, `internal/api/groups_scale_test.go` repeats the reads and writes through
+the HTTP handler.
+
+```
+./run.sh bench groups                          # 10% tenant (about 35 min), then the REST gate
+./run.sh bench groups -percent 1 -samples 100  # a quick look (about 2 min); -md/-json write the table, -enforce exits 1 on a miss
+TESSERA_GROUPS_SCALE_GATE=1 go test -run 'TestScaleGate|TestGroupsScaleGate_REST$' -timeout 3h ./internal/groups/benchgen ./internal/api
+```
+
+- `go test` runs only smoke versions (a 0.05 to 0.1% tenant, no timing assertions, `verify_clean` asserted).
+- Backend is SQLite (the design's SQLite numbers apply up to 10%). `tessera-bench` runs on SQLite and refuses a Postgres `-db`
+  (the `grp_*` tables have a Postgres dialect now, but the generator and its timings have not been run on it).
+- Result at 10%: the read, single-change, PIT, verification and incremental-provisioning targets pass; the 50,000-change
+  loader (864 s against 60 s), the first provisioning op after a large nesting (31.6 s against 30 s) and storage
+  (about 20 GB at 100% against 4 GB) miss. The table and the analysis are in the design note.
 
 ### Audit ledger
 
@@ -2799,7 +3337,7 @@ the right. Arrow keys move between items.
 | Group | Items |
 |---|---|
 | (top) | **Home**, **Inbox** (count) |
-| **Identity** | Users (with *Identity matches*), Machine identities & agents, Groups (with an *All entitlements* tab), Secret rotation (Secrets, Rotation jobs, Policies & adapters, Vendor compromised), Applications, Ownership, Accounts (with *Account matches*), Help desk, Roles, Organizations (live, read-only, derived from departments) |
+| **Identity** | Users (with *Identity matches*), Machine identities & agents, Groups (*Managed groups* and *Connected groups*, with an *All entitlements* tab), Secret rotation (Secrets, Rotation jobs, Policies & adapters, Vendor compromised), Applications, Ownership, Accounts (with *Account matches*), Help desk, Roles, Organizations (live, read-only, derived from departments) |
 | **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals, registration requests, sponsor code, recovery), Just-in-time, Access reviews (with *Lifecycle*, *Guest lifecycle* and *Workflows* tabs) |
 | **Protection** | Alerts (alerts, rules, channels), Policies & SoD (violations, policies, what-if simulation, SoD functions, risks and rulesets), Mitigating controls (mitigations, control library), Attribute policies, Access graph (with an *As of* date for *Who can access…*), Evidence packs, Insights (Risk overview, Least privilege, SoD conflicts, MFA posture, Deployment health) |
 | **Settings** | Connections (governed connections and the setup wizard), Flat-file apps, Conditional access (network ranges, policies, device signals), Shared Signals (SSF transmitters and received events), Admin (including *Guests and external identities*) |
@@ -2823,6 +3361,22 @@ Groups, Activity. Groups, applications, accounts, roles, organizations, policy v
 review items have their own panels. The panel is deep-linkable (`/directory/people?selected=16`,
 `/governance/policies?selected=<key>`, `/governance/reviews?item=<id>`), traps focus, closes
 with `Esc` and returns focus to the row. **Open full page** goes to the existing object page.
+
+**Groups (GR-8, issue #51).** Directory → Groups has a toggle (`?view=connected`): **Managed
+groups** (the native groups of the GR-1 to GR-7 API, the default) and **Connected groups** (those
+discovered in connected systems, as before). Code: `frontend/src/features/directory/groups/`, the
+client is `groups` in `src/api.ts`, the pure logic (folder tree, dates, preview text, history diff,
+application template) is `model.ts`, tested by `tests/groups-model.test.ts` and
+`tests/groups-api.test.ts`. None of it is a Preview: every screen reads and writes the real API, and the
+server decides access on each request (the UI only hides what cannot work).
+
+| Screen | Route | What it has |
+|---|---|---|
+| Folder browser | `/directory/groups[?folder=<id>]` | breadcrumb, folders then groups with type badges and member counts, only what the caller may view; filter chips (type, definition, group or role, status), search, *Include subfolders*, CSV export; a row opens the side panel (overview, first members) with *Open group page* / *Open folder page*; commands *New group*, *New folder*, *New application* |
+| Group page | `/directory/groups/<id>[?tab=]` | header (path, type badges, owner, status, a *Recalculating…* banner while `recompute_state` is pending); tabs **Members** (direct / indirect / effective / composite, search, enabled filter, paging, add and remove, CSV import and export, a *Trace* drawer with every path), **Definition** (composite operator and factors as a set expression; edit or convert), **Privileges** (direct rows, grant, revoke, and the explanation of every path), **Usage** (what a composite is built from), **History** (members on a date, compare two dates, anyone in a period), **Attributes** (object types with lint findings, attribute assignments) |
+| Folder page | `/directory/groups/folders/<id>[?tab=]` | contents, privileges with inheritance scope (`groups`, `folders`, `attr_defs`; one level or all), object types and attributes, details |
+| Change preview | a drawer | every member add or remove, CSV import and composite save calls `POST /api/groups:simulate` first and shows "+1,204 / −13 identities in 4 groups" with the groups changed; nothing is written until *Apply*. Batches carry an `Idempotency-Key` |
+| New application | a drawer | the Deployment Guide layout in one step (app, security and service folders; admin, reference, allow, allow-manual, deny groups; policy group `allow − deny`) as separate changes, safe to run again |
 
 **Inbox.** One queue for JIT and catalog approvals, access-review items, joiner/mover/leaver
 tasks and delegations, with keys: `j`/`k` move, `a` approve or keep, `d` deny, `r` revoke,
@@ -3531,6 +4085,72 @@ identities) and `mcp_findings`, both tenant-scoped with cross-tenant guard trigg
 creator, sponsor status and violating policy ids; `GET /api/nhi` is unchanged. The demo company
 supplies Okta-sourced agents and five sample findings, so the screens work without any connector.
 
+### Groups from the command line and declarative plans (`tessera-cli groups`)
+
+`tessera-cli groups` drives the native groups API (see Native groups) through the same signed-in
+session as `api`: DPoP-bound OAuth tokens from `tessera-cli login`, nothing else. There is no
+separate credential and no new route: every step needs the route permission (`groups.read` or
+`groups.write`) and then the object privilege (GR-4), exactly as in the UI, and is audited as the user
+through client `tessera-cli`. A refusal prints the server's answer and exits 1 (3 for a step-up demand).
+
+```bash
+tessera-cli groups ls [FOLDER]                  # folders and groups, below FOLDER if given
+tessera-cli groups show app:foo:security:fooAdmin
+tessera-cli groups members ls app:foo:service:ref:testers [--filter direct|indirect|effective|composite]
+tessera-cli groups members add app:team 42 group:app:other --reason "onboarding"
+tessera-cli groups members rm  app:team identity:42
+tessera-cli groups plan   -f plan.yaml          # the diff and its simulated membership impact; changes nothing
+tessera-cli groups apply  -f plan.yaml          # the same diff, then the changes; -f - reads standard input
+tessera-cli groups export app:foo -o plan.yaml  # a folder and everything below it, as a plan
+tessera-cli groups templates                    # the plan templates and their inputs
+```
+
+A member is `identity:<id>` (or the bare id) or `group:<name>`; a holder of a privilege also
+`everyone`. Names are the `:`-separated full names (case-insensitive).
+
+**A plan is data, not code** (K6): YAML with `folders`, `groups` (with `members: {add, remove}` and,
+at creation, a `composite: {op, factors}`) and `privileges` (`object: folder:<name>|group:<name>`,
+`grant: {<privilege>: [holders], scope: self|one|sub}`; unknown keys are errors). A folder may name a
+`template` with typed `params`. The `application` template (version 1) is the Deployment Guide's
+standard application folder: `security`, `service:ref` and `service:policy` folders, the admin group
+`fooAdmin` (holding `stem_admin` and `admin`, inherited below `app:foo`), and the policy group
+`foo_user` = `foo_user_allow` minus `foo_user_deny` with `foo_user_allow_manual` for exceptions;
+optional inputs `admins` and `global_deny` nest a group in the admin and deny groups.
+
+```yaml
+folders:
+  - name: app:foo
+    template: application
+    params: {admins: "org:it:staff:iam"}
+groups:
+  - name: app:foo:service:ref:testers
+    members: {add: ["identity:12345", "identity:23456"]}
+privileges:
+  - object: folder:app:foo
+    grant: {create: ["group:app:foo:security:fooAdmin"], scope: sub}
+```
+
+A plan is additive and idempotent: it creates what is missing, adds and removes the members it lists,
+grants the privileges it lists, and never deletes or revokes anything, so a second `apply` finds
+"No changes". `plan` and `apply` first read the live state (folders, groups, the members of the groups
+the plan changes, the privilege rows it grants), diff against it, and refuse a plan that names a
+parent folder, factor, member group or holder that neither exists nor is created by the plan.
+`plan` then simulates the membership changes on existing groups with `POST /api/groups:simulate`
+(the real operations in a rolled-back savepoint, in chunks of 100) and prints `+N / -M identities in K
+groups`; changes on groups the plan itself creates cannot be simulated and are counted. `apply` sends
+folders, groups and privilege grants one request each, then each group's membership changes as an
+atomic `:batch` (up to 1,000 operations) with an `Idempotency-Key` derived from the group, the
+operations and `--run-id`: sending the same batch again, after a lost answer, replays the first answer
+and writes nothing twice (for 24 hours; pass another `--run-id` to send a repeated plan afresh). It stops
+at the first refusal; run it again to continue, because it only does what is still missing.
+Limits: 4 MiB and 20,000 items per plan; the catalog (all folders and groups the caller may view) is
+read in pages of 500. Membership dates are not part of a plan. The composite of an existing group is
+not compared or changed.
+
+Tests: `internal/groups/plan` (parsing, validation, templates, diff, golden `plan` output in
+`testdata/`) and, against the in-process server, `cmd/tessera-cli/groups_e2e_test.go`
+(`TestPlan_ApplyIsIdempotent`, `TestExportThenApply_RoundTrip`, replayed batches, refusals).
+
 ## Adding a real connector
 
 1. Implement `connectors.Connector` (`internal/connectors/connector.go`):
@@ -3581,7 +4201,7 @@ cd ../frontend && npm run build && npm test   # npm test: node:test, no extra de
 * **Unit tests** are table-driven Go tests per package: every test of the former pytest suite was
   ported, plus focused tests for effective-permission paths, policy evaluation, unused-access
   detection, the JIT lifecycle and leaver plans.
-* **API parity.** `internal/api/parity_test.go` replays 160 golden request/response pairs, in order
+* **API parity.** `internal/api/parity_test.go` replays 179 golden request/response pairs (160 recorded from the Python backend, 19 for the groups API), in order
   (reads, then simulation, JIT, review, revoke, HRIS/JML and sync mutations), against a freshly
   seeded server and requires identical JSON, including key order, number spelling and FastAPI's
   422 error bodies. The fixtures in `server/testdata/parity/` were recorded from the Python

@@ -1,0 +1,8 @@
+Plan: 1 member to add; 1 unchanged.
+
+  + member  app:team <- identity:3
+
+Impact (simulated by the server; nothing was changed): +1 / -0 identities in 1 group.
+  app:team[31m  3 -> 4 (+1, -0)  changed
+  The changes were simulated in 3 chunks of up to 100: an identity added by two chunks is counted twice.
+  The simulation was truncated: the lists above are incomplete.

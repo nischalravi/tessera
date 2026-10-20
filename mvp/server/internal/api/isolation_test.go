@@ -190,6 +190,9 @@ var crossTenantCases = map[string]crossTenantCase{
 		body: func(int64) string { return `{"reason":"suspected credential compromise"}` }},
 	"POST enable identity": {method: "POST", path: pathf("/api/identities/%d/enable"), key: "alice",
 		body: func(int64) string { return `{"reason":"suspected credential compromise"}` }},
+	// the groups REST API (GR-5): groups are UUIDs and are in TestGroupsAPI_Isolation; identities are here
+	"GET identity groups": {method: "GET", path: pathf("/api/identities/%d/groups"), key: "alice"},
+	"GET scim user":       {method: "GET", path: pathf("/scim/v2/Users/%d"), key: "alice"},
 }
 
 // routeParamKey maps each route with path parameters to the cases above.
@@ -225,6 +228,8 @@ var routeParamCases = map[string][]string{
 	"PUT /api/ownership/{kind}/{object_key}":              {"PUT group ownership", "PUT identity ownership"},
 	"POST /api/identities/{identity_id}/contain":          {"POST contain identity"},
 	"GET /api/identities/{identity_id}/containment":       {"GET identity containment"},
+	"GET /api/identities/{identity_id}/groups":            {"GET identity groups"},
+	"GET /scim/v2/Users/{id}":                             {"GET scim user"},
 	"GET /api/identities/{identity_id}/disables":          {"GET identity disables"},
 	"POST /api/identities/{identity_id}/disable":          {"POST disable identity"},
 	"POST /api/identities/{identity_id}/enable":           {"POST enable identity"},
@@ -381,7 +386,7 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if strings.HasPrefix(rt.Pattern, "/api/helpdesk/cases/{case_id}") {
 			continue // TestHelpdeskTenantIsolation (a UUID, not a fixture id)
 		}
-		if strings.HasPrefix(rt.Pattern, "/api/groups/") {
+		if strings.HasPrefix(rt.Pattern, "/api/groups/") || rt.Pattern == "/scim/v2/Groups/{id}" {
 			continue // TestGroupsTenantIsolation (UUIDs, not fixture ids)
 		}
 		if rt.Pattern == "/api/auth/sessions/{session_id}" {
@@ -515,6 +520,8 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		"/api/reviews/campaigns/{campaign_id}/export":     fmt.Sprint(b["campaign"]),
 		"/api/helpdesk/cases/{case_id}":                   caseIDs[f.B.Slug],
 		"/api/admin/api-clients/{client_id}":              "tsc_client_b",
+		"/api/identities/{identity_id}/groups":            fmt.Sprint(b["alice"]),
+		"/scim/v2/Users/{id}":                             fmt.Sprint(b["alice"]),
 	}
 	checked := 0
 	for _, rt := range srv.Routes() {
@@ -541,7 +548,7 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		if path == "/api/mcp/authorizations/{id}" {
 			continue // TestMCP_CrossTenant (a UUID, not a fixture id)
 		}
-		if strings.HasPrefix(path, "/api/groups/") && strings.Contains(path, "{") {
+		if (strings.HasPrefix(path, "/api/groups/") || path == "/scim/v2/Groups/{id}") && strings.Contains(path, "{") {
 			continue // TestGroupsTenantIsolation (UUIDs, not fixture ids)
 		}
 		if strings.HasPrefix(path, "/api/sod/") && strings.Contains(path, "{") {

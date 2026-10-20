@@ -1,0 +1,23 @@
+{
+ "name": "scim-user-excluded-attributes",
+ "request": {
+  "method": "GET",
+  "path": "/scim/v2/Users/1?attributes=userName,displayName"
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "displayName": "Rosalind Haverford",
+   "id": "1",
+   "meta": {
+    "created": "2026-10-08T09:30:00.000000Z",
+    "location": "/scim/v2/Users/1",
+    "resourceType": "User"
+   },
+   "schemas": [
+    "urn:ietf:params:scim:schemas:core:2.0:User"
+   ],
+   "userName": "rosalind.haverford@larkspur.example"
+  }
+ }
+}

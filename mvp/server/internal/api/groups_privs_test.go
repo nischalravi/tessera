@@ -11,6 +11,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/authtest"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/deprov"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/store/storetest"
 )
@@ -85,6 +86,50 @@ func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 	priv := e.grant("/api/groups/"+g, "update", "bob", "")
 	fpriv := e.grant("/api/groups/folders/"+app, "create", "bob", "")
 	other := "00000000-0000-4000-8000-00000000d00d"
+	// the attribute framework (GR-7): a definition with two names and two actions, an assignment, and a row on the definition
+	ad := e.admin.call("POST", "/api/groups/attr-defs", `{"folder":"`+app+`","extension":"tags","value_type":"string","multi_valued":true,`+
+		`"multi_assign":true,"assign_to":["group","folder","identity"]}`, 201)["id"].(string)
+	nm := e.admin.call("POST", "/api/groups/attr-names", `{"def":"`+ad+`","extension":"n"}`, 201)["id"].(string)
+	nm2 := e.admin.call("POST", "/api/groups/attr-names", `{"def":"`+ad+`","extension":"m"}`, 201)["id"].(string)
+	act2 := e.admin.call("POST", "/api/groups/attr-defs/"+ad+"/actions", `{"name":"extra"}`, 201)["id"].(string)
+	asg := e.admin.call("POST", "/api/groups/attr-assignments", `{"name":"`+nm+`","owner_type":"group","owner":"`+g+`","values":["a"]}`, 201)["id"].(string)
+	apriv := e.grant("/api/groups/attr-defs/"+ad, "attr_view", "bob", "")
+	rb := `{"name":"n","trigger":"membership.direct.added","action":"no_self_add"}`
+	grule := e.admin.call("POST", "/api/groups/"+g+"/rules", rb, 201)["id"].(string)
+	frule := e.admin.call("POST", "/api/groups/folders/"+app+"/rules", rb, 201)["id"].(string)
+	// GR-14: an attestation with an item and a task, a deprovisioning item, a saved report and its run
+	e.admin.call("POST", "/api/groups/"+g+"/members", fmt.Sprintf(`{"identity":%d}`, e.ident("alice")), 201)
+	camp := e.admin.call("POST", "/api/groups/"+g+"/attestation/campaigns", "", 201)["id"].(string)
+	item := e.admin.call("GET", "/api/groups/attestation/campaigns/"+camp, "", 200)["items"].([]any)[0].(map[string]any)["id"].(string)
+	task := e.admin.call("GET", "/api/groups/inbox/tasks", "", 200)["items"].([]any)[0].(map[string]any)["id"].(string)
+	aff := e.admin.group(app, "aff")
+	e.admin.call("PUT", "/api/groups/deprovisioning/settings", `{"affiliations":["`+aff+`"]}`, 200)
+	e.admin.call("POST", "/api/groups/"+aff+"/members", fmt.Sprintf(`{"identity":%d}`, e.ident("carol")), 201)
+	e.admin.call("POST", "/api/groups/"+g+"/members", fmt.Sprintf(`{"identity":%d}`, e.ident("carol")), 201)
+	e.admin.call("DELETE", "/api/groups/"+aff+"/members/"+fmt.Sprint(e.ident("carol")), "", 200)
+	if err := e.f.DB.InTenant(context.Background(), e.f.B.ID, func(tx *store.TenantTx) error {
+		_, err := deprov.Process(deprov.Env{Tx: tx, Now: storetest.Now}, 1000)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dp := e.admin.call("GET", "/api/groups/deprovisioning/items", "", 200)["items"].([]any)[0].(map[string]any)["id"].(string)
+	repBody := `{"name":"r","kind":"group_members","params":{"group":"` + g + `"}}`
+	rep := e.admin.call("POST", "/api/groups/reports/saved", repBody, 201)["id"].(string)
+	run := e.admin.call("POST", "/api/groups/reports/saved/"+rep+"/run", "", 200)["id"].(string)
+	settings := `{"interval_days":30,"window_days":14,"reviewers":"admins","reminder_days":[],"overdue_action":"none","enabled":true}`
+	adhoc := `{"kind":"group_members","params":{"group":"` + g + `"}}`
+
+	// policy groups (GR-9): a file for a new group in app that refers to g
+	polFile := func(group, ref string) string {
+		cedar := `permit (principal, action == Tessera::Action::"member", resource == Tessera::Group::"` + group + `") when { principal in Tessera::Group::"` + ref + `" };`
+		b, _ := json.Marshal(map[string]any{"files": []map[string]string{{"path": "groups/p.cedar", "cedar": cedar}}, "origin": "repo", "commit": "c1"})
+		return string(b)
+	}
+	polBody := polFile("root0:app:pol1", "root0:app:g")
+	ld := e.admin.call("POST", "/api/groups/loaders", `{"name":"L1","type":"csv","target_folder":"`+app+
+		`","config":{"path":"a.csv","group":"x","subject_column":"id"}}`, 201)["id"].(string)
+	ldRun := "00000000-0000-4000-8000-00000000dead"
 
 	type routeCase struct {
 		method, pattern, path, body string
@@ -107,6 +152,9 @@ func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 		{"GET", "/api/groups/{id}/members", "/api/groups/" + g + "/members", "", "read"},
 		{"POST", "/api/groups/{id}/members", "/api/groups/" + g + "/members", fmt.Sprintf(`{"identity":%d}`, e.ident("carol")), "update"},
 		{"GET", "/api/groups/{id}/members/{member}", "/api/groups/" + g + "/members/1", "", "read"},
+		{"GET", "/api/groups/{id}/members/{member}", "/api/groups/" + g + "/members/1?trace=true", "", "read"},
+		{"POST", "/api/groups/{id}/members:batch", "/api/groups/" + g + "/members:batch", fmt.Sprintf(`{"add":[{"identity":%d}]}`, e.ident("carol")), "update"},
+		{"POST", "/api/groups:simulate", "/api/groups:simulate", fmt.Sprintf(`{"changes":[{"kind":"add_member","group":%q,"identity":%d}]}`, g, e.ident("carol")), "update"},
 		{"DELETE", "/api/groups/{id}/members/{member}", "/api/groups/" + g + "/members/" + fmt.Sprint(e.ident("carol")), "", "update"},
 		{"POST", "/api/groups/{id}/convert-to-composite", "/api/groups/" + g + "/convert-to-composite", `{"op":"union","factors":["` + f1 + `"]}`, "admin"},
 		{"PUT", "/api/groups/{id}/composite", "/api/groups/" + g + "/composite", `{"op":"union","factors":["` + f1 + `"]}`, "admin"},
@@ -118,8 +166,76 @@ func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 		{"POST", "/api/groups/{id}/privileges", "/api/groups/" + g + "/privileges", `{"privilege":"view","holder_type":"everyone"}`, "admin"},
 		{"GET", "/api/groups/{id}/privileges/effective", "/api/groups/" + g + "/privileges/effective", "", "view"},
 		{"DELETE", "/api/groups/{id}/privileges/{privilege_id}", "/api/groups/" + g + "/privileges/" + priv, "", "admin"},
+		// rules: admin on the owner (stem_admin on a folder)
+		{"GET", "/api/groups/folders/{id}/rules", "/api/groups/folders/" + app + "/rules", "", "stem_admin"},
+		{"POST", "/api/groups/folders/{id}/rules", "/api/groups/folders/" + app + "/rules", rb, "stem_admin"},
+		{"PUT", "/api/groups/folders/{id}/rules/{rule_id}", "/api/groups/folders/" + app + "/rules/" + frule, rb, "stem_admin"},
+		{"DELETE", "/api/groups/folders/{id}/rules/{rule_id}", "/api/groups/folders/" + app + "/rules/" + frule, "", "stem_admin"},
+		{"GET", "/api/groups/{id}/rules", "/api/groups/" + g + "/rules", "", "admin"},
+		{"POST", "/api/groups/{id}/rules", "/api/groups/" + g + "/rules", rb, "admin"},
+		{"PUT", "/api/groups/{id}/rules/{rule_id}", "/api/groups/" + g + "/rules/" + grule, rb, "admin"},
+		{"DELETE", "/api/groups/{id}/rules/{rule_id}", "/api/groups/" + g + "/rules/" + grule, "", "admin"},
+		{"GET", "/api/groups/rules/settings", "/api/groups/rules/settings", "", ""},
+		{"PUT", "/api/groups/rules/settings", "/api/groups/rules/settings", `{"email_enabled":false}`, ""},
+		// GR-14: attestation, Inbox, deprovisioning, reports and the Groups lens
+		{"GET", "/api/groups/{id}/attestation", "/api/groups/" + g + "/attestation", "", "admin"},
+		{"PUT", "/api/groups/{id}/attestation", "/api/groups/" + g + "/attestation", settings, "admin"},
+		{"DELETE", "/api/groups/{id}/attestation", "/api/groups/" + g + "/attestation", "", "admin"},
+		{"GET", "/api/groups/folders/{id}/attestation", "/api/groups/folders/" + app + "/attestation", "", "stem_admin"},
+		{"PUT", "/api/groups/folders/{id}/attestation", "/api/groups/folders/" + app + "/attestation", settings, "stem_admin"},
+		{"DELETE", "/api/groups/folders/{id}/attestation", "/api/groups/folders/" + app + "/attestation", "", "stem_admin"},
+		{"GET", "/api/groups/{id}/attestation/campaigns", "/api/groups/" + g + "/attestation/campaigns", "", "admin"},
+		{"POST", "/api/groups/{id}/attestation/campaigns", "/api/groups/" + g + "/attestation/campaigns", "", "admin"},
+		{"GET", "/api/groups/attestation/campaigns/{campaign_id}", "/api/groups/attestation/campaigns/" + camp, "", "admin"},
+		{"POST", "/api/groups/attestation/campaigns/{campaign_id}/items/{item_id}/decision",
+			"/api/groups/attestation/campaigns/" + camp + "/items/" + item + "/decision", `{"decision":"keep"}`, "admin"},
+		{"POST", "/api/groups/inbox/tasks/{task_id}/close", "/api/groups/inbox/tasks/" + task + "/close", "", "admin"},
+		{"GET", "/api/groups/deprovisioning/settings", "/api/groups/deprovisioning/settings", "", ""},
+		{"PUT", "/api/groups/deprovisioning/settings", "/api/groups/deprovisioning/settings", `{"affiliations":[]}`, ""},
+		{"GET", "/api/groups/folders/{id}/deprovisioning", "/api/groups/folders/" + app + "/deprovisioning", "", "stem_admin"},
+		{"PUT", "/api/groups/folders/{id}/deprovisioning", "/api/groups/folders/" + app + "/deprovisioning", `{"mode":"notify"}`, "stem_admin"},
+		{"DELETE", "/api/groups/folders/{id}/deprovisioning", "/api/groups/folders/" + app + "/deprovisioning", "", "stem_admin"},
+		{"POST", "/api/groups/deprovisioning/items/{item_id}/resolve", "/api/groups/deprovisioning/items/" + dp + "/resolve",
+			`{"action":"dismiss","reason":"x"}`, "stem_admin"},
+		{"POST", "/api/groups/reports/saved", "/api/groups/reports/saved", repBody, "read"},
+		{"POST", "/api/groups/reports/run", "/api/groups/reports/run", adhoc, "read"},
+		{"GET", "/api/groups/{id}/graph", "/api/groups/" + g + "/graph", "", "view"},
 		// another identity's privileges need admin on the object, not view
 		{"GET", "/api/groups/{id}/privileges/effective", "/api/groups/" + g + "/privileges/effective?identity=" + fmt.Sprint(e.ident("bob")), "", "admin"},
+		// attribute definitions, names, actions and assignments (GR-7)
+		{"POST", "/api/groups/attr-defs", "/api/groups/attr-defs", `{"folder":"` + app + `","extension":"x","assign_to":["group"]}`, "create"},
+		{"GET", "/api/groups/attr-defs/{id}", "/api/groups/attr-defs/" + ad, "", "attr_view"},
+		{"PATCH", "/api/groups/attr-defs/{id}", "/api/groups/attr-defs/" + ad, `{"description":"x"}`, "attr_admin"},
+		{"DELETE", "/api/groups/attr-defs/{id}", "/api/groups/attr-defs/" + ad, "", "attr_admin"},
+		{"GET", "/api/groups/attr-defs/{id}/actions", "/api/groups/attr-defs/" + ad + "/actions", "", "attr_view"},
+		{"POST", "/api/groups/attr-defs/{id}/actions", "/api/groups/attr-defs/" + ad + "/actions", `{"name":"more"}`, "attr_admin"},
+		{"DELETE", "/api/groups/attr-defs/{id}/actions/{action_id}", "/api/groups/attr-defs/" + ad + "/actions/" + act2, "", "attr_admin"},
+		{"PUT", "/api/groups/attr-defs/{id}/actions/{action_id}/implies", "/api/groups/attr-defs/" + ad + "/actions/" + act2 + "/implies", `{"implies":[]}`, "attr_admin"},
+		{"GET", "/api/groups/attr-defs/{id}/privileges", "/api/groups/attr-defs/" + ad + "/privileges", "", "attr_admin"},
+		{"POST", "/api/groups/attr-defs/{id}/privileges", "/api/groups/attr-defs/" + ad + "/privileges", `{"privilege":"attr_view","holder_type":"everyone"}`, "attr_admin"},
+		{"GET", "/api/groups/attr-defs/{id}/privileges/effective", "/api/groups/attr-defs/" + ad + "/privileges/effective", "", "attr_view"},
+		{"GET", "/api/groups/attr-defs/{id}/privileges/effective", "/api/groups/attr-defs/" + ad + "/privileges/effective?identity=" + fmt.Sprint(e.ident("bob")), "", "attr_admin"},
+		{"DELETE", "/api/groups/attr-defs/{id}/privileges/{privilege_id}", "/api/groups/attr-defs/" + ad + "/privileges/" + apriv, "", "attr_admin"},
+		{"POST", "/api/groups/attr-names", "/api/groups/attr-names", `{"def":"` + ad + `","extension":"y"}`, "attr_admin"},
+		{"GET", "/api/groups/attr-names/{id}", "/api/groups/attr-names/" + nm, "", "attr_view"},
+		{"PATCH", "/api/groups/attr-names/{id}", "/api/groups/attr-names/" + nm, `{"description":"x"}`, "attr_admin"},
+		{"DELETE", "/api/groups/attr-names/{id}", "/api/groups/attr-names/" + nm2, "", "attr_admin"},
+		{"PUT", "/api/groups/attr-names/{id}/implies", "/api/groups/attr-names/" + nm + "/implies", `{"implies":["` + nm2 + `"]}`, "attr_admin"},
+		{"POST", "/api/groups/attr-assignments", "/api/groups/attr-assignments", `{"name":"` + nm + `","owner_type":"group","owner":"` + g + `","values":["b"]}`, "attr_update"},
+		{"GET", "/api/groups/attr-assignments/{id}", "/api/groups/attr-assignments/" + asg, "", "attr_read"},
+		{"PATCH", "/api/groups/attr-assignments/{id}", "/api/groups/attr-assignments/" + asg, `{"disabled_at":null}`, "attr_update"},
+		{"DELETE", "/api/groups/attr-assignments/{id}", "/api/groups/attr-assignments/" + asg, "", "attr_update"},
+		{"PUT", "/api/groups/attr-assignments/{id}/values", "/api/groups/attr-assignments/" + asg + "/values", `{"values":["c"]}`, "attr_update"},
+		{"GET", "/api/groups/{id}/object-types", "/api/groups/" + g + "/object-types", "", "view"},
+		{"PUT", "/api/groups/{id}/object-types", "/api/groups/" + g + "/object-types", `{"types":["ref"]}`, "group_attr_update"},
+		{"GET", "/api/groups/folders/{id}/object-types", "/api/groups/folders/" + app + "/object-types", "", "stem_view"},
+		{"PUT", "/api/groups/folders/{id}/object-types", "/api/groups/folders/" + app + "/object-types", `{"types":["app"]}`, "stem_attr_update"},
+		// policy groups as code (GR-9)
+		{"POST", "/api/groups/policy/validate", "/api/groups/policy/validate", polBody, "read"},
+		{"POST", "/api/groups/policy/diff", "/api/groups/policy/diff", polBody, "read"},
+		{"POST", "/api/groups/policy/apply", "/api/groups/policy/apply", polBody, "create"},
+		{"POST", "/api/groups/policy/reindex", "/api/groups/policy/reindex", "", ""},
+		{"GET", "/api/groups/{id}/policy", "/api/groups/" + g + "/policy", "", "read"},
 		// tenant-wide maintenance and settings: groups.admin
 		{"GET", "/api/groups/pit/digests", "/api/groups/pit/digests", "", ""},
 		{"GET", "/api/groups/pit/verify", "/api/groups/pit/verify", "", ""},
@@ -129,16 +245,77 @@ func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 		{"GET", "/api/groups/privileges/settings", "/api/groups/privileges/settings", "", ""},
 		{"PUT", "/api/groups/privileges/settings", "/api/groups/privileges/settings", `{"everyone_allowed":[],"defaults":[]}`, ""},
 		{"PUT", "/api/groups/users/{id}/identity", "/api/groups/users/" + other + "/identity", `{"identity_id":null}`, ""},
+		// GR-11, provisioners: tenant-wide, groups.admin only (the marks name groups, but the route permission is the gate)
+		{"GET", "/api/groups/provisioners", "/api/groups/provisioners", "", ""},
+		{"POST", "/api/groups/provisioners", "/api/groups/provisioners", `{"name":"p","target_type":"webhook"}`, ""},
+		{"GET", "/api/groups/provisioners/{id}", "/api/groups/provisioners/" + other, "", ""},
+		{"PATCH", "/api/groups/provisioners/{id}", "/api/groups/provisioners/" + other, `{"mode":"paused"}`, ""},
+		{"DELETE", "/api/groups/provisioners/{id}", "/api/groups/provisioners/" + other, "", ""},
+		{"GET", "/api/groups/provisioners/{id}/marks", "/api/groups/provisioners/" + other + "/marks", "", ""},
+		{"PUT", "/api/groups/provisioners/{id}/marks", "/api/groups/provisioners/" + other + "/marks", `{"marks":[]}`, ""},
+		{"DELETE", "/api/groups/provisioners/{id}/marks/{mark_type}/{object}", "/api/groups/provisioners/" + other + "/marks/group/" + g, "", ""},
+		{"POST", "/api/groups/provisioners/{id}/sync", "/api/groups/provisioners/" + other + "/sync", "", ""},
+		{"GET", "/api/groups/provisioners/{id}/runs", "/api/groups/provisioners/" + other + "/runs", "", ""},
+		{"GET", "/api/groups/provisioners/{id}/ops", "/api/groups/provisioners/" + other + "/ops", "", ""},
+		{"GET", "/api/groups/provisioners/{id}/groups", "/api/groups/provisioners/" + other + "/groups", "", ""},
+		{"POST", "/api/groups/provisioners/{id}/diagnose", "/api/groups/provisioners/" + other + "/diagnose", "", ""},
+		// GR-18, event sinks: tenant-wide, groups.admin only
+		{"GET", "/api/groups/event-sinks", "/api/groups/event-sinks", "", ""},
+		{"POST", "/api/groups/event-sinks", "/api/groups/event-sinks", `{"name":"s","kind":"sqs"}`, ""},
+		{"GET", "/api/groups/event-sinks/{id}", "/api/groups/event-sinks/" + other, "", ""},
+		{"PATCH", "/api/groups/event-sinks/{id}", "/api/groups/event-sinks/" + other, `{"enabled":false}`, ""},
+		{"DELETE", "/api/groups/event-sinks/{id}", "/api/groups/event-sinks/" + other, "", ""},
+		{"GET", "/api/groups/event-sinks/{id}/dead-letters", "/api/groups/event-sinks/" + other + "/dead-letters", "", ""},
+		{"POST", "/api/groups/event-sinks/{id}/dead-letters/{seq}/redeliver", "/api/groups/event-sinks/" + other + "/dead-letters/1/redeliver", "", ""},
+		{"POST", "/api/groups/event-sinks/{id}/dead-letters/{seq}/discard", "/api/groups/event-sinks/" + other + "/dead-letters/1/discard", "", ""},
+		// GR-10, loaders: the privilege is on the loader's target folder. The routes that need groups.loader.admin
+		// (see loaderAdmin below) are asked as a policy admin, who holds that permission and no privilege.
+		{"POST", "/api/groups/loaders", "/api/groups/loaders", `{"name":"L2","type":"csv","target_folder":"` + app +
+			`","config":{"path":"a.csv","group":"x","subject_column":"id"}}`, "stem_admin"},
+		{"GET", "/api/groups/loaders/{id}", "/api/groups/loaders/" + ld, "", "stem_view"},
+		{"PATCH", "/api/groups/loaders/{id}", "/api/groups/loaders/" + ld, `{"schedule":"@hourly"}`, "stem_admin"},
+		{"POST", "/api/groups/loaders/{id}/run", "/api/groups/loaders/" + ld + "/run", `{"kind":"preview"}`, "stem_admin"},
+		{"GET", "/api/groups/loaders/{id}/runs", "/api/groups/loaders/" + ld + "/runs", "", "stem_view"},
+		{"GET", "/api/groups/loaders/{id}/runs/{run_id}", "/api/groups/loaders/" + ld + "/runs/" + ldRun, "", "stem_admin"},
+		{"POST", "/api/groups/loaders/{id}/runs/{run_id}/approve", "/api/groups/loaders/" + ld + "/runs/" + ldRun + "/approve", "", "stem_admin"},
+		{"POST", "/api/groups/loaders/{id}/runs/{run_id}/reject", "/api/groups/loaders/" + ld + "/runs/" + ldRun + "/reject", "", "stem_admin"},
+		{"GET", "/api/groups/loaders/{id}/unresolved", "/api/groups/loaders/" + ld + "/unresolved", "", "stem_admin"},
 	}
+	loaderAdmin := map[string]bool{"POST /api/groups/loaders": true, "PATCH /api/groups/loaders/{id}": true,
+		"POST /api/groups/loaders/{id}/run": true, "POST /api/groups/loaders/{id}/runs/{run_id}/approve": true,
+		"POST /api/groups/loaders/{id}/runs/{run_id}/reject": true}
 	// the listings are gated too, by filtering: the table below names them so none is forgotten
-	listings := []routeCase{{"GET", "/api/groups/folders", "", "", ""}, {"GET", "/api/groups/native", "", "", ""}}
+	listings := []routeCase{{"GET", "/api/groups/folders", "", "", ""}, {"GET", "/api/groups/native", "", "", ""},
+		// GR-10: the loaders and the held-run tasks show only what the caller may view (stem_view) or administer (stem_admin)
+		{"GET", "/api/groups/loaders", "", "", ""}, {"GET", "/api/groups/loader-tasks", "", "", ""},
+		// GR-5: what an identity belongs to, and the read-only SCIM server, show only what the caller may read
+		// (the SCIM routes answer in SCIM's error format: TestSCIM_PrivilegeAndAuth checks their 403s)
+		{"GET", "/api/identities/{identity_id}/groups", "", "", ""}, {"GET", "/scim/v2/Groups", "", "", ""},
+		{"GET", "/scim/v2/Groups/{id}", "", "", ""}, {"GET", "/scim/v2/Users", "", "", ""}, {"GET", "/scim/v2/Users/{id}", "", "", ""},
+		{"GET", "/scim/v2/ServiceProviderConfig", "", "", ""}, {"GET", "/scim/v2/ResourceTypes", "", "", ""},
+		// the description of these routes is for every signed-in user
+		{"GET", "/api/openapi/groups.json", "", "", ""},
+
+		{"GET", "/api/groups/attr-defs", "", "", ""}, {"GET", "/api/groups/attr-names", "", "", ""},
+		{"GET", "/api/groups/attr-assignments", "", "", ""}, {"GET", "/api/groups/services", "", "", ""},
+		{"GET", "/api/groups/object-types", "", "", ""},
+		{"GET", "/api/groups/inbox/tasks", "", "", ""}, {"GET", "/api/groups/deprovisioning/items", "", "", ""},
+		{"GET", "/api/groups/reports/saved", "", "", ""}, {"GET", "/api/groups/reports/catalogue", "", "", ""},
+		{"GET", "/api/groups/graph/identity/{identity_id}", "", "", ""},
+		// saved reports and their runs belong to the user who saved them: another user gets 404 (tested below)
+		{"GET", "/api/groups/reports/saved/{report_id}", "", "", ""}, {"PUT", "/api/groups/reports/saved/{report_id}", "", "", ""},
+		{"DELETE", "/api/groups/reports/saved/{report_id}", "", "", ""}, {"POST", "/api/groups/reports/saved/{report_id}/run", "", "", ""},
+		{"GET", "/api/groups/reports/saved/{report_id}/runs", "", "", ""}, {"GET", "/api/groups/reports/runs/{run_id}", "", "", ""}}
 	// every registered group route is in the table
 	have := map[string]bool{}
 	for _, c := range append(slices.Clone(cases), listings...) {
 		have[c.method+" "+c.pattern] = true
 	}
 	for _, rt := range e.srv.Routes() {
-		if !strings.HasPrefix(rt.Pattern, "/api/groups") || (rt.Method == "GET" && rt.Pattern == "/api/groups") {
+		isGroups := strings.HasPrefix(rt.Pattern, "/api/groups") || strings.HasPrefix(rt.Pattern, "/scim/v2/") ||
+			rt.Pattern == "/api/openapi/groups.json" ||
+			(strings.HasPrefix(rt.Pattern, "/api/identities/") && strings.HasSuffix(rt.Pattern, "/groups"))
+		if !isGroups || (rt.Method == "GET" && rt.Pattern == "/api/groups") {
 			continue // GET /api/groups lists the connected-system groups
 		}
 		if !have[rt.Method+" "+rt.Pattern] {
@@ -146,21 +323,45 @@ func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 		}
 	}
 	nobody := e.user("nobody", "alice") // operator: reaches every route, holds no privilege
+	aliceID := e.ident("alice")
+	policyAdmin := e.as("nobody-pa", []auth.Role{auth.RolePolicyAdmin}, &aliceID) // holds groups.loader.admin, no privilege
 	for _, c := range cases {
 		t.Run("no privilege "+c.method+" "+c.pattern, func(t *testing.T) {
+			who := nobody
+			if loaderAdmin[c.method+" "+c.pattern] {
+				who = policyAdmin
+				// an operator is stopped by the role first: groups.loader.admin is not theirs
+				if rec := nobody.do(c.method, c.path, c.body); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"forbidden"`) ||
+					strings.Contains(rec.Body.String(), "privilege_required") {
+					t.Errorf("operator %s %s = %d %.200s, want 403 forbidden (the role)", c.method, c.path, rec.Code, rec.Body.String())
+				}
+			}
 			if c.privilege == "" {
-				if rec := nobody.do(c.method, c.path, c.body); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"forbidden"`) {
+				if rec := who.do(c.method, c.path, c.body); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"forbidden"`) {
 					t.Errorf("%s %s = %d %.200s, want 403 forbidden", c.method, c.path, rec.Code, rec.Body.String())
 				}
 				return
 			}
-			denied(t, nobody, c.method, c.path, c.body, c.privilege)
+			denied(t, who, c.method, c.path, c.body, c.privilege)
 		})
 	}
 	// the listings answer 200 and show nothing
-	for _, p := range []string{"/api/groups/folders", "/api/groups/native"} {
+	for _, p := range []string{"/api/groups/folders", "/api/groups/native", "/api/groups/attr-defs", "/api/groups/attr-names",
+		"/api/groups/attr-assignments", "/api/groups/services", "/api/groups/inbox/tasks", "/api/groups/deprovisioning/items", "/api/groups/reports/saved", "/api/groups/loaders", "/api/groups/loader-tasks"} {
 		if items := nobody.call("GET", p, "", 200)["items"].([]any); len(items) != 0 {
 			t.Errorf("%s shows %d items to a user without view", p, len(items))
+		}
+	}
+	// the object type vocabulary is public to anyone who reaches the groups routes
+	nobody.call("GET", "/api/groups/object-types", "", 200)
+	// someone else's saved report and its run are not found
+	for _, c := range []routeCase{
+		{"GET", "", "/api/groups/reports/saved/" + rep, "", ""}, {"PUT", "", "/api/groups/reports/saved/" + rep, repBody, ""},
+		{"DELETE", "", "/api/groups/reports/saved/" + rep, "", ""}, {"POST", "", "/api/groups/reports/saved/" + rep + "/run", "", ""},
+		{"GET", "", "/api/groups/reports/saved/" + rep + "/runs", "", ""}, {"GET", "", "/api/groups/reports/runs/" + run, "", ""},
+	} {
+		if rec := nobody.do(c.method, c.path, c.body); rec.Code != http.StatusNotFound {
+			t.Errorf("%s %s by another user = %d, want 404", c.method, c.path, rec.Code)
 		}
 	}
 	// a user without the route's permission: viewer holds groups.read only
@@ -169,6 +370,9 @@ func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 		if c.method == "GET" && !strings.Contains(c.pattern, "pit") && !strings.Contains(c.pattern, "engine") &&
 			!strings.Contains(c.pattern, "settings") {
 			continue
+		}
+		if c.pattern == "/api/groups/policy/validate" || c.pattern == "/api/groups/policy/diff" {
+			continue // POST, but reads: groups.read reaches them
 		}
 		if rec := viewer.do(c.method, c.path, c.body); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"forbidden"`) {
 			t.Errorf("viewer %s %s = %d %.100s, want 403 forbidden", c.method, c.path, rec.Code, rec.Body.String())
@@ -665,6 +869,70 @@ func TestPrivs_IdentityLinkFourEyes(t *testing.T) {
 
 	got := auditActions(t, e.f, e.f.B.ID)
 	if got["groups.user.identity_change_requested"] != 3 || got["groups.user.identity_linked"] != 1 || got["groups.user.identity_unlinked"] != 0 {
+		t.Errorf("audit actions %v", got)
+	}
+}
+
+// A first link to an identity another user is already linked to takes two
+// admins (issue #376); a first link to an unshared identity still applies at once.
+func TestPrivs_SharedIdentityLinkFourEyes(t *testing.T) {
+	e := newPrivEnv(t)
+	h := e.srv.Handler()
+	login := func(name string, roles []auth.Role, identity *int64) authtest.Login {
+		return signIn(t, e.f.DB, e.f.B.ID, authtest.User{Email: name + "@b.example", Roles: roles, IdentityID: identity}, authtest.Phr, storetest.Now)
+	}
+	put := func(by, user authtest.Login, identity int64) (int, string) {
+		t.Helper()
+		rec := corrDo(h, by, "PUT", "/api/groups/users/"+user.UserID.String()+"/identity", fmt.Sprintf(`{"identity_id":%d}`, identity))
+		return rec.Code, rec.Body.String()
+	}
+	linkOf := func(user authtest.Login) *int64 {
+		t.Helper()
+		var id *int64
+		if err := e.f.DB.ReadTenant(context.Background(), e.f.B.ID, func(c *store.TenantTx) error {
+			u, err := c.PlatformUser(user.UserID)
+			if err == nil {
+				id = u.IdentityID
+			}
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	admins := []auth.Role{auth.RoleTenantAdmin}
+	bob, carol := e.ident("bob"), e.ident("carol")
+	a1, a2 := login("a1", admins, nil), login("a2", admins, nil)
+	login("owner", []auth.Role{auth.RoleOperator}, &bob)
+	vic := login("vic", []auth.Role{auth.RoleOperator}, nil)
+
+	// an unshared identity still links at once
+	if code, body := put(a1, vic, carol); code != 200 {
+		t.Fatalf("unshared first link: %d %s", code, body)
+	}
+	other := login("other", []auth.Role{auth.RoleOperator}, nil)
+
+	// a shared identity: one admin leaves it pending and cannot confirm it alone
+	code, body := put(a1, other, bob)
+	if code != 202 || !strings.Contains(body, "pending_second_admin") {
+		t.Fatalf("first admin: %d %s", code, body)
+	}
+	code, body = put(a1, other, bob)
+	if code != 403 || !strings.Contains(body, "four_eyes_required") {
+		t.Fatalf("same admin again: %d %s", code, body)
+	}
+	if l := linkOf(other); l != nil {
+		t.Fatalf("one admin linked a shared identity: %v", *l)
+	}
+	// a second admin applies it
+	if code, body = put(a2, other, bob); code != 200 {
+		t.Fatalf("second admin: %d %s", code, body)
+	}
+	if l := linkOf(other); l == nil || *l != bob {
+		t.Fatalf("the confirmed link was not applied: %v", l)
+	}
+	got := auditActions(t, e.f, e.f.B.ID)
+	if got["groups.user.identity_change_requested"] != 1 || got["groups.user.identity_linked"] < 2 {
 		t.Errorf("audit actions %v", got)
 	}
 }

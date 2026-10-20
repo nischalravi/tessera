@@ -31,6 +31,9 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/loaders"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/provisioning"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/rules"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/claim"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/credential"
 	guestlife "github.com/nischalravi/tessera/mvp/server/internal/guests/lifecycle"
@@ -211,6 +214,19 @@ type Config struct {
 	// GroupsEngine is the native groups' membership engine, whose synchronous
 	// budget is TESSERA_GROUPS_SYNC_BUDGET. Nil: the defaults.
 	GroupsEngine *engine.Engine
+	// GroupsRules is what group rules need from outside the database: the
+	// outbound client for webhooks, the sealer for their secrets and the email
+	// notifier. Its veto rules are applied to every membership add. Nil: the
+	// defaults (no webhooks, email rules log).
+	GroupsRules *rules.Runtime
+	// LoaderDataDir is TESSERA_LOADER_DATA_DIR: the directory of the SQL and CSV
+	// file sources of group loaders, with a subdirectory <tenant id>/ per tenant
+	// (a loader reads only its own tenant's). Empty: file sources are off.
+	LoaderDataDir string
+	// Provisioning is the group provisioning service (issue #54): the same one
+	// the background runner uses. Nil: a service with no outbound clients, which
+	// can still hold provisioners but cannot reach a target.
+	Provisioning *provisioning.Service
 	// AuditAppend overrides how the audit middleware writes http.request
 	// events (tests inject failures). Nil: the store.
 	AuditAppend func(ctx context.Context, t tenancy.ID, e store.AuditEvent) error
@@ -275,6 +291,8 @@ type Server struct {
 	admin *admin.Service
 	// queue is the durable job queue (issue #300); never nil.
 	queue *queue.Queue
+	// loaders runs the group loaders (issue #53); never nil.
+	loaders *loaders.Service
 }
 
 // New builds a server.
@@ -319,6 +337,12 @@ func New(cfg Config) *Server {
 	// panics the first sign-in that reaches conditional access
 	if cfg.DeviceSignals == nil {
 		cfg.DeviceSignals = condaccess.StoreSignals{}
+	}
+	if cfg.GroupsRules == nil {
+		cfg.GroupsRules = &rules.Runtime{Engine: cfg.GroupsEngine}
+	}
+	if cfg.Provisioning == nil {
+		cfg.Provisioning = &provisioning.Service{DB: cfg.Store, Sealer: cfg.Sealer, Clock: cfg.Clock, Log: cfg.Logger}
 	}
 	if cfg.Containment == nil {
 		cfg.Containment = &containment.Service{}
@@ -394,6 +418,8 @@ func New(cfg Config) *Server {
 	}
 	s.guestLife = guestlife.New(s.guests)
 	s.guestLife.Secrets, s.guestLife.BaseURL, s.guestLife.TenantName = cfg.Secrets, cfg.PublicURL, s.tenantName
+	s.loaders = &loaders.Service{DB: cfg.Store, Engine: cfg.GroupsEngine, Clock: func() time.Time { return s.clock() },
+		Sealer: cfg.Sealer, HTTP: cfg.OutboundHTTP, DataDir: cfg.LoaderDataDir, Log: cfg.Logger}
 	if cfg.OutboundHTTP != nil {
 		rp, err := oidcrp.New(oidcrp.Config{HTTP: cfg.OutboundHTTP, Now: func() time.Time { return s.clock() }})
 		if err != nil {
@@ -453,16 +479,28 @@ func New(cfg Config) *Server {
 	s.registerNotificationRoutes()
 	s.registerEmailRoutes()
 	s.registerContainmentRoutes()
+	// the attribute routes name literal segments under /api/groups, so they come
+	// before the {id} routes (the first registered route that matches wins)
+	s.registerGroupsAttrRoutes()
 	s.registerMCPRoutes()
 	s.registerSSFRoutes()
 	s.registerFlatfileRoutes()
 	s.registerEvidenceRoutes()
 	s.registerReviewPopulationRoutes()
 	s.registerHelpdeskRoutes()
+	s.registerGroupsPolicyRoutes()
+	s.registerGroupsLoaderRoutes()       // before /api/groups/{id}, which would also match "loaders"
+	s.registerGroupsProvisioningRoutes() // before the {id} routes below: first match wins
+	s.registerGroupsSinkRoutes()         // before the {id} routes, which would match "event-sinks"
 	s.registerGroupsFolderRoutes()
 	s.registerGroupsPrivilegeRoutes()
 	s.registerGroupsMemberRoutes()
 	s.registerGroupsHistoryRoutes()
+	s.registerGroupsAPIRoutes()
+	s.registerSCIMRoutes()
+	s.registerGroupsRuleRoutes()
+	s.registerGroupsGovRoutes()
+	s.registerGroupsReportRoutes()
 	s.registerReadinessRoutes()
 	s.registerAgentRoutes()
 	s.registerAWSRoutes()
@@ -879,6 +917,10 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 		writeFile(w, fb)
 		return
 	}
+	if sr, ok := out.(scimResponse); ok {
+		writeJSONAs(w, "application/scim+json", sr.status, sr.body)
+		return
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -927,6 +969,16 @@ type statusBody struct {
 type rawJSON []byte
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
+	writeJSONAs(w, "application/json", status, v)
+}
+
+// scimResponse is an answer of the SCIM server: application/scim+json (RFC 7644 §3.1).
+type scimResponse struct {
+	status int
+	body   any
+}
+
+func writeJSONAs(w http.ResponseWriter, contentType string, status int, v any) {
 	var body []byte
 	if raw, ok := v.(rawJSON); ok {
 		body = raw
@@ -937,7 +989,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 			return
 		}
 	}
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", contentType)
 	w.WriteHeader(status)
 	_, _ = w.Write(body) // #nosec G705 -- JSON-encoded body served as application/json with nosniff, never HTML
 }

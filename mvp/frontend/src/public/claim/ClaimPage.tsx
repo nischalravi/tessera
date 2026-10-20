@@ -209,9 +209,9 @@ function VerifyContact({ status, conn, onDone }: { status: ClaimStatus; conn: Co
   const input = useRef<HTMLInputElement>(null);
   const send = () => a.run(async () => {
     setSent((await claimApi.sendCode(conn.slug, conn.signer, conn.nonce)).message);
-    // the code field appears next: move the keyboard (and a screen reader) to it
-    window.setTimeout(() => input.current?.focus(), 0);
   });
+  // the code field appears once the code is sent: move the keyboard (and a screen reader) to it
+  useEffect(() => { if (sent) input.current?.focus(); }, [sent]);
   const check = (e: FormEvent) => {
     e.preventDefault();
     return a.run(async () => {

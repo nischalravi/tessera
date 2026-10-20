@@ -535,13 +535,18 @@ func TestSettings(t *testing.T) {
 			"unknown privilege":  {EveryoneAllowed: []privs.Privilege{"bogus"}},
 			"a default outside":  {EveryoneAllowed: []privs.Privilege{privs.View}, Defaults: []privs.Default{{privs.Group, privs.Read}}},
 			"wrong object type":  {EveryoneAllowed: []privs.Privilege{privs.View}, Defaults: []privs.Default{{privs.Folder, privs.View}}},
-			"attr def default":   {EveryoneAllowed: []privs.Privilege{privs.AttrView}, Defaults: []privs.Default{{privs.AttrDef, privs.AttrView}}},
+			"attr def, wrong":    {EveryoneAllowed: []privs.Privilege{privs.AttrView}, Defaults: []privs.Default{{privs.AttrDef, privs.View}}},
 			"stem_admin default": {EveryoneAllowed: []privs.Privilege{privs.StemAdmin}},
 		}
 		for name, s := range bad {
 			if _, err := privs.SaveSettings(env(c), s); !isKind(err, privs.Invalid) {
 				t.Errorf("%s: %v, want invalid", name, err)
 			}
+		}
+		// an attribute definition can have a default from GR-7 on
+		if s, err := privs.SaveSettings(env(c), privs.Settings{EveryoneAllowed: []privs.Privilege{privs.AttrView},
+			Defaults: []privs.Default{{privs.AttrDef, privs.AttrView}}}); err != nil || len(s.Defaults) != 1 {
+			t.Errorf("an attr_view default for attribute definitions: %+v, %v", s, err)
 		}
 		saved, err := privs.SaveSettings(env(c), privs.Settings{EveryoneAllowed: []privs.Privilege{privs.Read, privs.View, privs.View},
 			Defaults: []privs.Default{{privs.Group, privs.View}, {privs.Group, privs.View}}})
@@ -682,12 +687,13 @@ func TestGrant_Refusals(t *testing.T) {
 			in   privs.GrantInput
 			kind privs.Kind
 		}{
-			"unknown privilege": {privs.GrantInput{Object: g1, Privilege: "bogus", Holder: privs.IdentityHolder(w.ivan)}, privs.Invalid},
-			"unknown holder":    {privs.GrantInput{Object: g1, Privilege: privs.View, Holder: privs.Holder{Type: "robot"}}, privs.Invalid},
-			"unknown identity":  {privs.GrantInput{Object: g1, Privilege: privs.View, Holder: privs.IdentityHolder(99999)}, privs.NotFound},
-			"unknown group":     {privs.GrantInput{Object: g1, Privilege: privs.View, Holder: privs.GroupHolder("nope")}, privs.NotFound},
-			"unknown object":    {privs.GrantInput{Object: privs.GroupObject("nope"), Privilege: privs.View, Holder: privs.IdentityHolder(w.ivan)}, privs.NotFound},
-			"attribute def":     {privs.GrantInput{Object: privs.AttrDefObject("x"), Privilege: privs.AttrView, Holder: privs.IdentityHolder(w.ivan)}, privs.Invalid},
+			"unknown privilege":               {privs.GrantInput{Object: g1, Privilege: "bogus", Holder: privs.IdentityHolder(w.ivan)}, privs.Invalid},
+			"unknown holder":                  {privs.GrantInput{Object: g1, Privilege: privs.View, Holder: privs.Holder{Type: "robot"}}, privs.Invalid},
+			"unknown identity":                {privs.GrantInput{Object: g1, Privilege: privs.View, Holder: privs.IdentityHolder(99999)}, privs.NotFound},
+			"unknown group":                   {privs.GrantInput{Object: g1, Privilege: privs.View, Holder: privs.GroupHolder("nope")}, privs.NotFound},
+			"unknown object":                  {privs.GrantInput{Object: privs.GroupObject("nope"), Privilege: privs.View, Holder: privs.IdentityHolder(w.ivan)}, privs.NotFound},
+			"attribute def":                   {privs.GrantInput{Object: privs.AttrDefObject("x"), Privilege: privs.AttrView, Holder: privs.IdentityHolder(w.ivan)}, privs.NotFound},
+			"group privilege on a definition": {privs.GrantInput{Object: privs.AttrDefObject("x"), Privilege: privs.View, Holder: privs.IdentityHolder(w.ivan)}, privs.Invalid},
 		} {
 			if _, _, err := privs.Grant(env(c), tc.in); !isKind(err, tc.kind) {
 				t.Errorf("%s: %v, want kind %d", name, err, tc.kind)

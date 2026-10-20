@@ -1,0 +1,23 @@
+{
+  "kind": "folder_privileges",
+  "generated_at": "2026-10-10T09:30:00Z",
+  "columns": [
+    "privilege",
+    "holder_type",
+    "holder",
+    "applies_to",
+    "scope",
+    "source"
+  ],
+  "rows": [
+    [
+      "stem_view",
+      "everyone",
+      "",
+      "self",
+      "self",
+      "api"
+    ]
+  ],
+  "truncated": false
+}

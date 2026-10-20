@@ -66,8 +66,8 @@ func (s Settings) normalize() (Settings, error) {
 	seen := map[Default]bool{}
 	for _, d := range s.Defaults {
 		switch {
-		case d.ObjectType != Folder && d.ObjectType != Group:
-			return out, invalid("invalid_default", "defaults apply to new folders and groups, not %q", d.ObjectType)
+		case d.ObjectType != Folder && d.ObjectType != Group && d.ObjectType != AttrDef:
+			return out, invalid("invalid_default", "defaults apply to new folders, groups and attribute definitions, not %q", d.ObjectType)
 		case !Valid(d.Privilege) || ObjectOf(d.Privilege) != d.ObjectType:
 			return out, invalid("invalid_default", "%q is not a %s privilege", d.Privilege, d.ObjectType)
 		case !out.Allowed(d.Privilege):
@@ -138,6 +138,8 @@ type Env struct {
 	By          *string
 	ByIdentity  *int64
 	TenantAdmin bool
+	// Cause and CauseRef stamp the operation's events (api when empty).
+	Cause, CauseRef string
 }
 
 func (e Env) audit(action, targetType, targetID string, detail ojson.Object) error {
