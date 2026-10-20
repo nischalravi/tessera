@@ -50,11 +50,14 @@
 //	                      dev_mock SAML connection pinning it (run.sh sets it)
 //	TESSERA_READINESS_SCENARIO  simulated validation scenario for demo connectors: gaps (default) or happy
 //	TESSERA_SAFEDIAL_ALLOW      dev only: host:port or CIDR:port private LDAP targets live checks may dial (see mvp/README.md "Live LDAP checks")
+//	TESSERA_AGENT_ADDR, TESSERA_AGENT_TLS_CERT, TESSERA_AGENT_TLS_KEY  the mutual-TLS listener Directory
+//	                      Agents connect to, and its certificate and key (see mvp/README.md "Directory Agent")
 //	TESSERA_READINESS_DEMO      "off" skips seeding the demo Okta connection (larkspur only) for Deployment health
 package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -71,6 +74,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/agent"
 	"github.com/nischalravi/tessera/mvp/server/internal/alerts"
 	"github.com/nischalravi/tessera/mvp/server/internal/api"
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
@@ -368,6 +372,14 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		return err
 	}
 	defer st.Close()
+	// #220: move the rows of the two retired credential tables into
+	// connection_credentials (a no-op once they are gone). A blob that does not
+	// open aborts startup rather than losing a credential.
+	if m, err := st.MigrateCredentials(ctx, sealer); err != nil {
+		return err
+	} else if m != (store.CredentialMigration{}) {
+		logger.Info("credentials migrated", "bind", m.Bind, "containment", m.Containment, "orphaned_dropped", m.Orphaned)
+	}
 	if _, err := loader.Load(); err != nil { // fail fast on broken policy files
 		return err
 	}
@@ -411,6 +423,9 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	rsvc := readiness.NewService(templates, string(cfg.Env))
 	rsvc.Runner.Scenario = scenario
 	rsvc.Runner.Live.Sealer, rsvc.Runner.Live.Allow = sealer, allow
+	// Directory Agents (DR-11): private directories are probed through them.
+	agents := &agent.Service{DB: st, Hub: agent.NewHub(nil), Clock: clock}
+	rsvc.Runner.Live.Agents = agents
 	// Outbound calls to IdPs (discovery, JWKS, token) and the kill switch's
 	// provider calls (containment) go through safehttp. A test server gets the
 	// production client (no loopback exception; ForConfig decides).
@@ -440,14 +455,14 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	siemSvc := &siem.Service{DB: st, Sealer: sealer, HTTP: outbound, Clock: clock, Log: logger,
 		Dev: cfg.Env == config.Dev && cfg.OutboundAllowLoopback}
 	srv := api.New(api.Config{Health: checker, Store: st, Clock: clock, Policies: loader, Logger: logger,
-		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound, APIAudience: cfg.APIAudience,
+		PublicURL: cfg.PublicURL, RPID: cfg.RPID, Sealer: sealer, OutboundHTTP: outbound, APIAudience: cfg.APIAudience,
 		AccessTokenTTL: time.Duration(cfg.AccessTokenTTLSeconds) * time.Second,
 		DeviceCodeTTL:  time.Duration(cfg.DeviceCodeTTLSeconds) * time.Second, DPoPRSNonce: cfg.DPoPRSNonce,
 		Outbound: outbound, FakeTargetURL: fakeURL,
 		Containment:    &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock},
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
-		HSTS: cfg.IsProd(), Env: cfg.Env, Identifiers: identifiers.NewKeyer(sealer), EmailMode: cfg.Mail.Mode, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, Readiness: rsvc, AuditAnchor: anchorURL,
-		Siem: siemSvc, Alerts: alertSvc,
+		HSTS: cfg.IsProd(), Env: cfg.Env, Identifiers: identifiers.NewKeyer(sealer), EmailMode: cfg.Mail.Mode, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, Readiness: rsvc, Agents: agents, AuditAnchor: anchorURL,
+		Siem: siemSvc, Alerts: alertSvc, AWSCatalog: awsCatalogLoader(cfg),
 		SoD: sod.Settings{MaxDays: cfg.SoDMaxMitigationDays, WarnDays: cfg.SoDWarnDays}})
 	sender, err := notify.NewSender(cfg.Mail, cfg.Env, cfg.OutboundAllowLoopback, sealer, config.DevMailPath(o.db), logger)
 	if err != nil {
@@ -479,6 +494,32 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	}
 	if metrics != nil {
 		go metrics.serve(logger)
+	}
+	// The Directory Agent listener (DR-11): mutual TLS only, a separate port
+	// from the API, serving nothing but the agent protocol.
+	var agentSrv *http.Server
+	var agentLn net.Listener
+	if cfg.AgentAddr != "" {
+		tlsCfg, err := agent.ServerTLSConfig(cfg.AgentTLSCert, cfg.AgentTLSKey)
+		if err != nil {
+			_ = ln.Close()
+			return err
+		}
+		raw, err := net.Listen("tcp", cfg.AgentAddr)
+		if err != nil {
+			_ = ln.Close()
+			return err
+		}
+		agentLn = tls.NewListener(raw, tlsCfg)
+		agentSrv = &http.Server{
+			Handler:           agents.Handler(agent.PollWait),
+			ReadHeaderTimeout: readHeaderTimeout,
+			ReadTimeout:       readTimeout,
+			WriteTimeout:      agent.PollWait + 15*time.Second,
+			IdleTimeout:       idleTimeout,
+			MaxHeaderBytes:    16 << 10,
+			ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
+		}
 	}
 	sweepDone := make(chan struct{})
 	go func() {
@@ -528,9 +569,13 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		defer close(notifyDone)
 		dispatcher.Loop(ctx, notifyInterval)
 	}()
-	errc := make(chan error, 1)
+	errc := make(chan error, 2)
 	go func() { errc <- httpSrv.Serve(ln) }()
 	logger.Info("tessera API listening", "addr", ln.Addr().String())
+	if agentSrv != nil {
+		go func() { errc <- agentSrv.Serve(agentLn) }()
+		logger.Info("tessera agent listener (mutual TLS)", "addr", agentLn.Addr().String())
+	}
 
 	select {
 	case err := <-errc:
@@ -538,6 +583,10 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 			_ = metrics.srv.Close()
 		}
 		stop()
+		if agentSrv != nil {
+			_ = agentSrv.Close()
+		}
+		_ = httpSrv.Close()
 		<-sweepDone
 		<-reviewsDone
 		<-provDone
@@ -557,6 +606,11 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		_ = metrics.srv.Shutdown(shutdownCtx)
 	}
 	err = httpSrv.Shutdown(shutdownCtx)
+	if agentSrv != nil {
+		if aerr := agentSrv.Shutdown(shutdownCtx); err == nil {
+			err = aerr
+		}
+	}
 	<-sweepDone
 	<-reviewsDone
 	<-provDone
@@ -566,8 +620,10 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	<-alertsDone
 	<-backupDone
 	<-notifyDone
-	if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
-		return serveErr
+	for i := 0; i < cap(errc) && (i == 0 || agentSrv != nil); i++ {
+		if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			return serveErr
+		}
 	}
 	return err
 }

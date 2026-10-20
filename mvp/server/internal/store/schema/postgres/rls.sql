@@ -333,13 +333,6 @@ CREATE POLICY tenant_isolation ON identity_merges
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
-ALTER TABLE containment_credentials ENABLE ROW LEVEL SECURITY;
-ALTER TABLE containment_credentials FORCE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS tenant_isolation ON containment_credentials;
-CREATE POLICY tenant_isolation ON containment_credentials
-  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
-  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
-
 ALTER TABLE containment_retries ENABLE ROW LEVEL SECURITY;
 ALTER TABLE containment_retries FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON containment_retries;
@@ -351,13 +344,6 @@ ALTER TABLE revoked_grants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE revoked_grants FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON revoked_grants;
 CREATE POLICY tenant_isolation ON revoked_grants
-  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
-  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
-
-ALTER TABLE connection_secrets ENABLE ROW LEVEL SECURITY;
-ALTER TABLE connection_secrets FORCE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS tenant_isolation ON connection_secrets;
-CREATE POLICY tenant_isolation ON connection_secrets
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
@@ -855,6 +841,215 @@ ALTER TABLE queue_jobs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE queue_jobs FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON queue_jobs;
 CREATE POLICY tenant_isolation ON queue_jobs
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE business_role_exclusions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE business_role_exclusions FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON business_role_exclusions;
+CREATE POLICY tenant_isolation ON business_role_exclusions
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE review_item_roles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE review_item_roles FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON review_item_roles;
+CREATE POLICY tenant_isolation ON review_item_roles
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE review_template_roles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE review_template_roles FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON review_template_roles;
+CREATE POLICY tenant_isolation ON review_template_roles
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE break_glass_credentials ENABLE ROW LEVEL SECURITY;
+ALTER TABLE break_glass_credentials FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON break_glass_credentials;
+CREATE POLICY tenant_isolation ON break_glass_credentials
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE break_glass_challenges ENABLE ROW LEVEL SECURITY;
+ALTER TABLE break_glass_challenges FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON break_glass_challenges;
+CREATE POLICY tenant_isolation ON break_glass_challenges
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE break_glass_uses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE break_glass_uses FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON break_glass_uses;
+CREATE POLICY tenant_isolation ON break_glass_uses
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE readiness_live_attestations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE readiness_live_attestations FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON readiness_live_attestations;
+CREATE POLICY tenant_isolation ON readiness_live_attestations
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE directory_agents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE directory_agents FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON directory_agents;
+CREATE POLICY tenant_isolation ON directory_agents
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+DROP POLICY IF EXISTS lookup_by_hash ON directory_agents;
+CREATE POLICY lookup_by_hash ON directory_agents FOR SELECT
+  USING (current_setting('app.lookup', true) = 'agent_cert_pin');
+
+ALTER TABLE agent_enrolments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_enrolments FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON agent_enrolments;
+CREATE POLICY tenant_isolation ON agent_enrolments
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+DROP POLICY IF EXISTS lookup_by_hash ON agent_enrolments;
+CREATE POLICY lookup_by_hash ON agent_enrolments FOR SELECT
+  USING (current_setting('app.lookup', true) = 'agent_enrolment_hash');
+
+ALTER TABLE connection_credentials ENABLE ROW LEVEL SECURITY;
+ALTER TABLE connection_credentials FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON connection_credentials;
+CREATE POLICY tenant_isolation ON connection_credentials
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE aws_connectors ENABLE ROW LEVEL SECURITY;
+ALTER TABLE aws_connectors FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON aws_connectors;
+CREATE POLICY tenant_isolation ON aws_connectors
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE aws_snapshots ENABLE ROW LEVEL SECURITY;
+ALTER TABLE aws_snapshots FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON aws_snapshots;
+CREATE POLICY tenant_isolation ON aws_snapshots
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE aws_policy_documents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE aws_policy_documents FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON aws_policy_documents;
+CREATE POLICY tenant_isolation ON aws_policy_documents
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE aws_policy_attachments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE aws_policy_attachments FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON aws_policy_attachments;
+CREATE POLICY tenant_isolation ON aws_policy_attachments
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE aws_org_nodes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE aws_org_nodes FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON aws_org_nodes;
+CREATE POLICY tenant_isolation ON aws_org_nodes
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE aws_snapshot_entities ENABLE ROW LEVEL SECURITY;
+ALTER TABLE aws_snapshot_entities FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON aws_snapshot_entities;
+CREATE POLICY tenant_isolation ON aws_snapshot_entities
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE aws_collection_findings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE aws_collection_findings FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON aws_collection_findings;
+CREATE POLICY tenant_isolation ON aws_collection_findings
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE aws_trust_edges ENABLE ROW LEVEL SECURITY;
+ALTER TABLE aws_trust_edges FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON aws_trust_edges;
+CREATE POLICY tenant_isolation ON aws_trust_edges
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE aws_effective_permissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE aws_effective_permissions FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON aws_effective_permissions;
+CREATE POLICY tenant_isolation ON aws_effective_permissions
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE aws_explanations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE aws_explanations FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON aws_explanations;
+CREATE POLICY tenant_isolation ON aws_explanations
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE aws_edge_evaluations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE aws_edge_evaluations FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON aws_edge_evaluations;
+CREATE POLICY tenant_isolation ON aws_edge_evaluations
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE aws_pr_comment_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE aws_pr_comment_settings FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON aws_pr_comment_settings;
+CREATE POLICY tenant_isolation ON aws_pr_comment_settings
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE connection_activation_requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE connection_activation_requests FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON connection_activation_requests;
+CREATE POLICY tenant_isolation ON connection_activation_requests
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE flatfile_mappings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE flatfile_mappings FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON flatfile_mappings;
+CREATE POLICY tenant_isolation ON flatfile_mappings
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE flatfile_uploads ENABLE ROW LEVEL SECURITY;
+ALTER TABLE flatfile_uploads FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON flatfile_uploads;
+CREATE POLICY tenant_isolation ON flatfile_uploads
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE flatfile_upload_errors ENABLE ROW LEVEL SECURITY;
+ALTER TABLE flatfile_upload_errors FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON flatfile_upload_errors;
+CREATE POLICY tenant_isolation ON flatfile_upload_errors
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE flatfile_changes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE flatfile_changes FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON flatfile_changes;
+CREATE POLICY tenant_isolation ON flatfile_changes
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE flatfile_records ENABLE ROW LEVEL SECURITY;
+ALTER TABLE flatfile_records FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON flatfile_records;
+CREATE POLICY tenant_isolation ON flatfile_records
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE flatfile_tasks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE flatfile_tasks FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON flatfile_tasks;
+CREATE POLICY tenant_isolation ON flatfile_tasks
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 

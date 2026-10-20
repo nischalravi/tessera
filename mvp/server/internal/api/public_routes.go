@@ -15,6 +15,11 @@ type Route struct {
 	Public bool
 	Perm   auth.Permission
 	Authn  *auth.AuthnRequirement
+	// BodyType is the one non-JSON media type the route takes as its body
+	// (the flat-file upload takes text/csv). Every other unsafe request must
+	// be application/json. The type must not be CORS-safelisted, so a
+	// cross-site form cannot send it (text/plain, for one, is).
+	BodyType string
 }
 
 // publicRoute is the requirement of a route on the allow-list.
@@ -34,8 +39,9 @@ func needStepUp(p auth.Permission, req auth.AuthnRequirement) Route {
 // unauthenticated caller. testdata/contract/public_routes.golden snapshots
 // this list, so adding to it needs a reviewed diff.
 //
-// The OAuth AS routes (PR10) are public because their credential is the
-// device code, the refresh token or the DPoP proof in the request itself.
+// The OAuth AS routes (PR10, PR11) are public because their credential is the
+// device code, the refresh token, the DPoP proof or the machine client's signed
+// assertion in the request itself.
 var publicRoutes = []string{
 	"GET /api/health",
 	"GET /api/auth/discover",
@@ -45,12 +51,15 @@ var publicRoutes = []string{
 	"POST /api/auth/saml/{connection_id}/acs",
 	"GET /api/auth/oauth2/{connection_id}/callback",
 	"GET /t/{slug}/bootstrap",
+	"POST /api/auth/break-glass/options",
+	"POST /api/auth/break-glass/verify",
 	"GET /t/{slug}/.well-known/oauth-authorization-server",
 	"GET /t/{slug}/.well-known/jwks.json",
 	"GET /.well-known/oauth-protected-resource",
 	"POST /t/{slug}/oauth/device_authorization",
 	"POST /t/{slug}/oauth/token",
 	"POST /t/{slug}/oauth/revoke",
+	"POST /t/{slug}/oauth/introspect",
 }
 
 // PublicRoutes returns the allow-list.

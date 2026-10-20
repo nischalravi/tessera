@@ -278,6 +278,16 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/api/containment-retries/{retry_id}/retry-now" {
 			continue // TestContainmentRetriesAPI (a UUID, not a fixture id)
 		}
+		if rt.Pattern == "/api/agents/{id}/revoke" {
+			continue // TestAgentsAPI (a UUID, not a fixture id)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/aws/principals/") || strings.HasPrefix(rt.Pattern, "/api/aws/resources/") ||
+			rt.Pattern == "/api/aws/explanations/{id}" {
+			continue // TestAWSEvalTenantIsolation (ARNs and content hashes, not fixture ids)
+		}
+		if rt.Pattern == "/api/aws/connectors/{id}" || rt.Pattern == "/api/aws/snapshots/{id}" {
+			continue // TestAWSAPI_*, and store.TestIsolation_AWSTables (UUIDs and content hashes, not fixture ids)
+		}
 		if strings.HasPrefix(rt.Pattern, "/api/evidence/packs/{pack_id}") {
 			continue // TestEvidenceAPI_CrossTenant (a UUID, not a fixture id)
 		}
@@ -286,6 +296,12 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		}
 		if rt.Pattern == "/api/auth/sessions/{session_id}" {
 			continue // TestIsolation_SessionCookieScoped (a UUID, not a fixture id)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/flatfile/") {
+			continue // TestFlatfileAPI_CrossTenant (a system name or a UUID, not a fixture id)
+		}
+		if rt.Pattern == "/api/admin/api-clients/{client_id}" {
+			continue // TestAdminAPIClients_CrossTenant (a client_id string, not a fixture id)
 		}
 		if strings.HasPrefix(rt.Pattern, "/api/siem/sinks/") {
 			continue // TestSiemAPI_CrossTenant (UUIDs, not fixture ids)
@@ -349,6 +365,9 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 	if rec := serveOnce(isolationServer(t, f, f.A.ID).Handler(), http.MethodGet, "/api/identities", ""); !leaks(rec.Body.String()) {
 		t.Fatal("tenant A's own identities do not carry the sentinel; the leak check would never fire")
 	}
+	// each tenant has an OAuth client; tenant A's carries the sentinel
+	seedClient(t, f.DB, f.A.ID, "tsc_client_a", "ETL "+storetest.Sentinel)
+	seedClient(t, f.DB, f.B.ID, "tsc_client_b", "ETL B")
 	srv := isolationServer(t, f, f.B.ID)
 	h := srv.Handler()
 	b := f.B.IDs
@@ -359,11 +378,14 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 	policyIDs := seedAbac(t, f)            // and A's policy name
 	values := map[string]string{
 		"/api/jobs/{job_id}":                         insertJobRun(t, f.DB, f.B.ID),
+		"/api/admin/api-clients/{client_id}":         "tsc_client_b",
 		"/api/provisioning/ops/{op_id}":              insertProvOp(t, f.DB, f.B.ID, f.B.Refs["connection:ad"], "b-key"),
 		"/api/abac/policies/{policy_id}":             policyIDs[f.B.ID],
 		"/api/roles/{role_id}":                       roleIDs[f.B.ID],
 		"/api/roles/{role_id}/versions":              roleIDs[f.B.ID],
 		"/api/roles/{role_id}/drift":                 roleIDs[f.B.ID],
+		"/api/roles/{role_id}/exclusions":            roleIDs[f.B.ID],
+		"/api/roles/{role_id}/flags":                 roleIDs[f.B.ID],
 		"/api/requests/{request_id}":                 lines[f.B.ID],
 		"/api/sponsorships/{sponsorship_id}":         sponsorships[f.B.ID],
 		"/api/identities/{identity_id}":              fmt.Sprint(b["alice"]),
@@ -388,10 +410,20 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		if rt.Method != http.MethodGet || !rt.Tenant {
 			continue
 		}
+		if rt.Pattern == "/api/flatfile/uploads/{upload_id}" {
+			continue // TestFlatfileAPI_CrossTenant (a UUID; the list route below is checked here)
+		}
 		if strings.HasPrefix(rt.Pattern, "/api/admin/") && strings.Contains(rt.Pattern, "{") {
 			continue // TestAdminAPI_CrossTenant (UUIDs, not fixture ids)
 		}
 		path := rt.Pattern
+		if path == "/api/aws/snapshots/{id}" {
+			continue // a content hash, not a fixture id: TestAWSAPI_Snapshots and store.TestIsolation_AWSTables
+		}
+		if strings.HasPrefix(path, "/api/aws/principals/") || strings.HasPrefix(path, "/api/aws/resources/") ||
+			path == "/api/aws/explanations/{id}" || path == "/api/aws/can" {
+			continue // they need a snapshot and a query: TestAWSEvalTenantIsolation
+		}
 		if rp, ok := readinessGetPaths(f.B.Refs)[path]; ok && strings.Contains(path, "{") {
 			path = rp // tenant B's own readiness ids
 		}

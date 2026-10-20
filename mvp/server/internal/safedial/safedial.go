@@ -15,9 +15,12 @@
 //
 // A private target is refused unless it is on the operator's dev-only
 // allowlist (TESSERA_SAFEDIAL_ALLOW, refused by internal/config in prod).
-// Production reaches private directories through the Directory Agent
-// (DR-11, not built yet): it implements Transport and is injected through
-// Options.Agent; the agent enforces its own local allowlist.
+// The server never dials a private directory in production. Production
+// reaches them through the Directory Agent (DR-11, internal/agent): the
+// server sends it typed, read-only operations, and the agent, running inside
+// the customer network, dials with its own Dialer (Options.AgentLocal) whose
+// allowlist is the agent's local configuration file. No bytes are tunnelled
+// through the agent, so the server side has no transport seam.
 package safedial
 
 import (
@@ -60,29 +63,30 @@ var (
 	ErrNoTLS = errors.New("safedial: connection is not protected by TLS")
 )
 
-// Transport carries a connection to a target through something other than a
-// direct dial: the Directory Agent (DR-11) implements it. The agent applies
-// its own local allowlist and typed operations; Tessera does not check the
-// address because it never sees it.
-type Transport interface {
-	DialTarget(ctx context.Context, host string, port int) (net.Conn, error)
-}
-
 // Options configure a Dialer.
 type Options struct {
 	// Env is config.Dev or config.Prod. Required: the allowlist is dev only.
 	Env string
 	// Allow lists private targets a dev instance may dial (ParseAllow).
-	// New refuses a non-empty list unless Env is dev.
+	// New refuses a non-empty list unless Env is dev or AgentLocal is set.
 	Allow []AllowEntry
-	// Agent, when set, carries every connection (the production path for
-	// private directories). No local dial and no allowlist then apply.
-	Agent Transport
+	// AgentLocal marks the Dialer of the Directory Agent, which runs inside
+	// the customer network: Allow is then the agent's own local allowlist
+	// (its configuration file) and is accepted in production. Cloud
+	// metadata, link-local, multicast and reserved space stay refused. The
+	// server never sets it.
+	AgentLocal bool
 	// RootCAs replaces the system roots (the connection's CA bundle).
 	RootCAs          *x509.CertPool
 	Resolver         safehttp.Resolver
 	DialTimeout      time.Duration
 	HandshakeTimeout time.Duration
+
+	// TestDial replaces the final TCP connect, for tests that point a lab
+	// host name at an in-process server. It receives the IP:port that already
+	// passed the address policy, so it can redirect a connection but never
+	// admits an address the policy refuses. Production code leaves it nil.
+	TestDial func(ctx context.Context, network, addr string) (net.Conn, error)
 
 	// dial replaces the TCP dial in tests; it receives the checked IP:port.
 	dial func(ctx context.Context, network, addr string) (net.Conn, error)
@@ -100,7 +104,7 @@ func New(o Options) (*Dialer, error) {
 	default:
 		return nil, fmt.Errorf("safedial: Options.Env must be %q or %q (got %q)", config.Dev, config.Prod, o.Env)
 	}
-	if len(o.Allow) > 0 && o.Env != config.Dev {
+	if len(o.Allow) > 0 && o.Env != config.Dev && !o.AgentLocal {
 		return nil, errors.New("safedial: the private-target allowlist is only allowed with TESSERA_ENV=dev")
 	}
 	if o.DialTimeout <= 0 {
@@ -112,16 +116,19 @@ func New(o Options) (*Dialer, error) {
 	if o.Resolver == nil {
 		o.Resolver = net.DefaultResolver
 	}
+	if o.TestDial != nil {
+		o.dial = o.TestDial
+	}
 	return &Dialer{o: o}, nil
 }
 
 // ForConfig returns the dialer for the running configuration.
-func ForConfig(c *config.Config, roots *x509.CertPool, agent Transport) (*Dialer, error) {
+func ForConfig(c *config.Config, roots *x509.CertPool) (*Dialer, error) {
 	allow, err := ParseAllow(c.SafedialAllow)
 	if err != nil {
 		return nil, fmt.Errorf("TESSERA_SAFEDIAL_ALLOW: %w", err)
 	}
-	return New(Options{Env: c.Env, Allow: allow, RootCAs: roots, Agent: agent})
+	return New(Options{Env: c.Env, Allow: allow, RootCAs: roots})
 }
 
 // Conn is an open connection to a directory. For port 636 the TLS handshake
@@ -174,13 +181,7 @@ func (d *Dialer) Dial(ctx context.Context, host string, port int, inspect bool) 
 	if host == "" || strings.ContainsAny(host, "/@ \t\r\n") {
 		return nil, ErrHost
 	}
-	var raw net.Conn
-	var err error
-	if d.o.Agent != nil {
-		raw, err = d.o.Agent.DialTarget(ctx, host, port)
-	} else {
-		raw, err = d.dialChecked(ctx, host, port)
-	}
+	raw, err := d.dialChecked(ctx, host, port)
 	if err != nil {
 		return nil, err
 	}
@@ -324,6 +325,31 @@ func (e AllowEntry) matches(host string, a netip.Addr, port int) bool {
 		return host != "" && strings.EqualFold(e.Host, host)
 	}
 	return e.Prefix.Contains(a)
+}
+
+// Listed reports whether host:port is itself on the list: a host name equal
+// to an entry's name, or an IP literal inside an entry's prefix, on the
+// entry's port. A name is never matched against a CIDR entry (it is not
+// resolved here). The Directory Agent uses it to refuse every target that is
+// not on its local allowlist before anything is dialed, public ones included.
+func Listed(list []AllowEntry, host string, port int) bool {
+	host = strings.TrimSuffix(strings.TrimSpace(host), ".")
+	var lit netip.Addr
+	if a, err := netip.ParseAddr(host); err == nil {
+		lit = a.Unmap().WithZone("")
+	}
+	for _, e := range list {
+		switch {
+		case e.Port != port:
+		case e.Host != "":
+			if strings.EqualFold(e.Host, host) {
+				return true
+			}
+		case lit.IsValid() && e.Prefix.Contains(lit):
+			return true
+		}
+	}
+	return false
 }
 
 // Smallest CIDRs an entry may use: a wildcard-like 0.0.0.0/0 or 10.0.0.0/8

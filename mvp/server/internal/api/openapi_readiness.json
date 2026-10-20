@@ -3,7 +3,7 @@
  "info": {
   "title": "Tessera deployment readiness",
   "version": "0.1.0",
-  "description": "Deployment readiness API (docs/design/deployment-readiness.md \u00a79). The MVP has no authentication: the acting user is sent as X-Tessera-User. Permissions listed per route arrive with DR-10. Errors are {\"error\": code, \"detail\": message}; refused transitions return the gate report {error, state, to, blocking: [{item|finding, level|severity, status, reason}]}."
+  "description": "Deployment readiness API (docs/design/deployment-readiness.md \u00a79). Every route needs a signed-in session; the permission each route needs is listed with it (step-up means a phishing-resistant sign-in in the last 15 minutes, otherwise 401 step_up_required). Errors are {\"error\": code, \"detail\": message}; refused transitions return the gate report {error, state, to, blocking: [{item|finding, level|severity, status, reason}]}."
  },
  "paths": {
   "/api/readiness/templates": {
@@ -365,6 +365,63 @@
     }
    }
   },
+  "/api/connections/{id}/checklist/{item}/attest-instead": {
+   "post": {
+    "summary": "Attest in place of a live check the system reports unsupported",
+    "description": "Permission: connections.manage; step-up required. Only items whose template declares on_unsupported: attestation, and only while the latest live result is unsupported (a failed result cannot be attested).",
+    "responses": {
+     "200": {
+      "description": "Checklist"
+     },
+     "409": {
+      "description": "dependencies_not_passing (gate report)"
+     },
+     "422": {
+      "description": "attester_required, reason_too_short, evidence_required, not_attestable_instead, live_check_not_unsupported"
+     },
+     "401": {
+      "description": "step_up_required"
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "item",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "X-Tessera-User",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "maxLength": 120
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/AttestInstead"
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/connections/{id}/checklist/{item}/skip": {
    "post": {
     "summary": "Skip a Recommended item with a reason (at least 20 characters)",
@@ -504,13 +561,13 @@
   "/api/connections/{id}/activate": {
    "post": {
     "summary": "Re-evaluate every gate and activate",
-    "description": "Permission: connections.activate + step-up (DR-10)",
+    "description": "Permission: connections.activate + step-up. A read-only revision (write_mode off) is activated at once; a write-enabled one opens an activation request that a different person approves (two-person rule)",
     "responses": {
      "200": {
-      "description": "Connection"
+      "description": "Connection (write_mode off)"
      },
-     "403": {
-      "description": "phase0_required (non-demo types outside TESSERA_ENV=dev)"
+     "202": {
+      "description": "pending_approval: an activation request waits for a second person (write_mode dry_run or scoped)"
      },
      "409": {
       "description": "activation_blocked (gate report)"
@@ -532,6 +589,110 @@
       "schema": {
        "type": "string",
        "maxLength": 120
+      }
+     }
+    ]
+   }
+  },
+  "/api/connections/{id}/activation": {
+   "get": {
+    "summary": "The connection's latest activation request (two-person activation)",
+    "description": "Permission: connections.read",
+    "responses": {
+     "200": {
+      "description": "{request: null | {id, revision_id, write_mode, status, requested_by, requested_at, expires_at, decided_by, decided_at, decision_note}}"
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     }
+    ]
+   }
+  },
+  "/api/connections/{id}/activation/approve": {
+   "post": {
+    "summary": "Approve the open activation request and apply the activation",
+    "description": "Permission: connections.activate + step-up. The approver must differ from the requester and must not have attested an item of the revision; the gate is evaluated again and the revision must be unchanged since the request",
+    "requestBody": {
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "properties": {
+         "note": {
+          "type": "string",
+          "maxLength": 500
+         }
+        }
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Connection (now active)"
+     },
+     "403": {
+      "description": "two_person_rule (requester or attestor), or interactive_authentication_required"
+     },
+     "409": {
+      "description": "no_activation_request, activation_request_stale, activation_request_expired or activation_blocked (gate report)"
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     }
+    ]
+   }
+  },
+  "/api/connections/{id}/activation/reject": {
+   "post": {
+    "summary": "Reject (or, by the requester, cancel) the open activation request",
+    "description": "Permission: connections.activate",
+    "requestBody": {
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "properties": {
+         "note": {
+          "type": "string",
+          "maxLength": 500
+         }
+        }
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "{request}"
+     },
+     "409": {
+      "description": "no_activation_request"
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
       }
      }
     ]
@@ -1188,6 +1349,32 @@
      "note": {
       "type": "string",
       "minLength": 10
+     }
+    }
+   },
+   "AttestInstead": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "attester",
+     "reason",
+     "evidence"
+    ],
+    "properties": {
+     "attester": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 120
+     },
+     "reason": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 2000
+     },
+     "evidence": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 4000
      }
     }
    },

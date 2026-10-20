@@ -39,14 +39,15 @@ func inA(t *testing.T, f *storetest.Fixture, fn func(*store.TenantTx) error) {
 // refs they return rows and nothing of B's; called with B's refs (the
 // parameterized ones) they return nothing.
 var readinessLists = map[string]func(c *store.TenantTx, r refs) (any, error){
-	"Connections":  func(c *store.TenantTx, _ refs) (any, error) { return c.Connections() },
-	"Revisions":    func(c *store.TenantTx, r refs) (any, error) { return c.Revisions(r["connection:ad"]) },
-	"Attestations": func(c *store.TenantTx, r refs) (any, error) { return c.Attestations(r["revision:ad"]) },
-	"Skips":        func(c *store.TenantTx, r refs) (any, error) { return c.Skips(r["revision:ad"]) },
-	"AllSkips":     func(c *store.TenantTx, _ refs) (any, error) { return c.AllSkips() },
-	"ItemStates":   func(c *store.TenantTx, r refs) (any, error) { return c.ItemStates(r["revision:ad"]) },
-	"CheckResults": func(c *store.TenantTx, r refs) (any, error) { return c.CheckResults(r["run:ad-live"]) },
-	"RunFindings":  func(c *store.TenantTx, r refs) (any, error) { return c.RunFindings(r["run:ad-dry"]) },
+	"Connections":      func(c *store.TenantTx, _ refs) (any, error) { return c.Connections() },
+	"Revisions":        func(c *store.TenantTx, r refs) (any, error) { return c.Revisions(r["connection:ad"]) },
+	"Attestations":     func(c *store.TenantTx, r refs) (any, error) { return c.Attestations(r["revision:ad"]) },
+	"LiveAttestations": func(c *store.TenantTx, r refs) (any, error) { return c.LiveAttestations(r["revision:ad"]) },
+	"Skips":            func(c *store.TenantTx, r refs) (any, error) { return c.Skips(r["revision:ad"]) },
+	"AllSkips":         func(c *store.TenantTx, _ refs) (any, error) { return c.AllSkips() },
+	"ItemStates":       func(c *store.TenantTx, r refs) (any, error) { return c.ItemStates(r["revision:ad"]) },
+	"CheckResults":     func(c *store.TenantTx, r refs) (any, error) { return c.CheckResults(r["run:ad-live"]) },
+	"RunFindings":      func(c *store.TenantTx, r refs) (any, error) { return c.RunFindings(r["run:ad-dry"]) },
 	"PreviousFindings": func(c *store.TenantTx, r refs) (any, error) {
 		return c.PreviousFindings(r["connection:ad"], "")
 	},
@@ -361,6 +362,11 @@ var readinessCrossRefs = map[string]func(c *store.TenantTx, a, b refs, bIdentity
 		return c.UpsertAttestation(&store.Attestation{RevisionID: b["revision:ad"], ItemID: "base.owner", ActorID: "a",
 			Note: "attested across tenants", ItemHash: "x", ConfigHash: "x", AttestedAt: storetest.Now})
 	},
+	"UpsertLiveAttestation.revision_id": func(c *store.TenantTx, _, b refs, _ int64) error {
+		return c.UpsertLiveAttestation(&store.LiveAttestation{RevisionID: b["revision:ad"], ItemID: "ldap.svc.no_write",
+			ActorID: "a", Attester: "Someone", Reason: "attested across tenants for the test", Evidence: "none",
+			ItemHash: "x", ConfigHash: "x", AttestedAt: storetest.Now})
+	},
 	"UpsertSkip.revision_id": func(c *store.TenantTx, a, b refs, _ int64) error {
 		return c.UpsertSkip(&store.Skip{RevisionID: b["revision:ad"], ConnectionID: a["connection:ad"], ItemID: "x.y",
 			Level: "recommended", ActorID: "a", Reason: "skipped across the tenant boundary", ReviewBy: storetest.Now,
@@ -460,5 +466,8 @@ func readinessCovered() map[string]bool {
 	// Covered by TestIsolation_ReadinessInsertWrongTenantRejected and
 	// TestIsolation_ReadinessCountsOnlyOwnRows.
 	out["InsertConnection"], out["RunningDryRuns"] = true, true
+	for k := range activationCovered() { // TestIsolation_ReadinessTables
+		out[k] = true
+	}
 	return out
 }

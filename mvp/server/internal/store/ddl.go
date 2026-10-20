@@ -287,7 +287,8 @@ func PostgresRLSFile() ([]byte, error) { return pgSchemaFS.ReadFile("schema/post
 
 // hashLookupSetting is the app.lookup value that unlocks the narrow SELECT
 // policy of each GlobalHashLookups table (design §14.2, §14.3).
-var hashLookupSetting = map[string]string{"sessions": "session_hash", "login_transactions": "login_cookie_hash"}
+var hashLookupSetting = map[string]string{"sessions": "session_hash", "login_transactions": "login_cookie_hash",
+	"agent_enrolments": "agent_enrolment_hash", "directory_agents": "agent_cert_pin"}
 
 // GenerateRLS renders rls.sql from the Postgres schema (design §14.3): for
 // every table with a tenant_id column that is not a GlobalTable, ENABLE and

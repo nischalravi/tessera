@@ -134,6 +134,23 @@ func ForConfig(c *config.Config) (*http.Client, error) {
 	return newClient(o)
 }
 
+// ForConfigLimits is ForConfig with a different total timeout and body limit,
+// for a caller whose responses are far larger than OIDC discovery (the AWS
+// connector's IAM and Organizations pages). The SSRF guard is unchanged; zero
+// values keep the defaults.
+func ForConfigLimits(c *config.Config, timeout time.Duration, maxBodyBytes int64) (*http.Client, error) {
+	env, loopback, ok := c.Outbound()
+	if !ok {
+		return nil, errors.New("safehttp: ForConfigLimits needs a configuration from config.Load")
+	}
+	o := Options{Env: config.Prod}
+	if env == config.Dev {
+		o = Options{Env: config.Dev, AllowLoopback: loopback}
+	}
+	o.Timeout, o.MaxBodyBytes = timeout, maxBodyBytes
+	return newClient(o)
+}
+
 // ForCLIEnv is ForCLI for a command-line tool whose user names the
 // environment (the reference CLI reads TESSERA_ENV): only "dev" gets the
 // loopback exception and plain http, so a CLI pointed at a local development

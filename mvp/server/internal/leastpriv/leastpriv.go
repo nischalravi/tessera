@@ -41,6 +41,15 @@ type Recommendation struct {
 	Rationale        string   `json:"rationale"`
 }
 
+func anyWeak(eps []*graph.EffectivePermission) bool {
+	for _, ep := range eps {
+		if ep.Weak() {
+			return true
+		}
+	}
+	return false
+}
+
 func examples(eps []*graph.EffectivePermission) []string {
 	out := []string{}
 	for i, ep := range eps {
@@ -89,6 +98,11 @@ func GrantRecommendations(g *graph.Snapshot, u *usage.Index, unusedDays int, ide
 			edge := [2]string{ag.Acct, ag.Dst}
 			via := graph.PermsViaEdge(eff, edge)
 			if len(via) == 0 {
+				continue
+			}
+			if ag.Edge.Weak() || anyWeak(via) {
+				// a grant the evaluator found conditional, approximate or unsupported is
+				// not a basis for a recommendation (design §11.5, spec R2)
 				continue
 			}
 			lost := graph.PermsLostIfRemoved(eff, edge)
@@ -223,7 +237,7 @@ func RoleTrimRecommendations(g *graph.Snapshot, u *usage.Index, unusedDays, minH
 			continue
 		}
 		ed := g.EdgeData(k.group, k.perm)
-		if ed.EdgeID == nil {
+		if ed.EdgeID == nil || ed.Weak() {
 			continue
 		}
 		pn := g.Node(k.perm)

@@ -14,6 +14,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
+	"github.com/nischalravi/tessera/mvp/server/internal/flatfile"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/ingest"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
@@ -1049,6 +1050,11 @@ func (s *Server) revokeEdge(r *http.Request, edgeID int64, dryRun bool) (*revoke
 	if e == nil {
 		return nil, errStatus(http.StatusNotFound, "grant not found")
 	}
+	if !dryRun && (e.Outcome == graph.OutcomeConditional || e.Fidelity == graph.FidelityApprox || e.Fidelity == graph.FidelityUnsupp) {
+		// least privilege never acts on a grant the evaluator found conditional,
+		// approximate or unsupported (design §11.5, spec R2)
+		return nil, errStatus(http.StatusConflict, "this grant rests on a conditional or approximate evaluation; review it by hand")
+	}
 	res, err := simulate.Run(c, simulate.Request{RemoveEdgeIDs: []int64{edgeID}},
 		simulate.Inputs{Now: a.now, Policies: a.policies, Usage: a.u, Base: a.g})
 	if err != nil {
@@ -1068,6 +1074,9 @@ func (s *Server) revokeEdge(r *http.Request, edgeID int64, dryRun bool) (*revoke
 	}
 	if err := c.Audit(a.now, pr.Display, "grant.revoke", ojson.Object{{Key: "edge_id", Value: e.ID},
 		{Key: "grant", Value: out.Grant.Label}, {Key: "permissions_removed", Value: res.Summary.PermissionsRemoved}}); err != nil {
+		return nil, err
+	}
+	if err := flatfile.GrantRevoked(c, a.now, pr.Display, e.ID, "revoke"); err != nil {
 		return nil, err
 	}
 	if err := c.RevokeEdge(e.ID, a.now, "least-privilege"); err != nil {
@@ -1375,15 +1384,23 @@ func campaignView(c *store.TenantTx, cmp *store.ReviewCampaign, withItems bool) 
 			return nil, err
 		}
 		rows := []ojson.Object{}
+		memberships, err := membershipViews(c, cmp.ID)
+		if err != nil {
+			return nil, err
+		}
 		for _, it := range items {
 			var reviewer any
 			if it.ReviewerID != nil {
 				reviewer = brief(people[*it.ReviewerID])
 			}
-			rows = append(rows, ojson.Object{{Key: "id", Value: it.ID}, {Key: "identity", Value: brief(people[it.IdentityID])},
+			row := ojson.Object{{Key: "id", Value: it.ID}, {Key: "identity", Value: brief(people[it.IdentityID])},
 				{Key: "grant", Value: it.GrantLabel}, {Key: "edge_id", Value: it.EdgeID}, {Key: "reasons", Value: it.Reasons},
 				{Key: "context", Value: it.Context}, {Key: "reviewer", Value: reviewer}, {Key: "decision", Value: it.Decision},
-				{Key: "comment", Value: it.Comment}, {Key: "decided_at", Value: timeutil.ISOPtr(it.DecidedAt)}})
+				{Key: "comment", Value: it.Comment}, {Key: "decided_at", Value: timeutil.ISOPtr(it.DecidedAt)}}
+			if m, ok := memberships[it.ID]; ok { // a role membership item (issue #214)
+				row = append(row, m...)
+			}
+			rows = append(rows, row)
 		}
 		out = append(out, ojson.KV{Key: "review_items", Value: rows})
 	}
@@ -1506,6 +1523,8 @@ func (s *Server) campaign(_ http.ResponseWriter, r *http.Request, p *params) (an
 var reviewDecisionFields = []field{
 	{name: "decision", kind: kLiteral, required: true, lits: []string{"keep", "revoke"}},
 	{name: "comment", kind: kStr, nullable: true, def: nil},
+	// revoking a rule membership: exclude the person from the rule, or flag it to the role owner (issue #214)
+	{name: "rule_action", kind: kLiteral, nullable: true, def: nil, lits: []string{"exclude", "flag"}},
 }
 
 func (s *Server) reviewDecide(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
@@ -1526,13 +1545,18 @@ func (s *Server) reviewDecide(_ http.ResponseWriter, r *http.Request, p *params)
 				Input: v, Ctx: ojson.Object{{Key: "max_length", Value: reviews.MaxCommentRunes}}}}}
 		}
 	}
-	it, err := reviews.Decide(store.TxFrom(r.Context()), s.clock(), id, body["decision"].(string), principal(r).User(), comment)
+	choice, _ := body["rule_action"].(string)
+	it, resolution, err := reviews.DecideItem(store.TxFrom(r.Context()), s.clock(), id, body["decision"].(string), principal(r).User(), comment, choice)
 	if errors.Is(err, reviews.ErrUnknownItem) {
 		return nil, errStatus(http.StatusNotFound, "unknown review item")
 	}
 	var re *reviews.Error
 	if errors.As(err, &re) {
 		return nil, errStatus(http.StatusBadRequest, re.Msg)
+	}
+	var ce *reviews.ChoiceRequiredError
+	if errors.As(err, &ce) {
+		return nil, errStatus(http.StatusUnprocessableEntity, ce.Error())
 	}
 	var de *reviews.DecidedError
 	if errors.As(err, &de) {
@@ -1554,9 +1578,13 @@ func (s *Server) reviewDecide(_ http.ResponseWriter, r *http.Request, p *params)
 			{Key: "decision", Value: de.Current}}}, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, reqErr(err) // a refusal of the role service keeps its status and code
 	}
-	return ojson.Object{{Key: "id", Value: it.ID}, {Key: "decision", Value: it.Decision}}, nil
+	out := ojson.Object{{Key: "id", Value: it.ID}, {Key: "decision", Value: it.Decision}}
+	if resolution != "" { // a role membership: what the revoke did
+		out = append(out, ojson.KV{Key: "resolution", Value: resolution})
+	}
+	return out, nil
 }
 
 // ---------------------------------------------------------------- HRIS / JML

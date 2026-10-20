@@ -48,6 +48,7 @@ const RolePage = named(roles, "RolePage");
 const EntitlementPage = named(objects, "EntitlementPage");
 const AppPage = named(objects, "AppPage");
 const OrgPage = named(objects, "OrgPage");
+const AwsAccess = named(() => import("../features/insights/AwsAccess"), "AwsAccess");
 const RiskOverview = named(() => import("../features/insights/RiskOverview"), "RiskOverview");
 // cytoscape is the heaviest dependency; it only loads with the graph
 const GraphExplorer = lazy(() => import("../features/insights/GraphExplorer"));
@@ -63,11 +64,13 @@ const Lifecycle = named(() => import("../features/governance/Lifecycle"), "Lifec
 const Workflows = named(() => import("../features/governance/Workflows"), "Workflows");
 const EvidencePacks = named(() => import("../features/governance/EvidencePacks"), "EvidencePacks");
 const Admin = named(admin, "Admin");
+const FlatFiles = named(() => import("../features/admin/FlatFiles"), "FlatFiles");
 const ConnectionsList = named(connections, "ConnectionsList");
 const NewConnection = named(connections, "NewConnection");
 const ConnectionDetail = named(connections, "ConnectionDetail");
 const ValidationResults = named(connections, "ValidationResults");
 const ReconReport = named(connections, "ReconReport");
+const AgentsList = named(connections, "AgentsList");
 const AdminSectionPage = named(admin, "AdminSectionPage");
 const MySessions = named(() => import("../features/account/MySessions"), "MySessions");
 const DeviceApprove = lazy(() => import("../pages/DeviceApprove"));
@@ -77,11 +80,21 @@ const ChangeRequests = named(() => import("../features/admin/ChangeRequests"), "
 const ApiClients = named(() => import("../features/admin/ApiClients"), "ApiClients");
 const PlatformHealth = named(() => import("../features/admin/PlatformHealth"), "PlatformHealth");
 const ChangeBanner = named(() => import("../features/admin/ChangeBanner"), "ChangeBanner");
+const BreakGlass = named(() => import("../features/admin/BreakGlass"), "BreakGlass");
+const BreakGlassNotice = named(() => import("../features/admin/BreakGlass"), "BreakGlassNotice");
 
-/** The persistent banner of pending and cooling-off admin changes (design §15.2), for admins only. */
+/**
+ * The persistent banner of pending and cooling-off admin changes and unexplained break-glass sign-ins
+ * (design §15.2, §15.4), for admins only; a break-glass session also sees what it may do and its time left.
+ */
 function AdminBanner() {
-  const { can } = useSession();
-  return can("admin.read") ? <Suspense fallback={null}><ChangeBanner /></Suspense> : null;
+  const { can, session } = useSession();
+  return can("admin.read") ? (
+    <Suspense fallback={null}>
+      {session.active_roles.includes("break_glass") && <BreakGlassNotice />}
+      <ChangeBanner />
+    </Suspense>
+  ) : null;
 }
 
 /** Redirect an old route to its new home, keeping the query string (e.g. /graph?identity=5). */
@@ -145,6 +158,7 @@ export default function App() {
                     <Route path="/insights/graph" element={<GraphExplorer />} />
                     <Route path="/insights/least-privilege" element={<LeastPrivilege />} />
                     <Route path="/insights/sod" element={<SodConflicts />} />
+                    <Route path="/insights/aws" element={<AwsAccess />} />
                     <Route path="/insights/deployment-health" element={<DeploymentHealth />} />
                     <Route path="/insights/deployment" element={<Moved to="/insights/deployment-health" />} />
 
@@ -161,13 +175,16 @@ export default function App() {
                     <Route path="/admin" element={<Admin />} />
                     <Route path="/admin/connections" element={<ConnectionsList />} />
                     <Route path="/admin/connections/new" element={<NewConnection />} />
+                    <Route path="/admin/connections/agents" element={<AgentsList />} />
                     <Route path="/admin/connections/:id" element={<ConnectionDetail />} />
                     <Route path="/admin/connections/:id/validation/:run" element={<ValidationResults />} />
                     <Route path="/admin/connections/:id/reconciliation/:run" element={<ReconReport />} />
+                    <Route path="/admin/flat-files" element={<FlatFiles />} />
                     <Route path="/admin/users" element={<AdminUsers />} />
                     <Route path="/admin/authentication" element={<IdpConnections />} />
                     <Route path="/admin/change-requests" element={<ChangeRequests />} />
                     <Route path="/admin/api-clients" element={<ApiClients />} />
+                    <Route path="/admin/break-glass" element={<BreakGlass />} />
                     <Route path="/admin/platform-health" element={<PlatformHealth />} />
                     <Route path="/admin/:section" element={<AdminSectionPage />} />
 

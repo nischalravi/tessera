@@ -51,6 +51,10 @@ type Verify struct {
 	Kind   VerifyKind     `yaml:"kind" json:"kind"`
 	Check  string         `yaml:"check,omitempty" json:"check,omitempty"`
 	Params map[string]any `yaml:"params,omitempty" json:"params,omitempty"`
+	// OnUnsupported names the alternative that stands in for a live check the
+	// system cannot answer (it reports "unsupported"). The only value is
+	// "attestation". A failing result is never replaced by it.
+	OnUnsupported VerifyKind `yaml:"on_unsupported,omitempty" json:"on_unsupported,omitempty"`
 }
 
 // Remediation tells the user how to fix a failing item.
@@ -92,6 +96,12 @@ type Item struct {
 // HasKind reports whether the item has a verification of kind k.
 func (it *Item) HasKind(k VerifyKind) bool {
 	return slices.ContainsFunc(it.Verify, func(v Verify) bool { return v.Kind == k })
+}
+
+// HasLiveAlternative reports whether a live verification of the item may be
+// replaced by an attestation when the system reports it unsupported.
+func (it *Item) HasLiveAlternative() bool {
+	return slices.ContainsFunc(it.Verify, func(v Verify) bool { return v.Kind == Live && v.OnUnsupported == Attestation })
 }
 
 // OnlyAttestation reports whether every verification is an attestation.

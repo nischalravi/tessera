@@ -3,7 +3,6 @@ package readiness
 import (
 	"encoding/json"
 	"errors"
-	"net/http"
 	"slices"
 	"time"
 
@@ -91,6 +90,30 @@ func (s *Service) settle(c *store.TenantTx, b *Bundle, actor string, now time.Ti
 	return s.persist(c, b, now)
 }
 
+// liveUnsupported reports whether the item has a live verification, declared
+// attestable, whose current result is the system saying it cannot answer.
+func (ie *ItemEval) liveUnsupported() bool {
+	for i, v := range ie.Verify {
+		if v.Kind == template.Live && v.OnUnsupported == template.Attestation && i < len(ie.Parts) && ie.Parts[i].Unsupported {
+			return true
+		}
+	}
+	return false
+}
+
+// liveAttested reports whether an attestation passed in place of a live check.
+func (ie *ItemEval) liveAttested() bool {
+	if ie.LiveAttest == nil || ie.Status != StatusPass {
+		return false
+	}
+	for _, p := range ie.Parts {
+		if p.Kind == template.Live && p.Unsupported && p.Status == StatusPass {
+			return true
+		}
+	}
+	return false
+}
+
 // persist stores the evaluated item states for reporting.
 func (s *Service) persist(c *store.TenantTx, b *Bundle, now time.Time) error {
 	states := make([]*store.ItemState, 0, len(b.Eval.Items))
@@ -107,6 +130,9 @@ func (s *Service) persist(c *store.TenantTx, b *Bundle, now time.Time) error {
 			st.Source = "live"
 		default:
 			st.Source = "attestation"
+		}
+		if it.liveAttested() {
+			st.Source, st.ActorID, st.Note = "attestation", &it.LiveAttest.Attester, &it.LiveAttest.Reason
 		}
 		if st.Source == "attestation" && it.Attestation != nil {
 			st.ActorID, st.Note = &it.Attestation.ActorID, &it.Attestation.Note
@@ -239,34 +265,15 @@ func (s *Service) CanWrite(c *store.TenantTx, connID string) (bool, error) {
 
 // Activate re-evaluates every gate from stored evidence and, in one
 // transaction, swaps the in-progress revision in as the live one.
+//
+// A revision whose write_mode is not "off" is refused here by the gate
+// (blocker activation.approval) until a second person has approved a request
+// for exactly this revision and configuration (RequestActivation, then
+// ApproveActivation, which calls Activate in the approval's transaction).
 func (s *Service) Activate(c *store.TenantTx, connID, actor string, now time.Time) (*Bundle, ActiveConnection, error) {
-	conn, live, pending, err := Revisions(c, connID)
+	conn, live, b, g, err := s.activationGate(c, connID, actor, now, false)
 	if err != nil {
 		return nil, ActiveConnection{}, err
-	}
-	if conn.RetiredAt != nil {
-		return nil, ActiveConnection{}, conflict("connection_retired", "connection %s is retired", conn.Name)
-	}
-	if !IsDemoType(conn.ConnectorType) && s.Env != "dev" {
-		return nil, ActiveConnection{}, newErr(http.StatusForbidden, "phase0_required",
-			"%s connections can be activated only after tenancy, RBAC and step-up land (Phase 0, DR-10)", conn.ConnectorType)
-	}
-	if pending == nil {
-		return nil, ActiveConnection{}, conflict("no_pending_revision", "nothing to activate")
-	}
-	b, err := s.Load(c, pending, now)
-	if err != nil {
-		return nil, ActiveConnection{}, err
-	}
-	if err := s.settle(c, b, actor, now, "re-evaluated at activation"); err != nil {
-		return nil, ActiveConnection{}, err
-	}
-	g := b.Gate(store.StateActive, now)
-	if b.Rev.State != store.StateDryRunReconciled {
-		g.Blocking = append([]Blocker{{Item: "state", Status: b.Rev.State, Reason: "activation needs dry_run_reconciled"}}, g.Blocking...)
-	}
-	if g.Blocks() {
-		return nil, ActiveConnection{}, blocked("activation_blocked", g)
 	}
 	if live != nil {
 		old, err := s.Load(c, live, now)
@@ -288,6 +295,46 @@ func (s *Service) Activate(c *store.TenantTx, connID, actor string, now time.Tim
 		return nil, ActiveConnection{}, err
 	}
 	return b, ActiveConnection{conn.ID, b.Rev.ID, conn.System, conn.ConnectorType, conn.Name}, s.persist(c, b, now)
+}
+
+// ApprovalItem is the gate blocker of a write-enabled revision that has no
+// approved two-person activation request.
+const ApprovalItem = "activation.approval"
+
+// activationGate loads the in-progress revision, re-evaluates its evidence and
+// the activation gate; it fails with 409 activation_blocked (the gate report)
+// unless every condition holds. With forRequest the approval blocker is
+// ignored: a request is made once everything else passes. The caller's
+// transaction holds the result.
+func (s *Service) activationGate(c *store.TenantTx, connID, actor string, now time.Time, forRequest bool) (*store.Connection, *store.ConnectionRevision, *Bundle, *GateReport, error) {
+	conn, live, pending, err := Revisions(c, connID)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if conn.RetiredAt != nil {
+		return nil, nil, nil, nil, conflict("connection_retired", "connection %s is retired", conn.Name)
+	}
+	if pending == nil {
+		return nil, nil, nil, nil, conflict("no_pending_revision", "nothing to activate")
+	}
+	b, err := s.Load(c, pending, now)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if err := s.settle(c, b, actor, now, "re-evaluated at activation"); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	g := b.Gate(store.StateActive, now)
+	if b.Rev.State != store.StateDryRunReconciled {
+		g.Blocking = append([]Blocker{{Item: "state", Status: b.Rev.State, Reason: "activation needs dry_run_reconciled"}}, g.Blocking...)
+	}
+	if forRequest {
+		g.Blocking = slices.DeleteFunc(g.Blocking, func(x Blocker) bool { return x.Item == ApprovalItem })
+	}
+	if g.Blocks() {
+		return nil, nil, nil, nil, blocked("activation_blocked", g)
+	}
+	return conn, live, b, g, nil
 }
 
 // Retire retires a connection: its in-progress and live revisions move to

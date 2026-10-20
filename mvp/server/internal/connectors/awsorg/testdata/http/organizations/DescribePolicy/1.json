@@ -1,0 +1,1 @@
+{"Policy":{"PolicySummary":{"Id":"p-FullAWSAccess","Name":"FullAWSAccess","Type":"SERVICE_CONTROL_POLICY","AwsManaged":true},"Content":"{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"*\",\"Resource\":\"*\"}]}"}}

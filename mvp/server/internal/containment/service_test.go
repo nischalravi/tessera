@@ -35,11 +35,11 @@ func TestCredentialIsSealedAndBoundToTenantAndConnection(t *testing.T) {
 	}
 	var enc []byte
 	if err := f.DB.ReadTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
-		k, err := c.ContainmentCredential(conn)
+		k, err := c.Credential(conn, store.PurposeContainment, "")
 		if err != nil {
 			return err
 		}
-		enc = k.TokenEnc
+		enc = k.Sealed
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -47,13 +47,15 @@ func TestCredentialIsSealedAndBoundToTenantAndConnection(t *testing.T) {
 	if bytes.Contains(enc, []byte("tok-very-secret")) || len(enc) == 0 {
 		t.Fatal("the token is stored in the clear")
 	}
-	if _, err := svc.Sealer.Open(enc, seal.AAD(f.A.ID, "containment_credentials", "token_enc", conn)); err != nil {
+	if _, err := svc.Sealer.Open(enc, seal.AAD(f.A.ID, "connection_credentials", "sealed", conn, "containment")); err != nil {
 		t.Errorf("the right AAD does not open: %v", err)
 	}
 	for name, aad := range map[string][]byte{
-		"other tenant":     seal.AAD(f.B.ID, "containment_credentials", "token_enc", conn),
-		"other connection": seal.AAD(f.A.ID, "containment_credentials", "token_enc", f.A.Refs["connection:ad"]),
-		"other column":     seal.AAD(f.A.ID, "containment_credentials", "other", conn),
+		"other tenant":     seal.AAD(f.B.ID, "connection_credentials", "sealed", conn, "containment"),
+		"other connection": seal.AAD(f.A.ID, "connection_credentials", "sealed", f.A.Refs["connection:ad"], "containment"),
+		"other column":     seal.AAD(f.A.ID, "connection_credentials", "other", conn, "containment"),
+		"other purpose":    seal.AAD(f.A.ID, "connection_credentials", "sealed", conn, "bind"),
+		"old table":        seal.AAD(f.A.ID, "containment_credentials", "token_enc", conn),
 	} {
 		if _, err := svc.Sealer.Open(enc, aad); err == nil {
 			t.Errorf("a credential opens under the AAD of %s", name)

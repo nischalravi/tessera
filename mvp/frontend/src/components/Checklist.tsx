@@ -102,16 +102,88 @@ export function ReasonDialog({ title, body, label, minLength, confirmLabel, date
   );
 }
 
+/**
+ * Attest instead of a live check the system cannot answer (the server refuses it unless the
+ * check reported "unsupported"). Needs a named attester, a reason and the evidence relied on.
+ */
+export const MIN_LIVE_REASON = 20;
+export const MIN_EVIDENCE = 10;
+export function AttestInsteadDialog({ item, onCancel, onSubmit }: {
+  item: ChecklistItem;
+  onCancel: () => void;
+  onSubmit: (body: { attester: string; reason: string; evidence: string }) => Promise<void> | void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const id = useId();
+  const [attester, setAttester] = useState("");
+  const [reason, setReason] = useState("");
+  const [evidence, setEvidence] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useModal(ref, onCancel);
+  const bad = attester.trim().length < 2 || reason.trim().length < MIN_LIVE_REASON || evidence.trim().length < MIN_EVIDENCE;
+  const count = (v: string, min: number) => (v.trim().length < min ? `At least ${min} characters (${v.trim().length} so far).` : "");
+  return (
+    <div className="dialog-wrap">
+      <div className="overlay" onClick={onCancel} aria-hidden />
+      <div ref={ref} className="dialog" role="dialog" aria-modal="true" aria-labelledby={id}>
+        <form
+          onSubmit={async (e) => {
+            e.preventDefault();
+            if (bad) return;
+            setBusy(true);
+            setErr(null);
+            try {
+              await onSubmit({ attester: attester.trim(), reason: reason.trim(), evidence: evidence.trim() });
+            } catch (x) {
+              setErr((x as Error).message);
+              setBusy(false);
+            }
+          }}
+        >
+          <div className="dlg-b stack-sm">
+            <h2 id={id}>Attest instead: {item.title}</h2>
+            <div className="muted small">
+              The system cannot answer this live check. A named person confirms it instead. The attestation is audited, tied to the current
+              configuration and expires like a live result. A failed check cannot be attested.
+            </div>
+            <label className="field">
+              Attester (who verified it)
+              <input className="input" data-autofocus value={attester} onChange={(e) => setAttester(e.target.value)} minLength={2} maxLength={120} required autoComplete="name" />
+            </label>
+            <label className="field">
+              Reason the live check cannot be used
+              <textarea className="input" value={reason} onChange={(e) => setReason(e.target.value)} aria-describedby={`${id}-r`} minLength={MIN_LIVE_REASON} required />
+              <span id={`${id}-r`} className={`hint ${reason && count(reason, MIN_LIVE_REASON) ? "err" : ""}`}>{count(reason, MIN_LIVE_REASON) || "Recorded in the audit log."}</span>
+            </label>
+            <label className="field">
+              Evidence (what was checked, ideally with a change ticket)
+              <textarea className="input" value={evidence} onChange={(e) => setEvidence(e.target.value)} aria-describedby={`${id}-e`} minLength={MIN_EVIDENCE} required />
+              <span id={`${id}-e`} className={`hint ${evidence && count(evidence, MIN_EVIDENCE) ? "err" : ""}`}>{count(evidence, MIN_EVIDENCE) || "Recorded in the audit log."}</span>
+            </label>
+            {err && <div className="err" role="alert">{err}</div>}
+          </div>
+          <div className="dlg-f">
+            <Button onClick={onCancel}>Cancel</Button>
+            <Button type="submit" variant="primary" disabled={bad || busy}>{busy ? "Saving…" : "Attest instead"}</Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 type ChecklistFilter = "all" | "blocking" | Level | "skipped";
 
 const isBlocking = (i: ChecklistItem) =>
   i.applicable && ((i.level === "required" && i.status !== "pass") || (i.level === "recommended" && i.status !== "pass" && i.status !== "skipped"));
 
-function ItemRow({ item, open, onToggle, onAttest, onSkip, onUnskip, focus }: {
+function ItemRow({ item, open, onToggle, onAttest, onAttestInstead, onSkip, onUnskip, focus }: {
   item: ChecklistItem;
   open: boolean;
   onToggle: () => void;
   onAttest?: (i: ChecklistItem) => void;
+  onAttestInstead?: (i: ChecklistItem) => void;
   onSkip?: (i: ChecklistItem) => void;
   onUnskip?: (i: ChecklistItem) => void;
   focus?: boolean;
@@ -124,6 +196,9 @@ function ItemRow({ item, open, onToggle, onAttest, onSkip, onUnskip, focus }: {
   const attestable = item.applicable && item.verify.some((v) => v.kind === "attestation");
   const attestPart = item.parts.find((p) => p.kind === "attestation");
   const attested = attestPart?.status === "pass";
+  // A live check the system reported unsupported, which the template lets a person attest instead.
+  const canAttestInstead = item.applicable && item.verify.some((v) => v.kind === "live" && v.on_unsupported === "attestation")
+    && item.parts.some((p) => p.kind === "live" && p.unsupported) && (item.blocked_by?.length ?? 0) === 0;
   const depsBlocked = (item.blocked_by?.length ?? 0) > 0;
   return (
     <li ref={ref} className={`cl-item ${focus ? "focus" : ""}`} aria-describedby={statusId}>
@@ -170,10 +245,17 @@ function ItemRow({ item, open, onToggle, onAttest, onSkip, onUnskip, focus }: {
             </ul>
           </div>
           {item.attestation && <p>Attested by {item.attestation.actor}: “{item.attestation.note}”{item.attestation.stale && <Badge tone="warning">Stale</Badge>}</p>}
+          {item.live_attestation && (
+            <p>
+              Attested instead of the live check by {item.live_attestation.attester} (recorded by {item.live_attestation.actor}): “{item.live_attestation.reason}”.
+              Evidence: “{item.live_attestation.evidence}” {item.live_attestation.stale && <Badge tone="warning">Stale</Badge>}
+            </p>
+          )}
           {item.skip && <p>Skipped by {item.skip.actor}: “{item.skip.reason}”. Review by {item.skip.review_by.slice(0, 10)}{item.skip.expired && " (expired)"}.</p>}
           <p><b>Fix.</b> {item.remediation.hint} {item.remediation.link && <a href={item.remediation.link} target="_blank" rel="noreferrer noopener" className="row tight" style={{ display: "inline-flex" }}>Documentation <ExternalLink size={12} aria-hidden /></a>}</p>
           {item.depends_on && item.depends_on.length > 0 && <p className="faint">Depends on {item.depends_on.join(", ")}.</p>}
           <div className="row">
+            {canAttestInstead && onAttestInstead && <Button size="sm" onClick={() => onAttestInstead(item)}>{item.live_attestation ? "Attest again…" : "Attest instead…"}</Button>}
             {item.level === "recommended" && item.applicable && item.status !== "pass" && !item.skip && onSkip && <Button size="sm" onClick={() => onSkip(item)}>Skip…</Button>}
             {item.skip && onUnskip && <Button size="sm" onClick={() => onUnskip(item)}>Un-skip</Button>}
           </div>
@@ -188,10 +270,11 @@ function ItemRow({ item, open, onToggle, onAttest, onSkip, onUnskip, focus }: {
  * Attestation items are real checkboxes that open a note dialog; Recommended items can be
  * skipped with a reason; Required items have no skip control.
  */
-export function ChecklistPanel({ data, score, onAttest, onSkip, onUnskip, focusItem }: {
+export function ChecklistPanel({ data, score, onAttest, onAttestInstead, onSkip, onUnskip, focusItem }: {
   data: ChecklistData;
   score?: ReactNode;
   onAttest?: (i: ChecklistItem) => void;
+  onAttestInstead?: (i: ChecklistItem) => void;
   onSkip?: (i: ChecklistItem) => void;
   onUnskip?: (i: ChecklistItem) => void;
   focusItem?: string | null;
@@ -248,7 +331,7 @@ export function ChecklistPanel({ data, score, onAttest, onSkip, onUnskip, focusI
             <h3>{CATEGORY_LABEL[cat] ?? cat} <span className="faint">{xs.filter((i) => i.status === "pass").length}/{xs.length}</span></h3>
             <ul className="cl-list">
               {xs.map((i) => (
-                <ItemRow key={i.id} item={i} open={open.has(i.id)} onToggle={() => toggle(i.id)} onAttest={onAttest} onSkip={onSkip} onUnskip={onUnskip} focus={focusItem === i.id} />
+                <ItemRow key={i.id} item={i} open={open.has(i.id)} onToggle={() => toggle(i.id)} onAttest={onAttest} onAttestInstead={onAttestInstead} onSkip={onSkip} onUnskip={onUnskip} focus={focusItem === i.id} />
               ))}
             </ul>
           </div>

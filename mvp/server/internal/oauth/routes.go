@@ -3,6 +3,7 @@ package oauth
 import (
 	"encoding/json"
 	"net/http"
+	"slices"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -17,11 +18,9 @@ import (
 //	GET  /t/{slug}/.well-known/jwks.json                    the tenant's access-token keys
 //	GET  /.well-known/oauth-protected-resource              RFC 9728 metadata
 //	POST /t/{slug}/oauth/device_authorization               RFC 8628
-//	POST /t/{slug}/oauth/token                              device_code and refresh_token grants
+//	POST /t/{slug}/oauth/token                              device_code, refresh_token and client_credentials grants
 //	POST /t/{slug}/oauth/revoke                             RFC 7009
-//
-// Introspection (RFC 7662) and client credentials arrive with machine clients
-// in PR11.
+//	POST /t/{slug}/oauth/introspect                         RFC 7662 (machine clients with tessera:introspect)
 
 // Route patterns.
 const (
@@ -31,10 +30,16 @@ const (
 	PathDeviceAuth        = "/t/{slug}/oauth/device_authorization"
 	PathToken             = "/t/{slug}/oauth/token" // #nosec G101 -- a URL path pattern, not a credential
 	PathRevoke            = "/t/{slug}/oauth/revoke"
+	PathIntrospect        = "/t/{slug}/oauth/introspect"
 )
 
 // Scopes lists the scopes Tessera tokens can carry.
 var Scopes = []string{"tessera:read", "tessera:write", "tessera:audit", "tessera:admin"}
+
+// MachineScopes are the scopes a machine client can be registered with: the
+// token scopes, and ScopeIntrospect (the right to call the introspection
+// endpoint).
+var MachineScopes = append(slices.Clone(Scopes), ScopeIntrospect)
 
 // DPoPAlgs are the DPoP proof algorithms the server accepts.
 var DPoPAlgs = []string{"ES256", "EdDSA"}
@@ -51,6 +56,7 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("POST "+PathDeviceAuth, slugged(s.DeviceAuthorization))
 	mux.HandleFunc("POST "+PathToken, slugged(s.Token))
 	mux.HandleFunc("POST "+PathRevoke, slugged(s.Revoke))
+	mux.HandleFunc("POST "+PathIntrospect, slugged(s.Introspect))
 	return mux
 }
 
@@ -71,15 +77,21 @@ func (s *Service) Metadata(w http.ResponseWriter, r *http.Request, slug string) 
 		"token_endpoint":                s.endpoint(slug, "token"),
 		"device_authorization_endpoint": s.endpoint(slug, "device_authorization"),
 		"revocation_endpoint":           s.endpoint(slug, "revoke"),
+		"introspection_endpoint":        s.endpoint(slug, "introspect"),
 		"jwks_uri":                      s.Issuer(slug) + "/.well-known/jwks.json",
-		// no authorization endpoint: only the device and refresh grants exist
-		"response_types_supported":                       []string{},
-		"grant_types_supported":                          []string{GrantDeviceCode, GrantRefresh},
-		"token_endpoint_auth_methods_supported":          []string{"none"},
-		"revocation_endpoint_auth_methods_supported":     []string{"none"},
-		"dpop_signing_alg_values_supported":              DPoPAlgs,
-		"scopes_supported":                               Scopes,
-		"authorization_response_iss_parameter_supported": true,
+		// no authorization endpoint: only the device, refresh and client
+		// credentials grants exist
+		"response_types_supported": []string{},
+		"grant_types_supported":    []string{GrantDeviceCode, GrantRefresh, GrantClientCredentials},
+		// "none" is the public CLI client; machine clients use private_key_jwt
+		"token_endpoint_auth_methods_supported":                    []string{"none", "private_key_jwt"},
+		"token_endpoint_auth_signing_alg_values_supported":         AssertionAlgs,
+		"revocation_endpoint_auth_methods_supported":               []string{"none"},
+		"introspection_endpoint_auth_methods_supported":            []string{"private_key_jwt"},
+		"introspection_endpoint_auth_signing_alg_values_supported": AssertionAlgs,
+		"dpop_signing_alg_values_supported":                        DPoPAlgs,
+		"scopes_supported":                                         MachineScopes,
+		"authorization_response_iss_parameter_supported":           true,
 	})
 }
 

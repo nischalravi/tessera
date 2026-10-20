@@ -98,11 +98,24 @@ PATCH  /api/connections/{id}/config                  connections.manage STEP_UP_
 PUT    /api/connections/{id}/credential              connections.manage STEP_UP_POLICY
 GET    /api/connections/{id}/checklist               connections.read   -
 POST   /api/connections/{id}/checklist/{item}/attest connections.manage -
+POST   /api/connections/{id}/checklist/{item}/attest-instead connections.manage STEP_UP_POLICY  # issue #217
 POST   /api/connections/{id}/checklist/{item}/skip   connections.manage -
 DELETE /api/connections/{id}/checklist/{item}/skip   connections.manage -
 POST   /api/connections/{id}/transition              connections.manage -
 POST   /api/connections/{id}/activate                connections.activate STEP_UP_POLICY
 POST   /api/connections/{id}/retire                  connections.manage STEP_UP_POLICY
+GET    /api/aws/connectors                           connections.read   -  # issue #26
+POST   /api/aws/connectors                           connections.manage STEP_UP_POLICY  # issue #26
+DELETE /api/aws/connectors/{id}                      connections.manage STEP_UP_POLICY  # issue #26
+GET    /api/aws/snapshots                            connections.read   -  # issue #26
+GET    /api/aws/snapshots/{id}                       connections.read   -  # issue #26
+GET    /api/aws/can                                  graph.read         -  # issue #30
+GET    /api/aws/principals/{arn}/effective           graph.read         -  # issue #30
+GET    /api/aws/resources/{arn}/who-can              graph.read         -  # issue #30
+GET    /api/aws/explanations/{id}                    graph.read         -  # issue #30
+POST   /api/aws/simulate-policy-change               graph.read         -  # issue #30 (a comment post: connections.manage + STEP_UP_POLICY in the handler)
+GET    /api/aws/pr-comment                           connections.read   -  # issue #30
+PUT    /api/aws/pr-comment                           connections.manage STEP_UP_POLICY  # issue #30
 GET    /api/correlation/queue                        graph.read      -  # issue #160
 GET    /api/correlation/decisions                    graph.read      -  # issue #160
 POST   /api/accounts/{account_id}/link               identities.correlate STEP_UP_POLICY  # issue #160
@@ -134,6 +147,9 @@ POST   /api/roles/{role_id}/retire                   roles.manage    STEP_UP_POL
 POST   /api/roles/{role_id}/reconcile                roles.manage    STEP_UP_POLICY  # issue #161
 POST   /api/roles/{role_id}/members                  roles.manage    STEP_UP_POLICY  # issue #161
 POST   /api/roles/{role_id}/members/{identity_id}/remove roles.manage STEP_UP_POLICY  # issue #161
+GET    /api/roles/{role_id}/exclusions               graph.read      -  # issue #214
+POST   /api/roles/{role_id}/exclusions/{identity_id}/remove roles.manage STEP_UP_POLICY  # issue #214
+GET    /api/roles/{role_id}/flags                    graph.read      -  # issue #214
 GET    /api/abac/policies                            graph.read      -  # issue #162
 POST   /api/abac/policies                            roles.manage    STEP_UP_POLICY  # issue #162
 GET    /api/abac/policies/{policy_id}                graph.read      -  # issue #162
@@ -196,6 +212,16 @@ POST   /api/identities/{identity_id}/enable          identities.contain STEP_UP_
 GET    /api/identities/{identity_id}/disables        graph.read      -  # wire-previews
 POST   /api/containment-retries/{retry_id}/retry-now identities.contain STEP_UP_POLICY  # issue #106
 PUT    /api/connections/{id}/containment-credential  connections.manage STEP_UP_POLICY  # issue #106
+GET    /api/agents                                   connections.read   -  # issue #92
+POST   /api/agents                                   connections.manage STEP_UP_POLICY  # issue #92
+POST   /api/agents/{id}/revoke                       connections.manage STEP_UP_POLICY  # issue #92
+GET    /api/flatfile/apps                            graph.read      -  # issue #105
+PUT    /api/flatfile/apps/{system}/mapping           flatfile.manage STEP_UP_POLICY  # issue #105
+POST   /api/flatfile/apps/{system}/uploads           flatfile.upload -  # issue #105
+GET    /api/flatfile/uploads                         graph.read      -  # issue #105
+GET    /api/flatfile/uploads/{upload_id}             graph.read      -  # issue #105
+GET    /api/flatfile/tasks                           graph.read      -  # issue #105
+POST   /api/flatfile/tasks/{task_id}/close           flatfile.close_tasks STEP_UP_POLICY  # issue #105
 GET    /api/access/as-of                             graph.read      -  # issue #111
 GET    /api/evidence/packs                           audit.read      -  # issue #111
 POST   /api/evidence/packs                           audit.read      -  # issue #111
@@ -206,8 +232,11 @@ GET    /api/connections/{id}/validations/{run}       connections.read   -
 POST   /api/connections/{id}/dry-run                 connections.manage -
 GET    /api/connections/{id}/dry-runs/{run}          connections.read   -
 GET    /api/connections/{id}/findings                connections.read   -
-POST   /api/connections/{id}/findings/{fid}/accept   connections.manage -
+POST   /api/connections/{id}/findings/{fid}/accept   connections.manage -  (critical finding: STEP_UP_POLICY in the handler)
 GET    /api/connections/{id}/health                  connections.read   -
+GET    /api/connections/{id}/activation              connections.read   -  # DR-10
+POST   /api/connections/{id}/activation/approve      connections.activate STEP_UP_POLICY  # DR-10
+POST   /api/connections/{id}/activation/reject       connections.activate -  # DR-10
 GET    /api/insights/deployment-health               connections.read   -
 POST   /api/insights/deployment-health/rerun         connections.manage -
 GET    /api/sod/functions                            graph.read      -  # issue #298
@@ -274,6 +303,7 @@ GET    /.well-known/oauth-protected-resource         public
 POST   /t/{slug}/oauth/device_authorization          public
 POST   /t/{slug}/oauth/token                         public
 POST   /t/{slug}/oauth/revoke                        public
+POST   /t/{slug}/oauth/introspect                    public
 POST   /api/auth/device/lookup                       auth.self       -  # issue #14
 POST   /api/auth/device/approve                      auth.self       STEP_UP_ADMIN  # issue #14: max_age 300 s
 GET    /api/groups/folders                           groups.admin    -  # issue #44
@@ -314,10 +344,19 @@ POST   /api/admin/change-requests/{change_id}/reject admin.change.approve -  # i
 POST   /api/admin/change-requests/{change_id}/cancel admin.change.request -  # issue #16
 POST   /api/admin/change-requests/{change_id}/apply  admin.change.approve STEP_UP_ADMIN  # issue #16
 GET    /api/admin/notifications                      admin.read      -  # issue #16
+GET    /api/admin/api-clients                        admin.read      -  # issue #15
+GET    /api/admin/api-clients/{client_id}            admin.read      -  # issue #15
 GET    /api/admin/recovery                           admin.read      -  # issue #16
 POST   /api/admin/recovery/{recovery_id}/cancel      admin.change.request -  # issue #16
 GET    /api/admin/api-clients                        admin.read      -  # issue #16
 GET    /api/admin/platform-health                    admin.read      -  # issue #303
+POST   /api/auth/break-glass/options                 public
+POST   /api/auth/break-glass/verify                  public
+GET    /api/admin/break-glass                        admin.read      -  # issue #17
+POST   /api/admin/break-glass/registration/options   admin.change.request STEP_UP_ADMIN  # issue #17
+POST   /api/admin/break-glass/registration/verify    admin.change.request STEP_UP_ADMIN  # issue #17
+POST   /api/admin/break-glass/actions/{action}       breakglass.recover -  # issue #17
+POST   /api/admin/break-glass/uses/{use_id}/attest   admin.change.request -  # issue #17
 `
 
 type designRoute struct {
@@ -518,5 +557,31 @@ func TestConnectionConfigNeedsStepUp(t *testing.T) {
 	fresh := signIn(t, f.DB, f.B.ID, authtest.User{Email: "conn-admin2@b.example", Roles: admin.Roles}, authtest.Phr, storetest.Now)
 	if rec := serve(h, authed(fresh, "PATCH", "/api/connections/x/config", body)); rec.Code == 401 || rec.Code == 403 {
 		t.Errorf("PATCH config with a fresh sign-in: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestAgentRoutesNeedStepUp: an enrolment code puts a host inside the customer
+// network on the path to the directory, so issuing one and revoking an agent
+// need a fresh phishing-resistant sign-in; viewers may only list.
+func TestAgentRoutesNeedStepUp(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	h := newIsolationServer(f).Handler()
+	admin := authtest.User{Email: "agent-admin@b.example", Roles: []auth.Role{auth.RoleTenantAdmin}}
+	stale := signIn(t, f.DB, f.B.ID, admin, authtest.Ctx{AAL: 2, Phr: true, AuthTime: storetest.Now.Add(-20 * time.Minute)}, storetest.Now)
+	for _, c := range []struct{ method, path string }{{"POST", "/api/agents"}, {"POST", "/api/agents/" + missingUUID + "/revoke"}} {
+		if rec := serve(h, authed(stale, c.method, c.path, `{"name":"dc-agent"}`)); rec.Code != 401 || !strings.Contains(rec.Body.String(), "step_up_required") {
+			t.Errorf("%s %s with a 20-minute-old sign-in: %d %s", c.method, c.path, rec.Code, rec.Body.String())
+		}
+	}
+	if rec := serve(h, authed(stale, "GET", "/api/agents", "")); rec.Code != 200 {
+		t.Errorf("listing needs no step-up: %d %s", rec.Code, rec.Body.String())
+	}
+	viewer := signIn(t, f.DB, f.B.ID, authtest.User{Email: "agent-viewer@b.example", Roles: []auth.Role{auth.RoleViewer}}, authtest.Phr, storetest.Now)
+	if rec := serve(h, authed(viewer, "POST", "/api/agents", `{"name":"dc-agent"}`)); rec.Code != 403 {
+		t.Errorf("a viewer issued an enrolment code: %d %s", rec.Code, rec.Body.String())
+	}
+	fresh := signIn(t, f.DB, f.B.ID, authtest.User{Email: "agent-admin2@b.example", Roles: admin.Roles}, authtest.Phr, storetest.Now)
+	if rec := serve(h, authed(fresh, "POST", "/api/agents", `{"name":"dc-agent"}`)); rec.Code != 201 {
+		t.Errorf("a fresh sign-in could not issue a code: %d %s", rec.Code, rec.Body.String())
 	}
 }

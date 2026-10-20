@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/admin"
+	"github.com/nischalravi/tessera/mvp/server/internal/agent"
 	"github.com/nischalravi/tessera/mvp/server/internal/alerts"
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
@@ -103,6 +104,9 @@ type Config struct {
 	// PublicURL is TESSERA_PUBLIC_URL: the base of the OIDC redirect URIs and
 	// of every OAuth issuer (PublicURL/t/{slug}) and DPoP htu.
 	PublicURL string
+	// RPID is TESSERA_RP_ID, the WebAuthn relying party id of break-glass
+	// keys. Empty (or no PublicOrigin): break-glass is unavailable.
+	RPID string
 	// APIAudience is TESSERA_API_AUDIENCE, the aud of access tokens (default
 	// PublicURL + "/api").
 	APIAudience string
@@ -159,6 +163,18 @@ type Config struct {
 	// AuditAppend overrides how the audit middleware writes http.request
 	// events (tests inject failures). Nil: the store.
 	AuditAppend func(ctx context.Context, t tenancy.ID, e store.AuditEvent) error
+	// Agents is the Directory Agent service (DR-11) behind /api/agents. Nil: a
+	// service with its own in-memory hub (no agent listener is attached).
+	// New links it to readiness so connections that name an agent are probed
+	// through it.
+	Agents *agent.Service
+	// AWSCatalog returns the action catalog the AWS evaluator runs against
+	// (see CatalogFromDir). Nil: the /api/aws evaluator routes answer 503
+	// aws_catalog_unavailable; everything else is unaffected.
+	AWSCatalog func() (*AWSCatalog, error)
+	// GitHubAPIBase is where the access-diff comment is posted (default
+	// https://api.github.com). Tests point it at a local server.
+	GitHubAPIBase string
 }
 
 // Server serves the API.
@@ -178,10 +194,13 @@ type Server struct {
 	oauth *oauth.Service
 
 	readiness *readiness.Service
+	agents    *agent.Service
 	prov      *provision.Engine
 	provSeal  *seal.Sealer // cfg.Sealer, or a per-process key when it is nil
 	// containment is the kill switch (issue #106); never nil.
 	containment *containment.Service
+	// aws holds the AWS evaluator's engines and explanations (aws_eval.go).
+	aws awsRuntime
 	// admin is the admin-change workflow (design §15); never nil.
 	admin *admin.Service
 	// queue is the durable job queue (issue #300); never nil.
@@ -217,6 +236,12 @@ func New(cfg Config) *Server {
 		cfg.Readiness.Runner.Scenario = cfg.ReadinessScenario
 		cfg.Readiness.Runner.SCIM.Client = cfg.OutboundHTTP
 	}
+	if cfg.Agents == nil {
+		cfg.Agents = &agent.Service{DB: cfg.Store, Hub: agent.NewHub(nil), Clock: cfg.Clock}
+	}
+	if cfg.Readiness.Runner.Live.Agents == nil {
+		cfg.Readiness.Runner.Live.Agents = cfg.Agents
+	}
 	if cfg.Containment == nil {
 		cfg.Containment = &containment.Service{}
 	}
@@ -235,11 +260,20 @@ func New(cfg Config) *Server {
 		provSeal = sealer
 	}
 	s := &Server{cfg: cfg, containment: cfg.Containment, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
-		limits: newLimiters(cfg.RateLimits), provSeal: provSeal}
+		agents: cfg.Agents, limits: newLimiters(cfg.RateLimits), provSeal: provSeal}
 	s.prov = &provision.Engine{DB: cfg.Store, Sealer: provSeal, HTTP: cfg.Outbound,
 		Clock: func() time.Time { return s.clock() }, Log: cfg.Logger.With("component", "provisioning")}
 	s.admin = &admin.Service{DB: cfg.Store, Clock: func() time.Time { return s.clock() }, Sealer: cfg.Sealer,
 		Prod: cfg.Env == "prod", Log: cfg.Logger}
+	if cfg.RPID != "" && cfg.PublicOrigin != "" {
+		// the ceremony runs on the public origin (and, in dev, the CORS origins)
+		origins := s.csrfOrigins()
+		if wa, err := admin.NewWebAuthn(cfg.RPID, origins); err != nil {
+			cfg.Logger.Error("break-glass is unavailable: the WebAuthn relying party is invalid", "rp_id", cfg.RPID, "err", err)
+		} else {
+			s.admin.WebAuthn = wa
+		}
+	}
 	s.guests = sponsorship.New(cfg.Identifiers)
 	if cfg.OutboundHTTP != nil {
 		rp, err := oidcrp.New(oidcrp.Config{HTTP: cfg.OutboundHTTP, Now: func() time.Time { return s.clock() }})
@@ -274,6 +308,7 @@ func New(cfg Config) *Server {
 	s.registerAlertRoutes()
 	s.registerOwnershipRoutes()
 	s.registerReviewScheduleRoutes()
+	s.registerRoleReviewRoutes()
 	s.registerCorrelationRoutes()
 	s.registerAffiliationRoutes()
 	s.registerRequestRoutes()
@@ -290,9 +325,12 @@ func New(cfg Config) *Server {
 	s.registerNotificationRoutes()
 	s.registerEmailRoutes()
 	s.registerContainmentRoutes()
+	s.registerFlatfileRoutes()
 	s.registerEvidenceRoutes()
 	s.registerGroupsFolderRoutes()
 	s.registerReadinessRoutes()
+	s.registerAgentRoutes()
+	s.registerAWSRoutes()
 	s.registerJobRoutes()
 	s.registerQueueRoutes()
 	s.registerProvisioningRoutes()
@@ -304,6 +342,8 @@ func New(cfg Config) *Server {
 	s.registerStepUpRoutes()
 	s.registerOAuthRoutes()
 	s.registerAdminRoutes()
+	s.registerBreakGlassRoutes()
+	s.registerAdminClientRoutes()
 	s.registerOpsRoutes()
 	s.checkPublicRoutes()
 	return s
@@ -571,22 +611,35 @@ func (s *Server) serveTenant(rt *route, w http.ResponseWriter, r *http.Request, 
 	return out, err
 }
 
+// multiSegmentVar is the one path variable that may span several segments: an
+// ARN, which can hold slashes ("role/Name", an S3 object key). A pattern has at
+// most one; it takes the segments the literal ones around it leave over.
+const multiSegmentVar = "{arn}"
+
 func (rt *route) match(path string) (map[string]string, bool) {
 	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
-	if len(parts) != len(rt.segs) {
+	extra := len(parts) - len(rt.segs) // segments beyond one per pattern segment
+	if extra != 0 && (extra < 0 || !slices.Contains(rt.segs, multiSegmentVar)) {
 		return nil, false
 	}
 	var vars map[string]string
-	for i, seg := range rt.segs {
+	pi := 0
+	for _, seg := range rt.segs {
+		n := 1
+		if seg == multiSegmentVar {
+			n += extra
+		}
+		got := parts[pi : pi+n]
+		pi += n
 		if strings.HasPrefix(seg, "{") {
-			if parts[i] == "" {
+			if slices.Contains(got, "") {
 				return nil, false
 			}
 			if vars == nil {
 				vars = map[string]string{}
 			}
-			vars[seg[1:len(seg)-1]] = parts[i]
-		} else if seg != parts[i] {
+			vars[seg[1:len(seg)-1]] = strings.Join(got, "/")
+		} else if seg != got[0] {
 			return nil, false
 		}
 	}
@@ -692,9 +745,12 @@ func (s *Server) attribute(r *http.Request) {
 		audit.SetAnonymous(r.Context(), reason)
 	default:
 		markAuthenticated(r.Context())
-		sid := p.SessionID.String()
-		audit.SetPrincipal(r.Context(), audit.Principal{Tenant: p.TenantID, Actor: p.AuditActor(), SessionID: &sid,
-			Authn: p.AuditAuthn(s.clock())})
+		ap := audit.Principal{Tenant: p.TenantID, Actor: p.AuditActor(), Authn: p.AuditAuthn(s.clock())}
+		if p.SessionID != nil { // a machine client has no session
+			sid := p.SessionID.String()
+			ap.SessionID = &sid
+		}
+		audit.SetPrincipal(r.Context(), ap)
 	}
 }
 

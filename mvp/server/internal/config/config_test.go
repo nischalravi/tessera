@@ -430,6 +430,28 @@ func TestSafedialAllowDevOnly(t *testing.T) {
 	}
 }
 
+// TestAgentListenerConfig: the Directory Agent listener is mutual TLS only, so
+// an address needs its certificate and key, and they need the address; prod
+// accepts the complete set.
+func TestAgentListenerConfig(t *testing.T) {
+	c, err := config.Load(env(with(safeProd(), "TESSERA_AGENT_ADDR", ":8443", "TESSERA_AGENT_TLS_CERT", "/etc/t/a.crt", "TESSERA_AGENT_TLS_KEY", "/etc/t/a.key")))
+	if err != nil || c.AgentAddr != ":8443" || c.AgentTLSCert != "/etc/t/a.crt" || c.AgentTLSKey != "/etc/t/a.key" {
+		t.Fatalf("prod with a complete agent listener: %v %+v", err, c)
+	}
+	if c, err := config.Load(env(safeProd())); err != nil || c.AgentAddr != "" {
+		t.Fatalf("no listener by default: %v", err)
+	}
+	for name, kv := range map[string][]string{
+		"address only":      {"TESSERA_AGENT_ADDR", ":8443"},
+		"address and cert":  {"TESSERA_AGENT_ADDR", ":8443", "TESSERA_AGENT_TLS_CERT", "/c"},
+		"cert and key only": {"TESSERA_AGENT_TLS_CERT", "/c", "TESSERA_AGENT_TLS_KEY", "/k"},
+	} {
+		if _, err := config.Load(env(with(safeProd(), kv...))); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+}
+
 // TestTestEnvAndInsecureCookie: TESSERA_ENV=test is a non-production
 // environment; the insecure-cookie fallback is allowed only in dev on a
 // localhost public URL (§11).

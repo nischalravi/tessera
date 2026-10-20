@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/nischalravi/tessera/mvp/server/internal/flatfile"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -59,11 +60,16 @@ func deptKey(d *string) (string, bool) {
 
 // Scope narrows a campaign (issue #166): one system's grants (System, "" for
 // every system) and, with PrivilegedOnly, privileged grants only.
+//
+// RoleIDs (issue #214) scopes the campaign to business roles: it then reviews
+// every membership of those roles (and nothing else), whatever the risk, and
+// System and PrivilegedOnly do not apply.
 type Scope struct {
 	System         string
 	PrivilegedOnly bool
 	// SkipEmpty creates no campaign when no grant is in scope (the campaign id is 0).
 	SkipEmpty bool
+	RoleIDs   []string
 }
 
 // GenerateCampaign creates a campaign with an item for every risky grant.
@@ -123,6 +129,10 @@ func GenerateScopedCampaign(c *store.TenantTx, now time.Time, name string, unuse
 		}
 	}
 
+	rv, err := loadRoleView(c, scope)
+	if err != nil {
+		return 0, err
+	}
 	var pending []*store.ReviewItem
 	total, items := 0, 0
 	for _, iid := range g.Identities(true) {
@@ -148,10 +158,18 @@ func GenerateScopedCampaign(c *store.TenantTx, now time.Time, name string, unuse
 			for _, ep := range via {
 				privileged = privileged || ep.Privileged
 			}
-			if (scope.System != "" && g.Node(ag.Dst).System != scope.System) || (scope.PrivilegedOnly && !privileged) {
-				continue
+			just := rv.justifying(iid, ag)
+			if len(just) == 0 && rv.scoped() {
+				continue // a role-scoped campaign reviews memberships only
 			}
-			total++
+			if len(just) == 0 || !rv.scoped() {
+				if (scope.System != "" && g.Node(ag.Dst).System != scope.System) || (scope.PrivilegedOnly && !privileged) {
+					continue
+				}
+			}
+			if len(just) == 0 {
+				total++ // a grant a role made is counted with its membership
+			}
 			var last *time.Time
 			usedN, events := 0, 0
 			for _, ep := range via {
@@ -182,6 +200,12 @@ func GenerateScopedCampaign(c *store.TenantTx, now time.Time, name string, unuse
 			}
 			if ident.Type != "human" && (owner == nil || owner.Status != "active") {
 				reasons = append(reasons, "orphaned_nhi")
+			}
+			if len(just) > 0 {
+				// the role's grant is reviewed under its membership, not as an item
+				rv.add(just, iid, reasons, g.Label(ag.Acct)+" → "+g.Label(ag.Dst), privileged, len(via), usedN, events, last,
+					via, vnames)
+				continue
 			}
 			if len(reasons) == 0 {
 				continue
@@ -252,6 +276,11 @@ func GenerateScopedCampaign(c *store.TenantTx, now time.Time, name string, unuse
 			items++
 		}
 	}
+	mTotal, mem, err := rv.build(now, people, securityLead)
+	if err != nil {
+		return 0, err
+	}
+	total, items = total+mTotal, items+len(mem)
 	if total == 0 && scope.SkipEmpty {
 		return 0, nil
 	}
@@ -262,6 +291,12 @@ func GenerateScopedCampaign(c *store.TenantTx, now time.Time, name string, unuse
 	for _, it := range pending {
 		it.CampaignID = campID
 		if err := c.InsertReviewItem(it); err != nil {
+			return 0, err
+		}
+	}
+	for _, m := range mem {
+		m.item.CampaignID = campID
+		if _, err := c.InsertMembershipItem(m.item, m.roleID, m.source); err != nil {
 			return 0, err
 		}
 	}
@@ -367,6 +402,10 @@ func applyDecision(c *store.TenantTx, now time.Time, item *store.ReviewItem, dec
 	item.Decision, item.Comment, item.DecidedAt = &decision, comment, &now
 	if decision == "revoke" {
 		if e, err := c.EdgeBetween(item.EdgeSrc, item.EdgeDst); err == nil {
+			// an entitlement of an app with no connector becomes a manual task (issue #105)
+			if err := flatfile.GrantRevoked(c, now, by.Display, e.ID, "review"); err != nil {
+				return nil, err
+			}
 			if err := c.RevokeEdge(e.ID, now, "review"); err != nil {
 				return nil, err
 			}

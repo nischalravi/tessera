@@ -131,7 +131,7 @@ type Principal struct {
 	// does not activate, with the reason (design §12.2).
 	InactiveRoles map[Role]string
 	Scopes        ScopeSet // nil = cookie session (all scopes implicitly)
-	Via           string   // cookie | dpop
+	Via           string   // cookie | dpop | bearer (a machine client's unbound token)
 
 	csrfSecret string
 	session    *store.Session
@@ -139,8 +139,11 @@ type Principal struct {
 
 // User returns the principal as a store.UserRef (who did something).
 func (p *Principal) User() store.UserRef {
-	if p == nil || p.UserID == nil {
+	if p == nil {
 		return store.UserRef{}
+	}
+	if p.UserID == nil { // a machine client: named, but it has no user id
+		return store.UserRef{Display: p.Display}
 	}
 	return store.UserRef{ID: *p.UserID, Display: p.Display}
 }

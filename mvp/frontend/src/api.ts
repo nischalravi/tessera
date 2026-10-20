@@ -147,10 +147,21 @@ function errorMessage(status: number, j: any): string {
   return j ? JSON.stringify(j.detail ?? j) : `${status}`;
 }
 
-/** Call the API. A write refused for step-up is kept so it can resume after re-authentication. */
-export function api<T = any>(path: string, body?: unknown, method?: string): Promise<T> {
-  const m = method ?? (body !== undefined ? "POST" : "GET");
-  return send<T>(path, body, m, () => savePendingAction({ method: m, path, body, label: actionLabel(m, path), at: Date.now() }));
+/** For the one kind of request that is not JSON: a file sent as it is (flat-file upload). */
+export interface RawBody {
+  data: Blob | string;
+  contentType: string;
+  /** Statuses that carry a result rather than an error (a rejected upload is 422 with its report). */
+  resultStatuses?: number[];
+}
+
+/**
+ * Call the API. A write refused for step-up is kept so it can resume after re-authentication (a raw file
+ * upload is not: its body cannot be replayed from storage).
+ */
+export function api<T = any>(path: string, body?: unknown, method?: string, raw?: RawBody): Promise<T> {
+  const m = method ?? (body !== undefined || raw ? "POST" : "GET");
+  return send<T>(path, body, m, raw ? clearPendingAction : () => savePendingAction({ method: m, path, body, label: actionLabel(m, path), at: Date.now() }), raw);
 }
 
 /**
@@ -161,9 +172,10 @@ export function apiNoResume<T = any>(path: string, body: unknown, method = "POST
   return send<T>(path, body, method, clearPendingAction);
 }
 
-async function send<T>(path: string, body: unknown, m: string, onStepUp: () => void): Promise<T> {
+async function send<T>(path: string, body: unknown, m: string, onStepUp: () => void, raw?: RawBody): Promise<T> {
   const headers: Record<string, string> = {};
-  if (body !== undefined) headers["content-type"] = "application/json";
+  if (raw) headers["content-type"] = raw.contentType;
+  else if (body !== undefined) headers["content-type"] = "application/json";
   if (m !== "GET" && m !== "HEAD" && csrfToken) headers["x-tessera-csrf"] = csrfToken;
   const epoch = sessionEpoch;
   let res: Response;
@@ -172,12 +184,12 @@ async function send<T>(path: string, body: unknown, m: string, onStepUp: () => v
       method: m,
       headers,
       credentials: "same-origin",
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      body: raw ? raw.data : body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch {
     throw new ApiError("Tessera can't reach its API right now.", 0, null);
   }
-  if (!res.ok) {
+  if (!res.ok && !raw?.resultStatuses?.includes(res.status)) {
     let j: any = null;
     try {
       j = await res.json();
@@ -270,6 +282,9 @@ const LABELS: [RegExp, (m: RegExpMatchArray) => string][] = [
   [/^\/hris\/events\/([^/]+)\/execute$/, (m) => `Run the lifecycle plan for event ${m[1]}`],
   [/^\/connections\/([^/]+)\/(config|credential|activate|retire)$/, (m) => `${{ config: "Save the configuration of", credential: "Set the credential of", activate: "Activate", retire: "Retire" }[m[2]]} connection ${m[1]}`],
   [/^\/readiness\/overlays\/([^/]+)$/, (m) => `Save the readiness overlay for ${m[1]}`],
+  [/^\/agents\/([^/]+)\/revoke$/, (m) => `Revoke Directory Agent ${m[1]}`],
+  [/^\/flatfile\/apps\/([^/]+)\/mapping$/, (m) => `Save the column mapping of ${m[1]}`],
+  [/^\/flatfile\/tasks\/([^/]+)\/close$/, () => "Close the manual task"],
   [/^\/auth\/device\/approve$/, () => "Approve the command-line sign-in"],
 ];
 
@@ -401,12 +416,22 @@ export interface ReviewItem {
     violations: string[];
     peer_coverage: number | null;
     sample_permissions: string[];
+    /** Role membership items: the grants the role made sit under the membership (issue #214). */
+    membership?: { role_id: string; role: string; source: RoleMemberSource; assigned_at: string; grants: string[] };
   };
   reviewer: IdentityBrief | null;
   decision: "keep" | "revoke" | null;
   comment: string | null;
   decided_at: string | null;
+  /** "membership": the item certifies a business-role membership; absent for a grant. */
+  kind?: "membership";
+  role?: { id: string; name: string };
+  member_source?: RoleMemberSource;
+  /** How a revoked membership was resolved. */
+  resolution?: "unassign" | "exclude" | "flag" | null;
 }
+export type RoleMemberSource = "rule" | "request" | "manual";
+export type RuleAction = "exclude" | "flag";
 
 export interface Campaign {
   id: number;
@@ -635,8 +660,10 @@ export const jitDecide = (id: number, action: "approve" | "deny" | "revoke") =>
 export const jitCreate = (body: { identity_id: number; group_id: number; duration_hours: number; justification: string }) =>
   api<JitRequest>("/jit/requests", body);
 
-export const reviewDecide = (itemId: number, decision: "keep" | "revoke", comment?: string) =>
-  api<{ id: number; decision: string }>(`/reviews/items/${itemId}/decision`, { decision, comment: comment || null });
+/** ruleAction: revoking a rule membership needs exclude (from the rule) or flag (to the role owner). */
+export const reviewDecide = (itemId: number, decision: "keep" | "revoke", comment?: string, ruleAction?: RuleAction) =>
+  api<{ id: number; decision: string; resolution?: string }>(`/reviews/items/${itemId}/decision`,
+    { decision, comment: comment || null, ...(ruleAction ? { rule_action: ruleAction } : {}) });
 
 // -------------------------------------------------------------- session
 export interface SessionInfo {
@@ -780,11 +807,15 @@ export interface ReviewSchedule {
   enabled: boolean;
   updated_at: string;
   launches: ReviewLaunch[];
+  /** Business roles whose memberships it reviews (none: grants). */
+  role_ids: string[];
 }
 export interface ReviewScheduleInput {
   name: string; system: string | null; privileged_only: boolean; unused_days: number; duration_days: number; reminder_days: number;
   close_out: "revoke" | "escalate"; escalation_identity_id: number | null; escalation_days: number; recurrence: Recurrence;
   first_run_at?: string; enabled: boolean;
+  /** Omitted: kept on update. */
+  role_ids?: string[];
 }
 export const createReviewSchedule = (b: ReviewScheduleInput) => api<ReviewSchedule>("/reviews/schedules", b);
 export const updateReviewSchedule = (id: string, b: ReviewScheduleInput) => api<ReviewSchedule>(`/reviews/schedules/${encodeURIComponent(id)}`, b, "PUT");
@@ -1531,6 +1562,83 @@ export interface ContainmentRetry {
 export const retryContainmentNow = (retryId: string) =>
   api<{ retry: ContainmentRetry }>(`/containment-retries/${encodeURIComponent(retryId)}/retry-now`, {});
 
+// ------------------------------------------------------------ flat-file import (issue #105)
+
+/** Which CSV column holds which field of an accounts file ("" or absent: not mapped). */
+export interface FlatAccountCols { account_id: string; username: string; email?: string; identity_id?: string; status?: string }
+/** The same for an account-entitlement file: one row per account and entitlement. */
+export interface FlatEntitlementCols { account_id: string; entitlement: string; name?: string; privileged?: string }
+export interface FlatMapping {
+  system: string;
+  name: string;
+  owner: string;
+  accounts: FlatAccountCols;
+  entitlements: FlatEntitlementCols | null;
+  updated_by: string;
+  updated_at: string;
+}
+export type FlatKind = "accounts" | "entitlements";
+export interface FlatUpload {
+  id: string;
+  system: string;
+  kind: FlatKind;
+  source: "api" | "sftp";
+  filename: string;
+  sha256: string;
+  size_bytes: number;
+  status: "applied" | "rejected";
+  rows_total: number;
+  rows_rejected: number;
+  added: number;
+  removed: number;
+  changed: number;
+  unchanged: number;
+  tasks_confirmed: number;
+  uploaded_by: string;
+  uploaded_at: string;
+}
+/** A rejected row; row 0 is the file as a whole. */
+export interface FlatRowError { row: number; column: string; code: string; message: string }
+export interface FlatChange { kind: FlatKind; change: "added" | "removed" | "changed"; label: string; detail?: string }
+export interface FlatUploadDetail extends FlatUpload { errors: FlatRowError[]; errors_truncated: boolean; changes: FlatChange[] }
+export interface FlatTask {
+  id: string;
+  system: string;
+  kind: "disable_account" | "remove_entitlement";
+  account: string;
+  account_label: string;
+  entitlement: string;
+  identity_id: number | null;
+  trigger: string;
+  status: "open" | "confirmed" | "closed";
+  instruction: string;
+  created_by: string;
+  created_at: string;
+  closed_by: string | null;
+  closed_at: string | null;
+  close_reason: string;
+  closed_upload_id: string | null;
+}
+
+/** Save an app's column mapping (flatfile.manage, fresh sign-in). */
+export const saveFlatMapping = (system: string, body: { name: string; owner: string; accounts: FlatAccountCols; entitlements: FlatEntitlementCols | null }) =>
+  api<FlatMapping>(`/flatfile/apps/${encodeURIComponent(system)}/mapping`, body, "PUT");
+
+/**
+ * Upload a CSV for an app. Resolves with the upload either way: a file with an invalid row is
+ * rejected whole (status "rejected", every bad row listed) and nothing else changes.
+ */
+export const uploadFlatFile = (system: string, kind: FlatKind, file: File) =>
+  api<{ upload: FlatUploadDetail; confirmed_tasks: FlatTask[] }>(
+    `/flatfile/apps/${encodeURIComponent(system)}/uploads?${new URLSearchParams({ kind, filename: file.name })}`,
+    undefined,
+    "POST",
+    { data: file, contentType: "text/csv", resultStatuses: [422] },
+  );
+
+/** Close a manual task by hand, with a reason (flatfile.close_tasks, fresh sign-in). */
+export const closeFlatTask = (taskId: string, reason: string) =>
+  api<{ task: FlatTask }>(`/flatfile/tasks/${encodeURIComponent(taskId)}/close`, { reason });
 // ---------------------------------------------------------------- attribute policies (issue #162)
 
 /** A condition: all/any/not over attribute tests, evaluated deterministically; a missing attribute denies. */
@@ -1864,14 +1972,16 @@ export interface Connection {
 
 export interface LegacyConnection { legacy: true; system: string; name: string; type: string; state: "legacy"; governed_by: string | null; connector_type: "legacy" }
 
-export interface Verify { kind: "attestation" | "live" | "data"; check?: string; params?: Record<string, unknown> }
-export interface Part { kind: Verify["kind"]; check?: string; status: ItemStatus; reason?: string; simulated?: boolean; run_id?: string; observed?: Record<string, unknown>; message?: string }
+export interface Verify { kind: "attestation" | "live" | "data"; check?: string; params?: Record<string, unknown>; on_unsupported?: "attestation" }
+export interface Part { kind: Verify["kind"]; check?: string; status: ItemStatus; reason?: string; simulated?: boolean; run_id?: string; observed?: Record<string, unknown>; message?: string; unsupported?: boolean }
 
 export interface ChecklistItem {
   id: string; title: string; category: string; level: Level; template_level?: Level; why: string; verify: Verify[];
   remediation: { hint: string; link?: string }; depends_on?: string[]; config_fields?: string[]; source?: string;
   applicable: boolean; status: ItemStatus; reason?: string; blocked_by?: string[]; live_blocked_by?: string[]; parts: Part[];
   attestation: { actor: string; note: string; at: string; stale: boolean } | null;
+  /** An attestation standing in for a live check the system reported unsupported. */
+  live_attestation: { attester: string; actor: string; reason: string; evidence: string; at: string; stale: boolean } | null;
   skip: { actor: string; reason: string; review_by: string; at: string; expired: boolean } | null;
 }
 
@@ -1954,6 +2064,8 @@ export const readiness = {
     api<{ connection: Connection; new_revision: boolean; invalidated: string[]; fields: { field: string; msg: string }[] }>(`/connections/${id}/config`, patch, "PATCH"),
   setCredential: (id: string, body: { secret?: string; reference?: string }) => apiNoResume<RevisionView["credential"]>(`/connections/${id}/credential`, body, "PUT"),
   attest: (id: string, item: string, note: string) => api<Checklist>(`/connections/${id}/checklist/${item}/attest`, { note }),
+  attestInstead: (id: string, item: string, body: { attester: string; reason: string; evidence: string }) =>
+    api<Checklist>(`/connections/${id}/checklist/${item}/attest-instead`, body),
   skip: (id: string, item: string, reason: string, review_by?: string) =>
     api<Checklist>(`/connections/${id}/checklist/${item}/skip`, review_by ? { reason, review_by } : { reason }),
   unskip: (id: string, item: string) => api<Checklist>(`/connections/${id}/checklist/${item}/skip`, undefined, "DELETE"),
@@ -1968,6 +2080,72 @@ export const readiness = {
     "/insights/deployment-health/rerun", { reconcile }),
 };
 
+// ------------------------------------------------------ Directory Agents (DR-11)
+export type AgentStatus = "pending" | "active" | "revoked";
+
+/** One Directory Agent. It carries no secret and no key pin. */
+export interface DirectoryAgent {
+  id: string; name: string; status: AgentStatus;
+  /** Polled Tessera recently (an active agent that is not online cannot answer checks). */
+  online: boolean;
+  /** Older than the version Tessera treats as current. */
+  outdated: boolean;
+  hostname?: string; os?: string; version?: string;
+  /** SHA-256 of the agent's local allowlist: changes when its allowed_targets change. */
+  allowlist_hash?: string;
+  last_seen_at?: string; enrolled_at?: string;
+  created_by: string; created_at: string;
+  revoked_at?: string; revoked_by?: string;
+  /** Prefix of a credential reference for a secret stored on this agent: agent:<id>/ */
+  credential_ref_prefix: string;
+}
+
+/** Issuing an enrolment code: the code is in this response only. */
+export interface AgentEnrolment { agent: DirectoryAgent; code: string; expires_at: string }
+
+export const agents = {
+  // the answer holds a code shown once, so a step-up must not replay this call in the background
+  enrol: (name: string) => apiNoResume<AgentEnrolment>("/agents", { name }),
+  revoke: (id: string) => api<DirectoryAgent>(`/agents/${id}/revoke`, {}),
+};
+
+// ---------------------------------------------------------------- AWS evaluator (/api/aws, design §11.2)
+
+export interface AwsReason { code: string; outcome_sensitive: boolean; detail?: string }
+export interface AwsCell { outcome: string; deny_kind?: string; fidelity: string; fidelity_reasons: AwsReason[]; residual: string | null }
+export interface AwsGap { kind: string; source_arn: string; policy_kind: string; code: string; detail: string; scope: string }
+export interface AwsCan {
+  decision: { outcome: string; fidelity: string; steps: unknown[] };
+  explanation_id: string;
+  summary: string;
+  narrative: string;
+  snapshot: { id: string; taken_at: string };
+  profile: string;
+  collection_gaps: AwsGap[];
+}
+export interface AwsPolicyChange { op: string; target_arn: string; document?: string | null; policy_arn?: string | null }
+export interface AwsDiffChange {
+  principals: string[]; actions: string[]; resources: string[];
+  action_count: number; resource_count: number;
+  kind: "gained" | "lost" | "conditional_changed" | "fidelity_changed";
+  before: AwsCell | null; after: AwsCell | null; trace: string[]; used_days_ago: number | null; gap: boolean;
+}
+export interface AwsSimulation {
+  base_snapshot: string; head_snapshot: string; profile: string; catalog_version: string; engine_version: string;
+  summary: { gained: number; lost: number; conditional_changed: number; fidelity_changed: number; principals_affected: number };
+  changes: AwsDiffChange[]; omitted_changes: number; comment: string; collection_gaps: AwsGap[];
+  pr_comment: { status: string; url?: string; error?: string };
+}
+
+export const awsCan = (principal: string, action: string, resource: string, profile = "default") =>
+  api<AwsCan>(`/aws/can?${new URLSearchParams({ principal, action, resource, profile })}`);
+
+export const awsSimulate = (changes: AwsPolicyChange[], head?: string, pullNumber?: number) =>
+  api<AwsSimulation>("/aws/simulate-policy-change", {
+    changes,
+    ...(head ? { head } : {}),
+    ...(pullNumber ? { comment: { pull_number: pullNumber } } : {}),
+  });
 // ------------------------------------------------------------ SIEM sinks (#169)
 
 export type SiemKind = "syslog" | "webhook";
@@ -2295,9 +2473,9 @@ export type ChangeStatus = "pending_approval" | "cooling_off" | "applied" | "rej
 /** The change types of design §15.2 that the API accepts. */
 export type ChangeType =
   | "role.grant" | "role.revoke" | "idp_connection.create" | "idp_connection.update_trust" | "idp_connection.update_cosmetic"
-  | "idp_connection.disable" | "tenant.settings.update" | "tenant.security_contacts.update";
+  | "idp_connection.disable" | "tenant.settings.update" | "tenant.security_contacts.update" | "breakglass.register" | "breakglass.revoke";
 
-interface AdminPersonRef { id: string; display_name: string }
+export interface AdminPersonRef { id: string; display_name: string }
 
 export interface AdminChange {
   id: string; type: ChangeType; summary: string; status: ChangeStatus; target_id: string | null; two_person: boolean;
@@ -2309,7 +2487,7 @@ export interface AdminChange {
 }
 
 export interface AdminNotification {
-  id: string; kind: string; recipient_type: "admin" | "contact" | "operator"; recipient: string; subject: string;
+  id: string; kind: string; severity: "info" | "critical"; recipient_type: "admin" | "contact" | "operator"; recipient: string; subject: string;
   change_request_id: string | null; recovery_id: string | null; created_at: string; delivered_at: string | null;
 }
 
@@ -2358,6 +2536,51 @@ export const adminChanges = {
   activateConnection: (id: string) => api<{ id: string; status: string }>(`/admin/idp-connections/${id}/activate`, {}),
   disableUser: (id: string, reason: string) => api<{ id: string; status: string }>(`/admin/users/${id}/disable`, { reason }),
   cancelRecovery: (id: string) => api<AdminRecovery>(`/admin/recovery/${id}/cancel`, {}),
+};
+
+// ------------------------------------------------------------ break-glass (design §9.6, §15.4)
+
+/** A WebAuthn options document as the API sends it (go-webauthn JSON: binary values are base64url). */
+export type WebAuthnOptionsJSON = { publicKey: Record<string, any> };
+
+export interface BreakGlassKey {
+  id: string; user_id: string; user: string; label: string; custodian: string; aaguid: string; attestation_format: string;
+  attestation_trust: "basic" | "attca" | "mds_verified"; transports: string[]; change_request_id: string; created_at: string;
+  last_used_at: string | null; revoked_at: string | null;
+}
+
+/** An applied breakglass.register request whose key has not been registered yet (24 h window). */
+export interface BreakGlassEnrolment {
+  change_request_id: string; user_id: string; label: string; custodian: string; requested_by: AdminPersonRef; window_closes_at: string;
+}
+
+/** One break-glass sign-in, open until an admin says why it happened. */
+export interface BreakGlassUse {
+  id: string; session_id: string; credential_id: string; key: string; used_at: string; ip: string | null; answered: boolean;
+  answered_at: string | null; answered_by: AdminPersonRef | null; reason: string | null;
+}
+
+/** What a break-glass session may do (§15.4). */
+export type BreakGlassAction = "idp_connection.disable" | "idp_connection.update_trust" | "role.grant" | "sessions.revoke_all";
+
+export interface BreakGlassOverview {
+  available: boolean; keys: BreakGlassKey[]; open_enrolments: BreakGlassEnrolment[]; uses: BreakGlassUse[]; unanswered_uses: number;
+  aaguid_allowlist: string[]; actions: BreakGlassAction[];
+}
+
+/** Break-glass calls. Registration is an admin's (step-up); the actions are the break-glass session's alone. */
+export const breakGlass = {
+  registrationOptions: (changeRequestId: string) =>
+    api<WebAuthnOptionsJSON>("/admin/break-glass/registration/options", { change_request_id: changeRequestId }),
+  registrationVerify: (changeRequestId: string, credential: unknown) =>
+    api<BreakGlassKey>("/admin/break-glass/registration/verify", { change_request_id: changeRequestId, credential }),
+  action: (action: BreakGlassAction, payload: Record<string, unknown> = {}) =>
+    api<{ action: BreakGlassAction; revoked_sessions: number; change_request?: AdminChange }>(`/admin/break-glass/actions/${action}`, payload),
+  attest: (useId: string, reason: string) => api<BreakGlassUse>(`/admin/break-glass/uses/${useId}/attest`, { reason }),
+  /** The sign-in page's two calls (no session yet): options for the tenant's keys, then the signed assertion. */
+  signInOptions: (tenant: string) => api<WebAuthnOptionsJSON>("/auth/break-glass/options", { tenant }),
+  signIn: (tenant: string, credential: unknown) =>
+    api<{ ok: boolean; redirect: string; expires_at: string; idle_timeout_s: number }>("/auth/break-glass/verify", { tenant, credential }),
 };
 
 /** Seconds as "24 h", "5 min" for the cooling-off column. */

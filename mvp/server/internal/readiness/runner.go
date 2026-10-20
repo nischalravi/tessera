@@ -301,7 +301,7 @@ func (s *Service) execute(ctx context.Context, b *Bundle, opts RunnerOptions, no
 					status = "rate_limited"
 				}
 			}
-			if r.status != checks.Pass && r.status != checks.Warn {
+			if r.status != checks.Pass && r.status != checks.Warn && !b.attestedInstead(ie, v, r, now) {
 				allOK = false
 			}
 			out = append(out, r)
@@ -309,6 +309,20 @@ func (s *Service) execute(ctx context.Context, b *Bundle, opts RunnerOptions, no
 		liveOK[ie.ID] = allOK
 	}
 	return out, status
+}
+
+// attestedInstead reports whether a result the system could not answer is
+// covered by a current attestation, so dependants may run. Simulated results
+// never count for a real connector type.
+func (b *Bundle) attestedInstead(ie *ItemEval, v template.Verify, r runResult, now time.Time) bool {
+	if v.OnUnsupported != template.Attestation || r.status != checks.Skipped || (r.simulated && !IsDemoType(b.Conn.ConnectorType)) {
+		return false
+	}
+	if u, _ := r.observed["unsupported"].(bool); !u {
+		return false
+	}
+	ok, _ := liveAttestationFresh(b.Evidence.LiveAttestations[ie.ID], ie.ItemHash, now, b.LiveTTL)
+	return ok
 }
 
 func paramsKey(p map[string]any) string {

@@ -98,6 +98,8 @@ var tables = []string{
 	"api_clients", "device_grants", "refresh_tokens",
 	// admin changes, admin notifications, operator recovery (schema/0008_admin_changes.sql)
 	"tenant_recoveries", "admin_change_requests", "admin_notifications",
+	// break-glass keys, WebAuthn challenges and uses (schema/0009_breakglass.sql)
+	"break_glass_credentials", "break_glass_challenges", "break_glass_uses",
 	// audit ledger (schema/0004_audit.sql)
 	"audit_events", "audit_chain_heads", "audit_checkpoints",
 	// deployment readiness (schema/0201-0203; revoked_grants is 0204)
@@ -112,8 +114,10 @@ var tables = []string{
 	"job_runs",
 	// closed-loop provisioning (schema/0282-0283)
 	"provisioning_targets", "provisioning_ops", "provisioning_findings",
-	// sealed connection credentials (schema/0205)
-	"connection_secrets",
+	// sealed connection credentials (schema/0345_connection_credentials.sql)
+	"connection_credentials",
+	// role memberships in reviews (schema/0340_review_role_memberships.sql)
+	"business_role_exclusions", "review_item_roles", "review_template_roles",
 	// account correlation (schema/0204_correlation.sql)
 	"account_links", "identity_merges",
 	// identity model for guests (schema/0226_identity_model.sql)
@@ -139,8 +143,21 @@ var tables = []string{
 	"email_messages",
 	// sponsorships and invitations (schema/0227_sponsorships.sql)
 	"intake_records", "sponsorships", "sponsorship_events",
-	// identity containment (schema/0205_containment.sql)
-	"containment_credentials", "containment_retries",
+	// identity containment (schema/0206_containment_retries.sql)
+	"containment_retries",
+	// attestation instead of an unsupported live check (schema/0343_live_attestations.sql)
+	"readiness_live_attestations",
+	// two-person activation (schema/0351_activation_requests.sql)
+	"connection_activation_requests",
+	// directory agent (schema/0250_directory_agents.sql)
+	"directory_agents", "agent_enrolments",
+	// AWS evaluator (schema/0319_aws_snapshots.sql)
+	"aws_connectors", "aws_snapshots", "aws_policy_documents", "aws_policy_attachments", "aws_org_nodes",
+	"aws_snapshot_entities", "aws_collection_findings", "aws_trust_edges", "aws_effective_permissions", "aws_explanations",
+	// AWS evaluator MVP integration (schema/0321_aws_integration.sql)
+	"aws_edge_evaluations", "aws_pr_comment_settings",
+	// flat-file import for disconnected apps (schema/0352_flatfile.sql)
+	"flatfile_mappings", "flatfile_uploads", "flatfile_upload_errors", "flatfile_changes", "flatfile_records", "flatfile_tasks",
 	// connector sync checkpoints (schema/0360_connector_checkpoints.sql)
 	"connector_checkpoints",
 	// point-in-time access and evidence packs (schema/0260-0261)
@@ -167,8 +184,10 @@ var tables = []string{
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was
-// the mutable audit table before the hash-chained ledger (PR3).
-var legacyTables = []string{"audit_log"}
+// the mutable audit table before the hash-chained ledger (PR3);
+// connection_secrets and containment_credentials were merged into
+// connection_credentials (#220, see MigrateCredentials).
+var legacyTables = []string{"audit_log", "connection_secrets", "containment_credentials"}
 
 // DB owns the database handle. The *sql.DB is unexported and there is no
 // accessor: no other package can obtain a *sql.DB, *sql.Tx or *sql.Conn.
@@ -364,7 +383,15 @@ func (d *DB) legacySchema(ctx context.Context) (bool, error) {
 			return true, nil
 		}
 	}
-	return false, nil
+	// admin_change_requests from before break-glass (PR13) has a type CHECK
+	// that refuses breakglass.*, and SQLite cannot widen a CHECK in place.
+	var def sql.NullString
+	err := d.sql.QueryRowContext(ctx,
+		`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'admin_change_requests'`).Scan(&def)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, err
+	}
+	return def.Valid && !strings.Contains(def.String, "breakglass.register"), nil
 }
 
 // InTenant runs fn in one write transaction scoped to t. A zero tenancy.ID or

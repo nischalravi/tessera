@@ -10,7 +10,7 @@ import {
   Checklist, ChecklistItem, ConnConfig, Connection, DryRunView, RunView, readiness, useApi,
 } from "../../../api";
 import {
-  Badge, Button, Callout, ChecklistPanel, EmptyState, Kpi, Loading, Page, ReasonDialog, Step, Stepper, useConfirm, useToast,
+  Badge, Button, Callout, AttestInsteadDialog, ChecklistPanel, EmptyState, Kpi, Loading, Page, ReasonDialog, Step, Stepper, useConfirm, useToast,
 } from "../../../components";
 import {
   BlockerList, CONNECTOR_TYPES, GateCallout, STATE_LABEL, ScoreCell, SimulatedBadge, StateBadge, observedText, useAction,
@@ -386,7 +386,7 @@ export function ConnectionDetail() {
   const { data: conn, error, reload } = useApi<Connection>(`/connections/${id}`);
   const { data: cl, reload: reloadCl } = useApi<Checklist>(`/connections/${id}/checklist`);
   const toast = useToast();
-  const [dialog, setDialog] = useState<{ kind: "attest" | "skip"; item: ChecklistItem } | null>(null);
+  const [dialog, setDialog] = useState<{ kind: "attest" | "attest_instead" | "skip"; item: ChecklistItem } | null>(null);
   const focus = params.get("item");
   const current = (params.get("step") as StepId | null) ?? (conn ? defaultStep(conn.state) : "connect");
   const setStep = (s: string) => setParams((p) => { const n = new URLSearchParams(p); n.set("step", s); n.delete("item"); return n; }, { replace: true });
@@ -448,6 +448,7 @@ export function ConnectionDetail() {
               focusItem={focus}
               score={conn.score ? <ScoreCell score={conn.score.score} band={conn.score.band} /> : undefined}
               onAttest={(item) => setDialog({ kind: "attest", item })}
+              onAttestInstead={(item) => setDialog({ kind: "attest_instead", item })}
               onSkip={(item) => setDialog({ kind: "skip", item })}
               onUnskip={async (item) => {
                 try {
@@ -464,6 +465,18 @@ export function ConnectionDetail() {
       </div>
       {dialog?.kind === "attest" && (
         <ReasonDialog title={`Attest: ${dialog.item.title}`} body={dialog.item.why} label="Note (what you checked, ideally with a change ticket)" minLength={10} confirmLabel="Attest" onCancel={() => setDialog(null)} onSubmit={submit} />
+      )}
+      {dialog?.kind === "attest_instead" && (
+        <AttestInsteadDialog
+          item={dialog.item}
+          onCancel={() => setDialog(null)}
+          onSubmit={async (body) => {
+            await readiness.attestInstead(conn.id, dialog.item.id, body);
+            toast(`Attested instead of the live check: ${dialog.item.title}`);
+            setDialog(null);
+            refresh();
+          }}
+        />
       )}
       {dialog?.kind === "skip" && (
         <ReasonDialog title={`Skip: ${dialog.item.title}`} body="A skipped Recommended item earns no score and stays visible as a known gap until its review date." label="Reason" minLength={20} confirmLabel="Skip with reason" date={{ label: "Review by (optional)", hint: "Defaults to 90 days. The skip expires then and the item needs attention again." }} onCancel={() => setDialog(null)} onSubmit={submit} />
