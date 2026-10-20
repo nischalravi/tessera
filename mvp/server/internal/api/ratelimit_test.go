@@ -25,7 +25,8 @@ import (
 
 // noRateLimits is for tests that send many anonymous requests on purpose.
 var noRateLimits = RateLimits{Anonymous: RateLimit{Every: time.Nanosecond, Burst: 1 << 20},
-	Auth: RateLimit{Every: time.Nanosecond, Burst: 1 << 20}}
+	Auth:  RateLimit{Every: time.Nanosecond, Burst: 1 << 20},
+	OAuth: RateLimit{Every: time.Nanosecond, Burst: 1 << 20}}
 
 func fromIP(r *http.Request, addr string) *http.Request {
 	r.RemoteAddr = addr

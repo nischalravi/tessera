@@ -421,6 +421,10 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `POST /api/accounts/{id}/link {identity_id, reason}` · `POST /api/accounts/{id}/not-person {reason}` ·
 `DELETE /api/accounts/{id}/link` · `POST /api/identities/{id}/merge {into, reason}` ·
 `GET /api/identity-merges` · `POST /api/identity-merges/{id}/unmerge {reason}` ·
+`GET|POST /api/mcp/clients` · `PUT /api/mcp/clients/{id}` · `GET|POST /api/mcp/resources` ·
+`PUT /api/mcp/resources/{id}` · `GET /api/mcp/tokens` · `POST /api/mcp/tokens/{jti}/revoke` ·
+`GET /api/mcp/decisions` · `GET /api/mcp/authorizations/{id}` · `POST /api/mcp/authorizations/{id}/decision`
+(agent authorization, see "MCP authorization server"; the OAuth endpoints live under `/t/{slug}/`)
 `GET /api/access/as-of?resource=&date=` · `GET|POST /api/evidence/packs` ·
 `GET /api/evidence/packs/{id}` · `GET /api/evidence/packs/{id}/download` (see "Point-in-time access and evidence packs")
 `GET|POST /api/reviews/schedules` · `PUT /api/reviews/schedules/{id}` · `POST /api/reviews/schedules/{id}/run` (an unknown `system` is 422 `invalid_system`; a second run in the same second is 409 `already_launched`; a schedule with no grants in scope creates no campaign, audits `review.schedule.skipped` and answers 200 `{skipped, reason}`) ·
@@ -1563,6 +1567,67 @@ the run failed. Provider calls go through `internal/safehttp`.
   sessions: those re-reads cover refresh tokens and say so in the step's notes. `rotate_secret`
   still only stamps a timestamp.
 
+### MCP authorization server (agent authorization)
+
+An OAuth 2.1 authorization server for MCP clients (MCP authorization spec 2025-11-25; issue #115;
+packages `server/internal/mcpauth`, `api/mcp_oauth.go`, `api/mcp_admin.go`; schema `0356_mcp_authz.sql`).
+Each tenant is its own issuer, `{TESSERA_PUBLIC_URL}/t/{slug}/mcp`: apart from the CLI and
+machine-client authorization server (`internal/oauth`, issuer `/t/{slug}`), so their routes never collide
+and neither accepts the other's tokens (both check `iss`; they share the tenant's signing key). Tokens are ES256 JWTs (`typ at+jwt`)
+signed with the tenant's `access_token` key from `internal/keys`; there are no refresh tokens.
+
+| Endpoint | What |
+| --- | --- |
+| `GET /t/{slug}/mcp/.well-known/oauth-authorization-server` | RFC 8414 metadata: PKCE `S256` only, `client_id_metadata_document_supported`, `authorization_response_iss_parameter_supported` |
+| `GET /t/{slug}/mcp/.well-known/oauth-protected-resource/{id}` | RFC 9728 metadata of a registered resource server |
+| `GET /t/{slug}/mcp/.well-known/jwks.json` | access-token public keys |
+| `GET /t/{slug}/mcp/oauth/authorize` | needs the browser session; checks the request, stores it and sends the user to Agent authorization (`?consent=`) to approve (step-up) |
+| `POST /t/{slug}/mcp/oauth/token` | `authorization_code` (PKCE S256, `resource` required, single-use code) and RFC 8693 token exchange |
+| `POST /t/{slug}/mcp/oauth/introspect`, `POST /t/{slug}/mcp/oauth/decisions` | for resource servers (HTTP Basic: resource id and secret): is the token live and for me; may it call this tool |
+| `POST /t/{slug}/mcp/oauth/revoke` | RFC 7009, by the token's holder |
+
+- **Clients** are identified by a client ID metadata document URL (https, with a path). The document
+  is fetched through `internal/safehttp` (no redirects, size cap 16 KiB, `application/json`, its
+  `client_id` must equal the URL), validated and cached for one hour in `mcp_clients`. A client is
+  `pending` and unusable until an administrator (`agents.manage`, step-up) binds it to an `ai_agent`
+  identity (the agent's permissions are the ceiling) and activates it. A changed redirect list or key
+  set sets an active client back to pending and revokes its tokens.
+- **Scope** names a graph permission: `<system>:<action>:<resource>` (for example
+  `snowflake:SELECT:snowflake/CUSTOMERS`). A token's scope is `user ∩ agent ∩ task` (and, on
+  exchange, `∩` the subject token's scope), computed from the graph at issue time. An empty result
+  is denied; a request is narrowed, never widened. The user must also hold an unexpired delegation
+  to the agent (`agent_delegations`). A permission whose names hold spaces has no scope name and is
+  never granted.
+- **Token exchange** takes a Tessera user token as `subject_token` and, as `actor_token`, a JWT the
+  client signed with a key in its own metadata document (`iss = sub = client_id`, `aud` the issuer,
+  five minutes at most, `jti` used once). The result has `sub` = the user, `act` = the agent (nested
+  after the subject token's actors, at most 3 deep, no repeats), `aud` = the one `resource`, `jti`,
+  and a lifetime of 5 minutes at most. The acting agent may only re-issue a token for the same
+  resource (another resource needs a different actor in the chain). The subject token's client,
+  agent and user must still be active, and the client's cached metadata (its keys) is refreshed
+  first when its one-hour cache has expired (`RefreshActorClient`; a failed refresh fails closed).
+- **Resource servers** (`/api/mcp/resources`) must be registered; a token is only issued for one.
+  Registration shows a secret once; only its SHA-256 is stored.
+- **Decisions**: every issue, exchange, denial, revocation and tool-call decision is a row in
+  `mcp_decisions` and an audit event (`mcp.token.issue`, `mcp.token.exchange`, `mcp.token.deny`,
+  `mcp.token.revoke`, `mcp.tool_call.decision`, `mcp.authorize.*`, `mcp.client.*`, `mcp.resource.*`)
+  written in the same transaction, with the policy version (a digest of the policy documents).
+- **Kill switch**: `POST /api/identities/{id}/contain` first revokes every live token whose agent or
+  user is that identity (`mcp.tokens.revoke_identity`), before any provider call. In the same
+  transaction it marks the identity contained (`mcp_contained`, schema 0357), disables the clients
+  bound to it and denies its pending and approved authorization requests, so no code redeems, no
+  authorization starts and no exchange succeeds for it (as agent or as user) until an operator lifts
+  the containment. Introspection also checks the token's row, the client, the agent and the user on
+  every call. A client that is not active never gets an authorization redirect (400 page instead).
+- **Rate limits**: every `/t/{slug}/mcp/oauth/*` path has a per-IP bucket (default burst 40, one per
+  250 ms) before the audit middleware, on top of the anonymous limit.
+- **UI**: Protection → Agent authorization (`/agents/authorization`): registered clients (bind and
+  activate), active tokens per agent (revoke), the decision log and resource servers. In dev the
+  Vite proxy forwards `/t/{slug}/mcp/oauth/*` and `/t/{slug}/mcp/.well-known/*` to the API.
+- Deferred: `jwks_uri` client keys, `private_key_jwt` at the token endpoint for the browser grant,
+  DPoP sender-constrained tokens, a sign-in redirect for an unauthenticated authorize request
+  (the user signs in to the admin center first), re-checking the graph on every tool call, and
+  root-path protected resource metadata.
 ### Shared Signals receiver (SSF, CAEP, RISC)
 
 A revocation at one provider should reach the others. Tessera receives OpenID Shared Signals

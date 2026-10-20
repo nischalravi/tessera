@@ -37,6 +37,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/helpdesk"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
+	"github.com/nischalravi/tessera/mvp/server/internal/mcpauth"
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/oauth"
 	"github.com/nischalravi/tessera/mvp/server/internal/obs"
@@ -241,6 +242,8 @@ type Server struct {
 	provSeal  *seal.Sealer // cfg.Sealer, or a per-process key when it is nil
 	// containment is the kill switch (issue #106); never nil.
 	containment *containment.Service
+	// mcp is the MCP authorization server (issue #115); never nil.
+	mcp *mcpauth.Service
 	// ssf is the Shared Signals receiver (issue #114); never nil.
 	ssf *ssf.Service
 	// aws holds the AWS evaluator's engines and explanations (aws_eval.go).
@@ -333,6 +336,8 @@ func New(cfg Config) *Server {
 	}
 	s := &Server{cfg: cfg, ssf: cfg.SSF, containment: cfg.Containment, helpdesk: cfg.Helpdesk, signals: cfg.DeviceSignals, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
 		agents: cfg.Agents, limits: newLimiters(cfg.RateLimits), provSeal: provSeal}
+	s.mcp = &mcpauth.Service{HTTP: cfg.OutboundHTTP, AllowLoopback: cfg.Env == "dev", Sealer: cfg.Sealer, Clock: func() time.Time { return s.clock() },
+		PolicyVersion: s.policyVersion}
 	s.prov = &provision.Engine{DB: cfg.Store, Sealer: provSeal, HTTP: cfg.Outbound,
 		Clock: func() time.Time { return s.clock() }, Log: cfg.Logger.With("component", "provisioning")}
 	s.admin = &admin.Service{DB: cfg.Store, Clock: func() time.Time { return s.clock() }, Sealer: cfg.Sealer,
@@ -410,6 +415,7 @@ func New(cfg Config) *Server {
 	s.registerNotificationRoutes()
 	s.registerEmailRoutes()
 	s.registerContainmentRoutes()
+	s.registerMCPRoutes()
 	s.registerSSFRoutes()
 	s.registerFlatfileRoutes()
 	s.registerEvidenceRoutes()

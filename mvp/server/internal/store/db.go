@@ -146,6 +146,9 @@ var tables = []string{
 	"email_messages",
 	// sponsorships and invitations (schema/0227_sponsorships.sql)
 	"intake_records", "sponsorships", "sponsorship_events",
+	// MCP authorization server (schema/0356_mcp_authz.sql)
+	"mcp_resources", "mcp_clients", "mcp_auth_requests", "mcp_tokens", "mcp_decisions", "mcp_actor_jtis",
+	"mcp_contained", // schema/0357_mcp_contained.sql
 	// identity containment (schema/0206_containment_retries.sql)
 	"containment_retries",
 	// attestation instead of an unsupported live check (schema/0343_live_attestations.sql)

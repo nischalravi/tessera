@@ -218,6 +218,25 @@ POST   /api/identities/{identity_id}/enable          identities.contain STEP_UP_
 GET    /api/identities/{identity_id}/disables        graph.read      -  # wire-previews
 POST   /api/containment-retries/{retry_id}/retry-now identities.contain STEP_UP_POLICY  # issue #106
 PUT    /api/connections/{id}/containment-credential  connections.manage STEP_UP_POLICY  # issue #106
+GET    /t/{slug}/mcp/.well-known/oauth-authorization-server public  # issue #115
+GET    /t/{slug}/mcp/.well-known/oauth-protected-resource/{resource_id} public  # issue #115
+GET    /t/{slug}/mcp/.well-known/jwks.json           public  # issue #115
+POST   /t/{slug}/mcp/oauth/token                     public  # issue #115
+POST   /t/{slug}/mcp/oauth/introspect                public  # issue #115
+POST   /t/{slug}/mcp/oauth/revoke                    public  # issue #115
+POST   /t/{slug}/mcp/oauth/decisions                 public  # issue #115
+GET    /t/{slug}/mcp/oauth/authorize                 auth.self       -  # issue #115
+GET    /api/mcp/authorizations/{id}                  auth.self       -  # issue #115
+POST   /api/mcp/authorizations/{id}/decision         auth.self       STEP_UP_POLICY  # issue #115
+GET    /api/mcp/clients                              graph.read      -  # issue #115
+POST   /api/mcp/clients                              agents.manage   STEP_UP_POLICY  # issue #115
+PUT    /api/mcp/clients/{id}                         agents.manage   STEP_UP_POLICY  # issue #115
+GET    /api/mcp/resources                            graph.read      -  # issue #115
+POST   /api/mcp/resources                            agents.manage   STEP_UP_POLICY  # issue #115
+PUT    /api/mcp/resources/{id}                       agents.manage   STEP_UP_POLICY  # issue #115
+GET    /api/mcp/tokens                               graph.read      -  # issue #115
+POST   /api/mcp/tokens/{jti}/revoke                  agents.manage   STEP_UP_POLICY  # issue #115
+GET    /api/mcp/decisions                            graph.read      -  # issue #115
 GET    /api/ssf/transmitters                         graph.read      -  # issue #114
 GET    /api/ssf/transmitters/{id}                    graph.read      -  # issue #114
 GET    /api/ssf/events                               graph.read      -  # issue #114
