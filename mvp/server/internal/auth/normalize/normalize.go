@@ -66,6 +66,8 @@ const (
 	GenericSAML   = "generic_saml"
 	GitHub        = "github"
 	GenericOAuth2 = "generic_oauth2"
+	GenericCAS    = "generic_cas"
+	ADFS          = "adfs"
 	DevMock       = "dev_mock"
 )
 
@@ -112,7 +114,12 @@ type Mapping struct {
 	PhrhClassRefs []string `json:"phrh_authn_context_class_refs,omitempty"`
 	AAL2ClassRefs []string `json:"aal2_authn_context_class_refs,omitempty"`
 	AMRAttribute  string   `json:"amr_attribute,omitempty"`
-	// DevEmulation pins the dev_mock emulation (okta | entra | generic | saml | github);
+	// Names of the claims (OIDC) or attributes (SAML) that carry the device
+	// posture (issue #163); see Device. Defaults device_managed and
+	// device_compliant.
+	DeviceManagedClaim   string `json:"device_managed_claim,omitempty"`
+	DeviceCompliantClaim string `json:"device_compliant_claim,omitempty"`
+	// DevEmulation pins the dev_mock emulation (okta | entra | generic | saml | github | cas | wsfed);
 	// empty infers it from the claims.
 	DevEmulation string `json:"dev_emulation,omitempty"`
 }
@@ -179,6 +186,8 @@ type Result struct {
 	MappingProfile    string
 	MappingVersion    int
 	ClaimsSHA256      string
+	// Device is the device posture the IdP asserted (Device).
+	Device Device
 }
 
 // Normalize applies the connection's profile to validated claims.
@@ -196,8 +205,11 @@ func Normalize(conn Connection, req Requested, c Claims) (Result, error) {
 		r, err = entra(conn, req, c, conn.Profile == DevMock)
 	case GenericOIDC, Google:
 		r, err = generic(conn, req, c)
-	case GenericSAML:
+	case GenericSAML, ADFS: // ADFS (WS-Federation): a SAML 2.0 assertion; class refs requested through wauth
 		r, err = saml(conn, req, c)
+	case GenericCAS: // attributes only (no class ref): amr_attribute + phr_amr; a CAS login is at least AAL1
+		r, err = saml(conn, Requested{}, Claims{Subject: c.Subject, Attributes: c.Attributes})
+		r.AAL = max(r.AAL, 1)
 	case GitHub, GenericOAuth2:
 		r = Result{Subject: c.Subject, AAL: 1} // oauth2: nothing proves the factor
 	default:
@@ -217,6 +229,7 @@ func Normalize(conn Connection, req Requested, c Claims) (Result, error) {
 		r.PhishingResistant, r.PhrBasis = true, BasisAttestation
 	}
 	r.AuthTime = c.AuthTime.UTC()
+	r.Device = deviceFrom(conn.Mapping, c)
 	r.MappingProfile, r.MappingVersion = conn.Profile, Version
 	if conn.Profile == DevMock {
 		r.MappingProfile = DevMock + "/" + profile
@@ -278,6 +291,10 @@ func devEmulation(m Mapping, c Claims) string {
 		return GenericSAML
 	case "github":
 		return GitHub
+	case "cas":
+		return GenericCAS
+	case "wsfed":
+		return ADFS
 	}
 	switch {
 	case c.ClassRef != "" || c.Attributes != nil: // a SAML assertion (the dev IdP's SAML endpoints)

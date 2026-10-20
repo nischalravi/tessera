@@ -115,7 +115,7 @@ func loginConnections(tx *store.TenantTx) ([]*store.IdPConnection, error) {
 	}
 	out := cs[:0]
 	for _, c := range cs {
-		if c.Status == "active" && (c.Protocol == "oidc" || c.Protocol == "saml" || c.Protocol == "oauth2") {
+		if c.Status == "active" && (c.Protocol == "oidc" || c.Protocol == "saml" || c.Protocol == "oauth2" || c.Protocol == "cas" || c.Protocol == "wsfed") {
 			out = append(out, c)
 		}
 	}
@@ -271,7 +271,7 @@ func requestedAuthn(c *store.IdPConnection, acr string) (authnorm.Requested, str
 	}
 	if err := json.Unmarshal(c.StepUpRequest, &m); err == nil {
 		if e, ok := m[acr]; ok {
-			if c.Protocol == "saml" {
+			if c.Protocol == "saml" || c.Protocol == "wsfed" {
 				return authnorm.Requested{ClassRefs: e.ClassRefs}, ""
 			}
 			req := authnorm.Requested{ACRValues: strings.Fields(e.ACRValues)}
@@ -283,7 +283,7 @@ func requestedAuthn(c *store.IdPConnection, acr string) (authnorm.Requested, str
 			return req, claims
 		}
 	}
-	if c.Protocol == "saml" {
+	if c.Protocol == "saml" || c.Protocol == "wsfed" {
 		return authnorm.Requested{}, "" // nothing requested: phr only by attestation (rule 4) or amr attribute
 	}
 	switch c.Profile {
@@ -353,6 +353,10 @@ func (s *Server) startLogin(w http.ResponseWriter, r *http.Request, t store.Tena
 		return s.startSAMLLogin(w, r, t, c, ls)
 	case "oauth2":
 		return s.startOAuth2Login(w, r, t, c, ls)
+	case "cas":
+		return s.startCASLogin(w, r, t, c, ls)
+	case "wsfed":
+		return s.startWSFedLogin(w, r, t, c, ls)
 	}
 	purpose, returnTo, acr, invitation := ls.purpose, ls.returnTo, ls.acr, ls.invitation
 	if s.rp == nil {
@@ -495,7 +499,7 @@ func (s *Server) bootstrapRedeem(w http.ResponseWriter, r *http.Request, p *para
 		if conn, err = tx.IdPConnection(inv.IdPConnectionID); err != nil {
 			return err
 		}
-		if conn.Status != "active" || (conn.Protocol != "oidc" && conn.Protocol != "saml") {
+		if conn.Status != "active" || (conn.Protocol != "oidc" && conn.Protocol != "saml" && conn.Protocol != "cas" && conn.Protocol != "wsfed") {
 			reason = "unknown_connection"
 		}
 		return nil
@@ -592,8 +596,8 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request, p *params)
 		case err != nil:
 		case conn.Status != "active" && !(txn.Purpose == "test" && conn.Status == "pending"):
 			reason = "connection_disabled" // a test sign-in is the one use of a pending connection
-		case (conn.Protocol == "oauth2") != strings.HasPrefix(r.URL.Path, "/api/auth/oauth2/"):
-			reason = "connection_mismatch" // an OIDC transaction at the OAuth 2.0 callback or the reverse
+		case !strings.HasPrefix(r.URL.Path, "/api/auth/"+conn.Protocol+"/"):
+			reason = "connection_mismatch" // a transaction of another protocol at this callback
 		}
 		return err
 	}); err != nil {
@@ -609,8 +613,11 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request, p *params)
 		}
 		return s.callbackFailure(w, r, txn, tid, reason, extra)
 	}
-	if conn.Protocol == "oauth2" {
+	switch conn.Protocol {
+	case "oauth2":
 		return s.finishOAuth2Callback(w, r, tenant, conn, txn)
+	case "cas":
+		return s.finishCASCallback(w, r, tenant, conn, txn)
 	}
 	rc, err := s.rpConnection(tid, conn)
 	if err != nil {
@@ -752,10 +759,34 @@ func (s *Server) finishLogin(w http.ResponseWriter, r *http.Request, tenant stor
 		return s.loginFailure(w, r, tenant.ID, reason, ojson.Object{{Key: "connection_id", Value: conn.ID.String()},
 			{Key: "subject", Value: truncate(res.Subject, 128)}})
 	}
+	// Conditional access (issue #163): the tenant's sign-in policies see the
+	// client address and the IdP's device claims. The operator bootstrap is
+	// exempt, so a policy can never block the recovery of a tenant.
+	var accessDetail ojson.KV
+	if txn.Purpose != "bootstrap" {
+		var uid *uuid.UUID
+		if user != nil {
+			uid = &user.ID
+		}
+		dec, err := s.signinAccess(ctx, tenant.ID, r, uid, res)
+		if err != nil {
+			return nil, err
+		}
+		if dec.Evaluated > 0 {
+			accessDetail = ojson.KV{Key: "conditional_access", Value: dec.Audit()}
+		}
+		if why := signinRefusal(dec, res, now); why != "" {
+			return s.loginFailure(w, r, tenant.ID, why, ojson.Object{{Key: "connection_id", Value: conn.ID.String()},
+				{Key: "subject", Value: truncate(res.Subject, 128)}, accessDetail})
+		}
+	}
 	groups := s.mappedGroupRoles(conn, tok.groups)
 	jitCreated := user == nil
 	o := loginOptions{via: conn.Protocol, protocol: conn.Protocol, purpose: txn.Purpose,
 		detail: ojson.Object{{Key: "jit_created", Value: jitCreated}}}
+	if accessDetail.Key != "" {
+		o.detail = append(o.detail, accessDetail)
+	}
 	if user == nil {
 		// a new user: its id is chosen now so the sign-in's events are
 		// attributed to it

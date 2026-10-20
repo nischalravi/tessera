@@ -1019,7 +1019,7 @@ type revokeResult struct {
 	Provisioning *provisioningRef `json:"provisioning,omitempty"`
 }
 
-func (s *Server) revoke(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+func (s *Server) revoke(w http.ResponseWriter, r *http.Request, p *params) (any, error) {
 	body, berrs, err := bodyModel(r, revokeFields, true)
 	if err != nil {
 		return nil, err
@@ -1033,14 +1033,21 @@ func (s *Server) revoke(_ http.ResponseWriter, r *http.Request, p *params) (any,
 // revokeEdge dry-runs or applies the revoke of one grant: applying needs
 // grants.revoke and a fresh phishing-resistant sign-in (checked here because
 // the requirement depends on the body, §16.2), a dry run only graph.read.
-func (s *Server) revokeEdge(r *http.Request, edgeID int64, dryRun bool) (*revokeResult, error) {
+func (s *Server) revokeEdge(r *http.Request, edgeID int64, dryRun bool) (any, error) {
 	pr := principal(r)
 	if !dryRun {
 		// Applying a revoke needs grants.revoke and a fresh phishing-resistant
 		// sign-in; a dry run needs only graph.read (the route's permission).
 		// Checked here because the requirement depends on the body (§16.2).
-		if d := auth.Check(pr, auth.PermGrantsRevoke, &auth.StepUpPolicy, s.clock()); d != nil {
-			return nil, denial{d}
+		d, err := s.accessCheck(r.Context(), r, store.TxFrom(r.Context()), pr, auth.PermGrantsRevoke, &auth.StepUpPolicy,
+			"POST /api/least-privilege/revoke")
+		if err != nil {
+			return nil, err
+		}
+		if d != nil {
+			// answered here, not as an error: the transaction commits, so the
+			// access.decision event of a conditional access refusal is kept
+			return deniedBody{d}, nil
 		}
 	}
 	c := store.TxFrom(r.Context())

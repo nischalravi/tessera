@@ -86,8 +86,7 @@ var pgSchemaFS embed.FS
 
 // tables in dependency order (parents first); Migrate(drop) drops them in reverse.
 var tables = []string{
-	"tenants", "platform_keys", "replay_cache", "tenant_signing_keys", "identities", "accounts", "groups", "resources", "permissions", "grant_edges", "secrets",
-	"revoked_grants", "agent_delegations", "usage_events", "access_requests", "review_campaigns", "review_items",
+	"tenants", "platform_keys", "replay_cache", "tenant_signing_keys", "identities", "accounts", "groups", "resources", "permissions", "grant_edges", "secrets", "revoked_grants", "agent_delegations", "usage_events", "access_requests", "review_campaigns", "review_items",
 	"hris_events",
 	// auth core (schema/0005_auth.sql)
 	"idp_connections", "platform_users", "external_logins", "role_assignments", "authn_contexts", "sessions",
@@ -106,6 +105,8 @@ var tables = []string{
 	"connections", "connection_revisions", "readiness_check_runs", "readiness_item_states", "readiness_attestations",
 	"readiness_skips", "readiness_overlays", "readiness_check_results", "recon_runs", "recon_findings", "readiness_scores",
 	"stg_identities", "stg_accounts", "stg_groups", "stg_memberships", "stg_attr_stats",
+	// conditional access (schema/0222)
+	"network_ranges", "access_policies", "device_compliance_signals",
 	// ownership (schema/0208_ownership.sql)
 	"ownerships",
 	// scheduled access reviews (schema/0316_review_schedules.sql)
@@ -170,6 +171,10 @@ var tables = []string{
 	"claim_proof_uses",
 	// readiness drift baselines (schema/0355_readiness_baselines.sql)
 	"readiness_baselines",
+	// frozen review populations and tenant settings (schema/0350_review_populations.sql)
+	"review_populations", "review_population_rows", "review_auto_decisions", "tenant_settings",
+	// verified help-desk resets (schema/0254_helpdesk.sql)
+	"helpdesk_cases", "helpdesk_verifications", "helpdesk_signals", "helpdesk_findings",
 	// SIEM sinks (schema/0210_siem.sql)
 	"siem_sinks", "siem_dead_letters",
 	// alerting (schema/0209_alerts.sql)

@@ -5,8 +5,6 @@ import (
 	"net/http"
 	"net/url"
 	"time"
-
-	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
 // Client is the provider JSON client of the revokers (safehttp transport, 429
@@ -38,22 +36,6 @@ func (c *Client) BasePath() string { return c.a.base.Path }
 
 // Esc escapes one path segment.
 func Esc(s string) string { return esc(s) }
-
-// CredentialFor returns the revocation credential of the live connection of
-// system, as the kill switch would use it. cred is nil when the system has no
-// live connection or no credential; why says when a stored credential cannot
-// be used (cannot be unsealed).
-func (s *Service) CredentialFor(c *store.TenantTx, system string) (cred *Credential, why string, err error) {
-	conns, err := liveConnections(c)
-	if err != nil {
-		return nil, "", err
-	}
-	cn := conns[system]
-	if cn == nil {
-		return nil, "", nil
-	}
-	return s.loadCredential(c, cn.ID)
-}
 
 // Outbound returns the service's outbound HTTP client and rate-limit sleep.
 func (s *Service) Outbound() (*http.Client, func(context.Context, time.Duration) error) {

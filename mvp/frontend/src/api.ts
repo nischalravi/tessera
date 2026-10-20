@@ -132,6 +132,8 @@ function errorMessage(status: number, j: any): string {
       return `You don't have permission to do this${j.permission ? ` (needs ${j.permission})` : ""}.`;
     case "csrf_failed":
       return "The request was refused as a possible cross-site request. Reload the page and try again.";
+    case "conditional_access_denied":
+      return "Your organization's conditional access policy does not allow this action from here. Ask an administrator, or try from an allowed network or device.";
     case "audit_unavailable":
       return "The audit log is unavailable, so Tessera refused the request. Try again shortly.";
     case "lookup_locked": {
@@ -218,7 +220,7 @@ async function send<T>(path: string, body: unknown, m: string, onStepUp: () => v
 // ------------------------------------------------------------ step-up (design §9.4, §17)
 
 /** An action that needs a fresh sign-in, kept across the IdP round trip (sessionStorage, ten minutes). */
-export interface PendingAction { method: string; path: string; body?: unknown; label: string; at: number }
+export interface PendingAction { method: string; path: string; body?: unknown; label: string; at: number; needsBody?: boolean }
 
 const PENDING = "tessera.pendingAction";
 /** A pending action older than this is discarded rather than resumed. */
@@ -237,16 +239,39 @@ export function carriesSecret(v: unknown, depth = 0): boolean {
   return Object.entries(v as Record<string, unknown>).some(([k, x]) => SECRET_KEY.test(k) || carriesSecret(x, depth + 1));
 }
 
-function savePendingAction(a: PendingAction): void {
-  // A request that carries a secret is never written to browser storage: after the step-up the user
-  // enters it again, as when storage is unavailable. An earlier pending action is dropped too, so the
-  // resume prompt never offers a different action than the one just refused.
-  if (carriesSecret(a.body)) {
-    clearPendingAction();
-    return;
+const PATH_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/-_.~%:,+@=&?!";
+const METHODS = ["POST", "PUT", "PATCH", "DELETE"];
+
+/** Copy s one character at a time out of PATH_ALPHABET: "" when s holds any other character. */
+function fromAlphabet(s: string): string {
+  let out = "";
+  for (const ch of s) {
+    const i = PATH_ALPHABET.indexOf(ch);
+    if (i < 0) return "";
+    out += PATH_ALPHABET[i];
   }
+  return out;
+}
+
+/** Request bodies kept in memory for a resume without a page reload; never written to browser storage. */
+const pendingBodies = new Map<string, unknown>();
+
+function savePendingAction(a: PendingAction): void {
+  // Browser storage holds only values rebuilt from constants: an allow-listed method, the path copied
+  // from a fixed alphabet, the label recomputed from that path, and a timestamp. The body stays in
+  // memory (pendingBodies), so a full page reload across the identity provider drops it and the user
+  // submits again; an action with an empty body ({}) needs none and resumes. An earlier pending
+  // action is dropped, so the resume prompt never offers a different action than the one just refused.
+  clearPendingAction();
+  const method = METHODS.find((m) => m === a.method);
+  const path = fromAlphabet(a.path);
+  if (!method || !path.startsWith("/") || carriesSecret(a.body)) return;
+  const needsBody = !(a.body === undefined || (typeof a.body === "object" && a.body !== null && Object.keys(a.body).length === 0));
+  if (needsBody) pendingBodies.set(PENDING, a.body);
+  const kept: PendingAction = { method, path, label: actionLabel(method, path), at: Date.now() };
+  if (needsBody) kept.needsBody = true;
   try {
-    sessionStorage.setItem(PENDING, JSON.stringify(a));
+    sessionStorage.setItem(PENDING, JSON.stringify(kept));
   } catch {
     /* storage unavailable: the user retries by hand after the step-up */
   }
@@ -254,6 +279,7 @@ function savePendingAction(a: PendingAction): void {
 
 /** Forget the pending action (the user declined to resume it, or it ran). */
 export function clearPendingAction(): void {
+  pendingBodies.delete(PENDING);
   try {
     sessionStorage.removeItem(PENDING);
   } catch {
@@ -270,7 +296,9 @@ export function takePendingAction(now = Date.now()): PendingAction | null {
   } catch {
     a = null;
   }
+  const body = pendingBodies.get(PENDING);
   clearPendingAction();
+  if (a && a.needsBody && body !== undefined) a.body = body;
   if (!a || typeof a.path !== "string" || !a.path.startsWith("/") || now - a.at > PENDING_TTL_MS || now < a.at) return null;
   return a;
 }
@@ -285,7 +313,10 @@ const LABELS: [RegExp, (m: RegExpMatchArray) => string][] = [
   [/^\/agents\/([^/]+)\/revoke$/, (m) => `Revoke Directory Agent ${m[1]}`],
   [/^\/flatfile\/apps\/([^/]+)\/mapping$/, (m) => `Save the column mapping of ${m[1]}`],
   [/^\/flatfile\/tasks\/([^/]+)\/close$/, () => "Close the manual task"],
+  [/^\/access\/(policies|networks|device-signals)(\/[^/]+)?$/, (m) => `Change conditional access (${m[1].replace("-", " ")})`],
   [/^\/auth\/device\/approve$/, () => "Approve the command-line sign-in"],
+  [/^\/helpdesk\/cases\/([^/]+)\/execute$/, () => "Run the verified reset"],
+  [/^\/helpdesk\/cases\/([^/]+)\/(manager|second)-approval$/, (m) => `Give the ${m[2]} approval on the reset case`],
 ];
 
 /** A plain-language name for an API action, shown before resuming it. */
@@ -308,7 +339,12 @@ export function stepUpHref(challenge: { step_up_url?: string; acr?: string; max_
 }
 
 /** Run a resumed action (after a successful step-up). */
-export const runPendingAction = (a: PendingAction) => api(a.path, a.body, a.method);
+export const runPendingAction = (a: PendingAction) => {
+  if (a.needsBody && a.body === undefined) {
+    return Promise.reject(new Error("The page reloaded during the sign-in, so the form was not kept. Fill it in and submit again."));
+  }
+  return api(a.path, a.body ?? (a.method === "DELETE" ? undefined : {}), a.method);
+};
 
 /** Tell mounted views that data changed outside `api()` (e.g. the mock layer). */
 export const notifyChanged = () => window.dispatchEvent(new Event(CHANGED));
@@ -664,6 +700,63 @@ export const jitCreate = (body: { identity_id: number; group_id: number; duratio
 export const reviewDecide = (itemId: number, decision: "keep" | "revoke", comment?: string, ruleAction?: RuleAction) =>
   api<{ id: number; decision: string; resolution?: string }>(`/reviews/items/${itemId}/decision`,
     { decision, comment: comment || null, ...(ruleAction ? { rule_action: ruleAction } : {}) });
+
+// ------------------------------------------------ frozen review populations (issue #110)
+export interface QAItem {
+  id: number;
+  identity: string;
+  grant: string;
+  system: string;
+  rule: { id: string; version: number; inputs: Record<string, any> };
+  qa_reviewer: string | null;
+  qa_decision: "keep" | "revoke" | null;
+  overturned: boolean;
+}
+
+export interface CampaignPopulation {
+  campaign_id: number;
+  population_hash: string;
+  recomputed_hash: string;
+  hash_match: boolean;
+  hash_algorithm: string;
+  frozen_at: string;
+  item_count: number;
+  system_counts: Record<string, number>;
+  source_syncs: Record<string, string | null>;
+  rules_version: string;
+  qa_sample_pct: number;
+  qa: { auto_certified: number; sampled: number; decided: number; overturned: number };
+  qa_queue: QAItem[];
+}
+
+export const qaDecide = (qaId: number, decision: "keep" | "revoke", comment?: string) =>
+  api<{ id: number; qa_decision: string; overturned: boolean }>(`/reviews/qa/${qaId}/decision`, { decision, comment: comment || null });
+
+/** Downloads the auditor export (population, hash, decisions) of a campaign as CSV or JSON. */
+export async function downloadPopulationExport(campaignId: number, format: "csv" | "json"): Promise<void> {
+  const res = await fetch(`/api/reviews/campaigns/${campaignId}/export?format=${format}`, { credentials: "same-origin" });
+  if (!res.ok) {
+    let j: any = null;
+    try {
+      j = await res.json();
+    } catch {
+      /* ignore */
+    }
+    if (res.status === 401 && j?.error === "login_required") {
+      resetSessionState();
+      window.dispatchEvent(new Event(SIGNED_OUT));
+    }
+    throw new ApiError(j ? errorMessage(res.status, j) : `${res.status} ${res.statusText}`, res.status, j);
+  }
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `tessera-review-population-${campaignId}.${format}`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
 
 // -------------------------------------------------------------- session
 export interface SessionInfo {
@@ -1298,7 +1391,8 @@ export const roles = {
   unassign: (id: string, identityId: number, reason: string, dryRun?: boolean) =>
     api<RoleChange>(rolePath(id, `/members/${identityId}/remove` + dry(dryRun)), { reason }),
   request: (roleId: string, beneficiaryId: number, justification: string) =>
-    api<RoleRequest>("/role-requests", { role_id: roleId, beneficiary_id: beneficiaryId, justification }),
+    // not resumable after a step-up: the body names a person, and a pending action is kept in browser storage
+    apiNoResume<RoleRequest>("/role-requests", { role_id: roleId, beneficiary_id: beneficiaryId, justification }),
   approve: (id: string, reason?: string) => api<RoleRequest>(`/role-requests/${encodeURIComponent(id)}/approve`, reason ? { reason } : {}),
   deny: (id: string, reason: string) => api<RoleRequest>(`/role-requests/${encodeURIComponent(id)}/deny`, { reason }),
   cancel: (id: string) => api<RoleRequest>(`/role-requests/${encodeURIComponent(id)}/cancel`, {}),
@@ -1651,6 +1745,68 @@ export const uploadFlatFile = (system: string, kind: FlatKind, file: File) =>
 /** Close a manual task by hand, with a reason (flatfile.close_tasks, fresh sign-in). */
 export const closeFlatTask = (taskId: string, reason: string) =>
   api<{ task: FlatTask }>(`/flatfile/tasks/${encodeURIComponent(taskId)}/close`, { reason });
+/** Verified help-desk resets (issue #108). */
+export type HelpdeskMethod = "push" | "callback" | "manager_approval" | "idv";
+export interface HelpdeskPolicy {
+  satisfied: boolean;
+  required_verifications: number;
+  counted_methods: HelpdeskMethod[];
+  needs_second_approver: boolean;
+  second_approved: boolean;
+  allowed_methods: HelpdeskMethod[];
+  missing: string[];
+}
+export interface HelpdeskVerification {
+  id: string;
+  method: HelpdeskMethod;
+  outcome: "passed" | "failed";
+  phishing_resistant: boolean;
+  verified_by: string;
+  evidence: string;
+  provider: string;
+  created_at: string;
+}
+export interface HelpdeskFinding {
+  id: string;
+  case_id: string;
+  identity_id: number;
+  rule: string;
+  detail: { device?: string; location?: string; reset_at?: string; device_added_at?: string; sign_in_at?: string; known_locations?: string[] };
+  created_at: string;
+}
+export interface HelpdeskCase {
+  id: string;
+  identity_id: number;
+  identity: string;
+  kind: "password" | "mfa";
+  system: "okta" | "entra" | "simulated";
+  reason: string;
+  status: "open" | "executing" | "executed" | "failed" | "cancelled";
+  privileged: boolean;
+  requested_by: string;
+  second_approver: string | null;
+  second_approved_at: string | null;
+  executed_by: string | null;
+  executed_at: string | null;
+  result: string[];
+  error: string;
+  created_at: string;
+  updated_at: string;
+  policy: HelpdeskPolicy;
+  verifications: HelpdeskVerification[];
+  findings: HelpdeskFinding[];
+}
+const hd = (id: string) => `/helpdesk/cases/${encodeURIComponent(id)}`;
+export const startHelpdeskCase = (b: { identity_id: number; kind: "password" | "mfa"; system: string; reason: string }) =>
+  api<HelpdeskCase>("/helpdesk/cases", b);
+export const verifyHelpdeskCase = (id: string, b: { method: HelpdeskMethod; evidence?: string; number_source?: "hr"; session_ref?: string }) =>
+  api<HelpdeskCase>(`${hd(id)}/verifications`, b);
+export const managerApproveHelpdeskCase = (id: string, evidence?: string) => api<HelpdeskCase>(`${hd(id)}/manager-approval`, { evidence });
+export const secondApproveHelpdeskCase = (id: string) => api<HelpdeskCase>(`${hd(id)}/second-approval`, {});
+export const cancelHelpdeskCase = (id: string) => api<HelpdeskCase>(`${hd(id)}/cancel`, {});
+/** The temporary access pass (Entra) is in the answer once; it is never stored or shown again. */
+export const executeHelpdeskCase = (id: string) => api<{ case: HelpdeskCase; temporary_access_pass?: string }>(`${hd(id)}/execute`, {});
+
 // ---------------------------------------------------------------- attribute policies (issue #162)
 
 /** A condition: all/any/not over attribute tests, evaluated deterministically; a missing attribute denies. */
@@ -2291,6 +2447,67 @@ export const awsSimulate = (changes: AwsPolicyChange[], head?: string, pullNumbe
     ...(head ? { head } : {}),
     ...(pullNumber ? { comment: { pull_number: pullNumber } } : {}),
   });
+// ------------------------------------------------------------------ conditional access (issue #163)
+
+export type AccessScope = "signin" | "privileged";
+export type AccessMode = "disabled" | "report_only" | "enforce";
+export type AccessOutcome = "allow" | "step_up" | "deny";
+export type NetworkOp = "any" | "in" | "not_in";
+export type DeviceCondition = "any" | "unmanaged" | "not_compliant";
+export type StepUpAcr = "urn:tessera:acr:aal2" | "urn:tessera:acr:phr" | "urn:tessera:acr:phrh";
+
+export interface AccessPolicy {
+  id: string; name: string; description: string; scope: AccessScope; mode: AccessMode; outcome: AccessOutcome;
+  step_up_acr: StepUpAcr | null; step_up_max_age: number; network_op: NetworkOp; network_range_ids: string[];
+  device: DeviceCondition; priority: number; created_at: string; updated_at: string;
+}
+export type AccessPolicyInput = Omit<AccessPolicy, "id" | "created_at" | "updated_at">;
+
+export interface NetworkRange { id: string; name: string; description: string; cidrs: string[]; used_by: string[]; created_at: string; updated_at: string }
+export interface NetworkRangeInput { name: string; description: string; cidrs: string[] }
+
+export interface DeviceSignal {
+  user_id: string; user: string; status: "compliant" | "not_compliant"; source: "manual" | "caep"; reason: string;
+  set_at: string; expires_at: string | null; active: boolean;
+}
+export interface AccessUser { id: string; name: string; email: string }
+
+/** The answer of a what-if evaluation: what the current policies would decide. */
+export interface AccessDecision {
+  scope: AccessScope; outcome: AccessOutcome; policies_evaluated: number;
+  decided_by?: { policy_id: string; name: string; mode: AccessMode; outcome: AccessOutcome; step_up_acr?: StepUpAcr; step_up_max_age?: number };
+  report_only?: { policy_id: string; name: string; outcome: AccessOutcome }[];
+  inputs: { client_ip: string; device_managed: string; device_compliance: string };
+}
+export interface AccessEvaluateInput { scope: AccessScope; client_ip?: string; device_managed?: boolean | null; device_compliance?: "compliant" | "not_compliant" | "unknown" }
+
+/** Conditional access: network ranges, policies and the device-compliance signal (needs conditional_access.read / .manage). */
+export const conditionalAccess = {
+  policies: () => api<AccessPolicy[]>("/access/policies"),
+  createPolicy: (b: AccessPolicyInput) => api<AccessPolicy>("/access/policies", b),
+  updatePolicy: (id: string, b: AccessPolicyInput) => api<AccessPolicy>(`/access/policies/${encodeURIComponent(id)}`, b, "PUT"),
+  deletePolicy: (id: string) => api<{ deleted: string }>(`/access/policies/${encodeURIComponent(id)}`, undefined, "DELETE"),
+  networks: () => api<NetworkRange[]>("/access/networks"),
+  createNetwork: (b: NetworkRangeInput) => api<NetworkRange>("/access/networks", b),
+  updateNetwork: (id: string, b: NetworkRangeInput) => api<NetworkRange>(`/access/networks/${encodeURIComponent(id)}`, b, "PUT"),
+  deleteNetwork: (id: string) => api<{ deleted: string }>(`/access/networks/${encodeURIComponent(id)}`, undefined, "DELETE"),
+  signals: () => api<DeviceSignal[]>("/access/device-signals"),
+  setSignal: (userId: string, b: { status: DeviceSignal["status"]; reason: string; expires_in_hours?: number }) =>
+    api<DeviceSignal>(`/access/device-signals/${encodeURIComponent(userId)}`, b, "PUT"),
+  clearSignal: (userId: string) => api<{ cleared: string }>(`/access/device-signals/${encodeURIComponent(userId)}`, undefined, "DELETE"),
+  evaluate: (b: AccessEvaluateInput) => api<AccessDecision>("/access/evaluate", b),
+};
+
+/** One line describing when a policy applies, for lists. */
+export function describeConditions(p: Pick<AccessPolicy, "network_op" | "network_range_ids" | "device">, ranges: Pick<NetworkRange, "id" | "name">[]): string {
+  const name = (id: string) => ranges.find((r) => r.id === id)?.name ?? "a deleted range";
+  const parts: string[] = [];
+  if (p.network_op !== "any") parts.push(`network ${p.network_op === "in" ? "is in" : "is not in"} ${p.network_range_ids.map(name).join(", ")}`);
+  if (p.device === "unmanaged") parts.push("device is not managed");
+  if (p.device === "not_compliant") parts.push("device is not known to be compliant");
+  return parts.length ? parts.join(" and ") : "always";
+}
+
 // ------------------------------------------------------------ SIEM sinks (#169)
 
 export type SiemKind = "syslog" | "webhook";

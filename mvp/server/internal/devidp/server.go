@@ -112,6 +112,7 @@ type Server struct {
 	samlACS         []string // ACS URL patterns AuthnRequests may name
 	samlPending     ttlStore[pendingSAML]
 	lastAssertionID string // guarded by mu; the replay fault reuses it
+	lastCASTicket   string // guarded by mu; cas_ticket_reuse issues it again
 
 	pending  ttlStore[pendingAuthz]
 	codes    ttlStore[authCode]
@@ -275,6 +276,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST "+pathGitHubToken, s.handleGitHubToken)
 	mux.HandleFunc("GET "+pathGitHubUser, s.handleGitHubUser)
 	mux.HandleFunc("GET "+pathGitHubEmails, s.handleGitHubEmails)
+	mux.HandleFunc("GET "+pathCASLogin, s.handleCASLogin)
+	mux.HandleFunc("GET "+pathCASValidate, s.handleCASValidate)
+	mux.HandleFunc("GET "+pathWSFed, s.handleWSFed)
 	mux.HandleFunc("GET "+samlEntityPath, s.handleSAMLMetadata)
 	mux.HandleFunc("GET "+samlSSOPath, s.handleSAMLSSO)
 	mux.HandleFunc("POST "+samlSSOPath, s.handleSAMLSubmit)

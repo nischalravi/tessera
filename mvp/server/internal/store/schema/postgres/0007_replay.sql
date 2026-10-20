@@ -3,7 +3,7 @@
 -- +goose Up
 
 CREATE TABLE replay_cache (
-  kind TEXT NOT NULL CHECK (kind IN ('saml_assertion','dpop_jti')),
+  kind TEXT NOT NULL CHECK (kind IN ('saml_assertion','cas_ticket','dpop_jti')),
   key_hash TEXT NOT NULL CHECK (length(key_hash) = 64),
   expires_at TEXT NOT NULL,
   PRIMARY KEY (kind, key_hash)

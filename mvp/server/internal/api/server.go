@@ -23,8 +23,10 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/alerts"
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/auth/casclient"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oauth2rp"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oidcrp"
+	"github.com/nischalravi/tessera/mvp/server/internal/condaccess"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
@@ -32,6 +34,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/credential"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/sponsorship"
 	"github.com/nischalravi/tessera/mvp/server/internal/health"
+	"github.com/nischalravi/tessera/mvp/server/internal/helpdesk"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
@@ -136,6 +139,10 @@ type Config struct {
 	// TrustedProxies (TESSERA_TRUSTED_PROXIES) are the peers whose
 	// X-Forwarded-For the rate limiter believes.
 	TrustedProxies []netip.Prefix
+	// DeviceSignals is the source of device-compliance signals for
+	// conditional access. Nil: the signals admins set (condaccess.StoreSignals);
+	// the CAEP receiver (#114) will plug in here.
+	DeviceSignals condaccess.SignalSource
 	// Siem streams the audit ledger to tenants' SIEMs (issue #169); its
 	// Sealer seals sink tokens. Nil: tests of sinks are unavailable.
 	Siem *siem.Service
@@ -173,6 +180,10 @@ type Config struct {
 	// grants). Nil: a service with no outbound client, so every containment
 	// step is a manual task.
 	Containment *containment.Service
+	// Helpdesk runs the verified help-desk reset workflow (issue #108). Nil:
+	// live executors from the Containment credentials, and the simulators
+	// unless Env is "prod".
+	Helpdesk *helpdesk.Service
 	// Health answers /readyz and the admin platform-health summary. Nil: a
 	// checker over Store and Sealer with the default loop-lag threshold.
 	Health *health.Checker
@@ -212,6 +223,9 @@ type Server struct {
 	names    nameCache
 	rp       *oidcrp.RP
 	oauth2   *oauth2rp.RP
+	// signals supplies device-compliance signals to conditional access.
+	signals condaccess.SignalSource
+	cas     *casclient.Client
 	// oauth is the authorization server of the CLI (internal/oauth); it also
 	// verifies the DPoP access tokens of API requests (authn.Tokens).
 	oauth *oauth.Service
@@ -224,6 +238,8 @@ type Server struct {
 	containment *containment.Service
 	// aws holds the AWS evaluator's engines and explanations (aws_eval.go).
 	aws awsRuntime
+	// helpdesk is the verified reset workflow (issue #108); never nil.
+	helpdesk *helpdesk.Service
 	// admin is the admin-change workflow (design §15); never nil.
 	admin *admin.Service
 	// queue is the durable job queue (issue #300); never nil.
@@ -267,6 +283,9 @@ func New(cfg Config) *Server {
 	}
 	if cfg.GroupsEngine == nil {
 		cfg.GroupsEngine = engine.New(0)
+		if cfg.DeviceSignals == nil {
+			cfg.DeviceSignals = condaccess.StoreSignals{}
+		}
 	}
 	if cfg.Containment == nil {
 		cfg.Containment = &containment.Service{}
@@ -285,7 +304,16 @@ func New(cfg Config) *Server {
 		}
 		provSeal = sealer
 	}
-	s := &Server{cfg: cfg, containment: cfg.Containment, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
+	if cfg.Helpdesk == nil {
+		// The live Okta and Entra executors reuse the kill switch's provider
+		// credentials and outbound client; the simulators never run in prod.
+		hc := cfg.Containment.HTTP
+		if hc == nil {
+			hc = cfg.OutboundHTTP
+		}
+		cfg.Helpdesk = &helpdesk.Service{HTTP: hc, Containment: cfg.Containment, Clock: cfg.Clock, Simulated: cfg.Env != "prod"}
+	}
+	s := &Server{cfg: cfg, containment: cfg.Containment, helpdesk: cfg.Helpdesk, signals: cfg.DeviceSignals, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
 		agents: cfg.Agents, limits: newLimiters(cfg.RateLimits), provSeal: provSeal}
 	s.prov = &provision.Engine{DB: cfg.Store, Sealer: provSeal, HTTP: cfg.Outbound,
 		Clock: func() time.Time { return s.clock() }, Log: cfg.Logger.With("component", "provisioning")}
@@ -317,6 +345,9 @@ func New(cfg Config) *Server {
 		}
 		s.rp = rp
 		if s.oauth2, err = oauth2rp.New(cfg.OutboundHTTP); err != nil {
+			panic(err) // HTTP is set
+		}
+		if s.cas, err = casclient.New(cfg.OutboundHTTP); err != nil {
 			panic(err) // HTTP is set
 		}
 	}
@@ -363,6 +394,8 @@ func New(cfg Config) *Server {
 	s.registerContainmentRoutes()
 	s.registerFlatfileRoutes()
 	s.registerEvidenceRoutes()
+	s.registerReviewPopulationRoutes()
+	s.registerHelpdeskRoutes()
 	s.registerGroupsFolderRoutes()
 	s.registerGroupsPrivilegeRoutes()
 	s.registerGroupsMemberRoutes()
@@ -379,7 +412,10 @@ func New(cfg Config) *Server {
 	s.registerLoginRoutes()
 	s.registerSAMLRoutes()
 	s.registerOAuth2Routes()
+	s.registerCASRoutes()
+	s.registerWSFedRoutes()
 	s.registerStepUpRoutes()
+	s.registerAccessRoutes()
 	s.registerOAuthRoutes()
 	s.registerAdminRoutes()
 	s.registerBreakGlassRoutes()
@@ -769,6 +805,10 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 	}
 	if sb, ok := out.(statusBody); ok {
 		writeJSON(w, sb.status, sb.body)
+		return
+	}
+	if db, ok := out.(deniedBody); ok {
+		auth.WriteDenial(w, db.d)
 		return
 	}
 	if fb, ok := out.(fileBody); ok {

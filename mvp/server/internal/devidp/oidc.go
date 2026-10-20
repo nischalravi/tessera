@@ -55,6 +55,7 @@ type pendingAuthz struct {
 	loginHint     string
 	fault         Fault
 	github        bool // GitHub-style OAuth 2.0 (github.go): no ID token
+	cas           bool // CAS (cas.go): redirectURI is the service URL
 }
 
 // authCode is what an authorization code is redeemed for.
@@ -65,6 +66,7 @@ type authCode struct {
 	profile  Profile
 	authTime time.Time
 	sid      string
+	newLogin bool // CAS isFromNewLogin: the user signed in for this ticket
 }
 
 // idpSession is the dev IdP's own single sign-on session.
@@ -129,7 +131,7 @@ func (s *Server) handleDiscovery(w http.ResponseWriter, _ *http.Request) {
 		TokenEndpointAuthMethodsSupported:      []string{"client_secret_basic", "private_key_jwt"},
 		TokenEndpointAuthSigningAlgsSupported:  algs,
 		CodeChallengeMethodsSupported:          []string{"S256"},
-		ClaimsSupported:                        []string{"iss", "sub", "aud", "exp", "iat", "auth_time", "nonce", "sid", "acr", "amr", "acrs", "email", "email_verified", "name", "preferred_username", "groups", "roles", "oid", "tid", "at_hash"},
+		ClaimsSupported:                        []string{"iss", "sub", "aud", "exp", "iat", "auth_time", "nonce", "sid", "acr", "amr", "acrs", "email", "email_verified", "name", "preferred_username", "groups", "roles", "device_managed", "device_compliant", "oid", "tid", "at_hash"},
 		ClaimsParameterSupported:               true,
 		ACRValuesSupported:                     acrValuesSupported,
 		PromptValuesSupported:                  []string{"none", "login"},
@@ -254,7 +256,7 @@ func (s *Server) parseAuthz(q url.Values, c *Client, redirectURI string) (pendin
 		if err != nil {
 			return p, "invalid_request", err.Error()
 		}
-		if slices.Contains(SAMLFaults(), f) || slices.Contains(GitHubFaults(), f) {
+		if slices.Contains(SAMLFaults(), f) || slices.Contains(GitHubFaults(), f) || slices.Contains(CASFaults(), f) {
 			return p, "invalid_request", fmt.Sprintf("fault %q is a SAML fault; it does not apply to OIDC", f)
 		}
 		p.fault = f
@@ -346,7 +348,7 @@ func (s *Server) handleAuthorizeSubmit(w http.ResponseWriter, r *http.Request) {
 	case !user.has(method):
 		s.errorPage(w, http.StatusBadRequest, "That user has no such authenticator.")
 		return
-	case !p.github && !slices.Contains(Profiles(), profile):
+	case !p.github && !p.cas && !slices.Contains(Profiles(), profile):
 		s.errorPage(w, http.StatusBadRequest, "Unknown profile.")
 		return
 	}
@@ -358,7 +360,7 @@ func (s *Server) handleAuthorizeSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	s.setSessionCookie(w, cookie, int(sessionTTL/time.Second))
 	s.log.Info("devidp sign-in", "sub", user.Sub, "method", method, "profile", profile, "client_id", p.clientID)
-	s.issueCode(w, r, p, authCode{user: *user, method: method, profile: profile, authTime: now, sid: sess.sid}, http.StatusSeeOther)
+	s.issueCode(w, r, p, authCode{user: *user, method: method, profile: profile, authTime: now, sid: sess.sid, newLogin: true}, http.StatusSeeOther)
 }
 
 // setSessionCookie sets (or, with maxAge -1, clears) the IdP session cookie.
@@ -382,6 +384,10 @@ func (s *Server) session(r *http.Request, now time.Time) (idpSession, bool) {
 func (s *Server) issueCode(w http.ResponseWriter, r *http.Request, p pendingAuthz, ac authCode, status int) {
 	now := s.now()
 	ac.authz = p
+	if p.cas {
+		s.issueCASTicket(w, r, ac, status)
+		return
+	}
 	code := rand.Text()
 	if err := s.codes.put(code, ac, now.Add(codeTTL), now); err != nil {
 		s.redirectError(w, r, p.redirectURI, p.state, "temporarily_unavailable", "too many outstanding codes")
@@ -391,7 +397,7 @@ func (s *Server) issueCode(w http.ResponseWriter, r *http.Request, p pendingAuth
 	if p.fault != FaultNoIssParam {
 		v.Set("iss", s.issuer)
 	}
-	s.redirectRegistered(w, r, p.redirectURI, v, status)
+	s.redirectRegistered(w, r, p.redirectURI, v, status, p.cas)
 }
 
 // redirectError sends an OAuth error to a validated redirect_uri, with the
@@ -405,30 +411,7 @@ func (s *Server) redirectError(w http.ResponseWriter, r *http.Request, redirectU
 	if r.Method == http.MethodPost {
 		status = http.StatusSeeOther
 	}
-	s.redirectRegistered(w, r, redirectURI, v, status)
-}
-
-// redirectRegistered redirects to base plus add, after checking base against
-// the registered redirect URIs once more. A target that matches nothing is
-// refused with 400: the dev IdP never redirects to an unregistered address,
-// whatever the caller did before.
-func (s *Server) redirectRegistered(w http.ResponseWriter, r *http.Request, base string, add url.Values, status int) {
-	target := ""
-	for _, c := range s.clients {
-		// an exact registration: redirect to the stored string, never the request's copy
-		if i := slices.Index(c.RedirectURIs, base); i >= 0 {
-			target = c.RedirectURIs[i]
-			break
-		}
-		if target == "" && c.redirectAllowed(base) {
-			target = base // matched a wildcard registration (loopback ports)
-		}
-	}
-	if target == "" {
-		s.errorPage(w, http.StatusBadRequest, "The redirect target is not registered.")
-		return
-	}
-	http.Redirect(w, r, withParams(target, add), status) // #nosec G710 -- target is a registered redirect URI (exact or wildcard match)
+	s.redirectRegistered(w, r, redirectURI, v, status, false)
 }
 
 func withParams(base string, add url.Values) string {
@@ -660,6 +643,14 @@ func (s *Server) mintIDToken(ac authCode, accessToken string, now time.Time) (st
 	}
 	if len(ac.user.Roles) > 0 {
 		claims["roles"] = ac.user.Roles
+	}
+	if d := ac.user.Device; d != nil {
+		if d.Managed != nil {
+			claims["device_managed"] = *d.Managed
+		}
+		if d.Compliant != nil {
+			claims["device_compliant"] = *d.Compliant
+		}
 	}
 	switch p.fault {
 	case FaultWrongIss:

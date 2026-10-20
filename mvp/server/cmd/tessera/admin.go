@@ -212,6 +212,11 @@ type idpFile struct {
 	TokenEndpoint         string `yaml:"token_endpoint"`
 	UserinfoEndpoint      string `yaml:"userinfo_endpoint"`
 	SubjectField          string `yaml:"subject_field"` // the user object's immutable id field ("id" for github)
+	// CAS 3.0 (protocol: cas)
+	CASServerURL string `yaml:"cas_server_url"`
+	// WS-Federation (protocol: wsfed): idp_entity_id is the token issuer,
+	// idp_signing_certs the pinned token-signing certificates
+	WSFedEndpoint string `yaml:"wsfed_endpoint"` // the passive endpoint, e.g. https://adfs.corp.example/adfs/ls/
 }
 
 func readIdPFile(path string) (*idpFile, error) {
@@ -240,7 +245,8 @@ func (f *idpFile) connection(prod bool, now time.Time) (*store.IdPConnection, er
 		AuthnMapping: f.AuthnMapping, IdPEntityID: f.IdPEntityID, IdPSSOURL: f.IdPSSOURL, IdPSigningCerts: f.IdPSigningCerts,
 		SubjectSource: f.SubjectSource, AttributeMap: f.AttributeMap, AssumePhr: f.AssumePhr,
 		AuthorizationEndpoint: f.AuthorizationEndpoint, TokenEndpoint: f.TokenEndpoint, UserinfoEndpoint: f.UserinfoEndpoint,
-		SubjectField: f.SubjectField}
+		SubjectField: f.SubjectField, CASServerURL: f.CASServerURL,
+		WSFedEndpoint: f.WSFedEndpoint}
 	c, err := cfg.Connection(admin.IdPOptions{Prod: prod}, now)
 	if err != nil {
 		return nil, err
@@ -301,8 +307,17 @@ func addIdP(e *adminEnv, slug, file, secretFile string) error {
 		return nil
 	}
 	path := "oidc"
-	if c.Protocol == "oauth2" {
+	switch c.Protocol {
+	case "oauth2":
 		path = "oauth2"
+	case "wsfed":
+		fmt.Fprintf(e.stdout, "register a relying party trust: identifier (realm) %s\nWS-Federation passive endpoint (reply) %s\n",
+			api.WSFedRealm(e.cfg.PublicURL, c.ID), api.WSFedReply(e.cfg.PublicURL, c.ID))
+		return nil
+	case "cas":
+		fmt.Fprintf(e.stdout, "register this service URL pattern at the CAS server: %s/api/auth/cas/%s/callback?state=*\n",
+			strings.TrimRight(e.cfg.PublicURL, "/"), c.ID)
+		return nil
 	}
 	fmt.Fprintf(e.stdout, "redirect URI to register at the IdP: %s/api/auth/%s/%s/callback\n",
 		strings.TrimRight(e.cfg.PublicURL, "/"), path, c.ID)
@@ -312,6 +327,9 @@ func addIdP(e *adminEnv, slug, file, secretFile string) error {
 // sealConnectionSecrets seals an OIDC client secret (from secretFile), or
 // generates and seals a SAML connection's SP signing key.
 func sealConnectionSecrets(e *adminEnv, t tenancy.ID, c *store.IdPConnection, secretFile string) error {
+	if c.Protocol == "cas" || c.Protocol == "wsfed" {
+		return nil // no client secret: CAS tickets are validated at the server, WS-Federation tokens are signed
+	}
 	if c.Protocol == "saml" {
 		keyPEM, certPEM, err := samlsp.GenerateSPKey("Tessera SP "+c.ID.String(), e.now)
 		if err != nil {
@@ -374,7 +392,7 @@ func inviteAdmin(e *adminEnv, slug, connID, email string, ttl time.Duration) err
 		} else if err != nil {
 			return err
 		}
-		if c.Status != "active" || (c.Protocol != "oidc" && c.Protocol != "saml") {
+		if c.Status != "active" || (c.Protocol != "oidc" && c.Protocol != "saml" && c.Protocol != "cas" && c.Protocol != "wsfed") {
 			return fmt.Errorf("connection %s is not an active OIDC or SAML connection", id)
 		}
 		if err := tx.InsertBootstrapInvitation(inv); err != nil {

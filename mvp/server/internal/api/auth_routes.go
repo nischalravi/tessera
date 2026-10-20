@@ -87,7 +87,19 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, rt *route) (*
 			}
 		}
 	}
-	if d := auth.Check(p, rt.spec.Perm, rt.spec.Authn, now); d != nil {
+	d := auth.Check(p, rt.spec.Perm, rt.spec.Authn, now)
+	if rt.spec.Authn != nil && !rt.spec.NoConditionalAccess && p.Kind == auth.KindUser &&
+		(d == nil || d.Error == "step_up_required") {
+		// a privileged action: the tenant's conditional access policies may
+		// deny it or add a step-up of their own (access.go)
+		var err error
+		if d, err = s.accessCheck(r.Context(), r, nil, p, rt.spec.Perm, rt.spec.Authn, rt.method+" "+rt.pattern); err != nil {
+			s.log.Error("conditional access failed", "method", r.Method, "path", r.URL.Path, "err", err)
+			writeAuditUnavailable(w, r)
+			return r, false
+		}
+	}
+	if d != nil {
 		if p.Via == auth.ViaDPoP {
 			auth.WriteDenialScheme(w, d, "DPoP")
 		} else {
@@ -146,6 +158,11 @@ func userPrincipal(r *http.Request) (*auth.Principal, error) {
 type denial struct{ d *auth.Denial }
 
 func (d denial) Error() string { return d.d.Error }
+
+// deniedBody is a refusal a handler answers with instead of returning an
+// error, so the request's transaction commits and keeps the access.decision
+// event of a conditional access refusal. dispatch writes it after the commit.
+type deniedBody struct{ d *auth.Denial }
 
 // ---------------------------------------------------------------- session routes
 

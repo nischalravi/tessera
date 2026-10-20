@@ -295,3 +295,115 @@ func TestAdminAddOAuth2IdP(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestAdminAddCASIdP: add-idp with protocol cas needs the server URL, keys
+// users on cas:user or an attribute (never the email), and prints the
+// service URL pattern to register.
+func TestAdminAddCASIdP(t *testing.T) {
+	t.Setenv("TESSERA_ENV", "dev")
+	t.Setenv("TESSERA_NOW", "2026-10-08T09:30:00")
+	t.Setenv("TESSERA_PUBLIC_URL", "http://localhost:5173")
+	dir := t.TempDir()
+	db := filepath.Join(dir, "t.db")
+	st, err := store.OpenFresh(context.Background(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Migrate(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	_ = st.Close()
+	if _, err := adminRun(t, db, "create-tenant", "-slug", "uni", "-name", "A University"); err != nil {
+		t.Fatal(err)
+	}
+	casYAML := "name: Campus CAS\nprotocol: cas\nprofile: generic_cas\ncas_server_url: https://cas.uni.example/cas/\n" +
+		"authn_mapping: {amr_attribute: successfulAuthenticationHandlers, phr_amr: [[WebAuthnAuthenticationHandler]]}\n"
+	out, err := adminRun(t, db, "add-idp", "-tenant", "uni", "-file", writeFile(t, dir, "cas.yaml", casYAML))
+	m := regexp.MustCompile(`added connection ([0-9a-f-]{36})`).FindStringSubmatch(out)
+	if err != nil || m == nil || !strings.Contains(out, "http://localhost:5173/api/auth/cas/"+m[1]+"/callback?state=*") {
+		t.Fatalf("add-idp: %v %s", err, out)
+	}
+	for name, body := range map[string]string{
+		"email subject":  casYAML + "subject_source: attribute:mail\n",
+		"no server":      strings.Replace(casYAML, "cas_server_url: https://cas.uni.example/cas/\n", "", 1),
+		"saml profile":   strings.Replace(casYAML, "generic_cas", "generic_saml", 1),
+		"oidc settings":  casYAML + "client_id: x\n",
+		"attested phr":   casYAML + "assume_phishing_resistant: true\n",
+		"bad subject":    casYAML + "subject_source: nameid\n",
+		"server w/query": strings.Replace(casYAML, "cas/\n", "cas?x=1\n", 1),
+	} {
+		if out, err := adminRun(t, db, "add-idp", "-tenant", "uni", "-file", writeFile(t, dir, "bad.yaml", body)); err == nil {
+			t.Errorf("%s: accepted: %s", name, out)
+		}
+	}
+	st, err = store.Open(context.Background(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	var uni store.Tenant
+	if err := st.ReadSystem(context.Background(), "test", func(s *store.SystemTx) error {
+		uni, err = s.TenantBySlug("uni")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ReadTenant(context.Background(), uni.ID, func(tx *store.TenantTx) error {
+		cs, err := tx.IdPConnections()
+		if err != nil || len(cs) != 1 || cs[0].Protocol != "cas" || *cs[0].Issuer != "https://cas.uni.example/cas" ||
+			cs[0].SubjectSource != "cas_user" || !strings.Contains(string(cs[0].AuthnMapping), "WebAuthnAuthenticationHandler") {
+			t.Errorf("connections %+v %v", cs, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestAdminAddWSFedIdP: add-idp with protocol wsfed pins the token-signing
+// certificate, refuses UPN or email subjects and prints the realm and reply
+// URL for the ADFS relying party trust.
+func TestAdminAddWSFedIdP(t *testing.T) {
+	t.Setenv("TESSERA_ENV", "dev")
+	t.Setenv("TESSERA_NOW", "2026-10-08T09:30:00")
+	t.Setenv("TESSERA_PUBLIC_URL", "http://localhost:5173")
+	dir := t.TempDir()
+	db := filepath.Join(dir, "t.db")
+	st, err := store.OpenFresh(context.Background(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Migrate(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	_ = st.Close()
+	if _, err := adminRun(t, db, "create-tenant", "-slug", "corp", "-name", "Corp"); err != nil {
+		t.Fatal(err)
+	}
+	_, cert, err := samlsp.GenerateSPKey("adfs", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	indented := "    " + strings.ReplaceAll(strings.TrimSpace(cert), "\n", "\n    ")
+	y := "name: ADFS\nprotocol: wsfed\nprofile: adfs\nidp_entity_id: http://adfs.corp.example/adfs/services/trust\n" +
+		"wsfed_endpoint: https://adfs.corp.example/adfs/ls/\n" +
+		"subject_source: attribute:http://schemas.microsoft.com/identity/claims/objectidentifier\nidp_signing_certs:\n  - |\n" + indented + "\n"
+	out, err := adminRun(t, db, "add-idp", "-tenant", "corp", "-file", writeFile(t, dir, "adfs.yaml", y))
+	m := regexp.MustCompile(`added connection ([0-9a-f-]{36})`).FindStringSubmatch(out)
+	if err != nil || m == nil || !strings.Contains(out, "identifier (realm) http://localhost:5173/api/auth/wsfed/"+m[1]+"\n") ||
+		!strings.Contains(out, "http://localhost:5173/api/auth/wsfed/"+m[1]+"/callback") {
+		t.Fatalf("add-idp: %v %s", err, out)
+	}
+	for name, body := range map[string]string{
+		"upn subject":   strings.Replace(y, "http://schemas.microsoft.com/identity/claims/objectidentifier", "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/upn", 1),
+		"email subject": strings.Replace(y, "http://schemas.microsoft.com/identity/claims/objectidentifier", "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress", 1),
+		"no cert":       strings.Split(y, "idp_signing_certs:")[0],
+		"no endpoint":   strings.Replace(y, "wsfed_endpoint: https://adfs.corp.example/adfs/ls/\n", "", 1),
+		"saml profile":  strings.Replace(y, "profile: adfs", "profile: generic_saml", 1),
+		"attested phr":  y + "assume_phishing_resistant: true\n",
+	} {
+		if out, err := adminRun(t, db, "add-idp", "-tenant", "corp", "-file", writeFile(t, dir, "bad.yaml", body)); err == nil {
+			t.Errorf("%s: accepted: %s", name, out)
+		}
+	}
+}

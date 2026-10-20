@@ -365,6 +365,8 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `POST /api/simulate {remove_edge_ids, add_edges:[{src,dst,duration_hours?}], disable_account_ids}` ·
 `GET|POST /api/jit/requests` · `POST /api/jit/requests/{id}/approve|deny|revoke` ·
 `GET|POST /api/reviews/campaigns` (`name` 1-200 characters after trimming, `unused_days` 1-3650, else 422) ·
+`GET /api/reviews/campaigns/{id}/population` · `GET /api/reviews/campaigns/{id}/export?format=csv|json` ·
+`POST /api/reviews/qa/{id}/decision {decision, comment?}` · `PUT /api/reviews/settings {qa_sample_pct}` (see "Review populations") ·
 `POST /api/reviews/items/{id}/decision {decision, comment?, rule_action?}` (a decision is final: repeating it is a 200 no-op, a different one is
 `409 review_item_decided` and an audited `review.decide.refused`) ·
 `GET|POST /api/hris/events` (422 for an unknown `identity_id`) · `GET /api/hris/events/{id}/plan` · `POST /api/hris/events/{id}/execute` ·
@@ -385,7 +387,11 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `GET /api/auth/discover?tenant=&email=` · `GET /api/auth/login?tenant=&connection=&return_to=` (302 to the IdP) ·
 `GET /api/auth/oidc/{connection_id}/callback` · `GET /api/auth/saml/{connection_id}/metadata` ·
 `POST /api/auth/saml/{connection_id}/acs` · `GET /api/auth/oauth2/{connection_id}/callback` ·
-`GET /t/{slug}/bootstrap?code=` (public)
+`GET /api/auth/cas/{connection_id}/callback` · `POST /api/auth/wsfed/{connection_id}/callback` ·
+`GET /t/{slug}/bootstrap?code=` (public) ·
+`GET|POST /api/access/policies` · `PUT|DELETE /api/access/policies/{id}` · `GET|POST /api/access/networks` ·
+`PUT|DELETE /api/access/networks/{id}` · `GET /api/access/users` · `GET /api/access/device-signals` ·
+`PUT|DELETE /api/access/device-signals/{user_id}` · `POST /api/access/evaluate` (conditional access, below) ·
 `GET|POST /api/auth/dev-login` (dev and test only) ·
 `GET /api/jobs[?status=running|succeeded|failed&kind=&connection_id=&limit=]` · `GET /api/jobs/{job_id}` ·
 `POST /api/jobs/{job_id}/retry` ·
@@ -453,6 +459,46 @@ Each route declares the permission it needs (design §12.1, §16.2; `api.Routes(
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
 or HRIS execution is always the signed-in user.
 
+### Conditional access (network location and device posture)
+
+Beyond step-up, a tenant can decide **allow, require step-up or deny** by where a request comes from and
+what is known about the device (issue #163; Settings → **Conditional access**, `/admin/conditional-access`).
+Policies have a **scope**: `signin` (the Tessera sign-in, at the OIDC callback and SAML ACS) or
+`privileged` (every route that already needs a fresh sign-in: JIT approval, review decisions, revoking
+grants, HRIS execution, connection changes). Conditions, all of which must hold:
+
+* **Network**: `in` or `not_in` named ranges (CIDRs, IPv4 and IPv6). The address is the **trusted-proxy
+  client IP**: the TCP peer, or, only when the peer is in `TESSERA_TRUSTED_PROXIES`, the rightmost
+  `X-Forwarded-For` entry that is not itself a trusted proxy. A header from any other peer is ignored, so a
+  client cannot name its own address (the rate limiter uses the same function). An address that cannot be
+  determined is in no range.
+* **Device**: `unmanaged` or `not_compliant`. Posture comes from the IdP's claims at sign-in (OIDC claims or
+  SAML attributes `device_managed` and `device_compliant`, renamable per connection with
+  `authn_mapping.device_managed_claim` / `device_compliant_claim`; stored on the authentication context) and
+  from the user's **device-compliance signal**. "Not compliant" from either source wins; a device the IdP says
+  nothing about counts as unmanaged and not compliant. Signals are set by an admin (source `manual`, optional
+  expiry) through `condaccess.SignalSource`; the CAEP receiver of #114 is not built, and will write
+  `caep` signals into the same table or implement that interface.
+
+Policies are checked in priority order and **the first enforced match decides**; no match is allow. `report_only`
+policies are evaluated and recorded with the outcome they would have had but never change the result;
+`disabled` ones are ignored. Outcomes: `deny` refuses a sign-in (`auth.login.failure`, reason
+`conditional_access_denied`) or answers `403 conditional_access_denied`; `step_up` names an ACR (aal2, phr, phrh)
+and optional `max_age`. On a sign-in the authentication itself must already meet it (else
+`conditional_access_step_up_required`); on a privileged route it tightens the route's own requirement, so the
+client gets the usual `401 step_up_required` challenge. The permission is checked before policies, so a caller
+without it learns nothing of them. The operator bootstrap sign-in and the conditional access routes themselves
+are exempt (a policy cannot lock an admin out of fixing it).
+
+Every evaluation that had a policy to check is audited with its inputs (`access.decision`, or the
+`conditional_access` detail of `auth.login.success` / `auth.login.failure`): scope, outcome, deciding policy,
+report-only hits, client IP and how it was resolved (`peer` or `x_forwarded_for`), device managed, compliance and
+its source. When a trusted proxy does not say who the client is (`X-Forwarded-For` missing or malformed, or every hop a trusted proxy), the client is unresolved: it is never given the proxy's address, every network condition on a deny or step-up policy holds for it (`in` and `not_in` alike, so a blocklist and an off-network rule both apply) and none on an allow policy does, and the event records `client_ip_unresolved`; rate limiting still keys on the proxy. Changes to ranges, policies and signals are `access.network.*`, `access.policy.*` and
+`access.device_signal.*` events in the same transaction. Reading needs `conditional_access.read` (auditor,
+tenant admin); changing needs `conditional_access.manage` (tenant admin) and a fresh phishing-resistant
+sign-in. A tenant is limited to 100 policies and 100 ranges. `POST /api/access/evaluate` answers what the
+current policies would decide for a described request without recording anything. In the dev IdP, Alice's
+device is managed and compliant and Olu's is neither (`device:` in `users.yaml`).
 ### Point-in-time access and evidence packs
 
 Issue #111; packages `server/internal/evidence`, `graph.BuildAsOf`, schema `0260` and `0261`.
@@ -854,6 +900,58 @@ under Change requests (the invitation is spent and both operators are told); red
 recovery. It is audited in the tenant's chain and the platform chain.
 `tessera admin revoke-signing-key -tenant acme -kid <kid> -reason "…"` revokes one of a tenant's signing
 keys at once (a new one becomes active; audited as the operator).
+### Review populations (auditor evidence, issue #110)
+
+Auditors test the completeness and accuracy of a review population (IPE). When a campaign is
+launched, `reviews.GenerateCampaign` freezes the **full population** in the same transaction:
+every standing (non-JIT) grant edge of an active account with effective permissions, for every
+identity including terminated ones, not only the risky grants that become review items.
+`review_populations` (hash, row count, per-system counts, source sync timestamps, scope, rules
+version, QA percent) and `review_population_rows` are immutable (triggers refuse UPDATE and DELETE),
+and a `review.population_frozen` audit event carries the hash and counts. Campaigns launched before
+this change have no population and answer 404 on the new routes.
+
+Each row has: `ordinal` (1..n in ascending `edge_id`), `edge_id`, `identity_id`, `identity_ref`
+(external id), `account_ref`, `system`, `entitlement` (label), `edge_src`, `edge_dst`,
+`in_scope_reason` (`standing_grant`) and `disposition` (`review` or `auto_certified`).
+`source_syncs` is the time of the tenant's last `connectors.sync` event (Tessera keeps no
+per-system sync clock), or null.
+
+**Hash (`tessera-review-population-v1`).** To recompute it from an export:
+
+1. Take the rows in ascending `ordinal`.
+2. Write each row as a JSON object with exactly the 11 fields above and canonicalize it with
+   RFC 8785 (JCS). Strings are UTF-8, numbers are integers.
+3. Join the canonical rows with a single `\n` (no trailing newline).
+4. `hash = lowercase-hex SHA-256( "tessera-review-population-v1" || 0x00 || joined )`. An empty
+   population hashes the domain string and the 0x00 byte.
+
+`server/testdata/golden/review_population_v1.json` is a test vector; the audit ledger's contract is
+`audit_v1.json`. The export recomputes the hash from the stored rows and reports `stored_hash`,
+`recomputed_hash` and `hash_match` (a mismatch is flagged `false`).
+
+**Auto-decisions.** A grant with no exception signal is auto-certified, and
+`review_auto_decisions.decided_by_rule` records the rule (`exception_only.no_exception_signals`,
+version 1) and the inputs that matched: the unused-days threshold, last-used time, days since used,
+permissions and permissions used, privileged, policy violation, identity status and type.
+
+**Sampled QA.** The tenant setting `qa_sample_pct` (default 5, 0 disables, set with
+`PUT /api/reviews/settings`, `reviews.manage`) sends `ceil(pct% of n)` of the n auto-decisions
+(at least 1 when n > 0 and pct > 0) to a human QA queue (the security lead). Selection is
+reproducible: rank the auto-decisions by `SHA-256(population_hash ":" edge_id)` ascending (hex)
+and take the first k. `POST /api/reviews/qa/{id}/decision` (`reviews.decide`, step-up) records
+keep (confirm) or revoke (overturn: the grant is removed like a review revoke); both are audited
+(`review.qa_confirmed`, `review.qa_overturned`). The campaign side panel's "Population & export"
+shows the hash, counts, QA queue and the export buttons.
+
+**Export.** `GET /api/reviews/campaigns/{id}/export?format=csv|json` (`reviews.export`: auditor,
+operator and policy admin) returns the population (rows, hashes, counts, sync timestamps) and a
+decision per grant: decision, decision source, reviewer, decided by, decided at, reason, exception
+reasons, the rule (auto), `qa_sample`, QA decision and `revocation_verification`:
+`not_applicable` (kept or open), `verified_removed` (revoked and the grant edge is gone from
+Tessera's graph) or `pending` (revoked but still present). Provider-side verification is the
+containment report (`GET /api/identities/{id}/containment`). CSV cells that start with
+`= + - @` are prefixed with `'`. Each export is audited as `review.population_exported`.
 
 ### Account correlation
 
@@ -1514,6 +1612,52 @@ to the account by a `direct_grant` edge. Agent delegations are left alone.
   from a sample file's first line), Upload CSV, upload history with a side panel of per-row errors and
   the delta, and the manual task list with Close.
 
+### Verified help-desk resets
+
+**Identity → Help desk** (`/helpdesk`, issue #108) resets a password or MFA only after the person
+is verified. A case (`helpdesk_cases`, schema 0254; also `helpdesk_verifications`,
+`helpdesk_signals`, `helpdesk_findings`, all tenant-scoped with isolation tests) is opened for an
+identity, collects verifications, and runs through the IdP once the policy
+(`internal/helpdesk/policy.go`, a pure `Evaluate`) is satisfied. The policy is checked again inside
+the transaction that claims the case (open or failed to executing, single-flight), so an
+unverified case cannot execute: `409 verification_required` with the policy in the body, and the
+IdP is never called.
+
+- **Methods.** `push` (a push to an existing phishing-resistant authenticator; a push to a weaker
+  one does not count), `callback` (to the number from the HR record; `number_source` must be
+  `"hr"` and a note is required), `manager_approval` (only the identity's manager, by a platform
+  user linked to the manager's identity, never the requester or the subject) and `idv` (privileged
+  identities only).
+- **Privileged identities** (an effective privileged permission in the access graph, or a platform
+  admin role) need two different methods and a second approver who is not the requester or the
+  subject. Nobody can open a case for their own identity.
+- **Routes.** `GET/POST /api/helpdesk/cases`, `GET .../{case_id}`, `POST .../{case_id}/verifications`
+  `{method, evidence, number_source, session_ref}`, `.../manager-approval` and `.../second-approval`
+  (`helpdesk.approve`, step-up), `.../execute` (`helpdesk.reset`, step-up), `.../cancel`,
+  `GET /api/helpdesk/findings`. `helpdesk.reset` and `helpdesk.approve` go to operators and policy
+  admins. Every step is audited in the same transaction (`helpdesk.case.started`,
+  `.verification`, `.second_approval`, `.reset.started`, `.reset.executed`, `.reset.failed`,
+  `.detection.fired`).
+- **Execution** goes through the narrow `ResetExecutor` interface. Okta: `reset_factors` (MFA) or
+  `reset_password` with `sendEmail=true`. Entra: delete every deletable authentication method and
+  issue a single-use temporary access pass (a password reset issues the pass only). They use the
+  connection's provider credential from `PUT /api/connections/{id}/containment-credential` (Okta
+  needs `okta.users.manage`; Entra `UserAuthenticationMethod.ReadWrite.All`) and go through
+  `internal/safehttp`. The Entra pass is returned once in the execute response
+  (`Cache-Control: no-store`), never stored, audited or logged. A failed reset leaves the case
+  `failed` and can be run again; a case stuck in `executing` after a crash needs a human.
+- **Detection** `helpdesk.post_reset_takeover`: within 24 hours after a reset, a new MFA device
+  and a sign-in from a location the identity had not signed in from before the reset. There is no
+  alerts engine on `dev` yet, so it is a pure function (`helpdesk.Detect`) run whenever a signal
+  is stored; a finding is raised once per case, audited and listed under Detections. Real
+  signals will come from the IdP log connectors; until then `POST /api/helpdesk/signals`
+  `{identity_id, kind: mfa_device_added|sign_in, location, device, occurred_at}`
+  (`helpdesk.approve`) simulates the feed and is a 404 in production.
+- **Simulated outside production.** The `simulated` executor (calls nothing), the push provider
+  (always approves) and the IDV provider (accepts any session reference not starting with
+  `fail`) exist when `TESSERA_ENV` is not `prod`. In production push and IDV answer
+  `503 provider_unavailable` until real providers implement `PushProvider` and `IDVProvider`.
+
 ### Native groups (folders and groups)
 
 Groups owned by Tessera (design `docs/design/groups-grouper-parity.md`, issue #44 GR-1; not the
@@ -1998,10 +2142,10 @@ the right. Arrow keys move between items.
 | Group | Items |
 |---|---|
 | (top) | **Home**, **Inbox** (count) |
-| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Ownership, Accounts (with *Account matches*), Roles, Organizations (live, read-only, derived from departments) |
+| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Ownership, Accounts (with *Account matches*), Help desk, Roles, Organizations (live, read-only, derived from departments) |
 | **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
 | **Protection** | Alerts (alerts, rules, channels), Policies & SoD (violations, policies, what-if simulation, SoD functions, risks and rulesets), Mitigating controls (mitigations, control library), Attribute policies, Access graph (with an *As of* date for *Who can access…*), Evidence packs, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
-| **Settings** | Connections (governed connections and the setup wizard), Admin |
+| **Settings** | Connections (governed connections and the setup wizard), Flat-file apps, Conditional access (network ranges, policies, device signals), Admin |
 
 **Home.** For the admin & security persona: the tenant name and a sync line, then tabs
 (Overview, Monitoring, Deployment health, Recommendations). Overview has the KPI cards
@@ -2068,7 +2212,7 @@ about 8 kB; cytoscape (about 146 kB gzipped) only loads with the access graph.
 
 Every API call needs a signed-in session (design `docs/design/phase-0-platform-security.md` §11, §12),
 and Tessera never sees a password: users sign in through their company's identity provider (OIDC, SAML 2.0,
-or an OAuth 2.0-only provider such as GitHub).
+CAS 3.0, WS-Federation (legacy ADFS), or an OAuth 2.0-only provider such as GitHub).
 
 1. `./run.sh` and open http://localhost:5173. The sign-in page asks for the organization (tenant):
    `larkspur` (the demo company) or `globex`.
@@ -2176,6 +2320,46 @@ ignored). `auth_time` is the callback time. Admins sign in through OIDC or SAML.
 (`/github/login/oauth/authorize`, `/github/login/oauth/access_token`, `/github/user`; faults
 `github_token_error`, `github_token_type`, `github_user_error`, `github_no_id`, `github_string_id`).
 
+### Sign-in through CAS 3.0
+
+A `protocol: cas` connection (issue #152; most Apereo CAS servers also speak SAML and OIDC, which are
+preferred) redirects to `{cas_server_url}/login?service=…` with the transaction's `state` inside the
+service URL, `/api/auth/cas/{connection_id}/callback?state=`. CAS sends back only a ticket, so the
+callback rebuilds that exact service URL and validates the ticket at `{cas_server_url}/p3/serviceValidate`
+through `internal/safehttp` (`internal/auth/casclient`): service tickets (`ST-`) only, no proxy tickets or
+proxy granting, a size cap, XML round-trip check, exactly one `cas:user`, and any markup inside the user
+or an attribute (a comment splitting the name, a nested element) refused. Each ticket is also used once
+here (`replay_cache`). The user is `cas:user` or `subject_source: attribute:<name>`, never the email.
+
+`authenticationDate` must be released: it is `auth_time` (max_age at sign-in). Phishing resistance comes
+only from a configured amr-style attribute (`authn_mapping.amr_attribute` + `phr_amr`, for example
+`successfulAuthenticationHandlers: [[WebAuthnAuthenticationHandler]]`); otherwise sessions are AAL1.
+Step-up sends `renew=true`, validates with `renew=true`, and needs an `authenticationDate` after the
+step-up started and `isFromNewLogin` not false.
+
+`./run.sh` seeds **Dev IdP (CAS)** against the dev IdP's `/cas` server (`/cas/login` with single
+sign-on unless `renew`, `/cas/p3/serviceValidate`; faults `cas_failure`, `cas_no_user`,
+`cas_two_users`, `cas_comment_user`, `cas_proxied`, `cas_stale_auth`, `cas_ticket_reuse`).
+
+### Sign-in through WS-Federation (legacy ADFS)
+
+A `protocol: wsfed` connection (issue #153; ADFS and Entra also speak SAML and OIDC, which are preferred)
+redirects to the passive endpoint with `wa=wsignin1.0`, `wtrealm` (Tessera's realm,
+`/api/auth/wsfed/{connection_id}`, the token audience), `wreply` (`…/callback`) and `wctx` (the login
+transaction's state); a step-up adds `wfresh=0`, and `wauth` asks for the configured class ref. The IdP
+posts `wresult`, a WS-Trust 2005/02 RequestSecurityTokenResponse, to the callback (cross-site, so it is
+re-posted from Tessera's origin as for SAML). `samlsp.ValidateWSFed` applies the SAML ACS checks to the
+SAML 2.0 assertion inside it (the document's only assertion, its own enveloped signature by a pinned
+certificate, verified detached and only the verified element read, no comment in NameID, issuer,
+audience = realm, Recipient when present, time window, AuthnInstant), plus AppliesTo = realm.
+WS-Federation has no request ID: the transaction is bound by the cookie and `wctx`, and each assertion
+ID is accepted once (`replay_cache`). SAML 1.1 tokens are refused. The user is the persistent NameID or
+`subject_source: attribute:<claim type>` (for example objectGUID), never the UPN or email.
+
+`./run.sh` seeds **Dev IdP (WS-Federation)** against the dev IdP's `/wsfed` endpoint, which wraps the
+SAML assertion it signs (faults: the SAML assertion faults, XSW1–8 included, plus `wsfed_saml11`,
+`wsfed_wrong_applies_to`, `wsfed_tampered`).
+
 **A new tenant** is created by an operator (design §15.3); every step is audited as the OS user:
 
 ```bash
@@ -2193,7 +2377,12 @@ needs `idp_entity_id`, `idp_sso_url` and `idp_signing_certs` (pinned), takes `su
 ID/metadata and ACS URLs to register at the IdP. `protocol: oauth2` takes `profile: github` (GitHub's
 endpoints and `id` by default) or `generic_oauth2` with `authorization_endpoint`, `token_endpoint`,
 `userinfo_endpoint` and `subject_field` (never a name or email), needs `-client-secret-file`, and
-prints the redirect URI. `invite-admin` prints a one-time
+prints the redirect URI. `protocol: cas` with `profile: generic_cas` needs `cas_server_url`, takes
+`subject_source` (`cas_user` or `attribute:<name>`), `attribute_map` and `authn_mapping`, and prints the
+service URL pattern to register at the CAS server. `protocol: wsfed` with `profile: adfs` needs
+`idp_entity_id` (the token issuer), `wsfed_endpoint` and `idp_signing_certs`, takes `subject_source`,
+`attribute_map`, `step_up_request` and `authn_mapping`, and prints the realm and reply URL for the
+relying party trust. `invite-admin` prints a one-time
 `/t/acme/bootstrap?code=tbi_…` URL valid for at most 24 hours (only its hash is stored): redeeming it
 with a phishing-resistant sign-in through that connection, as that email, makes the user `tenant_admin`
 (source `bootstrap`), once.

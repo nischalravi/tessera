@@ -8,7 +8,7 @@
   "status": 200,
   "body": [
    {
-    "id": 176,
+    "id": 179,
     "at": "2026-10-08T09:30:00",
     "actor": "security-oncall@larkspur.example",
     "action": "connectors.sync",
@@ -23,7 +23,7 @@
      "delegations": 8
     },
     "event_id": "<uuid>",
-    "seq": 176,
+    "seq": 179,
     "actor_type": "user",
     "actor_id": "00000000-0000-4000-8000-0000000000c1",
     "outcome": "success",
@@ -42,7 +42,7 @@
     "prev_hash": "<hash>"
    },
    {
-    "id": 162,
+    "id": 165,
     "at": "2026-10-08T09:30:00",
     "actor": "security-oncall@larkspur.example",
     "action": "jml.joiner",
@@ -52,7 +52,7 @@
      "steps": 9
     },
     "event_id": "<uuid>",
-    "seq": 162,
+    "seq": 165,
     "actor_type": "user",
     "actor_id": "00000000-0000-4000-8000-0000000000c1",
     "outcome": "success",
@@ -71,7 +71,7 @@
     "prev_hash": "<hash>"
    },
    {
-    "id": 160,
+    "id": 163,
     "at": "2026-10-08T09:30:00",
     "actor": "security-oncall@larkspur.example",
     "action": "jml.mover",
@@ -81,7 +81,7 @@
      "steps": 8
     },
     "event_id": "<uuid>",
-    "seq": 160,
+    "seq": 163,
     "actor_type": "user",
     "actor_id": "00000000-0000-4000-8000-0000000000c1",
     "outcome": "success",
@@ -100,7 +100,7 @@
     "prev_hash": "<hash>"
    },
    {
-    "id": 158,
+    "id": 161,
     "at": "2026-10-08T09:30:00",
     "actor": "security-oncall@larkspur.example",
     "action": "jml.joiner",
@@ -110,7 +110,36 @@
      "steps": 10
     },
     "event_id": "<uuid>",
-    "seq": 158,
+    "seq": 161,
+    "actor_type": "user",
+    "actor_id": "00000000-0000-4000-8000-0000000000c1",
+    "outcome": "success",
+    "target": null,
+    "request_id": "<uuid>",
+    "authn": {
+     "ctx_id": "00000000-0000-4000-8000-0000000000c2",
+     "aal": 2,
+     "phr": true,
+     "acr": "urn:tessera:acr:phr",
+     "auth_time": "2026-10-08T09:30:00.000000Z",
+     "auth_age_s": 0
+    },
+    "http": null,
+    "hash": "<hash>",
+    "prev_hash": "<hash>"
+   },
+   {
+    "id": 159,
+    "at": "2026-10-08T09:30:00",
+    "actor": "security-oncall@larkspur.example",
+    "action": "jml.mover",
+    "detail": {
+     "event_id": 2,
+     "identity": "Wim Bellweather",
+     "steps": 4
+    },
+    "event_id": "<uuid>",
+    "seq": 159,
     "actor_type": "user",
     "actor_id": "00000000-0000-4000-8000-0000000000c1",
     "outcome": "success",
@@ -132,11 +161,11 @@
     "id": 156,
     "at": "2026-10-08T09:30:00",
     "actor": "security-oncall@larkspur.example",
-    "action": "jml.mover",
+    "action": "jml.leaver",
     "detail": {
-     "event_id": 2,
-     "identity": "Wim Bellweather",
-     "steps": 4
+     "event_id": 1,
+     "identity": "Marcus Bellweather",
+     "steps": 13
     },
     "event_id": "<uuid>",
     "seq": 156,
@@ -158,17 +187,17 @@
     "prev_hash": "<hash>"
    },
    {
-    "id": 153,
+    "id": 141,
     "at": "2026-10-08T09:30:00",
     "actor": "security-oncall@larkspur.example",
-    "action": "jml.leaver",
+    "action": "grant.revoke",
     "detail": {
-     "event_id": 1,
-     "identity": "Marcus Bellweather",
-     "steps": 13
+     "edge_id": 19,
+     "grant": "workday:emp-1033 → workday:AP Approver",
+     "permissions_removed": 1
     },
     "event_id": "<uuid>",
-    "seq": 153,
+    "seq": 141,
     "actor_type": "user",
     "actor_id": "00000000-0000-4000-8000-0000000000c1",
     "outcome": "success",
@@ -187,17 +216,56 @@
     "prev_hash": "<hash>"
    },
    {
-    "id": 138,
+    "id": 137,
     "at": "2026-10-08T09:30:00",
     "actor": "security-oncall@larkspur.example",
-    "action": "grant.revoke",
+    "action": "review.population_frozen",
     "detail": {
-     "edge_id": 19,
-     "grant": "workday:emp-1033 → workday:AP Approver",
-     "permissions_removed": 1
+     "campaign_id": 3,
+     "population_hash": "b98ab54be62bf0700e2c536a9e817635cc231933549ed8c77ba18934f7d14f87",
+     "items": 218,
+     "systems": {
+      "aws": 18,
+      "github": 86,
+      "okta": 48,
+      "snowflake": 39,
+      "workday": 27
+     },
+     "auto_certified": 135,
+     "qa_sampled": 7,
+     "qa_sample_pct": 5
     },
     "event_id": "<uuid>",
-    "seq": 138,
+    "seq": 137,
+    "actor_type": "user",
+    "actor_id": "00000000-0000-4000-8000-0000000000c1",
+    "outcome": "success",
+    "target": null,
+    "request_id": "<uuid>",
+    "authn": {
+     "ctx_id": "00000000-0000-4000-8000-0000000000c2",
+     "aal": 2,
+     "phr": true,
+     "acr": "urn:tessera:acr:phr",
+     "auth_time": "2026-10-08T09:30:00.000000Z",
+     "auth_age_s": 0
+    },
+    "http": null,
+    "hash": "<hash>",
+    "prev_hash": "<hash>"
+   },
+   {
+    "id": 136,
+    "at": "2026-10-08T09:30:00",
+    "actor": "security-oncall@larkspur.example",
+    "action": "review.campaign_created",
+    "detail": {
+     "campaign": "Exception-only review",
+     "items": 83,
+     "total": 218
+    },
+    "event_id": "<uuid>",
+    "seq": 136,
     "actor_type": "user",
     "actor_id": "00000000-0000-4000-8000-0000000000c1",
     "outcome": "success",
@@ -219,11 +287,21 @@
     "id": 134,
     "at": "2026-10-08T09:30:00",
     "actor": "security-oncall@larkspur.example",
-    "action": "review.campaign_created",
+    "action": "review.population_frozen",
     "detail": {
-     "campaign": "Exception-only review",
-     "items": 83,
-     "total": 218
+     "campaign_id": 2,
+     "population_hash": "b98ab54be62bf0700e2c536a9e817635cc231933549ed8c77ba18934f7d14f87",
+     "items": 218,
+     "systems": {
+      "aws": 18,
+      "github": 86,
+      "okta": 48,
+      "snowflake": 39,
+      "workday": 27
+     },
+     "auto_certified": 135,
+     "qa_sampled": 7,
+     "qa_sample_pct": 5
     },
     "event_id": "<uuid>",
     "seq": 134,
@@ -245,7 +323,7 @@
     "prev_hash": "<hash>"
    },
    {
-    "id": 132,
+    "id": 133,
     "at": "2026-10-08T09:30:00",
     "actor": "security-oncall@larkspur.example",
     "action": "review.campaign_created",
@@ -255,7 +333,7 @@
      "total": 218
     },
     "event_id": "<uuid>",
-    "seq": 132,
+    "seq": 133,
     "actor_type": "user",
     "actor_id": "00000000-0000-4000-8000-0000000000c1",
     "outcome": "success",
@@ -274,7 +352,7 @@
     "prev_hash": "<hash>"
    },
    {
-    "id": 127,
+    "id": 128,
     "at": "2026-10-08T09:30:00",
     "actor": "security-oncall@larkspur.example",
     "action": "review.revoke",
@@ -283,7 +361,7 @@
      "grant": "snowflake:MIREILLE_DELACROIX → snowflake:FINANCE_ANALYST"
     },
     "event_id": "<uuid>",
-    "seq": 127,
+    "seq": 128,
     "actor_type": "user",
     "actor_id": "00000000-0000-4000-8000-0000000000c1",
     "outcome": "success",
@@ -305,7 +383,7 @@
     "prev_hash": "<hash>"
    },
    {
-    "id": 125,
+    "id": 126,
     "at": "2026-10-08T09:30:00",
     "actor": "security-oncall@larkspur.example",
     "action": "review.keep",
@@ -315,7 +393,7 @@
      "comment": "needed"
     },
     "event_id": "<uuid>",
-    "seq": 125,
+    "seq": 126,
     "actor_type": "user",
     "actor_id": "00000000-0000-4000-8000-0000000000c1",
     "outcome": "success",
@@ -337,7 +415,7 @@
     "prev_hash": "<hash>"
    },
    {
-    "id": 116,
+    "id": 117,
     "at": "2026-10-08T09:30:00",
     "actor": "security-oncall@larkspur.example",
     "action": "jit.approve",
@@ -346,7 +424,7 @@
      "expires_at": "2026-10-08T13:30:00"
     },
     "event_id": "<uuid>",
-    "seq": 116,
+    "seq": 117,
     "actor_type": "user",
     "actor_id": "00000000-0000-4000-8000-0000000000c1",
     "outcome": "success",
@@ -365,7 +443,7 @@
     "prev_hash": "<hash>"
    },
    {
-    "id": 113,
+    "id": 114,
     "at": "2026-10-08T09:30:00",
     "actor": "security-oncall@larkspur.example",
     "action": "jit.revoke",
@@ -373,7 +451,7 @@
      "request_id": 3
     },
     "event_id": "<uuid>",
-    "seq": 113,
+    "seq": 114,
     "actor_type": "user",
     "actor_id": "00000000-0000-4000-8000-0000000000c1",
     "outcome": "success",
@@ -392,7 +470,7 @@
     "prev_hash": "<hash>"
    },
    {
-    "id": 111,
+    "id": 112,
     "at": "2026-10-08T09:30:00",
     "actor": "security-oncall@larkspur.example",
     "action": "jit.deny",
@@ -400,7 +478,7 @@
      "request_id": 1
     },
     "event_id": "<uuid>",
-    "seq": 111,
+    "seq": 112,
     "actor_type": "user",
     "actor_id": "00000000-0000-4000-8000-0000000000c1",
     "outcome": "success",
@@ -419,7 +497,7 @@
     "prev_hash": "<hash>"
    },
    {
-    "id": 108,
+    "id": 109,
     "at": "2026-10-08T09:30:00",
     "actor": "security-oncall@larkspur.example",
     "action": "jit.approve",
@@ -428,7 +506,7 @@
      "expires_at": "2026-10-08T11:00:00"
     },
     "event_id": "<uuid>",
-    "seq": 108,
+    "seq": 109,
     "actor_type": "user",
     "actor_id": "00000000-0000-4000-8000-0000000000c1",
     "outcome": "success",
@@ -447,7 +525,7 @@
     "prev_hash": "<hash>"
    },
    {
-    "id": 105,
+    "id": 106,
     "at": "2026-10-08T09:30:00",
     "actor": "requester@larkspur.example",
     "action": "jit.request",
@@ -457,7 +535,7 @@
      "hours": "2.0"
     },
     "event_id": "<uuid>",
-    "seq": 105,
+    "seq": 106,
     "actor_type": "user",
     "actor_id": "00000000-0000-4000-8000-0000000000c3",
     "outcome": "success",
@@ -476,7 +554,7 @@
     "prev_hash": "<hash>"
    },
    {
-    "id": 95,
+    "id": 96,
     "at": "2026-10-08T09:30:00",
     "actor": "requester@larkspur.example",
     "action": "jit.request",
@@ -486,7 +564,7 @@
      "hours": "4"
     },
     "event_id": "<uuid>",
-    "seq": 95,
+    "seq": 96,
     "actor_type": "user",
     "actor_id": "00000000-0000-4000-8000-0000000000c3",
     "outcome": "success",
@@ -505,7 +583,7 @@
     "prev_hash": "<hash>"
    },
    {
-    "id": 93,
+    "id": 94,
     "at": "2026-10-08T09:30:00",
     "actor": "requester@larkspur.example",
     "action": "jit.request",
@@ -515,7 +593,7 @@
      "hours": "1.5"
     },
     "event_id": "<uuid>",
-    "seq": 93,
+    "seq": 94,
     "actor_type": "user",
     "actor_id": "00000000-0000-4000-8000-0000000000c3",
     "outcome": "success",
@@ -529,6 +607,38 @@
      "auth_time": "2026-10-08T09:30:00.000000Z",
      "auth_age_s": 0
     },
+    "http": null,
+    "hash": "<hash>",
+    "prev_hash": "<hash>"
+   },
+   {
+    "id": 9,
+    "at": "2026-10-08T09:30:00",
+    "actor": "system",
+    "action": "review.population_frozen",
+    "detail": {
+     "campaign_id": 1,
+     "population_hash": "2dab79c9ff1d1fe84c70d8587d0ff252e98dbcc3f47c65267195616e3f51eb32",
+     "items": 219,
+     "systems": {
+      "aws": 18,
+      "github": 86,
+      "okta": 48,
+      "snowflake": 40,
+      "workday": 27
+     },
+     "auto_certified": 135,
+     "qa_sampled": 7,
+     "qa_sample_pct": 5
+    },
+    "event_id": "<uuid>",
+    "seq": 9,
+    "actor_type": "system",
+    "actor_id": "system",
+    "outcome": "success",
+    "target": null,
+    "request_id": null,
+    "authn": null,
     "http": null,
     "hash": "<hash>",
     "prev_hash": "<hash>"

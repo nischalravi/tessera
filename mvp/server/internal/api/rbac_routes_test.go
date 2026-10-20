@@ -16,7 +16,7 @@ import (
 // designRoutes is the route -> requirement table of the designs, transcribed:
 // docs/design/phase-0-platform-security.md §16.2 (existing routes) and §16.1
 // (session and audit routes), and docs/design/deployment-readiness.md §9
-// (readiness routes). Columns: method, pattern, permission, step-up
+// (readiness routes) and issue #163 (conditional access). Columns: method, pattern, permission, step-up
 // (STEP_UP_POLICY or -). "public" marks the allow-list. Routes that neither
 // design names (GET /api/accounts, the API description) are marked with a
 // trailing "#" and the requirement chosen for them in this PR.
@@ -47,6 +47,10 @@ GET    /api/reviews/campaigns                        graph.read      -
 POST   /api/reviews/campaigns                        reviews.manage  -
 GET    /api/reviews/campaigns/{campaign_id}          graph.read      -
 POST   /api/reviews/items/{item_id}/decision         reviews.decide  STEP_UP_POLICY
+GET    /api/reviews/campaigns/{campaign_id}/population  graph.read   -  # issue #110
+GET    /api/reviews/campaigns/{campaign_id}/export   reviews.export  -  # issue #110
+POST   /api/reviews/qa/{qa_id}/decision              reviews.decide  STEP_UP_POLICY  # issue #110
+PUT    /api/reviews/settings                         reviews.manage  -  # issue #110
 GET    /api/reviews/schedules                        graph.read      -  # issue #166
 POST   /api/reviews/schedules                        reviews.manage  -  # issue #166
 PUT    /api/reviews/schedules/{schedule_id}          reviews.manage  -  # issue #166
@@ -229,6 +233,16 @@ GET    /api/evidence/packs                           audit.read      -  # issue 
 POST   /api/evidence/packs                           audit.read      -  # issue #111
 GET    /api/evidence/packs/{pack_id}                 audit.read      -  # issue #111
 GET    /api/evidence/packs/{pack_id}/download        audit.read      -  # issue #111
+GET    /api/helpdesk/cases                           graph.read      -  # issue #108
+POST   /api/helpdesk/cases                           helpdesk.reset  -  # issue #108
+GET    /api/helpdesk/cases/{case_id}                 graph.read      -  # issue #108
+POST   /api/helpdesk/cases/{case_id}/verifications   helpdesk.reset  -  # issue #108
+POST   /api/helpdesk/cases/{case_id}/manager-approval helpdesk.approve STEP_UP_POLICY  # issue #108
+POST   /api/helpdesk/cases/{case_id}/second-approval helpdesk.approve STEP_UP_POLICY  # issue #108
+POST   /api/helpdesk/cases/{case_id}/execute         helpdesk.reset  STEP_UP_POLICY  # issue #108
+POST   /api/helpdesk/cases/{case_id}/cancel          helpdesk.reset  -  # issue #108
+GET    /api/helpdesk/findings                        graph.read      -  # issue #108
+POST   /api/helpdesk/signals                         helpdesk.approve -  # issue #108
 POST   /api/connections/{id}/validate                connections.manage -
 GET    /api/connections/{id}/validations/{run}       connections.read   -
 POST   /api/connections/{id}/dry-run                 connections.manage -
@@ -243,6 +257,19 @@ GET    /api/insights/deployment-health               connections.read   -
 POST   /api/insights/deployment-health/rerun         connections.manage -
 GET    /api/connections/{id}/readiness/evidence      connections.read   -  (+ audit.read in the handler; the design's audit.export does not exist)
 GET    /api/insights/deployment-health/evidence      connections.read   -  (+ audit.read in the handler; the design's audit.export does not exist)
+GET    /api/access/policies                          conditional_access.read   -
+POST   /api/access/policies                          conditional_access.manage STEP_UP_POLICY
+PUT    /api/access/policies/{id}                     conditional_access.manage STEP_UP_POLICY
+DELETE /api/access/policies/{id}                     conditional_access.manage STEP_UP_POLICY
+GET    /api/access/networks                          conditional_access.read   -
+POST   /api/access/networks                          conditional_access.manage STEP_UP_POLICY
+PUT    /api/access/networks/{id}                     conditional_access.manage STEP_UP_POLICY
+DELETE /api/access/networks/{id}                     conditional_access.manage STEP_UP_POLICY
+GET    /api/access/users                             conditional_access.read   -
+GET    /api/access/device-signals                    conditional_access.read   -
+PUT    /api/access/device-signals/{user_id}          conditional_access.manage STEP_UP_POLICY
+DELETE /api/access/device-signals/{user_id}          conditional_access.manage STEP_UP_POLICY
+POST   /api/access/evaluate                          conditional_access.read   -
 GET    /api/sod/functions                            graph.read      -  # issue #298
 POST   /api/sod/functions                            sod.manage      STEP_UP_POLICY  # issue #298
 GET    /api/sod/functions/{function_id}              graph.read      -  # issue #298
@@ -364,6 +391,8 @@ GET    /api/auth/login                               public
 GET    /api/auth/oidc/{connection_id}/callback       public
 GET    /api/auth/saml/{connection_id}/metadata       public
 POST   /api/auth/saml/{connection_id}/acs            public
+GET    /api/auth/cas/{connection_id}/callback        public
+POST   /api/auth/wsfed/{connection_id}/callback      public
 GET    /t/{slug}/bootstrap                           public
 GET    /api/admin/users                              admin.read      -  # issue #16
 POST   /api/admin/users/{user_id}/disable            admin.users.disable STEP_UP_ADMIN  # issue #16
