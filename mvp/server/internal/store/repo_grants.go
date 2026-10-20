@@ -17,23 +17,52 @@ type GrantEdge struct {
 	TenantID  tenancy.ID
 	Src, Dst  string
 	Relation  string
-	Source    string // connector | jit | manual | request | role
+	Source    string // connector | jit | manual | request | role | evaluator
 	ExpiresAt *time.Time
 	CreatedAt time.Time
+	// ExplanationID, Outcome ("allow" | "conditional") and Fidelity ("exact" |
+	// "approximate" | "unsupported") are set only on edges the AWS evaluator
+	// confirmed (design §11.2); "" means unset, which is every other edge.
+	ExplanationID, Outcome, Fidelity string
+	// Ref and Provenance describe the intent behind a new edge (see
+	// repo_access_model.go): Ref names what approved it (a request line, a
+	// role id, a JIT request) and Provenance overrides the one the source
+	// implies (a birthright role grant). They are not stored in grant_edges.
+	Ref        string
+	Provenance string
 }
 
-const edgeCols = `e.id, e.tenant_id, e.src, e.dst, e.relation, e.source, e.expires_at, e.created_at`
+// EdgeSourceEvaluator is the source of an edge the AWS evaluator confirmed.
+const EdgeSourceEvaluator = "evaluator"
+
+// edgeCols are the columns of an edge, with the evaluator's fields from the
+// side table (schema/0321_aws_integration.sql) that edgeFrom joins.
+const edgeCols = `e.id, e.tenant_id, e.src, e.dst, e.relation, e.source, e.expires_at, e.created_at,
+	COALESCE(v.explanation_id, ''), COALESCE(v.outcome, ''), COALESCE(v.fidelity, '')`
+
+const edgeFrom = ` FROM grant_edges e LEFT JOIN aws_edge_evaluations v ON v.tenant_id = @tenant AND v.edge_id = e.id `
 
 var (
 	edgesList = tq("grant_edges.list", `
-		SELECT `+edgeCols+` FROM grant_edges e WHERE e.tenant_id = @tenant ORDER BY e.id`)
+		SELECT `+edgeCols+edgeFrom+`WHERE e.tenant_id = @tenant ORDER BY e.id`)
 	edgesGet = tq("grant_edges.get", `
-		SELECT `+edgeCols+` FROM grant_edges e WHERE e.tenant_id = @tenant AND e.id = @id`)
+		SELECT `+edgeCols+edgeFrom+`WHERE e.tenant_id = @tenant AND e.id = @id`)
 	edgesBetween = tq("grant_edges.between", `
-		SELECT `+edgeCols+` FROM grant_edges e WHERE e.tenant_id = @tenant AND e.src = @src AND e.dst = @dst
+		SELECT `+edgeCols+edgeFrom+`WHERE e.tenant_id = @tenant AND e.src = @src AND e.dst = @dst
 		ORDER BY e.id LIMIT 1`)
 	edgesFrom = tq("grant_edges.from", `
-		SELECT `+edgeCols+` FROM grant_edges e WHERE e.tenant_id = @tenant AND e.src = @src ORDER BY e.id`)
+		SELECT `+edgeCols+edgeFrom+`WHERE e.tenant_id = @tenant AND e.src = @src ORDER BY e.id`)
+	edgesUpsertEvaluator = tq("grant_edges.upsert_evaluator", `
+		INSERT INTO grant_edges (tenant_id, src, dst, relation, source, created_at)
+		VALUES (@tenant, @src, @dst, @relation, 'evaluator', @created_at)
+		ON CONFLICT (tenant_id, src, dst) DO UPDATE SET relation = excluded.relation WHERE grant_edges.source = 'evaluator'`)
+	edgeEvalUpsert = tq("aws_edge_evaluations.upsert", `
+		INSERT INTO aws_edge_evaluations (tenant_id, edge_id, explanation_id, outcome, fidelity)
+		VALUES (@tenant, @edge_id, @explanation_id, @outcome, @fidelity)
+		ON CONFLICT (tenant_id, edge_id) DO UPDATE SET explanation_id = excluded.explanation_id, outcome = excluded.outcome,
+			fidelity = excluded.fidelity`)
+	edgeEvalDelete = tq("aws_edge_evaluations.delete", `
+		DELETE FROM aws_edge_evaluations WHERE tenant_id = @tenant AND edge_id = @id`)
 	edgesCountStanding = tq("grant_edges.count_standing_between", `
 		SELECT count(*) FROM grant_edges e WHERE e.tenant_id = @tenant AND e.src = @src AND e.dst = @dst
 		AND e.source != 'jit'`)
@@ -72,7 +101,8 @@ func scanEdge(s scanner) (*GrantEdge, error) {
 	var e GrantEdge
 	var tid string
 	var exp, created nullTime
-	if err := s.Scan(&e.ID, &tid, &e.Src, &e.Dst, &e.Relation, &e.Source, &exp, &created); err != nil {
+	if err := s.Scan(&e.ID, &tid, &e.Src, &e.Dst, &e.Relation, &e.Source, &exp, &created,
+		&e.ExplanationID, &e.Outcome, &e.Fidelity); err != nil {
 		return nil, err
 	}
 	var err error
@@ -146,6 +176,53 @@ func (tx *TenantTx) UpsertConnectorEdge(src, dst, relation string, createdAt tim
 	return tx.openSpan(cur.ID, src, dst, relation, cur.Source, cur.ExpiresAt, createdAt)
 }
 
+// EdgeEvaluation is what the AWS evaluator confirmed about a grant edge.
+type EdgeEvaluation struct {
+	ExplanationID, Outcome, Fidelity string
+}
+
+// UpsertEvaluatorEdge inserts an edge the AWS evaluator confirmed, or updates
+// the one it made before, with the evaluation's explanation, outcome and
+// fidelity. An edge from another source (manual, JIT, a demo connector) keeps
+// its source and gets no evaluation. A grant revoked inside Tessera is not
+// brought back. It reports whether an edge now carries the evaluation. Like
+// UpsertConnectorEdge it keeps edge_history in step.
+func (tx *TenantTx) UpsertEvaluatorEdge(src, dst, relation string, createdAt time.Time, ev EdgeEvaluation) (bool, error) {
+	if n, err := tx.count(revokedCount, sql.Named("src", src), sql.Named("dst", dst)); err != nil || n > 0 {
+		return false, err
+	}
+	prev, err := getEdgeOrNil(tx.EdgeBetween(src, dst))
+	if err != nil {
+		return false, err
+	}
+	if _, err := tx.exec(edgesUpsertEvaluator, sql.Named("src", src), sql.Named("dst", dst), sql.Named("relation", relation),
+		sql.Named("created_at", T(createdAt))); err != nil {
+		return false, err
+	}
+	e, err := tx.EdgeBetween(src, dst)
+	if err != nil {
+		return false, err
+	}
+	if e.Source != EdgeSourceEvaluator {
+		return false, nil
+	}
+	// the edge set changed: keep edge_history in step (a new edge opens a span,
+	// a changed relation closes the old one and opens another)
+	if prev == nil || prev.Relation != e.Relation {
+		if prev != nil {
+			if err := tx.closeSpan(src, dst, createdAt); err != nil {
+				return false, err
+			}
+		}
+		if err := tx.openSpan(e.ID, src, dst, e.Relation, e.Source, e.ExpiresAt, createdAt); err != nil {
+			return false, err
+		}
+	}
+	_, err = tx.exec(edgeEvalUpsert, sql.Named("edge_id", e.ID), sql.Named("explanation_id", ev.ExplanationID),
+		sql.Named("outcome", ev.Outcome), sql.Named("fidelity", ev.Fidelity))
+	return err == nil, err
+}
+
 func getEdgeOrNil(e *GrantEdge, err error) (*GrantEdge, error) {
 	if errors.Is(err, ErrNotFound) {
 		return nil, nil
@@ -164,11 +241,16 @@ func (tx *TenantTx) InsertEdge(e *GrantEdge) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	// intent beside the live edge, in the same transaction; none for a connector edge
+	if err := tx.recordEdgeIntent(id, e); err != nil {
+		return 0, err
+	}
 	return id, tx.openSpan(id, e.Src, e.Dst, e.Relation, e.Source, e.ExpiresAt, e.CreatedAt)
 }
 
 // SetEdgeExpiry sets a grant edge's expiry as of at: the history span with
-// the old expiry closes at at and a new one opens with the new expiry.
+// the old expiry closes at at and a new one opens with the new expiry, and the
+// intent's validity follows.
 func (tx *TenantTx) SetEdgeExpiry(id int64, expires, at time.Time) error {
 	e, err := getEdgeOrNil(tx.Edge(id))
 	if err != nil || e == nil {
@@ -177,22 +259,38 @@ func (tx *TenantTx) SetEdgeExpiry(id int64, expires, at time.Time) error {
 	if _, err := tx.exec(edgesSetExpiry, sql.Named("expires_at", T(expires)), sql.Named("id", id)); err != nil {
 		return err
 	}
+	if _, err := tx.exec(intendedSetExpiry, sql.Named("valid_until", T(expires)), sql.Named("edge_id", id)); err != nil {
+		return err
+	}
 	if err := tx.closeSpan(e.Src, e.Dst, at); err != nil {
 		return err
 	}
 	return tx.openSpan(e.ID, e.Src, e.Dst, e.Relation, e.Source, &expires, at)
 }
 
-// DeleteEdge deletes a grant edge by id; its history span closes at at.
+// DeleteEdge deletes a grant edge by id (and the evaluation it carries); its
+// history span and its intent close at at.
 func (tx *TenantTx) DeleteEdge(id int64, at time.Time) error {
+	return tx.deleteEdge(id, at, CloseRemoved)
+}
+
+// deleteEdge removes the edge, its evaluation, closes its history span and its
+// intent (why: the close reason).
+func (tx *TenantTx) deleteEdge(id int64, at time.Time, why string) error {
 	e, err := getEdgeOrNil(tx.Edge(id))
 	if err != nil || e == nil {
+		return err
+	}
+	if _, err := tx.exec(edgeEvalDelete, sql.Named("id", id)); err != nil {
 		return err
 	}
 	if _, err := tx.exec(edgesDelete, sql.Named("id", id)); err != nil {
 		return err
 	}
-	return tx.closeSpan(e.Src, e.Dst, at)
+	if err := tx.closeSpan(e.Src, e.Dst, at); err != nil {
+		return err
+	}
+	return tx.closeEdgeIntent(id, why, at)
 }
 
 // RevokeEdge deletes a grant edge and records a tombstone, so a later connector
@@ -209,7 +307,14 @@ func (tx *TenantTx) RevokeEdge(id int64, at time.Time, reason string) error {
 		sql.Named("at", T(at))); err != nil {
 		return err
 	}
-	return tx.DeleteEdge(id, at)
+	return tx.deleteEdge(id, at, reasonOrDefault(reason))
+}
+
+func reasonOrDefault(r string) string {
+	if r == "" {
+		return CloseRemoved
+	}
+	return r
 }
 
 // RevokedGrant is a tombstone left by RevokeEdge.
@@ -241,21 +346,32 @@ func (tx *TenantTx) RevokedGrants() ([]*RevokedGrant, error) {
 }
 
 // DeleteJITEdge deletes a grant edge by id if it is a JIT edge; its history
-// span closes at at.
+// span and intent close at at.
 func (tx *TenantTx) DeleteJITEdge(id int64, at time.Time) error {
 	e, err := getEdgeOrNil(tx.Edge(id))
 	if err != nil || e == nil || e.Source != "jit" {
 		return err
 	}
-	if _, err := tx.exec(edgesDeleteJIT, sql.Named("id", id)); err != nil {
+	res, err := tx.exec(edgesDeleteJIT, sql.Named("id", id))
+	if err != nil {
 		return err
 	}
-	return tx.closeSpan(e.Src, e.Dst, at)
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		return err
+	}
+	if err := tx.closeSpan(e.Src, e.Dst, at); err != nil {
+		return err
+	}
+	return tx.closeEdgeIntent(id, CloseJITEnded, at)
 }
 
 // DeleteExpiredJITEdges deletes JIT edges that expired at or before now. Their
 // history spans close at the edge's own expiry, not at the (later) sweep.
 func (tx *TenantTx) DeleteExpiredJITEdges(now time.Time) (int64, error) {
+	// close the intent and the history spans first: the statements read the edges the delete removes
+	if _, err := tx.exec(intendedCloseExpiredJIT, sql.Named("now", T(now)), sql.Named("at", T(now))); err != nil {
+		return 0, err
+	}
 	if _, err := tx.exec(spansCloseExpired, sql.Named("now", T(now))); err != nil {
 		return 0, err
 	}

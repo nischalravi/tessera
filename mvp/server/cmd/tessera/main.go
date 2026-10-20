@@ -49,12 +49,17 @@
 //	                      tessera-devidp -print-saml-cert): seeding also creates a
 //	                      dev_mock SAML connection pinning it (run.sh sets it)
 //	TESSERA_READINESS_SCENARIO  simulated validation scenario for demo connectors: gaps (default) or happy
+//	TESSERA_READINESS_LIVE_CHECK_DAYS  how often live checks re-run on active connections, 1 to 7 days (default 1)
+//	TESSERA_READINESS_SCHEDULER "off" stops the scheduled re-runs, drift and Degraded detection
 //	TESSERA_SAFEDIAL_ALLOW      dev only: host:port or CIDR:port private LDAP targets live checks may dial (see mvp/README.md "Live LDAP checks")
+//	TESSERA_AGENT_ADDR, TESSERA_AGENT_TLS_CERT, TESSERA_AGENT_TLS_KEY  the mutual-TLS listener Directory
+//	                      Agents connect to, and its certificate and key (see mvp/README.md "Directory Agent")
 //	TESSERA_READINESS_DEMO      "off" skips seeding the demo Okta connection (larkspur only) for Deployment health
 package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -71,6 +76,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/agent"
 	"github.com/nischalravi/tessera/mvp/server/internal/alerts"
 	"github.com/nischalravi/tessera/mvp/server/internal/api"
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
@@ -79,6 +85,9 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/all"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/pit"
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/credential"
 	"github.com/nischalravi/tessera/mvp/server/internal/health"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
@@ -300,7 +309,7 @@ func seedDB(ctx context.Context, path string, cfg *config.Config, clock timeutil
 			secret = devIdPClientSecret
 		}
 		tenants = seed.WithDevIdPClient(tenants, cfg.DevIdPURL, seed.DevIdPClient{Sealer: sealer, Secret: secret,
-			SAMLCert: strings.TrimSpace(os.Getenv("TESSERA_DEV_IDP_SAML_CERT")), GitHub: true})
+			SAMLCert: strings.TrimSpace(os.Getenv("TESSERA_DEV_IDP_SAML_CERT")), GitHub: true, CAS: true, WSFed: true})
 	}
 	keyer := identifiers.NewKeyer(sealer)
 	for i := range tenants {
@@ -369,6 +378,14 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		return err
 	}
 	defer st.Close()
+	// #220: move the rows of the two retired credential tables into
+	// connection_credentials (a no-op once they are gone). A blob that does not
+	// open aborts startup rather than losing a credential.
+	if m, err := st.MigrateCredentials(ctx, sealer); err != nil {
+		return err
+	} else if m != (store.CredentialMigration{}) {
+		logger.Info("credentials migrated", "bind", m.Bind, "containment", m.Containment, "orphaned_dropped", m.Orphaned)
+	}
 	if _, err := loader.Load(); err != nil { // fail fast on broken policy files
 		return err
 	}
@@ -412,6 +429,12 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	rsvc := readiness.NewService(templates, string(cfg.Env))
 	rsvc.Runner.Scenario = scenario
 	rsvc.Runner.Live.Sealer, rsvc.Runner.Live.Allow = sealer, allow
+	// Directory Agents (DR-11): private directories are probed through them.
+	agents := &agent.Service{DB: st, Hub: agent.NewHub(nil), Clock: clock}
+	rsvc.Runner.Live.Agents = agents
+	if err := configureReadinessSchedule(rsvc); err != nil {
+		return err
+	}
 	// Outbound calls to IdPs (discovery, JWKS, token) and the kill switch's
 	// provider calls (containment) go through safehttp. A test server gets the
 	// production client (no loopback exception; ForConfig decides).
@@ -423,11 +446,25 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	all.Register(outbound, connsync.RuntimeFromConfig(cfg)) // okta and entra connectors use the shared client
 	obs.SetPoolStats(st.PoolStats)
 	checker := health.New(st, sealer, obs.DefaultLoops, time.Duration(cfg.ReadyMaxLoopLagSeconds)*time.Second, logger)
+	groupsEngine := &engine.Engine{Budget: cfg.GroupsSyncBudget, Log: logger}
 	fakeURL, stopFake, err := startFakeTarget(cfg, logger)
 	if err != nil {
 		return err
 	}
 	defer stopFake()
+	// One shared outbound client: sign-in, containment and provisioning all
+	// send through it.
+	// One-time secrets (claim links, confirmation codes) go from the API to the
+	// dispatcher through memory only.
+	secrets := notify.NewSecrets()
+	// The guest claim's credential authority: the dev IdP, in development only.
+	// Without one (production today) a claim stops at the credential step.
+	var authority credential.Authority
+	if cfg.Env == config.Dev && cfg.DevIdPURL != "" {
+		if authority, err = credential.NewDevIdP(cfg.Env, outbound); err != nil {
+			return err
+		}
+	}
 	// The s3:// anchor sink's AWS SDK client uses the same safehttp client.
 	anchorURL := cfg.AnchorURL(o.db)
 	alertSvc, err := newAlertService(cfg, st, sealer, outbound, clock, logger)
@@ -442,7 +479,8 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		Dev: cfg.Env == config.Dev && cfg.OutboundAllowLoopback}
 	containmentSvc := &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock, DB: st}
 	srv := api.New(api.Config{Health: checker, Store: st, Clock: clock, Policies: loader, Logger: logger,
-		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound, APIAudience: cfg.APIAudience,
+		Secrets: secrets, Credential: authority,
+		PublicURL: cfg.PublicURL, RPID: cfg.RPID, Sealer: sealer, OutboundHTTP: outbound, GroupsEngine: groupsEngine, APIAudience: cfg.APIAudience,
 		AccessTokenTTL: time.Duration(cfg.AccessTokenTTLSeconds) * time.Second,
 		DeviceCodeTTL:  time.Duration(cfg.DeviceCodeTTLSeconds) * time.Second, DPoPRSNonce: cfg.DPoPRSNonce,
 		Outbound: outbound, FakeTargetURL: fakeURL,
@@ -450,15 +488,15 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		SSF: &ssf.Service{HTTP: outbound, Sealer: sealer, Clock: clock, Containment: containmentSvc,
 			Dev: cfg.Env == config.Dev && cfg.OutboundAllowLoopback},
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
-		HSTS: cfg.IsProd(), Env: cfg.Env, Identifiers: identifiers.NewKeyer(sealer), EmailMode: cfg.Mail.Mode, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, Readiness: rsvc, AuditAnchor: anchorURL,
-		Siem: siemSvc, Alerts: alertSvc,
+		HSTS: cfg.IsProd(), Env: cfg.Env, Identifiers: identifiers.NewKeyer(sealer), EmailMode: cfg.Mail.Mode, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, Readiness: rsvc, Agents: agents, AuditAnchor: anchorURL,
+		Siem: siemSvc, Alerts: alertSvc, AWSCatalog: awsCatalogLoader(cfg),
 		SoD: sod.Settings{MaxDays: cfg.SoDMaxMitigationDays, WarnDays: cfg.SoDWarnDays}})
 	sender, err := notify.NewSender(cfg.Mail, cfg.Env, cfg.OutboundAllowLoopback, sealer, config.DevMailPath(o.db), logger)
 	if err != nil {
 		return err
 	}
 	dispatcher := &notify.Dispatcher{DB: st, Sender: sender, Clock: clock, Log: logger, MaxAttempts: cfg.NotifyMaxAttempts,
-		DigestHour: cfg.NotifyDigestHour, BaseURL: cfg.PublicURL}
+		DigestHour: cfg.NotifyDigestHour, BaseURL: cfg.PublicURL, Secrets: secrets}
 	checkpointer := &audit.Checkpointer{DB: st, Sealer: sealer, Sink: sink, Clock: timeutil.System, Issuer: cfg.PublicURL,
 		Every: time.Duration(cfg.AuditCheckpointSeconds) * time.Second, EveryEvents: int64(cfg.AuditCheckpointEvents),
 		Log: logger, OnTenant: api.RecordAnchorRun(st)}
@@ -483,6 +521,32 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	}
 	if metrics != nil {
 		go metrics.serve(logger)
+	}
+	// The Directory Agent listener (DR-11): mutual TLS only, a separate port
+	// from the API, serving nothing but the agent protocol.
+	var agentSrv *http.Server
+	var agentLn net.Listener
+	if cfg.AgentAddr != "" {
+		tlsCfg, err := agent.ServerTLSConfig(cfg.AgentTLSCert, cfg.AgentTLSKey)
+		if err != nil {
+			_ = ln.Close()
+			return err
+		}
+		raw, err := net.Listen("tcp", cfg.AgentAddr)
+		if err != nil {
+			_ = ln.Close()
+			return err
+		}
+		agentLn = tls.NewListener(raw, tlsCfg)
+		agentSrv = &http.Server{
+			Handler:           agents.Handler(agent.PollWait),
+			ReadHeaderTimeout: readHeaderTimeout,
+			ReadTimeout:       readTimeout,
+			WriteTimeout:      agent.PollWait + 15*time.Second,
+			IdleTimeout:       idleTimeout,
+			MaxHeaderBytes:    16 << 10,
+			ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
+		}
 	}
 	sweepDone := make(chan struct{})
 	go func() {
@@ -509,6 +573,11 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		defer close(ckptDone)
 		checkpointer.Loop(ctx, checkpointInterval)
 	}()
+	rdyDone := make(chan struct{})
+	go func() {
+		defer close(rdyDone)
+		runReadinessScheduler(ctx, rsvc, st, clock, logger)
+	}()
 	siemDone := make(chan struct{})
 	go func() {
 		defer close(siemDone)
@@ -527,14 +596,32 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 			runBackups(ctx, st, sealer, cfg, logger)
 		}
 	}()
+	// the groups engine's queue worker, time wheel and nightly verification
+	groupsDone := make(chan struct{})
+	groupsRunner := &engine.Runner{DB: st, Engine: groupsEngine, Clock: clock, Log: logger}
+	go func() {
+		defer close(groupsDone)
+		groupsRunner.Loop(ctx)
+	}()
+	// group history: the daily Merkle digest (00:05 UTC), retention and the weekly rebuild check
+	historyDone := make(chan struct{})
+	historyRunner := &pit.Runner{DB: st, Clock: clock, Log: logger, RetentionDays: cfg.GroupsRetentionDays}
+	go func() {
+		defer close(historyDone)
+		historyRunner.Loop(ctx)
+	}()
 	notifyDone := make(chan struct{})
 	go func() {
 		defer close(notifyDone)
 		dispatcher.Loop(ctx, notifyInterval)
 	}()
-	errc := make(chan error, 1)
+	errc := make(chan error, 2)
 	go func() { errc <- httpSrv.Serve(ln) }()
 	logger.Info("tessera API listening", "addr", ln.Addr().String())
+	if agentSrv != nil {
+		go func() { errc <- agentSrv.Serve(agentLn) }()
+		logger.Info("tessera agent listener (mutual TLS)", "addr", agentLn.Addr().String())
+	}
 
 	select {
 	case err := <-errc:
@@ -542,14 +629,21 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 			_ = metrics.srv.Close()
 		}
 		stop()
+		if agentSrv != nil {
+			_ = agentSrv.Close()
+		}
+		_ = httpSrv.Close()
 		<-sweepDone
 		<-reviewsDone
 		<-provDone
 		<-keysDone
 		<-ckptDone
+		<-rdyDone
 		<-siemDone
 		<-alertsDone
 		<-backupDone
+		<-groupsDone
+		<-historyDone
 		<-notifyDone
 		return err
 	case <-ctx.Done():
@@ -561,17 +655,27 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		_ = metrics.srv.Shutdown(shutdownCtx)
 	}
 	err = httpSrv.Shutdown(shutdownCtx)
+	if agentSrv != nil {
+		if aerr := agentSrv.Shutdown(shutdownCtx); err == nil {
+			err = aerr
+		}
+	}
 	<-sweepDone
 	<-reviewsDone
 	<-provDone
 	<-keysDone
 	<-ckptDone
+	<-rdyDone
 	<-siemDone
 	<-alertsDone
 	<-backupDone
+	<-groupsDone
+	<-historyDone
 	<-notifyDone
-	if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
-		return serveErr
+	for i := 0; i < cap(errc) && (i == 0 || agentSrv != nil); i++ {
+		if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			return serveErr
+		}
 	}
 	return err
 }

@@ -1,5 +1,12 @@
 GET /api/health
 POST /public/t/{slug}/ssf/{transmitter_id}/events
+POST /public/t/{slug}/claim/start
+POST /public/t/{slug}/claim/verify/send
+POST /public/t/{slug}/claim/verify/check
+GET /public/t/{slug}/claim/status
+POST /public/t/{slug}/claim/existing-account
+POST /public/t/{slug}/claim/credential
+POST /public/t/{slug}/claim/resend
 GET /api/auth/discover
 GET /api/auth/login
 GET /api/auth/oidc/{connection_id}/callback
@@ -7,9 +14,14 @@ GET /t/{slug}/bootstrap
 GET /api/auth/saml/{connection_id}/metadata
 POST /api/auth/saml/{connection_id}/acs
 GET /api/auth/oauth2/{connection_id}/callback
+GET /api/auth/cas/{connection_id}/callback
+POST /api/auth/wsfed/{connection_id}/callback
 GET /t/{slug}/.well-known/oauth-authorization-server
 GET /t/{slug}/.well-known/jwks.json
 GET /.well-known/oauth-protected-resource
 POST /t/{slug}/oauth/device_authorization
 POST /t/{slug}/oauth/token
 POST /t/{slug}/oauth/revoke
+POST /t/{slug}/oauth/introspect
+POST /api/auth/break-glass/options
+POST /api/auth/break-glass/verify

@@ -76,7 +76,7 @@ func (s *Server) renderSignIn(w http.ResponseWriter, id string, p pendingAuthz) 
 func (s *Server) renderUsers(w http.ResponseWriter, d *pageData, loginHint string) {
 	p := struct{ loginHint string }{loginHint}
 	// login_hint preselects: the hinted user is listed first.
-	users := slices.Clone(s.users)
+	users := s.userList()
 	slices.SortStableFunc(users, func(a, b User) int {
 		ha, hb := p.loginHint != "" && a.matchesHint(p.loginHint), p.loginHint != "" && b.matchesHint(p.loginHint)
 		switch {

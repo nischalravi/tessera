@@ -5,6 +5,7 @@ import (
 	"math"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,14 +29,17 @@ import (
 //	POST /api/sponsorships/{sponsorship_id}/end        {reason}                   the sponsor, or sponsorships.approve
 //	POST /api/sponsorships/{sponsorship_id}/transfer   {to_identity_id, reason}   the sponsor
 //	POST /api/sponsorships/{sponsorship_id}/accept-transfer  {}                   the person asked
+//	POST /api/guests/{identity_id}/resend-invitation   {}                         a new claim link by email (the sponsor, or sponsorships.approve)
+//	POST /api/guests/{identity_id}/revoke-invitation   {}                         cancel the invitation (the sponsor, or sponsorships.approve)
 //
 // Anyone with guests.sponsor may try to sponsor: the sponsor policy (versioned
 // in policy_version) decides who is eligible and answers 422 with a stable
 // code. Every change needs a fresh phishing-resistant sign-in. A sponsor sees
 // their own guests; guests.read and sponsorships.approve see every one. An
 // invitation never says whether the email matches a person we know. The
-// invitation's claim link and email, and granting the access bundle, are later
-// work (GU-6, GU-12); the sponsor leaving is GU-11.
+// invitation's claim link and email are issued when the sponsorship becomes
+// active (internal/guests/claim, GU-6); granting the access bundle is GU-12 and
+// the sponsor leaving GU-11.
 
 func (s *Server) registerGuestRoutes() {
 	const G, P = http.MethodGet, http.MethodPost
@@ -53,6 +57,8 @@ func (s *Server) registerGuestRoutes() {
 	s.handle(P, "/api/sponsorships/{sponsorship_id}/end", write, sponsor, s.endSponsorship)
 	s.handle(P, "/api/sponsorships/{sponsorship_id}/transfer", write, sponsor, s.transferSponsorship)
 	s.handle(P, "/api/sponsorships/{sponsorship_id}/accept-transfer", write, sponsor, s.acceptTransfer)
+	s.handle(P, "/api/guests/{identity_id}/resend-invitation", write, sponsor, s.resendInvitation)
+	s.handle(P, "/api/guests/{identity_id}/revoke-invitation", write, sponsor, s.revokeInvitation)
 }
 
 func (s *Server) sponsorActor(r *http.Request) (sponsorship.Actor, error) {
@@ -111,7 +117,10 @@ type sponsorshipView struct {
 	TransferDeadline  *time.Time               `json:"transfer_deadline"`
 	EndedAt           *time.Time               `json:"ended_at"`
 	EndReason         *string                  `json:"end_reason"`
-	Invitation        string                   `json:"invitation"` // ready until the claim flow (GU-6) sends it
+	Invitation        string                   `json:"invitation"` // ready, sent, claiming, expired, claimed or revoked
+	InvitationExpires *time.Time               `json:"invitation_expires_at"`
+	CanResend         bool                     `json:"can_resend_invitation"`
+	CanRevoke         bool                     `json:"can_revoke_invitation"`
 	CanRenew          bool                     `json:"can_renew"`
 	CanEnd            bool                     `json:"can_end"`
 	CanTransfer       bool                     `json:"can_transfer"`
@@ -169,16 +178,24 @@ func (s *Server) sponsorshipView(v *viewer, ss *store.Sponsorship, act sponsorsh
 		u := v.user(*ss.ApprovedBy)
 		out.ApprovedBy = &u
 	}
-	if in, err := tx.Intake(ss.IntakeID); err != nil {
+	in, err := tx.Intake(ss.IntakeID)
+	if err != nil {
 		return out, err
-	} else {
-		out.Invitation = in.InvitationStatus
 	}
+	ts, err := tx.ClaimTokensForIntake(ss.IntakeID)
+	if err != nil {
+		return out, err
+	}
+	out.Invitation, out.InvitationExpires = invitationState(in, ts, now)
 	if ss.Live() {
 		d := max(0, int(math.Ceil(ss.EndsAt.Sub(now).Hours()/24)))
 		out.DaysLeft = &d
 	}
 	owner := act.Is(ss.SponsorIdentityID)
+	mayInvite := owner || act.Approver
+	out.CanResend = mayInvite && ss.Live() && s.claimReady() && slices.Contains([]string{"ready", "sent", "claiming", "expired"}, out.Invitation)
+	out.CanRevoke = mayInvite && (ss.Live() || ss.Status == store.SponsorPendingApproval) &&
+		slices.Contains([]string{"ready", "sent", "claiming", "expired"}, out.Invitation)
 	out.CanRenew = ss.Status == store.SponsorActive && (owner || act.Approver)
 	out.CanEnd = (ss.Live() || ss.Status == store.SponsorPendingApproval) && (owner || act.Approver)
 	out.CanTransfer = (ss.Status == store.SponsorActive || ss.Status == store.SponsorTransferPending) && (owner || act.Approver)
@@ -484,4 +501,106 @@ func (s *Server) acceptTransfer(_ http.ResponseWriter, r *http.Request, p *param
 	return s.change(r, p, &struct{}{}, true, func(tx *store.TenantTx, act sponsorship.Actor, id string, now time.Time) (*store.Sponsorship, error) {
 		return s.guests.AcceptTransfer(tx, act, id, now)
 	})
+}
+
+// ---------------------------------------------------------------- invitations: resend and revoke
+
+// invitationState is what a reader sees of an invitation: the intake's status,
+// with a link that outlived its lifetime read as expired and a link the guest
+// opened (the claim is under way) as claiming. expires is when the newest link stops working.
+func invitationState(in *store.IntakeRecord, ts []*store.ClaimToken, now time.Time) (string, *time.Time) {
+	if in.InvitationStatus != store.InvitationSent || len(ts) == 0 {
+		return in.InvitationStatus, nil
+	}
+	t := ts[0] // newest first
+	switch {
+	case t.Status == store.ClaimConsumed:
+		return "claiming", nil
+	case t.Status == store.ClaimExpired || !now.Before(t.ExpiresAt):
+		return store.InvitationExpired, nil
+	}
+	exp := t.ExpiresAt
+	return in.InvitationStatus, &exp
+}
+
+// invitationOf finds the sponsorship the signed-in user may manage the
+// invitation of: the guest's, where they are the sponsor or an approver. One
+// they may not manage looks missing.
+func (s *Server) invitationOf(r *http.Request, p *params) (*store.Sponsorship, sponsorship.Actor, error) {
+	act, err := s.sponsorActor(r)
+	if err != nil {
+		return nil, act, err
+	}
+	missing := &readiness.Error{Status: http.StatusNotFound, Code: "sponsorship_not_found", Msg: "no invitation to manage for this person"}
+	id, err := strconv.ParseInt(p.path["identity_id"], 10, 64)
+	if err != nil {
+		return nil, act, missing
+	}
+	all, err := store.TxFrom(r.Context()).Sponsorships(store.SponsorshipFilter{Guest: id})
+	if err != nil {
+		return nil, act, err
+	}
+	var pick *store.Sponsorship
+	for _, x := range all { // newest first; a running one wins
+		if !(act.Is(x.SponsorIdentityID) || act.Approver) {
+			continue
+		}
+		if pick == nil || x.Live() && !pick.Live() {
+			pick = x
+		}
+	}
+	if pick == nil {
+		return nil, act, missing
+	}
+	return pick, act, nil
+}
+
+func (s *Server) resendInvitation(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	ss, act, err := s.invitationOf(r, p)
+	if err != nil {
+		return nil, err
+	}
+	if err := decodeBody(r, &struct{}{}, true); err != nil {
+		return nil, err
+	}
+	if !s.claimReady() {
+		return nil, &readiness.Error{Status: http.StatusServiceUnavailable, Code: "claim_unavailable", Msg: "claim links need TESSERA_PUBLIC_URL and the identifier key"}
+	}
+	tx := store.TxFrom(r.Context())
+	in, err := tx.Intake(ss.IntakeID)
+	if err != nil {
+		return nil, err
+	}
+	if in.InvitationStatus == store.InvitationRevoked {
+		return nil, &readiness.Error{Status: http.StatusConflict, Code: "invitation_revoked", Msg: "this invitation was revoked; invite the person again"}
+	}
+	if _, err := s.claimSvc.Issue(tx, ss, "resend", s.clock().UTC()); err != nil {
+		return nil, reqErr(err)
+	}
+	return s.sponsorshipView(newViewer(tx), ss, act, true)
+}
+
+func (s *Server) revokeInvitation(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	ss, act, err := s.invitationOf(r, p)
+	if err != nil {
+		return nil, err
+	}
+	if err := decodeBody(r, &struct{}{}, true); err != nil {
+		return nil, err
+	}
+	if s.claimSvc == nil {
+		return nil, &readiness.Error{Status: http.StatusServiceUnavailable, Code: "claim_unavailable", Msg: "claim links need TESSERA_PUBLIC_URL and the identifier key"}
+	}
+	tx := store.TxFrom(r.Context())
+	in, err := tx.Intake(ss.IntakeID)
+	if err != nil {
+		return nil, err
+	}
+	if in.InvitationStatus == store.InvitationClaimed {
+		return nil, &readiness.Error{Status: http.StatusConflict, Code: "already_claimed", Msg: "the guest has already claimed their invitation"}
+	}
+	if err := s.claimSvc.Revoke(tx, ss, "revoked by "+act.Display, s.clock().UTC()); err != nil {
+		return nil, reqErr(err)
+	}
+	return s.sponsorshipView(newViewer(tx), ss, act, true)
 }

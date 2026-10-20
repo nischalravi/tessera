@@ -34,7 +34,7 @@ func RevokeLocal(c *store.TenantTx, now time.Time, actor string, identityID int6
 	if err != nil {
 		return out, err
 	}
-	users, err := c.PlatformUserIDsForIdentity(identityID)
+	users, err := c.PlatformUserIDsLinkedToIdentity(identityID)
 	if err != nil {
 		return out, err
 	}

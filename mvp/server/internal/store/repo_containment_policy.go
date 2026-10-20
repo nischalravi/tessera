@@ -47,9 +47,9 @@ var (
 		DELETE FROM containment_policy_denials WHERE tenant_id = @tenant AND policy_id = @policy_id AND updated_at < @since`)
 )
 
-// PlatformUserIDsForIdentity lists the ids of the platform users (every status)
+// PlatformUserIDsLinkedToIdentity lists the ids of the platform users (every status)
 // linked to an identity of this tenant.
-func (tx *TenantTx) PlatformUserIDsForIdentity(identityID int64) ([]uuid.UUID, error) {
+func (tx *TenantTx) PlatformUserIDsLinkedToIdentity(identityID int64) ([]uuid.UUID, error) {
 	ids, err := collect(tx, func(s scanner) (*uuid.UUID, error) {
 		var raw string
 		if err := s.Scan(&raw); err != nil {

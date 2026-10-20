@@ -38,12 +38,13 @@ const (
 	ContainmentRetry    = "containment_retries"
 	SweepSoDMitigations = "sweep_sod_mitigations"
 	SweepSSFPoll        = "ssf_poll"
+	SweepDrift          = "drift_sweep"
 	Maintenance         = "job_maintenance"
 )
 
 // Kinds lists every kind, for filters.
 var Kinds = []string{Sync, Provision, Validation, DryRun, HealthRerun, JITSweep, AuditAnchor,
-	SweepRequests, SweepLifecycle, SweepAdminChanges, ContainmentRetry, SweepSoDMitigations, SweepSSFPoll, Maintenance}
+	SweepRequests, SweepLifecycle, SweepAdminChanges, ContainmentRetry, SweepSoDMitigations, SweepDrift, SweepSSFPoll, Maintenance}
 
 // Idempotent reports whether running a kind again with the same input is
 // safe: it reads a source and converges, or re-checks. Provisioning is not:

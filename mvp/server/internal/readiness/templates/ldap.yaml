@@ -21,6 +21,7 @@ items:
     verify:
       - kind: live
         check: bind_identity
+        on_unsupported: attestation
     remediation:
       hint: "Create a service entry with read ACIs (389-DS) or olcAccess rules (OpenLDAP)."
     depends_on: [ldap.bind]
@@ -34,8 +35,9 @@ items:
     verify:
       - kind: live
         check: effective_rights
+        on_unsupported: attestation
     remediation:
-      hint: "Restrict ACIs to read, search and compare. On OpenLDAP, attest instead (no Get Effective Rights control)."
+      hint: "Restrict ACIs to read, search and compare. On OpenLDAP and LLDAP (no Get Effective Rights control), attest instead."
     depends_on: [ldap.svc.readonly]
     config_fields: [host, port, bind_dn, ca_bundle, credential, base_dns, write_mode, write_scope]
 

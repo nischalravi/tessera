@@ -8,6 +8,38 @@
   "status": 200,
   "body": [
    {
+    "id": 9,
+    "at": "2026-10-08T09:30:00",
+    "actor": "system",
+    "action": "review.population_frozen",
+    "detail": {
+     "campaign_id": 1,
+     "population_hash": "2dab79c9ff1d1fe84c70d8587d0ff252e98dbcc3f47c65267195616e3f51eb32",
+     "items": 219,
+     "systems": {
+      "aws": 18,
+      "github": 86,
+      "okta": 48,
+      "snowflake": 40,
+      "workday": 27
+     },
+     "auto_certified": 135,
+     "qa_sampled": 7,
+     "qa_sample_pct": 5
+    },
+    "event_id": "<uuid>",
+    "seq": 9,
+    "actor_type": "system",
+    "actor_id": "system",
+    "outcome": "success",
+    "target": null,
+    "request_id": null,
+    "authn": null,
+    "http": null,
+    "hash": "<hash>",
+    "prev_hash": "<hash>"
+   },
+   {
     "id": 8,
     "at": "2026-10-08T09:30:00",
     "actor": "system",
@@ -41,27 +73,6 @@
     "seq": 7,
     "actor_type": "system",
     "actor_id": "system",
-    "outcome": "success",
-    "target": null,
-    "request_id": null,
-    "authn": null,
-    "http": null,
-    "hash": "<hash>",
-    "prev_hash": "<hash>"
-   },
-   {
-    "id": 6,
-    "at": "2026-10-08T09:30:00",
-    "actor": "Sana Iyer",
-    "action": "jit.approve",
-    "detail": {
-     "request_id": 4,
-     "expires_at": "2026-10-07T12:30:00"
-    },
-    "event_id": "<uuid>",
-    "seq": 6,
-    "actor_type": "system",
-    "actor_id": "Sana Iyer",
     "outcome": "success",
     "target": null,
     "request_id": null,

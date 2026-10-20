@@ -155,8 +155,17 @@ func (h *harness) whoami(w http.ResponseWriter, r *http.Request) {
 		for _, r := range p.ActiveRoles.Sorted() {
 			roles = append(roles, string(r))
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"user_id": p.UserID.String(), "tenant_id": p.TenantID.String(),
-			"client_id": p.ClientID, "scopes": scopes, "active_roles": roles, "via": p.Via})
+		userID := "" // a machine client has no user
+		if p.UserID != nil {
+			userID = p.UserID.String()
+		}
+		perms := []string{}
+		for _, perm := range auth.EffectivePermissions(p).Sorted() {
+			perms = append(perms, string(perm))
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"user_id": userID, "tenant_id": p.TenantID.String(),
+			"client_id": p.ClientID, "scopes": scopes, "active_roles": roles, "via": p.Via, "kind": p.Kind,
+			"permissions": perms, "has_session": p.SessionID != nil})
 	}
 }
 

@@ -140,7 +140,12 @@ func Launch(tx *store.TenantTx, t *store.ReviewTemplate, period string, now time
 	if t.System != nil {
 		sys = *t.System
 	}
-	campID, err := GenerateScopedCampaign(tx, now, name, t.UnusedDays, policies, Scope{System: sys, PrivilegedOnly: t.PrivilegedOnly, SkipEmpty: true})
+	roleIDs, err := tx.ReviewTemplateRoles(t.ID)
+	if err != nil {
+		return nil, err
+	}
+	campID, err := GenerateScopedCampaign(tx, now, name, t.UnusedDays, policies,
+		Scope{System: sys, PrivilegedOnly: t.PrivilegedOnly, SkipEmpty: true, RoleIDs: roleIDs})
 	if err != nil {
 		return nil, err
 	}
@@ -287,7 +292,8 @@ func progress(tx *store.TenantTx, l *store.ReviewLaunch, now time.Time, res *Tic
 	}
 	note := "not reviewed by the deadline"
 	for _, it := range open {
-		if _, err := Decide(tx, now, it.ID, "revoke", store.UserRef{Display: Scheduler}, &note); err != nil {
+		// a rule membership is flagged to the role owner rather than removed
+		if _, _, err := DecideItem(tx, now, it.ID, "revoke", store.UserRef{Display: Scheduler}, &note, ChoiceFlag); err != nil {
 			return err
 		}
 	}

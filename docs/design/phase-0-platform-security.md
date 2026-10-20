@@ -1477,6 +1477,7 @@ Nonces are stateless: `b64url(ts_bucket || HMAC-SHA256(nonce_key, ts_bucket))`, 
 | `jit.deny_revoke` | | ✓ | | ✓ | | |
 | `reviews.manage` (create campaign) | | ✓ | | ✓ | | |
 | `reviews.decide` | | ✓ | | ✓ | | |
+| `reviews.export` (auditor export of a frozen review population, issue #110) | | ✓ | ✓ | ✓ | | |
 | `hris.simulate_event` | | ✓ | | ✓ | | |
 | `grants.revoke` (apply), `hris.execute`, `jit.sweep`, `connectors.sync` | | | | ✓ | | |
 | `audit.read`, `audit.verify` | | | ✓ | | ✓ | |
@@ -2050,6 +2051,8 @@ Redeeming the code means signing in through the named connection with **phr** co
 | POST | `/api/admin/change-requests/{id}/apply` | admin.change.request. Only when `effective_at ≤ now`. The sweeper also applies. |
 | POST | `/api/admin/break-glass/registration/options` · `/verify` | admin.change.request + STEP_UP_ADMIN + an applied `breakglass.register` request id |
 | POST | `/api/admin/break-glass/actions/{action}` | break_glass role only (§15.4 actions) |
+| GET | `/api/admin/break-glass` | admin.read: keys, open enrolments, uses of the last 30 days (added in PR13) |
+| POST | `/api/admin/break-glass/uses/{use_id}/attest` | admin.change.request: why break-glass was used (added in PR13) |
 
 **Authenticated: audit**
 

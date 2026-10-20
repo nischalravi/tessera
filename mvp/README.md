@@ -111,8 +111,9 @@ server/
     connectors/scim/    read-only live prober for generic SCIM 2.0 applications (readiness DR-18)
     ratelimit/          keyed token-bucket limiter with a bounded key set
     oauth/              the OAuth authorization server (per-tenant issuer): device grant, refresh
-                        rotation with reuse detection, DPoP-bound JWT access tokens, RFC 8414/9728
-                        metadata; oauth/dpop validates DPoP proofs (RFC 9449)
+                        rotation with reuse detection, client credentials for machine clients
+                        (private_key_jwt, RFC 7523), introspection (RFC 7662), DPoP-bound JWT access
+                        tokens, RFC 8414/9728 metadata; oauth/dpop validates DPoP proofs (RFC 9449)
     cliauth/            the CLI's client library: device login, credentials file, DPoP calls
     ojson/, timeutil/   ordered JSON + Python float repr; CPython-compatible time arithmetic
     testkit/            shared test fixtures (tiny world through a real Connector, seeded demo DB; each is seeded once per test binary and handed out as a private copy per test)
@@ -174,6 +175,22 @@ tenant-scoped like every other table; Admin → Connections → New
 connection → Active Directory (demo) walks the rest. Design: `docs/design/deployment-readiness.md`.
 The routes are documented at `/api/readiness/openapi.json`.
 
+Access control: `connections.read` (tenant admin, auditor), `connections.manage` and
+`connections.activate` (tenant admin). Activating, retiring, editing the config or credential, and
+changing an overlay need a phishing-resistant sign-in in the last 15 minutes (step-up); so does
+accepting a **critical** finding (checked in the handler, since it depends on the finding). A
+revision with `write_mode` other than `off` is **two-person**: `POST /api/connections/{id}/activate`
+opens an activation request (`202 pending_approval`, valid 72 h, bound to the revision and config
+hash), and a different tenant admin approves it with `POST .../activation/approve` (step-up), which
+applies the activation in the same transaction. The requester and anyone who attested an item of
+the revision get `403 two_person_rule`; the requester cancels and anyone else rejects with
+`POST .../activation/reject`; `GET .../activation` shows the latest request. The gate itself
+(blocker `activation.approval`) refuses a write-enabled revision that has no approval, so no other
+caller can skip the second person. This request table stands in for the `connection.activate`
+admin-change type until Phase 0's admin-change workflow (PR12) lands. Non-demo connector types are
+no longer refused with `phase0_required`: the gate alone decides (simulated evidence never
+satisfies it).
+
 **Generic SCIM live checks (DR-18).** A non-demo `scim_app` connection runs its live checks
 against the real application (`server/internal/connectors/scim`, results not labelled Simulated,
 so they can satisfy the gate). The prober is GET only and every request goes through
@@ -188,6 +205,33 @@ the LDAP bind password); without one the live checks report an error instead of 
 unauthenticated. The client is the shared outbound one, with the connection's configured port
 allowed (`safehttp.WithConfiguredPorts`). Tests use an in-process SCIM server
 with misbehaviour switches (`internal/connectors/scim/fakescim_test.go`).
+**After activation** (design §7.4, §7.5). Activation stores a baseline of the live revision
+(`readiness_baselines`: score, item states, finding and object counts, config hash). A background
+scheduler (`readiness.Scheduler`, started by `tessera serve`, a pass every 15 minutes) re-runs the
+live checks of every active or degraded connection daily and reconciles it weekly in live mode (the
+same staging scratch tables and findings as a dry run; it never writes the live graph), then
+compares the evidence with the baseline. Drift is newly failing checks (a newly failing check on the
+service account's effective rights is reported as a change made outside Tessera), finding counts
+beyond ±10% or ±25 objects, object counts beyond ±5% between consecutive runs, credentials within
+30 days of expiry, and a newer template minor release that adds Required items (30-day grace from
+when the release is first seen). A revision moves `active → degraded` when a Required live check
+fails on two consecutive scheduled runs (an administrator's on-demand re-run does not count), its
+credential is within 7 days of expiry, or the template grace period ends; it recovers when none of
+these hold. While degraded, reads continue and write-back stops: `Service.CanWrite` is false and
+`Service.RequireWrite` refuses (409 `connection_degraded`), enforced on the server. The Inbox
+shows a task per degraded connection (`tasks` in `GET /api/insights/deployment-health`), and
+`GET /api/connections/{id}/health` and the dashboard carry `drift`. Settings:
+`TESSERA_READINESS_LIVE_CHECK_DAYS` (1 to 7, default 1) and `TESSERA_READINESS_SCHEDULER=off`.
+Not wired yet: the "sync failed for 24 hours" and "cursor lost three times in 7 days" triggers
+(`readiness.ExternalSignals`; nothing records them yet), and Admin → Jobs (set `Scheduler.Hook`
+to the `job_runs` wrapper of #172).
+**Evidence export** (design §7.6): `GET /api/connections/{id}/readiness/evidence` and
+`GET /api/insights/deployment-health/evidence` return a ZIP (`manifest.json`, `checklist.csv`,
+`checks.csv`, `findings.csv`, `skipped.csv`, `score.json`). The manifest holds the SHA-256 of every
+file, the template pins and config hashes, the ledger range and chain head, and the SOC 2, ISO 27001,
+SOX ITGC and PCI DSS control mapping text. Findings carry sample object ids only, never names. Each
+export appends `readiness.evidence.exported` (with the manifest hash) in the same transaction, and
+needs `connections.read` plus `audit.read` (auditor, tenant_admin).
 
 #### Live LDAP checks
 
@@ -201,6 +245,18 @@ negotiate StartTLS, reads at most 500 objects per class, and sends a password on
 connection with a verified TLS 1.2+ channel. What a server cannot answer (no Who Am I, no Get
 Effective Rights, no `cn=Monitor` clock, as on LLDAP and OpenLDAP) is reported as **unsupported:
 an attestation is required**, never as a pass. Other connector types keep their simulated checks.
+
+**Attest instead of an unsupported check.** A template item may mark a live verification
+`on_unsupported: attestation` (the only value; the vocabulary stays closed). The `ldap` template does
+so for `ldap.svc.no_write` (effective rights) and `ldap.svc.readonly` (bind identity without Who Am I).
+When that check reports unsupported, `POST /api/connections/{id}/checklist/{item}/attest-instead`
+(`connections.manage`, step-up) takes `{attester, reason, evidence}`: a named attester, a reason of at
+least 20 characters and evidence text of at least 10. It is stored in `readiness_live_attestations`,
+bound to the item's config fields (a change to them makes it stale), expires after the live TTL (24 h)
+like live results, and is audited as `readiness.item.attested_instead` in the same transaction. A
+`fail` or `error` result can never be attested (422 `live_check_not_unsupported`), and a simulated
+result never passes for a real connector type. In the checklist, an item whose live check is
+unsupported shows an "Attest instead" form.
 
 Network path: `server/internal/safedial` shares safehttp's address policy for raw TCP. Only ports
 **636 (LDAPS)** and **389 (StartTLS required)** are dialled, private, loopback, link-local,
@@ -247,6 +303,30 @@ To point a local dev instance at a real LDAP or LLDAP server (for example an LLD
    It logs every check's status and message (never the password) and fails if TLS, bind, the base
    DNs or the people search do not pass.
 
+#### Directory Agent (private directories, DR-11)
+
+Tessera never dials a private directory in production. A small agent (`cmd/tessera-agent`, Linux or
+Windows) runs inside the customer network, connects **outbound** to Tessera over mutual TLS and answers a
+closed set of typed, read-only operations (the nine `connectors.Prober` operations, nothing else: no
+commands, no raw LDAP, no proxying). The server sends typed jobs; the agent opens its own connection.
+
+- **Local allowlist.** The agent refuses any target not in `allowed_targets` of its own config file
+  (host:port, IP:port or CIDR:port; ports 389/636; the file must not be group/other-writable).
+- **Credentials stay on the agent.** `tessera-agent credential -config agent.json set NAME` reads the
+  password from stdin into a file store (0600; DPAPI-wrapped on Windows). In Tessera set the connection's
+  credential reference to `agent:<agent id>/NAME`.
+- **Enrolment.** Admin → Connections → Directory agents → Enrol: a single-use code (random, 15 minutes,
+  stored only as a hash, audited) is shown once. On the agent host run `tessera-agent enrol -config
+  agent.json` and paste it. Tessera then pins the agent's client key (SHA-256 of its public key) and the
+  agent pins Tessera's CA (`server_ca_file`). Revoke from the same screen.
+- **Server listener.** Set `TESSERA_AGENT_ADDR` with `TESSERA_AGENT_TLS_CERT` and `TESSERA_AGENT_TLS_KEY`
+  (a separate mutual-TLS port serving only `/agent/v1/*`).
+- **Agent config** (JSON): `{"server_url":"https://tessera.example:8443","server_ca_file":"ca.pem",
+  "state_dir":"/var/lib/tessera-agent","allowed_targets":["ldap.corp.example:636"]}`; then
+  `tessera-agent run -config agent.json`.
+- API: `GET /api/agents`, `POST /api/agents` (step-up; returns the code once), `POST /api/agents/{id}/revoke`
+  (step-up). Table `directory_agents`, `agent_enrolments` (schema 0250).
+- The Windows DPAPI store is cross-compiled and vetted (`GOOS=windows go vet`) but not run on Windows.
 ### Config transport (dev → test → prod)
 
 Admin → Export / import configuration moves a tenant's connections (config, owners, credential
@@ -285,7 +365,9 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `POST /api/simulate {remove_edge_ids, add_edges:[{src,dst,duration_hours?}], disable_account_ids}` ·
 `GET|POST /api/jit/requests` · `POST /api/jit/requests/{id}/approve|deny|revoke` ·
 `GET|POST /api/reviews/campaigns` (`name` 1-200 characters after trimming, `unused_days` 1-3650, else 422) ·
-`POST /api/reviews/items/{id}/decision` (a decision is final: repeating it is a 200 no-op, a different one is
+`GET /api/reviews/campaigns/{id}/population` · `GET /api/reviews/campaigns/{id}/export?format=csv|json` ·
+`POST /api/reviews/qa/{id}/decision {decision, comment?}` · `PUT /api/reviews/settings {qa_sample_pct}` (see "Review populations") ·
+`POST /api/reviews/items/{id}/decision {decision, comment?, rule_action?}` (a decision is final: repeating it is a 200 no-op, a different one is
 `409 review_item_decided` and an audited `review.decide.refused`) ·
 `GET|POST /api/hris/events` (422 for an unknown `identity_id`) · `GET /api/hris/events/{id}/plan` · `POST /api/hris/events/{id}/execute` ·
 `GET /api/jml/leaver-plan/{identity_id}` · `POST /api/identities/{id}/contain` (kill switch, see "Identity containment") · `POST /api/identities/{id}/disable|enable` ·
@@ -308,7 +390,11 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `GET /api/auth/discover?tenant=&email=` · `GET /api/auth/login?tenant=&connection=&return_to=` (302 to the IdP) ·
 `GET /api/auth/oidc/{connection_id}/callback` · `GET /api/auth/saml/{connection_id}/metadata` ·
 `POST /api/auth/saml/{connection_id}/acs` · `GET /api/auth/oauth2/{connection_id}/callback` ·
-`GET /t/{slug}/bootstrap?code=` (public)
+`GET /api/auth/cas/{connection_id}/callback` · `POST /api/auth/wsfed/{connection_id}/callback` ·
+`GET /t/{slug}/bootstrap?code=` (public) ·
+`GET|POST /api/access/policies` · `PUT|DELETE /api/access/policies/{id}` · `GET|POST /api/access/networks` ·
+`PUT|DELETE /api/access/networks/{id}` · `GET /api/access/users` · `GET /api/access/device-signals` ·
+`PUT|DELETE /api/access/device-signals/{user_id}` · `POST /api/access/evaluate` (conditional access, below) ·
 `GET|POST /api/auth/dev-login` (dev and test only) ·
 `GET /api/jobs[?status=running|succeeded|failed&kind=&connection_id=&limit=]` · `GET /api/jobs/{job_id}` ·
 `POST /api/jobs/{job_id}/retry` ·
@@ -338,9 +424,10 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `GET /api/access/as-of?resource=&date=` · `GET|POST /api/evidence/packs` ·
 `GET /api/evidence/packs/{id}` · `GET /api/evidence/packs/{id}/download` (see "Point-in-time access and evidence packs")
 `GET|POST /api/reviews/schedules` · `PUT /api/reviews/schedules/{id}` · `POST /api/reviews/schedules/{id}/run` (an unknown `system` is 422 `invalid_system`; a second run in the same second is 409 `already_launched`; a schedule with no grants in scope creates no campaign, audits `review.schedule.skipped` and answers 200 `{skipped, reason}`) ·
+`GET /api/roles/{id}/exclusions|flags` · `POST /api/roles/{id}/exclusions/{identity_id}/remove` ·
 `GET /api/identities/{id}/affiliations` · `GET /api/identities/{id}/identifiers` ·
 `POST /api/identities/{id}/affiliations {type, org_unit?, population?, starts_at?, ends_at?, reason}` ·
-`POST /api/affiliations/{id}/end {reason}`
+`POST /api/affiliations/{id}/end {reason}` ·
 `GET /api/catalog[?all=1]` · `PUT /api/catalog/items/{group_id}` ·
 `POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours}` ·
 `GET /api/requests[?scope=mine|pending|all&status=]` · `GET /api/requests/{id}` ·
@@ -353,6 +440,9 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `POST /api/guests/invitations` · `POST /api/guests/invitations/bulk {csv, dry_run}` ·
 `GET /api/guests[?sponsor=me|all&state=&population=]` · `GET /api/sponsorships/approvals` · `GET /api/sponsorships/{id}` ·
 `POST /api/sponsorships/{id}/approve|reject|renew|end|transfer|accept-transfer` ·
+`POST /api/guests/{identity_id}/resend-invitation|revoke-invitation` ·
+`POST /public/t/{slug}/claim/start|verify/send|verify/check|existing-account|credential|resend` ·
+`GET /public/t/{slug}/claim/status` (public: the guest's claim, see Guest claim) ·
 `GET /api/approvals/inbox` · `GET /api/approvals/delegates` · `GET|POST /api/approvals/delegations` ·
 `POST /api/approvals/delegations/{id}/revoke` ·
 `GET /api/notifications[?unread=1&limit=]` · `POST /api/notifications/read {ids}|{all:true}` ·
@@ -372,6 +462,46 @@ Each route declares the permission it needs (design §12.1, §16.2; `api.Routes(
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
 or HRIS execution is always the signed-in user.
 
+### Conditional access (network location and device posture)
+
+Beyond step-up, a tenant can decide **allow, require step-up or deny** by where a request comes from and
+what is known about the device (issue #163; Settings → **Conditional access**, `/admin/conditional-access`).
+Policies have a **scope**: `signin` (the Tessera sign-in, at the OIDC callback and SAML ACS) or
+`privileged` (every route that already needs a fresh sign-in: JIT approval, review decisions, revoking
+grants, HRIS execution, connection changes). Conditions, all of which must hold:
+
+* **Network**: `in` or `not_in` named ranges (CIDRs, IPv4 and IPv6). The address is the **trusted-proxy
+  client IP**: the TCP peer, or, only when the peer is in `TESSERA_TRUSTED_PROXIES`, the rightmost
+  `X-Forwarded-For` entry that is not itself a trusted proxy. A header from any other peer is ignored, so a
+  client cannot name its own address (the rate limiter uses the same function). An address that cannot be
+  determined is in no range.
+* **Device**: `unmanaged` or `not_compliant`. Posture comes from the IdP's claims at sign-in (OIDC claims or
+  SAML attributes `device_managed` and `device_compliant`, renamable per connection with
+  `authn_mapping.device_managed_claim` / `device_compliant_claim`; stored on the authentication context) and
+  from the user's **device-compliance signal**. "Not compliant" from either source wins; a device the IdP says
+  nothing about counts as unmanaged and not compliant. Signals are set by an admin (source `manual`, optional
+  expiry) through `condaccess.SignalSource`; the CAEP receiver of #114 is not built, and will write
+  `caep` signals into the same table or implement that interface.
+
+Policies are checked in priority order and **the first enforced match decides**; no match is allow. `report_only`
+policies are evaluated and recorded with the outcome they would have had but never change the result;
+`disabled` ones are ignored. Outcomes: `deny` refuses a sign-in (`auth.login.failure`, reason
+`conditional_access_denied`) or answers `403 conditional_access_denied`; `step_up` names an ACR (aal2, phr, phrh)
+and optional `max_age`. On a sign-in the authentication itself must already meet it (else
+`conditional_access_step_up_required`); on a privileged route it tightens the route's own requirement, so the
+client gets the usual `401 step_up_required` challenge. The permission is checked before policies, so a caller
+without it learns nothing of them. The operator bootstrap sign-in and the conditional access routes themselves
+are exempt (a policy cannot lock an admin out of fixing it).
+
+Every evaluation that had a policy to check is audited with its inputs (`access.decision`, or the
+`conditional_access` detail of `auth.login.success` / `auth.login.failure`): scope, outcome, deciding policy,
+report-only hits, client IP and how it was resolved (`peer` or `x_forwarded_for`), device managed, compliance and
+its source. When a trusted proxy does not say who the client is (`X-Forwarded-For` missing or malformed, or every hop a trusted proxy), the client is unresolved: it is never given the proxy's address, every network condition on a deny or step-up policy holds for it (`in` and `not_in` alike, so a blocklist and an off-network rule both apply) and none on an allow policy does, and the event records `client_ip_unresolved`; rate limiting still keys on the proxy. Changes to ranges, policies and signals are `access.network.*`, `access.policy.*` and
+`access.device_signal.*` events in the same transaction. Reading needs `conditional_access.read` (auditor,
+tenant admin); changing needs `conditional_access.manage` (tenant admin) and a fresh phishing-resistant
+sign-in. A tenant is limited to 100 policies and 100 ranges. `POST /api/access/evaluate` answers what the
+current policies would decide for a described request without recording anything. In the dev IdP, Alice's
+device is managed and compliant and Olu's is neither (`device:` in `users.yaml`).
 ### Point-in-time access and evidence packs
 
 Issue #111; packages `server/internal/evidence`, `graph.BuildAsOf`, schema `0260` and `0261`.
@@ -472,7 +602,10 @@ starts at the current head, so history does not alert.
   - Webhooks go out through `internal/safehttp`, which refuses private, loopback (except in dev) and cloud-metadata addresses.
   - Each webhook is signed: `X-Tessera-Signature: t=<unix>,v1=<hex HMAC-SHA256 of "<t>.<body>">`. The secret (`whsec_…`) is shown once, sealed under the KEK, and can be rotated.
   - Creating or changing a channel needs step-up.
-  - Webhook URLs come back redacted, because Slack and Teams put their token in the path.
+  - Webhook URLs (alert channels and SIEM sinks) come back as `scheme://host[:port]/…`, because Slack, Teams and
+    Sumo Logic put their token in the path or query. Send errors are scrubbed the same way before they reach
+    `last_error`, a test response or the audit ledger (`safehttp.ScrubError`, #333). Ledger entries written before
+    the fix keep their original text (the ledger is append-only).
 - **Retries.** Deliveries wait in an outbox and are retried after 1 min, 5 min, 15 min, 1 h and 4 h, then marked failed.
 - **Email.** `TESSERA_NOTIFY` controls email:
   - `log` (the default) writes each message to the server log.
@@ -518,6 +651,63 @@ drift. **Run now** launches outside the schedule. Reminders, escalations and clo
 events; delivery by email or chat comes with alerting (#168). Reviewers are assigned as for
 manual campaigns: the manager, then the owner, then the security lead. The scheduler follows
 `TESSERA_NOW` in dev.
+
+### Role memberships in reviews
+
+A campaign certifies what people hold *through* a business role as one item, the **membership**
+(issue #214): role, member and source (rule, request or manual), with the grants the role made
+listed under it in the side panel. Those grants are not separate items, so a reviewer can't revoke
+a grant the role would restore. A membership appears when one of its grants is risky (the same
+tests as any grant); a campaign or schedule **scoped to roles** reviews every membership of those
+roles, whatever the risk, and nothing else (the system and privileged scope then do not apply).
+Pick the roles in the schedule form (`role_ids`).
+
+Revoking a membership:
+
+- **Manual or request:** removed through `roles.Unassign`, so its removal plan takes the role's
+  grants that no other role justifies. Reconcile does not bring them back.
+- **Rule:** the person can't be removed while the rule matches, so the reviewer chooses
+  (`rule_action` in the decision; without one the API answers 422). **exclude** puts them on the
+  role's exclusion list (the membership and its grants go; birthright evaluation, every save and
+  Reconcile, skips them). The list is versioned: each add or removal is a new version, history is
+  kept, and `GET /api/roles/{id}/exclusions` shows it. Taking someone off (`roles.manage`) lets the
+  rule assign them again at the next save or Reconcile. **flag** removes nothing and records the
+  decision for the role owner (`GET /api/roles/{id}/flags`, audit `review.rule_flagged`).
+- **Old campaigns** still have items for a grant a role made. Revoking one is converted into a
+  revoke of the membership(s) that justify it (same choices for a rule member), rather than
+  refused (that would lose the decision) or applied to the edge alone (Reconcile would undo it).
+- **Close-out** of a scheduled review revokes undecided manual and request memberships and flags
+  undecided rule memberships; it never removes a rule member.
+
+Role removal, exclusion and the review decision are written, with their audit events
+(`role.unassign`, `role.exclude`, `review.revoke`), in the decision's transaction.
+
+### Intended and observed access, and drift (issue #301)
+
+Tessera keeps what was **decided** apart from what systems **report**:
+
+* `intended_grants` (schema 0330): identity x target entitlement, with provenance (`request`, `role`,
+  `birthright`, `jit`, `review_keep`, `manual`), a validity window and an owner. Approvals, role assignment,
+  JIT, a review "keep" and admin grants write it in the same transaction as their `grant_edges` write
+  (`InsertEdge`, `SetEdgeExpiry`, `RevokeEdge`, `Delete*Edge`, `KeepIntent` in `internal/store/repo_access_model.go`);
+  revoking or expiring closes the row (`closed_at`, `close_reason`), it is never deleted.
+* `observed_runs` / `observed_entitlements`: the account -> group memberships each system reported in its latest
+  connector run (one run per system; the snapshot replaces the previous one). Only `ingest.Discovery` writes them.
+* `access_drift` (schema 0331): one row per difference, classes `missing` (intended, not shown), `rogue` (shown, never
+  intended), `orphan` (account with no identity), `stale` (shown after the intent ended); status `open`,
+  `remediating`, `resolved`, `accepted`. `internal/reconcile/drift.go` finds them after each sync and every 5 minutes
+  on the sweeper (`drift_sweep`); reruns are idempotent (a row is opened, reopened, updated or resolved, never duplicated).
+* `remediation_policies`: per system, or per entitlement of a system, and class: `auto_provision` (missing only) and
+  `auto_revoke` (rogue, stale, orphan) go through the provisioning engine (needs a write-back target, else an owner task),
+  `owner_task` puts a security alert in the Inbox of the owner (the identity's owner or manager) or of the people who decide
+  access, `report_only` (the default) records only. Every action writes a `drift.remediate` audit event in the same transaction.
+* `grant_edges` is unchanged and stays the live model for the graph, insights, SoD and reviews. On a deployment that predates
+  the tables the first reconciliation backfills both sets from it (`BackfillAccessModel`).
+
+Routes: `GET /api/access-drift[?class=&status=&system=&identity_id=&limit=]` (`drift.read`) · `POST /api/access-drift/run`,
+`POST /api/access-drift/{drift_id}/accept` (`{"reason"}`) and `/remediate` (`{"action"}`) (`drift.remediate`, step-up) ·
+`GET /api/remediation-policies` · `PUT /api/remediation-policies` and `DELETE /api/remediation-policies/{policy_id}`
+(`drift.policy`, policy admin, step-up). UI: Governance, Drift.
 
 ### Job run history
 
@@ -660,6 +850,8 @@ Authentication, Change requests, API clients, and a banner on every page while a
 | `idp_connection.update_cosmetic`, `.disable` | one admin | none | at once (disable ends the connection's sessions; refused for the last active connection) |
 | `tenant.settings.update` | a different admin if it **weakens** a setting | 24 h if weakening | merges the bounded settings of §18.3 and `min_admins` |
 | `tenant.security_contacts.update` | a different admin | 24 h | replaces the contacts |
+| `breakglass.register` | a different admin | 24 h | creates the break-glass user (or adds a key to one) and opens a 24 h window for the requester to register the key |
+| `breakglass.revoke` | one admin | none | revokes the key and ends its sessions |
 
 The test login: while signed in, the requester opens `GET /api/auth/login?connection=<id>&test=1`
 (login transactions have a `test` purpose, schema `0315`; OIDC and SAML). The callback records the
@@ -674,10 +866,32 @@ and a mismatch is 409. States: `pending_approval` → `cooling_off` → `applied
 injected clock. A tenant with fewer than two admins can grant `tenant_admin` with one person and the 24 h;
 a change that needs two people is refused (`bootstrap_restricted`) until it has two. A client secret
 travels beside the payload, is sealed, and is cleared when the request ends; it never appears in the
-payload, audit, a response or a list. `api_client.*` and `breakglass.*` types arrive with the PRs that add
-their tables. Every transition writes an `admin.change.*` audit event and queues an `admin_notifications`
+payload, audit, a response or a list. `api_client.*` types arrive with the PRs that add their table.
+Every transition writes an `admin.change.*` audit event and queues an `admin_notifications`
 row for every active tenant admin and security contact, in the same transaction (delivery is the
 notification outbox's job, issue #189; until then the rows and the banner are the notice).
+
+**Break-glass** (IdP down, misconfigured or compromised, §9.6, §15.4; `internal/admin/breakglass.go`,
+schema `0009_breakglass.sql`, UI **Admin → Break-glass** and `/t/<slug>/break-glass`). Needs `TESSERA_RP_ID`
+(default `localhost`) and `TESSERA_PUBLIC_URL`; without them the ceremonies answer 503. go-webauthn v0.18.2
+with direct attestation, cross-platform keys, no resident key, user verification required.
+- **Enrol**: a `breakglass.register` request (above), then the requester calls
+  `POST /api/admin/break-glass/registration/options` and `/verify` (`{change_request_id[, credential]}`,
+  `STEP_UP_ADMIN`) within 24 h. Our own checks refuse a backup-eligible key (BE flag), a `none` or self
+  attestation, a missing user verification and, when the tenant setting `breakglass_aaguid_allowlist`
+  (set with `tenant.settings.update`; narrowing is immediate, widening needs two admins and 24 h) is not
+  empty, an AAGUID that is not on it. Refusals are audited (`breakglass.registration.rejected`) and spend the challenge.
+  The attestation chain is not yet checked against FIDO MDS3 (OQ11), so keys are recorded with trust `basic`.
+- **Use**: `POST /api/auth/break-glass/options` and `/verify` (public, JSON, `{tenant[, credential]}`). The
+  challenge is single use; a sign count that does not rise is refused and raises a critical notification.
+  The session has kind `break_glass`, only the role `break_glass` (`admin.read` + `breakglass.recover`), 15 min
+  idle and 60 min absolute. It writes `auth.break_glass.used` (tenant and platform chain) and a critical
+  notification (`severity: critical`) to every admin, contact and `tessera-security-operations`.
+- **Actions**: `POST /api/admin/break-glass/actions/{idp_connection.disable | idp_connection.update_trust | role.grant | sessions.revoke_all}`;
+  the first three file the normal change request with no approver and a 1 h cooling-off any admin can cancel
+  (`role.grant` only for `tenant_admin`); `sessions.revoke_all` ends every other session at once. Audited as `breakglass.action`.
+- **After**: `GET /api/admin/break-glass` lists keys, open enrolments and uses (30 days); every use stays on
+  the admin banner until an admin answers `POST …/uses/{use_id}/attest {reason}`.
 
 **Operator recovery** (all admins and break-glass keys lost, §15.5): two *different* operators run
 `tessera admin recover-tenant -tenant acme -operator <id> -co-operator <id> -ticket <ref> -connection <id>
@@ -689,6 +903,58 @@ under Change requests (the invitation is spent and both operators are told); red
 recovery. It is audited in the tenant's chain and the platform chain.
 `tessera admin revoke-signing-key -tenant acme -kid <kid> -reason "…"` revokes one of a tenant's signing
 keys at once (a new one becomes active; audited as the operator).
+### Review populations (auditor evidence, issue #110)
+
+Auditors test the completeness and accuracy of a review population (IPE). When a campaign is
+launched, `reviews.GenerateCampaign` freezes the **full population** in the same transaction:
+every standing (non-JIT) grant edge of an active account with effective permissions, for every
+identity including terminated ones, not only the risky grants that become review items.
+`review_populations` (hash, row count, per-system counts, source sync timestamps, scope, rules
+version, QA percent) and `review_population_rows` are immutable (triggers refuse UPDATE and DELETE),
+and a `review.population_frozen` audit event carries the hash and counts. Campaigns launched before
+this change have no population and answer 404 on the new routes.
+
+Each row has: `ordinal` (1..n in ascending `edge_id`), `edge_id`, `identity_id`, `identity_ref`
+(external id), `account_ref`, `system`, `entitlement` (label), `edge_src`, `edge_dst`,
+`in_scope_reason` (`standing_grant`) and `disposition` (`review` or `auto_certified`).
+`source_syncs` is the time of the tenant's last `connectors.sync` event (Tessera keeps no
+per-system sync clock), or null.
+
+**Hash (`tessera-review-population-v1`).** To recompute it from an export:
+
+1. Take the rows in ascending `ordinal`.
+2. Write each row as a JSON object with exactly the 11 fields above and canonicalize it with
+   RFC 8785 (JCS). Strings are UTF-8, numbers are integers.
+3. Join the canonical rows with a single `\n` (no trailing newline).
+4. `hash = lowercase-hex SHA-256( "tessera-review-population-v1" || 0x00 || joined )`. An empty
+   population hashes the domain string and the 0x00 byte.
+
+`server/testdata/golden/review_population_v1.json` is a test vector; the audit ledger's contract is
+`audit_v1.json`. The export recomputes the hash from the stored rows and reports `stored_hash`,
+`recomputed_hash` and `hash_match` (a mismatch is flagged `false`).
+
+**Auto-decisions.** A grant with no exception signal is auto-certified, and
+`review_auto_decisions.decided_by_rule` records the rule (`exception_only.no_exception_signals`,
+version 1) and the inputs that matched: the unused-days threshold, last-used time, days since used,
+permissions and permissions used, privileged, policy violation, identity status and type.
+
+**Sampled QA.** The tenant setting `qa_sample_pct` (default 5, 0 disables, set with
+`PUT /api/reviews/settings`, `reviews.manage`) sends `ceil(pct% of n)` of the n auto-decisions
+(at least 1 when n > 0 and pct > 0) to a human QA queue (the security lead). Selection is
+reproducible: rank the auto-decisions by `SHA-256(population_hash ":" edge_id)` ascending (hex)
+and take the first k. `POST /api/reviews/qa/{id}/decision` (`reviews.decide`, step-up) records
+keep (confirm) or revoke (overturn: the grant is removed like a review revoke); both are audited
+(`review.qa_confirmed`, `review.qa_overturned`). The campaign side panel's "Population & export"
+shows the hash, counts, QA queue and the export buttons.
+
+**Export.** `GET /api/reviews/campaigns/{id}/export?format=csv|json` (`reviews.export`: auditor,
+operator and policy admin) returns the population (rows, hashes, counts, sync timestamps) and a
+decision per grant: decision, decision source, reviewer, decided by, decided at, reason, exception
+reasons, the rule (auto), `qa_sample`, QA decision and `revocation_verification`:
+`not_applicable` (kept or open), `verified_removed` (revoked and the grant edge is gone from
+Tessera's graph) or `pending` (revoked but still present). Provider-side verification is the
+containment report (`GET /api/identities/{id}/containment`). CSV cells that start with
+`= + - @` are prefixed with `'`. Each export is audited as `review.population_exported`.
 
 ### Account correlation
 
@@ -1036,11 +1302,116 @@ the sponsor's decision (who, purpose, population, access bundle, term, who appro
   (policy admin). Every change needs a fresh phishing-resistant sign-in. A sponsorship someone may
   not see answers `404`. Audit actions: `sponsorship.create|approve|reject|renew|end|transfer|accept_transfer|expire|transfer_expire|bulk_invite|bulk_preview`.
 
-Not yet: the claim link and the guest's invitation email (GU-6; the intake's `invitation_status`
-stays `ready`), granting the bundle (GU-12), sponsor-leaver transfer from JML events and the
-transfer task in the Inbox (GU-11), self-registration (GU-3), resend and revoke invitation, and
-per-tenant sponsor policy editing. After pulling this change run `./run.sh --reseed`: it adds three
-tables and widens the lifecycle `source` check.
+Not yet: granting the bundle (GU-12), sponsor-leaver transfer from JML events and the transfer task
+in the Inbox (GU-11), self-registration (GU-3), and per-tenant sponsor policy editing. The invitation's
+claim link, email, resend and revoke are in "Guest claim" below.
+
+### Guest claim
+
+Issue #69 (GU-6; design `docs/design/guest-accounts-and-claim.md` §6, §7.1, §9.2, §10). A guest turns
+an invitation into a sign-in. Code: `internal/guests/claim` (links, sessions, codes, completion),
+`internal/guests/credential` (the credential authority), `internal/api/claim*.go`, schema
+`0228_claim.sql`, the page `frontend/src/public/claim/`. This branch merges #10's OIDC sign-in, whose
+callback the claim reuses.
+
+**Flow.** When a sponsorship becomes active (made without approval, or approved) Tessera issues a
+claim link and emails it through the notification outbox (so it shows in Admin → Email delivery);
+resend and revoke are `POST /api/guests/{identity_id}/resend-invitation|revoke-invitation` (the
+sponsor or a holder of `sponsorships.approve`, fresh phishing-resistant sign-in) and buttons in the
+Guests I sponsor side panel. The intake's `invitation_status` goes `ready` (nothing sent: the claim
+needs `TESSERA_PUBLIC_URL` and the KEK) → `sent` → `claimed`, `revoked` or `expired` (a sweeper marks
+the last; the panel also reads an old link as expired at once; "Guest is setting up" is a link in use).
+The link is `<TESSERA_PUBLIC_URL>/claim#t=<43 characters>`. The page reads the token from the
+**fragment**, removes it with `history.replaceState`, and starts the claim:
+
+1. **start**: the token is exchanged once for a claim session (cookie `__Host-tessera_claim`; in the
+   dev insecure-cookie mode `tessera_claim`, like the login cookie), 60 minutes idle and 24 hours at most.
+2. **verify_contact**: a 6-digit code to the invited address (10 minutes, 5 tries, then void). It
+   proves control of the address once, for the claim (A0, 800-63A contact verification); it is never an
+   authenticator (`docs/knowledge/01`: email is not an acceptable out-of-band authenticator).
+3. **existing_account**: "Do you already have an account with the organization?", asked of every
+   claimant. "No" continues. "Yes" is recorded on the intake (`existing_account`, for the review
+   queue) and the guest is told an administrator will follow up. **It never links** (K3): matching
+   and linking are GU-5, whose seam is `claim.Service.OnExistingAccount`.
+4. **credential**: the guest is sent to the bound credential authority to sign in. The claim
+   completes only on a sign-in at the sponsorship's required AAL, as the account that was set up for
+   this claim, through that authority (§7.1): then identity `invited` → `active`, the sponsorship's
+   affiliation `pending` → `active`, the intake `claimed`, the sponsor told (`guest.claimed`), and a
+   **new platform user with no roles**, linked to the identity, whose external login is the
+   `(issuer, subject)` of that sign-in (never the email), exists. Tessera creates no session for it.
+5. With no authority configured (production today) the claim stops at step 4 with "your organization
+   will finish setting up your sign-in" and stays pending. An IAL above 0 (IDV, GU-7) stops at
+   `verify_identity`. The step list is `claim.Steps`; terms (GU-10) go in as another step.
+
+**Security properties.** The token is 256 bits from `crypto/rand`, stored only as
+`SHA-256("tessera-claim-v1|"+tenant+"|"+token)`, single use (one atomic `UPDATE … WHERE
+status='issued' AND expires_at>now`, checked by rows affected because the store's SQL lint forbids
+`RETURNING`), 7 days for visitors and 14 for the others (never past the sponsorship's end), bound to
+the intake and the invited address's tenant-keyed hash. A new invitation revokes the earlier tokens
+and open sessions of the intake. The token is never in a log, an audit event, a notification row, the
+delivery log (it never records bodies) or a URL path or query. It reaches the email without being
+stored: the notification row only says "send the invitation", and `notify.Secrets` (memory) hands the
+link line to the dispatcher at send time and forgets it when the message is final. A restart between
+queueing and sending loses it: the message becomes a dead letter with a clear error and the sponsor
+resends (the same goes for confirmation codes). Codes are stored as a keyed hash (HKDF from the KEK),
+compared in constant time.
+Unknown, malformed, expired, used and revoked tokens get an identical `200 {"next":"check_link"}` with
+identical headers after a 300 ms floor (a dummy hash comparison keeps the path alike); `claim.start.refused`
+records the real reason. `Referrer-Policy: no-referrer` and `Cache-Control: no-store` are on every
+response. **Key binding (T20, implemented)**: the page makes a WebCrypto ECDSA P-256 key,
+non-extractable, keeps it in IndexedDB and sends the public JWK with `start`. Every request carries
+`X-Claim-Proof: <unix seconds>.<base64url r||s>`, a signature over
+`"tessera-claim-proof-v2\n"+METHOD+"\n"+PATH+"\n"+seconds+"\n"+session nonce+"\n"+base64url(SHA-256(body))`;
+the server verifies it with `crypto/ecdsa`, accepts ±60 s and lets each proof be used once, so a
+stolen cookie is useless and a captured proof cannot carry another body (the path signed is the one
+the API sees: a reverse proxy must not rewrite it). One use is keyed on the signature's `r`, so the
+malleated form `(r, N−s)` of an accepted signature is a replay too, and it is recorded atomically in
+the tenant's database (`claim_proof_uses`, schema `0229_claim_proofs.sql`), so it holds across
+restarts and processes. Missing, bad, stale and
+replayed proofs get the same `401 {"error":"session_required"}` as no cookie at all and are audited
+as `claim.proof.rejected`. A session of one tenant is nothing at another.
+
+**Public routes** (`/public/t/{slug}/claim/…`, registered `noTenant` and public; each resolves the
+tenant from the slug, opens its own tenant transaction and writes its domain events in it; the
+`http.request` event goes to the tenant's chain as an anonymous caller):
+`POST start {token, key}` · `POST verify/send` · `POST verify/check {code}` · `GET status` (step, first
+name, organization, sponsor, population, end date, nothing else) · `POST existing-account {answer}` ·
+`POST credential` (answers `{redirect}`) · `POST resend {email}` ("If an invitation exists for this
+address, we have sent a new link."). The design's `GET credential/callback` is the existing
+`/api/auth/oidc/{connection_id}/callback` with the login purpose `claim`; it sends the browser back to
+`/claim?result=complete|failed`. The Vite dev server proxies `/public/t`.
+
+**Rate limits** (`internal/ratelimit`, in process, token buckets of N per window; throttles are
+audited as `claim.throttled` without a token or code): start 10 per IP per 10 minutes (client IP as
+the API's rate limiter, trusting `TESSERA_TRUSTED_PROXIES`) and 100 per tenant per minute (429; no
+bot challenge yet); verify/send 3 per session per 10 minutes, 5 per address per hour, 10 per day
+(the answer is the same when throttled); verify/check 5 tries per code; resend 3 per address per day.
+
+**Audit actions:** `claim.invitation.issue|revoke|expire`, `claim.start`, `claim.start.refused`,
+`claim.code.send|failed|locked`, `claim.verify_contact`, `claim.existing_account`,
+`claim.credential.start|pending|failed`, `claim.complete`, `claim.throttled`, `claim.proof.rejected`.
+
+**Dev completion path** (the only credential authority so far; GU-8 does the real ones): outside
+production with the dev IdP configured, `credential.DevIdP` registers the guest with the dev IdP over
+HTTP through `internal/safehttp` (loopback allowed in dev only) at the dev-only
+`POST <issuer>/_register` (client authentication as `tessera-dev`; only `guest-…` subjects; users.yaml
+users cannot be replaced) with a passkey, then the claim redirects to the normal OIDC sign-in with
+`login_hint` and `prompt=login`; the callback binds `guest-<id>`, which is the only sign-in it accepts.
+To try it: `./run.sh --reseed`; sign in at http://localhost:5173 as Pat (policy admin; his account is a
+Larkspur employee) and invite a guest at Access → Guests I sponsor; the dev mail sink
+(`server/var/dev-mail.jsonl`, written by the dispatcher within about 15 seconds) holds the email: open
+its `/claim#t=…` link, ask for a code (also in the sink), answer the question, choose "Continue to
+sign-in" and pick the passkey for the guest on the dev IdP page. Back on `/claim` the guest sees
+"You are all set"; the panel shows the invitation as claimed. Checked by hand: the page is plain HTML
+and CSS, no third-party scripts, works at 360 px; `npm test` covers its model and client, `go test
+./internal/api -run TestClaim` the API end to end.
+
+**Deferred:** matching and linking on "yes" (GU-5), identity verification and IAL above 0 (GU-7), real
+credential authorities, passwords, MFA enrolment, the Tessera-hosted service (GU-8), terms and
+consent, recovery (GU-10), SMS codes, claim codes for letters, a bot challenge, and shared (multi-node)
+rate-limit state. Parity fixtures are unchanged. After pulling this change run `./run.sh --reseed`:
+it adds the claim tables and three columns to `intake_records`, widens its `invitation_status` check
+and allows the login purpose `claim`.
 themselves. Not yet: provisioning into the target system (#103), business roles (#161).
 
 ### Notifications
@@ -1179,8 +1550,11 @@ the run failed. Provider calls go through `internal/safehttp`.
   More actions, and the identity side panel, "Contain".
 - **Credentials.** `PUT /api/connections/{id}/containment-credential` `{token, base_url, org}`
   (connections.manage, step-up) seals the provider token with the KEK (`internal/seal`, AAD bound to
-  tenant, table, column and connection) in `containment_credentials`; it is never returned or
-  logged. Okta needs `base_url` (the org URL), GitHub `org`; Entra and Google default to
+  tenant, table, column, connection and purpose) in `connection_credentials` (purpose
+  `containment`; the same sealed store holds the LDAP bind secret as purpose `bind`); it
+  is never returned or logged. On start, `serve` re-seals any rows left in the retired
+  `connection_secrets` and `containment_credentials` tables into it and drops them, in one
+  transaction, and refuses to start if a blob will not open under the KEK. Okta needs `base_url` (the org URL), GitHub `org`; Entra and Google default to
   `graph.microsoft.com` and `admin.googleapis.com`. Tokens: Okta API token (SSWS), Entra and Google
   bearer access tokens with the permission to revoke sessions (`User.RevokeSessions.All`,
   `DelegatedPermissionGrant.ReadWrite.All`; `admin.directory.user.security`), GitHub an owner's
@@ -1378,6 +1752,103 @@ SigV4 signed by `internal/containment/sigv4` (standard library only, tested agai
 AWS's published test suite in `testdata/suite.json`) and sent through `internal/safehttp`, so the
 endpoints must be public https hosts. The fixtures in `internal/containment/testdata/aws.json`
 record every call, including a throttle, a concurrent modification and a full policy.
+### Flat-file import (disconnected applications)
+
+An app with no connector is fed by CSV files (issue #105; schema `0352_flatfile.sql`, package
+`internal/flatfile`). Its accounts and entitlements flow through the same ingest path as a
+connector's (`ingest.Import`), so they correlate with the normal resolver (the person's id, then
+email; a reviewer's pin is kept), and show in access reviews, SoD, leaver plans and the correlation
+queue (orphans). An entitlement is a permission `ent:<code>` on one application resource, granted
+to the account by a `direct_grant` edge. Agent delegations are left alone.
+
+- `PUT /api/flatfile/apps/{system}/mapping` `{name, owner, accounts{account_id, username, email,
+  identity_id, status}, entitlements{account_id, entitlement, name, privileged}}` saves the column
+  mapping (`flatfile.manage`: tenant admin; step-up). `system` is the app's permanent name
+  (`^[a-z0-9][a-z0-9_.-]{0,62}$`); one that a connection or another source already feeds is `409`.
+  `GET /api/flatfile/apps` lists the mappings.
+- `POST /api/flatfile/apps/{system}/uploads?kind=accounts|entitlements&filename=` takes the CSV as the
+  request body (`Content-Type: text/csv`, the one non-JSON body the API accepts, declared per route)
+  (`flatfile.upload`: operator, policy admin). `201` with `{upload, confirmed_tasks}` when applied;
+  `422` with the same body when rejected. Upload accounts before entitlements: an entitlement row
+  must name an account of the last accounts file.
+- Limits: 512 KiB, 5 000 rows, 64 columns, 256 characters a cell; UTF-8 only (a byte order mark is
+  dropped; NUL, other encodings and control characters in a cell are rejected). A file with **any**
+  invalid row is rejected whole, with every bad row listed (row, column, code, message; the first 200
+  are stored), and changes nothing but the history. A partial file must never make the delta call
+  accounts removed. Row codes: `not_utf8`, `column_count`, `required`, `formula_prefix`,
+  `invalid_email`, `invalid_status`, `duplicate_key`, `unknown_account`, and the file-level
+  `file_too_large`, `too_many_rows`, `missing_column`, `bad_csv`, `no_header`, `duplicate_column`.
+- Each upload is a full snapshot of its kind. The delta against the last applied file is *added*,
+  *removed* (an account is disabled, not deleted; its imported grants go; a removed account takes its
+  entitlements) and *changed* (which fields, never the values). `GET /api/flatfile/uploads[?system=]`
+  and `GET /api/flatfile/uploads/{id}` (graph.read) give the history, with the per-row errors and the
+  delta of each upload. The file itself is not kept: only its SHA-256, size and name.
+- **Formula injection.** Identifiers (account id, person's id, entitlement, email) that start with
+  `= + - @` (or tab or CR) are rejected; display values (username, entitlement name, file name) are
+  stored with a leading `'`; every API view neutralises again, and the CSV export of the lists does too.
+- **Manual tasks.** A leaver (the plan's `disable_account` step), a least-privilege revoke or a review
+  `revoke` on an imported account or entitlement opens a task (`flatfile_tasks`, audited as
+  `flatfile.task_created`): Tessera cannot do it in the app. A leaver gets one task per account, not one
+  per entitlement. The task stays `open` until an upload shows it done: the account gone from (or
+  disabled in) the accounts file, or the account/entitlement row gone from the entitlements file
+  (`confirmed`, with the upload that confirmed it, audited as `flatfile.task_confirmed`). Until then the
+  account stays disabled and revoked grants are not brought back by a file that still lists them.
+  `POST /api/flatfile/tasks/{id}/close` `{reason}` (10 to 500 characters; `flatfile.close_tasks`: policy
+  admin; step-up) closes one by hand (`closed`, `flatfile.task_closed`). `GET /api/flatfile/tasks[?status=]`
+  lists them.
+- Audit: `flatfile.mapping_saved`, `flatfile.upload` (outcome `failure` for a rejected file), and the
+  task events above, each in the transaction of the change.
+- **SFTP later.** `flatfile.Apply(tx, now, Input{Source: "sftp", Raw: bytes, ...})` is all an SFTP drop
+  has to call; the upload row already has `source` (`api` or `sftp`). No SFTP server is built.
+- UI: **Settings, Flat-file apps** (`/admin/flat-files`): the mapping editor (with column suggestions
+  from a sample file's first line), Upload CSV, upload history with a side panel of per-row errors and
+  the delta, and the manual task list with Close.
+
+### Verified help-desk resets
+
+**Identity → Help desk** (`/helpdesk`, issue #108) resets a password or MFA only after the person
+is verified. A case (`helpdesk_cases`, schema 0254; also `helpdesk_verifications`,
+`helpdesk_signals`, `helpdesk_findings`, all tenant-scoped with isolation tests) is opened for an
+identity, collects verifications, and runs through the IdP once the policy
+(`internal/helpdesk/policy.go`, a pure `Evaluate`) is satisfied. The policy is checked again inside
+the transaction that claims the case (open or failed to executing, single-flight), so an
+unverified case cannot execute: `409 verification_required` with the policy in the body, and the
+IdP is never called.
+
+- **Methods.** `push` (a push to an existing phishing-resistant authenticator; a push to a weaker
+  one does not count), `callback` (to the number from the HR record; `number_source` must be
+  `"hr"` and a note is required), `manager_approval` (only the identity's manager, by a platform
+  user linked to the manager's identity, never the requester or the subject) and `idv` (privileged
+  identities only).
+- **Privileged identities** (an effective privileged permission in the access graph, or a platform
+  admin role) need two different methods and a second approver who is not the requester or the
+  subject. Nobody can open a case for their own identity.
+- **Routes.** `GET/POST /api/helpdesk/cases`, `GET .../{case_id}`, `POST .../{case_id}/verifications`
+  `{method, evidence, number_source, session_ref}`, `.../manager-approval` and `.../second-approval`
+  (`helpdesk.approve`, step-up), `.../execute` (`helpdesk.reset`, step-up), `.../cancel`,
+  `GET /api/helpdesk/findings`. `helpdesk.reset` and `helpdesk.approve` go to operators and policy
+  admins. Every step is audited in the same transaction (`helpdesk.case.started`,
+  `.verification`, `.second_approval`, `.reset.started`, `.reset.executed`, `.reset.failed`,
+  `.detection.fired`).
+- **Execution** goes through the narrow `ResetExecutor` interface. Okta: `reset_factors` (MFA) or
+  `reset_password` with `sendEmail=true`. Entra: delete every deletable authentication method and
+  issue a single-use temporary access pass (a password reset issues the pass only). They use the
+  connection's provider credential from `PUT /api/connections/{id}/containment-credential` (Okta
+  needs `okta.users.manage`; Entra `UserAuthenticationMethod.ReadWrite.All`) and go through
+  `internal/safehttp`. The Entra pass is returned once in the execute response
+  (`Cache-Control: no-store`), never stored, audited or logged. A failed reset leaves the case
+  `failed` and can be run again; a case stuck in `executing` after a crash needs a human.
+- **Detection** `helpdesk.post_reset_takeover`: within 24 hours after a reset, a new MFA device
+  and a sign-in from a location the identity had not signed in from before the reset. There is no
+  alerts engine on `dev` yet, so it is a pure function (`helpdesk.Detect`) run whenever a signal
+  is stored; a finding is raised once per case, audited and listed under Detections. Real
+  signals will come from the IdP log connectors; until then `POST /api/helpdesk/signals`
+  `{identity_id, kind: mfa_device_added|sign_in, location, device, occurred_at}`
+  (`helpdesk.approve`) simulates the feed and is a 404 in production.
+- **Simulated outside production.** The `simulated` executor (calls nothing), the push provider
+  (always approves) and the IDV provider (accepts any session reference not starting with
+  `fail`) exist when `TESSERA_ENV` is not `prod`. In production push and IDV answer
+  `503 provider_unavailable` until real providers implement `PushProvider` and `IDVProvider`.
 
 ### Native groups (folders and groups)
 
@@ -1393,7 +1864,8 @@ soft delete), `server/internal/api/groups_folders.go`. No UI yet (GR-8).
   whole subtree; every old name is kept as an **alias**: it still resolves and stays reserved, and
   its owner can take it back. A folder is deleted only when empty; a group is soft-deleted
   (`status: deleted`, restorable, keeps its name). Copies carry fields and structure, not memberships.
-- Routes (all need `groups.admin`, held by `tenant_admin` until GR-4; every route is audited):
+- Routes (a route needs `groups.read` or `groups.write`, then the privilege of the folder or group,
+  see "Group privileges (GR-4)" below; every route is audited):
 
   | Route | |
   |---|---|
@@ -1413,6 +1885,158 @@ soft delete), `server/internal/api/groups_folders.go`. No UI yet (GR-8).
 - Audit events `groups.folder.{created,updated,renamed,moved,copied,deleted}` and
   `groups.group.{created,updated,renamed,moved,copied,deleted,restored}`, written in the change's
   transaction with the acting user; `GET /api/audit?target_type=group&target_id=` filters by object.
+
+#### Membership engine (GR-2, issue #45)
+
+`server/internal/groups/engine` keeps `grp_effective` (the materialized members, with support counts)
+equal to the stored inputs: direct memberships, nesting and composite-factor edges (`grp_deps`) and
+composite definitions. `grp_closure` and `grp_levels` are maintained incrementally (schema
+`0284_groups_engine.sql` adds `grp_engine_state`). Changes recompute the affected identities in
+ascending level order from the stored rows, stopping where membership does not change. A disabled or
+deleted group, or one outside its own `enabled_from`/`disabled_at`, is an empty set.
+
+| Route (`groups.read`/`groups.write`, then the privilege; the two engine routes `groups.admin`) | |
+|---|---|
+| `GET /api/groups/{id}/members?filter=direct\|effective&limit=&offset=` | members (`read`); `stale` is true while a recompute is queued |
+| `POST /api/groups/{id}/members` `{identity \| group, enabled_from, disabled_at, reason}` | add (`201`), update dates of an existing row (`200`), or `202` |
+| `GET /api/groups/{id}/members/{identity}` | hasMember; ignores a row whose `disabled_at` passed even if the time wheel lags |
+| `DELETE /api/groups/{id}/members/{identity-id \| group-id}` | remove (`200` or `202`) |
+| `POST /api/groups/{id}/convert-to-composite` `{op, factors, discard_members}` | basic to composite in place; direct members are `409 has_direct_members` unless discarded |
+| `PUT /api/groups/{id}/composite` `{op, factors}` | redefine a composite (`union`, `intersection` n-ary; `complement` = first minus second) |
+| `POST /api/groups` with `definition: composite`, `composite_op`, `factors` | create a composite |
+| `PATCH /api/groups/{id}` `enabled_from`, `disabled_at` (RFC 3339, `""` clears) | the group's own dates |
+| `POST /api/groups/engine/verify`, `GET /api/groups/engine/ops/{seq}` | full recompute and repair; progress of a `202` operation |
+
+- A composite has no direct members (`409 composite_no_members`). An edge whose parent is already a
+  descendant of the child is `409 {"error":"cycle","path":[names, child down to parent]}`.
+- `TESSERA_GROUPS_SYNC_BUDGET` (default 5000): the estimate is `|ancestors| x |identities affected|`.
+  Under it the change is applied in the request; over it the direct change commits, a
+  `grp_engine_queue` job is queued, the group is `recompute_state: pending` and the answer is `202`
+  with `op`. The background `engine.Runner` (started by `cmd/tessera`) drains the queue in chunks of
+  2,000 identities, runs the time wheel every 30 s (and at the next date boundary: a date takes
+  effect within 60 s) and verifies each tenant nightly.
+- Audit events `groups.member.{added,updated,removed}`, `groups.group.converted`,
+  `groups.composite.updated` (in the request's transaction) and, from the background job,
+  `groups.engine.{recomputed,verified,repaired}` and `groups.timewheel.applied`.
+- Tests: `go test ./internal/groups/engine` (oracle comparison; `TESSERA_ORACLE_SEEDS=500` for a
+  longer soak, `go test -fuzz=FuzzEngine_MatchesOracle` for the fuzzer);
+  `go test -bench . ./internal/groups/engine` runs the 10%-of-reference-tenant benchmark
+  (`TESSERA_GROUPS_BENCH_SCALE` percent, default 10).
+
+#### Group events and point-in-time history (GR-3, issue #46)
+
+Every change to a folder, group, direct membership or (from GR-4) privilege, and every effective
+membership the engine adds or removes, writes a row to `grp_events` in the same transaction, with a
+per-tenant gap-free `seq` (a counter row in `grp_event_heads`, bumped under the write lock, so a
+rolled-back change gives its number back). Rows are append-only (a trigger refuses `UPDATE`).
+Schema `0285_group_events.sql` (the design calls it `0103`): `grp_event_heads`, `grp_events`,
+`grp_event_cursors`, `grp_pit_{objects,direct,effective,privileges,digests}`, all tenant-scoped with
+cross-tenant guard triggers.
+
+- `server/internal/groups/events`: the §10.1 catalogue, `Append`, consumer cursors (`Poll`, `Ack`,
+  `Lag`) and CloudEvents 1.0 JSON encoding (`ToCloudEvent`: id `<tenant>/<seq>`, `sequence` extension).
+  The groups code calls `pit.Emit`, which appends the event, applies it to the PIT tables and moves the
+  `pit` cursor, all in the caller's transaction.
+- `server/internal/groups/pit`: the writer closes and opens half-open intervals `[start_at, end_at)`
+  (`start_seq`/`end_seq` are event seqs) for objects (a snapshot of names, folder, definition, status),
+  direct rows (with their own dates), effective memberships and privileges. The tables are derived
+  data: `Rebuild` replays `grp_events` (the whole tenant or one group), `CompareRebuild` rebuilds and
+  compares. `MembersAt`, `MembersBetween`, `DirectAt`, `DirectBetween`, `ObjectAt` are the queries.
+- Tamper evidence (K9): at 00:05 UTC `pit.Runner` writes, for each finished UTC day with events, a
+  Merkle root (RFC 6962 tree; leaves are SHA-256 of `0x00` and the RFC 8785 form of the event row) and
+  appends `groups.pit.digest {day, first_seq, last_seq, event_count, root}` to the audit ledger, whose
+  checkpoints are anchored outside the database. `VerifyDay` recomputes the root and also checks the
+  stored digest against the ledger's copy; an edited, deleted or added event of a digested day is a
+  `mismatch`. A server that was down catches up on the days it missed.
+- Retention: `TESSERA_GROUPS_RETENTION_DAYS` (default 2555, 7 years; 30 to 36500). Once a UTC day the
+  runner deletes events older than that (never past the last digested event, as a prefix of the
+  sequence) and PIT intervals that ended before it, and audits `groups.retention.pruned`. Digests are
+  kept; a day whose events were pruned verifies as `pruned`; `Rebuild` refuses (`history_pruned`)
+  rather than lose intervals whose events are gone. Weekly the runner rebuilds the PIT rows of a
+  sample of 20 groups and compares them with what was stored; a difference is repaired and audited
+  as `groups.pit.mismatch` (the schedule is in memory, so a restart postpones it by a week).
+
+| Route (the two members reads need `read` on the group, the pit routes `groups.admin`) | |
+|---|---|
+| `GET /api/groups/{id}/members?as_of=T[&filter=effective\|direct]` | the members at an instant (RFC 3339, not in the future); effective by default; `group` is the group's snapshot then (name, status), null if it did not exist; deleted groups keep their history |
+| `GET /api/groups/{id}/members?between=T1,T2` | everyone who was a member at any time in the window (at most 366 days); `items` are intervals |
+| `GET /api/groups/pit/digests?limit=` | the daily digests, newest first |
+| `GET /api/groups/pit/verify[?day=YYYY-MM-DD]` | recompute a day's root (default: the newest 100 digests); statuses `ok`, `mismatch`, `ledger_mismatch`, `no_digest`, `pruned` |
+| `POST /api/groups/pit/rebuild` `{group_id?}` | rebuild the PIT rows from the events (audited as `groups.pit.rebuilt`) |
+
+- Event causes: `api` for direct changes, `engine` for effective changes (repairs by verification carry
+  `data.repair`), `timewheel` for the wheel's own runs; `cause_ref` is the request id when there is one.
+- Tests: `go test ./internal/groups/pit ./internal/groups/events` (`TestPIT_AsOfMatchesReplay`,
+  `TestPIT_DigestDetectsTamper`, `TestPIT_RebuildEqualsLive`, `TestEvents_GapFreeSeqUnderConcurrency`),
+  `TestIsolation_GroupEventTables` in `internal/store`, `TestGroupsPITAPI` in `internal/api`.
+
+#### Group privileges (GR-4, issue #47)
+
+Design `docs/design/groups-grouper-parity.md` §7. Schema `0286_group_privs.sql` (the design calls it
+`0102`; `0280`..`0284` are taken): `grp_privileges` and `grp_priv_settings`. Code:
+`server/internal/groups/privs` (`implies.go` the implication table, `check.go` checks and dynamic
+inheritance, `explain.go`, `grant.go`, `settings.go`), `server/internal/api/groups_privs.go`.
+
+- **Privileges.** Grouper's names, lower-cased: group `admin update read view optin optout
+  group_attr_read group_attr_update`; folder `stem_admin create stem_attr_read stem_attr_update
+  stem_view`; attribute definition `attr_admin attr_update attr_read attr_view attr_optin attr_optout
+  attr_def_attr_read attr_def_attr_update` (21 names: the design says 22 but lists 21, and the
+  schema CHECK has 21). `admin`, `stem_admin` and `attr_admin` imply every privilege of their object;
+  `update`, `read`, `optin`, `optout`, `create` imply the view privilege.
+- **Holders.** An identity, a group (every effective member holds it; `IsMember` re-checks the
+  direct rows' own dates), or `everyone`. A platform user holds its identity's privileges through
+  `platform_users.identity_id` (the column came with the auth core); a user without a link, and a
+  machine client, hold only what everyone holds and what their roles give.
+- **Dynamic inheritance.** A row on folder `F` with `applies_to` `groups`, `folders` or `attr_defs`
+  and `scope` `one` (objects whose parent is `F`) or `sub` (everything below) is applied when a
+  privilege is checked, never copied. `stem_admin` on a folder, by a row on it or inherited, is every
+  privilege on what is below it (the design's §7.2 example).
+- **Platform roles still apply.** An active `tenant_admin` holds every privilege (Grouper's wheel),
+  `auditor` the read ones (`read`, `view`, `*_attr_read`, `attr_read`, `attr_view`) everywhere, and
+  `viewer` the view ones when the tenant sets `groups_viewer_can_view: true` in its settings.
+- **Every group route is gated twice.** The route permission (`groups.read` for reads,
+  `groups.write` for changes, by role and token scope) lets the request in; the handler then needs
+  the privilege of the object. A refusal is `403 {"error":"privilege_required","privilege","object_type","object_id"}`.
+  `groups.admin` (tenant admins) is for tenant-wide routes: engine verify and operations, the three
+  `pit` routes, the privilege settings and identity links.
+
+  | Operation | Privilege |
+  |---|---|
+  | list folders, list groups | only rows the caller may view (`stem_view`, `view`) |
+  | read a folder, a group | `stem_view`, `view` |
+  | create a folder or group | `create` on the parent folder (before the first folder exists, a tenant admin) |
+  | edit, rename, delete a folder; edit, delete, restore a group | `stem_admin`; `admin` |
+  | move | `stem_admin` or `admin` on the object, and `create` on the destination |
+  | copy | `stem_admin` (folder) or `read` (group) on the source, and `create` on the destination |
+  | read members, hasMember, point-in-time members | `read` |
+  | add or remove a member | `update`, or `optin` / `optout` when the member is the caller; `read` on a nested group |
+  | convert to composite, set a composite | `admin`, and `read` on each factor |
+  | list, grant, revoke privileges | `stem_admin` / `admin` (a holder group also needs `view`) |
+
+- **Creator and default privileges.** The creator's identity becomes `admin` of a new group and
+  `stem_admin` of a new folder or copy (`source: creator_default`); a tenant admin with no identity
+  link needs none. `PUT /api/groups/privileges/settings` `{everyone_allowed, defaults}` sets the
+  **everyone policy** (which privileges may be granted to everyone; `admin`, `stem_admin` and
+  `attr_admin` never) and the grants to everyone made on each new object. Granting to everyone
+  (`holder_type: everyone`, or a default) needs an active `tenant_admin`.
+- **Events and audit.** A grant or revoke writes `privilege.granted` / `privilege.revoked` (the PIT
+  keeps when each privilege was held, in `grp_pit_privileges`) and `groups.privilege.{granted,revoked}`
+  in the change's transaction; so do deleting a folder (its rows go with it), saving the settings
+  (`groups.privilege.settings_changed`) and linking a user (`groups.user.identity_{linked,unlinked}`).
+
+| Route | |
+|---|---|
+| `GET\|POST /api/groups/{id}/privileges`, `GET\|POST /api/groups/folders/{id}/privileges` | the rows on the object; grant `{privilege, holder_type: identity\|group\|everyone, identity, group, applies_to: self\|groups\|folders\|attr_defs, scope: self\|one\|sub}` (`201`, or `200` for a grant that exists) |
+| `DELETE .../privileges/{privilege_id}` | revoke one row (the design has `DELETE .../privileges`; the row is in the path here) |
+| `GET .../privileges/effective[?identity=]` | for each privilege of the object, every path by which the identity (default: the caller) holds it, with a sentence such as "Ivan holds UPDATE on `app:foo:g` because they are in `app:foo:admins`, which holds STEM_ADMIN on folder `app:foo` ..."; another identity's needs `admin` |
+| `GET\|PUT /api/groups/privileges/settings` | the everyone policy and default privileges (`groups.admin`) |
+| `PUT /api/groups/users/{id}/identity` `{identity_id \| null}` | link a platform user to an identity (`groups.admin`, fresh phishing-resistant sign-in; audited) |
+
+- Tests: `go test ./internal/groups/privs` (`TestImplication` for all 21 privileges,
+  `TestPrivs_InheritanceOneVsSub`, `TestPrivs_ExplainListsAllPaths`,
+  `TestPrivs_EveryoneNeedsTenantAdmin`), `internal/api` (`TestGroupsRoutesRequirePrivilege` for every
+  route, `TestPrivs_ViewFiltersBrowseAndSearch`, `TestPrivs_GrantsGiveAccess`, ...),
+  `TestIsolation_GroupPrivilegeTables` in `internal/store`.
 
 ### Audit ledger
 
@@ -1613,6 +2237,85 @@ anything changed against the previous artifact; `-report` writes the full diff a
 `internal/aws/catalog.Load(dir, version)` reads the artifact. See `catalog/aws/README.md` and
 `catalog/aws/THIRD_PARTY_NOTICES`.
 
+### AWS connector (read-only)
+
+`internal/connectors/awsorg` collects one `model.Snapshot` of an AWS estate for the evaluator
+(design §11.1): Organizations (tree, SCPs, RCPs), IAM (`GetAccountAuthorizationDetails`: users,
+groups, roles, managed policies, boundaries, trust policies), and the resource policies of S3, S3
+access points, KMS (and grants), SQS, SNS, Secrets Manager, Lambda, ECR and VPC endpoints, plus
+Identity Center assignments. It uses **no AWS SDK**: each call is an HTTPS request signed by the
+stdlib SigV4 signer (`internal/aws/sigv4`, tested against the published `get-vanilla` vector) and
+sent through `internal/safehttp`. Throttling and 5xx are retried with exponential backoff and full
+jitter (honouring `Retry-After`); every `List*` follows its token to the last page.
+
+- **Credentials.** The connector holds an access key pair, sealed with `internal/seal` (AAD bound to
+  tenant, table, column and connector id) and never returned by the API. It signs only
+  `sts:AssumeRole` with it; everything else is read as the customer's role (default `TesseraReader`)
+  in each account, with an `sts:ExternalId` the connector generates and shows (`external_id`) for
+  the role's trust policy. `awsorg.ReaderPolicy()` is the role's permissions policy: only List and
+  Read actions, verified against the action catalog (`CheckReadOnly`, tested).
+- **Fail closed (design §3.3).** A stored policy that does not parse, a statement dropped as an
+  ingest anomaly, and a read that fails (an account that refuses the role, a bucket policy that is
+  denied, a list that fails) are never skipped: each is a *finding* with the scope of decisions it
+  could affect. `Findings.Unsupported(Request)` returns the `POLICY_UNPARSEABLE` reasons for a
+  request; the evaluator (PR-5) returns such a decision as `UNSUPPORTED`.
+- **Persistence.** `schema/0319_aws_snapshots.sql` has the §6.2 tables (`aws_snapshots`,
+  `aws_policy_documents`, `aws_policy_attachments`, `aws_org_nodes`, `aws_trust_edges`,
+  `aws_effective_permissions`, `aws_explanations`) plus `aws_connectors`, `aws_snapshot_entities`
+  and `aws_collection_findings`. The snapshot id is a content hash, per tenant; persisting an
+  unchanged estate writes nothing. `awsorg.Persist` / `awsorg.Load` write and rebuild a snapshot.
+- **API** (connections permissions; writes need step-up): `GET|POST /api/aws/connectors`,
+  `DELETE /api/aws/connectors/{id}`, `GET /api/aws/snapshots`, `GET /api/aws/snapshots/{id}`.
+  `POST /api/aws/connectors` takes `{name, config: {regions, account_ids, management_account_id,
+  role_name, identity_center_region}, credentials: {access_key_id, secret_access_key}}`. Running a
+  collection (`awsorg.Service.Collect`) is not a route yet: a run can outlast the request timeout.
+- **Tests** use `internal/aws/awstest` (test-only): `Replay` serves recorded responses from
+  `internal/connectors/awsorg/testdata/http/<service>/<operation>/<n>.<ext>`, verifies every
+  signature and reports calls with no recording. It does not enforce IAM; these are collection
+  tests only. Fixtures are synthetic (fake account ids).
+
+### AWS evaluator in the MVP (`/api/aws/*`)
+
+Issue #30 (design §11). Set `TESSERA_AWS_CATALOG_DIR` (the catalog directory above, with a compiled
+artifact; `TESSERA_AWS_CATALOG_VERSION` picks a version, default the newest). Without it the
+evaluator routes answer `503 aws_catalog_unavailable` and nothing else changes.
+
+| Route | Permission | |
+|---|---|---|
+| `GET /api/aws/can?principal=&action=&resource=&profile=&snapshot=` | `graph.read` | one decision with its trace and `explanation_id` |
+| `GET /api/aws/principals/{arn}/effective?service=&profile=&limit=&cursor=` | `graph.read` | what a principal can do, paged; a larger answer than 200,000 cells needs `service=` |
+| `GET /api/aws/resources/{arn}/who-can?action=&profile=` | `graph.read` | principals that can, with decisions |
+| `GET /api/aws/explanations/{id}` | `graph.read` | a trace by id (from the store, else the recent ones held in memory) |
+| `POST /api/aws/simulate-policy-change` | `graph.read` | `{changes, base_snapshot?, profile?, head?, comment?: {pull_number}}`: who gains or loses what, plus the PR comment text |
+| `GET\|PUT /api/aws/pr-comment` | `connections.read` / `connections.manage` + step-up | the comment settings |
+
+`{arn}` may contain slashes. Profiles: `default` (current hour, TLS), `none`, `bare`, or a list of
+`any-network,mfa-session,now,tls`. Results carry fidelity (`exact`, `approximate`, `unsupported`);
+a policy the collector could not read makes the decisions it could affect `unsupported`
+(`POLICY_UNPARSEABLE`) and is listed as `collection_gaps`.
+
+`simulate-policy-change` ops (design §11.3): `put_policy_version attach detach put_inline
+delete_inline put_boundary delete_boundary put_resource_policy put_trust_policy attach_scp
+detach_scp put_scp attach_rcp detach_rcp put_rcp move_account create_grant retire_grant put_bpa
+put_ownership_controls`. For `put_inline`/`delete_inline` `policy_arn` is the inline policy's name,
+for `move_account` the new parent id, for `retire_grant` the grant id. `internal/aws/snapshot.Apply`
+builds the head snapshot; `internal/aws/render` writes the comment.
+
+**PR comment to GitHub** is off by default. `PUT /api/aws/pr-comment {enabled, repo: "owner/name",
+token}` seals the token under the KEK (never returned, never logged, not in audit events). Only a
+request with `comment.pull_number` posts, needs `connections.manage` and a fresh phishing-resistant
+sign-in, goes through `internal/safehttp` to `api.github.com`, and is audited
+(`aws.pr_comment.posted` / `.failed`).
+
+`awsorg.Service.Materialize` (run by `Collect` when `Service.Eval` is set) evaluates a snapshot and
+ingests what it confirms: accounts, role groups, permissions (action atom by resource atom) and
+`grants` edges with source `evaluator`, carrying explanation, outcome and fidelity
+(`schema/0321_aws_integration.sql`, a side table because there is no column migration), plus
+`can_assume` trust edges and the NHI trust flags `wildcard_oidc_trust`, `missing_external_id`,
+`public_trust`. Least privilege never recommends or applies a conditional, approximate or
+unsupported grant (`leastpriv.VerifyAWS` checks a candidate keeps the used calls and adds nothing).
+UI: Insights, AWS access.
+
 ## Web UI
 
 The UI follows an "admin center" layout: a dark top bar, a light left rail grouped by job, list
@@ -1631,12 +2334,12 @@ the right. Arrow keys move between items.
 | Group | Items |
 |---|---|
 | (top) | **Home**, **Inbox** (count) |
-| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Ownership, Accounts (with *Account matches*), Roles, Organizations (live, read-only, derived from departments) |
+| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Ownership, Accounts (with *Account matches*), Help desk, Roles, Organizations (live, read-only, derived from departments) |
 | **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
 | **Protection** | Alerts (alerts, rules, channels), Policies & SoD (violations, policies, what-if simulation, SoD functions, risks and rulesets), Attribute policies, Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
 | **Settings** | Connections (governed connections and the setup wizard), Shared Signals (SSF transmitters and received events), Admin |
 | **Protection** | Alerts (alerts, rules, channels), Policies & SoD (violations, policies, what-if simulation, SoD functions, risks and rulesets), Mitigating controls (mitigations, control library), Attribute policies, Access graph (with an *As of* date for *Who can access…*), Evidence packs, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
-| **Settings** | Connections (governed connections and the setup wizard), Admin |
+| **Settings** | Connections (governed connections and the setup wizard), Flat-file apps, Conditional access (network ranges, policies, device signals), Admin |
 
 **Home.** For the admin & security persona: the tenant name and a sync line, then tabs
 (Overview, Monitoring, Deployment health, Recommendations). Overview has the KPI cards
@@ -1703,7 +2406,7 @@ about 8 kB; cytoscape (about 146 kB gzipped) only loads with the access graph.
 
 Every API call needs a signed-in session (design `docs/design/phase-0-platform-security.md` §11, §12),
 and Tessera never sees a password: users sign in through their company's identity provider (OIDC, SAML 2.0,
-or an OAuth 2.0-only provider such as GitHub).
+CAS 3.0, WS-Federation (legacy ADFS), or an OAuth 2.0-only provider such as GitHub).
 
 1. `./run.sh` and open http://localhost:5173. The sign-in page asks for the organization (tenant):
    `larkspur` (the demo company) or `globex`.
@@ -1750,8 +2453,6 @@ balancer, list it in `TESSERA_TRUSTED_PROXIES` so the limit applies to the `X-Fo
 A tenant's `require_phr_for_all` setting (`tenants.settings`, §18.3) makes every role need a
 phishing-resistant sign-in in that tenant. Other session routes: `GET /api/auth/session`,
 `POST /api/auth/logout`, `GET /api/auth/sessions`, `DELETE /api/auth/sessions/{session_id}`.
-
-### Dev IdP
 
 ### Sign-in through the IdP (OIDC)
 
@@ -1813,6 +2514,46 @@ ignored). `auth_time` is the callback time. Admins sign in through OIDC or SAML.
 (`/github/login/oauth/authorize`, `/github/login/oauth/access_token`, `/github/user`; faults
 `github_token_error`, `github_token_type`, `github_user_error`, `github_no_id`, `github_string_id`).
 
+### Sign-in through CAS 3.0
+
+A `protocol: cas` connection (issue #152; most Apereo CAS servers also speak SAML and OIDC, which are
+preferred) redirects to `{cas_server_url}/login?service=…` with the transaction's `state` inside the
+service URL, `/api/auth/cas/{connection_id}/callback?state=`. CAS sends back only a ticket, so the
+callback rebuilds that exact service URL and validates the ticket at `{cas_server_url}/p3/serviceValidate`
+through `internal/safehttp` (`internal/auth/casclient`): service tickets (`ST-`) only, no proxy tickets or
+proxy granting, a size cap, XML round-trip check, exactly one `cas:user`, and any markup inside the user
+or an attribute (a comment splitting the name, a nested element) refused. Each ticket is also used once
+here (`replay_cache`). The user is `cas:user` or `subject_source: attribute:<name>`, never the email.
+
+`authenticationDate` must be released: it is `auth_time` (max_age at sign-in). Phishing resistance comes
+only from a configured amr-style attribute (`authn_mapping.amr_attribute` + `phr_amr`, for example
+`successfulAuthenticationHandlers: [[WebAuthnAuthenticationHandler]]`); otherwise sessions are AAL1.
+Step-up sends `renew=true`, validates with `renew=true`, and needs an `authenticationDate` after the
+step-up started and `isFromNewLogin` not false.
+
+`./run.sh` seeds **Dev IdP (CAS)** against the dev IdP's `/cas` server (`/cas/login` with single
+sign-on unless `renew`, `/cas/p3/serviceValidate`; faults `cas_failure`, `cas_no_user`,
+`cas_two_users`, `cas_comment_user`, `cas_proxied`, `cas_stale_auth`, `cas_ticket_reuse`).
+
+### Sign-in through WS-Federation (legacy ADFS)
+
+A `protocol: wsfed` connection (issue #153; ADFS and Entra also speak SAML and OIDC, which are preferred)
+redirects to the passive endpoint with `wa=wsignin1.0`, `wtrealm` (Tessera's realm,
+`/api/auth/wsfed/{connection_id}`, the token audience), `wreply` (`…/callback`) and `wctx` (the login
+transaction's state); a step-up adds `wfresh=0`, and `wauth` asks for the configured class ref. The IdP
+posts `wresult`, a WS-Trust 2005/02 RequestSecurityTokenResponse, to the callback (cross-site, so it is
+re-posted from Tessera's origin as for SAML). `samlsp.ValidateWSFed` applies the SAML ACS checks to the
+SAML 2.0 assertion inside it (the document's only assertion, its own enveloped signature by a pinned
+certificate, verified detached and only the verified element read, no comment in NameID, issuer,
+audience = realm, Recipient when present, time window, AuthnInstant), plus AppliesTo = realm.
+WS-Federation has no request ID: the transaction is bound by the cookie and `wctx`, and each assertion
+ID is accepted once (`replay_cache`). SAML 1.1 tokens are refused. The user is the persistent NameID or
+`subject_source: attribute:<claim type>` (for example objectGUID), never the UPN or email.
+
+`./run.sh` seeds **Dev IdP (WS-Federation)** against the dev IdP's `/wsfed` endpoint, which wraps the
+SAML assertion it signs (faults: the SAML assertion faults, XSW1–8 included, plus `wsfed_saml11`,
+`wsfed_wrong_applies_to`, `wsfed_tampered`).
+
 **A new tenant** is created by an operator (design §15.3); every step is audited as the OS user:
 
 ```bash
@@ -1820,6 +2561,7 @@ cd server
 TESSERA_ENV=dev go run ./cmd/tessera admin create-tenant -slug acme -name "Acme Corp"
 TESSERA_ENV=dev go run ./cmd/tessera admin add-idp -tenant acme -file okta.yaml -client-secret-file okta.secret
 TESSERA_ENV=dev go run ./cmd/tessera admin invite-admin -tenant acme -connection <id> -email jane@acme.example
+TESSERA_ENV=dev go run ./cmd/tessera admin add-client -tenant acme -name "ETL" -owner jane@acme.example -jwks-file etl.pub.jwks -scope tessera:read -roles viewer   # see Machine clients
 ```
 
 `add-idp` reads a connection file (§18.2; unknown keys are refused, secrets are never in it). OIDC uses
@@ -1829,7 +2571,12 @@ needs `idp_entity_id`, `idp_sso_url` and `idp_signing_certs` (pinned), takes `su
 ID/metadata and ACS URLs to register at the IdP. `protocol: oauth2` takes `profile: github` (GitHub's
 endpoints and `id` by default) or `generic_oauth2` with `authorization_endpoint`, `token_endpoint`,
 `userinfo_endpoint` and `subject_field` (never a name or email), needs `-client-secret-file`, and
-prints the redirect URI. `invite-admin` prints a one-time
+prints the redirect URI. `protocol: cas` with `profile: generic_cas` needs `cas_server_url`, takes
+`subject_source` (`cas_user` or `attribute:<name>`), `attribute_map` and `authn_mapping`, and prints the
+service URL pattern to register at the CAS server. `protocol: wsfed` with `profile: adfs` needs
+`idp_entity_id` (the token issuer), `wsfed_endpoint` and `idp_signing_certs`, takes `subject_source`,
+`attribute_map`, `step_up_request` and `authn_mapping`, and prints the realm and reply URL for the
+relying party trust. `invite-admin` prints a one-time
 `/t/acme/bootstrap?code=tbi_…` URL valid for at most 24 hours (only its hash is stored): redeeming it
 with a phishing-resistant sign-in through that connection, as that email, makes the user `tenant_admin`
 (source `bootstrap`), once.
@@ -2020,7 +2767,7 @@ http and loopback).
 | `GET /t/{slug}/.well-known/jwks.json` | the tenant's public access-token keys |
 | `GET /.well-known/oauth-protected-resource` | RFC 9728 metadata of the API (`authorization_servers` is the `/t/{slug}` template) |
 | `POST /t/{slug}/oauth/device_authorization` | start a device grant (10 per minute per IP); no `verification_uri_complete` |
-| `POST /t/{slug}/oauth/token` | `device_code` and `refresh_token` grants, DPoP proof and server nonce required |
+| `POST /t/{slug}/oauth/token` | `device_code` and `refresh_token` grants, DPoP proof and server nonce required (and `client_credentials`: see Machine clients) |
 | `POST /t/{slug}/oauth/revoke` | RFC 7009: revokes the refresh token's family and the CLI session |
 | `POST /api/auth/device/lookup` | session; who is asking (client, address, time, scope); 5 wrong codes lock the session out of lookups for 10 minutes (`oauth.device.lookup_bruteforce`) |
 | `POST /api/auth/device/approve` | session and step-up (`max_age` 300, phishing-resistant); `{user_code, decision}` |
@@ -2037,14 +2784,69 @@ role: the CLI session's). A used token presented again revokes the whole family 
 writes a critical `oauth.refresh.reuse_detected`; presenting a token with another DPoP key is
 `invalid_grant` and changes nothing. The first-party client `tessera-cli` exists in every tenant
 (created at seed and server start); a tenant can turn the device grant off with
-`tenants.settings.device_grant_enabled=false`. Machine clients and client credentials arrive with
-PR11; introspection (RFC 7662) is for them too and is not served yet.
+`tenants.settings.device_grant_enabled=false`.
 
 The authorization server is hand-written on go-jose (the design's §6 fallback), not on zitadel/oidc: see
 `internal/oauth/oauth.go` for why. Tests: `internal/oauth` (flow, refresh, tokens, metadata, fuzzing),
 `internal/oauth/dpop`, `internal/cliauth`, `internal/api/oauth_routes_test.go` and the CLI against an
 in-process server in `cmd/tessera-cli/e2e_test.go`. Fuzz targets: `FuzzValidateProof`,
 `FuzzVerifyAccessToken` (`go test -fuzz=FuzzValidateProof -fuzztime=30s ./internal/oauth/dpop`).
+`internal/oauth/oauth.go` for why. Tests: `internal/oauth` (flow, refresh, tokens, metadata, machine
+clients, fuzzing), `internal/oauth/dpop`, `internal/cliauth`, `internal/api/oauth_routes_test.go`,
+`internal/api/admin_clients_test.go` and the CLI against an in-process server in
+`cmd/tessera-cli/e2e_test.go`. Fuzz targets: `FuzzValidateProof`, `FuzzVerifyAccessToken`,
+`FuzzParseClientAssertion` (`go test -fuzz=FuzzValidateProof -fuzztime=30s ./internal/oauth/dpop`;
+`go test -run xxx -fuzz=FuzzParseClientAssertion -fuzztime=30s ./internal/oauth`).
+
+### Machine clients (client credentials)
+
+A service, pipeline or agent that has no person behind it is a **machine client** (design §9.5): it has
+its own key pair, gets its own tokens with the `client_credentials` grant, and is audited as an
+`api_client`. There is no client secret. The client keeps a private key (EC P-256 or Ed25519) and the
+tenant registers the public key; the client proves itself on every token request with a short-lived signed
+JWT (**RFC 7523 `private_key_jwt`**, `internal/oauth/clientauth.go`):
+
+- `alg` is `ES256` or `EdDSA`, nothing else (HS256, RS256 and `none` are refused), and the header has no
+  `jku`, `x5u`, `jwk`, `x5c` or `crit`; the signature must verify with a key registered for that client.
+- `iss` = `sub` = the `client_id`; `aud` is exactly the URL of the endpoint it is sent to (for example
+  `https://tessera.example.com/t/acme/oauth/token`, as one string); `exp` is in the future and at most 300
+  seconds after `iat`; `jti` is unique and is accepted once (in `replay_cache`, until `exp`).
+- A failed authentication is `401 invalid_client` with no reason; the reason is in the audit event
+  `oauth.client_auth.failed`.
+
+```bash
+# register: a PUBLIC key set (each key needs a kid), an accountable owner, roles and scopes
+TESSERA_ENV=dev go run ./cmd/tessera admin add-client -tenant acme -name "Nightly ETL" \
+  -owner jane@acme.example -jwks-file etl.pub.jwks -scope "tessera:read tessera:audit" -roles viewer,auditor
+#   added machine client tsc_… ; token endpoint https://…/t/acme/oauth/token
+
+# a token (DPoP proof header and the server's DPoP-Nonce as for the CLI; scope is optional)
+curl -X POST "$TESSERA_PUBLIC_URL/t/acme/oauth/token" -H "DPoP: $PROOF" \
+  -d grant_type=client_credentials -d client_id=tsc_… -d scope=tessera:read \
+  -d client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer -d client_assertion=$JWT
+```
+
+`add-client` takes only public keys, is audited as the operator (`oauth.client.created`), and refuses admin
+roles: a machine client may hold `viewer`, `operator` and `auditor` only, and its `roles` are read on every
+request like a user's. `-dpop=false` registers a client that may skip DPoP (it then gets a `Bearer` token and
+the command warns; sending a proof anyway still binds the token). Creating and changing clients moves to
+the change-request workflow in PR12. The token is an `at+jwt` of 10 minutes (5 with `tessera:admin`),
+`sub` = `cli_<client row id>`, with no `sid`, no refresh token, and `cnf.jkt` when DPoP-bound.
+
+What a machine principal may do is the intersection of its roles and its scopes (the scope is the subset of
+the client's registered `allowed_scopes` it asked for, all of them if it asked for none). It can never
+satisfy step-up: every route that needs a fresh sign-in (approvals, policy changes, device approval) is
+`403 interactive_authentication_required`, and `/api/auth/session`, `logout`, `sessions` are for users only.
+A disabled client, or one whose roles or scopes are narrowed, is cut off on the next request.
+
+| Route | Purpose |
+|---|---|
+| `POST /t/{slug}/oauth/token` | also `client_credentials`: `client_assertion_type`, `client_assertion`, optional `scope`; DPoP proof and nonce when the client requires DPoP |
+| `POST /t/{slug}/oauth/introspect` | RFC 7662: the same client authentication (`aud` = the introspect URL) for a client registered with the `tessera:introspect` scope; `{"active": false}` for anything that is not an active token of this tenant (expired, revoked session, other tenant, malformed) |
+| `GET /api/admin/api-clients` · `/{client_id}` | `admin.read`: the tenant's clients with their public keys (kid, alg, thumbprint), roles, scopes, owner, last use. Read-only |
+
+The RFC 8414 metadata advertises `client_credentials`, `private_key_jwt` (`ES256`, `EdDSA`) and the
+`introspection_endpoint`.
 
 ## Adding a real connector
 

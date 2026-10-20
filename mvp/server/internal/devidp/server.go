@@ -112,6 +112,7 @@ type Server struct {
 	samlACS         []string // ACS URL patterns AuthnRequests may name
 	samlPending     ttlStore[pendingSAML]
 	lastAssertionID string // guarded by mu; the replay fault reuses it
+	lastCASTicket   string // guarded by mu; cas_ticket_reuse issues it again
 
 	pending  ttlStore[pendingAuthz]
 	codes    ttlStore[authCode]
@@ -122,6 +123,9 @@ type Server struct {
 
 	mu    sync.Mutex
 	fault Fault // set by POST /_faults
+
+	usersMu    sync.RWMutex    // guards users, which POST /_register extends at runtime
+	registered map[string]bool // subs added at runtime (only those can be replaced)
 }
 
 // CheckEnv is the start-up guard of the standalone binary: the dev IdP runs
@@ -233,7 +237,7 @@ func (s *Server) JWKS() jose.JSONWebKeySet {
 }
 
 // Users returns a copy of the configured users.
-func (s *Server) Users() []User { return slices.Clone(s.users) }
+func (s *Server) Users() []User { return s.userList() }
 
 // SetFault sets the fault applied to every later authorization (as POST
 // /_faults does); FaultNone clears it. It fails when faults are disabled.
@@ -264,6 +268,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /authorize", s.handleAuthorize)
 	mux.HandleFunc("POST /authorize", s.handleAuthorizeSubmit)
 	mux.HandleFunc("POST /token", s.handleToken)
+	mux.HandleFunc("POST /_register", s.handleRegister)
 	mux.HandleFunc("GET /userinfo", s.handleUserinfo)
 	mux.HandleFunc("POST /userinfo", s.handleUserinfo)
 	mux.HandleFunc("GET /logout", s.handleLogout)
@@ -271,6 +276,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST "+pathGitHubToken, s.handleGitHubToken)
 	mux.HandleFunc("GET "+pathGitHubUser, s.handleGitHubUser)
 	mux.HandleFunc("GET "+pathGitHubEmails, s.handleGitHubEmails)
+	mux.HandleFunc("GET "+pathCASLogin, s.handleCASLogin)
+	mux.HandleFunc("GET "+pathCASValidate, s.handleCASValidate)
+	mux.HandleFunc("GET "+pathWSFed, s.handleWSFed)
 	mux.HandleFunc("GET "+samlEntityPath, s.handleSAMLMetadata)
 	mux.HandleFunc("GET "+samlSSOPath, s.handleSAMLSSO)
 	mux.HandleFunc("POST "+samlSSOPath, s.handleSAMLSubmit)

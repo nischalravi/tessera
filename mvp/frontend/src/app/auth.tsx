@@ -1,4 +1,4 @@
-import { FormEvent, ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { FormEvent, ReactNode, Suspense, createContext, lazy, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import {
   LoginConnection, RateLimitedError, SIGNED_OUT, STEP_UP, SessionInfo, clearPendingAction, discover, getSession, logout,
   runPendingAction, startLogin, stepUpHref, takePendingAction,
@@ -7,7 +7,11 @@ import { useConfirm } from "../components/Dialog";
 import { useToast } from "../components/Toast";
 import { Button } from "../components/Button";
 import { Callout } from "../components/Feedback";
+import { breakGlassPath, breakGlassSlug } from "../features/admin/breakGlassState";
 import { store } from "./storage";
+
+// its own chunk: only a person signing in with a hardware key loads it
+const BreakGlassSignIn = lazy(async () => ({ default: (await import("../features/admin/BreakGlassSignIn")).BreakGlassSignIn }));
 
 /**
  * Who is signed in (design §17). The session lives in an HttpOnly cookie the API sets; this
@@ -118,7 +122,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     return null;
   }
   if (!value) {
-    return <SignIn />;
+    // /t/<slug>/break-glass: the hardware-key sign-in for when the IdP cannot be used (design §9.6)
+    const glass = breakGlassSlug(window.location.pathname);
+    return glass ? <Suspense fallback={null}><BreakGlassSignIn slug={glass} /></Suspense> : <SignIn />;
   }
   return (
     <Ctx.Provider value={value}>
@@ -146,7 +152,7 @@ function RateLimited({ seconds, onRetry }: { seconds: number; onRetry: () => voi
   );
 }
 
-function SignInFrame({ children }: { children: ReactNode }) {
+export function SignInFrame({ children }: { children: ReactNode }) {
   return (
     <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: "var(--s-4)", background: "var(--bg)" }}>
       <div className="card stack" style={{ width: "min(520px, 100%)" }}>
@@ -181,6 +187,7 @@ function returnTo(): string {
  */
 function SignIn() {
   const [tenant, setTenant] = useState(() => store.get<string>(LAST_TENANT, ""));
+  const glassPath = breakGlassPath(tenant);
   const [connections, setConnections] = useState<LoginConnection[] | null>(null);
   const [asked, setAsked] = useState("");
   const [busy, setBusy] = useState(false);
@@ -242,6 +249,11 @@ function SignIn() {
           ))}
           <p className="faint small">You will sign in at your identity provider. Use a passkey or security key to activate admin roles.</p>
         </div>
+      )}
+      {glassPath && (
+        <p className="faint small" style={{ margin: 0 }}>
+          Identity provider unavailable? <a href={glassPath}>Sign in with a break-glass key</a>.
+        </p>
       )}
     </SignInFrame>
   );

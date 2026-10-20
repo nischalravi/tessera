@@ -1,0 +1,1 @@
+{"Accounts":[{"Id":"111111111111","Arn":"arn:aws:organizations::111111111111:account/o-example12345/111111111111","Name":"mgmt","Status":"ACTIVE"},{"Id":"333333333333","Arn":"arn:aws:organizations::111111111111:account/o-example12345/333333333333","Name":"old","Status":"SUSPENDED"}]}

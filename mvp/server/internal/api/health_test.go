@@ -84,6 +84,15 @@ func TestDeploymentHealth_API(t *testing.T) {
 	if len(skipped) != 1 || skipped[0].(map[string]any)["item_id"] != "okta.auth.oauth" {
 		t.Errorf("skipped: %v", skipped)
 	}
+	// Drift and Inbox tasks exist from DR-9; a connection in setup has no baseline and no task yet.
+	sched := d["schedule"].(map[string]any)
+	if drift, ok := d["drift"].([]any); !ok || len(drift) != 0 || sched["job"] != "readiness.rerun" || sched["live_checks"] != "daily" ||
+		sched["reconciliation"] != "weekly" || row["drift"] != nil {
+		t.Errorf("drift %v, schedule %v, row drift %v", d["drift"], sched, row["drift"])
+	}
+	if tasks, ok := d["tasks"].([]any); !ok || len(tasks) != 0 {
+		t.Errorf("tasks: %v", d["tasks"])
+	}
 	kpis := d["kpis"].(map[string]any)
 	if kpis["accounts_correlated_pct"] != float64(100) || kpis["open_critical_high"].(float64) < 1 || kpis["connections_in_setup"] != float64(1) {
 		t.Errorf("kpis: %v", kpis)
@@ -152,7 +161,7 @@ func TestReadinessOpenAPI_CoversRoutes(t *testing.T) {
 			t.Errorf("%s %s is not documented", rt.method, path)
 		}
 	}
-	if n != 25 {
-		t.Errorf("%d readiness routes registered, want 25", n)
+	if n != 31 {
+		t.Errorf("%d readiness routes registered, want 31", n)
 	}
 }

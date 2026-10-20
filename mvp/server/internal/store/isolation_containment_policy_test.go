@@ -19,7 +19,7 @@ const polID = "p-0a1b2c3d4e"
 func containmentPolicyCovered() map[string]bool {
 	return map[string]bool{"AcquirePolicyLease": true, "ReleasePolicyLease": true, // TestIsolation_PolicyLeaseIsPerTenant
 		"MarkPolicyDenial": true, "PolicyDenials": true, "PrunePolicyDenials": true, // TestIsolation_PolicyDenialsAreTenantScoped
-		"PlatformUserIDsForIdentity": true} // TestIsolation_PlatformUsersForIdentity
+		"PlatformUserIDsLinkedToIdentity": true} // TestIsolation_PlatformUsersForIdentity
 }
 
 func TestIsolation_PolicyLeaseIsPerTenant(t *testing.T) {
@@ -137,7 +137,7 @@ func TestIsolation_PlatformUsersForIdentity(t *testing.T) {
 		}
 	}
 	inB(t, f, func(c *store.TenantTx) error {
-		ids, err := c.PlatformUserIDsForIdentity(aliceB)
+		ids, err := c.PlatformUserIDsLinkedToIdentity(aliceB)
 		if err != nil || len(ids) != 1 {
 			t.Fatalf("B's alice: %v, %v", ids, err)
 		}
@@ -145,7 +145,7 @@ func TestIsolation_PlatformUsersForIdentity(t *testing.T) {
 			t.Errorf("user %+v, %v", u, err)
 		}
 		// A's identity id names nobody in B
-		if ids, err := c.PlatformUserIDsForIdentity(aliceA); err != nil || (aliceA != aliceB && len(ids) != 0) {
+		if ids, err := c.PlatformUserIDsLinkedToIdentity(aliceA); err != nil || (aliceA != aliceB && len(ids) != 0) {
 			t.Errorf("A's identity in B: %v, %v", ids, err)
 		}
 		return nil

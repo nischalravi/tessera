@@ -51,6 +51,7 @@ const (
 	PermJITDenyRevoke     Permission = "jit.deny_revoke"
 	PermReviewsManage     Permission = "reviews.manage"
 	PermReviewsDecide     Permission = "reviews.decide"
+	PermReviewsExport     Permission = "reviews.export" // auditor export of a frozen review population (issue #110)
 	PermHRISSimulateEvent Permission = "hris.simulate_event"
 	PermGrantsRevoke      Permission = "grants.revoke"
 	PermHRISExecute       Permission = "hris.execute"
@@ -92,6 +93,10 @@ const (
 	PermProvisioningManage Permission = "provisioning.manage"
 	// Config transport between tenants (issue #170).
 	PermConfigTransport Permission = "config.transport"
+	// Conditional access (issue #163): network ranges, access policies and
+	// the device-compliance signal.
+	PermConditionalAccessRead   Permission = "conditional_access.read"
+	PermConditionalAccessManage Permission = "conditional_access.manage"
 	// account correlation (issue #160)
 	PermIdentitiesCorrelate Permission = "identities.correlate"
 	PermIdentitiesMerge     Permission = "identities.merge"
@@ -119,8 +124,23 @@ const (
 	PermIdentitiesContain Permission = "identities.contain"
 	// Shared Signals receiver (issue #114): configure SSF transmitters and streams.
 	PermSSFConfigure Permission = "ssf.configure"
-	// native groups (issue #44, GR-1): folder and group CRUD. tenant_admin only,
-	// until GR-4 brings the per-object privilege model.
+	// flat-file import for disconnected apps (issue #105): column mappings,
+	// uploads, and closing a manual fulfilment task by hand
+	PermFlatfileManage     Permission = "flatfile.manage"
+	PermFlatfileUpload     Permission = "flatfile.upload"
+	PermFlatfileCloseTasks Permission = "flatfile.close_tasks"
+	// verified help-desk resets (issue #108): helpdesk.reset starts, verifies
+	// and executes a case; helpdesk.approve gives the manager approval and the
+	// second approval and feeds the simulated signal feed.
+	PermHelpdeskReset   Permission = "helpdesk.reset"
+	PermHelpdeskApprove Permission = "helpdesk.approve"
+	// native groups (issue #44, GR-1; #47, GR-4). groups.read and groups.write
+	// let a principal reach the group routes; what it may do to each folder and
+	// group is then decided by the object's privileges (internal/groups/privs),
+	// checked in the handler. groups.admin is tenant-wide administration (engine
+	// and history maintenance, privilege settings, identity links): tenant_admin.
+	PermGroupsRead  Permission = "groups.read"
+	PermGroupsWrite Permission = "groups.write"
 	PermGroupsAdmin Permission = "groups.admin"
 	// separation of duties (issue #298): functions, risks and rulesets. Reading
 	// them (and the violations) is graph.read, like the policy violations.
@@ -129,6 +149,13 @@ const (
 	// escalates a violation; sod.approve is the second person who decides it.
 	PermSoDMitigate Permission = "sod.mitigate"
 	PermSoDApprove  Permission = "sod.approve"
+	// access drift between intended and observed access (issue #301): read it,
+	// act on it (accept, remediate, run the engine), set the remediation policy.
+	// Acting and policy change access (a policy can revoke or provision on its
+	// own), so they sit with policy_admin and not tenant_admin.
+	PermDriftRead      Permission = "drift.read"
+	PermDriftRemediate Permission = "drift.remediate"
+	PermDriftPolicy    Permission = "drift.policy"
 )
 
 // rolePermissions is the static role -> permission map (Cedar-ready, §12.1).
@@ -137,23 +164,25 @@ const (
 // Everyone but break-glass may request access for themselves; operators
 // and policy admins may also request for others and decide (issue #164).
 var rolePermissions = map[Role][]Permission{
-	RoleViewer: {PermGraphRead, PermRequestsCreate, PermGuestsSponsor},
+	RoleViewer: {PermGraphRead, PermRequestsCreate, PermGuestsSponsor, PermGroupsRead},
 	RoleOperator: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
-		PermReviewsDecide, PermHRISSimulateEvent, PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide,
-		PermGuestsSponsor, PermGuestsRead, PermJobsRead, PermProvisioningRead, PermAlertsRead, PermAlertsManage, PermOwnershipManage, PermSoDMitigate},
+		PermReviewsDecide, PermReviewsExport, PermHRISSimulateEvent, PermFlatfileUpload, PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide,
+		PermGuestsSponsor, PermGuestsRead, PermJobsRead, PermProvisioningRead, PermAlertsRead, PermAlertsManage, PermOwnershipManage, PermSoDMitigate, PermDriftRead, PermGroupsRead, PermGroupsWrite, PermHelpdeskReset, PermHelpdeskApprove},
 	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead, PermRequestsCreate, PermEmailRead,
-		PermGuestsSponsor, PermGuestsRead, PermJobsRead, PermProvisioningRead, PermAlertsRead, PermSiemRead},
+		PermGuestsSponsor, PermGuestsRead, PermJobsRead, PermProvisioningRead, PermAlertsRead, PermSiemRead, PermDriftRead, PermGroupsRead, PermConditionalAccessRead, PermReviewsExport},
 	RolePolicyAdmin: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
-		PermReviewsDecide, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
+		PermReviewsDecide, PermReviewsExport, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
 		PermIdentitiesCorrelate, PermIdentitiesMerge, PermIdentitiesAffiliate,
 		PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide, PermCatalogManage, PermRolesManage, PermLifecycleManage,
 		PermGuestsSponsor, PermGuestsRead, PermSponsorshipsApprove, PermIdentitiesContain,
-		PermJobsRead, PermProvisioningRead, PermProvisioningManage, PermAlertsRead, PermAlertsManage, PermOwnershipManage, PermSoDManage, PermSoDMitigate, PermSoDApprove, PermSSFConfigure},
+		PermJobsRead, PermProvisioningRead, PermProvisioningManage, PermAlertsRead, PermAlertsManage, PermOwnershipManage, PermSoDManage, PermSoDMitigate, PermSoDApprove,
+		PermFlatfileUpload, PermFlatfileCloseTasks,
+		PermDriftRead, PermDriftRemediate, PermDriftPolicy, PermGroupsRead, PermGroupsWrite, PermHelpdeskReset, PermHelpdeskApprove, PermSSFConfigure},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
-		PermConnectionsActivate, PermRequestsCreate, PermEmailRead, PermEmailManage, PermGroupsAdmin,
+		PermConnectionsActivate, PermRequestsCreate, PermEmailRead, PermEmailManage, PermGuestsSponsor, PermGuestsRead, PermGroupsAdmin,
 		PermJobsRead, PermJobsManage, PermProvisioningRead, PermProvisioningManage, PermConfigTransport,
-		PermAlertsRead, PermAlertsManage, PermAlertsConfigure, PermSiemRead, PermSiemConfigure},
+		PermAlertsRead, PermAlertsManage, PermAlertsConfigure, PermSiemRead, PermSiemConfigure, PermFlatfileManage, PermDriftRead, PermGroupsRead, PermGroupsWrite, PermConditionalAccessRead, PermConditionalAccessManage},
 	RoleBreakGlass: {PermAdminRead, PermBreakGlassRecover},
 }
 
@@ -234,13 +263,13 @@ const (
 )
 
 var scopePermissions = map[Scope][]Permission{
-	ScopeRead: {PermGraphRead, PermConnectionsRead, PermJobsRead, PermProvisioningRead},
+	ScopeRead: {PermGraphRead, PermConnectionsRead, PermJobsRead, PermProvisioningRead, PermDriftRead, PermGroupsRead, PermConditionalAccessRead},
 	ScopeWrite: {PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage, PermReviewsDecide,
 		PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
-		PermConnectionsManage, PermConnectionsActivate, PermRolesManage, PermLifecycleManage, PermGroupsAdmin, PermProvisioningManage, PermJobsManage, PermAlertsManage, PermOwnershipManage, PermSoDManage, PermSoDMitigate, PermSoDApprove},
-	ScopeAudit: {PermAuditRead, PermAuditVerify, PermAlertsRead, PermSiemRead},
+		PermConnectionsManage, PermConnectionsActivate, PermRolesManage, PermLifecycleManage, PermGroupsAdmin, PermProvisioningManage, PermJobsManage, PermAlertsManage, PermOwnershipManage, PermSoDManage, PermSoDMitigate, PermSoDApprove, PermFlatfileManage, PermFlatfileUpload, PermFlatfileCloseTasks, PermDriftRemediate, PermDriftPolicy, PermGroupsWrite},
+	ScopeAudit: {PermAuditRead, PermAuditVerify, PermAlertsRead, PermSiemRead, PermReviewsExport},
 	ScopeAdmin: {PermEmailRead, PermEmailManage, PermAdminRead, PermAdminChangeReq, PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev,
-		PermBreakGlassRecover, PermConfigTransport, PermAlertsConfigure, PermSiemConfigure},
+		PermBreakGlassRecover, PermConfigTransport, PermAlertsConfigure, PermSiemConfigure, PermConditionalAccessManage},
 }
 
 // perms returns the union of the roles' permissions.
@@ -297,6 +326,10 @@ const (
 // ActivationSettings are the tenant settings that move role floors (§18.3).
 type ActivationSettings struct {
 	RequirePhrForAll bool // require_phr_for_all: raises the floor of every role to phr
+	// GroupsViewerCanView (groups_viewer_can_view) lets the viewer role see
+	// every native folder and group, Grouper's view-only admin (issue #47). Off
+	// by default; unreadable settings leave it off.
+	GroupsViewerCanView bool
 }
 
 // TenantSettings reads the activation settings from a tenant's settings
@@ -315,6 +348,11 @@ func TenantSettings(raw string) ActivationSettings {
 	var s ActivationSettings
 	if b, ok := v["require_phr_for_all"]; ok {
 		if err := json.Unmarshal(b, &s.RequirePhrForAll); err != nil {
+			return strict
+		}
+	}
+	if b, ok := v["groups_viewer_can_view"]; ok {
+		if err := json.Unmarshal(b, &s.GroupsViewerCanView); err != nil {
 			return strict
 		}
 	}

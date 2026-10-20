@@ -179,6 +179,7 @@ var (
 // Replay kinds.
 const (
 	ReplaySAMLAssertion = "saml_assertion"
+	ReplayCASTicket     = "cas_ticket"
 	ReplayDPoPJTI       = "dpop_jti"
 )
 

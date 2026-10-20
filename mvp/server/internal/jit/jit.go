@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -233,7 +234,7 @@ func Approve(c *store.TenantTx, requestID int64, by store.UserRef, now, createdA
 	var edgeID int64
 	if existing == nil {
 		edgeID, err = c.InsertEdge(&store.GrantEdge{Src: src, Dst: dst, Relation: "member_of", Source: "jit",
-			ExpiresAt: &expires, CreatedAt: createdAt})
+			ExpiresAt: &expires, CreatedAt: createdAt, Ref: "jit:" + strconv.FormatInt(req.ID, 10)})
 	} else {
 		edgeID = existing.ID
 		err = c.SetEdgeExpiry(edgeID, expires, createdAt)

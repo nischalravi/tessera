@@ -84,7 +84,7 @@ func TestQueueAPI(t *testing.T) {
 			t.Errorf("job %s is %s after %d attempts: %s", j.Kind, j.Status, j.Attempts, j.LastError)
 		}
 	}
-	for _, k := range []string{jobs.JITSweep, jobs.SweepRequests, jobs.SweepLifecycle, jobs.SweepAdminChanges, jobs.ContainmentRetry, jobs.SweepSoDMitigations, jobs.Maintenance} {
+	for _, k := range []string{jobs.JITSweep, jobs.SweepRequests, jobs.SweepLifecycle, jobs.SweepAdminChanges, jobs.ContainmentRetry, jobs.SweepSoDMitigations, jobs.SweepDrift, jobs.Maintenance} {
 		if !seen[k] {
 			t.Errorf("no %s job ran", k)
 		}

@@ -1,0 +1,84 @@
+{
+  "description": "Tessera review population hash v1 test vector. Each case lists population rows in ascending ordinal. The canonical form of a row is its JSON object canonicalized with RFC 8785 (JCS). The hash is the lower-hex SHA-256 of the bytes of the domain string, one 0x00 byte, then the canonical rows joined by a single \\n (no trailing newline). The empty population hashes the domain and the 0x00 byte.",
+  "algorithm": "sha256(\"tessera-review-population-v1\" || 0x00 || JCS(row1) || \"\\n\" || JCS(row2) || ... )",
+  "cases": [
+    {
+      "name": "empty population",
+      "rows": null,
+      "canonical": [],
+      "hash": "92710be6860c59436f3c07a32f37cfda49aa4ef3b45b0a6c25970a92dac34e28"
+    },
+    {
+      "name": "one row",
+      "rows": [
+        {
+          "ordinal": 1,
+          "edge_id": 4021,
+          "identity_id": 17,
+          "identity_ref": "alice@larkspur.example",
+          "account_ref": "alice",
+          "system": "okta",
+          "entitlement": "Okta Admins",
+          "edge_src": "account:31",
+          "edge_dst": "group:12",
+          "in_scope_reason": "standing_grant",
+          "disposition": "review"
+        }
+      ],
+      "canonical": [
+        "{\"account_ref\":\"alice\",\"disposition\":\"review\",\"edge_dst\":\"group:12\",\"edge_id\":4021,\"edge_src\":\"account:31\",\"entitlement\":\"Okta Admins\",\"identity_id\":17,\"identity_ref\":\"alice@larkspur.example\",\"in_scope_reason\":\"standing_grant\",\"ordinal\":1,\"system\":\"okta\"}"
+      ],
+      "hash": "ed2a979e7de37355bc71aeba04282c30af3ac74d09361c9641d2550e639bcba6"
+    },
+    {
+      "name": "three rows, escaping and non-ASCII",
+      "rows": [
+        {
+          "ordinal": 1,
+          "edge_id": 7,
+          "identity_id": 3,
+          "identity_ref": "svc-etl",
+          "account_ref": "svc-etl",
+          "system": "aws",
+          "entitlement": "ProdAdmin \"break glass\" \u003cops\u003e",
+          "edge_src": "account:5",
+          "edge_dst": "group:9",
+          "in_scope_reason": "standing_grant",
+          "disposition": "review"
+        },
+        {
+          "ordinal": 2,
+          "edge_id": 12,
+          "identity_id": 4,
+          "identity_ref": "zoë.o'brien",
+          "account_ref": "zoë",
+          "system": "github",
+          "entitlement": "Org owners ✓ \\ backslash",
+          "edge_src": "account:6",
+          "edge_dst": "group:10",
+          "in_scope_reason": "standing_grant",
+          "disposition": "auto_certified"
+        },
+        {
+          "ordinal": 3,
+          "edge_id": 4021,
+          "identity_id": 17,
+          "identity_ref": "alice@larkspur.example",
+          "account_ref": "alice",
+          "system": "okta",
+          "entitlement": "Okta Admins",
+          "edge_src": "account:31",
+          "edge_dst": "group:12",
+          "in_scope_reason": "standing_grant",
+          "disposition": "auto_certified"
+        }
+      ],
+      "canonical": [
+        "{\"account_ref\":\"svc-etl\",\"disposition\":\"review\",\"edge_dst\":\"group:9\",\"edge_id\":7,\"edge_src\":\"account:5\",\"entitlement\":\"ProdAdmin \\\"break glass\\\" \u003cops\u003e\",\"identity_id\":3,\"identity_ref\":\"svc-etl\",\"in_scope_reason\":\"standing_grant\",\"ordinal\":1,\"system\":\"aws\"}",
+        "{\"account_ref\":\"zoë\",\"disposition\":\"auto_certified\",\"edge_dst\":\"group:10\",\"edge_id\":12,\"edge_src\":\"account:6\",\"entitlement\":\"Org owners ✓ \\\\ backslash\",\"identity_id\":4,\"identity_ref\":\"zoë.o'brien\",\"in_scope_reason\":\"standing_grant\",\"ordinal\":2,\"system\":\"github\"}",
+        "{\"account_ref\":\"alice\",\"disposition\":\"auto_certified\",\"edge_dst\":\"group:12\",\"edge_id\":4021,\"edge_src\":\"account:31\",\"entitlement\":\"Okta Admins\",\"identity_id\":17,\"identity_ref\":\"alice@larkspur.example\",\"in_scope_reason\":\"standing_grant\",\"ordinal\":3,\"system\":\"okta\"}"
+      ],
+      "hash": "7c65d5121f0351c99a6ebe19e06a2eb91385111da7e6897353dc7c001281cd53"
+    }
+  ]
+}

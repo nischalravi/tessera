@@ -1049,6 +1049,9 @@ All routes are tenant-scoped (Phase 0 §12.4). New permissions: `connections.rea
 | POST | `/api/connections/{id}/findings/{fid}/accept` | `connections.manage` (+ step-up for critical) | `{reason, expires_at?}` |
 | POST | `/api/connections/{id}/transition` | per §4.2 | `{to: "ready_to_validate" \| "dry_run_reconciled"}`; 409 with the gate report |
 | POST | `/api/connections/{id}/activate` | `connections.activate` + step-up | 409 with the gate report; 202 pending second approval for write-enabled |
+| GET | `/api/connections/{id}/activation` | `connections.read` | Latest activation request (DR-10) |
+| POST | `/api/connections/{id}/activation/approve` | `connections.activate` + step-up | A different person approves and the activation is applied; 403 `two_person_rule` for the requester or an attestor of the revision (DR-10) |
+| POST | `/api/connections/{id}/activation/reject` | `connections.activate` | `{note?}`; the requester cancels, anyone else rejects (DR-10) |
 | POST | `/api/connections/{id}/retire` | `connections.manage` + step-up | |
 | GET | `/api/connections/{id}/health` | `connections.read` | Score breakdown, drift since baseline, schedule |
 | GET | `/api/connections/{id}/readiness/evidence` | `connections.read` + `audit.export` | ZIP (§7.6) |

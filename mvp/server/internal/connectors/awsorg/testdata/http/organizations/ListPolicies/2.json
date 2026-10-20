@@ -1,0 +1,1 @@
+{"Policies":[{"Id":"p-rcp00001","Arn":"arn:aws:organizations::111111111111:policy/o-example12345/resource_control_policy/p-rcp00001","Name":"DataPerimeter","Type":"RESOURCE_CONTROL_POLICY","AwsManaged":false}]}

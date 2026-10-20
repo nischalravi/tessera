@@ -1,6 +1,7 @@
 package oauth
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"encoding/base64"
 	"encoding/json"
@@ -53,26 +54,35 @@ type accessClaims struct {
 	JTI       string        `json:"jti"`
 	Scope     string        `json:"scope"`
 	TenantID  string        `json:"tid"`
-	SessionID string        `json:"sid"`
-	AuthTime  int64         `json:"auth_time"`
+	SessionID string        `json:"sid,omitempty"`
+	AuthTime  int64         `json:"auth_time,omitempty"`
 	ACR       string        `json:"acr,omitempty"`
 	AMR       []string      `json:"amr,omitempty"`
-	Cnf       *confirmation `json:"cnf"`
+	Cnf       *confirmation `json:"cnf,omitempty"`
 }
+
+// MachineSubjectPrefix prefixes the api_clients row id in the sub of a machine
+// client's token (design §10.1).
+const MachineSubjectPrefix = "cli_"
 
 // mintInput is what an access token is minted for.
 type mintInput struct {
-	Slug      string
-	User      uuid.UUID
-	Session   uuid.UUID
-	ClientID  string
-	Scope     string
-	AuthTime  time.Time
-	ACR       string
-	AMR       []string
-	JKT       string
-	Now       time.Time
-	SigningTx *store.TenantTx // the tenant's transaction (keys are read from it)
+	Slug string
+	User uuid.UUID
+	// Machine mints a client-credentials token: sub is MachineSubjectPrefix +
+	// ClientRowID, and there is no sid, auth_time, acr or amr. JKT may then be
+	// empty (a client not configured for DPoP): the token is unbound.
+	Machine     bool
+	ClientRowID uuid.UUID
+	Session     uuid.UUID
+	ClientID    string
+	Scope       string
+	AuthTime    time.Time
+	ACR         string
+	AMR         []string
+	JKT         string
+	Now         time.Time
+	SigningTx   *store.TenantTx // the tenant's transaction (keys are read from it)
 }
 
 // mintAccessToken signs an access token with the tenant's active access_token
@@ -104,8 +114,13 @@ func (s *Service) mintAccessToken(in mintInput) (string, time.Duration, error) {
 	c := accessClaims{Issuer: s.Issuer(in.Slug), Subject: SubjectPrefix + in.User.String(), Audience: s.cfg.APIAudience,
 		ClientID: in.ClientID, IssuedAt: now.Unix(), NotBefore: now.Unix(), Expiry: now.Add(ttl).Unix(),
 		JTI: "at_" + seal.RandomSecret(16), Scope: in.Scope, TenantID: in.SigningTx.Tenant().String(),
-		SessionID: in.Session.String(), AuthTime: in.AuthTime.Unix(), ACR: in.ACR, AMR: in.AMR,
-		Cnf: &confirmation{JKT: in.JKT}}
+		SessionID: in.Session.String(), AuthTime: in.AuthTime.Unix(), ACR: in.ACR, AMR: in.AMR}
+	if in.JKT != "" {
+		c.Cnf = &confirmation{JKT: in.JKT}
+	}
+	if in.Machine {
+		c.Subject, c.SessionID, c.AuthTime, c.ACR, c.AMR = MachineSubjectPrefix+in.ClientRowID.String(), "", 0, "", nil
+	}
 	tok, err := jwt.Signed(signer).Claims(c).Serialize()
 	return tok, ttl, err
 }
@@ -145,47 +160,36 @@ func refuse(description string) (*auth.VerifiedToken, *auth.TokenFailure, error)
 	return nil, &auth.TokenFailure{Reason: auth.FailInvalidToken, Challenge: challenge("invalid_token", description)}, nil
 }
 
-// VerifyAccessToken implements auth.TokenVerifier: design §10.4 steps 1 to 5
-// and 7 (step 6, the live session, is auth.Authenticator's). A token is
-// accepted only as "Authorization: DPoP <token>" with a valid proof of the key
-// it is bound to; err is set only when the database failed.
-func (s *Service) VerifyAccessToken(r *http.Request) (*auth.VerifiedToken, *auth.TokenFailure, error) {
-	ctx := r.Context()
-	now := s.now()
-	// 1. one Authorization header, scheme DPoP, size
-	hs := r.Header.Values("Authorization")
-	if len(hs) != 1 {
-		return refuse("exactly one Authorization header is required")
-	}
-	scheme, token, _ := strings.Cut(hs[0], " ")
-	switch {
-	case strings.EqualFold(scheme, "Bearer"):
-		// every token Tessera issues is DPoP-bound, and a bound token must not
-		// be used under Bearer (RFC 9449 §7.1)
-		return refuse("a DPoP-bound access token must use the DPoP authentication scheme")
-	case !strings.EqualFold(scheme, "DPoP"):
-		return refuse("unsupported authentication scheme")
-	}
-	token = strings.TrimSpace(token)
-	if token == "" || len(token) > MaxTokenBytes || strings.ContainsAny(token, " \t") {
-		return refuse("the access token is empty or too large")
-	}
+// checkedToken is an access token whose signature and claims were verified
+// against its tenant's keys (§10.4 steps 2 to 5).
+type checkedToken struct {
+	c      rawClaims
+	tenant store.Tenant
+	slug   string
+	client *store.APIClient
+}
+
+// checkAccessToken is §10.4 steps 2 to 5 for a token string: header, issuer ->
+// tenant, signature with that tenant's keys, claims, and the client. reason is
+// why it is refused ("" when it is accepted); err is only a database failure.
+// It does not look at the session or the DPoP proof.
+func (s *Service) checkAccessToken(ctx context.Context, token string, now time.Time) (ct *checkedToken, reason string, err error) {
 	// 2. the header, read without trusting it
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
-		return refuse("the access token is not a compact JWS")
+		return nil, "the access token is not a compact JWS", nil
 	}
 	hdrJSON, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
-		return refuse("the access token header is not base64url")
+		return nil, "the access token header is not base64url", nil
 	}
 	var hdr map[string]json.RawMessage
 	if err := json.Unmarshal(hdrJSON, &hdr); err != nil {
-		return refuse("the access token header is not a JSON object")
+		return nil, "the access token header is not a JSON object", nil
 	}
 	for _, k := range forbiddenTokenHeaders {
 		if _, ok := hdr[k]; ok {
-			return refuse("the access token header must not contain " + k)
+			return nil, "the access token header must not contain " + k, nil
 		}
 	}
 	var typ, alg, kid string
@@ -193,33 +197,32 @@ func (s *Service) VerifyAccessToken(r *http.Request) (*auth.VerifiedToken, *auth
 	_ = json.Unmarshal(hdr["alg"], &alg)
 	_ = json.Unmarshal(hdr["kid"], &kid)
 	if !strings.EqualFold(typ, "at+jwt") || alg != "ES256" || kid == "" || len(kid) > 64 {
-		return refuse("the access token must be an at+jwt signed with ES256 and name its key")
+		return nil, "the access token must be an at+jwt signed with ES256 and name its key", nil
 	}
 	// 3. the issuer names the tenant; only that tenant's keys can verify it
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return refuse("the access token payload is not base64url")
+		return nil, "the access token payload is not base64url", nil
 	}
 	var unverified struct {
 		Issuer string `json:"iss"`
 	}
 	if err := json.Unmarshal(payload, &unverified); err != nil {
-		return refuse("the access token payload is not a JSON object")
+		return nil, "the access token payload is not a JSON object", nil
 	}
 	slug, ok := strings.CutPrefix(unverified.Issuer, s.cfg.PublicURL+"/t/")
 	if !ok || strings.Contains(slug, "/") {
-		return refuse("the access token issuer is not this server")
+		return nil, "the access token issuer is not this server", nil
 	}
 	tenant, active, err := s.tenantBySlug(ctx, slug)
 	if err != nil {
-		return nil, nil, err
+		return nil, "", err
 	}
 	if !active {
-		return refuse("the access token issuer is unknown")
+		return nil, "the access token issuer is unknown", nil
 	}
 	// 4. and 5. the signature and the claims, inside the tenant
-	var c rawClaims
-	var reason string
+	ct = &checkedToken{tenant: tenant, slug: slug}
 	err = s.db.ReadTenant(ctx, tenant.ID, func(tx *store.TenantTx) error {
 		set, err := keys.JWKSFor(tx, store.KeyPurposeAccessToken, now, s.cfg.Log)
 		if err != nil {
@@ -235,14 +238,14 @@ func (s *Service) VerifyAccessToken(r *http.Request) (*auth.VerifiedToken, *auth
 			reason = "the access token cannot be parsed"
 			return nil
 		}
-		if err := tok.Claims(ks[0].Key, &c); err != nil {
+		if err := tok.Claims(ks[0].Key, &ct.c); err != nil {
 			reason = "the access token signature is invalid"
 			return nil
 		}
-		if reason = s.checkClaims(&c, tenant, slug, now); reason != "" {
+		if reason = s.checkClaims(&ct.c, tenant, slug, now); reason != "" {
 			return nil
 		}
-		cl, err := tx.APIClientByClientID(c.ClientID)
+		cl, err := tx.APIClientByClientID(ct.c.ClientID)
 		if errors.Is(err, store.ErrNotFound) {
 			reason = "the access token client is unknown"
 			return nil
@@ -250,16 +253,70 @@ func (s *Service) VerifyAccessToken(r *http.Request) (*auth.VerifiedToken, *auth
 		if err != nil {
 			return err
 		}
-		if cl.Status != store.ClientActive || cl.Kind != store.ClientFirstPartyCLI {
+		ct.client = cl
+		// a user token comes from the first-party CLI client, a machine token
+		// (no sid) from the machine client its sub names
+		switch {
+		case cl.Status != store.ClientActive:
 			reason = "the access token client is not active"
+		case ct.c.SessionID != "" && cl.Kind != store.ClientFirstPartyCLI:
+			reason = "the access token client is not active"
+		case ct.c.SessionID == "" && (cl.Kind != store.ClientMachine || ct.c.Subject != MachineSubjectPrefix+cl.ID.String()):
+			reason = "the access token subject is not its client"
 		}
 		return nil
 	})
+	if err != nil {
+		return nil, "", err
+	}
+	if reason != "" {
+		return nil, reason, nil
+	}
+	return ct, "", nil
+}
+
+// VerifyAccessToken implements auth.TokenVerifier: design §10.4 steps 1 to 5
+// and 7 (step 6, the live session, is auth.Authenticator's). A DPoP-bound
+// token is accepted only as "Authorization: DPoP <token>" with a valid proof
+// of the key it is bound to. The one unbound token is a machine client's, for a
+// client not configured for DPoP (§9.5): it is accepted only as "Bearer". err
+// is set only when the database failed.
+func (s *Service) VerifyAccessToken(r *http.Request) (*auth.VerifiedToken, *auth.TokenFailure, error) {
+	ctx := r.Context()
+	now := s.now()
+	// 1. one Authorization header, scheme DPoP or Bearer, size
+	hs := r.Header.Values("Authorization")
+	if len(hs) != 1 {
+		return refuse("exactly one Authorization header is required")
+	}
+	scheme, token, _ := strings.Cut(hs[0], " ")
+	bearer := strings.EqualFold(scheme, "Bearer")
+	if !bearer && !strings.EqualFold(scheme, "DPoP") {
+		return refuse("unsupported authentication scheme")
+	}
+	token = strings.TrimSpace(token)
+	if token == "" || len(token) > MaxTokenBytes || strings.ContainsAny(token, " \t") {
+		return refuse("the access token is empty or too large")
+	}
+	ct, reason, err := s.checkAccessToken(ctx, token, now)
 	if err != nil {
 		return nil, nil, err
 	}
 	if reason != "" {
 		return refuse(reason)
+	}
+	c, tenant := ct.c, ct.tenant
+	switch {
+	case c.Cnf != nil && bearer:
+		// a bound token must not be used under Bearer (RFC 9449 §7.1)
+		return refuse("a DPoP-bound access token must use the DPoP authentication scheme")
+	case c.Cnf == nil && !bearer:
+		return refuse("an unbound access token must use the Bearer authentication scheme")
+	}
+	machine := c.SessionID == ""
+	if c.Cnf == nil { // checkClaims allows this for a machine token only
+		return &auth.VerifiedToken{Tenant: tenant, ClientID: c.ClientID, Scopes: strings.Fields(c.Scope), Machine: true,
+			ClientRowID: ct.client.ID}, nil, nil
 	}
 	// 7. the DPoP proof, bound to this request, this token and its key
 	_, err = s.dpop.ValidateProof(ctx, r.Header, dpop.ProofParams{Method: r.Method, URL: s.cfg.PublicURL + r.URL.Path,
@@ -274,6 +331,10 @@ func (s *Service) VerifyAccessToken(r *http.Request) (*auth.VerifiedToken, *auth
 				Nonce: pe.NewNonce}, nil
 		}
 		return nil, &auth.TokenFailure{Reason: auth.FailInvalidDPoP, Challenge: challenge(dpop.CodeInvalidProof, "")}, nil
+	}
+	if machine {
+		return &auth.VerifiedToken{Tenant: tenant, ClientID: c.ClientID, Scopes: strings.Fields(c.Scope), Machine: true,
+			Bound: true, ClientRowID: ct.client.ID}, nil, nil
 	}
 	user, _ := strings.CutPrefix(c.Subject, SubjectPrefix)
 	uid, _ := uuid.Parse(user)
@@ -307,10 +368,23 @@ func (s *Service) checkClaims(c *rawClaims, tenant store.Tenant, slug string, no
 	if c.ClientID == "" || strings.TrimSpace(c.Scope) == "" {
 		return "the access token has no client or scope"
 	}
-	if c.Cnf == nil || c.Cnf.JKT == "" {
+	if c.Cnf != nil && c.Cnf.JKT == "" {
 		return "the access token is not DPoP-bound"
 	}
-	// machine tokens (no sid) arrive with PR11: refuse them rather than guess
+	if c.SessionID == "" {
+		// a machine client's token (§10.1): no session, sub names the client,
+		// and the client may be configured without DPoP (the only unbound token)
+		if u, ok := strings.CutPrefix(c.Subject, MachineSubjectPrefix); !ok {
+			return "the access token names no session"
+		} else if _, err := uuid.Parse(u); err != nil {
+			return "the access token names no session"
+		}
+		return ""
+	}
+	// a user's token is always DPoP-bound
+	if c.Cnf == nil {
+		return "the access token is not DPoP-bound"
+	}
 	if _, err := uuid.Parse(c.SessionID); err != nil {
 		return "the access token names no session"
 	}
