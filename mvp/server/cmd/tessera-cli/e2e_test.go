@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -81,6 +82,11 @@ type world struct {
 	dir    string
 	tenant tenancy.ID
 	slug   string
+	// answered, while login waits for the browser, is closed once the browser
+	// has answered the device code. The CLI's polling sleeps wait for it before
+	// moving the fake clock on, so a slow machine (-race) cannot expire the code
+	// before it is approved.
+	answered atomic.Pointer[chan struct{}]
 }
 
 const slug = "tiny"
@@ -147,6 +153,16 @@ func (w *world) runWith(stdout *syncBuf, args ...string) result {
 		stdout: o, stderr: &errb, now: w.clock.Now,
 		sleep: func(ctx context.Context, d time.Duration) error {
 			time.Sleep(10 * time.Millisecond)
+			if ch := w.answered.Load(); ch != nil {
+				// The 30s cap only bounds a browser step that never answers; past
+				// it the clock moves on and the code can expire as it did before.
+				select {
+				case <-*ch:
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(30 * time.Second):
+				}
+			}
 			w.clock.Advance(d)
 			return ctx.Err()
 		}})
@@ -179,6 +195,11 @@ var codeRE = regexp.MustCompile(`[BCDFGHJKLMNPQRSTVWXZ]{4}-[BCDFGHJKLMNPQRSTVWXZ
 func (w *world) login(email string, roles []auth.Role, decision string, extra ...string) result {
 	w.t.Helper()
 	var out syncBuf
+	answered := make(chan struct{})
+	w.answered.Store(&answered)
+	defer w.answered.Store(nil)
+	release := sync.OnceFunc(func() { close(answered) })
+	defer release() // on every exit path, so the CLI never waits out the cap
 	done := make(chan result, 1)
 	go func() {
 		args := append([]string{"login", "--server", w.srv.URL, "--tenant", w.slug}, extra...)
@@ -188,6 +209,7 @@ func (w *world) login(email string, roles []auth.Role, decision string, extra ..
 	for {
 		if code := codeRE.FindString(out.String()); code != "" {
 			w.browser(email, roles, code, decision)
+			release()
 			break
 		}
 		select {
