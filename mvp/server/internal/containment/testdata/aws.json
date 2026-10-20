@@ -1,0 +1,741 @@
+{
+ "revoke": [
+  {
+   "target": "AWSIdentityStore.DescribeUser",
+   "responses": [
+    {
+     "status": 200,
+     "body": {
+      "UserId": "c2a7e8f4-1031-70b2-9a64-0b5d8f6e3a11",
+      "UserName": "alice@larkspur.example",
+      "IdentityStoreId": "d-1234567890"
+     }
+    }
+   ]
+  },
+  {
+   "target": "AWSOrganizationsV20161128.DescribePolicy",
+   "responses": [
+    {
+     "status": 200,
+     "body": {
+      "Policy": {
+       "PolicySummary": {
+        "Id": "p-0a1b2c3d4e",
+        "Name": "tessera-revoke-user",
+        "Type": "SERVICE_CONTROL_POLICY",
+        "AwsManaged": false
+       },
+       "Content": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"Action\":[\"*\"],\"Resource\":\"*\",\"Condition\":{\"StringEquals\":{\"identitystore:userId\":[\"Add user ID here\"]}}}]}"
+      }
+     }
+    },
+    {
+     "status": 200,
+     "body": {
+      "Policy": {
+       "PolicySummary": {
+        "Id": "p-0a1b2c3d4e",
+        "Name": "tessera-revoke-user",
+        "Type": "SERVICE_CONTROL_POLICY",
+        "AwsManaged": false
+       },
+       "Content": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"Action\":[\"*\"],\"Resource\":\"*\",\"Condition\":{\"StringEquals\":{\"identitystore:userId\":[\"Add user ID here\",\"c2a7e8f4-1031-70b2-9a64-0b5d8f6e3a11\"]}}}]}"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "target": "AWSOrganizationsV20161128.UpdatePolicy",
+   "responses": [
+    {
+     "status": 200,
+     "body": {
+      "Policy": {
+       "PolicySummary": {
+        "Id": "p-0a1b2c3d4e",
+        "Name": "tessera-revoke-user",
+        "Type": "SERVICE_CONTROL_POLICY",
+        "AwsManaged": false
+       },
+       "Content": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"Action\":[\"*\"],\"Resource\":\"*\",\"Condition\":{\"StringEquals\":{\"identitystore:userId\":[\"Add user ID here\",\"c2a7e8f4-1031-70b2-9a64-0b5d8f6e3a11\"]}}}]}"
+      }
+     }
+    }
+   ],
+   "body_contains": [
+    "c2a7e8f4-1031-70b2-9a64-0b5d8f6e3a11",
+    "identitystore:userId"
+   ]
+  },
+  {
+   "target": "SWBExternalService.ListAccountAssignmentsForPrincipal",
+   "responses": [
+    {
+     "status": 200,
+     "body": {
+      "AccountAssignments": [
+       {
+        "AccountId": "111122223333",
+        "PermissionSetArn": "arn:aws:sso:::permissionSet/ssoins-7223a1b2c3d4e5f6/ps-1111aaaa2222bbbb",
+        "PrincipalId": "c2a7e8f4-1031-70b2-9a64-0b5d8f6e3a11",
+        "PrincipalType": "USER"
+       },
+       {
+        "AccountId": "444455556666",
+        "PermissionSetArn": "arn:aws:sso:::permissionSet/ssoins-7223a1b2c3d4e5f6/ps-3333cccc4444dddd",
+        "PrincipalId": "c2a7e8f4-1031-70b2-9a64-0b5d8f6e3a11",
+        "PrincipalType": "USER"
+       }
+      ]
+     }
+    },
+    {
+     "status": 200,
+     "body": {
+      "AccountAssignments": []
+     }
+    }
+   ]
+  },
+  {
+   "target": "SWBExternalService.DeleteAccountAssignment",
+   "responses": [
+    {
+     "status": 200,
+     "body": {
+      "AccountAssignmentDeletionStatus": {
+       "Status": "IN_PROGRESS",
+       "RequestId": "req-0001",
+       "PrincipalId": "c2a7e8f4-1031-70b2-9a64-0b5d8f6e3a11",
+       "PrincipalType": "USER"
+      }
+     }
+    }
+   ],
+   "body_contains": [
+    "c2a7e8f4-1031-70b2-9a64-0b5d8f6e3a11"
+   ]
+  },
+  {
+   "target": "SWBExternalService.DescribeAccountAssignmentDeletionStatus",
+   "responses": [
+    {
+     "status": 200,
+     "body": {
+      "AccountAssignmentDeletionStatus": {
+       "Status": "SUCCEEDED",
+       "RequestId": "req-0001"
+      }
+     }
+    }
+   ],
+   "body_contains": [
+    "req-0001"
+   ]
+  }
+ ],
+ "already_denied": [
+  {
+   "target": "AWSIdentityStore.DescribeUser",
+   "responses": [
+    {
+     "status": 200,
+     "body": {
+      "UserId": "c2a7e8f4-1031-70b2-9a64-0b5d8f6e3a11",
+      "UserName": "alice@larkspur.example",
+      "IdentityStoreId": "d-1234567890"
+     }
+    }
+   ]
+  },
+  {
+   "target": "AWSOrganizationsV20161128.DescribePolicy",
+   "responses": [
+    {
+     "status": 200,
+     "body": {
+      "Policy": {
+       "PolicySummary": {
+        "Id": "p-0a1b2c3d4e",
+        "Name": "tessera-revoke-user",
+        "Type": "SERVICE_CONTROL_POLICY",
+        "AwsManaged": false
+       },
+       "Content": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"Action\":[\"*\"],\"Resource\":\"*\",\"Condition\":{\"StringEquals\":{\"identitystore:userId\":[\"Add user ID here\",\"other-user\",\"c2a7e8f4-1031-70b2-9a64-0b5d8f6e3a11\"]}}}]}"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "target": "SWBExternalService.ListAccountAssignmentsForPrincipal",
+   "responses": [
+    {
+     "status": 200,
+     "body": {
+      "AccountAssignments": []
+     }
+    }
+   ]
+  }
+ ],
+ "throttled_then_ok": [
+  {
+   "target": "AWSIdentityStore.DescribeUser",
+   "responses": [
+    {
+     "status": 400,
+     "body": {
+      "__type": "ThrottlingException",
+      "message": "Rate exceeded"
+     }
+    },
+    {
+     "status": 400,
+     "body": {
+      "__type": "TooManyRequestsException",
+      "message": "Too many requests"
+     }
+    },
+    {
+     "status": 200,
+     "body": {
+      "UserId": "c2a7e8f4-1031-70b2-9a64-0b5d8f6e3a11",
+      "UserName": "alice@larkspur.example",
+      "IdentityStoreId": "d-1234567890"
+     }
+    }
+   ]
+  },
+  {
+   "target": "AWSOrganizationsV20161128.DescribePolicy",
+   "responses": [
+    {
+     "status": 200,
+     "body": {
+      "Policy": {
+       "PolicySummary": {
+        "Id": "p-0a1b2c3d4e",
+        "Name": "tessera-revoke-user",
+        "Type": "SERVICE_CONTROL_POLICY",
+        "AwsManaged": false
+       },
+       "Content": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"Action\":[\"*\"],\"Resource\":\"*\",\"Condition\":{\"StringEquals\":{\"identitystore:userId\":[\"Add user ID here\",\"c2a7e8f4-1031-70b2-9a64-0b5d8f6e3a11\"]}}}]}"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "target": "SWBExternalService.ListAccountAssignmentsForPrincipal",
+   "responses": [
+    {
+     "status": 200,
+     "body": {
+      "AccountAssignments": []
+     }
+    }
+   ]
+  }
+ ],
+ "throttle_exhausted": [
+  {
+   "target": "AWSIdentityStore.DescribeUser",
+   "responses": [
+    {
+     "status": 400,
+     "body": {
+      "__type": "ThrottlingException",
+      "message": "Rate exceeded"
+     }
+    }
+   ]
+  }
+ ],
+ "concurrent_modification": [
+  {
+   "target": "AWSIdentityStore.DescribeUser",
+   "responses": [
+    {
+     "status": 200,
+     "body": {
+      "UserId": "c2a7e8f4-1031-70b2-9a64-0b5d8f6e3a11",
+      "UserName": "alice@larkspur.example",
+      "IdentityStoreId": "d-1234567890"
+     }
+    }
+   ]
+  },
+  {
+   "target": "AWSOrganizationsV20161128.DescribePolicy",
+   "responses": [
+    {
+     "status": 200,
+     "body": {
+      "Policy": {
+       "PolicySummary": {
+        "Id": "p-0a1b2c3d4e",
+        "Name": "tessera-revoke-user",
+        "Type": "SERVICE_CONTROL_POLICY",
+        "AwsManaged": false
+       },
+       "Content": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"Action\":[\"*\"],\"Resource\":\"*\",\"Condition\":{\"StringEquals\":{\"identitystore:userId\":[\"Add user ID here\"]}}}]}"
+      }
+     }
+    },
+    {
+     "status": 200,
+     "body": {
+      "Policy": {
+       "PolicySummary": {
+        "Id": "p-0a1b2c3d4e",
+        "Name": "tessera-revoke-user",
+        "Type": "SERVICE_CONTROL_POLICY",
+        "AwsManaged": false
+       },
+       "Content": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"Action\":[\"*\"],\"Resource\":\"*\",\"Condition\":{\"StringEquals\":{\"identitystore:userId\":[\"Add user ID here\",\"someone-else\"]}}}]}"
+      }
+     }
+    },
+    {
+     "status": 200,
+     "body": {
+      "Policy": {
+       "PolicySummary": {
+        "Id": "p-0a1b2c3d4e",
+        "Name": "tessera-revoke-user",
+        "Type": "SERVICE_CONTROL_POLICY",
+        "AwsManaged": false
+       },
+       "Content": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"Action\":[\"*\"],\"Resource\":\"*\",\"Condition\":{\"StringEquals\":{\"identitystore:userId\":[\"Add user ID here\",\"someone-else\",\"c2a7e8f4-1031-70b2-9a64-0b5d8f6e3a11\"]}}}]}"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "target": "AWSOrganizationsV20161128.UpdatePolicy",
+   "responses": [
+    {
+     "status": 400,
+     "body": {
+      "__type": "ConcurrentModificationException",
+      "message": "The target of your operation was modified by another request"
+     }
+    },
+    {
+     "status": 200,
+     "body": {}
+    }
+   ]
+  },
+  {
+   "target": "SWBExternalService.ListAccountAssignmentsForPrincipal",
+   "responses": [
+    {
+     "status": 200,
+     "body": {
+      "AccountAssignments": []
+     }
+    }
+   ]
+  }
+ ],
+ "policy_too_large": [
+  {
+   "target": "AWSIdentityStore.DescribeUser",
+   "responses": [
+    {
+     "status": 200,
+     "body": {
+      "UserId": "c2a7e8f4-1031-70b2-9a64-0b5d8f6e3a11",
+      "UserName": "alice@larkspur.example",
+      "IdentityStoreId": "d-1234567890"
+     }
+    }
+   ]
+  },
+  {
+   "target": "AWSOrganizationsV20161128.DescribePolicy",
+   "responses": [
+    {
+     "status": 200,
+     "body": {
+      "Policy": {
+       "PolicySummary": {
+        "Id": "p-0a1b2c3d4e",
+        "Name": "tessera-revoke-user",
+        "Type": "SERVICE_CONTROL_POLICY",
+        "AwsManaged": false
+       },
+       "Content": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"Action\":[\"*\"],\"Resource\":\"*\",\"Condition\":{\"StringEquals\":{\"identitystore:userId\":[\"Add user ID here\"]}}}]}"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "target": "AWSOrganizationsV20161128.UpdatePolicy",
+   "responses": [
+    {
+     "status": 400,
+     "body": {
+      "__type": "ConstraintViolationException",
+      "message": "Policy content limit exceeded",
+      "Reason": "POLICY_CONTENT_LIMIT_EXCEEDED"
+     }
+    }
+   ]
+  }
+ ],
+ "user_not_found": [
+  {
+   "target": "AWSIdentityStore.DescribeUser",
+   "responses": [
+    {
+     "status": 400,
+     "body": {
+      "__type": "ResourceNotFoundException",
+      "message": "User not found"
+     }
+    }
+   ]
+  }
+ ],
+ "no_deny_statement": [
+  {
+   "target": "AWSIdentityStore.DescribeUser",
+   "responses": [
+    {
+     "status": 200,
+     "body": {
+      "UserId": "c2a7e8f4-1031-70b2-9a64-0b5d8f6e3a11",
+      "UserName": "alice@larkspur.example",
+      "IdentityStoreId": "d-1234567890"
+     }
+    }
+   ]
+  },
+  {
+   "target": "AWSOrganizationsV20161128.DescribePolicy",
+   "responses": [
+    {
+     "status": 200,
+     "body": {
+      "Policy": {
+       "Content": "{\"Version\": \"2012-10-17\", \"Statement\": [{\"Effect\": \"Allow\", \"Action\": \"*\", \"Resource\": \"*\"}]}"
+      }
+     }
+    }
+   ]
+  }
+ ],
+ "access_denied": [
+  {
+   "target": "AWSIdentityStore.DescribeUser",
+   "responses": [
+    {
+     "status": 200,
+     "body": {
+      "UserId": "c2a7e8f4-1031-70b2-9a64-0b5d8f6e3a11",
+      "UserName": "alice@larkspur.example",
+      "IdentityStoreId": "d-1234567890"
+     }
+    }
+   ]
+  },
+  {
+   "target": "AWSOrganizationsV20161128.DescribePolicy",
+   "responses": [
+    {
+     "status": 400,
+     "body": {
+      "__type": "AccessDeniedException",
+      "message": "not authorized to perform organizations:DescribePolicy"
+     }
+    }
+   ]
+  }
+ ],
+ "assignment_delete_failed": [
+  {
+   "target": "AWSIdentityStore.DescribeUser",
+   "responses": [
+    {
+     "status": 200,
+     "body": {
+      "UserId": "c2a7e8f4-1031-70b2-9a64-0b5d8f6e3a11",
+      "UserName": "alice@larkspur.example",
+      "IdentityStoreId": "d-1234567890"
+     }
+    }
+   ]
+  },
+  {
+   "target": "AWSOrganizationsV20161128.DescribePolicy",
+   "responses": [
+    {
+     "status": 200,
+     "body": {
+      "Policy": {
+       "PolicySummary": {
+        "Id": "p-0a1b2c3d4e",
+        "Name": "tessera-revoke-user",
+        "Type": "SERVICE_CONTROL_POLICY",
+        "AwsManaged": false
+       },
+       "Content": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"Action\":[\"*\"],\"Resource\":\"*\",\"Condition\":{\"StringEquals\":{\"identitystore:userId\":[\"Add user ID here\"]}}}]}"
+      }
+     }
+    },
+    {
+     "status": 200,
+     "body": {
+      "Policy": {
+       "PolicySummary": {
+        "Id": "p-0a1b2c3d4e",
+        "Name": "tessera-revoke-user",
+        "Type": "SERVICE_CONTROL_POLICY",
+        "AwsManaged": false
+       },
+       "Content": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"Action\":[\"*\"],\"Resource\":\"*\",\"Condition\":{\"StringEquals\":{\"identitystore:userId\":[\"Add user ID here\",\"c2a7e8f4-1031-70b2-9a64-0b5d8f6e3a11\"]}}}]}"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "target": "AWSOrganizationsV20161128.UpdatePolicy",
+   "responses": [
+    {
+     "status": 200,
+     "body": {}
+    }
+   ]
+  },
+  {
+   "target": "SWBExternalService.ListAccountAssignmentsForPrincipal",
+   "responses": [
+    {
+     "status": 200,
+     "body": {
+      "AccountAssignments": [
+       {
+        "AccountId": "111122223333",
+        "PermissionSetArn": "arn:aws:sso:::permissionSet/ssoins-7223a1b2c3d4e5f6/ps-1111aaaa2222bbbb",
+        "PrincipalId": "c2a7e8f4-1031-70b2-9a64-0b5d8f6e3a11",
+        "PrincipalType": "USER"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "target": "SWBExternalService.DeleteAccountAssignment",
+   "responses": [
+    {
+     "status": 200,
+     "body": {
+      "AccountAssignmentDeletionStatus": {
+       "Status": "IN_PROGRESS",
+       "RequestId": "req-0001",
+       "PrincipalId": "c2a7e8f4-1031-70b2-9a64-0b5d8f6e3a11",
+       "PrincipalType": "USER"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "target": "SWBExternalService.DescribeAccountAssignmentDeletionStatus",
+   "responses": [
+    {
+     "status": 200,
+     "body": {
+      "AccountAssignmentDeletionStatus": {
+       "Status": "FAILED",
+       "RequestId": "req-0001",
+       "FailureReason": "Internal error"
+      }
+     }
+    }
+   ]
+  }
+ ],
+ "verify_leftovers": [
+  {
+   "target": "AWSOrganizationsV20161128.DescribePolicy",
+   "responses": [
+    {
+     "status": 200,
+     "body": {
+      "Policy": {
+       "PolicySummary": {
+        "Id": "p-0a1b2c3d4e",
+        "Name": "tessera-revoke-user",
+        "Type": "SERVICE_CONTROL_POLICY",
+        "AwsManaged": false
+       },
+       "Content": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"Action\":[\"*\"],\"Resource\":\"*\",\"Condition\":{\"StringEquals\":{\"identitystore:userId\":[\"Add user ID here\"]}}}]}"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "target": "SWBExternalService.ListAccountAssignmentsForPrincipal",
+   "responses": [
+    {
+     "status": 200,
+     "body": {
+      "AccountAssignments": [
+       {
+        "AccountId": "111122223333",
+        "PermissionSetArn": "arn:aws:sso:::permissionSet/ssoins-7223a1b2c3d4e5f6/ps-1111aaaa2222bbbb",
+        "PrincipalId": "c2a7e8f4-1031-70b2-9a64-0b5d8f6e3a11",
+        "PrincipalType": "USER"
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ],
+ "verify_clean": [
+  {
+   "target": "AWSOrganizationsV20161128.DescribePolicy",
+   "responses": [
+    {
+     "status": 200,
+     "body": {
+      "Policy": {
+       "PolicySummary": {
+        "Id": "p-0a1b2c3d4e",
+        "Name": "tessera-revoke-user",
+        "Type": "SERVICE_CONTROL_POLICY",
+        "AwsManaged": false
+       },
+       "Content": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"Action\":[\"*\"],\"Resource\":\"*\",\"Condition\":{\"StringEquals\":{\"identitystore:userId\":[\"Add user ID here\",\"c2a7e8f4-1031-70b2-9a64-0b5d8f6e3a11\"]}}}]}"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "target": "SWBExternalService.ListAccountAssignmentsForPrincipal",
+   "responses": [
+    {
+     "status": 200,
+     "body": {
+      "AccountAssignments": []
+     }
+    }
+   ]
+  }
+ ],
+ "paged_assignments": [
+  {
+   "target": "AWSIdentityStore.DescribeUser",
+   "responses": [
+    {
+     "status": 200,
+     "body": {
+      "UserId": "c2a7e8f4-1031-70b2-9a64-0b5d8f6e3a11",
+      "UserName": "alice@larkspur.example",
+      "IdentityStoreId": "d-1234567890"
+     }
+    }
+   ]
+  },
+  {
+   "target": "AWSOrganizationsV20161128.DescribePolicy",
+   "responses": [
+    {
+     "status": 200,
+     "body": {
+      "Policy": {
+       "PolicySummary": {
+        "Id": "p-0a1b2c3d4e",
+        "Name": "tessera-revoke-user",
+        "Type": "SERVICE_CONTROL_POLICY",
+        "AwsManaged": false
+       },
+       "Content": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"Action\":[\"*\"],\"Resource\":\"*\",\"Condition\":{\"StringEquals\":{\"identitystore:userId\":[\"Add user ID here\",\"c2a7e8f4-1031-70b2-9a64-0b5d8f6e3a11\"]}}}]}"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "target": "SWBExternalService.ListAccountAssignmentsForPrincipal",
+   "responses": [
+    {
+     "status": 200,
+     "body": {
+      "AccountAssignments": [
+       {
+        "AccountId": "111122223333",
+        "PermissionSetArn": "arn:aws:sso:::permissionSet/ssoins-7223a1b2c3d4e5f6/ps-1111aaaa2222bbbb",
+        "PrincipalId": "c2a7e8f4-1031-70b2-9a64-0b5d8f6e3a11",
+        "PrincipalType": "USER"
+       }
+      ],
+      "NextToken": "page2"
+     }
+    },
+    {
+     "status": 200,
+     "body": {
+      "AccountAssignments": [
+       {
+        "AccountId": "444455556666",
+        "PermissionSetArn": "arn:aws:sso:::permissionSet/ssoins-7223a1b2c3d4e5f6/ps-3333cccc4444dddd",
+        "PrincipalId": "c2a7e8f4-1031-70b2-9a64-0b5d8f6e3a11",
+        "PrincipalType": "USER"
+       }
+      ]
+     }
+    },
+    {
+     "status": 200,
+     "body": {
+      "AccountAssignments": []
+     }
+    }
+   ]
+  },
+  {
+   "target": "SWBExternalService.DeleteAccountAssignment",
+   "responses": [
+    {
+     "status": 200,
+     "body": {
+      "AccountAssignmentDeletionStatus": {
+       "Status": "IN_PROGRESS",
+       "RequestId": "req-0001",
+       "PrincipalId": "c2a7e8f4-1031-70b2-9a64-0b5d8f6e3a11",
+       "PrincipalType": "USER"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "target": "SWBExternalService.DescribeAccountAssignmentDeletionStatus",
+   "responses": [
+    {
+     "status": 200,
+     "body": {
+      "AccountAssignmentDeletionStatus": {
+       "Status": "SUCCEEDED",
+       "RequestId": "req-0001"
+      }
+     }
+    }
+   ]
+  }
+ ]
+}

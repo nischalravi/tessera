@@ -51,6 +51,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/siem"
 	"github.com/nischalravi/tessera/mvp/server/internal/sod"
+	"github.com/nischalravi/tessera/mvp/server/internal/ssf"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
@@ -180,6 +181,10 @@ type Config struct {
 	// grants). Nil: a service with no outbound client, so every containment
 	// step is a manual task.
 	Containment *containment.Service
+	// SSF is the Shared Signals receiver (issue #114): push endpoint, stream
+	// management, polling. Nil: a service with no outbound client and no key,
+	// which refuses to hold secrets, so no stream can be configured.
+	SSF *ssf.Service
 	// Helpdesk runs the verified help-desk reset workflow (issue #108). Nil:
 	// live executors from the Containment credentials, and the simulators
 	// unless Env is "prod".
@@ -236,6 +241,8 @@ type Server struct {
 	provSeal  *seal.Sealer // cfg.Sealer, or a per-process key when it is nil
 	// containment is the kill switch (issue #106); never nil.
 	containment *containment.Service
+	// ssf is the Shared Signals receiver (issue #114); never nil.
+	ssf *ssf.Service
 	// aws holds the AWS evaluator's engines and explanations (aws_eval.go).
 	aws awsRuntime
 	// helpdesk is the verified reset workflow (issue #108); never nil.
@@ -306,6 +313,15 @@ func New(cfg Config) *Server {
 		}
 		provSeal = sealer
 	}
+	if cfg.Containment.DB == nil {
+		cfg.Containment.DB = cfg.Store // the lease that serializes edits of the AWS Deny policy
+	}
+	if cfg.SSF == nil {
+		cfg.SSF = &ssf.Service{Containment: cfg.Containment}
+	}
+	if cfg.SSF.Clock == nil {
+		cfg.SSF.Clock = cfg.Clock
+	}
 	if cfg.Helpdesk == nil {
 		// The live Okta and Entra executors reuse the kill switch's provider
 		// credentials and outbound client; the simulators never run in prod.
@@ -315,7 +331,7 @@ func New(cfg Config) *Server {
 		}
 		cfg.Helpdesk = &helpdesk.Service{HTTP: hc, Containment: cfg.Containment, Clock: cfg.Clock, Simulated: cfg.Env != "prod"}
 	}
-	s := &Server{cfg: cfg, containment: cfg.Containment, helpdesk: cfg.Helpdesk, signals: cfg.DeviceSignals, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
+	s := &Server{cfg: cfg, ssf: cfg.SSF, containment: cfg.Containment, helpdesk: cfg.Helpdesk, signals: cfg.DeviceSignals, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
 		agents: cfg.Agents, limits: newLimiters(cfg.RateLimits), provSeal: provSeal}
 	s.prov = &provision.Engine{DB: cfg.Store, Sealer: provSeal, HTTP: cfg.Outbound,
 		Clock: func() time.Time { return s.clock() }, Log: cfg.Logger.With("component", "provisioning")}
@@ -394,6 +410,7 @@ func New(cfg Config) *Server {
 	s.registerNotificationRoutes()
 	s.registerEmailRoutes()
 	s.registerContainmentRoutes()
+	s.registerSSFRoutes()
 	s.registerFlatfileRoutes()
 	s.registerEvidenceRoutes()
 	s.registerReviewPopulationRoutes()

@@ -9,6 +9,7 @@ const backend = process.env.TESSERA_API ?? "http://127.0.0.1:8000";
 const proxy = {
   "/api": backend,
   // and the guest claim API (/public/t/<slug>/claim), which the claim page calls without a session.
+  // and the SSF push receiver (/public/t/<slug>/ssf/...).
   "/public/t": backend,
   "^/t/[a-z0-9-]+/(bootstrap|oauth/.*|\\.well-known/.*)": backend,
   "/.well-known": backend,

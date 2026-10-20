@@ -40,7 +40,7 @@ const maxSweepAttempts = 3
 
 // SweeperLoops are the queue kinds whose runs are tracked as loops in
 // obs.DefaultLoops (lag in /metrics, /readyz and Admin -> Platform health).
-var SweeperLoops = []string{jobs.JITSweep, jobs.SweepRequests, jobs.SweepLifecycle, jobs.SweepAdminChanges, jobs.ContainmentRetry, jobs.SweepSoDMitigations, jobs.SweepDrift}
+var SweeperLoops = []string{jobs.JITSweep, jobs.SweepRequests, jobs.SweepLifecycle, jobs.SweepAdminChanges, jobs.ContainmentRetry, jobs.SweepSoDMitigations, jobs.SweepDrift, jobs.SweepSSFPoll}
 
 // tracked reports each run of a kind's handler, in any tenant, to its loop.
 func tracked(kind string, h queue.Handler) queue.Handler {
@@ -67,10 +67,11 @@ func (s *Server) newQueue() *queue.Queue {
 	q.Register(jobs.SweepAdminChanges, queue.Kind{Handler: tracked(jobs.SweepAdminChanges, s.queueAdminSweep), Actor: "admin.sweeper"})
 	q.Register(jobs.ContainmentRetry, queue.Kind{Handler: tracked(jobs.ContainmentRetry, s.queueContainmentRetries), Actor: "containment.sweeper"})
 	q.Register(jobs.SweepSoDMitigations, queue.Kind{Handler: tracked(jobs.SweepSoDMitigations, s.queueSoDSweep), Actor: sod.Sweeper})
+	q.Register(jobs.SweepSSFPoll, queue.Kind{Handler: tracked(jobs.SweepSSFPoll, s.queueSSFPoll), Actor: "ssf.poller"})
 	q.Register(jobs.SweepDrift, queue.Kind{Handler: tracked(jobs.SweepDrift, s.queueDriftSweep), Actor: "drift.sweeper"})
 	q.Register(jobs.Maintenance, queue.Kind{Handler: s.queueMaintenance, Actor: "queue.worker"})
 	every := "@every " + SweepInterval.String()
-	for _, k := range []string{jobs.JITSweep, jobs.SweepRequests, jobs.SweepLifecycle, jobs.SweepAdminChanges, jobs.ContainmentRetry, jobs.SweepSoDMitigations} {
+	for _, k := range []string{jobs.JITSweep, jobs.SweepRequests, jobs.SweepLifecycle, jobs.SweepAdminChanges, jobs.ContainmentRetry, jobs.SweepSoDMitigations, jobs.SweepSSFPoll} {
 		q.Schedule(k, k, every, maxSweepAttempts)
 	}
 	q.Schedule(jobs.SweepDrift, jobs.SweepDrift, "@every "+driftEvery.String(), maxSweepAttempts)
@@ -155,6 +156,11 @@ func (s *Server) queueAdminSweep(ctx context.Context, j queue.Job) (any, error) 
 func (s *Server) queueContainmentRetries(ctx context.Context, j queue.Job) (any, error) {
 	_, err := s.containment.RunRetries(audit.WithSystemActor(ctx, "containment.sweeper"), s.store, j.Tenant, "containment.sweeper", "")
 	return nil, err
+}
+
+// queueSSFPoll polls the tenant's enabled Shared Signals poll streams.
+func (s *Server) queueSSFPoll(ctx context.Context, j queue.Job) (any, error) {
+	return nil, s.ssf.PollTenant(audit.WithSystemActor(ctx, "ssf.poller"), s.store, j.Tenant)
 }
 
 // queueSoDSweep warns about SoD mitigations ending soon and closes the ones

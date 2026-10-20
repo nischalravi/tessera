@@ -1270,6 +1270,34 @@ CREATE POLICY tenant_isolation ON flatfile_tasks
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE ssf_transmitters ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ssf_transmitters FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON ssf_transmitters;
+CREATE POLICY tenant_isolation ON ssf_transmitters
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE ssf_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ssf_events FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON ssf_events;
+CREATE POLICY tenant_isolation ON ssf_events
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE containment_policy_leases ENABLE ROW LEVEL SECURITY;
+ALTER TABLE containment_policy_leases FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON containment_policy_leases;
+CREATE POLICY tenant_isolation ON containment_policy_leases
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE containment_policy_denials ENABLE ROW LEVEL SECURITY;
+ALTER TABLE containment_policy_denials FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON containment_policy_denials;
+CREATE POLICY tenant_isolation ON containment_policy_denials
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 ALTER TABLE readiness_baselines ENABLE ROW LEVEL SECURITY;
 ALTER TABLE readiness_baselines FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON readiness_baselines;

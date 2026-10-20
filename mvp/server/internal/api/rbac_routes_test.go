@@ -218,6 +218,14 @@ POST   /api/identities/{identity_id}/enable          identities.contain STEP_UP_
 GET    /api/identities/{identity_id}/disables        graph.read      -  # wire-previews
 POST   /api/containment-retries/{retry_id}/retry-now identities.contain STEP_UP_POLICY  # issue #106
 PUT    /api/connections/{id}/containment-credential  connections.manage STEP_UP_POLICY  # issue #106
+GET    /api/ssf/transmitters                         graph.read      -  # issue #114
+GET    /api/ssf/transmitters/{id}                    graph.read      -  # issue #114
+GET    /api/ssf/events                               graph.read      -  # issue #114
+POST   /api/ssf/transmitters                         ssf.configure   STEP_UP_POLICY  # issue #114
+PUT    /api/ssf/transmitters/{id}                    ssf.configure   STEP_UP_POLICY  # issue #114
+DELETE /api/ssf/transmitters/{id}                    ssf.configure   STEP_UP_POLICY  # issue #114
+POST   /api/ssf/transmitters/{id}/verify             ssf.configure   STEP_UP_POLICY  # issue #114
+POST   /public/t/{slug}/ssf/{transmitter_id}/events  public          # issue #114: bearer secret, RFC 8935
 GET    /api/agents                                   connections.read   -  # issue #92
 POST   /api/agents                                   connections.manage STEP_UP_POLICY  # issue #92
 POST   /api/agents/{id}/revoke                       connections.manage STEP_UP_POLICY  # issue #92

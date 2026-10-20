@@ -304,6 +304,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/api/containment-retries/{retry_id}/retry-now" {
 			continue // TestContainmentRetriesAPI (a UUID, not a fixture id)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/ssf/transmitters/{id}") || strings.HasPrefix(rt.Pattern, "/public/t/{slug}/ssf/") {
+			continue // TestSSFAPI_CrossTenant (UUIDs, not fixture ids)
+		}
 		if rt.Pattern == "/api/agents/{id}/revoke" {
 			continue // TestAgentsAPI (a UUID, not a fixture id)
 		}
@@ -394,6 +397,7 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 	if rec := serveOnce(isolationServer(t, f, f.A.ID).Handler(), http.MethodGet, "/api/identities", ""); !leaks(rec.Body.String()) {
 		t.Fatal("tenant A's own identities do not carry the sentinel; the leak check would never fire")
 	}
+	ssfIDs := seedSSFTransmitters(t, f) // each tenant's own, A's carrying the sentinel
 	// Each tenant has a help-desk case; A's carries the sentinel through its identity's name.
 	caseIDs := map[string]string{}
 	for _, tn := range []storetest.Tenant{f.A, f.B} {
@@ -443,6 +447,7 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		"/api/siem/sinks/{sink_id}/dead-letters":          seedSiemSink(t, f.DB, f.B.ID, "b"),
 		"/api/alerts/{alert_id}":                          seedAlert(t, f.DB, f.B.ID, "b"),
 		"/api/identities/{identity_id}/disables":          fmt.Sprint(b["alice"]),
+		"/api/ssf/transmitters/{id}":                      ssfIDs[f.B.Slug],
 		"/api/evidence/packs/{pack_id}":                   seedEvidencePack(t, f, f.B.ID),
 		"/api/evidence/packs/{pack_id}/download":          seedEvidencePack(t, f, f.B.ID),
 		"/api/orgs/{org_id}":                              orgs.RootID,

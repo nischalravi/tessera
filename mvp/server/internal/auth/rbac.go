@@ -122,6 +122,8 @@ const (
 	PermEmailManage Permission = "email.manage"
 	// kill switch (issue #106)
 	PermIdentitiesContain Permission = "identities.contain"
+	// Shared Signals receiver (issue #114): configure SSF transmitters and streams.
+	PermSSFConfigure Permission = "ssf.configure"
 	// flat-file import for disconnected apps (issue #105): column mappings,
 	// uploads, and closing a manual fulfilment task by hand
 	PermFlatfileManage     Permission = "flatfile.manage"
@@ -175,7 +177,7 @@ var rolePermissions = map[Role][]Permission{
 		PermGuestsSponsor, PermGuestsRead, PermSponsorshipsApprove, PermIdentitiesContain,
 		PermJobsRead, PermProvisioningRead, PermProvisioningManage, PermAlertsRead, PermAlertsManage, PermOwnershipManage, PermSoDManage, PermSoDMitigate, PermSoDApprove,
 		PermFlatfileUpload, PermFlatfileCloseTasks,
-		PermDriftRead, PermDriftRemediate, PermDriftPolicy, PermGroupsRead, PermGroupsWrite, PermHelpdeskReset, PermHelpdeskApprove},
+		PermDriftRead, PermDriftRemediate, PermDriftPolicy, PermGroupsRead, PermGroupsWrite, PermHelpdeskReset, PermHelpdeskApprove, PermSSFConfigure},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
 		PermConnectionsActivate, PermRequestsCreate, PermEmailRead, PermEmailManage, PermGuestsSponsor, PermGuestsRead, PermGroupsAdmin,
