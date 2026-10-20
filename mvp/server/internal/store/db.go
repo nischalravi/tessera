@@ -160,6 +160,8 @@ var tables = []string{
 	"aws_edge_evaluations", "aws_pr_comment_settings",
 	// flat-file import for disconnected apps (schema/0352_flatfile.sql)
 	"flatfile_mappings", "flatfile_uploads", "flatfile_upload_errors", "flatfile_changes", "flatfile_records", "flatfile_tasks",
+	// connector sync checkpoints (schema/0360_connector_checkpoints.sql)
+	"connector_checkpoints",
 	// point-in-time access and evidence packs (schema/0260-0261)
 	"edge_history", "evidence_packs",
 	// guest claim (schema/0228_claim.sql)
@@ -190,6 +192,8 @@ var tables = []string{
 	"grp_pit_privileges", "grp_pit_digests",
 	// group privileges (schema/0286_group_privs.sql)
 	"grp_privileges", "grp_priv_settings",
+	// third-party OAuth app inventory (schema/0361_oauth_apps.sql)
+	"oauth_apps", "oauth_grants", "oauth_sync_state",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was

@@ -342,7 +342,7 @@ func TestRefreshRequestChecks(t *testing.T) {
 			"no grant_type":     {url.Values{"client_id": {CLIClientID}}, "invalid_request"},
 			"no client_id":      {url.Values{"grant_type": {GrantRefresh}}, "invalid_request"},
 			"unknown grant":     {url.Values{"grant_type": {"password"}, "client_id": {CLIClientID}}, "unsupported_grant_type"},
-			"client_credential": {url.Values{"grant_type": {"client_credentials"}, "client_id": {CLIClientID}}, "unsupported_grant_type"},
+			"client_credential": {url.Values{"grant_type": {"client_credentials"}, "client_id": {CLIClientID}}, "unauthorized_client"}, // the CLI is not a machine client
 			"unknown client":    {refreshForm(t0.Refresh, "client_id", "nobody"), "invalid_client"},
 			"no refresh_token":  {url.Values{"grant_type": {GrantRefresh}, "client_id": {CLIClientID}}, "invalid_request"},
 			"two refresh_token": {url.Values{"grant_type": {GrantRefresh}, "client_id": {CLIClientID}, "refresh_token": {"a", "b"}}, "invalid_request"},

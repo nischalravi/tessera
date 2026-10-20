@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
@@ -113,6 +114,19 @@ func UpdateChannel(tx *store.TenantTx, sealer *seal.Sealer, id string, s Channel
 	if err := s.check(dev); err != nil {
 		return nil, "", err
 	}
+	// The signing secret is bound to the channel row, not to the receiver: a
+	// webhook that moves to another origin (scheme, host, port) must get a new
+	// secret, or the old receiver's signed payloads could be replayed to it
+	// and the new host would hold signatures made with the old secret
+	// (#332, as #315). A path-only change keeps the secret.
+	from, to := "", ""
+	if c.Kind == "webhook" {
+		from, to = safehttp.Origin(c.Target), safehttp.Origin(s.Target)
+		if from != to && !s.RotateSecret && len(c.SecretSealed) > 0 {
+			return nil, "", refuse(422, "credential_required",
+				"changing the webhook's origin (scheme, host, port) needs a new signing secret: set rotate_secret")
+		}
+	}
 	c.Name, c.Target, c.MinSeverity, c.Enabled, c.UpdatedAt = s.Name, s.Target, s.MinSeverity, s.Enabled, now
 	secret := ""
 	if s.RotateSecret {
@@ -123,7 +137,11 @@ func UpdateChannel(tx *store.TenantTx, sealer *seal.Sealer, id string, s Channel
 	if err := tx.UpdateAlertChannel(c); err != nil {
 		return nil, "", err
 	}
-	return c, secret, tx.Audit(now, by.Display, "alert.channel.updated", channelAudit(c, secret != ""))
+	d := channelAudit(c, secret != "")
+	if from != to {
+		d = append(d, ojson.KV{Key: "previous_origin", Value: from}, ojson.KV{Key: "origin", Value: to})
+	}
+	return c, secret, tx.Audit(now, by.Display, "alert.channel.updated", d)
 }
 
 func newSecret(tx *store.TenantTx, sealer *seal.Sealer, c *store.AlertChannel) (string, error) {

@@ -18,7 +18,8 @@
 //	                      default ./tessera.db
 //	TESSERA_AUDIT_ANCHOR  file:///path.jsonl (dev) or s3://bucket/prefix (S3 Object Lock; prod)
 //	TESSERA_POLICY_DIR    read policies from this directory instead of the built-in copies
-//	TESSERA_CONNECTORS    connector spec, e.g. "demo" (default) or "demo-workday,okta"
+//	TESSERA_CONNECTORS    connector spec, e.g. "demo" (default) or "demo-workday,okta,entra"
+//	                      (okta and entra are the production connectors; see mvp/README.md)
 //	TESSERA_CORS_ORIGINS  comma-separated browser origins allowed by CORS
 //	                      (default: the dev UI on localhost/127.0.0.1, port UI_PORT or 5173;
 //	                      must be empty in prod)
@@ -81,6 +82,8 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/all"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/pit"
@@ -285,6 +288,12 @@ func seedDB(ctx context.Context, path string, cfg *config.Config, clock timeutil
 		return err
 	}
 	now := clock()
+	// The okta and entra connectors take the shared outbound client from validated config.
+	connClient, err := safehttp.ForConfig(cfg)
+	if err != nil {
+		return err
+	}
+	all.Register(connClient, connsync.RuntimeFromConfig(cfg))
 	conns, err := connectors.Load("", now)
 	if err != nil {
 		return err
@@ -433,6 +442,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		return err
 	}
 	rsvc.Runner.SCIM.Client = outbound
+	all.Register(outbound, connsync.RuntimeFromConfig(cfg)) // okta and entra connectors use the shared client
 	obs.SetPoolStats(st.PoolStats)
 	checker := health.New(st, sealer, obs.DefaultLoops, time.Duration(cfg.ReadyMaxLoopLagSeconds)*time.Second, logger)
 	groupsEngine := &engine.Engine{Budget: cfg.GroupsSyncBudget, Log: logger}

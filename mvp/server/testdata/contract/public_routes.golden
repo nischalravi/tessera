@@ -19,5 +19,6 @@ GET /.well-known/oauth-protected-resource
 POST /t/{slug}/oauth/device_authorization
 POST /t/{slug}/oauth/token
 POST /t/{slug}/oauth/revoke
+POST /t/{slug}/oauth/introspect
 POST /api/auth/break-glass/options
 POST /api/auth/break-glass/verify
