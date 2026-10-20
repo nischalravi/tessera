@@ -472,6 +472,7 @@ type RiskInput struct {
 	RulesetID       string
 	FunctionIDs     []string
 	Subjects        Subjects
+	Remediation     []string // options offered on a violation; none: all of RemediationOptions
 	Note            string
 }
 
@@ -508,6 +509,11 @@ func (w *Writer) checkRisk(in *RiskInput, selfID string) error {
 	if err := in.Subjects.validate(); err != nil {
 		return err
 	}
+	opts, err := normalizeOptions(in.Remediation)
+	if err != nil {
+		return err
+	}
+	in.Remediation = opts
 	rs, err := w.Tx.SodRuleset(in.RulesetID)
 	if errors.Is(err, store.ErrNotFound) {
 		return refuse(422, "ruleset_not_found", "the ruleset does not exist")
@@ -540,7 +546,7 @@ func (w *Writer) functionKeys(ids []string) ([]string, error) {
 	return out, nil
 }
 
-func (w *Writer) riskSnapshot(r *store.SodRisk, fnIDs []string) (map[string]any, error) {
+func (w *Writer) riskSnapshot(r *store.SodRisk, fnIDs []string, opts []string) (map[string]any, error) {
 	keys, err := w.functionKeys(fnIDs)
 	if err != nil {
 		return nil, err
@@ -553,7 +559,7 @@ func (w *Writer) riskSnapshot(r *store.SodRisk, fnIDs []string) (map[string]any,
 	_ = json.Unmarshal([]byte(r.Subjects), &subj)
 	return map[string]any{"key": r.Key, "name": r.Name, "description": r.Description, "priority": r.Priority,
 		"business_process": r.BusinessProcess, "owner_identity_id": r.OwnerID, "ruleset": rs.Key, "functions": keys,
-		"subjects": subj, "status": r.Status}, nil
+		"subjects": subj, "remediation": opts, "status": r.Status}, nil
 }
 
 func riskDetail(r *store.SodRisk) ojson.Object {
@@ -586,7 +592,10 @@ func (w *Writer) CreateRisk(in RiskInput) (*store.SodRisk, error) {
 	if err := w.Tx.SetSodRiskFunctions(r.ID, in.FunctionIDs); err != nil {
 		return nil, err
 	}
-	snap, err := w.riskSnapshot(r, in.FunctionIDs)
+	if err := w.Tx.SetSodRiskOptions(r.ID, in.Remediation); err != nil {
+		return nil, err
+	}
+	snap, err := w.riskSnapshot(r, in.FunctionIDs, in.Remediation)
 	if err != nil {
 		return nil, err
 	}
@@ -628,7 +637,10 @@ func (w *Writer) UpdateRisk(id string, ver int, in RiskInput) (*store.SodRisk, e
 	if err := w.Tx.SetSodRiskFunctions(r.ID, in.FunctionIDs); err != nil {
 		return nil, err
 	}
-	snap, err := w.riskSnapshot(&r, in.FunctionIDs)
+	if err := w.Tx.SetSodRiskOptions(r.ID, in.Remediation); err != nil {
+		return nil, err
+	}
+	snap, err := w.riskSnapshot(&r, in.FunctionIDs, in.Remediation)
 	if err != nil {
 		return nil, err
 	}
@@ -687,7 +699,11 @@ func (w *Writer) RetireRisk(id, reason string) (*store.SodRisk, error) {
 	if err != nil {
 		return nil, err
 	}
-	snap, err := w.riskSnapshot(&r, ids)
+	opts, err := RiskOptions(w.Tx, r.ID)
+	if err != nil {
+		return nil, err
+	}
+	snap, err := w.riskSnapshot(&r, ids, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -708,4 +724,35 @@ func sortedKeys[V any](m map[string]V) []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// RiskOptions returns a risk's explicit remediation options (nil: all four).
+func RiskOptions(tx *store.TenantTx, riskID string) ([]string, error) {
+	all, err := tx.SodRiskOptions()
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, o := range all {
+		if o.RiskID == riskID {
+			out = append(out, o.Option)
+		}
+	}
+	return orderOptions(out), nil
+}
+
+// orderOptions puts options in display order (the database lists them alphabetically).
+func orderOptions(in []string) []string {
+	var out []string
+	for _, o := range RemediationOptions {
+		if contains(in, o) {
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
+// Offers reports whether a risk with these explicit options offers option.
+func Offers(explicit []string, option string) bool {
+	return len(explicit) == 0 || contains(explicit, option)
 }

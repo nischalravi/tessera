@@ -651,7 +651,7 @@ func (w *world) execute(p *Plan) error {
 		case AddGrant:
 			src, dst := graph.Key("account", *s.AccountID), graph.Key("group", s.GroupID)
 			if old, err := w.tx.EdgeBetween(src, dst); err == nil { // an expired or inactive-account grant: replace it
-				if err := w.tx.DeleteEdge(old.ID); err != nil {
+				if err := w.tx.DeleteEdge(old.ID, w.now); err != nil {
 					return err
 				}
 			} else if !errors.Is(err, store.ErrNotFound) {

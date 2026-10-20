@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"net/url"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,6 +13,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
@@ -346,15 +345,7 @@ func redactTarget(c *store.AlertChannel) string {
 	if c.Kind != "webhook" {
 		return c.Target
 	}
-	u, err := url.Parse(c.Target)
-	if err != nil {
-		return "(invalid URL)"
-	}
-	tail := strings.TrimRight(u.Path, "/")
-	if len(tail) > 4 {
-		tail = "/…" + tail[len(tail)-4:]
-	}
-	return u.Scheme + "://" + u.Host + tail
+	return safehttp.RedactURL(c.Target) // scheme://host[:port]/… (#333)
 }
 
 func channelViewOf(c *store.AlertChannel, secret string) channelView {

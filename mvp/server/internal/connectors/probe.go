@@ -94,6 +94,7 @@ type RootInfo struct {
 	Capabilities      []string
 	CustomAttributes  int
 	OrgUnits          int
+	Missing           []string // SCIM: discovery documents that could not be read
 }
 
 // SampleQuery is one bounded read. Op selects what is sampled.
@@ -121,6 +122,14 @@ type SampleStats struct {
 	FullCount    int
 	Fields       []string // field names returned (Workday field inventory)
 	Available    bool     // the read returned data (roles, rules, sign-in activity...)
+	// SCIM paging and members reads: what was inconsistent ("code: detail";
+	// empty means consistent), pages read, the server's totalResults and the
+	// reverse lookup of group membership through users' groups.
+	Findings       []string
+	Pages          int
+	TotalResults   int
+	ReverseChecked bool
+	ReverseCount   int
 }
 
 // Rights are the bound identity's effective rights, read rather than tried.
@@ -145,6 +154,8 @@ type FeedInfo struct {
 // RateInfo is the rate-limit headroom observed.
 type RateInfo struct {
 	Limit, Remaining, Throttled int
+	// Retries made after HTTP 429 and the longest Retry-After (seconds) seen.
+	Retries, RetryAfterSeconds int
 }
 
 // Simulator is implemented by simulated probers: a scenario may override a

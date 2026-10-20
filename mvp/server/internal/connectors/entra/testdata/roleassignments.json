@@ -1,0 +1,8 @@
+{
+  "value": [
+    {"id": "ra-1", "principalId": "aaaaaaaa-0000-4000-8000-000000000001", "roleDefinitionId": "62e90394-69f5-4237-9190-012177145e10", "directoryScopeId": "/"},
+    {"id": "ra-2", "principalId": "bbbbbbbb-0000-4000-8000-000000000002", "roleDefinitionId": "62e90394-69f5-4237-9190-012177145e10", "directoryScopeId": "/"},
+    {"id": "ra-3", "principalId": "cccccccc-0000-4000-8000-000000000001", "roleDefinitionId": "f2ef992c-3afb-46b9-b7cf-a126ee74c451", "directoryScopeId": "/"},
+    {"id": "ra-4", "principalId": "aaaaaaaa-0000-4000-8000-0000000000ee", "roleDefinitionId": "88d8e3e3-8f55-4a1e-953a-9b9898b8876b", "directoryScopeId": "/"}
+  ]
+}

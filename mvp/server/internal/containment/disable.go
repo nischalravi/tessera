@@ -86,7 +86,7 @@ func Disable(c *store.TenantTx, identityID int64, by, reason, status string, now
 	}
 	// The Tessera users linked to the identity lose their sessions now; the
 	// sign-in paths and the session middleware refuse them while the identity
-	// stays disabled (auth.IdentityDisabled).
+	// stays disabled (auth.IdentityInactive).
 	users, err := c.UsersLinkedTo(identityID)
 	if err != nil {
 		return nil, err
@@ -115,6 +115,20 @@ type EnableResult struct {
 	Disable  *store.IdentityDisable
 	Restored []AccountRef // accounts set back to active
 	Skipped  []AccountRef // accounts that were no longer disabled (changed since by something else)
+}
+
+// RefuseSelfDisable: the caller is a Tessera user linked to the identity they
+// tried to disable, which would sign them out and lock them out (#335).
+const RefuseSelfDisable = "self_disable_not_allowed"
+
+// DisableRefusal reports why byUser may not disable identityID, or "" when
+// they may. Nobody disables the identity their own Tessera user is linked to:
+// another admin must (#335).
+func DisableRefusal(identityID int64, byUser *store.PlatformUser) string {
+	if byUser != nil && byUser.IdentityID != nil && *byUser.IdentityID == identityID {
+		return RefuseSelfDisable
+	}
+	return ""
 }
 
 // Enable refusals (separation of duties, #316).
