@@ -310,9 +310,10 @@ func (s *Service) Start(tx *store.TenantTx, token, canonicalKey, jkt string, now
 		return nil, ReasonRevoked, nil
 	case t.Status == store.ClaimExpired || !now.Before(t.ExpiresAt):
 		return nil, ReasonExpired, nil
-	case t.Purpose != store.ClaimPurposeClaim || now.Before(t.NotBefore):
+	case t.Purpose != store.ClaimPurposeClaim && t.Purpose != store.ClaimPurposeRecovery || now.Before(t.NotBefore):
 		return nil, ReasonUnknown, nil
 	}
+	recovery := t.Purpose == store.ClaimPurposeRecovery
 	guest, err := tx.Identity(t.IdentityID)
 	if err != nil {
 		return nil, "", err
@@ -321,10 +322,28 @@ func (s *Service) Start(tx *store.TenantTx, token, canonicalKey, jkt string, now
 	if err != nil {
 		return nil, "", err
 	}
-	if ss == nil || guest.Status != "invited" {
+	if recovery {
+		// a recovery is for an active guest and an open case (a cancelled one revoked its token)
+		ss, err = liveSponsorshipOf(tx, t.IdentityID)
+		if err != nil {
+			return nil, "", err
+		}
+		if ss == nil || guest.Status != "active" {
+			return nil, ReasonNotActive, nil
+		}
+		if rc, err := tx.RecoveryCaseByToken(t.ID); errors.Is(err, store.ErrNotFound) || err == nil && rc.Status != store.RecoveryIssued {
+			return nil, ReasonRevoked, nil
+		} else if err != nil {
+			return nil, "", err
+		}
+	} else if ss == nil || guest.Status != "invited" {
 		return nil, ReasonNotActive, nil
 	}
-	if _, err := tx.ConsumeClaimToken(hash, now); errors.Is(err, store.ErrNotFound) {
+	consume := tx.ConsumeClaimToken
+	if recovery {
+		consume = tx.ConsumeRecoveryToken
+	}
+	if _, err := consume(hash, now); errors.Is(err, store.ErrNotFound) {
 		return nil, ReasonUsed, nil // lost the race to another start
 	} else if err != nil {
 		return nil, "", err
@@ -333,11 +352,26 @@ func (s *Service) Start(tx *store.TenantTx, token, canonicalKey, jkt string, now
 	sess := &store.ClaimSession{IDHash: seal.SHA256Hex([]byte(cookie)), TokenID: t.ID, IntakeID: t.IntakeID, IdentityID: t.IdentityID,
 		KeyJWK: canonicalKey, KeyJKT: jkt, Nonce: seal.RandomSecret(16), Step: StepVerifyContact, Verified: "{}",
 		CreatedAt: now, LastSeenAt: now, ExpiresAt: now.Add(s.absolute())}
+	detail := ojson.Object{{Key: "intake_id", Value: t.IntakeID}, {Key: "token_id", Value: t.ID}, {Key: "key_jkt", Value: jkt}}
+	if recovery {
+		saveVerified(sess, verified{Purpose: store.ClaimPurposeRecovery})
+		detail = append(detail, ojson.KV{Key: "purpose", Value: store.ClaimPurposeRecovery})
+	}
 	if err := tx.InsertClaimSession(sess); err != nil {
 		return nil, "", err
 	}
-	err = auditEvent(tx, now, "claim.start", "intake", t.IntakeID, ojson.Object{{Key: "intake_id", Value: t.IntakeID},
-		{Key: "token_id", Value: t.ID}, {Key: "key_jkt", Value: jkt}})
+	if recovery {
+		rc, err := tx.RecoveryCaseByToken(t.ID)
+		if err != nil {
+			return nil, "", err
+		}
+		rc.Status, rc.SessionHash, rc.UpdatedAt = store.RecoveryStarted, &sess.IDHash, now
+		if err := tx.SaveRecoveryCase(rc); err != nil {
+			return nil, "", err
+		}
+		detail = append(detail, ojson.KV{Key: "case_id", Value: rc.ID})
+	}
+	err = auditEvent(tx, now, "claim.start", "intake", t.IntakeID, detail)
 	return &Started{Cookie: cookie, Nonce: sess.Nonce, Session: sess}, "", err
 }
 
@@ -452,6 +486,9 @@ func (s *Service) StatusOf(tx *store.TenantTx, sess *store.ClaimSession) (*Statu
 
 // NeedsSweep reports whether Sweep would change anything at now.
 func NeedsSweep(tx *store.TenantTx, now time.Time) (bool, error) {
+	if cooling, err := tx.HasCoolingRecoveries(); err != nil || cooling {
+		return cooling, err
+	}
 	sent, err := tx.IntakesByInvitation(store.InvitationSent)
 	return len(sent) > 0, err
 }
@@ -460,6 +497,10 @@ func NeedsSweep(tx *store.TenantTx, now time.Time) (bool, error) {
 // whose last token expired unused as "expired".
 func (s *Service) Sweep(tx *store.TenantTx, now time.Time) (int, error) {
 	if _, err := tx.ExpireClaimTokens(now); err != nil {
+		return 0, err
+	}
+	// recoveries whose cooling-off has ended get their new sign-in (GU-10)
+	if _, err := s.ActivateDue(tx, now); err != nil {
 		return 0, err
 	}
 	sent, err := tx.IntakesByInvitation(store.InvitationSent)
@@ -508,7 +549,28 @@ func (s *Service) Requirements(tx *store.TenantTx, sess *store.ClaimSession) (ia
 	if ss == nil {
 		return 0, 0, refuse(409, "not_active", "the sponsorship is not active")
 	}
-	return ss.RequiredIAL, ss.RequiredAAL, nil
+	ial, err = s.requiredIAL(tx, sess, ss)
+	return ial, ss.RequiredAAL, err
+}
+
+// requiredIAL is the identity assurance a session must reach: the sponsorship's.
+// A recovery asks for at least the level on record for the identity, so
+// recovering an account can never be easier than claiming it was (§7.5).
+func (s *Service) requiredIAL(tx *store.TenantTx, sess *store.ClaimSession, ss *store.Sponsorship) (int, error) {
+	ial := ss.RequiredIAL
+	if IsRecovery(sess) {
+		rec, err := RecordedIAL(tx, sess.IdentityID)
+		if err != nil {
+			return 0, err
+		}
+		ial = max(ial, rec)
+		if c, err := tx.RecoveryCaseBySession(sess.IDHash); err == nil {
+			ial = max(ial, c.RequiredIAL)
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return 0, err
+		}
+	}
+	return ial, nil
 }
 
 // Sponsorship returns the live sponsorship an intake's invitation belongs to, or nil.

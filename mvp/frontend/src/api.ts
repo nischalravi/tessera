@@ -1459,9 +1459,38 @@ export interface ClaimStatus {
   sponsor: string;
   population: GuestPopulationKey;
   ends_at: string;
-  /** Why the claim waits: "" (it does not), the organization's own set-up, or identity verification. */
-  pending: "" | "organization" | "identity_verification";
+  /**
+   * Why the claim waits: "" (it does not), terms or the attribute-release consent still to answer
+   * (step 5, before the credential), the organization's own set-up, or identity verification.
+   */
+  pending: "" | "terms" | "consent" | "organization" | "identity_verification";
   complete: boolean;
+  /** Only "recovery": the claim page is recovering an existing account, not setting up a new one. */
+  purpose?: "recovery";
+}
+
+/** A terms document the claimant has to read and accept (step 5): the text and its hash, which the acceptance echoes. */
+export interface ClaimTermsDoc {
+  id: string;
+  key: string;
+  version: number;
+  title: string;
+  body: string;
+  sha256: string;
+  state: "accepted" | "grace" | "blocked";
+  due_by: string | null;
+  previously_accepted: boolean;
+}
+export interface ClaimAttribute {
+  name: string;
+  why: string;
+  required: boolean;
+}
+export interface ClaimTerms {
+  step: ClaimStep;
+  terms: ClaimTermsDoc[];
+  /** The attribute-release screen of a federated sign-in; `applies` is false for every other claim. */
+  consent: { applies: boolean; given: boolean; authority?: string; attributes: ClaimAttribute[] };
 }
 export interface ClaimStart {
   /** "check_link" for every link that does not work, whatever the reason; otherwise the first step. */
@@ -1517,6 +1546,12 @@ function claimMessage(status: number, j: any): string {
       return j.message ?? "We could not reach the sign-in service. Try again in a moment.";
     case "wrong_step":
       return "That step is not open yet.";
+    case "terms_required":
+      return "Read and accept the terms first.";
+    case "consent_required":
+      return "Choose what to share first.";
+    case "terms_changed":
+      return "The terms changed while you were reading them. The page has reloaded the current text.";
   }
   return j?.message ?? `Something went wrong (${status}).`;
 }
@@ -1535,9 +1570,55 @@ export const claimApi = {
     claimFetch<{ ok: boolean; step: ClaimStep; message?: string; status?: "redirect"; redirect?: string }>(slug, "POST", "existing-account", { answer }, signer, nonce),
   // "yes" answers {status: "redirect", redirect}: a sign-in as the existing account, which links this
   // invitation to it when it is the account the organization had in mind (and otherwise changes nothing).
+  /** Step 5: the terms still to accept and the consent screen. */
+  terms: (slug: string, signer: ClaimSigner, nonce: string) => claimFetch<ClaimTerms>(slug, "GET", "terms", undefined, signer, nonce),
+  /** Accept the documents as shown ({id, sha256} of each); the credential stays closed until all are accepted. */
+  acceptTerms: (slug: string, signer: ClaimSigner, nonce: string, documents: { id: string; sha256: string }[]) =>
+    claimFetch<{ ok: boolean; remaining: number }>(slug, "POST", "terms/accept", { documents }, signer, nonce),
+  /** The attributes the claimant agrees to release at a federated sign-in (the required ones are always included). */
+  consent: (slug: string, signer: ClaimSigner, nonce: string, attributes: string[]) =>
+    claimFetch<{ ok: boolean }>(slug, "POST", "consent", { attributes }, signer, nonce),
   /** Set up the sign-in: a redirect to the credential authority, or "pending" when the organization has not set one up. */
   credential: (slug: string, signer: ClaimSigner, nonce: string) =>
     claimFetch<{ status: "redirect" | "pending"; redirect?: string; pending?: string; message?: string }>(slug, "POST", "credential", undefined, signer, nonce),
+};
+
+// ---------------------------------------------------------------- guest terms and recovery (issue #73)
+
+/** One version of a terms document (admin list). */
+export interface TermsVersion {
+  id: string;
+  version: number;
+  sha256: string;
+  grace_days: number;
+  created_at: string;
+  created_by: string;
+}
+/** A terms document at its latest version, with where it applies. */
+export interface TermsDocument {
+  key: string;
+  title: string;
+  latest_version: number;
+  body: string;
+  sha256: string;
+  grace_days: number;
+  versions: TermsVersion[];
+  populations: GuestPopulationKey[];
+  bundles: { group_id: number; system: string; name: string }[];
+}
+export const termsAdmin = {
+  /** Publish a new version of a document (the first one when the key is new). */
+  publish: (d: { key: string; title: string; body: string; grace_days?: number }) => api<TermsVersion>("/admin/terms", d),
+  assign: (key: string, a: { populations: GuestPopulationKey[]; bundles: number[] }) =>
+    api<TermsDocument>(`/admin/terms/${encodeURIComponent(key)}/assignments`, a, "PUT"),
+};
+/** A signed-in person's own documents: accepted, in their grace period, or blocking until accepted. */
+export interface MyTerms {
+  documents: ClaimTermsDoc[];
+  blocked: boolean;
+}
+export const myTerms = {
+  accept: (documents: { id: string; sha256: string }[]) => api<MyTerms>("/me/terms/accept", { documents }),
 };
 
 /** "Send me a new link": the answer is the same whether or not an invitation exists. No session, so no proof. */

@@ -21,6 +21,7 @@ export const GovernanceTabs = () => (
       { to: "/governance/reviews", label: "Access reviews" },
       { to: "/governance/lifecycle", label: "Lifecycle" },
       { to: "/governance/guest-lifecycle", label: "Guest lifecycle" },
+      { to: "/governance/terms", label: "Guest terms" },
       { to: "/governance/workflows", label: <>Workflows <PreviewBadge /></> },
     ]}
   />

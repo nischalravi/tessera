@@ -4,6 +4,9 @@ POST /public/t/{slug}/claim/verify/send
 POST /public/t/{slug}/claim/verify/check
 GET /public/t/{slug}/claim/status
 POST /public/t/{slug}/claim/existing-account
+GET /public/t/{slug}/claim/terms
+POST /public/t/{slug}/claim/terms/accept
+POST /public/t/{slug}/claim/consent
 POST /public/t/{slug}/claim/credential
 POST /public/t/{slug}/claim/resend
 POST /public/t/{slug}/guest/renewal-request

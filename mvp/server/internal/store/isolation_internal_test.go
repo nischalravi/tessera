@@ -313,7 +313,7 @@ var referenceColumns = map[string][]string{
 
 // immutableTables refuse every UPDATE (a trigger raises unconditionally), so
 // they need no UPDATE guard.
-var immutableTables = []string{"authn_contexts"}
+var immutableTables = []string{"authn_contexts", "terms_acceptances", "attribute_consents"}
 
 // TestIsolation_EveryReferenceGuarded checks that every foreign key (other
 // than tenant_id) and every reference column on a tenant table is covered by

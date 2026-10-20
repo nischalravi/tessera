@@ -170,3 +170,28 @@ test("the sponsor's invitation calls and wording", async () => {
   assert.match(guestModel.invitationNote({ invitation: "expired", invitation_expires_at: null }, fmt), /Send a new one/);
   for (const k of Object.keys(guestModel.INVITATION_LABEL)) assert.ok(guestModel.INVITATION_TONE[k as keyof typeof guestModel.INVITATION_TONE], k);
 });
+
+test("step 5: terms and consent keep the credential closed, and the calls are signed", async () => {
+  const status = (pending: string, step = "credential") => ({ step, steps: ["verify_contact", "verify_identity", "existing_account", "credential", "complete"],
+    first_name: "G", tenant: "T", sponsor: "S", population: "visitor", ends_at: "2030-01-01T00:00:00Z", pending, complete: false });
+  assert.deepEqual(model.viewOf(status("terms") as any), { kind: "step", step: "credential" });
+  assert.deepEqual(model.viewOf(status("consent") as any), { kind: "step", step: "credential" });
+  assert.deepEqual(model.viewOf(status("identity_verification", "verify_identity") as any), { kind: "waiting", why: "identity_verification" });
+  assert.equal(model.termsReady([], {}), false);
+  assert.equal(model.termsReady([{ id: "a" }, { id: "b" }], { a: true }), false);
+  assert.equal(model.termsReady([{ id: "a" }, { id: "b" }], { a: true, b: true }), true);
+  const attrs = [{ name: "subject", required: true }, { name: "name", required: false }, { name: "affiliation", required: false }];
+  assert.deepEqual(model.consentChoice(attrs, { name: true, subject: true }), ["name"]);
+  assert.equal(model.resultFromSearch("?result=cooling_off"), "cooling_off");
+  const signer = { sign: async (m: string, p: string) => `sig:${m}:${p}` };
+  reply = { status: 200, body: { terms: [], consent: { applies: false, given: false, attributes: [] } } };
+  await api.claimApi.terms("larkspur", signer, "n");
+  await api.claimApi.acceptTerms("larkspur", signer, "n", [{ id: "d1", sha256: "h" }]);
+  await api.claimApi.consent("larkspur", signer, "n", ["name"]);
+  assert.deepEqual(calls.map((c) => [c.method, c.url, c.body, c.headers["x-tessera-csrf"]]), [
+    ["GET", "/public/t/larkspur/claim/terms", undefined, undefined],
+    ["POST", "/public/t/larkspur/claim/terms/accept", { documents: [{ id: "d1", sha256: "h" }] }, undefined],
+    ["POST", "/public/t/larkspur/claim/consent", { attributes: ["name"] }, undefined],
+  ]);
+  assert.match(calls[1].headers["x-claim-proof"], /^sig:POST:\/public\/t\/larkspur\/claim\/terms\/accept$/);
+});

@@ -67,6 +67,10 @@ const (
 	// The guest's reminder that their term ends soon carries the one-time
 	// "request renewal" link (#74), supplied at send time like the claim link.
 	KindGuestRenewalLink = "guest.renewal_link"
+	// The recovery link (#73) carries a one-time secret like the claim link;
+	// the notice that goes to every channel on file carries none.
+	KindGuestRecoveryLink = "guest.recovery_link"
+	KindGuestRecovery     = "guest.recovery"
 )
 
 // Channels a user may choose for a kind.
@@ -114,6 +118,7 @@ var Kinds = []Kind{
 	{KindSponsorshipEnding, "Sponsorship ending", "A guest sponsorship of yours ends in 30, 14 or 3 days.", false, ChannelBoth},
 	{KindGuestTask, "Guest lifecycle task", "A sponsorship needs a new sponsor, a renewal decision or a dual-status confirmation.", false, ChannelBoth},
 	{KindGuestStepUp, "Renewal needs identity verification", "A guest renewal waits until the guest verifies their identity at a higher level.", false, ChannelBoth},
+	{KindGuestRecovery, "Account recovery", "Someone started recovering a guest account, or it finished. These cannot be turned off.", true, ChannelBoth},
 	{KindMergeApproval, "Identity merge needs a reviewer", "A merge or link of two people waits for a second reviewer.", false, ChannelBoth},
 	{KindSecurityAlert, "Security alerts", "Security-relevant changes. These cannot be turned off.", true, ChannelBoth},
 }

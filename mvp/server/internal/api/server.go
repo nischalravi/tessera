@@ -259,6 +259,7 @@ func New(cfg Config) *Server {
 	s.registerClaimRoutes()
 	s.registerGuestAccessRoutes()
 	s.registerGuestLifecycleRoutes()
+	s.registerTermsRoutes()
 	s.registerNotificationRoutes()
 	s.registerEmailRoutes()
 	s.registerContainmentRoutes()

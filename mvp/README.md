@@ -201,8 +201,12 @@ when a second reviewer is needed) · `GET /api/identity-merges` · `POST /api/id
 `POST /api/sponsorships/{id}/approve|reject|renew|end|transfer|accept-transfer` ·
 `POST /api/guests/{identity_id}/resend-invitation|revoke-invitation` ·
 `GET /api/identities/{identity_id}/access-bundle` · `GET /api/refgroups` · `POST /api/refgroups/reconcile` ·
-`POST /public/t/{slug}/claim/start|verify/send|verify/check|existing-account|credential|resend` ·
-`GET /public/t/{slug}/claim/status` (public: the guest's claim, see Guest claim) ·
+`POST /public/t/{slug}/claim/start|verify/send|verify/check|existing-account|credential|resend|terms/accept|consent` ·
+`GET /public/t/{slug}/claim/status|terms` (public: the guest's claim, see Guest claim) ·
+`GET|POST /api/admin/terms {key, title, body, grace_days}` · `PUT /api/admin/terms/{key}/assignments {populations, bundles}` ·
+`GET /api/me/terms` · `POST /api/me/terms/accept {documents: [{id, sha256}]}` · `POST /api/me/recovery-codes` ·
+`POST /api/guests/{identity_id}/recovery {reason}` · `GET /api/guest-recoveries[?status=]` ·
+`POST /api/guest-recoveries/{case_id}/cancel {reason}` (see Guest terms, consent and recovery) ·
 `GET /api/guest-lifecycle` · `GET /api/guest-lifecycle/items[?bucket=]` · `GET /api/guest-lifecycle/tasks` ·
 `POST /api/guest-lifecycle/tasks/{id}/resolve {action: accept|decline|keep|confirm|dismiss}` ·
 `GET|PUT /api/admin/guest-lifecycle {sponsor_reminder_days, guest_reminder_days, transfer_deadline_days, on_sponsor_departure, conversion_dual_status, grace_days, retention_days, retention_days_visitor, keep_rematch_hashes}` ·
@@ -502,7 +506,8 @@ The link is `<TESSERA_PUBLIC_URL>/claim#t=<43 characters>`. The page reads the t
    `(issuer, subject)` of that sign-in (never the email), exists. Tessera creates no session for it.
 5. With no authority configured (production today) the claim stops at step 4 with "your organization
    will finish setting up your sign-in" and stays pending. An IAL above 0 (IDV, GU-7) stops at
-   `verify_identity`. The step list is `claim.Steps`; terms (GU-10) go in as another step.
+   `verify_identity`. The step list is `claim.Steps`. Step 5, terms and consent (GU-10), is a gate on
+   step 4, not a step of its own: see "Guest terms, consent and recovery".
 
 **Security properties.** The token is 256 bits from `crypto/rand`, stored only as
 `SHA-256("tessera-claim-v1|"+tenant+"|"+token)`, single use (one atomic `UPDATE … WHERE
@@ -569,8 +574,7 @@ and CSS, no third-party scripts, works at 360 px; `npm test` covers its model an
 ./internal/api -run TestClaim` the API end to end.
 
 **Deferred:** identity verification and IAL above 0 (GU-7), real
-credential authorities, passwords, MFA enrolment, the Tessera-hosted service (GU-8), terms and
-consent, recovery (GU-10), SMS codes, claim codes for letters, a bot challenge, and shared (multi-node)
+credential authorities, passwords, MFA enrolment, the Tessera-hosted service (GU-8), SMS codes, claim codes for letters, a bot challenge, and shared (multi-node)
 rate-limit state. Parity fixtures are unchanged. After pulling this change run `./run.sh --reseed`:
 it adds the claim tables and three columns to `intake_records`, widens its `invitation_status` check
 and allows the login purpose `claim`.
@@ -908,6 +912,62 @@ modified.
   `./run.sh --reseed` adds a contractor ending in 10 days and one whose sponsor left (a pending transfer).
   RBAC: `guests.read` for the page, `guests.sponsor` for tasks (the service decides who may act),
   `guest_lifecycle.configure` for settings.
+
+### Guest terms, consent and recovery
+
+Issue #73 (GU-10; design `docs/design/guest-accounts-and-claim.md` §7.4, §7.5). Code:
+`internal/guests/terms` (documents, acceptance, consent), `internal/guests/claim/{terms,recovery}.go`,
+`internal/notify/recovery.go`, `internal/api/terms.go`, schema `0232_terms_recovery.sql` (`terms_documents`,
+`terms_assignments`, `terms_acceptances`, `attribute_consents`, `recovery_cases`, `recovery_codes`; reseed
+existing databases with `./run.sh --reseed`, which also lets `claim_sessions.step` hold `verify_identity`).
+Every change is audited in its own transaction (`terms.publish|assign|accept`, `consent.attributes`,
+`recovery.issue|cooling_off|complete|cancel`, `recovery.codes.generate`, `recovery.code.use`; never a token or a code).
+
+**Terms.** A document has a key and numbered versions; each version stores its text and the SHA-256 of that text.
+A document is assigned to guest populations and to access bundles (a bundle is the group of a catalog item); it
+applies to a guest whose live sponsorship has that population or carries that item. `GET|POST /api/admin/terms` list
+and publish (`terms.manage`, step-up; the same text twice is `409 unchanged`), `PUT /api/admin/terms/{key}/assignments`
+replaces where it applies. **Claim step 5:** while a document that applies is not accepted the claim status says
+`pending: "terms"`, `POST claim/credential` answers `409 terms_required`, and the OIDC callback refuses to bind
+(`terms_not_accepted`), so acceptance always comes before a credential. `GET claim/terms` returns each text with its hash;
+`POST claim/terms/accept` takes `{id, sha256}` of what the guest saw (a changed text is `409 terms_changed`) and writes
+`terms_acceptances` (document, version, hash, time, claim session, keyed hashes of the client address and user agent) and the
+audit event in one transaction. **New version:** a person who accepted version N must accept N+1 within the document's
+`grace_days` (from its publication; for a document first assigned later, from the assignment); `GET /api/me/terms` shows
+`accepted | grace | blocked` and `POST /api/me/terms/accept` accepts. After the grace period every route except
+`/api/auth/*` and `/api/me/terms*` answers `403 terms_required` until they accept (the check runs in `authorize`, and
+reads nothing for a tenant with no terms). A guest who links to an existing person by signing in (step 3) skips step 5
+and meets the same check at their next request.
+
+**Attribute-release consent.** For a federated authority (`home_idp`, `incommon`, `edugain`; none is built yet, GU-8/9) step 5
+also shows what the home IdP releases and why (`GET claim/terms` → `consent`); `POST claim/consent {attributes}` records the
+choice (the required attributes are always included) in `attribute_consents` and the ledger, once per claim session. Other
+authorities show no consent screen.
+
+**Recovery.** `POST /api/guests/{identity_id}/recovery` issues a `purpose=recovery` claim token for an active guest. The
+caller is the guest's live sponsor (`via: sponsor`) or holds `guests.recover` (operator, policy admin: the help desk,
+`via: help_desk`); a new recovery cancels the open one. The link goes to the guest's address only; **every channel on file**
+gets a `guest.recovery` notice (the guest's address, each active sign-in user by email and inbox, the sponsor). The person
+opens the link (same `/claim` page, `purpose: "recovery"` in the status), confirms the address, and must **re-verify at the
+identity's recorded IAL** (the higher of `identity_assurance.ial` and the sponsorship's: IAL above 0 waits at
+`verify_identity` until GU-7, there is no downgrade). The new sign-in is then added to the existing platform user (a sign-in
+that belongs to another user is refused). An identity holding a privileged or high-risk bundle waits a **24 hour
+cooling-off**: the callback answers `/claim?result=cooling_off`, the credential is held in the case (`recovery_cases`), every
+channel is told, and the sweeper binds it when the time is up (`recovery.complete`; the user's sessions end).
+`POST /api/guest-recoveries/{case_id}/cancel` stops a recovery at any time before that (same caller rule);
+`GET /api/guest-recoveries` lists cases (`guests.read`).
+
+**Recovery codes.** For identities of the Tessera-hosted credential service (`Authority.Kind() == "hosted"`, GU-8 builds it)
+`POST /api/me/recovery-codes` returns 10 single-use codes once (`Cache-Control: no-store`); only a tenant-keyed hash of each
+is stored, a new batch voids the old one, and `claim.Service.UseRecoveryCode` spends one atomically.
+
+**UI:** the claim page shows the terms and consent screen (`TermsStep`); Governance → Guest terms lists documents, publishes
+a version and sets the populations (GU-13 does the full UI). Tests: `go test ./internal/api -run 'TestTerms|TestRecovery|TestClaim_Consent'`,
+`./internal/guests/terms`, `./internal/store -run Terms`; `npm test` covers the claim model.
+
+**Deferred:** wiring a recovery code into the hosted service's sign-in (GU-8), identity verification itself (GU-7),
+the full admin and help-desk UI (GU-13), GDPR lawful-basis text per attribute for EU partners, and an acceptance screen
+outside the claim for a guest already blocked (they accept through `/api/me/terms`).
 
 ### Closed-loop provisioning
 

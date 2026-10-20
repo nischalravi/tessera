@@ -8,11 +8,11 @@
  */
 import { FormEvent, ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { CheckCircle2 } from "lucide-react";
-import { ClaimError, ClaimSigner, ClaimStatus, ClaimStep, claimApi, claimResend, fmtDay } from "../../api";
+import { ClaimError, ClaimSigner, ClaimStatus, ClaimStep, ClaimTerms, claimApi, claimResend, fmtDay } from "../../api";
 import { Button } from "../../components/Button";
 import { Callout } from "../../components/Feedback";
 import { dropKey, loadKey, loadNonce, newKey, dropNonce, saveNonce } from "./keystore";
-import { POPULATION_PHRASE, STEP_LABEL, ClaimResult, ClaimView, codeReady, emailOk, normalizeCode, resultFromSearch, signInRedirect, stepIndex, tenantSlug, tokenFromHash, viewOf, visibleSteps } from "./model";
+import { POPULATION_PHRASE, STEP_LABEL, ClaimResult, ClaimView, codeReady, consentChoice, emailOk, normalizeCode, resultFromSearch, signInRedirect, stepIndex, tenantSlug, termsReady, tokenFromHash, viewOf, visibleSteps } from "./model";
 import { publicJwk, signerFor } from "./proof";
 
 const message = (e: unknown) => (e instanceof ClaimError ? e.message : "Something went wrong. Try again.");
@@ -96,6 +96,12 @@ export default function ClaimPage() {
             {result === "failed" && view.kind === "step" && view.step === "credential" && (
               <Callout tone="bad">We could not finish your sign-in. It may not have been strong enough, or it was for a different account. Try again.</Callout>
             )}
+            {status.purpose === "recovery" && view.kind !== "complete" && (
+              <Callout tone="info">You are recovering your account. We check who you are again before a new sign-in is set up.</Callout>
+            )}
+            {result === "cooling_off" && (
+              <Callout tone="info">Your new sign-in is saved. Because your account has privileged access it becomes active after a 24 hour wait. Everyone on record for your account has been told.</Callout>
+            )}
             {result === "continue" && view.kind === "step" && view.step === "credential" && (
               <Callout tone="info">That sign-in was not added to this invitation. You can carry on and set up a new sign-in below.</Callout>
             )}
@@ -103,7 +109,7 @@ export default function ClaimPage() {
               <StepView step={view.step} status={status} conn={conn} onStatus={(s) => { setResult(null); show(s); }} />
             )}
             {view.kind === "waiting" && <Waiting why={view.why} />}
-            {view.kind === "complete" && <Done status={status} />}
+            {view.kind === "complete" && <Done status={status} cooling={result === "cooling_off"} />}
           </>
         )}
       </main>
@@ -180,7 +186,10 @@ function StepView({ step, status, conn, onStatus }: { step: ClaimStep; status: C
     case "existing_account":
       return <ExistingAccount status={status} conn={conn} onDone={refresh} />;
     case "credential":
-      return <Credential status={status} conn={conn} />;
+      // step 5 (terms, then the attribute-release consent) comes before the credential
+      return status.pending === "terms" || status.pending === "consent"
+        ? <TermsStep status={status} conn={conn} onDone={refresh} />
+        : <Credential status={status} conn={conn} />;
     default:
       return <Waiting why="identity_verification" />;
   }
@@ -276,6 +285,60 @@ function ExistingAccount({ status, conn, onDone }: { status: ClaimStatus; conn: 
   );
 }
 
+/** Step 5: the terms that apply, and (federated sign-ins) the choice of attributes to release. */
+function TermsStep({ status, conn, onDone }: { status: ClaimStatus; conn: Conn; onDone: () => Promise<void> }) {
+  const [t, setT] = useState<ClaimTerms | null>(null);
+  const [ticked, setTicked] = useState<Record<string, boolean>>({});
+  const [chosen, setChosen] = useState<Record<string, boolean>>({});
+  const a = useAction();
+  const load = useCallback(async () => setT(await claimApi.terms(conn.slug, conn.signer, conn.nonce)), [conn]);
+  useEffect(() => { load().catch((e) => a.setErr(message(e))); }, [load]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!t) return <p role="status">Loading…</p>;
+  const docs = t.terms;
+  const askConsent = t.consent.applies && !t.consent.given;
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    return a.run(async () => {
+      if (docs.length) await claimApi.acceptTerms(conn.slug, conn.signer, conn.nonce, docs.map((d) => ({ id: d.id, sha256: d.sha256 })));
+      if (askConsent) await claimApi.consent(conn.slug, conn.signer, conn.nonce, consentChoice(t.consent.attributes, chosen));
+      await onDone();
+    }).then(() => load().catch(() => undefined));
+  };
+  return (
+    <>
+      <Heading>Before you sign in</Heading>
+      <form onSubmit={submit} className="stack">
+        {docs.map((d) => (
+          <section key={d.id} aria-labelledby={`terms-${d.id}`} className="stack-sm">
+            <h2 id={`terms-${d.id}`} className="h-sm">{d.title} <span className="faint">(version {d.version})</span></h2>
+            <div className="claim-terms" tabIndex={0} role="region" aria-label={`${d.title} text`} style={{ maxHeight: 240, overflow: "auto", whiteSpace: "pre-wrap", border: "1px solid var(--border, #d0d7de)", padding: 8 }}>{d.body}</div>
+            <label className="row tight">
+              <input type="checkbox" checked={!!ticked[d.id]} onChange={(e) => setTicked({ ...ticked, [d.id]: e.target.checked })} /> I have read and accept {d.title}
+            </label>
+          </section>
+        ))}
+        {askConsent && (
+          <fieldset className="stack-sm claim-choices">
+            <legend className="h-sm">What your home organization shares with {status.tenant}</legend>
+            {t.consent.attributes.map((x) => (
+              <label key={x.name} className="row tight">
+                <input type="checkbox" checked={x.required || !!chosen[x.name]} disabled={x.required} onChange={(e) => setChosen({ ...chosen, [x.name]: e.target.checked })} />
+                <span><strong>{x.name}</strong>{x.required ? " (needed)" : ""}: {x.why}</span>
+              </label>
+            ))}
+          </fieldset>
+        )}
+        <div>
+          <Button variant="primary" type="submit" disabled={a.busy || (docs.length > 0 && !termsReady(docs, ticked))}>
+            {docs.length ? "Accept and continue" : "Continue"}
+          </Button>
+        </div>
+      </form>
+      <div role="status" aria-live="polite">{a.err && <Callout tone="bad">{a.err}</Callout>}</div>
+    </>
+  );
+}
+
 function Credential({ status, conn }: { status: ClaimStatus; conn: Conn }) {
   const [pending, setPending] = useState<string | null>(status.pending === "organization" ? "Your organization will finish setting up your sign-in. We will email you when it is ready." : null);
   const a = useAction();
@@ -319,11 +382,13 @@ function Waiting({ why }: { why: "organization" | "identity_verification" }) {
   );
 }
 
-function Done({ status }: { status: ClaimStatus }) {
+function Done({ status, cooling }: { status: ClaimStatus; cooling: boolean }) {
   return (
     <>
-      <Heading>You are all set, {status.first_name}</Heading>
-      <Callout tone="ok" icon={<CheckCircle2 size={16} />}>Your sign-in for {status.tenant} is ready. Use the same login whenever you are asked to sign in.</Callout>
+      <Heading>{cooling ? `Thank you, ${status.first_name}` : `You are all set, ${status.first_name}`}</Heading>
+      {cooling
+        ? <Callout tone="ok" icon={<CheckCircle2 size={16} />}>Your new sign-in for {status.tenant} will be ready after the 24 hour wait.</Callout>
+        : <Callout tone="ok" icon={<CheckCircle2 size={16} />}>Your sign-in for {status.tenant} is ready. Use the same login whenever you are asked to sign in.</Callout>}
       <p>Your access runs until {fmtDay(status.ends_at)}. {status.sponsor} has been told. You can close this page.</p>
     </>
   );
