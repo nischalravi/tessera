@@ -767,13 +767,13 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	if target := q.Get("post_logout_redirect_uri"); target != "" {
 		for _, c := range s.clients {
+			// redirect to the registered string itself, never the caller's copy of it
 			if i := slices.Index(c.PostLogoutRedirectURIs, target); i >= 0 {
-				target := c.PostLogoutRedirectURIs[i] // the registered string, never the request's
 				v := url.Values{}
 				if st := q.Get("state"); st != "" {
 					v.Set("state", st)
 				}
-				http.Redirect(w, r, withParams(target, v), http.StatusFound) // #nosec G710 -- target is a registered post-logout URI
+				http.Redirect(w, r, withParams(c.PostLogoutRedirectURIs[i], v), http.StatusFound) // #nosec G710 -- a registered post-logout URI
 				return
 			}
 		}

@@ -532,7 +532,9 @@ func TestSchemes(t *testing.T) {
 		{"prod http loopback", prod, plain.URL, safehttp.ErrScheme},
 		{"dev http without the loopback exception", devNoLoopback, plain.URL, safehttp.ErrScheme},
 		{"dev http to a public host", dev, "http://idp.example/", safehttp.ErrScheme},
-		{"dev http to localhost by name", dev, "http://localhost:" + p + "/", safehttp.ErrScheme},
+		{"prod http to localhost by name", prod, "http://localhost:" + p + "/", safehttp.ErrScheme},
+		{"dev without the exception, localhost by name", devNoLoopback, "http://localhost:" + p + "/", safehttp.ErrScheme},
+		{"dev http to localhost.example", dev, "http://localhost.example:" + p + "/", safehttp.ErrScheme},
 		{"ftp", prod, "ftp://example.com/x", safehttp.ErrScheme},
 		{"file", prod, "file:///etc/passwd", safehttp.ErrScheme},
 		{"user info", prod, "https://user:pass@example.com/", safehttp.ErrURL},
@@ -547,6 +549,10 @@ func TestSchemes(t *testing.T) {
 	}
 	if resp, err := get(dev, plain.URL); err != nil || string(resp.Body) != "ok" {
 		t.Errorf("dev http to 127.0.0.1 with the loopback exception: %v", err)
+	}
+	// run.sh publishes http://localhost:<ui-port> as the dev issuer (#348)
+	if resp, err := get(dev, "http://localhost:"+p+"/"); err != nil || string(resp.Body) != "ok" {
+		t.Errorf("dev http to localhost by name with the loopback exception: %v", err)
 	}
 }
 

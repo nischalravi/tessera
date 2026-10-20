@@ -383,3 +383,26 @@ risks:
 		return nil
 	})
 }
+
+func TestSubjectCannotDecideOwnExemption(t *testing.T) {
+	st, ids := testkit.Tiny(t)
+	testkit.Write(t, st, func(c *store.TenantTx) error {
+		wd := setup(t, c, ids)
+		now := testkit.Now
+		subj := user(t, c, "bob", &wd.bob)
+		m, err := as(c, wd.req, now).RequestMitigation(wd.input(now.Add(24*time.Hour)), sod.Settings{})
+		must(t, err)
+		for _, approve := range []bool{true, false} {
+			if _, err := as(c, subj, now).DecideMitigation(m.ID, approve, "n"); code(err) != "self_exemption_forbidden" {
+				t.Errorf("subject decides (approve=%v): %v", approve, err)
+			}
+		}
+		if _, err := as(c, wd.req, now).DecideMitigation(m.ID, true, ""); code(err) != "four_eyes" {
+			t.Errorf("requester approves: %v", err)
+		}
+		if ap, err := as(c, wd.appr, now).DecideMitigation(m.ID, true, "ok"); err != nil || ap.Status != store.MitigationActive {
+			t.Errorf("third party approves: %+v %v", ap, err)
+		}
+		return nil
+	})
+}

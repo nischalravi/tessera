@@ -672,11 +672,15 @@ func (tx *TenantTx) RevokeSession(id uuid.UUID, reason string, at time.Time) err
 		sql.Named("id", id.String()))
 }
 
-// RevokeUserSessions revokes every active session of a user and returns how many.
+// RevokeUserSessions revokes every active session of a user, and the user's
+// CLI refresh tokens with them (#345), and returns how many sessions.
 func (tx *TenantTx) RevokeUserSessions(userID uuid.UUID, reason string, at time.Time) (int64, error) {
 	res, err := tx.exec(sessionsRevokeUser, sql.Named("at", RT(at)), sql.Named("reason", reason),
 		sql.Named("user_id", userID.String()))
 	if err != nil {
+		return 0, err
+	}
+	if _, err := tx.RevokeUserRefreshTokens(userID, reason, at); err != nil {
 		return 0, err
 	}
 	return res.RowsAffected()

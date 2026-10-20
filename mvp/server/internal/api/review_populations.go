@@ -125,7 +125,7 @@ func (s *Server) putReviewSettings(_ http.ResponseWriter, r *http.Request, p *pa
 		return nil, err
 	}
 	pct := body["qa_sample_pct"].(int64)
-	if err := reviews.SetQASamplePct(store.TxFrom(r.Context()), s.clock(), int(pct), principal(r).User()); err != nil {
+	if err := reviews.SetQASamplePct(store.TxFrom(r.Context()), s.clock(), clampInt(pct), principal(r).User()); err != nil {
 		return nil, populationErr(err)
 	}
 	return ojson.Object{{Key: "qa_sample_pct", Value: pct}}, nil

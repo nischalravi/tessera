@@ -317,6 +317,13 @@ var (
 	refreshRevokeSession = tq("refresh_tokens.revoke_session", `
 		UPDATE refresh_tokens SET revoked_at = @at, revoked_reason = @reason
 		WHERE tenant_id = @tenant AND session_id = @session_id AND revoked_at IS NULL`)
+	refreshRevokeUser = tq("refresh_tokens.revoke_user", `
+		UPDATE refresh_tokens SET revoked_at = @at, revoked_reason = @reason
+		WHERE refresh_tokens.tenant_id = @tenant AND refresh_tokens.user_id = @user_id AND refresh_tokens.revoked_at IS NULL`)
+	refreshRevokeIdentity = tq("refresh_tokens.revoke_identity", `
+		UPDATE refresh_tokens SET revoked_at = @at, revoked_reason = @reason
+		WHERE refresh_tokens.tenant_id = @tenant AND refresh_tokens.revoked_at IS NULL AND refresh_tokens.user_id IN (
+			SELECT u.id FROM platform_users u WHERE u.tenant_id = @tenant AND u.identity_id = @id)`)
 )
 
 func scanRefresh(s scanner) (*RefreshToken, error) {
@@ -414,6 +421,17 @@ func (tx *TenantTx) RevokeRefreshFamily(family uuid.UUID, reason string, at time
 func (tx *TenantTx) RevokeSessionRefreshTokens(sessionID uuid.UUID, reason string, at time.Time) (int64, error) {
 	res, err := tx.exec(refreshRevokeSession, sql.Named("at", RT(at)), sql.Named("reason", reason),
 		sql.Named("session_id", sessionID.String()))
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// RevokeUserRefreshTokens revokes every unrevoked CLI refresh token of a user
+// and returns how many (#345).
+func (tx *TenantTx) RevokeUserRefreshTokens(userID uuid.UUID, reason string, at time.Time) (int64, error) {
+	res, err := tx.exec(refreshRevokeUser, sql.Named("at", RT(at)), sql.Named("reason", reason),
+		sql.Named("user_id", userID.String()))
 	if err != nil {
 		return 0, err
 	}

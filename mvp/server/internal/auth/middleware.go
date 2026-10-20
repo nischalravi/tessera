@@ -291,6 +291,12 @@ func (a *Authenticator) authenticateToken(r *http.Request) (*Principal, *Failure
 			reason = FailUserDisabled
 			return nil
 		}
+		if off, err := IdentityInactive(tx, u); err != nil {
+			return err
+		} else if off {
+			reason = FailIdentityDisabled
+			return nil
+		}
 		rec, err := tx.AuthnContext(s.CurrentAuthnContextID)
 		if err != nil {
 			return err

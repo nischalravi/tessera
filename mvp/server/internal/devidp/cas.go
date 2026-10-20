@@ -79,22 +79,43 @@ func (s *Server) casServiceAllowed(service string) bool {
 // matches nothing is refused with 400: the dev IdP never redirects to an
 // unregistered address, whatever the caller did before.
 func (s *Server) redirectRegistered(w http.ResponseWriter, r *http.Request, base string, add url.Values, status int, cas bool) {
-	ok := false
-	if cas {
-		ok = s.casServiceAllowed(base)
-	} else {
-		for _, c := range s.clients {
-			if c.redirectAllowed(base) {
-				ok = true
-				break
-			}
-		}
-	}
-	if !ok {
+	target := s.registeredTarget(base, cas)
+	if target == "" {
 		s.errorPage(w, http.StatusBadRequest, "The redirect target is not registered.")
 		return
 	}
-	http.Redirect(w, r, withParams(base, add), status) // #nosec G710 -- base matched a registered redirect URI just above
+	http.Redirect(w, r, withParams(target, add), status) // #nosec G710 -- target is a registered redirect URI (exact or wildcard match)
+}
+
+// registeredTarget returns the registered redirect URI that base matches, as
+// the stored string where the registration is exact, so the redirect never
+// carries the request's copy of the address. A CAS service keeps its own
+// query, which is not part of the registration. "" means no match.
+func (s *Server) registeredTarget(base string, cas bool) string {
+	query := ""
+	if cas {
+		u, err := url.Parse(base)
+		if err != nil || !absoluteHTTP(base) {
+			return ""
+		}
+		query = u.RawQuery
+		u.RawQuery = ""
+		base = u.String()
+	}
+	found := ""
+	for _, c := range s.clients {
+		if i := slices.Index(c.RedirectURIs, base); i >= 0 {
+			found = c.RedirectURIs[i]
+			break
+		}
+		if found == "" && c.redirectAllowed(base) {
+			found = base // matched a wildcard registration (loopback ports)
+		}
+	}
+	if found != "" && query != "" {
+		found += "?" + query
+	}
+	return found
 }
 
 func (s *Server) handleCASLogin(w http.ResponseWriter, r *http.Request) {
