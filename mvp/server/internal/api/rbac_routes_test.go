@@ -497,6 +497,7 @@ GET    /api/groups/reports/runs/{run_id}             groups.read     -  # issue 
 POST   /api/groups/reports/run                       groups.write    -  # issue #57: the privilege the report's object needs
 GET    /api/groups/{id}/graph                        groups.read     -  # issue #57: view; nodes filtered by view
 GET    /api/groups/graph/identity/{identity_id}      groups.read     -  # issue #57: nodes filtered by view
+GET    /api/groups/users/identity-requests           groups.admin    -               # issue #376
 PUT    /api/groups/users/{id}/identity               groups.admin    STEP_UP_POLICY  # issue #47
 GET    /api/groups/pit/digests                       groups.admin    -  # issue #46
 GET    /api/groups/pit/verify                        groups.admin    -  # issue #46
