@@ -84,6 +84,23 @@ func (s *Server) groupHidden(ck *privs.Checker) func(store.GroupID) bool {
 	}
 }
 
+// requireOnDefined requires want on a group the files define. When the caller
+// may not even view that group, the 403 leaves out its id (#387): the name was
+// the caller's own input, and the group's UUID must not come back with it.
+func (s *Server) requireOnDefined(ck *privs.Checker, id store.GroupID, want privs.Privilege) error {
+	err := ck.Require(privs.GroupObject(id), want)
+	if err == nil {
+		return nil
+	}
+	var d *privs.DeniedError
+	if errors.As(err, &d) && s.groupHidden(ck)(id) {
+		return &readiness.Error{Status: http.StatusForbidden, Code: "privilege_required",
+			Msg:   "the " + string(want) + " privilege is required on this group",
+			Extra: map[string]any{"privilege": string(want), "object_type": string(d.Object.Type)}}
+	}
+	return grpErr(err)
+}
+
 // requireReadOnRefs requires read on every group the files refer to that exists,
 // that the caller may view and that the change does not itself define. A group
 // the caller may not view is skipped here and resolves as unknown (groupHidden),
@@ -145,8 +162,8 @@ func (s *Server) diffGrpPolicy(r *http.Request, _ *params) (int, any, error) {
 	tx := store.TxFrom(r.Context())
 	for _, f := range fs { // the members of the groups compared are shown
 		if g, err := tx.GrpGroupByName(f.Group); err == nil {
-			if err := ck.Require(privs.GroupObject(g.ID), privs.Read); err != nil {
-				return 0, nil, grpErr(err)
+			if err := s.requireOnDefined(ck, g.ID, privs.Read); err != nil {
+				return 0, nil, err
 			}
 		} else if !errors.Is(err, store.ErrNotFound) {
 			return 0, nil, err
@@ -201,8 +218,8 @@ func (s *Server) requireApply(r *http.Request, ck *privs.Checker, fs []*policygr
 		g, err := tx.GrpGroupByName(f.Group)
 		switch {
 		case err == nil:
-			if err := ck.Require(privs.GroupObject(g.ID), privs.Admin); err != nil {
-				return grpErr(err)
+			if err := s.requireOnDefined(ck, g.ID, privs.Admin); err != nil {
+				return err
 			}
 			continue
 		case !errors.Is(err, store.ErrNotFound):

@@ -210,3 +210,32 @@ func TestGroupsPolicyHiddenGroupIsUnknown(t *testing.T) {
 		})
 	}
 }
+
+// TestGroupsPolicyDefinedHiddenGroupNoID: a change that defines a group the
+// caller may not view is refused without the group's id (#387).
+func TestGroupsPolicyDefinedHiddenGroupNoID(t *testing.T) {
+	e := newPrivEnv(t)
+	root := e.admin.folder("", "sec")
+	secret := e.admin.group(root, "secret")
+	seen := e.admin.group(root, "seen3")
+	e.grant("/api/groups/"+seen, "view", "bob", "")
+	e.grant("/api/groups/folders/"+root, "create", "bob", "")
+	bob := e.user("bob", "bob")
+	body := func(name string) string {
+		return policyReq(map[string]string{"groups/sec/p.cedar": policyCedar(name, `principal has department && principal.department == "x"`, "")}, "", "", false)
+	}
+	for _, route := range []string{"diff", "apply"} {
+		t.Run(route, func(t *testing.T) {
+			path := "/api/groups/policy/" + route
+			rec := bob.do("POST", path, body("sec:secret"))
+			if rec.Code != 403 || strings.Contains(rec.Body.String(), secret) {
+				t.Errorf("defining a hidden group: %d %s", rec.Code, rec.Body)
+			}
+			// a group the caller can view still names itself in the refusal
+			rec = bob.do("POST", path, body("sec:seen3"))
+			if rec.Code != 403 || !strings.Contains(rec.Body.String(), seen) {
+				t.Errorf("defining a viewable group: %d %s", rec.Code, rec.Body)
+			}
+		})
+	}
+}
