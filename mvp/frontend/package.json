@@ -8,7 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "node --experimental-transform-types --no-warnings --test tests/*.test.ts",
-    "test:e2e:guests": "playwright test -c playwright.guests.config.ts"
+    "test:e2e:guests": "playwright test -c playwright.guests.config.ts",
+    "test:a11y": "playwright test"
   },
   "dependencies": {
     "cytoscape": "^3.34.3",

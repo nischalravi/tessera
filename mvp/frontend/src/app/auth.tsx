@@ -265,8 +265,7 @@ function SignIn() {
  */
 function StepUpDialog({ reason, onClose, onContinue }: { reason: string; onClose: () => void; onContinue: () => void }) {
   return (
-    <div role="alertdialog" aria-labelledby="stepup-h" aria-describedby="stepup-d" className="card stack"
-      style={{ position: "fixed", right: "var(--s-4)", top: "calc(48px + var(--s-4))", zIndex: 90, width: "min(420px, calc(100vw - 32px))", boxShadow: "var(--shadow-lg, 0 8px 24px rgba(0,0,0,.18))" }}>
+    <div role="alertdialog" aria-labelledby="stepup-h" aria-describedby="stepup-d" className="card stack stepup">
       <strong id="stepup-h">Confirm it's you</strong>
       <p id="stepup-d" className="small">
         {reason} Sign in again at your identity provider with a passkey or security key; you'll come back here and can

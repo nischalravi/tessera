@@ -191,7 +191,7 @@ export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void
       {tab === "groups" && (
         d.grants.length === 0 ? <EmptyState title="No groups or roles">This identity holds no group or role memberships.</EmptyState> : (
           <table>
-            <thead><tr><th>Group or role</th><th>Expires</th><th /></tr></thead>
+            <thead><tr><th>Group or role</th><th>Expires</th><th><span className="sr-only">Actions</span></th></tr></thead>
             <tbody>
               {d.grants.map((g) => (
                 <tr key={g.src + g.dst}>
