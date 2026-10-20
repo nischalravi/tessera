@@ -156,6 +156,10 @@ type Config struct {
 	// (<dir>/<tenant id>/; design groups-grouper-parity.md §9.1). Empty (the default) turns file sources off. It must be absolute and
 	// must not contain Tessera's own database.
 	LoaderDataDir string
+	// GroupsProvSQLDir is TESSERA_GROUPS_PROV_SQL_DIR: the directory of the SQLite
+	// files the group provisioning SQL target writes. Empty (the default)
+	// disables that target; a tenant chooses only a file name inside it.
+	GroupsProvSQLDir string
 	// FrozenNow is TESSERA_NOW (tests and demos; refused in prod). The zero
 	// time means the wall clock; use Clock.
 	FrozenNow time.Time
@@ -315,6 +319,7 @@ func Load(getenv func(string) string) (*Config, error) {
 			bad("TESSERA_LOADER_DATA_DIR: %q contains the database %q: a loader could read Tessera's own data", d, c.DB)
 		}
 	}
+	c.GroupsProvSQLDir = strings.TrimSpace(getenv("TESSERA_GROUPS_PROV_SQL_DIR"))
 	c.AccessTokenTTLSeconds = integer("TESSERA_AT_TTL_SECONDS", 600, 1, MaxAccessTokenTTLSeconds)
 	c.DeviceCodeTTLSeconds = integer("TESSERA_DEVICE_CODE_TTL_SECONDS", 300, 1, MaxDeviceCodeTTLSeconds)
 	c.DPoPRSNonce = boolean("TESSERA_DPOP_RS_NONCE", false, false)

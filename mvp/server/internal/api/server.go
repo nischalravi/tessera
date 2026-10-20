@@ -32,6 +32,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/loaders"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/provisioning"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/rules"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/claim"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/credential"
@@ -222,6 +223,10 @@ type Config struct {
 	// file sources of group loaders, with a subdirectory <tenant id>/ per tenant
 	// (a loader reads only its own tenant's). Empty: file sources are off.
 	LoaderDataDir string
+	// Provisioning is the group provisioning service (issue #54): the same one
+	// the background runner uses. Nil: a service with no outbound clients, which
+	// can still hold provisioners but cannot reach a target.
+	Provisioning *provisioning.Service
 	// AuditAppend overrides how the audit middleware writes http.request
 	// events (tests inject failures). Nil: the store.
 	AuditAppend func(ctx context.Context, t tenancy.ID, e store.AuditEvent) error
@@ -335,6 +340,9 @@ func New(cfg Config) *Server {
 	}
 	if cfg.GroupsRules == nil {
 		cfg.GroupsRules = &rules.Runtime{Engine: cfg.GroupsEngine}
+	}
+	if cfg.Provisioning == nil {
+		cfg.Provisioning = &provisioning.Service{DB: cfg.Store, Sealer: cfg.Sealer, Clock: cfg.Clock, Log: cfg.Logger}
 	}
 	if cfg.Containment == nil {
 		cfg.Containment = &containment.Service{}
@@ -481,7 +489,8 @@ func New(cfg Config) *Server {
 	s.registerReviewPopulationRoutes()
 	s.registerHelpdeskRoutes()
 	s.registerGroupsPolicyRoutes()
-	s.registerGroupsLoaderRoutes() // before /api/groups/{id}, which would also match "loaders"
+	s.registerGroupsLoaderRoutes()       // before /api/groups/{id}, which would also match "loaders"
+	s.registerGroupsProvisioningRoutes() // before the {id} routes below: first match wins
 	s.registerGroupsFolderRoutes()
 	s.registerGroupsPrivilegeRoutes()
 	s.registerGroupsMemberRoutes()

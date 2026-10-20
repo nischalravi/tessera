@@ -245,6 +245,20 @@ func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 		{"GET", "/api/groups/privileges/settings", "/api/groups/privileges/settings", "", ""},
 		{"PUT", "/api/groups/privileges/settings", "/api/groups/privileges/settings", `{"everyone_allowed":[],"defaults":[]}`, ""},
 		{"PUT", "/api/groups/users/{id}/identity", "/api/groups/users/" + other + "/identity", `{"identity_id":null}`, ""},
+		// GR-11, provisioners: tenant-wide, groups.admin only (the marks name groups, but the route permission is the gate)
+		{"GET", "/api/groups/provisioners", "/api/groups/provisioners", "", ""},
+		{"POST", "/api/groups/provisioners", "/api/groups/provisioners", `{"name":"p","target_type":"webhook"}`, ""},
+		{"GET", "/api/groups/provisioners/{id}", "/api/groups/provisioners/" + other, "", ""},
+		{"PATCH", "/api/groups/provisioners/{id}", "/api/groups/provisioners/" + other, `{"mode":"paused"}`, ""},
+		{"DELETE", "/api/groups/provisioners/{id}", "/api/groups/provisioners/" + other, "", ""},
+		{"GET", "/api/groups/provisioners/{id}/marks", "/api/groups/provisioners/" + other + "/marks", "", ""},
+		{"PUT", "/api/groups/provisioners/{id}/marks", "/api/groups/provisioners/" + other + "/marks", `{"marks":[]}`, ""},
+		{"DELETE", "/api/groups/provisioners/{id}/marks/{mark_type}/{object}", "/api/groups/provisioners/" + other + "/marks/group/" + g, "", ""},
+		{"POST", "/api/groups/provisioners/{id}/sync", "/api/groups/provisioners/" + other + "/sync", "", ""},
+		{"GET", "/api/groups/provisioners/{id}/runs", "/api/groups/provisioners/" + other + "/runs", "", ""},
+		{"GET", "/api/groups/provisioners/{id}/ops", "/api/groups/provisioners/" + other + "/ops", "", ""},
+		{"GET", "/api/groups/provisioners/{id}/groups", "/api/groups/provisioners/" + other + "/groups", "", ""},
+		{"POST", "/api/groups/provisioners/{id}/diagnose", "/api/groups/provisioners/" + other + "/diagnose", "", ""},
 		// GR-10, loaders: the privilege is on the loader's target folder. The routes that need groups.loader.admin
 		// (see loaderAdmin below) are asked as a policy admin, who holds that permission and no privilege.
 		{"POST", "/api/groups/loaders", "/api/groups/loaders", `{"name":"L2","type":"csv","target_folder":"` + app +

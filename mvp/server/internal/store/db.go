@@ -241,6 +241,8 @@ var tables = []string{
 	"grp_deprov_folders", "grp_deprovisioned", "grp_deprov_items", "grp_reports", "grp_report_runs",
 	// group loaders, their runs and unresolved subjects (schema/0377_group_loaders.sql)
 	"grp_loaders", "grp_loader_runs", "grp_loader_unresolved",
+	// group provisioning (schema/0378_group_prov.sql)
+	"grp_provisioners", "grp_provisionable", "grp_sync_groups", "grp_sync_runs", "grp_sync_ops",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was

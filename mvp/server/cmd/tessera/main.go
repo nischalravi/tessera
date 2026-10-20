@@ -94,6 +94,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/loaders"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/pit"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/provisioning"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/reports"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/rules"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/credential"
@@ -391,7 +392,15 @@ const (
 	siemInterval = 15 * time.Second
 	// rotationInterval is how often the rotation worker looks for due jobs.
 	rotationInterval = 30 * time.Second
+	// group provisioning calls to customer systems: SCIM and webhook requests
+	// may take longer, and a SCIM group lists all its members in one response
+	provisioningHTTPTimeout = 30 * time.Second
+	provisioningMaxBody     = 16 << 20
 )
+
+// ldapPorts are the destination ports the guarded dialer allows for LDAP and AD targets: LDAP,
+// LDAPS and the Active Directory global catalog (plain and TLS).
+var ldapPorts = []int{389, 636, 3268, 3269}
 
 func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Sealer, clock timeutil.Clock,
 	loader *policy.Loader, logger *slog.Logger) error {
@@ -510,9 +519,24 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		Factory: &rotation.Factory{HTTP: outbound, Sealer: sealer, Now: clock, AllowFake: cfg.RotationFakeAdapters}}
 	// group rules: webhooks go through the same safehttp client; email rules log (TESSERA_NOTIFY=log)
 	groupsRules := &rules.Runtime{Engine: groupsEngine, HTTP: outbound, Sealer: sealer, AllowHTTP: cfg.OutboundAllowLoopback, Log: logger}
+	// Group provisioning reaches customer systems through the same address
+	// guard: SCIM and webhooks through its own safehttp client (longer timeout,
+	// larger bodies: a SCIM group lists all its members), LDAP through the
+	// guarded dialer. Plain LDAP is for the dev directory only.
+	provHTTP, err := safehttp.ForConfigLimits(cfg, provisioningHTTPTimeout, provisioningMaxBody)
+	if err != nil {
+		return err
+	}
+	provDial, err := safehttp.NewDialer(safehttp.Options{Env: cfg.Env, AllowLoopback: cfg.OutboundAllowLoopback && cfg.Env == config.Dev,
+		Timeout: provisioningHTTPTimeout, AllowedPorts: ldapPorts})
+	if err != nil {
+		return err
+	}
+	provisioningSvc := &provisioning.Service{DB: st, Sealer: sealer, Clock: clock, Log: logger,
+		Deps: provisioning.Deps{HTTP: provHTTP, Dial: provDial, AllowPlainLDAP: cfg.Env == config.Dev, SQLDir: cfg.GroupsProvSQLDir}}
 	srv := api.New(api.Config{Health: checker, Store: st, Clock: clock, Policies: loader, Logger: logger,
 		Secrets: secrets, Credential: authority,
-		PublicURL: cfg.PublicURL, RPID: cfg.RPID, Sealer: sealer, OutboundHTTP: outbound, GroupsEngine: groupsEngine, GroupsRules: groupsRules, LoaderDataDir: cfg.LoaderDataDir, APIAudience: cfg.APIAudience,
+		PublicURL: cfg.PublicURL, RPID: cfg.RPID, Sealer: sealer, OutboundHTTP: outbound, GroupsEngine: groupsEngine, GroupsRules: groupsRules, Provisioning: provisioningSvc, LoaderDataDir: cfg.LoaderDataDir, APIAudience: cfg.APIAudience,
 		AccessTokenTTL: time.Duration(cfg.AccessTokenTTLSeconds) * time.Second,
 		DeviceCodeTTL:  time.Duration(cfg.DeviceCodeTTLSeconds) * time.Second, DPoPRSNonce: cfg.DPoPRSNonce,
 		Outbound: outbound, FakeTargetURL: fakeURL,
@@ -686,6 +710,13 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		defer close(loadersDone)
 		loadersRunner.Loop(ctx)
 	}()
+	// group provisioning: full syncs (daily and on request) and incremental syncs of the group events
+	provisioningDone := make(chan struct{})
+	provisioningRunner := &provisioning.Runner{Svc: provisioningSvc, Clock: clock, Log: logger}
+	go func() {
+		defer close(provisioningDone)
+		provisioningRunner.Loop(ctx)
+	}()
 	errc := make(chan error, 2)
 	go func() { errc <- httpSrv.Serve(ln) }()
 	logger.Info("tessera API listening", "addr", ln.Addr().String())
@@ -720,6 +751,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		<-rulesDone
 		<-govDone
 		<-loadersDone
+		<-provisioningDone
 		return err
 	case <-ctx.Done():
 	}
@@ -751,6 +783,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	<-rulesDone
 	<-govDone
 	<-loadersDone
+	<-provisioningDone
 	for i := 0; i < cap(errc) && (i == 0 || agentSrv != nil); i++ {
 		if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			return serveErr

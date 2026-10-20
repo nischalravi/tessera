@@ -1829,3 +1829,38 @@ DROP POLICY IF EXISTS tenant_isolation ON grp_loader_unresolved;
 CREATE POLICY tenant_isolation ON grp_loader_unresolved
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_provisioners ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_provisioners FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_provisioners;
+CREATE POLICY tenant_isolation ON grp_provisioners
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_provisionable ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_provisionable FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_provisionable;
+CREATE POLICY tenant_isolation ON grp_provisionable
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_sync_groups ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_sync_groups FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_sync_groups;
+CREATE POLICY tenant_isolation ON grp_sync_groups
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_sync_runs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_sync_runs FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_sync_runs;
+CREATE POLICY tenant_isolation ON grp_sync_runs
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_sync_ops ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_sync_ops FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_sync_ops;
+CREATE POLICY tenant_isolation ON grp_sync_ops
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
