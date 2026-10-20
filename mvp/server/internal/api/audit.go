@@ -111,7 +111,7 @@ const MaxAuditLimit = 1000
 // no rows.
 func (s *Server) auditLog(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
 	limit := min(p.queryInt("limit", 100, i64(0), nil), MaxAuditLimit)
-	f := store.AuditFilter{Limit: int(limit)}
+	f := store.AuditFilter{Limit: clampInt(limit)}
 	if b := p.queryOptInt("before_seq"); b != nil {
 		f.BeforeSeq = *b
 	}
