@@ -105,6 +105,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/seed"
 	"github.com/nischalravi/tessera/mvp/server/internal/siem"
 	"github.com/nischalravi/tessera/mvp/server/internal/sod"
+	"github.com/nischalravi/tessera/mvp/server/internal/ssf"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 	"github.com/nischalravi/tessera/mvp/server/policies"
@@ -476,13 +477,16 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	}
 	siemSvc := &siem.Service{DB: st, Sealer: sealer, HTTP: outbound, Clock: clock, Log: logger,
 		Dev: cfg.Env == config.Dev && cfg.OutboundAllowLoopback}
+	containmentSvc := &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock, DB: st}
 	srv := api.New(api.Config{Health: checker, Store: st, Clock: clock, Policies: loader, Logger: logger,
 		Secrets: secrets, Credential: authority,
 		PublicURL: cfg.PublicURL, RPID: cfg.RPID, Sealer: sealer, OutboundHTTP: outbound, GroupsEngine: groupsEngine, APIAudience: cfg.APIAudience,
 		AccessTokenTTL: time.Duration(cfg.AccessTokenTTLSeconds) * time.Second,
 		DeviceCodeTTL:  time.Duration(cfg.DeviceCodeTTLSeconds) * time.Second, DPoPRSNonce: cfg.DPoPRSNonce,
 		Outbound: outbound, FakeTargetURL: fakeURL,
-		Containment:    &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock},
+		Containment: containmentSvc,
+		SSF: &ssf.Service{HTTP: outbound, Sealer: sealer, Clock: clock, Containment: containmentSvc,
+			Dev: cfg.Env == config.Dev && cfg.OutboundAllowLoopback},
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
 		HSTS: cfg.IsProd(), Env: cfg.Env, Identifiers: identifiers.NewKeyer(sealer), EmailMode: cfg.Mail.Mode, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, Readiness: rsvc, Agents: agents, AuditAnchor: anchorURL,
 		Siem: siemSvc, Alerts: alertSvc, AWSCatalog: awsCatalogLoader(cfg),

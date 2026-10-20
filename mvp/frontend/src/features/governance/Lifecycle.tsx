@@ -2,7 +2,7 @@ import { FormEvent, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ListChecks } from "lucide-react";
 import { HrisEvent, IdentityRow, api, fmtDate, useApi } from "../../api";
-import { Badge, Button, Callout, Chip, EmptyState, IdLink, Loading, Page, Segmented, Status, Tone, useConfirm, useToast, GovernanceTabs } from "../../components";
+import { Badge, Button, Callout, Chip, EmptyState, Loading, Page, Segmented, Status, Tone, useConfirm, useToast, GovernanceTabs } from "../../components";
 
 interface Step { action: string; detail: string; system: string }
 interface Impact { permissions_removed: number; privileged_removed: number; systems: string[]; owned_nhis: number; violations_resolved: number }
@@ -191,15 +191,17 @@ export function Lifecycle() {
               <Segmented label="Show" value={status} onChange={setStatus} options={[["all", "All"], ["pending", "Pending"]]} />
             </div>
             {rows.length === 0 ? <EmptyState title="No pending events" icon={<ListChecks size={18} />}>Every joiner, mover and leaver has been handled.</EmptyState> : (
-              <div role="listbox" aria-label="HRIS events" style={{ maxHeight: 520, overflow: "auto" }}>
+              <div role="list" aria-label="HRIS events" style={{ maxHeight: 520, overflow: "auto" }}>
                 {rows.map((e) => (
-                  <div key={e.id} role="option" aria-selected={current === e.id} tabIndex={0} className="qrow" style={{ gridTemplateColumns: "minmax(0,1fr) auto" }}
-                    onClick={() => pick(e.id)} onKeyDown={(k) => (k.key === "Enter" || k.key === " ") && pick(e.id)}>
+                  <div key={e.id} role="listitem">
+                  <button type="button" aria-pressed={current === e.id} className={`qrow qbtn ${current === e.id ? "selected" : ""}`} style={{ gridTemplateColumns: "minmax(0,1fr) auto" }}
+                    onClick={() => pick(e.id)}>
                     <span style={{ minWidth: 0 }}>
-                      <span className="row tight"><Badge tone={TYPE_TONE[e.type]}>{cap(e.type)}</Badge> {e.identity ? <IdLink i={e.identity} /> : <b className="small">{String(e.payload.name ?? "")}</b>}</span>
+                      <span className="row tight"><Badge tone={TYPE_TONE[e.type]}>{cap(e.type)}</Badge> <b className="small">{e.identity?.name ?? String(e.payload.name ?? "")}</b></span>
                       <span className="q-meta">{e.payload.historical ? "Handled by legacy process" : fmtDate(e.effective_at)}</span>
                     </span>
                     <Status s={e.status} />
+                  </button>
                   </div>
                 ))}
               </div>

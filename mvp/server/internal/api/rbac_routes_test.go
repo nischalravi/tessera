@@ -237,6 +237,14 @@ PUT    /api/mcp/resources/{id}                       agents.manage   STEP_UP_POL
 GET    /api/mcp/tokens                               graph.read      -  # issue #115
 POST   /api/mcp/tokens/{jti}/revoke                  agents.manage   STEP_UP_POLICY  # issue #115
 GET    /api/mcp/decisions                            graph.read      -  # issue #115
+GET    /api/ssf/transmitters                         graph.read      -  # issue #114
+GET    /api/ssf/transmitters/{id}                    graph.read      -  # issue #114
+GET    /api/ssf/events                               graph.read      -  # issue #114
+POST   /api/ssf/transmitters                         ssf.configure   STEP_UP_POLICY  # issue #114
+PUT    /api/ssf/transmitters/{id}                    ssf.configure   STEP_UP_POLICY  # issue #114
+DELETE /api/ssf/transmitters/{id}                    ssf.configure   STEP_UP_POLICY  # issue #114
+POST   /api/ssf/transmitters/{id}/verify             ssf.configure   STEP_UP_POLICY  # issue #114
+POST   /public/t/{slug}/ssf/{transmitter_id}/events  public          # issue #114: bearer secret, RFC 8935
 GET    /api/agents                                   connections.read   -  # issue #92
 POST   /api/agents                                   connections.manage STEP_UP_POLICY  # issue #92
 POST   /api/agents/{id}/revoke                       connections.manage STEP_UP_POLICY  # issue #92
