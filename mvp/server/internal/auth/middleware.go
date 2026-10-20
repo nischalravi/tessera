@@ -38,6 +38,7 @@ const (
 	// (disabled, terminated or merged; #316, #331).
 	FailIdentityDisabled = "identity_disabled"
 	FailTenantInactive   = "tenant_inactive"
+	FailClientDisabled   = "client_disabled"
 )
 
 // Authenticator resolves the session cookie of a request to a Principal

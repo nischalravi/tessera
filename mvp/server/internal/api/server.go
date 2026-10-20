@@ -304,6 +304,7 @@ func New(cfg Config) *Server {
 	s.registerStepUpRoutes()
 	s.registerOAuthRoutes()
 	s.registerAdminRoutes()
+	s.registerAdminClientRoutes()
 	s.registerOpsRoutes()
 	s.checkPublicRoutes()
 	return s

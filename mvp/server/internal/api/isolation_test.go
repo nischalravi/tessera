@@ -287,6 +287,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/api/auth/sessions/{session_id}" {
 			continue // TestIsolation_SessionCookieScoped (a UUID, not a fixture id)
 		}
+		if rt.Pattern == "/api/admin/api-clients/{client_id}" {
+			continue // TestAdminAPIClients_CrossTenant (a client_id string, not a fixture id)
+		}
 		if strings.HasPrefix(rt.Pattern, "/api/siem/sinks/") {
 			continue // TestSiemAPI_CrossTenant (UUIDs, not fixture ids)
 		}
@@ -362,6 +365,7 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 	policyIDs := seedAbac(t, f)            // and A's policy name
 	values := map[string]string{
 		"/api/jobs/{job_id}":                         insertJobRun(t, f.DB, f.B.ID),
+		"/api/admin/api-clients/{client_id}":         "tsc_client_b",
 		"/api/provisioning/ops/{op_id}":              insertProvOp(t, f.DB, f.B.ID, f.B.Refs["connection:ad"], "b-key"),
 		"/api/abac/policies/{policy_id}":             policyIDs[f.B.ID],
 		"/api/roles/{role_id}":                       roleIDs[f.B.ID],

@@ -21,7 +21,7 @@ import (
 //
 //	GET /api/admin/api-clients               admin.read
 //	GET /api/admin/api-clients/{client_id}   admin.read
-func (s *Server) registerAdminRoutes() {
+func (s *Server) registerAdminClientRoutes() {
 	G := http.MethodGet
 	s.handle(G, "/api/admin/api-clients", read, need(auth.PermAdminRead), s.adminListAPIClients)
 	s.handle(G, "/api/admin/api-clients/{client_id}", read, need(auth.PermAdminRead), s.adminGetAPIClient)

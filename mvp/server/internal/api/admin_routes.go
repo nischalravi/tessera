@@ -35,7 +35,7 @@ import (
 //	GET  /api/admin/notifications                           queued admin notifications
 //	GET  /api/admin/recovery                                operator recoveries
 //	POST /api/admin/recovery/{recovery_id}/cancel           an existing admin cancels a recovery
-//	GET  /api/admin/api-clients                             machine clients (the table arrives with PR10/11)
+//	GET  /api/admin/api-clients                             machine clients (admin_clients.go)
 //
 // The mutating routes are phased: internal/admin opens its own tenant
 // transactions (an applier that fails is recorded as failed in a second
@@ -60,7 +60,6 @@ func (s *Server) registerAdminRoutes() {
 	s.handle(G, "/api/admin/notifications", read, need(auth.PermAdminRead), s.adminNotifications)
 	s.handle(G, "/api/admin/recovery", read, need(auth.PermAdminRead), s.adminRecoveries)
 	s.handle(P, "/api/admin/recovery/{recovery_id}/cancel", phased, need(auth.PermAdminChangeReq), s.adminCancelRecovery)
-	s.handle(G, "/api/admin/api-clients", read, need(auth.PermAdminRead), s.adminAPIClients)
 }
 
 // pathUUID reads a UUID path segment; anything else is the same 404 as a
@@ -458,13 +457,4 @@ func (s *Server) adminCancelRecovery(_ http.ResponseWriter, r *http.Request, p *
 		return nil, err
 	}
 	return recoveryView(rec), nil
-}
-
-// adminAPIClients lists machine clients. Their table (api_clients) arrives
-// with the OAuth authorization server and machine clients (PR10, PR11), so
-// until then the list is empty and says why; the admin UI shows the page
-// against this route and needs no change when the table lands.
-func (s *Server) adminAPIClients(_ http.ResponseWriter, _ *http.Request, _ *params) (any, error) {
-	return ojson.Object{{Key: "available", Value: false}, {Key: "clients", Value: []ojson.Object{}},
-		{Key: "detail", Value: "machine clients arrive with the OAuth authorization server (PR10) and machine clients (PR11)"}}, nil
 }

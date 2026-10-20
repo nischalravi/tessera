@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -370,16 +369,5 @@ func TestAdminAPI_RecoveryRoutes(t *testing.T) {
 	}
 	if len(reasons) != 2 || !(strings.Contains(reasons[0], "bootstrap_code_used") || strings.Contains(reasons[0], admin.ReasonRecoveryClosed)) {
 		t.Errorf("failure reasons %v, want the first (newest) refusal to say the code is used or the recovery is not pending", reasons)
-	}
-}
-
-// TestAdminAPI_APIClientsPlaceholder: the machine-client list answers, empty
-// and unavailable, until the table lands; admins and auditors read it.
-func TestAdminAPI_APIClientsPlaceholder(t *testing.T) {
-	e := newAdminEnv(t)
-	aud := e.login(t, e.f.B, "aud@b.example", 0, auth.RoleAuditor)
-	v := e.mustCall(t, aud, "GET", "/api/admin/api-clients", "", http.StatusOK)
-	if v["available"] != false || len(v["clients"].([]any)) != 0 || !bytes.Contains([]byte(asString(v["detail"])), []byte("PR10")) {
-		t.Errorf("api clients: %v", v)
 	}
 }
