@@ -5,7 +5,7 @@ import { Badge, Button, Callout, DataTable, SidePanel, useToast } from "../../co
 
 const KIND: Record<string, string> = {
   sync: "Connector sync", provision: "Provisioning (leaver/mover)", validation: "Connection validation", dry_run: "Dry run",
-  health_rerun: "Deployment health re-run", jit_sweep: "JIT expiry sweep", audit_anchor: "Audit anchoring",
+  health_rerun: "Deployment health re-run", jit_sweep: "JIT expiry sweep", audit_anchor: "Audit anchoring", guest_lifecycle: "Guest lifecycle",
   sweep_requests: "Access request sweep", sweep_lifecycle: "Lifecycle and sponsorship sweep", sweep_admin_changes: "Admin change sweep",
   containment_retries: "Containment retries", job_maintenance: "Job history upkeep",
 };

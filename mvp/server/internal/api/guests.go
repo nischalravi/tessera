@@ -127,6 +127,16 @@ type sponsorshipView struct {
 	CanAcceptTransfer bool                   `json:"can_accept_transfer"`
 	CanApprove        bool                   `json:"can_approve"`
 	Events            []sponsorshipEventView `json:"events,omitempty"`
+	// Stepup is a renewal held until the guest's identity assurance reaches
+	// RequiredIAL; the access does not extend meanwhile (issue #74).
+	Stepup *stepupView `json:"stepup,omitempty"`
+}
+
+type stepupView struct {
+	RequiredIAL     int       `json:"required_ial"`
+	RequestedEndsAt time.Time `json:"requested_ends_at"`
+	Justification   string    `json:"justification"`
+	RequestedAt     time.Time `json:"requested_at"`
 }
 
 // sponsorshipState is what a reader sees: the status, with a running
@@ -190,6 +200,11 @@ func (s *Server) sponsorshipView(v *viewer, ss *store.Sponsorship, act sponsorsh
 		return out, err
 	}
 	out.Invitation, out.InvitationExpires = invitationState(in, ts, now)
+	if ups, err := tx.Stepups(store.StepupPending, ss.ID); err != nil {
+		return out, err
+	} else if len(ups) > 0 {
+		out.Stepup = &stepupView{ups[0].RequiredIAL, ups[0].RequestedEndsAt, ups[0].Justification, ups[0].CreatedAt}
+	}
 	if ss.Live() {
 		d := max(0, int(math.Ceil(ss.EndsAt.Sub(now).Hours()/24)))
 		out.DaysLeft = &d
@@ -275,7 +290,7 @@ func (s *Server) listGuests(_ http.ResponseWriter, r *http.Request, p *params) (
 	case which != "" && which != "me" && which != "all":
 		return nil, bad("invalid_sponsor", "sponsor is me or all")
 	case state != "" && !slices.Contains([]string{store.SponsorRequested, store.SponsorPendingApproval, store.SponsorActive,
-		store.SponsorTransferPending, store.SponsorEnded, store.SponsorRevoked, store.SponsorRejected}, state):
+		store.SponsorTransferPending, store.SponsorSuspended, store.SponsorEnded, store.SponsorRevoked, store.SponsorRejected}, state):
 		return nil, bad("invalid_state", "state is a sponsorship status")
 	case pop != "" && !slices.ContainsFunc(sponsorship.Populations, func(x sponsorship.Population) bool { return x.Key == pop }):
 		return nil, bad("invalid_population", "population is visitor, contractor, volunteer or partner")

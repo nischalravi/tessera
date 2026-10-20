@@ -27,6 +27,8 @@ type verified struct {
 	AAL        int    `json:"aal,omitempty"`
 	ACR        string `json:"acr,omitempty"`
 	Authority  string `json:"authority,omitempty"`
+	// Purpose is "recovery" for the session of an account recovery (GU-10).
+	Purpose string `json:"purpose,omitempty"`
 }
 
 func readVerified(sess *store.ClaimSession) verified {
@@ -155,8 +157,15 @@ func (s *Service) CheckCode(tx *store.TenantTx, sess *store.ClaimSession, submit
 	v.EmailAt, v.IAL, v.VouchedBy = now.UTC().Format("2006-01-02T15:04:05Z"), 0, "sponsor"
 	saveVerified(sess, v)
 	sess.Step, sess.LastSeenAt = StepExistingAccount, now
-	if ss.RequiredIAL > 0 {
-		sess.Step = StepVerifyIdentity
+	ial, err := s.requiredIAL(tx, sess, ss)
+	if err != nil {
+		return CodeCheck{}, err
+	}
+	switch {
+	case ial > 0:
+		sess.Step = StepVerifyIdentity // GU-7 (not built): the claim waits here
+	case v.Purpose == store.ClaimPurposeRecovery:
+		sess.Step = StepCredential // a recovery has no "existing account" question
 	}
 	if err := tx.SaveClaimSession(sess); err != nil {
 		return CodeCheck{}, err
@@ -317,6 +326,10 @@ func (s *Service) Complete(tx *store.TenantTx, sess *store.ClaimSession, b Bindi
 	}
 	if !MeetsAAL(ss.RequiredAAL, b.AAL, b.ACR) {
 		return nil, ErrAAL
+	}
+	// terms come before the credential is bound (§7.4)
+	if err := s.outstandingGate(tx, sess, b.Authority, now); err != nil {
+		return nil, err
 	}
 	if users, err := tx.UsersLinkedTo(guest.ID); err != nil {
 		return nil, err

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -793,11 +794,16 @@ func route(c *store.TenantTx, now time.Time, ch provision.Change) (bool, error) 
 	return routed, err
 }
 
-func stepKey(eventID int64, idx int, action string) string {
-	return fmt.Sprintf("jml:%d:%d:%s", eventID, idx, action)
+// stepKey is the idempotency key of one plan step: base names the run (an HRIS
+// event, or another caller's pass over a leaver's plan), idx the step.
+func stepKey(base string, idx int, action string) string {
+	return fmt.Sprintf("%s:%d:%s", base, idx, action)
 }
 
-func applyStep(c *store.TenantTx, now time.Time, by string, ident *store.Identity, st Step, eventID int64, idx int) error {
+// eventBase is the base of the keys of an HRIS event's steps.
+func eventBase(eventID int64) string { return fmt.Sprintf("jml:%d", eventID) }
+
+func applyStep(c *store.TenantTx, now time.Time, by string, ident *store.Identity, st Step, base string, idx int) error {
 	var err error
 	switch stepStr(st, "action") {
 	case containment.ActionRevokeSessions, containment.ActionRevokeGrants:
@@ -805,7 +811,7 @@ func applyStep(c *store.TenantTx, now time.Time, by string, ident *store.Identit
 	case "disable_account":
 		id, _ := stepInt(st, "account_id")
 		var routed bool
-		if routed, err = routeDisable(c, now, id, stepKey(eventID, idx, "disable_account")); err == nil && !routed {
+		if routed, err = routeDisable(c, now, id, stepKey(base, idx, "disable_account")); err == nil && !routed {
 			if err = c.DisableAccount(id); err == nil {
 				// an app with no connector cannot be disabled from here: a manual task (issue #105)
 				err = flatfile.AccountDisabled(c, now, by, id, "leaver")
@@ -814,14 +820,14 @@ func applyStep(c *store.TenantTx, now time.Time, by string, ident *store.Identit
 	case "remove_grant":
 		id, _ := stepInt(st, "edge_id")
 		var routed bool
-		if routed, err = routeRemoveGrant(c, now, id, stepKey(eventID, idx, "remove_grant")); err == nil && !routed {
+		if routed, err = routeRemoveGrant(c, now, id, stepKey(base, idx, "remove_grant")); err == nil && !routed {
 			if err = flatfile.GrantRevoked(c, now, by, id, "leaver"); err == nil {
 				err = c.RevokeEdge(id, now, "jml")
 			}
 		}
 	case "add_grant":
 		var routed bool
-		if routed, err = routeAddGrant(c, now, ident, st, stepKey(eventID, idx, "add_grant")); err == nil && !routed {
+		if routed, err = routeAddGrant(c, now, ident, st, stepKey(base, idx, "add_grant")); err == nil && !routed {
 			err = addGrant(c, now, ident, st)
 		}
 	case "cancel_jit":
@@ -1050,7 +1056,7 @@ func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.User
 		}
 		for i, st := range steps {
 			if stepStr(st, "action") == "add_grant" {
-				if err := applyStep(c, now, by.Display, ident, st, ev.ID, i); err != nil {
+				if err := applyStep(c, now, by.Display, ident, st, eventBase(ev.ID), i); err != nil {
 					return nil, err
 				}
 			}
@@ -1061,7 +1067,7 @@ func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.User
 			return nil, err
 		}
 		for i, st := range steps {
-			if err := applyStep(c, now, by.Display, ident, st, ev.ID, i); err != nil {
+			if err := applyStep(c, now, by.Display, ident, st, eventBase(ev.ID), i); err != nil {
 				return nil, err
 			}
 		}
@@ -1181,11 +1187,38 @@ func ExecuteLeaver(c *store.TenantTx, now time.Time, identityID int64) (Plan, er
 	for i, st := range steps {
 		// No HRIS event: a negative id keeps the provisioning keys of this
 		// identity's end-date leaver apart from every event's.
-		if err := applyStep(c, now, "system", ident, st, -identityID, i); err != nil {
+		if err := applyStep(c, now, "system", ident, st, eventBase(-identityID), i); err != nil {
 			return nil, err
 		}
 	}
 	return plan, c.TerminateIdentity(identityID, now)
+}
+
+// ExecuteLeaverSteps applies only the steps of the person's leaver plan whose
+// action is one of actions, for a later pass over what a leaver still holds (the
+// guest lifecycle's grace period reassigns ownership then, issue #74). It
+// terminates nobody and returns how many steps it applied.
+func ExecuteLeaverSteps(c *store.TenantTx, now time.Time, identityID int64, base string, actions ...string) (int, error) {
+	plan, err := LeaverPlan(c, now, identityID, false, nil)
+	if err != nil {
+		return 0, err
+	}
+	ident, err := c.Identity(identityID)
+	if err != nil {
+		return 0, err
+	}
+	steps, _ := getAny(plan, "steps").([]Step)
+	n := 0
+	for i, st := range steps {
+		if !slices.Contains(actions, stepStr(st, "action")) {
+			continue
+		}
+		if err := applyStep(c, now, "system", ident, st, base, i); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
 }
 
 // joinerLifecycle records a non-employee joiner's worker type, end date and

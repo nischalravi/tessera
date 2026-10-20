@@ -167,6 +167,7 @@ func TestProvisioning_TargetConfigIsValidatedAndCredentialWriteOnly(t *testing.T
 		"okta no tok": `{"kind":"okta","base_url":"https://x.okta.example"}`,
 		"fault":       `{"kind":"scim","base_url":"https://x.example","fault":"drop_writes"}`,
 		"unknown":     `{"kind":"scim","base_url":"https://x.example","password":"p"}`,
+		"deprovision": `{"kind":"scim","base_url":"https://x.example","on_deprovision":"purge"}`,
 	} {
 		if rec := h.c.do("PUT", "/api/provisioning/targets/"+h.conn, body); rec.Code != http.StatusUnprocessableEntity {
 			t.Errorf("%s: status %d: %s", name, rec.Code, rec.Body)
@@ -195,8 +196,15 @@ func TestProvisioning_TargetConfigIsValidatedAndCredentialWriteOnly(t *testing.T
 		return nil
 	})
 	v = h.target(`{"kind":"scim","base_url":"https://scim.example/scim/v2","write_back":true}`, 200)
-	if v["has_credential"] != true || v["write_back"] != true {
-		t.Errorf("after edit: %v", v)
+	if v["has_credential"] != true || v["write_back"] != true || v["on_deprovision"] != nil {
+		t.Errorf("after edit: %v", v) // accounts are left disabled by default
+	}
+	// the per-connection choice of what happens to a deprovisioned guest's account (issue #74)
+	if v = h.target(`{"kind":"scim","base_url":"https://scim.example/scim/v2","write_back":true,"on_deprovision":"delete"}`, 200); v["on_deprovision"] != "delete" {
+		t.Errorf("on_deprovision = %v", v["on_deprovision"])
+	}
+	if v = h.target(`{"kind":"scim","base_url":"https://scim.example/scim/v2","write_back":true,"on_deprovision":"disable"}`, 200); v["on_deprovision"] != nil {
+		t.Errorf("back to the default: %v", v)
 	}
 	if a := h.audit(); !strings.Contains(a, "provision.target_set") {
 		t.Errorf("audit = %s", a)

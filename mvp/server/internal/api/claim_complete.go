@@ -87,21 +87,32 @@ func (s *Server) finishClaim(w http.ResponseWriter, r *http.Request, tenant stor
 		if s.cfg.Credential != nil {
 			authority = s.cfg.Credential.Kind()
 		}
-		_, err = s.claimSvc.Complete(tx, sess, claim.Binding{ConnectionID: conn.ID, Issuer: deref(conn.Issuer), Subject: res.Subject,
-			Email: tok.Email, Name: tok.Name, AAL: res.AAL, ACR: res.TesseraACR, Authority: authority}, now)
-		switch {
-		case err == nil:
-			return nil
-		case errors.Is(err, claim.ErrAAL):
-			reason = "aal_not_met"
-		case errors.Is(err, claim.ErrSubject):
-			reason = "subject_mismatch"
-		case errors.Is(err, claim.ErrSubjectBound):
-			reason = "subject_already_bound"
-		case errors.Is(err, claim.ErrNotReady):
-			reason = "claim_not_ready"
-		default:
-			return err
+		bind := claim.Binding{ConnectionID: conn.ID, Issuer: deref(conn.Issuer), Subject: res.Subject,
+			Email: tok.Email, Name: tok.Name, AAL: res.AAL, ACR: res.TesseraACR, Authority: authority}
+		if claim.IsRecovery(sess) {
+			// a recovery adds the sign-in to the existing user (GU-10); a privileged account waits 24 hours
+			out, err := s.claimSvc.CompleteRecovery(tx, sess, bind, now)
+			if err == nil {
+				if out.Cooling {
+					result = "cooling_off"
+				}
+				return nil
+			}
+			reason, err = claimRefusal(err)
+			if err != nil {
+				return err
+			}
+		} else {
+			_, err = s.claimSvc.Complete(tx, sess, bind, now)
+			if err == nil {
+				// a renewal held for a step-up continues once the assurance is reached (GU-11)
+				_, err = s.guests.ApplyStepups(tx, 0, now)
+				return err
+			}
+			reason, err = claimRefusal(err)
+			if err != nil {
+				return err
+			}
 		}
 		// the refusal is recorded and committed (Complete wrote nothing before it refused)
 		return claim.Audit(tx, now, "claim.credential.failed", ojson.Object{{Key: "intake_id", Value: sess.IntakeID},
@@ -193,4 +204,28 @@ func (s *Server) completeClaimLink(tx *store.TenantTx, l *store.ClaimLink, conn 
 	}
 	return result, "", claim.Audit(tx, now, "claim.link", ojson.Object{{Key: "intake_id", Value: l.IntakeID}, {Key: "outcome", Value: outcome},
 		{Key: "aal", Value: res.AAL}, {Key: "acr", Value: res.TesseraACR}}, store.OutcomeSuccess)
+}
+
+// claimRefusal maps a refused credential step to the reason in the audit event;
+// any other error is returned as it is.
+func claimRefusal(err error) (string, error) {
+	switch {
+	case errors.Is(err, claim.ErrAAL):
+		return "aal_not_met", nil
+	case errors.Is(err, claim.ErrSubject):
+		return "subject_mismatch", nil
+	case errors.Is(err, claim.ErrSubjectBound):
+		return "subject_already_bound", nil
+	case errors.Is(err, claim.ErrNotReady):
+		return "claim_not_ready", nil
+	case errors.Is(err, claim.ErrTerms):
+		return "terms_not_accepted", nil
+	case errors.Is(err, claim.ErrConsent):
+		return "consent_not_recorded", nil
+	case errors.Is(err, claim.ErrIAL):
+		return "ial_not_met", nil
+	case errors.Is(err, claim.ErrNoUser):
+		return "no_user_to_recover", nil
+	}
+	return "", err
 }

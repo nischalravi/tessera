@@ -32,6 +32,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/claim"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/credential"
+	guestlife "github.com/nischalravi/tessera/mvp/server/internal/guests/lifecycle"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/sponsorship"
 	"github.com/nischalravi/tessera/mvp/server/internal/health"
 	"github.com/nischalravi/tessera/mvp/server/internal/helpdesk"
@@ -218,6 +219,8 @@ type Server struct {
 	authn  *auth.Authenticator
 	limits *limiters
 	guests *sponsorship.Service
+	// guestLife runs the guest lifecycle: reminders, transfer tasks, conversion, deprovisioning (issue #74)
+	guestLife *guestlife.Service
 
 	claimSvc *claim.Service
 	claimLim *claimLimits
@@ -342,6 +345,8 @@ func New(cfg Config) *Server {
 		s.claimSvc = claim.New(cfg.Identifiers, cfg.Secrets, cfg.PublicURL, s.tenantName)
 		s.guests.Claim = s.claimSvc
 	}
+	s.guestLife = guestlife.New(s.guests)
+	s.guestLife.Secrets, s.guestLife.BaseURL, s.guestLife.TenantName = cfg.Secrets, cfg.PublicURL, s.tenantName
 	if cfg.OutboundHTTP != nil {
 		rp, err := oidcrp.New(oidcrp.Config{HTTP: cfg.OutboundHTTP, Now: func() time.Time { return s.clock() }})
 		if err != nil {
@@ -395,6 +400,8 @@ func New(cfg Config) *Server {
 	s.registerGuestRoutes()
 	s.registerClaimRoutes()
 	s.registerGuestAccessRoutes()
+	s.registerGuestLifecycleRoutes()
+	s.registerTermsRoutes()
 	s.registerNotificationRoutes()
 	s.registerEmailRoutes()
 	s.registerContainmentRoutes()

@@ -80,9 +80,13 @@ var publicRoutes = []string{
 	"POST /public/t/{slug}/claim/verify/check",
 	"GET /public/t/{slug}/claim/status",
 	"POST /public/t/{slug}/claim/existing-account",
+	"GET /public/t/{slug}/claim/terms",
+	"POST /public/t/{slug}/claim/terms/accept",
+	"POST /public/t/{slug}/claim/consent",
 	"POST /public/t/{slug}/claim/credential",
 	"POST /public/t/{slug}/claim/resend",
 	"POST /t/{slug}/oauth/introspect",
+	"POST /public/t/{slug}/guest/renewal-request",
 }
 
 // PublicRoutes returns the allow-list.

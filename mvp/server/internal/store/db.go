@@ -203,6 +203,11 @@ var tables = []string{
 	"match_results", "identity_merge_requests", "matching_settings", "claim_links",
 	// third-party OAuth app inventory (schema/0361_oauth_apps.sql)
 	"oauth_apps", "oauth_grants", "oauth_sync_state",
+	// guest lifecycle (schema/0364_guest_lifecycle.sql)
+	"guest_lifecycle_settings", "guest_reminders", "guest_renewal_tokens", "guest_lifecycle_tasks", "sponsorship_stepups",
+	"guest_deprovisioning",
+	// guest terms, attribute consent and recovery (schema/0365_terms_recovery.sql)
+	"terms_documents", "terms_assignments", "terms_acceptances", "attribute_consents", "recovery_cases", "recovery_codes",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was

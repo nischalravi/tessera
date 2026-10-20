@@ -444,8 +444,16 @@ when a second reviewer is needed) ·
 `POST /api/sponsorships/{id}/approve|reject|renew|end|transfer|accept-transfer` ·
 `POST /api/guests/{identity_id}/resend-invitation|revoke-invitation` ·
 `GET /api/identities/{identity_id}/access-bundle` · `GET /api/refgroups` · `POST /api/refgroups/reconcile` ·
-`POST /public/t/{slug}/claim/start|verify/send|verify/check|existing-account|credential|resend` ·
-`GET /public/t/{slug}/claim/status` (public: the guest's claim, see Guest claim) ·
+`POST /public/t/{slug}/claim/start|verify/send|verify/check|existing-account|credential|resend|terms/accept|consent` ·
+`GET /public/t/{slug}/claim/status|terms` (public: the guest's claim, see Guest claim) ·
+`GET|POST /api/admin/terms {key, title, body, grace_days}` · `PUT /api/admin/terms/{key}/assignments {populations, bundles}` ·
+`GET /api/me/terms` · `POST /api/me/terms/accept {documents: [{id, sha256}]}` · `POST /api/me/recovery-codes` ·
+`POST /api/guests/{identity_id}/recovery {reason}` · `GET /api/guest-recoveries[?status=]` ·
+`POST /api/guest-recoveries/{case_id}/cancel {reason}` (see Guest terms, consent and recovery) ·
+`GET /api/guest-lifecycle` · `GET /api/guest-lifecycle/items[?bucket=]` · `GET /api/guest-lifecycle/tasks` ·
+`POST /api/guest-lifecycle/tasks/{id}/resolve {action: accept|decline|keep|confirm|dismiss}` ·
+`GET|PUT /api/admin/guest-lifecycle {sponsor_reminder_days, guest_reminder_days, transfer_deadline_days, on_sponsor_departure, conversion_dual_status, grace_days, retention_days, retention_days_visitor, keep_rematch_hashes}` ·
+`POST /public/t/{slug}/guest/renewal-request {token}` (public, always 202; see Guest lifecycle) ·
 `GET /api/approvals/inbox` · `GET /api/approvals/delegates` · `GET|POST /api/approvals/delegations` ·
 `POST /api/approvals/delegations/{id}/revoke` ·
 `GET /api/notifications[?unread=1&limit=]` · `POST /api/notifications/read {ids}|{all:true}` ·
@@ -715,7 +723,7 @@ Routes: `GET /api/access-drift[?class=&status=&system=&identity_id=&limit=]` (`d
 ### Job run history
 
 Every run of a connector sync, provisioning (HRIS execute), connection validation, dry run,
-deployment-health re-run and JIT sweep is recorded in `job_runs` (`internal/jobs`), plus every
+deployment-health re-run, JIT sweep and guest lifecycle sweep is recorded in `job_runs` (`internal/jobs`), plus every
 audit anchoring run that did something or failed. A sweep that finds nothing is not recorded.
 Each record has the kind, trigger (manual, schedule or retry), status, duration, a result summary
 and a one-line error. The run row is written in its own transaction before the job and finished in
@@ -1357,7 +1365,8 @@ The link is `<TESSERA_PUBLIC_URL>/claim#t=<43 characters>`. The page reads the t
    `(issuer, subject)` of that sign-in (never the email), exists. Tessera creates no session for it.
 5. With no authority configured (production today) the claim stops at step 4 with "your organization
    will finish setting up your sign-in" and stays pending. An IAL above 0 (IDV, GU-7) stops at
-   `verify_identity`. The step list is `claim.Steps`; terms (GU-10) go in as another step.
+   `verify_identity`. The step list is `claim.Steps`. Step 5, terms and consent (GU-10), is a gate on
+   step 4, not a step of its own: see "Guest terms, consent and recovery".
 
 **Security properties.** The token is 256 bits from `crypto/rand`, stored only as
 `SHA-256("tessera-claim-v1|"+tenant+"|"+token)`, single use (one atomic `UPDATE … WHERE
@@ -1424,8 +1433,7 @@ and CSS, no third-party scripts, works at 360 px; `npm test` covers its model an
 ./internal/api -run TestClaim` the API end to end.
 
 **Deferred:** identity verification and IAL above 0 (GU-7), real
-credential authorities, passwords, MFA enrolment, the Tessera-hosted service (GU-8), terms and
-consent, recovery (GU-10), SMS codes, claim codes for letters, a bot challenge, and shared (multi-node)
+credential authorities, passwords, MFA enrolment, the Tessera-hosted service (GU-8), SMS codes, claim codes for letters, a bot challenge, and shared (multi-node)
 rate-limit state. Parity fixtures are unchanged. After pulling this change run `./run.sh --reseed`:
 it adds the claim tables and three columns to `intake_records`, widens its `invitation_status` check
 and allows the login purpose `claim`.
@@ -1731,6 +1739,137 @@ IdP is never called.
   (always approves) and the IDV provider (accepts any session reference not starting with
   `fail`) exist when `TESSERA_ENV` is not `prod`. In production push and IDV answer
   `503 provider_unavailable` until real providers implement `PushProvider` and `IDVProvider`.
+
+### Guest lifecycle
+
+Issue #74 (GU-11, design §8). Code: `internal/guests/lifecycle` (the jobs), `internal/guests/sponsorship`
+(renew with step-up, take over, end or suspend, return). Tables in `schema/0364_guest_lifecycle.sql`
+(`guest_lifecycle_settings`, `guest_reminders`, `guest_renewal_tokens`, `guest_lifecycle_tasks`,
+`sponsorship_stepups`, `guest_deprovisioning`); `suspended` joined the sponsorship statuses and events in
+`0227_sponsorships.sql`, so reseed existing databases (`./run.sh --reseed`). The jobs run in the sweeper
+(every tick, each step in its own transaction) and are recorded as `guest_lifecycle` runs in Admin → Jobs when
+they did something or failed. Every change is audited in its own transaction; the audit ledger itself is never
+modified.
+
+- **Settings** (tenant, `GET|PUT /api/admin/guest-lifecycle`, `guest_lifecycle.configure`, policy admins;
+  Governance → Guest lifecycle → Settings). Defaults: sponsor reminders at 30, 14 and 3 days; guest reminder at
+  14 days (0 turns it off); transfer deadline 14 days; `on_sponsor_departure` `end` (or `suspend`);
+  `conversion_dual_status` `end` (or `sponsor_confirms`); grace 0 days for visitors and 30 for contractors,
+  volunteers and partners; retention 2555 days (7 years) for anyone who held access, 365 days for a visitor who
+  held none; `keep_rematch_hashes` off. Per connection, Admin → Provisioning has *on deprovision*:
+  `disable` (default, the account stays disabled) or `delete` (a verified `delete_account` after the grace period).
+- **Reminders.** `guest_reminders` holds one row per (sponsorship, end date, audience, threshold), written before
+  the message in the same transaction, so each goes out once across sweeps and restarts; a renewal moves the end
+  date and re-arms them. A sponsor gets the bucket they are in (30, 14 or 3 days). The guest (active, with an
+  address; needs `TESSERA_PUBLIC_URL` and the identifier key) gets a mail with a one-time "request renewal" link
+  `/renew#t=<token>`: only its SHA-256 is stored and the link is handed to the mailer through memory only (like
+  the claim link). `POST /public/t/{slug}/guest/renewal-request {token}` spends the token once and opens a
+  renewal-request task for the sponsor; every call (good, bad, spent, unknown tenant) answers the same `202
+  {"status":"received"}` after the same minimum time, with an Origin check and a per-tenant rate limit.
+- **Renewal and step-up.** Renewal re-runs the sponsor policy (eligible, within limits, at most the maximum).
+  If the guest's `identity_assurance` is below what the sponsorship now needs (its own requirement, the
+  population default, the bundle minimum) the renewal is **recorded and held** (`sponsorship_stepups`, event
+  `stepup_required`, the sponsorship view's `stepup`): nothing extends. When the assurance is recorded at that
+  level (after a claim completes, or by the sweeper) the renewal is applied under a fresh policy check, or
+  cancelled if it can no longer stand. *Not built:* the guest's step-up claim itself (a claim session for an
+  active guest, `claim_tokens.purpose = renewal_stepup`, and identity verification at IAL 2, GU-7): today the
+  assurance rises only through the claim; this is the missing piece.
+- **Sponsor leaver or mover.** Executing an HRIS leaver or mover event for a sponsor, or the sweeper finding a
+  sponsor who is no longer eligible, opens a `sponsor_transfer` task per active sponsorship, with a deadline
+  (the transfer deadline, never past the sponsorship's end). The sponsor's manager and the holders of
+  `sponsorships.approve` are notified (kind *Guest lifecycle task*; Inbox banner; Governance → Guest lifecycle →
+  My tasks). **Take over** moves the sponsorship to the person acting under a fresh policy check; **keep** (movers)
+  leaves an eligible sponsor in place; **decline** and the deadline end the sponsorship or, by setting, **suspend**
+  it (`suspended`: no access, affiliation ended, not final; a sponsor admin ends it, or it ends at its end date).
+  Until the deadline the sponsorship stands under the departed sponsor; at the deadline nothing is left without
+  a living sponsor or without a decision. Only the departed sponsor's manager and sponsor admins see and decide
+  these tasks (others get 404).
+- **Several sponsorships.** The person stays active until the last one ends; each bundle ends independently
+  (`TestExpiry_LastSponsorshipEndsIdentity`, `TestBundle_TwoSponsorshipsEndIndependently`).
+- **Conversion.** An HR or student employee affiliation that appears on an identity with a running guest
+  sponsorship (after a merge, GU-5) ends the sponsorship at the hire date, or with `sponsor_confirms` asks the
+  sponsor (task `dual_status`; ends at the deadline unless confirmed). The person stays one identity and keeps
+  every history; the lifecycle becomes employee instead of ending; a `conversion` sponsorship event and a
+  `jml.conversion` audit event record it. Employee to guest: a person who left (terminated, deprovisioned, not
+  purged) can be sponsored again; they are revived on the same identity, with a new guest affiliation next to the
+  ended employee one. Applicant, admit and pre-hire conversions need SIS/HRIS intake (GU-4) and are not built.
+- **Deprovisioning.** When the last sponsorship ends the lifecycle leaver plan runs as before (memberships and
+  grants end, accounts disabled through provisioning, verified by re-read). The sweeper then starts the grace
+  period (`guest_deprovisioning`), revokes the person's sign-in sessions, and after the grace period, once every
+  operation that ended their access is verified, deletes accounts where the target says so, reassigns the
+  ownership they still hold (NHI owners, secrets, delegations, reports: the leaver plan's steps) and sets the
+  identity `deprovisioned`. A failed or unverified operation holds the person in grace (shown as blocked).
+- **Purge.** After the retention period the identity becomes a tombstone (`purged`): the id, affiliation history,
+  lifecycle and dates stay; name, email, department, title, identifiers (`value_norm` always; the keyed hash
+  only when `keep_rematch_hashes`), source-record attributes, the linked sign-in user's name and email, and the
+  notifications and email log rows addressed to the person are nulled or redacted. The `guest.purge` audit event
+  lists counts, never values. A purge is idempotent. **The audit ledger is append-only and is not minimised
+  here; ledger PII minimisation is a follow-up**, as are notifications about the guest sent to others and the
+  claim tokens' keyed email hashes (those rows are immutable). A person who returns within retention is matched
+  (Tier A on a federated binding or authoritative identifier, or by sign-in) and gets the same identity back; after
+  a purge only when hashes were kept.
+- **Governance → Guest lifecycle** (`/governance/guest-lifecycle`, `guests.read`): counts and lists for ending in
+  30, 14 and 3 days, renewal requests, step-up required, pending transfer, ended by sponsor departure, suspended,
+  dual status, in grace, deprovisioned and purged, a side panel per row, My tasks and (policy admins) Settings.
+  `./run.sh --reseed` adds a contractor ending in 10 days and one whose sponsor left (a pending transfer).
+  RBAC: `guests.read` for the page, `guests.sponsor` for tasks (the service decides who may act),
+  `guest_lifecycle.configure` for settings.
+
+### Guest terms, consent and recovery
+
+Issue #73 (GU-10; design `docs/design/guest-accounts-and-claim.md` §7.4, §7.5). Code:
+`internal/guests/terms` (documents, acceptance, consent), `internal/guests/claim/{terms,recovery}.go`,
+`internal/notify/recovery.go`, `internal/api/terms.go`, schema `0365_terms_recovery.sql` (`terms_documents`,
+`terms_assignments`, `terms_acceptances`, `attribute_consents`, `recovery_cases`, `recovery_codes`; reseed
+existing databases with `./run.sh --reseed`, which also lets `claim_sessions.step` hold `verify_identity`).
+Every change is audited in its own transaction (`terms.publish|assign|accept`, `consent.attributes`,
+`recovery.issue|cooling_off|complete|cancel`, `recovery.codes.generate`, `recovery.code.use`; never a token or a code).
+
+**Terms.** A document has a key and numbered versions; each version stores its text and the SHA-256 of that text.
+A document is assigned to guest populations and to access bundles (a bundle is the group of a catalog item); it
+applies to a guest whose live sponsorship has that population or carries that item. `GET|POST /api/admin/terms` list
+and publish (`terms.manage`, step-up; the same text twice is `409 unchanged`), `PUT /api/admin/terms/{key}/assignments`
+replaces where it applies. **Claim step 5:** while a document that applies is not accepted the claim status says
+`pending: "terms"`, `POST claim/credential` answers `409 terms_required`, and the OIDC callback refuses to bind
+(`terms_not_accepted`), so acceptance always comes before a credential. `GET claim/terms` returns each text with its hash;
+`POST claim/terms/accept` takes `{id, sha256}` of what the guest saw (a changed text is `409 terms_changed`) and writes
+`terms_acceptances` (document, version, hash, time, claim session, keyed hashes of the client address and user agent) and the
+audit event in one transaction. **New version:** a person who accepted version N must accept N+1 within the document's
+`grace_days` (from its publication; for a document first assigned later, from the assignment); `GET /api/me/terms` shows
+`accepted | grace | blocked` and `POST /api/me/terms/accept` accepts. After the grace period every route except
+`/api/auth/*` and `/api/me/terms*` answers `403 terms_required` until they accept (the check runs in `authorize`, and
+reads nothing for a tenant with no terms). A guest who links to an existing person by signing in (step 3) skips step 5
+and meets the same check at their next request.
+
+**Attribute-release consent.** For a federated authority (`home_idp`, `incommon`, `edugain`; none is built yet, GU-8/9) step 5
+also shows what the home IdP releases and why (`GET claim/terms` → `consent`); `POST claim/consent {attributes}` records the
+choice (the required attributes are always included) in `attribute_consents` and the ledger, once per claim session. Other
+authorities show no consent screen.
+
+**Recovery.** `POST /api/guests/{identity_id}/recovery` issues a `purpose=recovery` claim token for an active guest. The
+caller is the guest's live sponsor (`via: sponsor`) or holds `guests.recover` (operator, policy admin: the help desk,
+`via: help_desk`); a new recovery cancels the open one. The link goes to the guest's address only; **every channel on file**
+gets a `guest.recovery` notice (the guest's address, each active sign-in user by email and inbox, the sponsor). The person
+opens the link (same `/claim` page, `purpose: "recovery"` in the status), confirms the address, and must **re-verify at the
+identity's recorded IAL** (the higher of `identity_assurance.ial` and the sponsorship's: IAL above 0 waits at
+`verify_identity` until GU-7, there is no downgrade). The new sign-in is then added to the existing platform user (a sign-in
+that belongs to another user is refused). An identity holding a privileged or high-risk bundle waits a **24 hour
+cooling-off**: the callback answers `/claim?result=cooling_off`, the credential is held in the case (`recovery_cases`), every
+channel is told, and the sweeper binds it when the time is up (`recovery.complete`; the user's sessions end).
+`POST /api/guest-recoveries/{case_id}/cancel` stops a recovery at any time before that (same caller rule);
+`GET /api/guest-recoveries` lists cases (`guests.read`).
+
+**Recovery codes.** For identities of the Tessera-hosted credential service (`Authority.Kind() == "hosted"`, GU-8 builds it)
+`POST /api/me/recovery-codes` returns 10 single-use codes once (`Cache-Control: no-store`); only a tenant-keyed hash of each
+is stored, a new batch voids the old one, and `claim.Service.UseRecoveryCode` spends one atomically.
+
+**UI:** the claim page shows the terms and consent screen (`TermsStep`); Governance → Guest terms lists documents, publishes
+a version and sets the populations (GU-13 does the full UI). Tests: `go test ./internal/api -run 'TestTerms|TestRecovery|TestClaim_Consent'`,
+`./internal/guests/terms`, `./internal/store -run Terms`; `npm test` covers the claim model.
+
+**Deferred:** wiring a recovery code into the hosted service's sign-in (GU-8), identity verification itself (GU-7),
+the full admin and help-desk UI (GU-13), GDPR lawful-basis text per attribute for EU partners, and an acceptance screen
+outside the claim for a guest already blocked (they accept through `/api/me/terms`).
 
 ### Native groups (folders and groups)
 
@@ -2217,7 +2356,7 @@ the right. Arrow keys move between items.
 |---|---|
 | (top) | **Home**, **Inbox** (count) |
 | **Identity** | Users (with *Identity matches*), Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Ownership, Accounts (with *Account matches*), Help desk, Roles, Organizations (live, read-only, derived from departments) |
-| **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
+| **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals), Just-in-time, Access reviews (with *Lifecycle*, *Guest lifecycle* and *Workflows* tabs) |
 | **Protection** | Alerts (alerts, rules, channels), Policies & SoD (violations, policies, what-if simulation, SoD functions, risks and rulesets), Mitigating controls (mitigations, control library), Attribute policies, Access graph (with an *As of* date for *Who can access…*), Evidence packs, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
 | **Settings** | Connections (governed connections and the setup wizard), Flat-file apps, Conditional access (network ranges, policies, device signals), Admin |
 

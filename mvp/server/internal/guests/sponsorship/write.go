@@ -132,6 +132,9 @@ func (s *Service) SponsorExisting(tx *store.TenantTx, by Actor, guestID int64, i
 	if err != nil {
 		return nil, err
 	}
+	if err := Return(tx, guest, by, now); err != nil { // a person who left comes back as themselves
+		return nil, err
+	}
 	intakeID := uuid.NewString()
 	if err := tx.InsertIntake(&store.IntakeRecord{ID: intakeID, Channel: store.ChannelSponsorInvite, MatchMode: store.MatchSelfAsserted,
 		SubmittedBy: by.uid(), SponsorIdentityID: &sp.ID, Status: "resolved", InvitationStatus: store.InvitationReady, CreatedAt: now}); err != nil {
@@ -306,6 +309,15 @@ func (s *Service) settle(tx *store.TenantTx, guestID int64, by Actor, now time.T
 			return nil
 		}
 	}
+	// the HR or student system holds them now (a conversion, design §8.4): the
+	// sponsorship's term gives way to employment and nobody leaves
+	if emp, err := employed(tx, guestID, now); err != nil {
+		return err
+	} else if emp {
+		_, err := lifecycle.Set(tx, guestID, lifecycle.Spec{WorkerType: store.WorkerEmployee, Reason: "converted to employee: " + note},
+			by.lc(), now)
+		return err
+	}
 	if _, ended, err := lifecycle.EndNow(tx, guestID, note, by.lc(), now); err != nil || ended {
 		return err
 	}
@@ -317,4 +329,19 @@ func (s *Service) settle(tx *store.TenantTx, guestID int64, by Actor, now time.T
 		return tx.TerminateIdentity(guestID, now)
 	}
 	return nil
+}
+
+// employed reports whether the person has a running affiliation from the HR or
+// student system.
+func employed(tx *store.TenantTx, guestID int64, now time.Time) (bool, error) {
+	affs, err := tx.AffiliationsFor(guestID)
+	if err != nil {
+		return false, err
+	}
+	for _, a := range affs {
+		if (a.Source == store.AffSourceHRIS || a.Source == store.AffSourceSIS) && affiliations.Effective(a, now) == store.AffActive {
+			return true, nil
+		}
+	}
+	return false, nil
 }

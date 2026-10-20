@@ -1055,6 +1055,73 @@ export interface MatchingSettings {
 export const putMatchingSettings = (s: Pick<MatchingSettings, "auto_link_tier_b" | "require_review_tier_a" | "unmerge_window_days">) =>
   api<MatchingSettings>("/admin/matching", s, "PUT");
 
+// ------------------------------------------------ guest lifecycle (issue #74)
+
+export type GuestLifecycleBucket =
+  | "expiring_30" | "expiring_14" | "expiring_3" | "renewal_requests" | "stepup_required" | "pending_transfer"
+  | "auto_ended" | "suspended" | "dual_status" | "in_grace" | "deprovisioned" | "purged";
+export interface GuestLifecycleSettings {
+  sponsor_reminder_days: number[];
+  guest_reminder_days: number;
+  transfer_deadline_days: number;
+  on_sponsor_departure: "end" | "suspend";
+  conversion_dual_status: "end" | "sponsor_confirms";
+  grace_days: Record<"visitor" | "contractor" | "volunteer" | "partner", number>;
+  retention_days: number;
+  retention_days_visitor: number;
+  keep_rematch_hashes: boolean;
+  updated_at: string | null;
+}
+export interface GuestLifecycleOverview {
+  buckets: GuestLifecycleBucket[];
+  counts: Record<GuestLifecycleBucket, number>;
+  settings: GuestLifecycleSettings;
+}
+export interface GuestLifecycleItem {
+  sponsorship_id?: string;
+  task_id?: string;
+  task_kind?: "sponsor_transfer" | "renewal_request" | "dual_status";
+  guest: { id: number; name: string };
+  sponsor?: { id: number; name: string };
+  population?: string;
+  /** Sponsorship status, or the deprovisioning stage. */
+  status?: string;
+  ends_at?: string;
+  days_left?: number;
+  deadline?: string;
+  outcome?: string;
+  trigger?: string;
+  grace_until?: string;
+  retention_until?: string;
+  held_access?: boolean;
+  required_ial?: number;
+  can_act: boolean;
+}
+export type GuestTaskAction = "accept" | "decline" | "keep" | "confirm" | "dismiss";
+export const guestLifecycle = {
+  resolveTask: (taskId: string, action: GuestTaskAction) =>
+    api<{ id: string; kind: string; sponsorship_id: string; status: string; outcome: string | null }>(
+      `/guest-lifecycle/tasks/${encodeURIComponent(taskId)}/resolve`, { action }),
+  putSettings: (s: Omit<GuestLifecycleSettings, "updated_at">) => api<GuestLifecycleSettings>("/admin/guest-lifecycle", s, "PUT"),
+};
+
+/**
+ * The guest's "request renewal" link (/renew#t=...): public, no session. The answer is the same
+ * whether or not the token was good, so the page says only that the request was received.
+ */
+export async function requestRenewal(slug: string, token: string): Promise<void> {
+  const res = await fetch(`/public/t/${encodeURIComponent(slug)}/guest/renewal-request`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    credentials: "same-origin",
+    cache: "no-store",
+    referrerPolicy: "no-referrer",
+    body: JSON.stringify({ token }),
+  });
+  if (res.status === 429) throw new Error("Too many tries. Wait a while and try again.");
+  if (!res.ok && res.status !== 202) throw new Error("Something went wrong. Try again.");
+}
+
 // ------------------------------------------------ affiliations and identifiers (issue #64)
 
 export type AffiliationType = "employee" | "student" | "applicant" | "admit" | "prehire" | "contractor" | "guest_visitor" | "volunteer" | "partner" | "alum" | "retiree";
@@ -1543,7 +1610,7 @@ export const lifecycle = {
 // ---------------------------------------------------------------- guest sponsorships (issue #65)
 
 export type GuestPopulationKey = "visitor" | "contractor" | "volunteer" | "partner";
-export type SponsorshipStatus = "requested" | "pending_approval" | "active" | "transfer_pending" | "ended" | "revoked" | "rejected";
+export type SponsorshipStatus = "requested" | "pending_approval" | "active" | "transfer_pending" | "suspended" | "ended" | "revoked" | "rejected";
 /** The status, with a running sponsorship told apart as upcoming, active or ending (within 14 days). */
 export type SponsorshipState = SponsorshipStatus | "upcoming" | "ending";
 export interface BundleItem { group_id: number; system: string; name: string; risk: Risk; privileged: boolean }
@@ -1575,8 +1642,12 @@ export interface SponsorshipEvent {
   at: string;
 }
 export type InvitationState = "ready" | "sent" | "claiming" | "expired" | "claimed" | "revoked";
+/** A renewal held until the guest's identity assurance reaches `required_ial` (issue #74). */
+export interface SponsorshipStepup { required_ial: number; requested_ends_at: string; justification: string; requested_at: string }
 export interface Sponsorship {
   id: string;
+  /** Set while a renewal waits for a step-up: the access does not extend meanwhile. */
+  stepup?: SponsorshipStepup;
   status: SponsorshipStatus;
   state: SponsorshipState;
   guest: PersonRef & { email: string | null };
@@ -2151,9 +2222,38 @@ export interface ClaimStatus {
   sponsor: string;
   population: GuestPopulationKey;
   ends_at: string;
-  /** Why the claim waits: "" (it does not), the organization's own set-up, or identity verification. */
-  pending: "" | "organization" | "identity_verification";
+  /**
+   * Why the claim waits: "" (it does not), terms or the attribute-release consent still to answer
+   * (step 5, before the credential), the organization's own set-up, or identity verification.
+   */
+  pending: "" | "terms" | "consent" | "organization" | "identity_verification";
   complete: boolean;
+  /** Only "recovery": the claim page is recovering an existing account, not setting up a new one. */
+  purpose?: "recovery";
+}
+
+/** A terms document the claimant has to read and accept (step 5): the text and its hash, which the acceptance echoes. */
+export interface ClaimTermsDoc {
+  id: string;
+  key: string;
+  version: number;
+  title: string;
+  body: string;
+  sha256: string;
+  state: "accepted" | "grace" | "blocked";
+  due_by: string | null;
+  previously_accepted: boolean;
+}
+export interface ClaimAttribute {
+  name: string;
+  why: string;
+  required: boolean;
+}
+export interface ClaimTerms {
+  step: ClaimStep;
+  terms: ClaimTermsDoc[];
+  /** The attribute-release screen of a federated sign-in; `applies` is false for every other claim. */
+  consent: { applies: boolean; given: boolean; authority?: string; attributes: ClaimAttribute[] };
 }
 export interface ClaimStart {
   /** "check_link" for every link that does not work, whatever the reason; otherwise the first step. */
@@ -2209,6 +2309,12 @@ function claimMessage(status: number, j: any): string {
       return j.message ?? "We could not reach the sign-in service. Try again in a moment.";
     case "wrong_step":
       return "That step is not open yet.";
+    case "terms_required":
+      return "Read and accept the terms first.";
+    case "consent_required":
+      return "Choose what to share first.";
+    case "terms_changed":
+      return "The terms changed while you were reading them. The page has reloaded the current text.";
   }
   return j?.message ?? `Something went wrong (${status}).`;
 }
@@ -2227,9 +2333,55 @@ export const claimApi = {
     claimFetch<{ ok: boolean; step: ClaimStep; message?: string; status?: "redirect"; redirect?: string }>(slug, "POST", "existing-account", { answer }, signer, nonce),
   // "yes" answers {status: "redirect", redirect}: a sign-in as the existing account, which links this
   // invitation to it when it is the account the organization had in mind (and otherwise changes nothing).
+  /** Step 5: the terms still to accept and the consent screen. */
+  terms: (slug: string, signer: ClaimSigner, nonce: string) => claimFetch<ClaimTerms>(slug, "GET", "terms", undefined, signer, nonce),
+  /** Accept the documents as shown ({id, sha256} of each); the credential stays closed until all are accepted. */
+  acceptTerms: (slug: string, signer: ClaimSigner, nonce: string, documents: { id: string; sha256: string }[]) =>
+    claimFetch<{ ok: boolean; remaining: number }>(slug, "POST", "terms/accept", { documents }, signer, nonce),
+  /** The attributes the claimant agrees to release at a federated sign-in (the required ones are always included). */
+  consent: (slug: string, signer: ClaimSigner, nonce: string, attributes: string[]) =>
+    claimFetch<{ ok: boolean }>(slug, "POST", "consent", { attributes }, signer, nonce),
   /** Set up the sign-in: a redirect to the credential authority, or "pending" when the organization has not set one up. */
   credential: (slug: string, signer: ClaimSigner, nonce: string) =>
     claimFetch<{ status: "redirect" | "pending"; redirect?: string; pending?: string; message?: string }>(slug, "POST", "credential", undefined, signer, nonce),
+};
+
+// ---------------------------------------------------------------- guest terms and recovery (issue #73)
+
+/** One version of a terms document (admin list). */
+export interface TermsVersion {
+  id: string;
+  version: number;
+  sha256: string;
+  grace_days: number;
+  created_at: string;
+  created_by: string;
+}
+/** A terms document at its latest version, with where it applies. */
+export interface TermsDocument {
+  key: string;
+  title: string;
+  latest_version: number;
+  body: string;
+  sha256: string;
+  grace_days: number;
+  versions: TermsVersion[];
+  populations: GuestPopulationKey[];
+  bundles: { group_id: number; system: string; name: string }[];
+}
+export const termsAdmin = {
+  /** Publish a new version of a document (the first one when the key is new). */
+  publish: (d: { key: string; title: string; body: string; grace_days?: number }) => api<TermsVersion>("/admin/terms", d),
+  assign: (key: string, a: { populations: GuestPopulationKey[]; bundles: number[] }) =>
+    api<TermsDocument>(`/admin/terms/${encodeURIComponent(key)}/assignments`, a, "PUT"),
+};
+/** A signed-in person's own documents: accepted, in their grace period, or blocking until accepted. */
+export interface MyTerms {
+  documents: ClaimTermsDoc[];
+  blocked: boolean;
+}
+export const myTerms = {
+  accept: (documents: { id: string; sha256: string }[]) => api<MyTerms>("/me/terms/accept", { documents }),
 };
 
 /** "Send me a new link": the answer is the same whether or not an invitation exists. No session, so no proof. */
@@ -2868,11 +3020,11 @@ export interface ProvOpDetail extends ProvOp { payload: { account?: Record<strin
 
 export interface ProvTarget {
   connection_id: string; connection_name: string; system: string; kind: "scim" | "okta" | "fake"; base_url: string;
-  dialect?: "standard" | "entra"; fault?: string; write_back: boolean; has_credential: boolean; credential_version: string | null; updated_at: string;
+  dialect?: "standard" | "entra"; fault?: string; on_deprovision?: "delete"; write_back: boolean; has_credential: boolean; credential_version: string | null; updated_at: string;
 }
 
 /** token is write-only: omit it to keep the stored credential. A change of kind or origin (scheme, host, port) needs a new token (422 credential_required). */
-export interface ProvTargetInput { kind: ProvTarget["kind"]; base_url: string; dialect?: string; fault?: string; token?: string; write_back: boolean }
+export interface ProvTargetInput { kind: ProvTarget["kind"]; base_url: string; dialect?: string; fault?: string; token?: string; write_back: boolean; on_deprovision?: "disable" | "delete" }
 
 export const provisioning = {
   targets: () => api<ProvTarget[]>("/provisioning/targets"),

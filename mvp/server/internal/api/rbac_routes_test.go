@@ -142,6 +142,21 @@ POST   /api/identity-merge-requests/{merge_request_id}/approve identities.merge 
 POST   /api/identity-merge-requests/{merge_request_id}/reject  identities.merge STEP_UP_POLICY  # issue #68
 GET    /api/admin/matching                           matching.configure -  # issue #68
 PUT    /api/admin/matching                           matching.configure STEP_UP_POLICY  # issue #68
+GET    /api/guest-lifecycle                          guests.read     -  # issue #74
+GET    /api/guest-lifecycle/items                    guests.read     -  # issue #74
+GET    /api/guest-lifecycle/tasks                    guests.sponsor  -  # issue #74 (only the tasks the caller may decide)
+POST   /api/guest-lifecycle/tasks/{task_id}/resolve  guests.sponsor  STEP_UP_POLICY  # issue #74 (the manager of the departed sponsor, sponsorships.approve or the sponsor, in the service)
+GET    /api/admin/guest-lifecycle                    guest_lifecycle.configure -  # issue #74
+PUT    /api/admin/guest-lifecycle                    guest_lifecycle.configure STEP_UP_POLICY  # issue #74
+GET    /api/admin/terms                              guests.read     -  # issue #73
+POST   /api/admin/terms                              terms.manage    STEP_UP_POLICY  # issue #73
+PUT    /api/admin/terms/{key}/assignments            terms.manage    STEP_UP_POLICY  # issue #73
+GET    /api/me/terms                                 auth.self        -  # issue #73 (the caller's own person)
+POST   /api/me/terms/accept                          auth.self        -  # issue #73 (the caller's own person)
+POST   /api/me/recovery-codes                        auth.self        -  # issue #73 (hosted identities only)
+POST   /api/guests/{identity_id}/recovery            guests.sponsor  STEP_UP_POLICY  # issue #73 (the guest's sponsor, or guests.recover, in the handler)
+GET    /api/guest-recoveries                         guests.read     -  # issue #73
+POST   /api/guest-recoveries/{case_id}/cancel        guests.sponsor  STEP_UP_POLICY  # issue #73 (the guest's sponsor, or guests.recover, in the handler)
 GET    /api/catalog                                  requests.create -  # issue #164 (?all=1: catalog.manage in the handler)
 PUT    /api/catalog/items/{group_id}                 catalog.manage  STEP_UP_POLICY  # issue #164
 POST   /api/requests                                 requests.create -  # issue #164 (others: requests.create_for_others in the handler)
@@ -426,6 +441,9 @@ POST   /public/t/{slug}/claim/verify/send            public
 POST   /public/t/{slug}/claim/verify/check           public
 GET    /public/t/{slug}/claim/status                 public
 POST   /public/t/{slug}/claim/existing-account       public
+GET    /public/t/{slug}/claim/terms                  public
+POST   /public/t/{slug}/claim/terms/accept           public
+POST   /public/t/{slug}/claim/consent                public
 POST   /public/t/{slug}/claim/credential             public
 POST   /public/t/{slug}/claim/resend                 public
 GET    /api/admin/platform-health                    admin.read      -  # issue #303
@@ -436,6 +454,7 @@ POST   /api/admin/break-glass/registration/options   admin.change.request STEP_U
 POST   /api/admin/break-glass/registration/verify    admin.change.request STEP_UP_ADMIN  # issue #17
 POST   /api/admin/break-glass/actions/{action}       breakglass.recover -  # issue #17
 POST   /api/admin/break-glass/uses/{use_id}/attest   admin.change.request -  # issue #17
+POST   /public/t/{slug}/guest/renewal-request        public  # issue #74: the guest's "request renewal" link, always 202
 `
 
 type designRoute struct {

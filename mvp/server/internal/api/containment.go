@@ -442,11 +442,15 @@ func (s *Server) executeLeaver(r *http.Request, p *params, id int64) (any, error
 		if err != nil {
 			return err
 		}
+		// read before it runs: a leaver or mover who sponsors guests sets transfer tasks going
+		ev, evErr := c.HrisEvent(id)
 		plan, err = jml.ExecuteEvent(c, s.clock(), id, principal(r).User(), pols)
 		var ex *jml.ExistsError
 		if errors.As(err, &ex) {
 			// ExecuteEvent wrote nothing before refusing; commit so the refusal is audited.
 			refusal, err = s.joinerRefused(c, "execute", &id, ex, principal(r).User())
+		} else if err == nil && evErr == nil && ev.IdentityID != nil {
+			_, err = s.guestLife.OnEvent(c, ev.Type, *ev.IdentityID, s.clock().UTC())
 		}
 		return err
 	})
