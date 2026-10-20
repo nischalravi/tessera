@@ -13,7 +13,7 @@ func archiveCovered() map[string]bool {
 	out := map[string]bool{}
 	for _, k := range []string{"RetentionPolicies", "SetRetentionPolicy", "InsertArchiveSegment", "ArchiveSegment", "ArchiveSegments",
 		"AuditArchiveSegments", "OpenArchiveSegments", "MarkArchiveVerified", "MarkArchivePurged", "MarkArchiveFailed", "PurgeArchivedAudit",
-		"ArchiveCandidates", "ArchiveDocument", "ArchiveDelete"} {
+		"ArchiveCandidates", "ArchiveDocument", "ArchiveDelete", "InsertArchiveSegmentItems", "ArchiveSegmentItems"} {
 		out[k] = true // TestIsolation_RetentionAndArchive
 	}
 	return out
@@ -44,6 +44,7 @@ func TestIsolation_RetentionAndArchive(t *testing.T) {
 			Count: 1, Location: store.LocationLocal, ObjectKey: "k", Size: 10, SHA256: "0123456789012345678901234567890123456789012345678901234567890123",
 			CreatedAt: now})
 	})
+	inA(t, f, func(c *store.TenantTx) error { return c.InsertArchiveSegmentItems("seg-a", []string{"7", "8"}) })
 	before := storetest.Dump(t, f.DB, f.A.ID)
 
 	inB(t, f, func(c *store.TenantTx) error {
@@ -67,6 +68,12 @@ func TestIsolation_RetentionAndArchive(t *testing.T) {
 		}
 		if err := c.MarkArchivePurged("seg-a", now); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("MarkArchivePurged(A's) = %v", err)
+		}
+		if its, err := c.ArchiveSegmentItems("seg-a"); err != nil || len(its) != 0 {
+			t.Errorf("ArchiveSegmentItems(A's) = %v, %v", its, err)
+		}
+		if err := c.InsertArchiveSegmentItems("seg-a", []string{"1"}); err == nil {
+			t.Error("B listed an item under A's segment")
 		}
 		if err := c.MarkArchiveFailed("seg-a"); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("MarkArchiveFailed(A's) = %v", err)

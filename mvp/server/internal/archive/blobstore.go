@@ -95,16 +95,13 @@ func (l *LocalStore) Put(_ context.Context, key string, data []byte) error {
 	name := tmp.Name()
 	defer os.Remove(name) // after a successful rename the name is gone and this is a no-op
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
+		return errors.Join(err, tmp.Close())
 	}
 	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return err
+		return errors.Join(err, tmp.Close())
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
+		return errors.Join(err, tmp.Close())
 	}
 	if err := tmp.Close(); err != nil {
 		return err

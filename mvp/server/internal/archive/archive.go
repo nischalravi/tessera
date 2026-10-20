@@ -323,7 +323,7 @@ func (s *Service) runClass(ctx context.Context, t tenancy.ID, class string, cuto
 		}
 	}
 	for i := 0; i < orDefault(s.MaxSegments, defaultSegments); i++ {
-		g, blob, err := s.plan(ctx, t, class, cutoff)
+		g, blob, ids, err := s.plan(ctx, t, class, cutoff)
 		if err != nil {
 			return err
 		}
@@ -336,6 +336,10 @@ func (s *Service) runClass(ctx context.Context, t tenancy.ID, class string, cuto
 		}
 		if err := s.DB.InTenant(ctx, t, func(tx *store.TenantTx) error {
 			if err := tx.InsertArchiveSegment(g); err != nil {
+				return err
+			}
+			// the records it holds: only they are unlocked for delete once it is verified (schema/0403)
+			if err := tx.InsertArchiveSegmentItems(g.ID, ids); err != nil {
 				return err
 			}
 			_, err := audit.Record(ctx, tx, "archive.segment.written", segmentDetail(g), audit.At(s.now()),
@@ -482,8 +486,9 @@ func (s *Service) purge(ctx context.Context, t tenancy.ID, g *store.ArchiveSegme
 
 // plan reads the next batch of a class that is past the cutoff and returns the
 // sealed segment (nil when nothing is due). It writes nothing.
-func (s *Service) plan(ctx context.Context, t tenancy.ID, class string, cutoff time.Time) (*store.ArchiveSegment, []byte, error) {
+func (s *Service) plan(ctx context.Context, t tenancy.ID, class string, cutoff time.Time) (*store.ArchiveSegment, []byte, []string, error) {
 	var lines [][]byte
+	var ids []string
 	g := &store.ArchiveSegment{ID: uuid.NewString(), Class: class, Status: store.SegmentWritten, Location: s.Store.Location(),
 		CreatedAt: s.now()}
 	err := s.DB.ReadTenant(ctx, t, func(tx *store.TenantTx) error {
@@ -491,26 +496,26 @@ func (s *Service) plan(ctx context.Context, t tenancy.ID, class string, cutoff t
 		if class == store.ClassAudit {
 			lines, err = s.planAudit(tx, g, cutoff)
 		} else {
-			lines, err = s.planDocs(tx, g, cutoff)
+			lines, ids, err = s.planDocs(tx, g, cutoff)
 		}
 		return err
 	})
 	if err != nil || len(lines) == 0 {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	g.Count = int64(len(lines))
 	g.ObjectKey = objectKey(t, class, g.ID)
 	plain := append(bytes.Join(lines, []byte("\n")), '\n')
 	zipped, err := gz(plain)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	blob, err := s.Sealer.Seal(zipped, segmentAAD(t, g))
 	if err != nil {
-		return nil, nil, fmt.Errorf("seal segment: %w", err)
+		return nil, nil, nil, fmt.Errorf("seal segment: %w", err)
 	}
 	g.Size, g.SHA256 = int64(len(blob)), sha256hex(blob)
-	return g, blob, nil
+	return g, blob, ids, nil
 }
 
 // planAudit takes the oldest events past the cutoff that no segment covers.
@@ -572,24 +577,25 @@ var timeKey = map[string]string{store.ClassJobRuns: "started_at", store.ClassOut
 	store.ClassRequests: "requested_at", store.ClassCampaigns: "created_at"}
 
 // planDocs takes the oldest closed records past the cutoff with their dependants.
-func (s *Service) planDocs(tx *store.TenantTx, g *store.ArchiveSegment, cutoff time.Time) ([][]byte, error) {
-	ids, err := tx.ArchiveCandidates(g.Class, cutoff, orDefault(s.DocBatch, defaultDocBatch))
+func (s *Service) planDocs(tx *store.TenantTx, g *store.ArchiveSegment, cutoff time.Time) ([][]byte, []string, error) {
+	cands, err := tx.ArchiveCandidates(g.Class, cutoff, orDefault(s.DocBatch, defaultDocBatch))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var lines [][]byte
+	var ids []string
 	size := 0
-	for _, id := range ids {
+	for _, id := range cands {
 		d, err := tx.ArchiveDocument(g.Class, id)
 		if errors.Is(err, store.ErrNotFound) {
 			continue
 		}
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		b, err := json.Marshal(d)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if len(lines) > 0 && size+len(b) > orDefault(s.MaxPlain, defaultMaxPlain) {
 			break
@@ -600,12 +606,13 @@ func (s *Service) planDocs(tx *store.TenantTx, g *store.ArchiveSegment, cutoff t
 		}
 		g.RangeTo = at
 		lines = append(lines, b)
+		ids = append(ids, d.ID)
 		size += len(b) + 1
 	}
 	if g.RangeFrom == "" {
 		g.RangeFrom, g.RangeTo = "-", "-"
 	}
-	return lines, nil
+	return lines, ids, nil
 }
 
 // ---------------------------------------------------------------- admin checks

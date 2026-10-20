@@ -1,4 +1,5 @@
--- Postgres dialect of schema/0402_archive_guards.sql: the delete guards of archived records.
+-- Postgres dialect of schema/0402_archive_guards.sql: the delete guard of archived audit events
+-- (the request and campaign tables are guarded per record by 0403).
 --
 -- audit_events: the application role has no DELETE on it (0900_roles.sql revokes it) and the
 -- append-only trigger of 0004 stays in spirit; the only way to remove an event is
@@ -20,12 +21,6 @@ BEGIN
 		END IF;
 		RAISE EXCEPTION 'audit_events is append-only' USING ERRCODE = 'integrity_constraint_violation';
 	END IF;
-	-- the request event log, and the frozen review population of a campaign (0350)
-	IF EXISTS (SELECT 1 FROM archive_segments s
-			WHERE s.tenant_id = OLD.tenant_id AND s.status = 'verified'
-				AND s.class = CASE TG_TABLE_NAME WHEN 'access_request_events' THEN 'requests' ELSE 'review_campaigns' END) THEN
-		RETURN OLD;
-	END IF;
 	RAISE EXCEPTION '% is append-only', TG_TABLE_NAME USING ERRCODE = 'integrity_constraint_violation';
 END
 $fn$;
@@ -33,18 +28,6 @@ $fn$;
 
 DROP TRIGGER IF EXISTS audit_events_no_delete ON audit_events;
 CREATE TRIGGER audit_events_no_delete BEFORE DELETE ON audit_events
-	FOR EACH ROW EXECUTE FUNCTION tessera_guard_archived_delete();
-DROP TRIGGER IF EXISTS access_request_events_no_delete ON access_request_events;
-CREATE TRIGGER access_request_events_no_delete BEFORE DELETE ON access_request_events
-	FOR EACH ROW EXECUTE FUNCTION tessera_guard_archived_delete();
-DROP TRIGGER IF EXISTS review_populations_no_delete ON review_populations;
-CREATE TRIGGER review_populations_no_delete BEFORE DELETE ON review_populations
-	FOR EACH ROW EXECUTE FUNCTION tessera_guard_archived_delete();
-DROP TRIGGER IF EXISTS review_population_rows_no_delete ON review_population_rows;
-CREATE TRIGGER review_population_rows_no_delete BEFORE DELETE ON review_population_rows
-	FOR EACH ROW EXECUTE FUNCTION tessera_guard_archived_delete();
-DROP TRIGGER IF EXISTS review_auto_decisions_no_delete ON review_auto_decisions;
-CREATE TRIGGER review_auto_decisions_no_delete BEFORE DELETE ON review_auto_decisions
 	FOR EACH ROW EXECUTE FUNCTION tessera_guard_archived_delete();
 
 -- +goose StatementBegin

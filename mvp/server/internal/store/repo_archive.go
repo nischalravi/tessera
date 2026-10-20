@@ -66,6 +66,10 @@ var (
 			first_hash, last_hash, location, object_key, size_bytes, sha256, created_at)
 		VALUES (@id, @tenant, @class, 'written', @seq_from, @seq_to, @range_from, @range_to, @item_count, @prev_hash,
 			@first_hash, @last_hash, @location, @object_key, @size_bytes, @sha256, @created_at)`)
+	archiveItemInsert = tq("archive_segment_items.insert", `
+		INSERT INTO archive_segment_items (tenant_id, segment_id, item_id) VALUES (@tenant, @segment_id, @item_id)`)
+	archiveItemList = tq("archive_segment_items.list", `
+		SELECT i.item_id FROM archive_segment_items i WHERE i.tenant_id = @tenant AND i.segment_id = @segment_id ORDER BY i.item_id`)
 	archiveSegmentGet = tq("archive_segments.get", `
 		SELECT `+archiveSegmentCols+` FROM archive_segments g WHERE g.tenant_id = @tenant AND g.id = @id`)
 	archiveSegmentList = tq("archive_segments.list", `
@@ -121,6 +125,36 @@ func (tx *TenantTx) InsertArchiveSegment(g *ArchiveSegment) error {
 		sql.Named("object_key", g.ObjectKey), sql.Named("size_bytes", g.Size), sql.Named("sha256", g.SHA256),
 		sql.Named("created_at", RT(g.CreatedAt)))
 	return err
+}
+
+// InsertArchiveSegmentItems records which requests or campaigns a segment holds (classes requests and
+// review_campaigns), in the transaction that catalogues it. Only a verified segment's items unlock the
+// delete guards of their append-only rows (schema/0403).
+func (tx *TenantTx) InsertArchiveSegmentItems(segmentID string, ids []string) error {
+	for _, id := range ids {
+		if _, err := tx.exec(archiveItemInsert, sql.Named("segment_id", segmentID), sql.Named("item_id", id)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ArchiveSegmentItems lists the request or campaign ids of a segment.
+func (tx *TenantTx) ArchiveSegmentItems(segmentID string) ([]string, error) {
+	rows, err := tx.query(archiveItemList, sql.Named("segment_id", segmentID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }
 
 // ArchiveSegment returns one segment; ErrNotFound for another tenant's.

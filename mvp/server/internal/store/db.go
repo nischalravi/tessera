@@ -201,7 +201,7 @@ var tables = []string{
 	// durable job queue (schema/0320_queue.sql)
 	"queue_jobs", "queue_schedules",
 	// log retention settings and archive segments (schema/0400, 0401; issue #298)
-	"retention_policies", "archive_segments",
+	"retention_policies", "archive_segments", "archive_segment_items",
 	// configuration transport (schema/0211_config_transport.sql)
 	"config_signing_keys", "config_trusted_signers", "config_imports",
 	// native groups (schema/0280_groups.sql, 0284_groups_engine.sql)
