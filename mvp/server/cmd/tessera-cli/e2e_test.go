@@ -154,8 +154,12 @@ func (w *world) runWith(stdout *syncBuf, args ...string) result {
 		sleep: func(ctx context.Context, d time.Duration) error {
 			time.Sleep(10 * time.Millisecond)
 			if ch := w.answered.Load(); ch != nil {
+				// The 30s cap only bounds a browser step that never answers; past
+				// it the clock moves on and the code can expire as it did before.
 				select {
 				case <-*ch:
+				case <-ctx.Done():
+					return ctx.Err()
 				case <-time.After(30 * time.Second):
 				}
 			}
@@ -194,6 +198,8 @@ func (w *world) login(email string, roles []auth.Role, decision string, extra ..
 	answered := make(chan struct{})
 	w.answered.Store(&answered)
 	defer w.answered.Store(nil)
+	release := sync.OnceFunc(func() { close(answered) })
+	defer release() // on every exit path, so the CLI never waits out the cap
 	done := make(chan result, 1)
 	go func() {
 		args := append([]string{"login", "--server", w.srv.URL, "--tenant", w.slug}, extra...)
@@ -203,12 +209,11 @@ func (w *world) login(email string, roles []auth.Role, decision string, extra ..
 	for {
 		if code := codeRE.FindString(out.String()); code != "" {
 			w.browser(email, roles, code, decision)
-			close(answered)
+			release()
 			break
 		}
 		select {
 		case r := <-done: // the command ended without printing a code
-			close(answered)
 			return r
 		default:
 		}
