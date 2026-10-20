@@ -293,6 +293,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if strings.HasPrefix(rt.Pattern, "/api/requests/{request_id}") {
 			continue // TestRequestsAPI_CrossTenant (a UUID, not a fixture id)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/questionnaires/{id}") {
+			continue // TestQuestionnairesAPI_CrossTenant (a UUID, not a fixture id)
+		}
 		if strings.HasPrefix(rt.Pattern, "/api/roles/{role_id}") || strings.HasPrefix(rt.Pattern, "/api/role-requests/{request_id}") {
 			continue // TestRolesAPI_CrossTenant (UUIDs, not fixture ids)
 		}
@@ -562,6 +565,9 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		}
 		if path == "/api/request-drafts/{draft_id}" {
 			continue // TestRequestDraftsAPI (a UUID, private to its user)
+		}
+		if path == "/api/questionnaires/{id}" {
+			continue // TestQuestionnairesAPI_CrossTenant (a UUID, not a fixture id)
 		}
 		if rp, ok := rotationGetPaths(f.B.Refs)[path]; ok {
 			path = rp // tenant B's own rotation ids

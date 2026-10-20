@@ -32,16 +32,18 @@ const (
 	FileItems      = "review_items.csv"
 	FilePrivileged = "privileged_access.csv"
 	FileRevoked    = "revocations.csv"
+	// FileQuestionnaires holds the answers given to questionnaires on requests and review decisions (issue #298).
+	FileQuestionnaires = "questionnaire_answers.csv"
 )
 
 var frameworks = []Framework{
 	{ID: "soc2", Name: "SOC 2 (Trust Services Criteria)", Controls: []Control{
 		{"CC6.1", "Logical access: identification, authentication, restriction", []string{FileUsers, FilePrivileged}},
-		{"CC6.2", "Registration and authorization before credentials; removal when access is no longer needed", []string{FileUsers, FileJML}},
+		{"CC6.2", "Registration and authorization before credentials; removal when access is no longer needed", []string{FileUsers, FileJML, FileQuestionnaires}},
 		{"CC6.3", "Access modification and removal; periodic review", []string{FileJML, FileCampaigns, FileItems, FileRevoked}},
 	}, Notes: []string{"SOC 2 sets no review frequency; the auditor tests the one the company defines."}},
 	{ID: "sox_itgc", Name: "SOX ITGC (logical access)", Controls: []Control{
-		{"ITGC-Provisioning", "New access approved before grant", []string{FileUsers}},
+		{"ITGC-Provisioning", "New access approved before grant", []string{FileUsers, FileQuestionnaires}},
 		{"ITGC-Termination", "Terminated users removed timely", []string{FileJML, FileRevoked}},
 		{"ITGC-Review", "Periodic user access recertification", []string{FileCampaigns, FileItems}},
 		{"ITGC-Privileged", "Privileged access restricted and reviewed", []string{FilePrivileged}},
@@ -49,7 +51,7 @@ var frameworks = []Framework{
 	{ID: "iso27001", Name: "ISO/IEC 27001:2022 Annex A", Controls: []Control{
 		{"A.5.15", "Access control", []string{FileUsers}},
 		{"A.5.16", "Identity management", []string{FileUsers}},
-		{"A.5.18", "Access rights: provisioning, review, removal", []string{FileJML, FileCampaigns, FileItems, FileRevoked}},
+		{"A.5.18", "Access rights: provisioning, review, removal", []string{FileJML, FileCampaigns, FileItems, FileRevoked, FileQuestionnaires}},
 		{"A.8.2", "Privileged access rights", []string{FilePrivileged}},
 	}, Notes: nil},
 	{ID: "pci_dss_v4", Name: "PCI DSS v4.0.1 (requirements 7 and 8)", Controls: []Control{

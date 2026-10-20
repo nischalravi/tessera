@@ -25,6 +25,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
+	"github.com/nischalravi/tessera/mvp/server/internal/questionnaires"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/reconcile"
 	"github.com/nischalravi/tessera/mvp/server/internal/reviews"
@@ -1539,6 +1540,8 @@ var reviewDecisionFields = []field{
 	{name: "comment", kind: kStr, nullable: true, def: nil},
 	// revoking a rule membership: exclude the person from the rule, or flag it to the role owner (issue #214)
 	{name: "rule_action", kind: kLiteral, nullable: true, def: nil, lits: []string{"exclude", "flag"}},
+	// the answers to the campaign's questionnaire: question id -> value (issue #298)
+	{name: "answers", kind: kDict, nullable: true, def: nil},
 }
 
 func (s *Server) reviewDecide(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
@@ -1560,6 +1563,10 @@ func (s *Server) reviewDecide(_ http.ResponseWriter, r *http.Request, p *params)
 		}
 	}
 	choice, _ := body["rule_action"].(string)
+	checked, err := reviewAnswers(store.TxFrom(r.Context()), id, body["answers"])
+	if err != nil {
+		return nil, err
+	}
 	it, resolution, err := reviews.DecideItem(store.TxFrom(r.Context()), s.clock(), id, body["decision"].(string), principal(r).User(), comment, choice)
 	if errors.Is(err, reviews.ErrUnknownItem) {
 		return nil, errStatus(http.StatusNotFound, "unknown review item")
@@ -1593,6 +1600,16 @@ func (s *Server) reviewDecide(_ http.ResponseWriter, r *http.Request, p *params)
 	}
 	if err != nil {
 		return nil, reqErr(err) // a refusal of the role service keeps its status and code
+	}
+	if len(checked) > 0 { // the reviewer's answers, with their hash in the audit ledger (issue #298)
+		tx, by, now := store.TxFrom(r.Context()), principal(r).User(), s.clock()
+		if err := questionnaires.Record(tx, store.QSubjectReviewItem, strconv.FormatInt(id, 10), checked, by.Display, now); err != nil {
+			return nil, err
+		}
+		if err := tx.Audit(now, by.Display, "review.answers", ojson.Object{{Key: "item_id", Value: id},
+			{Key: "decision", Value: body["decision"]}, {Key: "questionnaires", Value: questionnaires.AuditDetail(checked)}}); err != nil {
+			return nil, err
+		}
 	}
 	out := ojson.Object{{Key: "id", Value: it.ID}, {Key: "decision", Value: it.Decision}}
 	if resolution != "" { // a role membership: what the revoke did

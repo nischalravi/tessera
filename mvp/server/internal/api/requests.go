@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/questionnaires"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/requests"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -155,7 +156,9 @@ type lineView struct {
 	ExpiresAt      *time.Time  `json:"expires_at"`
 	ClosedAt       *time.Time  `json:"closed_at"`
 	Events         []lineEvent `json:"events,omitempty"`
-	Stages         []stageView `json:"stages"`
+	// Questionnaires are the requester's answers (issue #298), with the questions as asked.
+	Questionnaires []questionnaires.Answered `json:"questionnaires,omitempty"`
+	Stages         []stageView               `json:"stages"`
 	// What the signed-in user may do with the line (the API checks again).
 	CanApprove bool `json:"can_approve"`
 	CanCancel  bool `json:"can_cancel"`
@@ -322,6 +325,10 @@ func (s *Server) lineView(r *http.Request, v *viewer, l *store.RequestLine, me r
 	out.CanCancel = l.Status == store.RequestPending && l.RequestedBy == me.UserID.String()
 	out.CanRemove = l.Status == store.RequestApproved && (decider || mine)
 	if withEvents {
+		// what the requester answered, for the approvers (issue #298)
+		if out.Questionnaires, err = questionnaires.AnswersFor(v.tx, store.QSubjectRequestLine, l.ID); err != nil {
+			return out, err
+		}
 		evs, err := v.tx.RequestEvents(l.ID)
 		if err != nil {
 			return out, err
@@ -483,6 +490,8 @@ type submitBody struct {
 	Justification  string   `json:"justification"`
 	DurationHours  *float64 `json:"duration_hours"`
 	Attachments    []string `json:"attachments"`
+	// answers to the questionnaires the items ask: questionnaire id -> question id -> value (issue #298)
+	Answers map[string]map[string]any `json:"answers"`
 }
 
 func (s *Server) submitRequest(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
@@ -496,7 +505,7 @@ func (s *Server) submitRequest(_ http.ResponseWriter, r *http.Request, _ *params
 	}
 	tx := store.TxFrom(r.Context())
 	batch, lines, err := requests.Submit(tx, requests.Submission{Beneficiaries: b.BeneficiaryIDs, Items: b.CatalogItemIDs,
-		Justification: b.Justification, DurationHours: b.DurationHours, Attachments: b.Attachments}, by, s.can(r, auth.PermRequestsCreateOthers), s.clock().UTC())
+		Justification: b.Justification, DurationHours: b.DurationHours, Attachments: b.Attachments, Answers: b.Answers}, by, s.can(r, auth.PermRequestsCreateOthers), s.clock().UTC())
 	if err != nil {
 		return nil, reqErr(err)
 	}

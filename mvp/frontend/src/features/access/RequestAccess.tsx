@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Layers, Minus, Plus, Search, ShieldAlert, ShoppingCart, Timer, X } from "lucide-react";
-import { BusinessRole, CatalogView, ConnectorRow, Group, IdentityRow, DraftItem, RequestDraft, Risk, RequestSettingsView, RolesView, SimResult, api, draftPath, requestDrafts, requestSettingsPath, roles as roleApi, simulate, submitRequest, useApi } from "../../api";
+import { AnswersByQuestionnaire, BusinessRole, CatalogView, QuestionnaireNeed, ConnectorRow, Group, IdentityRow, DraftItem, RequestDraft, Risk, RequestSettingsView, RolesView, SimResult, api, draftPath, neededPath, requestDrafts, requestSettingsPath, roles as roleApi, simulate, submitRequest, useApi } from "../../api";
 import { DEFAULT_REQUEST_SETTINGS, attachmentError, defaultDurationLabel, durationChoices, durationRequired, effectiveMaxHours, forOthersNote, justificationError, justificationHint, parseAttachments } from "./requestSettings";
 import { SodWarning } from "./SodWarning";
+import { QuestionnaireForm, formReady } from "./QuestionnaireForm";
+import { answersPayload, mergeNeeds } from "../governance/questionnaireModel";
 import { Badge, Button, Callout, EmptyState, FilterChips, Loading, Page, Segmented, Skeleton, useToast } from "../../components";
 
 /** What a catalog card stands for: one group (an entitlement) or one business role. */
@@ -158,6 +160,9 @@ export function RequestAccess() {
   const { data: rs } = useApi<RequestSettingsView>(requestSettingsPath);
   const set = rs ?? DEFAULT_REQUEST_SETTINGS;
   const [draftId, setDraftId] = useState<string | undefined>();
+  // the questionnaires the cart asks (Governance → Questionnaires): the items', and each role's; null while loading
+  const [answers, setAnswers] = useState<AnswersByQuestionnaire>({});
+  const [asked, setAsked] = useState<{ items: QuestionnaireNeed[]; roles: Record<string, QuestionnaireNeed[]> } | null>({ items: [], roles: {} });
 
   useEffect(() => {
     if (forIds.length) {
@@ -202,6 +207,31 @@ export function RequestAccess() {
   const maxHours = effectiveMaxHours(itemMaxHours, set);
   const catalogCart = cart.filter((c) => c.catalogId);
   const itemsHaveDefaults = catalogCart.length > 0 && catalogCart.every((c) => c.defaultHours != null);
+  const askSig = catalogCart.map((c) => c.catalogId).join(",") + "|" + cart.filter((c) => !c.catalogId).map((c) => c.role!.id).join(",");
+  useEffect(() => {
+    const itemIds = catalogCart.map((c) => c.catalogId!);
+    const roleIds = cart.filter((c) => !c.catalogId).map((c) => c.role!.id);
+    if (!itemIds.length && !roleIds.length) {
+      setAsked({ items: [], roles: {} });
+      return;
+    }
+    let alive = true;
+    setAsked(null);
+    (async () => {
+      try {
+        const get = async (q: Parameters<typeof neededPath>[0]) => (await api<{ questionnaires: QuestionnaireNeed[] }>(neededPath(q))).questionnaires;
+        const items = itemIds.length ? await get({ catalogItemIds: itemIds }) : [];
+        const roles: Record<string, QuestionnaireNeed[]> = {};
+        for (const id of roleIds) roles[id] = await get({ roleId: id });
+        if (alive) setAsked({ items, roles });
+      } catch {
+        if (alive) setAsked({ items: [], roles: {} }); // the server asks again on submit
+      }
+    })();
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [askSig]);
+  const needs = mergeNeeds([asked?.items ?? [], ...Object.values(asked?.roles ?? {})]);
   useEffect(() => {
     if (duration != null && maxHours != null && duration > maxHours) setDuration(null);
   }, [maxHours, duration]);
@@ -257,19 +287,21 @@ export function RequestAccess() {
           justification: justification.trim(),
           duration_hours: duration,
           ...(set.attachments_allowed && attachments.length ? { attachments } : {}),
+          answers: answersPayload(asked?.items ?? [], answers),
         });
         n += res.lines.length;
       }
       // a role is requested per person (one approval assigns the whole bundle)
       for (const c of roles) {
         for (const b of beneficiaries) {
-          await roleApi.request(c.role!.id, b.id, justification.trim());
+          await roleApi.request(c.role!.id, b.id, justification.trim(), answersPayload(asked?.roles[c.role!.id] ?? [], answers));
           n++;
         }
       }
       if (draftId) await requestDrafts.remove(draftId).catch(() => undefined); // the request is in; a draft left behind is harmless
       toast(`Submitted ${n} request${n === 1 ? "" : "s"}. Approvers can see ${n === 1 ? "it" : "them"} now.`);
       setCart([]);
+      setAnswers({});
       setJustification("");
       setDraftId(undefined);
       nav("/access/requests");
@@ -284,7 +316,8 @@ export function RequestAccess() {
   const justError = justificationError(set, justification, rs?.max_justification_length);
   const attachError = attachmentError(set, attachments);
   const needsDuration = catalogCart.length > 0 && duration === null && durationRequired(set, itemsHaveDefaults);
-  const canSubmit = cart.length > 0 && beneficiaries.length > 0 && !justError && !attachError && !needsDuration && !busy;
+  const answersReady = asked !== null && formReady(needs, answers);
+  const canSubmit = cart.length > 0 && beneficiaries.length > 0 && !justError && !attachError && !needsDuration && answersReady && !busy;
   const kinds: { id: CatalogKind; label: string; count?: number }[] = [
     { id: "all", label: "All", count: catalog?.length },
     { id: "role", label: "Roles", count: catalog?.filter((c) => c.target.kind === "role").length },
@@ -402,6 +435,9 @@ export function RequestAccess() {
                 <span className="hint" id="req-att-hint">{attachError ?? `Links or ids, at most ${rs?.max_attachments ?? 5}. Approvers see them. Files are not uploaded.`}</span>
               </label>
             )}
+            {cart.length > 0 && asked === null && <p className="small muted" role="status">Checking what approvers ask…</p>}
+            {needs.length > 0 && <QuestionnaireForm needs={needs} value={answers} onChange={setAnswers} disabled={busy} />}
+            {needs.length > 0 && !answersReady && <p className="hint" role="status">Answer the required questions to submit.</p>}
             <SodWarning beneficiaryIds={beneficiaries.map((b) => b.id)} catalogIds={cart.flatMap((c) => (c.catalogId ? [c.catalogId] : []))} durationHours={duration} />
             {groups && <RiskPreview beneficiaries={beneficiaries} cart={cart} groups={groups} />}
             {cart.some((c) => !c.catalogId) && <Callout tone="neutral">A role is one request per person: approving it grants every entitlement in the role.</Callout>}
