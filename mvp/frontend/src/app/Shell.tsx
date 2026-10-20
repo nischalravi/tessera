@@ -137,7 +137,7 @@ function GlobalSearch() {
           aria-activedescendant={show && results.length ? `gs-${active}` : undefined}
           autoComplete="off"
         />
-        <button type="button" className="kbd-btn hide-narrow" onClick={() => palette.open(q)} aria-label="Open command palette" title="Command palette">
+        <button type="button" className="kbd-btn hide-narrow" onClick={() => palette.open(q)} aria-label={`${MOD} K, open command palette`} title="Command palette">
           <kbd>{MOD} K</kbd>
         </button>
       </label>
@@ -318,9 +318,10 @@ function UserMenu() {
         { label: "Sign out", onSelect: () => { signOut(); } },
       ]}
       trigger={(t) => (
-        <button type="button" className="me" aria-label={`User menu: ${name}, ${session.tenant.name}, viewing as ${p.label}`} {...t}>
+        <button type="button" className="me" {...t}>
+          <span className="sr-only">User menu: </span>
           <span className="tb-hide-sm">
-            {name}
+            {name}{" "}
             <small>{session.tenant.name} · {p.label}</small>
           </span>
           <span className="avatar" aria-hidden>{initials(name)}</span>
