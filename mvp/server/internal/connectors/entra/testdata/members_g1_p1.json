@@ -1,0 +1,6 @@
+{
+  "@odata.nextLink": "{{BASE}}/v1.0/groups/bbbbbbbb-0000-4000-8000-000000000001/members?$skiptoken=m2",
+  "value": [
+    {"@odata.type": "#microsoft.graph.user", "id": "aaaaaaaa-0000-4000-8000-000000000001"}
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#users",
+  "value": [
+    {
+      "id": "aaaaaaaa-0000-4000-8000-000000000003",
+      "displayName": "Cy Guest",
+      "userPrincipalName": "cy_guest.example.net#EXT#@fixture.onmicrosoft.com",
+      "mail": "cy@guest.example.net",
+      "accountEnabled": false,
+      "createdDateTime": "2025-09-01T12:00:00Z",
+      "employeeId": null,
+      "userType": "Guest"
+    },
+    {
+      "id": "not-a-guid",
+      "displayName": "Malformed Id"
+    }
+  ],
+  "@odata.deltaLink": "{{BASE}}/v1.0/users/delta?$deltatoken=dt-users-1"
+}

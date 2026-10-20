@@ -1,0 +1,35 @@
+{
+  "id": "probe-denied-identity",
+  "description": "The probe is denied and names the identity-based policy; the engine denies as well.",
+  "synthetic": true,
+  "spec": {
+    "id": "probe-denied-identity",
+    "stratum": "S4",
+    "fixture_version": "synthetic-1",
+    "principal_arn": "arn:aws:iam::111111111111:user/alice",
+    "policy_source_arn": "",
+    "action": "s3:PutObject",
+    "resource": "arn:aws:s3:::tsr-bkt/k",
+    "identity": [
+      "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"s3:GetObject\",\"Resource\":\"arn:aws:s3:::tsr-bkt/*\"}]}"
+    ],
+    "boundary": null,
+    "scp_levels": null,
+    "resource_policy": "",
+    "resource_owner": "",
+    "context": null,
+    "exclusions": null,
+    "features": [
+      "ambiguity_probe"
+    ]
+  },
+  "probe_responses": [
+    {
+      "family": "s3",
+      "success": false,
+      "error_code": "AccessDenied",
+      "message": "User: arn:aws:iam::111111111111:user/alice is not authorized to perform: s3:PutObject because no identity-based policy allows the s3:PutObject action"
+    }
+  ],
+  "expect": {}
+}

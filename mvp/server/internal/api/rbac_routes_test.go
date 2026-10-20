@@ -196,6 +196,11 @@ POST   /api/identities/{identity_id}/enable          identities.contain STEP_UP_
 GET    /api/identities/{identity_id}/disables        graph.read      -  # wire-previews
 POST   /api/containment-retries/{retry_id}/retry-now identities.contain STEP_UP_POLICY  # issue #106
 PUT    /api/connections/{id}/containment-credential  connections.manage STEP_UP_POLICY  # issue #106
+GET    /api/access/as-of                             graph.read      -  # issue #111
+GET    /api/evidence/packs                           audit.read      -  # issue #111
+POST   /api/evidence/packs                           audit.read      -  # issue #111
+GET    /api/evidence/packs/{pack_id}                 audit.read      -  # issue #111
+GET    /api/evidence/packs/{pack_id}/download        audit.read      -  # issue #111
 POST   /api/connections/{id}/validate                connections.manage -
 GET    /api/connections/{id}/validations/{run}       connections.read   -
 POST   /api/connections/{id}/dry-run                 connections.manage -
@@ -227,10 +232,27 @@ POST   /api/sod/rulesets/{ruleset_id}/retire         sod.manage      STEP_UP_POL
 GET    /api/sod/rulesets/{ruleset_id}/export         graph.read      -  # issue #298
 POST   /api/sod/import-legacy                        sod.manage      STEP_UP_POLICY  # issue #298
 GET    /api/sod/violations                           graph.read      -  # issue #298
+GET    /api/sod/controls                             graph.read      -  # issue #298
+POST   /api/sod/controls                             sod.manage      STEP_UP_POLICY  # issue #298
+GET    /api/sod/controls/{control_id}                graph.read      -  # issue #298
+PUT    /api/sod/controls/{control_id}                sod.manage      STEP_UP_POLICY  # issue #298
+POST   /api/sod/controls/{control_id}/retire         sod.manage      STEP_UP_POLICY  # issue #298
+GET    /api/sod/mitigations                          graph.read      -  # issue #298
+POST   /api/sod/mitigations                          sod.mitigate    -  # issue #298
+POST   /api/sod/mitigations/{mitigation_id}/approve  sod.approve     STEP_UP_POLICY  # issue #298 (not the requester)
+POST   /api/sod/mitigations/{mitigation_id}/reject   sod.approve     -  # issue #298 (not the requester)
+POST   /api/sod/mitigations/{mitigation_id}/cancel   sod.mitigate    -  # issue #298 (the requester)
+POST   /api/sod/mitigations/{mitigation_id}/revoke   requests.create -  # issue #298 (risk owner or sod.approve; step-up in the handler)
+POST   /api/sod/violations/escalate                  sod.mitigate    -  # issue #298
+POST   /api/sod/violations/revoke                    graph.read      -  # issue #298 (applying: grants.revoke and step-up in the handler)
+GET    /api/sod/review-context                       graph.read      -  # issue #298
 POST   /api/sod/simulate                             requests.create -  # issue #298
 GET    /api/jobs                                     jobs.read       -  # issue #172
 GET    /api/jobs/{job_id}                            jobs.read       -  #
 POST   /api/jobs/{job_id}/retry                      jobs.read       -  # (the replayed route's own permission and step-up apply)
+GET    /api/queue/jobs                               jobs.read       -  # issue #300
+GET    /api/queue/schedules                          jobs.read       -  #
+POST   /api/queue/jobs/{job_id}/retry                jobs.manage     STEP_UP_POLICY  #
 GET    /api/provisioning/targets                     provisioning.read   -  # issue #103
 PUT    /api/provisioning/targets/{id}                connections.manage  STEP_UP_POLICY
 DELETE /api/provisioning/targets/{id}                connections.manage  STEP_UP_POLICY
@@ -248,6 +270,15 @@ DELETE /api/config/trusted-signers/{kid}             config.transport STEP_UP_PO
 POST   /api/config/import/plan                       config.transport -  #
 POST   /api/config/import/apply                      config.transport STEP_UP_POLICY #
 GET    /api/config/imports                           admin.read      -  #
+GET    /api/auth/oauth2/{connection_id}/callback     public
+GET    /t/{slug}/.well-known/oauth-authorization-server public
+GET    /t/{slug}/.well-known/jwks.json               public
+GET    /.well-known/oauth-protected-resource         public
+POST   /t/{slug}/oauth/device_authorization          public
+POST   /t/{slug}/oauth/token                         public
+POST   /t/{slug}/oauth/revoke                        public
+POST   /api/auth/device/lookup                       auth.self       -  # issue #14
+POST   /api/auth/device/approve                      auth.self       STEP_UP_ADMIN  # issue #14: max_age 300 s
 GET    /api/groups/folders                           groups.admin    -  # issue #44
 POST   /api/groups/folders                           groups.admin    -  # issue #44
 GET    /api/groups/folders/{id}                      groups.admin    -  # issue #44
@@ -273,7 +304,6 @@ GET    /api/auth/login                               public
 GET    /api/auth/oidc/{connection_id}/callback       public
 GET    /api/auth/saml/{connection_id}/metadata       public
 POST   /api/auth/saml/{connection_id}/acs            public
-GET    /api/auth/oauth2/{connection_id}/callback     public
 GET    /t/{slug}/bootstrap                           public
 GET    /api/admin/users                              admin.read      -  # issue #16
 POST   /api/admin/users/{user_id}/disable            admin.users.disable STEP_UP_ADMIN  # issue #16

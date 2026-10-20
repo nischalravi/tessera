@@ -1,0 +1,8 @@
+{
+  "value": [
+    {"@odata.type": "#microsoft.graph.group", "id": "bbbbbbbb-0000-4000-8000-000000000001"},
+    {"@odata.type": "#microsoft.graph.user", "id": "aaaaaaaa-0000-4000-8000-000000000003"},
+    {"@odata.type": "#microsoft.graph.group", "id": "bbbbbbbb-0000-4000-8000-000000000002"},
+    {"@odata.type": "#microsoft.graph.group", "id": "bbbbbbbb-0000-4000-8000-0000000000ff"}
+  ]
+}

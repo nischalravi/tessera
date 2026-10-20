@@ -32,7 +32,7 @@ var pureDirs = []string{
 const awstestPkg = "internal/aws/awstest"
 
 // TestAWSTestkitOnlyInTests proves from the import graph of non-test files that
-// nothing but tests imports internal/aws/awstest.
+// nothing but tests (and the offline harness) imports internal/aws/awstest.
 func TestAWSTestkitOnlyInTests(t *testing.T) {
 	graph := moduleImports(t, moduleRoot(t))
 	if _, ok := graph[awstestPkg]; !ok {
@@ -40,7 +40,9 @@ func TestAWSTestkitOnlyInTests(t *testing.T) {
 	}
 	for pkg, deps := range graph {
 		for _, dep := range deps {
-			if dep == awstestPkg {
+			// the offline harness records and replays cassettes with it; TestHarnessOnlyImportedByItsBinary
+			// keeps the harness itself out of every production binary
+			if dep == awstestPkg && !inTree(pkg, harnessPkg) {
 				t.Errorf("%s imports %s outside a _test.go file", pkg, dep)
 			}
 		}

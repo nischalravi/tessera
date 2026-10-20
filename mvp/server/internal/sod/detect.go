@@ -125,6 +125,7 @@ type Risk struct {
 	Ruleset         RulesetRef
 	Functions       []*Function
 	Subjects        Subjects
+	Remediation     []string // explicit remediation options; none: all
 }
 
 // Grant is one entitlement an identity holds on one side of a violation, with
@@ -160,7 +161,8 @@ type Violation struct {
 	Entitlement     string     `json:"entitlement"`
 	Systems         []string   `json:"systems"`
 	Sides           [2]Side    `json:"sides"`
-	Status          string     `json:"status"` // open
+	Status          string     `json:"status"` // open, mitigated, accepted, mitigation_pending (see mitigation.go)
+	Mitigation      *Cover     `json:"mitigation,omitempty"`
 	Message         string     `json:"message"`
 	Evidence        []string   `json:"evidence"`
 	Edges           [][]string `json:"edges"`
