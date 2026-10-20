@@ -59,6 +59,9 @@ const (
 	RevokedBreakGlass = "break_glass"
 	// RevokedBreakGlassKey: the break-glass key that signed the session in was revoked.
 	RevokedBreakGlassKey = "break_glass_key_revoked"
+	// RevokedIdentityLinkChanged: a second admin changed or removed the
+	// user's identity link (#357).
+	RevokedIdentityLinkChanged = "identity_link_changed"
 	// RevokedIdentityDisabled: the governed identity the user is linked to
 	// was disabled (containment.Disable, #316).
 	RevokedIdentityDisabled = store.RevokedIdentityDisabled

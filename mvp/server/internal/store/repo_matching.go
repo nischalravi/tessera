@@ -6,7 +6,7 @@ import (
 )
 
 // Identity matching, the review queue, four-eyes merge requests, matching
-// settings and claim links (schema/0363_matching.sql, issue #68). Every
+// settings and claim links (schema/0370_matching.sql, issue #68). Every
 // statement binds @tenant.
 
 // Match outcomes (what the matcher did) and statuses (where a result stands).

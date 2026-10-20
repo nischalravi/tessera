@@ -8,7 +8,7 @@ import (
 )
 
 // Guest access bundles, assurance and catalog populations
-// (schema/0362_guest_access.sql, issue #75). Every statement binds @tenant.
+// (schema/0369_guest_access.sql, issue #75). Every statement binds @tenant.
 
 // Bundle item statuses.
 const (

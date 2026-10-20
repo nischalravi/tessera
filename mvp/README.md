@@ -1559,7 +1559,7 @@ themselves. Not yet: provisioning into the target system (#103), business roles 
 Issue #66 (GU-3; design `docs/design/guest-accounts-and-claim.md` §3, §6.4, T16). A visitor asks a
 sponsor to register them at `/register` (public page, no sign-in; the tenant comes from the host or
 `VITE_TESSERA_TENANT`). Code: `internal/guests/register`, `internal/api/register.go`, schema
-`0366_guest_registration.sql` (`guest_registrations`, `guest_sponsor_codes`), page
+`0373_guest_registration.sql` (`guest_registrations`, `guest_sponsor_codes`), page
 `frontend/src/public/register/`, the sponsor's side in the Inbox ("Guest registration requests").
 
 - **Nothing exists until the sponsor approves.** `POST /public/t/{slug}/register` records a pending
@@ -1601,7 +1601,7 @@ sponsor to register them at `/register` (public page, no sign-in; the tenant com
 Issue #68 (GU-5; design `docs/design/guest-accounts-and-claim.md` §5, §6.5, §9). Code:
 `internal/identity/match` (the matcher), `internal/correlation` (the merge engine of #160, extended: there
 is no second engine), `internal/identity/merge` (policy around it), `internal/api/matching.go`, schema
-`0363_matching.sql`, the page `frontend/src/features/directory/IdentityMatches.tsx`.
+`0370_matching.sql`, the page `frontend/src/features/directory/IdentityMatches.tsx`.
 
 **Matcher.** Names are normalized (Unicode NFKC, case folding, diacritics removed, "given family" and "family
 given" order, preferred names) and compared with Jaro-Winkler (tested against the published reference values).
@@ -1741,7 +1741,7 @@ notify.Expiring(tx, now, notify.Ending{Key: "identity:42", IdentityID: 42, Also:
 
 ### SIS and HRIS intake (applicants, admits, pre-hires)
 
-Issue #67 (GU-4, package `internal/intake`, schema `0367_intake.sql`) turns feed records into
+Issue #67 (GU-4, package `internal/intake`, schema `0374_intake.sql`) turns feed records into
 affiliations on **one identity** (design §4.1, §8.4). There is no API route or screen yet: the
 entry points are `intake.ApplySIS`, `intake.ApplyHRIS` and `intake.Run(conns, since)`, called
 inside a tenant transaction, so each change and its audit event commit together.
@@ -2152,6 +2152,11 @@ IdP is never called.
 - **Privileged identities** (an effective privileged permission in the access graph, or a platform
   admin role) need two different methods and a second approver who is not the requester or the
   subject. Nobody can open a case for their own identity.
+- **Four eyes (#358).** A call-back is the operator's own word, so the requester cannot record it
+  (`403 requester_cannot_verify`; one recorded by the requester or the subject never counts), and
+  the requester cannot execute their own case (`403 requester_cannot_execute`): a second operator
+  must. Nobody verifies, approves or executes a reset of their own identity
+  (`403 self_reset_not_allowed`).
 - **Routes.** `GET/POST /api/helpdesk/cases`, `GET .../{case_id}`, `POST .../{case_id}/verifications`
   `{method, evidence, number_source, session_ref}`, `.../manager-approval` and `.../second-approval`
   (`helpdesk.approve`, step-up), `.../execute` (`helpdesk.reset`, step-up), `.../cancel`,
@@ -2182,7 +2187,7 @@ IdP is never called.
 ### Guest lifecycle
 
 Issue #74 (GU-11, design §8). Code: `internal/guests/lifecycle` (the jobs), `internal/guests/sponsorship`
-(renew with step-up, take over, end or suspend, return). Tables in `schema/0364_guest_lifecycle.sql`
+(renew with step-up, take over, end or suspend, return). Tables in `schema/0371_guest_lifecycle.sql`
 (`guest_lifecycle_settings`, `guest_reminders`, `guest_renewal_tokens`, `guest_lifecycle_tasks`,
 `sponsorship_stepups`, `guest_deprovisioning`); `suspended` joined the sponsorship statuses and events in
 `0227_sponsorships.sql`, so reseed existing databases (`./run.sh --reseed`). The jobs run in the sweeper
@@ -2258,7 +2263,7 @@ modified.
 
 Issue #73 (GU-10; design `docs/design/guest-accounts-and-claim.md` §7.4, §7.5). Code:
 `internal/guests/terms` (documents, acceptance, consent), `internal/guests/claim/{terms,recovery}.go`,
-`internal/notify/recovery.go`, `internal/api/terms.go`, schema `0365_terms_recovery.sql` (`terms_documents`,
+`internal/notify/recovery.go`, `internal/api/terms.go`, schema `0372_terms_recovery.sql` (`terms_documents`,
 `terms_assignments`, `terms_acceptances`, `attribute_consents`, `recovery_cases`, `recovery_codes`; reseed
 existing databases with `./run.sh --reseed`, which also lets `claim_sessions.step` hold `verify_identity`).
 Every change is audited in its own transaction (`terms.publish|assign|accept`, `consent.attributes`,
@@ -2490,7 +2495,7 @@ inheritance, `explain.go`, `grant.go`, `settings.go`), `server/internal/api/grou
 | `DELETE .../privileges/{privilege_id}` | revoke one row (the design has `DELETE .../privileges`; the row is in the path here) |
 | `GET .../privileges/effective[?identity=]` | for each privilege of the object, every path by which the identity (default: the caller) holds it, with a sentence such as "Ivan holds UPDATE on `app:foo:g` because they are in `app:foo:admins`, which holds STEM_ADMIN on folder `app:foo` ..."; another identity's needs `admin` |
 | `GET\|PUT /api/groups/privileges/settings` | the everyone policy and default privileges (`groups.admin`) |
-| `PUT /api/groups/users/{id}/identity` `{identity_id \| null}` | link a platform user to an identity (`groups.admin`, fresh phishing-resistant sign-in; audited) |
+| `PUT /api/groups/users/{id}/identity` `{identity_id \| null}` | link a platform user to an identity (`groups.admin`, fresh phishing-resistant sign-in; audited). #357: never your own user (`403 self_link_not_allowed`), only to an `active` identity (`409 identity_not_active`), and a user whose identity is terminated or disabled keeps the link so sign-in stays blocked (`409 identity_inactive`). Linking an unlinked user applies at once; changing or removing an existing link needs two admins: the first gets `202 pending_second_admin` (schema `0362`, 72 h), the same admin again `403 four_eyes_required`, and a second admin's identical change applies it and revokes the user's sessions and CLI refresh tokens |
 
 - Tests: `go test ./internal/groups/privs` (`TestImplication` for all 21 privileges,
   `TestPrivs_InheritanceOneVsSub`, `TestPrivs_ExplainListsAllPaths`,
@@ -3522,7 +3527,7 @@ on every sync of their source, so a removed finding or agent disappears.
 
 Storage: `agent_profiles` (source, kind, creator and sponsor as the source spells them, links to
 identities) and `mcp_findings`, both tenant-scoped with cross-tenant guard triggers
-(`schema/0368_agent_discovery.sql`). `GET /api/ai-agents` is the `ai_agent` inventory with source,
+(`schema/0375_agent_discovery.sql`). `GET /api/ai-agents` is the `ai_agent` inventory with source,
 creator, sponsor status and violating policy ids; `GET /api/nhi` is unchanged. The demo company
 supplies Okta-sourced agents and five sample findings, so the screens work without any connector.
 

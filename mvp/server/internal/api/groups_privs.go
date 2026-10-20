@@ -388,9 +388,25 @@ func (s *Server) putGrpPrivSettings(r *http.Request, _ *params) (int, any, error
 	return http.StatusOK, out, nil
 }
 
+// identityLinkWindow is how long a link change waits for its second admin.
+const identityLinkWindow = 72 * time.Hour
+
 // linkGrpUserIdentity links a platform user to an identity of the tenant (or
-// removes the link with null). The link decides which group privileges the user
-// holds, so it is a tenant admin's act and needs a fresh sign-in.
+// removes the link with null). The link decides which group privileges the
+// user holds, whether sign-in is refused because the identity is inactive,
+// and every self check (self-approval, SoD exemption, help-desk own
+// identity), so it is a tenant admin's act, needs a fresh sign-in and
+// (#357):
+//
+//   - nobody changes their own user's link (self_link_not_allowed);
+//   - a user is linked only to an active identity (identity_not_active);
+//   - a user whose identity is not active (terminated, disabled) keeps the
+//     link, so their sign-in stays blocked (identity_inactive);
+//   - linking a user that has no link applies at once, but changing or
+//     removing an existing link needs two admins: the first admin's request
+//     answers 202 and waits, the same admin repeating it is refused
+//     (four_eyes_required), and a second admin's identical change applies it
+//     and revokes the user's sessions and CLI refresh tokens.
 func (s *Server) linkGrpUserIdentity(r *http.Request, p *params) (int, any, error) {
 	uid, err := uuid.Parse(p.path["id"])
 	if err != nil || !idRE.MatchString(p.path["id"]) {
@@ -405,7 +421,11 @@ func (s *Server) linkGrpUserIdentity(r *http.Request, p *params) (int, any, erro
 	if in.IdentityID != nil && *in.IdentityID < 1 {
 		return 0, nil, badRequest("invalid_identity", "identity_id is an identity id, or null to remove the link")
 	}
-	var was *int64
+	by := principal(r).User()
+	if by.ID == uuid.Nil {
+		return 0, nil, &readiness.Error{Status: http.StatusForbidden, Code: "forbidden", Msg: "a tenant admin's signed-in user changes identity links"}
+	}
+	status, out := http.StatusOK, map[string]any{"user_id": uid.String(), "identity_id": in.IdentityID}
 	err = s.write(r, func(c *store.TenantTx, now time.Time) error {
 		u, err := c.PlatformUser(uid)
 		if errors.Is(err, store.ErrNotFound) {
@@ -414,28 +434,96 @@ func (s *Server) linkGrpUserIdentity(r *http.Request, p *params) (int, any, erro
 		if err != nil {
 			return err
 		}
-		was = u.IdentityID
+		if u.ID == by.ID {
+			return &readiness.Error{Status: http.StatusForbidden, Code: "self_link_not_allowed",
+				Msg: "you cannot change your own user's identity link; another admin must"}
+		}
 		if in.IdentityID != nil {
-			if _, err := c.Identity(*in.IdentityID); errors.Is(err, store.ErrNotFound) {
+			ident, err := c.Identity(*in.IdentityID)
+			if errors.Is(err, store.ErrNotFound) {
 				return &readiness.Error{Status: http.StatusNotFound, Code: "not_found", Msg: "no such identity"}
 			} else if err != nil {
 				return err
 			}
+			if ident.Status != "active" {
+				return &readiness.Error{Status: http.StatusConflict, Code: "identity_not_active",
+					Msg: "a user is linked only to an active identity; this one is " + ident.Status}
+			}
 		}
-		if err := c.SetPlatformUserIdentity(uid, in.IdentityID); err != nil {
-			return err
-		}
+		was := u.IdentityID
+		detail := ojson.Object{{Key: "user_id", Value: uid.String()}, {Key: "identity_id", Value: in.IdentityID},
+			{Key: "previous_identity_id", Value: was}}
 		action := "groups.user.identity_linked"
 		if in.IdentityID == nil {
 			action = "groups.user.identity_unlinked"
 		}
+		if was != nil && !sameLink(was, in.IdentityID) {
+			// the user's current identity must be active: unlinking or
+			// relinking a terminated or disabled person would give them
+			// their sign-in back
+			cur, err := c.Identity(*was)
+			if err != nil && !errors.Is(err, store.ErrNotFound) {
+				return err
+			}
+			if cur == nil || cur.Status != "active" {
+				st := "missing"
+				if cur != nil {
+					st = cur.Status
+				}
+				return &readiness.Error{Status: http.StatusConflict, Code: "identity_inactive",
+					Msg: "the user's identity is " + st + ", so their sign-in is blocked; the link stays until the identity is enabled again"}
+			}
+			pend, err := c.IdentityLinkRequest(uid)
+			if err != nil && !errors.Is(err, store.ErrNotFound) {
+				return err
+			}
+			matches := pend != nil && now.Before(pend.ExpiresAt) && sameLink(pend.PreviousIdentityID, was) &&
+				sameLink(pend.IdentityID, in.IdentityID)
+			switch {
+			case matches && pend.RequestedByUserID == by.ID:
+				return &readiness.Error{Status: http.StatusForbidden, Code: "four_eyes_required",
+					Msg: "changing an existing identity link needs a second admin: another tenant admin must make the same change"}
+			case !matches:
+				req := &store.IdentityLinkRequest{UserID: uid, IdentityID: in.IdentityID, PreviousIdentityID: was,
+					RequestedByUserID: by.ID, RequestedBy: by.Display, RequestedAt: now, ExpiresAt: now.Add(identityLinkWindow)}
+				if err := c.PutIdentityLinkRequest(req); err != nil {
+					return err
+				}
+				status = http.StatusAccepted
+				out = map[string]any{"user_id": uid.String(), "identity_id": in.IdentityID, "status": "pending_second_admin",
+					"previous_identity_id": was, "expires_at": req.ExpiresAt}
+				_, err = c.RecordAudit(store.AuditRecord{At: now, Action: "groups.user.identity_change_requested", LegacyActor: "groups",
+					TargetType: "platform_user", TargetID: uid.String(), Detail: append(detail, ojson.KV{Key: "expires_at", Value: req.ExpiresAt})})
+				return err
+			}
+			// a second admin confirms the pending request
+			detail = append(detail, ojson.KV{Key: "requested_by", Value: pend.RequestedBy},
+				ojson.KV{Key: "requested_by_user_id", Value: pend.RequestedByUserID.String()})
+		}
+		if err := c.SetPlatformUserIdentity(uid, in.IdentityID); err != nil {
+			return err
+		}
+		if err := c.DeleteIdentityLinkRequest(uid); err != nil {
+			return err
+		}
+		if was != nil && !sameLink(was, in.IdentityID) {
+			n, err := c.RevokeUserSessions(uid, auth.RevokedIdentityLinkChanged, now)
+			if err != nil {
+				return err
+			}
+			detail = append(detail, ojson.KV{Key: "sessions_revoked", Value: n})
+		}
 		_, err = c.RecordAudit(store.AuditRecord{At: now, Action: action, LegacyActor: "groups", TargetType: "platform_user",
-			TargetID: uid.String(), Detail: ojson.Object{{Key: "user_id", Value: uid.String()},
-				{Key: "identity_id", Value: in.IdentityID}, {Key: "previous_identity_id", Value: was}}})
+			TargetID: uid.String(), Detail: detail})
 		return err
 	})
 	if err != nil {
 		return 0, nil, err
 	}
-	return http.StatusOK, map[string]any{"user_id": uid.String(), "identity_id": in.IdentityID}, nil
+	return status, out, nil
+}
+
+// sameLink reports whether two identity links are the same (nil is no link).
+func sameLink(a, b *int64) bool {
+	return (a == nil && b == nil) || (a != nil && b != nil && *a == *b)
 }

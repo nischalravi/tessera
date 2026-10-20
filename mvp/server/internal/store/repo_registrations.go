@@ -7,7 +7,7 @@ import (
 )
 
 // Guest self-registration requests and sponsor codes
-// (schema/0366_guest_registration.sql, issue #66). Every statement binds
+// (schema/0373_guest_registration.sql, issue #66). Every statement binds
 // @tenant. A registration holds a visitor's name, address and purpose until the
 // sponsor decides; a sponsor code is only ever reached by its keyed hash.
 

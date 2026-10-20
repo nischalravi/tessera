@@ -8,7 +8,7 @@ import (
 )
 
 // Guest lifecycle: settings, reminders, renewal tokens, lifecycle tasks,
-// step-up renewals and deprovisioning stages (schema/0364_guest_lifecycle.sql,
+// step-up renewals and deprovisioning stages (schema/0371_guest_lifecycle.sql,
 // issue #74). Every statement binds @tenant.
 
 // Task kinds, triggers, statuses and outcomes.

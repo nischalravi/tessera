@@ -7,7 +7,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 )
 
-// AI agent discovery (schema/0368_agent_discovery.sql, issue #116). Nothing
+// AI agent discovery (schema/0375_agent_discovery.sql, issue #116). Nothing
 // here holds a secret value: findings keep a location, a truncated hash and a
 // secret type.
 

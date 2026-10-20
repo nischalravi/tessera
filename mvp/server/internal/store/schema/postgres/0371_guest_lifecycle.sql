@@ -1,4 +1,4 @@
--- Postgres dialect of schema/0364_guest_lifecycle.sql (kept in parity with the SQLite file
+-- Postgres dialect of schema/0371_guest_lifecycle.sql (kept in parity with the SQLite file
 -- by TestSchemaParity_SQLiteAndPostgres; json_valid CHECKs are dropped: the column is TEXT and the store writes JSON). Cross-tenant guard triggers become composite
 -- foreign keys (tenant_id, x_id) -> (tenant_id, id); see 0001_tenancy.sql.
 

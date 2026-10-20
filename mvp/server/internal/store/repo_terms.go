@@ -6,7 +6,7 @@ import (
 )
 
 // Guest terms of use, attribute-release consent and account recovery
-// (schema/0365_terms_recovery.sql, issue #73). Every statement binds @tenant.
+// (schema/0372_terms_recovery.sql, issue #73). Every statement binds @tenant.
 // Recovery codes are only ever reached by their keyed hash.
 
 // Recovery case statuses and the ways a recovery is issued.

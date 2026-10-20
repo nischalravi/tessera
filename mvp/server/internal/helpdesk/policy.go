@@ -7,7 +7,8 @@
 //   - Fail closed. A case executes only when Evaluate says the policy is
 //     satisfied, checked again inside the transaction that claims the case.
 //   - A person never verifies themselves. The requester cannot be the second
-//     approver or the manager approval, and the subject (or anyone signed in
+//     approver, the manager approval or the call-back, nor execute the case
+//     (#358), and the subject (or anyone signed in
 //     as the subject) cannot approve their own reset.
 //   - Privileged identities need two distinct verification methods and a
 //     second approver. IDV counts only for them.
@@ -113,8 +114,10 @@ func (in Input) counts(v Verification) bool {
 	switch v.Method {
 	case MethodPush:
 		return v.PhishingResistant
-	case MethodManagerApproval:
-		// a manager approval from the requester or the subject is no approval
+	case MethodManagerApproval, MethodCallback:
+		// an attestation (a manager approval, or a call-back, which is only
+		// the operator's word) from the requester or the subject is no
+		// verification (#358)
 		if v.By == nil || *v.By == uuid.Nil || isOneOf(v.By, in.SubjectUsers...) {
 			return false
 		}

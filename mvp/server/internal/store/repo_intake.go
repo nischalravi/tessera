@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// SIS and HRIS intake (schema/0367_intake.sql, issue #67): organizational
+// SIS and HRIS intake (schema/0374_intake.sql, issue #67): organizational
 // sponsors, intake events and conversions. Every statement binds @tenant.
 
 // Intake channels and matching modes (design §4.1, §5.2).

@@ -206,25 +206,27 @@ var tables = []string{
 	"grp_pit_privileges", "grp_pit_digests",
 	// group privileges (schema/0286_group_privs.sql)
 	"grp_privileges", "grp_priv_settings",
-	// guest access bundles, assurance and catalog populations (schema/0362_guest_access.sql)
+	// guest access bundles, assurance and catalog populations (schema/0369_guest_access.sql)
 	"guest_bundle_items", "identity_assurance", "catalog_item_populations",
-	// identity matching, merge requests, settings and claim links (schema/0363_matching.sql)
+	// identity matching, merge requests, settings and claim links (schema/0370_matching.sql)
 	"match_results", "identity_merge_requests", "matching_settings", "claim_links",
-	// SIS and HRIS intake (schema/0367_intake.sql)
+	// SIS and HRIS intake (schema/0374_intake.sql)
 	"org_sponsors", "intake_events", "identity_conversions",
 	// third-party OAuth app inventory (schema/0361_oauth_apps.sql)
 	"oauth_apps", "oauth_grants", "oauth_sync_state",
-	// guest lifecycle (schema/0364_guest_lifecycle.sql)
+	// guest lifecycle (schema/0371_guest_lifecycle.sql)
 	"guest_lifecycle_settings", "guest_reminders", "guest_renewal_tokens", "guest_lifecycle_tasks", "sponsorship_stepups",
 	"guest_deprovisioning",
-	// guest terms, attribute consent and recovery (schema/0365_terms_recovery.sql)
+	// guest terms, attribute consent and recovery (schema/0372_terms_recovery.sql)
 	"terms_documents", "terms_assignments", "terms_acceptances", "attribute_consents", "recovery_cases", "recovery_codes",
-	// guest self-registration (schema/0366_guest_registration.sql)
+	// guest self-registration (schema/0373_guest_registration.sql)
 	"guest_registrations", "guest_sponsor_codes",
 	// MFA posture (schema/0255_mfa_posture.sql)
 	"auth_methods", "auth_method_sources", "account_auth_signals", "mfa_posture_snapshots",
-	// AI agent discovery (schema/0368_agent_discovery.sql)
+	// AI agent discovery (schema/0375_agent_discovery.sql)
 	"agent_profiles", "mcp_findings",
+	// pending identity-link changes, the four-eyes step (schema/0362_identity_link_requests.sql)
+	"identity_link_requests",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was

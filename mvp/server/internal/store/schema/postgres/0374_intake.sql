@@ -1,4 +1,4 @@
--- Postgres dialect of schema/0367_intake.sql (kept in parity with the SQLite file
+-- Postgres dialect of schema/0374_intake.sql (kept in parity with the SQLite file
 -- by TestSchemaParity_SQLiteAndPostgres). Cross-tenant guard triggers become composite
 -- foreign keys (tenant_id, x_id) -> (tenant_id, id); see 0001_tenancy.sql.
 
