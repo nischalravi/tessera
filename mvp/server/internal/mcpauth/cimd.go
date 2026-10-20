@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -58,6 +59,15 @@ func clientErr(format string, a ...any) error { return &ErrClient{Msg: fmt.Sprin
 
 // ValidateClientID checks that id is usable as a CIMD client_id: an absolute
 // https URL with a path, no fragment, no credentials, no dot segments.
+// fetchableClientID is the exact syntax of a client ID Tessera fetches:
+// https, a DNS name (ASCII; an IDN in its punycode form) or a bracketed IP
+// literal, an optional port, and a path of RFC 3986 path characters. No
+// userinfo, query or fragment can match. It is checked by ValidateClientID
+// and again on the very string handed to safehttp.Get, so nothing that was
+// not validated reaches the outbound client (which still applies its own
+// address, port, size and redirect rules at dial time).
+var fetchableClientID = regexp.MustCompile(`^https://(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*|\[[0-9A-Fa-f:.]+\])(?::[0-9]{1,5})?/[A-Za-z0-9._~!$&'()*+,;=:@%/-]+$`)
+
 func ValidateClientID(id string) error {
 	if len(id) > 512 {
 		return clientErr("client_id is too long")
@@ -83,6 +93,9 @@ func ValidateClientID(id string) error {
 	}
 	if u.String() != id {
 		return clientErr("client_id must be in canonical form")
+	}
+	if !fetchableClientID.MatchString(id) {
+		return clientErr("client_id must be an https URL with an ASCII host and a plain path")
 	}
 	return nil
 }
@@ -230,7 +243,11 @@ func (s *Service) fetchDocument(ctx context.Context, clientID string) (*Document
 	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	resp, err := safehttp.Get(ctx, &hc, u.String())
+	target := u.String()
+	if !fetchableClientID.MatchString(target) {
+		return nil, clientErr("client_id must be an https URL with an ASCII host and a plain path")
+	}
+	resp, err := safehttp.Get(ctx, &hc, target)
 	if err != nil {
 		return nil, clientErr("client metadata document could not be fetched: %s", fetchReason(err))
 	}
