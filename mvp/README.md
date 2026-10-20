@@ -31,6 +31,7 @@ Requirements: Go 1.27+ (the version in `server/go.mod`), Node 18+ (tested on 24)
 ./run.sh bench       # Go benchmarks + end-to-end latency, startup and memory of the server
 ./run.sh backup      # encrypted online backup now (-dir /backups; see "Backup and restore")
 ./run.sh restore F   # verify backup F and restore it over the database (stop the server first)
+./run.sh bench groups  # the groups scale gate: a synthetic university tenant, every target of the groups design 6.7 (slow)
 ./run.sh audit-deps  # govulncheck ./... on the Go module (install with server/scripts/install-tools.sh)
 ```
 
@@ -3019,6 +3020,26 @@ event type); Kafka `brokers[]`, `topic`, `sasl?` (`plain`, `scram-sha-256`, `scr
   `TestNetwork_DialIsGuarded`; brokers are in-process fakes, SQS and SNS a TLS test server),
   `TestIsolation_GroupEventSinks` in `internal/store`, `TestGroupsSinksAPI` in `internal/api`,
   `tests/event-sinks.test.ts` in the frontend.
+
+#### Groups scale gate (GR-17, issue #60)
+
+Design `docs/design/groups-scale-gate.md` (targets: `groups-grouper-parity.md` §6.7). `internal/groups/benchgen`
+generates a "large university" tenant at a percentage of the reference size and measures every target of the
+table; `cmd/tessera-bench groups` runs it, `internal/api/groups_scale_test.go` repeats the reads and writes through
+the HTTP handler.
+
+```
+./run.sh bench groups                          # 10% tenant (about 35 min), then the REST gate
+./run.sh bench groups -percent 1 -samples 100  # a quick look (about 2 min); -md/-json write the table, -enforce exits 1 on a miss
+TESSERA_GROUPS_SCALE_GATE=1 go test -run 'TestScaleGate|TestGroupsScaleGate_REST$' -timeout 3h ./internal/groups/benchgen ./internal/api
+```
+
+- `go test` runs only smoke versions (a 0.05 to 0.1% tenant, no timing assertions, `verify_clean` asserted).
+- Backend is SQLite (the design's SQLite numbers apply up to 10%). `tessera-bench` runs on SQLite and refuses a Postgres `-db`
+  (the `grp_*` tables have a Postgres dialect now, but the generator and its timings have not been run on it).
+- Result at 10%: the read, single-change, PIT, verification and incremental-provisioning targets pass; the 50,000-change
+  loader (864 s against 60 s), the first provisioning op after a large nesting (31.6 s against 30 s) and storage
+  (about 20 GB at 100% against 4 GB) miss. The table and the analysis are in the design note.
 
 ### Audit ledger
 

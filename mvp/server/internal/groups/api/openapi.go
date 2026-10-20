@@ -25,6 +25,10 @@ func Covers(method, pattern string) bool {
 	if method == "GET" && pattern == "/api/groups" {
 		return false
 	}
+	// the provisioning routes (GR-11) are not part of this document
+	if strings.HasPrefix(pattern, "/api/groups/provisioners") {
+		return false
+	}
 	return pattern == "/api/groups" || strings.HasPrefix(pattern, "/api/groups/") || strings.HasPrefix(pattern, "/api/groups:") ||
 		strings.HasPrefix(pattern, "/scim/v2/") || (strings.HasPrefix(pattern, "/api/identities/") && strings.HasSuffix(pattern, "/groups"))
 }
@@ -167,19 +171,6 @@ var docList = []opDoc{
 	{Key: "GET /api/groups/event-sinks/{id}/dead-letters", Summary: "List the dead letters of a sink", Tag: "event-sinks"},
 	{Key: "POST /api/groups/event-sinks/{id}/dead-letters/{seq}/redeliver", Summary: "Deliver a dead letter again", Tag: "event-sinks"},
 	{Key: "POST /api/groups/event-sinks/{id}/dead-letters/{seq}/discard", Summary: "Discard a dead letter", Tag: "event-sinks"},
-	{Key: "GET /api/groups/provisioners", Summary: "Read provisioners", Tag: "provisioning"},
-	{Key: "POST /api/groups/provisioners", Summary: "Create provisioners", Tag: "provisioning"},
-	{Key: "GET /api/groups/provisioners/{id}", Summary: "Read provisioners/id", Tag: "provisioning"},
-	{Key: "PATCH /api/groups/provisioners/{id}", Summary: "Change provisioners/id", Tag: "provisioning"},
-	{Key: "DELETE /api/groups/provisioners/{id}", Summary: "Delete provisioners/id", Tag: "provisioning"},
-	{Key: "GET /api/groups/provisioners/{id}/marks", Summary: "Read provisioners/id/marks", Tag: "provisioning"},
-	{Key: "PUT /api/groups/provisioners/{id}/marks", Summary: "Save provisioners/id/marks", Tag: "provisioning"},
-	{Key: "DELETE /api/groups/provisioners/{id}/marks/{mark_type}/{object}", Summary: "Delete provisioners/id/marks/mark_type/object", Tag: "provisioning"},
-	{Key: "POST /api/groups/provisioners/{id}/sync", Summary: "Create provisioners/id/sync", Tag: "provisioning"},
-	{Key: "GET /api/groups/provisioners/{id}/runs", Summary: "Read provisioners/id/runs", Tag: "provisioning"},
-	{Key: "GET /api/groups/provisioners/{id}/ops", Summary: "Read provisioners/id/ops", Tag: "provisioning"},
-	{Key: "GET /api/groups/provisioners/{id}/groups", Summary: "Read provisioners/id/groups", Tag: "provisioning"},
-	{Key: "POST /api/groups/provisioners/{id}/diagnose", Summary: "Create provisioners/id/diagnose", Tag: "provisioning"},
 	{Key: "GET /api/groups/{id}/attestation", Summary: "Read id/attestation", Tag: "attestation"},
 	{Key: "PUT /api/groups/{id}/attestation", Summary: "Save id/attestation", Tag: "attestation"},
 	{Key: "DELETE /api/groups/{id}/attestation", Summary: "Delete id/attestation", Tag: "attestation"},
