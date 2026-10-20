@@ -433,7 +433,7 @@ export function Inbox() {
                 const self = selfRequest(it);
                 return (
                   <div key={it.key} id={`ib-${it.key}`} role="listitem" aria-current={it.key === current?.key ? "true" : undefined} className={`qrow ${it.key === current?.key ? "selected" : ""}`} onClick={() => setSelKey(it.key)}>
-                    <input type="checkbox" checked={checked.has(it.key)} onClick={(e) => e.stopPropagation()} onChange={() => setChecked((s) => { const n = new Set(s); if (n.has(it.key)) n.delete(it.key); else n.add(it.key); return n; })} aria-label={`Select ${t.title}`} />
+                    <label className="chk-hit" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={checked.has(it.key)} onChange={() => setChecked((s) => { const n = new Set(s); if (n.has(it.key)) n.delete(it.key); else n.add(it.key); return n; })} aria-label={`Select ${t.title}`} /></label>
                     <span className="q-ic" aria-hidden>{t.icon}</span>
                     <span style={{ minWidth: 0 }}>
                       <span className="q-title truncate" style={{ display: "block" }}>{t.title}</span>

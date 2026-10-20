@@ -252,7 +252,7 @@ export function DataTable<T>(p: DataTableProps<T>) {
                 <tr>
                   {hasBulk && (
                     <th className="check">
-                      <input type="checkbox" checked={allVisibleSelected} onChange={toggleAll} aria-label="Select all rows" />
+                      <label className="chk-hit"><input type="checkbox" checked={allVisibleSelected} onChange={toggleAll} aria-label="Select all rows" /></label>
                     </th>
                   )}
                   {p.columns.map((c) => (
@@ -281,7 +281,7 @@ export function DataTable<T>(p: DataTableProps<T>) {
                     >
                       {hasBulk && (
                         <td className="check" onClick={(e) => e.stopPropagation()}>
-                          <input type="checkbox" checked={sel.has(k)} onChange={() => toggle(k)} aria-label={p.rowLabel ? `Select ${p.rowLabel(r)}` : "Select row"} />
+                          <label className="chk-hit"><input type="checkbox" checked={sel.has(k)} onChange={() => toggle(k)} aria-label={p.rowLabel ? `Select ${p.rowLabel(r)}` : "Select row"} /></label>
                         </td>
                       )}
                       {p.columns.map((c) => (

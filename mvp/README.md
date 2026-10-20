@@ -2205,6 +2205,13 @@ darker rail and surfaces) with AA contrast. Focus rings are always visible, the 
 palette work from the keyboard, motion is reduced when the OS asks for it, and the layout works
 down to about 360px wide.
 
+**Phones and tablets (768px and below).** The rail becomes a menu behind the top-bar button.
+Side panels and dialogs open as full-screen sheets with a sticky header, and the step-up
+prompt is a bottom sheet. Buttons, chips, tabs, inputs, rail items and row checkboxes have
+touch targets of at least 44 × 44 px, and inputs use 16px text so iOS does not zoom. When
+sign-in is rate limited (429), a "Too many sign-in attempts" screen counts down the server's
+`Retry-After` and then enables "Try again", instead of showing a generic error.
+
 **Bundle.** Every route is lazy-loaded. The main chunk is about 87 kB gzipped and the stylesheet
 about 8 kB; cytoscape (about 146 kB gzipped) only loads with the access graph.
 
@@ -2738,6 +2745,11 @@ cd ../frontend && npm run build && npm test   # npm test: node:test, no extra de
     and on the detail pages, and fails on any serious or critical violation.
   - Reflow at 320 px, text spacing and focus-not-obscured are scripted checks.
   - A keyboard-only walkthrough signs in, requests access, approves and reviews.
+  - Viewport tests (`e2e/mobile.spec.ts`, project `mobile`) run at 360, 400 and 768 px:
+    sign-in, the rate-limited screen, inbox, request access, my requests, home, the step-up
+    sheet, the rail menu and side panels. Each fails on sideways scrolling or on a control
+    under 44 px, and attaches a screenshot to the report. Run only them with
+    `npx playwright test --project=setup --project=mobile`.
 
   CI runs it in `.github/workflows/a11y.yml`. The audit, with the criteria-by-criteria evidence
   and the screen-reader pass still to do by hand, is in `docs/accessibility/wcag-2.2-aa-audit.md`.
