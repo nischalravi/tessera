@@ -1,6 +1,7 @@
 package api
 
 import (
+	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"net/http"
 	"strconv"
 	"strings"
@@ -48,7 +49,7 @@ func rotationGetPaths(refs map[string]string) map[string]string {
 
 func TestIsolation_RotationRouteCrossTenant(t *testing.T) {
 	f := storetest.TwoTenants(t)
-	h := isolationServer(t, f, f.B.ID).Handler()
+	h := rotationIsolationServer(t, f, f.B.ID).Handler()
 	refs := map[string]string{}
 	for k, v := range f.A.Refs {
 		refs[k] = v
@@ -82,7 +83,7 @@ func TestIsolation_RotationRouteCrossTenant(t *testing.T) {
 // Ids in request bodies: a secret, an adapter name and a bulk system of tenant A's answer as missing ones.
 func TestIsolation_RotationBodyReferences(t *testing.T) {
 	f := storetest.TwoTenants(t)
-	h := isolationServer(t, f, f.B.ID).Handler()
+	h := rotationIsolationServer(t, f, f.B.ID).Handler()
 	beforeA := storetest.Dump(t, f.DB, f.A.ID)
 	aSecret := itoa(f.A.IDs["secret"])
 	missingSecret := itoa(missingID)
@@ -118,7 +119,7 @@ func TestIsolation_RotationBodyReferences(t *testing.T) {
 // makes B's own and leaves A's alone.
 func TestIsolation_RotationAdapterNamesAreTenantScoped(t *testing.T) {
 	f := storetest.TwoTenants(t)
-	h := isolationServer(t, f, f.B.ID).Handler()
+	h := rotationIsolationServer(t, f, f.B.ID).Handler()
 	beforeA := storetest.Dump(t, f.DB, f.A.ID)
 	name := "adapter-" + storetest.Sentinel
 	rec := serveOnce(h, "PUT", "/api/rotation/adapters/"+name, `{"type":"fake","config":{"fail_at":"create"}}`)
@@ -134,8 +135,8 @@ func TestIsolation_RotationAdapterNamesAreTenantScoped(t *testing.T) {
 // Rotation lists show a tenant its own rows only; as tenant A the sentinel is there (positive control).
 func TestIsolation_RotationListsNeverLeak(t *testing.T) {
 	f := storetest.TwoTenants(t)
-	asA := isolationServer(t, f, f.A.ID).Handler()
-	asB := isolationServer(t, f, f.B.ID).Handler()
+	asA := rotationIsolationServer(t, f, f.A.ID).Handler()
+	asB := rotationIsolationServer(t, f, f.B.ID).Handler()
 	for _, path := range []string{"/api/rotation/adapters", "/api/rotation/policies", "/api/rotation/jobs", "/api/rotation/bulk",
 		"/api/rotation/overview"} {
 		a := serveOnce(asA, "GET", path, "")
@@ -159,3 +160,9 @@ func TestIsolation_RotationListsNeverLeak(t *testing.T) {
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+// rotationIsolationServer is isolationServer on a server that can rotate.
+func rotationIsolationServer(t testing.TB, f *storetest.Fixture, tenant tenancy.ID) testSrv {
+	t.Helper()
+	return asAdmin(t, newRotationIsolationServer(f), f.DB, tenant, storetest.Now)
+}
