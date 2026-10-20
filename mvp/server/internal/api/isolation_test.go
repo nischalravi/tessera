@@ -312,6 +312,12 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/public/t/{slug}/guest/renewal-request" {
 			continue // TestGuestLifecycleAPI_RenewalRequest (public; the tenant comes from the slug)
 		}
+		if strings.HasPrefix(rt.Pattern, "/public/t/{slug}/register") {
+			continue // TestRegister_* (public; the tenant comes from the slug)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/guest-registrations/{registration_id}/") {
+			continue // TestRegisterAPI_CrossTenant (a UUID, not a fixture id)
+		}
 		if strings.HasPrefix(rt.Pattern, "/public/t/{slug}/claim/") {
 			continue // TestClaim_SessionIsPerTenant (public; the tenant comes from the slug)
 		}

@@ -29,6 +29,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/devidp/devidptest"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/claim"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/credential"
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/register"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
@@ -104,6 +105,7 @@ type claimOpts struct {
 	none      bool
 	minDur    time.Duration
 	users     []devidp.User
+	challenge register.Challenger // the registration page's bot challenge (default: accept all, outside production)
 }
 
 type claimEnv struct {
@@ -166,7 +168,7 @@ func newClaimEnv(t *testing.T, o claimOpts) *claimEnv {
 	}
 	srv := New(Config{Store: db, Clock: clk.now, Policies: policy.NewLoader(policies.FS), Env: "test",
 		AllowedOrigins: []string{"http://localhost:5173", oidcPublicURL}, PublicURL: oidcPublicURL, Sealer: sealer, OutboundHTTP: hc,
-		Identifiers: keyer, Secrets: secrets, Credential: authority, ClaimMinDuration: minDur,
+		Identifiers: keyer, Secrets: secrets, Credential: authority, ClaimMinDuration: minDur, RegisterChallenge: o.challenge,
 		RateLimits: noRateLimits, Logger: slog.New(slog.NewTextHandler(logs, nil))})
 	mail := &capturedMail{}
 	e := &claimEnv{t: t, clk: clk, idp: idp, srv: srv, h: srv.Handler(), db: db, secrets: secrets, mail: mail, logs: logs,

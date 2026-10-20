@@ -27,12 +27,14 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oauth2rp"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oidcrp"
 	"github.com/nischalravi/tessera/mvp/server/internal/condaccess"
+	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/claim"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/credential"
 	guestlife "github.com/nischalravi/tessera/mvp/server/internal/guests/lifecycle"
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/register"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/sponsorship"
 	"github.com/nischalravi/tessera/mvp/server/internal/health"
 	"github.com/nischalravi/tessera/mvp/server/internal/helpdesk"
@@ -175,6 +177,11 @@ type Config struct {
 	// through (guest claim, internal/guests/credential). Nil: the claim stops
 	// at the credential step and stays pending.
 	Credential credential.Authority
+	// RegisterChallenge is the bot challenge of the public registration page
+	// (Turnstile or equivalent). Nil: outside production the page accepts
+	// every request (register.AllowAll); in production registration answers
+	// 503 until one is configured.
+	RegisterChallenge register.Challenger
 	// ClaimMinDuration is the minimum time of a claim start or resend (default
 	// 300 ms); tests shorten it.
 	ClaimMinDuration time.Duration
@@ -224,9 +231,12 @@ type Server struct {
 
 	claimSvc *claim.Service
 	claimLim *claimLimits
-	names    nameCache
-	rp       *oidcrp.RP
-	oauth2   *oauth2rp.RP
+	// reg is guest self-registration with sponsor approval (issue #66)
+	reg    *register.Service
+	regLim *registerLimits
+	names  nameCache
+	rp     *oidcrp.RP
+	oauth2 *oauth2rp.RP
 	// signals supplies device-compliance signals to conditional access.
 	signals condaccess.SignalSource
 	cas     *casclient.Client
@@ -345,6 +355,12 @@ func New(cfg Config) *Server {
 		s.claimSvc = claim.New(cfg.Identifiers, cfg.Secrets, cfg.PublicURL, s.tenantName)
 		s.guests.Claim = s.claimSvc
 	}
+	s.regLim = newRegisterLimits()
+	s.reg = &register.Service{Guests: s.guests, Keyer: cfg.Identifiers, Challenge: cfg.RegisterChallenge, TenantName: s.tenantName,
+		SignInURL: cfg.PublicURL}
+	if s.reg.Challenge == nil && cfg.Env != config.Prod {
+		s.reg.Challenge = register.AllowAll{} // dev and test only: production needs a real bot challenge
+	}
 	s.guestLife = guestlife.New(s.guests)
 	s.guestLife.Secrets, s.guestLife.BaseURL, s.guestLife.TenantName = cfg.Secrets, cfg.PublicURL, s.tenantName
 	if cfg.OutboundHTTP != nil {
@@ -402,6 +418,7 @@ func New(cfg Config) *Server {
 	s.registerGuestAccessRoutes()
 	s.registerGuestLifecycleRoutes()
 	s.registerTermsRoutes()
+	s.registerRegistrationRoutes()
 	s.registerNotificationRoutes()
 	s.registerEmailRoutes()
 	s.registerContainmentRoutes()

@@ -15,6 +15,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/access"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/claim"
 	guestlife "github.com/nischalravi/tessera/mvp/server/internal/guests/lifecycle"
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/register"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/sponsorship"
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/lifecycle"
@@ -139,6 +140,18 @@ func (s *Server) queueLifecycleSweep(ctx context.Context, j queue.Job) (any, err
 		if err != nil {
 			return nil, err
 		}
+	}
+	// pending registrations that waited too long, and the personal data of decided ones (GU-3)
+	err = s.store.InTenant(audit.WithSystemActor(ctx, register.Sweeper), j.Tenant, func(tx *store.TenantTx) error {
+		need, err := register.NeedsSweep(tx)
+		if err != nil || !need {
+			return err
+		}
+		_, err = s.reg.Sweep(tx, now)
+		return err
+	})
+	if err != nil {
+		return nil, err
 	}
 	// bundles of ended sponsorships, waiting items and the reference groups (GU-12)
 	err = s.store.InTenant(audit.WithSystemActor(ctx, access.Sweeper), j.Tenant, func(tx *store.TenantTx) error {

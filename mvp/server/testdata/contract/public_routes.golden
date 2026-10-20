@@ -10,6 +10,8 @@ POST /public/t/{slug}/claim/consent
 POST /public/t/{slug}/claim/credential
 POST /public/t/{slug}/claim/resend
 POST /public/t/{slug}/guest/renewal-request
+GET /public/t/{slug}/register/sponsors
+POST /public/t/{slug}/register
 GET /api/auth/discover
 GET /api/auth/login
 GET /api/auth/oidc/{connection_id}/callback

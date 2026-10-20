@@ -1458,3 +1458,17 @@ DROP POLICY IF EXISTS tenant_isolation ON recovery_codes;
 CREATE POLICY tenant_isolation ON recovery_codes
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE guest_registrations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE guest_registrations FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON guest_registrations;
+CREATE POLICY tenant_isolation ON guest_registrations
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE guest_sponsor_codes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE guest_sponsor_codes FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON guest_sponsor_codes;
+CREATE POLICY tenant_isolation ON guest_sponsor_codes
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
