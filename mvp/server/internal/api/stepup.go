@@ -80,7 +80,8 @@ func (s *Server) stepUpFailure(w http.ResponseWriter, r *http.Request, t tenancy
 // authStepUp is GET /api/auth/step-up?acr=&max_age=&return_to=.
 func (s *Server) authStepUp(w http.ResponseWriter, r *http.Request, _ *params) (any, error) {
 	p := principal(r)
-	if p.Kind != auth.KindUser || p.SessionID == nil || p.UserID == nil {
+	// a browser flow for a browser session: a CLI session steps up through the device flow
+	if p.Kind != auth.KindUser || p.SessionID == nil || p.UserID == nil || p.Via != auth.ViaCookie {
 		auth.WriteDenial(w, &auth.Denial{Status: http.StatusForbidden, Error: "interactive_authentication_required"})
 		return nil, nil
 	}
@@ -197,7 +198,7 @@ func (s *Server) finishStepUp(w http.ResponseWriter, r *http.Request, tenant sto
 			reason = "subject_mismatch"
 		} else if user.Status != "active" {
 			reason = "user_disabled"
-		} else if off, err := auth.IdentityDisabled(tx, user); err != nil {
+		} else if off, err := auth.IdentityInactive(tx, user); err != nil {
 			return err
 		} else if off {
 			reason = auth.FailIdentityDisabled

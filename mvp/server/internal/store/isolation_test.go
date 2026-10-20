@@ -687,7 +687,7 @@ func TestIsolation_EveryRepoMethodClassified(t *testing.T) {
 	}
 	for _, m := range []map[string]bool{keys(listCases), keys(getCases), keys(naturalKeyGets), keys(countCases),
 		keys(mutations), keys(insertCases), readinessCovered(), keysCovered(), auditCovered(), authCovered(), jobsCovered(), provisioningCovered(), correlationCovered(), identityModelCovered(), containmentCovered(), groupsCovered(), transportCovered(), alertsCovered(), siemCovered(),
-		flatfileCovered(), evidenceCovered(), approvalsCovered(), lifecycleCovered(), notificationsCovered(), requestsCovered(), rolesCovered(), reviewRolesCovered(), abacCovered(), sodCovered(), sodCtlCovered(), sponsorshipsCovered(), adminCovered(), disablesCovered(), removalsCovered(), requestDraftsCovered(), reviewSchedulesCovered(), ownershipCovered(), queueCovered(), breakGlassCovered(), awsCovered()} {
+		flatfileCovered(), evidenceCovered(), oauthCovered(), approvalsCovered(), lifecycleCovered(), notificationsCovered(), requestsCovered(), rolesCovered(), reviewRolesCovered(), abacCovered(), sodCovered(), sodCtlCovered(), sponsorshipsCovered(), adminCovered(), disablesCovered(), removalsCovered(), requestDraftsCovered(), reviewSchedulesCovered(), ownershipCovered(), queueCovered(), breakGlassCovered(), awsCovered()} {
 		for k := range m {
 			covered[strings.SplitN(k, "/", 2)[0]] = true
 		}

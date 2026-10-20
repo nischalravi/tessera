@@ -151,6 +151,20 @@ func ForConfigLimits(c *config.Config, timeout time.Duration, maxBodyBytes int64
 	return newClient(o)
 }
 
+// ForCLIEnv is ForCLI for a command-line tool whose user names the
+// environment (the reference CLI reads TESSERA_ENV): only "dev" gets the
+// loopback exception and plain http, so a CLI pointed at a local development
+// server works; any other value, an empty one included, gets the production
+// rules. The server never uses it (ForConfig decides there, from the validated
+// configuration). Zero timeout and maxBodyBytes keep the defaults.
+func ForCLIEnv(env string, timeout time.Duration, maxBodyBytes int64) (*http.Client, error) {
+	o := Options{Env: config.Prod, Timeout: timeout, MaxBodyBytes: maxBodyBytes}
+	if env == config.Dev {
+		o.Env, o.AllowLoopback = config.Dev, true
+	}
+	return newClient(o)
+}
+
 // ForCLI returns a production client (no loopback exception, https only,
 // default ports) with a longer timeout and a larger body limit, for the
 // `tessera catalog` command, which runs without a server configuration and

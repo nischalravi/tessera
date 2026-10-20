@@ -39,8 +39,8 @@ func needStepUp(p auth.Permission, req auth.AuthnRequirement) Route {
 // unauthenticated caller. testdata/contract/public_routes.golden snapshots
 // this list, so adding to it needs a reviewed diff.
 //
-// The well-known documents and the OAuth AS routes of §16.1 join with the PR
-// that adds them (PR10).
+// The OAuth AS routes (PR10) are public because their credential is the
+// device code, the refresh token or the DPoP proof in the request itself.
 var publicRoutes = []string{
 	"GET /api/health",
 	"GET /api/auth/discover",
@@ -52,6 +52,12 @@ var publicRoutes = []string{
 	"GET /t/{slug}/bootstrap",
 	"POST /api/auth/break-glass/options",
 	"POST /api/auth/break-glass/verify",
+	"GET /t/{slug}/.well-known/oauth-authorization-server",
+	"GET /t/{slug}/.well-known/jwks.json",
+	"GET /.well-known/oauth-protected-resource",
+	"POST /t/{slug}/oauth/device_authorization",
+	"POST /t/{slug}/oauth/token",
+	"POST /t/{slug}/oauth/revoke",
 }
 
 // PublicRoutes returns the allow-list.
