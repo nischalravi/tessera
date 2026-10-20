@@ -294,7 +294,11 @@ func (s *Service) Activate(c *store.TenantTx, connID, actor string, now time.Tim
 		{Key: "revision_id", Value: b.Rev.ID}, {Key: "gate_report", Value: g}}); err != nil {
 		return nil, ActiveConnection{}, err
 	}
-	return b, ActiveConnection{conn.ID, b.Rev.ID, conn.System, conn.ConnectorType, conn.Name}, s.persist(c, b, now)
+	if err := s.persist(c, b, now); err != nil {
+		return nil, ActiveConnection{}, err
+	}
+	_, err = s.captureBaseline(c, b, now) // the drift baseline of the new live revision (§7.4)
+	return b, ActiveConnection{conn.ID, b.Rev.ID, conn.System, conn.ConnectorType, conn.Name}, err
 }
 
 // ApprovalItem is the gate blocker of a write-enabled revision that has no

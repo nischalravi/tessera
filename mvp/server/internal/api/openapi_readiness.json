@@ -999,8 +999,8 @@
   },
   "/api/insights/deployment-health": {
    "get": {
-    "summary": "Tenant score, per-connection scores, needs-attention, skipped items",
-    "description": "Permission: connections.read",
+    "summary": "Tenant score, per-connection scores, needs-attention, skipped items, drift since activation and Inbox tasks",
+    "description": "Permission: connections.read. drift lists live connections against their activation baseline; tasks are the Inbox tasks of degraded connections (source connection); schedule names the re-run job.",
     "responses": {
      "200": {
       "description": "Deployment health"

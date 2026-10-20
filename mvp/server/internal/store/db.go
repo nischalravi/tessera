@@ -166,6 +166,8 @@ var tables = []string{
 	"claim_tokens", "claim_sessions", "confirmation_codes",
 	// claim proof one-use memory (schema/0229_claim_proofs.sql)
 	"claim_proof_uses",
+	// readiness drift baselines (schema/0355_readiness_baselines.sql)
+	"readiness_baselines",
 	// SIEM sinks (schema/0210_siem.sql)
 	"siem_sinks", "siem_dead_letters",
 	// alerting (schema/0209_alerts.sql)

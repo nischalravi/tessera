@@ -2162,9 +2162,24 @@ export interface AttentionEntry {
   fix: { kind: "item" | "finding"; item_id?: string; finding_id?: string; href: string };
 }
 
+export interface DriftEvent { kind: string; severity: "high" | "medium" | "low"; subject: string; sentence: string; was?: number; now?: number }
+export interface TemplateUpgrade { pin: string; available: string; major: boolean; new_required: string[]; new_other: number; first_seen_at?: string; grace_ends_at?: string; overdue: boolean }
+export interface DriftView {
+  connection_id: string; connection_name: string; revision_id: string; state: RevisionState;
+  baseline: { captured_at: string; score: number; config_hash: string; findings: number; accounts: number; groups: number };
+  score: number; accounts: number; groups: number; findings: number; events: DriftEvent[]; template_upgrade: TemplateUpgrade | null;
+  fail_streak: number; degraded_reason?: string; degraded_at?: string; last_scheduled_run_at?: string; score_series: { at: string; score: number }[];
+}
+/** An Inbox task from deployment readiness (source "connection"): a degraded connection. */
+export interface ReadinessTask {
+  id: string; kind: "connection"; connection_id: string; connection_name: string; owner: string | null; severity: string; title: string;
+  reason: string; since: string; href: string;
+}
+
 export interface ConnectionHealthRow {
   id: string; name: string; connector_type: string; state: RevisionState; health: string; simulated: boolean; score: number; band: Band;
-  counted: boolean; accounts: number; blocking: number; last_validated: string | null; last_dry_run: string | null; drift: unknown;
+  counted: boolean; accounts: number; blocking: number; last_validated: string | null; last_dry_run: string | null;
+  drift: { events: number; high: number; template_update: boolean } | null;
 }
 
 export interface SkippedRow { connection_id: string; connection_name: string; item_id: string; item_title: string; level: string; actor: string; reason: string; skipped_at: string; review_by: string; expired: boolean }
@@ -2173,7 +2188,7 @@ export interface DeploymentHealth {
   generated_at: string;
   tenant: { score: number | null; band: Band | ""; capped: boolean; cap_reason?: string; hr_source: string; connections_counted: number; formula: string };
   kpis: { accounts_correlated_pct?: number; orphans: number; dormant: number; privileged_accounts: number; open_critical_high: number; connections_in_setup: number; degraded: number };
-  connections: ConnectionHealthRow[]; needs_attention: AttentionEntry[]; skipped: SkippedRow[]; drift: unknown[];
+  connections: ConnectionHealthRow[]; needs_attention: AttentionEntry[]; skipped: SkippedRow[]; drift: DriftView[]; tasks: ReadinessTask[];
   schedule: Record<string, string>; scenario: string;
 }
 

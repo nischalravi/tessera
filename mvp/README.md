@@ -200,6 +200,26 @@ the LDAP bind password); without one the live checks report an error instead of 
 unauthenticated. The client is the shared outbound one, with the connection's configured port
 allowed (`safehttp.WithConfiguredPorts`). Tests use an in-process SCIM server
 with misbehaviour switches (`internal/connectors/scim/fakescim_test.go`).
+**After activation** (design §7.4, §7.5). Activation stores a baseline of the live revision
+(`readiness_baselines`: score, item states, finding and object counts, config hash). A background
+scheduler (`readiness.Scheduler`, started by `tessera serve`, a pass every 15 minutes) re-runs the
+live checks of every active or degraded connection daily and reconciles it weekly in live mode (the
+same staging scratch tables and findings as a dry run; it never writes the live graph), then
+compares the evidence with the baseline. Drift is newly failing checks (a newly failing check on the
+service account's effective rights is reported as a change made outside Tessera), finding counts
+beyond ±10% or ±25 objects, object counts beyond ±5% between consecutive runs, credentials within
+30 days of expiry, and a newer template minor release that adds Required items (30-day grace from
+when the release is first seen). A revision moves `active → degraded` when a Required live check
+fails on two consecutive scheduled runs (an administrator's on-demand re-run does not count), its
+credential is within 7 days of expiry, or the template grace period ends; it recovers when none of
+these hold. While degraded, reads continue and write-back stops: `Service.CanWrite` is false and
+`Service.RequireWrite` refuses (409 `connection_degraded`), enforced on the server. The Inbox
+shows a task per degraded connection (`tasks` in `GET /api/insights/deployment-health`), and
+`GET /api/connections/{id}/health` and the dashboard carry `drift`. Settings:
+`TESSERA_READINESS_LIVE_CHECK_DAYS` (1 to 7, default 1) and `TESSERA_READINESS_SCHEDULER=off`.
+Not wired yet: the "sync failed for 24 hours" and "cursor lost three times in 7 days" triggers
+(`readiness.ExternalSignals`; nothing records them yet), and Admin → Jobs (set `Scheduler.Hook`
+to the `job_runs` wrapper of #172).
 
 #### Live LDAP checks
 

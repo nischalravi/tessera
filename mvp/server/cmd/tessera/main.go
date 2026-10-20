@@ -48,6 +48,8 @@
 //	                      tessera-devidp -print-saml-cert): seeding also creates a
 //	                      dev_mock SAML connection pinning it (run.sh sets it)
 //	TESSERA_READINESS_SCENARIO  simulated validation scenario for demo connectors: gaps (default) or happy
+//	TESSERA_READINESS_LIVE_CHECK_DAYS  how often live checks re-run on active connections, 1 to 7 days (default 1)
+//	TESSERA_READINESS_SCHEDULER "off" stops the scheduled re-runs, drift and Degraded detection
 //	TESSERA_SAFEDIAL_ALLOW      dev only: host:port or CIDR:port private LDAP targets live checks may dial (see mvp/README.md "Live LDAP checks")
 //	TESSERA_AGENT_ADDR, TESSERA_AGENT_TLS_CERT, TESSERA_AGENT_TLS_KEY  the mutual-TLS listener Directory
 //	                      Agents connect to, and its certificate and key (see mvp/README.md "Directory Agent")
@@ -420,6 +422,9 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	// Directory Agents (DR-11): private directories are probed through them.
 	agents := &agent.Service{DB: st, Hub: agent.NewHub(nil), Clock: clock}
 	rsvc.Runner.Live.Agents = agents
+	if err := configureReadinessSchedule(rsvc); err != nil {
+		return err
+	}
 	// Outbound calls to IdPs (discovery, JWKS, token) and the kill switch's
 	// provider calls (containment) go through safehttp. A test server gets the
 	// production client (no loopback exception; ForConfig decides).
@@ -554,6 +559,11 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		defer close(ckptDone)
 		checkpointer.Loop(ctx, checkpointInterval)
 	}()
+	rdyDone := make(chan struct{})
+	go func() {
+		defer close(rdyDone)
+		runReadinessScheduler(ctx, rsvc, st, clock, logger)
+	}()
 	siemDone := make(chan struct{})
 	go func() {
 		defer close(siemDone)
@@ -614,6 +624,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		<-provDone
 		<-keysDone
 		<-ckptDone
+		<-rdyDone
 		<-siemDone
 		<-alertsDone
 		<-backupDone
@@ -640,6 +651,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	<-provDone
 	<-keysDone
 	<-ckptDone
+	<-rdyDone
 	<-siemDone
 	<-alertsDone
 	<-backupDone

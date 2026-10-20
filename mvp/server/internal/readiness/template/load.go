@@ -25,6 +25,7 @@ type Registry struct {
 	base      *Template
 	templates map[string]*Template
 	resolved  map[string]*Resolved
+	archived  map[string]*Resolved // earlier major.minor releases by pin (Archive)
 }
 
 var semver = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
@@ -188,9 +189,35 @@ func (r *Registry) Resolve(pin string) (*Resolved, error) {
 	}
 	m := semver.FindStringSubmatch(t.Version)
 	if m == nil || m[1] != strconv.Itoa(major) || m[2] != strconv.Itoa(minor) {
+		if old, ok := r.archived[fmt.Sprintf("%s@%d.%d", id, major, minor)]; ok {
+			return old.Clone(), nil
+		}
 		return nil, fmt.Errorf("%w: %s is at %s", ErrVersionUnavailable, pin, t.Version)
 	}
 	return t, nil
+}
+
+// Archive adds an earlier release set (base.yaml plus connector templates, the
+// same layout Load reads) so revisions pinned to its major.minor keep
+// resolving after a newer minor release replaces it as the current template.
+// The set is linted like the current one. A newer minor release is offered to
+// live connections as an update (readiness.TemplateUpgrade), never substituted.
+func (r *Registry) Archive(fsys fs.FS) error {
+	base, ts, err := parseAll(fsys)
+	if err != nil {
+		return err
+	}
+	if probs := Lint(base, ts); len(probs) > 0 {
+		return fmt.Errorf("archived readiness templates failed lint: %s", probs[0].String())
+	}
+	if r.archived == nil {
+		r.archived = map[string]*Resolved{}
+	}
+	for _, t := range ts {
+		res := resolve(base, t)
+		r.archived[res.Pin()] = res
+	}
+	return nil
 }
 
 func majorMinor(v string) string {
