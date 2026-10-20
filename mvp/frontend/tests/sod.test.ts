@@ -178,3 +178,37 @@ test("expiry wording and the expiring-soon filter", () => {
   assert.equal(m.mitigationStatusLabel({ status: "pending", kind: "control" }), "Awaiting approval");
   assert.deepEqual(m.parseEvidence(" a \n\n b\n"), ["a", "b"]);
 });
+
+test("ruleset remediation sends method, path, body and CSRF", async () => {
+  await api.sod.setRulesetRemediation("rs/1", ["revoke", "escalate"], 7);
+  await api.sod.setRulesetRemediation("rs1", [], null);
+  assert.deepEqual(
+    calls.map((c) => [c.method, c.url, c.headers["x-tessera-csrf"], c.body]),
+    [
+      ["PUT", "/api/sod/rulesets/rs%2F1/remediation", "csrf-pat", { options: ["revoke", "escalate"], escalate_to_id: 7 }],
+      ["PUT", "/api/sod/rulesets/rs1/remediation", "csrf-pat", { options: [], escalate_to_id: null }],
+    ],
+  );
+});
+
+test("own options are sent only when chosen, and all four mean none", () => {
+  assert.deepEqual(m.optionsToSend(false, ["revoke"]), []); // inherit: the chosen list is ignored
+  assert.deepEqual(m.optionsToSend(true, ["escalate", "revoke"]), ["revoke", "escalate"]); // display order
+  assert.deepEqual(m.optionsToSend(true, ["accept", "escalate", "revoke", "mitigate"]), []); // all four = the default
+  assert.equal(m.optionsError(true, []), "Choose at least one option, or inherit them");
+  assert.equal(m.optionsError(false, []), null);
+  assert.equal(m.optionsError(true, ["accept"]), null);
+});
+
+test("remediation wording names where options come from and who gets an escalation", () => {
+  assert.equal(m.sourceLabel("risk"), "Set on this risk");
+  assert.equal(m.sourceLabel("ruleset"), "Inherited from the ruleset");
+  assert.match(m.sourceLabel("default"), /Every option/);
+  assert.equal(m.describeOptions([]), "None");
+  assert.equal(m.describeOptions(["escalate", "revoke"]), "Revoke access, Escalate to an approver");
+  assert.equal(m.escalationLabel({ name: "Carol" }), "Carol");
+  assert.match(m.escalationLabel(null), /Nobody/);
+  // a violation offers only what its risk (or ruleset) offers
+  assert.equal(m.offers({ remediation: ["revoke", "escalate"] }, "accept"), false);
+  assert.equal(m.offers({ remediation: ["revoke", "escalate"] }, "escalate"), true);
+});

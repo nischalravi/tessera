@@ -223,7 +223,7 @@ func (a *Applier) Apply(in ApplyInput) (*ApplyResult, error) {
 	}
 
 	// compile, now that every group exists
-	resolve := resolver(tx, batch)
+	resolve := resolver(tx, batch, env.GroupHidden)
 	var cdiags []Diagnostic
 	for _, p := range ps {
 		plan, ds := comp.Compile(p.file, resolve)

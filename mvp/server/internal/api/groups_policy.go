@@ -75,8 +75,36 @@ func policyFiles(r *http.Request) (*grpPolicyBody, []*policygroups.File, []polic
 	return &in, fs, diags, nil
 }
 
-// requireReadOnRefs requires read on every group the files refer to that exists
-// and that the change does not itself define.
+// groupHidden reports the groups the caller may not view. It fails closed: a
+// group whose privilege cannot be checked counts as hidden.
+func (s *Server) groupHidden(ck *privs.Checker) func(store.GroupID) bool {
+	return func(id store.GroupID) bool {
+		ok, err := ck.Has(privs.GroupObject(id), privs.View)
+		return err != nil || !ok
+	}
+}
+
+// requireOnDefined requires want on a group the files define. When the caller
+// may not even view that group, the 403 leaves out its id (#387): the name was
+// the caller's own input, and the group's UUID must not come back with it.
+func (s *Server) requireOnDefined(ck *privs.Checker, id store.GroupID, want privs.Privilege) error {
+	err := ck.Require(privs.GroupObject(id), want)
+	if err == nil {
+		return nil
+	}
+	var d *privs.DeniedError
+	if errors.As(err, &d) && s.groupHidden(ck)(id) {
+		return &readiness.Error{Status: http.StatusForbidden, Code: "privilege_required",
+			Msg:   "the " + string(want) + " privilege is required on this group",
+			Extra: map[string]any{"privilege": string(want), "object_type": string(d.Object.Type)}}
+	}
+	return grpErr(err)
+}
+
+// requireReadOnRefs requires read on every group the files refer to that exists,
+// that the caller may view and that the change does not itself define. A group
+// the caller may not view is skipped here and resolves as unknown (groupHidden),
+// so neither the 403 nor its object_id tells that the name exists.
 func (s *Server) requireReadOnRefs(r *http.Request, ck *privs.Checker, fs []*policygroups.File) error {
 	tx := store.TxFrom(r.Context())
 	batch := map[string]bool{}
@@ -94,7 +122,7 @@ func (s *Server) requireReadOnRefs(r *http.Request, ck *privs.Checker, fs []*pol
 			if err != nil {
 				return err
 			}
-			if ok {
+			if ok && !s.groupHidden(ck)(id) {
 				ids = append(ids, id)
 			}
 		}
@@ -113,7 +141,9 @@ func (s *Server) validateGrpPolicy(r *http.Request, _ *params) (int, any, error)
 	if err := s.requireReadOnRefs(r, s.grpChecker(r), fs); err != nil {
 		return 0, nil, err
 	}
-	v, _, err := policygroups.Validate(s.grpRead(r), policygroups.DefaultSchema(), in.Files)
+	env := s.grpRead(r)
+	env.GroupHidden = s.groupHidden(s.grpChecker(r))
+	v, _, err := policygroups.Validate(env, policygroups.DefaultSchema(), in.Files)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -132,8 +162,8 @@ func (s *Server) diffGrpPolicy(r *http.Request, _ *params) (int, any, error) {
 	tx := store.TxFrom(r.Context())
 	for _, f := range fs { // the members of the groups compared are shown
 		if g, err := tx.GrpGroupByName(f.Group); err == nil {
-			if err := ck.Require(privs.GroupObject(g.ID), privs.Read); err != nil {
-				return 0, nil, grpErr(err)
+			if err := s.requireOnDefined(ck, g.ID, privs.Read); err != nil {
+				return 0, nil, err
 			}
 		} else if !errors.Is(err, store.ErrNotFound) {
 			return 0, nil, err
@@ -147,7 +177,9 @@ func (s *Server) diffGrpPolicy(r *http.Request, _ *params) (int, any, error) {
 			return 0, nil, err
 		}
 	}
-	d, err := s.policyApplier(s.grpRead(r)).Diff(in.Files, in.Full)
+	env := s.grpRead(r)
+	env.GroupHidden = s.groupHidden(ck)
+	d, err := s.policyApplier(env).Diff(in.Files, in.Full)
 	if err != nil {
 		return 0, nil, policyErr(err)
 	}
@@ -186,8 +218,8 @@ func (s *Server) requireApply(r *http.Request, ck *privs.Checker, fs []*policygr
 		g, err := tx.GrpGroupByName(f.Group)
 		switch {
 		case err == nil:
-			if err := ck.Require(privs.GroupObject(g.ID), privs.Admin); err != nil {
-				return grpErr(err)
+			if err := s.requireOnDefined(ck, g.ID, privs.Admin); err != nil {
+				return err
 			}
 			continue
 		case !errors.Is(err, store.ErrNotFound):
@@ -237,6 +269,7 @@ func (s *Server) applyGrpPolicy(r *http.Request, _ *params) (int, any, error) {
 	var out *policygroups.ApplyResult
 	err = s.grpWrite(r, func(e model.Env) error {
 		var err error
+		e.GroupHidden = s.groupHidden(ck)
 		out, err = s.policyApplier(e).Apply(policygroups.ApplyInput{Origin: in.Origin, Commit: in.Commit, Files: in.Files, Full: in.Full})
 		return err
 	})

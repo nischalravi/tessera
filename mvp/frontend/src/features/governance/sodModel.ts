@@ -3,7 +3,7 @@
  * editor validation, ordering and the warning shown before an access request is submitted.
  * Pure functions; `npm test` covers them.
  */
-import type { SodAttribute, SodMitigation, SodPriority, SodRemediation, SodSelector, SodSimulation, SodSubjects, SodViolation } from "../../api";
+import type { SodAttribute, SodMitigation, SodPriority, SodRemediation, SodRemediationSource, SodSelector, SodSimulation, SodSubjects, SodViolation } from "../../api";
 
 export const PRIORITIES: SodPriority[] = ["critical", "high", "medium", "low"];
 export const priorityRank = (p: string) => PRIORITIES.length - PRIORITIES.indexOf(p as SodPriority);
@@ -93,7 +93,7 @@ export const REMEDIATION: { id: SodRemediation; label: string; hint: string }[] 
   { id: "revoke", label: "Revoke access", hint: "Remove a grant behind the violation, through the revoke path" },
   { id: "mitigate", label: "Mitigate with a control", hint: "Cover it with a control from the library until an end date" },
   { id: "accept", label: "Accept until a date", hint: "Accept the risk until an end date" },
-  { id: "escalate", label: "Escalate to the risk owner", hint: "Ask the owner of the risk to decide" },
+  { id: "escalate", label: "Escalate to an approver", hint: "Send it to the ruleset's approver, else the owner of the risk, who gets an inbox item" },
 ];
 
 /** True when the violation's risk offers the option (the server enforces the same). */
@@ -139,3 +139,30 @@ export const mitigationStatusLabel = (m: Pick<SodMitigation, "status" | "kind">)
 
 /** Evidence references typed one per line. */
 export const parseEvidence = (text: string) => text.split("\n").map((l) => l.trim()).filter(Boolean);
+
+// ------------------------------------------------------------ remediation options (issue #298)
+
+/** Where a risk's options come from, in words. */
+export const sourceLabel = (s: SodRemediationSource): string =>
+  s === "risk" ? "Set on this risk" : s === "ruleset" ? "Inherited from the ruleset" : "Every option (nothing is configured)";
+
+/** The options as one line, in display order. */
+export const describeOptions = (opts: SodRemediation[]): string =>
+  opts.length === 0 ? "None" : REMEDIATION.filter((r) => opts.includes(r.id)).map((r) => r.label).join(", ");
+
+/**
+ * What to send as a risk's or ruleset's own options: nothing when it should inherit (or offer all),
+ * else the chosen options in display order. All four chosen is the same as none, as on the server.
+ */
+export function optionsToSend(custom: boolean, chosen: SodRemediation[]): SodRemediation[] {
+  if (!custom) return [];
+  const ordered = REMEDIATION.map((r) => r.id).filter((id) => chosen.includes(id));
+  return ordered.length === REMEDIATION.length ? [] : ordered;
+}
+
+/** Why a set of custom options cannot be saved, or null: offering nothing would leave a violation no way out. */
+export const optionsError = (custom: boolean, chosen: SodRemediation[]): string | null =>
+  custom && chosen.length === 0 ? "Choose at least one option, or inherit them" : null;
+
+/** Who an escalation goes to, in words. */
+export const escalationLabel = (to: { name: string } | null | undefined): string => (to ? to.name : "Nobody (no approver and no risk owner)");

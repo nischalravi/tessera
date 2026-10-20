@@ -1879,6 +1879,20 @@ CREATE POLICY tenant_isolation ON grp_sink_dead_letters
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE request_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE request_settings FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON request_settings;
+CREATE POLICY tenant_isolation ON request_settings
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE sod_ruleset_remediation ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sod_ruleset_remediation FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON sod_ruleset_remediation;
+CREATE POLICY tenant_isolation ON sod_ruleset_remediation
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 ALTER TABLE tenant_certificates ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tenant_certificates FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON tenant_certificates;

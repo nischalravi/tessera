@@ -182,14 +182,19 @@ func TestQueueRecordsJobRuns(t *testing.T) {
 	if _, err := srv.Queue().Enqueue(context.Background(), f.A.ID, "always_fails", "", "", time.Time{}, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := srv.Queue().Tick(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	srv.Queue().Wait()
+	// A tick claims at most Concurrency due jobs, oldest run_at first, so
+	// scheduled sweeps still due (or newly due at a minute boundary) can take
+	// every slot ahead of it. Tick until it has run, with a bound.
 	var failed *store.JobRun
-	for _, r := range runs(f.A.ID) {
-		if r.Kind == "always_fails" {
-			failed = r
+	for i := 0; i < 50 && failed == nil; i++ {
+		if err := srv.Queue().Tick(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		srv.Queue().Wait()
+		for _, r := range runs(f.A.ID) {
+			if r.Kind == "always_fails" {
+				failed = r
+			}
 		}
 	}
 	if failed == nil || failed.Status != "failed" || failed.Error == nil || !strings.Contains(*failed.Error, "nope") {
