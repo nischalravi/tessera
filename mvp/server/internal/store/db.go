@@ -227,6 +227,8 @@ var tables = []string{
 	"agent_profiles", "mcp_findings",
 	// pending identity-link changes, the four-eyes step (schema/0362_identity_link_requests.sql)
 	"identity_link_requests",
+	// groups REST API idempotency keys (schema/0376_groups_api.sql)
+	"grp_idempotency",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was

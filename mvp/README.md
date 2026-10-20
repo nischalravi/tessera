@@ -2362,7 +2362,7 @@ deleted group, or one outside its own `enabled_from`/`disabled_at`, is an empty 
 
 | Route (`groups.read`/`groups.write`, then the privilege; the two engine routes `groups.admin`) | |
 |---|---|
-| `GET /api/groups/{id}/members?filter=direct\|effective&limit=&offset=` | members (`read`); `stale` is true while a recompute is queued |
+| `GET /api/groups/{id}/members?filter=direct\|effective&limit=&offset=` | members (`read`); `stale` is true while a recompute is queued (more filters in "Groups REST API", GR-5) |
 | `POST /api/groups/{id}/members` `{identity \| group, enabled_from, disabled_at, reason}` | add (`201`), update dates of an existing row (`200`), or `202` |
 | `GET /api/groups/{id}/members/{identity}` | hasMember; ignores a row whose `disabled_at` passed even if the time wheel lags |
 | `DELETE /api/groups/{id}/members/{identity-id \| group-id}` | remove (`200` or `202`) |
@@ -2502,6 +2502,75 @@ inheritance, `explain.go`, `grant.go`, `settings.go`), `server/internal/api/grou
   `TestPrivs_EveryoneNeedsTenantAdmin`), `internal/api` (`TestGroupsRoutesRequirePrivilege` for every
   route, `TestPrivs_ViewFiltersBrowseAndSearch`, `TestPrivs_GrantsGiveAccess`, ...),
   `TestIsolation_GroupPrivilegeTables` in `internal/store`.
+
+#### Groups REST API and SCIM server (GR-5, issue #48)
+
+Design `docs/design/groups-grouper-parity.md` §10.11. Schema `0376_groups_api.sql` (`0285` is the
+last numbered file before it; `0287` is another PR's): `grp_idempotency`. Code:
+`server/internal/groups/api` (idempotency keys, the SCIM resources and filter, the OpenAPI document),
+`server/internal/groups/model/{batch,trace,simulate}.go` (the operations), and the handlers in
+`server/internal/api/{groups_members,groups_api,scim}.go`. (The design puts the whole API in
+`internal/groups/api`; the handlers need the server's routing, authentication and audit, so they sit
+beside the other group routes, as GR-1 to GR-4 did, and `internal/groups/api` holds what does not
+depend on `net/http`.) Every route needs its route permission and then the privilege of the group it
+names, like the routes of GR-1 to GR-4; `TestGroupsRoutesRequirePrivilege` and the rbac table list them.
+
+| Route | |
+|---|---|
+| `GET /api/groups/{id}/members?filter=direct\|indirect\|effective\|composite&list=members&enabled=true\|false&q=&sort=name\|-name\|since\|-since&page=&limit=&offset=` | `direct` (default): the rows, `enabled` keeps those that count now or not; `effective`: every identity; `indirect`: effective members with no active direct row of their own (they come through nesting or factors); `composite`: the members a composite definition gives (none for a basic group). `q` is a substring of the member's name (or email), `page` is 1-based with `limit` (instead of `offset`). Needs `read` |
+| `GET /api/groups/{id}/members?as_of=T` and `?between=T1,T2` | as GR-3; `q`, `sort`, `enabled` and `page` are refused with them |
+| `GET /api/groups/{id}/members/{identity}?trace=true` | adds `paths`: every way the identity is a member, each a list of steps from the group down to the group whose direct row names the identity (`via`: `start`, `nested`, `factor`; `op`: the composite's operator; at most 100 paths, then `truncated`). A complement is explained by its left factor, an intersection by all of its factors |
+| `POST /api/groups/{id}/members:batch` `{add:[{identity \| group, enabled_from, disabled_at, reason}], remove:["<identity id or group id>"], enabled_from, disabled_at, reason, atomic}` | 1 to 1,000 operations on one group (adds first, then removes; a member in both lists is `422 conflicting_operations`). **Atomic by default**: the first refused operation undoes the whole batch and the answer is its error with `index`. With `"atomic": false` every operation stands or falls by itself (a savepoint each) and `results[i]` says `created`, `updated`, `removed` or `failed` with the error; if every operation was refused for want of a privilege the answer is `403` instead. Each operation asks the privileges of the single routes (`update`, or `optin`/`optout` for oneself, `read` on a nested group), each writes its own event, and the batch writes `groups.member.batch`. `200`, or `202` with `ops` when a recompute was queued |
+| `GET /api/identities/{identity_id}/groups?filter=effective\|direct\|indirect&as_of=T&limit=&offset=` | the groups an identity is in, by name, only those the caller holds `read` on (read, because it tells who is a member); `as_of` answers from the point-in-time history. `groups.read` |
+| `POST /api/groups:simulate` `{changes:[{kind: add_member\|remove_member\|set_composite\|convert_to_composite, group, identity, member_group, member, op, factors, discard_members, ...}]}` | what the changes (at most 100) would do: `groups[]` with `before`, `after`, `added`, `removed` and a sample of the identities, for the groups the changes name (`targeted`) and for every group above them (downstream); `changes[]` says created, updated or removed. Needs `groups.write` and the privileges of the changes themselves. **Writes nothing**: see below |
+| `GET /api/openapi/groups.json` | the OpenAPI 3.1 document of the groups, SCIM and identity-groups routes, built from the server's route table (`x-tessera-permission` per operation); `TestGroupsOpenAPI_CoversRoutes` fails if a route has no entry |
+| `GET /scim/v2/Groups[/{id}]`, `/scim/v2/Users[/{id}]`, `/scim/v2/ServiceProviderConfig`, `/scim/v2/ResourceTypes` | the read-only SCIM 2.0 server, below |
+
+- **Idempotency.** `POST /members`, `DELETE /members/{member}` and the batch accept
+  `Idempotency-Key` (1 to 255 of `A-Za-z0-9._~:+=-`). The first answer (2xx) is stored with the
+  change, in its transaction, in `grp_idempotency`; for 24 hours the same key with the same method,
+  path and body replays that answer (`Idempotent-Replayed: true`) and writes nothing. The key is
+  scoped to the tenant and the caller (`user:<id>`, or `client:<id>` for a machine client), so two
+  callers never share one; the same key with another request is `422 idempotency_key_reused`. A
+  refused request stores nothing. Expired keys are purged by the tenant's next keyed write; the table
+  is immutable (a trigger) and has no cross-table references, so it needs no cross-tenant guard.
+- **Simulation writes nothing.** It runs the real operations, the real engine included (with a budget
+  of 100,000 row operations, so it never queues), inside a savepoint, reads the effective changes back
+  from the events the engine wrote, and rolls the savepoint back: rows, events, audit events, the
+  queue and the counters all return to what they were. The request's own `http.request` event is the
+  only trace, and the route fails closed like a read if that cannot be written.
+  `TestSimulate_NoSideEffects` compares every groups table, the event head, the engine state and the
+  audit ledger before and after. A change too big for the budget is `422 simulation_too_large`.
+- **SCIM authentication.** There is no separate credential. The SCIM server is authenticated like
+  every other route: the request needs a signed-in principal (a session cookie today; `Principal`
+  already has the `api_client` kind for the token principals of the machine-client work) whose roles
+  hold `groups.read`, the tenant is the principal's and never a header or path, and nothing is served
+  anonymously (`TestSCIM_PrivilegeAndAuth` tries a bearer token, a tenant header and a stray cookie).
+  A provisioning tool therefore needs a machine client when those land; until then the SCIM server is
+  usable by signed-in people and by tests. `ServiceProviderConfig.authenticationSchemes` is empty
+  because no SCIM scheme names this sign-in.
+- **SCIM resources.** `Users` are the tenant's identities (`id` the identity id, `userName` the email
+  or else the external id, `active` is status `active`, `userType` the identity type, `groups` on a
+  single user: the groups the caller may read). `Groups` are the native groups the caller holds `read`
+  on (`id` the group id, `displayName` the full `:` name, `members` the effective identities: the first
+  100 on a list, 1,000 on a single group, with `memberCount` and `membersTruncated` in the extension
+  `urn:tessera:params:scim:schemas:extension:group:2.0:Group`); a deleted group does not exist, a
+  disabled one has no members. `filter` supports `eq ne co sw ew gt ge lt le pr`, `and or not` and
+  parentheses (strings compare without case) on `id displayName` (Groups) and `id userName
+  displayName externalId emails.value active userType title` (Users), `startIndex` and `count` page
+  (`count` at most 200), `attributes` and `excludedAttributes` select. Errors are SCIM's
+  (`urn:ietf:params:scim:api:messages:2.0:Error`, `scimType` `invalidFilter` or `invalidValue`);
+  answers are `application/scim+json`. Sorting, PATCH, bulk and ETags are not supported, and there
+  are no write routes (`405`).
+- Audit events `groups.member.batch` (and one `groups.member.*` per operation); reads, simulations and
+  replays write only the `http.request` event.
+- Parity fixtures `161`-`179` (`testdata/parity/README.md`).
+- Tests: `internal/api` (`TestMembers_FiltersSearchSortAndPaging`, `TestMembers_Trace`,
+  `TestBatch_AtomicAndIdempotent`, `TestBatch_NonAtomicReportsEachOperation`, `TestBatch_Validation`,
+  `TestBatch_PrivilegesPerOperation`, `TestIdempotency_SingleMembershipRoutes`, `TestIdentityGroups`,
+  `TestSimulate_*`, `TestGroupsOpenAPI_CoversRoutes`, `TestSCIM_*`, `TestGroupsAPI_Isolation`),
+  `internal/groups/api` (filter, selection, key store and expiry, OpenAPI), `internal/store`
+  (`TestIsolation_GroupsAPIStatements`, `TestSavepoint`, `TestIsolation_IdempotencyTable`).
 
 ### Audit ledger
 
@@ -3581,7 +3650,7 @@ cd ../frontend && npm run build && npm test   # npm test: node:test, no extra de
 * **Unit tests** are table-driven Go tests per package: every test of the former pytest suite was
   ported, plus focused tests for effective-permission paths, policy evaluation, unused-access
   detection, the JIT lifecycle and leaver plans.
-* **API parity.** `internal/api/parity_test.go` replays 160 golden request/response pairs, in order
+* **API parity.** `internal/api/parity_test.go` replays 179 golden request/response pairs (160 recorded from the Python backend, 19 for the groups API), in order
   (reads, then simulation, JIT, review, revoke, HRIS/JML and sync mutations), against a freshly
   seeded server and requires identical JSON, including key order, number spelling and FastAPI's
   422 error bodies. The fixtures in `server/testdata/parity/` were recorded from the Python

@@ -107,6 +107,9 @@ func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 		{"GET", "/api/groups/{id}/members", "/api/groups/" + g + "/members", "", "read"},
 		{"POST", "/api/groups/{id}/members", "/api/groups/" + g + "/members", fmt.Sprintf(`{"identity":%d}`, e.ident("carol")), "update"},
 		{"GET", "/api/groups/{id}/members/{member}", "/api/groups/" + g + "/members/1", "", "read"},
+		{"GET", "/api/groups/{id}/members/{member}", "/api/groups/" + g + "/members/1?trace=true", "", "read"},
+		{"POST", "/api/groups/{id}/members:batch", "/api/groups/" + g + "/members:batch", fmt.Sprintf(`{"add":[{"identity":%d}]}`, e.ident("carol")), "update"},
+		{"POST", "/api/groups:simulate", "/api/groups:simulate", fmt.Sprintf(`{"changes":[{"kind":"add_member","group":%q,"identity":%d}]}`, g, e.ident("carol")), "update"},
 		{"DELETE", "/api/groups/{id}/members/{member}", "/api/groups/" + g + "/members/" + fmt.Sprint(e.ident("carol")), "", "update"},
 		{"POST", "/api/groups/{id}/convert-to-composite", "/api/groups/" + g + "/convert-to-composite", `{"op":"union","factors":["` + f1 + `"]}`, "admin"},
 		{"PUT", "/api/groups/{id}/composite", "/api/groups/" + g + "/composite", `{"op":"union","factors":["` + f1 + `"]}`, "admin"},
@@ -131,14 +134,24 @@ func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 		{"PUT", "/api/groups/users/{id}/identity", "/api/groups/users/" + other + "/identity", `{"identity_id":null}`, ""},
 	}
 	// the listings are gated too, by filtering: the table below names them so none is forgotten
-	listings := []routeCase{{"GET", "/api/groups/folders", "", "", ""}, {"GET", "/api/groups/native", "", "", ""}}
+	listings := []routeCase{{"GET", "/api/groups/folders", "", "", ""}, {"GET", "/api/groups/native", "", "", ""},
+		// GR-5: what an identity belongs to, and the read-only SCIM server, show only what the caller may read
+		// (the SCIM routes answer in SCIM's error format: TestSCIM_PrivilegeAndAuth checks their 403s)
+		{"GET", "/api/identities/{identity_id}/groups", "", "", ""}, {"GET", "/scim/v2/Groups", "", "", ""},
+		{"GET", "/scim/v2/Groups/{id}", "", "", ""}, {"GET", "/scim/v2/Users", "", "", ""}, {"GET", "/scim/v2/Users/{id}", "", "", ""},
+		{"GET", "/scim/v2/ServiceProviderConfig", "", "", ""}, {"GET", "/scim/v2/ResourceTypes", "", "", ""},
+		// the description of these routes is for every signed-in user
+		{"GET", "/api/openapi/groups.json", "", "", ""}}
 	// every registered group route is in the table
 	have := map[string]bool{}
 	for _, c := range append(slices.Clone(cases), listings...) {
 		have[c.method+" "+c.pattern] = true
 	}
 	for _, rt := range e.srv.Routes() {
-		if !strings.HasPrefix(rt.Pattern, "/api/groups") || (rt.Method == "GET" && rt.Pattern == "/api/groups") {
+		isGroups := strings.HasPrefix(rt.Pattern, "/api/groups") || strings.HasPrefix(rt.Pattern, "/scim/v2/") ||
+			rt.Pattern == "/api/openapi/groups.json" ||
+			(strings.HasPrefix(rt.Pattern, "/api/identities/") && strings.HasSuffix(rt.Pattern, "/groups"))
+		if !isGroups || (rt.Method == "GET" && rt.Pattern == "/api/groups") {
 			continue // GET /api/groups lists the connected-system groups
 		}
 		if !have[rt.Method+" "+rt.Pattern] {

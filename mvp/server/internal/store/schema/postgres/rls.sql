@@ -1647,3 +1647,10 @@ DROP POLICY IF EXISTS tenant_isolation ON mcp_findings;
 CREATE POLICY tenant_isolation ON mcp_findings
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_idempotency ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_idempotency FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_idempotency;
+CREATE POLICY tenant_isolation ON grp_idempotency
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));

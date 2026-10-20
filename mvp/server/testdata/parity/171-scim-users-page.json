@@ -1,0 +1,92 @@
+{
+ "name": "scim-users-page",
+ "request": {
+  "method": "GET",
+  "path": "/scim/v2/Users?startIndex=2&count=3"
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "schemas": [
+    "urn:ietf:params:scim:api:messages:2.0:ListResponse"
+   ],
+   "totalResults": 93,
+   "startIndex": 2,
+   "itemsPerPage": 3,
+   "Resources": [
+    {
+     "schemas": [
+      "urn:ietf:params:scim:schemas:core:2.0:User"
+     ],
+     "id": "2",
+     "externalId": "emp-1002",
+     "userName": "caspian.arkwright@larkspur.example",
+     "displayName": "Caspian Arkwright",
+     "title": "Chief Technology Officer",
+     "userType": "human",
+     "active": true,
+     "emails": [
+      {
+       "value": "caspian.arkwright@larkspur.example",
+       "type": "work",
+       "primary": true
+      }
+     ],
+     "meta": {
+      "resourceType": "User",
+      "created": "2026-10-08T09:30:00.000000Z",
+      "location": "/scim/v2/Users/2"
+     }
+    },
+    {
+     "schemas": [
+      "urn:ietf:params:scim:schemas:core:2.0:User"
+     ],
+     "id": "3",
+     "externalId": "emp-1003",
+     "userName": "mireille.delacroix@larkspur.example",
+     "displayName": "Mireille Delacroix",
+     "title": "Chief Financial Officer",
+     "userType": "human",
+     "active": true,
+     "emails": [
+      {
+       "value": "mireille.delacroix@larkspur.example",
+       "type": "work",
+       "primary": true
+      }
+     ],
+     "meta": {
+      "resourceType": "User",
+      "created": "2026-10-08T09:30:00.000000Z",
+      "location": "/scim/v2/Users/3"
+     }
+    },
+    {
+     "schemas": [
+      "urn:ietf:params:scim:schemas:core:2.0:User"
+     ],
+     "id": "4",
+     "externalId": "emp-1004",
+     "userName": "kofi.mensah@larkspur.example",
+     "displayName": "Kofi Mensah",
+     "title": "Engineering Manager, Backend",
+     "userType": "human",
+     "active": true,
+     "emails": [
+      {
+       "value": "kofi.mensah@larkspur.example",
+       "type": "work",
+       "primary": true
+      }
+     ],
+     "meta": {
+      "resourceType": "User",
+      "created": "2026-10-08T09:30:00.000000Z",
+      "location": "/scim/v2/Users/4"
+     }
+    }
+   ]
+  }
+ }
+}

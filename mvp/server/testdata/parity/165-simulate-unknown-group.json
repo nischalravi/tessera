@@ -1,0 +1,24 @@
+{
+ "name": "simulate-unknown-group",
+ "request": {
+  "method": "POST",
+  "path": "/api/groups:simulate",
+  "body": {
+   "changes": [
+    {
+     "kind": "add_member",
+     "group": "00000000-0000-4000-8000-00000000d00d",
+     "identity": 1
+    }
+   ]
+  }
+ },
+ "response": {
+  "status": 404,
+  "body": {
+   "detail": "no such group",
+   "error": "not_found",
+   "index": 0
+  }
+ }
+}
