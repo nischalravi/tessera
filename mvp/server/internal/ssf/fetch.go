@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -45,6 +46,14 @@ func scrubErr(err error) error {
 	}
 	return err
 }
+
+// outboundSyntax is the exact syntax of a URL Tessera calls a transmitter
+// at: http(s), an ASCII DNS name or a bracketed IP literal, an optional port,
+// and a path and query of RFC 3986 characters. No user info or fragment can
+// match. do checks it on the very string the request is built from, after
+// outboundURL; the safehttp client still applies its address, port and
+// redirect rules at dial time.
+var outboundSyntax = regexp.MustCompile(`^https?://(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*|\[[0-9A-Fa-f:.]+\])(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*)?(?:\?[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*)?$`)
 
 // outboundURL checks a transmitter-configured URL before any request is built:
 // https (http only with Dev), a host, no user info, and no IP literal in a
@@ -95,7 +104,11 @@ func (s *Service) do(ctx context.Context, method, rawURL, bearer string, body an
 	if err != nil {
 		return 0, nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, method, u.String(), rd)
+	target := u.String()
+	if !outboundSyntax.MatchString(target) {
+		return 0, nil, errors.New("the URL is not allowed")
+	}
+	req, err := http.NewRequestWithContext(ctx, method, target, rd)
 	if err != nil {
 		return 0, nil, errors.New("the URL is not valid")
 	}

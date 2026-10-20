@@ -69,3 +69,29 @@ func TestDoRefusesBeforeSending(t *testing.T) {
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// TestOutboundSyntax: the anchored syntax do checks on the string it sends.
+func TestOutboundSyntax(t *testing.T) {
+	for raw, ok := range map[string]bool{
+		"https://tx.example.com/jwks":                   true,
+		"https://TX.example.com:8443/a/b?x=1&y=%20":     true,
+		"http://127.0.0.1:8001/jwks":                    true,
+		"https://[2001:db8::1]/jwks":                    true,
+		"https://xn--bcher-kva.example/jwks":            true,
+		"https://tx.example.com":                        true,
+		"https://bücher.example/jwks":                   false,
+		"https://tx.example.com/jwks#frag":              false,
+		"https://u:p@tx.example.com/jwks":               false,
+		"https://-tx.example.com/jwks":                  false,
+		"https://tx.example.com/a b":                    false,
+		"https://tx.example.com/a\\b":                   false,
+		"ftp://tx.example.com/jwks":                     false,
+		"https://tx.example.com/jwks\r\nHost: evil":     false,
+		" https://tx.example.com/jwks":                  false,
+		"https://tx.example.com/jwks?next=http://x/y?z": true,
+	} {
+		if got := outboundSyntax.MatchString(raw); got != ok {
+			t.Errorf("outboundSyntax(%q) = %v, want %v", raw, got, ok)
+		}
+	}
+}
