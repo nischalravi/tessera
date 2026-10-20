@@ -1714,8 +1714,73 @@ export const sodPaths = {
 export const simulate = (body: { remove_edge_ids?: number[]; add_edges?: { src: string; dst: string; duration_hours?: number }[]; disable_account_ids?: number[] }) =>
   api<SimResult>("/simulate", { remove_edge_ids: [], add_edges: [], disable_account_ids: [], ...body });
 
+// ------------------------------------------------------------ evidence packs and point-in-time access (issue #111)
+export interface EvidenceControl { id: string; title: string; files: string[] }
+export interface EvidenceFramework { id: string; name: string; controls: EvidenceControl[] }
+export interface EvidenceFile { name: string; sha256: string; bytes: number; rows: number }
+export interface EvidenceManifest {
+  schema: string;
+  pack_id: string;
+  framework: string;
+  framework_name: string;
+  controls: EvidenceControl[];
+  period_from: string;
+  period_to: string;
+  generated_at: string;
+  generated_by: string;
+  files: EvidenceFile[];
+  user_rows_by_source: Record<string, number>;
+  notes: string[];
+}
+export interface EvidencePack {
+  id: string;
+  framework: string;
+  framework_name: string;
+  period_from: string;
+  period_to: string;
+  generated_at: string;
+  generated_by: string;
+  manifest_sha256: string;
+  size_bytes: number;
+  files: number;
+  manifest?: EvidenceManifest;
+}
+export interface EvidencePackList { packs: EvidencePack[]; frameworks: EvidenceFramework[] }
+
+/** Generate a pack. `from` and `to` are dates (YYYY-MM-DD); `to` includes that day. */
+export const createEvidencePack = (body: { framework: string; from: string; to: string }) => api<EvidencePack>("/evidence/packs", body);
+
+/** The pack's ZIP, for saving. A server error comes back as an ApiError like any other call. */
+export async function downloadEvidencePack(id: string): Promise<Blob> {
+  const res = await fetch(`/api/evidence/packs/${encodeURIComponent(id)}/download`, { credentials: "same-origin" });
+  if (!res.ok) {
+    let j: any = null;
+    try {
+      j = await res.json();
+    } catch {
+      /* ignore */
+    }
+    throw new ApiError(j ? errorMessage(res.status, j) : `${res.status} ${res.statusText}`, res.status, j);
+  }
+  return res.blob();
+}
+
+export interface AsOfPath { text: string; steps: { key: string; kind: string; label: string; system: string | null }[] }
+export interface AsOfPermission { permission_id: number; action: string; privileged: boolean; standing: boolean; paths: AsOfPath[] }
+export interface AsOfAccess { identity: IdentityBrief; permissions: AsOfPermission[] }
+export interface AsOfResult {
+  resource: { id: number; system: string; name: string; kind: string; environment: string | null };
+  date: string;
+  as_of: string;
+  identities: AsOfAccess[];
+  count: number;
+}
+/** Path for useApi: who could reach the resource on `date` (YYYY-MM-DD, end of that day, or an ISO instant). */
+export const asOfPath = (resourceId: number | string, date: string) =>
+  `/access/as-of?resource=${encodeURIComponent(String(resourceId))}&date=${encodeURIComponent(date)}`;
+
 // ------------------------------------------------------------ formatting
-const asUtc = (s: string) => new Date(s + (s.endsWith("Z") ? "" : "Z"));
+const asUtc =(s: string) => new Date(s + (s.endsWith("Z") ? "" : "Z"));
 export const fmtDate = (s?: string | null) => (s ? asUtc(s).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "Never");
 export const fmtDay = (s?: string | null) => (s ? asUtc(s).toLocaleDateString(undefined, { dateStyle: "medium" }) : "Never");
 export const ago = (days?: number | null) =>
