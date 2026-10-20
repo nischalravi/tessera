@@ -33,6 +33,10 @@ type MemberInput struct {
 	EnabledFrom *time.Time
 	DisabledAt  *time.Time
 	Reason      string
+	// Source and SourceRef say where a new row comes from (default api; a rule
+	// that adds a member says rule and its id).
+	Source    string
+	SourceRef string
 }
 
 // AddResult is the stored row, whether it is new (an add of an existing member
@@ -145,7 +149,18 @@ func (e Env) AddMember(id store.GroupID, in MemberInput) (*AddResult, error) {
 				return nil, e.engineErr(err)
 			}
 		}
-		m = &store.DirectMembership{GroupID: g.ID, ListID: list, MemberType: typ, Source: "api", CreatedBy: e.By, CreatedAt: e.Now}
+		source := in.Source
+		if source == "" {
+			source = "api"
+		}
+		// rules may veto a new identity row (membership require, one group only, ...)
+		if child == nil && e.Guard != nil {
+			if err := e.Guard.VetoAdd(e, g, *in.Identity, source); err != nil {
+				return nil, err
+			}
+		}
+		m = &store.DirectMembership{GroupID: g.ID, ListID: list, MemberType: typ, Source: source, SourceRef: ownerPtr(in.SourceRef),
+			CreatedBy: e.By, CreatedAt: e.Now}
 		if child != nil {
 			m.MemberGroup = &child.ID
 		} else {

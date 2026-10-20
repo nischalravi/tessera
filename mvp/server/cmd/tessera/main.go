@@ -89,6 +89,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/pit"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/rules"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/credential"
 	"github.com/nischalravi/tessera/mvp/server/internal/health"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
@@ -498,9 +499,11 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	rotationEngine := &rotation.Engine{DB: st, Clock: clock, Log: logger,
 		Service: &rotation.Service{Sealer: sealer, Env: cfg.Env, AllowFake: cfg.RotationFakeAdapters},
 		Factory: &rotation.Factory{HTTP: outbound, Sealer: sealer, Now: clock, AllowFake: cfg.RotationFakeAdapters}}
+	// group rules: webhooks go through the same safehttp client; email rules log (TESSERA_NOTIFY=log)
+	groupsRules := &rules.Runtime{Engine: groupsEngine, HTTP: outbound, Sealer: sealer, AllowHTTP: cfg.OutboundAllowLoopback, Log: logger}
 	srv := api.New(api.Config{Health: checker, Store: st, Clock: clock, Policies: loader, Logger: logger,
 		Secrets: secrets, Credential: authority,
-		PublicURL: cfg.PublicURL, RPID: cfg.RPID, Sealer: sealer, OutboundHTTP: outbound, GroupsEngine: groupsEngine, APIAudience: cfg.APIAudience,
+		PublicURL: cfg.PublicURL, RPID: cfg.RPID, Sealer: sealer, OutboundHTTP: outbound, GroupsEngine: groupsEngine, GroupsRules: groupsRules, APIAudience: cfg.APIAudience,
 		AccessTokenTTL: time.Duration(cfg.AccessTokenTTLSeconds) * time.Second,
 		DeviceCodeTTL:  time.Duration(cfg.DeviceCodeTTLSeconds) * time.Second, DPoPRSNonce: cfg.DPoPRSNonce,
 		Outbound: outbound, FakeTargetURL: fakeURL,
@@ -631,6 +634,13 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		defer close(historyDone)
 		historyRunner.Loop(ctx)
 	}()
+	// group rules: the rules that react to membership and creation events
+	rulesDone := make(chan struct{})
+	rulesRunner := &rules.Runner{DB: st, Runtime: groupsRules, Clock: clock, Log: logger}
+	go func() {
+		defer close(rulesDone)
+		rulesRunner.Loop(ctx)
+	}()
 	notifyDone := make(chan struct{})
 	go func() {
 		defer close(notifyDone)
@@ -672,6 +682,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		<-historyDone
 		<-notifyDone
 		<-rotationDone
+		<-rulesDone
 		return err
 	case <-ctx.Done():
 	}
@@ -700,6 +711,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	<-historyDone
 	<-notifyDone
 	<-rotationDone
+	<-rulesDone
 	for i := 0; i < cap(errc) && (i == 0 || agentSrv != nil); i++ {
 		if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			return serveErr

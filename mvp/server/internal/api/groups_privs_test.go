@@ -93,6 +93,9 @@ func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 	act2 := e.admin.call("POST", "/api/groups/attr-defs/"+ad+"/actions", `{"name":"extra"}`, 201)["id"].(string)
 	asg := e.admin.call("POST", "/api/groups/attr-assignments", `{"name":"`+nm+`","owner_type":"group","owner":"`+g+`","values":["a"]}`, 201)["id"].(string)
 	apriv := e.grant("/api/groups/attr-defs/"+ad, "attr_view", "bob", "")
+	rb := `{"name":"n","trigger":"membership.direct.added","action":"no_self_add"}`
+	grule := e.admin.call("POST", "/api/groups/"+g+"/rules", rb, 201)["id"].(string)
+	frule := e.admin.call("POST", "/api/groups/folders/"+app+"/rules", rb, 201)["id"].(string)
 
 	type routeCase struct {
 		method, pattern, path, body string
@@ -129,6 +132,17 @@ func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 		{"POST", "/api/groups/{id}/privileges", "/api/groups/" + g + "/privileges", `{"privilege":"view","holder_type":"everyone"}`, "admin"},
 		{"GET", "/api/groups/{id}/privileges/effective", "/api/groups/" + g + "/privileges/effective", "", "view"},
 		{"DELETE", "/api/groups/{id}/privileges/{privilege_id}", "/api/groups/" + g + "/privileges/" + priv, "", "admin"},
+		// rules: admin on the owner (stem_admin on a folder)
+		{"GET", "/api/groups/folders/{id}/rules", "/api/groups/folders/" + app + "/rules", "", "stem_admin"},
+		{"POST", "/api/groups/folders/{id}/rules", "/api/groups/folders/" + app + "/rules", rb, "stem_admin"},
+		{"PUT", "/api/groups/folders/{id}/rules/{rule_id}", "/api/groups/folders/" + app + "/rules/" + frule, rb, "stem_admin"},
+		{"DELETE", "/api/groups/folders/{id}/rules/{rule_id}", "/api/groups/folders/" + app + "/rules/" + frule, "", "stem_admin"},
+		{"GET", "/api/groups/{id}/rules", "/api/groups/" + g + "/rules", "", "admin"},
+		{"POST", "/api/groups/{id}/rules", "/api/groups/" + g + "/rules", rb, "admin"},
+		{"PUT", "/api/groups/{id}/rules/{rule_id}", "/api/groups/" + g + "/rules/" + grule, rb, "admin"},
+		{"DELETE", "/api/groups/{id}/rules/{rule_id}", "/api/groups/" + g + "/rules/" + grule, "", "admin"},
+		{"GET", "/api/groups/rules/settings", "/api/groups/rules/settings", "", ""},
+		{"PUT", "/api/groups/rules/settings", "/api/groups/rules/settings", `{"email_enabled":false}`, ""},
 		// another identity's privileges need admin on the object, not view
 		{"GET", "/api/groups/{id}/privileges/effective", "/api/groups/" + g + "/privileges/effective?identity=" + fmt.Sprint(e.ident("bob")), "", "admin"},
 		// attribute definitions, names, actions and assignments (GR-7)

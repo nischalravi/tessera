@@ -456,6 +456,16 @@ GET    /api/groups/{id}/privileges/effective         groups.read     -  # issue 
 DELETE /api/groups/{id}/privileges/{privilege_id}    groups.write    -  # issue #47: admin
 GET    /api/groups/privileges/settings               groups.admin    -  # issue #47
 PUT    /api/groups/privileges/settings               groups.admin    -  # issue #47
+GET    /api/groups/folders/{id}/rules                groups.read     -  # issue #56: stem_admin
+POST   /api/groups/folders/{id}/rules                groups.write    -  # issue #56: stem_admin, and admin on what the action touches
+PUT    /api/groups/folders/{id}/rules/{rule_id}      groups.write    -  # issue #56: stem_admin, and admin on what the action touches
+DELETE /api/groups/folders/{id}/rules/{rule_id}      groups.write    -  # issue #56: stem_admin
+GET    /api/groups/{id}/rules                        groups.read     -  # issue #56: admin
+POST   /api/groups/{id}/rules                        groups.write    -  # issue #56: admin, and admin on what the action touches
+PUT    /api/groups/{id}/rules/{rule_id}              groups.write    -  # issue #56: admin, and admin on what the action touches
+DELETE /api/groups/{id}/rules/{rule_id}              groups.write    -  # issue #56: admin
+GET    /api/groups/rules/settings                    groups.admin    -  # issue #56
+PUT    /api/groups/rules/settings                    groups.admin    -  # issue #56
 PUT    /api/groups/users/{id}/identity               groups.admin    STEP_UP_POLICY  # issue #47
 GET    /api/groups/pit/digests                       groups.admin    -  # issue #46
 GET    /api/groups/pit/verify                        groups.admin    -  # issue #46

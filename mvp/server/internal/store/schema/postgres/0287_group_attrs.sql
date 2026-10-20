@@ -2,7 +2,7 @@
 -- TestSchemaParity_SQLiteAndPostgres). The foreign keys are composite (tenant_id, x_id) ->
 -- (tenant_id, id) and replace the SQLite cross-tenant triggers; "a name and an action of the
 -- definition only" is enforced by composite keys that carry def_id. The owner of an assignment is
--- polymorphic (owner_type, owner_id), so a plpgsql guard checks its tenant. json_valid is dropped:
+-- polymorphic (owner_type, owner_id), so a plpgsql guard checks its tenant. json_valid is IS JSON:
 -- assign_to is TEXT and internal/groups/attrs validates it. The privilege object guard of 0285 gains
 -- the attr_def object type.
 
@@ -19,7 +19,7 @@ CREATE TABLE grp_attr_defs (
   value_type TEXT NOT NULL CHECK (value_type IN ('marker','string','integer','floating','timestamp','member_id')),
   multi_assign INTEGER NOT NULL DEFAULT 0 CHECK (multi_assign IN (0,1)),
   multi_valued INTEGER NOT NULL DEFAULT 0 CHECK (multi_valued IN (0,1)),
-  assign_to TEXT NOT NULL,
+  assign_to TEXT NOT NULL CHECK (assign_to IS JSON),
   system INTEGER NOT NULL DEFAULT 0 CHECK (system IN (0,1)),
   created_at TEXT NOT NULL,
   created_by TEXT,

@@ -914,6 +914,20 @@ CREATE POLICY tenant_isolation ON grp_attr_values
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE grp_rules ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_rules FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_rules;
+CREATE POLICY tenant_isolation ON grp_rules
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_rule_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_rule_settings FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_rule_settings;
+CREATE POLICY tenant_isolation ON grp_rule_settings
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 ALTER TABLE config_signing_keys ENABLE ROW LEVEL SECURITY;
 ALTER TABLE config_signing_keys FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON config_signing_keys;

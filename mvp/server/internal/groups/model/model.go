@@ -34,6 +34,10 @@ const (
 // privileges of what the operation creates) and TenantAdmin says the user holds
 // an active tenant_admin role (GR-4). The model does not check privileges: the
 // API does, before it calls the model.
+//
+// Guard (GR-13) vets a change before it is made; nil vets nothing. Cause and
+// CauseRef say what the change's events are caused by (default: the API); the
+// rules runner sets them to rule and the rule's id.
 type Env struct {
 	Tx          *store.TenantTx
 	Now         time.Time
@@ -41,6 +45,27 @@ type Env struct {
 	Engine      *engine.Engine
 	ByIdentity  *int64
 	TenantAdmin bool
+	Guard       Guard
+	Cause       string
+	CauseRef    string
+}
+
+// Guard vets changes before the model makes them (internal/groups/rules
+// implements it). A refusal is returned as the operation's error, usually a
+// Vetoed conflict.
+type Guard interface {
+	// VetoAdd is asked before an identity is added directly to a group's members
+	// list (not when the dates of an existing row change). source is where the
+	// add comes from (api, rule, ...).
+	VetoAdd(e Env, g *store.NativeGroup, identity int64, source string) error
+}
+
+// cause is the cause type of the events the operation writes.
+func (e Env) cause() string {
+	if e.Cause != "" {
+		return e.Cause
+	}
+	return store.CauseAPI
 }
 
 var defaultEngine = engine.New(0)
@@ -1067,6 +1092,10 @@ func (e Env) DeleteFolder(id store.FolderID) error {
 	}
 	// the folder's attribute assignments end with it
 	if _, err := attrs.RemoveAllOf(e.Attrs(), attrs.Owner{Type: store.AttrOwnerFolder, ID: string(f.ID)}); err != nil {
+		return err
+	}
+	// its rules end with it (a rule names its owner with no foreign key)
+	if _, err := e.Tx.DeleteGrpRulesOf(store.RuleOwnerFolder, string(f.ID)); err != nil {
 		return err
 	}
 	// the folder's privileges end with it; a row on a folder names no foreign key

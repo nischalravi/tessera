@@ -11,6 +11,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/attrs"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/model"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/privs"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/rules"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -85,6 +86,7 @@ func privErr(err error) error {
 	var d *privs.DeniedError
 	var pe *privs.Error
 	var ae *attrs.Error
+	var re *rules.Error
 	switch {
 	case errors.As(err, &d):
 		return privilegeRequired(d)
@@ -92,6 +94,10 @@ func privErr(err error) error {
 		status := map[attrs.Kind]int{attrs.NotFound: http.StatusNotFound, attrs.Conflict: http.StatusConflict,
 			attrs.Invalid: http.StatusUnprocessableEntity, attrs.Forbidden: http.StatusForbidden}[ae.Kind]
 		return &readiness.Error{Status: status, Code: ae.Code, Msg: ae.Msg, Extra: ae.Extra}
+	case errors.As(err, &re):
+		status := map[rules.Kind]int{rules.NotFound: http.StatusNotFound, rules.Conflict: http.StatusConflict,
+			rules.Invalid: http.StatusUnprocessableEntity, rules.Forbidden: http.StatusForbidden}[re.Kind]
+		return &readiness.Error{Status: status, Code: re.Code, Msg: re.Msg, Extra: re.Extra}
 	case errors.As(err, &pe):
 		status := map[privs.Kind]int{privs.NotFound: http.StatusNotFound, privs.Conflict: http.StatusConflict,
 			privs.Invalid: http.StatusUnprocessableEntity, privs.Forbidden: http.StatusForbidden}[pe.Kind]

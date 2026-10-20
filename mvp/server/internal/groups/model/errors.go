@@ -41,6 +41,12 @@ func invalid(code, format string, args ...any) *Error {
 	return &Error{Kind: Invalid, Code: code, Msg: fmt.Sprintf(format, args...)}
 }
 
+// Vetoed is the refusal of a rule's veto (409 vetoed). rule names the rule that
+// vetoed, so an admin can find it.
+func Vetoed(msg, rule string) *Error {
+	return &Error{Kind: Conflict, Code: "vetoed", Msg: msg, Extra: map[string]any{"rule": rule}}
+}
+
 // wrap maps the naming and store errors an operation can meet to an Error.
 func wrap(err error) error {
 	var ne *naming.Error
