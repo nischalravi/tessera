@@ -1664,6 +1664,79 @@ export const roles = {
 };
 export const rolePaths = { list: "/roles", one: (id: string) => rolePath(id), versions: (id: string) => rolePath(id, "/versions"), drift: (id: string) => rolePath(id, "/drift") };
 
+// ---------------------------------------------------------------- role mining (issue #298)
+
+export type MiningRunStatus = "queued" | "running" | "succeeded" | "failed";
+export interface MiningParams {
+  department: string[];
+  title: string[];
+  /** Identity type: human, service or ai_agent. */
+  type: string[];
+  min_members: number;
+  min_entitlements: number;
+  /** Jaccard similarity, percent. */
+  min_similarity: number;
+  max_candidates: number;
+}
+export interface MiningRun {
+  id: string;
+  status: MiningRunStatus;
+  params: MiningParams;
+  algorithm: string;
+  /** SHA-256 over the algorithm, the parameters and the filtered input: same hash and parameters, same candidates. */
+  snapshot_hash: string;
+  people: number;
+  entitlements: number;
+  candidates: number;
+  skipped_existing: number;
+  truncated: boolean;
+  error: string;
+  requested_by: string;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+export interface MiningRule { attribute: "department" | "title" | "type"; values: string[]; precision: number; recall: number }
+export interface MiningCandidate {
+  id: string;
+  run_id: string;
+  rank: number;
+  name: string;
+  entitlements: GroupRef[];
+  coverage: number;
+  outlier_count: number;
+  rule: MiningRule | null;
+  confidence: number;
+  cohesion: number;
+  similar_role: { id: string; name: string } | null;
+  similarity: number;
+  status: "open" | "accepted" | "dismissed";
+  decided_by: string | null;
+  decided_at: string | null;
+  decision_reason: string | null;
+  role_id: string | null;
+  /** Only on GET /role-mining/candidates/{id}. */
+  members?: PersonRef[];
+  outliers?: { person: PersonRef; extra: GroupRef[] }[];
+}
+export interface MiningRunsView { can_manage: boolean; defaults: MiningParams; runs: MiningRun[] }
+export interface MiningRunDetail { run: MiningRun; candidates: MiningCandidate[] }
+export interface MiningAccept { name?: string; description?: string; risk?: Risk; entitlement_group_ids?: number[] }
+
+const miningCandidatePath = (id: string, rest = "") => `/role-mining/candidates/${encodeURIComponent(id)}${rest}`;
+export const miningPaths = {
+  runs: "/role-mining/runs",
+  run: (id: string) => `/role-mining/runs/${encodeURIComponent(id)}`,
+  candidate: (id: string) => miningCandidatePath(id),
+};
+export const roleMining = {
+  /** async: true queues the run as a job even for a small tenant. */
+  start: (p: Partial<MiningParams> & { async?: boolean }) => api<MiningRun>(miningPaths.runs, p),
+  /** Creates a draft role: no members, no rule, not requestable. Grants and removes nothing. */
+  accept: (id: string, edit: MiningAccept) => api<{ candidate: MiningCandidate; role: BusinessRole }>(miningCandidatePath(id, "/accept"), edit),
+  dismiss: (id: string, reason: string) => api<MiningCandidate>(miningCandidatePath(id, "/dismiss"), { reason }),
+};
+
 // ---------------------------------------------------------------- identity lifecycle (issue #159)
 
 export type WorkerType = "employee" | "contractor" | "intern" | "partner" | "vendor" | "guest";

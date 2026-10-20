@@ -42,6 +42,7 @@ const (
 	SweepSSFPoll        = "ssf_poll"
 	SweepDrift          = "drift_sweep"
 	Maintenance         = "job_maintenance"
+	RoleMining          = "role_mining" // computes a queued role mining run (issue #298)
 
 	// GuestLifecycle is the guest lifecycle sweep: reminders, transfer deadlines,
 	// step-up renewals, conversions, grace and retention (issue #74).
@@ -50,7 +51,7 @@ const (
 
 // Kinds lists every kind, for filters.
 var Kinds = []string{Sync, Provision, Validation, DryRun, HealthRerun, JITSweep, AuditAnchor,
-	SweepRequests, SweepLifecycle, SweepAdminChanges, ContainmentRetry, SweepSoDMitigations, SoDMitigationExpire, SweepDrift, SweepSSFPoll, Maintenance, GuestLifecycle}
+	SweepRequests, SweepLifecycle, SweepAdminChanges, ContainmentRetry, SweepSoDMitigations, SoDMitigationExpire, SweepDrift, SweepSSFPoll, Maintenance, GuestLifecycle, RoleMining}
 
 // Idempotent reports whether running a kind again with the same input is
 // safe: it reads a source and converges, or re-checks. Provisioning is not:
