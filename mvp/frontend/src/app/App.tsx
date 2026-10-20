@@ -57,10 +57,12 @@ const SodConflicts = named(() => import("../features/insights/SodConflicts"), "S
 const DeploymentHealth = named(() => import("../features/insights/DeploymentHealth"), "DeploymentHealth");
 const Alerts = named(() => import("../features/alerts/Alerts"), "Alerts");
 const Policies = named(() => import("../features/governance/Policies"), "Policies");
+const Mitigations = named(() => import("../features/governance/Mitigations"), "Mitigations");
 const AttributePolicies = named(() => import("../features/governance/AttributePolicies"), "AttributePolicies");
 const Reviews = named(() => import("../features/governance/Reviews"), "Reviews");
 const Lifecycle = named(() => import("../features/governance/Lifecycle"), "Lifecycle");
 const Workflows = named(() => import("../features/governance/Workflows"), "Workflows");
+const EvidencePacks = named(() => import("../features/governance/EvidencePacks"), "EvidencePacks");
 const Admin = named(admin, "Admin");
 const ConnectionsList = named(connections, "ConnectionsList");
 const NewConnection = named(connections, "NewConnection");
@@ -70,6 +72,7 @@ const ReconReport = named(connections, "ReconReport");
 const ConditionalAccess = named(conditionalAccess, "ConditionalAccess");
 const AdminSectionPage = named(admin, "AdminSectionPage");
 const MySessions = named(() => import("../features/account/MySessions"), "MySessions");
+const DeviceApprove = lazy(() => import("../pages/DeviceApprove"));
 const AdminUsers = named(() => import("../features/admin/Users"), "Users");
 const IdpConnections = named(() => import("../features/admin/IdpConnections"), "IdpConnections");
 const ChangeRequests = named(() => import("../features/admin/ChangeRequests"), "ChangeRequests");
@@ -107,6 +110,8 @@ export default function App() {
                     {/* signed in already: the sign-in page (and its error) has nothing left to do */}
                     <Route path="/login" element={<Navigate to="/" replace />} />
                     <Route path="/sessions" element={<MySessions />} />
+                    {/* where `tessera-cli login` sends you (design §9.3): type the code, decide */}
+                    <Route path="/device" element={<DeviceApprove />} />
                     <Route path="/inbox" element={<Inbox />} />
                     <Route path="/notifications" element={<Notifications />} />
 
@@ -148,10 +153,12 @@ export default function App() {
                     <Route path="/governance" element={<Navigate to="/governance/policies" replace />} />
                     <Route path="/alerts" element={<Alerts />} />
                     <Route path="/governance/policies" element={<Policies />} />
+                    <Route path="/governance/mitigations" element={<Mitigations />} />
                     <Route path="/governance/attributes" element={<AttributePolicies />} />
                     <Route path="/governance/reviews" element={<Reviews />} />
                     <Route path="/governance/lifecycle" element={<Lifecycle />} />
                     <Route path="/governance/workflows" element={<Workflows />} />
+                    <Route path="/governance/evidence" element={<EvidencePacks />} />
 
                     <Route path="/admin" element={<Admin />} />
                     <Route path="/admin/connections" element={<ConnectionsList />} />

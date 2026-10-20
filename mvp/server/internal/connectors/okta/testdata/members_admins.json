@@ -1,0 +1,4 @@
+[
+  {"id": "00u1caseyexample03", "status": "SUSPENDED", "profile": {"login": "casey.placeholder@example.com"}},
+  {"id": "00u1unknownuser0099", "status": "ACTIVE", "profile": {"login": "not.in.the.user.list@example.com"}}
+]

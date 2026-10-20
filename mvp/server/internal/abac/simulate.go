@@ -54,9 +54,13 @@ func Simulate(tx *store.TenantTx, draft *Node, current *store.AbacPolicy, extra 
 	if err != nil {
 		return nil, err
 	}
+	resolver, err := NewResolver(tx, now)
+	if err != nil {
+		return nil, err
+	}
 	base := Merge(ContextAttrs(now, 0), extra)
 	for _, p := range people {
-		attrs := Merge(IdentityAttrs(p, now), base)
+		attrs := Merge(resolver.Identity(p), base)
 		res.Evaluated++
 		nd := draft.Tri(attrs)
 		after := nd == True

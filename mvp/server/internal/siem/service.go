@@ -461,6 +461,16 @@ func UpdateSink(tx *store.TenantTx, sealer *seal.Sealer, id string, s SinkSpec, 
 	if err := s.check(dev); err != nil {
 		return nil, err
 	}
+	// The sealed token is bound to the sink row, not to the destination, so it
+	// must never follow the sink to another origin: an edit that moves the
+	// target (webhook scheme, host or port; syslog host:port) has to bring a
+	// new token or clear it. A path-only change keeps it (#332, as #315).
+	from, to := sinkOrigin(k.Kind, k.Target), sinkOrigin(k.Kind, s.Target)
+	moved := from != to
+	if moved && s.Token == nil && len(k.SecretSealed) > 0 {
+		return nil, refuse(422, "credential_required",
+			"changing the sink's origin (scheme, host, port) needs a new token; the stored token does not move with it")
+	}
 	k.Name, k.Format, k.Target, k.Flavor, k.IncludeHTTP, k.Enabled, k.UpdatedAt = s.Name, s.Format, s.Target, s.Flavor,
 		s.IncludeHTTP, s.Enabled, now
 	k.CAPEM = nil
@@ -476,7 +486,25 @@ func UpdateSink(tx *store.TenantTx, sealer *seal.Sealer, id string, s SinkSpec, 
 	if err := tx.UpdateSiemSink(k); err != nil {
 		return nil, err
 	}
-	return k, tx.Audit(now, by.Display, "siem.sink.updated", sinkAudit(k, s.Token != nil))
+	d := sinkAudit(k, s.Token != nil)
+	if moved {
+		d = append(d, ojson.KV{Key: "previous_origin", Value: from}, ojson.KV{Key: "origin", Value: to})
+	}
+	return k, tx.Audit(now, by.Display, "siem.sink.updated", d)
+}
+
+// sinkOrigin is where a sink's token would be sent: scheme://host:port for a
+// webhook (default ports filled in, case folded), host:port for syslog. An
+// unparsable target is its own origin, so any change to it counts as a move.
+func sinkOrigin(kind, target string) string {
+	if kind == "syslog" {
+		host, port, err := net.SplitHostPort(target)
+		if err != nil {
+			return strings.ToLower(target)
+		}
+		return net.JoinHostPort(strings.ToLower(host), port)
+	}
+	return safehttp.Origin(target)
 }
 
 // Rewind sets a sink's cursor: replay from seq+1 (0: the whole ledger), or

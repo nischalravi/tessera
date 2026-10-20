@@ -136,6 +136,10 @@ function errorMessage(status: number, j: any): string {
       return "Your organization's conditional access policy does not allow this action from here. Ask an administrator, or try from an allowed network or device.";
     case "audit_unavailable":
       return "The audit log is unavailable, so Tessera refused the request. Try again shortly.";
+    case "lookup_locked": {
+      const mins = Math.max(1, Math.ceil((Number(j.retry_after) || 600) / 60));
+      return `Too many wrong codes. Command-line approvals are paused for this session; try again in ${mins} minute${mins === 1 ? "" : "s"}.`;
+    }
     case "activation_blocked":
     case "transition_blocked":
       return `${j.blocking?.length ?? 0} item(s) block this step`;
@@ -268,7 +272,7 @@ const LABELS: [RegExp, (m: RegExpMatchArray) => string][] = [
   [/^\/hris\/events\/([^/]+)\/execute$/, (m) => `Run the lifecycle plan for event ${m[1]}`],
   [/^\/connections\/([^/]+)\/(config|credential|activate|retire)$/, (m) => `${{ config: "Save the configuration of", credential: "Set the credential of", activate: "Activate", retire: "Retire" }[m[2]]} connection ${m[1]}`],
   [/^\/readiness\/overlays\/([^/]+)$/, (m) => `Save the readiness overlay for ${m[1]}`],
-  [/^\/access\/(policies|networks|device-signals)(\/[^/]+)?$/, (m) => `Change conditional access (${m[1].replace("-", " ")})`],
+  [/^\/auth\/device\/approve$/, () => "Approve the command-line sign-in"],
 ];
 
 /** A plain-language name for an API action, shown before resuming it. */
@@ -730,6 +734,30 @@ export const mySessions = () => api<MySession[]>("/auth/sessions");
 export const revokeSession = (id: string) => api<unknown>(`/auth/sessions/${encodeURIComponent(id)}`, undefined, "DELETE");
 
 export const hrisExecute = (eventId: number) => api(`/hris/events/${eventId}/execute`, {});
+
+// ---------------------------------------------------------------- command-line sign-in (design §9.3)
+
+/** What a device code asks for: shown to the person who must decide. */
+export interface DeviceRequest {
+  client: string;
+  client_id: string;
+  scope: string[];
+  requested_at: string;
+  request_ip: string;
+  expires_at: string;
+  /** The sign-in the approval needs (a fresh phishing-resistant one, 300 s or less old). */
+  requires: { acr: string; max_age: number };
+}
+
+/** Look up a user code the command line printed (wrong codes are counted: five lock the session out for ten minutes). */
+export const deviceLookup = (userCode: string) => api<DeviceRequest>("/auth/device/lookup", { user_code: userCode });
+
+/**
+ * Approve or deny the device. Approval needs a sign-in within five minutes: without one the API
+ * answers step_up_required, which opens the step-up dialog and resumes this call afterwards.
+ */
+export const deviceDecide = (userCode: string, decision: "approve" | "deny") =>
+  api<{ status: "approved" | "denied" }>("/auth/device/approve", { user_code: userCode, decision });
 
 // ---------------------------------------------------------------- scheduled reviews (issue #166)
 
@@ -1563,11 +1591,227 @@ export const abac = {
 };
 export const abacPaths = { list: "/abac/policies", one: (id: string) => abacPath(id), bindings: "/abac/bindings" };
 
+// ---------------------------------------------------------------- SoD functions, risks, rulesets (issue #298)
+
+export type SodPriority = "critical" | "high" | "medium" | "low";
+export type SodAttribute = "environment" | "tag" | "resource" | "privileged";
+/** Picks entitlements: a system plus a permission id or an action name pattern (`*` wildcard), optionally narrowed by a resource attribute. */
+export interface SodSelector { system?: string; entitlement_id?: number; name_pattern?: string; attribute?: SodAttribute; value?: string }
+export interface SodSubjects { identity_types?: IdentityType[]; statuses?: string[]; condition?: AbacCondition }
+export interface SodPerson { id: number; name: string; type: IdentityType; status: string }
+export interface SodVersion { version: number; snapshot: Record<string, unknown>; note: string | null; actor: string; changed_at: string }
+export interface SodRef { id: string; key: string; name: string }
+export interface SodFunction {
+  id: string; key: string; name: string; description: string; owner: SodPerson | null; selectors: SodSelector[];
+  status: "active" | "retired"; version: number; created_at: string; updated_by: { id: string; display_name: string } | null; updated_at: string;
+  used_by: SodRef[];
+  /** Only on GET /sod/functions/{id} and after a change. */
+  versions?: SodVersion[];
+}
+export interface SodRisk {
+  /** The remediation options the risk offers. */
+  remediation: SodRemediation[];
+  id: string; key: string; name: string; description: string; priority: SodPriority; business_process: string; owner: SodPerson | null;
+  ruleset: SodRef; functions: SodRef[]; subjects: SodSubjects; status: "active" | "retired"; version: number; created_at: string;
+  updated_by: { id: string; display_name: string } | null; updated_at: string; violations?: number; versions?: SodVersion[];
+}
+export interface SodRuleset {
+  id: string; key: string; name: string; description: string; enabled: boolean; status: "active" | "retired"; version: number;
+  created_at: string; updated_by: { id: string; display_name: string } | null; updated_at: string; risks: number; violations?: number;
+  versions?: SodVersion[];
+}
+export interface SodFunctionList { can_manage: boolean; attributes: SodAttribute[]; functions: SodFunction[] }
+export interface SodRiskList { can_manage: boolean; priorities: SodPriority[]; risks: SodRisk[] }
+export interface SodRulesetList { can_manage: boolean; /** No stored ruleset yet: the policy files are checked. */ legacy: boolean; rulesets: SodRuleset[] }
+export interface SodFunctionSpec { key?: string; name: string; description: string; owner_id: number | null; selectors: SodSelector[]; note?: string }
+export interface SodRiskSpec {
+  key?: string; name: string; description: string; priority: SodPriority; business_process: string; owner_id: number | null;
+  ruleset_id: string; function_ids: string[]; subjects: SodSubjects; remediation?: SodRemediation[]; note?: string;
+}
+export interface SodRulesetSpec { key?: string; name: string; description: string; enabled: boolean; note?: string }
+export interface SodGrant { perm_key: string; action: string; resource: string; system: string; privileged: boolean; paths: string[] }
+export interface SodViolation {
+  key: string; risk_id: string; risk_key: string; risk_name: string; priority: SodPriority; ruleset: SodRef; business_process: string;
+  identity_id: number; identity_name: string; function1: SodRef; function2: SodRef; entitlement: string; systems: string[];
+  sides: [{ function: SodRef; grants: SodGrant[] }, { function: SodRef; grants: SodGrant[] }];
+  /** open, mitigated, accepted or mitigation_pending (a request waits for its second person; still open). */
+  status: SodViolationStatus; message: string; evidence: string[]; edges: [string, string][];
+  /** The remediation options the risk offers on this violation. */
+  remediation: SodRemediation[];
+  mitigation?: SodCover;
+}
+export type SodViolationStatus = "open" | "mitigated" | "accepted" | "mitigation_pending";
+export type SodRemediation = "revoke" | "mitigate" | "accept" | "escalate";
+/** What covers a violation now ("Mitigated until 2026-11-20"). */
+export interface SodCover { mitigation_id: string; kind: "control" | "accept"; status: SodViolationStatus; control?: string; ends_at: string; label: string }
+export interface SodViolationFilter { risk?: string; priority?: SodPriority; ruleset?: string; system?: string; business_process?: string; identity?: string }
+export interface SodImportResult { dry_run: boolean; ruleset: string; created: string[]; updated: string[]; unchanged: string[]; retired: string[] }
+export interface SodTrigger {
+  risk_id: string; risk_key: string; risk_name: string; priority: SodPriority; business_process: string; ruleset: SodRef;
+  identity_id: number; identity_name: string; function1: SodRef; function2: SodRef; entitlement: string; message: string;
+}
+export interface SodSimulation { checked: number; skipped: { beneficiary_id: number; catalog_item_id: string; reason: string }[]; would_trigger: SodTrigger[]; highest_priority: SodPriority | "" }
+
+const sodPath = (kind: "functions" | "risks" | "rulesets", id: string, rest = "") => `/sod/${kind}/${encodeURIComponent(id)}${rest}`;
+/** Query string of the SoD violations filters (empty values are left out). */
+export function sodViolationQuery(f: SodViolationFilter): string {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(f)) if (v) q.set(k, v);
+  const s = q.toString();
+  return s ? `?${s}` : "";
+}
+export const sod = {
+  createFunction: (spec: SodFunctionSpec) => api<SodFunction>("/sod/functions", spec),
+  updateFunction: (id: string, version: number, spec: SodFunctionSpec) => api<SodFunction>(sodPath("functions", id), { version, ...spec }, "PUT"),
+  retireFunction: (id: string, reason: string) => api<SodFunction>(sodPath("functions", id, "/retire"), { reason }),
+  createRisk: (spec: SodRiskSpec) => api<SodRisk>("/sod/risks", spec),
+  updateRisk: (id: string, version: number, spec: SodRiskSpec) => api<SodRisk>(sodPath("risks", id), { version, ...spec }, "PUT"),
+  retireRisk: (id: string, reason: string) => api<SodRisk>(sodPath("risks", id, "/retire"), { reason }),
+  createRuleset: (spec: SodRulesetSpec) => api<SodRuleset>("/sod/rulesets", spec),
+  updateRuleset: (id: string, version: number, spec: SodRulesetSpec) => api<SodRuleset>(sodPath("rulesets", id), { version, ...spec }, "PUT"),
+  retireRuleset: (id: string, reason: string) => api<SodRuleset>(sodPath("rulesets", id, "/retire"), { reason }),
+  /** The ruleset as a YAML file (access as code). */
+  exportRuleset: (id: string) => api<{ filename: string; version: number; yaml: string }>(sodPath("rulesets", id, "/export")),
+  importRuleset: (yaml: string, opts: { prune?: boolean; dry_run?: boolean } = {}) => api<SodImportResult>("/sod/rulesets/import", { yaml, ...opts }),
+  /** One-time import of the separation_of_duties policy files as a ruleset. */
+  importLegacy: (dryRun = false) => api<SodImportResult>("/sod/import-legacy", { dry_run: dryRun }),
+  /** Which risks would these requested items trigger? Changes nothing; used before an access request is submitted. */
+  simulate: (beneficiaryIds: number[], catalogItemIds: string[], durationHours?: number) =>
+    apiNoResume<SodSimulation>("/sod/simulate", { beneficiary_ids: beneficiaryIds, catalog_item_ids: catalogItemIds, ...(durationHours ? { duration_hours: durationHours } : {}) }),
+};
+// ------------------------------------------------------------ SoD mitigating controls (issue #298)
+
+export type SodControlType = "preventive" | "detective" | "corrective";
+export type SodFrequency = "continuous" | "daily" | "weekly" | "monthly" | "quarterly" | "annually";
+export interface SodControl {
+  id: string; name: string; description: string; owner: SodPerson | null; type: SodControlType; frequency: SodFrequency;
+  evidence_requirement: string; status: "active" | "retired"; version: number; updated_by: { id: string; display_name: string } | null;
+  updated_at: string; active_mitigations: number;
+}
+export interface SodControlList { can_manage: boolean; types: SodControlType[]; frequencies: SodFrequency[]; controls: SodControl[] }
+export interface SodControlSpec { name: string; description: string; owner_id: number | null; type: SodControlType; frequency: SodFrequency; evidence_requirement: string }
+export type SodMitigationStatus = "pending" | "active" | "rejected" | "cancelled" | "expired" | "revoked";
+export interface SodMitigation {
+  id: string; risk: { id: string; key: string; name: string; priority: SodPriority }; identity: SodPerson; kind: "control" | "accept";
+  control: { id: string; name: string } | null; justification: string; evidence: string[]; status: SodMitigationStatus;
+  starts_at: string | null; ends_at: string; days_left: number | null; requested_by: { id: string; display_name: string }; requested_at: string;
+  decided_by: { id: string; display_name: string } | null; decided_at: string | null; decision_note: string | null;
+  revoked_by: { id: string; display_name: string } | null; revoke_reason: string | null; requested_by_me: boolean;
+}
+export interface SodMitigationList { can_request: boolean; can_approve: boolean; max_days: number; warn_days: number; mitigations: SodMitigation[] }
+export interface SodMitigationRequest { risk_id: string; identity_id: number; kind: "control" | "accept"; control_id?: string; justification: string; ends_at: string; evidence?: string[] }
+export interface SodReviewContext {
+  can_request: boolean;
+  items: { item_id: number; violations: { risk_id: string; risk_key: string; risk_name: string; priority: SodPriority; status: SodViolationStatus; mitigation?: SodCover; identity_id: number; remediation: SodRemediation[] }[] }[];
+}
+export const sodControls = {
+  create: (spec: SodControlSpec) => api<SodControl>("/sod/controls", spec),
+  update: (id: string, version: number, spec: SodControlSpec) => api<SodControl>(`/sod/controls/${encodeURIComponent(id)}`, { version, ...spec }, "PUT"),
+  retire: (id: string, reason: string) => api<SodControl>(`/sod/controls/${encodeURIComponent(id)}/retire`, { reason }),
+};
+const mitPath = (id: string, rest: string) => `/sod/mitigations/${encodeURIComponent(id)}/${rest}`;
+export const sodMitigations = {
+  request: (req: SodMitigationRequest) => api<SodMitigation>("/sod/mitigations", req),
+  approve: (id: string, note = "") => api<SodMitigation>(mitPath(id, "approve"), { note }),
+  reject: (id: string, note: string) => api<SodMitigation>(mitPath(id, "reject"), { note }),
+  cancel: (id: string) => api<SodMitigation>(mitPath(id, "cancel"), {}),
+  /** End an active mitigation early (the risk owner or an approver): the violation is open again. */
+  revoke: (id: string, reason: string) => api<SodMitigation>(mitPath(id, "revoke"), { reason }),
+};
+/** Remediation of a violation: send it to the risk owner, or remove a grant behind it (the risk must offer it). */
+export const sodRemediate = {
+  escalate: (riskId: string, identityId: number, note: string) => api<{ id: string }>("/sod/violations/escalate", { risk_id: riskId, identity_id: identityId, note }),
+  revoke: (riskId: string, identityId: number, edgeId: number, dryRun: boolean) =>
+    api<SimResult>("/sod/violations/revoke", { risk_id: riskId, identity_id: identityId, edge_id: edgeId, dry_run: dryRun }),
+};
+export const sodControlPaths = {
+  controls: "/sod/controls",
+  mitigations: (f: { status?: SodMitigationStatus; expiring_within_days?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (f.status) q.set("status", f.status);
+    if (f.expiring_within_days !== undefined) q.set("expiring_within_days", String(f.expiring_within_days));
+    const s = q.toString();
+    return `/sod/mitigations${s ? `?${s}` : ""}`;
+  },
+  reviewContext: (campaignId: number) => `/sod/review-context?campaign_id=${campaignId}`,
+};
+
+export const sodPaths = {
+  functions: "/sod/functions", risks: "/sod/risks", rulesets: "/sod/rulesets",
+  function: (id: string) => sodPath("functions", id), risk: (id: string) => sodPath("risks", id), ruleset: (id: string) => sodPath("rulesets", id),
+  violations: (f: SodViolationFilter = {}) => `/sod/violations${sodViolationQuery(f)}`,
+};
+
 export const simulate = (body: { remove_edge_ids?: number[]; add_edges?: { src: string; dst: string; duration_hours?: number }[]; disable_account_ids?: number[] }) =>
   api<SimResult>("/simulate", { remove_edge_ids: [], add_edges: [], disable_account_ids: [], ...body });
 
+// ------------------------------------------------------------ evidence packs and point-in-time access (issue #111)
+export interface EvidenceControl { id: string; title: string; files: string[] }
+export interface EvidenceFramework { id: string; name: string; controls: EvidenceControl[] }
+export interface EvidenceFile { name: string; sha256: string; bytes: number; rows: number }
+export interface EvidenceManifest {
+  schema: string;
+  pack_id: string;
+  framework: string;
+  framework_name: string;
+  controls: EvidenceControl[];
+  period_from: string;
+  period_to: string;
+  generated_at: string;
+  generated_by: string;
+  files: EvidenceFile[];
+  user_rows_by_source: Record<string, number>;
+  notes: string[];
+}
+export interface EvidencePack {
+  id: string;
+  framework: string;
+  framework_name: string;
+  period_from: string;
+  period_to: string;
+  generated_at: string;
+  generated_by: string;
+  manifest_sha256: string;
+  size_bytes: number;
+  files: number;
+  manifest?: EvidenceManifest;
+}
+export interface EvidencePackList { packs: EvidencePack[]; frameworks: EvidenceFramework[] }
+
+/** Generate a pack. `from` and `to` are dates (YYYY-MM-DD); `to` includes that day. */
+export const createEvidencePack = (body: { framework: string; from: string; to: string }) => api<EvidencePack>("/evidence/packs", body);
+
+/** The pack's ZIP, for saving. A server error comes back as an ApiError like any other call. */
+export async function downloadEvidencePack(id: string): Promise<Blob> {
+  const res = await fetch(`/api/evidence/packs/${encodeURIComponent(id)}/download`, { credentials: "same-origin" });
+  if (!res.ok) {
+    let j: any = null;
+    try {
+      j = await res.json();
+    } catch {
+      /* ignore */
+    }
+    throw new ApiError(j ? errorMessage(res.status, j) : `${res.status} ${res.statusText}`, res.status, j);
+  }
+  return res.blob();
+}
+
+export interface AsOfPath { text: string; steps: { key: string; kind: string; label: string; system: string | null }[] }
+export interface AsOfPermission { permission_id: number; action: string; privileged: boolean; standing: boolean; paths: AsOfPath[] }
+export interface AsOfAccess { identity: IdentityBrief; permissions: AsOfPermission[] }
+export interface AsOfResult {
+  resource: { id: number; system: string; name: string; kind: string; environment: string | null };
+  date: string;
+  as_of: string;
+  identities: AsOfAccess[];
+  count: number;
+}
+/** Path for useApi: who could reach the resource on `date` (YYYY-MM-DD, end of that day, or an ISO instant). */
+export const asOfPath = (resourceId: number | string, date: string) =>
+  `/access/as-of?resource=${encodeURIComponent(String(resourceId))}&date=${encodeURIComponent(date)}`;
+
 // ------------------------------------------------------------ formatting
-const asUtc = (s: string) => new Date(s + (s.endsWith("Z") ? "" : "Z"));
+const asUtc =(s: string) => new Date(s + (s.endsWith("Z") ? "" : "Z"));
 export const fmtDate = (s?: string | null) => (s ? asUtc(s).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "Never");
 export const fmtDay = (s?: string | null) => (s ? asUtc(s).toLocaleDateString(undefined, { dateStyle: "medium" }) : "Never");
 export const ago = (days?: number | null) =>
@@ -2032,7 +2276,7 @@ export interface ProvTarget {
   dialect?: "standard" | "entra"; fault?: string; write_back: boolean; has_credential: boolean; credential_version: string | null; updated_at: string;
 }
 
-/** token is write-only: omit it to keep the stored credential. */
+/** token is write-only: omit it to keep the stored credential. A change of kind or origin (scheme, host, port) needs a new token (422 credential_required). */
 export interface ProvTargetInput { kind: ProvTarget["kind"]; base_url: string; dialect?: string; fault?: string; token?: string; write_back: boolean }
 
 export const provisioning = {
@@ -2059,6 +2303,23 @@ export const jobs = {
   get: (id: string) => api<JobRun>(`/jobs/${encodeURIComponent(id)}`),
   /** Replays the run's API call as you; its own permission and step-up apply. */
   retry: (id: string) => api<unknown>(`/jobs/${encodeURIComponent(id)}/retry`, {}),
+};
+
+// ------------------------------------------------ durable job queue (#300)
+
+export type QueueStatus = "queued" | "running" | "succeeded" | "failed" | "dead";
+export interface QueueJob {
+  id: string; kind: string; status: QueueStatus; run_at: string; attempts: number; max_attempts: number; last_error: string;
+  lease_owner: string | null; lease_expires_at: string | null; schedule_id: string | null; created_at: string; updated_at: string;
+  finished_at: string | null;
+}
+export interface QueueSchedule {
+  name: string; kind: string; spec: string; enabled: boolean; max_attempts: number; next_run_at: string; last_enqueued_at: string | null;
+}
+
+export const queue = {
+  /** Puts a dead job back in the queue with a fresh attempt budget (step-up, audited). */
+  retry: (id: string) => api<QueueJob>(`/queue/jobs/${encodeURIComponent(id)}/retry`, {}),
 };
 
 // ------------------------------------------------- config transport (#170)

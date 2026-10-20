@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -80,26 +81,28 @@ func newLimiters(c RateLimits) *limiters {
 		anonEvery: anon.Every, authEvery: au.Every}
 }
 
-// Where a client address came from (condaccess.Input.IPVia).
-const (
-	ipViaPeer = "peer"
-	ipViaXFF  = "x_forwarded_for"
-	// ipViaUnresolved: a trusted proxy did not say who the client is.
-	ipViaUnresolved = "unresolved"
-)
+// rateKey is the limiter key of the request's client. A peer address that
+// does not parse (not TCP) shares one "invalid" bucket.
+func (s *Server) rateKey(r *http.Request) ratelimit.Key {
+	a, _ := s.clientIP(r)
+	return ratelimit.IPKey(a)
+}
 
-// walkClient resolves the request's client. The peer is the client unless it
-// is one of TrustedProxies, and then the rightmost X-Forwarded-For entry that
-// is not itself a trusted proxy. A header sent by any other peer is ignored,
-// so a client cannot name its own address. resolved is false when the peer is
-// a trusted proxy and no client could be found: the header is missing or
-// malformed (the walk stops at a malformed hop), or every hop is a trusted
-// proxy. addr is then the last address the walk could trust, the proxy's own.
-// The zero Addr means the peer address could not be parsed (also unresolved).
-func (s *Server) walkClient(r *http.Request) (addr netip.Addr, via string, resolved bool) {
+// requestIP is the client address as text (the OAuth server records it).
+func (s *Server) requestIP(r *http.Request) string {
+	if a, ok := s.clientIP(r); ok {
+		return a.String()
+	}
+	return r.RemoteAddr
+}
+
+// clientIP is the client address: the TCP peer, or, when the peer is a
+// trusted proxy, the rightmost X-Forwarded-For entry that is not one. The
+// zero Addr and false mean the peer address could not be parsed.
+func (s *Server) clientIP(r *http.Request) (netip.Addr, bool) {
 	ap, err := netip.ParseAddrPort(r.RemoteAddr)
 	if err != nil {
-		return netip.Addr{}, "", false
+		return netip.Addr{}, false
 	}
 	a, via := ap.Addr().Unmap(), ipViaPeer
 	if !s.trustedProxy(a) {
@@ -116,35 +119,7 @@ func (s *Server) walkClient(r *http.Request) (addr netip.Addr, via string, resol
 			return a, via, true
 		}
 	}
-	return a, via, false
-}
-
-// clientIP is the client address for rate limiting. When the client cannot be
-// resolved it falls back to the last trusted address (the proxy's own), which
-// is a fine limiter key but must never be used for an access decision: see
-// accessClientIP.
-func (s *Server) clientIP(r *http.Request) (netip.Addr, string) {
-	a, via, _ := s.walkClient(r)
-	return a, via
-}
-
-// accessClientIP is the client address for conditional access, and fails
-// closed: when the client is unresolved it returns the zero Addr and via
-// ipViaUnresolved, never the trusted proxy's address (which may sit in a
-// corporate range and so make an external client look internal).
-func (s *Server) accessClientIP(r *http.Request) (netip.Addr, string, bool) {
-	a, via, ok := s.walkClient(r)
-	if !ok {
-		return netip.Addr{}, ipViaUnresolved, false
-	}
-	return a, via, true
-}
-
-// rateKey is the limiter key of the request's client. A peer address that
-// does not parse (not TCP) shares one "invalid" bucket.
-func (s *Server) rateKey(r *http.Request) ratelimit.Key {
-	a, _ := s.clientIP(r)
-	return ratelimit.IPKey(a)
+	return a, true
 }
 
 func (s *Server) trustedProxy(a netip.Addr) bool {
@@ -161,8 +136,8 @@ func (s *Server) trustedProxy(a netip.Addr) bool {
 type authenticatedKey struct{}
 
 func markAuthenticated(ctx context.Context) {
-	if b, ok := ctx.Value(authenticatedKey{}).(*bool); ok {
-		*b = true
+	if b, ok := ctx.Value(authenticatedKey{}).(*atomic.Bool); ok {
+		b.Store(true)
 	}
 }
 
@@ -188,9 +163,12 @@ func (s *Server) rateLimit(next http.Handler) http.Handler {
 			tooMany(w, s.limits.anonEvery)
 			return
 		}
-		authenticated := false
+		// The flag is set by the handler, which http.TimeoutHandler runs on its
+		// own goroutine and which can outlive next.ServeHTTP once the timeout
+		// fires, so it is atomic.
+		var authenticated atomic.Bool
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), authenticatedKey{}, &authenticated)))
-		if !authenticated {
+		if !authenticated.Load() {
 			s.limits.anon.Allow(key)
 		}
 	})

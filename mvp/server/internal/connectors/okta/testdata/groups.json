@@ -1,0 +1,18 @@
+[
+  {
+    "id": "00g1engineers0001",
+    "created": "2023-11-15T09:00:00.000Z",
+    "lastUpdated": "2026-03-01T09:00:00.000Z",
+    "lastMembershipUpdated": "2026-09-01T09:00:00.000Z",
+    "type": "OKTA_GROUP",
+    "profile": {"name": "Engineers", "description": "All engineers"}
+  },
+  {
+    "id": "00g1admins0000002",
+    "created": "2023-11-15T09:00:00.000Z",
+    "lastUpdated": "2026-03-01T09:00:00.000Z",
+    "lastMembershipUpdated": "2026-06-02T09:00:00.000Z",
+    "type": "OKTA_GROUP",
+    "profile": {"name": "Okta Admins", "description": null}
+  }
+]

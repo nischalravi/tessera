@@ -169,3 +169,21 @@ func TestDevGitHubIDMatchesDevIdP(t *testing.T) {
 		}
 	}
 }
+
+// TestLarkspurHasTwoContainHolders: re-enabling an identity linked to a
+// Tessera user needs a second holder of identities.contain (four eyes,
+// #316), so the demo tenant must have at least two (#335).
+func TestLarkspurHasTwoContainHolders(t *testing.T) {
+	var holders []string
+	for _, u := range seed.LarkspurUsers {
+		for _, r := range u.Roles {
+			if slices.Contains(auth.RolePermissions(auth.Role(r)), auth.PermIdentitiesContain) {
+				holders = append(holders, u.Subject)
+				break
+			}
+		}
+	}
+	if len(holders) < 2 {
+		t.Errorf("larkspur users holding identities.contain: %v; four eyes on enable needs two", holders)
+	}
+}
