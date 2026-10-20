@@ -7,6 +7,9 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"text/template"
+
+	"github.com/go-ldap/ldap/v3"
 )
 
 // Common is the configuration every target type shares (a provisioner's
@@ -122,6 +125,13 @@ type Compiled struct {
 	name   *Tpl
 	member *Tpl
 	attrs  map[string]*Tpl
+	// dnMember: the member reference is a DN (member and uniqueMember of an
+	// ldap or ad target). Member then escapes the fields the template reads
+	// (RFC 4514) and checks the DN keeps the shape the template gives it.
+	dnMember bool
+	// dnShape is the attribute types of the member_ref DN rendered with
+	// placeholder values, one slice per RDN; nil when that is not a DN.
+	dnShape [][]string
 }
 
 // MaxAttrs bounds the attributes of a group.
@@ -167,6 +177,58 @@ func ParseCommon(raw []byte) (*Compiled, error) {
 	return out, nil
 }
 
+// ParseCommonFor is ParseCommon for a provisioner of the target type: for an
+// ldap or ad target whose member attribute holds DNs, the member_ref
+// substitutions are DN-escaped (an unreadable target config counts as DN-valued,
+// failing closed). ldapEscape in member_ref is then the identity, as the
+// fields are already escaped.
+func ParseCommonFor(typ string, raw []byte) (*Compiled, error) {
+	c, err := ParseCommon(raw)
+	if err != nil || (typ != TypeLDAP && typ != TypeAD) {
+		return c, err
+	}
+	c.dnMember = true
+	if cfg, perr := parseLDAPConfig(typ, c, Deps{AllowPlainLDAP: true}); perr == nil {
+		c.dnMember = strings.EqualFold(cfg.MemberAttr, "member") || strings.EqualFold(cfg.MemberAttr, "uniqueMember")
+	}
+	if !c.dnMember {
+		return c, nil
+	}
+	fm := template.FuncMap{}
+	for k, v := range funcs {
+		fm[k] = v
+	}
+	fm["ldapEscape"] = func(s string) string { return s }
+	if c.member, err = parseTemplate("member_ref", c.MemberRef, fm); err != nil {
+		return nil, err
+	}
+	if probe, err := c.member.Render(escapeMember(MemberData{Name: "x", Email: "x", Username: "x", ExternalID: "x"})); err == nil {
+		c.dnShape = dnShapeOf(probe)
+	}
+	return c, nil
+}
+
+// escapeMember DN-escapes every string the member_ref template can read.
+func escapeMember(m MemberData) MemberData {
+	m.Name, m.Email, m.Username, m.ExternalID = EscapeDN(m.Name), EscapeDN(m.Email), EscapeDN(m.Username), EscapeDN(m.ExternalID)
+	return m
+}
+
+// dnShapeOf is the attribute types of each RDN of dn, nil if dn is not a DN.
+func dnShapeOf(dn string) [][]string {
+	p, err := ldap.ParseDN(dn)
+	if err != nil || len(p.RDNs) == 0 {
+		return nil
+	}
+	out := make([][]string, len(p.RDNs))
+	for i, r := range p.RDNs {
+		for _, a := range r.Attributes {
+			out[i] = append(out[i], strings.ToLower(a.Type))
+		}
+	}
+	return out
+}
+
 // AttrKeys lists the managed attribute names, sorted.
 func (c *Compiled) AttrKeys() []string {
 	keys := make([]string, 0, len(c.attrs))
@@ -201,12 +263,18 @@ func (c *Compiled) Group(g GroupData) (string, map[string][]string, error) {
 
 // Member translates an identity's account to a member reference.
 func (c *Compiled) Member(m MemberData) (string, error) {
+	if c.dnMember {
+		m = escapeMember(m)
+	}
 	ref, err := c.member.Render(m)
 	if err != nil {
 		return "", err
 	}
 	if ref == "" {
 		return "", fmt.Errorf("member_ref is empty for identity %d", m.IdentityID)
+	}
+	if c.dnMember && c.dnShape != nil && !slices.EqualFunc(dnShapeOf(ref), c.dnShape, slices.Equal[[]string]) {
+		return "", fmt.Errorf("member_ref for identity %d does not keep the DN the template defines", m.IdentityID)
 	}
 	return ref, nil
 }

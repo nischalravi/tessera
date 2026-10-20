@@ -227,7 +227,7 @@ func (s *Service) ValidateConfig(typ string, config json.RawMessage, sec map[str
 	if !slices.Contains(TargetTypes(), typ) {
 		return cfgErr("target_type must be one of %v", TargetTypes())
 	}
-	c, err := ParseCommon(config)
+	c, err := ParseCommonFor(typ, config)
 	if err != nil {
 		return err
 	}

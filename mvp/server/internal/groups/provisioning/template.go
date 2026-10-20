@@ -105,11 +105,13 @@ type Tpl struct {
 }
 
 // ParseTemplate parses src with the fixed function set.
-func ParseTemplate(name, src string) (*Tpl, error) {
+func ParseTemplate(name, src string) (*Tpl, error) { return parseTemplate(name, src, funcs) }
+
+func parseTemplate(name, src string, fm template.FuncMap) (*Tpl, error) {
 	if len(src) > maxTemplateBytes {
 		return nil, cfgErr("template %s is longer than %d bytes", name, maxTemplateBytes)
 	}
-	t, err := template.New(name).Funcs(funcs).Option("missingkey=error").Parse(src)
+	t, err := template.New(name).Funcs(fm).Option("missingkey=error").Parse(src)
 	if err != nil {
 		return nil, cfgErr("template %s: %v", name, err)
 	}

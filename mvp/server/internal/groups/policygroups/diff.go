@@ -64,7 +64,7 @@ func (a *Applier) Diff(files []SourceFile, full bool) (*DiffResult, error) {
 		src = IdentityAttrs{}
 	}
 	members := store.MembersListID(tx.Tenant())
-	resolve := resolver(tx, byName2set(byName))
+	resolve := resolver(tx, byName2set(byName), env.GroupHidden)
 
 	// the current members of every group the change refers to or replaces
 	sets := map[string]map[int64]bool{} // group id -> members

@@ -2904,7 +2904,10 @@ numbers it 0106). Code: `server/internal/groups/provisioning`; SQL for the SQL t
   group's target name, attributes and members' references come from templates (Go `text/template`, only
   `lower upper replace truncateHash ldapEscape join`, output at most 4 KiB): `group_name` (default
   `{{.Name}}`), `attrs` and `member_ref` (default `{{.Username}}`), fed by the group and by the member's
-  **active account** in `account_system`. A member with no account is counted in the run summary
+  **active account** in `account_system`. For an `ldap`/`ad` target whose member attribute holds DNs
+  (`member`, `uniqueMember`), every field substituted into `member_ref` is DN-escaped (RFC 4514) automatically
+  (`ldapEscape` there changes nothing), and a rendered DN that no longer has the template's RDN structure is
+  refused. A member with no account is counted in the run summary
   (`unmapped_members`) and in diagnostics, never dropped silently; two groups with one target name are
   both left alone (`conflicts`); a group the engine is still recomputing is skipped until its events
   arrive; a disabled group is the empty set.

@@ -72,7 +72,7 @@ func (s *Service) Diagnose(ctx context.Context, tenant tenancy.ID, id, groupID s
 		if err != nil {
 			return err
 		}
-		cc, err := ParseCommon(p.Config)
+		cc, err := ParseCommonFor(p.TargetType, p.Config)
 		if err != nil {
 			return err
 		}
