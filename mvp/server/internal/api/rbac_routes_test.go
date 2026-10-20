@@ -241,6 +241,8 @@ POST   /api/connections/{id}/activation/approve      connections.activate STEP_U
 POST   /api/connections/{id}/activation/reject       connections.activate -  # DR-10
 GET    /api/insights/deployment-health               connections.read   -
 POST   /api/insights/deployment-health/rerun         connections.manage -
+GET    /api/connections/{id}/readiness/evidence      connections.read   -  (+ audit.read in the handler; the design's audit.export does not exist)
+GET    /api/insights/deployment-health/evidence      connections.read   -  (+ audit.read in the handler; the design's audit.export does not exist)
 GET    /api/sod/functions                            graph.read      -  # issue #298
 POST   /api/sod/functions                            sod.manage      STEP_UP_POLICY  # issue #298
 GET    /api/sod/functions/{function_id}              graph.read      -  # issue #298

@@ -220,6 +220,13 @@ shows a task per degraded connection (`tasks` in `GET /api/insights/deployment-h
 Not wired yet: the "sync failed for 24 hours" and "cursor lost three times in 7 days" triggers
 (`readiness.ExternalSignals`; nothing records them yet), and Admin → Jobs (set `Scheduler.Hook`
 to the `job_runs` wrapper of #172).
+**Evidence export** (design §7.6): `GET /api/connections/{id}/readiness/evidence` and
+`GET /api/insights/deployment-health/evidence` return a ZIP (`manifest.json`, `checklist.csv`,
+`checks.csv`, `findings.csv`, `skipped.csv`, `score.json`). The manifest holds the SHA-256 of every
+file, the template pins and config hashes, the ledger range and chain head, and the SOC 2, ISO 27001,
+SOX ITGC and PCI DSS control mapping text. Findings carry sample object ids only, never names. Each
+export appends `readiness.evidence.exported` (with the manifest hash) in the same transaction, and
+needs `connections.read` plus `audit.read` (auditor, tenant_admin).
 
 #### Live LDAP checks
 
