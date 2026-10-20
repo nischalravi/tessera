@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -881,5 +882,34 @@ func TestMCP_RegisterClientFetchesTheDocument(t *testing.T) {
 	acts := auditActions(t, x.f, x.main.ID)
 	if acts["mcp.client.discovered"] < 1 || acts["mcp.client.update"] != 1 {
 		t.Errorf("audit = %v", acts)
+	}
+}
+
+// The MCP authorization server is its own issuer (/t/{slug}/mcp), apart from
+// internal/oauth's (/t/{slug}), though both sign with the tenant's
+// access-token key: an MCP token never authenticates an API call.
+func TestMCP_TokenIsNotAnAPIToken(t *testing.T) {
+	x := newMCPFx(t, noRateLimits)
+	tok := x.userToken(x.resA)["access_token"].(string)
+	parts := strings.Split(tok, ".")
+	if len(parts) != 3 {
+		t.Fatalf("token is not a JWT: %q", tok)
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c struct {
+		Iss string `json:"iss"`
+	}
+	if err := json.Unmarshal(raw, &c); err != nil || c.Iss != x.issuer || !strings.HasSuffix(c.Iss, "/t/"+x.main.Slug+"/mcp") {
+		t.Fatalf("iss = %q, want %q", c.Iss, x.issuer)
+	}
+	for _, scheme := range []string{"Bearer ", "DPoP "} {
+		req := httptest.NewRequest("GET", "/api/mcp/clients", nil)
+		req.Header.Set("Authorization", scheme+tok)
+		if rec := serve(x.h, req); rec.Code != http.StatusUnauthorized {
+			t.Errorf("%sMCP token on the API: %d %.200s, want 401", scheme, rec.Code, rec.Body)
+		}
 	}
 }
