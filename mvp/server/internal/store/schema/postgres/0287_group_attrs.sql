@@ -189,3 +189,9 @@ $fn$;
 
 CREATE TRIGGER tg_grp_attr_assigns_owner_xtenant BEFORE INSERT OR UPDATE OF tenant_id, owner_type, owner_id ON grp_attr_assigns
 	FOR EACH ROW EXECUTE FUNCTION tessera_guard_grp_attr_owner();
+
+-- a BEFORE trigger refuses a definition of another tenant before the primary key is checked, like SQLite
+CREATE TRIGGER tg_grp_attr_name_implies_def_xtenant BEFORE INSERT OR UPDATE OF tenant_id, def_id ON grp_attr_name_implies
+	FOR EACH ROW EXECUTE FUNCTION tessera_guard_soft_ref('grp_attr_defs', 'def_id', 'text');
+CREATE TRIGGER tg_grp_attr_action_implies_def_xtenant BEFORE INSERT OR UPDATE OF tenant_id, def_id ON grp_attr_action_implies
+	FOR EACH ROW EXECUTE FUNCTION tessera_guard_soft_ref('grp_attr_defs', 'def_id', 'text');
