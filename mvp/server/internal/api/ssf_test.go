@@ -692,7 +692,11 @@ func TestSSFPoll_SweeperPollsAndAcknowledgesOnlyProcessedJTIs(t *testing.T) {
 		t.Fatalf("create poll stream: %d %s", rec.Code, rec.Body)
 	}
 	// the ssf_poll queue job polls the stream; a tick starts four jobs at a time
-	for range 4 {
+	// and the job may not be among them (or may be slow under load), so tick
+	// until the stream has been polled twice and the processed event is stored,
+	// with a generous deadline instead of a fixed number of ticks
+	deadline := time.Now().Add(60 * time.Second)
+	for {
 		if err := e.srv.Queue().Tick(context.Background()); err != nil {
 			t.Fatal(err)
 		}
@@ -700,9 +704,13 @@ func TestSSFPoll_SweeperPollsAndAcknowledgesOnlyProcessedJTIs(t *testing.T) {
 		mu.Lock()
 		n := len(reqs)
 		mu.Unlock()
-		if n >= 2 {
+		if n >= 2 && len(e.events(e.pa, "")) >= 1 {
 			break
 		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the queue polled %d times and stored %d events before the deadline", n, len(e.events(e.pa, "")))
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	mu.Lock()
 	defer mu.Unlock()

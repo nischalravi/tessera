@@ -3,6 +3,8 @@ package store
 import (
 	"database/sql"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // MCP authorization server storage (schema/0356_mcp_authz.sql). Secrets are
@@ -306,6 +308,10 @@ var (
 	mcpTokensRevokeIdentity = tq("mcp_tokens.revoke_identity", `
 		UPDATE mcp_tokens SET revoked_at = @now, revoked_reason = @reason
 		WHERE tenant_id = @tenant AND revoked_at IS NULL AND (agent_identity_id = @identity_id OR subject_identity_id = @identity_id)`)
+	mcpTokensRevokeUser = tq("mcp_tokens.revoke_user", `
+		UPDATE mcp_tokens SET revoked_at = @now, revoked_reason = @reason
+		WHERE mcp_tokens.tenant_id = @tenant AND mcp_tokens.revoked_at IS NULL AND mcp_tokens.subject_identity_id IN (
+			SELECT u.identity_id FROM platform_users u WHERE u.tenant_id = @tenant AND u.id = @user_id AND u.identity_id IS NOT NULL)`)
 	mcpTokensRevokeClient = tq("mcp_tokens.revoke_client", `
 		UPDATE mcp_tokens SET revoked_at = @now, revoked_reason = @reason
 		WHERE tenant_id = @tenant AND revoked_at IS NULL AND client_id = @client_id`)
@@ -369,6 +375,12 @@ func (tx *TenantTx) revokeMany(s tstmt, now time.Time, reason string, args ...sq
 // the identity (the kill switch) and returns how many.
 func (tx *TenantTx) RevokeMCPTokensOfIdentity(identityID int64, reason string, now time.Time) (int64, error) {
 	return tx.revokeMany(mcpTokensRevokeIdentity, now, reason, sql.Named("identity_id", identityID))
+}
+
+// RevokeMCPTokensOfUser revokes every live token whose subject is the
+// identity linked to the platform user (the user was disabled).
+func (tx *TenantTx) RevokeMCPTokensOfUser(userID uuid.UUID, reason string, now time.Time) (int64, error) {
+	return tx.revokeMany(mcpTokensRevokeUser, now, reason, sql.Named("user_id", userID.String()))
 }
 
 // RevokeMCPTokensOfClient revokes every live token issued to a client.

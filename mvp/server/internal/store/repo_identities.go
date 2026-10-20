@@ -94,6 +94,12 @@ var (
 		WHERE refresh_tokens.tenant_id = @tenant AND refresh_tokens.revoked_at IS NULL AND refresh_tokens.user_id IN (
 			SELECT u.id FROM platform_users u JOIN identities i ON i.tenant_id = u.tenant_id AND i.id = u.identity_id
 			WHERE u.tenant_id = @tenant AND i.tenant_id = @tenant AND i.external_id = @external_id AND i.status <> 'active')`)
+	// and their MCP tokens, as agent or subject (the leaver gap next to #345)
+	identitiesSyncRevokeMCP = tq("identities.sync_revoke_mcp", `
+		UPDATE mcp_tokens SET revoked_at = @at, revoked_reason = @reason
+		WHERE mcp_tokens.tenant_id = @tenant AND mcp_tokens.revoked_at IS NULL AND (
+			mcp_tokens.subject_identity_id IN (SELECT i.id FROM identities i WHERE i.tenant_id = @tenant AND i.external_id = @external_id AND i.status <> 'active')
+			OR mcp_tokens.agent_identity_id IN (SELECT i.id FROM identities i WHERE i.tenant_id = @tenant AND i.external_id = @external_id AND i.status <> 'active'))`)
 	identitiesSetDeptTitle = tq("identities.set_department_title", `
 		UPDATE identities SET department = @department, title = @title WHERE tenant_id = @tenant AND id = @id`)
 )
@@ -199,7 +205,11 @@ func (tx *TenantTx) UpsertIdentity(i *Identity) error {
 		sql.Named("external_id", i.ExternalID)); err != nil {
 		return err
 	}
-	_, err = tx.exec(identitiesSyncRevokeRefresh, sql.Named("at", RT(at)), sql.Named("reason", reason),
+	if _, err = tx.exec(identitiesSyncRevokeRefresh, sql.Named("at", RT(at)), sql.Named("reason", reason),
+		sql.Named("external_id", i.ExternalID)); err != nil {
+		return err
+	}
+	_, err = tx.exec(identitiesSyncRevokeMCP, sql.Named("at", RT(at)), sql.Named("reason", reason),
 		sql.Named("external_id", i.ExternalID))
 	return err
 }
@@ -260,8 +270,12 @@ func (tx *TenantTx) TerminateIdentity(id int64, at time.Time) error {
 		return err
 	}
 	// and their CLI refresh tokens (#345)
-	_, err := tx.exec(refreshRevokeIdentity, sql.Named("at", RT(at)),
-		sql.Named("reason", RevokedIdentityTerminated), sql.Named("id", id))
+	if _, err := tx.exec(refreshRevokeIdentity, sql.Named("at", RT(at)),
+		sql.Named("reason", RevokedIdentityTerminated), sql.Named("id", id)); err != nil {
+		return err
+	}
+	// and the MCP tokens the identity holds, as user or as agent
+	_, err := tx.RevokeMCPTokensOfIdentity(id, RevokedIdentityTerminated, at)
 	return err
 }
 

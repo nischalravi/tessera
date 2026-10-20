@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"github.com/google/uuid"
 	"testing"
 	"time"
 
@@ -122,6 +123,9 @@ func TestIsolation_MCPWritesScoped(t *testing.T) {
 		}
 		if n, err := c.RevokeMCPTokensOfIdentity(f.A.IDs["helper-bot"], "x", now); err != nil || n != 0 {
 			t.Errorf("RevokeMCPTokensOfIdentity(A's agent) in B = %d, %v", n, err)
+		}
+		if n, err := c.RevokeMCPTokensOfUser(uuid.New(), "x", now); err != nil || n != 0 {
+			t.Errorf("RevokeMCPTokensOfUser(unknown user) in B = %d, %v", n, err)
 		}
 		if n, err := c.RevokeMCPTokensOfClient("https://client.example/"+f.A.Slug+".json", "x", now); err != nil || n != 0 {
 			t.Errorf("RevokeMCPTokensOfClient(A's) in B = %d, %v", n, err)
@@ -259,6 +263,6 @@ func mcpCovered() map[string]bool {
 		"SetMCPResourceStatus": true, "UpsertMCPClient": true, "MCPClient": true, "MCPClients": true, "SetMCPClient": true,
 		"InsertMCPAuthRequest": true, "MCPAuthRequest": true, "MCPAuthRequestByCode": true, "DecideMCPAuthRequest": true,
 		"RedeemMCPAuthRequest": true, "InsertMCPToken": true, "MCPToken": true, "MCPTokens": true, "RevokeMCPToken": true,
-		"RevokeMCPTokensOfIdentity": true, "RevokeMCPTokensOfClient": true, "RevokeMCPTokensOfAudience": true,
+		"RevokeMCPTokensOfIdentity": true, "RevokeMCPTokensOfUser": true, "RevokeMCPTokensOfClient": true, "RevokeMCPTokensOfAudience": true,
 		"InsertMCPDecision": true, "MCPDecisions": true, "UseMCPActorJTI": true}
 }

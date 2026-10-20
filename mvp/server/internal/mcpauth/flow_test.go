@@ -1,6 +1,7 @@
 package mcpauth
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -13,6 +14,8 @@ import (
 	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/google/uuid"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
@@ -700,7 +703,8 @@ func TestIntrospectNeedsActiveClientAndAgent(t *testing.T) {
 	if in, _ := e.introspect(tok, e.resA); !in.Active {
 		t.Fatal("not active again")
 	}
-	e.write(func(tx *store.TenantTx) error { return tx.TerminateIdentity(e.bot, e.now) })
+	// a status change that revokes nothing: the status check holds on its own
+	e.write(func(tx *store.TenantTx) error { return tx.SetIdentityStatusFrom(e.bot, "active", "terminated") })
 	if in, why := e.introspect(tok, e.resA); in.Active || why != "agent is not active" {
 		t.Errorf("terminated agent: %+v %s", in, why)
 	}
@@ -723,4 +727,84 @@ func forge(t *testing.T, key *ecdsa.PrivateKey, typ, kid string, c Claims) strin
 		t.Fatal(err)
 	}
 	return raw
+}
+
+// TestIdentityEndedRevokesMCPTokens: every path that ends an identity (leaver
+// or lifecycle end, a sync that writes a non-active status, a containment
+// disable) revokes the MCP tokens it holds as user or as agent, in the
+// transaction that ends it.
+func TestIdentityEndedRevokesMCPTokens(t *testing.T) {
+	ends := []struct {
+		name   string
+		reason string
+		end    func(e *env, tx *store.TenantTx, id int64) error
+	}{
+		{"terminate", store.RevokedIdentityTerminated, func(e *env, tx *store.TenantTx, id int64) error {
+			return tx.TerminateIdentity(id, e.now)
+		}},
+		{"sync terminated", store.RevokedIdentityTerminated, func(e *env, tx *store.TenantTx, id int64) error {
+			i, err := tx.Identity(id)
+			if err != nil {
+				return err
+			}
+			i.Status = "terminated"
+			return tx.UpsertIdentity(i)
+		}},
+		{"sync disabled", auth.RevokedIdentityDisabled, func(e *env, tx *store.TenantTx, id int64) error {
+			i, err := tx.Identity(id)
+			if err != nil {
+				return err
+			}
+			i.Status = "disabled"
+			return tx.UpsertIdentity(i)
+		}},
+		{"containment disable", auth.RevokedIdentityDisabled, func(e *env, tx *store.TenantTx, id int64) error {
+			_, err := containment.Disable(tx, id, "admin", "test", "none", e.now)
+			return err
+		}},
+	}
+	for _, who := range []struct {
+		name string
+		id   func(e *env) int64
+	}{{"user", func(e *env) int64 { return e.alice }}, {"agent", func(e *env) int64 { return e.bot }}} {
+		for _, tc := range ends {
+			t.Run(who.name+"/"+tc.name, func(t *testing.T) {
+				e := newEnv(t)
+				tok := e.userToken(e.resA)
+				if in, why := e.introspect(tok.AccessToken, e.resA); !in.Active {
+					t.Fatalf("inactive before: %s", why)
+				}
+				e.write(func(tx *store.TenantTx) error { return tc.end(e, tx, who.id(e)) })
+				row := e.tokenRow(e.claims(tok.AccessToken).ID)
+				if row.RevokedAt == nil || row.RevokedReason != tc.reason {
+					t.Errorf("token row %+v, want revoked with %q", row, tc.reason)
+				}
+				if in, why := e.introspect(tok.AccessToken, e.resA); in.Active || why != "token is revoked" {
+					t.Errorf("after: %+v %s", in, why)
+				}
+				if _, oe := e.exchange(tok.AccessToken, e.actorToken(actorOpts{}), e.resB, e.shared); oe == nil || oe.Code != "invalid_grant" {
+					t.Errorf("exchange after = %+v", oe)
+				}
+			})
+		}
+	}
+}
+
+// TestEndedIdentityTokensRefusedWithoutRevocation: the status check holds on
+// its own, for a status changed by a path that revokes nothing (#345's rule
+// for CLI tokens, applied to MCP): introspection and exchange refuse.
+func TestEndedIdentityTokensRefusedWithoutRevocation(t *testing.T) {
+	e := newEnv(t)
+	tok := e.userToken(e.resA).AccessToken
+	if err := e.db.InTenant(context.Background(), e.db.Tenant, func(tx *store.TenantTx) error {
+		return tx.SetIdentityStatusFrom(e.alice, "active", "disabled")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if in, why := e.introspect(tok, e.resA); in.Active || why != "user is not active" {
+		t.Errorf("introspect: %+v %s", in, why)
+	}
+	if _, oe := e.exchange(tok, e.actorToken(actorOpts{}), e.resB, e.shared); oe == nil || oe.Code != "invalid_grant" {
+		t.Errorf("exchange = %+v", oe)
+	}
 }
