@@ -112,7 +112,7 @@ func TestHelpdeskUnverifiedCaseCannotExecute(t *testing.T) {
 	path := "/api/helpdesk/cases/" + v.ID + "/execute"
 
 	// nothing verified: refused, with the policy in the body, and the IdP is never called
-	code, body := e.do(e.agent, "POST", path, "")
+	code, body := e.do(e.other, "POST", path, "")
 	if code != http.StatusConflict || !strings.Contains(body, `"verification_required"`) || !strings.Contains(body, `"policy"`) {
 		t.Fatalf("unverified execute: %d %s", code, body)
 	}
@@ -120,14 +120,14 @@ func TestHelpdeskUnverifiedCaseCannotExecute(t *testing.T) {
 	if code, body = e.verify(e.agent, v.ID, `{"method":"idv","session_ref":"s1"}`); code != 422 {
 		t.Errorf("IDV for a non-privileged identity: %d %s", code, body)
 	}
-	if code, body = e.do(e.agent, "POST", path, ""); code != http.StatusConflict {
+	if code, body = e.do(e.other, "POST", path, ""); code != http.StatusConflict {
 		t.Fatalf("execute after a refused verification: %d %s", code, body)
 	}
 	// the number must come from HR, never from the caller
-	if code, body = e.verify(e.agent, v.ID, `{"method":"callback","number_source":"caller","evidence":"they gave me a number"}`); code != 422 {
+	if code, body = e.verify(e.other, v.ID, `{"method":"callback","number_source":"caller","evidence":"they gave me a number"}`); code != 422 {
 		t.Errorf("call-back to a caller-supplied number: %d %s", code, body)
 	}
-	if code, body = e.verify(e.agent, v.ID, `{"method":"callback","number_source":"hr"}`); code != 422 {
+	if code, body = e.verify(e.other, v.ID, `{"method":"callback","number_source":"hr"}`); code != 422 {
 		t.Errorf("call-back without evidence: %d %s", code, body)
 	}
 	if code, body = e.verify(e.agent, v.ID, `{"method":"sms"}`); code != 422 {
@@ -141,10 +141,10 @@ func TestHelpdeskUnverifiedCaseCannotExecute(t *testing.T) {
 	}
 
 	// verified: it runs once, through the executor, and is audited
-	if code, body = e.verify(e.agent, v.ID, callbackBody); code != 200 {
+	if code, body = e.verify(e.other, v.ID, callbackBody); code != 200 {
 		t.Fatalf("callback: %d %s", code, body)
 	}
-	code, body = e.do(e.agent, "POST", path, "")
+	code, body = e.do(e.other, "POST", path, "")
 	if code != 200 || strings.Contains(body, "temporary_access_pass") {
 		t.Fatalf("execute: %d %s", code, body)
 	}
@@ -163,10 +163,10 @@ func TestHelpdeskUnverifiedCaseCannotExecute(t *testing.T) {
 		}
 	}
 	// it cannot run twice, and a closed case takes no more verifications
-	if code, body = e.do(e.agent, "POST", path, ""); code != http.StatusConflict {
+	if code, body = e.do(e.other, "POST", path, ""); code != http.StatusConflict {
 		t.Errorf("second execute: %d %s", code, body)
 	}
-	if code, body = e.verify(e.agent, v.ID, callbackBody); code != http.StatusConflict {
+	if code, body = e.verify(e.other, v.ID, callbackBody); code != http.StatusConflict {
 		t.Errorf("verify a closed case: %d %s", code, body)
 	}
 	if len(e.fake.Calls()) != 1 {
@@ -184,7 +184,7 @@ func TestHelpdeskPushNeedsPhishingResistantAuthenticator(t *testing.T) {
 	if len(got.Verifications) != 1 || got.Verifications[0].Outcome != "failed" || got.Policy.Satisfied {
 		t.Errorf("a push to a weak authenticator must not count: %+v", got)
 	}
-	if code, body := e.do(e.agent, "POST", "/api/helpdesk/cases/"+v.ID+"/execute", ""); code != http.StatusConflict {
+	if code, body := e.do(e.other, "POST", "/api/helpdesk/cases/"+v.ID+"/execute", ""); code != http.StatusConflict {
 		t.Errorf("execute: %d %s", code, body)
 	}
 	if len(e.fake.Calls()) != 0 {
@@ -211,7 +211,7 @@ func TestHelpdeskPrivilegedNeedsTwoVerificationsAndSecondApprover(t *testing.T) 
 	if code, body := e.verify(e.agent, v.ID, `{"method":"idv","session_ref":"idv-123"}`); code != 200 {
 		t.Fatalf("idv: %d %s", code, body)
 	}
-	if code, _ := e.do(e.agent, "POST", exec, ""); code != http.StatusConflict {
+	if code, _ := e.do(e.other, "POST", exec, ""); code != http.StatusConflict {
 		t.Errorf("one verification: %d", code)
 	}
 	if code, body := e.verify(e.agent, v.ID, `{"method":"idv","session_ref":"fail-1"}`); code != 200 || e.view(v.ID).Policy.Satisfied {
@@ -224,11 +224,11 @@ func TestHelpdeskPrivilegedNeedsTwoVerificationsAndSecondApprover(t *testing.T) 
 	if got := e.view(v.ID); len(got.Policy.Counted) != 1 {
 		t.Errorf("counted: %v", got.Policy.Counted)
 	}
-	if code, body := e.verify(e.agent, v.ID, callbackBody); code != 200 {
+	if code, body := e.verify(e.other, v.ID, callbackBody); code != 200 {
 		t.Fatalf("callback: %d %s", code, body)
 	}
 	// two methods, no second approver
-	code, body := e.do(e.agent, "POST", exec, "")
+	code, body := e.do(e.other, "POST", exec, "")
 	if code != http.StatusConflict || !strings.Contains(body, "second approver") {
 		t.Fatalf("no second approver: %d %s", code, body)
 	}
@@ -236,7 +236,7 @@ func TestHelpdeskPrivilegedNeedsTwoVerificationsAndSecondApprover(t *testing.T) 
 	if code, body = e.do(e.agent, "POST", second, ""); code != http.StatusForbidden {
 		t.Errorf("requester as second approver: %d %s", code, body)
 	}
-	if code, _ = e.do(e.agent, "POST", exec, ""); code != http.StatusConflict {
+	if code, _ = e.do(e.other, "POST", exec, ""); code != http.StatusConflict {
 		t.Errorf("execute after a refused approval: %d", code)
 	}
 	// a viewer cannot approve at all
@@ -254,7 +254,7 @@ func TestHelpdeskPrivilegedNeedsTwoVerificationsAndSecondApprover(t *testing.T) 
 	if code, body = e.do(e.other, "POST", second, ""); code != http.StatusConflict {
 		t.Errorf("second approval twice: %d %s", code, body)
 	}
-	if code, body = e.do(e.agent, "POST", exec, ""); code != 200 {
+	if code, body = e.do(e.other, "POST", exec, ""); code != 200 {
 		t.Fatalf("execute: %d %s", code, body)
 	}
 	if got := e.fake.Calls(); len(got) != 1 || got[0].UserID != "carol" {
@@ -299,7 +299,7 @@ func TestHelpdeskManagerApproval(t *testing.T) {
 	if got := e.view(v.ID); !got.Policy.Satisfied || got.Policy.Counted[0] != "manager_approval" {
 		t.Errorf("policy after the manager approval: %+v", got.Policy)
 	}
-	if code, body := e.do(e.agent, "POST", "/api/helpdesk/cases/"+v.ID+"/execute", ""); code != 200 {
+	if code, body := e.do(e.other, "POST", "/api/helpdesk/cases/"+v.ID+"/execute", ""); code != 200 {
 		t.Fatalf("execute: %d %s", code, body)
 	}
 }
@@ -307,12 +307,12 @@ func TestHelpdeskManagerApproval(t *testing.T) {
 func TestHelpdeskFailedResetCanBeRetried(t *testing.T) {
 	e := newHelpdeskEnv(t, nil)
 	v := e.start(e.agent, e.alice, "mfa")
-	if code, body := e.verify(e.agent, v.ID, callbackBody); code != 200 {
+	if code, body := e.verify(e.other, v.ID, callbackBody); code != 200 {
 		t.Fatal(code, body)
 	}
 	exec := "/api/helpdesk/cases/" + v.ID + "/execute"
 	e.fake.Err = fmt.Errorf("POST /x: status 500")
-	code, body := e.do(e.agent, "POST", exec, "")
+	code, body := e.do(e.other, "POST", exec, "")
 	if code != http.StatusBadGateway || !strings.Contains(body, `"provider_failed"`) {
 		t.Fatalf("failed reset: %d %s", code, body)
 	}
@@ -324,7 +324,7 @@ func TestHelpdeskFailedResetCanBeRetried(t *testing.T) {
 	}
 	e.fake.Err = nil
 	e.fake.TAP = "Tap-secret-xyz"
-	rec := corrDo(e.h, e.agent, "POST", exec, "")
+	rec := corrDo(e.h, e.other, "POST", exec, "")
 	if rec.Code != 200 || rec.Header().Get("Cache-Control") != "no-store" || !strings.Contains(rec.Body.String(), "Tap-secret-xyz") {
 		t.Fatalf("retry: %d %s", rec.Code, rec.Body)
 	}
@@ -397,10 +397,10 @@ func TestHelpdeskSimulationRefusedInProduction(t *testing.T) {
 	// with no live connection the okta executor is unavailable, not faked
 	e2 := newHelpdeskEnv(t, func(s *helpdesk.Service) { s.Simulated = false; s.Executors = nil })
 	v2 := e2.start(e2.agent, e2.alice, "mfa")
-	if code, body := e2.verify(e2.agent, v2.ID, callbackBody); code != 200 {
+	if code, body := e2.verify(e2.other, v2.ID, callbackBody); code != 200 {
 		t.Fatal(code, body)
 	}
-	if code, body := e2.do(e2.agent, "POST", "/api/helpdesk/cases/"+v2.ID+"/execute", ""); code != http.StatusServiceUnavailable {
+	if code, body := e2.do(e2.other, "POST", "/api/helpdesk/cases/"+v2.ID+"/execute", ""); code != http.StatusServiceUnavailable {
 		t.Errorf("execute without an executor: %d %s", code, body)
 	}
 	if got := e2.view(v2.ID); got.Status != "open" {
@@ -412,10 +412,10 @@ func TestHelpdeskTakeoverDetection(t *testing.T) {
 	e := newHelpdeskEnv(t, nil)
 	t0 := storetest.Now
 	v := e.start(e.agent, e.alice, "mfa")
-	if code, body := e.verify(e.agent, v.ID, callbackBody); code != 200 {
+	if code, body := e.verify(e.other, v.ID, callbackBody); code != 200 {
 		t.Fatal(code, body)
 	}
-	if code, body := e.do(e.agent, "POST", "/api/helpdesk/cases/"+v.ID+"/execute", ""); code != 200 {
+	if code, body := e.do(e.other, "POST", "/api/helpdesk/cases/"+v.ID+"/execute", ""); code != 200 {
 		t.Fatal(code, body)
 	}
 	*e.now = t0.Add(3 * time.Hour)
@@ -521,16 +521,60 @@ func TestHelpdeskTenantIsolation(t *testing.T) {
 func TestHelpdeskCancel(t *testing.T) {
 	e := newHelpdeskEnv(t, nil)
 	v := e.start(e.agent, e.alice, "mfa")
-	if code, body := e.verify(e.agent, v.ID, callbackBody); code != 200 {
+	if code, body := e.verify(e.other, v.ID, callbackBody); code != 200 {
 		t.Fatal(code, body)
 	}
 	if code, body := e.do(e.agent, "POST", "/api/helpdesk/cases/"+v.ID+"/cancel", ""); code != 200 {
 		t.Fatalf("cancel: %d %s", code, body)
 	}
-	if code, _ := e.do(e.agent, "POST", "/api/helpdesk/cases/"+v.ID+"/execute", ""); code != http.StatusConflict {
+	if code, _ := e.do(e.other, "POST", "/api/helpdesk/cases/"+v.ID+"/execute", ""); code != http.StatusConflict {
 		t.Errorf("execute a cancelled case: %d", code)
 	}
 	if len(e.fake.Calls()) != 0 {
 		t.Error("a cancelled case reached the IdP")
+	}
+}
+
+// Four eyes (#358): the operator who opens a case cannot record the call-back
+// (it is their own word) or execute it, and nobody verifies or executes a
+// reset of their own identity.
+func TestHelpdeskFourEyes(t *testing.T) {
+	e := newHelpdeskEnv(t, nil)
+	self := e.signin("alice@a.example", &e.alice) // an operator linked to the subject
+	v := e.start(e.agent, e.alice, "mfa")
+	exec := "/api/helpdesk/cases/" + v.ID + "/execute"
+	refused := func(name string, code int, body, want string) {
+		t.Helper()
+		if code != http.StatusForbidden || !strings.Contains(body, `"`+want+`"`) {
+			t.Errorf("%s: %d %s, want 403 %s", name, code, body, want)
+		}
+	}
+	code, body := e.verify(e.agent, v.ID, callbackBody)
+	refused("requester call-back", code, body, helpdesk.ReasonRequesterVerify)
+	code, body = e.verify(self, v.ID, callbackBody)
+	refused("subject call-back", code, body, helpdesk.ReasonSelfReset)
+	code, body = e.verify(self, v.ID, `{"method":"push"}`)
+	refused("subject push", code, body, helpdesk.ReasonSelfReset)
+	if got := e.view(v.ID); got.Policy.Satisfied || len(got.Verifications) != 0 {
+		t.Fatalf("a refused verification was recorded: %+v", got)
+	}
+	if code, body = e.verify(e.other, v.ID, callbackBody); code != 200 {
+		t.Fatalf("second operator call-back: %d %s", code, body)
+	}
+	if !e.view(v.ID).Policy.Satisfied {
+		t.Fatal("a second operator's call-back does not satisfy the policy")
+	}
+	code, body = e.do(e.agent, "POST", exec, "")
+	refused("requester execute", code, body, helpdesk.ReasonRequesterExecute)
+	code, body = e.do(self, "POST", exec, "")
+	refused("subject execute", code, body, helpdesk.ReasonSelfReset)
+	if len(e.fake.Calls()) != 0 || e.view(v.ID).Status != "open" {
+		t.Fatal("a refused execute reached the IdP or changed the case")
+	}
+	if code, body = e.do(e.other, "POST", exec, ""); code != 200 {
+		t.Fatalf("second operator execute: %d %s", code, body)
+	}
+	if len(e.fake.Calls()) != 1 {
+		t.Errorf("executor calls: %v", e.fake.Calls())
 	}
 }
