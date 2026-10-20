@@ -690,6 +690,62 @@ CREATE POLICY tenant_isolation ON grp_engine_state
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE grp_event_heads ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_event_heads FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_event_heads;
+CREATE POLICY tenant_isolation ON grp_event_heads
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_events FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_events;
+CREATE POLICY tenant_isolation ON grp_events
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_event_cursors ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_event_cursors FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_event_cursors;
+CREATE POLICY tenant_isolation ON grp_event_cursors
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_pit_objects ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_pit_objects FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_pit_objects;
+CREATE POLICY tenant_isolation ON grp_pit_objects
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_pit_direct ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_pit_direct FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_pit_direct;
+CREATE POLICY tenant_isolation ON grp_pit_direct
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_pit_effective ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_pit_effective FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_pit_effective;
+CREATE POLICY tenant_isolation ON grp_pit_effective
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_pit_privileges ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_pit_privileges FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_pit_privileges;
+CREATE POLICY tenant_isolation ON grp_pit_privileges
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_pit_digests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_pit_digests FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_pit_digests;
+CREATE POLICY tenant_isolation ON grp_pit_digests
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 ALTER TABLE config_signing_keys ENABLE ROW LEVEL SECURITY;
 ALTER TABLE config_signing_keys FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON config_signing_keys;

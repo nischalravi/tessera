@@ -81,6 +81,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/pit"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/credential"
 	"github.com/nischalravi/tessera/mvp/server/internal/health"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
@@ -566,6 +567,13 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		defer close(groupsDone)
 		groupsRunner.Loop(ctx)
 	}()
+	// group history: the daily Merkle digest (00:05 UTC), retention and the weekly rebuild check
+	historyDone := make(chan struct{})
+	historyRunner := &pit.Runner{DB: st, Clock: clock, Log: logger, RetentionDays: cfg.GroupsRetentionDays}
+	go func() {
+		defer close(historyDone)
+		historyRunner.Loop(ctx)
+	}()
 	notifyDone := make(chan struct{})
 	go func() {
 		defer close(notifyDone)
@@ -598,6 +606,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		<-alertsDone
 		<-backupDone
 		<-groupsDone
+		<-historyDone
 		<-notifyDone
 		return err
 	case <-ctx.Done():
@@ -623,6 +632,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	<-alertsDone
 	<-backupDone
 	<-groupsDone
+	<-historyDone
 	<-notifyDone
 	for i := 0; i < cap(errc) && (i == 0 || agentSrv != nil); i++ {
 		if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {

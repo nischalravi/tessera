@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/events"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
@@ -160,6 +161,13 @@ func (e Env) AddMember(id store.GroupID, in MemberInput) (*AddResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	evType := events.MembershipDirectAdded
+	if !created {
+		evType = events.MembershipDirectDatesChanged
+	}
+	if err := e.emitDirect(evType, m); err != nil {
+		return nil, err
+	}
 	var out Outcome
 	if child != nil {
 		if created {
@@ -229,6 +237,9 @@ func (e Env) RemoveMember(id store.GroupID, member string) (Outcome, error) {
 		return Outcome{}, err
 	}
 	if err := e.Tx.DeleteGrpDirect(m.ID); err != nil {
+		return Outcome{}, err
+	}
+	if err := e.emitDirect(events.MembershipDirectRemoved, m); err != nil {
 		return Outcome{}, err
 	}
 	var out Outcome
@@ -329,6 +340,9 @@ func (e Env) ConvertToComposite(id store.GroupID, in CompositeInput) (*store.Nat
 	if err := e.eng().SetFactors(e.Tx, e.Now, g.ID, in.Factors); err != nil {
 		return nil, Outcome{}, e.engineErr(err)
 	}
+	if err := e.definitionChanged(g.ID); err != nil {
+		return nil, Outcome{}, err
+	}
 	out, err := e.eng().RecomputeGroup(e.Tx, e.Now, g.ID)
 	if err != nil {
 		return nil, Outcome{}, e.engineErr(err)
@@ -345,12 +359,17 @@ func (e Env) ConvertToComposite(id store.GroupID, in CompositeInput) (*store.Nat
 // edges out of the dependency graph first.
 func (e Env) dropDirect(g store.GroupID) error {
 	for off := 0; ; {
-		rows, err := e.Tx.GrpDirect(store.GrpDirectFilter{Group: g, MemberType: store.MemberGroup, Limit: 500, Offset: off})
+		rows, err := e.Tx.GrpDirect(store.GrpDirectFilter{Group: g, Limit: 500, Offset: off})
 		if err != nil {
 			return err
 		}
 		for _, m := range rows {
-			if err := e.eng().RemoveEdge(e.Tx, store.GrpDep{Parent: g, Child: *m.MemberGroup, Kind: store.DepNest, List: m.ListID}); err != nil {
+			if m.MemberType == store.MemberGroup {
+				if err := e.eng().RemoveEdge(e.Tx, store.GrpDep{Parent: g, Child: *m.MemberGroup, Kind: store.DepNest, List: m.ListID}); err != nil {
+					return err
+				}
+			}
+			if err := e.emitDirect(events.MembershipDirectRemoved, m); err != nil {
 				return err
 			}
 		}
@@ -361,6 +380,16 @@ func (e Env) dropDirect(g store.GroupID) error {
 	}
 	_, err := e.Tx.DeleteGrpDirectOf(g)
 	return err
+}
+
+// definitionChanged writes the group.definition_changed event of a group whose
+// definition (basic to composite, or a new operator or factor list) was just stored.
+func (e Env) definitionChanged(id store.GroupID) error {
+	g, err := e.Group(id)
+	if err != nil {
+		return err
+	}
+	return e.emitGroup(events.GroupDefinitionChanged, g, nil)
 }
 
 // SetComposite redefines a composite group: a new operator and factor list.
@@ -385,6 +414,9 @@ func (e Env) SetComposite(id store.GroupID, in CompositeInput) (*store.NativeGro
 	}
 	if err := e.eng().SetFactors(e.Tx, e.Now, g.ID, in.Factors); err != nil {
 		return nil, Outcome{}, e.engineErr(err)
+	}
+	if err := e.definitionChanged(g.ID); err != nil {
+		return nil, Outcome{}, err
 	}
 	out, err := e.eng().RecomputeGroup(e.Tx, e.Now, g.ID)
 	if err != nil {

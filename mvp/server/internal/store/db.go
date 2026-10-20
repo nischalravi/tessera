@@ -181,6 +181,9 @@ var tables = []string{
 	// native groups (schema/0280_groups.sql, 0284_groups_engine.sql)
 	"grp_folders", "grp_name_aliases", "grp_groups", "grp_composite_factors", "grp_lists", "grp_direct_memberships",
 	"grp_deps", "grp_closure", "grp_levels", "grp_effective", "grp_engine_queue", "grp_engine_state",
+	// group events and point-in-time history (schema/0285_group_events.sql)
+	"grp_event_heads", "grp_events", "grp_event_cursors", "grp_pit_objects", "grp_pit_direct", "grp_pit_effective",
+	"grp_pit_privileges", "grp_pit_digests",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was

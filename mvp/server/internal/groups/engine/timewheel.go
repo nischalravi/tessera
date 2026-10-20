@@ -5,6 +5,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/events"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/pit"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
@@ -80,6 +82,15 @@ func (e *Engine) Tick(tx *store.TenantTx, now time.Time) (TickResult, error) {
 			if err := tx.UpdateGrpGroup(g); err != nil {
 				return res, err
 			}
+			factors, err := tx.GrpFactors(g.ID)
+			if err != nil {
+				return res, err
+			}
+			ev := events.New(events.GroupDisabled, string(g.ID), now, store.CauseTimewheel)
+			ev.Data = pit.ObjectData(pit.GroupSnapshot(g, factors), nil)
+			if err := pit.Emit(tx, ev); err != nil {
+				return res, err
+			}
 		}
 	}
 	res.Groups = len(gen) + len(gdis)
@@ -97,7 +108,7 @@ func (e *Engine) Tick(tx *store.TenantTx, now time.Time) (TickResult, error) {
 	slices.SortFunc(seeds, func(a, b Seed) int {
 		return cmp.Or(cmp.Compare(a.Group, b.Group), cmp.Compare(a.List, b.List), cmp.Compare(a.Identity, b.Identity))
 	})
-	changes, err := e.Apply(tx, now, seeds)
+	changes, err := e.applyAs(tx, now, seeds, store.CauseTimewheel)
 	if err != nil {
 		return res, err
 	}

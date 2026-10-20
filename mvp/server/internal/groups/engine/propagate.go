@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/pit"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
@@ -29,12 +30,16 @@ type run struct {
 	net     map[store.GroupID]int64 // change of the members-list count, per group
 	touched map[store.GroupID]bool
 	steps   int
+	// cause is the event cause of the changes this run makes: engine, or
+	// timewheel for the wheel's own runs
+	cause string
 }
 
 func newRun(tx *store.TenantTx, now time.Time) *run {
 	return &run{tx: tx, now: now, members: store.MembersListID(tx.Tenant()),
 		metas: map[store.GroupID]*gmeta{}, levels: map[store.GroupID]int{}, parents: map[gl][]store.GroupID{},
-		pending: map[int]map[gl]map[int64]struct{}{}, net: map[store.GroupID]int64{}, touched: map[store.GroupID]bool{}}
+		pending: map[int]map[gl]map[int64]struct{}{}, net: map[store.GroupID]int64{}, touched: map[store.GroupID]bool{},
+		cause: store.CauseEngine}
 }
 
 func (r *run) meta(id store.GroupID) (*gmeta, error) {
@@ -99,7 +104,13 @@ func (r *run) parentsOf(g store.GroupID, l store.ListID) ([]store.GroupID, error
 // Seeds name groups of the transaction's tenant; a seed for a group that does
 // not exist is an error.
 func (e *Engine) Apply(tx *store.TenantTx, now time.Time, seeds []Seed) ([]Change, error) {
+	return e.applyAs(tx, now, seeds, store.CauseEngine)
+}
+
+// applyAs is Apply with the cause its events carry.
+func (e *Engine) applyAs(tx *store.TenantTx, now time.Time, seeds []Seed, cause string) ([]Change, error) {
 	r := newRun(tx, now)
+	r.cause = cause
 	for _, s := range seeds {
 		if err := r.push(s.Group, s.List, s.Identity); err != nil {
 			return nil, err
@@ -183,6 +194,10 @@ func (r *run) step(k gl, identity int64) error {
 	was, is := had > 0, want > 0
 	if was == is {
 		return nil // only the number of paths changed: nothing above sees it
+	}
+	// the change goes to the outbox and the PIT history in this transaction (K9)
+	if err := pit.Emit(r.tx, pit.EffectiveEvent(k.g, k.l, identity, is, r.now, r.cause, false)); err != nil {
+		return err
 	}
 	r.out = append(r.out, Change{Group: k.g, List: k.l, Identity: identity, Member: is})
 	if k.l == r.members {

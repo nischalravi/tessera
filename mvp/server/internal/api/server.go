@@ -337,6 +337,7 @@ func New(cfg Config) *Server {
 	s.registerEvidenceRoutes()
 	s.registerGroupsFolderRoutes()
 	s.registerGroupsMemberRoutes()
+	s.registerGroupsHistoryRoutes()
 	s.registerReadinessRoutes()
 	s.registerAgentRoutes()
 	s.registerAWSRoutes()

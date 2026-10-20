@@ -103,6 +103,11 @@ func (s *Server) listGrpMembers(r *http.Request, p *params) (int, any, error) {
 	if err != nil {
 		return 0, nil, err
 	}
+	if from, to, asOf, ok, err := pitWindow(p, s.clock()); err != nil {
+		return 0, nil, err
+	} else if ok {
+		return s.pitMembers(r, p, id, from, to, asOf)
+	}
 	filter, _ := p.query("filter")
 	if filter == "" {
 		filter = "direct"
