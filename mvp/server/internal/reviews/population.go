@@ -31,9 +31,19 @@ import (
 //	            || line(row 1) "\n" line(row 2) "\n" ... line(row n)
 //
 // with rows in ascending ordinal (ordinals are 1..n, assigned in ascending
-// edge_id). There is no trailing newline; an empty population hashes the
+// edge_id; the role-membership rows below have edge_id 0 and so come first, by
+// edge_src then edge_dst). There is no trailing newline; an empty population hashes the
 // domain and the 0x00 byte. Strings are UTF-8, numbers are integers. The same
-// text is in mvp/README.md and a golden vector is in
+//
+// A business-role membership that became a review item (issue #365) is a row
+// too: edge_id 0, account_ref "", system "business_role", entitlement "Role
+// <name>", edge_src "role:<role id>", edge_dst "identity:<identity id>",
+// in_scope_reason "role_membership", disposition "review". The grants a role
+// made are certified under their membership and are not rows of their own. The
+// row format and the hash algorithm are unchanged: a campaign without
+// memberships hashes as before.
+//
+// The same text is in mvp/README.md and a golden vector is in
 // testdata/golden/review_population_v1.json.
 
 // Population hash, rules and settings.
@@ -52,6 +62,10 @@ const (
 	// InScope is why every row is in the population: a standing grant of an
 	// active account.
 	InScope = "standing_grant"
+	// InScopeMembership and MembershipSystem mark the row of a business-role
+	// membership item.
+	InScopeMembership = "role_membership"
+	MembershipSystem  = "business_role"
 
 	DispositionReview = "review"
 	DispositionAuto   = "auto_certified"
@@ -156,6 +170,8 @@ type freezer struct {
 	rows  []*store.PopulationRow
 	rules map[int64]ojson.Object // edge id -> the rule that auto-certified it
 	ident map[int64]int64        // edge id -> identity id
+	// roleScope is set when the campaign certifies only these business roles.
+	roleScope []string
 }
 
 func newFreezer() *freezer {
@@ -176,6 +192,15 @@ func (f *freezer) record(ident *store.Identity, g *graph.Snapshot, ag graph.Acco
 	f.rows = append(f.rows, &store.PopulationRow{EdgeID: edge, IdentityID: ident.ID, IdentityRef: ident.ExternalID,
 		AccountRef: acct.Label, System: acct.System, Entitlement: g.Label(ag.Dst), EdgeSrc: ag.Acct, EdgeDst: ag.Dst,
 		InScopeReason: InScope, Disposition: disp})
+}
+
+// recordMembership adds the row of a role membership that became a review
+// item. It has no grant edge, so edge_id is 0 and the role and identity are
+// named by the item's edge_src and edge_dst.
+func (f *freezer) recordMembership(ident *store.Identity, it *store.ReviewItem, roleName string) {
+	f.rows = append(f.rows, &store.PopulationRow{IdentityID: ident.ID, IdentityRef: ident.ExternalID,
+		System: MembershipSystem, Entitlement: "Role " + roleName, EdgeSrc: it.EdgeSrc, EdgeDst: it.EdgeDst,
+		InScopeReason: InScopeMembership, Disposition: DispositionReview})
 }
 
 // autoRule is the evidence recorded for an auto-certified grant: the rule, its
@@ -208,7 +233,16 @@ func lastSync(c *store.TenantTx) (*time.Time, error) {
 // freeze writes the population, its auto-decisions (with the QA sample) and the
 // review.population_frozen audit event, in the launch transaction.
 func (f *freezer) freeze(c *store.TenantTx, now time.Time, campID int64, unusedDays int, qaReviewer *int64) (string, error) {
-	sort.Slice(f.rows, func(i, j int) bool { return f.rows[i].EdgeID < f.rows[j].EdgeID })
+	sort.Slice(f.rows, func(i, j int) bool {
+		a, b := f.rows[i], f.rows[j]
+		if a.EdgeID != b.EdgeID {
+			return a.EdgeID < b.EdgeID
+		}
+		if a.EdgeSrc != b.EdgeSrc {
+			return a.EdgeSrc < b.EdgeSrc
+		}
+		return a.EdgeDst < b.EdgeDst
+	})
 	counts := map[string]int{}
 	var autoEdges []int64
 	for i, r := range f.rows {
@@ -240,7 +274,11 @@ func (f *freezer) freeze(c *store.TenantTx, now time.Time, campID int64, unusedD
 		countObj = append(countObj, ojson.KV{Key: s, Value: counts[s]})
 		syncObj = append(syncObj, ojson.KV{Key: s, Value: timeutil.ISOPtr(sync)})
 	}
-	scope := ojson.Object{{Key: "grants", Value: "standing (non-JIT) grant edges of active accounts with effective permissions"},
+	grants := "standing (non-JIT) grant edges of active accounts with effective permissions"
+	if len(f.roleScope) > 0 {
+		grants = "business-role memberships of the scoped roles (each with the grants the role made), certified as one item per membership"
+	}
+	scope := ojson.Object{{Key: "grants", Value: grants},
 		{Key: "identities", Value: "all, including terminated"}, {Key: "unused_days", Value: unusedDays},
 		{Key: "rules_version", Value: RulesVersion}}
 	enc := func(v ojson.Object) ([]byte, error) { return ojson.Marshal(v) }

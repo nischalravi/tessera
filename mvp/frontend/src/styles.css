@@ -496,7 +496,8 @@ textarea.input { height: auto; min-height: 72px; padding: 8px 10px; width: 100%;
 .input-icon { position: relative; display: inline-flex; align-items: center; }
 .input-icon svg { position: absolute; left: 9px; color: var(--text-3); pointer-events: none; }
 .input-icon .input { padding-left: 30px; }
-.field { display: flex; flex-direction: column; gap: 5px; font-size: var(--fs-md); color: var(--text); font-weight: 600; }
+.field { min-width: 0; max-width: 100%; display: flex; flex-direction: column; gap: 5px; font-size: var(--fs-md); color: var(--text); font-weight: 600; }
+.field > select.input { max-width: 100%; }
 .field .hint { font-weight: 400; color: var(--text-3); font-size: var(--fs-sm); }
 input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
 
@@ -775,7 +776,7 @@ pre.yaml { background: var(--surface-2); color: var(--text); padding: 12px; bord
 }
 @media (max-width: 860px) { .wizard > .stack:first-child { grid-template-columns: minmax(0, 1fr); } }
 
-.stepper { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.stepper { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; position: relative; }
 .stepper button { all: unset; box-sizing: border-box; display: flex; gap: 10px; align-items: flex-start; width: 100%; padding: 8px 10px; border-radius: var(--r-md); cursor: pointer; color: var(--text); }
 .stepper button:hover:not(:disabled) { background: var(--surface-2); }
 .stepper button:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
@@ -788,7 +789,7 @@ pre.yaml { background: var(--surface-2); color: var(--text); padding: 12px; bord
 .stepper .st-l { font-weight: 600; font-size: var(--fs-md); }
 .stepper .st-s { font-size: var(--fs-xs); color: var(--text-3); }
 @media (max-width: 860px) {
-  .stepper { flex-direction: row; overflow-x: auto; }
+  .stepper { flex-direction: row; overflow-x: auto; min-width: 0; }
   .stepper .st-s { display: none; }
   .stepper button { white-space: nowrap; }
 }
