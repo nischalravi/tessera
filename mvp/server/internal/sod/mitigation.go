@@ -167,13 +167,22 @@ func (w *Writer) saveMitigation(m *store.SodMitigation, from, action string, ext
 }
 
 // DecideMitigation approves or rejects a pending mitigation. The person who
-// decides must not be the one who requested it (four-eyes). A rejection needs a note.
+// decides must not be the one who requested it (four-eyes) nor the identity the
+// violation is about (their linked person). A rejection needs a note.
 func (w *Writer) DecideMitigation(id string, approve bool, note string) (*store.SodMitigation, error) {
 	m, err := w.loadMitigation(id)
 	if err != nil {
 		return nil, err
 	}
 	note = clean(note)
+	subject := false
+	if w.By.UserID != uuid.Nil {
+		u, err := w.Tx.PlatformUser(w.By.UserID)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			return nil, err
+		}
+		subject = err == nil && u.IdentityID != nil && *u.IdentityID == m.IdentityID
+	}
 	switch {
 	case m.Status != store.MitigationPending:
 		return nil, refuse(409, "not_pending", "the mitigation is %s, not pending", m.Status)
@@ -181,6 +190,8 @@ func (w *Writer) DecideMitigation(id string, approve bool, note string) (*store.
 		return nil, refuse(403, "user_required", "a mitigation is decided by a signed-in user")
 	case w.By.UserID.String() == m.RequestedBy:
 		return nil, refuse(403, "four_eyes", "another person must decide a mitigation you requested")
+	case subject:
+		return nil, refuse(403, "self_exemption_forbidden", "you cannot decide an exemption for your own violation")
 	case len(note) > MaxNote || (!approve && note == ""):
 		return nil, refuse(422, "invalid_note", "a note of 1 to %d characters is required to reject", MaxNote)
 	case approve && !m.EndsAt.After(w.Now):

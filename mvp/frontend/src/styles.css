@@ -691,6 +691,8 @@ pre.yaml { background: var(--surface-2); color: var(--text); padding: 12px; bord
 .steps { padding-left: 0; list-style: none; margin: 0; }
 .step { display: flex; gap: 10px; align-items: center; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-md); margin-bottom: 6px; background: var(--surface); flex-wrap: wrap; }
 .step .act { min-width: 128px; }
+.step > .grow { flex: 1 1 160px; min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 520px) { .step .act { min-width: 0; } }
 
 .graph-layout { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: var(--s-4); }
 @media (max-width: 1000px) { .graph-layout { grid-template-columns: minmax(0, 1fr); } }

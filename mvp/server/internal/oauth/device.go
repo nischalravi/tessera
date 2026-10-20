@@ -467,6 +467,11 @@ func (s *Service) DeviceApprove(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
+		if off, err := auth.IdentityInactive(tx, user); err != nil {
+			return err
+		} else if off {
+			return errIdentityInactive
+		}
 		rec, err := tx.AuthnContext(p.Session().CurrentAuthnContextID)
 		if err != nil {
 			return err
@@ -490,6 +495,8 @@ func (s *Service) DeviceApprove(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, store.ErrNotFound):
 		// expired or decided between the read and the write
 		s.lookupFailed(w, r, p, "approve")
+	case errors.Is(err, errIdentityInactive):
+		auth.WriteDenial(w, &auth.Denial{Status: http.StatusUnauthorized, Error: "login_required"})
 	case errors.Is(err, errDeviceGrantRefused):
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "device_grant_disabled",
 			"detail": "Command-line sign-in is turned off for this organization."})
@@ -499,6 +506,8 @@ func (s *Service) DeviceApprove(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": status})
 	}
 }
+
+var errIdentityInactive = errors.New("oauth: the approving user's identity is not active")
 
 var errDeviceGrantRefused = errors.New("oauth: the device grant is not allowed for this client or tenant")
 
