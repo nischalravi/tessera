@@ -1,4 +1,4 @@
-import { FormEvent, ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { FormEvent, ReactNode, Suspense, createContext, lazy, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import {
   LoginConnection, RateLimitedError, SIGNED_OUT, STEP_UP, SessionInfo, clearPendingAction, discover, getSession, logout,
   runPendingAction, startLogin, stepUpHref, takePendingAction,
@@ -7,7 +7,11 @@ import { useConfirm } from "../components/Dialog";
 import { useToast } from "../components/Toast";
 import { Button } from "../components/Button";
 import { Callout } from "../components/Feedback";
+import { breakGlassPath, breakGlassSlug } from "../features/admin/breakGlassState";
 import { store } from "./storage";
+
+// its own chunk: only a person signing in with a hardware key loads it
+const BreakGlassSignIn = lazy(async () => ({ default: (await import("../features/admin/BreakGlassSignIn")).BreakGlassSignIn }));
 
 /**
  * Who is signed in (design §17). The session lives in an HttpOnly cookie the API sets; this
@@ -118,7 +122,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     return null;
   }
   if (!value) {
-    return <SignIn />;
+    // /t/<slug>/break-glass: the hardware-key sign-in for when the IdP cannot be used (design §9.6)
+    const glass = breakGlassSlug(window.location.pathname);
+    return glass ? <Suspense fallback={null}><BreakGlassSignIn slug={glass} /></Suspense> : <SignIn />;
   }
   return (
     <Ctx.Provider value={value}>
@@ -146,7 +152,7 @@ function RateLimited({ seconds, onRetry }: { seconds: number; onRetry: () => voi
   );
 }
 
-function SignInFrame({ children }: { children: ReactNode }) {
+export function SignInFrame({ children }: { children: ReactNode }) {
   return (
     <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: "var(--s-4)", background: "var(--bg)" }}>
       <div className="card stack" style={{ width: "min(520px, 100%)" }}>
@@ -181,6 +187,7 @@ function returnTo(): string {
  */
 function SignIn() {
   const [tenant, setTenant] = useState(() => store.get<string>(LAST_TENANT, ""));
+  const glassPath = breakGlassPath(tenant);
   const [connections, setConnections] = useState<LoginConnection[] | null>(null);
   const [asked, setAsked] = useState("");
   const [busy, setBusy] = useState(false);
@@ -243,6 +250,11 @@ function SignIn() {
           <p className="faint small">You will sign in at your identity provider. Use a passkey or security key to activate admin roles.</p>
         </div>
       )}
+      {glassPath && (
+        <p className="faint small" style={{ margin: 0 }}>
+          Identity provider unavailable? <a href={glassPath}>Sign in with a break-glass key</a>.
+        </p>
+      )}
     </SignInFrame>
   );
 }
@@ -253,8 +265,7 @@ function SignIn() {
  */
 function StepUpDialog({ reason, onClose, onContinue }: { reason: string; onClose: () => void; onContinue: () => void }) {
   return (
-    <div role="alertdialog" aria-labelledby="stepup-h" aria-describedby="stepup-d" className="card stack"
-      style={{ position: "fixed", right: "var(--s-4)", top: "calc(48px + var(--s-4))", zIndex: 90, width: "min(420px, calc(100vw - 32px))", boxShadow: "var(--shadow-lg, 0 8px 24px rgba(0,0,0,.18))" }}>
+    <div role="alertdialog" aria-labelledby="stepup-h" aria-describedby="stepup-d" className="card stack stepup">
       <strong id="stepup-h">Confirm it's you</strong>
       <p id="stepup-d" className="small">
         {reason} Sign in again at your identity provider with a passkey or security key; you'll come back here and can

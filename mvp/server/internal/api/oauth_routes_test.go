@@ -517,7 +517,7 @@ func TestOAuth_RoutesDeclared(t *testing.T) {
 	}
 	for _, k := range []string{"GET /t/{slug}/.well-known/oauth-authorization-server", "GET /t/{slug}/.well-known/jwks.json",
 		"GET /.well-known/oauth-protected-resource", "POST /t/{slug}/oauth/device_authorization", "POST /t/{slug}/oauth/token",
-		"POST /t/{slug}/oauth/revoke"} {
+		"POST /t/{slug}/oauth/revoke", "POST /t/{slug}/oauth/introspect"} {
 		if rt, ok := got[k]; !ok || !rt.Public || rt.Tenant {
 			t.Errorf("%s: %+v (public, and it opens its own transactions)", k, rt)
 		}

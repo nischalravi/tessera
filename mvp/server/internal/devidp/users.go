@@ -26,6 +26,16 @@ type User struct {
 	Groups         []string `yaml:"groups"`
 	Roles          []string `yaml:"roles"`
 	Authenticators []Method `yaml:"authenticators"`
+	// Device is the device posture the IdP asserts for the user, emitted as
+	// the device_managed and device_compliant claims (SAML attributes of the
+	// same names); nil emits none. Conditional access (issue #163) reads them.
+	Device *Device `yaml:"device"`
+}
+
+// Device is a user's device posture; a nil field is not asserted.
+type Device struct {
+	Managed   *bool `yaml:"managed"`
+	Compliant *bool `yaml:"compliant"`
 }
 
 // DefaultUsers returns the embedded users.yaml.

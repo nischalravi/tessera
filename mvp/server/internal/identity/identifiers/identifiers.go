@@ -195,3 +195,22 @@ func (k *Keyer) Digest(tenant tenancy.ID, typ, issuer, value string) (norm *stri
 	}
 	return &n, mac, nil
 }
+
+// MAC returns a keyed hash of parts under a per-tenant, per-purpose key derived
+// from the KEK: for short secrets such as confirmation codes, whose bare
+// SHA-256 could be searched offline. The parts are separated by NUL.
+func (k *Keyer) MAC(tenant tenancy.ID, purpose string, parts ...string) (string, error) {
+	if k == nil || k.sealer == nil {
+		return "", errors.New("identifiers: no key")
+	}
+	if purpose == "" {
+		return "", errors.New("identifiers: MAC needs a purpose")
+	}
+	key, err := k.sealer.DeriveKey("mac/"+purpose+"/"+tenant.String(), 32)
+	if err != nil {
+		return "", err
+	}
+	h := hmac.New(sha256.New, key)
+	h.Write([]byte(strings.Join(parts, "\x00")))
+	return hex.EncodeToString(h.Sum(nil)), nil
+}

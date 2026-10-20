@@ -20,6 +20,7 @@ import (
 //	POST /t/{slug}/oauth/device_authorization
 //	POST /t/{slug}/oauth/token
 //	POST /t/{slug}/oauth/revoke
+//	POST /t/{slug}/oauth/introspect   (the credential is the machine client's signed assertion)
 //
 // Session routes (the browser approving a device):
 //
@@ -47,6 +48,7 @@ func (s *Server) registerOAuthRoutes() {
 	s.handle(P, oauth.PathDeviceAuth, noTenant, publicRoute, slugged(s.oauth.DeviceAuthorization))
 	s.handle(P, oauth.PathToken, noTenant, publicRoute, slugged(s.oauth.Token))
 	s.handle(P, oauth.PathRevoke, noTenant, publicRoute, slugged(s.oauth.Revoke))
+	s.handle(P, oauth.PathIntrospect, noTenant, publicRoute, slugged(s.oauth.Introspect))
 	s.handle(P, "/api/auth/device/lookup", noTenant, need(auth.PermAuthenticated), plain(s.oauth.DeviceLookup))
 	s.handle(P, "/api/auth/device/approve", noTenant, needStepUp(auth.PermAuthenticated, auth.StepUpAdmin), plain(s.oauth.DeviceApprove))
 }

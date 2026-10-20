@@ -34,7 +34,7 @@ export function LeastPrivilege() {
             {data.length === 0 ? <EmptyState title="Nothing to trim" icon={<Scissors size={18} />}>No recommendations for this filter. Try a shorter unused window or another type.</EmptyState> : (
               <div className="table-scroll">
                 <table>
-                  <thead><tr><th>Who</th><th>Grant</th><th className="hide-narrow">Why</th><th className="num">Unused / lost</th><th>Last used</th><th /></tr></thead>
+                  <thead><tr><th>Who</th><th>Grant</th><th className="hide-narrow">Why</th><th className="num">Unused / lost</th><th>Last used</th><th><span className="sr-only">Actions</span></th></tr></thead>
                   <tbody>
                     {data.map((r) => (
                       <tr key={String(r.id ?? r.edge_id)}>

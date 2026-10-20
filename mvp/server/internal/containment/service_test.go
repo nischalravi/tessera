@@ -35,11 +35,11 @@ func TestCredentialIsSealedAndBoundToTenantAndConnection(t *testing.T) {
 	}
 	var enc []byte
 	if err := f.DB.ReadTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
-		k, err := c.ContainmentCredential(conn)
+		k, err := c.Credential(conn, store.PurposeContainment, "")
 		if err != nil {
 			return err
 		}
-		enc = k.TokenEnc
+		enc = k.Sealed
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -47,13 +47,15 @@ func TestCredentialIsSealedAndBoundToTenantAndConnection(t *testing.T) {
 	if bytes.Contains(enc, []byte("tok-very-secret")) || len(enc) == 0 {
 		t.Fatal("the token is stored in the clear")
 	}
-	if _, err := svc.Sealer.Open(enc, seal.AAD(f.A.ID, "containment_credentials", "token_enc", conn)); err != nil {
+	if _, err := svc.Sealer.Open(enc, seal.AAD(f.A.ID, "connection_credentials", "sealed", conn, "containment")); err != nil {
 		t.Errorf("the right AAD does not open: %v", err)
 	}
 	for name, aad := range map[string][]byte{
-		"other tenant":     seal.AAD(f.B.ID, "containment_credentials", "token_enc", conn),
-		"other connection": seal.AAD(f.A.ID, "containment_credentials", "token_enc", f.A.Refs["connection:ad"]),
-		"other column":     seal.AAD(f.A.ID, "containment_credentials", "other", conn),
+		"other tenant":     seal.AAD(f.B.ID, "connection_credentials", "sealed", conn, "containment"),
+		"other connection": seal.AAD(f.A.ID, "connection_credentials", "sealed", f.A.Refs["connection:ad"], "containment"),
+		"other column":     seal.AAD(f.A.ID, "connection_credentials", "other", conn, "containment"),
+		"other purpose":    seal.AAD(f.A.ID, "connection_credentials", "sealed", conn, "bind"),
+		"old table":        seal.AAD(f.A.ID, "containment_credentials", "token_enc", conn),
 	} {
 		if _, err := svc.Sealer.Open(enc, aad); err == nil {
 			t.Errorf("a credential opens under the AAD of %s", name)
@@ -182,6 +184,69 @@ func TestRecordWritesTimingsToTheLedger(t *testing.T) {
 		}
 		t.Error("no containment.run event")
 		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPutAWSCredential(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	svc := newSvc(t)
+	var conn string
+	if err := f.DB.InTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
+		conn = store.NewID()
+		return c.InsertConnection(&store.Connection{ID: conn, Name: "AWS IAM Identity Center", ConnectorType: "aws-identity-center",
+			System: containment.AWSIdentityCenter, Role: "account_source", CreatedAt: storetest.Now, UpdatedAt: storetest.Now})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	good := containment.AWSCredential{AccessKeyID: "AKIDEXAMPLE1234567", SecretAccessKey: "very-secret-key", Region: "us-east-1",
+		PolicyID: "p-0a1b2c3d4e", IdentityStoreID: "d-1234567890", InstanceARN: "arn:aws:sso:::instance/ssoins-7223a1b2c3d4e5f6"}
+	put := func(in containment.CredentialInput, id string) error {
+		return f.DB.InTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
+			return svc.PutCredential(c, id, in, "admin", storetest.Now)
+		})
+	}
+	for name, tc := range map[string]struct {
+		conn string
+		in   containment.CredentialInput
+		want string
+	}{
+		"no aws block":       {conn, containment.CredentialInput{Token: "t"}, "aws (the AWS credential) is required"},
+		"aws on okta":        {f.A.Refs["connection"], containment.CredentialInput{AWS: &good, BaseURL: "https://x"}, "only for aws_identity_center"},
+		"bad policy":         {conn, containment.CredentialInput{AWS: &containment.AWSCredential{AccessKeyID: good.AccessKeyID, SecretAccessKey: "s", Region: "us-east-1", PolicyID: "no"}}, "policy_id"},
+		"bad endpoint":       {conn, containment.CredentialInput{AWS: &good, BaseURL: "ftp://x"}, "https URL"},
+		"missing access key": {conn, containment.CredentialInput{AWS: &containment.AWSCredential{SecretAccessKey: "s"}}, "access_key_id"},
+	} {
+		err := put(tc.in, tc.conn)
+		var ce *containment.Error
+		if err == nil || !asError(err, &ce) || !strings.Contains(ce.Msg, tc.want) {
+			t.Errorf("%s: %v, want %q", name, err, tc.want)
+		}
+	}
+	if err := put(containment.CredentialInput{AWS: &good}, conn); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.DB.ReadTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
+		k, err := c.Credential(conn, store.PurposeContainment, "")
+		if err != nil {
+			return err
+		}
+		if bytes.Contains(k.Sealed, []byte("very-secret-key")) || bytes.Contains(k.Sealed, []byte("AKIDEXAMPLE")) {
+			t.Error("the AWS credential is stored in the clear")
+		}
+		plain, err := svc.Sealer.Open(k.Sealed, seal.AAD(f.A.ID, "connection_credentials", "sealed", conn, "containment"))
+		if err != nil || !strings.Contains(string(plain), `"policy_id":"p-0a1b2c3d4e"`) {
+			t.Errorf("sealed credential: %s %v", plain, err)
+		}
+		log, err := c.AuditLog(-1)
+		for _, e := range log {
+			raw, _ := json.Marshal(e)
+			if strings.Contains(string(raw), "very-secret-key") || strings.Contains(string(raw), "AKIDEXAMPLE") {
+				t.Errorf("audit event %s carries the AWS credential", e.Action)
+			}
+		}
+		return err
 	}); err != nil {
 		t.Fatal(err)
 	}

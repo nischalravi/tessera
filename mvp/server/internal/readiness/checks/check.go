@@ -241,6 +241,12 @@ func probeErr(err error) Result {
 		return Result{Status: Error, Message: "the check timed out"}
 	case errors.Is(err, connectors.ErrUnsupported):
 		return unsupported("this system does not expose it")
+	case errors.Is(err, connectors.ErrAgentUnavailable):
+		return Result{Status: Error, Message: "the Directory Agent is offline or unavailable: check its status under Admin, Connections, Agents",
+			Observed: map[string]any{"agent_unavailable": true}}
+	case errors.Is(err, connectors.ErrAgentRefused):
+		return Result{Status: Error, Message: "the Directory Agent refused the target: it is not on the agent's local allowed_targets",
+			Observed: map[string]any{"agent_refused": true}}
 	case errors.Is(err, connectors.ErrTargetNotAllowed):
 		return Result{Status: Error, Message: "the target is not reachable from this deployment: private directories need the Directory Agent"}
 	case errors.Is(err, ErrOpNotAllowed):

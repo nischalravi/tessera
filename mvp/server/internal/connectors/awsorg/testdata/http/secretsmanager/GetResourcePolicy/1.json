@@ -1,0 +1,1 @@
+{"ARN":"arn:aws:secretsmanager:us-east-1:111111111111:secret:db-AbCdEf","Name":"db","ResourcePolicy":"{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"Principal\":\"*\",\"Action\":\"secretsmanager:GetSecretValue\",\"Resource\":\"*\",\"Condition\":{\"StringNotEquals\":{\"aws:PrincipalOrgID\":\"o-example12345\"}}}]}"}

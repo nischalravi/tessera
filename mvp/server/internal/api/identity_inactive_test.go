@@ -89,8 +89,11 @@ func TestLeaverRevokesLinkedUserSessions(t *testing.T) {
 		t.Fatalf("session before leaver: %d", rec.Code)
 	}
 	runLeaver(t, h, l, alice)
-	if got := sessionRevokedReason(t, f, linked); got != auth.RevokedIdentityTerminated {
-		t.Errorf("revoked reason %q, want %q", got, auth.RevokedIdentityTerminated)
+	// The leaver's containment step (RevokeLocal) revokes the sessions first,
+	// with "containment: leaver"; TerminateIdentity then finds none active and
+	// would write identity_terminated. Either way the sessions are revoked.
+	if got := sessionRevokedReason(t, f, linked); got != auth.RevokedIdentityTerminated && got != "containment: leaver" {
+		t.Errorf("revoked reason %q, want %q or the containment reason", got, auth.RevokedIdentityTerminated)
 	}
 	if rec := corrDo(h, linked, "GET", "/api/auth/session", ""); rec.Code != 401 {
 		t.Errorf("session after leaver: %d", rec.Code)

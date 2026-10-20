@@ -94,6 +94,15 @@ func (s *Server) acceptFinding(r *http.Request, p *params) (int, any, error) {
 	}
 	var out any
 	err = s.write(r, func(c *store.TenantTx, now time.Time) error {
+		// Accepting a critical finding accepts a serious risk, so it needs the
+		// policy step-up; the route cannot declare it because it depends on
+		// the finding (design §4.5, §9). An unknown finding falls through to
+		// the service's 404.
+		if f, err := c.FindingByID(fid); err == nil && f.ConnectionID == id && f.Severity == "critical" {
+			if d := auth.Check(principal(r), auth.PermConnectionsManage, &auth.StepUpPolicy, now); d != nil {
+				return denial{d}
+			}
+		}
 		f, err := s.readiness.AcceptFinding(c, id, fid, in.Reason, exp, actor(r), now)
 		if err != nil {
 			return err

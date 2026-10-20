@@ -75,13 +75,15 @@ type AuthnContext struct {
 	TesseraACR        ACR
 	AuthTime          time.Time
 	IdPConnectionID   *uuid.UUID
+	// Device is the device posture the IdP asserted at sign-in (issue #163).
+	Device normalize.Device
 }
 
 // ContextFromRecord converts a stored record.
 func ContextFromRecord(x *store.AuthnContextRecord) AuthnContext {
 	c := AuthnContext{ID: x.ID, UserID: x.UserID, Protocol: x.Protocol, AAL: x.AAL, PhishingResistant: x.PhishingResistant,
 		PhrBasis: x.PhrBasis, Methods: x.Methods, AMR: x.AMR, TesseraACR: ACR(x.TesseraACR), AuthTime: x.AuthTime,
-		IdPConnectionID: x.IdPConnectionID}
+		IdPConnectionID: x.IdPConnectionID, Device: normalize.ParseDevice(x.Device)}
 	if x.ACR != nil {
 		c.ACR = *x.ACR
 	}
@@ -131,7 +133,14 @@ type Principal struct {
 	// does not activate, with the reason (design §12.2).
 	InactiveRoles map[Role]string
 	Scopes        ScopeSet // nil = cookie session (all scopes implicitly)
-	Via           string   // cookie | dpop
+	Via           string   // cookie | dpop | bearer (a machine client's unbound token)
+	// IdentityID is the identity the user is linked to (platform_users.identity_id),
+	// whose group memberships give the user its group privileges (issue #47); nil
+	// when the user is not linked and for machine clients.
+	IdentityID *int64
+	// GroupsViewerView is the tenant setting that lets the viewer role see every
+	// native folder and group (groups_viewer_can_view, issue #47).
+	GroupsViewerView bool
 
 	csrfSecret string
 	session    *store.Session
@@ -139,8 +148,11 @@ type Principal struct {
 
 // User returns the principal as a store.UserRef (who did something).
 func (p *Principal) User() store.UserRef {
-	if p == nil || p.UserID == nil {
+	if p == nil {
 		return store.UserRef{}
+	}
+	if p.UserID == nil { // a machine client: named, but it has no user id
+		return store.UserRef{Display: p.Display}
 	}
 	return store.UserRef{ID: *p.UserID, Display: p.Display}
 }

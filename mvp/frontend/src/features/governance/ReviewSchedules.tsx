@@ -1,7 +1,7 @@
 import { FormEvent, useState } from "react";
 import { CalendarClock, Play, Plus } from "lucide-react";
 import {
-  ConnectorRow, IdentityRow, Recurrence, ReviewSchedule, ReviewScheduleInput, createReviewSchedule, fmtDate, runReviewSchedule,
+  ConnectorRow, IdentityRow, Recurrence, ReviewSchedule, ReviewScheduleInput, RolesView, createReviewSchedule, fmtDate, runReviewSchedule,
   updateReviewSchedule, useApi,
 } from "../../api";
 import { useSession } from "../../app/auth";
@@ -52,7 +52,9 @@ export function ReviewSchedules({ onLaunched }: { onLaunched: (campaignId: numbe
                         <b>{s.name}</b> {!s.enabled && <Badge tone="outline">Paused</Badge>}
                         <div className="xs faint">{REC_LABEL[s.recurrence]} · {s.duration_days} days to review · {s.close_out === "revoke" ? "undecided items are revoked" : `undecided items go to ${s.escalation_reviewer?.name ?? "?"} for ${s.escalation_days} days, then are revoked`}</div>
                       </td>
-                      <td className="small hide-narrow">{s.system ?? "All systems"}{s.privileged_only ? ", privileged only" : ""}</td>
+                      <td className="small hide-narrow">
+                        {s.role_ids.length > 0 ? `${s.role_ids.length} business role${s.role_ids.length === 1 ? "" : "s"}: every membership` : <>{s.system ?? "All systems"}{s.privileged_only ? ", privileged only" : ""}</>}
+                      </td>
                       <td className="small nowrap">{s.enabled && s.next_run_at ? fmtDate(s.next_run_at) : "—"}</td>
                       <td className="small hide-narrow">
                         {last ? <>{last.period} · {last.closed_at ? `closed${last.revoked ? `, ${last.revoked} revoked` : ""}` : `due ${fmtDate(last.due_at)}`}{last.escalated_at && " · escalated"}</> : <span className="faint">Never</span>}
@@ -82,8 +84,10 @@ function localInput(iso: string | null): string {
 function ScheduleForm({ schedule, onClose, onSaved }: { schedule: ReviewSchedule | null; onClose: () => void; onSaved: () => void }) {
   const { data: conns } = useApi<ConnectorRow[]>("/connectors");
   const { data: people } = useApi<IdentityRow[]>("/identities?type=human");
+  const { data: rv } = useApi<RolesView>("/roles");
   const toast = useToast();
   const s = schedule;
+  const [roleIds, setRoleIds] = useState<string[]>(s?.role_ids ?? []);
   const [f, setF] = useState({
     name: s?.name ?? "Quarterly privileged access review", system: s?.system ?? "", privileged: s?.privileged_only ?? true,
     unused: String(s?.unused_days ?? 60), duration: String(s?.duration_days ?? 14), reminder: String(s?.reminder_days ?? 3),
@@ -102,6 +106,7 @@ function ScheduleForm({ schedule, onClose, onSaved }: { schedule: ReviewSchedule
       name: f.name, system: f.system || null, privileged_only: f.privileged, unused_days: Number(f.unused), duration_days: Number(f.duration),
       reminder_days: Number(f.reminder), close_out: f.closeOut as "revoke" | "escalate", escalation_identity_id: f.escalation ? Number(f.escalation) : null,
       escalation_days: Number(f.escalationDays), recurrence: f.recurrence, first_run_at: new Date(f.first).toISOString(), enabled: f.enabled,
+      role_ids: roleIds,
     };
     try {
       if (s) await updateReviewSchedule(s.id, body);
@@ -125,6 +130,18 @@ function ScheduleForm({ schedule, onClose, onSaved }: { schedule: ReviewSchedule
           </select>
         </label>
         <label className="row tight small"><input type="checkbox" checked={f.privileged} onChange={(e) => setF({ ...f, privileged: e.target.checked })} /> Privileged access only</label>
+        {(rv?.roles ?? []).some((r) => r.status === "active") && (
+          <fieldset className="field" style={{ border: 0, padding: 0 }}>
+            <legend>Business roles</legend>
+            <div className="xs faint">Pick roles to review their memberships instead (every member, whatever the risk). The scope and privileged settings above then do not apply.</div>
+            {(rv?.roles ?? []).filter((r) => r.status === "active").map((r) => (
+              <label key={r.id} className="row tight small">
+                <input type="checkbox" checked={roleIds.includes(r.id)}
+                  onChange={(e) => setRoleIds(e.target.checked ? [...roleIds, r.id] : roleIds.filter((x) => x !== r.id))} /> {r.name}
+              </label>
+            ))}
+          </fieldset>
+        )}
         <div className="row">
           <label className="field" style={{ flex: 1 }}>Repeats
             <select className="input" value={f.recurrence} onChange={set("recurrence")}>

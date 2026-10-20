@@ -1,11 +1,12 @@
 # Item counts per template (design §3.14). Columns: template items, with base,
-# required, recommended, optional (the last three include the base items).
+# required, recommended, optional (the last three include the base items), and the
+# items whose live check may be attested instead when unsupported (on_unsupported).
 # Regenerate with: go test ./internal/readiness/template -run TestTemplates_Counts -update
-base      13 13  8  5 0
-ad        36 49 27 18 4
-entra     17 30 18 11 1
-google    15 28 16 11 1
-ldap      23 36 23 10 3
-okta      14 27 16 11 0
-scim_app  13 26 15 10 1
-workday   15 28 19  9 0
+base      13 13  8  5 0 0
+ad        36 49 27 18 4 0
+entra     17 30 18 11 1 0
+google    15 28 16 11 1 0
+ldap      23 36 23 10 3 2
+okta      14 27 16 11 0 0
+scim_app  13 26 15 10 1 0
+workday   15 28 19  9 0 0

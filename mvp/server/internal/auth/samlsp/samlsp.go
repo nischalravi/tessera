@@ -217,18 +217,38 @@ type Assertion struct {
 
 // precheck applies the structural rules before gosaml2 sees the document.
 func precheck(raw []byte) error {
+	root, err := parseChecked(raw)
+	if err != nil {
+		return err
+	}
+	if root.Tag != "Response" || root.NamespaceURI() != NSProtocol {
+		return fail(ReasonMalformed, errors.New("the document is not a samlp:Response"))
+	}
+	_, err = soleSignedAssertion(root, root)
+	return err
+}
+
+// parseChecked parses raw after the XML round-trip check.
+func parseChecked(raw []byte) (*etree.Element, error) {
 	if errs := xmlrt.ValidateAll(bytes.NewReader(raw)); len(errs) > 0 {
-		return fail(ReasonRoundTrip, errs[0])
+		return nil, fail(ReasonRoundTrip, errs[0])
 	}
 	doc := etree.NewDocument()
 	doc.ReadSettings.Permissive = false
 	if err := doc.ReadFromBytes(raw); err != nil {
-		return fail(ReasonMalformed, err)
+		return nil, fail(ReasonMalformed, err)
 	}
-	root := doc.Root()
-	if root == nil || root.Tag != "Response" || root.NamespaceURI() != NSProtocol {
-		return fail(ReasonMalformed, errors.New("the document is not a samlp:Response"))
+	if doc.Root() == nil {
+		return nil, fail(ReasonMalformed, errors.New("no root element"))
 	}
+	return doc.Root(), nil
+}
+
+// soleSignedAssertion finds the document's only Assertion (in any
+// namespace, anywhere under root), which must be a SAML 2.0 assertion
+// directly under parent, carry one enveloped signature referencing its ID,
+// and have no comment in a NameID. No EncryptedAssertion is accepted.
+func soleSignedAssertion(root, parent *etree.Element) (*etree.Element, error) {
 	var assertions, encrypted []*etree.Element
 	var walk func(el *etree.Element)
 	walk = func(el *etree.Element) {
@@ -244,42 +264,42 @@ func precheck(raw []byte) error {
 	}
 	walk(root)
 	if len(encrypted) > 0 {
-		return fail(ReasonEncrypted, errors.New("encrypted assertions are not accepted"))
+		return nil, fail(ReasonEncrypted, errors.New("encrypted assertions are not accepted"))
 	}
 	if len(assertions) != 1 {
-		return fail(ReasonAssertionCount, fmt.Errorf("%d assertions", len(assertions)))
+		return nil, fail(ReasonAssertionCount, fmt.Errorf("%d assertions", len(assertions)))
 	}
 	a := assertions[0]
-	if a.Parent() != root || a.NamespaceURI() != NSAssertion {
-		return fail(ReasonAssertionCount, errors.New("the assertion is not a direct child of the Response"))
+	if a.Parent() != parent || a.NamespaceURI() != NSAssertion {
+		return nil, fail(ReasonAssertionCount, errors.New("the assertion is not a SAML 2.0 assertion in its expected place"))
 	}
 	id := a.SelectAttrValue("ID", "")
 	var sig *etree.Element
 	for _, ch := range a.ChildElements() {
 		if ch.Tag == "Signature" && ch.NamespaceURI() == NSDSig {
 			if sig != nil {
-				return fail(ReasonUnsignedAssert, errors.New("more than one assertion signature"))
+				return nil, fail(ReasonUnsignedAssert, errors.New("more than one assertion signature"))
 			}
 			sig = ch
 		}
 	}
 	if id == "" || sig == nil {
-		return fail(ReasonUnsignedAssert, errors.New("the assertion carries no enveloped signature"))
+		return nil, fail(ReasonUnsignedAssert, errors.New("the assertion carries no enveloped signature"))
 	}
 	refs := sig.FindElements("./SignedInfo/Reference")
 	if len(refs) != 1 || refs[0].SelectAttrValue("URI", "") != "#"+id {
-		return fail(ReasonUnsignedAssert, errors.New("the signature does not reference the assertion"))
+		return nil, fail(ReasonUnsignedAssert, errors.New("the signature does not reference the assertion"))
 	}
 	// a comment inside NameID: c14n drops it from the signed bytes, so a
 	// parser that reads only the first text node would see another subject
 	for _, nid := range a.FindElements(".//NameID") {
 		for _, tok := range nid.Child {
 			if _, ok := tok.(*etree.Comment); ok {
-				return fail(ReasonNameIDComment, nil)
+				return nil, fail(ReasonNameIDComment, nil)
 			}
 		}
 	}
-	return nil
+	return a, nil
 }
 
 // ValidateResponse validates a base64 SAMLResponse from the ACS.

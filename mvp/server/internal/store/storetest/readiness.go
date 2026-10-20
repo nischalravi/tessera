@@ -36,6 +36,9 @@ const ReadinessSentinel = "ZZ-GLOBEX-READINESS-SENTINEL"
 //	run:ad-running  a validation run still running
 //	finding:ad      the marked finding
 //	item:ad-skip    the skipped Recommended item of the AD connection
+//
+// The AD revision also has a drift baseline (readiness_baselines) with a
+// marked snapshot and degraded reason.
 func seedReadiness(tb testing.TB, db *store.DB, t *Tenant, sentinel string) {
 	tb.Helper()
 	mark := func(s string) string {
@@ -100,6 +103,11 @@ func seedReadiness(tb testing.TB, db *store.DB, t *Tenant, sentinel string) {
 		ad := b.Conn.ID
 		refs["connection:ad"], refs["revision:ad"] = ad, b.Rev.ID
 		if _, err := svc.Attest(c, ad, "base.owner", mark("Owners agreed in CHG-1042"), "admin", Now); err != nil {
+			return err
+		}
+		if err := c.UpsertLiveAttestation(&store.LiveAttestation{RevisionID: b.Rev.ID, ItemID: "ldap.svc.no_write", ActorID: "admin",
+			Attester: mark("Ingrid Lindqvist"), Reason: mark("The directory has no Get Effective Rights control"),
+			Evidence: mark("ACL export reviewed in CHG-1043"), ItemHash: "h", ConfigHash: b.ConfigHash, AttestedAt: Now}); err != nil {
 			return err
 		}
 		for _, it := range b.Eval.Items {
@@ -174,6 +182,12 @@ func seedReadiness(tb testing.TB, db *store.DB, t *Tenant, sentinel string) {
 		if err := c.SetStagedCorrelation(dryID, "ad-corp", "S-1", "correlated", 1, ptr(t.IDs["alice"]), nil); err != nil {
 			return err
 		}
+		snapshot, _ := json.Marshal(map[string]string{"note": mark("baseline")})
+		reason := mark("Required live check failed on 2 consecutive scheduled runs")
+		if err := c.InsertBaseline(&store.Baseline{RevisionID: b.Rev.ID, CapturedAt: at, Score: 42, ConfigHash: b.ConfigHash,
+			Snapshot: string(snapshot), FailStreak: 1, DegradedReason: &reason}); err != nil {
+			return err
+		}
 		breakdown, _ := json.Marshal(map[string]string{"note": mark("score")})
 		return c.RecordScore(&store.ScoreRow{Scope: "connection", ConnectionID: &ad, RevisionID: &b.Rev.ID, ComputedAt: at,
 			Score: 42, Band: "at_risk", Breakdown: string(breakdown)})
@@ -206,6 +220,8 @@ func ReadinessDump(tb testing.TB, db *store.DB, t tenancy.ID, refs map[string]st
 			for _, r := range revs {
 				v1, e := c.Attestations(r.ID)
 				put("attestations:"+r.ID, v1, e)
+				v1b, e := c.LiveAttestations(r.ID)
+				put("live_attestations:"+r.ID, v1b, e)
 				v2, e := c.Skips(r.ID)
 				put("skips:"+r.ID, v2, e)
 				v3, e := c.ItemStates(r.ID)
@@ -216,6 +232,8 @@ func ReadinessDump(tb testing.TB, db *store.DB, t tenancy.ID, refs map[string]st
 		}
 		s, e := c.ScoreSeries("tenant", nil, 1000)
 		put("scores:tenant", s, e)
+		bls, e := c.Baselines()
+		put("baselines", bls, e)
 		k, e := c.AllSkips()
 		put("skips", k, e)
 		o, e := c.LatestOverlay("ad")

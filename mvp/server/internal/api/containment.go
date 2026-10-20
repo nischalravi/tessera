@@ -105,6 +105,10 @@ func (s *Server) containIdentity(_ http.ResponseWriter, r *http.Request, p *para
 	if err != nil {
 		return nil, err
 	}
+	// Tessera's own sessions end first, whatever the providers do
+	if err := s.revokeLocalSessions(ctx, p, actor(r), id, job.Trigger); err != nil {
+		return nil, err
+	}
 	rep := s.runContainment(ctx, job)
 	retries, err := s.recordContainment(ctx, p, actor(r), job, rep)
 	if err != nil {
@@ -114,6 +118,15 @@ func (s *Server) containIdentity(_ http.ResponseWriter, r *http.Request, p *para
 		return nil, containmentFailed(rep, retries)
 	}
 	return rep, nil
+}
+
+// revokeLocalSessions ends the identity's Tessera sessions (and audits it) in
+// one write transaction: the part of containment that needs no provider.
+func (s *Server) revokeLocalSessions(ctx context.Context, p *params, by string, identityID int64, trigger string) error {
+	return p.scope.Write(ctx, func(c *store.TenantTx) error {
+		_, err := containment.RevokeLocal(c, s.clock(), by, identityID, trigger)
+		return err
+	})
 }
 
 func checkReason(reason string) error {
@@ -405,6 +418,7 @@ func (s *Server) putContainmentCredential(r *http.Request, p *params) (int, any,
 func (s *Server) executeLeaver(r *http.Request, p *params, id int64) (any, error) {
 	ctx := r.Context()
 	var job *containment.Job
+	var leaverID *int64
 	err := p.scope.Read(ctx, func(c *store.TenantTx) error {
 		pols, err := s.effectivePolicies(c)
 		if err != nil {
@@ -418,6 +432,7 @@ func (s *Server) executeLeaver(r *http.Request, p *params, id int64) (any, error
 		if err != nil {
 			return nil
 		}
+		leaverID = ev.IdentityID
 		if specs := jml.ContainmentSpecs(plan); len(specs) > 0 {
 			job, err = s.containment.BuildJob(c, *ev.IdentityID, "leaver", specs)
 			return err
@@ -426,6 +441,12 @@ func (s *Server) executeLeaver(r *http.Request, p *params, id int64) (any, error
 	})
 	if err != nil {
 		return nil, err
+	}
+	if leaverID != nil {
+		// the leaver's Tessera sessions end whether or not a provider step exists
+		if err := s.revokeLocalSessions(ctx, p, actor(r), *leaverID, "leaver"); err != nil {
+			return nil, err
+		}
 	}
 	var rep *containment.Report
 	var retries []*store.ContainmentRetry

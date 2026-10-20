@@ -44,6 +44,9 @@ type scheduleBody struct {
 	Recurrence           string     `json:"recurrence"`
 	FirstRunAt           *time.Time `json:"first_run_at"`
 	Enabled              *bool      `json:"enabled"`
+	// RoleIDs scopes the review to these business roles' memberships (issue
+	// #214). Omitted: kept on update, none on create. An empty list clears it.
+	RoleIDs *[]string `json:"role_ids"`
 }
 
 func intOr(p *int, d int) int {
@@ -96,6 +99,7 @@ type scheduleView struct {
 	Enabled            bool         `json:"enabled"`
 	UpdatedAt          time.Time    `json:"updated_at"`
 	Launches           []launchView `json:"launches"`
+	RoleIDs            []string     `json:"role_ids"`
 }
 
 type personBrief struct {
@@ -107,6 +111,10 @@ func scheduleViewOf(tx *store.TenantTx, t *store.ReviewTemplate) (scheduleView, 
 	v := scheduleView{ID: t.ID, Name: t.Name, System: t.System, PrivilegedOnly: t.PrivilegedOnly, UnusedDays: t.UnusedDays,
 		DurationDays: t.DurationDays, ReminderDays: t.ReminderDays, CloseOut: t.CloseOut, EscalationDays: t.EscalationDays,
 		Recurrence: t.Recurrence, NextRunAt: t.NextRunAt, Enabled: t.Enabled, UpdatedAt: t.UpdatedAt, Launches: []launchView{}}
+	var err error
+	if v.RoleIDs, err = tx.ReviewTemplateRoles(t.ID); err != nil {
+		return v, err
+	}
 	if t.EscalationIdentityID != nil {
 		i, err := tx.Identity(*t.EscalationIdentityID)
 		if err != nil {
@@ -160,6 +168,13 @@ func (s *Server) putSchedule(r *http.Request, t *store.ReviewTemplate, b schedul
 	if err := reviews.ValidateTemplate(tx, t); err != nil {
 		return nil, scheduleErr(err)
 	}
+	var roleIDs []string
+	if b.RoleIDs != nil {
+		var rerr error
+		if roleIDs, rerr = reviews.ValidateRoleScope(tx, *b.RoleIDs); rerr != nil {
+			return nil, scheduleErr(rerr)
+		}
+	}
 	var err error
 	if insert {
 		err = tx.InsertReviewTemplate(t)
@@ -169,13 +184,19 @@ func (s *Server) putSchedule(r *http.Request, t *store.ReviewTemplate, b schedul
 	if err != nil {
 		return nil, err
 	}
+	if b.RoleIDs != nil {
+		if err := tx.SetReviewTemplateRoles(t.ID, roleIDs); err != nil {
+			return nil, err
+		}
+	}
 	next := ""
 	if t.NextRunAt != nil {
 		next = timeutil.ISO(*t.NextRunAt)
 	}
 	if err := tx.Audit(now, principal(r).Display, "review.schedule.put", ojson.Object{{Key: "schedule_id", Value: t.ID},
 		{Key: "name", Value: t.Name}, {Key: "recurrence", Value: t.Recurrence}, {Key: "next_run_at", Value: next},
-		{Key: "close_out", Value: t.CloseOut}, {Key: "enabled", Value: t.Enabled}}); err != nil {
+		{Key: "close_out", Value: t.CloseOut}, {Key: "enabled", Value: t.Enabled},
+		{Key: "role_ids", Value: roleScopeForAudit(tx, t.ID)}}); err != nil {
 		return nil, err
 	}
 	v, err := scheduleViewOf(tx, t)

@@ -41,7 +41,7 @@ export function itemTitle(it: InboxItem): { icon: ReactNode; title: string; meta
       return { icon: <ListChecks size={15} />, title: `${e.type[0].toUpperCase() + e.type.slice(1)}: ${who}`, meta: <>HRIS event {e.external_id} · effective {fmtDate(e.effective_at)}</>, tone: e.type === "leaver" ? "critical" : "neutral", kindLabel: KIND_LABEL.task };
     }
     case "connection":
-      return { icon: <Plug size={15} />, title: `${it.conn.name} is degraded`, meta: <>Readiness {it.conn.score} · write-back stopped, reads continue</>, tone: "warning", kindLabel: KIND_LABEL.connection };
+      return { icon: <Plug size={15} />, title: `${it.conn.name} is degraded`, meta: <>Readiness {it.conn.score} · {it.task?.reason ?? "write-back stopped, reads continue"}</>, tone: "warning", kindLabel: KIND_LABEL.connection };
   }
 }
 
@@ -204,6 +204,7 @@ function Detail({ it }: { it: InboxItem }) {
         {it.kind === "connection" && (
           <div className="stack-sm">
             <p className="small muted">A scheduled check failed twice, a credential is close to expiry or sync has failed. Reads continue and data is labelled as coming from a degraded connection; write-back has stopped.</p>
+            {it.task && <p className="small"><b>Why:</b> {it.task.reason}{it.task.owner && <> · technical owner {it.task.owner}</>}</p>}
             <Link className="btn" to={`/admin/connections/${it.conn.id}`}>Open the connection</Link>
           </div>
         )}
@@ -320,7 +321,7 @@ export function Inbox() {
     if (visible.length && !visible.some((i) => i.key === selKey)) setSelKey(visible[Math.min(idx, visible.length - 1)].key);
   }, [visible, selKey, idx]);
   useEffect(() => {
-    listRef.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
+    listRef.current?.querySelector<HTMLElement>('[aria-current="true"]')?.scrollIntoView({ block: "nearest" });
   }, [selKey]);
 
   const run = async (it: InboxItem, verb: Verb) => {
@@ -425,14 +426,14 @@ export function Inbox() {
               {items.length ? "Try another filter or clear the search." : scope === "mine" ? "Nothing is assigned to you. Approvals, review items and tasks for you will appear here." : "No open approvals, reviews or tasks. Start an access review from Governance when you're ready."}
             </EmptyState>
           ) : (
-            <div ref={listRef} role="listbox" aria-label="Inbox items" aria-activedescendant={current ? `ib-${current.key}` : undefined} tabIndex={0}>
+            <div ref={listRef} role="list" aria-label="Inbox items">
               {visible.map((it) => {
                 const t = itemTitle(it);
                 const v = VERBS[it.kind];
                 const self = selfRequest(it);
                 return (
-                  <div key={it.key} id={`ib-${it.key}`} role="option" aria-selected={it.key === current?.key} className="qrow" onClick={() => setSelKey(it.key)}>
-                    <input type="checkbox" checked={checked.has(it.key)} onClick={(e) => e.stopPropagation()} onChange={() => setChecked((s) => { const n = new Set(s); if (n.has(it.key)) n.delete(it.key); else n.add(it.key); return n; })} aria-label={`Select ${t.title}`} />
+                  <div key={it.key} id={`ib-${it.key}`} role="listitem" aria-current={it.key === current?.key ? "true" : undefined} className={`qrow ${it.key === current?.key ? "selected" : ""}`} onClick={() => setSelKey(it.key)}>
+                    <label className="chk-hit" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={checked.has(it.key)} onChange={() => setChecked((s) => { const n = new Set(s); if (n.has(it.key)) n.delete(it.key); else n.add(it.key); return n; })} aria-label={`Select ${t.title}`} /></label>
                     <span className="q-ic" aria-hidden>{t.icon}</span>
                     <span style={{ minWidth: 0 }}>
                       <span className="q-title truncate" style={{ display: "block" }}>{t.title}</span>

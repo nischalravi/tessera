@@ -53,7 +53,7 @@ func TestDeviceFlow(t *testing.T) {
 		}
 		// the user types the code: no pre-filled URL, no QR payload
 		for _, k := range []string{"verification_uri_complete", "verification_url_complete", "qr"} {
-			if _, ok := d.Raw.Body[k]; ok || strings.Contains(d.Raw.Raw, k) {
+			if _, ok := d.Raw.Body[k]; ok { // the keys, not the raw text: a random device_code can contain "qr"
 				t.Errorf("the response has %q", k)
 			}
 		}

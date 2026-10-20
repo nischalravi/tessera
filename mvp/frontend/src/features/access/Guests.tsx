@@ -3,20 +3,21 @@
  * sponsorship with its state and days left, renew, transfer or end it, accept a transfer, and (for
  * approvers) approve or reject the sponsorships the sponsor policy sends for a second person.
  *
- * The invitation is recorded and left "ready": the claim link and the guest's email come with the
- * claim flow, and the access bundle is granted when the groups engine reads sponsorships.
+ * When a sponsorship starts, the guest gets an email with a one-time claim link (issue #69). The side
+ * panel shows where the invitation stands (sent, claimed, expired, revoked) and lets the sponsor send
+ * a new link or cancel it. The access bundle is granted when the groups engine reads sponsorships.
  */
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ArrowRightLeft, Check, CalendarPlus, FileUp, UserCheck, UserPlus, Users, X } from "lucide-react";
+import { ArrowRightLeft, Check, CalendarPlus, FileUp, Mail, UserCheck, UserPlus, Users, X } from "lucide-react";
 import {
   BulkResult, CatalogView, GuestList, GuestPopulationInfo, GuestPopulationKey, IdentityRow, Sponsorship,
   fmtDate, fmtDay, guests, relTime, useApi,
 } from "../../api";
-import { Badge, Button, Callout, Column, DataTable, Drawer, EmptyState, Loading, Page, SidePanel, Tabs, useSelected, useToast } from "../../components";
+import { Badge, Button, Callout, Column, DataTable, Drawer, EmptyState, Loading, Page, SidePanel, Tabs, useConfirm, useSelected, useToast } from "../../components";
 import {
-  CSV_HEADER, InviteForm, MAX_BULK_ROWS, POPULATIONS, POPULATION_LABEL, ROW_LABEL, STATE_LABEL, STATE_TONE, addDays, bundleChoices, csvRowCount,
-  csvTemplate, csvTooLong, dayOf, daysLeftLabel, emptyInvite, endInstant, invitePayload, inviteProblems, itemIal, maxEndDay, needsApproval, requiredIal,
+  CSV_HEADER, INVITATION_LABEL, INVITATION_TONE, InviteForm, MAX_BULK_ROWS, POPULATIONS, POPULATION_LABEL, ROW_LABEL, STATE_LABEL, STATE_TONE, addDays, bundleChoices, csvRowCount,
+  csvTemplate, csvTooLong, dayOf, daysLeftLabel, emptyInvite, endInstant, invitationNote, invitePayload, inviteProblems, itemIal, maxEndDay, needsApproval, requiredIal,
 } from "./guestModel";
 
 type Tab = "mine" | "all" | "approvals";
@@ -122,6 +123,7 @@ function SponsorshipDetail({ id, onChanged }: { id: string; onChanged: () => voi
   const { data: list } = useApi<GuestList>(guests.paths.list({ sponsor: "me" }));
   const [drawer, setDrawer] = useState<null | "renew" | "transfer" | "end" | "reject">(null);
   const toast = useToast();
+  const confirm = useConfirm();
   const [busy, setBusy] = useState(false);
   if (!s) return <Loading error={error} kind="block" />;
   const pop = list?.populations.find((p) => p.key === s.population);
@@ -147,6 +149,23 @@ function SponsorshipDetail({ id, onChanged }: { id: string; onChanged: () => voi
         {s.can_transfer && <Button size="sm" icon={<ArrowRightLeft size={14} />} onClick={() => setDrawer("transfer")}>Transfer</Button>}
         {s.can_end && <Button size="sm" variant="danger" onClick={() => setDrawer("end")}>End</Button>}
       </div>
+      {(s.can_resend_invitation || s.can_revoke_invitation) && (
+        <div className="row tight wrap">
+          {s.can_resend_invitation && (
+            <Button size="sm" icon={<Mail size={14} />} disabled={busy}
+              onClick={() => run(() => guests.resendInvitation(s.guest.id), `A new link was sent to ${s.guest.email ?? s.guest.name}`)}>
+              {s.invitation === "ready" ? "Send invitation" : "Resend invitation"}
+            </Button>
+          )}
+          {s.can_revoke_invitation && (
+            <Button size="sm" variant="danger" disabled={busy} onClick={async () => {
+              const ok = await confirm({ title: `Revoke the invitation to ${s.guest.name}?`, danger: true, confirmLabel: "Revoke invitation",
+                body: "The link in their email stops working and any claim in progress ends. The sponsorship itself stays; you can end it separately." });
+              if (ok !== null) await run(() => guests.revokeInvitation(s.guest.id), "Invitation revoked");
+            }}>Revoke invitation</Button>
+          )}
+        </div>
+      )}
       {s.status === "pending_approval" && <Callout tone="warn">A second person must approve this sponsorship before the guest gets any standing or access. {s.can_approve ? "" : "Approvers have been asked."}</Callout>}
       {s.status === "transfer_pending" && s.transfer_to && (
         <Callout tone="warn">Waiting for {s.transfer_to.name} to accept, until {fmtDate(s.transfer_deadline)}. If nobody accepts, the sponsorship ends then.</Callout>
@@ -165,7 +184,8 @@ function SponsorshipDetail({ id, onChanged }: { id: string; onChanged: () => voi
           )}
           {s.bundle.length > 0 && <div className="xs faint">Granted when the groups engine reads sponsorships; nothing is granted yet.</div>}
         </dd>
-        <dt>Invitation</dt><dd>{s.invitation === "ready" ? <span>Ready <span className="xs faint">(the claim link and email are sent by the claim flow, not yet)</span></span> : s.invitation}</dd>
+        <dt>Invitation</dt>
+        <dd><Badge tone={INVITATION_TONE[s.invitation]}>{INVITATION_LABEL[s.invitation]}</Badge><div className="xs faint">{invitationNote(s, fmtDate)}</div></dd>
         {s.approved_by && <><dt>Approved by</dt><dd>{s.approved_by.display_name}, {relTime(s.approved_at)}</dd></>}
         {s.end_reason && <><dt>Ended</dt><dd>{fmtDate(s.ended_at)}: {s.end_reason}</dd></>}
         <dt>Policy</dt><dd className="xs faint">{s.policy_version}</dd>
