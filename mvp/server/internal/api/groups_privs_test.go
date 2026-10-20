@@ -337,6 +337,17 @@ func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 					t.Errorf("operator %s %s = %d %.200s, want 403 forbidden (the role)", c.method, c.path, rec.Code, rec.Body.String())
 				}
 			}
+			if c.pattern == "/api/groups/policy/validate" || c.pattern == "/api/groups/policy/diff" {
+				// The referenced group is one this caller may not view, so it
+				// resolves as unknown rather than answering 403 (#387). The 403
+				// for a viewable, unreadable group is in TestGroupsPolicyHiddenGroupIsUnknown.
+				rec := who.do(c.method, c.path, c.body)
+				if (rec.Code != http.StatusOK && rec.Code != http.StatusUnprocessableEntity) ||
+					!strings.Contains(rec.Body.String(), "unknown_group") || strings.Contains(rec.Body.String(), "privilege_required") {
+					t.Errorf("%s %s = %d %.200s, want unknown_group", c.method, c.path, rec.Code, rec.Body.String())
+				}
+				return
+			}
 			if c.privilege == "" {
 				if rec := who.do(c.method, c.path, c.body); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"forbidden"`) {
 					t.Errorf("%s %s = %d %.200s, want 403 forbidden", c.method, c.path, rec.Code, rec.Body.String())

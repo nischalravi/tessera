@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -152,6 +153,11 @@ func TestGroupsPolicyAPI_Privileges(t *testing.T) {
 	body := policyReq(map[string]string{"p.cedar": policyCedar("app:pol", inGroup("app:ref"), "")}, "repo", "c1", false)
 	denied(t, bob, "POST", "/api/groups/policy/apply", body, "create")
 	e.grant("/api/groups/folders/"+app, "create", "bob", "")
+	// a group bob may not view is unknown to him (issue #387); once he may view it, reading it is what he lacks
+	if r := bob.call("POST", "/api/groups/policy/apply", body, 422); r["error"] != "invalid_policy" {
+		t.Errorf("hidden reference = %v", r)
+	}
+	e.grant("/api/groups/"+ref, "view", "bob", "")
 	denied(t, bob, "POST", "/api/groups/policy/apply", body, "read")
 	e.grant("/api/groups/"+ref, "read", "bob", "")
 	out := bob.call("POST", "/api/groups/policy/apply", body, 200)
@@ -168,4 +174,68 @@ func TestGroupsPolicyAPI_Privileges(t *testing.T) {
 	// a full sync that would retire a group needs admin on it
 	empty := policyReq(map[string]string{}, "repo", "c3", true)
 	denied(t, other, "POST", "/api/groups/policy/apply", empty, "admin")
+}
+
+// A policy that names a group the caller may not view answers exactly as for a
+// name that does not exist: no 403, no object_id (issue #387). A group the caller
+// may view but not read keeps its 403.
+func TestGroupsPolicyHiddenGroupIsUnknown(t *testing.T) {
+	e := newPrivEnv(t)
+	root := e.admin.folder("", "sec")
+	secret := e.admin.group(root, "secret")
+	e.grant("/api/groups/"+e.admin.group(root, "seen2"), "view", "bob", "")
+	seen := "sec:seen2"
+	e.grant("/api/groups/folders/"+root, "create", "bob", "")
+	bob := e.user("bob", "bob")
+	body := func(name string) string {
+		return policyReq(map[string]string{"groups/sec/p.cedar": policyCedar("sec:p", inGroup(name), "")}, "", "", false)
+	}
+	for _, route := range []string{"validate", "diff", "apply"} {
+		t.Run(route, func(t *testing.T) {
+			path := "/api/groups/policy/" + route
+			hidden := bob.do("POST", path, body("sec:secret"))
+			missing := bob.do("POST", path, body("sec:nosuch"))
+			norm := func(s, name string) string { return strings.ReplaceAll(s, name, "NAME") }
+			if hidden.Code != missing.Code || norm(hidden.Body.String(), "sec:secret") != norm(missing.Body.String(), "sec:nosuch") {
+				t.Errorf("hidden = %d %s, missing = %d %s", hidden.Code, hidden.Body, missing.Code, missing.Body)
+			}
+			if strings.Contains(hidden.Body.String(), secret) || strings.Contains(hidden.Body.String(), "privilege_required") {
+				t.Errorf("the answer for a hidden group leaks it: %s", hidden.Body)
+			}
+			if !strings.Contains(hidden.Body.String(), "unknown_group") {
+				t.Errorf("want an unknown_group finding: %d %s", hidden.Code, hidden.Body)
+			}
+			// viewable, not readable: still 403
+			denied(t, bob, "POST", path, body(seen), "read")
+		})
+	}
+}
+
+// TestGroupsPolicyDefinedHiddenGroupNoID: a change that defines a group the
+// caller may not view is refused without the group's id (#387).
+func TestGroupsPolicyDefinedHiddenGroupNoID(t *testing.T) {
+	e := newPrivEnv(t)
+	root := e.admin.folder("", "sec")
+	secret := e.admin.group(root, "secret")
+	seen := e.admin.group(root, "seen3")
+	e.grant("/api/groups/"+seen, "view", "bob", "")
+	e.grant("/api/groups/folders/"+root, "create", "bob", "")
+	bob := e.user("bob", "bob")
+	body := func(name string) string {
+		return policyReq(map[string]string{"groups/sec/p.cedar": policyCedar(name, `principal has department && principal.department == "x"`, "")}, "", "", false)
+	}
+	for _, route := range []string{"diff", "apply"} {
+		t.Run(route, func(t *testing.T) {
+			path := "/api/groups/policy/" + route
+			rec := bob.do("POST", path, body("sec:secret"))
+			if rec.Code != 403 || strings.Contains(rec.Body.String(), secret) {
+				t.Errorf("defining a hidden group: %d %s", rec.Code, rec.Body)
+			}
+			// a group the caller can view still names itself in the refusal
+			rec = bob.do("POST", path, body("sec:seen3"))
+			if rec.Code != 403 || !strings.Contains(rec.Body.String(), seen) {
+				t.Errorf("defining a viewable group: %d %s", rec.Code, rec.Body)
+			}
+		})
+	}
 }

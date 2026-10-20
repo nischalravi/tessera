@@ -198,7 +198,7 @@ func (s *Service) snapshot(ctx context.Context, tenant tenancy.ID, id string, o 
 		if p.Mode == store.ProvModePaused {
 			return ErrPaused
 		}
-		cc, err := ParseCommon(p.Config)
+		cc, err := ParseCommonFor(p.TargetType, p.Config)
 		if err != nil {
 			return err
 		}
