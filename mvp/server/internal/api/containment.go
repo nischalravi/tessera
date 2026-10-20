@@ -105,7 +105,15 @@ func (s *Server) containIdentity(_ http.ResponseWriter, r *http.Request, p *para
 	if err != nil {
 		return nil, err
 	}
-	// Tessera's own sessions end first, whatever the providers do
+	// the kill switch cuts MCP tokens first and on its own: the provider calls
+	// below can be slow or fail, and a live agent token must not wait for them
+	if err := p.scope.Write(ctx, func(c *store.TenantTx) error {
+		_, err := s.mcp.RevokeIdentity(c, id, "kill switch ("+job.Trigger+")")
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	// then Tessera's own sessions end, before any provider call
 	if err := s.revokeLocalSessions(ctx, p, actor(r), id, job.Trigger); err != nil {
 		return nil, err
 	}
@@ -375,6 +383,11 @@ func (s *Server) recordContainment(ctx context.Context, p *params, by string, jo
 		if err := containment.Record(c, now, by, rep); err != nil {
 			return err
 		}
+		// an agent's (or a user's) MCP tokens die with the containment, also
+		// when a provider step failed
+		if _, err := s.mcp.RevokeIdentity(c, rep.IdentityID, "identity contained ("+rep.Trigger+")"); err != nil {
+			return err
+		}
 		var err error
 		retries, err = containment.EnqueueRetries(c, now, job, rep)
 		return err
@@ -463,11 +476,15 @@ func (s *Server) executeLeaver(r *http.Request, p *params, id int64) (any, error
 		if err != nil {
 			return err
 		}
-		plan, err = jml.ExecuteEvent(c, s.clock(), id, principal(r).User(), pols)
+		// read before it runs: a leaver or mover who sponsors guests sets transfer tasks going
+		ev, evErr := c.HrisEvent(id)
+		plan, err = jml.ExecuteEvent(c, s.clock(), id, principal(r).User(), pols, jml.WithRotator(s.rotation))
 		var ex *jml.ExistsError
 		if errors.As(err, &ex) {
 			// ExecuteEvent wrote nothing before refusing; commit so the refusal is audited.
 			refusal, err = s.joinerRefused(c, "execute", &id, ex, principal(r).User())
+		} else if err == nil && evErr == nil && ev.IdentityID != nil {
+			_, err = s.guestLife.OnEvent(c, ev.Type, *ev.IdentityID, s.clock().UTC())
 		}
 		return err
 	})

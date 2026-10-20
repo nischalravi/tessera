@@ -1,0 +1,4 @@
+[
+  {"name": "agents", "default_branch": "main", "archived": false, "disabled": false, "fork": false},
+  {"name": "old-stuff", "default_branch": "main", "archived": true, "disabled": false, "fork": false}
+]

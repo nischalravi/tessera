@@ -150,6 +150,7 @@ function TargetPanel({ target, onClose }: { target: ProvTarget | null; onClose: 
   const [fault, setFault] = useState(target?.fault ?? "none");
   const [token, setToken] = useState("");
   const [writeBack, setWriteBack] = useState(target?.write_back ?? false);
+  const [onDeprovision, setOnDeprovision] = useState<"disable" | "delete">(target?.on_deprovision ?? "disable");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   // legacy (pre-readiness) entries have no id and no target to configure
@@ -158,7 +159,7 @@ function TargetPanel({ target, onClose }: { target: ProvTarget | null; onClose: 
     e.preventDefault();
     setBusy(true);
     setErr(null);
-    const body: ProvTargetInput = { kind, base_url: url, write_back: writeBack };
+    const body: ProvTargetInput = { kind, base_url: url, write_back: writeBack, on_deprovision: onDeprovision };
     if (kind === "scim") body.dialect = dialect;
     if (kind === "fake") body.fault = fault;
     if (token) body.token = token;
@@ -222,6 +223,13 @@ function TargetPanel({ target, onClose }: { target: ProvTarget | null; onClose: 
         )}
         <label className="row tight small">
           <input type="checkbox" checked={writeBack} onChange={(e) => setWriteBack(e.target.checked)} /> Write-back: send changes to this target and update Tessera only after a re-read confirms them
+        </label>
+        <label className="field">Accounts of deprovisioned guests
+          <select className="input" value={onDeprovision} onChange={(e) => setOnDeprovision(e.target.value as "disable" | "delete")}>
+            <option value="disable">Leave disabled after the grace period</option>
+            <option value="delete">Delete in this target after the grace period</option>
+          </select>
+          <span className="hint">Applies when write-back is on: the delete is sent and confirmed by a re-read.</span>
         </label>
         <div className="row" style={{ gap: 8 }}>
           <Button variant="primary" type="submit" disabled={busy || (!target && !conn)}>Save target</Button>

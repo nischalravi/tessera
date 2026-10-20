@@ -24,3 +24,6 @@ dist/
 
 # CI diagnostics output (mvp/scripts/ci-diagnostics.sh)
 mvp/logs/
+# Playwright (mvp/frontend e2e)
+test-results/
+playwright-report/

@@ -8,7 +8,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/access"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/affiliations"
+	"github.com/nischalravi/tessera/mvp/server/internal/identity/match"
 	"github.com/nischalravi/tessera/mvp/server/internal/lifecycle"
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -42,10 +44,10 @@ func (s *Service) Invite(tx *store.TenantTx, by Actor, in Invite, channel, batch
 	if !p.Decision.Allowed {
 		return nil, refusal(p.Decision)
 	}
-	return s.writeInvite(tx, by, p, channel, batch, now)
+	return s.writeInvite(tx, by, p, channel, batch, nil, now)
 }
 
-func (s *Service) writeInvite(tx *store.TenantTx, by Actor, p *Plan, channel, batch string, now time.Time) (*Result, error) {
+func (s *Service) writeInvite(tx *store.TenantTx, by Actor, p *Plan, channel, batch string, pool *match.Pool, now time.Time) (*Result, error) {
 	if s.Keyer == nil {
 		return nil, errors.New("sponsorship: no identifier key")
 	}
@@ -98,6 +100,14 @@ func (s *Service) writeInvite(tx *store.TenantTx, by Actor, p *Plan, channel, ba
 	if err != nil {
 		return nil, err
 	}
+	// is the invited person someone we know? A self-asserted intake only ever
+	// raises a flag for the review queue; the sponsor is told nothing (K3)
+	if s.Matcher != nil {
+		if _, err := s.Matcher.Run(tx, pool, intakeID, match.Subject{Mode: match.SelfAsserted, Given: p.Given, Family: p.Family,
+			Emails: []string{p.Email}, SOR: SourceSor, SORID: intakeID, Exclude: guestID}, now); err != nil {
+			return nil, err
+		}
+	}
 	return &Result{Sponsorship: ss, Guest: guest, Decision: p.Decision}, nil
 }
 
@@ -120,6 +130,9 @@ func (s *Service) SponsorExisting(tx *store.TenantTx, by Actor, guestID int64, i
 	}
 	sp, err := sponsorOf(tx, by)
 	if err != nil {
+		return nil, err
+	}
+	if err := Return(tx, guest, by, now); err != nil { // a person who left comes back as themselves
 		return nil, err
 	}
 	intakeID := uuid.NewString()
@@ -217,6 +230,14 @@ func (s *Service) activate(tx *store.TenantTx, ss *store.Sponsorship, by Actor, 
 	if err := s.syncPerson(tx, ss.GuestIdentityID, by, now, "sponsorship "+ss.ID); err != nil {
 		return err
 	}
+	// the access bundle: recorded now, granted once the guest has claimed
+	// (at once for a guest who is active already)
+	if err := access.Plan(tx, ss, by.Display, now); err != nil {
+		return err
+	}
+	if err := access.GrantPending(tx, ss.GuestIdentityID, by.Display, now); err != nil {
+		return err
+	}
 	return s.invite(tx, ss, now)
 }
 
@@ -263,11 +284,18 @@ func (s *Service) syncPerson(tx *store.TenantTx, guestID int64, by Actor, now ti
 		}
 	}
 	if last == nil {
-		return s.settle(tx, guestID, by, now, note, all)
+		if err := s.settle(tx, guestID, by, now, note, all); err != nil {
+			return err
+		}
+	} else {
+		pop, _ := PopulationOf(last.Population)
+		if _, err = lifecycle.ApplySponsored(tx, guestID, lifecycle.Sponsored{WorkerType: pop.WorkerType, SponsorID: last.SponsorIdentityID,
+			StartsAt: starts, EndsAt: last.EndsAt, Note: note}, by.lc(), now); err != nil {
+			return err
+		}
 	}
-	pop, _ := PopulationOf(last.Population)
-	_, err = lifecycle.ApplySponsored(tx, guestID, lifecycle.Sponsored{WorkerType: pop.WorkerType, SponsorID: last.SponsorIdentityID,
-		StartsAt: starts, EndsAt: last.EndsAt, Note: note}, by.lc(), now)
+	// the reference groups follow the guest's affiliations and status
+	_, err = access.Recompute(tx, now, by.Display, guestID, s.CanSponsor)
 	return err
 }
 
@@ -281,6 +309,15 @@ func (s *Service) settle(tx *store.TenantTx, guestID int64, by Actor, now time.T
 			return nil
 		}
 	}
+	// the HR or student system holds them now (a conversion, design §8.4): the
+	// sponsorship's term gives way to employment and nobody leaves
+	if emp, err := employed(tx, guestID, now); err != nil {
+		return err
+	} else if emp {
+		_, err := lifecycle.Set(tx, guestID, lifecycle.Spec{WorkerType: store.WorkerEmployee, Reason: "converted to employee: " + note},
+			by.lc(), now)
+		return err
+	}
 	if _, ended, err := lifecycle.EndNow(tx, guestID, note, by.lc(), now); err != nil || ended {
 		return err
 	}
@@ -292,4 +329,19 @@ func (s *Service) settle(tx *store.TenantTx, guestID int64, by Actor, now time.T
 		return tx.TerminateIdentity(guestID, now)
 	}
 	return nil
+}
+
+// employed reports whether the person has a running affiliation from the HR or
+// student system.
+func employed(tx *store.TenantTx, guestID int64, now time.Time) (bool, error) {
+	affs, err := tx.AffiliationsFor(guestID)
+	if err != nil {
+		return false, err
+	}
+	for _, a := range affs {
+		if (a.Source == store.AffSourceHRIS || a.Source == store.AffSourceSIS) && affiliations.Effective(a, now) == store.AffActive {
+			return true, nil
+		}
+	}
+	return false, nil
 }

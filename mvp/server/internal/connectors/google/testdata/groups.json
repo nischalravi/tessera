@@ -1,0 +1,8 @@
+{
+  "kind": "admin#directory#groups",
+  "groups": [
+    {"id": "g-eng", "email": "engineering@example.com", "name": "Engineering", "description": "All engineers", "etag": "\"etag-eng-1\"", "directMembersCount": "5"},
+    {"id": "g-plat", "email": "platform-admins@example.com", "name": "Platform Admins", "description": "Nested: holds Engineering", "etag": "\"etag-plat-1\"", "directMembersCount": "1"},
+    {"id": "g-fin", "email": "finance@example.com", "name": "Finance", "etag": "\"etag-fin-1\"", "directMembersCount": "1"}
+  ]
+}

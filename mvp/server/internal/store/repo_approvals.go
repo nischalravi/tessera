@@ -14,6 +14,7 @@ const (
 	StageManager = "manager"
 	StageOwner   = "owner"
 	StageDecider = "decider"
+	StageSponsor = "sponsor" // the guest's sponsor (guest access, issue #75)
 )
 
 // Stage statuses.

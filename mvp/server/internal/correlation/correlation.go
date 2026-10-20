@@ -11,12 +11,24 @@
 //     it (ingest.Resolver.AccountIdentity).
 //   - A merge moves the merged identity's accounts, account pins, owned
 //     identities, reports and agent delegations to the survivor, in one
-//     transaction, and records every moved row. History (usage, reviews,
-//     requests, HRIS events) stays where it was.
-//   - Credentials never move: an identity bound to a Tessera sign-in user
-//     cannot be the merged side.
-//   - Unmerge, within UnmergeWindow, moves back each recorded row that still
-//     points at the survivor; rows changed since are kept and reported.
+//     transaction, and records every moved row. Since the guest design (§5.4,
+//     issue #68) it also moves the person's source records, identifiers,
+//     affiliations, sponsorships (as guest, and as sponsor while live),
+//     access bundle items, lifecycle record (when the survivor has none) and
+//     pending access requests, each recorded as a move so an unmerge restores
+//     it. History (usage, reviews, decided requests, HRIS events) stays where
+//     it was.
+//   - Credentials never move: an identity with an active Tessera sign-in user
+//     cannot be the merged side. internal/identity/merge disables that user
+//     (and ends its sessions) first, when it holds no role; this package only
+//     enforces the rule.
+//   - Unmerge, within the window (UnmergeWindow, or the tenant's setting),
+//     moves back each recorded row that still points at the survivor; rows
+//     changed since are kept and reported.
+//
+// This is the move engine. The policy around it (four eyes, credential
+// revocation, notifications, memberships through the access code) is
+// internal/identity/merge, which calls it; there is no second engine.
 //
 // Every function works inside the caller's tenant transaction, which also
 // carries the audit event.
@@ -24,13 +36,15 @@ package correlation
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
-// UnmergeWindow is how long a merge can be undone.
+// UnmergeWindow is how long a merge can be undone unless the tenant sets another
+// (matching_settings.unmerge_window_days).
 const UnmergeWindow = 180 * 24 * time.Hour
 
 // MaxReason caps a decision's reason.
@@ -269,11 +283,11 @@ func Merge(tx *store.TenantTx, id string, mergedID, survivorID int64, reason, ac
 	case m.Type != s.Type:
 		return nil, refuse(409, "type_mismatch", "identities of different types cannot be merged")
 	}
-	if n, err := tx.PlatformUsersForIdentity(m.ID); err != nil {
+	if users, err := tx.UsersLinkedTo(m.ID); err != nil {
 		return nil, err
-	} else if n > 0 {
+	} else if len(users) > 0 {
 		return nil, refuse(409, "merged_identity_signs_in",
-			"the identity to merge is bound to a Tessera sign-in user; credentials never move, so merge the other way or unbind it first")
+			"the identity to merge has an active sign-in user; credentials never move, so merge the other way or disable the user first")
 	}
 	var moves []store.MergeMove
 	accts, err := tx.IdentityAccounts(m.ID)
@@ -315,20 +329,27 @@ func Merge(tx *store.TenantTx, id string, mergedID, survivorID int64, reason, ac
 	for _, d := range dels {
 		moves = append(moves, store.MergeMove{Table: "agent_delegations", ID: d, Column: "principal_id"})
 	}
+	guest, err := guestMoves(tx, m.ID, s.ID)
+	if err != nil {
+		return nil, err
+	}
+	moves = append(moves, guest...)
+	if moves == nil {
+		moves = []store.MergeMove{}
+	}
+	// the record comes first: the schema lets guest rows change identity only
+	// between the two sides of an open merge record
+	rec := &store.IdentityMerge{ID: id, SurvivorID: s.ID, MergedID: m.ID, MergedStatus: m.Status, Moves: moves,
+		Reason: strings.TrimSpace(reason), MergedBy: actor, MergedAt: now}
+	if err := tx.InsertIdentityMerge(rec); err != nil {
+		return nil, err
+	}
 	for _, mv := range moves {
 		if err := tx.ApplyMove(mv, s.ID); err != nil {
 			return nil, err
 		}
 	}
 	if err := tx.SetIdentityStatus(m.ID, store.IdentityStatusMerged); err != nil {
-		return nil, err
-	}
-	if moves == nil {
-		moves = []store.MergeMove{}
-	}
-	rec := &store.IdentityMerge{ID: id, SurvivorID: s.ID, MergedID: m.ID, MergedStatus: m.Status, Moves: moves,
-		Reason: strings.TrimSpace(reason), MergedBy: actor, MergedAt: now}
-	if err := tx.InsertIdentityMerge(rec); err != nil {
 		return nil, err
 	}
 	return rec, nil
@@ -341,8 +362,13 @@ type UnmergeResult struct {
 	Kept     []store.MergeMove // changed since the merge (or gone): left as they are
 }
 
-// Unmerge undoes a merge.
+// Unmerge undoes a merge within the default window.
 func Unmerge(tx *store.TenantTx, mergeID, reason, actor string, now time.Time) (*UnmergeResult, error) {
+	return UnmergeWithin(tx, mergeID, reason, actor, now, UnmergeWindow)
+}
+
+// UnmergeWithin undoes a merge made at most window ago.
+func UnmergeWithin(tx *store.TenantTx, mergeID, reason, actor string, now time.Time, window time.Duration) (*UnmergeResult, error) {
 	if err := checkReason(reason); err != nil {
 		return nil, err
 	}
@@ -355,8 +381,8 @@ func Unmerge(tx *store.TenantTx, mergeID, reason, actor string, now time.Time) (
 	if m.UnmergedAt != nil {
 		return nil, refuse(409, "already_unmerged", "the merge was already undone")
 	}
-	if now.Sub(m.MergedAt) > UnmergeWindow {
-		return nil, refuse(409, "unmerge_window_passed", "merges can be undone for 180 days")
+	if now.Sub(m.MergedAt) > window {
+		return nil, refuse(409, "unmerge_window_passed", fmt.Sprintf("merges can be undone for %d days", int(window/(24*time.Hour))))
 	}
 	s, err := tx.Identity(m.SurvivorID)
 	if err != nil {

@@ -9,12 +9,13 @@ import (
 // (schema/0227_sponsorships.sql, issue #65). Every statement binds @tenant.
 
 // Sponsorship statuses. Active and transfer-pending sponsorships are live: the
-// guest has access under them. The last three are final.
+// guest has access under them. The last three are final; suspended is not.
 const (
 	SponsorRequested       = "requested"
 	SponsorPendingApproval = "pending_approval"
 	SponsorActive          = "active"
 	SponsorTransferPending = "transfer_pending"
+	SponsorSuspended       = "suspended" // held after its sponsor left: no access, not live, not final
 	SponsorEnded           = "ended"
 	SponsorRevoked         = "revoked"
 	SponsorRejected        = "rejected"
@@ -167,7 +168,7 @@ var (
 	sponsorDue = tq("sponsorships.due", `
 		SELECT `+sponsorCols+` FROM sponsorships s WHERE s.tenant_id = @tenant
 			AND ((s.status = 'transfer_pending' AND s.transfer_deadline <= @now)
-				OR (s.status IN ('pending_approval','active','transfer_pending') AND s.ends_at <= @now))
+				OR (s.status IN ('pending_approval','active','transfer_pending','suspended') AND s.ends_at <= @now))
 		ORDER BY s.ends_at, s.id`)
 
 	sponsorEventInsert = tq("sponsorship_events.insert", `

@@ -2,6 +2,7 @@ import { FormEvent, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ListChecks } from "lucide-react";
 import { HrisEvent, IdentityRow, api, fmtDate, useApi } from "../../api";
+import { GuestKpis } from "./GuestKpis";
 import { Badge, Button, Callout, Chip, EmptyState, Loading, Page, Segmented, Status, Tone, useConfirm, useToast, GovernanceTabs } from "../../components";
 
 interface Step { action: string; detail: string; system: string }
@@ -183,7 +184,8 @@ export function Lifecycle() {
   const rows = data.filter((e) => status === "all" || e.status === "pending");
   return (
     <Page tabs={<GovernanceTabs />} title="Lifecycle: joiners, movers and leavers" crumbs={crumbs} sub="Workday events drive provisioning plans across every connected system. A leaver plan also re-homes the machine identities and AI agents the person owned, and revokes delegations made on their behalf.">
-      <div className="grid list-detail">
+      <GuestKpis />
+      <div className="grid list-detail mt">
         <div className="stack">
           <div className="card flush">
             <div className="card-h">

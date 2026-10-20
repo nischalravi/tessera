@@ -1,0 +1,25 @@
+{
+  "kind": "admin#directory#users",
+  "users": [
+    {
+      "id": "10000000003",
+      "primaryEmail": "cy.placeholder@example.com",
+      "name": {"fullName": "Cy Placeholder"},
+      "suspended": false,
+      "archived": true,
+      "lastLoginTime": "2025-03-01T10:00:00.000Z",
+      "creationTime": "2022-01-10T09:00:00.000Z",
+      "orgUnitPath": "/Finance",
+      "externalIds": [{"type": "custom", "customType": "Employee ID", "value": "EMP-3003"}]
+    },
+    {
+      "id": "10000000001",
+      "primaryEmail": "ada.fixture@example.com",
+      "name": {"fullName": "Ada Fixture (duplicate row)"}
+    },
+    {
+      "primaryEmail": "no.id@example.com",
+      "name": {"fullName": "No Id"}
+    }
+  ]
+}

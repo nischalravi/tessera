@@ -31,10 +31,14 @@ const (
 const IdentityStatusMerged = "merged"
 
 // MergeMove is one row a merge re-pointed from the merged identity to the survivor.
+//
+// Rows with a numeric key are named by ID; rows with a text key (the guest
+// tables of schema/0226, 0227 and 0229, and access_request_lines) by Key.
 type MergeMove struct {
-	Table  string `json:"table"`  // accounts, identities, agent_delegations, account_links
-	ID     int64  `json:"id"`     // the row (account_links: the account id)
-	Column string `json:"column"` // identity_id, owner_id, manager_id, principal_id
+	Table  string `json:"table"` // accounts, identities, agent_delegations, account_links, identity_source_records, ...
+	ID     int64  `json:"id"`    // the row (account_links: the account id)
+	Key    string `json:"key,omitempty"`
+	Column string `json:"column"` // identity_id, owner_id, manager_id, principal_id, guest_identity_id, ...
 }
 
 // IdentityMerge is a recorded merge.
@@ -237,7 +241,17 @@ func (tx *TenantTx) MoveRef(m MergeMove) (*int64, error) {
 			return l.IdentityID, nil
 		}
 	default:
-		return nil, fmt.Errorf("store: unknown merge move %s.%s", m.Table, m.Column)
+		sp, ok := moveSpecs[m.Table+"."+m.Column]
+		if !ok {
+			return nil, fmt.Errorf("store: unknown merge move %s.%s", m.Table, m.Column)
+		}
+		err = tx.queryRow(sp.get, sp.arg(m)).Scan(&v)
+		if err == nil {
+			return intp(v), nil
+		}
+		if errors.Is(err, sql.ErrNoRows) {
+			err = ErrNotFound
+		}
 	}
 	return nil, err
 }
@@ -258,7 +272,11 @@ func (tx *TenantTx) ApplyMove(m MergeMove, ref int64) error {
 	case "account_links.identity_id":
 		res, err = tx.exec(accountLinksSetIdentity, sql.Named("account_id", m.ID), sql.Named("identity_id", ref))
 	default:
-		return fmt.Errorf("store: unknown merge move %s.%s", m.Table, m.Column)
+		sp, ok := moveSpecs[m.Table+"."+m.Column]
+		if !ok {
+			return fmt.Errorf("store: unknown merge move %s.%s", m.Table, m.Column)
+		}
+		res, err = tx.exec(sp.set, sp.arg(m), sql.Named("ref", ref))
 	}
 	return affectedOne(res, err)
 }
@@ -338,4 +356,62 @@ func affectedOne(res sql.Result, err error) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// moveSpec is how one more table's identity column is read and set by a merge:
+// the guest tables, keyed by a text id (or, for identity_lifecycle, its row id).
+type moveSpec struct {
+	get, set tstmt
+	text     bool
+}
+
+func (sp moveSpec) arg(m MergeMove) sql.NamedArg {
+	if sp.text {
+		return sql.Named("key", m.Key)
+	}
+	return sql.Named("key", m.ID)
+}
+
+var (
+	move_identity_source_records_identity_id_get  = tq("identity_source_records.move_get.identity_id", `SELECT t.identity_id FROM identity_source_records t WHERE t.tenant_id = @tenant AND t.id = @key`)
+	move_identity_source_records_identity_id_set  = tq("identity_source_records.move_set.identity_id", `UPDATE identity_source_records SET identity_id = @ref WHERE tenant_id = @tenant AND id = @key`)
+	move_identity_identifiers_identity_id_get     = tq("identity_identifiers.move_get.identity_id", `SELECT t.identity_id FROM identity_identifiers t WHERE t.tenant_id = @tenant AND t.id = @key`)
+	move_identity_identifiers_identity_id_set     = tq("identity_identifiers.move_set.identity_id", `UPDATE identity_identifiers SET identity_id = @ref WHERE tenant_id = @tenant AND id = @key`)
+	move_affiliations_identity_id_get             = tq("affiliations.move_get.identity_id", `SELECT t.identity_id FROM affiliations t WHERE t.tenant_id = @tenant AND t.id = @key`)
+	move_affiliations_identity_id_set             = tq("affiliations.move_set.identity_id", `UPDATE affiliations SET identity_id = @ref WHERE tenant_id = @tenant AND id = @key`)
+	move_sponsorships_guest_identity_id_get       = tq("sponsorships.move_get.guest_identity_id", `SELECT t.guest_identity_id FROM sponsorships t WHERE t.tenant_id = @tenant AND t.id = @key`)
+	move_sponsorships_guest_identity_id_set       = tq("sponsorships.move_set.guest_identity_id", `UPDATE sponsorships SET guest_identity_id = @ref WHERE tenant_id = @tenant AND id = @key`)
+	move_sponsorships_sponsor_identity_id_get     = tq("sponsorships.move_get.sponsor_identity_id", `SELECT t.sponsor_identity_id FROM sponsorships t WHERE t.tenant_id = @tenant AND t.id = @key`)
+	move_sponsorships_sponsor_identity_id_set     = tq("sponsorships.move_set.sponsor_identity_id", `UPDATE sponsorships SET sponsor_identity_id = @ref WHERE tenant_id = @tenant AND id = @key`)
+	move_guest_bundle_items_guest_identity_id_get = tq("guest_bundle_items.move_get.guest_identity_id", `SELECT t.guest_identity_id FROM guest_bundle_items t WHERE t.tenant_id = @tenant AND t.id = @key`)
+	move_guest_bundle_items_guest_identity_id_set = tq("guest_bundle_items.move_set.guest_identity_id", `UPDATE guest_bundle_items SET guest_identity_id = @ref WHERE tenant_id = @tenant AND id = @key`)
+	move_access_request_lines_beneficiary_id_get  = tq("access_request_lines.move_get.beneficiary_id", `SELECT t.beneficiary_id FROM access_request_lines t WHERE t.tenant_id = @tenant AND t.id = @key`)
+	move_access_request_lines_beneficiary_id_set  = tq("access_request_lines.move_set.beneficiary_id", `UPDATE access_request_lines SET beneficiary_id = @ref WHERE tenant_id = @tenant AND id = @key`)
+	move_identity_lifecycle_identity_id_get       = tq("identity_lifecycle.move_get.identity_id", `SELECT t.identity_id FROM identity_lifecycle t WHERE t.tenant_id = @tenant AND t.id = @key`)
+	move_identity_lifecycle_identity_id_set       = tq("identity_lifecycle.move_set.identity_id", `UPDATE identity_lifecycle SET identity_id = @ref WHERE tenant_id = @tenant AND id = @key`)
+)
+
+var moveSpecs = map[string]moveSpec{
+	"identity_source_records.identity_id":  {get: move_identity_source_records_identity_id_get, set: move_identity_source_records_identity_id_set, text: true},
+	"identity_identifiers.identity_id":     {get: move_identity_identifiers_identity_id_get, set: move_identity_identifiers_identity_id_set, text: true},
+	"affiliations.identity_id":             {get: move_affiliations_identity_id_get, set: move_affiliations_identity_id_set, text: true},
+	"sponsorships.guest_identity_id":       {get: move_sponsorships_guest_identity_id_get, set: move_sponsorships_guest_identity_id_set, text: true},
+	"sponsorships.sponsor_identity_id":     {get: move_sponsorships_sponsor_identity_id_get, set: move_sponsorships_sponsor_identity_id_set, text: true},
+	"guest_bundle_items.guest_identity_id": {get: move_guest_bundle_items_guest_identity_id_get, set: move_guest_bundle_items_guest_identity_id_set, text: true},
+	"access_request_lines.beneficiary_id":  {get: move_access_request_lines_beneficiary_id_get, set: move_access_request_lines_beneficiary_id_set, text: true},
+	"identity_lifecycle.identity_id":       {get: move_identity_lifecycle_identity_id_get, set: move_identity_lifecycle_identity_id_set, text: false},
+}
+
+var lifecycleRowID = tq("identity_lifecycle.row_id", `
+	SELECT l.id FROM identity_lifecycle l WHERE l.tenant_id = @tenant AND l.identity_id = @identity_id`)
+
+// LifecycleRowID returns the row id of an identity's lifecycle record (the key
+// of a merge move), or ErrNotFound.
+func (tx *TenantTx) LifecycleRowID(identityID int64) (int64, error) {
+	var id int64
+	err := tx.queryRow(lifecycleRowID, sql.Named("identity_id", identityID)).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	return id, err
 }

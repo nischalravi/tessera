@@ -51,6 +51,7 @@ func (s *Server) registerReadinessRoutes() {
 	s.registerValidationRoutes()
 	s.registerDryRunRoutes()
 	s.registerHealthRoutes()
+	s.registerMFARoutes()
 }
 
 // rdFunc is a readiness handler: it returns the status and body to send.

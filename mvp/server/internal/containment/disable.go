@@ -91,6 +91,9 @@ func Disable(c *store.TenantTx, identityID int64, by, reason, status string, now
 	if err != nil {
 		return nil, err
 	}
+	if _, err := c.RevokeMCPTokensOfIdentity(identityID, auth.RevokedIdentityDisabled, now); err != nil {
+		return nil, err
+	}
 	res.Users = []string{}
 	for _, u := range users {
 		uid, err := uuid.Parse(u)

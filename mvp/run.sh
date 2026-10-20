@@ -93,6 +93,8 @@ seed() {
 
 case "${1:-}" in
   test)
+    # Launcher-only defaults must not affect production-refusal tests.
+    unset TESSERA_DEV_FAKE_TARGET
     cd "$SERVER"
     "$GO" vet ./...
     # the test-only session helper (internal/auth/authtest) runs only with TESSERA_ENV=test

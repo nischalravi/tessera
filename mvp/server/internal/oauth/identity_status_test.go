@@ -145,3 +145,26 @@ func TestDeviceApproveInactiveIdentity(t *testing.T) {
 		t.Errorf("approve by a terminated user: %d %s", r.Status, r.Raw)
 	}
 }
+
+// TestIntrospectInactiveIdentity (#359): a CLI token whose user's identity is
+// not active introspects as inactive, even where nothing revoked the session.
+func TestIntrospectInactiveIdentity(t *testing.T) {
+	for _, status := range []string{"terminated", "disabled", "merged"} {
+		t.Run(status, func(t *testing.T) {
+			h := newHarness(t)
+			k := newKey(t)
+			gw := h.addMachine(machineOpts{scopes: []string{ScopeIntrospect}})
+			l, id, _ := h.linkedLogin(slugA, "alice@a.example")
+			d := h.startDevice(slugA, nil)
+			h.approve(l, d.UserCode, "approve")
+			tk := tokensOf(t, h.devicePoll(slugA, d, k))
+			if r := h.introspect(gw, tk.Access); r.Status != 200 || r.Body["active"] != true {
+				t.Fatalf("before: %d %s", r.Status, r.Raw)
+			}
+			h.mutateTenant(slugA, func(tx *store.TenantTx) error { return tx.SetIdentityStatus(id, status) })
+			if r := h.introspect(gw, tk.Access); r.Status != 200 || r.Body["active"] != false || len(r.Body) != 1 {
+				t.Errorf("after: %d %s", r.Status, r.Raw)
+			}
+		})
+	}
+}

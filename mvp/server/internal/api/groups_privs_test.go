@@ -482,7 +482,15 @@ func TestPrivs_PlatformUserIdentityLink(t *testing.T) {
 	if rec := e.admin.do("PUT", path, `{"identity_id":0}`); rec.Code != 422 {
 		t.Errorf("identity 0 = %d", rec.Code)
 	}
-	e.admin.call("PUT", path, `{"identity_id":null}`, 200)
+	// removing an existing link needs a second admin (#357), and it ends dave's sessions
+	e.admin.call("PUT", path, `{"identity_id":null}`, 202)
+	dave.call("PATCH", "/api/groups/"+g, `{"description":"still linked"}`, 200)
+	e.as("admin2", []auth.Role{auth.RoleTenantAdmin}, nil).call("PUT", path, `{"identity_id":null}`, 200)
+	if rec := dave.do("PATCH", "/api/groups/"+g, `{"description":"unlinked"}`); rec.Code != http.StatusUnauthorized {
+		t.Errorf("dave's session after the unlink = %d, want 401", rec.Code)
+	}
+	dave = grpClient{client{t, signIn(t, e.f.DB, e.f.B.ID, authtest.User{Email: "dave@b.example", Roles: []auth.Role{auth.RoleOperator}},
+		authtest.Phr, storetest.Now).Handler(e.srv.Handler())}}
 	denied(t, dave, "PATCH", "/api/groups/"+g, `{"description":"unlinked"}`, "admin")
 	err := e.f.DB.ReadTenant(context.Background(), e.f.B.ID, func(tx *store.TenantTx) error {
 		for action, want := range map[string]int{"groups.user.identity_linked": 1, "groups.user.identity_unlinked": 1,
@@ -533,5 +541,130 @@ func TestPrivs_TenantIsolation(t *testing.T) {
 	}
 	if got := a.call("GET", "/api/groups/"+ag+"/privileges", "", 200)["items"].([]any); len(got) != 1 {
 		t.Errorf("A's rows after B's attempts = %v", got)
+	}
+}
+
+// TestPrivs_IdentityLinkFourEyes (#357): the user-identity link feeds the
+// inactive-identity sign-in block and every self check, so one admin cannot
+// lift a termination or a self check by changing it.
+func TestPrivs_IdentityLinkFourEyes(t *testing.T) {
+	e := newPrivEnv(t)
+	h := e.srv.Handler()
+	login := func(name string, roles []auth.Role, identity *int64) authtest.Login {
+		return signIn(t, e.f.DB, e.f.B.ID, authtest.User{Email: name + "@b.example", Roles: roles, IdentityID: identity}, authtest.Phr, storetest.Now)
+	}
+	put := func(by authtest.Login, user authtest.Login, body string) (int, string) {
+		t.Helper()
+		rec := corrDo(h, by, "PUT", "/api/groups/users/"+user.UserID.String()+"/identity", body)
+		return rec.Code, rec.Body.String()
+	}
+	want := func(name string, code int, body string, status int, errCode string) {
+		t.Helper()
+		if code != status || (errCode != "" && !strings.Contains(body, `"`+errCode+`"`)) {
+			t.Errorf("%s: %d %s, want %d %s", name, code, body, status, errCode)
+		}
+	}
+	linkOf := func(user authtest.Login) *int64 {
+		t.Helper()
+		var id *int64
+		if err := e.f.DB.ReadTenant(context.Background(), e.f.B.ID, func(c *store.TenantTx) error {
+			u, err := c.PlatformUser(user.UserID)
+			if err == nil {
+				id = u.IdentityID
+			}
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	setStatus := func(identity int64, status string) {
+		t.Helper()
+		if err := e.f.DB.InTenant(context.Background(), e.f.B.ID, func(c *store.TenantTx) error {
+			return c.SetIdentityStatus(identity, status)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	admins := []auth.Role{auth.RoleTenantAdmin}
+	bob, carol, dave := e.ident("bob"), e.ident("carol"), e.ident("dave")
+	a1 := login("a1", admins, &bob)
+	a2 := login("a2", admins, nil)
+
+	// nobody changes their own link, even to drop it before approving their own request
+	code, body := put(a1, a1, `{"identity_id":null}`)
+	want("own link", code, body, 403, "self_link_not_allowed")
+	if l := linkOf(a1); l == nil || *l != bob {
+		t.Fatalf("a1's link changed: %v", l)
+	}
+
+	// a user is linked only to an active identity
+	setStatus(dave, "terminated")
+	fresh := login("fresh", []auth.Role{auth.RoleOperator}, nil)
+	code, body = put(a1, fresh, fmt.Sprintf(`{"identity_id":%d}`, dave))
+	want("link to a terminated identity", code, body, 409, "identity_not_active")
+
+	// a terminated or disabled person's link stays, so sign-in stays blocked
+	for _, st := range []string{"terminated", "disabled"} {
+		setStatus(carol, "active")
+		pat := login("pat-"+st, []auth.Role{auth.RolePolicyAdmin}, &carol)
+		setStatus(carol, st)
+		for _, by := range []authtest.Login{a1, a2} {
+			code, body = put(by, pat, `{"identity_id":null}`)
+			want(st+": unlink", code, body, 409, "identity_inactive")
+			code, body = put(by, pat, fmt.Sprintf(`{"identity_id":%d}`, bob))
+			want(st+": relink", code, body, 409, "identity_inactive")
+		}
+		if l := linkOf(pat); l == nil || *l != carol {
+			t.Errorf("%s: the link changed: %v", st, l)
+		}
+		if err := e.f.DB.ReadTenant(context.Background(), e.f.B.ID, func(c *store.TenantTx) error {
+			u, err := c.PlatformUser(pat.UserID)
+			if err != nil {
+				return err
+			}
+			if off, err := auth.IdentityInactive(c, u); err != nil || !off {
+				t.Errorf("%s: IdentityInactive = %v, %v", st, off, err)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setStatus(carol, "active")
+
+	// changing an existing link takes two admins
+	vic := login("vic", []auth.Role{auth.RoleOperator}, &bob)
+	code, body = put(a1, vic, `{"identity_id":null}`)
+	want("first admin's unlink", code, body, 202, "pending_second_admin")
+	code, body = put(a1, vic, `{"identity_id":null}`)
+	want("same admin again", code, body, 403, "four_eyes_required")
+	if l := linkOf(vic); l == nil || *l != bob {
+		t.Fatalf("one admin changed the link: %v", l)
+	}
+	if rec := corrDo(h, vic, "GET", "/api/connectors", ""); rec.Code != 200 {
+		t.Fatalf("vic's session before the change: %d", rec.Code)
+	}
+	// a different change by the second admin replaces the request; it is theirs now
+	code, body = put(a2, vic, fmt.Sprintf(`{"identity_id":%d}`, carol))
+	want("second admin's different change", code, body, 202, "pending_second_admin")
+	code, body = put(a2, vic, fmt.Sprintf(`{"identity_id":%d}`, carol))
+	want("second admin again", code, body, 403, "four_eyes_required")
+	// the first admin confirms it
+	code, body = put(a1, vic, fmt.Sprintf(`{"identity_id":%d}`, carol))
+	want("confirmed", code, body, 200, "")
+	if l := linkOf(vic); l == nil || *l != carol {
+		t.Fatalf("the confirmed change was not applied: %v", l)
+	}
+	if rec := corrDo(h, vic, "GET", "/api/connectors", ""); rec.Code != http.StatusUnauthorized {
+		t.Errorf("vic's session after the change: %d, want 401", rec.Code)
+	}
+	// the request was consumed: the next change starts over
+	code, body = put(a2, vic, `{"identity_id":null}`)
+	want("next change", code, body, 202, "pending_second_admin")
+
+	got := auditActions(t, e.f, e.f.B.ID)
+	if got["groups.user.identity_change_requested"] != 3 || got["groups.user.identity_linked"] != 1 || got["groups.user.identity_unlinked"] != 0 {
+		t.Errorf("audit actions %v", got)
 	}
 }

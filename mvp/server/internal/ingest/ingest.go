@@ -4,7 +4,8 @@
 // resolve (e.g. an Okta group -> AWS role edge emitted by the AWS connector):
 //
 //	identities -> resources -> permissions -> groups -> accounts
-//	-> edges -> secrets -> delegations -> events
+//	-> auth methods and sign-in signals -> edges -> secrets -> delegations
+//	-> MFA snapshot -> events
 //
 // Every phase is an idempotent upsert keyed on the natural key, scoped to the
 // tenant of the transaction it runs in.
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/mfa"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
@@ -172,6 +174,9 @@ func (r *Resolver) ID(kind, system, xid string) (int64, bool) {
 // DiscoveryStats counts records ingested per type (keys in API order).
 type DiscoveryStats struct {
 	Identities, Resources, Permissions, Groups, Accounts, Edges, Secrets, Delegations int
+	// Agents and MCPFindings (issue #116) are not in Object(): the sync
+	// response keeps its shape.
+	Agents, MCPFindings int
 }
 
 // Object renders the stats as an ordered JSON object.
@@ -273,6 +278,10 @@ func discovery(c *store.TenantTx, now time.Time, results []*connectors.Discovery
 	if err := res.Refresh(); err != nil {
 		return st, err
 	}
+	// 5b. authentication methods and sign-in signals of those accounts
+	if err := authPosture(c, res, now, results); err != nil {
+		return st, err
+	}
 	// 6. edges
 	seen := map[[2]string]bool{}
 	for _, r := range results {
@@ -347,6 +356,16 @@ func discovery(c *store.TenantTx, now time.Time, results []*connectors.Discovery
 		return st, err
 	}
 	st.Delegations = len(dels)
+	// 9. today's MFA coverage, now that groups and grants are in place
+	if authPostureRan(results) {
+		if err := mfa.RecordSnapshot(c, now); err != nil {
+			return st, err
+		}
+	}
+	// 10. agent profiles and MCP findings (issue #116)
+	if err := agentDiscovery(c, now, results, &st); err != nil {
+		return st, err
+	}
 	return st, nil
 }
 

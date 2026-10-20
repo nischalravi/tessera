@@ -1,0 +1,14 @@
+{
+  "ARN": "arn:aws:secretsmanager:eu-west-1:123456789012:secret:{{.Name}}-AbCdEf",
+  "Name": "{{.Name}}",
+  "Versions": [
+{{- range $i, $v := .Versions}}{{if $i}},{{end}}
+    {
+      "CreatedDate": {{$v.Created}},
+      "LastAccessedDate": {{$v.Accessed}},
+      "VersionId": "{{$v.ID}}",
+      "VersionStages": [{{range $j, $s := $v.Stages}}{{if $j}}, {{end}}"{{$s}}"{{end}}]
+    }
+{{- end}}
+  ]
+}

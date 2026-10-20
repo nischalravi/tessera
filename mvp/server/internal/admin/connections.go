@@ -140,6 +140,9 @@ func (s *Service) DisableUser(ctx context.Context, p *auth.Principal, id uuid.UU
 		if err != nil {
 			return err
 		}
+		if _, err := tx.RevokeMCPTokensOfUser(id, auth.RevokedUserDisabled, now); err != nil {
+			return err
+		}
 		if _, err := audit.Record(tx.Context(), tx, "admin.user.disabled", ojson.Object{{Key: "user_id", Value: id.String()},
 			{Key: "reason", Value: reason}, {Key: "sessions_revoked", Value: n}, {Key: "by", Value: p.Display}},
 			audit.At(now), audit.Target("platform_user", id.String())); err != nil {

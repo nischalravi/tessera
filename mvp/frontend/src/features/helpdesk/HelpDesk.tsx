@@ -196,7 +196,8 @@ function CasePanel({ c, onClose, onChanged }: { c: HelpdeskCase; onClose: () => 
 
       <h3 className="h-sm mt">Verification policy</h3>
       <p className="small muted">
-        {c.privileged ? "Privileged identity: two different methods and a second approver who is not the requester." : "One verification method."}
+        {c.privileged ? "Privileged identity: two different methods and a second approver who is not the requester." : "One verification method."}{" "}
+        A second operator, not the requester, records any call-back and runs the reset.
       </p>
       <ul className="plain-list" aria-label="Policy status">
         <li><Badge tone={p.counted_methods.length >= p.required_verifications ? "ok" : "warning"}>{p.counted_methods.length} of {p.required_verifications}</Badge>{" "}

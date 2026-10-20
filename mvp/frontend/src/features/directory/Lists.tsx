@@ -1,19 +1,23 @@
 import { FormEvent, useMemo, useState } from "react";
 import { Outlet, useNavigate, useSearchParams } from "react-router-dom";
 import { Ban, ClipboardCheck, KeyRound, Plus, RotateCcw, ShoppingCart, UserCheck, Users } from "lucide-react";
-import { AccountRow, ConnectorRow, Group, HrisEvent, IdentityRow, NhiRow, OrgRow, ResourceRow, api, fmtDay, relTime, useApi, LifecycleList, orgsPath } from "../../api";
+import { AccountRow, AffiliationSummaryRow, ConnectorRow, Group, HrisEvent, IdentityRow, NhiRow, OrgRow, ResourceRow, api, fmtDay, relTime, useAIAgents, useApi, LifecycleList, orgsPath } from "../../api";
 import { useIdentityActions } from "../../app/actions";
 import { useSession } from "../../app/auth";
 import { usePersona } from "../../app/persona";
 import {
-  Avatar, Badge, Button, Callout, Chip, Column, Command, DataTable, Drawer, EmptyState, Flag, GroupTabs, IdLink, Page, RiskPill, Status, TypeBadge, useSelected, useToast,
+  Avatar, Badge, Button, Callout, Chip, Column, Command, DataTable, Drawer, EmptyState, Flag, GroupTabs, IdLink, Page, RiskPill, Status, Tabs, TypeBadge, useSelected, useToast,
 } from "../../components";
 import { mockObjects } from "../../mocks";
+import { identityRotation, SECRET_STATUS_LABEL, SECRET_STATUS_TONE } from "../rotation/model";
+import { PlanDrawer, useRotationStatus } from "../rotation/shared";
 import { AgentCard } from "./AgentCards";
+import { McpFindings, SponsorCell, sourceLabel } from "./AgentFindings";
 import { StateBadge, WORKER_LABEL } from "../lifecycle/parts";
 import { AccountPanel, AppPanel, GroupPanel, IdentityPanel, OrgPanel } from "./Panels";
 import { BulkOwnerDrawer } from "./owners";
 import { ImportDrawer, PreviewFormDrawer, opts, uniq } from "./shared";
+import { AFFILIATION_LABEL, STATE_LABEL as PERSON_STATE_LABEL } from "./affiliationModel";
 
 /** Identity lists each render their own page header; the layout only hosts them. */
 export function DirectoryLayout() {
@@ -128,6 +132,8 @@ export function People() {
   const { data, error, reload } = useApi<IdentityRow[]>("/identities?type=human");
   const { data: lc } = useApi<LifecycleList>("/lifecycle");
   const worker = useMemo(() => new Map((lc?.rows ?? []).map((l) => [l.person.id, l])), [lc]);
+  const { data: aff } = useApi<{ people: AffiliationSummaryRow[] }>("/affiliation-summary");
+  const affOf = useMemo(() => new Map((aff?.people ?? []).map((a) => [a.identity_id, a])), [aff]);
   const [selected, setSelected] = useSelected();
   const acts = useIdentityActions();
   const nav = useNavigate();
@@ -155,6 +161,8 @@ export function People() {
           { id: "dept", label: "Department", options: opts(uniq((data ?? []).map((r) => r.department))), get: (r) => r.department },
           { id: "worker", label: "Worker type", options: Object.entries(WORKER_LABEL).map(([value, label]) => ({ value, label })), get: (r) => worker.get(r.id)?.worker_type ?? "employee" },
           { id: "status", label: "Status", options: opts(["active", "disabled", "terminated"]), get: (r) => r.status },
+          { id: "affiliation", label: "Affiliation", options: Object.entries(AFFILIATION_LABEL).map(([value, label]) => ({ value, label })), get: (r) => affOf.get(r.id)?.types ?? [] },
+          { id: "lifecycle", label: "Lifecycle state", options: Object.entries(PERSON_STATE_LABEL).map(([value, label]) => ({ value, label })), get: (r) => affOf.get(r.id)?.lifecycle_state ?? "" },
           { id: "system", label: "System", options: opts(uniq((data ?? []).flatMap((r) => r.systems))), get: (r) => r.systems },
         ]}
         commands={[
@@ -181,7 +189,18 @@ export function People() {
 
 // -------------------------------------------------------- machine identities
 export function Machine() {
+  const [params, setParams] = useSearchParams();
+  const tab = params.get("tab") === "mcp" ? "mcp" : "inventory";
+  const setTab = (t: "inventory" | "mcp") => {
+    const next = new URLSearchParams(params);
+    if (t === "mcp") next.set("tab", "mcp");
+    else next.delete("tab");
+    next.delete("selected");
+    setParams(next, { replace: true });
+  };
   const { data, error, reload } = useApi<NhiRow[]>("/nhi");
+  const { data: agentRows } = useAIAgents();
+  const agentOf = useMemo(() => new Map((agentRows ?? []).map((a) => [a.id, a])), [agentRows]);
   const [selected, setSelected] = useSelected();
   const acts = useIdentityActions();
   const toast = useToast();
@@ -191,18 +210,43 @@ export function Machine() {
   const { can } = useSession();
   const [assign, setAssign] = useState<NhiRow[] | null>(null);
   const [showAgents, setShowAgents] = useState(false);
+  const [rotate, setRotate] = useState<{ title: string; ids: number[] } | null>(null);
+  const rot = useRotationStatus();
+  const rotationOf = (r: NhiRow) => identityRotation(r.secrets.map((s) => rot.get(s.id)).filter((x): x is NonNullable<typeof x> => !!x));
   const cols: Column<NhiRow>[] = [
     { id: "name", header: "Name", sort: (r) => r.name.toLowerCase(), csv: (r) => r.name, cell: (r) => <div className="row" style={{ flexWrap: "nowrap" }}><Avatar name={r.name} type={r.type} /><div style={{ minWidth: 0 }}><span className="name-link">{r.name}</span><div className="xs faint truncate">{r.kind}</div></div></div> },
     { id: "type", header: "Type", sort: (r) => r.type, cell: (r) => <TypeBadge type={r.type} />, hideNarrow: true },
     { id: "owner", header: "Owner", sort: (r) => r.owner?.name ?? "", cell: (r) => (r.owner ? <span className="small nowrap"><IdLink i={r.owner} /></span> : <Badge tone="critical">No owner</Badge>) },
+    // where an AI agent was discovered, and who created it (issue #116); other machine identities have none
+    {
+      id: "source", header: "Source", sort: (r) => agentOf.get(r.id)?.source ?? "", csv: (r) => agentOf.get(r.id)?.source ?? "",
+      cell: (r) => {
+        const a = agentOf.get(r.id);
+        return a ? <div><Chip mono>{sourceLabel(a.source)}</Chip>{a.creator && <div className="xs faint truncate">created by {a.creator}</div>}</div> : <span className="faint">-</span>;
+      },
+      hideNarrow: true,
+    },
+    // the sponsor is the owner the nhi-ownership policy checks, so "No sponsor" here is a violation there
+    {
+      id: "sponsor", header: "Sponsor", sort: (r) => agentOf.get(r.id)?.sponsor_status ?? "", csv: (r) => agentOf.get(r.id)?.sponsor_status ?? "",
+      cell: (r) => { const a = agentOf.get(r.id); return a ? <SponsorCell a={a} /> : <span className="faint">-</span>; },
+    },
     { id: "systems", header: "Systems", csv: (r) => r.systems.join(" "), cell: (r) => <div className="row tight" style={{ flexWrap: "nowrap" }}>{r.systems.map((s) => <Chip key={s} mono>{s}</Chip>)}</div>, hideNarrow: true },
     { id: "secret", header: "Oldest secret", num: true, sort: (r) => r.oldest_secret_days ?? -1, cell: (r) => (r.oldest_secret_days == null ? <span className="faint">-</span> : r.oldest_secret_days > 90 ? <Badge tone="warning">{r.oldest_secret_days} d</Badge> : `${r.oldest_secret_days} d`) },
+    { id: "rotation", header: "Rotation", sort: (r) => rotationOf(r)?.key ?? "", csv: (r) => { const x = rotationOf(r); return x ? SECRET_STATUS_LABEL[x.key] : ""; }, cell: (r) => { const x = rotationOf(r); return x ? <Badge tone={SECRET_STATUS_TONE[x.key]} dot>{SECRET_STATUS_LABEL[x.key]}{x.count > 1 ? ` (${x.count})` : ""}</Badge> : <span className="faint">-</span>; }, hideNarrow: true },
     { id: "last", header: "Last active", sort: (r) => r.days_since_activity ?? 9999, cell: (r) => <span className="small nowrap">{r.days_since_activity == null ? "never" : r.days_since_activity === 0 ? "today" : `${r.days_since_activity} d ago`}</span>, hideNarrow: true },
     { id: "flags", header: "Flags", csv: (r) => r.flags.join(" "), cell: (r) => <div className="row tight">{r.flags.map((f) => <Flag key={f} f={f} />)}</div> },
     { id: "risk", header: "Risk", sort: (r) => r.risk, csv: (r) => r.risk, cell: (r) => <RiskPill score={r.risk} /> },
   ];
   return (
     <Page title="Machine identities & agents" count={plural(data?.length, "identity", "identities")} crumbs={[IDENTITY, ["Machine identities & agents"]]}>
+      <Tabs
+        label="Machine identities and agents"
+        value={tab}
+        onChange={setTab}
+        tabs={[{ id: "inventory", label: "Inventory" }, { id: "mcp", label: "MCP config findings" }]}
+      />
+      {tab === "mcp" ? <McpFindings /> : <>
       <DataTable
         id="machine"
         rows={data}
@@ -210,18 +254,24 @@ export function Machine() {
         rowKey={(r) => r.id}
         columns={cols}
         initialSort={["risk", -1]}
-        searchText={(r) => `${r.name} ${r.kind} ${r.description ?? ""} ${r.owner?.name ?? ""} ${r.systems.join(" ")}`}
+        searchText={(r) => `${r.name} ${r.kind} ${r.description ?? ""} ${r.owner?.name ?? ""} ${r.systems.join(" ")} ${agentOf.get(r.id)?.source ?? ""} ${agentOf.get(r.id)?.creator ?? ""}`}
         searchPlaceholder="Search service accounts, keys, agents…"
         filters={[
           { id: "type", label: "Type", options: [{ value: "service", label: "Service account" }, { value: "ai_agent", label: "AI agent" }], get: (r) => r.type },
           { id: "flag", label: "Flag", options: [["orphaned", "No owner"], ["owner_left", "Owner left"], ["stale_secret", "Stale secret"], ["dormant", "Dormant"], ["privileged", "Privileged"], ["pii_access", "PII access"]].map(([value, label]) => ({ value, label })), get: (r) => r.flags },
           { id: "system", label: "System", options: opts(uniq((data ?? []).flatMap((r) => r.systems))), get: (r) => r.systems },
+          { id: "source", label: "Source", options: opts(uniq((agentRows ?? []).map((a) => a.source))).map((o) => ({ ...o, label: sourceLabel(o.value) })), get: (r) => agentOf.get(r.id)?.source },
+          { id: "sponsor", label: "Sponsor", options: [["active", "Active"], ["inactive", "Inactive"], ["none", "No sponsor"]].map(([value, label]) => ({ value, label })), get: (r) => agentOf.get(r.id)?.sponsor_status },
         ]}
         commands={[newCmd("Register", () => setNew(true), true)]}
         onRefresh={reload}
         bulkActions={[
           ...(can("ownership.manage") ? [{ label: "Assign owner", icon: <UserCheck size={16} />, run: (rs: NhiRow[]) => setAssign(rs) }] : []),
-          { label: "Rotate secrets", icon: <RotateCcw size={16} />, run: async (rs) => { await mockObjects.save("secret", `${rs.length} identities`, "bulk", "update"); toast(`Rotation requested for ${rs.length} identities (preview)`); } },
+          { label: "Rotate secrets…", icon: <RotateCcw size={16} />, run: (rs) => {
+            const ids = rs.flatMap((r) => r.secrets.map((s) => s.id));
+            if (ids.length === 0) toast("None of the selected identities has a recorded secret", { kind: "info" });
+            else setRotate({ title: `Rotate the secrets of ${rs.length} identit${rs.length === 1 ? "y" : "ies"}`, ids });
+          } },
           { label: "Disable", icon: <Ban size={16} />, danger: true, run: (rs) => acts.disableMany(rs) },
         ]}
         rowLabel={(r) => r.name}
@@ -237,7 +287,9 @@ export function Machine() {
           {showAgents && <div className="grid g2">{agents.map((a) => <AgentCard key={a.id} a={a} />)}</div>}
         </div>
       )}
-      {selected && <IdentityPanel id={selected} onClose={() => setSelected(null)} />}
+      </>}
+      {selected && tab === "inventory" && <IdentityPanel id={selected} onClose={() => setSelected(null)} />}
+      {rotate && <PlanDrawer title={rotate.title} secretIds={rotate.ids} onClose={() => { setRotate(null); reload(); }} />}
       {assign && <BulkOwnerDrawer objects={assign.map((r) => ({ kind: "identity", key: String(r.id), label: r.name }))} onClose={() => setAssign(null)} onDone={reload} />}
       {newOpen && (
         <PreviewFormDrawer

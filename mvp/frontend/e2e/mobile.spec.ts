@@ -86,6 +86,16 @@ for (const width of WIDTHS) {
         });
       }
 
+      // issues #366, #367: these pages overflowed at 360 px (the wizard's step list, a select)
+      for (const [name, path] of [["new-connection", "/admin/connections/new"], ["evidence-packs", "/governance/evidence"]] as const) {
+        test(`${name} has no horizontal scroll`, async ({ page }, info) => {
+          await page.goto(path);
+          await settle(page);
+          await shoot(page, info, `${name}-${width}`);
+          expect(await page.evaluate(noHorizontalScroll), `${name}: horizontal scroll`).toBe(true);
+        });
+      }
+
       test("step-up notice is a sheet with full-size buttons", async ({ page }, info) => {
         await page.goto("/inbox");
         await settle(page);

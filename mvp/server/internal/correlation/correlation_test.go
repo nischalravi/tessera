@@ -234,7 +234,9 @@ func TestMerge_MovesAndUnmergeRestores(t *testing.T) {
 	})
 	// carol's account and pin, and bob's and dave's manager, move; alice's own manager
 	// (carol) does not, or alice would manage herself
-	want := map[string]bool{"accounts:identity_id": true, "account_links:identity_id": true, "identities:manager_id": true}
+	// carol's HR source record, identifiers and affiliation move too (guest data model)
+	want := map[string]bool{"accounts:identity_id": true, "account_links:identity_id": true, "identities:manager_id": true,
+		"identity_source_records:identity_id": true, "identity_identifiers:identity_id": true, "affiliations:identity_id": true}
 	for _, mv := range m.Moves {
 		if !want[mv.Table+":"+mv.Column] {
 			t.Errorf("unexpected move %+v", mv)
@@ -243,8 +245,8 @@ func TestMerge_MovesAndUnmergeRestores(t *testing.T) {
 			t.Error("the survivor's own manager was moved")
 		}
 	}
-	if len(m.Moves) != 4 {
-		t.Errorf("moves = %+v, want 4", m.Moves)
+	if len(m.Moves) != 8 {
+		t.Errorf("moves = %+v, want 8 (4 directory rows, 1 source record, 2 identifiers, 1 affiliation)", m.Moves)
 	}
 	if i := w.identity("carol"); i.Status != store.IdentityStatusMerged {
 		t.Errorf("carol status = %s", i.Status)
@@ -279,7 +281,7 @@ func TestMerge_MovesAndUnmergeRestores(t *testing.T) {
 		res, err = correlation.Unmerge(c, "m1", "wrong match", w.actor, storetest.Now.Add(time.Hour))
 		return
 	})
-	if len(res.Restored) != 3 || len(res.Kept) != 1 || res.Kept[0].ID != bob {
+	if len(res.Restored) != 7 || len(res.Kept) != 1 || res.Kept[0].ID != bob {
 		t.Errorf("restored %+v kept %+v", res.Restored, res.Kept)
 	}
 	if i := w.identity("carol"); i.Status != "active" {

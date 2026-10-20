@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -213,12 +214,27 @@ func LeaverPlan(c *store.TenantTx, now time.Time, identityID int64, withImpact b
 			{Key: "target", Value: a.Username}, {Key: "account_id", Value: a.ID},
 			{Key: "detail", Value: fmt.Sprintf(what, a.System, a.Username)}})
 	}
+	// edges a guest's access bundle is already taking out through its own
+	// removal (guest sponsorships end first, issue #75): not planned twice
+	bundleEnding := map[int64]bool{}
+	items, err := c.BundleItems(store.BundleItemFilter{Guest: identityID})
+	if err != nil {
+		return nil, err
+	}
+	for _, it := range items {
+		if it.EdgeID != nil && (it.Status == store.BundleRemoving || it.Status == store.BundleRemoved) {
+			bundleEnding[*it.EdgeID] = true
+		}
+	}
 	for _, a := range accounts {
 		edges, err := c.EdgesFrom(graph.Key("account", a.ID))
 		if err != nil {
 			return nil, err
 		}
 		for _, e := range edges {
+			if bundleEnding[e.ID] {
+				continue
+			}
 			lbl, err := Label(c, e.Dst)
 			if err != nil {
 				return nil, err
@@ -778,11 +794,34 @@ func route(c *store.TenantTx, now time.Time, ch provision.Change) (bool, error) 
 	return routed, err
 }
 
-func stepKey(eventID int64, idx int, action string) string {
-	return fmt.Sprintf("jml:%d:%d:%s", eventID, idx, action)
+// stepKey is the idempotency key of one plan step: base names the run (an HRIS
+// event, or another caller's pass over a leaver's plan), idx the step.
+func stepKey(base string, idx int, action string) string {
+	return fmt.Sprintf("%s:%d:%s", base, idx, action)
 }
 
-func applyStep(c *store.TenantTx, now time.Time, by string, ident *store.Identity, st Step, eventID int64, idx int) error {
+// eventBase is the base of the keys of an HRIS event's steps.
+func eventBase(eventID int64) string { return fmt.Sprintf("jml:%d", eventID) }
+
+// SecretRotator queues a real rotation of a secret a leaver had custody of
+// (internal/rotation.Service). QueueForLeaver reports whether a rotation job
+// is now running for the secret; false means no rotation policy and adapter
+// can rotate it, and the rotate_secret step keeps recording the timestamp
+// only, as before.
+type SecretRotator interface {
+	QueueForLeaver(tx *store.TenantTx, secretID int64, actor string, now time.Time) (bool, error)
+}
+
+// Option adjusts ExecuteEvent.
+type Option func(*options)
+
+type options struct{ rotator SecretRotator }
+
+// WithRotator makes the rotate_secret step queue a rotation job through r
+// when one can run, instead of only stamping the secret's rotation time.
+func WithRotator(r SecretRotator) Option { return func(o *options) { o.rotator = r } }
+
+func applyStep(c *store.TenantTx, now time.Time, by string, ident *store.Identity, st Step, base string, idx int, o *options) error {
 	var err error
 	switch stepStr(st, "action") {
 	case containment.ActionRevokeSessions, containment.ActionRevokeGrants:
@@ -790,7 +829,7 @@ func applyStep(c *store.TenantTx, now time.Time, by string, ident *store.Identit
 	case "disable_account":
 		id, _ := stepInt(st, "account_id")
 		var routed bool
-		if routed, err = routeDisable(c, now, id, stepKey(eventID, idx, "disable_account")); err == nil && !routed {
+		if routed, err = routeDisable(c, now, id, stepKey(base, idx, "disable_account")); err == nil && !routed {
 			if err = c.DisableAccount(id); err == nil {
 				// an app with no connector cannot be disabled from here: a manual task (issue #105)
 				err = flatfile.AccountDisabled(c, now, by, id, "leaver")
@@ -799,14 +838,14 @@ func applyStep(c *store.TenantTx, now time.Time, by string, ident *store.Identit
 	case "remove_grant":
 		id, _ := stepInt(st, "edge_id")
 		var routed bool
-		if routed, err = routeRemoveGrant(c, now, id, stepKey(eventID, idx, "remove_grant")); err == nil && !routed {
+		if routed, err = routeRemoveGrant(c, now, id, stepKey(base, idx, "remove_grant")); err == nil && !routed {
 			if err = flatfile.GrantRevoked(c, now, by, id, "leaver"); err == nil {
 				err = c.RevokeEdge(id, now, "jml")
 			}
 		}
 	case "add_grant":
 		var routed bool
-		if routed, err = routeAddGrant(c, now, ident, st, stepKey(eventID, idx, "add_grant")); err == nil && !routed {
+		if routed, err = routeAddGrant(c, now, ident, st, stepKey(base, idx, "add_grant")); err == nil && !routed {
 			err = addGrant(c, now, ident, st)
 		}
 	case "cancel_jit":
@@ -819,7 +858,15 @@ func applyStep(c *store.TenantTx, now time.Time, by string, ident *store.Identit
 		err = reassignOwnership(c, now, st)
 	case "rotate_secret":
 		id, _ := stepInt(st, "secret_id")
-		err = c.SetSecretRotated(id, now)
+		queued := false
+		if o.rotator != nil {
+			if queued, err = o.rotator.QueueForLeaver(c, id, by, now); err != nil {
+				return err
+			}
+		}
+		if !queued { // no adapter can rotate it: record the rotation time, as before
+			err = c.SetSecretRotated(id, now)
+		}
 	case "revoke_delegation":
 		id, _ := stepInt(st, "delegation_id")
 		err = c.DeleteDelegation(id)
@@ -912,6 +959,19 @@ func routeAddGrant(c *store.TenantTx, now time.Time, ident *store.Identity, st S
 // system's connection has write-back on. Without a target (or when the
 // account exists) it is a plain ensureAccount.
 func routeEnsureAccount(c *store.TenantTx, now time.Time, ident *store.Identity, system, key string) error {
+	return RouteEnsureAccount(c, now, ident, system, key, provision.SourceJML)
+}
+
+// EnsureAccount returns the identity's active account in a system, creating
+// it in Tessera's graph when it has none.
+func EnsureAccount(c *store.TenantTx, now time.Time, ident *store.Identity, system string) (*store.Account, error) {
+	return ensureAccount(c, now, ident, system)
+}
+
+// RouteEnsureAccount is routeEnsureAccount for another feature: source and
+// key say who asked, and the account is created in Tessera's graph once the
+// target confirms it (the same completion as the joiner's).
+func RouteEnsureAccount(c *store.TenantTx, now time.Time, ident *store.Identity, system, key, source string) error {
 	if t, err := provision.Route(c, system); err != nil {
 		return err
 	} else if t != nil {
@@ -933,7 +993,7 @@ func routeEnsureAccount(c *store.TenantTx, now time.Time, ident *store.Identity,
 			acct.Email = *ident.Email
 		}
 		_, err = route(c, now, provision.Change{System: system, Kind: target.CreateAccount, Account: acct,
-			Source: provision.SourceJML, Key: key, Completion: completeEnsureAccount,
+			Source: source, Key: key, Completion: completeEnsureAccount,
 			Data: identitySystem{IdentityID: ident.ID, System: system}})
 		return err
 	}
@@ -946,7 +1006,11 @@ func routeEnsureAccount(c *store.TenantTx, now time.Time, ident *store.Identity,
 // containment steps (revoke_sessions, revoke_grants) are not applied here:
 // the caller runs them before, and a failed one is a retry task, not a
 // reason to stop the leaver.
-func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.UserRef, policies []*policy.Policy) (Plan, error) {
+func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.UserRef, policies []*policy.Policy, opts ...Option) (Plan, error) {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
 	ev, err := getOrNil(c.HrisEvent(eventID))
 	if err != nil {
 		return nil, err
@@ -1022,7 +1086,7 @@ func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.User
 		}
 		for i, st := range steps {
 			if stepStr(st, "action") == "add_grant" {
-				if err := applyStep(c, now, by.Display, ident, st, ev.ID, i); err != nil {
+				if err := applyStep(c, now, by.Display, ident, st, eventBase(ev.ID), i, &o); err != nil {
 					return nil, err
 				}
 			}
@@ -1033,7 +1097,7 @@ func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.User
 			return nil, err
 		}
 		for i, st := range steps {
-			if err := applyStep(c, now, by.Display, ident, st, ev.ID, i); err != nil {
+			if err := applyStep(c, now, by.Display, ident, st, eventBase(ev.ID), i, &o); err != nil {
 				return nil, err
 			}
 		}
@@ -1153,11 +1217,38 @@ func ExecuteLeaver(c *store.TenantTx, now time.Time, identityID int64) (Plan, er
 	for i, st := range steps {
 		// No HRIS event: a negative id keeps the provisioning keys of this
 		// identity's end-date leaver apart from every event's.
-		if err := applyStep(c, now, "system", ident, st, -identityID, i); err != nil {
+		if err := applyStep(c, now, "system", ident, st, eventBase(-identityID), i, &options{}); err != nil {
 			return nil, err
 		}
 	}
 	return plan, c.TerminateIdentity(identityID, now)
+}
+
+// ExecuteLeaverSteps applies only the steps of the person's leaver plan whose
+// action is one of actions, for a later pass over what a leaver still holds (the
+// guest lifecycle's grace period reassigns ownership then, issue #74). It
+// terminates nobody and returns how many steps it applied.
+func ExecuteLeaverSteps(c *store.TenantTx, now time.Time, identityID int64, base string, actions ...string) (int, error) {
+	plan, err := LeaverPlan(c, now, identityID, false, nil)
+	if err != nil {
+		return 0, err
+	}
+	ident, err := c.Identity(identityID)
+	if err != nil {
+		return 0, err
+	}
+	steps, _ := getAny(plan, "steps").([]Step)
+	n := 0
+	for i, st := range steps {
+		if !slices.Contains(actions, stepStr(st, "action")) {
+			continue
+		}
+		if err := applyStep(c, now, "system", ident, st, base, i, &options{}); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
 }
 
 // joinerLifecycle records a non-employee joiner's worker type, end date and
@@ -1191,4 +1282,10 @@ func joinerLifecycle(c *store.TenantTx, now time.Time, id int64, mgr *int64, p o
 	w := wt
 	return c.AddLifecycleEvent(&store.LifecycleEvent{IdentityID: id, Event: "set", WorkerType: &w, EndsAt: l.EndsAt,
 		Actor: "hris", At: now})
+}
+
+// AccountSpec is the username and external id the identity's account in a
+// system gets (what the joiner's account creation uses).
+func AccountSpec(ident *store.Identity, system string) (username, externalID string, err error) {
+	return accountSpec(ident, system)
 }

@@ -64,7 +64,11 @@ func helpdeskErr(err error) error {
 	case helpdesk.CodeConflict:
 		return &readiness.Error{Status: http.StatusConflict, Code: "conflict", Msg: he.Msg}
 	case helpdesk.CodeForbidden:
-		return &readiness.Error{Status: http.StatusForbidden, Code: "forbidden", Msg: he.Msg}
+		code := "forbidden"
+		if he.Reason != "" {
+			code = he.Reason
+		}
+		return &readiness.Error{Status: http.StatusForbidden, Code: code, Msg: he.Msg}
 	case helpdesk.CodeNotVerified:
 		return &readiness.Error{Status: http.StatusConflict, Code: "verification_required", Msg: he.Msg,
 			Extra: map[string]any{"policy": he.Decision}}

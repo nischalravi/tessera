@@ -55,6 +55,19 @@ type apiApp struct {
 	Name       string `json:"name"`
 	Status     string `json:"status"`
 	SignOnMode string `json:"signOnMode"`
+	// The fields below are read only for agent discovery (agents.go).
+	Created  string `json:"created"`
+	Settings struct {
+		OAuthClient struct {
+			ApplicationType string `json:"application_type"`
+		} `json:"oauthClient"`
+	} `json:"settings"`
+	Credentials struct {
+		OAuthClient struct {
+			ClientID string `json:"client_id"`
+		} `json:"oauthClient"`
+	} `json:"credentials"`
+	Profile map[string]any `json:"profile"`
 }
 
 type apiAppUser struct {
@@ -134,6 +147,12 @@ func (c *Connector) Discover(ctx context.Context) (*connectors.DiscoveryResult, 
 		return nil, err
 	}
 	res := c.build(st, apps, userRoles)
+	res.AuthMethods, res.AuthSource = c.readAuthMethods(ctx, st)
+	if c.cfg.DiscoverAgents {
+		if err := c.discoverAgents(ctx, apps, res); err != nil {
+			return nil, err
+		}
+	}
 	c.save(ctx, st, start, !incremental)
 	return res, nil
 }

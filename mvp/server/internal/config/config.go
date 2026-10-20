@@ -81,9 +81,12 @@ type Config struct {
 	// (TESSERA_AGENT_TLS_CERT, TESSERA_AGENT_TLS_KEY) are that listener's
 	// certificate and key files, required whenever AgentAddr is set; the CA
 	// that signs the certificate is the one the agents pin.
-	AgentAddr              string
-	AgentTLSCert           string
-	AgentTLSKey            string
+	AgentAddr    string
+	AgentTLSCert string
+	AgentTLSKey  string
+	// RotationFakeAdapters admits the simulated secret-rotation adapter
+	// (TESSERA_ROTATION_FAKE_ADAPTERS; dev and test only).
+	RotationFakeAdapters   bool
 	AuditAnchor            string
 	AuditCheckpointSeconds int
 	AuditCheckpointEvents  int
@@ -272,6 +275,7 @@ func Load(getenv func(string) string) (*Config, error) {
 	c.CookieSecure = boolean("TESSERA_COOKIE_SECURE", true, true)
 	c.CORSOrigins = corsOrigins(getenv("TESSERA_CORS_ORIGINS"), getenv("UI_PORT"), prod)
 	c.OutboundAllowLoopback = boolean("TESSERA_OUTBOUND_ALLOW_LOOPBACK", true, false)
+	c.RotationFakeAdapters = boolean("TESSERA_ROTATION_FAKE_ADAPTERS", true, false)
 	// dev default: var/audit-anchors.jsonl next to the database (AnchorURL)
 	c.SafedialAllow = strings.TrimSpace(getenv("TESSERA_SAFEDIAL_ALLOW"))
 	c.AgentAddr = strings.TrimSpace(getenv("TESSERA_AGENT_ADDR"))
@@ -402,6 +406,9 @@ func Load(getenv func(string) string) (*Config, error) {
 		}
 		if c.OutboundAllowLoopback {
 			bad("TESSERA_OUTBOUND_ALLOW_LOOPBACK must be false with TESSERA_ENV=prod")
+		}
+		if c.RotationFakeAdapters {
+			bad("TESSERA_ROTATION_FAKE_ADAPTERS must be false with TESSERA_ENV=prod: the simulated rotation adapter would report success without touching any credential")
 		}
 		if c.DevIdPURL != "" {
 			bad("TESSERA_DEV_IDP_URL must not be set with TESSERA_ENV=prod")

@@ -19,6 +19,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oidcrp"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/claim"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/credential"
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/terms"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/ratelimit"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
@@ -34,8 +35,11 @@ import (
 //	POST verify/send                       mail a 6-digit code to the invited address
 //	POST verify/check      {code}          check it (5 tries, 10 minutes)
 //	GET  status                            the step and what the page may show
-//	POST existing-account  {answer}        "do you already have an account?" (asked of everyone)
-//	POST credential                        set up the sign-in: answers {redirect} to the authority
+//	POST existing-account  {answer}        "do you already have an account?" (asked of everyone; "yes" answers {redirect} to a sign-in as that person)
+//	GET  terms                             step 5: the terms documents still to accept, and the attribute-release consent screen
+//	POST terms/accept {documents}          accept the documents shown ({id, sha256}); before the credential
+//	POST consent {attributes}              federated sign-ins: the attributes the guest agrees to release
+//	POST credential                        set up the sign-in: answers {redirect} to the authority (409 terms_required / consent_required until step 5 is done)
 //	POST resend            {email}         "send me a new link"
 //
 // The authority's redirect comes back to the OIDC callback of the sign-in
@@ -80,6 +84,9 @@ func (s *Server) registerClaimRoutes() {
 	s.handle(P, "/public/t/{slug}/claim/verify/check", noTenant, publicRoute, s.claimVerifyCheck)
 	s.handle(G, "/public/t/{slug}/claim/status", noTenant, publicRoute, s.claimStatus)
 	s.handle(P, "/public/t/{slug}/claim/existing-account", noTenant, publicRoute, s.claimExistingAccount)
+	s.handle(G, "/public/t/{slug}/claim/terms", noTenant, publicRoute, s.claimTerms)
+	s.handle(P, "/public/t/{slug}/claim/terms/accept", noTenant, publicRoute, s.claimTermsAccept)
+	s.handle(P, "/public/t/{slug}/claim/consent", noTenant, publicRoute, s.claimConsent)
 	s.handle(P, "/public/t/{slug}/claim/credential", noTenant, publicRoute, s.claimCredential)
 	s.handle(P, "/public/t/{slug}/claim/resend", noTenant, publicRoute, s.claimResend)
 }
@@ -255,15 +262,35 @@ func (s *Server) claimStatusBody(tx *store.TenantTx, sess *store.ClaimSession) (
 	}
 	pending := st.Pending
 	if st.Step == claim.StepCredential {
-		if _, _, ok, err := s.claimAuthority(tx); err != nil {
+		// step 5 first: terms, then the attribute-release consent, then the credential
+		due, err := s.claimSvc.OutstandingTerms(tx, sess, s.clock().UTC())
+		if err != nil {
 			return nil, err
-		} else if !ok {
-			pending = "organization"
+		}
+		consent, err := s.claimSvc.ConsentPending(tx, sess, s.authorityKind())
+		if err != nil {
+			return nil, err
+		}
+		switch {
+		case len(due) > 0:
+			pending = "terms"
+		case consent:
+			pending = "consent"
+		default:
+			if _, _, ok, err := s.claimAuthority(tx); err != nil {
+				return nil, err
+			} else if !ok {
+				pending = "organization"
+			}
 		}
 	}
-	return ojson.Object{{Key: "step", Value: st.Step}, {Key: "steps", Value: claim.Steps}, {Key: "first_name", Value: st.FirstName},
+	out := ojson.Object{{Key: "step", Value: st.Step}, {Key: "steps", Value: claim.Steps}, {Key: "first_name", Value: st.FirstName},
 		{Key: "tenant", Value: st.Tenant}, {Key: "sponsor", Value: st.Sponsor}, {Key: "population", Value: st.Population},
-		{Key: "ends_at", Value: rt3339(st.EndsAt)}, {Key: "pending", Value: pending}, {Key: "complete", Value: st.Step == claim.StepComplete}}, nil
+		{Key: "ends_at", Value: rt3339(st.EndsAt)}, {Key: "pending", Value: pending}, {Key: "complete", Value: st.Step == claim.StepComplete}}
+	if claim.IsRecovery(sess) {
+		out = append(out, ojson.KV{Key: "purpose", Value: "recovery"}) // the claim page says "recover your account"
+	}
+	return out, nil
 }
 
 // claimAuthority returns the credential authority and the tenant connection it
@@ -532,6 +559,14 @@ type claimExistingBody struct {
 	Answer string `json:"answer"`
 }
 
+// claimExistingAccount is POST existing-account: "do you already have an
+// account?", asked of every claimant. A "no" moves on to the credential. A "yes"
+// starts a sign-in with the tenant's identity provider (purpose claim, recorded
+// as a claim link); the callback links the claim to the person who signed in
+// when they are one of the people the matcher thought this invitation might be
+// (§6.5), and otherwise the claim goes on at the credential step. The answer
+// is the same whatever the matcher found: the claimant is never told whether a
+// match exists, and a "yes" always gets a sign-in.
 func (s *Server) claimExistingAccount(w http.ResponseWriter, r *http.Request, p *params) (any, error) {
 	c, err := s.claimBegin(w, r, p)
 	if err != nil {
@@ -545,6 +580,39 @@ func (s *Server) claimExistingAccount(w http.ResponseWriter, r *http.Request, p 
 	if err != nil || deny != nil {
 		return orDeny(deny, err)
 	}
+	// 1. read: the tenant's sign-in connection and what the claim asks of it
+	var conn *store.IdPConnection
+	aal := 1
+	if b.Answer == "yes" {
+		err = s.store.ReadTenant(c.ctx, c.t.ID, func(tx *store.TenantTx) error {
+			cur, err := tx.ClaimSession(sess.IDHash)
+			if err != nil || cur.Step != claim.StepExistingAccount {
+				return err // a wrong step is refused below, with the other refusals
+			}
+			cs, err := loginConnections(tx)
+			if err != nil {
+				return err
+			}
+			conn = claimSignInConnection(cs)
+			if _, a, err := s.claimSvc.Requirements(tx, cur); err == nil {
+				aal = a
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	// 2. outside any transaction: the authorization URL
+	var cookie, authURL string
+	var txn *store.LoginTransaction
+	if conn != nil && s.rp != nil {
+		if cookie, txn, authURL, err = s.claimSignIn(c, conn, aal); err != nil {
+			s.log.Warn("claim: the existing-account sign-in could not start", "request_id", audit.RequestID(c.ctx))
+			authURL = "" // the claim goes on without it
+		}
+	}
+	// 3. write: the answer, and the login transaction with the claim link that tells the callback what it is for
 	var rerr error
 	err = s.store.InTenant(c.ctx, c.t.ID, func(tx *store.TenantTx) error {
 		cur, err := tx.ClaimSession(sess.IDHash)
@@ -559,7 +627,14 @@ func (s *Server) claimExistingAccount(w http.ResponseWriter, r *http.Request, p 
 			}
 			return err
 		}
-		return nil
+		if authURL == "" {
+			return nil
+		}
+		if err := tx.InsertLoginTransaction(txn); err != nil {
+			return err
+		}
+		return tx.InsertClaimLink(&store.ClaimLink{ID: uuid.NewString(), SessionIDHash: cur.IDHash, IntakeID: cur.IntakeID,
+			LoginTxnID: txn.ID.String(), CreatedAt: c.now})
 	})
 	if err != nil {
 		return nil, err
@@ -568,12 +643,64 @@ func (s *Server) claimExistingAccount(w http.ResponseWriter, r *http.Request, p 
 	if errors.As(rerr, &ce) {
 		return statusBody{ce.Status, ojson.Object{{Key: "error", Value: ce.Code}}}, nil
 	}
-	msg := ""
-	if b.Answer == "yes" {
-		// the seam for matching (GU-5): nothing is linked; an administrator reviews it
-		msg = "Thank you. An administrator will follow up about your existing account. You can carry on setting up this one."
+	out := ojson.Object{{Key: "ok", Value: true}, {Key: "step", Value: claim.StepCredential}}
+	switch {
+	case authURL != "":
+		http.SetCookie(w, s.loginCookie(cookie, int(loginTxnTTL/time.Second)))
+		out = append(out, ojson.KV{Key: "status", Value: "redirect"}, ojson.KV{Key: "redirect", Value: authURL})
+	case b.Answer == "yes":
+		// nothing to sign in to here: the answer is kept for the reviewers and the claim goes on
+		out = append(out, ojson.KV{Key: "message", Value: "Thank you. An administrator will follow up about your existing account. You can carry on setting up this one."})
 	}
-	return ojson.Object{{Key: "ok", Value: true}, {Key: "step", Value: claim.StepCredential}, {Key: "message", Value: msg}}, nil
+	return out, nil
+}
+
+// claimSignInConnection picks the connection for a claim's sign-in as an
+// existing person: the default one, or the only one, among the OIDC
+// connections. A claim asks for a phishing-resistant level and OAuth 2.0
+// sessions are AAL1 (its callback refuses the claim purpose anyway); a claim
+// signs in through the OIDC callback, not SAML. Nil: none.
+func claimSignInConnection(cs []*store.IdPConnection) *store.IdPConnection {
+	var oidc []*store.IdPConnection
+	for _, x := range cs {
+		if x.Protocol == "oidc" {
+			oidc = append(oidc, x)
+		}
+	}
+	for _, x := range oidc {
+		if x.IsDefault || len(oidc) == 1 {
+			return x
+		}
+	}
+	return nil
+}
+
+// claimSignIn builds the sign-in as an existing person: a login transaction
+// (purpose claim, a fresh authentication at the sponsorship's assurance level)
+// and the authorization URL. Nothing is written; the caller stores the
+// transaction with the claim link.
+func (s *Server) claimSignIn(c *claimReq, conn *store.IdPConnection, aal int) (cookie string, txn *store.LoginTransaction, authURL string, err error) {
+	rc, err := s.rpConnection(c.t.ID, conn)
+	if err != nil {
+		return "", nil, "", err
+	}
+	required := claimACR(aal)
+	cookie, state, nonce, verifier := seal.RandomSecret(32), seal.RandomSecret(32), seal.RandomSecret(32), seal.RandomSecret(48)
+	stateHash := seal.SHA256Hex([]byte(state))
+	maxAge := claimMaxAge
+	req, claims := requestedAuthn(conn, required)
+	txn = &store.LoginTransaction{ID: uuid.New(), CookieHash: seal.SHA256Hex([]byte(cookie)), IdPConnectionID: conn.ID,
+		Purpose: "claim", StateHash: &stateHash, Nonce: &nonce, RequiredTesseraACR: &required, MaxAge: &maxAge,
+		ReturnTo: "/claim", CreatedAt: c.now, ExpiresAt: c.now.Add(loginTxnTTL)}
+	if txn.PKCEVerifierEnc, err = s.cfg.Sealer.Seal([]byte(verifier), verifierAAD(c.t.ID, txn.ID)); err != nil {
+		return "", nil, "", err
+	}
+	authURL, err = s.rp.AuthURL(c.ctx, rc, oidcrp.AuthRequest{RedirectURI: s.redirectURI(conn.ID), State: state, Nonce: nonce,
+		Verifier: verifier, ACRValues: req.ACRValues, MaxAge: &maxAge, Prompt: "login", Claims: claims})
+	if err != nil {
+		return "", nil, "", err
+	}
+	return cookie, txn, authURL, nil
 }
 
 // ---------------------------------------------------------------- credential
@@ -604,6 +731,7 @@ func (s *Server) claimCredential(w http.ResponseWriter, r *http.Request, p *para
 		aal       int
 		wrongStep bool
 		haveAuth  bool
+		gate      string // step 5 is not done: terms_required or consent_required
 	)
 	err = s.store.InTenant(c.ctx, c.t.ID, func(tx *store.TenantTx) error {
 		cur, err := tx.ClaimSession(sess.IDHash)
@@ -613,6 +741,10 @@ func (s *Server) claimCredential(w http.ResponseWriter, r *http.Request, p *para
 		if cur.Step != claim.StepCredential {
 			wrongStep = true
 			return nil
+		}
+		// acceptance comes before a credential is bound (§7.4)
+		if gate, err = s.step5Gate(tx, cur, c.now); err != nil || gate != "" {
+			return err
 		}
 		if authority, conn, haveAuth, err = s.claimAuthority(tx); err != nil {
 			return err
@@ -632,6 +764,8 @@ func (s *Server) claimCredential(w http.ResponseWriter, r *http.Request, p *para
 	switch {
 	case wrongStep:
 		return statusBody{http.StatusConflict, ojson.Object{{Key: "error", Value: "wrong_step"}}}, nil
+	case gate != "":
+		return statusBody{http.StatusConflict, ojson.Object{{Key: "error", Value: gate}}}, nil
 	case !haveAuth:
 		return claimPendingOrg, nil
 	}
@@ -754,4 +888,162 @@ func (s *Server) claimResend(w http.ResponseWriter, r *http.Request, p *params) 
 		return nil, err
 	}
 	return claimResent, nil
+}
+
+// ---------------------------------------------------------------- step 5: terms and consent
+
+// authorityKind is the kind of the tenant's credential authority ("" when none).
+func (s *Server) authorityKind() string {
+	if s.cfg.Credential == nil {
+		return ""
+	}
+	return s.cfg.Credential.Kind()
+}
+
+// step5Gate says why the credential cannot start: terms_required while a
+// document that applies is not accepted, consent_required while the
+// attribute-release screen of a federated sign-in is not answered; "" when step
+// 5 is done.
+func (s *Server) step5Gate(tx *store.TenantTx, sess *store.ClaimSession, now time.Time) (string, error) {
+	due, err := s.claimSvc.OutstandingTerms(tx, sess, now)
+	if err != nil {
+		return "", err
+	}
+	if len(due) > 0 {
+		return "terms_required", nil
+	}
+	pending, err := s.claimSvc.ConsentPending(tx, sess, s.authorityKind())
+	if pending {
+		return "consent_required", err
+	}
+	return "", err
+}
+
+type claimConsentView struct {
+	Applies    bool              `json:"applies"`
+	Given      bool              `json:"given"`
+	Authority  string            `json:"authority,omitempty"`
+	Attributes []terms.Attribute `json:"attributes"`
+}
+
+// claimTerms is GET terms: the documents the claimant still has to read and
+// accept (the text and its hash, which the acceptance must echo) and the
+// consent screen. Nothing else.
+func (s *Server) claimTerms(w http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	c, err := s.claimBegin(w, r, p)
+	if err != nil {
+		return nil, err
+	}
+	sess, deny, err := s.claimSession(r, c)
+	if err != nil || deny != nil {
+		return orDeny(deny, err)
+	}
+	var out ojson.Object
+	err = s.store.ReadTenant(c.ctx, c.t.ID, func(tx *store.TenantTx) error {
+		cur, err := tx.ClaimSession(sess.IDHash)
+		if err != nil {
+			return err
+		}
+		due, err := s.claimSvc.OutstandingTerms(tx, cur, c.now)
+		if err != nil {
+			return err
+		}
+		consent := claimConsentView{Attributes: []terms.Attribute{}}
+		if kind := s.authorityKind(); terms.ConsentApplies(kind) {
+			given, err := terms.ConsentGiven(tx, cur.IDHash)
+			if err != nil {
+				return err
+			}
+			consent = claimConsentView{Applies: true, Given: given, Authority: kind, Attributes: terms.Attributes}
+		}
+		out = ojson.Object{{Key: "step", Value: cur.Step}, {Key: "terms", Value: viewRequirements(due, true)}, {Key: "consent", Value: consent}}
+		return nil
+	})
+	return out, err
+}
+
+type claimAcceptBody struct {
+	Documents []terms.Shown `json:"documents"`
+}
+
+// claimTermsAccept is POST terms/accept.
+func (s *Server) claimTermsAccept(w http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	c, err := s.claimBegin(w, r, p)
+	if err != nil {
+		return nil, err
+	}
+	var b claimAcceptBody
+	if resp, ok := s.claimBody(w, r, &b); !ok {
+		return resp, nil
+	}
+	sess, deny, err := s.claimSession(r, c)
+	if err != nil || deny != nil {
+		return orDeny(deny, err)
+	}
+	var refused *claim.Error
+	var left int
+	err = s.store.InTenant(c.ctx, c.t.ID, func(tx *store.TenantTx) error {
+		cur, err := tx.ClaimSession(sess.IDHash)
+		if err != nil {
+			return err
+		}
+		if _, err := s.claimSvc.AcceptTerms(tx, cur, b.Documents, s.claimSvc.ClientHash(c.t.ID, "ip", s.rateKey(r).String()),
+			s.claimSvc.ClientHash(c.t.ID, "ua", r.UserAgent()), c.now); err != nil {
+			if errors.As(err, &refused) {
+				return nil // nothing was written; the refusal is answered below
+			}
+			return err
+		}
+		due, err := s.claimSvc.OutstandingTerms(tx, cur, c.now)
+		left = len(due)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	if refused != nil {
+		return statusBody{refused.Status, ojson.Object{{Key: "error", Value: refused.Code}}}, nil
+	}
+	return ojson.Object{{Key: "ok", Value: true}, {Key: "remaining", Value: left}}, nil
+}
+
+type claimConsentBody struct {
+	Attributes []string `json:"attributes"`
+}
+
+// claimConsent is POST consent: the attributes the claimant agrees to release.
+func (s *Server) claimConsent(w http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	c, err := s.claimBegin(w, r, p)
+	if err != nil {
+		return nil, err
+	}
+	var b claimConsentBody
+	if resp, ok := s.claimBody(w, r, &b); !ok {
+		return resp, nil
+	}
+	sess, deny, err := s.claimSession(r, c)
+	if err != nil || deny != nil {
+		return orDeny(deny, err)
+	}
+	var refused *claim.Error
+	err = s.store.InTenant(c.ctx, c.t.ID, func(tx *store.TenantTx) error {
+		cur, err := tx.ClaimSession(sess.IDHash)
+		if err != nil {
+			return err
+		}
+		if err := s.claimSvc.RecordConsent(tx, cur, s.authorityKind(), b.Attributes, c.now); err != nil {
+			if errors.As(err, &refused) {
+				return nil
+			}
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if refused != nil {
+		return statusBody{refused.Status, ojson.Object{{Key: "error", Value: refused.Code}}}, nil
+	}
+	return ojson.Object{{Key: "ok", Value: true}}, nil
 }

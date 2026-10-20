@@ -87,8 +87,11 @@ server/
                         company the Python backend generated), registry (TESSERA_CONNECTORS)
       connsync/         shared framework of the production connectors: checkpoints, full vs
                         incremental, bounded backoff, size-bounded retrying client, URL checks
-      okta/ entra/      production read connectors (see Production connectors)
-      all/              registers okta and entra (imported by cmd/tessera)
+      okta/ entra/ google/ workday/
+                        production read connectors (see Production connectors)
+      githubscan/       GitHub org scan for MCP configs and agent credentials (see AI agent discovery)
+      agentcore/        AWS Bedrock AgentCore agents, fixture-only (see AI agent discovery)
+      all/              registers okta, entra, google, workday, github-scan and aws-agentcore (imported by cmd/tessera)
     ingest/             phased, idempotent upsert of connector output (cross-system refs resolve)
     store/              schema, row types and parameterized queries (database/sql, no ORM)
     audit/              hash-chained audit ledger: Record, the http.request middleware (fail-closed
@@ -102,6 +105,8 @@ server/
     simulate/           what-if engine: apply edits to a snapshot copy, diff perms + violations
     leastpriv/          grant-level and role-level recommendations
     nhi/, jit/, reviews/, jml/, seed/
+    rotation/           secret rotation: adapters (AWS IAM, Secrets Manager, Vault, GitHub), SigV4,
+                        policies, plans, the job engine, bulk "vendor compromised", Notifier
     notify/             notification outbox, in-app inbox, email senders (dev sink, SMTP), dispatcher
     api/                HTTP routes under /api, FastAPI-compatible validation errors, OpenAPI/docs
     config/             typed settings from TESSERA_* variables; production guard rails
@@ -175,6 +180,95 @@ tenant-scoped like every other table; Admin → Connections → New
 connection → Active Directory (demo) walks the rest. Design: `docs/design/deployment-readiness.md`.
 The routes are documented at `/api/readiness/openapi.json`.
 
+### Secret rotation
+
+Issue #113. Unrotated credentials caused Cloudflare (2023), Internet Archive (2024), Snowflake (2024)
+and Klue (2026); the old `rotate_secret` step only stamped a timestamp. Tessera now rotates a
+credential through the customer's own vaults and cloud APIs and proves the old one is unused before
+deleting it. Screens: Identity → **Secret rotation** (Secrets, Rotation jobs, Policies & adapters,
+Vendor compromised), plus the rotation status and **Rotate secrets…** action on Machine identities
+and on an identity's panel and page. The routes are documented at `/api/rotation/openapi.json`.
+
+**Tessera is not a password vault.** A new credential is written into the customer's vault (Vault KV v2
+or AWS Secrets Manager) and is never stored by Tessera: it lives in memory for the few calls a hand-over
+takes. The only credentials Tessera holds are the adapters' own (an AWS access key, a Vault token, a
+GitHub token), sealed with `internal/seal` under the KEK, bound by AAD to tenant, table, column and
+adapter, and never returned by the API or written to a log or audit event. Every outbound call goes
+through `internal/safehttp`; the simulated adapter exists only where `TESSERA_ROTATION_FAKE_ADAPTERS`
+allows it (on by default in dev and test, refused when `TESSERA_ENV=prod`).
+
+A **job** walks `pending → created → handed_over → old_disabled → verified → old_deleted`, or `failed`
+(retry resumes at the step that failed):
+
+1. *created*: the adapter makes the new credential.
+2. *handed_over*: it is written to the vault named by the policy (`dest_path`, with `{system}`, `{kind}`,
+   `{name}`, `{account}`). If the hand-over fails the new credential is removed again, so nothing is left
+   behind and the old one is untouched. A worker that dies between the two steps is recovered the same way.
+3. After the policy's **grace period**, *old_disabled*: the old credential is deactivated where the provider
+   can (IAM yes; Secrets Manager removes the `AWSPREVIOUS` label; Vault and GitHub cannot, so the step is
+   recorded as skipped).
+4. *verified*: Tessera **re-reads the old credential**, records its key age and last use on the job
+   (`verification`), and refuses to go on if it is still active after being disabled or was used after the
+   grace period (a consumer has not moved). The database enforces it: a job cannot be `verified` or
+   `old_deleted` without the recorded observation. Providers that report no last use (Vault) are recorded as
+   `age_only` evidence.
+5. *old_deleted*: the old credential is deleted, the inventory follows the new credential and the owner is
+   notified. The job reaches this state only once the provider's retirement condition is **observed** after
+   the delete call. Exists-but-inactive is not enough for a deletable credential (a stale read or a delete
+   that did not take): the job re-reads with the usual backoff and retry budget, then fails and notifies the
+   owner, and never reports `old_deleted` on an unverified delete. The completion audit event records
+   `old_disposition` (`deleted` or `retired_deprecated`) and `old_deleted` (true or false).
+
+| Adapter | "Done" means | Disposition |
+|---|---|---|
+| `aws_iam` | the key is no longer listed for the user (absent) | `deleted` |
+| `vault` | the SecretID accessor lookup returns not found (absent) | `deleted` |
+| `github` | the deploy key lookup returns 404 (absent) | `deleted` |
+| `aws_secretsmanager` | the old version carries neither `AWSCURRENT` nor `AWSPENDING` (`AWSPREVIOUS` or no stage); the version itself may remain | `retired_deprecated`: retired, not deleted (Secrets Manager has no call to delete a version) |
+
+| Adapter | Rotates | Disable | Last use | Notes |
+|---|---|---|---|---|
+| `aws_iam` | IAM user access key (`access_key`); secret ref is the key id, account username the IAM user | yes | `GetAccessKeyLastUsed` | hand over to Vault or Secrets Manager; SigV4 signed with the standard library (no SDK) |
+| `aws_secretsmanager` | a secret's value in place: `RotateSecret` when it has a rotation function, otherwise a new random version | removes `AWSPREVIOUS` | `LastAccessedDate` | Tessera never reads a secret value; also a hand-over destination |
+| `vault` | AppRole SecretID (`approle_secret_id`, ref `mount/role#accessor`) | no | not reported | also a KV v2 destination; SecretID accessor lookup and destroy |
+| `github` | repository deploy key (`deploy_key`, ref `owner/repo#id`) | no | `last_used` | new Ed25519 key, read-only flag copied from the old key |
+
+What GitHub allows: deploy keys can be created and deleted through the API. Personal access tokens (classic
+and fine-grained) and GitHub App private keys cannot be created or revoked by API, and installation tokens
+last an hour, so those kinds stay **manual**: Tessera tracks their age against a max-age policy and the plan
+says why. Kinds with no adapter (key pairs, passwords) are manual as well.
+
+**Policies** (`/api/rotation/policies`) give a secret kind (optionally one system) a max age, a grace period
+and an adapter (none means manual: age tracking and owner notification only); `auto_rotate` lets the worker
+queue the rotation of an overdue secret. **Plans** (`POST /api/rotation/plan`, `/api/rotation/bulk/plan`)
+are dry runs computed from the database: nothing is called or written. **Vendor compromised**
+(`POST /api/rotation/bulk`): pick an integration, review the plan (its `plan_hash` is what you confirm; the
+server refuses with 409 `plan_changed` if the credentials changed since), give a reason, and every active
+credential of that system is queued with no grace period; owners of credentials Tessera cannot rotate are
+told to rotate them by hand. The JML `rotate_secret` step queues a rotation (no grace period) when a policy
+covers the secret, and otherwise keeps stamping the timestamp as before.
+
+Reading rotation state needs `graph.read`; changing anything (adapters, policies, rotate now, retry, cancel,
+bulk) needs the new `secrets.rotate` permission (policy admin) and a fresh phishing-resistant sign-in. Every
+change writes its audit event in the same transaction (`rotation.adapter.*`, `rotation.policy.*`,
+`rotation.job.queued|created|handed_over|old_disabled|verified|failed|retried|cancelled`,
+`rotation.completed`, `rotation.bulk.executed`, `rotation.owner_notified`); the worker acts as the system
+actor `rotation.worker`.
+
+**Owner notifications** go through `rotation.Notifier` (`internal/rotation/notify.go`): `Notify(ctx, tx,
+Notification)` runs in the tenant transaction that records the change, must not do network I/O, and an error
+rolls the change back. The default, `AuditNotifier`, writes a `rotation.owner_notified` audit event naming the
+owner (or "tenant administrators" when the secret is orphaned or its owner has left) and sends nothing. The
+notifications outbox (#189) plugs in by implementing the interface and setting `api.Config.RotationNotifier`
+and `rotation.Service.Notifier`.
+
+Limits worth knowing: the worker steps jobs every 30 s and retries transient provider errors with a backoff
+(30 s doubling, five attempts). AWS reports last use at about hour granularity and may lag, so a late use can
+show up after the re-read. Secrets Manager cannot delete a version, only take its labels off (the version is
+then deprecated and removed by AWS). A Vault or GitHub endpoint on a private address is refused by the SSRF
+guard (there is no allow-list yet). GitHub OAuth app tokens need the app's client secret and the token itself,
+which Tessera does not hold, so they are not rotated. The dev seed adds a simulated provider and policies for
+the demo credentials (`TESSERA_ROTATION_FAKE_ADAPTERS=false` skips them).
 Access control: `connections.read` (tenant admin, auditor), `connections.manage` and
 `connections.activate` (tenant admin). Activating, retiring, editing the config or credential, and
 changing an overlay need a phishing-resistant sign-in in the last 15 minutes (step-up); so does
@@ -359,7 +453,8 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 ### Main API endpoints
 
 `GET /api/summary` · `GET /api/identities[?type=&q=]` · `GET /api/identities/{id}` · `GET /api/accounts[?system=]` ·
-`GET /api/graph?identity_id=|resource_id=` · `GET /api/nhi` ·
+`GET /api/graph?identity_id=|resource_id=` · `GET /api/nhi` · `GET /api/ai-agents` ·
+`GET /api/ai-agents/mcp-findings[?kind=mcp_server|agent_credential]` ·
 `GET /api/least-privilege/recommendations?unused_days=60&kind=remove|right_size|role_trim` ·
 `POST /api/least-privilege/revoke {edge_id, dry_run}` · `GET /api/policies` · `GET /api/violations` ·
 `POST /api/simulate {remove_edge_ids, add_edges:[{src,dst,duration_hours?}], disable_account_ids}` ·
@@ -417,15 +512,30 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `POST /api/sod/violations/escalate` · `POST /api/sod/violations/revoke` · `GET /api/sod/review-context` ·
 `GET /api/approvals/inbox` · `GET /api/approvals/delegates` · `GET|POST /api/approvals/delegations` ·
 `POST /api/approvals/delegations/{id}/revoke` ·
+`GET /api/rotation/overview` · `GET|PUT /api/rotation/adapters[/{name}]` · `GET|PUT /api/rotation/policies` ·
+`POST /api/rotation/plan {secret_ids}` · `GET|POST /api/rotation/jobs` · `GET /api/rotation/jobs/{id}` ·
+`POST /api/rotation/jobs/{id}/retry|cancel` · `POST /api/rotation/bulk/plan {system}` ·
+`GET|POST /api/rotation/bulk` · `GET /api/rotation/bulk/{id}` ·
 `GET /api/correlation/queue` · `GET /api/correlation/decisions` ·
 `POST /api/accounts/{id}/link {identity_id, reason}` · `POST /api/accounts/{id}/not-person {reason}` ·
-`DELETE /api/accounts/{id}/link` · `POST /api/identities/{id}/merge {into, reason}` ·
+`DELETE /api/accounts/{id}/link` · `POST /api/identities/{id}/merge {into, reason}` (202 and a request
+when a second reviewer is needed) ·
+`GET /api/identity-matches[?status=review|reverification|decided|all&limit=]` ·
+`POST /api/identity-matches/{match_id}/decide {decision: link|new_person|reject, reason}` ·
+`GET /api/identity-merge-requests[?status=]` · `POST /api/identity-merge-requests/{id}/approve {}|reject {reason}` ·
+`GET|PUT /api/admin/matching {auto_link_tier_b, require_review_tier_a, unmerge_window_days}` ·
 `GET /api/identity-merges` · `POST /api/identity-merges/{id}/unmerge {reason}` ·
+`GET|POST /api/mcp/clients` · `PUT /api/mcp/clients/{id}` · `GET|POST /api/mcp/resources` ·
+`PUT /api/mcp/resources/{id}` · `GET /api/mcp/tokens` · `POST /api/mcp/tokens/{jti}/revoke` ·
+`GET /api/mcp/decisions` · `GET /api/mcp/authorizations/{id}` · `POST /api/mcp/authorizations/{id}/decision`
+(agent authorization, see "MCP authorization server"; the OAuth endpoints live under `/t/{slug}/`)
 `GET /api/access/as-of?resource=&date=` · `GET|POST /api/evidence/packs` ·
 `GET /api/evidence/packs/{id}` · `GET /api/evidence/packs/{id}/download` (see "Point-in-time access and evidence packs")
 `GET|POST /api/reviews/schedules` · `PUT /api/reviews/schedules/{id}` · `POST /api/reviews/schedules/{id}/run` (an unknown `system` is 422 `invalid_system`; a second run in the same second is 409 `already_launched`; a schedule with no grants in scope creates no campaign, audits `review.schedule.skipped` and answers 200 `{skipped, reason}`) ·
 `GET /api/roles/{id}/exclusions|flags` · `POST /api/roles/{id}/exclusions/{identity_id}/remove` ·
 `GET /api/identities/{id}/affiliations` · `GET /api/identities/{id}/identifiers` ·
+`GET /api/identities/{id}/guest-profile` (guests.read: source records with masked references and attribute names, terms accepted) ·
+`GET /api/affiliation-summary` (graph.read: lifecycle state and effective affiliation types per person, for the People filters) ·
 `POST /api/identities/{id}/affiliations {type, org_unit?, population?, starts_at?, ends_at?, reason}` ·
 `POST /api/affiliations/{id}/end {reason}` ·
 `GET /api/catalog[?all=1]` · `PUT /api/catalog/items/{group_id}` ·
@@ -441,8 +551,19 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `GET /api/guests[?sponsor=me|all&state=&population=]` · `GET /api/sponsorships/approvals` · `GET /api/sponsorships/{id}` ·
 `POST /api/sponsorships/{id}/approve|reject|renew|end|transfer|accept-transfer` ·
 `POST /api/guests/{identity_id}/resend-invitation|revoke-invitation` ·
-`POST /public/t/{slug}/claim/start|verify/send|verify/check|existing-account|credential|resend` ·
-`GET /public/t/{slug}/claim/status` (public: the guest's claim, see Guest claim) ·
+`GET /api/identities/{identity_id}/access-bundle` · `GET /api/refgroups` · `POST /api/refgroups/reconcile` ·
+`POST /public/t/{slug}/claim/start|verify/send|verify/check|existing-account|credential|resend|terms/accept|consent` ·
+`GET /public/t/{slug}/claim/status|terms` (public: the guest's claim, see Guest claim) ·
+`GET|POST /api/admin/terms {key, title, body, grace_days}` · `PUT /api/admin/terms/{key}/assignments {populations, bundles}` ·
+`GET /api/me/terms` · `POST /api/me/terms/accept {documents: [{id, sha256}]}` · `POST /api/me/recovery-codes` ·
+`POST /api/guests/{identity_id}/recovery {reason}` · `GET /api/guest-recoveries[?status=]` ·
+`POST /api/guest-recoveries/{case_id}/cancel {reason}` (see Guest terms, consent and recovery) ·
+`GET /api/guest-lifecycle` · `GET /api/guest-lifecycle/items[?bucket=]` · `GET /api/guest-lifecycle/tasks` ·
+`POST /api/guest-lifecycle/tasks/{id}/resolve {action: accept|decline|keep|confirm|dismiss}` ·
+`GET|PUT /api/admin/guest-lifecycle {sponsor_reminder_days, guest_reminder_days, transfer_deadline_days, on_sponsor_departure, conversion_dual_status, grace_days, retention_days, retention_days_visitor, keep_rematch_hashes}` ·
+`POST /public/t/{slug}/guest/renewal-request {token}` (public, always 202; see Guest lifecycle) ·
+`GET /public/t/{slug}/register/sponsors?q=` · `POST /public/t/{slug}/register` (public, always 202; see Guest self-registration) ·
+`GET /api/guest-registrations` · `POST /api/guest-registrations/code` · `POST /api/guest-registrations/{id}/approve|deny` ·
 `GET /api/approvals/inbox` · `GET /api/approvals/delegates` · `GET|POST /api/approvals/delegations` ·
 `POST /api/approvals/delegations/{id}/revoke` ·
 `GET /api/notifications[?unread=1&limit=]` · `POST /api/notifications/read {ids}|{all:true}` ·
@@ -456,7 +577,8 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `GET /api/admin/api-clients` (see "Admin changes")
 `GET /api/config/signing-key` · `POST /api/config/export` · `GET|POST /api/config/trusted-signers` ·
 `DELETE /api/config/trusted-signers/{kid}` · `POST /api/config/import/plan` (body: the bundle file) ·
-`POST /api/config/import/apply?hash=&digest=&prune=` · `GET /api/config/imports`
+`POST /api/config/import/apply?hash=&digest=&prune=` · `GET /api/config/imports` ·
+`GET /api/mfa/posture[?department=&privileged=]` (see "MFA posture")
 
 Each route declares the permission it needs (design §12.1, §16.2; `api.Routes()` lists them and
 `internal/api/rbac_routes_test.go` holds the table). The decider of a JIT request, review item, revoke
@@ -712,7 +834,7 @@ Routes: `GET /api/access-drift[?class=&status=&system=&identity_id=&limit=]` (`d
 ### Job run history
 
 Every run of a connector sync, provisioning (HRIS execute), connection validation, dry run,
-deployment-health re-run and JIT sweep is recorded in `job_runs` (`internal/jobs`), plus every
+deployment-health re-run, JIT sweep and guest lifecycle sweep is recorded in `job_runs` (`internal/jobs`), plus every
 audit anchoring run that did something or failed. A sweep that finds nothing is not recorded.
 Each record has the kind, trigger (manual, schedule or retry), status, duration, a result summary
 and a one-line error. The run row is written in its own transaction before the job and finished in
@@ -791,6 +913,7 @@ change in the target system and checks that it happened.
 * **Tessera changes only after verification.** An operation carries a completion (a graph edit, a
   review decision, a JIT end) that runs in the same transaction that marks it `verified`. A failed or
   unverified write therefore leaves the review item open, the account active and the JIT grant in place.
+  Mismatch findings remain open during retry or cancellation and resolve only after successful verification.
   Retrying (or deciding again, or the next `POST …/retry`) re-queues the same operation.
 * **Write-back is per connection and off by default.** A target (`provisioning_targets`, schema
   `0224`, one per connection) has a `write_back` switch. Off: the change edits the graph at once, as
@@ -823,6 +946,9 @@ change in the target system and checks that it happened.
   simulated fault: `fail_writes` (503) or `drop_writes` (accepted, never applied: a mismatch). The fake
   treats users and groups it has never seen as already provisioned. Config refuses the setting with
   `TESSERA_ENV=prod`, and an architecture test keeps the fake out of every package but `cmd/tessera`.
+  The test launcher (`./run.sh test`) clears `TESSERA_DEV_FAKE_TARGET` before vet and tests so its local
+  fake-target default does not affect the production-refusal checks; production still rejects the fake
+  target when it is explicitly enabled.
 * **Tests.** Recorded exchanges (`internal/provision/{scim,okta}/testdata`, replayed by
   `internal/provision/replay`) pin Entra's string booleans, capitalised PATCH operations, paginated
   large groups, Okta `Link` paging and error classification; engine tests cover backoff, idempotency,
@@ -968,12 +1094,18 @@ Connectors tie most accounts to a person. **Directory → Accounts → Account m
   Connector syncs keep it until someone releases it, which hands the account back to the
   connector's mapping.
 - **Merge** (identity page, More actions → Merge into…) moves the merged identity's accounts,
-  account decisions, owned identities, reports and agent delegations to the identity kept. The
-  merged identity gets status `merged`; syncs keep it merged and resolve references to it to the
-  survivor. History (usage, reviews, requests, HRIS events) is not moved. An identity bound to a
-  Tessera sign-in user cannot be the merged side, because credentials never move.
-- **Undo** (Merges tab) works for 180 days. It moves back every recorded row that still points
-  at the survivor; rows changed since stay and are listed. Merges into an identity that was
+  account decisions, owned identities, reports and agent delegations to the identity kept, and
+  since GU-5 also its source records, identifiers, affiliations, sponsorships, access bundle
+  items, lifecycle record and pending access requests (see Identity matching and merging below).
+  The merged identity gets status `merged`; syncs keep it merged and resolve references to it to
+  the survivor. History (usage, reviews, decided requests, HRIS events) is not moved. Credentials
+  never move: the merged person's sign-in users are disabled and their sessions ended (a user that
+  holds a role blocks the merge until the role is removed). A merge where either person holds
+  privileged access, has IAL 2 or more or is an employee needs a second reviewer.
+- **Undo** (Merges tab) works for 180 days by default (the tenant can set another window, under
+  Identity matches → Settings). It moves back every recorded row that still points
+  at the survivor; rows changed since stay and are listed, and so are the rows created after the
+  merge, which stay with the survivor (`created_after`). Merges into an identity that was
   merged later are undone last-first.
 
 Decisions need `identities.correlate`, merges `identities.merge` (both: policy admin), each
@@ -1330,9 +1462,16 @@ The link is `<TESSERA_PUBLIC_URL>/claim#t=<43 characters>`. The page reads the t
    proves control of the address once, for the claim (A0, 800-63A contact verification); it is never an
    authenticator (`docs/knowledge/01`: email is not an acceptable out-of-band authenticator).
 3. **existing_account**: "Do you already have an account with the organization?", asked of every
-   claimant. "No" continues. "Yes" is recorded on the intake (`existing_account`, for the review
-   queue) and the guest is told an administrator will follow up. **It never links** (K3): matching
-   and linking are GU-5, whose seam is `claim.Service.OnExistingAccount`.
+   claimant. "No" continues. "Yes" is recorded on the intake (`existing_account`) and answers
+   `{status:"redirect", redirect}`: a sign-in as that account at the tenant's identity provider (login
+   purpose `claim`, recorded as a `claim_links` row, `prompt=login`, the sponsorship's AAL). The answer
+   itself never links (K3). When the sign-in comes back and the person who signed in is one of the
+   candidates the matcher found for this invitation, the intake is **linked by sign-in** (Tier A): the
+   sponsorship, affiliations and bundle become theirs, no credential is created, the claim completes
+   (`/claim?result=complete`). Otherwise nothing is linked and the claim goes on at step 4 as a new
+   identity with the suspicion still in the review queue (`/claim?result=continue`, the same for every
+   reason). Whether the matcher found anything never shows: every claimant gets the same question and
+   the same answer.
 4. **credential**: the guest is sent to the bound credential authority to sign in. The claim
    completes only on a sign-in at the sponsorship's required AAL, as the account that was set up for
    this claim, through that authority (§7.1): then identity `invited` → `active`, the sponsorship's
@@ -1341,7 +1480,8 @@ The link is `<TESSERA_PUBLIC_URL>/claim#t=<43 characters>`. The page reads the t
    `(issuer, subject)` of that sign-in (never the email), exists. Tessera creates no session for it.
 5. With no authority configured (production today) the claim stops at step 4 with "your organization
    will finish setting up your sign-in" and stays pending. An IAL above 0 (IDV, GU-7) stops at
-   `verify_identity`. The step list is `claim.Steps`; terms (GU-10) go in as another step.
+   `verify_identity`. The step list is `claim.Steps`. Step 5, terms and consent (GU-10), is a gate on
+   step 4, not a step of its own: see "Guest terms, consent and recovery".
 
 **Security properties.** The token is 256 bits from `crypto/rand`, stored only as
 `SHA-256("tessera-claim-v1|"+tenant+"|"+token)`, single use (one atomic `UPDATE … WHERE
@@ -1379,7 +1519,7 @@ name, organization, sponsor, population, end date, nothing else) · `POST existi
 `POST credential` (answers `{redirect}`) · `POST resend {email}` ("If an invitation exists for this
 address, we have sent a new link."). The design's `GET credential/callback` is the existing
 `/api/auth/oidc/{connection_id}/callback` with the login purpose `claim`; it sends the browser back to
-`/claim?result=complete|failed`. The Vite dev server proxies `/public/t`.
+`/claim?result=complete|failed|continue`. The Vite dev server proxies `/public/t`.
 
 **Rate limits** (`internal/ratelimit`, in process, token buckets of N per window; throttles are
 audited as `claim.throttled` without a token or code): start 10 per IP per 10 minutes (client IP as
@@ -1389,7 +1529,8 @@ bot challenge yet); verify/send 3 per session per 10 minutes, 5 per address per 
 
 **Audit actions:** `claim.invitation.issue|revoke|expire`, `claim.start`, `claim.start.refused`,
 `claim.code.send|failed|locked`, `claim.verify_contact`, `claim.existing_account`,
-`claim.credential.start|pending|failed`, `claim.complete`, `claim.throttled`, `claim.proof.rejected`.
+`claim.credential.start|pending|failed`, `claim.complete`, `claim.link`, `claim.link.failed`, `claim.throttled`,
+`claim.proof.rejected`.
 
 **Dev completion path** (the only credential authority so far; GU-8 does the real ones): outside
 production with the dev IdP configured, `credential.DevIdP` registers the guest with the dev IdP over
@@ -1406,13 +1547,108 @@ sign-in" and pick the passkey for the guest on the dev IdP page. Back on `/claim
 and CSS, no third-party scripts, works at 360 px; `npm test` covers its model and client, `go test
 ./internal/api -run TestClaim` the API end to end.
 
-**Deferred:** matching and linking on "yes" (GU-5), identity verification and IAL above 0 (GU-7), real
-credential authorities, passwords, MFA enrolment, the Tessera-hosted service (GU-8), terms and
-consent, recovery (GU-10), SMS codes, claim codes for letters, a bot challenge, and shared (multi-node)
+**Deferred:** identity verification and IAL above 0 (GU-7), real
+credential authorities, passwords, MFA enrolment, the Tessera-hosted service (GU-8), SMS codes, claim codes for letters, a bot challenge, and shared (multi-node)
 rate-limit state. Parity fixtures are unchanged. After pulling this change run `./run.sh --reseed`:
 it adds the claim tables and three columns to `intake_records`, widens its `invitation_status` check
 and allows the login purpose `claim`.
 themselves. Not yet: provisioning into the target system (#103), business roles (#161).
+
+### Guest self-registration
+
+Issue #66 (GU-3; design `docs/design/guest-accounts-and-claim.md` §3, §6.4, T16). A visitor asks a
+sponsor to register them at `/register` (public page, no sign-in; the tenant comes from the host or
+`VITE_TESSERA_TENANT`). Code: `internal/guests/register`, `internal/api/register.go`, schema
+`0373_guest_registration.sql` (`guest_registrations`, `guest_sponsor_codes`), page
+`frontend/src/public/register/`, the sponsor's side in the Inbox ("Guest registration requests").
+
+- **Nothing exists until the sponsor approves.** `POST /public/t/{slug}/register` records a pending
+  request (name, address, purpose, dates, sponsor) and mails the sponsor (Inbox notification) and the
+  visitor ("your sponsor has been asked", no link). No identity, account, platform user or claim token
+  is created. Pending requests expire after 14 days.
+- **The sponsor is named by a name-only search** (`GET register/sponsors?q=`, at least two letters,
+  at most 20 results, each `{name, handle}`; the handle is a keyed hash, so no id or address leaks and
+  a handle means nothing in another tenant) **or by a code** the sponsor made (`POST
+  /api/guest-registrations/code`, shown once, `XXXXX-XXXXX`, 30 days, one active code per sponsor, only
+  a keyed hash is stored). Only people the sponsor policy lets sponsor are found or accepted.
+- **Always the same answer.** The response is `202 {"status":"ok","message":"Check your email. ..."}` for a
+  new request, an address that already has an account, an unknown sponsor or code, a repeat and an
+  unknown tenant, after the claim minimum duration (300 ms). Only a form that is not valid (400), a
+  failed bot challenge (403), the rate limit (429) and an unconfigured server (503) differ, and none
+  depends on anyone else. Refusals are audited with a reason and never with the address.
+- **An address that already belongs to someone** (a person, an identifier or a sign-in user) gets one
+  "you already have an account, sign in" email a day and nothing is created (K3: a match is never
+  authority).
+- **Limits:** 5 per IP per hour (token bucket, same client-IP key as the other limits), 3 per address
+  per day (throttles are audited as `claim.throttled` with scope `register_ip` or `register_email`), 30
+  searches per IP then one per 2 s.
+- **Bot challenge:** `register.Challenger` (`Config.RegisterChallenge`). Outside production the default
+  accepts everything (`register.AllowAll`); in production registration answers `503` until a real
+  verifier is configured. A Turnstile adapter (through `internal/safehttp`) is not built yet.
+- **Approve / deny** (`guests.sponsor`, step-up; only the sponsor the request names, anyone else gets
+  404). Approve runs the ordinary invitation path (`sponsorship.Invite`, channel `self_registration`,
+  self-asserted, never auto-links): the sponsor policy still decides and refuses with its own codes
+  (the request stays pending), and the claim link is issued and mailed as for any sponsor invitation.
+  Optional body `{population, ends_at}` (defaults: `visitor`, the dates asked for). Deny sends the
+  visitor a neutral "not approved" email (no sponsor, no reason).
+- **Retention (PII).** A request holds name, address and purpose. They are reduced to NULL at approval
+  (the person record holds them) and 30 days after a denial or expiry (the sweeper does it; the row
+  stays as a tombstone with the address's keyed hash). Audit actions:
+  `guest.registration.submit|refused|approve|deny|expire|purge`, `guest.sponsor_code.create`.
+
+### Identity matching and merging
+
+Issue #68 (GU-5; design `docs/design/guest-accounts-and-claim.md` §5, §6.5, §9). Code:
+`internal/identity/match` (the matcher), `internal/correlation` (the merge engine of #160, extended: there
+is no second engine), `internal/identity/merge` (policy around it), `internal/api/matching.go`, schema
+`0370_matching.sql`, the page `frontend/src/features/directory/IdentityMatches.tsx`.
+
+**Matcher.** Names are normalized (Unicode NFKC, case folding, diacritics removed, "given family" and "family
+given" order, preferred names) and compared with Jaro-Winkler (tested against the published reference values).
+Tiers (§5.3) and the rules that fire: **A** exact (the same source record already linked, the same authoritative
+identifier in two sources, the same federated `(issuer, subject)` already bound, or the claimant signed in as the
+person), **B** strong (verified email, date of birth and name similarity 0.92 or more), **C** possible (name 0.85 and
+date of birth, the same verified email, the same verified phone), **D** none. A date of birth is kept only as a keyed
+hash (`dob_key` in a source record), and a day-and-month transposition still compares equal. Modes: *authoritative*
+(HRIS, SIS: Tier A auto-links, Tier B only if the tenant allows it and both sides are authoritative, otherwise review),
+*self-asserted* (sponsor invitations: **never auto-links**; a match is a "suspected existing person" flag),
+*federated* (an existing binding auto-binds). Every result is a `match_results` row with the tier, score, the rules
+fired and the attributes compared **masked**, so "why did this match" is answerable for every link. Sponsor
+invitations (single and bulk) run the matcher; nothing the sponsor sees depends on it. The matcher is exposed in
+authoritative mode and tested, but no authoritative intake path exists yet (SIS/HRIS intake is GU-4). A national-identifier
+rule is deliberately absent (design §13.4 is open); `match.NationalIDRule` marks where it would go.
+
+**Review queue.** Directory → Users → **Identity matches** (`/directory/identity-matches`; the Inbox shows a banner with
+the count): one item per intake with the candidates side by side with the invited person, masked attributes, the
+rules that fired, the candidate's affiliations, privileged access and IAL, and the decision with a reason:
+**link**, **new person**, **reject intake** (the invitation and sponsorship end). Tabs: To review, Second reviewer,
+Waiting for sign-in, Decided, Settings. The seeded demo tenant has one item: `./run.sh --reseed`.
+
+**Four eyes.** A merge, or a reviewer's link, where either person holds privileged access, has IAL 2 or more (recorded, or
+an HR or student record, vetted at hire) or is an employee does not apply when asked. It becomes a pending
+`identity_merge_requests` row (HTTP 202) that a **different** reviewer approves or rejects (the requester can withdraw
+it); a self-approval is refused by the API and by the table. A link by sign-in is proof of possession and needs none.
+
+**Reverification (§5.5.3).** A reviewer's link needs the claimant at the existing person's IAL. While the claimant's IAL
+is lower nothing is linked and no access is granted: the decision is recorded as `reverification_required` and completes
+when the claimant signs in as the existing person (the claim's "yes" step). An IAL 2 employee is never linked to someone
+who proved only email control.
+
+**What a merge does.** One transaction, one ledger entry listing the moves (`identity.merge`): the engine moves the
+rows (each recorded so an unmerge restores it); the merged person's sign-in users are disabled and sessions ended
+(credentials never transfer; the survivor's are untouched; a user with a role blocks the merge); both people's contact
+channels are told through the notification outbox (a security alert that names no one); the intakes' claim links stop
+working; bundle memberships follow the moved accounts and waiting bundles are granted, and the reference groups are
+recomputed, through `internal/guests/access` (`access.Merged`). Unmerge replays the moves in reverse within the window,
+recomputes both people and lists what was created since. A merge is refused when it would make a person their own sponsor.
+
+**Deviations and follow-ups.** The groups engine (GR-1/GR-2) is not built, so group memberships move through the
+GU-12 access code instead; one ledger entry lists all moves instead of one event per moved item; routes use `/decide`,
+`/approve`, `/unmerge` path segments like the rest of the API, not the design's colon actions. Follow-ups: the TAP ID
+Match-compatible endpoint (`PUT /match/api/1/v1/people/{sor}/{sorid}`, tenant flag, needs a reference-id table and a
+choice of intake channel), a "this wasn't me" link in the merge notification (a public freeze endpoint and incident),
+wiring the matcher to SIS/HRIS intake (GU-4), the national-identifier rule, and a blocking index for large tenants (the
+matcher scans every person per intake, once per bulk file).
 
 ### Notifications
 
@@ -1502,6 +1738,38 @@ notify.Expiring(tx, now, notify.Ending{Key: "identity:42", IdentityID: 42, Also:
 `notify.Identity`, `notify.User` and `notify.Deciders` build recipients. Add a kind to `notify.Kinds`
 (label, default, mandatory) and it appears in everyone's settings. Not yet: per-tenant SMTP and chat
 (the settings are server-wide), templates, per-kind digests.
+
+### SIS and HRIS intake (applicants, admits, pre-hires)
+
+Issue #67 (GU-4, package `internal/intake`, schema `0374_intake.sql`) turns feed records into
+affiliations on **one identity** (design §4.1, §8.4). There is no API route or screen yet: the
+entry points are `intake.ApplySIS`, `intake.ApplyHRIS` and `intake.Run(conns, since)`, called
+inside a tenant transaction, so each change and its audit event commit together.
+
+- **SIS** (`connectors.SisConnector`, `SisRecord`): `applied` starts an `applicant` affiliation;
+  `admitted`/`deposited` converts it to `admit`; `matriculated` converts to `student`;
+  `withdrawn`/`denied` revoke an open application. An older status arriving late changes nothing.
+- **HRIS** (generic over `connectors.HrisEventRecord`): a **future-dated joiner** is an accepted offer
+  and starts a `prehire` affiliation (ending at the start date + 30 days if no hire arrives); the
+  same joiner once its date has passed converts it to `employee`; a **leaver (or a joiner with
+  `rescinded: true`) for a worker who has not started** revokes the pre-hire. Payload keys: `worker_id`
+  (or the event's identity), `name`, `personal_email` (or `email`), `department`, `title`,
+  `manager_external_id`. Joiners and leavers for people who were never pre-hires are the JML
+  process's and are ignored. The identity's external id is the worker id, so the HR sync that later
+  discovers the employee lands on the same identity.
+- **Matching is authoritative only.** A record attaches to a person by the system of record's own id
+  or an authoritative identifier (`applicant_id`, `student_id`, `employee_id`). A personal email that
+  another person already holds does not link: the record is held as an intake event in `review` and
+  nothing is created (GU-5 owns the review queue).
+- **Organizational sponsors** (`org_sponsors`: `admissions`, `hr`) stand behind these populations
+  instead of an individual. **Intake events** (`intake_events`, one per event key, so a replayed
+  feed is a no-op) and **conversions** (`identity_conversions`, append-only) are the history. Audit
+  actions: `intake.sis.*`, `intake.hris.*` and `identity.conversion`; details carry ids and outcomes,
+  never names or emails.
+- **Demo feeds**: `connectors.NewDemoSIS` and `connectors.NewDemoPrehireHRIS` are staged only (not in
+  the default `demo` spec or `TESSERA_CONNECTORS`), so the seeded demo tenant is unchanged.
+  Not yet stored: date of birth and phone (sealed by the PR that first needs them).
+
 ### Identity containment (kill switch)
 
 A disabled account does not end its live sessions, refresh tokens or OAuth consents. Two plan
@@ -1563,6 +1831,67 @@ the run failed. Provider calls go through `internal/safehttp`.
   sessions: those re-reads cover refresh tokens and say so in the step's notes. `rotate_secret`
   still only stamps a timestamp.
 
+### MCP authorization server (agent authorization)
+
+An OAuth 2.1 authorization server for MCP clients (MCP authorization spec 2025-11-25; issue #115;
+packages `server/internal/mcpauth`, `api/mcp_oauth.go`, `api/mcp_admin.go`; schema `0356_mcp_authz.sql`).
+Each tenant is its own issuer, `{TESSERA_PUBLIC_URL}/t/{slug}/mcp`: apart from the CLI and
+machine-client authorization server (`internal/oauth`, issuer `/t/{slug}`), so their routes never collide
+and neither accepts the other's tokens (both check `iss`; they share the tenant's signing key). Tokens are ES256 JWTs (`typ at+jwt`)
+signed with the tenant's `access_token` key from `internal/keys`; there are no refresh tokens.
+
+| Endpoint | What |
+| --- | --- |
+| `GET /t/{slug}/mcp/.well-known/oauth-authorization-server` | RFC 8414 metadata: PKCE `S256` only, `client_id_metadata_document_supported`, `authorization_response_iss_parameter_supported` |
+| `GET /t/{slug}/mcp/.well-known/oauth-protected-resource/{id}` | RFC 9728 metadata of a registered resource server |
+| `GET /t/{slug}/mcp/.well-known/jwks.json` | access-token public keys |
+| `GET /t/{slug}/mcp/oauth/authorize` | needs the browser session; checks the request, stores it and sends the user to Agent authorization (`?consent=`) to approve (step-up) |
+| `POST /t/{slug}/mcp/oauth/token` | `authorization_code` (PKCE S256, `resource` required, single-use code) and RFC 8693 token exchange |
+| `POST /t/{slug}/mcp/oauth/introspect`, `POST /t/{slug}/mcp/oauth/decisions` | for resource servers (HTTP Basic: resource id and secret): is the token live and for me; may it call this tool |
+| `POST /t/{slug}/mcp/oauth/revoke` | RFC 7009, by the token's holder |
+
+- **Clients** are identified by a client ID metadata document URL (https, with a path). The document
+  is fetched through `internal/safehttp` (no redirects, size cap 16 KiB, `application/json`, its
+  `client_id` must equal the URL), validated and cached for one hour in `mcp_clients`. A client is
+  `pending` and unusable until an administrator (`agents.manage`, step-up) binds it to an `ai_agent`
+  identity (the agent's permissions are the ceiling) and activates it. A changed redirect list or key
+  set sets an active client back to pending and revokes its tokens.
+- **Scope** names a graph permission: `<system>:<action>:<resource>` (for example
+  `snowflake:SELECT:snowflake/CUSTOMERS`). A token's scope is `user ∩ agent ∩ task` (and, on
+  exchange, `∩` the subject token's scope), computed from the graph at issue time. An empty result
+  is denied; a request is narrowed, never widened. The user must also hold an unexpired delegation
+  to the agent (`agent_delegations`). A permission whose names hold spaces has no scope name and is
+  never granted.
+- **Token exchange** takes a Tessera user token as `subject_token` and, as `actor_token`, a JWT the
+  client signed with a key in its own metadata document (`iss = sub = client_id`, `aud` the issuer,
+  five minutes at most, `jti` used once). The result has `sub` = the user, `act` = the agent (nested
+  after the subject token's actors, at most 3 deep, no repeats), `aud` = the one `resource`, `jti`,
+  and a lifetime of 5 minutes at most. The acting agent may only re-issue a token for the same
+  resource (another resource needs a different actor in the chain). The subject token's client,
+  agent and user must still be active, and the client's cached metadata (its keys) is refreshed
+  first when its one-hour cache has expired (`RefreshActorClient`; a failed refresh fails closed).
+- **Resource servers** (`/api/mcp/resources`) must be registered; a token is only issued for one.
+  Registration shows a secret once; only its SHA-256 is stored.
+- **Decisions**: every issue, exchange, denial, revocation and tool-call decision is a row in
+  `mcp_decisions` and an audit event (`mcp.token.issue`, `mcp.token.exchange`, `mcp.token.deny`,
+  `mcp.token.revoke`, `mcp.tool_call.decision`, `mcp.authorize.*`, `mcp.client.*`, `mcp.resource.*`)
+  written in the same transaction, with the policy version (a digest of the policy documents).
+- **Kill switch**: `POST /api/identities/{id}/contain` first revokes every live token whose agent or
+  user is that identity (`mcp.tokens.revoke_identity`), before any provider call. In the same
+  transaction it marks the identity contained (`mcp_contained`, schema 0357), disables the clients
+  bound to it and denies its pending and approved authorization requests, so no code redeems, no
+  authorization starts and no exchange succeeds for it (as agent or as user) until an operator lifts
+  the containment. Introspection also checks the token's row, the client, the agent and the user on
+  every call. A client that is not active never gets an authorization redirect (400 page instead).
+- **Rate limits**: every `/t/{slug}/mcp/oauth/*` path has a per-IP bucket (default burst 40, one per
+  250 ms) before the audit middleware, on top of the anonymous limit.
+- **UI**: Protection → Agent authorization (`/agents/authorization`): registered clients (bind and
+  activate), active tokens per agent (revoke), the decision log and resource servers. In dev the
+  Vite proxy forwards `/t/{slug}/mcp/oauth/*` and `/t/{slug}/mcp/.well-known/*` to the API.
+- Deferred: `jwks_uri` client keys, `private_key_jwt` at the token endpoint for the browser grant,
+  DPoP sender-constrained tokens, a sign-in redirect for an unauthenticated authorize request
+  (the user signs in to the admin center first), re-checking the graph on every tool call, and
+  root-path protected resource metadata.
 ### Shared Signals receiver (SSF, CAEP, RISC)
 
 A revocation at one provider should reach the others. Tessera receives OpenID Shared Signals
@@ -1823,6 +2152,11 @@ IdP is never called.
 - **Privileged identities** (an effective privileged permission in the access graph, or a platform
   admin role) need two different methods and a second approver who is not the requester or the
   subject. Nobody can open a case for their own identity.
+- **Four eyes (#358).** A call-back is the operator's own word, so the requester cannot record it
+  (`403 requester_cannot_verify`; one recorded by the requester or the subject never counts), and
+  the requester cannot execute their own case (`403 requester_cannot_execute`): a second operator
+  must. Nobody verifies, approves or executes a reset of their own identity
+  (`403 self_reset_not_allowed`).
 - **Routes.** `GET/POST /api/helpdesk/cases`, `GET .../{case_id}`, `POST .../{case_id}/verifications`
   `{method, evidence, number_source, session_ref}`, `.../manager-approval` and `.../second-approval`
   (`helpdesk.approve`, step-up), `.../execute` (`helpdesk.reset`, step-up), `.../cancel`,
@@ -1849,6 +2183,137 @@ IdP is never called.
   (always approves) and the IDV provider (accepts any session reference not starting with
   `fail`) exist when `TESSERA_ENV` is not `prod`. In production push and IDV answer
   `503 provider_unavailable` until real providers implement `PushProvider` and `IDVProvider`.
+
+### Guest lifecycle
+
+Issue #74 (GU-11, design §8). Code: `internal/guests/lifecycle` (the jobs), `internal/guests/sponsorship`
+(renew with step-up, take over, end or suspend, return). Tables in `schema/0371_guest_lifecycle.sql`
+(`guest_lifecycle_settings`, `guest_reminders`, `guest_renewal_tokens`, `guest_lifecycle_tasks`,
+`sponsorship_stepups`, `guest_deprovisioning`); `suspended` joined the sponsorship statuses and events in
+`0227_sponsorships.sql`, so reseed existing databases (`./run.sh --reseed`). The jobs run in the sweeper
+(every tick, each step in its own transaction) and are recorded as `guest_lifecycle` runs in Admin → Jobs when
+they did something or failed. Every change is audited in its own transaction; the audit ledger itself is never
+modified.
+
+- **Settings** (tenant, `GET|PUT /api/admin/guest-lifecycle`, `guest_lifecycle.configure`, policy admins;
+  Governance → Guest lifecycle → Settings). Defaults: sponsor reminders at 30, 14 and 3 days; guest reminder at
+  14 days (0 turns it off); transfer deadline 14 days; `on_sponsor_departure` `end` (or `suspend`);
+  `conversion_dual_status` `end` (or `sponsor_confirms`); grace 0 days for visitors and 30 for contractors,
+  volunteers and partners; retention 2555 days (7 years) for anyone who held access, 365 days for a visitor who
+  held none; `keep_rematch_hashes` off. Per connection, Admin → Provisioning has *on deprovision*:
+  `disable` (default, the account stays disabled) or `delete` (a verified `delete_account` after the grace period).
+- **Reminders.** `guest_reminders` holds one row per (sponsorship, end date, audience, threshold), written before
+  the message in the same transaction, so each goes out once across sweeps and restarts; a renewal moves the end
+  date and re-arms them. A sponsor gets the bucket they are in (30, 14 or 3 days). The guest (active, with an
+  address; needs `TESSERA_PUBLIC_URL` and the identifier key) gets a mail with a one-time "request renewal" link
+  `/renew#t=<token>`: only its SHA-256 is stored and the link is handed to the mailer through memory only (like
+  the claim link). `POST /public/t/{slug}/guest/renewal-request {token}` spends the token once and opens a
+  renewal-request task for the sponsor; every call (good, bad, spent, unknown tenant) answers the same `202
+  {"status":"received"}` after the same minimum time, with an Origin check and a per-tenant rate limit.
+- **Renewal and step-up.** Renewal re-runs the sponsor policy (eligible, within limits, at most the maximum).
+  If the guest's `identity_assurance` is below what the sponsorship now needs (its own requirement, the
+  population default, the bundle minimum) the renewal is **recorded and held** (`sponsorship_stepups`, event
+  `stepup_required`, the sponsorship view's `stepup`): nothing extends. When the assurance is recorded at that
+  level (after a claim completes, or by the sweeper) the renewal is applied under a fresh policy check, or
+  cancelled if it can no longer stand. *Not built:* the guest's step-up claim itself (a claim session for an
+  active guest, `claim_tokens.purpose = renewal_stepup`, and identity verification at IAL 2, GU-7): today the
+  assurance rises only through the claim; this is the missing piece.
+- **Sponsor leaver or mover.** Executing an HRIS leaver or mover event for a sponsor, or the sweeper finding a
+  sponsor who is no longer eligible, opens a `sponsor_transfer` task per active sponsorship, with a deadline
+  (the transfer deadline, never past the sponsorship's end). The sponsor's manager and the holders of
+  `sponsorships.approve` are notified (kind *Guest lifecycle task*; Inbox banner; Governance → Guest lifecycle →
+  My tasks). **Take over** moves the sponsorship to the person acting under a fresh policy check; **keep** (movers)
+  leaves an eligible sponsor in place; **decline** and the deadline end the sponsorship or, by setting, **suspend**
+  it (`suspended`: no access, affiliation ended, not final; a sponsor admin ends it, or it ends at its end date).
+  Until the deadline the sponsorship stands under the departed sponsor; at the deadline nothing is left without
+  a living sponsor or without a decision. Only the departed sponsor's manager and sponsor admins see and decide
+  these tasks (others get 404).
+- **Several sponsorships.** The person stays active until the last one ends; each bundle ends independently
+  (`TestExpiry_LastSponsorshipEndsIdentity`, `TestBundle_TwoSponsorshipsEndIndependently`).
+- **Conversion.** An HR or student employee affiliation that appears on an identity with a running guest
+  sponsorship (after a merge, GU-5) ends the sponsorship at the hire date, or with `sponsor_confirms` asks the
+  sponsor (task `dual_status`; ends at the deadline unless confirmed). The person stays one identity and keeps
+  every history; the lifecycle becomes employee instead of ending; a `conversion` sponsorship event and a
+  `jml.conversion` audit event record it. Employee to guest: a person who left (terminated, deprovisioned, not
+  purged) can be sponsored again; they are revived on the same identity, with a new guest affiliation next to the
+  ended employee one. Applicant, admit and pre-hire conversions need SIS/HRIS intake (GU-4) and are not built.
+- **Deprovisioning.** When the last sponsorship ends the lifecycle leaver plan runs as before (memberships and
+  grants end, accounts disabled through provisioning, verified by re-read). The sweeper then starts the grace
+  period (`guest_deprovisioning`), revokes the person's sign-in sessions, and after the grace period, once every
+  operation that ended their access is verified, deletes accounts where the target says so, reassigns the
+  ownership they still hold (NHI owners, secrets, delegations, reports: the leaver plan's steps) and sets the
+  identity `deprovisioned`. A failed or unverified operation holds the person in grace (shown as blocked).
+- **Purge.** After the retention period the identity becomes a tombstone (`purged`): the id, affiliation history,
+  lifecycle and dates stay; name, email, department, title, identifiers (`value_norm` always; the keyed hash
+  only when `keep_rematch_hashes`), source-record attributes, the linked sign-in user's name and email, and the
+  notifications and email log rows addressed to the person are nulled or redacted. The `guest.purge` audit event
+  lists counts, never values. A purge is idempotent. **The audit ledger is append-only and is not minimised
+  here; ledger PII minimisation is a follow-up**, as are notifications about the guest sent to others and the
+  claim tokens' keyed email hashes (those rows are immutable). A person who returns within retention is matched
+  (Tier A on a federated binding or authoritative identifier, or by sign-in) and gets the same identity back; after
+  a purge only when hashes were kept.
+- **Governance → Guest lifecycle** (`/governance/guest-lifecycle`, `guests.read`): counts and lists for ending in
+  30, 14 and 3 days, renewal requests, step-up required, pending transfer, ended by sponsor departure, suspended,
+  dual status, in grace, deprovisioned and purged, a side panel per row, My tasks and (policy admins) Settings.
+  `./run.sh --reseed` adds a contractor ending in 10 days and one whose sponsor left (a pending transfer).
+  RBAC: `guests.read` for the page, `guests.sponsor` for tasks (the service decides who may act),
+  `guest_lifecycle.configure` for settings.
+
+### Guest terms, consent and recovery
+
+Issue #73 (GU-10; design `docs/design/guest-accounts-and-claim.md` §7.4, §7.5). Code:
+`internal/guests/terms` (documents, acceptance, consent), `internal/guests/claim/{terms,recovery}.go`,
+`internal/notify/recovery.go`, `internal/api/terms.go`, schema `0372_terms_recovery.sql` (`terms_documents`,
+`terms_assignments`, `terms_acceptances`, `attribute_consents`, `recovery_cases`, `recovery_codes`; reseed
+existing databases with `./run.sh --reseed`, which also lets `claim_sessions.step` hold `verify_identity`).
+Every change is audited in its own transaction (`terms.publish|assign|accept`, `consent.attributes`,
+`recovery.issue|cooling_off|complete|cancel`, `recovery.codes.generate`, `recovery.code.use`; never a token or a code).
+
+**Terms.** A document has a key and numbered versions; each version stores its text and the SHA-256 of that text.
+A document is assigned to guest populations and to access bundles (a bundle is the group of a catalog item); it
+applies to a guest whose live sponsorship has that population or carries that item. `GET|POST /api/admin/terms` list
+and publish (`terms.manage`, step-up; the same text twice is `409 unchanged`), `PUT /api/admin/terms/{key}/assignments`
+replaces where it applies. **Claim step 5:** while a document that applies is not accepted the claim status says
+`pending: "terms"`, `POST claim/credential` answers `409 terms_required`, and the OIDC callback refuses to bind
+(`terms_not_accepted`), so acceptance always comes before a credential. `GET claim/terms` returns each text with its hash;
+`POST claim/terms/accept` takes `{id, sha256}` of what the guest saw (a changed text is `409 terms_changed`) and writes
+`terms_acceptances` (document, version, hash, time, claim session, keyed hashes of the client address and user agent) and the
+audit event in one transaction. **New version:** a person who accepted version N must accept N+1 within the document's
+`grace_days` (from its publication; for a document first assigned later, from the assignment); `GET /api/me/terms` shows
+`accepted | grace | blocked` and `POST /api/me/terms/accept` accepts. After the grace period every route except
+`/api/auth/*` and `/api/me/terms*` answers `403 terms_required` until they accept (the check runs in `authorize`, and
+reads nothing for a tenant with no terms). A guest who links to an existing person by signing in (step 3) skips step 5
+and meets the same check at their next request.
+
+**Attribute-release consent.** For a federated authority (`home_idp`, `incommon`, `edugain`; none is built yet, GU-8/9) step 5
+also shows what the home IdP releases and why (`GET claim/terms` → `consent`); `POST claim/consent {attributes}` records the
+choice (the required attributes are always included) in `attribute_consents` and the ledger, once per claim session. Other
+authorities show no consent screen.
+
+**Recovery.** `POST /api/guests/{identity_id}/recovery` issues a `purpose=recovery` claim token for an active guest. The
+caller is the guest's live sponsor (`via: sponsor`) or holds `guests.recover` (operator, policy admin: the help desk,
+`via: help_desk`); a new recovery cancels the open one. The link goes to the guest's address only; **every channel on file**
+gets a `guest.recovery` notice (the guest's address, each active sign-in user by email and inbox, the sponsor). The person
+opens the link (same `/claim` page, `purpose: "recovery"` in the status), confirms the address, and must **re-verify at the
+identity's recorded IAL** (the higher of `identity_assurance.ial` and the sponsorship's: IAL above 0 waits at
+`verify_identity` until GU-7, there is no downgrade). The new sign-in is then added to the existing platform user (a sign-in
+that belongs to another user is refused). An identity holding a privileged or high-risk bundle waits a **24 hour
+cooling-off**: the callback answers `/claim?result=cooling_off`, the credential is held in the case (`recovery_cases`), every
+channel is told, and the sweeper binds it when the time is up (`recovery.complete`; the user's sessions end).
+`POST /api/guest-recoveries/{case_id}/cancel` stops a recovery at any time before that (same caller rule);
+`GET /api/guest-recoveries` lists cases (`guests.read`).
+
+**Recovery codes.** For identities of the Tessera-hosted credential service (`Authority.Kind() == "hosted"`, GU-8 builds it)
+`POST /api/me/recovery-codes` returns 10 single-use codes once (`Cache-Control: no-store`); only a tenant-keyed hash of each
+is stored, a new batch voids the old one, and `claim.Service.UseRecoveryCode` spends one atomically.
+
+**UI:** the claim page shows the terms and consent screen (`TermsStep`); Governance → Guest terms lists documents, publishes
+a version and sets the populations (GU-13 does the full UI). Tests: `go test ./internal/api -run 'TestTerms|TestRecovery|TestClaim_Consent'`,
+`./internal/guests/terms`, `./internal/store -run Terms`; `npm test` covers the claim model.
+
+**Deferred:** wiring a recovery code into the hosted service's sign-in (GU-8), identity verification itself (GU-7),
+the full admin and help-desk UI (GU-13), GDPR lawful-basis text per attribute for EU partners, and an acceptance screen
+outside the claim for a guest already blocked (they accept through `/api/me/terms`).
 
 ### Native groups (folders and groups)
 
@@ -2030,7 +2495,7 @@ inheritance, `explain.go`, `grant.go`, `settings.go`), `server/internal/api/grou
 | `DELETE .../privileges/{privilege_id}` | revoke one row (the design has `DELETE .../privileges`; the row is in the path here) |
 | `GET .../privileges/effective[?identity=]` | for each privilege of the object, every path by which the identity (default: the caller) holds it, with a sentence such as "Ivan holds UPDATE on `app:foo:g` because they are in `app:foo:admins`, which holds STEM_ADMIN on folder `app:foo` ..."; another identity's needs `admin` |
 | `GET\|PUT /api/groups/privileges/settings` | the everyone policy and default privileges (`groups.admin`) |
-| `PUT /api/groups/users/{id}/identity` `{identity_id \| null}` | link a platform user to an identity (`groups.admin`, fresh phishing-resistant sign-in; audited) |
+| `PUT /api/groups/users/{id}/identity` `{identity_id \| null}` | link a platform user to an identity (`groups.admin`, fresh phishing-resistant sign-in; audited). #357: never your own user (`403 self_link_not_allowed`), only to an `active` identity (`409 identity_not_active`), and a user whose identity is terminated or disabled keeps the link so sign-in stays blocked (`409 identity_inactive`). Linking an unlinked user applies at once; changing or removing an existing link needs two admins: the first gets `202 pending_second_admin` (schema `0362`, 72 h), the same admin again `403 four_eyes_required`, and a second admin's identical change applies it and revokes the user's sessions and CLI refresh tokens |
 
 - Tests: `go test ./internal/groups/privs` (`TestImplication` for all 21 privileges,
   `TestPrivs_InheritanceOneVsSub`, `TestPrivs_ExplainListsAllPaths`,
@@ -2334,12 +2799,10 @@ the right. Arrow keys move between items.
 | Group | Items |
 |---|---|
 | (top) | **Home**, **Inbox** (count) |
-| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Ownership, Accounts (with *Account matches*), Help desk, Roles, Organizations (live, read-only, derived from departments) |
-| **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
-| **Protection** | Alerts (alerts, rules, channels), Policies & SoD (violations, policies, what-if simulation, SoD functions, risks and rulesets), Attribute policies, Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
-| **Settings** | Connections (governed connections and the setup wizard), Shared Signals (SSF transmitters and received events), Admin |
-| **Protection** | Alerts (alerts, rules, channels), Policies & SoD (violations, policies, what-if simulation, SoD functions, risks and rulesets), Mitigating controls (mitigations, control library), Attribute policies, Access graph (with an *As of* date for *Who can access…*), Evidence packs, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
-| **Settings** | Connections (governed connections and the setup wizard), Flat-file apps, Conditional access (network ranges, policies, device signals), Admin |
+| **Identity** | Users (with *Identity matches*), Machine identities & agents, Groups (with an *All entitlements* tab), Secret rotation (Secrets, Rotation jobs, Policies & adapters, Vendor compromised), Applications, Ownership, Accounts (with *Account matches*), Help desk, Roles, Organizations (live, read-only, derived from departments) |
+| **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals, registration requests, sponsor code, recovery), Just-in-time, Access reviews (with *Lifecycle*, *Guest lifecycle* and *Workflows* tabs) |
+| **Protection** | Alerts (alerts, rules, channels), Policies & SoD (violations, policies, what-if simulation, SoD functions, risks and rulesets), Mitigating controls (mitigations, control library), Attribute policies, Access graph (with an *As of* date for *Who can access…*), Evidence packs, Insights (Risk overview, Least privilege, SoD conflicts, MFA posture, Deployment health) |
+| **Settings** | Connections (governed connections and the setup wizard), Flat-file apps, Conditional access (network ranges, policies, device signals), Shared Signals (SSF transmitters and received events), Admin (including *Guests and external identities*) |
 
 **Home.** For the admin & security persona: the tenant name and a sync line, then tabs
 (Overview, Monitoring, Deployment health, Recommendations). Overview has the KPI cards
@@ -2355,7 +2818,7 @@ chips with **+ Add filter**, saved views, CSV export and a table with checkbox s
 **Side panel.** Clicking a row opens a 520px panel over the list; on wide screens the list makes
 room so it stays visible, and the selected row stays highlighted. For a user or machine identity
 the panel shows the avatar, name and risk pill, a command bar (Edit, Request access for, Reset
-password or Rotate secret, Start review, Open in graph, Disable) and tabs: Overview, Access,
+password or Rotate secrets…, Start review, Open in graph, Disable) and tabs: Overview, Access,
 Groups, Activity. Groups, applications, accounts, roles, organizations, policy violations and
 review items have their own panels. The panel is deep-linkable (`/directory/people?selected=16`,
 `/governance/policies?selected=<key>`, `/governance/reviews?item=<id>`), traps focus, closes
@@ -2363,7 +2826,37 @@ with `Esc` and returns focus to the row. **Open full page** goes to the existing
 
 **Inbox.** One queue for JIT and catalog approvals, access-review items, joiner/mover/leaver
 tasks and delegations, with keys: `j`/`k` move, `a` approve or keep, `d` deny, `r` revoke,
-`x` select, `?` help.
+`x` select, `?` help. Guest work is in the same queue as **Guest** items (filter chip *Guests*):
+sponsorship approvals (approve, reject with a reason), registration requests (approve, deny),
+identity-match reviews (the row links to the review page: linking needs the evidence, re-verification
+and four-eyes rules shown there) and guest lifecycle tasks (a sponsor-transfer task can be taken over or
+ended in place; other tasks open in Guest lifecycle). Each source is read only if the person holds the
+permission and is already routed to them by its endpoint.
+
+**Guests (UI, issue #76, GU-13).** *Access → Guests I sponsor* is the sponsor portal: my guests with
+state chips and days left, **Invite guest** (single, with the bundle picker showing the required IAL),
+**Bulk invite** (CSV, per-row policy preview), a **Registration requests** tab for visitors who asked
+this person to sponsor them, **Sponsor code** (shown once), and in the side panel Renew, End, Transfer,
+Resend or Revoke invitation and **Start recovery** for a claimed guest. The *Directory → Users* list
+filters by affiliation and lifecycle state; the person page (tab *Affiliations & identifiers*) has a
+lifecycle, assurance and claim card, affiliations, identifiers (masked), sponsorships, the access
+bundle, source records (masked references, attribute names only), match and merge history and terms
+accepted. *Governance → Access reviews → Lifecycle* shows guest tiles (ending soon, pending transfer,
+renewal requests, hired with a sponsorship open) linking to *Guest lifecycle*. *Admin → Guests and
+external identities* summarizes and links to matching, guest lifecycle and terms settings, shows the
+populations and sponsor policy, and lists recovery cases (cancel). Not built because their backends are
+not merged: claim KPIs (time to claim, completion and IDV failure rates), claims stuck at a step,
+identity-verification providers, federation metadata, partner organizations and proofing agents (listed
+under "Coming next" on the Admin page).
+
+**Public pages** (`/claim`, `/register`, `/renew`; no sign-in, no navigation, no third-party scripts).
+Every string comes from the message catalog in `src/i18n` (`t("key", {name})`; English only, a new
+language is a file with the same keys, picked from the browser's language list, with English as the
+fallback). The pages share `src/public/PublicShell.tsx` (page language, title, brand, one `main`).
+Accessibility: each step's heading takes focus when the step appears, errors go to a `role="alert"`
+region and mark the field, the code field takes focus when it appears, sponsor search results are a radio
+group with an announced count, the identity step explains the proofing-agent and online pathways.
+`tests/guestui.test.ts` checks that every key used exists, none is unused and no sentence is hard-coded.
 
 Routes from the previous UI (`/identities`, `/graph`, `/nhi`, `/jit`, `/policies`, `/reviews`,
 `/lifecycle`, `/least-privilege`, `/dashboard`) redirect to their new homes.
@@ -2658,10 +3151,11 @@ Tessera's keys. `devidp.New` refuses `TESSERA_ENV=prod`. `TestIsolation_DevIdPNo
 (`internal/archtest`) proves from the import graph that `cmd/tessera` and `internal/api` never link
 the dev IdP.
 
-## Production connectors: Okta and Entra ID
+## Production connectors: Okta, Entra ID, Google Workspace and Workday
 
-`TESSERA_CONNECTORS=okta`, `entra` or `okta,entra` (also mixed with `demo-*` names) runs the real
-read connectors instead of the demo ones. The default stays `demo`. Both are read-only (every
+`TESSERA_CONNECTORS=okta`, `entra`, `google`, `workday` or any comma-separated mix (also with
+`demo-*` names) runs the real read connectors instead of the demo ones. The default stays `demo`.
+All four are read-only (every
 request is a GET, except the OAuth token request), send every call through `internal/safehttp`
 (https only, private and link-local addresses refused, redirects and page links pinned to the
 configured host), and never log or audit tokens, secrets, keys or response bodies. Errors carry the
@@ -2678,22 +3172,57 @@ vault references of the connection credential store plug into the same resolver 
 | `TESSERA_OKTA_API_TOKEN` | reference to an SSWS token, instead of OAuth (set one or the other, not both) |
 | `TESSERA_OKTA_EMIT_IDENTITIES` | `true` (default): also create an identity per user. `false` when an HR system is authoritative |
 | `TESSERA_OKTA_MAX_INCREMENTAL_AGE` | default `24h`: a full read repairs deletions at least this often |
+| `TESSERA_OKTA_AUTH_METHODS` | `true` (default): read each active user's enrolled factors for the MFA posture report (one request per user per sync). `false` turns it off |
+| `TESSERA_OKTA_PUSH_NUMBER_MATCH` | default `false`. Set `true` if Okta Verify push always requires number matching and the authenticator settings cannot be read (see "MFA posture") |
 | `TESSERA_ENTRA_TENANT_ID`, `TESSERA_ENTRA_CLIENT_ID` | directory (tenant) GUID and application (client) id |
 | `TESSERA_ENTRA_CLIENT_SECRET` | reference to the client secret |
 | `TESSERA_ENTRA_GRAPH_URL`, `TESSERA_ENTRA_AUTHORITY_URL` | default `https://graph.microsoft.com` and `https://login.microsoftonline.com`; set for national clouds |
 | `TESSERA_ENTRA_EMIT_IDENTITIES`, `TESSERA_ENTRA_SIGNIN_ACTIVITY` | both default `true` (the second reads last sign-in) |
 | `TESSERA_ENTRA_MAX_INCREMENTAL_AGE` | default none (delta queries report deletions) |
+| `TESSERA_ENTRA_AUTH_METHODS` | `true` (default): read each enabled member user's registered authentication methods for the MFA posture report (one request per user per sync). `false` turns it off |
+| `TESSERA_GOOGLE_SERVICE_ACCOUNT_KEY` | reference to the service account's JSON key file (`file:/abs/path` or `env:NAME`); only `client_email`, `private_key` and `private_key_id` are used |
+| `TESSERA_GOOGLE_ADMIN_EMAIL` | the administrator the service account impersonates (domain-wide delegation) |
+| `TESSERA_GOOGLE_CUSTOMER`, `TESSERA_GOOGLE_DOMAIN` | default `my_customer`; optionally limit users to one domain |
+| `TESSERA_GOOGLE_API_URL`, `TESSERA_GOOGLE_TOKEN_URL` | default `https://admin.googleapis.com` and `https://oauth2.googleapis.com/token` |
+| `TESSERA_GOOGLE_EMIT_IDENTITIES`, `TESSERA_GOOGLE_GROUPS`, `TESSERA_GOOGLE_ROLES` | all default `true`; turn groups or roles off when the delegation does not grant their scope (Google refuses the whole token request if one scope is missing) |
+| `TESSERA_GOOGLE_MAX_INCREMENTAL_AGE` | default `24h` (`0` never): a full read repairs group members this often |
+| `TESSERA_WORKDAY_BASE_URL`, `TESSERA_WORKDAY_TENANT` | the tenant's services host (`https://wd2-impl-services1.workday.com`, no path) and the tenant name |
+| `TESSERA_WORKDAY_CLIENT_ID`, `TESSERA_WORKDAY_CLIENT_SECRET` | the Workday API client (secret is a reference) |
+| `TESSERA_WORKDAY_REFRESH_TOKEN` | optional reference: use the refresh-token grant. Without it the client-credentials grant is used |
+| `TESSERA_WORKDAY_TOKEN_URL` | default `<base>/ccx/oauth2/<tenant>/token` |
+| `TESSERA_WORKDAY_WORKERS_PATH`, `TESSERA_WORKDAY_EVENTS_PATH` | default `/ccx/api/v1/{tenant}/workers` and `/ccx/api/v1/{tenant}/workerEvents`; point them at a custom report (RaaS) that returns the JSON below |
+| `TESSERA_WORKDAY_EMIT_IDENTITIES` | `true` (default): Workday is HR-authoritative, its workers are the identities. Set the other connectors' `..._EMIT_IDENTITIES` to `false` |
+| `TESSERA_WORKDAY_EVENT_WINDOW`, `TESSERA_WORKDAY_MAX_INCREMENTAL_AGE` | defaults `720h` (an event older than this is historical) and `24h` (`0` never) |
 
 Minimum read-only permissions:
 
 * **Okta.** OAuth scopes `okta.users.read`, `okta.groups.read`, `okta.apps.read`, `okta.roles.read`
   and `okta.logs.read` (usage events), and the service app needs the **Read-only Administrator**
   admin role. For SSWS, a token of a Read-only Administrator. Without `okta.roles.read` role data is
-  skipped, without `okta.logs.read` no usage events are produced; neither fails the sync.
+  skipped, without `okta.logs.read` no usage events are produced; neither fails the sync. The MFA
+  posture report reads `GET /api/v1/users/{id}/factors` (`okta.users.read` and the admin role above;
+  a 403 marks Okta's methods unavailable) and `GET /api/v1/authenticators` for the Okta Verify number
+  challenge setting (`okta.authenticators.read`, add it to the service app's scopes; without it push
+  counts as plain push unless `TESSERA_OKTA_PUSH_NUMBER_MATCH=true`).
 * **Entra ID** (application permissions, admin consent): `User.Read.All`, `Group.Read.All`,
   `GroupMember.Read.All`, `Application.Read.All`, `RoleManagement.Read.Directory`, and optionally
   `AuditLog.Read.All` (last sign-in and usage events; needs Entra ID P1/P2). If Graph refuses
   `signInActivity` (403) the sync goes on without last sign-in. Entra needs no write permission.
+  The MFA posture report needs one more read-only application permission,
+  **`UserAuthenticationMethod.Read.All`** (admin consent), for `GET /users/{id}/authentication/methods`.
+  Without it Graph answers 403: the sync goes on, Entra's methods are marked unavailable, and its
+  people show as Unknown in the report (never as having no MFA).
+* **Google Workspace.** A service account with domain-wide delegation, granted in the Admin console
+  (Security, API controls, Domain-wide delegation) exactly these read-only scopes, all under
+  `https://www.googleapis.com/auth/`: `admin.directory.user.readonly`,
+  `admin.directory.group.readonly`, `admin.directory.group.member.readonly`,
+  `admin.directory.rolemanagement.readonly`. The impersonated administrator needs a read-only
+  admin role (Users, Groups and Roles read access); no write privilege is used. A 403 on groups or
+  roles degrades to no group or role data; a 403 on users fails the sync. No Reports scope is requested.
+* **Workday.** An API client (Integration System User, "API Clients for Integrations") with the
+  Staffing / Worker Data read domains (for example "Worker Data: Public Worker Reports" and
+  "Worker Data: Workers" view-only) and the scopes for the workers and worker-events endpoints.
+  View-only; no put/post domain is granted.
 
 What is mapped: users become accounts (Okta `lastLogin`, Entra `signInActivity`) and, unless turned
 off, identities keyed by `employeeNumber`/`employeeId` (else `okta:<id>`/`entra:<id>`) with the
@@ -2717,13 +3246,61 @@ re-read on every sync. Rate limits: 429 and 502/503/504 are retried with `Retry-
 when `X-Rate-Limit-Remaining` hits 0. Ingest does not delete accounts and groups that vanish from a
 source; it prunes only connector edges.
 
-Tests run on synthetic recorded fixtures (`okta/testdata`, `entra/testdata`) through an `httptest`
-TLS server. Live tests are skipped unless set (needs-human, never run in CI): `go test
+Google Workspace. Users become accounts (`lastLoginTime`, suspended or archived is `disabled`) and,
+unless turned off, identities keyed by the employee id in `externalIds` (type `organization`, or a
+custom type containing "employee"), else `google:<id>`, with the primary e-mail address. Groups and
+members come from the Directory API (a member of type `GROUP` is a group-in-group `member_of` edge;
+external and customer-wide members are skipped); admin roles from `roleassignments` (users and
+groups) become `role` groups, privileged unless a reader role. The Directory API has no change feed
+(no `updatedMin`; `showDeleted` lists only the last 20 days of deletions), so users, groups and role
+assignments are read on every sync and an incremental sync saves requests by re-reading the members
+only of groups whose `etag` or `directMembersCount` changed; a member swap that changes neither is
+repaired by the periodic full read. OAuth tokens and third-party app access are deferred: listing
+tokens needs `admin.directory.user.security`, which is not read-only, so `StreamEvents` yields
+nothing. Throttling (429, and 403 with reason `rateLimitExceeded` or `userRateLimitExceeded`) is
+retried with back-off.
+
+Workday. Workers become identities (employee id, work e-mail, manager, supervisory organization as
+department, business title, hire and termination dates) and workday accounts, plus supervisory
+organizations as `supervisory_org` groups. Effective-dated events become HRIS events for the existing
+joiner / mover / leaver flow: hire is `joiner`, terminate `leaver`, job change and manager change
+`mover` (a mover always carries `to_team`, so the plan never strips access for a missing value).
+Nothing is applied early: a worker whose hire date is ahead is not an identity yet (only its pending
+joiner exists), a future termination leaves the worker active until its date (the leaver is pending
+with the future `effective_at`), and every event keeps its own effective date. A hire that has taken
+effect and any event older than `EVENT_WINDOW` is emitted as `historical` (ingest marks it
+executed), the first because the identity already came from the worker record. Workers are read with
+`Updated_From=<watermark>`; events with `Updated_From` incrementally and `Effective_From=<now - window>`
+on a full read (which also returns future-dated events entered long ago). The connector does not
+execute events: `jml.ExecuteEvent` does not yet check `effective_at`, so a person can still apply a
+pending future-dated event early. Expected JSON (the default paths and the custom-report shape):
+
+```
+workers  GET {workers path}?limit=100&offset=0[&Updated_From=<RFC 3339>]
+         {"total": N, "data": [{"id", "descriptor", "employeeId", "primaryWorkEmail",
+           "workerType": {"id", "descriptor"}, "businessTitle",
+           "supervisoryOrganization": {"id", "descriptor"}, "manager": {"id", "employeeId"},
+           "hireDate", "terminationDate", "active"}]}
+events   GET {events path}?limit=100&offset=0 &(Updated_From=<RFC 3339> | Effective_From=<date>)
+         {"total": N, "data": [{"id", "type": HIRE|TERMINATE|JOB_CHANGE|MANAGER_CHANGE,
+           "effectiveDate", "reason", "worker": {"id", "employeeId"},
+           "from": {"businessTitle", "supervisoryOrganization", "manager"}, "to": {...}}]}
+```
+
+Tests run on synthetic recorded fixtures (`okta/testdata`, `entra/testdata`, `google/testdata`,
+`workday/testdata`) through an `httptest` TLS server. Live tests are skipped unless set (needs-human, never run in CI): `go test
 ./internal/connectors/okta -run Integration -v` with `TESSERA_OKTA_DEV_ORG_URL` and
 `TESSERA_OKTA_DEV_API_TOKEN` (or `TESSERA_OKTA_DEV_CLIENT_ID` + `TESSERA_OKTA_DEV_PRIVATE_KEY_FILE`
 [+ `TESSERA_OKTA_DEV_KEY_ID`]); `go test ./internal/connectors/entra -run Integration -v` with
-`TESSERA_ENTRA_DEV_TENANT_ID`, `TESSERA_ENTRA_DEV_CLIENT_ID`, `TESSERA_ENTRA_DEV_CLIENT_SECRET`.
-`internal/connectors/connsync` is what Google Workspace and Workday reuse.
+`TESSERA_ENTRA_DEV_TENANT_ID`, `TESSERA_ENTRA_DEV_CLIENT_ID`, `TESSERA_ENTRA_DEV_CLIENT_SECRET`;
+`go test ./internal/connectors/google -run Integration -v` with `TESSERA_GOOGLE_DEV_KEY_FILE` and
+`TESSERA_GOOGLE_DEV_ADMIN_EMAIL`; `go test ./internal/connectors/workday -run Integration -v` with
+`TESSERA_WORKDAY_DEV_BASE_URL`, `TESSERA_WORKDAY_DEV_TENANT`, `TESSERA_WORKDAY_DEV_CLIENT_ID`,
+`TESSERA_WORKDAY_DEV_CLIENT_SECRET` [+ `TESSERA_WORKDAY_DEV_REFRESH_TOKEN`, `..._WORKERS_PATH`,
+`..._EVENTS_PATH`]. The Workday JSON shapes above follow Workday's REST naming but are verified only
+against fixtures: run the live test against an implementation tenant before relying on them.
+`internal/connectors/connsync` is the framework all four share.
+
 ## Command-line sign-in (`tessera-cli`)
 
 The CLI and other non-browser clients use OAuth 2.0, not cookies (design §9.3, §10): Tessera is an
@@ -2855,6 +3432,105 @@ A disabled client, or one whose roles or scopes are narrowed, is cut off on the 
 The RFC 8414 metadata advertises `client_credentials`, `private_key_jwt` (`ES256`, `EdDSA`) and the
 `introspection_endpoint`.
 
+## MFA posture
+
+Insights → MFA posture (`GET /api/mfa/posture[?department=&privileged=true|false]`, permission
+`graph.read`) shows how strongly each person can authenticate, coverage per department and per
+privileged group, passkey enrolment over time, and app accounts that bypass SSO or MFA. Code:
+`internal/mfa` (classification and report), `internal/connectors/{okta,entra}/authmethods.go`
+(ingest), `internal/ingest/authposture.go`, `internal/store/repo_mfa.go`, schema
+`0255_mfa_posture.sql`, UI `frontend/src/features/insights/MfaPosture.tsx`.
+
+**Method classes** (`mfa.Strength`, strongest first):
+
+| Class | Okta factor types | Entra method types |
+|---|---|---|
+| `phishing_resistant` | `webauthn` (passkey), `u2f` (security key), `signed_nonce` (Okta FastPass) | `fido2`, `windowsHelloForBusiness`, `x509Certificate` |
+| `push_number_match` | `push` when the Okta Verify authenticator has `channelBinding` `NUMBER_CHALLENGE` required `ALWAYS` (or `TESSERA_OKTA_PUSH_NUMBER_MATCH=true`) | `microsoftAuthenticator`, `passwordlessMicrosoftAuthenticator` (Microsoft enforces number matching) |
+| `push` | `push` without number matching | none |
+| `otp` | `token:software:totp`, `token:hotp`, `token:hardware`, `token` | `softwareOath`, `hardwareOath` |
+| `sms_voice` | `sms`, `call`, `email` | `phone` (mobile/alternateMobile: SMS; office: voice) |
+
+Not MFA and ignored: Okta security questions and non-ACTIVE factors; Entra `password`,
+`temporaryAccessPass` and the SSPR-only `email` method. A person's class is their strongest active
+method; `none` means their IdP was read and reported no method; `unknown` means none of their accounts
+is in a system whose methods could be read. A system that returns 403 (or fails) is stored as
+`unavailable` in `auth_method_sources`, its previously stored methods are kept, and the page shows a
+warning. A missing scope never turns into "no MFA". The report counts active human identities;
+"privileged" means a (transitive, unexpired) member of a privileged group, including through `maps_to`,
+or holder of a privileged permission.
+
+**Snapshots.** `mfa_posture_snapshots` holds one row per day, dimension (`all`, `department`,
+`privileged_group`) and group, written at the end of each ingest that carried authentication posture
+(the last sync of a UTC day wins). The page's trend reads the `all` rows.
+
+**Policy type `mfa_required`.** Produces a violation for each privileged identity whose strongest method
+is below `require` (default `phishing_resistant`; also `push_number_match`, `push`, `otp`, `sms_voice`).
+Identities whose MFA is unknown are skipped. It is not enabled by default: a default policy file would
+change the recorded `/api/policies` and `/api/violations` parity fixtures. To turn it on, add this to
+`server/policies/mfa-required.yaml` (and refresh those fixtures, explained in
+`testdata/parity/README.md`):
+
+```yaml
+id: mfa-required-privileged
+name: Privileged identities need phishing-resistant MFA
+type: mfa_required
+severity: high
+description: People with privileged access must have a passkey, security key, Windows Hello, certificate or FastPass.
+require: phishing_resistant
+```
+
+**Apps and data platforms** (Snowflake, GitHub, AWS IAM users). `account_auth_signals` stores, per
+account, `has_local_password`, `mfa_enabled` and `sso_enforced` as the connector reported them (NULL =
+unknown). A connector fills `DiscoveryResult.AuthSignals`; the page flags a local password, no MFA or SSO
+not enforced, and lists systems that report nothing as a data gap. Today no production connector for
+these platforms exists (only the demo ones, which carry no such attributes), so on a real tenant the
+table stays empty. Attribute mapping to implement with each connector: Snowflake `SHOW USERS`
+(`has_password`, `ext_authn_duo`/`ext_authn_uid`, `disabled`; no per-user SSO flag), GitHub org members
+(`two_factor_authentication` via the 2FA filter, SAML identity link via GraphQL `samlIdentity`), AWS IAM
+(`GetLoginProfile` for a console password, `ListMFADevices`; IAM users have no SSO flag). Entra and Okta
+accounts are IdPs and are judged by their methods, not by these flags.
+
+**Demo data.** `tessera seed` (tenant `larkspur` only) runs `seed.MFADemo`: Okta methods and app flags
+are synthetic, chosen by a stable hash of the account id, with passkey enrolment dates spread over the
+last 90 days and snapshot history computed from them. The demo is labelled as such here, not in the UI.
+
+## AI agent discovery (issue #116)
+
+Tessera discovers AI agents, MCP servers and agent credentials from identity providers, the cloud and
+source code, and shows them on **Directory > Machine identities & agents** (a Source and a Sponsor
+column on the inventory, and an **MCP config findings** tab). Every discovered agent is an `ai_agent`
+identity with a creator, a sponsor and its credentials, so the existing policies apply unchanged:
+
+* `nhi-ownership` reports an agent with no **active** sponsor. The sponsor is the identity's owner
+  (the first sponsor whose account is enabled and who resolves to a person), which is what that
+  policy checks; a sponsor who left shows as `Inactive`.
+* `ai-agents-no-pii` reports an agent that can reach a resource tagged `pii`, and
+  `nhi-no-prod-admin` one with privileged prod access. No new policy was needed.
+
+| Source | Connector, and what turns it on | What it reads | Real or fixture-only |
+|---|---|---|---|
+| Entra Agent ID | `entra` with `TESSERA_ENTRA_DISCOVER_AGENTS=true` | Graph **beta** `servicePrincipals/microsoft.graph.agentIdentity`, its `sponsors`, `createdByAppId` and password/key credentials (ids, names and dates only). Needs `AgentIdentity.Read.All` in addition to the permissions above; a 403 or 404 means no agents, not a failed sync | Real HTTP code, tested on recorded fixtures only. The Graph beta shapes follow the documentation and were never run against a live tenant |
+| Okta | `okta` with `TESSERA_OKTA_DISCOVER_AGENTS=true` | OIDC **service apps** (`application_type=service`) as agents, their `credentials/secrets` (ids and dates only), `credentials/jwks` and API scope `grants` (a `.manage` scope is privileged) | Real HTTP code, tested on recorded fixtures only. Okta has no native creator or sponsor on an app, so the connector reads two custom app profile properties, `creator` and `sponsor` (an e-mail address or employee number); an app without them has no sponsor. Okta's own AI agent registry API is not used |
+| AWS Bedrock AgentCore | `TESSERA_CONNECTORS=aws-agentcore` with `TESSERA_AGENTCORE_SNAPSHOT=/abs/path.json` | agent runtimes, their credential providers and what the execution role reaches, from a recorded snapshot (`agentcore/testdata/runtimes.json` shows the shape). Creator is the `creator` tag or the creating principal, sponsor the `sponsor` tag | **Fixture-only.** The `agentcore.API` interface is what a live client implements; none is built and the AWS SDK is not a dependency. The connector refuses `TESSERA_ENV=prod` |
+| GitHub code scan | `TESSERA_CONNECTORS=github-scan` with `TESSERA_GITHUB_SCAN_ORG`, `TESSERA_GITHUB_SCAN_TOKEN` (an `env:` or `file:` reference to a read-only token: Contents and Metadata read) and optionally `TESSERA_GITHUB_SCAN_API_URL` | `.mcp.json`, `mcp.json`, `claude_desktop_config.json`, `.cursor/mcp.json`, `.vscode/mcp.json` and similar for MCP servers; `.env*` and `.claude/settings*.json` for credentials | Real read-only REST client (`githubscan.REST`, GET only, through `safehttp`, pages pinned to the host), tested on recorded fixtures only. Live test `-run Integration` needs `TESSERA_GITHUB_DEV_ORG` and `TESSERA_GITHUB_DEV_TOKEN`, skipped by default |
+
+What a code scan keeps. A finding is a repository, a path, where in the file (a JSON path or a line),
+for an MCP server its transport and target (a command and package, or a URL host, never a path or query),
+and for a secret its **type** (`github_token`, `anthropic_api_key`, `bearer_token`, `generic_secret` ...)
+and a fingerprint: the first 16 hex digits of a SHA-256 of the type and the matched text. The secret
+value is never stored, logged, audited or returned, and `${VAR}` style placeholders are not findings.
+The owner is the CODEOWNERS owner of the file (a person's e-mail first, else the first listed, a team
+stays a team) or else the author of the last commit that touched it; it links to an identity when the
+e-mail address (or `github:<login>` external id) matches one. Findings and agent profiles are replaced
+on every sync of their source, so a removed finding or agent disappears.
+
+Storage: `agent_profiles` (source, kind, creator and sponsor as the source spells them, links to
+identities) and `mcp_findings`, both tenant-scoped with cross-tenant guard triggers
+(`schema/0375_agent_discovery.sql`). `GET /api/ai-agents` is the `ai_agent` inventory with source,
+creator, sponsor status and violating policy ids; `GET /api/nhi` is unchanged. The demo company
+supplies Okta-sourced agents and five sample findings, so the screens work without any connector.
+
 ## Adding a real connector
 
 1. Implement `connectors.Connector` (`internal/connectors/connector.go`):
@@ -2922,6 +3598,22 @@ cd ../frontend && npm run build && npm test   # npm test: node:test, no extra de
   GitHub's runs, jobs, runners, annotations and job logs for that PR. It also checks that every
   action version the workflows pin exists. Use it when CI is red: if every local step passes and
   the jobs show `runner_id=0` with no steps, they never ran (see the annotations, usually billing).
+* **Guest UI end-to-end** (issue #76): `frontend/e2e/guests.spec.ts` (Playwright 1.56.1 and axe-core)
+  runs against a stack you start yourself and skips every spec when none answers, so it never touches
+  a running dev instance:
+
+  ```bash
+  cd mvp && API_PORT=8430 UI_PORT=5430 DEVIDP_PORT=8431 TESSERA_DB=/tmp/guests-e2e.db \
+    TESSERA_AUTH_RATE_BURST=5000 TESSERA_ANON_RATE_BURST=5000 ./run.sh --reseed    # in one terminal
+  cd mvp/frontend && GUESTS_UI_PORT=5430 GUESTS_DB=/tmp/guests-e2e.db npm run test:e2e:guests
+  ```
+
+  Flows: a sponsor invites a contractor; the contractor confirms the email and reaches identity
+  verification (IAL 1: completing it needs an identity-verification provider, GU-7); a visitor claims
+  through the existing-account question, terms and the sign-in step; the sponsor renews; the sponsor
+  leaves (HR leaver event) and the transfer task appears in the Inbox. Axe (serious and critical) runs
+  on the guest screens and the public pages, and the public pages are checked at 360px. The emails
+  (claim link, codes) are read from the dev mail sink file next to `GUESTS_DB`.
 * **Security scanners:** gosec reports 0 issues; each of the few `#nosec` annotations carries a
   justification. govulncheck reports no vulnerabilities.
 * **AWS evaluator indexes and queries** (`internal/aws/index`, `internal/aws/query`, pure, no

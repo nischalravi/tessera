@@ -149,6 +149,8 @@ type Tenant struct {
 	Connectors []connectors.Connector
 	// Workflows, if set, runs after the connectors are synced.
 	Workflows func(c *store.TenantTx, now time.Time, policies []*policy.Policy) error
+	// MFA, if set, seeds the MFA posture report after the workflows.
+	MFA func(c *store.TenantTx, now time.Time) error
 	// DevIdP, when set, is the issuer of a dev_mock IdP connection seeded
 	// with Users as its bootstrap users (WithDevIdP; dev and test only).
 	DevIdP string
@@ -158,11 +160,18 @@ type Tenant struct {
 	Identifiers *identifiers.Keyer
 	// DevIdPClient seals the dev IdP connection's client secret (optional).
 	DevIdPClient *DevIdPClient
+	// DemoMatching adds a guest invitation that matches an employee, so the
+	// review queue has an item (needs Identifiers). Off for tests.
+	DemoMatching bool
+	// DemoGuestLifecycle adds a sponsorship that expires in 10 days and one whose
+	// sponsor has left, so Governance → Guest lifecycle has rows (needs
+	// Identifiers). Off for tests.
+	DemoGuestLifecycle bool
 }
 
 // Larkspur is the Larkspur Labs demo tenant over conns.
 func Larkspur(conns []connectors.Connector) Tenant {
-	return Tenant{ID: LarkspurID, Slug: LarkspurSlug, Name: "Larkspur Labs", Connectors: conns, Workflows: Workflows}
+	return Tenant{ID: LarkspurID, Slug: LarkspurSlug, Name: "Larkspur Labs", Connectors: conns, Workflows: Workflows, MFA: MFADemo}
 }
 
 // Globex is the second demo tenant: the tiny world with GlobexSentinel in
@@ -221,6 +230,11 @@ func Run(ctx context.Context, db *store.DB, now time.Time, policies []*policy.Po
 			if _, err := identity.Backfill(c, t.Identifiers, now); err != nil {
 				return err
 			}
+			if t.MFA != nil {
+				if err := t.MFA(c, now); err != nil {
+					return err
+				}
+			}
 			if err := seedAuth(c, t, now); err != nil {
 				return err
 			}
@@ -246,6 +260,16 @@ func Run(ctx context.Context, db *store.DB, now time.Time, policies []*policy.Po
 			}
 			if err := seedLifecycle(c, now, skip); err != nil {
 				return err
+			}
+			if t.DemoMatching {
+				if err := seedMatching(c, t.Identifiers, skip, now); err != nil {
+					return err
+				}
+			}
+			if t.DemoGuestLifecycle {
+				if err := seedGuestLifecycle(c, t.Identifiers, skip, now); err != nil {
+					return err
+				}
 			}
 			st.Requests, err = c.CountRequests()
 			return err

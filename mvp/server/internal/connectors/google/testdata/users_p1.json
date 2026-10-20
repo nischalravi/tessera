@@ -1,0 +1,31 @@
+{
+  "kind": "admin#directory#users",
+  "users": [
+    {
+      "id": "10000000001",
+      "primaryEmail": "ada.fixture@example.com",
+      "name": {"fullName": "Ada Fixture"},
+      "suspended": false,
+      "archived": false,
+      "lastLoginTime": "2026-10-07T08:15:00.000Z",
+      "creationTime": "2023-02-01T09:00:00.000Z",
+      "isAdmin": true,
+      "isDelegatedAdmin": false,
+      "orgUnitPath": "/Engineering",
+      "externalIds": [{"type": "organization", "value": "EMP-3001"}],
+      "organizations": [{"department": "Engineering", "title": "Staff Engineer", "primary": true}]
+    },
+    {
+      "id": "10000000002",
+      "primaryEmail": "Ben.Sample@Example.com",
+      "name": {"fullName": "Ben Sample"},
+      "suspended": true,
+      "archived": false,
+      "lastLoginTime": "1970-01-01T00:00:00.000Z",
+      "creationTime": "2023-05-15T09:00:00.000Z",
+      "orgUnitPath": "/Engineering",
+      "organizations": [{"department": "Platform", "title": "Engineer"}]
+    }
+  ],
+  "nextPageToken": "u2"
+}

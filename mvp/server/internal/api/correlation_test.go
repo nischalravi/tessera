@@ -86,16 +86,38 @@ func TestCorrelationAPI_LinkMergeUnmerge(t *testing.T) {
 		t.Errorf("unknown field: %d %s", rec.Code, rec.Body)
 	}
 
-	// merge carol into alice, then undo it
+	// merge carol into alice, then undo it. Both are employees with access, so a
+	// second reviewer must approve: the request alone changes nothing.
+	l2 := policyAdmin(t, f, f.B.ID, "pa2@b.example")
 	rec = corrDo(h, l, "POST", fmt.Sprintf("/api/identities/%d/merge", ids["carol"]),
 		fmt.Sprintf(`{"into":%d,"reason":"duplicate HR record"}`, ids["alice"]))
-	if rec.Code != 200 {
-		t.Fatalf("merge: %d %s", rec.Code, rec.Body)
+	if rec.Code != 202 || !strings.Contains(rec.Body.String(), `"pending_approval"`) {
+		t.Fatalf("merge request: %d %s", rec.Code, rec.Body)
 	}
-	var m mergeView
-	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil || m.SurvivorID != ids["alice"] || len(m.Moves) == 0 ||
+	var pend struct {
+		Request mergeRequestView `json:"request"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &pend); err != nil || len(pend.Request.Risk) == 0 {
+		t.Fatalf("request body %s (%v)", rec.Body, err)
+	}
+	if rec = corrDo(h, l, "GET", fmt.Sprintf("/api/identities/%d", ids["carol"]), ""); strings.Contains(rec.Body.String(), `"merged"`) {
+		t.Error("a merge waiting for a second reviewer was applied")
+	}
+	rec = corrDo(h, l, "POST", "/api/identity-merge-requests/"+pend.Request.ID+"/approve", `{}`)
+	if rec.Code != 403 || !strings.Contains(rec.Body.String(), "second_reviewer_required") {
+		t.Fatalf("self-approval: %d %s", rec.Code, rec.Body)
+	}
+	rec = corrDo(h, l2, "POST", "/api/identity-merge-requests/"+pend.Request.ID+"/approve", `{}`)
+	if rec.Code != 200 {
+		t.Fatalf("approval: %d %s", rec.Code, rec.Body)
+	}
+	var appr struct {
+		Merge mergeView `json:"merge"`
+	}
+	m := &appr.Merge
+	if err := json.Unmarshal(rec.Body.Bytes(), &appr); err != nil || m.SurvivorID != ids["alice"] || len(m.Moves) == 0 ||
 		!m.UnmergeBefore.Equal(storetest.Now.Add(180*24*time.Hour)) {
-		t.Fatalf("merge body %s (%v)", rec.Body, err)
+		t.Fatalf("approval body %s (%v)", rec.Body, err)
 	}
 	rec = corrDo(h, l, "GET", fmt.Sprintf("/api/identities/%d", ids["carol"]), "")
 	if !strings.Contains(rec.Body.String(), `"merged"`) {
@@ -119,7 +141,7 @@ func TestCorrelationAPI_LinkMergeUnmerge(t *testing.T) {
 	}
 
 	acts := auditActions(t, f, f.B.ID)
-	for _, a := range []string{"identity.account.link", "identity.merge", "identity.unmerge", "identity.account.release"} {
+	for _, a := range []string{"identity.account.link", "identity.merge.request", "identity.merge.approve", "identity.merge", "identity.unmerge", "identity.account.release"} {
 		if acts[a] != 1 {
 			t.Errorf("audit %s = %d, want 1 (%v)", a, acts[a], acts)
 		}
@@ -168,14 +190,25 @@ func TestCorrelationAPI_CrossTenant(t *testing.T) {
 	f := storetest.TwoTenants(t)
 	h := newIsolationServer(f).Handler()
 	la := policyAdmin(t, f, f.A.ID, "pa@a.example")
+	la2 := policyAdmin(t, f, f.A.ID, "pa2@a.example")
 	lb := policyAdmin(t, f, f.B.ID, "pa@b.example")
 	rec := corrDo(h, la, "POST", fmt.Sprintf("/api/identities/%d/merge", f.A.IDs["bob"]),
 		fmt.Sprintf(`{"into":%d,"reason":"dup"}`, f.A.IDs["alice"]))
-	if rec.Code != 200 {
-		t.Fatalf("A merge: %d %s", rec.Code, rec.Body)
+	if rec.Code != 202 {
+		t.Fatalf("A merge request: %d %s", rec.Code, rec.Body)
 	}
-	var m mergeView
-	_ = json.Unmarshal(rec.Body.Bytes(), &m)
+	var pend struct {
+		Request mergeRequestView `json:"request"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &pend)
+	if rec = corrDo(h, la2, "POST", "/api/identity-merge-requests/"+pend.Request.ID+"/approve", `{}`); rec.Code != 200 {
+		t.Fatalf("A merge approval: %d %s", rec.Code, rec.Body)
+	}
+	var appr struct {
+		Merge mergeView `json:"merge"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &appr)
+	m := appr.Merge
 	before := storetest.Dump(t, f.DB, f.A.ID)
 
 	cross := corrDo(h, lb, "POST", "/api/identity-merges/"+m.ID+"/unmerge", `{"reason":"x"}`)

@@ -1,0 +1,26 @@
+{
+  "mcpServers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "@@GITHUB@@", "LOG_LEVEL": "debug"}
+    },
+    "remote-tools": {
+      "type": "sse",
+      "url": "https://tools.example.com/sse?region=eu",
+      "headers": {"Authorization": "Bearer @@BEARER@@", "X-Api-Key": "@@ANTHROPIC@@"}
+    },
+    "safe": {
+      "command": "node",
+      "args": ["server.js", "--api-key=${API_KEY}"],
+      "env": {"TOKEN": "${env:MY_TOKEN}", "REGION": "us-east-1", "PASSWORD_FILE": "/run/secrets/pw"}
+    },
+    "db": {
+      "command": "uvx",
+      "args": ["mcp-server-db", "--password", "@@PASSWORD@@"]
+    },
+    "query": {
+      "url": "https://mcp.example.com/v1?api_key=@@QUERYKEY@@"
+    }
+  }
+}
