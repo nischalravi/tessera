@@ -87,3 +87,14 @@ export function settingsProblem(s: Omit<GuestLifecycleSettings, "updated_at">): 
 
 /** "30, 14, 3" → [30, 14, 3]; anything else → NaN entries, which settingsProblem refuses. */
 export const parseDays = (s: string): number[] => s.split(/[,\s]+/).filter(Boolean).map(Number);
+
+/** The tiles on Governance → Lifecycle: bucket, label, count and what the number means. A tile that needs action is flagged. */
+export function kpiTiles(counts: Partial<Record<GuestLifecycleBucket, number>>): { bucket: GuestLifecycleBucket; label: string; value: number; sub: string; tone?: "critical" | "warning" }[] {
+  const n = (b: GuestLifecycleBucket) => counts[b] ?? 0;
+  return [
+    { bucket: "expiring_14", label: "Ending in 14 days", value: n("expiring_14"), sub: `${n("expiring_3")} within 3 days`, tone: n("expiring_3") > 0 ? "warning" : undefined },
+    { bucket: "pending_transfer", label: "Pending transfer", value: n("pending_transfer"), sub: "a sponsor left; someone must take over", tone: n("pending_transfer") > 0 ? "critical" : undefined },
+    { bucket: "renewal_requests", label: "Renewal requests", value: n("renewal_requests"), sub: `${n("stepup_required")} held for step-up` },
+    { bucket: "dual_status", label: "Hired, sponsorship open", value: n("dual_status"), sub: "keep both roles, or end the sponsorship" },
+  ];
+}

@@ -40,14 +40,14 @@ export function GuestLifecycle() {
       sub="Sponsorships that are about to end, tasks that wait for a sponsor or an admin, and each guest's grace and retention period after their last affiliation ended."
       tabs={<GovernanceTabs />}
     >
-      {overview.error && <Callout tone="bad">{overview.error}</Callout>}
+      {overview.error && <Callout tone="bad">{overview.error.message}</Callout>}
       <div style={{ marginBottom: 12 }}>
         <FilterChips label="Guest lifecycle lists" options={options} value={view} onChange={(v) => setParams({ view: v }, { replace: true })} />
       </div>
       {view === "settings" ? (
         canSettings ? <Settings settings={overview.data?.settings ?? null} onSaved={overview.reload} /> : null
       ) : view === "tasks" ? (
-        <List key="tasks" bucket="tasks" rows={mine.data?.tasks ?? null} error={mine.error} reload={reloadAll} onDeparture={overview.data?.settings.on_sponsor_departure ?? "end"} />
+        <List key="tasks" bucket="tasks" rows={mine.data?.tasks ?? null} error={mine.error?.message ?? null} reload={reloadAll} onDeparture={overview.data?.settings.on_sponsor_departure ?? "end"} />
       ) : (
         <Bucket key={view} bucket={view} reload={reloadAll} onDeparture={overview.data?.settings.on_sponsor_departure ?? "end"} />
       )}
@@ -57,7 +57,7 @@ export function GuestLifecycle() {
 
 function Bucket({ bucket, reload, onDeparture }: { bucket: GuestLifecycleBucket; reload: () => void; onDeparture: "end" | "suspend" }) {
   const { data, error, reload: reloadList } = useApi<{ bucket: string; items: GuestLifecycleItem[] }>(`/guest-lifecycle/items?bucket=${bucket}`);
-  return <List bucket={bucket} rows={data?.items ?? null} error={error} reload={() => { reloadList(); reload(); }} onDeparture={onDeparture} />;
+  return <List bucket={bucket} rows={data?.items ?? null} error={error?.message ?? null} reload={() => { reloadList(); reload(); }} onDeparture={onDeparture} />;
 }
 
 function List({ bucket, rows, error, reload, onDeparture }: {

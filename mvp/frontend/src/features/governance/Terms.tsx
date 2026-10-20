@@ -38,7 +38,7 @@ export function Terms() {
       sub="Terms of use guests accept before they set up a sign-in. A new version needs accepting again, within its grace period."
       tabs={<GovernanceTabs />}
     >
-      {docs.error && <Callout tone="bad">{docs.error}</Callout>}
+      {docs.error && <Callout tone="bad">{docs.error.message}</Callout>}
       <DataTable
         id="guest-terms"
         rows={rows}

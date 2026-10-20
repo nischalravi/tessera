@@ -1,7 +1,7 @@
 import { FormEvent, useMemo, useState } from "react";
 import { Outlet, useNavigate, useSearchParams } from "react-router-dom";
 import { Ban, ClipboardCheck, KeyRound, Plus, RotateCcw, ShoppingCart, UserCheck, Users } from "lucide-react";
-import { AccountRow, ConnectorRow, Group, HrisEvent, IdentityRow, NhiRow, OrgRow, ResourceRow, api, fmtDay, relTime, useApi, LifecycleList, orgsPath } from "../../api";
+import { AccountRow, AffiliationSummaryRow, ConnectorRow, Group, HrisEvent, IdentityRow, NhiRow, OrgRow, ResourceRow, api, fmtDay, relTime, useApi, LifecycleList, orgsPath } from "../../api";
 import { useIdentityActions } from "../../app/actions";
 import { useSession } from "../../app/auth";
 import { usePersona } from "../../app/persona";
@@ -14,6 +14,7 @@ import { StateBadge, WORKER_LABEL } from "../lifecycle/parts";
 import { AccountPanel, AppPanel, GroupPanel, IdentityPanel, OrgPanel } from "./Panels";
 import { BulkOwnerDrawer } from "./owners";
 import { ImportDrawer, PreviewFormDrawer, opts, uniq } from "./shared";
+import { AFFILIATION_LABEL, STATE_LABEL as PERSON_STATE_LABEL } from "./affiliationModel";
 
 /** Identity lists each render their own page header; the layout only hosts them. */
 export function DirectoryLayout() {
@@ -128,6 +129,8 @@ export function People() {
   const { data, error, reload } = useApi<IdentityRow[]>("/identities?type=human");
   const { data: lc } = useApi<LifecycleList>("/lifecycle");
   const worker = useMemo(() => new Map((lc?.rows ?? []).map((l) => [l.person.id, l])), [lc]);
+  const { data: aff } = useApi<{ people: AffiliationSummaryRow[] }>("/affiliation-summary");
+  const affOf = useMemo(() => new Map((aff?.people ?? []).map((a) => [a.identity_id, a])), [aff]);
   const [selected, setSelected] = useSelected();
   const acts = useIdentityActions();
   const nav = useNavigate();
@@ -155,6 +158,8 @@ export function People() {
           { id: "dept", label: "Department", options: opts(uniq((data ?? []).map((r) => r.department))), get: (r) => r.department },
           { id: "worker", label: "Worker type", options: Object.entries(WORKER_LABEL).map(([value, label]) => ({ value, label })), get: (r) => worker.get(r.id)?.worker_type ?? "employee" },
           { id: "status", label: "Status", options: opts(["active", "disabled", "terminated"]), get: (r) => r.status },
+          { id: "affiliation", label: "Affiliation", options: Object.entries(AFFILIATION_LABEL).map(([value, label]) => ({ value, label })), get: (r) => affOf.get(r.id)?.types ?? [] },
+          { id: "lifecycle", label: "Lifecycle state", options: Object.entries(PERSON_STATE_LABEL).map(([value, label]) => ({ value, label })), get: (r) => affOf.get(r.id)?.lifecycle_state ?? "" },
           { id: "system", label: "System", options: opts(uniq((data ?? []).flatMap((r) => r.systems))), get: (r) => r.systems },
         ]}
         commands={[

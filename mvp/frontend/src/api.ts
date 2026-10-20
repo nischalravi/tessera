@@ -1147,6 +1147,8 @@ export interface Affiliation {
 /** Lifecycle state as far as affiliations determine it. */
 export type PersonState = "unaffiliated" | "prospective" | "active" | "expiring" | "expired" | "revoked" | "merged" | "invited";
 export interface PersonAffiliations { identity_id: number; lifecycle_state: PersonState; affiliations: Affiliation[] }
+/** One row of the People list's affiliation and lifecycle filters: effective affiliation types, no identifiers. */
+export interface AffiliationSummaryRow { identity_id: number; lifecycle_state: PersonState; types: AffiliationType[] }
 export interface PersonIdentifier {
   id: string;
   type: string;
@@ -1768,6 +1770,8 @@ export const guests = {
   resendInvitation: (guestId: number) => api<Sponsorship>(`/guests/${guestId}/resend-invitation`, {}),
   /** Cancel the invitation: its links and open claim sessions stop working. */
   revokeInvitation: (guestId: number) => api<Sponsorship>(`/guests/${guestId}/revoke-invitation`, {}),
+  /** Start recovery for a guest who lost their sign-in: a link goes to the guest, who proves who they are again (issue #73). */
+  recover: (guestId: number, reason: string) => api<GuestRecovery>(`/guests/${guestId}/recovery`, { reason }),
 };
 /** Kill switch (issue #106): revoke an identity's sessions, refresh tokens and OAuth grants at the providers. */
 export interface ContainmentStep {
@@ -2202,6 +2206,31 @@ export const sodPaths = {
   function: (id: string) => sodPath("functions", id), risk: (id: string) => sodPath("risks", id), ruleset: (id: string) => sodPath("rulesets", id),
   violations: (f: SodViolationFilter = {}) => `/sod/violations${sodViolationQuery(f)}`,
 };
+/** A recovery case: the guest re-proves identity at their original assurance level before a new sign-in is set up. */
+export interface GuestRecovery {
+  id: string;
+  identity_id: number;
+  status: string;
+  via: string;
+  reason: string;
+  required_ial: number;
+  privileged: boolean;
+  cooling_until: string | null;
+  created_at: string;
+  completed_at: string | null;
+  expires_at?: string;
+}
+export const guestRecoveries = {
+  list: () => api<{ recoveries: GuestRecovery[] }>("/guest-recoveries"),
+  cancel: (id: string, reason: string) => api<GuestRecovery>(`/guest-recoveries/${encodeURIComponent(id)}/cancel`, { reason }),
+};
+
+/** What the person page shows besides affiliations: where the person came from and what they accepted. No values, no hashes. */
+export interface GuestProfile {
+  identity_id: number;
+  source_records: { id: string; system: string; system_id: string; status: string; received_at: string; attributes: string[] }[];
+  terms_acceptances: { key: string; version: number; context: string; accepted_at: string }[];
+}
 
 // ---------------------------------------------------------------- guest claim (issue #69)
 

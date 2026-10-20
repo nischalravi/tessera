@@ -106,7 +106,10 @@ export const RAIL: RailGroup[] = [
       { id: "connections", label: "Connections", icon: Plug, path: "/admin/connections", keywords: "connectors sync okta aws github snowflake workday active directory ldap entra readiness wizard" },
       { id: "conditional-access", label: "Conditional access", icon: ShieldAlert, path: "/admin/conditional-access", keywords: "network location ip range device posture compliant managed step-up deny report-only policy sign-in trusted proxy" },
       { id: "flat-files", label: "Flat-file apps", icon: FileUp, path: "/admin/flat-files", keywords: "csv import upload disconnected applications no connector manual tasks column mapping sftp" },
-      { id: "admin", label: "Admin", icon: Settings, path: "/admin", except: ["/admin/connections", "/admin/flat-files", "/admin/conditional-access"], keywords: "settings configuration audit jobs" },
+      {
+        id: "admin", label: "Admin", icon: Settings, path: "/admin", except: ["/admin/connections", "/admin/flat-files", "/admin/conditional-access"], keywords: "settings configuration audit jobs",
+        pages: [{ path: "/admin/guests", label: "Guests and external identities", keywords: "guest settings matching lifecycle terms sponsor codes populations recovery cases sponsor policy" }],
+      },
     ],
   },
 ];
