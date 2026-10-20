@@ -144,13 +144,25 @@ func TestAffiliationsAPI_DerivedStateAndMerged(t *testing.T) {
 		t.Errorf("after ending the last affiliation: %s", v.LifecycleState)
 	}
 	carol := f.B.IDs["carol"]
-	if rec := corrDo(h, l, "POST", fmt.Sprintf("/api/identities/%d/merge", carol), fmt.Sprintf(`{"into":%d,"reason":"dup"}`, f.B.IDs["alice"])); rec.Code != 200 {
+	// both are employees: the merge waits for a second reviewer
+	rec := corrDo(h, l, "POST", fmt.Sprintf("/api/identities/%d/merge", carol), fmt.Sprintf(`{"into":%d,"reason":"dup"}`, f.B.IDs["alice"]))
+	if rec.Code != 202 {
 		t.Fatalf("merge: %d %s", rec.Code, rec.Body)
+	}
+	var pend struct {
+		Request mergeRequestView `json:"request"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &pend); err != nil {
+		t.Fatal(err)
+	}
+	l2 := policyAdmin(t, f, f.B.ID, "pa2@b.example")
+	if rec := corrDo(h, l2, "POST", "/api/identity-merge-requests/"+pend.Request.ID+"/approve", `{}`); rec.Code != 200 {
+		t.Fatalf("approve: %d %s", rec.Code, rec.Body)
 	}
 	if v := decodeAffs(t, corrDo(h, l, "GET", fmt.Sprintf("/api/identities/%d/affiliations", carol), "")); v.LifecycleState != "merged" {
 		t.Errorf("merged identity reads %s", v.LifecycleState)
 	}
-	rec := corrDo(h, l, "POST", fmt.Sprintf("/api/identities/%d/affiliations", carol), `{"type":"alum","reason":"x"}`)
+	rec = corrDo(h, l, "POST", fmt.Sprintf("/api/identities/%d/affiliations", carol), `{"type":"alum","reason":"x"}`)
 	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "identity_merged") {
 		t.Errorf("add to merged: %d %s", rec.Code, rec.Body)
 	}
@@ -229,5 +241,71 @@ func TestAffiliationsAPI_CrossTenant(t *testing.T) {
 		return err
 	}); err != nil || !stillActive {
 		t.Errorf("A's guest affiliation is no longer active (%v)", err)
+	}
+}
+
+func TestGuestProfileAPI(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	h := newIsolationServer(f).Handler()
+	alice, aliceA := f.B.IDs["alice"], f.A.IDs["alice"]
+	l := policyAdmin(t, f, f.B.ID, "pa@b.example")
+
+	for name, tc := range map[string]struct {
+		path string
+		code int
+	}{
+		"own tenant":   {fmt.Sprintf("/api/identities/%d/guest-profile", alice), 200},
+		"other tenant": {fmt.Sprintf("/api/identities/%d/guest-profile", aliceA), 404},
+		"not a number": {"/api/identities/x/guest-profile", 422},
+		"nobody":       {"/api/identities/999999/guest-profile", 404},
+	} {
+		rec := corrDo(h, l, "GET", tc.path, "")
+		if rec.Code != tc.code {
+			t.Errorf("%s: %d, want %d: %s", name, rec.Code, tc.code, rec.Body)
+		}
+	}
+
+	rec := corrDo(h, l, "GET", fmt.Sprintf("/api/identities/%d/guest-profile", alice), "")
+	var v guestProfileView
+	if json.Unmarshal(rec.Body.Bytes(), &v) != nil || v.IdentityID != alice || len(v.SourceRecords) == 0 {
+		t.Fatalf("profile: %s", rec.Body)
+	}
+	for _, sr := range v.SourceRecords {
+		if sr.System == "" || !strings.Contains(sr.SystemID, "***") && sr.SystemID != "***" || sr.Attributes == nil {
+			t.Errorf("source record not masked or shaped: %+v", sr)
+		}
+	}
+	if v.TermsAcceptance == nil {
+		t.Error("terms_acceptances must be an array, not null")
+	}
+}
+
+func TestAffiliationSummaryAPI(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	h := newIsolationServer(f).Handler()
+	l := policyAdmin(t, f, f.B.ID, "pa@b.example")
+	rec := corrDo(h, l, "GET", "/api/affiliation-summary", "")
+	var v struct {
+		People []affiliationSummaryRow `json:"people"`
+	}
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &v) != nil || len(v.People) == 0 {
+		t.Fatalf("summary: %d %s", rec.Code, rec.Body)
+	}
+	byID := map[int64]affiliationSummaryRow{}
+	for _, r := range v.People {
+		byID[r.IdentityID] = r
+		if r.Types == nil || r.LifecycleState == "" {
+			t.Errorf("row not shaped: %+v", r)
+		}
+	}
+	// the summary agrees with the per-person route
+	alice := f.B.IDs["alice"]
+	one := decodeAffs(t, corrDo(h, l, "GET", fmt.Sprintf("/api/identities/%d/affiliations", alice), ""))
+	if byID[alice].LifecycleState != one.LifecycleState {
+		t.Errorf("alice: summary %q, person route %q", byID[alice].LifecycleState, one.LifecycleState)
+	}
+	// only this tenant's people
+	if _, leaked := byID[f.A.IDs["alice"]]; leaked && f.A.IDs["alice"] != alice {
+		t.Errorf("tenant A's alice (%d) is in tenant B's summary", f.A.IDs["alice"])
 	}
 }

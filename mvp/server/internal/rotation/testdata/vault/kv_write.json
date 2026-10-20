@@ -1,0 +1,16 @@
+{
+  "request_id": "9f8e7d6c-5b4a-3921-0817-f6e5d4c3b2a1",
+  "lease_id": "",
+  "renewable": false,
+  "lease_duration": 0,
+  "data": {
+    "created_time": "2026-10-12T09:30:00.123456789Z",
+    "custom_metadata": null,
+    "deletion_time": "",
+    "destroyed": false,
+    "version": 3
+  },
+  "wrap_info": null,
+  "warnings": null,
+  "auth": null
+}

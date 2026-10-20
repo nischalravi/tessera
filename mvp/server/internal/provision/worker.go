@@ -37,6 +37,10 @@ type Settings struct {
 	Dialect string `json:"dialect,omitempty"`
 	// Fault is the fake target's fault mode (dev only).
 	Fault string `json:"fault,omitempty"`
+	// OnDeprovision says what happens to a person's account here once the grace
+	// period after their last affiliation ended has passed: "disable" (the
+	// default: leave it disabled) or "delete" it in the target (issue #74).
+	OnDeprovision string `json:"on_deprovision,omitempty"`
 }
 
 // Engine sends queued operations to their targets and verifies them.

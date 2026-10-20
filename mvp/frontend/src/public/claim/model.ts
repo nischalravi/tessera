@@ -39,14 +39,6 @@ export function tenantSlug(hostname: string, configured?: string): string {
   return "larkspur";
 }
 
-export const STEP_LABEL: Record<ClaimStep, string> = {
-  verify_contact: "Confirm your email",
-  verify_identity: "Verify your identity",
-  existing_account: "Existing account",
-  credential: "Choose how you sign in",
-  complete: "Done",
-};
-
 /** The steps a person goes through, from what the API listed (identity verification only when it is the step). */
 export function visibleSteps(s: Pick<ClaimStatus, "steps" | "step">): ClaimStep[] {
   return s.steps.filter((x) => x !== "verify_identity" || s.step === "verify_identity");
@@ -73,20 +65,35 @@ export type ClaimView =
 export function viewOf(s: ClaimStatus): ClaimView {
   if (s.complete || s.step === "complete") return { kind: "complete" };
   if (s.pending === "organization" && s.step === "credential") return { kind: "step", step: "credential" };
+  if ((s.pending === "terms" || s.pending === "consent") && s.step === "credential") return { kind: "step", step: "credential" };
   if (s.pending === "identity_verification") return { kind: "waiting", why: "identity_verification" };
   return { kind: "step", step: s.step };
 }
 
-/** ?result=complete|failed, which the credential authority's callback sends the browser back with. */
-export function resultFromSearch(search: string): "complete" | "failed" | null {
+export type ClaimResult = "complete" | "failed" | "continue" | "cooling_off";
+
+/**
+ * ?result=complete|failed|continue|cooling_off, which the sign-in callbacks send the browser back with.
+ * "continue" is a sign-in as an existing account that did not link anything: it looks the same whatever the
+ * reason, and the claim goes on at the credential step.
+ */
+export function resultFromSearch(search: string): ClaimResult | null {
   const v = new URLSearchParams(search).get("result");
-  return v === "complete" || v === "failed" ? v : null;
+  return v === "complete" || v === "failed" || v === "continue" || v === "cooling_off" ? v : null;
 }
 
-/** Population in a sentence. */
-export const POPULATION_PHRASE: Record<string, string> = {
-  visitor: "a visitor",
-  contractor: "a contractor",
-  volunteer: "a volunteer",
-  partner: "a partner",
-};
+/** Where a "yes, I have an account" answer sends the browser: the sign-in the API started, or nowhere. */
+export const signInRedirect = (r: { status?: string; redirect?: string }): string | null =>
+  r.status === "redirect" && typeof r.redirect === "string" && r.redirect !== "" ? r.redirect : null;
+
+/**
+ * What is left of step 5 in what the API listed: the documents not yet ticked, and whether the consent
+ * screen is still to answer. The page offers the button only when everything shown is ticked.
+ */
+export function termsReady(docs: { id: string }[], ticked: Record<string, boolean>): boolean {
+  return docs.length > 0 && docs.every((d) => ticked[d.id]);
+}
+
+/** The attributes to send for a consent: the required ones are always included by the API, so only the chosen optional ones. */
+export const consentChoice = (attrs: { name: string; required: boolean }[], chosen: Record<string, boolean>): string[] =>
+  attrs.filter((a) => !a.required && chosen[a.name]).map((a) => a.name);

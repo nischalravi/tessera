@@ -87,4 +87,6 @@ func (s *Secrets) Len() int {
 
 // SecretKind reports whether a notification kind carries a one-time secret
 // supplied at send time (see Secrets).
-func SecretKind(kind string) bool { return kind == KindGuestInvitation || kind == KindClaimCode }
+func SecretKind(kind string) bool {
+	return kind == KindGuestInvitation || kind == KindClaimCode || kind == KindGuestRenewalLink || kind == KindGuestRecoveryLink
+}

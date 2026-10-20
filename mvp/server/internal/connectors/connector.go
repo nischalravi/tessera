@@ -62,6 +62,38 @@ type AccountRecord struct {
 	Attributes map[string]string
 }
 
+// AuthSignals are what a source reports about how one account signs in.
+// Each fact is tri-state: nil is unknown. They are recorded as reported,
+// never inferred, and a connector that has no such field leaves them out.
+type AuthSignals struct {
+	Account          Ref   // kind account
+	HasLocalPassword *bool // the account can sign in with a password held by the app itself
+	MFAEnabled       *bool // the app enforces or has registered MFA for the account
+	SSOEnforced      *bool // the account can only sign in through the IdP
+}
+
+// AuthMethodRecord is one registered authentication method of an account.
+// Strength is a mfa.Strength value and Kind a mfa.Kind* value, set by the
+// connector's classifier.
+type AuthMethodRecord struct {
+	Account    Ref // kind account
+	ExternalID string
+	Strength   string
+	Kind       string
+	Label      string
+	EnrolledAt *time.Time
+}
+
+// AuthMethodSource says whether a connector read registered methods in this
+// run. Unavailable (for example a missing Graph scope) means no methods were
+// read: ingest keeps what it stored and the report shows the gap, so a missing
+// permission never looks like "nobody has MFA".
+type AuthMethodSource struct {
+	System      string
+	Unavailable bool
+	Detail      string
+}
+
 // GroupRecord is a group, team, role or security group.
 type GroupRecord struct {
 	System      string
@@ -129,6 +161,63 @@ type DelegationRecord struct {
 	ExpiresAt *time.Time
 }
 
+// AgentRecord is what a source system says about how an AI agent came to be:
+// the system it was found in, who created it and who sponsors it (issue #116).
+// The agent itself is an ai_agent IdentityRecord (the sponsor is its Owner, so
+// the nhi-ownership policy applies), its account is an AccountRecord of kind
+// "agent" and its credentials are SecretRecords; this record adds provenance.
+type AgentRecord struct {
+	// System is the source system ("entra", "okta", "aws-agentcore").
+	System string
+	// ExternalID is the agent's id in that system.
+	ExternalID string
+	// Identity is the ai_agent identity this record describes.
+	Identity IdentityRef
+	// Kind says what the agent is in the source: entra_agent_identity,
+	// okta_service_app or bedrock_agentcore_runtime.
+	Kind    string
+	Creator *IdentityRef
+	Sponsor *IdentityRef
+	// CreatorRef and SponsorRef are the source's own words for them (a UPN, an
+	// e-mail address, a principal ARN), kept when they do not resolve to an
+	// identity. They are never credentials.
+	CreatorRef string
+	SponsorRef string
+}
+
+// MCPFindingRecord is one finding from scanning source code for MCP server
+// configurations and agent credentials (issue #116). It holds the location, a
+// fingerprint and the secret TYPE, never a secret value: Fingerprint is a
+// truncated hash made by the scanner.
+type MCPFindingRecord struct {
+	// System is the scanning connector ("github").
+	System string
+	// Kind is mcp_server or agent_credential.
+	Kind string
+	Org  string
+	Repo string
+	Path string
+	// Location is where in the file: a JSON path ("mcpServers.github.env.TOKEN")
+	// or a line ("L12").
+	Location string
+	// Server is the MCP server's name in the config, Transport is stdio, http,
+	// sse or unknown and Target is the command name or the URL host.
+	Server    string
+	Transport string
+	Target    string
+	// SecretType is the kind of secret ("github_token", "anthropic_api_key"),
+	// empty for an mcp_server finding without one.
+	SecretType  string
+	Fingerprint string
+	// Owner is who the finding is linked to: Ref is a source-side name
+	// ("@team", "github:login", an e-mail address), Source says how it was
+	// found (codeowners, committer or none).
+	OwnerRef    string
+	OwnerSource string
+	Owner       *IdentityRef
+	CommitSHA   string
+}
+
 // DiscoveryResult is a full snapshot of one system.
 type DiscoveryResult struct {
 	Identities  []IdentityRecord
@@ -139,6 +228,21 @@ type DiscoveryResult struct {
 	Edges       []EdgeRecord
 	Secrets     []SecretRecord
 	Delegations []DelegationRecord
+	// AuthMethods are the registered authentication methods of the accounts
+	// in AuthSource.System. Optional.
+	AuthMethods []AuthMethodRecord
+	// AuthSource is set by a connector that reads authentication methods.
+	AuthSource *AuthMethodSource
+	// AuthSignals are per-account password, MFA and SSO facts of apps and
+	// data platforms (Snowflake, GitHub, AWS IAM users). Optional.
+	AuthSignals []AuthSignals
+	// Agents and MCPFindings are the agent-discovery records (issue #116).
+	// AgentSnapshotOf names the systems for which this result is the complete
+	// list of both: ingest replaces what it holds for those systems, so an
+	// agent or finding that is gone from the source is gone from Tessera.
+	Agents          []AgentRecord
+	MCPFindings     []MCPFindingRecord
+	AgentSnapshotOf []string
 	// Stats are per-object-class attribute fill counts computed by the
 	// connector, so fill rates need no attribute values. Optional.
 	Stats *DiscoveryStats

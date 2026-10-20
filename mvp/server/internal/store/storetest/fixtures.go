@@ -144,6 +144,8 @@ func seedTemplate(target string) error {
 		seeded.b = seedTenant(rec, db, BID, "tenant-b", "")
 		seedReadiness(rec, db, &seeded.a, "")
 		seedReadiness(rec, db, &seeded.b, ReadinessSentinel)
+		seedRotation(rec, db, &seeded.a, Sentinel)
+		seedRotation(rec, db, &seeded.b, "")
 	}()
 	if rec.msg != "" {
 		_ = db.Close()
@@ -285,6 +287,24 @@ func seedTenant(tb testing.TB, db *store.DB, id tenancy.ID, slug, sentinel strin
 		for i, e := range edges {
 			t.IDs[fmt.Sprintf("edge:%d", i)] = e.ID
 		}
+		// AI agent discovery (issue #116): the tiny world's agent has a profile, and a scan found
+		// an MCP server and a credential in code.
+		bot, owner := t.IDs["helper-bot"], t.IDs["alice"]
+		if err := c.UpsertAgentProfile(&store.AgentProfile{Source: "okta", ExternalID: "helper-bot", IdentityID: bot,
+			Kind: "okta_service_app", CreatorRef: mark("creator"), SponsorRef: mark("sponsor"), SponsorID: &owner}, Now); err != nil {
+			return err
+		}
+		for _, f := range []store.MCPFinding{
+			{Kind: "mcp_server", Location: "mcpServers.docs", Server: mark("docs"), Transport: "http", Target: "docs.example.com"},
+			{Kind: "agent_credential", Location: "mcpServers.docs.env.TOKEN", Server: mark("docs"), SecretType: "github_token",
+				Fingerprint: "0123456789abcdef"},
+		} {
+			f.Source, f.Org, f.Repo, f.Path = "github-scan", mark("org"), "repo", ".mcp.json"
+			f.OwnerRef, f.OwnerSource, f.OwnerID = mark("owner"), "committer", &owner
+			if err := c.UpsertMCPFinding(&f, Now); err != nil {
+				return err
+			}
+		}
 		return c.Audit(Now, mark("auditor"), "storetest.seeded", ojson.Object{{Key: "tenant", Value: mark(slug)}})
 	})
 	if err != nil {
@@ -404,6 +424,14 @@ func Dump(tb testing.TB, db *store.DB, t tenancy.ID) string {
 		get("edge_history", v14, e)
 		v15, e := c.EvidencePacks()
 		get("evidence_packs", v15, e)
+		v16, e := c.RotationAdapters()
+		get("rotation_adapters", v16, e)
+		v17, e := c.RotationPolicies()
+		get("rotation_policies", v17, e)
+		v18, e := c.RotationBulks()
+		get("rotation_bulks", v18, e)
+		v19, e := c.RotationJobs(store.RotationJobFilter{})
+		get("rotation_jobs", v19, e)
 		return err
 	})
 	if err != nil {
@@ -452,7 +480,43 @@ func seedIdentityModel(c *store.TenantTx, t *Tenant, mark func(string) string) e
 		return err
 	}
 	t.Refs["affiliation:guest"] = a.ID
-	return nil
+	return seedIntake(c, t, a, mark)
+}
+
+// seedIntake adds an organizational sponsor, an intake event whose detail
+// carries the tenant's sentinel (Refs["intake"]) and a conversion of alice
+// from her employee affiliation to the guest one (Refs["conversion"]).
+func seedIntake(c *store.TenantTx, t *Tenant, guest *store.Affiliation, mark func(string) string) error {
+	if err := c.PutOrgSponsor(&store.OrgSponsor{Key: "admissions", Name: mark("Office of Admissions"),
+		Population: "applicant", CreatedAt: Now}); err != nil {
+		return err
+	}
+	sponsor, eff := "admissions", Now
+	rec := &store.IntakeEvent{ID: uuid.NewString(), Channel: store.ChannelSIS, MatchMode: store.MatchAuthoritative,
+		SponsorOrg: &sponsor, EventKey: "sis:evt-1", EventType: "admitted", EffectiveAt: &eff, Status: store.IntakeEventResolved,
+		Detail: `{"outcome":"started","note":"` + mark("fixture") + `"}`, CreatedAt: Now}
+	if err := c.InsertIntakeEvent(rec); err != nil {
+		return err
+	}
+	t.Refs["intake"] = rec.ID
+	affs, err := c.AffiliationsFor(t.IDs["alice"])
+	if err != nil {
+		return err
+	}
+	for _, from := range affs {
+		if from.Type != store.AffEmployee {
+			continue
+		}
+		v := &store.Conversion{ID: uuid.NewString(), IdentityID: t.IDs["alice"], FromAffiliationID: from.ID,
+			ToAffiliationID: guest.ID, FromType: from.Type, ToType: guest.Type, Trigger: store.ConvSISStatus,
+			IntakeID: &rec.ID, EffectiveAt: Now, CreatedAt: Now}
+		if err := c.InsertConversion(v); err != nil {
+			return err
+		}
+		t.Refs["conversion"] = v.ID
+		return nil
+	}
+	return errors.New("storetest: alice has no employee affiliation")
 }
 
 var errSeedFailed = errors.New("storetest: seed failed")

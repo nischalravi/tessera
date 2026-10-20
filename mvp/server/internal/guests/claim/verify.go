@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/normalize"
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/access"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/affiliations"
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -26,6 +27,8 @@ type verified struct {
 	AAL        int    `json:"aal,omitempty"`
 	ACR        string `json:"acr,omitempty"`
 	Authority  string `json:"authority,omitempty"`
+	// Purpose is "recovery" for the session of an account recovery (GU-10).
+	Purpose string `json:"purpose,omitempty"`
 }
 
 func readVerified(sess *store.ClaimSession) verified {
@@ -154,8 +157,15 @@ func (s *Service) CheckCode(tx *store.TenantTx, sess *store.ClaimSession, submit
 	v.EmailAt, v.IAL, v.VouchedBy = now.UTC().Format("2006-01-02T15:04:05Z"), 0, "sponsor"
 	saveVerified(sess, v)
 	sess.Step, sess.LastSeenAt = StepExistingAccount, now
-	if ss.RequiredIAL > 0 {
-		sess.Step = StepVerifyIdentity
+	ial, err := s.requiredIAL(tx, sess, ss)
+	if err != nil {
+		return CodeCheck{}, err
+	}
+	switch {
+	case ial > 0:
+		sess.Step = StepVerifyIdentity // GU-7 (not built): the claim waits here
+	case v.Purpose == store.ClaimPurposeRecovery:
+		sess.Step = StepCredential // a recovery has no "existing account" question
 	}
 	if err := tx.SaveClaimSession(sess); err != nil {
 		return CodeCheck{}, err
@@ -170,8 +180,9 @@ func (s *Service) CheckCode(tx *store.TenantTx, sess *store.ClaimSession, submit
 // ExistingAccount records the claimant's answer to "do you already have an
 // account?". It is asked of every claimant, so asking it reveals nothing. The
 // answer is stored on the intake for the review queue and never links anyone
-// (K3); matching is GU-5 (see Service.OnExistingAccount). It moves the claim to
-// the credential step.
+// (K3). A "yes" is followed by a sign-in as the existing person (the API starts
+// it; the callback links by sign-in, CompleteLinked). It moves the claim to the
+// credential step: if the sign-in does not link, that is where the claim goes on.
 func (s *Service) ExistingAccount(tx *store.TenantTx, sess *store.ClaimSession, answer string, now time.Time) error {
 	if answer != "yes" && answer != "no" {
 		return refuse(422, "invalid_answer", "answer is yes or no")
@@ -182,15 +193,6 @@ func (s *Service) ExistingAccount(tx *store.TenantTx, sess *store.ClaimSession, 
 	if err := tx.SetIntakeExistingAccount(sess.IntakeID, answer, now); err != nil {
 		return err
 	}
-	if s.OnExistingAccount != nil {
-		in, err := tx.Intake(sess.IntakeID)
-		if err != nil {
-			return err
-		}
-		if err := s.OnExistingAccount(tx, in, answer); err != nil {
-			return err
-		}
-	}
 	v := readVerified(sess)
 	v.ExistingAt = now.UTC().Format("2006-01-02T15:04:05Z")
 	saveVerified(sess, v)
@@ -200,6 +202,37 @@ func (s *Service) ExistingAccount(tx *store.TenantTx, sess *store.ClaimSession, 
 	}
 	return auditEvent(tx, now, "claim.existing_account", "intake", sess.IntakeID, ojson.Object{{Key: "intake_id", Value: sess.IntakeID},
 		{Key: "answer", Value: answer}, {Key: "linked", Value: false}})
+}
+
+// ---------------------------------------------------------------- link by sign-in
+
+// ErrLinkNotReady is a link by sign-in for a claim that is not open.
+var ErrLinkNotReady = errors.New("claim: the claim is not open")
+
+// Linked is what a link by sign-in did to the claim: the invitation is done, as
+// the person the claimant signed in as. No credential was created for the guest
+// and none was transferred; the person's own credential is the one that proved it.
+// The caller has already linked the intake (merge.LinkBySignIn, which moved the
+// sponsorship, bundle and affiliations to the person, started the affiliations
+// and told the sponsor); this closes the claim session and records the assurance
+// the sign-in reached.
+func (s *Service) CompleteLinked(tx *store.TenantTx, sess *store.ClaimSession, person int64, b Binding, now time.Time) error {
+	if sess.CompletedAt != nil || sess.RevokedAt != nil || sess.Step == StepComplete {
+		return ErrLinkNotReady
+	}
+	if err := tx.PutIdentityAssurance(&store.Assurance{IdentityID: person, IAL: 0, AAL: b.AAL, Source: "claim_link", RecordedAt: now}); err != nil {
+		return err
+	}
+	v := readVerified(sess)
+	v.AAL, v.ACR, v.Authority = b.AAL, b.ACR, "existing_account"
+	saveVerified(sess, v)
+	sess.Step, sess.CompletedAt, sess.LastSeenAt = StepComplete, &now, now
+	if err := tx.SaveClaimSession(sess); err != nil {
+		return err
+	}
+	return auditEvent(tx, now, "claim.complete", "identity", int64s(person), ojson.Object{{Key: "intake_id", Value: sess.IntakeID},
+		{Key: "identity_id", Value: person}, {Key: "linked_by_sign_in", Value: true}, {Key: "connection_id", Value: b.ConnectionID.String()},
+		{Key: "aal", Value: b.AAL}, {Key: "acr", Value: b.ACR}})
 }
 
 // ---------------------------------------------------------------- credential
@@ -294,6 +327,10 @@ func (s *Service) Complete(tx *store.TenantTx, sess *store.ClaimSession, b Bindi
 	if !MeetsAAL(ss.RequiredAAL, b.AAL, b.ACR) {
 		return nil, ErrAAL
 	}
+	// terms come before the credential is bound (§7.4)
+	if err := s.outstandingGate(tx, sess, b.Authority, now); err != nil {
+		return nil, err
+	}
 	if users, err := tx.UsersLinkedTo(guest.ID); err != nil {
 		return nil, err
 	} else if len(users) > 0 {
@@ -352,6 +389,11 @@ func (s *Service) Complete(tx *store.TenantTx, sess *store.ClaimSession, b Bindi
 		return nil, err
 	}
 	if err := notify.GuestClaimed(tx, now, ss); err != nil {
+		return nil, err
+	}
+	// the access bundle is granted and the guest joins the reference groups of
+	// their affiliations (GU-12); the identity assurance reached is recorded
+	if err := access.Claimed(tx, now, guest.ID, v.IAL, b.AAL); err != nil {
 		return nil, err
 	}
 	err = auditEvent(tx, now, "claim.complete", "identity", int64s(guest.ID), ojson.Object{{Key: "intake_id", Value: sess.IntakeID},

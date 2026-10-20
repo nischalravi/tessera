@@ -1,5 +1,5 @@
 import {
-  AppWindow, BadgeCheck, BellRing, Bot, Building2, CalendarClock, ChartLine, ClipboardCheck, FileArchive, FileUp, House, Inbox, KeyRound, Layers, LifeBuoy, LockKeyhole, LucideIcon, Network, Plug, Plus, Radio, Settings, ShieldAlert, ShieldCheck, ShieldHalf, SlidersHorizontal, Timer, UserCheck, UserPlus, Users, UsersRound,
+  AppWindow, BadgeCheck, BellRing, Bot, Building2, CalendarClock, ChartLine, ClipboardCheck, FileArchive, FileUp, House, Inbox, KeyRound, Layers, LifeBuoy, LockKeyhole, LucideIcon, Network, Plug, Plus, Radio, RotateCw, Settings, ShieldAlert, ShieldCheck, ShieldHalf, SlidersHorizontal, Timer, UserCheck, UserPlus, Users, UsersRound,
 } from "lucide-react";
 
 export interface NavPage {
@@ -37,12 +37,23 @@ export const RAIL: RailGroup[] = [
   {
     label: "Identity",
     items: [
-      { id: "users", label: "Users", icon: Users, path: "/directory/people", keywords: "people employees humans identities" },
+      {
+        id: "users", label: "Users", icon: Users, path: "/directory/people", also: ["/directory/identity-matches"], keywords: "people employees humans identities",
+        pages: [{ path: "/directory/identity-matches", label: "Identity matches", keywords: "match review queue duplicate guest invitation existing person link merge second reviewer four eyes reverification" }],
+      },
       { id: "workers", label: "Contractors & guests", icon: CalendarClock, path: "/directory/workers", keywords: "contractors partners vendors interns guests temporary accounts expiry end date sponsor expiring" },
       { id: "machine", label: "Machine identities & agents", icon: Bot, path: "/directory/machine", keywords: "nhi service accounts api keys ai agents bots secrets" },
       {
         id: "groups", label: "Groups", icon: UsersRound, path: "/directory/groups", also: ["/directory/entitlements"], keywords: "okta groups teams",
         pages: [{ path: "/directory/entitlements", label: "Entitlements", keywords: "groups permissions aws roles snowflake okta" }],
+      },
+      {
+        id: "rotation", label: "Secret rotation", icon: RotateCw, path: "/rotation/secrets", also: ["/rotation"], keywords: "credentials vault rotate keys tokens api keys aws iam secrets manager hashicorp github deploy key vendor compromised breach",
+        pages: [
+          { path: "/rotation/jobs", label: "Rotation jobs", keywords: "rotate history failed retry verify old credential" },
+          { path: "/rotation/policies", label: "Rotation policies & adapters", keywords: "max age grace period vault aws github adapter" },
+          { path: "/rotation/vendor", label: "Vendor compromised", keywords: "breach bulk rotate integration incident" },
+        ],
       },
       { id: "apps", label: "Applications", icon: AppWindow, path: "/directory/apps", keywords: "apps systems endpoints connectors resources" },
       { id: "ownership", label: "Ownership", icon: UserCheck, path: "/directory/ownership", keywords: "owners backup owner orphaned unowned accountable purpose" },
@@ -66,9 +77,11 @@ export const RAIL: RailGroup[] = [
       { id: "guests", label: "Guests I sponsor", icon: UserPlus, path: "/access/guests", keywords: "guest sponsor invite visitor contractor volunteer partner sponsorship bulk csv approve transfer" },
       { id: "jit", label: "Just-in-time", icon: Timer, path: "/access/jit", keywords: "jit elevation temporary privileged break glass" },
       {
-        id: "reviews", label: "Access reviews", icon: ClipboardCheck, path: "/governance/reviews", also: ["/governance/lifecycle", "/governance/workflows", "/governance/drift"], keywords: "certification campaigns attestation",
+        id: "reviews", label: "Access reviews", icon: ClipboardCheck, path: "/governance/reviews", also: ["/governance/lifecycle", "/governance/guest-lifecycle", "/governance/terms", "/governance/workflows", "/governance/drift"], keywords: "certification campaigns attestation",
         pages: [
           { path: "/governance/lifecycle", label: "Lifecycle", keywords: "joiner mover leaver jml hris workday onboarding offboarding" },
+          { path: "/governance/guest-lifecycle", label: "Guest lifecycle", keywords: "guest sponsorship expiry renewal reminder transfer sponsor leaver conversion deprovision grace retention purge step-up" },
+          { path: "/governance/terms", label: "Guest terms", keywords: "guest terms of use acceptable use privacy notice acceptance consent version grace recovery" },
           { path: "/governance/drift", label: "Drift", keywords: "intended observed rogue orphan stale missing reconciliation remediation" },
           { path: "/governance/workflows", label: "Workflows", keywords: "approval routing escalation" },
         ],
@@ -91,6 +104,7 @@ export const RAIL: RailGroup[] = [
           { path: "/insights/least-privilege", label: "Least privilege", keywords: "unused recommendations right size revoke" },
           { path: "/insights/sod", label: "SoD conflicts", keywords: "segregation separation of duties toxic combination" },
           { path: "/insights/aws", label: "AWS access", keywords: "aws effective permissions can who can policy change simulate diff pull request" },
+          { path: "/insights/mfa", label: "MFA posture", keywords: "mfa multi-factor passkey fido2 webauthn phishing-resistant authentication methods okta entra sso bypass local password coverage" },
           { path: "/insights/deployment-health", label: "Deployment health", keywords: "readiness checklist deployment gaps connection setup reconciliation orphans missed" },
         ],
       },
@@ -103,7 +117,10 @@ export const RAIL: RailGroup[] = [
       { id: "conditional-access", label: "Conditional access", icon: ShieldAlert, path: "/admin/conditional-access", keywords: "network location ip range device posture compliant managed step-up deny report-only policy sign-in trusted proxy" },
       { id: "flat-files", label: "Flat-file apps", icon: FileUp, path: "/admin/flat-files", keywords: "csv import upload disconnected applications no connector manual tasks column mapping sftp" },
       { id: "signals", label: "Shared Signals", icon: Radio, path: "/admin/shared-signals", keywords: "ssf caep risc transmitter okta revoke session propagate push poll set events" },
-      { id: "admin", label: "Admin", icon: Settings, path: "/admin", except: ["/admin/connections", "/admin/shared-signals", "/admin/flat-files", "/admin/conditional-access"], keywords: "settings configuration audit jobs" },
+      {
+        id: "admin", label: "Admin", icon: Settings, path: "/admin", except: ["/admin/connections", "/admin/shared-signals", "/admin/flat-files", "/admin/conditional-access"], keywords: "settings configuration audit jobs",
+        pages: [{ path: "/admin/guests", label: "Guests and external identities", keywords: "guest settings matching lifecycle terms sponsor codes populations recovery cases sponsor policy" }],
+      },
     ],
   },
 ];

@@ -54,6 +54,8 @@
 //	TESSERA_SAFEDIAL_ALLOW      dev only: host:port or CIDR:port private LDAP targets live checks may dial (see mvp/README.md "Live LDAP checks")
 //	TESSERA_AGENT_ADDR, TESSERA_AGENT_TLS_CERT, TESSERA_AGENT_TLS_KEY  the mutual-TLS listener Directory
 //	                      Agents connect to, and its certificate and key (see mvp/README.md "Directory Agent")
+//	TESSERA_ROTATION_FAKE_ADAPTERS  true (the dev and test default) admits the simulated secret-rotation
+//	                      adapter, which the demo policies use; prod refuses it
 //	TESSERA_READINESS_DEMO      "off" skips seeding the demo Okta connection (larkspur only) for Deployment health
 package main
 
@@ -99,6 +101,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/provision/fake"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
+	"github.com/nischalravi/tessera/mvp/server/internal/rotation"
 	"github.com/nischalravi/tessera/mvp/server/internal/safedial"
 	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
@@ -314,6 +317,8 @@ func seedDB(ctx context.Context, path string, cfg *config.Config, clock timeutil
 	keyer := identifiers.NewKeyer(sealer)
 	for i := range tenants {
 		tenants[i].Identifiers = keyer
+		tenants[i].DemoMatching = tenants[i].Slug == seed.LarkspurSlug       // an item for the Identity matches queue
+		tenants[i].DemoGuestLifecycle = tenants[i].Slug == seed.LarkspurSlug // rows for Governance → Guest lifecycle
 	}
 	stats, err := seed.Run(ctx, st, now, pols, tenants)
 	if err != nil {
@@ -335,6 +340,13 @@ func seedDB(ctx context.Context, path string, cfg *config.Config, clock timeutil
 			return fmt.Errorf("readiness demo: %w", err)
 		}
 		fmt.Fprintf(stdout, "Seeded the deployment-readiness demo for tenant %s: Okta (demo) connection validated and dry-run reconciled\n",
+			seed.LarkspurSlug)
+	}
+	if cfg.RotationFakeAdapters {
+		if err := seedRotationDemo(ctx, st, seed.LarkspurID, clock); err != nil {
+			return fmt.Errorf("rotation demo: %w", err)
+		}
+		fmt.Fprintf(stdout, "Seeded the secret-rotation demo for tenant %s: a simulated provider and policies for the demo credentials\n",
 			seed.LarkspurSlug)
 	}
 	if err := keys.EnsureAll(ctx, st, sealer, clock()); err != nil {
@@ -367,6 +379,8 @@ const (
 	checkpointInterval = 30 * time.Second
 	// siemInterval is how often SIEM sinks are pushed what is new in the ledger (#169).
 	siemInterval = 15 * time.Second
+	// rotationInterval is how often the rotation worker looks for due jobs.
+	rotationInterval = 30 * time.Second
 )
 
 func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Sealer, clock timeutil.Clock,
@@ -478,6 +492,12 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	siemSvc := &siem.Service{DB: st, Sealer: sealer, HTTP: outbound, Clock: clock, Log: logger,
 		Dev: cfg.Env == config.Dev && cfg.OutboundAllowLoopback}
 	containmentSvc := &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock, DB: st}
+	// Secret rotation: the worker calls providers only through the SSRF-guarded
+	// client, opens adapter credentials only with the KEK, and the simulated
+	// adapter exists only where config allows it (never in prod).
+	rotationEngine := &rotation.Engine{DB: st, Clock: clock, Log: logger,
+		Service: &rotation.Service{Sealer: sealer, Env: cfg.Env, AllowFake: cfg.RotationFakeAdapters},
+		Factory: &rotation.Factory{HTTP: outbound, Sealer: sealer, Now: clock, AllowFake: cfg.RotationFakeAdapters}}
 	srv := api.New(api.Config{Health: checker, Store: st, Clock: clock, Policies: loader, Logger: logger,
 		Secrets: secrets, Credential: authority,
 		PublicURL: cfg.PublicURL, RPID: cfg.RPID, Sealer: sealer, OutboundHTTP: outbound, GroupsEngine: groupsEngine, APIAudience: cfg.APIAudience,
@@ -490,7 +510,8 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
 		HSTS: cfg.IsProd(), Env: cfg.Env, Identifiers: identifiers.NewKeyer(sealer), EmailMode: cfg.Mail.Mode, TrustedProxies: cfg.TrustedProxies, ReadinessScenario: scenario, Readiness: rsvc, Agents: agents, AuditAnchor: anchorURL,
 		Siem: siemSvc, Alerts: alertSvc, AWSCatalog: awsCatalogLoader(cfg),
-		SoD: sod.Settings{MaxDays: cfg.SoDMaxMitigationDays, WarnDays: cfg.SoDWarnDays}})
+		SoD:          sod.Settings{MaxDays: cfg.SoDMaxMitigationDays, WarnDays: cfg.SoDWarnDays},
+		RotationFake: cfg.RotationFakeAdapters})
 	sender, err := notify.NewSender(cfg.Mail, cfg.Env, cfg.OutboundAllowLoopback, sealer, config.DevMailPath(o.db), logger)
 	if err != nil {
 		return err
@@ -615,6 +636,11 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		defer close(notifyDone)
 		dispatcher.Loop(ctx, notifyInterval)
 	}()
+	rotationDone := make(chan struct{})
+	go func() {
+		defer close(rotationDone)
+		rotationEngine.Loop(ctx, rotationInterval)
+	}()
 	errc := make(chan error, 2)
 	go func() { errc <- httpSrv.Serve(ln) }()
 	logger.Info("tessera API listening", "addr", ln.Addr().String())
@@ -645,6 +671,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		<-groupsDone
 		<-historyDone
 		<-notifyDone
+		<-rotationDone
 		return err
 	case <-ctx.Done():
 	}
@@ -672,6 +699,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	<-groupsDone
 	<-historyDone
 	<-notifyDone
+	<-rotationDone
 	for i := 0; i < cap(errc) && (i == 0 || agentSrv != nil); i++ {
 		if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			return serveErr

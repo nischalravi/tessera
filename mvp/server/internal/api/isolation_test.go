@@ -41,12 +41,20 @@ func isolationServer(t testing.TB, f *storetest.Fixture, tenant tenancy.ID) test
 	return asAdmin(t, newIsolationServer(f), f.DB, tenant, storetest.Now)
 }
 
-func newIsolationServer(f *storetest.Fixture) *Server {
+func newIsolationServer(f *storetest.Fixture) *Server { return newIsolationServerWith(f, nil) }
+
+// newRotationIsolationServer is newIsolationServer with a KEK for adapter
+// credentials and the simulated rotation adapter admitted.
+func newRotationIsolationServer(f *storetest.Fixture) *Server {
+	return newIsolationServerWith(f, func(c *Config) { c.Sealer, c.RotationFake = testSealer(), true })
+}
+
+func newIsolationServerWith(f *storetest.Fixture, mutate func(*Config)) *Server {
 	kek, err := seal.New(storetest.IdentityKEK)
 	if err != nil {
 		panic(err)
 	}
-	return New(Config{
+	cfg := Config{
 		Identifiers: identifiers.NewKeyer(kek),
 		Store:       f.DB, Clock: timeutil.Frozen(storetest.Now), Policies: policy.NewLoader(policies.FS),
 		Connectors: func(now time.Time) ([]connectors.Connector, error) {
@@ -56,7 +64,20 @@ func newIsolationServer(f *storetest.Fixture) *Server {
 		AllowedOrigins: []string{"http://localhost:5173"},
 		Env:            "test",
 		RateLimits:     noRateLimits, // the coverage tests send hundreds of anonymous requests
-	})
+	}
+	if mutate != nil {
+		mutate(&cfg)
+	}
+	return New(cfg)
+}
+
+// testSealer is a throwaway KEK for adapter credentials.
+func testSealer() *seal.Sealer {
+	s, err := seal.New(seal.RandomBytes(seal.KeySize))
+	if err != nil {
+		panic(err)
+	}
+	return s
 }
 
 func serveOnce(h http.Handler, method, path, body string) *httptest.ResponseRecorder {
@@ -144,8 +165,10 @@ var crossTenantCases = map[string]crossTenantCase{
 	"DELETE account link": {method: "DELETE", path: pathf("/api/accounts/%d/link"), key: "acct:okta:alice"},
 	"POST merge identity": {method: "POST", path: pathf("/api/identities/%d/merge"), key: "alice",
 		body: func(id int64) string { return fmt.Sprintf(`{"into":%d,"reason":"x"}`, id) }},
-	"GET identity affiliations": {method: "GET", path: pathf("/api/identities/%d/affiliations"), key: "alice"},
-	"GET identity identifiers":  {method: "GET", path: pathf("/api/identities/%d/identifiers"), key: "alice"},
+	"GET identity affiliations":  {method: "GET", path: pathf("/api/identities/%d/affiliations"), key: "alice"},
+	"GET identity identifiers":   {method: "GET", path: pathf("/api/identities/%d/identifiers"), key: "alice"},
+	"GET identity access bundle": {method: "GET", path: pathf("/api/identities/%d/access-bundle"), key: "alice"},
+	"GET identity guest profile": {method: "GET", path: pathf("/api/identities/%d/guest-profile"), key: "alice"},
 	// a bundle names catalog groups by id: tenant A's group is not in B's catalog, like a missing one
 	"POST invite bundle": {method: "POST", path: fixed("/api/guests/invitations"), key: "group:aws:ProdAdmin",
 		body: func(id int64) string {
@@ -156,6 +179,8 @@ var crossTenantCases = map[string]crossTenantCase{
 	"POST resend invitation": {method: "POST", path: pathf("/api/guests/%d/resend-invitation"), key: "alice",
 		body: func(int64) string { return `{}` }},
 	"POST revoke invitation": {method: "POST", path: pathf("/api/guests/%d/revoke-invitation"), key: "alice",
+		body: func(int64) string { return `{}` }},
+	"POST guest recovery": {method: "POST", path: pathf("/api/guests/%d/recovery"), key: "alice",
 		body: func(int64) string { return `{}` }},
 	"GET identity containment": {method: "GET", path: pathf("/api/identities/%d/containment"), key: "alice"},
 	"POST contain identity": {method: "POST", path: pathf("/api/identities/%d/contain"), key: "alice",
@@ -185,6 +210,7 @@ var routeParamCases = map[string][]string{
 	"GET /api/identities/{identity_id}/lifecycle":         {"GET lifecycle"},
 	"POST /api/guests/{identity_id}/resend-invitation":    {"POST resend invitation"},
 	"POST /api/guests/{identity_id}/revoke-invitation":    {"POST revoke invitation"},
+	"POST /api/guests/{identity_id}/recovery":             {"POST guest recovery"},
 	"PUT /api/identities/{identity_id}/lifecycle":         {"PUT lifecycle"},
 	"POST /api/identities/{identity_id}/lifecycle/extend": {"POST lifecycle extend"},
 	"POST /api/accounts/{account_id}/link":                {"POST link account"},
@@ -193,6 +219,8 @@ var routeParamCases = map[string][]string{
 	"POST /api/identities/{identity_id}/merge":            {"POST merge identity"},
 	"GET /api/identities/{identity_id}/affiliations":      {"GET identity affiliations"},
 	"GET /api/identities/{identity_id}/identifiers":       {"GET identity identifiers"},
+	"GET /api/identities/{identity_id}/access-bundle":     {"GET identity access bundle"},
+	"GET /api/identities/{identity_id}/guest-profile":     {"GET identity guest profile"},
 	"POST /api/identities/{identity_id}/affiliations":     {"POST add affiliation"},
 	"PUT /api/ownership/{kind}/{object_key}":              {"PUT group ownership", "PUT identity ownership"},
 	"POST /api/identities/{identity_id}/contain":          {"POST contain identity"},
@@ -269,6 +297,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if strings.HasPrefix(rt.Pattern, "/api/abac/policies/{policy_id}") || rt.Pattern == "/api/catalog/items/{group_id}/policy" {
 			continue // TestAbacAPI_CrossTenant (UUIDs, not fixture ids)
 		}
+		if _, ok := rotationRouteCases[rt.Method+" "+rt.Pattern]; ok {
+			continue // TestIsolation_RotationRouteCrossTenant
+		}
 		if rt.Pattern == "/api/auth/oidc/{connection_id}/callback" || rt.Pattern == "/api/auth/oauth2/{connection_id}/callback" ||
 			rt.Pattern == "/api/auth/cas/{connection_id}/callback" || rt.Pattern == "/api/auth/wsfed/{connection_id}/callback" ||
 			rt.Pattern == "/t/{slug}/bootstrap" {
@@ -289,6 +320,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/api/identity-merges/{merge_id}/unmerge" {
 			continue // TestCorrelationAPI_CrossTenant (a UUID, not a fixture id)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/identity-matches/{match_id}") || strings.HasPrefix(rt.Pattern, "/api/identity-merge-requests/{merge_request_id}") {
+			continue // TestMatchingAPI_CrossTenant (UUIDs, not fixture ids)
+		}
 		if rt.Pattern == "/api/affiliations/{affiliation_id}/end" {
 			continue // TestAffiliationsAPI_CrossTenant (a UUID, not a fixture id)
 		}
@@ -301,8 +335,29 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/api/auth/oidc/{connection_id}/callback" || rt.Pattern == "/t/{slug}/bootstrap" {
 			continue // TestIsolation_LoginCrossTenant (public; the tenant comes from the cookie or the slug)
 		}
+		if rt.Pattern == "/api/guest-lifecycle/tasks/{task_id}/resolve" {
+			continue // TestGuestLifecycleAPI_CrossTenant (a UUID, not a fixture id)
+		}
+		if rt.Pattern == "/public/t/{slug}/guest/renewal-request" {
+			continue // TestGuestLifecycleAPI_RenewalRequest (public; the tenant comes from the slug)
+		}
+		if strings.HasPrefix(rt.Pattern, "/public/t/{slug}/register") {
+			continue // TestRegister_* (public; the tenant comes from the slug)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/guest-registrations/{registration_id}/") {
+			continue // TestRegisterAPI_CrossTenant (a UUID, not a fixture id)
+		}
 		if strings.HasPrefix(rt.Pattern, "/public/t/{slug}/claim/") {
 			continue // TestClaim_SessionIsPerTenant (public; the tenant comes from the slug)
+		}
+		if rt.Pattern == "/api/guest-recoveries/{case_id}/cancel" || rt.Pattern == "/api/admin/terms/{key}/assignments" {
+			continue // TestTermsAPI_CrossTenant (a UUID and a document key, not fixture ids)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/jobs/{job_id}") {
+			continue // TestIsolation_JobRoutes (a UUID, not a fixture id)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/provisioning/") {
+			continue // TestIsolation_ProvisioningRoutes (UUIDs, not fixture ids)
 		}
 		if rt.Pattern == "/api/containment-retries/{retry_id}/retry-now" {
 			continue // TestContainmentRetriesAPI (a UUID, not a fixture id)
@@ -441,6 +496,8 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		"/api/identities/{identity_id}/lifecycle":         fmt.Sprint(b["alice"]),
 		"/api/identities/{identity_id}/affiliations":      fmt.Sprint(b["alice"]),
 		"/api/identities/{identity_id}/identifiers":       fmt.Sprint(b["alice"]),
+		"/api/identities/{identity_id}/access-bundle":     fmt.Sprint(b["alice"]),
+		"/api/identities/{identity_id}/guest-profile":     fmt.Sprint(b["alice"]),
 		"/api/jml/leaver-plan/{identity_id}":              fmt.Sprint(b["alice"]),
 		"/api/reviews/campaigns/{campaign_id}":            fmt.Sprint(b["campaign"]),
 		"/api/hris/events/{event_id}/plan":                fmt.Sprint(b["hris:leaver"]),
@@ -492,6 +549,9 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		}
 		if path == "/api/request-drafts/{draft_id}" {
 			continue // TestRequestDraftsAPI (a UUID, private to its user)
+		}
+		if rp, ok := rotationGetPaths(f.B.Refs)[path]; ok {
+			path = rp // tenant B's own rotation ids
 		}
 		if strings.Contains(path, "{") {
 			v, ok := values[path]

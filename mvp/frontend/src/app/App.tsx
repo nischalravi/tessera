@@ -21,6 +21,7 @@ const directory = () => import("../features/directory/Lists");
 const objects = () => import("../features/directory/ObjectPages");
 const admin = () => import("../features/admin/Admin");
 const connections = () => import("../features/admin/connections");
+const rotationPages = () => import("../features/rotation");
 const conditionalAccess = () => import("../features/admin/access");
 
 const Home = named(() => import("../features/home/Home"), "Home");
@@ -36,6 +37,7 @@ const People = named(directory, "People");
 const Machine = named(directory, "Machine");
 const Accounts = named(directory, "Accounts");
 const Matches = named(() => import("../features/directory/Matches"), "Matches");
+const IdentityMatches = named(() => import("../features/directory/IdentityMatches"), "IdentityMatches");
 const roles = () => import("../features/roles/Roles");
 const Roles = named(roles, "Roles");
 const Workers = named(() => import("../features/lifecycle/Workers"), "Workers");
@@ -59,12 +61,15 @@ const LeastPrivilege = named(() => import("../features/insights/LeastPrivilege")
 const SodConflicts = named(() => import("../features/insights/SodConflicts"), "SodConflicts");
 const DeploymentHealth = named(() => import("../features/insights/DeploymentHealth"), "DeploymentHealth");
 const Alerts = named(() => import("../features/alerts/Alerts"), "Alerts");
+const MfaPosture = named(() => import("../features/insights/MfaPosture"), "MfaPosture");
 const Policies = named(() => import("../features/governance/Policies"), "Policies");
 const Mitigations = named(() => import("../features/governance/Mitigations"), "Mitigations");
 const AttributePolicies = named(() => import("../features/governance/AttributePolicies"), "AttributePolicies");
 const Reviews = named(() => import("../features/governance/Reviews"), "Reviews");
 const Lifecycle = named(() => import("../features/governance/Lifecycle"), "Lifecycle");
 const Drift = named(() => import("../features/governance/Drift"), "Drift");
+const GuestLifecycle = named(() => import("../features/governance/GuestLifecycle"), "GuestLifecycle");
+const Terms = named(() => import("../features/governance/Terms"), "Terms");
 const Workflows = named(() => import("../features/governance/Workflows"), "Workflows");
 const EvidencePacks = named(() => import("../features/governance/EvidencePacks"), "EvidencePacks");
 const Admin = named(admin, "Admin");
@@ -77,6 +82,10 @@ const ReconReport = named(connections, "ReconReport");
 const AgentsList = named(connections, "AgentsList");
 const ConditionalAccess = named(conditionalAccess, "ConditionalAccess");
 const AdminSectionPage = named(admin, "AdminSectionPage");
+const RotationSecrets = named(rotationPages, "RotationSecrets");
+const RotationJobs = named(rotationPages, "RotationJobs");
+const RotationPolicies = named(rotationPages, "RotationPolicies");
+const VendorCompromised = named(rotationPages, "VendorCompromised");
 const SharedSignals = named(() => import("../features/admin/SharedSignals"), "SharedSignals");
 const MySessions = named(() => import("../features/account/MySessions"), "MySessions");
 const DeviceApprove = lazy(() => import("../pages/DeviceApprove"));
@@ -113,9 +122,32 @@ function Moved({ to }: { to: string }) {
 
 // the guest's claim page: public, outside the admin shell and its sign-in
 const ClaimPage = lazy(() => import("../public/claim/ClaimPage"));
+// the guest's "request renewal" page (issue #74): public, one button, no session
+const RenewPage = lazy(() => import("../public/renew/RenewPage"));
+
+// guest self-registration (issue #66): public, one form, no session
+const RegisterPage = lazy(() => import("../public/register/RegisterPage"));
 
 export default function App() {
   const { pathname } = useLocation();
+  if (pathname === "/register") {
+    return (
+      <ThemeProvider>
+        <Suspense fallback={<PageSkeleton />}>
+          <RegisterPage />
+        </Suspense>
+      </ThemeProvider>
+    );
+  }
+  if (pathname === "/renew") {
+    return (
+      <ThemeProvider>
+        <Suspense fallback={<PageSkeleton />}>
+          <RenewPage />
+        </Suspense>
+      </ThemeProvider>
+    );
+  }
   if (pathname === "/claim") {
     return (
       <ThemeProvider>
@@ -158,6 +190,7 @@ export default function App() {
                       <Route path="machine" element={<Machine />} />
                       <Route path="accounts" element={<Accounts />} />
                       <Route path="matches" element={<Matches />} />
+                      <Route path="identity-matches" element={<IdentityMatches />} />
                       <Route path="roles" element={<Roles />} />
                       <Route path="workers" element={<Workers />} />
                       <Route path="entitlements" element={<Entitlements />} />
@@ -167,6 +200,11 @@ export default function App() {
                       <Route path="ownership" element={<Ownership />} />
                     </Route>
                     <Route path="/helpdesk" element={<HelpDesk />} />
+                    <Route path="/rotation" element={<Navigate to="/rotation/secrets" replace />} />
+                    <Route path="/rotation/secrets" element={<RotationSecrets />} />
+                    <Route path="/rotation/jobs" element={<RotationJobs />} />
+                    <Route path="/rotation/policies" element={<RotationPolicies />} />
+                    <Route path="/rotation/vendor" element={<VendorCompromised />} />
                     <Route path="/directory/identities/:id" element={<IdentityPage />} />
                     <Route path="/directory/roles/:id" element={<RolePage />} />
                     <Route path="/directory/entitlements/:id" element={<EntitlementPage />} />
@@ -180,6 +218,7 @@ export default function App() {
                     <Route path="/insights/sod" element={<SodConflicts />} />
                     <Route path="/insights/aws" element={<AwsAccess />} />
                     <Route path="/insights/deployment-health" element={<DeploymentHealth />} />
+                    <Route path="/insights/mfa" element={<MfaPosture />} />
                     <Route path="/insights/deployment" element={<Moved to="/insights/deployment-health" />} />
 
                     <Route path="/agents/authorization" element={<AgentAuthorization />} />
@@ -193,6 +232,8 @@ export default function App() {
                     <Route path="/governance/reviews" element={<Reviews />} />
                     <Route path="/governance/lifecycle" element={<Lifecycle />} />
                     <Route path="/governance/drift" element={<Drift />} />
+                    <Route path="/governance/guest-lifecycle" element={<GuestLifecycle />} />
+                    <Route path="/governance/terms" element={<Terms />} />
                     <Route path="/governance/workflows" element={<Workflows />} />
                     <Route path="/governance/evidence" element={<EvidencePacks />} />
 

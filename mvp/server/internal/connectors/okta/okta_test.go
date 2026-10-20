@@ -164,6 +164,15 @@ func (f *fake) serve(w http.ResponseWriter, r *http.Request) {
 		out("app_users.json")
 	case len(segs) == 5 && segs[2] == "apps" && segs[3] == wikiApp && segs[4] == "groups":
 		out("app_groups.json")
+	case r.URL.Path == "/api/v1/authenticators":
+		out("authenticators.json")
+	case len(segs) == 5 && segs[2] == "users" && segs[4] == "factors":
+		switch segs[3] {
+		case avery, morgan, casey:
+			out("factors_" + segs[3] + ".json")
+		default:
+			fmt.Fprint(w, `[]`)
+		}
 	case r.URL.Path == "/api/v1/logs":
 		if q.Get("after") == "c2" {
 			fmt.Fprint(w, `[]`)

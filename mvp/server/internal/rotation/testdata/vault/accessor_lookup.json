@@ -1,0 +1,20 @@
+{
+  "request_id": "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9",
+  "lease_id": "",
+  "renewable": false,
+  "lease_duration": 0,
+  "data": {
+    "cidr_list": [],
+    "creation_time": "{{CREATED}}",
+    "expiration_time": "0001-01-01T00:00:00Z",
+    "last_updated_time": "{{CREATED}}",
+    "metadata": {},
+    "secret_id_accessor": "{{ACCESSOR}}",
+    "secret_id_num_uses": 0,
+    "secret_id_ttl": 0,
+    "token_bound_cidrs": []
+  },
+  "wrap_info": null,
+  "warnings": null,
+  "auth": null
+}

@@ -684,7 +684,65 @@ export interface NhiRow {
   flags: string[];
   risk: number;
   delegations: { chain: { name: string; role: string; status: string }[]; scopes: string[]; exceeds_principal: string[] }[];
+  secrets: SecretRow[];
 }
+
+/** Who is responsible for an agent or a finding (the API's nhi.Owner). */
+export interface PersonBrief { id: number; name: string; status: string; department: string | null }
+
+/** An AI agent in the inventory: where it was discovered, who created and sponsors it (issue #116). */
+export interface AgentRow {
+  id: number;
+  name: string;
+  status: string;
+  description: string | null;
+  /** The system the agent was discovered in (entra, okta, aws-agentcore ...). */
+  source: string;
+  /** What it is there: entra_agent_identity, okta_service_app, bedrock_agentcore_runtime. */
+  source_kind: string | null;
+  creator: string | null;
+  sponsor: PersonBrief | null;
+  /** The sponsor as the source spells it, kept when it did not resolve to a person. */
+  sponsor_ref: string | null;
+  /** active, inactive (the sponsor left or is disabled) or none. */
+  sponsor_status: "active" | "inactive" | "none";
+  systems: string[];
+  credentials: number;
+  oldest_secret_days: number | null;
+  effective_permissions: number;
+  privileged_permissions: number;
+  flags: string[];
+  risk: number;
+  /** Ids of the policies the agent violates. */
+  violations: string[];
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+}
+
+/** An MCP server or an agent credential found in source code. Never a secret value. */
+export interface McpFinding {
+  id: number;
+  source: string;
+  kind: "mcp_server" | "agent_credential";
+  org: string;
+  repo: string;
+  path: string;
+  location: string;
+  server: string | null;
+  transport: string | null;
+  target: string | null;
+  /** The type of secret (github_token, anthropic_api_key ...). */
+  secret_type: string | null;
+  /** First 16 hex digits of a hash of the secret: identifies it without revealing it. */
+  fingerprint: string | null;
+  owner: { source: "codeowners" | "committer" | "none"; ref: string | null; identity: PersonBrief | null };
+  commit_sha: string | null;
+  first_seen_at: string;
+  last_seen_at: string;
+}
+
+export const useAIAgents = () => useApi<AgentRow[]>("/ai-agents");
+export const useMcpFindings = () => useApi<McpFinding[]>("/ai-agents/mcp-findings");
 
 export interface Policy { id: string; name: string; type: string; severity: string; description: string; enabled: boolean; source: string; violations: number }
 
@@ -929,7 +987,8 @@ export interface LinkDecision {
   decided_by: string;
   decided_at: string;
 }
-export interface MergeMove { table: string; id: number; column: string }
+/** One row a merge re-pointed: numeric ids in `id`; the guest tables, whose ids are text, in `key`. */
+export interface MergeMove { table: string; id: number; key?: string; column: string }
 export interface IdentityMerge {
   id: string;
   survivor_id: number;
@@ -946,7 +1005,9 @@ export interface IdentityMerge {
   unmerged_at: string | null;
   unmerge_reason: string | null;
 }
-export interface UnmergeResult { merge: IdentityMerge; restored: MergeMove[]; kept: MergeMove[] }
+/** A row created after the merge that now belongs to the survivor; an unmerge leaves it there. */
+export interface CreatedAfter { table: string; id: string; at: string }
+export interface UnmergeResult { merge: IdentityMerge; restored: MergeMove[]; kept: MergeMove[]; created_after?: CreatedAfter[] }
 
 export const linkAccount = (accountId: number, identityId: number, reason: string) =>
   api<{ account: CorrAccount; decision: LinkDecision }>(`/accounts/${accountId}/link`, { identity_id: identityId, reason });
@@ -954,10 +1015,170 @@ export const markNotPerson = (accountId: number, reason: string) =>
   api<{ account: CorrAccount; decision: LinkDecision }>(`/accounts/${accountId}/not-person`, { reason });
 export const releaseAccount = (accountId: number) =>
   api<{ account: CorrAccount; decision: LinkDecision }>(`/accounts/${accountId}/link`, undefined, "DELETE");
+/**
+ * Ask for a merge. Where either person holds privileged access, has IAL 2 or more or is an
+ * employee, the API answers 202 with a request that a second reviewer approves; the merge has not happened.
+ */
 export const mergeIdentity = (mergedId: number, survivorId: number, reason: string) =>
-  api<IdentityMerge>(`/identities/${mergedId}/merge`, { into: survivorId, reason });
+  api<IdentityMerge | PendingMerge>(`/identities/${mergedId}/merge`, { into: survivorId, reason });
+export const isPendingMerge = (r: IdentityMerge | PendingMerge): r is PendingMerge => (r as PendingMerge).status === "pending_approval";
 export const unmergeIdentity = (mergeId: string, reason: string) =>
   api<UnmergeResult>(`/identity-merges/${encodeURIComponent(mergeId)}/unmerge`, { reason });
+
+// ---------------------------------------------------------------- identity matching (issue #68)
+
+/** Why a second reviewer is needed. */
+export type MergeRisk = "privileged_access" | "ial2" | "employee";
+export interface MergeRequest {
+  id: string;
+  kind: "merge" | "match_link";
+  status: "pending" | "approved" | "rejected" | "cancelled";
+  survivor: PersonRef;
+  merged: PersonRef;
+  match_id: string | null;
+  reason: string;
+  risk: MergeRisk[];
+  requested_by: UserRef;
+  requested_at: string;
+  decided_by: UserRef | null;
+  decided_at: string | null;
+  decision_reason: string | null;
+  merge_id: string | null;
+}
+export interface PendingMerge { status: "pending_approval"; request: MergeRequest }
+
+/** A rule that fired, with the (masked) attributes it compared. */
+export interface MatchRule { rule: string; tier: "A" | "B" | "C"; score: number; why: string; compared: Record<string, string> }
+export interface MatchAffiliation { type: string; status: string; source: string }
+export interface IdentityMatchCandidate {
+  match_id: string;
+  candidate_id: number;
+  name: string;
+  email: string | null;
+  type: string;
+  tier: "A" | "B" | "C";
+  score: number;
+  outcome: string;
+  status: "review" | "reverification" | "linked" | "new_person" | "rejected" | "superseded";
+  decision: string | null;
+  rules: MatchRule[];
+  affiliations: MatchAffiliation[];
+  privileged_access: boolean;
+  ial: number;
+  employee: boolean;
+  second_reviewer_because: MergeRisk[];
+  reverification_required: boolean;
+  decided_by: UserRef | null;
+  second_reviewer: UserRef | null;
+  reason: string | null;
+  decided_at: string | null;
+  pending_request: MergeRequest | null;
+  merge_id: string | null;
+}
+export interface IdentityMatchItem {
+  /** The best candidate's match id; a decision may name any candidate's. */
+  id: string;
+  intake_id: string;
+  channel: string;
+  mode: string;
+  status: string;
+  received_at: string;
+  /** What the claimant said at "do you already have an account?". It never links anyone. */
+  claimant_says_has_account: "yes" | "no" | null;
+  subject: { identity_id: number | null; name: string; email: string | null; population: string | null; purpose: string | null; sponsor: PersonRef | null; sponsorship_id: string | null };
+  candidates: IdentityMatchCandidate[];
+}
+export interface IdentityMatchList { items: IdentityMatchItem[]; count: number }
+export type MatchDecision = "link" | "new_person" | "reject";
+export interface MatchDecided {
+  result: "linked" | "new_person" | "rejected" | "pending_approval" | "reverification_required" | "reverification" | "review";
+  item?: IdentityMatchItem;
+  request?: MergeRequest;
+  merge?: IdentityMerge;
+}
+export const decideIdentityMatch = (matchId: string, decision: MatchDecision, reason: string) =>
+  api<MatchDecided>(`/identity-matches/${encodeURIComponent(matchId)}/decide`, { decision, reason });
+export const approveMergeRequest = (id: string) =>
+  api<{ request: MergeRequest; result: "merged" | "reverification_required"; merge?: IdentityMerge }>(`/identity-merge-requests/${encodeURIComponent(id)}/approve`, {});
+export const rejectMergeRequest = (id: string, reason: string) =>
+  api<{ request: MergeRequest }>(`/identity-merge-requests/${encodeURIComponent(id)}/reject`, { reason });
+
+export interface MatchingSettings {
+  auto_link_tier_b: boolean;
+  require_review_tier_a: boolean;
+  unmerge_window_days: number;
+  updated_by: UserRef | null;
+  updated_at: string | null;
+}
+export const putMatchingSettings = (s: Pick<MatchingSettings, "auto_link_tier_b" | "require_review_tier_a" | "unmerge_window_days">) =>
+  api<MatchingSettings>("/admin/matching", s, "PUT");
+
+// ------------------------------------------------ guest lifecycle (issue #74)
+
+export type GuestLifecycleBucket =
+  | "expiring_30" | "expiring_14" | "expiring_3" | "renewal_requests" | "stepup_required" | "pending_transfer"
+  | "auto_ended" | "suspended" | "dual_status" | "in_grace" | "deprovisioned" | "purged";
+export interface GuestLifecycleSettings {
+  sponsor_reminder_days: number[];
+  guest_reminder_days: number;
+  transfer_deadline_days: number;
+  on_sponsor_departure: "end" | "suspend";
+  conversion_dual_status: "end" | "sponsor_confirms";
+  grace_days: Record<"visitor" | "contractor" | "volunteer" | "partner", number>;
+  retention_days: number;
+  retention_days_visitor: number;
+  keep_rematch_hashes: boolean;
+  updated_at: string | null;
+}
+export interface GuestLifecycleOverview {
+  buckets: GuestLifecycleBucket[];
+  counts: Record<GuestLifecycleBucket, number>;
+  settings: GuestLifecycleSettings;
+}
+export interface GuestLifecycleItem {
+  sponsorship_id?: string;
+  task_id?: string;
+  task_kind?: "sponsor_transfer" | "renewal_request" | "dual_status";
+  guest: { id: number; name: string };
+  sponsor?: { id: number; name: string };
+  population?: string;
+  /** Sponsorship status, or the deprovisioning stage. */
+  status?: string;
+  ends_at?: string;
+  days_left?: number;
+  deadline?: string;
+  outcome?: string;
+  trigger?: string;
+  grace_until?: string;
+  retention_until?: string;
+  held_access?: boolean;
+  required_ial?: number;
+  can_act: boolean;
+}
+export type GuestTaskAction = "accept" | "decline" | "keep" | "confirm" | "dismiss";
+export const guestLifecycle = {
+  resolveTask: (taskId: string, action: GuestTaskAction) =>
+    api<{ id: string; kind: string; sponsorship_id: string; status: string; outcome: string | null }>(
+      `/guest-lifecycle/tasks/${encodeURIComponent(taskId)}/resolve`, { action }),
+  putSettings: (s: Omit<GuestLifecycleSettings, "updated_at">) => api<GuestLifecycleSettings>("/admin/guest-lifecycle", s, "PUT"),
+};
+
+/**
+ * The guest's "request renewal" link (/renew#t=...): public, no session. The answer is the same
+ * whether or not the token was good, so the page says only that the request was received.
+ */
+export async function requestRenewal(slug: string, token: string): Promise<void> {
+  const res = await fetch(`/public/t/${encodeURIComponent(slug)}/guest/renewal-request`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    credentials: "same-origin",
+    cache: "no-store",
+    referrerPolicy: "no-referrer",
+    body: JSON.stringify({ token }),
+  });
+  if (res.status === 429) throw new Error("Too many tries. Wait a while and try again.");
+  if (!res.ok && res.status !== 202) throw new Error("Something went wrong. Try again.");
+}
 
 // ------------------------------------------------ affiliations and identifiers (issue #64)
 
@@ -984,6 +1205,8 @@ export interface Affiliation {
 /** Lifecycle state as far as affiliations determine it. */
 export type PersonState = "unaffiliated" | "prospective" | "active" | "expiring" | "expired" | "revoked" | "merged" | "invited";
 export interface PersonAffiliations { identity_id: number; lifecycle_state: PersonState; affiliations: Affiliation[] }
+/** One row of the People list's affiliation and lifecycle filters: effective affiliation types, no identifiers. */
+export interface AffiliationSummaryRow { identity_id: number; lifecycle_state: PersonState; types: AffiliationType[] }
 export interface PersonIdentifier {
   id: string;
   type: string;
@@ -1015,6 +1238,8 @@ export interface CatalogEntry {
   risk: Risk;
   eligible_types: string[];
   eligible_departments: string[];
+  /** Guest populations the item is open to (a guest may request only items naming theirs). */
+  populations?: GuestPopulationKey[];
   /** null: until removed. */
   default_hours: number | null;
   /** null: no limit. */
@@ -1023,7 +1248,7 @@ export interface CatalogEntry {
   /** Approval stages, in order (issue #165), and hours before a stage escalates to deciders. */
   approval: { stages: StageKind[]; escalate_after_hours: number };
 }
-export type StageKind = "manager" | "owner" | "decider";
+export type StageKind = "manager" | "owner" | "decider" | "sponsor";
 export interface RequestStage {
   index: number;
   kind: StageKind;
@@ -1445,10 +1670,28 @@ export const lifecycle = {
 // ---------------------------------------------------------------- guest sponsorships (issue #65)
 
 export type GuestPopulationKey = "visitor" | "contractor" | "volunteer" | "partner";
-export type SponsorshipStatus = "requested" | "pending_approval" | "active" | "transfer_pending" | "ended" | "revoked" | "rejected";
+export type SponsorshipStatus = "requested" | "pending_approval" | "active" | "transfer_pending" | "suspended" | "ended" | "revoked" | "rejected";
 /** The status, with a running sponsorship told apart as upcoming, active or ending (within 14 days). */
 export type SponsorshipState = SponsorshipStatus | "upcoming" | "ending";
 export interface BundleItem { group_id: number; system: string; name: string; risk: Risk; privileged: boolean }
+/** Where a bundle item stands (issue #75): waiting for the claim or the target, in place, failed, going or gone. */
+export type BundleState = "pending" | "granted" | "failed" | "removing" | "removed";
+/** A sponsorship's bundle item with its state; the access expires with the sponsorship. */
+export interface BundleItemState extends BundleItem {
+  state: BundleState;
+  detail?: string;
+  /** The provisioning operation doing it (Admin, Provisioning). */
+  op_id: string | null;
+  op_status: string | null;
+  expires_at: string | null;
+  granted_at: string | null;
+}
+/** One item of a person's bundles, from /identities/{id}/access-bundle. */
+export interface IdentityBundleItem {
+  id: string; sponsorship_id: string; group_id: number; system: string; name: string; state: BundleState; detail?: string;
+  op_id: string | null; op_status: string | null; expires_at: string; granted_at: string | null; removed_at: string | null;
+}
+export interface IdentityBundle { identity_id: number; ial: number; aal: number; items: IdentityBundleItem[] }
 export interface SponsorshipEvent {
   event: string;
   from_status: SponsorshipStatus | null;
@@ -1459,15 +1702,19 @@ export interface SponsorshipEvent {
   at: string;
 }
 export type InvitationState = "ready" | "sent" | "claiming" | "expired" | "claimed" | "revoked";
+/** A renewal held until the guest's identity assurance reaches `required_ial` (issue #74). */
+export interface SponsorshipStepup { required_ial: number; requested_ends_at: string; justification: string; requested_at: string }
 export interface Sponsorship {
   id: string;
+  /** Set while a renewal waits for a step-up: the access does not extend meanwhile. */
+  stepup?: SponsorshipStepup;
   status: SponsorshipStatus;
   state: SponsorshipState;
   guest: PersonRef & { email: string | null };
   sponsor: PersonRef;
   population: GuestPopulationKey;
   purpose: string;
-  bundle: BundleItem[];
+  bundle: BundleItemState[];
   required_ial: number;
   required_aal: number;
   starts_at: string;
@@ -1581,6 +1828,8 @@ export const guests = {
   resendInvitation: (guestId: number) => api<Sponsorship>(`/guests/${guestId}/resend-invitation`, {}),
   /** Cancel the invitation: its links and open claim sessions stop working. */
   revokeInvitation: (guestId: number) => api<Sponsorship>(`/guests/${guestId}/revoke-invitation`, {}),
+  /** Start recovery for a guest who lost their sign-in: a link goes to the guest, who proves who they are again (issue #73). */
+  recover: (guestId: number, reason: string) => api<GuestRecovery>(`/guests/${guestId}/recovery`, { reason }),
 };
 /** Kill switch (issue #106): revoke an identity's sessions, refresh tokens and OAuth grants at the providers. */
 export interface ContainmentStep {
@@ -2099,6 +2348,31 @@ export const sodPaths = {
   function: (id: string) => sodPath("functions", id), risk: (id: string) => sodPath("risks", id), ruleset: (id: string) => sodPath("rulesets", id),
   violations: (f: SodViolationFilter = {}) => `/sod/violations${sodViolationQuery(f)}`,
 };
+/** A recovery case: the guest re-proves identity at their original assurance level before a new sign-in is set up. */
+export interface GuestRecovery {
+  id: string;
+  identity_id: number;
+  status: string;
+  via: string;
+  reason: string;
+  required_ial: number;
+  privileged: boolean;
+  cooling_until: string | null;
+  created_at: string;
+  completed_at: string | null;
+  expires_at?: string;
+}
+export const guestRecoveries = {
+  list: () => api<{ recoveries: GuestRecovery[] }>("/guest-recoveries"),
+  cancel: (id: string, reason: string) => api<GuestRecovery>(`/guest-recoveries/${encodeURIComponent(id)}/cancel`, { reason }),
+};
+
+/** What the person page shows besides affiliations: where the person came from and what they accepted. No values, no hashes. */
+export interface GuestProfile {
+  identity_id: number;
+  source_records: { id: string; system: string; system_id: string; status: string; received_at: string; attributes: string[] }[];
+  terms_acceptances: { key: string; version: number; context: string; accepted_at: string }[];
+}
 
 // ---------------------------------------------------------------- guest claim (issue #69)
 
@@ -2119,9 +2393,38 @@ export interface ClaimStatus {
   sponsor: string;
   population: GuestPopulationKey;
   ends_at: string;
-  /** Why the claim waits: "" (it does not), the organization's own set-up, or identity verification. */
-  pending: "" | "organization" | "identity_verification";
+  /**
+   * Why the claim waits: "" (it does not), terms or the attribute-release consent still to answer
+   * (step 5, before the credential), the organization's own set-up, or identity verification.
+   */
+  pending: "" | "terms" | "consent" | "organization" | "identity_verification";
   complete: boolean;
+  /** Only "recovery": the claim page is recovering an existing account, not setting up a new one. */
+  purpose?: "recovery";
+}
+
+/** A terms document the claimant has to read and accept (step 5): the text and its hash, which the acceptance echoes. */
+export interface ClaimTermsDoc {
+  id: string;
+  key: string;
+  version: number;
+  title: string;
+  body: string;
+  sha256: string;
+  state: "accepted" | "grace" | "blocked";
+  due_by: string | null;
+  previously_accepted: boolean;
+}
+export interface ClaimAttribute {
+  name: string;
+  why: string;
+  required: boolean;
+}
+export interface ClaimTerms {
+  step: ClaimStep;
+  terms: ClaimTermsDoc[];
+  /** The attribute-release screen of a federated sign-in; `applies` is false for every other claim. */
+  consent: { applies: boolean; given: boolean; authority?: string; attributes: ClaimAttribute[] };
 }
 export interface ClaimStart {
   /** "check_link" for every link that does not work, whatever the reason; otherwise the first step. */
@@ -2177,6 +2480,12 @@ function claimMessage(status: number, j: any): string {
       return j.message ?? "We could not reach the sign-in service. Try again in a moment.";
     case "wrong_step":
       return "That step is not open yet.";
+    case "terms_required":
+      return "Read and accept the terms first.";
+    case "consent_required":
+      return "Choose what to share first.";
+    case "terms_changed":
+      return "The terms changed while you were reading them. The page has reloaded the current text.";
   }
   return j?.message ?? `Something went wrong (${status}).`;
 }
@@ -2192,10 +2501,58 @@ export const claimApi = {
   checkCode: (slug: string, signer: ClaimSigner, nonce: string, code: string) =>
     claimFetch<{ ok: boolean; step: ClaimStep }>(slug, "POST", "verify/check", { code }, signer, nonce),
   existingAccount: (slug: string, signer: ClaimSigner, nonce: string, answer: "yes" | "no") =>
-    claimFetch<{ ok: boolean; step: ClaimStep; message: string }>(slug, "POST", "existing-account", { answer }, signer, nonce),
+    claimFetch<{ ok: boolean; step: ClaimStep; message?: string; status?: "redirect"; redirect?: string }>(slug, "POST", "existing-account", { answer }, signer, nonce),
+  // "yes" answers {status: "redirect", redirect}: a sign-in as the existing account, which links this
+  // invitation to it when it is the account the organization had in mind (and otherwise changes nothing).
+  /** Step 5: the terms still to accept and the consent screen. */
+  terms: (slug: string, signer: ClaimSigner, nonce: string) => claimFetch<ClaimTerms>(slug, "GET", "terms", undefined, signer, nonce),
+  /** Accept the documents as shown ({id, sha256} of each); the credential stays closed until all are accepted. */
+  acceptTerms: (slug: string, signer: ClaimSigner, nonce: string, documents: { id: string; sha256: string }[]) =>
+    claimFetch<{ ok: boolean; remaining: number }>(slug, "POST", "terms/accept", { documents }, signer, nonce),
+  /** The attributes the claimant agrees to release at a federated sign-in (the required ones are always included). */
+  consent: (slug: string, signer: ClaimSigner, nonce: string, attributes: string[]) =>
+    claimFetch<{ ok: boolean }>(slug, "POST", "consent", { attributes }, signer, nonce),
   /** Set up the sign-in: a redirect to the credential authority, or "pending" when the organization has not set one up. */
   credential: (slug: string, signer: ClaimSigner, nonce: string) =>
     claimFetch<{ status: "redirect" | "pending"; redirect?: string; pending?: string; message?: string }>(slug, "POST", "credential", undefined, signer, nonce),
+};
+
+// ---------------------------------------------------------------- guest terms and recovery (issue #73)
+
+/** One version of a terms document (admin list). */
+export interface TermsVersion {
+  id: string;
+  version: number;
+  sha256: string;
+  grace_days: number;
+  created_at: string;
+  created_by: string;
+}
+/** A terms document at its latest version, with where it applies. */
+export interface TermsDocument {
+  key: string;
+  title: string;
+  latest_version: number;
+  body: string;
+  sha256: string;
+  grace_days: number;
+  versions: TermsVersion[];
+  populations: GuestPopulationKey[];
+  bundles: { group_id: number; system: string; name: string }[];
+}
+export const termsAdmin = {
+  /** Publish a new version of a document (the first one when the key is new). */
+  publish: (d: { key: string; title: string; body: string; grace_days?: number }) => api<TermsVersion>("/admin/terms", d),
+  assign: (key: string, a: { populations: GuestPopulationKey[]; bundles: number[] }) =>
+    api<TermsDocument>(`/admin/terms/${encodeURIComponent(key)}/assignments`, a, "PUT"),
+};
+/** A signed-in person's own documents: accepted, in their grace period, or blocking until accepted. */
+export interface MyTerms {
+  documents: ClaimTermsDoc[];
+  blocked: boolean;
+}
+export const myTerms = {
+  accept: (documents: { id: string; sha256: string }[]) => api<MyTerms>("/me/terms/accept", { documents }),
 };
 
 /** "Send me a new link": the answer is the same whether or not an invitation exists. No session, so no proof. */
@@ -2217,6 +2574,92 @@ export async function claimResend(slug: string, email: string): Promise<string> 
   }
   return j?.message ?? "If an invitation exists for this address, we have sent a new link.";
 }
+
+// ------------------------------------------------ guest self-registration (issue #66)
+
+/** A sponsor as the public search shows one: a name and an opaque handle, nothing else. */
+export interface SponsorChoice {
+  name: string;
+  handle: string;
+}
+
+/** What the visitor typed. `sponsor` is a handle from the search; `code` is a code the sponsor shared (it wins). */
+export interface RegistrationForm {
+  given_name: string;
+  family_name: string;
+  email: string;
+  purpose: string;
+  starts_at?: string;
+  ends_at: string;
+  sponsor?: string;
+  code?: string;
+  /** The bot challenge's token (Turnstile or equivalent); empty where none is configured (dev). */
+  challenge_token?: string;
+}
+
+const publicJSON = (slug: string, rest: string, init: RequestInit = {}) =>
+  fetch(`/public/t/${encodeURIComponent(slug)}/${rest}`, {
+    credentials: "same-origin",
+    cache: "no-store",
+    referrerPolicy: "no-referrer",
+    ...init,
+    headers: init.body ? { "content-type": "application/json" } : undefined,
+  });
+
+/** Public sponsor search: names only. Fewer than two letters lists nobody. */
+export async function searchSponsors(slug: string, q: string): Promise<SponsorChoice[]> {
+  if (q.trim().length < 2) return [];
+  const res = await publicJSON(slug, `register/sponsors?q=${encodeURIComponent(q.trim())}`);
+  if (res.status === 429) throw new Error("Too many searches. Wait a moment and try again.");
+  if (!res.ok) throw new Error("Search is unavailable. Try again.");
+  return ((await res.json()) as { sponsors: SponsorChoice[] }).sponsors;
+}
+
+/**
+ * Ask a sponsor to register you. The answer is the same whatever happened to the request (it does
+ * not say whether the address or the sponsor is known); only a form that is not valid, a failed
+ * bot challenge and the rate limit are told apart, and none of them depends on anyone else.
+ */
+export async function submitRegistration(slug: string, form: RegistrationForm): Promise<string> {
+  const res = await publicJSON(slug, "register", { method: "POST", body: JSON.stringify(form) });
+  if (res.status === 429) throw new Error("Too many tries from this network. Wait a while and try again.");
+  if (res.status === 403) throw new Error("We could not confirm you are not a robot. Try again.");
+  if (res.status === 400) throw new Error("Check the form: every field is needed, and the end date must be after today.");
+  if (res.status === 503) throw new Error("Registration is not available right now.");
+  if (!res.ok && res.status !== 202) throw new Error("Something went wrong. Try again.");
+  let j: any = null;
+  try {
+    j = await res.json();
+  } catch {
+    /* no body */
+  }
+  return j?.message ?? "Check your email.";
+}
+
+/** A request waiting for the signed-in sponsor. */
+export interface RegistrationRequest {
+  id: string;
+  given_name: string | null;
+  family_name: string | null;
+  email: string | null;
+  purpose: string | null;
+  via: "search" | "code";
+  starts_at: string;
+  ends_at: string;
+  expires_at: string;
+  created_at: string;
+}
+
+export const registrationRequests = {
+  list: () => api<{ registrations: RegistrationRequest[] }>("/guest-registrations"),
+  /** Approve: the guest is created and invited through the ordinary sponsor path. */
+  approve: (id: string, terms: { population?: string; ends_at?: string } = {}) =>
+    api<{ id: string; status: "approved"; guest_identity_id: number; sponsorship_id: string }>(`/guest-registrations/${encodeURIComponent(id)}/approve`, terms),
+  /** Deny: the visitor gets a neutral email; the reason is for the audit log only. */
+  deny: (id: string, reason = "") => api<{ id: string; status: "denied" }>(`/guest-registrations/${encodeURIComponent(id)}/deny`, { reason }),
+  /** A code to share instead of being searched for; shown once. */
+  newCode: () => api<{ code: string; expires_at: string }>("/guest-registrations/code", {}),
+};
 
 export const simulate = (body: { remove_edge_ids?: number[]; add_edges?: { src: string; dst: string; duration_hours?: number }[]; disable_account_ids?: number[] }) =>
   api<SimResult>("/simulate", { remove_edge_ids: [], add_edges: [], disable_account_ids: [], ...body });
@@ -2892,11 +3335,11 @@ export interface ProvOpDetail extends ProvOp { payload: { account?: Record<strin
 
 export interface ProvTarget {
   connection_id: string; connection_name: string; system: string; kind: "scim" | "okta" | "fake"; base_url: string;
-  dialect?: "standard" | "entra"; fault?: string; write_back: boolean; has_credential: boolean; credential_version: string | null; updated_at: string;
+  dialect?: "standard" | "entra"; fault?: string; on_deprovision?: "delete"; write_back: boolean; has_credential: boolean; credential_version: string | null; updated_at: string;
 }
 
 /** token is write-only: omit it to keep the stored credential. A change of kind or origin (scheme, host, port) needs a new token (422 credential_required). */
-export interface ProvTargetInput { kind: ProvTarget["kind"]; base_url: string; dialect?: string; fault?: string; token?: string; write_back: boolean }
+export interface ProvTargetInput { kind: ProvTarget["kind"]; base_url: string; dialect?: string; fault?: string; token?: string; write_back: boolean; on_deprovision?: "disable" | "delete" }
 
 export const provisioning = {
   targets: () => api<ProvTarget[]>("/provisioning/targets"),
@@ -3121,3 +3564,205 @@ export function fmtSpan(seconds: number): string {
   if (seconds % 60 === 0) return `${seconds / 60} min`;
   return `${seconds} s`;
 }
+// ---- MFA posture (GET /api/mfa/posture)
+
+/** Method class, strongest first; "none" is covered-but-nothing-registered, "unknown" is not covered by any IdP read. */
+export type MfaClass = "phishing_resistant" | "push_number_match" | "push" | "otp" | "sms_voice" | "none" | "unknown";
+export interface MfaMethod { system: string; account: string; kind: string; strength: MfaClass; label: string; enrolled_at: string | null }
+export interface MfaIdentity {
+  id: number; name: string; department: string; title: string;
+  privileged: boolean; privileged_groups: string[]; privileged_via: string[];
+  best: MfaClass; passkey: boolean; methods: MfaMethod[]; systems: string[];
+}
+export interface MfaCounts {
+  total: number; phishing_resistant: number; push_number_match: number; push: number; otp: number; sms_voice: number;
+  no_mfa: number; unknown: number; passkey_enrolled: number;
+}
+export interface MfaGroup extends MfaCounts { key: string }
+export interface MfaSource { system: string; status: "ok" | "unavailable"; detail: string; updated_at: string }
+export interface MfaAppFinding {
+  account_id: number; system: string; username: string; identity_id: number | null; identity_name: string;
+  privileged: boolean; issues: ("local_password" | "no_mfa" | "sso_not_enforced")[];
+}
+export interface MfaAppSystem { system: string; accounts: number; with_signals: number; flagged: number }
+export interface MfaPosture {
+  as_of: string;
+  departments: string[];
+  sources: MfaSource[];
+  summary: { totals: MfaCounts; by_department: MfaGroup[]; by_privileged_group: MfaGroup[]; privileged_totals: MfaCounts };
+  trend: (MfaCounts & { date: string })[];
+  identities: MfaIdentity[];
+  app_findings: MfaAppFinding[];
+  app_systems: MfaAppSystem[];
+  classes: { key: MfaClass; label: string }[];
+}
+
+/** The posture path with its filters; `privileged` is "" (all), "true" or "false". */
+export const mfaPosturePath = (department: string, privileged: "" | "true" | "false") => {
+  const q = new URLSearchParams();
+  if (department) q.set("department", department);
+  if (privileged) q.set("privileged", privileged);
+  const s = q.toString();
+  return `/mfa/posture${s ? `?${s}` : ""}`;
+};
+
+// -------------------------------------------------------------- secret rotation
+export type RotationState = "pending" | "created" | "handed_over" | "old_disabled" | "verified" | "old_deleted" | "failed" | "cancelled";
+export type RotationAction = "rotate" | "manual" | "blocked" | "in_flight";
+export type RotationOrigin = "manual" | "policy" | "vendor_compromise" | "jml";
+export type RotationAdapterType = "aws_iam" | "aws_secretsmanager" | "vault" | "github" | "fake";
+
+export interface RotationOwner { id: number; name: string; email: string | null; status: string }
+
+/** What a rotation of one secret would do. Computed from the database: nothing is called or written. */
+export interface RotationPlanItem {
+  secret_id: number;
+  name: string;
+  system: string;
+  kind: string;
+  account: string;
+  owner: RotationOwner | null;
+  age_days: number;
+  max_age_days: number | null;
+  overdue: boolean;
+  action: RotationAction;
+  reason?: string;
+  adapter: string | null;
+  adapter_type?: RotationAdapterType;
+  destination: string | null;
+  dest_path?: string;
+  grace_hours: number;
+  steps: string[];
+  warnings: string[];
+  job_id?: string;
+}
+
+export interface RotationJobLite { id: string; state: RotationState; origin: RotationOrigin; at: string; completed_at: string | null; last_error: string | null }
+
+export interface RotationSecretStatus {
+  secret_id: number;
+  name: string;
+  system: string;
+  kind: string;
+  account: string;
+  owner: RotationOwner | null;
+  age_days: number;
+  max_age_days: number | null;
+  overdue: boolean;
+  mode: "automatic" | "scheduled" | "manual" | "none";
+  action: RotationAction;
+  reason?: string;
+  adapter: string | null;
+  active_job: RotationJobLite | null;
+  last_job: RotationJobLite | null;
+}
+
+/** The recorded re-read of the old credential: a job is verified only with this. */
+export interface RotationVerification {
+  checked_at: string;
+  verdict: "ok" | "still_active" | "used_after_disable" | "missing_evidence";
+  evidence: "age_and_last_use" | "age_only" | "old_credential_absent";
+  old_exists: boolean;
+  old_active: boolean;
+  old_created_at: string | null;
+  old_age_days: number | null;
+  old_last_used_at: string | null;
+  last_used_known: boolean;
+  disabled_at: string | null;
+  detail?: string;
+}
+
+export interface RotationJobStep { state: Exclude<RotationState, "pending" | "failed" | "cancelled">; status: "done" | "current" | "pending" | "failed" | "skipped"; at: string | null }
+
+export interface RotationJob {
+  id: string;
+  secret_id: number;
+  secret: string;
+  system: string;
+  kind: string;
+  account: string;
+  origin: RotationOrigin;
+  bulk_id: string | null;
+  adapter: string;
+  adapter_type: RotationAdapterType;
+  destination: string | null;
+  dest_path: string;
+  state: RotationState;
+  failed_state: RotationState | null;
+  old_ref: string;
+  new_ref: string | null;
+  grace_hours: number;
+  attempts: number;
+  last_error: string | null;
+  next_step_at: string | null;
+  handed_over_at: string | null;
+  disabled_at: string | null;
+  verified_at: string | null;
+  completed_at: string | null;
+  verification: RotationVerification | null;
+  steps: RotationJobStep[];
+  requested_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** An adapter as the API shows it: the credential is never returned, only whether one is set. */
+export interface RotationAdapter { id: string; name: string; type: RotationAdapterType; config: Record<string, string>; credential_set: boolean; created_by: string; created_at: string; updated_at: string }
+export interface RotationAdapterList { adapters: RotationAdapter[]; types: RotationAdapterType[] }
+
+export interface RotationPolicy {
+  id: string;
+  kind: string;
+  system: string;
+  max_age_days: number;
+  grace_hours: number;
+  adapter: string | null;
+  destination: string | null;
+  dest_path: string;
+  auto_rotate: boolean;
+  mode: "automatic" | "scheduled" | "manual";
+  created_by: string;
+  updated_at: string;
+}
+
+export interface RotationPolicyInput { kind: string; system: string; max_age_days: number; grace_hours: number; adapter: string | null; destination: string | null; dest_path: string; auto_rotate: boolean }
+export interface RotationAdapterInput { type: RotationAdapterType; config: Record<string, string>; credential?: Record<string, string> }
+
+export interface RotationBulkCounts { total: number; rotate: number; manual: number; blocked: number; in_flight: number }
+export interface RotationBulkPlan { system: string; plan_hash: string; counts: RotationBulkCounts; items: RotationPlanItem[] }
+export interface RotationBulkItem { secret_id: number; name: string; kind: string; action: RotationAction; reason?: string; adapter: string | null; owner: string | null }
+export interface RotationBulk {
+  id: string;
+  system: string;
+  reason: string;
+  plan_hash: string;
+  requested_by: string;
+  created_at: string;
+  counts: RotationBulkCounts;
+  items: RotationBulkItem[];
+  jobs: RotationJob[];
+  progress: Partial<Record<RotationState, number>>;
+}
+
+/** The rotation endpoints. Reads use `useApi` with these paths; every change needs a fresh phishing-resistant sign-in. */
+export const rotation = {
+  paths: {
+    overview: "/rotation/overview",
+    adapters: "/rotation/adapters",
+    policies: "/rotation/policies",
+    jobs: (q = "") => `/rotation/jobs${q}`,
+    job: (id: string) => `/rotation/jobs/${id}`,
+    bulks: "/rotation/bulk",
+    bulk: (id: string) => `/rotation/bulk/${id}`,
+  },
+  plan: (secretIds: number[]) => api<RotationPlanItem[]>("/rotation/plan", { secret_ids: secretIds }),
+  start: (secretId: number) => api<RotationJob>("/rotation/jobs", { secret_id: secretId }),
+  retry: (id: string) => api<RotationJob>(`/rotation/jobs/${id}/retry`, {}),
+  cancel: (id: string) => api<RotationJob>(`/rotation/jobs/${id}/cancel`, {}),
+  putPolicy: (p: RotationPolicyInput) => api<RotationPolicy>("/rotation/policies", p, "PUT"),
+  deletePolicy: (id: string) => api<{ deleted: string }>(`/rotation/policies/${id}`, undefined, "DELETE"),
+  putAdapter: (name: string, a: RotationAdapterInput) => api<RotationAdapter>(`/rotation/adapters/${encodeURIComponent(name)}`, a, "PUT"),
+  deleteAdapter: (name: string) => api<{ deleted: string }>(`/rotation/adapters/${encodeURIComponent(name)}`, undefined, "DELETE"),
+  bulkPlan: (system: string) => api<RotationBulkPlan>("/rotation/bulk/plan", { system }),
+  bulkExecute: (system: string, reason: string, planHash: string) => api<RotationBulk>("/rotation/bulk", { system, reason, plan_hash: planHash }),
+};

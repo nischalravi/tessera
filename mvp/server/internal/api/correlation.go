@@ -6,10 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/correlation"
+	"github.com/nischalravi/tessera/mvp/server/internal/identity/merge"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -22,9 +21,9 @@ import (
 //	POST   /api/accounts/{account_id}/link            {identity_id, reason}
 //	POST   /api/accounts/{account_id}/not-person      {reason}
 //	DELETE /api/accounts/{account_id}/link            release the decision
-//	POST   /api/identities/{identity_id}/merge        {into, reason}: merge identity_id into "into"
+//	POST   /api/identities/{identity_id}/merge        {into, reason}: merge identity_id into "into" (202 and a request when a second reviewer is needed, see matching.go)
 //	GET    /api/identity-merges                       merges, newest first
-//	POST   /api/identity-merges/{merge_id}/unmerge    {reason}
+//	POST   /api/identity-merges/{merge_id}/unmerge    {reason}: restores the moves; lists what was created since (created_after)
 //
 // Decisions change whose access an account counts as, so they need
 // identities.correlate (merges identities.merge) and a fresh
@@ -87,13 +86,14 @@ func viewDecision(l *store.AccountLink) decisionView {
 type moveView struct {
 	Table  string `json:"table"`
 	ID     int64  `json:"id"`
+	Key    string `json:"key,omitempty"` // the row's id where it is text (the guest tables)
 	Column string `json:"column"`
 }
 
 func viewMoves(ms []store.MergeMove) []moveView {
 	out := make([]moveView, len(ms))
 	for i, m := range ms {
-		out[i] = moveView{m.Table, m.ID, m.Column}
+		out[i] = moveView{m.Table, m.ID, m.Key, m.Column}
 	}
 	return out
 }
@@ -131,9 +131,13 @@ func viewMerge(c *store.TenantTx, m *store.IdentityMerge) (mergeView, error) {
 	if err != nil {
 		return mergeView{}, err
 	}
+	window, err := merge.Window(c)
+	if err != nil {
+		return mergeView{}, err
+	}
 	return mergeView{ID: m.ID, SurvivorID: m.SurvivorID, SurvivorName: sn, MergedID: m.MergedID, MergedName: mn,
 		MergedStatus: m.MergedStatus, Moves: viewMoves(m.Moves), Reason: m.Reason, MergedBy: m.MergedBy,
-		MergedAt: m.MergedAt, UnmergeBefore: m.MergedAt.Add(correlation.UnmergeWindow), UnmergedBy: m.UnmergedBy,
+		MergedAt: m.MergedAt, UnmergeBefore: m.MergedAt.Add(window), UnmergedBy: m.UnmergedBy,
 		UnmergedAt: m.UnmergedAt, UnmergeReason: m.UnmergeReason}, nil
 }
 
@@ -266,8 +270,21 @@ func (s *Server) releaseAccount(_ http.ResponseWriter, r *http.Request, p *param
 	return s.decided(r, "identity.account.release", d)
 }
 
+// mergeActor is the signed-in user who merges, approves or decides.
+func mergeActor(r *http.Request) (merge.Actor, error) {
+	id, err := decider(r)
+	if err != nil {
+		return merge.Actor{}, err
+	}
+	return merge.Actor{UserID: id, Display: principal(r).Display}, nil
+}
+
+// mergeIdentity asks for a merge. Where either person holds privileged access,
+// has IAL 2 or more, or is an employee it answers 202 with a request that a
+// second reviewer approves (POST /api/identity-merge-requests/{id}/approve);
+// otherwise it applies at once and answers the merge, as before.
 func (s *Server) mergeIdentity(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
-	actor, err := decider(r)
+	actor, err := mergeActor(r)
 	if err != nil {
 		return nil, err
 	}
@@ -280,20 +297,18 @@ func (s *Server) mergeIdentity(_ http.ResponseWriter, r *http.Request, p *params
 		return nil, err
 	}
 	c, now := store.TxFrom(r.Context()), s.clock().UTC()
-	m, err := correlation.Merge(c, uuid.NewString(), id, b.Into, b.Reason, actor, now)
+	out, err := merge.Request(c, merge.Input{MergedID: id, SurvivorID: b.Into, Reason: b.Reason, Basis: merge.BasisReviewer}, actor, now)
 	if err != nil {
 		return nil, corrErr(err)
 	}
-	v, err := viewMerge(c, m)
-	if err != nil {
-		return nil, err
+	if out.Pending != nil {
+		v, err := viewMergeRequest(newViewer(c), out.Pending)
+		if err != nil {
+			return nil, err
+		}
+		return statusBody{http.StatusAccepted, ojson.Object{{Key: "status", Value: "pending_approval"}, {Key: "request", Value: v}}}, nil
 	}
-	if err := c.Audit(now, principal(r).Display, "identity.merge", ojson.Object{{Key: "merge_id", Value: m.ID},
-		{Key: "merged_id", Value: m.MergedID}, {Key: "survivor_id", Value: m.SurvivorID},
-		{Key: "moves", Value: v.Moves}, {Key: "reason", Value: m.Reason}}); err != nil {
-		return nil, err
-	}
-	return v, nil
+	return viewMerge(c, out.Merge)
 }
 
 func (s *Server) listMerges(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
@@ -314,7 +329,7 @@ func (s *Server) listMerges(_ http.ResponseWriter, r *http.Request, _ *params) (
 }
 
 func (s *Server) unmergeIdentity(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
-	actor, err := decider(r)
+	actor, err := mergeActor(r)
 	if err != nil {
 		return nil, err
 	}
@@ -324,7 +339,7 @@ func (s *Server) unmergeIdentity(_ http.ResponseWriter, r *http.Request, p *para
 	}
 	c, now := store.TxFrom(r.Context()), s.clock().UTC()
 	id := strings.TrimSpace(p.path["merge_id"])
-	res, err := correlation.Unmerge(c, id, b.Reason, actor, now)
+	res, err := merge.Unmerge(c, id, b.Reason, actor, now)
 	if err != nil {
 		return nil, corrErr(err)
 	}
@@ -332,11 +347,6 @@ func (s *Server) unmergeIdentity(_ http.ResponseWriter, r *http.Request, p *para
 	if err != nil {
 		return nil, err
 	}
-	restored, kept := viewMoves(res.Restored), viewMoves(res.Kept)
-	if err := c.Audit(now, principal(r).Display, "identity.unmerge", ojson.Object{{Key: "merge_id", Value: id},
-		{Key: "merged_id", Value: res.Merge.MergedID}, {Key: "survivor_id", Value: res.Merge.SurvivorID},
-		{Key: "restored", Value: restored}, {Key: "kept", Value: kept}, {Key: "reason", Value: *res.Merge.UnmergeReason}}); err != nil {
-		return nil, err
-	}
-	return ojson.Object{{Key: "merge", Value: v}, {Key: "restored", Value: restored}, {Key: "kept", Value: kept}}, nil
+	return ojson.Object{{Key: "merge", Value: v}, {Key: "restored", Value: viewMoves(res.Restored)}, {Key: "kept", Value: viewMoves(res.Kept)},
+		{Key: "created_after", Value: res.CreatedAfter}}, nil
 }

@@ -120,6 +120,10 @@ type ItemSpec struct {
 	EligibleDepartments []string
 	DefaultHours        *float64
 	MaxHours            *float64
+	// Populations are the guest populations the item is open to (guest
+	// access, issue #75); nil leaves them as they are, empty closes the item
+	// to guests.
+	Populations []string
 }
 
 // PutItem creates or updates a group's catalog item.
@@ -152,6 +156,11 @@ func PutItem(tx *store.TenantTx, groupID int64, s ItemSpec, by Actor, now time.T
 			return nil, refuse(422, "invalid_department", "department names are 1 to 200 characters")
 		}
 	}
+	for _, pop := range s.Populations {
+		if !slices.Contains(GuestPopulations, pop) {
+			return nil, refuse(422, "invalid_population", "populations are visitor, contractor, volunteer or partner")
+		}
+	}
 	if s.OwnerIdentityID != nil {
 		o, err := tx.Identity(*s.OwnerIdentityID)
 		if errors.Is(err, store.ErrNotFound) {
@@ -176,9 +185,19 @@ func PutItem(tx *store.TenantTx, groupID int64, s ItemSpec, by Actor, now time.T
 	if err := tx.PutCatalogItem(it); err != nil {
 		return nil, err
 	}
-	if err := tx.Audit(now, by.Display, "catalog.item.put", ojson.Object{{Key: "catalog_item_id", Value: id},
+	detail := ojson.Object{{Key: "catalog_item_id", Value: id},
 		{Key: "group_id", Value: g.ID}, {Key: "group", Value: g.System + ":" + g.Name},
-		{Key: "requestable", Value: s.Requestable}, {Key: "risk", Value: s.Risk}}); err != nil {
+		{Key: "requestable", Value: s.Requestable}, {Key: "risk", Value: s.Risk}}
+	if s.Populations != nil {
+		pops := slices.Clone(s.Populations)
+		slices.Sort(pops)
+		pops = slices.Compact(pops)
+		if err := tx.SetCatalogPopulations(id, pops); err != nil {
+			return nil, err
+		}
+		detail = append(detail, ojson.KV{Key: "populations", Value: pops})
+	}
+	if err := tx.Audit(now, by.Display, "catalog.item.put", detail); err != nil {
 		return nil, err
 	}
 	return tx.CatalogItem(id)
@@ -322,6 +341,9 @@ func line(tx *store.TenantTx, batch string, ben *store.Identity, itemID string, 
 		return nil, refuse(409, "not_eligible", "%s is not eligible for %s", ben.Name, name)
 	case len(it.EligibleDepartments) > 0 && (ben.Department == nil || !slices.Contains(it.EligibleDepartments, *ben.Department)):
 		return nil, refuse(409, "not_eligible", "%s is not eligible for %s (department)", ben.Name, name)
+	}
+	if err := guestChecks(tx, ben, it, g); err != nil {
+		return nil, err
 	}
 	if err := attributeEligible(tx, it, g, ben, by, now); err != nil {
 		return nil, err

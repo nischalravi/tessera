@@ -1,0 +1,29 @@
+{
+  "total": 2,
+  "data": [
+    {
+      "id": "w-1001",
+      "descriptor": "Avery Example",
+      "employeeId": "E1001",
+      "primaryWorkEmail": "Avery.Example@Example.com",
+      "workerType": {"id": "Employee", "descriptor": "Employee"},
+      "businessTitle": "Senior Platform Engineer",
+      "supervisoryOrganization": {"id": "SUP-100", "descriptor": "Platform Engineering"},
+      "manager": {"id": "w-1000", "employeeId": "E1000"},
+      "hireDate": "2021-04-12",
+      "active": true
+    },
+    {
+      "id": "w-1006",
+      "descriptor": "Sam Newhire",
+      "employeeId": "E1006",
+      "primaryWorkEmail": "sam.newhire@example.com",
+      "workerType": {"id": "Employee", "descriptor": "Employee"},
+      "businessTitle": "Analyst",
+      "supervisoryOrganization": {"id": "SUP-200", "descriptor": "Customer Support"},
+      "manager": {"id": "w-1000", "employeeId": "E1000"},
+      "hireDate": "2026-10-05",
+      "active": true
+    }
+  ]
+}

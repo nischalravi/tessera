@@ -16,7 +16,8 @@ import (
 // designRoutes is the route -> requirement table of the designs, transcribed:
 // docs/design/phase-0-platform-security.md §16.2 (existing routes) and §16.1
 // (session and audit routes), and docs/design/deployment-readiness.md §9
-// (readiness routes) and issue #163 (conditional access). Columns: method, pattern, permission, step-up
+// (readiness routes) and issue #163 (conditional access), and the secret-rotation routes of issue #113 (docs in
+// internal/api/openapi_rotation.json). Columns: method, pattern, permission, step-up
 // (STEP_UP_POLICY or -). "public" marks the allow-list. Routes that neither
 // design names (GET /api/accounts, the API description) are marked with a
 // trailing "#" and the requirement chosen for them in this PR.
@@ -32,6 +33,8 @@ GET    /api/groups                                   graph.read      -
 GET    /api/resources                                graph.read      -
 GET    /api/graph                                    graph.read      -
 GET    /api/nhi                                      graph.read      -
+GET    /api/ai-agents                                graph.read      -  # issue #116
+GET    /api/ai-agents/mcp-findings                   graph.read      -  # issue #116
 GET    /api/least-privilege/recommendations          graph.read      -
 POST   /api/least-privilege/revoke                   graph.read      -  (dry_run=false: grants.revoke + STEP_UP_POLICY in the handler)
 GET    /api/policies                                 graph.read      -
@@ -128,10 +131,37 @@ DELETE /api/accounts/{account_id}/link               identities.correlate STEP_U
 POST   /api/identities/{identity_id}/merge           identities.merge STEP_UP_POLICY  # issue #160
 GET    /api/identity-merges                          graph.read      -  # issue #160
 GET    /api/identities/{identity_id}/affiliations    graph.read      -  # issue #64
+GET    /api/affiliation-summary                      graph.read      -  # issue #76
+GET    /api/identities/{identity_id}/guest-profile   guests.read     -  # issue #76
 GET    /api/identities/{identity_id}/identifiers     graph.read      -  # issue #64
 POST   /api/identities/{identity_id}/affiliations    identities.affiliate STEP_UP_POLICY  # issue #64
 POST   /api/affiliations/{affiliation_id}/end        identities.affiliate STEP_UP_POLICY  # issue #64
+GET    /api/identities/{identity_id}/access-bundle   guests.read     -  # issue #75
+GET    /api/refgroups                                graph.read      -  # issue #75
+POST   /api/refgroups/reconcile                      lifecycle.manage -  # issue #75
 POST   /api/identity-merges/{merge_id}/unmerge       identities.merge STEP_UP_POLICY  # issue #160
+GET    /api/identity-matches                         identity_matches.review -  # issue #68
+POST   /api/identity-matches/{match_id}/decide       identity_matches.review STEP_UP_POLICY  # issue #68
+GET    /api/identity-merge-requests                  identities.merge -  # issue #68
+POST   /api/identity-merge-requests/{merge_request_id}/approve identities.merge STEP_UP_POLICY  # issue #68
+POST   /api/identity-merge-requests/{merge_request_id}/reject  identities.merge STEP_UP_POLICY  # issue #68
+GET    /api/admin/matching                           matching.configure -  # issue #68
+PUT    /api/admin/matching                           matching.configure STEP_UP_POLICY  # issue #68
+GET    /api/guest-lifecycle                          guests.read     -  # issue #74
+GET    /api/guest-lifecycle/items                    guests.read     -  # issue #74
+GET    /api/guest-lifecycle/tasks                    guests.sponsor  -  # issue #74 (only the tasks the caller may decide)
+POST   /api/guest-lifecycle/tasks/{task_id}/resolve  guests.sponsor  STEP_UP_POLICY  # issue #74 (the manager of the departed sponsor, sponsorships.approve or the sponsor, in the service)
+GET    /api/admin/guest-lifecycle                    guest_lifecycle.configure -  # issue #74
+PUT    /api/admin/guest-lifecycle                    guest_lifecycle.configure STEP_UP_POLICY  # issue #74
+GET    /api/admin/terms                              guests.read     -  # issue #73
+POST   /api/admin/terms                              terms.manage    STEP_UP_POLICY  # issue #73
+PUT    /api/admin/terms/{key}/assignments            terms.manage    STEP_UP_POLICY  # issue #73
+GET    /api/me/terms                                 auth.self        -  # issue #73 (the caller's own person)
+POST   /api/me/terms/accept                          auth.self        -  # issue #73 (the caller's own person)
+POST   /api/me/recovery-codes                        auth.self        -  # issue #73 (hosted identities only)
+POST   /api/guests/{identity_id}/recovery            guests.sponsor  STEP_UP_POLICY  # issue #73 (the guest's sponsor, or guests.recover, in the handler)
+GET    /api/guest-recoveries                         guests.read     -  # issue #73
+POST   /api/guest-recoveries/{case_id}/cancel        guests.sponsor  STEP_UP_POLICY  # issue #73 (the guest's sponsor, or guests.recover, in the handler)
 GET    /api/catalog                                  requests.create -  # issue #164 (?all=1: catalog.manage in the handler)
 PUT    /api/catalog/items/{group_id}                 catalog.manage  STEP_UP_POLICY  # issue #164
 POST   /api/requests                                 requests.create -  # issue #164 (others: requests.create_for_others in the handler)
@@ -188,6 +218,10 @@ PUT    /api/identities/{identity_id}/lifecycle       lifecycle.manage STEP_UP_PO
 POST   /api/identities/{identity_id}/lifecycle/extend requests.create -  # issue #159 (the sponsor, or lifecycle.manage)
 POST   /api/guests/invitations                       guests.sponsor  STEP_UP_POLICY  # issue #65 (the sponsor policy decides who may sponsor)
 POST   /api/guests/invitations/bulk                  guests.sponsor  STEP_UP_POLICY  # issue #65 (dry_run too: it audits)
+GET    /api/guest-registrations                      guests.sponsor  -  # issue #66 (only the caller's own pending requests)
+POST   /api/guest-registrations/code                 guests.sponsor  STEP_UP_POLICY  # issue #66
+POST   /api/guest-registrations/{registration_id}/approve  guests.sponsor  STEP_UP_POLICY  # issue #66 (only the sponsor the request names; the sponsor policy still decides)
+POST   /api/guest-registrations/{registration_id}/deny     guests.sponsor  STEP_UP_POLICY  # issue #66 (only the sponsor the request names)
 GET    /api/guests                                   guests.sponsor  -  # issue #65 (sponsor=all: guests.read in the handler)
 GET    /api/sponsorships/approvals                   sponsorships.approve -  # issue #65
 GET    /api/sponsorships/{sponsorship_id}            guests.sponsor  -  # issue #65 (the sponsor, the transfer target, guests.read or sponsorships.approve)
@@ -353,6 +387,24 @@ POST   /api/access-drift/{drift_id}/remediate        drift.remediate STEP_UP_POL
 GET    /api/remediation-policies                     drift.read      -
 PUT    /api/remediation-policies                     drift.policy    STEP_UP_POLICY
 DELETE /api/remediation-policies/{policy_id}         drift.policy    STEP_UP_POLICY
+GET    /api/rotation/openapi.json                    auth.self          -  #
+GET    /api/rotation/overview                        graph.read         -
+GET    /api/rotation/adapters                        graph.read         -
+PUT    /api/rotation/adapters/{name}                 secrets.rotate     STEP_UP_POLICY
+DELETE /api/rotation/adapters/{name}                 secrets.rotate     STEP_UP_POLICY
+GET    /api/rotation/policies                        graph.read         -
+PUT    /api/rotation/policies                        secrets.rotate     STEP_UP_POLICY
+DELETE /api/rotation/policies/{id}                   secrets.rotate     STEP_UP_POLICY
+POST   /api/rotation/plan                            graph.read         -  (a dry run: computed data, no provider call)
+GET    /api/rotation/jobs                            graph.read         -
+POST   /api/rotation/jobs                            secrets.rotate     STEP_UP_POLICY
+GET    /api/rotation/jobs/{id}                       graph.read         -
+POST   /api/rotation/jobs/{id}/retry                 secrets.rotate     STEP_UP_POLICY
+POST   /api/rotation/jobs/{id}/cancel                secrets.rotate     STEP_UP_POLICY
+POST   /api/rotation/bulk/plan                       graph.read         -  (a dry run)
+GET    /api/rotation/bulk                            graph.read         -
+POST   /api/rotation/bulk                            secrets.rotate     STEP_UP_POLICY
+GET    /api/rotation/bulk/{id}                       graph.read         -
 GET    /api/config/signing-key                       admin.read      -  # issue #170
 POST   /api/config/export                            config.transport -  #
 GET    /api/config/trusted-signers                   admin.read      -  #
@@ -408,6 +460,7 @@ PUT    /api/groups/users/{id}/identity               groups.admin    STEP_UP_POL
 GET    /api/groups/pit/digests                       groups.admin    -  # issue #46
 GET    /api/groups/pit/verify                        groups.admin    -  # issue #46
 POST   /api/groups/pit/rebuild                       groups.admin    -  # issue #46
+GET    /api/mfa/posture                              graph.read      -  # issue #109
 GET    /api/auth/session                             auth.self       -
 POST   /api/auth/logout                              auth.self       -
 GET    /api/auth/sessions                            auth.self       -
@@ -443,6 +496,9 @@ POST   /public/t/{slug}/claim/verify/send            public
 POST   /public/t/{slug}/claim/verify/check           public
 GET    /public/t/{slug}/claim/status                 public
 POST   /public/t/{slug}/claim/existing-account       public
+GET    /public/t/{slug}/claim/terms                  public
+POST   /public/t/{slug}/claim/terms/accept           public
+POST   /public/t/{slug}/claim/consent                public
 POST   /public/t/{slug}/claim/credential             public
 POST   /public/t/{slug}/claim/resend                 public
 GET    /api/admin/platform-health                    admin.read      -  # issue #303
@@ -453,6 +509,9 @@ POST   /api/admin/break-glass/registration/options   admin.change.request STEP_U
 POST   /api/admin/break-glass/registration/verify    admin.change.request STEP_UP_ADMIN  # issue #17
 POST   /api/admin/break-glass/actions/{action}       breakglass.recover -  # issue #17
 POST   /api/admin/break-glass/uses/{use_id}/attest   admin.change.request -  # issue #17
+POST   /public/t/{slug}/guest/renewal-request        public  # issue #74: the guest's "request renewal" link, always 202
+GET    /public/t/{slug}/register/sponsors           public  # issue #66: sponsor names (no emails), at least 2 letters, rate-limited
+POST   /public/t/{slug}/register                     public  # issue #66: self-registration, bot challenge, 5 per IP per hour, always 202
 `
 
 type designRoute struct {

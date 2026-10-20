@@ -126,3 +126,12 @@ test("labels cover every state and population", () => {
   assert.equal(model.needsMe({ can_accept_transfer: false, can_approve: true }), true);
   assert.equal(model.needsMe({ can_accept_transfer: false, can_approve: false }), false);
 });
+
+test("bundle summary lists the worst states first (issue #75)", () => {
+  assert.equal(model.bundleSummary([]), "No access bundle");
+  assert.equal(model.bundleSummary([{ state: "granted" }, { state: "pending" }, { state: "granted" }, { state: "failed" }]),
+    "1 failed, 1 pending, 2 granted");
+  assert.equal(model.bundleNeedsAttention([{ state: "granted" }]), false);
+  assert.equal(model.bundleNeedsAttention([{ state: "failed" }]), true);
+  for (const s of Object.keys(model.BUNDLE_STATE_LABEL)) assert.ok(model.BUNDLE_STATE_TONE[s as keyof typeof model.BUNDLE_STATE_TONE]);
+});

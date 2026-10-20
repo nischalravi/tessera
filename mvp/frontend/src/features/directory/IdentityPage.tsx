@@ -3,13 +3,14 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { Ban, ChevronDown, ChevronRight, ClipboardCheck, Ellipsis, GitMerge, Link2, ShieldAlert, Network, Pencil, RotateCcw, ShieldCheck, ShoppingCart, UserCheck } from "lucide-react";
 import { IdentityDetail, SimResult, ago, api, fmtDate, fmtDay, invalidLink, isNumericId, sodRemediate, useApi } from "../../api";
 import { useIdentityActions } from "../../app/actions";
-import { usePersona } from "../../app/persona";
 import {
   Avatar, Badge, Button, Callout, Chip, Drawer, EmptyState, IdLink, Loading, Menu, Page, PathView, Segmented, Sev, SimulationView, Status, Tabs, TypeBadge, useToast,
 } from "../../components";
-import { mockObjects } from "../../mocks";
+import { PlanDrawer, RotationBadge, useRotationStatus } from "../rotation/shared";
 import { useSession } from "../../app/auth";
 import { AffiliationsSection, IdentifiersSection } from "./affiliations";
+import { BundleSection } from "./bundle";
+import { IdentityCard, MatchHistory, SourceAndTerms, SponsorshipsSection } from "./guestProfile";
 import { MergeDialog } from "./correlation";
 import { ContainDialog } from "./containment";
 import { PreviewFormDrawer } from "./shared";
@@ -64,9 +65,9 @@ type Tab = "access" | "grants" | "violations" | "recs" | "accounts" | "affiliati
 
 function Header({ d }: { d: IdentityDetail }) {
   const acts = useIdentityActions();
-  const { actor } = usePersona();
   const toast = useToast();
   const [edit, setEdit] = useState(false);
+  const [rotate, setRotate] = useState(false);
   const [merging, setMerging] = useState(false);
   const [containing, setContaining] = useState(false);
   const { can } = useSession();
@@ -104,7 +105,7 @@ function Header({ d }: { d: IdentityDetail }) {
           {human ? (
             <Button size="sm" icon={<RotateCcw size={14} />} disabled={status !== "active"} onClick={() => acts.resetPassword(d)}>Reset password</Button>
           ) : (
-            <Button size="sm" icon={<RotateCcw size={14} />} onClick={async () => { await mockObjects.save("secret", d.name, actor, "update"); toast(`Secret rotation requested for ${d.name} (preview)`); }}>Rotate secret</Button>
+            <Button size="sm" icon={<RotateCcw size={14} />} disabled={d.secrets.length === 0} title={d.secrets.length === 0 ? "No secrets are recorded for this identity" : "Preview the rotation of its secrets"} onClick={() => setRotate(true)}>Rotate secrets…</Button>
           )}
           <Button size="sm" icon={<Pencil size={14} />} onClick={() => setEdit(true)}>Edit</Button>
           <Button size="sm" icon={<ShoppingCart size={14} />} disabled={status !== "active"} onClick={() => acts.requestFor(d)}>Request access for</Button>
@@ -125,6 +126,7 @@ function Header({ d }: { d: IdentityDetail }) {
           />
         </div>
       </div>
+      {rotate && <PlanDrawer title={`Rotate ${d.name}'s secrets`} secretIds={d.secrets.map((x) => x.id)} onClose={() => setRotate(false)} />}
       {d.status === "merged" && (
         <div className="mt">
           <Callout tone="warn">
@@ -138,8 +140,13 @@ function Header({ d }: { d: IdentityDetail }) {
         <MergeDialog
           merged={d}
           onClose={() => setMerging(false)}
-          onMerged={(survivor) => {
+          onMerged={(survivor, request) => {
             setMerging(false);
+            if (request) {
+              toast(`The merge of ${d.name} waits for a second reviewer`);
+              nav("/directory/identity-matches?tab=requests");
+              return;
+            }
             toast(`${d.name} merged`);
             nav(`/directory/identities/${survivor}`);
           }}
@@ -167,6 +174,7 @@ function Header({ d }: { d: IdentityDetail }) {
 }
 
 export function IdentityPage() {
+  const { can } = useSession();
   const { id } = useParams();
   const [params, setParams] = useSearchParams();
   const validId = isNumericId(id);
@@ -175,6 +183,7 @@ export function IdentityPage() {
   const [open, setOpen] = useState<string | null>(null);
   const [filter, setFilter] = useState<"" | "unused" | "privileged" | "sensitive">("");
   const [revoke, setRevoke] = useState<number | null>(null);
+  const rot = useRotationStatus();
   const tab = (params.get("tab") ?? "access") as Tab;
   const setTab = (t: Tab) => setParams({ tab: t }, { replace: true });
 
@@ -278,8 +287,13 @@ export function IdentityPage() {
 
       {tab === "affiliations" && !machine && (
         <div className="grid g2">
+          <div className="card"><IdentityCard identityId={d.id} /></div>
           <div className="card"><AffiliationsSection identityId={d.id} name={d.name} human /></div>
           <div className="card"><IdentifiersSection identityId={d.id} /></div>
+          {can("guests.sponsor") && <div className="card"><SponsorshipsSection identityId={d.id} /></div>}
+          {can("guests.read") && <div className="card"><BundleSection identityId={d.id} /></div>}
+          {can("guests.read") && <div className="card stack"><SourceAndTerms identityId={d.id} /></div>}
+          <div className="card"><MatchHistory identityId={d.id} /></div>
         </div>
       )}
 
@@ -344,13 +358,14 @@ export function IdentityPage() {
             {d.secrets.length === 0 ? <EmptyState title="No machine credentials">Only service accounts and agents hold API keys or tokens.</EmptyState> : (
               <div className="table-scroll">
                 <table>
-                  <thead><tr><th>Secret</th><th className="num">Age</th><th>Last used</th></tr></thead>
+                  <thead><tr><th>Secret</th><th className="num">Age</th><th>Last used</th><th>Rotation</th></tr></thead>
                   <tbody>
                     {d.secrets.map((s) => (
                       <tr key={s.id}>
                         <td className="small"><span className="sys">{s.name}</span><div className="xs faint">{s.kind.replace(/_/g, " ")}</div></td>
                         <td className="num">{s.stale ? <Badge tone="warning">{s.age_days} d</Badge> : `${s.age_days} d`}</td>
                         <td className="small nowrap">{ago(s.last_used_days)}</td>
+                        <td><RotationBadge status={rot.get(s.id)} /></td>
                       </tr>
                     ))}
                   </tbody>

@@ -1,0 +1,6 @@
+[
+  {"name": "forked", "default_branch": "main", "archived": false, "disabled": false, "fork": true},
+  {"name": "empty-repo", "default_branch": "main", "archived": false, "disabled": false, "fork": false},
+  {"name": "platform", "default_branch": "trunk", "archived": false, "disabled": false, "fork": false},
+  {"name": "../escape", "default_branch": "main", "archived": false, "disabled": false, "fork": false}
+]

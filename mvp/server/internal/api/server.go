@@ -27,15 +27,19 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oauth2rp"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oidcrp"
 	"github.com/nischalravi/tessera/mvp/server/internal/condaccess"
+	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/claim"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/credential"
+	guestlife "github.com/nischalravi/tessera/mvp/server/internal/guests/lifecycle"
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/register"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/sponsorship"
 	"github.com/nischalravi/tessera/mvp/server/internal/health"
 	"github.com/nischalravi/tessera/mvp/server/internal/helpdesk"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
+	"github.com/nischalravi/tessera/mvp/server/internal/identity/match"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
 	"github.com/nischalravi/tessera/mvp/server/internal/mcpauth"
 	"github.com/nischalravi/tessera/mvp/server/internal/notify"
@@ -49,6 +53,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 	"github.com/nischalravi/tessera/mvp/server/internal/requests"
 	"github.com/nischalravi/tessera/mvp/server/internal/reviews"
+	"github.com/nischalravi/tessera/mvp/server/internal/rotation"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/siem"
 	"github.com/nischalravi/tessera/mvp/server/internal/sod"
@@ -175,9 +180,19 @@ type Config struct {
 	// through (guest claim, internal/guests/credential). Nil: the claim stops
 	// at the credential step and stays pending.
 	Credential credential.Authority
+	// RegisterChallenge is the bot challenge of the public registration page
+	// (Turnstile or equivalent). Nil: outside production the page accepts
+	// every request (register.AllowAll); in production registration answers
+	// 503 until one is configured.
+	RegisterChallenge register.Challenger
 	// ClaimMinDuration is the minimum time of a claim start or resend (default
 	// 300 ms); tests shorten it.
 	ClaimMinDuration time.Duration
+	// RotationFake admits the simulated rotation adapter
+	// (TESSERA_ROTATION_FAKE_ADAPTERS; config refuses it in prod).
+	RotationFake bool
+	// RotationNotifier tells secret owners about rotations; nil: the audit-event notifier.
+	RotationNotifier rotation.Notifier
 	// Containment runs the kill switch's provider calls (revoke sessions and
 	// grants). Nil: a service with no outbound client, so every containment
 	// step is a manual task.
@@ -223,12 +238,17 @@ type Server struct {
 	authn  *auth.Authenticator
 	limits *limiters
 	guests *sponsorship.Service
+	// guestLife runs the guest lifecycle: reminders, transfer tasks, conversion, deprovisioning (issue #74)
+	guestLife *guestlife.Service
 
 	claimSvc *claim.Service
 	claimLim *claimLimits
-	names    nameCache
-	rp       *oidcrp.RP
-	oauth2   *oauth2rp.RP
+	// reg is guest self-registration with sponsor approval (issue #66)
+	reg    *register.Service
+	regLim *registerLimits
+	names  nameCache
+	rp     *oidcrp.RP
+	oauth2 *oauth2rp.RP
 	// signals supplies device-compliance signals to conditional access.
 	signals condaccess.SignalSource
 	cas     *casclient.Client
@@ -240,6 +260,7 @@ type Server struct {
 	agents    *agent.Service
 	prov      *provision.Engine
 	provSeal  *seal.Sealer // cfg.Sealer, or a per-process key when it is nil
+	rotation  *rotation.Service
 	// containment is the kill switch (issue #106); never nil.
 	containment *containment.Service
 	// mcp is the MCP authorization server (issue #115); never nil.
@@ -335,7 +356,8 @@ func New(cfg Config) *Server {
 		cfg.Helpdesk = &helpdesk.Service{HTTP: hc, Containment: cfg.Containment, Clock: cfg.Clock, Simulated: cfg.Env != "prod"}
 	}
 	s := &Server{cfg: cfg, ssf: cfg.SSF, containment: cfg.Containment, helpdesk: cfg.Helpdesk, signals: cfg.DeviceSignals, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
-		agents: cfg.Agents, limits: newLimiters(cfg.RateLimits), provSeal: provSeal}
+		agents: cfg.Agents, limits: newLimiters(cfg.RateLimits), provSeal: provSeal,
+		rotation: &rotation.Service{Sealer: cfg.Sealer, Env: cfg.Env, AllowFake: cfg.RotationFake, Notifier: cfg.RotationNotifier}}
 	s.mcp = &mcpauth.Service{HTTP: cfg.OutboundHTTP, AllowLoopback: cfg.Env == "dev", Sealer: cfg.Sealer, Clock: func() time.Time { return s.clock() },
 		PolicyVersion: s.policyVersion}
 	s.prov = &provision.Engine{DB: cfg.Store, Sealer: provSeal, HTTP: cfg.Outbound,
@@ -352,6 +374,9 @@ func New(cfg Config) *Server {
 		}
 	}
 	s.guests = sponsorship.New(cfg.Identifiers)
+	if cfg.Identifiers != nil {
+		s.guests.Matcher = match.New(cfg.Identifiers)
+	}
 	s.claimLim = newClaimLimits()
 	if cfg.Identifiers != nil && cfg.PublicURL != "" {
 		if cfg.Secrets == nil {
@@ -361,6 +386,14 @@ func New(cfg Config) *Server {
 		s.claimSvc = claim.New(cfg.Identifiers, cfg.Secrets, cfg.PublicURL, s.tenantName)
 		s.guests.Claim = s.claimSvc
 	}
+	s.regLim = newRegisterLimits()
+	s.reg = &register.Service{Guests: s.guests, Keyer: cfg.Identifiers, Challenge: cfg.RegisterChallenge, TenantName: s.tenantName,
+		SignInURL: cfg.PublicURL}
+	if s.reg.Challenge == nil && cfg.Env != config.Prod {
+		s.reg.Challenge = register.AllowAll{} // dev and test only: production needs a real bot challenge
+	}
+	s.guestLife = guestlife.New(s.guests)
+	s.guestLife.Secrets, s.guestLife.BaseURL, s.guestLife.TenantName = cfg.Secrets, cfg.PublicURL, s.tenantName
 	if cfg.OutboundHTTP != nil {
 		rp, err := oidcrp.New(oidcrp.Config{HTTP: cfg.OutboundHTTP, Now: func() time.Time { return s.clock() }})
 		if err != nil {
@@ -399,6 +432,7 @@ func New(cfg Config) *Server {
 	s.registerReviewScheduleRoutes()
 	s.registerRoleReviewRoutes()
 	s.registerCorrelationRoutes()
+	s.registerMatchingRoutes()
 	s.registerAffiliationRoutes()
 	s.registerRequestRoutes()
 	s.registerRemovalRoutes()
@@ -412,6 +446,10 @@ func New(cfg Config) *Server {
 	s.registerLifecycleRoutes()
 	s.registerGuestRoutes()
 	s.registerClaimRoutes()
+	s.registerGuestAccessRoutes()
+	s.registerGuestLifecycleRoutes()
+	s.registerTermsRoutes()
+	s.registerRegistrationRoutes()
 	s.registerNotificationRoutes()
 	s.registerEmailRoutes()
 	s.registerContainmentRoutes()
@@ -433,6 +471,7 @@ func New(cfg Config) *Server {
 	s.registerProvisioningRoutes()
 	s.registerDriftRoutes()
 	s.registerTransportRoutes()
+	s.registerRotationRoutes()
 	s.registerAuthRoutes()
 	s.registerLoginRoutes()
 	s.registerSAMLRoutes()

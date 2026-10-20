@@ -100,9 +100,23 @@ func startStages(tx *store.TenantTx, l *store.RequestLine, ben *store.Identity, 
 	if err != nil {
 		return err
 	}
+	// a guest's request goes to their sponsor first (guest access, issue #75)
+	var sponsor *int64
+	if pops, err := GuestPopulationsOf(tx, ben.ID); err != nil {
+		return err
+	} else if len(pops) > 0 {
+		if id, ok, err := sponsorOf(tx, ben.ID); err != nil {
+			return err
+		} else if ok {
+			sponsor = &id
+		}
+		kinds = guestKinds(kinds, it)
+	}
 	for i, k := range kinds {
 		st := &store.RequestStage{LineID: l.ID, Idx: i, Kind: k, Status: store.StageQueued}
 		switch k {
+		case store.StageSponsor:
+			st.AssigneeID = sponsor
 		case store.StageManager:
 			st.AssigneeID = ben.ManagerID
 		case store.StageOwner:

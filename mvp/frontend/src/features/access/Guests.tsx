@@ -6,21 +6,25 @@
  * When a sponsorship starts, the guest gets an email with a one-time claim link (issue #69). The side
  * panel shows where the invitation stands (sent, claimed, expired, revoked) and lets the sponsor send
  * a new link or cancel it. The access bundle is granted when the groups engine reads sponsorships.
+ *
+ * It is also the sponsor portal (guest accounts design §9.4, issue #76): the people who asked to be
+ * sponsored wait on the "Registration requests" tab, a sponsor code can be made for sharing instead of
+ * being searched for, and a sponsor can start recovery for a guest who lost their sign-in.
  */
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ArrowRightLeft, Check, CalendarPlus, FileUp, Mail, UserCheck, UserPlus, Users, X } from "lucide-react";
+import { ArrowRightLeft, Check, CalendarPlus, FileUp, KeyRound, Mail, Ticket, UserCheck, UserPlus, Users, X } from "lucide-react";
 import {
-  BulkResult, CatalogView, GuestList, GuestPopulationInfo, GuestPopulationKey, IdentityRow, Sponsorship,
-  fmtDate, fmtDay, guests, relTime, useApi,
+  BulkResult, CatalogView, GuestList, GuestPopulationInfo, GuestPopulationKey, IdentityRow, RegistrationRequest, Sponsorship,
+  fmtDate, fmtDay, guests, registrationRequests, relTime, useApi,
 } from "../../api";
 import { Badge, Button, Callout, Column, DataTable, Drawer, EmptyState, Loading, Page, SidePanel, Tabs, useConfirm, useSelected, useToast } from "../../components";
 import {
-  CSV_HEADER, INVITATION_LABEL, INVITATION_TONE, InviteForm, MAX_BULK_ROWS, POPULATIONS, POPULATION_LABEL, ROW_LABEL, STATE_LABEL, STATE_TONE, addDays, bundleChoices, csvRowCount,
+  BUNDLE_STATE_LABEL, BUNDLE_STATE_TONE, CSV_HEADER, INVITATION_LABEL, INVITATION_TONE, InviteForm, MAX_BULK_ROWS, POPULATIONS, POPULATION_LABEL, ROW_LABEL, STATE_LABEL, STATE_TONE, addDays, bundleChoices, bundleSummary, csvRowCount,
   csvTemplate, csvTooLong, dayOf, daysLeftLabel, emptyInvite, endInstant, invitationNote, invitePayload, inviteProblems, itemIal, maxEndDay, needsApproval, requiredIal,
 } from "./guestModel";
 
-type Tab = "mine" | "all" | "approvals";
+type Tab = "mine" | "all" | "approvals" | "registrations";
 
 const today = () => dayOf(new Date());
 const message = (e: unknown) => String((e as Error)?.message ?? e);
@@ -53,24 +57,29 @@ export function Guests() {
   const canApprove = base.data?.can_approve ?? false;
   const all = useApi<GuestList>(tab === "all" && canAll ? guests.paths.list({ sponsor: "all" }) : null);
   const approvals = useApi<Sponsorship[]>(tab === "approvals" && canApprove ? guests.paths.approvals : null);
+  const canSponsor = base.data?.can_sponsor ?? false;
+  // loaded on every tab: the count on the tab label tells a sponsor that someone waits
+  const regs = useApi<{ registrations: RegistrationRequest[] }>(canSponsor ? "/guest-registrations" : null);
   const rows = tab === "approvals" ? approvals.data : tab === "all" ? (all.data?.rows ?? null) : (base.data?.rows ?? null);
   const error = tab === "approvals" ? approvals.error : tab === "all" ? all.error : base.error;
   const reload = () => {
     base.reload();
     if (tab === "all") all.reload();
     if (tab === "approvals") approvals.reload();
+    regs.reload();
   };
   const [selected, setSelected] = useSelected();
   const open = rows?.find((s) => s.id === selected);
-  const [drawer, setDrawer] = useState<null | "invite" | "bulk">(null);
+  const [drawer, setDrawer] = useState<null | "invite" | "bulk" | "code">(null);
   const pops = base.data?.populations ?? [];
   const waiting = base.data?.rows.filter((s) => s.can_accept_transfer).length ?? 0;
+  const pending = regs.data?.registrations.length ?? 0;
   const tabs = [
     { id: "mine" as Tab, label: waiting ? `Guests I sponsor (${waiting} to accept)` : "Guests I sponsor" },
+    ...(canSponsor ? [{ id: "registrations" as Tab, label: pending ? `Registration requests (${pending})` : "Registration requests" }] : []),
     ...(canAll ? [{ id: "all" as Tab, label: "Every guest" }] : []),
     ...(canApprove ? [{ id: "approvals" as Tab, label: "Approvals" }] : []),
   ];
-  const canSponsor = base.data?.can_sponsor ?? false;
   return (
     <Page title="Guests I sponsor" crumbs={[["Access"], ["Guests I sponsor"]]}
       sub="Invite visitors, contractors, volunteers and partners, and stay accountable for them: every guest has a sponsor and an end date.">
@@ -78,6 +87,9 @@ export function Guests() {
       {base.data && !canSponsor && (
         <Callout tone="warn">You cannot sponsor guests: sponsors are active employees. You can still see guests you were asked to take over{canApprove ? " and approve sponsorships" : ""}.</Callout>
       )}
+      {tab === "registrations" ? (
+        <Registrations data={regs.data?.registrations ?? null} error={regs.error?.message ?? null} reload={reload} onCode={() => setDrawer("code")} />
+      ) : (
       <DataTable
         id={`guests-${tab}`}
         rows={rows}
@@ -94,6 +106,7 @@ export function Guests() {
         commands={[
           canSponsor && { label: "Invite guest", icon: <UserPlus size={16} />, onClick: () => setDrawer("invite") },
           canSponsor && { label: "Bulk invite", icon: <FileUp size={16} />, onClick: () => setDrawer("bulk"), title: "Invite many guests from a CSV file" },
+          canSponsor && { label: "Sponsor code", icon: <Ticket size={16} />, onClick: () => setDrawer("code"), title: "A code to share, so a visitor can ask you without searching for your name" },
         ]}
         onRefresh={reload}
         rowLabel={(s) => s.guest.name}
@@ -105,14 +118,117 @@ export function Guests() {
             Guests you invite show here with their sponsorship, end date and days left.
           </EmptyState>}
       />
-      {open && (
+      )}
+      {tab !== "registrations" && open && (
         <SidePanel title={open.guest.name} sub={<><span className="small">{POPULATION_LABEL[open.population]}</span><StateBadge s={open} /></>} onClose={() => setSelected(null)}>
           <SponsorshipDetail id={open.id} onChanged={reload} />
         </SidePanel>
       )}
       {drawer === "invite" && <InviteDrawer pops={pops} limit={base.data?.max_invites_per_day ?? 50} onClose={() => setDrawer(null)} />}
+      {drawer === "code" && <CodeDrawer onClose={() => setDrawer(null)} />}
       {drawer === "bulk" && <BulkDrawer limit={base.data?.max_invites_per_day ?? 50} onClose={() => setDrawer(null)} />}
     </Page>
+  );
+}
+
+// ------------------------------------------------------------------ registration requests
+
+/**
+ * People who asked this sponsor to register them (issue #66). Nothing exists for them until it is
+ * approved: approving creates the guest and sends the invitation; denying sends a neutral email.
+ */
+function Registrations({ data, error, reload, onCode }: { data: RegistrationRequest[] | null; error: string | null; reload: () => void; onCode: () => void }) {
+  const [selected, setSelected] = useSelected();
+  const open = data?.find((r) => r.id === selected);
+  const toast = useToast();
+  const confirm = useConfirm();
+  const [busy, setBusy] = useState(false);
+  const name = (r: RegistrationRequest) => [r.given_name, r.family_name].filter(Boolean).join(" ") || "A visitor";
+  const decide = async (r: RegistrationRequest, verb: "approve" | "deny") => {
+    if (verb === "deny") {
+      const ok = await confirm({ title: `Deny ${name(r)}?`, body: "They get a neutral email that does not say why.", confirmLabel: "Deny", danger: true });
+      if (ok === null) return;
+    }
+    setBusy(true);
+    try {
+      if (verb === "approve") await registrationRequests.approve(r.id);
+      else await registrationRequests.deny(r.id);
+      toast(`${verb === "approve" ? "Approved" : "Denied"}: ${name(r)}`);
+      setSelected(null);
+      reload();
+    } catch (e) {
+      toast(message(e), { kind: "error" });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <DataTable
+        id="guest-registrations"
+        rows={data}
+        error={error}
+        rowKey={(r) => r.id}
+        columns={[
+          { id: "who", header: "Name", sort: (r) => name(r), csv: (r) => name(r), cell: (r) => <><span className="name-link">{name(r)}</span>{r.email && <div className="xs faint">{r.email}</div>}</> },
+          { id: "purpose", header: "Purpose", cell: (r) => <span className="small">{r.purpose}</span>, hideNarrow: true },
+          { id: "ends", header: "Until", sort: (r) => r.ends_at, csv: (r) => r.ends_at, cell: (r) => <span className="small nowrap">{fmtDay(r.ends_at)}</span> },
+          { id: "via", header: "Found you", sort: (r) => r.via, csv: (r) => r.via, cell: (r) => <Badge tone={r.via === "code" ? "info" : "neutral"}>{r.via === "code" ? "Sponsor code" : "Search"}</Badge>, hideNarrow: true },
+          { id: "at", header: "Asked", sort: (r) => r.created_at, csv: (r) => r.created_at, cell: (r) => <span className="small nowrap" title={fmtDate(r.created_at)}>{relTime(r.created_at)}</span> },
+        ]}
+        initialSort={["at", 1]}
+        searchText={(r) => `${name(r)} ${r.email ?? ""} ${r.purpose ?? ""}`}
+        searchPlaceholder="Search requests…"
+        filters={[{ id: "via", label: "Found you", options: [{ value: "search", label: "Search" }, { value: "code", label: "Sponsor code" }], get: (r) => r.via }]}
+        commands={[{ label: "Sponsor code", icon: <Ticket size={16} />, onClick: onCode, title: "A code to share instead of being searched for" }]}
+        onRefresh={reload}
+        rowLabel={name}
+        onRowClick={(r) => setSelected(r.id)}
+        activeKey={selected}
+        empty={<EmptyState title="No registration requests" icon={<UserCheck size={18} />}>When a visitor asks you to sponsor them, the request waits here until you approve or deny it.</EmptyState>}
+      />
+      {open && (
+        <SidePanel title={name(open)} sub={<Badge tone="warning">Waiting for you</Badge>} onClose={() => setSelected(null)}>
+          <div className="stack">
+            <div className="row tight wrap">
+              <Button variant="primary" size="sm" icon={<Check size={14} />} disabled={busy} onClick={() => decide(open, "approve")}>Approve</Button>
+              <Button size="sm" icon={<X size={14} />} disabled={busy} onClick={() => decide(open, "deny")}>Deny</Button>
+            </div>
+            <dl className="kv">
+              <dt>Name</dt><dd>{name(open)}</dd>
+              <dt>Email</dt><dd>{open.email}<div className="xs faint">As the visitor wrote it, not verified.</div></dd>
+              <dt>Purpose</dt><dd>{open.purpose}</dd>
+              <dt>Term asked</dt><dd>{fmtDay(open.starts_at)} to {fmtDay(open.ends_at)}</dd>
+              <dt>Found you</dt><dd>{open.via === "code" ? "With your sponsor code" : "By searching for your name"}</dd>
+              <dt>Request expires</dt><dd>{fmtDate(open.expires_at)}</dd>
+            </dl>
+            <p className="small muted">Approving makes you their sponsor, runs the sponsor policy and emails the invitation. Only approve people you know.</p>
+          </div>
+        </SidePanel>
+      )}
+    </>
+  );
+}
+
+/** A code to share instead of being searched for. It is shown once. */
+function CodeDrawer({ onClose }: { onClose: () => void }) {
+  const [code, setCode] = useState<{ code: string; expires_at: string } | null>(null);
+  const { busy, err, go } = useBusy();
+  return (
+    <Drawer title="Sponsor code" onClose={onClose}
+      footer={code ? <Button variant="primary" onClick={onClose}>Done</Button> : (
+        <><Button onClick={onClose}>Cancel</Button><Button variant="primary" icon={<Ticket size={14} />} disabled={busy} onClick={() => go(() => registrationRequests.newCode().then(setCode), () => undefined)}>Make a code</Button></>
+      )}>
+      <div className="stack">
+        <p className="muted">A visitor who types this code on the registration page asks you directly, without searching for your name. Their request still waits for you to approve it. Making a new code does not cancel older ones; they run out by themselves.</p>
+        {code && (
+          <div role="status">
+            <Callout tone="ok">Your code is <b className="mono" style={{ fontSize: "var(--fs-lg)" }}>{code.code}</b>. It is shown only now and works until {fmtDate(code.expires_at)}.</Callout>
+          </div>
+        )}
+        {err && <Callout tone="bad">{err}</Callout>}
+      </div>
+    </Drawer>
   );
 }
 
@@ -121,7 +237,7 @@ export function Guests() {
 function SponsorshipDetail({ id, onChanged }: { id: string; onChanged: () => void }) {
   const { data: s, error, reload } = useApi<Sponsorship>(guests.paths.one(id));
   const { data: list } = useApi<GuestList>(guests.paths.list({ sponsor: "me" }));
-  const [drawer, setDrawer] = useState<null | "renew" | "transfer" | "end" | "reject">(null);
+  const [drawer, setDrawer] = useState<null | "renew" | "transfer" | "end" | "reject" | "recover">(null);
   const toast = useToast();
   const confirm = useConfirm();
   const [busy, setBusy] = useState(false);
@@ -148,6 +264,9 @@ function SponsorshipDetail({ id, onChanged }: { id: string; onChanged: () => voi
         {s.can_renew && <Button size="sm" icon={<CalendarPlus size={14} />} onClick={() => setDrawer("renew")}>Renew</Button>}
         {s.can_transfer && <Button size="sm" icon={<ArrowRightLeft size={14} />} onClick={() => setDrawer("transfer")}>Transfer</Button>}
         {s.can_end && <Button size="sm" variant="danger" onClick={() => setDrawer("end")}>End</Button>}
+        {s.invitation === "claimed" && s.status === "active" && s.can_renew && (
+          <Button size="sm" icon={<KeyRound size={14} />} onClick={() => setDrawer("recover")} title="The guest lost their sign-in">Start recovery</Button>
+        )}
       </div>
       {(s.can_resend_invitation || s.can_revoke_invitation) && (
         <div className="row tight wrap">
@@ -167,6 +286,12 @@ function SponsorshipDetail({ id, onChanged }: { id: string; onChanged: () => voi
         </div>
       )}
       {s.status === "pending_approval" && <Callout tone="warn">A second person must approve this sponsorship before the guest gets any standing or access. {s.can_approve ? "" : "Approvers have been asked."}</Callout>}
+      {s.stepup && (
+        <Callout tone="info">
+          The renewal to {fmtDay(s.stepup.requested_ends_at)} is recorded but held: {s.guest.name} must verify their identity at IAL {s.stepup.required_ial} first. Access does not extend until then.
+        </Callout>
+      )}
+      {s.status === "suspended" && <Callout tone="warn">Suspended after the sponsor left and nobody took over. It gives no access. A sponsor admin can end it; it ends at its own end date.</Callout>}
       {s.status === "transfer_pending" && s.transfer_to && (
         <Callout tone="warn">Waiting for {s.transfer_to.name} to accept, until {fmtDate(s.transfer_deadline)}. If nobody accepts, the sponsorship ends then.</Callout>
       )}
@@ -180,9 +305,16 @@ function SponsorshipDetail({ id, onChanged }: { id: string; onChanged: () => voi
         <dt>Access bundle</dt>
         <dd>
           {s.bundle.length === 0 ? <span className="faint">None</span> : (
-            <ul className="plain-list">{s.bundle.map((b) => <li key={b.group_id}>{b.system}:{b.name} <Badge tone={itemIal(b) ? "warning" : "neutral"}>IAL {itemIal(b)}</Badge></li>)}</ul>
+            <ul className="plain-list">{s.bundle.map((b) => (
+              <li key={b.group_id}>
+                {b.system}:{b.name} <Badge tone={itemIal(b) ? "warning" : "neutral"}>IAL {itemIal(b)}</Badge>{" "}
+                <Badge tone={BUNDLE_STATE_TONE[b.state]}>{BUNDLE_STATE_LABEL[b.state]}</Badge>
+                {b.detail && <div className="xs faint">{b.detail}</div>}
+                {b.op_id && <div className="xs faint">Provisioning operation {b.op_id.slice(0, 8)} ({b.op_status})</div>}
+              </li>
+            ))}</ul>
           )}
-          {s.bundle.length > 0 && <div className="xs faint">Granted when the groups engine reads sponsorships; nothing is granted yet.</div>}
+          {s.bundle.length > 0 && <div className="xs faint">{bundleSummary(s.bundle)}. Granted after the guest claims their account, and removed when this sponsorship ends.</div>}
         </dd>
         <dt>Invitation</dt>
         <dd><Badge tone={INVITATION_TONE[s.invitation]}>{INVITATION_LABEL[s.invitation]}</Badge><div className="xs faint">{invitationNote(s, fmtDate)}</div></dd>
@@ -205,6 +337,9 @@ function SponsorshipDetail({ id, onChanged }: { id: string; onChanged: () => voi
       {drawer === "end" && <ReasonDrawer title={`End the sponsorship of ${s.guest.name}`} verb="End sponsorship" danger
         intro="The guest's access under this sponsorship stops now. If it is their last sponsorship, their account ends and the leaver plan runs."
         call={(r) => guests.end(s.id, r)} onClose={() => setDrawer(null)} onDone={() => done("Sponsorship ended")} />}
+      {drawer === "recover" && <ReasonDrawer title={`Start recovery for ${s.guest.name}`} verb="Send recovery link"
+        intro={`${s.guest.name} gets a link to prove who they are again at identity assurance IAL ${s.required_ial} before a new sign-in is set up. Your say-so alone never restores access, and a cooling-off period may apply.`}
+        call={(r) => guests.recover(s.guest.id, r)} onClose={() => setDrawer(null)} onDone={() => done("Recovery link sent")} />}
       {drawer === "reject" && <ReasonDrawer title={`Reject the sponsorship of ${s.guest.name}`} verb="Reject"
         intro="The sponsor is told. The invited person is withdrawn unless another sponsorship stands behind them."
         call={(r) => guests.reject(s.id, r)} onClose={() => setDrawer(null)} onDone={() => done("Sponsorship rejected")} />}
@@ -351,7 +486,7 @@ function InviteDrawer({ pops, limit, onClose }: { pops: GuestPopulationInfo[]; l
               ))}
             </ul>
           )}
-          <p className="xs faint">The bundle is recorded with the sponsorship; the groups engine grants it later. Privileged or high-risk items need the guest to prove their identity to IAL 2.</p>
+          <p className="xs faint">The bundle is recorded with the sponsorship and granted once the guest has claimed their account. Privileged or high-risk items need the guest to prove their identity to IAL 2.</p>
         </fieldset>
         <p className="small">The guest will need identity assurance <b>IAL {ial}</b>{pop ? ` and sign-in strength AAL ${pop.default_aal}` : ""}.</p>
         {needsApproval(pop, picked) && <Callout tone="warn">This contractor sponsorship has privileged access, so a second person must approve it before it starts.</Callout>}

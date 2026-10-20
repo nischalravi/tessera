@@ -8,7 +8,7 @@ import { Callout, EmptyState, Loading } from "../../components/Feedback";
 import { useModal } from "../../components/overlay";
 import { useToast } from "../../components/Toast";
 import {
-  AFFILIATION_LABEL, IDENTIFIER_LABEL, MANUAL_TYPES, NEEDS_END, SOURCE_LABEL, STATE_LABEL, STATE_TONE, VERIFIED_LABEL, addProblem, canEnd, endOfDayUtc,
+  AFFILIATION_LABEL, IDENTIFIER_LABEL, MANUAL_TYPES, NEEDS_END, SOURCE_LABEL, STATE_LABEL, STATE_TONE, VERIFIED_LABEL, addProblem, canEnd, endOfDayUtc, maskIdentifier,
 } from "./affiliationModel";
 
 /**
@@ -109,7 +109,7 @@ export function IdentifiersSection({ identityId }: { identityId: number }) {
                 <tr key={x.id}>
                   <td>{IDENTIFIER_LABEL[x.type] ?? x.type}{x.status === "retired" && <> <Badge>Retired</Badge></>}</td>
                   <td className="small" style={{ overflowWrap: "anywhere" }}>
-                    {x.value ?? <span className="faint">Not stored (hash only)</span>}
+                    {x.value !== null ? <span title="Masked on this page">{maskIdentifier(x.type, x.value)}</span> : <span className="faint">Not stored (hash only)</span>}
                     {x.issuer && <div className="xs faint">{x.issuer}</div>}
                   </td>
                   <td className="small">

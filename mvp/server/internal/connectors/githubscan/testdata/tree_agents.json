@@ -1,0 +1,15 @@
+{
+  "sha": "tree0000000000000000000000000000000000001",
+  "truncated": false,
+  "tree": [
+    {"path": ".github", "type": "tree"},
+    {"path": ".github/CODEOWNERS", "type": "blob", "size": 180},
+    {"path": ".mcp.json", "type": "blob", "size": 900},
+    {"path": ".cursor/mcp.json", "type": "blob", "size": 300},
+    {"path": ".env", "type": "blob", "size": 120},
+    {"path": ".env.example", "type": "blob", "size": 120},
+    {"path": "README.md", "type": "blob", "size": 2000},
+    {"path": "node_modules/pkg/mcp.json", "type": "blob", "size": 300},
+    {"path": "big/mcp.json", "type": "blob", "size": 9999999}
+  ]
+}

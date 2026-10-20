@@ -146,6 +146,13 @@ func (f *fake) serve(w http.ResponseWriter, r *http.Request) {
 		out("members_g2.json")
 	case p == "/groups/"+g3+"/members":
 		out("members_g3.json")
+	case strings.HasPrefix(p, "/users/") && strings.HasSuffix(p, "/authentication/methods"):
+		switch id := strings.TrimSuffix(strings.TrimPrefix(p, "/users/"), "/authentication/methods"); id {
+		case ada, ben, cy:
+			out("methods_" + id + ".json")
+		default:
+			fmt.Fprint(w, `{"value":[]}`)
+		}
 	case p == "/users":
 		if q.Get("$select") != "id,signInActivity" {
 			f.t.Errorf("unexpected users list %s", r.URL.RawQuery)

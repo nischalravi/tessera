@@ -1,0 +1,6 @@
+{
+  "kind": "admin#directory#members",
+  "members": [
+    {"id": "10000000003", "email": "cy.placeholder@example.com", "type": "USER", "role": "MEMBER"}
+  ]
+}

@@ -97,9 +97,18 @@ const (
 	// the device-compliance signal.
 	PermConditionalAccessRead   Permission = "conditional_access.read"
 	PermConditionalAccessManage Permission = "conditional_access.manage"
+	// PermSecretsRotate changes how secrets are rotated: rotation adapters
+	// (their credentials), policies, rotate-now and the vendor-compromised
+	// bulk run. Held by policy_admin only; every route that uses it also asks
+	// for a fresh phishing-resistant sign-in (STEP_UP_POLICY).
+	PermSecretsRotate Permission = "secrets.rotate"
 	// account correlation (issue #160)
 	PermIdentitiesCorrelate Permission = "identities.correlate"
 	PermIdentitiesMerge     Permission = "identities.merge"
+	// identity matching (guest accounts design §5, issue #68): the review queue
+	// and the matching settings
+	PermIdentityMatchesReview Permission = "identity_matches.review"
+	PermMatchingConfigure     Permission = "matching.configure"
 	// affiliations of a person (guest accounts design, issue #64)
 	PermIdentitiesAffiliate Permission = "identities.affiliate"
 	// access requests (issue #164)
@@ -117,9 +126,19 @@ const (
 	PermGuestsSponsor       Permission = "guests.sponsor"
 	PermGuestsRead          Permission = "guests.read"
 	PermSponsorshipsApprove Permission = "sponsorships.approve"
+	// guest lifecycle settings (issue #74): reminders, transfer deadlines,
+	// grace and retention
+	PermGuestLifecycleConfigure Permission = "guest_lifecycle.configure"
+	// guest terms of use and recovery (issue #73): terms.manage publishes and
+	// assigns terms documents; guests.recover is the help desk's right to issue a
+	// recovery link for any guest (a sponsor may for their own guests with
+	// guests.sponsor).
+	PermTermsManage   Permission = "terms.manage"
+	PermGuestsRecover Permission = "guests.recover"
 	// email delivery log (issue #189)
 	PermEmailRead   Permission = "email.read"
 	PermEmailManage Permission = "email.manage"
+
 	// kill switch (issue #106)
 	PermIdentitiesContain Permission = "identities.contain"
 	// MCP authorization server: register clients and resources, bind a
@@ -170,14 +189,16 @@ var rolePermissions = map[Role][]Permission{
 	RoleViewer: {PermGraphRead, PermRequestsCreate, PermGuestsSponsor, PermGroupsRead},
 	RoleOperator: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
 		PermReviewsDecide, PermReviewsExport, PermHRISSimulateEvent, PermFlatfileUpload, PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide,
-		PermGuestsSponsor, PermGuestsRead, PermJobsRead, PermProvisioningRead, PermAlertsRead, PermAlertsManage, PermOwnershipManage, PermSoDMitigate, PermDriftRead, PermGroupsRead, PermGroupsWrite, PermHelpdeskReset, PermHelpdeskApprove},
+		PermGuestsSponsor, PermGuestsRead, PermGuestsRecover, PermJobsRead, PermProvisioningRead, PermAlertsRead, PermAlertsManage, PermOwnershipManage, PermSoDMitigate, PermDriftRead, PermGroupsRead, PermGroupsWrite, PermHelpdeskReset, PermHelpdeskApprove},
 	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead, PermRequestsCreate, PermEmailRead,
 		PermGuestsSponsor, PermGuestsRead, PermJobsRead, PermProvisioningRead, PermAlertsRead, PermSiemRead, PermDriftRead, PermGroupsRead, PermConditionalAccessRead, PermReviewsExport},
 	RolePolicyAdmin: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
 		PermReviewsDecide, PermReviewsExport, PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
+		PermSecretsRotate,
 		PermIdentitiesCorrelate, PermIdentitiesMerge, PermIdentitiesAffiliate,
+		PermIdentityMatchesReview, PermMatchingConfigure, PermGuestLifecycleConfigure,
 		PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide, PermCatalogManage, PermRolesManage, PermLifecycleManage,
-		PermGuestsSponsor, PermGuestsRead, PermSponsorshipsApprove, PermIdentitiesContain,
+		PermGuestsSponsor, PermGuestsRead, PermGuestsRecover, PermSponsorshipsApprove, PermTermsManage, PermIdentitiesContain,
 		PermJobsRead, PermProvisioningRead, PermProvisioningManage, PermAlertsRead, PermAlertsManage, PermOwnershipManage, PermSoDManage, PermSoDMitigate, PermSoDApprove,
 		PermFlatfileUpload, PermFlatfileCloseTasks,
 		PermDriftRead, PermDriftRemediate, PermDriftPolicy, PermGroupsRead, PermGroupsWrite, PermHelpdeskReset, PermHelpdeskApprove, PermSSFConfigure, PermAgentsManage},
@@ -269,7 +290,7 @@ var scopePermissions = map[Scope][]Permission{
 	ScopeRead: {PermGraphRead, PermConnectionsRead, PermJobsRead, PermProvisioningRead, PermDriftRead, PermGroupsRead, PermConditionalAccessRead},
 	ScopeWrite: {PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage, PermReviewsDecide,
 		PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
-		PermConnectionsManage, PermConnectionsActivate, PermRolesManage, PermLifecycleManage, PermGroupsAdmin, PermProvisioningManage, PermJobsManage, PermAlertsManage, PermOwnershipManage, PermSoDManage, PermSoDMitigate, PermSoDApprove, PermFlatfileManage, PermFlatfileUpload, PermFlatfileCloseTasks, PermDriftRemediate, PermDriftPolicy, PermGroupsWrite, PermAgentsManage},
+		PermConnectionsManage, PermConnectionsActivate, PermSecretsRotate, PermRolesManage, PermLifecycleManage, PermGroupsAdmin, PermProvisioningManage, PermJobsManage, PermAlertsManage, PermOwnershipManage, PermSoDManage, PermSoDMitigate, PermSoDApprove, PermFlatfileManage, PermFlatfileUpload, PermFlatfileCloseTasks, PermDriftRemediate, PermDriftPolicy, PermGroupsWrite, PermAgentsManage},
 	ScopeAudit: {PermAuditRead, PermAuditVerify, PermAlertsRead, PermSiemRead, PermReviewsExport},
 	ScopeAdmin: {PermEmailRead, PermEmailManage, PermAdminRead, PermAdminChangeReq, PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev,
 		PermBreakGlassRecover, PermConfigTransport, PermAlertsConfigure, PermSiemConfigure, PermConditionalAccessManage},

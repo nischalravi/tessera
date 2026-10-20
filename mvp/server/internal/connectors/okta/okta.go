@@ -67,9 +67,19 @@ type Config struct {
 	// EmitIdentities also emits an identity per user. Turn it off when an HR
 	// system is the authoritative source of identities.
 	EmitIdentities bool
+	// DiscoverAgents also reads the org's OAuth service apps as ai_agent
+	// identities with their credentials and API scope grants (issue #116).
+	// Off by default: it is additive.
+	DiscoverAgents bool
 	// MaxIncrementalAge is how long an incremental chain may run before a full
 	// read repairs what Okta does not report (deletions). Default 24h.
 	MaxIncrementalAge time.Duration
+	// SkipAuthMethods turns off reading each user's enrolled factors (one
+	// request per active user per sync) for the MFA posture report.
+	SkipAuthMethods bool
+	// PushNumberMatch declares that Okta Verify push always requires number
+	// matching, for when the authenticator settings cannot be read.
+	PushNumberMatch bool
 }
 
 // Connector implements connectors.Connector for Okta.
@@ -141,6 +151,9 @@ func New(cfg Config, rt connsync.Runtime, hc *http.Client, now func() time.Time)
 //	TESSERA_OKTA_KEY_ID             kid of that key
 //	TESSERA_OKTA_API_TOKEN          reference to an SSWS token (instead of OAuth)
 //	TESSERA_OKTA_EMIT_IDENTITIES    true (default) or false
+//	TESSERA_OKTA_AUTH_METHODS       true (default) or false: read enrolled factors (MFA posture)
+//	TESSERA_OKTA_PUSH_NUMBER_MATCH  true if Okta Verify push always requires number matching (default false)
+//	TESSERA_OKTA_DISCOVER_AGENTS    true or false (default): OAuth service apps as ai_agent identities
 //	TESSERA_OKTA_MAX_INCREMENTAL_AGE  duration, default 24h
 //
 // rt and hc come from the validated server configuration (connsync.RuntimeFromConfig,
@@ -154,6 +167,27 @@ func FromEnv(getenv func(string) string, now time.Time, rt connsync.Runtime, hc 
 			return nil, errors.New("TESSERA_OKTA_EMIT_IDENTITIES must be true or false")
 		}
 		cfg.EmitIdentities = b
+	}
+	if v := getenv("TESSERA_OKTA_PUSH_NUMBER_MATCH"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, errors.New("TESSERA_OKTA_PUSH_NUMBER_MATCH must be true or false")
+		}
+		cfg.PushNumberMatch = b
+	}
+	if v := getenv("TESSERA_OKTA_AUTH_METHODS"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, errors.New("TESSERA_OKTA_AUTH_METHODS must be true or false")
+		}
+		cfg.SkipAuthMethods = !b
+	}
+	if v := getenv("TESSERA_OKTA_DISCOVER_AGENTS"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, errors.New("TESSERA_OKTA_DISCOVER_AGENTS must be true or false")
+		}
+		cfg.DiscoverAgents = b
 	}
 	if v := getenv("TESSERA_OKTA_MAX_INCREMENTAL_AGE"); v != "" {
 		d, err := time.ParseDuration(v)

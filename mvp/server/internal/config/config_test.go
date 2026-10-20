@@ -95,6 +95,7 @@ func TestProdRefusesEachUnsafeSetting(t *testing.T) {
 		{"trusted proxies mapped IPv4 broader than /8", []string{"TESSERA_TRUSTED_PROXIES", "::ffff:0:0/96"}, "broader than /104"},
 		{"outbound loopback", []string{"TESSERA_OUTBOUND_ALLOW_LOOPBACK", "true"}, "TESSERA_OUTBOUND_ALLOW_LOOPBACK must be false"},
 		{"safedial allowlist", []string{"TESSERA_SAFEDIAL_ALLOW", "192.168.1.10:636"}, "TESSERA_SAFEDIAL_ALLOW must not be set"},
+		{"simulated rotation adapter", []string{"TESSERA_ROTATION_FAKE_ADAPTERS", "true"}, "TESSERA_ROTATION_FAKE_ADAPTERS must be false"},
 		{"dev IdP URL set", []string{"TESSERA_DEV_IDP_URL", "http://127.0.0.1:8001"}, "TESSERA_DEV_IDP_URL must not be set"},
 		{"dev fake provisioning target", []string{"TESSERA_DEV_FAKE_TARGET", "1"}, "TESSERA_DEV_FAKE_TARGET must not be set"},
 		{"file audit anchor", []string{"TESSERA_AUDIT_ANCHOR", "file://server/var/audit-anchors.jsonl"}, "must not be file://"},
@@ -631,5 +632,27 @@ func TestMetricsAddr(t *testing.T) {
 	}
 	if _, err := config.Load(env(with(safeProd(), "TESSERA_READY_MAX_LOOP_LAG_SECONDS", "5"))); err == nil {
 		t.Error("lag threshold below 30s accepted")
+	}
+}
+
+// The simulated secret-rotation adapter exists only where it cannot be mistaken for a real one.
+func TestRotationFakeAdapters(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		kv   map[string]string
+		want bool
+	}{
+		{"dev default", map[string]string{"TESSERA_ENV": "dev"}, true},
+		{"test default", map[string]string{"TESSERA_ENV": "test"}, true},
+		{"dev switched off", map[string]string{"TESSERA_ENV": "dev", "TESSERA_ROTATION_FAKE_ADAPTERS": "0"}, false},
+		{"prod default", safeProd(), false},
+	} {
+		cfg, err := config.Load(env(tc.kv))
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if cfg.RotationFakeAdapters != tc.want {
+			t.Errorf("%s: RotationFakeAdapters = %v, want %v", tc.name, cfg.RotationFakeAdapters, tc.want)
+		}
 	}
 }

@@ -1,0 +1,18 @@
+<GetAccessKeyLastUsedResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <GetAccessKeyLastUsedResult>
+    <UserName>{{.User}}</UserName>
+    <AccessKeyLastUsed>
+{{- if .LastUsed}}
+      <LastUsedDate>{{.LastUsed}}</LastUsedDate>
+      <ServiceName>s3</ServiceName>
+      <Region>us-east-1</Region>
+{{- else}}
+      <ServiceName>N/A</ServiceName>
+      <Region>N/A</Region>
+{{- end}}
+    </AccessKeyLastUsed>
+  </GetAccessKeyLastUsedResult>
+  <ResponseMetadata>
+    <RequestId>8f4b0ad2-1d5c-11e5-b86d-8d6f3EXAMPLE</RequestId>
+  </ResponseMetadata>
+</GetAccessKeyLastUsedResponse>

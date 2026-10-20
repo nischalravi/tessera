@@ -1,0 +1,12 @@
+{
+  "id": {{ID}},
+  "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEXAMPLE",
+  "url": "https://api.github.com/repos/larkspur/payments/keys/{{ID}}",
+  "title": "{{TITLE}}",
+  "verified": true,
+  "created_at": "{{CREATED}}",
+  "read_only": {{READONLY}},
+  "added_by": "octocat",
+  "last_used": {{LASTUSED}},
+  "enabled": true
+}

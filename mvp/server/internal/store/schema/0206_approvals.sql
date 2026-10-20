@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS access_request_stages (
   tenant_id TEXT NOT NULL REFERENCES tenants (id),
   line_id TEXT NOT NULL REFERENCES access_request_lines (id),
   idx INTEGER NOT NULL CHECK (idx >= 0),
-  kind TEXT NOT NULL CHECK (kind IN ('manager','owner','decider')),
+  kind TEXT NOT NULL CHECK (kind IN ('manager','owner','decider','sponsor')),
   assignee_identity_id INTEGER REFERENCES identities (id),
   status TEXT NOT NULL CHECK (status IN ('queued','waiting','approved','denied','closed')),
   started_at TEXT,

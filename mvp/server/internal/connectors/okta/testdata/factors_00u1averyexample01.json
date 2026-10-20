@@ -1,0 +1,15 @@
+[
+  {"id": "fwf1averyyubikey001", "factorType": "webauthn", "provider": "FIDO", "vendorName": "FIDO", "status": "ACTIVE",
+   "created": "2025-03-02T10:00:00.000Z", "lastUpdated": "2025-03-02T10:00:00.000Z",
+   "profile": {"credentialId": "cred-abc", "authenticatorName": "YubiKey 5C"}},
+  {"id": "opf1averyverify0001", "factorType": "push", "provider": "OKTA", "vendorName": "OKTA", "status": "ACTIVE",
+   "created": "2024-11-20T08:30:00.000Z", "lastUpdated": "2024-11-20T08:30:00.000Z",
+   "profile": {"credentialId": "avery@example.com", "deviceType": "SmartPhone_IPhone", "name": "Avery's iPhone", "platform": "IOS", "version": "17.4"}},
+  {"id": "smsf1averyphone0001", "factorType": "sms", "provider": "OKTA", "vendorName": "OKTA", "status": "ACTIVE",
+   "created": "2023-06-01T09:00:00.000Z", "lastUpdated": "2023-06-01T09:00:00.000Z",
+   "profile": {"phoneNumber": "+1 XXX-XXX-1234"}},
+  {"id": "ost1averytotp000001", "factorType": "token:software:totp", "provider": "GOOGLE", "vendorName": "GOOGLE", "status": "PENDING_ACTIVATION",
+   "created": "2025-09-01T09:00:00.000Z", "lastUpdated": "2025-09-01T09:00:00.000Z", "profile": {"credentialId": "avery@example.com"}},
+  {"id": "ufq1averyquestion01", "factorType": "question", "provider": "OKTA", "vendorName": "OKTA", "status": "ACTIVE",
+   "created": "2022-01-01T09:00:00.000Z", "lastUpdated": "2022-01-01T09:00:00.000Z", "profile": {"question": "disliked_food", "questionText": "What is the food you least liked as a child?"}}
+]

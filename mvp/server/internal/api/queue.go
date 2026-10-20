@@ -12,7 +12,10 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/access"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/claim"
+	guestlife "github.com/nischalravi/tessera/mvp/server/internal/guests/lifecycle"
+	"github.com/nischalravi/tessera/mvp/server/internal/guests/register"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/sponsorship"
 	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/lifecycle"
@@ -69,9 +72,10 @@ func (s *Server) newQueue() *queue.Queue {
 	q.Register(jobs.SweepSoDMitigations, queue.Kind{Handler: tracked(jobs.SweepSoDMitigations, s.queueSoDSweep), Actor: sod.Sweeper})
 	q.Register(jobs.SweepSSFPoll, queue.Kind{Handler: tracked(jobs.SweepSSFPoll, s.queueSSFPoll), Actor: "ssf.poller"})
 	q.Register(jobs.SweepDrift, queue.Kind{Handler: tracked(jobs.SweepDrift, s.queueDriftSweep), Actor: "drift.sweeper"})
+	q.Register(jobs.GuestLifecycle, queue.Kind{Handler: tracked(jobs.GuestLifecycle, s.queueGuestLifecycleSweep), Actor: guestlife.Sweeper})
 	q.Register(jobs.Maintenance, queue.Kind{Handler: s.queueMaintenance, Actor: "queue.worker"})
 	every := "@every " + SweepInterval.String()
-	for _, k := range []string{jobs.JITSweep, jobs.SweepRequests, jobs.SweepLifecycle, jobs.SweepAdminChanges, jobs.ContainmentRetry, jobs.SweepSoDMitigations, jobs.SweepSSFPoll} {
+	for _, k := range []string{jobs.JITSweep, jobs.SweepRequests, jobs.SweepLifecycle, jobs.SweepAdminChanges, jobs.ContainmentRetry, jobs.SweepSoDMitigations, jobs.GuestLifecycle, jobs.SweepSSFPoll} {
 		q.Schedule(k, k, every, maxSweepAttempts)
 	}
 	q.Schedule(jobs.SweepDrift, jobs.SweepDrift, "@every "+driftEvery.String(), maxSweepAttempts)
@@ -137,6 +141,25 @@ func (s *Server) queueLifecycleSweep(ctx context.Context, j queue.Job) (any, err
 		if err != nil {
 			return nil, err
 		}
+	}
+	// pending registrations that waited too long, and the personal data of decided ones (GU-3)
+	err = s.store.InTenant(audit.WithSystemActor(ctx, register.Sweeper), j.Tenant, func(tx *store.TenantTx) error {
+		need, err := register.NeedsSweep(tx)
+		if err != nil || !need {
+			return err
+		}
+		_, err = s.reg.Sweep(tx, now)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	// bundles of ended sponsorships, waiting items and the reference groups (GU-12)
+	err = s.store.InTenant(audit.WithSystemActor(ctx, access.Sweeper), j.Tenant, func(tx *store.TenantTx) error {
+		return access.SweepTenant(tx, now, s.eligible())
+	})
+	if err != nil {
+		return nil, err
 	}
 	_, err = lifecycle.SweepTenant(audit.WithSystemActor(ctx, lifecycle.Sweeper), readiness.Scope{DB: s.store, Tenant: j.Tenant},
 		s.containment, now)
