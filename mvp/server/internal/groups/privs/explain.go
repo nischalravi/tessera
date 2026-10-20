@@ -71,6 +71,10 @@ func (n namer) object(t string, id string) string {
 		if g, err := n.tx.GrpGroup(store.GroupID(id)); err == nil {
 			return g.Name
 		}
+	case AttrDef:
+		if d, err := n.tx.GrpAttrDef(id); err == nil {
+			return d.Name()
+		}
 	}
 	return id
 }

@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/attrs"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/events"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -236,6 +237,10 @@ func (e Env) RemoveMember(id store.GroupID, member string) (Outcome, error) {
 	if err != nil {
 		return Outcome{}, err
 	}
+	// the membership's attribute assignments end with it
+	if _, err := attrs.RemoveAllOf(e.Attrs(), attrs.Owner{Type: store.AttrOwnerMembership, ID: m.ID}); err != nil {
+		return Outcome{}, err
+	}
 	if err := e.Tx.DeleteGrpDirect(m.ID); err != nil {
 		return Outcome{}, err
 	}
@@ -368,6 +373,9 @@ func (e Env) dropDirect(g store.GroupID) error {
 				if err := e.eng().RemoveEdge(e.Tx, store.GrpDep{Parent: g, Child: *m.MemberGroup, Kind: store.DepNest, List: m.ListID}); err != nil {
 					return err
 				}
+			}
+			if _, err := attrs.RemoveAllOf(e.Attrs(), attrs.Owner{Type: store.AttrOwnerMembership, ID: m.ID}); err != nil {
+				return err
 			}
 			if err := e.emitDirect(events.MembershipDirectRemoved, m); err != nil {
 				return err

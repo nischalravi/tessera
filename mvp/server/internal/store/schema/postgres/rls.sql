@@ -865,6 +865,55 @@ CREATE POLICY tenant_isolation ON grp_priv_settings
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE grp_attr_defs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_attr_defs FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_attr_defs;
+CREATE POLICY tenant_isolation ON grp_attr_defs
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_attr_names ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_attr_names FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_attr_names;
+CREATE POLICY tenant_isolation ON grp_attr_names
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_attr_name_implies ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_attr_name_implies FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_attr_name_implies;
+CREATE POLICY tenant_isolation ON grp_attr_name_implies
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_attr_actions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_attr_actions FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_attr_actions;
+CREATE POLICY tenant_isolation ON grp_attr_actions
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_attr_action_implies ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_attr_action_implies FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_attr_action_implies;
+CREATE POLICY tenant_isolation ON grp_attr_action_implies
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_attr_assigns ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_attr_assigns FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_attr_assigns;
+CREATE POLICY tenant_isolation ON grp_attr_assigns
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_attr_values ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_attr_values FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_attr_values;
+CREATE POLICY tenant_isolation ON grp_attr_values
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 ALTER TABLE config_signing_keys ENABLE ROW LEVEL SECURITY;
 ALTER TABLE config_signing_keys FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON config_signing_keys;
