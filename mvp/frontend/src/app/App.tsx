@@ -21,6 +21,7 @@ const directory = () => import("../features/directory/Lists");
 const objects = () => import("../features/directory/ObjectPages");
 const admin = () => import("../features/admin/Admin");
 const connections = () => import("../features/admin/connections");
+const rotationPages = () => import("../features/rotation");
 const conditionalAccess = () => import("../features/admin/access");
 
 const Home = named(() => import("../features/home/Home"), "Home");
@@ -80,6 +81,10 @@ const ReconReport = named(connections, "ReconReport");
 const AgentsList = named(connections, "AgentsList");
 const ConditionalAccess = named(conditionalAccess, "ConditionalAccess");
 const AdminSectionPage = named(admin, "AdminSectionPage");
+const RotationSecrets = named(rotationPages, "RotationSecrets");
+const RotationJobs = named(rotationPages, "RotationJobs");
+const RotationPolicies = named(rotationPages, "RotationPolicies");
+const VendorCompromised = named(rotationPages, "VendorCompromised");
 const MySessions = named(() => import("../features/account/MySessions"), "MySessions");
 const DeviceApprove = lazy(() => import("../pages/DeviceApprove"));
 const AdminUsers = named(() => import("../features/admin/Users"), "Users");
@@ -193,6 +198,11 @@ export default function App() {
                       <Route path="ownership" element={<Ownership />} />
                     </Route>
                     <Route path="/helpdesk" element={<HelpDesk />} />
+                    <Route path="/rotation" element={<Navigate to="/rotation/secrets" replace />} />
+                    <Route path="/rotation/secrets" element={<RotationSecrets />} />
+                    <Route path="/rotation/jobs" element={<RotationJobs />} />
+                    <Route path="/rotation/policies" element={<RotationPolicies />} />
+                    <Route path="/rotation/vendor" element={<VendorCompromised />} />
                     <Route path="/directory/identities/:id" element={<IdentityPage />} />
                     <Route path="/directory/roles/:id" element={<RolePage />} />
                     <Route path="/directory/entitlements/:id" element={<EntitlementPage />} />

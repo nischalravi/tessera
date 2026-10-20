@@ -144,6 +144,8 @@ func seedTemplate(target string) error {
 		seeded.b = seedTenant(rec, db, BID, "tenant-b", "")
 		seedReadiness(rec, db, &seeded.a, "")
 		seedReadiness(rec, db, &seeded.b, ReadinessSentinel)
+		seedRotation(rec, db, &seeded.a, Sentinel)
+		seedRotation(rec, db, &seeded.b, "")
 	}()
 	if rec.msg != "" {
 		_ = db.Close()
@@ -422,6 +424,14 @@ func Dump(tb testing.TB, db *store.DB, t tenancy.ID) string {
 		get("edge_history", v14, e)
 		v15, e := c.EvidencePacks()
 		get("evidence_packs", v15, e)
+		v16, e := c.RotationAdapters()
+		get("rotation_adapters", v16, e)
+		v17, e := c.RotationPolicies()
+		get("rotation_policies", v17, e)
+		v18, e := c.RotationBulks()
+		get("rotation_bulks", v18, e)
+		v19, e := c.RotationJobs(store.RotationJobFilter{})
+		get("rotation_jobs", v19, e)
 		return err
 	})
 	if err != nil {

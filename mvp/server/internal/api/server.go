@@ -52,6 +52,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 	"github.com/nischalravi/tessera/mvp/server/internal/requests"
 	"github.com/nischalravi/tessera/mvp/server/internal/reviews"
+	"github.com/nischalravi/tessera/mvp/server/internal/rotation"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/siem"
 	"github.com/nischalravi/tessera/mvp/server/internal/sod"
@@ -185,6 +186,11 @@ type Config struct {
 	// ClaimMinDuration is the minimum time of a claim start or resend (default
 	// 300 ms); tests shorten it.
 	ClaimMinDuration time.Duration
+	// RotationFake admits the simulated rotation adapter
+	// (TESSERA_ROTATION_FAKE_ADAPTERS; config refuses it in prod).
+	RotationFake bool
+	// RotationNotifier tells secret owners about rotations; nil: the audit-event notifier.
+	RotationNotifier rotation.Notifier
 	// Containment runs the kill switch's provider calls (revoke sessions and
 	// grants). Nil: a service with no outbound client, so every containment
 	// step is a manual task.
@@ -248,6 +254,7 @@ type Server struct {
 	agents    *agent.Service
 	prov      *provision.Engine
 	provSeal  *seal.Sealer // cfg.Sealer, or a per-process key when it is nil
+	rotation  *rotation.Service
 	// containment is the kill switch (issue #106); never nil.
 	containment *containment.Service
 	// aws holds the AWS evaluator's engines and explanations (aws_eval.go).
@@ -328,7 +335,8 @@ func New(cfg Config) *Server {
 		cfg.Helpdesk = &helpdesk.Service{HTTP: hc, Containment: cfg.Containment, Clock: cfg.Clock, Simulated: cfg.Env != "prod"}
 	}
 	s := &Server{cfg: cfg, containment: cfg.Containment, helpdesk: cfg.Helpdesk, signals: cfg.DeviceSignals, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
-		agents: cfg.Agents, limits: newLimiters(cfg.RateLimits), provSeal: provSeal}
+		agents: cfg.Agents, limits: newLimiters(cfg.RateLimits), provSeal: provSeal,
+		rotation: &rotation.Service{Sealer: cfg.Sealer, Env: cfg.Env, AllowFake: cfg.RotationFake, Notifier: cfg.RotationNotifier}}
 	s.prov = &provision.Engine{DB: cfg.Store, Sealer: provSeal, HTTP: cfg.Outbound,
 		Clock: func() time.Time { return s.clock() }, Log: cfg.Logger.With("component", "provisioning")}
 	s.admin = &admin.Service{DB: cfg.Store, Clock: func() time.Time { return s.clock() }, Sealer: cfg.Sealer,
@@ -438,6 +446,7 @@ func New(cfg Config) *Server {
 	s.registerProvisioningRoutes()
 	s.registerDriftRoutes()
 	s.registerTransportRoutes()
+	s.registerRotationRoutes()
 	s.registerAuthRoutes()
 	s.registerLoginRoutes()
 	s.registerSAMLRoutes()

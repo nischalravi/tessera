@@ -15,3 +15,12 @@ var readinessOpenAPIDoc []byte
 func (s *Server) readinessOpenAPI(w http.ResponseWriter, _ *http.Request, _ *params) (any, error) {
 	return rawJSON(readinessOpenAPIDoc), nil
 }
+
+// The secret-rotation routes are documented the same way.
+
+//go:embed openapi_rotation.json
+var rotationOpenAPIDoc []byte
+
+func (s *Server) rotationOpenAPI(w http.ResponseWriter, _ *http.Request, _ *params) (any, error) {
+	return rawJSON(rotationOpenAPIDoc), nil
+}

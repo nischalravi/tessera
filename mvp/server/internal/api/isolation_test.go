@@ -56,7 +56,18 @@ func newIsolationServer(f *storetest.Fixture) *Server {
 		AllowedOrigins: []string{"http://localhost:5173"},
 		Env:            "test",
 		RateLimits:     noRateLimits, // the coverage tests send hundreds of anonymous requests
+		Sealer:         testSealer(),
+		RotationFake:   true,
 	})
+}
+
+// testSealer is a throwaway KEK for adapter credentials.
+func testSealer() *seal.Sealer {
+	s, err := seal.New(seal.RandomBytes(seal.KeySize))
+	if err != nil {
+		panic(err)
+	}
+	return s
 }
 
 func serveOnce(h http.Handler, method, path, body string) *httptest.ResponseRecorder {
@@ -275,6 +286,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		}
 		if strings.HasPrefix(rt.Pattern, "/api/abac/policies/{policy_id}") || rt.Pattern == "/api/catalog/items/{group_id}/policy" {
 			continue // TestAbacAPI_CrossTenant (UUIDs, not fixture ids)
+		}
+		if _, ok := rotationRouteCases[rt.Method+" "+rt.Pattern]; ok {
+			continue // TestIsolation_RotationRouteCrossTenant
 		}
 		if rt.Pattern == "/api/auth/oidc/{connection_id}/callback" || rt.Pattern == "/api/auth/oauth2/{connection_id}/callback" ||
 			rt.Pattern == "/api/auth/cas/{connection_id}/callback" || rt.Pattern == "/api/auth/wsfed/{connection_id}/callback" ||
@@ -514,6 +528,9 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		}
 		if path == "/api/request-drafts/{draft_id}" {
 			continue // TestRequestDraftsAPI (a UUID, private to its user)
+		}
+		if rp, ok := rotationGetPaths(f.B.Refs)[path]; ok {
+			path = rp // tenant B's own rotation ids
 		}
 		if strings.Contains(path, "{") {
 			v, ok := values[path]

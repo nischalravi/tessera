@@ -444,7 +444,7 @@ func (s *Server) executeLeaver(r *http.Request, p *params, id int64) (any, error
 		}
 		// read before it runs: a leaver or mover who sponsors guests sets transfer tasks going
 		ev, evErr := c.HrisEvent(id)
-		plan, err = jml.ExecuteEvent(c, s.clock(), id, principal(r).User(), pols)
+		plan, err = jml.ExecuteEvent(c, s.clock(), id, principal(r).User(), pols, jml.WithRotator(s.rotation))
 		var ex *jml.ExistsError
 		if errors.As(err, &ex) {
 			// ExecuteEvent wrote nothing before refusing; commit so the refusal is audited.

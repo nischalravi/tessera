@@ -508,6 +508,34 @@ CREATE POLICY tenant_isolation ON email_messages
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE rotation_adapters ENABLE ROW LEVEL SECURITY;
+ALTER TABLE rotation_adapters FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON rotation_adapters;
+CREATE POLICY tenant_isolation ON rotation_adapters
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE rotation_policies ENABLE ROW LEVEL SECURITY;
+ALTER TABLE rotation_policies FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON rotation_policies;
+CREATE POLICY tenant_isolation ON rotation_policies
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE rotation_bulks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE rotation_bulks FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON rotation_bulks;
+CREATE POLICY tenant_isolation ON rotation_bulks
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE rotation_jobs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE rotation_jobs FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON rotation_jobs;
+CREATE POLICY tenant_isolation ON rotation_jobs
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 ALTER TABLE guest_populations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE guest_populations FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON guest_populations;

@@ -803,7 +803,25 @@ func stepKey(base string, idx int, action string) string {
 // eventBase is the base of the keys of an HRIS event's steps.
 func eventBase(eventID int64) string { return fmt.Sprintf("jml:%d", eventID) }
 
-func applyStep(c *store.TenantTx, now time.Time, by string, ident *store.Identity, st Step, base string, idx int) error {
+// SecretRotator queues a real rotation of a secret a leaver had custody of
+// (internal/rotation.Service). QueueForLeaver reports whether a rotation job
+// is now running for the secret; false means no rotation policy and adapter
+// can rotate it, and the rotate_secret step keeps recording the timestamp
+// only, as before.
+type SecretRotator interface {
+	QueueForLeaver(tx *store.TenantTx, secretID int64, actor string, now time.Time) (bool, error)
+}
+
+// Option adjusts ExecuteEvent.
+type Option func(*options)
+
+type options struct{ rotator SecretRotator }
+
+// WithRotator makes the rotate_secret step queue a rotation job through r
+// when one can run, instead of only stamping the secret's rotation time.
+func WithRotator(r SecretRotator) Option { return func(o *options) { o.rotator = r } }
+
+func applyStep(c *store.TenantTx, now time.Time, by string, ident *store.Identity, st Step, base string, idx int, o *options) error {
 	var err error
 	switch stepStr(st, "action") {
 	case containment.ActionRevokeSessions, containment.ActionRevokeGrants:
@@ -840,7 +858,15 @@ func applyStep(c *store.TenantTx, now time.Time, by string, ident *store.Identit
 		err = reassignOwnership(c, now, st)
 	case "rotate_secret":
 		id, _ := stepInt(st, "secret_id")
-		err = c.SetSecretRotated(id, now)
+		queued := false
+		if o.rotator != nil {
+			if queued, err = o.rotator.QueueForLeaver(c, id, by, now); err != nil {
+				return err
+			}
+		}
+		if !queued { // no adapter can rotate it: record the rotation time, as before
+			err = c.SetSecretRotated(id, now)
+		}
 	case "revoke_delegation":
 		id, _ := stepInt(st, "delegation_id")
 		err = c.DeleteDelegation(id)
@@ -980,7 +1006,11 @@ func RouteEnsureAccount(c *store.TenantTx, now time.Time, ident *store.Identity,
 // containment steps (revoke_sessions, revoke_grants) are not applied here:
 // the caller runs them before, and a failed one is a retry task, not a
 // reason to stop the leaver.
-func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.UserRef, policies []*policy.Policy) (Plan, error) {
+func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.UserRef, policies []*policy.Policy, opts ...Option) (Plan, error) {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
 	ev, err := getOrNil(c.HrisEvent(eventID))
 	if err != nil {
 		return nil, err
@@ -1056,7 +1086,7 @@ func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.User
 		}
 		for i, st := range steps {
 			if stepStr(st, "action") == "add_grant" {
-				if err := applyStep(c, now, by.Display, ident, st, eventBase(ev.ID), i); err != nil {
+				if err := applyStep(c, now, by.Display, ident, st, eventBase(ev.ID), i, &o); err != nil {
 					return nil, err
 				}
 			}
@@ -1067,7 +1097,7 @@ func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.User
 			return nil, err
 		}
 		for i, st := range steps {
-			if err := applyStep(c, now, by.Display, ident, st, eventBase(ev.ID), i); err != nil {
+			if err := applyStep(c, now, by.Display, ident, st, eventBase(ev.ID), i, &o); err != nil {
 				return nil, err
 			}
 		}
@@ -1187,7 +1217,7 @@ func ExecuteLeaver(c *store.TenantTx, now time.Time, identityID int64) (Plan, er
 	for i, st := range steps {
 		// No HRIS event: a negative id keeps the provisioning keys of this
 		// identity's end-date leaver apart from every event's.
-		if err := applyStep(c, now, "system", ident, st, eventBase(-identityID), i); err != nil {
+		if err := applyStep(c, now, "system", ident, st, eventBase(-identityID), i, &options{}); err != nil {
 			return nil, err
 		}
 	}
@@ -1213,7 +1243,7 @@ func ExecuteLeaverSteps(c *store.TenantTx, now time.Time, identityID int64, base
 		if !slices.Contains(actions, stepStr(st, "action")) {
 			continue
 		}
-		if err := applyStep(c, now, "system", ident, st, base, i); err != nil {
+		if err := applyStep(c, now, "system", ident, st, base, i, &options{}); err != nil {
 			return n, err
 		}
 		n++

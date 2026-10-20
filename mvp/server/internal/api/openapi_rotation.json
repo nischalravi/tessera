@@ -1,0 +1,584 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Tessera secret rotation",
+    "version": "1.0.0",
+    "description": "Rotation of secrets through the customer's vaults and cloud APIs (issue #113). New credentials are written to the customer's vault and are never stored by Tessera; adapter credentials are sealed and never returned. A job reaches verified only after the old credential was re-read (its age and last use) and recorded."
+  },
+  "paths": {
+    "/api/rotation/overview": {
+      "get": {
+        "summary": "Rotation status of every secret",
+        "description": "Permission: graph.read. Age, policy, what Rotate would do now, and the active and last job.",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "login_required or step_up_required"
+          },
+          "403": {
+            "description": "forbidden"
+          }
+        }
+      }
+    },
+    "/api/rotation/adapters": {
+      "get": {
+        "summary": "List rotation adapters",
+        "description": "Permission: graph.read. Connection settings only: the sealed credential is never returned.",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "login_required or step_up_required"
+          },
+          "403": {
+            "description": "forbidden"
+          }
+        }
+      }
+    },
+    "/api/rotation/adapters/{name}": {
+      "put": {
+        "summary": "Create or update a rotation adapter",
+        "description": "Permission: secrets.rotate; requires a fresh phishing-resistant sign-in (step-up). The credential is sealed under the KEK; an update without one keeps the sealed credential.",
+        "responses": {
+          "200": {
+            "description": "Updated (201 when created)"
+          },
+          "401": {
+            "description": "login_required or step_up_required"
+          },
+          "403": {
+            "description": "forbidden"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdapterInput"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "delete": {
+        "summary": "Delete a rotation adapter",
+        "description": "Permission: secrets.rotate; requires a fresh phishing-resistant sign-in (step-up). Refused with 409 while a policy or job refers to it.",
+        "responses": {
+          "200": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "login_required or step_up_required"
+          },
+          "403": {
+            "description": "forbidden"
+          }
+        },
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/rotation/policies": {
+      "get": {
+        "summary": "List rotation policies",
+        "description": "Permission: graph.read.",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "login_required or step_up_required"
+          },
+          "403": {
+            "description": "forbidden"
+          }
+        }
+      },
+      "put": {
+        "summary": "Create or replace the policy for a secret kind and system",
+        "description": "Permission: secrets.rotate; requires a fresh phishing-resistant sign-in (step-up).",
+        "responses": {
+          "200": {
+            "description": "Replaced (201 when created)"
+          },
+          "401": {
+            "description": "login_required or step_up_required"
+          },
+          "403": {
+            "description": "forbidden"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PolicyInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/rotation/policies/{id}": {
+      "delete": {
+        "summary": "Delete a rotation policy",
+        "description": "Permission: secrets.rotate; requires a fresh phishing-resistant sign-in (step-up).",
+        "responses": {
+          "200": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "login_required or step_up_required"
+          },
+          "403": {
+            "description": "forbidden"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/rotation/plan": {
+      "post": {
+        "summary": "Plan the rotation of secrets (dry run)",
+        "description": "Permission: graph.read. Reads the database only: no provider is called and nothing is written.",
+        "responses": {
+          "200": {
+            "description": "One plan item per secret"
+          },
+          "401": {
+            "description": "login_required or step_up_required"
+          },
+          "403": {
+            "description": "forbidden"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/rotation/jobs": {
+      "get": {
+        "summary": "List rotation jobs",
+        "description": "Permission: graph.read.",
+        "responses": {
+          "200": {
+            "description": "Newest first"
+          },
+          "401": {
+            "description": "login_required or step_up_required"
+          },
+          "403": {
+            "description": "forbidden"
+          }
+        },
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "secret_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "bulk_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
+      },
+      "post": {
+        "summary": "Rotate a secret now",
+        "description": "Permission: secrets.rotate; requires a fresh phishing-resistant sign-in (step-up). 409 manual_rotation_required or rotation_blocked when Tessera cannot rotate it, with the reason.",
+        "responses": {
+          "201": {
+            "description": "The queued job"
+          },
+          "401": {
+            "description": "login_required or step_up_required"
+          },
+          "403": {
+            "description": "forbidden"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/rotation/jobs/{id}": {
+      "get": {
+        "summary": "One rotation job",
+        "description": "Permission: graph.read.",
+        "responses": {
+          "200": {
+            "description": "The job, its steps and the recorded re-read of the old credential"
+          },
+          "401": {
+            "description": "login_required or step_up_required"
+          },
+          "403": {
+            "description": "forbidden"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/rotation/jobs/{id}/retry": {
+      "post": {
+        "summary": "Retry a failed job from the step that failed",
+        "description": "Permission: secrets.rotate; requires a fresh phishing-resistant sign-in (step-up).",
+        "responses": {
+          "200": {
+            "description": "The job"
+          },
+          "401": {
+            "description": "login_required or step_up_required"
+          },
+          "403": {
+            "description": "forbidden"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/rotation/jobs/{id}/cancel": {
+      "post": {
+        "summary": "Cancel a job that has not started",
+        "description": "Permission: secrets.rotate; requires a fresh phishing-resistant sign-in (step-up).",
+        "responses": {
+          "200": {
+            "description": "The job"
+          },
+          "401": {
+            "description": "login_required or step_up_required"
+          },
+          "403": {
+            "description": "forbidden"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/rotation/bulk/plan": {
+      "post": {
+        "summary": "Plan a vendor-compromised rotation (dry run)",
+        "description": "Permission: graph.read. Plans every active credential of the system with no grace period.",
+        "responses": {
+          "200": {
+            "description": "The plan and its plan_hash"
+          },
+          "401": {
+            "description": "login_required or step_up_required"
+          },
+          "403": {
+            "description": "forbidden"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkPlanInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/rotation/bulk": {
+      "get": {
+        "summary": "List vendor-compromised runs",
+        "description": "Permission: graph.read.",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "login_required or step_up_required"
+          },
+          "403": {
+            "description": "forbidden"
+          }
+        }
+      },
+      "post": {
+        "summary": "Execute a vendor-compromised rotation",
+        "description": "Permission: secrets.rotate; requires a fresh phishing-resistant sign-in (step-up). 409 plan_changed when the credentials changed since the plan was made. Owners of every credential are notified.",
+        "responses": {
+          "201": {
+            "description": "The run and its jobs"
+          },
+          "401": {
+            "description": "login_required or step_up_required"
+          },
+          "403": {
+            "description": "forbidden"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/rotation/bulk/{id}": {
+      "get": {
+        "summary": "One vendor-compromised run with its jobs",
+        "description": "Permission: graph.read.",
+        "responses": {
+          "200": {
+            "description": "The run"
+          },
+          "401": {
+            "description": "login_required or step_up_required"
+          },
+          "403": {
+            "description": "forbidden"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AdapterInput": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "aws_iam",
+              "aws_secretsmanager",
+              "vault",
+              "github",
+              "fake"
+            ]
+          },
+          "config": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "region, endpoint (aws); address, namespace (vault); api_url (github); fail_at, consumer_still_uses (fake)"
+          },
+          "credential": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "access_key_id, secret_access_key, session_token (aws); token (vault, github). Write-only."
+          }
+        }
+      },
+      "PolicyInput": {
+        "type": "object",
+        "required": [
+          "kind",
+          "max_age_days"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "system": {
+            "type": "string"
+          },
+          "max_age_days": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3650
+          },
+          "grace_hours": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 720
+          },
+          "adapter": {
+            "type": "string",
+            "nullable": true
+          },
+          "destination": {
+            "type": "string",
+            "nullable": true
+          },
+          "dest_path": {
+            "type": "string",
+            "description": "May use {system}, {kind}, {name}, {account}"
+          },
+          "auto_rotate": {
+            "type": "boolean"
+          }
+        }
+      },
+      "PlanInput": {
+        "type": "object",
+        "properties": {
+          "secret_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          }
+        }
+      },
+      "StartInput": {
+        "type": "object",
+        "required": [
+          "secret_id"
+        ],
+        "properties": {
+          "secret_id": {
+            "type": "integer"
+          }
+        }
+      },
+      "BulkPlanInput": {
+        "type": "object",
+        "required": [
+          "system"
+        ],
+        "properties": {
+          "system": {
+            "type": "string"
+          }
+        }
+      },
+      "BulkInput": {
+        "type": "object",
+        "required": [
+          "system",
+          "reason",
+          "plan_hash"
+        ],
+        "properties": {
+          "system": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 10
+          },
+          "plan_hash": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

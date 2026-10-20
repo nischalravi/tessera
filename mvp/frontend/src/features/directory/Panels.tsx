@@ -16,6 +16,7 @@ import {
 import { AffiliationsSection, IdentifiersSection } from "./affiliations";
 import { LifecycleSection } from "../lifecycle/parts";
 import { mockObjects } from "../../mocks";
+import { PlanDrawer, RotationBadge, useRotationStatus } from "../rotation/shared";
 import { useSession } from "../../app/auth";
 import { ContainDialog, ContainmentRetries } from "./containment";
 import { RevokeDrawer } from "./IdentityPage";
@@ -46,11 +47,11 @@ export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void
   const { data: d, error: loadError, reload } = useApi<IdentityDetail>(validId ? `/identities/${id}` : null);
   const error = validId ? loadError : invalidLink();
   const acts = useIdentityActions();
-  const { actor } = usePersona();
-  const toast = useToast();
   const [tab, setTab] = useTab<IdTab>("overview", id);
   const [edit, setEdit] = useState(false);
   const [revoke, setRevoke] = useState<number | null>(null);
+  const [rotate, setRotate] = useState(false);
+  const rot = useRotationStatus();
   const [containing, setContaining] = useState(false);
   const { can } = useSession();
 
@@ -87,7 +88,7 @@ export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void
             { label: "Request access for", icon: <ShoppingCart size={I} />, disabled: status !== "active", onClick: () => acts.requestFor(d) },
             human
               ? { label: "Reset password", icon: <RotateCcw size={I} />, disabled: status !== "active", onClick: () => acts.resetPassword(d) }
-              : { label: "Rotate secret", icon: <RotateCcw size={I} />, onClick: async () => { await mockObjects.save("secret", d.name, actor, "update"); toast(`Secret rotation requested for ${d.name} (preview)`); } },
+              : { label: "Rotate secrets…", icon: <RotateCcw size={I} />, disabled: d.secrets.length === 0, title: d.secrets.length === 0 ? "No secrets are recorded for this identity" : "Preview the rotation of its secrets", onClick: () => setRotate(true) },
             { label: "Start review", icon: <ClipboardCheck size={I} />, onClick: () => acts.reviewAccess(d) },
             { label: "Open in graph", icon: <Network size={I} />, onClick: () => acts.openGraph(d) },
             ...(can("identities.contain") && d.status !== "merged"
@@ -237,7 +238,7 @@ export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void
               <table>
                 <tbody>
                   {d.secrets.map((s) => (
-                    <tr key={s.id}><td className="small"><span className="sys">{s.name}</span><div className="xs faint">{s.kind.replace(/_/g, " ")}</div></td><td className="num">{s.stale ? <Badge tone="warning">{s.age_days} d old</Badge> : `${s.age_days} d old`}</td><td className="small nowrap" style={{ textAlign: "right" }}>used {ago(s.last_used_days)}</td></tr>
+                    <tr key={s.id}><td className="small"><span className="sys">{s.name}</span><div className="xs faint">{s.kind.replace(/_/g, " ")}</div></td><td className="num">{s.stale ? <Badge tone="warning">{s.age_days} d old</Badge> : `${s.age_days} d old`}</td><td className="small nowrap" style={{ textAlign: "right" }}>used {ago(s.last_used_days)}</td><td><RotationBadge status={rot.get(s.id)} /></td></tr>
                   ))}
                 </tbody>
               </table>
@@ -253,6 +254,7 @@ export function IdentityPanel({ id, onClose }: { id: string; onClose: () => void
         </>
       )}
 
+      {rotate && <PlanDrawer title={`Rotate ${d.name}'s secrets`} secretIds={d.secrets.map((x) => x.id)} onClose={() => setRotate(false)} />}
       {edit && (
         <PreviewFormDrawer
           title={`Edit ${d.name}`}

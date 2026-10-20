@@ -121,6 +121,8 @@ var tables = []string{
 	"connection_credentials",
 	// role memberships in reviews (schema/0340_review_role_memberships.sql)
 	"business_role_exclusions", "review_item_roles", "review_template_roles",
+	// secret rotation (schema/0225_rotation.sql)
+	"rotation_adapters", "rotation_policies", "rotation_bulks", "rotation_jobs",
 	// account correlation (schema/0204_correlation.sql)
 	"account_links", "identity_merges",
 	// identity model for guests (schema/0226_identity_model.sql)

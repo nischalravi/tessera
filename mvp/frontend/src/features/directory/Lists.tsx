@@ -9,6 +9,8 @@ import {
   Avatar, Badge, Button, Callout, Chip, Column, Command, DataTable, Drawer, EmptyState, Flag, GroupTabs, IdLink, Page, RiskPill, Status, Tabs, TypeBadge, useSelected, useToast,
 } from "../../components";
 import { mockObjects } from "../../mocks";
+import { identityRotation, SECRET_STATUS_LABEL, SECRET_STATUS_TONE } from "../rotation/model";
+import { PlanDrawer, useRotationStatus } from "../rotation/shared";
 import { AgentCard } from "./AgentCards";
 import { McpFindings, SponsorCell, sourceLabel } from "./AgentFindings";
 import { StateBadge, WORKER_LABEL } from "../lifecycle/parts";
@@ -208,6 +210,9 @@ export function Machine() {
   const { can } = useSession();
   const [assign, setAssign] = useState<NhiRow[] | null>(null);
   const [showAgents, setShowAgents] = useState(false);
+  const [rotate, setRotate] = useState<{ title: string; ids: number[] } | null>(null);
+  const rot = useRotationStatus();
+  const rotationOf = (r: NhiRow) => identityRotation(r.secrets.map((s) => rot.get(s.id)).filter((x): x is NonNullable<typeof x> => !!x));
   const cols: Column<NhiRow>[] = [
     { id: "name", header: "Name", sort: (r) => r.name.toLowerCase(), csv: (r) => r.name, cell: (r) => <div className="row" style={{ flexWrap: "nowrap" }}><Avatar name={r.name} type={r.type} /><div style={{ minWidth: 0 }}><span className="name-link">{r.name}</span><div className="xs faint truncate">{r.kind}</div></div></div> },
     { id: "type", header: "Type", sort: (r) => r.type, cell: (r) => <TypeBadge type={r.type} />, hideNarrow: true },
@@ -228,6 +233,7 @@ export function Machine() {
     },
     { id: "systems", header: "Systems", csv: (r) => r.systems.join(" "), cell: (r) => <div className="row tight" style={{ flexWrap: "nowrap" }}>{r.systems.map((s) => <Chip key={s} mono>{s}</Chip>)}</div>, hideNarrow: true },
     { id: "secret", header: "Oldest secret", num: true, sort: (r) => r.oldest_secret_days ?? -1, cell: (r) => (r.oldest_secret_days == null ? <span className="faint">-</span> : r.oldest_secret_days > 90 ? <Badge tone="warning">{r.oldest_secret_days} d</Badge> : `${r.oldest_secret_days} d`) },
+    { id: "rotation", header: "Rotation", sort: (r) => rotationOf(r)?.key ?? "", csv: (r) => { const x = rotationOf(r); return x ? SECRET_STATUS_LABEL[x.key] : ""; }, cell: (r) => { const x = rotationOf(r); return x ? <Badge tone={SECRET_STATUS_TONE[x.key]} dot>{SECRET_STATUS_LABEL[x.key]}{x.count > 1 ? ` (${x.count})` : ""}</Badge> : <span className="faint">-</span>; }, hideNarrow: true },
     { id: "last", header: "Last active", sort: (r) => r.days_since_activity ?? 9999, cell: (r) => <span className="small nowrap">{r.days_since_activity == null ? "never" : r.days_since_activity === 0 ? "today" : `${r.days_since_activity} d ago`}</span>, hideNarrow: true },
     { id: "flags", header: "Flags", csv: (r) => r.flags.join(" "), cell: (r) => <div className="row tight">{r.flags.map((f) => <Flag key={f} f={f} />)}</div> },
     { id: "risk", header: "Risk", sort: (r) => r.risk, csv: (r) => r.risk, cell: (r) => <RiskPill score={r.risk} /> },
@@ -261,7 +267,11 @@ export function Machine() {
         onRefresh={reload}
         bulkActions={[
           ...(can("ownership.manage") ? [{ label: "Assign owner", icon: <UserCheck size={16} />, run: (rs: NhiRow[]) => setAssign(rs) }] : []),
-          { label: "Rotate secrets", icon: <RotateCcw size={16} />, run: async (rs) => { await mockObjects.save("secret", `${rs.length} identities`, "bulk", "update"); toast(`Rotation requested for ${rs.length} identities (preview)`); } },
+          { label: "Rotate secrets…", icon: <RotateCcw size={16} />, run: (rs) => {
+            const ids = rs.flatMap((r) => r.secrets.map((s) => s.id));
+            if (ids.length === 0) toast("None of the selected identities has a recorded secret", { kind: "info" });
+            else setRotate({ title: `Rotate the secrets of ${rs.length} identit${rs.length === 1 ? "y" : "ies"}`, ids });
+          } },
           { label: "Disable", icon: <Ban size={16} />, danger: true, run: (rs) => acts.disableMany(rs) },
         ]}
         rowLabel={(r) => r.name}
@@ -279,6 +289,7 @@ export function Machine() {
       )}
       </>}
       {selected && tab === "inventory" && <IdentityPanel id={selected} onClose={() => setSelected(null)} />}
+      {rotate && <PlanDrawer title={rotate.title} secretIds={rotate.ids} onClose={() => { setRotate(null); reload(); }} />}
       {assign && <BulkOwnerDrawer objects={assign.map((r) => ({ kind: "identity", key: String(r.id), label: r.name }))} onClose={() => setAssign(null)} onDone={reload} />}
       {newOpen && (
         <PreviewFormDrawer

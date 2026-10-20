@@ -56,6 +56,9 @@ func TestServeSeedsAndShutsDownGracefully(t *testing.T) {
 	if resp.StatusCode != 200 || resp.Header.Get("X-Content-Type-Options") != "nosniff" {
 		t.Errorf("health: %d %v", resp.StatusCode, resp.Header)
 	}
+	if !strings.Contains(out.String(), "secret-rotation demo") {
+		t.Errorf("seed output lacks the secret-rotation demo: %s", out.String())
+	}
 	if !strings.Contains(out.String(), "Seeded Tessera") || !strings.Contains(out.String(), "deployment-readiness demo") ||
 		!strings.Contains(out.String(), "signing keys") {
 		t.Errorf("missing seed output: %q", out.String())

@@ -684,6 +684,7 @@ export interface NhiRow {
   flags: string[];
   risk: number;
   delegations: { chain: { name: string; role: string; status: string }[]; scopes: string[]; exceeds_principal: string[] }[];
+  secrets: SecretRow[];
 }
 
 /** Who is responsible for an agent or a finding (the API's nhi.Owner). */
@@ -3461,4 +3462,165 @@ export const mfaPosturePath = (department: string, privileged: "" | "true" | "fa
   if (privileged) q.set("privileged", privileged);
   const s = q.toString();
   return `/mfa/posture${s ? `?${s}` : ""}`;
+};
+
+// -------------------------------------------------------------- secret rotation
+export type RotationState = "pending" | "created" | "handed_over" | "old_disabled" | "verified" | "old_deleted" | "failed" | "cancelled";
+export type RotationAction = "rotate" | "manual" | "blocked" | "in_flight";
+export type RotationOrigin = "manual" | "policy" | "vendor_compromise" | "jml";
+export type RotationAdapterType = "aws_iam" | "aws_secretsmanager" | "vault" | "github" | "fake";
+
+export interface RotationOwner { id: number; name: string; email: string | null; status: string }
+
+/** What a rotation of one secret would do. Computed from the database: nothing is called or written. */
+export interface RotationPlanItem {
+  secret_id: number;
+  name: string;
+  system: string;
+  kind: string;
+  account: string;
+  owner: RotationOwner | null;
+  age_days: number;
+  max_age_days: number | null;
+  overdue: boolean;
+  action: RotationAction;
+  reason?: string;
+  adapter: string | null;
+  adapter_type?: RotationAdapterType;
+  destination: string | null;
+  dest_path?: string;
+  grace_hours: number;
+  steps: string[];
+  warnings: string[];
+  job_id?: string;
+}
+
+export interface RotationJobLite { id: string; state: RotationState; origin: RotationOrigin; at: string; completed_at: string | null; last_error: string | null }
+
+export interface RotationSecretStatus {
+  secret_id: number;
+  name: string;
+  system: string;
+  kind: string;
+  account: string;
+  owner: RotationOwner | null;
+  age_days: number;
+  max_age_days: number | null;
+  overdue: boolean;
+  mode: "automatic" | "scheduled" | "manual" | "none";
+  action: RotationAction;
+  reason?: string;
+  adapter: string | null;
+  active_job: RotationJobLite | null;
+  last_job: RotationJobLite | null;
+}
+
+/** The recorded re-read of the old credential: a job is verified only with this. */
+export interface RotationVerification {
+  checked_at: string;
+  verdict: "ok" | "still_active" | "used_after_disable" | "missing_evidence";
+  evidence: "age_and_last_use" | "age_only" | "old_credential_absent";
+  old_exists: boolean;
+  old_active: boolean;
+  old_created_at: string | null;
+  old_age_days: number | null;
+  old_last_used_at: string | null;
+  last_used_known: boolean;
+  disabled_at: string | null;
+  detail?: string;
+}
+
+export interface RotationJobStep { state: Exclude<RotationState, "pending" | "failed" | "cancelled">; status: "done" | "current" | "pending" | "failed" | "skipped"; at: string | null }
+
+export interface RotationJob {
+  id: string;
+  secret_id: number;
+  secret: string;
+  system: string;
+  kind: string;
+  account: string;
+  origin: RotationOrigin;
+  bulk_id: string | null;
+  adapter: string;
+  adapter_type: RotationAdapterType;
+  destination: string | null;
+  dest_path: string;
+  state: RotationState;
+  failed_state: RotationState | null;
+  old_ref: string;
+  new_ref: string | null;
+  grace_hours: number;
+  attempts: number;
+  last_error: string | null;
+  next_step_at: string | null;
+  handed_over_at: string | null;
+  disabled_at: string | null;
+  verified_at: string | null;
+  completed_at: string | null;
+  verification: RotationVerification | null;
+  steps: RotationJobStep[];
+  requested_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** An adapter as the API shows it: the credential is never returned, only whether one is set. */
+export interface RotationAdapter { id: string; name: string; type: RotationAdapterType; config: Record<string, string>; credential_set: boolean; created_by: string; created_at: string; updated_at: string }
+export interface RotationAdapterList { adapters: RotationAdapter[]; types: RotationAdapterType[] }
+
+export interface RotationPolicy {
+  id: string;
+  kind: string;
+  system: string;
+  max_age_days: number;
+  grace_hours: number;
+  adapter: string | null;
+  destination: string | null;
+  dest_path: string;
+  auto_rotate: boolean;
+  mode: "automatic" | "scheduled" | "manual";
+  created_by: string;
+  updated_at: string;
+}
+
+export interface RotationPolicyInput { kind: string; system: string; max_age_days: number; grace_hours: number; adapter: string | null; destination: string | null; dest_path: string; auto_rotate: boolean }
+export interface RotationAdapterInput { type: RotationAdapterType; config: Record<string, string>; credential?: Record<string, string> }
+
+export interface RotationBulkCounts { total: number; rotate: number; manual: number; blocked: number; in_flight: number }
+export interface RotationBulkPlan { system: string; plan_hash: string; counts: RotationBulkCounts; items: RotationPlanItem[] }
+export interface RotationBulkItem { secret_id: number; name: string; kind: string; action: RotationAction; reason?: string; adapter: string | null; owner: string | null }
+export interface RotationBulk {
+  id: string;
+  system: string;
+  reason: string;
+  plan_hash: string;
+  requested_by: string;
+  created_at: string;
+  counts: RotationBulkCounts;
+  items: RotationBulkItem[];
+  jobs: RotationJob[];
+  progress: Partial<Record<RotationState, number>>;
+}
+
+/** The rotation endpoints. Reads use `useApi` with these paths; every change needs a fresh phishing-resistant sign-in. */
+export const rotation = {
+  paths: {
+    overview: "/rotation/overview",
+    adapters: "/rotation/adapters",
+    policies: "/rotation/policies",
+    jobs: (q = "") => `/rotation/jobs${q}`,
+    job: (id: string) => `/rotation/jobs/${id}`,
+    bulks: "/rotation/bulk",
+    bulk: (id: string) => `/rotation/bulk/${id}`,
+  },
+  plan: (secretIds: number[]) => api<RotationPlanItem[]>("/rotation/plan", { secret_ids: secretIds }),
+  start: (secretId: number) => api<RotationJob>("/rotation/jobs", { secret_id: secretId }),
+  retry: (id: string) => api<RotationJob>(`/rotation/jobs/${id}/retry`, {}),
+  cancel: (id: string) => api<RotationJob>(`/rotation/jobs/${id}/cancel`, {}),
+  putPolicy: (p: RotationPolicyInput) => api<RotationPolicy>("/rotation/policies", p, "PUT"),
+  deletePolicy: (id: string) => api<{ deleted: string }>(`/rotation/policies/${id}`, undefined, "DELETE"),
+  putAdapter: (name: string, a: RotationAdapterInput) => api<RotationAdapter>(`/rotation/adapters/${encodeURIComponent(name)}`, a, "PUT"),
+  deleteAdapter: (name: string) => api<{ deleted: string }>(`/rotation/adapters/${encodeURIComponent(name)}`, undefined, "DELETE"),
+  bulkPlan: (system: string) => api<RotationBulkPlan>("/rotation/bulk/plan", { system }),
+  bulkExecute: (system: string, reason: string, planHash: string) => api<RotationBulk>("/rotation/bulk", { system, reason, plan_hash: planHash }),
 };

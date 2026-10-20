@@ -1,5 +1,5 @@
 import {
-  AppWindow, BadgeCheck, BellRing, Bot, Building2, CalendarClock, ChartLine, ClipboardCheck, FileArchive, FileUp, House, Inbox, KeyRound, Layers, LifeBuoy, LucideIcon, Network, Plug, Plus, Settings, ShieldAlert, ShieldCheck, ShieldHalf, SlidersHorizontal, Timer, UserCheck, UserPlus, Users, UsersRound,
+  AppWindow, BadgeCheck, BellRing, Bot, Building2, CalendarClock, ChartLine, ClipboardCheck, FileArchive, FileUp, House, Inbox, KeyRound, Layers, LifeBuoy, LucideIcon, Network, Plug, Plus, RotateCw, Settings, ShieldAlert, ShieldCheck, ShieldHalf, SlidersHorizontal, Timer, UserCheck, UserPlus, Users, UsersRound,
 } from "lucide-react";
 
 export interface NavPage {
@@ -46,6 +46,14 @@ export const RAIL: RailGroup[] = [
       {
         id: "groups", label: "Groups", icon: UsersRound, path: "/directory/groups", also: ["/directory/entitlements"], keywords: "okta groups teams",
         pages: [{ path: "/directory/entitlements", label: "Entitlements", keywords: "groups permissions aws roles snowflake okta" }],
+      },
+      {
+        id: "rotation", label: "Secret rotation", icon: RotateCw, path: "/rotation/secrets", also: ["/rotation"], keywords: "credentials vault rotate keys tokens api keys aws iam secrets manager hashicorp github deploy key vendor compromised breach",
+        pages: [
+          { path: "/rotation/jobs", label: "Rotation jobs", keywords: "rotate history failed retry verify old credential" },
+          { path: "/rotation/policies", label: "Rotation policies & adapters", keywords: "max age grace period vault aws github adapter" },
+          { path: "/rotation/vendor", label: "Vendor compromised", keywords: "breach bulk rotate integration incident" },
+        ],
       },
       { id: "apps", label: "Applications", icon: AppWindow, path: "/directory/apps", keywords: "apps systems endpoints connectors resources" },
       { id: "ownership", label: "Ownership", icon: UserCheck, path: "/directory/ownership", keywords: "owners backup owner orphaned unowned accountable purpose" },

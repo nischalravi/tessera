@@ -16,7 +16,8 @@ import (
 // designRoutes is the route -> requirement table of the designs, transcribed:
 // docs/design/phase-0-platform-security.md §16.2 (existing routes) and §16.1
 // (session and audit routes), and docs/design/deployment-readiness.md §9
-// (readiness routes) and issue #163 (conditional access). Columns: method, pattern, permission, step-up
+// (readiness routes) and issue #163 (conditional access), and the secret-rotation routes of issue #113 (docs in
+// internal/api/openapi_rotation.json). Columns: method, pattern, permission, step-up
 // (STEP_UP_POLICY or -). "public" marks the allow-list. Routes that neither
 // design names (GET /api/accounts, the API description) are marked with a
 // trailing "#" and the requirement chosen for them in this PR.
@@ -359,6 +360,24 @@ POST   /api/access-drift/{drift_id}/remediate        drift.remediate STEP_UP_POL
 GET    /api/remediation-policies                     drift.read      -
 PUT    /api/remediation-policies                     drift.policy    STEP_UP_POLICY
 DELETE /api/remediation-policies/{policy_id}         drift.policy    STEP_UP_POLICY
+GET    /api/rotation/openapi.json                    auth.self          -  #
+GET    /api/rotation/overview                        graph.read         -
+GET    /api/rotation/adapters                        graph.read         -
+PUT    /api/rotation/adapters/{name}                 secrets.rotate     STEP_UP_POLICY
+DELETE /api/rotation/adapters/{name}                 secrets.rotate     STEP_UP_POLICY
+GET    /api/rotation/policies                        graph.read         -
+PUT    /api/rotation/policies                        secrets.rotate     STEP_UP_POLICY
+DELETE /api/rotation/policies/{id}                   secrets.rotate     STEP_UP_POLICY
+POST   /api/rotation/plan                            graph.read         -  (a dry run: computed data, no provider call)
+GET    /api/rotation/jobs                            graph.read         -
+POST   /api/rotation/jobs                            secrets.rotate     STEP_UP_POLICY
+GET    /api/rotation/jobs/{id}                       graph.read         -
+POST   /api/rotation/jobs/{id}/retry                 secrets.rotate     STEP_UP_POLICY
+POST   /api/rotation/jobs/{id}/cancel                secrets.rotate     STEP_UP_POLICY
+POST   /api/rotation/bulk/plan                       graph.read         -  (a dry run)
+GET    /api/rotation/bulk                            graph.read         -
+POST   /api/rotation/bulk                            secrets.rotate     STEP_UP_POLICY
+GET    /api/rotation/bulk/{id}                       graph.read         -
 GET    /api/config/signing-key                       admin.read      -  # issue #170
 POST   /api/config/export                            config.transport -  #
 GET    /api/config/trusted-signers                   admin.read      -  #
