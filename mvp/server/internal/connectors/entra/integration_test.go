@@ -26,8 +26,8 @@ func TestIntegrationDevTenant(t *testing.T) {
 	}
 	cfg := Config{TenantID: tenant, ClientID: os.Getenv("TESSERA_ENTRA_DEV_CLIENT_ID"),
 		ClientSecret: connsync.NewSecret(os.Getenv("TESSERA_ENTRA_DEV_CLIENT_SECRET")), EmitIdentities: true, SignInActivity: true}
-	rt := connsync.RuntimeFromEnv(os.Getenv)
-	hc, err := connsync.NewHTTPClient(rt, safehttp.Options{})
+	rt := connsync.Runtime{Env: "prod"}
+	hc, err := safehttp.NewForTest(t, safehttp.Options{Env: "prod", Timeout: 30 * time.Second, MaxBodyBytes: 16 << 20})
 	if err != nil {
 		t.Fatal(err)
 	}

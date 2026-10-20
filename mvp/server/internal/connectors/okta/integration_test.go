@@ -35,8 +35,8 @@ func TestIntegrationDevOrg(t *testing.T) {
 		}
 		cfg.PrivateKey = k
 	}
-	rt := connsync.RuntimeFromEnv(os.Getenv)
-	hc, err := connsync.NewHTTPClient(rt, safehttp.Options{})
+	rt := connsync.Runtime{Env: "prod"}
+	hc, err := safehttp.NewForTest(t, safehttp.Options{Env: "prod", Timeout: 30 * time.Second, MaxBodyBytes: 16 << 20})
 	if err != nil {
 		t.Fatal(err)
 	}

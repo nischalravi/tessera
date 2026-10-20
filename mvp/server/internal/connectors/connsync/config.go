@@ -4,17 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
-	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 )
 
 // Runtime is what a connector needs from the process configuration: the
@@ -24,42 +21,16 @@ type Runtime struct {
 	AllowLoopback bool
 }
 
-// RuntimeFromEnv reads TESSERA_ENV and TESSERA_OUTBOUND_ALLOW_LOOPBACK the way
-// internal/config does (config.Load has already refused loopback in prod).
-// Anything but "prod" is treated as dev-like for safehttp, which only knows dev
-// and prod; "test" has the dev rules.
-func RuntimeFromEnv(getenv func(string) string) Runtime {
-	r := Runtime{Env: config.Dev}
-	if getenv("TESSERA_ENV") == config.Prod {
-		r.Env = config.Prod
-		return r
+// RuntimeFromConfig takes the environment and the loopback exception from the
+// configuration config.Load validated (config.Prod refuses the exception), the
+// same source safehttp.ForConfig uses. Anything but "prod" has the dev rules;
+// a Config that Load did not return gets the production rules.
+func RuntimeFromConfig(c *config.Config) Runtime {
+	env, loopback, ok := c.Outbound()
+	if !ok || env != config.Dev {
+		return Runtime{Env: config.Prod}
 	}
-	switch strings.ToLower(getenv("TESSERA_OUTBOUND_ALLOW_LOOPBACK")) {
-	case "1", "true", "yes":
-		r.AllowLoopback = true
-	}
-	return r
-}
-
-// Defaults for connector clients: pages are larger and slower than the
-// 5 s / 512 KiB defaults meant for discovery documents.
-const (
-	DefaultTimeout      = 30 * time.Second
-	DefaultMaxBodyBytes = 16 << 20
-)
-
-// NewHTTPClient returns the SSRF-guarded client every connector must use. o
-// carries the test hooks (RootCAs, Resolver) and limits; Env and
-// AllowLoopback come from rt.
-func NewHTTPClient(rt Runtime, o safehttp.Options) (*http.Client, error) {
-	o.Env, o.AllowLoopback = rt.Env, rt.AllowLoopback
-	if o.Timeout <= 0 {
-		o.Timeout = DefaultTimeout
-	}
-	if o.MaxBodyBytes <= 0 {
-		o.MaxBodyBytes = DefaultMaxBodyBytes
-	}
-	return safehttp.New(o)
+	return Runtime{Env: config.Dev, AllowLoopback: loopback}
 }
 
 var domainRE = regexp.MustCompile(`^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{1,59})$`)

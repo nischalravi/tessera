@@ -217,7 +217,7 @@ func (f *fake) checkAssertion(r *http.Request) {
 func (f *fake) connector(cfg Config) *Connector {
 	f.t.Helper()
 	cfg.OrgURL = f.srv.URL
-	c, err := New(cfg, connsynctest.Runtime, f.srv.Client(f.t, 0), func() time.Time { return now0 })
+	c, err := New(cfg, connsynctest.Runtime, testClient(f.t, f.srv, 0), func() time.Time { return now0 })
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -479,7 +479,7 @@ func TestMalformedAndOversizedPages(t *testing.T) {
 		f.body["/api/v1/users"] = `[{"id":"00u1averyexample01","profile":{"title":"` + strings.Repeat("x", 8192) + `"}}]`
 		cfg := ssws()
 		cfg.OrgURL = f.srv.URL
-		c, err := New(cfg, connsynctest.Runtime, f.srv.Client(t, 2048), func() time.Time { return now0 })
+		c, err := New(cfg, connsynctest.Runtime, testClient(t, f.srv, 2048), func() time.Time { return now0 })
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -765,7 +765,7 @@ func TestStreamEventsStopsWhenYieldFails(t *testing.T) {
 // ---------------------------------------------------------------- configuration
 
 func TestNewValidatesConfiguration(t *testing.T) {
-	hc, err := connsync.NewHTTPClient(connsync.Runtime{Env: "prod"}, safehttp.Options{})
+	hc, err := safehttp.NewForTest(t, safehttp.Options{Env: "prod"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -807,7 +807,7 @@ func TestFromEnv(t *testing.T) {
 	env := func(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
 	good := map[string]string{"TESSERA_OKTA_ORG_URL": "https://example.okta.com", "TESSERA_OKTA_API_TOKEN": "env:OKTA_TOKEN",
 		"OKTA_TOKEN": "tok", "TESSERA_ENV": "prod"}
-	c, err := FromEnv(env(good), now0)
+	c, err := FromEnv(env(good), now0, prodRT, prodClient(t))
 	if err != nil || c.System() != "okta" || c.TypeName() != "OktaConnector" || c.DisplayName() != "Okta" {
 		t.Fatalf("FromEnv = %v, %v", c, err)
 	}
@@ -817,7 +817,7 @@ func TestFromEnv(t *testing.T) {
 	oauth := map[string]string{"TESSERA_OKTA_ORG_URL": "https://example.okta.com", "TESSERA_OKTA_CLIENT_ID": "0oa1",
 		"TESSERA_OKTA_PRIVATE_KEY": "env:KEY", "KEY": pemKey, "TESSERA_OKTA_KEY_ID": "k", "TESSERA_OKTA_EMIT_IDENTITIES": "false",
 		"TESSERA_OKTA_MAX_INCREMENTAL_AGE": "6h", "TESSERA_ENV": "prod"}
-	c, err = FromEnv(env(oauth), now0)
+	c, err = FromEnv(env(oauth), now0, prodRT, prodClient(t))
 	if err != nil || c.(*Connector).cfg.EmitIdentities || c.(*Connector).cfg.MaxIncrementalAge != 6*time.Hour || c.(*Connector).tok == nil {
 		t.Fatalf("oauth FromEnv = %v, %v", c, err)
 	}
@@ -833,7 +833,7 @@ func TestFromEnv(t *testing.T) {
 		for k, v := range mod {
 			m[k] = v
 		}
-		if _, err := FromEnv(env(m), now0); err == nil {
+		if _, err := FromEnv(env(m), now0, prodRT, prodClient(t)); err == nil {
 			t.Errorf("%s: FromEnv succeeded", name)
 		} else if strings.Contains(err.Error(), "literal-token") {
 			t.Errorf("%s: error echoes the literal credential: %v", name, err)
@@ -880,4 +880,27 @@ func TestValidID(t *testing.T) {
 			t.Errorf("validID(%q) = %v", id, !ok)
 		}
 	}
+}
+
+// testClient is a safehttp test client that reaches srv.
+func testClient(t testing.TB, srv *connsynctest.Server, maxBody int64) *http.Client {
+	t.Helper()
+	hc, err := safehttp.NewForTest(t, srv.Options(maxBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return hc
+}
+
+// prodRT is the production runtime; prodClient is a production-rules safehttp
+// test client (no loopback, https, default ports).
+var prodRT = connsync.Runtime{Env: "prod"}
+
+func prodClient(t testing.TB) *http.Client {
+	t.Helper()
+	hc, err := safehttp.NewForTest(t, safehttp.Options{Env: "prod"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return hc
 }

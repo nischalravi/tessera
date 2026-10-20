@@ -69,17 +69,14 @@ func (s *Server) Count(prefix string) int {
 // reach the server.
 var Runtime = connsync.Runtime{Env: config.Dev, AllowLoopback: true}
 
-// Client returns a safehttp client that trusts the server's certificate and
-// reads at most maxBody bytes per response (0: the connector default).
-func (s *Server) Client(t testing.TB, maxBody int64) *http.Client {
-	t.Helper()
+// Options returns safehttp options for a client that trusts the server's
+// certificate, reads at most maxBody bytes per response (0: the safehttp
+// default) and reaches the loopback server (the dev loopback exception).
+// Tests pass them to safehttp.NewForTest, which only a _test.go file may call.
+func (s *Server) Options(maxBody int64) safehttp.Options {
 	pool := x509.NewCertPool()
 	pool.AddCert(s.Certificate())
-	hc, err := connsync.NewHTTPClient(Runtime, safehttp.Options{RootCAs: pool, MaxBodyBytes: maxBody, Timeout: 10 * time.Second})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return hc
+	return safehttp.Options{Env: config.Dev, AllowLoopback: true, RootCAs: pool, MaxBodyBytes: maxBody, Timeout: 10 * time.Second}
 }
 
 // Fixture reads testdata/<name> (relative to the calling test's package) and

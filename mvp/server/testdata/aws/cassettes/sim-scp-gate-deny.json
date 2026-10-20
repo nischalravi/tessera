@@ -1,0 +1,50 @@
+{
+  "id": "sim-scp-gate-deny",
+  "description": "The account-level SCP allows only ec2: the request is denied by the organization.",
+  "synthetic": true,
+  "spec": {
+    "id": "sim-scp-gate-deny",
+    "stratum": "S2",
+    "fixture_version": "synthetic-1",
+    "principal_arn": "arn:aws:iam::111111111111:user/alice",
+    "policy_source_arn": "",
+    "action": "s3:GetObject",
+    "resource": "arn:aws:s3:::tsr-bkt/k",
+    "identity": [
+      "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"s3:GetObject\",\"Resource\":\"arn:aws:s3:::tsr-bkt/*\"}]}"
+    ],
+    "boundary": null,
+    "scp_levels": [
+      [
+        "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"*\",\"Resource\":\"*\"}]}"
+      ],
+      [
+        "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"ec2:*\",\"Resource\":\"*\"}]}"
+      ]
+    ],
+    "resource_policy": "",
+    "resource_owner": "",
+    "context": null,
+    "exclusions": null,
+    "features": null
+  },
+  "iam_cassette": {
+    "fixture_version": "synthetic-1",
+    "entries": [
+      {
+        "key": "49433e8401c2dd2ff53279a75c4cc7723537ae71561c9dc6768589c2c209aee4",
+        "request": "POST iam.amazonaws.com/\nAction=SimulateCustomPolicy\nActionNames.member.1=s3:GetObject\nContextEntries.member.1.ContextKeyName=aws:PrincipalArn\nContextEntries.member.1.ContextKeyType=string\nContextEntries.member.1.ContextKeyValues.member.1=arn:aws:iam::111111111111:user/alice\nMaxItems=1000\nOrderedOrganizationPolicyInputList.member.1.ServiceControlPolicyInputList.member.1={\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"*\",\"Resource\":\"*\"}]}\nOrderedOrganizationPolicyInputList.member.2.ServiceControlPolicyInputList.member.1={\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"ec2:*\",\"Resource\":\"*\"}]}\nPolicyInputList.member.1={\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"s3:GetObject\",\"Resource\":\"arn:aws:s3:::tsr-bkt/*\"}]}\nResourceArns.member.1=arn:aws:s3:::tsr-bkt/k\nVersion=2010-05-08\n",
+        "responses": [
+          {
+            "status": 200,
+            "headers": {
+              "Content-Type": "text/xml"
+            },
+            "body": "<SimulateCustomPolicyResponse xmlns=\"https://iam.amazonaws.com/doc/2010-05-08/\"><SimulateCustomPolicyResult><EvaluationResults><member><EvalActionName>s3:GetObject</EvalActionName><EvalResourceName>arn:aws:s3:::tsr-bkt/k</EvalResourceName><EvalDecision>implicitDeny</EvalDecision><MatchedStatements></MatchedStatements><MissingContextValues></MissingContextValues><OrganizationsDecisionDetail><AllowedByOrganizations>false</AllowedByOrganizations></OrganizationsDecisionDetail></member></EvaluationResults><IsTruncated>false</IsTruncated></SimulateCustomPolicyResult><ResponseMetadata><RequestId>00000000-0000-0000-0000-000000000000</RequestId></ResponseMetadata></SimulateCustomPolicyResponse>"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {}
+}

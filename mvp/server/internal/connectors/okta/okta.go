@@ -83,7 +83,8 @@ type Connector struct {
 	maxEventPages int
 }
 
-// New builds a connector. hc must come from connsync.NewHTTPClient (safehttp).
+// New builds a connector. hc must be the server's shared outbound client
+// (safehttp.ForConfig); the connector adds the org URL's explicit port to it.
 func New(cfg Config, rt connsync.Runtime, hc *http.Client, now func() time.Time) (*Connector, error) {
 	base, err := connsync.ParseBaseURL(cfg.OrgURL, rt)
 	if err != nil {
@@ -104,6 +105,7 @@ func New(cfg Config, rt connsync.Runtime, hc *http.Client, now func() time.Time)
 	if hc == nil {
 		return nil, errors.New("okta: an internal/safehttp client is required")
 	}
+	hc = safehttp.WithConfiguredPorts(hc, cfg.OrgURL)
 	if now == nil {
 		now = time.Now
 	}
@@ -140,7 +142,10 @@ func New(cfg Config, rt connsync.Runtime, hc *http.Client, now func() time.Time)
 //	TESSERA_OKTA_API_TOKEN          reference to an SSWS token (instead of OAuth)
 //	TESSERA_OKTA_EMIT_IDENTITIES    true (default) or false
 //	TESSERA_OKTA_MAX_INCREMENTAL_AGE  duration, default 24h
-func FromEnv(getenv func(string) string, now time.Time) (connectors.Connector, error) {
+//
+// rt and hc come from the validated server configuration (connsync.RuntimeFromConfig,
+// safehttp.ForConfig); FromEnv never builds a client.
+func FromEnv(getenv func(string) string, now time.Time, rt connsync.Runtime, hc *http.Client) (connectors.Connector, error) {
 	cfg := Config{OrgURL: getenv("TESSERA_OKTA_ORG_URL"), ClientID: getenv("TESSERA_OKTA_CLIENT_ID"),
 		KeyID: getenv("TESSERA_OKTA_KEY_ID"), EmitIdentities: true}
 	if v := getenv("TESSERA_OKTA_EMIT_IDENTITIES"); v != "" {
@@ -167,11 +172,6 @@ func FromEnv(getenv func(string) string, now time.Time) (connectors.Connector, e
 		if cfg.APIToken, err = connsync.ResolveSecret(ref, getenv); err != nil {
 			return nil, fmt.Errorf("TESSERA_OKTA_API_TOKEN: %w", err)
 		}
-	}
-	rt := connsync.RuntimeFromEnv(getenv)
-	hc, err := connsync.NewHTTPClient(rt, safehttp.Options{})
-	if err != nil {
-		return nil, err
 	}
 	return New(cfg, rt, hc, func() time.Time { return time.Now().UTC() })
 }

@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"strings"
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
@@ -37,6 +38,13 @@ var (
 		SELECT `+identityCols+` FROM identities i WHERE i.tenant_id = @tenant AND i.id = @id`)
 	identitiesByXID = tq("identities.by_external_id", `
 		SELECT `+identityCols+` FROM identities i WHERE i.tenant_id = @tenant AND i.external_id = @external_id`)
+	// An empty @email or @external_id matches nothing. lower() is SQLite's (ASCII).
+	identitiesActiveMatch = tq("identities.active_match", `
+		SELECT `+identityCols+` FROM identities i
+		WHERE i.tenant_id = @tenant AND i.status = 'active'
+			AND ((@email <> '' AND lower(trim(i.email)) = lower(@email))
+				OR (@external_id <> '' AND i.external_id = @external_id))
+		ORDER BY i.id LIMIT 1`)
 	identitiesOwnedBy = tq("identities.owned_by", `
 		SELECT `+identityCols+` FROM identities i WHERE i.tenant_id = @tenant AND i.owner_id = @owner_id ORDER BY i.id`)
 	identitiesManagedBy = tq("identities.managed_by", `
@@ -49,8 +57,9 @@ var (
 		ON CONFLICT (tenant_id, external_id) DO UPDATE SET name = excluded.name, email = excluded.email,
 			type = excluded.type, department = excluded.department, title = excluded.title,
 			-- Tessera-side decisions win over the connector: a merged identity stays merged
-			-- until unmerged (repo_correlation.go), a terminated one stays terminated (UAT #134)
-			status = CASE WHEN identities.status IN ('merged', 'terminated') THEN identities.status ELSE excluded.status END,
+			-- until unmerged (repo_correlation.go), a terminated one stays terminated (UAT #134),
+			-- and a disabled one stays disabled until Enable (repo_identity_disables.go)
+			status = CASE WHEN identities.status IN ('merged', 'terminated', 'disabled') THEN identities.status ELSE excluded.status END,
 			description = excluded.description, hired_at = excluded.hired_at,
 			terminated_at = CASE WHEN identities.status = 'terminated' THEN identities.terminated_at ELSE excluded.terminated_at END`)
 	identitiesInsert = tq("identities.insert", `
@@ -59,14 +68,20 @@ var (
 		VALUES (@tenant, @external_id, @name, @email, @type, @department, @title, @status, @manager_id,
 			@owner_id, @source, @description, @hired_at, @terminated_at, @created_at)`)
 	identitiesSetRefsByXID = tq("identities.set_manager_owner_by_external_id", `
-		UPDATE identities SET manager_id = @manager_id, owner_id = @owner_id
-		WHERE tenant_id = @tenant AND external_id = @external_id`)
+		UPDATE identities SET manager_id = @manager_id,
+			owner_id = CASE WHEN EXISTS (SELECT 1 FROM ownerships o WHERE o.tenant_id = @tenant
+				AND o.object_kind = 'identity' AND o.object_key = CAST(identities.id AS TEXT)) THEN owner_id ELSE @owner_id END
+		WHERE identities.tenant_id = @tenant AND identities.external_id = @external_id`)
 	identitiesSetOwner = tq("identities.set_owner", `
 		UPDATE identities SET owner_id = @owner_id WHERE tenant_id = @tenant AND id = @id`)
 	identitiesSetManager = tq("identities.set_manager", `
 		UPDATE identities SET manager_id = @manager_id WHERE tenant_id = @tenant AND id = @id`)
 	identitiesTerminate = tq("identities.terminate", `
 		UPDATE identities SET status = 'terminated', terminated_at = @at WHERE tenant_id = @tenant AND id = @id`)
+	identitiesTerminateSessions = tq("identities.terminate_sessions", `
+		UPDATE sessions SET status = 'revoked', revoked_at = @rat, revoked_reason = @reason
+		WHERE sessions.tenant_id = @tenant AND sessions.status = 'active' AND sessions.user_id IN (
+			SELECT u.id FROM platform_users u WHERE u.tenant_id = @tenant AND u.identity_id = @id)`)
 	identitiesSetDeptTitle = tq("identities.set_department_title", `
 		UPDATE identities SET department = @department, title = @title WHERE tenant_id = @tenant AND id = @id`)
 )
@@ -110,6 +125,16 @@ func (tx *TenantTx) Identity(id int64) (*Identity, error) {
 // IdentityByExternalID returns one identity by external id.
 func (tx *TenantTx) IdentityByExternalID(xid string) (*Identity, error) {
 	return one(tx, scanIdentity, identitiesByXID, sql.Named("external_id", xid))
+}
+
+// ActiveIdentityMatching returns the lowest-id active identity whose email
+// equals email (case-insensitive, trimmed) or whose external (HR) id equals
+// externalID; an empty argument matches nothing. ErrNotFound if none. Called
+// in the write transaction that then inserts, it is the joiner uniqueness
+// guard: writes are serialized, so no second insert can slip between the two.
+func (tx *TenantTx) ActiveIdentityMatching(email, externalID string) (*Identity, error) {
+	return one(tx, scanIdentity, identitiesActiveMatch, sql.Named("email", strings.TrimSpace(email)),
+		sql.Named("external_id", strings.TrimSpace(externalID)))
 }
 
 // IdentitiesOwnedBy returns the identities whose owner is ownerID, in id order.
@@ -163,6 +188,7 @@ func (tx *TenantTx) InsertIdentity(i *Identity) (int64, error) {
 }
 
 // SetIdentityRefsByExternalID sets manager and owner of the identity with the external id.
+// An owner set in Tessera (an ownerships row, #167) is kept.
 func (tx *TenantTx) SetIdentityRefsByExternalID(xid string, managerID, ownerID *int64) error {
 	_, err := tx.exec(identitiesSetRefsByXID, sql.Named("manager_id", IP(managerID)), sql.Named("owner_id", IP(ownerID)),
 		sql.Named("external_id", xid))
@@ -181,9 +207,22 @@ func (tx *TenantTx) SetIdentityManager(id int64, managerID *int64) error {
 	return err
 }
 
-// TerminateIdentity marks an identity terminated at.
+// RevokedIdentityTerminated is the revoked_reason TerminateIdentity writes on
+// the sessions of the Tessera users linked to the identity (#331).
+const RevokedIdentityTerminated = "identity_terminated"
+
+// TerminateIdentity marks an identity terminated at and, in the same
+// transaction, revokes every active session of the Tessera users linked to
+// it, whatever their user status (#331). Every leaver path (HRIS event, end
+// date, lifecycle, guest sponsorship) goes through here, so none can leave a
+// terminated person signed in. The sign-in paths and the session middleware
+// then refuse the user (auth.IdentityInactive).
 func (tx *TenantTx) TerminateIdentity(id int64, at time.Time) error {
-	_, err := tx.exec(identitiesTerminate, sql.Named("at", T(at)), sql.Named("id", id))
+	if _, err := tx.exec(identitiesTerminate, sql.Named("at", T(at)), sql.Named("id", id)); err != nil {
+		return err
+	}
+	_, err := tx.exec(identitiesTerminateSessions, sql.Named("rat", RT(at)),
+		sql.Named("reason", RevokedIdentityTerminated), sql.Named("id", id))
 	return err
 }
 

@@ -6,17 +6,30 @@
 // crypto/cipher, crypto/rand, crypto/sha256, crypto/subtle and crypto/hkdf.
 // Nothing here is a home-made primitive.
 //
-// Sealed format (version 1):
+// Sealed format:
 //
-//	0x01 || nonce (12 random bytes) || AES-256-GCM ciphertext and 16-byte tag
+//	version (1 byte) || nonce (12 random bytes) || AES-256-GCM ciphertext and 16-byte tag
+//
+// Version 2 (written by Seal) encrypts under a sealing key derived from the
+// KEK, HKDF-SHA256(KEK, info "tessera/seal/v1"), so the KEK itself is only
+// ever an HKDF input (key separation: DeriveKey's subkeys and the sealing
+// key are all distinct HKDF outputs, and DeriveKey refuses the "seal/"
+// labels). Version 1, written before, used the raw KEK as the AES key; Open
+// still reads it, so existing databases keep working.
+//
+// Migration from version 1 is lazy: every new Seal writes version 2 (the
+// key rotation of internal/keys replaces tenant keys within 30 days and
+// re-seals nothing old), and Reseal rewrites one value in place for a caller
+// that is updating the row anyway. Version 1 support can be removed once a
+// re-seal CLI (with KEK rotation, §21) has rewritten every sealed column.
 //
 // The additional authenticated data is the version byte followed by the
 // caller's AAD, so a blob cannot be moved to another tenant, table, column or
-// row (see AAD) and the version byte cannot be changed. A random 96-bit nonce
-// per Seal is safe for well under 2^32 seals per KEK, far above what sealing
-// keys and client secrets needs. KEK rotation (and KMS envelope encryption)
-// arrives with production key custody (§21); the version byte leaves room for
-// it.
+// row (see AAD) and the version byte cannot be changed (a changed version
+// also selects another key). A random 96-bit nonce per Seal is safe for well
+// under 2^32 seals per KEK, far above what sealing keys and client secrets
+// needs. KEK rotation (and KMS envelope encryption) arrives with production
+// key custody (§21); the version byte leaves room for it.
 package seal
 
 import (
@@ -39,10 +52,19 @@ import (
 const KeySize = 32
 
 const (
-	version1  byte = 1
-	nonceSize      = 12
-	overhead       = 1 + nonceSize + 16
+	// Version1 is the legacy format: AES-256-GCM under the raw KEK (read only).
+	Version1 byte = 1
+	// Version2 is the current format: AES-256-GCM under SealKeyInfo's HKDF output.
+	Version2 byte = 2
+
+	nonceSize = 12
+	overhead  = 1 + nonceSize + 16
 )
+
+// SealKeyInfo is the HKDF info of the version 2 sealing key. DeriveKey labels
+// are prefixed "tessera/" and may not start with "seal", so no subkey can
+// equal it.
+const SealKeyInfo = "tessera/seal/v1"
 
 var (
 	// ErrKEK is returned by New for a key that is not KeySize bytes or is all
@@ -56,8 +78,9 @@ var (
 
 // Sealer seals and opens values under one KEK. It is safe for concurrent use.
 type Sealer struct {
-	aead cipher.AEAD
-	kek  []byte // kept only for DeriveKey
+	v1  cipher.AEAD // raw KEK: opens legacy version 1 values only
+	v2  cipher.AEAD // HKDF(KEK, SealKeyInfo): seals and opens version 2
+	kek []byte      // kept only as the HKDF input of DeriveKey
 }
 
 // New returns a Sealer for kek, which must be KeySize random bytes. The
@@ -67,15 +90,28 @@ func New(kek []byte) (*Sealer, error) {
 		return nil, ErrKEK
 	}
 	k := append([]byte(nil), kek...)
-	block, err := aes.NewCipher(k)
+	v1, err := gcm(k)
 	if err != nil {
 		return nil, err
 	}
-	aead, err := cipher.NewGCM(block)
+	sk, err := hkdf.Key(sha256.New, k, nil, SealKeyInfo, KeySize)
 	if err != nil {
 		return nil, err
 	}
-	return &Sealer{aead: aead, kek: k}, nil
+	defer clear(sk)
+	v2, err := gcm(sk)
+	if err != nil {
+		return nil, err
+	}
+	return &Sealer{v1: v1, v2: v2, kek: k}, nil
+}
+
+func gcm(key []byte) (cipher.AEAD, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	return cipher.NewGCM(block)
 }
 
 // String never reveals the key.
@@ -91,36 +127,77 @@ func (s *Sealer) Seal(plaintext, aad []byte) ([]byte, error) {
 		return nil, errors.New("seal: Seal needs an AAD")
 	}
 	out := make([]byte, 1+nonceSize, overhead+len(plaintext))
-	out[0] = version1
+	out[0] = Version2
 	if _, err := rand.Read(out[1:]); err != nil {
 		return nil, err
 	}
-	return s.aead.Seal(out, out[1:], plaintext, additional(aad)), nil
+	return s.v2.Seal(out, out[1:], plaintext, additional(Version2, aad)), nil
 }
 
-// Open decrypts a value produced by Seal with the same aad. Any mismatch
-// returns ErrOpen.
+// Open decrypts a value produced by Seal (either version) with the same
+// aad. Any mismatch returns ErrOpen.
 func (s *Sealer) Open(sealed, aad []byte) ([]byte, error) {
-	if len(aad) == 0 || len(sealed) < overhead || sealed[0] != version1 {
+	if len(aad) == 0 || len(sealed) < overhead {
+		return nil, ErrOpen
+	}
+	var aead cipher.AEAD
+	switch sealed[0] {
+	case Version2:
+		aead = s.v2
+	case Version1:
+		aead = s.v1
+	default:
 		return nil, ErrOpen
 	}
 	nonce, ct := sealed[1:1+nonceSize], sealed[1+nonceSize:]
-	pt, err := s.aead.Open(nil, nonce, ct, additional(aad))
+	pt, err := aead.Open(nil, nonce, ct, additional(sealed[0], aad))
 	if err != nil {
 		return nil, ErrOpen
 	}
 	return pt, nil
 }
 
-func additional(aad []byte) []byte {
-	return append([]byte{version1}, aad...)
+// Reseal returns sealed rewritten in the current version, and whether it
+// changed. A current-version value is returned as is after it opens; any
+// value that does not open returns ErrOpen. It is the lazy migration step
+// for a caller that is writing the row anyway.
+func (s *Sealer) Reseal(sealed, aad []byte) ([]byte, bool, error) {
+	pt, err := s.Open(sealed, aad)
+	if err != nil {
+		return nil, false, err
+	}
+	defer clear(pt)
+	if sealed[0] == Version2 {
+		return sealed, false, nil
+	}
+	out, err := s.Seal(pt, aad)
+	if err != nil {
+		return nil, false, err
+	}
+	return out, true, nil
+}
+
+// Version returns the format version byte of a sealed value (0 if empty).
+func Version(sealed []byte) byte {
+	if len(sealed) == 0 {
+		return 0
+	}
+	return sealed[0]
+}
+
+func additional(version byte, aad []byte) []byte {
+	return append([]byte{version}, aad...)
 }
 
 // DeriveKey derives an n-byte subkey from the KEK with HKDF-SHA256 and a
-// fixed, distinct label per use (for example "dpop-nonce", §10.5).
+// fixed, distinct label per use (for example "dpop-nonce", §10.5). Labels
+// starting with "seal" are reserved for the sealing key (SealKeyInfo).
 func (s *Sealer) DeriveKey(label string, n int) ([]byte, error) {
 	if label == "" {
 		return nil, errors.New("seal: DeriveKey needs a label")
+	}
+	if strings.HasPrefix(label, "seal") {
+		return nil, fmt.Errorf("seal: DeriveKey label %q is reserved for the sealing key", label)
 	}
 	return hkdf.Key(sha256.New, s.kek, nil, "tessera/"+label, n)
 }

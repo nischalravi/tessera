@@ -3,14 +3,18 @@ package containment
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -125,7 +129,7 @@ func advancing() func() time.Time {
 
 func testService(t *testing.T) (*Service, *[]time.Duration) {
 	t.Helper()
-	hc, err := safehttp.New(safehttp.Options{Env: config.Dev, AllowLoopback: true})
+	hc, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Dev, AllowLoopback: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,7 +351,7 @@ func TestTargetIDsAreValidated(t *testing.T) {
 
 // A provider call outside the SSRF guard is refused (private address, no loopback exception).
 func TestSafeHTTPGuardApplies(t *testing.T) {
-	hc, err := safehttp.New(safehttp.Options{Env: config.Prod})
+	hc, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Prod})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -357,6 +361,52 @@ func TestSafeHTTPGuardApplies(t *testing.T) {
 	rep := svc.Run(context.Background(), &Job{Items: []Item{it}})
 	if rep.OK || rep.Steps[0].Outcome != OutcomeFailed {
 		t.Errorf("%+v", rep.Steps[0])
+	}
+}
+
+type oneHost map[string]netip.Addr
+
+func (h oneHost) LookupNetIP(_ context.Context, _, host string) ([]netip.Addr, error) {
+	if a, ok := h[host]; ok {
+		return []netip.Addr{a}, nil
+	}
+	return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
+}
+
+// TestConfiguredBaseURLPort (L6): safehttp allows only 443 and 8443, but a
+// provider connection whose base_url names another port reaches it: the
+// port comes from the connection's configuration, for that host only.
+func TestConfiguredBaseURLPort(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer srv.Close()
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hc, err := safehttp.NewForTest(t, safehttp.Options{Env: config.Dev, AllowLoopback: true,
+		RootCAs:  srv.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs,
+		Resolver: oneHost{"okta.example.com": netip.MustParseAddr("127.0.0.1")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the base client alone refuses the port
+	if _, err := safehttp.Get(context.Background(), hc, "https://okta.example.com:"+u.Port()+"/"); !errors.Is(err, safehttp.ErrPort) {
+		t.Fatalf("base client: %v, want ErrPort", err)
+	}
+	svc := &Service{HTTP: hc, Clock: func() time.Time { return t0 }}
+	it := Item{Action: ActionRevokeSessions, AccountID: 1, Target: targets[Okta], Connection: "c",
+		cred: &Credential{BaseURL: "https://okta.example.com:" + u.Port(), Token: "t"}}
+	rep := svc.Run(context.Background(), &Job{Items: []Item{it}})
+	if hits.Load() == 0 {
+		t.Errorf("the configured base_url port was not reached: %+v", rep.Steps)
 	}
 }
 

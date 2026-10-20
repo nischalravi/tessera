@@ -47,11 +47,36 @@ GET    /api/reviews/campaigns                        graph.read      -
 POST   /api/reviews/campaigns                        reviews.manage  -
 GET    /api/reviews/campaigns/{campaign_id}          graph.read      -
 POST   /api/reviews/items/{item_id}/decision         reviews.decide  STEP_UP_POLICY
+GET    /api/reviews/schedules                        graph.read      -  # issue #166
+POST   /api/reviews/schedules                        reviews.manage  -  # issue #166
+PUT    /api/reviews/schedules/{schedule_id}          reviews.manage  -  # issue #166
+POST   /api/reviews/schedules/{schedule_id}/run      reviews.manage  -  # issue #166
 GET    /api/hris/events                              graph.read      -
 POST   /api/hris/events                              hris.simulate_event -
 GET    /api/hris/events/{event_id}/plan              graph.read      -
 POST   /api/hris/events/{event_id}/execute           hris.execute    STEP_UP_POLICY
 GET    /api/jml/leaver-plan/{identity_id}            graph.read      -
+GET    /api/siem/sinks                               siem.read       -  # issue #169
+POST   /api/siem/sinks                               siem.configure  STEP_UP_POLICY  # issue #169
+PUT    /api/siem/sinks/{sink_id}                     siem.configure  STEP_UP_POLICY  # issue #169
+POST   /api/siem/sinks/{sink_id}/rewind              siem.configure  -  # issue #169
+POST   /api/siem/sinks/{sink_id}/test                siem.configure  -  # issue #169
+GET    /api/siem/sinks/{sink_id}/dead-letters        siem.read       -  # issue #169
+GET    /api/alerts                                   alerts.read     -  # issue #168
+GET    /api/alerts/summary                           alerts.read     -  # issue #168
+GET    /api/alerts/rules                             alerts.read     -  # issue #168
+PUT    /api/alerts/rules/{rule_id}                   alerts.configure -  # issue #168
+GET    /api/alerts/channels                          alerts.configure -  # issue #168
+POST   /api/alerts/channels                          alerts.configure STEP_UP_POLICY  # issue #168
+PUT    /api/alerts/channels/{channel_id}             alerts.configure STEP_UP_POLICY  # issue #168
+POST   /api/alerts/channels/{channel_id}/test        alerts.configure -  # issue #168
+GET    /api/alerts/{alert_id}                        alerts.read     -  # issue #168
+POST   /api/alerts/{alert_id}/acknowledge            alerts.manage   -  # issue #168
+POST   /api/alerts/{alert_id}/resolve                alerts.manage   -  # issue #168
+POST   /api/alerts/{alert_id}/assign                 alerts.manage   -  # issue #168
+GET    /api/ownership                                graph.read      -  # issue #167
+PUT    /api/ownership/{kind}/{object_key}            ownership.manage -  # issue #167
+POST   /api/ownership/bulk                           ownership.manage -  # issue #167
 GET    /openapi.json                                 auth.self       -  #
 GET    /docs                                         auth.self       -  #
 GET    /docs/oauth2-redirect                         auth.self       -  #
@@ -85,11 +110,97 @@ POST   /api/accounts/{account_id}/not-person         identities.correlate STEP_U
 DELETE /api/accounts/{account_id}/link               identities.correlate STEP_UP_POLICY  # issue #160
 POST   /api/identities/{identity_id}/merge           identities.merge STEP_UP_POLICY  # issue #160
 GET    /api/identity-merges                          graph.read      -  # issue #160
+GET    /api/identities/{identity_id}/affiliations    graph.read      -  # issue #64
+GET    /api/identities/{identity_id}/identifiers     graph.read      -  # issue #64
+POST   /api/identities/{identity_id}/affiliations    identities.affiliate STEP_UP_POLICY  # issue #64
+POST   /api/affiliations/{affiliation_id}/end        identities.affiliate STEP_UP_POLICY  # issue #64
 POST   /api/identity-merges/{merge_id}/unmerge       identities.merge STEP_UP_POLICY  # issue #160
+GET    /api/catalog                                  requests.create -  # issue #164 (?all=1: catalog.manage in the handler)
+PUT    /api/catalog/items/{group_id}                 catalog.manage  STEP_UP_POLICY  # issue #164
+POST   /api/requests                                 requests.create -  # issue #164 (others: requests.create_for_others in the handler)
+GET    /api/requests                                 requests.create -  # issue #164 (scope=pending|all: requests.decide or graph.read)
+GET    /api/requests/{request_id}                    requests.create -  # issue #164
+POST   /api/requests/{request_id}/approve            requests.create STEP_UP_POLICY  # issue #164 (#165: the line's routing decides who)
+POST   /api/requests/{request_id}/deny               requests.create -  # issue #164 (#165: the line's routing decides who)
+POST   /api/requests/{request_id}/cancel             requests.create -  # issue #164 (the requester)
+POST   /api/requests/{request_id}/remove             requests.create -  # issue #164 (requests.decide, or the beneficiary)
+GET    /api/roles                                    requests.create -  # issue #161
+POST   /api/roles                                    roles.manage    STEP_UP_POLICY  # issue #161
+GET    /api/roles/{role_id}                          graph.read      -  # issue #161
+PUT    /api/roles/{role_id}                          roles.manage    STEP_UP_POLICY  # issue #161
+GET    /api/roles/{role_id}/versions                 graph.read      -  # issue #161
+GET    /api/roles/{role_id}/drift                    graph.read      -  # issue #161
+POST   /api/roles/{role_id}/retire                   roles.manage    STEP_UP_POLICY  # issue #161
+POST   /api/roles/{role_id}/reconcile                roles.manage    STEP_UP_POLICY  # issue #161
+POST   /api/roles/{role_id}/members                  roles.manage    STEP_UP_POLICY  # issue #161
+POST   /api/roles/{role_id}/members/{identity_id}/remove roles.manage STEP_UP_POLICY  # issue #161
+GET    /api/abac/policies                            graph.read      -  # issue #162
+POST   /api/abac/policies                            roles.manage    STEP_UP_POLICY  # issue #162
+GET    /api/abac/policies/{policy_id}                graph.read      -  # issue #162
+PUT    /api/abac/policies/{policy_id}                roles.manage    STEP_UP_POLICY  # issue #162
+POST   /api/abac/policies/{policy_id}/retire         roles.manage    STEP_UP_POLICY  # issue #162
+POST   /api/abac/simulate                            graph.read      -  # issue #162
+GET    /api/abac/bindings                            graph.read      -  # issue #162
+PUT    /api/catalog/items/{group_id}/policy          catalog.manage  STEP_UP_POLICY  # issue #162
+POST   /api/removal-requests                         requests.create -  # wire-previews (others: requests.create_for_others in the handler)
+GET    /api/removal-requests                         requests.create -  # wire-previews (scope=pending|all: requests.decide or graph.read; approvals: what you may decide)
+POST   /api/removal-requests/{request_id}/approve    requests.create STEP_UP_POLICY  # wire-previews (the manager, a delegate or requests.decide: the handler checks)
+POST   /api/removal-requests/{request_id}/deny       requests.create -  # wire-previews
+POST   /api/removal-requests/{request_id}/cancel     requests.create -  # wire-previews (the requester)
+GET    /api/activity                                 auth.self       -  # wire-previews (the caller's own ledger events)
+GET    /api/orgs                                     graph.read      -  # wire-previews (derived from departments)
+GET    /api/orgs/{org_id}                            graph.read      -  # wire-previews
+GET    /api/request-drafts                           requests.create -  # wire-previews (the caller's own drafts)
+POST   /api/request-drafts                           requests.create -  # wire-previews
+GET    /api/request-drafts/{draft_id}                requests.create -  # wire-previews (the caller's own)
+PUT    /api/request-drafts/{draft_id}                requests.create -  # wire-previews (the caller's own)
+DELETE /api/request-drafts/{draft_id}                requests.create -  # wire-previews (the caller's own)
+POST   /api/role-requests                            requests.create -  # issue #161 (others: requests.create_for_others in the handler)
+GET    /api/role-requests                            requests.create -  # issue #161 (scope=pending|all: requests.decide or graph.read)
+POST   /api/role-requests/{request_id}/approve       requests.decide STEP_UP_POLICY  # issue #161
+POST   /api/role-requests/{request_id}/deny          requests.decide -  # issue #161
+POST   /api/role-requests/{request_id}/cancel        requests.create -  # issue #161 (the requester)
+GET    /api/lifecycle                                graph.read      -  # issue #159
+GET    /api/lifecycle/sponsored                      requests.create -  # issue #159
+POST   /api/lifecycle/sweep                          lifecycle.manage -  # issue #159
+GET    /api/identities/{identity_id}/lifecycle       graph.read      -  # issue #159
+PUT    /api/identities/{identity_id}/lifecycle       lifecycle.manage STEP_UP_POLICY  # issue #159
+POST   /api/identities/{identity_id}/lifecycle/extend requests.create -  # issue #159 (the sponsor, or lifecycle.manage)
+POST   /api/guests/invitations                       guests.sponsor  STEP_UP_POLICY  # issue #65 (the sponsor policy decides who may sponsor)
+POST   /api/guests/invitations/bulk                  guests.sponsor  STEP_UP_POLICY  # issue #65 (dry_run too: it audits)
+GET    /api/guests                                   guests.sponsor  -  # issue #65 (sponsor=all: guests.read in the handler)
+GET    /api/sponsorships/approvals                   sponsorships.approve -  # issue #65
+GET    /api/sponsorships/{sponsorship_id}            guests.sponsor  -  # issue #65 (the sponsor, the transfer target, guests.read or sponsorships.approve)
+POST   /api/sponsorships/{sponsorship_id}/approve    sponsorships.approve STEP_UP_POLICY  # issue #65
+POST   /api/sponsorships/{sponsorship_id}/reject     sponsorships.approve STEP_UP_POLICY  # issue #65
+POST   /api/sponsorships/{sponsorship_id}/renew      guests.sponsor  STEP_UP_POLICY  # issue #65 (the sponsor)
+POST   /api/sponsorships/{sponsorship_id}/end        guests.sponsor  STEP_UP_POLICY  # issue #65 (the sponsor, or sponsorships.approve)
+POST   /api/sponsorships/{sponsorship_id}/transfer   guests.sponsor  STEP_UP_POLICY  # issue #65 (the sponsor)
+POST   /api/sponsorships/{sponsorship_id}/accept-transfer guests.sponsor STEP_UP_POLICY  # issue #65 (the person asked)
+GET    /api/approvals/inbox                          requests.create -  # issue #165
+GET    /api/approvals/delegates                      requests.create -  # issue #165
+GET    /api/approvals/delegations                    requests.create -  # issue #165 (?all=1: requests.decide)
+POST   /api/approvals/delegations                    requests.create -  # issue #165
+POST   /api/approvals/delegations/{delegation_id}/revoke requests.create -  # issue #165
+GET    /api/notifications                            auth.self       -  # issue #189 (the caller's own inbox)
+POST   /api/notifications/read                       auth.self       -  # issue #189
+GET    /api/notifications/preferences                auth.self       -  # issue #189
+PUT    /api/notifications/preferences                auth.self       -  # issue #189
+GET    /api/email/messages                           email.read      -  # issue #189
+GET    /api/email/messages/{message_id}              email.read      -  # issue #189
+POST   /api/email/messages/{message_id}/retry        email.manage    -  # issue #189
 POST   /api/identities/{identity_id}/contain         identities.contain STEP_UP_POLICY  # issue #106
 GET    /api/identities/{identity_id}/containment     graph.read      -  # issue #106
+POST   /api/identities/{identity_id}/disable         identities.contain STEP_UP_POLICY  # wire-previews: containment, then disabled
+POST   /api/identities/{identity_id}/enable          identities.contain STEP_UP_POLICY  # wire-previews: restores what Disable disabled
+GET    /api/identities/{identity_id}/disables        graph.read      -  # wire-previews
 POST   /api/containment-retries/{retry_id}/retry-now identities.contain STEP_UP_POLICY  # issue #106
 PUT    /api/connections/{id}/containment-credential  connections.manage STEP_UP_POLICY  # issue #106
+GET    /api/access/as-of                             graph.read      -  # issue #111
+GET    /api/evidence/packs                           audit.read      -  # issue #111
+POST   /api/evidence/packs                           audit.read      -  # issue #111
+GET    /api/evidence/packs/{pack_id}                 audit.read      -  # issue #111
+GET    /api/evidence/packs/{pack_id}/download        audit.read      -  # issue #111
 POST   /api/connections/{id}/validate                connections.manage -
 GET    /api/connections/{id}/validations/{run}       connections.read   -
 POST   /api/connections/{id}/dry-run                 connections.manage -
@@ -99,6 +210,78 @@ POST   /api/connections/{id}/findings/{fid}/accept   connections.manage -
 GET    /api/connections/{id}/health                  connections.read   -
 GET    /api/insights/deployment-health               connections.read   -
 POST   /api/insights/deployment-health/rerun         connections.manage -
+GET    /api/sod/functions                            graph.read      -  # issue #298
+POST   /api/sod/functions                            sod.manage      STEP_UP_POLICY  # issue #298
+GET    /api/sod/functions/{function_id}              graph.read      -  # issue #298
+PUT    /api/sod/functions/{function_id}              sod.manage      STEP_UP_POLICY  # issue #298
+POST   /api/sod/functions/{function_id}/retire       sod.manage      STEP_UP_POLICY  # issue #298
+GET    /api/sod/risks                                graph.read      -  # issue #298
+POST   /api/sod/risks                                sod.manage      STEP_UP_POLICY  # issue #298
+GET    /api/sod/risks/{risk_id}                      graph.read      -  # issue #298
+PUT    /api/sod/risks/{risk_id}                      sod.manage      STEP_UP_POLICY  # issue #298
+POST   /api/sod/risks/{risk_id}/retire               sod.manage      STEP_UP_POLICY  # issue #298
+GET    /api/sod/rulesets                             graph.read      -  # issue #298
+POST   /api/sod/rulesets                             sod.manage      STEP_UP_POLICY  # issue #298
+POST   /api/sod/rulesets/import                      sod.manage      STEP_UP_POLICY  # issue #298
+GET    /api/sod/rulesets/{ruleset_id}                graph.read      -  # issue #298
+PUT    /api/sod/rulesets/{ruleset_id}                sod.manage      STEP_UP_POLICY  # issue #298
+POST   /api/sod/rulesets/{ruleset_id}/retire         sod.manage      STEP_UP_POLICY  # issue #298
+GET    /api/sod/rulesets/{ruleset_id}/export         graph.read      -  # issue #298
+POST   /api/sod/import-legacy                        sod.manage      STEP_UP_POLICY  # issue #298
+GET    /api/sod/violations                           graph.read      -  # issue #298
+GET    /api/sod/controls                             graph.read      -  # issue #298
+POST   /api/sod/controls                             sod.manage      STEP_UP_POLICY  # issue #298
+GET    /api/sod/controls/{control_id}                graph.read      -  # issue #298
+PUT    /api/sod/controls/{control_id}                sod.manage      STEP_UP_POLICY  # issue #298
+POST   /api/sod/controls/{control_id}/retire         sod.manage      STEP_UP_POLICY  # issue #298
+GET    /api/sod/mitigations                          graph.read      -  # issue #298
+POST   /api/sod/mitigations                          sod.mitigate    -  # issue #298
+POST   /api/sod/mitigations/{mitigation_id}/approve  sod.approve     STEP_UP_POLICY  # issue #298 (not the requester)
+POST   /api/sod/mitigations/{mitigation_id}/reject   sod.approve     -  # issue #298 (not the requester)
+POST   /api/sod/mitigations/{mitigation_id}/cancel   sod.mitigate    -  # issue #298 (the requester)
+POST   /api/sod/mitigations/{mitigation_id}/revoke   requests.create -  # issue #298 (risk owner or sod.approve; step-up in the handler)
+POST   /api/sod/violations/escalate                  sod.mitigate    -  # issue #298
+POST   /api/sod/violations/revoke                    graph.read      -  # issue #298 (applying: grants.revoke and step-up in the handler)
+GET    /api/sod/review-context                       graph.read      -  # issue #298
+POST   /api/sod/simulate                             requests.create -  # issue #298
+GET    /api/jobs                                     jobs.read       -  # issue #172
+GET    /api/jobs/{job_id}                            jobs.read       -  #
+POST   /api/jobs/{job_id}/retry                      jobs.read       -  # (the replayed route's own permission and step-up apply)
+GET    /api/queue/jobs                               jobs.read       -  # issue #300
+GET    /api/queue/schedules                          jobs.read       -  #
+POST   /api/queue/jobs/{job_id}/retry                jobs.manage     STEP_UP_POLICY  #
+GET    /api/provisioning/targets                     provisioning.read   -  # issue #103
+PUT    /api/provisioning/targets/{id}                connections.manage  STEP_UP_POLICY
+DELETE /api/provisioning/targets/{id}                connections.manage  STEP_UP_POLICY
+GET    /api/provisioning/ops                         provisioning.read   -
+GET    /api/provisioning/ops/{op_id}                 provisioning.read   -
+POST   /api/provisioning/ops/{op_id}/retry           provisioning.manage -
+POST   /api/provisioning/ops/{op_id}/cancel          provisioning.manage -
+POST   /api/provisioning/run                         provisioning.manage -
+GET    /api/provisioning/findings                    provisioning.read   -
+GET    /api/config/signing-key                       admin.read      -  # issue #170
+POST   /api/config/export                            config.transport -  #
+GET    /api/config/trusted-signers                   admin.read      -  #
+POST   /api/config/trusted-signers                   config.transport STEP_UP_POLICY #
+DELETE /api/config/trusted-signers/{kid}             config.transport STEP_UP_POLICY #
+POST   /api/config/import/plan                       config.transport -  #
+POST   /api/config/import/apply                      config.transport STEP_UP_POLICY #
+GET    /api/config/imports                           admin.read      -  #
+GET    /api/groups/folders                           groups.admin    -  # issue #44
+POST   /api/groups/folders                           groups.admin    -  # issue #44
+GET    /api/groups/folders/{id}                      groups.admin    -  # issue #44
+PATCH  /api/groups/folders/{id}                      groups.admin    -  # issue #44
+DELETE /api/groups/folders/{id}                      groups.admin    -  # issue #44
+POST   /api/groups/folders/{id}/move                 groups.admin    -  # issue #44
+POST   /api/groups/folders/{id}/copy                 groups.admin    -  # issue #44
+GET    /api/groups/native                            groups.admin    -  # issue #44
+POST   /api/groups                                   groups.admin    -  # issue #44
+GET    /api/groups/{id}                              groups.admin    -  # issue #44
+PATCH  /api/groups/{id}                              groups.admin    -  # issue #44
+DELETE /api/groups/{id}                              groups.admin    -  # issue #44
+POST   /api/groups/{id}/move                         groups.admin    -  # issue #44
+POST   /api/groups/{id}/copy                         groups.admin    -  # issue #44
+POST   /api/groups/{id}/restore                      groups.admin    -  # issue #44
 GET    /api/auth/session                             auth.self       -
 POST   /api/auth/logout                              auth.self       -
 GET    /api/auth/sessions                            auth.self       -
@@ -111,14 +294,33 @@ GET    /api/auth/saml/{connection_id}/metadata       public
 POST   /api/auth/saml/{connection_id}/acs            public
 GET    /api/auth/oauth2/{connection_id}/callback     public
 GET    /t/{slug}/bootstrap                           public
+GET    /api/admin/users                              admin.read      -  # issue #16
+POST   /api/admin/users/{user_id}/disable            admin.users.disable STEP_UP_ADMIN  # issue #16
+GET    /api/admin/idp-connections                    admin.read      -  # issue #16
+POST   /api/admin/idp-connections/{connection_id}/activate admin.change.request STEP_UP_ADMIN  # issue #16
+GET    /api/admin/change-requests                    admin.read      -  # issue #16
+POST   /api/admin/change-requests                    admin.change.request STEP_UP_ADMIN  # issue #16
+GET    /api/admin/change-requests/{change_id}        admin.read      -  # issue #16
+POST   /api/admin/change-requests/{change_id}/approve admin.change.approve STEP_UP_ADMIN  # issue #16
+POST   /api/admin/change-requests/{change_id}/reject admin.change.approve -  # issue #16
+POST   /api/admin/change-requests/{change_id}/cancel admin.change.request -  # issue #16
+POST   /api/admin/change-requests/{change_id}/apply  admin.change.approve STEP_UP_ADMIN  # issue #16
+GET    /api/admin/notifications                      admin.read      -  # issue #16
+GET    /api/admin/recovery                           admin.read      -  # issue #16
+POST   /api/admin/recovery/{recovery_id}/cancel      admin.change.request -  # issue #16
+GET    /api/admin/api-clients                        admin.read      -  # issue #16
+GET    /api/admin/platform-health                    admin.read      -  # issue #303
 `
 
 type designRoute struct {
 	method, pattern string
 	public          bool
 	perm            auth.Permission
-	stepUp          bool
+	stepUp          string // "", STEP_UP_POLICY or STEP_UP_ADMIN
 }
+
+// stepUps maps the table's step-up column to the requirement it names.
+var stepUps = map[string]*auth.AuthnRequirement{"": nil, "STEP_UP_POLICY": &auth.StepUpPolicy, "STEP_UP_ADMIN": &auth.StepUpAdmin}
 
 func parseDesignRoutes(t *testing.T) []designRoute {
 	t.Helper()
@@ -135,7 +337,13 @@ func parseDesignRoutes(t *testing.T) []designRoute {
 			if len(f) < 4 {
 				t.Fatalf("bad table line %q", line)
 			}
-			r.perm, r.stepUp = auth.Permission(f[2]), f[3] == "STEP_UP_POLICY"
+			r.perm = auth.Permission(f[2])
+			if strings.HasPrefix(f[3], "STEP_UP_") {
+				r.stepUp = f[3]
+			}
+			if _, ok := stepUps[r.stepUp]; !ok {
+				t.Fatalf("unknown step-up %q in table line %q", f[3], line)
+			}
 		}
 		out = append(out, r)
 	}
@@ -145,6 +353,7 @@ func parseDesignRoutes(t *testing.T) []designRoute {
 // TestRoutesMatchDesignTable: the registered routes are exactly the design
 // table, with the same permission and step-up requirement.
 func TestRoutesMatchDesignTable(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	srv := newIsolationServer(f)
 	table := map[string]designRoute{}
@@ -163,8 +372,8 @@ func TestRoutesMatchDesignTable(t *testing.T) {
 		if rt.Public != d.public || rt.Perm != d.perm {
 			t.Errorf("%s: public=%t perm=%q, design public=%t perm=%q", k, rt.Public, rt.Perm, d.public, d.perm)
 		}
-		if (rt.Authn != nil) != d.stepUp || (rt.Authn != nil && *rt.Authn != auth.StepUpPolicy) {
-			t.Errorf("%s: step-up %v, design %t", k, rt.Authn, d.stepUp)
+		if want := stepUps[d.stepUp]; (rt.Authn == nil) != (want == nil) || (want != nil && *rt.Authn != *want) {
+			t.Errorf("%s: step-up %v, design %q", k, rt.Authn, d.stepUp)
 		}
 	}
 	for k := range table {
@@ -188,6 +397,7 @@ var rbacRoles = []auth.Role{auth.RoleViewer, auth.RoleOperator, auth.RoleAuditor
 // active under an IdP sign-in, so it is refused everything but the
 // session's own routes.
 func TestRBACRouteMatrix(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	srv := newIsolationServer(f)
 	h := srv.Handler()
@@ -231,6 +441,7 @@ func TestRBACRouteMatrix(t *testing.T) {
 // needs grants.revoke (policy admins only) and a fresh phishing-resistant
 // sign-in (§16.2, checked in the handler because it depends on the body).
 func TestRevokeApplyNeedsGrantsRevoke(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	srv := newIsolationServer(f)
 	h := srv.Handler()
@@ -284,6 +495,7 @@ func containsPerm(ps []auth.Permission, p auth.Permission) bool {
 // its credential at another host or widen its write scope, so it needs the
 // same fresh phishing-resistant sign-in as setting the credential.
 func TestConnectionConfigNeedsStepUp(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	h := newIsolationServer(f).Handler()
 	admin := authtest.User{Email: "conn-admin@b.example", Roles: []auth.Role{auth.RoleTenantAdmin}}

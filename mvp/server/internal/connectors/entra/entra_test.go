@@ -182,7 +182,7 @@ func baseCfg() Config {
 func (f *fake) connector(cfg Config) *Connector {
 	f.t.Helper()
 	cfg.GraphURL, cfg.AuthorityURL = f.srv.URL, f.srv.URL
-	c, err := New(cfg, connsynctest.Runtime, f.srv.Client(f.t, 0), func() time.Time { return now0 })
+	c, err := New(cfg, connsynctest.Runtime, testClient(f.t, f.srv, 0), func() time.Time { return now0 })
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -466,7 +466,7 @@ func TestMalformedAndOversizedPages(t *testing.T) {
 		f.body["/v1.0/users/delta"] = `{"value":[{"id":"` + ada + `","displayName":"` + strings.Repeat("x", 8192) + `"}]}`
 		cfg := baseCfg()
 		cfg.GraphURL, cfg.AuthorityURL = f.srv.URL, f.srv.URL
-		c, err := New(cfg, connsynctest.Runtime, f.srv.Client(t, 2048), func() time.Time { return now0 })
+		c, err := New(cfg, connsynctest.Runtime, testClient(t, f.srv, 2048), func() time.Time { return now0 })
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -780,7 +780,7 @@ func TestTokenFailureDoesNotLeakTheSecret(t *testing.T) {
 
 func TestNewValidatesConfiguration(t *testing.T) {
 	prod := connsync.Runtime{Env: "prod"}
-	hc, err := connsync.NewHTTPClient(prod, safehttp.Options{})
+	hc, err := safehttp.NewForTest(t, safehttp.Options{Env: "prod"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -819,7 +819,7 @@ func TestFromEnv(t *testing.T) {
 	env := func(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
 	good := map[string]string{"TESSERA_ENV": "prod", "TESSERA_ENTRA_TENANT_ID": tenantGUID, "TESSERA_ENTRA_CLIENT_ID": "cid",
 		"TESSERA_ENTRA_CLIENT_SECRET": "env:ENTRA_SECRET", "ENTRA_SECRET": "s3cret"}
-	c, err := FromEnv(env(good), now0)
+	c, err := FromEnv(env(good), now0, prodRT, prodClient(t))
 	if err != nil || c.System() != "entra" || c.TypeName() != "EntraConnector" || c.DisplayName() != "Microsoft Entra ID" {
 		t.Fatalf("FromEnv = %v, %v", c, err)
 	}
@@ -845,7 +845,7 @@ func TestFromEnv(t *testing.T) {
 		"http graph":       mod("TESSERA_ENTRA_GRAPH_URL", "http://graph.microsoft.com"),
 		"loopback in prod": mod("TESSERA_OUTBOUND_ALLOW_LOOPBACK", "true"),
 	} {
-		_, err := FromEnv(env(m), now0)
+		_, err := FromEnv(env(m), now0, prodRT, prodClient(t))
 		if name == "loopback in prod" {
 			if err != nil {
 				t.Errorf("%s: %v (the flag is ignored in prod, the defaults are valid)", name, err)
@@ -861,7 +861,7 @@ func TestFromEnv(t *testing.T) {
 	off := mod("TESSERA_ENTRA_SIGNIN_ACTIVITY", "false")
 	off["TESSERA_ENTRA_EMIT_IDENTITIES"] = "false"
 	off["TESSERA_ENTRA_MAX_INCREMENTAL_AGE"] = "12h"
-	c, err = FromEnv(env(off), now0)
+	c, err = FromEnv(env(off), now0, prodRT, prodClient(t))
 	if err != nil || c.(*Connector).cfg.SignInActivity || c.(*Connector).cfg.EmitIdentities || c.(*Connector).cfg.MaxIncrementalAge != 12*time.Hour {
 		t.Fatalf("FromEnv(off) = %+v, %v", c, err)
 	}
@@ -874,4 +874,27 @@ func TestReaderRole(t *testing.T) {
 			t.Errorf("readerRole(%q) = %v", n, !want)
 		}
 	}
+}
+
+// testClient is a safehttp test client that reaches srv.
+func testClient(t testing.TB, srv *connsynctest.Server, maxBody int64) *http.Client {
+	t.Helper()
+	hc, err := safehttp.NewForTest(t, srv.Options(maxBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return hc
+}
+
+// prodRT is the production runtime; prodClient is a production-rules safehttp
+// test client (no loopback, https, default ports).
+var prodRT = connsync.Runtime{Env: "prod"}
+
+func prodClient(t testing.TB) *http.Client {
+	t.Helper()
+	hc, err := safehttp.NewForTest(t, safehttp.Options{Env: "prod"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return hc
 }

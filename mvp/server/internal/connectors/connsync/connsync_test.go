@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync/connsynctest"
 	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
@@ -140,7 +141,7 @@ func newClient(t *testing.T, h http.HandlerFunc, maxBody int64) (*connsync.Clien
 	t.Helper()
 	srv := connsynctest.New(t, h)
 	ns := &connsynctest.NoSleep{}
-	return &connsync.Client{HC: srv.Client(t, maxBody), Now: func() time.Time { return t0 },
+	return &connsync.Client{HC: testClient(t, srv, maxBody), Now: func() time.Time { return t0 },
 		Backoff: connsync.Backoff{Base: time.Second, Max: 30 * time.Second, MaxAttempts: 4, Sleep: ns.Sleep}}, srv, ns
 }
 
@@ -443,21 +444,32 @@ func TestResolveSecret(t *testing.T) {
 	}
 }
 
-func TestRuntimeFromEnv(t *testing.T) {
-	get := func(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
-	if r := connsync.RuntimeFromEnv(get(map[string]string{"TESSERA_ENV": "prod", "TESSERA_OUTBOUND_ALLOW_LOOPBACK": "true"})); r.Env != "prod" || r.AllowLoopback {
-		t.Errorf("prod runtime = %+v: loopback must never be on", r)
+func TestRuntimeFromConfig(t *testing.T) {
+	load := func(env map[string]string) *config.Config {
+		t.Helper()
+		c, err := config.Load(func(k string) string { return env[k] })
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
 	}
-	if r := connsync.RuntimeFromEnv(get(map[string]string{"TESSERA_ENV": "dev", "TESSERA_OUTBOUND_ALLOW_LOOPBACK": "1"})); r.Env != "dev" || !r.AllowLoopback {
+	if r := connsync.RuntimeFromConfig(load(map[string]string{"TESSERA_ENV": "dev", "TESSERA_OUTBOUND_ALLOW_LOOPBACK": "1"})); r.Env != "dev" || !r.AllowLoopback {
 		t.Errorf("dev runtime = %+v", r)
 	}
-	if r := connsync.RuntimeFromEnv(get(nil)); r.Env != "dev" || r.AllowLoopback {
-		t.Errorf("default runtime = %+v", r)
+	if r := connsync.RuntimeFromConfig(load(map[string]string{"TESSERA_ENV": "dev"})); r.Env != "dev" || r.AllowLoopback {
+		t.Errorf("default dev runtime = %+v", r)
+	}
+	// A Config that config.Load did not return gets the production rules.
+	if r := connsync.RuntimeFromConfig(&config.Config{Env: "dev"}); r.Env != "prod" || r.AllowLoopback {
+		t.Errorf("hand-built runtime = %+v: loopback must never be on", r)
+	}
+	if r := connsync.RuntimeFromConfig(nil); r.Env != "prod" || r.AllowLoopback {
+		t.Errorf("nil runtime = %+v", r)
 	}
 }
 
-func TestNewHTTPClientRefusesPrivateAddresses(t *testing.T) {
-	hc, err := connsync.NewHTTPClient(connsync.Runtime{Env: "prod"}, safehttp.Options{})
+func TestSharedClientRefusesPrivateAddresses(t *testing.T) {
+	hc, err := safehttp.NewForTest(t, safehttp.Options{Env: "prod"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -467,4 +479,13 @@ func TestNewHTTPClientRefusesPrivateAddresses(t *testing.T) {
 			t.Errorf("GET %s succeeded through the connector client", u)
 		}
 	}
+}
+
+func testClient(t testing.TB, srv *connsynctest.Server, maxBody int64) *http.Client {
+	t.Helper()
+	hc, err := safehttp.NewForTest(t, srv.Options(maxBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return hc
 }

@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -77,5 +78,29 @@ func TestFrontendContract_Session(t *testing.T) {
 		}
 		sort.Strings(keys)
 		t.Errorf("GET /api/auth/session changed shape (update src/api.ts SessionInfo, then run with -update-contract):\n%s\nkeys: %v", got, keys)
+	}
+}
+
+// TestSessionCarriesLinkedIdentity (#319): the session names the directory
+// person the sign-in is linked to (null when unlinked), so the UI does not
+// have to guess it from the email.
+func TestSessionCarriesLinkedIdentity(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	h := newIsolationServer(f).Handler()
+	id := f.B.IDs["carol"]
+	for _, c := range []struct {
+		name string
+		link *int64
+		want string
+	}{{"linked", &id, fmt.Sprint(id)}, {"unlinked", nil, "<nil>"}} {
+		l := signIn(t, f.DB, f.B.ID, authtest.User{Email: c.name + "@b.example", Roles: []auth.Role{auth.RoleViewer}, IdentityID: c.link}, authtest.Phr, storetest.Now)
+		user, _ := decode(t, serve(h, authed(l, "GET", "/api/auth/session", "")))["user"].(map[string]any)
+		got := user["identity_id"]
+		if f, ok := got.(float64); ok {
+			got = int64(f)
+		}
+		if fmt.Sprint(got) != c.want {
+			t.Errorf("%s: identity_id = %v, want %s", c.name, got, c.want)
+		}
 	}
 }

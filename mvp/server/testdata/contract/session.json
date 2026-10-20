@@ -36,6 +36,7 @@
   "user": {
     "display_name": "string",
     "email": "string",
-    "id": "string"
+    "id": "string",
+    "identity_id": "null"
   }
 }

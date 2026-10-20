@@ -88,7 +88,9 @@ type Connector struct {
 	maxEventPages int
 }
 
-// New builds a connector. hc must come from connsync.NewHTTPClient (safehttp).
+// New builds a connector. hc must be the server's shared outbound client
+// (safehttp.ForConfig); the connector adds the Graph and authority URLs'
+// explicit ports to it.
 func New(cfg Config, rt connsync.Runtime, hc *http.Client, now func() time.Time) (*Connector, error) {
 	if !guidRE.MatchString(cfg.TenantID) {
 		return nil, errors.New("entra: tenant id must be the directory GUID")
@@ -113,6 +115,7 @@ func New(cfg Config, rt connsync.Runtime, hc *http.Client, now func() time.Time)
 	if hc == nil {
 		return nil, errors.New("entra: an internal/safehttp client is required")
 	}
+	hc = safehttp.WithConfiguredPorts(hc, cfg.GraphURL, cfg.AuthorityURL)
 	if now == nil {
 		now = time.Now
 	}
@@ -135,7 +138,10 @@ func New(cfg Config, rt connsync.Runtime, hc *http.Client, now func() time.Time)
 //	TESSERA_ENTRA_EMIT_IDENTITIES  true (default) or false
 //	TESSERA_ENTRA_SIGNIN_ACTIVITY  true (default) or false
 //	TESSERA_ENTRA_MAX_INCREMENTAL_AGE  duration; default none
-func FromEnv(getenv func(string) string, now time.Time) (connectors.Connector, error) {
+//
+// rt and hc come from the validated server configuration (connsync.RuntimeFromConfig,
+// safehttp.ForConfig); FromEnv never builds a client.
+func FromEnv(getenv func(string) string, now time.Time, rt connsync.Runtime, hc *http.Client) (connectors.Connector, error) {
 	cfg := Config{TenantID: getenv("TESSERA_ENTRA_TENANT_ID"), ClientID: getenv("TESSERA_ENTRA_CLIENT_ID"),
 		GraphURL: getenv("TESSERA_ENTRA_GRAPH_URL"), AuthorityURL: getenv("TESSERA_ENTRA_AUTHORITY_URL"),
 		EmitIdentities: true, SignInActivity: true}
@@ -163,11 +169,6 @@ func FromEnv(getenv func(string) string, now time.Time) (connectors.Connector, e
 	var err error
 	if cfg.ClientSecret, err = connsync.ResolveSecret(ref, getenv); err != nil {
 		return nil, fmt.Errorf("TESSERA_ENTRA_CLIENT_SECRET: %w", err)
-	}
-	rt := connsync.RuntimeFromEnv(getenv)
-	hc, err := connsync.NewHTTPClient(rt, safehttp.Options{})
-	if err != nil {
-		return nil, err
 	}
 	return New(cfg, rt, hc, func() time.Time { return time.Now().UTC() })
 }
