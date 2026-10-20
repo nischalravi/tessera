@@ -19,7 +19,7 @@ CREATE TABLE access_request_stages (
   tenant_id TEXT NOT NULL REFERENCES tenants (id),
   line_id TEXT NOT NULL,
   idx BIGINT NOT NULL CHECK (idx >= 0),
-  kind TEXT NOT NULL CHECK (kind IN ('manager','owner','decider')),
+  kind TEXT NOT NULL CHECK (kind IN ('manager','owner','decider','sponsor')),
   assignee_identity_id BIGINT,
   status TEXT NOT NULL CHECK (status IN ('queued','waiting','approved','denied','closed')),
   started_at TEXT,

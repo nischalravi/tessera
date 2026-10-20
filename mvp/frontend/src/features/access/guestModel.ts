@@ -1,4 +1,4 @@
-import type { BundleItem, BulkRowStatus, CatalogEntry, GuestPopulationInfo, GuestPopulationKey, InvitationState, InviteInput, Sponsorship, SponsorshipState } from "../../api";
+import type { BundleItem, BundleItemState, BundleState, BulkRowStatus, CatalogEntry, GuestPopulationInfo, GuestPopulationKey, InvitationState, InviteInput, Sponsorship, SponsorshipState } from "../../api";
 
 /** Labels and rules for guest sponsorships (issue #65). No React, so `npm test` can import it. */
 
@@ -182,3 +182,33 @@ export function invitationNote(s: Pick<Sponsorship, "invitation" | "invitation_e
       return "The invitation was cancelled; its links no longer work.";
   }
 }
+
+/** Access bundle state (issue #75). */
+export const BUNDLE_STATE_LABEL: Record<BundleState, string> = {
+  pending: "Pending",
+  granted: "Granted",
+  failed: "Failed",
+  removing: "Being removed",
+  removed: "Removed",
+};
+export const BUNDLE_STATE_TONE: Record<BundleState, Tone> = {
+  pending: "info",
+  granted: "ok",
+  failed: "critical",
+  removing: "warning",
+  removed: "neutral",
+};
+
+/** One line for a bundle: how many items are in each state, worst first. */
+export function bundleSummary(items: Pick<BundleItemState, "state">[]): string {
+  if (items.length === 0) return "No access bundle";
+  const order: BundleState[] = ["failed", "pending", "removing", "granted", "removed"];
+  const parts = order
+    .map((st) => [st, items.filter((i) => i.state === st).length] as const)
+    .filter(([, n]) => n > 0)
+    .map(([st, n]) => `${n} ${BUNDLE_STATE_LABEL[st].toLowerCase()}`);
+  return parts.join(", ");
+}
+
+/** Whether an item needs somebody to look at it (a provisioning operation failed). */
+export const bundleNeedsAttention = (items: Pick<BundleItemState, "state">[]) => items.some((i) => i.state === "failed");

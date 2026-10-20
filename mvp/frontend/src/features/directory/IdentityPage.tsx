@@ -10,6 +10,7 @@ import {
 import { mockObjects } from "../../mocks";
 import { useSession } from "../../app/auth";
 import { AffiliationsSection, IdentifiersSection } from "./affiliations";
+import { BundleSection } from "./bundle";
 import { MergeDialog } from "./correlation";
 import { ContainDialog } from "./containment";
 import { PreviewFormDrawer } from "./shared";
@@ -167,6 +168,7 @@ function Header({ d }: { d: IdentityDetail }) {
 }
 
 export function IdentityPage() {
+  const { can } = useSession();
   const { id } = useParams();
   const [params, setParams] = useSearchParams();
   const validId = isNumericId(id);
@@ -280,6 +282,7 @@ export function IdentityPage() {
         <div className="grid g2">
           <div className="card"><AffiliationsSection identityId={d.id} name={d.name} human /></div>
           <div className="card"><IdentifiersSection identityId={d.id} /></div>
+          {can("guests.read") && <div className="card"><BundleSection identityId={d.id} /></div>}
         </div>
       )}
 

@@ -438,6 +438,7 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `GET /api/guests[?sponsor=me|all&state=&population=]` · `GET /api/sponsorships/approvals` · `GET /api/sponsorships/{id}` ·
 `POST /api/sponsorships/{id}/approve|reject|renew|end|transfer|accept-transfer` ·
 `POST /api/guests/{identity_id}/resend-invitation|revoke-invitation` ·
+`GET /api/identities/{identity_id}/access-bundle` · `GET /api/refgroups` · `POST /api/refgroups/reconcile` ·
 `POST /public/t/{slug}/claim/start|verify/send|verify/check|existing-account|credential|resend` ·
 `GET /public/t/{slug}/claim/status` (public: the guest's claim, see Guest claim) ·
 `GET /api/approvals/inbox` · `GET /api/approvals/delegates` · `GET|POST /api/approvals/delegations` ·

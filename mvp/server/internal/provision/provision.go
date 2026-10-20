@@ -51,6 +51,7 @@ const (
 	SourceJIT       = "jit"
 	SourceLeastPriv = "leastpriv"
 	SourceDrift     = "drift" // a remediation policy of the reconciliation engine (issue #301)
+	SourceGuest     = "guest" // a guest sponsorship's access bundle (issue #75); the key names the sponsorship
 	SourceAPI       = "api"
 )
 

@@ -81,7 +81,7 @@ func newProvHarness(t *testing.T, o fake.Options) *provHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := newTestAPIServerWith(t, st, func(c *Config) { c.Outbound = hc; c.FakeTargetURL = fs.URL })
+	srv := newTestAPIServerWith(t, st, func(c *Config) { c.OutboundHTTP = hc; c.FakeTargetURL = fs.URL })
 	h.srv = srv
 	h.c = client{t, asAdmin(t, srv, st.DB, st.Tenant, testkit.Now).Handler()}
 	v := h.c.json("POST", "/api/connections", `{"name":"Okta (provisioning test)","connector_type":"demo-okta"}`, http.StatusCreated).(map[string]any)

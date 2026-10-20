@@ -1325,3 +1325,24 @@ DROP POLICY IF EXISTS tenant_isolation ON oauth_sync_state;
 CREATE POLICY tenant_isolation ON oauth_sync_state
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE guest_bundle_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE guest_bundle_items FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON guest_bundle_items;
+CREATE POLICY tenant_isolation ON guest_bundle_items
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE identity_assurance ENABLE ROW LEVEL SECURITY;
+ALTER TABLE identity_assurance FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON identity_assurance;
+CREATE POLICY tenant_isolation ON identity_assurance
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE catalog_item_populations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE catalog_item_populations FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON catalog_item_populations;
+CREATE POLICY tenant_isolation ON catalog_item_populations
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));

@@ -213,12 +213,27 @@ func LeaverPlan(c *store.TenantTx, now time.Time, identityID int64, withImpact b
 			{Key: "target", Value: a.Username}, {Key: "account_id", Value: a.ID},
 			{Key: "detail", Value: fmt.Sprintf(what, a.System, a.Username)}})
 	}
+	// edges a guest's access bundle is already taking out through its own
+	// removal (guest sponsorships end first, issue #75): not planned twice
+	bundleEnding := map[int64]bool{}
+	items, err := c.BundleItems(store.BundleItemFilter{Guest: identityID})
+	if err != nil {
+		return nil, err
+	}
+	for _, it := range items {
+		if it.EdgeID != nil && (it.Status == store.BundleRemoving || it.Status == store.BundleRemoved) {
+			bundleEnding[*it.EdgeID] = true
+		}
+	}
 	for _, a := range accounts {
 		edges, err := c.EdgesFrom(graph.Key("account", a.ID))
 		if err != nil {
 			return nil, err
 		}
 		for _, e := range edges {
+			if bundleEnding[e.ID] {
+				continue
+			}
 			lbl, err := Label(c, e.Dst)
 			if err != nil {
 				return nil, err
@@ -912,6 +927,19 @@ func routeAddGrant(c *store.TenantTx, now time.Time, ident *store.Identity, st S
 // system's connection has write-back on. Without a target (or when the
 // account exists) it is a plain ensureAccount.
 func routeEnsureAccount(c *store.TenantTx, now time.Time, ident *store.Identity, system, key string) error {
+	return RouteEnsureAccount(c, now, ident, system, key, provision.SourceJML)
+}
+
+// EnsureAccount returns the identity's active account in a system, creating
+// it in Tessera's graph when it has none.
+func EnsureAccount(c *store.TenantTx, now time.Time, ident *store.Identity, system string) (*store.Account, error) {
+	return ensureAccount(c, now, ident, system)
+}
+
+// RouteEnsureAccount is routeEnsureAccount for another feature: source and
+// key say who asked, and the account is created in Tessera's graph once the
+// target confirms it (the same completion as the joiner's).
+func RouteEnsureAccount(c *store.TenantTx, now time.Time, ident *store.Identity, system, key, source string) error {
 	if t, err := provision.Route(c, system); err != nil {
 		return err
 	} else if t != nil {
@@ -933,7 +961,7 @@ func routeEnsureAccount(c *store.TenantTx, now time.Time, ident *store.Identity,
 			acct.Email = *ident.Email
 		}
 		_, err = route(c, now, provision.Change{System: system, Kind: target.CreateAccount, Account: acct,
-			Source: provision.SourceJML, Key: key, Completion: completeEnsureAccount,
+			Source: source, Key: key, Completion: completeEnsureAccount,
 			Data: identitySystem{IdentityID: ident.ID, System: system}})
 		return err
 	}
@@ -1191,4 +1219,10 @@ func joinerLifecycle(c *store.TenantTx, now time.Time, id int64, mgr *int64, p o
 	w := wt
 	return c.AddLifecycleEvent(&store.LifecycleEvent{IdentityID: id, Event: "set", WorkerType: &w, EndsAt: l.EndsAt,
 		Actor: "hris", At: now})
+}
+
+// AccountSpec is the username and external id the identity's account in a
+// system gets (what the joiner's account creation uses).
+func AccountSpec(ident *store.Identity, system string) (username, externalID string, err error) {
+	return accountSpec(ident, system)
 }

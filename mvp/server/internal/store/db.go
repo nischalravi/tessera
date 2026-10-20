@@ -197,6 +197,8 @@ var tables = []string{
 	"grp_pit_privileges", "grp_pit_digests",
 	// group privileges (schema/0286_group_privs.sql)
 	"grp_privileges", "grp_priv_settings",
+	// guest access bundles, assurance and catalog populations (schema/0362_guest_access.sql)
+	"guest_bundle_items", "identity_assurance", "catalog_item_populations",
 	// third-party OAuth app inventory (schema/0361_oauth_apps.sql)
 	"oauth_apps", "oauth_grants", "oauth_sync_state",
 }

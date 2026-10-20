@@ -2,7 +2,7 @@ import { RequestStage, fmtDate } from "../../api";
 import { Badge } from "../../components";
 
 /** A request line's approval stages (issue #165): who decides each, and how it went. */
-export const STAGE_LABEL: Record<string, string> = { manager: "Manager", owner: "Owner", decider: "Access approver" };
+export const STAGE_LABEL: Record<string, string> = { manager: "Manager", sponsor: "Sponsor", owner: "Owner", decider: "Access approver" };
 
 export function Stages({ stages }: { stages: RequestStage[] }) {
   if (!stages.length) return null;

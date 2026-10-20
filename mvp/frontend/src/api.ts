@@ -1015,6 +1015,8 @@ export interface CatalogEntry {
   risk: Risk;
   eligible_types: string[];
   eligible_departments: string[];
+  /** Guest populations the item is open to (a guest may request only items naming theirs). */
+  populations?: GuestPopulationKey[];
   /** null: until removed. */
   default_hours: number | null;
   /** null: no limit. */
@@ -1023,7 +1025,7 @@ export interface CatalogEntry {
   /** Approval stages, in order (issue #165), and hours before a stage escalates to deciders. */
   approval: { stages: StageKind[]; escalate_after_hours: number };
 }
-export type StageKind = "manager" | "owner" | "decider";
+export type StageKind = "manager" | "owner" | "decider" | "sponsor";
 export interface RequestStage {
   index: number;
   kind: StageKind;
@@ -1449,6 +1451,24 @@ export type SponsorshipStatus = "requested" | "pending_approval" | "active" | "t
 /** The status, with a running sponsorship told apart as upcoming, active or ending (within 14 days). */
 export type SponsorshipState = SponsorshipStatus | "upcoming" | "ending";
 export interface BundleItem { group_id: number; system: string; name: string; risk: Risk; privileged: boolean }
+/** Where a bundle item stands (issue #75): waiting for the claim or the target, in place, failed, going or gone. */
+export type BundleState = "pending" | "granted" | "failed" | "removing" | "removed";
+/** A sponsorship's bundle item with its state; the access expires with the sponsorship. */
+export interface BundleItemState extends BundleItem {
+  state: BundleState;
+  detail?: string;
+  /** The provisioning operation doing it (Admin, Provisioning). */
+  op_id: string | null;
+  op_status: string | null;
+  expires_at: string | null;
+  granted_at: string | null;
+}
+/** One item of a person's bundles, from /identities/{id}/access-bundle. */
+export interface IdentityBundleItem {
+  id: string; sponsorship_id: string; group_id: number; system: string; name: string; state: BundleState; detail?: string;
+  op_id: string | null; op_status: string | null; expires_at: string; granted_at: string | null; removed_at: string | null;
+}
+export interface IdentityBundle { identity_id: number; ial: number; aal: number; items: IdentityBundleItem[] }
 export interface SponsorshipEvent {
   event: string;
   from_status: SponsorshipStatus | null;
@@ -1467,7 +1487,7 @@ export interface Sponsorship {
   sponsor: PersonRef;
   population: GuestPopulationKey;
   purpose: string;
-  bundle: BundleItem[];
+  bundle: BundleItemState[];
   required_ial: number;
   required_aal: number;
   starts_at: string;

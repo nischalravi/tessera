@@ -120,6 +120,7 @@ const (
 	// email delivery log (issue #189)
 	PermEmailRead   Permission = "email.read"
 	PermEmailManage Permission = "email.manage"
+
 	// kill switch (issue #106)
 	PermIdentitiesContain Permission = "identities.contain"
 	// flat-file import for disconnected apps (issue #105): column mappings,
