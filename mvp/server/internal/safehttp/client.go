@@ -231,6 +231,9 @@ func portAllowed(o Options, configured ports, host, port string) bool {
 		if a, err := netip.ParseAddr(host); err == nil && a.Zone() == "" && isDevLoopback(a) {
 			return true
 		}
+		if isDevLocalhost(host) {
+			return true
+		}
 	}
 	return slices.Contains(o.AllowedPorts, p) || configured[hostPort(host, port)]
 }
@@ -390,7 +393,7 @@ func checkURL(u *url.URL, o Options, configured ports) error {
 	}
 	if scheme == "http" {
 		a, err := netip.ParseAddr(host)
-		if !(o.Env == config.Dev && o.AllowLoopback && err == nil && isDevLoopback(a)) {
+		if !(o.Env == config.Dev && o.AllowLoopback && ((err == nil && isDevLoopback(a)) || isDevLocalhost(host))) {
 			return fmt.Errorf("%w: http://%s (https only)", ErrScheme, host)
 		}
 	}
@@ -583,6 +586,12 @@ var (
 	devLoopback4 = netip.MustParseAddr("127.0.0.1")
 	devLoopback6 = netip.IPv6Loopback()
 )
+
+// isDevLocalhost is the exact name "localhost", which run.sh publishes as the
+// dev issuer (TESSERA_PUBLIC_URL=http://localhost:$UI_PORT; a WebAuthn RP ID
+// cannot be an IP). Only the dev loopback exception uses it, and the dialer
+// still checks every resolved address.
+func isDevLocalhost(host string) bool { return strings.EqualFold(host, "localhost") }
 
 func isDevLoopback(a netip.Addr) bool {
 	a = a.WithZone("").Unmap()
