@@ -50,6 +50,7 @@ const (
 	SourceReview    = "review"
 	SourceJIT       = "jit"
 	SourceLeastPriv = "leastpriv"
+	SourceDrift     = "drift" // a remediation policy of the reconciliation engine (issue #301)
 	SourceAPI       = "api"
 )
 

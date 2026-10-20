@@ -39,6 +39,8 @@ const (
 	ClassIP Class = iota + 1
 	ClassSession
 	ClassUserCode
+	ClassTenant
+	ClassDestination
 )
 
 func (c Class) String() string {
@@ -49,6 +51,10 @@ func (c Class) String() string {
 		return "session"
 	case ClassUserCode:
 		return "user_code"
+	case ClassTenant:
+		return "tenant"
+	case ClassDestination:
+		return "destination"
 	}
 	return fmt.Sprintf("class(%d)", uint8(c))
 }
@@ -63,6 +69,10 @@ func (c Class) DefaultMaxKeys() int {
 		return 4096
 	case ClassUserCode:
 		return 1024
+	case ClassTenant:
+		return 1024
+	case ClassDestination:
+		return 10000
 	}
 	return 0
 }
@@ -105,6 +115,13 @@ func SessionKey(id string) Key { return Key{ClassSession, digest(id)} }
 
 // UserCodeKey is the key of a device-flow user code (kept only as a hash).
 func UserCodeKey(code string) Key { return Key{ClassUserCode, digest(code)} }
+
+// TenantKey is the key of a tenant id (an opaque identifier, kept as is).
+func TenantKey(id string) Key { return Key{ClassTenant, id} }
+
+// DestinationKey is the key of a message destination or address such as an
+// email address (kept only as a hash).
+func DestinationKey(dest string) Key { return Key{ClassDestination, digest(dest)} }
 
 func digest(s string) string {
 	sum := sha256.Sum256([]byte(s))

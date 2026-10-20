@@ -178,8 +178,12 @@ func (b *Bundle) gateActive(add func(Blocker)) {
 			}
 		}
 	}
-	if mode := b.Config.WriteMode; mode != "" && mode != "off" {
-		add(Blocker{Item: "activation.approval", Status: StatusPending,
-			Reason: "write-enabled connections need a second approver (two-person activation arrives with RBAC, DR-10)"})
+	if mode := writeMode(b.Config); mode != "off" {
+		// An approval counts only for the exact revision, configuration and
+		// mode it was given for (two-person activation, DR-10).
+		if a := b.Evidence.Approval; a == nil || a.RevisionID != b.Rev.ID || a.ConfigHash != b.ConfigHash || a.WriteMode != mode {
+			add(Blocker{Item: ApprovalItem, Status: StatusPending,
+				Reason: "write-enabled connections need a second approver: request activation, then a different person approves it"})
+		}
 	}
 }

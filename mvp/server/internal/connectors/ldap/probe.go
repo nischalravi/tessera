@@ -15,7 +15,8 @@
 // credentials.
 //
 // What it does not do: reach private directories from a cloud deployment (the
-// Directory Agent, DR-11, implements safedial.Transport for that), or verify
+// Directory Agent, DR-11, runs this same Prober inside the customer network
+// with its own allowlist, and Tessera sends it typed operations), or verify
 // what the server cannot answer. LLDAP and OpenLDAP have no Get Effective
 // Rights control, and a server may have no Who Am I; those checks report
 // "unsupported" (skipped) and need an attestation, never a pass.

@@ -132,6 +132,8 @@ function errorMessage(status: number, j: any): string {
       return `You don't have permission to do this${j.permission ? ` (needs ${j.permission})` : ""}.`;
     case "csrf_failed":
       return "The request was refused as a possible cross-site request. Reload the page and try again.";
+    case "conditional_access_denied":
+      return "Your organization's conditional access policy does not allow this action from here. Ask an administrator, or try from an allowed network or device.";
     case "audit_unavailable":
       return "The audit log is unavailable, so Tessera refused the request. Try again shortly.";
     case "lookup_locked": {
@@ -147,10 +149,21 @@ function errorMessage(status: number, j: any): string {
   return j ? JSON.stringify(j.detail ?? j) : `${status}`;
 }
 
-/** Call the API. A write refused for step-up is kept so it can resume after re-authentication. */
-export function api<T = any>(path: string, body?: unknown, method?: string): Promise<T> {
-  const m = method ?? (body !== undefined ? "POST" : "GET");
-  return send<T>(path, body, m, () => savePendingAction({ method: m, path, body, label: actionLabel(m, path), at: Date.now() }));
+/** For the one kind of request that is not JSON: a file sent as it is (flat-file upload). */
+export interface RawBody {
+  data: Blob | string;
+  contentType: string;
+  /** Statuses that carry a result rather than an error (a rejected upload is 422 with its report). */
+  resultStatuses?: number[];
+}
+
+/**
+ * Call the API. A write refused for step-up is kept so it can resume after re-authentication (a raw file
+ * upload is not: its body cannot be replayed from storage).
+ */
+export function api<T = any>(path: string, body?: unknown, method?: string, raw?: RawBody): Promise<T> {
+  const m = method ?? (body !== undefined || raw ? "POST" : "GET");
+  return send<T>(path, body, m, raw ? clearPendingAction : () => savePendingAction({ method: m, path, body, label: actionLabel(m, path), at: Date.now() }), raw);
 }
 
 /**
@@ -161,9 +174,10 @@ export function apiNoResume<T = any>(path: string, body: unknown, method = "POST
   return send<T>(path, body, method, clearPendingAction);
 }
 
-async function send<T>(path: string, body: unknown, m: string, onStepUp: () => void): Promise<T> {
+async function send<T>(path: string, body: unknown, m: string, onStepUp: () => void, raw?: RawBody): Promise<T> {
   const headers: Record<string, string> = {};
-  if (body !== undefined) headers["content-type"] = "application/json";
+  if (raw) headers["content-type"] = raw.contentType;
+  else if (body !== undefined) headers["content-type"] = "application/json";
   if (m !== "GET" && m !== "HEAD" && csrfToken) headers["x-tessera-csrf"] = csrfToken;
   const epoch = sessionEpoch;
   let res: Response;
@@ -172,12 +186,12 @@ async function send<T>(path: string, body: unknown, m: string, onStepUp: () => v
       method: m,
       headers,
       credentials: "same-origin",
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      body: raw ? raw.data : body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch {
     throw new ApiError("Tessera can't reach its API right now.", 0, null);
   }
-  if (!res.ok) {
+  if (!res.ok && !raw?.resultStatuses?.includes(res.status)) {
     let j: any = null;
     try {
       j = await res.json();
@@ -206,7 +220,7 @@ async function send<T>(path: string, body: unknown, m: string, onStepUp: () => v
 // ------------------------------------------------------------ step-up (design §9.4, §17)
 
 /** An action that needs a fresh sign-in, kept across the IdP round trip (sessionStorage, ten minutes). */
-export interface PendingAction { method: string; path: string; body?: unknown; label: string; at: number }
+export interface PendingAction { method: string; path: string; body?: unknown; label: string; at: number; needsBody?: boolean }
 
 const PENDING = "tessera.pendingAction";
 /** A pending action older than this is discarded rather than resumed. */
@@ -225,16 +239,39 @@ export function carriesSecret(v: unknown, depth = 0): boolean {
   return Object.entries(v as Record<string, unknown>).some(([k, x]) => SECRET_KEY.test(k) || carriesSecret(x, depth + 1));
 }
 
-function savePendingAction(a: PendingAction): void {
-  // A request that carries a secret is never written to browser storage: after the step-up the user
-  // enters it again, as when storage is unavailable. An earlier pending action is dropped too, so the
-  // resume prompt never offers a different action than the one just refused.
-  if (carriesSecret(a.body)) {
-    clearPendingAction();
-    return;
+const PATH_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/-_.~%:,+@=&?!";
+const METHODS = ["POST", "PUT", "PATCH", "DELETE"];
+
+/** Copy s one character at a time out of PATH_ALPHABET: "" when s holds any other character. */
+function fromAlphabet(s: string): string {
+  let out = "";
+  for (const ch of s) {
+    const i = PATH_ALPHABET.indexOf(ch);
+    if (i < 0) return "";
+    out += PATH_ALPHABET[i];
   }
+  return out;
+}
+
+/** Request bodies kept in memory for a resume without a page reload; never written to browser storage. */
+const pendingBodies = new Map<string, unknown>();
+
+function savePendingAction(a: PendingAction): void {
+  // Browser storage holds only values rebuilt from constants: an allow-listed method, the path copied
+  // from a fixed alphabet, the label recomputed from that path, and a timestamp. The body stays in
+  // memory (pendingBodies), so a full page reload across the identity provider drops it and the user
+  // submits again; an action with an empty body ({}) needs none and resumes. An earlier pending
+  // action is dropped, so the resume prompt never offers a different action than the one just refused.
+  clearPendingAction();
+  const method = METHODS.find((m) => m === a.method);
+  const path = fromAlphabet(a.path);
+  if (!method || !path.startsWith("/") || carriesSecret(a.body)) return;
+  const needsBody = !(a.body === undefined || (typeof a.body === "object" && a.body !== null && Object.keys(a.body).length === 0));
+  if (needsBody) pendingBodies.set(PENDING, a.body);
+  const kept: PendingAction = { method, path, label: actionLabel(method, path), at: Date.now() };
+  if (needsBody) kept.needsBody = true;
   try {
-    sessionStorage.setItem(PENDING, JSON.stringify(a));
+    sessionStorage.setItem(PENDING, JSON.stringify(kept));
   } catch {
     /* storage unavailable: the user retries by hand after the step-up */
   }
@@ -242,6 +279,7 @@ function savePendingAction(a: PendingAction): void {
 
 /** Forget the pending action (the user declined to resume it, or it ran). */
 export function clearPendingAction(): void {
+  pendingBodies.delete(PENDING);
   try {
     sessionStorage.removeItem(PENDING);
   } catch {
@@ -258,7 +296,9 @@ export function takePendingAction(now = Date.now()): PendingAction | null {
   } catch {
     a = null;
   }
+  const body = pendingBodies.get(PENDING);
   clearPendingAction();
+  if (a && a.needsBody && body !== undefined) a.body = body;
   if (!a || typeof a.path !== "string" || !a.path.startsWith("/") || now - a.at > PENDING_TTL_MS || now < a.at) return null;
   return a;
 }
@@ -270,7 +310,13 @@ const LABELS: [RegExp, (m: RegExpMatchArray) => string][] = [
   [/^\/hris\/events\/([^/]+)\/execute$/, (m) => `Run the lifecycle plan for event ${m[1]}`],
   [/^\/connections\/([^/]+)\/(config|credential|activate|retire)$/, (m) => `${{ config: "Save the configuration of", credential: "Set the credential of", activate: "Activate", retire: "Retire" }[m[2]]} connection ${m[1]}`],
   [/^\/readiness\/overlays\/([^/]+)$/, (m) => `Save the readiness overlay for ${m[1]}`],
+  [/^\/agents\/([^/]+)\/revoke$/, (m) => `Revoke Directory Agent ${m[1]}`],
+  [/^\/flatfile\/apps\/([^/]+)\/mapping$/, (m) => `Save the column mapping of ${m[1]}`],
+  [/^\/flatfile\/tasks\/([^/]+)\/close$/, () => "Close the manual task"],
+  [/^\/access\/(policies|networks|device-signals)(\/[^/]+)?$/, (m) => `Change conditional access (${m[1].replace("-", " ")})`],
   [/^\/auth\/device\/approve$/, () => "Approve the command-line sign-in"],
+  [/^\/helpdesk\/cases\/([^/]+)\/execute$/, () => "Run the verified reset"],
+  [/^\/helpdesk\/cases\/([^/]+)\/(manager|second)-approval$/, (m) => `Give the ${m[2]} approval on the reset case`],
 ];
 
 /** A plain-language name for an API action, shown before resuming it. */
@@ -293,7 +339,12 @@ export function stepUpHref(challenge: { step_up_url?: string; acr?: string; max_
 }
 
 /** Run a resumed action (after a successful step-up). */
-export const runPendingAction = (a: PendingAction) => api(a.path, a.body, a.method);
+export const runPendingAction = (a: PendingAction) => {
+  if (a.needsBody && a.body === undefined) {
+    return Promise.reject(new Error("The page reloaded during the sign-in, so the form was not kept. Fill it in and submit again."));
+  }
+  return api(a.path, a.body ?? (a.method === "DELETE" ? undefined : {}), a.method);
+};
 
 /** Tell mounted views that data changed outside `api()` (e.g. the mock layer). */
 export const notifyChanged = () => window.dispatchEvent(new Event(CHANGED));
@@ -401,12 +452,22 @@ export interface ReviewItem {
     violations: string[];
     peer_coverage: number | null;
     sample_permissions: string[];
+    /** Role membership items: the grants the role made sit under the membership (issue #214). */
+    membership?: { role_id: string; role: string; source: RoleMemberSource; assigned_at: string; grants: string[] };
   };
   reviewer: IdentityBrief | null;
   decision: "keep" | "revoke" | null;
   comment: string | null;
   decided_at: string | null;
+  /** "membership": the item certifies a business-role membership; absent for a grant. */
+  kind?: "membership";
+  role?: { id: string; name: string };
+  member_source?: RoleMemberSource;
+  /** How a revoked membership was resolved. */
+  resolution?: "unassign" | "exclude" | "flag" | null;
 }
+export type RoleMemberSource = "rule" | "request" | "manual";
+export type RuleAction = "exclude" | "flag";
 
 export interface Campaign {
   id: number;
@@ -635,8 +696,67 @@ export const jitDecide = (id: number, action: "approve" | "deny" | "revoke") =>
 export const jitCreate = (body: { identity_id: number; group_id: number; duration_hours: number; justification: string }) =>
   api<JitRequest>("/jit/requests", body);
 
-export const reviewDecide = (itemId: number, decision: "keep" | "revoke", comment?: string) =>
-  api<{ id: number; decision: string }>(`/reviews/items/${itemId}/decision`, { decision, comment: comment || null });
+/** ruleAction: revoking a rule membership needs exclude (from the rule) or flag (to the role owner). */
+export const reviewDecide = (itemId: number, decision: "keep" | "revoke", comment?: string, ruleAction?: RuleAction) =>
+  api<{ id: number; decision: string; resolution?: string }>(`/reviews/items/${itemId}/decision`,
+    { decision, comment: comment || null, ...(ruleAction ? { rule_action: ruleAction } : {}) });
+
+// ------------------------------------------------ frozen review populations (issue #110)
+export interface QAItem {
+  id: number;
+  identity: string;
+  grant: string;
+  system: string;
+  rule: { id: string; version: number; inputs: Record<string, any> };
+  qa_reviewer: string | null;
+  qa_decision: "keep" | "revoke" | null;
+  overturned: boolean;
+}
+
+export interface CampaignPopulation {
+  campaign_id: number;
+  population_hash: string;
+  recomputed_hash: string;
+  hash_match: boolean;
+  hash_algorithm: string;
+  frozen_at: string;
+  item_count: number;
+  system_counts: Record<string, number>;
+  source_syncs: Record<string, string | null>;
+  rules_version: string;
+  qa_sample_pct: number;
+  qa: { auto_certified: number; sampled: number; decided: number; overturned: number };
+  qa_queue: QAItem[];
+}
+
+export const qaDecide = (qaId: number, decision: "keep" | "revoke", comment?: string) =>
+  api<{ id: number; qa_decision: string; overturned: boolean }>(`/reviews/qa/${qaId}/decision`, { decision, comment: comment || null });
+
+/** Downloads the auditor export (population, hash, decisions) of a campaign as CSV or JSON. */
+export async function downloadPopulationExport(campaignId: number, format: "csv" | "json"): Promise<void> {
+  const res = await fetch(`/api/reviews/campaigns/${campaignId}/export?format=${format}`, { credentials: "same-origin" });
+  if (!res.ok) {
+    let j: any = null;
+    try {
+      j = await res.json();
+    } catch {
+      /* ignore */
+    }
+    if (res.status === 401 && j?.error === "login_required") {
+      resetSessionState();
+      window.dispatchEvent(new Event(SIGNED_OUT));
+    }
+    throw new ApiError(j ? errorMessage(res.status, j) : `${res.status} ${res.statusText}`, res.status, j);
+  }
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `tessera-review-population-${campaignId}.${format}`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
 
 // -------------------------------------------------------------- session
 export interface SessionInfo {
@@ -780,11 +900,15 @@ export interface ReviewSchedule {
   enabled: boolean;
   updated_at: string;
   launches: ReviewLaunch[];
+  /** Business roles whose memberships it reviews (none: grants). */
+  role_ids: string[];
 }
 export interface ReviewScheduleInput {
   name: string; system: string | null; privileged_only: boolean; unused_days: number; duration_days: number; reminder_days: number;
   close_out: "revoke" | "escalate"; escalation_identity_id: number | null; escalation_days: number; recurrence: Recurrence;
   first_run_at?: string; enabled: boolean;
+  /** Omitted: kept on update. */
+  role_ids?: string[];
 }
 export const createReviewSchedule = (b: ReviewScheduleInput) => api<ReviewSchedule>("/reviews/schedules", b);
 export const updateReviewSchedule = (id: string, b: ReviewScheduleInput) => api<ReviewSchedule>(`/reviews/schedules/${encodeURIComponent(id)}`, b, "PUT");
@@ -1267,7 +1391,8 @@ export const roles = {
   unassign: (id: string, identityId: number, reason: string, dryRun?: boolean) =>
     api<RoleChange>(rolePath(id, `/members/${identityId}/remove` + dry(dryRun)), { reason }),
   request: (roleId: string, beneficiaryId: number, justification: string) =>
-    api<RoleRequest>("/role-requests", { role_id: roleId, beneficiary_id: beneficiaryId, justification }),
+    // not resumable after a step-up: the body names a person, and a pending action is kept in browser storage
+    apiNoResume<RoleRequest>("/role-requests", { role_id: roleId, beneficiary_id: beneficiaryId, justification }),
   approve: (id: string, reason?: string) => api<RoleRequest>(`/role-requests/${encodeURIComponent(id)}/approve`, reason ? { reason } : {}),
   deny: (id: string, reason: string) => api<RoleRequest>(`/role-requests/${encodeURIComponent(id)}/deny`, { reason }),
   cancel: (id: string) => api<RoleRequest>(`/role-requests/${encodeURIComponent(id)}/cancel`, {}),
@@ -1333,6 +1458,7 @@ export interface SponsorshipEvent {
   actor: string;
   at: string;
 }
+export type InvitationState = "ready" | "sent" | "claiming" | "expired" | "claimed" | "revoked";
 export interface Sponsorship {
   id: string;
   status: SponsorshipStatus;
@@ -1358,8 +1484,15 @@ export interface Sponsorship {
   transfer_deadline: string | null;
   ended_at: string | null;
   end_reason: string | null;
-  /** "ready" until the claim flow (GU-6) sends the invitation. */
-  invitation: "ready" | "sent" | "claimed" | "revoked";
+  /**
+   * The guest's invitation: "ready" (not sent: the claim is not set up), "sent" (the link is out),
+   * "claiming" (they opened it and are part way), "expired" (it ran out unused), "claimed" or "revoked".
+   */
+  invitation: InvitationState;
+  /** When the newest link stops working (sent invitations only). */
+  invitation_expires_at: string | null;
+  can_resend_invitation: boolean;
+  can_revoke_invitation: boolean;
   can_renew: boolean;
   can_end: boolean;
   can_transfer: boolean;
@@ -1444,6 +1577,10 @@ export const guests = {
   end: (id: string, reason: string) => api<Sponsorship>(spPath(id, "/end"), { reason }),
   transfer: (id: string, toIdentityId: number, reason: string) => api<Sponsorship>(spPath(id, "/transfer"), { to_identity_id: toIdentityId, reason }),
   acceptTransfer: (id: string) => api<Sponsorship>(spPath(id, "/accept-transfer"), {}),
+  /** A new claim link by email; the earlier ones stop working. */
+  resendInvitation: (guestId: number) => api<Sponsorship>(`/guests/${guestId}/resend-invitation`, {}),
+  /** Cancel the invitation: its links and open claim sessions stop working. */
+  revokeInvitation: (guestId: number) => api<Sponsorship>(`/guests/${guestId}/revoke-invitation`, {}),
 };
 /** Kill switch (issue #106): revoke an identity's sessions, refresh tokens and OAuth grants at the providers. */
 export interface ContainmentStep {
@@ -1530,6 +1667,145 @@ export interface ContainmentRetry {
 }
 export const retryContainmentNow = (retryId: string) =>
   api<{ retry: ContainmentRetry }>(`/containment-retries/${encodeURIComponent(retryId)}/retry-now`, {});
+
+// ------------------------------------------------------------ flat-file import (issue #105)
+
+/** Which CSV column holds which field of an accounts file ("" or absent: not mapped). */
+export interface FlatAccountCols { account_id: string; username: string; email?: string; identity_id?: string; status?: string }
+/** The same for an account-entitlement file: one row per account and entitlement. */
+export interface FlatEntitlementCols { account_id: string; entitlement: string; name?: string; privileged?: string }
+export interface FlatMapping {
+  system: string;
+  name: string;
+  owner: string;
+  accounts: FlatAccountCols;
+  entitlements: FlatEntitlementCols | null;
+  updated_by: string;
+  updated_at: string;
+}
+export type FlatKind = "accounts" | "entitlements";
+export interface FlatUpload {
+  id: string;
+  system: string;
+  kind: FlatKind;
+  source: "api" | "sftp";
+  filename: string;
+  sha256: string;
+  size_bytes: number;
+  status: "applied" | "rejected";
+  rows_total: number;
+  rows_rejected: number;
+  added: number;
+  removed: number;
+  changed: number;
+  unchanged: number;
+  tasks_confirmed: number;
+  uploaded_by: string;
+  uploaded_at: string;
+}
+/** A rejected row; row 0 is the file as a whole. */
+export interface FlatRowError { row: number; column: string; code: string; message: string }
+export interface FlatChange { kind: FlatKind; change: "added" | "removed" | "changed"; label: string; detail?: string }
+export interface FlatUploadDetail extends FlatUpload { errors: FlatRowError[]; errors_truncated: boolean; changes: FlatChange[] }
+export interface FlatTask {
+  id: string;
+  system: string;
+  kind: "disable_account" | "remove_entitlement";
+  account: string;
+  account_label: string;
+  entitlement: string;
+  identity_id: number | null;
+  trigger: string;
+  status: "open" | "confirmed" | "closed";
+  instruction: string;
+  created_by: string;
+  created_at: string;
+  closed_by: string | null;
+  closed_at: string | null;
+  close_reason: string;
+  closed_upload_id: string | null;
+}
+
+/** Save an app's column mapping (flatfile.manage, fresh sign-in). */
+export const saveFlatMapping = (system: string, body: { name: string; owner: string; accounts: FlatAccountCols; entitlements: FlatEntitlementCols | null }) =>
+  api<FlatMapping>(`/flatfile/apps/${encodeURIComponent(system)}/mapping`, body, "PUT");
+
+/**
+ * Upload a CSV for an app. Resolves with the upload either way: a file with an invalid row is
+ * rejected whole (status "rejected", every bad row listed) and nothing else changes.
+ */
+export const uploadFlatFile = (system: string, kind: FlatKind, file: File) =>
+  api<{ upload: FlatUploadDetail; confirmed_tasks: FlatTask[] }>(
+    `/flatfile/apps/${encodeURIComponent(system)}/uploads?${new URLSearchParams({ kind, filename: file.name })}`,
+    undefined,
+    "POST",
+    { data: file, contentType: "text/csv", resultStatuses: [422] },
+  );
+
+/** Close a manual task by hand, with a reason (flatfile.close_tasks, fresh sign-in). */
+export const closeFlatTask = (taskId: string, reason: string) =>
+  api<{ task: FlatTask }>(`/flatfile/tasks/${encodeURIComponent(taskId)}/close`, { reason });
+/** Verified help-desk resets (issue #108). */
+export type HelpdeskMethod = "push" | "callback" | "manager_approval" | "idv";
+export interface HelpdeskPolicy {
+  satisfied: boolean;
+  required_verifications: number;
+  counted_methods: HelpdeskMethod[];
+  needs_second_approver: boolean;
+  second_approved: boolean;
+  allowed_methods: HelpdeskMethod[];
+  missing: string[];
+}
+export interface HelpdeskVerification {
+  id: string;
+  method: HelpdeskMethod;
+  outcome: "passed" | "failed";
+  phishing_resistant: boolean;
+  verified_by: string;
+  evidence: string;
+  provider: string;
+  created_at: string;
+}
+export interface HelpdeskFinding {
+  id: string;
+  case_id: string;
+  identity_id: number;
+  rule: string;
+  detail: { device?: string; location?: string; reset_at?: string; device_added_at?: string; sign_in_at?: string; known_locations?: string[] };
+  created_at: string;
+}
+export interface HelpdeskCase {
+  id: string;
+  identity_id: number;
+  identity: string;
+  kind: "password" | "mfa";
+  system: "okta" | "entra" | "simulated";
+  reason: string;
+  status: "open" | "executing" | "executed" | "failed" | "cancelled";
+  privileged: boolean;
+  requested_by: string;
+  second_approver: string | null;
+  second_approved_at: string | null;
+  executed_by: string | null;
+  executed_at: string | null;
+  result: string[];
+  error: string;
+  created_at: string;
+  updated_at: string;
+  policy: HelpdeskPolicy;
+  verifications: HelpdeskVerification[];
+  findings: HelpdeskFinding[];
+}
+const hd = (id: string) => `/helpdesk/cases/${encodeURIComponent(id)}`;
+export const startHelpdeskCase = (b: { identity_id: number; kind: "password" | "mfa"; system: string; reason: string }) =>
+  api<HelpdeskCase>("/helpdesk/cases", b);
+export const verifyHelpdeskCase = (id: string, b: { method: HelpdeskMethod; evidence?: string; number_source?: "hr"; session_ref?: string }) =>
+  api<HelpdeskCase>(`${hd(id)}/verifications`, b);
+export const managerApproveHelpdeskCase = (id: string, evidence?: string) => api<HelpdeskCase>(`${hd(id)}/manager-approval`, { evidence });
+export const secondApproveHelpdeskCase = (id: string) => api<HelpdeskCase>(`${hd(id)}/second-approval`, {});
+export const cancelHelpdeskCase = (id: string) => api<HelpdeskCase>(`${hd(id)}/cancel`, {});
+/** The temporary access pass (Entra) is in the answer once; it is never stored or shown again. */
+export const executeHelpdeskCase = (id: string) => api<{ case: HelpdeskCase; temporary_access_pass?: string }>(`${hd(id)}/execute`, {});
 
 // ---------------------------------------------------------------- attribute policies (issue #162)
 
@@ -1740,6 +2016,124 @@ export const sodPaths = {
   violations: (f: SodViolationFilter = {}) => `/sod/violations${sodViolationQuery(f)}`,
 };
 
+// ---------------------------------------------------------------- guest claim (issue #69)
+
+/**
+ * The public claim API (/public/t/{slug}/claim): a guest with no Tessera session finishing an
+ * invitation. It has none of the admin session's assumptions: no CSRF token, no session cache and
+ * no sign-out handling. Instead every request carries the claim session's cookie (HttpOnly, set by
+ * the API) and a proof signed with the key this page generated (see public/claim/proof.ts), so a
+ * stolen cookie alone is useless. The claim link's token travels in the URL fragment and in the
+ * POST body of `start`, never in a path or query.
+ */
+export type ClaimStep = "verify_contact" | "verify_identity" | "existing_account" | "credential" | "complete";
+export interface ClaimStatus {
+  step: ClaimStep;
+  steps: ClaimStep[];
+  first_name: string;
+  tenant: string;
+  sponsor: string;
+  population: GuestPopulationKey;
+  ends_at: string;
+  /** Why the claim waits: "" (it does not), the organization's own set-up, or identity verification. */
+  pending: "" | "organization" | "identity_verification";
+  complete: boolean;
+}
+export interface ClaimStart {
+  /** "check_link" for every link that does not work, whatever the reason; otherwise the first step. */
+  next: "check_link" | ClaimStep;
+  nonce?: string;
+  status?: ClaimStatus;
+}
+export interface ClaimSigner {
+  /** The X-Claim-Proof header value for a request: a signature by the key bound at start over the request and its body ("" for none). */
+  sign(method: string, path: string, nonce: string, body: string): Promise<string>;
+}
+export class ClaimError extends ApiError {
+  constructor(message: string, status: number, code: string) {
+    super(message, status, { error: code, message });
+  }
+}
+
+export const claimPath = (slug: string, rest: string) => `/public/t/${encodeURIComponent(slug)}/claim/${rest}`;
+
+async function claimFetch<T>(slug: string, method: "GET" | "POST", rest: string, body: unknown, signer: ClaimSigner, nonce: string): Promise<T> {
+  const path = claimPath(slug, rest);
+  // serialize once: the proof signs exactly the bytes that are sent
+  const payload = body !== undefined ? JSON.stringify(body) : undefined;
+  const headers: Record<string, string> = { "x-claim-proof": await signer.sign(method, path, nonce, payload ?? "") };
+  if (payload !== undefined) headers["content-type"] = "application/json";
+  const res = await fetch(path, {
+    method,
+    headers,
+    credentials: "same-origin",
+    cache: "no-store",
+    referrerPolicy: "no-referrer",
+    body: payload,
+  });
+  let j: any = null;
+  try {
+    j = await res.json();
+  } catch {
+    /* no body */
+  }
+  if (!res.ok) throw new ClaimError(claimMessage(res.status, j), res.status, j?.error ?? "error");
+  return j as T;
+}
+
+function claimMessage(status: number, j: any): string {
+  switch (j?.error) {
+    case "session_required":
+      return "Your sign-up session ended. Open the link in your invitation email again, or ask for a new one.";
+    case "rate_limited":
+      return "Too many tries. Wait a few minutes and try again.";
+    case "code_invalid":
+      return j.message ?? "That code did not work.";
+    case "authority_unavailable":
+      return j.message ?? "We could not reach the sign-in service. Try again in a moment.";
+    case "wrong_step":
+      return "That step is not open yet.";
+  }
+  return j?.message ?? `Something went wrong (${status}).`;
+}
+
+/** The claim client. `nonce` is the session's, from `start`; the signer holds the key. */
+export const claimApi = {
+  /** Exchange the link's token for a session (sets the cookie). `publicKey` is the page's public JWK. */
+  start: (slug: string, token: string, publicKey: JsonWebKey, signer: ClaimSigner) =>
+    claimFetch<ClaimStart>(slug, "POST", "start", { token, key: publicKey }, signer, ""),
+  status: (slug: string, signer: ClaimSigner, nonce: string) => claimFetch<ClaimStatus>(slug, "GET", "status", undefined, signer, nonce),
+  sendCode: (slug: string, signer: ClaimSigner, nonce: string) =>
+    claimFetch<{ status: string; message: string }>(slug, "POST", "verify/send", undefined, signer, nonce),
+  checkCode: (slug: string, signer: ClaimSigner, nonce: string, code: string) =>
+    claimFetch<{ ok: boolean; step: ClaimStep }>(slug, "POST", "verify/check", { code }, signer, nonce),
+  existingAccount: (slug: string, signer: ClaimSigner, nonce: string, answer: "yes" | "no") =>
+    claimFetch<{ ok: boolean; step: ClaimStep; message: string }>(slug, "POST", "existing-account", { answer }, signer, nonce),
+  /** Set up the sign-in: a redirect to the credential authority, or "pending" when the organization has not set one up. */
+  credential: (slug: string, signer: ClaimSigner, nonce: string) =>
+    claimFetch<{ status: "redirect" | "pending"; redirect?: string; pending?: string; message?: string }>(slug, "POST", "credential", undefined, signer, nonce),
+};
+
+/** "Send me a new link": the answer is the same whether or not an invitation exists. No session, so no proof. */
+export async function claimResend(slug: string, email: string): Promise<string> {
+  const res = await fetch(claimPath(slug, "resend"), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    credentials: "same-origin",
+    cache: "no-store",
+    referrerPolicy: "no-referrer",
+    body: JSON.stringify({ email }),
+  });
+  if (res.status === 429) throw new ClaimError("Too many tries. Wait a while and try again.", 429, "rate_limited");
+  let j: any = null;
+  try {
+    j = await res.json();
+  } catch {
+    /* no body */
+  }
+  return j?.message ?? "If an invitation exists for this address, we have sent a new link.";
+}
+
 export const simulate = (body: { remove_edge_ids?: number[]; add_edges?: { src: string; dst: string; duration_hours?: number }[]; disable_account_ids?: number[] }) =>
   api<SimResult>("/simulate", { remove_edge_ids: [], add_edges: [], disable_account_ids: [], ...body });
 
@@ -1864,14 +2258,16 @@ export interface Connection {
 
 export interface LegacyConnection { legacy: true; system: string; name: string; type: string; state: "legacy"; governed_by: string | null; connector_type: "legacy" }
 
-export interface Verify { kind: "attestation" | "live" | "data"; check?: string; params?: Record<string, unknown> }
-export interface Part { kind: Verify["kind"]; check?: string; status: ItemStatus; reason?: string; simulated?: boolean; run_id?: string; observed?: Record<string, unknown>; message?: string }
+export interface Verify { kind: "attestation" | "live" | "data"; check?: string; params?: Record<string, unknown>; on_unsupported?: "attestation" }
+export interface Part { kind: Verify["kind"]; check?: string; status: ItemStatus; reason?: string; simulated?: boolean; run_id?: string; observed?: Record<string, unknown>; message?: string; unsupported?: boolean }
 
 export interface ChecklistItem {
   id: string; title: string; category: string; level: Level; template_level?: Level; why: string; verify: Verify[];
   remediation: { hint: string; link?: string }; depends_on?: string[]; config_fields?: string[]; source?: string;
   applicable: boolean; status: ItemStatus; reason?: string; blocked_by?: string[]; live_blocked_by?: string[]; parts: Part[];
   attestation: { actor: string; note: string; at: string; stale: boolean } | null;
+  /** An attestation standing in for a live check the system reported unsupported. */
+  live_attestation: { attester: string; actor: string; reason: string; evidence: string; at: string; stale: boolean } | null;
   skip: { actor: string; reason: string; review_by: string; at: string; expired: boolean } | null;
 }
 
@@ -1922,9 +2318,24 @@ export interface AttentionEntry {
   fix: { kind: "item" | "finding"; item_id?: string; finding_id?: string; href: string };
 }
 
+export interface DriftEvent { kind: string; severity: "high" | "medium" | "low"; subject: string; sentence: string; was?: number; now?: number }
+export interface TemplateUpgrade { pin: string; available: string; major: boolean; new_required: string[]; new_other: number; first_seen_at?: string; grace_ends_at?: string; overdue: boolean }
+export interface DriftView {
+  connection_id: string; connection_name: string; revision_id: string; state: RevisionState;
+  baseline: { captured_at: string; score: number; config_hash: string; findings: number; accounts: number; groups: number };
+  score: number; accounts: number; groups: number; findings: number; events: DriftEvent[]; template_upgrade: TemplateUpgrade | null;
+  fail_streak: number; degraded_reason?: string; degraded_at?: string; last_scheduled_run_at?: string; score_series: { at: string; score: number }[];
+}
+/** An Inbox task from deployment readiness (source "connection"): a degraded connection. */
+export interface ReadinessTask {
+  id: string; kind: "connection"; connection_id: string; connection_name: string; owner: string | null; severity: string; title: string;
+  reason: string; since: string; href: string;
+}
+
 export interface ConnectionHealthRow {
   id: string; name: string; connector_type: string; state: RevisionState; health: string; simulated: boolean; score: number; band: Band;
-  counted: boolean; accounts: number; blocking: number; last_validated: string | null; last_dry_run: string | null; drift: unknown;
+  counted: boolean; accounts: number; blocking: number; last_validated: string | null; last_dry_run: string | null;
+  drift: { events: number; high: number; template_update: boolean } | null;
 }
 
 export interface SkippedRow { connection_id: string; connection_name: string; item_id: string; item_title: string; level: string; actor: string; reason: string; skipped_at: string; review_by: string; expired: boolean }
@@ -1933,7 +2344,7 @@ export interface DeploymentHealth {
   generated_at: string;
   tenant: { score: number | null; band: Band | ""; capped: boolean; cap_reason?: string; hr_source: string; connections_counted: number; formula: string };
   kpis: { accounts_correlated_pct?: number; orphans: number; dormant: number; privileged_accounts: number; open_critical_high: number; connections_in_setup: number; degraded: number };
-  connections: ConnectionHealthRow[]; needs_attention: AttentionEntry[]; skipped: SkippedRow[]; drift: unknown[];
+  connections: ConnectionHealthRow[]; needs_attention: AttentionEntry[]; skipped: SkippedRow[]; drift: DriftView[]; tasks: ReadinessTask[];
   schedule: Record<string, string>; scenario: string;
 }
 
@@ -1954,6 +2365,8 @@ export const readiness = {
     api<{ connection: Connection; new_revision: boolean; invalidated: string[]; fields: { field: string; msg: string }[] }>(`/connections/${id}/config`, patch, "PATCH"),
   setCredential: (id: string, body: { secret?: string; reference?: string }) => apiNoResume<RevisionView["credential"]>(`/connections/${id}/credential`, body, "PUT"),
   attest: (id: string, item: string, note: string) => api<Checklist>(`/connections/${id}/checklist/${item}/attest`, { note }),
+  attestInstead: (id: string, item: string, body: { attester: string; reason: string; evidence: string }) =>
+    api<Checklist>(`/connections/${id}/checklist/${item}/attest-instead`, body),
   skip: (id: string, item: string, reason: string, review_by?: string) =>
     api<Checklist>(`/connections/${id}/checklist/${item}/skip`, review_by ? { reason, review_by } : { reason }),
   unskip: (id: string, item: string) => api<Checklist>(`/connections/${id}/checklist/${item}/skip`, undefined, "DELETE"),
@@ -1967,6 +2380,133 @@ export const readiness = {
   rerun: (reconcile = false) => api<{ results: { connection_id: string; name: string; validation_run_id: string | null; dry_run_id: string | null; skipped?: string }[]; dashboard: DeploymentHealth }>(
     "/insights/deployment-health/rerun", { reconcile }),
 };
+
+// ------------------------------------------------------ Directory Agents (DR-11)
+export type AgentStatus = "pending" | "active" | "revoked";
+
+/** One Directory Agent. It carries no secret and no key pin. */
+export interface DirectoryAgent {
+  id: string; name: string; status: AgentStatus;
+  /** Polled Tessera recently (an active agent that is not online cannot answer checks). */
+  online: boolean;
+  /** Older than the version Tessera treats as current. */
+  outdated: boolean;
+  hostname?: string; os?: string; version?: string;
+  /** SHA-256 of the agent's local allowlist: changes when its allowed_targets change. */
+  allowlist_hash?: string;
+  last_seen_at?: string; enrolled_at?: string;
+  created_by: string; created_at: string;
+  revoked_at?: string; revoked_by?: string;
+  /** Prefix of a credential reference for a secret stored on this agent: agent:<id>/ */
+  credential_ref_prefix: string;
+}
+
+/** Issuing an enrolment code: the code is in this response only. */
+export interface AgentEnrolment { agent: DirectoryAgent; code: string; expires_at: string }
+
+export const agents = {
+  // the answer holds a code shown once, so a step-up must not replay this call in the background
+  enrol: (name: string) => apiNoResume<AgentEnrolment>("/agents", { name }),
+  revoke: (id: string) => api<DirectoryAgent>(`/agents/${id}/revoke`, {}),
+};
+
+// ---------------------------------------------------------------- AWS evaluator (/api/aws, design §11.2)
+
+export interface AwsReason { code: string; outcome_sensitive: boolean; detail?: string }
+export interface AwsCell { outcome: string; deny_kind?: string; fidelity: string; fidelity_reasons: AwsReason[]; residual: string | null }
+export interface AwsGap { kind: string; source_arn: string; policy_kind: string; code: string; detail: string; scope: string }
+export interface AwsCan {
+  decision: { outcome: string; fidelity: string; steps: unknown[] };
+  explanation_id: string;
+  summary: string;
+  narrative: string;
+  snapshot: { id: string; taken_at: string };
+  profile: string;
+  collection_gaps: AwsGap[];
+}
+export interface AwsPolicyChange { op: string; target_arn: string; document?: string | null; policy_arn?: string | null }
+export interface AwsDiffChange {
+  principals: string[]; actions: string[]; resources: string[];
+  action_count: number; resource_count: number;
+  kind: "gained" | "lost" | "conditional_changed" | "fidelity_changed";
+  before: AwsCell | null; after: AwsCell | null; trace: string[]; used_days_ago: number | null; gap: boolean;
+}
+export interface AwsSimulation {
+  base_snapshot: string; head_snapshot: string; profile: string; catalog_version: string; engine_version: string;
+  summary: { gained: number; lost: number; conditional_changed: number; fidelity_changed: number; principals_affected: number };
+  changes: AwsDiffChange[]; omitted_changes: number; comment: string; collection_gaps: AwsGap[];
+  pr_comment: { status: string; url?: string; error?: string };
+}
+
+export const awsCan = (principal: string, action: string, resource: string, profile = "default") =>
+  api<AwsCan>(`/aws/can?${new URLSearchParams({ principal, action, resource, profile })}`);
+
+export const awsSimulate = (changes: AwsPolicyChange[], head?: string, pullNumber?: number) =>
+  api<AwsSimulation>("/aws/simulate-policy-change", {
+    changes,
+    ...(head ? { head } : {}),
+    ...(pullNumber ? { comment: { pull_number: pullNumber } } : {}),
+  });
+// ------------------------------------------------------------------ conditional access (issue #163)
+
+export type AccessScope = "signin" | "privileged";
+export type AccessMode = "disabled" | "report_only" | "enforce";
+export type AccessOutcome = "allow" | "step_up" | "deny";
+export type NetworkOp = "any" | "in" | "not_in";
+export type DeviceCondition = "any" | "unmanaged" | "not_compliant";
+export type StepUpAcr = "urn:tessera:acr:aal2" | "urn:tessera:acr:phr" | "urn:tessera:acr:phrh";
+
+export interface AccessPolicy {
+  id: string; name: string; description: string; scope: AccessScope; mode: AccessMode; outcome: AccessOutcome;
+  step_up_acr: StepUpAcr | null; step_up_max_age: number; network_op: NetworkOp; network_range_ids: string[];
+  device: DeviceCondition; priority: number; created_at: string; updated_at: string;
+}
+export type AccessPolicyInput = Omit<AccessPolicy, "id" | "created_at" | "updated_at">;
+
+export interface NetworkRange { id: string; name: string; description: string; cidrs: string[]; used_by: string[]; created_at: string; updated_at: string }
+export interface NetworkRangeInput { name: string; description: string; cidrs: string[] }
+
+export interface DeviceSignal {
+  user_id: string; user: string; status: "compliant" | "not_compliant"; source: "manual" | "caep"; reason: string;
+  set_at: string; expires_at: string | null; active: boolean;
+}
+export interface AccessUser { id: string; name: string; email: string }
+
+/** The answer of a what-if evaluation: what the current policies would decide. */
+export interface AccessDecision {
+  scope: AccessScope; outcome: AccessOutcome; policies_evaluated: number;
+  decided_by?: { policy_id: string; name: string; mode: AccessMode; outcome: AccessOutcome; step_up_acr?: StepUpAcr; step_up_max_age?: number };
+  report_only?: { policy_id: string; name: string; outcome: AccessOutcome }[];
+  inputs: { client_ip: string; device_managed: string; device_compliance: string };
+}
+export interface AccessEvaluateInput { scope: AccessScope; client_ip?: string; device_managed?: boolean | null; device_compliance?: "compliant" | "not_compliant" | "unknown" }
+
+/** Conditional access: network ranges, policies and the device-compliance signal (needs conditional_access.read / .manage). */
+export const conditionalAccess = {
+  policies: () => api<AccessPolicy[]>("/access/policies"),
+  createPolicy: (b: AccessPolicyInput) => api<AccessPolicy>("/access/policies", b),
+  updatePolicy: (id: string, b: AccessPolicyInput) => api<AccessPolicy>(`/access/policies/${encodeURIComponent(id)}`, b, "PUT"),
+  deletePolicy: (id: string) => api<{ deleted: string }>(`/access/policies/${encodeURIComponent(id)}`, undefined, "DELETE"),
+  networks: () => api<NetworkRange[]>("/access/networks"),
+  createNetwork: (b: NetworkRangeInput) => api<NetworkRange>("/access/networks", b),
+  updateNetwork: (id: string, b: NetworkRangeInput) => api<NetworkRange>(`/access/networks/${encodeURIComponent(id)}`, b, "PUT"),
+  deleteNetwork: (id: string) => api<{ deleted: string }>(`/access/networks/${encodeURIComponent(id)}`, undefined, "DELETE"),
+  signals: () => api<DeviceSignal[]>("/access/device-signals"),
+  setSignal: (userId: string, b: { status: DeviceSignal["status"]; reason: string; expires_in_hours?: number }) =>
+    api<DeviceSignal>(`/access/device-signals/${encodeURIComponent(userId)}`, b, "PUT"),
+  clearSignal: (userId: string) => api<{ cleared: string }>(`/access/device-signals/${encodeURIComponent(userId)}`, undefined, "DELETE"),
+  evaluate: (b: AccessEvaluateInput) => api<AccessDecision>("/access/evaluate", b),
+};
+
+/** One line describing when a policy applies, for lists. */
+export function describeConditions(p: Pick<AccessPolicy, "network_op" | "network_range_ids" | "device">, ranges: Pick<NetworkRange, "id" | "name">[]): string {
+  const name = (id: string) => ranges.find((r) => r.id === id)?.name ?? "a deleted range";
+  const parts: string[] = [];
+  if (p.network_op !== "any") parts.push(`network ${p.network_op === "in" ? "is in" : "is not in"} ${p.network_range_ids.map(name).join(", ")}`);
+  if (p.device === "unmanaged") parts.push("device is not managed");
+  if (p.device === "not_compliant") parts.push("device is not known to be compliant");
+  return parts.length ? parts.join(" and ") : "always";
+}
 
 // ------------------------------------------------------------ SIEM sinks (#169)
 
@@ -2227,6 +2767,33 @@ export const provisioning = {
   run: () => api<{ processed: number; verified: number; mismatch: number; failed: number; retrying: number }>("/provisioning/run", {}),
 };
 
+// ----------------------------------------------------- access drift (#301)
+
+export type DriftClass = "missing" | "rogue" | "orphan" | "stale";
+export type DriftStatus = "open" | "remediating" | "resolved" | "accepted";
+export type DriftAction = "auto_provision" | "auto_revoke" | "owner_task" | "report_only";
+
+export interface DriftItem {
+  id: string; class: DriftClass; status: DriftStatus; system: string; entitlement: string; entitlement_name: string;
+  account_ref: string; account: string; identity: { id: number | null; name: string } | null; owner: { id: number | null; name: string } | null;
+  intended_id: string | null; observed_id: number | null; action: DriftAction | "none"; remediation_ref: string | null;
+  remediation_note: string | null; remediation_at: string | null; detected_at: string; updated_at: string; resolved_at: string | null;
+  accepted_by: string | null; accepted_reason: string | null; can_remediate: boolean; can_accept: boolean;
+}
+
+export interface DriftList { items: DriftItem[]; counts: { by_class: Partial<Record<DriftClass, number>>; by_status: Partial<Record<DriftStatus, number>> } }
+
+export interface RemediationPolicy { id: string; system: string; entitlement_ref: string; drift_class: DriftClass; action: DriftAction; created_by: string; updated_at: string }
+export interface RemediationPolicyInput { system: string; entitlement_ref: string; drift_class: DriftClass; action: DriftAction }
+
+export const drift = {
+  run: () => api<{ opened: number; reopened: number; updated: number; resolved: number; actions: number }>("/access-drift/run", {}),
+  accept: (id: string, reason: string) => api<DriftItem>(`/access-drift/${encodeURIComponent(id)}/accept`, { reason }),
+  remediate: (id: string, action: DriftAction) => api<DriftItem>(`/access-drift/${encodeURIComponent(id)}/remediate`, { action }),
+  putPolicy: (body: RemediationPolicyInput) => api<RemediationPolicy>("/remediation-policies", body, "PUT"),
+  deletePolicy: (id: string) => api<{ removed: boolean }>(`/remediation-policies/${encodeURIComponent(id)}`, undefined, "DELETE"),
+};
+
 // ----------------------------------------------------- job runs (#172)
 
 export interface JobRun {
@@ -2295,9 +2862,9 @@ export type ChangeStatus = "pending_approval" | "cooling_off" | "applied" | "rej
 /** The change types of design §15.2 that the API accepts. */
 export type ChangeType =
   | "role.grant" | "role.revoke" | "idp_connection.create" | "idp_connection.update_trust" | "idp_connection.update_cosmetic"
-  | "idp_connection.disable" | "tenant.settings.update" | "tenant.security_contacts.update";
+  | "idp_connection.disable" | "tenant.settings.update" | "tenant.security_contacts.update" | "breakglass.register" | "breakglass.revoke";
 
-interface AdminPersonRef { id: string; display_name: string }
+export interface AdminPersonRef { id: string; display_name: string }
 
 export interface AdminChange {
   id: string; type: ChangeType; summary: string; status: ChangeStatus; target_id: string | null; two_person: boolean;
@@ -2309,7 +2876,7 @@ export interface AdminChange {
 }
 
 export interface AdminNotification {
-  id: string; kind: string; recipient_type: "admin" | "contact" | "operator"; recipient: string; subject: string;
+  id: string; kind: string; severity: "info" | "critical"; recipient_type: "admin" | "contact" | "operator"; recipient: string; subject: string;
   change_request_id: string | null; recovery_id: string | null; created_at: string; delivered_at: string | null;
 }
 
@@ -2358,6 +2925,51 @@ export const adminChanges = {
   activateConnection: (id: string) => api<{ id: string; status: string }>(`/admin/idp-connections/${id}/activate`, {}),
   disableUser: (id: string, reason: string) => api<{ id: string; status: string }>(`/admin/users/${id}/disable`, { reason }),
   cancelRecovery: (id: string) => api<AdminRecovery>(`/admin/recovery/${id}/cancel`, {}),
+};
+
+// ------------------------------------------------------------ break-glass (design §9.6, §15.4)
+
+/** A WebAuthn options document as the API sends it (go-webauthn JSON: binary values are base64url). */
+export type WebAuthnOptionsJSON = { publicKey: Record<string, any> };
+
+export interface BreakGlassKey {
+  id: string; user_id: string; user: string; label: string; custodian: string; aaguid: string; attestation_format: string;
+  attestation_trust: "basic" | "attca" | "mds_verified"; transports: string[]; change_request_id: string; created_at: string;
+  last_used_at: string | null; revoked_at: string | null;
+}
+
+/** An applied breakglass.register request whose key has not been registered yet (24 h window). */
+export interface BreakGlassEnrolment {
+  change_request_id: string; user_id: string; label: string; custodian: string; requested_by: AdminPersonRef; window_closes_at: string;
+}
+
+/** One break-glass sign-in, open until an admin says why it happened. */
+export interface BreakGlassUse {
+  id: string; session_id: string; credential_id: string; key: string; used_at: string; ip: string | null; answered: boolean;
+  answered_at: string | null; answered_by: AdminPersonRef | null; reason: string | null;
+}
+
+/** What a break-glass session may do (§15.4). */
+export type BreakGlassAction = "idp_connection.disable" | "idp_connection.update_trust" | "role.grant" | "sessions.revoke_all";
+
+export interface BreakGlassOverview {
+  available: boolean; keys: BreakGlassKey[]; open_enrolments: BreakGlassEnrolment[]; uses: BreakGlassUse[]; unanswered_uses: number;
+  aaguid_allowlist: string[]; actions: BreakGlassAction[];
+}
+
+/** Break-glass calls. Registration is an admin's (step-up); the actions are the break-glass session's alone. */
+export const breakGlass = {
+  registrationOptions: (changeRequestId: string) =>
+    api<WebAuthnOptionsJSON>("/admin/break-glass/registration/options", { change_request_id: changeRequestId }),
+  registrationVerify: (changeRequestId: string, credential: unknown) =>
+    api<BreakGlassKey>("/admin/break-glass/registration/verify", { change_request_id: changeRequestId, credential }),
+  action: (action: BreakGlassAction, payload: Record<string, unknown> = {}) =>
+    api<{ action: BreakGlassAction; revoked_sessions: number; change_request?: AdminChange }>(`/admin/break-glass/actions/${action}`, payload),
+  attest: (useId: string, reason: string) => api<BreakGlassUse>(`/admin/break-glass/uses/${useId}/attest`, { reason }),
+  /** The sign-in page's two calls (no session yet): options for the tenant's keys, then the signed assertion. */
+  signInOptions: (tenant: string) => api<WebAuthnOptionsJSON>("/auth/break-glass/options", { tenant }),
+  signIn: (tenant: string, credential: unknown) =>
+    api<{ ok: boolean; redirect: string; expires_at: string; idle_timeout_s: number }>("/auth/break-glass/verify", { tenant, credential }),
 };
 
 /** Seconds as "24 h", "5 min" for the cooling-off column. */

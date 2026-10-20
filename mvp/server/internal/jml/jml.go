@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
+	"github.com/nischalravi/tessera/mvp/server/internal/flatfile"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
@@ -703,7 +704,8 @@ func addGrantTo(c *store.TenantTx, now time.Time, ident *store.Identity, gid int
 	if err != nil || existing != nil {
 		return err
 	}
-	_, err = c.InsertEdge(&store.GrantEdge{Src: src, Dst: dst, Relation: "member_of", Source: "manual", CreatedAt: now})
+	_, err = c.InsertEdge(&store.GrantEdge{Src: src, Dst: dst, Relation: "member_of", Source: "manual", CreatedAt: now,
+		Ref: "jml:" + ident.ExternalID})
 	return err
 }
 
@@ -780,7 +782,7 @@ func stepKey(eventID int64, idx int, action string) string {
 	return fmt.Sprintf("jml:%d:%d:%s", eventID, idx, action)
 }
 
-func applyStep(c *store.TenantTx, now time.Time, ident *store.Identity, st Step, eventID int64, idx int) error {
+func applyStep(c *store.TenantTx, now time.Time, by string, ident *store.Identity, st Step, eventID int64, idx int) error {
 	var err error
 	switch stepStr(st, "action") {
 	case containment.ActionRevokeSessions, containment.ActionRevokeGrants:
@@ -789,13 +791,18 @@ func applyStep(c *store.TenantTx, now time.Time, ident *store.Identity, st Step,
 		id, _ := stepInt(st, "account_id")
 		var routed bool
 		if routed, err = routeDisable(c, now, id, stepKey(eventID, idx, "disable_account")); err == nil && !routed {
-			err = c.DisableAccount(id)
+			if err = c.DisableAccount(id); err == nil {
+				// an app with no connector cannot be disabled from here: a manual task (issue #105)
+				err = flatfile.AccountDisabled(c, now, by, id, "leaver")
+			}
 		}
 	case "remove_grant":
 		id, _ := stepInt(st, "edge_id")
 		var routed bool
 		if routed, err = routeRemoveGrant(c, now, id, stepKey(eventID, idx, "remove_grant")); err == nil && !routed {
-			err = c.RevokeEdge(id, now, "jml")
+			if err = flatfile.GrantRevoked(c, now, by, id, "leaver"); err == nil {
+				err = c.RevokeEdge(id, now, "jml")
+			}
 		}
 	case "add_grant":
 		var routed bool
@@ -1015,7 +1022,7 @@ func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.User
 		}
 		for i, st := range steps {
 			if stepStr(st, "action") == "add_grant" {
-				if err := applyStep(c, now, ident, st, ev.ID, i); err != nil {
+				if err := applyStep(c, now, by.Display, ident, st, ev.ID, i); err != nil {
 					return nil, err
 				}
 			}
@@ -1026,7 +1033,7 @@ func ExecuteEvent(c *store.TenantTx, now time.Time, eventID int64, by store.User
 			return nil, err
 		}
 		for i, st := range steps {
-			if err := applyStep(c, now, ident, st, ev.ID, i); err != nil {
+			if err := applyStep(c, now, by.Display, ident, st, ev.ID, i); err != nil {
 				return nil, err
 			}
 		}
@@ -1146,7 +1153,7 @@ func ExecuteLeaver(c *store.TenantTx, now time.Time, identityID int64) (Plan, er
 	for i, st := range steps {
 		// No HRIS event: a negative id keeps the provisioning keys of this
 		// identity's end-date leaver apart from every event's.
-		if err := applyStep(c, now, ident, st, -identityID, i); err != nil {
+		if err := applyStep(c, now, "system", ident, st, -identityID, i); err != nil {
 			return nil, err
 		}
 	}

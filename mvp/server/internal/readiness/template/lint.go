@@ -158,6 +158,9 @@ func lintItem(tid string, it *Item, all map[string]*Item, add addFn) {
 		add(tid, id, "no verification")
 	}
 	for _, v := range it.Verify {
+		if v.OnUnsupported != "" && (v.Kind != Live || v.OnUnsupported != Attestation) {
+			add(tid, id, "on_unsupported takes the value attestation and only on a live check")
+		}
 		switch v.Kind {
 		case Attestation:
 			if v.Check != "" || len(v.Params) > 0 {

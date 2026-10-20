@@ -214,7 +214,31 @@ func (s *Service) activate(tx *store.TenantTx, ss *store.Sponsorship, by Actor, 
 			return err
 		}
 	}
-	return s.syncPerson(tx, ss.GuestIdentityID, by, now, "sponsorship "+ss.ID)
+	if err := s.syncPerson(tx, ss.GuestIdentityID, by, now, "sponsorship "+ss.ID); err != nil {
+		return err
+	}
+	return s.invite(tx, ss, now)
+}
+
+// invite issues the guest's claim link and invitation email (GU-6) when the
+// guest has not claimed yet and the claim is set up.
+func (s *Service) invite(tx *store.TenantTx, ss *store.Sponsorship, now time.Time) error {
+	if !s.Claim.Ready() {
+		return nil
+	}
+	guest, err := tx.Identity(ss.GuestIdentityID)
+	if err != nil {
+		return err
+	}
+	if guest.Status != "invited" {
+		return nil // an existing person has nothing to claim
+	}
+	_, err = s.Claim.Issue(tx, ss, "activation", now)
+	var ce *Error
+	if errors.As(err, &ce) && ce.Code == "invitation_revoked" {
+		return nil // the sponsor cancelled the invitation before it was approved
+	}
+	return err
 }
 
 // syncPerson makes the guest's lifecycle follow their live sponsorships: the

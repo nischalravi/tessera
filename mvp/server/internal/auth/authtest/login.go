@@ -36,6 +36,8 @@ type User struct {
 	Roles   []auth.Role
 	// IdentityID links the user to an identity of the tenant (optional).
 	IdentityID *int64
+	// IsBreakGlass makes the user a break-glass user (when it is created).
+	IsBreakGlass bool
 }
 
 // Ctx describes the authentication context of the session.
@@ -45,6 +47,12 @@ type Ctx struct {
 	Phr      bool
 	Phrh     bool
 	AuthTime time.Time // zero: the session's creation time
+	// WebAuthn is a break-glass sign-in: a WebAuthn-attested context and a
+	// session of kind break_glass.
+	WebAuthn bool
+	// Device is the JSON of the device claims the IdP asserted (for example
+	// `{"managed":true,"compliant":false}`); empty: none.
+	Device string
 }
 
 // Common contexts.
@@ -55,6 +63,9 @@ var (
 	AAL2 = Ctx{AAL: 2}
 	// AAL1 is a password-only sign-in: no role is active.
 	AAL1 = Ctx{AAL: 1}
+	// BreakGlass is a break-glass sign-in with a hardware key: the break_glass
+	// role is active, and the session has kind break_glass.
+	BreakGlass = Ctx{AAL: 3, Phr: true, Phrh: true, WebAuthn: true}
 )
 
 // Login is a signed-in test session.
@@ -137,7 +148,8 @@ func New(db *store.DB, tenant tenancy.ID, u User, c Ctx, now time.Time) (Login, 
 			if display == "" {
 				display = u.Email
 			}
-			user = &store.PlatformUser{ID: u.ID, Email: &email, DisplayName: display, IdentityID: u.IdentityID, CreatedAt: now}
+			user = &store.PlatformUser{ID: u.ID, Email: &email, DisplayName: display, IdentityID: u.IdentityID, CreatedAt: now,
+				IsBreakGlass: u.IsBreakGlass}
 			if err := tx.InsertPlatformUser(user); err != nil {
 				return err
 			}
@@ -163,7 +175,11 @@ func New(db *store.DB, tenant tenancy.ID, u User, c Ctx, now time.Time) (Login, 
 		if err := tx.InsertAuthnContext(rec); err != nil {
 			return err
 		}
-		iss, err := auth.CreateSession(tx, auth.SessionInput{User: user, Authn: rec, Now: now})
+		kind := store.SessionBrowser
+		if c.WebAuthn {
+			kind = store.SessionBreakGlass
+		}
+		iss, err := auth.CreateSession(tx, auth.SessionInput{User: user, Authn: rec, Kind: kind, Now: now})
 		if err != nil {
 			return err
 		}
@@ -193,7 +209,15 @@ func Record(user uuid.UUID, c Ctx, now time.Time) *store.AuthnContextRecord {
 	if c.Phrh {
 		aal = 3
 	}
-	return &store.AuthnContextRecord{ID: c.ID, UserID: user, Protocol: "oidc", Purpose: "login", AAL: aal,
+	var device *string
+	if c.Device != "" {
+		device = &c.Device
+	}
+	protocol, purpose := "oidc", "login"
+	if c.WebAuthn {
+		protocol, purpose, basis = "webauthn", "break_glass", "webauthn_attested"
+	}
+	return &store.AuthnContextRecord{ID: c.ID, UserID: user, Device: device, Protocol: protocol, Purpose: purpose, AAL: aal,
 		PhishingResistant: c.Phr || c.Phrh, PhrBasis: basis, TesseraACR: string(acr), AuthTime: at.UTC(),
 		MappingProfile: "authtest", MappingVersion: 1, ClaimsSHA256: "authtest", CreatedAt: now}
 }

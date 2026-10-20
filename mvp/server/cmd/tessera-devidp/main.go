@@ -46,7 +46,8 @@ const devClientSecret = "tessera-dev-secret" // #nosec G101 -- documented dev-on
 
 const (
 	defaultRedirects = "http://localhost:*/api/auth/oidc/*/callback,http://127.0.0.1:*/api/auth/oidc/*/callback," +
-		"http://localhost:*/api/auth/oauth2/*/callback,http://127.0.0.1:*/api/auth/oauth2/*/callback"
+		"http://localhost:*/api/auth/oauth2/*/callback,http://127.0.0.1:*/api/auth/oauth2/*/callback," +
+		"http://localhost:*/api/auth/cas/*/callback,http://127.0.0.1:*/api/auth/cas/*/callback"
 	defaultPostLogouts = "http://localhost:5173/,http://127.0.0.1:5173/"
 	shutdownTimeout    = 5 * time.Second
 )

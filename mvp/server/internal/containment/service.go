@@ -82,7 +82,7 @@ type CredentialInput struct {
 }
 
 func credAAD(c *store.TenantTx, connectionID string) []byte {
-	return seal.AAD(c.Tenant(), "containment_credentials", "token_enc", connectionID)
+	return store.CredentialAAD(c.Tenant(), connectionID, store.PurposeContainment, "")
 }
 
 // PutCredential seals and stores the credential the kill switch uses for a
@@ -101,12 +101,14 @@ func (s *Service) PutCredential(c *store.TenantTx, connectionID string, in Crede
 	switch {
 	case conn.RetiredAt != nil:
 		return &Error{"the connection is retired"}
-	case !GrantCapable(conn.System):
+	case !GrantCapable(conn.System) && conn.System != Salesforce:
 		return &Error{fmt.Sprintf("containment supports okta, entra, google and github connections, not %q", conn.System)}
 	case in.Token == "" || len(in.Token) > 8192:
 		return &Error{"token is required and at most 8 KiB"}
 	case conn.System == Okta && in.BaseURL == "":
 		return &Error{"base_url (the Okta org URL) is required"}
+	case conn.System == Salesforce && in.BaseURL == "":
+		return &Error{"base_url (the Salesforce instance URL) is required"}
 	case conn.System == GitHub && !userIDRE.MatchString(in.Org):
 		return &Error{"org (the GitHub organization) is required"}
 	}
@@ -123,8 +125,8 @@ func (s *Service) PutCredential(c *store.TenantTx, connectionID string, in Crede
 	if err != nil {
 		return err
 	}
-	if err := c.PutContainmentCredential(&store.ContainmentCredential{ConnectionID: connectionID, BaseURL: in.BaseURL,
-		Org: in.Org, TokenEnc: enc, UpdatedBy: actor, UpdatedAt: now}); err != nil {
+	if err := c.PutCredential(&store.Credential{ConnectionID: connectionID, Purpose: store.PurposeContainment,
+		Sealed: enc, BaseURL: in.BaseURL, Org: in.Org, UpdatedBy: actor, UpdatedAt: now}); err != nil {
 		return err
 	}
 	return c.Audit(now, actor, "containment.credential_set", ojson.Object{{Key: "connection_id", Value: connectionID},
@@ -269,7 +271,7 @@ func (s *Service) BuildJob(c *store.TenantTx, identityID int64, trigger string, 
 // loadCredential returns the connection's credential (nil: none set), or why
 // a stored one cannot be used.
 func (s *Service) loadCredential(c *store.TenantTx, connectionID string) (*Credential, string, error) {
-	k, err := c.ContainmentCredential(connectionID)
+	k, err := c.Credential(connectionID, store.PurposeContainment, "")
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, "", nil
 	}
@@ -279,11 +281,34 @@ func (s *Service) loadCredential(c *store.TenantTx, connectionID string) (*Crede
 	if s.Sealer == nil {
 		return nil, "the stored credential cannot be unsealed: no key is configured", nil
 	}
-	tok, err := s.Sealer.Open(k.TokenEnc, credAAD(c, connectionID))
+	tok, err := s.Sealer.Open(k.Sealed, credAAD(c, connectionID))
 	if err != nil {
 		return nil, "the stored credential cannot be unsealed", nil
 	}
 	return &Credential{BaseURL: k.BaseURL, Org: k.Org, Token: string(tok)}, "", nil
+}
+
+// CredentialFor returns the stored provider credential of the live connection
+// for system, for other features that call the same provider (the help-desk
+// reset). A nil credential comes with why: no live connection or credential,
+// or one that cannot be unsealed.
+func (s *Service) CredentialFor(c *store.TenantTx, system string) (*Credential, string, error) {
+	conns, err := liveConnections(c)
+	if err != nil {
+		return nil, "", err
+	}
+	cn := conns[system]
+	if cn == nil {
+		return nil, "no live connection for " + system, nil
+	}
+	cred, why, err := s.loadCredential(c, cn.ID)
+	if err != nil {
+		return nil, "", err
+	}
+	if cred == nil && why == "" {
+		why = "no provider credential is configured for " + system
+	}
+	return cred, why, nil
 }
 
 // ---------------------------------------------------------------- run

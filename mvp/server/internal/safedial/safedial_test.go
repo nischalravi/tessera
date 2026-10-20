@@ -62,9 +62,9 @@ func mustAllow(t *testing.T, s string) []AllowEntry {
 
 // TestSafedial_BlocksPrivateUnlessAgent: private, loopback, CGNAT, link-local
 // and metadata targets are refused; a dev allowlist admits private ones but
-// never metadata; with an agent Transport (the production path, DR-11) the
-// agent carries the connection. The Directory Agent itself is not built in
-// this change: the test uses a fake Transport.
+// never metadata; in production the server-side dialer refuses every private
+// target and an allowlist, and only the Directory Agent's own dialer
+// (AgentLocal, its local allowlist; DR-11) reaches a listed private host.
 func TestSafedial_BlocksPrivateUnlessAgent(t *testing.T) {
 	res := &fakeResolver{addrs: map[string][]netip.Addr{
 		"lab.example":      {netip.MustParseAddr("192.168.1.10")},
@@ -129,10 +129,26 @@ func TestSafedial_BlocksPrivateUnlessAgent(t *testing.T) {
 		})
 	}
 
-	t.Run("agent carries private targets", func(t *testing.T) {
-		ag := &fakeAgent{}
-		before := res.calls
-		d, err := New(Options{Env: config.Prod, Resolver: res, Agent: ag})
+	t.Run("production server refuses private targets", func(t *testing.T) {
+		rd := &recDial{}
+		d, err := New(Options{Env: config.Prod, Resolver: res, dial: rd.dial})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, h := range []string{"lab.example", "192.168.1.10", "loop.example"} {
+			if _, err := d.Dial(context.Background(), h, 389, false); !errors.Is(err, ErrBlockedAddress) {
+				t.Errorf("%s: %v", h, err)
+			}
+		}
+		if len(rd.addrs) != 0 {
+			t.Fatalf("dialed %v", rd.addrs)
+		}
+	})
+
+	t.Run("agent-local allowlist reaches only listed private targets", func(t *testing.T) {
+		rd := &recDial{}
+		d, err := New(Options{Env: config.Prod, AgentLocal: true, Allow: mustAllow(t, "lab.example:389,10.0.0.0/24:636"),
+			Resolver: res, dial: rd.dial})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -142,25 +158,44 @@ func TestSafedial_BlocksPrivateUnlessAgent(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer c.Close()
-		if ag.host != "lab.example" || ag.port != 389 || res.calls != before {
-			t.Errorf("agent got %q:%d, local lookups %d", ag.host, ag.port, res.calls)
-		}
 		if c.Secure() {
 			t.Error("an unupgraded 389 connection must not report Secure")
+		}
+		if len(rd.addrs) != 1 || rd.addrs[0] != "192.168.1.10:389" {
+			t.Errorf("dialed %v", rd.addrs)
+		}
+		// Not listed, wrong port and metadata stay refused even on the agent.
+		for _, tc := range []struct {
+			host string
+			port int
+		}{{"192.168.1.10", 389}, {"lab.example", 636}, {"meta.example", 389}, {"cgnat.example", 389}} {
+			if _, err := d.Dial(context.Background(), tc.host, tc.port, false); !errors.Is(err, ErrBlockedAddress) {
+				t.Errorf("%s:%d: %v", tc.host, tc.port, err)
+			}
+		}
+		if len(rd.addrs) != 1 {
+			t.Errorf("dialed %v", rd.addrs)
 		}
 	})
 }
 
-type fakeAgent struct {
-	host string
-	port int
-}
-
-func (a *fakeAgent) DialTarget(_ context.Context, host string, port int) (net.Conn, error) {
-	a.host, a.port = host, port
-	c, s := net.Pipe()
-	_ = s.Close()
-	return c, nil
+func TestListed(t *testing.T) {
+	l := mustAllow(t, "ldap.corp.example:636, 10.1.2.0/24:389, 192.168.1.10:636")
+	for _, tc := range []struct {
+		host string
+		port int
+		want bool
+	}{
+		{"ldap.corp.example", 636, true}, {"LDAP.corp.example.", 636, true}, {"ldap.corp.example", 389, false},
+		{"other.corp.example", 636, false}, {"10.1.2.9", 389, true}, {"10.1.3.9", 389, false},
+		{"10.1.2.9", 636, false}, {"192.168.1.10", 636, true}, {"::ffff:192.168.1.10", 636, true},
+		// a name is never matched against a CIDR entry
+		{"nas.corp.example", 389, false}, {"", 636, false}, {"93.184.216.34", 636, false},
+	} {
+		if got := Listed(l, tc.host, tc.port); got != tc.want {
+			t.Errorf("Listed(%q, %d) = %t, want %t", tc.host, tc.port, got, tc.want)
+		}
+	}
 }
 
 // TestSafedial_BlocksRebinding: the name is resolved once, every address is
@@ -345,7 +380,7 @@ func TestSafedial_ProdRefusesAllowlist(t *testing.T) {
 	}
 	// The config layer refuses the variable in prod (internal/config tests);
 	// ForConfig also rejects bad syntax in dev.
-	if _, err := ForConfig(&config.Config{Env: config.Dev, SafedialAllow: "0.0.0.0/0:636"}, nil, nil); err == nil {
+	if _, err := ForConfig(&config.Config{Env: config.Dev, SafedialAllow: "0.0.0.0/0:636"}, nil); err == nil {
 		t.Fatal("0.0.0.0/0 accepted")
 	}
 }

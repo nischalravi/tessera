@@ -185,7 +185,8 @@ type Dashboard struct {
 	Connections    []ConnectionHealth `json:"connections"`
 	NeedsAttention []AttentionEntry   `json:"needs_attention"`
 	Skipped        []SkippedView      `json:"skipped"`
-	Drift          []any              `json:"drift"`
+	Drift          []*DriftView       `json:"drift"`
+	Tasks          []Task             `json:"tasks"` // Inbox tasks (source "connection"): degraded connections
 	Schedule       map[string]string  `json:"schedule"`
 	Scenario       string             `json:"scenario"`
 }
@@ -233,9 +234,7 @@ func dryRunCounts(c *store.TenantTx, b *Bundle) (DryRunCounts, error) {
 // Workday), which counts as the authoritative HR source until it is governed.
 func (s *Service) Dashboard(c *store.TenantTx, now time.Time, legacyHR string) (*Dashboard, error) {
 	d := &Dashboard{GeneratedAt: store.RT(now), KPIs: map[string]int{}, Connections: []ConnectionHealth{},
-		NeedsAttention: []AttentionEntry{}, Skipped: []SkippedView{}, Drift: []any{},
-		Schedule: map[string]string{"live_checks": "on demand", "reconciliation": "on demand",
-			"note": "scheduled re-runs, drift and degraded detection arrive with DR-9"},
+		NeedsAttention: []AttentionEntry{}, Skipped: []SkippedView{}, Drift: []*DriftView{}, Schedule: s.scheduleInfo(),
 		Scenario: s.Runner.withDefaults().Scenario}
 	conns, err := c.Connections()
 	if err != nil {
@@ -288,6 +287,14 @@ func (s *Service) Dashboard(c *store.TenantTx, now time.Time, legacyHR string) (
 			users += dc.Users
 			correlated += dc.Tier1 + dc.Tier2
 		}
+		dv, err := s.Drift(c, b, now)
+		if err != nil {
+			return nil, err
+		}
+		if dv != nil {
+			row.Drift = dv.brief()
+			d.Drift = append(d.Drift, dv)
+		}
 		d.Connections = append(d.Connections, row)
 		var fs []*store.Finding
 		if b.Evidence.DataRun != nil {
@@ -326,6 +333,9 @@ func (s *Service) Dashboard(c *store.TenantTx, now time.Time, legacyHR string) (
 				SkippedAt: store.RT(it.Skip.SkippedAt), ReviewBy: store.RT(it.Skip.ReviewBy), Expired: !it.Skip.ReviewBy.After(now)})
 		}
 	}
+	if d.Tasks, err = s.Tasks(c, now); err != nil {
+		return nil, err
+	}
 	if hrName == "" && legacyHR != "" {
 		hrName = legacyHR + " (legacy connector)"
 	}
@@ -354,7 +364,7 @@ type ConnectionHealthView struct {
 	State          string            `json:"state"`
 	Breakdown      ScoreBreakdown    `json:"breakdown"`
 	NeedsAttention []AttentionEntry  `json:"needs_attention"`
-	Drift          any               `json:"drift"`
+	Drift          *DriftView        `json:"drift"` // null until the revision is live and has a baseline
 	Schedule       map[string]string `json:"schedule"`
 }
 
@@ -382,8 +392,12 @@ func (s *Service) Health(c *store.TenantTx, connID string, now time.Time) (*Conn
 	if es == nil {
 		es = []AttentionEntry{}
 	}
+	dv, err := s.Drift(c, b, now)
+	if err != nil {
+		return nil, err
+	}
 	return &ConnectionHealthView{ConnectionID: conn.ID, RevisionID: b.Rev.ID, State: b.Rev.State, Breakdown: s.ConnectionScore(b),
-		NeedsAttention: es, Schedule: map[string]string{"live_checks": "on demand", "reconciliation": "on demand"}}, nil
+		NeedsAttention: es, Drift: dv, Schedule: s.scheduleInfo()}, nil
 }
 
 // RecordScore appends a connection score to the readiness_scores series

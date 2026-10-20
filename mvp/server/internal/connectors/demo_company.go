@@ -237,7 +237,7 @@ func (c *DemoCompany) edge(src, dst Ref, relation, system string) {
 	if system == "" {
 		system = dst.System
 	}
-	c.R[system].Edges = append(c.R[system].Edges, EdgeRecord{src, dst, relation})
+	c.R[system].Edges = append(c.R[system].Edges, EdgeRecord{Src: src, Dst: dst, Relation: relation})
 	c.children[src] = append(c.children[src], dst)
 }
 

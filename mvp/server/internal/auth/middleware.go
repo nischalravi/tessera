@@ -17,7 +17,14 @@ import (
 const (
 	ViaCookie = "cookie"
 	ViaDPoP   = "dpop" // PR10
+	// ViaBearer is a machine client's unbound token (a client not configured
+	// for DPoP, §9.5).
+	ViaBearer = "bearer"
 )
+
+// IsToken reports whether the principal authenticated with an access token
+// (not a cookie): no CSRF check applies, and its events carry the client id.
+func (p *Principal) IsToken() bool { return p.Via == ViaDPoP || p.Via == ViaBearer }
 
 // Reasons an authentication failed (recorded as the anonymous_reason of the
 // request's http.request event; the client only sees 401 login_required).
@@ -31,6 +38,7 @@ const (
 	// (disabled, terminated or merged; #316, #331).
 	FailIdentityDisabled = "identity_disabled"
 	FailTenantInactive   = "tenant_inactive"
+	FailClientDisabled   = "client_disabled"
 )
 
 // Authenticator resolves the session cookie of a request to a Principal
@@ -180,7 +188,8 @@ func (a *Authenticator) authenticateCookie(r *http.Request) (*Principal, string,
 		authn := ContextFromRecord(rec)
 		assigned := AssignedRoles(as, now)
 		// the floors of the session's own tenant (§18.3), read with the session
-		active, inactive := ActivateRoles(assigned, &authn, TenantSettings(tenant.Settings), now)
+		settings := TenantSettings(tenant.Settings)
+		active, inactive := ActivateRoles(assigned, &authn, settings, now)
 		uid, sessID := u.ID, s.ID
 		display := u.DisplayName
 		if u.Email != nil && *u.Email != "" {
@@ -188,7 +197,7 @@ func (a *Authenticator) authenticateCookie(r *http.Request) (*Principal, string,
 		}
 		p = &Principal{Kind: KindUser, TenantID: tid, UserID: &uid, Display: display, SessionID: &sessID,
 			Authn: &authn, AssignedRoles: assigned, ActiveRoles: active, InactiveRoles: inactive, Via: ViaCookie,
-			session: s}
+			IdentityID: u.IdentityID, GroupsViewerView: settings.GroupsViewerCanView, session: s}
 		if s.CSRFSecret != nil {
 			p.csrfSecret = *s.CSRFSecret
 		}
@@ -248,6 +257,9 @@ func (a *Authenticator) authenticateToken(r *http.Request) (*Principal, *Failure
 	if vt.Tenant.Status != "active" || vt.Tenant.ID == tenancy.Platform {
 		return nil, &Failure{Reason: FailTenantInactive, Challenge: `DPoP error="invalid_token"`}, nil
 	}
+	if vt.Machine {
+		return a.authenticateMachine(r, vt)
+	}
 	now := a.Clock().UTC()
 	var p *Principal
 	var reason string
@@ -277,6 +289,12 @@ func (a *Authenticator) authenticateToken(r *http.Request) (*Principal, *Failure
 		}
 		if u.Status != "active" {
 			reason = FailUserDisabled
+			return nil
+		}
+		if off, err := IdentityInactive(tx, u); err != nil {
+			return err
+		} else if off {
+			reason = FailIdentityDisabled
 			return nil
 		}
 		rec, err := tx.AuthnContext(s.CurrentAuthnContextID)

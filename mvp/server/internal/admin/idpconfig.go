@@ -53,6 +53,11 @@ type IdPConfig struct {
 	TokenEndpoint         string `json:"token_endpoint,omitempty"`
 	UserinfoEndpoint      string `json:"userinfo_endpoint,omitempty"`
 	SubjectField          string `json:"subject_field,omitempty"` // the user object's immutable id field ("id" for github)
+	// CAS 3.0 (protocol cas)
+	CASServerURL string `json:"cas_server_url,omitempty"`
+	// WS-Federation (protocol wsfed): idp_entity_id is the token issuer,
+	// idp_signing_certs the pinned token-signing certificates
+	WSFedEndpoint string `json:"wsfed_endpoint,omitempty"` // the passive endpoint, e.g. https://adfs.corp.example/adfs/ls/
 }
 
 // IdPOptions are the environment rules of IdPConfig.Connection.
@@ -90,9 +95,9 @@ func (f *IdPConfig) Connection(opt IdPOptions, now time.Time) (*store.IdPConnect
 		bad("name is required")
 	}
 	switch f.Protocol {
-	case "oidc", "saml", "oauth2":
+	case "oidc", "saml", "oauth2", "cas", "wsfed":
 	default:
-		bad("protocol %q: want oidc, saml or oauth2", f.Protocol)
+		bad("protocol %q: want oidc, saml, oauth2, cas or wsfed", f.Protocol)
 	}
 	switch {
 	case f.Profile == store.ProfileDevMock:
@@ -101,6 +106,10 @@ func (f *IdPConfig) Connection(opt IdPOptions, now time.Time) (*store.IdPConnect
 		}
 	case f.Protocol == "saml" && f.Profile != store.ProfileGenericSAML:
 		bad("profile %q: SAML connections use generic_saml", f.Profile)
+	case f.Protocol == "wsfed" && f.Profile != store.ProfileADFS:
+		bad("profile %q: WS-Federation connections use adfs", f.Profile)
+	case f.Protocol == "cas" && f.Profile != store.ProfileGenericCAS:
+		bad("profile %q: CAS connections use generic_cas", f.Profile)
 	case f.Protocol == "oauth2" && f.Profile != store.ProfileGitHub && f.Profile != store.ProfileGenericOAuth2:
 		bad("profile %q: OAuth 2.0 connections use github or generic_oauth2", f.Profile)
 	case f.Protocol == "oidc" && !slices.Contains([]string{store.ProfileOkta, store.ProfileEntra, store.ProfileGoogle,
@@ -115,6 +124,10 @@ func (f *IdPConfig) Connection(opt IdPOptions, now time.Time) (*store.IdPConnect
 		f.checkSAML(opt.Prod, bad)
 	case "oauth2":
 		f.checkOAuth2(opt.Prod, bad)
+	case "cas":
+		f.checkCAS(opt.Prod, bad)
+	case "wsfed":
+		f.checkWSFed(opt.Prod, bad)
 	default:
 		f.checkOIDC(opt.Prod, bad)
 	}
@@ -171,6 +184,16 @@ func (f *IdPConfig) Connection(opt IdPOptions, now time.Time) (*store.IdPConnect
 		entity, sso := f.IdPEntityID, f.IdPSSOURL
 		c.IdPEntityID, c.IdPSSOURL, c.IdPSigningCerts = &entity, &sso, enc(f.IdPSigningCerts, "[]")
 		c.SubjectSource, c.AttributeMap = f.SubjectSource, enc(f.AttributeMap, "{}")
+	case "wsfed":
+		entity, endpoint := f.IdPEntityID, f.WSFedEndpoint
+		c.IdPEntityID, c.IdPSSOURL, c.IdPSigningCerts = &entity, &endpoint, enc(f.IdPSigningCerts, "[]")
+		c.SubjectSource, c.AttributeMap = f.SubjectSource, enc(f.AttributeMap, "{}")
+	case "cas":
+		server := strings.TrimRight(f.CASServerURL, "/")
+		c.Issuer, c.SubjectSource, c.AttributeMap = &server, f.SubjectSource, enc(f.AttributeMap, "{}")
+		if c.SubjectSource == "" {
+			c.SubjectSource = "cas_user"
+		}
 	case "oauth2":
 		oc := oauth2rp.Connection{Profile: f.Profile, AuthorizationURL: f.AuthorizationEndpoint, TokenURL: f.TokenEndpoint,
 			UserinfoURL: f.UserinfoEndpoint, SubjectField: f.SubjectField, Scopes: f.Scopes}.Defaults()
@@ -313,6 +336,65 @@ func (f *IdPConfig) checkOAuth2(prod bool, bad func(string, ...any)) {
 		}
 	case "email", "login", "username", "preferred_username", "name", "upn":
 		bad("subject_field %q: users are keyed on an immutable id, never a name or email", f.SubjectField)
+	}
+}
+
+// checkCAS validates a CAS 3.0 connection: the server URL (https in prod)
+// and the subject (cas:user or an attribute, never the email).
+func (f *IdPConfig) checkCAS(prod bool, bad func(string, ...any)) {
+	u, err := url.Parse(f.CASServerURL)
+	switch {
+	case f.CASServerURL == "" || err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http"):
+		bad("cas_server_url must be an absolute URL (the CAS server base, e.g. https://cas.example.edu/cas)")
+	case prod && u.Scheme != "https":
+		bad("cas_server_url must be https with TESSERA_ENV=prod")
+	case u.RawQuery != "" || u.Fragment != "":
+		bad("cas_server_url has no query or fragment")
+	}
+	switch s := f.SubjectSource; {
+	case s == "" || s == "cas_user":
+	case strings.HasPrefix(s, "attribute:") && len(s) > len("attribute:"):
+		if a := strings.ToLower(strings.TrimPrefix(s, "attribute:")); a == "mail" || a == "email" {
+			bad("subject_source %q: users are keyed on an immutable id, never the email", s)
+		}
+	default:
+		bad("subject_source %q: want cas_user or attribute:<name>", s)
+	}
+	if f.Issuer != "" || f.ClientID != "" || f.IdPEntityID != "" {
+		bad("issuer, client_id and idp_entity_id are not CAS settings (use cas_server_url)")
+	}
+}
+
+// checkWSFed validates a WS-Federation connection: the token issuer, the
+// passive endpoint (https in prod), pinned signing certificates and the
+// subject (the persistent NameID or an immutable claim, never UPN or email).
+func (f *IdPConfig) checkWSFed(prod bool, bad func(string, ...any)) {
+	if f.IdPEntityID == "" {
+		bad("idp_entity_id is required: the token issuer (for ADFS, http://<host>/adfs/services/trust)")
+	}
+	u, err := url.Parse(f.WSFedEndpoint)
+	switch {
+	case f.WSFedEndpoint == "" || err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http"):
+		bad("wsfed_endpoint must be an absolute URL (the passive endpoint)")
+	case prod && u.Scheme != "https":
+		bad("wsfed_endpoint must be https with TESSERA_ENV=prod")
+	}
+	if len(f.IdPSigningCerts) == 0 {
+		bad("idp_signing_certs: pin at least one token-signing certificate")
+	} else if _, err := samlsp.ParseCerts(f.IdPSigningCerts); err != nil {
+		bad("idp_signing_certs: %v", err)
+	}
+	switch s := strings.ToLower(f.SubjectSource); {
+	case s == "" || s == "nameid_persistent":
+	case strings.HasPrefix(s, "attribute:") && len(s) > len("attribute:"):
+		if strings.Contains(s, "emailaddress") || strings.Contains(s, "/upn") || strings.HasSuffix(s, ":email") || strings.HasSuffix(s, ":mail") {
+			bad("subject_source %q: users are keyed on an immutable claim (e.g. objectGUID), never UPN or email", f.SubjectSource)
+		}
+	default:
+		bad("subject_source %q: want nameid_persistent or attribute:<claim type>", f.SubjectSource)
+	}
+	if f.Issuer != "" || f.ClientID != "" || f.IdPSSOURL != "" {
+		bad("issuer, client_id and idp_sso_url are not WS-Federation settings (use wsfed_endpoint)")
 	}
 }
 
