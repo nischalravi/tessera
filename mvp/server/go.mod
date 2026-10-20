@@ -20,7 +20,7 @@ require (
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/mattermost/xml-roundtrip-validator v0.1.0
 	github.com/pressly/goose/v3 v3.28.0
-	github.com/rabbitmq/amqp091-go v1.13.0
+	github.com/rabbitmq/amqp091-go v1.14.0
 	github.com/russellhaering/gosaml2 v0.12.0
 	github.com/russellhaering/goxmldsig v1.6.1
 	github.com/twmb/franz-go v1.21.3
