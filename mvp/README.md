@@ -811,6 +811,7 @@ change in the target system and checks that it happened.
 * **Tessera changes only after verification.** An operation carries a completion (a graph edit, a
   review decision, a JIT end) that runs in the same transaction that marks it `verified`. A failed or
   unverified write therefore leaves the review item open, the account active and the JIT grant in place.
+  Mismatch findings remain open during retry or cancellation and resolve only after successful verification.
   Retrying (or deciding again, or the next `POST …/retry`) re-queues the same operation.
 * **Write-back is per connection and off by default.** A target (`provisioning_targets`, schema
   `0224`, one per connection) has a `write_back` switch. Off: the change edits the graph at once, as
