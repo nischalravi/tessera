@@ -686,21 +686,21 @@ func TestMachineRolesIntersectScope(t *testing.T) {
 		active []string
 	}{
 		{"operator with read: only what both give", []string{"operator"}, []string{"tessera:read"}, "",
-			[]string{"graph.read", "jobs.read", "provisioning.read"}, []string{"operator"}},
+			[]string{"graph.read", "jobs.read", "provisioning.read", "drift.read", "groups.read"}, []string{"operator"}},
 		{"viewer with write: the scope covers what the role lacks", []string{"viewer"}, []string{"tessera:write"}, "",
 			nil, []string{"viewer"}},
 		{"operator with write only: the role's read is outside the scope", []string{"operator"}, []string{"tessera:write"}, "",
-			[]string{"jit.request", "jit.decide", "jit.deny_revoke", "reviews.manage", "reviews.decide", "hris.simulate_event", "flatfile.upload", "alerts.manage", "ownership.manage", "sod.mitigate"}, []string{"operator"}},
+			[]string{"jit.request", "jit.decide", "jit.deny_revoke", "reviews.manage", "reviews.decide", "hris.simulate_event", "flatfile.upload", "groups.write", "alerts.manage", "ownership.manage", "sod.mitigate"}, []string{"operator"}},
 		{"auditor with every scope", []string{"auditor"}, []string{"tessera:read", "tessera:audit", "tessera:admin", "tessera:write"}, "",
-			[]string{"graph.read", "audit.read", "audit.verify", "admin.read", "connections.read", "alerts.read", "email.read", "jobs.read", "provisioning.read", "siem.read"}, []string{"auditor"}},
+			[]string{"graph.read", "audit.read", "audit.verify", "admin.read", "connections.read", "alerts.read", "email.read", "jobs.read", "provisioning.read", "siem.read", "drift.read", "groups.read"}, []string{"auditor"}},
 		{"auditor asking for less than registered", []string{"auditor"}, []string{"tessera:read", "tessera:audit", "tessera:admin"}, "tessera:audit",
 			[]string{"audit.read", "audit.verify", "alerts.read", "siem.read"}, []string{"auditor"}},
 		{"no role", nil, []string{"tessera:read", "tessera:write", "tessera:admin"}, "", nil, nil},
 		{"an admin role in the row is inactive", []string{"tenant_admin", "policy_admin", "break_glass"}, []string{"tessera:read", "tessera:write", "tessera:admin"}, "",
 			nil, nil},
 		{"an admin role next to a viewer", []string{"tenant_admin", "viewer"}, []string{"tessera:read", "tessera:admin"}, "",
-			[]string{"graph.read"}, []string{"viewer"}},
-		{"an unknown role", []string{"root", "viewer"}, []string{"tessera:read"}, "", []string{"graph.read"}, []string{"viewer"}},
+			[]string{"graph.read", "groups.read"}, []string{"viewer"}},
+		{"an unknown role", []string{"root", "viewer"}, []string{"tessera:read"}, "", []string{"graph.read", "groups.read"}, []string{"viewer"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
