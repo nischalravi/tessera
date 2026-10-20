@@ -42,6 +42,7 @@ const Entitlements = named(directory, "Entitlements");
 const Apps = named(directory, "Apps");
 const Orgs = named(directory, "Orgs");
 const Groups = named(directory, "Groups");
+const Ownership = named(() => import("../features/directory/Ownership"), "Ownership");
 const IdentityPage = named(() => import("../features/directory/IdentityPage"), "IdentityPage");
 const RolePage = named(roles, "RolePage");
 const EntitlementPage = named(objects, "EntitlementPage");
@@ -53,11 +54,14 @@ const GraphExplorer = lazy(() => import("../features/insights/GraphExplorer"));
 const LeastPrivilege = named(() => import("../features/insights/LeastPrivilege"), "LeastPrivilege");
 const SodConflicts = named(() => import("../features/insights/SodConflicts"), "SodConflicts");
 const DeploymentHealth = named(() => import("../features/insights/DeploymentHealth"), "DeploymentHealth");
+const Alerts = named(() => import("../features/alerts/Alerts"), "Alerts");
 const Policies = named(() => import("../features/governance/Policies"), "Policies");
+const Mitigations = named(() => import("../features/governance/Mitigations"), "Mitigations");
 const AttributePolicies = named(() => import("../features/governance/AttributePolicies"), "AttributePolicies");
 const Reviews = named(() => import("../features/governance/Reviews"), "Reviews");
 const Lifecycle = named(() => import("../features/governance/Lifecycle"), "Lifecycle");
 const Workflows = named(() => import("../features/governance/Workflows"), "Workflows");
+const EvidencePacks = named(() => import("../features/governance/EvidencePacks"), "EvidencePacks");
 const Admin = named(admin, "Admin");
 const ConnectionsList = named(connections, "ConnectionsList");
 const NewConnection = named(connections, "NewConnection");
@@ -66,6 +70,7 @@ const ValidationResults = named(connections, "ValidationResults");
 const ReconReport = named(connections, "ReconReport");
 const AdminSectionPage = named(admin, "AdminSectionPage");
 const MySessions = named(() => import("../features/account/MySessions"), "MySessions");
+const DeviceApprove = lazy(() => import("../pages/DeviceApprove"));
 const AdminUsers = named(() => import("../features/admin/Users"), "Users");
 const IdpConnections = named(() => import("../features/admin/IdpConnections"), "IdpConnections");
 const ChangeRequests = named(() => import("../features/admin/ChangeRequests"), "ChangeRequests");
@@ -103,6 +108,8 @@ export default function App() {
                     {/* signed in already: the sign-in page (and its error) has nothing left to do */}
                     <Route path="/login" element={<Navigate to="/" replace />} />
                     <Route path="/sessions" element={<MySessions />} />
+                    {/* where `tessera-cli login` sends you (design §9.3): type the code, decide */}
+                    <Route path="/device" element={<DeviceApprove />} />
                     <Route path="/inbox" element={<Inbox />} />
                     <Route path="/notifications" element={<Notifications />} />
 
@@ -125,6 +132,7 @@ export default function App() {
                       <Route path="apps" element={<Apps />} />
                       <Route path="orgs" element={<Orgs />} />
                       <Route path="groups" element={<Groups />} />
+                      <Route path="ownership" element={<Ownership />} />
                     </Route>
                     <Route path="/directory/identities/:id" element={<IdentityPage />} />
                     <Route path="/directory/roles/:id" element={<RolePage />} />
@@ -141,11 +149,14 @@ export default function App() {
                     <Route path="/insights/deployment" element={<Moved to="/insights/deployment-health" />} />
 
                     <Route path="/governance" element={<Navigate to="/governance/policies" replace />} />
+                    <Route path="/alerts" element={<Alerts />} />
                     <Route path="/governance/policies" element={<Policies />} />
+                    <Route path="/governance/mitigations" element={<Mitigations />} />
                     <Route path="/governance/attributes" element={<AttributePolicies />} />
                     <Route path="/governance/reviews" element={<Reviews />} />
                     <Route path="/governance/lifecycle" element={<Lifecycle />} />
                     <Route path="/governance/workflows" element={<Workflows />} />
+                    <Route path="/governance/evidence" element={<EvidencePacks />} />
 
                     <Route path="/admin" element={<Admin />} />
                     <Route path="/admin/connections" element={<ConnectionsList />} />

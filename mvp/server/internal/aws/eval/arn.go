@@ -34,15 +34,27 @@ type ARNPattern struct {
 
 // CompileARN compiles one resource pattern. It fails on invalid UTF-8 and on
 // oversized patterns. Variables must already be substituted (§9.3).
-func CompileARN(pattern string) (*ARNPattern, error) {
+func CompileARN(pattern string) (*ARNPattern, error) { return compileARN(pattern, false) }
+
+// CompileARNEscaped is CompileARN for a pattern that variable substitution
+// produced (§9.3): the escapes ${*}, ${?} and ${$} stand for a literal '*', '?'
+// and '$', so a substituted value such as a tag "*" is never a wildcard. The
+// matching rules are those of CompileARN.
+func CompileARNEscaped(pattern string) (*ARNPattern, error) { return compileARN(pattern, true) }
+
+func compileARN(pattern string, escaped bool) (*ARNPattern, error) {
 	a := &ARNPattern{src: pattern, all: pattern == "*"}
 	if a.all {
 		return a, nil
 	}
+	compile := glob.Compile
+	if escaped {
+		compile = glob.CompileEscaped
+	}
 	segs := strings.SplitN(pattern, ":", 6)
 	a.parts = make([]*glob.Pattern, len(segs))
 	for i, s := range segs {
-		p, err := glob.Compile(s, false)
+		p, err := compile(s, false)
 		if err != nil {
 			return nil, err
 		}

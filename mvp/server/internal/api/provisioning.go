@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/url"
 	"slices"
@@ -228,7 +229,8 @@ func (s *Server) listTargets(r *http.Request, _ *params) (int, any, error) {
 }
 
 // targetInput is PUT /api/provisioning/targets/{id}. token is write-only; an
-// omitted token keeps the stored credential.
+// omitted token keeps the stored credential, unless the edit changes the kind
+// or origin, which then needs a new token (422 credential_required).
 type targetInput struct {
 	Kind      string `json:"kind"`
 	BaseURL   string `json:"base_url"`
@@ -313,31 +315,54 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 	}
 	t.Settings = string(settings)
 	old, err := c.ProvTarget(id)
+	existing := err == nil
 	switch {
-	case err == nil:
+	case existing:
 		t.ID, t.CredentialEnc, t.CredentialVer, t.CreatedBy = old.ID, old.CredentialEnc, old.CredentialVer, old.CreatedBy
 	case !errors.Is(err, store.ErrNotFound):
 		return 0, nil, err
 	}
-	credChanged := false
+	// The sealed credential is bound to the row, not to the destination, so a
+	// stored token must never follow the target to another origin or kind: an
+	// edit that moves it has to bring a new token (#315).
+	moved := existing && (old.Kind != in.Kind || targetOrigin(old.BaseURL) != targetOrigin(in.BaseURL))
+	credential := "none"
+	if len(t.CredentialEnc) > 0 {
+		credential = "kept"
+	}
 	switch {
 	case in.Token != "":
 		if t.CredentialEnc, err = provision.SealToken(s.provSeal, c.Tenant(), t.ID, in.Token); err != nil {
 			return 0, nil, err
 		}
 		ver := store.NewID()
-		t.CredentialVer, credChanged = &ver, true
+		t.CredentialVer = &ver
+		credential = "set"
+		if existing && len(old.CredentialEnc) > 0 {
+			credential = "rotated"
+		}
 	case in.Kind == provision.KindFake:
+		if len(t.CredentialEnc) > 0 {
+			credential = "cleared"
+		}
 		t.CredentialEnc, t.CredentialVer = nil, nil
+	case moved && len(t.CredentialEnc) > 0:
+		return 0, nil, &readiness.Error{Status: http.StatusUnprocessableEntity, Code: "credential_required",
+			Msg: "changing the target's kind or origin (scheme, host, port) needs a new token; the stored credential does not move with it"}
 	case in.Kind == provision.KindOkta && len(t.CredentialEnc) == 0:
 		return 0, nil, badRequest("invalid_credential", "an Okta target needs an API token")
 	}
 	if err := c.UpsertProvTarget(t, now); err != nil {
 		return 0, nil, err
 	}
-	if err := c.Audit(now, actor(r), "provision.target_set", ojson.Object{{Key: "connection_id", Value: id},
+	detail := ojson.Object{{Key: "connection_id", Value: id},
 		{Key: "kind", Value: in.Kind}, {Key: "write_back", Value: in.WriteBack}, {Key: "dialect", Value: st.Dialect},
-		{Key: "credential_changed", Value: credChanged}}); err != nil {
+		{Key: "origin", Value: targetOrigin(t.BaseURL)}, {Key: "credential", Value: credential}}
+	if moved {
+		detail = append(detail, ojson.KV{Key: "previous_kind", Value: old.Kind},
+			ojson.KV{Key: "previous_origin", Value: targetOrigin(old.BaseURL)})
+	}
+	if err := c.Audit(now, actor(r), "provision.target_set", detail); err != nil {
 		return 0, nil, err
 	}
 	saved, err := c.ProvTarget(id)
@@ -345,6 +370,21 @@ func (s *Server) putTarget(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, err
 	}
 	return http.StatusOK, viewTarget(saved, conn.Name), nil
+}
+
+// targetOrigin is the scheme, host and port of a target URL, lower-cased and
+// with the default port made explicit, so equal origins compare equal. A URL
+// that does not parse yields "" (validateTarget has already rejected those).
+func targetOrigin(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	scheme, host, port := strings.ToLower(u.Scheme), strings.ToLower(u.Hostname()), u.Port()
+	if port == "" {
+		port = map[string]string{"https": "443", "http": "80"}[scheme]
+	}
+	return scheme + "://" + net.JoinHostPort(host, port)
 }
 
 func (s *Server) deleteTarget(r *http.Request, p *params) (int, any, error) {

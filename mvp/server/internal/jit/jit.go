@@ -236,7 +236,7 @@ func Approve(c *store.TenantTx, requestID int64, by store.UserRef, now, createdA
 			ExpiresAt: &expires, CreatedAt: createdAt})
 	} else {
 		edgeID = existing.ID
-		err = c.SetEdgeExpiry(edgeID, expires)
+		err = c.SetEdgeExpiry(edgeID, expires, createdAt)
 	}
 	if err != nil {
 		return nil, err
@@ -302,7 +302,7 @@ func Revoke(c *store.TenantTx, requestID int64, by store.UserRef, now time.Time)
 	} else if routed {
 		return req, nil
 	}
-	if err := dropEdge(c, req); err != nil {
+	if err := dropEdge(c, req, now); err != nil {
 		return nil, err
 	}
 	req.Status, req.ExpiresAt = "revoked", &now
@@ -312,11 +312,11 @@ func Revoke(c *store.TenantTx, requestID int64, by store.UserRef, now time.Time)
 	return req, c.Audit(now, by.Display, "jit.revoke", ojson.Object{{Key: "request_id", Value: req.ID}})
 }
 
-func dropEdge(c *store.TenantTx, req *store.AccessRequest) error {
+func dropEdge(c *store.TenantTx, req *store.AccessRequest, now time.Time) error {
 	if req.EdgeID == nil || *req.EdgeID == 0 {
 		return nil
 	}
-	return c.DeleteJITEdge(*req.EdgeID)
+	return c.DeleteJITEdge(*req.EdgeID, now)
 }
 
 // completeEnd is the provisioning completion that ends a grant once the
@@ -342,7 +342,7 @@ func init() {
 		if req == nil || req.Status != "approved" {
 			return nil // ended some other way meanwhile
 		}
-		if err := dropEdge(c, req); err != nil {
+		if err := dropEdge(c, req, now); err != nil {
 			return err
 		}
 		req.Status, req.ExpiresAt = d.Status, &now
@@ -403,7 +403,7 @@ func Sweep(c *store.TenantTx, now time.Time) (int, error) {
 			}
 			continue
 		}
-		if err := dropEdge(c, r); err != nil {
+		if err := dropEdge(c, r, now); err != nil {
 			return 0, err
 		}
 		r.Status = "expired"

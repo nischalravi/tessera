@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Ban, ChevronDown, ChevronRight, ClipboardCheck, Ellipsis, GitMerge, Link2, ShieldAlert, Network, Pencil, RotateCcw, ShieldCheck, ShoppingCart, UserCheck } from "lucide-react";
-import { IdentityDetail, SimResult, ago, api, fmtDate, fmtDay, invalidLink, isNumericId, useApi } from "../../api";
+import { IdentityDetail, SimResult, ago, api, fmtDate, fmtDay, invalidLink, isNumericId, sodRemediate, useApi } from "../../api";
 import { useIdentityActions } from "../../app/actions";
 import { usePersona } from "../../app/persona";
 import {
@@ -16,14 +16,14 @@ import { PreviewFormDrawer } from "./shared";
 import { LifecycleSection } from "../lifecycle/parts";
 
 /** Dry-run first, then apply: shows the blast radius of removing one grant before anything changes. */
-export function RevokeDrawer({ edgeId, onClose, onDone }: { edgeId: number; onClose: () => void; onDone?: () => void }) {
+export function RevokeDrawer({ edgeId, via, onClose, onDone }: { edgeId: number; via?: { riskId: string; identityId: number }; onClose: () => void; onDone?: () => void }) {
   const toast = useToast();
   const [res, setRes] = useState<SimResult | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     let alive = true;
-    api<SimResult>("/least-privilege/revoke", { edge_id: edgeId, dry_run: true })
+    (via ? sodRemediate.revoke(via.riskId, via.identityId, edgeId, true) : api<SimResult>("/least-privilege/revoke", { edge_id: edgeId, dry_run: true }))
       .then((r) => alive && setRes(r))
       .catch((e) => alive && setErr(e.message));
     return () => {
@@ -33,7 +33,7 @@ export function RevokeDrawer({ edgeId, onClose, onDone }: { edgeId: number; onCl
   const apply = async () => {
     setBusy(true);
     try {
-      const r = await api<SimResult>("/least-privilege/revoke", { edge_id: edgeId, dry_run: false });
+      const r = await (via ? sodRemediate.revoke(via.riskId, via.identityId, edgeId, false) : api<SimResult>("/least-privilege/revoke", { edge_id: edgeId, dry_run: false }));
       setRes(r);
       toast("Grant revoked. An audit record was written.");
       onDone?.();

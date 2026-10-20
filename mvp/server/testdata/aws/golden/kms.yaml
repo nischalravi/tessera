@@ -1,0 +1,73 @@
+# Golden corpus, KMS: GC-60 to GC-64. Key K is arn:aws:kms:us-east-1:111111111111:key/k1.
+# Expectations are those of design §14.2; do not edit one to make a test pass.
+
+- id: GC-60
+  title: Without the root-delegation statement, IAM policies are ineffective
+  key_policy: {"Statement": [{"Effect": "Allow", "Principal": {"AWS": "arn:aws:iam::111111111111:role/kadmin"}, "Action": "kms:*", "Resource": "*"}]}
+  principal: U
+  identity:
+    - {"Statement": [{"Effect": "Allow", "Action": "kms:Decrypt", "Resource": "*"}]}
+  request: {action: "kms:Decrypt", resource: "arn:aws:kms:us-east-1:111111111111:key/k1"}
+  expect: {outcome: DENY, deny_kind: implicit, stage: resource_policy}
+  why: "[S13] 'Without this permission, IAM policies that allow access to the key are ineffective.'"
+  verified: doc
+
+- id: GC-61
+  title: With the root-delegation statement, IAM policies work
+  key_policy: {"Statement": [{"Sid": "Enable IAM User Permissions", "Effect": "Allow", "Principal": {"AWS": "arn:aws:iam::111111111111:root"}, "Action": "kms:*", "Resource": "*"}]}
+  principal: U
+  identity:
+    - {"Statement": [{"Effect": "Allow", "Action": "kms:Decrypt", "Resource": "*"}]}
+  request: {action: "kms:Decrypt", resource: "arn:aws:kms:us-east-1:111111111111:key/k1"}
+  expect: {outcome: ALLOW}
+  why: "[S13]."
+  verified: doc
+
+- id: GC-62
+  title: A grant with an encryption-context constraint
+  key_policy: {"Statement": [{"Effect": "Allow", "Principal": {"AWS": "arn:aws:iam::111111111111:role/kadmin"}, "Action": "kms:*", "Resource": "*"}]}
+  grant:
+    grantee: R
+    operations: [Decrypt]
+    constraints: {EncryptionContextEquals: {dept: fin}}
+  principal: RS
+  identity: []
+  requests:
+    - action: "kms:Decrypt"
+      resource: "arn:aws:kms:us-east-1:111111111111:key/k1"
+      context: {"kms:EncryptionContext:dept": fin}
+      expect: {outcome: ALLOW, stage: kms_grant, fidelity: exact}
+    - action: "kms:Decrypt"
+      resource: "arn:aws:kms:us-east-1:111111111111:key/k1"
+      context: {"kms:EncryptionContext:dept": hr}
+      expect: {outcome: DENY, deny_kind: implicit, fidelity: exact}
+  why: "[S14] grants allow the listed operations under their constraints. A12b (whether a boundary caps a role-ARN grantee) is evaluated but not outcome-sensitive here, because the role has no boundary (§7.9)."
+  verified: doc
+
+- id: GC-63
+  title: An identity-policy explicit deny overrides a grant
+  key_policy: {"Statement": [{"Effect": "Allow", "Principal": {"AWS": "arn:aws:iam::111111111111:role/kadmin"}, "Action": "kms:*", "Resource": "*"}]}
+  grant:
+    grantee: R
+    operations: [Decrypt]
+    constraints: {EncryptionContextEquals: {dept: fin}}
+  principal: RS
+  identity:
+    - {"Statement": [{"Effect": "Deny", "Action": "kms:Decrypt", "Resource": "*"}]}
+  request:
+    action: "kms:Decrypt"
+    resource: "arn:aws:kms:us-east-1:111111111111:key/k1"
+    context: {"kms:EncryptionContext:dept": fin}
+  expect: {outcome: DENY, deny_kind: explicit}
+  why: "[S14] grants cannot override a deny; [S13] IAM denies are always effective."
+  verified: doc
+
+- id: GC-64
+  title: A cross-account non-cryptographic KMS operation is blocked whatever the policies say
+  key_policy: {"Statement": [{"Effect": "Allow", "Principal": {"AWS": "222222222222"}, "Action": "kms:*", "Resource": "*"}]}
+  principal: "arn:aws:iam::222222222222:user/dave"
+  identity: [allow_all]
+  request: {action: "kms:ScheduleKeyDeletion", resource: "arn:aws:kms:us-east-1:111111111111:key/k1"}
+  expect: {outcome: DENY, deny_kind: guardrail, stage: special_rule}
+  why: "[S15] cross-account permission is effective only for cryptographic operations, CreateGrant, DescribeKey, ... ScheduleKeyDeletion 'still fails'."
+  verified: doc
