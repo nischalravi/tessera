@@ -57,7 +57,7 @@ const (
 	RevokedReplaced     = "replaced" // the browser signed in again
 	// RevokedIdentityDisabled: the governed identity the user is linked to
 	// was disabled (containment.Disable, #316).
-	RevokedIdentityDisabled = "identity_disabled"
+	RevokedIdentityDisabled = store.RevokedIdentityDisabled
 	// RevokedIdentityTerminated: the linked identity was terminated (a
 	// leaver, #331). store.TerminateIdentity writes it.
 	RevokedIdentityTerminated = store.RevokedIdentityTerminated

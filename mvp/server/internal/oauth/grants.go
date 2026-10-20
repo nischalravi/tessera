@@ -222,6 +222,12 @@ func (s *Service) deviceCodeGrant(r *http.Request, t store.Tenant, client *store
 			res = fail("invalid_grant", "the user is disabled")
 			return nil
 		}
+		if off, err := auth.IdentityInactive(tx, user); err != nil {
+			return err
+		} else if off {
+			res = fail("invalid_grant", "the identity is not active")
+			return nil
+		}
 		if err := tx.ConsumeDeviceGrant(g.ID, now); err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				res = fail("invalid_grant", "the device code was already used")
@@ -370,6 +376,12 @@ func (s *Service) refreshGrant(r *http.Request, t store.Tenant, client *store.AP
 		}
 		if user.Status != "active" {
 			res = fail("invalid_grant", "the user is disabled")
+			return nil
+		}
+		if off, err := auth.IdentityInactive(tx, user); err != nil {
+			return err
+		} else if off {
+			res = fail("invalid_grant", "the identity is not active")
 			return nil
 		}
 		// rotation: a compare-and-set, so two requests with one token cannot
