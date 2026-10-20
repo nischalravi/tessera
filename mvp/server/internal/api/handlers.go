@@ -13,7 +13,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
-	"github.com/nischalravi/tessera/mvp/server/internal/flatfile"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/ingest"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
@@ -27,6 +27,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/reviews"
 	"github.com/nischalravi/tessera/mvp/server/internal/simulate"
+	"github.com/nischalravi/tessera/mvp/server/internal/sod"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 	"github.com/nischalravi/tessera/mvp/server/internal/usage"
@@ -127,10 +128,36 @@ func (s *Server) newAnalysis(c *store.TenantTx) (*analysis, error) {
 	return &analysis{c: c, now: now, g: g, u: u, policies: pols}, nil
 }
 
+// withoutMitigated drops the SoD violations an approved mitigation or acceptance
+// covers: they leave the open counts, but stay in the SoD report (GET /api/sod/violations).
+func (a *analysis) withoutMitigated(vs []policy.Violation) ([]policy.Violation, error) {
+	cov, err := sod.Covers(a.c, a.now)
+	if err != nil || len(cov) == 0 {
+		return vs, err
+	}
+	riskID := map[string]string{}
+	for _, r := range a.sodRisks() {
+		riskID[r.Key] = r.ID
+	}
+	out := vs[:0:0]
+	for _, v := range vs {
+		if id, ok := riskID[v.PolicyID]; ok && v.IdentityID != nil {
+			if c := cov.For(id, *v.IdentityID); c != nil && sod.Closes(c.Status) {
+				continue
+			}
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
 func (a *analysis) violations() ([]policy.Violation, error) {
 	if !a.violDone {
 		v, err := policy.Evaluate(a.policies, policy.NewContext(a.g, a.c, a.now))
 		if err != nil {
+			return nil, err
+		}
+		if v, err = a.withoutMitigated(v); err != nil {
 			return nil, err
 		}
 		a.viol, a.violDone = v, true
@@ -312,16 +339,25 @@ func (s *Server) listConnectors(_ http.ResponseWriter, r *http.Request, _ *param
 	return out, nil
 }
 
-func (s *Server) syncConnectors(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+func (s *Server) syncConnectors(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	// ?mode=full ignores connector checkpoints and re-reads every source.
+	mode := p.queryOptLiteral("mode", []string{"incremental", "full"})
+	if err := validated(p, nil); err != nil {
+		return nil, err
+	}
 	now := s.clock()
 	conns, err := s.cfg.Connectors(now)
 	if err != nil {
 		return nil, err
 	}
 	c := store.TxFrom(r.Context())
+	ctx := ingest.WithCheckpoints(r.Context(), c)
+	if mode != nil && *mode == "full" {
+		ctx = connsync.WithMode(ctx, connsync.Full)
+	}
 	var results []*connectors.DiscoveryResult
 	for _, cn := range conns {
-		res, err := cn.Discover(r.Context())
+		res, err := cn.Discover(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("%s: discover: %w", cn.System(), err)
 		}
@@ -985,7 +1021,13 @@ func (s *Server) revoke(_ http.ResponseWriter, r *http.Request, p *params) (any,
 	if err := validated(p, berrs); err != nil {
 		return nil, err
 	}
-	edgeID, dryRun := body["edge_id"].(int64), body["dry_run"].(bool)
+	return s.revokeEdge(r, body["edge_id"].(int64), body["dry_run"].(bool))
+}
+
+// revokeEdge dry-runs or applies the revoke of one grant: applying needs
+// grants.revoke and a fresh phishing-resistant sign-in (checked here because
+// the requirement depends on the body, §16.2), a dry run only graph.read.
+func (s *Server) revokeEdge(r *http.Request, edgeID int64, dryRun bool) (*revokeResult, error) {
 	pr := principal(r)
 	if !dryRun {
 		// Applying a revoke needs grants.revoke and a fresh phishing-resistant

@@ -82,6 +82,8 @@ const (
 	PermConnectionsActivate Permission = "connections.activate"
 	// Job run history (issue #172).
 	PermJobsRead Permission = "jobs.read"
+	// Durable job queue (issue #300): retry a dead job.
+	PermJobsManage Permission = "jobs.manage"
 
 	// Closed-loop provisioning (issue #103). Configuring a target needs
 	// connections.manage; retrying, cancelling and running operations needs
@@ -126,6 +128,10 @@ const (
 	// separation of duties (issue #298): functions, risks and rulesets. Reading
 	// them (and the violations) is graph.read, like the policy violations.
 	PermSoDManage Permission = "sod.manage"
+	// SoD mitigations (issue #298): sod.mitigate requests a mitigation or acceptance,
+	// escalates a violation; sod.approve is the second person who decides it.
+	PermSoDMitigate Permission = "sod.mitigate"
+	PermSoDApprove  Permission = "sod.approve"
 )
 
 // rolePermissions is the static role -> permission map (Cedar-ready, §12.1).
@@ -136,8 +142,8 @@ const (
 var rolePermissions = map[Role][]Permission{
 	RoleViewer: {PermGraphRead, PermRequestsCreate, PermGuestsSponsor},
 	RoleOperator: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
-		PermReviewsDecide, PermHRISSimulateEvent, PermFlatfileUpload, PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide,
-		PermGuestsSponsor, PermGuestsRead, PermJobsRead, PermProvisioningRead, PermAlertsRead, PermAlertsManage, PermOwnershipManage},
+		PermReviewsDecide, PermHRISSimulateEvent, PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide,
+		PermGuestsSponsor, PermGuestsRead, PermJobsRead, PermProvisioningRead, PermAlertsRead, PermAlertsManage, PermOwnershipManage, PermSoDMitigate},
 	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead, PermRequestsCreate, PermEmailRead,
 		PermGuestsSponsor, PermGuestsRead, PermJobsRead, PermProvisioningRead, PermAlertsRead, PermSiemRead},
 	RolePolicyAdmin: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
@@ -145,13 +151,12 @@ var rolePermissions = map[Role][]Permission{
 		PermIdentitiesCorrelate, PermIdentitiesMerge, PermIdentitiesAffiliate,
 		PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide, PermCatalogManage, PermRolesManage, PermLifecycleManage,
 		PermGuestsSponsor, PermGuestsRead, PermSponsorshipsApprove, PermIdentitiesContain,
-		PermJobsRead, PermProvisioningRead, PermProvisioningManage, PermAlertsRead, PermAlertsManage, PermOwnershipManage, PermSoDManage,
-		PermFlatfileUpload, PermFlatfileCloseTasks},
+		PermJobsRead, PermProvisioningRead, PermProvisioningManage, PermAlertsRead, PermAlertsManage, PermOwnershipManage, PermSoDManage, PermSoDMitigate, PermSoDApprove},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
 		PermConnectionsActivate, PermRequestsCreate, PermEmailRead, PermEmailManage, PermGroupsAdmin,
-		PermJobsRead, PermProvisioningRead, PermProvisioningManage, PermConfigTransport,
-		PermAlertsRead, PermAlertsManage, PermAlertsConfigure, PermSiemRead, PermSiemConfigure, PermFlatfileManage},
+		PermJobsRead, PermJobsManage, PermProvisioningRead, PermProvisioningManage, PermConfigTransport,
+		PermAlertsRead, PermAlertsManage, PermAlertsConfigure, PermSiemRead, PermSiemConfigure},
 	RoleBreakGlass: {PermAdminRead, PermBreakGlassRecover},
 }
 
@@ -235,7 +240,7 @@ var scopePermissions = map[Scope][]Permission{
 	ScopeRead: {PermGraphRead, PermConnectionsRead, PermJobsRead, PermProvisioningRead},
 	ScopeWrite: {PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage, PermReviewsDecide,
 		PermHRISSimulateEvent, PermGrantsRevoke, PermHRISExecute, PermJITSweep, PermConnectorsSync,
-		PermConnectionsManage, PermConnectionsActivate, PermRolesManage, PermLifecycleManage, PermGroupsAdmin, PermProvisioningManage, PermAlertsManage, PermOwnershipManage, PermSoDManage, PermFlatfileManage, PermFlatfileUpload, PermFlatfileCloseTasks},
+		PermConnectionsManage, PermConnectionsActivate, PermRolesManage, PermLifecycleManage, PermGroupsAdmin, PermProvisioningManage, PermJobsManage, PermAlertsManage, PermOwnershipManage, PermSoDManage, PermSoDMitigate, PermSoDApprove},
 	ScopeAudit: {PermAuditRead, PermAuditVerify, PermAlertsRead, PermSiemRead},
 	ScopeAdmin: {PermEmailRead, PermEmailManage, PermAdminRead, PermAdminChangeReq, PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev,
 		PermBreakGlassRecover, PermConfigTransport, PermAlertsConfigure, PermSiemConfigure},
@@ -393,6 +398,12 @@ func Check(p *Principal, perm Permission, authn *AuthnRequirement, now time.Time
 		return &Denial{Status: http.StatusForbidden, Error: "forbidden"}
 	}
 	if !EffectivePermissions(p).Has(perm) {
+		// effective = perms(active roles) ∩ perms(scopes) (§12.3): when the
+		// roles are active and it is the token's scopes that lack the
+		// permission, the role is not the problem
+		if p.Scopes != nil && perms(p.ActiveRoles).Has(perm) {
+			return &Denial{Status: http.StatusForbidden, Error: "forbidden", Permission: perm}
+		}
 		if perms(p.AssignedRoles).Has(perm) {
 			return &Denial{Status: http.StatusForbidden, Error: "role_inactive", Permission: perm}
 		}

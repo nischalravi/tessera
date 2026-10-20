@@ -1,0 +1,16 @@
+[
+  {
+    "id": "0oa1wiki000000001",
+    "name": "examplewiki",
+    "label": "Example Wiki",
+    "status": "ACTIVE",
+    "signOnMode": "SAML_2_0"
+  },
+  {
+    "id": "../0oa1evil0000002",
+    "name": "evil",
+    "label": "Path Traversal Attempt",
+    "status": "ACTIVE",
+    "signOnMode": "BOOKMARK"
+  }
+]

@@ -303,6 +303,7 @@ var referenceColumns = map[string][]string{
 	"audit_chain_heads": {"last_seq", "last_hash"},
 	"audit_checkpoints": {"seq", "head_hash"},
 	"grant_edges":       {"src", "dst"},
+	"edge_history":      {"src", "dst"},
 	"access_requests":   {"edge_id", "requested_by_user_id", "decided_by_user_id"},
 	"review_items":      {"edge_id", "edge_src", "edge_dst", "decided_by_user_id"},
 	"hris_events":       {"executed_by_user_id"},

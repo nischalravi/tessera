@@ -1,0 +1,23 @@
+{
+  "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#users",
+  "value": [
+    {
+      "id": "aaaaaaaa-0000-4000-8000-000000000001",
+      "displayName": "Ada Fixture-Lovelace"
+    },
+    {
+      "id": "aaaaaaaa-0000-4000-8000-000000000003",
+      "@removed": {"reason": "deleted"}
+    },
+    {
+      "id": "aaaaaaaa-0000-4000-8000-000000000004",
+      "displayName": "Dee New",
+      "userPrincipalName": "dee.new@fixture.onmicrosoft.com",
+      "mail": "dee.new@example.com",
+      "accountEnabled": true,
+      "createdDateTime": "2026-10-08T06:00:00Z",
+      "userType": "Member"
+    }
+  ],
+  "@odata.deltaLink": "{{BASE}}/v1.0/users/delta?$deltatoken=dt-users-2"
+}

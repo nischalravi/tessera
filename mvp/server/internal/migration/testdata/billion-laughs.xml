@@ -1,0 +1,1 @@
+<!DOCTYPE sailpoint [<!ENTITY a "ha"><!ENTITY b "&a;&a;&a;&a;"><!ENTITY c "&b;&b;&b;&b;">]><sailpoint><Identity id="i" name="&c;"/></sailpoint>
