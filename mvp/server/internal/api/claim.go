@@ -62,7 +62,7 @@ const claimMinDuration = 300 * time.Millisecond
 // claimLimits are the §6.4 limits. They are token buckets (burst N, refill one
 // per window/N), so "3 per 10 minutes" is a burst of 3 that refills over 10 minutes.
 type claimLimits struct {
-	startIP, startTenant, sendSession, sendDestHour, sendDestDay, resendEmail *ratelimit.Limiter
+	startIP, startTenant, renewIP, renewTenant, sendSession, sendDestHour, sendDestDay, resendEmail *ratelimit.Limiter
 }
 
 func newClaimLimits() *claimLimits {
@@ -70,6 +70,8 @@ func newClaimLimits() *claimLimits {
 	return &claimLimits{
 		startIP:      ratelimit.New(ratelimit.ClassIP, time.Minute, 10, keys),               // 10 per IP per 10 minutes
 		startTenant:  ratelimit.New(ratelimit.ClassTenant, 600*time.Millisecond, 100, keys), // 100 per tenant per minute
+		renewIP:      ratelimit.New(ratelimit.ClassIP, 6*time.Minute, 10, keys),             // 10 per IP per hour (guest renewal-request)
+		renewTenant:  ratelimit.New(ratelimit.ClassTenant, 600*time.Millisecond, 100, keys), // 100 per tenant per minute, apart from claim/start
 		sendSession:  ratelimit.New(ratelimit.ClassSession, 200*time.Second, 3, keys),       // 3 per session per 10 minutes
 		sendDestHour: ratelimit.New(ratelimit.ClassDestination, 12*time.Minute, 5, keys),    // 5 per destination per hour
 		sendDestDay:  ratelimit.New(ratelimit.ClassDestination, 144*time.Minute, 10, keys),  // 10 per destination per day
