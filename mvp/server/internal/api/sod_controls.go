@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"slices"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/sod"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -24,7 +26,8 @@ import (
 //	POST /api/sod/mitigations/{id}/approve|reject   {note}: the second person (four-eyes)
 //	POST /api/sod/mitigations/{id}/cancel           the requester withdraws a pending request
 //	POST /api/sod/mitigations/{id}/revoke           {reason}: a risk owner or an approver ends it early
-//	POST /api/sod/violations/escalate               {risk_id, identity_id, note}: to the risk owner
+//	PUT  /api/sod/rulesets/{ruleset_id}/remediation {options, escalate_to_id}: what its risks offer, and the escalation approver
+//	POST /api/sod/violations/escalate               {risk_id, identity_id, note}: to the ruleset approver, else the risk owner
 //	POST /api/sod/violations/revoke                 {risk_id, identity_id, edge_id, dry_run}: through the revoke path
 //	GET  /api/sod/review-context?campaign_id=       the SoD risk and cover of each review item
 //
@@ -433,6 +436,15 @@ func (s *Server) decideSodMitigation(approve bool) handlerFunc {
 		if err := decodeBody(r, &b, true); err != nil {
 			return nil, err
 		}
+		// an approved mitigation re-opens its violation at the end date: queue that in this transaction
+		w.OnActivate = func(m *store.SodMitigation) error {
+			payload, err := json.Marshal(sodExpirePayload{MitigationID: m.ID})
+			if err != nil {
+				return err
+			}
+			_, err = s.queue.EnqueueTx(w.Tx, jobs.SoDMitigationExpire, string(payload), "sod-expire:"+m.ID, m.EndsAt, maxSweepAttempts)
+			return err
+		}
 		m, err := w.DecideMitigation(strings.TrimSpace(p.path["mitigation_id"]), approve, b.Note)
 		if err != nil {
 			return nil, sodErr(err)
@@ -537,9 +549,26 @@ func (s *Server) escalateSodViolation(_ http.ResponseWriter, r *http.Request, p 
 	} else if v == nil {
 		return nil, &readiness.Error{Status: http.StatusConflict, Code: "no_violation", Msg: "that person does not hold both sides of this risk now"}
 	}
+	// who it went to: the ruleset's approver, else the risk owner
+	tx := store.TxFrom(r.Context())
+	risk, err := tx.SodRisk(e.RiskID)
+	if err != nil {
+		return nil, err
+	}
+	rem, err := sod.RemediationOf(tx, risk.ID)
+	if err != nil {
+		return nil, err
+	}
+	var to *personRef
+	if t := rem.Target(risk); t != nil {
+		if p, err := newViewer(tx).person(*t); err == nil {
+			to = &p
+		}
+	}
 	return statusBody{http.StatusCreated, struct {
-		ID string `json:"id"`
-	}{e.ID}}, nil
+		ID       string     `json:"id"`
+		RoutedTo *personRef `json:"routed_to"`
+	}{e.ID, to}}, nil
 }
 
 // revokeSodViolation removes one of the grants behind a violation through the
@@ -564,11 +593,11 @@ func (s *Server) revokeSodViolation(_ http.ResponseWriter, r *http.Request, p *p
 	} else if err != nil {
 		return nil, err
 	}
-	opts, err := sod.RiskOptions(tx, risk.ID)
+	rem, err := sod.RemediationOf(tx, risk.ID)
 	if err != nil {
 		return nil, err
 	}
-	if !sod.Offers(opts, sod.OptRevoke) {
+	if !rem.Offers(sod.OptRevoke) {
 		return nil, &readiness.Error{Status: http.StatusConflict, Code: "option_not_offered", Msg: risk.Name + ` does not offer "revoke" as a remediation`}
 	}
 	v, err := s.currentViolation(r, risk.ID, b.IdentityID)
@@ -637,13 +666,9 @@ func (s *Server) sodReviewContext(_ http.ResponseWriter, r *http.Request, p *par
 	if err != nil {
 		return nil, err
 	}
-	opts, err := tx.SodRiskOptions()
+	rem, err := sod.LoadRemediation(tx)
 	if err != nil {
 		return nil, err
-	}
-	explicit := map[string][]string{}
-	for _, o := range opts {
-		explicit[o.RiskID] = append(explicit[o.RiskID], o.Option)
 	}
 	out := []sodReviewItem{}
 	for _, it := range items {
@@ -652,13 +677,7 @@ func (s *Server) sodReviewContext(_ http.ResponseWriter, r *http.Request, p *par
 			if v.IdentityID != it.IdentityID || !slices.ContainsFunc(v.Edges, func(x []string) bool { return x[0] == it.EdgeSrc && x[1] == it.EdgeDst }) {
 				continue
 			}
-			offers := []string{}
-			for _, o := range sod.RemediationOptions {
-				if sod.Offers(explicit[v.RiskID], o) {
-					offers = append(offers, o)
-				}
-			}
-			vs = append(vs, sodReviewOf{v.RiskID, v.RiskKey, v.RiskName, v.Priority, v.Status, v.Mitigation, v.IdentityID, offers})
+			vs = append(vs, sodReviewOf{v.RiskID, v.RiskKey, v.RiskName, v.Priority, v.Status, v.Mitigation, v.IdentityID, rem.For(v.RiskID).List()})
 		}
 		if len(vs) > 0 {
 			out = append(out, sodReviewItem{it.ID, vs})
@@ -668,4 +687,28 @@ func (s *Server) sodReviewContext(_ http.ResponseWriter, r *http.Request, p *par
 		CanRequest bool            `json:"can_request"`
 		Items      []sodReviewItem `json:"items"`
 	}{s.can(r, auth.PermSoDMitigate), out}, nil
+}
+
+// putSodRulesetRemediation sets which remediations a ruleset's risks offer
+// unless they set options of their own, and who an escalation goes to.
+func (s *Server) putSodRulesetRemediation(_ http.ResponseWriter, r *http.Request, p *params) (any, error) {
+	if err := validated(p, nil); err != nil {
+		return nil, err
+	}
+	w, err := s.sodWriter(r)
+	if err != nil {
+		return nil, err
+	}
+	var b struct {
+		Options    []string `json:"options"`
+		EscalateTo *int64   `json:"escalate_to_id"`
+	}
+	if err := decodeBody(r, &b, false); err != nil {
+		return nil, err
+	}
+	id := strings.TrimSpace(p.path["ruleset_id"])
+	if _, err := w.SetRulesetRemediation(id, sod.RulesetRemediationInput{Options: b.Options, EscalateTo: b.EscalateTo}); err != nil {
+		return nil, sodErr(err)
+	}
+	return s.sodRulesetDetail(r, id)
 }

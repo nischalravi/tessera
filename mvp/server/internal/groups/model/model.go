@@ -51,6 +51,9 @@ type Env struct {
 	// System is the policy sync's own operation (GR-9): it may change the groups
 	// the policy repository manages, which the API may not.
 	System bool
+	// GroupHidden, when set, says a group the caller may not view: policy
+	// resolution then answers as if it did not exist (no existence oracle).
+	GroupHidden func(store.GroupID) bool
 	// VetoOverride is the reason an administrator gives to add an identity the
 	// deprovisioning rule would refuse (GR-14). The API sets it only after it
 	// checked the caller holds admin on the group; it is audited.

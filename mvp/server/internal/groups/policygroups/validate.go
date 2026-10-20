@@ -80,7 +80,7 @@ func ParseAll(schema Schema, files []SourceFile) ([]*File, []Diagnostic) {
 // resolver maps a group name to the id of the group (a live one, by name or by
 // an old name). A name in batch is a group the change itself defines: it need
 // not exist yet.
-func resolver(tx *store.TenantTx, batch map[string]bool) func(string) (string, error) {
+func resolver(tx *store.TenantTx, batch map[string]bool, hidden func(store.GroupID) bool) func(string) (string, error) {
 	return func(name string) (string, error) {
 		k := strings.ToLower(name)
 		g, err := tx.GrpGroupByName(name)
@@ -91,6 +91,10 @@ func resolver(tx *store.TenantTx, batch map[string]bool) func(string) (string, e
 			} else if err == nil {
 				err = store.ErrNotFound
 			}
+		}
+		if err == nil && !batch[k] && hidden != nil && hidden(g.ID) {
+			// a group the caller may not view looks as if there were none
+			return "", fmt.Errorf("no group named %q", name)
 		}
 		switch {
 		case err == nil && g.Status == store.GroupDeleted:
@@ -155,7 +159,7 @@ func Validate(env model.Env, schema Schema, files []SourceFile) (*Validation, []
 		refs := map[string]bool{}
 		c := NewCompiler()
 		for _, f := range fs {
-			if _, ds := c.Compile(f, resolver(env.Tx, batch)); len(ds) > 0 {
+			if _, ds := c.Compile(f, resolver(env.Tx, batch, env.GroupHidden)); len(ds) > 0 {
 				diags = append(diags, ds...)
 			}
 			names, _ := f.Groups()

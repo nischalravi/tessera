@@ -37,6 +37,8 @@ const (
 	SweepAdminChanges   = "sweep_admin_changes"
 	ContainmentRetry    = "containment_retries"
 	SweepSoDMitigations = "sweep_sod_mitigations"
+	// SoDMitigationExpire fires at one mitigation's end date and re-opens its violation (issue #298).
+	SoDMitigationExpire = "sod_mitigation_expire"
 	SweepSSFPoll        = "ssf_poll"
 	SweepDrift          = "drift_sweep"
 	Maintenance         = "job_maintenance"
@@ -50,14 +52,14 @@ const (
 
 // Kinds lists every kind, for filters.
 var Kinds = []string{Sync, Provision, Validation, DryRun, HealthRerun, JITSweep, AuditAnchor,
-	SweepRequests, SweepLifecycle, SweepAdminChanges, ContainmentRetry, SweepSoDMitigations, SweepDrift, SweepSSFPoll, Maintenance, GuestLifecycle, ArchiveSweep}
+	SweepRequests, SweepLifecycle, SweepAdminChanges, ContainmentRetry, SweepSoDMitigations, SoDMitigationExpire, SweepDrift, SweepSSFPoll, Maintenance, GuestLifecycle, ArchiveSweep}
 
 // Idempotent reports whether running a kind again with the same input is
 // safe: it reads a source and converges, or re-checks. Provisioning is not:
 // it changes target systems.
 func Idempotent(kind string) bool {
 	switch kind {
-	case Sync, Validation, DryRun, HealthRerun, JITSweep:
+	case Sync, Validation, DryRun, HealthRerun, JITSweep, SoDMitigationExpire:
 		return true
 	}
 	return false

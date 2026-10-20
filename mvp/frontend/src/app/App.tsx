@@ -90,6 +90,7 @@ const RotationPolicies = named(rotationPages, "RotationPolicies");
 const VendorCompromised = named(rotationPages, "VendorCompromised");
 const SharedSignals = named(() => import("../features/admin/SharedSignals"), "SharedSignals");
 const EventSinks = named(() => import("../features/admin/EventSinks"), "EventSinks");
+const RequestSettings = named(() => import("../features/admin/RequestSettings"), "RequestSettings");
 const MySessions = named(() => import("../features/account/MySessions"), "MySessions");
 const DeviceApprove = lazy(() => import("../pages/DeviceApprove"));
 const AdminUsers = named(() => import("../features/admin/Users"), "Users");
@@ -259,6 +260,7 @@ export default function App() {
                     <Route path="/admin/break-glass" element={<BreakGlass />} />
                     <Route path="/admin/platform-health" element={<PlatformHealth />} />
                     <Route path="/admin/event-sinks" element={<EventSinks />} />
+                    <Route path="/admin/request-settings" element={<RequestSettings />} />
                     <Route path="/admin/:section" element={<AdminSectionPage />} />
 
                     {/* routes from the previous UI */}
