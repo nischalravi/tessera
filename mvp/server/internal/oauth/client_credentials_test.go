@@ -690,7 +690,7 @@ func TestMachineRolesIntersectScope(t *testing.T) {
 		{"viewer with write: the scope covers what the role lacks", []string{"viewer"}, []string{"tessera:write"}, "",
 			nil, []string{"viewer"}},
 		{"operator with write only: the role's read is outside the scope", []string{"operator"}, []string{"tessera:write"}, "",
-			[]string{"jit.request", "jit.decide", "jit.deny_revoke", "reviews.manage", "reviews.decide", "hris.simulate_event", "alerts.manage", "ownership.manage", "sod.mitigate"}, []string{"operator"}},
+			[]string{"jit.request", "jit.decide", "jit.deny_revoke", "reviews.manage", "reviews.decide", "hris.simulate_event", "flatfile.upload", "alerts.manage", "ownership.manage", "sod.mitigate"}, []string{"operator"}},
 		{"auditor with every scope", []string{"auditor"}, []string{"tessera:read", "tessera:audit", "tessera:admin", "tessera:write"}, "",
 			[]string{"graph.read", "audit.read", "audit.verify", "admin.read", "connections.read", "alerts.read", "email.read", "jobs.read", "provisioning.read", "siem.read"}, []string{"auditor"}},
 		{"auditor asking for less than registered", []string{"auditor"}, []string{"tessera:read", "tessera:audit", "tessera:admin"}, "tessera:audit",
