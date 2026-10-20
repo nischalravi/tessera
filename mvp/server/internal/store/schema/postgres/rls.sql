@@ -1864,3 +1864,17 @@ DROP POLICY IF EXISTS tenant_isolation ON grp_sync_ops;
 CREATE POLICY tenant_isolation ON grp_sync_ops
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_event_sinks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_event_sinks FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_event_sinks;
+CREATE POLICY tenant_isolation ON grp_event_sinks
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE grp_sink_dead_letters ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grp_sink_dead_letters FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON grp_sink_dead_letters;
+CREATE POLICY tenant_isolation ON grp_sink_dead_letters
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));

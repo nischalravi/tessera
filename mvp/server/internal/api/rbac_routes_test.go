@@ -572,6 +572,14 @@ GET    /api/groups/provisioners/{id}/runs            groups.admin    -  # issue 
 GET    /api/groups/provisioners/{id}/ops             groups.admin    -  # issue #54
 GET    /api/groups/provisioners/{id}/groups          groups.admin    -  # issue #54
 POST   /api/groups/provisioners/{id}/diagnose        groups.admin    -  # issue #54
+GET    /api/groups/event-sinks                       groups.admin    -  # issue #61
+POST   /api/groups/event-sinks                       groups.admin    -  # issue #61
+GET    /api/groups/event-sinks/{id}                  groups.admin    -  # issue #61
+PATCH  /api/groups/event-sinks/{id}                  groups.admin    -  # issue #61
+DELETE /api/groups/event-sinks/{id}                  groups.admin    -  # issue #61
+GET    /api/groups/event-sinks/{id}/dead-letters     groups.admin    -  # issue #61
+POST   /api/groups/event-sinks/{id}/dead-letters/{seq}/redeliver groups.admin    -  # issue #61
+POST   /api/groups/event-sinks/{id}/dead-letters/{seq}/discard   groups.admin    -  # issue #61
 GET    /api/auth/session                             auth.self       -
 POST   /api/auth/logout                              auth.self       -
 GET    /api/auth/sessions                            auth.self       -

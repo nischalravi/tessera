@@ -491,6 +491,7 @@ func New(cfg Config) *Server {
 	s.registerGroupsPolicyRoutes()
 	s.registerGroupsLoaderRoutes()       // before /api/groups/{id}, which would also match "loaders"
 	s.registerGroupsProvisioningRoutes() // before the {id} routes below: first match wins
+	s.registerGroupsSinkRoutes()         // before the {id} routes, which would match "event-sinks"
 	s.registerGroupsFolderRoutes()
 	s.registerGroupsPrivilegeRoutes()
 	s.registerGroupsMemberRoutes()

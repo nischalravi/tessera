@@ -259,6 +259,15 @@ func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 		{"GET", "/api/groups/provisioners/{id}/ops", "/api/groups/provisioners/" + other + "/ops", "", ""},
 		{"GET", "/api/groups/provisioners/{id}/groups", "/api/groups/provisioners/" + other + "/groups", "", ""},
 		{"POST", "/api/groups/provisioners/{id}/diagnose", "/api/groups/provisioners/" + other + "/diagnose", "", ""},
+		// GR-18, event sinks: tenant-wide, groups.admin only
+		{"GET", "/api/groups/event-sinks", "/api/groups/event-sinks", "", ""},
+		{"POST", "/api/groups/event-sinks", "/api/groups/event-sinks", `{"name":"s","kind":"sqs"}`, ""},
+		{"GET", "/api/groups/event-sinks/{id}", "/api/groups/event-sinks/" + other, "", ""},
+		{"PATCH", "/api/groups/event-sinks/{id}", "/api/groups/event-sinks/" + other, `{"enabled":false}`, ""},
+		{"DELETE", "/api/groups/event-sinks/{id}", "/api/groups/event-sinks/" + other, "", ""},
+		{"GET", "/api/groups/event-sinks/{id}/dead-letters", "/api/groups/event-sinks/" + other + "/dead-letters", "", ""},
+		{"POST", "/api/groups/event-sinks/{id}/dead-letters/{seq}/redeliver", "/api/groups/event-sinks/" + other + "/dead-letters/1/redeliver", "", ""},
+		{"POST", "/api/groups/event-sinks/{id}/dead-letters/{seq}/discard", "/api/groups/event-sinks/" + other + "/dead-letters/1/discard", "", ""},
 		// GR-10, loaders: the privilege is on the loader's target folder. The routes that need groups.loader.admin
 		// (see loaderAdmin below) are asked as a policy admin, who holds that permission and no privilege.
 		{"POST", "/api/groups/loaders", "/api/groups/loaders", `{"name":"L2","type":"csv","target_folder":"` + app +

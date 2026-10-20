@@ -92,6 +92,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/attest"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/deprov"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/events/sinks"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/loaders"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/pit"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/provisioning"
@@ -479,6 +480,10 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	all.Register(outbound, connsync.RuntimeFromConfig(cfg)) // okta and entra connectors use the shared client
 	obs.SetPoolStats(st.PoolStats)
 	checker := health.New(st, sealer, obs.DefaultLoops, time.Duration(cfg.ReadyMaxLoopLagSeconds)*time.Second, logger)
+	sinksNet, err := sinks.NewNetwork(cfg) // group event sinks (AWS over HTTPS, RabbitMQ and Kafka through the guarded dialer)
+	if err != nil {
+		return err
+	}
 	groupsEngine := &engine.Engine{Budget: cfg.GroupsSyncBudget, Log: logger}
 	fakeURL, stopFake, err := startFakeTarget(cfg, logger)
 	if err != nil {
@@ -717,6 +722,14 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		defer close(provisioningDone)
 		provisioningRunner.Loop(ctx)
 	}()
+	// group event sinks: SQS, SNS, RabbitMQ and Kafka delivery, through the same guarded network access
+	sinksDone := make(chan struct{})
+	sinksRunner := &sinks.Runner{DB: st, Svc: &sinks.Service{Sealer: sealer, AllowInsecure: sinksNet.AllowInsecure}, Open: sinksNet.Open,
+		Clock: clock, Log: logger}
+	go func() {
+		defer close(sinksDone)
+		sinksRunner.Loop(ctx)
+	}()
 	errc := make(chan error, 2)
 	go func() { errc <- httpSrv.Serve(ln) }()
 	logger.Info("tessera API listening", "addr", ln.Addr().String())
@@ -752,6 +765,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		<-govDone
 		<-loadersDone
 		<-provisioningDone
+		<-sinksDone
 		return err
 	case <-ctx.Done():
 	}
@@ -784,6 +798,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	<-govDone
 	<-loadersDone
 	<-provisioningDone
+	<-sinksDone
 	for i := 0; i < cap(errc) && (i == 0 || agentSrv != nil); i++ {
 		if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			return serveErr

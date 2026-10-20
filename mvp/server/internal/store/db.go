@@ -243,6 +243,8 @@ var tables = []string{
 	"grp_loaders", "grp_loader_runs", "grp_loader_unresolved",
 	// group provisioning (schema/0378_group_prov.sql)
 	"grp_provisioners", "grp_provisionable", "grp_sync_groups", "grp_sync_runs", "grp_sync_ops",
+	// group event sinks (schema/0379_group_event_sinks.sql)
+	"grp_event_sinks", "grp_sink_dead_letters",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was
