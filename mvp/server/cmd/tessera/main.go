@@ -440,7 +440,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	siemSvc := &siem.Service{DB: st, Sealer: sealer, HTTP: outbound, Clock: clock, Log: logger,
 		Dev: cfg.Env == config.Dev && cfg.OutboundAllowLoopback}
 	srv := api.New(api.Config{Health: checker, Store: st, Clock: clock, Policies: loader, Logger: logger,
-		PublicURL: cfg.PublicURL, Sealer: sealer, OutboundHTTP: outbound, APIAudience: cfg.APIAudience,
+		PublicURL: cfg.PublicURL, RPID: cfg.RPID, Sealer: sealer, OutboundHTTP: outbound, APIAudience: cfg.APIAudience,
 		AccessTokenTTL: time.Duration(cfg.AccessTokenTTLSeconds) * time.Second,
 		DeviceCodeTTL:  time.Duration(cfg.DeviceCodeTTLSeconds) * time.Second, DPoPRSNonce: cfg.DPoPRSNonce,
 		Outbound: outbound, FakeTargetURL: fakeURL,

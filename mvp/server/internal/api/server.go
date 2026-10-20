@@ -103,6 +103,9 @@ type Config struct {
 	// PublicURL is TESSERA_PUBLIC_URL: the base of the OIDC redirect URIs and
 	// of every OAuth issuer (PublicURL/t/{slug}) and DPoP htu.
 	PublicURL string
+	// RPID is TESSERA_RP_ID, the WebAuthn relying party id of break-glass
+	// keys. Empty (or no PublicOrigin): break-glass is unavailable.
+	RPID string
 	// APIAudience is TESSERA_API_AUDIENCE, the aud of access tokens (default
 	// PublicURL + "/api").
 	APIAudience string

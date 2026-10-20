@@ -45,6 +45,8 @@ var publicRoutes = []string{
 	"POST /api/auth/saml/{connection_id}/acs",
 	"GET /api/auth/oauth2/{connection_id}/callback",
 	"GET /t/{slug}/bootstrap",
+	"POST /api/auth/break-glass/options",
+	"POST /api/auth/break-glass/verify",
 	"GET /t/{slug}/.well-known/oauth-authorization-server",
 	"GET /t/{slug}/.well-known/jwks.json",
 	"GET /.well-known/oauth-protected-resource",
