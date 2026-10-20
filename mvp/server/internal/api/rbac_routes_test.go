@@ -164,6 +164,8 @@ GET    /api/guest-recoveries                         guests.read     -  # issue 
 POST   /api/guest-recoveries/{case_id}/cancel        guests.sponsor  STEP_UP_POLICY  # issue #73 (the guest's sponsor, or guests.recover, in the handler)
 GET    /api/catalog                                  requests.create -  # issue #164 (?all=1: catalog.manage in the handler)
 PUT    /api/catalog/items/{group_id}                 catalog.manage  STEP_UP_POLICY  # issue #164
+GET    /api/request-settings                          requests.create  -  # issue #298
+PUT    /api/request-settings                          catalog.manage  STEP_UP_POLICY  # issue #298
 POST   /api/requests                                 requests.create -  # issue #164 (others: requests.create_for_others in the handler)
 GET    /api/requests                                 requests.create -  # issue #164 (scope=pending|all: requests.decide or graph.read)
 GET    /api/requests/{request_id}                    requests.create -  # issue #164
@@ -347,6 +349,7 @@ POST   /api/sod/rulesets/import                      sod.manage      STEP_UP_POL
 GET    /api/sod/rulesets/{ruleset_id}                graph.read      -  # issue #298
 PUT    /api/sod/rulesets/{ruleset_id}                sod.manage      STEP_UP_POLICY  # issue #298
 POST   /api/sod/rulesets/{ruleset_id}/retire         sod.manage      STEP_UP_POLICY  # issue #298
+PUT    /api/sod/rulesets/{ruleset_id}/remediation     sod.manage      STEP_UP_POLICY  # issue #298
 GET    /api/sod/rulesets/{ruleset_id}/export         graph.read      -  # issue #298
 POST   /api/sod/import-legacy                        sod.manage      STEP_UP_POLICY  # issue #298
 GET    /api/sod/violations                           graph.read      -  # issue #298

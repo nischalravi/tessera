@@ -1291,6 +1291,34 @@ export interface CatalogView {
   can_manage: boolean;
   items: CatalogEntry[];
 }
+/** Tenant-wide request settings (Admin → Request settings). The server enforces them on submit; the form reads them to guide people. */
+export type RequestForOthers = "nobody" | "managers" | "permission";
+export type RequestHistoryVisibility = "involved" | "readers";
+export interface RequestSettings {
+  justification_required: boolean;
+  justification_min_length: number;
+  /** Hours used when neither the person nor the item names a duration; null: until removed. */
+  default_hours: number | null;
+  /** The longest any request may last; null: only each item's limit applies. */
+  max_hours: number | null;
+  attachments_allowed: boolean;
+  history_visibility: RequestHistoryVisibility;
+  for_others: RequestForOthers;
+}
+export interface RequestSettingsView extends RequestSettings {
+  /** 0 until the tenant saves settings for the first time. */
+  version: number;
+  can_manage: boolean;
+  /** What the signed-in user may do under the policy. */
+  can_request_for_others: boolean;
+  max_justification_length: number;
+  max_attachments: number;
+  max_hours_limit: number;
+}
+export const requestSettingsPath = "/request-settings";
+export const requestSettings = {
+  save: (version: number, s: RequestSettings) => api<RequestSettingsView>(requestSettingsPath, { version, ...s }, "PUT"),
+};
 export type RequestStatus = "pending" | "approved" | "denied" | "cancelled" | "expired" | "removed";
 export interface RequestLine {
   id: string;
@@ -1316,7 +1344,7 @@ export interface RequestLine {
   can_remove: boolean;
 }
 
-export const submitRequest = (body: { beneficiary_ids: number[]; catalog_item_ids: string[]; justification: string; duration_hours?: number | null }) =>
+export const submitRequest = (body: { beneficiary_ids: number[]; catalog_item_ids: string[]; justification: string; duration_hours?: number | null; attachments?: string[] }) =>
   api<{ batch_id: string; lines: RequestLine[] }>("/requests", body);
 const line = (id: string, action: string, body: object = {}) => api<RequestLine>(`/requests/${encodeURIComponent(id)}/${action}`, body);
 export const approveRequest = (id: string, reason?: string) => line(id, "approve", reason ? { reason } : {});
@@ -2217,9 +2245,14 @@ export interface SodFunction {
   /** Only on GET /sod/functions/{id} and after a change. */
   versions?: SodVersion[];
 }
+/** Where a risk's remediation options come from: its own list, its ruleset's, or the default of all four. */
+export type SodRemediationSource = "risk" | "ruleset" | "default";
 export interface SodRisk {
-  /** The remediation options the risk offers. */
+  /** The remediation options the risk offers (its own, else its ruleset's, else all four). */
   remediation: SodRemediation[];
+  remediation_source: SodRemediationSource;
+  /** Who an escalation goes to: the ruleset's approver, else the risk owner. */
+  escalate_to: SodPerson | null;
   id: string; key: string; name: string; description: string; priority: SodPriority; business_process: string; owner: SodPerson | null;
   ruleset: SodRef; functions: SodRef[]; subjects: SodSubjects; status: "active" | "retired"; version: number; created_at: string;
   updated_by: { id: string; display_name: string } | null; updated_at: string; violations?: number; versions?: SodVersion[];
@@ -2227,6 +2260,10 @@ export interface SodRisk {
 export interface SodRuleset {
   id: string; key: string; name: string; description: string; enabled: boolean; status: "active" | "retired"; version: number;
   created_at: string; updated_by: { id: string; display_name: string } | null; updated_at: string; risks: number; violations?: number;
+  /** What its risks offer unless they set options of their own. */
+  remediation: SodRemediation[];
+  /** The approver an escalation goes to; null sends it to the risk owner. */
+  escalate_to: SodPerson | null;
   versions?: SodVersion[];
 }
 export interface SodFunctionList { can_manage: boolean; attributes: SodAttribute[]; functions: SodFunction[] }
@@ -2247,6 +2284,8 @@ export interface SodViolation {
   status: SodViolationStatus; message: string; evidence: string[]; edges: [string, string][];
   /** The remediation options the risk offers on this violation. */
   remediation: SodRemediation[];
+  /** Who an escalation of this violation goes to. */
+  escalate_to?: SodPerson | null;
   mitigation?: SodCover;
 }
 export type SodViolationStatus = "open" | "mitigated" | "accepted" | "mitigation_pending";
@@ -2283,6 +2322,9 @@ export const sod = {
   exportRuleset: (id: string) => api<{ filename: string; version: number; yaml: string }>(sodPath("rulesets", id, "/export")),
   importRuleset: (yaml: string, opts: { prune?: boolean; dry_run?: boolean } = {}) => api<SodImportResult>("/sod/rulesets/import", { yaml, ...opts }),
   /** One-time import of the separation_of_duties policy files as a ruleset. */
+  /** What a ruleset's risks offer unless they set their own (none or all four: everything), and the escalation approver. */
+  setRulesetRemediation: (id: string, options: SodRemediation[], escalateToId: number | null) =>
+    api<SodRuleset>(sodPath("rulesets", id, "/remediation"), { options, escalate_to_id: escalateToId }, "PUT"),
   importLegacy: (dryRun = false) => api<SodImportResult>("/sod/import-legacy", { dry_run: dryRun }),
   /** Which risks would these requested items trigger? Changes nothing; used before an access request is submitted. */
   simulate: (beneficiaryIds: number[], catalogItemIds: string[], durationHours?: number) =>
@@ -2329,7 +2371,7 @@ export const sodMitigations = {
 };
 /** Remediation of a violation: send it to the risk owner, or remove a grant behind it (the risk must offer it). */
 export const sodRemediate = {
-  escalate: (riskId: string, identityId: number, note: string) => api<{ id: string }>("/sod/violations/escalate", { risk_id: riskId, identity_id: identityId, note }),
+  escalate: (riskId: string, identityId: number, note: string) => api<{ id: string; routed_to: SodPerson | null }>("/sod/violations/escalate", { risk_id: riskId, identity_id: identityId, note }),
   revoke: (riskId: string, identityId: number, edgeId: number, dryRun: boolean) =>
     api<SimResult>("/sod/violations/revoke", { risk_id: riskId, identity_id: identityId, edge_id: edgeId, dry_run: dryRun }),
 };

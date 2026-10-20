@@ -107,7 +107,7 @@ func (w *Writer) RequestMitigation(in MitigationInput, set Settings) (*store.Sod
 	if risk.Status != store.SodActive {
 		return nil, refuse(409, "risk_retired", "%s is retired", risk.Name)
 	}
-	opts, err := RiskOptions(w.Tx, risk.ID)
+	rem, err := RemediationOf(w.Tx, risk.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +115,7 @@ func (w *Writer) RequestMitigation(in MitigationInput, set Settings) (*store.Sod
 	if in.Kind == store.MitigationAccept {
 		want = OptAccept
 	}
-	if !Offers(opts, want) {
+	if !rem.Offers(want) {
 		return nil, refuse(409, "option_not_offered", "%s does not offer %q as a remediation", risk.Name, want)
 	}
 	if _, err := w.Tx.Identity(in.IdentityID); errors.Is(err, store.ErrNotFound) {
@@ -209,7 +209,15 @@ func (w *Writer) DecideMitigation(id string, approve bool, note string) (*store.
 	} else {
 		m.Status, m.ClosedAt = store.MitigationRejected, &w.Now
 	}
-	return w.saveMitigation(m, store.MitigationPending, action)
+	if _, err := w.saveMitigation(m, store.MitigationPending, action); err != nil {
+		return nil, err
+	}
+	if approve && w.OnActivate != nil {
+		if err := w.OnActivate(m); err != nil {
+			return nil, err
+		}
+	}
+	return m, nil
 }
 
 // CancelMitigation withdraws a pending request; only its requester may.
@@ -259,17 +267,18 @@ func (w *Writer) Escalate(riskID string, identityID int64, note string) (*store.
 	} else if err != nil {
 		return nil, err
 	}
-	opts, err := RiskOptions(w.Tx, risk.ID)
+	rem, err := RemediationOf(w.Tx, risk.ID)
 	if err != nil {
 		return nil, err
 	}
+	target := rem.Target(risk)
 	switch {
 	case risk.Status != store.SodActive:
 		return nil, refuse(409, "risk_retired", "%s is retired", risk.Name)
-	case !Offers(opts, OptEscalate):
+	case !rem.Offers(OptEscalate):
 		return nil, refuse(409, "option_not_offered", "%s does not offer %q as a remediation", risk.Name, OptEscalate)
-	case risk.OwnerID == nil:
-		return nil, refuse(409, "no_risk_owner", "%s has no owner to escalate to", risk.Name)
+	case target == nil:
+		return nil, refuse(409, "no_risk_owner", "%s has no owner or configured approver to escalate to", risk.Name)
 	case note == "" || len(note) > MaxNote:
 		return nil, refuse(422, "invalid_note", "a note of 1 to %d characters is required", MaxNote)
 	case w.By.UserID == uuid.Nil:
@@ -285,16 +294,21 @@ func (w *Writer) Escalate(riskID string, identityID int64, note string) (*store.
 	if err := w.Tx.InsertSodEscalation(e); err != nil {
 		return nil, err
 	}
-	to, err := notify.Identity(w.Tx, *risk.OwnerID)
+	to, err := notify.Identity(w.Tx, *target)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := notify.SecurityAlert(w.Tx, w.Now, "sod.escalation:"+e.ID, "SoD violation escalated: "+risk.Name,
-		fmt.Sprintf("%s holds both sides of %q. %s", who.Name, risk.Name, note), "/insights/sod", to...); err != nil {
+	// the inbox item: a notification the approver sees in the app
+	n, err := notify.SecurityAlert(w.Tx, w.Now, "sod.escalation:"+e.ID, "SoD violation escalated: "+risk.Name,
+		fmt.Sprintf("%s holds both sides of %q. %s", who.Name, risk.Name, note), "/insights/sod", to...)
+	if err != nil {
 		return nil, err
 	}
+	if n == 0 && !w.Quiet {
+		return nil, refuse(409, "approver_unreachable", "the person this escalation goes to has no active sign-in to receive it")
+	}
 	return e, w.audit("sod.violation.escalate", ojson.Object{{Key: "risk_id", Value: risk.ID}, {Key: "identity_id", Value: identityID},
-		{Key: "escalation_id", Value: e.ID}})
+		{Key: "escalation_id", Value: e.ID}, {Key: "routed_to", Value: *target}})
 }
 
 // ------------------------------------------------------------ cover
@@ -414,24 +428,7 @@ func Sweep(tx *store.TenantTx, now time.Time, set Settings) (warned, expired int
 			what = fmt.Sprintf("The acceptance of %s for %s", risk.Name, who.Name)
 		}
 		if !m.EndsAt.After(now) {
-			from := m.Status
-			m.Status, m.ClosedAt = store.MitigationExpired, &now
-			if _, err := w.saveMitigation(m, from, "sod.mitigation.expire", ojson.KV{Key: "reopened", Value: true}); err != nil {
-				return warned, expired, err
-			}
-			var to []notify.Recipient
-			for _, id := range []*int64{risk.OwnerID, ownerOf(control)} {
-				if id == nil {
-					continue
-				}
-				r, err := notify.Identity(tx, *id)
-				if err != nil {
-					return warned, expired, err
-				}
-				to = append(to, r...)
-			}
-			if _, err := notify.SecurityAlert(tx, now, "sod.mitigation.expired:"+m.ID, "SoD violation open again: "+risk.Name,
-				what+" ended on "+m.EndsAt.UTC().Format("2006-01-02")+". The violation is open again.", "/insights/sod", to...); err != nil {
+			if err := w.expire(m, risk, control, what); err != nil {
 				return warned, expired, err
 			}
 			expired++
@@ -463,6 +460,67 @@ func Sweep(tx *store.TenantTx, now time.Time, set Settings) (warned, expired int
 		warned++
 	}
 	return warned, expired, nil
+}
+
+// expire closes an active mitigation whose end date has passed: the violation
+// is open again, the risk and control owners are told, and the audit ledger
+// records it, all in the caller's transaction.
+func (w *Writer) expire(m *store.SodMitigation, risk *store.SodRisk, control *store.SodControl, what string) error {
+	from := m.Status
+	m.Status, m.ClosedAt = store.MitigationExpired, &w.Now
+	if _, err := w.saveMitigation(m, from, "sod.mitigation.expire", ojson.KV{Key: "reopened", Value: true}); err != nil {
+		return err
+	}
+	var to []notify.Recipient
+	for _, id := range []*int64{risk.OwnerID, ownerOf(control)} {
+		if id == nil {
+			continue
+		}
+		r, err := notify.Identity(w.Tx, *id)
+		if err != nil {
+			return err
+		}
+		to = append(to, r...)
+	}
+	_, err := notify.SecurityAlert(w.Tx, w.Now, "sod.mitigation.expired:"+m.ID, "SoD violation open again: "+risk.Name,
+		what+" ended on "+m.EndsAt.UTC().Format("2006-01-02")+". The violation is open again.", "/insights/sod", to...)
+	return err
+}
+
+// ExpireOne is the queue job that fires at a mitigation's end date (issue
+// #298): it re-opens the violation if the mitigation is still active and its
+// end date has passed. It does nothing if the mitigation already ended, was
+// revoked, or is not due yet. The periodic Sweep stays as the backstop.
+func ExpireOne(tx *store.TenantTx, now time.Time, id string) (bool, error) {
+	m, err := tx.SodMitigation(id)
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	if m.Status != store.MitigationActive || m.EndsAt.After(now) {
+		return false, nil
+	}
+	risk, err := tx.SodRisk(m.RiskID)
+	if err != nil {
+		return false, err
+	}
+	who, err := tx.Identity(m.IdentityID)
+	if err != nil {
+		return false, err
+	}
+	var control *store.SodControl
+	if m.ControlID != nil {
+		if control, err = tx.SodControl(*m.ControlID); err != nil {
+			return false, err
+		}
+	}
+	what := fmt.Sprintf("The mitigation of %s for %s", risk.Name, who.Name)
+	if m.Kind == store.MitigationAccept {
+		what = fmt.Sprintf("The acceptance of %s for %s", risk.Name, who.Name)
+	}
+	w := &Writer{Tx: tx, By: Actor{Display: Sweeper}, Now: now}
+	return true, w.expire(m, risk, control, what)
 }
 
 func ownerOf(c *store.SodControl) *int64 {
