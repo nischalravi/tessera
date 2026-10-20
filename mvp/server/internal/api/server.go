@@ -290,6 +290,7 @@ func New(cfg Config) *Server {
 	s.registerNotificationRoutes()
 	s.registerEmailRoutes()
 	s.registerContainmentRoutes()
+	s.registerFlatfileRoutes()
 	s.registerEvidenceRoutes()
 	s.registerGroupsFolderRoutes()
 	s.registerReadinessRoutes()

@@ -244,6 +244,13 @@ POST   /api/sod/violations/escalate                  sod.mitigate    -  # issue 
 POST   /api/sod/violations/revoke                    graph.read      -  # issue #298 (applying: grants.revoke and step-up in the handler)
 GET    /api/sod/review-context                       graph.read      -  # issue #298
 POST   /api/sod/simulate                             requests.create -  # issue #298
+GET    /api/flatfile/apps                            graph.read      -  # issue #105
+PUT    /api/flatfile/apps/{system}/mapping           flatfile.manage STEP_UP_POLICY  # issue #105
+POST   /api/flatfile/apps/{system}/uploads           flatfile.upload -  # issue #105
+GET    /api/flatfile/uploads                         graph.read      -  # issue #105
+GET    /api/flatfile/uploads/{upload_id}             graph.read      -  # issue #105
+GET    /api/flatfile/tasks                           graph.read      -  # issue #105
+POST   /api/flatfile/tasks/{task_id}/close           flatfile.close_tasks STEP_UP_POLICY  # issue #105
 GET    /api/jobs                                     jobs.read       -  # issue #172
 GET    /api/jobs/{job_id}                            jobs.read       -  #
 POST   /api/jobs/{job_id}/retry                      jobs.read       -  # (the replayed route's own permission and step-up apply)

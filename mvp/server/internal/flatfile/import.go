@@ -209,16 +209,16 @@ func Apply(c *store.TenantTx, now time.Time, in Input) (*Result, error) {
 	}
 	for _, r := range delta.Removed {
 		if in.Kind == KindAccounts {
-			err = dropAccount(c, in.System, r.Key)
+			err = dropAccount(c, now, in.System, r.Key)
 		} else {
-			err = dropEntitlement(c, in.System, r.Key)
+			err = dropEntitlement(c, now, in.System, r.Key)
 		}
 		if err != nil {
 			return nil, err
 		}
 	}
 	for _, r := range cascade {
-		if err := dropEntitlement(c, in.System, r.Key); err != nil {
+		if err := dropEntitlement(c, now, in.System, r.Key); err != nil {
 			return nil, err
 		}
 	}
@@ -335,7 +335,7 @@ func discovery(m *Mapping, accounts, ents []Record, held map[string]bool) *conne
 // dropAccount handles an account the file no longer lists: it is disabled,
 // and the grants an import made for it go. It is not deleted: reviews and the
 // audit trail still refer to it.
-func dropAccount(c *store.TenantTx, system, xid string) error {
+func dropAccount(c *store.TenantTx, now time.Time, system, xid string) error {
 	a, err := c.AccountByXID(system, xid)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil
@@ -352,7 +352,7 @@ func dropAccount(c *store.TenantTx, system, xid string) error {
 	}
 	for _, e := range edges {
 		if e.Source == "connector" {
-			if err := c.DeleteEdge(e.ID); err != nil {
+			if err := c.DeleteEdge(e.ID, now); err != nil {
 				return err
 			}
 		}
@@ -362,7 +362,7 @@ func dropAccount(c *store.TenantTx, system, xid string) error {
 
 // dropEntitlement removes the grant of an entitlement record (key: account id
 // and entitlement) the file no longer lists.
-func dropEntitlement(c *store.TenantTx, system, key string) error {
+func dropEntitlement(c *store.TenantTx, now time.Time, system, key string) error {
 	xid, code := SplitEntitlementKey(key)
 	a, err := c.AccountByXID(system, xid)
 	if errors.Is(err, store.ErrNotFound) {
@@ -386,7 +386,7 @@ func dropEntitlement(c *store.TenantTx, system, key string) error {
 		return err
 	}
 	if e.Source == "connector" {
-		return c.DeleteEdge(e.ID)
+		return c.DeleteEdge(e.ID, now)
 	}
 	return nil
 }

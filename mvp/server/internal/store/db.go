@@ -141,6 +141,8 @@ var tables = []string{
 	"intake_records", "sponsorships", "sponsorship_events",
 	// identity containment (schema/0205_containment.sql)
 	"containment_credentials", "containment_retries",
+	// flat-file import for disconnected apps (schema/0352_flatfile.sql)
+	"flatfile_mappings", "flatfile_uploads", "flatfile_upload_errors", "flatfile_changes", "flatfile_records", "flatfile_tasks",
 	// connector sync checkpoints (schema/0360_connector_checkpoints.sql)
 	"connector_checkpoints",
 	// point-in-time access and evidence packs (schema/0260-0261)
