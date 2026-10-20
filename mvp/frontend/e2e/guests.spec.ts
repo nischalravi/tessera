@@ -162,13 +162,15 @@ test("4 the sponsor leaves and the transfer task appears in the Inbox", async ({
   await admin.page.getByRole("button", { name: /Execute plan/ }).click();
   await admin.page.getByRole("alertdialog").getByRole("button", { name: "Execute plan" }).click();
   await expect(admin.page.getByText(/plan executed/i)).toBeVisible();
+  await admin.ctx.close(); // executing the plan ends the leaver's own sessions
 
-  // the guest's sponsorship now waits for someone to take it over: it is in the Inbox as a guest task
-  await admin.page.goto("/inbox?filter=guest");
-  await settle(admin.page);
-  const row = admin.page.getByRole("option", { name: new RegExp(`Take over sponsorship: ${guest.given} ${guest.family}`) });
+  // the guest's sponsorship now waits for someone to take it over: it is in the Inbox as a guest task (seen by a second admin)
+  const other = await signedInContext(browser, "Ivan");
+  await other.page.goto("/inbox?filter=guest");
+  await settle(other.page);
+  const row = other.page.getByRole("listitem").filter({ hasText: new RegExp(`Take over sponsorship: ${guest.given} ${guest.family}`) });
   await expect(row).toBeVisible();
-  await admin.ctx.close();
+  await other.ctx.close();
 });
 
 /**
@@ -182,7 +184,7 @@ const KNOWN_ELSEWHERE: [string, string[]][] = [
 ];
 
 test("the guest screens have no serious accessibility violations", async ({ browser }) => {
-  const { ctx, page } = await signedInContext(browser, "Pat");
+  const { ctx, page } = await signedInContext(browser, "Ivan"); // Pat left in test 4
   const routes = ["/access/guests", "/access/guests?tab=registrations", "/inbox?filter=guest", "/governance/guest-lifecycle", "/governance/lifecycle", "/governance/terms", "/admin/guests", "/directory/identity-matches"];
   const found = [];
   for (const r of routes) {
@@ -196,7 +198,11 @@ test("the guest screens have no serious accessibility violations", async ({ brow
   await page.getByPlaceholder("Search name, email, team…").fill(guest.family);
   await page.getByRole("row", { name: emailRe(guest.email) }).locator(".name-link").click();
   await page.getByRole("link", { name: /Open full page/ }).click();
-  await page.getByRole("tab", { name: /Affiliations/ }).click();
+  const affiliations = page.getByRole("tab", { name: /Affiliations/ });
+  await expect(async () => { // the page may still be loading its profile when the tab is first clicked
+    await affiliations.click();
+    await expect(page.getByRole("heading", { name: "Lifecycle and assurance" })).toBeVisible({ timeout: 2_000 });
+  }).toPass({ timeout: 20_000 });
   for (const h of ["Lifecycle and assurance", "Affiliations", "Identifiers", "Sponsorships", "Source records", "Terms accepted", "Match and merge history"]) {
     await expect(page.getByRole("heading", { name: h })).toBeVisible();
   }

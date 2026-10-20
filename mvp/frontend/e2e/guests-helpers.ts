@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Browser, BrowserContext, Page, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
+import { signIn as signInDev } from "./helpers";
 
 /** WCAG 2.0/2.1/2.2 A and AA rules. */
 export const WCAG_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
@@ -16,16 +17,12 @@ export async function stackIsUp(baseURL: string): Promise<boolean> {
   }
 }
 
-/** Dev sign-in as one of the dev IdP users, with a passkey (phishing-resistant, so changes need no step-up). */
+/**
+ * Dev sign-in as one of the dev IdP users, with a passkey (phishing-resistant, so changes need no step-up).
+ * The same flow as helpers.ts and auth.setup.ts: Organization, Continue, Sign in with ..., then the dev IdP's page.
+ */
 export async function signIn(page: Page, who: string, path = "/") {
-  await page.goto(path);
-  await page.waitForSelector("select");
-  const sel = page.locator("select").first();
-  const value = await sel.locator("option", { hasText: who }).first().getAttribute("value");
-  await sel.selectOption(value!);
-  await page.locator('input[name="method"]').first().check();
-  await page.locator('button[type="submit"]').click();
-  await expect(page.locator("main h1").first()).toBeVisible({ timeout: 20_000 });
+  await signInDev(page, who, "larkspur", path);
 }
 
 export async function signedInContext(browser: Browser, who: string): Promise<{ ctx: BrowserContext; page: Page }> {

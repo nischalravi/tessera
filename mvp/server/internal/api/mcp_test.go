@@ -716,6 +716,21 @@ func TestMCP_AdminAPI(t *testing.T) {
 		!strings.Contains(rec.Body.String(), "/.well-known/oauth-protected-resource/"+x.resA.id) {
 		t.Errorf("list resources: %d %s", rec.Code, rec.Body)
 	}
+	// the create response carries the stored status, the same as the list
+	var created resourceView
+	rec = corrDo(x.h, x.admin, "POST", "/api/mcp/resources", `{"resource":"https://mcp-c.example/mcp","name":"mcp c"}`)
+	if rec.Code != http.StatusCreated || json.Unmarshal(rec.Body.Bytes(), &created) != nil || created.Status != "active" {
+		t.Errorf("create resource status: %d %s, want status active", rec.Code, rec.Body)
+	}
+	var listed []resourceView
+	if rec := corrDo(x.h, x.admin, "GET", "/api/mcp/resources", ""); json.Unmarshal(rec.Body.Bytes(), &listed) != nil {
+		t.Errorf("list resources: %d %s", rec.Code, rec.Body)
+	}
+	for _, v := range listed {
+		if v.ID == created.ID && v.Status != created.Status {
+			t.Errorf("list status %q, create status %q", v.Status, created.Status)
+		}
+	}
 	if rec := corrDo(x.h, x.admin, "POST", "/api/mcp/resources", fmt.Sprintf(`{"resource":%q,"name":"dup"}`, x.resA.uri)); rec.Code != 409 {
 		t.Errorf("duplicate resource: %d", rec.Code)
 	}
