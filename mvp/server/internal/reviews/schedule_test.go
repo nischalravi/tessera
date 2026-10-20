@@ -325,3 +325,30 @@ func TestSchedule_RunNowTwiceInOneSecond(t *testing.T) {
 		}
 	}
 }
+
+// A known but disabled escalation reviewer keeps its own code, so an admin
+// can tell a leaver from a typo; a missing one is unknown.
+func TestSchedule_InactiveEscalationIdentity(t *testing.T) {
+	s := newSched(t)
+	carol := s.f.B.IDs["carol"]
+	s.tx(func(c *store.TenantTx) error { return c.SetIdentityStatus(carol, "disabled") })
+	missing := int64(987654321)
+	for _, tc := range []struct {
+		id       *int64
+		closeOut string
+		want     string
+	}{
+		{&carol, "escalate", "escalation_reviewer_not_active"},
+		{&carol, "revoke", "escalation_reviewer_not_active"},
+		{&missing, "escalate", "unknown_escalation_identity"},
+	} {
+		next := s.now
+		tm := &store.ReviewTemplate{Name: "x", UnusedDays: 60, DurationDays: 14, ReminderDays: 3, CloseOut: tc.closeOut,
+			EscalationDays: 7, Recurrence: "quarterly", NextRunAt: &next, Enabled: true, EscalationIdentityID: tc.id}
+		var err error
+		s.tx(func(c *store.TenantTx) error { err = reviews.ValidateTemplate(c, tm); return nil })
+		if se, ok := err.(*reviews.SpecError); !ok || se.Code != tc.want {
+			t.Errorf("%d %s: %v, want %s", *tc.id, tc.closeOut, err, tc.want)
+		}
+	}
+}

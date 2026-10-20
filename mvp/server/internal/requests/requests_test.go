@@ -306,7 +306,7 @@ func TestRequest_SweepNoticesRemovedGrant(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		return c.DeleteEdge(*l.EdgeID)
+		return c.DeleteEdge(*l.EdgeID, w.now)
 	})
 	w.tx(func(c *store.TenantTx) error {
 		if n, err := requests.Sweep(c, w.now); err != nil || n != 1 {

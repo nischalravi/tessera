@@ -99,3 +99,82 @@ test("conflicts sort most severe first and the request warning follows the highe
   assert.equal(m.sodWarning({ checked: 1, skipped: [], would_trigger: [t], highest_priority: "low" })!.tone, "warn");
   assert.deepEqual(m.distinct([{ s: ["b", "a"] }, { s: ["a", ""] }], (r) => r.s), ["a", "b"]);
 });
+
+test("mitigation calls send method, path, body and CSRF", async () => {
+  const spec = { name: "Monthly review", description: "", owner_id: 3, type: "detective", frequency: "monthly", evidence_requirement: "report" } as const;
+  await api.sodControls.create(spec as any);
+  await api.sodControls.update("c/1", 2, spec as any);
+  await api.sodControls.retire("c1", "obsolete");
+  await api.sodMitigations.request({ risk_id: "r1", identity_id: 4, kind: "control", control_id: "c1", justification: "j", ends_at: "2026-12-31", evidence: ["T-1"] });
+  await api.sodMitigations.approve("m1");
+  await api.sodMitigations.approve("m1", "fine");
+  await api.sodMitigations.reject("m/2", "no");
+  await api.sodMitigations.cancel("m3");
+  await api.sodMitigations.revoke("m4", "control failed");
+  await api.sodRemediate.escalate("r1", 4, "decide");
+  await api.sodRemediate.revoke("r1", 4, 9, true);
+  assert.deepEqual(
+    calls.map((c) => [c.method, c.url, c.body]),
+    [
+      ["POST", "/api/sod/controls", spec],
+      ["PUT", "/api/sod/controls/c%2F1", { version: 2, ...spec }],
+      ["POST", "/api/sod/controls/c1/retire", { reason: "obsolete" }],
+      ["POST", "/api/sod/mitigations", { risk_id: "r1", identity_id: 4, kind: "control", control_id: "c1", justification: "j", ends_at: "2026-12-31", evidence: ["T-1"] }],
+      ["POST", "/api/sod/mitigations/m1/approve", { note: "" }],
+      ["POST", "/api/sod/mitigations/m1/approve", { note: "fine" }],
+      ["POST", "/api/sod/mitigations/m%2F2/reject", { note: "no" }],
+      ["POST", "/api/sod/mitigations/m3/cancel", {}],
+      ["POST", "/api/sod/mitigations/m4/revoke", { reason: "control failed" }],
+      ["POST", "/api/sod/violations/escalate", { risk_id: "r1", identity_id: 4, note: "decide" }],
+      ["POST", "/api/sod/violations/revoke", { risk_id: "r1", identity_id: 4, edge_id: 9, dry_run: true }],
+    ],
+  );
+  for (const c of calls) assert.equal(c.headers["x-tessera-csrf"], "csrf-pat", `${c.method} ${c.url}`);
+  assert.equal(api.sodControlPaths.mitigations(), "/sod/mitigations");
+  assert.equal(api.sodControlPaths.mitigations({ status: "active", expiring_within_days: 14 }), "/sod/mitigations?status=active&expiring_within_days=14");
+  assert.equal(api.sodControlPaths.reviewContext(7), "/sod/review-context?campaign_id=7");
+});
+
+test("the end date is mandatory, in the future and within the limit", () => {
+  const now = new Date("2026-10-08T09:30:00Z");
+  assert.equal(m.endDayError("2026-12-31", now, 365), null);
+  assert.ok(m.endDayError("", now, 365));
+  assert.ok(m.endDayError("2026-10-08", now, 365), "today is not the future");
+  assert.ok(m.endDayError("2026-10-01", now, 365));
+  assert.ok(m.endDayError("tomorrow", now, 365));
+  assert.equal(m.latestEndDay(now, 30), "2026-11-07");
+  assert.equal(m.endDayError("2026-11-07", now, 30), null);
+  assert.match(m.endDayError("2026-11-08", now, 30)!, /at most 30 days/);
+  assert.equal(m.defaultEndDay(now, 365), "2027-01-06");
+  assert.equal(m.defaultEndDay(now, 30), "2026-11-07");
+});
+
+test("only the options a risk offers are available, and covered violations are not open", () => {
+  assert.equal(m.offers({ remediation: ["revoke", "escalate"] }, "revoke"), true);
+  assert.equal(m.offers({ remediation: ["revoke", "escalate"] }, "mitigate"), false);
+  assert.equal(m.offers({}, "accept"), true);
+  assert.equal(m.openCount([{ status: "open" }, { status: "mitigation_pending" }, { status: "mitigated" }, { status: "accepted" }]), 2);
+  assert.equal(m.statusLabel("mitigation_pending"), "Mitigation requested");
+});
+
+test("four-eyes in the UI: the requester is never offered the decision", () => {
+  assert.equal(m.canDecide({ status: "pending", requested_by_me: false }, true), true);
+  assert.equal(m.canDecide({ status: "pending", requested_by_me: true }, true), false);
+  assert.equal(m.canDecide({ status: "pending", requested_by_me: false }, false), false);
+  assert.equal(m.canDecide({ status: "active", requested_by_me: false }, true), false);
+});
+
+test("expiry wording and the expiring-soon filter", () => {
+  assert.equal(m.daysLeftLabel(null), "");
+  assert.equal(m.daysLeftLabel(-1), "ended");
+  assert.equal(m.daysLeftLabel(0), "ends today");
+  assert.equal(m.daysLeftLabel(1), "1 day left");
+  assert.equal(m.daysLeftLabel(9), "9 days left");
+  assert.equal(m.expiringSoon({ status: "active", days_left: 9 }, 14), true);
+  assert.equal(m.expiringSoon({ status: "active", days_left: 30 }, 14), false);
+  assert.equal(m.expiringSoon({ status: "pending", days_left: 3 }, 14), false);
+  assert.equal(m.mitigationStatusLabel({ status: "active", kind: "accept" }), "Accepted");
+  assert.equal(m.mitigationStatusLabel({ status: "active", kind: "control" }), "Mitigated");
+  assert.equal(m.mitigationStatusLabel({ status: "pending", kind: "control" }), "Awaiting approval");
+  assert.deepEqual(m.parseEvidence(" a \n\n b\n"), ["a", "b"]);
+});

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE sailpoint PUBLIC "sailpoint.dtd" "sailpoint.dtd">
+<sailpoint>
+  <Identity id="person-1" name="Synthetic Person"><Links><Link id="account-1" application="synthetic-erp" nativeIdentity="dummy-user"><Attributes><Map><entry key="groups" value="invoice-read"/></Map></Attributes></Link></Links></Identity>
+  <ManagedAttribute id="ent-1" application="synthetic-erp" attribute="group" value="invoice-read"><Owner><Reference class="sailpoint.object.Identity" id="person-1" name="Synthetic Person"/></Owner></ManagedAttribute>
+  <Bundle id="role-1" name="Synthetic finance role"><Owner><Reference class="sailpoint.object.Identity" id="person-1"/></Owner><Profiles><Profile><Constraints><Filter operation="EQ" property="groups" value="invoice-read"/></Constraints></Profile></Profiles></Bundle>
+  <Rule id="rule-1" name="Synthetic rule"><Source>DO_NOT_EXECUTE_OR_ECHO</Source></Rule>
+</sailpoint>

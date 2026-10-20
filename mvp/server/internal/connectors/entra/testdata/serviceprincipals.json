@@ -1,0 +1,40 @@
+{
+  "value": [
+    {
+      "id": "cccccccc-0000-4000-8000-000000000001",
+      "appId": "11110000-0000-4000-8000-000000000001",
+      "displayName": "Fixture Billing Service",
+      "appOwnerOrganizationId": "11111111-2222-3333-4444-555555555555",
+      "servicePrincipalType": "Application",
+      "accountEnabled": true,
+      "tags": [],
+      "appRoles": [
+        {"id": "dd000000-0000-4000-8000-000000000001", "value": "Invoice.Read", "displayName": "Read invoices", "isEnabled": true},
+        {"id": "dd000000-0000-4000-8000-000000000002", "value": "Invoice.Write", "displayName": "Write invoices", "isEnabled": true},
+        {"id": "dd000000-0000-4000-8000-000000000003", "value": "Old.Role", "displayName": "Disabled role", "isEnabled": false}
+      ]
+    },
+    {
+      "id": "cccccccc-0000-4000-8000-000000000002",
+      "appId": "22220000-0000-4000-8000-000000000002",
+      "displayName": "Example SaaS",
+      "appOwnerOrganizationId": "99999999-8888-4777-8666-555555555555",
+      "servicePrincipalType": "Application",
+      "accountEnabled": true,
+      "tags": ["WindowsAzureActiveDirectoryIntegratedApp"],
+      "appRoles": [
+        {"id": "ee000000-0000-4000-8000-000000000001", "value": "Admin", "displayName": "Administrator", "isEnabled": true}
+      ]
+    },
+    {
+      "id": "cccccccc-0000-4000-8000-000000000003",
+      "appId": "33330000-0000-4000-8000-000000000003",
+      "displayName": "Fixture Platform App",
+      "appOwnerOrganizationId": "ffffffff-0000-4000-8000-0000000000f0",
+      "servicePrincipalType": "Application",
+      "accountEnabled": true,
+      "tags": [],
+      "appRoles": []
+    }
+  ]
+}

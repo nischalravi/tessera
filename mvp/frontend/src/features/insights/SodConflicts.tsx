@@ -1,24 +1,43 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { Scale } from "lucide-react";
-import { IdentityDetail, SodViolation, sodPaths, useApi } from "../../api";
-import { Badge, Button, CommandBar, DataTable, EmptyState, InsightsTabs, Page, Sev, SidePanel, useSelected } from "../../components";
+import { AlertTriangle, ShieldCheck as Shield, Undo2, UserX, Scale as ScaleIcon } from "lucide-react";
+import { IdentityDetail, SodMitigationList, SodViolation, sodControlPaths, sodPaths, useApi } from "../../api";
+import { Badge, Button, Callout, CommandBar, DataTable, EmptyState, InsightsTabs, Page, Sev, SidePanel, useSelected } from "../../components";
+import { EndEarlyDrawer, EscalateDrawer, MitigateDrawer, Target } from "../governance/MitigateDrawers";
 import { RevokeDrawer } from "../directory/IdentityPage";
-import { PRIORITIES, distinct, sortViolations, statusLabel } from "../governance/sodModel";
+import { PRIORITIES, distinct, offers, openCount, sortViolations, statusLabel } from "../governance/sodModel";
 
 const opts = (vs: SodViolation[], get: (v: SodViolation) => string | string[]) => distinct(vs, get).map((value) => ({ value, label: value }));
 
 /** One conflict: both halves with the paths that grant them, and a dry-run revoke of either. */
-function ConflictPanel({ v, onClose }: { v: SodViolation; onClose: () => void }) {
+function ConflictPanel({ v, onClose, onChanged }: { v: SodViolation; onClose: () => void; onChanged: () => void }) {
   const { data: d, reload } = useApi<IdentityDetail>(`/identities/${v.identity_id}`);
+  const { data: mits, reload: reloadMits } = useApi<SodMitigationList>(sodControlPaths.mitigations());
   const [revoke, setRevoke] = useState<number | null>(null);
+  const [drawer, setDrawer] = useState<null | "mitigate" | "accept" | "escalate" | "end">(null);
   const grants = v.edges.map(([src, dst]) => d?.grants.find((g) => g.src === src && g.dst === dst)).filter((g) => !!g);
+  const target: Target = { riskId: v.risk_id, riskName: v.risk_name, identityId: v.identity_id, identityName: v.identity_name };
+  const covered = !!v.mitigation && v.status !== "open";
+  const canRequest = !!mits?.can_request && v.status === "open";
+  const live = mits?.mitigations.find((m) => m.id === v.mitigation?.mitigation_id);
+  const done = () => { reload(); reloadMits(); onChanged(); };
   return (
     <>
-      <SidePanel title={v.identity_name} sub={<><Sev s={v.priority} /> <Badge>{statusLabel(v.status)}</Badge></>} onClose={onClose} fullHref={`/directory/identities/${v.identity_id}`} fullLabel="Open person"
-        commands={<CommandBar label={`Actions for ${v.identity_name}`} items={grants.map((g) => g.edge_id ? { label: `Remove ${g.label}…`, onClick: () => setRevoke(g.edge_id) } : null)} />}>
+      <SidePanel title={v.identity_name} sub={<><Sev s={v.priority} /> <Badge tone={v.status === "open" ? "critical" : v.status === "mitigation_pending" ? "warning" : "ok"}>{v.mitigation?.label ?? statusLabel(v.status)}</Badge></>} onClose={onClose} fullHref={`/directory/identities/${v.identity_id}`} fullLabel="Open person"
+        commands={<CommandBar label={`Actions for ${v.identity_name}`} items={[
+          canRequest && offers(v, "mitigate") && { label: "Mitigate…", icon: <Shield size={16} />, onClick: () => setDrawer("mitigate") },
+          canRequest && offers(v, "accept") && { label: "Accept…", icon: <ScaleIcon size={16} />, onClick: () => setDrawer("accept") },
+          canRequest && offers(v, "escalate") && { label: "Escalate…", icon: <AlertTriangle size={16} />, onClick: () => setDrawer("escalate") },
+          covered && live?.status === "active" && { label: "End early…", icon: <Undo2 size={16} />, danger: true, onClick: () => setDrawer("end") },
+          ...(v.status === "open" || v.status === "mitigation_pending" ? grants.filter(() => offers(v, "revoke")).map((g) => g.edge_id ? { label: `Revoke ${g.label}…`, icon: <UserX size={16} />, onClick: () => setRevoke(g.edge_id) } : null) : []),
+        ]} />}>
         <div className="stack">
           <div><b>{v.risk_name}</b><div className="small muted">{v.ruleset.name}{v.business_process ? ` · ${v.business_process}` : ""}</div></div>
+          {covered && v.mitigation && (
+            <Callout tone="ok">{v.mitigation.label}{v.mitigation.control ? ` by ${v.mitigation.control}` : ""}. It is left out of the open counts and stays in reports. When it ends the violation opens again.</Callout>
+          )}
+          {v.status === "mitigation_pending" && <Callout tone="warn">A request is waiting for a second person to approve it. Until then the violation is open.</Callout>}
           <p>{v.message}</p>
           {v.sides.map((side, i) => (
             <section key={i} className="stack-sm" aria-label={`Side ${i + 1}: ${side.function.name}`}>
@@ -31,10 +50,13 @@ function ConflictPanel({ v, onClose }: { v: SodViolation; onClose: () => void })
               ))}
             </section>
           ))}
-          <p className="xs faint">Open conflicts count toward risk reports. Resolve one by removing either side, or ask a risk owner about a mitigating control.</p>
+          <p className="xs faint">Options this risk offers: {v.remediation.join(", ")}. Resolve by removing either side, or cover it with a control another person approves.</p>
         </div>
       </SidePanel>
-      {revoke !== null && <RevokeDrawer edgeId={revoke} onClose={() => setRevoke(null)} onDone={reload} />}
+      {revoke !== null && <RevokeDrawer edgeId={revoke} via={{ riskId: v.risk_id, identityId: v.identity_id }} onClose={() => setRevoke(null)} onDone={done} />}
+      {(drawer === "mitigate" || drawer === "accept") && <MitigateDrawer target={target} kind={drawer === "accept" ? "accept" : "control"} offerControl={drawer === "mitigate"} offerAccept={drawer === "accept"} onClose={() => setDrawer(null)} onDone={done} />}
+      {drawer === "end" && live && <EndEarlyDrawer mitigationId={live.id} label={`${v.identity_name}: ${v.risk_name}`} onClose={() => setDrawer(null)} onDone={done} />}
+      {drawer === "escalate" && <EscalateDrawer target={target} onClose={() => setDrawer(null)} onDone={done} />}
     </>
   );
 }
@@ -47,7 +69,7 @@ export function SodConflicts() {
   const all = rows ?? [];
   const crumbs: [string, string?][] = [["Protection"], ["Insights", "/insights"], ["SoD conflicts"]];
   return (
-    <Page tabs={<InsightsTabs />} title="Separation-of-duties conflicts" count={rows ? `${rows.length} conflict${rows.length === 1 ? "" : "s"}` : undefined} crumbs={crumbs}
+    <Page tabs={<InsightsTabs />} title="Separation-of-duties conflicts" count={rows ? `${openCount(rows)} open of ${rows.length} conflict${rows.length === 1 ? "" : "s"}` : undefined} crumbs={crumbs}
       sub={<>People and machine identities who hold an entitlement of each of two conflicting functions, through any combination of groups, roles and systems. Define the rules under <Link to="/governance/policies?view=risks">Policies & SoD</Link>.</>}>
       <DataTable
         id="sod-conflicts"
@@ -63,7 +85,7 @@ export function SodConflicts() {
           { id: "sys", header: "System", sort: (v) => v.systems.join(), csv: (v) => v.systems.join(" "), cell: (v) => v.systems.join(", "), hideNarrow: true },
           { id: "ruleset", header: "Ruleset", sort: (v) => v.ruleset.name, cell: (v) => v.ruleset.name, hideNarrow: true },
           { id: "process", header: "Business process", sort: (v) => v.business_process, cell: (v) => v.business_process || <span className="faint">-</span>, hideNarrow: true },
-          { id: "status", header: "Status", sort: (v) => v.status, cell: (v) => <Badge tone={v.status === "open" ? "critical" : "ok"}>{statusLabel(v.status)}</Badge> },
+          { id: "status", header: "Status", sort: (v) => v.status, cell: (v) => <Badge tone={v.status === "open" ? "critical" : v.status === "mitigation_pending" ? "warning" : "ok"}>{v.mitigation?.label ?? statusLabel(v.status)}</Badge> },
         ]}
         initialSort={["priority", 1]}
         searchText={(v) => `${v.identity_name} ${v.risk_name} ${v.function1.name} ${v.function2.name} ${v.entitlement} ${v.message}`}
@@ -82,7 +104,7 @@ export function SodConflicts() {
         activeKey={selected}
         empty={<EmptyState title="No conflicts" icon={<Scale size={18} />} action={<Link to="/governance/policies?view=risks"><Button>Review the risks</Button></Link>}>Nobody holds both halves of any enabled risk.</EmptyState>}
       />
-      {open && <ConflictPanel v={open} onClose={() => setSelected(null)} />}
+      {open && <ConflictPanel v={open} onClose={() => setSelected(null)} onChanged={reload} />}
     </Page>
   );
 }
