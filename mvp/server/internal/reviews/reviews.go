@@ -136,6 +136,9 @@ func GenerateScopedCampaign(c *store.TenantTx, now time.Time, name string, unuse
 	var pending []*store.ReviewItem
 	total, items := 0, 0
 	fz := newFreezer() // the population snapshot (issue #110), frozen below in this transaction
+	if rv.scoped() {
+		fz.roleScope = scope.RoleIDs
+	}
 	for _, iid := range g.Identities(true) {
 		ident := people[iid]
 		eff := g.EffectivePermissions(iid)
@@ -302,6 +305,7 @@ func GenerateScopedCampaign(c *store.TenantTx, now time.Time, name string, unuse
 		if _, err := c.InsertMembershipItem(m.item, m.roleID, m.source); err != nil {
 			return 0, err
 		}
+		fz.recordMembership(people[m.item.IdentityID], m.item, rv.roles[m.roleID].Name) // memberships are in the population (#365)
 	}
 	if err := c.SetCampaignTotals(campID, total, total-items); err != nil {
 		return 0, err
