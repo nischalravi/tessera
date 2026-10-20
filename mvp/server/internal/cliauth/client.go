@@ -543,6 +543,13 @@ func parseChallenge(h string) (scheme string, params map[string]string) {
 // the RFC 9470 challenge returns *StepUpError; a stale token is refreshed
 // once and a server nonce is adopted, each with one retry.
 func (c *Client) Do(ctx context.Context, method, path string, body []byte) (*Response, error) {
+	return c.DoWith(ctx, method, path, body, nil)
+}
+
+// DoWith is Do with extra request headers (an Idempotency-Key, say). The
+// headers that carry the credentials (Authorization, DPoP) are never taken
+// from the caller.
+func (c *Client) DoWith(ctx context.Context, method, path string, body []byte, header http.Header) (*Response, error) {
 	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") || strings.ContainsAny(path, "\\\r\n") {
 		return nil, fmt.Errorf("%q is not an API path (want /api/...)", path)
 	}
@@ -567,6 +574,11 @@ func (c *Client) Do(ctx context.Context, method, path string, body []byte) (*Res
 		p, err := c.proof(key, method, req.URL.String(), cr.AccessToken, nonce)
 		if err != nil {
 			return nil, err
+		}
+		for k, v := range header {
+			if !strings.EqualFold(k, "Authorization") && !strings.EqualFold(k, "DPoP") {
+				req.Header[http.CanonicalHeaderKey(k)] = append([]string(nil), v...)
+			}
 		}
 		req.Header.Set("Authorization", "DPoP "+cr.AccessToken)
 		req.Header.Set("DPoP", p)

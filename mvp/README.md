@@ -75,7 +75,7 @@ server/
                         graceful shutdown, JIT sweeper, audit checkpointer
   cmd/tessera-devidp/   the dev IdP binary (development and tests only; see Signing in)
   cmd/tessera-cli/      the reference command-line client: `login` (device grant + DPoP), `whoami`,
-                        `api`, `logout` (see Command-line sign-in)
+                        `api`, `groups` (commands and plans), `logout` (see Command-line sign-in)
   cmd/tessera-harness/  AWS evaluator differential harness, offline subcommands: `replay` re-runs the
                         recorded corpus with no AWS credentials or network (`go run ./cmd/tessera-harness
                         replay` from `server/`; exits 1 unless every case concludes what it expects);
@@ -3848,6 +3848,72 @@ identities) and `mcp_findings`, both tenant-scoped with cross-tenant guard trigg
 (`schema/0375_agent_discovery.sql`). `GET /api/ai-agents` is the `ai_agent` inventory with source,
 creator, sponsor status and violating policy ids; `GET /api/nhi` is unchanged. The demo company
 supplies Okta-sourced agents and five sample findings, so the screens work without any connector.
+
+### Groups from the command line and declarative plans (`tessera-cli groups`)
+
+`tessera-cli groups` drives the native groups API (see Native groups) through the same signed-in
+session as `api`: DPoP-bound OAuth tokens from `tessera-cli login`, nothing else. There is no
+separate credential and no new route: every step needs the route permission (`groups.read` or
+`groups.write`) and then the object privilege (GR-4), exactly as in the UI, and is audited as the user
+through client `tessera-cli`. A refusal prints the server's answer and exits 1 (3 for a step-up demand).
+
+```bash
+tessera-cli groups ls [FOLDER]                  # folders and groups, below FOLDER if given
+tessera-cli groups show app:foo:security:fooAdmin
+tessera-cli groups members ls app:foo:service:ref:testers [--filter direct|indirect|effective|composite]
+tessera-cli groups members add app:team 42 group:app:other --reason "onboarding"
+tessera-cli groups members rm  app:team identity:42
+tessera-cli groups plan   -f plan.yaml          # the diff and its simulated membership impact; changes nothing
+tessera-cli groups apply  -f plan.yaml          # the same diff, then the changes; -f - reads standard input
+tessera-cli groups export app:foo -o plan.yaml  # a folder and everything below it, as a plan
+tessera-cli groups templates                    # the plan templates and their inputs
+```
+
+A member is `identity:<id>` (or the bare id) or `group:<name>`; a holder of a privilege also
+`everyone`. Names are the `:`-separated full names (case-insensitive).
+
+**A plan is data, not code** (K6): YAML with `folders`, `groups` (with `members: {add, remove}` and,
+at creation, a `composite: {op, factors}`) and `privileges` (`object: folder:<name>|group:<name>`,
+`grant: {<privilege>: [holders], scope: self|one|sub}`; unknown keys are errors). A folder may name a
+`template` with typed `params`. The `application` template (version 1) is the Deployment Guide's
+standard application folder: `security`, `service:ref` and `service:policy` folders, the admin group
+`fooAdmin` (holding `stem_admin` and `admin`, inherited below `app:foo`), and the policy group
+`foo_user` = `foo_user_allow` minus `foo_user_deny` with `foo_user_allow_manual` for exceptions;
+optional inputs `admins` and `global_deny` nest a group in the admin and deny groups.
+
+```yaml
+folders:
+  - name: app:foo
+    template: application
+    params: {admins: "org:it:staff:iam"}
+groups:
+  - name: app:foo:service:ref:testers
+    members: {add: ["identity:12345", "identity:23456"]}
+privileges:
+  - object: folder:app:foo
+    grant: {create: ["group:app:foo:security:fooAdmin"], scope: sub}
+```
+
+A plan is additive and idempotent: it creates what is missing, adds and removes the members it lists,
+grants the privileges it lists, and never deletes or revokes anything, so a second `apply` finds
+"No changes". `plan` and `apply` first read the live state (folders, groups, the members of the groups
+the plan changes, the privilege rows it grants), diff against it, and refuse a plan that names a
+parent folder, factor, member group or holder that neither exists nor is created by the plan.
+`plan` then simulates the membership changes on existing groups with `POST /api/groups:simulate`
+(the real operations in a rolled-back savepoint, in chunks of 100) and prints `+N / -M identities in K
+groups`; changes on groups the plan itself creates cannot be simulated and are counted. `apply` sends
+folders, groups and privilege grants one request each, then each group's membership changes as an
+atomic `:batch` (up to 1,000 operations) with an `Idempotency-Key` derived from the group, the
+operations and `--run-id`: sending the same batch again, after a lost answer, replays the first answer
+and writes nothing twice (for 24 hours; pass another `--run-id` to send a repeated plan afresh). It stops
+at the first refusal; run it again to continue, because it only does what is still missing.
+Limits: 4 MiB and 20,000 items per plan; the catalog (all folders and groups the caller may view) is
+read in pages of 500. Membership dates are not part of a plan. The composite of an existing group is
+not compared or changed.
+
+Tests: `internal/groups/plan` (parsing, validation, templates, diff, golden `plan` output in
+`testdata/`) and, against the in-process server, `cmd/tessera-cli/groups_e2e_test.go`
+(`TestPlan_ApplyIsIdempotent`, `TestExportThenApply_RoundTrip`, replayed batches, refusals).
 
 ## Adding a real connector
 

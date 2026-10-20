@@ -22,6 +22,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/authtest"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
 	"github.com/nischalravi/tessera/mvp/server/internal/keys"
 	"github.com/nischalravi/tessera/mvp/server/internal/oauth"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
@@ -87,14 +88,15 @@ type world struct {
 	// moving the fake clock on, so a slow machine (-race) cannot expire the code
 	// before it is approved.
 	answered atomic.Pointer[chan struct{}]
+	ids      testkit.IDs
 }
 
 const slug = "tiny"
 
 func newWorld(t *testing.T) *world {
 	t.Helper()
-	db, _ := testkit.Tiny(t)
-	w := &world{t: t, db: db, clock: &fakeClock{t: time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC)},
+	db, ids := testkit.Tiny(t)
+	w := &world{t: t, db: db, ids: ids, clock: &fakeClock{t: time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC)},
 		dir:    filepath.Join(t.TempDir(), "tessera"), // the CLI creates it (mode 0700)
 		tenant: testkit.TinyTenant, slug: slug}
 	kek := make([]byte, 32)
@@ -121,6 +123,7 @@ func newWorld(t *testing.T) *world {
 		},
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), AllowedOrigins: []string{authtest.Origin}, Env: "test",
 		RateLimits: api.RateLimits{Anonymous: lots, Auth: lots}, PublicURL: w.srv.URL, Sealer: sealer,
+		GroupsEngine: engine.New(5000),
 	}).Handler()
 	return w
 }

@@ -7,6 +7,7 @@
 //	                   [--acr URN] [--max-age SECONDS]
 //	tessera-cli whoami
 //	tessera-cli api    [-d JSON | -d @-] METHOD /api/path
+//	tessera-cli groups ls|show|members|plan|apply|export|templates   (groups.go)
 //	tessera-cli logout
 //
 // The DPoP key and the refresh token are stored in
@@ -72,6 +73,7 @@ const usage = `usage:
   tessera-cli login  [--server URL] [--tenant SLUG] [--scope "..."] [--acr URN] [--max-age SECONDS]
   tessera-cli whoami
   tessera-cli api    [-d JSON | -d @-] METHOD /api/path
+  tessera-cli groups ...   (tessera-cli groups help)
   tessera-cli logout
 `
 
@@ -104,6 +106,8 @@ func run(ctx context.Context, args []string, e runEnv) int {
 		return apiCmd(ctx, c, rest, e)
 	case "logout":
 		return logout(ctx, c, rest, e)
+	case "groups":
+		return groupsCmd(ctx, c, rest, e)
 	}
 	_, _ = fmt.Fprintf(e.stderr, "tessera-cli: unknown command %q\n%s", cmd, usage)
 	return exitUsage
