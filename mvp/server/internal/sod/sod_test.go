@@ -286,11 +286,15 @@ risks:
 
 func TestParseYAMLRefusals(t *testing.T) {
 	for name, doc := range map[string]string{
-		"empty":         "",
-		"unknown field": "ruleset: {key: a, name: A, colour: red}\n",
-		"two documents": "ruleset: {key: a, name: A}\n---\nruleset: {key: b, name: B}\n",
-		"wrong schema":  "schema: other/v9\nruleset: {key: a, name: A}\n",
-		"not yaml":      "ruleset: [",
+		"empty":          "",
+		"unknown field":  "ruleset: {key: a, name: A, colour: red}\n",
+		"two documents":  "ruleset: {key: a, name: A}\n---\nruleset: {key: b, name: B}\n",
+		"wrong schema":   "schema: other/v9\nruleset: {key: a, name: A}\n",
+		"not yaml":       "ruleset: [",
+		"enabled text":   "ruleset: {key: a, name: A, enabled: maybe}\n",
+		"enabled null":   "ruleset: {key: a, name: A, enabled: null}\n",
+		"enabled int":    "ruleset: {key: a, name: A, enabled: 1}\n",
+		"enabled quoted": "ruleset: {key: a, name: A, enabled: 'true'}\n",
 	} {
 		if _, err := sod.ParseYAML([]byte(doc)); code(err) != "invalid_document" {
 			t.Errorf("%s: %v", name, err)
@@ -317,6 +321,80 @@ func TestParseYAMLRefusals(t *testing.T) {
 		}
 		if n, _ := c.CountSodRulesets(); n != 0 {
 			t.Error("a refused import wrote a ruleset")
+		}
+		return nil
+	})
+}
+
+// A file with no enabled key is on, as a ruleset made in the UI; an explicit
+// false stays off, and both survive an export and re-parse.
+func TestParseYAMLEnabledDefault(t *testing.T) {
+	for name, tc := range map[string]struct {
+		doc  string
+		want bool
+	}{
+		"missing": {"ruleset: {key: a, name: A}\n", true},
+		"true":    {"ruleset: {key: a, name: A, enabled: true}\n", true},
+		"false":   {"ruleset: {key: a, name: A, enabled: false}\n", false},
+		"yes":     {"ruleset: {key: a, name: A, enabled: yes}\n", true},
+		"off":     {"ruleset: {key: a, name: A, enabled: off}\n", false},
+	} {
+		b, err := sod.ParseYAML([]byte(tc.doc))
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		if b.Ruleset.Enabled != tc.want {
+			t.Errorf("%s: enabled = %v, want %v", name, b.Ruleset.Enabled, tc.want)
+		}
+		out, err := b.MarshalYAML()
+		if err != nil {
+			t.Fatal(err)
+		}
+		again, err := sod.ParseYAML(out)
+		if err != nil || again.Ruleset.Enabled != tc.want {
+			t.Errorf("%s: round trip enabled = %v, err %v", name, again, err)
+		}
+	}
+}
+
+// #334: a ruleset file with no enabled key imports as an enabled ruleset, so
+// its risks are evaluated.
+func TestImportWithoutEnabledIsEnabled(t *testing.T) {
+	st, _ := testkit.Tiny(t)
+	doc := `schema: tessera.sod/v1
+ruleset:
+  key: noflag
+  name: No flag
+functions:
+  - key: create
+    name: Create payments
+    selectors:
+      - {name_pattern: "payments:create"}
+  - key: approve
+    name: Approve payments
+    selectors:
+      - {name_pattern: "payments:approve"}
+risks:
+  - key: pay-own
+    name: Pay own invoice
+    priority: high
+    functions: [create, approve]
+`
+	testkit.Write(t, st, func(c *store.TenantTx) error {
+		b, err := sod.ParseYAML([]byte(doc))
+		if err != nil {
+			return err
+		}
+		if _, err := writer(c).Import(b, sod.ImportOptions{}); err != nil {
+			return err
+		}
+		rs, err := c.SodRulesetByKey("noflag")
+		if err != nil {
+			return err
+		}
+		if !rs.Enabled {
+			t.Error("a file without enabled imported a disabled ruleset")
 		}
 		return nil
 	})
