@@ -121,6 +121,7 @@ type reqState struct {
 	tenant    tenancy.ID
 	actor     store.AuditActor
 	sessionID *string
+	clientID  *string // the OAuth client of a token principal
 	authn     json.RawMessage
 	anonWhy   string
 	cfg       *MiddlewareConfig
@@ -162,7 +163,7 @@ func SetPrincipal(ctx context.Context, p Principal) context.Context {
 	st, ok := ctx.Value(stateKey{}).(*reqState)
 	if ok {
 		st.mu.Lock()
-		st.tenant, st.actor, st.sessionID, st.authn, st.anonWhy = p.Tenant, p.Actor, p.SessionID, p.Authn, ""
+		st.tenant, st.actor, st.sessionID, st.clientID, st.authn, st.anonWhy = p.Tenant, p.Actor, p.SessionID, p.ClientID, p.Authn, ""
 		st.mu.Unlock()
 	}
 	ac, _ := store.AuditContextFrom(ctx)
@@ -338,7 +339,7 @@ func (st *reqState) appendLocked(status int) error {
 		return err
 	}
 	e := store.AuditEvent{OccurredAt: st.at, ActorType: st.actor.Type, ActorID: st.actor.ID, ActorDisplay: st.actor.Display,
-		SessionID: st.sessionID, Authn: st.authn, Action: store.ActionHTTPRequest,
+		SessionID: st.sessionID, ClientID: st.clientID, Authn: st.authn, Action: store.ActionHTTPRequest,
 		Outcome: outcome(status), RequestID: &st.requestID, HTTP: h, IP: ac.IP, UserAgentSHA256: ac.UAHash, Detail: detail}
 	if st.route != nil {
 		e.TargetType, e.TargetID = target(*st.route, params)

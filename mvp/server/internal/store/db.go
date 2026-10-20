@@ -94,6 +94,8 @@ var tables = []string{
 	"login_transactions",
 	// operator bootstrap (schema/0006_admin.sql)
 	"bootstrap_invitations",
+	// OAuth authorization server (schema/0358_oauth.sql)
+	"api_clients", "device_grants", "refresh_tokens",
 	// admin changes, admin notifications, operator recovery (schema/0008_admin_changes.sql)
 	"tenant_recoveries", "admin_change_requests", "admin_notifications",
 	// audit ledger (schema/0004_audit.sql)

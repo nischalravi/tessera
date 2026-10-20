@@ -858,6 +858,27 @@ CREATE POLICY tenant_isolation ON queue_jobs
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE api_clients ENABLE ROW LEVEL SECURITY;
+ALTER TABLE api_clients FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON api_clients;
+CREATE POLICY tenant_isolation ON api_clients
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE device_grants ENABLE ROW LEVEL SECURITY;
+ALTER TABLE device_grants FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON device_grants;
+CREATE POLICY tenant_isolation ON device_grants
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE refresh_tokens ENABLE ROW LEVEL SECURITY;
+ALTER TABLE refresh_tokens FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON refresh_tokens;
+CREATE POLICY tenant_isolation ON refresh_tokens
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 ALTER TABLE connector_checkpoints ENABLE ROW LEVEL SECURITY;
 ALTER TABLE connector_checkpoints FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON connector_checkpoints;

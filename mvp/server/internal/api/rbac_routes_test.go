@@ -267,6 +267,15 @@ DELETE /api/config/trusted-signers/{kid}             config.transport STEP_UP_PO
 POST   /api/config/import/plan                       config.transport -  #
 POST   /api/config/import/apply                      config.transport STEP_UP_POLICY #
 GET    /api/config/imports                           admin.read      -  #
+GET    /api/auth/oauth2/{connection_id}/callback     public
+GET    /t/{slug}/.well-known/oauth-authorization-server public
+GET    /t/{slug}/.well-known/jwks.json               public
+GET    /.well-known/oauth-protected-resource         public
+POST   /t/{slug}/oauth/device_authorization          public
+POST   /t/{slug}/oauth/token                         public
+POST   /t/{slug}/oauth/revoke                        public
+POST   /api/auth/device/lookup                       auth.self       -  # issue #14
+POST   /api/auth/device/approve                      auth.self       STEP_UP_ADMIN  # issue #14: max_age 300 s
 GET    /api/groups/folders                           groups.admin    -  # issue #44
 POST   /api/groups/folders                           groups.admin    -  # issue #44
 GET    /api/groups/folders/{id}                      groups.admin    -  # issue #44
@@ -292,7 +301,6 @@ GET    /api/auth/login                               public
 GET    /api/auth/oidc/{connection_id}/callback       public
 GET    /api/auth/saml/{connection_id}/metadata       public
 POST   /api/auth/saml/{connection_id}/acs            public
-GET    /api/auth/oauth2/{connection_id}/callback     public
 GET    /t/{slug}/bootstrap                           public
 GET    /api/admin/users                              admin.read      -  # issue #16
 POST   /api/admin/users/{user_id}/disable            admin.users.disable STEP_UP_ADMIN  # issue #16
