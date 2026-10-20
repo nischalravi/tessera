@@ -12,6 +12,8 @@ import { ADMIN_BY_ID, ADMIN_SECTIONS, AdminSection, useMockState } from "../../m
 import { GuestsAdmin } from "./GuestsAdmin";
 import { Jobs } from "./Jobs";
 import { Provisioning } from "./Provisioning";
+import { Archive } from "./Archive";
+import { Retention } from "./Retention";
 import { ConfigTransfer } from "./ConfigTransfer";
 import { SiemSinks } from "./SiemSinks";
 
@@ -155,7 +157,7 @@ function AuditLog() {
   );
 }
 
-const LIVE: Record<string, () => React.JSX.Element> = { guests: GuestsAdmin, jobs: Jobs, audit: AuditLog, provisioning: Provisioning, siem: SiemSinks, "config-transfer": ConfigTransfer, notifications: NotificationsAdminPanel, "email-delivery": EmailDelivery };
+const LIVE: Record<string, () => React.JSX.Element> = { archive: Archive, retention: Retention, guests: GuestsAdmin, jobs: Jobs, audit: AuditLog, provisioning: Provisioning, siem: SiemSinks, "config-transfer": ConfigTransfer, notifications: NotificationsAdminPanel, "email-delivery": EmailDelivery };
 
 export function AdminSectionPage() {
   const { section } = useParams();

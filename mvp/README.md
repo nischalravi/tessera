@@ -3047,7 +3047,7 @@ Every tenant has an append-only, hash-chained audit log (`audit_events`; design
 `docs/design/phase-0-platform-security.md` §13). Each event's hash is SHA-256 over
 `"tessera-audit-v1" 0x00` and the RFC 8785 (JCS) form of the event, and links to the previous
 event; `server/testdata/golden/audit_v1.json` is a test vector for independent verifiers.
-SQLite triggers refuse UPDATE and DELETE. Every API call writes one `http.request` event (the
+SQLite triggers refuse UPDATE and DELETE (the one exception is an event inside a verified archive segment: see "Log retention and the archive"). Every API call writes one `http.request` event (the
 route template, status, sorted query keys, never bodies or query values); a read whose event
 cannot be written answers `503 {"error":"audit_unavailable"}` instead of the data, and so does a
 POST that committed no domain event of its own (and `POST /api/simulate`, whose answer is data). Domain events
@@ -3103,6 +3103,70 @@ credential endpoints, so give the process credentials through the SDK's other so
 (environment, web identity / IRSA) and set `AWS_REGION`. `AWS_CA_BUNDLE` is not supported with the
 safehttp client; trust a private CA through the system roots. `tessera audit verify -anchors`
 reads `file://` anchor files only; verifying against the bucket is a later step.
+
+## Log retention and the archive (issue #298)
+
+Admin → Retention sets, per tenant, how long each data class stays online. A scheduled job on the durable
+queue (`archive_sweep`, every 6 hours per tenant) seals what is older into archive segments and then removes it
+online. Admin → Archive lists the segments, verifies one and exports it.
+
+| Class | Default | Minimum | Counted from |
+| --- | --- | --- | --- |
+| Audit events (`audit`) | 2 years | 1 year | the event time; the chain head is never archived |
+| Closed review campaigns (`review_campaigns`) | 2 years | 1 year | creation, `completed` campaigns only, with items, frozen population and auto-decisions; one that group attestation or a role exclusion still points at stays online |
+| Closed and expired requests (`requests`) | 2 years | 1 year | the close time of a denied, cancelled, expired or removed request, with its event log and stages |
+| Job runs (`job_runs`) | 90 days | 30 days | the start of a finished run |
+| Notification outbox (`notifications`) | 90 days | 30 days | creation, delivered, skipped or dead only (with the email delivery log) |
+
+The ceiling of every class is 10 years. The floors are in `internal/retention` and enforced on the server: the
+change request is a 422 below one. A floor raised later lifts a stored lower value to it.
+
+**Changing a setting** is an admin change request of type `retention.update` (`POST /api/admin/change-requests`,
+`{"type":"retention.update","payload":{"audit_days":400,"job_runs_days":45}}`; only the classes that change).
+It needs a step-up from the requester and from a second admin who approves the payload hash, has no cooling-off,
+and is audited with `admin.change.*` and `retention.updated` in the transaction that applies it.
+
+**Archiving** is on when a KEK and an archive store exist. The store is `TESSERA_ARCHIVE_URL` (an http(s) object
+store, PUT and GET of `<base>/<tenant>/<class>/<segment>.seg`, always through `internal/safehttp`; https in prod),
+else the directory `TESSERA_ARCHIVE_DIR`, else `TESSERA_BACKUP_DIR/archive`, else, outside prod, `var/archive` next
+to the database. In prod with none of them nothing is archived or deleted, and Admin → Retention says so. While archiving is on
+the 30-day clean-up of finished job runs is left to the archive; with it off that clean-up is unchanged.
+Back the archive store up with the database: a restore verifies the audit chain without opening it and warns
+(`archive_unchecked`); `tessera audit verify` opens it when it runs with the server's environment.
+
+A segment is NDJSON, gzip-compressed and sealed under the KEK (`internal/seal`) with an AAD that binds tenant, class,
+segment id and range (a segment does not open as another tenant's, class's or range). Per segment, each step its own
+transaction, so a crash at any point loses nothing and the next run resumes:
+
+1. **written**: the blob is put in the store, then catalogued (`archive_segments`);
+2. **verified**: it is read back, its checksum, seal, count and content are checked (an audit segment's every hash and
+   link); a segment that fails is marked `failed`, its records stay online and are archived again in a new one;
+3. **purged**: it is checked once more, then in one transaction the online records are deleted, the anchor event is
+   appended and the segment is marked purged. The schema refuses the delete unless the segment is `verified`
+   (`schema/0402_archive_guards.sql`; on Postgres the application role has no DELETE on `audit_events`, and
+   `tessera_archive_purge_audit` does it for the transaction's tenant). A record that changed since it was archived is
+   not deleted with the stale copy; it is archived again later.
+
+**The audit chain stays verifiable.** An audit segment records its seq range, the `prev_hash` before it and its first
+and last hash. The purge appends an `audit.archived` event to the chain naming the segment, range and hashes ("archived
+up to N"). `audit.Verify` (`POST /api/audit/verify`, `tessera audit verify`) checks the purged segments join up from
+genesis with no gap or overlap, opens each one and recomputes every event hash and link, checks the signed checkpoints
+that fall inside, requires an `audit.archived` anchor for every purged segment (online or inside a later segment), and
+starts the online chain at N+1 from the last archived hash. A segment that is altered, replaced, missing or
+unreadable is exit 2 (`archive_corrupt`, `archive_hash_mismatch`, `archive_broken_link`, `archive_ends`), a gap
+exit 3, a forged or dropped catalogue row a missing anchor. With no archive source, verification still checks the online
+chain and reports the archived range as unchecked (a warning, never `ok`). The golden vector and the hash contract are
+unchanged.
+
+Routes: `GET /api/admin/retention` (`admin.read`: settings, defaults, floors, archive state),
+`GET /api/admin/archive/segments?class=&status=&limit=` (`audit.read`),
+`POST /api/admin/archive/segments/{id}/verify` (`audit.verify`: reads the segment back and checks it; a segment that
+fails is the answer, `ok: false`), `GET /api/admin/archive/segments/{id}/export` (`audit.read` and a step-up: NDJSON
+after the same checks, the read-only restore; nothing is written back online). Every verify and export is audited
+(`archive.segment.checked`, `archive.segment.exported`), as are the job's steps (`archive.segment.written`,
+`.verified`, `.failed`, `audit.archived`, `archive.purged`).
+
+Not archived yet: the legacy `access_requests` table, and anything else outside the five classes.
 
 ## Operational monitoring (issue #303)
 

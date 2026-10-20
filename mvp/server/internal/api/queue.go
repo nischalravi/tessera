@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/archive"
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/access"
@@ -74,12 +75,14 @@ func (s *Server) newQueue() *queue.Queue {
 	q.Register(jobs.SweepDrift, queue.Kind{Handler: tracked(jobs.SweepDrift, s.queueDriftSweep), Actor: "drift.sweeper"})
 	q.Register(jobs.GuestLifecycle, queue.Kind{Handler: tracked(jobs.GuestLifecycle, s.queueGuestLifecycleSweep), Actor: guestlife.Sweeper})
 	q.Register(jobs.Maintenance, queue.Kind{Handler: s.queueMaintenance, Actor: "queue.worker"})
+	q.Register(jobs.ArchiveSweep, queue.Kind{Handler: s.queueArchive, Actor: archive.Actor})
 	every := "@every " + SweepInterval.String()
 	for _, k := range []string{jobs.JITSweep, jobs.SweepRequests, jobs.SweepLifecycle, jobs.SweepAdminChanges, jobs.ContainmentRetry, jobs.SweepSoDMitigations, jobs.GuestLifecycle, jobs.SweepSSFPoll} {
 		q.Schedule(k, k, every, maxSweepAttempts)
 	}
 	q.Schedule(jobs.SweepDrift, jobs.SweepDrift, "@every "+driftEvery.String(), maxSweepAttempts)
 	q.Schedule(jobs.Maintenance, jobs.Maintenance, "@every "+jobMaintainGap.String(), 1)
+	q.Schedule(jobs.ArchiveSweep, jobs.ArchiveSweep, "@every "+archiveEvery.String(), maxArchiveAttempts)
 	return q
 }
 
@@ -209,7 +212,12 @@ func (s *Server) queueDriftSweep(ctx context.Context, j queue.Job) (any, error) 
 func (s *Server) queueMaintenance(ctx context.Context, j queue.Job) (any, error) {
 	now := s.clock()
 	return nil, s.store.InTenant(ctx, j.Tenant, func(tx *store.TenantTx) error {
-		if err := jobs.MaintainTx(tx, now, jobStaleAfter, jobRetention); err != nil {
+		if s.archive.Enabled() {
+			// finished runs leave the online store through the archive (issue #298)
+			if err := jobs.FailStaleTx(tx, now, jobStaleAfter); err != nil {
+				return err
+			}
+		} else if err := jobs.MaintainTx(tx, now, jobStaleAfter, jobRetention); err != nil {
 			return err
 		}
 		_, err := s.queue.Prune(tx)

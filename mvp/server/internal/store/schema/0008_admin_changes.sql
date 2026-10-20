@@ -50,7 +50,9 @@ CREATE TABLE IF NOT EXISTS admin_change_requests (
     'idp_connection.update_cosmetic','idp_connection.disable','tenant.settings.update','tenant.security_contacts.update',
     'breakglass.register','breakglass.revoke',
     -- issue #53, GR-10: a SQL loader's creation or change (internal/admin/change_loader.go)
-    'groups.loader.save')),
+    'groups.loader.save',
+    -- issue #298: per-tenant log retention settings (internal/admin/change_retention.go)
+    'retention.update')),
 
   payload TEXT NOT NULL CHECK (json_valid(payload) AND json_type(payload) = 'object'),
   payload_hash TEXT NOT NULL CHECK (length(payload_hash) = 64),

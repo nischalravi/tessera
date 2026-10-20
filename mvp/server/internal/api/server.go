@@ -21,6 +21,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/admin"
 	"github.com/nischalravi/tessera/mvp/server/internal/agent"
 	"github.com/nischalravi/tessera/mvp/server/internal/alerts"
+	"github.com/nischalravi/tessera/mvp/server/internal/archive"
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/casclient"
@@ -140,6 +141,10 @@ type Config struct {
 	// credentials cannot be read after a restart. cmd/tessera always passes
 	// the real one.
 	Sealer *seal.Sealer
+	// Archive is the archival job and its checks (issue #298; internal/archive).
+	// Nil, or without a sealer or store: archiving is off, nothing is archived
+	// or deleted, and the Admin -> Archive routes answer 503.
+	Archive *archive.Service
 	// OutboundHTTP is the safehttp client for IdP discovery, JWKS and token
 	// requests. Nil: browser sign-in through an IdP is unavailable.
 	OutboundHTTP *http.Client
@@ -276,6 +281,7 @@ type Server struct {
 	agents    *agent.Service
 	prov      *provision.Engine
 	provSeal  *seal.Sealer // cfg.Sealer, or a per-process key when it is nil
+	archive   *archive.Service
 	rotation  *rotation.Service
 	// containment is the kill switch (issue #106); never nil.
 	containment *containment.Service
@@ -380,7 +386,7 @@ func New(cfg Config) *Server {
 		cfg.Helpdesk = &helpdesk.Service{HTTP: hc, Containment: cfg.Containment, Clock: cfg.Clock, Simulated: cfg.Env != "prod"}
 	}
 	s := &Server{cfg: cfg, ssf: cfg.SSF, containment: cfg.Containment, helpdesk: cfg.Helpdesk, signals: cfg.DeviceSignals, store: cfg.Store, clock: cfg.Clock, log: cfg.Logger, readiness: cfg.Readiness,
-		agents: cfg.Agents, limits: newLimiters(cfg.RateLimits), provSeal: provSeal,
+		agents: cfg.Agents, limits: newLimiters(cfg.RateLimits), provSeal: provSeal, archive: cfg.Archive,
 		rotation: &rotation.Service{Sealer: cfg.Sealer, Env: cfg.Env, AllowFake: cfg.RotationFake, Notifier: cfg.RotationNotifier}}
 	s.mcp = &mcpauth.Service{HTTP: cfg.OutboundHTTP, AllowLoopback: cfg.Env == "dev", Sealer: cfg.Sealer, Clock: func() time.Time { return s.clock() },
 		PolicyVersion: s.policyVersion}
@@ -452,6 +458,7 @@ func New(cfg Config) *Server {
 	s.authn.Tokens = s.oauth
 	s.registerRoutes()
 	s.registerAuditRoutes()
+	s.registerArchiveRoutes()
 	s.registerSiemRoutes()
 	s.registerAlertRoutes()
 	s.registerOwnershipRoutes()
