@@ -40,6 +40,7 @@ const Matches = named(() => import("../features/directory/Matches"), "Matches");
 const IdentityMatches = named(() => import("../features/directory/IdentityMatches"), "IdentityMatches");
 const roles = () => import("../features/roles/Roles");
 const Roles = named(roles, "Roles");
+const RoleMining = named(() => import("../features/roles/RoleMining"), "RoleMining");
 const Workers = named(() => import("../features/lifecycle/Workers"), "Workers");
 const Entitlements = named(directory, "Entitlements");
 const Apps = named(directory, "Apps");
@@ -195,6 +196,7 @@ export default function App() {
                       <Route path="matches" element={<Matches />} />
                       <Route path="identity-matches" element={<IdentityMatches />} />
                       <Route path="roles" element={<Roles />} />
+                      <Route path="roles/mining" element={<RoleMining />} />
                       <Route path="workers" element={<Workers />} />
                       <Route path="entitlements" element={<Entitlements />} />
                       <Route path="apps" element={<Apps />} />

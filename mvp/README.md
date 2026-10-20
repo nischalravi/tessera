@@ -546,6 +546,8 @@ when a second reviewer is needed) ·
 `GET|POST /api/roles` · `GET|PUT /api/roles/{id}` · `GET /api/roles/{id}/versions|drift` ·
 `POST /api/roles/{id}/retire|reconcile|members` · `POST /api/roles/{id}/members/{identity_id}/remove`
 (changes take `?dry_run=1`) · `GET|POST /api/role-requests` · `POST /api/role-requests/{id}/approve|deny|cancel` ·
+`GET|POST /api/role-mining/runs` · `GET /api/role-mining/runs/{id}` · `GET /api/role-mining/candidates/{id}` ·
+`POST /api/role-mining/candidates/{id}/accept|dismiss` (role mining, below) ·
 `GET /api/lifecycle[?state=upcoming|active|ending|ended]` · `GET /api/lifecycle/sponsored` · `POST /api/lifecycle/sweep` ·
 `GET|PUT /api/identities/{id}/lifecycle` · `POST /api/identities/{id}/lifecycle/extend {ends_at, reason}`
 `POST /api/guests/invitations` · `POST /api/guests/invitations/bulk {csv, dry_run}` ·
@@ -1217,8 +1219,54 @@ contains their value.
 Changing roles needs `roles.manage` (policy admins) and a fresh phishing-resistant sign-in.
 Members, versions and drift need `graph.read`. The seed creates the demo company's six roles.
 Rule members are seeded only where people already hold every entitlement, so seeding grants
-nothing: reconcile a role to see the rest. Not yet: provisioning into the target system (#103)
-and role mining (Phase 3).
+nothing: reconcile a role to see the rest. Not yet: provisioning into the target system (#103).
+
+#### Role mining
+
+**Directory → Roles → Mining** (issue #298, `internal/roles/mining`, schema `0420_role_mining.sql`,
+tables `role_mining_runs` and `role_mining_candidates`). A run suggests business roles from the
+access people hold today. It is deterministic: no random seed and no ML service, so the same data
+and settings always give the same candidates (the run stores its parameters and a SHA-256
+`snapshot_hash` over the algorithm, the parameters and the filtered input).
+
+- **Input.** Every active person's standing entitlements: groups reached by an active account
+  through a grant that does not expire (JIT and other timed grants are left out). Optional filters:
+  department, job title and identity type (`human`, `service`, `ai_agent`). The identity model has
+  no location or organization column yet, so those cannot be filtered on.
+- **Method.** Drop entitlements held by fewer than `min_members` people (default 3). People with
+  the same remaining set share a profile; profiles are ordered (most people, largest set, key) and
+  clustered by Jaccard similarity to a cluster's first profile (`min_similarity`, default 60%). A
+  cluster's core is the intersection of its profiles. A core of at least `min_entitlements`
+  (default 2) becomes a candidate whose **coverage** is everyone in the filtered population who
+  holds all of it. A set equal to an existing role's is not listed again; a near match names the
+  similar role.
+- **Per candidate.** The entitlement set, the people who hold all of it, **outliers** (covered
+  people who also hold an entitlement under 25% of the others have), the **suggested birthright
+  rule** (the attribute among department, title and type whose values best predict coverage, by
+  F1, with precision and recall; none when F1 is under 50), and a **confidence** from 0 to 100:
+  40% rule F1, 30% cohesion (how close members are to the set), 30% size (people against three
+  times `min_members`).
+- **Bounds.** At most 20,000 people per run (a filter narrows it; more is `too_many_identities`),
+  people holding over 300 entitlements are skipped, 3,000 profiles are clustered, 40 million
+  comparison steps (a run that hits a bound is marked `truncated`), 100 candidates, two minutes.
+  Everything is integer maths, so results do not vary by platform.
+- **Queue.** A run over at most 500 people is computed in the request (`201`); a larger one, or
+  one sent with `"async": true`, is a `role_mining` job on the durable queue (`202`, status
+  `queued`, then `succeeded` or `failed`; the page polls). One run is active at a time (`409
+  run_in_progress`; a run still queued after an hour no longer blocks).
+- **Review.** `accept` creates a business role through the roles service (versioned, audited as
+  `role.create`) with the candidate's entitlements, a name you may change, a description of how it
+  was mined (including the suggested rule), risk `high` when it holds a privileged entitlement
+  and `medium` otherwise (or the one you choose). You may drop entitlements before accepting, not
+  add. **The role has no members, no birthright rule and is not requestable**, so accepting grants
+  and removes nothing; assigning people, adding the rule and requesting follow the usual role
+  flows and approvals. `dismiss` needs a reason. A candidate is decided once. Audit events:
+  `role_mining.run`, `role_mining.complete`, `role_mining.accept`, `role_mining.dismiss`.
+
+Reading needs `graph.read`; starting a run and dismissing need `roles.manage`; accepting needs
+`roles.manage` and a fresh phishing-resistant sign-in, like creating a role. The demo tenant
+`larkspur` yields a dozen candidates on a default run (Sales, Data, People, Security, and the
+engineering teams), each with a department or title rule.
 
 ### Attribute policies (ABAC)
 
@@ -3337,7 +3385,7 @@ the right. Arrow keys move between items.
 | Group | Items |
 |---|---|
 | (top) | **Home**, **Inbox** (count) |
-| **Identity** | Users (with *Identity matches*), Machine identities & agents, Groups (*Managed groups* and *Connected groups*, with an *All entitlements* tab), Secret rotation (Secrets, Rotation jobs, Policies & adapters, Vendor compromised), Applications, Ownership, Accounts (with *Account matches*), Help desk, Roles, Organizations (live, read-only, derived from departments) |
+| **Identity** | Users (with *Identity matches*), Machine identities & agents, Groups (*Managed groups* and *Connected groups*, with an *All entitlements* tab), Secret rotation (Secrets, Rotation jobs, Policies & adapters, Vendor compromised), Applications, Ownership, Accounts (with *Account matches*), Help desk, Roles (with a *Mining* tab), Organizations (live, read-only, derived from departments) |
 | **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals, registration requests, sponsor code, recovery), Just-in-time, Access reviews (with *Lifecycle*, *Guest lifecycle* and *Workflows* tabs) |
 | **Protection** | Alerts (alerts, rules, channels), Policies & SoD (violations, policies, what-if simulation, SoD functions, risks and rulesets), Mitigating controls (mitigations, control library), Attribute policies, Access graph (with an *As of* date for *Who can access…*), Evidence packs, Insights (Risk overview, Least privilege, SoD conflicts, MFA posture, Deployment health) |
 | **Settings** | Connections (governed connections and the setup wizard), Flat-file apps, Conditional access (network ranges, policies, device signals), Shared Signals (SSF transmitters and received events), Admin (including *Guests and external identities*) |
