@@ -413,6 +413,7 @@ func New(cfg Config) *Server {
 	s.registerSAMLRoutes()
 	s.registerOAuth2Routes()
 	s.registerCASRoutes()
+	s.registerWSFedRoutes()
 	s.registerStepUpRoutes()
 	s.registerAccessRoutes()
 	s.registerOAuthRoutes()

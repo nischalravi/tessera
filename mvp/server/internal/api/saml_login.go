@@ -266,6 +266,17 @@ func (s *Server) samlACS(w http.ResponseWriter, r *http.Request, p *params) (any
 		s.log.Info("SAML response refused", "err", err, "request_id", audit.RequestID(ctx))
 		return fail(samlsp.ReasonOf(err), nil)
 	}
+	return s.finishAssertion(w, r, tenant, conn, txn, sc.IdPEntityID, a, fail)
+}
+
+// finishAssertion completes a sign-in from a verified SAML 2.0 assertion
+// (SAML ACS, WS-Federation): freshness, one use per assertion ID, the
+// subject, normalization, then the session or the step-up.
+func (s *Server) finishAssertion(w http.ResponseWriter, r *http.Request, tenant store.Tenant, conn *store.IdPConnection,
+	txn *store.LoginTransaction, idpEntityID string, a *samlsp.Assertion, fail func(string, ojson.Object) (any, error)) (any, error) {
+	ctx := r.Context()
+	now := s.clock().UTC()
+	stepUp := txn.Purpose == "step_up"
 	// freshness: max_age at sign-in, and a step-up must have re-authenticated
 	// after it started (ForceAuthn alone is only a request)
 	if txn.MaxAge != nil && now.Sub(a.AuthnInstant) > time.Duration(*txn.MaxAge)*time.Second+oidcrp.AuthTimeSkew && !stepUp {
@@ -275,7 +286,7 @@ func (s *Server) samlACS(w http.ResponseWriter, r *http.Request, p *params) (any
 		return fail(oidcrp.ReasonAuthTimeStale, nil)
 	}
 	// one use per assertion ID (per IdP), kept until it expires
-	used := seal.SHA256Hex([]byte(sc.IdPEntityID + "\x00" + a.ID))
+	used := seal.SHA256Hex([]byte(idpEntityID + "\x00" + a.ID))
 	if err := s.store.InSystem(ctx, "saml replay cache", func(st *store.SystemTx) error {
 		return st.UseOnce(store.ReplaySAMLAssertion, used, now, a.NotOnOrAfter.Add(samlsp.Skew))
 	}); errors.Is(err, store.ErrDuplicate) {
@@ -355,9 +366,8 @@ func attributeProfile(conn *store.IdPConnection, attrs map[string][]string, defa
 var bounceTmpl = template.Must(template.New("bounce").Parse(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Signing in to Tessera</title></head><body>
 <form method="post" action="{{.Action}}">
-<input type="hidden" name="SAMLResponse" value="{{.Response}}">
-<input type="hidden" name="RelayState" value="{{.RelayState}}">
-<input type="hidden" name="bounce" value="1">
+{{range .Fields}}<input type="hidden" name="{{index . 0}}" value="{{index . 1}}">
+{{end}}<input type="hidden" name="bounce" value="1">
 <noscript><p>Signing in to Tessera.</p><button type="submit">Continue</button></noscript>
 </form>
 <script nonce="{{.Nonce}}">document.forms[0].submit()</script>
@@ -371,10 +381,18 @@ func (s *Server) samlBounce(w http.ResponseWriter, connID, resp, relay string) (
 	if err != nil {
 		return nil, errStatus(http.StatusNotFound, "Not Found")
 	}
+	return s.formBounce(w, ACSURL(s.cfg.PublicURL, id), [][2]string{{"SAMLResponse", resp}, {"RelayState", relay}})
+}
+
+// formBounce answers a cross-site form POST with a page that posts fields
+// (plus bounce=1) again to action, from Tessera's origin.
+func (s *Server) formBounce(w http.ResponseWriter, action string, fields [][2]string) (any, error) {
 	nonce := seal.RandomSecret(16)
 	var buf bytes.Buffer
-	if err := bounceTmpl.Execute(&buf, struct{ Action, Response, RelayState, Nonce string }{
-		ACSURL(s.cfg.PublicURL, id), resp, relay, nonce}); err != nil {
+	if err := bounceTmpl.Execute(&buf, struct {
+		Action, Nonce string
+		Fields        [][2]string
+	}{action, nonce, fields}); err != nil {
 		return nil, err
 	}
 	h := w.Header()

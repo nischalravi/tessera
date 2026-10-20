@@ -108,6 +108,7 @@ type pendingSAML struct {
 	classRefs   []string
 	fault       Fault
 	requestedAt time.Time
+	wsfed       bool // WS-Federation (wsfed.go): acs is wreply, spEntityID the realm, relayState wctx
 }
 
 // SAMLEntityID is the dev IdP's SAML entity ID (its metadata URL).
@@ -321,6 +322,10 @@ func (s *Server) handleSAMLSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	s.setSessionCookie(w, cookie, int(sessionTTL/time.Second))
 	s.log.Info("devidp SAML sign-in", "sub", user.Sub, "method", method, "sp", p.spEntityID)
+	if p.wsfed {
+		s.postWSFed(w, p, *user, method, now, sess.sid)
+		return
+	}
 	s.postSAMLResponse(w, p, *user, method, now, sess.sid)
 }
 

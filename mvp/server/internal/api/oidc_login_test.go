@@ -74,7 +74,7 @@ func newOIDCEnv(t *testing.T, users ...devidp.User) *oidcEnv {
 }
 
 // authEnvOpts adds seeded dev_mock connections besides the OIDC one.
-type authEnvOpts struct{ saml, github, cas bool }
+type authEnvOpts struct{ saml, github, cas, wsfed bool }
 
 // newAuthEnv is newOIDCEnv, with the dev_mock SAML and GitHub connections
 // seeded too when asked.
@@ -97,9 +97,10 @@ func newAuthEnv(t testing.TB, o authEnvOpts, users ...devidp.User) *oidcEnv {
 	}
 	db := testkit.Open(t)
 	client := seed.DevIdPClient{Sealer: sealer, Secret: oidcSecret}
-	if o.saml {
+	if o.saml || o.wsfed {
 		client.SAMLCert = idp.SAMLCertificatePEM()
 	}
+	client.WSFed = o.wsfed
 	client.GitHub, client.CAS = o.github, o.cas
 	tenants := seed.WithDevIdPClient([]seed.Tenant{
 		{ID: seed.LarkspurID, Slug: seed.LarkspurSlug, Name: "Larkspur Labs", Connectors: []connectors.Connector{connectors.Tiny{Now: testkit.Now}}},

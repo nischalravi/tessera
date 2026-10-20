@@ -67,6 +67,7 @@ const (
 	GitHub        = "github"
 	GenericOAuth2 = "generic_oauth2"
 	GenericCAS    = "generic_cas"
+	ADFS          = "adfs"
 	DevMock       = "dev_mock"
 )
 
@@ -118,7 +119,7 @@ type Mapping struct {
 	// device_compliant.
 	DeviceManagedClaim   string `json:"device_managed_claim,omitempty"`
 	DeviceCompliantClaim string `json:"device_compliant_claim,omitempty"`
-	// DevEmulation pins the dev_mock emulation (okta | entra | generic | saml | github | cas);
+	// DevEmulation pins the dev_mock emulation (okta | entra | generic | saml | github | cas | wsfed);
 	// empty infers it from the claims.
 	DevEmulation string `json:"dev_emulation,omitempty"`
 }
@@ -204,7 +205,7 @@ func Normalize(conn Connection, req Requested, c Claims) (Result, error) {
 		r, err = entra(conn, req, c, conn.Profile == DevMock)
 	case GenericOIDC, Google:
 		r, err = generic(conn, req, c)
-	case GenericSAML:
+	case GenericSAML, ADFS: // ADFS (WS-Federation): a SAML 2.0 assertion; class refs requested through wauth
 		r, err = saml(conn, req, c)
 	case GenericCAS: // attributes only (no class ref): amr_attribute + phr_amr; a CAS login is at least AAL1
 		r, err = saml(conn, Requested{}, Claims{Subject: c.Subject, Attributes: c.Attributes})
@@ -292,6 +293,8 @@ func devEmulation(m Mapping, c Claims) string {
 		return GitHub
 	case "cas":
 		return GenericCAS
+	case "wsfed":
+		return ADFS
 	}
 	switch {
 	case c.ClassRef != "" || c.Attributes != nil: // a SAML assertion (the dev IdP's SAML endpoints)

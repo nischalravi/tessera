@@ -115,7 +115,7 @@ func loginConnections(tx *store.TenantTx) ([]*store.IdPConnection, error) {
 	}
 	out := cs[:0]
 	for _, c := range cs {
-		if c.Status == "active" && (c.Protocol == "oidc" || c.Protocol == "saml" || c.Protocol == "oauth2" || c.Protocol == "cas") {
+		if c.Status == "active" && (c.Protocol == "oidc" || c.Protocol == "saml" || c.Protocol == "oauth2" || c.Protocol == "cas" || c.Protocol == "wsfed") {
 			out = append(out, c)
 		}
 	}
@@ -271,7 +271,7 @@ func requestedAuthn(c *store.IdPConnection, acr string) (authnorm.Requested, str
 	}
 	if err := json.Unmarshal(c.StepUpRequest, &m); err == nil {
 		if e, ok := m[acr]; ok {
-			if c.Protocol == "saml" {
+			if c.Protocol == "saml" || c.Protocol == "wsfed" {
 				return authnorm.Requested{ClassRefs: e.ClassRefs}, ""
 			}
 			req := authnorm.Requested{ACRValues: strings.Fields(e.ACRValues)}
@@ -283,7 +283,7 @@ func requestedAuthn(c *store.IdPConnection, acr string) (authnorm.Requested, str
 			return req, claims
 		}
 	}
-	if c.Protocol == "saml" {
+	if c.Protocol == "saml" || c.Protocol == "wsfed" {
 		return authnorm.Requested{}, "" // nothing requested: phr only by attestation (rule 4) or amr attribute
 	}
 	switch c.Profile {
@@ -355,6 +355,8 @@ func (s *Server) startLogin(w http.ResponseWriter, r *http.Request, t store.Tena
 		return s.startOAuth2Login(w, r, t, c, ls)
 	case "cas":
 		return s.startCASLogin(w, r, t, c, ls)
+	case "wsfed":
+		return s.startWSFedLogin(w, r, t, c, ls)
 	}
 	purpose, returnTo, acr, invitation := ls.purpose, ls.returnTo, ls.acr, ls.invitation
 	if s.rp == nil {
@@ -497,7 +499,7 @@ func (s *Server) bootstrapRedeem(w http.ResponseWriter, r *http.Request, p *para
 		if conn, err = tx.IdPConnection(inv.IdPConnectionID); err != nil {
 			return err
 		}
-		if conn.Status != "active" || (conn.Protocol != "oidc" && conn.Protocol != "saml" && conn.Protocol != "cas") {
+		if conn.Status != "active" || (conn.Protocol != "oidc" && conn.Protocol != "saml" && conn.Protocol != "cas" && conn.Protocol != "wsfed") {
 			reason = "unknown_connection"
 		}
 		return nil

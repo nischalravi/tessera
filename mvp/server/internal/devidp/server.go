@@ -278,6 +278,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET "+pathGitHubEmails, s.handleGitHubEmails)
 	mux.HandleFunc("GET "+pathCASLogin, s.handleCASLogin)
 	mux.HandleFunc("GET "+pathCASValidate, s.handleCASValidate)
+	mux.HandleFunc("GET "+pathWSFed, s.handleWSFed)
 	mux.HandleFunc("GET "+samlEntityPath, s.handleSAMLMetadata)
 	mux.HandleFunc("GET "+samlSSOPath, s.handleSAMLSSO)
 	mux.HandleFunc("POST "+samlSSOPath, s.handleSAMLSubmit)

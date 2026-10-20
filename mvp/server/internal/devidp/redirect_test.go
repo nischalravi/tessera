@@ -47,3 +47,26 @@ func TestCASValidateNeverEchoesInput(t *testing.T) {
 		t.Errorf("the failure body echoes the ticket: %q", body)
 	}
 }
+
+// TestWSFedRefusesUnregisteredReply: a wreply outside the registered reply
+// patterns gets a 400 page with no form, and nothing of the input is echoed.
+func TestWSFedRefusesUnregisteredReply(t *testing.T) {
+	idp, b := start(t, devidp.Config{})
+	for _, reply := range []string{
+		"http://evil.example/<script>alert(1)</script>",
+		"http://evil.example/callback",
+		"http://127.0.0.1:5999@evil.example/callback",
+		"javascript:alert(1)",
+	} {
+		q := url.Values{"wa": {"wsignin1.0"}, "wtrealm": {"urn:x<script>"}, "wreply": {reply}, "wctx": {"c"}}
+		resp, body := b.get(idp.URL + "/wsfed?" + q.Encode())
+		if resp.StatusCode != http.StatusBadRequest || resp.Header.Get("Location") != "" || strings.Contains(body, "<form") {
+			t.Errorf("wreply %q: status %d, want a 400 page without a form", reply, resp.StatusCode)
+		}
+		for _, raw := range []string{"<script>", "evil.example", "javascript:"} {
+			if strings.Contains(body, raw) {
+				t.Errorf("wreply %q: the error page echoes %q", reply, raw)
+			}
+		}
+	}
+}
