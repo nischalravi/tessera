@@ -109,12 +109,12 @@ func ValidateTemplate(tx *store.TenantTx, t *store.ReviewTemplate) error {
 	}
 	if t.EscalationIdentityID != nil { // checked whatever the close-out; another tenant's id is unknown
 		i, err := tx.Identity(*t.EscalationIdentityID)
-		if errors.Is(err, store.ErrNotFound) || (err == nil && i.Status != "active") {
-			return specErr("unknown_escalation_identity", "escalation_identity_id is not an active identity in this organization")
+		if errors.Is(err, store.ErrNotFound) {
+			return specErr("unknown_escalation_identity", "escalation_identity_id is not an identity in this organization")
 		} else if err != nil {
 			return err
 		}
-		if t.CloseOut == "escalate" && i.Type != "human" {
+		if i.Status != "active" || (t.CloseOut == "escalate" && i.Type != "human") {
 			return specErr("escalation_reviewer_not_active", "the escalation reviewer is an active person")
 		}
 	}

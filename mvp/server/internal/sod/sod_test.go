@@ -333,10 +333,11 @@ func TestParseYAMLEnabledDefault(t *testing.T) {
 		doc  string
 		want bool
 	}{
-		"missing":    {"ruleset: {key: a, name: A}\n", true},
-		"true":       {"ruleset: {key: a, name: A, enabled: true}\n", true},
-		"false":      {"ruleset: {key: a, name: A, enabled: false}\n", false},
-		"no ruleset": {"functions: []\n", true},
+		"missing": {"ruleset: {key: a, name: A}\n", true},
+		"true":    {"ruleset: {key: a, name: A, enabled: true}\n", true},
+		"false":   {"ruleset: {key: a, name: A, enabled: false}\n", false},
+		"yes":     {"ruleset: {key: a, name: A, enabled: yes}\n", true},
+		"off":     {"ruleset: {key: a, name: A, enabled: off}\n", false},
 	} {
 		b, err := sod.ParseYAML([]byte(tc.doc))
 		if err != nil {
@@ -355,4 +356,46 @@ func TestParseYAMLEnabledDefault(t *testing.T) {
 			t.Errorf("%s: round trip enabled = %v, err %v", name, again, err)
 		}
 	}
+}
+
+// #334: a ruleset file with no enabled key imports as an enabled ruleset, so
+// its risks are evaluated.
+func TestImportWithoutEnabledIsEnabled(t *testing.T) {
+	st, _ := testkit.Tiny(t)
+	doc := `schema: tessera.sod/v1
+ruleset:
+  key: noflag
+  name: No flag
+functions:
+  - key: create
+    name: Create payments
+    selectors:
+      - {name_pattern: "payments:create"}
+  - key: approve
+    name: Approve payments
+    selectors:
+      - {name_pattern: "payments:approve"}
+risks:
+  - key: pay-own
+    name: Pay own invoice
+    priority: high
+    functions: [create, approve]
+`
+	testkit.Write(t, st, func(c *store.TenantTx) error {
+		b, err := sod.ParseYAML([]byte(doc))
+		if err != nil {
+			return err
+		}
+		if _, err := writer(c).Import(b, sod.ImportOptions{}); err != nil {
+			return err
+		}
+		rs, err := c.SodRulesetByKey("noflag")
+		if err != nil {
+			return err
+		}
+		if !rs.Enabled {
+			t.Error("a file without enabled imported a disabled ruleset")
+		}
+		return nil
+	})
 }

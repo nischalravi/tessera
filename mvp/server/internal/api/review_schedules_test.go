@@ -151,7 +151,7 @@ func TestReviewSchedulesAPI_SystemAndDoubleRun(t *testing.T) {
 }
 
 // An escalation identity that is not an active identity of the tenant is
-// refused on create and update, whatever the close-out; it is never dropped.
+// refused on create and update, whatever the close-out.
 func TestReviewSchedulesAPI_UnknownEscalationIdentity(t *testing.T) {
 	f := storetest.TwoTenants(t)
 	h := newIsolationServer(f).Handler()

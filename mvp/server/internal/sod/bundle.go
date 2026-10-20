@@ -90,9 +90,16 @@ func ParseYAML(data []byte) (*Bundle, error) {
 			Enabled yaml.Node `yaml:"enabled"` // Kind 0 when the key is missing
 		} `yaml:"ruleset"`
 	}
+	// The strict decode above already accepted the document, so this second
+	// parse cannot fail; it only tells an absent enabled from an explicit one.
+	// Decoding the node into a bool keeps what yaml accepts (yes, on, off)
+	// and refuses text, numbers and null instead of reading them as off.
 	if err := yaml.Unmarshal(data, &probe); err == nil {
-		if n := probe.Ruleset.Enabled; n.Kind != 0 && (n.Kind != yaml.ScalarNode || n.Tag != "!!bool") {
-			return nil, refuse(422, "invalid_document", "ruleset.enabled must be true or false")
+		if n := probe.Ruleset.Enabled; n.Kind != 0 {
+			var v bool
+			if n.Tag == "!!null" || n.Decode(&v) != nil {
+				return nil, refuse(422, "invalid_document", "ruleset.enabled must be true or false")
+			}
 		}
 	}
 	var extra yaml.Node
