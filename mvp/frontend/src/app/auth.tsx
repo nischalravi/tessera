@@ -1,6 +1,6 @@
 import { FormEvent, ReactNode, Suspense, createContext, lazy, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import {
-  LoginConnection, RateLimitedError, SIGNED_OUT, STEP_UP, SessionInfo, clearPendingAction, discover, getSession, logout,
+  LoginConnection, PublicBranding, RateLimitedError, SIGNED_OUT, STEP_UP, SessionInfo, clearPendingAction, discover, getSession, logout,
   runPendingAction, startLogin, stepUpHref, takePendingAction,
 } from "../api";
 import { useConfirm } from "../components/Dialog";
@@ -8,6 +8,9 @@ import { useToast } from "../components/Toast";
 import { Button } from "../components/Button";
 import { Callout } from "../components/Feedback";
 import { breakGlassPath, breakGlassSlug } from "../features/admin/breakGlassState";
+import { brandStyle } from "../branding";
+import { BrandMark } from "../public/BrandMark";
+import { usePublicBranding } from "../public/useBranding";
 import { store } from "./storage";
 
 // its own chunk: only a person signing in with a hardware key loads it
@@ -152,12 +155,17 @@ function RateLimited({ seconds, onRetry }: { seconds: number; onRetry: () => voi
   );
 }
 
-export function SignInFrame({ children }: { children: ReactNode }) {
+export function SignInFrame({ children, branding }: { children: ReactNode; branding?: PublicBranding | null }) {
+  const branded = branding?.configured ? branding : null;
   return (
-    <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: "var(--s-4)", background: "var(--bg)" }}>
+    <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: "var(--s-4)", background: "var(--bg)", ...brandStyle(branded) }}>
       <div className="card stack" style={{ width: "min(520px, 100%)" }}>
         <div className="row" style={{ justifyContent: "space-between" }}>
-          <span className="brand" aria-label="Tessera"><span className="logo" aria-hidden><i /><i /><i /><i /></span> <strong>Tessera</strong></span>
+          {branded ? (
+            <BrandMark branding={branded} name={branded.name} />
+          ) : (
+            <span className="brand" aria-label="Tessera"><span className="logo" aria-hidden><i /><i /><i /><i /></span> <strong>Tessera</strong></span>
+          )}
         </div>
         {children}
       </div>
@@ -190,6 +198,10 @@ function SignIn() {
   const glassPath = breakGlassPath(tenant);
   const [connections, setConnections] = useState<LoginConnection[] | null>(null);
   const [asked, setAsked] = useState("");
+  // the organization's branding, once it is named (or remembered from the last sign-in)
+  const [brandSlug, setBrandSlug] = useState(() => store.get<string>(LAST_TENANT, ""));
+  const branding = usePublicBranding(brandSlug);
+  const product = branding?.configured ? branding.name : "Tessera";
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const failed = useMemo(loginError, []);
@@ -203,6 +215,7 @@ function SignIn() {
     try {
       setConnections(await discover(slug));
       setAsked(slug);
+      setBrandSlug(slug);
     } catch (err: any) {
       setError(String(err.message ?? err));
     } finally {
@@ -216,8 +229,8 @@ function SignIn() {
   };
 
   return (
-    <SignInFrame>
-      <h1 style={{ fontSize: "var(--fs-xl)" }}>Sign in to Tessera</h1>
+    <SignInFrame branding={branding}>
+      <h1 style={{ fontSize: "var(--fs-xl)" }}>Sign in to {product}</h1>
       {failed && (
         <Callout tone="bad">
           Sign-in did not complete. Try again, or ask your administrator

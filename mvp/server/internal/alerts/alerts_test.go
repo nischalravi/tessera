@@ -67,7 +67,7 @@ func TestRuleMatching(t *testing.T) {
 		}
 	}
 	for _, r := range alerts.Rules {
-		if (r.Kind == "event") != (r.Match != nil) || (r.Kind == "detection") != (r.Detect != nil) || alerts.SeverityRank(r.Severity) < 0 {
+		if (r.Kind == "event") != (r.Match != nil) || (r.Kind == "detection" || r.Kind == "scheduled") != (r.Detect != nil) || alerts.SeverityRank(r.Severity) < 0 {
 			t.Errorf("rule %s is malformed", r.ID)
 		}
 	}

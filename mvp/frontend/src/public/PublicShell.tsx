@@ -1,4 +1,7 @@
 import { ReactNode, useEffect, useRef } from "react";
+import { PublicBranding } from "../api";
+import { brandStyle } from "../branding";
+import { BrandMark } from "./BrandMark";
 import { Callout } from "../components/Feedback";
 import { MessageKey, setLocale, t } from "../i18n";
 
@@ -8,16 +11,17 @@ import { MessageKey, setLocale, t } from "../i18n";
  * navigation, no third-party scripts. The pages are English-only today; the language attribute and
  * the catalog (src/i18n) are in place so a translation is a new file, not a rewrite.
  */
-export function PublicShell({ titleKey, brand, children }: { titleKey: MessageKey; brand?: string; children: ReactNode }) {
+export function PublicShell({ titleKey, brand, branding, children }: { titleKey: MessageKey; brand?: string; branding?: PublicBranding | null; children: ReactNode }) {
+  const name = branding?.configured ? branding.name : brand ?? t("brand.default");
   const lang = setLocale(typeof navigator === "undefined" ? [] : navigator.languages ?? [navigator.language]);
   useEffect(() => {
     document.documentElement.lang = lang;
-    document.title = `${t(titleKey)} · ${brand ?? t("brand.default")}`;
-  }, [lang, titleKey, brand]);
+    document.title = `${t(titleKey)} · ${name}`;
+  }, [lang, titleKey, name]);
   return (
-    <div className="claim-wrap">
+    <div className="claim-wrap" style={brandStyle(branding)}>
       <main className="claim" aria-labelledby="claim-title">
-        <p className="claim-brand">{brand ?? t("brand.default")}</p>
+        <p className="claim-brand"><BrandMark branding={branding} name={name} /></p>
         {children}
       </main>
     </div>

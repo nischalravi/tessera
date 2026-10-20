@@ -3277,6 +3277,122 @@ export interface SiemDeadLetter {
   created_at: string;
 }
 
+// ------------------------------------------------ Admin: certificates, branding, identity rules
+
+/** A certificate or key Tessera holds (GET /api/admin/certificates). Private keys are never part of it. */
+export interface CertificateEntry {
+  /** conn:<id> (a SAML connection's SP key), cert:<id> (uploaded), key:<kid> (a signing key), agent:<id> (a directory agent's pinned key). */
+  id: string;
+  source: "saml_connection" | "uploaded" | "signing_key" | "directory_agent";
+  purpose: "saml_sp" | "mtls_client" | "signing" | "encryption";
+  label: string;
+  /** `next` is published in the SP metadata beside the active certificate and waits to be promoted. */
+  status: "next" | "active" | "retired";
+  used_by: string;
+  subject: string;
+  issuer: string;
+  sans: string[];
+  not_before: string | null;
+  not_after: string | null;
+  days_left: number | null;
+  /** 30 or 7 when it is inside that expiry warning window, else 0. */
+  expiry_warning: 0 | 30 | 7;
+  fingerprint_sha256: string;
+  key_algorithm: string;
+  signature_algorithm: string;
+  /** The SAML connection of a saml_sp entry. */
+  connection_id: string | null;
+  can_promote: boolean;
+  can_retire: boolean;
+}
+
+export interface CertificateUpload {
+  purpose: "saml_sp" | "mtls_client" | "signing" | "encryption";
+  label: string;
+  certificate_pem: string;
+  private_key_pem: string;
+  /** saml_sp: the SAML connection; mtls_client: the connector (optional). */
+  connection_id?: string;
+}
+
+/** The id the certificate routes take (the inventory id without its `cert:` prefix). */
+export const certificateRowId = (id: string) => id.replace(/^cert:/, "");
+
+export const PURPOSE_LABEL: Record<CertificateEntry["purpose"], string> = {
+  saml_sp: "SAML SP signing", mtls_client: "Connector mutual TLS", signing: "Signing", encryption: "Encryption",
+};
+
+export const certificatesApi = {
+  /** The private key never goes through the resume-after-step-up store. */
+  upload: (b: CertificateUpload) => apiNoResume<CertificateEntry>("/admin/certificates", b),
+  generate: (connectionId: string) => api<CertificateEntry>("/admin/certificates/generate", { connection_id: connectionId }),
+  promote: (id: string) => api<CertificateEntry>(`/admin/certificates/${encodeURIComponent(certificateRowId(id))}/promote`, {}),
+  retire: (id: string) => api<CertificateEntry>(`/admin/certificates/${encodeURIComponent(certificateRowId(id))}/retire`, {}),
+};
+
+/** The saved branding (GET /api/admin/branding); the defaults when nothing is saved. */
+export interface BrandingSettings {
+  configured: boolean;
+  display_name: string;
+  primary_color: string;
+  on_primary_color: string;
+  logo: { content_type: "image/png" | "image/jpeg"; width: number; height: number; sha256: string } | null;
+  updated_by: string | null;
+  updated_at: string | null;
+  limits: { logo_max_bytes: number; logo_min_px: number; logo_max_px: number; logo_types: string[]; min_contrast: number };
+}
+
+export interface BrandingInput {
+  display_name: string;
+  primary_color: string;
+  /** Omitted or empty: Tessera picks white or black, whichever reads better. */
+  on_primary_color?: string;
+  logo?: { content_type: string; data_base64: string };
+  remove_logo?: boolean;
+}
+
+export const brandingApi = {
+  /** A logo can be hundreds of kilobytes: it is not kept for resuming after a step-up. */
+  save: (b: BrandingInput) => apiNoResume<BrandingSettings>("/admin/branding", b, "PUT"),
+};
+
+/** What the sign-in and claim pages show for a tenant (public). */
+export interface PublicBranding {
+  name: string;
+  configured: boolean;
+  primary_color: string;
+  on_primary_color: string;
+  logo_url: string | null;
+  logo_width?: number;
+  logo_height?: number;
+}
+
+/** The tenant's branding for the sign-in and claim pages; null if it cannot be read (the pages then show the default). */
+export async function publicBranding(tenant: string): Promise<PublicBranding | null> {
+  try {
+    const res = await fetch(`/api/auth/branding?${new URLSearchParams({ tenant })}`, { credentials: "same-origin" });
+    return res.ok ? ((await res.json()) as PublicBranding) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The identity rules the engines apply (GET /api/admin/identity-rules). */
+export interface IdentityRules {
+  matching: {
+    settings: MatchingSettings;
+    rules: { name: string; tier: "A" | "B" | "C" | "D"; description: string }[];
+    name_strong: number;
+    name_possible: number;
+    self_asserted: string;
+    changeable_with: string;
+  };
+  correlation: { proposals: { name: string; description: string }[]; decisions: string };
+  group_naming: { separator: string; allowed: string; max_segment: number; max_name: number; max_display: number; max_depth: number; case_insensitive: boolean };
+  dormancy: { identity_type: string; days: number; effect: string }[];
+  not_configurable: string[];
+}
+
 export const siemApi = {
   create: (body: SiemSinkInput) => api<SiemSink>("/siem/sinks", body),
   update: (id: string, body: SiemSinkInput) => api<SiemSink>(`/siem/sinks/${encodeURIComponent(id)}`, body, "PUT"),

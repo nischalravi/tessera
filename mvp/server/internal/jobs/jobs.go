@@ -44,6 +44,9 @@ const (
 	Maintenance         = "job_maintenance"
 	RoleMining          = "role_mining" // computes a queued role mining run (issue #298)
 
+	// CertificateExpiry is the daily check that raises an alert 30 and 7 days before a certificate expires.
+	CertificateExpiry = "certificate_expiry"
+
 	// GuestLifecycle is the guest lifecycle sweep: reminders, transfer deadlines,
 	// step-up renewals, conversions, grace and retention (issue #74).
 	GuestLifecycle = "guest_lifecycle"
@@ -51,7 +54,7 @@ const (
 
 // Kinds lists every kind, for filters.
 var Kinds = []string{Sync, Provision, Validation, DryRun, HealthRerun, JITSweep, AuditAnchor,
-	SweepRequests, SweepLifecycle, SweepAdminChanges, ContainmentRetry, SweepSoDMitigations, SoDMitigationExpire, SweepDrift, SweepSSFPoll, Maintenance, GuestLifecycle, RoleMining}
+	SweepRequests, SweepLifecycle, SweepAdminChanges, ContainmentRetry, SweepSoDMitigations, SoDMitigationExpire, SweepDrift, SweepSSFPoll, Maintenance, GuestLifecycle, RoleMining, CertificateExpiry}
 
 // Idempotent reports whether running a kind again with the same input is
 // safe: it reads a source and converges, or re-checks. Provisioning is not:

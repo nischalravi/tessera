@@ -13,6 +13,7 @@ import { CheckCircle2 } from "lucide-react";
 import { SponsorChoice, searchSponsors, submitRegistration } from "../../api";
 import { Button } from "../../components/Button";
 import { t } from "../../i18n";
+import { usePublicBranding } from "../useBranding";
 import { ErrorAlert, PublicHeading, PublicShell, StatusRegion } from "../PublicShell";
 import { tenantSlug } from "../claim/model";
 
@@ -20,6 +21,7 @@ const isoDay = (d: Date) => d.toISOString().slice(0, 10);
 
 export default function RegisterPage() {
   const slug = tenantSlug(window.location.hostname, import.meta.env.VITE_TESSERA_TENANT as string | undefined);
+  const branding = usePublicBranding(slug);
   const today = new Date();
   const [form, setForm] = useState({ given_name: "", family_name: "", email: "", purpose: "", ends_at: isoDay(new Date(today.getTime() + 7 * 864e5)) });
   const [mode, setMode] = useState<"search" | "code">("search");
@@ -79,7 +81,7 @@ export default function RegisterPage() {
   };
 
   return (
-    <PublicShell titleKey="register.title">
+    <PublicShell titleKey="register.title" branding={branding}>
       {state === "sent" ? (
         <>
           <PublicHeading>{t("register.sent_title")}</PublicHeading>

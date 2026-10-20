@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/certs"
 	"github.com/nischalravi/tessera/mvp/server/internal/graph"
 	"github.com/nischalravi/tessera/mvp/server/internal/nhi"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -54,7 +55,8 @@ type Rule struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	// Kind is "event" or "detection".
+	// Kind is "event", "detection" (run with the engine's detections) or
+	// "scheduled" (run only by RunScheduled, from a durable queue job).
 	Kind      string        `json:"kind"`
 	Severity  string        `json:"severity"`
 	Threshold int           `json:"threshold"`
@@ -212,6 +214,25 @@ var Rules = []*Rule{
 					Title: fmt.Sprintf("%s holds privileged access and %s", it.Name, why),
 					Detail: map[string]any{"identity_id": it.ID, "identity": it.Name, "type": it.Type,
 						"privileged_permissions": it.PrivilegedPermissions, "flags": it.Flags}})
+			}
+			return out, nil
+		},
+	},
+	{
+		ID: "certificate_expiry", Name: "Certificate expiring", Kind: "scheduled", Severity: "high", Threshold: 1,
+		Description: "A certificate Tessera holds (SAML SP key, uploaded or mTLS certificate) expires in 30 days or less; raised again in the last 7 days. Checked daily by the job queue.",
+		Detect: func(tx *store.TenantTx, now time.Time) ([]Finding, error) {
+			es, err := certs.Expiring(tx, now)
+			if err != nil {
+				return nil, err
+			}
+			var out []Finding
+			for _, e := range es {
+				b := certs.Bucket(now, *e.NotAfter)
+				out = append(out, Finding{Key: fmt.Sprintf("%s:%dd", e.ID, b), Title: certs.ExpiryTitle(e, now),
+					Detail: map[string]any{"certificate": e.ID, "label": e.Label, "purpose": e.Purpose, "used_by": e.UsedBy,
+						"fingerprint": e.Fingerprint, "not_after": e.NotAfter.UTC().Format(time.RFC3339), "days_left": certs.DaysLeft(now, *e.NotAfter),
+						"warning_days": b}})
 			}
 			return out, nil
 		},
