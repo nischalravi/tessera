@@ -115,11 +115,6 @@ func newWorld(t *testing.T) *world {
 		},
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), AllowedOrigins: []string{authtest.Origin}, Env: "test",
 		RateLimits: api.RateLimits{Anonymous: lots, Auth: lots}, PublicURL: w.srv.URL, Sealer: sealer,
-		// The CLI's sleeps advance the fake clock while the "browser" approves in real
-		// time, so a slow runner (-race) could poll past the default 5 minute code before
-		// the approval lands; a long TTL keeps that deterministic. TestE2E_Expired still
-		// expires it: nobody approves and the polling advances the clock past any TTL.
-		DeviceCodeTTL: 30 * time.Minute,
 	}).Handler()
 	return w
 }
@@ -189,7 +184,7 @@ func (w *world) login(email string, roles []auth.Role, decision string, extra ..
 		args := append([]string{"login", "--server", w.srv.URL, "--tenant", w.slug}, extra...)
 		done <- w.runWith(&out, args...)
 	}()
-	deadline := time.Now().Add(60 * time.Second) // generous: -race on a busy runner
+	deadline := time.Now().Add(10 * time.Second)
 	for {
 		if code := codeRE.FindString(out.String()); code != "" {
 			w.browser(email, roles, code, decision)
