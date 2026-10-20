@@ -1,5 +1,5 @@
 import {
-  AppWindow, BadgeCheck, BellRing, Bot, Building2, CalendarClock, ChartLine, ClipboardCheck, FileArchive, FileUp, House, Inbox, KeyRound, Layers, LucideIcon, Network, Plug, Plus, Settings, ShieldAlert, ShieldCheck, ShieldHalf, SlidersHorizontal, Timer, UserCheck, UserPlus, Users, UsersRound,
+  AppWindow, BadgeCheck, BellRing, Bot, Building2, CalendarClock, ChartLine, ClipboardCheck, FileArchive, FileUp, House, Inbox, KeyRound, Layers, LifeBuoy, LucideIcon, Network, Plug, Plus, Settings, ShieldAlert, ShieldCheck, ShieldHalf, SlidersHorizontal, Timer, UserCheck, UserPlus, Users, UsersRound,
 } from "lucide-react";
 
 export interface NavPage {
@@ -50,6 +50,7 @@ export const RAIL: RailGroup[] = [
         id: "accounts", label: "Accounts", icon: KeyRound, path: "/directory/accounts", also: ["/directory/matches"], keywords: "system accounts usernames",
         pages: [{ path: "/directory/matches", label: "Account matches", keywords: "correlation link merge unmerge duplicate orphan uncorrelated" }],
       },
+      { id: "helpdesk", label: "Help desk", icon: LifeBuoy, path: "/helpdesk", keywords: "password reset mfa reset verification call-back push idv manager approval takeover" },
       { id: "roles", label: "Roles", icon: Layers, path: "/directory/roles", keywords: "business roles birthright drift" },
       { id: "orgs", label: "Organizations", icon: Building2, path: "/directory/orgs", keywords: "departments org units cost centers" },
     ],

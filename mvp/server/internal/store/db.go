@@ -173,6 +173,8 @@ var tables = []string{
 	"readiness_baselines",
 	// frozen review populations and tenant settings (schema/0350_review_populations.sql)
 	"review_populations", "review_population_rows", "review_auto_decisions", "tenant_settings",
+	// verified help-desk resets (schema/0254_helpdesk.sql)
+	"helpdesk_cases", "helpdesk_verifications", "helpdesk_signals", "helpdesk_findings",
 	// SIEM sinks (schema/0210_siem.sql)
 	"siem_sinks", "siem_dead_letters",
 	// alerting (schema/0209_alerts.sql)

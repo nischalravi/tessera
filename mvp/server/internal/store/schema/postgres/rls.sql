@@ -585,6 +585,34 @@ CREATE POLICY tenant_isolation ON claim_proof_uses
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE helpdesk_cases ENABLE ROW LEVEL SECURITY;
+ALTER TABLE helpdesk_cases FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON helpdesk_cases;
+CREATE POLICY tenant_isolation ON helpdesk_cases
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE helpdesk_verifications ENABLE ROW LEVEL SECURITY;
+ALTER TABLE helpdesk_verifications FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON helpdesk_verifications;
+CREATE POLICY tenant_isolation ON helpdesk_verifications
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE helpdesk_signals ENABLE ROW LEVEL SECURITY;
+ALTER TABLE helpdesk_signals FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON helpdesk_signals;
+CREATE POLICY tenant_isolation ON helpdesk_signals
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE helpdesk_findings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE helpdesk_findings FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON helpdesk_findings;
+CREATE POLICY tenant_isolation ON helpdesk_findings
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 ALTER TABLE edge_history ENABLE ROW LEVEL SECURITY;
 ALTER TABLE edge_history FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON edge_history;

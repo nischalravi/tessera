@@ -127,6 +127,11 @@ const (
 	PermFlatfileManage     Permission = "flatfile.manage"
 	PermFlatfileUpload     Permission = "flatfile.upload"
 	PermFlatfileCloseTasks Permission = "flatfile.close_tasks"
+	// verified help-desk resets (issue #108): helpdesk.reset starts, verifies
+	// and executes a case; helpdesk.approve gives the manager approval and the
+	// second approval and feeds the simulated signal feed.
+	PermHelpdeskReset   Permission = "helpdesk.reset"
+	PermHelpdeskApprove Permission = "helpdesk.approve"
 	// native groups (issue #44, GR-1; #47, GR-4). groups.read and groups.write
 	// let a principal reach the group routes; what it may do to each folder and
 	// group is then decided by the object's privileges (internal/groups/privs),
@@ -160,7 +165,7 @@ var rolePermissions = map[Role][]Permission{
 	RoleViewer: {PermGraphRead, PermRequestsCreate, PermGuestsSponsor, PermGroupsRead},
 	RoleOperator: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
 		PermReviewsDecide, PermReviewsExport, PermHRISSimulateEvent, PermFlatfileUpload, PermRequestsCreate, PermRequestsCreateOthers, PermRequestsDecide,
-		PermGuestsSponsor, PermGuestsRead, PermJobsRead, PermProvisioningRead, PermAlertsRead, PermAlertsManage, PermOwnershipManage, PermSoDMitigate, PermDriftRead, PermGroupsRead, PermGroupsWrite},
+		PermGuestsSponsor, PermGuestsRead, PermJobsRead, PermProvisioningRead, PermAlertsRead, PermAlertsManage, PermOwnershipManage, PermSoDMitigate, PermDriftRead, PermGroupsRead, PermGroupsWrite, PermHelpdeskReset, PermHelpdeskApprove},
 	RoleAuditor: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermConnectionsRead, PermRequestsCreate, PermEmailRead,
 		PermGuestsSponsor, PermGuestsRead, PermJobsRead, PermProvisioningRead, PermAlertsRead, PermSiemRead, PermDriftRead, PermGroupsRead, PermConditionalAccessRead, PermReviewsExport},
 	RolePolicyAdmin: {PermGraphRead, PermJITRequest, PermJITDecide, PermJITDenyRevoke, PermReviewsManage,
@@ -170,7 +175,7 @@ var rolePermissions = map[Role][]Permission{
 		PermGuestsSponsor, PermGuestsRead, PermSponsorshipsApprove, PermIdentitiesContain,
 		PermJobsRead, PermProvisioningRead, PermProvisioningManage, PermAlertsRead, PermAlertsManage, PermOwnershipManage, PermSoDManage, PermSoDMitigate, PermSoDApprove,
 		PermFlatfileUpload, PermFlatfileCloseTasks,
-		PermDriftRead, PermDriftRemediate, PermDriftPolicy, PermGroupsRead, PermGroupsWrite},
+		PermDriftRead, PermDriftRemediate, PermDriftPolicy, PermGroupsRead, PermGroupsWrite, PermHelpdeskReset, PermHelpdeskApprove},
 	RoleTenantAdmin: {PermGraphRead, PermAuditRead, PermAuditVerify, PermAdminRead, PermAdminChangeReq,
 		PermAdminChangeAppr, PermAdminUsersDisable, PermAdminSessionsRev, PermConnectionsRead, PermConnectionsManage,
 		PermConnectionsActivate, PermRequestsCreate, PermEmailRead, PermEmailManage, PermGuestsSponsor, PermGuestsRead, PermGroupsAdmin,

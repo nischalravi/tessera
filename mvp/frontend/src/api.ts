@@ -289,6 +289,8 @@ const LABELS: [RegExp, (m: RegExpMatchArray) => string][] = [
   [/^\/flatfile\/tasks\/([^/]+)\/close$/, () => "Close the manual task"],
   [/^\/access\/(policies|networks|device-signals)(\/[^/]+)?$/, (m) => `Change conditional access (${m[1].replace("-", " ")})`],
   [/^\/auth\/device\/approve$/, () => "Approve the command-line sign-in"],
+  [/^\/helpdesk\/cases\/([^/]+)\/execute$/, () => "Run the verified reset"],
+  [/^\/helpdesk\/cases\/([^/]+)\/(manager|second)-approval$/, (m) => `Give the ${m[2]} approval on the reset case`],
 ];
 
 /** A plain-language name for an API action, shown before resuming it. */
@@ -1358,7 +1360,8 @@ export const roles = {
   unassign: (id: string, identityId: number, reason: string, dryRun?: boolean) =>
     api<RoleChange>(rolePath(id, `/members/${identityId}/remove` + dry(dryRun)), { reason }),
   request: (roleId: string, beneficiaryId: number, justification: string) =>
-    api<RoleRequest>("/role-requests", { role_id: roleId, beneficiary_id: beneficiaryId, justification }),
+    // not resumable after a step-up: the body names a person, and a pending action is kept in browser storage
+    apiNoResume<RoleRequest>("/role-requests", { role_id: roleId, beneficiary_id: beneficiaryId, justification }),
   approve: (id: string, reason?: string) => api<RoleRequest>(`/role-requests/${encodeURIComponent(id)}/approve`, reason ? { reason } : {}),
   deny: (id: string, reason: string) => api<RoleRequest>(`/role-requests/${encodeURIComponent(id)}/deny`, { reason }),
   cancel: (id: string) => api<RoleRequest>(`/role-requests/${encodeURIComponent(id)}/cancel`, {}),
@@ -1711,6 +1714,68 @@ export const uploadFlatFile = (system: string, kind: FlatKind, file: File) =>
 /** Close a manual task by hand, with a reason (flatfile.close_tasks, fresh sign-in). */
 export const closeFlatTask = (taskId: string, reason: string) =>
   api<{ task: FlatTask }>(`/flatfile/tasks/${encodeURIComponent(taskId)}/close`, { reason });
+/** Verified help-desk resets (issue #108). */
+export type HelpdeskMethod = "push" | "callback" | "manager_approval" | "idv";
+export interface HelpdeskPolicy {
+  satisfied: boolean;
+  required_verifications: number;
+  counted_methods: HelpdeskMethod[];
+  needs_second_approver: boolean;
+  second_approved: boolean;
+  allowed_methods: HelpdeskMethod[];
+  missing: string[];
+}
+export interface HelpdeskVerification {
+  id: string;
+  method: HelpdeskMethod;
+  outcome: "passed" | "failed";
+  phishing_resistant: boolean;
+  verified_by: string;
+  evidence: string;
+  provider: string;
+  created_at: string;
+}
+export interface HelpdeskFinding {
+  id: string;
+  case_id: string;
+  identity_id: number;
+  rule: string;
+  detail: { device?: string; location?: string; reset_at?: string; device_added_at?: string; sign_in_at?: string; known_locations?: string[] };
+  created_at: string;
+}
+export interface HelpdeskCase {
+  id: string;
+  identity_id: number;
+  identity: string;
+  kind: "password" | "mfa";
+  system: "okta" | "entra" | "simulated";
+  reason: string;
+  status: "open" | "executing" | "executed" | "failed" | "cancelled";
+  privileged: boolean;
+  requested_by: string;
+  second_approver: string | null;
+  second_approved_at: string | null;
+  executed_by: string | null;
+  executed_at: string | null;
+  result: string[];
+  error: string;
+  created_at: string;
+  updated_at: string;
+  policy: HelpdeskPolicy;
+  verifications: HelpdeskVerification[];
+  findings: HelpdeskFinding[];
+}
+const hd = (id: string) => `/helpdesk/cases/${encodeURIComponent(id)}`;
+export const startHelpdeskCase = (b: { identity_id: number; kind: "password" | "mfa"; system: string; reason: string }) =>
+  api<HelpdeskCase>("/helpdesk/cases", b);
+export const verifyHelpdeskCase = (id: string, b: { method: HelpdeskMethod; evidence?: string; number_source?: "hr"; session_ref?: string }) =>
+  api<HelpdeskCase>(`${hd(id)}/verifications`, b);
+export const managerApproveHelpdeskCase = (id: string, evidence?: string) => api<HelpdeskCase>(`${hd(id)}/manager-approval`, { evidence });
+export const secondApproveHelpdeskCase = (id: string) => api<HelpdeskCase>(`${hd(id)}/second-approval`, {});
+export const cancelHelpdeskCase = (id: string) => api<HelpdeskCase>(`${hd(id)}/cancel`, {});
+/** The temporary access pass (Entra) is in the answer once; it is never stored or shown again. */
+export const executeHelpdeskCase = (id: string) => api<{ case: HelpdeskCase; temporary_access_pass?: string }>(`${hd(id)}/execute`, {});
+
 // ---------------------------------------------------------------- attribute policies (issue #162)
 
 /** A condition: all/any/not over attribute tests, evaluated deterministically; a missing attribute denies. */

@@ -1607,6 +1607,52 @@ to the account by a `direct_grant` edge. Agent delegations are left alone.
   from a sample file's first line), Upload CSV, upload history with a side panel of per-row errors and
   the delta, and the manual task list with Close.
 
+### Verified help-desk resets
+
+**Identity → Help desk** (`/helpdesk`, issue #108) resets a password or MFA only after the person
+is verified. A case (`helpdesk_cases`, schema 0254; also `helpdesk_verifications`,
+`helpdesk_signals`, `helpdesk_findings`, all tenant-scoped with isolation tests) is opened for an
+identity, collects verifications, and runs through the IdP once the policy
+(`internal/helpdesk/policy.go`, a pure `Evaluate`) is satisfied. The policy is checked again inside
+the transaction that claims the case (open or failed to executing, single-flight), so an
+unverified case cannot execute: `409 verification_required` with the policy in the body, and the
+IdP is never called.
+
+- **Methods.** `push` (a push to an existing phishing-resistant authenticator; a push to a weaker
+  one does not count), `callback` (to the number from the HR record; `number_source` must be
+  `"hr"` and a note is required), `manager_approval` (only the identity's manager, by a platform
+  user linked to the manager's identity, never the requester or the subject) and `idv` (privileged
+  identities only).
+- **Privileged identities** (an effective privileged permission in the access graph, or a platform
+  admin role) need two different methods and a second approver who is not the requester or the
+  subject. Nobody can open a case for their own identity.
+- **Routes.** `GET/POST /api/helpdesk/cases`, `GET .../{case_id}`, `POST .../{case_id}/verifications`
+  `{method, evidence, number_source, session_ref}`, `.../manager-approval` and `.../second-approval`
+  (`helpdesk.approve`, step-up), `.../execute` (`helpdesk.reset`, step-up), `.../cancel`,
+  `GET /api/helpdesk/findings`. `helpdesk.reset` and `helpdesk.approve` go to operators and policy
+  admins. Every step is audited in the same transaction (`helpdesk.case.started`,
+  `.verification`, `.second_approval`, `.reset.started`, `.reset.executed`, `.reset.failed`,
+  `.detection.fired`).
+- **Execution** goes through the narrow `ResetExecutor` interface. Okta: `reset_factors` (MFA) or
+  `reset_password` with `sendEmail=true`. Entra: delete every deletable authentication method and
+  issue a single-use temporary access pass (a password reset issues the pass only). They use the
+  connection's provider credential from `PUT /api/connections/{id}/containment-credential` (Okta
+  needs `okta.users.manage`; Entra `UserAuthenticationMethod.ReadWrite.All`) and go through
+  `internal/safehttp`. The Entra pass is returned once in the execute response
+  (`Cache-Control: no-store`), never stored, audited or logged. A failed reset leaves the case
+  `failed` and can be run again; a case stuck in `executing` after a crash needs a human.
+- **Detection** `helpdesk.post_reset_takeover`: within 24 hours after a reset, a new MFA device
+  and a sign-in from a location the identity had not signed in from before the reset. There is no
+  alerts engine on `dev` yet, so it is a pure function (`helpdesk.Detect`) run whenever a signal
+  is stored; a finding is raised once per case, audited and listed under Detections. Real
+  signals will come from the IdP log connectors; until then `POST /api/helpdesk/signals`
+  `{identity_id, kind: mfa_device_added|sign_in, location, device, occurred_at}`
+  (`helpdesk.approve`) simulates the feed and is a 404 in production.
+- **Simulated outside production.** The `simulated` executor (calls nothing), the push provider
+  (always approves) and the IDV provider (accepts any session reference not starting with
+  `fail`) exist when `TESSERA_ENV` is not `prod`. In production push and IDV answer
+  `503 provider_unavailable` until real providers implement `PushProvider` and `IDVProvider`.
+
 ### Native groups (folders and groups)
 
 Groups owned by Tessera (design `docs/design/groups-grouper-parity.md`, issue #44 GR-1; not the
@@ -2091,14 +2137,10 @@ the right. Arrow keys move between items.
 | Group | Items |
 |---|---|
 | (top) | **Home**, **Inbox** (count) |
-| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Accounts (with *Account matches*), Roles (Preview), Organizations (Preview) |
-| **Access** | Request access, My access (with *My requests*), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
-| **Protection** | Policies & SoD (violations, policies, what-if simulation), Access graph, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
-| **Settings** | Connections (governed connections and the setup wizard), Conditional access (network ranges, policies, device signals), Admin |
-| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Ownership, Accounts (with *Account matches*), Roles, Organizations (live, read-only, derived from departments) |
+| **Identity** | Users, Machine identities & agents, Groups (with an *All entitlements* tab), Applications, Ownership, Accounts (with *Account matches*), Help desk, Roles, Organizations (live, read-only, derived from departments) |
 | **Access** | Request access, My access (with *My requests*), Guests I sponsor (invite, bulk invite, renew, transfer, approvals), Just-in-time, Access reviews (with *Lifecycle* and *Workflows* tabs) |
 | **Protection** | Alerts (alerts, rules, channels), Policies & SoD (violations, policies, what-if simulation, SoD functions, risks and rulesets), Mitigating controls (mitigations, control library), Attribute policies, Access graph (with an *As of* date for *Who can access…*), Evidence packs, Insights (Risk overview, Least privilege, SoD conflicts, Deployment health) |
-| **Settings** | Connections (governed connections and the setup wizard), Admin |
+| **Settings** | Connections (governed connections and the setup wizard), Flat-file apps, Conditional access (network ranges, policies, device signals), Admin |
 
 **Home.** For the admin & security persona: the tenant name and a sync line, then tabs
 (Overview, Monitoring, Deployment health, Recommendations). Overview has the KPI cards
