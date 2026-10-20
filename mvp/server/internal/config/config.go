@@ -87,6 +87,12 @@ type Config struct {
 	AuditAnchor            string
 	AuditCheckpointSeconds int
 	AuditCheckpointEvents  int
+	// AuthRateBurst and AnonRateBurst are the per-IP burst sizes of the
+	// /api/auth/* and anonymous request limiters (TESSERA_AUTH_RATE_BURST,
+	// TESSERA_ANON_RATE_BURST; defaults 30 and 120). Browser test suites from
+	// one address raise them.
+	AuthRateBurst int
+	AnonRateBurst int
 	// AWSCatalogDir (TESSERA_AWS_CATALOG_DIR) is the catalog directory with
 	// compiled/<version>.json.gz; empty leaves the AWS evaluator routes
 	// unavailable (503). AWSCatalogVersion picks a version (default: newest).
@@ -283,6 +289,8 @@ func Load(getenv func(string) string) (*Config, error) {
 	}
 	c.AuditCheckpointSeconds = integer("TESSERA_AUDIT_CHECKPOINT_SECONDS", 300, 1, 86400)
 	c.AuditCheckpointEvents = integer("TESSERA_AUDIT_CHECKPOINT_EVENTS", 1000, 1, 1_000_000)
+	c.AuthRateBurst = integer("TESSERA_AUTH_RATE_BURST", 30, 1, 100_000)
+	c.AnonRateBurst = integer("TESSERA_ANON_RATE_BURST", 120, 1, 100_000)
 	c.BackupDir = str("TESSERA_BACKUP_DIR", "", "")
 	c.BackupEveryMinutes = integer("TESSERA_BACKUP_EVERY_MINUTES", 360, 5, 7*24*60)
 	c.BackupKeep = integer("TESSERA_BACKUP_KEEP", 28, 1, 10_000)

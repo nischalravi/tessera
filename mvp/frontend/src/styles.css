@@ -241,7 +241,7 @@ a:hover { text-decoration: underline; }
 h1, h2, h3, h4 { margin: 0; font-weight: 600; }
 h1 { font-size: var(--fs-2xl); line-height: 1.27; }
 h2 { font-size: var(--fs-xl); line-height: 1.375; }
-h3 { font-size: var(--fs-sm); color: var(--text-2); font-weight: 600; }
+h3, .h3 { font-size: var(--fs-sm); color: var(--text-2); font-weight: 600; }
 p { margin: 0; }
 code, pre, .mono { font-family: var(--font-mono); font-size: 12px; }
 .num, td.num, th.num, .tnum { font-variant-numeric: tabular-nums; }
@@ -510,7 +510,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 }
 .fchip:hover { background: var(--surface-2); }
 .fchip[aria-pressed="true"], .fchip.on { border-color: var(--accent-line); color: var(--accent-text); background: var(--accent-soft); }
-.fchip .n { font-variant-numeric: tabular-nums; opacity: 0.8; }
+.fchip .n { font-variant-numeric: tabular-nums; }
 .fchip.add { border-style: dashed; color: var(--text-3); }
 .fchip .x { display: inline-grid; place-items: center; margin-right: -6px; }
 
@@ -651,13 +651,13 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 .palette-foot { display: flex; gap: 14px; padding: 8px 14px; border-top: 1px solid var(--border); font-size: var(--fs-xs); color: var(--text-3); background: var(--surface-2); flex-wrap: wrap; }
 
 /* --------------------------------------------------------- inbox layout */
-.split { display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap: var(--s-4); align-items: start; }
+.split { display: grid; grid-template-columns: minmax(0, 1fr) var(--side-w, 420px); gap: var(--s-4); align-items: start; }
 .split .side-panel { position: sticky; top: calc(var(--topbar-h) + 16px); max-height: calc(100vh - var(--topbar-h) - 32px); overflow: auto; }
 @media (max-width: 1180px) { .split { grid-template-columns: minmax(0, 1fr); } .split .side-panel { position: static; max-height: none; } }
 .qrow { display: grid; grid-template-columns: 22px 28px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--divider); cursor: pointer; }
 .qrow:last-child { border-bottom: 0; }
 .qrow:hover { background: var(--row-hover); }
-.qrow[aria-selected="true"] { background: var(--row-selected); box-shadow: inset 3px 0 0 var(--accent-line); }
+.qrow[aria-selected="true"], .qrow.selected { background: var(--row-selected); box-shadow: inset 3px 0 0 var(--accent-line); }
 .qrow:focus-visible { outline-offset: -2px; }
 .qrow .q-ic { width: 28px; height: 28px; border-radius: var(--r-md); display: grid; place-items: center; background: var(--surface-2); color: var(--accent-text); }
 .qrow .q-title { font-weight: 600; }
@@ -828,6 +828,20 @@ fieldset.card { margin: 0; }
 .score-cell { display: grid; grid-template-columns: 28px minmax(56px, 1fr) auto; gap: 8px; align-items: center; min-width: 160px; }
 .att .att-bar.low { background: var(--info); }
 .hint.err { color: var(--critical); }
+
+/* Accessibility (issue #173) */
+/* Links inside running text are underlined, not told apart by colour alone (WCAG 1.4.1). */
+:where(p, dd, .sub, .xs, .callout) a:not(.btn) { text-decoration: underline; text-underline-offset: 2px; }
+/* A list row that is a button (select an item) */
+.qbtn { width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px solid var(--divider); font: inherit; color: inherit; cursor: pointer; }
+.qbtn:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.linklike { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; }
+.linklike:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+/* Focus not obscured (WCAG 2.4.11): scrolling to a focused element keeps it below the sticky top bar. */
+html { scroll-padding-top: calc(var(--topbar-h) + 8px); }
+/* Reflow (WCAG 1.4.10): grid columns may shrink below their content's width; segmented controls wrap. */
+.split > * { min-width: 0; }
+.seg { max-width: 100%; flex-wrap: wrap; }
 
 /* Account matches (issue #160) */
 .h-sm { font-size: var(--fs-lg); color: var(--text); margin-bottom: var(--s-2); }

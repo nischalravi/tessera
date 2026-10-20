@@ -296,7 +296,7 @@ function Drafts({ drafts, error, reload }: { drafts: RequestDraft[] | null; erro
         <EmptyState title="No drafts" icon={<Pencil size={18} />}>Use “Save draft” on Request access to come back to a request later. A draft is never submitted until you submit it.</EmptyState>
       ) : (
         <table>
-          <thead><tr><th>Items</th><th>For</th><th>Saved</th><th /></tr></thead>
+          <thead><tr><th>Items</th><th>For</th><th>Saved</th><th><span className="sr-only">Actions</span></th></tr></thead>
           <tbody>
             {drafts.map((d) => (
               <tr key={d.id}>
@@ -359,7 +359,7 @@ function Delegations() {
         ) : (
           <div className="table-scroll">
             <table>
-              <thead><tr><th>From</th><th>To</th><th>When</th><th className="hide-narrow">Reason</th><th>State</th><th /></tr></thead>
+              <thead><tr><th>From</th><th>To</th><th>When</th><th className="hide-narrow">Reason</th><th>State</th><th><span className="sr-only">Actions</span></th></tr></thead>
               <tbody>
                 {data.map((d) => (
                   <tr key={d.id}>

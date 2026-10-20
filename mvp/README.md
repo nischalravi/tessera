@@ -2732,6 +2732,18 @@ cd ../frontend && npm run build && npm test   # npm test: node:test, no extra de
   `TESSERA_PERF_PROFILE=<dir>` for CPU and heap profiles (keep `<dir>` out of the repository), and
   `TESSERA_PERF_ROOT=1` for the root-SCP diff.
 
+* **Accessibility.** `cd frontend && npm run test:a11y` runs the Playwright suite in `frontend/e2e`
+  against the real stack. It starts `run.sh` on ports 8610/5610/8611 with a temporary DB.
+  - axe-core checks the WCAG 2.2 AA rules on the sign-in page, on every route (light and dark)
+    and on the detail pages, and fails on any serious or critical violation.
+  - Reflow at 320 px, text spacing and focus-not-obscured are scripted checks.
+  - A keyboard-only walkthrough signs in, requests access, approves and reviews.
+
+  CI runs it in `.github/workflows/a11y.yml`. The audit, with the criteria-by-criteria evidence
+  and the screen-reader pass still to do by hand, is in `docs/accessibility/wcag-2.2-aa-audit.md`.
+  `TESSERA_AUTH_RATE_BURST` and `TESSERA_ANON_RATE_BURST` (defaults 30 and 120) set the per-IP
+  burst of the `/api/auth/*` and anonymous limiters; the suite raises them for its own instance.
+
 ## Server hardening
 
 * Request bodies are capped at 1 MiB (413); JSON bodies are decoded strictly (unknown fields and

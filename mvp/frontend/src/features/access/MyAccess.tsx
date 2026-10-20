@@ -106,7 +106,7 @@ export function MyAccess() {
             ) : (
               <div className="table-scroll">
                 <table>
-                  <thead><tr><th>Access</th><th className="hide-narrow">Account</th><th className="num">Permissions</th><th>Last used</th><th>Granted</th><th /></tr></thead>
+                  <thead><tr><th>Access</th><th className="hide-narrow">Account</th><th className="num">Permissions</th><th>Last used</th><th>Granted</th><th><span className="sr-only">Actions</span></th></tr></thead>
                   <tbody>
                     {shown.map((r) => (
                       <tr key={r.key}>
