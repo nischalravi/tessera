@@ -1,7 +1,11 @@
 package reviews_test
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -439,4 +443,68 @@ func TestSchedule_ScopedToRoles(t *testing.T) {
 	if !s.isMember(eng, "alice") || !s.audited("review.rule_flagged") {
 		t.Error("the close-out removed a rule member instead of flagging it")
 	}
+}
+
+// Issue #365: the memberships a campaign certified, and what was decided on
+// them, are in the frozen population, its hash and the auditor export.
+func TestMembership_InPopulationAndExport(t *testing.T) {
+	s := newSched(t)
+	eng := s.role("Engineer", true) // rule role: alice and carol
+	camp := s.campaign(reviews.Scope{RoleIDs: []string{eng}})
+	if res, err := s.decide(s.memberItem(camp, eng, "alice").ID, "revoke", reviews.ChoiceExclude); err != nil || res != store.ResolveExclude {
+		t.Fatalf("exclude alice = %q, %v", res, err)
+	}
+	if _, err := s.decide(s.memberItem(camp, eng, "carol").ID, "keep", ""); err != nil {
+		t.Fatal(err)
+	}
+	s.tx(func(c *store.TenantTx) error {
+		e, err := reviews.BuildExport(c, camp, s.now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(e.Rows) != 2 || e.Population.ItemCount != 2 || len(e.Decisions) != 2 || !e.HashMatch() {
+			t.Fatalf("rows %d, item_count %d, decisions %d, hash match %v; want 2, 2, 2, true",
+				len(e.Rows), e.Population.ItemCount, len(e.Decisions), e.HashMatch())
+		}
+		got := map[string]reviews.Decision{}
+		for _, d := range e.Decisions {
+			if d.Kind != "membership" || d.Row.InScopeReason != reviews.InScopeMembership || d.Row.EdgeID != 0 ||
+				d.Row.System != reviews.MembershipSystem || d.Row.Entitlement != "Role Engineer" || d.Reviewer == "" && d.Decision == "open" {
+				t.Errorf("unexpected membership decision %+v row %+v", d, d.Row)
+			}
+			got[d.Row.EdgeDst] = d
+		}
+		a, k := got["identity:"+strconv.FormatInt(s.id("alice"), 10)], got["identity:"+strconv.FormatInt(s.id("carol"), 10)]
+		if a.Decision != "revoke" || a.RuleAction != store.ResolveExclude || a.Source != "reviewer" || a.DecidedAt == nil ||
+			a.Verification != reviews.VerifyVerified {
+			t.Errorf("alice's decision = %+v", a)
+		}
+		if k.Decision != "keep" || k.RuleAction != "" || k.Verification != reviews.VerifyNotApplicable {
+			t.Errorf("carol's decision = %+v", k)
+		}
+		doc, err := e.JSON()
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := json.Marshal(doc)
+		for _, want := range []string{`"kind":"membership"`, `"rule_action":"exclude"`, `"entitlement":"Role Engineer"`, "business-role memberships"} {
+			if !strings.Contains(string(raw), want) {
+				t.Errorf("JSON export lacks %s", want)
+			}
+		}
+		var buf bytes.Buffer
+		if err := e.WriteCSV(&buf); err != nil {
+			t.Fatal(err)
+		}
+		if lines := strings.Count(buf.String(), "\n"); lines != 3 || !strings.Contains(buf.String(), "Role Engineer") {
+			t.Errorf("CSV has %d lines, want header and 2 members:\n%s", lines, buf.String())
+		}
+		// the hash covers the rows: a tampered membership row no longer matches
+		rows, _ := c.PopulationRows(camp)
+		rows[0].Entitlement = "Role Other"
+		if h, err := reviews.PopulationHash(rows); err != nil || h == e.Population.PopulationHash {
+			t.Errorf("hash did not change when a membership row changed (%v)", err)
+		}
+		return nil
+	})
 }

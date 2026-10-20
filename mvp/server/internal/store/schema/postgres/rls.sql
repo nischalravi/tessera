@@ -1402,3 +1402,10 @@ DROP POLICY IF EXISTS tenant_isolation ON oauth_sync_state;
 CREATE POLICY tenant_isolation ON oauth_sync_state
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE identity_link_requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE identity_link_requests FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON identity_link_requests;
+CREATE POLICY tenant_isolation ON identity_link_requests
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));

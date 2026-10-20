@@ -432,10 +432,6 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `GET /api/identities/{id}/affiliations` · `GET /api/identities/{id}/identifiers` ·
 `POST /api/identities/{id}/affiliations {type, org_unit?, population?, starts_at?, ends_at?, reason}` ·
 `POST /api/affiliations/{id}/end {reason}` ·
-`GET /api/catalog[?all=1]` · `PUT /api/catalog/items/{group_id}` ·
-`POST /api/requests {beneficiary_ids, catalog_item_ids, justification, duration_hours}` ·
-`GET /api/requests[?scope=mine|pending|all&status=]` · `GET /api/requests/{id}` ·
-`POST /api/requests/{id}/approve|deny|cancel|remove {reason}` ·
 `GET|POST /api/roles` · `GET|PUT /api/roles/{id}` · `GET /api/roles/{id}/versions|drift` ·
 `POST /api/roles/{id}/retire|reconcile|members` · `POST /api/roles/{id}/members/{identity_id}/remove`
 (changes take `?dry_run=1`) · `GET|POST /api/role-requests` · `POST /api/role-requests/{id}/approve|deny|cancel` ·
@@ -447,8 +443,6 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `POST /api/guests/{identity_id}/resend-invitation|revoke-invitation` ·
 `POST /public/t/{slug}/claim/start|verify/send|verify/check|existing-account|credential|resend` ·
 `GET /public/t/{slug}/claim/status` (public: the guest's claim, see Guest claim) ·
-`GET /api/approvals/inbox` · `GET /api/approvals/delegates` · `GET|POST /api/approvals/delegations` ·
-`POST /api/approvals/delegations/{id}/revoke` ·
 `GET /api/notifications[?unread=1&limit=]` · `POST /api/notifications/read {ids}|{all:true}` ·
 `GET|PUT /api/notifications/preferences {prefs:{kind:channel}}` ·
 `GET /api/email/messages[?status=&kind=&recipient=&limit=]` · `GET /api/email/messages/{id}` ·
@@ -907,6 +901,7 @@ under Change requests (the invitation is spent and both operators are told); red
 recovery. It is audited in the tenant's chain and the platform chain.
 `tessera admin revoke-signing-key -tenant acme -kid <kid> -reason "…"` revokes one of a tenant's signing
 keys at once (a new one becomes active; audited as the operator).
+
 ### Review populations (auditor evidence, issue #110)
 
 Auditors test the completeness and accuracy of a review population (IPE). When a campaign is
@@ -923,6 +918,16 @@ Each row has: `ordinal` (1..n in ascending `edge_id`), `edge_id`, `identity_id`,
 `in_scope_reason` (`standing_grant`) and `disposition` (`review` or `auto_certified`).
 `source_syncs` is the time of the tenant's last `connectors.sync` event (Tessera keeps no
 per-system sync clock), or null.
+
+**Role memberships (issue #365).** A business-role membership that became a review item is a
+row too, so a role-scoped campaign exports what it certified: `edge_id` 0, `system`
+`business_role`, `entitlement` `Role <name>`, `edge_src` `role:<role id>`, `edge_dst`
+`identity:<id>`, `in_scope_reason` `role_membership`, `disposition` `review`. Rows sort by
+`edge_id`, then `edge_src`, then `edge_dst`, so memberships come first. The grants a role made are
+certified under their membership, not as rows of their own; a role-scoped campaign's population
+`scope` says so. The export's decisions carry `kind` (`grant` or `membership`) and `rule_action`
+(`unassign`, `exclude` or `flag` for a revoked membership). The row format and hash are unchanged
+(golden vector case "role membership rows"). Campaigns launched earlier keep their frozen rows.
 
 **Hash (`tessera-review-population-v1`).** To recompute it from an export:
 
@@ -1888,6 +1893,11 @@ IdP is never called.
 - **Privileged identities** (an effective privileged permission in the access graph, or a platform
   admin role) need two different methods and a second approver who is not the requester or the
   subject. Nobody can open a case for their own identity.
+- **Four eyes (#358).** A call-back is the operator's own word, so the requester cannot record it
+  (`403 requester_cannot_verify`; one recorded by the requester or the subject never counts), and
+  the requester cannot execute their own case (`403 requester_cannot_execute`): a second operator
+  must. Nobody verifies, approves or executes a reset of their own identity
+  (`403 self_reset_not_allowed`).
 - **Routes.** `GET/POST /api/helpdesk/cases`, `GET .../{case_id}`, `POST .../{case_id}/verifications`
   `{method, evidence, number_source, session_ref}`, `.../manager-approval` and `.../second-approval`
   (`helpdesk.approve`, step-up), `.../execute` (`helpdesk.reset`, step-up), `.../cancel`,
@@ -2095,7 +2105,7 @@ inheritance, `explain.go`, `grant.go`, `settings.go`), `server/internal/api/grou
 | `DELETE .../privileges/{privilege_id}` | revoke one row (the design has `DELETE .../privileges`; the row is in the path here) |
 | `GET .../privileges/effective[?identity=]` | for each privilege of the object, every path by which the identity (default: the caller) holds it, with a sentence such as "Ivan holds UPDATE on `app:foo:g` because they are in `app:foo:admins`, which holds STEM_ADMIN on folder `app:foo` ..."; another identity's needs `admin` |
 | `GET\|PUT /api/groups/privileges/settings` | the everyone policy and default privileges (`groups.admin`) |
-| `PUT /api/groups/users/{id}/identity` `{identity_id \| null}` | link a platform user to an identity (`groups.admin`, fresh phishing-resistant sign-in; audited) |
+| `PUT /api/groups/users/{id}/identity` `{identity_id \| null}` | link a platform user to an identity (`groups.admin`, fresh phishing-resistant sign-in; audited). #357: never your own user (`403 self_link_not_allowed`), only to an `active` identity (`409 identity_not_active`), and a user whose identity is terminated or disabled keeps the link so sign-in stays blocked (`409 identity_inactive`). Linking an unlinked user applies at once; changing or removing an existing link needs two admins: the first gets `202 pending_second_admin` (schema `0362`, 72 h), the same admin again `403 four_eyes_required`, and a second admin's identical change applies it and revokes the user's sessions and CLI refresh tokens |
 
 - Tests: `go test ./internal/groups/privs` (`TestImplication` for all 21 privileges,
   `TestPrivs_InheritanceOneVsSub`, `TestPrivs_ExplainListsAllPaths`,
@@ -2789,6 +2799,7 @@ TLS server. Live tests are skipped unless set (needs-human, never run in CI): `g
 [+ `TESSERA_OKTA_DEV_KEY_ID`]); `go test ./internal/connectors/entra -run Integration -v` with
 `TESSERA_ENTRA_DEV_TENANT_ID`, `TESSERA_ENTRA_DEV_CLIENT_ID`, `TESSERA_ENTRA_DEV_CLIENT_SECRET`.
 `internal/connectors/connsync` is what Google Workspace and Workday reuse.
+
 ## Command-line sign-in (`tessera-cli`)
 
 The CLI and other non-browser clients use OAuth 2.0, not cookies (design §9.3, §10): Tessera is an
@@ -2801,12 +2812,14 @@ token may do is the intersection of the user's active roles and its scopes.
 
 **Dev flow.** `./run.sh` serves everything on the UI port (the dev server proxies `/api`, `/t/*/oauth/*`
 and `/.well-known/*`), and `TESSERA_PUBLIC_URL` defaults to `http://localhost:$UI_PORT`: that is the
-CLI's server URL, because DPoP proofs are bound to it.
+CLI's server URL, because DPoP proofs are bound to it. In dev (`TESSERA_ENV=dev`) the CLI accepts
+`http://localhost` as well as an IP-literal loopback address; use exactly the host `TESSERA_PUBLIC_URL`
+names (the issuer must match), so with the default `run.sh` that is `localhost`, not `127.0.0.1`.
 
 ```bash
 cd server && go build -o /tmp/tessera-cli ./cmd/tessera-cli     # or: go run ./cmd/tessera-cli ...
-export TESSERA_ENV=dev                                             # lets the CLI use http and loopback
-tessera-cli login --server http://localhost:5173 --tenant larkspur
+export TESSERA_ENV=dev                                             # lets the CLI use http and loopback (localhost, 127.0.0.1, ::1)
+tessera-cli login --server http://localhost:5173 --tenant larkspur   # the UI port: $UI_PORT, 5173 by default
 #   To sign in to larkspur, open  http://localhost:5173/device  and enter the code  KDQV-TMWB
 tessera-cli whoami
 tessera-cli api GET /api/summary

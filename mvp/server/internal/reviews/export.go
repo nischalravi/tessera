@@ -63,6 +63,11 @@ type Decision struct {
 	QAReviewer   string
 	QADecidedAt  *time.Time
 	Verification string
+	// Kind is "grant" or "membership" (a business-role membership item, issue
+	// #365); RuleAction is how a revoked membership was resolved (unassign,
+	// exclude or flag), "" otherwise.
+	Kind       string
+	RuleAction string
 }
 
 // BuildExport assembles the export of a campaign (ErrNoPopulation when it has
@@ -106,10 +111,23 @@ func BuildExport(c *store.TenantTx, campaignID int64, now time.Time) (*Export, e
 		return people[*id].Name
 	}
 	itemByEdge := map[int64]*store.ReviewItem{}
+	memberItems := map[string]*store.ReviewItem{} // membership items by "role:<id>|identity:<id>"
 	for _, it := range items {
 		if it.EdgeID != nil {
 			itemByEdge[*it.EdgeID] = it
+		} else {
+			memberItems[it.EdgeSrc+"|"+it.EdgeDst] = it
 		}
+	}
+	itemRoles, err := c.CampaignItemRoles(campaignID)
+	if err != nil {
+		return nil, err
+	}
+	resolutions := map[int64]string{}
+	roleOf := map[int64]string{}
+	for _, ir := range itemRoles {
+		roleOf[ir.ItemID] = ir.RoleID
+		resolutions[ir.ItemID] = deref(ir.Resolution)
 	}
 	autoByOrdinal := map[int]*store.AutoDecision{}
 	for _, a := range autos {
@@ -123,9 +141,16 @@ func BuildExport(c *store.TenantTx, campaignID int64, now time.Time) (*Export, e
 		return nil, err
 	}
 	for _, r := range rows {
-		d := Decision{Row: r, Decision: "open", Verification: VerifyNotApplicable}
+		d := Decision{Row: r, Decision: "open", Verification: VerifyNotApplicable, Kind: "grant"}
 		revoked := false
-		switch it, a := itemByEdge[r.EdgeID], autoByOrdinal[r.Ordinal]; {
+		it, a := itemByEdge[r.EdgeID], autoByOrdinal[r.Ordinal]
+		if r.InScopeReason == InScopeMembership {
+			d.Kind, it, a = "membership", memberItems[r.EdgeSrc+"|"+r.EdgeDst], nil
+			if it != nil {
+				d.RuleAction = resolutions[it.ID]
+			}
+		}
+		switch {
 		case r.Disposition == DispositionAuto && a != nil:
 			e.QA.AutoCertified++
 			d.Decision, d.Source, d.DecidedAt, d.Rule = "auto_certified", "rule", &pop.CreatedAt, string(a.Rule)
@@ -156,7 +181,17 @@ func BuildExport(c *store.TenantTx, campaignID int64, now time.Time) (*Export, e
 				}
 			}
 		}
-		if revoked {
+		if revoked && d.Kind == "membership" {
+			// removed unless the reviewer only flagged the rule to its owner
+			d.Verification = VerifyVerified
+			if d.RuleAction == store.ResolveFlag {
+				d.Verification = VerifyPending
+			} else if present, err := memberPresent(c, roleOf[it.ID], it.IdentityID); err != nil {
+				return nil, err
+			} else if present && d.RuleAction != store.ResolveExclude {
+				d.Verification = VerifyPending
+			}
+		} else if revoked {
 			d.Verification = VerifyPending
 			if _, err := c.EdgeBetween(r.EdgeSrc, r.EdgeDst); errors.Is(err, store.ErrNotFound) {
 				d.Verification = VerifyVerified
@@ -167,6 +202,20 @@ func BuildExport(c *store.TenantTx, campaignID int64, now time.Time) (*Export, e
 		e.Decisions = append(e.Decisions, d)
 	}
 	return e, nil
+}
+
+// memberPresent reports whether the identity still holds the role.
+func memberPresent(c *store.TenantTx, roleID string, identityID int64) (bool, error) {
+	ms, err := c.RoleMembers(roleID)
+	if err != nil {
+		return false, err
+	}
+	for _, m := range ms {
+		if m.IdentityID == identityID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func deref(s *string) string {
@@ -222,6 +271,7 @@ func (e *Export) JSON() (ojson.Object, error) {
 		decisions = append(decisions, ojson.Object{{Key: "ordinal", Value: d.Row.Ordinal}, {Key: "edge_id", Value: d.Row.EdgeID},
 			{Key: "identity", Value: d.Row.IdentityRef}, {Key: "account", Value: d.Row.AccountRef},
 			{Key: "system", Value: d.Row.System}, {Key: "entitlement", Value: d.Row.Entitlement},
+			{Key: "kind", Value: d.Kind}, {Key: "rule_action", Value: nullable(d.RuleAction)},
 			{Key: "decision", Value: d.Decision}, {Key: "decision_source", Value: d.Source},
 			{Key: "reviewer", Value: nullable(d.Reviewer)}, {Key: "decided_by_user_id", Value: nullable(d.DecidedBy)},
 			{Key: "decided_at", Value: timeutil.ISOPtr(d.DecidedAt)}, {Key: "reason", Value: nullable(d.Reason)},
@@ -258,7 +308,7 @@ func qaObject(q QACounts) ojson.Object {
 var csvColumns = []string{"ordinal", "edge_id", "identity", "account", "system", "entitlement", "in_scope_reason",
 	"disposition", "decision", "decision_source", "reviewer", "decided_by_user_id", "decided_at", "reason",
 	"exception_reasons", "rule", "qa_sample", "qa_reviewer", "qa_decision", "qa_decided_at", "revocation_verification",
-	"source_sync", "population_hash", "recomputed_hash", "hash_match", "frozen_at"}
+	"source_sync", "population_hash", "recomputed_hash", "hash_match", "frozen_at", "kind", "rule_action"}
 
 // WriteCSV writes the export as CSV (RFC 4180). Text cells that start with a
 // spreadsheet formula character are prefixed with an apostrophe.
@@ -279,7 +329,8 @@ func (e *Export) WriteCSV(w io.Writer) error {
 			r.Entitlement, r.InScopeReason, r.Disposition, d.Decision, d.Source, d.Reviewer, d.DecidedBy,
 			isoOrEmpty(d.DecidedAt), d.Reason, strings.Join(d.Reasons, ";"), d.Rule, strconv.FormatBool(d.QASample),
 			d.QAReviewer, d.QADecision, isoOrEmpty(d.QADecidedAt), d.Verification, syncs[r.System],
-			e.Population.PopulationHash, e.Recomputed, strconv.FormatBool(e.HashMatch()), timeutil.ISO(e.Population.CreatedAt)}
+			e.Population.PopulationHash, e.Recomputed, strconv.FormatBool(e.HashMatch()), timeutil.ISO(e.Population.CreatedAt),
+			d.Kind, d.RuleAction}
 		for i := range rec {
 			rec[i] = csvSafe(rec[i])
 		}
