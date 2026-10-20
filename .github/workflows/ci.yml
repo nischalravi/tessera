@@ -4,6 +4,7 @@ on:
   push:
     branches: [dev, test, prod, main]
   pull_request:
+  merge_group: # lets a merge queue / ruleset be enabled later without another edit
   workflow_dispatch:
 
 permissions:
@@ -38,12 +39,13 @@ jobs:
               - 'mvp/frontend/**'
               - '.github/workflows/ci.yml'
 
-  backend:
-    name: backend (Go)
+  # Fast static checks. Bound to the same `changes` gate as the test shards.
+  lint:
+    name: lint (Go)
     needs: changes
     if: needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: mvp/server
@@ -60,10 +62,64 @@ jobs:
       - name: gofmt
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
       - run: go vet ./...
+      - run: go build -trimpath -o bin/tessera ./cmd/tessera
+
+  # Tests run as parallel shards (package lists in mvp/server/scripts/ci-shard.sh; `rest` is
+  # every package no other shard names, so new packages are never skipped).
+  backend-test:
+    name: backend tests (${{ matrix.shard }})
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    # Self-hosted runner via repo variable TESSERA_RUNNER, but never for fork PRs.
+    runs-on: ${{ ((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.TESSERA_RUNNER) || 'ubuntu-latest' }}
+    # The api shard with -race (pushes to dev/test/prod) takes ~30 minutes on hosted runners.
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [api, store, cmd, core, rest]
+    defaults:
+      run:
+        working-directory: mvp/server
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: mvp/server/go.mod
+          cache-dependency-path: mvp/server/go.sum
       # -race makes the api parity suite slow on hosted runners (every request also
       # writes an audit event since #7), so the default 10m per-package limit is too tight.
-      - run: go test -race -timeout 25m ./...
-      - run: go build -trimpath -o bin/tessera ./cmd/tessera
+      # Pull requests skip -race for the api shard only (the bottleneck); pushes to
+      # dev/test/prod, merge queue and promotion runs keep full -race everywhere.
+      - name: go test
+        env:
+          SHARD: ${{ matrix.shard }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          race=-race
+          if [ "$EVENT" = pull_request ] && [ "$SHARD" = api ]; then race=; fi
+          mapfile -t pkgs < <(scripts/ci-shard.sh "$SHARD")
+          echo "shard=$SHARD race=${race:-off} packages=${#pkgs[@]}"
+          go test $race -timeout 45m "${pkgs[@]}"
+
+  # Stable required-check name: branch protection / rulesets keep requiring `backend (Go)`.
+  # promote.yml waits on whole CI runs (gh run list --workflow ci.yml), so it needs no change.
+  backend:
+    name: backend (Go)
+    needs: [changes, lint, backend-test]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Aggregate
+        env:
+          GO_CHANGED: ${{ needs.changes.outputs.go }}
+          LINT: ${{ needs.lint.result }}
+          TESTS: ${{ needs.backend-test.result }}
+        run: |
+          if [ "$GO_CHANGED" != true ]; then echo "no Go changes; skipped"; exit 0; fi
+          echo "lint=$LINT tests=$TESTS"
+          [ "$LINT" = success ] && [ "$TESTS" = success ]
 
   frontend:
     needs: changes
