@@ -420,7 +420,7 @@ func (s *Server) mcpListDecisions(r *http.Request, p *params) (int, any, error) 
 	if err != nil {
 		return 0, nil, err
 	}
-	ds, err := tx.MCPDecisions(boundedLimit(p.queryInt("limit", 200, ptr64(1), ptr64(500)), 200, 500))
+	ds, err := tx.MCPDecisions(boundedLimit(p.queryInt("limit", 200, ptr64(1), ptr64(mcpMaxLimit)), 200))
 	if err != nil {
 		return 0, nil, err
 	}
@@ -448,9 +448,12 @@ func ptr64(v int64) *int64 { return &v }
 // boundedLimit converts a query limit to int only inside 1..max (the validator
 // has already refused anything else with a 422; this keeps the conversion safe
 // on its own, on any int width).
-func boundedLimit(v int64, def, max int) int {
-	if v < 1 || v > int64(max) {
+func boundedLimit(v int64, def int) int {
+	if v < 1 || v > mcpMaxLimit {
 		return def
 	}
 	return int(v)
 }
+
+// mcpMaxLimit is the largest page of MCP decisions one request returns.
+const mcpMaxLimit = 500
