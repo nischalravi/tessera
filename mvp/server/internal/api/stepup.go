@@ -198,7 +198,7 @@ func (s *Server) finishStepUp(w http.ResponseWriter, r *http.Request, tenant sto
 			reason = "subject_mismatch"
 		} else if user.Status != "active" {
 			reason = "user_disabled"
-		} else if off, err := auth.IdentityDisabled(tx, user); err != nil {
+		} else if off, err := auth.IdentityInactive(tx, user); err != nil {
 			return err
 		} else if off {
 			reason = auth.FailIdentityDisabled

@@ -27,7 +27,8 @@ const (
 	FailExpired        = "session_expired"
 	FailRevoked        = "session_revoked"
 	FailUserDisabled   = "user_disabled"
-	// FailIdentityDisabled: the user's linked governed identity is disabled.
+	// FailIdentityDisabled: the user's linked governed identity is not active
+	// (disabled, terminated or merged; #316, #331).
 	FailIdentityDisabled = "identity_disabled"
 	FailTenantInactive   = "tenant_inactive"
 )
@@ -162,7 +163,7 @@ func (a *Authenticator) authenticateCookie(r *http.Request) (*Principal, string,
 			reason = FailUserDisabled
 			return nil
 		}
-		if off, err := IdentityDisabled(tx, u); err != nil {
+		if off, err := IdentityInactive(tx, u); err != nil {
 			return err
 		} else if off {
 			reason = FailIdentityDisabled
