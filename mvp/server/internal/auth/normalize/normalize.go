@@ -66,6 +66,7 @@ const (
 	GenericSAML   = "generic_saml"
 	GitHub        = "github"
 	GenericOAuth2 = "generic_oauth2"
+	GenericCAS    = "generic_cas"
 	DevMock       = "dev_mock"
 )
 
@@ -117,7 +118,7 @@ type Mapping struct {
 	// device_compliant.
 	DeviceManagedClaim   string `json:"device_managed_claim,omitempty"`
 	DeviceCompliantClaim string `json:"device_compliant_claim,omitempty"`
-	// DevEmulation pins the dev_mock emulation (okta | entra | generic | saml | github);
+	// DevEmulation pins the dev_mock emulation (okta | entra | generic | saml | github | cas);
 	// empty infers it from the claims.
 	DevEmulation string `json:"dev_emulation,omitempty"`
 }
@@ -205,6 +206,9 @@ func Normalize(conn Connection, req Requested, c Claims) (Result, error) {
 		r, err = generic(conn, req, c)
 	case GenericSAML:
 		r, err = saml(conn, req, c)
+	case GenericCAS: // attributes only (no class ref): amr_attribute + phr_amr; a CAS login is at least AAL1
+		r, err = saml(conn, Requested{}, Claims{Subject: c.Subject, Attributes: c.Attributes})
+		r.AAL = max(r.AAL, 1)
 	case GitHub, GenericOAuth2:
 		r = Result{Subject: c.Subject, AAL: 1} // oauth2: nothing proves the factor
 	default:
@@ -286,6 +290,8 @@ func devEmulation(m Mapping, c Claims) string {
 		return GenericSAML
 	case "github":
 		return GitHub
+	case "cas":
+		return GenericCAS
 	}
 	switch {
 	case c.ClassRef != "" || c.Attributes != nil: // a SAML assertion (the dev IdP's SAML endpoints)

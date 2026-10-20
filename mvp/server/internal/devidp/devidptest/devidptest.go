@@ -47,7 +47,7 @@ func Start(tb testing.TB, cfg devidp.Config) *IdP {
 			ID:     ClientID,
 			Secret: ClientSecret,
 			RedirectURIs: []string{"http://127.0.0.1:*/callback", "http://127.0.0.1:*/api/auth/oidc/*/callback",
-				"http://127.0.0.1:*/api/auth/oauth2/*/callback"},
+				"http://127.0.0.1:*/api/auth/oauth2/*/callback", "http://127.0.0.1:*/api/auth/cas/*/callback"},
 		}}
 	}
 	srv, err := devidp.New(cfg)

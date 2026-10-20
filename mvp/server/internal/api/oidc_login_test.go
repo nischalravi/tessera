@@ -74,7 +74,7 @@ func newOIDCEnv(t *testing.T, users ...devidp.User) *oidcEnv {
 }
 
 // authEnvOpts adds seeded dev_mock connections besides the OIDC one.
-type authEnvOpts struct{ saml, github bool }
+type authEnvOpts struct{ saml, github, cas bool }
 
 // newAuthEnv is newOIDCEnv, with the dev_mock SAML and GitHub connections
 // seeded too when asked.
@@ -89,7 +89,8 @@ func newAuthEnv(t testing.TB, o authEnvOpts, users ...devidp.User) *oidcEnv {
 		users = append(users, newbie)
 	}
 	idp := devidptest.Start(t, devidp.Config{Now: clk.now, Users: users, Clients: []devidp.Client{{ID: oidcClientID,
-		Secret: oidcSecret, RedirectURIs: []string{"http://127.0.0.1:*/api/auth/oidc/*/callback", "http://127.0.0.1:*/api/auth/oauth2/*/callback"}}}})
+		Secret: oidcSecret, RedirectURIs: []string{"http://127.0.0.1:*/api/auth/oidc/*/callback", "http://127.0.0.1:*/api/auth/oauth2/*/callback",
+			"http://127.0.0.1:*/api/auth/cas/*/callback"}}}})
 	sealer, err := seal.New(seal.RandomBytes(seal.KeySize))
 	if err != nil {
 		t.Fatal(err)
@@ -99,7 +100,7 @@ func newAuthEnv(t testing.TB, o authEnvOpts, users ...devidp.User) *oidcEnv {
 	if o.saml {
 		client.SAMLCert = idp.SAMLCertificatePEM()
 	}
-	client.GitHub = o.github
+	client.GitHub, client.CAS = o.github, o.cas
 	tenants := seed.WithDevIdPClient([]seed.Tenant{
 		{ID: seed.LarkspurID, Slug: seed.LarkspurSlug, Name: "Larkspur Labs", Connectors: []connectors.Connector{connectors.Tiny{Now: testkit.Now}}},
 		{ID: seed.GlobexID, Slug: seed.GlobexSlug, Name: "Globex", Connectors: []connectors.Connector{connectors.Tiny{Now: testkit.Now, Sentinel: "G"}}},

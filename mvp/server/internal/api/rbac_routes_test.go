@@ -390,6 +390,7 @@ GET    /api/auth/login                               public
 GET    /api/auth/oidc/{connection_id}/callback       public
 GET    /api/auth/saml/{connection_id}/metadata       public
 POST   /api/auth/saml/{connection_id}/acs            public
+GET    /api/auth/cas/{connection_id}/callback        public
 GET    /t/{slug}/bootstrap                           public
 GET    /api/admin/users                              admin.read      -  # issue #16
 POST   /api/admin/users/{user_id}/disable            admin.users.disable STEP_UP_ADMIN  # issue #16

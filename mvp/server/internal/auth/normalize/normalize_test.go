@@ -62,6 +62,11 @@ func entraClaims(amr []string, acrs ...string) normalize.Claims {
 	return normalize.Claims{Subject: "pairwise-sub-not-the-user", TID: tenantGUID, OID: oid, AMR: amr, ACRS: acrs, AuthTime: &t}
 }
 
+func casClaims(amr ...string) normalize.Claims {
+	t := at
+	return normalize.Claims{Subject: "jdoe", Attributes: map[string][]string{"amr": amr}, AuthTime: &t}
+}
+
 func samlClaims(classRef string, amr ...string) normalize.Claims {
 	t := at
 	c := normalize.Claims{Subject: "persistent-nameid", ClassRef: classRef, AuthTime: &t}
@@ -202,6 +207,16 @@ var rows = []row{
 		Mapping: normalize.Mapping{PhrClassRefs: []string{"urn:devidp:ac:phr"}}},
 		normalize.Requested{}, samlClaims("urn:devidp:ac:phr"),
 		want{1, false, "none", normalize.ACRAAL1, "persistent-nameid", nil}},
+
+	// CAS: amr-style attribute values only, when configured (rule 3)
+	{"cas phr by configured amr attribute", normalize.Connection{Profile: normalize.GenericCAS,
+		Mapping: normalize.Mapping{AMRAttribute: "amr", PhrAMR: [][]string{{"hwk", "user"}}}},
+		normalize.Requested{}, casClaims("hwk", "user", "mfa"), want{2, true, "amr", normalize.ACRPhr, "jdoe", nil}},
+	{"cas mfa without phr", normalize.Connection{Profile: normalize.GenericCAS,
+		Mapping: normalize.Mapping{AMRAttribute: "amr", PhrAMR: [][]string{{"hwk", "user"}}}},
+		normalize.Requested{}, casClaims("pwd", "otp", "mfa"), want{2, false, "none", normalize.ACRAAL2, "jdoe", nil}},
+	{"cas amr not configured", normalize.Connection{Profile: normalize.GenericCAS}, normalize.Requested{},
+		casClaims("hwk", "user", "mfa"), want{1, false, "none", normalize.ACRAAL1, "jdoe", nil}},
 
 	// OAuth 2.0-only providers: AAL1 at most, never phr, not even attested
 	{"github", normalize.Connection{Profile: normalize.GitHub}, normalize.Requested{}, claims("12345", ""),

@@ -88,6 +88,19 @@ type DevIdPClient struct {
 	// GitHub seeds a dev_mock OAuth 2.0 connection to the dev IdP's
 	// GitHub emulation (no ID token; AAL1 sign-ins), with the same secret.
 	GitHub bool
+	// CAS seeds a dev_mock CAS 3.0 connection to the dev IdP's /cas server.
+	CAS bool
+}
+
+// devCASConnection is the dev_mock CAS connection to the dev IdP at issuer:
+// phishing resistance from the amr attribute the dev IdP releases.
+func devCASConnection(issuer string, domains json.RawMessage, now time.Time) *store.IdPConnection {
+	server := issuer + "/cas"
+	return &store.IdPConnection{ID: uuid.New(), Name: "Dev IdP (CAS)", Protocol: "cas", Profile: store.ProfileDevMock,
+		Status: "active", VerifiedDomains: domains, Issuer: &server, SubjectSource: "cas_user",
+		AttributeMap: json.RawMessage(`{"groups":"memberOf"}`),
+		AuthnMapping: json.RawMessage(`{"dev_emulation":"cas","amr_attribute":"amr","phr_amr":[["hwk","user"],["swk","user"]]}`),
+		PinCerts:     true, JITProvisioning: false, DefaultRole: store.RoleViewer, CreatedAt: now, UpdatedAt: now}
 }
 
 // DevGitHubID is the dev IdP's GitHub-style numeric id for a subject
@@ -214,6 +227,13 @@ func seedAuth(c *store.TenantTx, t Tenant, now time.Time) error {
 		}
 		conns = append(conns, gc)
 	}
+	if dc := t.DevIdPClient; dc != nil && dc.CAS {
+		cc := devCASConnection(issuer, domains, now)
+		if err := c.InsertIdPConnection(cc); err != nil {
+			return fmt.Errorf("seed: dev IdP CAS connection: %w", err)
+		}
+		conns = append(conns, cc)
+	}
 	for _, u := range t.Users {
 		email := u.Email
 		pu := &store.PlatformUser{Email: &email, DisplayName: u.Name, CreatedAt: now}
@@ -234,6 +254,8 @@ func seedAuth(c *store.TenantTx, t Tenant, now time.Time) error {
 				iss = *cn.IdPEntityID
 			case "oauth2":
 				iss, sub = issuer, DevGitHubID(u.Subject)
+			case "cas":
+				iss = *cn.Issuer
 			}
 			if err := c.InsertExternalLogin(&store.ExternalLogin{UserID: pu.ID, IdPConnectionID: cn.ID, Issuer: iss,
 				Subject: sub, CreatedAt: now}); err != nil {
