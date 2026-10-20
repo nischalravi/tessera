@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
@@ -27,6 +28,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/requests"
 	"github.com/nischalravi/tessera/mvp/server/internal/sod"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/worker"
 )
 
 // The durable job queue (issue #300). The background work that used to be one
@@ -76,6 +78,15 @@ func (s *Server) newQueue() *queue.Queue {
 	q.Register(jobs.SweepDrift, queue.Kind{Handler: tracked(jobs.SweepDrift, s.queueDriftSweep), Actor: "drift.sweeper"})
 	q.Register(jobs.GuestLifecycle, queue.Kind{Handler: tracked(jobs.GuestLifecycle, s.queueGuestLifecycleSweep), Actor: guestlife.Sweeper})
 	q.Register(jobs.Maintenance, queue.Kind{Handler: s.queueMaintenance, Actor: "queue.worker"})
+	// The worker kinds (issue #302): run here unless a `tessera worker` is
+	// meant to. provision_push is not registered here: the process keeps the
+	// provisioning loop (RunProvisioning), which the serve wiring skips when
+	// the kind is external.
+	if kinds := s.inProcessKinds(); len(kinds) > 0 {
+		if err := s.workerDeps().Register(q, kinds, nil); err != nil {
+			panic(err) // a programming error, found at startup
+		}
+	}
 	every := "@every " + SweepInterval.String()
 	for _, k := range []string{jobs.JITSweep, jobs.SweepRequests, jobs.SweepLifecycle, jobs.SweepAdminChanges, jobs.ContainmentRetry, jobs.SweepSoDMitigations, jobs.GuestLifecycle, jobs.SweepSSFPoll} {
 		q.Schedule(k, k, every, maxSweepAttempts)
@@ -84,6 +95,26 @@ func (s *Server) newQueue() *queue.Queue {
 	q.Schedule(jobs.Maintenance, jobs.Maintenance, "@every "+jobMaintainGap.String(), 1)
 	return q
 }
+
+// workerDeps are the handlers of the worker kinds, built on this server's
+// parts (so an on-demand sync and a queued one run the same code).
+func (s *Server) workerDeps() *worker.Deps {
+	return &worker.Deps{DB: s.store, Clock: func() time.Time { return s.clock() }, Log: s.log.With("component", "worker"),
+		Connectors: s.cfg.Connectors, Provision: s.prov, SyncSchedule: s.cfg.ConnectorSyncSchedule}
+}
+
+// inProcessKinds are the queue kinds of the worker pool that this process
+// registers: connector_sync unless it is external. (provision_push is run by
+// RunProvisioning, see newQueue.)
+func (s *Server) inProcessKinds() []string {
+	if slices.Contains(s.cfg.ExternalKinds, jobs.ConnectorSync) {
+		return nil
+	}
+	return []string{jobs.ConnectorSync}
+}
+
+// ExternalKind reports whether kind is run by workers rather than this process.
+func (s *Server) ExternalKind(kind string) bool { return slices.Contains(s.cfg.ExternalKinds, kind) }
 
 // Queue is the job queue (tests drive it with Tick and Wait).
 func (s *Server) Queue() *queue.Queue { return s.queue }
@@ -250,6 +281,7 @@ func (s *Server) queueMaintenance(ctx context.Context, j queue.Job) (any, error)
 func (s *Server) registerQueueRoutes() {
 	s.handle(http.MethodGet, "/api/queue/jobs", read, need(auth.PermJobsRead), s.listQueueJobs)
 	s.handle(http.MethodGet, "/api/queue/schedules", read, need(auth.PermJobsRead), s.listQueueSchedules)
+	s.handle(http.MethodGet, "/api/queue/workers", read, need(auth.PermJobsRead), s.listQueueWorkers)
 	s.handle(http.MethodPost, "/api/queue/jobs/{job_id}/retry", write, needStepUp(auth.PermJobsManage, auth.StepUpPolicy), s.retryQueueJob)
 }
 
@@ -338,6 +370,49 @@ func (s *Server) listQueueSchedules(_ http.ResponseWriter, r *http.Request, _ *p
 	for _, v := range ss {
 		out = append(out, queueScheduleView{Name: v.Name, Kind: v.Kind, Spec: v.Spec, Enabled: v.Enabled,
 			MaxAttempts: v.MaxAttempts, NextRunAt: v.NextRunAt.UTC().Format(time.RFC3339), LastEnqueuedAt: isoPtr(v.LastEnqueuedAt)})
+	}
+	return out, nil
+}
+
+type queueWorkerView struct {
+	WorkerID        string   `json:"worker_id"`
+	Mode            string   `json:"mode"`
+	Status          string   `json:"status"` // healthy | stale
+	Hostname        string   `json:"hostname"`
+	PID             int      `json:"pid"`
+	Version         string   `json:"version"`
+	Kinds           []string `json:"kinds"`
+	Concurrency     int      `json:"concurrency"`
+	Running         int      `json:"running"`
+	StartedAt       string   `json:"started_at"`
+	LastHeartbeatAt string   `json:"last_heartbeat_at"`
+	LagSeconds      int      `json:"lag_seconds"` // since the last heartbeat
+}
+
+// listQueueWorkers shows the workers that serve the queue and when each last
+// beat: a worker whose last beat is older than worker.StaleAfter is stale
+// (crashed or cut off; its jobs return when their leases expire).
+func (s *Server) listQueueWorkers(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
+	ws, err := store.TxFrom(r.Context()).QueueWorkers()
+	if err != nil {
+		return nil, err
+	}
+	now := s.clock()
+	out := make([]queueWorkerView, 0, len(ws))
+	for _, w := range ws {
+		lag := max(0, int(now.Sub(w.LastHeartbeatAt).Seconds()))
+		st := "healthy"
+		if now.Sub(w.LastHeartbeatAt) > worker.StaleAfter {
+			st = "stale"
+		}
+		kinds := []string{}
+		if w.Kinds != "" {
+			kinds = strings.Split(w.Kinds, ",")
+		}
+		out = append(out, queueWorkerView{WorkerID: w.WorkerID, Mode: w.Mode, Status: st, Hostname: w.Hostname, PID: w.PID,
+			Version: w.Version, Kinds: kinds, Concurrency: w.Concurrency, Running: w.Running,
+			StartedAt: w.StartedAt.UTC().Format(time.RFC3339), LastHeartbeatAt: w.LastHeartbeatAt.UTC().Format(time.RFC3339),
+			LagSeconds: lag})
 	}
 	return out, nil
 }

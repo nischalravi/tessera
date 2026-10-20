@@ -48,6 +48,9 @@ type Executor struct {
 	Allow []safedial.AllowEntry
 	Creds CredentialStore
 	New   ProberFactory
+	// NewSyncer builds the directory reader of pulled sync jobs (nil: the
+	// agent answers them "unsupported").
+	NewSyncer SyncerFactory
 	// Resolver replaces DNS (tests); nil means the system resolver.
 	Resolver safehttp.Resolver
 	// TestDial is safedial.Options.TestDial, for tests only.
@@ -125,6 +128,87 @@ func (e *Executor) Execute(ctx context.Context, j Job) (res Result) {
 		return fail(CodeFailed, "result could not be encoded")
 	}
 	res.Payload = b
+	return res
+}
+
+// SyncLimits are the bounds a Syncer must stay within.
+type SyncLimits struct{ Accounts, Groups, Members int }
+
+// Syncer reads the whole directory of one connection (read-only) and returns
+// the typed listing. cmd/tessera-agent supplies the LDAP one; a Syncer that
+// finds more than a limit returns an error rather than a partial listing.
+type Syncer interface {
+	Discover(ctx context.Context, lim SyncLimits) (*SyncResult, error)
+}
+
+// SyncerFactory builds the Syncer for a pulled job, like ProberFactory.
+type SyncerFactory func(ProberSpec) (Syncer, error)
+
+// ExecuteSync runs one pulled sync job and returns the report to send. Like
+// Execute it checks the typed arguments, then the local allowlist, before
+// anything is resolved or dialed, reads the credential only from the local
+// store, and never puts the credential in the report.
+func (e *Executor) ExecuteSync(ctx context.Context, j PulledJob) (res PullResult) {
+	res.JobID = j.ID
+	fail := func(code, msg string) PullResult {
+		res.Error = &ResultError{Code: code, Message: msg}
+		return res
+	}
+	if j.Kind != KindSync {
+		return fail(CodeUnknownOp, "not a Directory Agent job kind")
+	}
+	if e.NewSyncer == nil {
+		return fail(CodeUnsupported, "this agent build cannot run syncs")
+	}
+	if j.ID == "" || len(j.ID) > 64 {
+		return fail(CodeBadRequest, "job id is required")
+	}
+	if err := j.Spec.Validate(); err != nil {
+		return fail(CodeBadRequest, err.Error())
+	}
+	if !safedial.Listed(e.Allow, j.Spec.Target.Host, j.Spec.Target.Port) {
+		return fail(CodeTargetNotAllowed, "target is not on this agent's local allowlist")
+	}
+	pw, err := e.Creds.Get(j.Spec.Config.CredName)
+	if err != nil {
+		if errors.Is(err, ErrNoCredential) {
+			return fail(CodeNoCredential, "no credential of that name on this agent")
+		}
+		return fail(CodeFailed, "the local credential store could not be read")
+	}
+	var roots *x509.CertPool
+	if j.Spec.Config.CABundle != "" {
+		roots = x509.NewCertPool()
+		if !roots.AppendCertsFromPEM([]byte(j.Spec.Config.CABundle)) {
+			return fail(CodeBadRequest, "ca_bundle holds no certificate")
+		}
+	}
+	d, err := safedial.New(safedial.Options{Env: config.Prod, AgentLocal: true, Allow: e.Allow, RootCAs: roots,
+		Resolver: e.Resolver, TestDial: e.TestDial})
+	if err != nil {
+		return fail(CodeFailed, "dialer: "+err.Error())
+	}
+	sy, err := e.NewSyncer(ProberSpec{Target: j.Spec.Target, Config: j.Spec.Config, Password: pw, RootCAs: roots, Dialer: d})
+	if err != nil {
+		return fail(CodeBadRequest, err.Error())
+	}
+	limit := SyncTimeout
+	if t := time.Duration(j.TimeoutSecs) * time.Second; t > 0 && t < limit {
+		limit = t
+	}
+	ctx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+	out, err := sy.Discover(ctx, SyncLimits{Accounts: MaxSyncAccounts, Groups: MaxSyncGroups, Members: MaxSyncMembers})
+	if err != nil {
+		return fail(codeOf(err), safeMessage(err, pw))
+	}
+	if out == nil {
+		return fail(CodeFailed, "the directory returned no listing")
+	}
+	if err := out.Validate(); err != nil {
+		return fail(CodeFailed, err.Error())
+	}
+	res.Sync = out
 	return res
 }
 

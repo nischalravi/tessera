@@ -42,6 +42,10 @@ type Service struct {
 	DB    *store.DB
 	Hub   *Hub
 	Clock timeutil.Clock
+	// Recorder ingests a pulled sync (see pull.go); without it a report is refused.
+	Recorder SyncRecorder
+	// PullPoll is how often a long-poll looks for work (2 s).
+	PullPoll time.Duration
 }
 
 // HashCode is the SHA-256 (hex) under which a code is stored and looked up.
@@ -222,6 +226,11 @@ func (s *Service) Revoke(c *store.TenantTx, id, actor string, now time.Time) err
 	if _, err := c.RecordAudit(store.AuditRecord{At: now, Action: "agent.revoked", LegacyActor: actor,
 		TargetType: "directory_agent", TargetID: id,
 		Detail: ojson.Object{{Key: "agent_id", Value: id}}}); err != nil {
+		return err
+	}
+	// pulled jobs are cancelled in the same transaction, so a revoked agent's
+	// work is never handed to anything else
+	if _, err := c.CancelAgentJobs(id, now); err != nil {
 		return err
 	}
 	if s.Hub != nil {

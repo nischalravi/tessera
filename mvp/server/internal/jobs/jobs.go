@@ -46,11 +46,17 @@ const (
 	// GuestLifecycle is the guest lifecycle sweep: reminders, transfer deadlines,
 	// step-up renewals, conversions, grace and retention (issue #74).
 	GuestLifecycle = "guest_lifecycle"
+
+	// Kinds a `tessera worker` can run outside the API process (issue #302):
+	// ConnectorSync reads the connectors (and queues sync jobs for the remote
+	// agents), ProvisionPush sends a tenant's due provisioning operations.
+	ConnectorSync = "connector_sync"
+	ProvisionPush = "provision_push"
 )
 
 // Kinds lists every kind, for filters.
 var Kinds = []string{Sync, Provision, Validation, DryRun, HealthRerun, JITSweep, AuditAnchor,
-	SweepRequests, SweepLifecycle, SweepAdminChanges, ContainmentRetry, SweepSoDMitigations, SoDMitigationExpire, SweepDrift, SweepSSFPoll, Maintenance, GuestLifecycle}
+	SweepRequests, SweepLifecycle, SweepAdminChanges, ContainmentRetry, SweepSoDMitigations, SoDMitigationExpire, SweepDrift, SweepSSFPoll, Maintenance, GuestLifecycle, ConnectorSync, ProvisionPush}
 
 // Idempotent reports whether running a kind again with the same input is
 // safe: it reads a source and converges, or re-checks. Provisioning is not:

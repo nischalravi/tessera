@@ -32,7 +32,7 @@ func ServerTLSConfig(certFile, keyFile string) (*tls.Config, error) {
 	}, nil
 }
 
-// Handler serves the agent API (PathEnrol, PathHeartbeat, PathPoll,
+// Handler serves the agent API (PathEnrol, PathHeartbeat, PathPoll, PathClaim, PathReport,
 // PathResult). Mount it only on the mTLS listener: it reads the client key
 // from the TLS connection state and refuses a request without one. pollWait
 // is how long a poll is held (PollWait in production).
@@ -44,6 +44,10 @@ func (s *Service) Handler(pollWait time.Duration) http.Handler {
 		s.handlePoll(w, r, p, pollWait)
 	}))
 	mux.HandleFunc("POST "+PathResult, s.authed(s.handleResult))
+	mux.HandleFunc("POST "+PathClaim, s.authed(func(w http.ResponseWriter, r *http.Request, p *Principal) {
+		s.handleClaim(w, r, p, pollWait)
+	}))
+	mux.HandleFunc("POST "+PathReport, s.authed(s.handleReport))
 	return noStore(mux)
 }
 
@@ -193,4 +197,49 @@ func (s *Service) handleResult(w http.ResponseWriter, r *http.Request, p *Princi
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *Service) handleClaim(w http.ResponseWriter, r *http.Request, p *Principal, wait time.Duration) {
+	var empty struct{}
+	if r.ContentLength != 0 && !decode(w, r, 1<<10, &empty) {
+		return
+	}
+	j, err := s.Claim(r.Context(), p, wait)
+	switch {
+	case errors.Is(err, ErrUnauthorized):
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
+	case err != nil && r.Context().Err() != nil:
+		// the agent went away mid-poll
+		w.WriteHeader(http.StatusNoContent)
+	case err != nil:
+		writeErr(w, http.StatusInternalServerError, "internal")
+	case j == nil:
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		writeJSON(w, http.StatusOK, j)
+	}
+}
+
+func (s *Service) handleReport(w http.ResponseWriter, r *http.Request, p *Principal) {
+	var res PullResult
+	if !decode(w, r, MaxSyncResultBytes, &res) {
+		return
+	}
+	if res.JobID == "" || len(res.JobID) > 64 ||
+		(res.Error != nil && (len(res.Error.Code) > 64 || len(res.Error.Message) > 512 || res.Error.Code == "revoked")) {
+		writeErr(w, http.StatusBadRequest, "invalid_body")
+		return
+	}
+	switch err := s.Report(r.Context(), p, res); {
+	case errors.Is(err, ErrUnknownJob):
+		writeErr(w, http.StatusNotFound, "unknown_job")
+	case errors.Is(err, ErrUnauthorized):
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
+	case errors.Is(err, ErrBadInput):
+		writeErr(w, http.StatusBadRequest, "invalid_body")
+	case err != nil:
+		writeErr(w, http.StatusInternalServerError, "internal")
+	default:
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	}
 }

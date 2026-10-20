@@ -68,6 +68,14 @@ func (r *Runner) Run(ctx context.Context) error {
 		}
 	}()
 
+	if r.Exec.NewSyncer != nil {
+		wg.Add(1)
+		go func() { // pulled syncs, one at a time
+			defer wg.Done()
+			r.pullLoop(ctx, refused)
+		}()
+	}
+
 	sem := make(chan struct{}, r.MaxParallel)
 	backoff := time.Second
 	for ctx.Err() == nil {
@@ -112,6 +120,43 @@ func (r *Runner) Run(ctx context.Context) error {
 		return ErrAgentRefused
 	default:
 		return nil
+	}
+}
+
+// pullLoop long-polls PathClaim, runs each pulled sync and reports it. It is
+// outbound only, like the probe poll, and runs one sync at a time (a sync reads
+// a whole directory).
+func (r *Runner) pullLoop(ctx context.Context, refused func(error) bool) {
+	backoff := time.Second
+	wait := func() {
+		select {
+		case <-ctx.Done():
+		case <-time.After(backoff):
+		}
+		if backoff < 30*time.Second {
+			backoff *= 2
+		}
+	}
+	for ctx.Err() == nil {
+		j, err := r.Client.Claim(ctx)
+		if err != nil {
+			if ctx.Err() == nil && !refused(err) {
+				r.Log.Warn("claiming a job failed", "err", err)
+				wait()
+			}
+			continue
+		}
+		backoff = time.Second
+		if j == nil {
+			continue
+		}
+		res := r.Exec.ExecuteSync(ctx, *j)
+		if err := r.Client.Report(ctx, res); err != nil && ctx.Err() == nil {
+			if !refused(err) {
+				// the lease expires and the job is claimed again
+				r.Log.Warn("reporting a job failed", "job", j.ID, "err", err)
+			}
+		}
 	}
 }
 

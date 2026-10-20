@@ -526,6 +526,27 @@ func TestAgentListenerConfig(t *testing.T) {
 	}
 }
 
+// TestExternalWorkerKinds (issue #302): serve stops running the listed worker
+// kinds in-process; an unknown kind is refused (a typo must not silently leave
+// work un-run), repeats collapse, and the default is to run everything here.
+// Prod still refuses the private-network allowlist that remote agents replace.
+func TestExternalWorkerKinds(t *testing.T) {
+	c, err := config.Load(env(with(safeProd(), "TESSERA_EXTERNAL_WORKER_KINDS", " provision_push, connector_sync,provision_push ",
+		"TESSERA_CONNECTOR_SYNC_SCHEDULE", "@every 15m")))
+	if err != nil || !slices.Equal(c.ExternalWorkerKinds, []string{"connector_sync", "provision_push"}) || c.ConnectorSyncSchedule != "@every 15m" {
+		t.Fatalf("prod with external kinds: %v %+v", err, c)
+	}
+	if c, err := config.Load(env(safeProd())); err != nil || len(c.ExternalWorkerKinds) != 0 || c.ConnectorSyncSchedule != "" {
+		t.Fatalf("default runs every kind in-process: %v %+v", err, c)
+	}
+	if _, err := config.Load(env(with(safeProd(), "TESSERA_EXTERNAL_WORKER_KINDS", "connector_sync,jit_sweep"))); err == nil {
+		t.Error("an unknown worker kind was accepted")
+	}
+	if _, err := config.Load(env(with(safeProd(), "TESSERA_SAFEDIAL_ALLOW", "10.0.0.0/8:389"))); err == nil {
+		t.Error("prod accepted a private-network allowlist (private directories are reached through a remote agent)")
+	}
+}
+
 // TestTestEnvAndInsecureCookie: TESSERA_ENV=test is a non-production
 // environment; the insecure-cookie fallback is allowed only in dev on a
 // localhost public URL (§11).
