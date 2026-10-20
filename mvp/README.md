@@ -87,8 +87,9 @@ server/
                         company the Python backend generated), registry (TESSERA_CONNECTORS)
       connsync/         shared framework of the production connectors: checkpoints, full vs
                         incremental, bounded backoff, size-bounded retrying client, URL checks
-      okta/ entra/      production read connectors (see Production connectors)
-      all/              registers okta and entra (imported by cmd/tessera)
+      okta/ entra/ google/ workday/
+                        production read connectors (see Production connectors)
+      all/              registers the production connectors (imported by cmd/tessera)
     ingest/             phased, idempotent upsert of connector output (cross-system refs resolve)
     store/              schema, row types and parameterized queries (database/sql, no ORM)
     audit/              hash-chained audit ledger: Record, the http.request middleware (fail-closed
@@ -2778,10 +2779,11 @@ Tessera's keys. `devidp.New` refuses `TESSERA_ENV=prod`. `TestIsolation_DevIdPNo
 (`internal/archtest`) proves from the import graph that `cmd/tessera` and `internal/api` never link
 the dev IdP.
 
-## Production connectors: Okta and Entra ID
+## Production connectors: Okta, Entra ID, Google Workspace and Workday
 
-`TESSERA_CONNECTORS=okta`, `entra` or `okta,entra` (also mixed with `demo-*` names) runs the real
-read connectors instead of the demo ones. The default stays `demo`. Both are read-only (every
+`TESSERA_CONNECTORS=okta`, `entra`, `google`, `workday` or any comma-separated mix (also with
+`demo-*` names) runs the real read connectors instead of the demo ones. The default stays `demo`.
+All four are read-only (every
 request is a GET, except the OAuth token request), send every call through `internal/safehttp`
 (https only, private and link-local addresses refused, redirects and page links pinned to the
 configured host), and never log or audit tokens, secrets, keys or response bodies. Errors carry the
@@ -2803,6 +2805,19 @@ vault references of the connection credential store plug into the same resolver 
 | `TESSERA_ENTRA_GRAPH_URL`, `TESSERA_ENTRA_AUTHORITY_URL` | default `https://graph.microsoft.com` and `https://login.microsoftonline.com`; set for national clouds |
 | `TESSERA_ENTRA_EMIT_IDENTITIES`, `TESSERA_ENTRA_SIGNIN_ACTIVITY` | both default `true` (the second reads last sign-in) |
 | `TESSERA_ENTRA_MAX_INCREMENTAL_AGE` | default none (delta queries report deletions) |
+| `TESSERA_GOOGLE_SERVICE_ACCOUNT_KEY` | reference to the service account's JSON key file (`file:/abs/path` or `env:NAME`); only `client_email`, `private_key` and `private_key_id` are used |
+| `TESSERA_GOOGLE_ADMIN_EMAIL` | the administrator the service account impersonates (domain-wide delegation) |
+| `TESSERA_GOOGLE_CUSTOMER`, `TESSERA_GOOGLE_DOMAIN` | default `my_customer`; optionally limit users to one domain |
+| `TESSERA_GOOGLE_API_URL`, `TESSERA_GOOGLE_TOKEN_URL` | default `https://admin.googleapis.com` and `https://oauth2.googleapis.com/token` |
+| `TESSERA_GOOGLE_EMIT_IDENTITIES`, `TESSERA_GOOGLE_GROUPS`, `TESSERA_GOOGLE_ROLES` | all default `true`; turn groups or roles off when the delegation does not grant their scope (Google refuses the whole token request if one scope is missing) |
+| `TESSERA_GOOGLE_MAX_INCREMENTAL_AGE` | default `24h` (`0` never): a full read repairs group members this often |
+| `TESSERA_WORKDAY_BASE_URL`, `TESSERA_WORKDAY_TENANT` | the tenant's services host (`https://wd2-impl-services1.workday.com`, no path) and the tenant name |
+| `TESSERA_WORKDAY_CLIENT_ID`, `TESSERA_WORKDAY_CLIENT_SECRET` | the Workday API client (secret is a reference) |
+| `TESSERA_WORKDAY_REFRESH_TOKEN` | optional reference: use the refresh-token grant. Without it the client-credentials grant is used |
+| `TESSERA_WORKDAY_TOKEN_URL` | default `<base>/ccx/oauth2/<tenant>/token` |
+| `TESSERA_WORKDAY_WORKERS_PATH`, `TESSERA_WORKDAY_EVENTS_PATH` | default `/ccx/api/v1/{tenant}/workers` and `/ccx/api/v1/{tenant}/workerEvents`; point them at a custom report (RaaS) that returns the JSON below |
+| `TESSERA_WORKDAY_EMIT_IDENTITIES` | `true` (default): Workday is HR-authoritative, its workers are the identities. Set the other connectors' `..._EMIT_IDENTITIES` to `false` |
+| `TESSERA_WORKDAY_EVENT_WINDOW`, `TESSERA_WORKDAY_MAX_INCREMENTAL_AGE` | defaults `720h` (an event older than this is historical) and `24h` (`0` never) |
 
 Minimum read-only permissions:
 
@@ -2814,6 +2829,17 @@ Minimum read-only permissions:
   `GroupMember.Read.All`, `Application.Read.All`, `RoleManagement.Read.Directory`, and optionally
   `AuditLog.Read.All` (last sign-in and usage events; needs Entra ID P1/P2). If Graph refuses
   `signInActivity` (403) the sync goes on without last sign-in. Entra needs no write permission.
+* **Google Workspace.** A service account with domain-wide delegation, granted in the Admin console
+  (Security, API controls, Domain-wide delegation) exactly these read-only scopes, all under
+  `https://www.googleapis.com/auth/`: `admin.directory.user.readonly`,
+  `admin.directory.group.readonly`, `admin.directory.group.member.readonly`,
+  `admin.directory.rolemanagement.readonly`. The impersonated administrator needs a read-only
+  admin role (Users, Groups and Roles read access); no write privilege is used. A 403 on groups or
+  roles degrades to no group or role data; a 403 on users fails the sync. No Reports scope is requested.
+* **Workday.** An API client (Integration System User, "API Clients for Integrations") with the
+  Staffing / Worker Data read domains (for example "Worker Data: Public Worker Reports" and
+  "Worker Data: Workers" view-only) and the scopes for the workers and worker-events endpoints.
+  View-only; no put/post domain is granted.
 
 What is mapped: users become accounts (Okta `lastLogin`, Entra `signInActivity`) and, unless turned
 off, identities keyed by `employeeNumber`/`employeeId` (else `okta:<id>`/`entra:<id>`) with the
@@ -2837,13 +2863,61 @@ re-read on every sync. Rate limits: 429 and 502/503/504 are retried with `Retry-
 when `X-Rate-Limit-Remaining` hits 0. Ingest does not delete accounts and groups that vanish from a
 source; it prunes only connector edges.
 
-Tests run on synthetic recorded fixtures (`okta/testdata`, `entra/testdata`) through an `httptest`
-TLS server. Live tests are skipped unless set (needs-human, never run in CI): `go test
+Google Workspace. Users become accounts (`lastLoginTime`, suspended or archived is `disabled`) and,
+unless turned off, identities keyed by the employee id in `externalIds` (type `organization`, or a
+custom type containing "employee"), else `google:<id>`, with the primary e-mail address. Groups and
+members come from the Directory API (a member of type `GROUP` is a group-in-group `member_of` edge;
+external and customer-wide members are skipped); admin roles from `roleassignments` (users and
+groups) become `role` groups, privileged unless a reader role. The Directory API has no change feed
+(no `updatedMin`; `showDeleted` lists only the last 20 days of deletions), so users, groups and role
+assignments are read on every sync and an incremental sync saves requests by re-reading the members
+only of groups whose `etag` or `directMembersCount` changed; a member swap that changes neither is
+repaired by the periodic full read. OAuth tokens and third-party app access are deferred: listing
+tokens needs `admin.directory.user.security`, which is not read-only, so `StreamEvents` yields
+nothing. Throttling (429, and 403 with reason `rateLimitExceeded` or `userRateLimitExceeded`) is
+retried with back-off.
+
+Workday. Workers become identities (employee id, work e-mail, manager, supervisory organization as
+department, business title, hire and termination dates) and workday accounts, plus supervisory
+organizations as `supervisory_org` groups. Effective-dated events become HRIS events for the existing
+joiner / mover / leaver flow: hire is `joiner`, terminate `leaver`, job change and manager change
+`mover` (a mover always carries `to_team`, so the plan never strips access for a missing value).
+Nothing is applied early: a worker whose hire date is ahead is not an identity yet (only its pending
+joiner exists), a future termination leaves the worker active until its date (the leaver is pending
+with the future `effective_at`), and every event keeps its own effective date. A hire that has taken
+effect and any event older than `EVENT_WINDOW` is emitted as `historical` (ingest marks it
+executed), the first because the identity already came from the worker record. Workers are read with
+`Updated_From=<watermark>`; events with `Updated_From` incrementally and `Effective_From=<now - window>`
+on a full read (which also returns future-dated events entered long ago). The connector does not
+execute events: `jml.ExecuteEvent` does not yet check `effective_at`, so a person can still apply a
+pending future-dated event early. Expected JSON (the default paths and the custom-report shape):
+
+```
+workers  GET {workers path}?limit=100&offset=0[&Updated_From=<RFC 3339>]
+         {"total": N, "data": [{"id", "descriptor", "employeeId", "primaryWorkEmail",
+           "workerType": {"id", "descriptor"}, "businessTitle",
+           "supervisoryOrganization": {"id", "descriptor"}, "manager": {"id", "employeeId"},
+           "hireDate", "terminationDate", "active"}]}
+events   GET {events path}?limit=100&offset=0 &(Updated_From=<RFC 3339> | Effective_From=<date>)
+         {"total": N, "data": [{"id", "type": HIRE|TERMINATE|JOB_CHANGE|MANAGER_CHANGE,
+           "effectiveDate", "reason", "worker": {"id", "employeeId"},
+           "from": {"businessTitle", "supervisoryOrganization", "manager"}, "to": {...}}]}
+```
+
+Tests run on synthetic recorded fixtures (`okta/testdata`, `entra/testdata`, `google/testdata`,
+`workday/testdata`) through an `httptest` TLS server. Live tests are skipped unless set (needs-human, never run in CI): `go test
 ./internal/connectors/okta -run Integration -v` with `TESSERA_OKTA_DEV_ORG_URL` and
 `TESSERA_OKTA_DEV_API_TOKEN` (or `TESSERA_OKTA_DEV_CLIENT_ID` + `TESSERA_OKTA_DEV_PRIVATE_KEY_FILE`
 [+ `TESSERA_OKTA_DEV_KEY_ID`]); `go test ./internal/connectors/entra -run Integration -v` with
-`TESSERA_ENTRA_DEV_TENANT_ID`, `TESSERA_ENTRA_DEV_CLIENT_ID`, `TESSERA_ENTRA_DEV_CLIENT_SECRET`.
-`internal/connectors/connsync` is what Google Workspace and Workday reuse.
+`TESSERA_ENTRA_DEV_TENANT_ID`, `TESSERA_ENTRA_DEV_CLIENT_ID`, `TESSERA_ENTRA_DEV_CLIENT_SECRET`;
+`go test ./internal/connectors/google -run Integration -v` with `TESSERA_GOOGLE_DEV_KEY_FILE` and
+`TESSERA_GOOGLE_DEV_ADMIN_EMAIL`; `go test ./internal/connectors/workday -run Integration -v` with
+`TESSERA_WORKDAY_DEV_BASE_URL`, `TESSERA_WORKDAY_DEV_TENANT`, `TESSERA_WORKDAY_DEV_CLIENT_ID`,
+`TESSERA_WORKDAY_DEV_CLIENT_SECRET` [+ `TESSERA_WORKDAY_DEV_REFRESH_TOKEN`, `..._WORKERS_PATH`,
+`..._EVENTS_PATH`]. The Workday JSON shapes above follow Workday's REST naming but are verified only
+against fixtures: run the live test against an implementation tenant before relying on them.
+`internal/connectors/connsync` is the framework all four share.
+
 ## Command-line sign-in (`tessera-cli`)
 
 The CLI and other non-browser clients use OAuth 2.0, not cookies (design §9.3, §10): Tessera is an

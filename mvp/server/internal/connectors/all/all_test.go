@@ -1,6 +1,7 @@
 package all_test
 
 import (
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/all"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync/connsynctest"
 	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 )
 
@@ -25,9 +27,9 @@ func register(t *testing.T) {
 
 var now = time.Date(2026, 10, 8, 9, 30, 0, 0, time.UTC)
 
-func TestLoadRegistersOktaAndEntra(t *testing.T) {
+func TestLoadRegistersTheProductionConnectors(t *testing.T) {
 	register(t)
-	for _, name := range []string{"okta", "entra"} {
+	for _, name := range []string{"okta", "entra", "google", "workday"} {
 		if _, ok := connectors.Factories[name]; !ok {
 			t.Errorf("connector %q is not registered", name)
 		}
@@ -61,7 +63,15 @@ func TestLoadBuildsTheProductionConnectorsFromTheEnvironment(t *testing.T) {
 	t.Setenv("TESSERA_ENTRA_CLIENT_ID", "cid")
 	t.Setenv("TESSERA_ENTRA_CLIENT_SECRET", "env:TEST_ENTRA_SECRET")
 	t.Setenv("TEST_ENTRA_SECRET", "s")
-	conns, err := connectors.Load("demo-workday,okta,entra", now)
+	t.Setenv("TESSERA_GOOGLE_SERVICE_ACCOUNT_KEY", "env:TEST_GOOGLE_KEY")
+	t.Setenv("TEST_GOOGLE_KEY", testServiceAccountKey(t))
+	t.Setenv("TESSERA_GOOGLE_ADMIN_EMAIL", "admin@example.com")
+	t.Setenv("TESSERA_WORKDAY_BASE_URL", "https://wd2-impl-services1.workday.com")
+	t.Setenv("TESSERA_WORKDAY_TENANT", "fixture_tenant")
+	t.Setenv("TESSERA_WORKDAY_CLIENT_ID", "cid")
+	t.Setenv("TESSERA_WORKDAY_CLIENT_SECRET", "env:TEST_WORKDAY_SECRET")
+	t.Setenv("TEST_WORKDAY_SECRET", "s")
+	conns, err := connectors.Load("demo-workday,okta,entra,google,workday", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,16 +79,18 @@ func TestLoadBuildsTheProductionConnectorsFromTheEnvironment(t *testing.T) {
 	for _, c := range conns {
 		got = append(got, c.TypeName())
 	}
-	if strings.Join(got, ",") != "DemoWorkdayConnector,OktaConnector,EntraConnector" {
+	if strings.Join(got, ",") != "DemoWorkdayConnector,OktaConnector,EntraConnector,GoogleConnector,WorkdayConnector" {
 		t.Errorf("connectors = %v", got)
 	}
 }
 
 func TestLoadRefusesAnUnsafeOrIncompleteConfiguration(t *testing.T) {
 	register(t)
-	for _, tc := range []struct{ name, spec string }{{"okta unconfigured", "okta"}, {"entra unconfigured", "entra"}} {
+	for _, tc := range []struct{ name, spec string }{{"okta unconfigured", "okta"}, {"entra unconfigured", "entra"},
+		{"google unconfigured", "google"}, {"workday unconfigured", "workday"}} {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, k := range []string{"TESSERA_OKTA_ORG_URL", "TESSERA_OKTA_API_TOKEN", "TESSERA_ENTRA_TENANT_ID"} {
+			for _, k := range []string{"TESSERA_OKTA_ORG_URL", "TESSERA_OKTA_API_TOKEN", "TESSERA_ENTRA_TENANT_ID",
+				"TESSERA_GOOGLE_SERVICE_ACCOUNT_KEY", "TESSERA_WORKDAY_BASE_URL"} {
 				t.Setenv(k, "")
 				_ = os.Unsetenv(k)
 			}
@@ -96,4 +108,14 @@ func TestLoadRefusesAnUnsafeOrIncompleteConfiguration(t *testing.T) {
 			t.Errorf("err = %v, want a refusal of a non-https URL", err)
 		}
 	})
+}
+
+// testClient is a safehttp test client that reaches srv.
+func testClient(t testing.TB, srv *connsynctest.Server, maxBody int64) *http.Client {
+	t.Helper()
+	hc, err := safehttp.NewForTest(t, srv.Options(maxBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return hc
 }

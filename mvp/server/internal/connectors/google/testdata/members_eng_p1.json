@@ -1,0 +1,8 @@
+{
+  "kind": "admin#directory#members",
+  "members": [
+    {"id": "10000000001", "email": "ada.fixture@example.com", "type": "USER", "role": "OWNER", "status": "ACTIVE"},
+    {"id": "10000000002", "email": "ben.sample@example.com", "type": "USER", "role": "MEMBER", "status": "SUSPENDED"}
+  ],
+  "nextPageToken": "m2"
+}

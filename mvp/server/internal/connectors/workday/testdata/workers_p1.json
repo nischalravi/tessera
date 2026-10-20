@@ -1,0 +1,42 @@
+{
+  "total": 7,
+  "data": [
+    {
+      "id": "w-1000",
+      "descriptor": "Morgan Lead",
+      "employeeId": "E1000",
+      "primaryWorkEmail": "morgan.lead@example.com",
+      "workerType": {"id": "Employee", "descriptor": "Employee"},
+      "businessTitle": "Engineering Manager",
+      "supervisoryOrganization": {"id": "SUP-100", "descriptor": "Platform Engineering"},
+      "hireDate": "2019-01-07",
+      "terminationDate": null,
+      "active": true
+    },
+    {
+      "id": "w-1001",
+      "descriptor": "Avery Example",
+      "employeeId": "E1001",
+      "primaryWorkEmail": "Avery.Example@Example.com",
+      "workerType": {"id": "Employee", "descriptor": "Employee"},
+      "businessTitle": "Platform Engineer",
+      "supervisoryOrganization": {"id": "SUP-100", "descriptor": "Platform Engineering"},
+      "manager": {"id": "w-1000", "employeeId": "E1000", "descriptor": "Morgan Lead"},
+      "hireDate": "2021-04-12",
+      "active": true
+    },
+    {
+      "id": "w-1002",
+      "descriptor": "Riley Sample",
+      "employeeId": "E1002",
+      "primaryWorkEmail": "riley.sample@example.com",
+      "workerType": {"id": "Employee", "descriptor": "Employee"},
+      "businessTitle": "Support Specialist",
+      "supervisoryOrganization": {"id": "SUP-200", "descriptor": "Customer Support"},
+      "manager": {"id": "w-1000"},
+      "hireDate": "2023-06-01",
+      "terminationDate": "2026-10-01",
+      "active": false
+    }
+  ]
+}

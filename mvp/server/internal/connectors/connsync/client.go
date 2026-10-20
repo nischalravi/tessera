@@ -39,12 +39,27 @@ func (e *StatusError) Error() string {
 	return s
 }
 
-// Unwrap lets errors.Is(err, ErrRateLimited) match an exhausted 429.
+// Unwrap lets errors.Is(err, ErrRateLimited) match an exhausted 429, or an
+// exhausted 403 whose reason is a Google rate-limit reason.
 func (e *StatusError) Unwrap() error {
-	if e.Status == http.StatusTooManyRequests {
+	if e.Status == http.StatusTooManyRequests || IsGoogleRateLimit(e.Status, e.Code) {
 		return ErrRateLimited
 	}
 	return nil
+}
+
+// IsGoogleRateLimit reports whether a status and error reason are a Google API
+// rate limit: Google answers 403 (or 429) with one of these reasons instead of
+// a plain 429. dailyLimitExceeded is not one: waiting seconds does not help.
+func IsGoogleRateLimit(status int, reason string) bool {
+	if status != http.StatusForbidden && status != http.StatusTooManyRequests {
+		return false
+	}
+	switch reason {
+	case "rateLimitExceeded", "userRateLimitExceeded", "quotaExceeded":
+		return true
+	}
+	return false
 }
 
 // Status returns the HTTP status of a *StatusError in err's chain, or 0.
@@ -163,6 +178,10 @@ type Client struct {
 	// OnUnauthorized is called once after a 401; return nil to retry the request
 	// once (for example after dropping a cached token).
 	OnUnauthorized func()
+	// RetryOn, when set, marks further answers as throttling that is retried
+	// like a 429 (Google's 403 rateLimitExceeded). It gets the status and the
+	// short error code, never the body.
+	RetryOn func(status int, code string) bool
 	// Now is the clock (default time.Now).
 	Now func() time.Time
 }
@@ -212,8 +231,8 @@ func (c *Client) Do(ctx context.Context, method, rawURL string, hdr http.Header,
 			reauthed = true
 			c.OnUnauthorized()
 			continue
-		case (resp.Status == http.StatusTooManyRequests || resp.Status == 502 || resp.Status == 503 || resp.Status == 504) &&
-			attempt+1 < b.MaxAttempts:
+		case (resp.Status == http.StatusTooManyRequests || resp.Status == 502 || resp.Status == 503 || resp.Status == 504 ||
+			c.RetryOn != nil && c.RetryOn(resp.Status, errorCode(resp.Body))) && attempt+1 < b.MaxAttempts:
 			wait, ok := ParseRetryAfter(resp.Header.Get("Retry-After"), c.now())
 			if !ok {
 				if d, ok2 := parseResetEpoch(resp.Header.Get("X-Rate-Limit-Reset"), c.now()); ok2 && resp.Status == http.StatusTooManyRequests {
@@ -290,6 +309,12 @@ func errorCode(body []byte) string {
 	case map[string]any:
 		if s, ok := v["code"].(string); ok {
 			code = s
+		} else if errs, ok := v["errors"].([]any); ok && len(errs) > 0 { // Google: error.errors[0].reason
+			if m, ok := errs[0].(map[string]any); ok {
+				if s, ok := m["reason"].(string); ok {
+					code = s
+				}
+			}
 		}
 	}
 	if len(code) > 64 {
