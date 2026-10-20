@@ -1,4 +1,6 @@
 GET /api/health
+GET /api/auth/branding
+GET /api/auth/branding/logo
 POST /public/t/{slug}/claim/start
 POST /public/t/{slug}/claim/verify/send
 POST /public/t/{slug}/claim/verify/check

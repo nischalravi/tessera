@@ -190,6 +190,8 @@ var tables = []string{
 	"helpdesk_cases", "helpdesk_verifications", "helpdesk_signals", "helpdesk_findings",
 	// SIEM sinks (schema/0210_siem.sql)
 	"siem_sinks", "siem_dead_letters",
+	// certificates and rotation state, tenant branding (schema/0410_certificates.sql, 0411_branding.sql)
+	"tenant_certificates", "tenant_branding",
 	// alerting (schema/0209_alerts.sql)
 	"alert_rule_settings", "alerts", "alert_channels", "alert_deliveries", "alert_cursors",
 	// identity disable / enable (schema/0310_identity_disables.sql)
@@ -200,6 +202,8 @@ var tables = []string{
 	"request_drafts",
 	// durable job queue (schema/0320_queue.sql)
 	"queue_jobs", "queue_schedules", "queue_workers", "agent_jobs",
+	// role mining (schema/0420_role_mining.sql)
+	"role_mining_runs", "role_mining_candidates",
 	// configuration transport (schema/0211_config_transport.sql)
 	"config_signing_keys", "config_trusted_signers", "config_imports",
 	// native groups (schema/0280_groups.sql, 0284_groups_engine.sql)

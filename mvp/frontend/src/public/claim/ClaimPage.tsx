@@ -18,6 +18,7 @@ import { Button } from "../../components/Button";
 import { Callout } from "../../components/Feedback";
 import { MessageKey, t } from "../../i18n";
 import { ErrorAlert, PublicHeading as Heading, PublicShell, StatusRegion } from "../PublicShell";
+import { usePublicBranding } from "../useBranding";
 import { dropKey, loadKey, loadNonce, newKey, dropNonce, saveNonce } from "./keystore";
 import { ClaimResult, ClaimView, codeReady, consentChoice, emailOk, normalizeCode, resultFromSearch, signInRedirect, stepIndex, tenantSlug, termsReady, tokenFromHash, viewOf, visibleSteps } from "./model";
 import { publicJwk, signerFor } from "./proof";
@@ -34,6 +35,7 @@ interface Conn {
 
 export default function ClaimPage() {
   const slug = tenantSlug(window.location.hostname, import.meta.env.VITE_TESSERA_TENANT as string | undefined);
+  const branding = usePublicBranding(slug);
   const [conn, setConn] = useState<Conn | null>(null);
   const [status, setStatus] = useState<ClaimStatus | null>(null);
   const [view, setView] = useState<ClaimView>({ kind: "loading" });
@@ -94,7 +96,7 @@ export default function ClaimPage() {
   }, [view.kind, slug]);
 
   return (
-    <PublicShell titleKey="claim.title" brand={status?.tenant}>
+    <PublicShell titleKey="claim.title" brand={status?.tenant} branding={branding}>
       {view.kind === "loading" && <p role="status">{t("claim.opening")}</p>}
       {view.kind === "check_link" && <CheckLink slug={slug} />}
       {status && view.kind !== "check_link" && view.kind !== "loading" && (

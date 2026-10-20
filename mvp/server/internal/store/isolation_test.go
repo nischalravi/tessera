@@ -684,10 +684,14 @@ func TestIsolation_EveryRepoMethodClassified(t *testing.T) {
 		"ConsumeAgentEnrolment": true,
 		// HasPendingRequest has its own test (TestIsolation_PendingRequestUniquePerTenant).
 		"HasPendingRequest": true,
+		// Certificates and branding: TestIsolation_Certificates, TestCertificateLifecycleStore, TestIsolation_Branding.
+		"InsertCertificate": true, "Certificates": true, "Certificate": true, "CertificateKey": true, "NextSAMLCertificate": true,
+		"ActivateCertificate": true, "RetireCertificate": true, "SetIdPSPKey": true,
+		"PutBranding": true, "Branding": true, "BrandingLogo": true, "BrandName": true,
 	}
 	for _, m := range []map[string]bool{keys(listCases), keys(getCases), keys(naturalKeyGets), keys(countCases),
 		keys(mutations), keys(insertCases), readinessCovered(), keysCovered(), auditCovered(), authCovered(), jobsCovered(), provisioningCovered(), correlationCovered(), identityModelCovered(), containmentCovered(), groupsCovered(), groupsEngineCovered(), groupEventsCovered(), groupPrivsCovered(), transportCovered(), alertsCovered(), siemCovered(), claimCovered(), guestAccessCovered(), matchingCovered(), guestLifecycleCovered(), termsCovered(), registrationsCovered(), intakeCovered(), mfaCovered(), agentDiscoveryCovered(), rotationCovered(),
-		flatfileCovered(), containmentPolicyCovered(), ssfCovered(), evidenceCovered(), oauthCovered(), mcpCovered(), approvalsCovered(), lifecycleCovered(), notificationsCovered(), requestsCovered(), rolesCovered(), reviewRolesCovered(), abacCovered(), sodCovered(), sodCtlCovered(), sponsorshipsCovered(), adminCovered(), disablesCovered(), removalsCovered(), requestDraftsCovered(), reviewSchedulesCovered(), ownershipCovered(), queueCovered(), accessModelCovered(), breakGlassCovered(), awsCovered(), accessCovered(), checkpointsCovered(), populationCovered(), helpdeskCovered(), oauthAppsCovered(), groupsAPICovered(), groupAttrsCovered(), groupRulesCovered(), groupPolicyCovered(), groupAttestCovered(), groupLoadersCovered(), groupProvCovered(), groupSinksCovered(), requestSettingsCovered(), sodRemediationCovered(), workersCovered()} {
+		flatfileCovered(), containmentPolicyCovered(), ssfCovered(), evidenceCovered(), oauthCovered(), mcpCovered(), approvalsCovered(), lifecycleCovered(), notificationsCovered(), requestsCovered(), rolesCovered(), reviewRolesCovered(), abacCovered(), sodCovered(), sodCtlCovered(), sponsorshipsCovered(), adminCovered(), disablesCovered(), removalsCovered(), requestDraftsCovered(), reviewSchedulesCovered(), ownershipCovered(), queueCovered(), accessModelCovered(), breakGlassCovered(), awsCovered(), accessCovered(), checkpointsCovered(), populationCovered(), helpdeskCovered(), oauthAppsCovered(), groupsAPICovered(), groupAttrsCovered(), groupRulesCovered(), groupPolicyCovered(), groupAttestCovered(), groupLoadersCovered(), groupProvCovered(), groupSinksCovered(), requestSettingsCovered(), sodRemediationCovered(), miningCovered(), workersCovered()} {
 		for k := range m {
 			covered[strings.SplitN(k, "/", 2)[0]] = true
 		}
