@@ -17,7 +17,7 @@ type GrantEdge struct {
 	TenantID  tenancy.ID
 	Src, Dst  string
 	Relation  string
-	Source    string // connector | jit | manual
+	Source    string // connector | jit | manual | request | role
 	ExpiresAt *time.Time
 	CreatedAt time.Time
 }
@@ -62,7 +62,10 @@ var (
 	edgesDeleteJIT = tq("grant_edges.delete_jit", `
 		DELETE FROM grant_edges WHERE tenant_id = @tenant AND id = @id AND source = 'jit'`)
 	edgesDeleteExpiredJIT = tq("grant_edges.delete_expired_jit", `
-		DELETE FROM grant_edges WHERE tenant_id = @tenant AND source = 'jit' AND expires_at <= @now`)
+		DELETE FROM grant_edges WHERE grant_edges.tenant_id = @tenant AND grant_edges.source = 'jit'
+			AND grant_edges.expires_at <= @now
+			AND grant_edges.id NOT IN (SELECT r.edge_id FROM access_requests r
+				WHERE r.tenant_id = @tenant AND r.status = 'approved' AND r.edge_id IS NOT NULL)`)
 )
 
 func scanEdge(s scanner) (*GrantEdge, error) {
@@ -112,34 +115,84 @@ func (tx *TenantTx) CountEdges() (int, error) { return tx.count(edgesCount) }
 
 // UpsertConnectorEdge inserts a connector edge or updates the relation of the existing src -> dst edge.
 // A grant revoked inside Tessera (see RevokeEdge) is not brought back.
+//
+// Every change of the edge set also opens or closes a span in edge_history in
+// the same transaction (see EdgeSpan): a new edge opens one at createdAt, a
+// changed relation closes the old one and opens another.
 func (tx *TenantTx) UpsertConnectorEdge(src, dst, relation string, createdAt time.Time) error {
 	if n, err := tx.count(revokedCount, sql.Named("src", src), sql.Named("dst", dst)); err != nil || n > 0 {
 		return err
 	}
-	_, err := tx.exec(edgesUpsertConnector, sql.Named("src", src), sql.Named("dst", dst), sql.Named("relation", relation),
-		sql.Named("created_at", T(createdAt)))
-	return err
+	prev, err := getEdgeOrNil(tx.EdgeBetween(src, dst))
+	if err != nil {
+		return err
+	}
+	if _, err := tx.exec(edgesUpsertConnector, sql.Named("src", src), sql.Named("dst", dst), sql.Named("relation", relation),
+		sql.Named("created_at", T(createdAt))); err != nil {
+		return err
+	}
+	if prev != nil && prev.Relation == relation {
+		return nil
+	}
+	cur, err := tx.EdgeBetween(src, dst)
+	if err != nil {
+		return err
+	}
+	if prev != nil {
+		if err := tx.closeSpan(src, dst, createdAt); err != nil {
+			return err
+		}
+	}
+	return tx.openSpan(cur.ID, src, dst, relation, cur.Source, cur.ExpiresAt, createdAt)
 }
 
-// InsertEdge inserts a grant edge and returns its id.
+func getEdgeOrNil(e *GrantEdge, err error) (*GrantEdge, error) {
+	if errors.Is(err, ErrNotFound) {
+		return nil, nil
+	}
+	return e, err
+}
+
+// InsertEdge inserts a grant edge and returns its id. The edge's history span
+// opens at e.CreatedAt.
 func (tx *TenantTx) InsertEdge(e *GrantEdge) (int64, error) {
 	if err := tx.own(e.TenantID); err != nil {
 		return 0, err
 	}
-	return tx.insert(edgesInsert, sql.Named("src", e.Src), sql.Named("dst", e.Dst), sql.Named("relation", e.Relation),
+	id, err := tx.insert(edgesInsert, sql.Named("src", e.Src), sql.Named("dst", e.Dst), sql.Named("relation", e.Relation),
 		sql.Named("source", e.Source), sql.Named("expires_at", TP(e.ExpiresAt)), sql.Named("created_at", T(e.CreatedAt)))
+	if err != nil {
+		return 0, err
+	}
+	return id, tx.openSpan(id, e.Src, e.Dst, e.Relation, e.Source, e.ExpiresAt, e.CreatedAt)
 }
 
-// SetEdgeExpiry sets a grant edge's expiry.
-func (tx *TenantTx) SetEdgeExpiry(id int64, expires time.Time) error {
-	_, err := tx.exec(edgesSetExpiry, sql.Named("expires_at", T(expires)), sql.Named("id", id))
-	return err
+// SetEdgeExpiry sets a grant edge's expiry as of at: the history span with
+// the old expiry closes at at and a new one opens with the new expiry.
+func (tx *TenantTx) SetEdgeExpiry(id int64, expires, at time.Time) error {
+	e, err := getEdgeOrNil(tx.Edge(id))
+	if err != nil || e == nil {
+		return err
+	}
+	if _, err := tx.exec(edgesSetExpiry, sql.Named("expires_at", T(expires)), sql.Named("id", id)); err != nil {
+		return err
+	}
+	if err := tx.closeSpan(e.Src, e.Dst, at); err != nil {
+		return err
+	}
+	return tx.openSpan(e.ID, e.Src, e.Dst, e.Relation, e.Source, &expires, at)
 }
 
-// DeleteEdge deletes a grant edge by id.
-func (tx *TenantTx) DeleteEdge(id int64) error {
-	_, err := tx.exec(edgesDelete, sql.Named("id", id))
-	return err
+// DeleteEdge deletes a grant edge by id; its history span closes at at.
+func (tx *TenantTx) DeleteEdge(id int64, at time.Time) error {
+	e, err := getEdgeOrNil(tx.Edge(id))
+	if err != nil || e == nil {
+		return err
+	}
+	if _, err := tx.exec(edgesDelete, sql.Named("id", id)); err != nil {
+		return err
+	}
+	return tx.closeSpan(e.Src, e.Dst, at)
 }
 
 // RevokeEdge deletes a grant edge and records a tombstone, so a later connector
@@ -156,7 +209,7 @@ func (tx *TenantTx) RevokeEdge(id int64, at time.Time, reason string) error {
 		sql.Named("at", T(at))); err != nil {
 		return err
 	}
-	return tx.DeleteEdge(id)
+	return tx.DeleteEdge(id, at)
 }
 
 // RevokedGrant is a tombstone left by RevokeEdge.
@@ -187,14 +240,25 @@ func (tx *TenantTx) RevokedGrants() ([]*RevokedGrant, error) {
 	return collect(tx, scanRevoked, revokedList)
 }
 
-// DeleteJITEdge deletes a grant edge by id if it is a JIT edge.
-func (tx *TenantTx) DeleteJITEdge(id int64) error {
-	_, err := tx.exec(edgesDeleteJIT, sql.Named("id", id))
-	return err
+// DeleteJITEdge deletes a grant edge by id if it is a JIT edge; its history
+// span closes at at.
+func (tx *TenantTx) DeleteJITEdge(id int64, at time.Time) error {
+	e, err := getEdgeOrNil(tx.Edge(id))
+	if err != nil || e == nil || e.Source != "jit" {
+		return err
+	}
+	if _, err := tx.exec(edgesDeleteJIT, sql.Named("id", id)); err != nil {
+		return err
+	}
+	return tx.closeSpan(e.Src, e.Dst, at)
 }
 
-// DeleteExpiredJITEdges deletes JIT edges that expired at or before now.
+// DeleteExpiredJITEdges deletes JIT edges that expired at or before now. Their
+// history spans close at the edge's own expiry, not at the (later) sweep.
 func (tx *TenantTx) DeleteExpiredJITEdges(now time.Time) (int64, error) {
+	if _, err := tx.exec(spansCloseExpired, sql.Named("now", T(now))); err != nil {
+		return 0, err
+	}
 	res, err := tx.exec(edgesDeleteExpiredJIT, sql.Named("now", T(now)))
 	if err != nil {
 		return 0, err

@@ -6,229 +6,319 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/store/storetest"
+	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 )
 
-// Third-party OAuth apps (issue #107): a tenant sees and changes only its own
-// apps, grants and sync state; a row naming another tenant's app, identity or
-// account is refused by the guard triggers.
+// OAuth authorization server isolation (design §7.4, §14.4): a tenant sees
+// and changes only its own API clients, device grants and refresh tokens;
+// another tenant's ids and hashes look nonexistent, and rows that reference
+// another tenant's rows are refused.
 
-type oauthSeed struct{ app, grant map[string]string }
-
-func seedOAuth(t *testing.T, f *storetest.Fixture) oauthSeed {
-	t.Helper()
-	out := oauthSeed{app: map[string]string{}, grant: map[string]string{}}
-	for _, tn := range []storetest.Tenant{f.A, f.B} {
-		err := f.DB.InTenant(context.Background(), tn.ID, func(c *store.TenantTx) error {
-			app := &store.OAuthApp{Provider: store.OAuthGoogle, ClientID: "client-" + tn.Slug, Name: "App " + tn.Slug, Publisher: "Acme"}
-			if err := c.UpsertOAuthApp(app, storetest.Now); err != nil {
-				return err
-			}
-			g := &store.OAuthGrant{AppID: app.ID, Provider: app.Provider, GrantKey: "u:alice", ProviderRef: "alice@x.example",
-				Kind: "token", UserRef: "alice@x.example", Scopes: []string{"https://mail.google.com/"}, ConsentType: "user"}
-			if err := c.UpsertOAuthGrant(g, storetest.Now); err != nil {
-				return err
-			}
-			out.app[tn.Slug], out.grant[tn.Slug] = app.ID, g.ID
-			return c.PutOAuthSyncState(&store.OAuthSyncState{Provider: store.OAuthGoogle, Status: "ok", AttemptedAt: storetest.Now,
-				SucceededAt: &storetest.Now, Apps: 1, Grants: 1})
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	return out
+type oauthRows struct {
+	auth    authRows
+	cli     *store.APIClient
+	machine *store.APIClient
+	grant   *store.DeviceGrant
+	rt      *store.RefreshToken
 }
 
-func TestIsolation_OAuthReads(t *testing.T) {
+func seedOAuthRows(t *testing.T, db *store.DB, tid tenancy.ID, tag byte) oauthRows {
+	t.Helper()
+	now := storetest.Now
+	r := oauthRows{auth: seedAuthRows(t, db, tid, tag)}
+	err := db.InTenant(context.Background(), tid, func(c *store.TenantTx) error {
+		r.cli = &store.APIClient{ClientID: "tessera-cli", Name: "Tessera CLI", Kind: store.ClientFirstPartyCLI,
+			GrantTypes: []string{"urn:ietf:params:oauth:grant-type:device_code", "refresh_token"}, TokenEndpointAuthMethod: "none",
+			DPoPRequired: true, AllowedScopes: []string{"tessera:read"}, CreatedAt: now}
+		if err := c.InsertAPIClient(r.cli); err != nil {
+			return err
+		}
+		r.machine = &store.APIClient{ClientID: "tsc_only" + string(tag), Name: "ETL", Kind: store.ClientMachine,
+			GrantTypes: []string{"client_credentials"}, TokenEndpointAuthMethod: "private_key_jwt", DPoPRequired: true,
+			AllowedScopes: []string{"tessera:read"}, Roles: []string{"viewer"}, OwnerUserID: &r.auth.user.ID, CreatedAt: now}
+		if err := c.InsertAPIClient(r.machine); err != nil {
+			return err
+		}
+		r.grant = &store.DeviceGrant{ClientID: "tessera-cli", DeviceCodeHash: hexHash(tag + 10), UserCodeHash: hexHash(tag + 11),
+			Scope: "tessera:read", Interval: 5, CreatedAt: now, ExpiresAt: now.Add(300 * time.Second)}
+		if err := c.InsertDeviceGrant(r.grant); err != nil {
+			return err
+		}
+		r.rt = &store.RefreshToken{TokenHash: hexHash(tag + 12), FamilyID: uuid.New(), SessionID: r.auth.session.ID,
+			UserID: r.auth.user.ID, ClientID: "tessera-cli", DPoPJKT: "0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I",
+			Scope: "tessera:read", IssuedAt: now, ExpiresAt: now.Add(12 * time.Hour), AbsoluteExpiresAt: now.Add(24 * time.Hour)}
+		return c.InsertRefreshToken(r.rt)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+func oauthFixture(t *testing.T) (*storetest.Fixture, oauthRows, oauthRows) {
+	t.Helper()
 	f := storetest.TwoTenants(t)
-	ids := seedOAuth(t, f)
+	return f, seedOAuthRows(t, f.DB, f.A.ID, 'a'), seedOAuthRows(t, f.DB, f.B.ID, 'b')
+}
+
+// oauthMutations change one of A's rows; run in B they must fail with
+// ErrNotFound and leave A's row alone.
+var oauthMutations = map[string]func(c *store.TenantTx, a oauthRows) error{
+	"TouchAPIClient": func(c *store.TenantTx, a oauthRows) error {
+		return c.TouchAPIClient("tsc_onlya", storetest.Now)
+	},
+	"PollDeviceGrant": func(c *store.TenantTx, a oauthRows) error {
+		return c.PollDeviceGrant(a.grant.ID, storetest.Now, 10)
+	},
+	"ApproveDeviceGrant": func(c *store.TenantTx, a oauthRows) error {
+		return c.ApproveDeviceGrant(a.grant.ID, a.auth.user.ID, a.auth.ctx.ID, a.auth.session.ID, storetest.Now)
+	},
+	"DenyDeviceGrant": func(c *store.TenantTx, a oauthRows) error {
+		return c.DenyDeviceGrant(a.grant.ID, a.auth.user.ID, storetest.Now)
+	},
+	"ExpireDeviceGrant":  func(c *store.TenantTx, a oauthRows) error { return c.ExpireDeviceGrant(a.grant.ID) },
+	"ConsumeDeviceGrant": func(c *store.TenantTx, a oauthRows) error { return c.ConsumeDeviceGrant(a.grant.ID, storetest.Now) },
+	"UseRefreshToken":    func(c *store.TenantTx, a oauthRows) error { return c.UseRefreshToken(a.rt.ID, storetest.Now) },
+}
+
+func TestIsolation_OAuthRows(t *testing.T) {
+	f, a, b := oauthFixture(t)
 	inB(t, f, func(c *store.TenantTx) error {
-		apps, err := c.OAuthApps()
-		if err != nil || len(apps) != 1 || apps[0].ID != ids.app[f.B.Slug] {
-			t.Errorf("OAuthApps = %v, %v", apps, err)
+		// both tenants have a "tessera-cli": B resolves its own
+		cli, err := c.APIClientByClientID("tessera-cli")
+		if err != nil || cli.ID != b.cli.ID || cli.TenantID != f.B.ID {
+			t.Errorf("APIClientByClientID in B: %+v %v", cli, err)
 		}
-		if n, err := c.CountOAuthApps(); err != nil || n != 1 {
-			t.Errorf("CountOAuthApps = %d, %v", n, err)
+		cs, err := c.APIClients()
+		if err != nil || len(cs) != 2 {
+			t.Errorf("APIClients in B: %d %v", len(cs), err)
 		}
-		if _, err := c.OAuthApp(ids.app[f.A.Slug]); !errors.Is(err, store.ErrNotFound) {
-			t.Errorf("OAuthApp(A's) = %v", err)
+		for _, x := range cs {
+			if x.TenantID != f.B.ID || x.ID == a.cli.ID || x.ID == a.machine.ID {
+				t.Errorf("APIClients in B returned %+v", x)
+			}
 		}
-		if _, err := c.OAuthAppByKey(store.OAuthGoogle, "client-"+f.A.Slug); !errors.Is(err, store.ErrNotFound) {
-			t.Errorf("OAuthAppByKey(A's) = %v", err)
+		for name, get := range map[string]func() error{
+			"APIClientByClientID(A's machine)": func() error { _, err := c.APIClientByClientID(a.machine.ClientID); return err },
+			"DeviceGrant":                      func() error { _, err := c.DeviceGrant(a.grant.ID); return err },
+			"DeviceGrantByDeviceCodeHash": func() error {
+				_, err := c.DeviceGrantByDeviceCodeHash(a.grant.DeviceCodeHash)
+				return err
+			},
+			"PendingDeviceGrantByUserCodeHash": func() error {
+				_, err := c.PendingDeviceGrantByUserCodeHash(a.grant.UserCodeHash, storetest.Now)
+				return err
+			},
+			"RefreshTokenByHash": func() error { _, err := c.RefreshTokenByHash(a.rt.TokenHash); return err },
+		} {
+			if err := get(); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("%s of A's row in B = %v, want ErrNotFound", name, err)
+			}
 		}
-		if _, err := c.OAuthGrant(ids.grant[f.A.Slug]); !errors.Is(err, store.ErrNotFound) {
-			t.Errorf("OAuthGrant(A's) = %v", err)
+		if ts, err := c.RefreshTokensByFamily(a.rt.FamilyID); err != nil || len(ts) != 0 {
+			t.Errorf("RefreshTokensByFamily(A's family) in B = %d %v, want none", len(ts), err)
 		}
-		if gs, err := c.OAuthGrantsOf(ids.app[f.A.Slug]); err != nil || len(gs) != 0 {
-			t.Errorf("OAuthGrantsOf(A's app) = %v, %v", gs, err)
+		if n, err := c.RevokeRefreshFamily(a.rt.FamilyID, "x", storetest.Now); err != nil || n != 0 {
+			t.Errorf("RevokeRefreshFamily(A's family) in B revoked %d (%v)", n, err)
 		}
-		gs, err := c.OAuthGrants()
-		if err != nil || len(gs) != 1 || gs[0].ID != ids.grant[f.B.Slug] {
-			t.Errorf("OAuthGrants = %v, %v", gs, err)
+		if n, err := c.RevokeSessionRefreshTokens(a.auth.session.ID, "x", storetest.Now); err != nil || n != 0 {
+			t.Errorf("RevokeSessionRefreshTokens(A's session) in B revoked %d (%v)", n, err)
 		}
-		st, err := c.OAuthSyncStates()
-		if err != nil || len(st) != 1 || st[0].Apps != 1 {
-			t.Errorf("OAuthSyncStates = %v, %v", st, err)
+		// expiring stale grants in B leaves A's alone
+		if n, err := c.ExpireStaleDeviceGrants(storetest.Now.Add(time.Hour)); err != nil || n != 1 {
+			t.Errorf("ExpireStaleDeviceGrants in B = %d %v, want only B's grant", n, err)
 		}
 		return nil
 	})
-}
-
-func TestIsolation_OAuthWritesScoped(t *testing.T) {
-	f := storetest.TwoTenants(t)
-	ids := seedOAuth(t, f)
-	by := "b"
-	later := storetest.Now.Add(time.Hour)
-	err := f.DB.InTenant(context.Background(), f.B.ID, func(c *store.TenantTx) error {
-		for name, err := range map[string]error{
-			"SetOAuthAppRisk":     c.SetOAuthAppRisk(ids.app[f.A.Slug], 99, []string{"x"}, nil, "active"),
-			"SetOAuthAppOwner":    c.SetOAuthAppOwner(ids.app[f.A.Slug], nil),
-			"MarkOAuthAppRevoked": c.MarkOAuthAppRevoked(ids.app[f.A.Slug], by, later),
-			"SetOAuthGrantStatus": c.SetOAuthGrantStatus(ids.grant[f.A.Slug], "revoked", &by, &later, ""),
-		} {
+	for name, fn := range oauthMutations {
+		t.Run(name, func(t *testing.T) {
+			err := f.DB.InTenant(context.Background(), f.B.ID, func(c *store.TenantTx) error { return fn(c, a) })
 			if !errors.Is(err, store.ErrNotFound) {
-				t.Errorf("%s on A's row in B = %v, want ErrNotFound", name, err)
+				t.Errorf("%s(A's row) in B = %v, want ErrNotFound", name, err)
 			}
+		})
+	}
+	// A's rows are untouched
+	err := f.DB.ReadTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
+		g, err := c.DeviceGrant(a.grant.ID)
+		if err != nil || g.Status != store.DevicePending || g.LastPolledAt != nil || g.Interval != 5 || g.ApprovedByUserID != nil {
+			t.Errorf("A's device grant changed: %+v %v", g, err)
 		}
-		if err := c.DefaultOAuthAppOwner(ids.app[f.A.Slug], f.B.IDs["alice"]); err != nil { // matches no row of B
-			t.Error(err)
+		rt, err := c.RefreshTokenByHash(a.rt.TokenHash)
+		if err != nil || rt.UsedAt != nil || rt.RevokedAt != nil {
+			t.Errorf("A's refresh token changed: %+v %v", rt, err)
 		}
-		// B's sweep of "unseen" grants never touches A's
-		if _, err := c.RemoveUnseenOAuthGrants(store.OAuthGoogle, later); err != nil {
-			t.Error(err)
+		m, err := c.APIClientByClientID(a.machine.ClientID)
+		if err != nil || m.LastUsedAt != nil || m.OwnerUserID == nil || *m.OwnerUserID != a.auth.user.ID ||
+			len(m.Roles) != 1 || m.Roles[0] != "viewer" {
+			t.Errorf("A's machine client changed: %+v %v", m, err)
 		}
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.DB.ReadTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
-		a, err := c.OAuthApp(ids.app[f.A.Slug])
-		if err != nil || a.Status != "active" || a.RiskScore != 0 || a.OwnerIdentityID != nil {
-			t.Errorf("A's app = %+v, %v", a, err)
-		}
-		g, err := c.OAuthGrant(ids.grant[f.A.Slug])
-		if err != nil || g.Status != "active" {
-			t.Errorf("A's grant = %+v, %v", g, err)
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
 }
 
-func TestIsolation_OAuthCrossTenantReferences(t *testing.T) {
-	f := storetest.TwoTenants(t)
-	ids := seedOAuth(t, f)
-	a := f.A.IDs
-	for name, fn := range map[string]func(c *store.TenantTx) error{
-		"grant.app_id": func(c *store.TenantTx) error {
-			return c.UpsertOAuthGrant(&store.OAuthGrant{AppID: ids.app[f.A.Slug], Provider: "google", GrantKey: "u:evil", Kind: "token",
-				ConsentType: "user"}, storetest.Now)
+// TestIsolation_OAuthInsertsRefused: a row stamped with another tenant, or
+// referencing another tenant's row, is refused.
+func TestIsolation_OAuthInsertsRefused(t *testing.T) {
+	f, a, b := oauthFixture(t)
+	now := storetest.Now
+	crossTenant := map[string]func(c *store.TenantTx) error{
+		"InsertAPIClient/stamped": func(c *store.TenantTx) error {
+			return c.InsertAPIClient(&store.APIClient{TenantID: f.A.ID, ClientID: "x1x", Name: "x", Kind: store.ClientFirstPartyCLI,
+				TokenEndpointAuthMethod: "none", DPoPRequired: true, CreatedAt: now})
 		},
-		"grant.identity_id": func(c *store.TenantTx) error {
-			id := a["alice"]
-			return c.UpsertOAuthGrant(&store.OAuthGrant{AppID: ids.app[f.B.Slug], Provider: "google", GrantKey: "u:evil", Kind: "token",
-				ConsentType: "user", IdentityID: &id}, storetest.Now)
+		"InsertAPIClient/owner is A's user": func(c *store.TenantTx) error {
+			return c.InsertAPIClient(&store.APIClient{ClientID: "x2x", Name: "x", Kind: store.ClientMachine,
+				TokenEndpointAuthMethod: "private_key_jwt", DPoPRequired: true, OwnerUserID: &a.auth.user.ID, CreatedAt: now})
 		},
-		"grant.account_id": func(c *store.TenantTx) error {
-			id := a["acct:okta:alice"]
-			return c.UpsertOAuthGrant(&store.OAuthGrant{AppID: ids.app[f.B.Slug], Provider: "google", GrantKey: "u:evil", Kind: "token",
-				ConsentType: "user", AccountID: &id}, storetest.Now)
+		"InsertDeviceGrant/stamped": func(c *store.TenantTx) error {
+			return c.InsertDeviceGrant(&store.DeviceGrant{TenantID: f.A.ID, ClientID: "tessera-cli", DeviceCodeHash: hexHash('1'),
+				UserCodeHash: hexHash('2'), Scope: "x", Interval: 5, CreatedAt: now, ExpiresAt: now})
 		},
-		"app.owner": func(c *store.TenantTx) error {
-			id := a["alice"]
-			return c.SetOAuthAppOwner(ids.app[f.B.Slug], &id)
+		"InsertRefreshToken/stamped": func(c *store.TenantTx) error {
+			return c.InsertRefreshToken(&store.RefreshToken{TenantID: f.A.ID, TokenHash: hexHash('3'), FamilyID: uuid.New(),
+				SessionID: b.auth.session.ID, UserID: b.auth.user.ID, ClientID: "tessera-cli", DPoPJKT: b.rt.DPoPJKT,
+				Scope: "x", IssuedAt: now, ExpiresAt: now, AbsoluteExpiresAt: now})
 		},
-	} {
+		"InsertRefreshToken/references A's session": func(c *store.TenantTx) error {
+			return c.InsertRefreshToken(&store.RefreshToken{TokenHash: hexHash('4'), FamilyID: uuid.New(),
+				SessionID: a.auth.session.ID, UserID: b.auth.user.ID, ClientID: "tessera-cli", DPoPJKT: b.rt.DPoPJKT,
+				Scope: "x", IssuedAt: now, ExpiresAt: now, AbsoluteExpiresAt: now})
+		},
+		"InsertRefreshToken/references A's user": func(c *store.TenantTx) error {
+			return c.InsertRefreshToken(&store.RefreshToken{TokenHash: hexHash('5'), FamilyID: uuid.New(),
+				SessionID: b.auth.session.ID, UserID: a.auth.user.ID, ClientID: "tessera-cli", DPoPJKT: b.rt.DPoPJKT,
+				Scope: "x", IssuedAt: now, ExpiresAt: now, AbsoluteExpiresAt: now})
+		},
+		"InsertRefreshToken/parent in A": func(c *store.TenantTx) error {
+			return c.InsertRefreshToken(&store.RefreshToken{TokenHash: hexHash('6'), FamilyID: a.rt.FamilyID, ParentID: &a.rt.ID,
+				SessionID: b.auth.session.ID, UserID: b.auth.user.ID, ClientID: "tessera-cli", DPoPJKT: b.rt.DPoPJKT,
+				Scope: "x", IssuedAt: now, ExpiresAt: now, AbsoluteExpiresAt: now})
+		},
+		"ApproveDeviceGrant/by A's user": func(c *store.TenantTx) error {
+			return c.ApproveDeviceGrant(b.grant.ID, a.auth.user.ID, b.auth.ctx.ID, b.auth.session.ID, now)
+		},
+		"ApproveDeviceGrant/A's session": func(c *store.TenantTx) error {
+			return c.ApproveDeviceGrant(b.grant.ID, b.auth.user.ID, b.auth.ctx.ID, a.auth.session.ID, now)
+		},
+	}
+	for name, fn := range crossTenant {
 		t.Run(name, func(t *testing.T) {
 			err := f.DB.InTenant(context.Background(), f.B.ID, fn)
 			if !errors.Is(err, store.ErrCrossTenant) {
-				t.Fatalf("err = %v, want ErrCrossTenant", err)
+				t.Errorf("%s in B = %v, want ErrCrossTenant", name, err)
 			}
 		})
 	}
+	// a device grant naming a client that only A has fails the foreign key
+	t.Run("InsertDeviceGrant/A's client", func(t *testing.T) {
+		err := f.DB.InTenant(context.Background(), f.B.ID, func(c *store.TenantTx) error {
+			return c.InsertDeviceGrant(&store.DeviceGrant{ClientID: a.machine.ClientID, DeviceCodeHash: hexHash('7'),
+				UserCodeHash: hexHash('8'), Scope: "x", Interval: 5, CreatedAt: now, ExpiresAt: now})
+		})
+		if err == nil {
+			t.Error("a device grant for another tenant's client was accepted")
+		}
+	})
 }
 
-// The upsert is keyed on provider + client id (apps) and app + grant key
-// (grants); a grant a full sync no longer lists is removed, not deleted; a
-// grant seen again is active again; a failed revoke stays visible.
-func TestOAuthUpsertAndRemoval(t *testing.T) {
-	f := storetest.TwoTenants(t)
-	t1, t2 := storetest.Now, storetest.Now.Add(time.Hour)
-	err := f.DB.InTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
-		app := &store.OAuthApp{Provider: "entra", ClientID: "c1", Name: "One"}
-		if err := c.UpsertOAuthApp(app, t1); err != nil {
-			return err
+// TestOAuthSchemaRules: the schema's backstops (one pending user code per
+// tenant, duplicate client ids, the machine-owner and CLI-client rules) and
+// the single-use and rotation updates.
+func TestOAuthSchemaRules(t *testing.T) {
+	f, _, b := oauthFixture(t)
+	now := storetest.Now
+	err := f.DB.InTenant(context.Background(), f.B.ID, func(c *store.TenantTx) error {
+		if err := c.InsertAPIClient(&store.APIClient{ClientID: "tessera-cli", Name: "dup", Kind: store.ClientFirstPartyCLI,
+			TokenEndpointAuthMethod: "none", DPoPRequired: true, CreatedAt: now}); !errors.Is(err, store.ErrDuplicate) {
+			t.Errorf("duplicate client id: %v", err)
 		}
-		id := app.ID
-		again := &store.OAuthApp{Provider: "entra", ClientID: "c1", Name: "One renamed", Publisher: "P", Verified: true}
-		if err := c.UpsertOAuthApp(again, t2); err != nil {
-			return err
-		}
-		if again.ID != id || again.Name != "One renamed" || !again.Verified || !again.FirstSeen.Equal(t1) || !again.LastSeen.Equal(t2) {
-			t.Errorf("upsert = %+v (want id %s kept, first_seen %s)", again, id, t1)
-		}
-		keep := &store.OAuthGrant{AppID: id, Provider: "entra", GrantKey: "d:1", Kind: "delegated", Scopes: []string{"Mail.Read"}, ConsentType: "user"}
-		gone := &store.OAuthGrant{AppID: id, Provider: "entra", GrantKey: "d:2", Kind: "delegated", ConsentType: "admin"}
-		failed := &store.OAuthGrant{AppID: id, Provider: "entra", GrantKey: "d:3", Kind: "delegated", ConsentType: "user"}
-		for _, g := range []*store.OAuthGrant{keep, gone, failed} {
-			if err := c.UpsertOAuthGrant(g, t1); err != nil {
-				return err
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, fn := range map[string]func(c *store.TenantTx) error{
+		"machine client without an owner": func(c *store.TenantTx) error {
+			return c.InsertAPIClient(&store.APIClient{ClientID: "tsc_noowner", Name: "x", Kind: store.ClientMachine,
+				TokenEndpointAuthMethod: "private_key_jwt", DPoPRequired: true, CreatedAt: now})
+		},
+		"CLI client without DPoP": func(c *store.TenantTx) error {
+			return c.InsertAPIClient(&store.APIClient{ClientID: "cli-nodpop", Name: "x", Kind: store.ClientFirstPartyCLI,
+				TokenEndpointAuthMethod: "none", DPoPRequired: false, CreatedAt: now})
+		},
+		"the same pending user code twice": func(c *store.TenantTx) error {
+			return c.InsertDeviceGrant(&store.DeviceGrant{ClientID: "tessera-cli", DeviceCodeHash: hexHash('9'),
+				UserCodeHash: b.grant.UserCodeHash, Scope: "x", Interval: 5, CreatedAt: now, ExpiresAt: now.Add(time.Minute)})
+		},
+		"a refresh token idle expiry past the absolute": func(c *store.TenantTx) error {
+			return c.InsertRefreshToken(&store.RefreshToken{TokenHash: hexHash('a'), FamilyID: uuid.New(),
+				SessionID: b.auth.session.ID, UserID: b.auth.user.ID, ClientID: "tessera-cli", DPoPJKT: b.rt.DPoPJKT,
+				Scope: "x", IssuedAt: now, ExpiresAt: now.Add(2 * time.Hour), AbsoluteExpiresAt: now.Add(time.Hour)})
+		},
+		"a refresh token hash twice": func(c *store.TenantTx) error {
+			return c.InsertRefreshToken(&store.RefreshToken{TokenHash: b.rt.TokenHash, FamilyID: uuid.New(),
+				SessionID: b.auth.session.ID, UserID: b.auth.user.ID, ClientID: "tessera-cli", DPoPJKT: b.rt.DPoPJKT,
+				Scope: "x", IssuedAt: now, ExpiresAt: now, AbsoluteExpiresAt: now})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := f.DB.InTenant(context.Background(), f.B.ID, fn); err == nil {
+				t.Errorf("%s was accepted", name)
 			}
+		})
+	}
+	err = f.DB.InTenant(context.Background(), f.B.ID, func(c *store.TenantTx) error {
+		// an expired grant frees its user code and cannot be found or approved
+		late := now.Add(10 * time.Minute)
+		if _, err := c.PendingDeviceGrantByUserCodeHash(b.grant.UserCodeHash, late); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("expired grant found by user code: %v", err)
 		}
-		by := "admin"
-		if err := c.SetOAuthGrantStatus(failed.ID, store.OAuthRevokeFailed, &by, nil, "boom"); err != nil {
-			return err
+		if err := c.ApproveDeviceGrant(b.grant.ID, b.auth.user.ID, b.auth.ctx.ID, b.auth.session.ID, late); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("expired grant approved: %v", err)
 		}
-		// a later sync sees d:1 and d:3 only
-		for _, g := range []*store.OAuthGrant{{AppID: id, Provider: "entra", GrantKey: "d:1", Kind: "delegated", ConsentType: "user", Scopes: []string{"Mail.Read", "Files.Read"}},
-			{AppID: id, Provider: "entra", GrantKey: "d:3", Kind: "delegated", ConsentType: "user"}} {
-			if err := c.UpsertOAuthGrant(g, t2); err != nil {
-				return err
-			}
+		// approve once, consume once
+		if err := c.ApproveDeviceGrant(b.grant.ID, b.auth.user.ID, b.auth.ctx.ID, b.auth.session.ID, now); err != nil {
+			t.Fatal(err)
 		}
-		n, err := c.RemoveUnseenOAuthGrants("entra", t2)
-		if err != nil || n != 1 {
-			t.Errorf("RemoveUnseenOAuthGrants = %d, %v, want 1", n, err)
+		if err := c.ApproveDeviceGrant(b.grant.ID, b.auth.user.ID, b.auth.ctx.ID, b.auth.session.ID, now); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("approved twice: %v", err)
 		}
-		gs, err := c.OAuthGrantsOf(id)
-		if err != nil || len(gs) != 3 {
-			t.Fatalf("grants = %v, %v (removed grants are kept)", gs, err)
+		if err := c.ConsumeDeviceGrant(b.grant.ID, now); err != nil {
+			t.Fatal(err)
 		}
-		got := map[string]*store.OAuthGrant{}
-		for _, g := range gs {
-			got[g.GrantKey] = g
+		if err := c.ConsumeDeviceGrant(b.grant.ID, now); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("consumed twice: %v", err)
 		}
-		if got["d:1"].ID != keep.ID || len(got["d:1"].Scopes) != 2 || got["d:1"].Status != "active" {
-			t.Errorf("d:1 = %+v", got["d:1"])
+		// rotation: a token is used once; its family is revoked as a unit
+		if err := c.UseRefreshToken(b.rt.ID, now); err != nil {
+			t.Fatal(err)
 		}
-		if got["d:2"].Status != "removed" {
-			t.Errorf("d:2 = %+v, want removed", got["d:2"])
+		if err := c.UseRefreshToken(b.rt.ID, now); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("refresh token used twice: %v", err)
 		}
-		if got["d:3"].Status != "revoke_failed" || got["d:3"].RevokeError != "boom" {
-			t.Errorf("d:3 = %+v, want revoke_failed kept", got["d:3"])
+		child := &store.RefreshToken{TokenHash: hexHash('b'), FamilyID: b.rt.FamilyID, ParentID: &b.rt.ID,
+			SessionID: b.auth.session.ID, UserID: b.auth.user.ID, ClientID: "tessera-cli", DPoPJKT: b.rt.DPoPJKT, Scope: "x",
+			IssuedAt: now, ExpiresAt: now.Add(time.Hour), AbsoluteExpiresAt: now.Add(2 * time.Hour)}
+		if err := c.InsertRefreshToken(child); err != nil {
+			t.Fatal(err)
 		}
-		// a removed grant seen again is active again
-		if err := c.UpsertOAuthGrant(&store.OAuthGrant{AppID: id, Provider: "entra", GrantKey: "d:2", Kind: "delegated", ConsentType: "admin"}, t2.Add(time.Hour)); err != nil {
-			return err
+		if n, err := c.RevokeRefreshFamily(b.rt.FamilyID, "rt_reuse", now); err != nil || n != 2 {
+			t.Errorf("RevokeRefreshFamily revoked %d (%v), want 2", n, err)
 		}
-		g2, err := c.OAuthGrant(gone.ID)
-		if err != nil || g2.Status != "active" {
-			t.Errorf("d:2 seen again = %+v, %v", g2, err)
+		ts, err := c.RefreshTokensByFamily(b.rt.FamilyID)
+		if err != nil || len(ts) != 2 || ts[0].RevokedAt == nil || ts[1].RevokedAt == nil || *ts[1].RevokedReason != "rt_reuse" {
+			t.Errorf("family after revoke: %+v %v", ts, err)
 		}
-		// a failed sync keeps the last good counts
-		if err := c.PutOAuthSyncState(&store.OAuthSyncState{Provider: "entra", Status: "ok", AttemptedAt: t1, SucceededAt: &t1, Apps: 4, Grants: 9}); err != nil {
-			return err
-		}
-		if err := c.PutOAuthSyncState(&store.OAuthSyncState{Provider: "entra", Status: "failed", AttemptedAt: t2, Error: "429"}); err != nil {
-			return err
-		}
-		st, err := c.OAuthSyncStates()
-		if err != nil || len(st) != 1 || st[0].Status != "failed" || st[0].Apps != 4 || st[0].SucceededAt == nil || !st[0].SucceededAt.Equal(t1) {
-			t.Errorf("sync state = %+v, %v", st, err)
+		if err := c.UseRefreshToken(child.ID, now); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("a revoked token was used: %v", err)
 		}
 		return nil
 	})
@@ -238,9 +328,14 @@ func TestOAuthUpsertAndRemoval(t *testing.T) {
 }
 
 func oauthCovered() map[string]bool {
-	return map[string]bool{"UpsertOAuthApp": true, "OAuthAppByKey": true, "OAuthApp": true, "OAuthApps": true, "CountOAuthApps": true,
-		"OAuthGrant": true, "OAuthGrantsOf": true, "OAuthGrants": true, "OAuthSyncStates": true, // TestIsolation_OAuthReads
-		"SetOAuthAppRisk": true, "SetOAuthAppOwner": true, "DefaultOAuthAppOwner": true, "MarkOAuthAppRevoked": true,
-		"SetOAuthGrantStatus": true, "RemoveUnseenOAuthGrants": true, // TestIsolation_OAuthWritesScoped
-		"UpsertOAuthGrant": true, "PutOAuthSyncState": true} // TestIsolation_OAuthCrossTenantReferences, TestOAuthUpsertAndRemoval
+	out := map[string]bool{}
+	for k := range oauthMutations {
+		out[k] = true
+	}
+	for _, k := range []string{"InsertAPIClient", "APIClientByClientID", "APIClients", "InsertDeviceGrant", "DeviceGrant",
+		"DeviceGrantByDeviceCodeHash", "PendingDeviceGrantByUserCodeHash", "ExpireStaleDeviceGrants", "InsertRefreshToken",
+		"RefreshTokenByHash", "RefreshTokensByFamily", "RevokeRefreshFamily", "RevokeSessionRefreshTokens"} {
+		out[k] = true // TestIsolation_OAuthRows, TestIsolation_OAuthInsertsRefused
+	}
+	return out
 }

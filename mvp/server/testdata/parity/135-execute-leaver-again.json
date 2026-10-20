@@ -5,7 +5,7 @@
   "path": "/api/hris/events/1/execute"
  },
  "response": {
-  "status": 400,
+  "status": 409,
   "body": {
    "detail": "event already executed"
   }

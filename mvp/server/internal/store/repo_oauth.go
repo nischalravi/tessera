@@ -4,376 +4,418 @@ import (
 	"database/sql"
 	"encoding/json"
 	"time"
+
+	"github.com/google/uuid"
 )
 
-// Third-party OAuth app inventory (schema/0207_oauth_apps.sql). The risk
-// score and the reasons are computed by internal/oauthapps; the store only
-// holds them.
+// The OAuth authorization server's repositories (design §7.4,
+// schema/0358_oauth.sql). Every statement is tenant-scoped (tq).
 
-// OAuth providers.
-const (
-	OAuthGoogle     = "google"
-	OAuthEntra      = "entra"
-	OAuthSalesforce = "salesforce"
-	OAuthGitHub     = "github"
-)
+// ---------------------------------------------------------------- api_clients
 
-// OAuth app and grant statuses.
-const (
-	OAuthActive       = "active"
-	OAuthRevoked      = "revoked"
-	OAuthRemoved      = "removed"
-	OAuthRevokeFailed = "revoke_failed"
-)
-
-// OAuthApp is one third-party app at one provider.
-type OAuthApp struct {
-	ID              string
-	Provider        string
-	ClientID        string
-	Name            string
-	Publisher       string
-	Verified        bool
-	FirstSeen       time.Time
-	LastSeen        time.Time
-	LastUsed        *time.Time
-	OwnerIdentityID *int64
-	RiskScore       int
-	RiskReasons     []string
-	Status          string // active, revoked, removed
-	RevokedAt       *time.Time
-	RevokedBy       *string
-}
-
-// OAuthGrant is one grant an app holds.
-type OAuthGrant struct {
-	ID           string
-	AppID        string
-	Provider     string
-	GrantKey     string // stable per grant at the provider; with AppID it is the upsert key
-	ProviderRef  string // what the revoke call names (a grant id, a token id, a user)
-	Kind         string // token, delegated, app_role, installation, credential
-	IdentityID   *int64
-	AccountID    *int64
-	UserRef      string
-	GranterAdmin bool
-	Scopes       []string
-	ConsentType  string // user, admin
-	GrantedAt    *time.Time
-	LastUsed     *time.Time
-	FirstSeen    time.Time
-	LastSeen     time.Time
-	Status       string // active, removed, revoked, revoke_failed
-	RevokedAt    *time.Time
-	RevokedBy    *string
-	RevokeError  string
-}
-
-// OAuthSyncState is the last sync of one provider.
-type OAuthSyncState struct {
-	Provider    string
-	Status      string // ok, failed
-	AttemptedAt time.Time
-	SucceededAt *time.Time
-	Apps        int
-	Grants      int
-	Removed     int
-	Error       string
-}
-
-const oauthAppCols = `a.id, a.provider, a.client_id, a.name, a.publisher, a.verified, a.first_seen, a.last_seen, a.last_used,
-	a.owner_identity_id, a.risk_score, a.risk_reasons, a.status, a.revoked_at, a.revoked_by`
-
-const oauthGrantCols = `g.id, g.app_id, g.provider, g.grant_key, g.provider_ref, g.kind, g.identity_id, g.account_id, g.user_ref,
-	g.granter_admin, g.scopes, g.consent_type, g.granted_at, g.last_used, g.first_seen, g.last_seen, g.status,
-	g.revoked_at, g.revoked_by, g.revoke_error`
+const clientCols = `c.id, c.tenant_id, c.client_id, c.name, c.kind, c.grant_types, c.token_endpoint_auth_method, c.jwks,
+	c.dpop_required, c.allowed_scopes, c.roles, c.owner_user_id, c.status, c.created_at, c.last_used_at`
 
 var (
-	oauthAppsUpsert = tq("oauth_apps.upsert", `
-		INSERT INTO oauth_apps (id, tenant_id, provider, client_id, name, publisher, verified, first_seen, last_seen, last_used)
-		VALUES (@id, @tenant, @provider, @client_id, @name, @publisher, @verified, @now, @now, @last_used)
-		ON CONFLICT (tenant_id, provider, client_id) DO UPDATE SET name = excluded.name, publisher = excluded.publisher,
-			verified = excluded.verified, last_seen = excluded.last_seen,
-			last_used = COALESCE(excluded.last_used, oauth_apps.last_used)`)
-	oauthAppsByKey = tq("oauth_apps.by_key", `
-		SELECT `+oauthAppCols+` FROM oauth_apps a
-		WHERE a.tenant_id = @tenant AND a.provider = @provider AND a.client_id = @client_id`)
-	oauthAppsGet = tq("oauth_apps.get", `
-		SELECT `+oauthAppCols+` FROM oauth_apps a WHERE a.tenant_id = @tenant AND a.id = @id`)
-	oauthAppsList = tq("oauth_apps.list", `
-		SELECT `+oauthAppCols+` FROM oauth_apps a WHERE a.tenant_id = @tenant
-		ORDER BY a.risk_score DESC, a.name, a.id`)
-	oauthAppsCount = tq("oauth_apps.count", `
-		SELECT count(a.id) FROM oauth_apps a WHERE a.tenant_id = @tenant`)
-	oauthAppsSetRisk = tq("oauth_apps.set_risk", `
-		UPDATE oauth_apps SET risk_score = @risk_score, risk_reasons = @risk_reasons, last_used = @last_used,
-			status = CASE WHEN status = 'revoked' AND @status = 'removed' THEN 'revoked' ELSE @status END
-		WHERE tenant_id = @tenant AND id = @id`)
-	oauthAppsDefaultOwner = tq("oauth_apps.default_owner", `
-		UPDATE oauth_apps SET owner_identity_id = @owner_identity_id
-		WHERE tenant_id = @tenant AND id = @id AND owner_identity_id IS NULL`)
-	oauthAppsSetOwner = tq("oauth_apps.set_owner", `
-		UPDATE oauth_apps SET owner_identity_id = @owner_identity_id WHERE tenant_id = @tenant AND id = @id`)
-	oauthAppsMarkRevoked = tq("oauth_apps.mark_revoked", `
-		UPDATE oauth_apps SET status = 'revoked', revoked_at = @now, revoked_by = @by WHERE tenant_id = @tenant AND id = @id`)
-
-	oauthGrantsUpsert = tq("oauth_grants.upsert", `
-		INSERT INTO oauth_grants (id, tenant_id, app_id, provider, grant_key, provider_ref, kind, identity_id, account_id,
-			user_ref, granter_admin, scopes, consent_type, granted_at, last_used, first_seen, last_seen)
-		VALUES (@id, @tenant, @app_id, @provider, @grant_key, @provider_ref, @kind, @identity_id, @account_id,
-			@user_ref, @granter_admin, @scopes, @consent_type, @granted_at, @last_used, @now, @now)
-		ON CONFLICT (tenant_id, app_id, grant_key) DO UPDATE SET provider_ref = excluded.provider_ref, kind = excluded.kind,
-			identity_id = excluded.identity_id, account_id = excluded.account_id, user_ref = excluded.user_ref,
-			granter_admin = excluded.granter_admin, scopes = excluded.scopes, consent_type = excluded.consent_type,
-			granted_at = COALESCE(excluded.granted_at, oauth_grants.granted_at),
-			last_used = COALESCE(excluded.last_used, oauth_grants.last_used), last_seen = excluded.last_seen,
-			status = CASE WHEN oauth_grants.status = 'revoke_failed' THEN 'revoke_failed' ELSE 'active' END,
-			revoked_at = CASE WHEN oauth_grants.status = 'revoke_failed' THEN oauth_grants.revoked_at ELSE NULL END,
-			revoked_by = CASE WHEN oauth_grants.status = 'revoke_failed' THEN oauth_grants.revoked_by ELSE NULL END,
-			revoke_error = CASE WHEN oauth_grants.status = 'revoke_failed' THEN oauth_grants.revoke_error ELSE '' END`)
-	oauthGrantsByKey = tq("oauth_grants.by_key", `
-		SELECT `+oauthGrantCols+` FROM oauth_grants g
-		WHERE g.tenant_id = @tenant AND g.app_id = @app_id AND g.grant_key = @grant_key`)
-	oauthGrantsGet = tq("oauth_grants.get", `
-		SELECT `+oauthGrantCols+` FROM oauth_grants g WHERE g.tenant_id = @tenant AND g.id = @id`)
-	oauthGrantsByApp = tq("oauth_grants.by_app", `
-		SELECT `+oauthGrantCols+` FROM oauth_grants g WHERE g.tenant_id = @tenant AND g.app_id = @app_id
-		ORDER BY g.user_ref, g.grant_key, g.id`)
-	oauthGrantsAll = tq("oauth_grants.list", `
-		SELECT `+oauthGrantCols+` FROM oauth_grants g WHERE g.tenant_id = @tenant ORDER BY g.app_id, g.user_ref, g.grant_key, g.id`)
-	oauthGrantsRemove = tq("oauth_grants.mark_removed", `
-		UPDATE oauth_grants SET status = 'removed'
-		WHERE tenant_id = @tenant AND provider = @provider AND status IN ('active','revoke_failed') AND last_seen < @before`)
-	oauthGrantsSetStatus = tq("oauth_grants.set_status", `
-		UPDATE oauth_grants SET status = @status, revoked_at = @revoked_at, revoked_by = @revoked_by, revoke_error = @revoke_error
-		WHERE tenant_id = @tenant AND id = @id`)
-
-	oauthSyncUpsert = tq("oauth_sync_state.upsert", `
-		INSERT INTO oauth_sync_state (tenant_id, provider, status, attempted_at, succeeded_at, apps, grants, removed, error)
-		VALUES (@tenant, @provider, @status, @attempted_at, @succeeded_at, @apps, @grants, @removed, @error)
-		ON CONFLICT (tenant_id, provider) DO UPDATE SET status = excluded.status, attempted_at = excluded.attempted_at,
-			succeeded_at = COALESCE(excluded.succeeded_at, oauth_sync_state.succeeded_at),
-			apps = CASE WHEN excluded.status = 'ok' THEN excluded.apps ELSE oauth_sync_state.apps END,
-			grants = CASE WHEN excluded.status = 'ok' THEN excluded.grants ELSE oauth_sync_state.grants END,
-			removed = CASE WHEN excluded.status = 'ok' THEN excluded.removed ELSE oauth_sync_state.removed END,
-			error = excluded.error`)
-	oauthSyncList = tq("oauth_sync_state.list", `
-		SELECT s.provider, s.status, s.attempted_at, s.succeeded_at, s.apps, s.grants, s.removed, s.error
-		FROM oauth_sync_state s WHERE s.tenant_id = @tenant ORDER BY s.provider`)
+	clientsInsert = tq("api_clients.insert", `
+		INSERT INTO api_clients (id, tenant_id, client_id, name, kind, grant_types, token_endpoint_auth_method, jwks,
+			dpop_required, allowed_scopes, roles, owner_user_id, status, created_at)
+		VALUES (@id, @tenant, @client_id, @name, @kind, @grant_types, @token_endpoint_auth_method, @jwks,
+			@dpop_required, @allowed_scopes, @roles, @owner_user_id, @status, @created_at)`)
+	clientsByClientID = tq("api_clients.by_client_id", `
+		SELECT `+clientCols+` FROM api_clients c WHERE c.tenant_id = @tenant AND c.client_id = @client_id`)
+	clientsList = tq("api_clients.list", `
+		SELECT `+clientCols+` FROM api_clients c WHERE c.tenant_id = @tenant ORDER BY c.created_at, c.rowid`)
+	clientsTouch = tq("api_clients.touch", `
+		UPDATE api_clients SET last_used_at = @at WHERE tenant_id = @tenant AND client_id = @client_id`)
 )
 
-func scanOAuthApp(s scanner) (*OAuthApp, error) {
-	var a OAuthApp
-	var verified int
-	var first, last string
-	var used, revoked, revokedBy sql.NullString
-	var owner sql.NullInt64
-	var reasons string
-	if err := s.Scan(&a.ID, &a.Provider, &a.ClientID, &a.Name, &a.Publisher, &verified, &first, &last, &used, &owner,
-		&a.RiskScore, &reasons, &a.Status, &revoked, &revokedBy); err != nil {
+func scanClient(s scanner) (*APIClient, error) {
+	var x APIClient
+	var id, tid, grants, scopes, roles, created string
+	var jwks, owner, lastUsed sql.NullString
+	var dpop int
+	if err := s.Scan(&id, &tid, &x.ClientID, &x.Name, &x.Kind, &grants, &x.TokenEndpointAuthMethod, &jwks, &dpop, &scopes,
+		&roles, &owner, &x.Status, &created, &lastUsed); err != nil {
 		return nil, err
 	}
 	var err error
-	a.Verified = verified == 1
-	if a.FirstSeen, err = ParseRT(first); err != nil {
+	if x.ID, err = uuid.Parse(id); err != nil {
 		return nil, err
 	}
-	if a.LastSeen, err = ParseRT(last); err != nil {
+	if x.TenantID, err = tenantOf(tid); err != nil {
 		return nil, err
 	}
-	if a.LastUsed, err = rtp(used); err != nil {
+	for _, p := range []struct {
+		dst *[]string
+		src string
+	}{{&x.GrantTypes, grants}, {&x.AllowedScopes, scopes}, {&x.Roles, roles}} {
+		if err := json.Unmarshal([]byte(p.src), p.dst); err != nil {
+			return nil, err
+		}
+	}
+	if jwks.Valid {
+		x.JWKS = []byte(jwks.String)
+	}
+	x.DPoPRequired = dpop == 1
+	if owner.Valid {
+		u, err := uuid.Parse(owner.String)
+		if err != nil {
+			return nil, err
+		}
+		x.OwnerUserID = &u
+	}
+	if x.CreatedAt, err = ParseRT(created); err != nil {
 		return nil, err
 	}
-	if a.RevokedAt, err = rtp(revoked); err != nil {
-		return nil, err
-	}
-	a.OwnerIdentityID, a.RevokedBy = intp(owner), strp(revokedBy)
-	a.RiskReasons = []string{}
-	if err := json.Unmarshal([]byte(reasons), &a.RiskReasons); err != nil {
-		return nil, err
-	}
-	return &a, nil
+	x.LastUsedAt, err = rtp(lastUsed)
+	return &x, err
 }
 
-func scanOAuthGrant(s scanner) (*OAuthGrant, error) {
-	var g OAuthGrant
-	var admin int
-	var ident, acct sql.NullInt64
-	var scopes, first, last string
-	var granted, used, revoked, revokedBy sql.NullString
-	if err := s.Scan(&g.ID, &g.AppID, &g.Provider, &g.GrantKey, &g.ProviderRef, &g.Kind, &ident, &acct, &g.UserRef, &admin,
-		&scopes, &g.ConsentType, &granted, &used, &first, &last, &g.Status, &revoked, &revokedBy, &g.RevokeError); err != nil {
+// InsertAPIClient creates a client (a zero ID gets a fresh one; a zero
+// Status is active). ErrDuplicate if the tenant already has the client_id.
+func (tx *TenantTx) InsertAPIClient(x *APIClient) error {
+	if err := tx.own(x.TenantID); err != nil {
+		return err
+	}
+	if x.ID == uuid.Nil {
+		x.ID = uuid.New()
+	}
+	if x.Status == "" {
+		x.Status = ClientActive
+	}
+	grants, err := jsonList(x.GrantTypes)
+	if err != nil {
+		return err
+	}
+	scopes, err := jsonList(x.AllowedScopes)
+	if err != nil {
+		return err
+	}
+	roles, err := jsonList(x.Roles)
+	if err != nil {
+		return err
+	}
+	var jwks any
+	if len(x.JWKS) > 0 {
+		jwks = string(x.JWKS)
+	}
+	_, err = tx.exec(clientsInsert, sql.Named("id", x.ID.String()), sql.Named("client_id", x.ClientID),
+		sql.Named("name", x.Name), sql.Named("kind", x.Kind), sql.Named("grant_types", grants),
+		sql.Named("token_endpoint_auth_method", x.TokenEndpointAuthMethod), sql.Named("jwks", jwks),
+		sql.Named("dpop_required", B(x.DPoPRequired)), sql.Named("allowed_scopes", scopes), sql.Named("roles", roles),
+		sql.Named("owner_user_id", uuidOrNil(x.OwnerUserID)), sql.Named("status", x.Status),
+		sql.Named("created_at", RT(x.CreatedAt)))
+	if isUnique(err) {
+		return ErrDuplicate
+	}
+	return crossTenant(err)
+}
+
+// APIClientByClientID returns this tenant's client (ErrNotFound otherwise).
+func (tx *TenantTx) APIClientByClientID(clientID string) (*APIClient, error) {
+	return one(tx, scanClient, clientsByClientID, sql.Named("client_id", clientID))
+}
+
+// APIClients lists this tenant's clients in creation order.
+func (tx *TenantTx) APIClients() ([]*APIClient, error) { return collect(tx, scanClient, clientsList) }
+
+// TouchAPIClient records a use of the client.
+func (tx *TenantTx) TouchAPIClient(clientID string, at time.Time) error {
+	return tx.execOne(clientsTouch, sql.Named("at", RT(at)), sql.Named("client_id", clientID))
+}
+
+// ---------------------------------------------------------------- device_grants
+
+const deviceCols = `g.id, g.tenant_id, g.client_id, g.device_code_hash, g.user_code_hash, g.scope, g.required_tessera_acr,
+	g.max_age, g.status, g.request_ip, g.request_user_agent, g.poll_interval, g.last_polled_at, g.created_at, g.expires_at,
+	g.approved_by_user_id, g.approved_authn_context_id, g.approved_at, g.session_id`
+
+var (
+	deviceInsert = tq("device_grants.insert", `
+		INSERT INTO device_grants (id, tenant_id, client_id, device_code_hash, user_code_hash, scope, required_tessera_acr,
+			max_age, status, request_ip, request_user_agent, poll_interval, created_at, expires_at)
+		VALUES (@id, @tenant, @client_id, @device_code_hash, @user_code_hash, @scope, @required_tessera_acr,
+			@max_age, 'pending', @request_ip, @request_user_agent, @poll_interval, @created_at, @expires_at)`)
+	deviceGet = tq("device_grants.get", `
+		SELECT `+deviceCols+` FROM device_grants g WHERE g.tenant_id = @tenant AND g.id = @id`)
+	deviceByDeviceCode = tq("device_grants.by_device_code", `
+		SELECT `+deviceCols+` FROM device_grants g WHERE g.tenant_id = @tenant AND g.device_code_hash = @hash`)
+	devicePendingByUserCode = tq("device_grants.pending_by_user_code", `
+		SELECT `+deviceCols+` FROM device_grants g
+		WHERE g.tenant_id = @tenant AND g.user_code_hash = @hash AND g.status = 'pending' AND g.expires_at > @now`)
+	deviceExpireStale = tq("device_grants.expire_stale", `
+		UPDATE device_grants SET status = 'expired'
+		WHERE tenant_id = @tenant AND status = 'pending' AND expires_at <= @now`)
+	devicePoll = tq("device_grants.poll", `
+		UPDATE device_grants SET last_polled_at = @at, poll_interval = @poll_interval
+		WHERE tenant_id = @tenant AND id = @id`)
+	deviceApprove = tq("device_grants.approve", `
+		UPDATE device_grants SET status = 'approved', approved_by_user_id = @user_id, approved_authn_context_id = @ctx_id,
+			approved_at = @at, session_id = @session_id
+		WHERE tenant_id = @tenant AND id = @id AND status = 'pending' AND expires_at > @at`)
+	deviceDeny = tq("device_grants.deny", `
+		UPDATE device_grants SET status = 'denied', approved_by_user_id = @user_id, approved_at = @at
+		WHERE tenant_id = @tenant AND id = @id AND status = 'pending' AND expires_at > @at`)
+	deviceExpire = tq("device_grants.expire", `
+		UPDATE device_grants SET status = 'expired' WHERE tenant_id = @tenant AND id = @id AND status = 'pending'`)
+	deviceConsume = tq("device_grants.consume", `
+		UPDATE device_grants SET status = 'consumed'
+		WHERE tenant_id = @tenant AND id = @id AND status = 'approved' AND expires_at > @at`)
+)
+
+func scanDevice(s scanner) (*DeviceGrant, error) {
+	var x DeviceGrant
+	var id, tid, created, expires string
+	var acr, ip, ua, polled, approvedBy, approvedCtx, approvedAt, sid sql.NullString
+	var maxAge sql.NullInt64
+	if err := s.Scan(&id, &tid, &x.ClientID, &x.DeviceCodeHash, &x.UserCodeHash, &x.Scope, &acr, &maxAge, &x.Status, &ip, &ua,
+		&x.Interval, &polled, &created, &expires, &approvedBy, &approvedCtx, &approvedAt, &sid); err != nil {
 		return nil, err
 	}
 	var err error
-	g.GranterAdmin = admin == 1
-	g.IdentityID, g.AccountID, g.RevokedBy = intp(ident), intp(acct), strp(revokedBy)
-	if g.GrantedAt, err = rtp(granted); err != nil {
+	if x.ID, err = uuid.Parse(id); err != nil {
 		return nil, err
 	}
-	if g.LastUsed, err = rtp(used); err != nil {
+	if x.TenantID, err = tenantOf(tid); err != nil {
 		return nil, err
 	}
-	if g.RevokedAt, err = rtp(revoked); err != nil {
+	x.RequiredTesseraACR, x.RequestIP, x.RequestUserAgent = strp(acr), strp(ip), strp(ua)
+	if maxAge.Valid {
+		m := int(maxAge.Int64)
+		x.MaxAge = &m
+	}
+	for _, p := range []struct {
+		dst **uuid.UUID
+		src sql.NullString
+	}{{&x.ApprovedByUserID, approvedBy}, {&x.ApprovedAuthnContextID, approvedCtx}, {&x.SessionID, sid}} {
+		if p.src.Valid {
+			u, err := uuid.Parse(p.src.String)
+			if err != nil {
+				return nil, err
+			}
+			*p.dst = &u
+		}
+	}
+	if x.CreatedAt, err = ParseRT(created); err != nil {
 		return nil, err
 	}
-	if g.FirstSeen, err = ParseRT(first); err != nil {
+	if x.ExpiresAt, err = ParseRT(expires); err != nil {
 		return nil, err
 	}
-	if g.LastSeen, err = ParseRT(last); err != nil {
+	if x.LastPolledAt, err = rtp(polled); err != nil {
 		return nil, err
 	}
-	g.Scopes = []string{}
-	if err := json.Unmarshal([]byte(scopes), &g.Scopes); err != nil {
-		return nil, err
-	}
-	return &g, nil
+	x.ApprovedAt, err = rtp(approvedAt)
+	return &x, err
 }
 
-func scanOAuthSync(s scanner) (*OAuthSyncState, error) {
-	var st OAuthSyncState
-	var attempted string
-	var succeeded sql.NullString
-	if err := s.Scan(&st.Provider, &st.Status, &attempted, &succeeded, &st.Apps, &st.Grants, &st.Removed, &st.Error); err != nil {
-		return nil, err
-	}
-	var err error
-	if st.AttemptedAt, err = ParseRT(attempted); err != nil {
-		return nil, err
-	}
-	st.SucceededAt, err = rtp(succeeded)
-	return &st, err
-}
-
-// UpsertOAuthApp inserts the app, or refreshes name, publisher, verified,
-// last_seen and last_used of the app with the same provider and client id. It
-// sets a.ID (an existing app keeps its id). Risk, status and owner are set by
-// SetOAuthAppRisk and the owner methods.
-func (tx *TenantTx) UpsertOAuthApp(a *OAuthApp, now time.Time) error {
-	if _, err := tx.exec(oauthAppsUpsert, sql.Named("id", NewID()), sql.Named("provider", a.Provider),
-		sql.Named("client_id", a.ClientID), sql.Named("name", a.Name), sql.Named("publisher", a.Publisher),
-		sql.Named("verified", B(a.Verified)), sql.Named("now", RT(now)), sql.Named("last_used", RTP(a.LastUsed))); err != nil {
+// InsertDeviceGrant creates a pending grant. ErrDuplicate means the user
+// code is already pending in this tenant (the caller picks a new one).
+func (tx *TenantTx) InsertDeviceGrant(x *DeviceGrant) error {
+	if err := tx.own(x.TenantID); err != nil {
 		return err
 	}
-	got, err := tx.OAuthAppByKey(a.Provider, a.ClientID)
-	if err != nil {
-		return err
+	if x.ID == uuid.Nil {
+		x.ID = uuid.New()
 	}
-	*a = *got
-	return nil
-}
-
-// OAuthAppByKey returns the app of a provider and client id, or ErrNotFound.
-func (tx *TenantTx) OAuthAppByKey(provider, clientID string) (*OAuthApp, error) {
-	return one(tx, scanOAuthApp, oauthAppsByKey, sql.Named("provider", provider), sql.Named("client_id", clientID))
-}
-
-// OAuthApp returns one app or ErrNotFound.
-func (tx *TenantTx) OAuthApp(id string) (*OAuthApp, error) {
-	return one(tx, scanOAuthApp, oauthAppsGet, sql.Named("id", id))
-}
-
-// OAuthApps lists the tenant's apps, highest risk first.
-func (tx *TenantTx) OAuthApps() ([]*OAuthApp, error) { return collect(tx, scanOAuthApp, oauthAppsList) }
-
-// CountOAuthApps counts the tenant's apps.
-func (tx *TenantTx) CountOAuthApps() (int, error) { return tx.count(oauthAppsCount) }
-
-// SetOAuthAppRisk stores the computed risk and the app's status. A revoked
-// app stays revoked when status says removed.
-func (tx *TenantTx) SetOAuthAppRisk(id string, score int, reasons []string, lastUsed *time.Time, status string) error {
-	rj, err := JSON(reasons)
-	if err != nil {
-		return err
+	x.Status = DevicePending
+	var maxAge any
+	if x.MaxAge != nil {
+		maxAge = *x.MaxAge
 	}
-	return tx.execOne(oauthAppsSetRisk, sql.Named("id", id), sql.Named("risk_score", score), sql.Named("risk_reasons", rj),
-		sql.Named("last_used", RTP(lastUsed)), sql.Named("status", status))
-}
-
-// DefaultOAuthAppOwner sets the owner of an app that has none.
-func (tx *TenantTx) DefaultOAuthAppOwner(id string, owner int64) error {
-	_, err := tx.exec(oauthAppsDefaultOwner, sql.Named("id", id), sql.Named("owner_identity_id", owner))
-	return err
-}
-
-// SetOAuthAppOwner sets (or, with nil, clears) the owner of an app.
-func (tx *TenantTx) SetOAuthAppOwner(id string, owner *int64) error {
-	return tx.execOne(oauthAppsSetOwner, sql.Named("id", id), sql.Named("owner_identity_id", IP(owner)))
-}
-
-// MarkOAuthAppRevoked marks an app revoked across the tenant.
-func (tx *TenantTx) MarkOAuthAppRevoked(id, by string, now time.Time) error {
-	return tx.execOne(oauthAppsMarkRevoked, sql.Named("id", id), sql.Named("by", by), sql.Named("now", RT(now)))
-}
-
-// UpsertOAuthGrant inserts the grant, or refreshes the grant with the same app
-// and grant key (seen again: it is active again, unless a revoke failed on
-// it, which stays visible). It sets g.ID.
-func (tx *TenantTx) UpsertOAuthGrant(g *OAuthGrant, now time.Time) error {
-	scopes, err := JSON(g.Scopes)
-	if err != nil {
-		return err
+	_, err := tx.exec(deviceInsert, sql.Named("id", x.ID.String()), sql.Named("client_id", x.ClientID),
+		sql.Named("device_code_hash", x.DeviceCodeHash), sql.Named("user_code_hash", x.UserCodeHash),
+		sql.Named("scope", x.Scope), sql.Named("required_tessera_acr", SP(x.RequiredTesseraACR)),
+		sql.Named("max_age", maxAge), sql.Named("request_ip", SP(x.RequestIP)),
+		sql.Named("request_user_agent", SP(x.RequestUserAgent)), sql.Named("poll_interval", x.Interval),
+		sql.Named("created_at", RT(x.CreatedAt)), sql.Named("expires_at", RT(x.ExpiresAt)))
+	if isUnique(err) {
+		return ErrDuplicate
 	}
-	if _, err := tx.exec(oauthGrantsUpsert, sql.Named("id", NewID()), sql.Named("app_id", g.AppID),
-		sql.Named("provider", g.Provider), sql.Named("grant_key", g.GrantKey), sql.Named("provider_ref", g.ProviderRef),
-		sql.Named("kind", g.Kind), sql.Named("identity_id", IP(g.IdentityID)), sql.Named("account_id", IP(g.AccountID)),
-		sql.Named("user_ref", g.UserRef), sql.Named("granter_admin", B(g.GranterAdmin)), sql.Named("scopes", scopes),
-		sql.Named("consent_type", g.ConsentType), sql.Named("granted_at", RTP(g.GrantedAt)),
-		sql.Named("last_used", RTP(g.LastUsed)), sql.Named("now", RT(now))); err != nil {
-		return err
-	}
-	got, err := one(tx, scanOAuthGrant, oauthGrantsByKey, sql.Named("app_id", g.AppID), sql.Named("grant_key", g.GrantKey))
-	if err != nil {
-		return err
-	}
-	*g = *got
-	return nil
+	return crossTenant(err)
 }
 
-// OAuthGrant returns one grant or ErrNotFound.
-func (tx *TenantTx) OAuthGrant(id string) (*OAuthGrant, error) {
-	return one(tx, scanOAuthGrant, oauthGrantsGet, sql.Named("id", id))
+// DeviceGrant returns one of this tenant's grants (ErrNotFound otherwise).
+func (tx *TenantTx) DeviceGrant(id uuid.UUID) (*DeviceGrant, error) {
+	return one(tx, scanDevice, deviceGet, sql.Named("id", id.String()))
 }
 
-// OAuthGrantsOf lists an app's grants.
-func (tx *TenantTx) OAuthGrantsOf(appID string) ([]*OAuthGrant, error) {
-	return collect(tx, scanOAuthGrant, oauthGrantsByApp, sql.Named("app_id", appID))
+// DeviceGrantByDeviceCodeHash returns the grant with this device-code hash.
+func (tx *TenantTx) DeviceGrantByDeviceCodeHash(hash string) (*DeviceGrant, error) {
+	return one(tx, scanDevice, deviceByDeviceCode, sql.Named("hash", hash))
 }
 
-// OAuthGrants lists every grant of the tenant.
-func (tx *TenantTx) OAuthGrants() ([]*OAuthGrant, error) {
-	return collect(tx, scanOAuthGrant, oauthGrantsAll)
+// PendingDeviceGrantByUserCodeHash returns the unexpired pending grant with
+// this user-code hash (ErrNotFound otherwise).
+func (tx *TenantTx) PendingDeviceGrantByUserCodeHash(hash string, now time.Time) (*DeviceGrant, error) {
+	return one(tx, scanDevice, devicePendingByUserCode, sql.Named("hash", hash), sql.Named("now", RT(now)))
 }
 
-// RemoveUnseenOAuthGrants marks the provider's active grants last seen before
-// `before` as removed (a full successful sync did not list them) and returns
-// how many. Revoked grants keep their status.
-func (tx *TenantTx) RemoveUnseenOAuthGrants(provider string, before time.Time) (int, error) {
-	res, err := tx.exec(oauthGrantsRemove, sql.Named("provider", provider), sql.Named("before", RT(before)))
+// ExpireStaleDeviceGrants marks pending grants past their expiry expired
+// (frees their user codes) and returns how many.
+func (tx *TenantTx) ExpireStaleDeviceGrants(now time.Time) (int64, error) {
+	res, err := tx.exec(deviceExpireStale, sql.Named("now", RT(now)))
 	if err != nil {
 		return 0, err
 	}
-	n, err := res.RowsAffected()
-	return int(n), err
+	return res.RowsAffected()
 }
 
-// SetOAuthGrantStatus records the outcome of a revoke on a grant: revoked,
-// revoke_failed (with the error) or active again.
-func (tx *TenantTx) SetOAuthGrantStatus(id, status string, by *string, at *time.Time, revokeError string) error {
-	return tx.execOne(oauthGrantsSetStatus, sql.Named("id", id), sql.Named("status", status), sql.Named("revoked_at", RTP(at)),
-		sql.Named("revoked_by", SP(by)), sql.Named("revoke_error", revokeError))
+// PollDeviceGrant records a poll and the (possibly raised) interval.
+func (tx *TenantTx) PollDeviceGrant(id uuid.UUID, at time.Time, interval int) error {
+	return tx.execOne(devicePoll, sql.Named("at", RT(at)), sql.Named("poll_interval", interval), sql.Named("id", id.String()))
 }
 
-// PutOAuthSyncState records the result of a provider's sync. A failed sync
-// keeps the counts and the success time of the last good one.
-func (tx *TenantTx) PutOAuthSyncState(st *OAuthSyncState) error {
-	_, err := tx.exec(oauthSyncUpsert, sql.Named("provider", st.Provider), sql.Named("status", st.Status),
-		sql.Named("attempted_at", RT(st.AttemptedAt)), sql.Named("succeeded_at", RTP(st.SucceededAt)),
-		sql.Named("apps", st.Apps), sql.Named("grants", st.Grants), sql.Named("removed", st.Removed), sql.Named("error", st.Error))
-	return err
+// ApproveDeviceGrant approves a pending, unexpired grant for a user with the
+// authentication context that approved it and the CLI session created for it
+// (ErrNotFound if the grant is not pending or has expired).
+func (tx *TenantTx) ApproveDeviceGrant(id, userID, ctxID, sessionID uuid.UUID, at time.Time) error {
+	return tx.execOne(deviceApprove, sql.Named("user_id", userID.String()), sql.Named("ctx_id", ctxID.String()),
+		sql.Named("session_id", sessionID.String()), sql.Named("at", RT(at)), sql.Named("id", id.String()))
 }
 
-// OAuthSyncStates lists the last sync of each provider.
-func (tx *TenantTx) OAuthSyncStates() ([]*OAuthSyncState, error) {
-	return collect(tx, scanOAuthSync, oauthSyncList)
+// DenyDeviceGrant denies a pending, unexpired grant.
+func (tx *TenantTx) DenyDeviceGrant(id, userID uuid.UUID, at time.Time) error {
+	return tx.execOne(deviceDeny, sql.Named("user_id", userID.String()), sql.Named("at", RT(at)), sql.Named("id", id.String()))
+}
+
+// ExpireDeviceGrant marks a pending grant expired.
+func (tx *TenantTx) ExpireDeviceGrant(id uuid.UUID) error {
+	return tx.execOne(deviceExpire, sql.Named("id", id.String()))
+}
+
+// ConsumeDeviceGrant marks an approved, unexpired grant consumed: the device
+// code can be exchanged once (ErrNotFound if it was already).
+func (tx *TenantTx) ConsumeDeviceGrant(id uuid.UUID, at time.Time) error {
+	return tx.execOne(deviceConsume, sql.Named("at", RT(at)), sql.Named("id", id.String()))
+}
+
+// ---------------------------------------------------------------- refresh_tokens
+
+const refreshCols = `r.id, r.tenant_id, r.token_hash, r.family_id, r.parent_id, r.session_id, r.user_id, r.client_id, r.dpop_jkt,
+	r.scope, r.issued_at, r.expires_at, r.absolute_expires_at, r.used_at, r.revoked_at, r.revoked_reason`
+
+var (
+	refreshInsert = tq("refresh_tokens.insert", `
+		INSERT INTO refresh_tokens (id, tenant_id, token_hash, family_id, parent_id, session_id, user_id, client_id, dpop_jkt,
+			scope, issued_at, expires_at, absolute_expires_at)
+		VALUES (@id, @tenant, @token_hash, @family_id, @parent_id, @session_id, @user_id, @client_id, @dpop_jkt,
+			@scope, @issued_at, @expires_at, @absolute_expires_at)`)
+	refreshByHash = tq("refresh_tokens.by_hash", `
+		SELECT `+refreshCols+` FROM refresh_tokens r WHERE r.tenant_id = @tenant AND r.token_hash = @hash`)
+	refreshByFamily = tq("refresh_tokens.by_family", `
+		SELECT `+refreshCols+` FROM refresh_tokens r WHERE r.tenant_id = @tenant AND r.family_id = @family_id
+		ORDER BY r.issued_at, r.rowid`)
+	// rotation: only a token that is neither used nor revoked can be used
+	refreshUse = tq("refresh_tokens.use", `
+		UPDATE refresh_tokens SET used_at = @at
+		WHERE tenant_id = @tenant AND id = @id AND used_at IS NULL AND revoked_at IS NULL`)
+	refreshRevokeFamily = tq("refresh_tokens.revoke_family", `
+		UPDATE refresh_tokens SET revoked_at = @at, revoked_reason = @reason
+		WHERE tenant_id = @tenant AND family_id = @family_id AND revoked_at IS NULL`)
+	refreshRevokeSession = tq("refresh_tokens.revoke_session", `
+		UPDATE refresh_tokens SET revoked_at = @at, revoked_reason = @reason
+		WHERE tenant_id = @tenant AND session_id = @session_id AND revoked_at IS NULL`)
+)
+
+func scanRefresh(s scanner) (*RefreshToken, error) {
+	var x RefreshToken
+	var id, tid, family, sid, uid, issued, expires, abs string
+	var parent, used, revoked, reason sql.NullString
+	if err := s.Scan(&id, &tid, &x.TokenHash, &family, &parent, &sid, &uid, &x.ClientID, &x.DPoPJKT, &x.Scope, &issued,
+		&expires, &abs, &used, &revoked, &reason); err != nil {
+		return nil, err
+	}
+	var err error
+	if x.TenantID, err = tenantOf(tid); err != nil {
+		return nil, err
+	}
+	for _, p := range []struct {
+		dst *uuid.UUID
+		src string
+	}{{&x.ID, id}, {&x.FamilyID, family}, {&x.SessionID, sid}, {&x.UserID, uid}} {
+		if *p.dst, err = uuid.Parse(p.src); err != nil {
+			return nil, err
+		}
+	}
+	if parent.Valid {
+		u, err := uuid.Parse(parent.String)
+		if err != nil {
+			return nil, err
+		}
+		x.ParentID = &u
+	}
+	for _, p := range []struct {
+		dst *time.Time
+		src string
+	}{{&x.IssuedAt, issued}, {&x.ExpiresAt, expires}, {&x.AbsoluteExpiresAt, abs}} {
+		if *p.dst, err = ParseRT(p.src); err != nil {
+			return nil, err
+		}
+	}
+	if x.UsedAt, err = rtp(used); err != nil {
+		return nil, err
+	}
+	x.RevokedReason = strp(reason)
+	x.RevokedAt, err = rtp(revoked)
+	return &x, err
+}
+
+// InsertRefreshToken stores a refresh token (by hash).
+func (tx *TenantTx) InsertRefreshToken(x *RefreshToken) error {
+	if err := tx.own(x.TenantID); err != nil {
+		return err
+	}
+	if x.ID == uuid.Nil {
+		x.ID = uuid.New()
+	}
+	_, err := tx.exec(refreshInsert, sql.Named("id", x.ID.String()), sql.Named("token_hash", x.TokenHash),
+		sql.Named("family_id", x.FamilyID.String()), sql.Named("parent_id", uuidOrNil(x.ParentID)),
+		sql.Named("session_id", x.SessionID.String()), sql.Named("user_id", x.UserID.String()),
+		sql.Named("client_id", x.ClientID), sql.Named("dpop_jkt", x.DPoPJKT), sql.Named("scope", x.Scope),
+		sql.Named("issued_at", RT(x.IssuedAt)), sql.Named("expires_at", RT(x.ExpiresAt)),
+		sql.Named("absolute_expires_at", RT(x.AbsoluteExpiresAt)))
+	if isUnique(err) {
+		return ErrDuplicate
+	}
+	return crossTenant(err)
+}
+
+// RefreshTokenByHash returns this tenant's refresh token with the hash.
+func (tx *TenantTx) RefreshTokenByHash(hash string) (*RefreshToken, error) {
+	return one(tx, scanRefresh, refreshByHash, sql.Named("hash", hash))
+}
+
+// RefreshTokensByFamily lists a family's tokens, oldest first.
+func (tx *TenantTx) RefreshTokensByFamily(family uuid.UUID) ([]*RefreshToken, error) {
+	return collect(tx, scanRefresh, refreshByFamily, sql.Named("family_id", family.String()))
+}
+
+// UseRefreshToken marks a token used (rotated). ErrNotFound if it was
+// already used or revoked: the caller treats that as reuse.
+func (tx *TenantTx) UseRefreshToken(id uuid.UUID, at time.Time) error {
+	return tx.execOne(refreshUse, sql.Named("at", RT(at)), sql.Named("id", id.String()))
+}
+
+// RevokeRefreshFamily revokes every unrevoked token of a family and returns
+// how many.
+func (tx *TenantTx) RevokeRefreshFamily(family uuid.UUID, reason string, at time.Time) (int64, error) {
+	res, err := tx.exec(refreshRevokeFamily, sql.Named("at", RT(at)), sql.Named("reason", reason),
+		sql.Named("family_id", family.String()))
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// RevokeSessionRefreshTokens revokes every unrevoked refresh token of a
+// session and returns how many.
+func (tx *TenantTx) RevokeSessionRefreshTokens(sessionID uuid.UUID, reason string, at time.Time) (int64, error) {
+	res, err := tx.exec(refreshRevokeSession, sql.Named("at", RT(at)), sql.Named("reason", reason),
+		sql.Named("session_id", sessionID.String()))
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }

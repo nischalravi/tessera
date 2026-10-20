@@ -29,6 +29,7 @@ var ErrSessionInactive = errors.New("store: session is not active")
 const idpCols = `c.id, c.tenant_id, c.name, c.protocol, c.profile, c.status, c.is_default, c.verified_domains,
 	c.issuer, c.discovery_url, c.client_id, c.client_auth_method, c.client_secret_enc, c.client_signing_kid,
 	c.scopes, c.id_token_algs, c.step_up_request, c.idp_entity_id, c.idp_sso_url, c.idp_signing_certs,
+	c.authorization_endpoint, c.token_endpoint, c.userinfo_endpoint,
 	c.metadata_url, c.pin_certs, c.sp_key_enc, c.sp_cert_pem, c.subject_source, c.attribute_map, c.authn_mapping,
 	c.assume_phishing_resistant, c.groups_claim, c.group_role_mapping, c.jit_provisioning, c.default_role,
 	c.created_at, c.updated_at, c.last_change_request_id`
@@ -37,13 +38,15 @@ var (
 	idpInsert = tq("idp_connections.insert", `
 		INSERT INTO idp_connections (id, tenant_id, name, protocol, profile, status, is_default, verified_domains,
 			issuer, discovery_url, client_id, client_auth_method, client_secret_enc, client_signing_kid, scopes,
-			id_token_algs, step_up_request, idp_entity_id, idp_sso_url, idp_signing_certs, metadata_url, pin_certs,
+			id_token_algs, step_up_request, idp_entity_id, idp_sso_url, idp_signing_certs, authorization_endpoint,
+			token_endpoint, userinfo_endpoint, metadata_url, pin_certs,
 			sp_key_enc, sp_cert_pem, subject_source, attribute_map, authn_mapping, assume_phishing_resistant,
 			groups_claim, group_role_mapping, jit_provisioning, default_role, created_at, updated_at,
 			last_change_request_id)
 		VALUES (@id, @tenant, @name, @protocol, @profile, @status, @is_default, @verified_domains,
 			@issuer, @discovery_url, @client_id, @client_auth_method, @client_secret_enc, @client_signing_kid, @scopes,
-			@id_token_algs, @step_up_request, @idp_entity_id, @idp_sso_url, @idp_signing_certs, @metadata_url, @pin_certs,
+			@id_token_algs, @step_up_request, @idp_entity_id, @idp_sso_url, @idp_signing_certs, @authorization_endpoint,
+			@token_endpoint, @userinfo_endpoint, @metadata_url, @pin_certs,
 			@sp_key_enc, @sp_cert_pem, @subject_source, @attribute_map, @authn_mapping, @assume_phishing_resistant,
 			@groups_claim, @group_role_mapping, @jit_provisioning, @default_role, @created_at, @updated_at,
 			@last_change_request_id)`)
@@ -68,9 +71,11 @@ func scanIdP(s scanner) (*IdPConnection, error) {
 	var verified, scopes, algs, stepUp, certs, attrs, mapping, groupMap string
 	var isDefault, pin, assume, jitProv int
 	var issuer, disc, clientID, authMethod, kid, entity, sso, meta, spCert, groupsClaim, lastCR sql.NullString
+	var authzEP, tokenEP, userinfoEP sql.NullString
 	if err := s.Scan(&id, &tid, &c.Name, &c.Protocol, &c.Profile, &c.Status, &isDefault, &verified,
 		&issuer, &disc, &clientID, &authMethod, &c.ClientSecretEnc, &kid,
 		&scopes, &algs, &stepUp, &entity, &sso, &certs,
+		&authzEP, &tokenEP, &userinfoEP,
 		&meta, &pin, &c.SPKeyEnc, &spCert, &c.SubjectSource, &attrs, &mapping,
 		&assume, &groupsClaim, &groupMap, &jitProv, &c.DefaultRole,
 		&created, &updated, &lastCR); err != nil {
@@ -90,6 +95,7 @@ func scanIdP(s scanner) (*IdPConnection, error) {
 	c.Issuer, c.DiscoveryURL, c.ClientID, c.ClientAuthMethod = strp(issuer), strp(disc), strp(clientID), strp(authMethod)
 	c.ClientSigningKID, c.IdPEntityID, c.IdPSSOURL, c.MetadataURL = strp(kid), strp(entity), strp(sso), strp(meta)
 	c.SPCertPEM, c.GroupsClaim, c.LastChangeRequestID = strp(spCert), strp(groupsClaim), strp(lastCR)
+	c.AuthorizationEndpoint, c.TokenEndpoint, c.UserinfoEndpoint = strp(authzEP), strp(tokenEP), strp(userinfoEP)
 	if c.CreatedAt, err = ParseRT(created); err != nil {
 		return nil, err
 	}
@@ -125,6 +131,8 @@ func (tx *TenantTx) InsertIdPConnection(c *IdPConnection) error {
 		sql.Named("id_token_algs", jsonOr(c.IDTokenAlgs, `["RS256","ES256","PS256"]`)),
 		sql.Named("step_up_request", jsonOr(c.StepUpRequest, "{}")), sql.Named("idp_entity_id", SP(c.IdPEntityID)),
 		sql.Named("idp_sso_url", SP(c.IdPSSOURL)), sql.Named("idp_signing_certs", jsonOr(c.IdPSigningCerts, "[]")),
+		sql.Named("authorization_endpoint", SP(c.AuthorizationEndpoint)), sql.Named("token_endpoint", SP(c.TokenEndpoint)),
+		sql.Named("userinfo_endpoint", SP(c.UserinfoEndpoint)),
 		sql.Named("metadata_url", SP(c.MetadataURL)), sql.Named("pin_certs", B(c.PinCerts)),
 		sql.Named("sp_key_enc", c.SPKeyEnc), sql.Named("sp_cert_pem", SP(c.SPCertPEM)),
 		sql.Named("subject_source", c.SubjectSource), sql.Named("attribute_map", jsonOr(c.AttributeMap, "{}")),
@@ -682,15 +690,23 @@ func (tx *TenantTx) ExpireSession(id uuid.UUID) error {
 // two reads of a tenant table outside a TenantTx (design §14.2): the caller
 // then loads the row with InTenant/ReadTenant, which re-applies the tenant.
 func (s *SystemTx) LookupSessionBySecretHash(hash string) (tenancy.ID, uuid.UUID, error) {
-	return s.lookup(sessionsLookup, hash)
+	return s.lookup(sessionsLookup, "session_hash", hash)
 }
 
-func (s *SystemTx) lookup(st lstmt, hash string) (tenancy.ID, uuid.UUID, error) {
+// lookup runs one of the two hash lookups. On Postgres it first sets
+// app.lookup (transaction-local) to the lookup's name, which is what the
+// narrow SELECT policy lookup_by_hash of rls.sql keys on.
+func (s *SystemTx) lookup(st lstmt, setting, hash string) (tenancy.ID, uuid.UUID, error) {
 	if len(hash) != 64 {
 		return tenancy.ID{}, uuid.Nil, ErrNotFound
 	}
+	if s.tx.d == dialectPostgres {
+		if _, err := s.tx.tx.ExecContext(s.ctx, pgSetLookup, setting); err != nil {
+			return tenancy.ID{}, uuid.Nil, fmt.Errorf("store: set lookup: %w", err)
+		}
+	}
 	var tid, id string
-	err := s.tx.QueryRowContext(s.ctx, st.sql, sql.Named("hash", hash)).Scan(&tid, &id)
+	err := s.db.queryRowIn(s.ctx, s.tx, st.sql, []any{sql.Named("hash", hash)}).Scan(&tid, &id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return tenancy.ID{}, uuid.Nil, ErrNotFound
 	}
@@ -709,16 +725,16 @@ func (s *SystemTx) lookup(st lstmt, hash string) (tenancy.ID, uuid.UUID, error) 
 
 const txnCols = `t.id, t.tenant_id, t.cookie_hash, t.idp_connection_id, t.purpose, t.state_hash, t.nonce,
 	t.pkce_verifier_enc, t.saml_request_id, t.required_tessera_acr, t.max_age, t.session_id,
-	t.expected_external_login_id, t.return_to, t.created_at, t.expires_at, t.consumed_at`
+	t.expected_external_login_id, t.bootstrap_invitation_id, t.return_to, t.created_at, t.expires_at, t.consumed_at`
 
 var (
 	txnInsert = tq("login_transactions.insert", `
 		INSERT INTO login_transactions (id, tenant_id, cookie_hash, idp_connection_id, purpose, state_hash, nonce,
 			pkce_verifier_enc, saml_request_id, required_tessera_acr, max_age, session_id, expected_external_login_id,
-			return_to, created_at, expires_at)
+			bootstrap_invitation_id, return_to, created_at, expires_at)
 		VALUES (@id, @tenant, @cookie_hash, @idp_connection_id, @purpose, @state_hash, @nonce,
 			@pkce_verifier_enc, @saml_request_id, @required_tessera_acr, @max_age, @session_id, @expected_external_login_id,
-			@return_to, @created_at, @expires_at)`)
+			@bootstrap_invitation_id, @return_to, @created_at, @expires_at)`)
 	txnGet = tq("login_transactions.get", `
 		SELECT `+txnCols+` FROM login_transactions t WHERE t.tenant_id = @tenant AND t.id = @id`)
 	// single use: only an unconsumed, unexpired transaction can be consumed
@@ -732,10 +748,10 @@ var (
 func scanTxn(s scanner) (*LoginTransaction, error) {
 	var x LoginTransaction
 	var id, tid, conn, created, expires string
-	var state, nonce, samlID, acr, sid, ext, consumed sql.NullString
+	var state, nonce, samlID, acr, sid, ext, inv, consumed sql.NullString
 	var maxAge sql.NullInt64
 	if err := s.Scan(&id, &tid, &x.CookieHash, &conn, &x.Purpose, &state, &nonce, &x.PKCEVerifierEnc, &samlID, &acr,
-		&maxAge, &sid, &ext, &x.ReturnTo, &created, &expires, &consumed); err != nil {
+		&maxAge, &sid, &ext, &inv, &x.ReturnTo, &created, &expires, &consumed); err != nil {
 		return nil, err
 	}
 	var err error
@@ -751,7 +767,7 @@ func scanTxn(s scanner) (*LoginTransaction, error) {
 	for _, p := range []struct {
 		dst **uuid.UUID
 		src sql.NullString
-	}{{&x.SessionID, sid}, {&x.ExpectedExternalLoginID, ext}} {
+	}{{&x.SessionID, sid}, {&x.ExpectedExternalLoginID, ext}, {&x.BootstrapInvitationID, inv}} {
 		if p.src.Valid {
 			u, err := uuid.Parse(p.src.String)
 			if err != nil {
@@ -827,6 +843,7 @@ func (tx *TenantTx) InsertLoginTransaction(x *LoginTransaction) error {
 		sql.Named("required_tessera_acr", SP(x.RequiredTesseraACR)), sql.Named("max_age", IP(x.MaxAge)),
 		sql.Named("session_id", uuidOrNil(x.SessionID)),
 		sql.Named("expected_external_login_id", uuidOrNil(x.ExpectedExternalLoginID)),
+		sql.Named("bootstrap_invitation_id", uuidOrNil(x.BootstrapInvitationID)),
 		sql.Named("return_to", x.ReturnTo), sql.Named("created_at", RT(x.CreatedAt)),
 		sql.Named("expires_at", RT(x.ExpiresAt)))
 	if isUnique(err) {
@@ -849,5 +866,5 @@ func (tx *TenantTx) ConsumeLoginTransaction(id uuid.UUID, at time.Time) error {
 // LookupLoginTxnByCookieHash resolves a login cookie's hash to its tenant and
 // transaction id (the second §14.2 lookup).
 func (s *SystemTx) LookupLoginTxnByCookieHash(hash string) (tenancy.ID, uuid.UUID, error) {
-	return s.lookup(txnLookup, hash)
+	return s.lookup(txnLookup, "login_cookie_hash", hash)
 }

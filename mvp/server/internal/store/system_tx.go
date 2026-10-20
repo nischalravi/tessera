@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 )
@@ -14,16 +15,17 @@ import (
 // lookups of design §14.2. It has no access to tenant-owned tables.
 type SystemTx struct {
 	ctx    context.Context
-	tx     *sql.Tx
+	db     *DB
+	tx     *xtx
 	reason string
 }
 
 func (s *SystemTx) exec(st sstmt, args ...sql.NamedArg) (sql.Result, error) {
-	return s.tx.ExecContext(s.ctx, st.sql, namedArgs(args)...)
+	return s.db.execIn(s.ctx, s.tx, st.sql, namedArgs(args))
 }
 
 func (s *SystemTx) query(st sstmt, args ...sql.NamedArg) (*sql.Rows, error) {
-	return s.tx.QueryContext(s.ctx, st.sql, namedArgs(args)...)
+	return s.db.queryIn(s.ctx, s.tx, st.sql, namedArgs(args))
 }
 
 func namedArgs(args []sql.NamedArg) []any {
@@ -34,7 +36,7 @@ func namedArgs(args []sql.NamedArg) []any {
 	return out
 }
 
-const tenantCols = `t.id, t.slug, t.name, t.status, t.cell, t.min_admins, t.settings, t.created_at`
+const tenantCols = `t.id, t.slug, t.name, t.status, t.cell, t.min_admins, t.settings, t.security_contacts, t.created_at`
 
 var (
 	tenantsExists         = sq("tenants.exists", `SELECT count(*) FROM tenants t WHERE t.id = @id`)
@@ -58,7 +60,7 @@ func scanTenant(s scanner) (Tenant, error) {
 	var t Tenant
 	var id string
 	var created nullTime
-	if err := s.Scan(&id, &t.Slug, &t.Name, &t.Status, &t.Cell, &t.MinAdmins, &t.Settings, &created); err != nil {
+	if err := s.Scan(&id, &t.Slug, &t.Name, &t.Status, &t.Cell, &t.MinAdmins, &t.Settings, &t.SecurityContacts, &created); err != nil {
 		return t, err
 	}
 	var err error
@@ -164,4 +166,33 @@ func (s *SystemTx) TenantByID(id tenancy.ID) (Tenant, error) {
 		return Tenant{}, ErrNotFound
 	}
 	return ts[0], nil
+}
+
+// ---------------------------------------------------------------- replay_cache
+
+var (
+	replayPurge  = sq("replay_cache.purge", `DELETE FROM replay_cache WHERE expires_at <= @now`)
+	replayInsert = sq("replay_cache.insert", `
+		INSERT INTO replay_cache (kind, key_hash, expires_at) VALUES (@kind, @key_hash, @expires_at)`)
+)
+
+// Replay kinds.
+const (
+	ReplaySAMLAssertion = "saml_assertion"
+	ReplayDPoPJTI       = "dpop_jti"
+)
+
+// UseOnce records that the value with keyHash (SHA-256 hex) of kind was
+// used, until expires. It returns ErrDuplicate if it was already used and has
+// not expired; expired entries are purged first.
+func (s *SystemTx) UseOnce(kind, keyHash string, now, expires time.Time) error {
+	if _, err := s.exec(replayPurge, sql.Named("now", RT(now))); err != nil {
+		return err
+	}
+	_, err := s.exec(replayInsert, sql.Named("kind", kind), sql.Named("key_hash", keyHash),
+		sql.Named("expires_at", RT(expires)))
+	if isUnique(err) {
+		return ErrDuplicate
+	}
+	return err
 }

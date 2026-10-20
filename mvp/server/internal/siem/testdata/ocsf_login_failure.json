@@ -1,0 +1,61 @@
+{
+  "activity_id": 1,
+  "activity_name": "Logon",
+  "actor": {
+    "app_name": "Tessera",
+    "user": {
+      "type": "anonymous"
+    }
+  },
+  "category_name": "Identity & Access Management",
+  "category_uid": 3,
+  "class_name": "Authentication",
+  "class_uid": 3002,
+  "message": "auth.login.failure",
+  "metadata": {
+    "labels": [
+      "tenant:larkspur"
+    ],
+    "log_name": "tessera.audit",
+    "original_time": "2026-10-11T09:30:00.123Z",
+    "product": {
+      "feature": {
+        "name": "audit"
+      },
+      "name": "Tessera",
+      "vendor_name": "Tessera"
+    },
+    "sequence": 2,
+    "tenant_uid": "00000000-0000-4000-8000-0000000000aa",
+    "uid": "00000000-0000-4000-8000-000000000002",
+    "version": "1.3.0"
+  },
+  "severity": "Medium",
+  "severity_id": 3,
+  "src_endpoint": {
+    "ip": "203.0.113.7"
+  },
+  "status": "Failure",
+  "status_detail": "unknown_user",
+  "status_id": 2,
+  "time": 1791711000123,
+  "type_name": "Authentication: Logon",
+  "type_uid": 300201,
+  "unmapped": {
+    "tessera": {
+      "action": "auth.login.failure",
+      "detail": {
+        "email": "mallory@example.com",
+        "reason": "unknown_user"
+      },
+      "hash": "hash2",
+      "outcome": "failure",
+      "prev_hash": "prev2",
+      "seq": 2,
+      "tenant_id": "00000000-0000-4000-8000-0000000000aa"
+    }
+  },
+  "user": {
+    "name": "mallory@example.com"
+  }
+}

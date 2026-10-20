@@ -1,0 +1,42 @@
+{
+  "active_roles": [
+    "string"
+  ],
+  "authn": {
+    "aal": "number",
+    "acr": "string",
+    "auth_time": "string",
+    "methods": [],
+    "phishing_resistant": "boolean",
+    "phr_basis": "string"
+  },
+  "csrf_token": "string",
+  "inactive_roles": [
+    {
+      "reason": "string",
+      "role": "string"
+    }
+  ],
+  "permissions": [
+    "string"
+  ],
+  "roles": [
+    "string"
+  ],
+  "session": {
+    "absolute_expires_at": "string",
+    "id": "string",
+    "idle_expires_at": "string"
+  },
+  "tenant": {
+    "id": "string",
+    "name": "string",
+    "slug": "string"
+  },
+  "user": {
+    "display_name": "string",
+    "email": "string",
+    "id": "string",
+    "identity_id": "null"
+  }
+}

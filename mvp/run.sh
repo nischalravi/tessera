@@ -2,12 +2,16 @@
 # Tessera MVP launcher.
 #   ./run.sh            build the Go server, install UI deps (first run), seed if no DB (or a
 #                       DB from before sign-in), start the dev IdP :8001, the API :8000 and
-#                       the UI :5173; open the UI and use dev sign-in (see mvp/README.md)
+#                       the UI :5173; open the UI and sign in through the dev IdP (see mvp/README.md)
 #   ./run.sh --reseed   wipe and re-seed the demo database first
 #   ./run.sh test       go vet + the Go test suite (includes the API parity replay)
 #   ./run.sh build      build the Go server and type-check/build the frontend
 #   ./run.sh seed       (re)seed the database only
 #   ./run.sh audit-deps govulncheck ./... on the Go module (install: server/scripts/install-tools.sh)
+#   ./run.sh backup     take an encrypted online backup now (server may be running; args go to
+#                       `tessera backup create`, e.g. -dir /backups -keep 28)
+#   ./run.sh restore F  verify backup F and restore it over the database (stop the server
+#                       first; the current database is kept as a .pre-restore copy)
 #   ./run.sh devidp     run only the dev IdP (mock OIDC issuer for local sign-in) in the foreground
 #   ./run.sh bench      Go benchmarks + end-to-end latency/startup/memory of the server
 #                       (set PYTHON=… PY_BACKEND=… to also measure a Python backend checkout)
@@ -25,13 +29,15 @@ export UI_PORT
 DEVIDP_PORT="${DEVIDP_PORT:-8001}"
 DEVIDP_URL="${TESSERA_DEV_IDP_URL:-http://127.0.0.1:$DEVIDP_PORT}"
 # seeding creates a dev_mock IdP connection to this issuer with the dev IdP's users
-# (dev sign-in resolves users through it); the API refuses it in production (§18.4)
+# (the seeded dev_mock connections sign users in through it); the API refuses it in production (§18.4)
 export TESSERA_DEV_IDP_URL="$DEVIDP_URL"
 # read policies from disk so edits apply on the next request (the binary also embeds copies)
 export TESSERA_POLICY_DIR="${TESSERA_POLICY_DIR:-$SERVER/policies}"
-# local development: every API call needs a session; TESSERA_ENV=dev enables dev sign-in
-# (POST /api/auth/dev-login) until IdP sign-in lands in the UI (Phase 0 PR7)
+# local development: every API call needs a session; users sign in through the dev IdP
 export TESSERA_ENV="${TESSERA_ENV:-dev}"
+# dev only: an in-process fake SCIM target so Admin → Provisioning can be tried without a real
+# system (the API refuses it in production). TESSERA_DEV_FAKE_TARGET=0 turns it off.
+export TESSERA_DEV_FAKE_TARGET="${TESSERA_DEV_FAKE_TARGET:-1}"
 # the browser origin of the UI: the CSRF Origin check admits it
 export TESSERA_PUBLIC_URL="${TESSERA_PUBLIC_URL:-http://localhost:$UI_PORT}"
 
@@ -76,6 +82,12 @@ setup_frontend() {
 # `tessera seed` drops and recreates every table, so it also works over a
 # database left from an older schema. Stop a running API before reseeding.
 seed() {
+  # the dev IdP's SAML signing certificate (derived from its key), pinned by
+  # the seeded dev_mock SAML connection
+  if [ "${DEVIDP:-1}" != "0" ] && [ -x "$DEVIDP_BIN" ]; then
+    TESSERA_DEV_IDP_SAML_CERT="$("$DEVIDP_BIN" -print-saml-cert -issuer "$DEVIDP_URL" -key-dir "$SERVER/var/devidp")"
+    export TESSERA_DEV_IDP_SAML_CERT
+  fi
   "$BIN" seed -db "$DB"
 }
 
@@ -104,6 +116,17 @@ case "${1:-}" in
     seed
     exit 0
     ;;
+  backup)
+    build_server
+    shift
+    exec "$BIN" backup create -db "$DB" "$@"
+    ;;
+  restore)
+    build_server
+    if [ -z "${2:-}" ]; then echo "usage: ./run.sh restore <backup.tbak> [tessera backup restore flags]" >&2; exit 2; fi
+    f="$2"; shift 2
+    exec "$BIN" backup restore -in "$f" -db "$DB" -force "$@"
+    ;;
   devidp)
     build_server
     echo "==> starting dev IdP on $DEVIDP_URL (development only; Ctrl+C to stop)"
@@ -125,7 +148,13 @@ esac
 
 build_server
 setup_frontend
-if [ "${1:-}" = "--reseed" ] || [ ! -f "$DB" ]; then
+if [ "${1:-}" = "--reseed" ]; then
+  seed
+elif [[ "$DB" == postgres://* || "$DB" == postgresql://* ]]; then
+  # A Postgres database is never wiped implicitly (it is not a file that may be missing);
+  # `serve` seeds an empty one in dev, and --reseed wipes and reseeds it.
+  :
+elif [ ! -f "$DB" ]; then
   seed
 elif ! "$BIN" check-db -db "$DB" >/dev/null 2>&1; then
   # a database from an older schema (before tenancy or sign-in) has no users to sign in as
@@ -150,6 +179,8 @@ if [ "${DEVIDP:-1}" != "0" ]; then
   fi
 fi
 
+# internal /metrics listener (loopback); one port per instance so several dev instances coexist
+export TESSERA_METRICS_ADDR="${TESSERA_METRICS_ADDR:-127.0.0.1:$((API_PORT + 1000))}"
 echo "==> starting API on http://127.0.0.1:$API_PORT"
 "$BIN" serve -addr "127.0.0.1:$API_PORT" -db "$DB" &
 PIDS+=($!)
@@ -160,6 +191,6 @@ for _ in $(seq 1 40); do
 done
 
 echo "==> starting UI on http://localhost:$UI_PORT  (Ctrl+C to stop everything)"
-echo "    sign in with dev sign-in: e.g. Alice (tenant admin) or Pat (policy admin) with a passkey"
+echo "    sign in to larkspur through the dev IdP: e.g. Alice (tenant admin) or Pat (policy admin) with a passkey"
 cd "$FRONTEND"
 TESSERA_API="http://127.0.0.1:$API_PORT" npx vite --port "$UI_PORT" --strictPort

@@ -1,0 +1,20 @@
+[
+  {
+    "id": "00u1averyexample01",
+    "status": "ACTIVE",
+    "created": "2024-03-01T10:00:00.000Z",
+    "lastLogin": "2026-10-08T07:00:00.000Z",
+    "lastUpdated": "2026-10-08T07:30:00.000Z",
+    "profile": {
+      "firstName": "Avery",
+      "lastName": "Example",
+      "displayName": "Avery Example",
+      "login": "avery.example@example.com",
+      "email": "avery.example@example.com",
+      "employeeNumber": "E1001",
+      "department": "Engineering",
+      "title": "Principal Engineer",
+      "managerId": "00u1morganexample2"
+    }
+  }
+]

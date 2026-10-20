@@ -303,12 +303,15 @@ var referenceColumns = map[string][]string{
 	"audit_chain_heads": {"last_seq", "last_hash"},
 	"audit_checkpoints": {"seq", "head_hash"},
 	"grant_edges":       {"src", "dst"},
+	"edge_history":      {"src", "dst"},
 	"access_requests":   {"edge_id", "requested_by_user_id", "decided_by_user_id"},
 	"review_items":      {"edge_id", "edge_src", "edge_dst", "decided_by_user_id"},
 	"hris_events":       {"executed_by_user_id"},
 	// platform users and sessions named without a declared foreign key
 	"role_assignments":   {"granted_by_user_id"},
-	"login_transactions": {"session_id", "expected_external_login_id"},
+	"login_transactions": {"session_id", "expected_external_login_id", "bootstrap_invitation_id"},
+	// an alias names a folder or a group, by object_type
+	"grp_name_aliases": {"object_id"},
 }
 
 // immutableTables refuse every UPDATE (a trigger raises unconditionally), so

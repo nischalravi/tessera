@@ -74,6 +74,7 @@ func serve(h http.Handler, req *http.Request) *httptest.ResponseRecorder {
 // session, with an expired one and with a bearer token (token principals
 // arrive in PR10); the allow-list is snapshot-tested.
 func TestAllRoutesRequireAuth(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	srv := isolationServer(t, f, f.B.ID)
 	h := srv.Anonymous()
@@ -128,6 +129,7 @@ func TestAllRoutesRequireAuth(t *testing.T) {
 // permission, and registration without one (or a public route off the
 // allow-list, or a public route reaching tenant data) panics at startup.
 func TestAllRoutesDeclarePermission(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	srv := newIsolationServer(f)
 	perms := map[auth.Permission]bool{}
@@ -171,14 +173,15 @@ func TestAllRoutesDeclarePermission(t *testing.T) {
 // recorded on the platform chain as anonymous; a 403 is recorded with the
 // user and outcome denied.
 func TestEveryCallAudited(t *testing.T) {
+	t.Parallel()
 	f := storetest.TwoTenants(t)
 	srv := newIsolationServer(f)
 	raw := srv.Handler()
 	viewer := signIn(t, f.DB, f.B.ID, authtest.User{Email: "vic@b.example", Roles: []auth.Role{auth.RoleViewer}},
 		authtest.Phr, storetest.Now)
 	for _, rt := range srv.Routes() {
-		if rt.Pattern == "/api/health" {
-			continue // excluded from http.request (§13.4)
+		if rt.Pattern == "/api/health" || (rt.Method == http.MethodGet && strings.Contains(rt.Pattern, "/.well-known/")) {
+			continue // excluded from http.request (§13.4, audit.DefaultExcluded): TestOAuth_WellKnownNotAudited
 		}
 		t.Run(rt.Method+" "+rt.Pattern, func(t *testing.T) {
 			// a fresh session per route: logout and session revocation end theirs

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strconv"
 	"time"
 )
 
@@ -43,10 +45,15 @@ func (r AuthnRequirement) describe() string {
 }
 
 // WriteDenial writes the error-contract response of d (§16.2). A step-up
-// denial carries the RFC 9470 challenge in WWW-Authenticate and the
-// requirement in the body. The step-up flow that satisfies it (step_up_url,
-// /api/auth/step-up) arrives in PR8; until then the client signs in again.
-func WriteDenial(w http.ResponseWriter, d *Denial) {
+// denial carries the RFC 9470 challenge in WWW-Authenticate and, in the body,
+// the requirement and the step_up_url that satisfies it (§9.4; the client
+// adds return_to).
+func WriteDenial(w http.ResponseWriter, d *Denial) { WriteDenialScheme(w, d, "Bearer") }
+
+// WriteDenialScheme is WriteDenial with the challenge's authentication
+// scheme: "DPoP" for a token principal, whose client reads the same
+// insufficient_user_authentication error (RFC 9470, RFC 9449 §7.1).
+func WriteDenialScheme(w http.ResponseWriter, d *Denial, scheme string) {
 	body := map[string]any{"error": d.Error}
 	if d.Permission != "" && d.Error != "login_required" {
 		body["permission"] = string(d.Permission)
@@ -55,9 +62,10 @@ func WriteDenial(w http.ResponseWriter, d *Denial) {
 		req := *d.Requirement
 		maxAge := int64(req.MaxAge / time.Second)
 		body["acr"], body["max_age"] = string(req.ACR), maxAge
+		body["step_up_url"] = StepUpURL(req)
 		w.Header().Set("WWW-Authenticate", fmt.Sprintf(
-			`Bearer error="insufficient_user_authentication", error_description=%q, acr_values=%q, max_age=%d`,
-			req.describe(), string(req.ACR), maxAge))
+			`%s error="insufficient_user_authentication", error_description=%q, acr_values=%q, max_age=%d`,
+			scheme, req.describe(), string(req.ACR), maxAge))
 	}
 	b, err := json.Marshal(body)
 	if err != nil {
@@ -68,4 +76,11 @@ func WriteDenial(w http.ResponseWriter, d *Denial) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(d.Status)
 	_, _ = w.Write(b) // #nosec G705 -- JSON-encoded body served as application/json with nosniff
+}
+
+// StepUpURL is the URL that starts the step-up satisfying req (without
+// return_to, which the client adds).
+func StepUpURL(req AuthnRequirement) string {
+	v := url.Values{"acr": {string(req.ACR)}, "max_age": {strconv.FormatInt(int64(req.MaxAge/time.Second), 10)}}
+	return "/api/auth/step-up?" + v.Encode()
 }

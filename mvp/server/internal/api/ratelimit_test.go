@@ -1,6 +1,9 @@
 package api
 
 import (
+	"context"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -10,10 +13,14 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/authtest"
+	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/seed"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/testkit"
+	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
+	"github.com/nischalravi/tessera/mvp/server/policies"
 )
 
 // noRateLimits is for tests that send many anonymous requests on purpose.
@@ -43,7 +50,7 @@ func countHTTPEvents(t *testing.T, db *store.DB) int {
 // 429 with Retry-After and writes nothing to the ledger; another IP and a
 // signed-in session are unaffected; made-up cookies count as anonymous.
 func TestRateLimit_AnonymousPerIP(t *testing.T) {
-	srv, db := devLoginServer(t, "dev")
+	srv, db := seededServer(t)
 	srv.limits = newLimiters(RateLimits{Anonymous: RateLimit{Every: time.Hour, Burst: 3}, Auth: RateLimit{Every: time.Hour, Burst: 100}})
 	h := srv.Handler()
 	alice := signIn(t, db, seed.LarkspurID, testAdmin, authtest.Phr, testkit.Now)
@@ -97,21 +104,30 @@ func TestRateLimit_AnonymousPerIP(t *testing.T) {
 // TestRateLimit_AuthRoutes: every /api/auth/* request takes a token from the
 // IP's auth bucket, signed in or not.
 func TestRateLimit_AuthRoutes(t *testing.T) {
-	srv, db := devLoginServer(t, "dev")
+	srv, db := seededServer(t)
 	srv.limits = newLimiters(RateLimits{Anonymous: RateLimit{Every: time.Hour, Burst: 100}, Auth: RateLimit{Every: time.Hour, Burst: 2}})
 	h := srv.Handler()
 	alice := signIn(t, db, seed.LarkspurID, testAdmin, authtest.Phr, testkit.Now)
-	body := `{"tenant":"larkspur","subject":"nobody"}`
-	for i, want := range []int{401, 401, 429} {
-		r := fromIP(httptest.NewRequest("POST", "/api/auth/dev-login", strings.NewReader(body)), "198.51.100.8:1")
-		r.Header.Set("Content-Type", "application/json")
-		r.Header.Set("Origin", authtest.Origin)
+	for i, want := range []int{200, 200, 429} {
+		r := fromIP(httptest.NewRequest("GET", "/api/auth/discover?tenant=larkspur", nil), "198.51.100.8:1")
 		if code := serve(h, r).Code; code != want {
-			t.Errorf("dev-login %d: %d, want %d", i, code, want)
+			t.Errorf("discover %d: %d, want %d", i, code, want)
 		}
 	}
-	if code := serve(h, fromIP(authed(alice, "GET", "/api/auth/session", ""), "198.51.100.8:1")).Code; code != 429 {
-		t.Errorf("signed-in /api/auth/session from a limited IP: %d", code)
+	// Reading your own session is not a sign-in attempt: the UI does it on every page load (UAT #308).
+	for _, path := range []string{"/api/auth/session", "/api/auth/sessions"} {
+		if code := serve(h, fromIP(authed(alice, "GET", path, ""), "198.51.100.8:1")).Code; code != 200 {
+			t.Errorf("signed-in %s from a limited IP: %d", path, code)
+		}
+	}
+	// ... and does not use up the sign-in budget of a fresh IP.
+	for i := 0; i < 40; i++ {
+		if code := serve(h, fromIP(authed(alice, "GET", "/api/auth/session", ""), "198.51.100.9:1")).Code; code != 200 {
+			t.Fatalf("session read %d: %d", i, code)
+		}
+	}
+	if code := serve(h, fromIP(httptest.NewRequest("GET", "/api/auth/discover?tenant=larkspur", nil), "198.51.100.9:1")).Code; code != 200 {
+		t.Errorf("discover after 40 session reads: %d", code)
 	}
 	if code := serve(h, fromIP(authed(alice, "GET", "/api/identities", ""), "198.51.100.8:1")).Code; code != 200 {
 		t.Errorf("other routes of a signed-in user from that IP: %d", code)
@@ -130,15 +146,36 @@ func TestRateLimit_ClientBehindTrustedProxy(t *testing.T) {
 		{"10.1.2.3:443", "junk, 198.51.100.2", "198.51.100.2"},
 		{"10.1.2.3:443", "[::1], junk", "10.1.2.3"},
 		{"10.1.2.3:443", "2001:db8:1:2::7", "2001:db8:1:2::/64"},
+		{"10.1.2.3:443", "2001:db8:1:2:aaaa:bbbb:cccc:dddd", "2001:db8:1:2::/64"}, // same /64, same bucket
+		{"10.1.2.3:443", "fe80::1%eth0", "fe80::/64"},                             // zone dropped
+		{"10.1.2.3:443", "::ffff:198.51.100.3", "198.51.100.3"},
+		{"[2001:db8:9:9::1]:443", "", "2001:db8:9:9::/64"},
 		{"203.0.113.5:443", "198.51.100.1", "203.0.113.5"}, // untrusted peer: header ignored
+		{"not-an-address", "", "invalid"},
 	} {
 		r := httptest.NewRequest("GET", "/api/health", nil)
 		r.RemoteAddr = tc.peer
 		if tc.xff != "" {
 			r.Header.Set("X-Forwarded-For", tc.xff)
 		}
-		if got := s.rateKey(r); got != tc.want {
+		if got := s.rateKey(r).String(); got != tc.want {
 			t.Errorf("peer %s XFF %q: key %s, want %s", tc.peer, tc.xff, got, tc.want)
 		}
 	}
+}
+
+// seededServer is a server over a seed with the dev IdP connections and
+// their bootstrap users.
+func seededServer(t *testing.T) (*Server, *store.DB) {
+	t.Helper()
+	db := testkit.Open(t)
+	tenants := seed.WithDevIdP([]seed.Tenant{
+		{ID: seed.LarkspurID, Slug: seed.LarkspurSlug, Name: "Larkspur Labs", Connectors: []connectors.Connector{connectors.Tiny{Now: testkit.Now}}},
+		{ID: seed.GlobexID, Slug: seed.GlobexSlug, Name: "Globex", Connectors: []connectors.Connector{connectors.Tiny{Now: testkit.Now, Sentinel: "G"}}},
+	}, "http://127.0.0.1:8001")
+	if _, err := seed.Run(context.Background(), db, testkit.Now, testkit.Policies(t), tenants); err != nil {
+		t.Fatal(err)
+	}
+	return New(Config{Store: db, Clock: timeutil.Frozen(testkit.Now), Policies: policy.NewLoader(policies.FS), Env: "test",
+		AllowedOrigins: []string{authtest.Origin}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}), db
 }

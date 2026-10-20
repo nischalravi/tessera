@@ -1,3 +1,14 @@
 GET /api/health
-GET /api/auth/dev-login
-POST /api/auth/dev-login
+GET /api/auth/discover
+GET /api/auth/login
+GET /api/auth/oidc/{connection_id}/callback
+GET /t/{slug}/bootstrap
+GET /api/auth/saml/{connection_id}/metadata
+POST /api/auth/saml/{connection_id}/acs
+GET /api/auth/oauth2/{connection_id}/callback
+GET /t/{slug}/.well-known/oauth-authorization-server
+GET /t/{slug}/.well-known/jwks.json
+GET /.well-known/oauth-protected-resource
+POST /t/{slug}/oauth/device_authorization
+POST /t/{slug}/oauth/token
+POST /t/{slug}/oauth/revoke
