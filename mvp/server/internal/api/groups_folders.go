@@ -83,32 +83,77 @@ func viewFolder(f *store.Folder) folderView {
 }
 
 type groupView struct {
-	ID                string  `json:"id"`
-	FolderID          string  `json:"folder_id"`
-	Extension         string  `json:"extension"`
-	DisplayExtension  string  `json:"display_extension"`
-	Name              string  `json:"name"`
-	DisplayName       string  `json:"display_name"`
-	Description       string  `json:"description"`
-	IDIndex           int64   `json:"id_index"`
-	Type              string  `json:"type"`
-	Definition        string  `json:"definition"`
-	ManagedBy         string  `json:"managed_by"`
-	DataOwner         *string `json:"data_owner"`
-	MemberDescription *string `json:"member_description"`
-	Status            string  `json:"status"`
-	Requestable       bool    `json:"requestable"`
-	CreatedAt         string  `json:"created_at"`
-	CreatedBy         *string `json:"created_by"`
-	Version           int64   `json:"version"`
+	ID                string    `json:"id"`
+	FolderID          string    `json:"folder_id"`
+	Extension         string    `json:"extension"`
+	DisplayExtension  string    `json:"display_extension"`
+	Name              string    `json:"name"`
+	DisplayName       string    `json:"display_name"`
+	Description       string    `json:"description"`
+	IDIndex           int64     `json:"id_index"`
+	Type              string    `json:"type"`
+	Definition        string    `json:"definition"`
+	CompositeOp       *string   `json:"composite_op"`
+	Factors           *[]string `json:"factors,omitempty"` // composites, on single-group answers
+	ManagedBy         string    `json:"managed_by"`
+	DataOwner         *string   `json:"data_owner"`
+	MemberDescription *string   `json:"member_description"`
+	Status            string    `json:"status"`
+	EnabledFrom       *string   `json:"enabled_from"`
+	DisabledAt        *string   `json:"disabled_at"`
+	Requestable       bool      `json:"requestable"`
+	EffectiveCount    int64     `json:"effective_count"`
+	EffectiveVersion  int64     `json:"effective_version"`
+	// RecomputeState is clean, pending (a queued recompute is running: the
+	// members are stale) or failed.
+	RecomputeState string  `json:"recompute_state"`
+	CreatedAt      string  `json:"created_at"`
+	CreatedBy      *string `json:"created_by"`
+	Version        int64   `json:"version"`
 }
 
 func viewGroup(g *store.NativeGroup) groupView {
-	return groupView{ID: string(g.ID), FolderID: string(g.FolderID), Extension: g.Extension, DisplayExtension: g.DisplayExtension,
+	v := groupView{ID: string(g.ID), FolderID: string(g.FolderID), Extension: g.Extension, DisplayExtension: g.DisplayExtension,
 		Name: g.Name, DisplayName: g.DisplayName, Description: g.Description, IDIndex: g.IDIndex, Type: string(g.Kind),
 		Definition: string(g.Definition), ManagedBy: string(g.ManagedBy), DataOwner: g.DataOwner,
 		MemberDescription: g.MemberDescription, Status: g.Status, Requestable: g.Requestable,
+		EffectiveCount: g.EffectiveCount, EffectiveVersion: g.EffectiveVersion, RecomputeState: g.RecomputeState,
 		CreatedAt: store.RT(g.CreatedAt), CreatedBy: g.CreatedBy, Version: g.Version}
+	if g.CompositeOp != nil {
+		op := string(*g.CompositeOp)
+		v.CompositeOp = &op
+	}
+	if g.EnabledFrom != nil {
+		s := store.RT(*g.EnabledFrom)
+		v.EnabledFrom = &s
+	}
+	if g.DisabledAt != nil {
+		s := store.RT(*g.DisabledAt)
+		v.DisabledAt = &s
+	}
+	return v
+}
+
+// viewGroupFull is viewGroup plus a composite's factors.
+func viewGroupFull(e model.Env, g *store.NativeGroup) (groupView, error) {
+	v := viewGroup(g)
+	if g.Definition != store.DefinitionBasic {
+		fs, err := e.Factors(g.ID)
+		if err != nil {
+			return v, err
+		}
+		out := groupIDStrings(fs)
+		v.Factors = &out
+	}
+	return v, nil
+}
+
+func groupIDStrings(ids []store.GroupID) []string {
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		out[i] = string(id)
+	}
+	return out
 }
 
 type listBody struct {
@@ -152,7 +197,7 @@ func grpBodyID(field, v string) error {
 }
 
 func (s *Server) grpEnv(r *http.Request, c *store.TenantTx, now time.Time) model.Env {
-	env := model.Env{Tx: c, Now: now}
+	env := model.Env{Tx: c, Now: now, Engine: s.cfg.GroupsEngine}
 	if pr := principal(r); pr.UserID != nil {
 		u := pr.UserID.String()
 		env.By = &u
@@ -167,7 +212,7 @@ func (s *Server) grpWrite(r *http.Request, fn func(e model.Env) error) error {
 
 // grpRead builds a read-only model.Env.
 func (s *Server) grpRead(r *http.Request) model.Env {
-	return model.Env{Tx: store.TxFrom(r.Context()), Now: s.clock()}
+	return model.Env{Tx: store.TxFrom(r.Context()), Now: s.clock(), Engine: s.cfg.GroupsEngine}
 }
 
 // pageParams reads limit (1..500, default 100) and offset (>= 0).
@@ -397,11 +442,13 @@ func (s *Server) getGrpGroup(r *http.Request, p *params) (int, any, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	g, err := s.grpRead(r).Group(store.GroupID(id))
+	e := s.grpRead(r)
+	g, err := e.Group(store.GroupID(id))
 	if err != nil {
 		return 0, nil, grpErr(err)
 	}
-	return http.StatusOK, viewGroup(g), nil
+	v, err := viewGroupFull(e, g)
+	return http.StatusOK, v, err
 }
 
 func (s *Server) createGrpGroup(r *http.Request, _ *params) (int, any, error) {
@@ -414,6 +461,10 @@ func (s *Server) createGrpGroup(r *http.Request, _ *params) (int, any, error) {
 		DataOwner         string `json:"data_owner"`
 		MemberDescription string `json:"member_description"`
 		Requestable       bool   `json:"requestable"`
+		// a composite group: definition "composite" with an operator and its factors
+		Definition  string   `json:"definition"`
+		CompositeOp string   `json:"composite_op"`
+		Factors     []string `json:"factors"`
 	}
 	if err := decodeBody(r, &in, false); err != nil {
 		return 0, nil, err
@@ -424,18 +475,54 @@ func (s *Server) createGrpGroup(r *http.Request, _ *params) (int, any, error) {
 	if err := grpBodyID("folder", in.Folder); err != nil {
 		return 0, nil, err
 	}
-	var out *store.NativeGroup
-	err := s.grpWrite(r, func(e model.Env) error {
-		var err error
-		out, err = e.CreateGroup(model.CreateGroupInput{Folder: store.FolderID(in.Folder), Extension: in.Extension,
+	factors, err := grpFactorIDs(in.Factors)
+	if err != nil {
+		return 0, nil, err
+	}
+	var out groupView
+	err = s.grpWrite(r, func(e model.Env) error {
+		g, err := e.CreateGroup(model.CreateGroupInput{Folder: store.FolderID(in.Folder), Extension: in.Extension,
 			DisplayExtension: in.DisplayExtension, Description: in.Description, Kind: store.GroupKind(in.Type),
-			DataOwner: in.DataOwner, MemberDescription: in.MemberDescription, Requestable: in.Requestable})
+			DataOwner: in.DataOwner, MemberDescription: in.MemberDescription, Requestable: in.Requestable,
+			Definition: store.Definition(in.Definition), Op: store.CompositeOp(in.CompositeOp), Factors: factors})
+		if err != nil {
+			return err
+		}
+		out, err = viewGroupFull(e, g)
 		return err
 	})
 	if err != nil {
 		return 0, nil, err
 	}
-	return http.StatusCreated, viewGroup(out), nil
+	return http.StatusCreated, out, nil
+}
+
+// grpFactorIDs validates the factor ids of a composite body.
+func grpFactorIDs(in []string) ([]store.GroupID, error) {
+	out := make([]store.GroupID, len(in))
+	for i, f := range in {
+		if !idRE.MatchString(f) {
+			return nil, badRequest("invalid_factors", "factors must be group ids (UUIDs)")
+		}
+		out[i] = store.GroupID(f)
+	}
+	return out, nil
+}
+
+// grpTime parses an optional RFC 3339 field; clear is true for "" (remove the date).
+func grpTime(field string, v *string) (t *time.Time, clear bool, err error) {
+	if v == nil {
+		return nil, false, nil
+	}
+	if *v == "" {
+		return nil, true, nil
+	}
+	p, perr := time.Parse(time.RFC3339, *v)
+	if perr != nil {
+		return nil, false, badRequest("invalid_"+field, field+" must be an RFC 3339 time, or empty to clear it")
+	}
+	p = p.UTC()
+	return &p, false, nil
 }
 
 func (s *Server) patchGrpGroup(r *http.Request, p *params) (int, any, error) {
@@ -451,23 +538,37 @@ func (s *Server) patchGrpGroup(r *http.Request, p *params) (int, any, error) {
 		MemberDescription *string `json:"member_description"`
 		Requestable       *bool   `json:"requestable"`
 		Status            *string `json:"status"`
+		EnabledFrom       *string `json:"enabled_from"` // RFC 3339; "" removes it
+		DisabledAt        *string `json:"disabled_at"`
 		Version           *int64  `json:"version"`
 	}
 	if err := decodeBody(r, &in, false); err != nil {
 		return 0, nil, err
 	}
-	var out *store.NativeGroup
+	from, clearFrom, err := grpTime("enabled_from", in.EnabledFrom)
+	if err != nil {
+		return 0, nil, err
+	}
+	to, clearTo, err := grpTime("disabled_at", in.DisabledAt)
+	if err != nil {
+		return 0, nil, err
+	}
+	var out groupView
 	err = s.grpWrite(r, func(e model.Env) error {
-		var err error
-		out, err = e.UpdateGroup(store.GroupID(id), model.UpdateGroupInput{Extension: in.Extension,
+		g, err := e.UpdateGroup(store.GroupID(id), model.UpdateGroupInput{Extension: in.Extension,
 			DisplayExtension: in.DisplayExtension, Description: in.Description, DataOwner: in.DataOwner,
-			MemberDescription: in.MemberDescription, Requestable: in.Requestable, Status: in.Status, Version: in.Version})
+			MemberDescription: in.MemberDescription, Requestable: in.Requestable, Status: in.Status,
+			EnabledFrom: from, DisabledAt: to, ClearEnabledFrom: clearFrom, ClearDisabledAt: clearTo, Version: in.Version})
+		if err != nil {
+			return err
+		}
+		out, err = viewGroupFull(e, g)
 		return err
 	})
 	if err != nil {
 		return 0, nil, err
 	}
-	return http.StatusOK, viewGroup(out), nil
+	return http.StatusOK, out, nil
 }
 
 func (s *Server) deleteGrpGroup(r *http.Request, p *params) (int, any, error) {

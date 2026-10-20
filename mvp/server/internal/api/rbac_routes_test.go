@@ -320,6 +320,14 @@ DELETE /api/groups/{id}                              groups.admin    -  # issue 
 POST   /api/groups/{id}/move                         groups.admin    -  # issue #44
 POST   /api/groups/{id}/copy                         groups.admin    -  # issue #44
 POST   /api/groups/{id}/restore                      groups.admin    -  # issue #44
+GET    /api/groups/{id}/members                      groups.admin    -  # issue #45
+POST   /api/groups/{id}/members                      groups.admin    -  # issue #45
+GET    /api/groups/{id}/members/{member}             groups.admin    -  # issue #45
+DELETE /api/groups/{id}/members/{member}             groups.admin    -  # issue #45
+POST   /api/groups/{id}/convert-to-composite         groups.admin    -  # issue #45
+PUT    /api/groups/{id}/composite                    groups.admin    -  # issue #45
+POST   /api/groups/engine/verify                     groups.admin    -  # issue #45
+GET    /api/groups/engine/ops/{seq}                  groups.admin    -  # issue #45
 GET    /api/auth/session                             auth.self       -
 POST   /api/auth/logout                              auth.self       -
 GET    /api/auth/sessions                            auth.self       -

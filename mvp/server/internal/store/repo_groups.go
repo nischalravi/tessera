@@ -112,7 +112,7 @@ var (
 		UPDATE grp_groups SET folder_id = @folder_id, extension = @extension, display_extension = @display_extension,
 			name = @name, display_name = @display_name, description = @description, data_owner = @data_owner,
 			member_description = @member_description, status = @status, requestable = @requestable,
-			version = version + 1
+			enabled_from = @enabled_from, disabled_at = @disabled_at, version = version + 1
 		WHERE tenant_id = @tenant AND id = @id AND version = @version`)
 
 	grpAliasInsert = tq("grp_name_aliases.insert", `
@@ -426,15 +426,16 @@ func (tx *TenantTx) InsertGrpGroup(g *NativeGroup) error {
 	return err
 }
 
-// UpdateGrpGroup writes g's folder, names, description, owner, status and
-// requestable flag if the stored version is still g.Version, and bumps
+// UpdateGrpGroup writes g's folder, names, description, owner, status,
+// requestable flag and enabled and disabled dates if the stored version is still g.Version, and bumps
 // g.Version. Errors as UpdateGrpFolder.
 func (tx *TenantTx) UpdateGrpGroup(g *NativeGroup) error {
 	res, err := tx.exec(grpGroupUpdate, sql.Named("id", string(g.ID)), sql.Named("folder_id", string(g.FolderID)),
 		sql.Named("extension", g.Extension), sql.Named("display_extension", g.DisplayExtension), sql.Named("name", g.Name),
 		sql.Named("display_name", g.DisplayName), sql.Named("description", g.Description), sql.Named("data_owner", SP(g.DataOwner)),
 		sql.Named("member_description", SP(g.MemberDescription)), sql.Named("status", g.Status),
-		sql.Named("requestable", B(g.Requestable)), sql.Named("version", g.Version))
+		sql.Named("requestable", B(g.Requestable)), sql.Named("enabled_from", RTP(g.EnabledFrom)),
+		sql.Named("disabled_at", RTP(g.DisabledAt)), sql.Named("version", g.Version))
 	if err != nil {
 		return err
 	}

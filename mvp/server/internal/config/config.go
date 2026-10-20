@@ -103,6 +103,10 @@ type Config struct {
 	RPID                  string
 	Notify                string
 	DevIdPURL             string
+	// GroupsSyncBudget is TESSERA_GROUPS_SYNC_BUDGET: the most effective-row
+	// operations a group change may do inside its request; more is queued
+	// (design groups-grouper-parity.md §6.5).
+	GroupsSyncBudget int
 	// FakeTarget is TESSERA_DEV_FAKE_TARGET: cmd/tessera starts an in-process
 	// fake SCIM target on a loopback port, so the provisioning screens can be
 	// demonstrated without a real system. Refused in prod.
@@ -278,6 +282,7 @@ func Load(getenv func(string) string) (*Config, error) {
 	c.BackupDir = str("TESSERA_BACKUP_DIR", "", "")
 	c.BackupEveryMinutes = integer("TESSERA_BACKUP_EVERY_MINUTES", 360, 5, 7*24*60)
 	c.BackupKeep = integer("TESSERA_BACKUP_KEEP", 28, 1, 10_000)
+	c.GroupsSyncBudget = integer("TESSERA_GROUPS_SYNC_BUDGET", 5000, 1, 10_000_000)
 	c.AccessTokenTTLSeconds = integer("TESSERA_AT_TTL_SECONDS", 600, 1, MaxAccessTokenTTLSeconds)
 	c.DeviceCodeTTLSeconds = integer("TESSERA_DEVICE_CODE_TTL_SECONDS", 300, 1, MaxDeviceCodeTTLSeconds)
 	c.DPoPRSNonce = boolean("TESSERA_DPOP_RS_NONCE", false, false)

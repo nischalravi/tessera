@@ -178,9 +178,9 @@ var tables = []string{
 	"queue_jobs", "queue_schedules",
 	// configuration transport (schema/0211_config_transport.sql)
 	"config_signing_keys", "config_trusted_signers", "config_imports",
-	// native groups (schema/0280_groups.sql); the engine tables stay empty until GR-2
+	// native groups (schema/0280_groups.sql, 0284_groups_engine.sql)
 	"grp_folders", "grp_name_aliases", "grp_groups", "grp_composite_factors", "grp_lists", "grp_direct_memberships",
-	"grp_deps", "grp_closure", "grp_levels", "grp_effective", "grp_engine_queue",
+	"grp_deps", "grp_closure", "grp_levels", "grp_effective", "grp_engine_queue", "grp_engine_state",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was

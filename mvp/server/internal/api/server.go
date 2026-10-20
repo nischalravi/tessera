@@ -27,6 +27,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oidcrp"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/claim"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/credential"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/sponsorship"
@@ -164,6 +165,9 @@ type Config struct {
 	// Health answers /readyz and the admin platform-health summary. Nil: a
 	// checker over Store and Sealer with the default loop-lag threshold.
 	Health *health.Checker
+	// GroupsEngine is the native groups' membership engine, whose synchronous
+	// budget is TESSERA_GROUPS_SYNC_BUDGET. Nil: the defaults.
+	GroupsEngine *engine.Engine
 	// AuditAppend overrides how the audit middleware writes http.request
 	// events (tests inject failures). Nil: the store.
 	AuditAppend func(ctx context.Context, t tenancy.ID, e store.AuditEvent) error
@@ -247,6 +251,9 @@ func New(cfg Config) *Server {
 	if cfg.Readiness.Runner.Live.Agents == nil {
 		cfg.Readiness.Runner.Live.Agents = cfg.Agents
 	}
+	if cfg.GroupsEngine == nil {
+		cfg.GroupsEngine = engine.New(0)
+	}
 	if cfg.Containment == nil {
 		cfg.Containment = &containment.Service{}
 	}
@@ -329,6 +336,7 @@ func New(cfg Config) *Server {
 	s.registerFlatfileRoutes()
 	s.registerEvidenceRoutes()
 	s.registerGroupsFolderRoutes()
+	s.registerGroupsMemberRoutes()
 	s.registerReadinessRoutes()
 	s.registerAgentRoutes()
 	s.registerAWSRoutes()

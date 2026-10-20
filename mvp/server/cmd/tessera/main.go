@@ -80,6 +80,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/credential"
 	"github.com/nischalravi/tessera/mvp/server/internal/health"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
@@ -418,6 +419,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	rsvc.Runner.SCIM.Client = outbound
 	obs.SetPoolStats(st.PoolStats)
 	checker := health.New(st, sealer, obs.DefaultLoops, time.Duration(cfg.ReadyMaxLoopLagSeconds)*time.Second, logger)
+	groupsEngine := &engine.Engine{Budget: cfg.GroupsSyncBudget, Log: logger}
 	fakeURL, stopFake, err := startFakeTarget(cfg, logger)
 	if err != nil {
 		return err
@@ -450,7 +452,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		Dev: cfg.Env == config.Dev && cfg.OutboundAllowLoopback}
 	srv := api.New(api.Config{Health: checker, Store: st, Clock: clock, Policies: loader, Logger: logger,
 		Secrets: secrets, Credential: authority,
-		PublicURL: cfg.PublicURL, RPID: cfg.RPID, Sealer: sealer, OutboundHTTP: outbound,
+		PublicURL: cfg.PublicURL, RPID: cfg.RPID, Sealer: sealer, OutboundHTTP: outbound, GroupsEngine: groupsEngine,
 		Outbound: outbound, FakeTargetURL: fakeURL,
 		Containment:    &containment.Service{HTTP: outbound, Sealer: sealer, Clock: clock},
 		AllowedOrigins: cfg.CORSOrigins, PublicOrigin: cfg.PublicOrigin(), InsecureCookie: !cfg.CookieSecure,
@@ -557,6 +559,13 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 			runBackups(ctx, st, sealer, cfg, logger)
 		}
 	}()
+	// the groups engine's queue worker, time wheel and nightly verification
+	groupsDone := make(chan struct{})
+	groupsRunner := &engine.Runner{DB: st, Engine: groupsEngine, Clock: clock, Log: logger}
+	go func() {
+		defer close(groupsDone)
+		groupsRunner.Loop(ctx)
+	}()
 	notifyDone := make(chan struct{})
 	go func() {
 		defer close(notifyDone)
@@ -588,6 +597,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		<-siemDone
 		<-alertsDone
 		<-backupDone
+		<-groupsDone
 		<-notifyDone
 		return err
 	case <-ctx.Done():
@@ -612,6 +622,7 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	<-siemDone
 	<-alertsDone
 	<-backupDone
+	<-groupsDone
 	<-notifyDone
 	for i := 0; i < cap(errc) && (i == 0 || agentSrv != nil); i++ {
 		if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
