@@ -102,7 +102,7 @@ func TestClientAbort_NotAnAuthFailure(t *testing.T) {
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/abort", nil).WithContext(ctx))
 			if rec.Code != c.wantCode {
-				t.Errorf("status %d, want %d; body %q", rec.Code, c.wantCode, rec.Body.String())
+				t.Errorf("status %d, want %d; body %q; logs %s", rec.Code, c.wantCode, rec.Body.String(), logs.String())
 			}
 			for _, bad := range []string{"authentication failed", "audit write failed", "audit_unavailable"} {
 				if strings.Contains(logs.String(), bad) || strings.Contains(rec.Body.String(), bad) {
