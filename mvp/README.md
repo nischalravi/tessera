@@ -1525,7 +1525,7 @@ address, we have sent a new link."). The design's `GET credential/callback` is t
 **Rate limits** (`internal/ratelimit`, in process, token buckets of N per window; throttles are
 audited as `claim.throttled` without a token or code): start 10 per IP per 10 minutes (client IP as
 the API's rate limiter, trusting `TESSERA_TRUSTED_PROXIES`) and 100 per tenant per minute (429; no
-bot challenge yet); verify/send 3 per session per 10 minutes, 5 per address per hour, 10 per day
+bot challenge yet); guest renewal-request has its own buckets, 10 per IP per hour and 100 per tenant per minute, apart from start's; verify/send 3 per session per 10 minutes, 5 per address per hour, 10 per day
 (the answer is the same when throttled); verify/check 5 tries per code; resend 3 per address per day.
 
 **Audit actions:** `claim.invitation.issue|revoke|expire`, `claim.start`, `claim.start.refused`,
@@ -2210,7 +2210,7 @@ modified.
   `/renew#t=<token>`: only its SHA-256 is stored and the link is handed to the mailer through memory only (like
   the claim link). `POST /public/t/{slug}/guest/renewal-request {token}` spends the token once and opens a
   renewal-request task for the sponsor; every call (good, bad, spent, unknown tenant) answers the same `202
-  {"status":"received"}` after the same minimum time, with an Origin check and a per-tenant rate limit.
+  {"status":"received"}` after the same minimum time, with an Origin check, a per-IP limit (10 per hour) and a per-tenant limit (100 per minute), neither shared with claim/start.
 - **Renewal and step-up.** Renewal re-runs the sponsor policy (eligible, within limits, at most the maximum).
   If the guest's `identity_assurance` is below what the sponsorship now needs (its own requirement, the
   population default, the bundle minimum) the renewal is **recorded and held** (`sponsorship_stepups`, event

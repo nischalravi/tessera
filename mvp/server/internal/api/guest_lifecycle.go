@@ -231,10 +231,15 @@ func (s *Server) guestRenewalRequest(w http.ResponseWriter, r *http.Request, p *
 		return resp, nil
 	}
 	defer s.claimFloor(r.Context(), begin)
+	// the per-IP limit comes first and does not look at the token or the tenant, so
+	// it answers the same for every call; its own buckets keep claim/start's intact
+	if !s.claimLim.renewIP.AllowAt(s.rateKey(r), c.now) {
+		return s.claimThrottled(c, "renewal_ip", 6*time.Minute)
+	}
 	if !c.ok || len(b.Token) != claim.TokenLen {
 		return renewalReceived, nil
 	}
-	if !s.claimLim.startTenant.AllowAt(ratelimit.TenantKey(c.t.ID.String()), c.now) {
+	if !s.claimLim.renewTenant.AllowAt(ratelimit.TenantKey(c.t.ID.String()), c.now) {
 		return s.claimThrottled(c, "renewal_request", 6*time.Second)
 	}
 	err = s.store.InTenant(c.ctx, c.t.ID, func(tx *store.TenantTx) error {
