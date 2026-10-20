@@ -1361,6 +1361,55 @@ CREATE POLICY tenant_isolation ON readiness_baselines
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE mcp_resources ENABLE ROW LEVEL SECURITY;
+ALTER TABLE mcp_resources FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON mcp_resources;
+CREATE POLICY tenant_isolation ON mcp_resources
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE mcp_clients ENABLE ROW LEVEL SECURITY;
+ALTER TABLE mcp_clients FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON mcp_clients;
+CREATE POLICY tenant_isolation ON mcp_clients
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE mcp_auth_requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE mcp_auth_requests FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON mcp_auth_requests;
+CREATE POLICY tenant_isolation ON mcp_auth_requests
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE mcp_tokens ENABLE ROW LEVEL SECURITY;
+ALTER TABLE mcp_tokens FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON mcp_tokens;
+CREATE POLICY tenant_isolation ON mcp_tokens
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE mcp_decisions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE mcp_decisions FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON mcp_decisions;
+CREATE POLICY tenant_isolation ON mcp_decisions
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE mcp_actor_jtis ENABLE ROW LEVEL SECURITY;
+ALTER TABLE mcp_actor_jtis FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON mcp_actor_jtis;
+CREATE POLICY tenant_isolation ON mcp_actor_jtis
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE mcp_contained ENABLE ROW LEVEL SECURITY;
+ALTER TABLE mcp_contained FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON mcp_contained;
+CREATE POLICY tenant_isolation ON mcp_contained
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 ALTER TABLE api_clients ENABLE ROW LEVEL SECURITY;
 ALTER TABLE api_clients FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON api_clients;

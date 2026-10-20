@@ -314,6 +314,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if strings.HasPrefix(rt.Pattern, "/t/{slug}/.well-known/") || strings.HasPrefix(rt.Pattern, "/t/{slug}/oauth/") {
 			continue // TestOAuth_CrossTenant (public; the tenant is the slug, and its codes and tokens are its own)
 		}
+		if strings.HasPrefix(rt.Pattern, "/t/{slug}/mcp/") || strings.HasPrefix(rt.Pattern, "/api/mcp/") {
+			continue // TestMCP_CrossTenant (UUID and token ids, a tenant slug in the path)
+		}
 		if rt.Pattern == "/api/identity-merges/{merge_id}/unmerge" {
 			continue // TestCorrelationAPI_CrossTenant (a UUID, not a fixture id)
 		}
@@ -534,6 +537,9 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		}
 		if rp, ok := readinessGetPaths(f.B.Refs)[path]; ok && strings.Contains(path, "{") {
 			path = rp // tenant B's own readiness ids
+		}
+		if path == "/api/mcp/authorizations/{id}" {
+			continue // TestMCP_CrossTenant (a UUID, not a fixture id)
 		}
 		if strings.HasPrefix(path, "/api/groups/") && strings.Contains(path, "{") {
 			continue // TestGroupsTenantIsolation (UUIDs, not fixture ids)

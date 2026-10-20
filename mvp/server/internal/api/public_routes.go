@@ -91,6 +91,16 @@ var publicRoutes = []string{
 	"POST /public/t/{slug}/guest/renewal-request",
 	"GET /public/t/{slug}/register/sponsors",
 	"POST /public/t/{slug}/register",
+	// MCP authorization server (issue #115), its own issuer
+	// {PUBLIC_URL}/t/{slug}/mcp: discovery and the OAuth
+	// endpoints, rate-limited per IP; each opens its own tenant transaction
+	"GET /t/{slug}/mcp/.well-known/oauth-authorization-server",
+	"GET /t/{slug}/mcp/.well-known/oauth-protected-resource/{resource_id}",
+	"GET /t/{slug}/mcp/.well-known/jwks.json",
+	"POST /t/{slug}/mcp/oauth/token",
+	"POST /t/{slug}/mcp/oauth/introspect",
+	"POST /t/{slug}/mcp/oauth/revoke",
+	"POST /t/{slug}/mcp/oauth/decisions",
 }
 
 // PublicRoutes returns the allow-list.

@@ -56,6 +56,7 @@ const HelpDesk = named(() => import("../features/helpdesk/HelpDesk"), "HelpDesk"
 const RiskOverview = named(() => import("../features/insights/RiskOverview"), "RiskOverview");
 // cytoscape is the heaviest dependency; it only loads with the graph
 const GraphExplorer = lazy(() => import("../features/insights/GraphExplorer"));
+const AgentAuthorization = named(() => import("../features/agents/AgentAuthorization"), "AgentAuthorization");
 const LeastPrivilege = named(() => import("../features/insights/LeastPrivilege"), "LeastPrivilege");
 const SodConflicts = named(() => import("../features/insights/SodConflicts"), "SodConflicts");
 const DeploymentHealth = named(() => import("../features/insights/DeploymentHealth"), "DeploymentHealth");
@@ -219,6 +220,9 @@ export default function App() {
                     <Route path="/insights/deployment-health" element={<DeploymentHealth />} />
                     <Route path="/insights/mfa" element={<MfaPosture />} />
                     <Route path="/insights/deployment" element={<Moved to="/insights/deployment-health" />} />
+
+                    <Route path="/agents/authorization" element={<AgentAuthorization />} />
+                    <Route path="/agent-authorization" element={<Moved to="/agents/authorization" />} />
 
                     <Route path="/governance" element={<Navigate to="/governance/policies" replace />} />
                     <Route path="/alerts" element={<Alerts />} />

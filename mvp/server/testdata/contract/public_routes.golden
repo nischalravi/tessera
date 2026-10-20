@@ -12,6 +12,13 @@ POST /public/t/{slug}/claim/resend
 POST /public/t/{slug}/guest/renewal-request
 GET /public/t/{slug}/register/sponsors
 POST /public/t/{slug}/register
+GET /t/{slug}/mcp/.well-known/oauth-authorization-server
+GET /t/{slug}/mcp/.well-known/oauth-protected-resource/{resource_id}
+GET /t/{slug}/mcp/.well-known/jwks.json
+POST /t/{slug}/mcp/oauth/token
+POST /t/{slug}/mcp/oauth/introspect
+POST /t/{slug}/mcp/oauth/revoke
+POST /t/{slug}/mcp/oauth/decisions
 POST /public/t/{slug}/ssf/{transmitter_id}/events
 GET /api/auth/discover
 GET /api/auth/login
