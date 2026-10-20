@@ -83,7 +83,7 @@ func TestSeedDevIdPConnection(t *testing.T) {
 		}
 		log, err := tx.AuditLog(-1)
 		for _, e := range log {
-			if e.Action != "review.campaign_created" {
+			if e.Action != "review.campaign_created" && e.Action != "review.population_frozen" {
 				t.Errorf("seeding the auth rows wrote %s", e.Action)
 			}
 		}

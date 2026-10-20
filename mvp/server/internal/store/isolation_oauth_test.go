@@ -128,6 +128,9 @@ func TestIsolation_OAuthRows(t *testing.T) {
 		if n, err := c.RevokeSessionRefreshTokens(a.auth.session.ID, "x", storetest.Now); err != nil || n != 0 {
 			t.Errorf("RevokeSessionRefreshTokens(A's session) in B revoked %d (%v)", n, err)
 		}
+		if n, err := c.RevokeUserRefreshTokens(a.auth.user.ID, "x", storetest.Now); err != nil || n != 0 {
+			t.Errorf("RevokeUserRefreshTokens(A's user) in B revoked %d (%v)", n, err)
+		}
 		// expiring stale grants in B leaves A's alone
 		if n, err := c.ExpireStaleDeviceGrants(storetest.Now.Add(time.Hour)); err != nil || n != 1 {
 			t.Errorf("ExpireStaleDeviceGrants in B = %d %v, want only B's grant", n, err)
@@ -334,7 +337,7 @@ func oauthCovered() map[string]bool {
 	}
 	for _, k := range []string{"InsertAPIClient", "APIClientByClientID", "APIClients", "InsertDeviceGrant", "DeviceGrant",
 		"DeviceGrantByDeviceCodeHash", "PendingDeviceGrantByUserCodeHash", "ExpireStaleDeviceGrants", "InsertRefreshToken",
-		"RefreshTokenByHash", "RefreshTokensByFamily", "RevokeRefreshFamily", "RevokeSessionRefreshTokens"} {
+		"RefreshTokenByHash", "RefreshTokensByFamily", "RevokeRefreshFamily", "RevokeSessionRefreshTokens", "RevokeUserRefreshTokens"} {
 		out[k] = true // TestIsolation_OAuthRows, TestIsolation_OAuthInsertsRefused
 	}
 	return out

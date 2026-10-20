@@ -41,7 +41,7 @@ export function itemTitle(it: InboxItem): { icon: ReactNode; title: string; meta
       return { icon: <ListChecks size={15} />, title: `${e.type[0].toUpperCase() + e.type.slice(1)}: ${who}`, meta: <>HRIS event {e.external_id} · effective {fmtDate(e.effective_at)}</>, tone: e.type === "leaver" ? "critical" : "neutral", kindLabel: KIND_LABEL.task };
     }
     case "connection":
-      return { icon: <Plug size={15} />, title: `${it.conn.name} is degraded`, meta: <>Readiness {it.conn.score} · write-back stopped, reads continue</>, tone: "warning", kindLabel: KIND_LABEL.connection };
+      return { icon: <Plug size={15} />, title: `${it.conn.name} is degraded`, meta: <>Readiness {it.conn.score} · {it.task?.reason ?? "write-back stopped, reads continue"}</>, tone: "warning", kindLabel: KIND_LABEL.connection };
   }
 }
 
@@ -204,6 +204,7 @@ function Detail({ it }: { it: InboxItem }) {
         {it.kind === "connection" && (
           <div className="stack-sm">
             <p className="small muted">A scheduled check failed twice, a credential is close to expiry or sync has failed. Reads continue and data is labelled as coming from a degraded connection; write-back has stopped.</p>
+            {it.task && <p className="small"><b>Why:</b> {it.task.reason}{it.task.owner && <> · technical owner {it.task.owner}</>}</p>}
             <Link className="btn" to={`/admin/connections/${it.conn.id}`}>Open the connection</Link>
           </div>
         )}

@@ -97,6 +97,10 @@ func TestLint_RejectsBadTemplates(t *testing.T) {
 		{"bad level", header + strings.Replace(item("ad.a", ""), "level: required", "level: mandatory", 1), "level"},
 		{"bad category", header + strings.Replace(item("ad.a", ""), "category: scope", "category: vibes", 1), "category"},
 		{"narrower dependency", header + item("ad.a", "    applies_when: { write_mode: [scoped] }\n") + item("ad.b", "    depends_on: [ad.a]\n"), "not applicable in every configuration"},
+		{"live with attestation alternative", header + strings.Replace(item("ad.a", ""), "{ kind: attestation }", "{ kind: live, check: bind, on_unsupported: attestation }", 1), ""},
+		{"alternative other than attestation", header + strings.Replace(item("ad.a", ""), "{ kind: attestation }", "{ kind: live, check: bind, on_unsupported: data }", 1), "on_unsupported takes the value attestation"},
+		{"alternative on a data check", header + strings.Replace(item("ad.a", ""), "{ kind: attestation }", "{ kind: data, check: key_unique, on_unsupported: attestation }", 1), "only on a live check"},
+		{"alternative on an attestation", header + strings.Replace(item("ad.a", ""), "{ kind: attestation }", "{ kind: attestation, on_unsupported: attestation }", 1), "only on a live check"},
 		{"bad config field", header + item("ad.a", "    config_fields: [password]\n"), `unknown config field "password"`},
 	}
 	for _, tc := range cases {
@@ -124,7 +128,8 @@ func TestTemplates_Counts(t *testing.T) {
 	reg := MustDefault()
 	var b strings.Builder
 	b.WriteString("# Item counts per template (design §3.14). Columns: template items, with base,\n")
-	b.WriteString("# required, recommended, optional (the last three include the base items).\n")
+	b.WriteString("# required, recommended, optional (the last three include the base items), and the\n")
+	b.WriteString("# items whose live check may be attested instead when unsupported (on_unsupported).\n")
 	b.WriteString("# Regenerate with: go test ./internal/readiness/template -run TestTemplates_Counts -update\n")
 	base := len(reg.base.Items)
 	var req, rec, opt int
@@ -138,11 +143,17 @@ func TestTemplates_Counts(t *testing.T) {
 			opt++
 		}
 	}
-	fmt.Fprintf(&b, "%-9s %2d %2d %2d %2d %d\n", "base", base, base, req, rec, opt)
+	fmt.Fprintf(&b, "%-9s %2d %2d %2d %2d %d %d\n", "base", base, base, req, rec, opt, 0)
 	for _, id := range reg.IDs() {
 		r, _ := reg.Get(id)
 		c := r.Count()
-		fmt.Fprintf(&b, "%-9s %2d %2d %2d %2d %d\n", id, c.Items-base, c.Items, c.Required, c.Recommended, c.Optional)
+		alt := 0
+		for _, it := range r.Items {
+			if it.HasLiveAlternative() {
+				alt++
+			}
+		}
+		fmt.Fprintf(&b, "%-9s %2d %2d %2d %2d %d %d\n", id, c.Items-base, c.Items, c.Required, c.Recommended, c.Optional, alt)
 	}
 	const golden = "testdata/counts.golden"
 	if *update {

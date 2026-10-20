@@ -82,6 +82,18 @@ var (
 		UPDATE sessions SET status = 'revoked', revoked_at = @rat, revoked_reason = @reason
 		WHERE sessions.tenant_id = @tenant AND sessions.status = 'active' AND sessions.user_id IN (
 			SELECT u.id FROM platform_users u WHERE u.tenant_id = @tenant AND u.identity_id = @id)`)
+	// after a connector sync wrote a non-active status (#345): the linked users'
+	// sessions and CLI refresh tokens, for an identity (by external id) that is not active
+	identitiesSyncRevokeSessions = tq("identities.sync_revoke_sessions", `
+		UPDATE sessions SET status = 'revoked', revoked_at = @rat, revoked_reason = @reason
+		WHERE sessions.tenant_id = @tenant AND sessions.status = 'active' AND sessions.user_id IN (
+			SELECT u.id FROM platform_users u JOIN identities i ON i.tenant_id = u.tenant_id AND i.id = u.identity_id
+			WHERE u.tenant_id = @tenant AND i.tenant_id = @tenant AND i.external_id = @external_id AND i.status <> 'active')`)
+	identitiesSyncRevokeRefresh = tq("identities.sync_revoke_refresh", `
+		UPDATE refresh_tokens SET revoked_at = @at, revoked_reason = @reason
+		WHERE refresh_tokens.tenant_id = @tenant AND refresh_tokens.revoked_at IS NULL AND refresh_tokens.user_id IN (
+			SELECT u.id FROM platform_users u JOIN identities i ON i.tenant_id = u.tenant_id AND i.id = u.identity_id
+			WHERE u.tenant_id = @tenant AND i.tenant_id = @tenant AND i.external_id = @external_id AND i.status <> 'active')`)
 	identitiesSetDeptTitle = tq("identities.set_department_title", `
 		UPDATE identities SET department = @department, title = @title WHERE tenant_id = @tenant AND id = @id`)
 )
@@ -171,6 +183,24 @@ func (tx *TenantTx) UpsertIdentity(i *Identity) error {
 		sql.Named("title", SP(i.Title)), sql.Named("status", i.Status), sql.Named("description", SP(i.Description)),
 		sql.Named("hired_at", TP(i.HiredAt)), sql.Named("terminated_at", TP(i.TerminatedAt)),
 		sql.Named("created_at", T(i.CreatedAt)))
+	if err != nil || i.Status == "active" {
+		return err
+	}
+	// a sync that ends the identity (terminated, disabled) ends its users' sessions
+	// and CLI refresh tokens in the same transaction (#345)
+	at, reason := time.Now().UTC(), RevokedIdentityDisabled
+	if i.TerminatedAt != nil && i.TerminatedAt.Before(at) {
+		at = i.TerminatedAt.UTC()
+	}
+	if i.Status == "terminated" {
+		reason = RevokedIdentityTerminated
+	}
+	if _, err := tx.exec(identitiesSyncRevokeSessions, sql.Named("rat", RT(at)), sql.Named("reason", reason),
+		sql.Named("external_id", i.ExternalID)); err != nil {
+		return err
+	}
+	_, err = tx.exec(identitiesSyncRevokeRefresh, sql.Named("at", RT(at)), sql.Named("reason", reason),
+		sql.Named("external_id", i.ExternalID))
 	return err
 }
 
@@ -211,6 +241,10 @@ func (tx *TenantTx) SetIdentityManager(id int64, managerID *int64) error {
 // the sessions of the Tessera users linked to the identity (#331).
 const RevokedIdentityTerminated = "identity_terminated"
 
+// RevokedIdentityDisabled is the reason a sync that disables an identity
+// writes (auth.RevokedIdentityDisabled).
+const RevokedIdentityDisabled = "identity_disabled"
+
 // TerminateIdentity marks an identity terminated at and, in the same
 // transaction, revokes every active session of the Tessera users linked to
 // it, whatever their user status (#331). Every leaver path (HRIS event, end
@@ -221,7 +255,12 @@ func (tx *TenantTx) TerminateIdentity(id int64, at time.Time) error {
 	if _, err := tx.exec(identitiesTerminate, sql.Named("at", T(at)), sql.Named("id", id)); err != nil {
 		return err
 	}
-	_, err := tx.exec(identitiesTerminateSessions, sql.Named("rat", RT(at)),
+	if _, err := tx.exec(identitiesTerminateSessions, sql.Named("rat", RT(at)),
+		sql.Named("reason", RevokedIdentityTerminated), sql.Named("id", id)); err != nil {
+		return err
+	}
+	// and their CLI refresh tokens (#345)
+	_, err := tx.exec(refreshRevokeIdentity, sql.Named("at", RT(at)),
 		sql.Named("reason", RevokedIdentityTerminated), sql.Named("id", id))
 	return err
 }

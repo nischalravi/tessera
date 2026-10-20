@@ -61,17 +61,34 @@ func connectorFor(b *Bundle, now time.Time) (connectors.Connector, error) {
 // reconciles it (§6). It writes staging tables and reconciliation results
 // only; the live graph is untouched until activation.
 func (s *Service) DryRun(ctx context.Context, st Scope, connID, actor string, clock func() time.Time, stage StageFunc) (*DryRunView, error) {
+	return s.dryRun(ctx, st, connID, actor, clock, stage, false)
+}
+
+// dryRun is DryRun, or with live set the post-activation reconciliation of
+// the live revision (§7.4): the same discovery, staging scratch tables and
+// analysis, recorded as a 'live' reconciliation run.
+func (s *Service) dryRun(ctx context.Context, st Scope, connID, actor string, clock func() time.Time, stage StageFunc, live bool) (*DryRunView, error) {
 	start := clock()
 	var b *Bundle
 	var run *store.CheckRun
 	var cn connectors.Connector
+	mode, started := "staging", "readiness.dryrun.started"
+	if live {
+		mode, started = "live", "readiness.reconcile.started"
+	}
 	err := st.Write(ctx, func(c *store.TenantTx) error {
-		conn, _, pending, err := Revisions(c, connID)
+		conn, liveRev, pending, err := Revisions(c, connID)
 		if err != nil {
 			return err
 		}
 		if conn.RetiredAt != nil {
 			return conflict("connection_retired", "connection %s is retired", conn.Name)
+		}
+		if live {
+			pending = liveRev
+			if pending == nil {
+				return conflict("not_live", "the connection has no live revision")
+			}
 		}
 		if pending == nil {
 			return conflict("no_pending_revision", "the connection has no revision in setup")
@@ -79,7 +96,7 @@ func (s *Service) DryRun(ctx context.Context, st Scope, connID, actor string, cl
 		if b, err = s.Load(c, pending, start); err != nil {
 			return err
 		}
-		if pending.State != store.StateValidated && pending.State != store.StateDryRunReconciled {
+		if !live && pending.State != store.StateValidated && pending.State != store.StateDryRunReconciled {
 			return blocked("not_ready_for_dry_run", b.Gate(store.StateValidated, start))
 		}
 		if n, err := c.RunningDryRuns(); err != nil {
@@ -95,11 +112,11 @@ func (s *Service) DryRun(ctx context.Context, st Scope, connID, actor string, cl
 		if err := c.InsertCheckRun(run); err != nil {
 			return err
 		}
-		if err := c.InsertReconRun(&store.ReconRun{ID: run.ID, RevisionID: pending.ID, ConnectionID: conn.ID, Mode: "staging",
+		if err := c.InsertReconRun(&store.ReconRun{ID: run.ID, RevisionID: pending.ID, ConnectionID: conn.ID, Mode: mode,
 			CheckRunID: run.ID, Status: "running", StartedAt: start}); err != nil {
 			return err
 		}
-		return c.Audit(start, actor, "readiness.dryrun.started", ojson.Object{{Key: "connection_id", Value: conn.ID},
+		return c.Audit(start, actor, started, ojson.Object{{Key: "connection_id", Value: conn.ID},
 			{Key: "revision_id", Value: pending.ID}, {Key: "run_id", Value: run.ID}})
 	})
 	if err != nil {
@@ -428,7 +445,8 @@ const MinAcceptReason = 20
 
 // AcceptFinding accepts an open finding of the connection's latest dry run
 // with a reason, then re-evaluates the data checks that read finding status.
-// Accepting a critical finding will additionally need step-up (DR-10).
+// Accepting a critical finding additionally needs step-up, which the API
+// handler checks (the authentication context is not known here).
 func (s *Service) AcceptFinding(c *store.TenantTx, connID, findingID, reason string, expires *time.Time, actor string, now time.Time) (*store.Finding, error) {
 	f, err := c.FindingByID(findingID)
 	if errors.Is(err, store.ErrNotFound) || (err == nil && f.ConnectionID != connID) {

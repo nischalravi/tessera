@@ -74,7 +74,16 @@ type Config struct {
 	// LDAP checks against a lab directory). Dev only; syntax is checked by
 	// safedial.ParseAllow. Production reaches private directories through the
 	// Directory Agent instead.
-	SafedialAllow          string
+	SafedialAllow string
+	// AgentAddr is TESSERA_AGENT_ADDR: the address of the mutual-TLS listener
+	// the Directory Agents connect to (DR-11). Empty: no listener, and
+	// enrolled agents cannot connect. AgentTLSCert and AgentTLSKey
+	// (TESSERA_AGENT_TLS_CERT, TESSERA_AGENT_TLS_KEY) are that listener's
+	// certificate and key files, required whenever AgentAddr is set; the CA
+	// that signs the certificate is the one the agents pin.
+	AgentAddr              string
+	AgentTLSCert           string
+	AgentTLSKey            string
 	AuditAnchor            string
 	AuditCheckpointSeconds int
 	AuditCheckpointEvents  int
@@ -84,6 +93,11 @@ type Config struct {
 	// one address raise them.
 	AuthRateBurst int
 	AnonRateBurst int
+	// AWSCatalogDir (TESSERA_AWS_CATALOG_DIR) is the catalog directory with
+	// compiled/<version>.json.gz; empty leaves the AWS evaluator routes
+	// unavailable (503). AWSCatalogVersion picks a version (default: newest).
+	AWSCatalogDir     string
+	AWSCatalogVersion string
 	// BackupDir (TESSERA_BACKUP_DIR) turns on scheduled encrypted backups
 	// every BackupEveryMinutes, keeping the newest BackupKeep (issue #171).
 	BackupDir             string
@@ -95,6 +109,14 @@ type Config struct {
 	RPID                  string
 	Notify                string
 	DevIdPURL             string
+	// GroupsSyncBudget is TESSERA_GROUPS_SYNC_BUDGET: the most effective-row
+	// operations a group change may do inside its request; more is queued
+	// (design groups-grouper-parity.md §6.5).
+	GroupsSyncBudget int
+	// GroupsRetentionDays is TESSERA_GROUPS_RETENTION_DAYS (`groups.retention_days`):
+	// how long group events and point-in-time history are kept, 7 years by
+	// default (design §10.2).
+	GroupsRetentionDays int
 	// FakeTarget is TESSERA_DEV_FAKE_TARGET: cmd/tessera starts an in-process
 	// fake SCIM target on a loopback port, so the provisioning screens can be
 	// demonstrated without a real system. Refused in prod.
@@ -252,6 +274,15 @@ func Load(getenv func(string) string) (*Config, error) {
 	c.OutboundAllowLoopback = boolean("TESSERA_OUTBOUND_ALLOW_LOOPBACK", true, false)
 	// dev default: var/audit-anchors.jsonl next to the database (AnchorURL)
 	c.SafedialAllow = strings.TrimSpace(getenv("TESSERA_SAFEDIAL_ALLOW"))
+	c.AgentAddr = strings.TrimSpace(getenv("TESSERA_AGENT_ADDR"))
+	c.AgentTLSCert = strings.TrimSpace(getenv("TESSERA_AGENT_TLS_CERT"))
+	c.AgentTLSKey = strings.TrimSpace(getenv("TESSERA_AGENT_TLS_KEY"))
+	if c.AgentAddr != "" && (c.AgentTLSCert == "" || c.AgentTLSKey == "") {
+		bad("TESSERA_AGENT_ADDR needs TESSERA_AGENT_TLS_CERT and TESSERA_AGENT_TLS_KEY: the agent channel is mutual TLS only")
+	}
+	if c.AgentAddr == "" && (c.AgentTLSCert != "" || c.AgentTLSKey != "") {
+		bad("TESSERA_AGENT_TLS_CERT and TESSERA_AGENT_TLS_KEY are set without TESSERA_AGENT_ADDR")
+	}
 	c.AuditAnchor = str("TESSERA_AUDIT_ANCHOR", "", "")
 	if a := c.AuditAnchor; a != "" && !strings.HasPrefix(a, "file://") && !strings.HasPrefix(a, "s3://") {
 		bad("TESSERA_AUDIT_ANCHOR: %q is not a file:// or s3:// URL", a)
@@ -263,6 +294,8 @@ func Load(getenv func(string) string) (*Config, error) {
 	c.BackupDir = str("TESSERA_BACKUP_DIR", "", "")
 	c.BackupEveryMinutes = integer("TESSERA_BACKUP_EVERY_MINUTES", 360, 5, 7*24*60)
 	c.BackupKeep = integer("TESSERA_BACKUP_KEEP", 28, 1, 10_000)
+	c.GroupsSyncBudget = integer("TESSERA_GROUPS_SYNC_BUDGET", 5000, 1, 10_000_000)
+	c.GroupsRetentionDays = integer("TESSERA_GROUPS_RETENTION_DAYS", 7*365, 30, 36_500)
 	c.AccessTokenTTLSeconds = integer("TESSERA_AT_TTL_SECONDS", 600, 1, MaxAccessTokenTTLSeconds)
 	c.DeviceCodeTTLSeconds = integer("TESSERA_DEVICE_CODE_TTL_SECONDS", 300, 1, MaxDeviceCodeTTLSeconds)
 	c.DPoPRSNonce = boolean("TESSERA_DPOP_RS_NONCE", false, false)
@@ -284,6 +317,11 @@ func Load(getenv func(string) string) (*Config, error) {
 		default:
 			c.FrozenNow = t
 		}
+	}
+	c.AWSCatalogDir = strings.TrimSpace(getenv("TESSERA_AWS_CATALOG_DIR"))
+	c.AWSCatalogVersion = strings.TrimSpace(getenv("TESSERA_AWS_CATALOG_VERSION"))
+	if v := c.AWSCatalogVersion; v != "" && (len(v) > 40 || strings.Trim(v, "0123456789abcdef-") != "") {
+		bad("TESSERA_AWS_CATALOG_VERSION: %q is not a compiled catalog version (<date>-<hex>)", v)
 	}
 	c.FakeTarget = boolean("TESSERA_DEV_FAKE_TARGET", false, false)
 	c.DevIdPURL = strings.TrimSpace(getenv("TESSERA_DEV_IDP_URL"))

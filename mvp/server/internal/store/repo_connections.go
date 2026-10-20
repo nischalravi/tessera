@@ -272,6 +272,18 @@ var (
 	attestationsOfRevision = tq("readiness_attestations.of_revision", `
 		SELECT a.revision_id, a.item_id, a.actor_id, a.note, a.item_hash, a.config_hash, a.attested_at
 		FROM readiness_attestations a WHERE a.tenant_id = @tenant AND a.revision_id = @revision_id`)
+	liveAttestationsUpsert = tq("readiness_live_attestations.upsert", `
+		INSERT INTO readiness_live_attestations (tenant_id, revision_id, item_id, actor_id, attester, reason, evidence,
+			item_hash, config_hash, attested_at)
+		VALUES (@tenant, @revision_id, @item_id, @actor_id, @attester, @reason, @evidence, @item_hash, @config_hash,
+			@attested_at)
+		ON CONFLICT (tenant_id, revision_id, item_id) DO UPDATE SET actor_id = excluded.actor_id,
+			attester = excluded.attester, reason = excluded.reason, evidence = excluded.evidence,
+			item_hash = excluded.item_hash, config_hash = excluded.config_hash, attested_at = excluded.attested_at`)
+	liveAttestationsOfRevision = tq("readiness_live_attestations.of_revision", `
+		SELECT a.revision_id, a.item_id, a.actor_id, a.attester, a.reason, a.evidence, a.item_hash, a.config_hash,
+			a.attested_at
+		FROM readiness_live_attestations a WHERE a.tenant_id = @tenant AND a.revision_id = @revision_id`)
 	skipsUpsert = tq("readiness_skips.upsert", `
 		INSERT INTO readiness_skips (tenant_id, revision_id, connection_id, item_id, level, actor_id, reason, review_by,
 			template_version, skipped_at)
@@ -322,6 +334,39 @@ func (tx *TenantTx) Attestations(revisionID string) (map[string]*Attestation, er
 		return nil, err
 	}
 	out := make(map[string]*Attestation, len(list))
+	for _, a := range list {
+		out[a.ItemID] = a
+	}
+	return out, nil
+}
+
+// UpsertLiveAttestation records (or replaces) an attestation standing in for an
+// unsupported live check.
+func (tx *TenantTx) UpsertLiveAttestation(a *LiveAttestation) error {
+	_, err := tx.exec(liveAttestationsUpsert, sql.Named("revision_id", a.RevisionID), sql.Named("item_id", a.ItemID),
+		sql.Named("actor_id", a.ActorID), sql.Named("attester", a.Attester), sql.Named("reason", a.Reason),
+		sql.Named("evidence", a.Evidence), sql.Named("item_hash", a.ItemHash), sql.Named("config_hash", a.ConfigHash),
+		sql.Named("attested_at", RT(a.AttestedAt)))
+	return err
+}
+
+// LiveAttestations returns a revision's live-check attestations by item id.
+func (tx *TenantTx) LiveAttestations(revisionID string) (map[string]*LiveAttestation, error) {
+	list, err := collect(tx, func(s scanner) (*LiveAttestation, error) {
+		var a LiveAttestation
+		var at string
+		if err := s.Scan(&a.RevisionID, &a.ItemID, &a.ActorID, &a.Attester, &a.Reason, &a.Evidence, &a.ItemHash,
+			&a.ConfigHash, &at); err != nil {
+			return nil, err
+		}
+		var err error
+		a.AttestedAt, err = ParseRT(at)
+		return &a, err
+	}, liveAttestationsOfRevision, sql.Named("revision_id", revisionID))
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]*LiveAttestation, len(list))
 	for _, a := range list {
 		out[a.ItemID] = a
 	}

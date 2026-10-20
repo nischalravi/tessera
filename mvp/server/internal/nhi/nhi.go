@@ -2,6 +2,8 @@
 package nhi
 
 import (
+	"encoding/json"
+	"slices"
 	"sort"
 	"time"
 
@@ -112,7 +114,44 @@ type Item struct {
 	Delegations           *[]DelegationView `json:"delegations,omitempty"`
 }
 
-var riskWeights = map[string]int{"orphaned": 30, "owner_left": 30, "stale_secret": 15, "dormant": 10, "privileged": 20, "pii_access": 20}
+var riskWeights = map[string]int{"orphaned": 30, "owner_left": 30, "stale_secret": 15, "dormant": 10, "privileged": 20, "pii_access": 20,
+	// the trust risks of an AWS role (design §11.4)
+	"wildcard_oidc_trust": 25, "missing_external_id": 20, "public_trust": 30}
+
+// TrustFlags returns the trust risks of AWS roles, by role ARN, as the
+// evaluator found them in the newest snapshot (design §11.4): a role whose
+// OIDC trust does not pin the token's subject, a cross-account trust with no
+// external id, a trust of "*" that nothing narrows. The flags are stored on
+// the snapshot's trust edges (awsorg.Materialize); a tenant with no snapshot
+// has none.
+func TrustFlags(c *store.TenantTx) (map[string][]string, error) {
+	snaps, err := c.AWSSnapshots(1)
+	if err != nil || len(snaps) == 0 {
+		return nil, err
+	}
+	edges, err := c.AWSTrustEdges(snaps[0].ID)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string][]string{}
+	for _, e := range edges {
+		var r struct {
+			Flags []string `json:"flags"`
+		}
+		if json.Unmarshal(e.Residual, &r) != nil {
+			continue // a residual that is not ours carries no flag
+		}
+		for _, f := range r.Flags {
+			if _, known := riskWeights[f]; known && !slices.Contains(out[e.ToRoleARN], f) {
+				out[e.ToRoleARN] = append(out[e.ToRoleARN], f)
+			}
+		}
+	}
+	for _, fs := range out {
+		sort.Strings(fs)
+	}
+	return out, nil
+}
 
 func risk(flags []string) int {
 	s := 0
@@ -156,6 +195,10 @@ func Inventory(c *store.TenantTx, g *graph.Snapshot, u *usage.Index) ([]Item, er
 		if a.IdentityID != nil {
 			acctsBy[*a.IdentityID] = append(acctsBy[*a.IdentityID], a)
 		}
+	}
+	trust, err := TrustFlags(c)
+	if err != nil {
+		return nil, err
 	}
 
 	out := []Item{}
@@ -207,6 +250,15 @@ func Inventory(c *store.TenantTx, g *graph.Snapshot, u *usage.Index) ([]Item, er
 		}
 		if pii {
 			flags = append(flags, "pii_access")
+		}
+		for _, a := range acctsBy[i.ID] {
+			if a.System == "aws" {
+				for _, f := range trust[a.ExternalID] {
+					if !slices.Contains(flags, f) {
+						flags = append(flags, f)
+					}
+				}
+			}
 		}
 		acctViews := []AccountView{}
 		sysSet := map[string]bool{}

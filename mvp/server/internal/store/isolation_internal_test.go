@@ -307,16 +307,24 @@ var referenceColumns = map[string][]string{
 	"access_requests":   {"edge_id", "requested_by_user_id", "decided_by_user_id"},
 	"review_items":      {"edge_id", "edge_src", "edge_dst", "decided_by_user_id"},
 	"hris_events":       {"executed_by_user_id"},
+	// frozen populations name a grant edge by id (the edge is deleted when revoked)
+	"review_population_rows": {"edge_id"},
+	"review_auto_decisions":  {"edge_id", "qa_decided_by_user_id"},
 	// platform users and sessions named without a declared foreign key
 	"role_assignments":   {"granted_by_user_id"},
 	"login_transactions": {"session_id", "expected_external_login_id", "bootstrap_invitation_id"},
 	// an alias names a folder or a group, by object_type
 	"grp_name_aliases": {"object_id"},
+	// events and PIT rows outlive what they name, so they declare no foreign keys; the guards still apply
+	"grp_events":        {"object_id", "identity_id", "member_group_id", "list_id"},
+	"grp_pit_objects":   {"object_id"},
+	"grp_pit_direct":    {"group_id", "list_id", "member_identity_id", "member_group_id"},
+	"grp_pit_effective": {"group_id", "list_id", "identity_id"},
 }
 
 // immutableTables refuse every UPDATE (a trigger raises unconditionally), so
 // they need no UPDATE guard.
-var immutableTables = []string{"authn_contexts"}
+var immutableTables = []string{"authn_contexts", "grp_events"}
 
 // TestIsolation_EveryReferenceGuarded checks that every foreign key (other
 // than tenant_id) and every reference column on a tenant table is covered by

@@ -207,6 +207,8 @@ var (
 		SELECT `+permissionCols+` FROM permissions p WHERE p.tenant_id = @tenant ORDER BY p.id`)
 	permissionsGet = tq("permissions.get", `
 		SELECT `+permissionCols+` FROM permissions p WHERE p.tenant_id = @tenant AND p.id = @id`)
+	permissionsByXID = tq("permissions.by_xid", `
+		SELECT `+permissionCols+` FROM permissions p WHERE p.tenant_id = @tenant AND p.system = @system AND p.external_id = @external_id`)
 	permissionsUpsert = tq("permissions.upsert", `
 		INSERT INTO permissions (tenant_id, system, external_id, action, resource_id, privileged)
 		VALUES (@tenant, @system, @external_id, @action, @resource_id, @privileged)
@@ -230,6 +232,11 @@ func scanPermission(s scanner) (*Permission, error) {
 // Permissions returns every permission, in id order.
 func (tx *TenantTx) Permissions() ([]*Permission, error) {
 	return collect(tx, scanPermission, permissionsList)
+}
+
+// PermissionByXID returns the permission with the system and external id, or ErrNotFound.
+func (tx *TenantTx) PermissionByXID(system, externalID string) (*Permission, error) {
+	return one(tx, scanPermission, permissionsByXID, sql.Named("system", system), sql.Named("external_id", externalID))
 }
 
 // Permission returns one permission by id.

@@ -186,6 +186,13 @@ func TestEveryCallAudited(t *testing.T) {
 		t.Run(rt.Method+" "+rt.Pattern, func(t *testing.T) {
 			// a fresh session per route: logout and session revocation end theirs
 			l := signIn(t, f.DB, f.B.ID, testAdmin, authtest.Phr, storetest.Now)
+			wantAAL, wantACR := 2, string(auth.ACRPhr)
+			if rt.Perm == auth.PermBreakGlassRecover {
+				// only a break-glass session holds this permission
+				l = signIn(t, f.DB, f.B.ID, authtest.User{Email: "glass@b.example", Roles: []auth.Role{auth.RoleBreakGlass},
+					IsBreakGlass: true}, authtest.BreakGlass, storetest.Now)
+				wantAAL, wantACR = 3, string(auth.ACRPhrh)
+			}
 			req := routeRequest(rt, f.B)
 			if rt.Public {
 				req.Header.Set("Origin", authtest.Origin)
@@ -224,7 +231,7 @@ func TestEveryCallAudited(t *testing.T) {
 			}
 			var authn store.AuditAuthn
 			if err := json.Unmarshal(e.Authn, &authn); err != nil || authn.Phr == nil || !*authn.Phr || authn.AAL == nil ||
-				*authn.AAL != 2 || authn.ACR == nil || *authn.ACR != string(auth.ACRPhr) || authn.AuthAgeS == nil {
+				*authn.AAL != wantAAL || authn.ACR == nil || *authn.ACR != wantACR || authn.AuthAgeS == nil {
 				t.Errorf("authn summary %s (%v)", e.Authn, err)
 			}
 		})

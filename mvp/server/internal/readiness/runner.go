@@ -23,6 +23,9 @@ type RunnerOptions struct {
 	RunTimeout     time.Duration // whole run (default 120 s)
 	MaxRunsPerHour int           // per connection (default 6)
 	Scenario       string        // demo scenario (default connectors.DefaultScenario)
+	// Scheduled re-run intervals (§7.4, Scheduler): live checks every 1 to 7
+	// days (default 1), post-activation reconciliation weekly.
+	LiveEvery, ReconEvery time.Duration
 	// ProberFor returns the prober for a revision. The default is the real
 	// LDAP prober for non-demo ldap revisions (see Live) and the simulated
 	// scenario prober for everything else; simulated results can never gate
@@ -47,6 +50,12 @@ func (o *RunnerOptions) withDefaults() RunnerOptions {
 	}
 	if r.Scenario == "" {
 		r.Scenario = connectors.DefaultScenario
+	}
+	if r.LiveEvery < 24*time.Hour || r.LiveEvery > 7*24*time.Hour {
+		r.LiveEvery = 24 * time.Hour
+	}
+	if r.ReconEvery <= 0 {
+		r.ReconEvery = 7 * 24 * time.Hour
 	}
 	if r.ProberFor == nil {
 		scenario, live, scimOpts := r.Scenario, r.Live, r.SCIM
@@ -301,7 +310,7 @@ func (s *Service) execute(ctx context.Context, b *Bundle, opts RunnerOptions, no
 					status = "rate_limited"
 				}
 			}
-			if r.status != checks.Pass && r.status != checks.Warn {
+			if r.status != checks.Pass && r.status != checks.Warn && !b.attestedInstead(ie, v, r, now) {
 				allOK = false
 			}
 			out = append(out, r)
@@ -309,6 +318,20 @@ func (s *Service) execute(ctx context.Context, b *Bundle, opts RunnerOptions, no
 		liveOK[ie.ID] = allOK
 	}
 	return out, status
+}
+
+// attestedInstead reports whether a result the system could not answer is
+// covered by a current attestation, so dependants may run. Simulated results
+// never count for a real connector type.
+func (b *Bundle) attestedInstead(ie *ItemEval, v template.Verify, r runResult, now time.Time) bool {
+	if v.OnUnsupported != template.Attestation || r.status != checks.Skipped || (r.simulated && !IsDemoType(b.Conn.ConnectorType)) {
+		return false
+	}
+	if u, _ := r.observed["unsupported"].(bool); !u {
+		return false
+	}
+	ok, _ := liveAttestationFresh(b.Evidence.LiveAttestations[ie.ID], ie.ItemHash, now, b.LiveTTL)
+	return ok
 }
 
 func paramsKey(p map[string]any) string {

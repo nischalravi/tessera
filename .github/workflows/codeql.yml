@@ -16,6 +16,7 @@ on:
     branches: [ "dev" ]
   pull_request:
     branches: [ "dev", "agent/**" ]
+  merge_group:
   schedule:
     - cron: '17 0 * * 2'
 

@@ -16,7 +16,7 @@ import (
 // designRoutes is the route -> requirement table of the designs, transcribed:
 // docs/design/phase-0-platform-security.md §16.2 (existing routes) and §16.1
 // (session and audit routes), and docs/design/deployment-readiness.md §9
-// (readiness routes). Columns: method, pattern, permission, step-up
+// (readiness routes) and issue #163 (conditional access). Columns: method, pattern, permission, step-up
 // (STEP_UP_POLICY or -). "public" marks the allow-list. Routes that neither
 // design names (GET /api/accounts, the API description) are marked with a
 // trailing "#" and the requirement chosen for them in this PR.
@@ -47,6 +47,10 @@ GET    /api/reviews/campaigns                        graph.read      -
 POST   /api/reviews/campaigns                        reviews.manage  -
 GET    /api/reviews/campaigns/{campaign_id}          graph.read      -
 POST   /api/reviews/items/{item_id}/decision         reviews.decide  STEP_UP_POLICY
+GET    /api/reviews/campaigns/{campaign_id}/population  graph.read   -  # issue #110
+GET    /api/reviews/campaigns/{campaign_id}/export   reviews.export  -  # issue #110
+POST   /api/reviews/qa/{qa_id}/decision              reviews.decide  STEP_UP_POLICY  # issue #110
+PUT    /api/reviews/settings                         reviews.manage  -  # issue #110
 GET    /api/reviews/schedules                        graph.read      -  # issue #166
 POST   /api/reviews/schedules                        reviews.manage  -  # issue #166
 PUT    /api/reviews/schedules/{schedule_id}          reviews.manage  -  # issue #166
@@ -98,11 +102,24 @@ PATCH  /api/connections/{id}/config                  connections.manage STEP_UP_
 PUT    /api/connections/{id}/credential              connections.manage STEP_UP_POLICY
 GET    /api/connections/{id}/checklist               connections.read   -
 POST   /api/connections/{id}/checklist/{item}/attest connections.manage -
+POST   /api/connections/{id}/checklist/{item}/attest-instead connections.manage STEP_UP_POLICY  # issue #217
 POST   /api/connections/{id}/checklist/{item}/skip   connections.manage -
 DELETE /api/connections/{id}/checklist/{item}/skip   connections.manage -
 POST   /api/connections/{id}/transition              connections.manage -
 POST   /api/connections/{id}/activate                connections.activate STEP_UP_POLICY
 POST   /api/connections/{id}/retire                  connections.manage STEP_UP_POLICY
+GET    /api/aws/connectors                           connections.read   -  # issue #26
+POST   /api/aws/connectors                           connections.manage STEP_UP_POLICY  # issue #26
+DELETE /api/aws/connectors/{id}                      connections.manage STEP_UP_POLICY  # issue #26
+GET    /api/aws/snapshots                            connections.read   -  # issue #26
+GET    /api/aws/snapshots/{id}                       connections.read   -  # issue #26
+GET    /api/aws/can                                  graph.read         -  # issue #30
+GET    /api/aws/principals/{arn}/effective           graph.read         -  # issue #30
+GET    /api/aws/resources/{arn}/who-can              graph.read         -  # issue #30
+GET    /api/aws/explanations/{id}                    graph.read         -  # issue #30
+POST   /api/aws/simulate-policy-change               graph.read         -  # issue #30 (a comment post: connections.manage + STEP_UP_POLICY in the handler)
+GET    /api/aws/pr-comment                           connections.read   -  # issue #30
+PUT    /api/aws/pr-comment                           connections.manage STEP_UP_POLICY  # issue #30
 GET    /api/correlation/queue                        graph.read      -  # issue #160
 GET    /api/correlation/decisions                    graph.read      -  # issue #160
 POST   /api/accounts/{account_id}/link               identities.correlate STEP_UP_POLICY  # issue #160
@@ -134,6 +151,9 @@ POST   /api/roles/{role_id}/retire                   roles.manage    STEP_UP_POL
 POST   /api/roles/{role_id}/reconcile                roles.manage    STEP_UP_POLICY  # issue #161
 POST   /api/roles/{role_id}/members                  roles.manage    STEP_UP_POLICY  # issue #161
 POST   /api/roles/{role_id}/members/{identity_id}/remove roles.manage STEP_UP_POLICY  # issue #161
+GET    /api/roles/{role_id}/exclusions               graph.read      -  # issue #214
+POST   /api/roles/{role_id}/exclusions/{identity_id}/remove roles.manage STEP_UP_POLICY  # issue #214
+GET    /api/roles/{role_id}/flags                    graph.read      -  # issue #214
 GET    /api/abac/policies                            graph.read      -  # issue #162
 POST   /api/abac/policies                            roles.manage    STEP_UP_POLICY  # issue #162
 GET    /api/abac/policies/{policy_id}                graph.read      -  # issue #162
@@ -177,6 +197,8 @@ POST   /api/sponsorships/{sponsorship_id}/renew      guests.sponsor  STEP_UP_POL
 POST   /api/sponsorships/{sponsorship_id}/end        guests.sponsor  STEP_UP_POLICY  # issue #65 (the sponsor, or sponsorships.approve)
 POST   /api/sponsorships/{sponsorship_id}/transfer   guests.sponsor  STEP_UP_POLICY  # issue #65 (the sponsor)
 POST   /api/sponsorships/{sponsorship_id}/accept-transfer guests.sponsor STEP_UP_POLICY  # issue #65 (the person asked)
+POST   /api/guests/{identity_id}/resend-invitation   guests.sponsor  STEP_UP_POLICY  # issue #69 (the sponsor, or sponsorships.approve; checked in the handler)
+POST   /api/guests/{identity_id}/revoke-invitation   guests.sponsor  STEP_UP_POLICY  # issue #69 (the sponsor, or sponsorships.approve; checked in the handler)
 GET    /api/approvals/inbox                          requests.create -  # issue #165
 GET    /api/approvals/delegates                      requests.create -  # issue #165
 GET    /api/approvals/delegations                    requests.create -  # issue #165 (?all=1: requests.decide)
@@ -196,20 +218,58 @@ POST   /api/identities/{identity_id}/enable          identities.contain STEP_UP_
 GET    /api/identities/{identity_id}/disables        graph.read      -  # wire-previews
 POST   /api/containment-retries/{retry_id}/retry-now identities.contain STEP_UP_POLICY  # issue #106
 PUT    /api/connections/{id}/containment-credential  connections.manage STEP_UP_POLICY  # issue #106
+GET    /api/agents                                   connections.read   -  # issue #92
+POST   /api/agents                                   connections.manage STEP_UP_POLICY  # issue #92
+POST   /api/agents/{id}/revoke                       connections.manage STEP_UP_POLICY  # issue #92
+GET    /api/flatfile/apps                            graph.read      -  # issue #105
+PUT    /api/flatfile/apps/{system}/mapping           flatfile.manage STEP_UP_POLICY  # issue #105
+POST   /api/flatfile/apps/{system}/uploads           flatfile.upload -  # issue #105
+GET    /api/flatfile/uploads                         graph.read      -  # issue #105
+GET    /api/flatfile/uploads/{upload_id}             graph.read      -  # issue #105
+GET    /api/flatfile/tasks                           graph.read      -  # issue #105
+POST   /api/flatfile/tasks/{task_id}/close           flatfile.close_tasks STEP_UP_POLICY  # issue #105
 GET    /api/access/as-of                             graph.read      -  # issue #111
 GET    /api/evidence/packs                           audit.read      -  # issue #111
 POST   /api/evidence/packs                           audit.read      -  # issue #111
 GET    /api/evidence/packs/{pack_id}                 audit.read      -  # issue #111
 GET    /api/evidence/packs/{pack_id}/download        audit.read      -  # issue #111
+GET    /api/helpdesk/cases                           graph.read      -  # issue #108
+POST   /api/helpdesk/cases                           helpdesk.reset  -  # issue #108
+GET    /api/helpdesk/cases/{case_id}                 graph.read      -  # issue #108
+POST   /api/helpdesk/cases/{case_id}/verifications   helpdesk.reset  -  # issue #108
+POST   /api/helpdesk/cases/{case_id}/manager-approval helpdesk.approve STEP_UP_POLICY  # issue #108
+POST   /api/helpdesk/cases/{case_id}/second-approval helpdesk.approve STEP_UP_POLICY  # issue #108
+POST   /api/helpdesk/cases/{case_id}/execute         helpdesk.reset  STEP_UP_POLICY  # issue #108
+POST   /api/helpdesk/cases/{case_id}/cancel          helpdesk.reset  -  # issue #108
+GET    /api/helpdesk/findings                        graph.read      -  # issue #108
+POST   /api/helpdesk/signals                         helpdesk.approve -  # issue #108
 POST   /api/connections/{id}/validate                connections.manage -
 GET    /api/connections/{id}/validations/{run}       connections.read   -
 POST   /api/connections/{id}/dry-run                 connections.manage -
 GET    /api/connections/{id}/dry-runs/{run}          connections.read   -
 GET    /api/connections/{id}/findings                connections.read   -
-POST   /api/connections/{id}/findings/{fid}/accept   connections.manage -
+POST   /api/connections/{id}/findings/{fid}/accept   connections.manage -  (critical finding: STEP_UP_POLICY in the handler)
 GET    /api/connections/{id}/health                  connections.read   -
+GET    /api/connections/{id}/activation              connections.read   -  # DR-10
+POST   /api/connections/{id}/activation/approve      connections.activate STEP_UP_POLICY  # DR-10
+POST   /api/connections/{id}/activation/reject       connections.activate -  # DR-10
 GET    /api/insights/deployment-health               connections.read   -
 POST   /api/insights/deployment-health/rerun         connections.manage -
+GET    /api/connections/{id}/readiness/evidence      connections.read   -  (+ audit.read in the handler; the design's audit.export does not exist)
+GET    /api/insights/deployment-health/evidence      connections.read   -  (+ audit.read in the handler; the design's audit.export does not exist)
+GET    /api/access/policies                          conditional_access.read   -
+POST   /api/access/policies                          conditional_access.manage STEP_UP_POLICY
+PUT    /api/access/policies/{id}                     conditional_access.manage STEP_UP_POLICY
+DELETE /api/access/policies/{id}                     conditional_access.manage STEP_UP_POLICY
+GET    /api/access/networks                          conditional_access.read   -
+POST   /api/access/networks                          conditional_access.manage STEP_UP_POLICY
+PUT    /api/access/networks/{id}                     conditional_access.manage STEP_UP_POLICY
+DELETE /api/access/networks/{id}                     conditional_access.manage STEP_UP_POLICY
+GET    /api/access/users                             conditional_access.read   -
+GET    /api/access/device-signals                    conditional_access.read   -
+PUT    /api/access/device-signals/{user_id}          conditional_access.manage STEP_UP_POLICY
+DELETE /api/access/device-signals/{user_id}          conditional_access.manage STEP_UP_POLICY
+POST   /api/access/evaluate                          conditional_access.read   -
 GET    /api/sod/functions                            graph.read      -  # issue #298
 POST   /api/sod/functions                            sod.manage      STEP_UP_POLICY  # issue #298
 GET    /api/sod/functions/{function_id}              graph.read      -  # issue #298
@@ -259,6 +319,13 @@ POST   /api/provisioning/ops/{op_id}/retry           provisioning.manage -
 POST   /api/provisioning/ops/{op_id}/cancel          provisioning.manage -
 POST   /api/provisioning/run                         provisioning.manage -
 GET    /api/provisioning/findings                    provisioning.read   -
+GET    /api/access-drift                             drift.read      -  # issue #301
+POST   /api/access-drift/run                         drift.remediate -
+POST   /api/access-drift/{drift_id}/accept           drift.remediate STEP_UP_POLICY
+POST   /api/access-drift/{drift_id}/remediate        drift.remediate STEP_UP_POLICY
+GET    /api/remediation-policies                     drift.read      -
+PUT    /api/remediation-policies                     drift.policy    STEP_UP_POLICY
+DELETE /api/remediation-policies/{policy_id}         drift.policy    STEP_UP_POLICY
 GET    /api/config/signing-key                       admin.read      -  # issue #170
 POST   /api/config/export                            config.transport -  #
 GET    /api/config/trusted-signers                   admin.read      -  #
@@ -274,23 +341,46 @@ GET    /.well-known/oauth-protected-resource         public
 POST   /t/{slug}/oauth/device_authorization          public
 POST   /t/{slug}/oauth/token                         public
 POST   /t/{slug}/oauth/revoke                        public
+POST   /t/{slug}/oauth/introspect                    public
 POST   /api/auth/device/lookup                       auth.self       -  # issue #14
 POST   /api/auth/device/approve                      auth.self       STEP_UP_ADMIN  # issue #14: max_age 300 s
-GET    /api/groups/folders                           groups.admin    -  # issue #44
-POST   /api/groups/folders                           groups.admin    -  # issue #44
-GET    /api/groups/folders/{id}                      groups.admin    -  # issue #44
-PATCH  /api/groups/folders/{id}                      groups.admin    -  # issue #44
-DELETE /api/groups/folders/{id}                      groups.admin    -  # issue #44
-POST   /api/groups/folders/{id}/move                 groups.admin    -  # issue #44
-POST   /api/groups/folders/{id}/copy                 groups.admin    -  # issue #44
-GET    /api/groups/native                            groups.admin    -  # issue #44
-POST   /api/groups                                   groups.admin    -  # issue #44
-GET    /api/groups/{id}                              groups.admin    -  # issue #44
-PATCH  /api/groups/{id}                              groups.admin    -  # issue #44
-DELETE /api/groups/{id}                              groups.admin    -  # issue #44
-POST   /api/groups/{id}/move                         groups.admin    -  # issue #44
-POST   /api/groups/{id}/copy                         groups.admin    -  # issue #44
-POST   /api/groups/{id}/restore                      groups.admin    -  # issue #44
+GET    /api/groups/folders                           groups.read     -  # issue #44, #47: the folders the caller may view
+POST   /api/groups/folders                           groups.write    -  # issue #44, #47: create on the parent
+GET    /api/groups/folders/{id}                      groups.read     -  # issue #44, #47: stem_view
+PATCH  /api/groups/folders/{id}                      groups.write    -  # issue #44, #47: stem_admin
+DELETE /api/groups/folders/{id}                      groups.write    -  # issue #44, #47: stem_admin
+POST   /api/groups/folders/{id}/move                 groups.write    -  # issue #44, #47: stem_admin, create on the destination
+POST   /api/groups/folders/{id}/copy                 groups.write    -  # issue #44, #47: stem_admin, create on the destination
+GET    /api/groups/native                            groups.read     -  # issue #44, #47: the groups the caller may view
+POST   /api/groups                                   groups.write    -  # issue #44, #47: create on the folder
+GET    /api/groups/{id}                              groups.read     -  # issue #44, #47: view
+PATCH  /api/groups/{id}                              groups.write    -  # issue #44, #47: admin
+DELETE /api/groups/{id}                              groups.write    -  # issue #44, #47: admin
+POST   /api/groups/{id}/move                         groups.write    -  # issue #44, #47: admin, create on the destination
+POST   /api/groups/{id}/copy                         groups.write    -  # issue #44, #47: read, create on the destination
+POST   /api/groups/{id}/restore                      groups.write    -  # issue #44, #47: admin
+GET    /api/groups/{id}/members                      groups.read     -  # issue #45, #47: read
+POST   /api/groups/{id}/members                      groups.write    -  # issue #45, #47: update, or optin for oneself
+GET    /api/groups/{id}/members/{member}             groups.read     -  # issue #45, #47: read
+DELETE /api/groups/{id}/members/{member}             groups.write    -  # issue #45, #47: update, or optout for oneself
+POST   /api/groups/{id}/convert-to-composite         groups.write    -  # issue #45, #47: admin, read on the factors
+PUT    /api/groups/{id}/composite                    groups.write    -  # issue #45, #47: admin, read on the factors
+POST   /api/groups/engine/verify                     groups.admin    -  # issue #45
+GET    /api/groups/engine/ops/{seq}                  groups.admin    -  # issue #45
+GET    /api/groups/folders/{id}/privileges           groups.read     -  # issue #47: stem_admin
+POST   /api/groups/folders/{id}/privileges           groups.write    -  # issue #47: stem_admin
+GET    /api/groups/folders/{id}/privileges/effective groups.read     -  # issue #47: stem_view (own), stem_admin (another identity)
+DELETE /api/groups/folders/{id}/privileges/{privilege_id} groups.write -  # issue #47: stem_admin
+GET    /api/groups/{id}/privileges                   groups.read     -  # issue #47: admin
+POST   /api/groups/{id}/privileges                   groups.write    -  # issue #47: admin
+GET    /api/groups/{id}/privileges/effective         groups.read     -  # issue #47: view (own), admin (another identity)
+DELETE /api/groups/{id}/privileges/{privilege_id}    groups.write    -  # issue #47: admin
+GET    /api/groups/privileges/settings               groups.admin    -  # issue #47
+PUT    /api/groups/privileges/settings               groups.admin    -  # issue #47
+PUT    /api/groups/users/{id}/identity               groups.admin    STEP_UP_POLICY  # issue #47
+GET    /api/groups/pit/digests                       groups.admin    -  # issue #46
+GET    /api/groups/pit/verify                        groups.admin    -  # issue #46
+POST   /api/groups/pit/rebuild                       groups.admin    -  # issue #46
 GET    /api/auth/session                             auth.self       -
 POST   /api/auth/logout                              auth.self       -
 GET    /api/auth/sessions                            auth.self       -
@@ -301,6 +391,8 @@ GET    /api/auth/login                               public
 GET    /api/auth/oidc/{connection_id}/callback       public
 GET    /api/auth/saml/{connection_id}/metadata       public
 POST   /api/auth/saml/{connection_id}/acs            public
+GET    /api/auth/cas/{connection_id}/callback        public
+POST   /api/auth/wsfed/{connection_id}/callback      public
 GET    /t/{slug}/bootstrap                           public
 GET    /api/admin/users                              admin.read      -  # issue #16
 POST   /api/admin/users/{user_id}/disable            admin.users.disable STEP_UP_ADMIN  # issue #16
@@ -314,10 +406,26 @@ POST   /api/admin/change-requests/{change_id}/reject admin.change.approve -  # i
 POST   /api/admin/change-requests/{change_id}/cancel admin.change.request -  # issue #16
 POST   /api/admin/change-requests/{change_id}/apply  admin.change.approve STEP_UP_ADMIN  # issue #16
 GET    /api/admin/notifications                      admin.read      -  # issue #16
+GET    /api/admin/api-clients                        admin.read      -  # issue #15
+GET    /api/admin/api-clients/{client_id}            admin.read      -  # issue #15
 GET    /api/admin/recovery                           admin.read      -  # issue #16
 POST   /api/admin/recovery/{recovery_id}/cancel      admin.change.request -  # issue #16
 GET    /api/admin/api-clients                        admin.read      -  # issue #16
+POST   /public/t/{slug}/claim/start                 public  # issue #69: the guest's claim, by link token, cookie and key proof
+POST   /public/t/{slug}/claim/verify/send            public
+POST   /public/t/{slug}/claim/verify/check           public
+GET    /public/t/{slug}/claim/status                 public
+POST   /public/t/{slug}/claim/existing-account       public
+POST   /public/t/{slug}/claim/credential             public
+POST   /public/t/{slug}/claim/resend                 public
 GET    /api/admin/platform-health                    admin.read      -  # issue #303
+POST   /api/auth/break-glass/options                 public
+POST   /api/auth/break-glass/verify                  public
+GET    /api/admin/break-glass                        admin.read      -  # issue #17
+POST   /api/admin/break-glass/registration/options   admin.change.request STEP_UP_ADMIN  # issue #17
+POST   /api/admin/break-glass/registration/verify    admin.change.request STEP_UP_ADMIN  # issue #17
+POST   /api/admin/break-glass/actions/{action}       breakglass.recover -  # issue #17
+POST   /api/admin/break-glass/uses/{use_id}/attest   admin.change.request -  # issue #17
 `
 
 type designRoute struct {
@@ -434,8 +542,11 @@ func TestRBACRouteMatrix(t *testing.T) {
 				// auth.self: any principal, whatever its roles
 				allowed := d.perm == auth.PermAuthenticated ||
 					(role != auth.RoleBreakGlass && containsPerm(auth.RolePermissions(role), d.perm))
+				// a group route's handler may still refuse for want of the folder's or
+				// group's privilege (403 privilege_required, issue #47): the handler ran
+				privDenied := rec.Code == http.StatusForbidden && strings.Contains(rec.Body.String(), `"privilege_required"`)
 				switch {
-				case allowed && (rec.Code == http.StatusUnauthorized || rec.Code == http.StatusForbidden):
+				case allowed && !privDenied && (rec.Code == http.StatusUnauthorized || rec.Code == http.StatusForbidden):
 					t.Errorf("%s: %d %.200s, want the handler to run", role, rec.Code, rec.Body.String())
 				case !allowed && rec.Code != http.StatusForbidden:
 					t.Errorf("%s: %d %.200s, want 403", role, rec.Code, rec.Body.String())
@@ -518,5 +629,31 @@ func TestConnectionConfigNeedsStepUp(t *testing.T) {
 	fresh := signIn(t, f.DB, f.B.ID, authtest.User{Email: "conn-admin2@b.example", Roles: admin.Roles}, authtest.Phr, storetest.Now)
 	if rec := serve(h, authed(fresh, "PATCH", "/api/connections/x/config", body)); rec.Code == 401 || rec.Code == 403 {
 		t.Errorf("PATCH config with a fresh sign-in: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestAgentRoutesNeedStepUp: an enrolment code puts a host inside the customer
+// network on the path to the directory, so issuing one and revoking an agent
+// need a fresh phishing-resistant sign-in; viewers may only list.
+func TestAgentRoutesNeedStepUp(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	h := newIsolationServer(f).Handler()
+	admin := authtest.User{Email: "agent-admin@b.example", Roles: []auth.Role{auth.RoleTenantAdmin}}
+	stale := signIn(t, f.DB, f.B.ID, admin, authtest.Ctx{AAL: 2, Phr: true, AuthTime: storetest.Now.Add(-20 * time.Minute)}, storetest.Now)
+	for _, c := range []struct{ method, path string }{{"POST", "/api/agents"}, {"POST", "/api/agents/" + missingUUID + "/revoke"}} {
+		if rec := serve(h, authed(stale, c.method, c.path, `{"name":"dc-agent"}`)); rec.Code != 401 || !strings.Contains(rec.Body.String(), "step_up_required") {
+			t.Errorf("%s %s with a 20-minute-old sign-in: %d %s", c.method, c.path, rec.Code, rec.Body.String())
+		}
+	}
+	if rec := serve(h, authed(stale, "GET", "/api/agents", "")); rec.Code != 200 {
+		t.Errorf("listing needs no step-up: %d %s", rec.Code, rec.Body.String())
+	}
+	viewer := signIn(t, f.DB, f.B.ID, authtest.User{Email: "agent-viewer@b.example", Roles: []auth.Role{auth.RoleViewer}}, authtest.Phr, storetest.Now)
+	if rec := serve(h, authed(viewer, "POST", "/api/agents", `{"name":"dc-agent"}`)); rec.Code != 403 {
+		t.Errorf("a viewer issued an enrolment code: %d %s", rec.Code, rec.Body.String())
+	}
+	fresh := signIn(t, f.DB, f.B.ID, authtest.User{Email: "agent-admin2@b.example", Roles: admin.Roles}, authtest.Phr, storetest.Now)
+	if rec := serve(h, authed(fresh, "POST", "/api/agents", `{"name":"dc-agent"}`)); rec.Code != 201 {
+		t.Errorf("a fresh sign-in could not issue a code: %d %s", rec.Code, rec.Body.String())
 	}
 }

@@ -51,8 +51,15 @@ const (
 	KindSponsorshipApproval = "sponsorship.approval_needed"
 	KindSponsorshipDecided  = "sponsorship.decided"
 	KindSponsorshipTransfer = "sponsorship.transfer"
+	KindGuestClaimed        = "guest.claimed" // a guest you sponsor finished their claim (#69)
 	// KindDigest is the daily digest email itself. Users do not choose it.
 	KindDigest = "digest"
+	// The guest claim's two emails (#69): the invitation with the claim link
+	// and the confirmation code. Neither is a user preference; both go to a
+	// person with no sign-in, by email only, and carry a one-time secret that
+	// is supplied at send time (Secrets), never stored in the row.
+	KindGuestInvitation = "guest.invitation"
+	KindClaimCode       = "claim.code"
 )
 
 // Channels a user may choose for a kind.
@@ -96,6 +103,7 @@ var Kinds = []Kind{
 	{KindSponsorshipApproval, "Sponsorship approval needed", "A guest sponsorship is waiting for a second approver.", false, ChannelBoth},
 	{KindSponsorshipDecided, "Sponsorship decided", "A sponsorship you made was approved or rejected.", false, ChannelInApp},
 	{KindSponsorshipTransfer, "Sponsorship transfer requested", "Someone asked you to take over sponsoring a guest.", false, ChannelBoth},
+	{KindGuestClaimed, "Guest set up their sign-in", "A guest you invited accepted the invitation and set up their sign-in.", false, ChannelInApp},
 	{KindSecurityAlert, "Security alerts", "Security-relevant changes. These cannot be turned off.", true, ChannelBoth},
 }
 
@@ -178,7 +186,7 @@ func (m Message) validate() error {
 }
 
 func isKind(id string) bool {
-	if id == KindDigest {
+	if id == KindDigest || SecretKind(id) {
 		return true
 	}
 	_, ok := KindByID(id)

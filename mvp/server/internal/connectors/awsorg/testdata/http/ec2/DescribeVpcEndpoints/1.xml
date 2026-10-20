@@ -1,0 +1,12 @@
+<DescribeVpcEndpointsResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
+  <requestId>r1</requestId>
+  <vpcEndpointSet>
+    <item>
+      <vpcEndpointId>vpce-0abc</vpcEndpointId>
+      <vpcEndpointType>Gateway</vpcEndpointType>
+      <ownerId>111111111111</ownerId>
+      <serviceName>com.amazonaws.us-east-1.s3</serviceName>
+      <policyDocument>{"Statement":[{"Action":"*","Effect":"Allow","Principal":"*","Resource":"*"}]}</policyDocument>
+    </item>
+  </vpcEndpointSet>
+</DescribeVpcEndpointsResponse>

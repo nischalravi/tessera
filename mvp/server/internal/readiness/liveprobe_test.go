@@ -93,23 +93,30 @@ func TestLive_CredentialSealedAndTenantBound(t *testing.T) {
 		t.Fatalf("ref %q", ref)
 	}
 	read(t, st, func(c *store.TenantTx) error {
-		blob, err := c.ConnectionSecret(ref)
+		k, err := c.Credential(id, store.PurposeBind, ref)
 		if err != nil {
 			return err
 		}
+		blob := k.Sealed
 		if bytes.Contains(blob, []byte(bindPassword)) {
 			t.Error("the stored credential is not encrypted")
 		}
-		pt, err := s.Runner.Live.Sealer.Open(blob, connectionSecretAAD(c.Tenant(), ref))
+		pt, err := s.Runner.Live.Sealer.Open(blob, connectionSecretAAD(c.Tenant(), id, ref))
 		if err != nil || string(pt) != bindPassword {
 			t.Errorf("open: %q %v", pt, err)
 		}
 		other := tenancy.MustParse("00000000-0000-4000-8000-0000000000b2")
-		if _, err := s.Runner.Live.Sealer.Open(blob, connectionSecretAAD(other, ref)); err == nil {
+		if _, err := s.Runner.Live.Sealer.Open(blob, connectionSecretAAD(other, id, ref)); err == nil {
 			t.Error("the blob opened under another tenant")
 		}
-		if _, err := s.Runner.Live.Sealer.Open(blob, connectionSecretAAD(c.Tenant(), "sealed:other")); err == nil {
+		if _, err := s.Runner.Live.Sealer.Open(blob, connectionSecretAAD(c.Tenant(), id, "sealed:other")); err == nil {
 			t.Error("the blob opened under another reference")
+		}
+		if _, err := s.Runner.Live.Sealer.Open(blob, connectionSecretAAD(c.Tenant(), "other-conn", ref)); err == nil {
+			t.Error("the blob opened under another connection")
+		}
+		if _, err := s.Runner.Live.Sealer.Open(blob, store.CredentialAAD(c.Tenant(), id, store.PurposeContainment, ref)); err == nil {
+			t.Error("the blob opened under another purpose")
 		}
 		b, err := s.Current(c, id, t0)
 		if err != nil {
@@ -131,9 +138,9 @@ func TestLive_CredentialSealedAndTenantBound(t *testing.T) {
 	})
 	// Without a Sealer the secret is acknowledged and discarded, as before.
 	st2, plain := newStore(t), newSvc(t)
-	_, ref2 := ldapConn(t, plain, st2, ldapCfg)
+	id2, ref2 := ldapConn(t, plain, st2, ldapCfg)
 	read(t, st2, func(c *store.TenantTx) error {
-		if _, err := c.ConnectionSecret(ref2); err != store.ErrNotFound {
+		if _, err := c.Credential(id2, store.PurposeBind, ref2); err != store.ErrNotFound {
 			t.Errorf("stored without a sealer: %v", err)
 		}
 		return nil

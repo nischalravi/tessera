@@ -3,13 +3,13 @@ package api
 import (
 	"errors"
 	"net/http"
-	"net/url"
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/siem"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -81,12 +81,7 @@ func redactSinkTarget(k *store.SiemSink) string {
 	if k.Kind != "webhook" {
 		return k.Target
 	}
-	u, err := url.Parse(k.Target)
-	if err != nil {
-		return "(invalid URL)"
-	}
-	u.RawQuery, u.Fragment = "", ""
-	return u.String()
+	return safehttp.RedactURL(k.Target) // scheme://host[:port]/… (#333)
 }
 
 func sinkViewOf(tx *store.TenantTx, k *store.SiemSink, head int64) (sinkView, error) {

@@ -58,29 +58,48 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, rt *route) (*
 	markAuthenticated(r.Context())
 	now := s.clock()
 	ctx := auth.WithPrincipal(r.Context(), p)
-	sid := p.SessionID.String()
-	ap := audit.Principal{Tenant: p.TenantID, Actor: p.AuditActor(), SessionID: &sid, Authn: p.AuditAuthn(now)}
-	if p.Via == auth.ViaDPoP {
+	ap := audit.Principal{Tenant: p.TenantID, Actor: p.AuditActor(), Authn: p.AuditAuthn(now)}
+	if p.SessionID != nil { // a machine client has no session
+		sid := p.SessionID.String()
+		ap.SessionID = &sid
+	}
+	if p.IsToken() {
 		ap.ClientID = &p.ClientID
 	}
 	ctx = audit.SetPrincipal(ctx, ap)
 	r = r.WithContext(ctx)
 	if !auth.SafeMethod(r.Method) {
-		if hasBody(r) && !jsonContentType(r) {
+		if hasBody(r) && !jsonContentType(r) && !bodyTypeIs(r, rt.spec.BodyType) {
+			detail := "request bodies must be application/json"
+			if rt.spec.BodyType != "" {
+				detail += " or " + rt.spec.BodyType
+			}
 			writeJSON(w, http.StatusUnsupportedMediaType, ojson.Object{{Key: "error", Value: "unsupported_media_type"},
-				{Key: "detail", Value: "request bodies must be application/json"}})
+				{Key: "detail", Value: detail}})
 			return r, false
 		}
 		// CSRF protects ambient credentials: a DPoP token is not sent by a
 		// browser on its own, and its proof is bound to the request
-		if p.Via != auth.ViaDPoP {
+		if !p.IsToken() {
 			if err := auth.CheckCSRF(r, p, s.csrfOrigins()); err != nil {
 				writeJSON(w, http.StatusForbidden, ojson.Object{{Key: "error", Value: "csrf_failed"}})
 				return r, false
 			}
 		}
 	}
-	if d := auth.Check(p, rt.spec.Perm, rt.spec.Authn, now); d != nil {
+	d := auth.Check(p, rt.spec.Perm, rt.spec.Authn, now)
+	if rt.spec.Authn != nil && !rt.spec.NoConditionalAccess && p.Kind == auth.KindUser &&
+		(d == nil || d.Error == "step_up_required") {
+		// a privileged action: the tenant's conditional access policies may
+		// deny it or add a step-up of their own (access.go)
+		var err error
+		if d, err = s.accessCheck(r.Context(), r, nil, p, rt.spec.Perm, rt.spec.Authn, rt.method+" "+rt.pattern); err != nil {
+			s.log.Error("conditional access failed", "method", r.Method, "path", r.URL.Path, "err", err)
+			writeAuditUnavailable(w, r)
+			return r, false
+		}
+	}
+	if d != nil {
 		if p.Via == auth.ViaDPoP {
 			auth.WriteDenialScheme(w, d, "DPoP")
 		} else {
@@ -100,6 +119,16 @@ func jsonContentType(r *http.Request) bool {
 	return err == nil && mt == "application/json"
 }
 
+// bodyTypeIs reports whether the body is declared as the route's own media
+// type (never true for a route with none).
+func bodyTypeIs(r *http.Request, want string) bool {
+	if want == "" {
+		return false
+	}
+	mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	return err == nil && mt == want
+}
+
 // principal returns the request's authenticated principal. Every non-public
 // route runs after authorize, so it is always there; a missing one is a
 // programming error and fails loudly rather than running unattributed.
@@ -111,11 +140,29 @@ func principal(r *http.Request) *auth.Principal {
 	return p
 }
 
+// userPrincipal is principal for the routes about a signed-in user's session
+// (auth.self is held by every principal, a machine client included): a
+// machine client has no user and no session, and gets 403
+// interactive_authentication_required, like a step-up route.
+func userPrincipal(r *http.Request) (*auth.Principal, error) {
+	p := principal(r)
+	if p.Kind != auth.KindUser || p.UserID == nil || p.SessionID == nil {
+		return nil, denial{&auth.Denial{Status: http.StatusForbidden, Error: "interactive_authentication_required",
+			Permission: auth.PermAuthenticated}}
+	}
+	return p, nil
+}
+
 // denial is an authorization refusal decided inside a handler (for example
 // a revoke with dry_run=false). writeError renders it.
 type denial struct{ d *auth.Denial }
 
 func (d denial) Error() string { return d.d.Error }
+
+// deniedBody is a refusal a handler answers with instead of returning an
+// error, so the request's transaction commits and keeps the access.decision
+// event of a conditional access refusal. dispatch writes it after the commit.
+type deniedBody struct{ d *auth.Denial }
 
 // ---------------------------------------------------------------- session routes
 
@@ -141,7 +188,10 @@ func roleNames(rs []auth.Role) []string {
 // (active and inactive with the reason), the authentication summary, the
 // CSRF token and the session's expiry.
 func (s *Server) authSession(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
-	p := principal(r)
+	p, err := userPrincipal(r)
+	if err != nil {
+		return nil, err
+	}
 	tx := store.TxFrom(r.Context())
 	u, err := tx.PlatformUser(*p.UserID)
 	if err != nil {
@@ -192,7 +242,10 @@ func (s *Server) authSession(_ http.ResponseWriter, r *http.Request, _ *params) 
 // authLogout is POST /api/auth/logout: it revokes the current session and
 // clears the cookie.
 func (s *Server) authLogout(w http.ResponseWriter, r *http.Request, _ *params) (any, error) {
-	p := principal(r)
+	p, err := userPrincipal(r)
+	if err != nil {
+		return nil, err
+	}
 	tx := store.TxFrom(r.Context())
 	now := s.clock()
 	if err := auth.RevokeSession(tx, *p.SessionID, auth.RevokedLogout, now); err != nil {
@@ -208,7 +261,10 @@ func (s *Server) authLogout(w http.ResponseWriter, r *http.Request, _ *params) (
 
 // authSessions is GET /api/auth/sessions: the caller's own sessions.
 func (s *Server) authSessions(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
-	p := principal(r)
+	p, err := userPrincipal(r)
+	if err != nil {
+		return nil, err
+	}
 	ss, err := store.TxFrom(r.Context()).SessionsForUser(*p.UserID)
 	if err != nil {
 		return nil, err
@@ -234,7 +290,10 @@ func (s *Server) authSessions(_ http.ResponseWriter, r *http.Request, _ *params)
 // own session, or (admin.sessions.revoke with STEP_UP_ADMIN) another user's
 // in the same tenant. Any other session id is 404, like a missing one.
 func (s *Server) authRevokeSession(w http.ResponseWriter, r *http.Request, p *params) (any, error) {
-	pr := principal(r)
+	pr, err := userPrincipal(r)
+	if err != nil {
+		return nil, err
+	}
 	id, err := uuid.Parse(p.path["session_id"])
 	if err != nil {
 		return nil, errStatus(http.StatusNotFound, "Not Found")
