@@ -132,6 +132,13 @@ type Principal struct {
 	InactiveRoles map[Role]string
 	Scopes        ScopeSet // nil = cookie session (all scopes implicitly)
 	Via           string   // cookie | dpop
+	// IdentityID is the identity the user is linked to (platform_users.identity_id),
+	// whose group memberships give the user its group privileges (issue #47); nil
+	// when the user is not linked and for machine clients.
+	IdentityID *int64
+	// GroupsViewerView is the tenant setting that lets the viewer role see every
+	// native folder and group (groups_viewer_can_view, issue #47).
+	GroupsViewerView bool
 
 	csrfSecret string
 	session    *store.Session

@@ -8,13 +8,23 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/model"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/privs"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
 
 // Native groups, folder and group CRUD (issue #44, GR-1; design
-// docs/design/groups-grouper-parity.md §10.11). Every route needs groups.admin,
-// which only tenant_admin holds until GR-4 adds the per-object privileges.
+// docs/design/groups-grouper-parity.md §10.11). A route needs groups.read or
+// groups.write to be reached, and then the privilege its folder or group asks
+// for (GR-4, issue #47; groups_privs.go): a refusal is 403 privilege_required.
+//
+//	list folders and groups   only those the caller may view (stem_view, view)
+//	GET a folder              stem_view         GET a group       view
+//	create a folder           create on the parent folder
+//	create a group            create on the folder (and read on a composite's factors)
+//	edit, delete a folder     stem_admin        edit, delete, restore a group   admin
+//	move                      stem_admin / admin on the object, create on the destination
+//	copy                      stem_admin / read on the source, create on the destination
 //
 //	GET    /api/groups/folders?parent=&scope=one|sub&q=&limit=&offset=
 //	POST   /api/groups/folders                   {parent, extension, display_extension, description, data_owner}
@@ -34,23 +44,23 @@ import (
 // invalid name or field.
 func (s *Server) registerGroupsFolderRoutes() {
 	G, P, PA, D := http.MethodGet, http.MethodPost, http.MethodPatch, http.MethodDelete
-	perm := need(auth.PermGroupsAdmin)
+	canRead, canWrite := need(auth.PermGroupsRead), need(auth.PermGroupsWrite)
 	// literal paths first: /api/groups/{id} would also match "folders" and "native"
-	s.handle(G, "/api/groups/folders", read, perm, s.rd(s.listGrpFolders))
-	s.handle(P, "/api/groups/folders", write, perm, s.rd(s.createGrpFolder))
-	s.handle(G, "/api/groups/folders/{id}", read, perm, s.rd(s.getGrpFolder))
-	s.handle(PA, "/api/groups/folders/{id}", write, perm, s.rd(s.patchGrpFolder))
-	s.handle(D, "/api/groups/folders/{id}", write, perm, s.rd(s.deleteGrpFolder))
-	s.handle(P, "/api/groups/folders/{id}/move", write, perm, s.rd(s.moveGrpFolder))
-	s.handle(P, "/api/groups/folders/{id}/copy", write, perm, s.rd(s.copyGrpFolder))
-	s.handle(G, "/api/groups/native", read, perm, s.rd(s.listGrpGroups))
-	s.handle(P, "/api/groups", write, perm, s.rd(s.createGrpGroup))
-	s.handle(G, "/api/groups/{id}", read, perm, s.rd(s.getGrpGroup))
-	s.handle(PA, "/api/groups/{id}", write, perm, s.rd(s.patchGrpGroup))
-	s.handle(D, "/api/groups/{id}", write, perm, s.rd(s.deleteGrpGroup))
-	s.handle(P, "/api/groups/{id}/move", write, perm, s.rd(s.moveGrpGroup))
-	s.handle(P, "/api/groups/{id}/copy", write, perm, s.rd(s.copyGrpGroup))
-	s.handle(P, "/api/groups/{id}/restore", write, perm, s.rd(s.restoreGrpGroup))
+	s.handle(G, "/api/groups/folders", read, canRead, s.rd(s.listGrpFolders))
+	s.handle(P, "/api/groups/folders", write, canWrite, s.rd(s.createGrpFolder))
+	s.handle(G, "/api/groups/folders/{id}", read, canRead, s.rd(s.getGrpFolder))
+	s.handle(PA, "/api/groups/folders/{id}", write, canWrite, s.rd(s.patchGrpFolder))
+	s.handle(D, "/api/groups/folders/{id}", write, canWrite, s.rd(s.deleteGrpFolder))
+	s.handle(P, "/api/groups/folders/{id}/move", write, canWrite, s.rd(s.moveGrpFolder))
+	s.handle(P, "/api/groups/folders/{id}/copy", write, canWrite, s.rd(s.copyGrpFolder))
+	s.handle(G, "/api/groups/native", read, canRead, s.rd(s.listGrpGroups))
+	s.handle(P, "/api/groups", write, canWrite, s.rd(s.createGrpGroup))
+	s.handle(G, "/api/groups/{id}", read, canRead, s.rd(s.getGrpGroup))
+	s.handle(PA, "/api/groups/{id}", write, canWrite, s.rd(s.patchGrpGroup))
+	s.handle(D, "/api/groups/{id}", write, canWrite, s.rd(s.deleteGrpGroup))
+	s.handle(P, "/api/groups/{id}/move", write, canWrite, s.rd(s.moveGrpGroup))
+	s.handle(P, "/api/groups/{id}/copy", write, canWrite, s.rd(s.copyGrpGroup))
+	s.handle(P, "/api/groups/{id}/restore", write, canWrite, s.rd(s.restoreGrpGroup))
 }
 
 // ---------------------------------------------------------------- views
@@ -168,7 +178,7 @@ type listBody struct {
 func grpErr(err error) error {
 	var me *model.Error
 	if !errors.As(err, &me) {
-		return err
+		return privErr(err)
 	}
 	status := map[model.Kind]int{model.NotFound: http.StatusNotFound, model.Conflict: http.StatusConflict,
 		model.Invalid: http.StatusUnprocessableEntity}[me.Kind]
@@ -197,8 +207,10 @@ func grpBodyID(field, v string) error {
 }
 
 func (s *Server) grpEnv(r *http.Request, c *store.TenantTx, now time.Time) model.Env {
-	env := model.Env{Tx: c, Now: now, Engine: s.cfg.GroupsEngine}
-	if pr := principal(r); pr.UserID != nil {
+	pr := principal(r)
+	env := model.Env{Tx: c, Now: now, Engine: s.cfg.GroupsEngine, ByIdentity: pr.IdentityID,
+		TenantAdmin: pr.ActiveRoles.Has(auth.RoleTenantAdmin)}
+	if pr.UserID != nil {
 		u := pr.UserID.String()
 		env.By = &u
 	}
@@ -256,7 +268,11 @@ func (s *Server) listGrpFolders(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, err
 	}
 	scope, _ := p.query("scope")
-	fs, err := s.grpRead(r).ListFolders(model.FolderQuery{Parent: store.FolderID(parent), Scope: scope, Q: q, Limit: limit, Offset: offset})
+	e := s.grpRead(r)
+	// browse and search show only what the caller may view (stem_view)
+	fs, err := visible(s.grpChecker(r), privs.Folder, limit, offset, func(l, o int) ([]*store.Folder, error) {
+		return e.ListFolders(model.FolderQuery{Parent: store.FolderID(parent), Scope: scope, Q: q, Limit: l, Offset: o})
+	}, func(f *store.Folder) privs.Object { return privs.FolderObject(f.ID) }, privs.StemView)
 	if err != nil {
 		return 0, nil, grpErr(err)
 	}
@@ -272,9 +288,9 @@ func (s *Server) getGrpFolder(r *http.Request, p *params) (int, any, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	f, err := s.grpRead(r).Folder(store.FolderID(id))
+	f, err := s.grpFolderFor(r, s.grpChecker(r), id, privs.StemView)
 	if err != nil {
-		return 0, nil, grpErr(err)
+		return 0, nil, err
 	}
 	return http.StatusOK, viewFolder(f), nil
 }
@@ -293,6 +309,9 @@ func (s *Server) createGrpFolder(r *http.Request, _ *params) (int, any, error) {
 	if err := grpBodyID("parent", in.Parent); err != nil {
 		return 0, nil, err
 	}
+	if _, err := s.grpFolderOrRoot(r, s.grpChecker(r), in.Parent, privs.Create); err != nil {
+		return 0, nil, err
+	}
 	var out *store.Folder
 	err := s.grpWrite(r, func(e model.Env) error {
 		var err error
@@ -309,6 +328,9 @@ func (s *Server) createGrpFolder(r *http.Request, _ *params) (int, any, error) {
 func (s *Server) patchGrpFolder(r *http.Request, p *params) (int, any, error) {
 	id, err := grpPathID(p, "folder")
 	if err != nil {
+		return 0, nil, err
+	}
+	if _, err := s.grpFolderFor(r, s.grpChecker(r), id, privs.StemAdmin); err != nil {
 		return 0, nil, err
 	}
 	var in struct {
@@ -339,6 +361,9 @@ func (s *Server) deleteGrpFolder(r *http.Request, p *params) (int, any, error) {
 	if err != nil {
 		return 0, nil, err
 	}
+	if _, err := s.grpFolderFor(r, s.grpChecker(r), id, privs.StemAdmin); err != nil {
+		return 0, nil, err
+	}
 	if err := s.grpWrite(r, func(e model.Env) error { return e.DeleteFolder(store.FolderID(id)) }); err != nil {
 		return 0, nil, err
 	}
@@ -348,6 +373,10 @@ func (s *Server) deleteGrpFolder(r *http.Request, p *params) (int, any, error) {
 func (s *Server) moveGrpFolder(r *http.Request, p *params) (int, any, error) {
 	id, err := grpPathID(p, "folder")
 	if err != nil {
+		return 0, nil, err
+	}
+	ck := s.grpChecker(r)
+	if _, err := s.grpFolderFor(r, ck, id, privs.StemAdmin); err != nil {
 		return 0, nil, err
 	}
 	var in struct {
@@ -360,6 +389,9 @@ func (s *Server) moveGrpFolder(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, badRequest("invalid_parent", "parent is required")
 	}
 	if err := grpBodyID("parent", in.Parent); err != nil {
+		return 0, nil, err
+	}
+	if _, err := s.grpFolderFor(r, ck, in.Parent, privs.Create); err != nil { // the destination
 		return 0, nil, err
 	}
 	var out *store.Folder
@@ -379,6 +411,11 @@ func (s *Server) copyGrpFolder(r *http.Request, p *params) (int, any, error) {
 	if err != nil {
 		return 0, nil, err
 	}
+	ck := s.grpChecker(r)
+	// a copy takes the groups below the folder with it, so it needs stem_admin on the source
+	if _, err := s.grpFolderFor(r, ck, id, privs.StemAdmin); err != nil {
+		return 0, nil, err
+	}
 	var in struct {
 		Parent    string `json:"parent"`
 		Extension string `json:"extension"`
@@ -390,6 +427,9 @@ func (s *Server) copyGrpFolder(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, badRequest("invalid_parent", "parent is required")
 	}
 	if err := grpBodyID("parent", in.Parent); err != nil {
+		return 0, nil, err
+	}
+	if _, err := s.grpFolderFor(r, ck, in.Parent, privs.Create); err != nil {
 		return 0, nil, err
 	}
 	var out *store.Folder
@@ -425,8 +465,12 @@ func (s *Server) listGrpGroups(r *http.Request, p *params) (int, any, error) {
 	if deleted != "" && deleted != "true" && deleted != "false" {
 		return 0, nil, badRequest("invalid_deleted", "deleted is true or false")
 	}
-	gs, err := s.grpRead(r).ListGroups(model.GroupQuery{Folder: store.FolderID(folder), Scope: scope, Q: q,
-		Kind: store.GroupKind(typ), IncludeDeleted: deleted == "true", Limit: limit, Offset: offset})
+	e := s.grpRead(r)
+	// browse and search show only what the caller may view (GRP-7387)
+	gs, err := visible(s.grpChecker(r), privs.Group, limit, offset, func(l, o int) ([]*store.NativeGroup, error) {
+		return e.ListGroups(model.GroupQuery{Folder: store.FolderID(folder), Scope: scope, Q: q,
+			Kind: store.GroupKind(typ), IncludeDeleted: deleted == "true", Limit: l, Offset: o})
+	}, func(g *store.NativeGroup) privs.Object { return privs.GroupObject(g.ID) }, privs.View)
 	if err != nil {
 		return 0, nil, grpErr(err)
 	}
@@ -442,12 +486,11 @@ func (s *Server) getGrpGroup(r *http.Request, p *params) (int, any, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	e := s.grpRead(r)
-	g, err := e.Group(store.GroupID(id))
+	g, err := s.grpGroupFor(r, s.grpChecker(r), id, privs.View)
 	if err != nil {
-		return 0, nil, grpErr(err)
+		return 0, nil, err
 	}
-	v, err := viewGroupFull(e, g)
+	v, err := viewGroupFull(s.grpRead(r), g)
 	return http.StatusOK, v, err
 }
 
@@ -477,6 +520,13 @@ func (s *Server) createGrpGroup(r *http.Request, _ *params) (int, any, error) {
 	}
 	factors, err := grpFactorIDs(in.Factors)
 	if err != nil {
+		return 0, nil, err
+	}
+	ck := s.grpChecker(r)
+	if _, err := s.grpFolderFor(r, ck, in.Folder, privs.Create); err != nil {
+		return 0, nil, err
+	}
+	if err := s.requireReadOn(r, ck, factors); err != nil {
 		return 0, nil, err
 	}
 	var out groupView
@@ -530,6 +580,9 @@ func (s *Server) patchGrpGroup(r *http.Request, p *params) (int, any, error) {
 	if err != nil {
 		return 0, nil, err
 	}
+	if _, err := s.grpGroupFor(r, s.grpChecker(r), id, privs.Admin); err != nil {
+		return 0, nil, err
+	}
 	var in struct {
 		Extension         *string `json:"extension"`
 		DisplayExtension  *string `json:"display_extension"`
@@ -576,6 +629,9 @@ func (s *Server) deleteGrpGroup(r *http.Request, p *params) (int, any, error) {
 	if err != nil {
 		return 0, nil, err
 	}
+	if _, err := s.grpGroupFor(r, s.grpChecker(r), id, privs.Admin); err != nil {
+		return 0, nil, err
+	}
 	if err := s.grpWrite(r, func(e model.Env) error { return e.DeleteGroup(store.GroupID(id)) }); err != nil {
 		return 0, nil, err
 	}
@@ -585,6 +641,9 @@ func (s *Server) deleteGrpGroup(r *http.Request, p *params) (int, any, error) {
 func (s *Server) restoreGrpGroup(r *http.Request, p *params) (int, any, error) {
 	id, err := grpPathID(p, "group")
 	if err != nil {
+		return 0, nil, err
+	}
+	if _, err := s.grpGroupFor(r, s.grpChecker(r), id, privs.Admin); err != nil {
 		return 0, nil, err
 	}
 	var out *store.NativeGroup
@@ -604,6 +663,10 @@ func (s *Server) moveGrpGroup(r *http.Request, p *params) (int, any, error) {
 	if err != nil {
 		return 0, nil, err
 	}
+	ck := s.grpChecker(r)
+	if _, err := s.grpGroupFor(r, ck, id, privs.Admin); err != nil {
+		return 0, nil, err
+	}
 	var in struct {
 		Folder string `json:"folder"`
 	}
@@ -614,6 +677,9 @@ func (s *Server) moveGrpGroup(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, badRequest("invalid_folder", "folder is required")
 	}
 	if err := grpBodyID("folder", in.Folder); err != nil {
+		return 0, nil, err
+	}
+	if _, err := s.grpFolderFor(r, ck, in.Folder, privs.Create); err != nil { // the destination
 		return 0, nil, err
 	}
 	var out *store.NativeGroup
@@ -633,6 +699,10 @@ func (s *Server) copyGrpGroup(r *http.Request, p *params) (int, any, error) {
 	if err != nil {
 		return 0, nil, err
 	}
+	ck := s.grpChecker(r)
+	if _, err := s.grpGroupFor(r, ck, id, privs.Read); err != nil {
+		return 0, nil, err
+	}
 	var in struct {
 		Folder    string `json:"folder"`
 		Extension string `json:"extension"`
@@ -644,6 +714,9 @@ func (s *Server) copyGrpGroup(r *http.Request, p *params) (int, any, error) {
 		return 0, nil, badRequest("invalid_folder", "folder is required")
 	}
 	if err := grpBodyID("folder", in.Folder); err != nil {
+		return 0, nil, err
+	}
+	if _, err := s.grpFolderFor(r, ck, in.Folder, privs.Create); err != nil {
 		return 0, nil, err
 	}
 	var out *store.NativeGroup

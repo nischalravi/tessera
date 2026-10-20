@@ -283,16 +283,17 @@ func TestGroupsTenantIsolation(t *testing.T) {
 	}
 }
 
-func TestGroupsRequireTenantAdmin(t *testing.T) {
+// TestGroupsRoutesNeedAGroupsPermission: the route permission is the first
+// gate. break_glass holds no groups permission, and a role that holds one is
+// still refused by the folder's or group's privilege (groups_privs_test.go).
+func TestGroupsRoutesNeedAGroupsPermission(t *testing.T) {
 	f := storetest.TwoTenants(t)
 	h := newIsolationServer(f).Handler()
-	for _, role := range []auth.Role{auth.RoleViewer, auth.RoleOperator, auth.RoleAuditor, auth.RolePolicyAdmin} {
-		l := signIn(t, f.DB, f.B.ID, authtest.User{Email: string(role) + "@b.example", Roles: []auth.Role{role}}, authtest.Phr, storetest.Now)
-		for _, tc := range [][3]string{{"GET", "/api/groups/folders", ""}, {"POST", "/api/groups/folders", `{"extension":"x"}`},
-			{"GET", "/api/groups/native", ""}, {"POST", "/api/groups", `{"folder":"x","extension":"x"}`}} {
-			if rec := serve(h, authed(l, tc[0], tc[1], tc[2])); rec.Code != http.StatusForbidden {
-				t.Errorf("%s %s %s = %d, want 403", role, tc[0], tc[1], rec.Code)
-			}
+	bg := signIn(t, f.DB, f.B.ID, authtest.User{Email: "bg@b.example", Roles: []auth.Role{auth.RoleBreakGlass}}, authtest.Phr, storetest.Now)
+	for _, tc := range [][3]string{{"GET", "/api/groups/folders", ""}, {"POST", "/api/groups/folders", `{"extension":"x"}`},
+		{"GET", "/api/groups/native", ""}, {"POST", "/api/groups", `{"folder":"x","extension":"x"}`}} {
+		if rec := serve(h, authed(bg, tc[0], tc[1], tc[2])); rec.Code != http.StatusForbidden {
+			t.Errorf("break_glass %s %s = %d, want 403", tc[0], tc[1], rec.Code)
 		}
 	}
 	admin := signIn(t, f.DB, f.B.ID, authtest.User{Email: "ta@b.example", Roles: []auth.Role{auth.RoleTenantAdmin}}, authtest.Phr, storetest.Now)
