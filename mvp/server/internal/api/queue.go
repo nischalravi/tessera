@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/alerts"
 	"github.com/nischalravi/tessera/mvp/server/internal/archive"
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
@@ -26,6 +27,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/reconcile"
 	"github.com/nischalravi/tessera/mvp/server/internal/requests"
+	"github.com/nischalravi/tessera/mvp/server/internal/roles/mining"
 	"github.com/nischalravi/tessera/mvp/server/internal/sod"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 )
@@ -76,7 +78,9 @@ func (s *Server) newQueue() *queue.Queue {
 	q.Register(jobs.SweepSSFPoll, queue.Kind{Handler: tracked(jobs.SweepSSFPoll, s.queueSSFPoll), Actor: "ssf.poller"})
 	q.Register(jobs.SweepDrift, queue.Kind{Handler: tracked(jobs.SweepDrift, s.queueDriftSweep), Actor: "drift.sweeper"})
 	q.Register(jobs.GuestLifecycle, queue.Kind{Handler: tracked(jobs.GuestLifecycle, s.queueGuestLifecycleSweep), Actor: guestlife.Sweeper})
+	q.Register(jobs.RoleMining, queue.Kind{Handler: s.queueRoleMining, Actor: mining.Worker})
 	q.Register(jobs.Maintenance, queue.Kind{Handler: s.queueMaintenance, Actor: "queue.worker"})
+	q.Register(jobs.CertificateExpiry, queue.Kind{Handler: s.queueCertificateExpiry, Actor: "certificate.sweeper"})
 	q.Register(jobs.ArchiveSweep, queue.Kind{Handler: s.queueArchive, Actor: archive.Actor})
 	every := "@every " + SweepInterval.String()
 	for _, k := range []string{jobs.JITSweep, jobs.SweepRequests, jobs.SweepLifecycle, jobs.SweepAdminChanges, jobs.ContainmentRetry, jobs.SweepSoDMitigations, jobs.GuestLifecycle, jobs.SweepSSFPoll} {
@@ -84,6 +88,7 @@ func (s *Server) newQueue() *queue.Queue {
 	}
 	q.Schedule(jobs.SweepDrift, jobs.SweepDrift, "@every "+driftEvery.String(), maxSweepAttempts)
 	q.Schedule(jobs.Maintenance, jobs.Maintenance, "@every "+jobMaintainGap.String(), 1)
+	q.Schedule(jobs.CertificateExpiry, jobs.CertificateExpiry, certificateExpirySchedule, maxSweepAttempts)
 	q.Schedule(jobs.ArchiveSweep, jobs.ArchiveSweep, "@every "+archiveEvery.String(), maxArchiveAttempts)
 	return q
 }
@@ -235,6 +240,25 @@ func (s *Server) queueDriftSweep(ctx context.Context, j queue.Job) (any, error) 
 		_, err := reconcile.RunDrift(tx, now, "drift.sweeper")
 		return err
 	})
+}
+
+// certificateExpirySchedule runs the certificate expiry check once a day (UTC).
+const certificateExpirySchedule = "17 6 * * *"
+
+// queueCertificateExpiry raises, through the alerts engine, an alert for each certificate that expires in 30 days
+// or less (and again in the last 7), and resolves the alerts of certificates that were rotated or retired.
+func (s *Server) queueCertificateExpiry(ctx context.Context, j queue.Job) (any, error) {
+	now := s.clock().UTC()
+	var raised, resolved int
+	err := s.store.InTenant(audit.WithSystemActor(ctx, "certificate.sweeper"), j.Tenant, func(tx *store.TenantTx) error {
+		var err error
+		raised, resolved, err = alerts.RunScheduled(tx, now, "certificate_expiry")
+		return err
+	})
+	if err != nil || raised+resolved == 0 {
+		return nil, err
+	}
+	return map[string]int{"raised": raised, "resolved": resolved}, nil
 }
 
 func (s *Server) queueMaintenance(ctx context.Context, j queue.Job) (any, error) {

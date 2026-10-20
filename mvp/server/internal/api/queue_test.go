@@ -47,7 +47,7 @@ func TestQueueAPI(t *testing.T) {
 	f := storetest.TwoTenants(t)
 	srv := newIsolationServer(f)
 	h := srv.Handler()
-	for range 8 { // eleven jobs per tenant, four run at a time in all
+	for range 8 { // twelve schedules per tenant, eleven fire at once (certificate_expiry waits for its daily window); four run at a time
 		if err := srv.Queue().Tick(context.Background()); err != nil {
 			t.Fatal(err)
 		}
@@ -64,10 +64,16 @@ func TestQueueAPI(t *testing.T) {
 	// The schedules exist for both tenants and fired once: every sweep ran.
 	var scheds []queueScheduleView
 	rec := corrDo(h, auditor, "GET", "/api/queue/schedules", "")
-	if err := json.Unmarshal(rec.Body.Bytes(), &scheds); err != nil || rec.Code != 200 || len(scheds) != 11 {
+	if err := json.Unmarshal(rec.Body.Bytes(), &scheds); err != nil || rec.Code != 200 || len(scheds) != 12 {
 		t.Fatalf("schedules: %d %s", rec.Code, rec.Body)
 	}
 	for _, s := range scheds {
+		if s.Name == jobs.CertificateExpiry { // a daily cron: waits for its next window instead of firing at once
+			if !s.Enabled || s.Spec != certificateExpirySchedule || s.LastEnqueuedAt != nil || s.NextRunAt == "" {
+				t.Errorf("certificate expiry schedule %+v", s)
+			}
+			continue
+		}
 		if !s.Enabled || s.LastEnqueuedAt == nil || !strings.HasPrefix(s.Spec, "@every ") {
 			t.Errorf("schedule %+v", s)
 		}

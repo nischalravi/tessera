@@ -114,7 +114,7 @@ export function IdentityMatches() {
       {tab === "links" && <LinkRequests data={links} />}
       {tab === "reverification" && <Queue data={reverify} kind="reverification" />}
       {tab === "decided" && <Queue data={decided} kind="decided" />}
-      {tab === "settings" && canSettings && <Settings />}
+      {tab === "settings" && canSettings && <MatchingSettingsForm />}
     </Page>
   );
 }
@@ -414,7 +414,8 @@ function LinkRequests({ data }: { data: Loaded<{ items: IdentityLinkRequest[]; c
 
 // ------------------------------------------------------------------ settings
 
-function Settings() {
+/** The matching settings form (also used by Admin > Identity rules). */
+export function MatchingSettingsForm() {
   const { data, reload } = useApi<MatchingSettings>("/admin/matching");
   const toast = useToast();
   const [draft, setDraft] = useState<Partial<MatchingSettings>>({});

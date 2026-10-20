@@ -156,7 +156,8 @@ func (d *Dispatcher) RunOnce(ctx context.Context) (Stats, error) {
 
 type claimed struct {
 	n       *store.Notification
-	attempt int // the attempt number, counted by the claim
+	attempt int    // the attempt number, counted by the claim
+	brand   string // the tenant's product name (Admin > Branding), "" for the default
 }
 
 type outcome struct {
@@ -226,13 +227,17 @@ func (d *Dispatcher) Tenant(ctx context.Context, t tenancy.ID) (Stats, error) {
 		if err != nil {
 			return err
 		}
+		brand, err := tx.BrandName()
+		if err != nil {
+			return err
+		}
 		for _, n := range due {
 			if err := tx.ClaimNotification(n.ID, n.Attempts, now.Add(d.Lease)); errors.Is(err, store.ErrNotFound) {
 				continue // another dispatcher took it
 			} else if err != nil {
 				return err
 			}
-			claims = append(claims, claimed{n, n.Attempts + 1})
+			claims = append(claims, claimed{n, n.Attempts + 1, brand})
 			if d.Sender != nil && deref(n.Email) != "" {
 				if err := d.markSending(tx, n, now); err != nil {
 					return err
@@ -328,11 +333,15 @@ func (d *Dispatcher) send(ctx context.Context, c claimed) outcome {
 	case d.Sender == nil:
 		return skip("email is not configured")
 	}
+	product := "Tessera"
+	if c.brand != "" {
+		product = c.brand
+	}
 	body := c.n.Body
 	if c.n.Link != "" && d.BaseURL != "" {
-		body += "\n\nOpen in Tessera: " + strings.TrimRight(d.BaseURL, "/") + c.n.Link
+		body += "\n\nOpen in " + product + ": " + strings.TrimRight(d.BaseURL, "/") + c.n.Link
 	}
-	body += "\n\n--\nYou get this because of your notification settings in Tessera."
+	body += "\n\n--\nYou get this because of your notification settings in " + product + "."
 	if SecretKind(c.n.Kind) {
 		secret, ok := d.Secrets.Get(c.n.ID, d.Clock().UTC())
 		if !ok {
@@ -346,7 +355,7 @@ func (d *Dispatcher) send(ctx context.Context, c claimed) outcome {
 		}
 		body = c.n.Body + "\n\n" + secret + "\n\n--\nIf you were not expecting this message, ignore it: nothing happens until the link or code is used."
 	}
-	mail := Email{ID: c.n.ID, To: email, Subject: "[Tessera] " + c.n.Subject, Body: body}
+	mail := Email{ID: c.n.ID, To: email, Subject: "[" + product + "] " + c.n.Subject, Body: body}
 	var err error
 	if rec, ok := d.Sender.(RecordingSender); ok {
 		o.att, err = rec.SendRecorded(ctx, mail)

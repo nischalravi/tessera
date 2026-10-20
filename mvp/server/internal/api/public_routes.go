@@ -59,6 +59,9 @@ func needStepUpExempt(p auth.Permission, req auth.AuthnRequirement) Route {
 var publicRoutes = []string{
 	"GET /api/health",
 	"GET /api/auth/discover",
+	// the tenant's name, colours and logo for the sign-in and claim pages (Admin > Branding)
+	"GET /api/auth/branding",
+	"GET /api/auth/branding/logo",
 	"GET /api/auth/login",
 	"GET /api/auth/oidc/{connection_id}/callback",
 	"GET /api/auth/saml/{connection_id}/metadata",
