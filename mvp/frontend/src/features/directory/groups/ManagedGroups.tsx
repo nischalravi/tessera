@@ -106,7 +106,7 @@ export function ManagedGroups() {
           <>
             <ViewToggle />
             <label className="row tight small">
-              <input type="checkbox" checked={everywhere} onChange={(e) => setParam("all", e.target.checked ? "1" : null)} />
+              <input type="checkbox" style={{ width: 24, height: 24 }} checked={everywhere} onChange={(e) => setParam("all", e.target.checked ? "1" : null)} />
               <span>{current ? "Include subfolders" : "Search every folder"}</span>
             </label>
           </>
