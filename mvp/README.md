@@ -592,6 +592,33 @@ Revoking a membership:
 Role removal, exclusion and the review decision are written, with their audit events
 (`role.unassign`, `role.exclude`, `review.revoke`), in the decision's transaction.
 
+### Intended and observed access, and drift (issue #301)
+
+Tessera keeps what was **decided** apart from what systems **report**:
+
+* `intended_grants` (schema 0330): identity x target entitlement, with provenance (`request`, `role`,
+  `birthright`, `jit`, `review_keep`, `manual`), a validity window and an owner. Approvals, role assignment,
+  JIT, a review "keep" and admin grants write it in the same transaction as their `grant_edges` write
+  (`InsertEdge`, `SetEdgeExpiry`, `RevokeEdge`, `Delete*Edge`, `KeepIntent` in `internal/store/repo_access_model.go`);
+  revoking or expiring closes the row (`closed_at`, `close_reason`), it is never deleted.
+* `observed_runs` / `observed_entitlements`: the account -> group memberships each system reported in its latest
+  connector run (one run per system; the snapshot replaces the previous one). Only `ingest.Discovery` writes them.
+* `access_drift` (schema 0331): one row per difference, classes `missing` (intended, not shown), `rogue` (shown, never
+  intended), `orphan` (account with no identity), `stale` (shown after the intent ended); status `open`,
+  `remediating`, `resolved`, `accepted`. `internal/reconcile/drift.go` finds them after each sync and every 5 minutes
+  on the sweeper (`drift_sweep`); reruns are idempotent (a row is opened, reopened, updated or resolved, never duplicated).
+* `remediation_policies`: per system, or per entitlement of a system, and class: `auto_provision` (missing only) and
+  `auto_revoke` (rogue, stale, orphan) go through the provisioning engine (needs a write-back target, else an owner task),
+  `owner_task` puts a security alert in the Inbox of the owner (the identity's owner or manager) or of the people who decide
+  access, `report_only` (the default) records only. Every action writes a `drift.remediate` audit event in the same transaction.
+* `grant_edges` is unchanged and stays the live model for the graph, insights, SoD and reviews. On a deployment that predates
+  the tables the first reconciliation backfills both sets from it (`BackfillAccessModel`).
+
+Routes: `GET /api/access-drift[?class=&status=&system=&identity_id=&limit=]` (`drift.read`) · `POST /api/access-drift/run`,
+`POST /api/access-drift/{drift_id}/accept` (`{"reason"}`) and `/remediate` (`{"action"}`) (`drift.remediate`, step-up) ·
+`GET /api/remediation-policies` · `PUT /api/remediation-policies` and `DELETE /api/remediation-policies/{policy_id}`
+(`drift.policy`, policy admin, step-up). UI: Governance, Drift.
+
 ### Job run history
 
 Every run of a connector sync, provisioning (HRIS execute), connection validation, dry run,

@@ -335,6 +335,7 @@ func New(cfg Config) *Server {
 	s.registerJobRoutes()
 	s.registerQueueRoutes()
 	s.registerProvisioningRoutes()
+	s.registerDriftRoutes()
 	s.registerTransportRoutes()
 	s.registerAuthRoutes()
 	s.registerLoginRoutes()
@@ -424,6 +425,10 @@ func (s *Server) RunReviewScheduler(ctx context.Context, interval time.Duration)
 		}
 	}
 }
+
+// driftEvery is how often the queue reconciles intended and observed access
+// (a sync reconciles at once; the schedule catches what time changes: expiries).
+const driftEvery = 5 * time.Minute
 
 // sweepTenant expires one tenant's JIT grants and closes its due request
 // lines (requests.Sweep), taking the write lock only when there is work. The

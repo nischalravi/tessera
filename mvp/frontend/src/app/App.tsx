@@ -61,6 +61,7 @@ const Mitigations = named(() => import("../features/governance/Mitigations"), "M
 const AttributePolicies = named(() => import("../features/governance/AttributePolicies"), "AttributePolicies");
 const Reviews = named(() => import("../features/governance/Reviews"), "Reviews");
 const Lifecycle = named(() => import("../features/governance/Lifecycle"), "Lifecycle");
+const Drift = named(() => import("../features/governance/Drift"), "Drift");
 const Workflows = named(() => import("../features/governance/Workflows"), "Workflows");
 const EvidencePacks = named(() => import("../features/governance/EvidencePacks"), "EvidencePacks");
 const Admin = named(admin, "Admin");
@@ -179,6 +180,7 @@ export default function App() {
                     <Route path="/governance/attributes" element={<AttributePolicies />} />
                     <Route path="/governance/reviews" element={<Reviews />} />
                     <Route path="/governance/lifecycle" element={<Lifecycle />} />
+                    <Route path="/governance/drift" element={<Drift />} />
                     <Route path="/governance/workflows" element={<Workflows />} />
                     <Route path="/governance/evidence" element={<EvidencePacks />} />
 

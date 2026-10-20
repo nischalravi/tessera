@@ -872,6 +872,41 @@ CREATE POLICY tenant_isolation ON queue_jobs
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
 
+ALTER TABLE intended_grants ENABLE ROW LEVEL SECURITY;
+ALTER TABLE intended_grants FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON intended_grants;
+CREATE POLICY tenant_isolation ON intended_grants
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE observed_runs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE observed_runs FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON observed_runs;
+CREATE POLICY tenant_isolation ON observed_runs
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE observed_entitlements ENABLE ROW LEVEL SECURITY;
+ALTER TABLE observed_entitlements FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON observed_entitlements;
+CREATE POLICY tenant_isolation ON observed_entitlements
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE access_drift ENABLE ROW LEVEL SECURITY;
+ALTER TABLE access_drift FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON access_drift;
+CREATE POLICY tenant_isolation ON access_drift
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE remediation_policies ENABLE ROW LEVEL SECURITY;
+ALTER TABLE remediation_policies FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON remediation_policies;
+CREATE POLICY tenant_isolation ON remediation_policies
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
 ALTER TABLE business_role_exclusions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE business_role_exclusions FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON business_role_exclusions;

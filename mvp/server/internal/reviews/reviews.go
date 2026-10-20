@@ -400,6 +400,12 @@ func applyDecision(c *store.TenantTx, now time.Time, item *store.ReviewItem, dec
 		return nil, errors.New("review item decision was not applied")
 	}
 	item.Decision, item.Comment, item.DecidedAt = &decision, comment, &now
+	if decision == "keep" {
+		// a kept grant is intended access: record it, in this transaction
+		if err := c.KeepIntent(item.EdgeSrc, item.EdgeDst, "review-item:"+strconv.FormatInt(item.ID, 10), now); err != nil {
+			return nil, err
+		}
+	}
 	if decision == "revoke" {
 		if e, err := c.EdgeBetween(item.EdgeSrc, item.EdgeDst); err == nil {
 			// an entitlement of an app with no connector becomes a manual task (issue #105)

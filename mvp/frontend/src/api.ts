@@ -2506,6 +2506,33 @@ export const provisioning = {
   run: () => api<{ processed: number; verified: number; mismatch: number; failed: number; retrying: number }>("/provisioning/run", {}),
 };
 
+// ----------------------------------------------------- access drift (#301)
+
+export type DriftClass = "missing" | "rogue" | "orphan" | "stale";
+export type DriftStatus = "open" | "remediating" | "resolved" | "accepted";
+export type DriftAction = "auto_provision" | "auto_revoke" | "owner_task" | "report_only";
+
+export interface DriftItem {
+  id: string; class: DriftClass; status: DriftStatus; system: string; entitlement: string; entitlement_name: string;
+  account_ref: string; account: string; identity: { id: number | null; name: string } | null; owner: { id: number | null; name: string } | null;
+  intended_id: string | null; observed_id: number | null; action: DriftAction | "none"; remediation_ref: string | null;
+  remediation_note: string | null; remediation_at: string | null; detected_at: string; updated_at: string; resolved_at: string | null;
+  accepted_by: string | null; accepted_reason: string | null; can_remediate: boolean; can_accept: boolean;
+}
+
+export interface DriftList { items: DriftItem[]; counts: { by_class: Partial<Record<DriftClass, number>>; by_status: Partial<Record<DriftStatus, number>> } }
+
+export interface RemediationPolicy { id: string; system: string; entitlement_ref: string; drift_class: DriftClass; action: DriftAction; created_by: string; updated_at: string }
+export interface RemediationPolicyInput { system: string; entitlement_ref: string; drift_class: DriftClass; action: DriftAction }
+
+export const drift = {
+  run: () => api<{ opened: number; reopened: number; updated: number; resolved: number; actions: number }>("/access-drift/run", {}),
+  accept: (id: string, reason: string) => api<DriftItem>(`/access-drift/${encodeURIComponent(id)}/accept`, { reason }),
+  remediate: (id: string, action: DriftAction) => api<DriftItem>(`/access-drift/${encodeURIComponent(id)}/remediate`, { action }),
+  putPolicy: (body: RemediationPolicyInput) => api<RemediationPolicy>("/remediation-policies", body, "PUT"),
+  deletePolicy: (id: string) => api<{ removed: boolean }>(`/remediation-policies/${encodeURIComponent(id)}`, undefined, "DELETE"),
+};
+
 // ----------------------------------------------------- job runs (#172)
 
 export interface JobRun {

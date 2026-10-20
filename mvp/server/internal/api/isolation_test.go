@@ -229,6 +229,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if strings.HasPrefix(rt.Pattern, "/api/queue/jobs/{job_id}") {
 			continue // TestQueueAPI (a UUID, not a fixture id)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/access-drift/{drift_id}") || strings.HasPrefix(rt.Pattern, "/api/remediation-policies/{policy_id}") {
+			continue // TestDriftAPI (UUIDs, not fixture ids)
+		}
 		if strings.HasPrefix(rt.Pattern, "/api/provisioning/") {
 			continue // TestIsolation_ProvisioningRoutes (UUIDs, not fixture ids)
 		}
