@@ -8,8 +8,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/attrs"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/gov"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/model"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/privs"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/rules"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -83,9 +86,24 @@ func privilegeRequired(d *privs.DeniedError) error {
 func privErr(err error) error {
 	var d *privs.DeniedError
 	var pe *privs.Error
+	var ae *attrs.Error
+	var re *rules.Error
+	var ge *gov.Error
 	switch {
 	case errors.As(err, &d):
 		return privilegeRequired(d)
+	case errors.As(err, &ae):
+		status := map[attrs.Kind]int{attrs.NotFound: http.StatusNotFound, attrs.Conflict: http.StatusConflict,
+			attrs.Invalid: http.StatusUnprocessableEntity, attrs.Forbidden: http.StatusForbidden}[ae.Kind]
+		return &readiness.Error{Status: status, Code: ae.Code, Msg: ae.Msg, Extra: ae.Extra}
+	case errors.As(err, &ge):
+		status := map[gov.Kind]int{gov.KindNotFound: http.StatusNotFound, gov.KindConflict: http.StatusConflict,
+			gov.KindInvalid: http.StatusUnprocessableEntity, gov.KindForbidden: http.StatusForbidden}[ge.Kind]
+		return &readiness.Error{Status: status, Code: ge.Code, Msg: ge.Msg, Extra: ge.Extra}
+	case errors.As(err, &re):
+		status := map[rules.Kind]int{rules.NotFound: http.StatusNotFound, rules.Conflict: http.StatusConflict,
+			rules.Invalid: http.StatusUnprocessableEntity, rules.Forbidden: http.StatusForbidden}[re.Kind]
+		return &readiness.Error{Status: status, Code: re.Code, Msg: re.Msg, Extra: re.Extra}
 	case errors.As(err, &pe):
 		status := map[privs.Kind]int{privs.NotFound: http.StatusNotFound, privs.Conflict: http.StatusConflict,
 			privs.Invalid: http.StatusUnprocessableEntity, privs.Forbidden: http.StatusForbidden}[pe.Kind]
@@ -180,24 +198,38 @@ func (s *Server) privHandlers(t privs.ObjectType) privHandlers { return privHand
 
 // admin is the privilege that administers an object of the type.
 func (h privHandlers) admin() privs.Privilege {
-	if h.typ == privs.Folder {
+	switch h.typ {
+	case privs.Folder:
 		return privs.StemAdmin
+	case privs.AttrDef:
+		return privs.AttrAdmin
 	}
 	return privs.Admin
 }
 
 func (h privHandlers) view() privs.Privilege {
-	if h.typ == privs.Folder {
+	switch h.typ {
+	case privs.Folder:
 		return privs.StemView
+	case privs.AttrDef:
+		return privs.AttrView
 	}
 	return privs.View
 }
 
-// object loads the path's folder or group (404) and requires p on it (403).
+// object loads the path's folder, group or attribute definition (404) and
+// requires p on it (403).
 func (h privHandlers) object(r *http.Request, p *params, ck *privs.Checker, need privs.Privilege) (privs.Object, error) {
 	id, err := grpPathID(p, string(h.typ))
 	if err != nil {
 		return privs.Object{}, err
+	}
+	if h.typ == privs.AttrDef {
+		d, err := h.s.attrDefFor(r, ck, id, need)
+		if err != nil {
+			return privs.Object{}, err
+		}
+		return privs.AttrDefObject(d.ID), nil
 	}
 	if h.typ == privs.Folder {
 		f, err := h.s.grpFolderFor(r, ck, id, need)

@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/attrs"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/events"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
@@ -32,6 +33,10 @@ type MemberInput struct {
 	EnabledFrom *time.Time
 	DisabledAt  *time.Time
 	Reason      string
+	// Source and SourceRef say where a new row comes from (default api; a rule
+	// that adds a member says rule and its id).
+	Source    string
+	SourceRef string
 }
 
 // AddResult is the stored row, whether it is new (an add of an existing member
@@ -69,8 +74,9 @@ func (e Env) engineErr(err error) error {
 	return x
 }
 
-// writableGroup returns a group that can take membership changes: not deleted,
-// not in or of a mirrored folder.
+// writableGroup returns a group that can take membership changes by hand: not
+// deleted, not in or of a mirrored folder and not filled by a loader (its
+// loader is its only writer; see LoaderSync).
 func (e Env) writableGroup(id store.GroupID) (*store.NativeGroup, error) {
 	g, _, err := e.liveGroup(id)
 	if err != nil {
@@ -78,6 +84,9 @@ func (e Env) writableGroup(id store.GroupID) (*store.NativeGroup, error) {
 	}
 	if g.ManagedBy == store.ManagedByGrouperMirror {
 		return nil, conflict("folder_mirrored", "group %q is mirrored from Grouper and is read-only here", g.Name)
+	}
+	if g.ManagedBy == store.ManagedByLoader {
+		return nil, loaderManaged(g)
 	}
 	return g, nil
 }
@@ -144,7 +153,18 @@ func (e Env) AddMember(id store.GroupID, in MemberInput) (*AddResult, error) {
 				return nil, e.engineErr(err)
 			}
 		}
-		m = &store.DirectMembership{GroupID: g.ID, ListID: list, MemberType: typ, Source: "api", CreatedBy: e.By, CreatedAt: e.Now}
+		source := in.Source
+		if source == "" {
+			source = "api"
+		}
+		// rules may veto a new identity row (membership require, one group only, ...)
+		if child == nil && e.Guard != nil {
+			if err := e.Guard.VetoAdd(e, g, *in.Identity, source); err != nil {
+				return nil, err
+			}
+		}
+		m = &store.DirectMembership{GroupID: g.ID, ListID: list, MemberType: typ, Source: source, SourceRef: ownerPtr(in.SourceRef),
+			CreatedBy: e.By, CreatedAt: e.Now}
 		if child != nil {
 			m.MemberGroup = &child.ID
 		} else {
@@ -234,6 +254,10 @@ func (e Env) RemoveMember(id store.GroupID, member string) (Outcome, error) {
 		return Outcome{}, notFound("no such membership")
 	}
 	if err != nil {
+		return Outcome{}, err
+	}
+	// the membership's attribute assignments end with it
+	if _, err := attrs.RemoveAllOf(e.Attrs(), attrs.Owner{Type: store.AttrOwnerMembership, ID: m.ID}); err != nil {
 		return Outcome{}, err
 	}
 	if err := e.Tx.DeleteGrpDirect(m.ID); err != nil {
@@ -369,6 +393,9 @@ func (e Env) dropDirect(g store.GroupID) error {
 					return err
 				}
 			}
+			if _, err := attrs.RemoveAllOf(e.Attrs(), attrs.Owner{Type: store.AttrOwnerMembership, ID: m.ID}); err != nil {
+				return err
+			}
 			if err := e.emitDirect(events.MembershipDirectRemoved, m); err != nil {
 				return err
 			}
@@ -435,10 +462,17 @@ func (e Env) Factors(id store.GroupID) ([]store.GroupID, error) { return e.Tx.Gr
 
 // ---------------------------------------------------------------- reads
 
-// MemberQuery pages a members listing.
+// MemberQuery pages and narrows a members listing. Q is a case-insensitive
+// substring of the member's name (or email); Sort is name, -name, since or
+// -since; Enabled ("true" or "false") keeps the direct rows that count (or not)
+// right now; Indirect keeps the effective members without an active direct row.
 type MemberQuery struct {
-	Limit  int
-	Offset int
+	Limit    int
+	Offset   int
+	Q        string
+	Sort     string
+	Enabled  string
+	Indirect bool
 }
 
 // DirectMember is a direct membership with the member's name and whether the
@@ -455,12 +489,8 @@ func (e Env) DirectMembers(id store.GroupID, q MemberQuery) ([]DirectMember, int
 		return nil, 0, err
 	}
 	list := store.MembersListID(e.Tx.Tenant())
-	f := store.GrpDirectFilter{Group: id, List: list, Limit: q.Limit, Offset: q.Offset}
-	rows, err := e.Tx.GrpDirect(f)
-	if err != nil {
-		return nil, 0, err
-	}
-	total, err := e.Tx.GrpDirectCount(f)
+	rows, total, err := e.Tx.GrpDirectSearch(store.MemberSearch{Group: id, List: list, Q: q.Q, Sort: q.Sort, Enabled: q.Enabled,
+		Now: e.Now, Limit: q.Limit, Offset: q.Offset})
 	if err != nil {
 		return nil, 0, err
 	}
@@ -497,11 +527,9 @@ func (e Env) EffectiveMembers(id store.GroupID, q MemberQuery) (out []EffectiveM
 		return nil, 0, false, err
 	}
 	list := store.MembersListID(e.Tx.Tenant())
-	rows, err := e.Tx.GrpEffectiveList(id, list, q.Limit, q.Offset)
+	rows, total, err := e.Tx.GrpEffectiveSearch(store.MemberSearch{Group: id, List: list, Q: q.Q, Sort: q.Sort, Indirect: q.Indirect,
+		Now: e.Now, Limit: q.Limit, Offset: q.Offset})
 	if err != nil {
-		return nil, 0, false, err
-	}
-	if total, err = e.Tx.GrpEffectiveCount(id, list); err != nil {
 		return nil, 0, false, err
 	}
 	for _, r := range rows {

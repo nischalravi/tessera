@@ -49,11 +49,30 @@ type Engine struct {
 	// Log receives verification repairs (ERROR). Nil means slog.Default().
 	Log *slog.Logger
 
+	// cause and causeRef stamp the effective-change events of this engine's
+	// runs (WithCause); empty means the engine's own cause.
+	cause, causeRef string
+
 	repairs atomic.Int64
 }
 
 // New returns an engine with the given synchronous budget (<= 0: the default).
 func New(budget int) *Engine { return &Engine{Budget: budget} }
+
+// WithCause returns an engine with the same tunables whose effective-change
+// events carry cause and its reference (for the policy repository, the commit:
+// design §8.5 step 4). Work it queues keeps the cause when the queue is drained.
+// Its repair counter starts at zero.
+func (e *Engine) WithCause(cause, ref string) *Engine {
+	return &Engine{Budget: e.Budget, Chunk: e.Chunk, Log: e.Log, cause: cause, causeRef: ref}
+}
+
+func (e *Engine) eventCause() string {
+	if e.cause != "" {
+		return e.cause
+	}
+	return store.CauseEngine
+}
 
 func (e *Engine) budget() int64 {
 	if e.Budget > 0 {
@@ -160,6 +179,10 @@ func loadMeta(tx *store.TenantTx, now time.Time, id store.GroupID) (*gmeta, erro
 	if g.Definition != store.DefinitionBasic {
 		if g.CompositeOp != nil {
 			m.op = *g.CompositeOp
+		}
+		if g.Definition == store.DefinitionPolicy {
+			// a policy group is allow minus deny: its factors are (allow, deny) (design §8.3)
+			m.op = store.CompComplement
 		}
 		if m.factors, err = tx.GrpFactors(id); err != nil {
 			return nil, err

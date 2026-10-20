@@ -1,0 +1,14 @@
+{
+ "name": "identity-groups-unknown",
+ "request": {
+  "method": "GET",
+  "path": "/api/identities/99999/groups"
+ },
+ "response": {
+  "status": 404,
+  "body": {
+   "detail": "no such identity",
+   "error": "not_found"
+  }
+ }
+}

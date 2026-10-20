@@ -16,6 +16,7 @@ import { McpFindings, SponsorCell, sourceLabel } from "./AgentFindings";
 import { StateBadge, WORKER_LABEL } from "../lifecycle/parts";
 import { AccountPanel, AppPanel, GroupPanel, IdentityPanel, OrgPanel } from "./Panels";
 import { BulkOwnerDrawer } from "./owners";
+import { ViewToggle } from "./groups/ViewToggle";
 import { ImportDrawer, PreviewFormDrawer, opts, uniq } from "./shared";
 import { AFFILIATION_LABEL, STATE_LABEL as PERSON_STATE_LABEL } from "./affiliationModel";
 
@@ -385,7 +386,7 @@ function groupColumns(): Column<Group>[] {
   ];
 }
 
-function GroupList({ id, kinds, newLabel, title }: { id: string; kinds?: string[]; newLabel: string; title: string }) {
+function GroupList({ id, kinds, newLabel, title, toggle }: { id: string; kinds?: string[]; newLabel: string; title: string; toggle?: boolean }) {
   const { data, error, reload } = useApi<Group[]>("/groups");
   const nav = useNavigate();
   const [selected, setSelected] = useSelected();
@@ -416,6 +417,7 @@ function GroupList({ id, kinds, newLabel, title }: { id: string; kinds?: string[
         onRowClick={(r) => setSelected(r.id)}
         activeKey={selected}
         onImport={imp.onImport}
+        toolbarExtra={toggle ? <ViewToggle /> : undefined}
       />
       {open && <GroupPanel g={open} onClose={() => setSelected(null)} />}
       {newOpen && (
@@ -437,7 +439,8 @@ function GroupList({ id, kinds, newLabel, title }: { id: string; kinds?: string[
 
 export const Entitlements = () => <GroupList id="entitlements" title="Entitlements" newLabel="New entitlement" />;
 const GROUP_KINDS = ["group", "team", "security_group"];
-export const Groups = () => <GroupList id="groups" title="Groups" kinds={GROUP_KINDS} newLabel="New group" />;
+/** Connected groups: the groups of the connected systems. The managed (native) groups are in `groups/`. */
+export const ConnectedGroups = () => <GroupList id="groups" title="Groups" kinds={GROUP_KINDS} newLabel="New group" toggle />;
 
 // -------------------------------------------------------------------- apps
 export function Apps() {

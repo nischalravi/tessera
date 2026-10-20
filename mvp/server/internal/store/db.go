@@ -227,6 +227,24 @@ var tables = []string{
 	"agent_profiles", "mcp_findings",
 	// pending identity-link changes, the four-eyes step (schema/0362_identity_link_requests.sql)
 	"identity_link_requests",
+	// groups REST API idempotency keys (schema/0376_groups_api.sql)
+	"grp_idempotency",
+	// group attribute framework (schema/0287_group_attrs.sql)
+	"grp_attr_defs", "grp_attr_names", "grp_attr_name_implies", "grp_attr_actions", "grp_attr_action_implies",
+	"grp_attr_assigns", "grp_attr_values",
+	// group rules (schema/0288_group_rules.sql)
+	"grp_rules", "grp_rule_settings",
+	// policy groups as code (schema/0289_group_policy.sql)
+	"grp_policy_sources", "grp_policy_nodes", "grp_policy_uses",
+	// group attestation, deprovisioning, Inbox and reports (schema/0292_group_attestation.sql)
+	"grp_inbox_tasks", "grp_attest_settings", "grp_attest_campaigns", "grp_attest_items", "grp_deprov_settings",
+	"grp_deprov_folders", "grp_deprovisioned", "grp_deprov_items", "grp_reports", "grp_report_runs",
+	// group loaders, their runs and unresolved subjects (schema/0377_group_loaders.sql)
+	"grp_loaders", "grp_loader_runs", "grp_loader_unresolved",
+	// group provisioning (schema/0378_group_prov.sql)
+	"grp_provisioners", "grp_provisionable", "grp_sync_groups", "grp_sync_runs", "grp_sync_ops",
+	// group event sinks (schema/0379_group_event_sinks.sql)
+	"grp_event_sinks", "grp_sink_dead_letters",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was

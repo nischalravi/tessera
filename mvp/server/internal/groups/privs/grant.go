@@ -49,7 +49,12 @@ func snapshot(r *store.GrpPrivilege) json.RawMessage {
 }
 
 func (e Env) emit(typ string, r *store.GrpPrivilege) error {
-	ev := events.New(typ, r.ID, e.Now, store.CauseAPI)
+	cause := e.Cause
+	if cause == "" {
+		cause = store.CauseAPI
+	}
+	ev := events.New(typ, r.ID, e.Now, cause)
+	ev.CauseRef = e.CauseRef
 	ev.Data = pit.ObjectData(snapshot(r), map[string]any{"privilege_id": r.ID})
 	return pit.Emit(e.Tx, ev)
 }
@@ -94,8 +99,21 @@ func (e Env) folderOf(o Object) (*store.Folder, error) {
 			return nil, notFound("no such folder")
 		}
 		return f, err
+	case AttrDef:
+		d, err := e.Tx.GrpAttrDef(o.ID)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, notFound("no such attribute definition")
+		}
+		if err != nil {
+			return nil, err
+		}
+		f, err := e.Tx.GrpFolder(d.FolderID)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, notFound("no such folder")
+		}
+		return f, err
 	}
-	return nil, invalid("invalid_object", "privileges are granted on folders and groups")
+	return nil, invalid("invalid_object", "privileges are granted on folders, groups and attribute definitions")
 }
 
 // Grant gives the holder a privilege. It returns the row and whether it was
@@ -236,6 +254,12 @@ func (e Env) folderOfRow(r *store.GrpPrivilege) (*store.Folder, error) {
 			return nil, err
 		}
 		return e.Tx.GrpFolder(g.FolderID)
+	case AttrDef:
+		d, err := e.Tx.GrpAttrDef(r.ObjectID)
+		if err != nil {
+			return nil, err
+		}
+		return e.Tx.GrpFolder(d.FolderID)
 	}
 	return nil, nil
 }
@@ -264,8 +288,9 @@ func RevokeAllOf(e Env, o Object) (int, error) {
 }
 
 // creatorPrivilege is what the creator of an object is given: admin of a group,
-// stem_admin of a folder (Grouper's creator privileges, G-40).
-var creatorPrivilege = map[ObjectType]Privilege{Group: Admin, Folder: StemAdmin}
+// stem_admin of a folder, attr_admin of an attribute definition (Grouper's
+// creator privileges, G-40).
+var creatorPrivilege = map[ObjectType]Privilege{Group: Admin, Folder: StemAdmin, AttrDef: AttrAdmin}
 
 // GrantCreator makes the creator of a new folder or group its admin and grants
 // the tenant's default privileges (settings.Defaults) to everyone. The creator

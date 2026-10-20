@@ -44,7 +44,9 @@ const Workers = named(() => import("../features/lifecycle/Workers"), "Workers");
 const Entitlements = named(directory, "Entitlements");
 const Apps = named(directory, "Apps");
 const Orgs = named(directory, "Orgs");
-const Groups = named(directory, "Groups");
+const Groups = named(() => import("../features/directory/groups/GroupsRoute"), "GroupsRoute");
+const GroupPage = named(() => import("../features/directory/groups/GroupPage"), "GroupPage");
+const FolderPage = named(() => import("../features/directory/groups/FolderPage"), "FolderPage");
 const Ownership = named(() => import("../features/directory/Ownership"), "Ownership");
 const IdentityPage = named(() => import("../features/directory/IdentityPage"), "IdentityPage");
 const RolePage = named(roles, "RolePage");
@@ -87,6 +89,7 @@ const RotationJobs = named(rotationPages, "RotationJobs");
 const RotationPolicies = named(rotationPages, "RotationPolicies");
 const VendorCompromised = named(rotationPages, "VendorCompromised");
 const SharedSignals = named(() => import("../features/admin/SharedSignals"), "SharedSignals");
+const EventSinks = named(() => import("../features/admin/EventSinks"), "EventSinks");
 const MySessions = named(() => import("../features/account/MySessions"), "MySessions");
 const DeviceApprove = lazy(() => import("../pages/DeviceApprove"));
 const AdminUsers = named(() => import("../features/admin/Users"), "Users");
@@ -205,6 +208,8 @@ export default function App() {
                     <Route path="/rotation/jobs" element={<RotationJobs />} />
                     <Route path="/rotation/policies" element={<RotationPolicies />} />
                     <Route path="/rotation/vendor" element={<VendorCompromised />} />
+                    <Route path="/directory/groups/folders/:id" element={<FolderPage />} />
+                    <Route path="/directory/groups/:id" element={<GroupPage />} />
                     <Route path="/directory/identities/:id" element={<IdentityPage />} />
                     <Route path="/directory/roles/:id" element={<RolePage />} />
                     <Route path="/directory/entitlements/:id" element={<EntitlementPage />} />
@@ -253,6 +258,7 @@ export default function App() {
                     <Route path="/admin/api-clients" element={<ApiClients />} />
                     <Route path="/admin/break-glass" element={<BreakGlass />} />
                     <Route path="/admin/platform-health" element={<PlatformHealth />} />
+                    <Route path="/admin/event-sinks" element={<EventSinks />} />
                     <Route path="/admin/:section" element={<AdminSectionPage />} />
 
                     {/* routes from the previous UI */}

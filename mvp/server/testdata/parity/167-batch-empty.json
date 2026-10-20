@@ -1,0 +1,15 @@
+{
+ "name": "batch-empty",
+ "request": {
+  "method": "POST",
+  "path": "/api/groups/00000000-0000-4000-8000-00000000d00d/members:batch",
+  "body": {}
+ },
+ "response": {
+  "status": 422,
+  "body": {
+   "detail": "add or remove at least one member",
+   "error": "empty_batch"
+  }
+ }
+}

@@ -1,0 +1,17 @@
+{
+ "name": "simulate-empty",
+ "request": {
+  "method": "POST",
+  "path": "/api/groups:simulate",
+  "body": {
+   "changes": []
+  }
+ },
+ "response": {
+  "status": 422,
+  "body": {
+   "detail": "name at least one change",
+   "error": "empty_simulation"
+  }
+ }
+}

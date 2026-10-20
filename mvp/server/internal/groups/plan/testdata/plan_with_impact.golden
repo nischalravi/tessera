@@ -1,0 +1,25 @@
+Plan: 5 folders to create, 5 groups to create, 3 privileges to grant, 4 members to add, 1 member to remove; 3 unchanged.
+
+  + folder  app:foo
+  + folder  app:foo:security  (display name "Security")
+  + folder  app:foo:service  (display name "Service")
+  + folder  app:foo:service:ref  (display name "Reference groups")
+  + folder  app:foo:service:policy  (display name "Policy groups")
+  + group   app:foo:security:fooAdmin
+  + group   app:foo:service:policy:foo_user_allow
+  + group   app:foo:service:policy:foo_user_allow_manual
+  + group   app:foo:service:policy:foo_user_deny
+  + group   app:foo:service:policy:foo_user  (composite complement of app:foo:service:policy:foo_user_allow, app:foo:service:policy:foo_user_deny)
+  + grant   folder:app:foo  admin to group:app:foo:security:fooAdmin (inherited by groups, scope sub)
+  + grant   folder:app:foo  stem_admin to group:app:foo:security:fooAdmin
+  + grant   folder:app:foo  stem_admin to group:app:foo:security:fooAdmin (inherited by folders, scope sub)
+  + member  app:foo:security:fooAdmin <- group:app:staff
+  + member  app:foo:service:policy:foo_user_allow <- group:app:foo:service:policy:foo_user_allow_manual
+  + member  app:team <- identity:3
+  + member  app:team <- group:app:foo:service:policy:foo_user_allow_manual
+  - member  app:team <- identity:2
+
+Impact (simulated by the server; nothing was changed): +2 / -1 identities in 2 groups.
+  app:team  2 -> 3 (+2, -1)  changed
+  app:staff  4 -> 5 (+1, -0)  via nesting
+  1 membership change on groups or members that the plan creates was not simulated.

@@ -151,6 +151,15 @@ type Config struct {
 	// ReadyMaxLoopLagSeconds is how long a background loop may go without a
 	// success before /readyz fails (TESSERA_READY_MAX_LOOP_LAG_SECONDS).
 	ReadyMaxLoopLagSeconds int
+	// LoaderDataDir is TESSERA_LOADER_DATA_DIR: the directory the SQLite files
+	// and CSV files of group loaders live in, one subdirectory per tenant
+	// (<dir>/<tenant id>/; design groups-grouper-parity.md §9.1). Empty (the default) turns file sources off. It must be absolute and
+	// must not contain Tessera's own database.
+	LoaderDataDir string
+	// GroupsProvSQLDir is TESSERA_GROUPS_PROV_SQL_DIR: the directory of the SQLite
+	// files the group provisioning SQL target writes. Empty (the default)
+	// disables that target; a tenant chooses only a file name inside it.
+	GroupsProvSQLDir string
 	// FrozenNow is TESSERA_NOW (tests and demos; refused in prod). The zero
 	// time means the wall clock; use Clock.
 	FrozenNow time.Time
@@ -300,6 +309,17 @@ func Load(getenv func(string) string) (*Config, error) {
 	c.BackupKeep = integer("TESSERA_BACKUP_KEEP", 28, 1, 10_000)
 	c.GroupsSyncBudget = integer("TESSERA_GROUPS_SYNC_BUDGET", 5000, 1, 10_000_000)
 	c.GroupsRetentionDays = integer("TESSERA_GROUPS_RETENTION_DAYS", 7*365, 30, 36_500)
+	if d := strings.TrimSpace(getenv("TESSERA_LOADER_DATA_DIR")); d != "" {
+		c.LoaderDataDir = filepath.Clean(d)
+		db, err := filepath.Abs(c.DB)
+		switch {
+		case !filepath.IsAbs(d):
+			bad("TESSERA_LOADER_DATA_DIR: %q is not an absolute path", d)
+		case err == nil && within(db, c.LoaderDataDir):
+			bad("TESSERA_LOADER_DATA_DIR: %q contains the database %q: a loader could read Tessera's own data", d, c.DB)
+		}
+	}
+	c.GroupsProvSQLDir = strings.TrimSpace(getenv("TESSERA_GROUPS_PROV_SQL_DIR"))
 	c.AccessTokenTTLSeconds = integer("TESSERA_AT_TTL_SECONDS", 600, 1, MaxAccessTokenTTLSeconds)
 	c.DeviceCodeTTLSeconds = integer("TESSERA_DEVICE_CODE_TTL_SECONDS", 300, 1, MaxDeviceCodeTTLSeconds)
 	c.DPoPRSNonce = boolean("TESSERA_DPOP_RS_NONCE", false, false)
@@ -853,6 +873,12 @@ func dbPath(v string) string {
 		return "tessera.db"
 	}
 	return strings.TrimPrefix(v, "sqlite:///")
+}
+
+// within reports whether path is dir or below it (both absolute and clean).
+func within(path, dir string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // corsOrigins: an explicit comma-separated list wins; otherwise dev allows the

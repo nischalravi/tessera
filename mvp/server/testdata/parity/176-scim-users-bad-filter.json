@@ -1,0 +1,18 @@
+{
+ "name": "scim-users-bad-filter",
+ "request": {
+  "method": "GET",
+  "path": "/scim/v2/Users?filter=bogus%20eq%201"
+ },
+ "response": {
+  "status": 400,
+  "body": {
+   "schemas": [
+    "urn:ietf:params:scim:api:messages:2.0:Error"
+   ],
+   "status": "400",
+   "scimType": "invalidFilter",
+   "detail": "unsupported attribute \"bogus\""
+  }
+ }
+}

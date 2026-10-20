@@ -145,11 +145,23 @@ func (c *Checker) rowsOf(o Object) ([]*store.GrpPrivilege, error) {
 const maxDepth = 256
 
 // chain returns the folders above o, nearest first (the root last): the folders
-// whose rows o can inherit. ok is false when o does not exist (or, for an
-// attribute definition, until GR-7 gives it a folder).
+// whose rows o can inherit. ok is false when o does not exist. An attribute
+// definition lives in a folder (GR-7), so it inherits from that folder and the
+// ones above it like a group does.
 func (c *Checker) chain(o Object) (folders []*store.Folder, ok bool, err error) {
 	var start *store.Folder
 	switch o.Type {
+	case AttrDef:
+		d, err := c.tx.GrpAttrDef(o.ID)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, false, nil
+		}
+		if err != nil {
+			return nil, false, err
+		}
+		if start, err = c.folder(string(d.FolderID)); err != nil || start == nil {
+			return nil, false, err
+		}
 	case Group:
 		g, err := c.tx.GrpGroup(store.GroupID(o.ID))
 		if errors.Is(err, store.ErrNotFound) {
@@ -173,7 +185,7 @@ func (c *Checker) chain(o Object) (folders []*store.Folder, ok bool, err error) 
 			return nil, false, err
 		}
 	default:
-		return nil, true, nil // attribute definitions have no folder yet: self rows only
+		return nil, true, nil
 	}
 	for f := start; f != nil && len(folders) < maxDepth; {
 		folders = append(folders, f)

@@ -38,6 +38,11 @@ func (x *xtx) ExecContext(ctx context.Context, q string, args ...any) (sql.Resul
 	if x.d == dialectSQLite {
 		return x.tx.ExecContext(ctx, q, args...)
 	}
+	if isSavepointControl(q) {
+		// a caller's own savepoint (TenantTx.Savepoint): wrapping it in the statement
+		// guard would let the guard's RELEASE destroy it (or its ROLLBACK TO the guard)
+		return x.tx.ExecContext(ctx, q, args...)
+	}
 	q, args, err := translatePG(q, args)
 	if err != nil {
 		return nil, err
@@ -49,6 +54,12 @@ func (x *xtx) ExecContext(ctx context.Context, q string, args ...any) (sql.Resul
 		return err
 	})
 	return res, err
+}
+
+// isSavepointControl is true for the statements of TenantTx.Savepoint.
+func isSavepointControl(q string) bool {
+	return strings.HasPrefix(q, "SAVEPOINT tessera_sp") || strings.HasPrefix(q, "RELEASE SAVEPOINT tessera_sp") ||
+		strings.HasPrefix(q, "ROLLBACK TO SAVEPOINT tessera_sp")
 }
 
 // guard runs a write statement inside a savepoint so that a failing statement

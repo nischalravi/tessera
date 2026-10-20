@@ -1,0 +1,34 @@
+{
+ "name": "scim-user",
+ "request": {
+  "method": "GET",
+  "path": "/scim/v2/Users/1"
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "schemas": [
+    "urn:ietf:params:scim:schemas:core:2.0:User"
+   ],
+   "id": "1",
+   "externalId": "emp-1001",
+   "userName": "rosalind.haverford@larkspur.example",
+   "displayName": "Rosalind Haverford",
+   "title": "Chief Executive Officer",
+   "userType": "human",
+   "active": true,
+   "emails": [
+    {
+     "value": "rosalind.haverford@larkspur.example",
+     "type": "work",
+     "primary": true
+    }
+   ],
+   "meta": {
+    "resourceType": "User",
+    "created": "2026-10-08T09:30:00.000000Z",
+    "location": "/scim/v2/Users/1"
+   }
+  }
+ }
+}

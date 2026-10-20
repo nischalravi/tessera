@@ -1,0 +1,14 @@
+{
+ "name": "members-unknown-group-filtered",
+ "request": {
+  "method": "GET",
+  "path": "/api/groups/00000000-0000-4000-8000-00000000d00d/members?filter=indirect&q=a&sort=name&page=2"
+ },
+ "response": {
+  "status": 404,
+  "body": {
+   "detail": "no such group",
+   "error": "not_found"
+  }
+ }
+}

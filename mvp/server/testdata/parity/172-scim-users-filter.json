@@ -1,0 +1,54 @@
+{
+ "name": "scim-users-filter",
+ "request": {
+  "method": "GET",
+  "path": "/scim/v2/Users?filter=userType%20eq%20%22ai_agent%22%20and%20active%20eq%20true&count=2"
+ },
+ "response": {
+  "status": 200,
+  "body": {
+   "schemas": [
+    "urn:ietf:params:scim:api:messages:2.0:ListResponse"
+   ],
+   "totalResults": 6,
+   "startIndex": 1,
+   "itemsPerPage": 2,
+   "Resources": [
+    {
+     "schemas": [
+      "urn:ietf:params:scim:schemas:core:2.0:User"
+     ],
+     "id": "67",
+     "externalId": "agent-support-copilot",
+     "userName": "agent-support-copilot",
+     "displayName": "Support Copilot",
+     "title": "AI agent",
+     "userType": "ai_agent",
+     "active": true,
+     "meta": {
+      "resourceType": "User",
+      "created": "2026-10-08T09:30:00.000000Z",
+      "location": "/scim/v2/Users/67"
+     }
+    },
+    {
+     "schemas": [
+      "urn:ietf:params:scim:schemas:core:2.0:User"
+     ],
+     "id": "68",
+     "externalId": "agent-code-review",
+     "userName": "agent-code-review",
+     "displayName": "Code Review Bot",
+     "title": "AI agent",
+     "userType": "ai_agent",
+     "active": true,
+     "meta": {
+      "resourceType": "User",
+      "created": "2026-10-08T09:30:00.000000Z",
+      "location": "/scim/v2/Users/68"
+     }
+    }
+   ]
+  }
+ }
+}

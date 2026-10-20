@@ -34,6 +34,10 @@ type jobPayload struct {
 	Done    int64         `json:"done"`
 	Total   int64         `json:"total"`
 	Changed int64         `json:"changed"`
+	// Cause and CauseRef are the event cause of the engine that queued the job
+	// (WithCause); empty for the engine's own
+	Cause    string `json:"cause,omitempty"`
+	CauseRef string `json:"cause_ref,omitempty"`
 }
 
 // work estimates the effective-row operations of recomputing n identities of
@@ -172,7 +176,8 @@ func (e *Engine) enqueue(tx *store.TenantTx, now time.Time, g store.GroupID) (Ou
 	}
 	var first int64
 	for _, l := range ls {
-		p, err := json.Marshal(jobPayload{Group: g, List: l, After: math.MinInt64, Total: total})
+		p, err := json.Marshal(jobPayload{Group: g, List: l, After: math.MinInt64, Total: total,
+			Cause: e.cause, CauseRef: e.causeRef})
 		if err != nil {
 			return Outcome{}, err
 		}
@@ -271,7 +276,11 @@ func (e *Engine) Drain(tx *store.TenantTx, now time.Time) (bool, error) {
 	for i, id := range ids {
 		seeds[i] = Seed{p.Group, p.List, id}
 	}
-	changes, err := e.Apply(tx, now, seeds)
+	cause := p.Cause
+	if cause == "" {
+		cause = store.CauseEngine
+	}
+	changes, err := e.applyRef(tx, now, seeds, cause, p.CauseRef)
 	if err != nil {
 		return false, err
 	}

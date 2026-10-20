@@ -5,6 +5,7 @@
 //	tessera check-db [-db tessera.db]   exit 0 if the database opens with this server's schema
 //	                                    (run.sh reseeds a database from before sign-in)
 //	tessera readiness lint [-dir path]   lint the readiness checklist templates
+//	tessera groups policy validate [-dir path]   check the policy group files (*.cedar) offline (see groups.go)
 //	tessera audit verify|checkpoint|export   verify, checkpoint or export the audit ledger (see audit.go)
 //	tessera notify seal-password             seal an SMTP password (stdin) for TESSERA_SMTP_PASSWORD_SEALED
 //	tessera admin create-tenant|add-idp|invite-admin   operator bootstrap of a tenant (see admin.go)
@@ -75,6 +76,7 @@ import (
 	"os/signal"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -87,8 +89,15 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/all"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors/connsync"
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/attest"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/deprov"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/engine"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/events/sinks"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/loaders"
 	"github.com/nischalravi/tessera/mvp/server/internal/groups/pit"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/provisioning"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/reports"
+	"github.com/nischalravi/tessera/mvp/server/internal/groups/rules"
 	"github.com/nischalravi/tessera/mvp/server/internal/guests/credential"
 	"github.com/nischalravi/tessera/mvp/server/internal/health"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
@@ -138,6 +147,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	}
 	if cmd == "readiness" {
 		return readinessCmd(args, stdout, stderr)
+	}
+	if cmd == "groups" {
+		return groupsCmd(args, stdout, stderr)
 	}
 	if cmd == "audit" {
 		return auditCmd(ctx, args, stdout, stderr)
@@ -381,7 +393,15 @@ const (
 	siemInterval = 15 * time.Second
 	// rotationInterval is how often the rotation worker looks for due jobs.
 	rotationInterval = 30 * time.Second
+	// group provisioning calls to customer systems: SCIM and webhook requests
+	// may take longer, and a SCIM group lists all its members in one response
+	provisioningHTTPTimeout = 30 * time.Second
+	provisioningMaxBody     = 16 << 20
 )
+
+// ldapPorts are the destination ports the guarded dialer allows for LDAP and AD targets: LDAP,
+// LDAPS and the Active Directory global catalog (plain and TLS).
+var ldapPorts = []int{389, 636, 3268, 3269}
 
 func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Sealer, clock timeutil.Clock,
 	loader *policy.Loader, logger *slog.Logger) error {
@@ -460,6 +480,10 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	all.Register(outbound, connsync.RuntimeFromConfig(cfg)) // okta and entra connectors use the shared client
 	obs.SetPoolStats(st.PoolStats)
 	checker := health.New(st, sealer, obs.DefaultLoops, time.Duration(cfg.ReadyMaxLoopLagSeconds)*time.Second, logger)
+	sinksNet, err := sinks.NewNetwork(cfg) // group event sinks (AWS over HTTPS, RabbitMQ and Kafka through the guarded dialer)
+	if err != nil {
+		return err
+	}
 	groupsEngine := &engine.Engine{Budget: cfg.GroupsSyncBudget, Log: logger}
 	fakeURL, stopFake, err := startFakeTarget(cfg, logger)
 	if err != nil {
@@ -498,9 +522,26 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	rotationEngine := &rotation.Engine{DB: st, Clock: clock, Log: logger,
 		Service: &rotation.Service{Sealer: sealer, Env: cfg.Env, AllowFake: cfg.RotationFakeAdapters},
 		Factory: &rotation.Factory{HTTP: outbound, Sealer: sealer, Now: clock, AllowFake: cfg.RotationFakeAdapters}}
+	// group rules: webhooks go through the same safehttp client; email rules log (TESSERA_NOTIFY=log)
+	groupsRules := &rules.Runtime{Engine: groupsEngine, HTTP: outbound, Sealer: sealer, AllowHTTP: cfg.OutboundAllowLoopback, Log: logger}
+	// Group provisioning reaches customer systems through the same address
+	// guard: SCIM and webhooks through its own safehttp client (longer timeout,
+	// larger bodies: a SCIM group lists all its members), LDAP through the
+	// guarded dialer. Plain LDAP is for the dev directory only.
+	provHTTP, err := safehttp.ForConfigLimits(cfg, provisioningHTTPTimeout, provisioningMaxBody)
+	if err != nil {
+		return err
+	}
+	provDial, err := safehttp.NewDialer(safehttp.Options{Env: cfg.Env, AllowLoopback: cfg.OutboundAllowLoopback && cfg.Env == config.Dev,
+		Timeout: provisioningHTTPTimeout, AllowedPorts: ldapPorts})
+	if err != nil {
+		return err
+	}
+	provisioningSvc := &provisioning.Service{DB: st, Sealer: sealer, Clock: clock, Log: logger,
+		Deps: provisioning.Deps{HTTP: provHTTP, Dial: provDial, AllowPlainLDAP: cfg.Env == config.Dev, SQLDir: cfg.GroupsProvSQLDir}}
 	srv := api.New(api.Config{Health: checker, Store: st, Clock: clock, Policies: loader, Logger: logger,
 		Secrets: secrets, Credential: authority,
-		PublicURL: cfg.PublicURL, RPID: cfg.RPID, Sealer: sealer, OutboundHTTP: outbound, GroupsEngine: groupsEngine, APIAudience: cfg.APIAudience,
+		PublicURL: cfg.PublicURL, RPID: cfg.RPID, Sealer: sealer, OutboundHTTP: outbound, GroupsEngine: groupsEngine, GroupsRules: groupsRules, Provisioning: provisioningSvc, LoaderDataDir: cfg.LoaderDataDir, APIAudience: cfg.APIAudience,
 		AccessTokenTTL: time.Duration(cfg.AccessTokenTTLSeconds) * time.Second,
 		DeviceCodeTTL:  time.Duration(cfg.DeviceCodeTTLSeconds) * time.Second, DPoPRSNonce: cfg.DPoPRSNonce,
 		Outbound: outbound, FakeTargetURL: fakeURL,
@@ -631,6 +672,31 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		defer close(historyDone)
 		historyRunner.Loop(ctx)
 	}()
+	// group rules: the rules that react to membership and creation events
+	rulesDone := make(chan struct{})
+	rulesRunner := &rules.Runner{DB: st, Runtime: groupsRules, Clock: clock, Log: logger}
+	go func() {
+		defer close(rulesDone)
+		rulesRunner.Loop(ctx)
+	}()
+	// group governance: attestation campaigns, deprovisioning and scheduled reports
+	govDone := make(chan struct{})
+	go func() {
+		defer close(govDone)
+		var wg sync.WaitGroup
+		for _, loop := range []func(context.Context){
+			(&attest.Runner{DB: st, Engine: groupsEngine, Clock: clock, Log: logger}).Loop,
+			(&deprov.Runner{DB: st, Engine: groupsEngine, Clock: clock, Log: logger}).Loop,
+			(&reports.Runner{DB: st, Engine: groupsEngine, Clock: clock, Log: logger}).Loop,
+		} {
+			wg.Add(1)
+			go func(loop func(context.Context)) {
+				defer wg.Done()
+				loop(ctx)
+			}(loop)
+		}
+		wg.Wait()
+	}()
 	notifyDone := make(chan struct{})
 	go func() {
 		defer close(notifyDone)
@@ -640,6 +706,29 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	go func() {
 		defer close(rotationDone)
 		rotationEngine.Loop(ctx, rotationInterval)
+	}()
+	// group loaders: the scheduler of full and incremental runs (Admin > Jobs)
+	loadersDone := make(chan struct{})
+	loadersRunner := &loaders.Runner{Svc: &loaders.Service{DB: st, Engine: groupsEngine, Clock: clock, Sealer: sealer, HTTP: outbound,
+		DataDir: cfg.LoaderDataDir, Log: logger}}
+	go func() {
+		defer close(loadersDone)
+		loadersRunner.Loop(ctx)
+	}()
+	// group provisioning: full syncs (daily and on request) and incremental syncs of the group events
+	provisioningDone := make(chan struct{})
+	provisioningRunner := &provisioning.Runner{Svc: provisioningSvc, Clock: clock, Log: logger}
+	go func() {
+		defer close(provisioningDone)
+		provisioningRunner.Loop(ctx)
+	}()
+	// group event sinks: SQS, SNS, RabbitMQ and Kafka delivery, through the same guarded network access
+	sinksDone := make(chan struct{})
+	sinksRunner := &sinks.Runner{DB: st, Svc: &sinks.Service{Sealer: sealer, AllowInsecure: sinksNet.AllowInsecure}, Open: sinksNet.Open,
+		Clock: clock, Log: logger}
+	go func() {
+		defer close(sinksDone)
+		sinksRunner.Loop(ctx)
 	}()
 	errc := make(chan error, 2)
 	go func() { errc <- httpSrv.Serve(ln) }()
@@ -672,6 +761,11 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 		<-historyDone
 		<-notifyDone
 		<-rotationDone
+		<-rulesDone
+		<-govDone
+		<-loadersDone
+		<-provisioningDone
+		<-sinksDone
 		return err
 	case <-ctx.Done():
 	}
@@ -700,6 +794,11 @@ func serve(ctx context.Context, o options, cfg *config.Config, sealer *seal.Seal
 	<-historyDone
 	<-notifyDone
 	<-rotationDone
+	<-rulesDone
+	<-govDone
+	<-loadersDone
+	<-provisioningDone
+	<-sinksDone
 	for i := 0; i < cap(errc) && (i == 0 || agentSrv != nil); i++ {
 		if serveErr := <-errc; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			return serveErr
