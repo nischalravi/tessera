@@ -158,6 +158,8 @@ var tables = []string{
 	"aws_edge_evaluations", "aws_pr_comment_settings",
 	// flat-file import for disconnected apps (schema/0352_flatfile.sql)
 	"flatfile_mappings", "flatfile_uploads", "flatfile_upload_errors", "flatfile_changes", "flatfile_records", "flatfile_tasks",
+	// connector sync checkpoints (schema/0360_connector_checkpoints.sql)
+	"connector_checkpoints",
 	// point-in-time access and evidence packs (schema/0260-0261)
 	"edge_history", "evidence_packs",
 	// SIEM sinks (schema/0210_siem.sql)
@@ -177,6 +179,8 @@ var tables = []string{
 	// native groups (schema/0280_groups.sql); the engine tables stay empty until GR-2
 	"grp_folders", "grp_name_aliases", "grp_groups", "grp_composite_factors", "grp_lists", "grp_direct_memberships",
 	"grp_deps", "grp_closure", "grp_levels", "grp_effective", "grp_engine_queue",
+	// third-party OAuth app inventory (schema/0361_oauth_apps.sql)
+	"oauth_apps", "oauth_grants", "oauth_sync_state",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was

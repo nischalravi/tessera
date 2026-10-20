@@ -38,6 +38,9 @@ const (
 	Entra  = "entra"
 	Google = "google"
 	GitHub = "github"
+	// Salesforce has no session or leaver revoker; its credential is the one
+	// internal/oauthapps reads and revokes connected-app tokens with.
+	Salesforce = "salesforce"
 )
 
 // SessionCapable reports whether system is an IdP whose sessions and refresh
