@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/store/storetest"
@@ -111,6 +113,32 @@ func TestDisableEnable(t *testing.T) {
 			}
 			if _, err := containment.Disable(c, id, "pa", "suspected takeover", "none", now); !errors.Is(err, containment.ErrNotActive) {
 				t.Errorf("second Disable = %v", err)
+			}
+		}},
+		{"enable refuses the linked user and, for a linked identity, the disabler", func(t *testing.T, c *store.TenantTx, id int64) {
+			if _, err := containment.Disable(c, id, "pa", "suspected takeover", "none", now); err != nil {
+				t.Fatal(err)
+			}
+			// no linked user: the disabler may undo their own disable
+			if got, err := containment.EnableRefusal(c, id, nil, "pa"); err != nil || got != "" {
+				t.Errorf("unlinked, disabler = %q, %v", got, err)
+			}
+			u := &store.PlatformUser{ID: uuid.New(), DisplayName: "Alice", Status: "active", IdentityID: &id, CreatedAt: now}
+			if err := c.InsertPlatformUser(u); err != nil {
+				t.Fatal(err)
+			}
+			for name, tc := range map[string]struct {
+				user *store.PlatformUser
+				by   string
+				want string
+			}{
+				"self":         {u, "alice@a.example", containment.RefuseSelfEnable},
+				"disabler":     {nil, "pa", containment.RefuseFourEyes},
+				"second admin": {nil, "pa2", ""},
+			} {
+				if got, err := containment.EnableRefusal(c, id, tc.user, tc.by); err != nil || got != tc.want {
+					t.Errorf("%s: %q, %v, want %q", name, got, err, tc.want)
+				}
 			}
 		}},
 		{"a connector sync does not undo a disable", func(t *testing.T, c *store.TenantTx, id int64) {

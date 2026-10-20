@@ -742,6 +742,10 @@ func (s *Server) finishLogin(w http.ResponseWriter, r *http.Request, tenant stor
 		}
 		if user.Status != "active" {
 			reason = "user_disabled"
+		} else if off, err := auth.IdentityInactive(tx, user); err != nil {
+			return err
+		} else if off {
+			reason = auth.FailIdentityDisabled
 		}
 		return nil
 	})

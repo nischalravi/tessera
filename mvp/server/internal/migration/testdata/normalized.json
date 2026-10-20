@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "product_version": "synthetic-v1",
+  "captured_at": "2026-10-13T12:00:00Z",
+  "complete": true,
+  "identities": [{"id":"person-1","name":"Synthetic Person"}],
+  "accounts": [{"id":"account-1","identity_id":"person-1","application":"synthetic-erp","native_identity":"dummy-user","entitlement_ids":["ent-1"]}],
+  "entitlements": [{"id":"ent-1","application":"synthetic-erp","attribute":"group","value":"invoice-read","owner_id":"person-1"}],
+  "roles": [{"id":"role-1","name":"Synthetic finance role","owner_id":"person-1","entitlement_ids":["ent-1"]}],
+  "sod": [{"id":"sod-1","name":"Synthetic payment conflict","actions_a":["payment:Create"],"actions_b":["payment:Approve"]}],
+  "certifications": [{"id":"review-1","identity_id":"person-1","entitlement_id":"ent-1","decision":"approve","decided_at":"2026-10-12T12:00:00Z"}],
+  "unsupported": []
+}

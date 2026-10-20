@@ -19,6 +19,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/auth/oidcrp"
 	"github.com/nischalravi/tessera/mvp/server/internal/config"
 	"github.com/nischalravi/tessera/mvp/server/internal/connectors"
+	"github.com/nischalravi/tessera/mvp/server/internal/containment"
 	"github.com/nischalravi/tessera/mvp/server/internal/devidp"
 	"github.com/nischalravi/tessera/mvp/server/internal/devidp/devidptest"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
@@ -539,6 +540,50 @@ func TestOIDCLogin_DisabledUser(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.refused(e.signIn("00u-pat-policy", devidp.MethodPasskey, devidp.ProfileOkta), seed.LarkspurID, "user_disabled")
+}
+
+// TestOIDCLogin_DisabledIdentity (#316): a user whose linked identity is
+// disabled is refused, and signs in again once it is enabled.
+func TestOIDCLogin_DisabledIdentity(t *testing.T) {
+	e := newOIDCEnv(t, newbie)
+	conns := devConnID(t, e.db, seed.LarkspurID)
+	var identity int64
+	// newbie gets a Tessera user linked to a governed identity
+	if err := e.db.InTenant(context.Background(), seed.LarkspurID, func(tx *store.TenantTx) error {
+		pl, err := tx.ExternalLoginBySubject(conns, "00u-pat-policy")
+		if err != nil {
+			return err
+		}
+		if identity, err = tx.InsertIdentity(&store.Identity{TenantID: seed.LarkspurID, ExternalID: "newbie", Name: "Newbie",
+			Type: "human", Status: "active", CreatedAt: testkit.Now}); err != nil {
+			return err
+		}
+		email := newbie.Email
+		u := &store.PlatformUser{ID: uuid.New(), Email: &email, DisplayName: newbie.Name, IdentityID: &identity, CreatedAt: testkit.Now}
+		if err := tx.InsertPlatformUser(u); err != nil {
+			return err
+		}
+		return tx.InsertExternalLogin(&store.ExternalLogin{UserID: u.ID, IdPConnectionID: conns, Issuer: pl.Issuer,
+			Subject: newbie.Sub, CreatedAt: testkit.Now})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.db.InTenant(context.Background(), seed.LarkspurID, func(tx *store.TenantTx) error {
+		_, err := containment.Disable(tx, identity, "vic", "suspected insider", "none", testkit.Now)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	e.refused(e.signIn(newbie.Sub, devidp.MethodPasskey, devidp.ProfileOkta), seed.LarkspurID, auth.FailIdentityDisabled)
+	if err := e.db.InTenant(context.Background(), seed.LarkspurID, func(tx *store.TenantTx) error {
+		_, err := containment.Enable(tx, identity, "olu", "cleared", testkit.Now)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if rec := e.signIn(newbie.Sub, devidp.MethodPasskey, devidp.ProfileOkta); cookieNamed(rec, auth.CookieName) == nil {
+		t.Errorf("sign-in after enable: %d %v", rec.Code, rec.Header())
+	}
 }
 
 func devConnID(t testing.TB, db *store.DB, tn tenancy.ID) uuid.UUID {

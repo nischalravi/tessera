@@ -192,7 +192,7 @@ func ApproveRemoval(tx *store.TenantTx, id string, by Actor, reason string, now 
 	case e.Source == "role":
 		return nil, refuse(409, "not_removable", "this access now comes from a business role; deny the request and remove the role instead")
 	case e.Source == "jit":
-		if err := tx.DeleteJITEdge(e.ID); err != nil {
+		if err := tx.DeleteJITEdge(e.ID, now); err != nil {
 			return nil, err
 		}
 		outcome = OutcomeRevoked

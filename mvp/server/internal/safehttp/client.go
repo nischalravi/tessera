@@ -33,10 +33,10 @@
 // site. Tests use NewForTest, which refuses to run outside a test binary
 // (and internal/archtest bans it from non-test files).
 //
-// Not yet wired: the readiness connectors (internal/connectors,
-// internal/readiness) only simulate their systems today; when a connector
-// makes real calls to a customer-configured endpoint, its *http.Client must
-// come from ForConfig. go-oidc and x/oauth2 take this client through
+// The demo connectors and the readiness checks only simulate their systems.
+// The production connectors (internal/connectors/okta and entra) call a
+// customer-configured endpoint with the server's shared outbound client
+// (api.Config.OutboundHTTP, built by ForConfig); they never build their own. go-oidc and x/oauth2 take this client through
 // oidc.ClientContext and oauth2.HTTPClient (PR6).
 package safehttp
 
@@ -130,6 +130,20 @@ func ForConfig(c *config.Config) (*http.Client, error) {
 	o := Options{Env: config.Prod}
 	if env == config.Dev {
 		o = Options{Env: config.Dev, AllowLoopback: loopback}
+	}
+	return newClient(o)
+}
+
+// ForCLIEnv is ForCLI for a command-line tool whose user names the
+// environment (the reference CLI reads TESSERA_ENV): only "dev" gets the
+// loopback exception and plain http, so a CLI pointed at a local development
+// server works; any other value, an empty one included, gets the production
+// rules. The server never uses it (ForConfig decides there, from the validated
+// configuration). Zero timeout and maxBodyBytes keep the defaults.
+func ForCLIEnv(env string, timeout time.Duration, maxBodyBytes int64) (*http.Client, error) {
+	o := Options{Env: config.Prod, Timeout: timeout, MaxBodyBytes: maxBodyBytes}
+	if env == config.Dev {
+		o.Env, o.AllowLoopback = config.Dev, true
 	}
 	return newClient(o)
 }

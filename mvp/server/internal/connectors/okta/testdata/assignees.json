@@ -1,0 +1,7 @@
+{
+  "value": [
+    {"id": "00u1averyexample01", "orn": "orn:okta:directory:00oexample0000001:users:00u1averyexample01"},
+    {"id": "00u1morganexample2", "orn": "orn:okta:directory:00oexample0000001:users:00u1morganexample2"}
+  ],
+  "_links": {"self": {"href": "https://example.okta.com/api/v1/iam/assignees/users"}}
+}
