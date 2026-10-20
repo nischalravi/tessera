@@ -174,6 +174,7 @@ type Server struct {
 	guests *sponsorship.Service
 	rp     *oidcrp.RP
 	oauth2 *oauth2rp.RP
+	cas    *casclient.Client
 	// oauth is the authorization server of the CLI (internal/oauth); it also
 	// verifies the DPoP access tokens of API requests (authn.Tokens).
 	oauth *oauth.Service
