@@ -13,7 +13,7 @@ import {
 } from "../../api";
 import { useIdentityActions } from "../../app/actions";
 import {
-  Badge, Button, Callout, CommandBar, DataTable, Drawer, EmptyState, Loading, Page, SidePanel, Status, Tabs, useSelected, useToast,
+  Badge, Button, Callout, CommandBar, DataTable, Drawer, EmptyState, Loading, Page, RoleTabs, SidePanel, Status, Tabs, useSelected, useToast,
 } from "../../components";
 
 const I = 16;
@@ -55,7 +55,7 @@ export function Roles() {
   const rows = view?.roles ?? null;
   const open = rows?.find((r) => r.id === selected);
   return (
-    <Page title="Roles" count={rows ? plural(rows.length, "role") : null} crumbs={[["Identity"], ["Roles"]]}
+    <Page title="Roles" count={rows ? plural(rows.length, "role") : null} crumbs={[["Identity"], ["Roles"]]} tabs={<RoleTabs />}
       sub="Business roles bundle entitlements from several systems, so people request one thing and reviewers certify one thing.">
       <DataTable
         id="roles"

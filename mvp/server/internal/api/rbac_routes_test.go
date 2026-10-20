@@ -181,6 +181,12 @@ POST   /api/requests/{request_id}/approve            requests.create STEP_UP_POL
 POST   /api/requests/{request_id}/deny               requests.create -  # issue #164 (#165: the line's routing decides who)
 POST   /api/requests/{request_id}/cancel             requests.create -  # issue #164 (the requester)
 POST   /api/requests/{request_id}/remove             requests.create -  # issue #164 (requests.decide, or the beneficiary)
+GET    /api/role-mining/runs                         graph.read      -  # issue #298
+POST   /api/role-mining/runs                         roles.manage    -  # issue #298 (analysis only; changes nothing)
+GET    /api/role-mining/runs/{run_id}                graph.read      -  # issue #298
+GET    /api/role-mining/candidates/{candidate_id}    graph.read      -  # issue #298
+POST   /api/role-mining/candidates/{candidate_id}/accept roles.manage STEP_UP_POLICY  # issue #298 (creates a draft role, like POST /api/roles)
+POST   /api/role-mining/candidates/{candidate_id}/dismiss roles.manage -  # issue #298
 GET    /api/roles                                    requests.create -  # issue #161
 POST   /api/roles                                    roles.manage    STEP_UP_POLICY  # issue #161
 GET    /api/roles/{role_id}                          graph.read      -  # issue #161
