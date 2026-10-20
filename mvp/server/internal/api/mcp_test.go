@@ -845,7 +845,7 @@ func TestMCP_RegisterClientFetchesTheDocument(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	x.srv.mcp.HTTP = hc
+	x.srv.mcp.HTTP, x.srv.mcp.AllowLoopback = hc, true
 
 	doc = `{"client_id":"SELF","client_name":"New Agent","redirect_uris":["https://new.example/cb"]}`
 	id := srv.URL + "/clients/new.json"

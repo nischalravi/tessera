@@ -49,6 +49,10 @@ type Service struct {
 	Clock  func() time.Time
 	// PolicyVersion names the policy set a decision used.
 	PolicyVersion func() string
+	// AllowLoopback lets a client_id name a loopback IP literal (dev and
+	// tests); otherwise IP literals in private, loopback and link-local
+	// ranges are refused before the fetch.
+	AllowLoopback bool
 	// TTL is the access-token lifetime; zero or more than MaxTTL means MaxTTL.
 	TTL time.Duration
 }

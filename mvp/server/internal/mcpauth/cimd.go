@@ -9,6 +9,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"slices"
 	"sort"
@@ -221,11 +222,15 @@ func (s *Service) fetchDocument(ctx context.Context, clientID string) (*Document
 	if err := ValidateClientID(clientID); err != nil {
 		return nil, err
 	}
+	u, err := s.fetchURL(clientID)
+	if err != nil {
+		return nil, err
+	}
 	hc := *s.HTTP
 	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	resp, err := safehttp.Get(ctx, &hc, clientID)
+	resp, err := safehttp.Get(ctx, &hc, u.String())
 	if err != nil {
 		return nil, clientErr("client metadata document could not be fetched: %s", fetchReason(err))
 	}
@@ -236,6 +241,27 @@ func (s *Service) fetchDocument(ctx context.Context, clientID string) (*Document
 		return nil, clientErr("client metadata document is not application/json")
 	}
 	return ParseDocument(clientID, resp.Body)
+}
+
+// fetchURL re-parses clientID and refuses a host that is an IP literal in a
+// private, loopback, link-local or metadata range (loopback only with
+// AllowLoopback) before any request is built. The safehttp client repeats the
+// check at dial time, after DNS resolution; this one makes the refusal visible
+// at the call site and keeps a literal address from ever reaching the dialer.
+func (s *Service) fetchURL(clientID string) (*url.URL, error) {
+	if err := ValidateClientID(clientID); err != nil {
+		return nil, err
+	}
+	u, err := url.Parse(clientID)
+	if err != nil {
+		return nil, clientErr("client_id must be an https URL")
+	}
+	if a, err := netip.ParseAddr(u.Hostname()); err == nil {
+		if a.Zone() != "" || (!(s.AllowLoopback && a.Unmap().IsLoopback()) && safehttp.Blocked(a)) {
+			return nil, clientErr("client metadata document could not be fetched: address not allowed")
+		}
+	}
+	return u, nil
 }
 
 func fetchReason(err error) string {

@@ -198,7 +198,7 @@ func TestRefreshActorClient(t *testing.T) {
 		}
 		return tx.SetMCPClient(url, &e.bot, "active", e.now)
 	})
-	e.svc.HTTP = hc
+	e.svc.HTTP, e.svc.AllowLoopback = hc, true
 	ctx := context.Background()
 	subj := e.userToken(e.resA).AccessToken
 

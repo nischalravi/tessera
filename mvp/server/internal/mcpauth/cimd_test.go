@@ -137,7 +137,7 @@ func TestFetchDocument(t *testing.T) {
 			fmt.Fprint(w, docFor("https://"+r.Host+"/meta.json"))
 		})
 		url := srv.URL + "/meta.json"
-		s := &Service{HTTP: hc}
+		s := &Service{HTTP: hc, AllowLoopback: true}
 		d, err := s.fetchDocument(ctx, url)
 		if err != nil || d.Name != "Agent Host" {
 			t.Fatalf("fetch = %+v, %v", d, err)
@@ -148,7 +148,7 @@ func TestFetchDocument(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			fmt.Fprint(w, docFor("https://victim.example/meta.json"))
 		})
-		if _, err := (&Service{HTTP: hc}).fetchDocument(ctx, srv.URL+"/meta.json"); err == nil {
+		if _, err := (&Service{HTTP: hc, AllowLoopback: true}).fetchDocument(ctx, srv.URL+"/meta.json"); err == nil {
 			t.Fatal("a document naming a different client_id was accepted")
 		}
 	})
@@ -162,7 +162,7 @@ func TestFetchDocument(t *testing.T) {
 			http.Redirect(w, r, "/other.json", http.StatusFound)
 		})
 		url := srv.URL + "/meta.json"
-		if _, err := (&Service{HTTP: hc}).fetchDocument(ctx, url); err == nil || hits.Load() != 1 {
+		if _, err := (&Service{HTTP: hc, AllowLoopback: true}).fetchDocument(ctx, url); err == nil || hits.Load() != 1 {
 			t.Fatalf("err = %v after %d requests", err, hits.Load())
 		}
 	})
@@ -171,13 +171,13 @@ func TestFetchDocument(t *testing.T) {
 			w.Header().Set("Content-Type", "text/html")
 			fmt.Fprint(w, docFor("x"))
 		})
-		if _, err := (&Service{HTTP: hc}).fetchDocument(ctx, srv.URL+"/meta.json"); err == nil {
+		if _, err := (&Service{HTTP: hc, AllowLoopback: true}).fetchDocument(ctx, srv.URL+"/meta.json"); err == nil {
 			t.Fatal("a text/html document was accepted")
 		}
 	})
 	t.Run("not found", func(t *testing.T) {
 		srv, hc, _ := cimdServer(t, func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) })
-		if _, err := (&Service{HTTP: hc}).fetchDocument(ctx, srv.URL+"/meta.json"); err == nil {
+		if _, err := (&Service{HTTP: hc, AllowLoopback: true}).fetchDocument(ctx, srv.URL+"/meta.json"); err == nil {
 			t.Fatal("a 404 was accepted")
 		}
 	})
@@ -186,14 +186,14 @@ func TestFetchDocument(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			fmt.Fprint(w, `{"client_id":"x","padding":"`+strings.Repeat("a", 100<<10)+`"}`)
 		})
-		if _, err := (&Service{HTTP: hc}).fetchDocument(ctx, srv.URL+"/meta.json"); err == nil {
+		if _, err := (&Service{HTTP: hc, AllowLoopback: true}).fetchDocument(ctx, srv.URL+"/meta.json"); err == nil {
 			t.Fatal("an oversized document was accepted")
 		}
 	})
 	t.Run("http is refused before any request", func(t *testing.T) {
 		srv, hc, hits := cimdServer(t, func(w http.ResponseWriter, r *http.Request) {})
 		plain := strings.Replace(srv.URL, "https://", "http://", 1) + "/meta.json"
-		if _, err := (&Service{HTTP: hc}).fetchDocument(ctx, plain); err == nil || hits.Load() != 0 {
+		if _, err := (&Service{HTTP: hc, AllowLoopback: true}).fetchDocument(ctx, plain); err == nil || hits.Load() != 0 {
 			t.Fatalf("err = %v after %d requests", err, hits.Load())
 		}
 	})
@@ -203,7 +203,7 @@ func TestFetchDocument(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := (&Service{HTTP: hc}).fetchDocument(ctx, srv.URL+"/meta.json"); err == nil || hits.Load() != 0 {
+		if _, err := (&Service{HTTP: hc, AllowLoopback: true}).fetchDocument(ctx, srv.URL+"/meta.json"); err == nil || hits.Load() != 0 {
 			t.Fatalf("err = %v after %d requests", err, hits.Load())
 		}
 	})
@@ -229,7 +229,7 @@ func TestClientCache(t *testing.T) {
 	url := srv.URL + "/meta.json"
 	urlV.Store(url)
 	now := testkit.Now
-	s := &Service{HTTP: hc, Clock: func() time.Time { return now }}
+	s := &Service{HTTP: hc, AllowLoopback: true, Clock: func() time.Time { return now }}
 
 	c, err := s.Client(ctx, db.DB, db.Tenant, url)
 	if err != nil || c.Status != "pending" || c.AgentIdentityID != nil {
@@ -259,5 +259,40 @@ func TestClientCache(t *testing.T) {
 	redirV.Store("not a uri")
 	if _, err := s.Client(ctx, db.DB, db.Tenant, url); err == nil {
 		t.Error("an invalid refetch was served from the expired cache")
+	}
+}
+
+// TestFetchURLRefusals: an IP literal in a private, loopback, link-local or
+// metadata range is refused before any request is built.
+func TestFetchURLRefusals(t *testing.T) {
+	tests := []struct {
+		name, id string
+		loop     bool
+		ok       bool
+	}{
+		{"public host", "https://client.example.com/meta.json", false, true},
+		{"public literal", "https://8.8.8.8/meta.json", false, true},
+		{"loopback v4", "https://127.0.0.1/meta.json", false, false},
+		{"loopback allowed", "https://127.0.0.1:8443/meta.json", true, true},
+		{"loopback v6", "https://[::1]/meta.json", false, false},
+		{"mapped loopback", "https://[::ffff:127.0.0.1]/meta.json", false, false},
+		{"private 10/8", "https://10.1.2.3/meta.json", true, false},
+		{"private 192.168", "https://192.168.0.9/meta.json", false, false},
+		{"metadata", "https://169.254.169.254/meta.json", true, false},
+		{"unique local", "https://[fd00::1]/meta.json", false, false},
+		{"unspecified", "https://0.0.0.0/meta.json", false, false},
+		{"http", "http://client.example.com/meta.json", false, false},
+		{"user info", "https://u:p@client.example.com/meta.json", false, false},
+		{"fragment", "https://client.example.com/meta.json#x", false, false},
+		{"dot segments", "https://client.example.com/a/../meta.json", false, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Service{AllowLoopback: tc.loop}
+			_, err := s.fetchURL(tc.id)
+			if (err == nil) != tc.ok {
+				t.Errorf("fetchURL(%q, loopback=%v) = %v, want ok=%v", tc.id, tc.loop, err, tc.ok)
+			}
+		})
 	}
 }
