@@ -78,6 +78,10 @@ var (
 		UPDATE identities SET manager_id = @manager_id WHERE tenant_id = @tenant AND id = @id`)
 	identitiesTerminate = tq("identities.terminate", `
 		UPDATE identities SET status = 'terminated', terminated_at = @at WHERE tenant_id = @tenant AND id = @id`)
+	identitiesTerminateSessions = tq("identities.terminate_sessions", `
+		UPDATE sessions SET status = 'revoked', revoked_at = @rat, revoked_reason = @reason
+		WHERE sessions.tenant_id = @tenant AND sessions.status = 'active' AND sessions.user_id IN (
+			SELECT u.id FROM platform_users u WHERE u.tenant_id = @tenant AND u.identity_id = @id)`)
 	identitiesSetDeptTitle = tq("identities.set_department_title", `
 		UPDATE identities SET department = @department, title = @title WHERE tenant_id = @tenant AND id = @id`)
 )
@@ -203,9 +207,22 @@ func (tx *TenantTx) SetIdentityManager(id int64, managerID *int64) error {
 	return err
 }
 
-// TerminateIdentity marks an identity terminated at.
+// RevokedIdentityTerminated is the revoked_reason TerminateIdentity writes on
+// the sessions of the Tessera users linked to the identity (#331).
+const RevokedIdentityTerminated = "identity_terminated"
+
+// TerminateIdentity marks an identity terminated at and, in the same
+// transaction, revokes every active session of the Tessera users linked to
+// it, whatever their user status (#331). Every leaver path (HRIS event, end
+// date, lifecycle, guest sponsorship) goes through here, so none can leave a
+// terminated person signed in. The sign-in paths and the session middleware
+// then refuse the user (auth.IdentityInactive).
 func (tx *TenantTx) TerminateIdentity(id int64, at time.Time) error {
-	_, err := tx.exec(identitiesTerminate, sql.Named("at", T(at)), sql.Named("id", id))
+	if _, err := tx.exec(identitiesTerminate, sql.Named("at", T(at)), sql.Named("id", id)); err != nil {
+		return err
+	}
+	_, err := tx.exec(identitiesTerminateSessions, sql.Named("rat", RT(at)),
+		sql.Named("reason", RevokedIdentityTerminated), sql.Named("id", id))
 	return err
 }
 
