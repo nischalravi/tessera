@@ -53,23 +53,33 @@ func (s *Service) PollAll(ctx context.Context, db *store.DB) error {
 	}
 	var errs []error
 	for _, t := range tenants {
-		var ids []string
-		if err := db.ReadTenant(ctx, t.ID, func(c *store.TenantTx) error {
-			xs, err := c.SSFTransmitters()
-			for _, x := range xs {
-				if x.Delivery == store.SSFPoll && x.Status == store.SSFEnabled {
-					ids = append(ids, x.ID)
-				}
-			}
-			return err
-		}); err != nil {
+		if err := s.PollTenant(ctx, db, t.ID); err != nil {
 			errs = append(errs, fmt.Errorf("tenant %s: %w", t.Slug, err))
-			continue
 		}
-		for _, id := range ids {
-			if _, err := s.Poll(ctx, db, t.ID, id); err != nil && ctx.Err() == nil {
-				errs = append(errs, fmt.Errorf("tenant %s: transmitter %s: %w", t.Slug, id, err))
+	}
+	return errors.Join(errs...)
+}
+
+// PollTenant polls every enabled poll stream of one tenant (the queue job
+// ssf_poll runs it per tenant). An error in one stream is returned after the
+// others ran.
+func (s *Service) PollTenant(ctx context.Context, db *store.DB, tenant tenancy.ID) error {
+	var ids []string
+	if err := db.ReadTenant(ctx, tenant, func(c *store.TenantTx) error {
+		xs, err := c.SSFTransmitters()
+		for _, x := range xs {
+			if x.Delivery == store.SSFPoll && x.Status == store.SSFEnabled {
+				ids = append(ids, x.ID)
 			}
+		}
+		return err
+	}); err != nil {
+		return err
+	}
+	var errs []error
+	for _, id := range ids {
+		if _, err := s.Poll(ctx, db, tenant, id); err != nil && ctx.Err() == nil {
+			errs = append(errs, fmt.Errorf("transmitter %s: %w", id, err))
 		}
 	}
 	return errors.Join(errs...)

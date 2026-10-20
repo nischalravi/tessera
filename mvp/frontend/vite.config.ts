@@ -8,6 +8,7 @@ const backend = process.env.TESSERA_API ?? "http://127.0.0.1:8000";
 // signs (bound to that URL) match what the proxy forwards.
 const proxy = {
   "/api": backend,
+  "/public": backend, // the SSF push receiver
   "^/t/[a-z0-9-]+/(bootstrap|oauth/.*|\\.well-known/.*)": backend,
   "/.well-known": backend,
 };

@@ -278,6 +278,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/api/containment-retries/{retry_id}/retry-now" {
 			continue // TestContainmentRetriesAPI (a UUID, not a fixture id)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/ssf/transmitters/{id}") || strings.HasPrefix(rt.Pattern, "/public/t/") {
+			continue // TestSSFAPI_CrossTenant (UUIDs, not fixture ids)
+		}
 		if strings.HasPrefix(rt.Pattern, "/api/evidence/packs/{pack_id}") {
 			continue // TestEvidenceAPI_CrossTenant (a UUID, not a fixture id)
 		}
@@ -380,6 +383,7 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		"/api/siem/sinks/{sink_id}/dead-letters":     seedSiemSink(t, f.DB, f.B.ID, "b"),
 		"/api/alerts/{alert_id}":                     seedAlert(t, f.DB, f.B.ID, "b"),
 		"/api/identities/{identity_id}/disables":     fmt.Sprint(b["alice"]),
+		"/api/ssf/transmitters/{id}":                 ssfIDs[f.B.Slug],
 		"/api/evidence/packs/{pack_id}":              seedEvidencePack(t, f, f.B.ID),
 		"/api/evidence/packs/{pack_id}/download":     seedEvidencePack(t, f, f.B.ID),
 		"/api/orgs/{org_id}":                         orgs.RootID,

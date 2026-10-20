@@ -691,25 +691,23 @@ func TestSSFPoll_SweeperPollsAndAcknowledgesOnlyProcessedJTIs(t *testing.T) {
 		strings.Contains(rec.Body.String(), "poll-bearer-secret") || strings.Contains(rec.Body.String(), `"receiver_path"`) {
 		t.Fatalf("create poll stream: %d %s", rec.Code, rec.Body)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() { defer close(done); e.srv.RunSweeper(ctx, time.Hour) }()
-	deadline := time.Now().Add(20 * time.Second)
-	for {
+	// the ssf_poll queue job polls the stream; a tick starts four jobs at a time
+	for range 4 {
+		if err := e.srv.Queue().Tick(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		e.srv.Queue().Wait()
 		mu.Lock()
 		n := len(reqs)
 		mu.Unlock()
-		if n >= 2 || time.Now().After(deadline) {
+		if n >= 2 {
 			break
 		}
-		time.Sleep(20 * time.Millisecond)
 	}
-	cancel()
-	<-done
 	mu.Lock()
 	defer mu.Unlock()
 	if len(reqs) < 2 {
-		t.Fatalf("the sweeper polled %d times", len(reqs))
+		t.Fatalf("the queue polled %d times", len(reqs))
 	}
 	if reqs[0]["_auth"] != "Bearer poll-bearer-secret-123456" || reqs[0]["returnImmediately"] != true || reqs[0]["maxEvents"] != float64(25) {
 		t.Errorf("first poll %v", reqs[0])

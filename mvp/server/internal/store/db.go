@@ -141,6 +141,10 @@ var tables = []string{
 	"intake_records", "sponsorships", "sponsorship_events",
 	// identity containment (schema/0205_containment.sql)
 	"containment_credentials", "containment_retries",
+	// shared signals receiver (schema/0353_ssf.sql)
+	"ssf_transmitters", "ssf_events",
+	// the shared Deny policy of AWS containment (schema/0354_containment_policy.sql)
+	"containment_policy_leases", "containment_policy_denials",
 	// connector sync checkpoints (schema/0360_connector_checkpoints.sql)
 	"connector_checkpoints",
 	// point-in-time access and evidence packs (schema/0260-0261)
