@@ -7,6 +7,7 @@ import {
   Badge, Button, ButtonLink, Column, DataTable, EmptyState, Loading, MyAccessTabs, Page, SidePanel, Status, Tabs, useConfirm, useSelected, useToast,
 } from "../../components";
 import { Stages } from "./stages";
+import { AnswersView } from "./Answers";
 
 /**
  * Access requests (issue #164): your requests and the ones made for you, the approval queue for
@@ -146,6 +147,7 @@ function LinePanel({ id, onClose }: { id: string; onClose: () => void }) {
             {l.decided_by && <><dt>Decided by</dt><dd>{l.decided_by.display_name}, {fmtDate(l.decided_at)}</dd></>}
             {l.decision_reason && <><dt>Reason</dt><dd>{l.decision_reason}</dd></>}
           </dl>
+          <AnswersView answered={l.questionnaires ?? []} />
           {l.stages.length > 0 && <><h3 className="mt">Approval stages</h3><Stages stages={l.stages} /></>}
           <h3 className="mt">History</h3>
           <ol className="timeline">
@@ -250,7 +252,8 @@ function RoleRequests({ scope, onChange }: { scope: string; onChange: () => void
   const cols: Column<RoleRequest>[] = [
     { id: "role", header: "Role", sort: (q) => q.role.name, cell: (q) => <span><Link to={`/directory/roles/${q.role.id}`}>{q.role.name}</Link>{q.role.risk !== "low" && <> <Badge tone={q.role.risk === "high" ? "critical" : "warning"}>{q.role.risk} risk</Badge></>}</span> },
     { id: "for", header: "For", sort: (q) => q.beneficiary.name, cell: (q) => <span className="small">{q.beneficiary.name}</span> },
-    { id: "by", header: "Requested by", sort: (q) => q.requested_by.display_name, cell: (q) => <span className="small">{q.requested_by.display_name}<div className="xs faint truncate" style={{ maxWidth: 260 }}>{q.justification}</div></span>, hideNarrow: true },
+    { id: "by", header: "Requested by", sort: (q) => q.requested_by.display_name, cell: (q) => <span className="small">{q.requested_by.display_name}<div className="xs faint truncate" style={{ maxWidth: 260 }}>{q.justification}</div>
+      {(q.questionnaires?.length ?? 0) > 0 && <details className="xs"><summary>Answers ({q.questionnaires!.reduce((n, a) => n + a.items.length, 0)})</summary><AnswersView answered={q.questionnaires!} /></details>}</span>, hideNarrow: true },
     { id: "status", header: "Status", sort: (q) => q.status, cell: (q) => <span className="nowrap"><Status s={q.status} />{q.decided_by && <div className="xs faint">by {q.decided_by.display_name}</div>}</span> },
     { id: "at", header: "Requested", sort: (q) => q.requested_at, cell: (q) => <span className="small faint nowrap" title={fmtDate(q.requested_at)}>{relTime(q.requested_at)}</span> },
     { id: "act", header: "Actions", cell: (q) => (

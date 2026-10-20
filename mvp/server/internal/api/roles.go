@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nischalravi/tessera/mvp/server/internal/auth"
+	"github.com/nischalravi/tessera/mvp/server/internal/questionnaires"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/roles"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
@@ -514,6 +515,8 @@ type roleRequestView struct {
 	DecisionReason *string    `json:"decision_reason"`
 	CanApprove     bool       `json:"can_approve"`
 	CanCancel      bool       `json:"can_cancel"`
+	// Questionnaires are the requester's answers (issue #298), with the questions as asked.
+	Questionnaires []questionnaires.Answered `json:"questionnaires,omitempty"`
 }
 
 type roleRef struct {
@@ -541,13 +544,17 @@ func (s *Server) roleRequestView(r *http.Request, v *viewer, q *store.RoleReques
 	mine := me.IdentityID != nil && *me.IdentityID == q.BeneficiaryID
 	out.CanApprove = s.can(r, auth.PermRequestsDecide) && q.Status == store.RequestPending && q.RequestedBy != me.UserID.String() && !mine
 	out.CanCancel = q.Status == store.RequestPending && q.RequestedBy == me.UserID.String()
-	return out, nil
+	var qerr error
+	out.Questionnaires, qerr = questionnaires.AnswersFor(v.tx, store.QSubjectRoleRequest, q.ID)
+	return out, qerr
 }
 
 type roleRequestBody struct {
 	RoleID        string `json:"role_id"`
 	BeneficiaryID int64  `json:"beneficiary_id"`
 	Justification string `json:"justification"`
+	// answers to the questionnaires the role asks: questionnaire id -> question id -> value (issue #298)
+	Answers map[string]map[string]any `json:"answers"`
 }
 
 func (s *Server) submitRoleRequest(_ http.ResponseWriter, r *http.Request, _ *params) (any, error) {
@@ -563,7 +570,7 @@ func (s *Server) submitRoleRequest(_ http.ResponseWriter, r *http.Request, _ *pa
 		b.BeneficiaryID = *by.IdentityID
 	}
 	tx := store.TxFrom(r.Context())
-	q, err := roles.Request(tx, b.RoleID, b.BeneficiaryID, b.Justification, by, s.can(r, auth.PermRequestsCreateOthers), s.clock().UTC())
+	q, err := roles.RequestAnswered(tx, b.RoleID, b.BeneficiaryID, b.Justification, by, s.can(r, auth.PermRequestsCreateOthers), s.clock().UTC(), b.Answers)
 	if err != nil {
 		return nil, roleErr(err)
 	}

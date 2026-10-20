@@ -73,6 +73,7 @@ const Lifecycle = named(() => import("../features/governance/Lifecycle"), "Lifec
 const Drift = named(() => import("../features/governance/Drift"), "Drift");
 const GuestLifecycle = named(() => import("../features/governance/GuestLifecycle"), "GuestLifecycle");
 const Terms = named(() => import("../features/governance/Terms"), "Terms");
+const Questionnaires = named(() => import("../features/governance/Questionnaires"), "Questionnaires");
 const Workflows = named(() => import("../features/governance/Workflows"), "Workflows");
 const EvidencePacks = named(() => import("../features/governance/EvidencePacks"), "EvidencePacks");
 const Admin = named(admin, "Admin");
@@ -242,6 +243,7 @@ export default function App() {
                     <Route path="/governance/drift" element={<Drift />} />
                     <Route path="/governance/guest-lifecycle" element={<GuestLifecycle />} />
                     <Route path="/governance/terms" element={<Terms />} />
+                    <Route path="/governance/questionnaires" element={<Questionnaires />} />
                     <Route path="/governance/workflows" element={<Workflows />} />
                     <Route path="/governance/evidence" element={<EvidencePacks />} />
 
