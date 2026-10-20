@@ -1893,6 +1893,11 @@ IdP is never called.
 - **Privileged identities** (an effective privileged permission in the access graph, or a platform
   admin role) need two different methods and a second approver who is not the requester or the
   subject. Nobody can open a case for their own identity.
+- **Four eyes (#358).** A call-back is the operator's own word, so the requester cannot record it
+  (`403 requester_cannot_verify`; one recorded by the requester or the subject never counts), and
+  the requester cannot execute their own case (`403 requester_cannot_execute`): a second operator
+  must. Nobody verifies, approves or executes a reset of their own identity
+  (`403 self_reset_not_allowed`).
 - **Routes.** `GET/POST /api/helpdesk/cases`, `GET .../{case_id}`, `POST .../{case_id}/verifications`
   `{method, evidence, number_source, session_ref}`, `.../manager-approval` and `.../second-approval`
   (`helpdesk.approve`, step-up), `.../execute` (`helpdesk.reset`, step-up), `.../cancel`,
@@ -2100,7 +2105,7 @@ inheritance, `explain.go`, `grant.go`, `settings.go`), `server/internal/api/grou
 | `DELETE .../privileges/{privilege_id}` | revoke one row (the design has `DELETE .../privileges`; the row is in the path here) |
 | `GET .../privileges/effective[?identity=]` | for each privilege of the object, every path by which the identity (default: the caller) holds it, with a sentence such as "Ivan holds UPDATE on `app:foo:g` because they are in `app:foo:admins`, which holds STEM_ADMIN on folder `app:foo` ..."; another identity's needs `admin` |
 | `GET\|PUT /api/groups/privileges/settings` | the everyone policy and default privileges (`groups.admin`) |
-| `PUT /api/groups/users/{id}/identity` `{identity_id \| null}` | link a platform user to an identity (`groups.admin`, fresh phishing-resistant sign-in; audited) |
+| `PUT /api/groups/users/{id}/identity` `{identity_id \| null}` | link a platform user to an identity (`groups.admin`, fresh phishing-resistant sign-in; audited). #357: never your own user (`403 self_link_not_allowed`), only to an `active` identity (`409 identity_not_active`), and a user whose identity is terminated or disabled keeps the link so sign-in stays blocked (`409 identity_inactive`). Linking an unlinked user applies at once; changing or removing an existing link needs two admins: the first gets `202 pending_second_admin` (schema `0362`, 72 h), the same admin again `403 four_eyes_required`, and a second admin's identical change applies it and revokes the user's sessions and CLI refresh tokens |
 
 - Tests: `go test ./internal/groups/privs` (`TestImplication` for all 21 privileges,
   `TestPrivs_InheritanceOneVsSub`, `TestPrivs_ExplainListsAllPaths`,

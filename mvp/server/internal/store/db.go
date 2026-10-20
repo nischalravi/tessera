@@ -206,6 +206,8 @@ var tables = []string{
 	"grp_privileges", "grp_priv_settings",
 	// third-party OAuth app inventory (schema/0361_oauth_apps.sql)
 	"oauth_apps", "oauth_grants", "oauth_sync_state",
+	// pending identity-link changes, the four-eyes step (schema/0362_identity_link_requests.sql)
+	"identity_link_requests",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was

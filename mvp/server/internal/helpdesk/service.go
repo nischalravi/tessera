@@ -28,9 +28,27 @@ const (
 	CodeIdPFailed   = "idp_failed"
 )
 
+// Reasons of CodeForbidden refusals: the stable error code the API returns
+// (separation of duties, #358).
+const (
+	// ReasonOperatorRequired: the act needs a signed-in platform user.
+	ReasonOperatorRequired = "operator_required"
+	// ReasonSelfReset: the caller is linked to the identity being reset.
+	ReasonSelfReset = "self_reset_not_allowed"
+	// ReasonRequesterVerify: the requester recorded an attested verification
+	// (a call-back) on their own case; a second operator must.
+	ReasonRequesterVerify = "requester_cannot_verify"
+	// ReasonRequesterExecute: the requester tried to execute their own case;
+	// a second operator must.
+	ReasonRequesterExecute = "requester_cannot_execute"
+)
+
 // Error is a refusal the API renders: Code picks the status, Msg is safe to show.
 type Error struct {
-	Code     string
+	Code string
+	// Reason, when set, is the stable error code the API returns instead of
+	// the generic one for Code.
+	Reason   string
 	Msg      string
 	Decision *Decision // set with CodeNotVerified
 }
@@ -39,6 +57,10 @@ func (e *Error) Error() string { return e.Msg }
 
 func fail(code, format string, a ...any) *Error {
 	return &Error{Code: code, Msg: fmt.Sprintf(format, a...)}
+}
+
+func forbid(reason, msg string) *Error {
+	return &Error{Code: CodeForbidden, Reason: reason, Msg: msg}
 }
 
 // Service runs the workflow. The zero value works for the policy and the
@@ -165,7 +187,7 @@ func (s *Service) Start(c *store.TenantTx, in StartInput, by store.UserRef, now 
 		return nil, err
 	}
 	if isOneOf(userPtr(by), subj...) {
-		return nil, fail(CodeForbidden, "you cannot open a reset case for your own identity")
+		return nil, forbid(ReasonSelfReset, "you cannot open a reset case for your own identity")
 	}
 	priv, err := NewChecker(c, now).Privileged(ident.ID)
 	if err != nil {
@@ -367,6 +389,10 @@ func (s *Service) PrepareVerify(c *store.TenantTx, caseID string, in VerifyInput
 		}
 		return nil, fail(CodeInvalid, "method must be one of push, callback, manager_approval, idv")
 	}
+	// nobody verifies their own reset, whatever the method (#358)
+	if isOneOf(userPtr(by), pin.SubjectUsers...) {
+		return nil, forbid(ReasonSelfReset, "you cannot verify a reset of your own identity")
+	}
 	in.Evidence = strings.TrimSpace(in.Evidence)
 	if len(in.Evidence) > 500 || len(in.SessionRef) > 200 {
 		return nil, fail(CodeInvalid, "evidence is at most 500 characters and session_ref at most 200")
@@ -381,6 +407,14 @@ func (s *Service) PrepareVerify(c *store.TenantTx, caseID string, in VerifyInput
 	}
 	switch in.Method {
 	case MethodCallback:
+		// a call-back is the operator's own word: it never comes from the
+		// person who opened the case (#358)
+		if by.ID == uuid.Nil {
+			return nil, forbid(ReasonOperatorRequired, "a call-back is recorded by a signed-in operator")
+		}
+		if hc.RequestedByUserID != nil && *hc.RequestedByUserID == by.ID {
+			return nil, forbid(ReasonRequesterVerify, "the requester cannot record the call-back; a second operator must make it")
+		}
 		if in.NumberSource != "hr" {
 			return nil, fail(CodeInvalid, "a call-back must use the number taken from HR (number_source \"hr\"), never a number the caller gives")
 		}
@@ -403,10 +437,7 @@ func (s *Service) PrepareVerify(c *store.TenantTx, caseID string, in VerifyInput
 			return nil, fail(CodeForbidden, "a manager approval needs a signed-in platform user")
 		}
 		if hc.RequestedByUserID != nil && *hc.RequestedByUserID == by.ID {
-			return nil, fail(CodeForbidden, "the requester cannot give the manager approval")
-		}
-		if isOneOf(&by.ID, pin.SubjectUsers...) {
-			return nil, fail(CodeForbidden, "the subject cannot approve their own reset")
+			return nil, forbid(ReasonRequesterVerify, "the requester cannot give the manager approval")
 		}
 		u, err := c.PlatformUser(by.ID)
 		if err != nil {
@@ -487,7 +518,7 @@ func (s *Service) SecondApprove(c *store.TenantTx, caseID string, by store.UserR
 	case hc.RequestedByUserID != nil && *hc.RequestedByUserID == by.ID:
 		return fail(CodeForbidden, "the second approver cannot be the requester")
 	case isOneOf(&by.ID, in.SubjectUsers...):
-		return fail(CodeForbidden, "the subject cannot approve their own reset")
+		return forbid(ReasonSelfReset, "the subject cannot approve their own reset")
 	}
 	if err := c.SetHelpdeskSecondApproval(caseID, by, now); errors.Is(err, store.ErrNotFound) {
 		return fail(CodeConflict, "the case already has a second approver")
@@ -570,6 +601,16 @@ func (s *Service) Claim(c *store.TenantTx, caseID string, by store.UserRef, now 
 	in, _, err := policyInput(NewChecker(c, now), hc)
 	if err != nil {
 		return nil, err
+	}
+	// four eyes (#358): the operator who opened the case does not also run
+	// it, and nobody runs a reset of their own identity
+	switch {
+	case by.ID == uuid.Nil:
+		return nil, forbid(ReasonOperatorRequired, "a reset is executed by a signed-in operator")
+	case isOneOf(&by.ID, in.SubjectUsers...):
+		return nil, forbid(ReasonSelfReset, "you cannot execute a reset of your own identity")
+	case hc.RequestedByUserID != nil && *hc.RequestedByUserID == by.ID:
+		return nil, forbid(ReasonRequesterExecute, "the requester cannot execute their own case; a second operator must")
 	}
 	if d := Evaluate(in); !d.Satisfied {
 		return nil, &Error{Code: CodeNotVerified, Msg: "the verification policy is not satisfied: " + strings.Join(d.Missing, "; "),

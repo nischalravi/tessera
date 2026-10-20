@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -205,8 +206,82 @@ func groupPrivsCovered() map[string]bool {
 	m := map[string]bool{}
 	for _, name := range []string{"InsertGrpPrivilege", "GrpPrivilege", "GrpPrivilegesOf", "FindGrpPrivilege", "DeleteGrpPrivilege",
 		"GrpPrivilegesOfHolderGroup", "GrpPrivilegesOfHolderIdentity", "GrpPrivSettings", "SetGrpPrivSettings",
-		"SetPlatformUserIdentity"} {
+		"SetPlatformUserIdentity", "IdentityLinkRequest", "PutIdentityLinkRequest", "DeleteIdentityLinkRequest"} {
 		m[name] = true
 	}
 	return m
+}
+
+// TestIsolation_IdentityLinkRequests (#357): a pending link change is the
+// tenant's own. Another tenant's request looks nonexistent and cannot be
+// deleted, and a request naming another tenant's user or identity is refused.
+func TestIsolation_IdentityLinkRequests(t *testing.T) {
+	f := storetest.TwoTenants(t)
+	ids := seedGroupPrivs(t, f)
+	a, b := ids[f.A.Slug], ids[f.B.Slug]
+	exp := storetest.Now.Add(time.Hour)
+	for _, tn := range []storetest.Tenant{f.A, f.B} {
+		x := ids[tn.Slug]
+		if err := f.DB.InTenant(context.Background(), tn.ID, func(c *store.TenantTx) error {
+			if err := c.SetPlatformUserIdentity(x.user, &x.ident); err != nil {
+				return err
+			}
+			return c.PutIdentityLinkRequest(&store.IdentityLinkRequest{UserID: x.user, PreviousIdentityID: &x.ident,
+				RequestedByUserID: x.user, RequestedBy: "admin " + tn.Slug, RequestedAt: storetest.Now, ExpiresAt: exp})
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inB(t, f, func(c *store.TenantTx) error {
+		if _, err := c.IdentityLinkRequest(a.user); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("IdentityLinkRequest(A's user) = %v, want ErrNotFound", err)
+		}
+		r, err := c.IdentityLinkRequest(b.user)
+		if err != nil || r.RequestedBy != "admin "+f.B.Slug || r.IdentityID != nil || r.PreviousIdentityID == nil ||
+			*r.PreviousIdentityID != b.ident || !r.ExpiresAt.Equal(exp) {
+			t.Errorf("IdentityLinkRequest(B's user) = %+v, %v", r, err)
+		}
+		// replacing B's own request works
+		r.IdentityID, r.RequestedBy = &b.ident, "other admin"
+		if err := c.PutIdentityLinkRequest(r); err != nil {
+			t.Fatal(err)
+		}
+		if r, err := c.IdentityLinkRequest(b.user); err != nil || r.RequestedBy != "other admin" || r.IdentityID == nil {
+			t.Errorf("replaced request = %+v, %v", r, err)
+		}
+		// deleting A's request from B is a no-op
+		return c.DeleteIdentityLinkRequest(a.user)
+	})
+	for name, r := range map[string]store.IdentityLinkRequest{
+		"for A's user":         {UserID: a.user, RequestedByUserID: b.user},
+		"by A's user":          {UserID: b.user, RequestedByUserID: a.user},
+		"to A's identity":      {UserID: b.user, RequestedByUserID: b.user, IdentityID: &a.ident},
+		"against A's identity": {UserID: b.user, RequestedByUserID: b.user, PreviousIdentityID: &a.ident},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r.RequestedBy, r.RequestedAt, r.ExpiresAt = "x", storetest.Now, exp
+			err := f.DB.InTenant(context.Background(), f.B.ID, func(c *store.TenantTx) error { return c.PutIdentityLinkRequest(&r) })
+			if !errors.Is(err, store.ErrCrossTenant) {
+				t.Fatalf("err = %v, want ErrCrossTenant", err)
+			}
+		})
+	}
+	if err := f.DB.ReadTenant(context.Background(), f.A.ID, func(c *store.TenantTx) error {
+		r, err := c.IdentityLinkRequest(a.user)
+		if err != nil || r.RequestedBy != "admin "+f.A.Slug {
+			t.Errorf("A's request after B's calls = %+v, %v", r, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	inB(t, f, func(c *store.TenantTx) error {
+		if err := c.DeleteIdentityLinkRequest(b.user); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.IdentityLinkRequest(b.user); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("after delete: %v", err)
+		}
+		return nil
+	})
 }
