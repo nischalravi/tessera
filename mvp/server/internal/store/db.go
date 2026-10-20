@@ -163,6 +163,10 @@ var tables = []string{
 	"aws_edge_evaluations", "aws_pr_comment_settings",
 	// flat-file import for disconnected apps (schema/0352_flatfile.sql)
 	"flatfile_mappings", "flatfile_uploads", "flatfile_upload_errors", "flatfile_changes", "flatfile_records", "flatfile_tasks",
+	// shared signals receiver (schema/0353_ssf.sql)
+	"ssf_transmitters", "ssf_events",
+	// the shared Deny policy of AWS containment (schema/0354_containment_policy.sql)
+	"containment_policy_leases", "containment_policy_denials",
 	// connector sync checkpoints (schema/0360_connector_checkpoints.sql)
 	"connector_checkpoints",
 	// point-in-time access and evidence packs (schema/0260-0261)

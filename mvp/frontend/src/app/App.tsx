@@ -85,6 +85,7 @@ const RotationSecrets = named(rotationPages, "RotationSecrets");
 const RotationJobs = named(rotationPages, "RotationJobs");
 const RotationPolicies = named(rotationPages, "RotationPolicies");
 const VendorCompromised = named(rotationPages, "VendorCompromised");
+const SharedSignals = named(() => import("../features/admin/SharedSignals"), "SharedSignals");
 const MySessions = named(() => import("../features/account/MySessions"), "MySessions");
 const DeviceApprove = lazy(() => import("../pages/DeviceApprove"));
 const AdminUsers = named(() => import("../features/admin/Users"), "Users");
@@ -239,6 +240,7 @@ export default function App() {
                     <Route path="/admin/connections/:id" element={<ConnectionDetail />} />
                     <Route path="/admin/connections/:id/validation/:run" element={<ValidationResults />} />
                     <Route path="/admin/connections/:id/reconciliation/:run" element={<ReconReport />} />
+                    <Route path="/admin/shared-signals" element={<SharedSignals />} />
                     <Route path="/admin/flat-files" element={<FlatFiles />} />
                     <Route path="/admin/conditional-access" element={<ConditionalAccess />} />
                     <Route path="/admin/users" element={<AdminUsers />} />

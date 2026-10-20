@@ -2,6 +2,7 @@ package containment
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
+	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
 )
 
@@ -35,6 +37,10 @@ type Service struct {
 	// RetryBudget bounds the provider calls of one RunRetries pass (default
 	// 25s); tests shorten it.
 	RetryBudget time.Duration
+	// DB holds the lease and the ledger that serialize edits of the shared AWS
+	// Deny policy across workers. Without it (unit tests of one provider) the
+	// edits are not coordinated; the policy is still read back and verified.
+	DB *store.DB
 	// SweepBudget bounds the provider calls of one lifecycle sweep pass of a
 	// tenant (default 25s); tests shorten it.
 	SweepBudget time.Duration
@@ -55,7 +61,7 @@ func (s *Service) now() time.Time {
 	return timeutil.System()
 }
 
-func (s *Service) revoker(system string, c Credential) (Revoker, error) {
+func (s *Service) revoker(tenant tenancy.ID, system string, c Credential) (Revoker, error) {
 	if s.HTTP == nil {
 		return nil, errors.New("outbound HTTP is not configured")
 	}
@@ -68,6 +74,8 @@ func (s *Service) revoker(system string, c Credential) (Revoker, error) {
 		return newGoogle(s.HTTP, c, s.Sleep)
 	case GitHub:
 		return newGitHub(s.HTTP, c, s.Sleep)
+	case AWSIdentityCenter:
+		return newAWS(s.HTTP, c, s.Sleep, s.now, s.ledgerFor(tenant))
 	}
 	return nil, fmt.Errorf("no revoker for system %q", system)
 }
@@ -79,6 +87,9 @@ type CredentialInput struct {
 	Token   string `json:"token"`
 	BaseURL string `json:"base_url"`
 	Org     string `json:"org"`
+	// AWS is the credential of an aws_identity_center connection (instead of
+	// Token); base_url then optionally replaces the AWS endpoints.
+	AWS *AWSCredential `json:"aws"`
 }
 
 func credAAD(c *store.TenantTx, connectionID string) []byte {
@@ -101,9 +112,13 @@ func (s *Service) PutCredential(c *store.TenantTx, connectionID string, in Crede
 	switch {
 	case conn.RetiredAt != nil:
 		return &Error{"the connection is retired"}
-	case !GrantCapable(conn.System) && conn.System != Salesforce:
-		return &Error{fmt.Sprintf("containment supports okta, entra, google and github connections, not %q", conn.System)}
-	case in.Token == "" || len(in.Token) > 8192:
+	case !GrantCapable(conn.System) && conn.System != AWSIdentityCenter && conn.System != Salesforce:
+		return &Error{fmt.Sprintf("containment supports okta, entra, google, github, salesforce and aws_identity_center connections, not %q", conn.System)}
+	case conn.System == AWSIdentityCenter && in.AWS == nil:
+		return &Error{"aws (the AWS credential) is required for an aws_identity_center connection"}
+	case conn.System != AWSIdentityCenter && in.AWS != nil:
+		return &Error{"aws is only for aws_identity_center connections"}
+	case conn.System != AWSIdentityCenter && (in.Token == "" || len(in.Token) > 8192):
 		return &Error{"token is required and at most 8 KiB"}
 	case conn.System == Okta && in.BaseURL == "":
 		return &Error{"base_url (the Okta org URL) is required"}
@@ -121,7 +136,18 @@ func (s *Service) PutCredential(c *store.TenantTx, connectionID string, in Crede
 	if len(in.Org) > 100 {
 		return &Error{"org is too long"}
 	}
-	enc, err := s.Sealer.Seal([]byte(in.Token), credAAD(c, connectionID))
+	secret := in.Token
+	if conn.System == AWSIdentityCenter {
+		if why := in.AWS.check(); why != "" {
+			return &Error{why}
+		}
+		raw, err := json.Marshal(in.AWS) // #nosec G117 -- sealed below (internal/seal); never stored or logged in the clear
+		if err != nil {
+			return err
+		}
+		secret = string(raw)
+	}
+	enc, err := s.Sealer.Seal([]byte(secret), credAAD(c, connectionID))
 	if err != nil {
 		return err
 	}
@@ -195,6 +221,7 @@ type Item struct {
 	Connection string // the connection id, "" when the system has none
 	cred       *Credential
 	prepErr    string // why the credential could not be loaded (fails the step)
+	tenant     tenancy.ID
 }
 
 // Job is what Run executes: prepared in a read transaction, run with no
@@ -251,7 +278,7 @@ func (s *Service) BuildJob(c *store.TenantTx, identityID int64, trigger string, 
 		if a.IdentityID == nil || *a.IdentityID != identityID {
 			return nil, &Error{"account does not belong to the identity"}
 		}
-		it := Item{Action: sp.Action, AccountID: a.ID, Target: targetFor(a)}
+		it := Item{Action: sp.Action, AccountID: a.ID, Target: targetFor(a), tenant: c.Tenant()}
 		if cn := conns[a.System]; cn != nil {
 			it.Connection = cn.ID
 			if _, done := creds[cn.ID]; !done && failed[cn.ID] == "" {
@@ -453,7 +480,7 @@ func (s *Service) runItem(ctx context.Context, st *StepResult, it Item, revokers
 	rv, ok := revokers[it.Connection]
 	if !ok {
 		var err error
-		if rv, err = s.revoker(it.Target.System, *it.cred); err != nil {
+		if rv, err = s.revoker(it.tenant, it.Target.System, *it.cred); err != nil {
 			return fail("%v", err)
 		}
 		revokers[it.Connection] = rv
