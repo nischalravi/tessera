@@ -77,12 +77,10 @@ func DemoConnectors(company *DemoCompany) []Connector {
 // generated relative to it).
 type Factory func(now time.Time) (Connector, error)
 
-// Factories maps TESSERA_CONNECTORS names to constructors. Register a real
-// connector here, e.g.
-//
-//	Factories["okta"] = func(time.Time) (Connector, error) {
-//		return NewOktaConnector(os.Getenv("OKTA_ORG_URL"), os.Getenv("OKTA_API_TOKEN"))
-//	}
+// Factories maps TESSERA_CONNECTORS names to constructors. The production
+// connectors ("okta", "entra") register themselves from package
+// internal/connectors/all, which the server binary imports (a connector
+// imports this package for the record types, so it cannot be registered here).
 var Factories = map[string]Factory{}
 
 func init() {

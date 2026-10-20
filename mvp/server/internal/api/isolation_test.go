@@ -220,6 +220,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if strings.HasPrefix(rt.Pattern, "/api/jobs/{job_id}") {
 			continue // TestIsolation_JobRoutes (a UUID, not a fixture id)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/queue/jobs/{job_id}") {
+			continue // TestQueueAPI (a UUID, not a fixture id)
+		}
 		if strings.HasPrefix(rt.Pattern, "/api/provisioning/") {
 			continue // TestIsolation_ProvisioningRoutes (UUIDs, not fixture ids)
 		}
@@ -244,6 +247,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if strings.HasPrefix(rt.Pattern, "/api/roles/{role_id}") || strings.HasPrefix(rt.Pattern, "/api/role-requests/{request_id}") {
 			continue // TestRolesAPI_CrossTenant (UUIDs, not fixture ids)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/sod/") {
+			continue // TestSodAPI_CrossTenant (UUIDs, not fixture ids)
+		}
 		if strings.HasPrefix(rt.Pattern, "/api/abac/policies/{policy_id}") || rt.Pattern == "/api/catalog/items/{group_id}/policy" {
 			continue // TestAbacAPI_CrossTenant (UUIDs, not fixture ids)
 		}
@@ -253,6 +259,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		}
 		if strings.HasPrefix(rt.Pattern, "/api/auth/saml/{connection_id}/") {
 			continue // TestIsolation_SAMLCrossTenant (public; the tenant comes from the cookie or the connection)
+		}
+		if strings.HasPrefix(rt.Pattern, "/t/{slug}/.well-known/") || strings.HasPrefix(rt.Pattern, "/t/{slug}/oauth/") {
+			continue // TestOAuth_CrossTenant (public; the tenant is the slug, and its codes and tokens are its own)
 		}
 		if rt.Pattern == "/api/identity-merges/{merge_id}/unmerge" {
 			continue // TestCorrelationAPI_CrossTenant (a UUID, not a fixture id)
@@ -268,6 +277,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		}
 		if rt.Pattern == "/api/containment-retries/{retry_id}/retry-now" {
 			continue // TestContainmentRetriesAPI (a UUID, not a fixture id)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/evidence/packs/{pack_id}") {
+			continue // TestEvidenceAPI_CrossTenant (a UUID, not a fixture id)
 		}
 		if strings.HasPrefix(rt.Pattern, "/api/groups/") {
 			continue // TestGroupsTenantIsolation (UUIDs, not fixture ids)
@@ -367,6 +379,8 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		"/api/siem/sinks/{sink_id}/dead-letters":     seedSiemSink(t, f.DB, f.B.ID, "b"),
 		"/api/alerts/{alert_id}":                     seedAlert(t, f.DB, f.B.ID, "b"),
 		"/api/identities/{identity_id}/disables":     fmt.Sprint(b["alice"]),
+		"/api/evidence/packs/{pack_id}":              seedEvidencePack(t, f, f.B.ID),
+		"/api/evidence/packs/{pack_id}/download":     seedEvidencePack(t, f, f.B.ID),
 		"/api/orgs/{org_id}":                         orgs.RootID,
 	}
 	checked := 0
@@ -384,6 +398,9 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		if strings.HasPrefix(path, "/api/groups/") && strings.Contains(path, "{") {
 			continue // TestGroupsTenantIsolation (UUIDs, not fixture ids)
 		}
+		if strings.HasPrefix(path, "/api/sod/") && strings.Contains(path, "{") {
+			continue // TestSodAPI_CrossTenant (UUIDs, not fixture ids)
+		}
 		if path == "/api/request-drafts/{draft_id}" {
 			continue // TestRequestDraftsAPI (a UUID, private to its user)
 		}
@@ -399,6 +416,10 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		if path == "/api/graph" {
 			queries = []string{fmt.Sprintf("?identity_id=%d", b["alice"]), fmt.Sprintf("?resource_id=%d", b["resource:aws:prod"]),
 				fmt.Sprintf("?identity_id=%d&perm_key=perm:%d", b["alice"], b["perm:aws:get-pii"])}
+		}
+		if path == "/api/access/as-of" {
+			queries = []string{fmt.Sprintf("?resource=%d&date=2026-10-08", b["resource:aws:prod"]),
+				fmt.Sprintf("?resource=%d&date=2026-10-08T09:00:00", b["resource:aws:customer-pii"])}
 		}
 		for i, q := range queries {
 			rec := serveOnce(h, http.MethodGet, path+q, "")

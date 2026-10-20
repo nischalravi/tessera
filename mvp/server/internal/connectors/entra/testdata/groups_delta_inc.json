@@ -1,0 +1,17 @@
+{
+  "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#groups",
+  "value": [
+    {
+      "id": "bbbbbbbb-0000-4000-8000-000000000001",
+      "members@delta": [
+        {"@odata.type": "#microsoft.graph.user", "id": "aaaaaaaa-0000-4000-8000-000000000002", "@removed": {"reason": "deleted"}},
+        {"@odata.type": "#microsoft.graph.user", "id": "aaaaaaaa-0000-4000-8000-000000000004"}
+      ]
+    },
+    {
+      "id": "bbbbbbbb-0000-4000-8000-000000000003",
+      "@removed": {"reason": "deleted"}
+    }
+  ],
+  "@odata.deltaLink": "{{BASE}}/v1.0/groups/delta?$deltatoken=dt-groups-2"
+}

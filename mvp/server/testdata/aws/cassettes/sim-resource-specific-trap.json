@@ -1,0 +1,43 @@
+{
+  "id": "sim-resource-specific-trap",
+  "description": "ResourceSpecificResults aggregation trap: the top-level decision is the most restrictive of two resources; the per-resource decision for ours is allowed.",
+  "synthetic": true,
+  "spec": {
+    "id": "sim-resource-specific-trap",
+    "stratum": "S2",
+    "fixture_version": "synthetic-1",
+    "principal_arn": "arn:aws:iam::111111111111:user/alice",
+    "policy_source_arn": "",
+    "action": "s3:GetObject",
+    "resource": "arn:aws:s3:::tsr-bkt/k",
+    "identity": [
+      "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"s3:GetObject\",\"Resource\":\"arn:aws:s3:::tsr-bkt/*\"}]}"
+    ],
+    "boundary": null,
+    "scp_levels": null,
+    "resource_policy": "",
+    "resource_owner": "",
+    "context": null,
+    "exclusions": null,
+    "features": null
+  },
+  "iam_cassette": {
+    "fixture_version": "synthetic-1",
+    "entries": [
+      {
+        "key": "12e9d7b135b93c399086db910f1f82968826371bee69887e18fb691b46d9ec91",
+        "request": "POST iam.amazonaws.com/\nAction=SimulateCustomPolicy\nActionNames.member.1=s3:GetObject\nContextEntries.member.1.ContextKeyName=aws:PrincipalArn\nContextEntries.member.1.ContextKeyType=string\nContextEntries.member.1.ContextKeyValues.member.1=arn:aws:iam::111111111111:user/alice\nMaxItems=1000\nPolicyInputList.member.1={\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"s3:GetObject\",\"Resource\":\"arn:aws:s3:::tsr-bkt/*\"}]}\nResourceArns.member.1=arn:aws:s3:::tsr-bkt/k\nVersion=2010-05-08\n",
+        "responses": [
+          {
+            "status": 200,
+            "headers": {
+              "Content-Type": "text/xml"
+            },
+            "body": "<SimulateCustomPolicyResponse xmlns=\"https://iam.amazonaws.com/doc/2010-05-08/\"><SimulateCustomPolicyResult><EvaluationResults><member><EvalActionName>s3:GetObject</EvalActionName><EvalResourceName>*</EvalResourceName><EvalDecision>implicitDeny</EvalDecision><MatchedStatements></MatchedStatements><MissingContextValues></MissingContextValues><ResourceSpecificResults><member><EvalResourceName>arn:aws:s3:::other/x</EvalResourceName><EvalResourceDecision>implicitDeny</EvalResourceDecision><MatchedStatements></MatchedStatements><MissingContextValues></MissingContextValues></member><member><EvalResourceName>arn:aws:s3:::tsr-bkt/k</EvalResourceName><EvalResourceDecision>allowed</EvalResourceDecision><MatchedStatements><member><SourcePolicyId>PolicyInputList.1</SourcePolicyId><SourcePolicyType>IAM Policy</SourcePolicyType><StartPosition><Line>1</Line><Column>1</Column></StartPosition><EndPosition><Line>1</Line><Column>2</Column></EndPosition></member></MatchedStatements><MissingContextValues></MissingContextValues></member></ResourceSpecificResults></member></EvaluationResults><IsTruncated>false</IsTruncated></SimulateCustomPolicyResult><ResponseMetadata><RequestId>00000000-0000-0000-0000-000000000000</RequestId></ResponseMetadata></SimulateCustomPolicyResponse>"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {}
+}

@@ -229,7 +229,7 @@ func TestRemoval_Decisions(t *testing.T) {
 		w := newWorld(t)
 		_, id := w.removalOf("acct:okta:alice", "group:okta:eng")
 		q, _ := w.submitRemoval(w.alice, false, id, "x")
-		w.tx(func(c *store.TenantTx) error { return c.DeleteEdge(id) })
+		w.tx(func(c *store.TenantTx) error { return c.DeleteEdge(id, time.Now()) })
 		out, err := w.decideRemoval(func(c *store.TenantTx) (*store.RemovalRequest, error) {
 			return requests.ApproveRemoval(c, q.ID, w.pat, "", w.now)
 		})
