@@ -162,6 +162,8 @@ var tables = []string{
 	// native groups (schema/0280_groups.sql); the engine tables stay empty until GR-2
 	"grp_folders", "grp_name_aliases", "grp_groups", "grp_composite_factors", "grp_lists", "grp_direct_memberships",
 	"grp_deps", "grp_closure", "grp_levels", "grp_effective", "grp_engine_queue",
+	// third-party OAuth app inventory (schema/0361_oauth_apps.sql)
+	"oauth_apps", "oauth_grants", "oauth_sync_state",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was
