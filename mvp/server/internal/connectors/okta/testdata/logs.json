@@ -1,0 +1,30 @@
+[
+  {
+    "published": "2026-10-05T09:00:00.100Z",
+    "eventType": "user.authentication.sso",
+    "actor": {"id": "00u1averyexample01", "type": "User", "alternateId": "avery.example@example.com"},
+    "target": [{"id": "0oa1wiki000000001", "type": "AppInstance", "displayName": "Example Wiki"}],
+    "outcome": {"result": "SUCCESS"}
+  },
+  {
+    "published": "2026-10-05T15:30:00.000Z",
+    "eventType": "user.authentication.sso",
+    "actor": {"id": "00u1averyexample01", "type": "User", "alternateId": "avery.example@example.com"},
+    "target": [{"id": "0oa1wiki000000001", "type": "AppInstance", "displayName": "Example Wiki"}],
+    "outcome": {"result": "SUCCESS"}
+  },
+  {
+    "published": "2026-10-06T10:00:00.000Z",
+    "eventType": "user.authentication.sso",
+    "actor": {"id": "00u1morganexample2", "type": "User", "alternateId": "morgan.sample@example.com"},
+    "target": [{"id": "0oa1wiki000000001", "type": "AppInstance", "displayName": "Example Wiki"}],
+    "outcome": {"result": "SUCCESS"}
+  },
+  {
+    "published": "2026-10-06T11:00:00.000Z",
+    "eventType": "user.authentication.sso",
+    "actor": {"id": "00u1morganexample2", "type": "User", "alternateId": "morgan.sample@example.com"},
+    "target": [{"id": "0oa1wiki000000001", "type": "AppInstance", "displayName": "Example Wiki"}],
+    "outcome": {"result": "FAILURE"}
+  }
+]

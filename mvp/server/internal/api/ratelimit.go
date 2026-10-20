@@ -84,9 +84,25 @@ func newLimiters(c RateLimits) *limiters {
 // rateKey is the limiter key of the request's client. A peer address that
 // does not parse (not TCP) shares one "invalid" bucket.
 func (s *Server) rateKey(r *http.Request) ratelimit.Key {
+	a, _ := s.clientIP(r)
+	return ratelimit.IPKey(a)
+}
+
+// requestIP is the client address as text (the OAuth server records it).
+func (s *Server) requestIP(r *http.Request) string {
+	if a, ok := s.clientIP(r); ok {
+		return a.String()
+	}
+	return r.RemoteAddr
+}
+
+// clientIP is the client address: the TCP peer, or, when the peer is a
+// trusted proxy, the rightmost X-Forwarded-For entry that is not one. The
+// zero Addr and false mean the peer address could not be parsed.
+func (s *Server) clientIP(r *http.Request) (netip.Addr, bool) {
 	ap, err := netip.ParseAddrPort(r.RemoteAddr)
 	if err != nil {
-		return ratelimit.IPKey(netip.Addr{})
+		return netip.Addr{}, false
 	}
 	a := ap.Addr().Unmap()
 	if s.trustedProxy(a) {
@@ -102,7 +118,7 @@ func (s *Server) rateKey(r *http.Request) ratelimit.Key {
 			}
 		}
 	}
-	return ratelimit.IPKey(a)
+	return a, true
 }
 
 func (s *Server) trustedProxy(a netip.Addr) bool {

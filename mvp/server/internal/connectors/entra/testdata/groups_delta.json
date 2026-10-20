@@ -1,0 +1,34 @@
+{
+  "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#groups",
+  "value": [
+    {
+      "id": "bbbbbbbb-0000-4000-8000-000000000001",
+      "displayName": "Engineering",
+      "description": "All engineers",
+      "securityEnabled": true,
+      "mailEnabled": false,
+      "groupTypes": [],
+      "isAssignableToRole": false,
+      "members@delta": [{"@odata.type": "#microsoft.graph.user", "id": "aaaaaaaa-0000-4000-8000-000000000001"}]
+    },
+    {
+      "id": "bbbbbbbb-0000-4000-8000-000000000002",
+      "displayName": "Platform Admins",
+      "description": null,
+      "securityEnabled": true,
+      "mailEnabled": false,
+      "groupTypes": [],
+      "isAssignableToRole": true
+    },
+    {
+      "id": "bbbbbbbb-0000-4000-8000-000000000003",
+      "displayName": "All Hands",
+      "description": "Company-wide list",
+      "securityEnabled": false,
+      "mailEnabled": true,
+      "groupTypes": ["Unified"],
+      "isAssignableToRole": false
+    }
+  ],
+  "@odata.deltaLink": "{{BASE}}/v1.0/groups/delta?$deltatoken=dt-groups-1"
+}

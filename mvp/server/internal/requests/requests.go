@@ -452,7 +452,7 @@ func Approve(tx *store.TenantTx, id string, by Actor, reason string, now time.Ti
 	}
 	src, dst := graph.Key("account", l.AccountID), graph.Key("group", l.GroupID)
 	if old, err := tx.EdgeBetween(src, dst); err == nil { // an expired grant: replace it
-		if err := tx.DeleteEdge(old.ID); err != nil {
+		if err := tx.DeleteEdge(old.ID, now); err != nil {
 			return nil, err
 		}
 	} else if !errors.Is(err, store.ErrNotFound) {

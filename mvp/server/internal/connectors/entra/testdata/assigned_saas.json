@@ -1,0 +1,8 @@
+{
+  "value": [
+    {"principalId": "aaaaaaaa-0000-4000-8000-000000000001", "principalType": "User", "appRoleId": "00000000-0000-0000-0000-000000000000", "resourceId": "cccccccc-0000-4000-8000-000000000002"},
+    {"principalId": "bbbbbbbb-0000-4000-8000-000000000001", "principalType": "Group", "appRoleId": "00000000-0000-0000-0000-000000000000", "resourceId": "cccccccc-0000-4000-8000-000000000002"},
+    {"principalId": "aaaaaaaa-0000-4000-8000-000000000002", "principalType": "User", "appRoleId": "ee000000-0000-4000-8000-000000000001", "resourceId": "cccccccc-0000-4000-8000-000000000002"},
+    {"principalId": "aaaaaaaa-0000-4000-8000-0000000000aa", "principalType": "User", "appRoleId": "00000000-0000-0000-0000-000000000000", "resourceId": "cccccccc-0000-4000-8000-000000000002"}
+  ]
+}

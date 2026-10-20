@@ -361,6 +361,10 @@ func Dump(tb testing.TB, db *store.DB, t tenancy.ID) string {
 		get("hris_events", v12, e)
 		v13, e := c.AuditLog(-1)
 		get("audit_log", v13, e)
+		v14, e := c.EdgeSpans()
+		get("edge_history", v14, e)
+		v15, e := c.EvidencePacks()
+		get("evidence_packs", v15, e)
 		return err
 	})
 	if err != nil {

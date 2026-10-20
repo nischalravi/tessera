@@ -26,6 +26,14 @@ func Compile(tx *store.TenantTx) ([]*Risk, error) {
 	if err != nil {
 		return nil, err
 	}
+	optRows, err := tx.SodRiskOptions()
+	if err != nil {
+		return nil, err
+	}
+	optsOf := map[string][]string{}
+	for _, o := range optRows {
+		optsOf[o.RiskID] = append(optsOf[o.RiskID], o.Option)
+	}
 	rsByID := map[string]*store.SodRuleset{}
 	for _, r := range rulesets {
 		if r.Enabled && r.Status == store.SodActive {
@@ -61,7 +69,7 @@ func Compile(tx *store.TenantTx) ([]*Risk, error) {
 		}
 		out = append(out, &Risk{ID: r.ID, Key: r.Key, Name: r.Name, Description: r.Description, Priority: r.Priority,
 			BusinessProcess: r.BusinessProcess, OwnerID: r.OwnerID, Version: r.Version,
-			Ruleset: RulesetRef{rs.ID, rs.Key, rs.Name}, Functions: linked[r.ID], Subjects: subj})
+			Ruleset: RulesetRef{rs.ID, rs.Key, rs.Name}, Functions: linked[r.ID], Subjects: subj, Remediation: orderOptions(optsOf[r.ID])})
 	}
 	return out, nil
 }
@@ -84,6 +92,7 @@ func CompileBundle(b *Bundle) []*Risk {
 		if d.Subjects != nil {
 			r.Subjects = *d.Subjects
 		}
+		r.Remediation = d.Remediation
 		for _, k := range d.Functions {
 			if f := fns[k]; f != nil {
 				r.Functions = append(r.Functions, f)
