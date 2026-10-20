@@ -33,6 +33,7 @@ import (
 //	GET    /api/groups/folders/{id}/privileges/effective[?identity=]  every path, per privilege
 //	GET|POST /api/groups/{id}/privileges, DELETE .../privileges/{privilege_id}, GET .../privileges/effective   the same on a group (admin)
 //	GET|PUT /api/groups/privileges/settings                         the everyone policy and default privileges (groups.admin)
+//	GET    /api/groups/users/identity-requests                      identity link changes waiting for a second admin (groups.admin)
 //	PUT    /api/groups/users/{id}/identity                          {identity_id|null} link a platform user to an identity (groups.admin, step-up)
 //
 // A grant is {privilege, holder_type: identity|group|everyone, identity | group,
@@ -46,6 +47,7 @@ func (s *Server) registerGroupsPrivilegeRoutes() {
 	admin := need(auth.PermGroupsAdmin)
 	s.handle(G, "/api/groups/privileges/settings", read, admin, s.rd(s.getGrpPrivSettings))
 	s.handle(PU, "/api/groups/privileges/settings", write, admin, s.rd(s.putGrpPrivSettings))
+	s.handle(G, "/api/groups/users/identity-requests", read, admin, s.rd(s.listIdentityLinkRequests))
 	s.handle(PU, "/api/groups/users/{id}/identity", write, needStepUp(auth.PermGroupsAdmin, auth.StepUpPolicy), s.rd(s.linkGrpUserIdentity))
 	for _, typ := range []privs.ObjectType{privs.Folder, privs.Group} {
 		base := "/api/groups/{id}/privileges"
@@ -434,10 +436,8 @@ const identityLinkWindow = 72 * time.Hour
 //   - a user is linked only to an active identity (identity_not_active);
 //   - a user whose identity is not active (terminated, disabled) keeps the
 //     link, so their sign-in stays blocked (identity_inactive);
-//   - linking a user that has no link applies at once, unless another user
-//     is already linked to that identity (#376); changing or removing an
-//     existing link always needs two admins: the first admin's request
-//     answers 202 and waits, the same admin repeating it is refused
+//   - every change needs two admins, a first link included (#376): the
+//     first admin's request answers 202 and waits, the same admin repeating it is refused
 //     (four_eyes_required), and a second admin's identical change applies it
 //     and revokes the user's sessions and CLI refresh tokens.
 func (s *Server) linkGrpUserIdentity(r *http.Request, p *params) (int, any, error) {
@@ -490,22 +490,10 @@ func (s *Server) linkGrpUserIdentity(r *http.Request, p *params) (int, any, erro
 		if in.IdentityID == nil {
 			action = "groups.user.identity_unlinked"
 		}
-		// a first link to an identity that another user is already linked to
-		// would let this user act as that person (approval stages, guest
-		// recovery), so it needs two admins like a change (issue #376)
-		shared := false
-		if was == nil && in.IdentityID != nil {
-			others, err := c.UsersLinkedTo(*in.IdentityID)
-			if err != nil {
-				return err
-			}
-			for _, o := range others {
-				if o != uid.String() {
-					shared = true
-				}
-			}
-		}
-		if (was != nil && !sameLink(was, in.IdentityID)) || shared {
+		// every change of a link needs two admins, whether or not the target
+		// identity is already held (issue #376): a link lets the user act as
+		// that person (approval stages, guest recovery, group privileges)
+		if !sameLink(was, in.IdentityID) {
 			if was != nil {
 				// the user's current identity must be active: unlinking or
 				// relinking a terminated or disabled person would give them
@@ -571,6 +559,25 @@ func (s *Server) linkGrpUserIdentity(r *http.Request, p *params) (int, any, erro
 		return 0, nil, err
 	}
 	return status, out, nil
+}
+
+// listIdentityLinkRequests lists the link changes waiting for a second admin,
+// so the approver can find them; approving is the same PUT the first admin made.
+func (s *Server) listIdentityLinkRequests(r *http.Request, _ *params) (int, any, error) {
+	now := s.clock().UTC()
+	rows, err := store.TxFrom(r.Context()).IdentityLinkRequests(now)
+	if err != nil {
+		return 0, nil, err
+	}
+	items := make([]map[string]any, 0, len(rows))
+	for _, q := range rows {
+		items = append(items, map[string]any{"user_id": q.UserID.String(), "user_name": q.UserName,
+			"identity_id": q.IdentityID, "identity_name": q.IdentityName,
+			"previous_identity_id": q.PreviousIdentityID, "previous_identity_name": q.PreviousName,
+			"requested_by": q.RequestedBy, "requested_by_user_id": q.RequestedByUserID.String(),
+			"requested_at": q.RequestedAt, "expires_at": q.ExpiresAt})
+	}
+	return http.StatusOK, map[string]any{"items": items, "count": len(items)}, nil
 }
 
 // sameLink reports whether two identity links are the same (nil is no link).

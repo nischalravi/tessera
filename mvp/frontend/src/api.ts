@@ -1105,6 +1105,16 @@ export const approveMergeRequest = (id: string) =>
 export const rejectMergeRequest = (id: string, reason: string) =>
   api<{ request: MergeRequest }>(`/identity-merge-requests/${encodeURIComponent(id)}/reject`, { reason });
 
+/** A platform user's identity link change waiting for a second admin (#376): a link, a relink or an unlink. */
+export interface IdentityLinkRequest {
+  user_id: string; user_name: string; identity_id: number | null; identity_name: string;
+  previous_identity_id: number | null; previous_identity_name: string;
+  requested_by: string; requested_by_user_id: string; requested_at: string; expires_at: string;
+}
+/** Making the same change as the first admin applies it; the first call answers 202 pending_second_admin. */
+export const putUserIdentityLink = (userId: string, identityId: number | null) =>
+  api<{ status?: string; identity_id: number | null }>(`/groups/users/${encodeURIComponent(userId)}/identity`, { identity_id: identityId }, "PUT");
+
 export interface MatchingSettings {
   auto_link_tier_b: boolean;
   require_review_tier_a: boolean;

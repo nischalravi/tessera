@@ -244,6 +244,7 @@ func TestGroupsRoutesRequirePrivilege(t *testing.T) {
 		{"GET", "/api/groups/engine/ops/{seq}", "/api/groups/engine/ops/1", "", ""},
 		{"GET", "/api/groups/privileges/settings", "/api/groups/privileges/settings", "", ""},
 		{"PUT", "/api/groups/privileges/settings", "/api/groups/privileges/settings", `{"everyone_allowed":[],"defaults":[]}`, ""},
+		{"GET", "/api/groups/users/identity-requests", "/api/groups/users/identity-requests", "", ""},
 		{"PUT", "/api/groups/users/{id}/identity", "/api/groups/users/" + other + "/identity", `{"identity_id":null}`, ""},
 		// GR-11, provisioners: tenant-wide, groups.admin only (the marks name groups, but the route permission is the gate)
 		{"GET", "/api/groups/provisioners", "/api/groups/provisioners", "", ""},
@@ -674,7 +675,10 @@ func TestPrivs_PlatformUserIdentityLink(t *testing.T) {
 		}
 	}
 	denied2(dave)
-	e.admin.call("PUT", path, fmt.Sprintf(`{"identity_id":%d}`, e.ident("bob")), 200)
+	// a first link needs two admins too (#376)
+	e.admin.call("PUT", path, fmt.Sprintf(`{"identity_id":%d}`, e.ident("bob")), 202)
+	denied(t, dave, "GET", "/api/groups/"+g, "", "view")
+	e.as("admin2", []auth.Role{auth.RoleTenantAdmin}, nil).call("PUT", path, fmt.Sprintf(`{"identity_id":%d}`, e.ident("bob")), 200)
 	dave.call("PATCH", "/api/groups/"+g, `{"description":"linked"}`, 200) // dave now holds bob's privileges
 	// an identity of another tenant, an unknown user and a bad body
 	if rec := e.admin.do("PUT", path, fmt.Sprintf(`{"identity_id":%d}`, e.f.A.IDs["alice"])); rec.Code != 404 {
@@ -873,8 +877,8 @@ func TestPrivs_IdentityLinkFourEyes(t *testing.T) {
 	}
 }
 
-// A first link to an identity another user is already linked to takes two
-// admins (issue #376); a first link to an unshared identity still applies at once.
+// Every first link takes two admins, to a free identity as well as to one
+// another user already holds (issue #376).
 func TestPrivs_SharedIdentityLinkFourEyes(t *testing.T) {
 	e := newPrivEnv(t)
 	h := e.srv.Handler()
@@ -906,14 +910,64 @@ func TestPrivs_SharedIdentityLinkFourEyes(t *testing.T) {
 	login("owner", []auth.Role{auth.RoleOperator}, &bob)
 	vic := login("vic", []auth.Role{auth.RoleOperator}, nil)
 
-	// an unshared identity still links at once
-	if code, body := put(a1, vic, carol); code != 200 {
-		t.Fatalf("unshared first link: %d %s", code, body)
+	// a free identity: one admin leaves it pending and cannot confirm it alone
+	code, body := put(a1, vic, carol)
+	if code != 202 || !strings.Contains(body, "pending_second_admin") {
+		t.Fatalf("free identity, first admin: %d %s", code, body)
+	}
+	code, body = put(a1, vic, carol)
+	if code != 403 || !strings.Contains(body, "four_eyes_required") {
+		t.Fatalf("free identity, same admin again: %d %s", code, body)
+	}
+	if l := linkOf(vic); l != nil {
+		t.Fatalf("one admin linked a free identity: %v", *l)
+	}
+	// the pending request is listed for the approver
+	if rec := corrDo(h, a2, "GET", "/api/groups/users/identity-requests", ""); rec.Code != 200 ||
+		!strings.Contains(rec.Body.String(), vic.UserID.String()) || !strings.Contains(rec.Body.String(), `"count":1`) {
+		t.Fatalf("pending list: %d %s", rec.Code, rec.Body.String())
+	}
+	// an admin of another tenant cannot approve it, and the request stays
+	foreign := signIn(t, e.f.DB, e.f.A.ID, authtest.User{Email: "x@a.example", Roles: admins}, authtest.Phr, storetest.Now)
+	if rec := corrDo(h, foreign, "PUT", "/api/groups/users/"+vic.UserID.String()+"/identity", fmt.Sprintf(`{"identity_id":%d}`, carol)); rec.Code != 404 {
+		t.Fatalf("other tenant's admin: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := corrDo(h, foreign, "GET", "/api/groups/users/identity-requests", ""); rec.Code != 200 || strings.Contains(rec.Body.String(), vic.UserID.String()) {
+		t.Fatalf("other tenant sees the request: %d %s", rec.Code, rec.Body.String())
+	}
+	if l := linkOf(vic); l != nil {
+		t.Fatalf("another tenant's admin linked: %v", *l)
+	}
+	if code, body = put(a2, vic, carol); code != 200 {
+		t.Fatalf("free identity, second admin: %d %s", code, body)
+	}
+	if l := linkOf(vic); l == nil || *l != carol {
+		t.Fatalf("the confirmed link was not applied: %v", l)
+	}
+	// unlinking is the same: pending, same admin refused, second admin applies
+	unlink := func(by authtest.Login) (int, string) {
+		rec := corrDo(h, by, "PUT", "/api/groups/users/"+vic.UserID.String()+"/identity", `{"identity_id":null}`)
+		return rec.Code, rec.Body.String()
+	}
+	if code, body = unlink(a1); code != 202 {
+		t.Fatalf("unlink, first admin: %d %s", code, body)
+	}
+	if code, body = unlink(a1); code != 403 || !strings.Contains(body, "four_eyes_required") {
+		t.Fatalf("unlink, same admin: %d %s", code, body)
+	}
+	if rec := corrDo(h, foreign, "PUT", "/api/groups/users/"+vic.UserID.String()+"/identity", `{"identity_id":null}`); rec.Code != 404 {
+		t.Fatalf("unlink by other tenant's admin: %d", rec.Code)
+	}
+	if l := linkOf(vic); l == nil {
+		t.Fatal("one admin unlinked")
+	}
+	if code, body = unlink(a2); code != 200 || linkOf(vic) != nil {
+		t.Fatalf("unlink, second admin: %d %s", code, body)
 	}
 	other := login("other", []auth.Role{auth.RoleOperator}, nil)
 
 	// a shared identity: one admin leaves it pending and cannot confirm it alone
-	code, body := put(a1, other, bob)
+	code, body = put(a1, other, bob)
 	if code != 202 || !strings.Contains(body, "pending_second_admin") {
 		t.Fatalf("first admin: %d %s", code, body)
 	}
@@ -932,7 +986,7 @@ func TestPrivs_SharedIdentityLinkFourEyes(t *testing.T) {
 		t.Fatalf("the confirmed link was not applied: %v", l)
 	}
 	got := auditActions(t, e.f, e.f.B.ID)
-	if got["groups.user.identity_change_requested"] != 1 || got["groups.user.identity_linked"] < 2 {
+	if got["groups.user.identity_change_requested"] != 3 || got["groups.user.identity_linked"] != 2 || got["groups.user.identity_unlinked"] != 1 {
 		t.Errorf("audit actions %v", got)
 	}
 }

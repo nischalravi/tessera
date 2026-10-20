@@ -206,7 +206,7 @@ func groupPrivsCovered() map[string]bool {
 	m := map[string]bool{}
 	for _, name := range []string{"InsertGrpPrivilege", "GrpPrivilege", "GrpPrivilegesOf", "FindGrpPrivilege", "DeleteGrpPrivilege",
 		"GrpPrivilegesOfHolderGroup", "GrpPrivilegesOfHolderIdentity", "GrpPrivSettings", "SetGrpPrivSettings",
-		"SetPlatformUserIdentity", "IdentityLinkRequest", "PutIdentityLinkRequest", "DeleteIdentityLinkRequest"} {
+		"SetPlatformUserIdentity", "IdentityLinkRequest", "PutIdentityLinkRequest", "DeleteIdentityLinkRequest", "IdentityLinkRequests"} {
 		m[name] = true
 	}
 	return m
@@ -240,6 +240,10 @@ func TestIsolation_IdentityLinkRequests(t *testing.T) {
 		if err != nil || r.RequestedBy != "admin "+f.B.Slug || r.IdentityID != nil || r.PreviousIdentityID == nil ||
 			*r.PreviousIdentityID != b.ident || !r.ExpiresAt.Equal(exp) {
 			t.Errorf("IdentityLinkRequest(B's user) = %+v, %v", r, err)
+		}
+		rows, err := c.IdentityLinkRequests(exp.Add(-time.Hour))
+		if err != nil || len(rows) != 1 || rows[0].UserID != b.user {
+			t.Errorf("IdentityLinkRequests from B = %+v, %v, want only B's", rows, err)
 		}
 		// replacing B's own request works
 		r.IdentityID, r.RequestedBy = &b.ident, "other admin"

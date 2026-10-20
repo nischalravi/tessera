@@ -23,12 +23,27 @@ type IdentityLinkRequest struct {
 	ExpiresAt          time.Time
 }
 
+// IdentityLinkRequestRow is a pending request with the names an approver sees.
+type IdentityLinkRequestRow struct {
+	IdentityLinkRequest
+	UserName     string
+	IdentityName string
+	PreviousName string
+}
+
 const identityLinkCols = `r.user_id, r.identity_id, r.previous_identity_id, r.requested_by_user_id, r.requested_by,
 	r.requested_at, r.expires_at`
 
 var (
 	identityLinkGet = tq("identity_link_requests.get", `
 		SELECT `+identityLinkCols+` FROM identity_link_requests r WHERE r.tenant_id = @tenant AND r.user_id = @user_id`)
+	identityLinkList = tq("identity_link_requests.list", `
+		SELECT `+identityLinkCols+`, u.display_name, COALESCE(i.name, ''), COALESCE(pi.name, '')
+		FROM identity_link_requests r
+		JOIN platform_users u ON u.tenant_id = @tenant AND u.id = r.user_id
+		LEFT JOIN identities i ON i.tenant_id = @tenant AND i.id = r.identity_id
+		LEFT JOIN identities pi ON pi.tenant_id = @tenant AND pi.id = r.previous_identity_id
+		WHERE r.tenant_id = @tenant AND r.expires_at > @now ORDER BY r.requested_at, r.user_id`)
 	identityLinkPut = tq("identity_link_requests.put", `
 		INSERT INTO identity_link_requests (tenant_id, user_id, identity_id, previous_identity_id, requested_by_user_id,
 			requested_by, requested_at, expires_at)
@@ -84,4 +99,32 @@ func (tx *TenantTx) PutIdentityLinkRequest(r *IdentityLinkRequest) error {
 func (tx *TenantTx) DeleteIdentityLinkRequest(user uuid.UUID) error {
 	_, err := tx.exec(identityLinkDelete, sql.Named("user_id", user.String()))
 	return err
+}
+
+// IdentityLinkRequests lists the tenant's unexpired pending link changes,
+// oldest first.
+func (tx *TenantTx) IdentityLinkRequests(now time.Time) ([]*IdentityLinkRequestRow, error) {
+	return collect(tx, func(sc scanner) (*IdentityLinkRequestRow, error) {
+		var row IdentityLinkRequestRow
+		var user, by, at, exp string
+		var ident, prev sql.NullInt64
+		if err := sc.Scan(&user, &ident, &prev, &by, &row.RequestedBy, &at, &exp, &row.UserName, &row.IdentityName, &row.PreviousName); err != nil {
+			return nil, err
+		}
+		var err error
+		if row.UserID, err = uuid.Parse(user); err != nil {
+			return nil, err
+		}
+		if row.RequestedByUserID, err = uuid.Parse(by); err != nil {
+			return nil, err
+		}
+		if row.RequestedAt, err = ParseRT(at); err != nil {
+			return nil, err
+		}
+		if row.ExpiresAt, err = ParseRT(exp); err != nil {
+			return nil, err
+		}
+		row.IdentityID, row.PreviousIdentityID = intp(ident), intp(prev)
+		return &row, nil
+	}, identityLinkList, sql.Named("now", RT(now)))
 }

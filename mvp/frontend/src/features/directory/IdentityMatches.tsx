@@ -2,6 +2,7 @@ import { ReactNode, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Check, GitMerge, ShieldAlert, UserCheck, UserPlus, X } from "lucide-react";
 import {
+  IdentityLinkRequest,
   IdentityMatchCandidate,
   IdentityMatchItem,
   IdentityMatchList,
@@ -13,6 +14,7 @@ import {
   decideIdentityMatch,
   fmtDate,
   putMatchingSettings,
+  putUserIdentityLink,
   rejectMergeRequest,
   relTime,
   useApi,
@@ -35,7 +37,7 @@ import { useToast } from "../../components/Toast";
  * IAL 2 or more or is an employee needs a second reviewer. Attributes are masked: the page shows
  * enough to decide (a name's first letters, an address's domain), never the full values.
  */
-type Tab = "review" | "requests" | "reverification" | "decided" | "settings";
+type Tab = "review" | "requests" | "links" | "reverification" | "decided" | "settings";
 
 export const RULE_LABEL: Record<string, string> = {
   signed_in_as_candidate: "Signed in as the person",
@@ -84,6 +86,7 @@ export function IdentityMatches() {
   const reverify = useApi<IdentityMatchList>("/identity-matches?status=reverification");
   const decided = useApi<IdentityMatchList>("/identity-matches?status=decided");
   const requests = useApi<{ items: MergeRequest[]; count: number }>(can("identities.merge") ? "/identity-merge-requests?status=pending" : null);
+  const links = useApi<{ items: IdentityLinkRequest[]; count: number }>(can("groups.admin") ? "/groups/users/identity-requests" : null);
   const canSettings = can("matching.configure");
   return (
     <Page
@@ -98,6 +101,7 @@ export function IdentityMatches() {
           tabs={[
             { id: "review", label: `To review${review.data ? ` (${review.data.count})` : ""}` },
             ...(can("identities.merge") ? [{ id: "requests" as Tab, label: `Second reviewer${requests.data ? ` (${requests.data.count})` : ""}` }] : []),
+            ...(can("groups.admin") ? [{ id: "links" as Tab, label: `Sign-in links${links.data ? ` (${links.data.count})` : ""}` }] : []),
             { id: "reverification", label: `Waiting for sign-in${reverify.data ? ` (${reverify.data.count})` : ""}` },
             { id: "decided", label: "Decided" },
             ...(canSettings ? [{ id: "settings" as Tab, label: "Settings" }] : []),
@@ -107,6 +111,7 @@ export function IdentityMatches() {
     >
       {tab === "review" && <Queue data={review} open kind="review" />}
       {tab === "requests" && <Requests data={requests} onChanged={() => { review.reload(); reverify.reload(); decided.reload(); }} />}
+      {tab === "links" && <LinkRequests data={links} />}
       {tab === "reverification" && <Queue data={reverify} kind="reverification" />}
       {tab === "decided" && <Queue data={decided} kind="decided" />}
       {tab === "settings" && canSettings && <Settings />}
@@ -357,6 +362,52 @@ function Requests({ data, onChanged }: { data: Loaded<{ items: MergeRequest[]; c
       onRefresh={data.reload}
       rowLabel={(r) => `${r.merged.name} into ${r.survivor.name}`}
       empty={<EmptyState title="Nothing waits for a second reviewer" icon={<GitMerge size={18} />}>A merge or link that needs a second reviewer appears here for someone other than the person who asked.</EmptyState>}
+    />
+  );
+}
+
+// ------------------------------------------------------------------ sign-in link changes
+
+// A change to which person a sign-in user is linked to needs two admins (#376):
+// the first admin's request waits here as "pending second admin"; making the
+// same change as a different admin applies it.
+function LinkRequests({ data }: { data: Loaded<{ items: IdentityLinkRequest[]; count: number }> }) {
+  const { can, session } = useSession();
+  const toast = useToast();
+  const me = session.user.id;
+  const what = (r: IdentityLinkRequest) =>
+    r.identity_id == null ? `Remove the link to ${r.previous_identity_name || "its person"}` : `Link to ${r.identity_name}`;
+  const cols: Column<IdentityLinkRequest>[] = [
+    { id: "user", header: "Sign-in user", sort: (r) => r.user_name, cell: (r) => <b className="small">{r.user_name}</b> },
+    { id: "what", header: "Change", cell: (r) => <span className="small">{what(r)}</span> },
+    { id: "state", header: "Status", cell: () => <Badge tone="warning">Pending second admin</Badge> },
+    { id: "by", header: "Asked by", sort: (r) => r.requested_by, cell: (r) => <span className="small">{r.requested_by}</span> },
+    { id: "at", header: "Asked", sort: (r) => r.requested_at, cell: (r) => <span className="small nowrap" title={fmtDate(r.requested_at)}>{relTime(r.requested_at)}</span> },
+    { id: "act", header: "Actions",
+      cell: (r) => {
+        const mine = r.requested_by_user_id === me;
+        return (
+          <Button size="sm" variant="primary" icon={<Check size={14} />} disabled={!can("groups.admin") || mine} title={mine ? "A different admin must approve" : undefined}
+            onClick={(e) => {
+              e.stopPropagation();
+              putUserIdentityLink(r.user_id, r.identity_id).then(() => { toast("Link change applied"); data.reload(); })
+                .catch((x) => toast(String(x.message ?? x), { kind: "error" }));
+            }}>Approve</Button>
+        );
+      } },
+  ];
+  return (
+    <DataTable
+      id="identity-link-requests"
+      rows={data.data?.items ?? null}
+      error={data.error}
+      rowKey={(r) => r.user_id}
+      columns={cols}
+      searchText={(r) => `${r.user_name} ${r.identity_name} ${r.previous_identity_name} ${r.requested_by}`}
+      searchPlaceholder="Search link changes…"
+      onRefresh={data.reload}
+      rowLabel={(r) => `${r.user_name}: ${what(r)}`}
+      empty={<EmptyState title="No sign-in link waits for a second admin" icon={<UserCheck size={18} />}>Linking, relinking or unlinking a sign-in user needs two admins. The first admin's request appears here for a different admin to approve.</EmptyState>}
     />
   );
 }
