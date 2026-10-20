@@ -419,6 +419,7 @@ func New(cfg Config) *Server {
 	s.registerOAuthRoutes()
 	s.registerAdminRoutes()
 	s.registerBreakGlassRoutes()
+	s.registerAdminClientRoutes()
 	s.registerOpsRoutes()
 	s.checkPublicRoutes()
 	return s
@@ -757,8 +758,8 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 			alt += "/"
 		}
 		// Only same-origin absolute paths that match a registered route are
-		// redirected to; "//host" (protocol-relative) targets are refused.
-		if strings.HasPrefix(alt, "/") && !strings.HasPrefix(alt, "//") {
+		// redirected to; "//host" and "/\\host" (protocol-relative) targets are refused.
+		if strings.HasPrefix(alt, "/") && !strings.HasPrefix(alt, "//") && !strings.HasPrefix(alt, `/\`) {
 			if rt2, _, allowed2 := s.find(r.Method, alt); rt2 != nil || len(allowed2) > 0 {
 				u := url.URL{Path: alt, RawQuery: r.URL.RawQuery}
 				http.Redirect(w, r, u.RequestURI(), http.StatusTemporaryRedirect) // #nosec G710 -- target is a registered same-origin route
@@ -828,9 +829,12 @@ func (s *Server) attribute(r *http.Request) {
 		audit.SetAnonymous(r.Context(), reason)
 	default:
 		markAuthenticated(r.Context())
-		sid := p.SessionID.String()
-		audit.SetPrincipal(r.Context(), audit.Principal{Tenant: p.TenantID, Actor: p.AuditActor(), SessionID: &sid,
-			Authn: p.AuditAuthn(s.clock())})
+		ap := audit.Principal{Tenant: p.TenantID, Actor: p.AuditActor(), Authn: p.AuditAuthn(s.clock())}
+		if p.SessionID != nil { // a machine client has no session
+			sid := p.SessionID.String()
+			ap.SessionID = &sid
+		}
+		audit.SetPrincipal(r.Context(), ap)
 	}
 }
 

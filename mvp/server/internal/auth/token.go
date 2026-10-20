@@ -1,7 +1,9 @@
 package auth
 
 import (
+	"errors"
 	"net/http"
+	"slices"
 
 	"github.com/google/uuid"
 
@@ -32,6 +34,13 @@ type VerifiedToken struct {
 	SessionID uuid.UUID
 	ClientID  string
 	Scopes    []string
+	// Machine is a client-credentials token (§9.5): no user and no session;
+	// ClientRowID is the api_clients row its sub names. Bound is whether it is
+	// DPoP-bound (a machine client may be configured without DPoP; a user's
+	// token is always bound).
+	Machine     bool
+	Bound       bool
+	ClientRowID uuid.UUID
 }
 
 // TokenFailure is why a token was refused: the reason for the audit event,
@@ -58,6 +67,74 @@ type Failure struct {
 	// cookie failure); Nonce goes in the DPoP-Nonce header when set.
 	Challenge string
 	Nonce     string
+}
+
+// MachineRolesDenied is why a machine client's admin role is inactive.
+const MachineRolesDenied = "machine_clients_cannot_hold_admin_roles"
+
+// MachineRoles reads a machine client's configured roles (§9.5): the known
+// roles are assigned, and only the non-admin ones are active. A client row
+// that holds an admin role (it cannot be created that way) gets nothing from
+// it, so the rule does not depend on how the row was written.
+func MachineRoles(configured []string) (assigned, active RoleSet, inactive map[Role]string) {
+	assigned, active, inactive = RoleSet{}, RoleSet{}, map[Role]string{}
+	for _, name := range configured {
+		r := Role(name)
+		if !slices.Contains(AllRoles(), r) {
+			continue
+		}
+		assigned[r] = true
+		if r.IsAdmin() {
+			inactive[r] = MachineRolesDenied
+		} else {
+			active[r] = true
+		}
+	}
+	return assigned, active, inactive
+}
+
+// authenticateMachine builds the principal of a client-credentials token
+// (§9.5, §12.3): the client must still be an active machine client, its roles
+// are read now (so removing one takes effect at once), and its scopes are the
+// token's narrowed to what the client may still be granted. effective =
+// perms(roles) ∩ perms(scopes), exactly as for a user.
+func (a *Authenticator) authenticateMachine(r *http.Request, vt *VerifiedToken) (*Principal, *Failure, error) {
+	var p *Principal
+	var reason string
+	err := a.DB.ReadTenant(r.Context(), vt.Tenant.ID, func(tx *store.TenantTx) error {
+		cl, err := tx.APIClientByClientID(vt.ClientID)
+		if err != nil {
+			return err
+		}
+		if cl.ID != vt.ClientRowID || cl.Kind != store.ClientMachine || cl.Status != store.ClientActive {
+			reason = FailClientDisabled
+			return nil
+		}
+		assigned, active, inactive := MachineRoles(cl.Roles)
+		var scopes []string
+		for _, s := range vt.Scopes {
+			if slices.Contains(cl.AllowedScopes, s) {
+				scopes = append(scopes, s)
+			}
+		}
+		via := ViaDPoP
+		if !vt.Bound {
+			via = ViaBearer
+		}
+		p = &Principal{Kind: KindAPIClient, TenantID: vt.Tenant.ID, ClientID: cl.ClientID, Display: cl.Name,
+			AssignedRoles: assigned, ActiveRoles: active, InactiveRoles: inactive, Scopes: ScopeSetOf(scopes), Via: via}
+		return nil
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, &Failure{Reason: FailClientDisabled, Challenge: `DPoP error="invalid_token"`}, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	if p == nil {
+		return nil, &Failure{Reason: reason, Challenge: `DPoP error="invalid_token"`}, nil
+	}
+	return p, nil, nil
 }
 
 // ScopeSetOf converts token scopes to a ScopeSet, dropping unknown scopes.

@@ -1304,3 +1304,24 @@ DROP POLICY IF EXISTS tenant_isolation ON connector_checkpoints;
 CREATE POLICY tenant_isolation ON connector_checkpoints
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE oauth_apps ENABLE ROW LEVEL SECURITY;
+ALTER TABLE oauth_apps FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON oauth_apps;
+CREATE POLICY tenant_isolation ON oauth_apps
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE oauth_grants ENABLE ROW LEVEL SECURITY;
+ALTER TABLE oauth_grants FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON oauth_grants;
+CREATE POLICY tenant_isolation ON oauth_grants
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));
+
+ALTER TABLE oauth_sync_state ENABLE ROW LEVEL SECURITY;
+ALTER TABLE oauth_sync_state FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON oauth_sync_state;
+CREATE POLICY tenant_isolation ON oauth_sync_state
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''))
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), ''));

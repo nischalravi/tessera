@@ -41,22 +41,31 @@ func TestAuthorizationServerMetadata(t *testing.T) {
 		"token_endpoint":                iss + "/oauth/token",
 		"device_authorization_endpoint": iss + "/oauth/device_authorization",
 		"revocation_endpoint":           iss + "/oauth/revoke",
+		"introspection_endpoint":        iss + "/oauth/introspect",
 		"jwks_uri":                      iss + "/.well-known/jwks.json",
 	} {
 		if r.str(k) != want {
 			t.Errorf("%s = %q, want %q", k, r.str(k), want)
 		}
 	}
-	if got := strs(r.Body["grant_types_supported"]); !slices.Equal(got, []string{GrantDeviceCode, GrantRefresh}) {
-		t.Errorf("grant_types_supported = %v (only the device and refresh grants exist in PR10)", got)
+	if got := strs(r.Body["grant_types_supported"]); !slices.Equal(got, []string{GrantDeviceCode, GrantRefresh, GrantClientCredentials}) {
+		t.Errorf("grant_types_supported = %v", got)
 	}
 	if got := strs(r.Body["dpop_signing_alg_values_supported"]); !slices.Equal(got, []string{"ES256", "EdDSA"}) {
 		t.Errorf("dpop_signing_alg_values_supported = %v", got)
 	}
-	if got := strs(r.Body["token_endpoint_auth_methods_supported"]); !slices.Equal(got, []string{"none"}) {
+	if got := strs(r.Body["token_endpoint_auth_methods_supported"]); !slices.Equal(got, []string{"none", "private_key_jwt"}) {
 		t.Errorf("token_endpoint_auth_methods_supported = %v", got)
 	}
-	if got := strs(r.Body["scopes_supported"]); !slices.Equal(got, Scopes) {
+	for _, k := range []string{"token_endpoint_auth_signing_alg_values_supported", "introspection_endpoint_auth_signing_alg_values_supported"} {
+		if got := strs(r.Body[k]); !slices.Equal(got, []string{"ES256", "EdDSA"}) {
+			t.Errorf("%s = %v (no HS*, RS* or none)", k, got)
+		}
+	}
+	if got := strs(r.Body["introspection_endpoint_auth_methods_supported"]); !slices.Equal(got, []string{"private_key_jwt"}) {
+		t.Errorf("introspection_endpoint_auth_methods_supported = %v", got)
+	}
+	if got := strs(r.Body["scopes_supported"]); !slices.Equal(got, MachineScopes) {
 		t.Errorf("scopes_supported = %v", got)
 	}
 	if r.Body["authorization_response_iss_parameter_supported"] != true {
@@ -64,9 +73,6 @@ func TestAuthorizationServerMetadata(t *testing.T) {
 	}
 	if _, ok := r.Body["authorization_endpoint"]; ok {
 		t.Error("there is no authorization endpoint")
-	}
-	if _, ok := r.Body["introspection_endpoint"]; ok {
-		t.Error("introspection arrives with machine clients")
 	}
 	if cc := r.Header.Get("Cache-Control"); !strings.Contains(cc, "max-age=300") || strings.Contains(cc, "no-store") {
 		t.Errorf("Cache-Control = %q", cc)

@@ -18,6 +18,7 @@ import (
 
 	"github.com/nischalravi/tessera/mvp/server/internal/audit"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
+	"github.com/nischalravi/tessera/mvp/server/internal/safehttp"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
@@ -289,7 +290,7 @@ func (s *Service) postWebhook(ctx context.Context, t tenancy.ID, slug string, c 
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.Target, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return errors.New("webhook: bad URL")
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "Tessera-Alerts/1")
@@ -297,7 +298,10 @@ func (s *Service) postWebhook(ctx context.Context, t tenancy.ID, slug string, c 
 	req.Header.Set("X-Tessera-Alert", a.ID)
 	resp, err := s.HTTP.Do(req)
 	if err != nil {
-		return fmt.Errorf("webhook: %w", err)
+		// The URL may carry the receiver's credential in its path or query, and
+		// this error becomes last_error, the test response and audit detail:
+		// it never carries more than scheme://host[:port]/… (#333).
+		return errors.New("webhook: " + safehttp.ScrubError(err, c.Target))
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))

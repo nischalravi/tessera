@@ -197,6 +197,8 @@ var tables = []string{
 	"grp_pit_privileges", "grp_pit_digests",
 	// group privileges (schema/0286_group_privs.sql)
 	"grp_privileges", "grp_priv_settings",
+	// third-party OAuth app inventory (schema/0361_oauth_apps.sql)
+	"oauth_apps", "oauth_grants", "oauth_sync_state",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was
