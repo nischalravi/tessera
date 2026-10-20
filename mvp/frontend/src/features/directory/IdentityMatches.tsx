@@ -109,7 +109,7 @@ export function IdentityMatches() {
       {tab === "requests" && <Requests data={requests} onChanged={() => { review.reload(); reverify.reload(); decided.reload(); }} />}
       {tab === "reverification" && <Queue data={reverify} kind="reverification" />}
       {tab === "decided" && <Queue data={decided} kind="decided" />}
-      {tab === "settings" && canSettings && <Settings />}
+      {tab === "settings" && canSettings && <MatchingSettingsForm />}
     </Page>
   );
 }
@@ -363,7 +363,8 @@ function Requests({ data, onChanged }: { data: Loaded<{ items: MergeRequest[]; c
 
 // ------------------------------------------------------------------ settings
 
-function Settings() {
+/** The matching settings form (also used by Admin > Identity rules). */
+export function MatchingSettingsForm() {
   const { data, reload } = useApi<MatchingSettings>("/admin/matching");
   const toast = useToast();
   const [draft, setDraft] = useState<Partial<MatchingSettings>>({});

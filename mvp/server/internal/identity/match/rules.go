@@ -64,6 +64,28 @@ const (
 	RulePhoneOnly    = "verified_phone"           // C
 )
 
+// RuleInfo describes a matching rule for the admin page (Admin > Identity rules).
+type RuleInfo struct {
+	Name        string `json:"name"`
+	Tier        Tier   `json:"tier"`
+	Description string `json:"description"`
+}
+
+// Catalog lists the matching rules the engine applies, strongest tier first. It is documentation of
+// the engine in this file, not a second rule set: a test checks it names every Rule constant.
+func Catalog() []RuleInfo {
+	return []RuleInfo{
+		{RuleSignedIn, TierA, "The claimant signed in as this person."},
+		{RuleSourceLinked, TierA, "The same source record (system and id) is already linked to the person."},
+		{RuleAuthIdent, TierA, "An authoritative identifier (such as an employee id) is shared by two sources that both assert it."},
+		{RuleFederated, TierA, "The same federated subject (issuer and subject) is already bound to the person."},
+		{RuleEmailDOBName, TierB, "The same verified email address and date of birth, and a very similar name."},
+		{RuleNameDOB, TierC, "A similar name and the same date of birth."},
+		{RuleEmailOnly, TierC, "The same verified email address."},
+		{RulePhoneOnly, TierC, "The same verified phone number."},
+	}
+}
+
 // Thresholds of §5.3. Tenants may override them in Config.
 const (
 	DefaultNameStrong   = 0.92

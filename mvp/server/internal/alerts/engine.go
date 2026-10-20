@@ -232,6 +232,22 @@ func runDetection(tx *store.TenantTx, now time.Time, r Effective) (raised, resol
 	return raised, resolved, nil
 }
 
+// RunScheduled runs one "scheduled" rule for the tenant (the daily certificate
+// expiry check, from the durable queue): it raises an alert for each finding at
+// the rule's threshold and resolves the ones whose condition cleared.
+func RunScheduled(tx *store.TenantTx, now time.Time, ruleID string) (raised, resolved int, err error) {
+	rules, err := EffectiveRules(tx)
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, r := range rules {
+		if r.ID == ruleID && r.Kind == "scheduled" {
+			return runDetection(tx, now, r)
+		}
+	}
+	return 0, 0, fmt.Errorf("alerts: no scheduled rule %q", ruleID)
+}
+
 // raise inserts a new alert, audits it and queues its deliveries.
 func raise(tx *store.TenantTx, now time.Time, a *store.Alert) error {
 	if err := tx.InsertAlert(a); err != nil {

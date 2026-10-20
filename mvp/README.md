@@ -473,6 +473,9 @@ each environment; the bundle covers connections, readiness overlays and sign-in 
 `GET|POST /api/siem/sinks` · `PUT /api/siem/sinks/{id}` · `POST /api/siem/sinks/{id}/rewind {seq}` ·
 `GET|POST /api/siem/sinks` · `PUT /api/siem/sinks/{id}` (moving the target to another origin, or syslog host:port, while a token is stored needs a new `token`, else 422 `credential_required`; a path-only change keeps it) · `POST /api/siem/sinks/{id}/rewind {seq}` ·
 `POST /api/siem/sinks/{id}/test` · `GET /api/siem/sinks/{id}/dead-letters` ·
+`GET|POST /api/admin/certificates` · `POST /api/admin/certificates/generate {connection_id}` · `POST /api/admin/certificates/{id}/promote|retire` ·
+`GET|PUT /api/admin/branding` · `GET /api/auth/branding?tenant=` · `GET /api/auth/branding/logo?tenant=` (the last two are public, see "Certificates, branding and identity rules") ·
+`GET /api/admin/identity-rules` ·
 `GET /api/alerts[?status=open|acknowledged|resolved|live&severity=&rule=]` · `GET /api/alerts/summary` · `GET /api/alerts/{id}` ·
 `POST /api/alerts/{id}/acknowledge|resolve|assign` · `GET /api/alerts/rules` · `PUT /api/alerts/rules/{rule_id}` ·
 `GET|POST /api/alerts/channels` · `PUT /api/alerts/channels/{id}` (a webhook moved to another origin needs `rotate_secret: true`, else 422 `credential_required`) · `POST /api/alerts/channels/{id}/test` ·
@@ -698,6 +701,61 @@ The pull export (`/api/audit/export`) stays available.
   - `siem.configure`: tenant_admin, plus the `tessera:admin` scope.
 - **UI:** **Admin > Log streaming (SIEM)** lists each sink with its health, delivered count, dead letters, and Test, Replay and Edit actions.
 - **Not yet:** S3-compatible bucket sinks.
+### Certificates, branding and identity rules
+
+Three Admin settings pages that were Previews are live (`/admin/certificates`, `/admin/branding`, `/admin/identity-rules`).
+
+**Certificates** (`internal/certs`, schema `0410_certificates.sql`). `GET /api/admin/certificates` lists everything Tessera
+holds, with subject, issuer, SANs, validity, SHA-256 fingerprint, key algorithm and where it is used: the SP key of each SAML
+connection (`idp_connections`), uploaded and rotating certificates (`tenant_certificates`), the tenant's signing keys
+(`internal/keys`, public key only) and the pinned mTLS key of each active directory agent. No call returns a private key.
+
+* **Upload.** `POST /api/admin/certificates {purpose, label, certificate_pem, private_key_pem, connection_id?}` with purpose
+  `saml_sp | mtls_client | signing | encryption`. The upload must be PEM (one certificate, an unencrypted key), the key must match the
+  certificate, the certificate must not be expired, RSA keys must be at least 2048 bits (EC: P-256 or stronger), no SHA-1 or MD5
+  signature, and each field is at most 16 KiB. A SAML key must be RSA. The key is re-encoded as PKCS#8 and sealed with
+  `internal/seal` (AAD binds tenant, table, column and row id). Refusals are 422 with a code (`cert_expired`, `weak_key`,
+  `weak_signature`, `key_mismatch`, `bad_pem`, `bad_key`, `key_not_rsa`), 413 `cert_too_large`, 409 `duplicate_certificate`.
+* **SAML SP rotation.** `POST /api/admin/certificates/generate {connection_id}` (or an upload with purpose `saml_sp`) adds a
+  `next` key. While it waits, `GET /api/auth/saml/{id}/metadata` lists both certificates (the overlap window), so the identity
+  provider can trust the new one before it is used; sign-in keeps signing with the active key. `POST .../{id}/promote` copies the
+  sealed key onto the connection, makes the new certificate active and retires the old one (its key is destroyed). One waiting
+  key per connection (409 `rotation_in_progress`); the active key cannot be retired (409 `in_use`). `POST .../{id}/retire`
+  discards a waiting key or retires an uploaded certificate.
+* **Access.** Listing needs `connections.read`; every change needs `connections.manage` and a fresh strong sign-in (step-up), and
+  writes `certificate.uploaded|generated|promoted|retired` in the same transaction (no key material in the event).
+* **Expiry alerts.** The durable queue kind `certificate_expiry` runs daily (`17 6 * * *` UTC) and calls
+  `alerts.RunScheduled`, which runs the alert rule `certificate_expiry` (kind `scheduled`: the alerts engine's own 15-minute
+  detections skip it). A certificate in use (active or waiting) with 30 days or fewer left gets one alert; inside 7 days (or once
+  expired) the alert becomes the 7-day one and the 30-day one resolves. Retiring or rotating a certificate resolves its alert.
+  The rule's severity can be changed, or the rule switched off, under Alerts > Rules like any other.
+* **Limits.** An uploaded `mtls_client` certificate is stored sealed, can name a connector and is monitored for expiry, but no
+  connector reads it yet (connectors do not use client certificates today). The directory agent's key is shown by its pin only,
+  because Tessera does not hold the agent's certificate.
+
+**Branding** (`internal/branding`, schema `0411_branding.sql`). `GET|PUT /api/admin/branding` saves the product name, a button
+colour and its text colour, and a logo. Reading needs `admin.read`; saving needs `email.manage` (tenant admin) and a step-up,
+and is audited as `branding.updated`.
+
+* The colour pair must reach WCAG AA (4.5:1): a pair below it is refused with 422 `low_contrast` and the ratio. An empty text
+  colour is chosen automatically (white or black). Pages only override the button colours (`--accent`, `--accent-hover`,
+  `--on-accent`); text and link colours stay the theme's.
+* The logo is `{content_type, data_base64}`: PNG or JPEG only (SVG is refused with `svg_not_allowed`), at most 256 KiB, 32 to
+  1024 pixels each way, checked by decoding it, and the declared type must match the bytes. It is stored in the table.
+* Public, unauthenticated, rate limited: `GET /api/auth/branding?tenant=<slug>` (name, colours, logo URL; a tenant that does not
+  exist or has no branding gets the same default answer) and `GET /api/auth/branding/logo?tenant=<slug>`, served with
+  `Content-Type: image/png|jpeg`, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`, an
+  ETag and `Cache-Control: public, max-age=300`.
+* Used by the sign-in page, the guest claim, register and renew pages (name, logo, button colours) and by email (subject
+  prefix, link line and footer say the product name; emails are plain text, so no logo). Without branding everything says Tessera.
+
+**Identity rules** (`GET /api/admin/identity-rules`, `graph.read`). One read of what the identity engines apply: the matching
+rules with their tier (`internal/identity/match.Catalog`, kept in step by a test), the thresholds, the tenant's matching settings
+(changed with the existing `PUT /api/admin/matching`, `identity.matching.configure`, also editable on the page), the correlation
+proposals of `internal/correlation`, the group naming rules of `internal/groups/naming` and the machine-identity dormancy
+threshold of `internal/nhi`. It lists what is not configurable yet: the authoritative source per attribute, the order of the
+correlation rules and per-type dormancy thresholds have no engine behind them.
+
 ### Alerts
 
 The alert engine (`internal/alerts`, issue #168) runs every minute in `tessera serve`. It reads new audit
@@ -3434,7 +3492,7 @@ back a step and `Esc` to close. `/` focuses the top-bar search.
 
 **Preview features.** Some screens have no backend endpoint yet: workflows, reset password, generic
 object create / edit / import (accounts, machine identities, rotate secret) and most admin settings
-(Identity rules, Branding & labels, Certificates, Export / import configuration). They run on typed mock data in `src/mocks/`, keep their state in the
+(Export / import configuration; Identity rules, Branding & labels and Certificates are live, see "Certificates, branding and identity rules"). They run on typed mock data in `src/mocks/`, keep their state in the
 browser's localStorage, and carry a **Preview** badge. To wire one up, add a function to
 `src/api.ts` that returns the same type and remove the badge.
 

@@ -68,6 +68,14 @@ POST   /api/siem/sinks                               siem.configure  STEP_UP_POL
 PUT    /api/siem/sinks/{sink_id}                     siem.configure  STEP_UP_POLICY  # issue #169
 POST   /api/siem/sinks/{sink_id}/rewind              siem.configure  -  # issue #169
 POST   /api/siem/sinks/{sink_id}/test                siem.configure  -  # issue #169
+GET    /api/admin/certificates                       connections.read    -
+POST   /api/admin/certificates                       connections.manage  STEP_UP_POLICY  # Admin > Certificates
+POST   /api/admin/certificates/generate              connections.manage  STEP_UP_POLICY
+POST   /api/admin/certificates/{certificate_id}/promote connections.manage  STEP_UP_POLICY
+POST   /api/admin/certificates/{certificate_id}/retire  connections.manage  STEP_UP_POLICY
+GET    /api/admin/branding                           admin.read      -  # Admin > Branding
+PUT    /api/admin/branding                           email.manage    STEP_UP_POLICY
+GET    /api/admin/identity-rules                     graph.read      -  # Admin > Identity rules
 GET    /api/siem/sinks/{sink_id}/dead-letters        siem.read       -  # issue #169
 GET    /api/alerts                                   alerts.read     -  # issue #168
 GET    /api/alerts/summary                           alerts.read     -  # issue #168
@@ -586,6 +594,8 @@ GET    /api/auth/sessions                            auth.self       -
 GET    /api/auth/step-up                             auth.self       -
 DELETE /api/auth/sessions/{session_id}               auth.self       -  (another user's: admin.sessions.revoke + STEP_UP_ADMIN in the handler)
 GET    /api/auth/discover                            public
+GET    /api/auth/branding                            public
+GET    /api/auth/branding/logo                       public
 GET    /api/auth/login                               public
 GET    /api/auth/oidc/{connection_id}/callback       public
 GET    /api/auth/saml/{connection_id}/metadata       public
