@@ -123,6 +123,10 @@ var tables = []string{
 	"business_role_requests",
 	// attribute conditions (schema/0221_abac.sql)
 	"abac_policies", "abac_policy_versions", "abac_bindings",
+	// separation of duties: functions, risks, rulesets (schema/0300_sod.sql)
+	"sod_functions", "sod_rulesets", "sod_risks", "sod_risk_functions", "sod_versions",
+	// SoD mitigating controls (schema/0301_sod_controls.sql)
+	"sod_controls", "sod_mitigations", "sod_risk_options", "sod_escalations",
 	// identity lifecycle (schema/0220_lifecycle.sql)
 	"identity_lifecycle", "identity_lifecycle_events",
 	// approval routing (schema/0206_approvals.sql)
@@ -135,6 +139,8 @@ var tables = []string{
 	"intake_records", "sponsorships", "sponsorship_events",
 	// identity containment (schema/0205_containment.sql)
 	"containment_credentials", "containment_retries",
+	// point-in-time access and evidence packs (schema/0260-0261)
+	"edge_history", "evidence_packs",
 	// SIEM sinks (schema/0210_siem.sql)
 	"siem_sinks", "siem_dead_letters",
 	// alerting (schema/0209_alerts.sql)
@@ -145,6 +151,8 @@ var tables = []string{
 	"removal_requests",
 	// request access drafts (schema/0312_request_drafts.sql)
 	"request_drafts",
+	// durable job queue (schema/0320_queue.sql)
+	"queue_jobs", "queue_schedules",
 	// configuration transport (schema/0211_config_transport.sql)
 	"config_signing_keys", "config_trusted_signers", "config_imports",
 	// native groups (schema/0280_groups.sql); the engine tables stay empty until GR-2

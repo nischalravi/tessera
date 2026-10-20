@@ -27,7 +27,10 @@ const (
 	FailExpired        = "session_expired"
 	FailRevoked        = "session_revoked"
 	FailUserDisabled   = "user_disabled"
-	FailTenantInactive = "tenant_inactive"
+	// FailIdentityDisabled: the user's linked governed identity is not active
+	// (disabled, terminated or merged; #316, #331).
+	FailIdentityDisabled = "identity_disabled"
+	FailTenantInactive   = "tenant_inactive"
 )
 
 // Authenticator resolves the session cookie of a request to a Principal
@@ -133,6 +136,12 @@ func (a *Authenticator) Authenticate(r *http.Request) (*Principal, string, error
 		}
 		if u.Status != "active" {
 			reason = FailUserDisabled
+			return nil
+		}
+		if off, err := IdentityInactive(tx, u); err != nil {
+			return err
+		} else if off {
+			reason = FailIdentityDisabled
 			return nil
 		}
 		rec, err := tx.AuthnContext(s.CurrentAuthnContextID)

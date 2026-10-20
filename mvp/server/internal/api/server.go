@@ -31,18 +31,18 @@ import (
 	"github.com/nischalravi/tessera/mvp/server/internal/health"
 	"github.com/nischalravi/tessera/mvp/server/internal/identity/identifiers"
 	"github.com/nischalravi/tessera/mvp/server/internal/jit"
-	"github.com/nischalravi/tessera/mvp/server/internal/jobs"
-	"github.com/nischalravi/tessera/mvp/server/internal/lifecycle"
 	"github.com/nischalravi/tessera/mvp/server/internal/obs"
 	"github.com/nischalravi/tessera/mvp/server/internal/ojson"
 	"github.com/nischalravi/tessera/mvp/server/internal/policy"
 	"github.com/nischalravi/tessera/mvp/server/internal/provision"
+	"github.com/nischalravi/tessera/mvp/server/internal/queue"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness"
 	"github.com/nischalravi/tessera/mvp/server/internal/readiness/template"
 	"github.com/nischalravi/tessera/mvp/server/internal/requests"
 	"github.com/nischalravi/tessera/mvp/server/internal/reviews"
 	"github.com/nischalravi/tessera/mvp/server/internal/seal"
 	"github.com/nischalravi/tessera/mvp/server/internal/siem"
+	"github.com/nischalravi/tessera/mvp/server/internal/sod"
 	"github.com/nischalravi/tessera/mvp/server/internal/store"
 	"github.com/nischalravi/tessera/mvp/server/internal/tenancy"
 	"github.com/nischalravi/tessera/mvp/server/internal/timeutil"
@@ -95,6 +95,8 @@ type Config struct {
 	// ReadinessScenario selects the simulated validation scenario
 	// (TESSERA_READINESS_SCENARIO; default "gaps").
 	ReadinessScenario string
+	// SoD are the mitigation limits (TESSERA_SOD_MAX_MITIGATION_DAYS, TESSERA_SOD_WARN_DAYS); zero values default.
+	SoD sod.Settings
 	// AuditAnchor is TESSERA_AUDIT_ANCHOR: POST /api/audit/verify checks
 	// checkpoints against it when it is a file:// URL.
 	AuditAnchor string
@@ -170,6 +172,8 @@ type Server struct {
 	containment *containment.Service
 	// admin is the admin-change workflow (design §15); never nil.
 	admin *admin.Service
+	// queue is the durable job queue (issue #300); never nil.
+	queue *queue.Queue
 }
 
 // New builds a server.
@@ -199,6 +203,7 @@ func New(cfg Config) *Server {
 		}
 		cfg.Readiness = readiness.NewService(reg, cfg.Env)
 		cfg.Readiness.Runner.Scenario = cfg.ReadinessScenario
+		cfg.Readiness.Runner.SCIM.Client = cfg.OutboundHTTP
 	}
 	if cfg.Containment == nil {
 		cfg.Containment = &containment.Service{}
@@ -239,6 +244,7 @@ func New(cfg Config) *Server {
 	}
 	s.authn = &auth.Authenticator{DB: cfg.Store, Clock: func() time.Time { return s.clock() },
 		Cookies: auth.Cookies{Insecure: cfg.InsecureCookie}}
+	s.queue = s.newQueue()
 	s.registerRoutes()
 	s.registerAuditRoutes()
 	s.registerSiemRoutes()
@@ -254,14 +260,18 @@ func New(cfg Config) *Server {
 	s.registerActivityRoutes()
 	s.registerRoleRoutes()
 	s.registerAbacRoutes()
+	s.registerSodRoutes()
+	s.registerSodControlRoutes()
 	s.registerLifecycleRoutes()
 	s.registerGuestRoutes()
 	s.registerNotificationRoutes()
 	s.registerEmailRoutes()
 	s.registerContainmentRoutes()
+	s.registerEvidenceRoutes()
 	s.registerGroupsFolderRoutes()
 	s.registerReadinessRoutes()
 	s.registerJobRoutes()
+	s.registerQueueRoutes()
 	s.registerProvisioningRoutes()
 	s.registerTransportRoutes()
 	s.registerAuthRoutes()
@@ -353,66 +363,6 @@ func (s *Server) RunReviewScheduler(ctx context.Context, interval time.Duration)
 	}
 }
 
-// SweeperLoops are the loop names RunSweeper reports to obs.DefaultLoops.
-var SweeperLoops = []string{"jit_sweep", "request_sweep", "sponsorship_sweep", "lifecycle_sweep", "containment_retries",
-	"admin_change_sweep"}
-
-// RunSweeper expires JIT grants, closes due request lines and ends due
-// lifecycle terms (warnings first) of every active tenant, each in its own
-// tenant transaction, every interval until ctx is done. A failure in one
-// tenant is logged and does not stop the others.
-func (s *Server) RunSweeper(ctx context.Context, interval time.Duration) {
-	t := time.NewTicker(interval)
-	defer t.Stop()
-	ctx = audit.WithSystemActor(ctx, "jit.sweeper") // jit.expire events name the job
-	// Each step is its own tracked loop (obs.DefaultLoops): a step that stalls or
-	// keeps failing shows as lag in /metrics, /readyz and Admin -> Platform health.
-	loops := obs.DefaultLoops
-	for _, name := range SweeperLoops {
-		loops.Register(name, interval, true)
-	}
-	step := func(name, what string, fn func() error) {
-		if err := loops.Run(name, fn); err != nil && ctx.Err() == nil {
-			s.log.Error(what+" failed", "err", err)
-		}
-	}
-	var maintained time.Time
-	for {
-		// sweepAndRecord logs its own failures and records the job runs
-		step("jit_sweep", "jit sweep", func() error { s.sweepAndRecord(ctx); return nil })
-		if now := s.clock(); now.Sub(maintained) >= jobMaintainGap {
-			if err := jobs.Maintain(ctx, s.store, now, jobStaleAfter, jobRetention); err != nil && ctx.Err() == nil {
-				s.log.Error("job history upkeep failed", "err", err)
-			}
-			maintained = now
-		}
-		step("request_sweep", "request sweep", func() error {
-			return requests.SweepAll(audit.WithSystemActor(ctx, requests.Sweeper), s.store, s.clock())
-		})
-		// sponsorships first: the last one to end ends the person, the lifecycle sweep then has nothing left
-		step("sponsorship_sweep", "sponsorship sweep", func() error {
-			return s.guests.SweepAll(audit.WithSystemActor(ctx, sponsorship.Sweeper), s.store, s.clock())
-		})
-		step("lifecycle_sweep", "lifecycle sweep", func() error {
-			return lifecycle.SweepAll(audit.WithSystemActor(ctx, lifecycle.Sweeper), s.store, s.containment, s.clock())
-		})
-		step("containment_retries", "containment retry sweep", func() error {
-			return s.containment.SweepRetries(audit.WithSystemActor(ctx, "containment.sweeper"), s.store, "containment.sweeper")
-		})
-		// apply the admin changes whose cooling-off ended and expire the ones
-		// nobody approved in 72 hours (design §15.2)
-		step("admin_change_sweep", "admin change sweep", func() error {
-			_, err := s.admin.Sweep(audit.WithSystemActor(ctx, "admin.sweeper"))
-			return err
-		})
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-		}
-	}
-}
-
 // sweepTenant expires one tenant's JIT grants and closes its due request
 // lines (requests.Sweep), taking the write lock only when there is work. The
 // events name the sweepers, not the principal whose read happened to trigger
@@ -447,7 +397,27 @@ func (s *Server) sweepTenant(ctx context.Context, t tenancy.ID) error {
 	return nil
 }
 
+// policies are the policy files; see effectivePolicies for what is evaluated.
 func (s *Server) policies() ([]*policy.Policy, error) { return s.cfg.Policies.Load() }
+
+// effectivePolicies is what the tenant's analysis evaluates: the policy files
+// other than separation of duties, plus one policy per SoD risk of its enabled
+// rulesets (or of its legacy YAML SoD policies while it has no rulesets).
+func (s *Server) effectivePolicies(tx *store.TenantTx) ([]*policy.Policy, error) {
+	files, err := s.policies()
+	if err != nil {
+		return nil, err
+	}
+	legacy, err := policy.LegacyBundle(files, false)
+	if err != nil {
+		return nil, err
+	}
+	risks, err := sod.Load(tx, legacy)
+	if err != nil {
+		return nil, err
+	}
+	return policy.Effective(files, risks), nil
+}
 
 // ---------------------------------------------------------------- routing
 
@@ -679,6 +649,10 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 	}
 	if sb, ok := out.(statusBody); ok {
 		writeJSON(w, sb.status, sb.body)
+		return
+	}
+	if fb, ok := out.(fileBody); ok {
+		writeFile(w, fb)
 		return
 	}
 	writeJSON(w, http.StatusOK, out)

@@ -33,13 +33,16 @@ type User struct {
 }
 
 // Bootstrap users of the demo tenants (design §18.5): Alice and Ivan are
-// tenant admins, Pat a policy admin, Olu an operator, Vic a viewer; Gina is
+// tenant admins, Pat and Ivan policy admins, Olu an operator, Vic a viewer; Gina is
 // Globex's admin. Admin roles are granted with source "bootstrap", the only
 // way an admin role exists without a two-person change request.
 var (
 	LarkspurUsers = []User{
 		{"00u-alice-admin", "alice.admin@larkspur.example", "Alice (tenant admin)", []string{store.RoleTenantAdmin}, ""},
-		{"00u-ivan-admin2", "ivan.admin@larkspur.example", "Ivan (2nd admin)", []string{store.RoleTenantAdmin}, ""},
+		// Ivan is also a policy admin, so the demo has a second holder of
+		// identities.contain and a disable by Pat can be enabled under four
+		// eyes (#335).
+		{"00u-ivan-admin2", "ivan.admin@larkspur.example", "Ivan (2nd admin)", []string{store.RoleTenantAdmin, store.RolePolicyAdmin}, ""},
 		// Pat signs in as Anders Zeller, Hana's (Vic's) manager, so Vic's requests reach Pat first (#165)
 		{"00u-pat-policy", "pat.policy@larkspur.example", "Pat (policy admin)", []string{store.RolePolicyAdmin}, "emp-1011"},
 		// Olu and Vic sign in as two of the demo employees (issue #164)
