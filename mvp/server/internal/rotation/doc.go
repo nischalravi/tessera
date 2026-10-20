@@ -227,7 +227,11 @@ func handOverToDestination(ctx context.Context, t Target, m *Minted, dest Destin
 	if err := dest.ValidatePath(path); err != nil {
 		return err
 	}
-	data := make(map[string]string, len(m.Material)+4)
+	const maxMaterialFields = 64 // a credential has a handful of fields; refuse anything absurd before allocating
+	if len(m.Material) > maxMaterialFields {
+		return fail("hand over", "bad_material", "the new credential has too many fields", false)
+	}
+	data := make(map[string]string, maxMaterialFields)
 	for k, v := range m.Material {
 		data[k] = v
 	}

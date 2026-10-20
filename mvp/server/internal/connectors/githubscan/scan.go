@@ -16,6 +16,7 @@ package githubscan
 
 import (
 	"bytes"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -150,9 +151,14 @@ var (
 	placeholder  = regexp.MustCompile(`(?i)^(\$\{?[A-Za-z_]|\{\{|<.*>$|%[A-Za-z_].*%$|\$\{input:|\$\{env:)|your[_-]|example|placeholder|changeme|xxxx|\*\*\*|^(true|false|null|none)$`)
 )
 
-// fingerprint is the first 16 hex digits of SHA-256(type NUL value).
+// fingerprintKey is a fixed, public context string for the finding fingerprint. The fingerprint
+// is an HMAC, not a password hash: it only lets a finding be recognised again across scans, and
+// it is truncated so that it cannot be used to recover the value.
+var fingerprintKey = []byte("tessera/mcp-finding-fingerprint/v1")
+
+// fingerprint is the first 16 hex digits of HMAC-SHA-256(type NUL value).
 func fingerprint(typ, value string) string {
-	h := sha256.New()
+	h := hmac.New(sha256.New, fingerprintKey)
 	h.Write([]byte(typ))
 	h.Write([]byte{0})
 	h.Write([]byte(value))
