@@ -456,8 +456,8 @@ func TestRuntimeFromConfig(t *testing.T) {
 	if r := connsync.RuntimeFromConfig(load(map[string]string{"TESSERA_ENV": "dev", "TESSERA_OUTBOUND_ALLOW_LOOPBACK": "1"})); r.Env != "dev" || !r.AllowLoopback {
 		t.Errorf("dev runtime = %+v", r)
 	}
-	if r := connsync.RuntimeFromConfig(load(map[string]string{"TESSERA_ENV": "dev"})); r.Env != "dev" || r.AllowLoopback {
-		t.Errorf("default dev runtime = %+v", r)
+	if r := connsync.RuntimeFromConfig(load(map[string]string{"TESSERA_ENV": "dev", "TESSERA_OUTBOUND_ALLOW_LOOPBACK": "0"})); r.Env != "dev" || r.AllowLoopback {
+		t.Errorf("dev runtime without the exception = %+v", r)
 	}
 	// A Config that config.Load did not return gets the production rules.
 	if r := connsync.RuntimeFromConfig(&config.Config{Env: "dev"}); r.Env != "prod" || r.AllowLoopback {
