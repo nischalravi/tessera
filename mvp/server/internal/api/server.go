@@ -177,7 +177,9 @@ type Server struct {
 	limits *limiters
 	guests *sponsorship.Service
 	rp     *oidcrp.RP
-	oauth2 *oauth2rp.RP
+	// signals supplies device-compliance signals to conditional access.
+	signals condaccess.SignalSource
+	oauth2  *oauth2rp.RP
 	// oauth is the authorization server of the CLI (internal/oauth); it also
 	// verifies the DPoP access tokens of API requests (authn.Tokens).
 	oauth *oauth.Service
@@ -310,6 +312,7 @@ func New(cfg Config) *Server {
 	s.registerSAMLRoutes()
 	s.registerOAuth2Routes()
 	s.registerStepUpRoutes()
+	s.registerAccessRoutes()
 	s.registerOAuthRoutes()
 	s.registerAdminRoutes()
 	s.registerOpsRoutes()
@@ -680,6 +683,10 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 	}
 	if sb, ok := out.(statusBody); ok {
 		writeJSON(w, sb.status, sb.body)
+		return
+	}
+	if db, ok := out.(deniedBody); ok {
+		auth.WriteDenial(w, db.d)
 		return
 	}
 	if fb, ok := out.(fileBody); ok {

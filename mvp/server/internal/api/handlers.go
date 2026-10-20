@@ -1027,7 +1027,7 @@ func (s *Server) revoke(w http.ResponseWriter, r *http.Request, p *params) (any,
 // revokeEdge dry-runs or applies the revoke of one grant: applying needs
 // grants.revoke and a fresh phishing-resistant sign-in (checked here because
 // the requirement depends on the body, §16.2), a dry run only graph.read.
-func (s *Server) revokeEdge(r *http.Request, edgeID int64, dryRun bool) (*revokeResult, error) {
+func (s *Server) revokeEdge(r *http.Request, edgeID int64, dryRun bool) (any, error) {
 	pr := principal(r)
 	if !dryRun {
 		// Applying a revoke needs grants.revoke and a fresh phishing-resistant
@@ -1041,8 +1041,7 @@ func (s *Server) revokeEdge(r *http.Request, edgeID int64, dryRun bool) (*revoke
 		if d != nil {
 			// answered here, not as an error: the transaction commits, so the
 			// access.decision event of a conditional access refusal is kept
-			auth.WriteDenial(w, d)
-			return nil, nil
+			return deniedBody{d}, nil
 		}
 	}
 	c := store.TxFrom(r.Context())

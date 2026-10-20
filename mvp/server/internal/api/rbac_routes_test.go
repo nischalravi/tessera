@@ -210,6 +210,19 @@ POST   /api/connections/{id}/findings/{fid}/accept   connections.manage -
 GET    /api/connections/{id}/health                  connections.read   -
 GET    /api/insights/deployment-health               connections.read   -
 POST   /api/insights/deployment-health/rerun         connections.manage -
+GET    /api/access/policies                          conditional_access.read   -
+POST   /api/access/policies                          conditional_access.manage STEP_UP_POLICY
+PUT    /api/access/policies/{id}                     conditional_access.manage STEP_UP_POLICY
+DELETE /api/access/policies/{id}                     conditional_access.manage STEP_UP_POLICY
+GET    /api/access/networks                          conditional_access.read   -
+POST   /api/access/networks                          conditional_access.manage STEP_UP_POLICY
+PUT    /api/access/networks/{id}                     conditional_access.manage STEP_UP_POLICY
+DELETE /api/access/networks/{id}                     conditional_access.manage STEP_UP_POLICY
+GET    /api/access/users                             conditional_access.read   -
+GET    /api/access/device-signals                    conditional_access.read   -
+PUT    /api/access/device-signals/{user_id}          conditional_access.manage STEP_UP_POLICY
+DELETE /api/access/device-signals/{user_id}          conditional_access.manage STEP_UP_POLICY
+POST   /api/access/evaluate                          conditional_access.read   -
 GET    /api/sod/functions                            graph.read      -  # issue #298
 POST   /api/sod/functions                            sod.manage      STEP_UP_POLICY  # issue #298
 GET    /api/sod/functions/{function_id}              graph.read      -  # issue #298
