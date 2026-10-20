@@ -1,0 +1,11 @@
+{
+  "Name" : "sqs",
+  "Actions" : [
+    {"Name": "SendMessage", "ActionConditionKeys": [], "Annotations": {"Properties": {"IsList": false, "IsPermissionManagement": false, "IsTaggingOnly": false, "IsWrite": true}}, "Resources": [{"Name": "queue"}]}
+  ],
+  "ConditionKeys" : [],
+  "Resources" : [
+    {"Name": "queue", "ARNFormats": ["arn:${Partition}:sqs:${Region}:${Account}:${QueueName}"]}
+  ],
+  "Version" : "v1.0"
+}

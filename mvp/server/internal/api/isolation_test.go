@@ -120,6 +120,12 @@ var crossTenantCases = map[string]crossTenantCase{
 	"GET graph by resource": {method: "GET", path: pathf("/api/graph?resource_id=%d"), key: "resource:aws:prod"},
 	"POST simulate disable account": {method: "POST", path: fixed("/api/simulate"), key: "acct:aws:svc-etl",
 		body: func(id int64) string { return fmt.Sprintf(`{"disable_account_ids":[%d]}`, id) }},
+	"PUT group ownership": {method: "PUT", path: pathf("/api/ownership/group/%d"), key: "group:okta:payments-approvers",
+		body: func(int64) string { return `{}` }},
+	"PUT identity ownership": {method: "PUT", path: pathf("/api/ownership/identity/%d"), key: "svc-etl",
+		body: func(int64) string { return `{}` }},
+	"POST bulk ownership": {method: "POST", path: fixed("/api/ownership/bulk"), key: "svc-etl",
+		body: func(id int64) string { return fmt.Sprintf(`{"objects":[{"kind":"identity","key":"%d"}]}`, id) }},
 	"PUT catalog item": {method: "PUT", path: pathf("/api/catalog/items/%d"), key: "group:okta:platform",
 		body: func(int64) string { return `{"requestable":true,"risk":"low"}` }},
 	"GET lifecycle": {method: "GET", path: pathf("/api/identities/%d/lifecycle"), key: "alice"},
@@ -175,6 +181,7 @@ var routeParamCases = map[string][]string{
 	"GET /api/identities/{identity_id}/affiliations":      {"GET identity affiliations"},
 	"GET /api/identities/{identity_id}/identifiers":       {"GET identity identifiers"},
 	"POST /api/identities/{identity_id}/affiliations":     {"POST add affiliation"},
+	"PUT /api/ownership/{kind}/{object_key}":              {"PUT group ownership", "PUT identity ownership"},
 	"POST /api/identities/{identity_id}/contain":          {"POST contain identity"},
 	"GET /api/identities/{identity_id}/containment":       {"GET identity containment"},
 	"GET /api/identities/{identity_id}/disables":          {"GET identity disables"},
@@ -213,6 +220,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if strings.HasPrefix(rt.Pattern, "/api/jobs/{job_id}") {
 			continue // TestIsolation_JobRoutes (a UUID, not a fixture id)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/queue/jobs/{job_id}") {
+			continue // TestQueueAPI (a UUID, not a fixture id)
+		}
 		if strings.HasPrefix(rt.Pattern, "/api/provisioning/") {
 			continue // TestIsolation_ProvisioningRoutes (UUIDs, not fixture ids)
 		}
@@ -237,6 +247,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if strings.HasPrefix(rt.Pattern, "/api/roles/{role_id}") || strings.HasPrefix(rt.Pattern, "/api/role-requests/{request_id}") {
 			continue // TestRolesAPI_CrossTenant (UUIDs, not fixture ids)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/sod/") {
+			continue // TestSodAPI_CrossTenant (UUIDs, not fixture ids)
+		}
 		if strings.HasPrefix(rt.Pattern, "/api/abac/policies/{policy_id}") || rt.Pattern == "/api/catalog/items/{group_id}/policy" {
 			continue // TestAbacAPI_CrossTenant (UUIDs, not fixture ids)
 		}
@@ -246,6 +259,9 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		}
 		if strings.HasPrefix(rt.Pattern, "/api/auth/saml/{connection_id}/") {
 			continue // TestIsolation_SAMLCrossTenant (public; the tenant comes from the cookie or the connection)
+		}
+		if strings.HasPrefix(rt.Pattern, "/t/{slug}/.well-known/") || strings.HasPrefix(rt.Pattern, "/t/{slug}/oauth/") {
+			continue // TestOAuth_CrossTenant (public; the tenant is the slug, and its codes and tokens are its own)
 		}
 		if rt.Pattern == "/api/identity-merges/{merge_id}/unmerge" {
 			continue // TestCorrelationAPI_CrossTenant (a UUID, not a fixture id)
@@ -262,11 +278,20 @@ func TestIsolation_RouteCrossTenant(t *testing.T) {
 		if rt.Pattern == "/api/containment-retries/{retry_id}/retry-now" {
 			continue // TestContainmentRetriesAPI (a UUID, not a fixture id)
 		}
+		if strings.HasPrefix(rt.Pattern, "/api/evidence/packs/{pack_id}") {
+			continue // TestEvidenceAPI_CrossTenant (a UUID, not a fixture id)
+		}
 		if strings.HasPrefix(rt.Pattern, "/api/groups/") {
 			continue // TestGroupsTenantIsolation (UUIDs, not fixture ids)
 		}
 		if rt.Pattern == "/api/auth/sessions/{session_id}" {
 			continue // TestIsolation_SessionCookieScoped (a UUID, not a fixture id)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/siem/sinks/") {
+			continue // TestSiemAPI_CrossTenant (UUIDs, not fixture ids)
+		}
+		if strings.HasPrefix(rt.Pattern, "/api/alerts/") {
+			continue // TestAlertsAPI_CrossTenant (UUIDs and rule names, not fixture ids)
 		}
 		if strings.HasPrefix(rt.Pattern, "/api/admin/") {
 			continue // TestAdminAPI_CrossTenant (UUIDs, not fixture ids)
@@ -351,7 +376,11 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		"/api/audit/events/{event_id}/proof":         latestEventID(t, f.DB, f.B.ID),
 		"/api/email/messages/{message_id}":           seedEmailMessage(t, f, f.B, store.EmailDeferred),
 		"/api/identities/{identity_id}/containment":  fmt.Sprint(b["alice"]),
+		"/api/siem/sinks/{sink_id}/dead-letters":     seedSiemSink(t, f.DB, f.B.ID, "b"),
+		"/api/alerts/{alert_id}":                     seedAlert(t, f.DB, f.B.ID, "b"),
 		"/api/identities/{identity_id}/disables":     fmt.Sprint(b["alice"]),
+		"/api/evidence/packs/{pack_id}":              seedEvidencePack(t, f, f.B.ID),
+		"/api/evidence/packs/{pack_id}/download":     seedEvidencePack(t, f, f.B.ID),
 		"/api/orgs/{org_id}":                         orgs.RootID,
 	}
 	checked := 0
@@ -369,6 +398,9 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		if strings.HasPrefix(path, "/api/groups/") && strings.Contains(path, "{") {
 			continue // TestGroupsTenantIsolation (UUIDs, not fixture ids)
 		}
+		if strings.HasPrefix(path, "/api/sod/") && strings.Contains(path, "{") {
+			continue // TestSodAPI_CrossTenant (UUIDs, not fixture ids)
+		}
 		if path == "/api/request-drafts/{draft_id}" {
 			continue // TestRequestDraftsAPI (a UUID, private to its user)
 		}
@@ -384,6 +416,10 @@ func TestIsolation_ListRoutesNeverLeak(t *testing.T) {
 		if path == "/api/graph" {
 			queries = []string{fmt.Sprintf("?identity_id=%d", b["alice"]), fmt.Sprintf("?resource_id=%d", b["resource:aws:prod"]),
 				fmt.Sprintf("?identity_id=%d&perm_key=perm:%d", b["alice"], b["perm:aws:get-pii"])}
+		}
+		if path == "/api/access/as-of" {
+			queries = []string{fmt.Sprintf("?resource=%d&date=2026-10-08", b["resource:aws:prod"]),
+				fmt.Sprintf("?resource=%d&date=2026-10-08T09:00:00", b["resource:aws:customer-pii"])}
 		}
 		for i, q := range queries {
 			rec := serveOnce(h, http.MethodGet, path+q, "")

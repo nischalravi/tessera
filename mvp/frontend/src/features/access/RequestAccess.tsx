@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Layers, Minus, Plus, Search, ShieldAlert, ShoppingCart, Timer, X } from "lucide-react";
 import { BusinessRole, CatalogView, ConnectorRow, Group, IdentityRow, DraftItem, RequestDraft, Risk, RolesView, SimResult, api, draftPath, requestDrafts, roles as roleApi, simulate, submitRequest, useApi } from "../../api";
+import { SodWarning } from "./SodWarning";
 import { Badge, Button, Callout, EmptyState, FilterChips, Loading, Page, Segmented, Skeleton, useToast } from "../../components";
 
 /** What a catalog card stands for: one group (an entitlement) or one business role. */
@@ -380,6 +381,7 @@ export function RequestAccess() {
               <textarea className="input" maxLength={1000} value={justification} onChange={(e) => setJustification(e.target.value)} placeholder="What do you need it for? Include a ticket if there is one." />
               <span className="hint">Approvers see this. At least a few words.</span>
             </label>
+            <SodWarning beneficiaryIds={beneficiaries.map((b) => b.id)} catalogIds={cart.flatMap((c) => (c.catalogId ? [c.catalogId] : []))} durationHours={duration} />
             {groups && <RiskPreview beneficiaries={beneficiaries} cart={cart} groups={groups} />}
             {cart.some((c) => !c.catalogId) && <Callout tone="neutral">A role is one request per person: approving it grants every entitlement in the role.</Callout>}
             <div className="row" style={{ justifyContent: "flex-end" }}>

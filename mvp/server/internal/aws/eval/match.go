@@ -65,6 +65,17 @@ type ResourceMatcher struct {
 // are nil the statement is "implied this resource" and is valid only in a
 // resource-based policy (resourceBased).
 func CompileResources(resources, notResources *model.PatternSet, resourceBased bool) (*ResourceMatcher, error) {
+	return compileResources(resources, notResources, resourceBased, CompileARN)
+}
+
+// CompileResourcesEscaped is CompileResources for patterns that variable
+// substitution produced: ${*}, ${?} and ${$} in them are literal characters
+// (CompileARNEscaped).
+func CompileResourcesEscaped(resources, notResources *model.PatternSet, resourceBased bool) (*ResourceMatcher, error) {
+	return compileResources(resources, notResources, resourceBased, CompileARNEscaped)
+}
+
+func compileResources(resources, notResources *model.PatternSet, resourceBased bool, compile func(string) (*ARNPattern, error)) (*ResourceMatcher, error) {
 	m := &ResourceMatcher{}
 	var set *model.PatternSet
 	switch {
@@ -79,7 +90,7 @@ func CompileResources(resources, notResources *model.PatternSet, resourceBased b
 		return nil, errors.New("eval: a statement needs exactly one of Resource and NotResource")
 	}
 	for _, s := range set.MatchPatterns() {
-		p, err := CompileARN(s)
+		p, err := compile(s)
 		if err != nil {
 			return nil, fmt.Errorf("eval: resource pattern %q: %w", clip(s), err)
 		}

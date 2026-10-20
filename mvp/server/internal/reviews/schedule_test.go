@@ -2,6 +2,7 @@ package reviews_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -249,4 +250,105 @@ func TestSchedule_ScopeAndValidation(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+func TestSchedule_UnknownSystemRefused(t *testing.T) {
+	s := newSched(t)
+	for _, c := range []struct {
+		system, code string
+	}{{"nosuchsystem", "invalid_system"}, {"AWS", "invalid_system"}, {"awss", "invalid_system"}, {"aws", ""}, {"  okta ", ""}, {"", ""}} {
+		tm := &store.ReviewTemplate{ID: "v", Name: "x", UnusedDays: 60, DurationDays: 14, CloseOut: "revoke", EscalationDays: 7,
+			Recurrence: "once", System: &c.system}
+		var err error
+		s.tx(func(tx *store.TenantTx) error { err = reviews.ValidateTemplate(tx, tm); return nil })
+		var se *reviews.SpecError
+		switch {
+		case c.code == "" && err != nil:
+			t.Errorf("system %q: %v", c.system, err)
+		case c.code != "" && (!errors.As(err, &se) || se.Code != c.code):
+			t.Errorf("system %q: %v, want %s", c.system, err, c.code)
+		}
+	}
+}
+
+// A schedule whose scope holds no grants (stored before validation existed)
+// launches no campaign: a skipped launch is audited, with its reason.
+func TestSchedule_EmptyScopeIsSkipped(t *testing.T) {
+	s := newSched(t)
+	ghost := "nosuchsystem"
+	next := s.now.Add(-time.Hour)
+	tm := &store.ReviewTemplate{ID: "g", Name: "Ghost", UnusedDays: 60, DurationDays: 14, CloseOut: "revoke", EscalationDays: 7,
+		Recurrence: "once", NextRunAt: &next, Enabled: true, System: &ghost, CreatedAt: s.now, UpdatedAt: s.now}
+	s.tx(func(c *store.TenantTx) error { return c.InsertReviewTemplate(tm) })
+	if r := s.tick(s.now); r.Launched != 0 || r.Skipped != 1 {
+		t.Errorf("tick = %+v, want one skipped launch", r)
+	}
+	var l *store.ReviewLaunch
+	var camps []*store.ReviewCampaign
+	s.tx(func(c *store.TenantTx) (err error) {
+		if l, err = reviews.RunNow(c, tm.ID, s.now, s.ps, "pat"); err != nil {
+			return err
+		}
+		camps, err = c.CampaignsNewestFirst()
+		return
+	})
+	if l != nil {
+		t.Errorf("manual run launched %+v", l)
+	}
+	for _, c := range camps {
+		if strings.Contains(c.Name, "Ghost") {
+			t.Errorf("an empty campaign was created: %+v", c)
+		}
+	}
+	if n := len(s.launches()); n != 0 {
+		t.Errorf("%d launches recorded", n)
+	}
+}
+
+// Two manual runs at the same instant: the second is refused with
+// ErrAlreadyLaunched, not a UNIQUE violation.
+func TestSchedule_RunNowTwiceInOneSecond(t *testing.T) {
+	s := newSched(t)
+	tm := s.template(func(t *store.ReviewTemplate) { t.Enabled = false; t.NextRunAt = nil })
+	run := func(at time.Time) (l *store.ReviewLaunch, err error) {
+		s.tx(func(c *store.TenantTx) error { l, err = reviews.RunNow(c, tm.ID, at, s.ps, "pat"); return nil })
+		return
+	}
+	for _, c := range []struct {
+		name    string
+		at      time.Time
+		already bool
+	}{{"first", s.now, false}, {"same second", s.now.Add(300 * time.Millisecond), true}, {"next second", s.now.Add(time.Second), false}} {
+		l, err := run(c.at)
+		if errors.Is(err, reviews.ErrAlreadyLaunched) != c.already || (!c.already && (err != nil || l == nil)) {
+			t.Errorf("%s: launch %v, err %v", c.name, l, err)
+		}
+	}
+}
+
+// A known but disabled escalation reviewer keeps its own code, so an admin
+// can tell a leaver from a typo; a missing one is unknown.
+func TestSchedule_InactiveEscalationIdentity(t *testing.T) {
+	s := newSched(t)
+	carol := s.f.B.IDs["carol"]
+	s.tx(func(c *store.TenantTx) error { return c.SetIdentityStatus(carol, "disabled") })
+	missing := int64(987654321)
+	for _, tc := range []struct {
+		id       *int64
+		closeOut string
+		want     string
+	}{
+		{&carol, "escalate", "escalation_reviewer_not_active"},
+		{&carol, "revoke", "escalation_reviewer_not_active"},
+		{&missing, "escalate", "unknown_escalation_identity"},
+	} {
+		next := s.now
+		tm := &store.ReviewTemplate{Name: "x", UnusedDays: 60, DurationDays: 14, ReminderDays: 3, CloseOut: tc.closeOut,
+			EscalationDays: 7, Recurrence: "quarterly", NextRunAt: &next, Enabled: true, EscalationIdentityID: tc.id}
+		var err error
+		s.tx(func(c *store.TenantTx) error { err = reviews.ValidateTemplate(c, tm); return nil })
+		if se, ok := err.(*reviews.SpecError); !ok || se.Code != tc.want {
+			t.Errorf("%d %s: %v, want %s", *tc.id, tc.closeOut, err, tc.want)
+		}
+	}
 }

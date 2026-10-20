@@ -1,0 +1,30 @@
+{
+  "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#users",
+  "@odata.nextLink": "{{BASE}}/v1.0/users/delta?$skiptoken=p2",
+  "value": [
+    {
+      "id": "aaaaaaaa-0000-4000-8000-000000000001",
+      "displayName": "Ada Fixture",
+      "userPrincipalName": "ada.fixture@fixture.onmicrosoft.com",
+      "mail": "ada.fixture@example.com",
+      "accountEnabled": true,
+      "createdDateTime": "2024-02-01T10:00:00Z",
+      "employeeId": "EMP-2001",
+      "department": "Engineering",
+      "jobTitle": "Staff Engineer",
+      "userType": "Member"
+    },
+    {
+      "id": "aaaaaaaa-0000-4000-8000-000000000002",
+      "displayName": "Ben Sample",
+      "userPrincipalName": "ben.sample@fixture.onmicrosoft.com",
+      "mail": null,
+      "accountEnabled": true,
+      "createdDateTime": "2023-06-10T08:30:00Z",
+      "employeeId": null,
+      "department": null,
+      "jobTitle": null,
+      "userType": "Member"
+    }
+  ]
+}
