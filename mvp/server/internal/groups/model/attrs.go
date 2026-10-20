@@ -15,7 +15,8 @@ import (
 
 // Attrs is the same operation context for the attribute framework.
 func (e Env) Attrs() attrs.Env {
-	return attrs.Env{Tx: e.Tx, Now: e.Now, By: e.By, ByIdentity: e.ByIdentity, TenantAdmin: e.TenantAdmin}
+	return attrs.Env{Tx: e.Tx, Now: e.Now, By: e.By, ByIdentity: e.ByIdentity, TenantAdmin: e.TenantAdmin,
+		Cause: e.Cause, CauseRef: e.CauseRef}
 }
 
 // EnsureObjectTypes creates the built-in object types definition (and the etc
@@ -38,6 +39,13 @@ func (e Env) EnsureObjectTypes() error {
 		return err
 	}
 	_, _, err = attrs.CreateBuiltin(sys.Attrs(), f.ID)
+	return err
+}
+
+// SetGroupObjectTypes gives a group exactly these object types. The built-in
+// definition must exist (EnsureObjectTypes).
+func (e Env) SetGroupObjectTypes(id store.GroupID, types []string) error {
+	_, err := attrs.SetObjectTypes(e.Attrs(), attrs.Owner{Type: store.AttrOwnerGroup, ID: string(id)}, types)
 	return err
 }
 

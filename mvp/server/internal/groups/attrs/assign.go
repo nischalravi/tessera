@@ -202,7 +202,12 @@ func assignSnapshot(a *store.GrpAttrAssign, values []string) map[string]any {
 // emit writes the change event of an assignment (design §10.1) in the
 // caller's transaction.
 func (e Env) emit(typ string, a *store.GrpAttrAssign, values []string) error {
-	ev := events.New(typ, a.ID, e.Now, store.CauseAPI)
+	cause := e.Cause
+	if cause == "" {
+		cause = store.CauseAPI
+	}
+	ev := events.New(typ, a.ID, e.Now, cause)
+	ev.CauseRef = e.CauseRef
 	ev.Data = events.Data(assignSnapshot(a, values))
 	return pit.Emit(e.Tx, ev)
 }

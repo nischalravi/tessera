@@ -471,6 +471,7 @@ func New(cfg Config) *Server {
 	s.registerEvidenceRoutes()
 	s.registerReviewPopulationRoutes()
 	s.registerHelpdeskRoutes()
+	s.registerGroupsPolicyRoutes()
 	s.registerGroupsFolderRoutes()
 	s.registerGroupsPrivilegeRoutes()
 	s.registerGroupsMemberRoutes()

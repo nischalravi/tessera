@@ -33,6 +33,9 @@ type run struct {
 	// cause is the event cause of the changes this run makes: engine, or
 	// timewheel for the wheel's own runs
 	cause string
+	// causeRef is the cause's reference (a policy repository commit); empty
+	// leaves the request id of the audit context
+	causeRef string
 }
 
 func newRun(tx *store.TenantTx, now time.Time) *run {
@@ -104,13 +107,18 @@ func (r *run) parentsOf(g store.GroupID, l store.ListID) ([]store.GroupID, error
 // Seeds name groups of the transaction's tenant; a seed for a group that does
 // not exist is an error.
 func (e *Engine) Apply(tx *store.TenantTx, now time.Time, seeds []Seed) ([]Change, error) {
-	return e.applyAs(tx, now, seeds, store.CauseEngine)
+	return e.applyRef(tx, now, seeds, e.eventCause(), e.causeRef)
 }
 
 // applyAs is Apply with the cause its events carry.
 func (e *Engine) applyAs(tx *store.TenantTx, now time.Time, seeds []Seed, cause string) ([]Change, error) {
+	return e.applyRef(tx, now, seeds, cause, "")
+}
+
+// applyRef is applyAs with the cause's reference as well.
+func (e *Engine) applyRef(tx *store.TenantTx, now time.Time, seeds []Seed, cause, ref string) ([]Change, error) {
 	r := newRun(tx, now)
-	r.cause = cause
+	r.cause, r.causeRef = cause, ref
 	for _, s := range seeds {
 		if err := r.push(s.Group, s.List, s.Identity); err != nil {
 			return nil, err
@@ -196,7 +204,9 @@ func (r *run) step(k gl, identity int64) error {
 		return nil // only the number of paths changed: nothing above sees it
 	}
 	// the change goes to the outbox and the PIT history in this transaction (K9)
-	if err := pit.Emit(r.tx, pit.EffectiveEvent(k.g, k.l, identity, is, r.now, r.cause, false)); err != nil {
+	ev := pit.EffectiveEvent(k.g, k.l, identity, is, r.now, r.cause, false)
+	ev.CauseRef = r.causeRef
+	if err := pit.Emit(r.tx, ev); err != nil {
 		return err
 	}
 	r.out = append(r.out, Change{Group: k.g, List: k.l, Identity: identity, Member: is})

@@ -2707,6 +2707,59 @@ Design `docs/design/groups-grouper-parity.md` §10.3, K6. Schema `0288_group_rul
   `TestVetoHookFailClosed`, `TestSpec_Validate`, ...), `internal/api` (`TestGroupsRoutesRequirePrivilege`,
   `TestRulesAPI_*`), `TestIsolation_GroupRuleTables` in `internal/store`.
 
+#### Policy groups as code (GR-9, issue #52)
+
+A policy group (`definition: policy`) is the precomputed `allow - deny` of design §8: a Cedar file of a
+restricted fragment says who belongs, and it is compiled to composite groups the engine already
+evaluates. Schema `0289_group_policy.sql` (`grp_policy_sources`, `grp_policy_nodes`, `grp_policy_uses`).
+Code: `server/internal/groups/policygroups`, `server/internal/api/groups_policy.go`. The repository has no
+Cedar library, so the fragment's parser and its evaluator (the PDP of §8.6) are written in
+`policygroups`; the fragment is valid Cedar. Example layout and a CI snippet:
+`docs/design/groups-policy-repo-example.md`.
+
+- The fragment (design §8.2): `permit`/`forbid` on `Tessera::Action::"member"` with resource
+  `Tessera::Group::"<name>"`; conditions use only `principal in Tessera::Group::"x"`,
+  `principal.attr == "v"`, `principal.attr in ["a","b"]`, `principal.attr.contains("v")`,
+  `principal has attr`, `&&`, `||`, `!` and `unless`. Context, resource attributes, arithmetic, dates,
+  extension functions, `like`, `is` and `if` are refused with a line and column. Attributes come from a
+  schema (`DefaultSchema`: the identity's `type`, `status`, `department`, `title`, `source`); an optional
+  attribute must be guarded (`principal has department && principal.department == "cs"`), as Cedar's
+  validator requires, which makes "missing attribute" mean the same in the engine and in Cedar. A permit or
+  forbid needs a condition, and a result of the form "everyone except ..." is refused
+  (`unbounded_negation`): a group lists members.
+- Members are `(⋃ permits) − (⋃ forbids)`. Compilation hash-conses subtrees: identical ones, in any file,
+  are one internal group `sys:policy:_n<hash>`; `principal.campus == "main"` is the group
+  `sys:attr:campus:main`, a basic group whose direct members have `source = attribute`, kept current by the
+  indexer (`POST /api/groups/policy/reindex`, and on every apply). Groups the policy repository manages
+  (`managed_by = policy_repo`: the policy groups of a repository sync, the internal and the attribute
+  groups) refuse every other writer with `409 policy_managed`; the policy group itself takes no direct
+  members.
+- Every apply writes `groups.policy.applied` (origin, commit, groups, counts) to the audit ledger, and every
+  event of a repository sync (group, membership, effective membership, privilege and attribute events) has
+  `cause_type = policy_repo` and `cause_ref = <commit>`, also when the engine queue does the work later.
+  Each policy group records `policy_ref {path, commit, compiled_sha256}`.
+
+| Route (`groups.read` / `groups.write`, then the privilege) | |
+|---|---|
+| `POST /api/groups/policy/validate` `{files:[{path, cedar}]}` | findings and references, writes nothing (`read` on the groups referred to) |
+| `POST /api/groups/policy/diff` `{files, full}` | simulation: per policy group `status` (new, changed, unchanged, removed), counts and a sample of who joins and leaves |
+| `POST /api/groups/policy/apply` `{origin: repo\|ui, commit, files, full}` | one change in one transaction: `create` on the folder of a new group, `admin` on an existing one (and on those a `full` sync retires), `read` on the groups referred to; `422 invalid_policy` with `diagnostics`; `202` when a recompute is queued |
+| `POST /api/groups/policy/reindex` (`groups.admin`) | bring the attribute groups in line with the identities |
+| `GET /api/groups/{id}/policy` | the Cedar text, origin, path, commit and digest (`read`) |
+
+- CLI: `tessera groups policy validate [-dir path]` checks the `*.cedar` files offline (fragment, schema,
+  guards, unbounded negation; it cannot know the tenant's groups). `diff` and `apply` are the two API calls
+  above, made by CI with a machine client.
+- Not done in this step: a webhook or poll that fetches the repository (the sync takes a snapshot,
+  `policygroups.Source`/`DirSource`; fetching is the caller's), a tenant-specific schema (the API uses
+  `DefaultSchema`), hooking the indexer to identity ingestion (it runs on apply and on the reindex route),
+  and the usage facts in a diff ("3 of the 13 removed used Foo").
+- Tests: `go test ./internal/groups/policygroups` (`TestFragment_RejectsUnsupported`,
+  `TestCompile_EquivalentToNaive` and its fuzz target, `TestHashConsing_SharesSubtrees`,
+  `TestPolicyGroups_PDPAgreesWithEngine`, `TestSync_RecordsCommitOnEveryChange`, apply, diff, indexer),
+  `internal/api` (`TestGroupsRoutesRequirePrivilege` covers the policy routes, `TestGroupsPolicyAPI`),
+  `TestIsolation_GroupPolicy*` in `internal/store`, `TestGroupsPolicyValidate` in `cmd/tessera`.
+
 ### Audit ledger
 
 Every tenant has an append-only, hash-chained audit log (`audit_events`; design

@@ -234,6 +234,8 @@ var tables = []string{
 	"grp_attr_assigns", "grp_attr_values",
 	// group rules (schema/0288_group_rules.sql)
 	"grp_rules", "grp_rule_settings",
+	// policy groups as code (schema/0289_group_policy.sql)
+	"grp_policy_sources", "grp_policy_nodes", "grp_policy_uses",
 }
 
 // legacyTables are tables of older schemas that a reseed drops: audit_log was
